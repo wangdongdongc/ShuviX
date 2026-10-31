@@ -6,7 +6,9 @@
  * - Android 的 Chrome 自己也会在长按时发一次 contextmenu：我们的先到就吞掉它的（免得弹两次），它的先到就取消
  *   我们的；
  * - 长按之后松手那一下 click 吞掉，不让它把行「点开」；
- * - 手指挪动超过 10px（在滚动 / 翻页）就不算长按。
+ * - 手指挪动超过 10px（在滚动 / 翻页）就不算长按；
+ * - 派发到按住的那个最里层元素（composedPath()[0]）：在 document 上监听时，Shadow DOM 里的元素（Files
+ *   面板的文件树）被重定向成宿主，派到宿主上 shadow 里的行收不到；事件同原生右键一样 composed，冒得出来。
  */
 const HOLD_MS = 500
 const SLOP_PX = 10
@@ -32,7 +34,7 @@ export function installLongPressContextMenu(root: Document | HTMLElement = docum
       start = null
       return
     }
-    start = { x: touch[0].clientX, y: touch[0].clientY, target: e.target }
+    start = { x: touch[0].clientX, y: touch[0].clientY, target: e.composedPath()[0] ?? e.target }
     timer = setTimeout(() => {
       timer = null
       if (!start) return
@@ -41,6 +43,7 @@ export function installLongPressContextMenu(root: Document | HTMLElement = docum
         new MouseEvent('contextmenu', {
           bubbles: true,
           cancelable: true,
+          composed: true,
           clientX: start.x,
           clientY: start.y,
           view: window

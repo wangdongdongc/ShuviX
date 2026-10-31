@@ -11,18 +11,32 @@
  *
  * 文件预览不在本面板内：点击文件（音视频除外，走底部 dock）发 chatStore.requestFilePreview，
  * 由宿主承接（桌面：md 进协作编辑窗口，其余可预览文件进独立预览窗口，不支持的文件不响应）。
+ *
+ * 条目右键（手机长按）菜单：文件 = 打开 / 在对话中引用；文件与目录 = 复制路径 / 复制相对路径 /
+ * 在文件夹中显示（宿主注入 onRevealPath 才有）。只读，不改磁盘。经共享的 useContextMenu 弹：
+ * 桌面原生菜单，web 客户端（含手机）DOM 菜单。
+ *
+ * 密度跟 ChatHost 走（useChatDensity）：手机是 touch 档 —— 树行 40px、顶栏与搜索框放大到手指的尺寸。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
-import { FilesTree } from './FilesTree'
+import { FilesTree, type FilesTreeContextMenuItem } from './FilesTree'
 import { LoadedSlices, dirKeyOf, dirParamOf } from './lazyTree'
 import { usePanelCloseInset } from '../panel/panelCloseInset'
-import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import { useContextMenu } from '../contextmenu/ContextMenuProvider'
+import {
+  useChatStore,
+  getSessionChannelApi,
+  useAppEvent,
+  useChatDensity,
+  copyToClipboard
+} from '@shuvix/chat-ui'
 import { isContentOnlyFileChange, relativizeLoose } from '@shuvix/chat-protocol/utils/fileMap'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
+import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { AudioDock } from './AudioDock'
 import { VideoDock } from './VideoDock'
 import { extOf, basename, joinPath } from './paths'
@@ -67,13 +81,28 @@ export interface FilesPanelProps {
   /** 在系统文件管理器中打开工作目录（宿主注入）；提供则在工作目录名旁显示按钮。
    *  桌面注入 getHostApi().app.openFolder；扩展无原生文件管理器故不注入。 */
   onOpenFolder?: (projectPath: string) => void
+  /** 在系统文件管理器中定位某个文件 / 目录（宿主注入，绝对路径）；提供则右键菜单里有「在文件夹中显示」 */
+  onRevealPath?: (absPath: string) => void
+  /** 右键「在对话中引用」把胶囊插进输入框之后（手机：收起抽屉，让人看见输入框） */
+  onMentionInserted?: () => void
 }
 
-export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.Element {
+/** 相对路径（树内一律 `/`）换成工作目录自己的分隔符 —— Windows 工作目录复制出来的是 `\` 形式 */
+function hostRelPath(root: string, rel: string): string {
+  return root.includes('\\') && !root.includes('/') ? rel.replace(/\//g, '\\') : rel
+}
+
+export function FilesPanel({
+  onOpenFolder,
+  onRevealPath,
+  onMentionInserted
+}: FilesPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
   const closeInset = usePanelCloseInset()
+  const touch = useChatDensity() === 'touch'
+  const showContextMenu = useContextMenu()
 
   const [state, setState] = useState<ScanState | null>(null)
   const [error, setError] = useState<ScanError | null>(null)
@@ -317,6 +346,78 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
     setSearchTruncCount(null) // eslint-disable-line react-hooks/set-state-in-effect
   }, [projectPath])
 
+  /** 打开一个文件（点击与右键「打开」共用）：音视频上底部 dock，其余发预览请求 */
+  const openFile = useCallback(
+    (rel: string): void => {
+      if (!projectPath) return
+      const ext = extOf(rel)
+      const audioMime = AUDIO_MIME_BY_EXT[ext]
+      const videoMime = VIDEO_MIME_BY_EXT[ext]
+      const abs = joinPath(projectPath, rel)
+      if (audioMime || videoMime) {
+        // 音频 / 视频：上底部 dock，文件树继续可见
+        const name = abs.split(/[/\\]/).pop() || abs
+        setPlayingMedia({
+          absPath: abs,
+          relPath: rel,
+          mimeType: (audioMime || videoMime) as string,
+          fileName: name,
+          type: audioMime ? 'audio' : 'video'
+        })
+      } else {
+        // 其它文件：发预览请求（宿主开独立窗口；不支持预览的文件宿主不响应）
+        useChatStore.getState().requestFilePreview(abs)
+      }
+    },
+    [projectPath]
+  )
+
+  /** 条目右键菜单。「在对话中引用」把焦点交给输入框 → 告诉树关菜单时别把焦点抢回去 */
+  const handleItemContextMenu = useCallback(
+    async (
+      item: FilesTreeContextMenuItem,
+      position: { x: number; y: number }
+    ): Promise<void | 'focus-moved'> => {
+      const root = projectPath
+      if (!root || !sessionId) return
+      // 相对路径先换成工作目录的分隔符再拼：joinPath 只管接缝，Windows 上会拼出 `C:\…\docs/a.md`
+      const abs = joinPath(root, hostRelPath(root, item.path))
+      const items: ContextMenuItem[] = []
+      if (item.kind === 'file') {
+        items.push({ id: 'open', label: t('panel.filesMenu.open') })
+        // 只读笔记本（内置 agent / 技能 / 说明书）也有 Files 面板，却没有输入框：没地方插就不给这一项
+        if (useChatStore.getState().composerSessionId === sessionId) {
+          items.push({ id: 'mention', label: t('panel.filesMenu.mention') })
+        }
+        items.push({ type: 'separator' })
+      }
+      items.push(
+        { id: 'copyPath', label: t('panel.filesMenu.copyPath') },
+        { id: 'copyRelativePath', label: t('panel.filesMenu.copyRelativePath') }
+      )
+      if (onRevealPath) {
+        items.push({ type: 'separator' }, { id: 'reveal', label: t('panel.filesMenu.reveal') })
+      }
+      let focusMoved = false
+      await showContextMenu(position, items, (id) => {
+        if (id === 'open') openFile(item.path)
+        else if (id === 'mention') {
+          // 与在 @ 弹层里选这个文件同一结果：胶囊明文 = 文件名，引用 = 工作区相对路径
+          const name = basename(item.path)
+          useChatStore
+            .getState()
+            .requestMentionInsert(sessionId, { kind: 'file', rel: item.path, base: name }, name)
+          focusMoved = true
+          onMentionInserted?.()
+        } else if (id === 'copyPath') copyToClipboard(abs)
+        else if (id === 'copyRelativePath') copyToClipboard(hostRelPath(root, item.path))
+        else if (id === 'reveal') onRevealPath?.(abs)
+      })
+      return focusMoved ? 'focus-moved' : undefined
+    },
+    [projectPath, sessionId, t, onRevealPath, onMentionInserted, showContextMenu, openFile]
+  )
+
   // —— 派生状态：state / error 必须与当前 projectPath 匹配才视作有效 ——
   const freshState = state && state.forRoot === projectPath ? state : null
   const freshError = error && error.forRoot === projectPath ? error : null
@@ -348,32 +449,17 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
   } else {
     content = (
       <FilesTree
-        key={freshState.forRoot}
+        // 密度是挂载期定的（行高进虚拟列表）：换档（桌面 ↔ 手机布局）就重挂
+        key={`${freshState.forRoot}\n${touch ? 'touch' : 'compact'}`}
         paths={freshState.paths}
         searchQuery={searchOpen ? searchQuery : ''}
         // 与并排的对话列滚动条同款（常显 + 同色）；嵌在别处时不传，沿用 pierre 的 hover 才现
         persistentScrollbar
+        density={touch ? 'touch' : 'compact'}
         onRequestChildren={handleRequestChildren}
+        onItemContextMenu={handleItemContextMenu}
         onFileSelect={(rel) => {
-          if (!projectPath) return
-          const ext = extOf(rel)
-          const audioMime = AUDIO_MIME_BY_EXT[ext]
-          const videoMime = VIDEO_MIME_BY_EXT[ext]
-          const abs = joinPath(projectPath, rel)
-          if (audioMime || videoMime) {
-            // 音频 / 视频：上底部 dock，文件树继续可见
-            const name = abs.split(/[/\\]/).pop() || abs
-            setPlayingMedia({
-              absPath: abs,
-              relPath: rel,
-              mimeType: (audioMime || videoMime) as string,
-              fileName: name,
-              type: audioMime ? 'audio' : 'video'
-            })
-          } else {
-            // 其它文件：发预览请求（宿主开独立窗口；不支持预览的文件宿主不响应）
-            useChatStore.getState().requestFilePreview(abs)
-          }
+          openFile(rel)
           // 立即取消 pierre 选中：不取消会卡 selectionVersion —— 再次点击同一文件
           // #applySelection 短路（selection 未变），onFileSelect 不再触发
           treeModelRef.current?.getItem(rel)?.deselect()
@@ -384,13 +470,38 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
   }
 
   const folderName = projectPath ? basename(projectPath) : ''
+  // 顶栏与搜索框的尺寸：桌面紧凑；手机放大到手指能点（按钮 36px、图标 18px，同输入卡片的触屏控件），搜索框 16px 字 ——
+  // 小于 16px 的输入框在 iOS Safari 上一聚焦就把整页放大
+  const sz = touch
+    ? {
+        bar: 'h-11 px-3',
+        btn: 'p-[9px] rounded-lg',
+        icon: 18,
+        searchRow: 'px-3 pt-2',
+        input: 'pl-9 pr-9 py-2 rounded-lg text-[16px]',
+        inputIcon: 16,
+        inputIconPos: 'left-3',
+        clear: 'right-2 p-1.5',
+        clearIcon: 14
+      }
+    : {
+        bar: 'h-7 px-2',
+        btn: 'p-1 rounded',
+        icon: 11,
+        searchRow: 'px-2 pt-2',
+        input: 'pl-6 pr-6 py-1 rounded text-[11px]',
+        inputIcon: 11,
+        inputIconPos: 'left-2',
+        clear: 'right-1.5 p-0.5',
+        clearIcon: 10
+      }
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
       {/* 顶栏：左侧工作目录名（大写）+ 右侧搜索截断提示 + 搜索 + 刷新 */}
       {/* 头部：会话面板里要给悬在卡片右上角的收起按钮让出位置（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
       <div
-        className={`flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30${
+        className={`flex-shrink-0 flex items-center justify-between gap-2 ${sz.bar} border-b border-border-secondary/30${
           closeInset ? ' pr-8' : ''
         }`}
       >
@@ -404,10 +515,10 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
           {projectPath && onOpenFolder && (
             <button
               onClick={() => onOpenFolder(projectPath)}
-              className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors flex-shrink-0"
+              className={`${sz.btn} text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors flex-shrink-0`}
               title={projectPath}
             >
-              <Folder size={11} />
+              <Folder size={sz.icon} />
             </button>
           )}
         </div>
@@ -420,33 +531,33 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
           <button
             onClick={toggleSearch}
             disabled={!freshState}
-            className={`p-1 rounded hover:bg-bg-hover/40 disabled:opacity-40 disabled:hover:bg-transparent transition-colors ${
+            className={`${sz.btn} hover:bg-bg-hover/40 disabled:opacity-40 disabled:hover:bg-transparent transition-colors ${
               searchOpen
                 ? 'text-text-primary bg-bg-hover/30'
                 : 'text-text-tertiary hover:text-text-secondary'
             }`}
             title={t('panel.filesSearch')}
           >
-            <Search size={11} />
+            <Search size={sz.icon} />
           </button>
           <button
             onClick={handleRefresh}
             disabled={!sessionId || !projectPath}
-            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+            className={`${sz.btn} text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 disabled:opacity-40 disabled:hover:bg-transparent transition-colors`}
             title={t('panel.filesRefresh')}
           >
-            <RefreshCw size={11} className={showLoading ? 'animate-spin' : ''} />
+            <RefreshCw size={sz.icon} className={showLoading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
       {/* 搜索栏：自渲染 input，绕开库内置 search UI 的 blur=close、首项高亮等问题 */}
       {searchOpen && (
-        <div className="flex-shrink-0 flex items-center gap-1 px-2 pt-2">
+        <div className={`flex-shrink-0 flex items-center gap-1 ${sz.searchRow}`}>
           <div className="flex-1 relative">
             <Search
-              size={11}
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary/60 pointer-events-none"
+              size={sz.inputIcon}
+              className={`absolute ${sz.inputIconPos} top-1/2 -translate-y-1/2 text-text-tertiary/60 pointer-events-none`}
             />
             <input
               ref={searchInputRef}
@@ -460,7 +571,7 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
                 }
               }}
               placeholder={t('panel.filesSearch')}
-              className="w-full pl-6 pr-6 py-1 rounded text-[11px] bg-bg-primary border border-border-secondary focus:border-accent/60 outline-none text-text-primary placeholder:text-text-tertiary/60 transition-colors"
+              className={`w-full ${sz.input} bg-bg-primary border border-border-secondary focus:border-accent/60 outline-none text-text-primary placeholder:text-text-tertiary/60 transition-colors`}
             />
             {searchQuery && (
               <button
@@ -468,10 +579,10 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
                   setSearchQuery('')
                   searchInputRef.current?.focus()
                 }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-tertiary/60 hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
+                className={`absolute ${sz.clear} top-1/2 -translate-y-1/2 rounded text-text-tertiary/60 hover:text-text-secondary hover:bg-bg-hover/40 transition-colors`}
                 title={t('common.clear')}
               >
-                <X size={10} />
+                <X size={sz.clearIcon} />
               </button>
             )}
           </div>

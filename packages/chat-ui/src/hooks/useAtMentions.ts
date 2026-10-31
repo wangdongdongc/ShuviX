@@ -177,6 +177,16 @@ export interface UseAtMentions {
   handleKeyDown: (e: React.KeyboardEvent) => boolean
   /** 选中某候选：返回替换后的文本与新光标位置（并登记引用） */
   select: (suggestion: AtSuggestion, text: string, caret: number) => { text: string; caret: number }
+  /**
+   * 不经弹层，在光标处直接插入一个引用（Files 面板右键「在对话中引用」）：登记与胶囊明文同 select，
+   * 光标前紧挨着非空白时先补一个空格（胶囊要两侧边界成立才算数）
+   */
+  insert: (
+    ref: AtMentionRef,
+    displayText: string,
+    text: string,
+    caret: number
+  ) => { text: string; caret: number }
   /** 光标紧邻引用尾部时，一次退格整体删除；否则返回 null */
   backspace: (text: string, caret: number) => { text: string; caret: number } | null
   /** 发送时构造标记文本 + at 类型 InlineToken（无引用则原样返回） */
@@ -364,6 +374,27 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     [trigger]
   )
 
+  const insert = useCallback(
+    (
+      ref: AtMentionRef,
+      displayText: string,
+      text: string,
+      caret: number
+    ): { text: string; caret: number } => {
+      const entry = buildMentionEntry(
+        { source: ref.kind, label: displayText, displayText, ref },
+        mentionsRef.current
+      )
+      const before = text.slice(0, caret)
+      const after = text.slice(caret)
+      const insertText = `${before === '' || /\s$/.test(before) ? '' : ' '}${entry.text} `
+      setMentions((prev) => (prev.some((m) => m.text === entry.text) ? prev : [...prev, entry]))
+      setTrigger(null)
+      return { text: before + insertText + after, caret: before.length + insertText.length }
+    },
+    []
+  )
+
   const backspace = useCallback(
     (text: string, caret: number): { text: string; caret: number } | null => {
       if (caret <= 0) return null
@@ -456,6 +487,7 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     prune,
     handleKeyDown,
     select,
+    insert,
     backspace,
     buildOutgoing,
     resolveInline,

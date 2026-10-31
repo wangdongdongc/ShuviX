@@ -1325,6 +1325,13 @@
     "filesTruncated": "已显示前 {{count}} 个文件",
     "filesRefresh": "刷新",
     "filesSearch": "搜索",
+    "filesMenu": {
+      "open": "打开",
+      "mention": "在对话中引用",
+      "copyPath": "复制路径",
+      "copyRelativePath": "复制相对路径",
+      "reveal": "在文件夹中显示"
+    },
     "preview": {
       "copyPath": "复制完整路径",
       "revealInFolder": "在文件夹中显示",

@@ -22,6 +22,7 @@
 import { create } from 'zustand'
 import { forgetRedactions } from './redactionCache'
 import type { InlineToken, ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type { AtMentionRef } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
@@ -225,6 +226,22 @@ interface ChatState {
     nonce: number
   } | null
   /**
+   * 请求往某会话的输入框里插一个 @ 引用的信号（Files 面板右键「在对话中引用」）。
+   * 由该会话的 InputArea 消费：在光标处插入胶囊并登记引用（与在 @ 弹层里选中同一结果），消费后 clear。
+   * displayText 是胶囊明文（不含 @），文件 = 文件名，与 @ 弹层一致。
+   */
+  mentionInsertRequest: {
+    sessionId: string
+    ref: AtMentionRef
+    displayText: string
+    nonce: number
+  } | null
+  /**
+   * 此刻挂着输入框的会话（InputArea 挂载时登记、卸载时撤）。只读笔记本没有输入框 —— Files 面板据此
+   * 决定给不给「在对话中引用」，免得给一个点了什么都不发生的菜单项。欢迎页的输入框没有会话，不登记。
+   */
+  composerSessionId: string | null
+  /**
    * 请求滚到某条消息（日历点进某天会话：当天第一条用户消息）。
    * 消费方：Conversation 等消息列表渲染后再 querySelector `[data-msg-id]`。
    * 含 nonce 以便重复点同一条也能触发。entry 不在当前上下文（被 moveTo 切掉）时滚动失败就停顶部。
@@ -363,6 +380,11 @@ interface ChatState {
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
+  /** 请求往某会话输入框插入 @ 引用（Files 面板右键触发）；由该会话的 InputArea 消费后 clear */
+  requestMentionInsert: (sessionId: string, ref: AtMentionRef, displayText: string) => void
+  clearMentionInsert: () => void
+  /** InputArea 挂载时登记自己的会话、卸载时传 null（只撤自己登记的那条） */
+  setComposerSessionId: (sessionId: string | null) => void
   /** 请求滚到某条消息（日历点进某天）；Conversation 等消息列表渲染后消费 */
   requestScrollToMessage: (sessionId: string, messageId: string) => void
   /** 滚完或目标不在当前上下文后清掉，避免 visibleItems 再变时把用户弹回去 */
@@ -739,6 +761,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   taskRevealRequest: null,
   artifactRevealRequest: null,
   draftRestoreRequest: null,
+  mentionInsertRequest: null,
+  composerSessionId: null,
   scrollToMessageRequest: null,
   messages: [],
   sessionViews: {},
@@ -836,6 +860,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })),
   clearScrollToMessage: () => set({ scrollToMessageRequest: null }),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
+  requestMentionInsert: (sessionId, ref, displayText) =>
+    set((state) => ({
+      mentionInsertRequest: {
+        sessionId,
+        ref,
+        displayText,
+        nonce: (state.mentionInsertRequest?.nonce ?? 0) + 1
+      }
+    })),
+  clearMentionInsert: () => set({ mentionInsertRequest: null }),
+  setComposerSessionId: (sessionId) => set({ composerSessionId: sessionId }),
   removeMessage: (id) =>
     set((state) => {
       const sid = state.activeSessionId

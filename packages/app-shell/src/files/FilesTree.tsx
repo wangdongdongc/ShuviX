@@ -9,11 +9,20 @@
  * 失败在下次展开时重试）。不传则保持全量 paths 行为完全不变。
  *
  * 搜索过滤完全走 controller.setSearch / closeSearch,不启用库内置的 search input UI
+ *
+ * 右键菜单（可选）：传入 onItemContextMenu 时经 pierre React 组件的 renderContextMenu 打开右键触发，
+ * 菜单本身不让 pierre 画 —— 它的菜单槽里只挂一个不渲染任何东西的 ContextMenuHandoff，挂上就把条目与
+ * 位置交给宿主的 useContextMenu 弹（桌面原生菜单 / 手机长按的 DOM 菜单），菜单收起后再关 pierre 的
+ * 菜单态，行在菜单开着时保持高亮。
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { FileTree, useFileTreeSearch } from '@pierre/trees/react'
-import { FileTree as FileTreeModel } from '@pierre/trees'
+import {
+  FileTree as FileTreeModel,
+  type ContextMenuItem as PierreMenuItem,
+  type ContextMenuOpenContext
+} from '@pierre/trees'
 import { deriveDirPaths, LazyLoadTracker } from './lazyTree'
 
 /**
@@ -26,13 +35,86 @@ const PERSISTENT_SCROLLBAR_CSS = `[data-file-tree-virtualized-scroll="true"] {
   --trees-scrollbar-thumb-current: var(--trees-scrollbar-thumb);
 }`
 
+/**
+ * 两档密度：compact = 桌面，对齐侧栏桌面档的紧凑感；touch = 手机，对齐侧栏 touch 档（app-shell
+ * base.css `[data-sidebar-density='touch']`：40px 一行、19px 图标、10px 圆角）。树在 Shadow DOM 里，
+ * 手机布局按设备字号放大小字的那组规则（main.css `[data-mobile-scale]`）进不去，所以字号在这里定：
+ * 手机上取设备字号 --app-font-size（缺省 16，与侧栏 touch 档同号）—— 自定义属性能继承进 shadow root。
+ * 行高是 pierre 虚拟列表的计算依据，只能在构造 model 时给，故密度是挂载期决定的。
+ */
+export type FilesTreeDensity = 'compact' | 'touch'
+
+const DENSITY_MODEL = {
+  compact: { density: 'compact', itemHeight: 22 },
+  touch: { density: 'relaxed', itemHeight: 40 }
+} as const
+
+const DENSITY_STYLE: Record<FilesTreeDensity, Record<string, string>> = {
+  compact: {
+    // 字号与侧边栏对齐；横向内边距默认 16px 偏宽，压到 8px；缩进每层 12px，跟侧边栏 ml-1.5 / pl-0.5 相近
+    '--trees-font-size-override': '12px',
+    '--trees-padding-inline-override': '8px',
+    '--trees-level-gap-override': '12px'
+  },
+  touch: {
+    '--trees-font-size-override': 'var(--app-font-size, 16px)',
+    '--trees-icon-width-override': '19px',
+    '--trees-padding-inline-override': '8px',
+    '--trees-level-gap-override': '16px',
+    '--trees-item-row-gap-override': '10px',
+    '--trees-border-radius-override': '10px'
+  }
+}
+
+/** 右键（手机长按）一个条目：path 为树内相对路径（目录不带尾斜杠），position 为菜单弹出点（客户端坐标） */
+export interface FilesTreeContextMenuItem {
+  path: string
+  kind: 'file' | 'directory'
+}
+
+type ItemContextMenuHandler = (
+  item: FilesTreeContextMenuItem,
+  position: { x: number; y: number }
+) => Promise<void | 'focus-moved'> | void
+
+/**
+ * pierre 打开菜单态时挂进它的菜单槽：自己不渲染，挂上就把条目交给宿主弹菜单，等菜单收起（动作做完）再关
+ * pierre 的菜单态。每次打开都是新挂载（关了槽就清掉）；StrictMode 下 effect 会多跑一遍而组件并没卸载 ——
+ * 只弹一次。
+ */
+function ContextMenuHandoff({
+  item,
+  context,
+  onOpen
+}: {
+  item: PierreMenuItem
+  context: ContextMenuOpenContext
+  onOpen: ItemContextMenuHandler
+}): null {
+  const started = useRef(false)
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    const r = context.anchorRect
+    // 右键给的是光标点（高 0）；键盘（Shift+F10 / 菜单键）给的是行框 —— 贴着行的下沿弹
+    const position = { x: r.left, y: r.height > 0 ? r.bottom : r.top }
+    const path = item.path.replace(/\/+$/, '')
+    void Promise.resolve(onOpen({ path, kind: item.kind }, position))
+      .catch(() => undefined)
+      .then((res) => context.close({ restoreFocus: res !== 'focus-moved' }))
+  }, [item, context, onOpen])
+  return null
+}
+
 export function FilesTree({
   paths,
   searchQuery,
   onFileSelect,
   modelOutRef,
   persistentScrollbar,
-  onRequestChildren
+  onRequestChildren,
+  density = 'compact',
+  onItemContextMenu
 }: {
   paths: string[]
   searchQuery: string
@@ -47,6 +129,14 @@ export function FilesTree({
    * 列表（含子目录尾斜杠条目）。不传 = 全量 paths 模式。抛错视为失败，下次展开重试。
    */
   onRequestChildren?: (dirRelPath: string) => Promise<string[]>
+  /** 行高 / 字号档位（挂载期决定，换档要换 key 重挂）；缺省 compact */
+  density?: FilesTreeDensity
+  /**
+   * 右键（手机长按）一个条目时回调；返回的 Promise 结束（菜单收起、动作做完）后 pierre 的菜单态才关，
+   * 期间该行保持高亮。关闭时焦点回到这一行（键盘用户接着走），除非 resolve 为 'focus-moved' ——
+   * 动作把焦点交给了别处（如输入框），不能再抢回来。不传 = 浏览器默认右键。
+   */
+  onItemContextMenu?: ItemContextMenuHandler
 }): React.JSX.Element {
   // 用 ref 持有最新回调，组件保留 mount 时的 model 实例
   const onSelectRef = useRef(onFileSelect)
@@ -68,9 +158,7 @@ export function FilesTree({
         initialExpansion: 'closed',
         dragAndDrop: false,
         flattenEmptyDirectories: true,
-        // 紧凑布局，与侧边栏视觉密度对齐
-        density: 'compact',
-        itemHeight: 22,
+        ...DENSITY_MODEL[density],
         ...(persistentScrollbar ? { unsafeCSS: PERSISTENT_SCROLLBAR_CSS } : {})
       })
   )
@@ -205,7 +293,6 @@ export function FilesTree({
   }, [searchQuery, libraryIsOpen, model])
 
   // 把 ShuviX 主题 CSS 变量桥接到 @pierre/trees 的覆盖变量
-  // 字号 / 行高 / 横向内边距 进一步压缩，对齐侧边栏密度（text-[12px] + px-1.5 风格）
   const treeStyle = {
     height: '100%',
     width: '100%',
@@ -220,14 +307,23 @@ export function FilesTree({
     // 宽度不用改：默认 gutter 6px 里 thumb 带 1px 透明边 + content-box 裁切，实际就是 4px
     '--trees-scrollbar-thumb-override':
       'color-mix(in srgb, var(--color-border-primary) 40%, transparent)',
-    // 字体与字号 — 与侧边栏对齐
-    '--trees-font-size-override': '12px',
     '--trees-font-family-override': 'inherit',
-    // 横向内边距 — 默认 16px 偏宽，压到 8px
-    '--trees-padding-inline-override': '8px',
-    // 缩进每层 12px，跟侧边栏 ml-1.5 / pl-0.5 相近
-    '--trees-level-gap-override': '12px'
+    // 字号 / 内边距 / 缩进按密度（见 DENSITY_STYLE）
+    ...DENSITY_STYLE[density]
   } as React.CSSProperties
 
-  return <FileTree model={model} style={treeStyle} />
+  return (
+    <FileTree
+      model={model}
+      style={treeStyle}
+      // 开着菜单态时 pierre 的触发方式缺省就是只认右键（不画行尾的 ⋮ 按钮）
+      renderContextMenu={
+        onItemContextMenu
+          ? (item, context) => (
+              <ContextMenuHandoff item={item} context={context} onOpen={onItemContextMenu} />
+            )
+          : undefined
+      }
+    />
+  )
 }

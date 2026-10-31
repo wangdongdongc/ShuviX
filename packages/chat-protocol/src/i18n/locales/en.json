@@ -1325,6 +1325,13 @@
     "filesTruncated": "Showing first {{count}} files",
     "filesRefresh": "Refresh",
     "filesSearch": "Search",
+    "filesMenu": {
+      "open": "Open",
+      "mention": "Mention in chat",
+      "copyPath": "Copy path",
+      "copyRelativePath": "Copy relative path",
+      "reveal": "Show in folder"
+    },
     "preview": {
       "copyPath": "Copy full path",
       "revealInFolder": "Show in folder",

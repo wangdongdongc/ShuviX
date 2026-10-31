@@ -299,6 +299,31 @@ export function InputArea({
     setTimeout(() => textareaRef.current?.focus(), 0)
   }, [draftRestore, at, paste, setInputText])
 
+  // 登记「这个会话有输入框」（Files 面板据此给「在对话中引用」）。撤的时候只撤自己那条：换会话时
+  // React 先跑旧的清理再跑新的登记，但别处的输入框若已登记了别的会话，不能被这里清掉
+  useEffect(() => {
+    if (!activeSessionId) return
+    useChatStore.getState().setComposerSessionId(activeSessionId)
+    return () => {
+      if (useChatStore.getState().composerSessionId === activeSessionId) {
+        useChatStore.getState().setComposerSessionId(null)
+      }
+    }
+  }, [activeSessionId])
+
+  // Files 面板右键「在对话中引用」：插在光标处（失焦的 textarea 仍记着光标），只认本会话的请求
+  const mentionInsert = useChatStore((s) => s.mentionInsertRequest)
+  useEffect(() => {
+    if (!mentionInsert || mentionInsert.sessionId !== activeSessionId) return
+    useChatStore.getState().clearMentionInsert()
+    const text = useChatStore.getState().inputText
+    const caret = textareaRef.current?.selectionStart ?? text.length
+    const res = at.insert(mentionInsert.ref, mentionInsert.displayText, text, caret)
+    setInputText(res.text)
+    pendingCaretRef.current = res.caret
+    setTimeout(() => textareaRef.current?.focus(), 0)
+  }, [mentionInsert, activeSessionId, at, setInputText])
+
   /** 粘贴处理：图片交给 useImageUpload；超阈值长文本折叠为粘贴芯片（短文本走默认粘贴） */
   const handleTextareaPaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {

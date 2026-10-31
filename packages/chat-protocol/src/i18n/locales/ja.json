@@ -1325,6 +1325,13 @@
     "filesTruncated": "最初の {{count}} 件を表示しています",
     "filesRefresh": "更新",
     "filesSearch": "検索",
+    "filesMenu": {
+      "open": "開く",
+      "mention": "会話で参照",
+      "copyPath": "パスをコピー",
+      "copyRelativePath": "相対パスをコピー",
+      "reveal": "フォルダで表示"
+    },
     "preview": {
       "copyPath": "フルパスをコピー",
       "revealInFolder": "フォルダで表示",

@@ -215,12 +215,17 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       onOpenSessionConfig={() => setShowSessionConfig(true)}
       rightActions={rightActions}
       // 会话面板（共享组件）：媒体/PDF 走本窗口的解析器（桌面 shuvix-preview://，web 客户端 /files/preview），
-      // Files 内容注入桌面 caps（系统文件管理器打开目录；web 客户端里显示路径并给一个复制按钮）
+      // Files 内容注入桌面 caps（系统文件管理器打开目录 / 定位条目；web 客户端里显示路径并给一个复制按钮）
       sessionPanel={
         <MediaUrlProvider value={hostMediaResolver}>
           <SessionPanel
             sessionId={activeSessionId}
-            filesContent={<FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />}
+            filesContent={
+              <FilesPanel
+                onOpenFolder={(p) => void window.api.app.openFolder(p)}
+                onRevealPath={(p) => void window.api.app.revealPath(p)}
+              />
+            }
           />
         </MediaUrlProvider>
       }

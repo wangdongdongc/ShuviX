@@ -266,10 +266,17 @@ export interface ChatPane {
 
   /** 往输入框填字（native value setter + input 事件，走 React 的 onChange） */
   type(text: string): Promise<void>
+  /**
+   * 像人那样打字：先把焦点与光标放到输入框文末，再经 CDP `Input.insertText` 打进去（可信输入）—— 输入框里的光标是
+   * 浏览器自己维护的那一个（`type` 在失焦的输入框上改值，之前聚焦过的话 Chromium 记着的光标会在下一次右键时归零）
+   */
+  typeTrusted(text: string): Promise<void>
   /** 把光标（选区折叠）设到指定字符位置 —— 退格整体删引用等用例需要光标紧贴引用尾部 */
   setCaret(pos: number): Promise<void>
   /** 输入框镜像层（MentionHighlighter）画出的胶囊明文（含前导 @，与底层 textarea 逐字一致） */
   composerChips(): Promise<string[]>
+  /** 焦点在不在输入框（第一个 textarea）上 */
+  composerFocused(): Promise<boolean>
   /** 敲回车（走 React 的 onKeyDown → handleSend / handleSteer） */
   pressEnter(): Promise<void>
   /** 往输入框派发任意按键（弹层方向键导航等；只走 keydown，不改 value） */
@@ -625,6 +632,18 @@ export function chatPane(main: CdpClient): ChatPane {
     },
 
     type: type,
+    typeTrusted: async (text) => {
+      const focused = await main.eval<boolean>(`(() => {
+        const ta = ${TEXTAREA}
+        if (!ta) return false
+        ta.focus()
+        ta.selectionStart = ta.selectionEnd = ta.value.length
+        return document.activeElement === ta
+      })()`)
+      if (!focused) throw new Error('no composer textarea to type into')
+      await main.send('Input.insertText', { text })
+      await new Promise((r) => setTimeout(r, 120))
+    },
     setCaret: async (pos) => {
       await main.eval(
         `(() => {
@@ -645,6 +664,11 @@ export function chatPane(main: CdpClient): ChatPane {
             .map((s) => (s.textContent ?? '').trim())
         })()`
       ),
+    composerFocused: () =>
+      main.eval<boolean>(`(() => {
+        const ta = ${TEXTAREA}
+        return !!ta && document.activeElement === ta
+      })()`),
     pressEnter: pressEnter,
     pressKey: pressKey,
     typeAndSend: async (text) => {
@@ -11434,6 +11458,125 @@ export function sessionToolKeys(main: CdpClient): Promise<string[]> {
   )
 }
 
+// ─── 会话面板 · Files 页（FilesPanel 的文件树：@pierre/trees，行在 shadow DOM 里）──────────────
+//
+// 锚点：工具栏按钮 `[data-session-tool="files"]`；面板卡片 `.session-panel-card`；树的行是 pierre 的
+// `button[data-type="item"][data-item-path=<树内相对路径>]`（目录带尾斜杠），名字那一格 `[data-item-section="content"]`。
+// 条目右键菜单是原生的（桌面）：经 bootstrap.cjs 的 `contextMenu:popup` 桩，钉选 / 读项同侧栏（armMenu / lastMenuItems）。
+
+export interface FilesPanelPane {
+  /** 打开当前会话面板的 Files 页（点工具栏的 files 按钮），等文件树里有行 */
+  open(timeoutMs?: number): Promise<void>
+  /** 文件树一行（目录写不写尾斜杠都认）的高与名字那一格的计算字号；不在 → null */
+  rowShot(path: string): Promise<{ height: number; fontSize: string | null } | null>
+  /**
+   * 真右键文件树的一行（CDP `Input.dispatchMouseEvent`：挪过去、按下、松开右键）—— 先等它在屏、中心点没被盖住
+   * 且不再挪动
+   */
+  rightClick(path: string): Promise<void>
+  /** 钉下一次（桩）菜单要选的项（null = 取消），清掉上一次记下的项 */
+  armMenu(pick: string | null): Promise<void>
+  /** 桩记下的最近一次菜单项（原样，含分隔符）；弹出是异步的，等它到 */
+  lastMenuItems(): Promise<MenuItemShot[]>
+}
+
+export function filesPanelPane(main: CdpClient): FilesPanelPane {
+  const TOOL = `document.querySelector('[data-session-tool="files"]')`
+  const CARD = `document.querySelector('.session-panel-card')`
+  const ROW = (path: string): string => FILES_TREE_ROW(CARD, path)
+
+  const centreOf = async (path: string): Promise<{ x: number; y: number }> => {
+    let prev = ''
+    return until(async () => {
+      const p = await main.eval<{ x: number; y: number; hit: boolean } | null>(`(() => {
+        const el = ${ROW(path)}
+        if (!el) return null
+        el.scrollIntoView({ block: 'center', inline: 'nearest' })
+        const r = el.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) return null
+        const x = r.left + r.width / 2
+        const y = r.top + r.height / 2
+        const root = el.getRootNode()
+        const at = (typeof root.elementFromPoint === 'function' ? root : document).elementFromPoint(x, y)
+        return { x, y, hit: !!at && (at === el || el.contains(at)) }
+      })()`)
+      if (!p || !p.hit) {
+        prev = ''
+        return null
+      }
+      const key = `${p.x},${p.y}`
+      if (key !== prev) {
+        prev = key
+        return null
+      }
+      return { x: p.x, y: p.y }
+    }, `files tree row ${path} on screen, uncovered and settled`)
+  }
+
+  return {
+    open: async (timeoutMs = 15_000) => {
+      await until(() => main.eval<boolean>(`!!${TOOL}`), 'files toolbar button', timeoutMs)
+      await main.eval(`(() => {
+        ${TOOL}?.click()
+        return true
+      })()`)
+      await until(
+        () =>
+          main.eval<boolean>(`(() => {
+            const card = ${CARD}
+            if (!card) return false
+            let any = false
+            const walk = (root) => {
+              for (const el of root.querySelectorAll('*')) {
+                if (any) return
+                if (el.getAttribute('data-type') === 'item' && el.hasAttribute('data-item-path')) any = true
+                if (el.shadowRoot) walk(el.shadowRoot)
+              }
+            }
+            walk(card)
+            return any
+          })()`),
+        'files tree rows in the session panel',
+        timeoutMs
+      )
+    },
+    rowShot: (path) =>
+      main.eval<{ height: number; fontSize: string | null } | null>(`(() => {
+        const row = ${ROW(path)}
+        if (!row) return null
+        const label = row.querySelector('[data-item-section="content"]')
+        return {
+          height: row.getBoundingClientRect().height,
+          fontSize: label ? getComputedStyle(label).fontSize : null
+        }
+      })()`),
+    rightClick: async (path) => {
+      const { x, y } = await centreOf(path)
+      await main.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+      await main.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: 'right',
+        buttons: 2,
+        clickCount: 1
+      })
+      await main.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'right',
+        buttons: 0,
+        clickCount: 1
+      })
+    },
+    armMenu: async (pick) => {
+      await armMenu(main, pick)
+    },
+    lastMenuItems: () => lastMenuItems(main)
+  }
+}
+
 // ─── 会话面板 · 产物页（ArtifactsPanel）────────────────────────────────────────
 //
 // 锚点：工具栏按钮 `[data-session-tool="artifacts"]`（本会话或子会话有产物时才有）；页根 `[data-artifacts-panel]`；
@@ -12544,6 +12687,15 @@ export type WebMobileTouchTarget =
   | { replyBody: string }
   /** 输入卡片顶格待处理面板里审批卡的一行（`[data-pending-inputs] [data-ask-option=<id>]`：allow / remember-path / …） */
   | { pendingOption: string }
+  /**
+   * 开着的底部抽屉里文件树（@pierre/trees，行在 shadow DOM 里）的一行：`data-item-path`（树内相对路径；目录
+   * 写不写尾斜杠都认），不含吸顶的那份副本
+   */
+  | { filesRow: string }
+  /** 开着的底部抽屉里 Files 面板顶栏的搜索 / 刷新钮（按图标认：`.lucide-search` / `.lucide-refresh-cw`） */
+  | { filesSheetButton: 'search' | 'refresh' }
+  /** 开着的 DOM 右键菜单（`[role="menu"]`）里文字为它的那一项 —— 真点（`pickDomMenu` 是 el.click()，没有按下） */
+  | { domMenuItem: string }
 
 /** 手机布局里一个标签按钮 */
 export interface WebMobileTabShot {
@@ -12734,6 +12886,46 @@ export interface AssistantActionShot {
   icon: BoxShot | null
 }
 
+/** 底部抽屉里 Files 面板此刻的尺寸（见 `filesSheetShot`；视口坐标，CSS px） */
+export interface FilesSheetShot {
+  /** 文件树的那一行（pierre 的 `button[data-type="item"]`） */
+  row: BoxShot
+  /** 行里名字那一格（`[data-item-section="content"]`）的计算字号；没有那一格 → null */
+  labelFontSize: string | null
+  /** 顶栏的搜索 / 刷新钮；不在 → null */
+  search: BoxShot | null
+  refresh: BoxShot | null
+  /** 搜索框（开着时才有）的计算字号；没有 → null */
+  searchInputFontSize: string | null
+  /** 手机壳（`data-mobile-shell`）上 `--app-font-size` 的计算值；壳不在 → null */
+  appFontSize: string | null
+}
+
+/**
+ * 某处（`scope` 是一段求值为元素的 JS）文件树里 `data-item-path` 为 `path` 的那一行：@pierre/trees 的行都在
+ * shadow DOM 里，逐层钻进开着的 shadow root 找；目录写不写尾斜杠都认；吸顶的那份副本（`data-file-tree-sticky-row`）
+ * 不算。求值为元素或 null
+ */
+const FILES_TREE_ROW = (scope: string, path: string): string => `(() => {
+  const want = ${JSON.stringify(path.replace(/\/+$/, ''))}
+  let found = null
+  const walk = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (found) return
+      if (el.getAttribute('data-type') === 'item' && !el.hasAttribute('data-file-tree-sticky-row')) {
+        if ((el.getAttribute('data-item-path') ?? '').replace(/\\/+$/, '') === want) {
+          found = el
+          return
+        }
+      }
+      if (el.shadowRoot) walk(el.shadowRoot)
+    }
+  }
+  const scope = ${scope}
+  if (scope) walk(scope)
+  return found
+})()`
+
 export interface WebMobilePane {
   shellPresent(): Promise<boolean>
   /** 页面里有没有 `<meta name="viewport">`，有就回它的 content */
@@ -12913,6 +13105,18 @@ export interface WebMobilePane {
   pressDigitOnBodyTrusted(digit: string): Promise<void>
 
   /**
+   * 开着的底部抽屉里 Files 面板的尺寸：文件树的一行（同 `{ filesRow }` 的认法）与它名字那一格的计算字号、顶栏
+   * 搜索 / 刷新钮、搜索框（开着的话）的计算字号，以及手机壳上的 `--app-font-size`；抽屉或那一行不在 → null
+   */
+  filesSheetShot(path: string): Promise<FilesSheetShot | null>
+  /**
+   * 把 `navigator.clipboard.writeText` 换成记录器（并清空记录）—— 绝不写跑测试的人的剪贴板；`clipboardWrites`
+   * 读记录（按次序）
+   */
+  stubClipboard(): Promise<void>
+  clipboardWrites(): Promise<string[]>
+
+  /**
    * 在 window 上挂一个 contextmenu 计数器（并归零）—— **捕获**阶段：菜单的处理函数（showContextMenu）会
    * stopPropagation，冒泡到 window 的那一程走不到；捕获阶段数得到页面里派发的每一次（我们合成的、浏览器自己的）
    */
@@ -13044,6 +13248,13 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `document.querySelector('[data-msg-id=${JSON.stringify(target.replyBody)}] .min-w-0 > .markdown-body')`
     if ('pendingOption' in target)
       return `document.querySelector('[data-pending-inputs] [data-ask-option=${JSON.stringify(target.pendingOption)}]')`
+    if ('filesRow' in target) return FILES_TREE_ROW(SHEET, target.filesRow)
+    if ('filesSheetButton' in target) {
+      const icon = target.filesSheetButton === 'search' ? 'lucide-search' : 'lucide-refresh-cw'
+      return `${SHEET}?.querySelector('.${icon}')?.closest('button')`
+    }
+    if ('domMenuItem' in target)
+      return `[...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(target.domMenuItem)})`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
   }
 
@@ -13077,7 +13288,9 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           if (r.width === 0 || r.height === 0) return null
           const x = ${'widgetCardCorner' in target ? `r.right - ${CARD_CORNER_INSET}` : 'r.left + r.width / 2'}
           const y = ${'sheetBackdrop' in target || 'touchSheetBackdrop' in target ? 'r.top + 40' : 'widgetCardCorner' in target ? `r.top + ${CARD_CORNER_INSET}` : 'r.top + r.height / 2'}
-          const at = document.elementFromPoint(x, y)
+          // 在元素自己的树里命中：shadow DOM 里的元素（文件树的行），document.elementFromPoint 只回到宿主
+          const root = el.getRootNode()
+          const at = (typeof root.elementFromPoint === 'function' ? root : document).elementFromPoint(x, y)
           return {
             x,
             y,
@@ -13733,6 +13946,44 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       })
       await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
     },
+
+    filesSheetShot: (path) =>
+      client.eval<FilesSheetShot | null>(`(() => {
+        const box = (el) => {
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        const sheet = ${SHEET}
+        const row = ${FILES_TREE_ROW(SHEET, path)}
+        if (!sheet || !row) return null
+        const label = row.querySelector('[data-item-section="content"]')
+        const button = (icon) => sheet.querySelector('.' + icon)?.closest('button') ?? null
+        const input = sheet.querySelector('input')
+        const shell = ${SHELL}
+        return {
+          row: box(row),
+          labelFontSize: label ? getComputedStyle(label).fontSize : null,
+          search: box(button('lucide-search')),
+          refresh: box(button('lucide-refresh-cw')),
+          searchInputFontSize: input ? getComputedStyle(input).fontSize : null,
+          appFontSize: shell ? getComputedStyle(shell).getPropertyValue('--app-font-size').trim() : null
+        }
+      })()`),
+    stubClipboard: async () => {
+      await client.eval(`(() => {
+        window.__e2eClipboard = []
+        const fake = {
+          writeText: (text) => {
+            window.__e2eClipboard.push(String(text))
+            return Promise.resolve()
+          }
+        }
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => fake })
+        return true
+      })()`)
+    },
+    clipboardWrites: () => client.eval<string[]>(`window.__e2eClipboard ?? []`),
 
     installContextMenuCounter: async () => {
       await client.eval(`(() => {

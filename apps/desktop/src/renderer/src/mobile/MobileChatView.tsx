@@ -109,7 +109,12 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
               tall
             >
               {sheet === 'files' ? (
-                <FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />
+                <FilesPanel
+                  onOpenFolder={(p) => void window.api.app.openFolder(p)}
+                  // 引用插进输入框之后收起抽屉，让人看见它（「在文件夹中显示」在手机上只会弹一张服务端路径卡，
+                  // 与「复制路径」重复，故不注入 onRevealPath）
+                  onMentionInserted={() => setSheet(null)}
+                />
               ) : (
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   {taskCount > 0 ? (

@@ -82,6 +82,15 @@
  *        那一行的路径不伸出行的右缘；页面与壳没有横向溢出；输入框占位是 otherPlaceholderAsk。焦点在 body 上按可信的
  *        1 → 500ms 后卡片还在、假提供商没收到新请求（触屏没有数字键）。真点「允许这一次」→ 卡片收起、回复
  *        MOB-ASK-DONE 落定、read 那一块的结果里有 MOB-ASK-FILE 且不是错误
+ *   M-32 文件抽屉是触屏那一档（MOB-chat，抽屉滑入落定之后量）：hello.txt 那一行 40px（±1）、名字的字号 = 壳上的
+ *        --app-font-size（缺省 16px）；顶栏的搜索 / 刷新钮 36×36（±1）；真点搜索 → 搜索框 ≥ 16px。设备字号改成 20
+ *        （localStorage + storage 事件）→ 名字 20px、行还是 40px；改回来
+ *   M-33 文件抽屉里的长按菜单（剪贴板换成页面里的记录器，不写真的）：真按住 hello.txt 800ms → DOM 菜单恰是
+ *        「Open / Mention in chat / Copy path / Copy relative path」（手机不给「在文件夹中显示」）、contextmenu 恰一次、
+ *        300ms 后抽屉还开着、没开新标签页；真点「Copy relative path」→ 菜单关、抽屉还在、记录器收到 hello.txt；
+ *        再按住、真点「Copy path」→ `<scanDir 的 root>/hello.txt`；按住文件夹 notes → 只有两项复制，Esc 关；按住
+ *        hello.txt、真点「Mention in chat」→ 抽屉收起、输入框是 '@hello.txt '、一枚胶囊 @hello.txt、焦点在输入框；
+ *        项目目录的文件一个没变。最后清掉 MOB-chat 的输入框
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -89,7 +98,7 @@
  * `Input.dispatchTouchEvent` 的真触摸（webMobilePane）。M-17 的长按 / 挪动靠真实时长（800ms、按下 100ms 后挪动），
  * 在很慢的机器上偶发失败的话先看这一条。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
@@ -120,6 +129,7 @@ import {
   type BoxShot,
   type ComposerLayoutShot,
   type ConversationOverflowShot,
+  type FilesSheetShot,
   type ThinkingBlockShot,
   type TouchSheetShot,
   type UserMessageShot,
@@ -358,6 +368,9 @@ beforeAll(async () => {
   const mainDir = join(app.home, 'mob-proj')
   mkdirSync(mainDir, { recursive: true })
   writeFileSync(join(mainDir, 'hello.txt'), 'hello from the phone\n')
+  // M-33：Files 抽屉里要有一个文件夹行（内容里没有 hello，M-24 的 grep 数不到它）
+  mkdirSync(join(mainDir, 'notes'), { recursive: true })
+  writeFileSync(join(mainDir, 'notes', 'todo.md'), '# todo\n')
   projects.main.id = (await createProject(app.main, { name: projects.main.name, path: mainDir })).id
   const otherDir = join(app.home, 'mob-proj2')
   mkdirSync(otherDir, { recursive: true })
@@ -2283,7 +2296,165 @@ describe('phone layout: the shell', () => {
         await app.main.eval(`window.api.agent.abort(${JSON.stringify(sid)})`).catch(() => undefined)
     }
   })
+
+  it('M-32 the files sheet at touch density: 40px rows in the device font size, 36px header buttons, a 16px search input', async () => {
+    await openFilesSheet()
+    const shot = await settledFilesSheet('hello.txt')
+    const what = JSON.stringify(shot)
+    expect(Math.abs(shot.row.height - 40), what).toBeLessThanOrEqual(1)
+    expect(shot.appFontSize, what).toBe('16px')
+    expect(shot.labelFontSize, what).toBe(shot.appFontSize)
+    for (const [name, b] of [
+      ['search', shot.search],
+      ['refresh', shot.refresh]
+    ] as const) {
+      expect(b, `${name} button`).not.toBeNull()
+      expect(Math.abs(b!.width - 36), `${name} width ${what}`).toBeLessThanOrEqual(1)
+      expect(Math.abs(b!.height - 36), `${name} height ${what}`).toBeLessThanOrEqual(1)
+    }
+
+    await mobile().tap({ filesSheetButton: 'search' })
+    const withSearch = await until(async () => {
+      const s = await mobile().filesSheetShot('hello.txt')
+      return s?.searchInputFontSize ? s : null
+    }, 'the files search input')
+    expect(parseFloat(withSearch.searchInputFontSize!)).toBeGreaterThanOrEqual(16)
+    await mobile().tap({ filesSheetButton: 'search' })
+    await until(
+      async () => (await mobile().filesSheetShot('hello.txt'))?.searchInputFontSize === null,
+      'the files search closed'
+    )
+
+    // 这台设备的字号改成 20：名字跟着放大，行高不变（树的行高是挂载期定的 40）
+    try {
+      await setPhoneFontSize(20)
+      const big = await until(async () => {
+        const s = await mobile().filesSheetShot('hello.txt')
+        return s && s.labelFontSize === '20px' ? s : null
+      }, 'files labels at 20px')
+      expect(big.appFontSize).toBe('20px')
+      expect(Math.abs(big.row.height - 40), JSON.stringify(big)).toBeLessThanOrEqual(1)
+    } finally {
+      await setPhoneFontSize(null)
+      await until(
+        async () => (await mobile().filesSheetShot('hello.txt'))?.labelFontSize === '16px',
+        'files labels back at 16px'
+      )
+    }
+  })
+
+  it('M-33 a long press on a files row is its menu: copies reach the clipboard, mention fills the composer and closes the sheet', async () => {
+    const pane = mobile()
+    const dom = webClientPane(page())
+    const chat = chatPane(page())
+    const M = en.panel.filesMenu
+    const filesBefore = treeOf(join(app.home, 'mob-proj'))
+    try {
+      await pane.stubClipboard()
+      await openFilesSheet()
+      await settledFilesSheet('hello.txt')
+      await pane.installContextMenuCounter()
+      const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
+
+      // (a) 按住一个文件 → 它的菜单；什么都没打开
+      await pane.longPress({ filesRow: 'hello.txt' }, 800)
+      const menu = await until(() => dom.domMenu(), 'the files row menu')
+      expect(menu.map((m) => m.label)).toEqual([M.open, M.mention, M.copyPath, M.copyRelativePath])
+      expect(await pane.contextMenuCount()).toBe(1)
+      await sleep(300)
+      expect((await pane.sheet())?.title).toBe(en.mobile.files)
+      expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
+
+      // (b) 复制相对路径 / 复制路径（root 取 scanDir 自己报的）
+      await pane.tap({ domMenuItem: M.copyRelativePath })
+      await until(async () => (await dom.domMenu()) === null, 'the menu closed after a copy')
+      expect((await pane.sheet())?.title, 'the sheet stays open').toBe(en.mobile.files)
+      await until(
+        async () => (await pane.clipboardWrites()).length === 1,
+        'the relative path copied'
+      )
+      expect(await pane.clipboardWrites()).toEqual(['hello.txt'])
+      const root = await page().eval<string>(
+        `window.api.files.scanDir(${JSON.stringify({ sessionId: sids.chat, dir: '' })}).then((r) => r.root)`
+      )
+      expect(root).toBeTruthy()
+      await pane.longPress({ filesRow: 'hello.txt' }, 800)
+      await until(() => dom.domMenu(), 'the files row menu again')
+      await pane.tap({ domMenuItem: M.copyPath })
+      await until(async () => (await pane.clipboardWrites()).length === 2, 'the full path copied')
+      expect((await pane.clipboardWrites())[1]).toBe(`${root}/hello.txt`)
+      expect(await pane.sheet()).not.toBeNull()
+
+      // (c) 文件夹：只有两项复制
+      await pane.longPress({ filesRow: 'notes' }, 800)
+      const folderMenu = await until(() => dom.domMenu(), 'the folder row menu')
+      expect(folderMenu.map((m) => m.label)).toEqual([M.copyPath, M.copyRelativePath])
+      await pane.pressEscape()
+      await until(async () => (await dom.domMenu()) === null, 'the folder menu closed')
+
+      // (d) 在对话中引用 → 抽屉收起，胶囊进输入框，焦点在输入框
+      await pane.longPress({ filesRow: 'hello.txt' }, 800)
+      await until(() => dom.domMenu(), 'the files row menu for the mention')
+      await pane.tap({ domMenuItem: M.mention })
+      await until(async () => (await pane.sheet()) === null, 'the sheet closed after the mention')
+      await until(
+        async () => (await pane.composerValue()) === '@hello.txt ',
+        'the mention in the composer'
+      )
+      expect(await chat.composerChips()).toEqual(['@hello.txt'])
+      await until(() => chat.composerFocused(), 'focus in the composer')
+      expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
+      expect(await pane.clipboardWrites()).toHaveLength(2)
+
+      // (e) 只读：项目目录一个文件都没变
+      expect(treeOf(join(app.home, 'mob-proj'))).toEqual(filesBefore)
+    } finally {
+      if (await pane.chatOpen()) await chat.type('').catch(() => undefined)
+    }
+  })
 })
+
+/** 一个目录下的全部条目（递归，排好序） */
+function treeOf(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' }).sort()
+}
+
+/** 推入 MOB-chat、拉起文件抽屉，等 hello.txt 在树里 */
+async function openFilesSheet(): Promise<void> {
+  if (!(await mobile().chatOpen()) || (await mobile().chatTitle()) !== 'MOB-chat') {
+    await openFromList('MOB-chat')
+  }
+  await mobile().tap({ chat: 'files' })
+  await until(
+    async () => (await mobile().sheetFiles()).includes('hello.txt'),
+    'hello.txt in the files sheet'
+  )
+}
+
+/** 文件抽屉滑入动画走完（约 220ms）：连着两次量到同样的数才算落定 */
+async function settledFilesSheet(path: string): Promise<FilesSheetShot> {
+  let prev = ''
+  return until(async () => {
+    const shot = await mobile().filesSheetShot(path)
+    if (!shot) return null
+    const key = JSON.stringify(shot)
+    if (key !== prev) {
+      prev = key
+      return null
+    }
+    return shot
+  }, `the files sheet settled (${path})`)
+}
+
+/** 这台设备的字号（手机布局记在 localStorage，另一页改了靠 storage 事件跟上）；null = 去掉，回到缺省 */
+async function setPhoneFontSize(size: number | null): Promise<void> {
+  await page().eval(`(() => {
+    const key = 'shuvix.mobile.fontSize'
+    ${size === null ? 'localStorage.removeItem(key)' : `localStorage.setItem(key, ${JSON.stringify(String(size))})`}
+    window.dispatchEvent(new StorageEvent('storage', { key }))
+    return true
+  })()`)
+}
 
 /** 设置标签停在分区列表上：开着分区（或分区里的一项）就一层层返回 */
 async function settingsToList(): Promise<void> {

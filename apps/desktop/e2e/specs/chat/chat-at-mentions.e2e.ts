@@ -15,10 +15,17 @@
  * 选择要即时反映到候选」的期望用例：它们依赖 knowledge provider 同时订阅
  * `session.configChanged`（updateKnowledgeBases 的广播；修复前候选表只在 knowledge.changed
  * 时重扫，启用勾选变了弹层也不会变 —— 即 D-1）。
+ *
+ * AT-30（Files 面板的条目右键 → 「在对话中引用」，桌面主窗口）：右键是 CDP 的真鼠标（pierre 的行在 shadow DOM 里），
+ * 菜单是原生的、经 bootstrap.cjs 的 `contextMenu:popup` 桩（filesPanelPane 的 armMenu / lastMenuItems），
+ * 原样比对它收到的菜单项；用自己的一个项目（AtProjFiles），不动上面两组的候选。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import en from '@shuvix/chat-protocol/i18n/locales/en.json'
+import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
@@ -35,6 +42,7 @@ import {
 import {
   atPopoverPane,
   chatPane,
+  filesPanelPane,
   sidebarPane,
   type AtPopoverPane,
   type AtSuggestionRow,
@@ -43,6 +51,19 @@ import {
 } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
+/** AT-30：菜单项文案按界面语言比 */
+interface FilesMenuLocale {
+  panel: {
+    filesMenu: {
+      open: string
+      mention: string
+      copyPath: string
+      copyRelativePath: string
+      reveal: string
+    }
+  }
+}
+const LOCALES: Record<string, FilesMenuLocale> = { en, ja, zh }
 
 /** 行锚点（data-at-suggestion 的值）：知识条目 = `knowledge:` + 条目 id */
 const K_TOKEN = 'knowledge:knowledge/kb-a/notes/token-refresh.md'
@@ -823,3 +844,119 @@ describe('H · 两段式收窄与带空格的名字', () => {
     expect(row.label).toBe('Release plan.md')
   })
 })
+
+describe('I · Files 面板的条目右键（桌面）', () => {
+  it('AT-30 树是桌面档（22px 行、12px 字）；文件 / 目录的原生菜单项；「在对话中引用」插进光标处、焦点留在输入框，与在弹层里选同一个 Token；不碰磁盘', async () => {
+    // 一个自己的项目（侧栏分组里只有这一条会话，远低于折叠上限）：README.md + docs/
+    const dir = join(app.home, 'proj-at-files')
+    for (const rel of ['README.md', 'docs/guide.md']) {
+      mkdirSync(dirname(join(dir, rel)), { recursive: true })
+      writeFileSync(join(dir, rel), `# ${rel}\n`)
+    }
+    const filesBefore = treeOf(dir)
+    const project = await createProject(app.main, { name: 'AtProjFiles', path: dir })
+    const sid = await createSession('AT-30', undefined, project.id)
+    await until(async () => (await sidebar.titles()).includes('AT-30'), 'AT-30 in the sidebar')
+    expect(await sidebar.openSession('AT-30')).toBe(true)
+    await chat.ready()
+    await chat.type('')
+
+    const files = filesPanelPane(app.main)
+    await files.open()
+    const M = (await uiLocale()).panel.filesMenu
+
+    // (a) 桌面档：22px 一行、12px 字
+    const row = await until(() => files.rowShot('README.md'), 'the README.md row')
+    expect(Math.abs(row.height - 22), JSON.stringify(row)).toBeLessThanOrEqual(1)
+    expect(row.fontSize).toBe('12px')
+
+    // (b) 文件：恰是这几项（界面语言的文案）；取消 → 什么都没发生
+    const windowsBefore = {
+      preview: (await app.filePreviewWindows()).length,
+      markdown: (await app.markdownWindows()).length
+    }
+    await files.armMenu(null)
+    await files.rightClick('README.md')
+    expect(await files.lastMenuItems()).toEqual([
+      { id: 'open', label: M.open },
+      { id: 'mention', label: M.mention },
+      { type: 'separator' },
+      { id: 'copyPath', label: M.copyPath },
+      { id: 'copyRelativePath', label: M.copyRelativePath },
+      { type: 'separator' },
+      { id: 'reveal', label: M.reveal }
+    ])
+    await sleep(300)
+    expect(await chat.inputValue()).toBe('')
+    expect({
+      preview: (await app.filePreviewWindows()).length,
+      markdown: (await app.markdownWindows()).length
+    }).toEqual(windowsBefore)
+
+    // (c) 目录：两项复制 + 在文件夹中显示（不选它 —— 会开 Finder）
+    await files.armMenu(null)
+    await files.rightClick('docs')
+    expect(await files.lastMenuItems()).toEqual([
+      { id: 'copyPath', label: M.copyPath },
+      { id: 'copyRelativePath', label: M.copyRelativePath },
+      { type: 'separator' },
+      { id: 'reveal', label: M.reveal }
+    ])
+
+    // (d) 在对话中引用：像人那样在输入框里打字、把光标点到中间，再去右键 —— 右键按下时输入框失焦，插入点是它记着的
+    //     光标；焦点回到输入框，不被树抢回去
+    await chat.type('')
+    await chat.typeTrusted('look at please')
+    await chat.setCaret(8)
+    await files.armMenu('mention')
+    await files.rightClick('README.md')
+    await until(
+      async () => (await chat.inputValue()) === 'look at @README.md please',
+      'the mention inserted at the caret'
+    )
+    expect(await chat.composerChips()).toEqual(['@README.md'])
+    await sleep(300)
+    expect(await chat.composerFocused()).toBe(true)
+
+    // (e) 与在 @ 弹层里选同一个文件等价：同一个 Token，两处标记
+    provider.reset()
+    await events.clear()
+    provider.script({ text: 'ok' })
+    await chat.type('look at @README.md and @READ')
+    await waitRow('README.md')
+    expect(await popover.select('README.md')).toBe(true)
+    expect(await chat.inputValue()).toBe('look at @README.md and @README.md ')
+    await sendAndSettle(sid)
+    const user = await lastUserMessage(sid)
+    const tokens = user.metadata?.inlineTokens ?? {}
+    expect(Object.values(tokens)).toEqual([
+      {
+        type: 'at',
+        id: 'README.md',
+        displayText: 'README.md',
+        payload: '[workspace file: README.md]',
+        name: 'README.md'
+      }
+    ])
+    const [uid] = Object.keys(tokens)
+    expect(user.content.split(`{{shuvixInlineToken:${uid}}}`).length - 1).toBe(2)
+
+    // (f) 只读：项目目录一个文件都没变
+    expect(treeOf(dir)).toEqual(filesBefore)
+  })
+})
+
+/** 一个目录下的全部条目（递归，排好序） */
+function treeOf(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' }).sort()
+}
+
+/** 界面此刻用的语言（设置里有就是它，没有就是系统语言 —— 同渲染端 i18n.ts）的 locale 文案 */
+async function uiLocale(): Promise<FilesMenuLocale> {
+  const set = await app.main.eval<string | null>(
+    `Promise.resolve(window.api.settings.get('general.language')).then((v) => v || null)`
+  )
+  const lang =
+    set ?? (await app.main.eval<string>('navigator.language')).split('-')[0]!.toLowerCase()
+  return LOCALES[lang] ?? en
+}
