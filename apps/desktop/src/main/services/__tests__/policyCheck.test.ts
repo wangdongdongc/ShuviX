@@ -32,7 +32,12 @@ import {
 } from '@shuvix/agent-runtime'
 import { createInlinePolicyMdReader } from '../../../../../../packages/agent-runtime/src/security/builtinPolicies/inlineSources'
 import type { NetworkStatus } from '../../../shared/network'
-import { runPolicyCheck, type PolicyCheckDeps, type PolicyCheckParams } from '../policyCheck'
+import {
+  runPolicyCheck,
+  type PolicyCheckDeps,
+  type PolicyCheckParams,
+  type PolicyCheckResult
+} from '../policyCheck'
 import { networkPolicyCheckHint } from '../policyCheckHint'
 
 type Interfaces = ReturnType<typeof networkInterfaces>
@@ -145,7 +150,7 @@ function deps(
   }
 }
 
-function run(params: Partial<PolicyCheckParams>, d: PolicyCheckDeps = deps()) {
+function run(params: Partial<PolicyCheckParams>, d: PolicyCheckDeps = deps()): PolicyCheckResult {
   return runPolicyCheck({ flags: [], ...params }, d)
 }
 

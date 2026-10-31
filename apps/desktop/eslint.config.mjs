@@ -167,6 +167,20 @@ export default defineConfig(
         // main-util —— 广播要从 service、内聚模块乃至 utils（downloadManager）发出，main-util 是它们都能引的那一层。
         // 必须写在 main-ipc（目录）之前，先匹配到这个单文件
         { type: 'main-util', pattern: ['src/main/ipc/registry.ts'], mode: 'file' },
+        // 远程访问的策略点位（policyGate：设备 cookie、请求分类、主体 / 客体的构造与判定）与它引的三个纯叶子：同样不碰
+        // 网络服务本身（只引 node 内置、shared、utils 与 agent-runtime），归 main-util —— `shuvix policy check`
+        // （services/policyCheck.ts）按同一份代码试算判定，知识库的通道清单单测核对请求的 scope。
+        // 必须写在 main-frontend-impl（目录）之前
+        {
+          type: 'main-util',
+          pattern: [
+            'src/main/frontend/network/policyGate.ts',
+            'src/main/frontend/network/guards.ts',
+            'src/main/frontend/network/fileRoutes.ts',
+            'src/main/frontend/network/staticFiles.ts'
+          ],
+          mode: 'file'
+        },
         // main-frontend-core：frontend/core 的运行时编排（Gateway / Registry / OperationContext）
         { type: 'main-frontend-core', pattern: 'src/main/frontend/core' },
         // frontend/sync：视图同步的分发核（视图服务端单例、钩子扇出、窗口链路表），与 Registry 同层 ——

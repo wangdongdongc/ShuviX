@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/explicit-function-return-type */
 /**
  * e2e 运行记录的两个动作（记录由 e2e/harness/historyReporter.ts 边跑边写：一次运行 = 一行 `start`、每个跑完的
  * spec 文件一行 `file`、一行 `end`，同一个 `run` 串起来；中途被停掉的没有 `end`）：

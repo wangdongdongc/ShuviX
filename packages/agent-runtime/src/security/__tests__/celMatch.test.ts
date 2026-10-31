@@ -176,12 +176,12 @@ describe('evaluateMatch — inDir', () => {
 
     // 变量与字面量混排的列表字面量也成立（2026-10-19 起关掉了 cel-js 的 homogeneousAggregateLiterals：
     // 从前这是类型错误 —— dyn 与 string 不同型 —— deny 规则会在求值期 fail-safe 成命中一切）
-    expect(
-      evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/lit/x', { a: '/bots' }))
-    ).toBe(true)
-    expect(
-      evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/bots/x', { a: '/bots' }))
-    ).toBe(true)
+    expect(evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/lit/x', { a: '/bots' }))).toBe(
+      true
+    )
+    expect(evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/bots/x', { a: '/bots' }))).toBe(
+      true
+    )
     expect(
       evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/other/x', { a: '/bots' }))
     ).toBe(false)

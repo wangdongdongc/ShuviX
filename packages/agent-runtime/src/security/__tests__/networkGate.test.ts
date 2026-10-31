@@ -15,7 +15,9 @@ import { createSecurityContext, GATE_DOWNGRADED_MESSAGE, gateVerdictOf } from '.
 import { parsePolicyDefinitionFile } from '../policyFile'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
 import type {
+  GateVerdict,
   MatchContext,
+  SecurityDecision,
   SecurityHostProvider,
   SecurityRequest,
   SecuritySubject,
@@ -211,7 +213,7 @@ shuvix-policy-rules:
 })
 
 describe('judgeGate', () => {
-  const gate = (users: UserPolicyFile[], address: string) =>
+  const gate = (users: UserPolicyFile[], address: string): GateVerdict =>
     createSecurityContext(
       networkSubject({ address }),
       { host: 'desktop', platform: 'darwin' },
@@ -321,7 +323,7 @@ shuvix-policy-rules:
 })
 
 describe('内置 network-admission', () => {
-  const judge = (users: UserPolicyFile[], address: string, kind = 'network') =>
+  const judge = (users: UserPolicyFile[], address: string, kind = 'network'): SecurityDecision =>
     evaluate(
       assembleRules(provider(users)),
       request(kind === 'network' ? networkSubject({ address }) : { kind, sessionId: 's' })

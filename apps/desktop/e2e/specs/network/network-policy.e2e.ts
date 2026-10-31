@@ -59,6 +59,7 @@ import {
   removeUserPolicy,
   waitBrowserTab,
   writeUserPolicy,
+  type HttpProbeResult,
   type NetworkStatus,
   type WebClientHandle
 } from '../../harness/networkFixtures'
@@ -128,7 +129,9 @@ let roSession = ''
 const status = (): Promise<NetworkStatus> => networkStatus(app.main)
 
 /** 经局域网地址（缺省 LAN）的一次 HTTP 请求 */
-const lanProbe = (opts: { path?: string; headers?: Record<string, string>; ip?: string } = {}) =>
+const lanProbe = (
+  opts: { path?: string; headers?: Record<string, string>; ip?: string } = {}
+): Promise<HttpProbeResult> =>
   httpProbe({
     port: P,
     connectHost: opts.ip ?? LAN,

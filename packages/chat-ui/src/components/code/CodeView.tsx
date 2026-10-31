@@ -174,7 +174,7 @@ export function CodeView({
       attributeFilter: ['data-theme']
     })
     return () => obs.disconnect()
-  }, [themeC])
+  }, [themeC, maxHeight])
 
   return <div ref={hostRef} className={maxHeight ? 'w-full' : 'h-full w-full'} />
 }

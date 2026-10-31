@@ -1107,7 +1107,7 @@ app.whenReady().then(async () => {
   await runLegacySwitchover()
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
-  cliServer.setPolicyCheckDeps(desktopPolicyCheckDeps)
+  cliServer.setPolicyCheckDeps(() => desktopPolicyCheckDeps(() => networkService.status()))
   step('cliServer.start', () =>
     cliServer.start().catch((err) => {
       log.error(`cliServer.start failed: ${err}`)
