@@ -37,6 +37,15 @@
  *   FW-16 临时会话 P 的子会话 C：workingDirectory = P 的临时工作区（P 没问过也建出来），不建 temp_workspace/<C>，
  *         权限表的工作目录行就是它；删 P（级联 C）删掉；单删 C 留着，再删 P 删掉；内存父会话同样；
  *         项目父会话不写键也不建 temp_workspace/<P>；父指针落空 → 退回 C 自己的临时工作区
+ *
+ * bot 会话只归属 bot，项目只是它的工作位置（引用 `settings.workProject` + 路径快照 `settings.workingDirectory`，
+ * chat-protocol `projectContextIdOf`）：
+ *   BW-1  create({bot, workProject}) → projectId null、引用 + 快照；getById 是项目根；不在 findByProjectId 里；
+ *         权限表的工作目录行是项目根；workProject 先于 projectId；旧入口只给 projectId 也记成引用；笔记本 bot 仍是成员
+ *   BW-2  项目行被删 → 会话还在，退回快照；项目改路径 → 快照跟着搬（projectService.update），之后再删项目退回的是新路径；
+ *         别的会话（成员、临时、引用别的项目）的设置不动
+ *   BW-3  子会话、fork 抄引用与快照；项目删了之后的 fork / 子会话用快照；临时 bot 会话的子会话共用父会话的临时工作区
+ *   BW-4  项目根里的哨兵文件经得起删 bot 会话、它的子会话与 fork（项目在或不在都一样）
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -49,6 +58,8 @@ const holder = vi.hoisted(() => ({
   db: null as unknown,
   userData: '',
   projectRoot: '',
+  /** 假的项目表（projectDao 桩读写它）：每个用例重置成只有 p1 */
+  projects: {} as Record<string, { path: string; settings: Record<string, unknown> }>,
   /** 非空时，sessionService 删这个目录底下的东西会抛错（FW-13） */
   rmThrowsUnder: ''
 }))
@@ -97,7 +108,14 @@ vi.mock('../../dao/providerDao', () => ({
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: () => undefined } }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: {
-    pick: (id: string) => (id === 'p1' ? { path: holder.projectRoot, settings: {} } : undefined)
+    pick: (id: string) => (holder.projects[id] ? { ...holder.projects[id] } : undefined),
+    // projectService.update / delete 落到这两个（BW-2）
+    update: (id: string, patch: { path?: string }) => {
+      if (holder.projects[id] && patch.path !== undefined) holder.projects[id].path = patch.path
+    },
+    deleteById: (id: string) => {
+      delete holder.projects[id]
+    }
   }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
@@ -156,9 +174,11 @@ import { clearMemoryAclForTests } from '../acl/store'
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
 let sessionService: (typeof import('../sessionService'))['sessionService']
+let projectService: (typeof import('../projectService'))['projectService']
 
 beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
+  ;({ projectService } = await import('../projectService'))
 })
 
 let root: string
@@ -174,6 +194,7 @@ beforeEach(() => {
   holder.projectRoot = join(root, 'project-root')
   mkdirSync(holder.projectRoot, { recursive: true })
   writeFileSync(join(holder.projectRoot, 'README.md'), '# project\n')
+  holder.projects = { p1: { path: holder.projectRoot, settings: {} } }
   holder.rmThrowsUnder = ''
   process.env.HOME = join(root, 'home')
   sessionRecords.clearEphemeralForTests()
@@ -696,5 +717,199 @@ describe("FW-16 a temp session's sub-session shares the parent's temp workspace"
     expect(sessionRecords.findById(C)!.settings).not.toHaveProperty('workingDirectory')
     expect(sessionService.getById(C)!.workingDirectory).toBe(tempOf(C))
     expect(existsSync(tempOf('ghost'))).toBe(false)
+  })
+})
+
+// ─── BW-1..4：bot 会话引用工作项目 ─────────────────
+
+/** 一条选了项目 `projectId` 当工作位置的 bot 会话 */
+function createBot(id: string, workProject?: string): string {
+  return sessionService.create({ title: id, bot: 'scout', workProject }, { id }).id
+}
+
+/** 再加一个项目（p1 之外），根目录里放一份 README 当哨兵 */
+function addProject(id: string): string {
+  const dir = join(root, `project-${id}`)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'README.md'), `# ${id}\n`)
+  holder.projects[id] = { path: dir, settings: {} }
+  return dir
+}
+
+describe('BW-1..4 a bot session references its work project instead of belonging to it', () => {
+  it('BW-1 create({bot, workProject}) → projectId null, reference + path snapshot; getById is the project root; not a member of the project', () => {
+    const B = createBot('B', 'p1')
+    const stored = sessionRecords.findById(B)!
+    expect(stored.projectId).toBeNull()
+    expect(stored.settings.bot).toBe('scout')
+    expect(stored.settings.workProject).toBe('p1')
+    expect(stored.settings.workingDirectory).toBe(holder.projectRoot)
+    expect(sessionService.getById(B)!.workingDirectory).toBe(holder.projectRoot)
+    // 成员关系只看 projectId：按项目列会话（侧栏分组、项目删除的级联）看不见它
+    expect(sessionRecords.findByProjectId('p1').map((s) => s.id)).not.toContain(B)
+    // 权限表的工作目录行同样是项目根（acl/workdir 经 projectContextIdOf）
+    const row = sessionAcl.entries(B).find((e) => e.source === 'workdir')!
+    expect(row.target).toBe(holder.projectRoot)
+    // 临时工作区从没被建出来
+    expect(existsSync(tempOf(B))).toBe(false)
+  })
+
+  it('BW-1 workProject beats projectId; the old entry that only passes projectId is converted to a reference too', () => {
+    const p2 = addProject('p2')
+    const both = sessionService.create(
+      { title: 'both', bot: 'scout', workProject: 'p2', projectId: 'p1' },
+      { id: 'BOTH' }
+    ).id
+    expect(sessionRecords.findById(both)!.projectId).toBeNull()
+    expect(sessionRecords.findById(both)!.settings.workProject).toBe('p2')
+    expect(sessionService.getById(both)!.workingDirectory).toBe(p2)
+
+    const legacy = sessionService.create(
+      { title: 'old', bot: 'scout', projectId: 'p1' },
+      { id: 'OLD' }
+    ).id
+    expect(sessionRecords.findById(legacy)!.projectId).toBeNull()
+    expect(sessionRecords.findById(legacy)!.settings.workProject).toBe('p1')
+    expect(sessionService.getById(legacy)!.workingDirectory).toBe(holder.projectRoot)
+    expect(sessionRecords.findByProjectId('p1')).toEqual([])
+  })
+
+  it('BW-1 a missing project → temporary: no reference, no snapshot, its own temp workspace', () => {
+    const B = createBot('B', 'nope')
+    const stored = sessionRecords.findById(B)!
+    expect(stored.projectId).toBeNull()
+    expect(stored.settings).not.toHaveProperty('workProject')
+    expect(stored.settings).not.toHaveProperty('workingDirectory')
+    expect(sessionService.getById(B)!.workingDirectory).toBe(tempOf(B))
+  })
+
+  it('BW-1 a notebook bot (bot file opened as a notebook) stays a member of its carrier project', () => {
+    const N = sessionService.create(
+      { title: 'n', bot: 'scout', notebookPath: 'scout.md', projectId: 'p1' },
+      { id: 'N' }
+    ).id
+    const stored = sessionRecords.findById(N)!
+    expect(stored.projectId).toBe('p1')
+    expect(stored.settings).not.toHaveProperty('workProject')
+    expect(sessionRecords.findByProjectId('p1').map((s) => s.id)).toEqual([N])
+    expect(sessionService.getById(N)!.workingDirectory).toBe(holder.projectRoot)
+  })
+
+  it('BW-2 the project row deleted → the session survives and falls back to its path snapshot', () => {
+    const B = createBot('B', 'p1')
+    projectService.delete('p1')
+    expect(holder.projects.p1).toBeUndefined()
+
+    const stored = sessionRecords.findById(B)!
+    expect(stored).toBeDefined()
+    expect(stored.settings.workProject).toBe('p1')
+    expect(sessionService.getById(B)!.workingDirectory).toBe(holder.projectRoot)
+    const row = sessionAcl.entries(B).find((e) => e.source === 'workdir')!
+    expect(row.target).toBe(holder.projectRoot)
+  })
+
+  it('BW-2 the project moved (projectService.update path) → the snapshot follows; deleting the project afterwards falls back to the new path', () => {
+    const B = createBot('B', 'p1')
+    const C = sessionService.create({ parentId: B }, { id: 'C' }).id
+    const moved = join(root, 'moved-root')
+    mkdirSync(moved, { recursive: true })
+
+    projectService.update('p1', { path: moved })
+    expect(sessionRecords.findById(B)!.settings.workingDirectory).toBe(moved)
+    expect(sessionRecords.findById(C)!.settings.workingDirectory).toBe(moved)
+    expect(sessionService.getById(B)!.workingDirectory).toBe(moved)
+
+    projectService.delete('p1')
+    expect(sessionService.getById(B)!.workingDirectory).toBe(moved)
+    expect(sessionService.getById(C)!.workingDirectory).toBe(moved)
+  })
+
+  it('BW-2 a path change leaves other sessions alone: members, temp sessions and references to another project', () => {
+    const p2 = addProject('p2')
+    const member = sessionService.create({ projectId: 'p1' }, { id: 'M' }).id
+    const temp = createTemp('T')
+    sessionRecords.updateSettings(temp, { workingDirectory: '/elsewhere' })
+    const other = createBot('O', 'p2')
+    const before = {
+      member: JSON.stringify(sessionRecords.findById(member)!.settings),
+      temp: JSON.stringify(sessionRecords.findById(temp)!.settings),
+      other: JSON.stringify(sessionRecords.findById(other)!.settings)
+    }
+
+    projectService.update('p1', { path: join(root, 'moved-root') })
+
+    expect(JSON.stringify(sessionRecords.findById(member)!.settings)).toBe(before.member)
+    expect(JSON.stringify(sessionRecords.findById(temp)!.settings)).toBe(before.temp)
+    expect(JSON.stringify(sessionRecords.findById(other)!.settings)).toBe(before.other)
+    expect(sessionRecords.findById(other)!.settings.workingDirectory).toBe(p2)
+  })
+
+  it('BW-3 a sub-session and a fork copy the reference and the snapshot; neither is a member', () => {
+    const B = createBot('B', 'p1')
+    const C = sessionService.create({ parentId: B }, { id: 'C' }).id
+    forkOf(B, 'F')
+
+    for (const id of [C, 'F']) {
+      const stored = sessionRecords.findById(id)!
+      expect(stored.projectId, id).toBeNull()
+      expect(stored.settings.workProject, id).toBe('p1')
+      expect(stored.settings.workingDirectory, id).toBe(holder.projectRoot)
+      expect(sessionService.getById(id)!.workingDirectory, id).toBe(holder.projectRoot)
+      expect(existsSync(tempOf(id)), id).toBe(false)
+    }
+    expect(sessionRecords.findById('F')!.settings.bot).toBe('scout')
+    // 子会话不带 bot（BSess-Sub），但带着工作位置
+    expect(sessionRecords.findById(C)!.settings).not.toHaveProperty('bot')
+    expect(sessionRecords.findByProjectId('p1')).toEqual([])
+  })
+
+  it('BW-3 after the project is deleted, a fork and a new sub-session use the snapshot', () => {
+    const B = createBot('B', 'p1')
+    projectService.delete('p1')
+    forkOf(B, 'F')
+    const C = sessionService.create({ parentId: B }, { id: 'C' }).id
+
+    for (const id of ['F', C]) {
+      const stored = sessionRecords.findById(id)!
+      expect(stored.settings.workProject, id).toBe('p1')
+      expect(stored.settings.workingDirectory, id).toBe(holder.projectRoot)
+      expect(sessionService.getById(id)!.workingDirectory, id).toBe(holder.projectRoot)
+    }
+  })
+
+  it("BW-3 a temp bot session's child shares the parent's temp workspace", () => {
+    const T = createBot('T')
+    expect(sessionRecords.findById(T)!.settings).not.toHaveProperty('workProject')
+    const C = sessionService.create({ parentId: T }, { id: 'C' }).id
+    const stored = sessionRecords.findById(C)!
+    expect(stored.settings).not.toHaveProperty('workProject')
+    expect(stored.settings.workingDirectory).toBe(tempOf(T))
+    expect(sessionService.getById(C)!.workingDirectory).toBe(tempOf(T))
+    expect(existsSync(tempOf(C))).toBe(false)
+  })
+
+  it('BW-4 a sentinel in the project root survives deleting the bot session, its child and its fork', async () => {
+    const B = createBot('B', 'p1')
+    sessionService.create({ parentId: B }, { id: 'C' })
+    forkOf(B, 'F')
+    writeSentinel(holder.projectRoot, 'project')
+
+    await sessionService.delete('F')
+    await sessionService.delete(B)
+    expect(sessionRecords.findById('C')).toBeUndefined()
+    expectKept(holder.projectRoot, 'project')
+    expect(readFileSync(join(holder.projectRoot, 'README.md'), 'utf-8')).toBe('# project\n')
+  })
+
+  it('BW-4 the same once the project is deleted (the snapshot points at the old root)', async () => {
+    const B = createBot('B', 'p1')
+    forkOf(B, 'F')
+    writeSentinel(holder.projectRoot, 'project')
+    projectService.delete('p1')
+
+    await sessionService.delete(B)
+    await sessionService.delete('F')
+    expectKept(holder.projectRoot, 'project')
+    expect(readFileSync(join(holder.projectRoot, 'README.md'), 'utf-8')).toBe('# project\n')
   })
 })

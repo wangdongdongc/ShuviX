@@ -99,6 +99,16 @@ body {
   --sb-section-space: 16px;
   --sb-indent: calc(var(--sb-icon) + var(--sb-gap));
 }
+/* bot 组头的「+」（新对话）：手机上没有悬停，它常亮、放大到手指的尺寸 —— 那是开一条 bot 会话最直接的入口 */
+[data-sidebar-density='touch'] [data-group-add] {
+  opacity: 1;
+  width: 32px;
+  height: 32px;
+  right: 40px;
+}
+[data-sidebar-density='touch'] [data-has-add] {
+  padding-right: 76px;
+}
 .sb-row {
   position: relative;
   display: flex;

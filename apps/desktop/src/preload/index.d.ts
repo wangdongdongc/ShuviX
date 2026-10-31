@@ -653,6 +653,8 @@ declare global {
         /** 被同名压过、当前不生效的那几份（只给侧栏分组列出来） */
         shadowed: ShadowedBotInfo[]
         invalid: InvalidBotFile[]
+        /** 归档了的 bot 名（它们的会话在侧栏里一起藏起来） */
+        archived: string[]
       }>
       /** 打开 / 复用一份 bot 文件（合法或解析不过都行）的笔记本会话 */
       openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
@@ -663,7 +665,27 @@ declare global {
         fileName?: string
         error?: string
       }>
-      delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      /** 归档：生效的那份挪进 bots 目录的 `archived/`（会话一起藏起来，能恢复） */
+      archive: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      /** 归档了的 bot（设置 → 已归档 → Bots），各带它名下的会话条数 */
+      listArchived: () => Promise<
+        Array<{
+          name: string
+          displayName: string
+          description: string
+          fileName: string
+          sessionCount: number
+        }>
+      >
+      restore: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      /** 删除归档里的一份文件，连同它的会话（同名的另一份还在时只删文件） */
+      deleteArchived: (params: {
+        fileName: string
+      }) => Promise<{ success: boolean; deletedSessions: number; error?: string }>
+      /** 删掉一个找不到 bot 文件的名字下的全部会话（这个名字还有主人时拒绝） */
+      deleteSessions: (params: {
+        name: string
+      }) => Promise<{ success: boolean; deletedSessions: number; error?: string }>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
     }

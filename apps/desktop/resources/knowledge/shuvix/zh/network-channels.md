@@ -94,9 +94,9 @@ scope 管什么、界面上在哪，见 `network-policy` 条目的「scope 与 a
 ### `agents`
 
 - group: `bot`, `mdMeta`, `subAgent`, `trigger`
-- read: `bot:list`, `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`, `trigger:logs`, `trigger:status`
+- read: `bot:list`, `bot:listArchived`, `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`, `trigger:logs`, `trigger:status`
 - write: `bot:openFolder`, `subAgent:openBuiltinNote`, `subAgent:openFolder`, `trigger:clearLogs`
-- admin: `bot:createNew`, `bot:delete`, `bot:deleteByFile`, `bot:openNote`, `mdMeta:setFill`, `mdMeta:unsetFill`, `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
+- admin: `bot:archive`, `bot:createNew`, `bot:deleteArchived`, `bot:deleteByFile`, `bot:deleteSessions`, `bot:openNote`, `bot:restore`, `mdMeta:setFill`, `mdMeta:unsetFill`, `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
 - `settings:set` admin: `bots.*`, `general.defaultChatAgent`, `general.defaultProjectAgent`, `triggers.*`
 
 ### `extensions`

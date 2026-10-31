@@ -25,6 +25,7 @@
  * 另留 `resolveProfileModelSpec`：档案 `shuvix-model` 的解析（切档案种子；派生 agent 经
  * `SessionHostDeps.resolveProfileModel` 接到协调器）。
  */
+import { workProjectOf } from '@shuvix/chat-protocol/botSession'
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import {
   formatLanguageDisplay,
@@ -98,13 +99,19 @@ import { builtinManualDir, enabledBaseChoices } from '../services/knowledge'
 
 const log = createLogger('AgentHost')
 
-/** 会话所属项目（变量表/注入解析与 SkillTool 的同源查询；无项目会话返回 undefined） */
+/**
+ * 会话所属项目，或 bot 会话引用的工作项目（变量表/注入解析与 SkillTool 的同源查询；都没有返回 undefined）——
+ * bot 会话不是项目的成员，项目提示词与项目名照样跟着它选的项目来。先看 projectId，没有才读 `workProject`：
+ * 重建工具时不读会话配置（锁赢），而工作项目建会话时定死、之后不变，读它不违背这一条
+ */
 function sessionProject(
   sessionId: string
 ): Pick<Project, 'name' | 'path' | 'systemPrompt' | 'settings'> | undefined {
-  const session = sessionRecords.pick(sessionId, ['projectId'])
-  return session?.projectId
-    ? projectDao.pick(session.projectId, ['name', 'path', 'systemPrompt', 'settings'])
+  const projectId =
+    sessionRecords.pick(sessionId, ['projectId'])?.projectId ||
+    workProjectOf(sessionRecords.pickSettings(sessionId, ['workProject']))
+  return projectId
+    ? projectDao.pick(projectId, ['name', 'path', 'systemPrompt', 'settings'])
     : undefined
 }
 

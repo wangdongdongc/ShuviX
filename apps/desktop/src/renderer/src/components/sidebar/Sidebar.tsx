@@ -14,8 +14,8 @@ import {
   type TrackingGroupAdapter,
   PolicyGroup,
   type PolicyGroupAdapter,
-  BotGroup,
   type BotGroupAdapter,
+  type BotsSectionCaps,
   KnowledgeGroup,
   type KnowledgeGroupAdapter,
   SkillGroup,
@@ -41,8 +41,9 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *   - 打开文件夹走 Electron 目录对话框；置顶会话选中时聚焦悬浮窗
  *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
  *   - 会话配置弹窗、项目编辑弹窗
- *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 / 复用该文件的
- *     笔记本会话，删除的确认框在这里）+ 智能体档案置顶分组（AgentGroup，接 window.api.subAgent.*；
+ *   - 「Bots」分节（经 `bots` 交给共享侧栏，接 window.api.bot.*：一个 bot 一组，bot 会话只归属 bot、收拢在它名下；
+ *     开新会话先选工作位置；「编辑 bot」开 / 复用那份文件的笔记本会话，删除的确认框在这里）
+ *   - 资料库分组：智能体档案置顶分组（AgentGroup，接 window.api.subAgent.*；
  *     用户档案点行开可编辑的笔记本，内置档案点行开**随包发布那份 md 的只读笔记本**，右键才是
  *     「创建覆盖副本」）+ 安全策略置顶分组（PolicyGroup，接 window.api.policy.*；用户策略点行开
  *     可编辑的笔记本，内置策略点行开**随包发布那份 md 的只读笔记本**，右键才是「创建覆盖副本」）
@@ -50,7 +51,7 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *     + 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
  *     技能平铺，点行开那个技能 SKILL.md 的笔记本，启用开关与增删在菜单里）+ 知识库置顶分组
  *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）。
- *     分组顺序：bots → agents → policies → hooks → skills → knowledge（e2e PS-H2 钉死）
+ *     分组顺序：tracking → agents → policies → hooks → skills → knowledge（e2e PS-H2 钉死）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → 已归档 → 项目」
  */
@@ -79,7 +80,7 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     },
     [storeSetActiveSessionId]
   )
-  const { projects } = useProjects()
+  const { projects, archivedProjects } = useProjects()
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
   const updateEvent = useUpdateStore((s) => s.updateEvent)
   const hasUpdate = updateEvent?.type === 'available' || updateEvent?.type === 'ready'
@@ -87,10 +88,13 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
-  /** 待确认删除的 bot（按名删，文件名用来认出开着的笔记本）或无法解析的 bot 文件（按文件名） */
-  const [confirmingBotDelete, setConfirmingBotDelete] = useState<
-    { name: string; fileName: string } | { fileName: string } | null
-  >(null)
+  /** 待确认删除的 bot 文件（解析不过 / 被同名遮蔽的那份，按文件名） */
+  const [confirmingBotDelete, setConfirmingBotDelete] = useState<{ fileName: string } | null>(null)
+  /** 待确认删除的「找不到 bot 文件」那一组的会话 */
+  const [confirmingBotSessionsDelete, setConfirmingBotSessionsDelete] = useState<{
+    name: string
+    count: number
+  } | null>(null)
   /** 待确认删除的智能体档案（按名删生效的那份）或按文件名删（非法 / 同名里被遮蔽的那份） */
   const [confirmingAgentDelete, setConfirmingAgentDelete] = useState<
     { name: string; displayName: string; fileName: string } | { fileName: string } | null
@@ -117,13 +121,18 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     setActiveSessionId(session.id)
   }
 
+  /** 选一个文件夹并加成项目（已存在同路径则复用），回项目 id；取消回 null */
+  const pickFolderAsProject = useCallback(async (): Promise<string | null> => {
+    const folder = await window.api.app.openDirectoryDialog()
+    if (!folder) return null
+    const existing = (await getChatApi().project.list()).find((p) => p.path === folder)
+    return existing?.id ?? (await getChatApi().project.create({ path: folder })).id
+  }, [])
+
   /** 打开文件夹并创建为项目（已存在同路径则复用），随后新建会话 */
   const handleOpenFolder = async (): Promise<void> => {
-    const folder = await window.api.app.openDirectoryDialog()
-    if (!folder) return
-    const existing = (await getChatApi().project.list()).find((p) => p.path === folder)
-    const projectId = existing?.id ?? (await getChatApi().project.create({ path: folder })).id
-    await handleNewChat(projectId)
+    const projectId = await pickFolderAsProject()
+    if (projectId) await handleNewChat(projectId)
   }
 
   /** 选中会话；若已悬浮则同时把悬浮窗拉到前台 */
@@ -135,20 +144,11 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
   /** 会话 fork（行菜单「分支会话」：整段当前对话复制成一条新会话）：建好就选中；被拒在 overlays 里说一声 */
   const { forkSession, forkError, clearForkError } = useSessionFork(handleSelectSession)
 
-  /** bots 能力注入（窄投影）—— 注入即点亮项目分组菜单里的「新建 Bot 会话」入口与 bot 单选 */
-  const botsAdapter = useMemo(
-    () => ({
-      list: async () => (await window.api.bot.list()).bots,
-      openFolder: () => window.api.bot.openFolder()
-    }),
-    []
-  )
-
   /**
-   * Bots 分组能力注入 —— 清单 = 合法 bot + 无法解析的文件。点一行 / 新建一份都是打开那份文件的
-   * **笔记本会话**（main 侧去重，隐藏项目 `__bots__`）；「新建 Bot 会话」建的是一条**普通有根会话**
-   * （`settings.bot`，根档案由形态推导成基座 `bot`）；删除先弹确认框（见 overlays），真删掉后
-   * bot.changed 事件让分组重扫。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   * 「Bots」分节能力注入 —— 清单 = 合法 bot + 被同名遮蔽的 + 无法解析的文件。「编辑 bot」/ 新建一份都是打开那份
+   * 文件的**笔记本会话**（main 侧去重，隐藏项目 `__bots__`）；「新对话」建的是一条**普通有根会话**（`settings.bot`，
+   * 根档案由形态推导成基座 `bot`；只归属 bot，选的项目记成工作项目的引用）；删除先弹确认框（见 overlays），真删掉后
+   * bot.changed 事件让分节重扫。引用必须稳定（useMemo）：分节以 adapter 为扫描依赖。
    */
   const botGroupAdapter = useMemo<BotGroupAdapter>(() => {
     const openNote = async (fileName: string, title?: string): Promise<void> => {
@@ -169,13 +169,28 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
         if (r.success && r.fileName) await openNote(r.fileName, r.name)
       },
       openFolder: () => window.api.bot.openFolder(),
-      newSession: async (name) => {
-        const session = await getChatApi().session.create({ projectId: null, bot: name })
+      newSession: async (name, location) => {
+        const session = await getChatApi().session.create({
+          bot: name,
+          ...('workProject' in location ? { workProject: location.workProject } : {})
+        })
         useChatStore.getState().setSessions(await getChatApi().session.list())
         setActiveSessionId(session.id)
       },
-      delete: (bot) => setConfirmingBotDelete({ name: bot.name, fileName: bot.fileName }),
-      deleteFile: (fileName) => setConfirmingBotDelete({ fileName })
+      archive: (bot) => {
+        // 正开着这份 bot 文件的笔记本：先离开它（主进程归档时会把那条笔记本会话删掉）
+        const { sessions, activeSessionId } = useChatStore.getState()
+        const active = sessions.find((s) => s.id === activeSessionId)
+        if (
+          active?.projectId === REGISTRY_NOTE_PROJECT_IDS.bot &&
+          active.settings.notebookPath === bot.fileName
+        ) {
+          setActiveSessionId(null)
+        }
+        void window.api.bot.archive({ name: bot.name })
+      },
+      deleteFile: (fileName) => setConfirmingBotDelete({ fileName }),
+      deleteSessions: (name, count) => setConfirmingBotSessionsDelete({ name, count })
     }
   }, [setActiveSessionId])
 
@@ -214,14 +229,9 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
    * 确认删除：删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，自动保存会把
    * 刚删掉的文件写回来。
    */
-  const handleBotDelete = async (
-    target: { name: string; fileName: string } | { fileName: string }
-  ): Promise<void> => {
+  const handleBotDelete = async (target: { fileName: string }): Promise<void> => {
     setConfirmingBotDelete(null)
-    const r =
-      'name' in target
-        ? await window.api.bot.delete({ name: target.name })
-        : await window.api.bot.deleteByFile({ fileName: target.fileName })
+    const r = await window.api.bot.deleteByFile({ fileName: target.fileName })
     if (!r.success) return
     const { sessions, activeSessionId } = useChatStore.getState()
     const active = sessions.find((s) => s.id === activeSessionId)
@@ -231,6 +241,17 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     ) {
       setActiveSessionId(null)
     }
+  }
+
+  /** 确认删除找不到 bot 文件的那一组会话：主区开着其中一条时先离开它，再一条条删 */
+  const handleBotSessionsDelete = async (target: { name: string }): Promise<void> => {
+    setConfirmingBotSessionsDelete(null)
+    const { sessions, activeSessionId } = useChatStore.getState()
+    const active = sessions.find((s) => s.id === activeSessionId)
+    const root = active?.parentId ? sessions.find((s) => s.id === active.parentId) : active
+    if (root && !root.parentId && root.settings.bot === target.name) setActiveSessionId(null)
+    await window.api.bot.deleteSessions({ name: target.name })
+    useChatStore.getState().setSessions(await getChatApi().session.list())
   }
 
   /**
@@ -664,9 +685,13 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     [setActiveSessionId]
   )
 
+  const botsSection = useMemo<BotsSectionCaps>(
+    () => ({ adapter: botGroupAdapter, pickFolderAsProject, archivedProjects }),
+    [botGroupAdapter, pickFolderAsProject, archivedProjects]
+  )
+
   const groups = (
     <>
-      <BotGroup adapter={botGroupAdapter} />
       <TrackingGroup adapter={trackingGroupAdapter} />
       <AgentGroup adapter={agentGroupAdapter} />
       <PolicyGroup adapter={policyGroupAdapter} />
@@ -701,15 +726,25 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
       {confirmingBotDelete && (
         <ConfirmDialog
           title={t('settings.botDeleteConfirmTitle')}
-          description={
-            'name' in confirmingBotDelete
-              ? t('settings.botDeleteConfirmDesc', { name: confirmingBotDelete.name })
-              : t('settings.botDeleteFileConfirmDesc', { name: confirmingBotDelete.fileName })
-          }
+          description={t('settings.botDeleteFileConfirmDesc', {
+            name: confirmingBotDelete.fileName
+          })}
           confirmText={t('common.delete')}
           cancelText={t('common.cancel')}
           onConfirm={() => void handleBotDelete(confirmingBotDelete)}
           onCancel={() => setConfirmingBotDelete(null)}
+        />
+      )}
+      {confirmingBotSessionsDelete && (
+        <ConfirmDialog
+          title={t('sidebar.botDeleteSessionsTitle', { name: confirmingBotSessionsDelete.name })}
+          description={t('sidebar.botDeleteSessionsDesc', {
+            count: confirmingBotSessionsDelete.count
+          })}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void handleBotSessionsDelete(confirmingBotSessionsDelete)}
+          onCancel={() => setConfirmingBotSessionsDelete(null)}
         />
       )}
       {confirmingSkill && (
@@ -802,7 +837,7 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
       caps={full ? { windowDrag: true, pin: true } : {}}
       hideFooter={!full}
       density={full ? 'regular' : 'touch'}
-      bots={botsAdapter}
+      bots={botsSection}
       projectKnowledge={knowledgeAdapter}
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}

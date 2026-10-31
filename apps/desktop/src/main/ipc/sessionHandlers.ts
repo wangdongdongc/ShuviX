@@ -46,8 +46,7 @@ export function registerSessionHandlers(): void {
   /** 更新会话模型配置（provider/model） */
   /** 更新会话所属项目 */
   defineHandler('session:updateProject', (_ctx, params: SessionUpdateProjectParams) => {
-    sessionService.updateProjectId(params.id, params.projectId)
-    return { success: true }
+    return { success: sessionService.updateProjectId(params.id, params.projectId) }
   })
 
   /**

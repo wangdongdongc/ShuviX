@@ -379,9 +379,8 @@ describe('属性卡上的补缺值 —— agent 的模型与思考档位', () =>
 
     writeBotMd(app, 'meta-bot')
     const bots = botsPane(app.main)
-    await bots.expand()
     await bots.refresh()
-    await bots.selectRow('meta-bot')
+    await bots.pickGroupMenu('meta-bot', 'edit-bot')
     await note.waitCard()
     const botSid = await app.main.eval<string>(
       `window.api.bot.openNote({ fileName: 'meta-bot.md' }).then((s) => s.id)`

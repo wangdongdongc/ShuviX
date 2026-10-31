@@ -1,3 +1,4 @@
+import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
 import { defineHandler } from './registry'
 import { commandService } from '../services/commandService'
 import { skillService } from '../services/skillService'
@@ -46,7 +47,10 @@ export function registerCommandHandlers(): void {
   defineHandler('command:list', (_ctx, params: { sessionId: string | null }) => {
     let projectPath: string | null = null
     if (params.sessionId) {
-      const projectId = sessionRecords.pick(params.sessionId, ['projectId'])?.projectId
+      // bot 会话引用的工作项目同样有项目命令
+      const projectId = projectContextIdOf(
+        sessionRecords.pick(params.sessionId, ['projectId', 'settings'])
+      )
       if (projectId) projectPath = projectDao.pick(projectId, ['path'])?.path ?? null
     }
     return gatherSlashCommands(projectPath)

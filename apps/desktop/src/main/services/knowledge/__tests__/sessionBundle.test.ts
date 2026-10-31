@@ -17,6 +17,8 @@
  * bot / 技能 / 知识库的承载项目下（chat-protocol `shuvixFileKindOfProject`），`shuvix` 就恒启用、排在用户圈定的
  * 库之前，不归选择管（`[]` 也一样），配置卡里也不再列它；日报 / 跟踪项与普通会话照旧。
  *
+ * **bot 会话引用的工作项目**（`settings.workProject`，它不是项目的成员）同样有项目库、同样按那个项目回落（KB-B1）。
+ *
  * dao 是替身（这里不验 SQL），路径与目录清单用真的。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -155,7 +157,7 @@ describe('sessionBundle', () => {
       dir: bundleAt(root, 'projects/p1'),
       label: 'project "Acme Corp"'
     })
-    expect(sessionDao.pick).toHaveBeenCalledWith('s1', ['projectId'])
+    expect(sessionDao.pick).toHaveBeenCalledWith('s1', ['projectId', 'settings'])
     expect(projectDao.findById).toHaveBeenCalledWith('p1')
     expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
@@ -946,6 +948,76 @@ describe('SB-P1..P10 隐式的项目库', () => {
       expect(await baseNames(), hidden).toEqual(['notes'])
     }
     expect(existsSync(join(root, PROJECTS))).toBe(false)
+  })
+})
+
+/**
+ * KB-B1：bot 会话只归属 bot（`projectId` 空），项目以引用 `settings.workProject` 记下 —— 项目知识库照样跟着项目来
+ * （chat-protocol `projectContextIdOf`）：隐式的 `project` 库、项目设过的选择当回落，都按引用的那个项目算。
+ */
+describe('KB-B1 bot 会话引用的工作项目也有项目库', () => {
+  const seedBases = (...names: string[]): void => {
+    for (const name of names) mkdirSync(join(userRootOf(root), name), { recursive: true })
+  }
+  const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
+
+  it('KB-B1 引用 p1 的 bot 根会话 → sessionBundle 是 projects/p1，project 库打头、隐式启用；不建目录', async () => {
+    seedBases('notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    mockPick({ projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+
+    expect(sessionBundle('s1')).toEqual({
+      bundle: 'projects/p1',
+      dir: bundleAt(root, 'projects/p1'),
+      label: 'project "Acme Corp"'
+    })
+    expect(projectDao.findById).toHaveBeenCalledWith('p1')
+    expect(await baseNames()).toEqual(['project'])
+    expect(enabledBaseChoices('s1')).toEqual([
+      { name: 'project', label: 'Acme Corp', dir: bundleAt(root, 'projects/p1') }
+    ])
+    expect(existsSync(join(root, PROJECTS))).toBe(false)
+  })
+
+  it('KB-B1 项目设过的选择当回落（会话 / 父会话都没设过）；explicit 为真', async () => {
+    seedBases('notes', 'alpha')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    mockProjectBases('p1', ['notes'])
+    mockPick({ projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+
+    expect(await baseNames()).toEqual(['project', 'notes'])
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+  })
+
+  it('KB-B1 bot 会话的子会话（同一份引用）：项目库打头；父会话没设过时按父会话引用的项目回落', async () => {
+    seedBases('notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    mockProjectBases('p1', ['notes'])
+    mockPick({ projectId: null, parentId: 'parent', settings: { workProject: 'p1' } })
+    mockSessionRow('parent', { projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+    expect(await baseNames()).toEqual(['project', 'notes'])
+
+    // 子会话行自己没有引用（旧数据）：回落链经父会话的引用找到项目那份选择
+    mockPick({ projectId: null, parentId: 'parent' })
+    mockSessionRow('parent', { projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+  })
+
+  it('KB-B1 引用的项目已被删 / 是隐藏载体 / 空白 → 没有项目库，点名 project 回 NO_PROJECT', async () => {
+    seedBases('notes')
+    vi.mocked(projectDao.findById).mockReturnValue(undefined)
+    mockPick({ projectId: null, settings: { bot: 'scout', workProject: 'gone' } })
+    expect(sessionBundle('s1')).toEqual({ error: NO_PROJECT })
+    expect(await resolveBase('s1', 'project')).toEqual({ error: NO_PROJECT })
+
+    vi.mocked(projectDao.findById).mockReturnValue({ ...PROJECT, id: '__agents__' })
+    mockPick({ projectId: null, settings: { bot: 'scout', workProject: '__agents__' } })
+    expect(sessionBundle('s1')).toEqual({ error: NO_PROJECT })
+
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    mockPick({ projectId: null, settings: { bot: 'scout', workProject: '   ' } })
+    expect(sessionBundle('s1')).toEqual({ error: NO_PROJECT })
+    expect(await baseNames()).toEqual([])
   })
 })
 

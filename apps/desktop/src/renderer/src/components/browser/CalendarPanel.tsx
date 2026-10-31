@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   copyToClipboard,
@@ -13,6 +13,7 @@ import {
   CalendarView,
   DayReportHeader,
   ProjectSessionGroups,
+  type BotsSectionCaps,
   SessionConfigDialog,
   useProjects,
   useSessionDelete
@@ -173,6 +174,25 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
     copyToClipboard(`[${title}](${sessionLink(sessionId, entryId)})`)
   }
 
+  /**
+   * 当天的 bot 会话与侧栏同一个口径：收在各自的 bot 名下（2026-10-31）。日历按天渲染时 bot 组没有菜单、没有「+」，
+   * 只读清单；那几个动作在这里不会被调到
+   */
+  const botsSection = useMemo<BotsSectionCaps>(
+    () => ({
+      adapter: {
+        list: () => window.api.bot.list(),
+        open: () => undefined,
+        create: () => undefined,
+        openFolder: () => undefined,
+        newSession: () => undefined,
+        archive: () => undefined,
+        deleteFile: () => undefined
+      }
+    }),
+    []
+  )
+
   const handleSelect = useCallback(
     (id: string): void => {
       setActiveSessionId(id)
@@ -248,6 +268,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
               onDelete={handleDelete}
               onConfigureSession={setConfiguringSessionId}
               onCopyLink={(id) => void handleCopyLink(id)}
+              bots={botsSection}
               caps={{ pin: true }}
               pinnedSessionIds={pinnedSessionIds}
             />

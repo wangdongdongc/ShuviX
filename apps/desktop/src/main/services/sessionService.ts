@@ -57,7 +57,12 @@ import {
   type LockRecord
 } from '@shuvix/agent-runtime'
 import { HOST_ONLY_PROFILE_NAMES, type SubAgentModelConfig } from '@shuvix/agent-runtime'
-import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
+import {
+  isBotSessionSettings,
+  projectContextIdOf,
+  workProjectOf
+} from '@shuvix/chat-protocol/botSession'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import { chromeTabOf, isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStorageKind'
 import { agentService } from './agentService'
@@ -278,9 +283,9 @@ export class SessionService {
   getById(id: string): SessionInfo | undefined {
     const session = sessionRecords.findById(id)
     if (!session) return undefined
-    const project = session.projectId
-      ? projectDao.pick(session.projectId, ['path', 'settings'])
-      : undefined
+    // 所属项目，或 bot 会话引用的工作项目（项目被删 → 没有，退回 settings.workingDirectory 那份路径快照）
+    const projectId = projectContextIdOf(session)
+    const project = projectId ? projectDao.pick(projectId, ['path', 'settings']) : undefined
     return {
       ...this.withEffectiveRunState(session),
       workingDirectory: workingDirectoryOf(id, project?.path, session.settings)
@@ -297,6 +302,11 @@ export class SessionService {
    * 不存在，而这里的结果要落库 —— 过滤一次就永久丢掉。可用性只在创建 Agent 那一刻过滤
    * （resolveSessionAgentContext），设置里的原值不动。
    */
+  /** 一个（引用的）工作项目此刻的路径；没给、项目不在 → undefined（调用方退回路径快照 / 临时工作区） */
+  private workProjectPath(projectId: string | undefined): string | undefined {
+    return projectId ? projectDao.pick(projectId, ['path'])?.path || undefined : undefined
+  }
+
   private inheritedEnabledTools(projectId: string | null): string[] {
     const saved = projectId
       ? projectDao.pick(projectId, ['settings'])?.settings?.enabledTools
@@ -315,7 +325,7 @@ export class SessionService {
     const parentTools = parent.settings?.enabledTools
     return Array.isArray(parentTools)
       ? sessionScopedTools(parentTools)
-      : this.inheritedEnabledTools(parent.projectId)
+      : this.inheritedEnabledTools(projectContextIdOf(parent))
   }
 
   /**
@@ -331,7 +341,7 @@ export class SessionService {
     if (!row) return []
     const stored = row.settings?.enabledTools
     if (Array.isArray(stored)) return sessionScopedTools(stored)
-    const inherited = this.inheritedSelection(row.parentId, row.projectId)
+    const inherited = this.inheritedSelection(row.parentId, projectContextIdOf(row))
     sessionRecords.updateSettings(sessionId, { enabledTools: inherited })
     log.info(`补齐旧会话的扩展能力勾选 session=${sessionId} tools=[${inherited.join(',')}]`)
     return inherited
@@ -376,7 +386,7 @@ export class SessionService {
    */
   create(
     params?: SessionCreateParams,
-    options?: { ephemeral?: boolean; workingDirectory?: string; id?: string }
+    options?: { ephemeral?: boolean; workingDirectory?: string; id?: string; triggerRun?: boolean }
   ): Session {
     // 调用方给定 id（子会话的 create 动作把它记在工具的 memo 里，崩溃后重跑拿到同一个，P2-10 PIN-05）：
     // 幂等 —— 同一父会话下已有这一行就原样交回（不再插入、不再广播、勾选不再抄一遍）；落在别处就拒绝
@@ -403,20 +413,38 @@ export class SessionService {
       throw new Error(`Parent session ${parentId} has been deleted`)
     }
     const ephemeral = parentId ? sessionRecords.isEphemeral(parentId) : !!options?.ephemeral
-    const pid = chromeTab ? null : parent ? parent.projectId : (params?.projectId ?? null)
+    let pid = chromeTab ? null : parent ? parent.projectId : (params?.projectId ?? null)
     // 有项目的父会话不算：子会话的工作目录恒为项目根，也不该替父会话把临时工作区建出来
-    const workingDirectory = parentId
+    let workingDirectory = parentId
       ? parent && !parent.projectId
-        ? workingDirectoryOf(parentId, undefined, parent.settings)
+        ? workingDirectoryOf(
+            parentId,
+            this.workProjectPath(workProjectOf(parent.settings)),
+            parent.settings
+          )
         : undefined
       : chromeTab
         ? undefined
         : options?.workingDirectory
-    // 子会话抄父会话的勾选，其余按项目继承（与旧会话补键同一条规则，见 inheritedSelection）
-    const enabledTools = chromeTab ? [] : this.inheritedSelection(parentId, pid)
 
     // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
     const bot = chromeTab ? undefined : params?.bot?.trim() || undefined
+    // bot 会话**只归属 bot**（2026-10-31）：不当任何项目的成员。调用方给的项目（新建时选的工作位置、触发绑定
+    // 写的 project、旧入口传的 projectId）记成引用 `workProject` + 项目路径快照；项目不在 / 是隐藏的承载项目
+    // → 临时工作区。子会话抄父会话引用的那个（工作目录上面已随父会话）
+    let workProject = parent && !parent.projectId ? workProjectOf(parent.settings) : undefined
+    if (bot && !parentId && !notebookPath) {
+      const ref = params?.workProject?.trim() || params?.projectId || undefined
+      const path = ref && !isHiddenProjectId(ref) ? this.workProjectPath(ref) : undefined
+      pid = null
+      workProject = path ? ref : undefined
+      workingDirectory = path
+    }
+    // 子会话抄父会话的勾选，其余按项目继承（与旧会话补键同一条规则，见 inheritedSelection）——
+    // 引用的工作项目也算：选了项目的 bot 会话按项目来（用户 2026-10-31）
+    const enabledTools = chromeTab
+      ? []
+      : this.inheritedSelection(parentId, pid ?? workProject ?? null)
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
@@ -432,6 +460,9 @@ export class SessionService {
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
+        ...(workProject ? { workProject } : {}),
+        // 触发器开出来的运行会话（只有 botTriggerService 给）：侧栏折进 bot 组的「定时运行」
+        ...(bot && !parentId && options?.triggerRun ? { triggerRun: true } : {}),
         // 路径授权不在设置里：会话权限表（services/acl）在下面 insert 之后生成，子会话复制父会话的授予行
         ...(chromeTab ? { chromeTab } : {}),
         // 扩展能力勾选恒写键（见方法注释）
@@ -474,11 +505,18 @@ export class SessionService {
     if (from.enabledTools) settings.enabledTools = sessionScopedTools(from.enabledTools)
     if (from.knowledgeBases) settings.knowledgeBases = [...from.knowledgeBases]
     if (from.bot) settings.bot = from.bot
+    // bot 会话引用的工作项目照抄（工作目录在下面：项目路径，项目不在了就是源会话那份快照）
+    const workProject = workProjectOf(from)
+    if (workProject) settings.workProject = workProject
     if (from.agentProfile) settings.agentProfile = from.agentProfile
     if (from.model) settings.model = { ...from.model }
     if (from.thinkingLevel) settings.thinkingLevel = from.thinkingLevel
     if (!source.projectId) {
-      settings.workingDirectory = workingDirectoryOf(source.id, undefined, from)
+      settings.workingDirectory = workingDirectoryOf(
+        source.id,
+        this.workProjectPath(workProject),
+        from
+      )
     }
     const now = Date.now()
     const session: Session = {
@@ -550,7 +588,8 @@ export class SessionService {
       if (agentService.getProfile(pinned)) return pinned
       log.warn(`子会话档案 "${pinned}" 已不存在，回落形态基座（session=${sessionId}）`)
     }
-    return session?.projectId ? WORK_PROFILE_NAME : CHAT_PROFILE_NAME
+    // 引用工作项目的（bot 会话的子会话）与项目会话同一个基座：它就在那个项目里干活
+    return projectContextIdOf(session) ? WORK_PROFILE_NAME : CHAT_PROFILE_NAME
   }
 
   /**
@@ -652,10 +691,19 @@ export class SessionService {
     if (origin === 'auto') broadcastSessionTitleChanged(id, title)
   }
 
-  /** 更新会话所属项目 */
-  updateProjectId(id: string, projectId: string | null): void {
+  /**
+   * 更新会话所属项目。bot 会话（及挂着工作项目引用的子会话、fork）不收：它们只归属 bot，工作位置建会话时定下、之后
+   * 不变（用户 2026-10-31）—— 挪进项目会让它既在 bot 名下又是项目的成员，项目一删就被连带删掉。拒绝时回 false
+   */
+  updateProjectId(id: string, projectId: string | null): boolean {
+    const settings = sessionRecords.pick(id, ['settings'])?.settings
+    if (isBotSessionSettings(settings) || workProjectOf(settings)) {
+      log.warn(`拒绝把 bot 会话 ${id} 挪进项目：它只归属 bot`)
+      return false
+    }
     sessionRecords.updateProjectId(id, projectId)
     if (!sessionRecords.isEphemeral(id)) broadcastSessionListChanged()
+    return true
   }
 
   /**
@@ -941,8 +989,10 @@ export class SessionService {
       capabilities.reasoning,
       this.getDefaultThinkingLevel()
     )
-    const project = session.projectId
-      ? projectDao.pick(session.projectId, ['path', 'settings'])
+    // 所属项目，或 bot 会话引用的工作项目（它的环境变量、工作目录照项目来）
+    const contextProjectId = projectContextIdOf(session)
+    const project = contextProjectId
+      ? projectDao.pick(contextProjectId, ['path', 'settings'])
       : undefined
     const workingDirectory = workingDirectoryOf(sessionId, project?.path, session.settings)
     // 滤掉已不可用的 MCP（配置里已停用 / 已删）；设置里的原值不动。

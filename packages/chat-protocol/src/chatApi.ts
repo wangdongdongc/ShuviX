@@ -90,6 +90,13 @@ export interface SessionSettings {
    * 创建那一刻定死，不可换绑。判定一律经 `botSession.ts` 的 `isBotSessionSettings` / `boundBotOf`。
    */
   bot?: string
+  /**
+   * bot 会话（及其子会话、fork）引用的工作项目 id：bot 会话只归属 bot、`projectId` 恒为空，项目只是它干活的
+   * 地方 —— 项目的设置照常生效，项目的归档与删除不碰它。判定经 `botSession.ts` 的 `projectContextIdOf`
+   */
+  workProject?: string
+  /** 触发器开出来的运行会话（侧栏折进 bot 组的「定时运行」那一行）；只由主进程在创建时写 */
+  triggerRun?: boolean
 
   /**
    * 子会话被父级钉下的档案名（session 工具 `create-sub-session` 的 `agent_profile`，如 coding）。
@@ -467,6 +474,11 @@ export interface SessionCreateParams {
   title?: string
   /** 绑定的 bot 名；提供则创建 bot 会话（普通有根会话，见 SessionSettings.bot） */
   bot?: string
+  /**
+   * bot 会话的工作位置：一个项目 id（不给 = 临时工作区）。bot 会话只归属 bot，这个项目记成引用
+   * （SessionSettings.workProject），不是项目的成员。不是 bot 会话时不看
+   */
+  workProject?: string
 }
 
 export interface SessionUpdateTitleParams {

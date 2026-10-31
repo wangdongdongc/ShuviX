@@ -17,6 +17,8 @@
  *   PSv-SEED  **随应用提供的 bot**：seedBuiltinBots 每个只写一次（`.builtin-seeded`），同名 / 同 id 的不覆盖。
  *   PSv-UPG   **种下之后的升级**：seedBuiltinBots 开头对认定表里那份 ShuviX 写下的文件跑一次种子的 upgrade
  *              （旧版逐字未改的那一节换成新版）；别的文件一概不碰，失败只记日志、下次启动再试。
+ *   PSv-ARC   **归档**：archive / listArchived / restore / deleteArchivedFile（ARC-1…4，`archived/` 子目录）。
+ *   PSv-NEW   **createNew 取名**：生效的、归档里的、会话还绑着的名字都跳过。
  *
  * **fs 是真的** —— 扫描扫的是真目录，换成假 fs 一条也测不到。
  * `readFileSync` / `existsSync` 只是套了一层可数的壳（同
@@ -1554,5 +1556,274 @@ describe('PSv-UPG —— 已经种下的日报 bot 换上新版', () => {
     expect(entry.basePath).toBe(dailyPath())
     expect(entry.file.objectId).toBe(DAILY_ID)
     expect(entry.file.body).toContain('`builtin:tracking`')
+  })
+})
+
+// ────────────────────── PSv-ARC：归档 / 恢复 / 删除归档 ──────────────────────
+
+/**
+ * 归档（2026-10-31，与项目一样：侧栏里先归档，删除在 设置 → 已归档 里）。归档的 bot 是挪进 bots 目录下 `archived/`
+ * 的那份文件 —— 扫描只看顶层，挪进去的自然不再是 bot。纯文件：不碰会话（会话的级联归 IPC 层，见 botHandlers.test）。
+ *
+ *   ARC-1  archive：生效的那份挪进 archived/（同文件名）；get / listAll 不再有它，同名的另一份接班；广播一次；会话不动；
+ *          fileOf 不等缓存过期就跟上；名字不在 / 归档里已有同名文件 → 拒绝、不动文件、不广播
+ *   ARC-2  listArchived：目录不在 → [] 且不建；只列非点开头的 *.md（后缀大小写不敏感）、按文件名排序、跳过子目录；
+ *          解析得过 → name / displayName / description；解析不过 → 名字退回文件名、displayName 同名、description 空
+ *   ARC-3  restore：挪回 bots 目录、广播一次；bots 里已有同名文件 → 拒绝；已有一个同名（frontmatter name）的 bot 在用
+ *          （文件名不同）→ 拒绝；不在 / 文件名不合白名单 → not found；拒绝时两边文件都原样、不广播
+ *   ARC-4  deleteArchivedFile：删归档里那份、回它的 bot 名（解析不过的回文件名）、广播一次；同名的活 bot 不动；
+ *          不在 / 文件名不合白名单 → 拒绝、不广播
+ */
+describe('PSv-ARC —— 归档 / 恢复 / 删除归档', () => {
+  const archivedPath = (fileName: string): string => join(dirs.bots, 'archived', fileName)
+  /** 直接往 archived/ 里放一份 */
+  const putArchived = (fileName: string, text: string): string => {
+    mkdirSync(join(dirs.bots, 'archived'), { recursive: true })
+    writeFileSync(archivedPath(fileName), text)
+    return archivedPath(fileName)
+  }
+
+  it('ARC-1 archive 把生效的那份挪进 archived/：不再是 bot、会话不动、广播一次', async () => {
+    put('scout', md('scout', { displayName: 'Scout', description: 'finds things' }))
+    seedSessions([{ id: 's1', bot: 'scout' }])
+    expect(botService.archivedDir).toBe(join(dirs.bots, 'archived'))
+
+    const n = await countChanged(() => {
+      expect(botService.archive('scout')).toEqual({ success: true })
+    })
+    expect(n).toBe(1)
+    expect(existsSync(join(dirs.bots, 'scout.md'))).toBe(false)
+    expect(readFileSync(archivedPath('scout.md'), 'utf-8')).toBe(
+      md('scout', { displayName: 'Scout', description: 'finds things' })
+    )
+    expect(botService.get('scout')).toBeNull()
+    expect(botService.listAll().map((b) => b.file.name)).toEqual([])
+    // archived/ 是子目录：不进 invalid 也不进 valid
+    expect(botService.listWithInvalid().invalid).toEqual([])
+    expect(botService.listArchived()).toEqual([
+      { name: 'scout', displayName: 'Scout', description: 'finds things', fileName: 'scout.md' }
+    ])
+    // 会话是用户资产：归档不碰它们（删除连同会话在 设置 → 已归档 里）
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(boundBotOfSession('s1')).toBe('scout')
+  })
+
+  it('ARC-1 同名几份：挪走的是生效的那份，下一份接班', () => {
+    put('scout', md('scout', { body: 'winner' }))
+    put('a', md('scout', { body: 'runner-up' }))
+    expect(botService.get('scout')!.basePath).toBe(join(dirs.bots, 'scout.md'))
+
+    expect(botService.archive('scout').success).toBe(true)
+    expect(existsSync(archivedPath('scout.md'))).toBe(true)
+    expect(existsSync(join(dirs.bots, 'a.md'))).toBe(true)
+    expect(botService.get('scout')!.basePath).toBe(join(dirs.bots, 'a.md'))
+  })
+
+  it('ARC-1 fileOf 不等 2 s 缓存过期：归档后立刻是 null，恢复后立刻回来', () => {
+    put('arc-cache', md('arc-cache'))
+    mocks.pick.mockReturnValue({ settings: { bot: 'arc-cache' } })
+    expect(botService.fileOf('s1')).toBe(join(dirs.bots, 'arc-cache.md'))
+
+    expect(botService.archive('arc-cache').success).toBe(true)
+    expect(botService.fileOf('s1')).toBeNull()
+
+    expect(botService.restore('arc-cache.md').success).toBe(true)
+    expect(botService.fileOf('s1')).toBe(join(dirs.bots, 'arc-cache.md'))
+  })
+
+  it('ARC-1 名字不在 / 归档里已有同名文件 → 拒绝：不动文件、不广播', async () => {
+    put('scout', md('scout', { body: 'live' }))
+    putArchived('scout.md', md('scout', { body: 'old' }))
+
+    const n = await countChanged(() => {
+      expect(botService.archive('ghost')).toEqual({
+        success: false,
+        error: 'Bot "ghost" not found'
+      })
+      expect(botService.archive('scout')).toEqual({
+        success: false,
+        error: 'An archived bot file "scout.md" already exists'
+      })
+    })
+    expect(n).toBe(0)
+    expect(readFileSync(join(dirs.bots, 'scout.md'), 'utf-8')).toBe(md('scout', { body: 'live' }))
+    expect(readFileSync(archivedPath('scout.md'), 'utf-8')).toBe(md('scout', { body: 'old' }))
+    expect(botService.get('scout')).not.toBeNull()
+  })
+
+  it('ARC-2 listArchived：目录不在 → [] 且不建', () => {
+    expect(botService.listArchived()).toEqual([])
+    expect(existsSync(join(dirs.bots, 'archived'))).toBe(false)
+  })
+
+  it('ARC-2 只列非点开头的 *.md（后缀大小写不敏感）、按文件名排序、跳过子目录；解析不过的名字退回文件名', () => {
+    putArchived('zeta.md', md('zeta'))
+    putArchived('Alpha.MD', md('alpha', { displayName: 'Alpha Bot' }))
+    putArchived('broken.md', '不是 md')
+    putArchived('.hidden.md', md('hidden'))
+    putArchived('notes.txt', 'x')
+    mkdirSync(join(dirs.bots, 'archived', 'sub.md'), { recursive: true })
+
+    expect(botService.listArchived()).toEqual([
+      { name: 'alpha', displayName: 'Alpha Bot', description: '', fileName: 'Alpha.MD' },
+      { name: 'broken', displayName: 'broken', description: '', fileName: 'broken.md' },
+      { name: 'zeta', displayName: 'zeta', description: '', fileName: 'zeta.md' }
+    ])
+  })
+
+  it('ARC-3 restore 挪回 bots 目录、重新是 bot、广播一次', async () => {
+    putArchived('scout.md', md('scout'))
+    const n = await countChanged(() => {
+      expect(botService.restore('scout.md')).toEqual({ success: true })
+    })
+    expect(n).toBe(1)
+    expect(existsSync(archivedPath('scout.md'))).toBe(false)
+    expect(botService.get('scout')!.basePath).toBe(join(dirs.bots, 'scout.md'))
+    expect(botService.listArchived()).toEqual([])
+  })
+
+  it('ARC-3 bots 里已有同名文件 → 拒绝；两边原样、不广播', async () => {
+    put('scout', md('ranger'))
+    putArchived('scout.md', md('scout'))
+    const n = await countChanged(() => {
+      expect(botService.restore('scout.md')).toEqual({
+        success: false,
+        error: 'A bot file "scout.md" already exists in the bots folder'
+      })
+    })
+    expect(n).toBe(0)
+    expect(readFileSync(join(dirs.bots, 'scout.md'), 'utf-8')).toBe(md('ranger'))
+    expect(readFileSync(archivedPath('scout.md'), 'utf-8')).toBe(md('scout'))
+  })
+
+  it('ARC-3 已有一个同名的 bot 在用（文件名不同）→ 拒绝：恢复回来会压过它或被它压过，会话归谁就说不清了', async () => {
+    put('other-file', md('scout', { body: 'live' }))
+    putArchived('scout.md', md('scout', { body: 'archived' }))
+    const n = await countChanged(() => {
+      expect(botService.restore('scout.md')).toEqual({
+        success: false,
+        error: 'A bot named "scout" is already in use'
+      })
+    })
+    expect(n).toBe(0)
+    expect(existsSync(join(dirs.bots, 'scout.md'))).toBe(false)
+    expect(readFileSync(archivedPath('scout.md'), 'utf-8')).toBe(md('scout', { body: 'archived' }))
+    expect(botService.get('scout')!.basePath).toBe(join(dirs.bots, 'other-file.md'))
+
+    // 对照组：那份活的删掉之后照常恢复
+    expect(botService.deleteByFile('other-file.md').success).toBe(true)
+    expect(botService.restore('scout.md')).toEqual({ success: true })
+    expect(botService.get('scout')!.basePath).toBe(join(dirs.bots, 'scout.md'))
+  })
+
+  it('ARC-3 不在 / 文件名不合白名单 → not found，什么都不动', () => {
+    putArchived('scout.md', md('scout'))
+    writeFileSync(join(dirs.base, 'outside.md'), md('outside'))
+    for (const fileName of [
+      'nope.md',
+      '../outside.md',
+      '../../x.md',
+      'sub/x.md',
+      'x.txt',
+      '.h.md'
+    ]) {
+      expect(botService.restore(fileName), fileName).toEqual({
+        success: false,
+        error: `Archived file "${fileName}" not found`
+      })
+    }
+    expect(existsSync(join(dirs.base, 'outside.md'))).toBe(true)
+    expect(existsSync(archivedPath('scout.md'))).toBe(true)
+  })
+
+  it('ARC-4 deleteArchivedFile 删归档里那份、回 bot 名、广播一次；同名的活 bot 不动', async () => {
+    put('live', md('scout', { body: 'live' }))
+    putArchived('scout.md', md('scout', { body: 'archived' }))
+    putArchived('broken.md', '不是 md')
+
+    const n = await countChanged(() => {
+      expect(botService.deleteArchivedFile('scout.md')).toEqual({ success: true, name: 'scout' })
+    })
+    expect(n).toBe(1)
+    expect(existsSync(archivedPath('scout.md'))).toBe(false)
+    expect(botService.get('scout')!.basePath).toBe(join(dirs.bots, 'live.md'))
+
+    expect(botService.deleteArchivedFile('broken.md')).toEqual({ success: true, name: 'broken' })
+    expect(botService.listArchived()).toEqual([])
+  })
+
+  it('ARC-4 不在 / 文件名不合白名单 → 拒绝、不删别处的文件、不广播', async () => {
+    writeFileSync(join(dirs.base, 'outside.md'), md('outside'))
+    put('scout', md('scout'))
+    const n = await countChanged(() => {
+      for (const fileName of ['nope.md', '../outside.md', '../bots/scout.md', 'x.txt', '.h.md']) {
+        expect(botService.deleteArchivedFile(fileName), fileName).toEqual({
+          success: false,
+          error: `Archived file "${fileName}" not found`
+        })
+      }
+    })
+    expect(n).toBe(0)
+    expect(existsSync(join(dirs.base, 'outside.md'))).toBe(true)
+    expect(existsSync(join(dirs.bots, 'scout.md'))).toBe(true)
+  })
+})
+
+// ────────────────────── PSv-NEW：createNew 取名 ──────────────────────
+
+/**
+ * createNew 取第一个没被占用的 my-bot / my-bot-2 / …。占用的不只是生效的名字：会话按名字绑定，所以归档里的名字
+ * （新 bot 叫了它，归档 bot 的会话就归了新的、归档那份也恢复不回来）与还有会话绑着、文件已不在的名字（那几条
+ * 孤儿会话会被它领走）都算占用。
+ *
+ *   PSv-NEW1 生效的名字照旧跳过：my-bot 在 → my-bot-2；my-bot、my-bot-2 都在 → my-bot-3
+ *   PSv-NEW2 归档里的 my-bot（archived/my-bot.md）→ my-bot-2；归档文件的文件名不同、frontmatter 名字是 my-bot 也一样
+ *   PSv-NEW3 会话还绑着 my-bot、没有这份文件 → my-bot-2；三种占用叠在一起依次跳过；空白绑定不算占用
+ */
+describe('PSv-NEW —— createNew 跳过生效的、归档的与会话还绑着的名字', () => {
+  const putArchived = (fileName: string, text: string): void => {
+    mkdirSync(join(dirs.bots, 'archived'), { recursive: true })
+    writeFileSync(join(dirs.bots, 'archived', fileName), text)
+  }
+
+  it('PSv-NEW1 生效的名字照旧跳过', () => {
+    expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot' })
+    expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot-2' })
+    expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot-3' })
+    expect(botService.get('my-bot-3')).not.toBeNull()
+  })
+
+  it('PSv-NEW2 归档里的 my-bot → my-bot-2，归档那份不动', () => {
+    putArchived('my-bot.md', md('my-bot'))
+    const r = botService.createNew()
+    expect(r).toMatchObject({ success: true, name: 'my-bot-2', fileName: 'my-bot-2.md' })
+    expect(botService.get('my-bot')).toBeNull()
+    expect(readFileSync(join(dirs.bots, 'archived', 'my-bot.md'), 'utf-8')).toBe(md('my-bot'))
+    // 归档那份照样能恢复（名字没被新的占走）
+    expect(botService.restore('my-bot.md')).toEqual({ success: true })
+  })
+
+  it('PSv-NEW2 归档文件叫别的文件名、frontmatter 名字是 my-bot：同样跳过', () => {
+    putArchived('old-helper.md', md('my-bot'))
+    expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot-2' })
+  })
+
+  it('PSv-NEW3 会话还绑着 my-bot、文件不在 → my-bot-2；会话绑定不被改动', () => {
+    seedSessions([{ id: 's1', bot: 'my-bot' }])
+    expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot-2' })
+    expect(boundBotOfSession('s1')).toBe('my-bot')
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('PSv-NEW3 三种占用叠在一起依次跳过；空白绑定不算占用', () => {
+    put('my-bot', md('my-bot'))
+    putArchived('my-bot-2.md', md('my-bot-2'))
+    sessionRows = [
+      { id: 's1', settings: { bot: 'my-bot-3' } },
+      { id: 's2', settings: { bot: '  my-bot-4  ' } },
+      { id: 's3', settings: { bot: '   ' } },
+      { id: 's4', settings: {} }
+    ]
+    expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot-5' })
   })
 })

@@ -9,6 +9,7 @@
  *   TC-WD2 无项目、自带目录 → 那个目录，不去问临时工作区
  *   TC-WD3 无项目、没有自带目录 → getById 给的临时工作区
  *   TC-WD4 会话不存在 → 临时工作区（按 sessionId 取）
+ *   TC-B1  bot 会话引用的工作项目（settings.workProject）→ envVars 取那个项目的；项目被删 → 没有 envVars、用快照
  *
  * resolveSessionDocument / isSessionDocument —— 笔记本会话自己那份文档（doc_* 的磁盘回落读写它，write / edit
  * 不许碰它）：settings.notebookPath 按上面那个工作目录解析；比较时跟过链接、按文件系统的大小写规则：
@@ -450,6 +451,49 @@ describe('resolveProjectConfig —— 工作目录照抄 getById 的口径', () 
     tc.getById.mockReturnValue(undefined)
     expect(resolveProjectConfig('gone')).toEqual({ workingDirectory: '/tmp/shuvix-actor-ws' })
     expect(tc.getTempWorkspace).toHaveBeenCalledWith('gone')
+  })
+
+  it('TC-B1 bot 会话引用的工作项目（projectId 空、settings.workProject）→ envVars 取那个项目的，工作目录照 getById', () => {
+    tc.getById.mockReturnValue({
+      id: 'b1',
+      projectId: null,
+      settings: { bot: 'scout', workProject: 'p9', workingDirectory: '/snap' },
+      workingDirectory: '/proj/nine'
+    })
+    tc.projectPick.mockReturnValue({
+      id: 'p9',
+      path: '/proj/nine',
+      settings: { tool: { envVars: [{ key: 'TOKEN', value: 'x' }] } }
+    })
+    expect(resolveProjectConfig('b1')).toEqual({
+      workingDirectory: '/proj/nine',
+      envVars: { TOKEN: 'x' }
+    })
+    expect(tc.projectPick).toHaveBeenCalledWith('p9', ['id', 'path', 'settings'])
+    expect(tc.getTempWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('TC-B1 引用的项目已被删 → 没有 envVars，工作目录是 getById 退回的路径快照', () => {
+    tc.getById.mockReturnValue({
+      id: 'b2',
+      projectId: null,
+      settings: { bot: 'scout', workProject: 'gone', workingDirectory: '/snap' },
+      workingDirectory: '/snap'
+    })
+    tc.projectPick.mockReturnValue(undefined)
+    expect(resolveProjectConfig('b2')).toEqual({ workingDirectory: '/snap' })
+    expect(tc.projectPick).toHaveBeenCalledWith('gone', ['id', 'path', 'settings'])
+  })
+
+  it('TC-B1 空白的引用不算：不查项目表', () => {
+    tc.getById.mockReturnValue({
+      id: 'b3',
+      projectId: null,
+      settings: { workProject: '   ' },
+      workingDirectory: '/tmp/temp_workspace/b3'
+    })
+    expect(resolveProjectConfig('b3')).toEqual({ workingDirectory: '/tmp/temp_workspace/b3' })
+    expect(tc.projectPick).not.toHaveBeenCalled()
   })
 })
 

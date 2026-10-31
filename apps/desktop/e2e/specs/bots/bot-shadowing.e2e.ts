@@ -1,15 +1,15 @@
 /**
- * 同名的几份 bot 文件（BS-*）：`bot.list` 的 bots / shadowed、侧栏 Bots 分组、头部身份胶囊三处说的是
- * 同一次同名裁决 —— 文件名就是名字的那份生效；其余几份紧跟在胜出行后面、划线带覆盖徽标，title 说清
- * 被谁压过，菜单只剩按文件名删除。
+ * 同名的几份 bot 文件（BS-*）：`bot.list` 的 bots / shadowed、侧栏 Bots 分节、头部身份胶囊三处说的是
+ * 同一次同名裁决 —— 文件名就是名字的那份生效（它一组，会话都在里面）；其余几份排在所有组之后、划线带覆盖徽标，
+ * title 说清被谁压过，菜单只剩按文件名删除。
  *
  * 夹具刻意让「文件名即名字」与「更短 / 排序更前」打架：a.md 比 ace.md 短、码点序也更前，只有那一条
  * 规则能让 ace.md 胜出；zed.md 是既不短也不靠前的第三份。displayName 三份各不相同，胶囊上的名字
  * 因此直接说出「此刻生效的是哪一份文件」。
  *
- * 用例有顺序依赖（BS-2 接着 BS-1 的盘面删）。全程无 LLM。
+ * 用例有顺序依赖（BS-2 接着 BS-1 的盘面删 / 归档）。全程无 LLM。
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
@@ -47,6 +47,7 @@ interface BotListing {
   bots: BotRow[]
   shadowed: Array<BotRow & { shadowedBy: string }>
   invalid: Array<{ fileName: string; error: string }>
+  archived: string[]
 }
 
 let app: E2EApp
@@ -88,8 +89,9 @@ beforeAll(async () => {
   sid = await createBotSession(app.main, { bot: 'ace', title: TITLE })
 
   await until(async () => (await sidebar.titles()).includes(TITLE), `sidebar row "${TITLE}"`)
-  // 首次展开 = 首次扫描（分组是懒扫的）
-  await bots.expand()
+  // 分节一挂上就扫了（那时三份 md 还没落盘）—— 刷新一次
+  await bots.refresh()
+  await bots.waitGroup('ace')
   if (!(await sidebar.openSession(TITLE))) throw new Error(`seed: session "${TITLE}" not found`)
 }, 120_000)
 
@@ -98,7 +100,7 @@ afterAll(async () => {
 })
 
 describe('同名三份 bot 文件', () => {
-  it('BS-1 IPC、侧栏与头部胶囊说的是同一个胜者：ace.md 生效，a.md / zed.md 依次跟在它后面、划线带徽标、title 指向 ace.md；两种行各有各的菜单', async () => {
+  it('BS-1 IPC、侧栏与头部胶囊说的是同一个胜者：ace.md 生效（ace 一组，会话在里面），a.md / zed.md 依次排在组后面、划线带徽标、title 指向 ace.md；组与文件行各有各的菜单', async () => {
     const listing = await listBots()
     expect(listing.bots.map((b) => [b.name, b.fileName, b.displayName])).toEqual([
       ['ace', 'ace.md', 'Ace Canon']
@@ -109,10 +111,12 @@ describe('同名三份 bot 文件', () => {
     ])
     expect(listing.invalid).toEqual([])
 
-    expect(await bots.rows()).toEqual(['ace'])
+    expect(await bots.groups()).toEqual(['ace'])
+    expect(await bots.groupLabel('ace')).toBe('Ace Canon')
+    expect((await bots.groupSessions('ace')).map((r) => r.title)).toEqual([TITLE])
     const shadowed = await bots.shadowedRows()
     expect(shadowed.map(({ fileName, after }) => ({ fileName, after }))).toEqual([
-      { fileName: 'a.md', after: 'row:ace' },
+      { fileName: 'a.md', after: 'group:ace' },
       { fileName: 'zed.md', after: 'shadowed:a.md' }
     ])
     for (const row of shadowed) {
@@ -121,14 +125,14 @@ describe('同名三份 bot 文件', () => {
       expect(row.title, row.fileName).toContain('ace.md')
     }
 
-    // 生效行照常有「新建 Bot 会话 / 删除」；输掉的行只能按文件名删（按名删会删到生效的那份）
-    expect(await bots.rowMenuIds('ace')).toEqual(['new-bot-chat', 'delete-bot'])
+    // 生效的那一组：新对话 / 编辑 bot / 归档；输掉的行只能按文件名删（按名操作会落到生效的那份上）
+    expect(await bots.groupMenuIds('ace')).toEqual(['new-bot-chat', 'edit-bot', 'archive-bot'])
     expect(await bots.shadowedRowMenuIds('zed.md')).toEqual(['delete-bot-file'])
 
     expect(await waitChip('Ace Canon')).toMatchObject({ bot: 'ace', missing: false })
   })
 
-  it('BS-2 从菜单删：删输掉的 zed.md 只动它自己，胶囊纹丝不动；按名删 ace 删的是生效的 ace.md —— a.md 接班，胶囊换成 Ace Short、不标缺失，会话绑定不迁', async () => {
+  it('BS-2 删输掉的 zed.md 只动它自己，胶囊纹丝不动；归档 ace 挪走的是生效的 ace.md —— a.md 接班（组还在、会话还在里面），胶囊换成 Ace Short、不标缺失，会话绑定不迁', async () => {
     const confirm = confirmPane(app.main)
 
     await bots.pickShadowedRowMenu('zed.md', 'delete-bot-file')
@@ -149,18 +153,26 @@ describe('同名三份 bot 文件', () => {
       return shot.bot === 'ace' && shot.name === 'Ace Canon' && !shot.missing
     })
 
-    await bots.pickRowMenu('ace', 'delete-bot')
-    await confirm.waitOpen()
-    await confirm.confirm()
+    // 归档不弹确认（删除在 设置 → 已归档 里）
+    const aceText = readFileSync(botPath('ace.md'), 'utf8')
+    await bots.pickGroupMenu('ace', 'archive-bot')
 
-    await until(() => !existsSync(botPath('ace.md')), 'ace.md deleted')
+    await until(() => !existsSync(botPath('ace.md')), 'ace.md moved out of the bots dir')
+    expect(readFileSync(join(app.botsDir, 'archived', 'ace.md'), 'utf8')).toBe(aceText)
     const listing = await listBots()
     expect(listing.bots.map((b) => [b.name, b.fileName, b.displayName])).toEqual([
       ['ace', 'a.md', 'Ace Short']
     ])
     expect(listing.shadowed).toEqual([])
+    expect(listing.archived).toEqual(['ace'])
     await until(async () => (await bots.shadowedRows()).length === 0, 'no shadowed rows left')
-    expect(await bots.rows()).toEqual(['ace'])
+    expect(await bots.groups()).toEqual(['ace'])
+    await until(
+      async () => (await bots.groupLabel('ace')) === 'Ace Short',
+      'group renamed to Ace Short'
+    )
+    // 名字有主人（a.md）：它的会话照样在这一组里，不跟着归档的那份藏起来
+    expect((await bots.groupSessions('ace')).map((r) => r.title)).toEqual([TITLE])
     // 名字落定之后「不缺失」才算数（加载中同样不标缺失）
     expect(await waitChip('Ace Short')).toMatchObject({ missing: false })
     // 名字没变、只是换了一份文件在用 —— 不是改名，会话绑定原样

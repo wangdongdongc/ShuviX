@@ -6,6 +6,7 @@
 import { isAbsolute, resolve, sep } from 'path'
 import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
+import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
 import { sessionAcl } from './acl'
@@ -636,9 +637,9 @@ function envVarsToRecord(envVars?: ProjectEnvVar[]): Record<string, string> | un
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
 export function resolveProjectConfig(sessionId: string): ProjectConfig {
   const session = sessionService.getById(sessionId)
-  const project = session?.projectId
-    ? projectDao.pick(session.projectId, ['id', 'path', 'settings'])
-    : undefined
+  // 所属项目，或 bot 会话引用的工作项目：环境变量照项目来
+  const projectId = projectContextIdOf(session)
+  const project = projectId ? projectDao.pick(projectId, ['id', 'path', 'settings']) : undefined
 
   if (project) {
     // 有项目 → 使用项目配置

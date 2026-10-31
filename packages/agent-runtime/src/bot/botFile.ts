@@ -53,6 +53,11 @@ export interface BotBinding {
   when?: string
   /** 发给 bot 的话（宿主在后面附上事件围栏） */
   message: string
+  /**
+   * 运行会话的工作位置：一个项目的名字（2026-10-30 用户：定时运行可以指定项目或临时）。缺省 = 临时工作区。
+   * 按名字找没归档的项目（大小写不敏感），找不到或有不止一个同名项目时这一次不跑、记进触发日志
+   */
+  project?: string
 }
 
 /** 解析产物（basePath 由调用方补齐） */
@@ -165,8 +170,8 @@ function parseBindings(
     const trigger = typeof entry.trigger === 'string' ? entry.trigger.trim() : ''
     if (!trigger) return `each '${BOT_ON_KEY}' entry needs a 'trigger' id`
     for (const k of Object.keys(entry)) {
-      if (k !== 'trigger' && k !== 'when' && k !== 'message') {
-        return `binding '${trigger}': unknown key '${k}' — a binding has only trigger, when and message`
+      if (k !== 'trigger' && k !== 'when' && k !== 'message' && k !== 'project') {
+        return `binding '${trigger}': unknown key '${k}' — a binding has only trigger, when, message and project`
       }
     }
     let when: string | undefined
@@ -181,6 +186,13 @@ function parseBindings(
     if (typeof entry.message !== 'string' || !entry.message.trim()) {
       return `binding '${trigger}': 'message' must be the non-empty text sent to the bot`
     }
+    let project: string | undefined
+    if (entry.project !== undefined && entry.project !== null) {
+      if (typeof entry.project !== 'string' || !entry.project.trim()) {
+        return `binding '${trigger}': 'project' must be a project name (omit it to run in a temporary workspace)`
+      }
+      project = entry.project.trim()
+    }
     const point = getTriggerPoint(trigger)
     if (!point) {
       warn?.(`bot '${name}': trigger '${trigger}' is not known on this build — binding is inert`)
@@ -190,7 +202,8 @@ function parseBindings(
     bindings.push({
       trigger,
       ...(when === undefined ? {} : { when }),
-      message: entry.message.trim()
+      message: entry.message.trim(),
+      ...(project === undefined ? {} : { project })
     })
   }
   return bindings

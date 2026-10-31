@@ -15,7 +15,8 @@
  *     agent 重配（会话开着 → 交给它；没开但锁镜像说锁着 → peek 打开，存储不在就算了；都不是 → 不碰运行时）。
  *     `initAgent().created` 仍按锁回答（会话开着看运行时的锁，没开着看锁镜像 / peek 读真正的锁；销毁在途锁还在）；
  *     重配本身的细节（被拒 / 取消 / 等它落定）见 sessionServiceReconfigure.test.ts；
- *   - agent_created / agent_closing 归运行时的锁广播，sessionService 不发（见 sessionHostWiring 的 D10-39）。
+ *   - agent_created / agent_closing 归运行时的锁广播，sessionService 不发（见 sessionHostWiring 的 D10-39）；
+ *   - ET-B1 bot 会话引用的工作项目（`settings.workProject`）与所属项目同样是继承 / 补键的来源。
  *
  * mock 面沿用 sessionServiceProfileResolution.test.ts（import 图全换假件、会话运行时换成假宿主），
  * 只把 sessionDao / projectDao 换成一张**内存行表**：补键用例要能读回自己刚写的值，
@@ -881,5 +882,72 @@ describe('LA-D initAgent reports the locked agent, not the session settings (opt
       enabledTools: ['mcp:settings-only']
     })
     expect(fakeHost.callsOf('peek')).toEqual([SID, SID])
+  })
+})
+
+// ─── bot 会话引用的工作项目 ───────────────────────────────────────────────
+
+/**
+ * ET-B1：bot 会话只归属 bot（`projectId` 空），项目以引用 `settings.workProject` 记下 —— 但「新会话按项目来」这条
+ * 照引用算（用户 2026-10-31：选了项目的 bot 会话按项目来）。新建、旧行补键、旧子会话补键都读引用的那个项目。
+ */
+describe('ET-B1 引用的工作项目同样是勾选的来源', () => {
+  it('ET-B1 create({bot, workProject}) 继承那个项目保存过的勾选；只给 projectId 的旧入口同样', () => {
+    seedProject('p1', { enabledTools: ['mcp:a', 'skill:b', '-mcp:browser'] })
+    sessionService.create({ bot: 'scout', workProject: 'p1' })
+    expect(insertedSettings().workProject).toBe('p1')
+    expect(insertedSettings().enabledTools).toEqual(['mcp:a', '-mcp:browser'])
+
+    sessionService.create({ bot: 'scout', projectId: 'p1' })
+    expect(insertedSettings().enabledTools).toEqual(['mcp:a', '-mcp:browser'])
+  })
+
+  it('ET-B1 工作项目不在 → 临时会话，勾选为 []', () => {
+    sessionService.create({ bot: 'scout', workProject: 'p-ghost' })
+    expect('workProject' in insertedSettings()).toBe(false)
+    expect(insertedSettings().enabledTools).toEqual([])
+  })
+
+  it('ET-B1 bot 会话的子会话抄父会话的勾选（不回落项目那份）；父会话缺键 → 按父会话引用的项目算', () => {
+    seedProject('p1', { enabledTools: ['mcp:proj'] })
+    seedSession({
+      id: 'B',
+      projectId: null,
+      settings: { bot: 'scout', workProject: 'p1', enabledTools: ['mcp:mine'] }
+    })
+    sessionService.create({ parentId: 'B' })
+    expect(insertedSettings().enabledTools).toEqual(['mcp:mine'])
+    expect(insertedSettings().workProject).toBe('p1')
+
+    seedSession({ id: 'B2', projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+    sessionService.create({ parentId: 'B2' })
+    expect(insertedSettings().enabledTools).toEqual(['mcp:proj'])
+    expect(writesTo('B2')).toEqual([])
+  })
+
+  it('ET-B1 缺键的旧 bot 根会话（只有引用）：首次解析按引用的项目补一次', async () => {
+    seedProject('p1', { enabledTools: ['mcp:x', 'skill:legacy'] })
+    seedSession({ id: SID, projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+
+    const init = await sessionService.initAgent(SID)
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:x'] }]])
+    expect(init.enabledTools).toEqual(['mcp:x'])
+  })
+
+  it('ET-B1 缺键的旧子会话，父会话也缺键 → 按父会话引用的项目算；父行 0 写入', async () => {
+    seedProject('p1', { enabledTools: ['mcp:proj'] })
+    seedSession({ id: 'P', projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+    seedSession({ id: SID, projectId: null, parentId: 'P', settings: { workProject: 'p1' } })
+
+    const init = await sessionService.initAgent(SID)
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:proj'] }]])
+    expect(init.enabledTools).toEqual(['mcp:proj'])
+    expect(writesTo('P')).toEqual([])
+  })
+
+  it('ET-B1 引用的项目被删 → 缺键的旧行补 []，不抛', async () => {
+    seedSession({ id: SID, projectId: null, settings: { bot: 'scout', workProject: 'p-gone' } })
+    expect((await sessionService.initAgent(SID)).enabledTools).toEqual([])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: [] }]])
   })
 })

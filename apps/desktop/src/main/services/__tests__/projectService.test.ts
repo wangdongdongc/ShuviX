@@ -5,6 +5,8 @@
  * list / listArchived 不能把它们露到项目列表里，但 getById 不过滤 —— 它们的会话要能正常解析出
  * 所属项目。只 mock projectDao；id 取契约常量而非字面量，常量改了这里跟着改，字面量会让测试在
  * 过滤失效时还绿着。
+ *
+ * PH-2（文件末尾）：改项目路径时，引用它当工作位置的 bot 会话的路径快照跟着搬。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
@@ -21,8 +23,13 @@ vi.mock('../../dao/projectDao', () => ({
     update: vi.fn()
   }
 }))
+// 改路径时要扫引用这个项目的 bot 会话（路径快照跟着搬）：会话行桩掉，免得拉起数据库
+vi.mock('../sessionRecords', () => ({
+  sessionRecords: { findAll: vi.fn(() => []), updateSettings: vi.fn() }
+}))
 
 import { projectDao } from '../../dao/projectDao'
+import { sessionRecords } from '../sessionRecords'
 import { projectService } from '../projectService'
 
 const project = (id: string, over: Partial<Project> = {}): Project => ({
@@ -139,5 +146,53 @@ describe('projectService — settings 合并（PS-3 / PS-4）', () => {
 
     projectService.create({ path: '/tmp/shuvix-unit/p-c' })
     expect('knowledgeBases' in inserted()).toBe(false)
+  })
+})
+
+/**
+ * PH-2：bot 会话只归属 bot，引用一个项目当工作位置（`settings.workProject`）时另记一份项目路径的快照
+ * （`settings.workingDirectory`）—— 项目被删时退回那里。项目改了路径，快照跟着搬，否则删项目之后它退回一个已经
+ * 不在的旧路径。只改引用**这个**项目、快照与新路径不同的那几条；成员会话不带快照，不碰。
+ */
+describe('projectService — 改路径时引用它的会话的路径快照跟着搬（PH-2）', () => {
+  type Row = { id: string; projectId: string | null; settings: Record<string, unknown> }
+  const seed = (rows: Row[]): void => {
+    vi.mocked(sessionRecords.findAll).mockReturnValue(rows as never)
+  }
+  const rewrites = (): unknown[][] => vi.mocked(sessionRecords.updateSettings).mock.calls
+
+  it('PH-2 只改引用 p1、快照与新路径不同的会话；新路径按 resolve 规范化后写', () => {
+    seed([
+      {
+        id: 'bot',
+        projectId: null,
+        settings: { bot: 'scout', workProject: 'p1', workingDirectory: '/old' }
+      },
+      { id: 'child', projectId: null, settings: { workProject: ' p1 ', workingDirectory: '/old' } },
+      { id: 'no-snap', projectId: null, settings: { bot: 'scout', workProject: 'p1' } },
+      { id: 'same', projectId: null, settings: { workProject: 'p1', workingDirectory: '/new/p1' } },
+      { id: 'member', projectId: 'p1', settings: { enabledTools: [] } },
+      { id: 'other', projectId: null, settings: { workProject: 'p2', workingDirectory: '/old' } },
+      { id: 'blank', projectId: null, settings: { workProject: '  ', workingDirectory: '/old' } },
+      { id: 'temp', projectId: null, settings: { workingDirectory: '/old' } }
+    ])
+
+    projectService.update('p1', { path: '/new/./p1/' })
+
+    expect(vi.mocked(projectDao.update).mock.calls.at(-1)![1]).toEqual({ path: '/new/p1' })
+    expect(rewrites()).toEqual([
+      ['bot', { workingDirectory: '/new/p1' }],
+      ['child', { workingDirectory: '/new/p1' }],
+      ['no-snap', { workingDirectory: '/new/p1' }]
+    ])
+  })
+
+  it('PH-2 不改路径就不扫会话', () => {
+    seed([
+      { id: 'bot', projectId: null, settings: { workProject: 'p1', workingDirectory: '/old' } }
+    ])
+    projectService.update('p1', { name: 'Renamed', systemPrompt: 'x', knowledgeBases: [] })
+    expect(sessionRecords.findAll).not.toHaveBeenCalled()
+    expect(sessionRecords.updateSettings).not.toHaveBeenCalled()
   })
 })

@@ -5,7 +5,7 @@
  *  1. 派生 agent 的 ctx 里 `sessionId` 是 agentId、`cwd` 是 ''：工作目录与项目都按 `rootSessionId`
  *     （根会话）查 —— 旧代码直接回 ctx.cwd（''）、拿 agentId 查项目（''），isGitRepo 则看 process.cwd()，
  *     也就是 ShuviX 自己的检出（于是一律说 Yes）。根 ctx 有非空 cwd 时照用它、不去查；没传 rootSessionId
- *     的旧调用方按 sessionId 算（ENV-1…5）。
+ *     的旧调用方按 sessionId 算（ENV-1…5）。根会话是 bot 会话时项目名取它引用的工作项目（ENV-2b）。
  *  2. `gitRepoLine`：从工作目录往上找第一个 `.git`（目录或文件都算）；工作目录在家目录**之下**时不查家目录
  *     本身及以上（家目录里的 dotfiles 仓库不能让每个项目都读成 Yes），工作目录**就是**家目录时只查它自己，
  *     家目录之外一路查到文件系统根；根在工作目录之上时写出根（ENV-6…10）。路径按构造时的写法比（不 realpath：
@@ -156,6 +156,30 @@ describe('desktopPromptVars —— 派生 agent 按根会话取工作目录与�
     const lookedUp = mocks.pick.mock.calls.map((call) => call[0])
     expect(lookedUp).toContain('sess-root')
     expect(lookedUp).not.toContain('agent-xyz')
+  })
+
+  it('ENV-2b 根会话是引用工作项目的 bot 会话（projectId 空、settings.workProject）→ projectName 是那个项目的名字', async () => {
+    workingDirectories({ 'sess-root': '/w/root' })
+    mocks.pick.mockImplementation((id: string) =>
+      id === 'sess-root' ? { id, projectId: null } : undefined
+    )
+    mocks.pickSettings.mockImplementation((id: string, keys: string[]) =>
+      id === 'sess-root' && keys.includes('workProject') ? { workProject: 'proj-2' } : {}
+    )
+    mocks.projectPick.mockImplementation((id: string) =>
+      id === 'proj-2' ? { name: 'Referenced' } : undefined
+    )
+
+    expect((await desktopPromptVars(SPAWNED)).projectName).toBe('Referenced')
+    const settingsLookups = mocks.pickSettings.mock.calls
+      .filter((call) => (call[1] as string[]).includes('workProject'))
+      .map((call) => call[0])
+    expect(settingsLookups).toContain('sess-root')
+    expect(settingsLookups).not.toContain('agent-xyz')
+
+    // 引用的项目已被删 → 空
+    mocks.projectPick.mockReturnValue(undefined)
+    expect((await desktopPromptVars(SPAWNED)).projectName).toBe('')
   })
 
   it('ENV-3 (a) 根 ctx 的 cwd 非空 → 照用、不去查；(b) 没传 rootSessionId 的旧调用方 → 按 sessionId 查', async () => {

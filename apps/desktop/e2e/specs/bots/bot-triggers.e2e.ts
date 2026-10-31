@@ -1,9 +1,11 @@
 /**
  * bot 触发绑定（`shuvix-bot-on`，实验）—— 内置 timer 每分钟一次的 `timer.fired` 真的叫起一个 bot：
  *
- *   BT-E1 绑定命中 → 新开一条绑定该 bot 的临时会话（无项目、无父会话），标题「显示名 · MM-DD HH:MM」
+ *   BT-E1 绑定命中 → 新开一条绑定该 bot 的临时会话（无项目、无父会话、无工作项目引用，标着 triggerRun），
+ *         标题「显示名 · MM-DD HH:MM」
  *   BT-E2 发给模型的就是「绑定里的 message + 空行 + <trigger_event> 围栏」，围栏 YAML 里是这一分钟的事实，第一次没有 lastFiredAt
- *   BT-E3 打开那条会话：用户气泡带「触发器」来源标签（悬停说出 bot 与埋点），脚本回复照常渲染
+ *   BT-E3 侧栏里它折在 ticker 组的「定时运行」那一行里（缺省收起，不在用户自己开的会话之列）；照样点得开：
+ *         用户气泡带「触发器」来源标签（悬停说出 bot 与埋点），脚本回复照常渲染
  *   BT-E4 `when: "false"` 与求值出错（函数名拼错）的绑定都不建会话；出错只记一次日志
  *   BT-E5 设置 → 触发源：tab 带实验标签；开关缺省开（设置项没写）；副标题是上次触发的时刻；**不列订阅者**（触发源与
  *         bot 解绑，2026-10-24）；「上一次的事件」块缺省收起、点得开，JSON 就是 `when` 看到的 event（trigger + local.time）
@@ -36,6 +38,7 @@ import {
   writeBotMd
 } from '../../harness/seed'
 import {
+  botsPane,
   chatOriginBadges,
   chatPane,
   confirmPane,
@@ -106,6 +109,10 @@ interface TickerSession {
   projectId: string | null
   parentId: string | null
   bot: string
+  /** 触发器开出来的运行会话（侧栏折进「定时运行」） */
+  triggerRun: boolean
+  /** 工作项目的引用（绑定没写 project → 没有） */
+  workProject: string | null
   createdAt: number
 }
 
@@ -169,6 +176,8 @@ function tickerSessions(): Promise<TickerSession[]> {
         projectId: s.projectId,
         parentId: s.parentId,
         bot: s.settings.bot,
+        triggerRun: s.settings.triggerRun === true,
+        workProject: s.settings.workProject ?? null,
         createdAt: s.createdAt
       }))
       .sort((a, b) => a.createdAt - b.createdAt))`
@@ -243,7 +252,7 @@ afterAll(async () => {
 })
 
 describe('timer.fired 叫起 bot', () => {
-  it('BT-E1 一分钟之内冒出一条绑定 ticker 的临时会话：无项目、无父会话，标题「Ticker · MM-DD HH:MM」', async () => {
+  it('BT-E1 一分钟之内冒出一条绑定 ticker 的临时会话：无项目、无父会话、无工作项目，标着 triggerRun，标题「Ticker · MM-DD HH:MM」', async () => {
     first = await until(
       async () => (await tickerSessions())[0],
       'first ticker session',
@@ -252,6 +261,8 @@ describe('timer.fired 叫起 bot', () => {
     expect(first.bot).toBe('ticker')
     expect(first.projectId).toBeNull()
     expect(first.parentId).toBeNull()
+    expect(first.triggerRun).toBe(true)
+    expect(first.workProject).toBeNull()
     expect(first.title).toMatch(/^Ticker · \d{2}-\d{2} \d{2}:\d{2}$/)
   }, 120_000)
 
@@ -278,7 +289,20 @@ describe('timer.fired 叫起 bot', () => {
     expect(first.title).toBe(`Ticker · ${firstFence.local.date.slice(5)} ${firstFence.local.time}`)
   })
 
-  it('BT-E3 打开那条会话：用户气泡带「触发器」来源标签（悬停说出 ticker 与 timer.fired），脚本回复照常渲染', async () => {
+  it('BT-E3 侧栏里它折在 ticker 组的「定时运行」里；点开：用户气泡带「触发器」来源标签（悬停说出 ticker 与 timer.fired），脚本回复照常渲染', async () => {
+    const bots = botsPane(app.main)
+    // 分节一挂上就扫了（那时 ticker.md 还没落盘）—— 刷新一次，组头才是生效的 ticker 组
+    await bots.refresh()
+    await bots.waitGroup('ticker')
+    const runs = await until(async () => {
+      const r = await bots.runs('ticker')
+      return r && r.rows.some((row) => row.title === first.title) ? r : null
+    }, "the first run inside the ticker group's scheduled-runs row")
+    expect(runs.state).toBe('collapsed')
+    expect(runs.count).toBe(runs.rows.length)
+    expect(await bots.groupSessions('ticker')).toEqual([])
+
+    // 折叠只收高度，行仍在 DOM 里：照样点得开
     const sidebar = sidebarPane(app.main)
     await until(() => sidebar.openSession(first.title), `sidebar row "${first.title}"`)
     const chat = chatPane(app.main)

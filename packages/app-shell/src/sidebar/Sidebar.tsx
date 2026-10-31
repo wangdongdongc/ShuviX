@@ -3,8 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Settings } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from './useFocusDim'
-import { ProjectSessionGroups, TEMP_GROUP_KEY } from './ProjectSessionGroups'
-import { BotSessionDialog, type SidebarBotsAdapter } from './BotSessionDialog'
+import { ProjectSessionGroups, TEMP_GROUP_KEY, type BotsSectionCaps } from './ProjectSessionGroups'
 import type { ProjectRef } from './useProjects'
 import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 
@@ -43,8 +42,11 @@ export interface SidebarProps {
   groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode
-  /** bots 能力（桌面注入 window.api.bot 的窄投影 —— 缺省时 Bot 会话入口整体不渲染） */
-  bots?: SidebarBotsAdapter
+  /**
+   * 「Bots」分节（桌面注入 window.api.bot 的窄投影）：bot 会话收拢在各自的 bot 名下，开新会话先选工作位置。
+   * 缺省时整节不画（扩展没有 bot）
+   */
+  bots?: BotsSectionCaps
   /** 知识库能力（桌面注入）：每个项目组里的「项目知识库」子文件夹；缺省时不显示 */
   projectKnowledge?: KnowledgeGroupAdapter
   /** 不画底部的设置栏（web 客户端的手机布局：设置是底部标签栏里单独的一页） */
@@ -118,9 +120,6 @@ export function Sidebar({
     await afterCreate(session.id, projectId)
   }
 
-  // Bot 会话：先弹 bot 单选（BotSessionDialog），点行即带 bot 创建
-  const [botDialogFor, setBotDialogFor] = useState<{ projectId: string | null } | null>(null)
-
   // 菜单栏「新建对话 / 新建项目」（桌面原生菜单；扩展适配器为 no-op）
   useEffect(() => {
     const offChat = getChatApi().app.onNewChat(() => {
@@ -174,20 +173,35 @@ export function Sidebar({
         {groupsPrepend}
         {isEmpty ? (
           // 空态提示本身就是那句「打开一个文件夹作为项目」—— 点它即打开文件夹
-          // （此时分组列表整个不渲染，分节头那份菜单也就不在）
-          <button
-            onClick={() => void onOpenFolder()}
-            className="w-full px-3 py-8 text-center text-text-tertiary hover:text-text-secondary text-xs transition-colors"
-          >
-            {t('sidebar.emptyHint')}
-          </button>
+          // （此时项目分组整个不渲染，分节头那份菜单也就不在）。「Bots」分节照样在：bot 文件可能已经有了，
+          // 那里是开第一条对话的地方
+          <>
+            {bots && (
+              <ProjectSessionGroups
+                projects={projects}
+                collapsed={collapsedGroups}
+                onToggleGroup={toggleGroup}
+                onNewChat={(pid) => void handleNewChat(pid)}
+                bots={bots}
+                botsOnly
+                onSelect={onSelectSession}
+                projectsSection={{ dividerAbove: !!groupsPrepend }}
+              />
+            )}
+            <button
+              onClick={() => void onOpenFolder()}
+              className="w-full px-3 py-8 text-center text-text-tertiary hover:text-text-secondary text-xs transition-colors"
+            >
+              {t('sidebar.emptyHint')}
+            </button>
+          </>
         ) : (
           <ProjectSessionGroups
             projects={projects}
             collapsed={collapsedGroups}
             onToggleGroup={toggleGroup}
             onNewChat={(pid) => void handleNewChat(pid)}
-            onNewBotChat={bots ? (pid) => setBotDialogFor({ projectId: pid }) : undefined}
+            bots={bots}
             onSelect={onSelectSession}
             onDelete={onDeleteSession}
             onEditProject={onEditProject}
@@ -223,27 +237,6 @@ export function Sidebar({
       )}
 
       {overlays}
-
-      {bots && botDialogFor && (
-        <BotSessionDialog
-          projectId={botDialogFor.projectId}
-          projectName={
-            botDialogFor.projectId
-              ? projects.find((p) => p.id === botDialogFor.projectId)?.name
-              : undefined
-          }
-          bots={bots}
-          onPick={async (name) => {
-            const session = await getChatApi().session.create({
-              projectId: botDialogFor.projectId,
-              bot: name
-            })
-            await afterCreate(session.id, botDialogFor.projectId)
-            return null
-          }}
-          onClose={() => setBotDialogFor(null)}
-        />
-      )}
     </div>
   )
 }

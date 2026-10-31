@@ -1,10 +1,11 @@
 /**
- * Bot 文件经笔记本会话编辑（bot.openNote / createNew / delete + botService 的写入回执）。
+ * Bot 文件经笔记本会话编辑（bot.openNote / createNew / archive + botService 的写入回执）。
  *
  * 打开一份 bot 就是打开它的笔记本会话：没有显式保存、没有写前校验 —— 属性卡失焦提交、200ms 防抖
  * 自动保存落盘，写到一半解析不过的版本照样落盘（列进琥珀行）。botService 只在写入前后被告知一声
  * （noteWriting / noteWritten），据此补上两件事：**改名迁移会话绑定**（名字变了、且新名字独占、
- * 旧名字无人再用时才迁）与**合并窗口内广播一次 bot.changed**（侧栏分组据此重扫）。
+ * 旧名字无人再用时才迁）与**合并窗口内广播一次 bot.changed**（侧栏 Bots 分节据此重扫）。打开一份 bot 走 bot 组的
+ * 组头菜单「编辑 bot」；生效 bot 的组头不随它的笔记本高亮，「笔记还开着」由主区正文说。
  *
  * 用例间有顺序依赖（同一份 ranger.md 一路改下去），按列出顺序执行。写入只走两条路：属性卡
  * `commitField`（真实编辑路径）或 `noteWrite`（写路径 IPC，与自动保存同一个 writeSessionFile）——
@@ -30,7 +31,6 @@ import {
 } from '../../harness/seed'
 import {
   botsPane,
-  confirmPane,
   registryNotePane,
   type BotsPane,
   type RegistryNotePane
@@ -49,9 +49,11 @@ interface BotRow {
 
 interface BotListing {
   bots: BotRow[]
-  /** 同名里输掉的几份（侧栏列在胜出行之后）；shadowedBy = 胜出那份的文件名 */
+  /** 同名里输掉的几份（侧栏列在所有组之后）；shadowedBy = 胜出那份的文件名 */
   shadowed: Array<BotRow & { shadowedBy: string }>
   invalid: Array<{ fileName: string; error: string }>
+  /** 归档了的 bot 名（`archived/` 里的文件） */
+  archived: string[]
 }
 
 /** 种子文本以 `\n` 结尾：卡片改一行之后的全字节期望才稳定 */
@@ -79,6 +81,7 @@ let rangerSid = ''
 let scoutSid = ''
 
 const botPath = (fileName: string): string => join(app.botsDir, fileName)
+const archivedPath = (fileName: string): string => join(app.botsDir, 'archived', fileName)
 const readBot = (fileName: string): string => readFileSync(botPath(fileName), 'utf8')
 const listBots = (): Promise<BotListing> => app.main.eval<BotListing>('window.api.bot.list()')
 const boundTo = (name: string): Promise<string[]> => sessionsBoundTo(app.main, name)
@@ -96,8 +99,10 @@ beforeAll(async () => {
   note = registryNotePane(app.main)
   events = appEventRecorder(app.main)
   await events.install()
-  // 首次展开 = 首次扫描：botService 记下每份文件此刻的名字（改名迁移的基线）
-  await bots.expand()
+  // 分节一挂上就扫了（那时两份 md 还没落盘）—— 刷新一次：botService 记下每份文件此刻的名字（改名迁移的基线）
+  await bots.refresh()
+  await bots.waitGroup('ranger')
+  await bots.waitGroup('scout')
 }, 120_000)
 
 afterAll(async () => {
@@ -105,8 +110,8 @@ afterAll(async () => {
 })
 
 describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
-  it('BN-1 卡上把 name 改成 hunter：只动那一行，绑定 ranger 的会话迁到 hunter，侧栏行随之换名并保持选中', async () => {
-    await bots.selectRow('ranger')
+  it('BN-1 卡上把 name 改成 hunter：只动那一行，绑定 ranger 的会话迁到 hunter，侧栏的组随之换名（会话跟着进去），笔记照常开着', async () => {
+    await bots.pickGroupMenu('ranger', 'edit-bot')
     await note.waitBody('RANGER BODY.')
     const before = readBot('ranger.md')
     expect(before).toBe(RANGER)
@@ -121,18 +126,21 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     expect(await boundTo('ranger')).toEqual([])
     expect(await boundTo('scout')).toEqual([scoutSid])
 
-    // 不手动刷新：写入回执广播的 bot.changed 让分组自己重扫
+    // 不手动刷新：写入回执广播的 bot.changed 让分节自己重扫
     await until(async () => {
-      const rows = await bots.rows()
-      return rows.includes('hunter') && !rows.includes('ranger')
-    }, 'sidebar row renamed')
-    expect(await bots.activeRow()).toEqual({ row: 'hunter' })
+      const groups = await bots.groups()
+      return groups.includes('hunter') && !groups.includes('ranger')
+    }, 'sidebar group renamed')
+    // 迁过去的会话跟着进了新组（组缺省折叠，行仍在 DOM 里）
+    expect((await bots.groupSessions('hunter')).map((r) => r.title)).toEqual(['bn-ranger-chat'])
+    expect(await bots.activeFileRow()).toBeNull()
+    expect(await note.bodyText()).toContain('RANGER BODY.')
     expect((await listBots()).bots).toContainEqual(
       expect.objectContaining({ name: 'hunter', fileName: 'ranger.md' })
     )
   })
 
-  it('BN-2 中途撞上另一份文件的名字（scout）：不迁移；两份都列出 —— 文件名即名字的 scout.md 生效，ranger.md 跟在它后面划线带徽标、仍是活动行；改成独占的 scout-2 才一步迁过去，遮蔽随之解开', async () => {
+  it('BN-2 中途撞上另一份文件的名字（scout）：不迁移；两份都列出 —— 文件名即名字的 scout.md 生效，ranger.md 排在组后面划线带徽标、仍是活动行，hunter 的会话暂成「找不到文件」的一组；改成独占的 scout-2 才一步迁过去，遮蔽随之解开', async () => {
     let before = readBot('ranger.md')
     await events.clear()
     await note.commitField('name', 'scout')
@@ -160,13 +168,13 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     ])
     expect(collided.invalid).toEqual([])
 
-    // 侧栏（bot.changed 让分组自己重扫）：输掉的那份紧跟胜出行、划线带徽标；正开着的就是它自己的
-    // 笔记，活动行不丢
+    // 侧栏（bot.changed 让分节自己重扫）：输掉的那份排在组后面、划线带徽标；正开着的就是它自己的
+    // 笔记，活动行不丢。hunter 这个名字此刻没有主人：它的会话成了「找不到文件」的一组（同名文件回来就归位）
     await until(
       async () => (await bots.shadowedRows()).some((r) => r.fileName === 'ranger.md'),
       'shadowed row listed'
     )
-    expect(await bots.rows()).toEqual(['scout'])
+    expect(await bots.groups()).toEqual(['scout'])
     expect(
       (await bots.shadowedRows()).map(({ fileName, after, struck, badge }) => ({
         fileName,
@@ -174,8 +182,12 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
         struck,
         badge
       }))
-    ).toEqual([{ fileName: 'ranger.md', after: 'row:scout', struck: true, badge: true }])
-    expect(await bots.activeRow()).toEqual({ shadowedRow: 'ranger.md' })
+    ).toEqual([{ fileName: 'ranger.md', after: 'group:scout', struck: true, badge: true }])
+    expect(await bots.activeFileRow()).toEqual({ shadowedRow: 'ranger.md' })
+    expect(await bots.missingGroups()).toEqual(['hunter'])
+    expect((await bots.missingGroupSessions('hunter')).map((r) => r.title)).toEqual([
+      'bn-ranger-chat'
+    ])
 
     before = readBot('ranger.md')
     await note.commitField('name', 'scout-2')
@@ -187,14 +199,16 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     expect(await boundTo('hunter')).toEqual([])
     expect(await boundTo('scout')).toEqual([scoutSid])
 
-    // 撞名解开：谁也不再被遮蔽，两行各自生效，活动行回到普通行
+    // 撞名解开：谁也不再被遮蔽，两组各自生效，也不再有「找不到文件」的一组；文件行里不再有活动行（笔记照常开着）
     expect((await listBots()).shadowed).toEqual([])
     await until(async () => {
-      const rows = await bots.rows()
-      return rows.includes('scout-2') && (await bots.shadowedRows()).length === 0
+      const groups = await bots.groups()
+      return groups.includes('scout-2') && (await bots.shadowedRows()).length === 0
     }, 'sidebar rescanned after the collision resolved')
-    expect((await bots.rows()).sort()).toEqual(['scout', 'scout-2'])
-    expect(await bots.activeRow()).toEqual({ row: 'scout-2' })
+    expect((await bots.groups()).sort()).toEqual(['scout', 'scout-2'])
+    expect(await bots.missingGroups()).toEqual([])
+    expect(await bots.activeFileRow()).toBeNull()
+    expect(await note.bodyText()).toContain('RANGER BODY.')
   })
 
   it('BN-3 写到一半解析不过的版本照原样落盘：进琥珀行（仍是活动行、正文照常），绑定不动；写成合法的 hunter-final 一步迁到位', async () => {
@@ -209,7 +223,7 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     expect(listing.bots.some((b) => b.fileName === 'ranger.md')).toBe(false)
 
     await until(
-      async () => (await bots.activeRow())?.invalidRow === 'ranger.md',
+      async () => (await bots.activeFileRow())?.invalidRow === 'ranger.md',
       'amber row is the active one'
     )
     await note.waitBody('HALF WRITTEN.')
@@ -222,9 +236,11 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     expect(await boundTo('hunter-final')).toEqual([rangerSid])
     expect(await boundTo('scout-2')).toEqual([])
     await until(
-      async () => (await bots.activeRow())?.row === 'hunter-final',
-      'normal row active under the final name'
+      async () =>
+        (await bots.groups()).includes('hunter-final') && (await bots.activeFileRow()) === null,
+      'a group under the final name, no file row active'
     )
+    await note.waitBody('FINAL BODY.')
   })
 })
 
@@ -268,7 +284,7 @@ describe('外部改动与零写盘', () => {
   it('BN-6 第一次打开一份 bot、只看不改 → 零写盘（字节与 mtime 都不变）', async () => {
     const before = readBot('scout.md')
     const mtime = statSync(botPath('scout.md')).mtimeMs
-    await bots.selectRow('scout')
+    await bots.pickGroupMenu('scout', 'edit-bot')
     await note.waitBody('SCOUT BODY.')
     await sleep(700)
     expect(readBot('scout.md')).toBe(before)
@@ -276,71 +292,78 @@ describe('外部改动与零写盘', () => {
   })
 })
 
-describe('新建与删除', () => {
-  it('BN-7 组头「新建 bot」→ my-bot.md 落盘并打开它的笔记（成为活动行）；再建一份是 my-bot-2.md', async () => {
+describe('新建与归档', () => {
+  it('BN-7 分节菜单「新建 bot」→ my-bot.md 落盘、一个新组出现并打开它的笔记；再建一份是 my-bot-2.md', async () => {
     await bots.newBot()
     await until(() => existsSync(botPath('my-bot.md')), 'my-bot.md created')
-    await until(async () => (await bots.activeRow())?.row === 'my-bot', 'my-bot row active')
+    await bots.waitGroup('my-bot')
     expect((await listBots()).bots).toContainEqual(
       expect.objectContaining({ name: 'my-bot', fileName: 'my-bot.md' })
     )
     // 模板正文预置两段小标题（bot 维护自己的文件要靠 edit 锚定既有文本）
     await note.waitBody('我是谁')
+    expect(
+      (await registryNoteSessions(app.main, BOTS_PROJECT)).map((n) => n.notebookPath)
+    ).toContain('my-bot.md')
 
     await bots.newBot()
     await until(() => existsSync(botPath('my-bot-2.md')), 'my-bot-2.md created')
-    await until(async () => (await bots.activeRow())?.row === 'my-bot-2', 'my-bot-2 row active')
+    await bots.waitGroup('my-bot-2')
+    await until(
+      async () =>
+        (await registryNoteSessions(app.main, BOTS_PROJECT)).some(
+          (n) => n.notebookPath === 'my-bot-2.md'
+        ),
+      'my-bot-2.md notebook opened'
+    )
   })
 
-  it('BN-8 删掉正开着的 bot：文件没了且不被自动保存写回，主区离开它；笔记本会话本身留着，重建同名文件复用它', async () => {
-    const orphan = (await registryNoteSessions(app.main, BOTS_PROJECT)).find(
+  it('BN-8 归档正开着的 bot（不弹确认）：文件挪进 bots/archived/、不被自动保存写回，它的笔记本会话一起删掉、主区离开它；组从侧栏消失', async () => {
+    const noteSession = (await registryNoteSessions(app.main, BOTS_PROJECT)).find(
       (n) => n.notebookPath === 'my-bot-2.md'
     )
-    expect(orphan).toBeDefined()
+    expect(noteSession).toBeDefined()
+    const content = readBot('my-bot-2.md')
+    await note.waitBody('我是谁')
 
-    await bots.pickRowMenu('my-bot-2', 'delete-bot')
-    const confirm = confirmPane(app.main)
-    await confirm.waitOpen()
-    await confirm.confirm()
+    await bots.pickGroupMenu('my-bot-2', 'archive-bot')
 
-    await until(() => !existsSync(botPath('my-bot-2.md')), 'my-bot-2.md deleted')
-    await until(async () => (await bots.activeRow()) === null, 'no active bot row')
-    expect(await note.bodyText()).not.toContain('我是谁')
+    await until(() => !existsSync(botPath('my-bot-2.md')), 'my-bot-2.md moved out of the bots dir')
+    expect(readFileSync(archivedPath('my-bot-2.md'), 'utf8')).toBe(content)
+    await bots.waitGroupGone('my-bot-2')
+    await until(async () => !(await note.bodyText()).includes('我是谁'), 'main area left the note')
+    // 开着的笔记接着自动保存会把文件写回 bots 目录（bot 就又「活」了）：笔记本会话一并删掉
+    await until(
+      async () =>
+        !(await registryNoteSessions(app.main, BOTS_PROJECT)).some(
+          (n) => n.notebookPath === 'my-bot-2.md'
+        ),
+      'the my-bot-2.md notebook session deleted'
+    )
     await sleep(700)
     expect(existsSync(botPath('my-bot-2.md'))).toBe(false)
 
-    // 不级联：会话是用户资产，删 md 不带走它；但文件不在了，openNote 按白名单拒绝
-    const remaining = await registryNoteSessions(app.main, BOTS_PROJECT)
-    expect(remaining.filter((n) => n.notebookPath === 'my-bot-2.md').map((n) => n.id)).toEqual([
-      orphan!.id
-    ])
+    const listing = await listBots()
+    expect(listing.bots.map((b) => b.name)).not.toContain('my-bot-2')
+    expect(listing.archived).toContain('my-bot-2')
+    // 归档里的文件不是 bots 目录里的 bot 文件：openNote 按白名单拒绝
     const reopened = await openRegistryNote(app.main, 'bot', 'my-bot-2.md')
     expect(reopened.ok).toBe(false)
     expect(reopened.ok ? '' : reopened.error).toContain('Invalid bot file')
-
-    // 再新建：第一个没被占用的名字又是 my-bot-2，同名文件的笔记复用那条会话
-    await bots.newBot()
-    await until(() => existsSync(botPath('my-bot-2.md')), 'my-bot-2.md recreated')
-    await until(async () => (await bots.activeRow())?.row === 'my-bot-2', 'recreated row active')
-    const again = (await registryNoteSessions(app.main, BOTS_PROJECT)).filter(
-      (n) => n.notebookPath === 'my-bot-2.md'
-    )
-    expect(again.map((n) => n.id)).toEqual([orphan!.id])
   })
 
-  it('BN-9 删掉一份没开着的 bot：开着的笔记不受影响', async () => {
-    await bots.selectRow('scout')
+  it('BN-9 归档一份没开着的 bot：开着的笔记不受影响', async () => {
+    await bots.pickGroupMenu('scout', 'edit-bot')
     await note.waitBody('SCOUT BODY.')
 
-    await bots.pickRowMenu('my-bot', 'delete-bot')
-    const confirm = confirmPane(app.main)
-    await confirm.waitOpen()
-    await confirm.confirm()
+    await bots.pickGroupMenu('my-bot', 'archive-bot')
 
-    await until(() => !existsSync(botPath('my-bot.md')), 'my-bot.md deleted')
-    await until(async () => !(await bots.rows()).includes('my-bot'), 'my-bot row gone')
-    expect(await bots.activeRow()).toEqual({ row: 'scout' })
+    await until(() => !existsSync(botPath('my-bot.md')), 'my-bot.md moved out of the bots dir')
+    expect(existsSync(archivedPath('my-bot.md'))).toBe(true)
+    await bots.waitGroupGone('my-bot')
+    await sleep(300)
     expect(await note.bodyText()).toContain('SCOUT BODY.')
+    expect(await bots.groups()).toContain('scout')
   })
 })
 

@@ -41,6 +41,7 @@ import {
   policiesSidebarPane,
   registryNotePane,
   settingsTabsPane,
+  sidebarOutline,
   sidebarPane,
   type ConfirmPane,
   type PoliciesSidebarPane,
@@ -730,12 +731,13 @@ describe('侧栏安全策略分组', () => {
     }
   })
 
-  it('PS-H2 侧栏置顶分组顺序 = bots → agents → policies → hooks → skills → knowledge', async () => {
-    const order = await app.main.eval<string[]>(
-      `[...document.querySelectorAll('div[class*="group/header"]')]
-        .map((h) => h.getAttribute('data-group'))
-        .filter((g) => ['bots', 'agents', 'policies', 'hooks', 'skills', 'knowledge'].includes(g))`
-    )
-    expect(order).toEqual(['bots', 'agents', 'policies', 'hooks', 'skills', 'knowledge'])
+  it('PS-H2 侧栏置顶分组顺序 = agents → policies → hooks → skills → knowledge（资料库里不再有 bots）；Bots 分节在资料库之后、项目分节之前', async () => {
+    const outline = await sidebarOutline(app.main)
+    const library = ['agents', 'policies', 'hooks', 'skills', 'knowledge']
+    expect(outline.filter((g) => [...library, 'bots'].includes(g))).toEqual(library)
+    const at = (key: string): number => outline.indexOf(key)
+    expect(at('library-section'), JSON.stringify(outline)).toBeGreaterThanOrEqual(0)
+    expect(at('bots-section'), JSON.stringify(outline)).toBeGreaterThan(at('knowledge'))
+    expect(at('projects-section'), JSON.stringify(outline)).toBeGreaterThan(at('bots-section'))
   })
 })

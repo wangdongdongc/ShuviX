@@ -1,7 +1,14 @@
-import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
+import {
+  boundBotOf,
+  isBotSessionSettings,
+  projectContextIdOf,
+  workProjectOf
+} from '@shuvix/chat-protocol/botSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { AlertTriangle, Timer } from 'lucide-react'
 import {
+  BotAvatar,
   useChatStore,
   selectAllPendingCounts,
   selectInterruptedSessions,
@@ -10,6 +17,7 @@ import {
 } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { isForkableSessionShape } from '@shuvix/chat-protocol/sessionFork'
+import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
@@ -19,8 +27,45 @@ import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { useSessionExport } from './useSessionExport'
 import { ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
 import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
+import { RowMenuButton } from './RowMenuButton'
+import {
+  useBotRegistry,
+  type BotGroupAdapter,
+  type BotGroupItem,
+  type BotSessionLocation
+} from './useBotRegistry'
 
 export const TEMP_GROUP_KEY = '__no_project__'
+
+/** bot 组的 key 前缀（项目组用项目 id、临时组用 TEMP_GROUP_KEY） */
+export const BOT_GROUP_PREFIX = 'bot:'
+export const botGroupKey = (name: string): string => `${BOT_GROUP_PREFIX}${name}`
+
+/**
+ * 一条**顶层**会话进不进 bot 组：bot 会话（只归属 bot，2026-10-31）→ 它绑定的 bot 名；别的 → undefined。
+ * 子会话不看（跟着父行走）
+ */
+export function botGroupOf(session: Pick<Session, 'parentId' | 'settings'>): string | undefined {
+  return session.parentId ? undefined : boundBotOf(session.settings)
+}
+
+/** 位置选择里直接列出的项目个数（最近用过的在前），其余收进「更多项目」 */
+const PICKER_RECENT_PROJECTS = 8
+
+/** 「Bots」分节能力（宿主注入；扩展没有 bot，不注入则整节不画，bot 会话照旧落在临时对话里） */
+export interface BotsSectionCaps {
+  adapter: BotGroupAdapter
+  /**
+   * 位置选择里的「打开文件夹…」：选目录、加成项目（同路径已有就复用），回项目 id；取消回 null。
+   * 不给则没有这一项（没有目录选择框的宿主）
+   */
+  pickFolderAsProject?: () => Promise<string | null>
+  /**
+   * 归档了的项目（id + 名称）：bot 会话引用的项目被归档时行尾照样标它的名字 —— 项目还在，只是不在侧栏里，不该读成
+   * 「项目已删除」。不给则按删除处理
+   */
+  archivedProjects?: Array<{ id: string; name: string }>
+}
 
 /** 每组先给几条（超出的折在「查看更多」后面）—— 侧栏一眼该看得完，旧会话按需再放 */
 const GROUP_VISIBLE_LIMIT = 8
@@ -35,8 +80,13 @@ export interface ProjectSessionGroupsProps {
   onToggleGroup: (key: string) => void
   /** 在某组下新建会话（临时组传 null） */
   onNewChat: (projectId: string | null) => void
-  /** 在某组下新建 Bot 会话（打开 bot 单选）；宿主未注入 bots 能力时缺省，入口整体不渲染 */
-  onNewBotChat?: (projectId: string | null) => void
+  /**
+   * 「Bots」分节（2026-10-31：bot 会话只归属 bot，收拢在各自的 bot 名下，不再出现在项目组与临时对话里）。
+   * 缺省不画，bot 会话照旧按项目 / 临时分组（扩展）
+   */
+  bots?: BotsSectionCaps
+  /** 只画「Bots」分节（侧栏空态：一个会话、一个项目都没有时，下面换成「打开文件夹」的提示） */
+  botsOnly?: boolean
   /** 选中会话（缺省用 chatStore.setActiveSessionId） */
   onSelect?: (id: string) => void
   onDelete?: (id: string) => void
@@ -96,7 +146,8 @@ export function ProjectSessionGroups({
   collapsed,
   onToggleGroup,
   onNewChat,
-  onNewBotChat,
+  bots,
+  botsOnly = false,
   onSelect,
   onDelete,
   onEditProject,
@@ -138,12 +189,25 @@ export function ProjectSessionGroups({
     return map
   }, [projects])
 
+  const { registry: botRegistry, rescan: rescanBots } = useBotRegistry(bots?.adapter)
+
+  // 一条会话落在哪个组：bot 会话 → 它的 bot 组（注入了 bots 时）；子会话随父会话；其余按项目 / 临时
+  const groupKeyOf = (s: Session | undefined): string | null => {
+    if (!s) return null
+    const root = s.parentId ? (storeSessions.find((x) => x.id === s.parentId) ?? s) : s
+    const bot = bots ? botGroupOf(root) : undefined
+    if (bot) return botGroupKey(bot)
+    return root.projectId || TEMP_GROUP_KEY
+  }
+
   // 当前活动会话所属组 key（用于专注模式整组淡化）—— 始终基于 store 全量
-  const activeGroupKey = useMemo(() => {
-    if (!activeSessionId) return null
-    const s = storeSessions.find((x) => x.id === activeSessionId)
-    return s?.projectId || TEMP_GROUP_KEY
-  }, [activeSessionId, storeSessions])
+  const activeGroupKey = useMemo(
+    () =>
+      activeSessionId ? groupKeyOf(storeSessions.find((x) => x.id === activeSessionId)) : null,
+    // groupKeyOf 只读 storeSessions 与 bots（都在依赖里）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSessionId, storeSessions, bots]
+  )
 
   // 子会话（agent 经 session 工具自建）按父会话归拢，从平铺列表里摘出去。父级不在列表里
   // （已删/被过滤）的子会话**退回平铺**：宁可让它以顶层会话出现，也不能让一条真实会话在
@@ -189,14 +253,23 @@ export function ProjectSessionGroups({
     setExpandedParents((prev) => new Set([...prev, ...fresh]))
   }, [childrenByParent, sessions])
 
-  // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序
-  const groups = useMemo(() => {
+  // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序。
+  // 注入了 bots 时 bot 会话另收进 botSessions（按 bot 名），不进项目组也不进临时组
+  const { groups, botSessions } = useMemo(() => {
     const map = new Map<string, Session[]>()
     for (const p of projects) map.set(p.id, [])
     const temp: Session[] = []
+    const byBot = new Map<string, Session[]>()
     for (const s of sessions) {
       // 子会话跟着父行渲染（父级不在列表里时 childrenByParent 也没收它，照常平铺）
       if (s.parentId && childrenByParent.has(s.parentId)) continue
+      const bot = bots ? botGroupOf(s) : undefined
+      if (bot) {
+        const list = byBot.get(bot)
+        if (list) list.push(s)
+        else byBot.set(bot, [s])
+        continue
+      }
       if (s.projectId && map.has(s.projectId)) map.get(s.projectId)!.push(s)
       else if (!s.projectId) temp.push(s)
     }
@@ -207,8 +280,8 @@ export function ProjectSessionGroups({
     )
     const out: Array<[string, Session[]]> = sorted
     if (temp.length > 0) out.push([TEMP_GROUP_KEY, temp])
-    return out
-  }, [projects, sessions, projectNames, childrenByParent])
+    return { groups: out, botSessions: byBot }
+  }, [projects, sessions, projectNames, childrenByParent, bots])
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
@@ -244,15 +317,14 @@ export function ProjectSessionGroups({
     })
   }
 
-  // 分组头菜单（右键组头 / 点 ⋮ 是同一份）：新建对话 / 新建 Bot 会话（能力注入时）/（项目组）项目配置
+  // 分组头菜单（右键组头 / 点 ⋮ 是同一份）：新建对话 /（项目组）项目配置。bot 会话不再从项目里开（2026-10-31）：
+  // 它们只归属 bot，入口在「Bots」分节的 bot 组上
   const openGroupMenu = (key: string, isTemp: boolean, e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [{ id: 'new-chat', label: t('sidebar.newChat') }]
-    if (onNewBotChat) items.push({ id: 'new-bot-chat', label: t('sidebar.newBotChat') })
     if (!isTemp && onEditProject)
       items.push({ id: 'edit-project', label: t('sidebar.editProject') })
     void showContextMenu(e, items, (action) => {
       if (action === 'new-chat') onNewChat(isTemp ? null : key)
-      if (action === 'new-bot-chat') onNewBotChat?.(isTemp ? null : key)
       if (action === 'edit-project') onEditProject?.(key)
     })
   }
@@ -266,44 +338,169 @@ export function ProjectSessionGroups({
     })
   }
 
+  // ─── bot 组 ────────────────────────────────────
+
+  // bot 组的折叠：侧栏缺省收起（与项目组一样，一个 bot 的会话可以很多）；日历按天渲染时缺省摊开（一天就几条，
+  // 收起来就看不见了）。存的是「和缺省反着的那几组」
+  const [botToggled, setBotToggled] = useState<Set<string>>(() => new Set())
+  const botCollapsed = (key: string): boolean =>
+    hideEmptyGroups ? botToggled.has(key) : !botToggled.has(key)
+  const toggleBot = (key: string): void =>
+    setBotToggled((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+  const expandBot = (key: string): void => {
+    if (botCollapsed(key)) toggleBot(key)
+  }
+  // 组里那一行「定时运行」的展开：侧栏缺省收起（日报 bot 一天一条，摊开就淹掉用户自己开的对话），日历缺省摊开
+  const [runsToggled, setRunsToggled] = useState<Set<string>>(() => new Set())
+  const runsOpen = (key: string): boolean =>
+    hideEmptyGroups ? !runsToggled.has(key) : runsToggled.has(key)
+  const toggleRuns = (key: string): void =>
+    setRunsToggled((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+
   /**
-   * 单个分组的渲染。项目组与临时组的组装完全一样，差别只在外层：项目组被套进「项目」
-   * 分节，临时组自己就是一个分节（见下面 return）。
+   * 「在哪里工作？」—— 开一条 bot 会话前必须先选位置（用户 2026-10-30：不给缺省）：最近用过的项目在前，其余收进
+   * 「更多项目」；「打开文件夹…」把一个文件夹加成项目再选它；「临时」是临时工作区。关掉菜单就什么都不建
    */
-  const renderGroup = (
-    [groupKey, groupSessions]: [string, Session[]],
-    dividerAbove = false
+  const openLocationPicker = (bot: BotGroupItem, e: React.MouseEvent): void => {
+    if (!bots) return
+    // 项目的「最近」：它名下的会话与引用它的 bot 会话里最近的一次
+    const recency = new Map<string, number>()
+    for (const s of storeSessions) {
+      const pid = projectContextIdOf(s)
+      if (pid) recency.set(pid, Math.max(recency.get(pid) ?? 0, s.lastActiveAt))
+    }
+    const byRecent = [...projects].sort(
+      (a, b) =>
+        (recency.get(b.id) ?? 0) - (recency.get(a.id) ?? 0) || a.name.localeCompare(b.name, 'zh-CN')
+    )
+    const projectItem = (p: { id: string; name: string }): ContextMenuItem => ({
+      id: `project:${p.id}`,
+      label: p.name || t('sidebar.unnamedProject')
+    })
+    const items: ContextMenuItem[] = [
+      { id: 'where', label: t('sidebar.botWhere'), enabled: false },
+      ...byRecent.slice(0, PICKER_RECENT_PROJECTS).map(projectItem)
+    ]
+    const rest = byRecent.slice(PICKER_RECENT_PROJECTS)
+    if (rest.length > 0) {
+      items.push({
+        id: 'more-projects',
+        label: t('sidebar.botMoreProjects'),
+        submenu: [...rest].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).map(projectItem)
+      })
+    }
+    items.push({ type: 'separator' })
+    if (bots.pickFolderAsProject)
+      items.push({ id: 'open-folder', label: t('sidebar.botOpenFolder') })
+    items.push({ id: 'temp', label: t('sidebar.botTempLocation') })
+    const create = (location: BotSessionLocation): void => {
+      expandBot(botGroupKey(bot.name))
+      void bots.adapter.newSession(bot.name, location)
+    }
+    void showContextMenu(e, items, (action) => {
+      if (action.startsWith('project:')) create({ workProject: action.slice('project:'.length) })
+      if (action === 'temp') create({ temp: true })
+      if (action === 'open-folder') {
+        void bots.pickFolderAsProject?.().then((pid) => {
+          if (pid) create({ workProject: pid })
+        })
+      }
+    })
+  }
+
+  // bot 组头菜单：新对话 / 编辑 bot（打开 bot 文件的笔记本）/ 归档（与项目一样：删除在 设置 → 已归档 里，连同会话）
+  const openBotMenu = (bot: BotGroupItem, e: React.MouseEvent): void => {
+    if (!bots) return
+    const items: ContextMenuItem[] = [
+      { id: 'new-bot-chat', label: t('sidebar.newChat') },
+      { id: 'edit-bot', label: t('sidebar.editBot') },
+      { type: 'separator' },
+      { id: 'archive-bot', label: t('sidebar.archiveBot') }
+    ]
+    void showContextMenu(e, items, (action) => {
+      if (action === 'new-bot-chat') openLocationPicker(bot, e)
+      if (action === 'edit-bot') void bots.adapter.open(bot.fileName, bot.displayName)
+      if (action === 'archive-bot') bots.adapter.archive(bot)
+    })
+  }
+
+  // 找不到 bot 文件的那一组：只能把它的会话一起删掉
+  const openMissingBotMenu = (name: string, count: number, e: React.MouseEvent): void => {
+    const deleteSessions = bots?.adapter.deleteSessions
+    if (!deleteSessions) return
+    void showContextMenu(
+      e,
+      [{ id: 'delete-sessions', label: t('sidebar.botDeleteSessions') }],
+      (action) => {
+        if (action === 'delete-sessions') deleteSessions(name, count)
+      }
+    )
+  }
+
+  // 「Bots」分节头菜单：新建 bot（按模板落一份文件并打开它的笔记本）/ 打开 Bots 文件夹 / 刷新
+  const openBotsSectionMenu = (e: React.MouseEvent): void => {
+    if (!bots) return
+    const items: ContextMenuItem[] = [
+      { id: 'new-bot', label: t('sidebar.newBot') },
+      { id: 'open-folder', label: t('bot.dialogOpenFolder') },
+      { type: 'separator' },
+      { id: 'refresh', label: t('panel.filesRefresh') }
+    ]
+    void showContextMenu(e, items, (action) => {
+      if (action === 'new-bot') void bots.adapter.create()
+      if (action === 'open-folder') void bots.adapter.openFolder()
+      if (action === 'refresh') rescanBots()
+    })
+  }
+
+  /** 被同名遮蔽的与解析不过的 bot 文件：都只能按文件名删 */
+  const openBotFileMenu = (fileName: string, e: React.MouseEvent): void => {
+    if (!bots) return
+    void showContextMenu(e, [{ id: 'delete-bot-file', label: t('common.delete') }], (action) => {
+      if (action === 'delete-bot-file') bots.adapter.deleteFile(fileName)
+    })
+  }
+
+  // 正打开着的那份 bot 文件（笔记本会话）：被遮蔽 / 解析不过的行据此高亮
+  const activeBotFile = useMemo(() => {
+    const active = storeSessions.find((x) => x.id === activeSessionId)
+    return active?.projectId === REGISTRY_NOTE_PROJECT_IDS.bot
+      ? (active.settings.notebookPath ?? null)
+      : null
+  }, [activeSessionId, storeSessions])
+
+  /** bot 会话行尾标的位置：引用的项目名（归档了的也是）；项目已删 → 「项目已删除」；临时 → 「临时」 */
+  const locationOf = (s: Session): string => {
+    const pid = workProjectOf(s.settings)
+    if (!pid) return t('sidebar.botTempLocation')
+    // 项目在（侧栏里的或归档了的）：标它的名字，没起名字就是「未命名项目」；都不在才是「项目已删除」
+    const known =
+      pid in projectNames
+        ? projectNames[pid]
+        : bots?.archivedProjects?.find((p) => p.id === pid)?.name
+    if (known === undefined) return t('sidebar.botProjectGone')
+    return known || t('sidebar.unnamedProject')
+  }
+
+  /** 一组的会话行（项目组、临时组、bot 组共用）：子会话折在父行下面，超出的收进「查看更多」 */
+  const renderRows = (
+    groupKey: string,
+    groupSessions: Session[],
+    location?: (s: Session) => string
   ): React.JSX.Element => {
-    const isTemp = groupKey === TEMP_GROUP_KEY
-    const label = isTemp
-      ? t('sidebar.tempChats')
-      : projectNames[groupKey] || t('sidebar.unnamedProject')
-    // 非活动项目组在专注模式下整组淡化；活动组由逐项 dim 处理非选中会话
-    const groupDim = dim && activeGroupKey !== groupKey
     const limit = GROUP_VISIBLE_LIMIT + (extraVisible[groupKey] ?? 0)
     const shownSessions =
       groupSessions.length <= limit ? groupSessions : groupSessions.slice(0, limit)
     return (
-      <SessionGroup
-        key={groupKey}
-        label={label}
-        variant={isTemp ? 'temp' : 'project'}
-        collapsed={isTemp ? undefined : collapsed.has(groupKey)}
-        onToggle={isTemp ? undefined : () => onToggleGroup(groupKey)}
-        active={activeGroupKey === groupKey}
-        dim={groupDim}
-        showDividerAbove={dividerAbove}
-        onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
-      >
-        {projectKnowledge && !isTemp && (
-          <ProjectKnowledgeFolder
-            projectId={groupKey}
-            adapter={projectKnowledge}
-            // 折叠的项目组不扫盘（侧栏可能有几十个项目）
-            enabled={!collapsed.has(groupKey)}
-            dim={dim && activeGroupKey === groupKey}
-          />
-        )}
+      <>
         {shownSessions.map((s) => {
           const children = childrenByParent.get(s.id) ?? []
           const subCollapsed = !expandedParents.has(s.id)
@@ -325,6 +522,7 @@ export function ProjectSessionGroups({
               onToggleSubs={toggleSubs}
               onSelect={handleSelect}
               onMenu={hasSessionMenu(!!item.settings.notebookPath) ? openSessionMenu : undefined}
+              location={!isSub && location ? location(item) : undefined}
             />
           )
           if (children.length === 0) return row(s, false)
@@ -362,23 +560,296 @@ export function ProjectSessionGroups({
             </span>
           </div>
         )}
+      </>
+    )
+  }
+
+  /**
+   * 单个分组的渲染。项目组与临时组的组装完全一样，差别只在外层：项目组被套进「项目」
+   * 分节，临时组自己就是一个分节（见下面 return）。
+   */
+  const renderGroup = (
+    [groupKey, groupSessions]: [string, Session[]],
+    dividerAbove = false
+  ): React.JSX.Element => {
+    const isTemp = groupKey === TEMP_GROUP_KEY
+    const label = isTemp
+      ? t('sidebar.tempChats')
+      : projectNames[groupKey] || t('sidebar.unnamedProject')
+    // 非活动项目组在专注模式下整组淡化；活动组由逐项 dim 处理非选中会话
+    const groupDim = dim && activeGroupKey !== groupKey
+    return (
+      <SessionGroup
+        key={groupKey}
+        label={label}
+        variant={isTemp ? 'temp' : 'project'}
+        collapsed={isTemp ? undefined : collapsed.has(groupKey)}
+        onToggle={isTemp ? undefined : () => onToggleGroup(groupKey)}
+        active={activeGroupKey === groupKey}
+        dim={groupDim}
+        showDividerAbove={dividerAbove}
+        onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
+      >
+        {projectKnowledge && !isTemp && (
+          <ProjectKnowledgeFolder
+            projectId={groupKey}
+            adapter={projectKnowledge}
+            // 折叠的项目组不扫盘（侧栏可能有几十个项目）
+            enabled={!collapsed.has(groupKey)}
+            dim={dim && activeGroupKey === groupKey}
+          />
+        )}
+        {renderRows(groupKey, groupSessions)}
+      </SessionGroup>
+    )
+  }
+
+  /**
+   * 一组 bot 会话的正文：用户自己开的在前；触发器开出来的运行会话（settings.triggerRun）折进末尾一行「定时运行 · N」，
+   * 最近一次在跑时那一行带一个运行点
+   */
+  const renderBotRows = (key: string, groupSessions: Session[]): React.JSX.Element => {
+    const own = groupSessions.filter((s) => !s.settings.triggerRun)
+    const runs = groupSessions.filter((s) => s.settings.triggerRun)
+    const open = runsOpen(key)
+    const running = runs.some((s) => streamingSessions[s.id])
+    return (
+      <>
+        {renderRows(key, own, locationOf)}
+        {runs.length > 0 && (
+          <div data-bot-runs="">
+            <div
+              data-bot-runs-toggle={open ? 'expanded' : 'collapsed'}
+              onClick={() => toggleRuns(key)}
+              className="sb-row cursor-pointer text-text-tertiary hover:bg-bg-hover/60 hover:text-text-primary"
+            >
+              <Timer className={`sb-icon ${running ? 'animate-pulse text-accent' : ''}`} />
+              <span className="truncate">{t('sidebar.botTriggerRuns')}</span>
+              <span className="text-[0.8em] tabular-nums text-text-tertiary/70">{runs.length}</span>
+            </div>
+            <AnimatedCollapse open={open}>
+              {/* 再进一级：这几行挂在「定时运行」下面 */}
+              <div style={{ ['--sb-base' as string]: 'calc(var(--sb-indent) * 2)' }}>
+                {renderRows(`${key}:runs`, runs, locationOf)}
+              </div>
+            </AnimatedCollapse>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  /** 一个 bot 组：头像 + 显示名，正文是它的会话（行尾标位置）；还没有会话时是一行「新对话」 */
+  const renderBotGroup = (bot: BotGroupItem): React.JSX.Element | null => {
+    const key = botGroupKey(bot.name)
+    const groupSessions = botSessions.get(bot.name) ?? []
+    if (hideEmptyGroups && groupSessions.length === 0) return null
+    return (
+      <div key={key} data-bot-group={bot.name}>
+        <SessionGroup
+          label={bot.displayName}
+          variant="bot"
+          icon={<BotAvatar name={bot.name} displayName={bot.displayName} size={15} />}
+          collapsed={botCollapsed(key)}
+          onToggle={() => toggleBot(key)}
+          active={activeGroupKey === key}
+          dim={dim && activeGroupKey !== key}
+          onMenu={hideEmptyGroups ? undefined : (e) => openBotMenu(bot, e)}
+          onAdd={hideEmptyGroups ? undefined : (e) => openLocationPicker(bot, e)}
+          addLabel={t('sidebar.newChat')}
+        >
+          {groupSessions.length === 0 ? (
+            <div
+              data-bot-new-chat=""
+              onClick={(e) => openLocationPicker(bot, e)}
+              className="sb-row cursor-pointer text-text-tertiary hover:bg-bg-hover/60 hover:text-text-primary"
+            >
+              <span className="sb-icon" />
+              <span className="truncate">{t('sidebar.newChat')}</span>
+            </div>
+          ) : (
+            renderBotRows(key, groupSessions)
+          )}
+        </SessionGroup>
+      </div>
+    )
+  }
+
+  /**
+   * 「Bots」分节：生效的 bot 各一组（按显示名），同名里没胜出的与解析不过的文件缀在后面（只能打开或按文件名删），
+   * 最后是找不到 bot 文件的那几组会话（文件在 ShuviX 之外被删了 —— 同名的文件回来就自动归位）
+   */
+  const renderBotsSection = (): React.JSX.Element | null => {
+    if (!bots) return null
+    const registry = botRegistry ?? { bots: [], shadowed: [], invalid: [] }
+    const known = new Set(registry.bots.map((b) => b.name))
+    // 归档了的 bot：它的会话一起藏起来（与归档项目一样），既不画组也不当成「找不到」
+    const archived = new Set(registry.archived ?? [])
+    // 还没扫回来时不算「找不到」：那只是还不知道
+    const missing =
+      botRegistry === null
+        ? []
+        : [...botSessions.keys()]
+            .filter((name) => !known.has(name) && !archived.has(name))
+            .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    const sorted = [...registry.bots].sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, 'zh-CN')
+    )
+    // 日历：只画当天有会话的 bot；一个都没有就整节不画（清单还没回来时按会话里有没有 bot 会话算）
+    if (
+      hideEmptyGroups &&
+      !sorted.some((b) => botSessions.has(b.name)) &&
+      missing.length === 0 &&
+      (botRegistry !== null || botSessions.size === 0)
+    ) {
+      return null
+    }
+    const fileRowClass = (active: boolean): string =>
+      `group relative sb-row cursor-pointer transition-opacity duration-200 ${
+        active ? 'bg-bg-active/80 text-text-primary' : 'text-text-primary hover:bg-bg-hover/60'
+      }`
+    // 清单还没扫回来（或一次都没扫成）：先按会话里的 bot 名把组列出来 —— 会话不能因为扫描慢 / 失败就从侧栏里消失；
+    // 这时不知道它们的文件在哪，组上没有菜单、没有「+」
+    const unknown =
+      botRegistry === null
+        ? [...botSessions.keys()].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        : []
+    return (
+      <SessionGroup
+        label={t('sidebar.botsGroup')}
+        variant="section"
+        experimental="bots"
+        showDividerAbove={projectsSection?.dividerAbove}
+        onMenu={hideEmptyGroups ? undefined : openBotsSectionMenu}
+      >
+        <div data-sidebar-section="bots">
+          {sorted.map(renderBotGroup)}
+          {unknown.map((name) => {
+            const key = botGroupKey(name)
+            return (
+              <div key={key} data-bot-group={name} data-bot-group-pending="">
+                <SessionGroup
+                  label={name}
+                  variant="bot"
+                  icon={<BotAvatar name={name} displayName={name} size={15} />}
+                  collapsed={botCollapsed(key)}
+                  onToggle={() => toggleBot(key)}
+                  active={activeGroupKey === key}
+                  dim={dim && activeGroupKey !== key}
+                >
+                  {renderBotRows(key, botSessions.get(name) ?? [])}
+                </SessionGroup>
+              </div>
+            )
+          })}
+          {!hideEmptyGroups && (
+            <>
+              {registry.shadowed.map((s) => (
+                <div
+                  key={s.fileName}
+                  data-bot-shadowed-row={s.fileName}
+                  onClick={() => void bots.adapter.open(s.fileName, s.displayName)}
+                  onContextMenu={(e) => openBotFileMenu(s.fileName, e)}
+                  title={t('settings.shadowedByFileHint', { file: s.shadowedBy })}
+                  className={fileRowClass(activeBotFile === s.fileName)}
+                >
+                  <span className="sb-icon opacity-50">
+                    <BotAvatar name={s.name} displayName={s.displayName} size={15} />
+                  </span>
+                  <span className="flex-1 min-w-0 truncate line-through opacity-60 group-hover:pr-5">
+                    {s.displayName}
+                  </span>
+                  <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
+                    {t('sidebar.botOverridden')}
+                  </span>
+                  <RowMenuButton
+                    className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+                    onOpen={(e) => openBotFileMenu(s.fileName, e)}
+                  />
+                </div>
+              ))}
+              {registry.invalid.map((f) => (
+                <div
+                  key={f.fileName}
+                  data-bot-invalid-row={f.fileName}
+                  onClick={() => void bots.adapter.open(f.fileName)}
+                  onContextMenu={(e) => openBotFileMenu(f.fileName, e)}
+                  title={f.error}
+                  className={fileRowClass(activeBotFile === f.fileName)}
+                >
+                  <span className="sb-icon">
+                    <AlertTriangle size={12} className="text-amber-500" />
+                  </span>
+                  <span className="flex-1 min-w-0 font-mono text-[0.9em] truncate group-hover:pr-5">
+                    {f.fileName}
+                  </span>
+                  <RowMenuButton
+                    className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+                    onOpen={(e) => openBotFileMenu(f.fileName, e)}
+                  />
+                </div>
+              ))}
+              {botRegistry !== null &&
+                sorted.length === 0 &&
+                registry.invalid.length === 0 &&
+                missing.length === 0 && (
+                  <div
+                    data-bots-empty=""
+                    className="sb-hint cursor-pointer hover:text-text-secondary"
+                    onClick={() => void bots.adapter.create()}
+                  >
+                    {t('sidebar.botsEmpty')}
+                  </div>
+                )}
+            </>
+          )}
+          {missing.map((name) => {
+            const key = botGroupKey(name)
+            const orphans = botSessions.get(name) ?? []
+            return (
+              <div key={key} data-bot-missing-group={name}>
+                <SessionGroup
+                  label={name}
+                  variant="bot"
+                  icon={<BotAvatar name={name} displayName={name} size={15} />}
+                  muted
+                  collapsed={botCollapsed(key)}
+                  onToggle={() => toggleBot(key)}
+                  active={activeGroupKey === key}
+                  dim={dim && activeGroupKey !== key}
+                  onMenu={
+                    hideEmptyGroups || !bots.adapter.deleteSessions
+                      ? undefined
+                      : (e) => openMissingBotMenu(name, orphans.length, e)
+                  }
+                >
+                  <div className="sb-hint">{t('sidebar.botFileMissing')}</div>
+                  {renderBotRows(key, orphans)}
+                </SessionGroup>
+              </div>
+            )
+          })}
+        </div>
       </SessionGroup>
     )
   }
 
   // 项目组套进「项目」分节，临时组自己就是并列的另一个分节 ——
-  // 知识库分组由宿主经 groupsPrepend 插在两者之上，不属于任何一节
+  // 资料库那几组由宿主经 groupsPrepend 插在最上面；「Bots」分节在资料库与项目之间
   const projectGroups = visible.filter(([key]) => key !== TEMP_GROUP_KEY)
   const tempGroup = visible.find(([key]) => key === TEMP_GROUP_KEY)
+  const botsSection = renderBotsSection()
+  if (botsOnly) return <>{botsSection}</>
 
   return (
     <>
+      {botsSection}
       {projectsSection ? (
         // 一个项目都没有时也照样渲染：它的 ⋮ 是「打开文件夹」现在唯一的常驻入口
         <SessionGroup
           label={t('sidebar.projects')}
           variant="section"
-          showDividerAbove={projectsSection.dividerAbove}
+          showDividerAbove={projectsSection.dividerAbove || !!botsSection}
           onMenu={projectsSection.onNewProject ? openProjectsMenu : undefined}
         >
           {projectGroups.map((group) => renderGroup(group))}
@@ -386,7 +857,7 @@ export function ProjectSessionGroups({
       ) : (
         projectGroups.map((group) => renderGroup(group))
       )}
-      {tempGroup && renderGroup(tempGroup, projectGroups.length > 0)}
+      {tempGroup && renderGroup(tempGroup, projectGroups.length > 0 || !!botsSection)}
     </>
   )
 }

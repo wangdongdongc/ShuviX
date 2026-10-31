@@ -9,7 +9,9 @@
  *   - BSess-4 判定对不存在的会话不抛（注入侧在每次建根 Agent 时都会问一次）；
  *   - BSess-5 **没有换绑入口** —— 这是上面那条产品裁决的唯一守卫；
  *   - BSess-Sub 子会话**不继承** bot：这是「人设影响怎么说话、不影响怎么干活」那条
- *     结构保证在创建侧的一半（另一半在 agentSessionBot.test.ts 的 AG-5）。
+ *     结构保证在创建侧的一半（另一半在 agentSessionBot.test.ts 的 AG-5）；
+ *   - BSess-6 主进程专用的 `triggerRun` 选项只给 bot 根会话写键；不是 bot 会话时 `workProject` 不看；
+ *   - BSess-7 `updateProjectId` 不收 bot 会话、也不收挂着工作项目引用的会话（回 false、什么都不写），普通会话照旧。
  *
  * 形态推导（bot → 基座 `bot`）归 sessionServiceProfileResolution.test.ts 的 RP-12…16，
  * 这里不重复。mock 面：import 图全换假件，`sessionDao.insert` 是落库的观测点。
@@ -18,9 +20,12 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
+  projectPick: vi.fn<(id: string, cols: string[]) => unknown>(),
   daoPickSettings: vi.fn<(id: string, keys: string[]) => unknown>(),
   daoUpdateSettings: vi.fn(),
+  daoUpdateProjectId: vi.fn(),
   daoInsert: vi.fn(),
+  listChanged: vi.fn(),
   getProfile: vi.fn()
 }))
 
@@ -29,6 +34,7 @@ vi.mock('../../dao/sessionDao', () => ({
     pick: mocks.daoPick,
     pickSettings: mocks.daoPickSettings,
     updateSettings: mocks.daoUpdateSettings,
+    updateProjectId: mocks.daoUpdateProjectId,
     insert: mocks.daoInsert,
     findChildren: vi.fn(() => []),
     deleteById: vi.fn()
@@ -44,7 +50,7 @@ vi.mock('../sessionDayPromptService', () => ({
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 // create 为项目会话读项目的扩展能力（继承进 settings.enabledTools）
-vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
+vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
@@ -75,7 +81,7 @@ vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: 
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionConfigChanged: vi.fn(),
-  broadcastSessionListChanged: vi.fn(),
+  broadcastSessionListChanged: mocks.listChanged,
   broadcastSessionTitleChanged: vi.fn()
 }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
@@ -126,13 +132,30 @@ describe('BSess-1 / 2 / 3 —— create 写了什么', () => {
     }
   })
 
-  it('BSess-3 create({bot, projectId}) 两者都在 —— 绑 bot 不该把项目摘掉', () => {
-    // bot 会话可以归属项目：它派出去的子会话就在那个项目里干活（工作目录是会话的地基）。
-    // 项目分支压不过 bot 的那一条在 RP-12，这里钉的是「项目本身没被吃掉」
+  it('BSess-3 create({bot, projectId}) —— bot 会话只归属 bot：项目记成工作项目的引用 + 路径快照，不当成员', () => {
+    // 2026-10-31 用户裁定：bot 会话收拢到 bot 名下、不再归属项目；项目只是它的工作位置，设置经引用照常生效
+    // （chat-protocol projectContextIdOf）。旧入口传 projectId、新入口传 workProject，落下来是同一份
+    mocks.projectPick.mockReturnValue({ path: '/work/p1' })
     const session = sessionService.create({ bot: 'scout', projectId: 'p1' })
-    expect(inserted().projectId).toBe('p1')
+    expect(inserted().projectId).toBeNull()
     expect(inserted().settings.bot).toBe('scout')
-    expect(session.projectId).toBe('p1')
+    expect(inserted().settings.workProject).toBe('p1')
+    expect(inserted().settings.workingDirectory).toBe('/work/p1')
+    expect(session.projectId).toBeNull()
+    sessionService.create({ bot: 'scout', workProject: 'p1' })
+    expect(inserted().projectId).toBeNull()
+    expect(inserted().settings.workProject).toBe('p1')
+  })
+
+  it('BSess-3b 工作项目不在 / 是隐藏承载项目 → 临时：不记引用、不写路径', () => {
+    mocks.projectPick.mockReturnValue(undefined)
+    sessionService.create({ bot: 'scout', workProject: 'gone' })
+    expect(inserted().projectId).toBeNull()
+    expect('workProject' in inserted().settings).toBe(false)
+    expect('workingDirectory' in inserted().settings).toBe(false)
+    mocks.projectPick.mockReturnValue({ path: '/x' })
+    sessionService.create({ bot: 'scout', workProject: '__agents__' })
+    expect('workProject' in inserted().settings).toBe(false)
   })
 
   it('BSess-Sub 子会话不继承 bot —— 干活的那条会话不带人设', () => {
@@ -177,5 +200,83 @@ describe('BSess-4 / 5 —— 判定与「没有换绑入口」', () => {
     // 正控制组：判定与创建这两个口在（证明这条断言不是在测一个拼错的对象）
     expect(typeof surface.isBotSession).toBe('function')
     expect(typeof surface.create).toBe('function')
+  })
+})
+
+describe('BSess-6 —— 主进程专用的创建选项与 workProject 的适用范围', () => {
+  it('BSess-6 options.triggerRun 只给 bot 根会话写 settings.triggerRun: true；不给就没有这个键', () => {
+    // 触发器开出来的运行会话（botTriggerService）被侧栏折进「定时运行」—— 它只能由主进程在创建时标，
+    // 所以是 options 而不是 SessionCreateParams 里的字段（IPC 传不进来）
+    sessionService.create({ bot: 'scout' }, { triggerRun: true })
+    expect(inserted().settings.triggerRun).toBe(true)
+
+    sessionService.create({ bot: 'scout' })
+    expect('triggerRun' in inserted().settings).toBe(false)
+
+    sessionService.create({ bot: 'scout' }, { triggerRun: false })
+    expect('triggerRun' in inserted().settings).toBe(false)
+  })
+
+  it('BSess-6 不是 bot 会话、或是子会话 → 给了 triggerRun 也不写', () => {
+    sessionService.create({ title: 'plain' }, { triggerRun: true })
+    expect('triggerRun' in inserted().settings).toBe(false)
+
+    sessionService.create({ bot: '   ' }, { triggerRun: true })
+    expect('triggerRun' in inserted().settings).toBe(false)
+
+    // 子会话：父会话在（daoPick 恒回父会话那一行）
+    mocks.daoPick.mockReturnValue({ projectId: null, settings: { bot: 'scout' } })
+    sessionService.create({ parentId: 'P', bot: 'scout' }, { triggerRun: true })
+    expect('triggerRun' in inserted().settings).toBe(false)
+  })
+
+  it('BSess-6 SessionCreateParams 里的 triggerRun 不算数（只有 options 那一个入口）', () => {
+    sessionService.create({ bot: 'scout', triggerRun: true } as never)
+    expect('triggerRun' in inserted().settings).toBe(false)
+  })
+
+  it('BSess-6 不是 bot 会话时 workProject 不看：不写引用；只给 projectId 的普通会话照旧是成员', () => {
+    mocks.projectPick.mockReturnValue({ path: '/work/p1' })
+    sessionService.create({ workProject: 'p1' })
+    expect(inserted().projectId).toBeNull()
+    expect('workProject' in inserted().settings).toBe(false)
+    expect('workingDirectory' in inserted().settings).toBe(false)
+
+    sessionService.create({ projectId: 'p1', workProject: 'p2' })
+    expect(inserted().projectId).toBe('p1')
+    expect('workProject' in inserted().settings).toBe(false)
+  })
+})
+
+describe('BSess-7 —— bot 会话不能挪进项目', () => {
+  it('BSess-7 updateProjectId 对 bot 会话 → false，不写库、不广播', () => {
+    mocks.daoPick.mockReturnValue({ settings: { bot: 'scout', workProject: 'p1' } })
+    expect(sessionService.updateProjectId('B', 'p2')).toBe(false)
+    expect(sessionService.updateProjectId('B', null)).toBe(false)
+
+    mocks.daoPick.mockReturnValue({ settings: { bot: 'scout' } })
+    expect(sessionService.updateProjectId('B', 'p2')).toBe(false)
+
+    expect(mocks.daoUpdateProjectId).not.toHaveBeenCalled()
+    expect(mocks.listChanged).not.toHaveBeenCalled()
+  })
+
+  it('BSess-7 挂着工作项目引用的会话（bot 会话的子会话、fork）同样 → false', () => {
+    mocks.daoPick.mockReturnValue({ settings: { workProject: 'p1', enabledTools: [] } })
+    expect(sessionService.updateProjectId('C', 'p2')).toBe(false)
+    expect(mocks.daoUpdateProjectId).not.toHaveBeenCalled()
+    expect(mocks.listChanged).not.toHaveBeenCalled()
+  })
+
+  it('BSess-7 对照组：普通会话照旧挪得进去 → true，写库、广播', () => {
+    mocks.daoPick.mockReturnValue({ settings: { enabledTools: [] } })
+    expect(sessionService.updateProjectId('S', 'p2')).toBe(true)
+    expect(mocks.daoUpdateProjectId).toHaveBeenCalledWith('S', 'p2')
+    expect(mocks.listChanged).toHaveBeenCalledTimes(1)
+
+    // 空白的 bot 键不算 bot 会话（boundBotOf 同口径）
+    mocks.daoPick.mockReturnValue({ settings: { bot: '  ', workProject: '  ' } })
+    expect(sessionService.updateProjectId('S2', null)).toBe(true)
+    expect(mocks.daoUpdateProjectId).toHaveBeenLastCalledWith('S2', null)
   })
 })

@@ -18,7 +18,7 @@
  * 新建写盘走**原子写**（`writeFileAtomic`）：`scanDir` 随时可能在读，半份文件会让它从列表里
  * 消失一瞬。
  */
-import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, mkdirSync, renameSync, unlinkSync } from 'fs'
 import { basename, join } from 'path'
 import { shell } from 'electron'
 import {
@@ -80,6 +80,18 @@ export interface ShadowedBotEntry extends BotEntry {
   /** 压过它的那份文件的文件名 */
   shadowedBy: string
 }
+
+/** 归档了的一份 bot 文件（在 bots 目录的 `archived/` 里） */
+export interface ArchivedBot {
+  name: string
+  displayName: string
+  description: string
+  /** `archived/` 里的文件名 —— 恢复、删除都按它认 */
+  fileName: string
+}
+
+/** bots 目录下放归档的子目录名 */
+export const ARCHIVED_DIR_NAME = 'archived'
 
 class BotService {
   /**
@@ -503,7 +515,16 @@ class BotService {
    * 落盘之后怎么改就是打开它的笔记本会话去改，与任何 bot 一样。
    */
   createNew(): { success: boolean; name?: string; fileName?: string; error?: string } {
-    const taken = new Set(this.listAll().map((p) => p.file.name))
+    // 生效的、归档里的、还有会话绑着的名字都算占用：会话按名字绑定，新 bot 叫了归档里那个名字，归档 bot 的会话就
+    // 归了它、归档的那份也再恢复不回来；叫了一个文件已不在的名字，那几条孤儿会话同样被它领走
+    const taken = new Set([
+      ...this.listAll().map((p) => p.file.name),
+      ...this.listArchived().map((b) => b.name),
+      ...sessionRecords
+        .findAll()
+        .map((s) => boundBotOf(s.settings))
+        .filter((n): n is string => !!n)
+    ])
     let name = 'my-bot'
     for (let i = 2; taken.has(name); i++) name = `my-bot-${i}`
     return this.create(this.newBotTemplate({ name }))
@@ -574,6 +595,123 @@ class BotService {
     this.namesByPath.delete(filePath)
     appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
+  }
+
+  // ─── 归档（2026-10-31：与项目一样 —— 侧栏里先归档，删除在 设置 → 已归档 里，连同它的会话） ─────────
+
+  /**
+   * 归档的 bot 放在 bots 目录下的 `archived/` 子目录里：扫描本来就只看 bots 目录顶层的文件，挪进去的那份自然不再
+   * 是 bot（不在侧栏、不被触发、不能新开会话）。纯文件、随 bot 文件走（复制整个 bots 目录就带着归档状态），不依赖
+   * 文件里有没有 `shuvix-id`
+   */
+  get archivedDir(): string {
+    return join(this.userDir, ARCHIVED_DIR_NAME)
+  }
+
+  /** 归档了的 bot（解析得过的；解析不过的照样列出，名字退回文件名） */
+  listArchived(): ArchivedBot[] {
+    const dir = this.archivedDir
+    if (!existsSync(dir)) return []
+    let names: string[]
+    try {
+      names = readdirSync(dir, { withFileTypes: true })
+        .filter(
+          (e) => e.isFile() && !e.name.startsWith('.') && e.name.toLowerCase().endsWith('.md')
+        )
+        .map((e) => e.name)
+        .sort()
+    } catch (e) {
+      log.warn(`扫描归档目录 ${dir} 失败:`, e)
+      return []
+    }
+    return names.map((fileName) => {
+      let parsed: ParsedBotFile | null = null
+      try {
+        parsed = parseBotDefinitionFile(
+          readFileSync(join(dir, fileName), 'utf-8'),
+          fileName.slice(0, -3)
+        )
+      } catch {
+        parsed = null
+      }
+      const name = parsed?.name ?? fileName.slice(0, -3)
+      return {
+        name,
+        displayName: parsed?.displayName ?? name,
+        description: parsed?.description ?? '',
+        fileName
+      }
+    })
+  }
+
+  /** 把生效的那份挪进 `archived/`；同名文件已在归档里 → 拒绝（不覆盖） */
+  archive(name: string): { success: boolean; error?: string } {
+    const target = this.get(name)
+    if (!target) return { success: false, error: `Bot "${name}" not found` }
+    const fileName = basename(target.basePath)
+    const dest = join(this.archivedDir, fileName)
+    if (existsSync(dest)) {
+      return { success: false, error: `An archived bot file "${fileName}" already exists` }
+    }
+    try {
+      mkdirSync(this.archivedDir, { recursive: true })
+      renameSync(target.basePath, dest)
+    } catch (e) {
+      log.warn(`归档 bot "${name}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    this.namesByPath.delete(target.basePath)
+    this.fileCache.clear()
+    this.identityCache.clear()
+    log.info(`已归档 bot "${name}" → ${dest}`)
+    appEventBus.publish({ type: 'bot.changed' })
+    return { success: true }
+  }
+
+  /**
+   * 从 `archived/` 挪回 bots 目录。那里已有同名文件、或已有一个同名（frontmatter `name`）的 bot 在用 → 拒绝：前者会
+   * 覆盖，后者恢复回来要么压过它、要么被它压过，会话按名字绑定，归谁就说不清了
+   */
+  restore(fileName: string): { success: boolean; error?: string } {
+    const src = this.resolveArchivedFile(fileName)
+    if (!src) return { success: false, error: `Archived file "${fileName}" not found` }
+    const dest = join(this.userDir, fileName)
+    if (existsSync(dest)) {
+      return { success: false, error: `A bot file "${fileName}" already exists in the bots folder` }
+    }
+    const name = this.listArchived().find((b) => b.fileName === fileName)?.name
+    if (name && this.get(name)) {
+      return { success: false, error: `A bot named "${name}" is already in use` }
+    }
+    try {
+      renameSync(src, dest)
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    this.fileCache.clear()
+    this.identityCache.clear()
+    appEventBus.publish({ type: 'bot.changed' })
+    return { success: true }
+  }
+
+  /** 删掉归档里的一份文件，回它的 bot 名（会话的级联归调用方 —— 它们在 sessionService 里） */
+  deleteArchivedFile(fileName: string): { success: boolean; name?: string; error?: string } {
+    const filePath = this.resolveArchivedFile(fileName)
+    if (!filePath) return { success: false, error: `Archived file "${fileName}" not found` }
+    const name = this.listArchived().find((b) => b.fileName === fileName)?.name
+    try {
+      unlinkSync(filePath)
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    appEventBus.publish({ type: 'bot.changed' })
+    return { success: true, name }
+  }
+
+  private resolveArchivedFile(fileName: string): string | null {
+    if (!/^[^/\\]+\.md$/i.test(fileName) || fileName.startsWith('.')) return null
+    const filePath = join(this.archivedDir, fileName)
+    return existsSync(filePath) ? filePath : null
   }
 
   /** 在 OS 文件管理器里打开 bots 目录（不存在则先建 —— 用户点它就是想看见它） */

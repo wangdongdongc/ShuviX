@@ -24,6 +24,8 @@
  *
  * RP-17 ownBotFile（会话权限表 `bot` 派生行的来源）跟着同一个形态判定走：只有落在基座 bot 上的会话去问
  * botService.fileOf，标签页 / 笔记本形态与普通会话直接 null、不问。
+ *
+ * RP-18 挂着工作项目引用（`settings.workProject`）的子会话推导成 work、工作目录是项目根；bot 根会话仍是 bot。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import type { AgentProfile } from '@shuvix/agent-runtime'
@@ -521,5 +523,48 @@ describe('RP-17 ownBotFile：只有 bot 形态的会话去问 botService.fileOf'
     mocks.botFileOf.mockReturnValue(BOT_FILE)
     expect(sessionService.ownBotFile(SID)).toBeNull()
     expect(mocks.botFileOf).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * RP-18：bot 会话只归属 bot，项目只是它的工作位置（`settings.workProject`）。它的子会话（及 fork）带着同一份
+ * 引用、`projectId` 为空 —— 形态推导照 chat-protocol `projectContextIdOf` 算它「在项目里」：基座 work、工作目录是
+ * 项目根。bot 根会话本身仍是 bot（bot 判定先于项目分支，RP-12）。
+ * （设计清单里叫 RP-17；本文件的 RP-17 已是 ownBotFile，这里顺延成 RP-18。）
+ */
+describe('RP-18 工作项目引用算「在项目里」', () => {
+  it("挂着 workProject 的子会话 → 'work'（不是 chat）；resolveAgentConfig 的工作目录是项目根", async () => {
+    world({ projectId: null, parentId: 'B', settings: { workProject: 'p1' } })
+    expect(resolve()).toBe('work')
+
+    mocks.projectPick.mockReturnValue({ path: '/proj', settings: {} })
+    mocks.getProfile.mockImplementation((name: string) => existing(name))
+    const config = await sessionService.resolveAgentConfig(SID)
+    expect(config.profile.name).toBe('work')
+    expect(config.cwd).toBe('/proj')
+    expect(mocks.projectPick.mock.calls.every(([id]) => id === 'p1')).toBe(true)
+  })
+
+  it("挂着 workProject 的 bot 根会话仍是 'bot'", () => {
+    world({ projectId: null, parentId: null, settings: { bot: 'scout', workProject: 'p1' } })
+    expect(resolve()).toBe('bot')
+    expect(mocks.getProfile).not.toHaveBeenCalled()
+  })
+
+  it("workProject 是空白 / 非字符串 → 不算引用，落回 'chat'", () => {
+    for (const workProject of ['', '   ', 7, null]) {
+      world({ projectId: null, parentId: 'B', settings: { workProject } })
+      expect(resolve(), JSON.stringify(workProject)).toBe('chat')
+    }
+  })
+
+  it('子会话上钉的档案照旧先于形态（workProject 不改这条）', () => {
+    world({
+      projectId: null,
+      parentId: 'B',
+      settings: { workProject: 'p1', agentProfile: 'coding' }
+    })
+    mocks.getProfile.mockImplementation((name: string) => existing(name))
+    expect(resolve()).toBe('coding')
   })
 })

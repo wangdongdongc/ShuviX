@@ -96,9 +96,9 @@ ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い
 ### `agents`
 
 - group: `bot`, `mdMeta`, `subAgent`, `trigger`
-- read: `bot:list`, `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`, `trigger:logs`, `trigger:status`
+- read: `bot:list`, `bot:listArchived`, `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`, `trigger:logs`, `trigger:status`
 - write: `bot:openFolder`, `subAgent:openBuiltinNote`, `subAgent:openFolder`, `trigger:clearLogs`
-- admin: `bot:createNew`, `bot:delete`, `bot:deleteByFile`, `bot:openNote`, `mdMeta:setFill`, `mdMeta:unsetFill`, `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
+- admin: `bot:archive`, `bot:createNew`, `bot:deleteArchived`, `bot:deleteByFile`, `bot:deleteSessions`, `bot:openNote`, `bot:restore`, `mdMeta:setFill`, `mdMeta:unsetFill`, `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
 - `settings:set` admin: `bots.*`, `general.defaultChatAgent`, `general.defaultProjectAgent`, `triggers.*`
 
 ### `extensions`

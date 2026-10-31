@@ -2,6 +2,7 @@
  * 输入框 `@` 会话的候选（chat-protocol `SessionMentionEntry`）：侧栏看得见的会话（`sessionService.list` —— 不含
  * Chrome 标签页会话与内存会话），去掉正在输入的这一条，最近活跃的在前。只给标题、项目名与父会话标题，不读对话。
  */
+import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
 import type { SessionMentionEntry } from '@shuvix/chat-protocol/sessionMention'
 import { projectDao } from '../dao/projectDao'
 import { sessionService } from './sessionService'
@@ -19,7 +20,8 @@ export function listSessionMentions(sessionId: string): SessionMentionEntry[] {
     .filter((s) => s.id !== sessionId)
     .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
     .map((s) => {
-      const project = projectName(s.projectId)
+      // bot 会话标它引用的工作项目（只归属 bot，但在那个项目里干活）
+      const project = projectName(projectContextIdOf(s))
       const parentTitle = s.parentId ? titles.get(s.parentId) : undefined
       return {
         id: s.id,

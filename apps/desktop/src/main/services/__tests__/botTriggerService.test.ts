@@ -40,6 +40,7 @@ import type { BotEntry } from '../botService'
 
 const mocks = vi.hoisted(() => ({
   listAll: vi.fn<() => unknown[]>(),
+  projects: [] as Array<{ id: string; name: string }>,
   create: vi.fn<(input: Record<string, unknown>) => { id: string }>(),
   ensure: vi.fn<(id: string) => Promise<unknown>>(),
   prompt: vi.fn<(...args: unknown[]) => Promise<{ error?: string }>>(),
@@ -53,6 +54,8 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../botService', () => ({ botService: { listAll: mocks.listAll } }))
+// 绑定的 project 按名字找项目（没归档的）：给什么就是什么
+vi.mock('../projectService', () => ({ projectService: { list: () => mocks.projects } }))
 vi.mock('../sessionService', () => ({
   sessionService: { create: mocks.create, ensureAgentSession: mocks.ensure }
 }))
@@ -1072,4 +1075,123 @@ describe('运行前建好跟踪项目录', () => {
     first.resolve({})
     await settle()
   })
+})
+
+/**
+ * 绑定的 `project`（2026-10-31）：运行会话的工作位置。按名字（大小写不敏感、项目名去首尾空白）在没归档的项目
+ * （projectService.list）里找：恰一个 → 建会话时给 `workProject`（会话只归属 bot、引用这个项目），并带上主进程专用的
+ * `triggerRun`；一个都没有 / 不止一个 → 这一次不跑，记一条 failed 的触发日志（sessionId ''），不推 lastFired、
+ * 不提交跟踪项、不建跟踪项目录，下一次照常再试。
+ *
+ *   BTP-1 命中一个项目 → create({bot, title, workProject: id}, {triggerRun: true})，照常 prompt、推 lastFired、提交跟踪项；
+ *         没写 project 的绑定 → 没有 workProject 键，triggerRun 照带
+ *   BTP-2 找不到 / 同名不止一个 → failed 日志 + warn、不建会话；lastFired 与跟踪项提交不动；之后项目在了，下一次照跑
+ */
+describe('BTP 绑定的 project', () => {
+  const recordInput = (i: number): Record<string, unknown> =>
+    mocks.record.mock.calls[i][0] as Record<string, unknown>
+
+  beforeEach(() => {
+    mocks.projects = []
+  })
+
+  it('BTP-1 名字命中恰一个项目（大小写不敏感、项目名去空白）→ 会话引用它、带 triggerRun；照常跑完', async () => {
+    mocks.projects = [
+      { id: 'p-other', name: 'Other' },
+      { id: 'p-acme', name: '  Acme Site ' }
+    ]
+    const ticker = bot('ticker', [{ ...TICK, project: 'acme site' }], {
+      displayName: 'Ticker',
+      objectId: 'bot:x'
+    })
+    mocks.listAll.mockReturnValue([ticker])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+
+    expect(mocks.create.mock.calls).toEqual([
+      [
+        { bot: 'ticker', title: 'Ticker · 10-24 18:00', workProject: 'p-acme' },
+        { triggerRun: true }
+      ]
+    ])
+    expect(mocks.prompt).toHaveBeenCalledTimes(1)
+    expect(recordInput(0)).toMatchObject({ outcome: 'started', sessionId: 's-1' })
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'completed']])
+    expect(Object.keys(lastFired() ?? {})).toEqual([bindingKey(ticker, 0, 'timer.fired')])
+    expect(mocks.commit).toHaveBeenCalledTimes(1)
+  })
+
+  it('BTP-1 没写 project 的绑定：没有 workProject 键，triggerRun 照带', async () => {
+    mocks.projects = [{ id: 'p-acme', name: 'Acme' }]
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { displayName: 'Ticker' })])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+
+    expect(mocks.create.mock.calls).toEqual([
+      [{ bot: 'ticker', title: 'Ticker · 10-24 18:00' }, { triggerRun: true }]
+    ])
+  })
+
+  it.each<[string, Array<{ id: string; name: string }>, string]>([
+    ['找不到', [{ id: 'p-other', name: 'Other' }], 'Project "Acme" not found'],
+    [
+      '同名不止一个',
+      [
+        { id: 'p-1', name: 'acme' },
+        { id: 'p-2', name: 'ACME ' }
+      ],
+      'More than one project is named "Acme"'
+    ]
+  ])(
+    'BTP-2 %s → 记 failed、不建会话；lastFired / 跟踪项不动；项目在了下一次照跑',
+    async (_label, projects, error) => {
+      mocks.projects = projects
+      const ticker = bot('ticker', [{ ...TICK, project: 'Acme' }], {
+        displayName: 'Ticker',
+        objectId: 'bot:x'
+      })
+      mocks.listAll.mockReturnValue([ticker])
+      const p = minute(18, 0)
+      svc.fire('timer.fired', p)
+      await settle()
+
+      expect(mocks.record).toHaveBeenCalledTimes(1)
+      expect(recordInput(0)).toStrictEqual({
+        sourceId: 'timer:builtin:minute',
+        trigger: 'timer.fired',
+        bot: 'ticker',
+        botDisplayName: 'Ticker',
+        botFile: 'ticker.md',
+        bindingIndex: 0,
+        when: '',
+        outcome: 'failed',
+        sessionId: '',
+        error,
+        event: { ...p, trigger: 'timer.fired' }
+      })
+      expect(warnsMatching(/this run is skipped/)).toEqual([
+        `bot "ticker": ${error} — this run is skipped`
+      ])
+      expect(mocks.create).not.toHaveBeenCalled()
+      expect(mocks.ensureDir).not.toHaveBeenCalled()
+      expect(mocks.ensure).not.toHaveBeenCalled()
+      expect(mocks.finish).not.toHaveBeenCalled()
+      expect(mocks.commit).not.toHaveBeenCalled()
+      expect(lastFired()).toBeUndefined()
+      expect(svc.isRunning(bindingKey(ticker, 0, 'timer.fired'))).toBe(false)
+
+      // 项目理顺之后，下一分钟照跑
+      mocks.projects = [{ id: 'p-acme', name: 'Acme' }]
+      svc.fire('timer.fired', minute(18, 1))
+      await settle()
+      expect(mocks.create.mock.calls).toEqual([
+        [
+          { bot: 'ticker', title: 'Ticker · 10-24 18:01', workProject: 'p-acme' },
+          { triggerRun: true }
+        ]
+      ])
+      expect(recordInput(1)).toMatchObject({ outcome: 'started', sessionId: 's-1' })
+      expect(mocks.commit).toHaveBeenCalledTimes(1)
+    }
+  )
 })

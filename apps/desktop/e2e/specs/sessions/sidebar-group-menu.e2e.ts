@@ -1,6 +1,7 @@
 /**
- * 侧栏分组头的动作入口（GM）—— 组头同样只剩悬停浮现的那颗 ⋮，新建对话 / 新建 Bot 会话 /
- * 项目配置 / 知识库刷新全在它与右键的同一份菜单里。
+ * 侧栏分组头的动作入口（GM）—— 组头同样只剩悬停浮现的那颗 ⋮，新建对话 / 项目配置 / 知识库刷新全在它与
+ * 右键的同一份菜单里。bot 会话不再从项目 / 临时组里开（2026-10-31 起只归属 bot）：入口在 Bots 分节的 bot 组上
+ * （bots/new-bot-chat.e2e.ts）。
  *
  * 这里补的是既有 bots/ui-sidebar 那一批（A0-11…）没覆盖的三处装配缝：
  *   - **临时组**走的是 `openGroupMenu(..., isTemp=true)` 分支：它没有项目配置。那半个
@@ -66,13 +67,12 @@ afterAll(async () => {
 
 describe('三种组头各给什么菜单', () => {
   // GM-01
-  it('项目组有项目配置、临时组没有（临时组不属于任何项目，那一项无处可去）', async () => {
+  it('项目组有项目配置、临时组没有（临时组不属于任何项目，那一项无处可去）；两处都没有 bot 入口', async () => {
     expect(idsOf(await sidebar.groupMenuShots({ project: PROJECT_NAME }))).toEqual([
       'new-chat',
-      'new-bot-chat',
       'edit-project'
     ])
-    expect(idsOf(await sidebar.groupMenuShots('temp'))).toEqual(['new-chat', 'new-bot-chat'])
+    expect(idsOf(await sidebar.groupMenuShots('temp'))).toEqual(['new-chat'])
   })
 })
 

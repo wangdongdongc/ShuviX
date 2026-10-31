@@ -19,6 +19,7 @@
  * 关联：针对一个组件的动作（create / call / build / preview / sql / export / open）过了门就记一笔「这条会话、它的项目
  * 用过这个组件」（widgetService.noteSessionUse，Widget 面板的卡片据此显示项目标签）；`list` / `describe` 只是看，不记。
  */
+import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
 import { readFileSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
 import { Type } from 'typebox'
@@ -333,7 +334,10 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
    */
   private noteUse(widgetId: string): void {
     try {
-      const projectId = sessionRecords.pick(this.ctx.sessionId, ['projectId'])?.projectId ?? null
+      // bot 会话记它引用的工作项目（它在那个项目里干活，只是不归属那个项目）
+      const projectId = projectContextIdOf(
+        sessionRecords.pick(this.ctx.sessionId, ['projectId', 'settings'])
+      )
       widgetService.noteSessionUse(
         widgetId,
         this.ctx.sessionId,

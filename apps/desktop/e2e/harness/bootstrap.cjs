@@ -282,11 +282,22 @@ const origHandle = ipcMain.handle.bind(ipcMain)
 
 /** 桩的实现表：channel → 收下正式入参、回一个正式形状的应答 */
 const STUBS = {
+  /**
+   * 菜单桩：items 记进 `window.__E2E_MENU_ITEMS`（最近一次），回 `window.__E2E_MENU_PICK`（取走即清）。
+   *
+   * 一次点击弹出**两层**菜单时（bot 组 ⋮ →「新对话」→ 再弹位置选择），单个 PICK 只够第一层：用例改钉
+   * `window.__E2E_MENU_PICKS`（数组，按弹出先后逐个取走，取空为止），每一次弹出的 items 依次追加在
+   * `window.__E2E_MENU_LOG` 里。两者都只在用例钉了才生效 —— 没钉的用例行为与以前一模一样。
+   */
   'contextMenu:popup': async (event, request) => {
     const items = JSON.stringify((request && request.items) || [])
     const actionId = await event.sender.executeJavaScript(
       `(() => {
         window.__E2E_MENU_ITEMS = ${items}
+        if (Array.isArray(window.__E2E_MENU_LOG)) window.__E2E_MENU_LOG.push(${items})
+        if (Array.isArray(window.__E2E_MENU_PICKS) && window.__E2E_MENU_PICKS.length > 0) {
+          return window.__E2E_MENU_PICKS.shift() ?? null
+        }
         const pick = window.__E2E_MENU_PICK ?? null
         window.__E2E_MENU_PICK = null
         return pick

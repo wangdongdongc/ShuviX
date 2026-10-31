@@ -19,9 +19,11 @@
  *   - `temp`（临时对话，**摊开的纯分节**：无图标、无折叠）—— 它是侧栏最常用的落点，收在
  *     一层折叠后面只是每次多一次点击，而临时会话本来就没有「这个组是什么」要交代，图标与
  *     折叠箭头都只是噪音。
- *   - `section`（分节标题，如「项目」）—— 与 `temp` 同一副排版，差别只在正文是**别的分组**
+ *   - `section`（分节标题，如「项目」「Bots」）—— 与 `temp` 同一副排版，差别只在正文是**别的分组**
  *     而不是会话行（见下面 bodyShift）。侧栏顶栏留给产品名之后，「项目」就是靠它与「临时
  *     对话」长成一对并列的分节。
+ *   - `bot`（「Bots」分节里的一个 bot，可折叠，正文是它的会话 —— 与项目组同形，图标是 bot 的头像，
+ *     由容器经 `icon` 交进来）
  * 桌面与扩展共用——扩展只用单个 temp 分组，桌面对每个项目组 + 临时组 + 知识库组各渲染一个。
  *
  * 组头**没有一排小图标**：新建对话 / 新建 Bot 会话 / 项目配置 / 知识库刷新全部收进 `onMenu`
@@ -35,6 +37,7 @@ import {
   FolderOpen,
   Library,
   ListChecks,
+  Plus,
   Shield,
   Users,
   Webhook
@@ -57,6 +60,15 @@ export interface SessionGroupProps {
     | 'skills'
     | 'tracking'
     | 'section'
+    | 'bot'
+  /** 组头图标（只有 `bot` 形态用：bot 的头像）；缺省按形态取 */
+  icon?: React.ReactNode
+  /** 组头悬停时 ⋮ 旁边多一颗「+」（`bot` 形态：新对话）；缺省没有 */
+  onAdd?: (e: React.MouseEvent) => void
+  /** 「+」的悬停提示 / 无障碍名 */
+  addLabel?: string
+  /** 整组淡显（找不到 bot 文件的那几组：会话还在，主人没了） */
+  muted?: boolean
   /** 折叠态 + 切换；`temp` / `section` 形态是摊开的纯分节，两者都不传 */
   collapsed?: boolean
   onToggle?: () => void
@@ -84,6 +96,10 @@ export function SessionGroup({
   showDividerAbove = false,
   onMenu,
   experimental,
+  icon,
+  onAdd,
+  addLabel,
+  muted = false,
   children
 }: SessionGroupProps): React.JSX.Element {
   // temp / section 是摊开的纯分节：没有折叠，也就没有折叠图标（见文件头注释）
@@ -123,7 +139,10 @@ export function SessionGroup({
             className="sb-section relative group/header"
             onContextMenu={onMenu}
           >
-            <span className="flex-1 min-w-0 truncate group-hover/header:pr-6">{label}</span>
+            <span className="flex-1 min-w-0 truncate group-hover/header:pr-6">
+              {label}
+              {experimental && <ExperimentalTag feature={experimental} />}
+            </span>
             {onMenu && (
               <RowMenuButton
                 className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"
@@ -137,17 +156,38 @@ export function SessionGroup({
             data-group={variant}
             className={`sb-row group/header cursor-pointer ${
               active ? 'text-text-primary' : 'text-text-primary hover:bg-bg-hover/60'
-            }`}
+            } ${muted ? 'opacity-50' : ''}`}
             onContextMenu={onMenu}
           >
             <button
               onClick={onToggle}
-              className="flex items-center gap-[var(--sb-gap)] flex-1 min-w-0 self-stretch text-left group-hover/header:pr-6"
+              data-has-add={onAdd ? '' : undefined}
+              className={`flex items-center gap-[var(--sb-gap)] flex-1 min-w-0 self-stretch text-left ${
+                onAdd ? 'group-hover/header:pr-12' : 'group-hover/header:pr-6'
+              }`}
             >
-              <Icon className="sb-icon text-accent" />
-              <span className="truncate">{label}</span>
+              {icon ? (
+                <span className="sb-icon">{icon}</span>
+              ) : (
+                <Icon className="sb-icon text-accent" />
+              )}
+              <span className={`truncate ${muted ? 'line-through' : ''}`}>{label}</span>
               {experimental && <ExperimentalTag feature={experimental} />}
             </button>
+            {onAdd && (
+              <button
+                data-group-add=""
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onAdd(e)
+                }}
+                title={addLabel}
+                aria-label={addLabel}
+                className="absolute right-7 flex h-5 w-5 items-center justify-center rounded opacity-0 text-text-tertiary hover:bg-bg-active hover:text-text-primary group-hover/header:opacity-100"
+              >
+                <Plus size={13} />
+              </button>
+            )}
             {onMenu && (
               <RowMenuButton
                 className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"

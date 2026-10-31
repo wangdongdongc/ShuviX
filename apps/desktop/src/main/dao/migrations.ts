@@ -985,6 +985,86 @@ export const migrations: Migration[] = [
          VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
       ).run('builtin-mcp-plan', 'plan', now, now)
     }
+  },
+  {
+    version: 38,
+    description:
+      'bot 会话只归属 bot：在项目里建的 bot 会话（连同它们的子会话）不再是项目的成员 —— projectId 挪进 settings.workProject（项目作为工作位置的引用），另记项目路径快照 settings.workingDirectory',
+    up: (db) => {
+      // 2026-10-31 用户裁定：bot 会话收拢到 bot 名下，不再归属项目；项目的设置照样经引用生效（chat-protocol
+      // botSession.ts 的 projectContextIdOf）。只改这一列与设置里两个键，对话文件、权限表、日历都不动。
+      // 笔记本 / Chrome 标签页形态不是 bot 会话（形态推导里它们优先），不碰
+      const rows = db
+        .prepare(
+          `SELECT s.id AS id, s.parentId AS parentId, s.settings AS settings, s.projectId AS projectId,
+                  p.path AS path
+             FROM sessions s LEFT JOIN projects p ON p.id = s.projectId
+            WHERE s.projectId IS NOT NULL`
+        )
+        .all() as Array<{
+        id: string
+        parentId: string | null
+        settings: string | null
+        projectId: string
+        path: string | null
+      }>
+      // 解析不过（坏 JSON / 不是对象）→ null：这样的行一概不碰，改写只会把它原来那份设置冲掉
+      const parse = (json: string | null): Record<string, unknown> | null => {
+        try {
+          const v = JSON.parse(json || '{}')
+          return v && typeof v === 'object' && !Array.isArray(v) ? v : null
+        } catch {
+          return null
+        }
+      }
+      const isBotRoot = (s: Record<string, unknown>): boolean =>
+        typeof s.bot === 'string' &&
+        s.bot.trim() !== '' &&
+        !s.notebookPath &&
+        (s.chromeTab === undefined || s.chromeTab === null)
+      const settingsOf = new Map(rows.map((r) => [r.id, parse(r.settings)]))
+      const roots = new Set(
+        rows
+          .filter((r) => {
+            const s = settingsOf.get(r.id)
+            return !r.parentId && !!s && isBotRoot(s)
+          })
+          .map((r) => r.id)
+      )
+      const update = db.prepare('UPDATE sessions SET projectId = NULL, settings = ? WHERE id = ?')
+      for (const r of rows) {
+        // bot 会话本身，与挂在它下面的子会话（子会话随父会话的工作位置；留在项目里会随项目被删，父会话却还在）
+        if (!roots.has(r.id) && !(r.parentId && roots.has(r.parentId))) continue
+        const settings = settingsOf.get(r.id)
+        if (!settings) continue
+        settings.workProject = r.projectId
+        // 项目行已不在（悬空的 projectId）：没有路径可记，退回临时工作区
+        if (r.path) settings.workingDirectory = r.path
+        update.run(JSON.stringify(settings), r.id)
+      }
+
+      // 触发器开出来的运行会话打上 triggerRun（侧栏把它们折进 bot 组的「定时运行」那一行）：它的第一条用户条目是
+      // 触发器发的（session_day_prompts.origin，v34 起记；会话建成那一行 entryId = 'created' 不算）。v34 之前没有
+      // 记来源的那些认不出，就照普通会话列着
+      // 设置是坏 JSON 的行在 SQL 里一 json_extract 就整条迁移报错 —— 拿出来在 JS 里认
+      const botRoots = db
+        .prepare('SELECT id, settings FROM sessions WHERE parentId IS NULL')
+        .all() as Array<{ id: string; settings: string | null }>
+      const firstOrigin = db.prepare(
+        `SELECT origin FROM session_day_prompts
+          WHERE sessionId = ? AND entryId <> 'created'
+          ORDER BY timestamp ASC LIMIT 1`
+      )
+      const mark = db.prepare('UPDATE sessions SET settings = ? WHERE id = ?')
+      for (const r of botRoots) {
+        const settings = parse(r.settings)
+        if (!settings || !isBotRoot(settings) || settings.triggerRun) continue
+        const first = firstOrigin.get(r.id) as { origin: string | null } | undefined
+        if (first?.origin !== 'trigger') continue
+        settings.triggerRun = true
+        mark.run(JSON.stringify(settings), r.id)
+      }
+    }
   }
 ]
 

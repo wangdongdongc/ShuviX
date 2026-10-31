@@ -13,7 +13,7 @@
  * 基座判据走工具面（`tools`）而不是档案名 —— `AgentRuntimeInfo` 里没有档案名那个字段，
  * 而工具面恰恰是 bot 基座最要紧的那半个性质（看得见、动不了）。
  */
-import { realpathSync } from 'node:fs'
+import { realpathSync, rmSync } from 'node:fs'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { createAgentSession, ensureDefaultModel, writeBotMd } from '../../harness/seed'
@@ -99,17 +99,17 @@ describe('bot 会话 = 一条普通有根会话', () => {
     expect(await toolsOf(sid)).toContain('bash')
   })
 
-  it('PS-3 bot md 被删：会话照常跑在 bot 基座上，只是没有人设可注入（不是坏数据）', async () => {
-    writeBotMd(app, 'ghost', { body: 'GHOST BODY.' })
+  it('PS-3 bot md 在 ShuviX 之外被删：会话照常跑在 bot 基座上，只是没有人设可注入（不是坏数据）', async () => {
+    const file = writeBotMd(app, 'ghost', { body: 'GHOST BODY.' })
     // 先只建会话、不建运行时（根 Agent 是懒创建的），删掉 md 之后再让它建起来 ——
-    // 这正是用户「删了一个 bot，明天又点开它那条老会话」的路径
+    // 这正是用户「在访达里删了一个 bot，明天又点开它那条老会话」的路径（ShuviX 里只能归档，删除连会话一起删）
     const sid = await app.main.eval<string>(
       `window.api.session.create({ title: 'ghost-session', bot: 'ghost' }).then((s) => s.id)`
     )
-    const del = await app.main.eval<{ success: boolean }>(
-      `window.api.bot.delete({ name: 'ghost' })`
-    )
-    expect(del.success).toBe(true)
+    rmSync(file)
+    expect(
+      await app.main.eval<string[]>(`window.api.bot.list().then((r) => r.bots.map((b) => b.name))`)
+    ).not.toContain('ghost')
 
     const systemPrompt = await app.main.eval<string>(
       `window.api.agent.getInfo(${JSON.stringify(sid)}, { ensure: true }).then((i) => i.systemPrompt)`

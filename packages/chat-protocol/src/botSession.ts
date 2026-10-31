@@ -27,3 +27,35 @@ export function boundBotOf(settings?: BotSessionShape | null): string | undefine
 export function isBotSessionSettings(settings?: BotSessionShape | null): boolean {
   return !!boundBotOf(settings)
 }
+
+// ─── 工作项目（bot 会话只归属 bot，项目只是它的工作位置） ─────────────────────────
+
+/**
+ * bot 会话**只归属于 bot**（2026-10-31）：它的 `projectId` 恒为空，侧栏与日历把它放在 bot 名下，项目的归档
+ * 与删除都不碰它。选了项目当工作位置时，项目以**引用**记在 `settings.workProject`（项目 id），另记一份项目
+ * 路径快照 `settings.workingDirectory` —— 项目被删时会话退回那个文件夹继续用。它的子会话与 fork 抄同一份引用。
+ *
+ * 「归属」与「用谁的项目设置」因此是两件事：
+ *   - 归属（分组、归档隐藏、删除级联、按项目列会话）只看 `projectId`；
+ *   - 项目设置（工作目录、项目知识库、项目提示词、环境变量、新建时的扩展默认）看 `projectContextIdOf` ——
+ *     成员会话是所属项目，bot 会话（及其子会话）是引用的工作项目。
+ */
+export interface ProjectContextShape {
+  projectId?: string | null
+  settings?: { workProject?: string | null } | null
+}
+
+/** 会话引用的工作项目 id（`settings.workProject`）；没有则 undefined */
+export function workProjectOf(
+  settings?: { workProject?: string | null } | null
+): string | undefined {
+  const id = settings?.workProject
+  return typeof id === 'string' && id.trim() ? id.trim() : undefined
+}
+
+/** 这条会话用哪个项目的设置：所属项目，否则引用的工作项目；都没有 → null */
+export function projectContextIdOf(row?: ProjectContextShape | null): string | null {
+  if (!row) return null
+  if (row.projectId) return row.projectId
+  return workProjectOf(row.settings) ?? null
+}

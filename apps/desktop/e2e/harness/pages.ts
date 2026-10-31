@@ -2450,12 +2450,22 @@ export function taskListPane(main: CdpClient): TaskListPane {
 
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
- * CSS uppercase 不改 textContent），临时组 / 知识库组 / Bots 组 / 「项目」分节标题按
- * `data-group` 锚点认 —— 临时组与分节标题是摊开的纯分节（无图标无 toggle 按钮），知识库组
- * 与 Bots 组的标签是本地化文案，四者都只剩这个属性可认。Bots 组的行与页另有自己的 page
- * object（`botsPane`），这里的 target 只用于组头层面的菜单 / 按钮断言。
+ * CSS uppercase 不改 textContent），bot 组按 bot 名认（外层 `data-bot-group=<name>`，不含「找不到
+ * bot 文件」的那几组 `data-bot-missing-group`），临时组 / 知识库组按 `data-group` 锚点认 ——
+ * 临时组是摊开的纯分节（无图标无 toggle 按钮），知识库组的标签是本地化文案，只剩这个属性可认。
+ *
+ * 「项目」与「Bots」两个分节标题都是 `data-group="section"`（2026-10-31 起 Bots 分节排在项目之前）：
+ * `'section'` 恒指**项目**分节，`'bots-section'` 指 Bots 分节 —— Bots 分节的正文第一层是
+ * `[data-sidebar-section="bots"]`，两者只靠它分开。Bots 分节里的组与行另有自己的 page object
+ * （`botsPane`），这里的 target 只用于组头层面的菜单 / 按钮 / 折叠 / 行断言。
  */
-export type GroupTarget = { project: string } | 'temp' | 'knowledge' | 'bots' | 'section'
+export type GroupTarget =
+  | { project: string }
+  | { bot: string }
+  | 'temp'
+  | 'knowledge'
+  | 'section'
+  | 'bots-section'
 
 /**
  * 菜单项原样快照（对齐 `ContextMenuItem`；侧栏不用 role/submenu，故只留这四个键）。
@@ -2480,6 +2490,7 @@ export interface RowAffordances {
    *   'menu'         行尾那颗 ⋮（RowMenuButton）
    *   'subs-toggle'  有子会话的父行行首那枚折叠钮（`data-subs-toggle`；钮里包着行的身份图标）
    *   'toggle'       分组头的折叠钮（含分组标签 span.truncate 的那颗）
+   *   'add'          bot 组头 ⋮ 旁边那颗「+」（`data-group-add`：新对话 → 位置选择）
    *   'other'        其余（出现即说明有人往行里塞了新按钮 —— 正是要断死的东西）
    */
   buttons: string[]
@@ -2551,8 +2562,8 @@ export interface SidebarPane {
    */
   clickNewChat(): Promise<void>
   /**
-   * 分组头菜单里的动作 id（A0 Bot 入口）。组头不再有一排小图标 —— 新建对话 / 新建 Bot 会话 /
-   * 项目配置都在 ⋮ 与右键的同一份菜单里，故断言的是**菜单项**而非按钮。
+   * 分组头菜单里的动作 id。组头不再有一排小图标 —— 新建对话 / 项目配置都在 ⋮ 与右键的同一份菜单里，
+   * 故断言的是**菜单项**而非按钮（bot 会话不再从项目 / 临时组里开，入口在 Bots 分节的 bot 组上）。
    * 打开一次菜单（不选任何项 = 取消）后读 e2e 桩记下的 items；组头或 ⋮ 找不到返回 null。
    */
   groupMenuItems(target: GroupTarget): Promise<string[] | null>
@@ -2619,6 +2630,18 @@ export interface SidebarPane {
 /** 行/组头尾部那颗 ⋮（RowMenuButton）—— 侧栏一切动作如今的唯一入口 */
 const MENU_BTN = (scope: string): string =>
   `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`
+
+/**
+ * 「Bots」分节里一个 bot 的组外层（`data-bot-group=<name>`，扫描回来之前的 pending 组也算；找不到 bot 文件的那几组
+ * 是 `data-bot-missing-group`，不在这里）；不在 → undefined。只在第一个 Bots 分节里找（侧栏那份 —— 右侧面板的
+ * 日历按天也画一份，DOM 里在它后面）
+ */
+const BOT_GROUP = (name: string): string =>
+  `[...(document.querySelector('[data-sidebar-section="bots"]')?.querySelectorAll('[data-bot-group]') ?? [])].find((g) => g.getAttribute('data-bot-group') === ${JSON.stringify(name)})`
+
+/** 同上那一组的组头（SessionGroup `bot` 形态的 group/header 层）；不在 → undefined */
+const BOT_GROUP_HEADER = (name: string): string =>
+  `(${BOT_GROUP(name)}?.querySelector('div[class*="group/header"][data-group="bot"]') ?? undefined)`
 
 /**
  * 钉下一次弹出要选中的项，并清掉上一次记下的 items。钉 null = 取消（只看菜单内容时用）。
@@ -2721,14 +2744,25 @@ export function sidebarPane(main: CdpClient): SidebarPane {
   const ACTIVE_ROW = `${ROWS}.find((d) => d.className.includes('bg-bg-active'))`
   /** 分组头行（SessionGroup 的 group/header 那层）—— 见 GroupTarget 的定位说明 */
   const HEADERS = `[...document.querySelectorAll('div[class*="group/header"]')]`
-  const HEADER = (target: GroupTarget): string =>
-    typeof target === 'string'
-      ? `${HEADERS}.find((h) => h.getAttribute('data-group') === ${JSON.stringify(target)})`
-      : `${HEADERS}.find(
-          (h) =>
-            (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===
-            ${JSON.stringify(target.project)}
-        )`
+  const HEADER = (target: GroupTarget): string => {
+    if (target === 'section' || target === 'bots-section') {
+      // 两个分节标题同为 data-group="section"：Bots 分节的正文第一层是 [data-sidebar-section="bots"]
+      return `${HEADERS}.find(
+        (h) =>
+          h.getAttribute('data-group') === 'section' &&
+          ${target === 'bots-section' ? '' : '!'}h.nextElementSibling?.querySelector(':scope > [data-sidebar-section="bots"]')
+      )`
+    }
+    if (typeof target === 'string')
+      return `${HEADERS}.find((h) => h.getAttribute('data-group') === ${JSON.stringify(target)})`
+    if ('bot' in target) return BOT_GROUP_HEADER(target.bot)
+    return `${HEADERS}.find(
+      (h) =>
+        h.getAttribute('data-group') === 'project' &&
+        (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===
+          ${JSON.stringify(target.project)}
+    )`
+  }
   /**
    * 第一个「能建会话」的组头 —— 按 data-group **正向**点名（项目组 / 临时组）：知识库组的
    * 菜单里只有打开目录 / 刷新，而「项目」分节标题（`section`）压根没有菜单，两者都不是这里要的。
@@ -2757,6 +2791,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       if (b.querySelector('.lucide-ellipsis-vertical')) return 'menu'
       // 折叠钮里包的是行的身份图标（bot / 悬浮 / MessagesSquare 随会话变），故只认锚点
       if (b.hasAttribute('data-subs-toggle')) return 'subs-toggle'
+      if (b.hasAttribute('data-group-add')) return 'add'
       // 分组头的折叠钮 = 包着分组标签的那颗（按结构认，免得跟各分组的图标差异纠缠）
       if (b.querySelector('span.truncate')) return 'toggle'
       return 'other'
@@ -2935,6 +2970,25 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         `(${ACTIVE_ROW}?.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim()`
       )
   }
+}
+
+/**
+ * 侧栏自上而下的骨架（DOM 序）：每个分组头 / 分节标题一项 —— 资料库那一行分节标题（`data-sidebar-section="library"`）
+ * 记成 `library-section`，两个 `data-group="section"` 按正文分成 `bots-section`（正文第一层是
+ * `[data-sidebar-section="bots"]`）与 `projects-section`，其余记它自己的 `data-group`（bot 组是 `bot`）。
+ * 「Bots 分节排在资料库与项目之间」这类顺序断言用它，不必在用例里写选择器。
+ */
+export function sidebarOutline(main: CdpClient): Promise<string[]> {
+  return main.eval<string[]>(
+    `[...document.querySelectorAll('[data-sidebar-section="library"], div[class*="group/header"]')].map((el) => {
+      if (el.getAttribute('data-sidebar-section') === 'library') return 'library-section'
+      const g = el.getAttribute('data-group') ?? ''
+      if (g !== 'section') return g
+      return el.nextElementSibling?.querySelector(':scope > [data-sidebar-section="bots"]')
+        ? 'bots-section'
+        : 'projects-section'
+    })`
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -4871,23 +4925,32 @@ export function metaStripPane(main: CdpClient): MetaStripPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 主窗侧栏「Bots」分组（BotGroup）—— 刻意只做最小面。
+// 主窗侧栏「Bots」分节（ProjectSessionGroups 的 renderBotsSection，2026-10-31：bot 会话只归属 bot）。
 //
-// 锚点：分组头按 `data-group="bots"`（SessionGroup 的 group/header 层）认，合法行按
-// `data-bot-row=<name>`、同名里输掉的行按 `data-bot-shadowed-row=<fileName>`（紧跟胜出行，划线 +
-// 覆盖徽标）、解析不过的琥珀行按 `data-bot-invalid-row=<fileName>`。点任一行打开的是
-// 那份文件的**笔记本会话**（隐藏项目 `__bots__`）—— 主区就是普通笔记本，没有专门的档案页；
-// 正文与属性卡经 `registryNotePane` 读写。活动行 = 活动会话正是这份文件的笔记本（rowClass 的
-// active 分支 `bg-bg-active/80`）。分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头
-// 菜单「刷新」/ `bot.changed` 事件（笔记本写入 / 新建 / 删除）重扫 —— 磁盘外写入不广播，
-// 种完 md 要 refresh。菜单走与会话行同一套桩（pickFromMenu / openMenu）。
+// 锚点：分节标题是 `data-group="section"` 的那一行（与「项目」分节同一个 data-group），它的正文第一层是
+// `[data-sidebar-section="bots"]` —— 两个分节只靠这一层分开。生效的 bot 一组 `[data-bot-group=<name>]`（组头
+// `data-group="bot"`，**缺省折叠**；清单还没扫回来时先按会话里的 bot 名列出来的那几组另带
+// `data-bot-group-pending`，它们没有菜单也没有「+」），组头 ⋮ 旁一颗「+」`[data-group-add]`（新对话 → 位置选择）。
+// 组里的会话行是 SessionItem（`data-session-row`；行尾工作位置 `[data-session-location]`：项目名 /「项目已删除」/
+// 「临时」），还没有会话时只有一行 `[data-bot-new-chat]`；触发器开的运行会话（`settings.triggerRun`）折进
+// `[data-bot-runs]`（开关 `[data-bot-runs-toggle]` = collapsed / expanded，缺省收起）。所有组之后是同名里输掉的
+// 文件行 `[data-bot-shadowed-row=<fileName>]`（划线 + 覆盖徽标）与解析不过的琥珀行
+// `[data-bot-invalid-row=<fileName>]`，最后是找不到 bot 文件的那几组 `[data-bot-missing-group=<name>]`（淡显，
+// 菜单只有「删除这些会话」）。归档了的 bot 连同它的会话整组不画。
+//
+// 「编辑 bot」= 组头菜单 `edit-bot`：打开那份文件的**笔记本会话**（隐藏项目 `__bots__`）—— 主区就是普通笔记本，
+// 正文与属性卡经 `registryNotePane` 读写。生效 bot 的组头**不**随它的笔记本高亮（笔记本会话不属于这一组）；只有
+// 文件行（输掉的 / 解析不过的）开着时是活动行（`bg-bg-active`）。分节一挂上就扫，之后窗口聚焦 / 分节菜单
+// 「刷新」/ `bot.changed`（笔记本写入 / 新建 / 归档 / 恢复 …）重扫 —— 磁盘外写入不广播，种完 md 要 refresh。
+// 菜单走与会话行同一套桩（pickFromMenu / openMenu）；位置选择也是那一份原生菜单（`where` 标题项、`project:<id>`、
+// `more-projects` 子菜单、分隔、`open-folder`、`temp`）。
+//
+// 只认**第一个** `[data-sidebar-section="bots"]`：右侧面板的日历按天也画一份 Bots 分节，它在 DOM 里排在侧栏后面。
 
-/** 分组里的活动行：合法行给 name，同名里输掉的行与解析不过的琥珀行给文件名 */
-export interface BotsActiveRow {
-  row?: string
-  shadowedRow?: string
-  invalidRow?: string
-}
+/** 侧栏里那份「Bots」分节的正文（第一个；日历里的那份在它后面） */
+const BOTS_SECTION = `document.querySelector('[data-sidebar-section="bots"]')`
+/** Bots 分节的标题行（正文的父节点的上一个兄弟 = SessionGroup section 形态的 group/header 层） */
+const BOTS_SECTION_HEADER = `(${BOTS_SECTION}?.parentElement?.previousElementSibling ?? null)`
 
 /** 同名里输掉的一行（`data-bot-shadowed-row`） */
 export interface BotsShadowedRow {
@@ -4899,108 +4962,339 @@ export interface BotsShadowedRow {
   /** 行的 title 提示（说清被哪份文件压过） */
   title: string
   /**
-   * 紧挨着的上一行：`row:<name>`（胜出行）/ `shadowed:<fileName>`（另一份输掉的）/
-   * `invalid:<fileName>`；认不出为 `other`，没有为空串 ——「输掉的行紧跟胜出行」的判据
+   * 紧挨着的上一个兄弟：`group:<name>`（一个 bot 组）/ `shadowed:<fileName>`（另一份输掉的）/
+   * `invalid:<fileName>`；认不出为 `other`，没有为空串 —— 文件行排在所有组之后
    */
   after: string
 }
 
+/** 文件行里的活动行（输掉的给文件名、解析不过的给文件名） */
+export interface BotsActiveRow {
+  shadowedRow?: string
+  invalidRow?: string
+}
+
+/** bot 组里的一行会话（SessionItem） */
+export interface BotSessionRowShot {
+  title: string
+  /** 行尾的工作位置（`data-session-location` 的文字：项目名 / 本地化的「项目已删除」「临时」）；子会话行没有 → '' */
+  location: string
+  /** 活动行（bg-bg-active） */
+  active: boolean
+  /** 子会话行（`data-sub`） */
+  sub: boolean
+}
+
+/** bot 组里「定时运行」那一行（`data-bot-runs`） */
+export interface BotRunsShot {
+  /** 行上的条数 */
+  count: number
+  state: 'collapsed' | 'expanded'
+  /** 折在里面的会话行（折叠只收高度，行都在 DOM 里） */
+  rows: BotSessionRowShot[]
+}
+
 export interface BotsPane {
-  /** 组头显示的分组标签 */
-  label(): Promise<string>
-  /** 侧栏里 `data-group="bots"` 的组头个数（分组只该有一个） */
-  headerCount(): Promise<number>
-  /** 展开分组并等首次扫描落定（空态文案也算落定） */
-  expand(): Promise<void>
-  /** 合法行的 name（DOM 序） */
-  rows(): Promise<string[]>
+  /** 分节标题的标签（不含「实验」小标签） */
+  sectionLabel(): Promise<string>
+  /** 侧栏里 Bots 分节的个数（只该有一个；日历那份不在主窗侧栏的 DOM 前面，但这里数的是全部） */
+  sectionCount(): Promise<number>
+  /**
+   * 等分节扫描回来：有一个生效的组 / 一行文件行 / 空态 / 一个找不到文件的组（扫描之前按会话列出的 pending 组不算）
+   */
+  waitScanned(): Promise<void>
+  /** 生效 bot 的组（DOM 序 = 按显示名排序；不含 pending 与找不到文件的组） */
+  groups(): Promise<string[]>
+  /** 等某个组出现（清单重扫是异步的） */
+  waitGroup(name: string): Promise<void>
+  /** 等某个组消失（调用前该组须已在屏，否则秒过） */
+  waitGroupGone(name: string): Promise<void>
+  /** 组头上的显示名；组不在 → '' */
+  groupLabel(name: string): Promise<string>
+  /** 组展开着（AnimatedCollapse 的 gridTemplateRows）；组不在 → false */
+  groupExpanded(name: string): Promise<boolean>
+  /** 把组设成指定展开态并等它落定（幂等） */
+  setGroupExpanded(name: string, open: boolean): Promise<void>
+  /** 组里用户自己开的会话行（DOM 序，含子会话行；不含「定时运行」里的）。组不在 → [] */
+  groupSessions(name: string): Promise<BotSessionRowShot[]>
+  /** 组里「定时运行」那一行；没有 → null */
+  runs(name: string): Promise<BotRunsShot | null>
+  /** 点「定时运行」那一行并等它翻转 */
+  toggleRuns(name: string): Promise<void>
+  /** 组里那一行「新对话」（还没有会话的 bot 才有）在不在 */
+  newChatRow(name: string): Promise<boolean>
+  /** 找不到 bot 文件的那几组（DOM 序） */
+  missingGroups(): Promise<string[]>
+  /** 找不到 bot 文件的那一组里的会话行（同 groupSessions 的口径） */
+  missingGroupSessions(name: string): Promise<BotSessionRowShot[]>
+  /**
+   * 开位置选择并选中一项（`pick` = null 即取消，只看菜单内容）：**先钉选择再点**组头的「+」（`via: 'add'`，缺省）或
+   * 组里那一行「新对话」（`via: 'new-chat-row'`）。回桩记下的原始 items（含分隔与子菜单）—— 选中项在不在菜单里由
+   * 调用方断（位置选择里的项目 id 是会话之外的数据，这里不替调用方核对）
+   */
+  openPicker(
+    name: string,
+    pick: string | null,
+    via?: 'add' | 'new-chat-row'
+  ): Promise<MenuItemShot[]>
+  /**
+   * 走组头 ⋮ →「新对话」（`new-bot-chat`）→ 第二层弹出的位置选择里选 `pick`（null = 取消）。一次点击弹两层菜单，
+   * 单个 `__E2E_MENU_PICK` 只够第一层，这里用桩的 `__E2E_MENU_PICKS` 队列（见 bootstrap.cjs）。回两层各自的 items
+   */
+  pickerViaMenu(
+    name: string,
+    pick: string | null
+  ): Promise<{ menu: MenuItemShot[]; picker: MenuItemShot[] }>
+  /** 组头菜单的动作 id（开一次 ⋮、不选任何项，分隔符滤掉）；组或 ⋮ 不在 → null */
+  groupMenuIds(name: string): Promise<string[] | null>
+  /** 组头 ⋮ 与右键组头弹的原始 items（`via` 同 sidebarPane）；组不在 → null */
+  groupMenuShots(name: string, via?: MenuVia): Promise<MenuItemShot[] | null>
+  /** 开组头 ⋮ 并选中一项（自带「该项真的在菜单里」的核对）。`new-bot-chat` 会再弹一层，走 pickerViaMenu */
+  pickGroupMenu(name: string, actionId: 'edit-bot' | 'archive-bot'): Promise<void>
+  /** 找不到文件那一组的组头菜单动作 id；不在 → null */
+  missingGroupMenuIds(name: string): Promise<string[] | null>
+  /** 开找不到文件那一组的组头 ⋮ 并选中一项（确认框由宿主弹，调用方用 confirmPane 答） */
+  pickMissingGroupMenu(name: string, actionId: 'delete-sessions'): Promise<void>
   /** 同名里输掉的行（DOM 序） */
   shadowedRows(): Promise<BotsShadowedRow[]>
   /** 非法文件行（琥珀）的文件名 */
   invalidRows(): Promise<string[]>
-  /** 点一行并等它成为活动行（= 这份文件的笔记本成了活动会话） */
-  selectRow(name: string): Promise<void>
+  /** 点一行输掉的文件并等它成为活动行 */
+  selectShadowedRow(fileName: string): Promise<void>
   /** 点一行解析不过的文件并等它成为活动行 */
   selectInvalidRow(fileName: string): Promise<void>
-  /** 当前活动行；活动会话不是任何 bot 文件的笔记本时为 null */
-  activeRow(): Promise<BotsActiveRow | null>
-  /** 开 bot 行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
-  pickRowMenu(name: string, actionId: 'new-bot-chat' | 'delete-bot'): Promise<void>
-  /** 开同名里输掉那一行的 ⋮ 并选中一项（同上；它只能按文件名删） */
+  /** 文件行里的活动行；活动会话不是它们任何一份的笔记本时为 null */
+  activeFileRow(): Promise<BotsActiveRow | null>
+  /** 开同名里输掉那一行的 ⋮ 并选中一项（它只能按文件名删） */
   pickShadowedRowMenu(fileName: string, actionId: 'delete-bot-file'): Promise<void>
   /** 开非法文件行的 ⋮ 并选中一项（同上） */
   pickInvalidRowMenu(fileName: string, actionId: 'delete-bot-file'): Promise<void>
-  /** bot 行菜单里的动作 id（开一次 ⋮、不选任何项，分隔符滤掉）；⋮ 不在返回 null */
-  rowMenuIds(name: string): Promise<string[] | null>
-  /** 同名里输掉那一行的菜单动作 id（同上） */
+  /** 同名里输掉那一行的菜单动作 id */
   shadowedRowMenuIds(fileName: string): Promise<string[] | null>
-  /** 组头菜单「新建 bot」—— 只触发；新文件落盘与笔记打开由调用方 until */
+  /** 分节标题菜单的动作 id；不在 → null */
+  sectionMenuIds(): Promise<string[] | null>
+  /** 分节菜单「新建 bot」—— 只触发；新文件落盘与笔记打开由调用方 until */
   newBot(): Promise<void>
-  /** 组头菜单「刷新」—— 磁盘外改动不广播 bot.changed，需手动重扫 */
+  /** 分节菜单「刷新」—— 磁盘外改动不广播 bot.changed，需手动重扫 */
   refresh(): Promise<void>
 }
 
 export function botsPane(main: CdpClient): BotsPane {
-  const HEADER_SEL = `div[class*="group/header"][data-group="bots"]`
-  const HEADER = `document.querySelector('${HEADER_SEL}')`
-  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
-  const COLLAPSE = `${HEADER}?.nextElementSibling`
-  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
-  const ROWS = `[...document.querySelectorAll('[data-bot-row]')]`
-  const SHADOWED_ROWS = `[...document.querySelectorAll('[data-bot-shadowed-row]')]`
-  const INVALID_ROWS = `[...document.querySelectorAll('[data-bot-invalid-row]')]`
-  const ROW = (name: string): string =>
-    `document.querySelector('[data-bot-row=${JSON.stringify(name)}]')`
+  const HEADER = (name: string): string => BOT_GROUP_HEADER(name)
+  const MISSING = (name: string): string =>
+    `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-missing-group]') ?? [])].find((g) => g.getAttribute('data-bot-missing-group') === ${JSON.stringify(name)})`
+  const MISSING_HEADER = (name: string): string =>
+    `(${MISSING(name)}?.querySelector('div[class*="group/header"][data-group="bot"]') ?? undefined)`
+  /** 组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层） */
+  const BODY = (header: string): string => `${header}?.nextElementSibling`
+  const TOGGLE = (header: string): string =>
+    `[...(${header}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector(':scope > span.truncate'))`
+  const SHADOWED_ROWS = `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-shadowed-row]') ?? [])]`
+  const INVALID_ROWS = `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-invalid-row]') ?? [])]`
   const SHADOWED_ROW = (fileName: string): string =>
-    `document.querySelector('[data-bot-shadowed-row=${JSON.stringify(fileName)}]')`
+    `${SHADOWED_ROWS}.find((r) => r.getAttribute('data-bot-shadowed-row') === ${JSON.stringify(fileName)})`
   const INVALID_ROW = (fileName: string): string =>
-    `document.querySelector('[data-bot-invalid-row=${JSON.stringify(fileName)}]')`
+    `${INVALID_ROWS}.find((r) => r.getAttribute('data-bot-invalid-row') === ${JSON.stringify(fileName)})`
   const ACTIVE = (list: string): string =>
     `${list}.find((r) => r.className.includes('bg-bg-active'))`
+  /** 一行会话的快照（页内函数源码） */
+  const ROW_SHOT = `((r) => ({
+    title: (r.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim(),
+    location: (r.querySelector('[data-session-location]')?.textContent ?? '').trim(),
+    active: r.className.includes('bg-bg-active'),
+    sub: r.hasAttribute('data-sub')
+  }))`
+  /** 组正文里的会话行（先把「查看更多」都点开；`inRuns` 选「定时运行」里面 / 外面的） */
+  const ROWS_IN = (header: string, inRuns: boolean): string => `(() => {
+    const body = ${BODY(header)}
+    if (!body) return []
+    for (const more of body.querySelectorAll('[data-view-more]')) more.click()
+    return [...body.querySelectorAll('[data-session-row]')]
+      .filter((r) => ${inRuns ? '' : '!'}r.closest('[data-bot-runs]'))
+      .map(${ROW_SHOT})
+  })()`
+
+  const groupExpanded = (name: string): Promise<boolean> =>
+    main.eval<boolean>(`(${BODY(HEADER(name))})?.style.gridTemplateRows === '1fr'`)
 
   /** 点一行并等它成为活动行（打开笔记是异步的：openNote → 重拉会话列表 → 选中） */
   const clickUntilActive = async (scope: string, what: string): Promise<void> => {
-    await until(() => main.eval<boolean>(`${scope} !== null`), what)
-    await main.eval(`${scope}.click()`)
+    await until(() => main.eval<boolean>(`!!(${scope})`), what)
+    await main.eval(`(${scope}).click()`)
     await until(
-      () => main.eval<boolean>(`(${scope}?.className ?? '').includes('bg-bg-active')`),
+      () => main.eval<boolean>(`((${scope})?.className ?? '').includes('bg-bg-active')`),
       `${what} active`
     )
   }
 
-  /** 开某一行的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
+  /** 开某处的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
   const menuIds = async (scope: string, what: string): Promise<string[] | null> => {
-    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    await until(() => main.eval<boolean>(`!!(${scope})`), what)
     const items = await openMenu(main, scope, 'menu-button')
     return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
   }
 
+  const waitGroupHeader = (name: string): Promise<unknown> =>
+    until(() => main.eval<boolean>(`!!${HEADER(name)}`), `bot group "${name}"`)
+
   return {
-    label: () =>
-      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+    sectionLabel: () =>
+      main.eval<string>(
+        `(${BOTS_SECTION_HEADER}?.querySelector('span.truncate')?.firstChild?.textContent ?? '').trim()`
+      ),
 
-    headerCount: () => main.eval<number>(`document.querySelectorAll('${HEADER_SEL}').length`),
+    sectionCount: () =>
+      main.eval<number>(`document.querySelectorAll('[data-sidebar-section="bots"]').length`),
 
-    expand: async () => {
-      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'bots group header')
-      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
-      if (!open) await main.eval(`(${TOGGLE})?.click()`)
-      // 扫描是懒的：展开才发第一次请求，正文有内容（行或空态文案）才算落定
+    waitScanned: async () => {
       await until(
-        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
-        'bots group scanned'
+        () =>
+          main.eval<boolean>(
+            `!!${BOTS_SECTION}?.querySelector('[data-bot-group]:not([data-bot-group-pending]), [data-bot-invalid-row], [data-bots-empty], [data-bot-missing-group]')`
+          ),
+        'bots section scanned'
       )
     },
 
-    rows: () => main.eval<string[]>(`${ROWS}.map((r) => r.getAttribute('data-bot-row'))`),
+    groups: () =>
+      main.eval<string[]>(
+        `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-group]:not([data-bot-group-pending])') ?? [])].map((g) => g.getAttribute('data-bot-group') ?? '')`
+      ),
+
+    waitGroup: async (name) => {
+      await waitGroupHeader(name)
+    },
+
+    waitGroupGone: async (name) => {
+      await until(() => main.eval<boolean>(`!${HEADER(name)}`), `bot group "${name}" gone`)
+    },
+
+    groupLabel: (name) =>
+      main.eval<string>(
+        `((${TOGGLE(HEADER(name))})?.querySelector(':scope > span.truncate')?.textContent ?? '').trim()`
+      ),
+
+    groupExpanded,
+
+    setGroupExpanded: async (name, open) => {
+      await waitGroupHeader(name)
+      if ((await groupExpanded(name)) === open) return
+      await main.eval(`(${TOGGLE(HEADER(name))}).click()`)
+      await until(
+        async () => (await groupExpanded(name)) === open,
+        `bot group "${name}" ${open ? 'expanded' : 'collapsed'}`
+      )
+      // 内联样式已落定，高度过渡（150ms）还在走 —— 等它走完再往下
+      await sleep(200)
+    },
+
+    groupSessions: (name) => main.eval<BotSessionRowShot[]>(ROWS_IN(HEADER(name), false)),
+
+    runs: (name) =>
+      main.eval<BotRunsShot | null>(`(() => {
+        const runs = ${BODY(HEADER(name))}?.querySelector('[data-bot-runs]')
+        if (!runs) return null
+        const toggle = runs.querySelector('[data-bot-runs-toggle]')
+        const spans = [...(toggle?.querySelectorAll(':scope > span') ?? [])]
+        return {
+          count: Number((spans[spans.length - 1]?.textContent ?? '').trim()),
+          state: toggle?.getAttribute('data-bot-runs-toggle') ?? '',
+          rows: [...runs.querySelectorAll('[data-session-row]')].map(${ROW_SHOT})
+        }
+      })()`),
+
+    toggleRuns: async (name) => {
+      const TOGGLE_ROW = `${BODY(HEADER(name))}?.querySelector('[data-bot-runs-toggle]')`
+      await until(() => main.eval<boolean>(`!!${TOGGLE_ROW}`), `scheduled runs row of "${name}"`)
+      const before = await main.eval<string>(`${TOGGLE_ROW}.getAttribute('data-bot-runs-toggle')`)
+      await main.eval(`${TOGGLE_ROW}.click()`)
+      await until(
+        async () =>
+          (await main.eval<string>(`${TOGGLE_ROW}?.getAttribute('data-bot-runs-toggle') ?? ''`)) !==
+          before,
+        `scheduled runs row of "${name}" toggled`
+      )
+      await sleep(200)
+    },
+
+    newChatRow: (name) =>
+      main.eval<boolean>(`!!${BODY(HEADER(name))}?.querySelector('[data-bot-new-chat]')`),
+
+    missingGroups: () =>
+      main.eval<string[]>(
+        `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-missing-group]') ?? [])].map((g) => g.getAttribute('data-bot-missing-group') ?? '')`
+      ),
+
+    missingGroupSessions: (name) =>
+      main.eval<BotSessionRowShot[]>(ROWS_IN(MISSING_HEADER(name), false)),
+
+    openPicker: async (name, pick, via = 'add') => {
+      await waitGroupHeader(name)
+      const target =
+        via === 'add'
+          ? `${HEADER(name)}?.querySelector('[data-group-add]')`
+          : `${BODY(HEADER(name))}?.querySelector('[data-bot-new-chat]')`
+      await until(() => main.eval<boolean>(`!!${target}`), `"${name}" ${via} button`)
+      await armMenu(main, pick)
+      await main.eval(`${target}.click()`)
+      return lastMenuItems(main)
+    },
+
+    pickerViaMenu: async (name, pick) => {
+      await waitGroupHeader(name)
+      await until(() => main.eval<boolean>(`!!${MENU_BTN(HEADER(name))}`), `"${name}" group ⋮`)
+      await main.eval(`(() => {
+        window.__E2E_MENU_PICK = null
+        window.__E2E_MENU_ITEMS = null
+        window.__E2E_MENU_LOG = []
+        window.__E2E_MENU_PICKS = ['new-bot-chat', ${JSON.stringify(pick)}]
+        return true
+      })()`)
+      try {
+        await main.eval(`${MENU_BTN(HEADER(name))}.click()`)
+        const log = await until(async () => {
+          const got = await main.eval<MenuItemShot[][] | null>(`window.__E2E_MENU_LOG ?? null`)
+          return got && got.length >= 2 ? got : null
+        }, `"${name}" group menu and then the location picker`)
+        return { menu: log[0], picker: log[1] }
+      } finally {
+        await main.eval(`(() => {
+          window.__E2E_MENU_PICKS = null
+          window.__E2E_MENU_LOG = null
+          return true
+        })()`)
+      }
+    },
+
+    groupMenuIds: (name) => menuIds(HEADER(name), `bot group "${name}"`),
+
+    groupMenuShots: async (name, via = 'menu-button') => {
+      await waitGroupHeader(name)
+      return openMenu(main, HEADER(name), via)
+    },
+
+    pickGroupMenu: async (name, actionId) => {
+      await waitGroupHeader(name)
+      await pickFromMenu(main, HEADER(name), actionId, `bot group "${name}"`)
+    },
+
+    missingGroupMenuIds: (name) => menuIds(MISSING_HEADER(name), `missing bot group "${name}"`),
+
+    pickMissingGroupMenu: async (name, actionId) => {
+      await until(
+        () => main.eval<boolean>(`!!${MISSING_HEADER(name)}`),
+        `missing bot group "${name}"`
+      )
+      await pickFromMenu(main, MISSING_HEADER(name), actionId, `missing bot group "${name}"`)
+    },
 
     shadowedRows: () =>
       main.eval<BotsShadowedRow[]>(`${SHADOWED_ROWS}.map((r) => {
         const prev = r.previousElementSibling
         const after = !prev
           ? ''
-          : prev.hasAttribute('data-bot-row')
-            ? 'row:' + prev.getAttribute('data-bot-row')
+          : prev.hasAttribute('data-bot-group')
+            ? 'group:' + prev.getAttribute('data-bot-group')
             : prev.hasAttribute('data-bot-shadowed-row')
               ? 'shadowed:' + prev.getAttribute('data-bot-shadowed-row')
               : prev.hasAttribute('data-bot-invalid-row')
@@ -5018,15 +5312,14 @@ export function botsPane(main: CdpClient): BotsPane {
     invalidRows: () =>
       main.eval<string[]>(`${INVALID_ROWS}.map((r) => r.getAttribute('data-bot-invalid-row'))`),
 
-    selectRow: (name) => clickUntilActive(ROW(name), `bot row "${name}"`),
+    selectShadowedRow: (fileName) =>
+      clickUntilActive(SHADOWED_ROW(fileName), `shadowed bot row "${fileName}"`),
 
     selectInvalidRow: (fileName) =>
       clickUntilActive(INVALID_ROW(fileName), `invalid bot row "${fileName}"`),
 
-    activeRow: () =>
+    activeFileRow: () =>
       main.eval<BotsActiveRow | null>(`(() => {
-        const row = ${ACTIVE(ROWS)}
-        if (row) return { row: row.getAttribute('data-bot-row') }
         const shadowed = ${ACTIVE(SHADOWED_ROWS)}
         if (shadowed) return { shadowedRow: shadowed.getAttribute('data-bot-shadowed-row') }
         const invalid = ${ACTIVE(INVALID_ROWS)}
@@ -5034,14 +5327,9 @@ export function botsPane(main: CdpClient): BotsPane {
         return null
       })()`),
 
-    pickRowMenu: async (name, actionId) => {
-      await until(() => main.eval<boolean>(`${ROW(name)} !== null`), `bot row "${name}"`)
-      await pickFromMenu(main, ROW(name), actionId, `bot row "${name}"`)
-    },
-
     pickShadowedRowMenu: async (fileName, actionId) => {
       await until(
-        () => main.eval<boolean>(`${SHADOWED_ROW(fileName)} !== null`),
+        () => main.eval<boolean>(`!!(${SHADOWED_ROW(fileName)})`),
         `shadowed bot row "${fileName}"`
       )
       await pickFromMenu(main, SHADOWED_ROW(fileName), actionId, `shadowed bot row "${fileName}"`)
@@ -5049,21 +5337,21 @@ export function botsPane(main: CdpClient): BotsPane {
 
     pickInvalidRowMenu: async (fileName, actionId) => {
       await until(
-        () => main.eval<boolean>(`${INVALID_ROW(fileName)} !== null`),
+        () => main.eval<boolean>(`!!(${INVALID_ROW(fileName)})`),
         `invalid bot row "${fileName}"`
       )
       await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid bot row "${fileName}"`)
     },
 
-    rowMenuIds: (name) => menuIds(ROW(name), `bot row "${name}"`),
-
     shadowedRowMenuIds: (fileName) =>
       menuIds(SHADOWED_ROW(fileName), `shadowed bot row "${fileName}"`),
 
-    newBot: () => pickFromMenu(main, HEADER, 'new-bot', 'bots group header'),
+    sectionMenuIds: () => menuIds(BOTS_SECTION_HEADER, 'bots section header'),
+
+    newBot: () => pickFromMenu(main, BOTS_SECTION_HEADER, 'new-bot', 'bots section header'),
 
     refresh: async () => {
-      await pickFromMenu(main, HEADER, 'refresh', 'bots group header')
+      await pickFromMenu(main, BOTS_SECTION_HEADER, 'refresh', 'bots section header')
       await sleep(200)
     }
   }
@@ -6178,94 +6466,15 @@ export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 「新建 Bot 会话」单选框（BotSessionDialog）+ bot 会话头部身份胶囊（BotBindingChip）+
-// 空 bot 会话的自我介绍（WelcomeView 的 BotEmptyState）
+// bot 会话头部的身份胶囊（BotBindingChip）+ 工作位置胶囊 + 空 bot 会话的自我介绍（WelcomeView 的 BotEmptyState）
 //
-// 锚点：单选框面板 `data-bot-dialog="create"`、候选行 `data-bot-pick=<name>`；胶囊外层
-// `data-bot-binding=<bot>`、胶囊本体 `data-bot-bound=<bot>` + `data-bot-bound-missing="true"`
-// （不缺失时属性不存在）；空态根 `data-bot-empty`、自我介绍卡 `data-bot-empty-member=<bot>`。
-// 其余（加载占位、空态容器、「打开 Bots 文件夹」按钮、胶囊上的名字、卡片里的名字 / 描述）没有
-// 锚点，按结构认。
+// 锚点：胶囊外层 `data-bot-binding=<bot>`、胶囊本体 `data-bot-bound=<bot>` + `data-bot-bound-missing="true"`
+// （不缺失时属性不存在）；旁边的工作位置胶囊 `data-bot-location` = project（引用的项目在，含归档的）/ gone（引用的
+// 项目已删除）/ temp（临时工作区）—— 点它会在访达里开文件夹，e2e 绝不点；空态根 `data-bot-empty`、自我介绍卡
+// `data-bot-empty-member=<bot>`。其余（胶囊上的名字、卡片里的名字 / 描述）没有锚点，按结构认。
 //
-// 「加载中」与「查无结果」在这三处渲染得一模一样：单选框都是零行、胶囊都顶身份键且不标缺失、
-// 空态都只留提示行不出卡片 —— 否定断言必须先等到一个已落定的信号（见各方法说明）。
-
-export interface BotPickerPane {
-  /** 等单选框上屏 */
-  waitOpen(): Promise<void>
-  /** 等它真的卸载（Escape / 取消走 120ms 关闭动画，选中一行后则直接卸载） */
-  waitClosed(): Promise<void>
-  isOpen(): Promise<boolean>
-  /** 候选行的 bot 名（DOM 序）。加载中与空列表都是 [] —— 先等行出现或 emptyStateShown */
-  rows(): Promise<string[]>
-  /** 点一行（行不存在返回 false） */
-  pick(name: string): Promise<boolean>
-  /**
-   * 在**同一次** eval 里连点两下同一行。分两次 eval 的话 React 已在其间把按钮置成 disabled，
-   * 第二下浏览器根本不派发 —— 防重入断言就会在没有守卫时也通过。
-   *
-   * `found`：行在不在。`secondClickLive`：第二下点出去那一刻按钮还没置灰 —— 这是防重入用例
-   * 的**前提**，它为 false 时挡住第二下的是 disabled，测到的就不是守卫了。
-   */
-  pickTwiceSync(name: string): Promise<{ found: boolean; secondClickLive: boolean }>
-  /**
-   * 空态已落定：「打开 Bots 文件夹」按钮在屏。只做存在性判断，**绝不点**（它开的是 OS 文件
-   * 管理器，e2e 关不掉）。加载占位同样零行，故「零行」只能在这个信号之后断。
-   */
-  emptyStateShown(): Promise<boolean>
-  /** 面板整段文本 —— 归属行里的项目名是种子数据可以断，其余文案是本地化的，别断 */
-  text(): Promise<string>
-  /** Escape（单选框在 window 上听 keydown）；只派发不等待，关没关由 waitClosed 等 */
-  pressEscape(): Promise<void>
-}
-
-/** 「新建 Bot 会话」单选框（组头菜单 new-bot-chat 拉起） */
-export function botPickerPane(main: CdpClient): BotPickerPane {
-  const PANEL = `document.querySelector('[data-bot-dialog="create"]')`
-  const ROW = (name: string): string =>
-    `${PANEL}?.querySelector('[data-bot-pick=${JSON.stringify(name)}]')`
-  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== null`)
-
-  return {
-    waitOpen: async () => {
-      await until(isOpen, 'bot picker open')
-    },
-    waitClosed: async () => {
-      await until(async () => !(await isOpen()), 'bot picker closed')
-    },
-    isOpen,
-    rows: () =>
-      main.eval<string[]>(
-        `[...(${PANEL}?.querySelectorAll('[data-bot-pick]') ?? [])].map((b) => b.getAttribute('data-bot-pick'))`
-      ),
-    pick: (name) =>
-      main.eval<boolean>(`(() => {
-        const btn = ${ROW(name)}
-        if (!btn) return false
-        btn.click()
-        return true
-      })()`),
-    pickTwiceSync: (name) =>
-      main.eval<{ found: boolean; secondClickLive: boolean }>(`(() => {
-        const btn = ${ROW(name)}
-        if (!btn) return { found: false, secondClickLive: false }
-        btn.click()
-        // 第二下点出去之前读一次：还没置灰 = 第二下真的派发到了按钮上
-        const secondClickLive = !btn.disabled
-        btn.click()
-        return { found: true, secondClickLive }
-      })()`),
-    emptyStateShown: () =>
-      main.eval<boolean>(`!!${PANEL}?.querySelector('svg.lucide-folder-open')?.closest('button')`),
-    text: () => main.eval<string>(`(${PANEL}?.textContent ?? '').trim()`),
-    pressEscape: async () => {
-      await main.eval(`(() => {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-        return true
-      })()`)
-    }
-  }
-}
+// 「加载中」与「查无结果」渲染得一模一样：胶囊都顶身份键且不标缺失、空态都只留提示行不出卡片 —— 否定断言
+// 必须先等到一个已落定的信号（见各方法说明）。
 
 export interface BotChipSnapshot {
   /** `[data-bot-binding]` 的个数（头部只该有一枚；普通会话为 0） */
@@ -6276,6 +6485,10 @@ export interface BotChipSnapshot {
   missing: boolean
   /** 胶囊上的名字：查到了是 displayName；查询回来之前与 md 已删时是身份键 */
   name: string
+  /** 工作位置胶囊的 `data-bot-location`（project / gone / temp）；没有胶囊为空串 */
+  location: string
+  /** 工作位置胶囊上的文字（项目名，或本地化的「项目已删除 · <文件夹名>」/「临时」）；没有为空串 */
+  locationText: string
 }
 
 export interface BotChipPane {
@@ -6294,7 +6507,9 @@ export function botChip(main: CdpClient): BotChipPane {
           bot: pill?.getAttribute('data-bot-bound') ?? '',
           missing: pill?.getAttribute('data-bot-bound-missing') === 'true',
           // 名字是胶囊本体的直接子 span（头像组件排在它前面，别让它的内部结构掺进来）
-          name: (pill?.querySelector(':scope > span.truncate')?.textContent ?? '').trim()
+          name: (pill?.querySelector(':scope > span.truncate')?.textContent ?? '').trim(),
+          location: all[0]?.querySelector('[data-bot-location]')?.getAttribute('data-bot-location') ?? '',
+          locationText: (all[0]?.querySelector('[data-bot-location]')?.textContent ?? '').trim()
         }
       })()`)
   }
@@ -7808,6 +8023,13 @@ export interface ArchivedSettingsPane {
   archivedWidgetRow(
     id: string
   ): Promise<{ glyph: string; legacyIcon: boolean; actionsOpacity: number } | null>
+  /**
+   * 「Bots」子 tab（ArchivedBots，`[data-archived-bots]`）里归档了的 bot 行（`data-archived-bot=<fileName>`，DOM 序）：
+   * 显示名，与第二行的整段文字（「N 个对话 · <fileName>」—— 断数字与文件名，不断本地化文案）
+   */
+  archivedBots(): Promise<Array<{ fileName: string; displayName: string; detail: string }>>
+  /** 点某个归档 bot 行上的恢复 / 删除（`data-archived-bot-restore` / `-delete`）；行或按钮找不到抛 */
+  clickArchivedBot(fileName: string, action: 'restore' | 'delete'): Promise<void>
 }
 
 /** 「已归档」设置页（ArchivedSettings；openSettings('archived') 后调用） */
@@ -7927,6 +8149,29 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
         return true
       })()`)
       if (!ok) throw new Error(`archived widget "${id}" button (${titles.join(' / ')}) not found`)
+      await sleep(200)
+    },
+    archivedBots: () =>
+      settings.eval<Array<{ fileName: string; displayName: string; detail: string }>>(
+        `[...((${CONTENT})?.querySelectorAll('[data-archived-bot]') ?? [])].map((r) => {
+          const lines = [...(r.querySelector('.truncate')?.parentElement?.children ?? [])]
+          return {
+            fileName: r.getAttribute('data-archived-bot') ?? '',
+            displayName: (lines[0]?.textContent ?? '').trim(),
+            detail: (lines[1]?.textContent ?? '').trim()
+          }
+        })`
+      ),
+    clickArchivedBot: async (fileName, action) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const row = [...((${CONTENT})?.querySelectorAll('[data-archived-bot]') ?? [])].find(
+          (r) => r.getAttribute('data-archived-bot') === ${JSON.stringify(fileName)})
+        const btn = row?.querySelector('[data-archived-bot-${action}]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`archived bot "${fileName}" ${action} button not found`)
       await sleep(200)
     },
     archivedWidgetRow: (id) =>
@@ -12727,8 +12972,8 @@ export type WebMobileTouchTarget =
   | { calendarRow: string }
   /** 日历里的一天（`YYYY-MM-DD`，react-day-picker 的 `data-day`） */
   | { calendarDay: string }
-  /** 资料库 Bots 组里的合法行（bot name） */
-  | { botRow: string }
+  /** 会话页列表里 Bots 分节的一个 bot 组的组头（bot name；按住它 = 组头菜单） */
+  | { botGroup: string }
   /** 资料库智能体组里的内置行（档案名） */
   | { agentBuiltinRow: string }
   /** 小组件页里的卡片（widget id） */
@@ -13285,8 +13530,8 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     if ('calendarRow' in target) return ROW_IN(CALENDAR, target.calendarRow)
     if ('calendarDay' in target)
       return `(${CALENDAR})?.querySelector('[data-day=${JSON.stringify(target.calendarDay)}] button')`
-    if ('botRow' in target)
-      return `${PAGE('library')}?.querySelector('[data-bot-row=${JSON.stringify(target.botRow)}]')`
+    if ('botGroup' in target)
+      return `[...((${LIST})?.querySelectorAll('[data-bot-group]') ?? [])].find((g) => g.getAttribute('data-bot-group') === ${JSON.stringify(target.botGroup)})?.querySelector('div[class*="group/header"][data-group="bot"]')`
     if ('agentBuiltinRow' in target)
       return `${PAGE('library')}?.querySelector('[data-agent-builtin-row=${JSON.stringify(target.agentBuiltinRow)}]')`
     if ('widgetCard' in target)

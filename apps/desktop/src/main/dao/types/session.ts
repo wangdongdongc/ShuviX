@@ -40,6 +40,17 @@ export interface SessionSettings {
    */
   bot?: string
   /**
+   * bot 会话（及其子会话、fork）引用的工作项目 id（2026-10-31）：bot 会话只归属 bot、`projectId` 恒为空，项目
+   * 只是它的工作位置 —— 工作目录、项目知识库、项目提示词、环境变量照项目来（经 chat-protocol `projectContextIdOf`），
+   * 项目的归档与删除不碰它。建会话时同时写下项目路径的快照 `workingDirectory`：项目被删时退回那个文件夹
+   */
+  workProject?: string
+  /**
+   * 这条会话是触发器开出来的运行会话（bot 的 `shuvix-bot-on` 绑定命中时，botTriggerService 建它）。侧栏把它们折进 bot
+   * 组里那一行「定时运行」，免得淹掉用户自己开的对话。只由主进程在创建时写
+   */
+  triggerRun?: boolean
+  /**
    * 子会话被父级钉下的档案名（session 工具 `create-sub-session` 的 `agent_profile`，如 coding；
    * 唯一写入口 sessionService.pinAgentProfile）。根会话不读它：根 Agent 的档案由会话形态推导
    * （项目 work / 无项目 chat / 笔记本 notebook，见 resolveAgentProfileName）——旧的会话内切换

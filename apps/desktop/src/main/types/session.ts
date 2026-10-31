@@ -21,6 +21,11 @@ export interface SessionCreateParams {
   /** 绑定的 bot 名；提供则创建 bot 会话（普通有根会话，见 SessionSettings.bot） */
   bot?: string
   /**
+   * bot 会话的工作位置：一个项目 id（不给 = 临时工作区）。bot 会话不当项目的成员，这个项目记成引用
+   * （SessionSettings.workProject）；同时给了 `projectId` 也按引用处理。不是 bot 会话时不看
+   */
+  workProject?: string
+  /**
    * 挂着的 Chrome 标签页；提供则创建 Chrome 标签页会话（无项目、不进列表，见 SessionSettings.chromeTab）。
    * 只有 Chrome 前端（frontend/chrome）走这条路，渲染层的新建入口不传、IPC 也会滤掉。
    */

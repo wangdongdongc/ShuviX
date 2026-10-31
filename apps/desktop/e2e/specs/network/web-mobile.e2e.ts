@@ -13,8 +13,8 @@
  * 手机布局（390×844、dsf 2、mobile、触屏模拟，重载之后）：
  *   M-1 四个标签 Chats / Widgets / Library / Settings，只有会话标签 aria-current；只挂了会话页
  *   M-2 点标签：aria-current 跟着走、第一次点才挂载；去过的留着（display none）；展开的项目组转一圈回来还展开着
- *   M-3 会话页的分组只有 section / project / temp；没有设置栏、没有拖拽带
- *   M-4 资料库页的分组恰是 bots, agents, policies, hooks, skills, knowledge
+ *   M-3 会话页的分组只有 section（Bots 与项目两个分节）/ bot / project / temp；没有设置栏、没有拖拽带
+ *   M-4 资料库页的分组恰是 tracking, agents, policies, hooks, skills, knowledge（Bots 不在资料库里了）
  *   M-5 真点一行 → 对话页：标题对、预置的回复在、标签层 aria-hidden、历史压了一条带标记的（长度 +1）；
  *       对话横幅里没有 agent 胶囊（桌面布局里同一会话有）
  *   M-6 返回键收起对话页并退掉那条历史；history.back() 也收起（窗口上的标记证明没有重载）
@@ -22,7 +22,8 @@
  *   M-8 日历开关：aria-label 换；点当天的会话 → 对话页；返回；再点那条（已是活跃的）→ 又推入；
  *       列表 ⇄ 日历来回切，日历选中的日子与列表的展开状态都还在
  *   M-9 新建会话抽屉：临时会话 + 各项目；点遮罩什么都不建；选一个项目 → 恰建一条该项目的会话并推入
- *   M-10 资料库里的 bot 行 → 对话页里是笔记本（.cm-editor）；返回落在资料库；再点那一行（此刻是活跃会话）又推入
+ *   M-10 会话页里按住一个 bot 组的组头 → DOM 菜单「编辑 bot」→ 对话页里是笔记本（.cm-editor）；返回落在会话页；
+ *        再来一次（此刻它是活跃会话）又推入
  *   M-11 对话页没有桌面顶栏的按钮（内置浏览器窗口、侧栏 / 面板开关）；点标题 → 会话设置
  *   M-12 文件抽屉列出 hello.txt，点遮罩收起；任务抽屉是空态（mobile.noTasks）
  *   M-13 在会话设置里删掉这条会话 → 对话页收起、列表里没了这一行、那条历史标记退掉
@@ -117,7 +118,6 @@ import {
 } from '../../harness/networkFixtures'
 import {
   agentsSidebarPane,
-  botsPane,
   chatOriginBadges,
   chatPane,
   sessionConfigPane,
@@ -147,7 +147,7 @@ const MODEL = 'e2e-model'
 const USAGE = { prompt: 90, completion: 10 }
 const WIDGET_ID = 'mob-widget'
 const BOT = 'mobbot'
-const REGISTRY_GROUPS = ['bots', 'tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
+const REGISTRY_GROUPS = ['tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
 const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }
 /** M-21：最窄的常见手机 */
@@ -737,14 +737,16 @@ describe('phone layout: the shell', () => {
 
   it('M-3 the sessions page has only the session groups and no desktop chrome', async () => {
     const groups = await mobile().groupsIn('sessions')
-    expect(new Set(groups)).toEqual(new Set(['section', 'project', 'temp']))
+    // section ×2：Bots 分节与项目分节；bot = Bots 分节里 mobbot 的那一组
+    expect(new Set(groups)).toEqual(new Set(['section', 'bot', 'project', 'temp']))
+    expect(groups.filter((g) => g === 'section')).toHaveLength(2)
     expect(await mobile().desktopChromeIn('sessions')).toEqual({
       settingsRow: false,
       dragStrip: false
     })
   })
 
-  it('M-4 the library page has exactly the seven registry groups', async () => {
+  it('M-4 the library page has exactly the six registry groups (no Bots group)', async () => {
     expect(await mobile().groupsIn('library')).toEqual(REGISTRY_GROUPS)
   })
 
@@ -868,28 +870,25 @@ describe('phone layout: the shell', () => {
     await backToList()
   })
 
-  it('M-10 a bot row in the library opens its notebook on the chat page; back lands on the library; re-tapping it reopens', async () => {
-    await mobile().tap({ tab: 'library' })
-    await until(async () => (await mobile().activeTab()) === 'library', 'the library tab')
-    await botsPane(page()).expand()
-    await until(async () => (await botsPane(page()).rows()).includes(BOT), 'the bot row')
-    await mobile().tap({ botRow: BOT })
-    await until(
-      async () => (await mobile().chatOpen()) && (await mobile().chatNotebook()),
-      'the bot notebook on the chat page'
-    )
-    await backToList()
-    expect(await mobile().activeTab()).toBe('library')
-    expect((await mobile().pageDisplays()).library).not.toBe('none')
-    // 此刻它正是活跃会话：再点一次照样推回对话页
-    await mobile().tap({ botRow: BOT })
-    await until(
-      async () => (await mobile().chatOpen()) && (await mobile().chatNotebook()),
-      'the bot notebook again after re-tapping the active row'
-    )
-    await backToList()
-    await mobile().tap({ tab: 'sessions' })
-    await until(async () => (await mobile().activeTab()) === 'sessions', 'the sessions tab')
+  it('M-10 holding a bot group header on the sessions page → "Edit bot" opens its notebook on the chat page; back lands on the sessions page; again reopens', async () => {
+    await toTab('sessions')
+    const dom = webClientPane(page())
+    for (const what of ['first', 'again (the notebook is the active session now)']) {
+      await mobile().longPress({ botGroup: BOT }, 800)
+      const menu = await until(() => dom.domMenu(), `the bot group menu (${what})`)
+      expect(menu.map((m) => m.label)).toEqual(
+        expect.arrayContaining([en.sidebar.newChat, en.sidebar.editBot, en.sidebar.archiveBot])
+      )
+      expect(await mobile().chatOpen()).toBe(false)
+      await mobile().tap({ domMenuItem: en.sidebar.editBot })
+      await until(
+        async () => (await mobile().chatOpen()) && (await mobile().chatNotebook()),
+        `the bot notebook on the chat page (${what})`
+      )
+      await backToList()
+      expect(await mobile().activeTab()).toBe('sessions')
+      expect((await mobile().pageDisplays()).sessions).not.toBe('none')
+    }
   })
 
   it('M-11 the chat page has none of the desktop header buttons; the title opens the session config', async () => {

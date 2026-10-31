@@ -1,6 +1,8 @@
 import { v7 as uuidv7 } from 'uuid'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+import { workProjectOf } from '@shuvix/chat-protocol/botSession'
 import { projectDao } from '../dao/projectDao'
+import { sessionRecords } from './sessionRecords'
 import { appEventBus } from '../utils/appEventBus'
 import type { Project, ProjectSettings } from '../types'
 import { basename, resolve } from 'path'
@@ -126,13 +128,23 @@ export class ProjectService {
       if (params.tool !== undefined) current.tool = { ...(current.tool || {}), ...params.tool }
       settingsUpdate = current
     }
+    const newPath = params.path !== undefined ? resolve(expandPath(params.path)) : undefined
     projectDao.update(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
-      ...(params.path !== undefined ? { path: resolve(expandPath(params.path)) } : {}),
+      ...(newPath !== undefined ? { path: newPath } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
       ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })
+    // 引用这个项目当工作位置的 bot 会话（只归属 bot、不是成员）记着一份项目路径的快照 —— 项目被删时退回那里。
+    // 项目搬了家，快照跟着搬：否则删掉项目之后它退回的是一个已经不在的旧路径
+    if (newPath !== undefined) {
+      for (const s of sessionRecords.findAll()) {
+        if (workProjectOf(s.settings) === id && s.settings.workingDirectory !== newPath) {
+          sessionRecords.updateSettings(s.id, { workingDirectory: newPath })
+        }
+      }
+    }
     appEventBus.publish({ type: 'project.changed' })
   }
 

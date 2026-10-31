@@ -25,6 +25,7 @@
  * 可勾，和项目库一样不归选择管。
  */
 import { existsSync } from 'fs'
+import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
 import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import { shuvixFileKindOfProject } from '@shuvix/chat-protocol/shuvixFileNotes'
@@ -74,11 +75,14 @@ const BUILTIN_GUIDE_LABEL =
   "ShuviX's own reference (read-only): how its agent, bot, policy and hook files, knowledge entries and skills are written, and where they live"
 
 /**
- * 会话所属的项目。隐藏载体项目（`__agents__` / `__knowledge__` …，侧栏打开 md 时挂的壳）不算：
- * 它们没有「这个项目学到了什么」可言，否则每个笔记本会话都会凭空多出一个隐式项目库
+ * 会话所属的项目（bot 会话：它引用的工作项目 —— 它不是项目的成员，项目知识库照样跟着项目来）。隐藏载体项目
+ * （`__agents__` / `__knowledge__` …，侧栏打开 md 时挂的壳）不算：它们没有「这个项目学到了什么」可言，否则每个
+ * 笔记本会话都会凭空多出一个隐式项目库
  */
 function rootProject(rootSessionId: string): Project | undefined {
-  const projectId = sessionRecords.pick(rootSessionId, ['projectId'])?.projectId
+  const projectId = projectContextIdOf(
+    sessionRecords.pick(rootSessionId, ['projectId', 'settings'])
+  )
   return projectId && !isHiddenProjectId(projectId) ? projectDao.findById(projectId) : undefined
 }
 
@@ -139,7 +143,7 @@ export function selectedBaseNames(rootSessionId: string): string[] {
   const fromParent = parent?.settings?.knowledgeBases
   if (Array.isArray(fromParent)) return sanitize(fromParent)
 
-  const fromProject = projectSelection(row?.projectId ?? parent?.projectId ?? null)
+  const fromProject = projectSelection(projectContextIdOf(row) ?? projectContextIdOf(parent))
   if (fromProject) return fromProject
 
   return []
@@ -275,6 +279,6 @@ export function knowledgeBaseOptions(rootSessionId?: string): {
   const explicit =
     Array.isArray(row?.settings?.knowledgeBases) ||
     Array.isArray(parent?.settings?.knowledgeBases) ||
-    !!projectSelection(row?.projectId ?? parent?.projectId ?? null)
+    !!projectSelection(projectContextIdOf(row) ?? projectContextIdOf(parent))
   return { options, selected: selectedBaseNames(rootSessionId), explicit }
 }

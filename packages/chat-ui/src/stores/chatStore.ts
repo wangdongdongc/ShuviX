@@ -101,6 +101,13 @@ export interface SessionSettings {
   enabledTools?: string[]
   /** 绑定的 bot；有值即为 bot 会话（普通有根会话，根档案 bot）。判定经 chat-protocol 的 isBotSessionSettings */
   bot?: string
+  /**
+   * bot 会话（及其子会话、fork）引用的工作项目 id：bot 会话只归属 bot、projectId 恒为空，项目只是它干活的地方。
+   * 判定经 chat-protocol 的 projectContextIdOf / workProjectOf
+   */
+  workProject?: string
+  /** 触发器开出来的运行会话（侧栏折进 bot 组的「定时运行」那一行） */
+  triggerRun?: boolean
   /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目外的文件为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */

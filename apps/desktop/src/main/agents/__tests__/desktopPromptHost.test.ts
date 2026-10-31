@@ -3,6 +3,9 @@
  * 都按根会话解析、交回**原文**（围栏由运行时的段落统一加），每次请求准备时现调 —— 不缓存。
  *
  * 指令文件走**真的** resolveInstructionContent（临时目录）；项目 / 会话 / 知识库 / bot 是替身。
+ *
+ * H11-57b：bot 会话只归属 bot（projectId 空），项目提示词跟着它引用的工作项目（settings.workProject）来；
+ * 先看 projectId，没有才读引用。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -11,6 +14,8 @@ import { join } from 'node:path'
 
 const mocks = vi.hoisted(() => ({
   pick: vi.fn(),
+  /** 会话设置（sessionProject 在没有 projectId 时读 workProject，H11-57b）；缺省 undefined */
+  pickSettings: vi.fn(),
   projectPick: vi.fn(),
   resolveProjectConfig: vi.fn(),
   enabledBaseChoices: vi.fn(),
@@ -23,7 +28,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 }))
 vi.mock('../../services/sessionRecords', () => ({
-  sessionRecords: { pick: mocks.pick, pickSettings: () => undefined }
+  sessionRecords: { pick: mocks.pick, pickSettings: mocks.pickSettings }
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
@@ -123,6 +128,35 @@ describe('resolveProjectPrompt', () => {
     expect(await host.resolveProjectPrompt!('s1')).toBe('Be kind.')
     mocks.pick.mockReturnValue(undefined)
     expect(await host.resolveProjectPrompt!('s1')).toBeNull()
+  })
+
+  it('H11-57b bot 会话不是项目的成员（projectId 空）：项目提示词跟着它引用的工作项目（settings.workProject）来', async () => {
+    mocks.pick.mockReturnValue({ projectId: null })
+    mocks.pickSettings.mockReturnValue({ workProject: 'p2' })
+    mocks.projectPick.mockImplementation((id: string) =>
+      id === 'p2' ? { name: 'Two', path: '/w/two', systemPrompt: ' Ship it. ' } : undefined
+    )
+    expect(await host.resolveProjectPrompt!('b1')).toBe('Ship it.')
+    expect(mocks.pickSettings).toHaveBeenCalledWith('b1', ['workProject'])
+    expect(mocks.projectPick.mock.calls.map((c) => c[0])).toEqual(['p2'])
+
+    // 引用的项目已被删 → null
+    mocks.projectPick.mockReturnValue(undefined)
+    expect(await host.resolveProjectPrompt!('b1')).toBeNull()
+  })
+
+  it('H11-57b 先看 projectId：成员会话不读 workProject；空白引用不算、不查项目表', async () => {
+    mocks.pick.mockReturnValue({ projectId: 'p1' })
+    mocks.pickSettings.mockReturnValue({ workProject: 'p2' })
+    expect(await host.resolveProjectPrompt!('s1')).toBe('Be terse.')
+    expect(mocks.projectPick.mock.calls.map((c) => c[0])).toEqual(['p1'])
+    expect(mocks.pickSettings).not.toHaveBeenCalled()
+
+    mocks.projectPick.mockClear()
+    mocks.pick.mockReturnValue({ projectId: null })
+    mocks.pickSettings.mockReturnValue({ workProject: '   ' })
+    expect(await host.resolveProjectPrompt!('b2')).toBeNull()
+    expect(mocks.projectPick).not.toHaveBeenCalled()
   })
 })
 

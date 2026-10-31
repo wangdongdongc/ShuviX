@@ -25,7 +25,9 @@
  * 记下「这条会话用过这个组件」（widgetService.noteSessionUse；会话行的项目经 sessionRecords.pick）：
  *   TL-L1  create / call / build / preview / sql / export / open 各恰记一次 (id, 's1', null)：在门之后（export 在路径的
  *          写门之后），create 在授予之后、用去了空白的 id，open 在开窗口之后
- *   TL-L2  pick 按 ('s1', ['projectId']) 读；会话在项目 p1 里 → 记 'p1'
+ *   TL-L2  pick 按 ('s1', ['projectId', 'settings']) 读（bot 会话引用的工作项目在 settings 里）；会话在项目 p1 里 → 记 'p1'
+ *   TL-L2b bot 会话（及其子会话）只归属 bot：记它引用的工作项目（settings.workProject）；成员关系优先；
+ *          引用隐藏承载项目 / 空白引用 → null
  *   TL-L3  隐藏的承载项目（__knowledge__ / __agents__）、空串、读不到会话行 → 记 null
  *   TL-L4  门拒绝（五个带门的动作）、export 路径的写门拒绝、门挂着时取消 → 不记
  *   TL-L5  参数不对（组件缺 / 不是 id / 不在 / 归档了；call 缺 op、没有这个操作、没有 API、纯界面操作不带 dry_run；
@@ -1784,11 +1786,27 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     }
   )
 
-  it('TL-L2 读会话行按 (s1, [projectId])；会话在项目 p1 里 → 记 p1', async () => {
+  it('TL-L2 读会话行按 (s1, [projectId, settings])；会话在项目 p1 里 → 记 p1', async () => {
     state.pickSession.mockReturnValue({ projectId: 'p1' })
     textOf(await runUse(useOf('call')))
-    expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId']]])
+    expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId', 'settings']]])
     expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', 'p1']])
+  })
+
+  it.each<[string, unknown, string | null]>([
+    [
+      '引用 p2 的 bot 会话',
+      { projectId: null, settings: { bot: 'scout', workProject: 'p2' } },
+      'p2'
+    ],
+    ['引用 p2 的子会话（没有 bot 键）', { projectId: null, settings: { workProject: 'p2' } }, 'p2'],
+    ['成员关系优先于引用', { projectId: 'p1', settings: { workProject: 'p2' } }, 'p1'],
+    ['引用隐藏承载项目', { projectId: null, settings: { workProject: '__agents__' } }, null],
+    ['空白引用', { projectId: null, settings: { workProject: '  ' } }, null]
+  ])('TL-L2b %s → 记 %s', async (_l, row, expected) => {
+    state.pickSession.mockReturnValue(row)
+    textOf(await runUse(useOf('call')))
+    expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', expected]])
   })
 
   it.each<[string, unknown]>([
@@ -2006,7 +2024,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
       )
     )
     expect(agentOf).toHaveBeenCalledWith(2)
-    expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId']]])
+    expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId', 'settings']]])
     expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', 'p1']])
   })
 })

@@ -29,6 +29,7 @@ import {
 import type { TriggerOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { basename } from 'path'
 import { botService, type BotEntry } from './botService'
+import { projectService } from './projectService'
 import { sessionService } from './sessionService'
 import { settingsService } from './settingsService'
 import { commitTrackingChanges, ensureTrackingDir } from './trackingNotes'
@@ -192,12 +193,34 @@ export class BotTriggerService {
       const firedAt =
         typeof payload.firedAt === 'string' ? payload.firedAt : new Date().toISOString()
 
+      // 绑定写了 project：按名字找没归档的项目（大小写不敏感）。找不到、或有不止一个同名项目 —— 这一次不跑，记进
+      // 触发日志：改在临时里跑，bot 找不到它要的文件，跑出来的结果只会让人困惑（用户 2026-10-31）
+      let workProject: string | undefined
+      if (binding.project) {
+        const wanted = binding.project.toLowerCase()
+        const hits = projectService.list().filter((p) => p.name.trim().toLowerCase() === wanted)
+        if (hits.length !== 1) {
+          const error =
+            hits.length === 0
+              ? `Project "${binding.project}" not found`
+              : `More than one project is named "${binding.project}"`
+          log.warn(`bot "${entry.file.name}": ${error} — this run is skipped`)
+          triggerLogService.record({ ...logBase, outcome: 'failed', sessionId: '', error })
+          return
+        }
+        workProject = hits[0].id
+      }
+
       // 跟踪项目录先建好：不在时 bot 会去翻上一层找它，撞上一张没人回答的询问（见 ensureTrackingDir）
       ensureTrackingDir()
-      const session = sessionService.create({
-        bot: entry.file.name,
-        title: `${entry.file.displayName} · ${localStamp(payload)}`
-      })
+      const session = sessionService.create(
+        {
+          bot: entry.file.name,
+          title: `${entry.file.displayName} · ${localStamp(payload)}`,
+          ...(workProject ? { workProject } : {})
+        },
+        { triggerRun: true }
+      )
       const origin: TriggerOrigin = {
         kind: 'trigger',
         trigger,

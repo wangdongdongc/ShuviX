@@ -404,6 +404,7 @@ describe('BX —— v1 文件（带已拆除的管线块）', () => {
  * PB —— `shuvix-bot-on` 触发绑定（2026-10-24）：`[{trigger, when?, message}]`。与 hook 的 `shuvix-hook-on`
  * 同一张埋点表、同一套 CEL `when`，多一个 `message`。bot 只能绑**全局**埋点（timer.fired）—— 会话域埋点
  * 每轮都发，而 bot 每次触发都新建一条会话。结构非法整份拒绝；未知埋点 id 惰性化 + 软提示（同 hook）。
+ * 可选的 `project`（2026-10-31，PB-16）：运行会话的工作位置，一个项目名；名字怎么找到项目归宿主（botTriggerService）。
  */
 describe('PB —— shuvix-bot-on 触发绑定', () => {
   /** 最小 bot + 绑定行（缩进由调用方写好） */
@@ -509,11 +510,11 @@ describe('PB —— shuvix-bot-on 触发绑定', () => {
   })
 
   it.each(['debounce', 'agent', 'on'])(
-    'PB-8 绑定里的多余键 %s → 整份拒绝，点名那个键与「只有 trigger / when / message」',
+    'PB-8 绑定里的多余键 %s → 整份拒绝，点名那个键与「只有 trigger / when / message / project」',
     (key) => {
       const reason = rejectReason(withOn(`${BOT_ON_KEY}:`, ...TIMER, `    ${key}: x`))
       expect(reason).toContain(`binding 'timer.fired': unknown key '${key}'`)
-      expect(reason).toContain('only trigger, when and message')
+      expect(reason).toContain('only trigger, when, message and project')
     }
   )
 
@@ -651,6 +652,51 @@ describe('PB —— shuvix-bot-on 触发绑定', () => {
         message: 'Go through the sessions.'
       }
     ])
+  })
+
+  // 设计清单里叫 PB-9；本块的 PB-9 已是 message 那条，顺延成 PB-16
+  it('PB-16 project（运行会话的工作位置，项目名）：trim 后保留；没写 / 写成 ~ 没有这个键；坏值整份拒绝', () => {
+    const named = parseWithWarn(
+      withOn(`${BOT_ON_KEY}:`, ...TIMER, "    project: '  Acme Site  '", "    when: 'true'")
+    )
+    expect(named.messages).toEqual([])
+    expect(named.result?.bindings).toStrictEqual([
+      { trigger: 'timer.fired', when: 'true', message: 'Tick.', project: 'Acme Site' }
+    ])
+
+    for (const extra of [[], ['    project: ~']]) {
+      const { result, messages } = parseWithWarn(withOn(`${BOT_ON_KEY}:`, ...TIMER, ...extra))
+      expect(messages).toEqual([])
+      expect(result?.bindings).toStrictEqual([{ trigger: 'timer.fired', message: 'Tick.' }])
+      expect('project' in result!.bindings![0]).toBe(false)
+    }
+
+    for (const value of ["''", "'   '", '42', '[a, b]', '{name: x}', 'true']) {
+      expect(
+        rejectReason(withOn(`${BOT_ON_KEY}:`, ...TIMER, `    project: ${value}`)),
+        value
+      ).toContain(
+        "binding 'timer.fired': 'project' must be a project name (omit it to run in a temporary workspace)"
+      )
+    }
+  })
+
+  it('PB-16 （钉现状）project 的检查在 message 之后、埋点作用域之前：坏 project + 未知埋点 → 按 project 拒绝，没有 inert 软提示', () => {
+    const { result, messages } = parseWithWarn(
+      withOn(
+        `${BOT_ON_KEY}:`,
+        '  - trigger: webhook.received',
+        '    message: Hook came.',
+        '    project: 7'
+      )
+    )
+    expect(result).toBeNull()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain("binding 'webhook.received': 'project' must be a project name")
+    // 缺 message + 坏 project → message 先
+    expect(
+      rejectReason(withOn(`${BOT_ON_KEY}:`, '  - trigger: timer.fired', '    project: 7'))
+    ).toContain("'message' must be the non-empty text sent to the bot")
   })
 })
 

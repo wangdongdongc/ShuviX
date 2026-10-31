@@ -251,7 +251,11 @@ export const API_TABLE = {
     list: invoke('bot:list', 0),
     openNote: invoke('bot:openNote', 1),
     createNew: invoke('bot:createNew', 0),
-    delete: invoke('bot:delete', 1),
+    archive: invoke('bot:archive', 1),
+    listArchived: invoke('bot:listArchived', 0),
+    restore: invoke('bot:restore', 1),
+    deleteArchived: invoke('bot:deleteArchived', 1),
+    deleteSessions: invoke('bot:deleteSessions', 1),
     deleteByFile: invoke('bot:deleteByFile', 1),
     openFolder: invoke('bot:openFolder', 0)
   },

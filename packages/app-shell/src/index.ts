@@ -42,15 +42,9 @@ export type { SessionItemProps } from './sidebar/SessionItem'
 export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
-export type { ProjectSessionGroupsProps } from './sidebar/ProjectSessionGroups'
+export type { ProjectSessionGroupsProps, BotsSectionCaps } from './sidebar/ProjectSessionGroups'
 export { Sidebar } from './sidebar/Sidebar'
 export type { SidebarProps, SidebarCaps } from './sidebar/Sidebar'
-export { BotSessionDialog } from './sidebar/BotSessionDialog'
-export type {
-  BotSessionDialogProps,
-  BotPickItem,
-  SidebarBotsAdapter
-} from './sidebar/BotSessionDialog'
 export { CalendarView } from './sidebar/CalendarView'
 export type { CalendarViewProps } from './sidebar/CalendarView'
 export { DayReportHeader } from './sidebar/DayReportHeader'
@@ -72,14 +66,15 @@ export type {
 } from './sidebar/knowledgeTree'
 export { TrackingGroup } from './sidebar/TrackingGroup'
 export type { TrackingGroupProps, TrackingGroupAdapter } from './sidebar/TrackingGroup'
-export { BotGroup } from './sidebar/BotGroup'
+export { useBotRegistry } from './sidebar/useBotRegistry'
 export type {
-  BotGroupProps,
   BotGroupAdapter,
   BotGroupItem,
   BotGroupShadowedItem,
-  BotGroupInvalidFile
-} from './sidebar/BotGroup'
+  BotGroupInvalidFile,
+  BotRegistry,
+  BotSessionLocation
+} from './sidebar/useBotRegistry'
 export { AgentGroup } from './sidebar/AgentGroup'
 export type {
   AgentGroupProps,

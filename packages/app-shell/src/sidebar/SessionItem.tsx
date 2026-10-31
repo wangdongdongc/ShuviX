@@ -47,6 +47,11 @@ export interface SessionItemProps {
   onSelect: (id: string) => void
   /** 行菜单（右键整行 / 点行尾的 ⋮ 走的是同一个回调）；缺省即无 ⋮ 也无右键 */
   onMenu?: (id: string, e: React.MouseEvent) => void
+  /**
+   * 行尾一小段灰字：这条会话在哪干活（bot 会话 —— 同一个 bot 的会话散在不同项目里，行上不标就分不清：项目名或「临时」）。
+   * 缺省不画
+   */
+  location?: string
   // —— 桌面专属（可选） ——
   isPinned?: boolean
 }
@@ -66,6 +71,7 @@ export function SessionItem({
   onToggleSubs,
   onSelect,
   onMenu,
+  location,
   isPinned = false
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -135,6 +141,15 @@ export function SessionItem({
             }`}
           >
             {subCount}
+          </span>
+        )}
+        {location && (
+          <span
+            data-session-location=""
+            title={location}
+            className="ml-auto min-w-0 max-w-[45%] shrink truncate text-[0.85em] text-text-tertiary group-hover:invisible"
+          >
+            {location}
           </span>
         )}
         {interrupted && !isStreaming && (

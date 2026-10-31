@@ -7,6 +7,7 @@
  *     - 父会话在列表里（含 P 自己）→ parentTitle = 它的标题；父会话不在列表里 → 没有 parentTitle；
  *     - 缺的字段是**没有这个键**，不是 undefined 值（项目名为空串 / 父会话标题为空串同样不给）；
  *     - 只给 id / title / projectName / parentTitle / lastActiveAt，不带 settings 之类。
+ *   XS-69b bot 会话（只归属 bot、projectId 空）的 projectName 是它引用的工作项目（settings.workProject）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '../../dao/types/session'
@@ -141,5 +142,30 @@ describe('listSessionMentions（XS-69）', () => {
     mocks.sessions = []
     expect(listSessionMentions('P')).toEqual([])
     expect(mocks.pick).not.toHaveBeenCalled()
+  })
+
+  it('XS-69b bot 会话（projectId 空）标它引用的工作项目名；成员关系照旧优先；与成员会话共用一次读', () => {
+    const withSettings = (s: Session, settings: Record<string, unknown>): Session => ({
+      ...s,
+      settings: { ...s.settings, ...settings } as Session['settings']
+    })
+    mocks.sessions = [
+      withSettings(session('bot', 5), { bot: 'scout', workProject: 'p-web' }),
+      session('member', 4, { projectId: 'p-web' }),
+      withSettings(session('gone', 3), { bot: 'scout', workProject: 'p-gone' }),
+      withSettings(session('blank', 2), { bot: 'scout', workProject: '  ' }),
+      // 成员会话碰巧带着引用键（不该有）：所属项目说了算
+      withSettings(session('both', 1, { projectId: 'p-web' }), { workProject: 'p-other' })
+    ]
+    const list = listSessionMentions('P')
+    expect(list.map((e) => [e.id, e.projectName])).toEqual([
+      ['bot', 'Website'],
+      ['member', 'Website'],
+      ['gone', undefined],
+      ['blank', undefined],
+      ['both', 'Website']
+    ])
+    expect(list.find((e) => e.id === 'gone')).not.toHaveProperty('projectName')
+    expect(mocks.pick.mock.calls.map((c) => c[0]).sort()).toEqual(['p-gone', 'p-web'])
   })
 })

@@ -1,6 +1,8 @@
 /**
  * bot 会话的呈现（BD-5…11）—— 头部身份胶囊（BotBindingChip）、空会话里 bot 的自我介绍
- * （BotEmptyState）、侧栏行首的 bot 身份图标与子会话折叠钮（SessionItem）。
+ * （BotEmptyState）、侧栏行首的 bot 身份图标与子会话折叠钮（SessionItem）。bot 会话只归属 bot：侧栏里它们都在
+ * 「Bots」分节各自 bot 的组里（缺省折叠 —— 折叠只收高度，行仍在 DOM 里，按标题点得到）；md 在 ShuviX 之外被删的
+ * 那一组成了「找不到文件」的组，行照旧在。
  *
  * 种子刻意让每个 bot 的 displayName ≠ name：胶囊在 `bot.list()` 回来之前顶的是身份键，回来之后
  * 才换成 displayName —— 两者一样的话，「查询落定了没有」在 DOM 上无从分辨。
@@ -11,7 +13,7 @@
  * 全程无 LLM。唯一需要消息的 BD-8 走 promptAndListMessages（隔离实例无 API key，turn 在用户
  * 消息落树之后才失败 —— 同 sessions/sidebar-row-menu 的做法）。
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
@@ -26,6 +28,7 @@ import {
 import {
   botChip,
   botIntro,
+  botsPane,
   chatPane,
   sidebarPane,
   type BotChipPane,
@@ -42,9 +45,11 @@ const PLAIN = 'BDV-plain'
 /** 临时组里的两条 bot 会话 —— BD-5 / BD-7 在它们之间直接切换 */
 const SCOUT = 'BDV-scout'
 const ALPHA = 'BDV-alpha'
-/** 项目组里的 bot 会话（BD-9 把组折上 —— 折叠只收高度，行仍在 DOM 里） */
+/**
+ * 旧入口带着 projectId 建的 bot 会话：不进项目组，项目记成工作位置的引用，行在 scout 组里（BD-9 把组折上）
+ */
 const SCOUT_PROJ = 'BDV-scout-proj'
-/** 绑定的 md 在任何会话被打开之前就删了 */
+/** 绑定的 md 在任何会话被打开之前就（在 ShuviX 之外）删了 */
 const GHOST = 'BDV-ghost'
 /** 各用例现建的一次性夹具 */
 const WITH_MSG = 'BDV-scout-msg'
@@ -112,7 +117,7 @@ beforeAll(async () => {
   // displayName 与 name 故意不同（见文件头）；description 显式种上 —— 卡片只在它非空时才渲染描述
   writeBotMd(app, 'scout', { displayName: 'Scout Prime', description: 'BDV scout intro' })
   writeBotMd(app, 'alpha', { displayName: 'Alpha Prime', description: 'BDV alpha intro' })
-  writeBotMd(app, 'ghost', { displayName: 'Ghost Display', description: '' })
+  const ghostFile = writeBotMd(app, 'ghost', { displayName: 'Ghost Display', description: '' })
 
   const projDir = join(app.home, 'proj-bdv')
   mkdirSync(projDir, { recursive: true })
@@ -130,11 +135,10 @@ beforeAll(async () => {
   })
   sids.ghost = await createBotSession(app.main, { bot: 'ghost', title: GHOST })
 
-  // 在任何会话被打开之前删：胶囊与空态的第一次查询里它就已经不在了
-  const removed = await app.main.eval<{ success: boolean; error?: string }>(
-    `window.api.bot.delete({ name: 'ghost' })`
-  )
-  if (!removed.success) throw new Error(`seed: bot.delete(ghost) failed: ${removed.error}`)
+  // 在任何会话被打开之前、在 ShuviX 之外删（ShuviX 里只能归档）：胶囊与空态的第一次查询里它就已经不在了
+  rmSync(ghostFile)
+  // 分节一挂上就扫了（那时 md 都还没落盘）—— 磁盘外写入不广播 bot.changed，刷新一次
+  await botsPane(app.main).refresh()
 
   await until(async () => {
     const titles = await sidebar.titles()
@@ -237,9 +241,19 @@ describe('空会话里的自我介绍', () => {
 })
 
 describe('侧栏行首的身份图标', () => {
-  it('BD-9 bot 会话行的行首是 bot 图标（md 删了也是、在折叠的项目组里也是），普通会话行不是', async () => {
-    // 折叠只把高度收成 0，行仍在 DOM 里 —— 显式折上，让「折叠组里」这半条不靠首载默认
-    await sidebar.setGroupExpanded({ project: PROJECT }, false)
+  it('BD-9 bot 会话行的行首是 bot 图标（md 删了也是、在折叠的 bot 组里也是），普通会话行不是；旧入口给的项目不进项目组', async () => {
+    // 折叠只把高度收成 0，行仍在 DOM 里 —— 显式折上，让「折叠组里」这半条不靠缺省
+    const bots = botsPane(app.main)
+    await bots.setGroupExpanded('scout', false)
+    expect((await bots.groupSessions('scout')).map((r) => r.title)).toEqual(
+      expect.arrayContaining([SCOUT, SCOUT_PROJ])
+    )
+    expect((await bots.groupSessions('scout')).find((r) => r.title === SCOUT_PROJ)?.location).toBe(
+      PROJECT
+    )
+    expect((await bots.missingGroupSessions('ghost')).map((r) => r.title)).toEqual([GHOST])
+    await sidebar.setGroupExpanded({ project: PROJECT }, true)
+    expect(await sidebar.groupRows({ project: PROJECT })).toEqual([])
 
     expect(await sidebar.rowIcon(SCOUT)).toBe('bot')
     expect(await sidebar.rowIcon(GHOST)).toBe('bot')
@@ -253,7 +267,7 @@ describe('侧栏行首的身份图标', () => {
 })
 
 describe('会话开着时注册表变了', () => {
-  it('BD-10 删掉正开着的会话绑定的 md：胶囊跟上标缺失，自我介绍卡也退场', async () => {
+  it('BD-10 归档正开着的会话绑定的 bot：胶囊跟上标缺失，自我介绍卡也退场', async () => {
     writeBotMd(app, 'live', { displayName: 'Live One' })
     await createBotSession(app.main, { bot: 'live', title: LIVE })
     await waitRow(LIVE)
@@ -261,11 +275,11 @@ describe('会话开着时注册表变了', () => {
     await waitChip('live', 'Live One')
     await waitIntroCard('live')
 
-    // botService 每次落盘都广播 bot.changed —— 两个组件都得靠它重查，而不是等下次打开会话
-    const removed = await app.main.eval<{ success: boolean }>(
-      `window.api.bot.delete({ name: 'live' })`
+    // 归档广播 bot.changed —— 两个组件都得靠它重查，而不是等下次打开会话
+    const archived = await app.main.eval<{ success: boolean }>(
+      `window.api.bot.archive({ name: 'live' })`
     )
-    expect(removed.success).toBe(true)
+    expect(archived.success).toBe(true)
 
     await waitChipMissing('live', 5_000)
     await until(

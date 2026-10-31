@@ -109,8 +109,12 @@ injection lasts for the whole conversation.
   another session sent in, do not count); the function is only queried when evaluation reaches it, so put cheap
   conditions on the left.
 - `message` — required, what is sent to the bot when it fires.
+- `project` — optional, the name of the project the run works in (an archived project does not count; letter case
+  does not matter). Without it the run gets a temporary workspace. When no project, or more than one, has that name,
+  the run is skipped and the trigger log records why. ShuviX versions before this key existed reject a bot file that uses it.
 
-When a binding fires, ShuviX opens a new ordinary temporary session bound to this bot (titled "display name · time"),
+When a binding fires, ShuviX opens a new session bound to this bot — in the binding's project, or in a temporary
+workspace — (titled "display name · time"; in the sidebar it is folded into the bot's **Scheduled runs** row),
 sends `message` as a user message whose origin is "trigger", and appends a `<trigger_event>` fence: every field of
 the event plus `lastFiredAt` — when this binding fired last, so the bot can handle what happened since. While the
 previous run of the same binding is still going (waiting on an approval card included) a firing is skipped;
@@ -136,11 +140,20 @@ read the last 7 days of sessions, read the diary folder, and read and write the 
 
 ## A bot chat
 
-A **bot session** is a session created with `settings.bot = <name>` (sidebar → a project group's
-menu → "new bot chat" → pick a bot). The binding is decided at creation and **never changed** —
-switching bots means a new session, because the history is that bot's words. Otherwise it is an
-ordinary rooted session: model picker, extensions, compaction, export, sub-sessions and
-background auto-resume all work as usual.
+A **bot session** is a session created with `settings.bot = <name>`: in the sidebar's **Bots** section, the bot's
+**+** (or its menu → New chat) first asks where it should work — one of your projects, a folder opened as a new
+project, or Temporary — and only then creates the session; there is no default. The binding is decided at creation
+and **never changed** — switching bots means a new session, because the history is that bot's words.
+
+A bot session **belongs to its bot, not to a project**: it is listed only under the bot (with where it works at the
+end of the row), never in a project group or under temporary chats. When it works in a project, the project is a
+reference (`settings.workProject`, plus a snapshot of the project's folder in `settings.workingDirectory`): the session
+uses that project's folder, knowledge base, project prompt and environment variables, and starts with the project's
+saved extensions and knowledge bases — but archiving or deleting the project does not touch it. After the project is
+deleted it keeps working in the snapshot folder, without the project's settings. The location cannot change once the
+session exists; to work somewhere else, start a new chat — the bot's memory is in its file, so it still knows you.
+Otherwise it is an ordinary rooted session: model picker, extensions, compaction, export, sub-sessions (which work
+where their parent works) and background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
 `read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill` —
@@ -155,13 +168,17 @@ CLAUDE.md are conventions for the sub-session that does the coding). The base ca
 
 ## Lifecycle notes
 
-- **Editing** a bot = opening its file in ShuviX (the Bots group row) as a notebook session:
+- **Editing** a bot = opening its file in ShuviX (the bot's menu → Edit bot) as a notebook session:
   live preview, property card, autosave. There is no bot page and no Save button.
 - **Renaming** through the frontmatter `name` migrates the sessions bound to the old name when
   ShuviX next scans the directory (it compares each file's name with what it saw last time); a
   rename done while ShuviX is closed, or while the old or new name is still used by another
   file, is not migrated.
-- **Deleting** the file leaves its sessions untouched (they are the user's); their header chip
-  shows the bot as gone and they simply run on the base without the persona.
+- **Archiving** a bot (its menu → Archive) moves its file into `~/.shuvix/bots/archived/`: the bot and its sessions
+  leave the sidebar and the calendar, its bindings stop firing, and Settings → Archived → Bots restores it.
+  **Deleting** happens there, like a project, and takes the bot's sessions (sub-sessions included) with it — unless
+  another file still holds the same name, since sessions are bound by name.
+- A bot file deleted **outside ShuviX** leaves its sessions in a greyed group under the bot's name, whose menu deletes
+  them; a file with that name coming back takes them over again.
 - Same-name copies follow the rule in the `shuvix-files` entry — the losing copies are shown
   under the winner, struck through.

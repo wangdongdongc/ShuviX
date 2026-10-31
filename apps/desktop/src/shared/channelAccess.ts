@@ -210,7 +210,11 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'bot:list': 'read',
   'bot:openNote': 'admin', // bot 文件的编辑器
   'bot:createNew': 'admin',
-  'bot:delete': 'admin',
+  'bot:archive': 'admin',
+  'bot:listArchived': 'read',
+  'bot:restore': 'admin',
+  'bot:deleteArchived': 'admin', // 连同它的会话
+  'bot:deleteSessions': 'admin',
   'bot:deleteByFile': 'admin',
   'bot:openFolder': 'write',
 
