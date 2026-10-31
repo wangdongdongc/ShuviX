@@ -225,13 +225,32 @@ describe('日历上的日报', () => {
     expect(rejected).toBe(true)
     expect(existsSync(join(app.home, '.shuvix', 'daily', `${day}.md`))).toBe(false)
 
-    // 点月历上今天的下一格（跨月时下个月首日在 outside 格里，同样可点）
-    await evalCal(`(() => {
+    // 点月历上今天的下一格。月外的格子不画按钮（2026-10-31 周六：下一格 11 月 1 日是隐藏的月外格，
+    // 这条用例在月末那天一直挂）—— 那时翻到下个月，再点它的第一天
+    const clickedInMonth = await evalCal<boolean>(`(() => {
       const cells = [...${CAL}.querySelectorAll('.rdp-day')]
       const i = cells.findIndex((c) => c.classList.contains('rdp-today'))
-      cells[i + 1]?.querySelector('.rdp-day_button')?.click()
-      return true
+      const next = cells[i + 1]?.querySelector('.rdp-day_button')
+      if (next) {
+        next.click()
+        return true
+      }
+      ${CAL}.querySelector('.rdp-button_next')?.click()
+      return false
     })()`)
+    if (!clickedInMonth) {
+      await until(
+        () =>
+          evalCal<boolean>(`(() => {
+            // 隐藏的月外格同样带 rdp-today（翻过去之后上个月的今天还在网格里），只认当月的那一格
+            if (${CAL}.querySelector('.rdp-today:not(.rdp-outside)')) return false
+            const first = ${CAL}.querySelector('.rdp-day:not(.rdp-outside) .rdp-day_button')
+            first?.click()
+            return !!first
+          })()`),
+        'next month shown, its first day clicked'
+      )
+    }
     await until(
       () =>
         evalCal<boolean>(
