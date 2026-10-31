@@ -75,7 +75,9 @@ describe('bot 会话 = 一条普通有根会话', () => {
     expect(systemPrompt).toContain('<bot_profile name="scout"')
     expect(systemPrompt).toContain(BODY)
     expect(systemPrompt).toContain('</bot_profile>')
-    expect(systemPrompt).toContain('create-sub-session')
+    // 基座正文的锚点：记住这个人的那一节（2026-10-30 起 bot 正文不再引导子会话）
+    expect(systemPrompt).toContain('Remembering this person')
+    expect(systemPrompt).not.toContain('create-sub-session')
 
     // 基座判据：bot 的工具面（看得见、动不了 —— write / edit 只为记知识库条目与维护自己那份文件）
     const tools = await toolsOf(sid)

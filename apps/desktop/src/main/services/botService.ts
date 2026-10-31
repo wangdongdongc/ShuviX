@@ -509,7 +509,7 @@ class BotService {
         '',
         '## 我记得什么',
         '',
-        '（这一段归它自己。对话里出现的长期偏好、约定、结论，它会写进来。）'
+        '（这一段归它自己。它会把了解到的你的偏好按主题整理在这里，并随对话不断更新。）'
       ].join('\n')
     return serializeBotDefinitionFile({
       name: params.name,

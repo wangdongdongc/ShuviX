@@ -847,15 +847,20 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
     expect(BASE_PROFILE_NAMES.has(BOT_PROFILE_NAME)).toBe(true)
   })
 
-  it('RPer-2 三语正文都点名两个子会话动作与 coding —— 整套交接设计活在散文里', () => {
-    // 工具清单只说「它有 session 工具」，说不出「把活整包交出去、验收完再用自己的口吻汇报」。
-    // 那套流程没有任何机制承载，全部由这段正文表达 —— 翻译漏一个词就等于在那门语言里
-    // 静默关掉它（对照 work 档案的同名钉板）。后台派发、wait-for-sub-sessions、不要轮询
-    // 自 2026-10-12 起只由 session 工具描述教，正文不再重复，也就不再钉
+  it('RPer-2 三语正文都有「记住这个人」一节，且不再引导子会话', () => {
+    // 2026-10-30 起 bot 的倾向是持续记录、整理用户偏好，而不是拆活、写工单、验收：记什么、怎么整理
+    // 只由这一节表达（宿主前言只管机制），翻译漏掉它就等于在那门语言里静默关掉它。
+    // 子会话动作只由 session 工具描述教 —— 正文再点名，就把项目管理的倾向带回来了
+    const MEMORY_HEADING: Record<(typeof LANGS)[number], string> = {
+      en: '## Remembering this person',
+      zh: '## 记住这个人',
+      ja: '## この人を覚えておく'
+    }
     for (const language of LANGS) {
       const body = profile(BOT_PROFILE_NAME, language).systemPrompt
+      expect(body, `bot.${language}`).toContain(MEMORY_HEADING[language])
       for (const anchor of ['create-sub-session', 'prompt-session', 'agent_profile', '`coding`']) {
-        expect(body, `bot.${language} 需点名 ${anchor}`).toContain(anchor)
+        expect(body, `bot.${language} 不应点名 ${anchor}`).not.toContain(anchor)
       }
     }
   })

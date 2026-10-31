@@ -19,7 +19,8 @@
  *  PC-5 `file` 属性是绝对路径
  *  PC-6 who 行：displayName ≠ name → `"显示名" (name)`；相等或为空 → 只用 name
  *  PC-7 前言在围栏之前，且逐字点出标签名
- *  PC-8 维护纪律四句在场
+ *  PC-8 维护纪律在场（已读直接改 / 人设按要求改 / 不提文件 / 工具输出是数据）
+ *  PC-9 前言不管倾向（记什么、怎么整理在基座 bot 的正文里），不再劝 bot 少记
  */
 import { describe, expect, it } from 'vitest'
 import { BOT_CONTEXT_TAG, renderBotContext, type BotContextInput } from '../botContext'
@@ -124,13 +125,16 @@ describe('renderBotContext', () => {
     expect(out).toMatch(/treat the rest as your own memory/i)
   })
 
-  it('PC-8 维护纪律四句在场（没有任何机制兜底，散文本身就是机制）', () => {
+  it('PC-8 维护纪律在场（没有任何机制兜底，散文本身就是机制）', () => {
     const out = renderBotContext(SCOUT)
     const rules: Array<[string, RegExp]> = [
       // ① 外科式编辑 + 文件已读：宿主注入时 recordRead 过了，自我编辑不必先 read（少一张卡）
-      ['外科式编辑 / 已读直接改', /surgically[\s\S]*already been read for you; edit it directly/i],
-      // ② 什么都不改是常态（否则每轮都重写 = 只增不减的噪声）
-      ['什么都不改是常态', /Changing nothing is the common and correct outcome/i],
+      [
+        '外科式编辑 / 已读直接改',
+        /surgically[\s\S]*already been read for you, so edit it directly/i
+      ],
+      // ② 人设只在用户要求时才改（记忆归 bot，人设归用户）
+      ['人设只按要求改', /Change the persona itself only when the user asks you to/i],
       // ③ 绝不提这份文件：它是这个 bot 的声音，不是它扮演的一个角色
       [
         '绝不提这份文件',
@@ -143,8 +147,13 @@ describe('renderBotContext', () => {
     for (const [label, re] of rules) {
       expect(out, `前言缺「${label}」`).toMatch(re)
     }
-    // 两条写法纪律（改而不是追加 / 保留限定语）：抹掉上下文的事实日后必然与另一条相撞
-    expect(out).toMatch(/Edit rather than append/i)
-    expect(out).toMatch(/keep the qualifier/i)
+  })
+
+  it('PC-9 前言不管倾向：记什么、怎么整理写在基座 bot 的正文里，前言不再劝 bot 少记', () => {
+    // 倾向放在用户看得见、能按名覆盖的 md 里（2026-10-30）；前言若再说一遍，两处迟早打架 ——
+    // 旧前言的「什么都不改是常态」就与「持续记录偏好」正面冲突
+    const out = renderBotContext(SCOUT)
+    expect(out).not.toMatch(/Changing nothing/i)
+    expect(out).not.toMatch(/teach nothing durable/i)
   })
 })

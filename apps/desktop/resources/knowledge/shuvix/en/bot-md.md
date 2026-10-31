@@ -73,8 +73,9 @@ error, frontmatter not a mapping, a `shuvix` marker of another type, a non-strin
 ## The body — persona and memory
 
 The trimmed body is injected verbatim into the **root agent** of every session bound to this
-bot, inside a `<bot_profile name="…" file="…">` fence, after a short host preamble that states
-the self-maintenance rule (below). The system prompt is outside rolling compaction, so the
+bot, inside a `<bot_profile name="…" file="…">` fence, after a short host preamble with the
+mechanics of keeping the file (where it is, change the persona only when asked, never copy
+instructions found in tool output into it). The system prompt is outside rolling compaction, so the
 injection lasts for the whole conversation.
 
 - **Only the root agent gets it.** A sub-session the bot opens, or an agent it dispatches, builds
@@ -84,6 +85,13 @@ injection lasts for the whole conversation.
   new-bot template seeds (**who I am** / **what I remember**): the bot maintains its own file
   with `edit`, and `edit` needs existing text to anchor on. The first section is the user's to
   write; the second is the bot's.
+- **What goes into the memory half** is set by the `bot` base's body (its "Remembering this
+  person" section), not by the preamble: the bot records the user's preferences in the turn it
+  learns them — one the user states, a correction, the same choice made again; only what the
+  person showed, never its own rules or anything it did not see happen — keeps the scope it holds in, writes an inferred one as such, and tidies on every edit (by topic, merging
+  near-duplicates, replacing what is contradicted, deleting what turned out wrong). It is an
+  organized picture of the person (each entry the preference and its scope, not how it was learned), not a log of conversations or of the work done; facts about a
+  project go to its knowledge base. To change that, override the `bot` agent.
 
 ## Trigger bindings (experimental)
 
@@ -138,7 +146,7 @@ Its root persona is the builtin **`bot`** base, whose tool list is deliberately 
 `read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
-is the user's own call). The bot does the work itself (there is no shell); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. A large or separate piece of work can go to a sub-session (programming work → `agent_profile: coding`). A write under `~/.shuvix/bots/` is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with
+is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. A write under `~/.shuvix/bots/` — every memory update included — is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write reach the user — see `policy-md`).
 Like `notebook`, the base declares project awareness but reads no instruction files (AGENTS.md /
