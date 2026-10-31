@@ -210,7 +210,7 @@ there — an "ask me about everything" rule written for tools does not stop a bo
 | `systemDirs`          | string[] | extra OS directories (Windows system / program directories)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `now`                 | string   | this moment (ISO 8601 UTC) — use it with `timestamp(...)` and `duration('168h')` for rules that allow by time |
 | `dailyDir`            | string   | `~/.shuvix/daily` — the daily reports folder |
-| `trackingDir`         | string   | `~/.shuvix/tracking` — the tracked items folder (experimental, kept by the daily bot) |
+| `trackingDir`         | string   | `~/.shuvix/tracking` — the tracked items folder (experimental) |
 
 The permission table is made when the session is created. Rows that come from the session's
 settings follow them (tick a knowledge base and its row appears); granted rows stay until the user
@@ -245,8 +245,8 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 Seven ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read). The four gates for agents ask as
 little as possible, so they are plain `ask` rules; the one for remote access is a `deny`, because
-nobody can be asked there; `daily-bot-access` is no gate but a relaxation — three `force-allow` rules
-for the daily bot that ships with ShuviX; `redact-sensitive` is no gate either — two `allow` rules
+nobody can be asked there; `daily-bot-access` is no gate but a relaxation — two `force-allow` rules
+for the diary bot that ships with ShuviX; `redact-sensitive` is no gate either — two `allow` rules
 whose dispositions turn on auto-redaction. Beyond that, `deny`, `force-ask` and `force-allow` are for
 policies of your own:
 
@@ -258,7 +258,7 @@ policies of your own:
 | `ask-on-widget-access` | the `widget` tool asks before using a widget that is not in the permission table at the needed level (`vars.aclWidgetRead` for read operations, previews and exports; `vars.aclWidgetWrite` for writes, builds and SQL); "allow and remember" adds it (a read card can also remember read-and-write). A session that creates a widget gets a read-and-write row for it. The automatic review does not answer these either — the builtin hook `auto-review` leaves `widget` objects to you |
 | `network-admission`    | remote access (`subject.kind` `network`): refuses every HTTP request whose sender is not this computer (`127.0.0.0/8`, `::1`). Replace it with a user policy of the same name to let other devices in — the `network-policy` entry has recipes                                                                                     |
 | `redact-sensitive`     | auto-redaction (the `redaction` entry): every model request from an agent is redacted (`modelRequest`, `disposition: detect`), and every piece of sensitive content in it reaches the model as a placeholder (`sensitive`, `disposition: redact`) — except `USERNAME`, `HOSTNAME`, `IP` and `BUCKET`, which are sent as they are. Disabling it sends the real values to every model; the conversation record keeps the placeholders either way |
-| `daily-bot-access`     | relaxation only: the root agent of the daily bot (`subject.bot == 'bot:builtin:daily'`) reads, without asking, the sessions that had a message in the last 7 days (over `ask-on-session-access`; the window is the `duration('168h')`, change it in an override copy) reads and writes `vars.trackingDir` and reads `vars.dailyDir`, the diary (both over `ask-on-external-path`). A timer wakes it every evening, when nobody is likely to be there to answer. Applies only to that session's root agent, never to its sub-sessions or the agents it dispatches |
+| `daily-bot-access`     | relaxation only: the root agent of the diary bot (`subject.bot == 'bot:builtin:daily'`) reads, without asking, the sessions that had a message in the last 24 hours (over `ask-on-session-access`; the window is the `duration('24h')`, change it in an override copy) and reads `vars.dailyDir`, the diary (over `ask-on-external-path`). Nothing lets it write. A timer wakes it every evening, when nobody is likely to be there to answer. Applies only to that session's root agent, never to its sub-sessions or the agents it dispatches |
 
 The two agent gates draw the same line: what the file tools ask about is exactly what a confined command
 cannot reach, so an agent gains nothing by switching from `read` to `cat`. Both read the same

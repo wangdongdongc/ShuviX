@@ -82,7 +82,7 @@ export class RedactionTable {
 
 /**
  * 这几段文本里引用到的、表里解得开的项 —— 内容从这个会话流进别的会话时（子会话的指令与结果、读取别的会话、
- * 日报 bot）随它一起复制过去（§5.3），对方的历史因此不依赖这个会话还在不在。
+ * 日记 bot）随它一起复制过去（§5.3），对方的历史因此不依赖这个会话还在不在。
  */
 export function entriesReferencedBy(
   table: RedactionTable,

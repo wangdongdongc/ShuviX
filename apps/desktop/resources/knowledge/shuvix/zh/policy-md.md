@@ -193,7 +193,7 @@ vars     宿主变量表（见下），含本会话的权限表
 | `systemDirs`          | string[] | 额外的操作系统目录（Windows 的系统 / 程序目录）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `now`                 | string   | 此刻（ISO 8601 UTC）—— 与 `timestamp(...)`、`duration('168h')` 一起写按时间放行的规则 |
 | `dailyDir`            | string   | `~/.shuvix/daily` —— 日报目录 |
-| `trackingDir`         | string   | `~/.shuvix/tracking` —— 跟踪项目录（实验，日报 bot 维护） |
+| `trackingDir`         | string   | `~/.shuvix/tracking` —— 跟踪项目录（实验） |
 
 权限表在会话创建时生成。来自会话设置的行跟着设置走（勾上一个知识库，它的那一行就出现）；授予的行一直留着，
 直到用户删掉。子会话创建时复制父会话的授予行，fork 复制源会话的授予行和工作目录那一行的访问方式；会话里
@@ -218,8 +218,8 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 ## 内置策略
 
 随应用发布七份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）。管 agent 的四份门尽可能少问，都是
-普通的 `ask` 规则；管远程访问的那份是 `deny`，因为那里没有人可问；`daily-bot-access` 不设门、只放宽 —— 三条 `force-allow`，
-只给随应用提供的日报 bot 用；`redact-sensitive` 也不设门 —— 两条带处置的 `allow`，打开自动脱敏。除此之外，`deny`、`force-ask` 与 `force-allow` 留给你自己的策略：
+普通的 `ask` 规则；管远程访问的那份是 `deny`，因为那里没有人可问；`daily-bot-access` 不设门、只放宽 —— 两条 `force-allow`，
+只给随应用提供的日记 bot 用；`redact-sensitive` 也不设门 —— 两条带处置的 `allow`，打开自动脱敏。除此之外，`deny`、`force-ask` 与 `force-allow` 留给你自己的策略：
 
 | 名字                   | 门                                                                                                                                                                                                                      |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -229,7 +229,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `ask-on-widget-access` | `widget` 工具使用一个权限表里没有所需级别的小组件之前询问（读操作、预览、导出看 `vars.aclWidgetRead`；写操作、构建、SQL 看 `vars.aclWidgetWrite`）；「允许并记住」把它加进表（读的卡片也可以一次记成读写）。建了小组件的会话自动得到它的读写行。自动审查同样不回答这类询问 —— 内置 hook `auto-review` 把 `widget` 客体留给你 |
 | `network-admission`    | 远程访问（`subject.kind` 为 `network`）：发送方不是这台电脑（`127.0.0.0/8`、`::1`）的 HTTP 请求一律拒绝。要让其他设备进来，写一份同名的用户策略替换它 —— 写法见 `network-policy` 条目                                   |
 | `redact-sensitive`     | 自动脱敏（`redaction` 条目）：agent 发给模型的每个请求都脱敏（`modelRequest`，`disposition: detect`），其中每一处敏感内容以占位符发给模型（`sensitive`，`disposition: redact`）—— `USERNAME`、`HOSTNAME`、`IP`、`BUCKET` 四类除外，按原样发出。停用它，发给所有模型的都是真值；对话记录里存的始终是占位符 |
-| `daily-bot-access`     | 只放宽：日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent 不用问就能读最近 7 天有过消息的会话（压过 `ask-on-session-access`；时间窗写在 `duration('168h')` 里，覆盖副本里改），并读写 `vars.trackingDir`、读 `vars.dailyDir`（日记；都压过 `ask-on-external-path`）。它每天傍晚被内置定时器叫起来，那时多半没有人在场回答询问。只作用于那条会话的根 agent，不作用于子会话与派出去的 agent |
+| `daily-bot-access`     | 只放宽：日记 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent 不用问就能读最近 24 小时有过消息的会话（压过 `ask-on-session-access`；时间窗写在 `duration('24h')` 里，覆盖副本里改），并读 `vars.dailyDir`（日记；压过 `ask-on-external-path`）。没有一条让它写东西。它每天傍晚被内置定时器叫起来，那时多半没有人在场回答询问。只作用于那条会话的根 agent，不作用于子会话与派出去的 agent |
 
 管 agent 的两份划的是同一条线：文件工具要问的，恰好就是受限命令碰不到的，所以智能体从 `read` 换成 `cat` 也占不到
 便宜。两边读的是同一张权限表，它跟着会话的设置（工作目录、知识库、启用的技能目录）和用户的授权走，

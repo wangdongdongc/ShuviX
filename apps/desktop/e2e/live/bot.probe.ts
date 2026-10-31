@@ -16,7 +16,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, it } from 'vitest'
 import { launchApp, type E2EApp } from '../harness/launch'
 import {
@@ -29,7 +29,14 @@ import {
 } from '../harness/seed'
 import { seedRealModel } from './probe'
 import { collectProbeEnv } from './protocolProbeEnv'
-import { ENV_FILE, makeDebug, REAL_HOME, sendPrompt, settle } from './redactionProbeShared'
+import {
+  ENV_FILE,
+  installRealHomeGuard,
+  makeDebug,
+  REAL_HOME,
+  sendPrompt,
+  settle
+} from './redactionProbeShared'
 
 const OUT = process.env.PROBE_OUT ?? join(tmpdir(), 'shuvix-bot-probe.md')
 const LANG = process.env.PROBE_LANG ?? 'zh'
@@ -150,6 +157,7 @@ beforeAll(async () => {
   await app.main.eval(
     `window.api.settings.set({ key: 'general.language', value: ${JSON.stringify(LANG)} })`
   )
+  await installRealHomeGuard(app, resolve(process.cwd(), '../..'))
   events = eventRecorder(app.main)
   await events.install()
 }, 180_000)

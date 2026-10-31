@@ -25,16 +25,32 @@ import { appEventBus } from '../utils/appEventBus'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { getDefaultDailyDir } from '../utils/paths'
 import { t } from '../i18n'
+import { createLogger } from '../logger'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 import type { Project, SessionInfo } from '../types'
+
+const log = createLogger('DailyNotes')
 
 function isRegularFile(path: string): boolean {
   try {
     return statSync(path).isFile()
   } catch {
     return false
+  }
+}
+
+/**
+ * 日报目录还没有就建出来（bot 的每次触发运行之前调，与 trackingNotes 的 ensureTrackingDir 同一个理由）：日记 bot
+ * 要看昨天有没有日记，目录不在时它的 `ls` 只得到「路径不存在」，模型就去翻上一层的 `~/.shuvix` —— 那里不在
+ * daily-bot-access 的放行范围里，傍晚没人回答的询问把这次运行卡住（2026-10-31 演练里遇到过）。失败只记日志
+ */
+export function ensureDailyDir(): void {
+  try {
+    mkdirSync(getDefaultDailyDir(), { recursive: true })
+  } catch (err) {
+    log.warn(`could not create the daily folder: ${err instanceof Error ? err.message : err}`)
   }
 }
 

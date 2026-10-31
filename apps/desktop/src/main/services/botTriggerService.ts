@@ -17,7 +17,8 @@
  * （triggerLogService），设置 → 触发源 一页列出 —— 用户靠它看见「哪个事件叫起了哪个 bot」。
  *
  * 会话标题取「bot 显示名 · 触发的本地时间」：触发型会话往往只有一轮，等不到自动起标题。
- * 一次运行开始前宿主建好跟踪项目录（实验），结束后提交一次 git（见 trackingNotes 的 ensureTrackingDir / commitTrackingChanges）。
+ * 一次运行开始前宿主建好日报目录与跟踪项目录（dailyNotes 的 ensureDailyDir、trackingNotes 的 ensureTrackingDir），
+ * 结束后提交一次跟踪项目录的 git（commitTrackingChanges）。
  */
 import {
   evaluateWhen,
@@ -29,6 +30,7 @@ import {
 import type { TriggerOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { basename } from 'path'
 import { botService, type BotEntry } from './botService'
+import { ensureDailyDir } from './dailyNotes'
 import { projectService } from './projectService'
 import { sessionService } from './sessionService'
 import { settingsService } from './settingsService'
@@ -211,7 +213,8 @@ export class BotTriggerService {
         workProject = hits[0].id
       }
 
-      // 跟踪项目录先建好：不在时 bot 会去翻上一层找它，撞上一张没人回答的询问（见 ensureTrackingDir）
+      // 日报与跟踪项目录先建好：不在时 bot 会去翻上一层找它，撞上一张没人回答的询问（见 ensureDailyDir / ensureTrackingDir）
+      ensureDailyDir()
       ensureTrackingDir()
       const session = sessionService.create(
         {

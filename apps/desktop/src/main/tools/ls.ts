@@ -130,7 +130,8 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
 
     const relPath = relative(config.workingDirectory, searchPath) || '.'
     const tree = buildTree(files)
-    let output = `${relPath}/\n${tree}`
+    // 没有文件时只剩一行目录名，模型会读成「目录不存在」，转头去翻上一层（2026-10-31 日记 bot 演练）—— 明说
+    let output = `${relPath}/\n${files.length > 0 ? tree : '(no files)\n'}`
 
     if (truncated) {
       output += `\n[Results truncated, showing first ${LIMIT} files. Use the glob tool to filter by pattern, or narrow the directory scope.]`

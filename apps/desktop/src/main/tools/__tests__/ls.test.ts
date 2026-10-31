@@ -125,6 +125,20 @@ describe('ls 工具 - 基本功能', () => {
     const details = result.details as { count: number; truncated: boolean }
     expect(details.count).toBe(2) // index.ts + helper.ts
     expect(details.truncated).toBe(false)
+    expect(getText(result)).not.toContain('(no files)')
+  })
+
+  it('目录里没有文件（空目录、只有空子目录）：明说 (no files)，不是只剩一行目录名', async () => {
+    const empty = join(TEST_DIR, 'empty-dir')
+    mkdirSync(join(empty, 'nested'), { recursive: true })
+    const tool = new ListTool(ctx)
+    const result = await executeTool(tool, 'tc-empty', { path: empty })
+    const text = getText(result)
+    expect(text.trimEnd().split('\n')).toEqual([
+      expect.stringMatching(/empty-dir\/$/),
+      '(no files)'
+    ])
+    expect((result.details as { count: number }).count).toBe(0)
   })
 })
 

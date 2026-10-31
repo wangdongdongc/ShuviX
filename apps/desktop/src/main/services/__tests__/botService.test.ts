@@ -1334,8 +1334,9 @@ describe('PSv-TRUST —— 内置 id 的认定', () => {
 
 /**
  * seedBuiltinBots 每次启动先调 upgradeSeededBots：种子带 `upgrade` 的，只对认定表（`bots.builtinFiles`）记着的那份
- * ShuviX 自己写下的文件跑一次，交回非 null 才原子写回、广播一次 bot.changed。输入是 agent-runtime 里 v0.2.27 真正种下的
- * 那三份文件（`packages/agent-runtime/src/bot/__tests__/fixtures/daily-v0.2.27.<lang>.md`，来历见 builtinBots.test.ts）。
+ * ShuviX 自己写下的文件跑一次，交回非 null 才原子写回、广播一次 bot.changed。输入是 agent-runtime 里 v0.2.27 与 v0.2.29
+ * 真正种下的那几份文件（`packages/agent-runtime/src/bot/__tests__/fixtures/daily-v0.2.{27,29}.<lang>.md`，来历见
+ * builtinBots.test.ts）；两版都升级成今天的日记助手（2026-10-31）。
  * 认定表的注入与时钟同 PSv-TRUST（PSv-SEED 那批从不注入认定表，所以升级在那里永远是空操作）。
  */
 describe('PSv-UPG —— 已经种下的日报 bot 换上新版', () => {
@@ -1348,6 +1349,9 @@ describe('PSv-UPG —— 已经种下的日报 bot 换上新版', () => {
   )
   const legacy = (lang: 'zh' | 'en' | 'ja'): string =>
     readFileSync(join(FIXTURES, `daily-v0.2.27.${lang}.md`), 'utf-8')
+  /** v0.2.29 种下（或 v0.2.27 / v0.2.28 那份升级成）的日报助手 */
+  const v029 = (lang: 'zh' | 'en' | 'ja'): string =>
+    readFileSync(join(FIXTURES, `daily-v0.2.29.${lang}.md`), 'utf-8')
   const dailyPath = (): string => join(dirs.bots, 'daily.md')
   const markerPath = (): string => join(dirs.bots, BUILTIN_SEED_MARKER)
   /** 认定表：内置 id → 路径 */
@@ -1399,6 +1403,22 @@ describe('PSv-UPG —— 已经种下的日报 bot 换上新版', () => {
       trust({ [DAILY_ID]: dailyPath() })
       botService.seedBuiltinBots('en')
       expect(botWrites()).toEqual([[dailyPath(), SEED.render(lang)]])
+    }
+  )
+
+  it.each(['zh', 'en', 'ja'] as const)(
+    'PSv-UPG1c 认定的那份是 v0.2.29 的 %s 原文（指向 builtin:tracking 的日报助手）→ 恰一笔写入、换成同一语言的日记助手；再启动一次零写入',
+    async (lang) => {
+      putFile(BUILTIN_SEED_MARKER, 'daily\n')
+      put('daily', v029(lang))
+      trust({ [DAILY_ID]: dailyPath() })
+      const n = await countChanged(() => botService.seedBuiltinBots('en'))
+      expect(botWrites()).toEqual([[dailyPath(), SEED.render(lang)]])
+      expect(n).toBe(1)
+      mocks.atomicWrite.mockClear()
+      expect(await countChanged(() => botService.seedBuiltinBots('en'))).toBe(0)
+      expect(botWrites()).toEqual([])
+      expect(mocks.warn).not.toHaveBeenCalled()
     }
   )
 
@@ -1555,7 +1575,10 @@ describe('PSv-UPG —— 已经种下的日报 bot 换上新版', () => {
     const entry = botService.get('my-daily')!
     expect(entry.basePath).toBe(dailyPath())
     expect(entry.file.objectId).toBe(DAILY_ID)
-    expect(entry.file.body).toContain('`builtin:tracking`')
+    // 换上的是日记助手的那一节（2026-10-31）：列今天的会话、看日记，不再指向 builtin:tracking
+    expect(entry.file.body).toContain('`list-sessions`')
+    expect(entry.file.body).toContain('`shuvix: daily v1`')
+    expect(entry.file.body).not.toContain('builtin:tracking')
   })
 })
 

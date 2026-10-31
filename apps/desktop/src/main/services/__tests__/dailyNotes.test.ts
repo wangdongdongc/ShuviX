@@ -37,7 +37,13 @@ import { projectDao } from '../../dao/projectDao'
 import { sessionDao } from '../../dao/sessionDao'
 import { appEventBus } from '../../utils/appEventBus'
 import { sessionService } from '../sessionService'
-import { ensureDailyProject, openReport, reportDaysInMonth, reportOnDay } from '../dailyNotes'
+import {
+  ensureDailyDir,
+  ensureDailyProject,
+  openReport,
+  reportDaysInMonth,
+  reportOnDay
+} from '../dailyNotes'
 
 const publish = vi.spyOn(appEventBus, 'publish')
 
@@ -176,5 +182,20 @@ describe('打开那一天', () => {
     expect(ensureDailyProject().path).toBe(dailyDir())
     expect(projectDao.update).toHaveBeenCalledWith(DAILY_PROJECT_ID, { path: dailyDir() })
     expect(projectDao.insert).not.toHaveBeenCalled()
+  })
+})
+
+describe('触发运行前建好目录', () => {
+  it('DS-10 ensureDailyDir：目录不在就建出来（不建文件、不插项目行、不广播）；已在时原样，里面的日报不动', () => {
+    expect(existsSync(dailyDir())).toBe(false)
+    ensureDailyDir()
+    expect(existsSync(dailyDir())).toBe(true)
+    expect(reportDaysInMonth(2025, 3)).toEqual([])
+    expect(projectDao.insert).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+
+    put(`${DAY}.md`, '---\nshuvix: daily v1\n---\n\n- 写过的\n')
+    ensureDailyDir()
+    expect(readFileSync(fileOf(DAY), 'utf8')).toBe('---\nshuvix: daily v1\n---\n\n- 写过的\n')
   })
 })

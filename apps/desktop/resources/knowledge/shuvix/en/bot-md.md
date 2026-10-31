@@ -26,7 +26,7 @@ session's business.
 - Location: `~/.shuvix/bots/<name>.md`.
 - Marker: `shuvix: bot v2`. Optional on read, but a **different type is rejected**: an agent file
   dropped into `bots/` is refused, not read as a persona. The version is not checked.
-- Live on presence, no enable switch. ShuviX writes one bot into this folder on first start (the daily bot, see "Trigger bindings"); after that it is an ordinary file.
+- Live on presence, no enable switch. ShuviX writes one bot into this folder on first start (the diary bot, see "Trigger bindings"); after that it is an ordinary file.
 
 ## Example
 
@@ -125,18 +125,19 @@ word: the automatic review treats it as a delegated task, not as authorization. 
 shuvix-bot-on:
   - trigger: timer.fired
     when: event.local.time == '18:00' && activeSessions(event.local.date) > 0
-    message: Go through the sessions since the last run and update the tracked items.
+    message: Look at today's sessions and yesterday's diary, and give me a few suggestions.
 ```
 
-ShuviX ships one such bot: the **daily bot** (`daily`, `shuvix-id: bot:builtin:daily`). On first start it is
+ShuviX ships one such bot: the **diary bot** (`daily`, `shuvix-id: bot:builtin:daily`). On first start it is
 written into `~/.shuvix/bots/daily.md` in the interface language, and from then on it is an ordinary bot file —
 change it (the time it fires, say) or delete it; a deleted one is not written again (what was written is recorded
-in `.builtin-seeded` in the same folder). It goes through the recent sessions and the diary every evening and keeps
-the tracked items in `~/.shuvix/tracking/`: how is written in the builtin `builtin:tracking` skill (the bot file is
-written once, the rules update with the app); it creates an item directly only when the user's own words say the
-matter is unfinished, and suggests at most three others with `suggest`. The builtin policy `daily-bot-access` lets it
-read the last 7 days of sessions, read the diary folder, and read and write the tracked items folder without asking
-(see `policy-md`).
+in `.builtin-seeded` in the same folder). Every evening it looks at the sessions that had a message today and at
+whether yesterday has a page in `~/.shuvix/daily/`, says in a few sentences what the day was about and leaves at
+most three suggestions with `suggest` (write today's page, fill in yesterday's, note down something left open). It
+changes nothing on its own: accepting a suggestion sends it back as your reply, and the bot then does that one thing,
+with its writes asking as usual. The builtin policy `daily-bot-access` lets it read the last 24 hours of sessions
+and the diary folder without asking (see `policy-md`). A copy written by an earlier version (the daily bot that kept
+the tracked items) is brought up to date when ShuviX starts, but only the parts that were never edited.
 
 ## A bot chat
 

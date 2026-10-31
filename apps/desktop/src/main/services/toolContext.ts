@@ -342,7 +342,7 @@ function hostPolicyVars(
     systemDirs: windowsSystemDirs(),
     // 此刻（ISO 8601，UTC）—— 按时间放行的规则拿它比：`timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`
     now: new Date().toISOString(),
-    // 日报与跟踪项目录（事实变量）：给 bot 放行读写它们的策略引用（内置日报 bot 的那份就是）
+    // 日报与跟踪项目录（事实变量）：给 bot 放行读写它们的策略引用（内置日记 bot 的那份读 dailyDir）
     dailyDir: getDefaultDailyDir(),
     trackingDir: getDefaultTrackingDir()
   }

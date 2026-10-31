@@ -43,9 +43,9 @@ starts from `daily/_template.md` when it exists, otherwise from a single section
 today". A line linking a conversation uses `[title](shuvix://session/<id>#<message id>)`.
 
 `tracking/` holds the **tracked items** (experimental): one md per matter that needs following up and takes several days
-to settle (marker `shuvix: track v1`, titled by the body's first `# ` heading), kept by the daily bot following the `builtin:tracking`
+to settle (marker `shuvix: track v1`, titled by the body's first `# ` heading), kept by whichever session you ask, following the `builtin:tracking`
 skill (it creates an item directly only on the user's own words and only suggests the rest), listed in the sidebar Library's "Tracked items" group. The folder is a git repository: ShuviX
-commits it after each triggered run of the bot, so a wrong edit can be recovered from history. There are no management
+commits it after each triggered bot run, so a wrong edit can be recovered from history. There are no management
 fields such as status or next check yet.
 
 `artifacts/<session id>/` holds that session's **artifacts**: the files the `artifact` tool creates and `edit` then revises (figures, drafts, tables), deleted together with the session. The folder is a git repository that ShuviX keeps itself: whenever a tool call changes it, ShuviX commits one version (titled with the tool and the files it changed), so a bad edit can be recovered from history. The session panel's Artifacts tab lists every artifact of the session and of its direct sub-sessions, each with the number of versions recorded. Where a reply references an artifact (an ```artifact fence), it shows the version from when that reply was written: once a reply is finished and before its tools run, ShuviX stores the current content of every artifact it references in this repository and records it in the session; if the artifact changes later, the reference is marked "Newer version".
@@ -55,7 +55,7 @@ The **app log** is not under `~/.shuvix/`: ShuviX's own runtime record (the main
 **Builtins live inside the application, not on disk.** ShuviX ships builtin agents (`work`,
 `chat`, `notebook`, `bot`, `tab`, `coding`, `explore`, `titler`,
 `knowledge-writer`, `permission-reviewer`), builtin security policies, two builtin hooks
-(`auto-title`, `auto-review`) and the builtin skill `builtin:drawing`. Bots are not inside the app: the daily bot that ships with ShuviX is written into `~/.shuvix/bots/daily.md` on first start and is an ordinary bot file from then on (see `bot-md`).
+(`auto-title`, `auto-review`) and the builtin skill `builtin:drawing`. Bots are not inside the app: the diary bot that ships with ShuviX is written into `~/.shuvix/bots/daily.md` on first start and is an ordinary bot file from then on (see `bot-md`).
 A builtin cannot be edited, but
 it can be **overridden**: a user file whose `name` equals the builtin's name replaces it
 completely (a builtin row's menu in the sidebar group offers "Create override copy", which

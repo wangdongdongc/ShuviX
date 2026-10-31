@@ -90,7 +90,7 @@
     "moreActions": "更多操作",
     "interrupted": "ShuviX 关闭时被中断——打开即可继续",
     "trackingGroup": "跟踪项",
-    "trackingEmpty": "还没有跟踪项。日报 bot 会从你的会话里整理出需要持续跟进的事。",
+    "trackingEmpty": "还没有跟踪项。有需要持续跟进的事，在任何会话里让它帮你建一份。",
     "trackingOpenFolder": "打开跟踪项文件夹",
     "trackingRevealFile": "在文件夹中显示",
     "trackingCopyPath": "复制路径",

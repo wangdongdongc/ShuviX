@@ -465,7 +465,7 @@ export {
   type BuiltinHookSpec
 } from './hook/builtinHooks'
 // Bot：md 格式解析 + 正文围栏。一个 bot = 身份 + 正文（人设与记忆），绑在一条有根会话上；
-// 随应用提供的 bot（日报 bot）第一次启动时写进用户目录（BUILTIN_BOT_SEEDS），之后就是普通 bot 文件。
+// 随应用提供的 bot（日记 bot）第一次启动时写进用户目录（BUILTIN_BOT_SEEDS），之后就是普通 bot 文件。
 // bot 会话的基座档案 `bot` 在下面的内置档案里。
 export {
   parseBotDefinitionFile,

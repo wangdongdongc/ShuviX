@@ -354,7 +354,7 @@ export function ProjectSessionGroups({
   const expandBot = (key: string): void => {
     if (botCollapsed(key)) toggleBot(key)
   }
-  // 组里那一行「定时运行」的展开：侧栏缺省收起（日报 bot 一天一条，摊开就淹掉用户自己开的对话），日历缺省摊开
+  // 组里那一行「定时运行」的展开：侧栏缺省收起（日记 bot 一天一条，摊开就淹掉用户自己开的对话），日历缺省摊开
   const [runsToggled, setRunsToggled] = useState<Set<string>>(() => new Set())
   const runsOpen = (key: string): boolean =>
     hideEmptyGroups ? !runsToggled.has(key) : runsToggled.has(key)

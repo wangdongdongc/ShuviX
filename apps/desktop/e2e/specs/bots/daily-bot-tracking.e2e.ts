@@ -47,9 +47,9 @@ import {
 const DAILY_ID = 'bot:builtin:daily'
 const DAILY_WHEN = "event.local.time == '18:00' && activeSessions(event.local.date) > 0"
 const DAILY_DISPLAY: Record<'zh' | 'en' | 'ja', string> = {
-  zh: '日报助手',
-  en: 'Daily',
-  ja: 'デイリー'
+  zh: '日记助手',
+  en: 'Diary',
+  ja: '日記'
 }
 const TIMER_ID = 'timer:builtin:minute'
 const TRACKING_PROJECT = '__tracking__'

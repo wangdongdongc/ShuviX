@@ -1026,7 +1026,7 @@ app.whenReady().then(async () => {
   // 触发绑定的 CEL `when` 能查日历（hook 与 bot 共用）；内置 timer 每分钟发一次全局埋点 `timer.fired`，
   // 订阅它的 bot 绑定命中就新开一条会话（实验）。退出一开始就停表，关停中的会话不再被叫起来
   setWhenHostFunctions({ activeSessions: activeSessionsOnDay })
-  // 随应用提供的 bot（日报 bot）第一次启动时按界面语言写进 ~/.shuvix/bots（每个只写一次，删了不再补）；
+  // 随应用提供的 bot（日记 bot）第一次启动时按界面语言写进 ~/.shuvix/bots（每个只写一次，删了不再补）；
   // 内置 id 的认定记在设置库里（只认 ShuviX 自己写下的那份文件）
   botService.setBuiltinTrustStore(settingsService)
   step('botService.seedBuiltinBots', () => botService.seedBuiltinBots(i18next.language || 'en'))

@@ -90,7 +90,7 @@
     "moreActions": "その他の操作",
     "interrupted": "ShuviX の終了時に中断されました。開くと続行できます",
     "trackingGroup": "追跡項目",
-    "trackingEmpty": "追跡項目はまだありません。デイリーボットがセッションから継続して追うべきことをまとめます。",
+    "trackingEmpty": "追跡項目はまだありません。継続して追いたいことがあれば、どのセッションでも作成を頼めます。",
     "trackingOpenFolder": "追跡項目フォルダを開く",
     "trackingRevealFile": "フォルダで表示",
     "trackingCopyPath": "パスをコピー",

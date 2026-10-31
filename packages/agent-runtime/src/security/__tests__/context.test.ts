@@ -5463,7 +5463,7 @@ describe('createSecurityContext — enforceWidget（WT4-SE-15）', () => {
 
 describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
   const BOT = 'bot:builtin:daily'
-  const TRACKING = '/home/u/.shuvix/tracking'
+  const DIARY = '/home/u/.shuvix/daily'
 
   /** 带惰性 bot 的 agent 主体；getter 是 spy。attrs 就地加 bot（不展开拷贝 —— 展开会当场调用别的 getter） */
   const lazyBotSubject = (
@@ -5477,7 +5477,7 @@ describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
     return { subject: { ...SUBJECT, attrs }, getter }
   }
 
-  /** 内置的 daily-bot-access 读 vars.trackingDir / vars.now：交齐，免得缺键告警混进来 */
+  /** 内置的 daily-bot-access 读 vars.dailyDir / vars.now：交齐，免得缺键告警混进来 */
   const dailyVarsProvider = (
     overrides: Partial<SecurityHostProvider> = {}
   ): SecurityHostProvider => {
@@ -5485,7 +5485,7 @@ describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
     return makeProvider(noGrants(), {
       getVars: () => ({
         ...base.getVars(),
-        trackingDir: TRACKING,
+        dailyDir: DIARY,
         now: '2026-10-24T10:00:00.000Z'
       }),
       ...overrides
@@ -5538,7 +5538,13 @@ describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
       winning: 'ask-on-command#0'
     })
     expect(lazy.getter).not.toHaveBeenCalled()
-    // 停用 daily-bot-access 之后连路径读写也没有规则读它
+    // 写日记：daily-bot-access 的两条都只管 read，条件就筛掉了 —— 也没有规则读它
+    expect(lazyCtx.evaluate('write', { type: 'path', path: `${DIARY}/a.md` })).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-external-path#1'
+    })
+    expect(lazy.getter).not.toHaveBeenCalled()
+    // 停用 daily-bot-access 之后连读日记也没有规则读它
     const disabled = lazyBotSubject()
     const disabledCtx = createSecurityContext(
       disabled.subject,
@@ -5547,15 +5553,13 @@ describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
         isPolicyDisabled: (policy) => policy.objectId === 'policy:builtin:daily-bot-access'
       })
     )
-    expect(disabledCtx.evaluate('write', { type: 'path', path: `${TRACKING}/a.md` })).toMatchObject(
-      {
-        effect: 'ask',
-        winning: 'ask-on-external-path#1'
-      }
-    )
+    expect(disabledCtx.evaluate('read', { type: 'path', path: `${DIARY}/a.md` })).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-external-path#0'
+    })
     expect(disabled.getter).not.toHaveBeenCalled()
-    // 内置在：跟踪项目录的写由 daily-bot-access#1 放行 —— 这时才调
-    expect(lazyCtx.evaluate('write', { type: 'path', path: `${TRACKING}/a.md` })).toMatchObject({
+    // 内置在：日记目录的读由 daily-bot-access#1 放行 —— 这时才调
+    expect(lazyCtx.evaluate('read', { type: 'path', path: `${DIARY}/a.md` })).toMatchObject({
       effect: 'allow',
       tier: 'force-allow',
       winning: 'daily-bot-access#1'

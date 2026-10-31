@@ -1376,7 +1376,7 @@ describe('TC-BOT / XS-37 / XS-38 / TC-VAR1 —— subject.bot、会话客体的�
     expect(identitySpy).toHaveBeenCalledWith('tcb2-s')
   })
 
-  it('TC-BOT3 bot 会话下的子会话 subject.bot 为空串（settings.bot 不沿父链继承）：daily-bot-access 的跟踪项目录放行只落在 bot 会话自己的根 agent 上', () => {
+  it('TC-BOT3 bot 会话下的子会话 subject.bot 为空串（settings.bot 不沿父链继承）：daily-bot-access 的放宽（读最近的会话、读日记目录）只落在 bot 会话自己的根 agent 上；写跟踪项目录两边都照问（那条 2026-10-31 退役）', () => {
     bots = { 'tcb3-daily': DAILY_ID }
     row('tcb3-parent', { bot: 'tcb3-daily' })
     row('tcb3-child', { parentId: 'tcb3-parent' })
@@ -1385,19 +1385,51 @@ describe('TC-BOT / XS-37 / XS-38 / TC-VAR1 —— subject.bot、会话客体的�
     expect(lastSubject().attrs?.bot).toBe(DAILY_ID)
     const child = getDesktopSecurityContext({ sessionId: sid('tcb3-child') }, cfg)
     expect(lastSubject().attrs?.bot).toBe('')
+    const shape = (d: {
+      effect: string
+      winning: string
+    }): { effect: string; winning: string } => ({
+      effect: d.effect,
+      winning: d.winning
+    })
 
-    const note = { type: 'path', path: '/tmp/shuvix-tracking/release.md' }
-    const parentWrite = parent.evaluate('write', note)
-    expect({ effect: parentWrite.effect, winning: parentWrite.winning }).toEqual({
+    // 读一条一小时前有过消息的会话：根 agent 由 #0 放行，子会话照问
+    const recent = {
+      type: 'session',
+      sessionId: 'tcb3-other',
+      title: '',
+      ownTurn: false,
+      lastActiveAt: new Date(Date.now() - HOUR).toISOString(),
+      bot: ''
+    }
+    expect(shape(parent.evaluate('read', recent))).toEqual({
+      effect: 'allow',
+      winning: 'daily-bot-access#0'
+    })
+    expect(shape(child.evaluate('read', recent))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-session-access#0'
+    })
+
+    // 读日记目录：根 agent 由 #1 放行；子会话不命中（这里的日记目录替身在 /tmp 下，家目录外的读本来就不问 →
+    // 默认放行，不是 daily-bot-access）
+    const diary = { type: 'path', path: '/tmp/shuvix-daily/2026-10-30.md' }
+    expect(shape(parent.evaluate('read', diary))).toEqual({
       effect: 'allow',
       winning: 'daily-bot-access#1'
     })
-    // （只比写：这里的跟踪项目录替身在 /tmp 下，家目录外的读本来就不问）
-    const childWrite = child.evaluate('write', note)
-    expect({ effect: childWrite.effect, winning: childWrite.winning }).toEqual({
-      effect: 'ask',
-      winning: 'ask-on-external-path#1'
-    })
+    const childDiary = child.evaluate('read', diary)
+    expect(childDiary.effect).toBe('allow')
+    expect(childDiary.matched.filter((id) => id.startsWith('daily-bot-access'))).toEqual([])
+
+    // 写跟踪项目录（宿主照给 vars.trackingDir，规则不再用它）：根 agent 与子会话同样照问外部目录门 #1
+    const note = { type: 'path', path: '/tmp/shuvix-tracking/release.md' }
+    for (const ctx of [parent, child]) {
+      expect(shape(ctx.evaluate('write', note))).toEqual({
+        effect: 'ask',
+        winning: 'ask-on-external-path#1'
+      })
+    }
     // 子会话的 identityOf 只看它自己那一行，从不去问父会话绑的 bot
     expect(getSpy).not.toHaveBeenCalledWith('tcb3-child')
     expect(identitySpy.mock.calls.filter(([id]) => id === 'tcb3-child').length).toBeGreaterThan(0)

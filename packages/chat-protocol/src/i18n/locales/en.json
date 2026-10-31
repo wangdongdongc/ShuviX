@@ -90,7 +90,7 @@
     "moreActions": "More actions",
     "interrupted": "Interrupted when ShuviX closed — open it to continue",
     "trackingGroup": "Tracked items",
-    "trackingEmpty": "No tracked items yet. The daily bot collects the things to follow up on from your sessions.",
+    "trackingEmpty": "No tracked items yet. When something needs following up, ask any session to start one.",
     "trackingOpenFolder": "Open tracked items folder",
     "trackingRevealFile": "Show in folder",
     "trackingCopyPath": "Copy path",

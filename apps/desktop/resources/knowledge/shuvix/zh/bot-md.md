@@ -24,7 +24,7 @@ sources:
 - 位置：`~/.shuvix/bots/<name>.md`。
 - 标记：`shuvix: bot v2`。读取可选，但**类型不符即拒绝**：一份 agent 文件掉进 `bots/` 会被拒收，
   不会被当成人设读进去。版本不检查。
-- 存在即生效，没有启用开关。ShuviX 第一次启动时往这个目录写一份 bot（日报 bot，见「触发绑定」），之后它就是普通文件。
+- 存在即生效，没有启用开关。ShuviX 第一次启动时往这个目录写一份 bot（日记 bot，见「触发绑定」），之后它就是普通文件。
 
 ## 示例
 
@@ -105,14 +105,15 @@ ShuviX 没开时错过的分钟不补。触发消息不算人的意思：自动�
 shuvix-bot-on:
   - trigger: timer.fired
     when: event.local.time == '18:00' && activeSessions(event.local.date) > 0
-    message: 整理自上次运行以来的会话，更新跟踪项。
+    message: 看看今天的会话和昨天的日记，给我几条建议。
 ```
 
-ShuviX 自带一个这样的 bot：**日报 bot**（`daily`，`shuvix-id: bot:builtin:daily`）。第一次启动时按界面语言写进
+ShuviX 自带一个这样的 bot：**日记 bot**（`daily`，`shuvix-id: bot:builtin:daily`）。第一次启动时按界面语言写进
 `~/.shuvix/bots/daily.md`，之后就是一份普通 bot 文件 —— 可以改（比如改触发时间），删了不再补（写过哪些记在同目录的
-`.builtin-seeded` 里）。它每天傍晚翻一遍最近的会话和日记、维护 `~/.shuvix/tracking/` 里的跟踪项：怎么整理写在随应用发布的
-`builtin:tracking` 技能里（bot 文件只写一次，规则随版本更新），用户自己说了还没完的事才直接建，别的至多用 `suggest`
-提议三条；内置策略 `daily-bot-access` 让它不用问就能读最近 7 天的会话、读日记目录、读写跟踪项目录（见 `policy-md`）。
+`.builtin-seeded` 里）。它每天傍晚看看今天有消息的会话、再看看 `~/.shuvix/daily/` 里昨天有没有写，用几句话说今天做了什么，
+再用 `suggest` 至多提三条建议（写今天的日记、补昨天的、把没做完的事记下来）。它自己什么都不改：采纳一条建议，那条建议
+就作为你的回复发回去，bot 再照着做这一件事，写入照常询问。内置策略 `daily-bot-access` 让它不用问就能读最近 24 小时的
+会话和日记目录（见 `policy-md`）。旧版本写下的那份（维护跟踪项的日报 bot）在 ShuviX 启动时更新到新版，只改没被编辑过的部分。
 
 ## Bot 会话
 

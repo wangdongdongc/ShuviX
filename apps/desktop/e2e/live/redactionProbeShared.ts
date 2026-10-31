@@ -169,6 +169,36 @@ export async function restoredText(app: E2EApp, sid: string, text: string): Prom
   return text.replace(/\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\}/g, (p) => table[p]?.value ?? p)
 }
 
+/**
+ * 拒掉 agent 对这台电脑真实主目录的文件读写（这份仓库自己除外）。隔离实例的 HOME 在 /private/tmp 下，真实主目录
+ * 因此算「HOME 之外」，文件工具读它不问 —— settle 的拒答管不到；而 dev 构建的提示词里内置技能、手册的路径都在
+ * 仓库里（真实主目录下），模型会照着把 `~` 展开成真实主目录（2026-10-31 日记 bot 演练列出过真实的 ~/.shuvix）。
+ * 只管文件工具的 path 对象，命令不在内。
+ */
+export async function installRealHomeGuard(app: E2EApp, repoRoot: string): Promise<void> {
+  const quote = (s: string): string => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+  await installPolicy(
+    app,
+    'probe-real-home-guard',
+    [
+      '---',
+      'shuvix: policy v1',
+      'name: probe-real-home-guard',
+      'description: A live probe never reads or writes the real home folder of this computer.',
+      'shuvix-policy-scope:',
+      '  subject.kind: [agent]',
+      '  object.type: [path]',
+      'shuvix-policy-rules:',
+      '  - effect: deny',
+      '    action: [read, write]',
+      `    match: inDir(object.path, ${quote(REAL_HOME)}) && !inDir(object.path, ${quote(repoRoot)})`,
+      `    prompt: This environment's home folder is ${app.home}; use ~ or paths under it.`,
+      '---',
+      ''
+    ].join('\n')
+  )
+}
+
 /** 写下用户策略并等它生效（策略目录按定时器重扫） */
 export async function installPolicy(app: E2EApp, name: string, text: string | null): Promise<void> {
   const { mkdirSync, rmSync, writeFileSync } = await import('node:fs')

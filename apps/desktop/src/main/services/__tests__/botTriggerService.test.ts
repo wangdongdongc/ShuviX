@@ -10,8 +10,9 @@
  *    prompt 带 error / 抛错都不推；
  *  - `when` 求值出错 = 不命中，同一条绑定同一个错误只记一次 warn；
  *  - 一次运行（会话打开了）结束后提交一次跟踪项目录（commitTrackingChanges）；
- *  - 每次真去建会话之前先建好跟踪项目录（ensureTrackingDir）—— 不在时 bot 会去翻上一层、撞上没人回答的询问：
- *    BTR-1 每次运行恰一次、在 sessionService.create 之前 · BTR-2 不分是不是日报 bot · BTR-3 跳过的那几种不调。
+ *  - 每次真去建会话之前先建好日报目录与跟踪项目录（ensureDailyDir / ensureTrackingDir）—— 不在时 bot 会去翻上一层、
+ *    撞上没人回答的询问：BTR-1 每次运行各恰一次、都在 sessionService.create 之前 · BTR-2 不分是不是日记 bot ·
+ *    BTR-3 跳过的那几种都不调。
  *
  * 触发日志（触发源与 bot 解绑，用户 2026-10-24；断言打在 triggerLogService 桩的调用上）：
  *   BTL-1  命中（无 when）：会话建出来之后、打开之前记一条 started（sourceId / trigger / bot / 显示名 / 文件名 /
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   prompt: vi.fn<(...args: unknown[]) => Promise<{ error?: string }>>(),
   commit: vi.fn<(message: string) => Promise<void>>(),
   ensureDir: vi.fn<() => void>(),
+  ensureDaily: vi.fn<() => void>(),
   record: vi.fn<(input: Record<string, unknown>) => string | null>(),
   finish: vi.fn<(id: string | null, outcome: string, error?: string) => void>(),
   settings: new Map<string, string>(),
@@ -65,6 +67,7 @@ vi.mock('../settingsService', () => ({
     set: (key: string, value: string) => void mocks.settings.set(key, value)
   }
 }))
+vi.mock('../dailyNotes', () => ({ ensureDailyDir: mocks.ensureDaily }))
 vi.mock('../trackingNotes', () => ({
   commitTrackingChanges: mocks.commit,
   ensureTrackingDir: mocks.ensureDir
@@ -173,6 +176,7 @@ beforeEach(() => {
     mocks.prompt,
     mocks.commit,
     mocks.ensureDir,
+    mocks.ensureDaily,
     mocks.record,
     mocks.finish
   ]) {
@@ -997,17 +1001,18 @@ describe('触发日志', () => {
   })
 })
 
-describe('运行前建好跟踪项目录', () => {
+describe('运行前建好日报目录与跟踪项目录', () => {
   /** 两个桩被调的先后（vitest 的 invocationCallOrder 是跨 mock 的全局序号，就是一份共用的调用记录） */
   const order = (): string[] =>
     [
+      ...mocks.ensureDaily.mock.invocationCallOrder.map((n) => [n, 'ensureDailyDir'] as const),
       ...mocks.ensureDir.mock.invocationCallOrder.map((n) => [n, 'ensureTrackingDir'] as const),
       ...mocks.create.mock.invocationCallOrder.map((n) => [n, 'create'] as const)
     ]
       .sort((x, y) => x[0] - y[0])
       .map(([, name]) => name)
 
-  it('BTR-1 每次运行恰调一次 ensureTrackingDir，而且在 sessionService.create 之前', async () => {
+  it('BTR-1 每次运行 ensureDailyDir / ensureTrackingDir 各恰调一次，都在 sessionService.create 之前', async () => {
     mocks.listAll.mockReturnValue([
       bot('daily', [{ ...TICK, when: DAILY_WHEN }], { objectId: 'bot:builtin:daily' })
     ])
@@ -1018,7 +1023,15 @@ describe('运行前建好跟踪项目录', () => {
     await settle()
     expect(mocks.ensureDir).toHaveBeenCalledTimes(2)
     expect(mocks.ensureDir.mock.calls).toEqual([[], []])
-    expect(order()).toEqual(['ensureTrackingDir', 'create', 'ensureTrackingDir', 'create'])
+    expect(mocks.ensureDaily).toHaveBeenCalledTimes(2)
+    expect(order()).toEqual([
+      'ensureDailyDir',
+      'ensureTrackingDir',
+      'create',
+      'ensureDailyDir',
+      'ensureTrackingDir',
+      'create'
+    ])
   })
 
   it('BTR-2 不是日报 bot 的绑定也一样：每次运行一次，在建会话之前；同一个 tick 两条绑定 → 两次', async () => {
@@ -1030,10 +1043,13 @@ describe('运行前建好跟踪项目录', () => {
     await settle()
     expect(mocks.create).toHaveBeenCalledTimes(3)
     expect(order()).toEqual([
+      'ensureDailyDir',
       'ensureTrackingDir',
       'create',
+      'ensureDailyDir',
       'ensureTrackingDir',
       'create',
+      'ensureDailyDir',
       'ensureTrackingDir',
       'create'
     ])
@@ -1045,6 +1061,7 @@ describe('运行前建好跟踪项目录', () => {
     svc.fire('timer.fired', minute(18, 0))
     await settle()
     expect(mocks.ensureDir).not.toHaveBeenCalled()
+    expect(mocks.ensureDaily).not.toHaveBeenCalled()
 
     // when 求值出错
     setWhenHostFunctions({
@@ -1059,6 +1076,7 @@ describe('运行前建好跟踪项目录', () => {
     await settle()
     expect(warnsMatching(/when evaluation failed/)).toHaveLength(1)
     expect(mocks.ensureDir).not.toHaveBeenCalled()
+    expect(mocks.ensureDaily).not.toHaveBeenCalled()
 
     // 上一次还在跑：只有第一次那一回调
     const ticker = bot('ticker', [TICK], { objectId: 'bot:x' })
@@ -1174,6 +1192,7 @@ describe('BTP 绑定的 project', () => {
       ])
       expect(mocks.create).not.toHaveBeenCalled()
       expect(mocks.ensureDir).not.toHaveBeenCalled()
+      expect(mocks.ensureDaily).not.toHaveBeenCalled()
       expect(mocks.ensure).not.toHaveBeenCalled()
       expect(mocks.finish).not.toHaveBeenCalled()
       expect(mocks.commit).not.toHaveBeenCalled()

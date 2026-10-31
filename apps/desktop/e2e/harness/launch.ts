@@ -224,7 +224,7 @@ export interface LaunchOptions {
    */
   autoReview?: boolean
   /**
-   * 随应用提供的 bot（日报 bot，产品第一次启动时写进 `~/.shuvix/bots/daily.md`）。**缺省 false**：启动前在 fake HOME
+   * 随应用提供的 bot（日记 bot，产品第一次启动时写进 `~/.shuvix/bots/daily.md`）。**缺省 false**：启动前在 fake HOME
    * 的 bots 目录里放一份「已经写过」的记录（`.builtin-seeded`），产品就不写它 —— 既有 bots / 侧栏 spec 按「bots 目录
    * 里只有 spec 自己放的文件」写；每分钟一次的内置 timer 到了 18:00 也不会替它叫起一条会话、往假提供商发请求。
    * 测它的 spec 传 `true`。复用的 HOME 上记录已经在了就不动。
