@@ -13,6 +13,9 @@
  *     twice, pi's objects are never mutated, and the final `result()` — what pi-durable
  *     classifies — carries the annotation too.
  *  4. **Delegation.** Every other Models method reaches the inner collection unchanged.
+ *  5. **Tool-name repair.** A call named like an offered tool up to letter case reaches every
+ *     event and `result()` under the offered name — with or without a network seam — and a
+ *     call that needs no repair still passes by reference.
  *
  * `createAssistantMessageEventStream` stays real throughout: several cases assert pi's own
  * EventStream semantics (a terminal push settles `result()`, pushes after it are dropped).
@@ -33,7 +36,9 @@ import {
   type Context,
   type Model,
   type Models,
-  type ProviderStreams
+  type ProviderStreams,
+  type Tool,
+  type ToolCall
 } from '@earendil-works/pi-ai'
 import { AssistantMessageEventStream as EventStreamClass } from '@earendil-works/pi-ai/utils/event-stream'
 import type { RuntimeNetwork } from '../../types'
@@ -1028,5 +1033,368 @@ describe('J — what pi-durable’s retry classifier sees', () => {
     const quotaResult = await quota.decorated.completeSimple(quota.model, CONTEXT)
     expect(quotaResult.errorMessage).toBe('insufficient_quota (TypeError: fetch failed)')
     expect(isRetryableAssistantError(quotaResult)).toBe(false)
+  })
+})
+
+// ─────────────────────────── K: tool-name repair ───────────────────────────
+
+describe('K — tool-name repair', () => {
+  function tool(name: string): Tool {
+    return {
+      name,
+      description: `${name} tool`,
+      parameters: { type: 'object', properties: {} } as unknown as Tool['parameters']
+    }
+  }
+
+  function toolCall(name: string, extra: Partial<ToolCall> = {}): ToolCall {
+    return { type: 'toolCall', id: 'c1', name, arguments: { x: 1 }, ...extra }
+  }
+
+  function toolMessage(
+    content: AssistantMessage['content'],
+    extra: Partial<AssistantMessage> = {}
+  ): AssistantMessage {
+    return { ...fakeAssistant(''), content, stopReason: 'toolUse', ...extra }
+  }
+
+  const offering = (...names: string[]): Context => ({ messages: [], tools: names.map(tool) })
+
+  /** A real tool-call stream: start → toolcall_start → _delta → _end → done(toolUse). */
+  function toolUseScript(name: string): AssistantMessageEvent[] {
+    const call = toolCall(name)
+    return [
+      { type: 'start', partial: toolMessage([]) },
+      {
+        type: 'toolcall_start',
+        contentIndex: 0,
+        partial: toolMessage([toolCall(name, { arguments: {} })])
+      },
+      { type: 'toolcall_delta', contentIndex: 0, delta: '{"x":1}', partial: toolMessage([call]) },
+      { type: 'toolcall_end', contentIndex: 0, toolCall: call, partial: toolMessage([call]) },
+      { type: 'done', reason: 'toolUse', message: toolMessage([call]) }
+    ]
+  }
+  const SCRIPT_TYPES = ['start', 'toolcall_start', 'toolcall_delta', 'toolcall_end', 'done']
+  /** The script carries five names: one per partial / message, plus toolcall_end's toolCall. */
+  const fiveOf = (name: string): string[] => Array<string>(5).fill(name)
+
+  /** Every tool-call name an event carries. */
+  function toolNamesOf(event: AssistantMessageEvent): string[] {
+    const message =
+      event.type === 'done' ? event.message : event.type === 'error' ? event.error : event.partial
+    const names = message.content.flatMap((block) =>
+      block.type === 'toolCall' ? [block.name] : []
+    )
+    return event.type === 'toolcall_end' ? [...names, event.toolCall.name] : names
+  }
+
+  /** The script came through with every name repaired, ids and arguments kept. */
+  async function expectRepairedRun(stream: AssistantMessageEventStream): Promise<void> {
+    const events = await collect(stream)
+    expect(events.map((event) => event.type)).toEqual(SCRIPT_TYPES)
+    expect(events.flatMap(toolNamesOf)).toEqual(fiveOf('powershell'))
+    const [, , , end, done] = events
+    if (end.type !== 'toolcall_end' || done.type !== 'done') throw new Error('unexpected events')
+    expect(end.toolCall).toEqual(toolCall('powershell'))
+    expect(done.reason).toBe('toolUse')
+    expect(done.message.content).toEqual([toolCall('powershell')])
+    expect(await stream.result()).toBe(done.message)
+  }
+
+  /** Every event and the result passed by reference. */
+  async function expectUntouched(
+    stream: AssistantMessageEventStream,
+    script: AssistantMessageEvent[]
+  ): Promise<void> {
+    const events = await collect(stream)
+    expect(events).toHaveLength(script.length)
+    events.forEach((event, index) => expect(event).toBe(script[index]))
+    const done = script[script.length - 1]
+    expect(await stream.result()).toBe(done.type === 'done' ? done.message : undefined)
+  }
+
+  it.each(['stream', 'streamSimple'] as const)(
+    'D1/D3 %s without a network seam: every event and result() carry the offered name',
+    async (method) => {
+      const script = toolUseScript('powerShell')
+      const innerStream = queued(script)
+      const inner = fakeInner()
+      inner[method].mockReturnValue(innerStream)
+      const decorated = withNetwork(inner)
+      const context = offering('powershell')
+
+      const stream =
+        method === 'stream'
+          ? decorated.stream(MODEL, context)
+          : decorated.streamSimple(MODEL, context)
+
+      expect(stream).not.toBe(innerStream)
+      await expectRepairedRun(stream)
+      expect(script.flatMap(toolNamesOf)).toEqual(fiveOf('powerShell'))
+    }
+  )
+
+  it('D2 with a network seam and a rewrite hook: the same names, inside the request scope', async () => {
+    const seam = alsSeam()
+    const rewrite = vi.fn((message: string) => message)
+    let inScope: boolean | undefined
+    const inner = fakeInner()
+    inner.stream.mockImplementation(() => {
+      inScope = seam.inScope()
+      return queued(toolUseScript('powerShell'))
+    })
+
+    await expectRepairedRun(
+      withNetwork(inner, seam.network, { rewriteErrorMessage: rewrite }).stream(
+        MODEL,
+        offering('powershell')
+      )
+    )
+
+    expect(seam.scopeRuns()).toBe(1)
+    expect(inScope).toBe(true)
+    expect(rewrite).not.toHaveBeenCalled()
+  })
+
+  it('D4 complete / completeSimple resolve the repaired message', async () => {
+    const inner = fakeInner()
+    inner.stream.mockImplementation(() => queued(toolUseScript('powerShell')))
+    inner.streamSimple.mockImplementation(() => queued(toolUseScript('powerShell')))
+    const decorated = withNetwork(inner)
+
+    const results = [
+      await decorated.complete(MODEL, offering('powershell')),
+      await decorated.completeSimple(MODEL, offering('powershell'))
+    ]
+
+    for (const result of results) {
+      expect(result.stopReason).toBe('toolUse')
+      expect(result.content).toEqual([toolCall('powershell')])
+    }
+  })
+
+  it('D5 an exact name: the stream is wrapped, but events and result() pass by reference', async () => {
+    const script = toolUseScript('powershell')
+    const innerStream = queued(script)
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(innerStream)
+
+    const stream = withNetwork(inner).stream(MODEL, offering('powershell'))
+
+    expect(stream).not.toBe(innerStream)
+    await expectUntouched(stream, script)
+  })
+
+  it.each([
+    { label: 'D6 an unknown name', offered: ['powershell'], called: 'bash' },
+    { label: 'D7 an ambiguous fold', offered: ['Foo', 'foo'], called: 'FOO' }
+  ])('$label passes through unchanged', async ({ offered, called }) => {
+    const script = toolUseScript(called)
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(queued(script))
+
+    const stream = withNetwork(inner).stream(MODEL, offering(...offered))
+
+    await expectUntouched(stream, script)
+    expect(script.flatMap(toolNamesOf)).toEqual(fiveOf(called))
+  })
+
+  it('D8 no network, no rewrite, no tools offered: the inner stream itself is returned', () => {
+    const innerStream = queued(toolUseScript('powerShell'))
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(innerStream)
+
+    expect(withNetwork(inner).stream(MODEL, { systemPrompt: 'p', messages: [] })).toBe(innerStream)
+  })
+
+  it('D9 tools declared only in a transcript system message are repaired to', async () => {
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(queued(toolUseScript('powerShell')))
+    const context: Context = {
+      messages: [{ role: 'system', content: 'p', toolsAdded: [tool('powershell')], timestamp: 0 }]
+    }
+
+    await expectRepairedRun(withNetwork(inner).stream(MODEL, context))
+  })
+
+  it('D10 a tool removed later in the transcript is no longer repaired to', async () => {
+    const script = toolUseScript('PowerShell')
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(queued(script))
+    const context: Context = {
+      tools: [tool('read'), tool('powershell')],
+      messages: [
+        { role: 'system', content: 'p', toolsRemoved: [{ name: 'powershell' }], timestamp: 0 }
+      ]
+    }
+
+    await expectUntouched(withNetwork(inner).stream(MODEL, context), script)
+  })
+
+  it('D11 a failed tool-use stream: the error carries the offered name and the recorded detail', async () => {
+    const call = toolCall('powerShell')
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(
+      queued([
+        { type: 'toolcall_end', contentIndex: 0, toolCall: call, partial: toolMessage([call]) },
+        {
+          type: 'error',
+          reason: 'error',
+          error: toolMessage([call], { stopReason: 'error', errorMessage: 'Connection error.' })
+        }
+      ])
+    )
+
+    const stream = withNetwork(inner, detailSeam('ECONNRESET').network).stream(
+      MODEL,
+      offering('powershell')
+    )
+    const events = await collect(stream)
+    const result = await stream.result()
+
+    expect(events.flatMap(toolNamesOf)).toEqual(['powershell', 'powershell', 'powershell'])
+    const failed = events[1]
+    if (failed.type !== 'error') throw new Error('expected an error event')
+    expect(failed.reason).toBe('error')
+    expect(failed.error.errorMessage).toBe('Connection error. (ECONNRESET)')
+    expect(result).toBe(failed.error)
+    expect(result.content).toEqual([toolCall('powershell')])
+  })
+
+  it('D12 an aborted result: the offered name and the rewritten error text', async () => {
+    const rewrite = (message: string, model: Model<Api>): string =>
+      message.replace(model.provider, 'My Provider')
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(
+      queued([
+        {
+          type: 'error',
+          reason: 'aborted',
+          error: toolMessage([toolCall('powerShell')], {
+            stopReason: 'aborted',
+            errorMessage: 'Request to p1 aborted'
+          })
+        }
+      ])
+    )
+
+    const stream = withNetwork(inner, undefined, { rewriteErrorMessage: rewrite }).stream(
+      MODEL,
+      offering('powershell')
+    )
+    const [event] = await collect(stream)
+    const result = await stream.result()
+
+    if (event.type !== 'error') throw new Error('expected an error event')
+    expect(event.reason).toBe('aborted')
+    for (const message of [event.error, result]) {
+      expect(message.content).toEqual([toolCall('powershell')])
+      expect(message.errorMessage).toBe('Request to My Provider aborted')
+    }
+  })
+
+  it('D13 a source that ends without a terminal event: the outer result() is repaired', async () => {
+    const call = toolCall('powerShell')
+    const innerStream = createAssistantMessageEventStream()
+    innerStream.push({
+      type: 'toolcall_end',
+      contentIndex: 0,
+      toolCall: call,
+      partial: toolMessage([call])
+    })
+    innerStream.end(toolMessage([call]))
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(innerStream)
+
+    const result = await withNetwork(inner).stream(MODEL, offering('powershell')).result()
+
+    expect(result.stopReason).toBe('toolUse')
+    expect(result.content).toEqual([toolCall('powershell')])
+  })
+
+  it('D14 a nameless partial call at toolcall_start does not break a healthy stream', async () => {
+    const nameless = { type: 'toolCall', id: 'c1', arguments: {} } as unknown as ToolCall
+    const script = toolUseScript('powerShell')
+    script[1] = { type: 'toolcall_start', contentIndex: 0, partial: toolMessage([nameless]) }
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(queued(script))
+
+    const stream = withNetwork(inner).stream(MODEL, offering('powershell'))
+    const events = await collect(stream)
+    const result = await stream.result()
+
+    expect(events.map((event) => event.type)).toEqual(SCRIPT_TYPES)
+    expect(events[1]).toBe(script[1])
+    expect(result.stopReason).toBe('toolUse')
+    expect(result.content).toEqual([toolCall('powershell')])
+  })
+
+  it('D15 a context it cannot read: no synchronous throw, the inner output passes unrepaired', async () => {
+    const script = toolUseScript('powerShell')
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(queued(script))
+
+    let stream: AssistantMessageEventStream | undefined
+    expect(() => {
+      stream = withNetwork(inner, detailSeam(undefined).network).stream(MODEL, {} as Context)
+    }).not.toThrow()
+
+    await expectUntouched(stream!, script)
+    expect(script.flatMap(toolNamesOf)).toEqual(fiveOf('powerShell'))
+  })
+
+  it('D16 several calls in one message: each repaired, ids and order kept', async () => {
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(
+      queued([
+        {
+          type: 'done',
+          reason: 'toolUse',
+          message: toolMessage([toolCall('Read', { id: 'a' }), toolCall('powerShell', { id: 'b' })])
+        }
+      ])
+    )
+
+    const stream = withNetwork(inner).stream(MODEL, offering('read', 'powershell'))
+    const [done] = await collect(stream)
+
+    const expected = [toolCall('read', { id: 'a' }), toolCall('powershell', { id: 'b' })]
+    if (done.type !== 'done') throw new Error('expected done')
+    expect(done.message.content).toEqual(expected)
+    expect((await stream.result()).content).toEqual(expected)
+  })
+
+  it('D17 a tool without a string name in the context: no throw, the others still repair', async () => {
+    const inner = fakeInner()
+    inner.streamSimple.mockImplementation(() => queued(toolUseScript('powerShell')))
+    const decorated = withNetwork(inner)
+
+    for (const odd of [{ description: 'x' }, { name: 42, description: 'x' }]) {
+      const context: Context = { messages: [], tools: [odd as never, tool('powershell')] }
+      expect(() => decorated.streamSimple(MODEL, context)).not.toThrow()
+      const result = await decorated.completeSimple(MODEL, context)
+      expect(result.content).toEqual([toolCall('powershell')])
+    }
+  })
+
+  it('D18 an event type pi might add later, without a partial, is forwarded untouched', async () => {
+    const script = toolUseScript('powerShell')
+    const unknown = {
+      type: 'usage_update',
+      usage: { input: 1 }
+    } as unknown as AssistantMessageEvent
+    script.splice(1, 0, unknown)
+    const inner = fakeInner()
+    inner.stream.mockReturnValue(queued(script))
+
+    const stream = withNetwork(inner).stream(MODEL, offering('powershell'))
+    const events = await collect(stream)
+    const result = await stream.result()
+
+    expect(events.map((event) => event.type)).toEqual(script.map((event) => event.type))
+    expect(events[1]).toBe(unknown)
+    expect(result.stopReason).toBe('toolUse')
+    expect(result.content).toEqual([toolCall('powershell')])
   })
 })

@@ -20,6 +20,10 @@
  *    and a uuid containing `500` / `502` … would make a configuration error look retryable.
  * 4. **Timeout default.** `timeoutMs` is filled in on the stream/complete family when the
  *    caller left it out (A1) — also without a network seam.
+ * 5. **Tool-name repair.** A tool call named like an offered tool except for letter case
+ *    (`powerShell` for `powershell`) is renamed to it on every event and on `result()`
+ *    (`toolNameRepair.ts`) — also without a network seam. Deferred fetches carry no context
+ *    and are not repaired.
  *
  * Every other `Models` method is delegated untouched. The object literal below is typed as
  * `Models`, so a method added by a pi upgrade fails the typecheck instead of silently missing.
@@ -38,6 +42,12 @@ import {
   type ModelsSimpleStreamOptions
 } from '@earendil-works/pi-ai'
 import type { RuntimeNetwork } from '../types'
+import {
+  repairEventToolNames,
+  repairToolCallNames,
+  toolNameResolverFor,
+  type ToolNameResolver
+} from './toolNameRepair'
 
 /** Same as the OpenAI / Anthropic SDK clients' own default: 10 minutes. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000
@@ -121,16 +131,27 @@ export function withNetwork(
     return { ...message, errorMessage }
   }
 
-  /** A final result: only failed ones are touched (a clean result never reads the detail). */
-  const annotateResult = (message: AssistantMessage, model: Model<Api>): AssistantMessage =>
-    message.stopReason === 'error' || message.stopReason === 'aborted'
+  /**
+   * A final result: tool names repaired; error text only on failed ones (a clean result never
+   * reads the detail).
+   */
+  const annotateResult = (
+    result: AssistantMessage,
+    model: Model<Api>,
+    resolve: ToolNameResolver | undefined
+  ): AssistantMessage => {
+    const message = resolve ? repairToolCallNames(result, resolve) : result
+    return message.stopReason === 'error' || message.stopReason === 'aborted'
       ? annotateError(message, model)
       : message
+  }
 
   const annotateEvent = (
-    event: AssistantMessageEvent,
-    model: Model<Api>
+    original: AssistantMessageEvent,
+    model: Model<Api>,
+    resolve: ToolNameResolver | undefined
   ): AssistantMessageEvent => {
+    const event = resolve ? repairEventToolNames(original, resolve) : original
     if (event.type !== 'error') return event
     const error = annotateError(event.error, model)
     return error === event.error ? event : { ...event, error }
@@ -138,14 +159,16 @@ export function withNetwork(
 
   /**
    * Run `start` (the inner stream call) in a request scope and pump its events into a stream
-   * returned synchronously. Without a network seam and a rewrite hook there is nothing to do:
-   * the inner stream itself is returned, events and result by reference.
+   * returned synchronously. Without a network seam, a rewrite hook and offered tools there is
+   * nothing to do: the inner stream itself is returned, events and result by reference.
    */
   const wrapStream = (
     model: Model<Api>,
+    context: Context,
     start: () => AsyncIterable<AssistantMessageEvent>
   ): AssistantMessageEventStream => {
-    if (!network && !rewrite) {
+    const resolve = toolNameResolverFor(context)
+    if (!network && !rewrite && !resolve) {
       try {
         return start() as AssistantMessageEventStream
       } catch (error) {
@@ -160,11 +183,11 @@ export function withNetwork(
           const source = start()
           for await (const event of source) {
             if (event.type === 'done' || event.type === 'error') terminated = true
-            outer.push(annotateEvent(event, model))
+            outer.push(annotateEvent(event, model, resolve))
           }
           if (terminated) return
           if (hasResult(source)) {
-            outer.end(annotateResult(await source.result(), model))
+            outer.end(annotateResult(await source.result(), model, resolve))
           } else {
             const message = setupErrorMessage(
               model,
@@ -203,7 +226,7 @@ export function withNetwork(
       context: Context,
       streamOptions?: ModelsApiStreamOptions<TApi>
     ) =>
-      wrapStream(model, () =>
+      wrapStream(model, context, () =>
         inner.stream(model, context, withTimeoutDefault(streamOptions, timeoutMs))
       ),
     streamSimple: (
@@ -211,7 +234,7 @@ export function withNetwork(
       context: Context,
       streamOptions?: ModelsSimpleStreamOptions
     ) =>
-      wrapStream(model, () =>
+      wrapStream(model, context, () =>
         inner.streamSimple(model, context, withTimeoutDefault(streamOptions, timeoutMs))
       ),
     // complete* resolve the decorated stream's result: one code path, never rejects for
