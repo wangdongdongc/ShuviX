@@ -172,6 +172,11 @@ export interface SpawnedAgentRecord extends LockRecord {
   hook?: string
   /** 结果契约（`next` 工具据它的 schema 重建） */
   resultContract?: ResultContract
+  /**
+   * 工具派发时调用方声明的一次性（`SpawnParams.oneShot`）：派发 / 面板追问落定就卸掉按 agent 扩展，同 hook
+   * 派发（durable/spawn.ts）。缺省 = 不是（hook 派发不写它，靠 `dispatch` 认）
+   */
+  oneShot?: boolean
 }
 
 /**
@@ -208,7 +213,7 @@ function parseResultContract(raw: unknown): ResultContract | undefined {
  * 或形状不对 → undefined。锁字段与锁记录同一个校验器；人设等其余键丢掉。
  *
  * 严格口径（PIN-09）：agentId 非空串（不查前缀）；depth 是 ≥ 1 的整数；ids 是正整数；hook 给了就得是
- * 字符串；ownerCallId 给了就得是非空串；结果契约是 `{schema: 对象, nudges?: ≥ 0 的整数, sourceLabel?:
+ * 字符串；ownerCallId 给了就得是非空串；oneShot 给了就得是布尔；结果契约是 `{schema: 对象, nudges?: ≥ 0 的整数, sourceLabel?:
  * 字符串}`。不做跨字段校验（hook / ownerCallId 与 dispatch、记录里的 conversationId 与所在对话）。
  */
 export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | undefined {
@@ -216,7 +221,7 @@ export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | unde
   const lock = parseLockFields(raw)
   if (lock === undefined) return undefined
   const { agentId, depth, canSpawn, dispatch, parentConversationId, ownerTaskId } = raw
-  const { ownerCallId, displayName, description, hook, resultContract } = raw
+  const { ownerCallId, displayName, description, hook, resultContract, oneShot } = raw
   if (typeof agentId !== 'string' || agentId.length === 0) return undefined
   if (!isPositiveInteger(depth)) return undefined
   if (typeof canSpawn !== 'boolean') return undefined
@@ -224,6 +229,7 @@ export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | unde
   if (!isPositiveInteger(parentConversationId) || !isPositiveInteger(ownerTaskId)) return undefined
   if (typeof displayName !== 'string' || typeof description !== 'string') return undefined
   if (hook !== undefined && typeof hook !== 'string') return undefined
+  if (oneShot !== undefined && typeof oneShot !== 'boolean') return undefined
   if (ownerCallId !== undefined && (typeof ownerCallId !== 'string' || ownerCallId.length === 0)) {
     return undefined
   }
@@ -245,7 +251,8 @@ export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | unde
     displayName,
     description,
     ...(hook === undefined ? {} : { hook }),
-    ...(contract === undefined ? {} : { resultContract: contract })
+    ...(contract === undefined ? {} : { resultContract: contract }),
+    ...(oneShot === undefined ? {} : { oneShot })
   }
 }
 
@@ -277,12 +284,13 @@ const SPAWNED_RECORD_KEYS = [
   'displayName',
   'description',
   'hook',
-  'resultContract'
+  'resultContract',
+  'oneShot'
 ] as const satisfies readonly (keyof SpawnedAgentRecord)[]
 
 /**
  * 在调用方的提交里把派生 agent 记录平铺写进该对话的 `AgentStateDoc`（PIN-01）：记录的每个键整份覆盖，
- * 记录里缺省的可选键（思考档位 / 派发它的 tool_call id / hook / 结果契约）从文档删掉；其余键（人设、指令文件、根会话 id、
+ * 记录里缺省的可选键（思考档位 / 派发它的 tool_call id / hook / 结果契约 / 一次性）从文档删掉；其余键（人设、指令文件、根会话 id、
  * 上次告知的日期）原样保留。先严格序列化 —— 非 JSON 的值在碰文档之前就抛错。
  */
 export async function writeSpawnedAgentRecord(

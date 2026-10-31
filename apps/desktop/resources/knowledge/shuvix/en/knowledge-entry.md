@@ -13,7 +13,7 @@ sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/knowledgeTool.ts
     title: knowledgeTool.ts — the `knowledge` tool
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/review.ts
-    title: review.ts — what `submit` hands the knowledge writer and the stamp a pass earns
+    title: review.ts — what `submit` hands the knowledge librarian and the stamp a pass earns
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/chat-protocol/src/knowledge.ts
     title: knowledge.ts — the type and status vocabularies
 ---
@@ -85,7 +85,7 @@ In their usual order:
 | `stale_after`   | `YYYY-MM-DD`                                           | no       | Date after which the entry needs re-verification (the sidebar badges it).                                                                                                                                                              |
 | `sources`       | list of `{ id?, resource, title?, author?, last_modified? }` (or bare locator strings) | no | Where the claims come from. `resource` is a self-contained locator: an absolute path (optionally `#symbol`), a full URL, `<remote-url>@<commit>:<path>`, or `shuvix://session/<id>`. `id` enables footnote citations `[^id]`. |
 | `generated`     | `{ by, at }`                                           | no       | **Host stamp** — who wrote the content (`shuvix-<agent>/<model>`) and when (ISO 8601). Refreshed by the write hook on every agent edit of an entry; when an entry passes `submit`, set to the agent that submitted it. Never set it by hand; the sidebar's "new entry" leaves it out on purpose. |
-| `verified`      | `{ by, at }` or a list of them                         | no       | **The review axis**: who checked the entry. A person's check (`by: human:…`) is written only by a UI action; a pass of `submit` adds the knowledge writer's machine confirmation (`by: shuvix-knowledge-writer/<model>`, replacing an earlier one). **Agents never write it.** From it come the trust tier — machine-confirmed or human-reviewed, counting only checks no older than `generated.at` — and the "edited after it was checked" badge (every check older than `generated.at`). |
+| `verified`      | `{ by, at }` or a list of them                         | no       | **The review axis**: who checked the entry. A person's check (`by: human:…`) is written only by a UI action; a pass of `submit` adds the knowledge librarian's machine confirmation (`by: shuvix-knowledge-writer/<model>`, replacing an earlier one). **Agents never write it.** From it come the trust tier — machine-confirmed or human-reviewed, counting only checks no older than `generated.at` — and the "edited after it was checked" badge (every check older than `generated.at`). |
 
 Unknown keys are kept as they are. Values of the wrong shape are reported as warnings and fall
 back to defaults; only a missing frontmatter or a missing / empty `type` makes a file "not a
@@ -114,11 +114,11 @@ ASCII is lower-cased, the result is cut to 60 characters, and a taken name gets 
 - **Write it with `write`** into the base's directory as plain markdown — one subject per file,
   no frontmatter needed, saying in the body where each claim comes from — and then **submit** it
   (`knowledge`, `action: submit` with `base` and `path`). ShuviX runs the builtin
-  `knowledge-writer` agent on it right away: it completes the frontmatter (self-description,
+  knowledge librarian (the `knowledge-writer` agent) on it right away: it completes the frontmatter (self-description,
   `type`, `title`, `description`, `tags`, `status`, `sources`) and judges whether the entry is
   about one subject, reads cold, and sources every claim. On a pass ShuviX stamps `generated`
-  (the submitter) and `verified` (the writer's machine confirmation); on a fail the report says
-  what to fix and the entry stays unconfirmed. The writer runs only this way — the `agent` tool
+  (the submitter) and `verified` (the librarian's machine confirmation); on a fail the report says
+  what to fix and the entry stays unconfirmed. The librarian runs only this way — the `agent` tool
   cannot dispatch it — and its model follows the usual rule (its md's `shuvix-model`, else the
   caller's).
 - **Change with `edit`** at the absolute path that `search` / `list` gave you — a surgical diff

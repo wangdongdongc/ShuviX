@@ -11,7 +11,7 @@ sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/validate.ts
     title: validate.ts —— 検証の段階
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/review.ts
-    title: review.ts —— `submit` がナレッジライターに渡すものと、合格で押されるスタンプ
+    title: review.ts —— `submit` がナレッジ司書に渡すものと、合格で押されるスタンプ
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/knowledgeTool.ts
     title: knowledgeTool.ts —— `knowledge` ツール
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/chat-protocol/src/knowledge.ts
@@ -81,7 +81,7 @@ Open Knowledge Format（OKF）v0.2 に、小さな独自プロファイルを添
 | `stale_after`   | `YYYY-MM-DD`                                                 | いいえ                  | この日を過ぎるとエントリは再確認が必要（サイドバーにバッジ）。                                                                                                                                                                             |
 | `sources`       | `{ id?, resource, title?, author?, last_modified? }` のリスト（素のロケーター文字列も可） | いいえ | 主張の出所。`resource` は自己完結したロケーター：絶対パス（`#symbol` 付き可）、完全な URL、`<remote-url>@<commit>:<path>`、または `shuvix://session/<id>`。`id` は脚注引用 `[^id]` を可能にする。                                        |
 | `generated`     | `{ by, at }`                                                 | いいえ                  | **ホストのスタンプ** —— 内容を書いたのは誰か（`shuvix-<agent>/<model>`）、いつか（ISO 8601）。エージェントがエントリを編集するたびに書き込みフックが更新し、エントリが `submit` に合格すると提出したエージェントに書き換わる。手で設定しないこと。サイドバーの「新規エントリ」は意図的に省く。 |
-| `verified`      | `{ by, at }` またはそのリスト                                | いいえ                  | **レビュー軸**：誰がエントリを確認したか。人による確認（`by: human:…`）は UI 操作だけが書く。`submit` に合格するとナレッジライターの機械確認（`by: shuvix-knowledge-writer/<model>`、以前のものを置き換える）が加わる。**エージェントは決して書かない。** ここから信頼段階 —— 機械確認か人手レビューか、`generated.at` より古くない確認だけを数える —— と「確認後に編集あり」バッジ（すべての確認が `generated.at` より古い）が導かれる。 |
+| `verified`      | `{ by, at }` またはそのリスト                                | いいえ                  | **レビュー軸**：誰がエントリを確認したか。人による確認（`by: human:…`）は UI 操作だけが書く。`submit` に合格するとナレッジ司書の機械確認（`by: shuvix-knowledge-writer/<model>`、以前のものを置き換える）が加わる。**エージェントは決して書かない。** ここから信頼段階 —— 機械確認か人手レビューか、`generated.at` より古くない確認だけを数える —— と「確認後に編集あり」バッジ（すべての確認が `generated.at` より古い）が導かれる。 |
 
 未知のキーはそのまま保持されます。形が違う値は警告として報告され既定値に落ちます。frontmatter が
 無いか、`type` が欠落・空のときだけ、ファイルは「概念ではない」ものになります。
@@ -106,11 +106,11 @@ Markdown。**同じベース**内の他のエントリへは、バンドル絶�
 
 - **`write` でベースのディレクトリに書きます**。普通の markdown で —— 一つの主題に一つのファイル、
   frontmatter は不要、各主張の出典を本文に書く —— そのあと**提出**します（`knowledge`、`action: submit`、
-  `base` と `path`）。ShuviX はその場で組み込みの `knowledge-writer` エージェントに確認させます：
+  `base` と `path`）。ShuviX はその場で組み込みのナレッジ司書（`knowledge-writer` エージェント）に確認させます：
   frontmatter（自己申告行、`type`、`title`、`description`、`tags`、`status`、`sources`）を補い、
   エントリが一つの主題だけを扱い、予備知識なしで読め、すべての主張に出典があるかを判定します。合格なら
-  ShuviX が `generated`（提出者）と `verified`（ライターの機械確認）を押し、不合格なら報告が直すべき点を
-  述べ、エントリは未確認のままです。ライターはこの経路でしか動きません —— `agent` ツールでは派遣
+  ShuviX が `generated`（提出者）と `verified`（司書の機械確認）を押し、不合格なら報告が直すべき点を
+  述べ、エントリは未確認のままです。司書はこの経路でしか動きません —— `agent` ツールでは派遣
   できません —— そのモデルは通常の規則に従います（md の `shuvix-model`、なければ呼び出し元のもの）。
 - **`edit` で変更**。パスは `search` / `list` が返した絶対パス —— 本文全体を送り直すより、精密な差分の
   方がよい。編集後、書き込みフックがファイルを検証し（診断はツール結果で返る）、`generated` を更新し、

@@ -1,12 +1,14 @@
 /**
  * 宿主派发 · hook agent 用完即卸（P2-08 D 段：55–62）。宿主派发的子 agent（`dispatch: 'hook'`）在那次派发 /
- * 面板追问落定之后卸掉它的 `shuvix.agent.<对话>` 扩展（spawn.ts 的 `unloadHosted`）：监控面板（「此刻装着的」）
- * 只在它干活时列它；记录、转写、身份照留，任务登记里那一行**不**被清掉（面板「任务」页照常）。工具派发的不受影响。
+ * 面板追问落定之后卸掉它的 `shuvix.agent.<对话>` 扩展（spawn.ts 的 `unloadOneShot`）：监控面板（「此刻装着的」）
+ * 只在它干活时列它；记录、转写、身份照留，任务登记里那一行**不**被清掉（面板「任务」页照常）。缺省的工具派发
+ * 不受影响（声明一次性的工具派发同样卸，见 spawn.panel.test.ts 的 OS 段）。
  *
  *  55 审查员交卷之后卸掉（转写、任务行 done）· 56 每一种收场都卸掉（模型报错 / 不交卷 / 超时 / 外部 signal /
  *  根的中止级联 / 任务页软停止）· 57 混批捕获、协调器自己中止子对话之后也卸掉 · 58 面板追问装回来、落定再卸
  *  （titler 与审查员）· 59 忙着被拒的追问不卸在跑的 hook agent · 60 两个 hook agent 同时在跑，各卸各的 ·
- *  61 工具派发的子 agent 里发起的审查只卸审查员 · 62 卸载失败只记警告、不改结果；会话关在半路不挂住、不记警告
+ *  61 工具派发的子 agent 里发起的审查只卸审查员 · 62 卸载失败只记警告、不改结果；会话关在半路不挂住、不记警告 ·
+ *  OS-H1 宿主派发不读 `oneShot`：给 false 照样卸，给 true 也不进记录
  *
  * 断言的时机是固定的同步点，不是长 `waitFor`：没人会「过一会儿」再卸 —— 漏卸就永远列着。观察型在 `ends()`
  * 那一刻（runner 等 runTask，spawn 的 finally 已经跑过）；判定型正常交卷在 `decide` / askOp 返回那一刻；
@@ -19,6 +21,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { spawnedAgentRecordOf, type SpawnedAgentRecord } from '../agentRecord'
 import { backgroundContext as BG } from '../context'
 import type { DurableSession } from '../durableSession'
+import { AgentStateDoc } from '../docs'
 import { agentExtensionName } from '../lock'
 import type { AgentMonitorRow } from '../monitorSnapshot'
 import { answer, callTool, callTools, held, modelError, stalled } from './support/faux'
@@ -27,6 +30,7 @@ import {
   ASKER,
   HOOK_PROFILES,
   hookRig,
+  TITLER as TITLER_PROFILE,
   promptPayload,
   queueRoles,
   REVIEWER,
@@ -465,7 +469,7 @@ describe('P2-08 D · hook agents are unloaded once their dispatch settles', () =
     for (const record of [hookAgent(rig, TITLER), hookAgent(rig, REVIEWER_NAME)]) {
       const conv = record.conversationId
       expect(rig.t.warnings).toContainEqual(
-        expect.stringContaining(`unloading hook agent conversation ${conv} failed: boom`)
+        expect.stringContaining(`unloading one-shot agent conversation ${conv} failed: boom`)
       )
       // 收尾失败的代价：它还装着，所以还列着
       expect(extensionTools(rig.t, agentExtensionName(conv))).toBeDefined()
@@ -484,6 +488,46 @@ describe('P2-08 D · hook agents are unloaded once their dispatch settles', () =
     await waitFor(() => rig.ends().length === 1, 3000, 'the titler end')
     await waitFor(() => rig.runner.runningCount() === 0)
     expect(rig.ends()).toHaveLength(1)
-    expect(rig.t.warnings.filter((line) => /unloading hook agent/.test(line))).toEqual([])
+    expect(rig.t.warnings.filter((line) => /unloading one-shot agent/.test(line))).toEqual([])
   })
+
+  it.each([false, true])(
+    'OS-H1 a host dispatch ignores oneShot (%s): unloaded once it settles; the record is dispatch hook with no oneShot key',
+    async (oneShot) => {
+      const rig = await hookRig()
+      rig.kit.queue(answer('A Title'))
+      const outcome = await withTimeout(
+        rig.session.agents.spawn(
+          {
+            owner: { anchor: true },
+            profile: TITLER_PROFILE,
+            prompt: 'Title this session.',
+            description: 'title',
+            oneShot
+          },
+          BG
+        ),
+        5000,
+        'spawn'
+      )
+      expect(outcome).toMatchObject({ result: 'A Title' })
+      expect('error' in outcome).toBe(false)
+      const conv = outcome.conversationId!
+      const agentId = outcome.agentId!
+      // expectUnloaded 去掉任务行那几条（直接经协调器派发，没有路由登记）
+      expect(extensionTools(rig.t, agentExtensionName(conv))).toBeUndefined()
+      expect((await rig.session.monitorSnapshot()).map((row) => row.agentId)).not.toContain(agentId)
+      expect(rig.session.spawnedRecords().map((r) => r.agentId)).toContain(agentId)
+      expect(rig.session.agentIdentity(conv)?.kind).toBe('spawned')
+      expect(await liveTasks(rig.session, conv)).toEqual([])
+      const record = (await spawnedAgentRecordOf(rig.session.harness, conv, BG))!
+      expect(record.dispatch).toBe('hook')
+      expect('oneShot' in record).toBe(false)
+      const state = (await rig.session.harness.snapshot(AgentStateDoc, conv, BG)) as Record<
+        string,
+        unknown
+      >
+      expect('oneShot' in state).toBe(false)
+    }
+  )
 })

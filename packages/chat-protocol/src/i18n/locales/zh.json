@@ -185,7 +185,7 @@
   "knowledge": {
     "badgeDraft": "草稿 —— 尚未完成",
     "badgeVerified": "已人工核实",
-    "badgeMachineConfirmed": "已机器确认 —— 通过了知识库写手的检查，未经人工核实",
+    "badgeMachineConfirmed": "已机器确认 —— 通过了知识库管理员的检查，未经人工核实",
     "badgeVerifiedOutdated": "核实后又被修改",
     "badgeStale": "已过 stale_after 日期",
     "badgeDeprecated": "已过时",
@@ -1198,7 +1198,7 @@
     "widgetLabel": "小组件",
     "widgetHint": "经小组件自己的操作使用用户的小组件，以及造小组件",
     "knowledgeLabel": "知识库",
-    "knowledgeHint": "检索本会话的知识库，并把条目提交给知识库写手检查",
+    "knowledgeHint": "检索本会话的知识库，并把条目提交给知识库管理员检查",
     "agentLabel": "派发子智能体",
     "agentHint": "把一件自足的任务交给子智能体 —— 它以自己的系统提示词与工具独立执行，只把结果回报给你",
     "subAgentTab": "子智能体",

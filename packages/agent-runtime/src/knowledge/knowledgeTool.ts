@@ -90,7 +90,7 @@ Actions:
 - "bases": list this session's bases and their directories.
 - "search": find entries by free text (\`query\`); leave \`base\` out to search every base. Only titles, descriptions, tags, types and headings are indexed, not the prose — pick by title and description, then \`read\` the file. For a literal string inside bodies, \`grep\` the base's directory.
 - "list": list every entry in one base.
-- "submit": have the knowledge writer check one entry (\`path\`) and complete its metadata. A passing entry is marked machine-confirmed; otherwise fix what the report says and submit again.
+- "submit": have the knowledge librarian check one entry (\`path\`) and complete its metadata. A passing entry is marked machine-confirmed; otherwise fix what the report says and submit again.
 
 To record something, \`write\` it as plain markdown into the base's directory — one subject per file, named after that subject (the name is permanent), no frontmatter needed, saying in the body where each claim comes from (a path, URL or commit) — then submit it. Change an entry with \`edit\` and submit it again. Extend the entry that already covers a subject rather than adding a near-duplicate. A base may hold the user's own notes without metadata — leave them as they are. Never write \`verified\`. Point into another base with a \`shuvix://\` URI.`
 
@@ -455,7 +455,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   ): Promise<Result> {
     if (this.deps.isReviewer?.(call)) {
       throw new Error(
-        'The knowledge writer does not submit entries — edit the entry you were given and answer with `next`.'
+        'The knowledge librarian does not submit entries — edit the entry you were given and answer with `next`.'
       )
     }
     if (!params.path?.trim()) throw new Error('"submit" needs `path` — the entry\'s file')
@@ -508,7 +508,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     )
     if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
     if ('error' in outcome) {
-      throw new Error(`The knowledge writer could not check ${abs}: ${outcome.error}`)
+      throw new Error(`The knowledge librarian could not check ${abs}: ${outcome.error}`)
     }
     const report = outcome.report || '(no report)'
     if (!outcome.passed) {
@@ -518,7 +518,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
           '',
           report,
           '',
-          'Fix the entry and submit it again. Re-read it first — the writer may have edited its metadata.'
+          'Fix the entry and submit it again. Re-read it first — the librarian may have edited its metadata.'
         ],
         { action: 'submit', path: rel }
       )
@@ -533,7 +533,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         : ['- it has no OKF frontmatter with a `type`']
       return text(
         [
-          `Not confirmed: ${abs} — the writer passed it, but the file still breaks the format:`,
+          `Not confirmed: ${abs} — the librarian passed it, but the file still breaks the format:`,
           ...why,
           '',
           report,

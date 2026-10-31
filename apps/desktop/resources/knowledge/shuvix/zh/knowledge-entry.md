@@ -11,7 +11,7 @@ sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/validate.ts
     title: validate.ts —— 校验分档
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/review.ts
-    title: review.ts —— `submit` 交给知识库写手的东西，以及通过之后盖的章
+    title: review.ts —— `submit` 交给知识库管理员的东西，以及通过之后盖的章
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/knowledgeTool.ts
     title: knowledgeTool.ts —— `knowledge` 工具
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/chat-protocol/src/knowledge.ts
@@ -73,7 +73,7 @@ Format（OKF）v0.2，外加一个小小的自有 profile：frontmatter 是元�
 | `stale_after`   | `YYYY-MM-DD`                                               | 否                  | 过了这个日期条目需要重新核实（侧栏打徽标）。                                                                                                                                                                                     |
 | `sources`       | `{ id?, resource, title?, author?, last_modified? }` 的列表（也可以是裸定位符字符串） | 否 | 结论来自哪里。`resource` 是自含的定位符：绝对路径（可带 `#symbol`）、完整 URL、`<remote-url>@<commit>:<path>`，或 `shuvix://session/<id>`。`id` 用于脚注引用 `[^id]`。                                                            |
 | `generated`     | `{ by, at }`                                               | 否                  | **宿主章** —— 内容是谁写的（`shuvix-<agent>/<model>`）、何时（ISO 8601）。agent 每次编辑条目时由写钩子刷新；条目通过 `submit` 时改记为提交它的 agent。永远不要手写；侧栏的「新建条目」刻意不写它。 |
-| `verified`      | `{ by, at }` 或它们的列表                                  | 否                  | **审阅轴**：谁检查过这条。人的核实（`by: human:…`）只由界面动作写；`submit` 通过时追加知识库写手的机器确认（`by: shuvix-knowledge-writer/<model>`，取代早先那一条）。**agent 永远不写它。** 信任档 —— 机器确认或人工审阅，只算不早于 `generated.at` 的那几条 —— 与「核实后又被修改」徽标（每一条都早于 `generated.at`）都由它推出。 |
+| `verified`      | `{ by, at }` 或它们的列表                                  | 否                  | **审阅轴**：谁检查过这条。人的核实（`by: human:…`）只由界面动作写；`submit` 通过时追加知识库管理员的机器确认（`by: shuvix-knowledge-writer/<model>`，取代早先那一条）。**agent 永远不写它。** 信任档 —— 机器确认或人工审阅，只算不早于 `generated.at` 的那几条 —— 与「核实后又被修改」徽标（每一条都早于 `generated.at`）都由它推出。 |
 
 未知键原样保留。形状不对的值报警告并取缺省；只有缺 frontmatter 或 `type` 缺失 / 为空才让一份文件
 「不是概念」。
@@ -96,10 +96,10 @@ Markdown。链接**同一个库**里的其他条目用 bundle 绝对的 markdown
 
 - **用 `write` 写进库目录**，写成普通 markdown —— 一个主题一个文件，不需要 frontmatter，正文里写明
   每个说法的出处 —— 然后**提交**它（`knowledge`，`action: submit`，带 `base` 和 `path`）。ShuviX
-  当场让内置的 `knowledge-writer` agent 过一遍：它补齐 frontmatter（自述行、`type`、`title`、
+  当场让内置的知识库管理员（`knowledge-writer` agent）过一遍：它补齐 frontmatter（自述行、`type`、`title`、
   `description`、`tags`、`status`、`sources`），并判断条目是否只讲一件事、能否冷读、每个说法是否有出处。
-  通过时 ShuviX 盖 `generated`（提交者）与 `verified`（写手的机器确认）；不通过时报告会说要改什么，
-  条目保持未确认。写手只能这样调起 —— `agent` 工具派不出它 —— 它的模型按通用规则来（它的 md 里的
+  通过时 ShuviX 盖 `generated`（提交者）与 `verified`（管理员的机器确认）；不通过时报告会说要改什么，
+  条目保持未确认。管理员只能这样调起 —— `agent` 工具派不出它 —— 它的模型按通用规则来（它的 md 里的
   `shuvix-model`，否则跟随调用方）。
 - **用 `edit` 改动**，路径用 `search` / `list` 给的绝对路径 —— 一段精准 diff 胜过重发整篇正文。编辑
   之后写钩子会校验文件（诊断随工具结果回来）、刷新 `generated`、提交，侧栏跟着更新；改过的内容不再被

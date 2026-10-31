@@ -582,6 +582,8 @@ describe('TR-1..TR-15 submit：派写手与盖章', () => {
     expect(params.resultContract).toBe(KNOWLEDGE_REVIEW_CONTRACT)
     // 写手的模型按通用规则来（md 声明或跟随调用方）：宿主不另给
     expect('modelConfig' in params).toBe(false)
+    // 每次 submit 一个新写手、落定即卸（OS-K1）：不在监控面板里闲挂
+    expect(params.oneShot).toBe(true)
   })
 
   it('TR-2 取消随调用走：owner.tool.signal 与这次调用的中止态联动；runReview 自己不另传 signal', async () => {
@@ -652,7 +654,7 @@ describe('TR-1..TR-15 submit：派写手与盖章', () => {
     state.runTask.mockResolvedValue({ ...outcome, conversationId: 2 })
     const { res, abs } = await submitOne(name)
     expect(res.isError).toBe(true)
-    expect(textOf(res)).toBe(`The knowledge writer could not check ${abs}: ${why}`)
+    expect(textOf(res)).toBe(`The knowledge librarian could not check ${abs}: ${why}`)
     expect(readFileSync(abs, 'utf-8')).toBe(PLAIN)
     expect(state.record).not.toHaveBeenCalled()
   })
@@ -674,7 +676,7 @@ describe('TR-1..TR-15 submit：派写手与盖章', () => {
     const { res, abs } = await submitOne('tr7.md')
     expect(res.isError).toBe(true)
     expect(textOf(res)).toBe(
-      `The knowledge writer could not check ${abs}: the "knowledge-writer" agent is not available`
+      `The knowledge librarian could not check ${abs}: the "knowledge-writer" agent is not available`
     )
     expect(state.runTask).not.toHaveBeenCalled()
   })

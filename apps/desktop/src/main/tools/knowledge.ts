@@ -93,7 +93,9 @@ async function runReview(
       workingDirectory: resolveProjectConfig(ctx.sessionId).workingDirectory
     }),
     description: `Check ${req.rel}`,
-    resultContract: KNOWLEDGE_REVIEW_CONTRACT
+    resultContract: KNOWLEDGE_REVIEW_CONTRACT,
+    // 每次 submit 派一个新的知识库管理员：落定即卸，不在监控面板里闲挂
+    oneShot: true
   })
   const result = readKnowledgeReviewResult(outcome.structured)
   if (!result) return { error: outcome.error ?? 'it finished without a verdict' }

@@ -1,7 +1,8 @@
 /**
  * SpawnCoordinator · 崩溃、重开与重新挂上：一个子 agent、一条输入（P2-03，J 段 55–62，全部 SQLite）。
  * 派发工具 replay safe：继续时它重跑，按拥有者找到已建的子对话、以同一 requestId 拿回原来那条提交；
- * 子对话的生成在同一个 Harness 里接着跑。不再解析工具、不再算变量表、不再问档案模型。
+ * 子对话的生成在同一个 Harness 里接着跑。不再解析工具、不再算变量表、不再问档案模型。一次性的工具派发重新挂上、
+ * 跑完之后照样卸掉（OS-A1）。
  */
 import {
   ROOT_CONVERSATION_ID,
@@ -23,6 +24,7 @@ import {
   childOf,
   conversationIds,
   dispatchTask,
+  expectUnloadedTool,
   firstChild,
   hostD,
   liveTasks,
@@ -57,10 +59,11 @@ async function userLines(d: HostD, C: ConversationId): Promise<string[]> {
   return lines.filter((line) => line.startsWith('pi.user:'))
 }
 
-/** 进程 1：根派发、子 agent 卡住不答，然后崩溃；交回进程 2 与子对话 */
+/** 进程 1：根派发（`oneShot` 原样交给派发调用）、子 agent 卡住不答，然后崩溃；交回进程 2 与子对话 */
 async function crashMidChild(
   first: HostD,
-  prompt = 'find X'
+  prompt = 'find X',
+  options: { oneShot?: boolean } = {}
 ): Promise<{
   d: HostD
   C: ConversationId
@@ -69,7 +72,7 @@ async function crashMidChild(
   submissionId: SubmissionId
 }> {
   const stall = stalled()
-  first.t.kit.queue(callAgent('explore', prompt), stall.step)
+  first.t.kit.queue(callAgent('explore', prompt, { oneShot: options.oneShot }), stall.step)
   void first.session.submitUser('go')
   await stall.reached
   const C = await firstChild(first.session)
@@ -111,6 +114,28 @@ describe('SpawnCoordinator · re-attach after a crash', () => {
       // 进程 3：什么都没在跑，子对话不重建
       const third = await d.reopen()
       expect(third.t.toolHost.rebuildCalls.some((record) => 'agentId' in record)).toBe(false)
+    },
+    RESTART_TIMEOUT
+  )
+
+  it(
+    'OS-A1 a one-shot child restored at open is listed interrupted; continue re-attaches it, and it is unloaded once it settles',
+    async () => {
+      const first = await hostD()
+      const { d, C, task, agentId, submissionId } = await crashMidChild(first, 'find X', {
+        oneShot: true
+      })
+      // 打开时按记录重建了它（有活任务）：此刻装着、列着
+      expect(extensionTools(d.t, `shuvix.agent.${C}`)).toEqual(['probe'])
+      const row = (await d.session.monitorSnapshot()).find((r) => r.conversationId === C)
+      expect(row).toMatchObject({ kind: 'spawned', dispatch: 'tool', phase: 'interrupted' })
+      expect((await spawnedAgentRecordOf(d.session.harness, C, BG))?.oneShot).toBe(true)
+      d.t.kit.queue(answer('found'), answer('done'))
+      expect(await withTimeout(d.session.continue(), 5000, 'continue')).toEqual({})
+      expect((await submissionByRequest(d.session, C, `agent:${task}`))!.id).toBe(submissionId)
+      expect(await userLines(d, C)).toEqual(['pi.user:find X'])
+      expect(d.outcomes.at(-1)).toMatchObject({ result: 'found', conversationId: C, agentId })
+      await expectUnloadedTool(d, C, agentId, ['pi.user:find X', 'pi.assistant:found'])
     },
     RESTART_TIMEOUT
   )

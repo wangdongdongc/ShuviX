@@ -185,7 +185,7 @@
   "knowledge": {
     "badgeDraft": "Draft — not finished yet",
     "badgeVerified": "Verified by a person",
-    "badgeMachineConfirmed": "Machine-confirmed — passed the knowledge writer’s check, not reviewed by a person",
+    "badgeMachineConfirmed": "Machine-confirmed — passed the knowledge librarian’s check, not reviewed by a person",
     "badgeVerifiedOutdated": "Edited after it was checked",
     "badgeStale": "Past its stale_after date",
     "badgeDeprecated": "Deprecated",
@@ -1198,7 +1198,7 @@
     "widgetLabel": "Widget",
     "widgetHint": "Use the user’s widgets through their own operations, and build widgets",
     "knowledgeLabel": "Knowledge Base",
-    "knowledgeHint": "Search the session's knowledge bases and submit entries for the knowledge writer's check",
+    "knowledgeHint": "Search the session's knowledge bases and submit entries for the knowledge librarian's check",
     "agentLabel": "Dispatch Sub-Agent",
     "agentHint": "Hand a self-contained task to a sub-agent that runs with its own system prompt and tools, and report back only its result",
     "subAgentTab": "Sub-Agent",

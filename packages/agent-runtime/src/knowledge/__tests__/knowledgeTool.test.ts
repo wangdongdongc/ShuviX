@@ -1352,7 +1352,7 @@ describe('KS-1..KS-9 submit 的准入', () => {
     const isReviewer = vi.fn((_call: ToolCallScope | undefined) => true)
     const h = makeTool({ files: FILES, isReviewer })
     const MSG =
-      'The knowledge writer does not submit entries — edit the entry you were given and answer with `next`.'
+      'The knowledge librarian does not submit entries — edit the entry you were given and answer with `next`.'
 
     expect(
       await rejectionOf(
@@ -1578,7 +1578,7 @@ describe('KS-20..KS-37 写手结论的分支', () => {
       review: async () => ({ error: 'aborted by user' })
     })
     expect(await rejectionOf(submit(h))).toBe(
-      `The knowledge writer could not check ${ABS}: aborted by user`
+      `The knowledge librarian could not check ${ABS}: aborted by user`
     )
     expect(h.files.get(ABS)).toBe(ENTRY)
     expect(h.afterWrite).not.toHaveBeenCalled()
@@ -1611,7 +1611,7 @@ describe('KS-20..KS-37 写手结论的分支', () => {
       'Two subjects — split it.',
       'No source for claim 2.',
       '',
-      'Fix the entry and submit it again. Re-read it first — the writer may have edited its metadata.'
+      'Fix the entry and submit it again. Re-read it first — the librarian may have edited its metadata.'
     ])
     expect(res.details).toEqual({ action: 'submit', path: 'a.md' })
     expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
@@ -1652,7 +1652,7 @@ describe('KS-20..KS-37 写手结论的分支', () => {
 
   /** 写手判过、文件却仍过不了格式：不盖章，说清哪里不行 */
   const brokenAfterPass = (lines: string[]): string[] => [
-    `Not confirmed: ${ABS} — the writer passed it, but the file still breaks the format:`,
+    `Not confirmed: ${ABS} — the librarian passed it, but the file still breaks the format:`,
     ...lines,
     '',
     'ok',

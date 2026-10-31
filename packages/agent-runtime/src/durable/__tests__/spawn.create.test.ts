@@ -183,6 +183,66 @@ describe('SpawnCoordinator · creation', () => {
     >
     expect('hook' in state).toBe(false)
     expect('resultContract' in state).toBe(false)
+    expect('oneShot' in state).toBe(false)
+  })
+
+  it('OS-C1 a one-shot dispatch: the same record plus oneShot: true, also in the AgentStateDoc', async () => {
+    const d = await hostD()
+    d.t.toolHost.sandbox = true
+    d.t.kit.queue(
+      callAgent('explore', 'find X', { oneShot: true }),
+      answer('found'),
+      answer('done')
+    )
+    expect(await d.session.submitUser('go')).toEqual({})
+    const C = d.outcomes[0]!.conversationId!
+    const task = await dispatchTask(d.session)
+    expect(await spawnedAgentRecordOf(d.session.harness, C, BG)).toEqual({
+      conversationId: C,
+      profileName: 'explore',
+      kind: 'spawned',
+      model: { provider: 'faux', modelId: 'faux-1' },
+      thinkingLevel: 'low',
+      toolNames: ['probe'],
+      extensions: extensionsOf(C),
+      sandboxed: d.session.lock!.sandboxed,
+      mcp: {},
+      skills: [],
+      createdAt: W_NOW,
+      agentId: d.outcomes[0]!.agentId,
+      depth: 1,
+      canSpawn: true,
+      dispatch: 'tool',
+      parentConversationId: ROOT_CONVERSATION_ID,
+      ownerTaskId: task,
+      ownerCallId: 'call-agent',
+      displayName: 'Explorer',
+      description: 'look',
+      oneShot: true
+    })
+    const state = (await d.session.harness.snapshot(AgentStateDoc, C, BG)) as Record<
+      string,
+      unknown
+    >
+    expect(state.oneShot).toBe(true)
+  })
+
+  it('OS-C1 an explicit oneShot: false writes no key, like the default', async () => {
+    const d = await hostD()
+    d.t.kit.queue(
+      callAgent('explore', 'find X', { oneShot: false }),
+      answer('found'),
+      answer('done')
+    )
+    expect(await d.session.submitUser('go')).toEqual({})
+    const C = d.outcomes[0]!.conversationId!
+    const record = (await spawnedAgentRecordOf(d.session.harness, C, BG))!
+    expect('oneShot' in record).toBe(false)
+    const state = (await d.session.harness.snapshot(AgentStateDoc, C, BG)) as Record<
+      string,
+      unknown
+    >
+    expect('oneShot' in state).toBe(false)
   })
 
   it('P2-03-05 the resolve request: spawned, agentId, canSpawn, names, model, thinking, cwd ""', async () => {

@@ -7,6 +7,9 @@
  *   REC-1 派发它的 tool_call id（`ownerCallId`）随记录往返：JSON 里有这个键、解析回来与原值相同；旧记录没有它照样解析
  *   REC-2 ownerCallId 给了就得是非空串：数字 / null / 布尔 / 对象 / 数组 / 空串都让整条记录作废
  *   REC-3 ownerCallId 是记录自己的键：随种子写进文档、重写换成新值、重写时缺省就从文档删掉；人设那几项不动
+ *   OS-R1 一次性标记（`oneShot`）随记录往返：true / false 都原样回来；最小记录里没有这个键
+ *   OS-R2 oneShot 给了就得是布尔：字符串 / 数字 / null / 对象 / 数组都让整条记录作废（null ≠ 缺省）
+ *   OS-R3 oneShot 是记录自己的键：随种子写进文档、重写时缺省就从文档删掉；人设那几项不动
  */
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -87,7 +90,7 @@ describe('agent records · parse / serialise', () => {
     const json = spawnedAgentRecordJson(minimal)
     expect(parseSpawnedAgentRecord(json)).toEqual(minimal)
     // rec() 是早于 ownerCallId 的 tool 记录：没有这个键照样解析（REC-1），也不凭空长出来
-    for (const key of ['thinkingLevel', 'ownerCallId', 'hook', 'resultContract'])
+    for (const key of ['thinkingLevel', 'ownerCallId', 'hook', 'resultContract', 'oneShot'])
       expect(json).not.toHaveProperty(key)
 
     const schemaOnly = rec({ resultContract: { schema: structuredClone(TITLE_SCHEMA) } })
@@ -106,6 +109,16 @@ describe('agent records · parse / serialise', () => {
     expect(json.ownerCallId).toBe('call-x')
     expect(parseSpawnedAgentRecord(json)).toEqual(withCall)
     expect(parseSpawnedAgentRecord(JSON.parse(JSON.stringify(json)))).toEqual(withCall)
+  })
+
+  it('OS-R1 the one-shot flag round-trips as true and as false; the key is in the JSON', () => {
+    for (const oneShot of [true, false]) {
+      const flagged = rec({ oneShot })
+      const json = spawnedAgentRecordJson(flagged)
+      expect(json.oneShot).toBe(oneShot)
+      expect(parseSpawnedAgentRecord(json)).toEqual(flagged)
+      expect(parseSpawnedAgentRecord(JSON.parse(JSON.stringify(json)))).toEqual(flagged)
+    }
   })
 
   it('P2-01-03 parsing copies: neither the raw value nor the result sees the other change', () => {
@@ -177,6 +190,13 @@ describe('agent records · parse / serialise', () => {
     ['ownerCallId', {}],
     ['ownerCallId', ['call-x']],
     ['ownerCallId', ''],
+    // OS-R2：一次性标记给了就得是布尔（null 不算缺省）
+    ['oneShot', 'true'],
+    ['oneShot', 1],
+    ['oneShot', 0],
+    ['oneShot', null],
+    ['oneShot', {}],
+    ['oneShot', []],
     ['resultContract', 'x'],
     ['resultContract', []],
     ['resultContract', null],
@@ -394,6 +414,32 @@ describe('agent records · AgentStateDoc fields', () => {
     await session.harness.commit((tx) => writeSpawnedAgentRecord(tx, child, without), BG)
     state = (await agentState(session, child)) as Record<string, unknown>
     expect(state).not.toHaveProperty('ownerCallId')
+    expect(parseSpawnedAgentRecord(state)).toEqual(without)
+    expect(await spawnedAgentRecordOf(session.harness, child, BG)).toEqual(without)
+    expect(state).toMatchObject(persona)
+  })
+
+  it('OS-R3 oneShot is one of the record keys: seeded into the doc, deleted by a rewrite without it; persona keys untouched', async () => {
+    const t = await makeHost({ makeKit: wKit, extensions: [TEST_SPAWN_EXTENSION] })
+    const session = await t.open()
+    const seeded = await seedAgent(session, { record: rec({ oneShot: true }) })
+    const child = seeded.conversationId
+    const persona = {
+      persona: 'You are Explorer',
+      instructionFiles: [],
+      rootSessionId: 's1'
+    }
+    let state = (await agentState(session, child)) as Record<string, unknown>
+    expect(state.oneShot).toBe(true)
+    expect(state).toMatchObject(persona)
+    expect(await spawnedAgentRecordOf(session.harness, child, BG)).toEqual(seeded.record)
+
+    // 重写时缺省 = 从文档删掉（不留一个过期的标记）；人设那几项原样
+    const without: SpawnedAgentRecord = { ...seeded.record }
+    delete without.oneShot
+    await session.harness.commit((tx) => writeSpawnedAgentRecord(tx, child, without), BG)
+    state = (await agentState(session, child)) as Record<string, unknown>
+    expect(state).not.toHaveProperty('oneShot')
     expect(parseSpawnedAgentRecord(state)).toEqual(without)
     expect(await spawnedAgentRecordOf(session.harness, child, BG)).toEqual(without)
     expect(state).toMatchObject(persona)

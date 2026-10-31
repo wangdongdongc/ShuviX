@@ -1,7 +1,7 @@
 /**
  * 派生 agent 路由 · 会话映射与 agentId 索引（P2-05 A 段，01–07）：runTask 按会话找到协调器；子 agent 建好的那一刻
  * 广播 register、登记任务、记下索引；索引在完成与 LRU 关闭之后仍在、从不为查询打开会话；非工具拥有者在 P2-08
- * 起交给协调器（`{anchor}` / `{task}`，宿主派发的参数随之）。
+ * 起交给协调器（`{anchor}` / `{task}`，宿主派发的参数随之）。OS-M1：`oneShot` 只在为 true 时交给协调器。
  */
 import type { JsonValue } from '@earendil-works/chord'
 import type { DurableSession } from '../../durable/durableSession'
@@ -236,5 +236,17 @@ describe('router · mapping and the index', () => {
     await kit.router.runTask(params)
     const scope = (params.owner as Extract<RunTaskParams['owner'], { tool: unknown }>).tool
     expect((fc.spawnCalls[0]!.owner as SpawnToolOwner).tool).toBe(scope.api)
+  })
+
+  it('OS-M1 oneShot reaches the coordinator only when true; omitted and false pass no key (FC)', async () => {
+    const fc = fakeSession()
+    const kit = routerKit({ get: () => fc.session, peek: async () => fc.session })
+    await kit.router.runTask(toolParams({ oneShot: true }))
+    await kit.router.runTask(toolParams())
+    await kit.router.runTask(toolParams({ oneShot: false }))
+    expect(fc.spawnCalls).toHaveLength(3)
+    expect(fc.spawnCalls[0]!.oneShot).toBe(true)
+    expect('oneShot' in fc.spawnCalls[1]!).toBe(false)
+    expect('oneShot' in fc.spawnCalls[2]!).toBe(false)
   })
 })

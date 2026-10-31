@@ -1,7 +1,8 @@
 /**
  * SpawnCoordinator · 根 Esc 的级联（P2-03，I 段 50–54）：durable 原生 —— 根的中止经拥有者边到达派发工具
  * 名下的子对话（嵌套、并行都算），也到达面板追问的子对话（PIN-09）；后台锚名下的对话不受影响（fact 3）。
- * 工具自己被中止时协调器交回 `error: 'aborted'`、从不抛出（PIN-18）。
+ * 工具自己被中止时协调器交回 `error: 'aborted'`、从不抛出（PIN-18）。一次性的工具派发被 Esc 中止也照样卸掉
+ * （OS-E1：协调器等子对话闲下来再收尾，活任务不挡卸载）。
  */
 import type { FauxResponseStep } from '@earendil-works/pi-ai'
 import { describe, expect, it } from 'vitest'
@@ -78,6 +79,27 @@ describe('SpawnCoordinator · root Esc', () => {
     expect(await spawnedAgentRecordOf(d.session.harness, C, BG)).toEqual(record)
     await waitFor(() => d.outcomes.length > 0, 3000, 'outcome')
     expect(d.outcomes[0]!.error).toBe('aborted')
+  })
+
+  it('OS-E1 Esc while a one-shot child runs: error aborted, and it is unloaded; the record is unchanged', async () => {
+    const step = watchedStall()
+    const d = await hostD()
+    d.t.kit.queue(callAgent('explore', 'find X', { oneShot: true }), step.step)
+    const sent = d.session.submitUser('go')
+    await step.reached
+    const C = await firstChild(d.session)
+    const record = await spawnedAgentRecordOf(d.session.harness, C, BG)
+    expect(record?.oneShot).toBe(true)
+    await withTimeout(d.session.abort(), 3000, 'abort')
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    await waitFor(() => d.outcomes.length > 0, 3000, 'outcome')
+    expect(d.outcomes[0]!.error).toBe('aborted')
+    // 结果交回时收尾已经跑过：这里不等 —— 漏卸就永远装着
+    expect(extensionTools(d.t, `shuvix.agent.${C}`)).toBeUndefined()
+    const rows = await d.session.monitorSnapshot()
+    expect(rows.map((row) => row.conversationId)).not.toContain(C)
+    expect(await liveTasks(d.session, C)).toEqual([])
+    expect(await spawnedAgentRecordOf(d.session.harness, C, BG)).toEqual(record)
   })
 
   it('P2-03-51 nested and parallel: one abort stops G, C and D', async () => {

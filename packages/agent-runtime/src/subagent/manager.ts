@@ -119,6 +119,11 @@ export interface RunTaskParams {
   resultContract?: ResultContract
   /** 派发它的那次工具调用的 provider id（面板把子 agent 内联到那张工具卡片里） */
   parentToolCallId?: string
+  /**
+   * 工具派发：一次性 —— 这次（及之后每次面板追问）落定就卸掉，不在监控面板里闲挂（knowledge 工具派知识库管理员）。
+   * 宿主派发恒为一次性，不读它
+   */
+  oneShot?: boolean
   /** 宿主派发的取消信号：落下即中止子对话（PIN-05）。工具派发的取消在 `owner.tool.signal` 上 */
   signal?: AbortSignal
 }
@@ -438,6 +443,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
           description,
           ...(resultContract === undefined ? {} : { resultContract }),
           ...(dispatch.hosted === undefined ? {} : { hosted: dispatch.hosted }),
+          ...(params.oneShot === true ? { oneShot: true } : {}),
           onCreated
         },
         dispatch.context

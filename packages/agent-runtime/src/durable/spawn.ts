@@ -36,9 +36,10 @@
  *    记录都留着，按需重建，PIN-03）；`continue` = 追问（`whenBusy: 'reject'`，没有 requestId，PIN-12）。
  *    中止次序沿用会话的那一套（关询问窗口 → 中止前 seam → 取消挂起的询问 → 中止对话，PIN-04），从不
  *    记「显式喊停」；子对话停下之后重开询问窗口（根的 run 可能还在跑，它的询问不该被一直挡着）。
- *  - **hook agent 用完即卸**：宿主派发的子 agent（`dispatch: 'hook'`）在那次派发 / 面板追问落定之后就卸掉
- *    按 agent 扩展（`unloadHosted`）。它是一次性的 —— 宿主派发从不重新挂上，没人再往它的工具表里调；而监控
- *    面板列的是「此刻装着的」，不卸就是每起一次标题、每审查一次多一行闲着的。转写与记录照留（任务行、追问照常）。
+ *  - **一次性 agent 用完即卸**：宿主派发的子 agent（`dispatch: 'hook'`），以及工具派发时调用方声明一次性的
+ *    （`oneShot`，记进记录 —— 知识库管理员：knowledge 工具每次 submit 派一个新的）在那次派发 / 面板追问落定之后
+ *    就卸掉按 agent 扩展（`unloadOneShot`）。它们没人再往工具表里调；而监控面板列的是「此刻装着的」，不卸就是
+ *    每起一次标题、每审查一次、每提交一条知识多一行闲着的。转写与记录照留（任务行、追问照常）。
  *  - **重建**：`ensureInstalled(子对话)` 按记录重建按 agent 的工具（`rebuildAgentTools(record, {sessionId,
  *    extraTools: resultContractTools(record.resultContract)})`），附加工具显式拼进去
  *    （`agentExtensionTools(set)` 不读 `set.extraTools`）。打开时的重建由 DurableSession 调
@@ -194,6 +195,11 @@ export interface SpawnParams {
   onCreated?: (info: SpawnCreatedInfo) => void
   /** 宿主派发的参数（工具派发不读） */
   hosted?: SpawnHostedOptions
+  /**
+   * 工具派发：一次性 —— 落定（及之后每次面板追问落定）就卸掉按 agent 扩展，不在监控面板里闲挂（记进记录）。
+   * 宿主派发恒为一次性，不读它
+   */
+  oneShot?: boolean
 }
 
 /**
@@ -355,6 +361,11 @@ function positiveInteger(value: unknown): number | undefined {
 
 function randomAgentId(): string {
   return `sub-${globalThis.crypto.randomUUID()}`
+}
+
+/** 用完即卸的 agent：宿主派发的，或工具派发时声明一次性的（见文件头） */
+function isOneShot(record: SpawnedAgentRecord): boolean {
+  return record.dispatch === 'hook' || record.oneShot === true
 }
 
 // ─────────────────────────── 实现 ───────────────────────────
@@ -576,7 +587,8 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
           ...(api.callId ? { ownerCallId: api.callId } : {}),
           displayName: profile.displayName,
           description,
-          ...(contract === undefined ? {} : { resultContract: contract })
+          ...(contract === undefined ? {} : { resultContract: contract }),
+          ...(params.oneShot === true ? { oneShot: true } : {})
         }
         // 先严格序列化（非 JSON 的值在这里抛错，整个提交作废）
         await writeSpawnedAgentRecord(tx, child.id, built)
@@ -807,15 +819,11 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     logger.info(
       `session ${sessionId}: host-dispatched agent=${agentId} profile=${profile.name} hook=${hosted.hook ?? ''} conversation=${child} owner=${'task' in owner ? 'task' : 'anchor'}:${record.ownerTaskId}`
     )
-    try {
-      return await this.drive(params, record, false, context, {
-        requestId: hosted.requestId ?? `hook:${agentId}`,
-        conversation: (id) => host.harness.conversation(id, BG),
-        hosted: true
-      })
-    } finally {
-      this.unloadHosted(child)
-    }
+    return this.drive(params, record, false, context, {
+      requestId: hosted.requestId ?? `hook:${agentId}`,
+      conversation: (id) => host.harness.conversation(id, BG),
+      hosted: true
+    })
   }
 
   private async reattach(
@@ -842,7 +850,7 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
 
   /**
    * 子对话已在（新建或重跑找到）：details → onCreated → 提交任务 → 等待 → 追问 → 结果。任何失败都先
-   * 中止子对话；工具自己被中止 → `error: 'aborted'`。
+   * 中止子对话；工具自己被中止 → `error: 'aborted'`。一次性 agent 落定即卸（`unloadOneShot`）。
    */
   private async drive(
     params: SpawnParams,
@@ -901,8 +909,11 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
         .catch(() => undefined)
       if (context.abortSignal?.aborted || isClosedError(error)) {
         this.soft.delete(child)
-        // 宿主派发的子对话不在任何原生级联的范围里：调用方不再等了，就得自己停下它（PIN-05）
-        if (access.hosted && !isClosedError(error)) await this.abortQuietly(child)
+        // 宿主派发的子对话不在任何原生级联的范围里：调用方不再等了，就得自己停下它（PIN-05）。一次性的工具派发
+        // 已被原生级联中止，但级联不等它停下：这里等到它闲下来，收尾时才没有活任务挡着卸载
+        if ((access.hosted || isOneShot(record)) && !isClosedError(error)) {
+          await this.abortQuietly(child)
+        }
         const entries = await this.entriesSince(child, firstEntry).catch(() => [])
         const captured = firstCapture(entries)
         if (captured !== undefined) return capturedOutcome(captured, ids)
@@ -916,6 +927,8 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
       await this.abortQuietly(child)
       const entries = await this.entriesSince(child, firstEntry).catch(() => [])
       return { result: extractSpawnResult(entries, message), error: message, ...ids }
+    } finally {
+      if (isOneShot(record)) this.unloadOneShot(child)
     }
   }
 
@@ -1132,22 +1145,22 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
       const message = errorText(error)
       return { result: message, error: message, ...ids }
     } finally {
-      // 追问前 ensureInstalled 把 hook agent 装回来了：这一轮落定就再卸掉
-      if (record.dispatch === 'hook') this.unloadHosted(child)
+      // 追问前 ensureInstalled 把一次性 agent 装回来了：这一轮落定就再卸掉
+      if (isOneShot(record)) this.unloadOneShot(child)
     }
   }
 
   /**
-   * hook agent 收尾：卸掉它的按 agent 扩展（见文件头「hook agent 用完即卸」）。子对话上还有活任务（忙着拒了
-   * 追问的那一轮）就不动 —— 它还在跑；会话已关同样不动（扩展表随句柄一起没了）。从不抛：收尾失败不改派发结果。
+   * 一次性 agent 收尾：卸掉它的按 agent 扩展（见文件头「一次性 agent 用完即卸」）。子对话上还有活任务（忙着
+   * 拒了追问的那一轮）就不动 —— 它还在跑；会话已关同样不动（扩展表随句柄一起没了）。从不抛：收尾失败不改派发结果。
    */
-  private unloadHosted(child: ConversationId): void {
+  private unloadOneShot(child: ConversationId): void {
     try {
       if (this.host.isClosed() || this.host.liveTasksOf(child).length > 0) return
       this.host.registry.uninstall({ name: agentExtensionName(child) })
     } catch (error) {
       this.host.logger.warn(
-        `session ${this.host.sessionId}: unloading hook agent conversation ${child} failed: ${errorText(error)}`
+        `session ${this.host.sessionId}: unloading one-shot agent conversation ${child} failed: ${errorText(error)}`
       )
     }
   }

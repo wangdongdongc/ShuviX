@@ -294,6 +294,8 @@ export interface ContractToolOptions {
   /** 路由交回的结果 / 拒绝（按完成次序） */
   outcomes: (RunTaskOutcome | { rejected: string })[]
   profile?: InProcessAgentType
+  /** 原样交给 `runTask` 的 `oneShot`（缺省不传） */
+  oneShot?: boolean
 }
 
 /**
@@ -318,7 +320,8 @@ export function contractTool(
           prompt: args.prompt,
           description: 'contract',
           parentToolCallId: api.callId,
-          resultContract: options.contract
+          resultContract: options.contract,
+          ...(options.oneShot === undefined ? {} : { oneShot: options.oneShot })
         })
         options.outcomes.push(outcome)
         return { output: [{ type: 'text', text: outcome.result }] }

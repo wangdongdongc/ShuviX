@@ -9,6 +9,7 @@
  *  - `seedAgent()`：**一个提交**里建锚任务（或用给定的拥有者任务）、建子对话、配模型、冻结派生人设、
  *    经生产写入器写记录 —— 也就是 P2-03 将来的创建提交的形状。
  *  - `startRun()`、`liveTasks()`、`requestsWith()`、`mentions()`：起一轮 / 看活任务 / 看请求。
+ *  - 唯一带断言的是 `expectUnloadedTool()`（一次性工具派发「卸掉了」的那组判定，几个 spawn 用例共用）。
  */
 import { Type, type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
 import {
@@ -26,6 +27,7 @@ import {
   type ToolRegistration
 } from '@earendil-works/pi-durable'
 import type { Context, JsonValue } from '@earendil-works/chord'
+import { expect } from 'vitest'
 import type { ModelSelection } from '../../../models/lockModel'
 import type { ResultContract } from '../../../subagent/nextTool'
 import type { InProcessAgentType } from '../../../subagent/types'
@@ -39,8 +41,8 @@ import type { SpawnCreatedInfo, SpawnOutcome } from '../../spawn'
 import { markerVars, testProfile, type MarkerVars } from './agentConfig'
 import { callTool, type FauxKit } from './faux'
 import { makeHost, primeRoot, type TestHost, type TestHostOptions } from './host'
-import { W_NOW, wKit } from './scenario'
-import { messageText } from './transcript'
+import { extensionTools, W_NOW, wKit } from './scenario'
+import { messageText, transcript } from './transcript'
 import { aborted, deferred, waitFor, type Deferred } from './wait'
 
 // ─────────────────────────── 任务定义 ───────────────────────────
@@ -333,11 +335,14 @@ export interface DispatchOptions {
   name?: string
   /** 缺省 safe */
   replay?: 'safe' | 'unsafe'
+  /** 每次派发缺省的 `oneShot`（调用参数里给了就以调用的为准；都没给 = 不传这个键） */
+  oneShot?: boolean
 }
 
 /**
- * 测试派发工具：参数 `{name, prompt, description}`，把派发交给 `session.agents.spawn`，结果推进
- * `outcomes`，以 `o.result` 作结果文本（不带 details）。
+ * 测试派发工具：参数 `{name, prompt, description, oneShot?}`，把派发交给 `session.agents.spawn`，结果推进
+ * `outcomes`，以 `o.result` 作结果文本（不带 details）。`oneShot` 按调用给（同一会话里一次性与缺省的派发
+ * 可以并排），没给就取选项里的。
  */
 export function dispatch(options: DispatchOptions): ToolRegistration {
   const name = options.name ?? 'agent'
@@ -347,12 +352,14 @@ export function dispatch(options: DispatchOptions): ToolRegistration {
     parameters: Type.Object({
       name: Type.String(),
       prompt: Type.String(),
-      description: Type.String()
+      description: Type.String(),
+      oneShot: Type.Optional(Type.Boolean())
     }),
     replay: options.replay ?? 'safe',
     execute: async (args, api, context) => {
       const profile = options.profiles[args.name]
       if (profile === undefined) throw new Error(`unknown profile ${args.name}`)
+      const oneShot = args.oneShot ?? options.oneShot
       const outcome = await options.getSession().agents.spawn(
         {
           owner: { tool: options.wrapApi?.(api) ?? api },
@@ -360,7 +367,8 @@ export function dispatch(options: DispatchOptions): ToolRegistration {
           prompt: args.prompt,
           description: args.description,
           ...(options.contract === undefined ? {} : { resultContract: options.contract }),
-          ...(options.onCreated === undefined ? {} : { onCreated: options.onCreated })
+          ...(options.onCreated === undefined ? {} : { onCreated: options.onCreated }),
+          ...(oneShot === undefined ? {} : { oneShot })
         },
         context
       )
@@ -371,15 +379,20 @@ export function dispatch(options: DispatchOptions): ToolRegistration {
   })
 }
 
-/** 派发调用 `agent({name, prompt, description})` */
+/** 派发调用 `agent({name, prompt, description, oneShot?})`（`oneShot` 没给就不带这个参数） */
 export function callAgent(
   name: string,
   prompt: string,
-  options: { description?: string; id?: string; tool?: string } = {}
+  options: { description?: string; id?: string; tool?: string; oneShot?: boolean } = {}
 ): AssistantMessage {
   return callTool(
     options.tool ?? 'agent',
-    { name, prompt, description: options.description ?? 'look' },
+    {
+      name,
+      prompt,
+      description: options.description ?? 'look',
+      ...(options.oneShot === undefined ? {} : { oneShot: options.oneShot })
+    },
     options.id ?? 'call-agent'
   )
 }
@@ -626,4 +639,29 @@ export async function firstChild(
     `a child of conversation ${conversationId}`
   )
   return found!
+}
+
+/**
+ * 一次性的工具派发「卸掉了」（hosted.unload.test.ts `expectUnloaded` 的工具派发版；宿主 D 没有任务枢纽，
+ * 不看任务行）：扩展没了、监控快照里没这个对话；记录（仍带 `oneShot: true`）与身份照留、子对话上没有活任务；
+ * 转写照留 —— `kept`（任务 prompt 与回答）里的每一行都还在（没给就只要求至少一条 pi.user）。
+ */
+export async function expectUnloadedTool(
+  d: { readonly t: TestHost; readonly session: DurableSession },
+  C: ConversationId,
+  agentId: string,
+  kept: readonly string[] = []
+): Promise<void> {
+  const { session } = d
+  expect(extensionTools(d.t, agentExtensionName(C))).toBeUndefined()
+  expect((await session.monitorSnapshot()).map((row) => row.conversationId)).not.toContain(C)
+  expect(session.spawnedRecords().find((record) => record.agentId === agentId)).toMatchObject({
+    conversationId: C,
+    oneShot: true
+  })
+  expect(session.agentIdentity(C)?.kind).toBe('spawned')
+  expect(await liveTasks(session, C)).toEqual([])
+  const lines = await transcript((await session.harness.conversation(C, BG))!)
+  if (kept.length === 0) expect(lines.some((line) => line.startsWith('pi.user:'))).toBe(true)
+  for (const line of kept) expect(lines).toContain(line)
 }

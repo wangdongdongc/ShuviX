@@ -1,8 +1,11 @@
 /**
  * SpawnCoordinator · 面板：软停止 / 销毁 / 追问（P2-03，H 段 42–49、76）。软停止 = 中止子对话、保留部分结果；
  * 销毁 = 硬中止 + 卸掉扩展（转写、记录、身份都留着，PIN-03）；追问 = 不带来源时没有 requestId、忙就拒绝（PIN-12），
- * 落定之后照样装着（用完即卸只管 hook agent，见 hosted.unload.test.ts）；带来源（宿主按连接盖的章，2026-10-21）
- * 的追问按一个新生成的 requestId 记进子对话的 SourceDoc（P2-03-76）。
+ * 落定之后照样装着（用完即卸只管 hook agent 与一次性的工具派发，见 hosted.unload.test.ts 与本文件末段）；带来源
+ * （宿主按连接盖的章，2026-10-21）的追问按一个新生成的 requestId 记进子对话的 SourceDoc（P2-03-76）。
+ *
+ * 一次性的工具派发（`oneShot`，知识库写手的形状）：OS-P1 落定即卸、缺省派发照样装着 · OS-P2 面板追问装回来、
+ * 干活时列着、落定再卸（两次都是）· OS-P4 带结果契约时每一种收场都卸（捕获 / 追问后捕获 / 模型报错 / 软停止 / 混批）
  */
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, SubmissionRecord } from '@earendil-works/pi-durable'
@@ -10,17 +13,36 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { spawnedAgentRecordOf } from '../agentRecord'
 import { AgentStateDoc, SourceDoc } from '../docs'
+import type { AgentMonitorRow } from '../monitorSnapshot'
 import { freshAgentMount } from '../projection/__tests__/projectorSupport'
-import { answer, assistantWith, callTool, held, stalled } from './support/faux'
+import {
+  buildResultContractNote,
+  NEXT_NUDGE_TEXT,
+  type ResultContract
+} from '../../subagent/nextTool'
+import {
+  answer,
+  assistantWith,
+  callTool,
+  callTools,
+  held,
+  modelError,
+  stalled
+} from './support/faux'
 import { registerHostCleanup } from './support/host'
 import { extensionTools } from './support/scenario'
 import {
   callAgent,
+  dispatchTask,
+  expectUnloadedTool,
   firstChild,
   hostD,
   liveTasks,
+  queueRouted,
+  requestsOf,
   submissionByRequest,
   tasksOf,
+  TITLE_SCHEMA,
   type HostD
 } from './support/spawn'
 import { allEntries } from './support/transcript'
@@ -55,7 +77,10 @@ async function childLines(d: HostD, C: ConversationId): Promise<string[]> {
   return transcript((await d.session.harness.conversation(C, BG))!)
 }
 
-/** 工具派发的子 agent 追问落定之后：扩展还装着、监控面板还列着它（闲着）—— 用完即卸只管 hook agent */
+/**
+ * 缺省（非一次性）的工具派发子 agent 落定之后：扩展还装着、监控面板还列着它（闲着）—— 用完即卸只管 hook agent
+ * 与一次性的工具派发
+ */
 async function expectStillLoaded(d: HostD, C: ConversationId): Promise<void> {
   expect(extensionTools(d.t, `shuvix.agent.${C}`)).toEqual(['probe'])
   const row = (await d.session.monitorSnapshot()).find((r) => r.conversationId === C)
@@ -288,4 +313,206 @@ describe('SpawnCoordinator · continue', () => {
     expect(d.t.kit.callCount).toBe(calls)
     expect(await transcript(plain)).toEqual([])
   })
+})
+
+/** 监控快照里某对话那一行（没有 → undefined） */
+async function rowOfConversation(
+  d: HostD,
+  C: ConversationId
+): Promise<AgentMonitorRow | undefined> {
+  return (await d.session.monitorSnapshot()).find((row) => row.conversationId === C)
+}
+
+/** 一次性派发 A 跑完（子 agent 答 found、根答 done），交回子对话与 agentId */
+async function oneShotHeadline(d: HostD): Promise<{ C: ConversationId; agentId: string }> {
+  d.t.kit.queue(callAgent('explore', 'find X', { oneShot: true }), answer('found'), answer('done'))
+  expect(await d.session.submitUser('go')).toEqual({})
+  const outcome = d.outcomes.at(-1)!
+  return { C: outcome.conversationId!, agentId: outcome.agentId! }
+}
+
+describe('SpawnCoordinator · one-shot tool dispatch', () => {
+  it('OS-P1 listed while it works, unloaded once it settles; a default dispatch beside it stays loaded', async () => {
+    const d = await hostD()
+    const gate = held(answer('found'))
+    d.t.kit.queue(callAgent('explore', 'find X', { oneShot: true }), gate.step, answer('done'))
+    const sent = d.session.submitUser('go')
+    await gate.reached
+    const A = await firstChild(d.session)
+    expect(extensionTools(d.t, `shuvix.agent.${A}`)).toEqual(['probe'])
+    expect(await rowOfConversation(d, A)).toMatchObject({
+      kind: 'spawned',
+      dispatch: 'tool',
+      phase: 'turn'
+    })
+    gate.release()
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    const agentId = d.outcomes[0]!.agentId!
+
+    d.t.kit.queue(
+      callAgent('explore', 'find Y', { id: 'call-b' }),
+      answer('found Y'),
+      answer('done B')
+    )
+    expect(await d.session.submitUser('go B')).toEqual({})
+    const B = d.outcomes[1]!.conversationId!
+    expect(B).not.toBe(A)
+
+    await expectUnloadedTool(d, A, agentId, ['pi.user:find X', 'pi.assistant:found'])
+    expect(d.outcomes[0]).toEqual({ result: 'found', conversationId: A, agentId })
+    await expectStillLoaded(d, B)
+  })
+
+  it('OS-P2 a panel follow-up re-installs it from the record, lists it while it works, then unloads it again — every time', async () => {
+    const d = await hostD()
+    const { C, agentId } = await oneShotHeadline(d)
+    await expectUnloadedTool(d, C, agentId)
+    const rebuilds = d.t.toolHost.rebuildCalls.length
+
+    const gate = held(answer('more ok'))
+    d.t.kit.queue(gate.step)
+    const continued = d.session.agents.continue(C, 'more')
+    await gate.reached
+    expect(extensionTools(d.t, `shuvix.agent.${C}`)).toEqual(['probe'])
+    expect(await rowOfConversation(d, C)).toMatchObject({ dispatch: 'tool', phase: 'turn' })
+    expect(d.t.toolHost.rebuildCalls).toHaveLength(rebuilds + 1)
+    const stored = await spawnedAgentRecordOf(d.session.harness, C, BG)
+    expect(stored?.oneShot).toBe(true)
+    expect(d.t.toolHost.rebuildCalls.at(-1)).toEqual(stored)
+    gate.release()
+    const outcome = await withTimeout(continued, 3000, 'continue')
+    expect(outcome).toMatchObject({ result: 'more ok', conversationId: C, agentId })
+    expect('error' in outcome).toBe(false)
+    expect((await childLines(d, C)).slice(-2)).toEqual(['pi.user:more', 'pi.assistant:more ok'])
+    await expectUnloadedTool(d, C, agentId, ['pi.user:more', 'pi.assistant:more ok'])
+
+    d.t.kit.queue(answer('again ok'))
+    const again = await withTimeout(d.session.agents.continue(C, 'again'), 3000, 'continue 2')
+    expect(again).toMatchObject({ result: 'again ok', conversationId: C })
+    expect(d.t.toolHost.rebuildCalls).toHaveLength(rebuilds + 2)
+    await expectUnloadedTool(d, C, agentId, ['pi.user:again', 'pi.assistant:again ok'])
+  })
+
+  /** 带结果契约的一次性派发（knowledge 工具派写手的形状）：每一种收场都卸 */
+  const CONTRACT: ResultContract = { schema: structuredClone(TITLE_SCHEMA) }
+  const CHILD_PROMPT = `p\n\n${buildResultContractNote(CONTRACT)}`
+
+  interface ContractEnding {
+    row: string
+    title: string
+    /** 子对话转写里还得在的那几行 */
+    kept: string[]
+    /** 跑到根落定，交回子对话 */
+    run(d: HostD): Promise<ConversationId>
+    check(d: HostD, C: ConversationId): Promise<void>
+  }
+
+  const contractEndings: ContractEnding[] = [
+    {
+      row: 'a',
+      title: 'next captured',
+      kept: [`pi.user:${CHILD_PROMPT}`, 'pi.assistant:[tool:next]'],
+      run: async (d) => {
+        d.t.kit.queue(callAgent('explore', 'p'), callTool('next', { title: 'A' }), answer('done'))
+        expect(await d.session.submitUser('go')).toEqual({})
+        return d.outcomes[0]!.conversationId!
+      },
+      check: async (d) => {
+        expect(d.outcomes[0]!.structured).toEqual({ title: 'A' })
+        expect('error' in d.outcomes[0]!).toBe(false)
+      }
+    },
+    {
+      row: 'b',
+      title: 'prose, nudged, then next',
+      kept: [
+        `pi.user:${CHILD_PROMPT}`,
+        'pi.assistant:prose',
+        `pi.user:${NEXT_NUDGE_TEXT}`,
+        'pi.assistant:[tool:next]'
+      ],
+      run: async (d) => {
+        d.t.kit.queue(
+          callAgent('explore', 'p'),
+          answer('prose'),
+          callTool('next', { title: 'B' }),
+          answer('done')
+        )
+        expect(await d.session.submitUser('go')).toEqual({})
+        return d.outcomes[0]!.conversationId!
+      },
+      check: async (d, C) => {
+        expect(d.outcomes[0]!.structured).toEqual({ title: 'B' })
+        const task = await dispatchTask(d.session)
+        expect(await submissionByRequest(d.session, C, `agent:${task}:nudge:1`)).toBeDefined()
+      }
+    },
+    {
+      row: 'c',
+      title: 'model error',
+      kept: [`pi.user:${CHILD_PROMPT}`, 'pi.assistant:'],
+      run: async (d) => {
+        d.t.kit.queue(callAgent('explore', 'p'), modelError('boom'), answer('done'))
+        expect(await d.session.submitUser('go')).toEqual({})
+        return d.outcomes[0]!.conversationId!
+      },
+      check: async (d) => {
+        expect(d.outcomes[0]!.error).toBe('boom')
+      }
+    },
+    {
+      row: 'd',
+      title: 'panel interrupt while held (soft)',
+      // 被扣住的那一轮没有落下回答
+      kept: [`pi.user:${CHILD_PROMPT}`],
+      run: async (d) => {
+        const gate = held(answer('never'))
+        d.t.kit.queue(callAgent('explore', 'p'), gate.step, answer('done'))
+        const sent = d.session.submitUser('go')
+        await gate.reached
+        const C = await firstChild(d.session)
+        await withTimeout(d.session.agents.interrupt(C), 3000, 'interrupt')
+        expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+        return C
+      },
+      check: async (d) => {
+        expect('error' in d.outcomes[0]!).toBe(false)
+        expect('structured' in d.outcomes[0]!).toBe(false)
+      }
+    },
+    {
+      row: 'e',
+      title: 'mixed batch [next, probe]',
+      kept: [`pi.user:${CHILD_PROMPT}`, 'pi.assistant:[tool:next][tool:probe]'],
+      run: async (d) => {
+        queueRouted(d.t.kit, {
+          go: [callAgent('explore', 'p'), answer('done')],
+          [CHILD_PROMPT]: [
+            callTools([
+              ['next', { title: 'E' }, 'c1'],
+              ['probe', {}, 'c2']
+            ]),
+            modelError('should not be asked')
+          ]
+        })
+        expect(await withTimeout(d.session.submitUser('go'), 3000, 'root')).toEqual({})
+        return d.outcomes[0]!.conversationId!
+      },
+      check: async (d) => {
+        expect(d.outcomes[0]!.structured).toEqual({ title: 'E' })
+        expect('error' in d.outcomes[0]!).toBe(false)
+        expect(requestsOf(d.t.kit, 'explorer')).toHaveLength(1)
+      }
+    }
+  ]
+
+  it.each(contractEndings)(
+    'OS-P4($row) a one-shot dispatch with a result contract is unloaded however it ends: $title',
+    async (ending) => {
+      const d = await hostD({ dispatch: { contract: CONTRACT, oneShot: true } })
+      const C = await ending.run(d)
+      await ending.check(d, C)
+      await expectUnloadedTool(d, C, d.outcomes[0]!.agentId!, ending.kept)
+    }
+  )
 })

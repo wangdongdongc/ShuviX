@@ -185,7 +185,7 @@
   "knowledge": {
     "badgeDraft": "下書き — 未完成",
     "badgeVerified": "人が確認済み",
-    "badgeMachineConfirmed": "機械確認済み — ナレッジライターの確認を通過、人による確認はまだ",
+    "badgeMachineConfirmed": "機械確認済み — ナレッジ司書の確認を通過、人による確認はまだ",
     "badgeVerifiedOutdated": "確認後に編集あり",
     "badgeStale": "stale_after の期限切れ",
     "badgeDeprecated": "非推奨",
@@ -1198,7 +1198,7 @@
     "widgetLabel": "ウィジェット",
     "widgetHint": "ウィジェット自身の操作でユーザーのウィジェットを使い、ウィジェットを作る",
     "knowledgeLabel": "ナレッジベース",
-    "knowledgeHint": "セッションのナレッジベースを検索し、エントリをナレッジライターの確認に提出する",
+    "knowledgeHint": "セッションのナレッジベースを検索し、エントリをナレッジ司書の確認に提出する",
     "agentLabel": "サブエージェント派遣",
     "agentHint": "自己完結したタスクをサブエージェントに委ねる — 独自のシステムプロンプトとツールで実行し、結果だけを返す",
     "subAgentTab": "サブエージェント",

@@ -2,6 +2,7 @@
  * 派生 agent 路由 · 面板操作按 agentId（P2-05 E 段，32–38；39 在桌面 agentHandlers.test.ts）：追问空闲的子 agent、
  * 不认识的 id、忙（PIN-08）、中止之后照样能追问（PIN-09）、会话关着用 peek 重开 / 被删就 not found（PIN-11）、
  * 中断与销毁从不打开会话；追问带的来源（宿主按连接盖的章）原样交给 `agents.continue`（P2-05-54）。
+ * OS-M2：经路由的一次性派发（带结果契约，知识库写手的形状）落定即卸、任务行照留；面板追问装回来、落定再卸。
  */
 import { existsSync } from 'node:fs'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -10,13 +11,21 @@ import { backgroundContext as BG } from '../../durable/context'
 import { spawnedAgentRecordOf } from '../../durable/agentRecord'
 import { AgentStateDoc, SourceDoc } from '../../durable/docs'
 import type { DurableSession } from '../../durable/durableSession'
-import { answer, held, stalled } from '../../durable/__tests__/support/faux'
+import { answer, callTool, held, stalled } from '../../durable/__tests__/support/faux'
 import { registerHostCleanup } from '../../durable/__tests__/support/host'
 import { extensionTools } from '../../durable/__tests__/support/scenario'
-import { callAgent, childOf, dispatchTask } from '../../durable/__tests__/support/spawn'
+import {
+  callAgent,
+  childOf,
+  dispatchTask,
+  expectUnloadedTool,
+  TITLE_SCHEMA
+} from '../../durable/__tests__/support/spawn'
 import { transcript } from '../../durable/__tests__/support/transcript'
 import { waitFor, withTimeout } from '../../durable/__tests__/support/wait'
-import { hostR, type HostR } from '../../durable/__tests__/support/router'
+import { contractTool, hostR, type HostR } from '../../durable/__tests__/support/router'
+import type { RunTaskOutcome } from '../manager'
+import type { ResultContract } from '../nextTool'
 
 registerHostCleanup()
 
@@ -251,5 +260,44 @@ describe('router · interrupt and destroy edge rows', () => {
     const events = r.events.length
     await expect(r.router.destroy('sub-x')).resolves.toBeUndefined()
     expect(r.events).toHaveLength(events)
+  })
+})
+
+describe('router · one-shot dispatch', () => {
+  it('OS-M2 a one-shot contract dispatch: captured, task done and kept, unloaded; a panel follow-up re-installs it, then unloads it again', async () => {
+    const CONTRACT: ResultContract = { schema: structuredClone(TITLE_SCHEMA), sourceLabel: 'test' }
+    const outcomes: (RunTaskOutcome | { rejected: string })[] = []
+    const r = await hostR({
+      tools: (_sessionId, manager) => [
+        contractTool(manager, { contract: CONTRACT, outcomes, oneShot: true })
+      ]
+    })
+    r.t.kit.queue(
+      callTool('contract_agent', { prompt: 'title it' }),
+      callTool('next', { title: 'X' }, 'call-next'),
+      answer('done')
+    )
+    expect(await r.session.submitUser('go')).toEqual({})
+    expect((outcomes[0] as RunTaskOutcome).structured).toEqual({ title: 'X' })
+    const A = r.registers()[0]!.sessionId
+    const [C] = await childOf(r.session, await dispatchTask(r.session, 'call-contract_agent'))
+    expect(r.task(A)).toMatchObject({ status: 'done', endedAt: expect.any(Number) })
+    expect(r.router.has(A)).toBe(true)
+    expect(r.ends()).toHaveLength(1)
+    expect(r.ends()[0]).toMatchObject({ sessionId: A, isError: false })
+    await expectUnloadedTool(r, C!, A, ['pi.assistant:[tool:next]'])
+
+    const gate = held(answer('more ok'))
+    r.t.kit.queue(gate.step)
+    const continued = r.router.continueTask({ subSessionId: A, text: 'more' })
+    await gate.reached
+    expect(extensionTools(r.t, `shuvix.agent.${C}`)).toContain('next')
+    const row = (await r.session.monitorSnapshot()).find((x) => x.conversationId === C)
+    expect(row).toMatchObject({ kind: 'spawned', dispatch: 'tool', phase: 'turn' })
+    expect(r.task(A)!.status).toBe('running')
+    gate.release()
+    await withTimeout(continued, 3000, 'continue')
+    expect(r.statuses(A).slice(-2)).toEqual(['running', 'done'])
+    await expectUnloadedTool(r, C!, A, ['pi.user:more', 'pi.assistant:more ok'])
   })
 })
