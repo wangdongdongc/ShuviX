@@ -97,4 +97,11 @@ describe('MCP 行里的浏览器设置入口（BS-U45）', () => {
     expect(render!({ isBuiltin: 1, name: 'ssh' })).toBeNull()
     expect(render!({ isBuiltin: 0, name: 'browser' })).toBeNull()
   })
+
+  it('MCP-X-3 McpSettings：内置 plan 行（任务列表）没有附加区', async () => {
+    m = await mountInto(McpSettings, {})
+    const render = captured.props?.renderServerExtra
+    expect(render).toBeTypeOf('function')
+    expect(render!({ isBuiltin: 1, name: 'plan', type: 'inproc' })).toBeNull()
+  })
 })

@@ -858,7 +858,12 @@ function assistantCard(
     metadata: {
       ...(usage === undefined ? {} : { usage }),
       ...(images === undefined ? {} : { images }),
-      ...(hint === undefined ? {} : { retried: retriedCopy(hint) })
+      ...(hint === undefined ? {} : { retried: retriedCopy(hint) }),
+      // 这次调用被中止 / 以出错收尾（没带错误文案、所以没塌成错误行）：一段被截断的正文看着像终答，
+      // 读者（任务列表的「完成 / 已停止」）要分得清
+      ...(message.stopReason === 'aborted' || message.stopReason === 'error'
+        ? { stopped: true as const }
+        : {})
     }
   }
   return { card, tools }

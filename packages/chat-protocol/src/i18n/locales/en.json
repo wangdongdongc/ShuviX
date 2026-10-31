@@ -244,6 +244,7 @@
     "atSourceFile": "File",
     "atSourceKnowledge": "Knowledge",
     "atSourcePaste": "Paste",
+    "atSourceMidRun": "Sent mid-run",
     "placeholderVision": "Type a message, drag & drop or paste images...",
     "placeholder": "Type a message... (Shift+Enter for new line)",
     "placeholderNoSession": "Please create or select a chat first",
@@ -418,6 +419,13 @@
     "alreadyPlaced": "Already delivered — it can no longer be withdrawn",
     "withdrawFailed": "Couldn't withdraw: {{error}}",
     "touchSendHint": "Send now — hold for more ways to send"
+  },
+  "taskList": {
+    "title": "Task list",
+    "done": "Done",
+    "stopped": "Stopped",
+    "expand": "Expand the task list",
+    "collapse": "Collapse the task list"
   },
   "threadDrawer": {
     "running": "Running…",
@@ -1185,6 +1193,8 @@
     "browserHint": "Open and work with web pages in the app's browser — read, click, fill in forms, take screenshots",
     "chromeLabel": "Chrome",
     "chromeHint": "Work in your own Chrome through the ShuviX extension — used by Chrome tab sessions",
+    "taskListLabel": "Task list",
+    "taskListHint": "Shows the agent's steps and progress above the input box",
     "sshLabel": "SSH",
     "sshHint": "Run commands and copy or sync files on the hosts in your ~/.ssh/config",
     "gitLabel": "Version Control",

@@ -26,7 +26,7 @@ import { EMPTY_REPLY_NOTICE_TEXT as N } from '../../emptyReply'
 import type { ShuviXSettingsOverrides } from '../../settings'
 import { answer, assistantWith, callTool, held, modelError, stalled } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
-import { allEntries, messageText, transcript } from '../support/transcript'
+import { allEntries, messageText, midRunNoted, transcript } from '../support/transcript'
 import { waitFor, withTimeout } from '../support/wait'
 import { bare, recordLifecycle, settleFrames } from '../../projection/__tests__/projectorSupport'
 import { lines } from './support/scriptedModel'
@@ -210,12 +210,16 @@ describe('empty reply · no nudge', () => {
       allow(world, 'c-w')
       expect(await withTimeout(saving, 5000, 'save')).toEqual({})
       expect(world.model.chats).toHaveLength(2)
+      // 插话受理时会话正忙 → 模型文本带插话说明
       expect(lines(world.model.chats[1]!).slice(-2)).toEqual([
         expect.stringMatching(/^toolResult:/),
-        'user:also Y'
+        `user:${midRunNoted('also Y')}`
       ])
       expect(await noticeCount(session)).toBe(0)
-      expect((await tx(session)).slice(-2)).toEqual(['pi.user:also Y', 'pi.assistant:'])
+      expect((await tx(session)).slice(-2)).toEqual([
+        `pi.user:${midRunNoted('also Y')}`,
+        'pi.assistant:'
+      ])
       await settled(world, 1)
       expect(runSpans(world)).toBe(1)
     },
@@ -336,10 +340,12 @@ describe('empty reply · user input wins', () => {
       await waitFor(() => session.runState === 'idle', 3000, 'idle')
       expect(await noticeCount(session)).toBe(0)
       expect(world.model.chats).toHaveLength(3)
-      expect(lines(world.model.chats[2]!).slice(-2)).toEqual(['assistant:', 'user:next'])
+      // 忙时受理的插话带插话说明；followUp 不带
+      const next = mode === 'steer' ? midRunNoted('next') : 'next'
+      expect(lines(world.model.chats[2]!).slice(-2)).toEqual(['assistant:', `user:${next}`])
       expect((await tx(session)).slice(-3)).toEqual([
         'pi.assistant:',
-        'pi.user:next',
+        `pi.user:${next}`,
         'pi.assistant:next done'
       ])
       // 放在最终边界的输入接着同一个 run 跑（运行状态镜像只有一个 busy 区间）

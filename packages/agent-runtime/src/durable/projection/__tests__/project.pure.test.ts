@@ -4,7 +4,7 @@
  *
  *   01-03 user 与显示侧车        06-07b 通知（条目种类 / 正文形状 / 空回复追问）   09-11 assistant 块与用量
  *   12-16 工具回填、诊断段剥离、落盘   18 配对                          19-22, 24, 26-27 重试折叠
- *   28 中止的中间卡              30 压缩头                           32 跳过的种类
+ *   28 中止的中间卡（28b stopped） 30 压缩头                           32 跳过的种类
  *   34-36 实时卡与 toolRuns      37-38 run.retry / run.compacting    39 队列
  *   41 询问                      42-43 上下文占用                    46-50 纯度、确定性、严格 JSON、外壳
  *   51 AgentView                 52 不依赖 Node、包入口导出          54 搬家后的导出身份
@@ -600,6 +600,49 @@ describe('P3-02 · pure projector: aborted partial and compaction', () => {
       total: 43
     })
     expect(view.messages.some((m) => m.type === 'error_event')).toBe(false)
+  })
+
+  it('P3-02-28b stopped (task list, 2026-10-31): an aborted card and an error card without a message carry metadata.stopped; a normal card has no such key; an error with a message is still an error row', () => {
+    // 被中止时截断的纯正文卡：看着像终答，靠 stopped 分得清
+    const aborted = assistant(
+      P([U(1, 'go'), A(2, [text('partial')], 0, { stopReason: 'aborted' })]),
+      '2'
+    )
+    expect(aborted.blocks).toEqual([{ type: 'text', text: 'partial' }])
+    expect(aborted.metadata).toStrictEqual({
+      usage: expect.any(Object),
+      stopped: true
+    })
+    // 带工具块的中止卡同样标
+    expect(
+      assistant(P([A(1, [text('x'), call('ls', {}, 'c1')], 0, { stopReason: 'aborted' })]), '1')
+        .metadata?.stopped
+    ).toBe(true)
+    // 以出错收尾、没带（或带空的）错误文案：没塌成错误行，是一张卡，也标
+    for (const errorMessage of [undefined, '']) {
+      const view = P([
+        A(1, [text('half')], 0, {
+          stopReason: 'error',
+          ...(errorMessage === undefined ? {} : { errorMessage })
+        })
+      ])
+      expect(
+        view.messages.map((m) => m.type),
+        String(errorMessage)
+      ).toEqual(['message'])
+      expect(assistant(view, '1').metadata?.stopped, String(errorMessage)).toBe(true)
+    }
+    // 正常收尾（stop / toolUse / length）：没有这个键
+    for (const stopReason of ['stop', 'toolUse', 'length'] as const) {
+      const card = assistant(P([A(1, [text('done')], 0, { stopReason })]), '1')
+      expect(card.metadata, stopReason).not.toHaveProperty('stopped')
+    }
+    expect(assistant(P([A(1, [text('done')], 0, { usage: null })]), '1').metadata).toStrictEqual({})
+    // 带错误文案的失败轮：仍是一行 error_event，没有卡、也就没有 stopped
+    const failed = P([A(1, [text('half')], 0, { stopReason: 'error', errorMessage: 'boom' })])
+    expect(failed.messages.map((m) => [m.type, m.content, m.metadata])).toEqual([
+      ['error_event', 'boom', null]
+    ])
   })
 
   it('P3-02-30 the compaction summary unwrapped, first; a summary without the exact wrapper keeps its text', () => {

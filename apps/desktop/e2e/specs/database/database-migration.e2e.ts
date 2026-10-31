@@ -30,6 +30,7 @@ import {
 const BROWSER_ID = 'builtin-mcp-browser'
 const SSH_ID = 'builtin-mcp-ssh'
 const CHROME_ID = 'builtin-mcp-chrome'
+const PLAN_ID = 'builtin-mcp-plan'
 const MIGRATION_LINE = 'Running migration v28'
 const ALL_DB_TOOLS = DATABASE_TOOL_NAMES.map(dbTool).sort()
 
@@ -132,13 +133,13 @@ describe('迁移 v28', () => {
       cachedTools: '[]'
     })
     expect(row.createdAt).toBe(row.updatedAt)
-    // 内置的一台不少（chrome 是之后的 v29 种的）
+    // 内置的一台不少（chrome 是之后的 v29 种的，plan 是 v37）
     expect(
       rows()
         .filter((r) => r.type === 'inproc')
         .map((r) => r.id)
         .sort()
-    ).toEqual([BROWSER_ID, CHROME_ID, DATABASE_SERVER_ID, SSH_ID])
+    ).toEqual([BROWSER_ID, CHROME_ID, DATABASE_SERVER_ID, PLAN_ID, SSH_ID])
     // 之后的迁移照跑，库版本只会往上走（v27 区同一个写法）
     expect(Number(userVersion())).toBeGreaterThanOrEqual(28)
     expect(migrationRuns()).toBe(1)

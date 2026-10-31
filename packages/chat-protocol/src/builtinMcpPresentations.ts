@@ -5,7 +5,7 @@
  * （进程内、代码随产品发布）的工具名是确定的 `mcp__<server>__<tool>`，于是可以像内置工具一样
  * 给图标、标签、折叠摘要和详情形态。
  *
- * **认名字要认全**：server 名唯一、内置行占着 `browser` / `ssh` / `database` / `chrome`（桌面 v27 / v28 / v29 迁移、
+ * **认名字要认全**：server 名唯一、内置行占着 `browser` / `ssh` / `database` / `chrome` / `plan`（桌面 v27 / v28 / v29 / v37 迁移、
  * 扩展 mcpStore 都会给撞名的自定义行改名），但光凭前缀还不够 —— 一台叫 `browser__x` 的自定义 server，
  * 它的工具 `mcp__browser__x__tool` 也以 `mcp__browser__` 开头，于是会在询问卡片上顶着
  * 「浏览器」的名字和图标出现。所以前缀之后的那一截还必须是这台内置 server 真有的工具名
@@ -168,6 +168,19 @@ export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentat
             .filter(Boolean)
             .join(' · ') || undefined
         : undefined
+  },
+  // 任务列表（实验）：成功的调用在卡片里不出行（chat-protocol taskList.ts），这条呈现给失败的红行、监视器等处
+  plan: {
+    labelKey: 'tool.taskListLabel',
+    hintKey: 'tool.taskListHint',
+    toolNames: ['update'],
+    presentation: { icon: 'ListChecks', iconColor: '#8b5cf6' },
+    summary: (_tool, args) => {
+      if (!Array.isArray(args.items)) return undefined
+      const steps = args.items as Array<{ content?: unknown; status?: unknown }>
+      const current = steps.find((step) => step?.status === 'in_progress') ?? steps[0]
+      return asStr(current?.content)
+    }
   }
 }
 

@@ -45,7 +45,13 @@ import {
   viewOf
 } from './support/rollback'
 import { callAgent, hostD, probeTool } from './support/spawn'
-import { allEntries, requestTexts, transcript } from './support/transcript'
+import {
+  allEntries,
+  midRunDisplayed,
+  midRunNoted,
+  requestTexts,
+  transcript
+} from './support/transcript'
 import { aborted, deferred, sleep, withTimeout } from './support/wait'
 
 registerHostCleanup()
@@ -367,7 +373,7 @@ describe('session fork · branchAt', () => {
         (entry) =>
           entry.kind === 'pi.user' &&
           entry.model?.[0]?.role === 'user' &&
-          entry.model[0].content === 'S'
+          entry.model[0].content === midRunNoted('S')
       )!
       expect(steered.id).toBeGreaterThan(toolResult.id)
 
@@ -375,7 +381,7 @@ describe('session fork · branchAt', () => {
       expect((await conversationRecord(session, F))?.parent?.at).toBe(toolResult.id)
       const view = await viewOf(session)
       expect(messageIds(view)).not.toContain(String(steered.id))
-      expect(contents(view)).not.toContain('S')
+      expect(contents(view)).not.toContain(midRunDisplayed('S'))
       expect(view.messages.at(-1)!.id).toBe(String(call.id))
       expect(view.queue).toEqual([])
       expect(view.live).toBeNull()

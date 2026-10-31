@@ -117,6 +117,11 @@ export interface AssistantMeta {
    * 由随后的这张卡带一个「重试 ×N」的小提示。`count` = 自上一张带提示的卡以来折叠的尝试数。
    */
   retried?: RetriedInfo
+  /**
+   * 这次 LLM 调用没有正常结束（`stopReason` 是 aborted / error 但没塌成错误行）：被中止时截断的正文看着像终答，
+   * 任务列表据此判「已停止」而不是「完成」（taskList.ts）
+   */
+  stopped?: true
 }
 
 /** 折叠掉的重试：次数与最后一次的错误文案 */

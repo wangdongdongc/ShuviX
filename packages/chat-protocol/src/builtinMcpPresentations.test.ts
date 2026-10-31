@@ -58,6 +58,9 @@ const SSH_TOOLS = ['list-hosts', 'exec', 'upload', 'download', 'sync', 'disconne
 /** 内置 database server 的 2 个工具（仅桌面） */
 const DATABASE_TOOLS = ['list-connections', 'query']
 
+/** 内置 plan server（任务列表，实验）的 1 个工具 */
+const PLAN_TOOLS = ['update']
+
 /** 把 key 原样包一层的 t —— 断言看得出「用的是哪个 key」，而不依赖文案 */
 const T = (key: string): string => `T(${key})`
 
@@ -96,7 +99,7 @@ describe('parseBuiltinMcpToolName — 认名字要认全', () => {
     expect([...BUILTIN_MCP_PRESENTATIONS.ssh.toolNames].sort()).toEqual([...SSH_TOOLS].sort())
   })
 
-  it('BMP-1c database 的两个工具都认到 database 名下；手抄清单与表里的 toolNames 一致；表里恰是四台', () => {
+  it('BMP-1c database 的两个工具都认到 database 名下、plan 的 update 认到 plan 名下；手抄清单与表里的 toolNames 一致；表里恰是五台', () => {
     expect(DATABASE_TOOLS).toHaveLength(2)
     for (const tool of DATABASE_TOOLS) {
       expect(parseBuiltinMcpToolName(`mcp__database__${tool}`), tool).toEqual({
@@ -107,10 +110,15 @@ describe('parseBuiltinMcpToolName — 认名字要认全', () => {
     expect([...BUILTIN_MCP_PRESENTATIONS.database.toolNames].sort()).toEqual(
       [...DATABASE_TOOLS].sort()
     )
+    for (const tool of PLAN_TOOLS) {
+      expect(parseBuiltinMcpToolName(`mcp__plan__${tool}`), tool).toEqual({ server: 'plan', tool })
+    }
+    expect([...BUILTIN_MCP_PRESENTATIONS.plan.toolNames].sort()).toEqual([...PLAN_TOOLS].sort())
     expect(Object.keys(BUILTIN_MCP_PRESENTATIONS).sort()).toEqual([
       'browser',
       'chrome',
       'database',
+      'plan',
       'ssh'
     ])
   })
@@ -415,5 +423,72 @@ describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () =>
       })
       expect(new Set(hints).size, lang).toBe(hints.length)
     }
+  })
+})
+
+describe('plan（任务列表，实验）—— 成功的调用在卡片里不出行，这条呈现给失败的红行与监视器等处', () => {
+  const plan = BUILTIN_MCP_PRESENTATIONS.plan
+  const items = (
+    ...steps: Array<{ content: unknown; status?: unknown }>
+  ): Record<string, unknown> => ({
+    items: steps
+  })
+
+  it('PRES-1 标签 / 说明的键、ListChecks 图标与紫色', () => {
+    expect(plan.labelKey).toBe('tool.taskListLabel')
+    expect(plan.hintKey).toBe('tool.taskListHint')
+    expect(plan.presentation).toStrictEqual({ icon: 'ListChecks', iconColor: '#8b5cf6' })
+  })
+
+  it('PRES-2 摘要：进行中那一步的内容；没有进行中的 → 第一步', () => {
+    expect(
+      plan.summary(
+        'update',
+        items(
+          { content: 'Read the code', status: 'completed' },
+          { content: 'Fix the bug', status: 'in_progress' },
+          { content: 'Run tests', status: 'pending' }
+        )
+      )
+    ).toBe('Fix the bug')
+    expect(
+      plan.summary(
+        'update',
+        items(
+          { content: 'Read the code', status: 'pending' },
+          { content: 'Fix', status: 'pending' }
+        )
+      )
+    ).toBe('Read the code')
+  })
+
+  it('PRES-2 没有摘要：items 不是数组、推进 / 跳转、空数组、那一步的内容不是（非空）字符串', () => {
+    expect(plan.summary('update', { items: 'Read the code' })).toBeUndefined()
+    expect(plan.summary('update', { advance: true })).toBeUndefined()
+    expect(plan.summary('update', { done: [1], start: 2 })).toBeUndefined()
+    expect(plan.summary('update', { items: [] })).toBeUndefined()
+    for (const content of [null, {}, true, '   ']) {
+      expect(
+        plan.summary('update', items({ content, status: 'in_progress' })),
+        String(content)
+      ).toBe(undefined)
+    }
+  })
+
+  it('PRES-3 兜底呈现与 buildToolSummary 走这一条：红行上的标签、图标与摘要', () => {
+    expect(fallbackToolPresentation('mcp__plan__update', T)).toStrictEqual({
+      label: 'T(tool.taskListLabel)',
+      icon: 'ListChecks',
+      iconColor: '#8b5cf6'
+    })
+    expect(
+      buildToolSummary(
+        'mcp__plan__update',
+        items({ content: 'Fix the bug', status: 'in_progress' })
+      )
+    ).toBe('Fix the bug')
+    expect(buildToolSummary('mcp__plan__update', { advance: true })).toBeUndefined()
+    // 改了名的自定义 server（v37 迁移给撞名行起的名字）拿不到这条呈现
+    expect(fallbackToolPresentation('mcp__plan-custom__update', T)).toBeUndefined()
   })
 })

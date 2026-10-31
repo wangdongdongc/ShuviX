@@ -8,7 +8,8 @@
  *   SRC-02..05 (34..38)   submitUser：键是条目 id 的字符串形；只有带来源的那条；不补种；自动生成 requestId 的边界
  *   SRC-06 / 07 (39 / 40) 手写侧车：形状不对的照样算来源（失败闭合）；不在活上下文里的不出现
  *   SRC-08 (41)           忙时被拒的发送不出现
- *   SRC-09..13 (42..46)   steer / followUp：放下之后才出现；自动生成 requestId；不带来源时形状不变；幂等
+ *   SRC-09..13 (42..46)   steer / followUp：放下之后才出现；自动生成 requestId；不带来源时不写 SourceDoc（忙时的
+ *                         插话仍为插话说明的显示侧车生成 requestId）；幂等。忙时插话的模型文本带插话说明
  *   SRC-14 / 15 (47 / 48) 重新挂上不再写；撤回的排队输入不出现
  *   SRC-16..18 (49..51)   压缩切点之前、fork 的旧分支、别的对话都不出现；fork 继承前缀（asOf），重开照旧
  *   SRC-19 / 20 (52 / 53) 显示侧车与来源记在同一个 requestId 下；title: undefined 不落盘
@@ -35,6 +36,7 @@ import {
   type EntryRecord,
   type JsonObject
 } from '@earendil-works/pi-durable'
+import { midRunNoteDisplay } from '@shuvix/chat-protocol/midRunNote'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { describe, expect, it } from 'vitest'
 import * as runtime from '../../index'
@@ -57,7 +59,7 @@ import { answer, callTool, held, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup, type TestHost } from './support/host'
 import { forkedId } from './support/rollback'
 import { holdTool } from './support/tools'
-import { allEntries, messageText } from './support/transcript'
+import { allEntries, messageText, midRunNoted } from './support/transcript'
 import { deferred, sleep, waitFor, withTimeout } from './support/wait'
 
 registerHostCleanup()
@@ -518,7 +520,7 @@ describe('SRC · steer / followUp', () => {
       expect(await sources(session)).toEqual(new Map())
       release()
       expect(await withTimeout(sending, 5000, 'round')).toEqual({})
-      const entry = await userEntry(session, 'go left')
+      const entry = await userEntry(session, midRunNoted('go left'))
       expect(await sources(session)).toStrictEqual(new Map([[String(entry.id), PARENT]]))
     },
     TIMEOUT
@@ -536,19 +538,26 @@ describe('SRC · steer / followUp', () => {
       expect(Object.keys((await sourceDoc(session))!.items)).toEqual([record.requestId])
       release()
       expect(await withTimeout(sending, 5000, 'round')).toEqual({})
-      const entry = await userEntry(session, 'x')
+      const entry = await userEntry(session, midRunNoted('x'))
       expect(await sources(session)).toStrictEqual(new Map([[String(entry.id), PARENT]]))
     },
     TIMEOUT
   )
 
   it(
-    'SRC-11 WP2-44 a plain steer (the UI’s shape) writes no SourceDoc and carries no requestId',
+    'SRC-11 WP2-44 a plain steer (the UI’s shape) writes no SourceDoc; admitted while busy, its generated requestId holds only the mid-run note’s display sidecar',
     async () => {
       const { session, sending, release } = await heldRound()
       const steer = await session.steer('x')
       const record = await (await session.harness.submission(steer.submissionId!, BG))!.status(BG)
-      expect(record.requestId).toBeUndefined()
+      // 受理时会话正忙 → 生成一个 requestId，只为插话说明的显示侧车；来源表照旧不写
+      expect(typeof record.requestId).toBe('string')
+      expect(record.requestId).not.toBe('')
+      const conversation = await session.currentConversation()
+      expect(
+        (await session.harness.snapshot(DisplayDoc, conversation.id, BG))!.items
+      ).toStrictEqual({ [record.requestId!]: midRunNoteDisplay('x') })
+      expect(await sourceDoc(session)).toBeUndefined()
       release()
       expect(await withTimeout(sending, 5000, 'round')).toEqual({})
       expect(await sourceDoc(session)).toBeUndefined()
@@ -588,7 +597,7 @@ describe('SRC · steer / followUp', () => {
       expect(b.submissionId).toBe(a.submissionId)
       release()
       expect(await withTimeout(sending, 5000, 'round')).toEqual({})
-      const entry = await userEntry(session, 'twice')
+      const entry = await userEntry(session, midRunNoted('twice'))
       expect(Object.keys((await sourceDoc(session))!.items)).toEqual(['subsession-steer:P1:10'])
       expect(await sources(session)).toStrictEqual(new Map([[String(entry.id), PARENT]]))
     },

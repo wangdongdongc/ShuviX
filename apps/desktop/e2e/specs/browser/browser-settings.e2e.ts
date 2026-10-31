@@ -238,7 +238,7 @@ describe('种子行（IPC）', () => {
         .filter((r) => r.isBuiltin === 1)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'chrome', 'database', 'ssh'])
+    ).toEqual(['browser', 'chrome', 'database', 'plan', 'ssh'])
     expect(rows.find((r) => r.id === TAVILY_ID)?.isBuiltin).toBe(0)
 
     // 没连过就没有工具（工具数与工具表都取自上次连上时的 cachedTools）
@@ -291,7 +291,7 @@ describe('MCP 设置页（DOM）', () => {
         .filter((r) => r.builtinBadge)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'chrome', 'database', 'ssh'])
+    ).toEqual(['browser', 'chrome', 'database', 'plan', 'ssh'])
 
     const browser = rows.find((r) => r.name === 'browser')!
     expect(browser).toMatchObject({

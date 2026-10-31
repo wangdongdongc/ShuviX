@@ -32,6 +32,8 @@ import type { ConversationId, EntryId, ToolRegistration } from '@earendil-works/
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { transcribeConversation } from '@shuvix/chat-protocol/utils/transcript'
+import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
+import { MID_RUN_NOTE_UID } from '@shuvix/chat-protocol/midRunNote'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -733,7 +735,10 @@ describe('P3-07 day prompts by entry id (S)', () => {
       expect(await withTimeout(pending, 8000, 'run with steer')).toEqual({})
       await waitFor(() => dayRows('s1').length === 2, 3000, 'steer row')
       const listed = await messageService.listBySession('s1')
-      const steered = listed.find((m) => m.role === 'user' && m.content === 'mid-run')!
+      // 运行中插话：显示的是原文 + 插话说明那枚 Token（docs/task-list-design.md §2）
+      const steered = listed.find(
+        (m) => m.role === 'user' && m.content === `mid-run${makeTokenMarker(MID_RUN_NOTE_UID)}`
+      )!
       expect(dayRows('s1').map((r) => r.entryId)).toContain(steered.id)
 
       kit.queue(answer('followed'))

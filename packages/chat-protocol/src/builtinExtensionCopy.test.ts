@@ -87,3 +87,12 @@ describe('builtinExtensionCopy', () => {
     expect(sameAsIdentifier('浏览器', 'browser')).toBe(false)
   })
 })
+
+describe('builtinExtensionCopy — 任务列表', () => {
+  it('COPY-1 plan 与 mcp:plan：名字与说明是任务列表的那两个键', () => {
+    const T = (key: string): string => `T(${key})`
+    const expected = { label: 'T(tool.taskListLabel)', hint: 'T(tool.taskListHint)' }
+    expect(builtinMcpCopy('plan', T)).toStrictEqual(expected)
+    expect(builtinMcpCopy('mcp:plan', T)).toStrictEqual(expected)
+  })
+})

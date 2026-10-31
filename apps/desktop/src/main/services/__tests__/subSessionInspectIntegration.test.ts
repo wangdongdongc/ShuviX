@@ -23,6 +23,7 @@ import {
 } from './support/desktopRig'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { withoutMidRunNote } from '@shuvix/chat-protocol/midRunNote'
 import type { ClientContext } from '../../ipc/registry'
 import { answer, callTool, held, withTimeout } from './support/realHost'
 import { callTools } from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/faux'
@@ -193,8 +194,10 @@ describe('inspect-sub-session —— 接到真子会话上', () => {
       const REMOTE = { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' }
       const FROM_P = { kind: 'parent-session', sessionId: 'P' }
       const originOf = async (sessionId: string, content: string): Promise<unknown> => {
+        // 按用户自己的话认：运行中插进来的那条后面还挂着插话说明那枚 Token（docs/task-list-design.md §2）
         const found = (await viewOf(p, sessionId)).messages.filter(
-          (m) => m.role === 'user' && m.content === content
+          (m) =>
+            m.role === 'user' && withoutMidRunNote(m.content, m.metadata?.inlineTokens) === content
         )
         expect(found, `${sessionId}: ${content}`).toHaveLength(1)
         return (found[0]!.metadata as { origin?: unknown } | null)?.origin

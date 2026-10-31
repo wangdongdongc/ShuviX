@@ -15,7 +15,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
+import en from '@shuvix/chat-protocol/i18n/locales/en.json'
+import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { MID_RUN_NOTE_TEXT, midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 import { TokenChip } from '../TokenChip'
 
 declare global {
@@ -76,7 +79,7 @@ function hoverCard(): HTMLDivElement | null {
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
     lng: 'zh',
-    resources: { zh: { translation: zh } }
+    resources: { zh: { translation: zh }, en: { translation: en }, ja: { translation: ja } }
   })
 })
 
@@ -87,7 +90,10 @@ beforeEach(() => {
   root = createRoot(container)
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => {
+    await i18n.changeLanguage('zh')
+  })
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
@@ -220,5 +226,63 @@ describe('悬停预览卡', () => {
     const dialog = document.body.querySelector('.dialog-panel')
     expect(dialog).toBeTruthy()
     expect(dialog!.textContent).toContain('第四行') // 完整 payload，非 3 行截断
+  })
+})
+
+describe('插话说明 Token —— 只有标签、没有标题', () => {
+  const LABELS = { en: 'Sent mid-run', zh: '运行中发送', ja: '実行中に送信' } as const
+
+  for (const [lng, label] of Object.entries(LABELS)) {
+    it(`TK-2: 胶囊（${lng}）：data-token-kind="note"、锚点为空串，文字只有本地化标签，没有 \`·\` 和标题段`, async () => {
+      await act(async () => {
+        await i18n.changeLanguage(lng)
+      })
+      const chip = renderChip(midRunNoteToken())
+      expect(chip.dataset.tokenKind).toBe('note')
+      expect(chip.getAttribute('data-token-display')).toBe('')
+      expect(chip.textContent).toBe(label)
+      expect(chip.textContent).not.toContain('·')
+      expect(chip.querySelector('span.text-text-primary')).toBeNull()
+      expect(chip.classList.contains('ml-1.5')).toBe(true)
+    })
+  }
+
+  it('TK-2: displayText 存成别的字样也照样只显示 i18n 标签（胶囊认 id，不读 displayText）', () => {
+    const chip = renderChip({ ...midRunNoteToken(), displayText: 'sent mid-run' })
+    expect(chip.dataset.tokenKind).toBe('note')
+    expect(chip.textContent).toBe('运行中发送')
+    expect(chip.textContent).not.toContain('sent mid-run')
+  })
+
+  it('TK-2: 别的类型的胶囊不带 ml-1.5', () => {
+    const chip = renderChip(CMD_TOKEN)
+    expect(chip.dataset.tokenKind).toBe('cmd')
+    expect(chip.classList.contains('ml-1.5')).toBe(false)
+  })
+
+  it('TK-3: 悬停卡：标题即标签、右侧没有第二个源标签，正文是说明原文的预览', () => {
+    const chip = renderChip(midRunNoteToken())
+    enter(chip)
+    act(() => {
+      vi.advanceTimersByTime(350)
+    })
+    const card = hoverCard()
+    expect(card).toBeTruthy()
+    const title = card!.querySelector('span.font-semibold')
+    expect(title?.textContent).toBe('运行中发送')
+    expect(card!.querySelector('span.ml-auto')).toBeNull()
+    expect(card!.querySelector('pre')?.textContent).toBe(MID_RUN_NOTE_TEXT)
+  })
+
+  it('TK-4: 点击弹 TokenPayloadDialog：标题 = 标签，正文 = 说明原文，没有副标题', () => {
+    const chip = renderChip(midRunNoteToken())
+    act(() => {
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const dialog = document.body.querySelector('.dialog-panel')
+    expect(dialog).toBeTruthy()
+    expect(dialog!.querySelector('h3')?.textContent).toBe('运行中发送')
+    expect(dialog!.querySelector('h3 + div')).toBeNull()
+    expect(dialog!.querySelector('pre')?.textContent).toBe(MID_RUN_NOTE_TEXT)
   })
 })

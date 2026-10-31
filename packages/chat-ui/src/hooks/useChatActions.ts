@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from 'react'
 import { useChatStore, pendingPromptMessage, selectSessionViewOf } from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { tokensWithoutMidRunNote, withoutMidRunNote } from '@shuvix/chat-protocol/midRunNote'
 
 type ChatStoreState = ReturnType<typeof useChatStore.getState>
 
@@ -110,8 +111,9 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
           !m.metadata?.isSystemNotice &&
           !m.metadata?.isInstructionInjection
         ) {
-          lastUserText = m.content
-          lastUserTokens = m.metadata?.inlineTokens
+          // 插话说明不跟着重发：重发的是一条普通消息（运行时按那时的情形重新判断，见 midRunNote.ts）
+          lastUserText = withoutMidRunNote(m.content, m.metadata?.inlineTokens)
+          lastUserTokens = tokensWithoutMidRunNote(m.metadata?.inlineTokens)
           userMsgId = m.id
           break
         }

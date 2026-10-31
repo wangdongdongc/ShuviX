@@ -244,6 +244,7 @@
     "atSourceFile": "文件",
     "atSourceKnowledge": "知识库",
     "atSourcePaste": "粘贴",
+    "atSourceMidRun": "运行中发送",
     "placeholderVision": "输入消息，可拖放或粘贴图片...",
     "placeholder": "输入消息... (Shift+Enter 换行)",
     "placeholderNoSession": "请先创建或选择一个对话",
@@ -418,6 +419,13 @@
     "alreadyPlaced": "已经送达，无法撤回",
     "withdrawFailed": "撤回失败：{{error}}",
     "touchSendHint": "立即插入 —— 长按可选别的发法"
+  },
+  "taskList": {
+    "title": "任务列表",
+    "done": "已完成",
+    "stopped": "已停止",
+    "expand": "展开任务列表",
+    "collapse": "折叠任务列表"
   },
   "threadDrawer": {
     "running": "运行中…",
@@ -1185,6 +1193,8 @@
     "browserHint": "在应用内的浏览器里打开和操作网页 —— 阅读、点击、填表、截图",
     "chromeLabel": "Chrome",
     "chromeHint": "经 ShuviX 扩展操作你自己的 Chrome —— 供 Chrome 标签页会话使用",
+    "taskListLabel": "任务列表",
+    "taskListHint": "在输入框上方显示 agent 这次的步骤和进度",
     "sshLabel": "SSH",
     "sshHint": "在 ~/.ssh/config 里的主机上执行命令、复制和同步文件",
     "gitLabel": "版本控制",

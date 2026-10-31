@@ -16,6 +16,7 @@ import type { ToolAgentIdentity } from './toolAgent'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
+import type { TaskListItem } from '@shuvix/chat-protocol/taskList'
 import { mcpDao } from '../dao/mcpDao'
 import { BUILTIN_MCP_FACTORIES } from './builtinMcp'
 import { buildSpawnEnv } from '../utils/paths'
@@ -66,6 +67,20 @@ export function setBuiltinMcpAgentResolver(resolver: BuiltinMcpAgentResolver | n
   agentResolver = resolver
 }
 
+/**
+ * 任务列表 server（`plan`）读当前列表用的读者：(会话, 这次调用的 toolCallId) → 它之前的列表。由 main 启动时注册
+ * （从会话宿主取开着的 durable 会话，交给 agent-runtime 的 `readTaskList`）—— 理由同上。没注册 = 读不到。
+ */
+export type BuiltinMcpTaskListReader = (
+  sessionId: string,
+  beforeToolCallId?: string
+) => Promise<TaskListItem[] | undefined>
+let taskListReader: BuiltinMcpTaskListReader | null = null
+
+export function setBuiltinMcpTaskListReader(reader: BuiltinMcpTaskListReader | null): void {
+  taskListReader = reader
+}
+
 /** 桌面 transport 工厂：stdio（本地进程）+ http（Streamable HTTP）+ inproc（内置） */
 function createTransport(
   server: McpServer,
@@ -82,7 +97,8 @@ function createTransport(
       emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId }),
       // 每次调用现问注册着的解析器 —— 连接活得比任何一次调用都久（重连也在调用途中懒发生），
       // 建连时快照下来的身份会过时
-      agentOf: (conversationId) => agentResolver?.(sessionId, conversationId)
+      agentOf: (conversationId) => agentResolver?.(sessionId, conversationId),
+      readTaskList: async (beforeToolCallId) => taskListReader?.(sessionId, beforeToolCallId)
     })
   }
   if (server.type === 'stdio') {

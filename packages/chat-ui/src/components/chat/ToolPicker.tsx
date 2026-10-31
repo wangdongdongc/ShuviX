@@ -16,6 +16,8 @@ import { useSessionKnowledgeBases } from '../../hooks/useSessionKnowledgeBases'
 import type { ToolItem } from '../common/ToolSelectList'
 import { TouchSheet } from '../common/TouchSheet'
 import { useChatDensity } from '../../host/chatHostContext'
+import { ExperimentalTag } from '../common/ExperimentalTag'
+import { experimentalFeatureOfMcp } from '@shuvix/chat-protocol/experimentalFeatures'
 
 /** 欢迎页直接发送新建的是无项目会话，根档案由形态推导为基座 chat（见 sessionService） */
 const WELCOME_PROFILE = 'chat'
@@ -261,6 +263,8 @@ export function ToolPicker(): React.JSX.Element | null {
             // 惰性启动下「没连上」是常态（用到才连），只有连接失败才值得标红
             const failed = tool.serverStatus === 'error'
             const copy = mcpCopy(tool)
+            // 实验性质的内置 server（任务列表）：勾它就是「决定开始用」，标签放在这一行
+            const experimental = tool.isBuiltin ? experimentalFeatureOfMcp(tool.name) : undefined
             return (
               <label
                 key={tool.name}
@@ -285,6 +289,7 @@ export function ToolPicker(): React.JSX.Element | null {
                       colorCls={failed ? 'text-red-300/60' : 'text-purple-300'}
                       touch={touch}
                     />
+                    {experimental && <ExperimentalTag feature={experimental} />}
                     {failed && (
                       <span
                         className="flex items-center gap-0.5 text-[10px] text-red-400"

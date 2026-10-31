@@ -10,6 +10,7 @@ import type { BuiltinMcpScope } from '@shuvix/agent-runtime'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ChatEventPayload } from '../toolContext'
 import type { ToolAgentIdentity } from '../toolAgent'
+import type { TaskListItem } from '@shuvix/chat-protocol/taskList'
 
 export interface DesktopBuiltinMcpScope extends BuiltinMcpScope {
   /** 挂起询问并等用户答复（安全模块的 ask 卡走它）；缺省 = 这条会话没有输入面板 */
@@ -24,4 +25,10 @@ export interface DesktopBuiltinMcpScope extends BuiltinMcpScope {
    * （见 setBuiltinMcpAgentResolver）；缺省 = 宿主没接，主体按 root。
    */
   agentOf?: (conversationId: number) => ToolAgentIdentity | undefined
+  /**
+   * 任务列表（`plan` server）：从这条会话已提交的条目折叠出 `beforeToolCallId` 那次调用之前的列表
+   * （agent-runtime `readTaskList`）。由 mcpService 从启动时注册的读者补上（见 setBuiltinMcpTaskListReader）；
+   * 缺省 / 会话没开着 = 读不到，按「这个请求里还没有列表」处理。
+   */
+  readTaskList?: (beforeToolCallId?: string) => Promise<TaskListItem[] | undefined>
 }

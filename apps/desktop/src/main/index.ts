@@ -22,7 +22,11 @@ import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { browserHistoryDao } from './dao/browserHistoryDao'
-import { mcpService, setBuiltinMcpAgentResolver } from './services/mcpService'
+import {
+  mcpService,
+  setBuiltinMcpAgentResolver,
+  setBuiltinMcpTaskListReader
+} from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
 // services / frontend 层消费注册表前必须由 main-entry 先注册
@@ -91,7 +95,7 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
-import { setWhenHostFunctions } from '@shuvix/agent-runtime'
+import { readTaskList, setWhenHostFunctions } from '@shuvix/agent-runtime'
 import { activeSessionsOnDay } from './services/sessionDayPromptService'
 import { builtinTimer } from './services/triggerTimer'
 import { botTriggers } from './services/botTriggerService'
@@ -1069,6 +1073,13 @@ app.whenReady().then(async () => {
   })
   // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）
   step('builtin MCP agent resolver', () => setBuiltinMcpAgentResolver(sessionAgentResolver()))
+  // 任务列表 server（`plan`）从开着的 durable 会话读当前列表：同样注入（见 mcpService）
+  step('builtin MCP task list reader', () =>
+    setBuiltinMcpTaskListReader(async (sessionId, before) => {
+      const session = peekSessionHost()?.get(sessionId)
+      return session === undefined ? undefined : readTaskList(session, before)
+    })
+  )
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
   step('appEventBridge', () => registerAppEventBridge())

@@ -18,7 +18,7 @@ import type { DurableSession } from '../../durableSession'
 import { answer, callTool, held, modelError, stalled } from '../../__tests__/support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from '../../__tests__/support/host'
 import { hookRec, hostD, seedAgent, startRun, tasksOf } from '../../__tests__/support/spawn'
-import { allEntries } from '../../__tests__/support/transcript'
+import { allEntries, midRunDisplayed } from '../../__tests__/support/transcript'
 import { sleep, waitFor, withTimeout } from '../../__tests__/support/wait'
 import {
   bare,
@@ -178,7 +178,10 @@ describe('P3-03 · lifecycle reasons', () => {
       expect(await withTimeout(sending, 10000, 'send')).toEqual({})
       await waitFor(() => session.runState === 'idle', 5000, 'idle')
       await settleFrames()
-      expect(h.state.value.messages.some((m) => m.content === 'also this')).toBe(true)
+      // 忙时受理的插话：界面 content 是原文 + 插话说明的标记
+      expect(h.state.value.messages.some((m) => m.content === midRunDisplayed('also this'))).toBe(
+        true
+      )
       expect(kinds(lc)).toEqual([
         ['started', undefined],
         ['ended', 'ok']

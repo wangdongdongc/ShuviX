@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
+import { TaskListPanel } from './TaskListPanel'
 import {
   expandCommandTemplate,
   buildCommandToken,
@@ -1071,6 +1072,9 @@ export function InputArea({
             legacyNotice
           ) : (
             <>
+              {/* 任务列表（plan server，实验）：排在待处理输入之上 —— 审批 / 提问更急，要紧挨着输入框 */}
+              <TaskListPanel />
+
               {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
               {accessory}
 

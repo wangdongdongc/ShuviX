@@ -34,6 +34,7 @@ import { StepGroupView } from './StepGroupView'
 import { groupConsecutiveSteps } from './stepGrouping'
 import { SuggestionCards } from './SuggestionCards'
 import { isSettledSuggestBlock } from '@shuvix/chat-protocol/suggestions'
+import { isHiddenTaskListBlock, TASK_LIST_TOOL_NAME } from '@shuvix/chat-protocol/taskList'
 import {
   useChatStore,
   selectStreamingContent,
@@ -132,6 +133,8 @@ export const AssistantBubble = memo(function AssistantBubble({
     }> = []
     for (const m of msgs) {
       for (const b of m.blocks) {
+        // 任务列表的调用（没失败的）不出行：全部信息就在输入框上方那张列表里（chat-protocol taskList.ts）
+        if (isHiddenTaskListBlock(b)) continue
         if (b.type === 'tool' && isSettledSuggestBlock(b)) {
           suggestions.push({ messageId: m.id, block: b })
           continue
@@ -258,17 +261,19 @@ export const AssistantBubble = memo(function AssistantBubble({
 
         {/* 已完成生成的工具调用（等待执行） */}
         {isStreaming &&
-          completedStreamingToolCalls.map((tc, i) => (
-            <ToolCallBlock
-              key={`completed-tc-${i}`}
-              toolName={tc.toolName}
-              args={tc.args}
-              status="pending"
-            />
-          ))}
+          completedStreamingToolCalls
+            .filter((tc) => tc.toolName !== TASK_LIST_TOOL_NAME)
+            .map((tc, i) => (
+              <ToolCallBlock
+                key={`completed-tc-${i}`}
+                toolName={tc.toolName}
+                args={tc.args}
+                status="pending"
+              />
+            ))}
 
         {/* 当前正在生成的工具调用 */}
-        {isStreaming && streamingToolCall && (
+        {isStreaming && streamingToolCall && streamingToolCall.toolName !== TASK_LIST_TOOL_NAME && (
           <ToolCallBlock
             toolName={streamingToolCall.toolName}
             streamingArgsText={streamingToolCall.argsText}

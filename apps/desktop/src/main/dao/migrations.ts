@@ -958,6 +958,33 @@ export const migrations: Migration[] = [
         'CREATE INDEX IF NOT EXISTS idx_browser_history_visits_urlId ON browser_history_visits(urlId)'
       )
     }
+  },
+  {
+    version: 37,
+    description:
+      '种子内置能力服务器 plan（inproc MCP，任务列表，实验，会话默认不勾）；内置名被自定义 server 占着时让位',
+    up: (db) => {
+      // 与 v27–v29 同一个形状、同一条让位规则：内置行缺失、名字却被别的行占着 → 那一行改名为 `plan-custom`
+      // （再撞就加序号），再种内置行。任务列表见 docs/task-list-design.md
+      const now = Date.now()
+      const holderOf = db.prepare('SELECT id FROM mcp_servers WHERE name = ?')
+      if (db.prepare('SELECT 1 FROM mcp_servers WHERE id = ?').get('builtin-mcp-plan')) return
+      const occupant = holderOf.get('plan') as { id: string } | undefined
+      if (occupant) {
+        let freeName = 'plan-custom'
+        for (let n = 2; holderOf.get(freeName); n++) freeName = `plan-custom-${n}`
+        db.prepare('UPDATE mcp_servers SET name = ?, updatedAt = ? WHERE id = ?').run(
+          freeName,
+          now,
+          occupant.id
+        )
+      }
+      db.prepare(
+        `INSERT INTO mcp_servers
+           (id, name, type, command, args, env, url, headers, metadata, isEnabled, isBuiltin, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
+      ).run('builtin-mcp-plan', 'plan', now, now)
+    }
   }
 ]
 

@@ -26,12 +26,15 @@
  *   TD-1    采纳提议发出的 user 项（`suggest` 工具，2026-10-25）：纯核心按 `suggested` 给项带上 `suggested: true`
  *             （带不带显示侧车都一样；没有 `source` 键 —— 它仍是人的话）；只落在 user 项上；缺省第四参数 = 都不带；
  *             会话上手写的 SourceDoc（人的来源 + 合法引用）→ readTranscriptDigest 的项带 `suggested`，坏引用不带
+ *   DG-3/4  插话说明（midRunNote.ts）不算人的话：没有侧车时模型文本末尾的「分隔 + 说明」去掉；侧车原文由
+ *             调用方去好标记再交进来，纯核心原样交出
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
+import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol/midRunNote'
 import { describe, expect, it } from 'vitest'
 import { PARENT_ANSWERED } from '../../askTool'
 import * as runtime from '../../index'
@@ -856,5 +859,56 @@ describe('TD-1 · 采纳提议发出的 user 项（suggest，2026-10-25）', () 
       U(3, 'bad'),
       U(4, 'plain')
     ])
+  })
+})
+
+describe('DG · 插话说明不算人的话（docs/task-list-design.md §2.4，纯核心）', () => {
+  const NOTE = MID_RUN_NOTE_TEXT
+  const SUFFIX = `${MID_RUN_NOTE_SEPARATOR}${NOTE}`
+  const MARKER = '{{shuvixInlineToken:midrun}}'
+
+  it('DG-3 没有显示侧车的插话（压缩切点 / 别的分支）：模型文本末尾的说明去掉，原文逐字交出；只认末尾那一段', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      userDraft(`pivot${SUFFIX}`, 1),
+      userDraft([text('look'), IMAGE, text(SUFFIX)], 2),
+      userDraft(SUFFIX, 3),
+      userDraft(`  keep spaces  ${SUFFIX}`, 4),
+      userDraft(`S\n${NOTE}`, 5),
+      userDraft(`a ${NOTE} b`, 6)
+    ])
+    const view = await (await session.currentConversation()).context(BG)
+    const items = digestEntries(view.entries)
+    expect(items).toStrictEqual([
+      U(1, 'pivot'),
+      U(2, 'look'),
+      U(3, ''),
+      U(4, '  keep spaces  '),
+      // 不是「分隔 + 说明」结尾的：那是人自己写的字，原样
+      U(5, `S\n${NOTE}`),
+      U(6, `a ${NOTE} b`)
+    ])
+    // readTranscriptDigest 也一样（这里没写侧车）
+    expect(
+      (await digest(session)).slice(0, 4).map((item) => item.kind === 'user' && item.text)
+    ).toEqual(['pivot', 'look', '', '  keep spaces  '])
+  })
+
+  it('DG-4 显示侧车的原文由调用方去好标记再交进来：纯核心原样交出，不再动它（标记也不替它去）', async () => {
+    const { session } = await openSession()
+    const [stripped, marked] = await appendEntries(session, [
+      userDraft(`pivot${SUFFIX}`, 1),
+      userDraft(`again${SUFFIX}`, 2)
+    ])
+    const view = await (await session.currentConversation()).context(BG)
+    const displays = new Map([
+      [stripped!.id, 'pivot'],
+      [marked!.id, `again${MARKER}`]
+    ])
+    expect(digestEntries(view.entries, displays)).toStrictEqual([
+      U(1, 'pivot'),
+      U(2, `again${MARKER}`)
+    ])
+    expect(JSON.stringify(digestEntries(view.entries, displays))).not.toContain(NOTE)
   })
 })

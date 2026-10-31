@@ -1107,6 +1107,30 @@ describe('tab 档案钉板（Chrome 标签页会话的基座）', () => {
 })
 
 /**
+ * 任务列表（内置能力服务器 `plan`，实验，docs/task-list-design.md D7）在每个会话里默认不勾：没有哪份内置档案
+ * 声明 `mcp:plan`（声明了就成了「档案默认勾上」，用户得自己去取消）。
+ */
+describe('mcp:plan 默认不勾（任务列表，实验）', () => {
+  it('REG-1 三语：没有任何内置档案（含宿主专用的）的工具清单含 mcp:plan，md 原文里也不写', () => {
+    for (const language of LANGS) {
+      const built = buildBuiltinProfiles({ ...ALL_PARAMS, language })
+      // 一份 md 写坏会被 filter 掉、让下面的断言空过 —— 先钉住全都建出来了
+      expect(
+        built.map((p) => p.name),
+        language
+      ).toEqual(BUILTIN_PROFILE_SPECS.map((s) => s.name))
+      const declaring = built.filter((p) => p.tools.includes('mcp:plan')).map((p) => p.name)
+      expect(declaring, language).toEqual([])
+    }
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      for (const [language, source] of Object.entries(sourcesOf(spec.name))) {
+        expect(source, `${spec.name}.${language}`).not.toMatch(/mcp:plan\b/)
+      }
+    }
+  })
+})
+
+/**
  * 命令工具按平台二选一（bash：macOS / Linux，powershell：Windows）—— 内置档案因此**成对**点名两个，
  * 由宿主只装配这台机器上存在的那个；正文里不写死任何一个，而是用 `{{shuvix:shellTool}}` 指代
  * 「本平台的那个 shell 工具」。三条钉住这套约定，漏一处的后果都是静默的：

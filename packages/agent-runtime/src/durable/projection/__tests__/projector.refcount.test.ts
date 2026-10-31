@@ -18,7 +18,7 @@ import { SessionClosedError, type DurableSession } from '../../durableSession'
 import { testProfile } from '../../__tests__/support/agentConfig'
 import { answer, held, stalled } from '../../__tests__/support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from '../../__tests__/support/host'
-import { allEntries } from '../../__tests__/support/transcript'
+import { allEntries, midRunNoted } from '../../__tests__/support/transcript'
 import { waitFor, withTimeout } from '../../__tests__/support/wait'
 import {
   attachOracle,
@@ -297,9 +297,12 @@ describe('P3-03 · ref-counting and dispose', () => {
       await waitFor(() => session.runState === 'idle', 5000, 'idle')
       await settleFrames()
       const entries = await allEntries(conversation)
+      // 忙时受理的插话：模型文本带插话说明
       const steeredEntry = entries.find(
         (e) =>
-          e.kind === 'pi.user' && e.model?.[0]?.role === 'user' && e.model[0].content === 'steered'
+          e.kind === 'pi.user' &&
+          e.model?.[0]?.role === 'user' &&
+          e.model[0].content === midRunNoted('steered')
       )!
       expect(steered[1]).toEqual(['placed', { entryId: steeredEntry.id }])
       expect(withdrawn).toEqual([['admitted', {}]])

@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { BookOpen, ClipboardPaste, FileText, Terminal, X, type LucideIcon } from 'lucide-react'
+import {
+  BookOpen,
+  ClipboardPaste,
+  CornerDownRight,
+  FileText,
+  Terminal,
+  X,
+  type LucideIcon
+} from 'lucide-react'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import {
   payloadPreview,
@@ -32,6 +40,12 @@ const KIND_META: Record<
     color: 'var(--theme-text-tertiary)',
     Icon: ClipboardPaste,
     labelKey: 'input.atSourcePaste'
+  },
+  // 运行时加的插话说明：只有标签，没有标题（displayText 是空串）
+  note: {
+    color: 'var(--theme-text-tertiary)',
+    Icon: CornerDownRight,
+    labelKey: 'input.atSourceMidRun'
   }
 }
 
@@ -131,7 +145,8 @@ export function TokenChip({
     setOpen(true)
   }
 
-  const title = tokenTitle(token)
+  const isNote = kind === 'note'
+  const title = isNote ? (label ?? '') : tokenTitle(token)
   // 镜像层 at 知识：前缀段（`@knowledge:`，含冒号）弱化、标题段着色；两段拼接 = displayText 逐字一致
   const knowledgeSplit = inline && kind === 'knowledge' ? splitTokenTitle(token.displayText) : null
 
@@ -149,9 +164,10 @@ export function TokenChip({
         onMouseLeave={handleMouseLeave}
         // e2e 锚点：胶囊文字即 token.displayText（气泡新增图标/源标签后 textContent 不再等于它）
         data-token-display={token.displayText}
+        data-token-kind={kind}
         className={`rounded cursor-pointer transition-colors ${
           inline ? 'box-decoration-clone pointer-events-auto' : 'px-1.5'
-        } ${className}`}
+        } ${isNote ? 'ml-1.5' : ''} ${className}`}
         style={{
           color: inline ? color : undefined,
           backgroundColor: chipBg(color, hovered, inline)
@@ -176,9 +192,9 @@ export function TokenChip({
               />
             )}
             {label && <span className="text-text-secondary">{label}</span>}
-            {label && <span className="text-text-tertiary mx-0.5">·</span>}
+            {label && !isNote && <span className="text-text-tertiary mx-0.5">·</span>}
             {/* 同一字号同一字体,只靠颜色分主次 —— 芯片内两种字号/字体混排不协调 */}
-            <span className="text-text-primary">{title}</span>
+            {!isNote && <span className="text-text-primary">{title}</span>}
           </>
         )}
       </span>
@@ -198,7 +214,13 @@ export function TokenChip({
       {open &&
         createPortal(
           <TokenPayloadDialog
-            title={token.name && token.name !== token.id ? token.name : token.displayText}
+            title={
+              isNote
+                ? title
+                : token.name && token.name !== token.id
+                  ? token.name
+                  : token.displayText
+            }
             subtitle={token.name && token.name !== token.id ? token.displayText : undefined}
             payload={token.payload}
             onClose={() => setOpen(false)}
@@ -226,7 +248,12 @@ function TokenHoverCard({
   onMouseLeave: () => void
 }): React.JSX.Element {
   const meta = kind === 'other' ? null : KIND_META[kind]
-  const title = token.name && token.name !== token.id ? token.name : tokenTitle(token)
+  const isNote = kind === 'note'
+  const title = isNote
+    ? (label ?? '')
+    : token.name && token.name !== token.id
+      ? token.name
+      : tokenTitle(token)
   const sourcePath = tokenSourcePath(token)
 
   return (
@@ -239,7 +266,7 @@ function TokenHoverCard({
       <div className="flex items-center gap-1.5 min-w-0">
         {meta && <meta.Icon size={12} className="flex-shrink-0" style={{ color: meta.color }} />}
         <span className="text-xs font-semibold text-text-primary truncate">{title}</span>
-        {label && (
+        {label && !isNote && (
           <span className="ml-auto flex-shrink-0 text-[10px] text-text-tertiary">{label}</span>
         )}
       </div>

@@ -33,6 +33,12 @@ import type {
   UserTextMessage
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
+import {
+  MID_RUN_NOTE_UID,
+  midRunNoteDisplay,
+  midRunNoteToken
+} from '@shuvix/chat-protocol/midRunNote'
 
 interface Call {
   name: string
@@ -552,5 +558,54 @@ describe('P3-10b-19 回退入口的门控（PIN-07）', () => {
     expect(container.textContent).toContain('hi')
     expect(container.querySelector('.lucide-rotate-ccw')).toBeNull()
     expect(regenerateButton()).toBeUndefined()
+  })
+})
+
+// ─── 运行中插话的说明不跟着重发 ──────────────────────────────────────────────
+
+describe('重新生成 / 回退一条运行中插话', () => {
+  const PASTE: InlineToken = { type: 'paste', id: 'paste-1', displayText: '[Pasted]', payload: 'a' }
+
+  it('RG-1 最近的用户消息是带说明的插话：回退到它，prompt 发 `pivot`、不带 Token；占位也不带说明', async () => {
+    const steer = midRunNoteDisplay('pivot')
+    seed([
+      user('1', 'go'),
+      assistant('2', 'started'),
+      user('3', steer.content, steer.tokens),
+      assistant('4')
+    ])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('4'))
+
+    expect(names()).toEqual(['message.rollback', 'agent.init', 'agent.prompt'])
+    expect(callsOf('message.rollback')).toEqual([[{ sessionId: SID, messageId: '3' }]])
+    expect(callsOf('agent.prompt')).toEqual([
+      [{ sessionId: SID, text: 'pivot', inlineTokens: undefined }]
+    ])
+    expect(pendingAtPrompt).toEqual([{ content: 'pivot', tokens: undefined }])
+  })
+
+  it('RG-2 说明 + 粘贴 Token：只留 {p1}，正文保留 p1 的标记', async () => {
+    const content = `pivot ${makeTokenMarker('p1')}${makeTokenMarker(MID_RUN_NOTE_UID)}`
+    const tokens = { p1: PASTE, [MID_RUN_NOTE_UID]: midRunNoteToken() }
+    seed([user('3', content, tokens), assistant('4')])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('4'))
+
+    const sentText = `pivot ${makeTokenMarker('p1')}`
+    expect(callsOf('agent.prompt')).toEqual([
+      [{ sessionId: SID, text: sentText, inlineTokens: { p1: PASTE } }]
+    ])
+    expect(pendingAtPrompt).toEqual([{ content: sentText, tokens: { p1: PASTE } }])
+  })
+
+  it('RG-3 confirmRollback 回退一条插话：(content, tokens) 原样交给 requestDraftRestore（丢说明是 InputArea 的事）', async () => {
+    const steer = midRunNoteDisplay('pivot')
+    seed([user('3', steer.content, steer.tokens), assistant('4')])
+    await mountProbe()
+    await pickRollback('3')
+    await act(async () => actions.confirmRollback())
+
+    expect(callsOf('store.requestDraftRestore')).toEqual([[steer.content, steer.tokens]])
   })
 })

@@ -5,6 +5,7 @@ import {
   atTokenRef,
   buildAtToken,
   buildPasteToken,
+  inlineTokensToPlainText,
   makeTokenMarker,
   mentionRefId,
   parseSlashCommandInput,
@@ -15,6 +16,7 @@ import {
   sessionMentionPayload,
   type AtMentionRef
 } from './inlineTokens'
+import { midRunNoteDisplay, midRunNoteToken } from '../midRunNote'
 
 const atToken: InlineToken = {
   type: 'at',
@@ -363,5 +365,34 @@ describe('@ 会话引用（session ref）', () => {
       name: 'Fix tests'
     }
     expect(atTokenRef(noPrefix)).toStrictEqual({ kind: 'file', rel: 'S1', base: 'Fix tests' })
+  })
+})
+
+describe('插话说明（midRunNote）在人读的出口里不出现', () => {
+  const display = midRunNoteDisplay('S')
+  const NOTE = midRunNoteToken().payload
+
+  it('PT-1 inlineTokensToPlainText：说明 Token 的 displayText 是空串，只剩原文', () => {
+    expect(inlineTokensToPlainText(display.content, display.tokens)).toBe('S')
+  })
+
+  it('PT-2 resolveTokensForCopy：复制原文不带说明', () => {
+    const copied = resolveTokensForCopy(display.content, display.tokens)
+    expect(copied).toBe('S')
+    expect(copied).not.toContain(NOTE)
+  })
+
+  it('PT-3 rebuildDraftFromContent：回填只剩原文、不登记说明；同时带 @文件时只登记那枚 at', () => {
+    expect(rebuildDraftFromContent(display.content, display.tokens)).toStrictEqual({
+      text: 'S',
+      atTokens: [],
+      pasteTokens: []
+    })
+    const content = `S ${makeTokenMarker('a1')}${makeTokenMarker('midrun')}`
+    expect(rebuildDraftFromContent(content, { a1: atToken, ...display.tokens })).toStrictEqual({
+      text: 'S @foo.ts',
+      atTokens: [atToken],
+      pasteTokens: []
+    })
   })
 })

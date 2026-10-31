@@ -4,12 +4,17 @@
  */
 
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { isMidRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 
-/** 展示层细分类型：at 按 id 前缀再分 文件 / 知识库（token 结构无类型字段，沿用 id 前缀判别） */
-export type TokenKind = 'cmd' | 'file' | 'knowledge' | 'paste' | 'other'
+/**
+ * 展示层细分类型：at 按 id 前缀再分 文件 / 知识库（token 结构无类型字段，沿用 id 前缀判别）；`note` = 运行时
+ * 加的插话说明（chat-protocol midRunNote.ts），只有标签、没有标题
+ */
+export type TokenKind = 'cmd' | 'file' | 'knowledge' | 'paste' | 'note' | 'other'
 
 /** 判别展示类型；at token 以 id 的 `knowledge:` 前缀区分知识条目与工作区文件 */
 export function tokenKind(token: InlineToken): TokenKind {
+  if (isMidRunNoteToken(token)) return 'note'
   if (token.type === 'cmd') return 'cmd'
   if (token.type === 'paste') return 'paste'
   if (token.type === 'at') return token.id.startsWith('knowledge:') ? 'knowledge' : 'file'

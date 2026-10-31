@@ -11,7 +11,7 @@ import { testProfile } from './support/agentConfig'
 import { answer, callTool, held, modelError, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from './support/host'
 import { askingTool, holdTool } from './support/tools'
-import { allEntries, requestTexts, transcript } from './support/transcript'
+import { allEntries, midRunNoted, requestTexts, transcript } from './support/transcript'
 import { deferred, waitFor, withTimeout } from './support/wait'
 
 registerHostCleanup()
@@ -382,7 +382,11 @@ describe('steer', () => {
     expect(steer.submissionId).toBeDefined()
     gate.resolve()
     expect(await result).toEqual({})
-    expect(requestTexts(t.kit, 1).slice(-2)).toEqual(['toolResult:hold done', 'user:S'])
+    // 受理时会话正忙：模型文本末尾带插话说明
+    expect(requestTexts(t.kit, 1).slice(-2)).toEqual([
+      'toolResult:hold done',
+      `user:${midRunNoted('S')}`
+    ])
     expect(t.kit.callCount).toBe(2)
     expect((await submissionStatus(session, steer.submissionId!)).status).toBe('done')
   })
@@ -402,7 +406,11 @@ describe('steer', () => {
     await session.steer('S2')
     gate.resolve()
     expect(await result).toEqual({})
-    expect(requestTexts(t.kit, 1).slice(-3)).toEqual(['toolResult:hold done', 'user:S1', 'user:S2'])
+    expect(requestTexts(t.kit, 1).slice(-3)).toEqual([
+      'toolResult:hold done',
+      `user:${midRunNoted('S1')}`,
+      `user:${midRunNoted('S2')}`
+    ])
     expect(t.kit.callCount).toBe(2)
   })
 

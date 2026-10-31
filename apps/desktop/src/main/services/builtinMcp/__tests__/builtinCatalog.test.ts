@@ -6,11 +6,15 @@
  *   BC-2  呈现表里 browser 的工具名单 = server 目录（browserToolsForCaps，端能力全开）的工具名。
  *         名单是防冒名的白名单（一台叫 `browser__x` 的自定义 server 靠它认不出来），不在单子上的
  *         一律不认 —— 目录里新加一个工具而名单没跟上，那个工具就丢了图标、标签与折叠摘要。
+ *   BC-3  呈现表里 plan 的工具名单 = 真的 plan server 经 tools/list 列出的工具名（它没有外部依赖，
+ *         不用 mock，直接起一台）；`mcp__plan__update` 认得出是内置 plan 的。
  *
  * chat-protocol 不能依赖 agent-runtime，所以这份对账放在桌面这边。ssh 那一份在 sshServer.test.ts
  * （它的工具面要真的起一台 server 才列得出来）。
  */
 import { describe, expect, it, vi } from 'vitest'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { browserToolsForCaps, type BrowserCaps } from '@shuvix/agent-runtime'
 import {
   BUILTIN_MCP_PRESENTATIONS,
@@ -35,6 +39,7 @@ vi.mock('../../../logger', () => ({
 }))
 
 import { BUILTIN_MCP_FACTORIES } from '../index'
+import { createPlanMcpServer } from '../planServer'
 
 /** 端能力全开 —— 目录里的每一个工具都在（BrowserCaps 新增一项时这里编译不过，逼着补上） */
 const ALL_CAPS: BrowserCaps = {
@@ -74,5 +79,25 @@ describe('内置能力服务器的清单对账', () => {
         tool: tool.name
       })
     }
+  })
+
+  it('BC-3 呈现表里 plan 的工具名单 = 真的 plan server 列出的工具名；mcp__plan__update 认得出是内置 plan 的', async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await createPlanMcpServer({ sessionId: 's1' }, serverTransport)
+    const client = new Client({ name: 'test', version: '0.0.0' })
+    await client.connect(clientTransport)
+    try {
+      const names = (await client.listTools()).tools.map((t) => t.name)
+      const listed = BUILTIN_MCP_PRESENTATIONS.plan.toolNames
+      expect(new Set(listed).size).toBe(listed.length)
+      expect([...listed].sort()).toEqual([...names].sort())
+    } finally {
+      await clientTransport.close()
+    }
+
+    expect(parseBuiltinMcpToolName('mcp__plan__update')).toEqual({
+      server: 'plan',
+      tool: 'update'
+    })
   })
 })

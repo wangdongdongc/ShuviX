@@ -1,8 +1,24 @@
 /** 转写与请求的紧凑渲染：`<kind>:<text>`（跳过 pi.system） */
 import type { Message } from '@earendil-works/pi-ai'
 import type { Conversation, EntryRecord } from '@earendil-works/pi-durable'
+import {
+  MID_RUN_NOTE_SEPARATOR,
+  MID_RUN_NOTE_TEXT,
+  MID_RUN_NOTE_UID
+} from '@shuvix/chat-protocol/midRunNote'
+import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { backgroundContext as BG } from '../../context'
 import type { FauxKit } from './faux'
+
+/** 会话正忙时受理的插话，模型看到的文本：原文 + 插话说明（chat-protocol `midRunNote.ts`） */
+export function midRunNoted(text: string): string {
+  return `${text}${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`
+}
+
+/** 同一条插话在界面投影里的 `content`：原文 + 说明 Token 的标记 */
+export function midRunDisplayed(text: string): string {
+  return `${text}${makeTokenMarker(MID_RUN_NOTE_UID)}`
+}
 
 /** 一条消息的文本：user / toolResult 的文本块，assistant 的文本（没有文本时是 `[tool:name]`） */
 export function messageText(message: Message | undefined): string {

@@ -24,6 +24,7 @@ export type LucideIconName =
   | 'GitBranch'
   | 'Globe'
   | 'Lightbulb'
+  | 'ListChecks'
   | 'MessageCircleQuestion'
   | 'Monitor'
   | 'Palette'

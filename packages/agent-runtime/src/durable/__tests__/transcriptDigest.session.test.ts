@@ -14,22 +14,28 @@
  *             读摘要不种 SourceDoc、零发布
  *   RSRC-36   同一串交错的发送、人打的也盖上章（本机 / 远程，2026-10-21）：摘要与 RSRC-29 一模一样（人打的仍没有
  *             source 键），界面投影里每条用户消息的 `metadata.origin` 恰是它发送时带的（含排过队的 steer / followUp）
+ *   DG-1 / 2  运行中插话（docs/task-list-design.md §2.4）：带图、带脱敏值的忙时 steer，摘要里是脱敏后的原文 ——
+ *             没有说明的标记、没有说明；运行中采纳的提议照样 `suggested`、文本恰是提议的话
  */
+import { createHmac } from 'node:crypto'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
+import { MID_RUN_NOTE_TEXT, MID_RUN_NOTE_UID } from '@shuvix/chat-protocol/midRunNote'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { describe, expect, it } from 'vitest'
 import { PARENT_ANSWERED } from '../../askTool'
 import { backgroundContext as BG } from '../context'
 import { SessionStateDoc, SourceDoc, type DeferredNotice } from '../docs'
 import type { DurableSession } from '../durableSession'
 import { freshMount } from '../projection/__tests__/projectorSupport'
+import type { RedactionHost } from '../sessionRedaction'
 import { readTranscriptDigest, type TranscriptDigestItem } from '../transcriptDigest'
 import { recordPublications } from './support/commits'
 import { A, AC, U, appendEntries, bg, userDraft } from './support/digest'
 import { answer, callTool, modelError, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from './support/host'
-import { allEntries, requestTexts } from './support/transcript'
+import { allEntries, midRunDisplayed, requestTexts } from './support/transcript'
 import { holdTool } from './support/tools'
 import { deferred, sleep, waitFor, withTimeout } from './support/wait'
 import { choose, makeWorld, nextInput, registerWorldCleanup } from './integration/support/world'
@@ -603,8 +609,9 @@ describe('RSRC · 真发送上的来源（§19.7）', () => {
         ])
       ).toStrictEqual([
         ['P1', PARENT],
-        ['H-steer', LOCAL],
-        ['P-steer', PARENT],
+        // 两条插话受理时会话正忙：界面上原文后面跟着插话说明的标记（摘要里没有，见上）
+        [midRunDisplayed('H-steer'), LOCAL],
+        [midRunDisplayed('P-steer'), PARENT],
         ['H-follow', REMOTE],
         ['P-follow', PARENT],
         ['H-typed', LOCAL]
@@ -652,4 +659,91 @@ describe('RSRC · 真发送上的来源（§19.7）', () => {
       expect(await session.harness.snapshot(SourceDoc, conversation.id, BG)).toStrictEqual(before)
     })
   })
+})
+
+describe('DG · 运行中插话不算用户的话（docs/task-list-design.md §2.4）', () => {
+  const MARKER = makeTokenMarker(MID_RUN_NOTE_UID)
+  const PASSWORD = 'Tr0ub4dor&3xq'
+  const redactionHost: RedactionHost = {
+    signer: { sign: (data) => createHmac('sha256', 'test-key').update(data).digest() },
+    vault: {
+      seal: (v) => `SEALED:${Buffer.from(v).toString('base64')}`,
+      open: (s) => {
+        if (!s.startsWith('SEALED:')) throw new Error('cannot open')
+        return Buffer.from(s.slice(7), 'base64').toString()
+      }
+    }
+  }
+
+  /** 扣在工具上的一轮；`release()` 之后跑完（后面排几条应答给插话那一轮） */
+  async function heldRound(options: Parameters<typeof makeHost>[0] = {}): Promise<{
+    t: Awaited<ReturnType<typeof makeHost>>
+    session: DurableSession
+    sending: Promise<unknown>
+    release: () => void
+  }> {
+    const gate = deferred()
+    const running = deferred()
+    const t = await makeHost({
+      ephemeral: [SID],
+      ...options,
+      tools: [holdTool('hold', gate.promise, { onRun: () => running.resolve() })]
+    })
+    const session = await t.open(SID)
+    await primeRoot(session)
+    t.kit.queue(callTool('hold'), answer('done'))
+    const sending = session.submitUser('go')
+    await running.promise
+    return { t, session, sending, release: () => gate.resolve() }
+  }
+
+  it(
+    'DG-1 a busy steer with an image and a masked secret: the digest user item is the masked text, with no marker and no note',
+    async () => {
+      const { t, session, sending, release } = await heldRound({ redaction: redactionHost })
+      const admitted = await session.steer([
+        { type: 'text', text: `use DB_PASSWORD=${PASSWORD}` },
+        { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }
+      ])
+      expect(admitted.submissionId).toBeDefined()
+      release()
+      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+      // 模型那边照旧带着说明
+      expect(requestTexts(t.kit, 1).at(-1)).toContain(MID_RUN_NOTE_TEXT)
+      const users = shape(await digest(session)).filter(
+        (item) => (item as { kind: string }).kind === 'user'
+      ) as { kind: string; text: string }[]
+      expect(users).toHaveLength(2)
+      expect(users[0]).toStrictEqual({ kind: 'user', text: 'go' })
+      const steer = users[1]!
+      expect(steer.text).toMatch(/^use DB_PASSWORD=\{\{[A-Z_]+_[a-z2-7]{8}\}\}$/)
+      expect(steer.text).not.toContain(PASSWORD)
+      expect(steer.text).not.toContain(MARKER)
+      expect(steer.text).not.toContain(MID_RUN_NOTE_TEXT)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'DG-2 a suggestion accepted mid-run (a busy steer whose origin carries the suggestion ref): suggested, and the text is exactly the suggestion message',
+    async () => {
+      const { session, sending, release } = await heldRound()
+      const REF = { messageId: 'a1', toolCallId: 'call_0', index: 0 }
+      const message = 'Also add a test for the empty case'
+      const admitted = await session.steer(message, {
+        source: { kind: 'local', suggestion: REF }
+      })
+      expect(admitted.submissionId).toBeDefined()
+      release()
+      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+      const users = shape(await digest(session)).filter(
+        (item) => (item as { kind: string }).kind === 'user'
+      )
+      expect(users).toStrictEqual([
+        { kind: 'user', text: 'go' },
+        { kind: 'user', text: message, suggested: true }
+      ])
+    },
+    TIMEOUT
+  )
 })

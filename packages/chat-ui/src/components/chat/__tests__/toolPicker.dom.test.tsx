@@ -732,6 +732,56 @@ describe('内置项以界面语言的名字为主', () => {
   })
 })
 
+describe('实验性质的内置 server（任务列表 plan）带「实验」标签', () => {
+  const PLAN: ToolItem = { name: 'mcp:plan', label: 'plan', group: 'mcp:plan', isBuiltin: true }
+  const tagIn = (name: string): HTMLElement | null =>
+    row(name).querySelector<HTMLElement>('[data-experimental]')
+
+  it('TP-X-1 内置 mcp:plan：行内有 [data-experimental="taskList"]，字是 experimental.tag、悬停是 experimental.hint', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, PLAN])
+    await openPanel()
+    const tag = tagIn('mcp:plan')
+    expect(tag).not.toBeNull()
+    expect(tag!.getAttribute('data-experimental')).toBe('taskList')
+    expect(i18n.t('experimental.tag')).not.toBe('experimental.tag')
+    expect(tag!.textContent).toBe(i18n.t('experimental.tag'))
+    expect(tag!.title).toBe(i18n.t('experimental.hint'))
+    expect(row('mcp:plan').contains(tag)).toBe(true)
+    expect(document.querySelectorAll('[data-experimental]')).toHaveLength(1)
+  })
+
+  it('TP-X-2 内置 mcp:browser 没有标签；不是内置的同名 mcp:plan 也没有', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, { ...PLAN, isBuiltin: false }])
+    await openPanel()
+    expect(tagIn('mcp:browser')).toBeNull()
+    expect(tagIn('mcp:plan')).toBeNull()
+    expect(document.querySelector('[data-experimental]')).toBeNull()
+  })
+
+  it('TP-X-3 触屏抽屉里同样带标签', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, PLAN], { density: 'touch' })
+    await openPanel()
+    const sheet = document.querySelector<HTMLElement>('[data-touch-sheet="extensions"]')
+    expect(sheet).not.toBeNull()
+    const tag = tagIn('mcp:plan')
+    expect(tag?.getAttribute('data-experimental')).toBe('taskList')
+    expect(tag?.textContent).toBe(i18n.t('experimental.tag'))
+    expect(sheet!.contains(tag)).toBe(true)
+  })
+
+  it('TP-X-4 没人声明时缺省不勾：没有 data-declared、勾选框没勾、勾选里没有它', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, PLAN])
+    await openPanel()
+    expect(row('mcp:plan').hasAttribute('data-declared')).toBe(false)
+    expect(box('mcp:plan').checked).toBe(false)
+    expect(storedTools()).toEqual([])
+  })
+})
+
 describe('技能不在选择器里（2026-10-28）', () => {
   it('TP-17 tools.list 里混着技能项（group __skills__，带声明的也算）：不画、不计数、不进摘要；没有 SKILL 一组；勾选里残留的 skill: 条目也不算', async () => {
     seedSession(['mcp:foo', 'skill:foo', '-skill:builtin:drawing'])

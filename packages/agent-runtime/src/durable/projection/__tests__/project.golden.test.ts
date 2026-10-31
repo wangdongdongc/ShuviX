@@ -179,6 +179,9 @@ function normalize(messages: readonly ChatMessage[]): unknown[] {
       if (metadata) {
         delete metadata.noticeKind
         delete metadata.noticeDate
+        // 有意的差异（2026-10-31）：durable 给被中止 / 以出错收尾的卡标 `stopped`（任务列表据此判「已停止」），
+        // 冻结的旧投影没有这一项
+        delete metadata.stopped
       }
       return { at: index, ...rest }
     }

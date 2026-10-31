@@ -41,6 +41,11 @@ import type {
 } from '@shuvix/chat-protocol/types/sessionView'
 import { groupConsecutiveSteps } from '@shuvix/chat-protocol/utils/stepGrouping'
 import { clipLine } from '@shuvix/chat-protocol/utils/clipLine'
+import {
+  MID_RUN_NOTE_TEXT,
+  MID_RUN_NOTE_UID,
+  midRunNoteToken
+} from '@shuvix/chat-protocol/midRunNote'
 import type { InputSource } from '../../durable/inputSource'
 import {
   OUTLINE_LIMITS,
@@ -2203,5 +2208,88 @@ describe('K. 纯函数性质', () => {
     expect(v.messages).toHaveLength(2)
     expect(v.live?.message.id).toBe('live:3')
     expect(v.live?.id).toBe('live:3')
+  })
+})
+
+// ───────────── L. 插话说明（docs/task-list-design.md §2.4） ─────────────
+
+describe('L. 插话说明不算这条消息的话', () => {
+  const NOTE = MID_RUN_NOTE_TEXT
+  const MARKER = `{{shuvixInlineToken:${MID_RUN_NOTE_UID}}}`
+  /** 运行中插进来的一条：显示侧车 = 原文 + 说明标记，Token 里带说明 */
+  const steered = (
+    id: string,
+    said: string,
+    extra: UserTextMeta['inlineTokens'] = {}
+  ): UserTextMessage =>
+    U(id, `${said}${MARKER}`, { inlineTokens: { ...extra, [MID_RUN_NOTE_UID]: midRunNoteToken() } })
+  const TOP = reader([], { topLevel: true })
+
+  it('OL-1 大纲行 [user] pivot、搜得到原文、展开 [user] / pivot；说明与标记哪里都不出现', () => {
+    const v = view([steered('1', 'pivot')])
+    const res = outline(v, ALL, TOP)
+    expect(res.lines).toEqual(['#1 [user] pivot'])
+    expect(search(v, 'pivot', {}, TOP).lines).toEqual(['#1 [user] pivot'])
+    expect(item(v, '#1', TOP).lines).toEqual(['[user]', 'pivot'])
+    // 说明的字、标记、uid 都搜不到
+    for (const needle of ['Sent while you were working', 'shuvixInlineToken', MID_RUN_NOTE_UID]) {
+      expect(search(v, needle, {}, TOP).hits, needle).toBe(0)
+    }
+    const everything = [
+      ...res.lines,
+      ...item(v, '#1', TOP).lines,
+      ...search(v, 'pivot', {}, TOP).lines
+    ].join('\n')
+    expect(everything).not.toContain(NOTE)
+    expect(everything).not.toContain(MARKER)
+  })
+
+  it('OL-2 有来源记录的插话：父会话发的 [parent] pivot，别的会话发的 [other session] pivot', () => {
+    const v = view([steered('1', 'pivot')])
+    expect(outline(v, ALL, reader([['1', 'Q']])).lines).toEqual(['#1 [parent] pivot'])
+    expect(outline(v, ALL, reader([['1', 'Q', 'session']])).lines).toEqual([
+      '#1 [other session] pivot'
+    ])
+    expect(item(v, '#1', reader([['1', 'Q', 'session']])).lines).toEqual([
+      '[other session]',
+      'pivot'
+    ])
+  })
+
+  it('OL-3 说明之外还有别的标记：只去掉说明那一枚，别的标记原样留着', () => {
+    const paste = {
+      type: 'paste',
+      id: 'paste-1',
+      displayText: '[Pasted 3 lines]',
+      payload: 'a\nb\nc'
+    }
+    const v = view([steered('1', 'see {{shuvixInlineToken:p1}} ok', { p1: paste })])
+    expect(outline(v, ALL, TOP).lines).toEqual(['#1 [user] see {{shuvixInlineToken:p1}} ok'])
+    expect(item(v, '#1', TOP).lines).toEqual(['[user]', 'see {{shuvixInlineToken:p1}} ok'])
+    expect(outline(v, ALL, TOP).lines.join('\n')).not.toContain(MARKER)
+  })
+
+  it('OL-4 轮次与编号不受说明影响：同一段历史带不带说明 Token，大纲逐字相同', () => {
+    const histories = (note: boolean): ChatMessage[][] => {
+      const steer = (id: string, said: string): UserTextMessage =>
+        note ? steered(id, said) : U(id, said)
+      return [
+        // 紧挨工具卡之后：引导，不开新轮
+        [U('1', 'task'), A('2', [READ('c1', 'a.ts')]), steer('3', 'pivot'), A('4', [TX('done')])],
+        // 紧挨纯正文卡之后：开新轮（与说明无关）
+        [U('1', 'task'), A('2', [TX('first answer')]), steer('3', 'pivot'), A('4', [TX('second')])]
+      ]
+    }
+    const plain = histories(false)
+    const noted = histories(true)
+    plain.forEach((messages, i) => {
+      for (const query of [{}, ALL]) {
+        expect(outline(view(noted[i]!), query, TOP), `history ${i}`).toEqual(
+          outline(view(messages), query, TOP)
+        )
+      }
+    })
+    expect(outline(view(noted[0]!), ALL, TOP).turnCount).toBe(1)
+    expect(outline(view(noted[1]!), ALL, TOP).turnCount).toBe(2)
   })
 })

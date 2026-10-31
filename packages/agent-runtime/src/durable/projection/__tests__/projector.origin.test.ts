@@ -17,6 +17,7 @@
  *      缺 bot 的触发器项认不出 → 不带 origin（读者照样失败闭合）
  */
 import type { ConversationId, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
+import { midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
@@ -27,7 +28,7 @@ import { userDraft } from '../../__tests__/support/digest'
 import { answer, held } from '../../__tests__/support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from '../../__tests__/support/host'
 import { forkedId } from '../../__tests__/support/rollback'
-import { allEntries, messageText } from '../../__tests__/support/transcript'
+import { allEntries, messageText, midRunDisplayed } from '../../__tests__/support/transcript'
 import { waitFor, withTimeout } from '../../__tests__/support/wait'
 import {
   attachOracle,
@@ -237,9 +238,11 @@ describe('P3-03 · input origins', () => {
       )
       await settleFrames()
       const revisions = ops!.revisions
-      for (const [submissionId, text, origin] of [
-        [s1, 'a', CHROME],
-        [s2, 'b', TELEGRAM]
+      // 插话 b 受理时会话正忙：落下的消息是原文 + 插话说明的标记，metadata 里多一枚说明 Token
+      const note = { inlineTokens: { midrun: midRunNoteToken() } }
+      for (const [submissionId, text, content, extra, origin] of [
+        [s1, 'a', 'a', {}, CHROME],
+        [s2, 'b', midRunDisplayed('b'), note, TELEGRAM]
       ] as const) {
         const leaves = revisions.findIndex((r, i) => {
           const before = i === 0 ? ops!.snapshot.value : revisions[i - 1]!.value
@@ -249,8 +252,8 @@ describe('P3-03 · input origins', () => {
           )
         })
         expect(leaves, text).toBeGreaterThanOrEqual(0)
-        const message = revisions[leaves]!.value.messages.find((m) => m.content === text)
-        expect(message?.metadata, text).toStrictEqual({ origin })
+        const message = revisions[leaves]!.value.messages.find((m) => m.content === content)
+        expect(message?.metadata, text).toStrictEqual({ ...extra, origin })
       }
       expect(h!.state.value).toStrictEqual(await freshMount(session))
       ops!.replay()

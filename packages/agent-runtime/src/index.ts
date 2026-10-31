@@ -835,6 +835,12 @@ export {
   type TranscriptDigestSession,
   type TranscriptUserItem
 } from './durable/transcriptDigest'
+// 任务列表（docs/task-list-design.md §3.2）：内置 server `plan` 从已提交的条目折叠出当前请求的列表（只读）
+export {
+  readTaskList,
+  taskListEventsOfEntries,
+  type TaskListReaderSession
+} from './durable/taskListReader'
 // 会话大纲（§19.7）：父会话查看子会话现场 —— 先目录、再按编号展开，有字数上限（纯函数）
 export {
   buildSessionOutline,

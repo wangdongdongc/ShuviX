@@ -8,6 +8,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { MID_RUN_NOTE_TEXT, MID_RUN_NOTE_UID } from '@shuvix/chat-protocol/midRunNote'
+import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
@@ -29,6 +31,7 @@ interface ListedMessage {
   type: string
   content: string
   blocks?: Array<{ type: string }>
+  metadata?: { inlineTokens?: Record<string, { type: string; id: string }> }
 }
 
 let app: E2EApp
@@ -159,10 +162,11 @@ describe('引导（steer）', () => {
     await events.waitFor('agent_end', { sessionId: sids.steer })
     await chat.waitIdle()
 
-    // 发给模型的最后一次 payload 里带着 steer 原文
+    // 发给模型的最后一次 payload 里带着 steer 原文，后面跟着运行中插话的说明（docs/task-list-design.md §2）
     const chats = provider.chatRequests()
     expect(chats.length).toBeGreaterThanOrEqual(2)
     expect(chats.at(-1)!.raw).toContain('STEER-TEXT please pivot')
+    expect(chats.at(-1)!.raw).toContain(MID_RUN_NOTE_TEXT)
 
     // steer 被投影成普通 user/text，夹在被它截断的那张卡与终答之间
     const listed = await listMessages(sids.steer)
@@ -174,14 +178,21 @@ describe('引导（steer）', () => {
     ])
     // 被截断的那一轮是一条真实 entry（思考 + 工具调用同处一卡），不是 UI 造的合成消息
     expect(listed[1].blocks?.map((b) => b.type)).toEqual(['thinking', 'tool'])
-    expect(listed[2].content).toBe('STEER-TEXT please pivot')
+    // 界面上是原文 + 一枚说明 Token（说明是系统写的，不算用户的话）
+    expect(listed[2].content).toBe(`STEER-TEXT please pivot${makeTokenMarker(MID_RUN_NOTE_UID)}`)
+    expect(listed[2].metadata?.inlineTokens?.[MID_RUN_NOTE_UID]).toMatchObject({
+      type: 'note',
+      id: 'mid-run'
+    })
     expect(listed[3].content).toBe('steered answer')
 
     // DOM：四项，第二项就是那条真实 entry —— 不再有 orphan- 合成 id
     const items = await chat.settledItems()
     expect(items.map((i) => i.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
     expect(items[1].id).toBe(listed[1].id)
-    expect(items[2].text).toBe('STEER-TEXT please pivot')
+    // 气泡里是原文 + 「运行中发送」小标签；说明全文只在悬停 / 点开时才看得到
+    expect(items[2].text.startsWith('STEER-TEXT please pivot')).toBe(true)
+    expect(items[2].text).not.toContain(MID_RUN_NOTE_TEXT)
 
     expect(await sidebar.openSession('I-scratch')).toBe(true)
     expect(await sidebar.openSession('I-steer')).toBe(true)

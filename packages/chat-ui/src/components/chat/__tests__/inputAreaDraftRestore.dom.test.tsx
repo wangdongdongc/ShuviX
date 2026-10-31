@@ -19,6 +19,7 @@ import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
+import { hasMidRunNote, midRunNoteDisplay } from '@shuvix/chat-protocol/midRunNote'
 
 interface Call {
   name: string
@@ -203,5 +204,41 @@ describe('P3-10b-18 回退之后的草稿回填（edit-resend）', () => {
     expect(resolveTokensForCopy(sent.text, sent.inlineTokens)).toBe(
       resolveTokensForCopy(CONTENT, TOKENS)
     )
+  })
+})
+
+describe('回退一条运行中插话：说明不回填', () => {
+  const STEER = midRunNoteDisplay('pivot')
+
+  it('RB-1 requestDraftRestore(原文 + 说明标记, {midrun}) → 输入框里只有 `pivot`，没有芯片也没有 @ 引用', async () => {
+    await mount()
+    await act(async () => {
+      store().requestDraftRestore(STEER.content, STEER.tokens)
+    })
+    await flush()
+
+    expect(textarea().value).toBe('pivot')
+    expect(store().inputText).toBe('pivot')
+    expect(store().draftRestoreRequest).toBeNull()
+    expect(container.querySelector('[data-token-kind]')).toBeNull()
+    expect(container.querySelector('[data-token-display]')).toBeNull()
+  })
+
+  it('RB-2 空闲时把回填的草稿发出去：agent.prompt 的 text 是 `pivot`，不带说明 Token', async () => {
+    await mount()
+    await act(async () => {
+      store().requestDraftRestore(STEER.content, STEER.tokens)
+    })
+    await flush()
+    await pressEnter()
+
+    const prompts = callsOf('agent.prompt') as Array<
+      [{ sessionId: string; text: string; inlineTokens?: Record<string, InlineToken> }]
+    >
+    expect(prompts).toHaveLength(1)
+    const [sent] = prompts[0]!
+    expect(sent.sessionId).toBe(SID)
+    expect(sent.text).toBe('pivot')
+    expect(hasMidRunNote(sent.inlineTokens)).toBe(false)
   })
 })

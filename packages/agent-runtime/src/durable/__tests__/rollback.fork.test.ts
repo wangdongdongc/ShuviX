@@ -47,7 +47,7 @@ import {
   viewOf
 } from './support/rollback'
 import { callAgent, hostD } from './support/spawn'
-import { allEntries, transcript } from './support/transcript'
+import { allEntries, midRunNoted, transcript } from './support/transcript'
 import { aborted, deferred, sleep } from './support/wait'
 
 registerHostCleanup()
@@ -241,7 +241,7 @@ describe('P3-10a · fork point', () => {
         (entry) =>
           entry.kind === 'pi.user' &&
           entry.model?.[0]?.role === 'user' &&
-          entry.model[0].content === 'S'
+          entry.model[0].content === midRunNoted('S')
       )!
       expect(steered.id).toBeGreaterThan(toolResult.id)
 

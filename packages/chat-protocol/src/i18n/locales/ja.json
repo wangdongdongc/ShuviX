@@ -244,6 +244,7 @@
     "atSourceFile": "ファイル",
     "atSourceKnowledge": "ナレッジ",
     "atSourcePaste": "貼り付け",
+    "atSourceMidRun": "実行中に送信",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",
     "placeholderNoSession": "まずチャットを作成または選択してください",
@@ -418,6 +419,13 @@
     "alreadyPlaced": "すでに送信済みのため取り消せません",
     "withdrawFailed": "取り消しに失敗しました：{{error}}",
     "touchSendHint": "今すぐ送る — 長押しでほかの送り方を選べます"
+  },
+  "taskList": {
+    "title": "タスクリスト",
+    "done": "完了",
+    "stopped": "停止しました",
+    "expand": "タスクリストを展開",
+    "collapse": "タスクリストを折りたたむ"
   },
   "threadDrawer": {
     "running": "実行中…",
@@ -1185,6 +1193,8 @@
     "browserHint": "アプリ内のブラウザで Web ページを開いて操作 —— 閲覧、クリック、フォーム入力、スクリーンショット",
     "chromeLabel": "Chrome",
     "chromeHint": "ShuviX 拡張機能を通じて自分の Chrome を操作 —— Chrome タブのセッションで使用",
+    "taskListLabel": "タスクリスト",
+    "taskListHint": "エージェントの手順と進み具合を入力欄の上に表示します",
     "sshLabel": "SSH",
     "sshHint": "~/.ssh/config のホストでコマンドを実行し、ファイルをコピー・同期",
     "gitLabel": "バージョン管理",

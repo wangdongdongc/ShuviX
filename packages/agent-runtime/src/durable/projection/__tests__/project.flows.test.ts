@@ -24,6 +24,7 @@ import {
   type LiveState,
   type ToolDiagnostic
 } from '@earendil-works/pi-durable'
+import { midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { describe, expect, it } from 'vitest'
@@ -39,10 +40,10 @@ import {
   registerHostCleanup,
   type TestHost
 } from '../../__tests__/support/host'
-import { allEntries } from '../../__tests__/support/transcript'
+import { allEntries, midRunDisplayed, midRunNoted } from '../../__tests__/support/transcript'
 import { sleep, waitFor, withTimeout } from '../../__tests__/support/wait'
 import { makeWorld, registerWorldCleanup } from '../../__tests__/integration/support/world'
-import { displayContentOf, displayItemOf, resolveDisplayItems } from '../display'
+import { displayContentOf, displayItemOf, resolveDisplayItems, type DisplayItem } from '../display'
 import { projectSessionView, renderHarnessDiagnostics } from '../project'
 import { bg, expectJsonView } from './support'
 
@@ -73,6 +74,26 @@ const D = (n: number): { content: string; tokens: Tokens } => ({
 interface ViewOptions {
   display?: boolean
   runState?: RunViewState
+  /** 排队输入的显示侧车（`queueDisplayOf`）；不给 → 队列一律显示模型文本 */
+  queueDisplay?: ReadonlyMap<number, DisplayItem>
+}
+
+/**
+ * 排队输入 → 显示侧车，与 SessionProjector 的 `queueDisplay` 同一个口径：每条排着的输入按它 submission 的
+ * requestId 去当前对话的 `DisplayDoc` 里找
+ */
+async function queueDisplayOf(session: DurableSession): Promise<Map<number, DisplayItem>> {
+  const conversation = await session.currentConversation()
+  const display = await session.harness.snapshot(DisplayDoc, conversation.id, BG)
+  const inbox = await session.harness.snapshot(InboxDoc, conversation.id, BG)
+  const queued = new Map<number, DisplayItem>()
+  for (const item of inbox?.items ?? []) {
+    const record = await (await session.harness.submission(item.id, BG))?.status(BG)
+    const requestId = record?.requestId
+    const found = requestId === undefined ? undefined : displayItemOf(display?.items[requestId])
+    if (found !== undefined) queued.set(item.id, found)
+  }
+  return queued
 }
 
 /** 当前对话的视图：viewState 的条目与文档 + 显示侧车解析，过严格 JSON 检查 */
@@ -93,7 +114,8 @@ async function viewOf(session: DurableSession, options: ViewOptions = {}): Promi
         docs['pi.inbox'] as InboxState | undefined,
         display,
         [],
-        options.runState ?? session.runState
+        options.runState ?? session.runState,
+        options.queueDisplay
       )
     )
   } finally {
@@ -565,7 +587,8 @@ describe('P3-02 · projector over real flows', () => {
       const inbox = await session.harness.snapshot(InboxDoc, conversation.id, BG)
       expect(inbox?.items.map((item) => item.mode)).toEqual(['followUp', 'steer', 'write'])
 
-      const queued = await viewOf(session)
+      // 忙时受理的插话带插话说明：队列按显示侧车渲染（说明 Token 的 displayText 是空串），只显示原文
+      const queued = await viewOf(session, { queueDisplay: await queueDisplayOf(session) })
       expect(
         queued.queue.map(({ mode, text, imageCount }) => ({ mode, text, imageCount }))
       ).toEqual([
@@ -589,15 +612,25 @@ describe('P3-02 · projector over real flows', () => {
       const after = await viewOf(session)
       expect(after.queue).toEqual([])
       const entries = await allEntries(conversation)
-      for (const text of ['F later', 'S now']) {
+      // 模型文本 / 界面 content / metadata：followUp 原样；插话带说明（界面上是一枚说明 Token）
+      const placed = [
+        { text: 'F later', model: 'F later', content: 'F later', metadata: {} },
+        {
+          text: 'S now',
+          model: midRunNoted('S now'),
+          content: midRunDisplayed('S now'),
+          metadata: { inlineTokens: { midrun: midRunNoteToken() } }
+        }
+      ]
+      for (const { text, model, content, metadata } of placed) {
         const entry = entries.find(
           (e) =>
-            e.kind === 'pi.user' && e.model?.[0]?.role === 'user' && e.model[0].content === text
+            e.kind === 'pi.user' && e.model?.[0]?.role === 'user' && e.model[0].content === model
         )
         expect(entry, text).toBeDefined()
-        const message = after.messages.find((m) => m.content === text)
+        const message = after.messages.find((m) => m.content === content)
         expect(message?.id).toBe(String(entry!.id))
-        expect(message?.metadata).toStrictEqual({})
+        expect(message?.metadata).toStrictEqual(metadata)
       }
     },
     TIMEOUT

@@ -12,7 +12,7 @@ import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
 import { answer, callTool, held } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
-import { allEntries, toolDeltaCount, transcript } from '../support/transcript'
+import { allEntries, midRunNoted, toolDeltaCount, transcript } from '../support/transcript'
 import { waitFor, withTimeout } from '../support/wait'
 import { diagnosticsOf, resultEntry as entryOf, resultMessage } from './support/entries'
 import { dumpText, fileSuite, securityFor } from './support/realTools'
@@ -129,9 +129,10 @@ describe('P1-12 · lifecycle', () => {
 
       expect(world.fs.files.get('/ws/out.txt')).toBe('X')
       expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
+      // 问答期间（会话正忙）受理的插话带插话说明；followUp 不带
       expect(lines(world.model.chats[chatsBefore + 1]!).slice(-2)).toEqual([
         expect.stringMatching(/^toolResult:/),
-        'user:also Y'
+        `user:${midRunNoted('also Y')}`
       ])
       expect(lines(world.model.chats[chatsBefore + 2]!).at(-1)).toBe('user:next')
       const conversation = await session.currentConversation()
@@ -139,7 +140,7 @@ describe('P1-12 · lifecycle', () => {
         'pi.user:save',
         'pi.assistant:[tool:write]',
         expect.stringMatching(/^pi\.tool-result:/),
-        'pi.user:also Y',
+        `pi.user:${midRunNoted('also Y')}`,
         'pi.assistant:a2',
         'pi.user:next',
         'pi.assistant:a3'

@@ -9,6 +9,8 @@
  *  - 不认识的类型、没有会话的内置服务器直接抛，而不是造出一个半成品；
  *  - 内置服务器的 scope 带 `agentOf`（P2-07-50）：每次调用现问启动时注册的解析器
  *    （会话, 对话）→ 调用方 agent，不在建连时快照；没注册 = 认不出、不抛。
+ *  - 同样带 `readTaskList`（MCPS-TL，任务列表 server `plan`）：每次调用现问启动时注册的读者
+ *    （会话, 这次调用的 toolCallId）→ 之前的列表；没注册 = 读不到（undefined）、不抛；读者的失败原样交回。
  *
  * 工厂是模块私有的，只经单例 McpManager 的私有字段取得到（白盒）；import 图里的 DB / 内置服务器 /
  * 日志一律换成假件，只留 agent-runtime 与 SDK 是真的。
@@ -20,7 +22,12 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { BuiltinMcpScope } from '@shuvix/agent-runtime'
 import { McpStdioTransport } from '../../utils/mcpStdioTransport'
-import { builtinMcpRegistry, mcpService, setBuiltinMcpAgentResolver } from '../mcpService'
+import {
+  builtinMcpRegistry,
+  mcpService,
+  setBuiltinMcpAgentResolver,
+  setBuiltinMcpTaskListReader
+} from '../mcpService'
 import type { DesktopBuiltinMcpScope } from '../builtinMcp/types'
 
 const mocks = vi.hoisted(() => ({
@@ -163,5 +170,77 @@ describe('P2-07-50 内置服务器的 scope：agentOf 每次现问注册着的�
     const scope = await scopeOf()
     expect(() => scope.agentOf!(2)).not.toThrow()
     expect(scope.agentOf!(2)).toBeUndefined()
+  })
+})
+
+describe('MCPS-TL 内置服务器的 scope：readTaskList 每次现问注册着的读者', () => {
+  afterEach(() => {
+    setBuiltinMcpTaskListReader(null)
+    vi.restoreAllMocks()
+  })
+
+  /** 造一次 plan 的 inproc transport，交回内置注册表收到的 scope */
+  async function scopeOf(sessionId = 's1'): Promise<DesktopBuiltinMcpScope> {
+    const spy = vi
+      .spyOn(builtinMcpRegistry, 'createClientTransport')
+      .mockResolvedValue({} as unknown as Transport)
+    await createTransport(
+      row({ id: 'builtin-mcp-plan', name: 'plan', type: 'inproc', isBuiltin: 1 }),
+      { sessionId }
+    )
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toBe('plan')
+    return spy.mock.calls[0][1]
+  }
+
+  const LIST = [
+    { content: 'Read the code', status: 'completed' as const },
+    { content: 'Fix it', status: 'in_progress' as const }
+  ]
+
+  it('MCPS-TL-1 scope 带 readTaskList；建连时不读；readTaskList(c) = 读者(会话, c) 的值', async () => {
+    const reader = vi.fn(async (_sid: string, _before?: string) => LIST)
+    setBuiltinMcpTaskListReader(reader)
+
+    const scope = await scopeOf('s1')
+    expect(scope.readTaskList).toBeTypeOf('function')
+    expect(reader).not.toHaveBeenCalled()
+
+    await expect(scope.readTaskList!('c1')).resolves.toBe(LIST)
+    expect(reader).toHaveBeenCalledTimes(1)
+    expect(reader).toHaveBeenCalledWith('s1', 'c1')
+
+    await scope.readTaskList!()
+    expect(reader.mock.calls[1]).toEqual(['s1', undefined])
+  })
+
+  it('MCPS-TL-2 每次调用现问：建连之后换了读者，同一份 scope 立刻用新的', async () => {
+    const first = vi.fn(async (_sid: string, _before?: string) => LIST)
+    setBuiltinMcpTaskListReader(first)
+    const scope = await scopeOf('s2')
+
+    const replacedList = [{ content: 'Other', status: 'pending' as const }]
+    const second = vi.fn(async (_sid: string, _before?: string) => replacedList)
+    setBuiltinMcpTaskListReader(second)
+
+    await expect(scope.readTaskList!('c2')).resolves.toBe(replacedList)
+    expect(first).not.toHaveBeenCalled()
+    expect(second).toHaveBeenCalledWith('s2', 'c2')
+  })
+
+  it('MCPS-TL-3 没注册读者 → readTaskList 交回 undefined，不抛', async () => {
+    setBuiltinMcpTaskListReader(null)
+    const scope = await scopeOf()
+
+    await expect(scope.readTaskList!('c1')).resolves.toBeUndefined()
+    await expect(scope.readTaskList!()).resolves.toBeUndefined()
+  })
+
+  it('MCPS-TL-4 读者失败 → readTaskList 原样拒绝（plan server 把它当「还没有列表」，见 TLS-8）', async () => {
+    const boom = new Error('session not open')
+    setBuiltinMcpTaskListReader(async () => Promise.reject(boom))
+    const scope = await scopeOf()
+
+    await expect(scope.readTaskList!('c1')).rejects.toBe(boom)
   })
 })

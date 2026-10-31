@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { AssistantBlock, ChatMessage } from '../types/chatMessage'
 import { transcribeConversation } from './transcript'
+import { MID_RUN_NOTE_TEXT, midRunNoteDisplay } from '../midRunNote'
+import { makeTokenMarker } from './inlineTokens'
 
 let seq = 0
 function base(over: Record<string, unknown>): ChatMessage {
@@ -260,5 +262,58 @@ describe('transcribeConversation', () => {
       expect(md).toContain('message 5')
       for (const secret of secrets) expect(md).not.toContain(secret)
     }
+  })
+})
+
+describe('transcribeConversation — 插话说明不记在 User 名下', () => {
+  /** 一条带插话说明的用户消息（投影里的样子） */
+  function steered(text: string, extra: Record<string, unknown> = {}): ChatMessage {
+    const display = midRunNoteDisplay(text)
+    return userText(display.content, {
+      metadata: { inlineTokens: { ...display.tokens, ...extra } }
+    })
+  }
+
+  /** 各个 `### User` 分节的正文（去掉标题行与空行） */
+  function userBodies(md: string): string[] {
+    return md
+      .split(/\n(?=### )/)
+      .filter((section) => section.startsWith('### User'))
+      .map((section) => section.slice(section.indexOf('\n\n') + 2).trim())
+  }
+
+  it('PT-4 普通导出：User 正文恰是原文，没有说明；includeSystemNotices 也一样', () => {
+    const msgs = [steered('S'), assistantText('final answer')]
+    for (const options of [{}, { includeSystemNotices: true }]) {
+      const md = transcribeConversation(msgs, options)
+      expect(userBodies(md), JSON.stringify(options)).toEqual(['S'])
+      expect(md).not.toContain(MID_RUN_NOTE_TEXT)
+      expect(md).not.toContain('shuvixInlineToken')
+      expect(md).toContain('final answer')
+    }
+  })
+
+  it('PT-5 expandInlineTokens：说明同样不出现（S6）；同一条里的别的 Token 照常展开', () => {
+    const plain = transcribeConversation([steered('S'), assistantText('final answer')], {
+      expandInlineTokens: true
+    })
+    expect(userBodies(plain)).toEqual(['S'])
+    expect(plain).not.toContain(MID_RUN_NOTE_TEXT)
+
+    const paste = {
+      type: 'paste',
+      id: 'paste-1',
+      displayText: '[pasted #1]',
+      payload: 'PASTED BODY'
+    }
+    const display = midRunNoteDisplay(`see ${makeTokenMarker('p1')}`)
+    const withPaste = userText(display.content, {
+      metadata: { inlineTokens: { ...display.tokens, p1: paste } }
+    })
+    const expanded = transcribeConversation([withPaste, assistantText('ok')], {
+      expandInlineTokens: true
+    })
+    expect(userBodies(expanded)).toEqual(['see PASTED BODY'])
+    expect(expanded).not.toContain(MID_RUN_NOTE_TEXT)
   })
 })

@@ -57,6 +57,11 @@ import {
   type EntryRecord
 } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
+import {
+  MID_RUN_NOTE_SEPARATOR,
+  MID_RUN_NOTE_TEXT,
+  withoutMidRunNote
+} from '@shuvix/chat-protocol/midRunNote'
 import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveInputSources, resolveSuggestedEntries, type InputSource } from './inputSource'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
@@ -129,6 +134,9 @@ export type TranscriptDigestSession = Pick<
 
 // ─────────────────────────── 常量 ───────────────────────────
 
+/** 插话说明在模型文本里的样子（分隔 + 说明，midRunNote.ts） */
+const MID_RUN_NOTE_SUFFIX = `${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`
+
 /** 内置 ask 工具的名字（第三方工具恒带 `mcp__` 前缀，撞不上） */
 const ASK_TOOL_NAME = 'ask'
 
@@ -174,8 +182,12 @@ export function digestEntries(
           out.push({ kind: 'user', ts: tsOf(message), text: display, ...sourced })
           break
         }
-        const text = userText(message.content)
-        if (isSystemNoticeText(text)) break
+        const raw = userText(message.content)
+        if (isSystemNoticeText(raw)) break
+        // 侧车没解析到（压缩切点、别的分支）的插话：模型文本末尾的说明是系统写的，同样不交出
+        const text = raw.endsWith(MID_RUN_NOTE_SUFFIX)
+          ? raw.slice(0, raw.length - MID_RUN_NOTE_SUFFIX.length)
+          : raw
         out.push({ kind: 'user', ts: tsOf(message), text, ...sourced })
         break
       }
@@ -316,7 +328,10 @@ export async function readTranscriptDigest(
       resolveSuggestedEntries(session.harness, conversation.id, view.entries)
     ])
     const displayTexts = new Map<EntryId, string>()
-    for (const [entryId, display] of displays) displayTexts.set(entryId, display.content)
+    // 插话说明是系统写的，不进「用户说了什么」（docs/task-list-design.md §2.4）
+    for (const [entryId, display] of displays) {
+      displayTexts.set(entryId, withoutMidRunNote(display.content, display.tokens))
+    }
     return { items: digestEntries(view.entries, displayTexts, sources, suggested) }
   } catch (error) {
     if (isClosedError(error)) throw new SessionClosedError(session.sessionId)

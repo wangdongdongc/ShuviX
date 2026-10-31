@@ -15,6 +15,7 @@
 
 import type { ChatMessage, ImageMeta, InlineToken, UsageInfo } from '../types/chatMessage'
 import { inlineTokensToPlainText, resolveTokensForAgent } from './inlineTokens'
+import { tokensWithoutMidRunNote, withoutMidRunNote } from '../midRunNote'
 
 /** 角色 / 分节标签 —— 各端可注入本地化文案；缺省为英文。 */
 export interface TranscriptLabels {
@@ -106,14 +107,17 @@ function formatTimestamp(ms: number): string {
 
 /**
  * 解析用户/助手文本内容里的 inline token 标记。
- * expand=true 展开为发给 agent 的 payload；否则替换为人读 displayText。
+ * expand=true 展开为发给 agent 的 payload；否则替换为人读 displayText。插话说明（midRunNote.ts）两种都不出现：
+ * 它是系统写的，不该记在「User」名下。
  */
 function resolveContent(
   content: string,
   tokens: Record<string, InlineToken> | undefined,
   expand: boolean
 ): string {
-  return expand ? resolveTokensForAgent(content, tokens) : inlineTokensToPlainText(content, tokens)
+  const own = withoutMidRunNote(content, tokens)
+  const kept = tokensWithoutMidRunNote(tokens)
+  return expand ? resolveTokensForAgent(own, kept) : inlineTokensToPlainText(own, kept)
 }
 
 /** 把多行文本转成 Markdown 引用块（每行前缀 `> `）。 */

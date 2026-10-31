@@ -137,6 +137,7 @@ import {
 } from './lock'
 import { collectMonitorRows, totalCost, type AgentMonitorRow } from './monitorSnapshot'
 import { newSessionProcessRecord, type SessionProcessRecord } from './processRecord'
+import { withMidRunNote } from './midRunNote'
 import { maybeAnnounceDate } from './prompt/dateNotice'
 import { renderSystemPrompt, replaySections, type PromptExtensions } from './prompt/sections'
 import {
@@ -1705,9 +1706,15 @@ export class DurableSessionImpl implements DurableSession {
           if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
           this.reopenInputs()
           const conversation = await this.currentConversation()
-          if (options.source !== undefined) {
+          // 受理时会话正忙的插话：模型文本末尾带一段固定说明，界面上是一枚小 Token（midRunNote.ts）。
+          // 加在脱敏之后 —— 说明不是用户输入。被中断、照「先让它跑完」排在后面的也算（继续之后它落进那一轮）；
+          // 空闲时的 steer 会直接起一轮，它就是一条普通请求；通知形状的不加（withMidRunNote 自己判）
+          const midRun = whenBusy === 'steer' && (this.isBusy() || this.isInterrupted())
+          const noted = midRun ? withMidRunNote(content) : undefined
+          if (noted !== undefined) content = noted.content
+          if (options.source !== undefined || noted !== undefined) {
             requestId ??= randomId()
-            await this.recordSidecars(conversation, requestId, undefined, options.source)
+            await this.recordSidecars(conversation, requestId, noted?.display, options.source)
           }
           await this.flushDeferred(conversation, 'beforeSend')
           await this.announceDate(conversation)

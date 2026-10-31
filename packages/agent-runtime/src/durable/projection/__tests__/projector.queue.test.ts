@@ -20,7 +20,7 @@ import { DisplayDoc } from '../../docs'
 import type { DurableSession } from '../../durableSession'
 import { answer, callTool, held, stalled } from '../../__tests__/support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from '../../__tests__/support/host'
-import { allEntries } from '../../__tests__/support/transcript'
+import { allEntries, midRunDisplayed, midRunNoted } from '../../__tests__/support/transcript'
 import { waitFor, withTimeout } from '../../__tests__/support/wait'
 import {
   attachOracle,
@@ -88,9 +88,10 @@ describe('P3-03 · queue', () => {
       )
       await settleFrames()
       const ids = await userEntryIds(session)
-      for (const [submissionId, text] of [
-        [s1, 'a'],
-        [s2, 'b']
+      // 插话 b 受理时会话正忙：模型文本带插话说明，界面 content 是原文 + 说明标记（队列里只显示原文，见上）
+      for (const [submissionId, text, model, content] of [
+        [s1, 'a', 'a', 'a'],
+        [s2, 'b', midRunNoted('b'), midRunDisplayed('b')]
       ] as const) {
         const leaves = ops.revisions.findIndex(
           (r, i) =>
@@ -99,9 +100,9 @@ describe('P3-03 · queue', () => {
             ops.revisions[i - 1]!.value.queue.some((q) => q.submissionId === submissionId)
         )
         expect(leaves, text).toBeGreaterThan(0)
-        const message = ops.revisions[leaves]!.value.messages.find((m) => m.content === text)
-        expect(message?.id).toBe(String(ids.get(text)))
-        expect(ops.revisions[leaves - 1]!.value.messages.some((m) => m.content === text)).toBe(
+        const message = ops.revisions[leaves]!.value.messages.find((m) => m.content === content)
+        expect(message?.id).toBe(String(ids.get(model)))
+        expect(ops.revisions[leaves - 1]!.value.messages.some((m) => m.content === content)).toBe(
           false
         )
       }

@@ -2368,6 +2368,86 @@ export function suggestionsPane(main: CdpClient): SuggestionsPane {
   }
 }
 
+// ─── 任务列表（内置能力服务器 `plan`，chat-ui TaskListPanel，2026-10-31，实验） ───
+// 输入框卡片里、待处理输入之上的那一块。认的全是 data 属性：`[data-task-list]`（根，`data-task-list-phase` =
+// running / done / stopped）、`[data-task-list-toggle]`（开合钮，`aria-expanded`）、`[data-task-list-count]`
+// （「完成数/总数」）、`[data-task-step]`（一行步骤，值是 1 起的步骤号，`data-status` = pending / in_progress /
+// completed）。摘要没有 data 属性：它是开合钮里紧跟计数的那个 span（没有摘要时那里是一个空的占位 span）。
+
+/** 任务列表里的一行步骤 */
+export interface TaskListStepShot {
+  /** 步骤号（1 起） */
+  n: number
+  status: string
+  text: string
+  /** 行首那枚 lucide 图标的类名（已停止时进行中那一步是 `lucide-circle-pause`；空串 = 没有图标） */
+  icon: string
+}
+
+export interface TaskListPane {
+  /** 列表在不在屏 */
+  present(): Promise<boolean>
+  /** `data-task-list-phase`；不在屏 → null */
+  phase(): Promise<string | null>
+  /** 计数文字（`1/3`）；不在屏 → null */
+  count(): Promise<string | null>
+  /** 摘要文字（进行中那一步 / 「完成」/「已停止」，随界面语言变）；没有摘要 → 空串；不在屏 → null */
+  summary(): Promise<string | null>
+  /** 开合钮的 `aria-expanded`；不在屏 → null */
+  expanded(): Promise<boolean | null>
+  /** 点开合钮（不在屏抛） */
+  toggle(): Promise<void>
+  /** 展开着时逐行的步骤（DOM 序）；折叠 / 不在屏 → 空数组 */
+  steps(): Promise<TaskListStepShot[]>
+}
+
+export function taskListPane(main: CdpClient): TaskListPane {
+  const ROOT = `document.querySelector('[data-task-list]')`
+  const TOGGLE = `${ROOT}?.querySelector('[data-task-list-toggle]')`
+  return {
+    present: () => main.eval<boolean>(`!!${ROOT}`),
+    phase: () => main.eval<string | null>(`${ROOT}?.getAttribute('data-task-list-phase') ?? null`),
+    count: () =>
+      main.eval<string | null>(`(() => {
+        const el = ${ROOT}?.querySelector('[data-task-list-count]')
+        return el ? (el.textContent ?? '').trim() : null
+      })()`),
+    summary: () =>
+      main.eval<string | null>(`(() => {
+        const count = ${ROOT}?.querySelector('[data-task-list-count]')
+        if (!count) return null
+        const next = count.nextElementSibling
+        return next && next.tagName === 'SPAN' ? (next.textContent ?? '').trim() : ''
+      })()`),
+    expanded: () =>
+      main.eval<boolean | null>(`(() => {
+        const button = ${TOGGLE}
+        return button ? button.getAttribute('aria-expanded') === 'true' : null
+      })()`),
+    toggle: async () => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const button = ${TOGGLE}
+        if (!button) return false
+        button.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error('task list is not on screen')
+      await sleep(100)
+    },
+    steps: () =>
+      main.eval<TaskListStepShot[]>(
+        `[...(${ROOT}?.querySelectorAll('[data-task-step]') ?? [])].map((row) => ({
+          n: Number(row.getAttribute('data-task-step')),
+          status: row.getAttribute('data-status') ?? '',
+          text: (row.querySelector('span')?.textContent ?? '').trim(),
+          icon: [...(row.querySelector('svg')?.classList ?? [])].find(
+            (c) => c.startsWith('lucide-') && c !== 'lucide-icon'
+          ) ?? ''
+        }))`
+      )
+  }
+}
+
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
  * CSS uppercase 不改 textContent），临时组 / 知识库组 / Bots 组 / 「项目」分节标题按
@@ -3700,6 +3780,8 @@ export interface ToolPickerItem {
   declared: boolean
   /** 悬停提示（`title`）：声明项是「哪个档案带的」，其余没有 —— 有没有运行时都一样 */
   title: string
+  /** 这一行上的「实验」小标签（`data-experimental` 的值，如 `taskList`）；没有 → null */
+  experimental: string | null
 }
 
 export interface ToolPickerPane {
@@ -3771,7 +3853,9 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
             label.hasAttribute('data-offline') ||
             !!label.querySelector('span.text-red-400 svg'),
           declared: label.hasAttribute('data-declared'),
-          title: label.getAttribute('title') ?? ''
+          title: label.getAttribute('title') ?? '',
+          experimental:
+            label.querySelector('[data-experimental]')?.getAttribute('data-experimental') ?? null
         }
       })`),
     toggle: async (name) => {
@@ -7191,6 +7275,8 @@ export interface McpRowShot {
   name: string
   /** 「内置」徽章（琥珀色那枚）在不在 */
   builtinBadge: boolean
+  /** 头行里的「实验」小标签（`data-experimental` 的值，如 `taskList`）；没有 → null */
+  experimental: string | null
   /** 类型徽章上的字（stdio / http / inproc） */
   typeBadge: string
   /** 名字下面那行状态文字（「未启动」/「已连接 · 22 个工具」…，随界面语言变） */
@@ -7284,6 +7370,7 @@ export function mcpSettingsPane(settings: CdpClient): McpSettingsPane {
     return {
       name: el.getAttribute('data-mcp-server') ?? '',
       builtinBadge: badges.some((b) => b.className.includes('text-amber-500')),
+      experimental: head?.querySelector('[data-experimental]')?.getAttribute('data-experimental') ?? null,
       typeBadge: (badges.find((b) => b.className.includes('bg-bg-tertiary'))?.textContent ?? '').trim(),
       statusText: (head?.querySelector('div.min-w-0.flex-1')?.lastElementChild?.textContent ?? '').trim(),
       hasReconnect: !!byIcon('lucide-refresh-cw'),

@@ -10,7 +10,7 @@ import type { DurableSession } from '../durableSession'
 import { answer, callTool, held, modelError, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup, type TestHost } from './support/host'
 import { holdTool } from './support/tools'
-import { allEntries, requestTexts, transcript } from './support/transcript'
+import { allEntries, midRunNoted, requestTexts, transcript } from './support/transcript'
 import { deferred, sleep, waitFor, withTimeout } from './support/wait'
 
 registerHostCleanup()
@@ -105,10 +105,15 @@ describe('notices', () => {
       'pi.assistant:[tool:hold]',
       'pi.tool-result:hold done',
       'shuvix.notice:N',
-      'pi.user:S',
+      `pi.user:${midRunNoted('S')}`,
       'pi.assistant:done'
     ])
-    expect(requestTexts(t.kit, 1).slice(-3)).toEqual(['toolResult:hold done', 'user:N', 'user:S'])
+    // 插话受理时会话正忙 → 带插话说明；通知写入不带
+    expect(requestTexts(t.kit, 1).slice(-3)).toEqual([
+      'toolResult:hold done',
+      'user:N',
+      `user:${midRunNoted('S')}`
+    ])
   })
 
   it('N-04 final boundary: a notice during a held text answer lands after the answer, without a new run', async () => {

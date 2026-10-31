@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 import {
   payloadPreview,
   splitTokenTitle,
@@ -44,6 +45,14 @@ describe('tokenKind', () => {
 
   it('未知类型归 other', () => {
     expect(tokenKind({ ...fileToken, type: 'bot' })).toBe('other')
+  })
+
+  it('TK-1: 插话说明 Token 归 note —— 只认 type + id，id 不对 / type 不对按原规则分', () => {
+    expect(tokenKind(midRunNoteToken())).toBe('note')
+    expect(tokenKind({ type: 'note', id: 'x', displayText: '', payload: '' })).toBe('other')
+    expect(tokenKind({ type: 'at', id: 'mid-run', displayText: 'a', payload: '' })).toBe('file')
+    expect(tokenKind({ type: 'cmd', id: 'mid-run', displayText: '/a', payload: '' })).toBe('cmd')
+    expect(tokenKind({ type: 'paste', id: 'mid-run', displayText: 'p', payload: '' })).toBe('paste')
   })
 })
 

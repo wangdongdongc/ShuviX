@@ -26,6 +26,11 @@ import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { UserTextMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import {
+  MID_RUN_NOTE_TEXT,
+  MID_RUN_NOTE_UID,
+  midRunNoteDisplay
+} from '@shuvix/chat-protocol/midRunNote'
 
 const clip = vi.hoisted(() => ({ copyToClipboard: vi.fn() }))
 
@@ -363,5 +368,45 @@ describe('MA-U11 touch：脱敏占位符的点击不算点气泡', () => {
     expect(bubbleOf().contains(text)).toBe(true)
     click(text)
     expect(copyIn()).not.toBeNull()
+  })
+})
+
+describe('运行中插话：说明是一枚小标签，不算用户的话', () => {
+  /** 运行时写的显示侧车：原文 + 说明标记，tokens 里只有说明那一枚 */
+  function steered(text: string): UserTextMessage {
+    const display = midRunNoteDisplay(text)
+    return message({ content: display.content, metadata: { inlineTokens: display.tokens } })
+  }
+
+  it('UB-1 原文在前、后面恰一枚 note 胶囊；气泡文字里没有说明原文', () => {
+    show('compact', bubble({ msg: steered('pivot') }))
+    const chips = bubbleOf().querySelectorAll<HTMLElement>('[data-token-kind="note"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toBe(en.input.atSourceMidRun)
+    const text = bubbleOf().textContent ?? ''
+    expect(text.startsWith('pivot')).toBe(true)
+    expect(text.indexOf('pivot')).toBeLessThan(text.indexOf(en.input.atSourceMidRun))
+    expect(text).not.toContain(MID_RUN_NOTE_TEXT)
+    expect(text).not.toContain(`{{shuvixInlineToken:${MID_RUN_NOTE_UID}}}`)
+  })
+
+  it.each<Host>(['compact', 'touch'])('UB-2 %s：复制恰好是 `pivot`', (host) => {
+    show(host, bubble({ msg: steered('pivot') }))
+    if (host === 'touch') click(bubbleOf())
+    click(copyIn()!)
+    expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
+    expect(clip.copyToClipboard).toHaveBeenCalledWith('pivot')
+  })
+
+  it('UB-3 带脱敏占位符：复制换回真值，说明照样丢掉', async () => {
+    useChatStore.setState({ activeSessionId: 's1' })
+    show('compact', bubble({ msg: steered(`mail ${MAIL}`) }))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(container.querySelector('[data-redaction-placeholder]')?.textContent).toBe(MAIL)
+    click(copyIn()!)
+    expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
+    expect(clip.copyToClipboard).toHaveBeenCalledWith(`mail ${MAIL_VALUE}`)
   })
 })

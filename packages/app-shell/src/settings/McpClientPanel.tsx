@@ -22,6 +22,8 @@ import type {
   McpServerUpdateParams
 } from '@shuvix/chat-protocol/types/mcp'
 import { builtinMcpCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
+import { experimentalFeatureOfMcp } from '@shuvix/chat-protocol/experimentalFeatures'
+import { ExperimentalTag } from '../common/ExperimentalTag'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SettingsSection, Toggle } from './SettingsPrimitives'
 import {
@@ -275,6 +277,7 @@ export function McpClientPanel({
             const toggleTitle = s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')
             // 内置 server 以本地化名字为主，标识名（工具名前缀、档案里写的那个）并排留着
             const copy = s.isBuiltin === 1 ? builtinMcpCopy(s.name, t) : undefined
+            const experimental = s.isBuiltin === 1 ? experimentalFeatureOfMcp(s.name) : undefined
             return (
               <div key={s.id} className="flex flex-col" data-mcp-server={s.name}>
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -303,6 +306,7 @@ export function McpClientPanel({
                           {t('settings.mcpBuiltin')}
                         </span>
                       )}
+                      {experimental && <ExperimentalTag feature={experimental} />}
                       <span className="text-[9px] font-normal text-text-tertiary bg-bg-tertiary px-1.5 py-0.5 rounded-md shrink-0">
                         {s.type}
                       </span>
