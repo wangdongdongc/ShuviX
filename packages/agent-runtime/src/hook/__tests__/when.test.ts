@@ -8,6 +8,9 @@
  *
  * 宿主函数（HW-11…18）：`activeSessions(date)` 的签名登记在 when.ts，实现由宿主经 setWhenHostFunctions 注入 ——
  * 没注入 / 日期形状不对 / 实现抛错都是求值错误；只有表达式真的求值到它时才调用（短路）。
+ *
+ * 每次求值的宿主函数（HW-19…25，`evaluateWhen` 的第三个参数）：只给这一次求值换上，全局那份不被调、
+ * 求值之后（含抛错、非布尔）原样换回；`{}` 不动全局；编译缓存不捕获实现；日期形状照查。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { compileWhen, evaluateWhen, setWhenHostFunctions } from '../when'
@@ -186,5 +189,96 @@ describe('宿主函数 activeSessions(date)', () => {
     expect(evaluateWhen(expression, { event: {}, env: {} })).toBe(false)
     setWhenHostFunctions({ activeSessions: () => 2 })
     expect(evaluateWhen(expression, { event: {}, env: {} })).toBe(true)
+  })
+})
+
+/**
+ * 每次求值换上的宿主函数（`evaluateWhen` 的第三个参数，排期预演用它假设「那天有会话」）：只给这一次求值，
+ * 全局那份（真的触发源在用）原样留着 —— 求值抛错、桩抛错、结果不是布尔都一样换回去。
+ */
+describe('evaluateWhen 的 functions —— 只换这一次求值', () => {
+  afterEach(() => {
+    setWhenHostFunctions({})
+  })
+
+  const CALL = "activeSessions('2026-10-24') > 0"
+  const ctx = { event: {}, env: {} }
+
+  it('HW-19 传了桩 → 用桩（收到那个日期），全局的实现一次都不调', () => {
+    const global = vi.fn((_date: string) => 0)
+    const stub = vi.fn((_date: string) => 1)
+    setWhenHostFunctions({ activeSessions: global })
+    expect(evaluateWhen(CALL, ctx, { activeSessions: stub })).toBe(true)
+    expect(stub).toHaveBeenCalledTimes(1)
+    expect(stub).toHaveBeenCalledWith('2026-10-24')
+    expect(global).not.toHaveBeenCalled()
+  })
+
+  it('HW-20 不漏到全局：带桩求值之后，不带桩的求值又回到全局实现（桩不再被调）', () => {
+    const global = vi.fn((_date: string) => 0)
+    const stub = vi.fn((_date: string) => 1)
+    setWhenHostFunctions({ activeSessions: global })
+    expect(evaluateWhen(CALL, ctx, { activeSessions: stub })).toBe(true)
+    expect(evaluateWhen(CALL, ctx)).toBe(false)
+    expect(global).toHaveBeenCalledTimes(1)
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string, string, () => number]>([
+    ['表达式求值抛错（桩调过之后访问缺失属性）', `${CALL} && event.nope`, () => 1],
+    [
+      '桩自己抛错',
+      CALL,
+      () => {
+        throw new Error('stub exploded')
+      }
+    ],
+    ['结果不是布尔（int）', "activeSessions('2026-10-24')", () => 1]
+  ])('HW-21 %s → evaluateWhen 抛，之后全局实现照旧在位', (_label, expression, impl) => {
+    const global = vi.fn((_date: string) => 5)
+    const stub = vi.fn(impl)
+    setWhenHostFunctions({ activeSessions: global })
+    expect(() => evaluateWhen(expression, ctx, { activeSessions: stub })).toThrow()
+    expect(stub).toHaveBeenCalledTimes(1)
+    expect(global).not.toHaveBeenCalled()
+    expect(evaluateWhen("activeSessions('2026-10-24') == 5", ctx)).toBe(true)
+    expect(global).toHaveBeenCalledTimes(1)
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+
+  it('HW-22 全局没注入：带桩照样能求值；随后不带桩 → throw「not available on this host」', () => {
+    setWhenHostFunctions({})
+    expect(evaluateWhen(CALL, ctx, { activeSessions: () => 1 })).toBe(true)
+    expect(() => evaluateWhen(CALL, ctx)).toThrow('not available on this host')
+  })
+
+  it('HW-23 functions = {} 不动全局：用的还是全局实现', () => {
+    const global = vi.fn((_date: string) => 2)
+    setWhenHostFunctions({ activeSessions: global })
+    expect(evaluateWhen("activeSessions('2026-10-24') == 2", ctx, {})).toBe(true)
+    expect(global).toHaveBeenCalledTimes(1)
+  })
+
+  it('HW-24 编译缓存不捕获实现：同一表达式 桩 / 全局 / 桩 交替，结论跟着变', () => {
+    const expression = "activeSessions('2026-10-24') > 1"
+    setWhenHostFunctions({ activeSessions: () => 0 })
+    expect(evaluateWhen(expression, ctx, { activeSessions: () => 2 })).toBe(true)
+    expect(evaluateWhen(expression, ctx)).toBe(false)
+    expect(evaluateWhen(expression, ctx, { activeSessions: () => 3 })).toBe(true)
+    expect(evaluateWhen(expression, ctx)).toBe(false)
+  })
+
+  it('HW-25 带桩时日期形状不对照样 throw「expects a local date like」，桩不被调用', () => {
+    const stub = vi.fn((_date: string) => 1)
+    expect(() =>
+      evaluateWhen(
+        'activeSessions(event.d) > 0',
+        { event: { d: 'today' }, env: {} },
+        {
+          activeSessions: stub
+        }
+      )
+    ).toThrow("expects a local date like '2026-10-24'")
+    expect(stub).not.toHaveBeenCalled()
   })
 })

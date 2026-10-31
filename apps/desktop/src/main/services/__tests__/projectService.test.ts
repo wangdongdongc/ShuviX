@@ -107,6 +107,22 @@ describe('projectService — 隐藏项目', () => {
  * 环境变量一并抹掉。`create` 那侧则要区分「给了空数组」（明确选了一个库都不要）与「没给」
  * （这个项目还没选过，会话跟着缺省走）。
  */
+describe('projectService — 按名字找项目（bot 触发绑定的 project 键）', () => {
+  it('PN-1 projectsNamed：去掉两头空白、不分大小写，只看没归档的、不含隐藏项目；同名几个回几个', () => {
+    const tiny = project('p1', { name: 'tiny-cli' })
+    const tinyUpper = project('p2', { name: ' Tiny-CLI ' })
+    const other = project('p3', { name: 'tiny-cli-2' })
+    const hidden = project(REGISTRY_NOTE_PROJECT_IDS.bot, { name: 'tiny-cli' })
+    vi.mocked(projectDao.findAllActive).mockReturnValue([tiny, other, hidden, tinyUpper])
+    vi.mocked(projectDao.findAllArchived).mockReturnValue([project('p4', { name: 'archived', archivedAt: 5 })])
+
+    expect(projectService.projectsNamed('TINY-cli ')).toEqual([tiny, tinyUpper])
+    expect(projectService.projectsNamed('tiny-cli-2')).toEqual([other])
+    expect(projectService.projectsNamed('archived')).toEqual([])
+    expect(projectService.projectsNamed('nope')).toEqual([])
+  })
+})
+
 describe('projectService — settings 合并（PS-3 / PS-4）', () => {
   /** projectDao.update 收到的 patch */
   const patch = (): Record<string, unknown> =>

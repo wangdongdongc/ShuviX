@@ -30,13 +30,17 @@
  *   BTL-11 一次 tick 命中几条绑定就记几条，各带自己的 bot / 序号 / 会话；finish 用各自的 id
  *   BTL-12 记日志失败（record 交回 null）不挡运行：照样 prompt、finish(null, …)、lastFired 照推
  *
- * mock 面：botService（listAll 给什么就是什么）、sessionService、settingsService（内存表）、trackingNotes、
+ * 排期预演与触发源同口径（BTS，2026-10-31：bot 文件写入回执里的 Schedule check）：预演算出的第一次命中 M，用
+ * timerPayloadAt(M) 真 fire 一次就起一次运行，M 的前一分钟不起 —— 日记 bot 的条件（全局注入 activeSessions → 1）、
+ * 工作日 09:30；每分钟都触发的那条 M 就是此刻的下一分钟（前一分钟是此刻所在的分钟，在窗口外，不比）。
+ *
+ * mock 面：botService（listAll 给什么就是什么）、projectService（只有 projectsNamed）、sessionService、settingsService（内存表）、trackingNotes、
  * triggerLogService（record / finish 两个桩）、logger。
  * `evaluateWhen` / `renderEventPrompt` / `setWhenHostFunctions` 是真的 —— CEL 的上下文、宿主函数、围栏都按真实走。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { setWhenHostFunctions, type BotBinding } from '@shuvix/agent-runtime'
+import { previewTimerBinding, setWhenHostFunctions, type BotBinding } from '@shuvix/agent-runtime'
 import type { BotEntry } from '../botService'
 
 const mocks = vi.hoisted(() => ({
@@ -56,8 +60,16 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../botService', () => ({ botService: { listAll: mocks.listAll } }))
-// 绑定的 project 按名字找项目（没归档的）：给什么就是什么
-vi.mock('../projectService', () => ({ projectService: { list: () => mocks.projects } }))
+// 绑定的 project 按名字找项目（没归档的）：只给 projectsNamed —— 服务不再自己过滤 list()，免得两处规则分叉
+// （排期预演的项目那一行也用它）。规则本身（去空白、不分大小写）在 projectService.test 的 PN-1；这里照抄一份过滤
+vi.mock('../projectService', () => ({
+  projectService: {
+    projectsNamed: (name: string) =>
+      mocks.projects.filter(
+        (p: { name: string }) => p.name.trim().toLowerCase() === name.trim().toLowerCase()
+      )
+  }
+}))
 vi.mock('../sessionService', () => ({
   sessionService: { create: mocks.create, ensureAgentSession: mocks.ensure }
 }))
@@ -1213,4 +1225,68 @@ describe('BTP 绑定的 project', () => {
       expect(mocks.commit).toHaveBeenCalledTimes(1)
     }
   )
+})
+
+describe('BTS 排期预演与触发源同口径', () => {
+  const savedTz = process.env.TZ
+  beforeEach(() => {
+    process.env.TZ = 'Asia/Shanghai'
+  })
+  afterEach(() => {
+    if (savedTz === undefined) delete process.env.TZ
+    else process.env.TZ = savedTz
+  })
+
+  /** 周六 2026-10-31 12:00:30（本地） */
+  const NOW = (): Date => new Date(2026, 9, 31, 12, 0, 30)
+  const ENV = { host: 'desktop', platform: process.platform }
+
+  /** 预演的第一次命中（本地 `YYYY-MM-DD HH:MM` 与那一分钟的起点） */
+  function firstHit(when: string | undefined): { stamp: string; at: Date } {
+    const preview = previewTimerBinding(when, { now: NOW(), env: ENV })
+    expect(preview.kind, JSON.stringify(preview)).toBe('fires')
+    const first = (preview as Extract<typeof preview, { kind: 'fires' }>).at[0]
+    const at = new Date(first.firedAt)
+    // 预演给的 payload 就是真的 timer 在那一分钟发的
+    expect(timerPayloadAt(at)).toStrictEqual(first)
+    return { stamp: `${first.local.date} ${first.local.time}`, at }
+  }
+
+  it.each([
+    ['日记 bot 的条件（activeSessions 全局注入 → 1）', DAILY_WHEN, '2026-10-31 18:00'],
+    [
+      '工作日 09:30',
+      "event.local.weekday >= 1 && event.local.weekday <= 5 && event.local.time == '09:30'",
+      '2026-11-02 09:30'
+    ]
+  ])(
+    'BTS-1 %s：预演的第一次命中 M 真 fire 起一次运行，M 的前一分钟不起',
+    async (_label, when, stamp) => {
+      setWhenHostFunctions({ activeSessions: () => 1 })
+      mocks.listAll.mockReturnValue([bot('buddy', [{ ...TICK, when }], { displayName: 'Buddy' })])
+      const hit = firstHit(when)
+      expect(hit.stamp).toBe(stamp)
+
+      svc.fire('timer.fired', timerPayloadAt(new Date(hit.at.getTime() - 60_000)))
+      await settle()
+      expect(mocks.create).not.toHaveBeenCalled()
+
+      svc.fire('timer.fired', timerPayloadAt(hit.at))
+      await settle()
+      expect(mocks.create).toHaveBeenCalledTimes(1)
+      expect(mocks.create.mock.calls[0][0]).toMatchObject({ bot: 'buddy' })
+      expect(mocks.prompt).toHaveBeenCalledTimes(1)
+      expect(warnsMatching(/when evaluation failed/)).toEqual([])
+    }
+  )
+
+  it('BTS-2 每分钟都触发（没有 when）：M 是此刻的下一分钟，真 fire 起一次运行', async () => {
+    mocks.listAll.mockReturnValue([bot('buddy', [TICK], { displayName: 'Buddy' })])
+    const hit = firstHit(undefined)
+    expect(hit.stamp).toBe('2026-10-31 12:01')
+    svc.fire('timer.fired', timerPayloadAt(hit.at))
+    await settle()
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ title: 'Buddy · 10-31 12:01' })
+  })
 })

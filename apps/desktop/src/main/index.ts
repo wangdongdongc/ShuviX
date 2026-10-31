@@ -100,6 +100,8 @@ import { activeSessionsOnDay } from './services/sessionDayPromptService'
 import { builtinTimer } from './services/triggerTimer'
 import { botTriggers } from './services/botTriggerService'
 import { botService } from './services/botService'
+import { setBotScheduleProjectLookup } from './services/botScheduleHint'
+import { projectService } from './services/projectService'
 import { sessionService } from './services/sessionService'
 import { settingsService } from './services/settingsService'
 import i18next from 'i18next'
@@ -1114,6 +1116,8 @@ app.whenReady().then(async () => {
   // 内置安全策略 / hook 的停用开关：同一份快照，同样注入（两个服务都不直接依赖数据库）
   policyService.setDisabledReader((objectId) => mdMetaStore.isDisabled(objectId))
   hookService.setDisabledReader((objectId) => mdMetaStore.isDisabled(objectId))
+  // bot 文件写入回执里的排期预演：`project` 对得上几个项目（file 工具不直接依赖 projectService 与数据库）
+  setBotScheduleProjectLookup((name) => projectService.projectsNamed(name).length)
 
   // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
   // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在

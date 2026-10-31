@@ -11,7 +11,7 @@
  *
  * 主进程（桌面与无头）在 main 启动时 `start`，退出时 `stop`。
  */
-import type { TimerFiredPayload } from '@shuvix/agent-runtime'
+import { timerPayloadAt as payloadAt, type TimerFiredPayload } from '@shuvix/agent-runtime'
 import { settingsService } from './settingsService'
 import { createLogger } from '../logger'
 
@@ -26,27 +26,9 @@ export const TIMER_ENABLED_KEY = 'triggers.timer.enabled'
 /** 排到下一分钟起点之后再多等一点，免得计时器提前几毫秒醒来、落在上一分钟里 */
 const ALIGN_SLACK_MS = 50
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-/** 某一刻所在的本地分钟 → 事件 payload */
+/** 某一刻所在的本地分钟 → 事件 payload（agent-runtime 的 timerPayloadAt —— bot 文件的排期预演用的也是它） */
 export function timerPayloadAt(at: Date, sourceId: string = BUILTIN_TIMER_ID): TimerFiredPayload {
-  // 按真实时刻取整到分钟（不用 setSeconds：它按本地时间算，夏令时回拨那一小时里的两个 01:30 会被并成一个）
-  const minute = new Date(Math.floor(at.getTime() / 60_000) * 60_000)
-  const date = `${minute.getFullYear()}-${pad(minute.getMonth() + 1)}-${pad(minute.getDate())}`
-  const time = `${pad(minute.getHours())}:${pad(minute.getMinutes())}`
-  return {
-    sourceId,
-    firedAt: minute.toISOString(),
-    local: {
-      date,
-      time,
-      weekday: minute.getDay(),
-      hour: minute.getHours(),
-      minute: minute.getMinutes()
-    }
-  }
+  return payloadAt(at, sourceId)
 }
 
 /** 内置 timer 此刻开着没有 */

@@ -199,8 +199,7 @@ export class BotTriggerService {
       // 触发日志：改在临时里跑，bot 找不到它要的文件，跑出来的结果只会让人困惑（用户 2026-10-31）
       let workProject: string | undefined
       if (binding.project) {
-        const wanted = binding.project.toLowerCase()
-        const hits = projectService.list().filter((p) => p.name.trim().toLowerCase() === wanted)
+        const hits = projectService.projectsNamed(binding.project)
         if (hits.length !== 1) {
           const error =
             hits.length === 0

@@ -437,6 +437,7 @@ export {
   setWhenHostFunctions,
   type WhenHostFunctions
 } from './hook/when'
+export { timerPayloadAt } from './hook/timerPayload'
 export {
   createHookRunner,
   DEFAULT_HOOK_TIMEOUT_MS,
@@ -479,6 +480,13 @@ export {
   type BotBinding
 } from './bot/botFile'
 export { renderBotContext, BOT_CONTEXT_TAG, type BotContextInput } from './bot/botContext'
+export {
+  botScheduleNote,
+  previewTimerBinding,
+  type ScheduleNoteOptions,
+  type SchedulePreviewOptions,
+  type TimerBindingPreview
+} from './bot/schedulePreview'
 export {
   BUILTIN_BOT_SEEDS,
   DAILY_BOT_ID,

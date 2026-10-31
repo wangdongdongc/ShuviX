@@ -95,7 +95,7 @@ injection lasts for the whole conversation.
 
 ## Trigger bindings (experimental)
 
-`shuvix-bot-on` lets a bot start work without anyone talking to it first. Each binding has three keys:
+`shuvix-bot-on` lets a bot start work without anyone talking to it first. A binding has up to four keys:
 
 - `trigger` — a trigger point id. A bot can bind only trigger points that **belong to no session**; today there is
   one: `timer.fired` (the built-in timer, on out of the box, fires every minute on the minute; Settings → Triggers
@@ -104,7 +104,11 @@ injection lasts for the whole conversation.
   breed sessions.
 - `when` — optional CEL over `{ event, env }`, the same rules as a hook's `when` (see `hook-md`). For `timer.fired`
   the `event` is `{ sourceId, firedAt, local: { date, time, weekday, hour, minute }, trigger }`: compare the local
-  fields (`event.local.time == '18:00'`) and leave time zones alone. You can also call `activeSessions(date)` —
+  fields (`event.local.time == '18:00'`) and leave time zones alone. They are this computer's local time: `date` is
+  `'YYYY-MM-DD'`, `time` is `'HH:MM'` (24-hour, zero-padded), `weekday` is a number from 0 (Sunday) to 6 (Saturday),
+  and `hour` (0–23) and `minute` (0–59) are numbers — weekdays at 09:30 are
+  `event.local.weekday >= 1 && event.local.weekday <= 5 && event.local.time == '09:30'`, Sundays at 20:00 are
+  `event.local.weekday == 0 && event.local.time == '20:00'`. You can also call `activeSessions(date)` —
   how many sessions had a message typed by someone on that local date (messages a trigger sent for a bot, or
   another session sent in, do not count); the function is only queried when evaluation reaches it, so put cheap
   conditions on the left.
@@ -112,6 +116,11 @@ injection lasts for the whole conversation.
 - `project` — optional, the name of the project the run works in (an archived project does not count; letter case
   does not matter). Without it the run gets a temporary workspace. When no project, or more than one, has that name,
   the run is skipped and the trigger log records why. ShuviX versions before this key existed reject a bot file that uses it.
+  There is no need to look the project up before writing: the tool result of the write says whether the name matches.
+
+When an agent writes a bot file, the tool result says when each `timer.fired` binding fires next over the coming
+14 days (a `when` that calls `activeSessions` is checked as if every day had sessions), and says so when a binding
+never fires in that window or its `project` does not name exactly one project.
 
 When a binding fires, ShuviX opens a new session bound to this bot — in the binding's project, or in a temporary
 workspace — (titled "display name · time"; in the sidebar it is folded into the bot's **Scheduled runs** row),

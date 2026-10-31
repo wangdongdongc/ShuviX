@@ -55,6 +55,7 @@ import {
 } from '../services/toolContext'
 import { requestLiveDocument } from '../services/liveDocumentBridge'
 import { agentActorOf, withCallAgent } from '../services/toolAgent'
+import { botScheduleNoteFor } from '../services/botScheduleHint'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { recordRead } from '../utils/toolUtils/fileTime'
 import { bundleRelOf, makeDesktopFileToolDeps } from './fileToolDeps'
@@ -213,7 +214,38 @@ export function parseVerdictOf(sessionId: string, doc: string, text: string): st
   if (!MARKDOWN_RE.test(doc)) return null
   const kind = sessionDocumentKind(sessionId) ?? detectShuvixMarker(text)?.type ?? null
   if (!isParsedShuvixFileKind(kind)) return null
-  return judgeDocument(kind, doc, text).text
+  return joinNotes(
+    judgeDocument(kind, doc, text).text,
+    kind === 'bot' ? scheduleOf(doc, text) : null
+  )
+}
+
+/**
+ * bot 文档的排期预演（botScheduleHint）：每条定时接下来几次什么时候触发 —— doc_read 的判定、编辑器里改动的回执、
+ * 按承载项目改判的回执都附上它（磁盘回落那条已经由写入流程的 writtenNote 附过）。出错就不附：它只是附言
+ */
+function scheduleOf(doc: string, text: string): string | null {
+  try {
+    return botScheduleNoteFor(text, basename(doc))
+  } catch {
+    return null
+  }
+}
+
+/** 这份文档按 bot 文件判（先看承载项目，查不了就只看文件自己的标记 —— 种类查询出错不能连带丢掉解析器那段回执） */
+function botDocument(sessionId: string, text: string): boolean {
+  let kind: string | null = null
+  try {
+    kind = sessionDocumentKind(sessionId)
+  } catch {
+    kind = null
+  }
+  return (kind ?? detectShuvixMarker(text)?.type ?? null) === 'bot'
+}
+
+function joinNotes(...notes: Array<string | null>): string | null {
+  const kept = notes.filter((n): n is string => !!n)
+  return kept.length > 0 ? kept.join('\n\n') : null
 }
 
 /**
@@ -233,7 +265,10 @@ function receiptForCarrier(
     if (!isParsedShuvixFileKind(kind) || !MARKDOWN_RE.test(doc)) return note
     if (detectShuvixMarker(text)?.type === kind) return note
     const verdict = judgeDocument(kind, doc, text)
-    return verdict.clean ? null : verdict.text
+    return joinNotes(
+      verdict.clean ? null : verdict.text,
+      kind === 'bot' ? scheduleOf(doc, text) : null
+    )
   } catch {
     return note
   }
@@ -273,7 +308,7 @@ function liveDiagnostics(
   try {
     const rel = bundleRelOf(doc)
     const now = new Date()
-    return (
+    const review =
       reviewShuvixMdWrite(text, basename(doc).replace(MARKDOWN_RE, ''), {
         sessionId: ctx.sessionId,
         today: now.toISOString().slice(0, 10),
@@ -283,7 +318,7 @@ function liveDiagnostics(
             : undefined,
         diagnoseOnly: true
       })?.note ?? null
-    )
+    return joinNotes(review, botDocument(ctx.sessionId, text) ? scheduleOf(doc, text) : null)
   } catch {
     return null
   }

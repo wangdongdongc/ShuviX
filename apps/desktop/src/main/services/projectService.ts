@@ -55,6 +55,15 @@ export class ProjectService {
     return projectDao.findAllActive().filter((p) => !isHiddenProjectId(p.id))
   }
 
+  /**
+   * 叫这个名字的没归档项目（去掉两头空白、不分大小写）—— bot 触发绑定的 `project` 按它找项目（botTriggerService），
+   * bot 文件写入回执里的排期预演按它说对不对得上（botScheduleHint），两边同一条规则
+   */
+  projectsNamed(name: string): Project[] {
+    const wanted = name.trim().toLowerCase()
+    return this.list().filter((p) => p.name.trim().toLowerCase() === wanted)
+  }
+
   /** 获取已归档项目(不含隐藏项目) */
   listArchived(): Project[] {
     return projectDao.findAllArchived().filter((p) => !isHiddenProjectId(p.id))

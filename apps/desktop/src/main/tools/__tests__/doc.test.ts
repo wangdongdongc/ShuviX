@@ -45,8 +45,19 @@
  *      「doc_read 会说」的种类 = 真给判定的种类；PV-14 标记与载体一致时编辑回执不变
  *   RC 编辑回执按承载项目校正（receiptForCarrier）：载体是 agent / bot / policy / hook 而标记缺了或是别家的，
  *      回执换成按载体那一种判（没事不吭声，有事给 Parse check 那段）；标记一致 / 载体不是这四种 / 查询出错 → 原回执
+ *   SC bot 文档的排期回执（botScheduleNoteFor，编辑器这一侧；磁盘回落那侧在 docDiskFallback.test 的 DF-SC）：
+ *      按 bot 判的文档（载体是 bot，或载体不是 ShuviX 文件而标记是 bot）有定时绑定时，doc_read 的 Parse check 与
+ *      doc_edit / doc_insert 的回执后面恰附一段 `Schedule check`；载体是 agent / policy 的从不附；解析不过的不附。
+ *      SC-1 doc_read：`Parse check: … valid bot file.\n\nSchedule check (…)`（载体 bot / 标记兜底）
+ *      SC-2 doc_read：解析不过 / 没有定时绑定 → 只有 Parse check
+ *      SC-3 载体 policy / agent：带着 bot 标记与定时绑定也没有排期（doc_read、doc_edit）
+ *      SC-4 doc_edit / doc_insert（载体 bot 或标记兜底，标记都在）→ 恰一段，没有 Parse check
+ *      SC-5 载体 bot、没写标记 → 恰一段（干净时没有 Parse check）；带 v1 管线块 → 警告那段 + 排期，各一次
+ *      SC-6 种类查询抛错 + bot 标记 → 写后处理那段照留（RC-7 那条）+ 排期一次
+ *      SC-7 载体 bot、文本是 agent 标记 → 非法那段，没有排期
+ *      SC-8 20:00 改成 21:00 → 回执里是 21:00；排期那段与磁盘回落的逐字相同（同一个 SCHEDULE）
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   LiveDocOp,
   LiveDocResult,
@@ -978,5 +989,164 @@ describe('T6 交给编辑器之前过会话权限表', () => {
     expect(out).toContain('read-only for this session')
     mocks.gateError = null
     mocks.request.mockReset()
+  })
+})
+
+describe('SC bot 文档的排期回执（编辑器这一侧）', () => {
+  const savedTz = process.env.TZ
+  beforeEach(() => {
+    process.env.TZ = 'Asia/Shanghai'
+    // 与 docDiskFallback.test 的 DF-SC 同一刻（那边定在将来，读后被改守卫才不误判）：两边的排期逐字相同
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2030, 10, 2, 12, 0, 30))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    if (savedTz === undefined) delete process.env.TZ
+    else process.env.TZ = savedTz
+  })
+
+  const CONTEXT = '1│---\n2│x'
+  const HEAD = `Replaced at line 1. The text there now:\n${CONTEXT}`
+  const INSERT_HEAD = `Inserted at line 1. The text there now:\n${CONTEXT}`
+  /** 每天 20:00（或给定时刻）一条定时绑定的 bot */
+  const BOT = (
+    time = '20:00',
+    marker: string | null = 'shuvix: bot v2',
+    extra: string[] = []
+  ): string =>
+    [
+      '---',
+      ...(marker === null ? [] : [marker]),
+      'name: buddy',
+      ...extra,
+      'shuvix-bot-on:',
+      '  - trigger: timer.fired',
+      `    when: "event.local.time == '${time}'"`,
+      '    message: Evening check-in.',
+      '---',
+      '',
+      'Persona.',
+      ''
+    ].join('\n')
+  /** 与 docDiskFallback.test 的 DF-SC 那份逐字相同 */
+  const SCHEDULE = (time = '20:00'): string =>
+    'Schedule check (local time, the next 14 days):\n' +
+    `- binding #0 (timer.fired): next at Sat 2030-11-02 ${time}, Sun 2030-11-03 ${time}, Mon 2030-11-04 ${time}.`
+  const schedules = (out: string): number => out.split('Schedule check').length - 1
+
+  /** 跑一次 doc_edit（或 doc_insert），编辑器交回改动后的全文 text；回工具输出 */
+  async function changeWith(text: string, kind: 'edit' | 'insert' = 'edit'): Promise<string> {
+    mocks.request.mockResolvedValueOnce({
+      ok: true,
+      kind,
+      line: 1,
+      context: CONTEXT,
+      waitedMs: 0,
+      text
+    })
+    return kind === 'edit'
+      ? run(editTool(), { find: 'a', replace: 'b' })
+      : run(insertTool(), { text: 'b' })
+  }
+
+  it.each([
+    ['载体 bot', 'bot'],
+    ['载体不是 ShuviX 文件，按标记兜底', null]
+  ])(
+    'SC-1 doc_read 合法 bot（%s）→ 最后是 `Parse check: … valid bot file.` + 空行 + 排期，各一次',
+    async (_label, kind) => {
+      mocks.doc = '/x/bots/buddy.md'
+      mocks.kind = kind
+      const out = await readWith(readResult(BOT()))
+      expect(out.endsWith(`\n\n${VALID_VERDICT('bot')}\n\n${SCHEDULE()}`)).toBe(true)
+      expect(schedules(out)).toBe(1)
+      expect(out.split('Parse check:')).toHaveLength(2)
+    }
+  )
+
+  it('SC-2 doc_read：解析不过的 bot / 没有定时绑定 → 只有 Parse check', async () => {
+    mocks.doc = '/x/bots/buddy.md'
+    mocks.kind = 'bot'
+    const broken = BOT().replace(
+      'shuvix-bot-on:\n',
+      'shuvix-bot-on:\n  - trigger: session.turn-completed\n    message: Hi.\n'
+    )
+    const invalid = await readWith(readResult(broken))
+    expect(verdictIn(invalid)!.startsWith(INVALID_HEAD('a bot file'))).toBe(true)
+    expect(schedules(invalid)).toBe(0)
+
+    const plain = await readWith(readResult('---\nshuvix: bot v2\nname: buddy\n---\n\nPersona.\n'))
+    expect(verdictIn(plain)).toBe(VALID_VERDICT('bot'))
+    expect(schedules(plain)).toBe(0)
+  })
+
+  it.each([['policy'], ['agent']])(
+    'SC-3 载体 %s：文本带着 bot 标记与定时绑定，doc_read 与 doc_edit 都没有排期',
+    async (kind) => {
+      mocks.doc = `/x/${kind}s/buddy.md`
+      mocks.kind = kind
+      const read = await readWith(readResult(BOT()))
+      expect(verdictIn(read)).not.toBeNull()
+      expect(schedules(read)).toBe(0)
+      const edited = await changeWith(BOT())
+      expect(schedules(edited)).toBe(0)
+    }
+  )
+
+  it.each([
+    ['载体 bot', 'bot'],
+    ['载体不是 ShuviX 文件，按标记兜底', null]
+  ])(
+    'SC-4 doc_edit / doc_insert 合法 bot（%s，带标记）→ 恰一段排期，没有 Parse check',
+    async (_label, kind) => {
+      mocks.doc = '/x/bots/buddy.md'
+      mocks.kind = kind
+      expect(await changeWith(BOT(), 'edit')).toBe(`${HEAD}\n\n${SCHEDULE()}`)
+      expect(await changeWith(BOT(), 'insert')).toBe(`${INSERT_HEAD}\n\n${SCHEDULE()}`)
+    }
+  )
+
+  it('SC-5 载体 bot、没写标记：干净 → 恰一段排期、没有 Parse check；带 v1 管线块 → 警告那段 + 排期，各一次', async () => {
+    mocks.doc = '/x/bots/buddy.md'
+    mocks.kind = 'bot'
+    expect(await changeWith(BOT('20:00', null))).toBe(`${HEAD}\n\n${SCHEDULE()}`)
+
+    const warned = await changeWith(BOT('20:00', null, ['shuvix-bot-pipeline:', '  - step: chat']))
+    expect(warned.startsWith(`${HEAD}\n\n${WARNED_HEAD('bot')}`)).toBe(true)
+    expect(warned.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(warned.split('Parse check:')).toHaveLength(2)
+    expect(schedules(warned)).toBe(1)
+  })
+
+  it('SC-6 种类查询抛错 + bot 标记 → 写后处理那段照留（RC-7）、排期一次', async () => {
+    mocks.doc = '/x/bots/buddy.md'
+    mocks.kindThrows = true
+    const out = await changeWith(
+      BOT('20:00', 'shuvix: bot v1', ['shuvix-bot-pipeline:', '  - step: chat'])
+    )
+    expect(out.startsWith(`${HEAD}\n\n[shuvix bot v1] Written with parser warnings:\n- `)).toBe(
+      true
+    )
+    expect(out.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(schedules(out)).toBe(1)
+    expect(out).not.toContain('Parse check')
+  })
+
+  it('SC-7 载体 bot、文本是 agent 标记（带着定时绑定）→ 非法那段，没有排期', async () => {
+    mocks.doc = '/x/bots/buddy.md'
+    mocks.kind = 'bot'
+    const out = await changeWith(BOT('20:00', 'shuvix: agent v1'))
+    expect(out.startsWith(`${HEAD}\n\n${INVALID_HEAD('a bot file')}`)).toBe(true)
+    expect(schedules(out)).toBe(0)
+  })
+
+  it('SC-8 20:00 改成 21:00 → 回执里是 21:00（排期那段与磁盘回落 DF-SC 的逐字相同）', async () => {
+    mocks.doc = '/x/bots/buddy.md'
+    mocks.kind = 'bot'
+    expect(await changeWith(BOT('20:00'))).toBe(`${HEAD}\n\n${SCHEDULE('20:00')}`)
+    const later = await changeWith(BOT('21:00'))
+    expect(later).toBe(`${HEAD}\n\n${SCHEDULE('21:00')}`)
+    expect(later).not.toContain('20:00')
   })
 })

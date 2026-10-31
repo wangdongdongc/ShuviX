@@ -63,9 +63,25 @@ export function compileWhen(expression: string): string | null {
   }
 }
 
-/** 求值 `when`。要求严格布尔；错误/非布尔向上抛，由 runner 按「不命中 + 告警」兜底 */
-export function evaluateWhen(expression: string, context: Record<string, unknown>): boolean {
-  const result = program(expression)(context)
+/**
+ * 求值 `when`。要求严格布尔；错误/非布尔向上抛，由 runner 按「不命中 + 告警」兜底。
+ *
+ * `functions` 只给这一次求值换掉宿主函数（排期预演要假设「那天有会话」，不能动全局那份 —— 真的触发源还在用它）。
+ * 求值是同步的，换上与换回之间不会插进别的求值
+ */
+export function evaluateWhen(
+  expression: string,
+  context: Record<string, unknown>,
+  functions?: Partial<WhenHostFunctions>
+): boolean {
+  const saved = hostFunctions
+  if (functions) hostFunctions = { ...hostFunctions, ...functions }
+  let result: unknown
+  try {
+    result = program(expression)(context)
+  } finally {
+    hostFunctions = saved
+  }
   if (typeof result !== 'boolean') {
     throw new Error(`when expression must evaluate to a boolean, got ${typeof result}`)
   }

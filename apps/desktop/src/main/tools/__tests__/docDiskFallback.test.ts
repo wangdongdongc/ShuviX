@@ -31,8 +31,16 @@
  *   RC-6  策略载体（sessionDocumentKind 替身给 policy）里没写标记的策略，改坏了 → 回执是按载体判的
  *         `Parse check: … cannot parse … as a policy file`，不是写后处理那段（它只认文件自己的标记）；
  *         随后的 doc_read 把同一句判定接在「没开着」之后
+ *   DF-SC bot 文档的排期回执（磁盘这一侧；编辑器那侧在 doc.test 的 SC）：时钟只假 Date、定在将来（读后被改守卫拿
+ *         真实 mtime 比假的读取时刻），与 doc.test 的 SC 同一刻 —— 两边的 SCHEDULE 逐字相同
+ *     DF-SC1 doc_read 合法 bot（载体 bot）→ 「没开着」+ `Parse check: … valid bot file.` + 排期
+ *     DF-SC2 bots 目录里 doc_edit / doc_insert（带标记）→ 恰一段排期（写后处理的 writtenNote 给的）
+ *     DF-SC3 载体 bot、没写标记 → 恰一段（按载体改判时换掉、不叠两段）；载体不是 ShuviX 文件、没写标记 →
+ *            bots 目录里恰一段（只有写盘那段的目录规则认得出）、目录外没有
+ *     DF-SC4 载体不是 ShuviX 文件、bots 目录外、bot 标记 → 恰一段，与编辑器那侧同一段
+ *     DF-SC5 20:00 改成 21:00 → 回执里是 21:00
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   existsSync,
   mkdirSync,
@@ -60,6 +68,8 @@ const SID = 'doc-disk-session'
 const state = vi.hoisted(() => ({
   dir: '',
   kb: '',
+  /** bots 目录替身（getDefaultBotsDir）：没有它，写盘回执里的排期（botScheduleHint）会悄悄缺席 */
+  bots: '',
   /** resolveSessionDocument 的答复（null = 这条会话没有文档） */
   doc: null as string | null,
   /** sessionDocumentKind 的答复（会话的承载项目是哪种 ShuviX 文件；null = 不是）；每条用例复位成 null */
@@ -122,7 +132,8 @@ vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.kb,
   getUserKnowledgeRootDir: () => `${state.kb}-user`,
   getBuiltinKnowledgeDir: () => `${state.kb}-builtin`,
-  getToolResultsDir: () => join(state.dir, 'tool_results')
+  getToolResultsDir: () => join(state.dir, 'tool_results'),
+  getDefaultBotsDir: () => state.bots
 }))
 // 内置库的语言目录从 i18next 现读：钉成 en（同 fileToolDepsKnowledge.test）
 vi.mock('i18next', () => ({ default: { language: 'en', t: (key: string) => `i18n(${key})` } }))
@@ -203,6 +214,8 @@ beforeAll(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-doc-disk-'))
   state.kb = join(state.dir, 'kb')
   mkdirSync(join(`${state.kb}-user`, 'notes'), { recursive: true })
+  state.bots = join(state.dir, 'bots')
+  mkdirSync(state.bots, { recursive: true })
 })
 afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
@@ -570,5 +583,135 @@ describe('RC-6 磁盘回落的编辑回执按承载项目校正', () => {
 
     const read = await ok(executeTool(readTool(), 'rc6-read', {}))
     expect(read).toContain(`\n\n${NOT_OPEN}\n\n${head}`)
+  })
+})
+
+describe('DF-SC 磁盘回落的排期回执', () => {
+  const savedTz = process.env.TZ
+  beforeEach(() => {
+    process.env.TZ = 'Asia/Shanghai'
+    // 定在将来：读后被改守卫拿文件真实的 mtime 比读取时记下的（假的）时刻；与 doc.test 的 SC 同一刻
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2030, 10, 2, 12, 0, 30))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    if (savedTz === undefined) delete process.env.TZ
+    else process.env.TZ = savedTz
+  })
+
+  /** 每天 20:00（或给定时刻）一条定时绑定的 bot（与 doc.test 的 SC 那份同形） */
+  const BOT = (time = '20:00', marker: string | null = 'shuvix: bot v2'): string =>
+    [
+      '---',
+      ...(marker === null ? [] : [marker]),
+      'name: buddy',
+      'shuvix-bot-on:',
+      '  - trigger: timer.fired',
+      `    when: "event.local.time == '${time}'"`,
+      '    message: Evening check-in.',
+      '---',
+      '',
+      'Persona.',
+      ''
+    ].join('\n')
+  /** 与 doc.test 的 SC 那份逐字相同 */
+  const SCHEDULE = (time = '20:00'): string =>
+    'Schedule check (local time, the next 14 days):\n' +
+    `- binding #0 (timer.fired): next at Sat 2030-11-02 ${time}, Sun 2030-11-03 ${time}, Mon 2030-11-04 ${time}.`
+  const schedules = (out: string): number => out.split('Schedule check').length - 1
+
+  /** bots 目录里的一份文档，设成这条会话的文档 */
+  function seedBot(content: string, name: string): string {
+    const p = join(state.bots, name)
+    writeFileSync(p, content)
+    state.doc = p
+    return p
+  }
+
+  it('DF-SC1 doc_read 合法 bot（载体 bot）→ 「没开着」+ Parse check + 排期，各一次', async () => {
+    state.kind = 'bot'
+    seedBot(BOT(), 'sc1.md')
+    const out = await ok(executeTool(readTool(), 'sc1', {}))
+    expect(
+      out.endsWith(
+        `\n\n${NOT_OPEN}\n\nParse check: ShuviX parses this document as a valid bot file.\n\n${SCHEDULE()}`
+      )
+    ).toBe(true)
+    expect(schedules(out)).toBe(1)
+  })
+
+  it.each([
+    ['载体 bot', 'bot'],
+    ['载体不是 ShuviX 文件', null]
+  ])('DF-SC2 bots 目录里 doc_edit / doc_insert（带标记，%s）→ 恰一段排期', async (_label, kind) => {
+    state.kind = kind
+    const p = seedBot(BOT(), `sc2-${kind}.md`)
+    const edited = await ok(
+      executeTool(editTool(), 'sc2e', { find: 'Persona.', replace: 'Persona, kinder.' })
+    )
+    expect(edited.startsWith('Replaced at line ')).toBe(true)
+    expect(edited.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(schedules(edited)).toBe(1)
+    expect(edited).not.toContain('Parse check')
+
+    const inserted = await ok(executeTool(insertTool(), 'sc2i', { text: 'More persona.\n' }))
+    expect(inserted.startsWith('Inserted at line ')).toBe(true)
+    expect(inserted.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(schedules(inserted)).toBe(1)
+    expect(bytes(p)).toContain('Persona, kinder.\nMore persona.\n')
+  })
+
+  it('DF-SC3 载体 bot、没写标记 → 恰一段（按载体改判时换掉写盘那段，不叠两段）', async () => {
+    state.kind = 'bot'
+    seedBot(BOT('20:00', null), 'sc3.md')
+    const out = await ok(
+      executeTool(editTool(), 'sc3', { find: 'Persona.', replace: 'Persona, kinder.' })
+    )
+    expect(out.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(schedules(out)).toBe(1)
+    expect(out).not.toContain('Parse check')
+  })
+
+  it('DF-SC3 载体不是 ShuviX 文件、没写标记、在 bots 目录里 → 恰一段（只有写盘那段认得出：靠 getDefaultBotsDir）', async () => {
+    state.kind = null
+    seedBot(BOT('20:00', null), 'sc3b.md')
+    const out = await ok(
+      executeTool(editTool(), 'sc3b', { find: 'Persona.', replace: 'Persona, kinder.' })
+    )
+    expect(out.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(schedules(out)).toBe(1)
+
+    // 对照：同一份文本放在 bots 目录外 → 没有排期
+    seedDoc(BOT('20:00', null), 'sc3c.md')
+    const elsewhere = await ok(
+      executeTool(editTool(), 'sc3c', { find: 'Persona.', replace: 'Persona, kinder.' })
+    )
+    expect(schedules(elsewhere)).toBe(0)
+  })
+
+  it('DF-SC4 载体不是 ShuviX 文件、bots 目录外（notes/）、bot 标记 → 恰一段，与编辑器那侧（doc.test SC）同一段', async () => {
+    state.kind = null
+    const p = seedDoc(BOT(), 'sc4.md')
+    expect(p.startsWith(state.bots)).toBe(false)
+    const out = await ok(
+      executeTool(editTool(), 'sc4', { find: 'Persona.', replace: 'Persona, kinder.' })
+    )
+    expect(out.endsWith(`\n\n${SCHEDULE()}`)).toBe(true)
+    expect(schedules(out)).toBe(1)
+  })
+
+  it('DF-SC5 20:00 改成 21:00 → 回执里是 21:00', async () => {
+    state.kind = 'bot'
+    const p = seedBot(BOT('20:00'), 'sc5.md')
+    const out = await ok(
+      executeTool(editTool(), 'sc5', {
+        find: "event.local.time == '20:00'",
+        replace: "event.local.time == '21:00'"
+      })
+    )
+    expect(bytes(p)).toBe(BOT('21:00'))
+    expect(out.endsWith(`\n\n${SCHEDULE('21:00')}`)).toBe(true)
+    expect(schedules(out)).toBe(1)
   })
 })

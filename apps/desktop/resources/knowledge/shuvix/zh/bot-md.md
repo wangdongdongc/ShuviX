@@ -82,18 +82,25 @@ talking about, and you never pad feedback with praise.
 
 ## 触发绑定（实验）
 
-`shuvix-bot-on` 让 bot 不等人开口就开工。每条绑定三个键：
+`shuvix-bot-on` 让 bot 不等人开口就开工。每条绑定最多四个键：
 
 - `trigger` —— 触发点 id。bot 只能绑**不属于任何会话**的触发点，今天只有一个：`timer.fired`（内置定时器，开箱即开，
   每分钟整分触发一次；设置 → 触发源 里可以关）。会话里的触发点（`session.*`、`permission.request`）归 hook 用，
   绑了整份文件非法 —— 每次触发都会新开一条会话，绑会话里的事件等于让会话自己生会话。
 - `when` —— 可选的 CEL，看到 `{ event, env }`，与 hook 的 `when` 同一套规则（见 `hook-md`）。`timer.fired` 的
   `event` 是 `{ sourceId, firedAt, local: { date, time, weekday, hour, minute }, trigger }`：直接比本地字段
-  （`event.local.time == '18:00'`），不必碰时区。还能调用 `activeSessions(date)` —— 那个本地日有人写过消息的会话数
+  （`event.local.time == '18:00'`），不必碰时区。它们是这台电脑的本地时间：`date` 是 `'YYYY-MM-DD'`，`time` 是
+  `'HH:MM'`（24 小时制、补零），`weekday` 是数字，0 是周日、6 是周六，`hour`（0–23）和 `minute`（0–59）也是数字
+  —— 工作日 09:30 写 `event.local.weekday >= 1 && event.local.weekday <= 5 && event.local.time == '09:30'`，
+  每周日 20:00 写 `event.local.weekday == 0 && event.local.time == '20:00'`。还能调用 `activeSessions(date)` —— 那个本地日有人写过消息的会话数
   （触发器替 bot 发的、别的会话发进来的不算）；函数只在求值走到它时才查，便宜的条件写在左边。
 - `message` —— 必填，命中时发给 bot 的话。
 - `project` —— 可选，这次运行在哪个项目里干活，写项目名（归档了的项目不算，大小写不敏感）。不写就是临时工作区。
   没有这个名字的项目、或有不止一个同名项目时，这一次不跑，触发日志里写明原因。还不认这个键的旧版 ShuviX 会整份拒绝用了它的 bot 文件。
+  写之前不必先去查这个项目在不在：写下文件后的工具结果会说这个名字对不对得上。
+
+agent 写下一份 bot 文件时，工具结果里会说每条 `timer.fired` 绑定接下来 14 天里哪几次触发（调用了 `activeSessions`
+的 `when` 按每天都有会话来算）；一次都不触发、或 `project` 对不上恰好一个项目时也会明说。
 
 命中时 ShuviX 新开一条绑定这个 bot 的会话 —— 在绑定写的项目里，或在临时工作区里（标题是「显示名 · 触发时间」；侧栏里它
 折在这个 bot 的「定时运行」那一行下面），把 `message` 作为来源为

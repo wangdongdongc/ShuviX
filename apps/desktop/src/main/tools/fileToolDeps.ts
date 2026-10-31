@@ -27,6 +27,7 @@ import { appEventBus } from '../utils/appEventBus'
 import { isBuiltinBundle, locateBundle } from '../services/knowledge/knowledgePaths'
 import { t } from '../i18n'
 import { policyCheckHint } from '../services/policyCheckHint'
+import { botScheduleHint } from '../services/botScheduleHint'
 
 export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit); local HTML (.html/.htm) files are read as text source, not auto-converted. For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
@@ -85,8 +86,9 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
         return null
       }
     },
-    // 写下一份管远程访问或自动脱敏的策略 → 回执里提一句 `shuvix policy check`（policyCheckHint.ts）
-    writtenNote: policyCheckHint,
+    // 写下一份管远程访问或自动脱敏的策略 → 回执里提一句 `shuvix policy check`（policyCheckHint.ts）；
+    // 写下一份 bot 文件 → 它的定时接下来几次什么时候触发（botScheduleHint.ts）
+    writtenNote: (path, text) => policyCheckHint(path, text) ?? botScheduleHint(path, text),
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
