@@ -10,8 +10,8 @@
  *       （等那条消息随视图到达）
  *   C-4 closed / not-found / failed（带原因）/ promise reject 各显示自己的那句错误，按钮重新可点
  *   C-5 accepted：那张卡标「已采纳」（`data-suggestion-accepted`），其余压淡，没有任何按钮
- *   C-6 closed（有 Provider）：没有按钮，卡片压淡，底下一句「对话已经往下走了」
- *   C-7 只读：宿主没有 suggestion API → 没有按钮（开着也一样）；没有 Provider → 没有按钮、也没有那句「已关闭」；
+ *   C-6 closed（有 Provider）：没有按钮，卡片压淡
+ *   C-7 只读：宿主没有 suggestion API → 没有按钮（开着也一样）；没有 Provider → 没有按钮；
  *       Provider 里没有这一组的状态 → 当作关了
  *   C-8 参数里一条合法的都没有 → 什么都不画
  *   C-9 放在 AssistantBubble 里：落定的提议画在卡片最底下、终答之后，不进步骤组（两侧的 read 并成一组，计数不含它）；
@@ -149,7 +149,6 @@ const messages = (): string[] =>
   [...container.querySelectorAll('[data-suggestion-message]')].map((el) => el.textContent ?? '')
 const errorText = (): string | null =>
   container.querySelector('[data-suggestion-error]')?.textContent ?? null
-const closedNote = (): boolean => (container.textContent ?? '').includes(en.suggestion.closed)
 const dimmed = (el: HTMLElement): boolean => el.className.split(/\s+/).includes('opacity-50')
 
 interface Deferred<T> {
@@ -196,7 +195,6 @@ describe('C-1 开着：每条一张卡、一颗按钮', () => {
     expect(cards()[1]!.textContent).toContain('Update docs')
     expect(container.textContent).toContain(en.suggestion.header)
     expect(cards().some(dimmed)).toBe(false)
-    expect(closedNote()).toBe(false)
     expect(errorText()).toBeNull()
   })
 
@@ -271,7 +269,7 @@ describe('C-4 采纳没成', () => {
 // ─── C-5 / C-6 / C-7 / C-8 ────────────────────────────────
 
 describe('C-5 / C-6 采纳了 / 关了', () => {
-  it('C-5 accepted index 1：那张卡标「已采纳」、不压淡；其余压淡；没有任何按钮；没有「已关闭」', () => {
+  it('C-5 accepted index 1：那张卡标「已采纳」、不压淡；其余压淡；没有任何按钮', () => {
     renderCards({ status: 'accepted', index: 1 })
     expect(
       container.querySelector('[data-suggestions]')!.getAttribute('data-suggestion-state')
@@ -285,18 +283,16 @@ describe('C-5 / C-6 采纳了 / 关了', () => {
       expect(other.hasAttribute('data-suggestion-accepted')).toBe(false)
       expect(dimmed(other)).toBe(true)
     }
-    expect(closedNote()).toBe(false)
     // 要发的话照样都在
     expect(messages()).toStrictEqual(ITEMS.map((i) => i.message))
   })
 
-  it('C-6 closed（有 Provider）：没有按钮、都压淡、底下一句「已关闭」', () => {
+  it('C-6 closed（有 Provider）：没有按钮、都压淡', () => {
     renderCards({ status: 'closed' })
     expect(buttons()).toHaveLength(0)
     expect(cards()).toHaveLength(3)
     expect(cards().every(dimmed)).toBe(true)
     expect(container.querySelector('[data-suggestion-accepted]')).toBeNull()
-    expect(closedNote()).toBe(true)
   })
 })
 
@@ -307,14 +303,12 @@ describe('C-7 只读', () => {
     expect(cards()).toHaveLength(3)
     expect(buttons()).toHaveLength(0)
     expect(messages()).toStrictEqual(ITEMS.map((i) => i.message))
-    expect(closedNote()).toBe(false)
   })
 
-  it('C-7 没有 Provider：没有按钮，也没有「已关闭」那句（不知道会话往下走了没有）', () => {
+  it('C-7 没有 Provider：没有按钮', () => {
     renderCards(undefined)
     expect(cards()).toHaveLength(3)
     expect(buttons()).toHaveLength(0)
-    expect(closedNote()).toBe(false)
   })
 
   it('C-7 Provider 里没有这一组的状态 → 当作关了', () => {
@@ -323,7 +317,6 @@ describe('C-7 只读', () => {
     expect(
       container.querySelector('[data-suggestions]')!.getAttribute('data-suggestion-state')
     ).toBe('closed')
-    expect(closedNote()).toBe(true)
   })
 })
 

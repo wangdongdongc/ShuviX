@@ -1779,7 +1779,6 @@
     "accept": "Accept",
     "accepted": "Accepted",
     "willSend": "Sends",
-    "closed": "The conversation moved on; these can no longer be accepted",
     "errorClosed": "This suggestion can no longer be accepted",
     "errorNotFound": "This suggestion could not be found",
     "errorFailed": "Could not send it: {{error}}"

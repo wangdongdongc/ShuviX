@@ -141,10 +141,6 @@ export function SuggestionCards({
           </div>
         )
       })}
-      {/* 没有 Provider（别处借用这张卡）时不知道会话往下走了没有，不说「已继续」 */}
-      {state.status === 'closed' && ctx && (
-        <div className="text-[11px] text-text-tertiary">{t('suggestion.closed')}</div>
-      )}
       {error && (
         <div data-suggestion-error className="text-[11px] text-error">
           {error}

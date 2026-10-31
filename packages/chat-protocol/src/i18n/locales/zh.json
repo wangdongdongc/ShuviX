@@ -1779,7 +1779,6 @@
     "accept": "采纳",
     "accepted": "已采纳",
     "willSend": "采纳后发送",
-    "closed": "对话已经继续，这些提议不能再采纳",
     "errorClosed": "这条提议已经不能采纳了",
     "errorNotFound": "找不到这条提议",
     "errorFailed": "没能发送：{{error}}"

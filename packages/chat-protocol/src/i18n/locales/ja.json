@@ -1779,7 +1779,6 @@
     "accept": "採用",
     "accepted": "採用済み",
     "willSend": "採用すると送信",
-    "closed": "会話が進んだため、これらの提案はもう採用できません",
     "errorClosed": "この提案はもう採用できません",
     "errorNotFound": "この提案が見つかりません",
     "errorFailed": "送信できませんでした：{{error}}"

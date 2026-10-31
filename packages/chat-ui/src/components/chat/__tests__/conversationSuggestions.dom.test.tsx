@@ -3,7 +3,7 @@
  * 提议卡片在真的 Conversation 里（`suggest` 工具，2026-10-25；jsdom）：Conversation → `suggestionStatesOf(messages)` →
  * `SuggestionContext` → AssistantBubble → SuggestionCards。状态不另存，全从视图里的消息读出，所以会话视图一变卡片就跟着变。
  *
- *   C-10 只有那组提议、之后没人说话 → 开着（按钮可点）；之后来了一条用户消息 → 关了（没有按钮、一句「已关闭」）；
+ *   C-10 只有那组提议、之后没人说话 → 开着（按钮可点）；之后来了一条用户消息 → 关了（没有按钮）；
  *        之后那条用户消息的来源带着指向它的引用 → 采纳（那张卡 `data-suggestion-accepted`，其余压淡）；之后只来了一条
  *        系统通知（后台完成）→ 什么都不变，仍开着；点按钮带的是这条会话的 id
  *
@@ -181,14 +181,13 @@ describe('C-10 卡片状态跟着会话视图走', () => {
     ])
   })
 
-  it('C-10 之后来了一条用户消息 → 关了：没有按钮，一句「已关闭」', () => {
+  it('C-10 之后来了一条用户消息 → 关了：没有按钮', () => {
     load(history())
     render()
     expect(buttons()).toHaveLength(2)
     load(history(user('u2', 'something else', SID)))
     expect(group()!.getAttribute('data-suggestion-state')).toBe('closed')
     expect(buttons()).toHaveLength(0)
-    expect(container.textContent).toContain(en.suggestion.closed)
   })
 
   it('C-10 之后那条用户消息的来源带着指向它的引用 → 采纳：那张卡标已采纳，另一张压淡', () => {
