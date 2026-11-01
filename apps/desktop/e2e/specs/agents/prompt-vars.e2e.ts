@@ -22,7 +22,11 @@ describe('内置基座 body 的变量替换', () => {
     const { systemPrompt: sp } = await createAgentSession(app.main)
     expect(sp).not.toContain('{{shuvix:')
     expect(sp).toContain(`Platform: ${platform()}`)
-    expect(sp).toContain(new Date().toISOString().slice(0, 10))
+    // 提示词里的日期是**本地**日期（agent-runtime dateNotice 的写法）；toISOString 是 UTC，在美西的
+    // 17:00–24:00 两者差一天，这条曾因此每晚失败
+    const now = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    expect(sp).toContain(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`)
     expect(sp).toMatch(/\n- Working directory: \//)
     expect(sp).not.toMatch(/\n{3,}/)
     expect(sp).toBe(sp.trim())

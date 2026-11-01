@@ -132,6 +132,13 @@ describe('dragging the right panel divider over a widget', () => {
     const rect = (await divider.widgetFrameRect(WIDGET))!
     const yMid = rect.top + rect.height / 2
 
+    // 组件画好（发了就绪信号）之前 iframe 是透明且 pointer-events: none 的（WidgetFrame，7ac18bd5）——
+    // 那时点不到它。等它亮出来，测的才是报告里「拖过一个看得见的组件」的场景
+    await until(
+      async () => (await divider.hitAt(x0 + DX, yMid)) === 'widget-iframe' || null,
+      'widget frame revealed'
+    )
+
     // 前提：拖动经过的三个点都在组件 iframe 上（不然测的就不是报告里的场景）
     const hits: string[] = []
     for (let i = 1; i <= 3; i++) hits.push(await divider.hitAt(x0 + i * DX, yMid))
