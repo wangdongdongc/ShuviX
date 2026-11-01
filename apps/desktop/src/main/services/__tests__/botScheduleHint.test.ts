@@ -24,6 +24,14 @@
  *   BSH-11 env 与触发源一致：env.host == 'desktop' && env.platform == process.platform
  *   BSH-12 BOM + CRLF 的文本 → 与 LF 同一段
  *   BSH-13 getDefaultBotsDir 抛错 → null，不抛
+ *
+ * 排期之后接定时运行的权限核对（botAccessHint 注入的核对，文字在 botAccessCheck / agent-runtime 的 accessCheck）：
+ *   BSH-14 botFileNoteFor：排期那段、一个空行、权限核对那段；核对回 null → 只有排期；没有排期 → 只有核对
+ *   BSH-15 botScheduleHint 交给 forBotFile 的是绝对路径（不是 basename）；`<bots>/archived/` 里的从不调
+ *   BSH-16 核对抛错 → 排期照给
+ *   BSH-17 真的 createBotAccessChecker（试算替身一调就炸）：只有惰性埋点的 bot → 没有排期、没有核对、不试算；
+ *          对照：有定时的 bot → 试算被调（炸了）→ 排期照给
+ *   （注入核对是模块级状态：每条用例之后 setBotAccessChecker(null)，上面那批的期望只在没注入时成立）
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -40,10 +48,13 @@ vi.mock('../../utils/paths', () => ({
 }))
 
 import {
+  botFileNoteFor,
   botScheduleHint,
   botScheduleNoteFor,
   setBotScheduleProjectLookup
 } from '../botScheduleHint'
+import { setBotAccessChecker } from '../botAccessHint'
+import { createBotAccessChecker, type BotAccessChecker } from '../botAccessCheck'
 
 let root = ''
 const savedTz = process.env.TZ
@@ -63,6 +74,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   setBotScheduleProjectLookup(undefined)
+  setBotAccessChecker(null)
   if (savedTz === undefined) delete process.env.TZ
   else process.env.TZ = savedTz
 })
@@ -246,5 +258,89 @@ describe('botScheduleHint —— 项目查找与 env', () => {
     state.botsThrows = true
     expect(() => botScheduleHint(inBots('buddy.md'), daily('shuvix: bot v2'))).not.toThrow()
     expect(botScheduleHint(inBots('buddy.md'), daily('shuvix: bot v2'))).toBeNull()
+  })
+})
+
+describe('botScheduleHint —— 接着的权限核对', () => {
+  const stub = (
+    forBotFile: BotAccessChecker['forBotFile']
+  ): { forBotFile: ReturnType<typeof vi.fn<BotAccessChecker['forBotFile']>> } => {
+    const checker = {
+      forBotFile: vi.fn<BotAccessChecker['forBotFile']>(forBotFile),
+      forPolicyFile: vi.fn<BotAccessChecker['forPolicyFile']>(() => null),
+      forBotName: vi.fn<BotAccessChecker['forBotName']>(() => ({ text: '' }))
+    }
+    setBotAccessChecker(checker)
+    return checker
+  }
+  const inert = botText([
+    'name: buddy',
+    'shuvix-bot-on:',
+    '  - trigger: no.such.trigger',
+    '    message: Never.'
+  ])
+
+  it('BSH-14 botFileNoteFor：排期、一个空行、核对；核对回 null → 只有排期；没有排期 → 只有核对', () => {
+    stub(() => 'ACCESS')
+    expect(botFileNoteFor(daily(null), inBots('buddy.md'))).toBe(`${NOTE}\n\nACCESS`)
+    expect(botFileNoteFor(inert, inBots('buddy.md'))).toBe('ACCESS')
+    stub(() => null)
+    expect(botFileNoteFor(daily(null), inBots('buddy.md'))).toBe(NOTE)
+    expect(botFileNoteFor(inert, inBots('buddy.md'))).toBeNull()
+  })
+
+  it('BSH-15 botScheduleHint 交给 forBotFile 的是绝对路径；bots 目录外带标记的也是；archived 里的从不调', () => {
+    const checker = stub(() => 'ACCESS')
+    const text = daily(null)
+    expect(botScheduleHint(inBots('buddy.md'), text)).toBe(`${NOTE}\n\nACCESS`)
+    const marked = daily('shuvix: bot v2')
+    expect(botScheduleHint(outside('pal.md'), marked)).toBe(`${NOTE}\n\nACCESS`)
+    expect(checker.forBotFile.mock.calls).toEqual([
+      [text, inBots('buddy.md')],
+      [marked, outside('pal.md')]
+    ])
+
+    checker.forBotFile.mockClear()
+    expect(botScheduleHint(join(state.bots, 'archived', 'buddy.md'), marked)).toBeNull()
+    expect(checker.forBotFile).not.toHaveBeenCalled()
+  })
+
+  it('BSH-16 核对抛错 → 排期照给', () => {
+    stub(() => {
+      throw new Error('policy scan failed')
+    })
+    expect(botScheduleHint(inBots('buddy.md'), daily(null))).toBe(NOTE)
+    expect(botFileNoteFor(daily(null), inBots('buddy.md'))).toBe(NOTE)
+  })
+
+  it('BSH-17 真的核对：只有惰性埋点的 bot → 没有排期、没有核对、不试算；有定时的 → 试算被调（炸了）、排期照给', () => {
+    const trial = vi.fn((): never => {
+      throw new Error('trial must not be reached for an inert-only bot')
+    })
+    setBotAccessChecker(
+      createBotAccessChecker({
+        home: '/Users/u',
+        root: '/',
+        sep: '/',
+        policiesDirLabel: '~/.shuvix/policies/',
+        bots: () => [],
+        identityForFile: (file) => file.objectId ?? file.name,
+        projectsNamed: () => [],
+        projectKnowledgeDir: (id) => `/kb/${id}`,
+        temporaryWorkspace: () => '/tmp/ws',
+        aclDir: (dir) => dir,
+        userPolicies: () => [],
+        builtinPolicies: () => [],
+        isDisabled: () => false,
+        reviewActive: () => true,
+        isDirectory: () => false,
+        trial
+      })
+    )
+    expect(botScheduleHint(inBots('buddy.md'), inert)).toBeNull()
+    expect(trial).not.toHaveBeenCalled()
+
+    expect(botScheduleHint(inBots('buddy.md'), daily(null))).toBe(NOTE)
+    expect(trial).toHaveBeenCalledTimes(1)
   })
 })

@@ -68,7 +68,8 @@ function printUsage(): void {
       'Usage:',
       '  shuvix task stop <pid>        stop a background task this conversation started',
       '  shuvix policy check [<file>] [--from <ip>] [--device <id>] [--channel <name> | ...]',
-      '                                check a network access or redaction policy (shuvix policy check --help)',
+      "                                check a network access or redaction policy, or what a bot's scheduled runs",
+      '                                may do without asking (--bot <name>; shuvix policy check --help)',
       ''
     ].join('\n')
   )

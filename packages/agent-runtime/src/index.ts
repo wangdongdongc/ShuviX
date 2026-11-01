@@ -488,6 +488,19 @@ export {
   type TimerBindingPreview
 } from './bot/schedulePreview'
 export {
+  accessOutcomeOf,
+  botAccessNote,
+  botIdentitiesNamedBy,
+  celQuote,
+  namedPathsOf,
+  policyNamesBot,
+  type AccessAction,
+  type AccessOutcome,
+  type BotAccessCheckInput,
+  type BotAccessHost,
+  type BotAccessLocation
+} from './bot/accessCheck'
+export {
   BUILTIN_BOT_SEEDS,
   DAILY_BOT_ID,
   DAILY_BOT_NAME,

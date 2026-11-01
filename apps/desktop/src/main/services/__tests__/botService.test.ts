@@ -13,6 +13,7 @@
  *   PSv-27…40 **改名观察**：笔记本写入的回执（noteWriting / noteWritten）与每一次扫描怎样把
  *              会话绑定从旧名跟到新名、哪些情况必须不迁，以及 `bot.changed` 的合并窗口。
  *   PSv-ID    **对象 id**：新建铸 id、写坏的 id；identityOf（策略的 subject.bot / object.bot）与它的 2 s 缓存；
+ *              identityForFile（PSv-ID5：同一条规则按文件算 —— 权限核对拿刚写下、还没进注册表的那份用）；
  *   PSv-FILE  **一条会话的 bot 文件**：fileOf（会话权限表的 `bot` 派生行）—— 生效那份的绝对路径、同名裁决、2 s 缓存；
  *   PSv-SEED  **随应用提供的 bot**：seedBuiltinBots 每个只写一次（`.builtin-seeded`），同名 / 同 id 的不覆盖。
  *   PSv-UPG   **种下之后的升级**：seedBuiltinBots 开头对认定表里那份 ShuviX 写下的文件跑一次种子的 upgrade
@@ -996,6 +997,65 @@ describe('PSv-ID4 —— identityOf', () => {
     now += 1
     expect(botService.identityOf('s1')).toBe(U2)
     expect(vi.mocked(readFileSync)).toHaveBeenCalled()
+  })
+})
+
+// ────────────────────── PSv-ID5：一份文件的 bot 身份 ──────────────────────
+
+/**
+ * identityForFile —— identityOf 的规则，按文件算（bot 定时运行的权限核对拿刚写下、还没进注册表的那份用）：
+ * 对象 id，没有就是名字；内置形态的 id 只对认定表里 ShuviX 写下的那份文件成立，别的文件声明它按名字算。
+ * 不读盘、不看会话。
+ */
+describe('PSv-ID5 —— identityForFile', () => {
+  const U1 = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const DAILY_ID = 'bot:builtin:daily'
+
+  afterEach(() => {
+    botService.setBuiltinTrustStore(null)
+    vi.restoreAllMocks()
+  })
+
+  it('PSv-ID5 UUID → UUID；没有 id → 名字；内置 id 在认定的那份上 → id，别处 → 名字；没注入认定表 → 名字', () => {
+    const daily = join(dirs.bots, 'daily.md')
+    botService.setBuiltinTrustStore({
+      get: (key) => (key === BUILTIN_FILES_KEY ? JSON.stringify({ [DAILY_ID]: daily }) : undefined),
+      set: () => {}
+    })
+    expect(
+      botService.identityForFile({ name: 'buddy', objectId: U1 }, join(dirs.bots, 'buddy.md'))
+    ).toBe(U1)
+    expect(botService.identityForFile({ name: 'buddy' }, join(dirs.bots, 'buddy.md'))).toBe('buddy')
+    expect(botService.identityForFile({ name: 'daily', objectId: DAILY_ID }, daily)).toBe(DAILY_ID)
+    expect(
+      botService.identityForFile(
+        { name: 'my-daily', objectId: DAILY_ID },
+        join(dirs.bots, 'my-daily.md')
+      )
+    ).toBe('my-daily')
+    // 同一路径的别的写法不算认定的那份（逐字比较）
+    expect(botService.identityForFile({ name: 'daily', objectId: DAILY_ID }, `${daily}.bak`)).toBe(
+      'daily'
+    )
+
+    botService.setBuiltinTrustStore(null)
+    expect(botService.identityForFile({ name: 'daily', objectId: DAILY_ID }, daily)).toBe('daily')
+    expect(botService.identityForFile({ name: 'buddy', objectId: U1 }, daily)).toBe(U1)
+  })
+
+  it('PSv-ID5 与 identityOf 同一条规则：绑定的那份文件 → 两者相同', () => {
+    // 时钟跳到别的用例碰不到的地方：identityOf 的 2 s 缓存跨用例存活
+    const now = Date.now() + 300_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const file = put(
+      'id5-ranger',
+      md('id5-ranger').replace('shuvix: bot v2\n', `shuvix: bot v2\nshuvix-id: ${U1}\n`)
+    )
+    mocks.pick.mockReturnValue({ settings: { bot: 'id5-ranger' } })
+    const entry = botService.get('id5-ranger')!
+    expect(entry.basePath).toBe(file)
+    expect(botService.identityForFile(entry.file, entry.basePath)).toBe(botService.identityOf('s1'))
+    expect(botService.identityOf('s1')).toBe(U1)
   })
 })
 

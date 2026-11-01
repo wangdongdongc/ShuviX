@@ -19,10 +19,14 @@
  *   PC-14 写入回执的那一句（policyCheckHint）：管网络的合法策略才有、带路径；agent 主体的、非法的、不是策略的 → null
  *   PC-15 --scopes：行是 scope、列是设备，格子三档逐条判（全放 = 字母、全拒 = -、部分 = ~ 并列在表下、没有这一档 = .）；
  *         被准入拒掉的设备整列 -、写明拒在哪一步；--scopes 不带请求参数
+ *   PC-17 --bot <name>（不带 --redaction）：bot 定时运行的权限核对 —— 文字全在 deps.botAccess（botAccessCheck 的
+ *         forBotName），这里钉用法与文件：名字原样（去空白）交过去、给了文件就交 {全文, basename}、error → stderr + 2
+ *         （不带用法）；空名字 / 别的参数 / 没接 botAccess / 文件不是 .md → 用法错误 2；带 --redaction 就走脱敏那条；
+ *         --help 照常；用法里有那一行
  *   PC-16 --setting：settings:set 按 key 定 scope 与 access（主题 preferences / write，沙箱 security / admin），
  *         规则按 scope 写就分得开
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { networkInterfaces } from 'node:os'
 import {
   buildBuiltinPolicies,
@@ -33,6 +37,7 @@ import {
 import { createInlinePolicyMdReader } from '../../../../../../packages/agent-runtime/src/security/builtinPolicies/inlineSources'
 import type { NetworkStatus } from '../../../shared/network'
 import {
+  POLICY_CHECK_USAGE,
   runPolicyCheck,
   type PolicyCheckDeps,
   type PolicyCheckParams,
@@ -641,5 +646,119 @@ describe('policyCheck', () => {
     expect(networkPolicyCheckHint(`${POLICIES}/my-asks.md`, agentOnly)).toBeNull()
     expect(networkPolicyCheckHint(path, policyText('bad', '  - effect: nope'))).toBeNull()
     expect(networkPolicyCheckHint('/tmp/notes.md', '# notes\n')).toBeNull()
+  })
+})
+
+describe('PC-17 --bot', () => {
+  function botDeps(
+    answer: { text: string } | { error: string } = { text: 'BOT CHECK' }
+  ): PolicyCheckDeps & { botAccess: ReturnType<typeof vi.fn> } {
+    const botAccess = vi.fn<NonNullable<PolicyCheckDeps['botAccess']>>(() => answer)
+    return { ...deps(), botAccess }
+  }
+
+  it("PC-17 --bot buddy → botAccess('buddy', undefined)，stdout 原样、0", () => {
+    const d = botDeps()
+    const r = run({ flags: [['bot', 'buddy']] }, d)
+    expect(r).toEqual({ stdout: 'BOT CHECK\n', stderr: '', exitCode: 0 })
+    expect(d.botAccess.mock.calls).toEqual([['buddy', undefined]])
+  })
+
+  it('PC-17 名字两头的空白去掉', () => {
+    const d = botDeps()
+    run({ flags: [['bot', '  buddy ']] }, d)
+    expect(d.botAccess.mock.calls).toEqual([['buddy', undefined]])
+  })
+
+  it('PC-17 botAccess 回 error → stderr、2，不带用法', () => {
+    const r = run({ flags: [['bot', 'nobody']] }, botDeps({ error: 'No bot is named nobody.' }))
+    expect(r).toEqual({ stdout: '', stderr: 'No bot is named nobody.\n', exitCode: 2 })
+  })
+
+  it('PC-17 给了文件 → {全文, basename}', () => {
+    const d = botDeps()
+    const r = run(
+      { file: { path: '/tmp/drafts/buddy-access.md', text: 'DRAFT' }, flags: [['bot', 'buddy']] },
+      d
+    )
+    expect(r.exitCode).toBe(0)
+    expect(d.botAccess.mock.calls).toEqual([
+      ['buddy', { text: 'DRAFT', fileName: 'buddy-access.md' }]
+    ])
+  })
+
+  it('PC-17 用法错误一律 2、带用法，botAccess 不被调', () => {
+    const cases: Array<[Partial<PolicyCheckParams>, PolicyCheckDeps, string]> = [
+      [{ flags: [['bot', '']] }, botDeps(), '--bot needs the name of a bot.'],
+      [{ flags: [['bot', '   ']] }, botDeps(), '--bot needs the name of a bot.'],
+      [
+        {
+          flags: [
+            ['bot', 'x'],
+            ['from', '1.2.3.4']
+          ]
+        },
+        botDeps(),
+        "--bot checks a bot's scheduled runs; it does not take --from."
+      ],
+      [
+        {
+          flags: [
+            ['bot', 'x'],
+            ['expect', 'allow']
+          ]
+        },
+        botDeps(),
+        "--bot checks a bot's scheduled runs; it does not take --expect."
+      ],
+      [{ flags: [['bot', 'x']] }, deps(), '--bot is not available here.'],
+      [
+        { file: { path: '/tmp/draft.txt', text: 'x' }, flags: [['bot', 'x']] },
+        botDeps(),
+        'draft.txt: policy files must end in .md'
+      ]
+    ]
+    for (const [params, d, message] of cases) {
+      const r = run(params, d)
+      expect(r.exitCode, message).toBe(2)
+      expect(r.stdout, message).toBe('')
+      expect(r.stderr, message).toContain(message)
+      expect(r.stderr, message).toContain('Usage: shuvix policy check')
+      if ('botAccess' in d) expect(d.botAccess, message).not.toHaveBeenCalled()
+    }
+  })
+
+  it('PC-17 带 --redaction → 走脱敏那条（这里没接脱敏 → 那条的用法错误），botAccess 不被调', () => {
+    const d = botDeps()
+    const r = run(
+      {
+        flags: [
+          ['bot', 'x'],
+          ['redaction', '']
+        ]
+      },
+      d
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain('--redaction is not available here.')
+    expect(d.botAccess).not.toHaveBeenCalled()
+  })
+
+  it('PC-17 --help 带着 --bot → 用法、0；用法里有 --bot 那一行', () => {
+    const d = botDeps()
+    const r = run(
+      {
+        flags: [
+          ['bot', 'x'],
+          ['help', '']
+        ]
+      },
+      d
+    )
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('Usage: shuvix policy check')
+    expect(d.botAccess).not.toHaveBeenCalled()
+    expect(POLICY_CHECK_USAGE).toContain('shuvix policy check [<file>] --bot <name>')
+    expect(POLICY_CHECK_USAGE).toContain('--bot <name>')
   })
 })

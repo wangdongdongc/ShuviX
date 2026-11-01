@@ -45,6 +45,14 @@
  *   TC-CC classifyCommand 每次现取注入的命令分类（setCommandClassifier，带上本会话的 sessionId）：
  *     没注入 → null；注入的分类经真实的桌面 SecurityContext 挂成 object.risk，内置 ask-on-command 对
  *     很有把握的 read_only 不问（也不经审查），决策记录带 commandRisk。
+ * getDesktopBotRunTrial —— bot 定时运行的权限核对（botAccessCheck）用的试算上下文：一条新会话的根 agent（档案 bot、
+ * subject.bot = 身份），会话权限表只有调用方给的那几行、没有授予，按调用方给的用户策略与 logger 判，不问人、不送审查：
+ *   TC-BRT1 主体与 env：只认这个 bot 的根 agent 的用户策略（subject.profile / agentKind / bot）在试算里命中；env 是 desktop
+ *   TC-BRT2 vars：aclRead / aclWrite 恰是 run 给的、会话与组件那四张表是空的，sessionAcl 的三个视图一次都不读；
+ *           workspace = run 的工作目录、sessionArtifactsDir 为空串、now / dailyDir / home 都在
+ *   TC-BRT3 用户策略取 trial.userPolicies（policyService.getUserPolicies 的那份不算）；求值告警进 trial.logger
+ *   TC-BRT4 读别的会话 → 问（判定），注入的审查者一次都不调，provider 上没有询问通道
+ *   TC-BRT5 停用开关照 policyService.isDisabled：停用 daily-bot-access → 日记 bot 读会话要问；没停用 → 放行
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
  * reviewState / 决策日志是进程级表：这些用例各用独立 sessionId，afterEach 清掉。
  */
@@ -108,7 +116,9 @@ const tc = vi.hoisted(() => ({
    * sessionDao.pick 的替身数据（会话行，按 id）：botService.identityOf 读 settings.bot、sessionObjectFacts 读
    * lastActiveAt / createdAt。缺省空表 = 读不到任何会话（TC-BOT / XS-37 / XS-38 按需填）
    */
-  sessionRows: {} as Record<string, Record<string, unknown>>
+  sessionRows: {} as Record<string, Record<string, unknown>>,
+  /** policyService.isDisabled 认作停用的策略名（缺省一个都不停用；TC-BRT5 换） */
+  disabledPolicies: [] as string[]
 }))
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
@@ -151,7 +161,7 @@ vi.mock('../policyService', () => ({
   policyService: {
     getUserPolicies: () => tc.userPolicies,
     // 内置安全策略的禁用开关（ShuviX 扩展元数据）：这里一律不禁用
-    isDisabled: () => false,
+    isDisabled: (policy: { name: string }) => tc.disabledPolicies.includes(policy.name),
     // 与 policyService.readBuiltinPolicyMd 同形，只是基准目录直接钉在仓库那份上
     readBuiltinPolicyMd: (fileName: string) => {
       try {
@@ -193,6 +203,7 @@ import {
   agentActorOf,
   assertSessionAccess,
   assertWidgetAccess,
+  getDesktopBotRunTrial,
   getDesktopNetworkSecurityContext,
   getDesktopSecurityContext,
   isPathReadAllowed,
@@ -225,6 +236,7 @@ import {
   type PermissionReviewAnswer,
   type SecurityContext,
   type SecurityDecision,
+  type SecurityObject,
   type SecuritySubject,
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
@@ -2711,5 +2723,200 @@ describe('withCallAgent', () => {
     withCallAgent(ctx, { conversationId: 7 })
     expect(ctx.agentOf).toHaveBeenCalledTimes(1)
     expect(ctx.agentOf).toHaveBeenCalledWith(7)
+  })
+})
+
+describe('TC-BRT getDesktopBotRunTrial —— bot 定时运行的试算上下文', () => {
+  const runtime = vi.mocked(createSecurityContext)
+  const HOME = homedir()
+  const WORKDIR = join(HOME, 'shuvix-brt-work')
+  const BOT_FILE = '/tmp/shuvix-bots/buddy.md'
+  const NOTES = join(HOME, 'shuvix-brt-notes')
+  const runOf = (
+    bot = 'X'
+  ): { bot: string; workingDirectory: string; aclRead: string[]; aclWrite: string[] } => ({
+    bot,
+    workingDirectory: WORKDIR,
+    aclRead: [WORKDIR, BOT_FILE],
+    aclWrite: [WORKDIR, BOT_FILE]
+  })
+  type LogFn = (msg: string) => void
+  const loggerOf = (): {
+    info: ReturnType<typeof vi.fn<LogFn>>
+    warn: ReturnType<typeof vi.fn<LogFn>>
+    error: ReturnType<typeof vi.fn<LogFn>>
+  } => ({ info: vi.fn<LogFn>(), warn: vi.fn<LogFn>(), error: vi.fn<LogFn>() })
+  const at = (path: string): SecurityObject => ({ type: 'path', path, displayPath: path })
+  const sessionAt = (lastActiveAt: string): SecurityObject => ({
+    type: 'session',
+    sessionId: 'other',
+    title: '',
+    ownTurn: false,
+    lastActiveAt,
+    bot: ''
+  })
+  const READ = { tool: { name: 'read' } }
+  const READ_SESSION = { tool: { name: 'session', operation: 'read-session' } }
+
+  function policyOf(name: string, rules: string[]): UserPolicyFile {
+    const md = [
+      '---',
+      'shuvix: policy v1',
+      `name: ${name}`,
+      'description: Test policy.',
+      'shuvix-policy-scope:',
+      '  subject.kind: [agent]',
+      '  env.host: [desktop]',
+      'shuvix-policy-rules:',
+      ...rules,
+      '---',
+      ''
+    ].join('\n')
+    const parsed = parsePolicyDefinitionFile(md, name)
+    if (!parsed) throw new Error(`fixture policy ${name} does not parse`)
+    return { ...parsed, fileName: `${name}.md` }
+  }
+  /** 只认 bot X 的根 agent 读 NOTES 里的文件 */
+  const NOTES_FOR_X = (): UserPolicyFile =>
+    policyOf('brt-notes', [
+      '  - effect: force-allow',
+      '    object.type: [path]',
+      '    action: [read]',
+      '    match: >-',
+      `      subject.profile == 'bot' && subject.agentKind == 'root' && subject.bot == 'X' && inDir(object.path, '${NOTES}')`
+    ])
+
+  beforeEach(() => {
+    runtime.mockClear()
+    tc.pathView.mockClear()
+    tc.sessionView.mockClear()
+    tc.widgetView.mockClear()
+    tc.userPolicies = []
+    tc.disabledPolicies = []
+  })
+  afterEach(() => {
+    setPermissionReviewer(null)
+    tc.userPolicies = []
+    tc.disabledPolicies = []
+  })
+
+  it('TC-BRT1 主体是这个 bot 的根 agent（档案 bot）、env 是 desktop：只认它的用户策略在试算里命中', () => {
+    const { context } = getDesktopBotRunTrial(runOf('X'), {
+      userPolicies: [NOTES_FOR_X()],
+      logger: loggerOf()
+    })
+    const [subject, env] = runtime.mock.calls[runtime.mock.calls.length - 1]
+    expect(subject).toEqual({
+      kind: 'agent',
+      sessionId: '',
+      agentKind: 'root',
+      profileName: 'bot',
+      attrs: { bot: 'X' }
+    })
+    expect(env).toEqual({ host: 'desktop', platform: process.platform, workspaceDir: WORKDIR })
+
+    const granted = context.judgeGate('read', at(join(NOTES, 'a.md')), READ)
+    expect(granted.allowed).toBe(true)
+    expect(granted.decision.winning).toBe('brt-notes#0')
+
+    // 别的 bot：同一份策略不命中，家目录里工作目录之外照问
+    const other = getDesktopBotRunTrial(runOf('Y'), {
+      userPolicies: [NOTES_FOR_X()],
+      logger: loggerOf()
+    })
+    const asked = other.context.judgeGate('read', at(join(NOTES, 'a.md')), READ)
+    expect(asked.allowed).toBe(false)
+    expect(asked.decision.winning).toBe('ask-on-external-path#0')
+  })
+
+  it('TC-BRT2 vars：权限表恰是 run 给的、会话与组件表为空、不读 sessionAcl；workspace / now / dailyDir / home', () => {
+    const run = runOf()
+    const { context, vars } = getDesktopBotRunTrial(run, { userPolicies: [], logger: loggerOf() })
+    expect(vars.aclRead).toEqual(run.aclRead)
+    expect(vars.aclWrite).toEqual(run.aclWrite)
+    for (const key of ['aclSessionRead', 'aclSessionWrite', 'aclWidgetRead', 'aclWidgetWrite']) {
+      expect(vars[key], key).toEqual([])
+    }
+    expect(vars.workspace).toBe(WORKDIR)
+    expect(vars.sessionArtifactsDir).toBe('')
+    expect(vars.home).toBe(HOME)
+    expect(vars.dailyDir).toBe('/tmp/shuvix-daily')
+    expect(typeof vars.now).toBe('string')
+    expect(Number.isNaN(Date.parse(vars.now as string))).toBe(false)
+
+    // 判定读的就是这份：工作目录里不问、家目录里别处问
+    expect(context.judgeGate('read', at(join(WORKDIR, 'a.md')), READ).decision.winning).toBe(
+      'default:path'
+    )
+    expect(context.judgeGate('read', at(join(HOME, 'elsewhere.md')), READ).allowed).toBe(false)
+    context.judgeGate('read', sessionAt(vars.now as string), READ_SESSION)
+    context.judgeGate(
+      'read',
+      { type: 'widget', widgetId: 'w', name: 'w', operation: 'list' },
+      {
+        tool: { name: 'widget', operation: 'call' }
+      }
+    )
+    expect(tc.pathView).not.toHaveBeenCalled()
+    expect(tc.sessionView).not.toHaveBeenCalled()
+    expect(tc.widgetView).not.toHaveBeenCalled()
+  })
+
+  it('TC-BRT3 用户策略取 trial.userPolicies（policyService 那份不算）；求值告警进 trial.logger', () => {
+    // policyService 交出的那份会拒工作目录里的读：试算不用它
+    tc.userPolicies = [
+      policyOf('brt-deny', ['  - effect: deny', '    object.type: [path]', '    action: [read]'])
+    ]
+    const logger = loggerOf()
+    const broken = policyOf('brt-broken', [
+      '  - effect: force-allow',
+      '    object.type: [path]',
+      '    action: [read]',
+      '    match: >-',
+      "      timestamp('nope') > timestamp(vars.now)"
+    ])
+    const { context } = getDesktopBotRunTrial(runOf(), { userPolicies: [broken], logger })
+    const verdict = context.judgeGate('read', at(join(WORKDIR, 'a.md')), READ)
+    expect(verdict.allowed).toBe(true)
+    expect(verdict.decision.matched).not.toContain('brt-deny#0')
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("security rule 'brt-broken#0': match evaluation failed")
+    )
+  })
+
+  it('TC-BRT4 读别的会话 → 问；注入的审查者一次都不调；provider 上没有询问通道', () => {
+    const reviewer = vi.fn(async () => null)
+    setPermissionReviewer(reviewer)
+    const { context, vars } = getDesktopBotRunTrial(runOf(), {
+      userPolicies: [],
+      logger: loggerOf()
+    })
+    const verdict = context.judgeGate('read', sessionAt(vars.now as string), READ_SESSION)
+    expect(verdict.allowed).toBe(false)
+    expect(verdict.decision.effect).toBe('ask')
+    expect(verdict.decision.winning).toBe('ask-on-session-access#0')
+    expect(reviewer).not.toHaveBeenCalled()
+    const provider = runtime.mock.calls[runtime.mock.calls.length - 1][2]
+    expect(provider.onPermissionRequest).toBeUndefined()
+    expect(provider.requestUserInput).toBeUndefined()
+  })
+
+  it('TC-BRT5 停用开关：daily-bot-access 停用 → 日记 bot 读会话要问；没停用 → 放行', () => {
+    const on = getDesktopBotRunTrial(runOf('bot:builtin:daily'), {
+      userPolicies: [],
+      logger: loggerOf()
+    })
+    const allowed = on.context.judgeGate('read', sessionAt(on.vars.now as string), READ_SESSION)
+    expect(allowed.allowed).toBe(true)
+    expect(allowed.decision.winning).toBe('daily-bot-access#0')
+
+    tc.disabledPolicies = ['daily-bot-access']
+    const off = getDesktopBotRunTrial(runOf('bot:builtin:daily'), {
+      userPolicies: [],
+      logger: loggerOf()
+    })
+    const asked = off.context.judgeGate('read', sessionAt(off.vars.now as string), READ_SESSION)
+    expect(asked.allowed).toBe(false)
+    expect(asked.decision.winning).toBe('ask-on-session-access#0')
   })
 })

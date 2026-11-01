@@ -56,6 +56,15 @@
  *      SC-6 种类查询抛错 + bot 标记 → 写后处理那段照留（RC-7 那条）+ 排期一次
  *      SC-7 载体 bot、文本是 agent 标记 → 非法那段，没有排期
  *      SC-8 20:00 改成 21:00 → 回执里是 21:00；排期那段与磁盘回落的逐字相同（同一个 SCHEDULE）
+ *   BA 定时运行的权限核对（botAccessHint 注入的核对，编辑器这一侧；磁盘回落那侧在 docDiskFallback.test 的 DF-BA）：
+ *      替身核对按真核对的规矩回 null（bot 文件解析不过或没有绑定、策略解析不过），否则回 ACCESS-BOT / ACCESS-POLICY。
+ *      bot 文档接在排期之后、策略文档接在判定 / 回执之后，每条路恰一次；载体是 agent / hook 的从不附、也不调核对。
+ *      BA-1 doc_read bot（载体 bot / 标记兜底）：Parse check + 排期 + 核对，各一次；核对拿到的是文档的绝对路径
+ *      BA-2 doc_read 策略载体：点名 bot → Parse check + 核对（forPolicyFile(全文, basename)）；没有 subject.bot →
+ *           只有 Parse check、不调；非法 → 非法那段、没有核对
+ *      BA-3 doc_edit / doc_insert：bot 载体（有 / 没有标记）、策略载体（有 / 没有标记）、普通笔记载体 + 策略标记 → 恰一次；
+ *           agent / hook 载体 + bot 或策略标记 → 从不
+ *      BA-4 种类查询抛错 + bot 标记 → 写后处理那段照留 + 核对一次；核对抛错 → 回执原样（没有核对）
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -68,6 +77,9 @@ import type { ToolContext } from '../../services/toolContext'
 import { renderDocumentKind, type AnyTool } from '@shuvix/agent-runtime'
 import type { ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import { parseBotDefinitionFile, parsePolicyDefinitionFile } from '@shuvix/agent-runtime'
+import { setBotAccessChecker } from '../../services/botAccessHint'
+import type { BotAccessChecker } from '../../services/botAccessCheck'
 import {
   executeTool,
   failureText,
@@ -1148,5 +1160,166 @@ describe('SC bot 文档的排期回执（编辑器这一侧）', () => {
     const later = await changeWith(BOT('21:00'))
     expect(later).toBe(`${HEAD}\n\n${SCHEDULE('21:00')}`)
     expect(later).not.toContain('20:00')
+  })
+
+  describe('BA 定时运行的权限核对（编辑器这一侧）', () => {
+    let checker: {
+      forBotFile: ReturnType<typeof vi.fn<BotAccessChecker['forBotFile']>>
+      forPolicyFile: ReturnType<typeof vi.fn<BotAccessChecker['forPolicyFile']>>
+      forBotName: ReturnType<typeof vi.fn<BotAccessChecker['forBotName']>>
+    }
+    const base = (p: string): string => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '')
+    beforeEach(() => {
+      // 替身按真核对的规矩回 null：bot 解析不过 / 没有绑定、策略解析不过
+      checker = {
+        forBotFile: vi.fn((text: string, path: string) =>
+          parseBotDefinitionFile(text, base(path))?.bindings?.length ? 'ACCESS-BOT' : null
+        ),
+        forPolicyFile: vi.fn((text: string, fileName: string) =>
+          parsePolicyDefinitionFile(text, base(fileName)) ? 'ACCESS-POLICY' : null
+        ),
+        forBotName: vi.fn(() => ({ text: '' }))
+      }
+      setBotAccessChecker(checker)
+    })
+    afterEach(() => setBotAccessChecker(null))
+
+    /** 点名 bot buddy 的合法策略（带标记） */
+    const NAMING_POLICY = [
+      '---',
+      'shuvix: policy v1',
+      'name: buddy-access',
+      'description: Companion policy.',
+      'shuvix-policy-scope:',
+      '  subject.kind: [agent]',
+      '  env.host: [desktop]',
+      'shuvix-policy-rules:',
+      '  - effect: force-allow',
+      '    object.type: [session]',
+      '    action: [read]',
+      `    match: "has(subject.bot) && subject.bot == 'buddy' && subject.agentKind == 'root'"`,
+      '---',
+      '',
+      'Body.',
+      ''
+    ].join('\n')
+    const BROKEN_NAMING = NAMING_POLICY.replace('name: buddy-access', 'name: [unclosed')
+    const accesses = (out: string): number =>
+      out.split('ACCESS-BOT').length - 1 + (out.split('ACCESS-POLICY').length - 1)
+
+    it('BA-0 样本自检：点名策略合法、带 subject.bot；坏的那份解析不过', () => {
+      expect(parsePolicyDefinitionFile(NAMING_POLICY, 'buddy-access')).not.toBeNull()
+      expect(parsePolicyDefinitionFile(BROKEN_NAMING, 'buddy-access')).toBeNull()
+      expect(BROKEN_NAMING).toContain('subject.bot')
+    })
+
+    it.each([
+      ['载体 bot', 'bot'],
+      ['载体不是 ShuviX 文件，按标记兜底', null]
+    ])(
+      'BA-1 doc_read bot（%s）→ Parse check + 排期 + 核对，各一次；核对拿到绝对路径',
+      async (_label, kind) => {
+        mocks.doc = '/x/bots/buddy.md'
+        mocks.kind = kind
+        const out = await readWith(readResult(BOT()))
+        expect(out.endsWith(`\n\n${VALID_VERDICT('bot')}\n\n${SCHEDULE()}\n\nACCESS-BOT`)).toBe(
+          true
+        )
+        expect(accesses(out)).toBe(1)
+        expect(schedules(out)).toBe(1)
+        expect(out.split('Parse check:')).toHaveLength(2)
+        expect(checker.forBotFile.mock.calls).toEqual([[BOT(), '/x/bots/buddy.md']])
+        expect(checker.forPolicyFile).not.toHaveBeenCalled()
+      }
+    )
+
+    it('BA-2 doc_read 策略载体：点名 bot → Parse check + 核对；forPolicyFile(全文, basename)', async () => {
+      mocks.doc = '/x/policies/buddy-access.md'
+      mocks.kind = 'policy'
+      const out = await readWith(readResult(NAMING_POLICY))
+      expect(out.endsWith(`\n\n${VALID_VERDICT('policy')}\n\nACCESS-POLICY`)).toBe(true)
+      expect(accesses(out)).toBe(1)
+      expect(checker.forPolicyFile.mock.calls).toEqual([[NAMING_POLICY, 'buddy-access.md']])
+      expect(checker.forBotFile).not.toHaveBeenCalled()
+    })
+
+    it('BA-2 doc_read 策略载体：没有 subject.bot → 只有 Parse check、不调核对；非法 → 非法那段、没有核对', async () => {
+      mocks.doc = '/x/policies/ask-on-widget-access.md'
+      mocks.kind = 'policy'
+      const plain = await readWith(readResult(VALID_POLICY))
+      expect(plain.endsWith(`\n\n${VALID_VERDICT('policy')}`)).toBe(true)
+      expect(checker.forPolicyFile).not.toHaveBeenCalled()
+
+      mocks.doc = '/x/policies/buddy-access.md'
+      const broken = await readWith(readResult(BROKEN_NAMING))
+      expect(verdictIn(broken)!.startsWith(INVALID_HEAD('a policy file'))).toBe(true)
+      expect(accesses(broken)).toBe(0)
+    })
+
+    it.each([
+      ['bot 载体、带标记', 'bot', '/x/bots/buddy.md', BOT(), true],
+      ['bot 载体、没写标记（按载体改判）', 'bot', '/x/bots/buddy.md', BOT('20:00', null), true],
+      ['策略载体、带标记', 'policy', '/x/policies/buddy-access.md', NAMING_POLICY, false],
+      [
+        '策略载体、没写标记（按载体改判）',
+        'policy',
+        '/x/policies/buddy-access.md',
+        withoutMarker(NAMING_POLICY),
+        false
+      ],
+      ['普通笔记载体 + 策略标记（按标记）', null, '/x/notes/buddy-access.md', NAMING_POLICY, false]
+    ])('BA-3 doc_edit / doc_insert：%s → 核对恰一次', async (_label, kind, doc, text, schedule) => {
+      mocks.doc = doc
+      mocks.kind = kind
+      const tail = schedule ? `${SCHEDULE()}\n\n` : ''
+      const access = kind === 'bot' ? 'ACCESS-BOT' : 'ACCESS-POLICY'
+      const edited = await changeWith(text, 'edit')
+      expect(edited).toBe(`${HEAD}\n\n${tail}${access}`)
+      const inserted = await changeWith(text, 'insert')
+      expect(inserted).toBe(`${INSERT_HEAD}\n\n${tail}${access}`)
+    })
+
+    it.each([
+      ['agent', 'bot 标记', BOT()],
+      ['agent', '策略标记', NAMING_POLICY],
+      ['hook', 'bot 标记', BOT()],
+      ['hook', '策略标记', NAMING_POLICY]
+    ])('BA-3 载体 %s + %s → 从不附核对、也不调', async (kind, _label, text) => {
+      mocks.doc = `/x/${kind}s/buddy.md`
+      mocks.kind = kind
+      expect(accesses(await changeWith(text, 'edit'))).toBe(0)
+      expect(accesses(await changeWith(text, 'insert'))).toBe(0)
+      expect(accesses(await readWith(readResult(text)))).toBe(0)
+      expect(checker.forBotFile).not.toHaveBeenCalled()
+      expect(checker.forPolicyFile).not.toHaveBeenCalled()
+    })
+
+    it('BA-4 种类查询抛错 + bot 标记 → 写后处理那段照留、排期与核对各一次', async () => {
+      mocks.doc = '/x/bots/buddy.md'
+      mocks.kindThrows = true
+      const out = await changeWith(
+        BOT('20:00', 'shuvix: bot v1', ['shuvix-bot-pipeline:', '  - step: chat'])
+      )
+      expect(out.startsWith(`${HEAD}\n\n[shuvix bot v1] Written with parser warnings:\n- `)).toBe(
+        true
+      )
+      expect(out.endsWith(`\n\n${SCHEDULE()}\n\nACCESS-BOT`)).toBe(true)
+      expect(accesses(out)).toBe(1)
+    })
+
+    it('BA-4 核对抛错 → 回执原样（排期照给、没有核对）', async () => {
+      const fail = (): never => {
+        throw new Error('policy scan failed')
+      }
+      setBotAccessChecker({ forBotFile: fail, forPolicyFile: fail, forBotName: fail })
+      mocks.doc = '/x/bots/buddy.md'
+      mocks.kind = 'bot'
+      expect(await changeWith(BOT())).toBe(`${HEAD}\n\n${SCHEDULE()}`)
+      const read = await readWith(readResult(BOT()))
+      expect(read.endsWith(`\n\n${VALID_VERDICT('bot')}\n\n${SCHEDULE()}`)).toBe(true)
+      mocks.doc = '/x/policies/buddy-access.md'
+      mocks.kind = 'policy'
+      expect(await changeWith(NAMING_POLICY)).toBe(HEAD)
+    })
   })
 })

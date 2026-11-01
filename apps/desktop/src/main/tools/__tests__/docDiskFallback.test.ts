@@ -39,6 +39,12 @@
  *            bots 目录里恰一段（只有写盘那段的目录规则认得出）、目录外没有
  *     DF-SC4 载体不是 ShuviX 文件、bots 目录外、bot 标记 → 恰一段，与编辑器那侧同一段
  *     DF-SC5 20:00 改成 21:00 → 回执里是 21:00
+ *   DF-BA 定时运行的权限核对（磁盘这一侧；编辑器那侧在 doc.test 的 BA）：注入的核对是替身（按真核对的规矩：bot 解析不过或
+ *         没有绑定、策略解析不过 → null；否则 ACCESS-BOT / ACCESS-POLICY），每条用例之后复位；utils/paths 的替身要有
+ *         getDefaultPoliciesDir，不然写盘那段（writtenNote 的策略一侧）会悄悄缺席
+ *     DF-BA1 策略目录里的策略（带标记、点名 bot）doc_edit → 核对恰一次（写盘那段给的）
+ *     DF-BA2 bot / 策略载体、没写标记 → 按载体改判时换掉写盘那段，核对恰一次
+ *     DF-BA3 doc_read 磁盘上的 bot → 「没开着」+ Parse check + 排期 + 核对，各一次
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -70,6 +76,8 @@ const state = vi.hoisted(() => ({
   kb: '',
   /** bots 目录替身（getDefaultBotsDir）：没有它，写盘回执里的排期（botScheduleHint）会悄悄缺席 */
   bots: '',
+  /** 策略目录替身（getDefaultPoliciesDir）：写盘回执里点名 bot 的策略那段（botAccessHint）靠它认目录 */
+  policies: '',
   /** resolveSessionDocument 的答复（null = 这条会话没有文档） */
   doc: null as string | null,
   /** sessionDocumentKind 的答复（会话的承载项目是哪种 ShuviX 文件；null = 不是）；每条用例复位成 null */
@@ -133,7 +141,8 @@ vi.mock('../../utils/paths', () => ({
   getUserKnowledgeRootDir: () => `${state.kb}-user`,
   getBuiltinKnowledgeDir: () => `${state.kb}-builtin`,
   getToolResultsDir: () => join(state.dir, 'tool_results'),
-  getDefaultBotsDir: () => state.bots
+  getDefaultBotsDir: () => state.bots,
+  getDefaultPoliciesDir: () => state.policies
 }))
 // 内置库的语言目录从 i18next 现读：钉成 en（同 fileToolDepsKnowledge.test）
 vi.mock('i18next', () => ({ default: { language: 'en', t: (key: string) => `i18n(${key})` } }))
@@ -146,6 +155,8 @@ import { appEventBus } from '../../utils/appEventBus'
 import type { ToolContext } from '../../services/toolContext'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import type { AskDiffPreview } from '@shuvix/chat-protocol/types/inputRequest'
+import { parseBotDefinitionFile, parsePolicyDefinitionFile } from '@shuvix/agent-runtime'
+import { setBotAccessChecker } from '../../services/botAccessHint'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -216,6 +227,8 @@ beforeAll(() => {
   mkdirSync(join(`${state.kb}-user`, 'notes'), { recursive: true })
   state.bots = join(state.dir, 'bots')
   mkdirSync(state.bots, { recursive: true })
+  state.policies = join(state.dir, 'policies')
+  mkdirSync(state.policies, { recursive: true })
 })
 afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
@@ -713,5 +726,106 @@ describe('DF-SC 磁盘回落的排期回执', () => {
     expect(bytes(p)).toBe(BOT('21:00'))
     expect(out.endsWith(`\n\n${SCHEDULE('21:00')}`)).toBe(true)
     expect(schedules(out)).toBe(1)
+  })
+
+  describe('DF-BA 磁盘回落的权限核对', () => {
+    const base = (p: string): string => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '')
+    const checker = {
+      forBotFile: vi.fn((text: string, path: string) =>
+        parseBotDefinitionFile(text, base(path))?.bindings?.length ? 'ACCESS-BOT' : null
+      ),
+      forPolicyFile: vi.fn((text: string, fileName: string) =>
+        parsePolicyDefinitionFile(text, base(fileName)) ? 'ACCESS-POLICY' : null
+      ),
+      forBotName: vi.fn(() => ({ text: '' }))
+    }
+    beforeEach(() => {
+      checker.forBotFile.mockClear()
+      checker.forPolicyFile.mockClear()
+      setBotAccessChecker(checker)
+    })
+    afterEach(() => setBotAccessChecker(null))
+
+    /** 点名 bot buddy 的合法策略 */
+    const POLICY = (marker: string | null = 'shuvix: policy v1'): string =>
+      [
+        '---',
+        ...(marker === null ? [] : [marker]),
+        'name: buddy-access',
+        'description: Companion policy.',
+        'shuvix-policy-scope:',
+        '  subject.kind: [agent]',
+        '  env.host: [desktop]',
+        'shuvix-policy-rules:',
+        '  - effect: force-allow',
+        '    object.type: [session]',
+        '    action: [read]',
+        `    match: "has(subject.bot) && subject.bot == 'buddy' && subject.agentKind == 'root'"`,
+        '---',
+        '',
+        'Companion.',
+        ''
+      ].join('\n')
+    const accesses = (out: string): number =>
+      out.split('ACCESS-BOT').length - 1 + (out.split('ACCESS-POLICY').length - 1)
+    function seedPolicy(content: string, name: string): string {
+      const p = join(state.policies, name)
+      writeFileSync(p, content)
+      state.doc = p
+      return p
+    }
+
+    it.each([
+      ['载体 policy', 'policy'],
+      ['载体不是 ShuviX 文件', null]
+    ])('DF-BA1 策略目录里的策略（带标记）doc_edit → 核对恰一次（%s）', async (_label, kind) => {
+      state.kind = kind
+      const p = seedPolicy(POLICY(), `ba1-${kind}.md`)
+      const out = await ok(
+        executeTool(editTool(), 'ba1', { find: 'Companion.', replace: 'Companion, kinder.' })
+      )
+      expect(out.startsWith('Replaced at line ')).toBe(true)
+      expect(out.endsWith('\n\nACCESS-POLICY')).toBe(true)
+      expect(accesses(out)).toBe(1)
+      expect(bytes(p)).toContain('Companion, kinder.')
+      expect(checker.forPolicyFile.mock.calls.map((c) => c[1])).toContain(`ba1-${kind}.md`)
+    })
+
+    it('DF-BA2 bot 载体、没写标记 → 换掉写盘那段，排期与核对各一次', async () => {
+      state.kind = 'bot'
+      seedBot(BOT('20:00', null), 'ba2.md')
+      const out = await ok(
+        executeTool(editTool(), 'ba2', { find: 'Persona.', replace: 'Persona, kinder.' })
+      )
+      expect(out.endsWith(`\n\n${SCHEDULE()}\n\nACCESS-BOT`)).toBe(true)
+      expect(schedules(out)).toBe(1)
+      expect(accesses(out)).toBe(1)
+      expect(out).not.toContain('Parse check')
+    })
+
+    it('DF-BA2 策略载体、没写标记 → 换掉写盘那段，核对一次', async () => {
+      state.kind = 'policy'
+      seedPolicy(POLICY(null), 'ba2-policy.md')
+      const out = await ok(executeTool(insertTool(), 'ba2p', { text: 'More.\n' }))
+      expect(out.startsWith('Inserted at line ')).toBe(true)
+      expect(out.endsWith('\n\nACCESS-POLICY')).toBe(true)
+      expect(accesses(out)).toBe(1)
+      expect(out).not.toContain('Parse check')
+    })
+
+    it('DF-BA3 doc_read 磁盘上的 bot → 「没开着」+ Parse check + 排期 + 核对，各一次', async () => {
+      state.kind = 'bot'
+      const p = seedBot(BOT(), 'ba3.md')
+      const out = await ok(executeTool(readTool(), 'ba3', {}))
+      expect(
+        out.endsWith(
+          `\n\n${NOT_OPEN}\n\nParse check: ShuviX parses this document as a valid bot file.\n\n${SCHEDULE()}\n\nACCESS-BOT`
+        )
+      ).toBe(true)
+      expect(schedules(out)).toBe(1)
+      expect(accesses(out)).toBe(1)
+      expect(out.split(NOT_OPEN)).toHaveLength(2)
+      expect(checker.forBotFile.mock.calls).toEqual([[BOT(), p]])
+    })
   })
 })

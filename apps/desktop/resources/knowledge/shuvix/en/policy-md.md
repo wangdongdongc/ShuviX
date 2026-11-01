@@ -298,6 +298,40 @@ Agents cannot flip it — only you.
   asking. A policy never widens the command sandbox — a confined command still cannot read
   there; a row in the session's permission table ("allow and remember", or one added in its
   settings → File access) is what reaches both.
+- **Give one bot what its scheduled runs need**: a companion policy for that bot, the way the
+  diary bot has `daily-bot-access` — nobody answers asks when a timer wakes a bot (see `bot-md`,
+  Scheduled runs and access). Every rule is `force-allow` and starts with
+  `has(subject.bot) && subject.bot == '<the bot>' && subject.agentKind == 'root'` (the identity is
+  the bot file's `shuvix-id`, or its name when it has none; the tool result of writing the bot says
+  which), then the narrowest condition on the object. Write it only after the user agreed; the tool
+  result of the write checks the bot with the policy installed. For a bot that sums up the day's
+  sessions into one note every morning:
+
+```markdown
+---
+shuvix: policy v1
+name: xiaozhou-access
+description: Xiaozhou reads other sessions and writes ~/notes/daily-summary.md without asking you.
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: force-allow
+    object.type: [session]
+    action: [read]
+    match: >-
+      has(subject.bot) && subject.bot == 'xiaozhou' && subject.agentKind == 'root'
+    prompt: Reading the day's sessions is what Xiaozhou is for.
+  - effect: force-allow
+    object.type: [path]
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == 'xiaozhou' && subject.agentKind == 'root'
+      && object.path == vars.home + '/notes/daily-summary.md'
+    prompt: Xiaozhou keeps its daily summary here.
+---
+```
+
 - **Add an ask**: a new policy with an `ask` rule on the object you care about — see the example
   below.
 - **Add a hard stop**: a `deny` rule — it beats everything, including the session's permission

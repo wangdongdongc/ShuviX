@@ -7,6 +7,7 @@ import { homedir, networkInterfaces } from 'os'
 import i18next from 'i18next'
 import { buildBuiltinPolicies } from '@shuvix/agent-runtime'
 import { getDefaultPoliciesDir } from '../utils/paths'
+import { desktopBotAccessChecker } from './botAccessWiring'
 import type { PolicyCheckDeps } from './policyCheck'
 import { policyService } from './policyService'
 import {
@@ -48,6 +49,8 @@ export function desktopPolicyCheckDeps(status: PolicyCheckDeps['status']): Polic
       },
       agentContextFor: (userPolicies, logger, subject) =>
         getDesktopAgentTrialSecurityContext(subject, { userPolicies, logger })
-    }
+    },
+    botAccess: (nameOrIdentity, policy) =>
+      desktopBotAccessChecker().forBotName(nameOrIdentity, policy)
   }
 }

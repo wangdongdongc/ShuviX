@@ -14,6 +14,14 @@
  *   FT-5 普通 md → 两样都没有
  *   FT-6 写坏的 bot（会话域埋点）→ INVALID 回执，没有 Schedule check
  *   FT-7 项目查找抛错 / getDefaultBotsDir 抛错 → 写入照样成功（前者排期照给、没有项目那一行；后者没有排期）
+ *
+ * 定时运行的权限核对（botAccessHint 注入的核对，这里是替身：forBotFile 回 ACCESS-BOT、forPolicyFile 回 ACCESS-POLICY）：
+ *   FT-8  write / edit bot 文件 → 核对那段恰一次，接在排期之后、隔一个空行；核对拿到的是全文与绝对路径
+ *   FT-9  点名 bot 的策略写进策略目录 → 核对那段恰一次（forPolicyFile(全文, basename)）；管网络又点名 bot 的 →
+ *         policy check 那一句在前、核对在后，各一次；普通 md → 两样都没有
+ *   FT-10 核对抛错 → 写入照样成功、没有核对那段
+ *   （注入核对是模块级状态：每条用例之后复位成 null，FT-1…7 的期望只在没注入时成立；utils/paths 的替身要有
+ *    getDefaultPoliciesDir，不然策略那侧的核对会悄悄缺席）
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -27,6 +35,7 @@ const SESSION_ID = 'session-bot-schedule'
 const state = vi.hoisted(() => ({
   dir: '',
   bots: '',
+  policies: '',
   botsThrows: false,
   requests: [] as InputRequest[]
 }))
@@ -81,7 +90,8 @@ vi.mock('../../utils/paths', () => ({
   getDefaultBotsDir: () => {
     if (state.botsThrows) throw new Error('no home')
     return state.bots
-  }
+  },
+  getDefaultPoliciesDir: () => state.policies
 }))
 vi.mock('i18next', () => ({ default: { language: 'en', t: (key: string) => `i18n(${key})` } }))
 
@@ -90,6 +100,8 @@ import { makeEditTool } from '../edit'
 import { makeReadTool } from '../read'
 import { _resetAll } from '../../utils/toolUtils/fileTime'
 import { setBotScheduleProjectLookup } from '../../services/botScheduleHint'
+import { setBotAccessChecker } from '../../services/botAccessHint'
+import type { BotAccessChecker } from '../../services/botAccessCheck'
 import type { ToolContext } from '../../services/toolContext'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 
@@ -102,6 +114,7 @@ const savedTz = process.env.TZ
 beforeAll(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-filetool-bot-schedule-'))
   state.bots = join(state.dir, 'bots')
+  state.policies = join(state.dir, 'policies')
   mkdirSync(state.bots, { recursive: true })
 })
 afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
@@ -116,6 +129,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   setBotScheduleProjectLookup(undefined)
+  setBotAccessChecker(null)
   if (savedTz === undefined) delete process.env.TZ
   else process.env.TZ = savedTz
 })
@@ -255,5 +269,130 @@ describe('桌面 write / edit — bot 文件的排期回执', () => {
     const noDir = await ok(makeWriteTool(ctx), { path: q, content: bot('20:00') })
     expect(scheduleCount(noDir)).toBe(0)
     expect(readFileSync(q, 'utf-8')).toBe(bot('20:00'))
+  })
+})
+
+describe('桌面 write / edit — 定时运行的权限核对', () => {
+  function stub(throws = false): {
+    forBotFile: ReturnType<typeof vi.fn<BotAccessChecker['forBotFile']>>
+    forPolicyFile: ReturnType<typeof vi.fn<BotAccessChecker['forPolicyFile']>>
+    forBotName: ReturnType<typeof vi.fn<BotAccessChecker['forBotName']>>
+  } {
+    const fail = (): never => {
+      throw new Error('policy scan failed')
+    }
+    const checker = {
+      forBotFile: vi.fn<BotAccessChecker['forBotFile']>(throws ? fail : () => 'ACCESS-BOT'),
+      forPolicyFile: vi.fn<BotAccessChecker['forPolicyFile']>(
+        throws ? fail : () => 'ACCESS-POLICY'
+      ),
+      forBotName: vi.fn<BotAccessChecker['forBotName']>(() => ({ text: '' }))
+    }
+    setBotAccessChecker(checker)
+    return checker
+  }
+  const accessCount = (out: string): number =>
+    out.split('ACCESS-BOT').length - 1 + (out.split('ACCESS-POLICY').length - 1)
+
+  /** 点名 bot buddy 的配套策略；network = 再加一条管网络主体的规则 */
+  function namingPolicy(name: string, network = false): string {
+    return [
+      '---',
+      'shuvix: policy v1',
+      `name: ${name}`,
+      'shuvix-policy-rules:',
+      ...(network
+        ? [
+            '  - effect: deny',
+            '    subject.kind: [network]',
+            '    object.type: [request]',
+            `    match: "!inCidr(subject.address, ['127.0.0.0/8'])"`
+          ]
+        : []),
+      '  - effect: force-allow',
+      '    subject.kind: [agent]',
+      '    object.type: [session]',
+      '    action: [read]',
+      `    match: "has(subject.bot) && subject.bot == 'buddy' && subject.agentKind == 'root'"`,
+      '---',
+      '',
+      'Companion policy.',
+      ''
+    ].join('\n')
+  }
+
+  it('FT-8 write / edit bot 文件 → 核对恰一次，接在排期之后、隔一个空行；拿到的是全文与绝对路径', async () => {
+    const checker = stub()
+    const p = join(state.bots, 'ft8.md')
+    const written = await ok(makeWriteTool(ctx), { path: p, content: bot('20:00') })
+    expect(written.endsWith(`\n\n${note('20:00')}\n\nACCESS-BOT`)).toBe(true)
+    expect(accessCount(written)).toBe(1)
+    expect(scheduleCount(written)).toBe(1)
+    expect(checker.forBotFile.mock.calls).toEqual([[bot('20:00'), p]])
+    expect(checker.forPolicyFile).not.toHaveBeenCalled()
+
+    await ok(makeReadTool(ctx), { path: p })
+    const edited = await ok(makeEditTool(ctx), {
+      path: p,
+      oldText: "event.local.time == '20:00'",
+      newText: "event.local.time == '21:00'"
+    })
+    expect(edited.endsWith(`\n\n${note('21:00')}\n\nACCESS-BOT`)).toBe(true)
+    expect(accessCount(edited)).toBe(1)
+    expect(checker.forBotFile.mock.calls[1]).toEqual([bot('21:00'), p])
+  })
+
+  it('FT-9 点名 bot 的策略写进策略目录 → 核对恰一次（全文 + basename）', async () => {
+    const checker = stub()
+    const p = join(state.policies, 'buddy-access.md')
+    const text = namingPolicy('buddy-access')
+    const out = await ok(makeWriteTool(ctx), { path: p, content: text })
+    expect(out.endsWith('\n\nACCESS-POLICY')).toBe(true)
+    expect(accessCount(out)).toBe(1)
+    expect(out).not.toContain('shuvix policy check')
+    expect(checker.forPolicyFile.mock.calls).toEqual([[text, 'buddy-access.md']])
+    expect(checker.forBotFile).not.toHaveBeenCalled()
+  })
+
+  it('FT-9 管网络又点名 bot 的策略 → policy check 那一句在前、核对在后，各一次', async () => {
+    stub()
+    const p = join(state.policies, 'net-and-bot.md')
+    const out = await ok(makeWriteTool(ctx), {
+      path: p,
+      content: namingPolicy('net-and-bot', true)
+    })
+    const sentence = `\`shuvix policy check ${p}\``
+    expect(out.split(sentence)).toHaveLength(2)
+    expect(accessCount(out)).toBe(1)
+    expect(out.indexOf(sentence)).toBeLessThan(out.indexOf('ACCESS-POLICY'))
+    expect(out.endsWith('\n\nACCESS-POLICY')).toBe(true)
+  })
+
+  it('FT-9 普通 md（哪怕正文提到 subject.bot）→ 两样都没有', async () => {
+    const checker = stub()
+    const out = await ok(makeWriteTool(ctx), {
+      path: join(state.dir, 'ft9-notes.md'),
+      content: "# Notes\n\nsubject.bot == 'buddy'\n"
+    })
+    expect(accessCount(out)).toBe(0)
+    expect(out).not.toContain('shuvix policy check')
+    expect(checker.forBotFile).not.toHaveBeenCalled()
+    expect(checker.forPolicyFile).not.toHaveBeenCalled()
+  })
+
+  it('FT-10 核对抛错 → 写入照样成功、没有核对那段（bot 文件的排期照给）', async () => {
+    stub(true)
+    const b = join(state.bots, 'ft10.md')
+    const botOut = await ok(makeWriteTool(ctx), { path: b, content: bot('20:00') })
+    expect(botOut.endsWith(`\n\n${note('20:00')}`)).toBe(true)
+    expect(readFileSync(b, 'utf-8')).toBe(bot('20:00'))
+
+    const p = join(state.policies, 'ft10-access.md')
+    const policyOut = await ok(makeWriteTool(ctx), {
+      path: p,
+      content: namingPolicy('ft10-access')
+    })
+    expect(accessCount(policyOut)).toBe(0)
+    expect(readFileSync(p, 'utf-8')).toBe(namingPolicy('ft10-access'))
   })
 })

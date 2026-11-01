@@ -10,6 +10,7 @@ import { basename, dirname, resolve } from 'path'
 import { botScheduleNote, parseBotDefinitionFile, type BotBinding } from '@shuvix/agent-runtime'
 import { detectShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { getDefaultBotsDir } from '../utils/paths'
+import { botAccessNoteFor } from './botAccessHint'
 
 let projectMatches: ((name: string) => number) | undefined
 
@@ -45,7 +46,18 @@ export function botScheduleNoteFor(text: string, fileName: string): string | nul
 }
 
 /**
- * 刚写下的是一份 bot 文件 → 那一段；否则 null。认法与扫描一致：bots 目录顶层的 md（标记可以不写），
+ * bot 文件回执的全部附言：排期预演，再接定时运行的权限核对（botAccessHint）。path = 文件的绝对路径（权限核对按它认
+ * 内置 bot 的身份）；两段都没有回 null
+ */
+export function botFileNoteFor(text: string, path: string): string | null {
+  const notes = [botScheduleNoteFor(text, basename(path)), botAccessNoteFor(text, path)].filter(
+    (n): n is string => !!n
+  )
+  return notes.length > 0 ? notes.join('\n\n') : null
+}
+
+/**
+ * 刚写下的是一份 bot 文件 → 那一段（排期 + 权限核对）；否则 null。认法与扫描一致：bots 目录顶层的 md（标记可以不写），
  * 或者 frontmatter 的标记是 `shuvix: bot`（与解析器、doc_* 同一个 detectShuvixMarker —— 写在别处的 bot 文件
  * 也给预演，它可能正要被挪进 bots 目录）。归档目录（bots/archived，同 botService 的 ARCHIVED_DIR_NAME）里的
  * 不给：归档的 bot 不触发
@@ -57,7 +69,7 @@ export function botScheduleHint(path: string, text: string): string | null {
     const dir = resolve(dirname(path))
     if (dir === resolve(botsDir, 'archived')) return null
     if (dir !== botsDir && detectShuvixMarker(text)?.type !== 'bot') return null
-    return botScheduleNoteFor(text, basename(path))
+    return botFileNoteFor(text, path)
   } catch {
     return null
   }

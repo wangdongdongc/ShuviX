@@ -274,16 +274,20 @@ class BotService {
     const cached = this.identityCache.get(name)
     if (cached && now - cached.at < IDENTITY_CACHE_MS) return cached.id
     const entry = this.get(name)
-    let id = entry?.file.objectId ?? name
-    // 内置 id 只对 ShuviX 写入的那份文件成立（见 BUILTIN_FILES_KEY）：别的文件声明它，身份按名字算
-    if (
-      entry &&
-      parseObjectId(id)?.form === 'builtin' &&
-      this.trustedBuiltinFiles()[id] !== entry.basePath
-    ) {
-      id = name
-    }
+    const id = entry ? this.identityForFile(entry.file, entry.basePath) : name
     this.identityCache.set(name, { id, at: now })
+    return id
+  }
+
+  /**
+   * 一份 bot 文件的身份（identityOf 的规则，按文件算 —— 权限核对拿刚写下、还没进注册表的那份用）：对象 id，没有就是
+   * 名字；内置形态的 id（见 BUILTIN_FILES_KEY）只对 ShuviX 写入的那份文件成立，别的文件声明它也按名字算
+   */
+  identityForFile(file: Pick<ParsedBotFile, 'name' | 'objectId'>, basePath: string): string {
+    const id = file.objectId ?? file.name
+    if (parseObjectId(id)?.form === 'builtin' && this.trustedBuiltinFiles()[id] !== basePath) {
+      return file.name
+    }
     return id
   }
 

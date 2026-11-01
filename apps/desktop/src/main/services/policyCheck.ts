@@ -94,6 +94,14 @@ export interface PolicyCheckDeps {
   interfaces(): Interfaces
   /** `--redaction`（自动脱敏）用的模型清单与 agent 主体试算；没接 = 不支持这一种核对 */
   redaction?: RedactionCheckDeps
+  /**
+   * `--bot <name>`（不带 `--redaction`）：这个 bot 定时运行时能不问就做什么（botAccessCheck 的 forBotName；
+   * 给了文件就按装进去之后算）。没接 = 不支持这一种核对
+   */
+  botAccess?: (
+    nameOrIdentity: string,
+    policy?: { text: string; fileName: string }
+  ) => { text: string } | { error: string }
 }
 
 export interface PolicyCheckParams {
@@ -128,6 +136,7 @@ export const POLICY_CHECK_USAGE = [
   '                           [--page [<path>] | --channel <name> | --setting <key> | --read <path> | --write <path>]',
   '                           [--expect allow|deny]',
   '       shuvix policy check [<file>] --scopes [--from <ip>] [--device <id>]',
+  '       shuvix policy check [<file>] --bot <name>',
   '',
   '  <file>            a policy .md to check as if it were installed in ~/.shuvix/policies',
   '                    (it replaces the file of the same name there); omit to check what is in effect now',
@@ -144,6 +153,8 @@ export const POLICY_CHECK_USAGE = [
   '  --expect allow|deny   exit 1 when the result differs',
   '  --scopes          a matrix: every scope × the same devices as the table (or the one given with',
   '                    --from / --device), each cell read / write / admin, every call of the scope checked',
+  "  --bot <name>      (without --redaction) what this bot's scheduled runs may do without asking: other",
+  '                    sessions, the paths the policies naming it name, and what still asks',
   REDACTION_CHECK_USAGE
 ].join('\n')
 
@@ -198,6 +209,8 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
     return { stdout: `${POLICY_CHECK_USAGE}\n`, stderr: '', exitCode: 0 }
   }
   const flags = readFlags(params.flags)
+  // bot 定时运行的权限核对：`--bot` 不带 `--redaction`（带上就是按这个 bot 判自动脱敏）
+  if (flags.has('bot') && !flags.has('redaction')) return checkBot(params, flags, deps)
   const redaction = flags.has('redaction')
   const mode: readonly string[] = REDACTION_CHECK_FLAGS
   const misplaced = [...flags.keys()].filter((name) =>
@@ -646,6 +659,36 @@ function scopeMatrix(rows: DeviceRow[], walk: Walk, warnings: string[]): string[
 }
 
 // ─────────────────────────── 参数 ───────────────────────────
+
+/** `shuvix policy check [<file>] --bot <name>`：文字全在 botAccessCheck，这里只管用法与文件 */
+function checkBot(
+  params: PolicyCheckParams,
+  flags: Map<string, string>,
+  deps: PolicyCheckDeps
+): PolicyCheckResult {
+  const others = [...flags.keys()].filter((name) => name !== 'bot')
+  if (others.length > 0) {
+    throw new UsageError(
+      `--bot checks a bot's scheduled runs; it does not take ${others.map((f) => `--${f}`).join(', ')}.`
+    )
+  }
+  if (!deps.botAccess) throw new UsageError('--bot is not available here.')
+  const name = (flags.get('bot') ?? '').trim()
+  if (!name) throw new UsageError('--bot needs the name of a bot.')
+  let policy: { text: string; fileName: string } | undefined
+  if (params.file) {
+    const fileName = basename(params.file.path)
+    if (!fileName.toLowerCase().endsWith('.md')) {
+      throw new UsageError(
+        `${fileName}: policy files must end in .md (ShuviX only reads .md files in ~/.shuvix/policies)`
+      )
+    }
+    policy = { text: params.file.text, fileName }
+  }
+  const result = deps.botAccess(name, policy)
+  if ('error' in result) return { stdout: '', stderr: `${result.error}\n`, exitCode: 2 }
+  return { stdout: `${result.text}\n`, stderr: '', exitCode: 0 }
+}
 
 function readFlags(pairs: Array<[string, string]>): Map<string, string> {
   const known: readonly string[] = POLICY_CHECK_FLAGS

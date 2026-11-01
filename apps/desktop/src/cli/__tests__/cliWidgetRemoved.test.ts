@@ -9,6 +9,7 @@
  *             stdout 空，一次都不连 cli.sock
  *   WT4-CL-02 家目录里没有 cli-token → 同一句、同样退出 2（拒绝用不着令牌）
  *   WT4-CL-03 `--help`（退出 0）与不带参数（退出 1）的用法里没有 `shuvix widget`，照旧有 task stop 与 policy check
+ *             （policy check 那条提到 bot 定时运行的权限核对 `--bot <name>`）
  *   WT4-CL-04 `policy check --help` 照旧：正好发一条 `{command:'policy.check', params:{flags:[['help','']]}}`，回话原样打印
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -150,6 +151,7 @@ describe.skipIf(process.platform === 'win32')('shuvix widget 删掉了（CLI）[
     expect(r.stderr).not.toContain('shuvix widget')
     expect(r.stderr).toContain('shuvix task stop <pid>')
     expect(r.stderr).toContain('shuvix policy check')
+    expect(r.stderr).toContain('--bot <name>')
     expect(connections).toBe(0)
   })
 

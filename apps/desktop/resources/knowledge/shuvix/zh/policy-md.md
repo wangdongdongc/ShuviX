@@ -258,6 +258,38 @@ ShuviX 里，不写文件；那一行照常列着，变淡并带「已禁用」�
   例如 `action: [read]` 配 `match: inDir(object.path, vars.home + '/notes')`，文件工具读 `~/notes`
   就不再问。策略从不放宽命令沙箱 —— 受限的命令照样读不了那里；两边都管得到的是会话权限表里的一行
   （「允许并记住」，或在会话设置的「文件访问」里添加）。
+- **给一个 bot 它定时运行要用的权限**：给那个 bot 配一份配套策略，就像日记 bot 有 `daily-bot-access`
+  —— 定时器叫起 bot 时没有人回答询问（见 `bot-md` 的「定时运行与权限」）。每条规则都是 `force-allow`，
+  并以 `has(subject.bot) && subject.bot == '<这个 bot>' && subject.agentKind == 'root'` 开头（身份是 bot
+  文件的 `shuvix-id`，没有 id 时是名字；写下 bot 文件的工具结果会说是哪一个），再加上对客体最窄的条件。
+  用户同意之后再写；写下之后的工具结果会按装进去之后的样子核对那个 bot。比如一个每天早上把当天会话汇总进
+  一份笔记的 bot：
+
+```markdown
+---
+shuvix: policy v1
+name: xiaozhou-access
+description: 小周不用问你就能读别的会话、写 ~/notes/daily-summary.md。
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: force-allow
+    object.type: [session]
+    action: [read]
+    match: >-
+      has(subject.bot) && subject.bot == 'xiaozhou' && subject.agentKind == 'root'
+    prompt: 读当天的会话就是小周的工作。
+  - effect: force-allow
+    object.type: [path]
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == 'xiaozhou' && subject.agentKind == 'root'
+      && object.path == vars.home + '/notes/daily-summary.md'
+    prompt: 小周的每日汇总写在这里。
+---
+```
+
 - **加一道询问**：新建一份策略，对你在意的客体写一条 `ask` 规则 —— 见下面的示例。
 - **加一道硬停**：一条 `deny` 规则 —— 压过一切，包括会话的权限表。
 - **让「允许并记住」对你自己的询问也生效**：你写的路径 `ask` 在「允许并记住」之后照样会问，除非它的

@@ -624,6 +624,53 @@ export function getDesktopAgentTrialSecurityContext(
   )
 }
 
+/**
+ * bot 定时运行的权限核对（botAccessCheck.ts）用的试算：某个 bot 的一次定时运行 —— 一条新会话的根 agent（档案 `bot`，
+ * `subject.bot` = 它的身份），会话权限表只有那个位置会派生出来的几行（调用方给：工作目录、bot 文件、项目知识库），
+ * 没有授予行。按给定的用户策略判（「按装进去之后」由调用方换好），没有询问通道、不送审查。`vars` 一并交回：
+ * 核对要拿策略里写的 `vars.*` 去试。
+ */
+export function getDesktopBotRunTrial(
+  run: { bot: string; workingDirectory: string; aclRead: string[]; aclWrite: string[] },
+  trial: {
+    userPolicies: UserPolicyFile[]
+    logger: NonNullable<SecurityHostProvider['logger']>
+  }
+): { context: SecurityContext; vars: Record<string, unknown> } {
+  const vars = {
+    ...hostPolicyVars('', run.workingDirectory),
+    aclRead: run.aclRead,
+    aclWrite: run.aclWrite,
+    aclSessionRead: [],
+    aclSessionWrite: [],
+    aclWidgetRead: [],
+    aclWidgetWrite: []
+  }
+  const base = makeDesktopSecurityProvider({ sessionId: '' }, () => ({
+    workingDirectory: run.workingDirectory
+  }))
+  const provider: SecurityHostProvider = {
+    ...base,
+    getVars: () => vars,
+    getUserPolicies: () => trial.userPolicies,
+    logger: trial.logger,
+    onPermissionRequest: undefined,
+    requestUserInput: undefined
+  }
+  const context = createSecurityContext(
+    {
+      kind: 'agent',
+      sessionId: '',
+      agentKind: 'root',
+      profileName: 'bot',
+      attrs: { bot: run.bot }
+    },
+    { host: 'desktop', platform: process.platform, workspaceDir: run.workingDirectory },
+    provider
+  )
+  return { context, vars }
+}
+
 /** ProjectEnvVar[] → Record<string, string>，过滤空 key */
 function envVarsToRecord(envVars?: ProjectEnvVar[]): Record<string, string> | undefined {
   if (!envVars?.length) return undefined

@@ -55,7 +55,8 @@ import {
 } from '../services/toolContext'
 import { requestLiveDocument } from '../services/liveDocumentBridge'
 import { agentActorOf, withCallAgent } from '../services/toolAgent'
-import { botScheduleNoteFor } from '../services/botScheduleHint'
+import { botFileNoteFor } from '../services/botScheduleHint'
+import { policyBotAccessNoteFor } from '../services/botAccessHint'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { recordRead } from '../utils/toolUtils/fileTime'
 import { bundleRelOf, makeDesktopFileToolDeps } from './fileToolDeps'
@@ -214,33 +215,33 @@ export function parseVerdictOf(sessionId: string, doc: string, text: string): st
   if (!MARKDOWN_RE.test(doc)) return null
   const kind = sessionDocumentKind(sessionId) ?? detectShuvixMarker(text)?.type ?? null
   if (!isParsedShuvixFileKind(kind)) return null
-  return joinNotes(
-    judgeDocument(kind, doc, text).text,
-    kind === 'bot' ? scheduleOf(doc, text) : null
-  )
+  return joinNotes(judgeDocument(kind, doc, text).text, contractNoteOf(kind, doc, text))
 }
 
 /**
- * bot 文档的排期预演（botScheduleHint）：每条定时接下来几次什么时候触发 —— doc_read 的判定、编辑器里改动的回执、
- * 按承载项目改判的回执都附上它（磁盘回落那条已经由写入流程的 writtenNote 附过）。出错就不附：它只是附言
+ * 契约文档的附言 —— bot 文档：排期预演 + 定时运行的权限核对（botFileNoteFor）；策略文档：它点名的 bot 的权限核对，
+ * 按装进去之后算（botAccessHint）。doc_read 的判定、编辑器里改动的回执、按承载项目改判的回执都附上它（磁盘回落那条
+ * 已经由写入流程的 writtenNote 附过）。出错就不附：它只是附言
  */
-function scheduleOf(doc: string, text: string): string | null {
+function contractNoteOf(kind: string | null, doc: string, text: string): string | null {
   try {
-    return botScheduleNoteFor(text, basename(doc))
+    if (kind === 'bot') return botFileNoteFor(text, doc)
+    if (kind === 'policy') return policyBotAccessNoteFor(text, basename(doc))
+    return null
   } catch {
     return null
   }
 }
 
-/** 这份文档按 bot 文件判（先看承载项目，查不了就只看文件自己的标记 —— 种类查询出错不能连带丢掉解析器那段回执） */
-function botDocument(sessionId: string, text: string): boolean {
+/** 这份文档按哪种契约判（先看承载项目，查不了就只看文件自己的标记 —— 种类查询出错不能连带丢掉解析器那段回执） */
+function documentKindOf(sessionId: string, text: string): string | null {
   let kind: string | null = null
   try {
     kind = sessionDocumentKind(sessionId)
   } catch {
     kind = null
   }
-  return (kind ?? detectShuvixMarker(text)?.type ?? null) === 'bot'
+  return kind ?? detectShuvixMarker(text)?.type ?? null
 }
 
 function joinNotes(...notes: Array<string | null>): string | null {
@@ -265,10 +266,7 @@ function receiptForCarrier(
     if (!isParsedShuvixFileKind(kind) || !MARKDOWN_RE.test(doc)) return note
     if (detectShuvixMarker(text)?.type === kind) return note
     const verdict = judgeDocument(kind, doc, text)
-    return joinNotes(
-      verdict.clean ? null : verdict.text,
-      kind === 'bot' ? scheduleOf(doc, text) : null
-    )
+    return joinNotes(verdict.clean ? null : verdict.text, contractNoteOf(kind, doc, text))
   } catch {
     return note
   }
@@ -318,7 +316,7 @@ function liveDiagnostics(
             : undefined,
         diagnoseOnly: true
       })?.note ?? null
-    return joinNotes(review, botDocument(ctx.sessionId, text) ? scheduleOf(doc, text) : null)
+    return joinNotes(review, contractNoteOf(documentKindOf(ctx.sessionId, text), doc, text))
   } catch {
     return null
   }

@@ -16,14 +16,26 @@
  *
  * BK-26 反过来守笔记本提示词那一头：`{{shuvix:documentKind}}`（agent-runtime `renderDocumentKind`）按文件种类
  * 指向说明书里的某几篇，用的是这里的真实目录 —— 说明书改了文件名而片段没跟上，这里先红。
+ *
+ * BK-27 / BK-28 守 bot 定时运行的权限核对（设计稿 docs/bot-access-check-design.md）在说明书里的那两处：policy-md
+ * 「放宽与收紧」里给一个 bot 配的配套策略模板（三语的判定字段逐字相同、每条规则都是带三个条件的 force-allow、
+ * 拿真实引擎核对恰是它说的样子），以及 bot-md「定时运行与权限」一节讲到 force-allow、daily-bot-access、根 agent
+ * 的条件与 `shuvix policy check [<file>] --bot`。
  */
 import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  botAccessNote,
   buildBuiltinPolicies,
   buildBuiltinProfiles,
+  createSecurityContext,
+  parsePolicyDefinitionFile,
+  policyNamesBot,
+  resolvePolicyFiles,
+  type ParsedPolicyFile,
+  type PolicyRuleSpec,
   headingsOf,
   renderDocumentKind,
   validateBundleFiles,
@@ -628,5 +640,173 @@ describe('BK-26 笔记本提示词指向的说明书条目真的在', () => {
     }
     // agent / bot / policy（含远程访问、自动脱敏）/ hook / skills / knowledge-entry
     expect(referenced.size).toBeGreaterThanOrEqual(8)
+  })
+})
+
+describe('BK-27 policy-md 里给一个 bot 配的配套策略模板', () => {
+  /** 某种语言 policy-md.md 里那份模板（```markdown 块里带 `name: xiaozhou-access` 的那一块）解析出的策略 */
+  const templateOf = (lang: string): ParsedPolicyFile => {
+    const md = readFileSync(join(BASE_DIR, lang, 'policy-md.md'), 'utf8')
+    const block = [...md.matchAll(/```markdown\n([\s\S]*?)```/g)]
+      .map((m) => m[1])
+      .find((b) => b.includes('name: xiaozhou-access'))
+    expect(block, `${lang}/policy-md.md 没有 xiaozhou-access 模板`).toBeDefined()
+    const reasons: string[] = []
+    const parsed = parsePolicyDefinitionFile(block!, 'xiaozhou-access', (m) => reasons.push(m))
+    expect(reasons, lang).toEqual([])
+    expect(parsed, lang).not.toBeNull()
+    return parsed!
+  }
+  /** 判定字段（剥掉人读的 prompt / description / body） */
+  const machine = (p: ParsedPolicyFile): Record<string, unknown> => ({
+    name: p.name,
+    scope: p.scope,
+    lets: p.lets,
+    rules: p.rules.map(({ prompt: _prompt, ...rest }: PolicyRuleSpec) => rest)
+  })
+
+  it.each(EXPECTED_LANGS)(
+    'BK-27 %s：解析得过；每条规则都是 force-allow，带 has(subject.bot)、身份与根 agent 三个条件',
+    (lang) => {
+      const template = templateOf(lang)
+      expect(template.rules.length).toBeGreaterThan(0)
+      for (const rule of template.rules) {
+        expect(rule.effect).toBe('force-allow')
+        expect(rule.match).toContain('has(subject.bot)')
+        expect(rule.match).toContain("subject.bot == '")
+        expect(rule.match).toContain("subject.agentKind == 'root'")
+      }
+      expect(policyNamesBot(template, 'xiaozhou')).toBe(true)
+    }
+  )
+
+  it('BK-27 三语的判定字段逐字相同', () => {
+    const [first, ...rest] = EXPECTED_LANGS.map((lang) => ({
+      lang,
+      fields: machine(templateOf(lang))
+    }))
+    for (const other of rest) {
+      expect({ lang: other.lang, fields: other.fields }).toEqual({
+        lang: other.lang,
+        fields: first.fields
+      })
+    }
+  })
+
+  it.each(EXPECTED_LANGS)(
+    'BK-27 %s：拿真实引擎核对 —— 会话读放行、发消息会停、那份笔记读写放行，没有更宽的',
+    (lang) => {
+      const READ_MD = createInlinePolicyMdReader()
+      const HOME = '/Users/u'
+      const WORKDIR = '/Users/u/work/tiny-cli'
+      const BOT_FILE = '/Users/u/.shuvix/bots/xiaozhou.md'
+      const user = { ...templateOf(lang), fileName: 'xiaozhou-access.md' }
+      const vars = {
+        home: HOME,
+        workspace: WORKDIR,
+        aclRead: [WORKDIR, BOT_FILE],
+        aclWrite: [WORKDIR, BOT_FILE],
+        aclSessionRead: [],
+        aclSessionWrite: [],
+        aclWidgetRead: [],
+        aclWidgetWrite: [],
+        now: '2026-10-31T10:00:00.000Z',
+        dailyDir: '/Users/u/.shuvix/daily'
+      }
+      const warnings: string[] = []
+      const context = createSecurityContext(
+        {
+          kind: 'agent',
+          sessionId: '',
+          agentKind: 'root',
+          profileName: 'bot',
+          attrs: { bot: 'xiaozhou' }
+        },
+        { host: 'desktop' },
+        {
+          host: 'desktop',
+          pathSep: '/',
+          getVars: () => vars,
+          readBuiltinPolicyMd: READ_MD,
+          getUserPolicies: () => [user],
+          logger: {
+            info: () => {},
+            warn: (m) => void warnings.push(m),
+            error: (m) => void warnings.push(m)
+          }
+        }
+      )
+      const naming = resolvePolicyFiles(buildBuiltinPolicies({ readMd: READ_MD }), [user])
+        .filter((e) => !e.shadowedBy)
+        .map((e) => e.policy)
+        .filter((p) => policyNamesBot(p, 'xiaozhou'))
+      const note = botAccessNote({
+        botName: 'xiaozhou',
+        identity: 'xiaozhou',
+        identityFrom: 'name',
+        naming,
+        locations: [
+          {
+            label: 'a temporary folder',
+            vars,
+            judge: (action, object, tool) => context.judgeGate(action, object, { tool })
+          }
+        ],
+        reviewActive: true,
+        host: { home: HOME, root: '/', sep: '/', vars, isDirectory: () => false },
+        policiesDirLabel: '~/.shuvix/policies/',
+        now: new Date('2026-10-31T10:00:00.000Z'),
+        warnings: () => warnings
+      })
+      const lines = note.split('\n')
+      expect(lines).toContain('- read other sessions: allowed (xiaozhou-access).')
+      expect(lines).toContain(
+        '- send messages into other sessions: asks (ask-on-session-access; only the user can answer, so the run would stop).'
+      )
+      expect(lines).toContain(
+        '- ~/notes/daily-summary.md: read and write allowed (xiaozhou-access).'
+      )
+      expect(note).toContain('Policies that name it: xiaozhou-access.')
+      expect(note).not.toContain('also allowed')
+      expect(note).not.toContain('plain `allow`')
+      expect(note).not.toContain('companion policy')
+      expect(note).not.toContain('Some rules failed')
+    }
+  )
+})
+
+describe.each(LANGS)('BK-28 bot-md「定时运行与权限」 · %s', (lang) => {
+  const HEADINGS: Record<string, string> = {
+    en: '### Scheduled runs and access',
+    zh: '### 定时运行与权限',
+    ja: '### 定時実行と権限'
+  }
+
+  it('BK-28 那一节讲到 force-allow、daily-bot-access、根 agent 的条件与 `shuvix policy check [<file>] --bot`', () => {
+    const heading = HEADINGS[lang]
+    expect(heading, lang).toBeDefined()
+    const md = readFileSync(join(BASE_DIR, lang, 'bot-md.md'), 'utf8')
+    const all = md.split('\n')
+    const start = all.indexOf(heading)
+    expect(start, `${lang}/bot-md.md 没有「${heading}」`).toBeGreaterThanOrEqual(0)
+    // 一节到下一个同级或更高的标题为止（代码块里的行不算标题）
+    let fenced = false
+    let end = all.length
+    for (let i = start + 1; i < all.length; i++) {
+      if (all[i].startsWith('```')) fenced = !fenced
+      if (!fenced && /^#{1,3} /.test(all[i])) {
+        end = i
+        break
+      }
+    }
+    const section = all.slice(start, end).join('\n')
+    for (const needle of [
+      'force-allow',
+      'daily-bot-access',
+      "subject.agentKind == 'root'",
+      'shuvix policy check [<file>] --bot'
+    ]) {
+      expect(section, `${lang}: ${needle}`).toContain(needle)
+    }
   })
 })

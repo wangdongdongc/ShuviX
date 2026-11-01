@@ -122,6 +122,33 @@ When an agent writes a bot file, the tool result says when each `timer.fired` bi
 14 days (a `when` that calls `activeSessions` is checked as if every day had sessions), and says so when a binding
 never fires in that window or its `project` does not name exactly one project.
 
+### Scheduled runs and access
+
+Nobody is there to answer asks when a binding fires. A run that asks something only the user can answer — reading
+or messaging another session (`ask-on-session-access`), anything a `force-ask` rule covers, and every ask while the
+automatic review is turned off — waits on its card until the user comes back, and the binding's next firings are
+skipped meanwhile. Other asks (a file in the home folder outside the working folder, a write outside it) go to the
+automatic review, which may refuse.
+
+So a bot whose job needs any of that gets a **companion policy** of its own, the way the diary bot has
+`daily-bot-access`: one file in `~/.shuvix/policies/` (by convention `<bot>-access.md`) whose rules are all
+`force-allow` (a plain `allow` never overrides an ask) and each match
+`has(subject.bot) && subject.bot == '<the bot>' && subject.agentKind == 'root'` plus the narrowest condition on the
+object. `policy-md` (Loosening and tightening) has the template. When you set a bot up for someone: work out what its
+runs read or write outside the working folder and whether they read other sessions, tell the user what it needs and
+why, and write the policy only after they agree.
+
+The tool result of writing a bot file that has a binding includes an **unattended access check**. It runs the real
+policies as one of the bot's scheduled runs would meet them (its root agent, in the binding's project or a temporary
+folder, with nothing granted in the permission table) and says, for reading and messaging other sessions, for each
+path named in the policies that name the bot, and for a few places that should still ask (the home folder outside
+the working folder, outside the home folder, files next to the named paths), whether it is allowed, goes to the
+automatic review or would stop the run. It also says how a policy refers to this bot — its `shuvix-id`, or its name
+when the file has none, in which case renaming the bot breaks the policy — names the rules written as a plain
+`allow`, and points out anything the policies allow beyond the paths they name. Writing a policy that names a bot
+(`subject.bot == '…'`) gives the same check for that bot, with the new policy installed;
+`shuvix policy check [<file>] --bot <name>` prints it too.
+
 When a binding fires, ShuviX opens a new session bound to this bot — in the binding's project, or in a temporary
 workspace — (titled "display name · time"; in the sidebar it is folded into the bot's **Scheduled runs** row),
 sends `message` as a user message whose origin is "trigger", and appends a `<trigger_event>` fence: every field of

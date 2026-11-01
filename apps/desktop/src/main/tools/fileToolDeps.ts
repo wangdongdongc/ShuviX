@@ -28,6 +28,7 @@ import { isBuiltinBundle, locateBundle } from '../services/knowledge/knowledgePa
 import { t } from '../i18n'
 import { policyCheckHint } from '../services/policyCheckHint'
 import { botScheduleHint } from '../services/botScheduleHint'
+import { policyBotAccessHint } from '../services/botAccessHint'
 
 export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit); local HTML (.html/.htm) files are read as text source, not auto-converted. For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
@@ -86,9 +87,10 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
         return null
       }
     },
-    // 写下一份管远程访问或自动脱敏的策略 → 回执里提一句 `shuvix policy check`（policyCheckHint.ts）；
-    // 写下一份 bot 文件 → 它的定时接下来几次什么时候触发（botScheduleHint.ts）
-    writtenNote: (path, text) => policyCheckHint(path, text) ?? botScheduleHint(path, text),
+    // 写下一份管远程访问或自动脱敏的策略 → 回执里提一句 `shuvix policy check`（policyCheckHint.ts）；点名了 bot 的
+    // 策略 → 那个 bot 定时运行时能不问就做什么（botAccessHint.ts）；写下一份 bot 文件 → 它的定时接下来几次什么时候
+    // 触发，以及同样的权限核对（botScheduleHint.ts）
+    writtenNote: (path, text) => policyWrittenNote(path, text) ?? botScheduleHint(path, text),
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
@@ -111,4 +113,12 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
       }
     }
   }
+}
+
+/** 策略文件的回执附言：`shuvix policy check` 那一句，再接点名的 bot 的权限核对；都没有回 null */
+function policyWrittenNote(path: string, text: string): string | null {
+  const notes = [policyCheckHint(path, text), policyBotAccessHint(path, text)].filter(
+    (n): n is string => !!n
+  )
+  return notes.length > 0 ? notes.join('\n\n') : null
 }

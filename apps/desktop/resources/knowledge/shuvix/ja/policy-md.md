@@ -292,6 +292,39 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
   読めるようになる。ポリシーがコマンドサンドボックスを広げることはない —— 制限付きのコマンドは
   そこを読めないまま；両方に効くのはセッションの権限表の行（「許可して記憶」、またはセッション設定の
   「ファイルアクセス」で追加したもの）。
+- **一つの bot に定時実行で要るものを与える**：日記 bot の `daily-bot-access` のように、その bot の
+  付属ポリシーを書く —— タイマーが bot を起こすとき確認に答える人はいません（`bot-md` の「定時実行と権限」）。
+  規則はすべて `force-allow` で、`has(subject.bot) && subject.bot == '<その bot>' && subject.agentKind == 'root'`
+  から始め（識別子は bot ファイルの `shuvix-id`、id が無いときは名前。bot を書いたときのツールの結果が
+  どちらかを示します）、そこにオブジェクトへのいちばん狭い条件を加えます。ユーザーが同意してから書くこと；
+  書いたあとのツールの結果が、ポリシーを入れた状態でその bot を確かめます。毎朝その日のセッションを一つの
+  メモにまとめる bot なら：
+
+```markdown
+---
+shuvix: policy v1
+name: xiaozhou-access
+description: 小周は確認なしで別のセッションを読み、~/notes/daily-summary.md に書きます。
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: force-allow
+    object.type: [session]
+    action: [read]
+    match: >-
+      has(subject.bot) && subject.bot == 'xiaozhou' && subject.agentKind == 'root'
+    prompt: その日のセッションを読むのが小周の仕事です。
+  - effect: force-allow
+    object.type: [path]
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == 'xiaozhou' && subject.agentKind == 'root'
+      && object.path == vars.home + '/notes/daily-summary.md'
+    prompt: 小周は毎日のまとめをここに書きます。
+---
+```
+
 - **確認を加える**：気にかけるオブジェクトに `ask` の規則を持つ新しいポリシー —— 下の例を参照。
 - **強い停止を加える**：`deny` の規則 —— セッションの権限表を含むすべてに勝つ。
 - **自分の確認にも「許可して記憶」を効かせる**：あなたが書いたパスの `ask` は、`match` が

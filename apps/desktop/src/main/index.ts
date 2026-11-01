@@ -101,6 +101,8 @@ import { builtinTimer } from './services/triggerTimer'
 import { botTriggers } from './services/botTriggerService'
 import { botService } from './services/botService'
 import { setBotScheduleProjectLookup } from './services/botScheduleHint'
+import { setBotAccessChecker } from './services/botAccessHint'
+import { desktopBotAccessChecker } from './services/botAccessWiring'
 import { projectService } from './services/projectService'
 import { sessionService } from './services/sessionService'
 import { settingsService } from './services/settingsService'
@@ -1118,6 +1120,8 @@ app.whenReady().then(async () => {
   hookService.setDisabledReader((objectId) => mdMetaStore.isDisabled(objectId))
   // bot 文件写入回执里的排期预演：`project` 对得上几个项目（file 工具不直接依赖 projectService 与数据库）
   setBotScheduleProjectLookup((name) => projectService.projectsNamed(name).length)
+  // bot 文件 / 点名 bot 的策略的写入回执里那段定时运行权限核对（同上：回执挂在 file 工具上，不能静态引入服务）
+  setBotAccessChecker(desktopBotAccessChecker())
 
   // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
   // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在
