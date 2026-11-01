@@ -694,6 +694,9 @@ describe('sshControl 交给 ssh 的 argv', () => {
     // 任何交互提示（密码、passphrase、指纹）在这里都只会挂死
     expect(argv).toContain('BatchMode=yes')
     expect(argv).toContain('ControlMaster=auto')
+    // 对端静默一分钟算断：不探测的话安静的连接会无限挂着，探得太勤又会把 TCP 自己能恢复的抖动判死
+    expect(argv).toContain('ServerAliveInterval=15')
+    expect(argv).toContain('ServerAliveCountMax=4')
     expect(argv.slice(-3)).toEqual(['--', 'testbox', 'echo hi'])
 
     await sshDisconnect(sid, 'testbox', CONFIG)
@@ -740,6 +743,8 @@ describe('sshControl 交给 ssh 的 argv', () => {
       expect(argv).toContain('ControlMaster=no')
       expect(argv).toContain('ControlPath=none')
       expect(argv).not.toContain('ControlMaster=auto')
+      // 没有 master 也要探测：每条命令各自一条连接，安静的那条同样会挂
+      expect(argv).toContain('ServerAliveInterval=15')
 
       // 没有 socket 这回事：连接状态、断开、会话释放三处一起退化成「什么都没有」
       expect(win.sshConnectedAliases('win-session', ['testbox'])).toEqual([])
@@ -1068,6 +1073,8 @@ describe('sshControl 交给 scp / rsync 的 argv', () => {
     expect(argv[argv.indexOf('-F') + 1]).toBe(CONFIG)
     expect(argv).toContain('BatchMode=yes')
     expect(argv).toContain('ConnectTimeout=15')
+    expect(argv).toContain('ServerAliveInterval=15')
+    expect(argv).toContain('ServerAliveCountMax=4')
     expect(argv).toContain('ControlMaster=auto')
     expect(argv).toContain('ControlPersist=10m')
     expect(argv.some((a) => a.startsWith(`ControlPath=${CONTROL_ROOT}/`))).toBe(true)
@@ -1108,6 +1115,7 @@ describe('sshControl 交给 scp / rsync 的 argv', () => {
     expect(sshCmd).toContain(`-F ${CONFIG}`)
     expect(sshCmd).toContain('BatchMode=yes')
     expect(sshCmd).toContain('ConnectTimeout=15')
+    expect(sshCmd).toContain('ServerAliveInterval=15')
     expect(sshCmd).toContain(`ControlPath=${CONTROL_ROOT}/`)
     expect(argv.slice(4)).toEqual(['--', join(XFER, 'tree'), 'testbox:/srv/tree'])
   }, 60000)

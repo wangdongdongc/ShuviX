@@ -31,6 +31,16 @@ const CONTROL_PERSIST = `${CONTROL_PERSIST_MIN}m`
 export const CONTROL_PERSIST_MS = CONTROL_PERSIST_MIN * 60_000
 /** 建连超时（秒） */
 const CONNECT_TIMEOUT_SEC = 15
+/**
+ * 对端静默多久算断（秒）= 探测间隔 × 次数。
+ *
+ * 不设的话，一条安静的连接遇上对端静默（sshd 卡住、NAT 表项过期）会**无限挂着** —— 能兜底的只有
+ * 命令自己的超时（最长一小时）或 TCP keepalive（两小时起）。但也不能设得太短：实测断网 30 秒时，
+ * 不探测的连接靠 TCP 重传自己就恢复了，5 秒 × 3 的探测反而在第 15 秒把它判死、结果丢掉。
+ * 一分钟是两头的折中：扛得过一分钟内的抖动，又不会挂一小时。
+ */
+const SERVER_ALIVE_INTERVAL_SEC = 15
+const SERVER_ALIVE_COUNT_MAX = 4
 /** 进程退出后再等多久收尾巴输出（毫秒）—— `close` 没来也要落定，见 runProcess */
 const EXIT_DRAIN_MS = 300
 
@@ -119,6 +129,26 @@ function ensureSessionControlDir(sessionId: string): void {
  */
 function configArgs(configPath: string | undefined): string[] {
   return configPath ? ['-F', configPath] : []
+}
+
+/**
+ * 每次建连都带的固定参数：不交互、建连超时、对端静默探测。
+ *
+ * 命令行 `-o` 先于用户配置生效（OpenSSH 取第一次拿到的值）。探测跑在 master 那条连接上，
+ * 所以每次调用都要带 —— 谁建 master 谁的值生效。
+ */
+function connectArgs(configPath: string | undefined): string[] {
+  return [
+    ...configArgs(configPath),
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
+    '-o',
+    `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SEC}`,
+    '-o',
+    `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`
+  ]
 }
 
 /** 复用/多路复用相关的固定参数 */
@@ -248,11 +278,7 @@ export async function sshExec(opts: {
   ensureSessionControlDir(opts.sessionId)
   const sock = controlPath(opts.sessionId, opts.alias)
   const args = [
-    ...configArgs(opts.configPath),
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
+    ...connectArgs(opts.configPath),
     ...multiplexArgs(sock),
     // `--` 终止选项解析：即便别名不知怎么以 `-` 开头混了进来，ssh 也只会把它当主机名，
     // 不会当成 `-oProxyCommand=…` 那种能在**本地**执行命令的选项。与 sshConfig 的过滤
@@ -293,11 +319,7 @@ export async function sshCopy(opts: {
     // 拼出一条命令行、由远端 shell 求值 —— 远端路径里的 `;` 就成了远端命令执行。
     // 走 SFTP 时路径是协议里的一个字段，原样抵达，不经任何 shell。
     '-s',
-    ...configArgs(opts.configPath),
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
+    ...connectArgs(opts.configPath),
     ...multiplexArgs(sock),
     '--',
     ...(opts.direction === 'up' ? [opts.localPath, remote] : [remote, opts.localPath])
@@ -362,15 +384,7 @@ export async function sshSync(opts: {
 }): Promise<SshExecResult> {
   ensureSessionControlDir(opts.sessionId)
   const sock = controlPath(opts.sessionId, opts.alias)
-  const sshCmd = [
-    'ssh',
-    ...configArgs(opts.configPath),
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
-    ...multiplexArgs(sock)
-  ].join(' ')
+  const sshCmd = ['ssh', ...connectArgs(opts.configPath), ...multiplexArgs(sock)].join(' ')
   const remote = `${opts.alias}:${opts.remotePath}`
   const args = [
     '-a',
