@@ -13,3 +13,4 @@ The exported project is a fork: edits there do not flow back into ShuviX. `EXPOR
 - **`/w/<id>/fs/…` (and an older widget's `/w/<id>/db/…`) are served by ShuviX** and do not exist there either.
 - **The data stays in ShuviX.** The export carries `schema.sql` but no rows. If the user wants the data too, read it with `sql` (for example `SELECT json_group_array(json_object('id', id, 'title', title)) FROM books`) and save it next to the archive.
 - Imported images become URLs under Vite instead of inline data URLs. `<img src={x}>` works either way.
+- The libraries the widget imports (`libraries.md`) are listed in its `package.json` at the versions ShuviX ships, with the type packages `tsc` needs; `npm install` fetches them.

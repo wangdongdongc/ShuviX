@@ -2,7 +2,7 @@
  * Bundler 模块入口 —— 主进程持有的 esbuild 打包能力单例。
  *
  * 消费方：
- * - src/main/services/widget/ —— widget 运行时与导出
+ * - src/main/services/widget/ —— widget 运行时与导出（小组件可用的库表 widgetLibs.ts 是纯数据，直接引那个文件）
  */
 
 import { join, resolve } from 'path'

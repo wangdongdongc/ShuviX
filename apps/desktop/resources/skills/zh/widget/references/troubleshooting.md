@@ -4,7 +4,9 @@
 
 失败的 `build` 会列出带文件、行号和列号的 esbuild 消息。修好再构建。
 
-- `Could not resolve "<package>"`：这个 import 在封闭的依赖集（界面：React、React DOM、React Router、`shuvix/widget`；`api.ts`：`shuvix/widget-api`、`zod`）之外。用现有的东西来写：内联 SVG 图标、`Intl`、`Date`。
+- `"<package>" is not available in widgets`：这个包不在 ShuviX 随应用提供的库里，消息里列出了有哪些（`libraries.md`）。用它们来写，或者用 React、`Intl`、`Date`。`api.ts` 只能 import `shuvix/widget-api` 和 `zod`。
+- `"three/addons/…" is not among the three files ShuviX ships`：换成消息里列出的某个 addon。
+- `Importing "highlight.js" bundles every language`：import `highlight.js/lib/core`，再注册要用的语言（`libraries.md`）。
 - `"shuvix/widget-api" runs on ShuviX's side, not in the widget's screen`：界面把 `api.ts`（或 zod）当作值 import 了。写成 `import type Api from './api'`。
 - `api.ts: …`：API 没通过检查：某个操作缺 `description` 或 `input`、名称不合规、智能体读不懂的 schema（`z.date()`、`z.bigint()`、`z.map()`）。消息会指明是哪一处；界面也没有重新构建。
 - `No loader is configured for ".<ext>" files`：除了代码，只有 `.css`、`.json`、`.txt` 和图片 `.svg`、`.png`、`.jpg`、`.gif` 能 import。其他文件通过 `fs/file` 从磁盘读取（`files.md`）。

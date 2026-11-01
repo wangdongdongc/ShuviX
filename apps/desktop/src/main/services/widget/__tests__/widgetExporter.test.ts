@@ -21,6 +21,26 @@
  *   WC-89 index.html：主题脚本排在 `/src/index.css` 那条 link 之前，正文 = themeBootScript(WIDGET_EXPORT_THEME)
  *   WC-90 EXPORT_NOTES 第 6 条点名 src/shuvix-theme.css、data-scheme、useTheme()、themeColor()；文件表里有 src/shuvix-theme.css
  *   WC-91 组件自己也有 src/shuvix-theme.css → 归档里是生成的那份
+ *
+ * 组件用到的库（bundler/widgetLibs.json）进导出项目的 package.json：
+ *   X-1  librariesImportedBy 认 `from` / `import '…'` / `import\n'…'` / `import('…')` / `export … from`、库的子路径
+ *        （`three/addons/…`、`highlight.js/lib/core`、`uplot/dist/…css`）；按表里的顺序、不重复
+ *   X-2  只有非库的 import（react、react-dom/client、shuvix/widget、./local、zod、left-pad、`@dnd-kit`）→ []
+ *   X-3  多行的具名 import 算；`import type` 算（多一个依赖无害）；裸字符串 `'three'` 不算；引号对不上不算
+ *   X-4  withLibraryDependencies(模板插值后的 package.json, [three, d3, lucide-react])：dependencies / devDependencies
+ *        = 模板的 + 库的精确版本 / 类型包，键按字母排；别的顶层键顺序与值不变；2 空格缩进、结尾换行
+ *   X-5  已有 `three: '^0.1.0'` → 换成表里的版本
+ *   X-6  输入没有 dependencies / devDependencies：只补 dependencies；库不带类型包就不写空的 devDependencies
+ *        （带类型包的库照样补出 devDependencies）
+ *   X-7  exportWidget：index.tsx 用 lucide-react、three/addons/…、d3、papaparse，components/Chart.tsx 用 chart.js，
+ *        api.ts 用 zod → 解开的 package.json：模板的依赖值不变 + 这些库（表里的版本），三个类型包进 devDependencies，键都排好
+ *   X-8  一个库都不用 → package.json 与模板插值后的逐字节相同（不重新序列化）
+ *   X-9  库只出现在不扫的地方（notes.md、data.json、被模板盖掉的 src/shuvix-widget.ts、node_modules/）→ package.json 不变
+ *   X-10 库只从组件的 .css 里 `@import "…"` / `@import url('…')` 引、或只经 `require('…')` 引 → 照样补进去
+ *   X-11 只用自带类型的库（lucide-react、chart.js、dayjs、@tanstack/react-virtual）的导出解开后 `tsc -b` 通过
+ *        （仓库的 node_modules 链进去；靠 exportTypes 的库仓库里没装类型包，查不了）
+ *   X-12 EXPORT_NOTES 第 3 条（依赖）：不再说「只有 react、react-dom、react-router、spectacle」，说的是 ShuviX 随带的库
+ *        与「这个组件 import 的那些」写在这里
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -56,8 +76,14 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
 
-import { exportThemeCss, exportWidget } from '../widgetExporter'
+import {
+  exportThemeCss,
+  exportWidget,
+  librariesImportedBy,
+  withLibraryDependencies
+} from '../widgetExporter'
 import { EXPORTED_VERSIONS } from '../exportedVersions'
+import { WIDGET_LIBRARIES, type WidgetLibrary } from '../../bundler/widgetLibs'
 import {
   themeBootScript,
   widgetThemeCss,
@@ -396,4 +422,384 @@ describe('WC-87 带 API 的导出能过类型检查', () => {
     },
     120_000
   )
+})
+
+// ────────────────────────────── 组件用到的库进 package.json ──────────────────────────────
+
+describe('X-1..12 组件 import 的库进导出项目的 package.json', () => {
+  /** 表里的库（按名字取；名字写错直接抛，免得断言落空） */
+  const lib = (name: string): WidgetLibrary => {
+    const found = WIDGET_LIBRARIES.find((l) => l.name === name)
+    if (!found) throw new Error(`not in widgetLibs.json: ${name}`)
+    return found
+  }
+  const names = (libs: readonly WidgetLibrary[]): string[] => libs.map((l) => l.name)
+
+  /** 模板 package.json.tmpl 插值后的样子（与 exportWidget 第 1 步同一份输入；只用到这些占位符） */
+  const renderedTemplatePackageJson = (): string => {
+    const values: Record<string, string> = {
+      WIDGET_ID: ID,
+      WIDGET_DESCRIPTION: h.widget!.description,
+      REACT_VERSION: EXPORTED_VERSIONS.react,
+      REACT_DOM_VERSION: EXPORTED_VERSIONS['react-dom'],
+      REACT_ROUTER_VERSION: EXPORTED_VERSIONS['react-router'],
+      ZOD_VERSION: EXPORTED_VERSIONS.zod,
+      TAILWINDCSS_VERSION: EXPORTED_VERSIONS.tailwindcss,
+      TAILWINDCSS_VITE_VERSION: EXPORTED_VERSIONS['@tailwindcss/vite'],
+      TYPES_REACT_VERSION: EXPORTED_VERSIONS['@types/react'],
+      TYPES_REACT_DOM_VERSION: EXPORTED_VERSIONS['@types/react-dom'],
+      VITEJS_PLUGIN_REACT_VERSION: EXPORTED_VERSIONS['@vitejs/plugin-react'],
+      TYPESCRIPT_VERSION: EXPORTED_VERSIONS.typescript,
+      VITE_VERSION: EXPORTED_VERSIONS.vite
+    }
+    const text = readFileSync(join(TEMPLATE_DIR, 'package.json.tmpl'), 'utf8').replace(
+      /\{\{([A-Z_]+)\}\}/g,
+      (match, key: string) => values[key] ?? match
+    )
+    expect(text).not.toContain('{{')
+    return text
+  }
+
+  interface Pkg {
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+    [key: string]: unknown
+  }
+
+  const SCREEN_WITHOUT_LIBRARIES = `import { createRoot } from 'react-dom/client'
+const el = document.getElementById('root')
+if (el) createRoot(el).render(<p>hi</p>)
+`
+
+  it('X-1 各种写法都认、按表里的顺序、不重复', () => {
+    const sources = [
+      `import { Plus } from 'lucide-react'
+import { OrbitControls } from "three/addons/controls/OrbitControls.js"
+import { useSortable } from '@dnd-kit/sortable'
+import hljs from 'highlight.js/lib/core'
+`,
+      `import 'chart.js/auto'
+const d3 = await import('d3')
+import
+'uplot/dist/uPlot.min.css'
+export { default as dayjs } from 'dayjs'
+import { Trash2 } from 'lucide-react'
+`
+    ]
+    expect(names(librariesImportedBy(sources))).toEqual([
+      'lucide-react',
+      'chart.js',
+      'uplot',
+      'd3',
+      'dayjs',
+      '@dnd-kit/sortable',
+      'highlight.js',
+      'three'
+    ])
+    // 顺序就是表里的顺序（不是出现的顺序）
+    const order = WIDGET_LIBRARIES.map((l) => l.name)
+    const got = names(librariesImportedBy(sources)).map((n) => order.indexOf(n))
+    expect(got).toEqual([...got].sort((a, b) => a - b))
+  })
+
+  it('X-2 只有非库的 import → []', () => {
+    const source = `import { useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { createClient } from 'shuvix/widget'
+import { List } from './local'
+import { z } from 'zod'
+import pad from 'left-pad'
+import x from '@dnd-kit'
+`
+    expect(librariesImportedBy([source])).toEqual([])
+    expect(librariesImportedBy([])).toEqual([])
+  })
+
+  it('X-3 多行具名 import 与 import type 算；裸字符串、引号对不上的不算', () => {
+    expect(
+      names(
+        librariesImportedBy([
+          `import {\n  Chart,\n  BarController,\n  BarElement,\n} from 'chart.js'\n`
+        ])
+      )
+    ).toEqual(['chart.js'])
+    expect(names(librariesImportedBy([`import type { Mesh } from 'three'\n`]))).toEqual(['three'])
+    expect(librariesImportedBy([`const s = 'three'\nconsole.log(s)\n`])).toEqual([])
+    expect(librariesImportedBy([`import dayjs from 'dayjs"\n`])).toEqual([])
+  })
+
+  it('X-4 补库与类型包：键按字母排，别的顶层键不动，2 空格、结尾换行', () => {
+    const input = renderedTemplatePackageJson()
+    const before = JSON.parse(input) as Pkg
+    const out = withLibraryDependencies(input, [lib('three'), lib('d3'), lib('lucide-react')])
+
+    expect(out.endsWith('}\n')).toBe(true)
+    const pkg = JSON.parse(out) as Pkg
+    expect(out).toBe(JSON.stringify(pkg, null, 2) + '\n')
+
+    expect(Object.keys(pkg)).toEqual(Object.keys(before))
+    for (const key of Object.keys(before)) {
+      if (key === 'dependencies' || key === 'devDependencies') continue
+      expect(pkg[key], key).toEqual(before[key])
+    }
+
+    expect(pkg.dependencies).toEqual({
+      ...before.dependencies,
+      three: lib('three').version,
+      d3: lib('d3').version,
+      'lucide-react': lib('lucide-react').version
+    })
+    expect(Object.keys(pkg.dependencies!)).toEqual([
+      'd3',
+      'lucide-react',
+      'react',
+      'react-dom',
+      'react-router',
+      'three',
+      'zod'
+    ])
+    // 精确版本（不带 ^ ~）
+    expect(pkg.dependencies!.three).toBe('0.187.0')
+    expect(pkg.dependencies!.d3).toBe('7.9.0')
+    expect(pkg.dependencies!['lucide-react']).toBe('0.564.0')
+
+    expect(pkg.devDependencies).toEqual({
+      ...before.devDependencies,
+      ...lib('three').exportTypes,
+      ...lib('d3').exportTypes
+    })
+    expect(pkg.devDependencies!['@types/three']).toBe('^0.187.0')
+    expect(pkg.devDependencies!['@types/d3']).toBe('^7.4.3')
+    expect(Object.keys(pkg.devDependencies!)).toEqual([
+      '@tailwindcss/vite',
+      '@types/d3',
+      '@types/react',
+      '@types/react-dom',
+      '@types/three',
+      '@vitejs/plugin-react',
+      'tailwindcss',
+      'typescript',
+      'vite'
+    ])
+  })
+
+  it('X-5 已有的旧版本换成表里的', () => {
+    const input = JSON.stringify({ name: 'x', dependencies: { three: '^0.1.0', react: '^19' } })
+    const pkg = JSON.parse(withLibraryDependencies(input, [lib('three')])) as Pkg
+    expect(pkg.dependencies).toEqual({ react: '^19', three: lib('three').version })
+  })
+
+  it('X-6 输入没有依赖键：只补 dependencies；库不带类型包就不写空的 devDependencies', () => {
+    const input = JSON.stringify({ name: 'x', private: true })
+
+    const plain = JSON.parse(withLibraryDependencies(input, [lib('dayjs')])) as Pkg
+    expect(plain).toEqual({ name: 'x', private: true, dependencies: { dayjs: '1.11.23' } })
+    expect(Object.keys(plain)).toEqual(['name', 'private', 'dependencies'])
+    expect('devDependencies' in plain).toBe(false)
+
+    // 对照：带类型包的库照样补出 devDependencies
+    const typed = JSON.parse(
+      withLibraryDependencies(input, [lib('dayjs'), lib('papaparse')])
+    ) as Pkg
+    expect(typed.dependencies).toEqual({
+      dayjs: lib('dayjs').version,
+      papaparse: lib('papaparse').version
+    })
+    expect(typed.devDependencies).toEqual(lib('papaparse').exportTypes)
+    expect(Object.keys(typed)).toEqual(['name', 'private', 'dependencies', 'devDependencies'])
+  })
+
+  it('X-7 exportWidget：界面与子组件用到的库都进 package.json，模板的依赖不变', async () => {
+    put(
+      'index.tsx',
+      `import { createRoot } from 'react-dom/client'
+import { Plus } from 'lucide-react'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { scaleLinear } from 'd3'
+import Papa from 'papaparse'
+import { Chart } from './components/Chart'
+
+console.log(OrbitControls, scaleLinear, Papa)
+const el = document.getElementById('root')
+if (el) createRoot(el).render(<div><Plus /><Chart /></div>)
+`
+    )
+    put(
+      'components/Chart.tsx',
+      `import { Chart as ChartJS } from 'chart.js'\nexport function Chart() {\n  console.log(ChartJS)\n  return <canvas />\n}\n`
+    )
+    put('api.ts', API_TS)
+
+    const files = await exportAndUnzip()
+    const template = JSON.parse(renderedTemplatePackageJson()) as Pkg
+    const pkg = JSON.parse(utf8(files['package.json'])) as Pkg
+
+    expect(Object.keys(pkg.dependencies!)).toEqual([
+      'chart.js',
+      'd3',
+      'lucide-react',
+      'papaparse',
+      'react',
+      'react-dom',
+      'react-router',
+      'three',
+      'zod'
+    ])
+    for (const [name, version] of Object.entries(template.dependencies!)) {
+      expect(pkg.dependencies![name], name).toBe(version)
+    }
+    for (const name of ['chart.js', 'd3', 'lucide-react', 'papaparse', 'three']) {
+      expect(pkg.dependencies![name], name).toBe(lib(name).version)
+    }
+
+    expect(Object.keys(pkg.devDependencies!)).toEqual([
+      '@tailwindcss/vite',
+      '@types/d3',
+      '@types/papaparse',
+      '@types/react',
+      '@types/react-dom',
+      '@types/three',
+      '@vitejs/plugin-react',
+      'tailwindcss',
+      'typescript',
+      'vite'
+    ])
+    expect(pkg.devDependencies).toEqual({
+      ...template.devDependencies,
+      ...lib('d3').exportTypes,
+      ...lib('papaparse').exportTypes,
+      ...lib('three').exportTypes
+    })
+    // 别的顶层键照旧
+    expect(pkg.name).toBe(ID)
+    expect(pkg.scripts).toEqual(template.scripts)
+  })
+
+  it('X-8 一个库都不用 → package.json 与模板插值后逐字节相同', async () => {
+    put('index.tsx', SCREEN_WITHOUT_LIBRARIES)
+    put('api.ts', API_TS)
+
+    const files = await exportAndUnzip()
+    expect(utf8(files['package.json'])).toBe(renderedTemplatePackageJson())
+    expect(utf8(files['package.json'])).not.toContain('lucide-react')
+  })
+
+  it('X-9 库只出现在不扫的地方 → package.json 不变', async () => {
+    put('index.tsx', SCREEN_WITHOUT_LIBRARIES)
+    put('notes.md', "```ts\nimport * as THREE from 'three'\n```\n")
+    put('data.json', JSON.stringify({ code: "import { x } from 'three'" }))
+    // 与模板同名：归档里是模板的那份，组件这份不扫
+    put('src/shuvix-widget.ts', "import 'dayjs'\nexport const mine = true\n")
+    // node_modules 不进归档，也不扫
+    put('node_modules/x/index.js', "import * as THREE from 'three'\nexport default THREE\n")
+
+    const files = await exportAndUnzip()
+    expect(utf8(files['package.json'])).toBe(renderedTemplatePackageJson())
+    expect(utf8(files['notes.md'])).toContain("from 'three'")
+  })
+
+  it('X-10 只从 .css 的 @import、或只经 require() 引的库照样补进去', async () => {
+    put('index.tsx', `import './style.css'\n${SCREEN_WITHOUT_LIBRARIES}`)
+    put('style.css', '@import "uplot/dist/uPlot.min.css";\n.box { color: red; }\n')
+    put('more.css', "@import url('highlight.js/styles/github.css');\n")
+    put('legacy.js', "const dayjs = require('dayjs')\nmodule.exports = dayjs\n")
+
+    const files = await exportAndUnzip()
+    const pkg = JSON.parse(utf8(files['package.json'])) as Pkg
+    expect(pkg.dependencies!.uplot).toBe(lib('uplot').version)
+    expect(pkg.dependencies!['highlight.js']).toBe(lib('highlight.js').version)
+    expect(pkg.dependencies!.dayjs).toBe(lib('dayjs').version)
+
+    // 纯函数上同样的三种写法
+    expect(
+      names(
+        librariesImportedBy([
+          '@import "uplot/dist/uPlot.min.css";',
+          "@import url('highlight.js/styles/github.css');",
+          '@import url("dayjs/x.css");',
+          "const Papa = require('papaparse')"
+        ])
+      )
+    ).toEqual(['uplot', 'papaparse', 'dayjs', 'highlight.js'])
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'X-11 只用自带类型的库：解开后 tsc -b 通过',
+    async () => {
+      put(
+        'index.tsx',
+        `import { useRef } from 'react'
+import { createRoot } from 'react-dom/client'
+import { Plus } from 'lucide-react'
+import { Chart, BarController, BarElement, CategoryScale, LinearScale } from 'chart.js'
+import dayjs from 'dayjs'
+import { useVirtualizer } from '@tanstack/react-virtual'
+
+Chart.register(BarController, BarElement, CategoryScale, LinearScale)
+
+function App() {
+  const parent = useRef<HTMLDivElement>(null)
+  const rows = useVirtualizer({
+    count: 100,
+    getScrollElement: () => parent.current,
+    estimateSize: () => 24
+  })
+  return (
+    <div ref={parent}>
+      <Plus className="size-4" />
+      <span>{dayjs('2026-01-01').add(1, 'day').format('YYYY-MM-DD')}</span>
+      {rows.getVirtualItems().map((r) => (
+        <div key={r.key}>{r.index}</div>
+      ))}
+    </div>
+  )
+}
+
+const el = document.getElementById('root')
+if (el) createRoot(el).render(<App />)
+`
+      )
+      const files = await exportAndUnzip()
+      const pkg = JSON.parse(utf8(files['package.json'])) as Pkg
+      expect(Object.keys(pkg.dependencies!)).toEqual(
+        expect.arrayContaining(['lucide-react', 'chart.js', 'dayjs', '@tanstack/react-virtual'])
+      )
+      const dir = join(tmp, 'unzipped', ID)
+      for (const [path, bytes] of Object.entries(files)) {
+        const full = join(dir, path)
+        mkdirSync(dirname(full), { recursive: true })
+        writeFileSync(full, bytes)
+      }
+      symlinkSync(join(REPO_DIR, 'node_modules'), join(dir, 'node_modules'), 'dir')
+      let code = 0
+      let output = ''
+      try {
+        output = execFileSync(
+          process.execPath,
+          [join(REPO_DIR, 'node_modules/typescript/bin/tsc'), '-b', '--pretty', 'false'],
+          { cwd: dir, encoding: 'utf8', stdio: 'pipe' }
+        )
+      } catch (e) {
+        const err = e as { status?: number; stdout?: string; stderr?: string }
+        code = err.status ?? -1
+        output = `${err.stdout ?? ''}${err.stderr ?? ''}`
+      }
+      expect(output).toBe('')
+      expect(code).toBe(0)
+    },
+    120_000
+  )
+
+  it('X-12 EXPORT_NOTES 第 3 条讲 ShuviX 随带的库，不再说只有 react … spectacle', async () => {
+    put('index.tsx', SCREEN_WITHOUT_LIBRARIES)
+    const files = await exportAndUnzip()
+    const notes = utf8(files['EXPORT_NOTES.md'])
+    const three = notes.split('\n').find((l) => l.startsWith('3. ')) ?? ''
+    expect(three).toContain('**Dependencies**')
+    expect(notes).not.toContain('spectacle')
+    expect(three).not.toMatch(/Only `react`/)
+    expect(three).toContain('the libraries ShuviX ships')
+    expect(three).toContain('this widget imports')
+    expect(three).toContain('type packages')
+  })
 })

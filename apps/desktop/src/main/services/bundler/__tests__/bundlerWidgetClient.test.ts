@@ -16,7 +16,7 @@
  *         `import type Api from './api'`
  *   WC-76 界面直接 import zod / shuvix/widget-api → 同样的说明，点名那个模块
  *   WC-77 组件的 tsconfig 开了 verbatimModuleSyntax，只当类型用的 `import Api` → 失败并给出说明（少写 type 的真实情形）
- *   WC-78 长得像的 `shuvix/widgets`、`shuvix/widget/x` → 普通的 Could not resolve；既不是客户端，也不是那句说明
+ *   WC-78 长得像的 `shuvix/widgets`、`shuvix/widget/x` → 「小组件里没有这个模块」；既不是客户端，也不是那句说明
  *   WC-80 用 bundle-widget-api.mjs 的选项（react 外置）重打 widgetClient.ts → 与 deps/widget.esm.js 逐字节相同
  *   WC-81 随包的 widget.esm.js：唯一的 import 是 react；没有 React 内部的东西；导出正好是 createClient、WidgetError、
  *         themeColor 与 useTheme；它从 react 取的每个名字（useSyncExternalStore …）随包的 react-all.esm.js 都导出
@@ -312,7 +312,7 @@ describe('WC-73..78 界面只取 API 的类型', () => {
   })
 
   it.each(['shuvix/widgets', 'shuvix/widget/x'])(
-    'WC-78 长得像的 %j → 普通的 Could not resolve，不是客户端、也不是那句说明',
+    'WC-78 长得像的 %j → 小组件里没有这个模块，不是客户端、也不是那句说明',
     async (spec) => {
       put(
         'index.tsx',
@@ -323,7 +323,7 @@ describe('WC-73..78 界面只取 API 的类型', () => {
 
       expect(r.success).toBe(false)
       const text = (r.errors ?? []).join('\n')
-      expect(text).toContain(`Could not resolve "${spec}"`)
+      expect(text).toContain(`"${spec}" is not available in widgets`)
       expect(text).not.toContain(API_SIDE)
     }
   )

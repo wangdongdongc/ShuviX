@@ -19,10 +19,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, resolve, sep } from 'path'
 import { homedir } from 'os'
-import { zipSync, strToU8 } from 'fflate'
+import { zipSync, strToU8, strFromU8 } from 'fflate'
 import { writeFileAtomic } from '../../utils/atomicWrite'
 import { widgetService } from './widgetService'
 import { bundlerResourcePath } from '../bundler'
+import { WIDGET_LIBRARIES, widgetLibraryOf, type WidgetLibrary } from '../bundler/widgetLibs'
 import { createLogger } from '../../logger'
 import { EXPORTED_VERSIONS } from './exportedVersions'
 import {
@@ -196,7 +197,15 @@ export async function exportWidget(params: {
     collectTemplateTree(getExportTemplateDir(), rootDir, placeholders, files)
     files[`${rootDir}/src/shuvix-theme.css`] = strToU8(exportThemeCss())
     // 2) widget 源文件叠加 —— 与模板同名时模板优先
-    collectWidgetSources(widgetService.getWidgetDir(widget.id), rootDir, files)
+    const sourceKeys = collectWidgetSources(widgetService.getWidgetDir(widget.id), rootDir, files)
+    // 3) 组件用到的库（widgetLibs.json）进 package.json：版本与 ShuviX 里打包的一致
+    const pkgKey = `${rootDir}/package.json`
+    const libs = librariesImportedBy(
+      sourceKeys.filter((k) => SOURCE_EXT.test(k)).map((k) => strFromU8(files[k]))
+    )
+    if (files[pkgKey] && libs.length > 0) {
+      files[pkgKey] = strToU8(withLibraryDependencies(strFromU8(files[pkgKey]), libs))
+    }
 
     const archive = zipSync(files, { level: 6 })
     mkdirSync(dirname(zipPath), { recursive: true })
@@ -264,7 +273,8 @@ function collectWidgetSources(
   widgetDir: string,
   rootDir: string,
   files: Record<string, Uint8Array>
-): void {
+): string[] {
+  const added: string[] = []
   const walk = (absDir: string, zipDir: string, isRoot: boolean): void => {
     for (const entry of readdirSync(absDir, { withFileTypes: true })) {
       if (EXCLUDED_ANYWHERE.has(entry.name)) continue
@@ -278,7 +288,54 @@ function collectWidgetSources(
       if (!entry.isFile()) continue
       if (files[key] !== undefined) continue // 模板已生成，不被源文件覆盖
       files[key] = new Uint8Array(readFileSync(absPath))
+      added.push(key)
     }
   }
   walk(widgetDir, rootDir, true)
+  return added
+}
+
+/** 读 import 的源文件（样式表的 `@import` 也算：`uplot/dist/uPlot.min.css`） */
+const SOURCE_EXT = /\.(tsx?|jsx?|mjs|css)$/
+
+/**
+ * `from 'x'` / `import 'x'` / `import('x')` / `require('x')` / CSS 的 `@import 'x'`、`@import url('x')` 里的模块名
+ * （注释里的也算：多一个依赖无害）
+ */
+const IMPORT_SPECIFIER =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|@import\s+(?:url\(\s*)?)(['"])([^'"\n]+)\1/g
+
+/** 这些源码 import 了 widgetLibs.json 里的哪些库（按表里的顺序，不重复） */
+export function librariesImportedBy(sources: readonly string[]): WidgetLibrary[] {
+  const names = new Set<string>()
+  for (const source of sources) {
+    for (const m of source.matchAll(IMPORT_SPECIFIER)) {
+      const lib = widgetLibraryOf(m[2])
+      if (lib) names.add(lib.name)
+    }
+  }
+  return WIDGET_LIBRARIES.filter((lib) => names.has(lib.name))
+}
+
+/** 给导出的 package.json 补上这些库（精确版本）与它们的类型包，键按字母排 */
+export function withLibraryDependencies(
+  packageJson: string,
+  libs: readonly WidgetLibrary[]
+): string {
+  const pkg = JSON.parse(packageJson) as {
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+  }
+  // npm 写 package.json 时的排法
+  const sorted = (deps: Record<string, string>): Record<string, string> =>
+    Object.fromEntries(Object.entries(deps).sort(([a], [b]) => a.localeCompare(b, 'en')))
+  const deps = { ...pkg.dependencies }
+  const devDeps = { ...pkg.devDependencies }
+  for (const lib of libs) {
+    deps[lib.name] = lib.version
+    Object.assign(devDeps, lib.exportTypes)
+  }
+  pkg.dependencies = sorted(deps)
+  if (pkg.devDependencies || Object.keys(devDeps).length > 0) pkg.devDependencies = sorted(devDeps)
+  return JSON.stringify(pkg, null, 2) + '\n'
 }

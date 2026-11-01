@@ -13,3 +13,4 @@
 - **`/w/<id>/fs/…`（以及旧小组件的 `/w/<id>/db/…`）由 ShuviX 提供**，在那里也不存在。
 - **数据留在 ShuviX 里。** 导出带着 `schema.sql`，但不带任何数据行。如果用户也要数据，用 `sql` 读出来（例如 `SELECT json_group_array(json_object('id', id, 'title', title)) FROM books`），存在压缩包旁边。
 - 被 import 的图片在 Vite 下会变成 URL，而不是内联 data URL。`<img src={x}>` 两种情况下都能用。
+- 小组件 import 的库（`libraries.md`）会写进它的 `package.json`，版本与 ShuviX 随应用提供的一致，并带上 `tsc` 需要的类型包；`npm install` 会把它们装上。

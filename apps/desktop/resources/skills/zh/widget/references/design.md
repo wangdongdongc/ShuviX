@@ -72,6 +72,7 @@ const colors = useMemo(() => ({ line: themeColor('viz-1'), grid: themeColor('lin
 - 随小组件一起提供的图片放在它的目录里，并通过 import 引入（`import logo from './logo.svg'`）：`.svg`、`.png`、`.jpg` 和 `.gif` 会变成内联 data URL，所以要保持小。其他图片格式不能 import；改为通过 `fs/file` 从磁盘读取（`files.md`）。
 - 随小组件提供的固定数据也可以 import：`.json` 得到解析后的值，`.txt` 得到字符串。
 - 样式写在 `className` 里。组件里 import 的 `.css` 文件也会被打包，用于 Tailwind 表达不了的东西。
+- 图标用 `lucide-react`（`libraries.md`）：`<Trash2 className="size-4" />`。它们用 `currentColor` 画，所以用文字颜色名给它们上色。
 
 ## 检查
 

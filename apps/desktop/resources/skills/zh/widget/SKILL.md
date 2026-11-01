@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "如何构建、修改、导出和调试 ShuviX 小组件（widget）—— 用户从「Widget 面板」反复打开的 React 小应用，每个都有自己的 SQLite 数据库，以及一套由它的界面和智能体共用的 API：widget 工具的构建类动作、在 api.ts 里定义 API、在界面里用 shuvix/widget 调用它、封闭的依赖集、以从浏览器使用 ShuviX 时也能工作的方式读取用户电脑上的文件、面板、宽窗口和手机三处的设计指南、用截图检查排版，以及升级旧的小组件。用户要一个 widget、mini app、小工具或小组件，或者一个会反复回来用的小工具时加载它；修改或调试已有的小组件之前也要加载。"
+description: "如何构建、修改、导出和调试 ShuviX 小组件（widget）—— 用户从「Widget 面板」反复打开的 React 小应用，每个都有自己的 SQLite 数据库，以及一套由它的界面和智能体共用的 API：widget 工具的构建类动作、在 api.ts 里定义 API、在界面里用 shuvix/widget 调用它、小组件能 import 的库（图标、图表、CSV、日期、Markdown、拖拽、长列表、搜索、文本对比、二维码、YAML、代码高亮、3D）、以从浏览器使用 ShuviX 时也能工作的方式读取用户电脑上的文件、面板、宽窗口和手机三处的设计指南、用截图检查排版，以及升级旧的小组件。用户要一个 widget、mini app、小工具或小组件，或者一个会反复回来用的小工具时加载它；修改或调试已有的小组件之前也要加载。"
 ---
 
 # ShuviX 小组件
@@ -19,7 +19,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 ## 始终成立的规矩
 
 1. **构建一律走 `widget` 工具**（`create`、`build`、`preview`、`sql`、`export`、`open`；`references/tool.md`）。`build` 是唯一的构建：绝不安装包，绝不运行 npm、npx 或打包器，绝不在小组件里运行 git。
-2. **封闭的依赖集。** 界面：React 19 加 TypeScript，通过 `className` 使用的 Tailwind CSS v4（颜色只用 `references/design.md` 里的主题颜色名，小组件就跟随应用的主题），只在确实是多页面的小组件里使用的 React Router（`react-router` 的 `createHashRouter`），以及用来调用 API 的 `shuvix/widget`。`api.ts`：`shuvix/widget-api` 和 `zod`。别的都解析不了；未知的 import 会让构建失败。图标用内联 SVG，日期用 `Intl` 和 `Date`。
+2. **固定的一组库。** 界面：React 19 加 TypeScript，通过 `className` 使用的 Tailwind CSS v4（颜色只用 `references/design.md` 里的主题颜色名，小组件就跟随应用的主题），只在确实是多页面的小组件里使用的 React Router（`react-router` 的 `createHashRouter`），用来调用 API 的 `shuvix/widget`，以及 ShuviX 随应用提供、列在 `references/libraries.md` 里的库（lucide 图标、Chart.js、CSV、日期、Markdown、拖拽、长列表、搜索、文本对比、二维码、YAML、代码高亮、three.js）。`api.ts`：`shuvix/widget-api` 和 `zod`。别的都解析不了，也不从网上加载任何东西；未知的 import 会让构建失败。
 3. **`index.tsx` 以挂载块结尾**，放在脚手架的 "DO NOT DELETE" 注释之内：
    ```tsx
    const root = document.getElementById('root')
@@ -71,6 +71,7 @@ reading-list ("读书清单") — books the user wants to read, is reading or fi
 | `references/data.md`            | 表：SQLite 方言的 `schema.sql`、修改表、查看数据               |
 | `references/files.md`           | 小组件要读取或列出用户电脑上的文件                             |
 | `references/design.md`          | 写 UI 或重做样式之前                                           |
+| `references/libraries.md`       | 要用图标、图表、CSV、Markdown、拖拽、3D 或别的库之前           |
 | `references/maintenance.md`     | 修改已有的小组件，尤其是在它的 API 出现之前写的                |
 | `references/export.md`          | 用户想把小组件拿成一个独立项目                                 |
 | `references/troubleshooting.md` | 构建失败、窗口空白或显示错误、某个操作或 fetch 失败            |

@@ -7,6 +7,7 @@
  *   GET /w/<id>/bundle.css
  *   GET /w/<id>/tailwind.js   → Tailwind browser runtime（共享）
  *   GET /w/<id>/theme.css     → 主题令牌（应用的 themes.css，见 widgetTheme.ts）
+ *   GET /w/<id>/lib/<name>@<version>/… → 由宿主单独发的库（three；页面的 import map 指过来，widgetLibFiles.ts）
  *   GET /w/<id>/sse           → Server-Sent Events，推送 reload / data / theme 事件
  *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
  *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
@@ -37,6 +38,8 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { resolve } from 'path'
 import { readFileSync } from 'fs'
 import { bundlerService, bundlerResourcePath } from '../bundler'
+import { widgetImportMap } from '../bundler/widgetLibs'
+import { serveWidgetLib, WIDGET_LIB_SEGMENT } from './widgetLibFiles'
 import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
 import { resolveWidgetFilePath, serveWidgetFiles } from './widgetFiles'
@@ -103,6 +106,7 @@ interface WidgetEntry {
  * 页面骨架。主题脚本排在最前（首帧之前设好 `data-theme`），令牌在 Tailwind 运行时之前，语义色名紧跟运行时；
  * 底色与字色取主题令牌。`color-scheme` 由主题块给（meta 里的 `light dark` 只管 theme.css 到之前的那一帧）。
  * 就绪脚本紧随其后、早于组件 bundle（它要先包好 fetch）：画好了告诉承载它的 iframe（shared/widgetReady.ts）。
+ * import map 把由宿主单独发的库（three）指到 `lib/…`（widgetLibFiles.ts），得在任何模块脚本之前。
  * `forced` = 预览强制的明暗（URL 上的 shuvix-scheme）。
  */
 function hostHTML(baseHref: string, title: string, forced: WidgetScheme | null): string {
@@ -115,6 +119,7 @@ function hostHTML(baseHref: string, title: string, forced: WidgetScheme | null):
   <script>${themeBootScript(currentWidgetTheme(), forced)}</script>
   <script>${widgetReadyScript()}</script>
   <base href="${baseHref}" />
+  <script type="importmap">${JSON.stringify(widgetImportMap(baseHref))}</script>
   <title>${title}</title>
   <link rel="stylesheet" href="theme.css" />
   <script src="tailwind.js"></script>
@@ -488,6 +493,12 @@ export class WidgetServer {
       res.write(themeEvent())
       entry.sseClients.add(res)
       req.on('close', () => entry.sseClients.delete(res))
+      return
+    }
+
+    // /lib/<name>@<version>/… —— 由宿主单独发的库（three），页面的 import map 指过来
+    if (rest.startsWith(WIDGET_LIB_SEGMENT)) {
+      serveWidgetLib(rest, req, res)
       return
     }
 

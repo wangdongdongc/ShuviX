@@ -35,15 +35,37 @@
  * WIDGET_THEME_COLORS）。BS-16 钉 widget 技能的两张表（design.md 的颜色表、maintenance.md 的换色表「Change to / 换成」那一栏）
  * 里的每个颜色类都落在那份名单上（去掉变体前缀、工具类前缀与 `/NN`），且 widget 技能的文件一处都不提 `--theme-` /
  * `data-theme` —— 那是 themes.css 的内部名字，改名时只改宿主那张表。
+ *
+ * 2026-10-31：小组件界面可以 import 一批随应用发的库（bundler/widgetLibs.json，vendor 进 resources/bundler/vendor），
+ * widget 技能的 references/libraries.md 教它们。这里钉的不是措辞，而是三件会悄悄过时的事实（同 BS-16 的思路）：
+ *   SK-1 三语 libraries.md 里每个库都写着表里的精确版本（`` `<名字>` <版本> ``；@dnd-kit 的短写 `` `/<末段>` <版本> ``），
+ *        反过来文中每一对 `` `x` N.N.N `` 都对得上表里的一个库与它的版本 —— 升级一个库而技能还写旧版本就红
+ *   SK-2 技能教的每一句 import（表格里反引号中的、tsx 代码块里的；三语并集）都真的打得出来：每句单独一个 .jsx 文件
+ *        （.tsx 里没用到的 import 会被 esbuild 直接丢掉，测试就空转了），真的 esbuild-wasm + 仓库的 resources/bundler；
+ *        对照：多一句 `import x from 'left-pad'` 就失败
+ *   SK-3 troubleshooting.md 引的三句报错（不在小组件里 / 不在 three 随带的文件里 / highlight.js 整包）各是打包器真实报错的子串
+ *   SK-4 libraries.md 里 three 那段点名的 addon 在 vendor 的 three/examples/jsm/ 下都真的有
  */
 import { describe, it, expect, afterAll } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { BUILTIN_SKILL_COPY } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { WIDGET_THEME_COLORS } from '../widget/widgetTheme'
+import { stop as stopEsbuild } from 'esbuild-wasm'
+import { BundlerService } from '../bundler/bundlerService'
+import { packageNameOf, WIDGET_LIBRARIES } from '../bundler/widgetLibs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/__tests__` 往上六层 */
@@ -635,6 +657,209 @@ describe('BS 内置技能的两条接线', () => {
         expect(text, `${lang}.json 缺 ${key}`).toBeTypeOf('string')
         expect((text as string).trim(), `${lang}.json 的 ${key} 是空的`).not.toBe('')
       }
+    }
+  })
+})
+
+// ────────────────────────────── widget 技能教的库 ──────────────────────────────
+
+describe('SK widget 技能教的库与打包器、库表对得上', () => {
+  const BUNDLER_RESOURCES = join(REPO_ROOT, 'apps/desktop/resources/bundler')
+  const VENDOR_THREE_JSM = join(BUNDLER_RESOURCES, 'vendor/node_modules/three/examples/jsm')
+  const librariesMd = (lang: string): string =>
+    readFileSync(join(skillDir(lang, 'widget'), 'references/libraries.md'), 'utf8')
+  const troubleshootingMd = (lang: string): string =>
+    readFileSync(join(skillDir(lang, 'widget'), 'references/troubleshooting.md'), 'utf8')
+
+  const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+  const bundler = new BundlerService((p) => join(BUNDLER_RESOURCES, p), silentLogger)
+  const roots: string[] = []
+
+  afterAll(async () => {
+    for (const dir of roots) rmSync(dir, { recursive: true, force: true })
+    await stopEsbuild()
+  })
+
+  /** 在临时目录里搭一个组件（文件名 → 内容），打包 `entry`，交回结果 */
+  async function buildWidget(
+    files: Record<string, string>,
+    entry: string
+  ): Promise<{ success: boolean; errors?: string[] }> {
+    const root = mkdtempSync(join(tmpdir(), 'shuvix-skill-libs-'))
+    roots.push(root)
+    const widgetDir = join(root, 'w-skill')
+    for (const [name, content] of Object.entries(files)) {
+      const full = join(widgetDir, name)
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, content)
+    }
+    return bundler.build(join(widgetDir, entry), widgetDir)
+  }
+
+  /** 每句 import 一个 .jsx 文件，入口逐个引它们 */
+  const snippetWidget = (snippets: readonly string[]): Record<string, string> => {
+    const files: Record<string, string> = {}
+    snippets.forEach((snippet, i) => {
+      files[`s${i}.jsx`] = `${snippet}\n`
+    })
+    files['index.jsx'] = snippets.map((_, i) => `import './s${i}.jsx'\n`).join('')
+    return files
+  }
+
+  /** 技能教的 import：表格行里反引号中的 `import …`，加 tsx 代码块里的 import 行（三语并集，按出现顺序去重） */
+  const taughtImports = (): string[] => {
+    const out = new Set<string>()
+    for (const lang of LANGS) {
+      const text = librariesMd(lang)
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('|')) continue
+        for (const m of line.matchAll(/`(import\b[^`]*)`/g)) out.add(m[1].trim())
+      }
+      for (const block of text.matchAll(/```tsx\n([\s\S]*?)```/g)) {
+        for (const line of block[1].split('\n')) {
+          if (/^import\b/.test(line.trim())) out.add(line.trim())
+        }
+      }
+    }
+    return [...out]
+  }
+
+  /** `` `x` N.N.N `` 这一对里的 x 指表里的哪个库：全名，或 @scope 包的短写 `/<末段>`（得恰好一个） */
+  const libraryNamed = (x: string): (typeof WIDGET_LIBRARIES)[number] | undefined => {
+    const hits = WIDGET_LIBRARIES.filter(
+      (lib) =>
+        lib.name === x || (x.startsWith('/') && lib.name.startsWith('@') && lib.name.endsWith(x))
+    )
+    return hits.length === 1 ? hits[0] : undefined
+  }
+
+  it('SK-0 护栏：三种语言都有 libraries.md / troubleshooting.md，库表非空', () => {
+    expect(LANGS).toEqual(expect.arrayContaining(['en', 'zh', 'ja']))
+    expect(WIDGET_LIBRARIES.length).toBeGreaterThan(10)
+    for (const lang of LANGS) {
+      expect(existsSync(join(skillDir(lang, 'widget'), 'references/libraries.md')), lang).toBe(true)
+      expect(
+        existsSync(join(skillDir(lang, 'widget'), 'references/troubleshooting.md')),
+        lang
+      ).toBe(true)
+    }
+  })
+
+  it.each(LANGS)('SK-1 %s：每个库都写着表里的精确版本；文中每一对版本都对得上表', (lang) => {
+    const text = librariesMd(lang)
+    for (const lib of WIDGET_LIBRARIES) {
+      const full = `\`${lib.name}\` ${lib.version}`
+      const short = lib.name.startsWith('@')
+        ? `\`/${lib.name.split('/').pop()}\` ${lib.version}`
+        : null
+      expect(
+        text.includes(full) || (short !== null && text.includes(short)),
+        `${lang} libraries.md 没写 ${full}`
+      ).toBe(true)
+    }
+
+    const pairs = [...text.matchAll(/`([^`\s]+)` (\d+\.\d+\.\d+)/g)].map((m) => ({
+      name: m[1],
+      version: m[2]
+    }))
+    expect(pairs.length).toBeGreaterThanOrEqual(WIDGET_LIBRARIES.length)
+    for (const { name, version } of pairs) {
+      const lib = libraryNamed(name)
+      expect(lib, `${lang}: \`${name}\` ${version} 不是表里的库`).toBeDefined()
+      expect(version, `${lang}: \`${name}\` 写的是 ${version}，表里是 ${lib?.version}`).toBe(
+        lib?.version
+      )
+    }
+  })
+
+  it('SK-2 技能教的每一句 import 都打得出来（每句一个 .jsx）；对照：多一句 left-pad 就失败', async () => {
+    const snippets = taughtImports()
+    // 护栏：抽到了，且几乎每个库都有一句（@dnd-kit/utilities 只在说明里点名 `CSS`，没有单独的 import 句）
+    const taught = new Set(
+      snippets.flatMap((s) => {
+        const m = /\bfrom\s*['"]([^'"]+)['"]|^import\s*['"]([^'"]+)['"]/.exec(s)
+        return m ? [packageNameOf(m[1] ?? m[2])] : []
+      })
+    )
+    for (const lib of WIDGET_LIBRARIES) {
+      if (lib.name === '@dnd-kit/utilities') continue
+      expect(taught.has(lib.name), `技能没教 ${lib.name} 的 import`).toBe(true)
+    }
+
+    const ok = await buildWidget(snippetWidget(snippets), 'index.jsx')
+    expect(ok.errors, snippets.join('\n')).toBeUndefined()
+    expect(ok.success).toBe(true)
+
+    const bad = await buildWidget(
+      snippetWidget([...snippets, "import x from 'left-pad'"]),
+      'index.jsx'
+    )
+    expect(bad.success).toBe(false)
+    expect((bad.errors ?? []).join('\n')).toContain('"left-pad" is not available in widgets')
+  }, 60_000)
+
+  it('SK-3 troubleshooting.md 引的三句报错各是打包器真实报错的子串（三语）', async () => {
+    const cases: Array<{ phrase: string; source: string }> = [
+      {
+        phrase: 'is not available in widgets',
+        source: "import pad from 'left-pad'\nconsole.log(pad)\n"
+      },
+      {
+        phrase: 'is not among the three files ShuviX ships',
+        source:
+          "import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'\nconsole.log(EffectComposer)\n"
+      },
+      {
+        phrase: 'Importing "highlight.js" bundles every language',
+        source: "import hljs from 'highlight.js'\nconsole.log(hljs)\n"
+      }
+    ]
+    for (const { phrase, source } of cases) {
+      const r = await buildWidget({ 'index.jsx': source }, 'index.jsx')
+      expect(r.success, phrase).toBe(false)
+      expect((r.errors ?? []).join('\n'), phrase).toContain(phrase)
+      for (const lang of LANGS) {
+        expect(troubleshootingMd(lang), `${lang} troubleshooting.md`).toContain(phrase)
+      }
+    }
+  }, 60_000)
+
+  it.each(LANGS)('SK-4 %s：three 那段点名的 addon 在 vendor 里都有', (lang) => {
+    expect(
+      existsSync(VENDOR_THREE_JSM),
+      `${VENDOR_THREE_JSM} is missing: run npm install (it runs scripts/vendor-widget-libs.mjs)`
+    ).toBe(true)
+    const paragraph = librariesMd(lang)
+      .split('\n')
+      .find((line) => line.startsWith('**three.js**'))
+    expect(paragraph, `${lang} libraries.md 没有 three.js 那段`).toBeDefined()
+
+    const named = new Set<string>()
+    for (const [, token] of paragraph!.matchAll(/`([^`]+)`/g)) {
+      if (/^[A-Z]\w*Controls$/.test(token)) named.add(`controls/${token}.js`)
+      else if (/^[A-Z]\w*Loader$/.test(token)) named.add(`loaders/${token}.js`)
+      else if (/^[a-z]+\/[A-Za-z0-9]+\.js$/.test(token)) named.add(token)
+    }
+    expect([...named]).toEqual(
+      expect.arrayContaining([
+        'controls/OrbitControls.js',
+        'controls/MapControls.js',
+        'controls/TrackballControls.js',
+        'controls/TransformControls.js',
+        'loaders/GLTFLoader.js',
+        'loaders/OBJLoader.js',
+        'loaders/MTLLoader.js',
+        'loaders/STLLoader.js',
+        'loaders/PLYLoader.js',
+        'environments/RoomEnvironment.js',
+        'renderers/CSS2DRenderer.js',
+        'geometries/RoundedBoxGeometry.js',
+        'utils/BufferGeometryUtils.js',
+        'utils/SkeletonUtils.js'
+      ])
+    )
+    for (const rel of named) {
+      expect(existsSync(join(VENDOR_THREE_JSM, rel)), `${lang}: three/addons/${rel}`).toBe(true)
     }
   })
 })

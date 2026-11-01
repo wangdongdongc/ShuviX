@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "How to build, change, export and debug ShuviX Widgets — small React apps the user reopens from the Widget panel, each with its own SQLite database and an API that its screen and agents share: the widget tool's building actions, defining the API in api.ts, calling it from the screen with shuvix/widget, the closed dependency set, reading files on the user's computer in a way that also works when ShuviX is used from a browser, the design guide for the panel, a wide window and a phone, checking the layout with screenshots, and upgrading an older widget. Load this when the user asks for a widget, mini app, 小工具 or 小组件, or a small tool they will come back to, and before changing or debugging an existing widget."
+description: "How to build, change, export and debug ShuviX Widgets — small React apps the user reopens from the Widget panel, each with its own SQLite database and an API that its screen and agents share: the widget tool's building actions, defining the API in api.ts, calling it from the screen with shuvix/widget, the libraries a widget can import (icons, charts, CSV, dates, Markdown, drag and drop, long lists, search, diffs, QR codes, YAML, code highlighting, 3D), reading files on the user's computer in a way that also works when ShuviX is used from a browser, the design guide for the panel, a wide window and a phone, checking the layout with screenshots, and upgrading an older widget. Load this when the user asks for a widget, mini app, 小工具 or 小组件, or a small tool they will come back to, and before changing or debugging an existing widget."
 ---
 
 # ShuviX Widgets
@@ -19,7 +19,7 @@ This file is the whole workflow. The references hold the details; each row of th
 ## Rules that always hold
 
 1. **Building goes through the `widget` tool** (`create`, `build`, `preview`, `sql`, `export`, `open`; `references/tool.md`). `build` is the only build: never install packages, never run npm, npx or a bundler, never run git in a widget.
-2. **Closed dependency set.** The screen: React 19 with TypeScript, Tailwind CSS v4 through `className` (colors only from the theme names in `references/design.md`, so the widget follows the app's theme), React Router (`createHashRouter` from `react-router`) only for a genuinely multi-page widget, and `shuvix/widget` to call the API. `api.ts`: `shuvix/widget-api` and `zod`. Nothing else resolves; an unknown import fails the build. Icons are inline SVG, dates are `Intl` and `Date`.
+2. **A fixed set of libraries.** The screen: React 19 with TypeScript, Tailwind CSS v4 through `className` (colors only from the theme names in `references/design.md`, so the widget follows the app's theme), React Router (`createHashRouter` from `react-router`) only for a genuinely multi-page widget, `shuvix/widget` to call the API, and the libraries ShuviX ships in `references/libraries.md` (lucide icons, Chart.js, CSV, dates, Markdown, drag and drop, long lists, search, diffs, QR codes, YAML, code highlighting, three.js). `api.ts`: `shuvix/widget-api` and `zod`. Nothing else resolves and nothing is loaded from the internet; an unknown import fails the build.
 3. **`index.tsx` ends with the mount block**, inside the scaffold's "DO NOT DELETE" comment:
    ```tsx
    const root = document.getElementById('root')
@@ -71,6 +71,7 @@ Add a line only for a real deviation: something you could not build or implement
 | `references/data.md`            | the tables: `schema.sql` in the SQLite dialect, changing tables, looking at the data        |
 | `references/files.md`           | the widget reads or lists files on the user's computer                                      |
 | `references/design.md`          | before writing or restyling UI                                                              |
+| `references/libraries.md`       | before using icons, a chart, CSV, Markdown, drag and drop, 3D or any other library          |
 | `references/maintenance.md`     | changing an existing widget, especially one written before its API existed                  |
 | `references/export.md`          | the user wants the widget as a standalone project                                           |
 | `references/troubleshooting.md` | a build fails, the window is blank or shows an error, an operation or a fetch fails         |

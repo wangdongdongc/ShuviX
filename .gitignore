@@ -21,3 +21,6 @@ AGENTS.md
 
 # Chrome extension signing key (private) — public key is embedded in apps/extension/public/manifest.json
 apps/extension/extension-key.pem
+
+# Widget libraries copied from node_modules by apps/desktop/scripts/vendor-widget-libs.mjs
+apps/desktop/resources/bundler/vendor/

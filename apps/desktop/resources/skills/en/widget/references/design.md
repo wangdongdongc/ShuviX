@@ -72,6 +72,7 @@ In a `.css` file the same names are variables: `var(--widget-accent)`, `var(--wi
 - Images that ship with the widget live in its directory and are imported (`import logo from './logo.svg'`): `.svg`, `.png`, `.jpg` and `.gif` become inline data URLs, so keep them small. Other image formats do not import; read them from disk through `fs/file` instead (`files.md`).
 - Fixed data that ships with the widget can be imported too: `.json` as a parsed value, `.txt` as a string.
 - Styles go in `className`. A `.css` file imported from a component is bundled too, for what Tailwind cannot express.
+- Icons come from `lucide-react` (`libraries.md`): `<Trash2 className="size-4" />`. They draw in `currentColor`, so the text color names color them.
 
 ## Check it
 
