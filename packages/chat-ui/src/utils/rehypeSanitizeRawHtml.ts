@@ -84,6 +84,8 @@ const STRIP_TAGS = new Set([
 
 /**
  * 保留成真实元素的标签 —— 全是排版，没有一个能动网络或脚本。
+ * `<img>` 是例外：它的 src 会被取。留在表里是因为排在插件表最后的 rehypeHoldImages 会把它换成不去取图的
+ * 占位（远端的点一下才加载）—— 这里只管它的属性白名单。
  * `<input>` 只为任务列表的复选框而留，见下面的 `checkbox` 判定。
  */
 const ALLOWED_TAGS = new Set([

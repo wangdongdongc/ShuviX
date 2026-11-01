@@ -38,6 +38,7 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { useRestoredText } from '../../hooks/useRedaction'
 import { hasPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { RedactedMark } from './RedactedText'
+import { HeldImage } from './HeldImage'
 
 // ─── 超链接 ────────────────────────────────────────────
 
@@ -350,14 +351,15 @@ function plainTextOf(children: React.ReactNode): string {
 }
 
 /**
- * 对话流 markdown 的共用组件表 —— 代码块容器 + 链接 chip + 路径 chip + 脱敏标记。
+ * 对话流 markdown 的共用组件表 —— 代码块容器 + 链接 chip + 路径 chip + 脱敏标记 + 扣下的图片。
  * 所有渲染 markdown 的地方都用这一份，避免各处样式漂移。
  */
 export const markdownComponents = {
   pre: CodeBlock as never,
   a: LinkChip as never,
   code: InlineCode as never,
-  'redaction-mark': RedactionMarkTag as never
+  'redaction-mark': RedactionMarkTag as never,
+  'held-image': HeldImage as never
 }
 
 // ─── 共用插件表 ────────────────────────────────────────

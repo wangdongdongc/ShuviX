@@ -460,4 +460,26 @@ describe('i18n 语言包', () => {
       )
     }
   })
+
+  /**
+   * HL-1：对话流里扣下的图片（HeldImage）上的三句 —— 没有 alt 时的兜底文字、远端占位的悬停说明（点名要去取的
+   * 主机）、非远端占位的悬停说明。`imageClickToLoad` 漏了 `{{host}}` 运行期不报错，只是说明里少了那个主机 ——
+   * 用户点之前看不到要连去哪；多出一个插值则会露出原始占位符。三句撞成同字，兜底文字与说明就分不出来。
+   */
+  it('HL-1 message.imageAltFallback / imageClickToLoad / imageNotShown 三语都非空；imageClickToLoad 恰插 {{host}}，另两句不含插值；同一门语言里三句两两不同', () => {
+    const KEYS = ['imageAltFallback', 'imageClickToLoad', 'imageNotShown'].map(
+      (name) => `message.${name}`
+    )
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const texts = KEYS.map((key) => {
+        const text = leaf(bundle, key)
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} ${key}`).toEqual(
+          key === 'message.imageClickToLoad' ? ['host'] : []
+        )
+        return text!.trim()
+      })
+      expect(new Set(texts).size, `${lang}: ${JSON.stringify(texts)}`).toBe(KEYS.length)
+    }
+  })
 })

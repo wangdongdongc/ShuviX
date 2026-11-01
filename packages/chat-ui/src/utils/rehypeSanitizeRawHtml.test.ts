@@ -33,6 +33,7 @@ import {
 } from './markdownPlugins'
 import { rehypeSanitizeRawHtml, isSafeMarkdownUrl, sanitizeHastTree } from './rehypeSanitizeRawHtml'
 import { rehypeRedactionMarks } from './rehypeRedactionMarks'
+import { rehypeHoldImages } from './rehypeHoldImages'
 
 interface HastNode {
   type: string
@@ -157,20 +158,21 @@ describe('0 · 管线本身', () => {
    */
   it('闸紧跟在 rehype-raw 之后，且排在 highlight / katex 之前', () => {
     expect(markdownRehypePlugins.indexOf(rehypeSanitizeRawHtml)).toBe(1)
-    expect(markdownRehypePlugins).toHaveLength(5)
+    expect(markdownRehypePlugins).toHaveLength(6)
   })
 
   /**
    * 整张表逐项按引用：高亮那一格是全进程共用一个变换的 rehypeHighlightShared（见 markdownPlugins.ts），
    * 不是 rehype-highlight 的默认导出 —— 换回去不会让哪条形状断言变红，只会让每次渲染重新注册三十多种语法
    */
-  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex, 脱敏标记]', () => {
+  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex, 脱敏标记, 扣下图片]', () => {
     expect(markdownRehypePlugins).toEqual([
       rehypeRaw,
       rehypeSanitizeRawHtml,
       rehypeHighlightShared,
       rehypeKatex,
-      rehypeRedactionMarks
+      rehypeRedactionMarks,
+      rehypeHoldImages
     ])
   })
 })
@@ -253,10 +255,10 @@ describe('A · 连内容一起删 —— 能执行 / 能拉远端 / 能改全局
   it('<noscript> 里的 <img onerror> 跟着一起走', () => {
     const md = '<noscript><img src=x onerror="window.__pwn = 1"></noscript>'
     expect(tags(md)).not.toContain('noscript')
-    expect(tags(md)).not.toContain('img')
+    expect(tags(md)).not.toContain('held-image')
     // 非空证：脚本未禁用时 parse5 把 noscript 的内容解析成**真元素**（不是一团文本），
-    // 所以那个 img 确实是闸删掉的
-    expect(tags(md, ungated)).toContain('img')
+    // 所以那个 img（到表尾被扣成 held-image）确实是闸删掉的
+    expect(tags(md, ungated)).toContain('held-image')
   })
 
   it('大写的 <SCRIPT> / <IFRAME> 同样删 —— 判定认的是规范化后的标签名', () => {
@@ -417,7 +419,7 @@ describe('D · 属性白名单 —— 活下来的标签上还要再过一遍', 
   })
 
   it.each(BLOCKED_URLS)('src 协议白名单：%s 连属性一起丢', (_label, src) => {
-    const img = find(`<img src="${src}" alt="A">`, 'img')
+    const img = find(`<img src="${src}" alt="A">`, 'held-image')
     expect(img?.properties).toEqual({ alt: 'A' })
   })
 
@@ -445,7 +447,7 @@ describe('D · 属性白名单 —— 活下来的标签上还要再过一遍', 
   it('img 上的 srcset / crossorigin 同样丢', () => {
     const md =
       '<img src="https://x.com/i.png" srcset="https://evil/x 2x" crossorigin="use-credentials" alt="A">'
-    expect(find(md, 'img')?.properties).toEqual({ src: 'https://x.com/i.png', alt: 'A' })
+    expect(find(md, 'held-image')?.properties).toEqual({ url: 'https://x.com/i.png', alt: 'A' })
   })
 
   /**
@@ -588,9 +590,9 @@ describe('E · 差分 —— 不含裸 HTML 的正文，装闸与不装闸必须
     expect(find('$$\ny = 1\n$$', 'math')?.properties?.display).toBe('block')
   })
 
-  it('图片的 src / alt 都在', () => {
-    expect(find('![alt](https://example.com/i.png)', 'img')?.properties).toEqual({
-      src: 'https://example.com/i.png',
+  it('图片的地址 / alt 都在（扣成 held-image，地址在 url 上）', () => {
+    expect(find('![alt](https://example.com/i.png)', 'held-image')?.properties).toEqual({
+      url: 'https://example.com/i.png',
       alt: 'alt'
     })
   })
@@ -647,7 +649,7 @@ describe('F · 排版标签与安全链接照常活着', () => {
     'th',
     'td',
     'a',
-    'img'
+    'held-image'
   ])('<%s> 活着', (tag) => {
     expect(tags(SURVIVORS)).toContain(tag)
   })
