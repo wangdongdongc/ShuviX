@@ -220,11 +220,33 @@ function findRelativeImport(
   return undefined
 }
 
+/**
+ * esbuild-wasm 的服务子进程没了（被杀、崩溃、起不来）时它给的错误。它不会自己重起：模块里一直挂着那个死掉的服务，
+ * 之后每次调用都是这一句。它总是一个普通 Error（带插件的构建也是：插件在本进程里注册，不经过服务），
+ * 编译错误则是带 `errors` 的 BuildFailure —— 只认前者，否则一条 import 路径里恰好有这句话的编译错误也会被当成服务没了
+ */
+const SERVICE_GONE = /^The service (?:is no longer running|was stopped)/
+
+/** 是那种错误 → 那一句（`The service is no longer running: spawn node ENOENT`）；不是 → null */
+function serviceGoneText(err: unknown): string | null {
+  if (!(err instanceof Error) || 'errors' in err) return null
+  return SERVICE_GONE.test(err.message) ? err.message : null
+}
+
+/** esbuild 格式化不了时的退路：`file:line:col: error: text`（加上 notes），真正的错误总要交回去 */
+function plainMessage(message: esbuild.Message, kind: 'error' | 'warning'): string {
+  const at = (loc: esbuild.Location | null): string =>
+    loc ? `${loc.file}:${loc.line}:${loc.column}: ` : ''
+  const notes = (message.notes ?? []).map((n) => `\n  ${at(n.location)}note: ${n.text}`)
+  return `${at(message.location)}${kind}: ${message.text}${notes.join('')}`
+}
+
 // ────────────────────── BundlerService ──────────────────────
 
 export class BundlerService {
-  private initialized = false
   private initPromise: Promise<void> | null = null
+  /** 第几个服务子进程：并发的几次构建同时撞上服务没了，只有用着当前这一个的那次去重起 */
+  private generation = 0
 
   constructor(
     private getResourcePath: (relativePath: string) => string,
@@ -243,46 +265,130 @@ export class BundlerService {
 
   // ── Initialization ──
 
-  /** 懒初始化 esbuild-wasm，全局只执行一次 */
-  async ensureInitialized(): Promise<void> {
-    if (this.initialized) return
-    if (this.initPromise) return this.initPromise
-
-    this.initPromise = (async () => {
-      this.log.info('Initializing esbuild-wasm')
-
-      // esbuild-wasm 硬编码 spawn("node", [bin/esbuild]) 启动 WASM worker。
-      // 打包后的 Electron 应用 PATH 中没有 node，会 ENOENT。
-      // 临时把 "node" 重定向到 Electron 自身（ELECTRON_RUN_AS_NODE=1）作为 Node 运行。
-      const originalSpawn = cpModule.spawn
-      cpModule.spawn = ((
-        command: string,
-        args?: readonly string[] | childProcess.SpawnOptions,
-        options?: childProcess.SpawnOptions
-      ) => {
-        if (command === 'node' && Array.isArray(args)) {
-          const opts = options ?? {}
-          const env = { ...(opts.env ?? process.env), ELECTRON_RUN_AS_NODE: '1' }
-          return originalSpawn(process.execPath, args, { ...opts, env })
-        }
-        return (originalSpawn as (...a: unknown[]) => childProcess.ChildProcess)(
-          command,
-          args,
-          options
-        )
-      }) as typeof cpModule.spawn
-
-      try {
-        await esbuild.initialize({})
-      } finally {
-        cpModule.spawn = originalSpawn
-      }
-
-      this.initialized = true
-      this.log.info('esbuild-wasm initialized')
-    })()
-
+  /** 懒初始化 esbuild-wasm：起一个服务子进程，之后的调用都走它；它没了由 restartService 换一个 */
+  ensureInitialized(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = this.startService().catch((err) => {
+        this.initPromise = null
+        throw err
+      })
+    }
     return this.initPromise
+  }
+
+  private async startService(): Promise<void> {
+    this.log.info('Initializing esbuild-wasm')
+
+    // esbuild-wasm 硬编码 spawn("node", [bin/esbuild]) 启动 WASM worker。
+    // 打包后的 Electron 应用 PATH 中没有 node，会 ENOENT。
+    // 把 "node" 重定向到 Electron 自身（ELECTRON_RUN_AS_NODE=1）作为 Node 运行；子进程在 initialize() 里同步 spawn，
+    // 调完就换回去
+    const originalSpawn = cpModule.spawn
+    cpModule.spawn = ((
+      command: string,
+      args?: readonly string[] | childProcess.SpawnOptions,
+      options?: childProcess.SpawnOptions
+    ) => {
+      if (command === 'node' && Array.isArray(args)) {
+        const opts = options ?? {}
+        const env = { ...(opts.env ?? process.env), ELECTRON_RUN_AS_NODE: '1' }
+        return originalSpawn(process.execPath, args, { ...opts, env })
+      }
+      return (originalSpawn as (...a: unknown[]) => childProcess.ChildProcess)(
+        command,
+        args,
+        options
+      )
+    }) as typeof cpModule.spawn
+
+    let ready: Promise<void>
+    try {
+      ready = esbuild.initialize({})
+    } finally {
+      cpModule.spawn = originalSpawn
+    }
+    await ready
+
+    this.log.info('esbuild-wasm initialized')
+  }
+
+  /**
+   * 服务子进程没了 → 换一个。不换的话只有重启整个应用才能再打包。stop() 把死掉的服务摘掉并允许再 initialize 一次；
+   * 两步同步做完，中间不让别的调用插进来 —— 那次调用会按 esbuild 的缺省去 spawn PATH 里的 `node`
+   */
+  private restartService(deadGeneration: number): Promise<void> {
+    if (deadGeneration === this.generation) {
+      this.generation++
+      this.log.warn('esbuild-wasm service is no longer running; starting a new one')
+      void esbuild.stop()
+      this.initPromise = null
+    }
+    return this.ensureInitialized()
+  }
+
+  /** 跑一次 esbuild 调用；服务没了 → 换一个再跑一次（又没了就把错误照常抛出） */
+  private async withService<T>(run: () => Promise<T>): Promise<T> {
+    await this.ensureInitialized()
+    const generation = this.generation
+    try {
+      return await run()
+    } catch (err) {
+      if (serviceGoneText(err) === null) throw err
+      await this.restartService(generation)
+      return run()
+    }
+  }
+
+  /**
+   * esbuild 的消息 → 带代码框的文本。走主服务的异步 formatMessages，不用 formatMessagesSync：同步版另起一个 worker 线程
+   * 和一个 esbuild 子进程，那个子进程按缺省 spawn PATH 里的 `node`（上面的重定向够不着 worker 线程）—— 打包后的应用
+   * PATH 里没有 node，它起不来，每次构建失败交回的都成了 "The service is no longer running: spawn node ENOENT"，
+   * 真正的错误被盖掉。格式化本身失败 → plainMessage
+   */
+  private async formatMessages(
+    messages: esbuild.Message[],
+    kind: 'error' | 'warning'
+  ): Promise<string[]> {
+    if (messages.length === 0) return []
+    try {
+      return await esbuild.formatMessages(messages, { kind })
+    } catch {
+      return messages.map((m) => plainMessage(m, kind))
+    }
+  }
+
+  /** 一次打包：成功 → 产物与格式化好的警告；失败 → 格式化好的错误 */
+  private async bundle(
+    options: esbuild.BuildOptions & { write: false }
+  ): Promise<
+    | { ok: true; outputFiles: esbuild.OutputFile[]; warnings?: string[] }
+    | { ok: false; errors: string[] }
+  > {
+    try {
+      const result = await this.withService(() => esbuild.build(options))
+      const warnings = await this.formatMessages(result.warnings, 'warning')
+      return {
+        ok: true,
+        outputFiles: result.outputFiles ?? [],
+        warnings: warnings.length > 0 ? warnings : undefined
+      }
+    } catch (err) {
+      const gone = serviceGoneText(err)
+      if (gone !== null) {
+        return {
+          ok: false,
+          errors: [
+            `The bundler (esbuild) stopped during this build, and again after it was restarted (${gone}). ` +
+              'The next build starts it again; if this keeps happening, something in this build is what stops it.'
+          ]
+        }
+      }
+      const failure = err as Partial<esbuild.BuildFailure>
+      const errors = Array.isArray(failure.errors)
+        ? await this.formatMessages(failure.errors, 'error')
+        : [String(err)]
+      return { ok: false, errors: errors.length > 0 ? errors : [String(err)] }
+    }
   }
 
   // ── esbuild plugin ──
@@ -549,7 +655,6 @@ export class BundlerService {
    * 产物是给 QuickJS 执行的 IIFE（没有模块加载器）
    */
   async buildApi(projectDir: string, apiFileName = 'api.ts'): Promise<BundleResult> {
-    await this.ensureInitialized()
     const start = Date.now()
     // 相对路径 import（resolveDir = 组件目录）：绝对路径在 Windows 上以盘符开头，会被当成裸模块挡掉
     const entry = [
@@ -557,107 +662,77 @@ export class BundlerService {
       `import { __installWidgetRuntime } from '${WIDGET_API_SPECIFIER}'`,
       '__installWidgetRuntime(api)'
     ].join('\n')
-    try {
-      const result = await esbuild.build({
-        stdin: {
-          contents: entry,
-          resolveDir: projectDir,
-          loader: 'ts',
-          sourcefile: 'api-entry.ts'
-        },
-        bundle: true,
-        format: 'iife',
-        write: false,
-        platform: 'neutral',
-        target: 'es2020',
-        loader: { '.ts': 'ts', '.js': 'js' },
-        plugins: [this.createApiPlugin(projectDir)],
-        logLevel: 'silent'
-      })
-      const outputJS = result.outputFiles?.[0]?.text ?? ''
-      const warnings = result.warnings.map(
-        (w) => esbuild.formatMessagesSync([w], { kind: 'warning' })[0]
-      )
-      return {
-        success: true,
-        outputJS,
-        warnings: warnings.length > 0 ? warnings : undefined,
-        duration: Date.now() - start
-      }
-    } catch (err) {
-      const buildErr = err as esbuild.BuildFailure
-      const errors = buildErr.errors
-        ? buildErr.errors.map((e) => esbuild.formatMessagesSync([e], { kind: 'error' })[0])
-        : [String(err)]
-      return { success: false, errors, duration: Date.now() - start }
+    const result = await this.bundle({
+      stdin: {
+        contents: entry,
+        resolveDir: projectDir,
+        loader: 'ts',
+        sourcefile: 'api-entry.ts'
+      },
+      bundle: true,
+      format: 'iife',
+      write: false,
+      platform: 'neutral',
+      target: 'es2020',
+      loader: { '.ts': 'ts', '.js': 'js' },
+      plugins: [this.createApiPlugin(projectDir)],
+      logLevel: 'silent'
+    })
+    if (!result.ok) return { success: false, errors: result.errors, duration: Date.now() - start }
+    return {
+      success: true,
+      outputJS: result.outputFiles[0]?.text ?? '',
+      warnings: result.warnings,
+      duration: Date.now() - start
     }
   }
 
   /** 打包项目 */
   async build(entryPoint: string, projectDir: string): Promise<BundleResult> {
-    await this.ensureInitialized()
-
     const start = Date.now()
-    try {
-      const result = await esbuild.build({
-        entryPoints: [entryPoint],
-        bundle: true,
-        format: 'esm',
-        write: false, // 输出到内存
-        outdir: 'out', // 虚拟输出目录
-        platform: 'browser',
-        target: 'es2020',
-        // 空白与语法压缩，变量名不动：报错的调用栈还能读。手机远程打开时 bundle 是不压缩直传的
-        minifyWhitespace: true,
-        minifySyntax: true,
-        // 库里的 `process.env.NODE_ENV` 检查（@tanstack、@dnd-kit、dayjs …）在浏览器里没有 process
-        define: { 'process.env.NODE_ENV': '"production"' },
-        jsx: 'automatic',
-        jsxImportSource: 'react',
-        loader: {
-          '.tsx': 'tsx',
-          '.ts': 'ts',
-          '.jsx': 'jsx',
-          '.js': 'js',
-          '.css': 'css',
-          '.svg': 'dataurl',
-          '.png': 'dataurl',
-          '.jpg': 'dataurl',
-          '.gif': 'dataurl'
-        },
-        plugins: [this.createDesignPlugin(projectDir)],
-        logLevel: 'silent' // 我们自行处理错误
-      })
+    const result = await this.bundle({
+      entryPoints: [entryPoint],
+      bundle: true,
+      format: 'esm',
+      write: false, // 输出到内存
+      outdir: 'out', // 虚拟输出目录
+      platform: 'browser',
+      target: 'es2020',
+      // 空白与语法压缩，变量名不动：报错的调用栈还能读。手机远程打开时 bundle 是不压缩直传的
+      minifyWhitespace: true,
+      minifySyntax: true,
+      // 库里的 `process.env.NODE_ENV` 检查（@tanstack、@dnd-kit、dayjs …）在浏览器里没有 process
+      define: { 'process.env.NODE_ENV': '"production"' },
+      jsx: 'automatic',
+      jsxImportSource: 'react',
+      loader: {
+        '.tsx': 'tsx',
+        '.ts': 'ts',
+        '.jsx': 'jsx',
+        '.js': 'js',
+        '.css': 'css',
+        '.svg': 'dataurl',
+        '.png': 'dataurl',
+        '.jpg': 'dataurl',
+        '.gif': 'dataurl'
+      },
+      plugins: [this.createDesignPlugin(projectDir)],
+      logLevel: 'silent' // 我们自行处理错误
+    })
+    if (!result.ok) return { success: false, errors: result.errors, duration: Date.now() - start }
 
-      let outputJS = ''
-      let outputCSS = ''
-      for (const file of result.outputFiles ?? []) {
-        if (file.path.endsWith('.js')) outputJS = file.text
-        else if (file.path.endsWith('.css')) outputCSS = file.text
-      }
-
-      const warnings = result.warnings.map(
-        (w) => esbuild.formatMessagesSync([w], { kind: 'warning' })[0]
-      )
-
-      return {
-        success: true,
-        outputJS,
-        outputCSS,
-        warnings: warnings.length > 0 ? warnings : undefined,
-        duration: Date.now() - start
-      }
-    } catch (err) {
-      const buildErr = err as esbuild.BuildFailure
-      const errors = buildErr.errors
-        ? buildErr.errors.map((e) => esbuild.formatMessagesSync([e], { kind: 'error' })[0])
-        : [String(err)]
-
-      return {
-        success: false,
-        errors,
-        duration: Date.now() - start
-      }
+    let outputJS = ''
+    let outputCSS = ''
+    for (const file of result.outputFiles) {
+      if (file.path.endsWith('.js')) outputJS = file.text
+      else if (file.path.endsWith('.css')) outputCSS = file.text
+    }
+    return {
+      success: true,
+      outputJS,
+      outputCSS,
+      warnings: result.warnings,
+      duration: Date.now() - start
     }
   }
 }
