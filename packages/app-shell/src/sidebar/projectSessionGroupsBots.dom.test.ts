@@ -743,7 +743,11 @@ describe('PG-8 找不到 / 归档 / 还没扫回来', () => {
     }
     expect(rowIds(groupEl('scout'))).toEqual(['b1'])
     expect(container.querySelector('[data-bot-missing-group]')).toBeNull()
-    expect(container.querySelector('[data-group-add]')).toBeNull()
+    // pending 组上没有「+」；「聊天」分节头那颗与 bot 无关，照样在（bot 会话不进聊天，它的正文是「New Chat」行）
+    expect(container.querySelector('[data-sidebar-section="bots"] [data-group-add]')).toBeNull()
+    expect(container.querySelector('[data-group="temp"] [data-group-add]')).not.toBeNull()
+    expect(tempGroupBox()!.querySelector('[data-temp-new-chat]')).not.toBeNull()
+    expect(rowIds(tempGroupBox()!)).toEqual([])
     expect(container.querySelector('[data-bots-empty]')).toBeNull()
     await rightClick(headerOf('scout'))
     expect(menus).toEqual([])

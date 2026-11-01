@@ -19,7 +19,7 @@ export interface SidebarProps {
   /** 项目列表——由宿主经 useProjects() 提供，侧栏与日历视图共用同一份 */
   projects: ProjectRef[]
   /** 打开文件夹（宿主：选目录 → 建项目 → 新建会话；桌面 dialog，扩展 FSA）。建项目后经
-   *  events 'project.changed' 自动刷新项目列表。入口：「项目」分节头的 ⋮ / 右键、空态提示、
+   *  events 'project.changed' 自动刷新项目列表。入口：「项目」分节头的 ⋮ / 右键、没有项目时分节里那句提示、
    *  宿主菜单栏的「新建项目」—— 顶栏不再有那颗 + 按钮 */
   onOpenFolder: () => void | Promise<void>
   /** 打开设置（桌面开独立窗口）—— 底栏左侧常驻的那一行。Windows/Linux 的菜单栏默认隐藏，
@@ -38,7 +38,7 @@ export interface SidebarProps {
   pinnedSessionIds?: Set<string>
   /** 底栏设置行右侧的额外按钮（桌面：更新提示） */
   footerActions?: React.ReactNode
-  /** 分组列表前置插槽（桌面：Bots 与知识库分组，排在「项目」分节之上）；仅默认正文渲染，空态时也保留（功能入口） */
+  /** 分组列表前置插槽（桌面：资料库那几组，排在「Bots」「项目」分节之上） */
   groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode
@@ -86,7 +86,6 @@ export function Sidebar({
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
-  const sessions = useChatStore((s) => s.sessions)
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const initialCollapseApplied = useRef(false)
@@ -142,8 +141,6 @@ export function Sidebar({
       return next
     })
 
-  const projectNamesEmpty = projects.length === 0
-  const isEmpty = sessions.length === 0 && projectNamesEmpty
   const platform = getChatApi().app.platform
   // 拖拽带只在 macOS 有意义（hiddenInset 交通灯留白 + app-region: drag）；
   // Windows 是原生标题栏，app-region 惰性，留条空带纯属占位
@@ -171,52 +168,28 @@ export function Sidebar({
         className={`flex-1 overflow-y-auto no-scrollbar ${density === 'touch' ? 'px-3 pb-4' : 'px-2.5 pb-3'}`}
       >
         {groupsPrepend}
-        {isEmpty ? (
-          // 空态提示本身就是那句「打开一个文件夹作为项目」—— 点它即打开文件夹
-          // （此时项目分组整个不渲染，分节头那份菜单也就不在）。「Bots」分节照样在：bot 文件可能已经有了，
-          // 那里是开第一条对话的地方
-          <>
-            {bots && (
-              <ProjectSessionGroups
-                projects={projects}
-                collapsed={collapsedGroups}
-                onToggleGroup={toggleGroup}
-                onNewChat={(pid) => void handleNewChat(pid)}
-                bots={bots}
-                botsOnly
-                onSelect={onSelectSession}
-                projectsSection={{ dividerAbove: !!groupsPrepend }}
-              />
-            )}
-            <button
-              onClick={() => void onOpenFolder()}
-              className="w-full px-3 py-8 text-center text-text-tertiary hover:text-text-secondary text-xs transition-colors"
-            >
-              {t('sidebar.emptyHint')}
-            </button>
-          </>
-        ) : (
-          <ProjectSessionGroups
-            projects={projects}
-            collapsed={collapsedGroups}
-            onToggleGroup={toggleGroup}
-            onNewChat={(pid) => void handleNewChat(pid)}
-            bots={bots}
-            onSelect={onSelectSession}
-            onDelete={onDeleteSession}
-            onEditProject={onEditProject}
-            onConfigureSession={onConfigureSession}
-            onForkSession={onForkSession}
-            projectsSection={{
-              // 上方有插槽时才画分隔线（没有插槽时线会贴在列表最顶上）
-              dividerAbove: !!groupsPrepend,
-              onNewProject: () => void onOpenFolder()
-            }}
-            caps={{ pin: caps.pin }}
-            pinnedSessionIds={pinnedSessionIds}
-            projectKnowledge={projectKnowledge}
-          />
-        )}
+        {/* 一个会话、一个项目都没有（全新安装）也是这一套分节：「项目」里是「打开一个文件夹作为项目」，
+            「聊天」里是一行「新对话」—— 两种对话的入口都看得见，web 客户端没有菜单栏可退 */}
+        <ProjectSessionGroups
+          projects={projects}
+          collapsed={collapsedGroups}
+          onToggleGroup={toggleGroup}
+          onNewChat={(pid) => void handleNewChat(pid)}
+          bots={bots}
+          onSelect={onSelectSession}
+          onDelete={onDeleteSession}
+          onEditProject={onEditProject}
+          onConfigureSession={onConfigureSession}
+          onForkSession={onForkSession}
+          projectsSection={{
+            // 上方有插槽时才画分隔线（没有插槽时线会贴在列表最顶上）
+            dividerAbove: !!groupsPrepend,
+            onNewProject: () => void onOpenFolder()
+          }}
+          caps={{ pin: caps.pin }}
+          pinnedSessionIds={pinnedSessionIds}
+          projectKnowledge={projectKnowledge}
+        />
       </div>
 
       {/* 底部设置栏 + 宿主额外按钮（桌面更新提示） */}

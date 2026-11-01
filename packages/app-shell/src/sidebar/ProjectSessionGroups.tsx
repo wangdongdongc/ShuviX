@@ -85,8 +85,6 @@ export interface ProjectSessionGroupsProps {
    * 缺省不画，bot 会话照旧按项目 / 临时分组（扩展）
    */
   bots?: BotsSectionCaps
-  /** 只画「Bots」分节（侧栏空态：一个会话、一个项目都没有时，下面换成「打开文件夹」的提示） */
-  botsOnly?: boolean
   /** 选中会话（缺省用 chatStore.setActiveSessionId） */
   onSelect?: (id: string) => void
   onDelete?: (id: string) => void
@@ -119,8 +117,8 @@ export interface ProjectSessionGroupsProps {
    * 在项目组外面套一层「项目」分节标题（与临时对话组同一形态：无图标、无折叠、悬停一颗 ⋮）。
    * 侧栏传；日历视图按天渲染时不传 —— 那里一天里只有几条会话，多一层标题只是噪音。
    *   - `dividerAbove`：上方还有别的东西时才画那条线（桌面的知识库分组；扩展没有）
-   *   - `onNewProject`：分节头菜单里的「打开文件夹」—— 它是新建项目**唯一**的常驻入口
-   *     （顶栏那颗 + 已收进来），故有项目没项目都要把分节标题渲染出来
+   *   - `onNewProject`：分节头菜单里的「打开文件夹」—— 它是新建项目的常驻入口（顶栏那颗 + 已收进来），
+   *     故有项目没项目都要把分节标题渲染出来；一个项目都没有时分节正文是那句「打开一个文件夹作为项目」，点它也是它
    */
   projectsSection?: { dividerAbove?: boolean; onNewProject?: () => void }
   /**
@@ -133,7 +131,7 @@ export interface ProjectSessionGroupsProps {
 /**
  * 按项目分组的会话列表（桌面/扩展共用）—— 项目为骨架，会话填入，末尾临时对话组
  * （摊开的纯分节：无图标无折叠，见 SessionGroup 的 temp 形态；仍受每组 20 条的
- * 「查看全部」限额约束）。侧栏再经 projectsSection 给项目组套一层同形态的「项目」分节
+ * 「查看全部」限额约束；侧栏里常驻，没有临时会话时是一行「新对话」，日历里没有就不画）。侧栏再经 projectsSection 给项目组套一层同形态的「项目」分节
  * 标题 —— 于是「项目」与「临时对话」是两个并列的分节（各自上方一条分隔线），而不再是
  * 顶栏标题与它下面的一切。
  * 数据读 chat-ui 的 chatStore（sessions/active/streams/pending/shared/telegram），项目列表由宿主传入。
@@ -147,7 +145,6 @@ export function ProjectSessionGroups({
   onToggleGroup,
   onNewChat,
   bots,
-  botsOnly = false,
   onSelect,
   onDelete,
   onEditProject,
@@ -253,8 +250,9 @@ export function ProjectSessionGroups({
     setExpandedParents((prev) => new Set([...prev, ...fresh]))
   }, [childrenByParent, sessions])
 
-  // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序。
-  // 注入了 bots 时 bot 会话另收进 botSessions（按 bot 名），不进项目组也不进临时组
+  // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组（没有临时会话也追加：侧栏里「聊天」分节常驻，
+  // 空着时是一行「新对话」—— 它是开一条临时会话唯一看得见的入口，web 客户端没有菜单栏的 ⌘N；日历经 hideEmptyGroups
+  // 照样滤掉空组）；项目按名称排序。注入了 bots 时 bot 会话另收进 botSessions（按 bot 名），不进项目组也不进临时组
   const { groups, botSessions } = useMemo(() => {
     const map = new Map<string, Session[]>()
     for (const p of projects) map.set(p.id, [])
@@ -279,7 +277,7 @@ export function ProjectSessionGroups({
         .localeCompare((projectNames[b] || '').toLowerCase(), 'zh-CN')
     )
     const out: Array<[string, Session[]]> = sorted
-    if (temp.length > 0) out.push([TEMP_GROUP_KEY, temp])
+    out.push([TEMP_GROUP_KEY, temp])
     return { groups: out, botSessions: byBot }
   }, [projects, sessions, projectNames, childrenByParent, bots])
 
@@ -589,6 +587,9 @@ export function ProjectSessionGroups({
         dim={groupDim}
         showDividerAbove={dividerAbove}
         onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
+        // 「聊天」分节头的「+」：直接开一条临时会话（日历里不给，与 bot 组一样）
+        onAdd={isTemp && !hideEmptyGroups ? () => onNewChat(null) : undefined}
+        addLabel={isTemp ? t('sidebar.newChat') : undefined}
       >
         {projectKnowledge && !isTemp && (
           <ProjectKnowledgeFolder
@@ -599,7 +600,19 @@ export function ProjectSessionGroups({
             dim={dim && activeGroupKey === groupKey}
           />
         )}
-        {renderRows(groupKey, groupSessions)}
+        {isTemp && groupSessions.length === 0 ? (
+          // 还没有临时会话：一行「新对话」（与还没有会话的 bot 组同一副样子）
+          <div
+            data-temp-new-chat=""
+            onClick={() => onNewChat(null)}
+            className="sb-row cursor-pointer text-text-tertiary hover:bg-bg-hover/60 hover:text-text-primary"
+          >
+            <span className="sb-icon" />
+            <span className="truncate">{t('sidebar.newChat')}</span>
+          </div>
+        ) : (
+          renderRows(groupKey, groupSessions)
+        )}
       </SessionGroup>
     )
   }
@@ -839,25 +852,36 @@ export function ProjectSessionGroups({
   const projectGroups = visible.filter(([key]) => key !== TEMP_GROUP_KEY)
   const tempGroup = visible.find(([key]) => key === TEMP_GROUP_KEY)
   const botsSection = renderBotsSection()
-  if (botsOnly) return <>{botsSection}</>
+  const onNewProject = projectsSection?.onNewProject
 
   return (
     <>
       {botsSection}
       {projectsSection ? (
-        // 一个项目都没有时也照样渲染：它的 ⋮ 是「打开文件夹」现在唯一的常驻入口
+        // 一个项目都没有时也照样渲染：它的 ⋮ 是「打开文件夹」的常驻入口；空着时正文是那句「打开一个文件夹作为项目」，点它即打开
         <SessionGroup
           label={t('sidebar.projects')}
           variant="section"
           showDividerAbove={projectsSection.dividerAbove || !!botsSection}
-          onMenu={projectsSection.onNewProject ? openProjectsMenu : undefined}
+          onMenu={onNewProject ? openProjectsMenu : undefined}
         >
-          {projectGroups.map((group) => renderGroup(group))}
+          {projectGroups.length === 0 && onNewProject ? (
+            <div
+              data-projects-empty=""
+              className="sb-hint cursor-pointer hover:text-text-secondary"
+              onClick={onNewProject}
+            >
+              {t('sidebar.emptyHint')}
+            </div>
+          ) : (
+            projectGroups.map((group) => renderGroup(group))
+          )}
         </SessionGroup>
       ) : (
         projectGroups.map((group) => renderGroup(group))
       )}
-      {tempGroup && renderGroup(tempGroup, projectGroups.length > 0 || !!botsSection)}
+      {tempGroup &&
+        renderGroup(tempGroup, projectGroups.length > 0 || !!botsSection || !!projectsSection)}
     </>
   )
 }

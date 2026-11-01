@@ -28,7 +28,8 @@
  *
  * 组头**没有一排小图标**：新建对话 / 新建 Bot 会话 / 项目配置 / 知识库刷新全部收进 `onMenu`
  * 那一份菜单（右键组头与点 ⋮ 同一个入口，见 RowMenuButton）。菜单由容器组装 ——
- * 各形态能做什么本就是容器（ProjectSessionGroups / KnowledgeGroup）才知道的事。
+ * 各形态能做什么本就是容器（ProjectSessionGroups / KnowledgeGroup）才知道的事。唯一的例外是「新对话」那颗 `onAdd`
+ * 的「+」：bot 组与「聊天」分节（`temp`）各有一颗 —— 开一条对话是这两处最常做的事，藏在菜单里多一次点击。
  */
 import {
   Bot,
@@ -63,7 +64,7 @@ export interface SessionGroupProps {
     | 'bot'
   /** 组头图标（只有 `bot` 形态用：bot 的头像）；缺省按形态取 */
   icon?: React.ReactNode
-  /** 组头悬停时 ⋮ 旁边多一颗「+」（`bot` 形态：新对话）；缺省没有 */
+  /** 组头悬停时 ⋮ 旁边多一颗「+」（`bot` 形态与 `temp` 分节：新对话）；缺省没有 */
   onAdd?: (e: React.MouseEvent) => void
   /** 「+」的悬停提示 / 无障碍名 */
   addLabel?: string
@@ -84,6 +85,27 @@ export interface SessionGroupProps {
   experimental?: ExperimentalFeature
   /** 分组内的会话项（SessionItem 列表） */
   children: React.ReactNode
+}
+
+/** 组头的「+」（悬停浮现；手机上 base.css 让它常亮、放大） */
+function addButton(
+  onAdd: (e: React.MouseEvent) => void,
+  addLabel: string | undefined
+): React.JSX.Element {
+  return (
+    <button
+      data-group-add=""
+      onClick={(e) => {
+        e.stopPropagation()
+        onAdd(e)
+      }}
+      title={addLabel}
+      aria-label={addLabel}
+      className="absolute right-7 flex h-5 w-5 items-center justify-center rounded opacity-0 text-text-tertiary hover:bg-bg-active hover:text-text-primary group-hover/header:opacity-100"
+    >
+      <Plus size={13} />
+    </button>
+  )
 }
 
 export function SessionGroup({
@@ -139,10 +161,16 @@ export function SessionGroup({
             className="sb-section relative group/header"
             onContextMenu={onMenu}
           >
-            <span className="flex-1 min-w-0 truncate group-hover/header:pr-6">
+            <span
+              data-has-add={onAdd ? '' : undefined}
+              className={`flex-1 min-w-0 truncate ${
+                onAdd ? 'group-hover/header:pr-12' : 'group-hover/header:pr-6'
+              }`}
+            >
               {label}
               {experimental && <ExperimentalTag feature={experimental} />}
             </span>
+            {onAdd && addButton(onAdd, addLabel)}
             {onMenu && (
               <RowMenuButton
                 className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"
@@ -174,20 +202,7 @@ export function SessionGroup({
               <span className={`truncate ${muted ? 'line-through' : ''}`}>{label}</span>
               {experimental && <ExperimentalTag feature={experimental} />}
             </button>
-            {onAdd && (
-              <button
-                data-group-add=""
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onAdd(e)
-                }}
-                title={addLabel}
-                aria-label={addLabel}
-                className="absolute right-7 flex h-5 w-5 items-center justify-center rounded opacity-0 text-text-tertiary hover:bg-bg-active hover:text-text-primary group-hover/header:opacity-100"
-              >
-                <Plus size={13} />
-              </button>
-            )}
+            {onAdd && addButton(onAdd, addLabel)}
             {onMenu && (
               <RowMenuButton
                 className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"

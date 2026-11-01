@@ -9,7 +9,7 @@
  *   SB-2 hideFooter：两样都没有；overlays 与 groupsPrepend 照旧
  *
  * `@shuvix/chat-ui` 只给侧栏会碰的几样（getChatApi 的平台与菜单栏订阅、按 selector 读的 store、外观）；
- * 会话分组与 Bot 单选换成空替身（项目与会话都为空时画的是空态提示，不碰它们）。文件是 `.ts`，一律 createElement。
+ * 会话分组换成空替身（这里只看底栏，分节骨架见 sidebarSections 那份测试）。文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -38,7 +38,6 @@ vi.mock('./ProjectSessionGroups', () => ({
   ProjectSessionGroups: () => null,
   TEMP_GROUP_KEY: '__temp__'
 }))
-vi.mock('./BotSessionDialog', () => ({ BotSessionDialog: () => null }))
 
 import { Sidebar, type SidebarProps } from './Sidebar'
 

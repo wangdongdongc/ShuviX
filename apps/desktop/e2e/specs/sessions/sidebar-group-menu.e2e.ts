@@ -1,6 +1,6 @@
 /**
  * 侧栏分组头的动作入口（GM）—— 组头同样只剩悬停浮现的那颗 ⋮，新建对话 / 项目配置 / 知识库刷新全在它与
- * 右键的同一份菜单里。bot 会话不再从项目 / 临时组里开（2026-10-31 起只归属 bot）：入口在 Bots 分节的 bot 组上
+ * 右键的同一份菜单里（「聊天」分节头另有一颗新对话的 +，见 GM-07）。bot 会话不再从项目 / 临时组里开（2026-10-31 起只归属 bot）：入口在 Bots 分节的 bot 组上
  * （bots/new-bot-chat.e2e.ts）。
  *
  * 这里补的是既有 bots/ui-sidebar 那一批（A0-11…）没覆盖的三处装配缝：
@@ -112,12 +112,13 @@ describe('⋮ 与右键同源（组头这一侧的接法与会话行不同）', 
   })
 
   // GM-07
-  it('组头也只剩一颗 ⋮：临时组 {⋮}、项目组与知识库组 {折叠钮, ⋮}，旧的一排小图标一个不剩', async () => {
+  it('组头只剩 ⋮（「聊天」分节多一颗新对话的 +）：临时组 {+, ⋮}、项目组与知识库组 {折叠钮, ⋮}，旧的一排小图标一个不剩', async () => {
     const temp = await sidebar.groupAffordances('temp')
     expect(temp).not.toBeNull()
-    // 临时组是摊开的纯分节：标题行是 div 不是按钮，故连折叠钮都没有
-    expect(temp!.buttons).toEqual(['menu'])
-    expect(temp!.legacyActionIcons).toEqual([])
+    // 临时组是摊开的纯分节：标题行是 div 不是按钮，故连折叠钮都没有；那颗 + 是新对话（2026-11-01：侧栏里开临时会话
+    // 看得见的入口，web 客户端没有菜单栏的 ⌘N），不是旧的一排小图标回来了
+    expect(temp!.buttons).toEqual(['add', 'menu'])
+    expect(temp!.legacyActionIcons).toEqual(['lucide-plus'])
     expect(temp!.menuOpacity).toBe('0')
 
     for (const target of [{ project: PROJECT_NAME }, 'knowledge'] as const) {
