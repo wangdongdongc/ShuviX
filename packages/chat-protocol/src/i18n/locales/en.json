@@ -337,7 +337,7 @@
     "pathClickToCopy": "Click to copy path",
     "imageAltFallback": "image",
     "imageClickToLoad": "Not loaded automatically · click to load it from {{host}}",
-    "imageNotShown": "Not shown: images in replies load only from http(s) addresses, on click",
+    "imageNotShown": "Not shown: images in replies load only from https addresses, on click",
     "showRendered": "Show rendered",
     "showSource": "Show source",
     "rollback": "Rollback to here",

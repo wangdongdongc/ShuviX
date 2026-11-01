@@ -9,9 +9,11 @@
  * 浏览器的 favicon 都正当地需要 `img-src https:`，所以把关在这里，不在 CSP。
  *
  * src 分两种：
- *   - 写明了 http(s) 的绝对 URL → 带上 `url`（URL 解析后的规范形，点开时取的就是它，与占位上显示的主机
+ *   - 写明了 https 的绝对 URL → 带上 `url`（URL 解析后的规范形，点开时取的就是它，与占位上显示的主机
  *     是同一个）。带用户名 / 密码的除外：`https://good.example@evil.example/` 的提示里打头的是一个假主机，
- *     Chromium 也不取带凭据的子资源，点了只是一张破图；
+ *     Chromium 也不取带凭据的子资源，点了只是一张破图。`http:` 也除外：桌面端与 web 客户端两份 CSP 的
+ *     `img-src` 只放行 `'self' data: https:`，http 图片点了也取不到（实测服务器一个请求都没收到，只换来
+ *     一张破图）—— 一个点了没用的按钮比没有更糟；
  *   - 其余一律只是占位、没有加载的路：相对路径与本地路径（按页面地址解析，桌面端是 file:// 下应用自己的
  *     目录，web 客户端打到这台服务自己的路由）、`//host/x` 与 `\\host\x`（按页面协议变成远端；桌面端的
  *     file://host 在 Windows 上就是 SMB）、`data:`
@@ -26,7 +28,7 @@ import type { Element, Root } from 'hast'
 
 export const HELD_IMAGE_TAG = 'held-image'
 
-/** 点开时可以去取的地址：只认写明 http(s)、不带凭据的绝对 URL，交回解析后的规范形；其余 → undefined */
+/** 点开时可以去取的地址：只认写明 https、不带凭据的绝对 URL，交回解析后的规范形；其余 → undefined */
 export function remoteImageUrl(src: unknown): string | undefined {
   if (typeof src !== 'string') return undefined
   let url: URL
@@ -35,7 +37,7 @@ export function remoteImageUrl(src: unknown): string | undefined {
   } catch {
     return undefined
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+  if (url.protocol !== 'https:') return undefined
   return url.username || url.password ? undefined : url.href
 }
 

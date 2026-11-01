@@ -337,7 +337,7 @@
     "pathClickToCopy": "点击复制路径",
     "imageAltFallback": "图片",
     "imageClickToLoad": "没有自动加载 · 点击从 {{host}} 加载",
-    "imageNotShown": "未显示：回复里的图片只能从 http(s) 地址点击加载",
+    "imageNotShown": "未显示：回复里的图片只能从 https 地址点击加载",
     "showRendered": "显示渲染",
     "showSource": "显示源码",
     "rollback": "回退到此处",

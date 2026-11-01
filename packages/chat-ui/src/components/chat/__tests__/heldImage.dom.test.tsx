@@ -13,7 +13,7 @@
  *   HJ-5  显示的主机 = 加载的主机（怪写法一律规范化）
  *   HJ-6  正文里伪造的占位（手写 held-image / data-held-image 的 span / button）一个都不出现
  *   HJ-D1 「点过」跟着地址走：同一位置换成新地址（后到的引用式定义）不会替用户把新地址也点了
- *   HJ-Q6 HeldImage 自己再认一遍 url：直接传进来的非 http(s) 也只是占位；大写的地址按规范形显示
+ *   HJ-Q6 HeldImage 自己再认一遍 url：直接传进来的非 https（含 http）也只是占位；大写的地址按规范形显示
  *
  * 包入口顶掉，i18n 走真 en 资源；文件是 .tsx 但不写 JSX，一律 createElement。属性一律用 getAttribute 读
  * （`img.src` 会被 jsdom 按页面地址解析，读不出写进去的那个字面量）。
@@ -210,6 +210,7 @@ describe('HJ-2 · 远端占位：按钮，`alt · 主机`，title 是完整地�
 
 describe('HJ-3 · 非远端：只是占位，没有按钮，点了也不出 img', () => {
   it.each([
+    ['http（CSP 只放行 https）', '![a](http://a.example/x.png)', 'a'],
     ['相对路径', '![a](./x.png)', 'a'],
     ['协议相对 //', '<img src="//evil.example/x" alt="a">', 'a'],
     ['反斜杠 UNC', '<img src="\\\\evil.example\\x" alt="a">', 'a'],
@@ -373,20 +374,22 @@ describe('HJ-D1 · 同一位置换成新地址：不替用户把新地址也点�
 // HJ-Q6 · HeldImage 自己再认一遍 url
 // ══════════════════════════════════════════════════════
 
-describe('HJ-Q6 · 直接渲染 HeldImage：url 不是 http(s) 也只是占位', () => {
-  it.each(['file://server/share/x.png', 'javascript:alert(1)', '//evil.example/x'])(
-    'HJ-Q6 url=%s → span，没有按钮，点了不出 img',
-    (url) => {
-      render(createElement(HeldImage, { alt: 'a', url }))
-      const span = container.querySelector('span[data-held-image]')
-      expect(span).not.toBeNull()
-      expect(span!.getAttribute('title')).toBe(en.message.imageNotShown)
-      expect(container.querySelector('button')).toBeNull()
-      click(span!)
-      expect(all('img')).toHaveLength(0)
-      expect(all('[src]')).toHaveLength(0)
-    }
-  )
+describe('HJ-Q6 · 直接渲染 HeldImage：url 不是 https 也只是占位', () => {
+  it.each([
+    'http://a.example/x',
+    'file://server/share/x.png',
+    'javascript:alert(1)',
+    '//evil.example/x'
+  ])('HJ-Q6 url=%s → span，没有按钮，点了不出 img', (url) => {
+    render(createElement(HeldImage, { alt: 'a', url }))
+    const span = container.querySelector('span[data-held-image]')
+    expect(span).not.toBeNull()
+    expect(span!.getAttribute('title')).toBe(en.message.imageNotShown)
+    expect(container.querySelector('button')).toBeNull()
+    click(span!)
+    expect(all('img')).toHaveLength(0)
+    expect(all('[src]')).toHaveLength(0)
+  })
 
   it('HJ-Q6 大写地址 → 按钮，title 第一行与显示的主机都是规范形', () => {
     render(createElement(HeldImage, { alt: 'a', url: 'HTTPS://A.EXAMPLE/x' }))

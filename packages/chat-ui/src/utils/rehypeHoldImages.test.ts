@@ -4,7 +4,7 @@
  * rehypeSanitizeRawHtml.test.ts 的文件头：KaTeX 会把 TeX 源码回显进文本，按整棵树的 dump 断言会写出假红）。
  *
  * 这一步要防的是「模型写的图片地址在消息显示出来的那一刻就被请求」：每个 `img` 都换成不取图的 `held-image`，
- * 只有写明 http(s)、不带凭据的绝对 URL 才带上 `url`（URL 解析后的规范形 —— 占位上显示的主机就是点开时取的那个）。
+ * 只有写明 https、不带凭据的绝对 URL 才带上 `url`（URL 解析后的规范形 —— 占位上显示的主机就是点开时取的那个）。
  *
  * 五条派生链，全部从生产数组**按引用**剔除 / 替换，不另抄插件表：
  *   - `gated`   —— 生产链；
@@ -16,9 +16,9 @@
  *   HI-0  派生链确实各少了一格
  *   HI-1  远端图片（markdown / 裸 HTML / 引用式 / `<image>`）→ held-image，url 即原地址
  *   HI-2  怪写法一律规范化：url 是 URL 解析后的 href，主机就是会被取的那个
- *   HI-3  闸留着 src、扣图让它变成只是占位（相对 / 本地 / 协议相对 / 反斜杠 / mailto / 空 / 带凭据）
+ *   HI-3  闸留着 src、扣图让它变成只是占位（http / 相对 / 本地 / 协议相对 / 反斜杠 / mailto / 空 / 带凭据）
  *   HI-4  闸已经丢了 src 的，照样是占位
- *   HI-5  不装闸时扣图自己也只认 http(s)；手写的 `url` 属性顶不掉 src；remoteImageUrl 直接调用
+ *   HI-5  不装闸时扣图自己也只认 https；手写的 `url` 属性顶不掉 src；remoteImageUrl 直接调用
  *   HI-6  alt 的取舍，其余属性一律不带过去
  *   HI-7  正文里手写的 `<held-image>` 伪造不出来
  *   HI-8  任何位置的图片都被扣下，一对一、原地替换
@@ -175,7 +175,6 @@ describe('HI-0 · 对照链', () => {
 describe('HI-1 · 远端图片一律扣下，url 即原地址', () => {
   const REMOTE: Array<[string, string, string]> = [
     ['markdown https', '![a](https://a.example/x.png)', 'https://a.example/x.png'],
-    ['markdown http', '![a](http://a.example/x.png)', 'http://a.example/x.png'],
     ['裸 <img>', '<img src="https://a.example/x.png" alt="a">', 'https://a.example/x.png'],
     ['引用式', '![a][r]\n\n[r]: https://a.example/x.png', 'https://a.example/x.png'],
     // parse5 把 <image> 改名成 <img>：不能因为写法不同绕过
@@ -242,6 +241,9 @@ describe('HI-2 · 怪写法规范化：url 是解析后的 href，主机就是�
 
 describe('HI-3 · 闸留着 src 的非远端地址：只是占位，没有 url', () => {
   const INERT: Array<[string, string]> = [
+    // http 图片两份 CSP 都不放行（img-src 只有 https:），给按钮也取不到
+    ['markdown http', '![a](http://a.example/x.png)'],
+    ['裸 <img> http', '<img src="http://127.0.0.1:8080/x.png" alt="a">'],
     ['相对 ./', '![a](./x.png)'],
     ['相对裸名', '![a](x.png)'],
     ['本地绝对路径', '![a](/Users/x/a.png)'],
@@ -296,7 +298,7 @@ describe('HI-4 · 闸已丢掉 src 的：照样是只有 alt 的占位', () => {
 // HI-5 · 扣图自己就够
 // ══════════════════════════════════════════════════════
 
-describe('HI-5 · 不装闸，扣图自己也只认 http(s)', () => {
+describe('HI-5 · 不装闸，扣图自己也只认 https', () => {
   const ODD_SCHEMES = [
     'ws://evil.example/x',
     'ftp://evil.example/x',
@@ -324,6 +326,7 @@ describe('HI-5 · 不装闸，扣图自己也只认 http(s)', () => {
 
   it.each([
     ['undefined', undefined],
+    ['http', 'http://a.example/x'],
     ['数字', 1],
     ['数组', ['https://a.example/']],
     ['用户名冒充主机', 'https://good.example@evil.example/x'],
