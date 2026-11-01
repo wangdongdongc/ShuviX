@@ -455,7 +455,11 @@ describe('session fork', () => {
     await prompt(forkId, Q.e4b)
     const req = requestFor(Q.e4b, since)
     expect(req).toBeDefined()
-    expect(requestSystemText(req!)).toBe(requestSystemText(childReq!))
+    // 除了 Environment 里那一行临时目录：每个会话有自己的临时目录（40fb6ed6 起写进提示），fork 是另一个会话
+    const tempLine = /(- Temporary files: `)[^`]+(`)/
+    expect(requestSystemText(req!)).toMatch(tempLine)
+    const sameButTemp = (text: string): string => text.replace(tempLine, '$1<session temp>$2')
+    expect(sameButTemp(requestSystemText(req!))).toBe(sameButTemp(requestSystemText(childReq!)))
     expect(conversationOf(req!)).toEqual([`user:${Q.e4a}`, `assistant:${A.e4a}`, `user:${Q.e4b}`])
     expect(await listMessages(sid.e4child)).toEqual(childMsgs)
   })
