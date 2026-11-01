@@ -6,6 +6,8 @@
  *  - `GET /files/preview?session=<id>&path=<路径>` 同上，路径按会话解析（≈ `shuvix-preview://`，同一份
  *    `resolvePreviewFilePath`）；
  *  - `GET /files/download?path=<绝对路径>`         同上，外加 `Content-Disposition: attachment`（导出后的下载）；
+ *  - `GET /sessions/shown-image?session=<id>&file=<名字>` 会话里摆给用户看的图的快照（只认快照文件名，归 `sessions`
+ *    scope、不过 path 点位）；
  *  - `GET /lib/<名字>`                             沙箱库（≈ `shuvix-lib://`，同一张白名单、同一份缓存）。
  *
  * 读法与桌面协议共用 `utils/fileResponse.ts` / `services/fileServing.ts`（MIME 表、Range 解析、路径解析、库白名单），
@@ -23,19 +25,25 @@ import {
   NETWORK_DOWNLOAD_PATH,
   NETWORK_LIB_PREFIX,
   NETWORK_MEDIA_PATH,
-  NETWORK_PREVIEW_PATH
+  NETWORK_PREVIEW_PATH,
+  NETWORK_SHOWN_IMAGE_PATH
 } from '../../../shared/networkRoutes'
 import { plainResponse as plain, sendFileResponse as sendFile } from '../../utils/httpFile'
 import type { GateVerdict } from '@shuvix/agent-runtime'
 
-/** 一条文件路由 */
-export type FileRoute = 'media' | 'preview' | 'download' | 'lib'
+/** 一条文件路由（`shown`：会话里摆给用户看的图，归 `sessions` scope，见 policyGate 的 requestFactsOf） */
+export type FileRoute = 'media' | 'preview' | 'download' | 'lib' | 'shown'
 
 export interface FileRouteDeps {
   /** 预览资源的路径解析（相对路径按会话的工作目录）；解析不了可以抛 */
   readonly resolvePreviewPath: (sessionId: string, path: string) => string
   /** 沙箱库的字节：不在白名单 → undefined；读失败可以抛 */
   readonly readSandboxLib: (name: string) => Promise<Buffer | undefined>
+  /**
+   * 会话里一张图的快照 → 绝对路径；会话 id 或文件名形状不对 → undefined（404）。不给 → 这条路由 404。
+   * 不过 path 点位：快照是会话内容，能读这个会话的设备就能看图（用户裁决，docs/show-image-design.md §4.4）
+   */
+  readonly resolveShownImage?: (sessionId: string, file: string) => string | undefined
   /** path 点位（服务端按这个请求的事实绑好的；不给 → 不判）。`path` 是要读的绝对路径 */
   readonly judgePath?: (path: string, route: FileRoute) => GateVerdict
   /** 拒绝时的 403 正文（缺省：规则的话） */
@@ -65,6 +73,7 @@ export function fileRouteOf(pathname: string): FileRoute | undefined {
   if (pathname === NETWORK_MEDIA_PATH) return 'media'
   if (pathname === NETWORK_PREVIEW_PATH) return 'preview'
   if (pathname === NETWORK_DOWNLOAD_PATH) return 'download'
+  if (pathname === NETWORK_SHOWN_IMAGE_PATH) return 'shown'
   if (pathname.startsWith(NETWORK_LIB_PREFIX)) return 'lib'
   return undefined
 }
@@ -134,6 +143,14 @@ export async function serveFileRoute(
           return plain(res, 404, 'Not found.')
         }
         if (!admitPath(res, deps, path, route)) return
+        return await sendFile(req, res, path)
+      }
+      case 'shown': {
+        const sessionId = url.searchParams.get('session')
+        const file = url.searchParams.get('file')
+        if (!sessionId || !file) return plain(res, 400, 'Bad request.')
+        const path = deps.resolveShownImage?.(sessionId, file)
+        if (path === undefined) return plain(res, 404, 'Not found.')
         return await sendFile(req, res, path)
       }
       case 'lib': {

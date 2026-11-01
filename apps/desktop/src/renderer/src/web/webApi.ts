@@ -22,7 +22,8 @@
 import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../shared/apiTable'
 import { buildApi, createCommonOverrides, type WebApi } from '../../../shared/buildApi'
 import type { ServerFolderKind } from '../../../shared/serverFs'
-import { filePreviewPageUrl, widgetPageUrl } from '../host/hostUrls'
+import { shownImageFileOfRef } from '@shuvix/chat-protocol/shownImages'
+import { filePreviewPageUrl, webPreviewUrl, widgetPageUrl } from '../host/hostUrls'
 import { stashPendingSessionDraft } from '../host/sessionDraftStash'
 import { requestDirectoryPick } from './webDirectoryPick'
 import { showServerPath, type WebPathNotice } from './webPathNotice'
@@ -125,6 +126,11 @@ export function webLocalHandlers(
     'files:open': (params) => {
       const p = params as { sessionId?: unknown; path?: unknown; openedBy?: unknown } | undefined
       if (!isNonEmptyString(p?.sessionId) || !isNonEmptyString(p?.path)) return false
+      // 摆给用户看的图：新标签页直接开图本身（会话那条路由），不经文件预览页 —— 预览页读文件归 `files`
+      if (shownImageFileOfRef(p.path)) {
+        win.open(webPreviewUrl(p.sessionId, p.path), '_blank')
+        return true
+      }
       win.open(
         filePreviewPageUrl(win.location, {
           sessionId: p.sessionId,

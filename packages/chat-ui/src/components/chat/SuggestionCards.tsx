@@ -8,7 +8,11 @@ import {
   type SuggestionGroupState
 } from '@shuvix/chat-protocol/suggestions'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import { suggestionImagesOf } from '@shuvix/chat-protocol/shownImages'
 import { getHostApi } from '../../api/chatApi'
+import { useChatDensity } from '../../host/chatHostContext'
+import { useResolveMediaUrl } from '../../host/mediaUrl'
+import { ShownImageView, shownThumbBoxClass } from './ShownImagesBlock'
 import type { AssistantBlock } from '../../stores/chatStore'
 
 /**
@@ -33,6 +37,9 @@ function failureText(
 /**
  * 一次 `suggest` 调用的提议卡片（画在助手卡片底部，不进步骤组）：每条是标题、理由、采纳后要发的那句话（全文）和一个
  * 「采纳」按钮。点了 → 主进程核对后把那句话作为用户回复发进会话（会话在跑就是 steer）。之后用户说了别的话，这组就关了。
+ * 以文字为主、每条一行（2026-11-01 用户裁决）：带图的那条在文字右边多一个**固定大小**的缩略图位（快照在调用详情里，
+ * 下标同参数），图多大都不影响文字的排布；一组里只要有一条带图，每行都留出这个位置（没图的留空），文字、缩略图、采纳
+ * 按钮逐行对齐。点图是看图，不算采纳。
  *
  * 状态全从会话本身读（见 chat-protocol `suggestions.ts`）；这里只多一个「刚点过、会话里还没出现那条消息」的本地态。
  */
@@ -47,8 +54,14 @@ export function SuggestionCards({
   const ctx = useContext(SuggestionContext)
   const [sending, setSending] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const touch = useChatDensity() === 'touch'
+  // 取不到本地文件地址的宿主（Chrome 侧栏）不画图，也就不留缩略图位
+  const canShowImages = useResolveMediaUrl() !== null
   const items = suggestionsOf(block.args)
   if (!items.some(Boolean)) return null
+  const images = canShowImages ? suggestionImagesOf(block.details) : []
+  const thumbSlot = items.some((item, index) => item !== undefined && images[index] !== undefined)
+  const thumbBox = shownThumbBoxClass(touch)
 
   const state: SuggestionGroupState = ctx?.states.get(
     suggestionGroupKey(messageId, block.toolCallId)
@@ -85,62 +98,78 @@ export function SuggestionCards({
         <Lightbulb size={12} className="text-warning flex-shrink-0" />
         <span>{t('suggestion.header')}</span>
       </div>
-      {items.map((item, index) => {
-        if (!item) return null
-        const accepted = state.status === 'accepted' && state.index === index
-        const dimmed = state.status !== 'open' && !accepted
-        return (
-          <div
-            key={index}
-            data-suggestion-index={index}
-            data-suggestion-accepted={accepted || undefined}
-            className={`rounded-lg border px-3 py-2 transition-opacity ${
-              accepted ? 'border-accent/40 bg-accent/[0.04]' : 'border-border-primary'
-            } ${dimmed ? 'opacity-50' : ''}`}
-          >
-            <div className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-text-primary break-words">
-                  {item.title}
+      <div className="space-y-1.5">
+        {items.map((item, index) => {
+          if (!item) return null
+          const accepted = state.status === 'accepted' && state.index === index
+          const dimmed = state.status !== 'open' && !accepted
+          const image = images[index]
+          return (
+            <div
+              key={index}
+              data-suggestion-index={index}
+              data-suggestion-accepted={accepted || undefined}
+              className={`rounded-lg border px-3 py-2 transition-opacity ${
+                accepted ? 'border-accent/40 bg-accent/[0.04]' : 'border-border-primary'
+              } ${dimmed ? 'opacity-50' : ''}`}
+            >
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-text-primary break-words">
+                    {item.title}
+                  </div>
+                  {item.detail && (
+                    <div className="mt-0.5 text-xs text-text-secondary break-words">
+                      {item.detail}
+                    </div>
+                  )}
+                  {/* 采纳时发出去的就是这句话：全文显示，用户点之前看得见自己在同意什么 */}
+                  <div className="mt-1.5 text-xs text-text-tertiary">
+                    <span>{t('suggestion.willSend')}</span>
+                    <span className="mx-1">·</span>
+                    <span
+                      data-suggestion-message
+                      className="whitespace-pre-wrap break-words text-text-secondary"
+                    >
+                      {item.message}
+                    </span>
+                  </div>
                 </div>
-                {item.detail && (
-                  <div className="mt-0.5 text-xs text-text-secondary break-words">
-                    {item.detail}
+                {/* 固定大小的缩略图位：一组里有图就每行都留（没图的空着），逐行对齐 */}
+                {thumbSlot && (
+                  <div data-suggestion-thumb-slot className={`flex-shrink-0 ${thumbBox}`}>
+                    {image && (
+                      <div data-suggestion-image>
+                        <ShownImageView image={image} variant="thumb" />
+                      </div>
+                    )}
                   </div>
                 )}
+                {/* 动作位定宽：按钮、「已采纳」、空着时宽度一样，缩略图位才对得齐 */}
+                <div className="flex min-w-[4.5rem] flex-shrink-0 justify-end">
+                  {accepted ? (
+                    <span className="flex flex-shrink-0 items-center gap-1 text-[11px] text-accent">
+                      <Check size={12} />
+                      {t('suggestion.accepted')}
+                    </span>
+                  ) : state.status === 'open' && ctx && accept ? (
+                    <button
+                      type="button"
+                      data-suggestion-accept
+                      disabled={!canAccept}
+                      onClick={() => void onAccept(index)}
+                      className="flex flex-shrink-0 items-center gap-1 rounded-md border border-accent/40 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/10 disabled:opacity-60 disabled:cursor-default transition-colors"
+                    >
+                      {sending === index && <Loader2 size={11} className="animate-spin" />}
+                      {t('suggestion.accept')}
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              {accepted ? (
-                <span className="flex flex-shrink-0 items-center gap-1 text-[11px] text-accent">
-                  <Check size={12} />
-                  {t('suggestion.accepted')}
-                </span>
-              ) : state.status === 'open' && ctx && accept ? (
-                <button
-                  type="button"
-                  data-suggestion-accept
-                  disabled={!canAccept}
-                  onClick={() => void onAccept(index)}
-                  className="flex flex-shrink-0 items-center gap-1 rounded-md border border-accent/40 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/10 disabled:opacity-60 disabled:cursor-default transition-colors"
-                >
-                  {sending === index && <Loader2 size={11} className="animate-spin" />}
-                  {t('suggestion.accept')}
-                </button>
-              ) : null}
             </div>
-            {/* 采纳时发出去的就是这句话：全文显示，用户点之前看得见自己在同意什么 */}
-            <div className="mt-1.5 text-xs text-text-tertiary">
-              <span>{t('suggestion.willSend')}</span>
-              <span className="mx-1">·</span>
-              <span
-                data-suggestion-message
-                className="whitespace-pre-wrap break-words text-text-secondary"
-              >
-                {item.message}
-              </span>
-            </div>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
       {error && (
         <div data-suggestion-error className="text-[11px] text-error">
           {error}

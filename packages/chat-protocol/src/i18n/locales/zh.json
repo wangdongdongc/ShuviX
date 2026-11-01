@@ -1277,7 +1277,9 @@
     "docEditHint": "替换共享文档里的一段原文 —— 生成时就有预览，执行时一次落下",
     "docInsertHint": "在共享文档的某段之前、之后或文末插入新内容",
     "suggestLabel": "提议",
-    "suggestHint": "AI 给你留几条可以一键采纳的下一步，不打断它手上的工作"
+    "suggestHint": "AI 给你留几条可以一键采纳的下一步，不打断它手上的工作",
+    "showImageLabel": "显示图片",
+    "showImageHint": "把这台电脑上的图片直接摆进对话给你看：它画的图表、存下的截图"
   },
   "widgets": {
     "panelEmptyHint": "还没有小组件。在对话里告诉 AI，比如\"做一个 JSON 格式化小组件\"",
@@ -1803,6 +1805,11 @@
     "confirmDeleteTitle": "删除这份日报？",
     "confirmDeleteDescription": "{{day}} 的日报文件会被删除，且无法恢复。",
     "tag": "日记"
+  },
+  "shownImage": {
+    "missing": "这张图片已经不在了",
+    "openHint": "点击查看原图",
+    "alt": "图片"
   },
   "suggestion": {
     "header": "提议",

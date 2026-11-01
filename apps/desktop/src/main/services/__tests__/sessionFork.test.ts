@@ -32,10 +32,24 @@
  *   SF-21 源会话自带 workingDirectory（它本身是 fork / 一个用户目录）→ fork 抄同一个值
  *   SF-22 临时子会话做源：同一父会话，workingDirectory = 那条子会话自己的 temp_workspace/<子会话>（钉住现状）
  *   SF-23 临时源会话在忙 → busy，不插行
+ *   摆给用户看的图的快照（`<userData>/shown/<id>/`，show_image；paths 用真实现，userData 在临时目录）：
+ *   SF-24 整段 fork：shown/S 的文件逐字节拷到 shown/F（同名）；源目录原样
+ *   SF-25 从回复分支（branchAt 那条路）：同样拷过去
+ *   SF-26 源会话没有 shown/S → 不建 shown/F
+ *   SF-27 拷快照抛错（包一层：拷完再抛）→ failed；fork 的行没了、shown/F 不留，shown/S 原样
+ *   SF-28 branchAt 拒绝（SF-10 那条路，拷完之后）→ shown/F 不留（完整删除管到它）；源原样
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fakeHost, resetFakeHost, type FakeDurableSession } from './support/fakeSessionHost'
@@ -51,6 +65,7 @@ const mocks = vi.hoisted(() => ({
   listChanged: vi.fn<() => void>(),
   artifactCalls: [] as Array<[string, string]>,
   artifactsFail: false,
+  shownFail: false,
   /** projectDao.pick：缺省没有项目行（工作目录回落到会话自带的 / 临时工作区）；SF-11 的权限表用例给项目根 */
   projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined)
 }))
@@ -114,6 +129,17 @@ vi.mock('../artifacts/store', async (importOriginal) => {
       mocks.artifactCalls.push([from, to])
       if (mocks.artifactsFail) throw new Error('artifacts copy failed')
       actual.copySessionArtifacts(from, to)
+    }
+  }
+})
+// 快照的拷贝留真的（目录在 <root>/userData/shown 里），外面包一层：可注入失败（拷完再抛，看半成品有没有被收走）
+vi.mock('../shownImages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shownImages')>()
+  return {
+    ...actual,
+    copyShownImages: (from: string, to: string) => {
+      actual.copyShownImages(from, to)
+      if (mocks.shownFail) throw new Error('shown images copy failed')
     }
   }
 })
@@ -214,6 +240,7 @@ beforeEach(() => {
   mocks.projectPick.mockReset()
   mocks.artifactCalls.length = 0
   mocks.artifactsFail = false
+  mocks.shownFail = false
   mocks.copy.mockResolvedValue(undefined)
   mocks.openFile.mockResolvedValue(STORAGE)
   mocks.reset.mockResolvedValue(undefined)
@@ -1218,5 +1245,88 @@ describe('SF-21..23 temp sources: carried working dirs, sub-session sources, bus
     expect(await forkSession({ sessionId: SRC })).toEqual({ success: false, reason: 'busy' })
     expect(rowIds()).toEqual([SRC])
     expectNothingCreated()
+  })
+})
+
+// ─── SF-24..28：摆给用户看的图的快照 ─────────────────
+
+const shownDir = (sid: string): string => join(holder.root, 'userData', 'shown', sid)
+const SHOWN_A = `${'a'.repeat(64)}.png`
+const SHOWN_B = `${'b'.repeat(64)}.svg`
+
+/** 源会话的两张快照 */
+function seedShown(sid: string): void {
+  mkdirSync(shownDir(sid), { recursive: true })
+  writeFileSync(join(shownDir(sid), SHOWN_A), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]))
+  writeFileSync(join(shownDir(sid), SHOWN_B), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+}
+
+/** 两个目录里的快照逐字节一致 */
+function expectSameShown(from: string, to: string): void {
+  expect(readdirSync(shownDir(to)).sort()).toEqual([SHOWN_A, SHOWN_B].sort())
+  for (const name of [SHOWN_A, SHOWN_B]) {
+    expect(
+      readFileSync(join(shownDir(to), name)).equals(readFileSync(join(shownDir(from), name))),
+      name
+    ).toBe(true)
+  }
+}
+
+describe('SF-24..28 shown-image snapshots', () => {
+  it('SF-24 whole fork: shown/S is copied byte for byte into shown/F; the source stays', async () => {
+    seedRow()
+    seedShown(SRC)
+    openSource()
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+    expectSameShown(SRC, forkId)
+    expect(readdirSync(shownDir(SRC)).sort()).toEqual([SHOWN_A, SHOWN_B].sort())
+  })
+
+  it('SF-25 reply fork (branchAt): the same copy', async () => {
+    seedRow()
+    seedShown(SRC)
+    openSource()
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC, messageId: '2' }))
+    expect(fakeHost.get(forkId)!.callsOf('branchAt')).toEqual([['branchAt', 2]])
+    expectSameShown(SRC, forkId)
+  })
+
+  it('SF-26 a source without shown/S → no shown/F', async () => {
+    seedRow()
+    openSource()
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+    expect(existsSync(shownDir(forkId))).toBe(false)
+    expect(existsSync(shownDir(SRC))).toBe(false)
+  })
+
+  it('SF-27 copying the snapshots throws (after copying) → failed; the fork row and shown/F are gone, shown/S intact', async () => {
+    seedRow()
+    seedShown(SRC)
+    openSource()
+    mocks.shownFail = true
+
+    expect(await forkSession({ sessionId: SRC })).toEqual({ success: false, reason: 'failed' })
+    const forkId = mocks.copy.mock.calls[0]![1]
+    expect(rowIds()).toEqual([SRC])
+    expect(existsSync(shownDir(forkId))).toBe(false)
+    expect(readdirSync(shownDir(SRC)).sort()).toEqual([SHOWN_A, SHOWN_B].sort())
+  })
+
+  it('SF-28 branchAt refused after the copy → shown/F is gone (the full delete covers it); the source stays', async () => {
+    seedRow()
+    seedShown(SRC)
+    openSource()
+    fakeHost.configure = (session) => {
+      if (session.sessionId !== SRC) session.branchResult = { ok: false, reason: 'not_found' }
+    }
+
+    expect(await forkSession({ sessionId: SRC, messageId: '4' })).toEqual({
+      success: false,
+      reason: 'invalid_target'
+    })
+    const forkId = mocks.copy.mock.calls[0]![1]
+    expect(rowIds()).toEqual([SRC])
+    expect(existsSync(shownDir(forkId))).toBe(false)
+    expect(readdirSync(shownDir(SRC)).sort()).toEqual([SHOWN_A, SHOWN_B].sort())
   })
 })

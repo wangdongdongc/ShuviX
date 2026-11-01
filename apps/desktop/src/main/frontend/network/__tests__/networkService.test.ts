@@ -59,8 +59,12 @@
  *   NSP-8  迁移（桌面）：network.lan='true' → 写一份规则为空的 network-admission、删掉两个旧键；还指定了 eth1（SCOPED_IFACES）
  *          → 写进 192.168.50.10/24；已有同名用户策略 → 不写、照样删键；没开局域网 → 不写；没接策略 → 什么也不动
  *   NSP-9  迁移（无头）：--lan / --bind 同样写；不删设置
+ *   NSP-SH-1 会话里摆给用户看的图（`/sessions/shown-image`）：200；判定只收到 request 对象（scope sessions，加连接时的
+ *          socket），从不收到 path；拒绝 `scope == 'files'` 的规则挡不住它，拒绝 `scope == 'sessions'` → 403 且解析器不调
+ *   NSP-SH-2 `/files/preview?path=shown:…`（解析器映射到快照）→ 一个 request（scope files）+ 一个 path 对象，path 是快照的
+ *          绝对路径
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir, type NetworkInterfaceInfo, type networkInterfaces } from 'node:os'
@@ -1114,5 +1118,93 @@ describe('NSP 安全策略', () => {
     plain.setHeadless({ port: await freePort() })
     await plain.init({ security: none })
     expect(none.created).toEqual([])
+  })
+})
+
+describe('NSP-SH 会话里摆给用户看的图', () => {
+  const SHOWN = `${'a'.repeat(64)}.png`
+
+  /** 临时目录里的一张快照；解析器的间谍按 (会话, 文件名) 指过去 */
+  function shownFixture(): {
+    file: string
+    resolveShownImage: ReturnType<typeof vi.fn<(s: string, f: string) => string | undefined>>
+  } {
+    mkdirSync(join(tmp, 'shown', 'S'), { recursive: true })
+    const file = join(tmp, 'shown', 'S', SHOWN)
+    writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    return {
+      file,
+      resolveShownImage: vi.fn((s: string, f: string) =>
+        s === 'S' && f === SHOWN ? file : undefined
+      )
+    }
+  }
+
+  const shownPath = `/sessions/shown-image?session=S&file=${SHOWN}`
+
+  it('NSP-SH-1 只过 request 点位（sessions），从不过 path；files 规则挡不住，sessions 规则 → 403 且解析器不调', async () => {
+    const P = await freePort()
+    enable(P)
+    const { resolveShownImage } = shownFixture()
+    const objects: SecurityObject[] = []
+    const security = fakeSecurity((_s, _a, object) => {
+      objects.push(object)
+      return allowed()
+    })
+    const svc = makeService()
+    await svc.init({
+      security,
+      fileRoutes: {
+        resolveShownImage,
+        resolvePreviewPath: (_s, p) => p,
+        readSandboxLib: async () => undefined
+      }
+    })
+    expect(await getPathStatus(P, shownPath)).toBe(200)
+    expect(resolveShownImage).toHaveBeenCalledWith('S', SHOWN)
+    expect(objects.map((o) => o.type).filter((t) => t !== 'socket')).toEqual(['request'])
+    expect(objects.find((o) => o.type === 'request')).toMatchObject({
+      route: 'shown',
+      scope: 'sessions',
+      access: 'read'
+    })
+    expect(objects.some((o) => o.type === 'path')).toBe(false)
+
+    // 拒绝 files scope 的规则：这条不归 files，照样 200
+    security.decide = (_s, _a, object) => (object.scope === 'files' ? denied() : allowed())
+    expect(await getPathStatus(P, shownPath)).toBe(200)
+
+    // 拒绝 sessions scope 的规则：403，解析器一次都不调
+    resolveShownImage.mockClear()
+    security.decide = (_s, _a, object) => (object.scope === 'sessions' ? denied() : allowed())
+    expect(await getPathStatus(P, shownPath)).toBe(403)
+    expect(resolveShownImage).not.toHaveBeenCalled()
+  })
+
+  it('NSP-SH-2 /files/preview 的 shown: 引用 → request（files）+ path（快照的绝对路径）', async () => {
+    const P = await freePort()
+    enable(P)
+    const { file, resolveShownImage } = shownFixture()
+    const objects: SecurityObject[] = []
+    const security = fakeSecurity((_s, _a, object) => {
+      objects.push(object)
+      return allowed()
+    })
+    const svc = makeService()
+    await svc.init({
+      security,
+      fileRoutes: {
+        resolveShownImage,
+        resolvePreviewPath: (s, p) =>
+          p === `shown:${SHOWN}` ? (resolveShownImage(s, SHOWN) ?? p) : p,
+        readSandboxLib: async () => undefined
+      }
+    })
+    const ref = encodeURIComponent(`shown:${SHOWN}`)
+    expect(await getPathStatus(P, `/files/preview?session=S&path=${ref}`)).toBe(200)
+    const judged = objects.filter((o) => o.type !== 'socket')
+    expect(judged.map((o) => o.type)).toEqual(['request', 'path'])
+    expect(judged[0]).toMatchObject({ route: 'preview', scope: 'files', access: 'read' })
+    expect(judged[1]).toMatchObject({ path: file, scope: 'files', access: 'read' })
   })
 })

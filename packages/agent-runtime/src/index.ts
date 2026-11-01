@@ -80,7 +80,11 @@ export {
 export {
   createSuggestTool,
   SuggestParamsSchema,
+  SuggestParamsWithImagesSchema,
   SUGGEST_DESCRIPTION,
+  SUGGEST_DESCRIPTION_WITH_IMAGES,
+  type CreateSuggestToolOptions,
+  type SuggestImagePresenter,
   type SuggestTool
 } from './suggestTool'
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）

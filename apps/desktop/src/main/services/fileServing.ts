@@ -3,7 +3,8 @@
  * `shuvix-lib://`）与网络服务的 HTTP 路由（`frontend/network/fileRoutes.ts`：`/files/*`、`/lib/*`，
  * server mode phase D）用的是同一份（纯的 MIME 表与 Range 解析在 `utils/fileResponse.ts`）：
  *
- *  - `resolvePreviewFilePath`：预览资源的路径解析（相对路径按会话的工作目录，与 files.read 同口径）；
+ *  - `resolvePreviewFilePath`：预览资源的路径解析（相对路径按会话的工作目录，与 files.read 同口径；`shown:` 引用
+ *    是会话自己的图片快照）；
  *  - `readSandboxLib`：交互图沙箱的库 —— 只按名字查白名单，命中回随包文件（进程内缓存，读失败不缓存）。
  *
  * 不碰 Electron：两种外壳（protocol.handle 的 Response、node:http 的 ServerResponse）各自拼应答。
@@ -16,6 +17,7 @@ import { resolveProjectConfig } from './toolContext'
 import { sessionService } from './sessionService'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { getSandboxLibsDir } from '../utils/paths'
+import { shownImagePathOfRef } from './shownImages'
 
 /**
  * 预览资源的路径：相对路径按会话的工作目录解析（会话不在 → 按空工作目录，绝对路径照样能读）。
@@ -23,6 +25,9 @@ import { getSandboxLibsDir } from '../utils/paths'
  * （`/files/preview?session=../../x`），不能让它在 userData 以外建目录
  */
 export function resolvePreviewFilePath(sessionId: string, rawPath: string): string {
+  // 摆给用户看的图的快照（`shown:<sha256>.<ext>`）：在会话自己的快照目录里，不按工作目录解析
+  const shown = shownImagePathOfRef(sessionId, rawPath)
+  if (shown) return shown
   if (!sessionService.getById(sessionId)) return resolveReadPath(rawPath, '')
   const config = resolveProjectConfig(sessionId)
   return resolveReadPath(rawPath, config.workingDirectory)

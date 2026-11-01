@@ -17,6 +17,9 @@
  *  - SP-3 会话自己的目录（sessionOwnDirs，权限表 workdir / system 行的来源）：工作目录（不适合时为 null
  *    并说明原因）、本会话临时目录、artifacts、工具结果；坏 id 没有（null）；工作目录是别的会话的临时
  *    工作区时其余三项仍是本会话自己的，本会话自己的临时工作区与第三个会话的不在里面；
+ *  - SPEC-SH 摆给用户看的图的快照目录（`<userData>/shown/<id>/`，show_image）**不在**会话自己的目录里：
+ *    sessionOwnDirs 交出的哪一项都不等于、也不包含 `<userData>/shown` 或 `<userData>/shown/<sid>`（快照进了权限表，
+ *    「摆一张表外的图、再 read 快照」就绕过了外部路径询问）；工作目录指到快照目录也不适合（workdir 为 null）；
  *  - SP-3x 会话设置带来的目录（acceptableSettingDir，权限表 knowledge / skill 行的写法）：realpath；
  *    空串、`/`、覆盖家目录的 → null；
  *  - SP-3e 规格怎么用权限表的行：可读根 = 全部行 + 本会话临时目录 + ShuviX 自己的程序，可写根 = 可写的行
@@ -604,6 +607,33 @@ describe('SP-3 会话自己的目录（sessionOwnDirs）', () => {
       ])
     }
   })
+})
+
+describe('SPEC-SH 快照目录不在会话自己的目录里', () => {
+  it.each(LAYOUTS)(
+    'SPEC-SH %s 布局：哪一项都不等于 / 包含 shown 与 shown/<sid>；工作目录指到快照目录 → 不适合',
+    (_layout, p) => {
+      const shownBase = `${p.userData}/shown`
+      const shownOwn = `${shownBase}/${SID}`
+      const t = tempWorkspacesOf(p)
+      for (const workingDirectory of [WS, t.own, t.other, h('Documents/proj', p.home)]) {
+        const own = ownOf({ workingDirectory }, p)!
+        const dirs = [own.workdir, own.tmp, own.artifacts, own.toolResults].filter(
+          (d): d is string => d !== null
+        )
+        expect(dirs.length, workingDirectory).toBeGreaterThanOrEqual(3)
+        for (const d of dirs) {
+          expect(isWithin(shownBase, d), `${workingDirectory} → ${d}`).toBe(false)
+          expect(isWithin(shownOwn, d), `${workingDirectory} → ${d}`).toBe(false)
+        }
+      }
+      for (const workingDirectory of [shownBase, shownOwn]) {
+        const own = ownOf({ workingDirectory }, p)!
+        expect(own.workdir, workingDirectory).toBeNull()
+        expect(own.workspaceUnsuitable, workingDirectory).toContain("ShuviX's application data")
+      }
+    }
+  )
 })
 
 describe('SP-3x 会话设置带来的目录（acceptableSettingDir）', () => {

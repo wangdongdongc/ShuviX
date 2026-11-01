@@ -1277,7 +1277,9 @@
     "docEditHint": "Replace one passage of the shared document — previewed while written, applied in one step",
     "docInsertHint": "Insert new text into the shared document after or before a passage, or at the end",
     "suggestLabel": "Suggest",
-    "suggestHint": "Leaves you a few next steps to accept with one click, without pausing its work"
+    "suggestHint": "Leaves you a few next steps to accept with one click, without pausing its work",
+    "showImageLabel": "Show image",
+    "showImageHint": "Shows you images from this computer right in the conversation: a chart it plotted, a screenshot it saved"
   },
   "widgets": {
     "panelEmptyHint": "No widgets yet. Ask the AI in chat to build one — e.g. \"make a JSON formatter widget\"",
@@ -1803,6 +1805,11 @@
     "confirmDeleteTitle": "Delete this daily report?",
     "confirmDeleteDescription": "The daily report file for {{day}} will be deleted. This can't be undone.",
     "tag": "Diary"
+  },
+  "shownImage": {
+    "missing": "This image is no longer available",
+    "openHint": "Click to open at full size",
+    "alt": "Image"
   },
   "suggestion": {
     "header": "Suggestions",

@@ -13,6 +13,7 @@
  *   SG-6 两条助手消息里同一个 toolCallId（`call_0`）→ 两个独立的组，按消息 id 区分
  *   SG-7 `suggestionToAccept`：not-found（未知消息 id / 指向用户消息 / toolCallId 不对 / 还在执行 / 出错 / 下标越界 /
  *        下标是空位）；closed（之后用户说了别的 / 已采纳过）；否则 ok，交回的是工具参数里那条的 message（原样）
+ *   SUG-IMG-1 带 `image` 的项照常认出，交回的 Suggestion 里没有 image 键（采纳只能发 message，2026-11-01）
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -167,6 +168,22 @@ describe('SG-1 · suggestionsOf', () => {
     expect(items[0]).toStrictEqual({ title: 'first', message: 'one' })
     for (let i = 1; i <= 8; i++) expect(items[i], `index ${i}`).toBeUndefined()
     expect(items[9]).toStrictEqual({ title: 'last', message: 'nine' })
+  })
+})
+
+describe('SUG-IMG-1 · 带图的提议', () => {
+  it('SUG-IMG-1 项里多一个 image 照常认出；交回的 Suggestion 没有 image 键', () => {
+    const items = suggestionsOf({
+      suggestions: [
+        { title: 'Layout A', message: 'Go with layout A', image: '/x.png' },
+        { title: 'Layout B', message: 'Go with layout B', detail: 'Denser', image: '/y.png' }
+      ]
+    })
+    expect(items).toStrictEqual([
+      { title: 'Layout A', message: 'Go with layout A' },
+      { title: 'Layout B', message: 'Go with layout B', detail: 'Denser' }
+    ])
+    for (const item of items) expect(item).not.toHaveProperty('image')
   })
 })
 

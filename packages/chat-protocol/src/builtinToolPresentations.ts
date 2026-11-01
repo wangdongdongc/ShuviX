@@ -111,6 +111,19 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
       return title && list.length > 1 ? `${title} · +${list.length - 1}` : title
     }
   },
+  // 落定的调用画成图片块（chat-ui ShownImagesBlock），走到这一行的只有执行中 / 出错的那几次
+  show_image: {
+    labelKey: 'tool.showImageLabel',
+    presentation: { icon: 'Image', iconColor: '#38bdf8' },
+    buildSummary: (args) => {
+      const list = Array.isArray(args.images) ? args.images : []
+      const first: unknown = list[0]
+      const o =
+        typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : {}
+      const name = asStr(o.caption) ?? asStr(o.path)?.split(/[\\/]/).pop()
+      return name && list.length > 1 ? `${name} · +${list.length - 1}` : name
+    }
+  },
   artifact: {
     labelKey: 'tool.artifactLabel',
     presentation: { icon: 'Archive', iconColor: '#8b5cf6' },

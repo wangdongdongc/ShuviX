@@ -227,6 +227,38 @@ export interface ReadToolDetails {
   image?: ToolResultImage
 }
 
+/**
+ * 摆给用户看的一张图（`show_image` 与带图提议共用，docs/show-image-design.md §4.4）—— 宿主在调用时把源文件
+ * 快照到会话自己的目录里，历史记的是**会话内的文件名**，不是绝对路径：分支把目录整个拷过去，历史照常显示。
+ * 渲染端经 mediaUrl seam 用 `shown:<file>` 取（chat-protocol `shownImages.ts` 的 `shownImageRef`）。
+ */
+export interface ShownImage {
+  /** 卡片显示的那份：`<sha256>.<ext>`（有展示副本就是副本） */
+  file: string
+  /** 有展示副本时，原图的文件名（点开看原图） */
+  original?: string
+  /** agent 给的路径解析后的绝对路径 —— 只用于悬停提示，渲染从不读它 */
+  source: string
+  mimeType: string
+  /** 卡片那份的像素尺寸（SVG 没有） */
+  width?: number
+  height?: number
+  /** 卡片那份的字节数 */
+  bytes: number
+}
+
+/** `show_image` 工具详情：与 `args.images` 按下标对应（说明文字在参数里，这里只放宿主事实） */
+export interface ShowImageToolDetails {
+  type: 'show_image'
+  images: ShownImage[]
+}
+
+/** `suggest` 工具详情：与 `args.suggestions` 按下标对应，没带图的那条是 null */
+export interface SuggestToolDetails {
+  type: 'suggest'
+  images: Array<ShownImage | null>
+}
+
 /** glob 工具详情 */
 export interface GlobToolDetails {
   type: 'glob'
@@ -373,6 +405,8 @@ export type ToolResultDetails =
   | McpToolDetails
   | BrowserToolDetails
   | GitToolDetails
+  | ShowImageToolDetails
+  | SuggestToolDetails
 
 /**
  * 这次工具调用是不是**后台形态**（活还在跑、结果要另外去收）。

@@ -94,7 +94,7 @@ style, each with file and line. Never modify files.
 对之后新建的 agent 生效；正在运行的 agent 保持它创建时的那批技能，直到你重建它（agent 标签上的 X）。
 **收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
 `bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, powershell, read, write, edit, ask,
-suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill`），
+suggest, show_image, ls, grep, glob, agent, session, knowledge, artifact, widget, skill`），
 只在正文上有区别。
 
 ### 正文 —— 系统提示词

@@ -90,7 +90,7 @@ ShuviX が同梱するネットワークポリシーは一つ、`network-admissi
 | ネットワークが読み書きするファイル | `path` | `read` / `write` | `path`（実際に行き着く場所）、`requestedPath`、`displayPath`、`scope`（常に `files`）、`access`（`action` と同じ）；`tool.name` / `tool.operation` は後述 | 403、またはファイルを表示しない / 保存しない |
 
 `route` は `page`（`/`）、`asset`（ページのスクリプトとスタイル）、`media`、`preview`、`download`（ファイル
-ルート）、`lib`（グラフのライブラリ）、`widget`（`/w/…`）、`socket`（どのページも行う `/ws` のアップグレード）の
+ルート）、`shown`（エージェントが会話に表示した画像。scope は `sessions` で、`path` のチェックはない）、`lib`（グラフのライブラリ）、`widget`（`/w/…`）、`socket`（どのページも行う `/ws` のアップグレード）の
 いずれかです。`path` の判定はファイルルート（`tool.name` が `files`、`tool.operation` が `media` / `preview` /
 `download`）と、ディスク上の任意のファイルを読み書きできるチャネル —— `files:read` / `files:write`（`files`、
 `read` / `write`）と `fs:listDirectories`（`fs`、`listDirectories`）—— で行われます。ShuviX 自身はこれらの

@@ -27,6 +27,17 @@
  *   FR-R14 坏 Host → 421 connection: close；依赖都不调、秘密文件不出去
  *   FR-R15 一个 20 MB 的下载读到第一块就断开 → 下一个请求照样很快 200
  *   FR-R16 能当文档跑脚本的 SVG 带 `Content-Security-Policy: sandbox`；png / pdf / octet-stream 不带 CSP 头
+ *
+ * `/sessions/shown-image?session=<id>&file=<sha256>.<ext>`（show_image 的快照，归 sessions scope、不过 path 点位）：
+ *   FR-R1+  fileRouteOf('/sessions/shown-image') → shown；`/sessions/shown-image/`、`/sessions/shown`、大写、
+ *           `/files/shown-image` 都不是；networkShownImageUrl 拼的地址取回原样的两个参数
+ *   FR-SH-1 GET → 200 快照字节、image/png、那几条头；解析器恰调一次（解码后的参数）；HEAD 只回头；Range → 206
+ *   FR-SH-2 缺 / 空 session、缺 file → 400 `Bad request.`，解析器不调
+ *   FR-SH-3 解析器回 undefined、或 deps 里没有它 → 404；解析出不在的文件 → 404
+ *   FR-SH-4 不过 path 点位：judgePath 一律拒绝时这条照样 200、judgePath 不调；而 `/files/preview` 的 `shown:` 引用
+ *           → 403，judgePath 以 preview 被调
+ *   FR-SH-5 .svg 快照带 `Content-Security-Policy: sandbox` + nosniff（web 的 files:open 把标签页直接开到这个地址）
+ *   FR-SH-6 POST → 405 + allow: GET, HEAD，解析器不调；没给 fileRoutes → 静态 404，解析器不调
  */
 import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -38,8 +49,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   networkDownloadUrl,
   networkMediaUrl,
-  networkPreviewUrl
+  networkPreviewUrl,
+  networkShownImageUrl
 } from '../../../../shared/networkRoutes'
+import type { GateVerdict } from '@shuvix/agent-runtime'
 import { createNetworkDispatcher } from '../dispatch'
 import { attachmentDisposition, fileRouteOf, type FileRouteDeps } from '../fileRoutes'
 import { createNetworkLinkHub } from '../networkLinks'
@@ -70,6 +83,9 @@ const SECRET = 'TOP-SECRET-FILE-CONTENT'
 const PAYLOAD = Buffer.from(Array.from({ length: 64 }, (_, i) => (i * 7 + 3) % 256))
 const N = PAYLOAD.length
 const LIB_BODY = Buffer.from('/* fake chart.js */ window.Chart = function () {}\n')
+/** 快照文件名的形状：64 位小写十六进制 + 扩展名 */
+const SHOWN_PNG = `${'a'.repeat(64)}.png`
+const SHOWN_SVG = `${'b'.repeat(64)}.svg`
 
 let tmp: string
 let rendererDir: string
@@ -107,6 +123,12 @@ beforeEach(async () => {
   writeFileSync(at('pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>')
   writeFileSync(at('doc.pdf'), '%PDF-1.4 fake')
   writeFileSync(at('blob.bin'), PAYLOAD.subarray(0, 8))
+  mkdirSync(at('shown', 'S'), { recursive: true })
+  writeFileSync(at('shown', 'S', SHOWN_PNG), PAYLOAD)
+  writeFileSync(
+    at('shown', 'S', SHOWN_SVG),
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>'
+  )
 
   spies = {
     resolvePreviewPath: vi.fn((_sessionId: string, path: string) => resolve(tmp, path)),
@@ -699,5 +721,163 @@ describe('FR-R16 能当文档跑脚本的类型', () => {
       expect(res.headers['content-type'], file).toBe(type)
       expect(res.headers['content-security-policy'], file).toBeUndefined()
     }
+  })
+})
+
+// ─── /sessions/shown-image（FR-R1+、FR-SH-1…6） ─────────────────────────────
+
+/** 快照解析器的间谍：S 会话、形状对的文件名 → 临时目录里的快照路径 */
+function shownResolver(): ReturnType<
+  typeof vi.fn<(sessionId: string, file: string) => string | undefined>
+> {
+  return vi.fn((sessionId: string, file: string) =>
+    /^[0-9a-f]{64}\.(png|svg)$/.test(file) ? at('shown', sessionId, file) : undefined
+  )
+}
+
+/** 一律拒绝的 path 点位 */
+function denyAllJudgePath(): ReturnType<typeof vi.fn<NonNullable<FileRouteDeps['judgePath']>>> {
+  return vi.fn(
+    (): GateVerdict => ({
+      allowed: false,
+      decision: { effect: 'deny', reason: 'denied by test' } as GateVerdict['decision'],
+      downgraded: false,
+      message: 'denied by test'
+    })
+  )
+}
+
+describe('FR-R1+ /sessions/shown-image 的路由', () => {
+  it('FR-R1+ fileRouteOf：/sessions/shown-image → shown；长得像的不是', () => {
+    expect(fileRouteOf('/sessions/shown-image')).toBe('shown')
+    for (const path of [
+      '/sessions/shown-image/',
+      '/sessions/shown',
+      '/sessions/SHOWN-IMAGE',
+      '/files/shown-image'
+    ]) {
+      expect(fileRouteOf(path), path).toBeUndefined()
+    }
+  })
+
+  it('FR-R1+ networkShownImageUrl 拼的地址 → shown，session / file 原样取回', () => {
+    for (const session of ['s 1', 'a&b=c#d?e+f', '100%', '会话 一']) {
+      const u = new URL(networkShownImageUrl(session, SHOWN_PNG), 'http://h')
+      expect(fileRouteOf(u.pathname), session).toBe('shown')
+      expect(u.searchParams.get('session'), session).toBe(session)
+      expect(u.searchParams.get('file'), session).toBe(SHOWN_PNG)
+    }
+  })
+})
+
+describe('FR-SH-1…6 /sessions/shown-image', () => {
+  let resolveShownImage: ReturnType<typeof shownResolver>
+
+  beforeEach(() => {
+    resolveShownImage = shownResolver()
+    deps = { ...deps, resolveShownImage }
+  })
+
+  it('FR-SH-1 GET → 200 快照字节与那几条头；解析器恰调一次（解码后的参数）', async () => {
+    await boot()
+    const res = await http(networkShownImageUrl('S', SHOWN_PNG))
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toBe('image/png')
+    expect(res.headers['accept-ranges']).toBe('bytes')
+    expect(res.headers['content-length']).toBe(String(N))
+    expect(res.headers['cache-control']).toBe('no-cache')
+    expect(res.headers['x-content-type-options']).toBe('nosniff')
+    expect(res.headers['content-disposition']).toBeUndefined()
+    expect(res.body.equals(PAYLOAD)).toBe(true)
+    expect(resolveShownImage).toHaveBeenCalledTimes(1)
+    expect(resolveShownImage).toHaveBeenCalledWith('S', SHOWN_PNG)
+    expectNoDepCalled()
+
+    // 编码过的 session 解码后交给解析器
+    resolveShownImage.mockClear()
+    const encoded = await http(`/sessions/shown-image?session=s%201&file=${SHOWN_PNG}`)
+    expect(encoded.status).toBe(404)
+    expect(resolveShownImage).toHaveBeenCalledWith('s 1', SHOWN_PNG)
+  })
+
+  it('FR-SH-1 HEAD 只回头；Range → 206 切片', async () => {
+    await boot()
+    const head = await http(networkShownImageUrl('S', SHOWN_PNG), { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.headers['content-type']).toBe('image/png')
+    expect(head.headers['content-length']).toBe(String(N))
+    expect(head.body.length).toBe(0)
+
+    const ranged = await http(networkShownImageUrl('S', SHOWN_PNG), {
+      headers: { Range: 'bytes=2-5' }
+    })
+    expect(ranged.status).toBe(206)
+    expect(ranged.headers['content-range']).toBe(`bytes 2-5/${N}`)
+    expect(ranged.body.equals(PAYLOAD.subarray(2, 6))).toBe(true)
+  })
+
+  it('FR-SH-2 缺 / 空 session、缺 file → 400，解析器不调', async () => {
+    await boot()
+    for (const query of [
+      `?file=${SHOWN_PNG}`,
+      `?session=&file=${SHOWN_PNG}`,
+      '?session=S',
+      '?session=S&file='
+    ]) {
+      expectPlain(await http(`/sessions/shown-image${query}`), 400, 'Bad request.')
+    }
+    expect(resolveShownImage).not.toHaveBeenCalled()
+  })
+
+  it('FR-SH-3 解析器回 undefined / 解析出不在的文件 / deps 里没有解析器 → 404', async () => {
+    await boot()
+    expectPlain(await http(networkShownImageUrl('S', 'x.png')), 404, 'Not found.')
+    expect(resolveShownImage).toHaveBeenCalledWith('S', 'x.png')
+
+    expectPlain(await http(networkShownImageUrl('S', `${'c'.repeat(64)}.png`)), 404, 'Not found.')
+
+    deps = { ...deps, resolveShownImage: undefined }
+    expectPlain(await http(networkShownImageUrl('S', SHOWN_PNG)), 404, 'Not found.')
+  })
+
+  it('FR-SH-4 不过 path 点位：judgePath 一律拒绝也 200、不调；/files/preview 的 shown: 引用 → 403', async () => {
+    const judgePath = denyAllJudgePath()
+    deps = { ...deps, judgePath }
+    await boot()
+    const res = await http(networkShownImageUrl('S', SHOWN_PNG))
+    expect(res.status).toBe(200)
+    expect(res.body.equals(PAYLOAD)).toBe(true)
+    expect(judgePath).not.toHaveBeenCalled()
+
+    const viaPreview = await http(preview('S', `shown:${SHOWN_PNG}`))
+    expect(viaPreview.status).toBe(403)
+    expect(viaPreview.body.toString()).toBe('denied by test\n')
+    expect(judgePath).toHaveBeenCalledTimes(1)
+    expect(judgePath.mock.calls[0][1]).toBe('preview')
+  })
+
+  it('FR-SH-5 .svg 快照 → Content-Security-Policy: sandbox + nosniff', async () => {
+    await boot()
+    const res = await http(networkShownImageUrl('S', SHOWN_SVG))
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toBe('image/svg+xml')
+    expect(res.headers['content-security-policy']).toBe('sandbox')
+    expect(res.headers['x-content-type-options']).toBe('nosniff')
+  })
+
+  it('FR-SH-6 POST → 405 + allow: GET, HEAD，解析器不调', async () => {
+    await boot()
+    const res = await http(networkShownImageUrl('S', SHOWN_PNG), { method: 'POST' })
+    expect(res.status).toBe(405)
+    expect(res.headers.allow).toBe('GET, HEAD')
+    expect(resolveShownImage).not.toHaveBeenCalled()
+  })
+
+  it('FR-SH-6 没给 fileRoutes → 静态 404，解析器不调', async () => {
+    await boot({ fileRoutes: undefined })
+    const res = await http(networkShownImageUrl('S', SHOWN_PNG))
+    expect(res.status).toBe(404)
+    expect(res.body.equals(PAYLOAD)).toBe(false)
+    expect(resolveShownImage).not.toHaveBeenCalled()
   })
 })

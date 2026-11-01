@@ -18,6 +18,8 @@
  *
  *   WA-6  files:open：合法 → true、新标签页开 filePreviewPageUrl（恰一次）；openedBy 只认 agent，别的都是 user；缺 / 空 /
  *         非字符串的 sessionId / path、参数是 undefined → false，不开
+ *   WA-6-SH files:open 的 `shown:` 引用（会话里摆给用户看的图）：新标签页直接开图本身（`/sessions/shown-image`，恰一次，
+ *         不经预览页、不带 openedBy）；形状不对的 `shown:` 照常开预览页（path 是原串）；缺 / 空 sessionId → false，不开
  *   WA-7  widgetWindow:open：'demo-widget' → {success:true}、新标签页开 widgetPageUrl；空 / undefined / 非字符串 →
  *         {success:false, error:'missing widget id'}，不开
  *   WA-7b widgetWindow:status → 不论参数都回 {open:[],preferWindow:[]}；widgetWindow:setPreferWindow → {success:true}；
@@ -37,6 +39,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../../shared/apiTable'
 import type { ApiTransport } from '../../../../shared/buildApi'
 import { filePreviewPageUrl, widgetPageUrl } from '../../host/hostUrls'
+import { networkShownImageUrl } from '../../../../shared/networkRoutes'
 import {
   WEB_FOLDER_CHANNELS,
   createWebApi,
@@ -325,6 +328,39 @@ describe('WA-6 files:open', () => {
       { sessionId: 5, path: '/a.png' },
       { sessionId: 's1', path: ['/a.png'] }
     ]) {
+      expect(open(params), JSON.stringify(params)).toBe(false)
+    }
+    expect(fakeWin.open).not.toHaveBeenCalled()
+  })
+})
+
+describe('WA-6-SH files:open 的 shown: 引用', () => {
+  const FILE = `${'a'.repeat(64)}.png`
+
+  it('WA-6-SH-1 合法引用 → true，新标签页直接开 /sessions/shown-image（恰一次，不经预览页）', () => {
+    const open = webLocalHandlers(fakeWin)['files:open']
+    expect(open({ sessionId: 's 1', path: `shown:${FILE}`, openedBy: 'agent' })).toBe(true)
+    expect(fakeWin.open).toHaveBeenCalledTimes(1)
+    expect(fakeWin.open).toHaveBeenCalledWith(networkShownImageUrl('s 1', FILE), '_blank')
+    const url = String(fakeWin.open.mock.calls[0][0])
+    expect(url).not.toContain('#file-preview')
+    expect(url).not.toContain('openedBy')
+  })
+
+  it('WA-6-SH-2 形状不对的 shown: → 照常开预览页，path 是原串', () => {
+    const open = webLocalHandlers(fakeWin)['files:open']
+    const raw = `shown:${'A'.repeat(64)}.png`
+    expect(open({ sessionId: 's1', path: raw })).toBe(true)
+    expect(fakeWin.open).toHaveBeenCalledTimes(1)
+    expect(fakeWin.open).toHaveBeenCalledWith(
+      filePreviewPageUrl(fakeWin.location, { sessionId: 's1', path: raw, openedBy: 'user' }),
+      '_blank'
+    )
+  })
+
+  it('WA-6-SH-3 shown: 引用但缺 / 空 sessionId → false，不开', () => {
+    const open = webLocalHandlers(fakeWin)['files:open']
+    for (const params of [{ path: `shown:${FILE}` }, { sessionId: '', path: `shown:${FILE}` }]) {
       expect(open(params), JSON.stringify(params)).toBe(false)
     }
     expect(fakeWin.open).not.toHaveBeenCalled()

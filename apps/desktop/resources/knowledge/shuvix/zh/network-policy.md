@@ -81,7 +81,7 @@ ShuviX 只出厂一份网络策略 `network-admission`：**只有这台电脑能
 | WebSocket 上的每一次调用 | `channel` | `invoke` | `channel`（`agent:prompt`）、`group`（`agent`）、`scope`、`kind`（`invoke` / `send`）、`access`、`size`、`args` | 调用失败，错误码 `denied`，带 `prompt` |
 | 网络读写的一个文件 | `path` | `read` / `write` | `path`（真正通向的位置）、`requestedPath`、`displayPath`、`scope`（恒为 `files`）、`access`（同 `action`）；`tool.name` / `tool.operation` 见下 | 403，或文件不显示 / 不保存 |
 
-`route` 取值：`page`（`/`）、`asset`（页面的脚本与样式）、`media`、`preview`、`download`（文件路由）、`lib`
+`route` 取值：`page`（`/`）、`asset`（页面的脚本与样式）、`media`、`preview`、`download`（文件路由）、`shown`（agent 在对话里摆给用户看的图，scope 是 `sessions`，不过 `path` 检查）、`lib`
 （图表库）、`widget`（`/w/…`）、`socket`（每个页面都会发起的 `/ws` 升级）。`path` 检查覆盖文件路由（`tool.name`
 为 `files`，`tool.operation` 为 `media` / `preview` / `download`），以及能读写磁盘上任意文件的几条通道：
 `files:read` / `files:write`（`files`，`read` / `write`）与 `fs:listDirectories`（`fs`，`listDirectories`）。

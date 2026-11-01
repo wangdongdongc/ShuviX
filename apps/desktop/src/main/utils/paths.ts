@@ -291,6 +291,20 @@ export function tempWorkspaceOwnerOf(dir: string): string | undefined {
   return isSafeSessionId(id) ? id : undefined
 }
 
+/**
+ * 摆给用户看的图的快照根目录（`show_image` / 带图提议，docs/show-image-design.md §4.3）：`<userData>/shown/<会话 id>/`。
+ * **刻意不在会话权限表里**（不像 `tool_results/<id>`）：快照落进模型可自由读的目录，就等于「摆一张权限表外的图、
+ * 再 read 快照」绕过外部路径询问。不自动创建：首次快照时才建。
+ */
+export function getShownImagesBase(): string {
+  return join(app.getPath('userData'), 'shown')
+}
+
+/** 一条会话的快照目录（不创建；会话 id 先过 isSafeSessionId） */
+export function getShownImagesDir(sessionId: string): string {
+  return join(getShownImagesBase(), sessionId)
+}
+
 /** 工具大结果持久化根目录（不自动创建） */
 export function getToolResultsBase(): string {
   return join(app.getPath('userData'), 'tool_results')

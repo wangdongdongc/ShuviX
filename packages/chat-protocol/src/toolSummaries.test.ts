@@ -108,6 +108,40 @@ describe('buildToolSummary — suggest', () => {
 })
 
 /**
+ * 给用户看图（`show_image`，2026-11-01）：落定的调用画成图片块，折叠行只给执行中 / 出错的那几次用 ——
+ * 摆第一张的说明（没有说明就是文件名），多张时带「+N」。
+ * TSum-1 / TSum-2
+ */
+describe('buildToolSummary — show_image', () => {
+  it('TSum-1 第一张的文件名（POSIX 与 Windows 路径）；说明优先；多张 → `名字 · +N`；没有可用的第一项 → 没有摘要', () => {
+    expect(buildToolSummary('show_image', { images: [{ path: '/a/b/chart.png' }] })).toBe(
+      'chart.png'
+    )
+    expect(buildToolSummary('show_image', { images: [{ path: 'C:\\x\\y.png' }] })).toBe('y.png')
+    expect(
+      buildToolSummary('show_image', {
+        images: [{ path: '/a/b/chart.png', caption: 'Revenue by month' }]
+      })
+    ).toBe('Revenue by month')
+    expect(
+      buildToolSummary('show_image', {
+        images: [{ path: '/a/b/chart.png' }, { path: '/a/b/after.png' }]
+      })
+    ).toBe('chart.png · +1')
+    expect(buildToolSummary('show_image', { images: [] })).toBeUndefined()
+    expect(buildToolSummary('show_image', {})).toBeUndefined()
+    expect(buildToolSummary('show_image', { images: '/a/b/chart.png' })).toBeUndefined()
+    expect(buildToolSummary('show_image', { images: ['/a/b/chart.png'] })).toBeUndefined()
+    expect(buildToolSummary('show_image', { images: [null, { path: '/a.png' }] })).toBeUndefined()
+  })
+
+  it("TSum-2 labelKey 'tool.showImageLabel'，图标 'Image'", () => {
+    expect(BUILTIN_TOOL_PRESENTATIONS.show_image.labelKey).toBe('tool.showImageLabel')
+    expect(BUILTIN_TOOL_PRESENTATIONS.show_image.presentation?.icon).toBe('Image')
+  })
+})
+
+/**
  * 内置 MCP 能力服务器（`mcp__browser__*` / `mcp__ssh__*`）按前缀认、不逐个登记 —— 表里没有的
  * 名字才去问它；退役的 multiplex `browser` 工具仍按自己的条目给历史会话出摘要。
  */

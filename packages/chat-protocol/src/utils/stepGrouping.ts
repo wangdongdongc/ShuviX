@@ -3,6 +3,7 @@
  * 纯函数，只依赖消息块的类型：父会话在大纲里看到的折叠，与用户点进子会话看到的一致。
  */
 import type { AssistantBlock, AssistantToolBlock } from '../types/chatMessage'
+import { isSettledShowImageBlock } from '../shownImages'
 import { clipLine } from './clipLine'
 
 /** 能并进合并行的块：思考，或已成功完成的工具调用 */
@@ -26,6 +27,8 @@ function settledStep(block: AssistantBlock): StepBlock | null {
   if (block.type !== 'tool') return null
   if (block.result === undefined || block.isError) return null
   if (!block.toolName) return null
+  // 摆给用户的图不是过程步骤：并进计数徽章就等于没给用户看（和中间文本一样切开一段）
+  if (isSettledShowImageBlock(block)) return null
   return block
 }
 

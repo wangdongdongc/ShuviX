@@ -29,6 +29,13 @@
  *   W-9  错开：每个已开窗口 +24，锚在聚焦窗口；没有聚焦窗口不给 x/y
  *   W-10 已开窗口的文件之后被删了：再开仍聚焦那扇窗、回 true（查表先于分类）
  *   PW-H1 无头运行（已初始化）：可预览的 .txt 与 .md 都回 false；不交给 openMarkdownFile、不开窗、不装守卫
+ *
+ * `shown:<sha256>.<ext>`（show_image 的快照引用）：到会话自己的快照目录 `<userData>/shown/<sid>/` 里取，解成绝对
+ * 路径再照常开窗（userData 是另一个临时目录，app.getPath 指过去，utils/paths 用真实现）：
+ *   W-11 活会话 + 合法引用（快照在）→ 开窗；hash 里的 path 是快照的真实路径，不在工作目录下
+ *   W-12 会话已删（没有工作目录）+ 合法引用 → 照样开（不受「相对路径要工作目录」的限制）
+ *   W-13 形状不对的 shown: 引用当相对路径：活会话 → 按工作目录解、没这个文件 → false；会话已删 → false + warn
+ *   W-14 合法引用但快照不在 → false、不开窗；.svg 快照 → 开预览窗口
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -116,12 +123,17 @@ const fx = vi.hoisted(() => {
     FakeWindow,
     getById: vi.fn<(id: string) => { workingDirectory?: string } | undefined>(),
     openMarkdownFile: vi.fn<(path: string) => boolean>(() => true),
+    userData: '',
     guardAppWindow: vi.fn(),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
   }
 })
 
-vi.mock('electron', () => ({ BrowserWindow: fx.FakeWindow }))
+vi.mock('electron', () => ({
+  BrowserWindow: fx.FakeWindow,
+  // show_image 的快照目录在 <userData>/shown/<sid>/（utils/paths 用真实现）
+  app: { getPath: () => fx.userData }
+}))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 vi.mock('../sessionService', () => ({ sessionService: { getById: fx.getById } }))
 vi.mock('../markdownWindowService', () => ({ openMarkdownFile: fx.openMarkdownFile }))
@@ -150,6 +162,15 @@ function pngHeader(width: number, height: number): Buffer {
 const rawRoot = mkdtempSync(join(tmpdir(), 'shuvix-prevwin-'))
 const realRoot = realpathSync.native(rawRoot)
 const p = (...rel: string[]): string => join(realRoot, ...rel)
+// userData 不在工作目录（realRoot）下：W-11 要能分辨「从快照目录取」与「按工作目录解」
+const userDataRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'shuvix-prevwin-ud-')))
+fx.userData = userDataRoot
+const SHOWN_PNG = `${'a'.repeat(64)}.png`
+const SHOWN_SVG = `${'b'.repeat(64)}.svg`
+/** 形状不对（大写十六进制）的快照名：文件放进快照目录也不该被认 */
+const SHOWN_UPPER = `${'A'.repeat(64)}.png`
+const shownPath = (sessionId: string, file: string): string =>
+  join(userDataRoot, 'shown', sessionId, file)
 
 beforeAll(() => {
   mkdirSync(p('dir'))
@@ -174,10 +195,17 @@ beforeAll(() => {
   truncateSync(p('dir', 'huge.png'), 10 * 1024 * 1024 + 1)
   symlinkSync(p('dir', 'a.txt'), p('link-a.txt'))
   symlinkSync(p('dir', 'real.md'), p('link.txt'))
+  for (const sid of [LIVE, GONE]) {
+    mkdirSync(join(userDataRoot, 'shown', sid), { recursive: true })
+    writeFileSync(shownPath(sid, SHOWN_PNG), pngHeader(40, 24))
+    writeFileSync(shownPath(sid, SHOWN_SVG), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    writeFileSync(shownPath(sid, SHOWN_UPPER), pngHeader(40, 24))
+  }
 })
 
 afterAll(() => {
   rmSync(realRoot, { recursive: true, force: true })
+  rmSync(userDataRoot, { recursive: true, force: true })
 })
 
 let service: Service
@@ -463,5 +491,52 @@ describe('PW-H1 无头运行', () => {
     expect(fx.openMarkdownFile).not.toHaveBeenCalled()
     expect(windows()).toHaveLength(0)
     expect(fx.guardAppWindow).not.toHaveBeenCalled()
+  })
+})
+
+describe('W-11…14 show_image 的快照引用', () => {
+  it('W-11 活会话 + shown:<hash>.png（快照在）→ 开窗；path 是快照的真实路径，不在工作目录下', async () => {
+    init()
+    expect(await open(`shown:${SHOWN_PNG}`)).toBe(true)
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    const win = onlyWindow()
+    const { path, route, sessionId } = hashOf(win)
+    expect(route).toBe('file-preview')
+    expect(sessionId).toBe(LIVE)
+    expect(path).toBe(realpathSync.native(shownPath(LIVE, SHOWN_PNG)))
+    expect(path!.startsWith(realRoot + '/')).toBe(false)
+    expect(win.options).toMatchObject({ title: SHOWN_PNG })
+  })
+
+  it('W-12 会话已删（没有工作目录）+ 合法引用 → 照样开', async () => {
+    init()
+    expect(await open(`shown:${SHOWN_PNG}`, { sessionId: GONE })).toBe(true)
+    expect(hashOf(onlyWindow())).toMatchObject({
+      sessionId: GONE,
+      path: realpathSync.native(shownPath(GONE, SHOWN_PNG))
+    })
+    expect(fx.log.warn).not.toHaveBeenCalled()
+  })
+
+  it('W-13 形状不对的 shown: 引用当相对路径：活会话按工作目录解（没这个文件）→ false；会话已删 → false + warn', async () => {
+    init()
+    // 快照目录里真有这个（大写的）文件：若被当作快照去取就会开窗
+    expect(await open(`shown:${SHOWN_UPPER}`)).toBe(false)
+    expect(windows()).toHaveLength(0)
+
+    expect(await open(`shown:${SHOWN_UPPER}`, { sessionId: GONE })).toBe(false)
+    expect(windows()).toHaveLength(0)
+    expect(fx.log.warn).toHaveBeenCalledTimes(1)
+    expect(String(fx.log.warn.mock.calls[0][0])).toContain(`shown:${SHOWN_UPPER}`)
+  })
+
+  it('W-14 合法引用但快照不在 → false、不开窗；.svg 快照 → 开预览窗口', async () => {
+    init()
+    expect(await open(`shown:${'c'.repeat(64)}.png`)).toBe(false)
+    expect(windows()).toHaveLength(0)
+    expect(fx.guardAppWindow).not.toHaveBeenCalled()
+
+    expect(await open(`shown:${SHOWN_SVG}`)).toBe(true)
+    expect(hashOf(onlyWindow()).path).toBe(realpathSync.native(shownPath(LIVE, SHOWN_SVG)))
   })
 })

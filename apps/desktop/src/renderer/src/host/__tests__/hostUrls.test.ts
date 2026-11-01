@@ -9,10 +9,12 @@
  *   HU-5 filePreviewPageUrl：openedBy 缺省 user、给 agent 就是 agent；按 FilePreviewWindowShell 的 parseHash 那样解析
  *        回来，路径原样（& # + %、空格、CJK）
  *   HU-6 widgetPageUrl：按 WidgetWindowShell 的 parseWidgetIdFromHash 那样解析回来，id 原样
+ *   HU-7 webPreviewUrl 的 `shown:` 引用（会话里摆给用户看的图）→ 会话那条路由 `/sessions/shown-image`；形状不对的
+ *        `shown:` 照普通路径走 `/files/preview`
  *   （外加：webPreviewUrl 就是网络服务的 `/files/preview` 地址）
  */
 import { describe, expect, it } from 'vitest'
-import { networkPreviewUrl } from '../../../../shared/networkRoutes'
+import { networkPreviewUrl, networkShownImageUrl } from '../../../../shared/networkRoutes'
 import {
   filePreviewPageUrl,
   isWebPlatform,
@@ -138,5 +140,17 @@ describe('HU-6 widgetPageUrl', () => {
 describe('webPreviewUrl', () => {
   it('就是网络服务的 /files/preview 地址', () => {
     expect(webPreviewUrl('s1', 'sub/b.png')).toBe(networkPreviewUrl('s1', 'sub/b.png'))
+  })
+})
+
+describe('HU-7 webPreviewUrl 的 shown: 引用', () => {
+  const FILE = `${'a'.repeat(64)}.png`
+
+  it('HU-7 合法引用 → /sessions/shown-image；形状不对 → /files/preview（原串）', () => {
+    expect(webPreviewUrl('s 1', `shown:${FILE}`)).toBe(networkShownImageUrl('s 1', FILE))
+    for (const raw of ['shown:../x.png', `shown:${'A'.repeat(64)}.png`, 'shown:abc.png']) {
+      expect(webPreviewUrl('s 1', raw), raw).toBe(networkPreviewUrl('s 1', raw))
+    }
+    expect(webPreviewUrl('s 1', 'sub/b.png')).toBe(networkPreviewUrl('s 1', 'sub/b.png'))
   })
 })

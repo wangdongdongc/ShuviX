@@ -255,6 +255,7 @@ const SHARED_BASE_TOOLS = [
   'edit',
   'ask',
   'suggest',
+  'show_image',
   'ls',
   'grep',
   'glob',
@@ -284,6 +285,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'edit',
       'ask',
       'suggest',
+      'show_image',
       'ls',
       'grep',
       'glob',
@@ -367,6 +369,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'edit',
       'ask',
       'suggest',
+      'show_image',
       'ls',
       'grep',
       'glob',
@@ -480,6 +483,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'edit',
       'ask',
       'suggest',
+      'show_image',
       'ls',
       'grep',
       'glob',
@@ -804,7 +808,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十四件（十三个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
+  it('REG-4 三语工具清单恰为十五件（十四个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
     // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
     // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
@@ -821,6 +825,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'glob',
         'ask',
         'suggest',
+        'show_image',
         'write',
         'edit',
         'session',
@@ -830,7 +835,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'widget',
         'skill'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(14)
+      expect(built.tools, `bot.${language}`).toHaveLength(15)
       for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
@@ -978,6 +983,7 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     'grep',
     'ask',
     'suggest',
+    'show_image',
     'git',
     'session',
     'knowledge',

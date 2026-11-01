@@ -83,6 +83,7 @@ import {
 } from './services/widget'
 import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
+import { shownImageFilePath } from './services/shownImages'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
 import { sessionAcl, setAclBotFile, setAclSkillRoots } from './services/acl'
@@ -1189,6 +1190,7 @@ app.whenReady().then(async () => {
     networkService.init({
       fileRoutes: {
         resolvePreviewPath: resolvePreviewFilePath,
+        resolveShownImage: shownImageFilePath,
         readSandboxLib,
         logger: { warn: (message) => log.warn(message) }
       },

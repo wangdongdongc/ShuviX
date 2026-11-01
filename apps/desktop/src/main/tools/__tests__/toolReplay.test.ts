@@ -4,7 +4,8 @@
  * durable 在一次工具调用开始前把 `replay` 记进意图；进程中断后恢复时，只有记下的与当前的都是
  * 'safe' 才重跑，否则这次调用记为「中断，可能已部分执行」交给模型（P1-04，Verified fact 1）。
  * 规则一句话：只读、**或按构造幂等**、重跑无害的才 'safe' —— read / ls / grep / glob 只读；session 的每个
- * 动作都幂等（create 的 id 记在 memo 里、prompt 按幂等键重新挂上、wait 记下目标，P2-10 / Q-P2-01）；
+ * 动作都幂等（create 的 id 记在 memo 里、prompt 按幂等键重新挂上、wait 记下目标，P2-10 / Q-P2-01）；show_image 重放
+ * 只是再快照一次（按内容去重，RT-1，2026-11-01）；
  * 其余一律 'unsafe'（BaseTool 缺省）。把 'safe' 写到一个有副作用、又不幂等的工具上，恢复时它就会把那个
  * 副作用再做一遍，所以逐个钉。
  *
@@ -100,6 +101,7 @@ import { BashTool } from '../bash'
 import { PowerShellTool } from '../powershell'
 import { SkillTool } from '../../services/skillTool'
 import { WidgetTool } from '../widget'
+import { ShowImageTool } from '../showImage'
 
 const ctx = { sessionId: 'sess-replay' } as ToolContext
 
@@ -112,6 +114,12 @@ describe('RT 桌面内置工具的重跑策略', () => {
   ])('RT-1 %s 只读 → safe', (name, make) => {
     const tool = make()
     expect(tool.name).toBe(name)
+    expect(tool.replay).toBe('safe')
+  })
+
+  it('RT-1 show_image 重放只是再快照一次（按内容去重）→ safe', () => {
+    const tool = new ShowImageTool(ctx)
+    expect(tool.name).toBe('show_image')
     expect(tool.replay).toBe('safe')
   })
 

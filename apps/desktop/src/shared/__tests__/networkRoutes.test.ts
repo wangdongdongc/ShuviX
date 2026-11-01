@@ -7,6 +7,8 @@
  *        isSandboxLibBase（局域网 IP、127.0.0.1、https 主机名、IPv6 字面量）
  *   NR-3 networkWidgetUrl：widget 服务的 `/w/…` 地址换成 origin 下的同一个路径（查询串与片段保留）；不是 `/w/` 下的、
  *        解析不了的、空串 → 原样
+ *   NR-4 networkShownImageUrl（会话里摆给用户看的图）：以 `/sessions/shown-image?` 开头；session / file 原样取回
+ *        （空格、&、#、CJK）；NETWORK_SHOWN_IMAGE_PATH 是 `/sessions/shown-image`
  */
 import { describe, expect, it } from 'vitest'
 import { isSandboxLibBase } from '@shuvix/chat-protocol/utils/interactiveFence'
@@ -15,10 +17,12 @@ import {
   NETWORK_LIB_PREFIX,
   NETWORK_MEDIA_PATH,
   NETWORK_PREVIEW_PATH,
+  NETWORK_SHOWN_IMAGE_PATH,
   networkDownloadUrl,
   networkLibBase,
   networkMediaUrl,
   networkPreviewUrl,
+  networkShownImageUrl,
   networkWidgetUrl
 } from '../networkRoutes'
 
@@ -106,6 +110,23 @@ describe('NR-3 networkWidgetUrl', () => {
       ''
     ]) {
       expect(networkWidgetUrl(url, 'http://192.168.1.10:7766'), url).toBe(url)
+    }
+  })
+})
+
+describe('NR-4 networkShownImageUrl', () => {
+  it('NR-4 以 /sessions/shown-image? 开头；session 与 file 原样取回', () => {
+    expect(NETWORK_SHOWN_IMAGE_PATH).toBe('/sessions/shown-image')
+    for (const session of ['s1', 's 1&x=y#z', '会话 一', 'a+b%20c']) {
+      for (const file of [`${'a'.repeat(64)}.png`, 'a b&c#d.png', '图 1.png']) {
+        const url = networkShownImageUrl(session, file)
+        expect(url.startsWith('/sessions/shown-image?'), url).toBe(true)
+        const parsed = parse(url)
+        expect(parsed.pathname, url).toBe(NETWORK_SHOWN_IMAGE_PATH)
+        expect(parsed.searchParams.get('session'), url).toBe(session)
+        expect(parsed.searchParams.get('file'), url).toBe(file)
+        expect([...parsed.searchParams.keys()].sort()).toStrictEqual(['file', 'session'])
+      }
     }
   })
 })

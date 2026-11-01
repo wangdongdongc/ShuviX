@@ -16,6 +16,8 @@
  *   GA-10 （裁定）会话空闲且送出超过 10 秒 → 记号不再挡（例如回退删掉了采纳的那条，卡片又开着）；9.999 秒还挡；
  *         会话在跑时一直挡，哪怕过了很久
  *   GA-11 （裁定）空闲路径：回退之后待沿用的来源（原文一字不差、窗口之内）**不**顶替提议的来源；那条记录照样撤掉
+ *   GA-IMG 带图的提议（参数里有 `image`、详情里有快照）：空闲的 prompt 与在跑的 steer 都只收到那条的 message ——
+ *         没有图、没有路径（docs/show-image-design.md D4：图只给用户看，采纳不发给模型）
  *
  * GA-9（IPC 处理函数）在 ipc/__tests__/suggestionHandlers.test.ts。mock 骨架照抄 chatGatewayResendSource.test.ts；
  * operationContext 用真的。
@@ -329,6 +331,61 @@ describe('GA-4 · 在跑：steer，等它受理', () => {
     expect(await result).toStrictEqual({ success: true })
     expect(prompt).not.toHaveBeenCalled()
     expect(mocks.ensureAgentSession).not.toHaveBeenCalled()
+  })
+})
+
+// ─── GA-IMG ─────────────────────────────────────────────
+
+describe('GA-IMG · 带图的提议：采纳只发那句话', () => {
+  const SHOWN = {
+    file: `${'a'.repeat(64)}.png`,
+    source: '/work/mockups/layout-b.png',
+    mimeType: 'image/png',
+    width: 40,
+    height: 24,
+    bytes: 120
+  }
+  const withImages: AssistantBlock = {
+    type: 'tool',
+    toolCallId: 'call_0',
+    toolName: 'suggest',
+    args: {
+      suggestions: ITEMS.map((item, i) =>
+        i === 1 ? { ...item, image: 'mockups/layout-b.png' } : item
+      )
+    },
+    result: 'Shown 3 suggestions',
+    details: { type: 'suggest', images: [null, SHOWN, null] }
+  }
+  const imageTranscript = (): ChatMessage[] => [
+    user('u1', 'hi'),
+    assistant('a1', [withImages, { type: 'text', text: 'done' }])
+  ]
+
+  /** 发出去的东西里一点图的痕迹都没有 */
+  function expectNoImage(args: unknown[]): void {
+    const text = JSON.stringify(args)
+    for (const trace of ['layout-b.png', SHOWN.file, SHOWN.source, 'image']) {
+      expect(text, trace).not.toContain(trace)
+    }
+  }
+
+  it('GA-IMG 空闲：prompt 只收到 message 的文本', async () => {
+    transcripts.set('s1', imageTranscript())
+    expect(await accept()).toStrictEqual({ success: true })
+    await flush()
+    expect(prompt.mock.calls).toStrictEqual([
+      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }, undefined]
+    ])
+    expectNoImage(prompt.mock.calls[0]!)
+  })
+
+  it('GA-IMG 在跑：steer 只收到 message 的文本', async () => {
+    transcripts.set('s1', imageTranscript())
+    const steer = streaming('s1')
+    expect(await accept()).toStrictEqual({ success: true })
+    expect(steer.mock.calls).toStrictEqual([[TEXT, { ...LOCAL, suggestion: REF }]])
+    expectNoImage(steer.mock.calls[0]!)
   })
 })
 

@@ -8,6 +8,8 @@
  *   PG-4 requestRouteOf / requestTarget / channelGroupOf
  *   PG-5 四个点位交给判定的 action / 对象 / tool；channel 的 args 惰性、不进 JSON；access 来自通道表；request / channel /
  *        path 都带 scope 与 access（settings:set 按 key、文件路由是 files、/w/ 的写方法是 write）
+ *   PG-4+ / PG-5+ 会话里摆给用户看的图（`/sessions/shown-image`，show_image 的快照）：去处是 shown（带尾斜杠的不是，
+ *        落到 asset）；request 对象归 sessions scope —— GET / HEAD / OPTIONS 读、POST 写；拒绝记录 stage request、scope sessions
  *   PG-6 拒绝记录：放行不记；同一（地址、设备、规则、摘要）一分钟内合并、过了窗口另起一条；新 ID 记进 device；
  *        最多 200 条；onChange 只在新条目时调
  *   PG-7 判定抛错 → 拒绝（fail closed）且记一条 rule 'error'；没接上 → 一律放行
@@ -162,6 +164,11 @@ describe('PG-4 去处、地址、命名空间', () => {
     expect(channelGroupOf('network:setPort')).toBe('network')
     expect(channelGroupOf('nope:nope')).toBe('')
   })
+
+  it('PG-4+ /sessions/shown-image → shown；带尾斜杠 → asset', () => {
+    expect(requestRouteOf('/sessions/shown-image', false)).toBe('shown')
+    expect(requestRouteOf('/sessions/shown-image/', false)).toBe('asset')
+  })
 })
 
 /** 记下每次判定的门 */
@@ -291,6 +298,58 @@ describe('PG-5 四个点位', () => {
       ['widgets', 'read'],
       ['widgets', 'write'],
       ['app', 'read']
+    ])
+  })
+})
+
+describe('PG-5+ 摆给用户看的图的请求', () => {
+  it('PG-5+ route shown → sessions scope；GET / HEAD / OPTIONS 读、POST 写；拒绝记录 stage request、scope sessions', () => {
+    const { gate, calls } = recordingGate()
+    const query = { session: 'S', file: 'f' }
+    gate.judgeRequest(PEER, HTTP, {
+      method: 'GET',
+      path: '/sessions/shown-image',
+      query,
+      route: 'shown'
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].action).toBe('request')
+    expect(calls[0].object).toEqual({
+      type: 'request',
+      method: 'GET',
+      path: '/sessions/shown-image',
+      query: { session: 'S', file: 'f' },
+      route: 'shown',
+      scope: 'sessions',
+      access: 'read'
+    })
+
+    calls.length = 0
+    for (const method of ['HEAD', 'OPTIONS', 'POST']) {
+      gate.judgeRequest(PEER, HTTP, {
+        method,
+        path: '/sessions/shown-image',
+        query,
+        route: 'shown'
+      })
+    }
+    expect(calls.map((c) => [c.object.scope, c.object.access])).toEqual([
+      ['sessions', 'read'],
+      ['sessions', 'read'],
+      ['sessions', 'write']
+    ])
+
+    const denials = new NetworkDenialLog()
+    const { gate: refusing } = recordingGate(() => DENY, denials)
+    const verdict = refusing.judgeRequest(PEER, HTTP, {
+      method: 'GET',
+      path: '/sessions/shown-image',
+      query,
+      route: 'shown'
+    })
+    expect(verdict.allowed).toBe(false)
+    expect(denials.recent()).toMatchObject([
+      { stage: 'request', summary: 'GET /sessions/shown-image', scope: 'sessions' }
     ])
   })
 })

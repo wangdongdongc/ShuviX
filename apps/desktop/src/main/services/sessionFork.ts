@@ -9,7 +9,7 @@
  *  2. 在源会话的 `whileIdle` 里拷存储（有工作在跑 / 被中断 → `busy`，什么都不建）；源会话还没有存储
  *     （从没发过消息）→ 不拷，fork 就是一条抄了设置的空会话；
  *  3. 拷贝收尾（`resetForkedSessionState`：锁、driven-run 标记、待送达通知属于源会话那一场），再插行、
- *     拷 artifacts；
+ *     拷 artifacts 与摆给用户看的图的快照；
  *  4. 给了 `messageId`：打开 fork、`branchAt` 那条回复（不合格 → 删掉 fork，`invalid_target`）；
  *  5. 广播一次列表变化。
  * 任何一步出错都把已建的半成品删掉（`failed`），源会话从不被写。
@@ -40,6 +40,7 @@ import {
 import { createLogger } from '../logger'
 import { broadcastSessionListChanged } from '../utils/sessionConfigBroadcast'
 import { copySessionArtifacts } from './artifacts/store'
+import { copyShownImages } from './shownImages'
 import { parseEntryId } from './messageService'
 import { getSessionHost } from './sessionHost'
 import { sessionRecords } from './sessionRecords'
@@ -134,6 +135,8 @@ export async function forkSession(params: SessionForkParams): Promise<SessionFor
   // 行已经在了：之后出错走完整的删除（存储、artifacts、行一起）
   try {
     copySessionArtifacts(source.id, forkId)
+    // 摆给用户看的图：历史记的是会话内的文件名，目录拷过去，fork 里的图照常显示
+    copyShownImages(source.id, forkId)
     if (copied === 'copied' && entryId !== undefined) {
       const fork = await getSessionHost().open(forkId)
       const branched = await fork.branchAt(entryId)

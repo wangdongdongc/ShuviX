@@ -235,6 +235,7 @@ const DARWIN_BUILTINS = [
   'edit',
   'ask',
   'suggest',
+  'show_image',
   'git',
   'artifact',
   'session',

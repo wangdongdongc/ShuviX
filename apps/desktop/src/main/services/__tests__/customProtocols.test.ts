@@ -32,6 +32,13 @@
  *  - CP-11 相对路径按会话的工作目录解析（两个依赖的调用与参数）；缺 session 或 path → 400，依赖都不调
  *  - CP-12 文件不在 → 500 `Internal error` + 一条 warn（桌面保持 500；网络路由回 404）
  *  - CP-13 shuvix-media：pathname 解码后交 net.fetch 一次（file://），结果原样交回
+ *
+ * `shown:<sha256>.<ext>`（show_image 的快照引用，docs/show-image-design.md §4.4）：到会话自己的快照目录里取，
+ * 不按工作目录解析。paths 的 mock 里 `getShownImagesDir` 指向临时目录，`isSafeSessionId` 用真实现：
+ *
+ *  - CP-14 合法引用 → 200、快照目录里那份字节、image/png；resolveProjectConfig / resolveReadPath 都不调
+ *  - CP-15 形状不对的 `shown:`（`../x.png`、大写十六进制）照普通相对路径解析（resolveReadPath 拿到原串）
+ *  - CP-16 合法引用 + 不安全的会话 id → 不从快照目录取（resolveReadPath 被调）；引用合法但快照不在 → 500（同 CP-12）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -45,6 +52,7 @@ const REPO_ROOT = resolve(HERE, '../../../../../..')
 
 const state = vi.hoisted(() => ({
   libsDir: '',
+  shownBase: '',
   registerSchemesAsPrivileged: vi.fn(),
   handle: vi.fn(),
   warn: vi.fn(),
@@ -66,7 +74,16 @@ vi.mock('fs/promises', async (importOriginal) => {
   const readFile = (...args: unknown[]): unknown => state.readFile(...args)
   return { ...actual, default: { ...actual, readFile }, readFile }
 })
-vi.mock('../../utils/paths', () => ({ getSandboxLibsDir: () => state.libsDir }))
+vi.mock('../../utils/paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/paths')>()
+  const { join: joinPath } = await import('node:path')
+  return {
+    getSandboxLibsDir: () => state.libsDir,
+    // show_image 的快照目录：基址指到临时目录；会话 id 的安全判断用真实现
+    getShownImagesDir: (sessionId: string) => joinPath(state.shownBase, sessionId),
+    isSafeSessionId: actual.isSafeSessionId
+  }
+})
 // 预览路径的解析只在会话存在时才用工作目录（会话不在不建临时工作区）：这里的会话一律当作存在
 vi.mock('../sessionService', () => ({
   sessionService: { getById: (id: string) => ({ id }) }
@@ -393,5 +410,67 @@ describe('shuvix-preview / shuvix-media：phase D 抽出共用读法之后桌面
     expect(state.netFetch).toHaveBeenCalledTimes(1)
     expect(state.netFetch).toHaveBeenCalledWith('file:///tmp/a b.mp3')
     expect(res).toBe(answer)
+  })
+})
+
+// ─── shuvix-preview 的 `shown:` 引用（CP-14…16） ─────────────────────────────
+
+const HASH = 'a'.repeat(64)
+const SHOWN_FILE = `${HASH}.png`
+
+describe('shuvix-preview：`shown:` 引用到会话自己的快照目录里取（CP-14…16）', () => {
+  beforeEach(() => {
+    previewTmp = mkdtempSync(join(tmpdir(), 'shuvix-preview-shown-'))
+    state.shownBase = join(previewTmp, 'shown')
+    mkdirSync(join(state.shownBase, 'S'), { recursive: true })
+    writeFileSync(join(state.shownBase, 'S', SHOWN_FILE), PAYLOAD)
+    state.resolveProjectConfig.mockImplementation(() => ({ workingDirectory: previewTmp }))
+    state.resolveReadPath.mockImplementation((p: string, cwd: string) => resolve(cwd, p))
+  })
+
+  afterEach(() => {
+    rmSync(previewTmp, { recursive: true, force: true })
+  })
+
+  it('CP-14 shown:<hash>.png → 200、快照那份字节、image/png；两个解析依赖都不调', async () => {
+    const handle = await handlerFor('shuvix-preview')
+    const res = await handle(previewReq({ session: 'S', path: `shown:${SHOWN_FILE}` }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/png')
+    expect(res.headers.get('Content-Length')).toBe(String(N))
+    expect((await body(res)).equals(PAYLOAD)).toBe(true)
+    expect(state.resolveProjectConfig).not.toHaveBeenCalled()
+    expect(state.resolveReadPath).not.toHaveBeenCalled()
+  })
+
+  it('CP-15 形状不对的 shown: 引用照普通相对路径解析：resolveReadPath 拿到原串', async () => {
+    const handle = await handlerFor('shuvix-preview')
+    for (const raw of ['shown:../x.png', `shown:${'A'.repeat(64)}.png`]) {
+      state.resolveReadPath.mockClear()
+      const res = await handle(previewReq({ session: 'S', path: raw }))
+      // 工作目录里没有这个文件：读失败（500），要钉的是它走了普通解析
+      expect(res.status, raw).toBe(500)
+      expect(state.resolveReadPath, raw).toHaveBeenCalledTimes(1)
+      expect(state.resolveReadPath, raw).toHaveBeenCalledWith(raw, previewTmp)
+    }
+  })
+
+  it('CP-16 合法引用 + 不安全的会话 id → 不从快照目录取；引用合法但快照不在 → 500', async () => {
+    const handle = await handlerFor('shuvix-preview')
+    // `..` 拼进快照基址就跳出了 shown/：不认，照普通路径解析
+    writeFileSync(join(previewTmp, SHOWN_FILE), Buffer.from('outside'))
+    const unsafe = await handle(previewReq({ session: '..', path: `shown:${SHOWN_FILE}` }))
+    expect(state.resolveReadPath).toHaveBeenCalledTimes(1)
+    expect(state.resolveReadPath).toHaveBeenCalledWith(`shown:${SHOWN_FILE}`, previewTmp)
+    expect(unsafe.status).toBe(500)
+    await unsafe.arrayBuffer()
+
+    state.resolveReadPath.mockClear()
+    state.warn.mockClear()
+    const missing = await handle(previewReq({ session: 'S', path: `shown:${'b'.repeat(64)}.png` }))
+    expect(missing.status).toBe(500)
+    expect(await missing.text()).toBe('Internal error')
+    expect(state.warn).toHaveBeenCalledTimes(1)
+    expect(state.resolveReadPath).not.toHaveBeenCalled()
   })
 })

@@ -104,7 +104,7 @@ off in the sidebar — that applies to agents created from then on; a running ag
 shelf it was created with until you rebuild it (the X on the agent chip). Narrowing a list is
 **not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
 The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, powershell, read, write,
-edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill`) and differ only in their bodies.
+edit, ask, suggest, show_image, ls, grep, glob, agent, session, knowledge, artifact, widget, skill`) and differ only in their bodies.
 
 ### The body — the system prompt
 

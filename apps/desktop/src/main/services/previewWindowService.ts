@@ -19,6 +19,7 @@ import { realpathSync } from 'fs'
 import { classifyPreviewFile, isPreviewable } from '@shuvix/agent-runtime'
 import { sessionService } from './sessionService'
 import { openMarkdownFile } from './markdownWindowService'
+import { shownImagePathOfRef } from './shownImages'
 import { guardAppWindow } from './externalOpen'
 import { isMarkdownPath } from '../utils/markdownFiles'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
@@ -77,13 +78,15 @@ export async function openFileInWindow(params: OpenFileParams): Promise<boolean>
     log.info(`无头运行：不开预览窗口，忽略 ${params.path}`)
     return false
   }
+  // 摆给用户看的图（`shown:` 引用）：会话自己的快照目录里那一份，解成绝对路径再照常开窗
+  const shown = shownImagePathOfRef(params.sessionId, params.path)
   const workingDirectory = sessionService.getById(params.sessionId)?.workingDirectory
   // 相对路径只有会话的工作目录能解；会话没了又给的是相对路径 → 解不出来，不响应
-  if (!isAbsolute(params.path) && !workingDirectory) {
+  if (!shown && !isAbsolute(params.path) && !workingDirectory) {
     log.warn(`会话没有工作目录，无法解析相对路径，忽略: ${params.path}`)
     return false
   }
-  const absolute = resolveReadPath(params.path, workingDirectory ?? '')
+  const absolute = shown ?? resolveReadPath(params.path, workingDirectory ?? '')
 
   const path = canonicalPath(absolute)
   // 是不是 md 两头都认（与 md 窗口同口径）：点的是 `notes.md`，或它链到一个 md

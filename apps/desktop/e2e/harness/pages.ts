@@ -2293,6 +2293,26 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
 // `[data-suggestion-index]`（一张卡，带参数里的下标）、`[data-suggestion-accept]`（采纳按钮）、
 // `[data-suggestion-accepted]`（采纳的那张）、`[data-suggestion-message]`（采纳后发出的那句话），
 // 用户气泡上的 `[data-origin-suggestion]`（「采纳的提议」标签）。压淡没有 data 属性，只能认 `opacity-50`。
+// 带图的那张（2026-11-01）：以文字为主、每条一行，文字右边一个固定大小的缩略图位 `[data-suggestion-thumb-slot]`
+// （一组里有图就每行都留，没图的空着），带图的那格里是 `[data-suggestion-image]` → `figure[data-shown-image=<快照文件名>]`
+// （与 show_image 同一个 ShownImageView），点图的按钮就是 figure 里那颗 button。文字列没有 data 属性：它是缩略图位
+// 前面那个兄弟节点，按结构认。
+
+/** 视口里的一个框 */
+export interface BoxShot {
+  top: number
+  left: number
+  width: number
+  height: number
+}
+
+/** 提议卡右边那张图 */
+export interface SuggestionCardImageShot {
+  /** 快照文件名（`data-shown-image`） */
+  file: string
+  naturalWidth: number
+  complete: boolean
+}
 
 /** 一张提议卡 */
 export interface SuggestionCardShot {
@@ -2306,6 +2326,14 @@ export interface SuggestionCardShot {
   dimmed: boolean
   /** 有采纳按钮且可点 */
   acceptable: boolean
+  /** 卡片右边的图；没带图 / 宿主画不了 → null */
+  image: SuggestionCardImageShot | null
+  /** 缩略图位的框（没图的那行也有，空着）；整组都没图 → null */
+  slot: BoxShot | null
+  /** 文字列的框（标题、理由、要发的话） */
+  text: BoxShot
+  /** 卡片的视口坐标 */
+  rect: BoxShot
 }
 
 /** 一组提议（一次 suggest 调用） */
@@ -2321,30 +2349,73 @@ export interface SuggestionsPane {
   groups(): Promise<SuggestionGroupShot[]>
   /** 点第 `group` 组里下标为 `index` 的那张卡的采纳按钮；按钮不在 / 禁用 → false */
   accept(index: number, group?: number): Promise<boolean>
+  /** 点第 `group` 组里下标为 `index` 的那张卡右边的图；卡或图不在 → false */
+  clickImage(index: number, group?: number): Promise<boolean>
   /** 带「采纳的提议」标签的用户气泡：消息 id + 正文 */
   acceptedBubbles(): Promise<Array<{ id: string; text: string }>>
 }
 
 export function suggestionsPane(main: CdpClient): SuggestionsPane {
   const GROUPS = `[...document.querySelectorAll('[data-suggestions]')]`
+  const CARD_OF = (index: number, group: number): string =>
+    `(() => {
+      const g = ${GROUPS}[${group}]
+      return g ? [...g.querySelectorAll('[data-suggestion-index]')].find(
+        (c) => c.getAttribute('data-suggestion-index') === ${JSON.stringify(String(index))}
+      ) ?? null : null
+    })()`
   return {
     groups: () =>
       main.eval<SuggestionGroupShot[]>(
-        `${GROUPS}.map((g) => ({
-          state: g.getAttribute('data-suggestion-state') ?? '',
-          cards: [...g.querySelectorAll('[data-suggestion-index]')].map((c) => {
-            const button = c.querySelector('[data-suggestion-accept]')
-            return {
-              index: Number(c.getAttribute('data-suggestion-index')),
-              message: c.querySelector('[data-suggestion-message]')?.textContent ?? '',
-              accepted: c.hasAttribute('data-suggestion-accepted'),
-              dimmed: c.className.split(/\\s+/).includes('opacity-50'),
-              acceptable: !!button && !button.disabled
-            }
-          }),
-          error: g.querySelector('[data-suggestion-error]')?.textContent ?? null
-        }))`
+        `${GROUPS}.map((g) => {
+          const cards = [...g.querySelectorAll('[data-suggestion-index]')]
+          const box = (el) => {
+            const r = el.getBoundingClientRect()
+            return { top: r.top, left: r.left, width: r.width, height: r.height }
+          }
+          return {
+            state: g.getAttribute('data-suggestion-state') ?? '',
+            cards: cards.map((c) => {
+              const button = c.querySelector('[data-suggestion-accept]')
+              const slot = c.querySelector('[data-suggestion-thumb-slot]')
+              const figure = c.querySelector('[data-suggestion-image] [data-shown-image]')
+              const img = figure?.querySelector('img') ?? null
+              const message = c.querySelector('[data-suggestion-message]')
+              // 文字列：要发的话所在的那一列（缩略图位前面的兄弟节点）
+              let text = message
+              while (text && text.parentElement && !text.parentElement.contains(slot ?? button ?? c)) {
+                text = text.parentElement
+              }
+              return {
+                index: Number(c.getAttribute('data-suggestion-index')),
+                message: c.querySelector('[data-suggestion-message]')?.textContent ?? '',
+                accepted: c.hasAttribute('data-suggestion-accepted'),
+                dimmed: c.className.split(/\\s+/).includes('opacity-50'),
+                acceptable: !!button && !button.disabled,
+                image: figure
+                  ? {
+                      file: figure.getAttribute('data-shown-image') ?? '',
+                      naturalWidth: img?.naturalWidth ?? 0,
+                      complete: !!img?.complete
+                    }
+                  : null,
+                slot: slot ? box(slot) : null,
+                text: box(text ?? c),
+                rect: box(c)
+              }
+            }),
+            error: g.querySelector('[data-suggestion-error]')?.textContent ?? null
+          }
+        })`
       ),
+    clickImage: (index, group = 0) =>
+      main.eval<boolean>(`(() => {
+        const card = ${CARD_OF(index, group)}
+        const button = card?.querySelector('[data-suggestion-image] [data-shown-image] button')
+        if (!button) return false
+        button.click()
+        return true
+      })()`),
     accept: (index, group = 0) =>
       main.eval<boolean>(`(() => {
         const g = ${GROUPS}[${group}]
@@ -2365,6 +2436,137 @@ export function suggestionsPane(main: CdpClient): SuggestionsPane {
             text: (el.querySelector('.whitespace-pre-wrap')?.textContent ?? '').trim()
           }))`
       )
+  }
+}
+
+// ─── 摆给用户看的图（`show_image` 工具与带图提议，chat-ui ShownImagesBlock，2026-11-01） ───
+// 认的全是 data 属性：`[data-shown-images]`（一次 show_image 调用的图片块，是助手卡片过程区的一行，与
+// `[data-step-group]` / `[data-tool-name]` 并列）、`figure[data-shown-image=<快照文件名>]`（一张图；提议卡顶上的
+// 那张也是它，在 `[data-suggestions]` 里）、`[data-shown-image-missing]`（快照没了的那句话）。点图的按钮是 figure
+// 里那颗 button，说明是 figcaption。图的地址是 `shuvix-preview://load/?session=<id>&path=shown%3A<文件名>`。
+// 终答正文是卡片里的 `.markdown-body`（AssistantBubble 的结构，过程区在它之前）。
+
+/** 对话里的一张图 */
+export interface ShownFigureShot {
+  /** 快照文件名（`data-shown-image`） */
+  file: string
+  /** 所在助手卡片的 `data-msg-id`（卡片的锚点 = 这一轮最后那条消息） */
+  msgId: string
+  /** img 的完整 src；还没取到地址 → 空串 */
+  src: string
+  /** src 里解码后的 `session` 参数；没有 → null */
+  session: string | null
+  naturalWidth: number
+  naturalHeight: number
+  complete: boolean
+  /** figcaption 的文字；没有说明 → null */
+  caption: string | null
+  /** 「这张图不在了」那句话在不在 */
+  missing: boolean
+  inStepGroup: boolean
+  /** 在提议卡里（不是 show_image 的图片块） */
+  inSuggestion: boolean
+  /** 它的 `[data-shown-images]` 在卡片过程区里排第几行（0 起）；提议卡里的图 → -1 */
+  blockIndex: number
+  rect: { top: number; left: number; width: number; height: number }
+}
+
+/** 一张助手卡片过程区的行（DOM 序），以及终答正文是不是排在过程区之后 */
+export interface ShownCardRows {
+  /** 每行的种类：'stepGroup' | 'shownImages' | 'tool' | 'other' */
+  rows: string[]
+  /** 卡片里有 `.markdown-body`，且它在过程区之后 */
+  answerAfter: boolean
+}
+
+export interface ShownImagesPane {
+  /** 对话滚动区里的每一张图（DOM 序，含提议卡里的） */
+  figures(): Promise<ShownFigureShot[]>
+  /** 等到（`which` 选出的）图里至少 n 张解码完成（complete 且 naturalWidth > 0），交回那时的全部快照 */
+  waitLoaded(n: number, which?: (f: ShownFigureShot) => boolean): Promise<ShownFigureShot[]>
+  /** 点 `figures()` 里第 index 张图的按钮；不在 / 没有按钮 → false */
+  click(index: number): Promise<boolean>
+  /** 锚点为 `msgId` 的助手卡片的过程区；卡片不在 / 没有过程区 → null */
+  cardRows(msgId: string): Promise<ShownCardRows | null>
+  /** 把对话滚动区滚到顶 / 底（虚拟列表只挂视口附近的条目） */
+  scrollConversation(to: 'top' | 'bottom'): Promise<void>
+}
+
+export function shownImagesPane(main: CdpClient): ShownImagesPane {
+  const SCROLLER = `document.querySelector('.conversation-scroller')`
+  const FIGURES = `[...(${SCROLLER}?.querySelectorAll('[data-shown-image]') ?? [])]`
+  const ROW_KIND = `(el) => el.hasAttribute('data-step-group')
+    ? 'stepGroup'
+    : el.hasAttribute('data-shown-images')
+      ? 'shownImages'
+      : el.hasAttribute('data-tool-name')
+        ? 'tool'
+        : 'other'`
+  const figures = (): Promise<ShownFigureShot[]> =>
+    main.eval<ShownFigureShot[]>(
+      `${FIGURES}.map((f) => {
+        const img = f.querySelector('img')
+        const src = img?.getAttribute('src') ?? ''
+        const m = /[?&]session=([^&]*)/.exec(src)
+        const block = f.closest('[data-shown-images]')
+        const inSuggestion = f.closest('[data-suggestions]') !== null
+        const r = f.getBoundingClientRect()
+        return {
+          file: f.getAttribute('data-shown-image') ?? '',
+          msgId: f.closest('[data-msg-id]')?.getAttribute('data-msg-id') ?? '',
+          src,
+          session: m ? decodeURIComponent(m[1]) : null,
+          naturalWidth: img?.naturalWidth ?? 0,
+          naturalHeight: img?.naturalHeight ?? 0,
+          complete: !!img?.complete,
+          caption: f.querySelector('figcaption')?.textContent ?? null,
+          missing: f.querySelector('[data-shown-image-missing]') !== null,
+          inStepGroup: f.closest('[data-step-group]') !== null,
+          inSuggestion,
+          blockIndex:
+            !inSuggestion && block?.parentElement
+              ? [...block.parentElement.children].indexOf(block)
+              : -1,
+          rect: { top: r.top, left: r.left, width: r.width, height: r.height }
+        }
+      })`
+    )
+  return {
+    figures,
+    waitLoaded: (n, which = () => true) =>
+      until(async () => {
+        const all = await figures()
+        const loaded = all.filter((f) => which(f) && f.complete && f.naturalWidth > 0)
+        return loaded.length >= n ? all : null
+      }, `${n} shown image(s) decoded`),
+    click: (index) =>
+      main.eval<boolean>(`(() => {
+        const button = ${FIGURES}[${index}]?.querySelector('button')
+        if (!button) return false
+        button.click()
+        return true
+      })()`),
+    cardRows: (msgId) =>
+      main.eval<ShownCardRows | null>(`(() => {
+        const card = ${SCROLLER}?.querySelector('[data-msg-id="' + CSS.escape(${JSON.stringify(msgId)}) + '"]')
+        const first = card?.querySelector('[data-step-group], [data-shown-images], [data-tool-name]')
+        const area = first?.parentElement
+        if (!card || !area) return null
+        // 中间文本也是 .markdown-body，但它在过程区里面：只认过程区之外的那段
+        const answer = [...card.querySelectorAll('.markdown-body')].find((el) => !area.contains(el))
+        return {
+          rows: [...area.children].map(${ROW_KIND}),
+          answerAfter:
+            !!answer && !!(area.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING)
+        }
+      })()`),
+    scrollConversation: async (to) => {
+      await main.eval(`(() => {
+        const s = ${SCROLLER}
+        if (s) s.scrollTop = ${to === 'top' ? '0' : 's.scrollHeight'}
+      })()`)
+      await sleep(300)
+    }
   }
 }
 

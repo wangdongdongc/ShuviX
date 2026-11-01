@@ -5,7 +5,9 @@
  *    并成一行；运行中 / 出错 / 中间文本都把一段切开；键与顺序是渲染层 key 的依据；
  *  - **同工具判定**（`uniformToolName`）：一段全是同一个工具时合并行保持从前的形态；
  *  - **归纳**（`summarizeSteps`）：按标签聚合计数，首次出现顺序排列；
- *  - **一行文本**（`formatStepSequence`）：`×` 与 ` · ` 两个字符钉死，超长按字符截断。
+ *  - **一行文本**（`formatStepSequence`）：`×` 与 ` · ` 两个字符钉死，超长按字符截断；
+ *  - **摆给用户看的图**（`show_image`，docs/show-image-design.md §5）：落定的调用不是过程步骤，像中间文本一样切开一段、
+ *    永不进步骤组，计数徽章不数它（SG-SI-1…SG-SI-4）。
  *
  * 标签由调用方给（工具显示名 / i18n 文案），这里用静态字符串，不牵扯 store 与 i18n。
  */
@@ -280,5 +282,99 @@ describe('formatStepSequence —— 步骤摘要 → 一行文本', () => {
     expect(formatStepSequence([step('aaaa'), step('bbbb')], 10)).toBe('aaaa · ...')
     // 单项没超、整串才超 —— 截的是整串
     expect(formatStepSequence([step('aaaa'), step('bbbb')], 11)).toBe('aaaa · bbbb')
+  })
+})
+
+describe('摆给用户看的图（show_image）不进步骤组', () => {
+  const shown = (id: string, result = 'Shown 1 image to the user'): AssistantToolBlock =>
+    tool(id, 'show_image', { result })
+  const kinds = (groups: BlockGroup[]): string[] => groups.map((g) => g.kind)
+
+  it('SG-SI-1 [read✓, read✓, show_image✓, read✓, read✓] → stepGroup 0–1、单个 2、stepGroup 3–4', () => {
+    const blocks = [
+      tool('a', 'read', { result: 'A' }),
+      tool('b', 'read', { result: 'B' }),
+      shown('s'),
+      tool('c', 'read', { result: 'C' }),
+      tool('d', 'read', { result: 'D' })
+    ]
+    const groups = groupConsecutiveSteps(blocks)
+    expect(kinds(groups)).toEqual(['stepGroup', 'single', 'stepGroup'])
+    expect(groups.map((g) => g.key)).toEqual(['a', 's', 'c'])
+    expect(groups[0].kind === 'stepGroup' && groups[0].blocks).toEqual([blocks[0], blocks[1]])
+    expect(groups[1]).toEqual({ kind: 'single', key: 's', block: blocks[2] })
+    expect(groups[2].kind === 'stepGroup' && groups[2].blocks).toEqual([blocks[3], blocks[4]])
+    expect(flatten(groups)).toEqual(blocks)
+  })
+
+  it('SG-SI-2 result 为空串的 show_image 照样切开一段、永不在步骤组里', () => {
+    // 空串 = 已落定（契约只认 undefined 为运行中）；它也不能因此被当成「普通的已完成调用」并进去
+    const groups = groupConsecutiveSteps([
+      tool('a', 'read', { result: 'A' }),
+      shown('s', ''),
+      tool('b', 'grep', { result: 'B' }),
+      tool('c', 'read', { result: 'C' })
+    ])
+    expect(kinds(groups)).toEqual(['single', 'single', 'stepGroup'])
+    for (const g of groups) {
+      if (g.kind === 'stepGroup') {
+        expect(g.blocks.some((b) => b.type === 'tool' && b.toolName === 'show_image')).toBe(false)
+      }
+    }
+    // 两个相邻的 show_image 也不并成一组
+    expect(kinds(groupConsecutiveSteps([shown('s1'), shown('s2')]))).toEqual(['single', 'single'])
+  })
+
+  it('SG-SI-3 [thinking, show_image✓, thinking] → 三个单个；执行中 / 出错的 show_image 是普通的单行', () => {
+    expect(kinds(groupConsecutiveSteps([thinking('t1'), shown('s'), thinking('t2')]))).toEqual([
+      'single',
+      'single',
+      'single'
+    ])
+    const running = tool('s', 'show_image')
+    const failed = tool('s', 'show_image', {
+      result: 'images[0].path: no such file',
+      isError: true
+    })
+    for (const odd of [running, failed]) {
+      const groups = groupConsecutiveSteps([
+        tool('a', 'read', { result: 'A' }),
+        odd,
+        tool('c', 'read', { result: 'C' })
+      ])
+      expect(kinds(groups)).toEqual(['single', 'single', 'single'])
+      expect(groups[1]).toEqual({ kind: 'single', key: 's', block: odd })
+    }
+  })
+
+  it('SG-SI-4 按分组归纳的计数（徽章）从不数 show_image', () => {
+    const labelOf = (b: StepBlock): string => (b.type === 'tool' ? b.toolName : b.type)
+    const groups = groupConsecutiveSteps([
+      thinking('t'),
+      tool('a', 'read', { result: 'A' }),
+      shown('s1'),
+      tool('b', 'read', { result: 'B' }),
+      tool('c', 'grep', { result: 'C' }),
+      shown('s2', ''),
+      tool('d', 'read', { result: 'D' })
+    ])
+    const summaries = groups
+      .filter((g): g is Extract<BlockGroup, { kind: 'stepGroup' }> => g.kind === 'stepGroup')
+      .map((g) => summarizeSteps(g.blocks, labelOf))
+    expect(summaries).toEqual([
+      [
+        { label: 'thinking', count: 1 },
+        { label: 'read', count: 1 }
+      ],
+      [
+        { label: 'read', count: 1 },
+        { label: 'grep', count: 1 }
+      ]
+    ])
+    for (const summary of summaries) {
+      expect(summary.some((item) => item.label === 'show_image')).toBe(false)
+      expect(formatStepSequence(summary)).not.toContain('show_image')
+    }
+    expect(summaries.map((s) => formatStepSequence(s))).toEqual(['thinking · read', 'read · grep'])
   })
 })

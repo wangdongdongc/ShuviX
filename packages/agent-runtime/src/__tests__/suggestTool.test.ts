@@ -9,11 +9,34 @@
  *   ST-3 结果文字：单复数（1 suggestion / 2 suggestions）、按序编号的标题、「Do not wait」；没有 details
  *   ST-4 注册项形状：name `suggest`、`replay: 'safe'`、label 缺省 'Suggest' 可由宿主换、描述与 schema、
  *        schema 的条数上下限与 SUGGEST_LIMITS 一致；从包入口导出
+ *
+ * 带图的提议（2026-11-01，docs/show-image-design.md §6）—— 宿主注入 `presentImages` 时每条才多一个 `image`：
+ *   ST-5  没注入：项里的 image 当没有 —— 不报错、没有 `(with image)`、没有 details；描述与 schema 是不带图的那份
+ *   ST-6  注入了：描述是 SUGGEST_DESCRIPTION_WITH_IMAGES（以 SUGGEST_DESCRIPTION 开头、提到 `image`）；schema 是
+ *         SuggestParamsWithImagesSchema，项的键恰 {detail, image, message, title}、必填 {message, title}，条数上下限同
+ *         SUGGEST_LIMITS；image 的描述说出格式清单与「not sent to you」
+ *   ST-7  presenter 只调一次、只带有图的项、按顺序、路径 trim、label `suggestions[i].image`
+ *   ST-8  details = {type:'suggest', images:[A, null, C]}；结果文字里带图的那条后面标 `(with image)`
+ *   ST-9  注入了但没有一条带图 → 不调 presenter、没有 details、没有标记
+ *   ST-10 image 是 '' / 空白 / 数字 / null → isError 点名 suggestions[1].image 与 non-empty string；不调 presenter
+ *   ST-11 presenter 抛错 → isError，文字是它的消息；没有 details
+ *   ST-12 先校验再快照：第 0 条图合法、第 1 条标题不合法 → isError，presenter 一次都没调
+ *   ST-13 presenter 交回的比请求的少 → 缺的那格是 null、不标记（钉住现状）
+ *   ST-14 包入口导出 SuggestParamsWithImagesSchema 与 SUGGEST_DESCRIPTION_WITH_IMAGES
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SUGGEST_LIMITS, SUGGEST_TOOL_NAME } from '@shuvix/chat-protocol/suggestions'
+import { SHOWN_IMAGE_FORMAT_NAMES } from '@shuvix/chat-protocol/shownImages'
+import type { ShownImage } from '@shuvix/chat-protocol/types/chatMessage'
 import * as runtime from '../index'
-import { SUGGEST_DESCRIPTION, SuggestParamsSchema, createSuggestTool } from '../suggestTool'
+import {
+  SUGGEST_DESCRIPTION,
+  SUGGEST_DESCRIPTION_WITH_IMAGES,
+  SuggestParamsSchema,
+  SuggestParamsWithImagesSchema,
+  createSuggestTool,
+  type SuggestImagePresenter
+} from '../suggestTool'
 import { failureText, invokeTool, resultText } from '../tools/testing/invokeTool'
 
 type Item = { title?: unknown; message?: unknown; detail?: unknown }
@@ -170,5 +193,190 @@ describe('ST-4 · 注册项形状', () => {
     expect(runtime.createSuggestTool).toBe(createSuggestTool)
     expect(runtime.SuggestParamsSchema).toBe(SuggestParamsSchema)
     expect(runtime.SUGGEST_DESCRIPTION).toBe(SUGGEST_DESCRIPTION)
+  })
+})
+
+// ─── 带图的提议 ─────────────────────────────────────────
+
+const shownA: ShownImage = {
+  file: `${'a'.repeat(64)}.png`,
+  source: '/w/a.png',
+  mimeType: 'image/png',
+  width: 40,
+  height: 24,
+  bytes: 100
+}
+const shownC: ShownImage = {
+  file: `${'c'.repeat(64)}.jpg`,
+  source: '/w/c.jpg',
+  mimeType: 'image/jpeg',
+  width: 10,
+  height: 10,
+  bytes: 50
+}
+
+/** 按请求逐个交回 A / C 的 presenter spy（交回的条数可以少给，见 ST-13） */
+function presenter(
+  images: ShownImage[] = [shownA, shownC]
+): ReturnType<typeof vi.fn<SuggestImagePresenter>> {
+  return vi.fn<SuggestImagePresenter>(async (requests) => images.slice(0, requests.length))
+}
+
+async function callWith(
+  presentImages: SuggestImagePresenter | undefined,
+  suggestions: unknown
+): ReturnType<typeof invokeTool> {
+  return invokeTool(createSuggestTool({ presentImages }), { suggestions } as never)
+}
+
+describe('ST-5 · 宿主不能摆图', () => {
+  it('ST-5 项里带 image 当没有：不报错、没有 (with image)、没有 details', async () => {
+    const { result } = await callWith(undefined, [
+      { title: 'T1', message: 'M1', image: 'a.png' },
+      { title: 'T2', message: 'M2', image: 7 }
+    ])
+    expect(result.isError).not.toBe(true)
+    const text = resultText(result)
+    expect(text).toContain('1. T1\n2. T2\n')
+    expect(text).not.toContain('(with image)')
+    expect(result.details).toBeUndefined()
+  })
+
+  it('ST-5 描述与 schema 是不带图的那份', () => {
+    const tool = createSuggestTool()
+    expect(tool.description).toBe(SUGGEST_DESCRIPTION)
+    expect(tool.parameters).toBe(SuggestParamsSchema)
+  })
+})
+
+describe('ST-6 · 宿主能摆图时的描述与 schema', () => {
+  it('ST-6 描述以 SUGGEST_DESCRIPTION 开头、多一句提到 `image`', () => {
+    const tool = createSuggestTool({ presentImages: presenter() })
+    expect(tool.description).toBe(SUGGEST_DESCRIPTION_WITH_IMAGES)
+    expect(SUGGEST_DESCRIPTION_WITH_IMAGES.startsWith(SUGGEST_DESCRIPTION)).toBe(true)
+    expect(SUGGEST_DESCRIPTION_WITH_IMAGES.length).toBeGreaterThan(SUGGEST_DESCRIPTION.length)
+    expect(SUGGEST_DESCRIPTION_WITH_IMAGES.slice(SUGGEST_DESCRIPTION.length)).toContain('`image`')
+    expect(SUGGEST_DESCRIPTION).not.toContain('`image`')
+  })
+
+  it('ST-6 schema：项的键恰 {detail, image, message, title}，必填 {message, title}，条数上下限同 SUGGEST_LIMITS', () => {
+    const tool = createSuggestTool({ presentImages: presenter() })
+    expect(tool.parameters).toBe(SuggestParamsWithImagesSchema)
+    const list = SuggestParamsWithImagesSchema.properties.suggestions
+    const bounds = list as unknown as { minItems?: number; maxItems?: number }
+    expect(bounds.minItems).toBe(1)
+    expect(bounds.maxItems).toBe(SUGGEST_LIMITS.maxItems)
+    expect(Object.keys(list.items.properties).sort()).toStrictEqual([
+      'detail',
+      'image',
+      'message',
+      'title'
+    ])
+    expect([...(list.items.required ?? [])].sort()).toStrictEqual(['message', 'title'])
+  })
+
+  it('ST-6 image 的描述说出格式清单，并说它不会发给模型', () => {
+    // description 是 JSON Schema 的选项，typebox 的类型上不带它：按普通对象读
+    const image = SuggestParamsWithImagesSchema.properties.suggestions.items.properties
+      .image as unknown as { description?: string }
+    const description = image.description ?? ''
+    expect(description).toContain(SHOWN_IMAGE_FORMAT_NAMES)
+    expect(description).toContain('not sent to you')
+  })
+})
+
+describe('ST-7 / ST-8 · 摆图', () => {
+  const ITEMS = [
+    { title: 'T1', message: 'M1', image: '  a.png  ' },
+    { title: 'T2', message: 'M2' },
+    { title: 'T3', message: 'M3', image: 'c.png' }
+  ]
+
+  it('ST-7 presenter 只调一次，只带有图的项，按顺序、路径 trim、label 点名那一项', async () => {
+    const spy = presenter()
+    await callWith(spy, ITEMS)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toStrictEqual([
+      { path: 'a.png', label: 'suggestions[0].image' },
+      { path: 'c.png', label: 'suggestions[2].image' }
+    ])
+  })
+
+  it('ST-8 details 与参数按下标对应（没带图的是 null）；带图的那条标 (with image)', async () => {
+    const { result } = await callWith(presenter(), ITEMS)
+    expect(result.isError).not.toBe(true)
+    expect(result.details).toStrictEqual({ type: 'suggest', images: [shownA, null, shownC] })
+    const text = resultText(result)
+    expect(text).toContain('1. T1 (with image)\n2. T2\n3. T3 (with image)\n')
+  })
+})
+
+describe('ST-9 · 注入了但没有一条带图', () => {
+  it('ST-9 不调 presenter、没有 details、没有标记', async () => {
+    const spy = presenter()
+    const { result } = await callWith(spy, [ok(1), ok(2)])
+    expect(spy).not.toHaveBeenCalled()
+    expect(result.details).toBeUndefined()
+    expect(resultText(result)).not.toContain('(with image)')
+  })
+})
+
+describe('ST-10 · image 字段', () => {
+  it.each<[string, unknown]>([
+    ['空串', ''],
+    ['只有空白', '   '],
+    ['数字', 3],
+    ['null', null]
+  ])('ST-10 image 是 %s → isError 点名 suggestions[1].image，不调 presenter', async (_l, image) => {
+    const spy = presenter()
+    const text = await failureText(
+      callWith(spy, [ok(1), { title: 'T', message: 'M', image }]).then((r) => r.result)
+    )
+    expect(text).toContain('suggestions[1].image')
+    expect(text).toContain('non-empty string')
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe('ST-11 / ST-12 / ST-13 · 出错与边界', () => {
+  it('ST-11 presenter 抛错 → isError，文字是它的消息；没有 details', async () => {
+    const spy = vi.fn<SuggestImagePresenter>(async () => {
+      throw new Error('suggestions[1].image: no such file: /x')
+    })
+    const { result } = await callWith(spy, [ok(1), { title: 'T', message: 'M', image: '/x' }])
+    expect(result.isError).toBe(true)
+    expect(resultText(result)).toContain('suggestions[1].image: no such file: /x')
+    expect(result.details).toBeUndefined()
+  })
+
+  it('ST-12 先校验再快照：第 0 条图合法、第 1 条标题不合法 → isError，presenter 一次都没调', async () => {
+    const spy = presenter()
+    const text = await failureText(
+      callWith(spy, [
+        { title: 'T', message: 'M', image: 'a.png' },
+        { title: '', message: 'M' }
+      ]).then((r) => r.result)
+    )
+    expect(text).toContain('suggestions[1].title')
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('ST-13 presenter 交回的比请求的少 → 缺的那格是 null、不标记', async () => {
+    const spy = presenter([shownA])
+    const { result } = await callWith(spy, [
+      { title: 'T1', message: 'M1', image: 'a.png' },
+      { title: 'T2', message: 'M2', image: 'b.png' }
+    ])
+    expect(result.isError).not.toBe(true)
+    expect(result.details).toStrictEqual({ type: 'suggest', images: [shownA, null] })
+    const text = resultText(result)
+    expect(text).toContain('1. T1 (with image)\n2. T2\n')
+  })
+})
+
+describe('ST-14 · 包入口', () => {
+  it('ST-14 导出带图的 schema 与描述', () => {
+    expect(runtime.SuggestParamsWithImagesSchema).toBe(SuggestParamsWithImagesSchema)
+    expect(runtime.SUGGEST_DESCRIPTION_WITH_IMAGES).toBe(SUGGEST_DESCRIPTION_WITH_IMAGES)
   })
 })

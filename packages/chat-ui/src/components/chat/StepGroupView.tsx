@@ -4,7 +4,10 @@ import { MarkdownMessageIdContext, messageIdOfTextBlock } from './markdownStream
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { StepGroup } from './StepGroup'
+import { ShownImagesBlock } from './ShownImagesBlock'
+import { useResolveMediaUrl } from '../../host/mediaUrl'
 import type { BlockGroup } from './stepGrouping'
+import { isSettledShowImageBlock, shownImagesOfBlock } from '@shuvix/chat-protocol/shownImages'
 
 /** 两个分组是否画出同样的东西：种类、key 相同，块逐个是同一个对象（块落盘后身份不变） */
 function sameGroup(a: BlockGroup, b: BlockGroup): boolean {
@@ -17,7 +20,7 @@ function sameGroup(a: BlockGroup, b: BlockGroup): boolean {
 }
 
 /**
- * 过程区的一行 —— 按分组种类分发：步骤合并行 / 思考 / 中间文本 / 单次工具调用。
+ * 过程区的一行 —— 按分组种类分发：步骤合并行 / 思考 / 中间文本 / 摆给用户看的图 / 单次工具调用。
  * 主对话卡与子智能体内联转写共用这一份分发，免得几处各写一遍 switch 之后悄悄走散。
  * key 由调用方按 `group.key` 给。
  *
@@ -36,6 +39,8 @@ function StepGroupViewImpl({
   /** 中间文本的正文类名 —— 子智能体转写用更小的字号 */
   markdownClassName?: string
 }): React.JSX.Element {
+  // 取不到本地文件地址的宿主（Chrome 侧栏）画不了摆给用户的图 —— 这时照普通工具行显示
+  const canShowImages = useResolveMediaUrl() !== null
   if (group.kind === 'stepGroup') return <StepGroup blocks={group.blocks} />
   const block = group.block
   if (block.type === 'thinking') return <ThinkingBlock content={block.text} />
@@ -48,6 +53,11 @@ function StepGroupViewImpl({
         </MarkdownMessageIdContext.Provider>
       </div>
     )
+  }
+  // 摆给用户看的图：画成图片块（详情里没有可画的快照 —— 形状不对 —— 就照普通工具行显示）
+  if (canShowImages && isSettledShowImageBlock(block)) {
+    const items = shownImagesOfBlock(block)
+    if (items.length > 0) return <ShownImagesBlock items={items} />
   }
   return (
     <ToolCallBlock

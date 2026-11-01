@@ -185,7 +185,7 @@ bot セッションは**その bot だけに属し、プロジェクトには属
 場所で作業します）、バックグラウンドの自動再開はすべて通常どおり動きます。
 
 そのルート人格は組み込みの **`bot`** ベースで、ツールリストは意図的に狭められています：`read, ls,
-grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill` —— `bash`
+grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, artifact, widget, skill` —— `bash`
 はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` / `mcp:database` も宣言していません（このセッションの
 拡張機能でユーザーがオンにすることはでき、それはユーザー自身の選択です）。bot は作業を自分で行います（シェルはなく、確かめられなかったことは試すスクリプトを書かずにそう伝えます）。人格はあなたとの話し方だけを形づくり、bot が書くファイル・メモ・コードは平易に書かれます。bot 自身のファイルはそのセッションの権限表の一行です（**Bot ファイル**、既定で読み書き可。セッション設定の「ファイルアクセス」で読み取り専用にできます）。そのため bot は確認なしで記憶を更新します。`~/.shuvix/bots/` 配下へのそれ以外の書き込みは権限表の外への普通の書き込みで、
 組み込みポリシー **ask-on-external-path** の確認になり、自動レビューがオンならレビュアーが答えることも

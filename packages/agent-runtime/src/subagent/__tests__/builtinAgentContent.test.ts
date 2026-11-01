@@ -12,9 +12,13 @@
  * bot（bot 会话的基座档案，2026-10-24 起「自己动手干活」）：三种语言的工具面一字不差、没有 bash / MCP；description
  * 与正文里不再残留「真正的活都交给子会话、write/edit 不许用来干活」那套旧说法 —— 日报 bot 被定时叫起来时要自己写
  * 跟踪项，旧措辞会让它拒绝动手。
+ *
+ * show_image（2026-11-01，docs/show-image-design.md D7）：
+ *   BA-SI 每种语言的文件里，`show_image` 恰在 work / chat / coding / bot 的 shuvix-tools 里、紧跟在 suggest 之后；
+ *         notebook / tab / explore / titler / knowledge-writer / permission-reviewer 都没有
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -73,7 +77,7 @@ describe('BA bot 基座档案', () => {
     }
   } as const
   const TOOLS =
-    'read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill'
+    'read, ls, grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, artifact, widget, skill'
 
   it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
     'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',
@@ -142,4 +146,42 @@ describe('BA suggest', () => {
       for (const phrase of REVIEWER[file]) expect(bullet, phrase).toContain(phrase)
     }
   )
+})
+
+/** 摆图给用户（`show_image`，2026-11-01，D7）：只有能回复用户的主路线基座与 bot 持有它，紧跟 suggest */
+describe('BA show_image', () => {
+  const HOLDERS = ['work', 'chat', 'coding', 'bot']
+  const NON_HOLDERS = [
+    'notebook',
+    'tab',
+    'explore',
+    'titler',
+    'knowledge-writer',
+    'permission-reviewer'
+  ]
+  const toolsOf = (file: string): string[] => {
+    const text = readFileSync(join(MD_DIR, file), 'utf8')
+    const line = /^shuvix-tools: (.*)$/m.exec(text)?.[1] ?? ''
+    return line.split(',').map((t) => t.trim())
+  }
+
+  it.each(HOLDERS.flatMap(localized))(
+    'BA-SI %s：shuvix-tools 里有 show_image，紧跟在 suggest 之后',
+    (file) => {
+      const tools = toolsOf(file)
+      expect(tools).toContain('show_image')
+      expect(tools.filter((t) => t === 'show_image')).toHaveLength(1)
+      expect(tools.indexOf('show_image')).toBe(tools.indexOf('suggest') + 1)
+    }
+  )
+
+  it.each(NON_HOLDERS.flatMap(localized))('BA-SI %s：没有 show_image', (file) => {
+    expect(toolsOf(file)).not.toContain('show_image')
+  })
+
+  it('BA-SI 目录里每个 md：持有 show_image 的恰是 work / chat / coding / bot（每种语言都三份齐）', () => {
+    const files = readdirSync(MD_DIR).filter((f) => f.endsWith('.md'))
+    const holders = files.filter((f) => toolsOf(f).includes('show_image')).sort()
+    expect(holders).toStrictEqual(HOLDERS.flatMap(localized).sort())
+  })
 })

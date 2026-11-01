@@ -6,6 +6,7 @@
  *  - `GET /files/media?path=<绝对路径>`              ≈ `shuvix-media://`（流式、按扩展名给 MIME、支持 Range）
  *  - `GET /files/preview?session=<id>&path=<路径>`   ≈ `shuvix-preview://`（相对路径按会话的工作目录解析）
  *  - `GET /files/download?path=<绝对路径>`           附件下载（`Content-Disposition: attachment`）
+ *  - `GET /sessions/shown-image?session=<id>&file=<名字>`  会话里摆给用户看的图（≈ `shuvix-preview://` 的 `shown:`）
  *  - `GET /lib/<名字>`                               ≈ `shuvix-lib://<名字>`（同一张白名单）
  *  - `/w/<widget id>/…`（任意方法）                   转发给本机的 widget 服务
  *
@@ -27,6 +28,13 @@ export const NETWORK_PREVIEW_PATH = '/files/preview'
 /** 附件下载 */
 export const NETWORK_DOWNLOAD_PATH = '/files/download'
 
+/**
+ * 会话里摆给用户看的图（`show_image` / 带图提议的快照，docs/show-image-design.md §4.4）：
+ * `GET /sessions/shown-image?session=<id>&file=<sha256>.<ext>`。不在 `/files/` 下 —— 它是会话内容（归 `sessions` scope、
+ * 不过 path 点位），能读这个会话的设备就能看图（用户裁决）
+ */
+export const NETWORK_SHOWN_IMAGE_PATH = '/sessions/shown-image'
+
 /** 交互图沙箱的库（`/lib/<名字>`） */
 export const NETWORK_LIB_PREFIX = '/lib/'
 
@@ -41,6 +49,11 @@ export function networkMediaUrl(absolutePath: string): string {
 /** 会话里的文件 → 预览资源地址（PDF / 图片 / 音视频；相对路径按会话的工作目录解析） */
 export function networkPreviewUrl(sessionId: string, path: string): string {
   return `${NETWORK_PREVIEW_PATH}?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+}
+
+/** 会话里一张图的快照 → 地址 */
+export function networkShownImageUrl(sessionId: string, file: string): string {
+  return `${NETWORK_SHOWN_IMAGE_PATH}?session=${encodeURIComponent(sessionId)}&file=${encodeURIComponent(file)}`
 }
 
 /** 服务端的文件 → 附件下载地址 */

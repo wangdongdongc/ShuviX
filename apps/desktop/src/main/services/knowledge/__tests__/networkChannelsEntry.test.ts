@@ -34,6 +34,7 @@ const ROUTES: RequestRoute[] = [
   'media',
   'preview',
   'download',
+  'shown',
   'widget'
 ]
 const code = (items: string[]): string => items.map((item) => `\`${item}\``).join(', ')

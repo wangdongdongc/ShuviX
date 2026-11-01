@@ -5,7 +5,13 @@
  *
  * 纯函数（平台、页面地址都由调用方交进来），桌面那一支一律原样 / undefined —— 桌面行为不因此改变。
  */
-import { networkLibBase, networkPreviewUrl, networkWidgetUrl } from '../../../shared/networkRoutes'
+import { shownImageFileOfRef } from '@shuvix/chat-protocol/shownImages'
+import {
+  networkLibBase,
+  networkPreviewUrl,
+  networkShownImageUrl,
+  networkWidgetUrl
+} from '../../../shared/networkRoutes'
 
 /** 页面地址里要的那一点（`window.location` 满足它） */
 export interface PageLocation {
@@ -18,9 +24,13 @@ export function isWebPlatform(platform: string | undefined): boolean {
   return platform === 'web'
 }
 
-/** web 客户端的预览资源地址（`shuvix-preview://` 的等价物；桌面用 chat-ui 的 `shuvixPreviewResolver`） */
+/**
+ * web 客户端的预览资源地址（`shuvix-preview://` 的等价物；桌面用 chat-ui 的 `shuvixPreviewResolver`）。
+ * 摆给用户看的图（`shown:` 引用）走会话自己的那条路由：它是会话内容，能读这个会话就能看（不归 `files`）
+ */
 export function webPreviewUrl(sessionId: string, path: string): string {
-  return networkPreviewUrl(sessionId, path)
+  const shown = shownImageFileOfRef(path)
+  return shown ? networkShownImageUrl(sessionId, shown) : networkPreviewUrl(sessionId, path)
 }
 
 /** 交互图沙箱的库基址：web 客户端 `<origin>/lib/`；桌面 undefined（沿用 `shuvix-lib:`） */

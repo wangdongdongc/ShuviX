@@ -12,8 +12,18 @@
  *   SG-3 / SG-11               分发本身：工具状态（没回填 = running、空串结果 = done、isError = error）、
  *                              默认正文类名、工具块的字段原样交给 ToolCallBlock
  *
- * 子组件全部换成**不 memo** 的计数桩（StepGroup / ThinkingBlock / ToolCallBlock / MarkdownText）：桩被调一次
- * 就是 StepGroupView 往下渲染了一次，props 一并记下。每一步都 `root.render` 一个新的 StepGroupView 元素 ——
+ * 摆给用户看的图（`show_image`，docs/show-image-design.md §5）—— 落定的调用画成图片块，前提是宿主注入了 mediaUrl
+ * seam（`MediaUrlProvider`）：
+ *
+ *   SGV-SI-1  有 seam、落定、详情合法 → ShownImagesBlock 拿到 `shownImagesOfBlock(block)`；ToolCallBlock 不调
+ *   SGV-SI-2  落定但详情缺失 / 类型不对 / 每张都坏 → ToolCallBlock `done`
+ *   SGV-SI-3  还在执行 → `running`；出错 → `error`；图片块桩不调
+ *   SGV-SI-4  重建的分组里块是同一个对象 → 图片块不重渲染（memo 契约）
+ *   SGV-SI-5  没有 seam（Chrome 侧栏）：同一个合法的落定块 → ToolCallBlock `done`，图片块桩不调
+ *   SGV-SI-6  seam 从无到有（同一个分组、同一个 StepGroupView 实例）→ 重渲染成图片块（context 穿过 memo）
+ *
+ * 子组件全部换成**不 memo** 的计数桩（StepGroup / ThinkingBlock / ToolCallBlock / MarkdownText / ShownImagesBlock）：
+ * 桩被调一次就是 StepGroupView 往下渲染了一次，props 一并记下。每一步都 `root.render` 一个新的 StepGroupView 元素 ——
  * 跳没跳过全看比较器。不碰 store，也不需要 i18n。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -25,7 +35,8 @@ const calls = vi.hoisted(() => ({
   StepGroup: [] as Array<Record<string, unknown>>,
   ThinkingBlock: [] as Array<Record<string, unknown>>,
   ToolCallBlock: [] as Array<Record<string, unknown>>,
-  MarkdownText: [] as Array<Record<string, unknown>>
+  MarkdownText: [] as Array<Record<string, unknown>>,
+  ShownImagesBlock: [] as Array<Record<string, unknown>>
 }))
 
 vi.mock('../StepGroup', async () => {
@@ -55,6 +66,15 @@ vi.mock('../ToolCallBlock', async () => {
     }
   }
 })
+vi.mock('../ShownImagesBlock', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    ShownImagesBlock: (props: { items: unknown[] }) => {
+      calls.ShownImagesBlock.push(props)
+      return h('div', { 'data-stub': 'shown-images', 'data-size': props.items.length })
+    }
+  }
+})
 vi.mock('../markdownComponents', async () => {
   const { createElement: h } = await import('react')
   return {
@@ -68,6 +88,9 @@ vi.mock('../markdownComponents', async () => {
 import { StepGroupView } from '../StepGroupView'
 import type { BlockGroup, StepBlock } from '../stepGrouping'
 import { text, thinking, toolBlock } from '../../../__tests__/support/views'
+import { MediaUrlProvider, type ResolveMediaUrl } from '../../../host/mediaUrl'
+import { shownImagesOfBlock } from '@shuvix/chat-protocol/shownImages'
+import type { ShownImage } from '@shuvix/chat-protocol/types/chatMessage'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -252,5 +275,128 @@ describe('分发本身（SG-11）', () => {
     expect(props.result).toBe('patched')
     expect(props.details).toBe(details)
     expect(props.status).toBe('done')
+  })
+})
+
+describe('摆给用户看的图（SGV-SI-1…SGV-SI-6）', () => {
+  const resolver: ResolveMediaUrl = ({ sessionId, path }) => ({
+    url: `test://${sessionId}/${path}`
+  })
+
+  const shot = (file: string, extra: Partial<ShownImage> = {}): ShownImage => ({
+    file,
+    source: `/w/${file}`,
+    mimeType: 'image/png',
+    width: 40,
+    height: 24,
+    bytes: 100,
+    ...extra
+  })
+  const HASH_A = 'a'.repeat(64)
+  const HASH_B = 'b'.repeat(64)
+
+  /** 落定的 show_image（`result` 有值）；`extra` 覆盖任意字段 */
+  function showImage(extra: Partial<AssistantToolBlock> = {}): AssistantToolBlock {
+    return toolBlock(
+      'img1',
+      'show_image',
+      { images: [{ path: 'a.png', caption: ' First ' }, { path: 'b.png' }] },
+      {
+        result: 'Shown 2 images to the user',
+        details: {
+          type: 'show_image',
+          images: [shot(`${HASH_A}.png`), shot(`${HASH_B}.png`)]
+        },
+        ...extra
+      }
+    )
+  }
+
+  /** 包在 MediaUrlProvider 里渲染（`value` 可以是 null：Provider 在、seam 没有） */
+  function renderWithMedia(group: BlockGroup, value: ResolveMediaUrl | null = resolver): void {
+    act(() =>
+      root.render(
+        createElement(MediaUrlProvider, { value }, createElement(StepGroupView, { group }))
+      )
+    )
+  }
+
+  it('SGV-SI-1 有 seam、落定、详情合法 → 图片块拿到 shownImagesOfBlock(block)，ToolCallBlock 不调', () => {
+    const block = showImage()
+    renderWithMedia(single('img1', block))
+    expect(calls.ShownImagesBlock).toHaveLength(1)
+    expect(calls.ShownImagesBlock[0].items).toStrictEqual(shownImagesOfBlock(block))
+    // 说明按下标对应、去掉首尾空白；第二张没有说明
+    expect(calls.ShownImagesBlock[0].items).toStrictEqual([
+      { image: shot(`${HASH_A}.png`), caption: 'First' },
+      { image: shot(`${HASH_B}.png`) }
+    ])
+    expect(calls.ToolCallBlock).toHaveLength(0)
+    expect(stub('shown-images')!.getAttribute('data-size')).toBe('2')
+  })
+
+  it.each<[string, Partial<AssistantToolBlock>]>([
+    ['详情缺失', { details: undefined }],
+    [
+      '详情类型不对',
+      { details: { type: 'read', path: 'a.png' } as unknown as AssistantToolBlock['details'] }
+    ],
+    [
+      '每张都坏',
+      {
+        details: {
+          type: 'show_image',
+          images: [{ file: '../x.png' }, null, 'nope']
+        } as unknown as AssistantToolBlock['details']
+      }
+    ]
+  ])('SGV-SI-2 落定但%s → ToolCallBlock done，图片块不调', (_label, extra) => {
+    renderWithMedia(single('img1', showImage(extra)))
+    expect(calls.ShownImagesBlock).toHaveLength(0)
+    expect(calls.ToolCallBlock.map((p) => p.status)).toEqual(['done'])
+    expect(calls.ToolCallBlock[0].toolName).toBe('show_image')
+  })
+
+  it('SGV-SI-3 还在执行 → running；出错 → error；图片块桩都不调', () => {
+    renderWithMedia(single('img1', showImage({ result: undefined })))
+    renderWithMedia(
+      single('img1', showImage({ result: 'images[0].path: no such file', isError: true }))
+    )
+    expect(calls.ToolCallBlock.map((p) => p.status)).toEqual(['running', 'error'])
+    expect(calls.ShownImagesBlock).toHaveLength(0)
+  })
+
+  it('SGV-SI-4 重建的分组里块是同一个对象 → 图片块不重渲染', () => {
+    const block = showImage()
+    renderWithMedia(single('img1', block))
+    renderWithMedia(single('img1', block))
+    renderWithMedia({ ...single('img1', block) })
+    expect(calls.ShownImagesBlock).toHaveLength(1)
+
+    // 换成新块（内容一样）→ 重渲染
+    renderWithMedia(single('img1', showImage()))
+    expect(calls.ShownImagesBlock).toHaveLength(2)
+  })
+
+  it('SGV-SI-5 没有 MediaUrlProvider → 同一个合法的落定块照普通工具行（done），图片块不调', () => {
+    renderGroup(single('img1', showImage()))
+    expect(calls.ShownImagesBlock).toHaveLength(0)
+    expect(calls.ToolCallBlock.map((p) => p.status)).toEqual(['done'])
+    expect(stub('tool')!.textContent).toBe('show_image')
+  })
+
+  it('SGV-SI-6 seam 从无到有（同一个分组、同一个实例）→ 重渲染成图片块', () => {
+    const group = single('img1', showImage())
+    renderWithMedia(group, null)
+    expect(calls.ToolCallBlock.map((p) => p.status)).toEqual(['done'])
+    // 同一个值：比较器照样拦住
+    renderWithMedia(group, null)
+    expect(calls.ToolCallBlock).toHaveLength(1)
+
+    renderWithMedia(group, resolver)
+    expect(calls.ShownImagesBlock).toHaveLength(1)
+    expect(stub('shown-images')).not.toBeNull()
+    expect(stub('tool')).toBeNull()
+    expect(calls.ToolCallBlock).toHaveLength(1)
   })
 })

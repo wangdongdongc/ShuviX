@@ -46,6 +46,13 @@
  *         别的会话（成员、临时、引用别的项目）的设置不动
  *   BW-3  子会话、fork 抄引用与快照；项目删了之后的 fork / 子会话用快照；临时 bot 会话的子会话共用父会话的临时工作区
  *   BW-4  项目根里的哨兵文件经得起删 bot 会话、它的子会话与 fork（项目在或不在都一样）
+ *
+ * 摆给用户看的图的快照（`<userData>/shown/<id>/`，show_image；真的 utils/paths）随会话删除：
+ *   DEL-1 delete(S) 删 shown/S；shown/T 与 shown/ 本身都在
+ *   DEL-2 删 fork F 不动 shown/S
+ *   DEL-3 删父会话 P 级联：子会话 C 的 shown/C 也删掉
+ *   DEL-4 内存会话删掉时它的 shown/<id> 也删掉
+ *   DEL-5 rmSync 在 shown/ 底下抛错 → delete 照样 resolve、行没了、沙箱清理照样调到（同 FW-13）
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -170,6 +177,7 @@ import { getTempWorkspace, getTempWorkspaceBase } from '../../utils/paths'
 import { sessionRecords } from '../sessionRecords'
 import { sessionAcl } from '../acl'
 import { clearMemoryAclForTests } from '../acl/store'
+import { cleanupSession as cleanupSandboxSession } from '../sandbox'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -911,5 +919,77 @@ describe('BW-1..4 a bot session references its work project instead of belonging
     await sessionService.delete('F')
     expectKept(holder.projectRoot, 'project')
     expect(readFileSync(join(holder.projectRoot, 'README.md'), 'utf-8')).toBe('# project\n')
+  })
+})
+
+// ─── DEL-1..5：摆给用户看的图的快照随会话删除 ─────────────────
+
+describe('DEL-1..5 shown-image snapshots are removed with their session', () => {
+  const shownBase = (): string => join(holder.userData, 'shown')
+  const shownOf = (id: string): string => join(shownBase(), id)
+  const SHOWN = `${'a'.repeat(64)}.png`
+
+  /** 一条会话的快照目录里放一张图 */
+  function seedShown(id: string): string {
+    mkdirSync(shownOf(id), { recursive: true })
+    writeFileSync(join(shownOf(id), SHOWN), id)
+    return shownOf(id)
+  }
+
+  it('DEL-1 delete(S) removes shown/S; shown/T and the shown/ base survive', async () => {
+    const S = createTemp('S')
+    const T = createTemp('T')
+    seedShown(S)
+    seedShown(T)
+
+    await sessionService.delete(S)
+    expect(existsSync(shownOf(S))).toBe(false)
+    expect(readFileSync(join(shownOf(T), SHOWN), 'utf-8')).toBe(T)
+    expect(existsSync(shownBase())).toBe(true)
+  })
+
+  it('DEL-2 deleting a fork F leaves shown/S alone', async () => {
+    const S = createTemp('S')
+    forkOf(S, 'F')
+    seedShown(S)
+    seedShown('F')
+
+    await sessionService.delete('F')
+    expect(existsSync(shownOf('F'))).toBe(false)
+    expect(readFileSync(join(shownOf(S), SHOWN), 'utf-8')).toBe(S)
+  })
+
+  it("DEL-3 deleting a parent P cascades to child C's shown/C", async () => {
+    const P = createTemp('P')
+    const C = createTemp('C', { parentId: P })
+    seedShown(P)
+    seedShown(C)
+
+    await sessionService.delete(P)
+    expect(sessionRecords.findById(C)).toBeUndefined()
+    expect(existsSync(shownOf(P))).toBe(false)
+    expect(existsSync(shownOf(C))).toBe(false)
+  })
+
+  it('DEL-4 an ephemeral session’s shown/<id> is removed on delete', async () => {
+    const E = sessionService.create({ title: 'E' }, { id: 'E', ephemeral: true }).id
+    expect(sessionRecords.isEphemeral(E)).toBe(true)
+    seedShown(E)
+
+    await sessionService.delete(E)
+    expect(existsSync(shownOf(E))).toBe(false)
+  })
+
+  it('DEL-5 rmSync throwing under shown/ → delete still resolves, the row is gone, the sandbox cleanup still runs', async () => {
+    const S = createTemp('S')
+    const dir = seedShown(S)
+    vi.mocked(cleanupSandboxSession).mockClear()
+    holder.rmThrowsUnder = shownBase()
+
+    await expect(sessionService.delete(S)).resolves.toBeUndefined()
+    expect(sessionRecords.findById(S)).toBeUndefined()
+    // rmSync 真的被叫到并抛了：快照目录还在
+    expect(readFileSync(join(dir, SHOWN), 'utf-8')).toBe(S)
+    expect(vi.mocked(cleanupSandboxSession)).toHaveBeenCalledWith(S)
   })
 })

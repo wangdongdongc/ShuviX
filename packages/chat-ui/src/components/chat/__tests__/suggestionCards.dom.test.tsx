@@ -17,6 +17,22 @@
  *   C-9 放在 AssistantBubble 里：落定的提议画在卡片最底下、终答之后，不进步骤组（两侧的 read 并成一组，计数不含它）；
  *       还在执行 / 出错的 suggest 调用照普通工具块画，没有卡片
  *
+ * 带图的提议（docs/show-image-design.md §6）：快照在调用详情里（`details.images`，下标同参数），图经 mediaUrl seam 取
+ * （这些用例包 `MediaUrlProvider`）：
+ *
+ *   C-10 带图那条：文字右边的缩略图位 `[data-suggestion-thumb-slot]` 里有 `[data-suggestion-image]`，里面是
+ *        `figure[data-shown-image=<file>]`；位置在文字（标题、要发的话）之后、采纳按钮之前；没带图的、null / 坏项那一格
+ *        都没有图
+ *   C-11 点图：不采纳；`filePreviewRequest` = `'shown:' + (original ?? file)`；采纳按钮照样可点
+ *   C-12 以文字为主、每条一行（2026-11-01 用户裁决，取代并排）：卡片总是竖排（`space-y-1.5`，没有 grid / `@container`）；
+ *        一组里有图就**每行**都留一个固定大小的缩略图位（compact `h-16 w-24`，touch `h-14 w-20`），没图的那行空着；图在
+ *        位里铺满、`object-contain`、不带 aspect-ratio —— 图多大都不改变文字的排布；动作位定宽（`min-w-[4.5rem]`），
+ *        按钮 / 「已采纳」/ 空着时缩略图位都对得齐；没有一条带图（全是 null / 坏项）→ 没有缩略图位
+ *   C-13 没有详情 → 没有图、没有缩略图位、竖排（从前的样子）
+ *   C-14 采纳了：采纳的那张卡留着图；压淡的卡里也有图
+ *   C-15 宿主没注入 mediaUrl seam（Chrome 侧栏）：详情里有图也一张不画 —— 没有 `[data-suggestion-image]`、没有
+ *        缩略图位、没有 figure / img、竖排；标题、要发的话、采纳按钮照旧
+ *
  * 宿主经 `setChatApi` 注入（只给 suggestion 这一面）；包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；
  * i18n 走真 en 资源。文件是 .tsx 但不写 JSX，一律 createElement。
  */
@@ -33,7 +49,7 @@ import {
   type SuggestionAcceptParams,
   type SuggestionGroupState
 } from '@shuvix/chat-protocol/suggestions'
-import type { AssistantToolBlock } from '@shuvix/chat-protocol/types/chatMessage'
+import type { AssistantToolBlock, ShownImage } from '@shuvix/chat-protocol/types/chatMessage'
 
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
@@ -41,6 +57,9 @@ import { setChatApi } from '../../../api/chatApi'
 import { SuggestionCards, SuggestionContext } from '../SuggestionCards'
 import { AssistantBubble } from '../AssistantBubble'
 import { assistant, resetStore, text, toolBlock } from '../../../__tests__/support/views'
+import { MediaUrlProvider, type ResolveMediaUrl } from '../../../host/mediaUrl'
+import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
+import { useChatStore } from '../../../stores/chatStore'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -78,6 +97,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetStore(SID)
+  useChatStore.setState({ filePreviewRequest: null })
   accept = vi.fn(async () => ({ success: true }) as AcceptSuggestionResult)
   setChatApi({ suggestion: { accept } } as unknown as ChatApi)
   container = document.createElement('div')
@@ -398,5 +418,236 @@ describe('C-9 在助手卡片里的位置', () => {
     expect(container.querySelector('[data-suggestions]')).toBeNull()
     expect(buttons()).toHaveLength(0)
     expect(container.querySelector('[data-tool-name="suggest"]')).not.toBeNull()
+  })
+})
+
+// ─── C-10 … C-15：带图的提议 ────────────────────────────────
+
+describe('带图的提议（C-10 … C-15）', () => {
+  const HASH_A = 'a'.repeat(64)
+  const HASH_B = 'b'.repeat(64)
+  const HASH_C = 'c'.repeat(64)
+  const resolver: ResolveMediaUrl = ({ sessionId, path }) => ({
+    url: `test://${sessionId}/${path}`
+  })
+
+  const shot = (file: string, extra: Partial<ShownImage> = {}): ShownImage => ({
+    file,
+    source: `/w/mockups/${file}`,
+    mimeType: 'image/png',
+    width: 320,
+    height: 200,
+    bytes: 2048,
+    ...extra
+  })
+  const A = shot(`${HASH_A}.png`)
+  const B = shot(`${HASH_B}.png`, { original: `${HASH_C}.png` })
+  const C = shot(`${HASH_C}.jpg`, { mimeType: 'image/jpeg' })
+
+  interface ImageOptions {
+    state?: SuggestionGroupState
+    suggestions?: unknown
+    /** `undefined` = 调用没有详情 */
+    images?: unknown[]
+    media?: boolean
+    density?: ChatHostValue['density']
+  }
+
+  async function renderImageCards({
+    state = OPEN,
+    suggestions = ITEMS,
+    images,
+    media = true,
+    density
+  }: ImageOptions): Promise<void> {
+    const details =
+      images === undefined
+        ? undefined
+        : ({ type: 'suggest', images } as unknown as AssistantToolBlock['details'])
+    let tree: ReactNode = createElement(SuggestionCards, {
+      messageId: MSG,
+      block: suggestBlock(suggestions, details === undefined ? {} : { details })
+    })
+    tree = createElement(SuggestionContext.Provider, { value: provider(state) }, tree)
+    if (media) tree = createElement(MediaUrlProvider, { value: resolver }, tree)
+    if (density) {
+      tree = createElement(ChatHostContext.Provider, { value: { density } as ChatHostValue }, tree)
+    }
+    // 图的地址在 effect 里异步取：等它落定
+    await act(async () => {
+      root.render(tree)
+      await Promise.resolve()
+    })
+  }
+
+  const imageOf = (card: HTMLElement): HTMLElement | null =>
+    card.querySelector<HTMLElement>('[data-suggestion-image]')
+  const slotOf = (card: HTMLElement): HTMLElement | null =>
+    card.querySelector<HTMLElement>('[data-suggestion-thumb-slot]')
+  /** 卡片的直接容器 */
+  const list = (): HTMLElement => cards()[0]!.parentElement!
+  const classes = (el: HTMLElement): string[] => el.className.split(/\s+/).filter(Boolean)
+  /** 每条一行：卡片的容器是竖排，整组里没有 grid / 容器查询 */
+  const stacked = (): void => {
+    expect(classes(list())).toStrictEqual(['space-y-1.5'])
+    expect(container.querySelector('[data-suggestions] .grid')).toBeNull()
+    expect(container.querySelector('[data-suggestions] .\\@container')).toBeNull()
+  }
+  const isFollowing = (a: Node, b: Node): boolean =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+  it('C-10 带图那条：文字右边的缩略图位里有 [data-suggestion-image] + figure；没带图 / null / 坏项那一格都没有图', async () => {
+    await renderImageCards({
+      suggestions: [...ITEMS, { title: 'Fourth', message: 'fourth one' }],
+      images: [A, null, { file: 'not-a-snapshot.png', mimeType: 'image/png', source: '' }]
+    })
+    const [first, second, third, fourth] = cards()
+    const wrap = imageOf(first!)!
+    expect(wrap).not.toBeNull()
+    expect(slotOf(first!)!.contains(wrap)).toBe(true)
+    expect(wrap.querySelector(`figure[data-shown-image="${HASH_A}.png"]`)).not.toBeNull()
+    expect(wrap.querySelector('img')!.getAttribute('src')).toBe(`test://${SID}/shown:${HASH_A}.png`)
+    // 文字在前（标题、要发的话），缩略图位在后，采纳按钮最后
+    const title = [...first!.querySelectorAll('div')].find((el) => el.textContent === 'Add tests')!
+    const message = first!.querySelector('[data-suggestion-message]')!
+    const button = first!.querySelector('[data-suggestion-accept]')!
+    expect(isFollowing(title, slotOf(first!)!)).toBe(true)
+    expect(isFollowing(message, slotOf(first!)!)).toBe(true)
+    expect(isFollowing(slotOf(first!)!, button)).toBe(true)
+
+    for (const card of [second!, third!, fourth!]) {
+      expect(imageOf(card)).toBeNull()
+      expect(card.querySelector('figure')).toBeNull()
+    }
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+  })
+
+  it('C-11 点图：不采纳；开原图（有原图时）；采纳按钮照样可点', async () => {
+    await renderImageCards({ images: [A, B, C] })
+    const imageButton = imageOf(cards()[1]!)!.querySelector<HTMLButtonElement>('button')!
+    await click(imageButton)
+    expect(accept).not.toHaveBeenCalled()
+    expect(useChatStore.getState().filePreviewRequest).toStrictEqual({
+      absPath: `shown:${HASH_C}.png`,
+      nonce: 1,
+      openedBy: 'user'
+    })
+    await click(imageOf(cards()[0]!)!.querySelector<HTMLButtonElement>('button')!)
+    expect(useChatStore.getState().filePreviewRequest?.absPath).toBe(`shown:${HASH_A}.png`)
+    expect(accept).not.toHaveBeenCalled()
+    expect(buttons()).toHaveLength(3)
+    expect(buttons().every((b) => !b.disabled)).toBe(true)
+    expect(container.querySelector('[data-suggestion-state="open"]')).not.toBeNull()
+  })
+
+  describe('C-12 以文字为主、每条一行、固定缩略图位', () => {
+    it('C-12 都带图 → 仍然竖排；每行一个 h-16 w-24 的缩略图位', async () => {
+      await renderImageCards({ images: [A, B, C] })
+      stacked()
+      for (const card of cards()) {
+        expect(classes(slotOf(card)!)).toEqual(
+          expect.arrayContaining(['h-16', 'w-24', 'flex-shrink-0'])
+        )
+        expect(imageOf(card)).not.toBeNull()
+      }
+    })
+
+    it('C-12 有一条没图 → 那一行也留着同样大小的空位（逐行对齐）', async () => {
+      await renderImageCards({ images: [A, null, C] })
+      stacked()
+      const slots = cards().map((c) => slotOf(c))
+      expect(slots.every((slot) => slot !== null)).toBe(true)
+      expect(slots.map((slot) => classes(slot!).filter((c) => /^[hw]-/.test(c)))).toStrictEqual([
+        ['h-16', 'w-24'],
+        ['h-16', 'w-24'],
+        ['h-16', 'w-24']
+      ])
+      expect(slots[1]!.childElementCount).toBe(0)
+      expect(cards().filter((c) => imageOf(c) !== null)).toHaveLength(2)
+    })
+
+    it('C-12 图铺满缩略图位、object-contain、没有 aspect-ratio：图多大都不改变文字的排布', async () => {
+      const huge = shot(`${HASH_A}.png`, { width: 4000, height: 300 })
+      await renderImageCards({ images: [huge, B, C] })
+      const img = imageOf(cards()[0]!)!.querySelector('img')!
+      expect(classes(img)).toEqual(expect.arrayContaining(['h-full', 'w-full', 'object-contain']))
+      expect(img.style.aspectRatio).toBe('')
+      const figure = imageOf(cards()[0]!)!.querySelector('figure')!
+      expect(classes(figure)).toEqual(expect.arrayContaining(['h-16', 'w-24']))
+    })
+
+    it('C-12 动作位定宽：开着、已采纳、关着都一样（缩略图位才对得齐）', async () => {
+      for (const state of [OPEN, { status: 'accepted', index: 0 }, { status: 'closed' }] as const) {
+        await renderImageCards({ state, images: [A, B, C] })
+        for (const card of cards()) {
+          const action = slotOf(card)!.nextElementSibling as HTMLElement
+          expect(classes(action)).toEqual(
+            expect.arrayContaining(['min-w-[4.5rem]', 'flex-shrink-0'])
+          )
+        }
+      }
+    })
+
+    it('C-12 touch 密度 → 竖排，缩略图位 h-14 w-20', async () => {
+      await renderImageCards({ suggestions: ITEMS.slice(0, 2), images: [A, B], density: 'touch' })
+      stacked()
+      for (const card of cards()) {
+        expect(classes(slotOf(card)!)).toEqual(expect.arrayContaining(['h-14', 'w-20']))
+        expect(imageOf(card)).not.toBeNull()
+      }
+    })
+
+    it('C-12 只有一条提议 → 竖排，有缩略图位', async () => {
+      await renderImageCards({ suggestions: [ITEMS[0]], images: [A] })
+      expect(cards()).toHaveLength(1)
+      stacked()
+      expect(imageOf(cards()[0]!)).not.toBeNull()
+    })
+
+    it('C-12 一条图都没有（null / 坏项）→ 没有缩略图位', async () => {
+      await renderImageCards({
+        images: [null, { file: 'not-a-snapshot.png', mimeType: 'image/png', source: '' }]
+      })
+      stacked()
+      expect(container.querySelector('[data-suggestion-thumb-slot]')).toBeNull()
+    })
+  })
+
+  it('C-13 没有详情 → 没有图、没有缩略图位、竖排（从前的样子）', async () => {
+    await renderImageCards({ images: undefined })
+    expect(cards()).toHaveLength(3)
+    expect(container.querySelector('[data-suggestion-image]')).toBeNull()
+    expect(container.querySelector('[data-suggestion-thumb-slot]')).toBeNull()
+    expect(container.querySelector('img')).toBeNull()
+    stacked()
+  })
+
+  it('C-14 采纳了：采纳的那张卡留着图，压淡的卡里也有图', async () => {
+    await renderImageCards({ state: { status: 'accepted', index: 1 }, images: [A, B, C] })
+    const [first, second, third] = cards()
+    expect(second!.hasAttribute('data-suggestion-accepted')).toBe(true)
+    expect(
+      imageOf(second!)!.querySelector(`figure[data-shown-image="${HASH_B}.png"]`)
+    ).not.toBeNull()
+    for (const card of [first!, third!]) {
+      expect(dimmed(card)).toBe(true)
+      expect(imageOf(card)!.querySelector('img')).not.toBeNull()
+    }
+    expect(buttons()).toHaveLength(0)
+  })
+
+  it('C-15 没有 mediaUrl seam：一张图都不画、没有缩略图位、竖排；标题 / 要发的话 / 采纳按钮照旧', async () => {
+    await renderImageCards({ suggestions: ITEMS.slice(0, 2), images: [A, B], media: false })
+    expect(cards()).toHaveLength(2)
+    expect(container.querySelector('[data-suggestion-image]')).toBeNull()
+    expect(container.querySelector('[data-suggestion-thumb-slot]')).toBeNull()
+    expect(container.querySelector('figure[data-shown-image]')).toBeNull()
+    expect(container.querySelector('img')).toBeNull()
+    stacked()
+    expect(cards()[0]!.textContent).toContain('Add tests')
+    expect(cards()[1]!.textContent).toContain('Update docs')
+    expect(messages()).toStrictEqual(ITEMS.slice(0, 2).map((i) => i.message))
+    expect(buttons()).toHaveLength(2)
+    expect(buttons().every((b) => !b.disabled)).toBe(true)
   })
 })

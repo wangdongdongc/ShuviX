@@ -33,6 +33,8 @@ import {
   Archive,
   Lightbulb,
   ListChecks,
+  Image,
+  Bot,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -92,7 +94,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Eye,
   Archive,
   Lightbulb,
-  ListChecks
+  ListChecks,
+  Image,
+  Bot
 }
 
 /** 根据图标名查找 lucide 组件，找不到时返回 Wrench */
