@@ -219,6 +219,10 @@ export interface ReadToolDetails {
   format?: string
   converted?: boolean
   truncated: boolean
+  /** 文本读取采用的编码（普通文本分支的可选元数据） */
+  encoding?: string
+  /** 输出中是否把不允许的控制字符转义成了字面 \0 / \xHH */
+  escapedControlChars?: boolean
   /** URL 来源标识（仅 URL 抓取时存在） */
   url?: string
   /** 完整输出是否已持久化到磁盘 */

@@ -91,7 +91,12 @@ export {
 export { toBuiltinToolDefinitions, type ToolDefinitionEntry } from './tools/toolDefinitions'
 // 文件工具共享内核（端口注入 File API；桌面 Node fs / 扩展 FSA）
 export type { FileSystemPort, FileStat, DirEntry, FileGuards, WriteAskHook } from './fileTools/port'
-export { readTextContent, readDirContent, type ReadTextParams } from './fileTools/read'
+export {
+  readTextContent,
+  readDirContent,
+  type ReadTextParams,
+  type ReadTextContentOptions
+} from './fileTools/read'
 export { applyWrite, type WriteParams } from './fileTools/write'
 export { applyEdit, type EditParams } from './fileTools/edit'
 export { buildTree } from './fileTools/ls'
@@ -347,6 +352,7 @@ export {
   type FileToolDeps,
   type FileToolSuite,
   type ReadDecoders,
+  type ReadTextDetection,
   type WriteFileContentArgs
 } from './tools/fileToolSuite'
 // edit 内部的纯函数（行尾/BOM/diff、多级回退匹配链）—— 供桌面/扩展直接复用与单测

@@ -20,7 +20,7 @@ import { getToolResultsDir } from '../utils/paths'
 import {
   KNOWN_BINARY_EXTENSIONS,
   IMAGE_MIME_BY_EXT,
-  isBinaryFile
+  detectTextFile
 } from '../utils/toolUtils/binaryDetect'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { makeDesktopFileToolDeps } from './fileToolDeps'
@@ -437,7 +437,7 @@ const makeReadDecoders = (ctx: ToolContext): ReadDecoders => ({
   readRich: readRichFile,
   readLegacyDoc,
   knownBinaryExtensions: KNOWN_BINARY_EXTENSIONS,
-  isBinary: isBinaryFile,
+  detectText: detectTextFile,
   suggestSimilar: suggestSimilarFiles
 })
 

@@ -199,6 +199,24 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 const detailsOf = (result: { details?: unknown }): ReadToolDetails =>
   result.details as ReadToolDetails
 
+/** 去掉 File/Showing 头部与 End/Showing 尾部，只留带行号的正文 */
+function numberedBody(text: string): string {
+  return text.slice(text.indexOf('\n\n') + 2, text.lastIndexOf('\n\n('))
+}
+
+function expectedNumberedBody(lines: string[], offset = 1, totalLines = lines.length): string {
+  const padWidth = String(totalLines).length
+  return lines
+    .map((line, index) => `${String(offset + index).padStart(padWidth, ' ')}│${line}`)
+    .join('\n')
+}
+
+function expectNoMixedTextNotice(text: string): void {
+  expect(text).not.toContain('mixed text')
+  expect(text).not.toContain('control characters escaped')
+  expect(text).not.toContain('invalid sequences replaced')
+}
+
 /** 交给模型的那个图片块（base64 + mimeType）；没有则 undefined */
 function textContent(result: { content: Array<{ type: string }> }): string {
   const item = result.content.find((c) => c.type === 'text') as { text: string } | undefined
@@ -405,6 +423,346 @@ describe('read 工具 - 纯文本文件', () => {
     const result = await executeTool(tool, 'tc3', { path: join(TEST_DIR, 'empty.txt') })
     expect(getText(result)).toBeDefined()
     expect((result.details as { totalLines: number }).totalLines).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('read 工具 - 文本编码与混合内容', () => {
+  const plainLines = ['ASCII plain text', '中文与 emoji：你好 😀']
+  const legacyCases = [
+    {
+      name: 'gbk.out',
+      encoding: 'GBK',
+      // "GBK中文：你好，世界！\n第二行：文件读取测试。"；独立编码后写死，不用被测 iconv 造夹具
+      hex: '47424bd6d0cec4a3bac4e3bac3a3accac0bde7a3a10ab5dab6fed0d0a3bacec4bcfeb6c1c8a1b2e2cad4a1a3',
+      lines: ['GBK中文：你好，世界！', '第二行：文件读取测试。']
+    },
+    {
+      name: 'gb18030.out',
+      encoding: 'GB18030',
+      // 含 U+2000B 的四字节序列 95 32 83 37
+      hex: '47423138303330babad7d6a3ba95328337a3accbc4d7d6bddad7d6b7fba1a30ab5dab6fed0d0a3bad7bcc8b7bbb9d4ada1a3',
+      lines: ['GB18030汉字：𠀋，四字节字符。', '第二行：准确还原。']
+    },
+    {
+      name: 'shift-jis.out',
+      encoding: 'Shift_JIS',
+      hex: '93fa967b8cea82cc8365834c83588367814682b182f182c982bf82cd90a28a4581490a93f18d7396da814690b38a6d82c993c782dd82dc82b78142',
+      lines: ['日本語のテキスト：こんにちは世界！', '二行目：正確に読みます。']
+    }
+  ] as const
+  const pagedLines = ['第一行中文', '第二行你好', '第三行世界', '第四行完成']
+  const largeLines = Array.from(
+    { length: 2500 },
+    (_, index) => `第${index + 1}行：多字节中文内容🙂`
+  )
+  let readId = 0
+
+  const writeFixture = (name: string, content: string | Buffer): void => {
+    writeFileSync(join(TEST_DIR, name), content)
+  }
+  const readFixture = async (
+    name: string,
+    params: { offset?: number; limit?: number } = {}
+  ): Promise<InvokedToolResult> =>
+    executeTool(makeReadTool(ctx), `tc-text-${readId++}`, {
+      path: join(TEST_DIR, name),
+      ...params
+    })
+  const utf16Bytes = (text: string, endian: 'LE' | 'BE', bom: boolean): Buffer => {
+    const body = Buffer.from(text, 'utf16le')
+    if (endian === 'BE') body.swap16()
+    const marker = endian === 'LE' ? [0xff, 0xfe] : [0xfe, 0xff]
+    return bom ? Buffer.concat([Buffer.from(marker), body]) : body
+  }
+
+  beforeAll(() => {
+    writeFixture('plain.out', plainLines.join('\n'))
+    for (const endian of ['LE', 'BE'] as const) {
+      for (const bom of [true, false]) {
+        writeFixture(
+          `utf16${endian.toLowerCase()}-${bom ? 'bom' : 'no-bom'}.out`,
+          utf16Bytes('第一行 ASCII\n第二行中文 😀\n第三行结束', endian, bom)
+        )
+      }
+      writeFixture(
+        `paged-utf16${endian.toLowerCase()}.out`,
+        utf16Bytes(pagedLines.join('\n'), endian, false)
+      )
+    }
+    for (const fixture of legacyCases) writeFixture(fixture.name, Buffer.from(fixture.hex, 'hex'))
+    writeFixture(
+      'paged-gbk.out',
+      Buffer.from(
+        'b5dad2bbd0d0d6d0cec40ab5dab6fed0d0c4e3bac30ab5dac8fdd0d0cac0bde70ab5dacbc4d0d0cdeab3c9',
+        'hex'
+      )
+    )
+    writeFixture('large-utf16.out', utf16Bytes(largeLines.join('\n'), 'LE', true))
+    writeFixture('long-non-ascii.out', `${'界'.repeat(2100)}\nshort`)
+    writeFixture('mixed-paging.out', `zero\0\none\x01\nclean-${'x'.repeat(80)}\nlast`)
+    writeFixture('tabs-newlines.out', 'A\tB\r\nC\rD\n')
+    writeFixture(
+      'invalid-utf8.out',
+      Buffer.concat([
+        Buffer.from(`VALID-BEFORE-${'x'.repeat(80)}\n`),
+        Buffer.from([0xff]),
+        Buffer.from('\nVALID-AFTER')
+      ])
+    )
+    writeFixture(
+      'dense.out',
+      Buffer.from(Array.from({ length: 256 }, (_, i) => (i % 3 === 0 ? 0 : i & 0xff)))
+    )
+    writeFixture('zeros.out', Buffer.alloc(256))
+    writeFixture('controls.out', Buffer.from(Array.from({ length: 256 }, (_, i) => (i % 4) + 1)))
+  })
+
+  it('RD-ENC-01 plain.out 的 ASCII、中文与 emoji 精确可读且无异常提示', async () => {
+    const result = await readFixture('plain.out')
+    const text = getText(result)
+
+    expect(numberedBody(text)).toBe(expectedNumberedBody(plainLines))
+    expect(detailsOf(result).totalLines).toBe(2)
+    expect(detailsOf(result).encoding).toBe('UTF-8')
+    expect(detailsOf(result).escapedControlChars).toBeUndefined()
+    expectNoMixedTextNotice(text)
+    expect(text).not.toContain('\uFFFD')
+  })
+
+  it.each([
+    ['UTF-16LE', true],
+    ['UTF-16LE', false],
+    ['UTF-16BE', true],
+    ['UTF-16BE', false]
+  ] as const)(
+    'RD-ENC-02 %s（BOM=%s）精确解码，无 NUL 转义、替换字符或 BOM 泄漏',
+    async (encoding, bom) => {
+      const name = `utf16${encoding.slice(-2).toLowerCase()}-${bom ? 'bom' : 'no-bom'}.out`
+      const result = await readFixture(name)
+      const text = getText(result)
+      const lines = ['第一行 ASCII', '第二行中文 😀', '第三行结束']
+
+      expect(numberedBody(text)).toBe(expectedNumberedBody(lines))
+      expect(detailsOf(result).encoding).toBe(encoding)
+      expect(detailsOf(result).totalLines).toBe(3)
+      expect(detailsOf(result).escapedControlChars).toBeUndefined()
+      expect(text).not.toContain('\0')
+      expect(text).not.toContain('\\0')
+      expect(text).not.toContain('\\x00')
+      expect(text).not.toContain('\uFFFD')
+      expect(text).not.toContain('\uFEFF')
+      expectNoMixedTextNotice(text)
+    }
+  )
+
+  it.each(legacyCases)(
+    'RD-ENC-03 $encoding 固定字节 fixture 精确还原且无混合文本提示',
+    async (fixture) => {
+      const result = await readFixture(fixture.name)
+      const text = getText(result)
+
+      expect(numberedBody(text)).toBe(expectedNumberedBody([...fixture.lines]))
+      expect(detailsOf(result).totalLines).toBe(2)
+      expect(detailsOf(result).encoding).toBeDefined()
+      expect(detailsOf(result).escapedControlChars).toBeUndefined()
+      expect(text).not.toContain('\uFFFD')
+      expectNoMixedTextNotice(text)
+    }
+  )
+
+  it.each([
+    ['ascii-short.out', 'x'],
+    ['chinese-short.out', '好'],
+    ['emoji-short.out', '😀'],
+    ['combined-short.out', 'A好😀']
+  ])('RD-ENC-04 短 UTF-8 %s 不误判为其他编码', async (name, content) => {
+    writeFixture(name, content)
+    const result = await readFixture(name)
+    const text = getText(result)
+
+    expect(numberedBody(text)).toBe(expectedNumberedBody([content]))
+    expect(detailsOf(result).encoding).toBe('UTF-8')
+    expectNoMixedTextNotice(text)
+    expect(text).not.toContain('\uFFFD')
+  })
+
+  const sparseControlCases = [0x00, 0x01].flatMap((control) => {
+    const escaped = control === 0 ? '\\0' : '\\x01'
+    return [
+      {
+        position: '文件开头',
+        name: `sparse-${control}-start.out`,
+        bytes: Buffer.concat([
+          Buffer.from([control]),
+          Buffer.from(`AFTER-START-${'x'.repeat(80)}\nTAIL`)
+        ]),
+        lines: [`${escaped}AFTER-START-${'x'.repeat(80)}`, 'TAIL']
+      },
+      {
+        position: '8KiB 边界附近',
+        name: `sparse-${control}-8k.out`,
+        bytes: Buffer.concat([
+          Buffer.from(`${'A'.repeat(8180)}\nLEFT-8K-`),
+          Buffer.from([control]),
+          Buffer.from('-RIGHT-8K\nTAIL')
+        ]),
+        lines: null
+      },
+      {
+        position: 'EOF',
+        name: `sparse-${control}-eof.out`,
+        bytes: Buffer.concat([
+          Buffer.from(`HEAD\nBEFORE-EOF-${'x'.repeat(80)}`),
+          Buffer.from([control])
+        ]),
+        lines: ['HEAD', `BEFORE-EOF-${'x'.repeat(80)}${escaped}`]
+      }
+    ]
+  })
+
+  it.each(sparseControlCases)(
+    'RD-ENC-05 $position 的单个控制字节可转义读取且只提示一次（$name）',
+    async (fixture) => {
+      writeFixture(fixture.name, fixture.bytes)
+      const result = await readFixture(fixture.name)
+      const text = getText(result)
+      const control = fixture.name.includes('-0-') ? 0 : 1
+      const escaped = control === 0 ? '\\0' : '\\x01'
+
+      if (fixture.lines) {
+        expect(numberedBody(text)).toBe(expectedNumberedBody(fixture.lines))
+      } else {
+        expect(text).toContain(`2│LEFT-8K-${escaped}-RIGHT-8K`)
+        expect(text).toContain('3│TAIL')
+        expect(detailsOf(result).totalLines).toBe(3)
+      }
+      expect(text).not.toContain(String.fromCharCode(control))
+      expect(text.match(/mixed text/g)).toHaveLength(1)
+      expect(text.match(/control characters escaped/g)).toHaveLength(1)
+      expect(detailsOf(result).escapedControlChars).toBe(true)
+    }
+  )
+
+  it('RD-ENC-06 少量非法 UTF-8 仍保留合法上下文并给出一次提示', async () => {
+    const result = await readFixture('invalid-utf8.out')
+    const text = getText(result)
+
+    expect(result.isError).not.toBe(true)
+    expect(text).toContain('1│VALID-BEFORE')
+    expect(text).toContain('3│VALID-AFTER')
+    expect(detailsOf(result).totalLines).toBe(3)
+    expect(text.match(/mixed text/g)).toHaveLength(1)
+    expect(text).toContain('invalid sequences replaced with U+FFFD')
+  })
+
+  it.each(['dense.out', 'zeros.out', 'controls.out'])(
+    'RD-ENC-07 高密度二进制 %s 仍拒绝读取',
+    async (name) => {
+      const failure = await failureText(readFixture(name))
+      expect(failure).toContain('Unsupported format')
+    }
+  )
+
+  it('RD-ENC-08a tab、CRLF 与 CR 保持原有分行及原文字义', async () => {
+    const result = await readFixture('tabs-newlines.out')
+    const text = getText(result)
+
+    expect(numberedBody(text)).toBe(expectedNumberedBody(['A\tB', 'C', 'D']))
+    expect(detailsOf(result).totalLines).toBe(3)
+    expectNoMixedTextNotice(text)
+  })
+
+  it('RD-ENC-08b ANSI ESC 序列保留原文，不转义也不单独触发混合文本提示', async () => {
+    const ansiLine = `before \u001B[31mred\u001B[0m after ${'padding '.repeat(20)}`
+    writeFixture('ansi.out', ansiLine)
+    const result = await readFixture('ansi.out')
+    const text = getText(result)
+
+    expect(numberedBody(text)).toBe(expectedNumberedBody([ansiLine]))
+    expect(text).toContain('\u001B[31m')
+    expect(text).toContain('\u001B[0m')
+    expect(text).not.toContain('\\x1b')
+    expectNoMixedTextNotice(text)
+    expect(detailsOf(result).escapedControlChars).toBeUndefined()
+  })
+
+  it.each(['paged-utf16le.out', 'paged-utf16be.out', 'paged-gbk.out'])(
+    'RD-ENC-09a %s 的 offset/limit 与 totalLines 正确',
+    async (name) => {
+      const result = await readFixture(name, { offset: 2, limit: 2 })
+      const text = getText(result)
+
+      expect(numberedBody(text)).toBe(expectedNumberedBody(pagedLines.slice(1, 3), 2, 4))
+      expect(detailsOf(result).totalLines).toBe(4)
+      expect(detailsOf(result).truncated).toBe(true)
+      expect(text).toContain('Showing: lines 2-3')
+      expect(text).toContain('Use offset=4 to continue')
+      expect(text).not.toContain('\uFFFD')
+    }
+  )
+
+  it('RD-ENC-09b 多字节大文件按输出字节截断后可从准确行号续读', async () => {
+    const first = await readFixture('large-utf16.out')
+    const firstText = getText(first)
+    const nextOffset = Number(firstText.match(/Use offset=(\d+) to continue/)?.[1])
+
+    expect(detailsOf(first).truncated).toBe(true)
+    expect(firstText).toContain('Output capped at 50.0KB')
+    expect(Number.isInteger(nextOffset)).toBe(true)
+    expect(nextOffset).toBeGreaterThan(1)
+    expect(nextOffset).toBeLessThan(largeLines.length)
+    expect(firstText).not.toContain('\uFFFD')
+
+    const second = await readFixture('large-utf16.out', { offset: nextOffset, limit: 3 })
+    expect(numberedBody(getText(second))).toBe(
+      expectedNumberedBody(
+        largeLines.slice(nextOffset - 1, nextOffset + 2),
+        nextOffset,
+        largeLines.length
+      )
+    )
+    expect(detailsOf(second).totalLines).toBe(largeLines.length)
+    expect(getText(second)).not.toContain('\uFFFD')
+  })
+
+  it('RD-ENC-10a 非 ASCII 超长单行仍按 2000 字符截断', async () => {
+    const result = await readFixture('long-non-ascii.out')
+    const text = getText(result)
+
+    expect(numberedBody(text)).toBe(
+      expectedNumberedBody([`${'界'.repeat(2000)}... (line truncated to 2000 chars)`, 'short'])
+    )
+    expect(text).not.toContain('界界超出')
+    expect(text).not.toContain('\uFFFD')
+  })
+
+  it('RD-ENC-10b 混合异常转义不破坏 offset/limit 与 totalLines', async () => {
+    const result = await readFixture('mixed-paging.out', { offset: 2, limit: 2 })
+    const text = getText(result)
+
+    expect(numberedBody(text)).toBe(
+      expectedNumberedBody(['one\\x01', `clean-${'x'.repeat(80)}`], 2, 4)
+    )
+    expect(detailsOf(result).totalLines).toBe(4)
+    expect(detailsOf(result).truncated).toBe(true)
+    expect(text.match(/mixed text/g)).toHaveLength(1)
+  })
+
+  it('RD-ENC-11 不同编码并发读取不串解码或转义状态', async () => {
+    const names = ['plain.out', 'utf16le-bom.out', 'gbk.out', 'gb18030.out', 'shift-jis.out']
+    const results = await Promise.all(names.map((name) => readFixture(name)))
+    const expected = [
+      plainLines,
+      ['第一行 ASCII', '第二行中文 😀', '第三行结束'],
+      ...legacyCases.map((fixture) => [...fixture.lines])
+    ]
+
+    for (const [index, result] of results.entries()) {
+      const text = getText(result)
+      expect(numberedBody(text)).toBe(expectedNumberedBody(expected[index]))
+      expect(text).not.toContain('\uFFFD')
+      expectNoMixedTextNotice(text)
+    }
   })
 })
 

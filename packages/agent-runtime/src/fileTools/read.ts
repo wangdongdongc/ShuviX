@@ -20,6 +20,15 @@ export interface ReadTextParams {
   limit?: number
 }
 
+/** 宿主可选提供的已解码文本源与展示元数据；缺省仍是 port 的 UTF-8 行流 */
+export interface ReadTextContentOptions {
+  lines?: AsyncIterable<string>
+  encoding?: string
+  escapedControlChars?: boolean
+  /** 追加在 File 头后的简洁说明（编码 / 混合文本修复） */
+  headerNote?: string
+}
+
 /**
  * 纯文本：按行流式读取（行号、分页、单行截断、字节上限）。
  * readPath 交给 port 解释；displayPath（params.path）用于输出文案。
@@ -28,7 +37,8 @@ export async function readTextContent(
   port: FileSystemPort,
   readPath: string,
   params: ReadTextParams,
-  fileSize: number
+  fileSize: number,
+  options?: ReadTextContentOptions
 ): Promise<ReadResult> {
   const limit = params.limit ?? DEFAULT_MAX_LINES
   const offset = params.offset ?? 1
@@ -39,7 +49,7 @@ export async function readTextContent(
   let truncatedByBytes = false
   let hasMoreLines = false
 
-  for await (const text of port.readTextLines(readPath)) {
+  for await (const text of options?.lines ?? port.readTextLines(readPath)) {
     lines += 1
     if (lines <= start) continue
 
@@ -84,7 +94,9 @@ export async function readTextContent(
     text += `\n\n(End of file - total ${totalLines} lines)`
   }
 
-  const header = `File: ${params.path} (${totalLines} lines, ${formatSize(fileSize)})`
+  const header =
+    `File: ${params.path} (${totalLines} lines, ${formatSize(fileSize)})` +
+    (options?.headerNote ? ` — ${options.headerNote}` : '')
   if (params.offset || params.limit) {
     text = `${header}\nShowing: lines ${offset}-${lastReadLine}\n\n${text}`
   } else {
@@ -93,7 +105,14 @@ export async function readTextContent(
 
   return {
     content: [{ type: 'text' as const, text }],
-    details: { type: 'read', totalLines, fileSize, truncated }
+    details: {
+      type: 'read',
+      totalLines,
+      fileSize,
+      truncated,
+      ...(options?.encoding ? { encoding: options.encoding } : {}),
+      ...(options?.escapedControlChars ? { escapedControlChars: true } : {})
+    }
   }
 }
 

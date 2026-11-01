@@ -77,6 +77,20 @@ function withNote<T>(res: ToolResult<T>, note: string | null): ToolResult<T> {
 }
 
 /**
+ * 宿主文本嗅探结果。text 携带一次性读取所需的解码行流工厂与元数据；
+ * 共享内核仍负责行号、分页和截断，宿主不得复制那套逻辑。
+ */
+export type ReadTextDetection =
+  | { kind: 'binary' }
+  | {
+      kind: 'text'
+      encoding: string
+      readLines: () => AsyncIterable<string>
+      escapedControlChars?: boolean
+      headerNote?: string
+    }
+
+/**
  * 内容解码器(可选能力函数)—— read 的非纯文本分支由各端注入实现。
  * 桌面:markitdown(rich) / nativeImage(image) / word-extractor(.doc) / markitdown(url)。
  * 扩展:turndown(url) / Canvas(image);rich/.doc 缺省(不支持)。
@@ -107,7 +121,9 @@ export interface ReadDecoders {
   ): Promise<ReadResult>
   /** 已知二进制扩展名(直接拒绝) */
   knownBinaryExtensions?: Set<string>
-  /** 内容嗅探是否二进制 */
+  /** 有限采样后给出解码读取计划；实现此能力时取代 isBinary + 默认 UTF-8 路径 */
+  detectText?(portPath: string, fileSize: number): Promise<ReadTextDetection>
+  /** 旧式内容嗅探是否二进制；未实现 detectText 的宿主继续使用 */
   isBinary?(portPath: string, fileSize: number): Promise<boolean> | boolean
   /** 文件不存在时的相似路径建议(桌面 fuzzy 匹配;扩展缺省) */
   suggestSimilar?(portPath: string): string[]
@@ -442,6 +458,23 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
       // 已知二进制 → 拒绝
       if (dec?.knownBinaryExtensions?.has(ext)) {
         throw new Error(`Unsupported format (${ext}): ${params.path}${UNSUPPORTED_SUFFIX}`)
+      }
+      // 新能力：宿主给出编码与解码行流；旧宿主保持 isBinary + UTF-8 行为
+      if (dec?.detectText) {
+        const detected = await dec.detectText(portPath, st.size)
+        if (detected.kind === 'binary') {
+          throw new Error(
+            `Unsupported format (${ext || 'binary'}): ${params.path}${UNSUPPORTED_SUFFIX}`
+          )
+        }
+        const result = await readTextContent(port, portPath, params, st.size, {
+          lines: detected.readLines(),
+          encoding: detected.encoding,
+          escapedControlChars: detected.escapedControlChars,
+          headerNote: detected.headerNote
+        })
+        guards.recordRead(portPath)
+        return result
       }
       // 内容嗅探二进制 → 拒绝
       if (dec?.isBinary && (await dec.isBinary(portPath, st.size))) {
