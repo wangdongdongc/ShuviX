@@ -10,6 +10,7 @@ import { networkMediaUrl } from '../../../shared/networkRoutes'
 import { createWsConnection, type WsConnection } from './wsConnection'
 import { createWebApi, webDesktopOnlyChannels, webLocalHandlers } from './webApi'
 import { notifyDesktopOnly } from './webNotices'
+import { settleFirstPaintBackground } from './firstPaintBackground'
 
 const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 // 本地实现里有几条要先问服务端（「在文件管理器中打开」的路径）：经同一条连接，连接建好之后才会被调到
@@ -35,6 +36,7 @@ window.api = createWebApi(connection)
 async function start(): Promise<void> {
   await import('../i18n')
   await import('../assets/main.css')
+  settleFirstPaintBackground()
   // 自己拼 shuvix-media:// 的地方（TTS 播放、语音试听）在浏览器里改走网络服务的 /files/media（phase D）
   const { setMediaFileUrlBuilder } = await import('@shuvix/chat-ui')
   setMediaFileUrlBuilder(networkMediaUrl)

@@ -29,7 +29,7 @@ import type { ClientContext, NetworkClientRef } from '../../ipc/registry'
 import type { NetworkDispatcher } from './dispatch'
 import { displayPeerAddress, isAllowedHost, isAllowedOrigin, isPrivatePeerAddress } from './guards'
 import type { NetworkLinkHub } from './networkLinks'
-import { mimeTypeOf, resolveStaticRequest } from './staticFiles'
+import { mimeTypeOf, resolveStaticRequest, staticCacheControl } from './staticFiles'
 import { fileRouteOf, serveFileRoute, type FileRouteDeps } from './fileRoutes'
 import { proxyWidgetRequest, type WidgetProxyDeps } from './widgetProxy'
 import { NETWORK_WIDGET_PREFIX } from '../../../shared/networkRoutes'
@@ -207,7 +207,8 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
   let upgrading = 0
 
   function serveStatic(req: IncomingMessage, res: ServerResponse): void {
-    const resolution = resolveStaticRequest(req.method, req.url, deps.rendererDir())
+    const rendererDir = deps.rendererDir()
+    const resolution = resolveStaticRequest(req.method, req.url, rendererDir)
     switch (resolution.kind) {
       case 'method-not-allowed':
         res.setHeader('Allow', 'GET, HEAD')
@@ -238,7 +239,7 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
     res.writeHead(200, {
       'Content-Type': mimeTypeOf(resolution.path),
       'Content-Length': size,
-      'Cache-Control': 'no-cache',
+      'Cache-Control': staticCacheControl(resolution.path, rendererDir),
       'X-Content-Type-Options': 'nosniff'
     })
     if (req.method === 'HEAD') {

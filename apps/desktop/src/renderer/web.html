@@ -18,7 +18,8 @@
       content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self'; connect-src 'self' ws: wss: https:; frame-src 'self';"
     />
     <script>
-      // 在 CSS 加载前同步设置主题，避免闪烁
+      // 在 CSS 加载前同步设置主题，避免闪烁。样式要等入口脚本跑起来才动态加载，那之前是浏览器的缺省底色（亮色就是白）
+      // —— 先垫上明暗与上次记下的这个主题的底色，样式到了再撤掉（src/web/firstPaintBackground.ts）
       ;(function () {
         var mode = localStorage.getItem('theme') || 'dark'
         if (mode === 'system') {
@@ -28,7 +29,11 @@
           mode === 'light'
             ? localStorage.getItem('lightTheme') || 'github-light'
             : localStorage.getItem('darkTheme') || 'github-dark'
-        document.documentElement.setAttribute('data-theme', themeId)
+        var root = document.documentElement
+        root.setAttribute('data-theme', themeId)
+        root.style.colorScheme = mode === 'light' ? 'light' : 'dark'
+        var bg = localStorage.getItem('themeBg:' + themeId)
+        if (bg) root.style.backgroundColor = bg
       })()
     </script>
   </head>

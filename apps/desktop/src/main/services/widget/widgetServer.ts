@@ -65,6 +65,7 @@ import {
   WIDGET_FILES_SEGMENT,
   WIDGET_LIST_ROUTE
 } from '../../../shared/widgetRoutes'
+import { widgetReadyNowScript, widgetReadyScript } from '../../../shared/widgetReady'
 
 const log = createLogger('WidgetServer')
 
@@ -101,6 +102,7 @@ interface WidgetEntry {
 /**
  * 页面骨架。主题脚本排在最前（首帧之前设好 `data-theme`），令牌在 Tailwind 运行时之前，语义色名紧跟运行时；
  * 底色与字色取主题令牌。`color-scheme` 由主题块给（meta 里的 `light dark` 只管 theme.css 到之前的那一帧）。
+ * 就绪脚本紧随其后、早于组件 bundle（它要先包好 fetch）：画好了告诉承载它的 iframe（shared/widgetReady.ts）。
  * `forced` = 预览强制的明暗（URL 上的 shuvix-scheme）。
  */
 function hostHTML(baseHref: string, title: string, forced: WidgetScheme | null): string {
@@ -111,6 +113,7 @@ function hostHTML(baseHref: string, title: string, forced: WidgetScheme | null):
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
   <script>${themeBootScript(currentWidgetTheme(), forced)}</script>
+  <script>${widgetReadyScript()}</script>
   <base href="${baseHref}" />
   <title>${title}</title>
   <link rel="stylesheet" href="theme.css" />
@@ -183,6 +186,7 @@ function errorOverlayHTML(errors: string[]): string {
 <script>
   const es = new EventSource('sse');
   es.addEventListener('reload', () => location.reload());
+  ${widgetReadyNowScript()}
 </script>
 </body></html>`
 }

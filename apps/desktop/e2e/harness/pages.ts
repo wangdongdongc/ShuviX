@@ -12573,6 +12573,11 @@ export interface WidgetPanelPane {
   panelApps(): Promise<string[]>
   /** 这个应用的 iframe 挂上了没有 */
   frameReady(id: string): Promise<boolean>
+  /**
+   * 这个应用的 iframe 揭开了没有（`data-revealed`：页面发来「画好了」，或兜底的时间到了 —— 之前它是透明的，
+   * 见 WidgetFrame）
+   */
+  frameRevealed(id: string): Promise<boolean>
   /** iframe 元素的身份戳（第一次问时打上）—— 同一个戳 = 同一个 iframe，没有重建 */
   frameStamp(id: string): Promise<number | null>
   /** 点前台应用顶栏的返回 */
@@ -12728,6 +12733,7 @@ export function widgetPanelPane(main: CdpClient): WidgetPanelPane {
         `[...(${PANEL}?.querySelectorAll('[data-panel-app]') ?? [])].map((el) => el.getAttribute('data-panel-app') ?? '')`
       ),
     frameReady: (id) => main.eval<boolean>(`!!${frame(id)}`),
+    frameRevealed: (id) => main.eval<boolean>(`!!${frame(id)}?.hasAttribute('data-revealed')`),
     frameStamp: (id) =>
       main.eval<number | null>(`(() => {
         const f = ${frame(id)}
@@ -12980,6 +12986,8 @@ export type WebMobileTouchTarget =
   | { widgetCard: string }
   /** 同一张卡片，点它右上角往里 CARD_CORNER_INSET 的那一点（桌面上悬浮按钮所在的地方） */
   | { widgetCardCorner: string }
+  /** 整屏开着的小组件（前台应用）顶栏上的返回 / 重新加载 / 在独立窗口打开 */
+  | { widgetApp: 'back' | 'reload' | 'popout' }
   | { chat: 'back' | 'title' | 'files' | 'tasks' }
   | { sessions: 'calendarToggle' | 'newChat' }
   /** 新建会话抽屉里的一项（'' = 临时会话，否则项目 id） */
@@ -13456,6 +13464,12 @@ export interface WebMobilePane {
   contextMenuCount(): Promise<number>
   /** 浏览器历史：当前条目带不带手机布局的标记、历史长度 */
   history(): Promise<{ mark: boolean; length: number }>
+  /** 同上，打开小组件时压的那条标记（`shuvixMobileWidget`） */
+  widgetHistory(): Promise<{ mark: boolean; length: number }>
+  /** 小组件页此刻是不是一个应用整屏开着（`data-widget-app-open`：页头与标签栏收起） */
+  widgetAppOpen(): Promise<boolean>
+  /** 底部标签栏此刻显示着（计算 display 不是 none）；不在 → false */
+  tabBarShown(): Promise<boolean>
 }
 
 export function webMobilePane(client: CdpClient): WebMobilePane {
@@ -13538,6 +13552,12 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `${PAGE('widgets')}?.querySelector('[data-widget-card=${JSON.stringify(target.widgetCard)}]')`
     if ('widgetCardCorner' in target)
       return `${PAGE('widgets')}?.querySelector('[data-widget-card=${JSON.stringify(target.widgetCardCorner)}]')`
+    if ('widgetApp' in target) {
+      const attr = { back: 'data-app-back', reload: 'data-app-reload', popout: 'data-app-popout' }[
+        target.widgetApp
+      ]
+      return `${PAGE('widgets')}?.querySelector('[data-panel-app][data-foreground] [${attr}]')`
+    }
     if ('chat' in target) {
       const attr = {
         back: 'data-mobile-back',
@@ -14331,7 +14351,18 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     history: () =>
       client.eval<{ mark: boolean; length: number }>(
         `({ mark: !!history.state?.shuvixMobileChat, length: history.length })`
-      )
+      ),
+    widgetHistory: () =>
+      client.eval<{ mark: boolean; length: number }>(
+        `({ mark: !!history.state?.shuvixMobileWidget, length: history.length })`
+      ),
+    widgetAppOpen: () =>
+      client.eval<boolean>(`!!${PAGE('widgets')}?.hasAttribute('data-widget-app-open')`),
+    tabBarShown: () =>
+      client.eval<boolean>(`(() => {
+        const nav = document.querySelector('[data-mobile-tabbar]')
+        return !!nav && getComputedStyle(nav).display !== 'none'
+      })()`)
   }
 }
 

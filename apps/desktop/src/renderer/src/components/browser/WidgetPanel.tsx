@@ -29,13 +29,15 @@ import { WidgetFrame } from '../widget/WidgetFrame'
  */
 export interface WidgetPanelProps {
   /**
-   * 点卡片总在新页面打开、从不嵌在面板里（web 客户端的手机布局：手机上没有「面板」可言，小组件要整页）。
-   * 菜单里也就没有「在面板中打开」。缺省 = 桌面的行为（面板里打开，或按记住的选择开窗口）
+   * web 客户端的手机布局：点卡片就地打开（手机壳在应用开着时收起页头与标签栏，应用占满整屏，返回手势回列表 ——
+   * 见 MobileShell）；应用顶栏换成手指的尺寸；菜单里没有「在面板中打开」（点一下就是）。要真开一个新标签页走菜单的
+   * 「在独立窗口打开」。从前手机上点卡片总开新标签页：整个 web 客户端在那一页里从头加载一遍，每次都是整屏几闪。
+   * 缺省 = 桌面的行为（面板里打开，或按记住的选择开窗口）
    */
-  launchInNewPage?: boolean
+  mobile?: boolean
 }
 
-export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}): React.JSX.Element {
+export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
   const widgets = useWidgetStore((s) => s.widgets)
@@ -79,15 +81,15 @@ export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}):
   // ── 点卡片 / 菜单 ──
   const handleLaunch = useCallback(
     (id: string): void => {
-      if (launchInNewPage || launchTarget(id) === 'window') {
+      if (launchTarget(id) === 'window') {
         // 开着的窗口 / 上次选的窗口：开或聚焦它，不改偏好（agent 开的窗口不算用户的选择）。
-        // 手机布局：总是新页面（web 客户端的「窗口」就是一个新标签页）
+        // web 客户端（含手机布局）恒为 'panel'：页面里就地打开
         void focusWindow(id)
         return
       }
       openInPanel(id)
     },
-    [launchInNewPage, launchTarget, focusWindow, openInPanel]
+    [launchTarget, focusWindow, openInPanel]
   )
 
   /**
@@ -128,7 +130,7 @@ export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}):
     void showContextMenu(
       e,
       [
-        ...(launchInNewPage ? [] : [{ id: 'openPanel', label: t('widgets.openInPanel') }]),
+        ...(mobile ? [] : [{ id: 'openPanel', label: t('widgets.openInPanel') }]),
         { id: 'openWindow', label: t('widgets.openInWindow') },
         ...(isRunning ? [{ id: 'stop', label: t('widgets.stop') }] : []),
         { id: 'sep1', label: '', type: 'separator' as const },
@@ -149,6 +151,7 @@ export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}):
   }
 
   const deletingWidget = widgets.find((w) => w.id === deletingId) ?? null
+  const bar = mobile ? TOUCH_APP_BAR : COMPACT_APP_BAR
 
   return (
     <div data-widget-panel="" className="relative h-full bg-bg-primary overflow-hidden">
@@ -206,38 +209,38 @@ export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}):
             className="absolute inset-0 flex flex-col bg-bg-primary"
             style={visible ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
           >
-            <div className="flex-shrink-0 flex items-center gap-1 h-9 pl-1 pr-1.5 border-b border-border-secondary/40">
+            <div className={bar.row}>
               <button
                 type="button"
                 data-app-back=""
                 onClick={goHome}
-                className="flex items-center gap-0.5 min-w-0 h-7 pl-0.5 pr-2 rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
+                className={bar.back}
                 title={t('widgets.backToHome')}
                 aria-label={t('widgets.backToHome')}
               >
-                <ChevronLeft size={16} className="flex-shrink-0" />
-                <span className="truncate text-[12px] font-medium text-text-primary">{w.name}</span>
+                <ChevronLeft size={bar.chevron} className="flex-shrink-0" />
+                <span className={bar.name}>{w.name}</span>
               </button>
               <div className="flex-1" />
               <button
                 type="button"
                 data-app-reload=""
                 onClick={() => setReloadNonces((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))}
-                className="p-1.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors"
+                className={bar.icon}
                 title={t('widgets.windowReload')}
                 aria-label={t('widgets.windowReload')}
               >
-                <RotateCw size={13} />
+                <RotateCw size={bar.reload} />
               </button>
               <button
                 type="button"
                 data-app-popout=""
                 onClick={() => void openInWindow(id)}
-                className="p-1.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors"
+                className={bar.icon}
                 title={t('widgets.openInWindow')}
                 aria-label={t('widgets.openInWindow')}
               >
-                <AppWindow size={14} />
+                <AppWindow size={bar.popout} />
               </button>
             </div>
             <WidgetFrame
@@ -299,6 +302,28 @@ export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}):
       )}
     </div>
   )
+}
+
+/** 面板里开着的应用的顶栏：桌面的紧凑档 */
+const COMPACT_APP_BAR = {
+  row: 'flex-shrink-0 flex items-center gap-1 h-9 pl-1 pr-1.5 border-b border-border-secondary/40',
+  back: 'flex items-center gap-0.5 min-w-0 h-7 pl-0.5 pr-2 rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors',
+  name: 'truncate text-[12px] font-medium text-text-primary',
+  icon: 'p-1.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors',
+  chevron: 16,
+  reload: 13,
+  popout: 14
+}
+
+/** 手机布局：与手机对话页的顶栏（MobileChatView）同一档 —— 48px 高、40px 的按钮 */
+const TOUCH_APP_BAR = {
+  row: 'flex-shrink-0 flex items-center gap-1 h-12 px-1 border-b border-border-secondary/40',
+  back: 'flex items-center gap-0.5 min-w-0 h-10 pl-1 pr-3 rounded-full text-text-secondary active:bg-bg-hover',
+  name: 'truncate text-[15px] font-medium text-text-primary',
+  icon: 'h-10 w-10 flex-shrink-0 flex items-center justify-center rounded-full text-text-secondary active:bg-bg-hover',
+  chevron: 24,
+  reload: 18,
+  popout: 19
 }
 
 /** 把 widget:exportAsVite 返回的 code 映射成本地化错误描述 */

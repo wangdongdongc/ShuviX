@@ -5,6 +5,7 @@
  *  - `GET /`、`GET /web.html` → `web.html`（不在 → 503，一句短话：web 客户端没构建）；
  *  - `GET /<资源>` → 渲染端产物目录下的那个**文件**（目录不列、不出目录、不给桌面入口 `index.html` ——
  *    它要 preload，在浏览器里只会白屏）；不在 → 404；
+ *    `assets/` 下的文件名带内容哈希（Vite 的产物），可以长缓存（`staticCacheControl`）；其余（入口、图标）每次都问；
  *  - 其余方法 → 405。
  *
  * 纯路径解析 + MIME 表（`resolveStaticRequest`），真正读文件的是服务端。phase D 在这里加文件路由。
@@ -87,4 +88,22 @@ export function resolveStaticRequest(
     return { kind: 'not-found' }
   }
   return { kind: 'file', path: target, entry: false }
+}
+
+/** 构建产物里文件名带内容哈希的那个目录（Vite 缺省的 `assets/[name]-[hash]`） */
+const HASHED_ASSETS_DIR = 'assets'
+
+/**
+ * 一个静态文件的 `Cache-Control`。`assets/` 下的文件名带内容哈希，内容变了名字就变：一年、immutable —— 从前一律
+ * `no-cache` 又没有校验头，浏览器每开一页（手机上每开一个标签页）都把几 MB 的脚本整个重新下一遍。入口 `web.html`
+ * 和其它没带哈希的文件（图标）照旧每次都问，应用升级之后页面拿到的是新入口、新入口点名新的哈希文件。
+ */
+export function staticCacheControl(path: string, root: string): string {
+  const base = resolve(root)
+  if (!path.startsWith(base + sep)) return 'no-cache'
+  const parts = path.slice(base.length + 1).split(sep)
+  // 只认 `assets/` **里面**的文件（一个恰好叫 assets 的根级文件不算）
+  return parts.length > 1 && parts[0] === HASHED_ASSETS_DIR
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache'
 }

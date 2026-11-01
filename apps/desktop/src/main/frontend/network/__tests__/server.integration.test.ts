@@ -6,8 +6,9 @@
  *
  *   NS-1  start(0,'127.0.0.1') 回 > 0 的端口，等于 server.port
  *   NSL-14 server.host：start 之前 undefined；start(port,'127.0.0.1') 之后 '127.0.0.1'；stop() 之后 undefined
- *   NS-2  GET / 与 /web.html → 200，web.html 的内容；content-type / cache-control / nosniff / content-length
- *   NS-3  资源：js / css / woff2 的 MIME；HEAD → 200、content-length、空 body
+ *   NS-2  GET /、/?v=1 与 /web.html → 200，web.html 的内容；content-type / cache-control: no-cache / nosniff / content-length
+ *   NS-3  资源：js / css / woff2 的 MIME 与 cache-control（`assets/` 下 = 一年 immutable）；HEAD → 200、content-length、
+ *         空 body、同样的 cache-control
  *   NS-4  404 'Not found.'：/index.html、/assets/、/assets（目录）、/missing.js
  *   NS-5  原样路径出不了目录（404）；NUL / 编码的反斜杠 → 400 'Bad request.'；从不给出目录外文件的内容
  *   NS-6  隐藏文件 → 404
@@ -39,6 +40,8 @@
  *   NS-27 一个乱发的原始 socket 被断开；之后 GET / 照样 200
  *   NS-28 GET /INDEX.HTML → 404（大小写不敏感的文件系统上也不给桌面入口）
  *   NS-29 全栈：渲染端 createWsConnection + createWebApi 经真的 ws 调到处理函数；stop → reconnecting；同端口再 start → open
+ *   NS-30 顶层不是入口的文件（apple-touch-icon.png）与 sub/x.js → 200，cache-control: no-cache（不长缓存）
+ *   NS-31 出错的应答从不长缓存：/assets/missing-abc.js → 404 no-store；产物目录没有 web.html 时 / → 503 no-store
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
@@ -71,6 +74,10 @@ const APP_JS = 'console.log("app")\n'
 const STYLE_CSS = 'body{color:red}'
 const FONT = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0, 1, 2, 3])
 const SECRET = 'TOP-SECRET-CONTENT'
+const ICON = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const SUB_JS = 'export const sub = 1\n'
+/** `assets/` 下（文件名带内容哈希）的 Cache-Control */
+const IMMUTABLE = 'public, max-age=31536000, immutable'
 const HELLO = { t: 'hello', name: 'renderer', kind: 'client', epoch: 1 }
 
 let tmp: string
@@ -321,13 +328,13 @@ describe('NS-2..NS-8 静态路由', () => {
     await boot()
   })
 
-  it('NS-2 GET / 与 /web.html → 200，web.html 的内容与头', async () => {
-    for (const path of ['/', '/web.html']) {
+  it('NS-2 GET /、/?v=1 与 /web.html → 200，web.html 的内容与头', async () => {
+    for (const path of ['/', '/?v=1', '/web.html']) {
       const res = await http(path)
       expect(res.status).toBe(200)
       expect(res.body).toBe(WEB_HTML)
       expect(res.headers['content-type']).toBe('text/html; charset=utf-8')
-      expect(res.headers['cache-control']).toBe('no-cache')
+      expect(res.headers['cache-control'], path).toBe('no-cache')
       expect(res.headers['x-content-type-options']).toBe('nosniff')
       expect(res.headers['content-length']).toBe(String(Buffer.byteLength(WEB_HTML)))
     }
@@ -337,16 +344,43 @@ describe('NS-2..NS-8 静态路由', () => {
     const js = await http('/assets/app.js')
     expect(js.status).toBe(200)
     expect(js.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(js.headers['cache-control']).toBe(IMMUTABLE)
     expect(js.body).toBe(APP_JS)
     const css = await http('/assets/style.css')
     expect(css.headers['content-type']).toBe('text/css; charset=utf-8')
+    expect(css.headers['cache-control']).toBe(IMMUTABLE)
     const font = await http('/assets/font.woff2')
     expect(font.status).toBe(200)
     expect(font.headers['content-type']).toBe('font/woff2')
+    expect(font.headers['cache-control']).toBe(IMMUTABLE)
     const head = await http('/assets/app.js', { method: 'HEAD' })
     expect(head.status).toBe(200)
     expect(head.headers['content-length']).toBe(String(Buffer.byteLength(APP_JS)))
+    expect(head.headers['cache-control']).toBe(IMMUTABLE)
     expect(head.body).toBe('')
+  })
+
+  it('NS-30 顶层不是入口的文件与 sub/x.js → 200，no-cache', async () => {
+    writeFileSync(join(rendererDir, 'apple-touch-icon.png'), ICON)
+    writeFileSync(join(rendererDir, 'sub', 'x.js'), SUB_JS)
+    const icon = await http('/apple-touch-icon.png')
+    expect(icon.status).toBe(200)
+    expect(icon.headers['content-type']).toBe('image/png')
+    expect(icon.headers['cache-control']).toBe('no-cache')
+    const sub = await http('/sub/x.js')
+    expect(sub.status).toBe(200)
+    expect(sub.body).toBe(SUB_JS)
+    expect(sub.headers['cache-control']).toBe('no-cache')
+  })
+
+  it('NS-31 出错的应答从不长缓存：缺的 assets → 404 no-store；没有 web.html → 503 no-store', async () => {
+    const missing = await http('/assets/missing-abc.js')
+    expect(missing.status).toBe(404)
+    expect(missing.headers['cache-control']).toBe('no-store')
+    currentDir = emptyDir
+    const unbuilt = await http('/')
+    expect(unbuilt.status).toBe(503)
+    expect(unbuilt.headers['cache-control']).toBe('no-store')
   })
 
   it("NS-4 404 'Not found.'", async () => {

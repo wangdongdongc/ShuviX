@@ -2,8 +2,10 @@
  * web 客户端的手机布局（窄屏，见 useCompactLayout）—— 桌面布局（侧栏 + 对话 + 右侧 / 底部面板）在手机上放不下，
  * 这里把同一批组件换一种排法，桌面的组件只多了几个缺省关闭的参数：
  *
- * - 底部四个标签：会话（项目与临时会话，可切到日历）、小组件（主屏；点开总在新页面）、资料库（Bots / 智能体 /
+ * - 底部四个标签：会话（项目与临时会话，可切到日历）、小组件（卡片列表；点开就地整屏打开）、资料库（Bots / 智能体 /
  *   安全策略 / Hooks / 技能 / 知识库）、设置（分区列表 → 分区；外加智能体监视）；
+ * - 打开一个小组件 → 小组件页收起页头与标签栏、应用占满整屏（应用本身还挂在 WidgetPanel 里，回列表不关）；
+ *   返回键 / 返回手势回卡片列表（同对话页，打开时压一条浏览器历史）；
  * - 打开一个会话（从哪儿打开都算：列表、日历、资料库里的笔记、新建）→ 对话页整屏推入，标签栏收起；返回键 /
  *   手机的返回手势回到列表（打开时压一条浏览器历史，返回就是 history.back）；
  * - 终端、悬浮窗、内置浏览器窗口在手机上没有；
@@ -30,6 +32,7 @@ import { useProjects } from '@shuvix/app-shell'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { CalendarPanel } from '../components/browser/CalendarPanel'
 import { WidgetPanel } from '../components/browser/WidgetPanel'
+import { useWidgetStore } from '../stores/widgetStore'
 import { AgentMonitorPanel } from '../components/browser/AgentMonitorPanel'
 import { SettingsPanel } from '../components/settings/SettingsPanel'
 import { MobileChatView } from './MobileChatView'
@@ -48,6 +51,11 @@ const TABS: { key: MobileTab; labelKey: string; Icon: typeof MessagesSquare }[] 
 
 /** 浏览器历史里标记「这一条是手机布局打开对话时压的」 */
 const HISTORY_MARK = 'shuvixMobileChat'
+/** 同上，打开小组件时压的 */
+const WIDGET_HISTORY_MARK = 'shuvixMobileWidget'
+
+const historyHas = (mark: string): boolean =>
+  Boolean((window.history.state as Record<string, unknown> | null)?.[mark])
 
 const headerIcon =
   'h-10 w-10 flex items-center justify-center rounded-full text-text-secondary active:bg-bg-hover'
@@ -86,6 +94,8 @@ function MobileShellBody(): React.JSX.Element {
   const [newChatOpen, setNewChatOpen] = useState(false)
   const { projects } = useProjects()
   const fontSize = usePhoneFontSize()
+  const widgetApp = useWidgetStore((s) => s.foregroundApp)
+  const widgetAppOpen = tab === 'widgets' && widgetApp !== null
 
   // 长按 = 右键（只在手机布局里装）
   useEffect(() => installLongPressContextMenu(document), [])
@@ -100,7 +110,7 @@ function MobileShellBody(): React.JSX.Element {
   /** 返回键：退掉打开对话时压的那条历史（popstate 再收起对话页），与手机的返回手势同一条路 */
   const closeChat = useCallback((): void => {
     if (!chatOpenRef.current) return
-    if ((window.history.state as Record<string, unknown> | null)?.[HISTORY_MARK]) {
+    if (historyHas(HISTORY_MARK)) {
       window.history.back()
     } else {
       chatOpenRef.current = false
@@ -109,19 +119,41 @@ function MobileShellBody(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    // 重新加载时对话页开着：那条标记过的历史还在，但对话页已经不在 —— 摘掉标记，免得之后要多退一次
-    if ((window.history.state as Record<string, unknown> | null)?.[HISTORY_MARK]) {
+    // 重新加载时对话页 / 小组件开着：那条标记过的历史还在，但页面已经不在 —— 摘掉标记，免得之后要多退一次
+    if (historyHas(HISTORY_MARK) || historyHas(WIDGET_HISTORY_MARK)) {
       window.history.replaceState(null, '')
     }
     const onPop = (): void => {
       if (!chatOpenRef.current) return
       // 退回到的那一条还带着标记（比如页面里一个 #锚点 的前进 / 后退）：对话页还该开着
-      if ((window.history.state as Record<string, unknown> | null)?.[HISTORY_MARK]) return
+      if (historyHas(HISTORY_MARK)) return
       chatOpenRef.current = false
       setChatOpen(false)
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // 小组件：打开（卡片）压一条历史；顶栏的返回（goHome）退掉它；返回手势退掉它 → 回卡片列表
+  useEffect(() => {
+    const onPop = (): void => {
+      if (useWidgetStore.getState().foregroundApp === null) return
+      if (historyHas(WIDGET_HISTORY_MARK)) return
+      useWidgetStore.getState().goHome()
+    }
+    window.addEventListener('popstate', onPop)
+    const off = useWidgetStore.subscribe((state, prev) => {
+      if (state.foregroundApp === prev.foregroundApp) return
+      if (prev.foregroundApp === null) {
+        window.history.pushState({ [WIDGET_HISTORY_MARK]: true }, '')
+      } else if (state.foregroundApp === null && historyHas(WIDGET_HISTORY_MARK)) {
+        window.history.back()
+      }
+    })
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      off()
+    }
   }, [])
 
   // 活跃会话变了（从任何地方打开 / 新建）→ 推入对话页；会话没了（删掉了）→ 收起
@@ -233,12 +265,16 @@ function MobileShellBody(): React.JSX.Element {
             <section
               data-mobile-page="widgets"
               data-mobile-scale=""
-              className="absolute inset-0 flex flex-col"
+              data-widget-app-open={widgetAppOpen ? '' : undefined}
+              className={`absolute inset-0 flex flex-col ${
+                widgetAppOpen ? 'pb-[env(safe-area-inset-bottom)]' : ''
+              }`}
               style={tab === 'widgets' ? undefined : { display: 'none' }}
             >
-              {pageTitle(t('mobile.tabWidgets'))}
+              {/* 应用开着：没有页头（应用自己的顶栏有返回），标签栏也收起（见下）—— 应用占满整屏 */}
+              {!widgetAppOpen && pageTitle(t('mobile.tabWidgets'))}
               <div className="flex-1 min-h-0">
-                <WidgetPanel launchInNewPage />
+                <WidgetPanel mobile />
               </div>
             </section>
           )}
@@ -277,10 +313,11 @@ function MobileShellBody(): React.JSX.Element {
           )}
         </div>
 
-        {/* 底部标签栏 */}
+        {/* 底部标签栏（小组件整屏开着时收起） */}
         <nav
           data-mobile-tabbar=""
           className="flex-shrink-0 flex border-t border-border-secondary/60 bg-bg-secondary/80 pb-[env(safe-area-inset-bottom)]"
+          style={widgetAppOpen ? { display: 'none' } : undefined}
         >
           {TABS.map(({ key, labelKey, Icon }) => (
             <button

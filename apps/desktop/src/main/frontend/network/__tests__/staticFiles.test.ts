@@ -11,10 +11,16 @@
  *   SF-6 `/assets`（不带斜杠）→ file（由服务端 stat 判成 404，见 NS-4）
  *   SF-7 mimeTypeOf：常见扩展名（不分大小写）；不认识 / 没有扩展名 → application/octet-stream
  *   SF-8 index.html 不分大小写地拒掉：`/INDEX.HTML`、`/Index.html` → not-found
+ *   SC-1 staticCacheControl：`assets/` 下的文件（含更深的子目录）→ `public, max-age=31536000, immutable`
+ *   SC-2 SF-1 的每个入口地址解析出来的路径 → `no-cache`
+ *   SC-3 不在顶层 `assets/` 里面的（图标、`sub/assets/`、`assets-old/`、`assetsx.js`、大写的 `ASSETS/`、恰好叫 `assets` 的根级文件）
+ *        → `no-cache`
+ *   SC-4 不在根目录里的（根目录本身、`../assets/x.js`、前缀相同的兄弟目录、别处的 `assets`）→ `no-cache`
+ *   SC-5 根目录写成 `/srv/r/` 或 `/srv/x/../r` → assets 照样长缓存、web.html 照样 `no-cache`
  */
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { mimeTypeOf, resolveStaticRequest } from '../staticFiles'
+import { mimeTypeOf, resolveStaticRequest, staticCacheControl } from '../staticFiles'
 
 const root = resolve('/srv/r')
 const ENTRY = { kind: 'file', path: resolve(root, 'web.html'), entry: true }
@@ -129,4 +135,61 @@ describe('SF-8 index.html 不分大小写', () => {
   it.each(['/INDEX.HTML', '/Index.html', '/index.HTML'])('SF-8 %s → not-found', (url) => {
     expect(get(url)).toStrictEqual({ kind: 'not-found' })
   })
+})
+
+const IMMUTABLE = 'public, max-age=31536000, immutable'
+
+describe('SC staticCacheControl', () => {
+  it.each(['assets/index-BxY12.js', 'assets/fonts/a-1.woff2', 'assets/index-a1b2.css'])(
+    'SC-1 %s → 长缓存',
+    (rel) => {
+      expect(staticCacheControl(resolve(root, rel), root)).toBe(IMMUTABLE)
+    }
+  )
+
+  it('SC-1 经 resolveStaticRequest 解析的 /assets/app.js → 长缓存', () => {
+    const res = get('/assets/app.js')
+    if (res.kind !== 'file') throw new Error(`expected a file, got ${res.kind}`)
+    expect(staticCacheControl(res.path, root)).toBe(IMMUTABLE)
+  })
+
+  it.each(['/', '', '/?x=1', '/web.html#a', '/web.html?v=2', '/web.html'])(
+    'SC-2 入口 %j → no-cache',
+    (url) => {
+      const res = get(url)
+      if (res.kind !== 'file') throw new Error(`expected a file, got ${res.kind}`)
+      expect(res.entry).toBe(true)
+      expect(staticCacheControl(res.path, root)).toBe('no-cache')
+    }
+  )
+
+  it.each([
+    'apple-touch-icon.png',
+    'sub/assets/x.js',
+    'assets-old/x.js',
+    'assetsx.js',
+    'ASSETS/x.js',
+    // 恰好叫 assets 的根级文件：不在 assets/ 里面
+    'assets'
+  ])('SC-3 %s → no-cache', (rel) => {
+    expect(staticCacheControl(resolve(root, rel), root)).toBe('no-cache')
+  })
+
+  it.each([
+    ['根目录本身', resolve('/srv/r')],
+    ['../assets/x.js', resolve(root, '../assets/x.js')],
+    ['前缀相同的兄弟目录', resolve('/srv/r-evil/assets/x.js')],
+    ['别处的 assets', resolve('/etc/assets/x')]
+  ])('SC-4 %s → no-cache', (_what, path) => {
+    expect(staticCacheControl(path, root)).toBe('no-cache')
+  })
+
+  it.each(['/srv/r/', '/srv/x/../r'])(
+    'SC-5 根目录写成 %j：assets 长缓存、web.html no-cache',
+    (spelled) => {
+      expect(staticCacheControl(resolve(root, 'assets/index-BxY12.js'), spelled)).toBe(IMMUTABLE)
+      expect(staticCacheControl(resolve(root, 'assets/fonts/a-1.woff2'), spelled)).toBe(IMMUTABLE)
+      expect(staticCacheControl(resolve(root, 'web.html'), spelled)).toBe('no-cache')
+    }
+  )
 })

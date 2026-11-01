@@ -27,9 +27,12 @@
  *   M-11 对话页没有桌面顶栏的按钮（内置浏览器窗口、侧栏 / 面板开关）；点标题 → 会话设置
  *   M-12 文件抽屉列出 hello.txt，点遮罩收起；任务抽屉是空态（mobile.noTasks）
  *   M-13 在会话设置里删掉这条会话 → 对话页收起、列表里没了这一行、那条历史标记退掉
- *   M-14 真点小组件卡片 → 新标签页 #widget-window?widgetId=…，页面里不开面板；真长按卡片 → DOM 菜单恰是
- *        「在独立窗口打开 / 导出 / 归档 / 删除」（运行中多一个「停止」），没有「在面板中打开」
- *   M-14b 真点卡片右上角（桌面上悬浮按钮所在的地方）→ 与点中间一样开新标签页：没有归档、没有删除确认框、没有停掉
+ *   M-14 真点小组件卡片 → 就地整屏打开（不开新标签页）：前台应用是它、页头与标签栏收起、压一条带标记的历史；
+ *        iframe 揭开（页面发来「画好了」），里面是组件写的字；history.back()（返回手势）→ 回卡片列表、标签栏回来、
+ *        应用留在后台；再点 → 同一个 iframe 回到前台；顶栏的返回 → 回列表并退掉那条历史；顶栏的 ↗ → 新标签页
+ *        #widget-window?widgetId=…（面板收走它）；真长按卡片 → DOM 菜单恰是「在独立窗口打开 / 导出 / 归档 / 删除」
+ *        （运行中多一个「停止」），没有「在面板中打开」
+ *   M-14b 真点卡片右上角（桌面上悬浮按钮所在的地方）→ 与点中间一样就地打开：没有归档、没有删除确认框、没有停掉
  *   M-15 设置：分区列表 general … about + agents（voice / triggers / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
  *        设置行 flex-wrap: wrap 且标题栏 min-width 9em；回列表；「智能体」分区头部是 Agents
  *   M-16 #settings/general 在手机宽度直接进分区、返回是列表；#settings 是列表；1280 宽不是叠放
@@ -104,7 +107,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import { connectTabPage } from '../../harness/browserFixtures'
-import { sleep, until, type CdpClient } from '../../harness/cdp'
+import { connect, listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
 import {
@@ -452,7 +455,8 @@ beforeAll(async () => {
   )
   writeFileSync(
     join(widgetDir, 'index.tsx'),
-    "const root = document.getElementById('root')\nif (root) root.textContent = 'MOB-WIDGET'\n"
+    // 挂一个元素（不是裸文字）：页面骨架的看门狗只认子元素，300ms 后会把只有文字的 #root 换成「没挂上」的说明
+    "const root = document.getElementById('root')\nconst p = document.createElement('p')\np.textContent = 'MOB-WIDGET'\nif (root) root.appendChild(p)\n"
   )
 
   do {
@@ -609,6 +613,11 @@ async function resetShell(): Promise<void> {
     await until(async () => (await mobile().sheet()) === null, 'reset: the sheet closed')
   }
   if (await mobile().chatOpen()) await backToList()
+  // 小组件整屏开着时标签栏是收起的：先回卡片列表
+  if (await mobile().widgetAppOpen()) {
+    await mobile().tap({ widgetApp: 'back' })
+    await until(async () => !(await mobile().widgetAppOpen()), 'reset: the widget closed')
+  }
   await toTab('sessions')
 }
 
@@ -947,25 +956,87 @@ describe('phone layout: the shell', () => {
     expect(await config.isOpen()).toBe(false)
   })
 
-  it('M-14 a widget card opens in a new tab on a tap; a long press shows the card menu', async () => {
+  it('M-14 a tap opens the widget full screen in the page; back returns to the cards; ↗ opens a tab; a long press shows the card menu', async () => {
     const cards = widgetPanelPane(page())
     await mobile().tap({ tab: 'widgets' })
     await until(async () => (await cards.cardIds()).includes(WIDGET_ID), 'the widget card')
-    const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
+    const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
+    const before = await mobile().widgetHistory()
+    expect(before.mark).toBe(false)
+
     await mobile().tap({ widgetCard: WIDGET_ID })
+    await until(
+      async () => (await cards.foregroundApp()) === WIDGET_ID,
+      'the widget open in the page'
+    )
+    expect(await cards.panelApps()).toEqual([WIDGET_ID])
+    expect(await mobile().widgetAppOpen()).toBe(true)
+    expect(await mobile().tabBarShown()).toBe(false)
+    // 压了一条带标记的（前面的用例留下的「前进」条目被它换掉，长度不一定加一）
+    const opened = await mobile().widgetHistory()
+    expect(opened.mark).toBe(true)
+    expect(opened.length).toBeGreaterThanOrEqual(before.length)
+    // 页面说「画好了」才揭开；里面是组件自己写的字
+    await until(() => cards.frameRevealed(WIDGET_ID), 'the widget frame revealed', 30_000)
+    const frameUrl = `http://127.0.0.1:${P}/w/${WIDGET_ID}/`
+    const target = await until(
+      async () =>
+        (await listTargets(app.port)).find((t) => t.type === 'iframe' && t.url === frameUrl),
+      'the widget iframe target'
+    )
+    const inside = await connect(target.webSocketDebuggerUrl)
+    try {
+      await until(
+        () => inside.eval<boolean>(`(document.body?.textContent ?? '').includes('MOB-WIDGET')`),
+        'the widget wrote MOB-WIDGET'
+      )
+    } finally {
+      inside.close()
+    }
+    // 没有开新标签页
+    expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
+
+    // 返回手势 = history.back()：回卡片列表，应用留在后台
+    const stamp = await cards.frameStamp(WIDGET_ID)
+    await page().eval(`(history.back(), true)`)
+    await until(async () => (await cards.foregroundApp()) === null, 'history.back() went back')
+    expect(await mobile().widgetAppOpen()).toBe(false)
+    expect(await mobile().tabBarShown()).toBe(true)
+    expect((await mobile().widgetHistory()).mark).toBe(false)
+    expect(await cards.panelApps()).toEqual([WIDGET_ID])
+
+    // 再点：同一个 iframe 回到前台；顶栏的返回退掉那条历史（不多压一条）
+    await mobile().tap({ widgetCard: WIDGET_ID })
+    await until(async () => (await cards.foregroundApp()) === WIDGET_ID, 'reopened')
+    expect(await cards.frameStamp(WIDGET_ID)).toBe(stamp)
+    expect((await mobile().widgetHistory()).mark).toBe(true)
+    await mobile().tap({ widgetApp: 'back' })
+    await until(async () => (await cards.foregroundApp()) === null, 'the back button went back')
+    await until(async () => !(await mobile().widgetHistory()).mark, 'the marked entry popped')
+    // 开了又关：没有多出条目
+    expect((await mobile().widgetHistory()).length).toBe(opened.length)
+    expect(await mobile().tabBarShown()).toBe(true)
+
+    // 顶栏的 ↗：真开一个新标签页，面板收走它
+    await mobile().tap({ widgetCard: WIDGET_ID })
+    await until(async () => (await cards.foregroundApp()) === WIDGET_ID, 'opened for the popout')
+    const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
+    await mobile().tap({ widgetApp: 'popout' })
     const tab = await waitBrowserTab(app, (u) => u === tabUrl, 'the #widget-window tab')
     openedTabs.add(tab.id)
-    expect(await cards.panelApps()).toEqual([])
+    await until(async () => (await cards.panelApps()).length === 0, 'the panel let it go')
     expect(await cards.foregroundApp()).toBeNull()
+    expect(await mobile().tabBarShown()).toBe(true)
+    await until(async () => !(await mobile().widgetHistory()).mark, 'the popout popped the entry')
     await closeBrowserTab(app, tab.id)
     openedTabs.delete(tab.id)
 
-    const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
+    const tabsBeforeMenu = (await browserTabs(app)).map((t) => t.id).sort()
     await mobile().longPress({ widgetCard: WIDGET_ID }, 800)
     const menu = await until(() => webClientPane(page()).domMenu(), 'the card menu')
     const labels = menu.map((m) => m.label)
     expect(labels).not.toContain(en.widgets.openInPanel)
-    // 「停止」在不在取决于那个标签页把它注册上了没有；除此之外恰是这四项（也就没有整理图标）
+    // 「停止」在不在取决于它此刻注册着没有；除此之外恰是这四项（也就没有整理图标）
     expect(labels.filter((l) => l !== en.widgets.stop)).toEqual([
       en.widgets.openInWindow,
       en.widgets.exportAsVite,
@@ -973,8 +1044,8 @@ describe('phone layout: the shell', () => {
       en.widgets.delete
     ])
     await sleep(500)
-    expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
-    expect(await cards.panelApps()).toEqual([])
+    expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBeforeMenu)
+    expect(await cards.foregroundApp()).toBeNull()
     await mobile().pressEscape()
     await until(async () => (await webClientPane(page()).domMenu()) === null, 'the menu closed')
   })
@@ -987,19 +1058,16 @@ describe('phone layout: the shell', () => {
     // afterEach 的 resetShell 把壳放回了会话页
     await toTab('widgets')
     await until(async () => (await cards.cardIds()).includes(WIDGET_ID), 'the widget card')
-    const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
     // 那一点正是悬浮按钮（删除）所在的地方：按钮在触屏上不接点击，点下去的是卡片
     expect(await cards.cornerButton(WIDGET_ID)).not.toBeNull()
-    const tabsBefore = (await browserTabs(app)).map((t) => t.id)
+    const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
     await mobile().tap({ widgetCardCorner: WIDGET_ID })
-    const tab = await waitBrowserTab(
-      app,
-      (u) => u === tabUrl,
-      'the #widget-window tab from the corner'
+    await until(
+      async () => (await cards.foregroundApp()) === WIDGET_ID,
+      'the widget open in the page from the corner'
     )
-    openedTabs.add(tab.id)
-    expect(tabsBefore).not.toContain(tab.id)
-    // 那个标签页把它注册上了，之后没有被停掉
+    expect(await mobile().widgetAppOpen()).toBe(true)
+    // 它注册着，之后没有被停掉
     await until(async () => (await registered()).includes(WIDGET_ID), 'the widget registered')
     await sleep(300)
     expect((await confirmPane(page()).snapshot()).open).toBe(false)
@@ -1012,9 +1080,9 @@ describe('phone layout: the shell', () => {
       await app.main.eval<string[]>('window.api.widget.list().then((l) => l.map((w) => w.id))')
     ).toContain(WIDGET_ID)
     expect(await registered()).toContain(WIDGET_ID)
-    expect(await cards.panelApps()).toEqual([])
-    await closeBrowserTab(app, tab.id)
-    openedTabs.delete(tab.id)
+    expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
+    await mobile().tap({ widgetApp: 'back' })
+    await until(async () => !(await mobile().widgetAppOpen()), 'back to the cards')
   })
 
   it('M-15 settings: the section list, a section with a back button and wrapping rows, the agents monitor section', async () => {

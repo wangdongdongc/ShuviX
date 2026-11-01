@@ -38,6 +38,13 @@
  *   WS-T3 地址上的 shuvix-scheme：dark / light（也在别的参数后面）→ 写进 forced；DARK、system、空串 → null
  *   WS-T4 送出来的页面在 JSDOM 里跑（假 matchMedia、假 EventSource）：属性与设置一致；SSE `theme` 带新选择 → 就地换
  *         data-theme，不重载（没有导航）；不是 JSON 的 data → 不抛、什么都不变；对照：`reload` 事件确实会导航
+ *   WS-RD1 页面骨架里的就绪脚本（shared/widgetReady.ts）：主题脚本 < 就绪脚本 < 组件 bundle（module）；就绪脚本恰好一段、
+ *          在 </head> 之前；主题脚本仍是第一个 <script；带 ?shuvix-scheme=dark 也一样
+ *   WS-RD2 构建失败页（有错误 / 没有错误的那一支）：带 widgetReadyNowScript() 恰好一次，不带 widgetReadyScript()
+ *   WS-RD3 构建成功页框在 iframe 里（JSDOM 跑脚本，parent 换成假的、fetch 是桩、真定时器）：bundle 不加载，
+ *          300ms 看门狗往 #root 里写说明 → 恰好发一次 { type }，在 MAX + 200ms 之内；之后 fetch 换回桩；没有 jsdom 错误
+ *   WS-RD4 构建失败页框在 iframe 里 → 解析时同步发一次
+ *   WS-RD5 顶层页面（没有父页面）→ 什么都不发，fetch 还是那个桩（对照：看门狗照样写了 #root，脚本确实跑了）
  *
  * 除 WS-K 外，http() 自动给 `/w/<id>/…` 带上那个 widget 的 ui 令牌（widget 页面经主进程补头的样子）。
  */
@@ -81,6 +88,12 @@ import {
   WIDGET_TAILWIND_THEME,
   type WidgetThemeState
 } from '../widgetTheme'
+import {
+  widgetReadyNowScript,
+  widgetReadyScript,
+  WIDGET_READY_MAX_WAIT_MS,
+  WIDGET_READY_MESSAGE
+} from '../../../../shared/widgetReady'
 
 const SECRET = 'top-secret-file-contents-42'
 
@@ -810,6 +823,188 @@ describe('WS-T 主题', () => {
       expect(jsdomErrors.filter((m) => /navigation/i.test(m))).toHaveLength(1)
     } finally {
       dom.window.close()
+    }
+  })
+})
+
+describe('WS-RD 就绪信号（shared/widgetReady.ts）', () => {
+  const SYSTEM: WidgetThemeState = { mode: 'system', light: 'one-light', dark: 'nord' }
+  const READY_TAG = `<script>${widgetReadyScript()}</script>`
+  const BUNDLE_TAG = '<script type="module" src="bundle.js"></script>'
+  const occurrences = (text: string, part: string): number => text.split(part).length - 1
+
+  interface ReadyPage {
+    dom: JSDOM
+    /** 发给父页面（顶层页面：发给自己）的每一条：时间 + 参数 */
+    posts: Array<{ at: number; args: unknown[] }>
+    /** 页面里的 window.fetch 一开始就是它 */
+    fetchStub: ReturnType<typeof vi.fn>
+    jsdomErrors: string[]
+    startedAt: number
+  }
+
+  /** 在 JSDOM 里跑送出来的页面（真定时器、pretendToBeVisual 给 rAF）；framed = parent 换成一个假的父页面 */
+  function runPage(html: string, framed: boolean): ReadyPage {
+    const posts: ReadyPage['posts'] = []
+    const jsdomErrors: string[] = []
+    const virtualConsole = new VirtualConsole()
+    virtualConsole.on('jsdomError', (e: Error) => jsdomErrors.push(e.message))
+    const record = (...args: unknown[]): void => {
+      posts.push({ at: Date.now(), args })
+    }
+    const fakeParent = { postMessage: record }
+    const fetchStub = vi.fn()
+    const mql = { matches: true, addEventListener: (): void => {} }
+    const startedAt = Date.now()
+    const dom = new JSDOM(html, {
+      url: `http://127.0.0.1:${port}/w/photo-wall/`,
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+      virtualConsole,
+      beforeParse(window) {
+        Object.assign(window, {
+          matchMedia: () => mql,
+          fetch: fetchStub,
+          EventSource: class {
+            onerror: unknown = null
+            constructor(readonly url: string) {}
+            addEventListener(): void {}
+          }
+        })
+        if (framed) {
+          Object.defineProperty(window, 'parent', { configurable: true, get: () => fakeParent })
+        } else {
+          window.postMessage = record as typeof window.postMessage
+        }
+      }
+    })
+    return { dom, posts, fetchStub, jsdomErrors, startedAt }
+  }
+
+  async function waitUntil(cond: () => boolean, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+  }
+
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  it.each<[string, 'dark' | null]>([
+    ['', null],
+    ['?shuvix-scheme=dark', 'dark']
+  ])(
+    'WS-RD1 页面 %j：主题脚本 < 就绪脚本 < bundle；就绪脚本恰好一段、在 </head> 之前',
+    async (query, forced) => {
+      setWidgetThemeReader(() => SYSTEM)
+      const res = await http(`/w/photo-wall/${query}`)
+      expect(res.status).toBe(200)
+      const html = res.body.toString()
+      const themeTag = `<script>${themeBootScript(SYSTEM, forced)}</script>`
+      const at = {
+        theme: html.indexOf(themeTag),
+        ready: html.indexOf(READY_TAG),
+        bundle: html.indexOf(BUNDLE_TAG),
+        headEnd: html.indexOf('</head>')
+      }
+      for (const [what, i] of Object.entries(at)) expect(i, what).toBeGreaterThan(-1)
+      expect(at.theme).toBeLessThan(at.ready)
+      expect(at.ready).toBeLessThan(at.headEnd)
+      expect(at.headEnd).toBeLessThan(at.bundle)
+      expect(occurrences(html, READY_TAG)).toBe(1)
+      expect(occurrences(html, widgetReadyScript())).toBe(1)
+      // 主题脚本仍是第一个脚本
+      expect(html.indexOf('<script')).toBe(at.theme)
+      // 主题脚本之后紧接着就是就绪脚本（中间只有空白）
+      expect(html.slice(at.theme + themeTag.length, at.ready).trim()).toBe('')
+      expect(html).not.toContain(widgetReadyNowScript())
+    }
+  )
+
+  it.each<[string, string[] | undefined, string]>([
+    ['有错误', ['boom <b>'], 'boom &lt;b>'],
+    ['错误是空数组', [], 'Build failed. Check build output or call widget.build again.'],
+    ['没有 errors', undefined, 'Build failed. Check build output or call widget.build again.']
+  ])(
+    'WS-RD2 构建失败页（%s）：带 widgetReadyNowScript() 恰好一次，不带 widgetReadyScript()',
+    async (_what, errors, shown) => {
+      mocks.build.mockImplementationOnce((async () => ({ success: false, errors })) as never)
+      await server.rebuild('photo-wall')
+      const res = await http('/w/photo-wall/')
+      expect(res.status).toBe(200)
+      const html = res.body.toString()
+      expect(html).toContain('Build Error')
+      expect(html).toContain(shown)
+      expect(occurrences(html, widgetReadyNowScript())).toBe(1)
+      expect(html).not.toContain(widgetReadyScript())
+      expect(html).not.toContain(BUNDLE_TAG)
+    }
+  )
+
+  it('WS-RD3 构建成功页框在 iframe 里：看门狗填 #root 之后恰好发一次 { type }，fetch 换回桩，没有 jsdom 错误', async () => {
+    setWidgetThemeReader(() => SYSTEM)
+    const html = (await http('/w/photo-wall/')).body.toString()
+    const page = runPage(html, true)
+    try {
+      expect(page.posts).toHaveLength(0)
+      // 脚本跑起来时包了 fetch
+      expect(page.dom.window.fetch).not.toBe(page.fetchStub)
+      await waitUntil(() => page.posts.length > 0, 1500)
+      expect(page.posts).toHaveLength(1)
+      expect(page.posts[0].args).toHaveLength(2)
+      expect(page.posts[0].args[0]).toEqual({ type: WIDGET_READY_MESSAGE })
+      expect(page.posts[0].args[1]).toBe('*')
+      expect(page.posts[0].at - page.startedAt).toBeLessThan(WIDGET_READY_MAX_WAIT_MS + 200)
+      // 帧与 100ms 的兜底都过去之后仍然只有一条
+      await sleep(250)
+      expect(page.posts).toHaveLength(1)
+      expect(page.dom.window.fetch).toBe(page.fetchStub)
+      // 对照：bundle 没加载，是骨架的看门狗往 #root 里写了说明
+      expect(page.dom.window.document.getElementById('root')?.textContent).toContain(
+        'Widget did not mount anything to #root.'
+      )
+      expect(page.jsdomErrors).toEqual([])
+    } finally {
+      page.dom.window.close()
+    }
+  })
+
+  it('WS-RD4 构建失败页框在 iframe 里 → 解析时同步发一次', async () => {
+    mocks.build.mockImplementationOnce((async () => ({
+      success: false,
+      errors: ['boom']
+    })) as never)
+    await server.rebuild('photo-wall')
+    const html = (await http('/w/photo-wall/')).body.toString()
+    const page = runPage(html, true)
+    try {
+      // 没有任何 await：构造 JSDOM（同步解析、跑脚本）时就发了
+      expect(page.posts).toHaveLength(1)
+      expect(page.posts[0].args[0]).toEqual({ type: WIDGET_READY_MESSAGE })
+      expect(page.posts[0].args[1]).toBe('*')
+      await sleep(200)
+      expect(page.posts).toHaveLength(1)
+      expect(page.jsdomErrors).toEqual([])
+    } finally {
+      page.dom.window.close()
+    }
+  })
+
+  it('WS-RD5 顶层页面 → 什么都不发，fetch 还是那个桩', async () => {
+    setWidgetThemeReader(() => SYSTEM)
+    const html = (await http('/w/photo-wall/')).body.toString()
+    const page = runPage(html, false)
+    try {
+      expect(page.dom.window.fetch).toBe(page.fetchStub)
+      // 看门狗（300ms）+ 安静（80ms）+ 兜底（100ms）都过去
+      await sleep(600)
+      expect(page.posts).toEqual([])
+      expect(page.dom.window.fetch).toBe(page.fetchStub)
+      // 对照：脚本确实跑了
+      expect(page.dom.window.document.getElementById('root')?.textContent).toContain(
+        'Widget did not mount anything to #root.'
+      )
+      expect(page.jsdomErrors).toEqual([])
+    } finally {
+      page.dom.window.close()
     }
   })
 })
