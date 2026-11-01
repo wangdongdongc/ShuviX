@@ -91,6 +91,8 @@ function useKindLabel(task: TaskInfo): string {
   if (task.subject.kind === 'sub-session') {
     return t(task.subject.other ? 'panel.tasksKindSession' : 'panel.tasksKindSubSession')
   }
+  // ssh 远端任务：协议名不翻译，主机别名是数据
+  if (task.subject.kind === 'bash' && task.subject.host) return `SSH · ${task.subject.host}`
   return t('panel.tasksKindBash')
 }
 

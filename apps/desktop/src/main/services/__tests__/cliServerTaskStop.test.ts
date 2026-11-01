@@ -13,10 +13,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   stopBgTaskByAgent:
-    vi.fn<(sessionId: string, pid: number) => 'stopped' | 'not-found' | 'not-running'>()
+    vi.fn<(sessionId: string, pid: number) => 'stopped' | 'not-found' | 'not-running'>(),
+  stopTaskByAgentId:
+    vi.fn<(sessionId: string, taskId: string) => 'stopped' | 'not-found' | 'not-running'>()
 }))
 
-vi.mock('../bgTaskService', () => ({ stopBgTaskByAgent: mocks.stopBgTaskByAgent }))
+vi.mock('../bgTaskService', () => ({
+  stopBgTaskByAgent: mocks.stopBgTaskByAgent,
+  stopTaskByAgentId: mocks.stopTaskByAgentId
+}))
 // 其余依赖本文件一个都不碰：给空壳
 vi.mock('../widget', () => ({
   widgetService: {},
@@ -66,6 +71,8 @@ const BAD_PIDS: unknown[] = [
 beforeEach(() => {
   mocks.stopBgTaskByAgent.mockReset()
   mocks.stopBgTaskByAgent.mockReturnValue('stopped')
+  mocks.stopTaskByAgentId.mockReset()
+  mocks.stopTaskByAgentId.mockReturnValue('stopped')
 })
 
 describe('FU-4 task.stop 的入参', () => {
@@ -130,5 +137,31 @@ describe('FU-4 task.stop 的三种结局', () => {
     await expect(stopHandler()({ pid: 123 }, 'sess-1')).rejects.toThrow(
       /^no background task with pid 123 in this session$/
     )
+  })
+})
+
+describe('FU-7 task.stop 按任务 id（ssh 远端任务的回执给的是它）', () => {
+  it('FU-7a 带 task → 按 id 停，pid 那条路一次都不走', async () => {
+    await expect(stopHandler()({ task: 'toolu_01abc' }, 'sess-1')).resolves.toBe(
+      'stopping background task toolu_01abc'
+    )
+    expect(mocks.stopTaskByAgentId).toHaveBeenCalledWith('sess-1', 'toolu_01abc')
+    expect(mocks.stopBgTaskByAgent).not.toHaveBeenCalled()
+  })
+
+  it('FU-7b not-running / not-found 的措辞与 pid 一致', async () => {
+    mocks.stopTaskByAgentId.mockReturnValue('not-running')
+    await expect(stopHandler()({ task: 'call_1' }, 'sess-1')).resolves.toBe(
+      'task call_1 is not running'
+    )
+    mocks.stopTaskByAgentId.mockReturnValue('not-found')
+    await expect(stopHandler()({ task: 'call_1' }, 'sess-1')).rejects.toThrow(
+      /^no background task with id call_1 in this session$/
+    )
+  })
+
+  it('FU-7c 没有会话 id → 先报会话（与 pid 同一道）', async () => {
+    await expect(stopHandler()({ task: 'call_1' }, undefined)).rejects.toThrow(/SHUVIX_SESSION_ID/)
+    expect(mocks.stopTaskByAgentId).not.toHaveBeenCalled()
   })
 })

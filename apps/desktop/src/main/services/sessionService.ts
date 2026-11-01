@@ -74,6 +74,7 @@ import { getModelRegistry, providerCredentialPort } from './models'
 import { peekSyncHub } from '../frontend/sync/syncWiring'
 import { effectiveRunState, mirroredAgentLocked } from './sessionMirror'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
+import { killRemoteTasksBySession } from './builtinMcp/sshRemoteTasks'
 import { resolveProfileModelSpec } from '../agents/agentHost'
 import {
   broadcastSessionConfigChanged,
@@ -828,7 +829,9 @@ export class SessionService {
       await this.delete(child.id)
     }
     // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录。
-    // 放在关停运行时**之前**：run 可能正等着某个后台任务，先杀掉才不会把关停一直吊着
+    // 放在关停运行时**之前**：run 可能正等着某个后台任务，先杀掉才不会把关停一直吊着。
+    // ssh 的远端任务先走（经脱离的 ssh 停掉并删远端目录），之后枢纽的级联对它们什么也不做
+    killRemoteTasksBySession(id)
     killBySession(id)
     // 父会话驱动着、此刻正在跑的那一轮：先照常中止（落定为用户停掉的 aborted），再删 —— 关停中的会话不报
     // driven 落定，直接删的话父会话永远等不到这一轮的结果（P2-12 PIN-06：删除 = 中止，通知照常走一条）。

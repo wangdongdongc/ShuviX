@@ -10,7 +10,8 @@
  *      有 SHUVIX_SESSION_KEY 时原样带上 `sessionKey`（主进程拿它核对会话 id，见 services/cliSession.ts）；
  *  (b) 失败回话 → stderr `Error: <原因>`、退出 1；
  *  (c) 没有 / 空的 SHUVIX_SESSION_ID → 请求里干脆没有 sessionId 这个键；
- *  (d) pid 不是一串数字 → 本地就拒（stderr 一句、退出 1），根本不连 ShuviX；
+ *  (d) 空的、像选项的（`-5`）、带空白的 → 本地就拒（stderr 一句、退出 1），根本不连 ShuviX；
+ *  (d2) 不是纯数字的就是任务 id（ssh 远端任务的回执给的是它）：请求里是 `params:{task:<id>}`；
  *  (e) `task` / `task kill 5` → 用法、退出 1、不连；
  *  (f) `--help`（退出 0）与不带参数（退出 1）打印的用法里有 `shuvix task stop <pid>`。
  */
@@ -163,20 +164,32 @@ describe.skipIf(process.platform === 'win32')(
 
     it.each([
       [['task', 'stop']],
-      [['task', 'stop', 'abc']],
       [['task', 'stop', '-5']],
-      [['task', 'stop', '1.5']],
-      [['task', 'stop', '0x10']],
-      [['task', 'stop', '1e3']],
-      [['task', 'stop', ' 7']]
+      [['task', 'stop', ' 7']],
+      [['task', 'stop', 'a b']]
     ])('FU-5d %j → 本地就拒：stderr 一句，退出 1，不连 ShuviX', async (args) => {
       const r = await cli(args, { SHUVIX_SESSION_ID: 'sess-1' })
 
       expect(r.code).toBe(1)
-      expect(r.stderr).toBe('task stop: <pid> (a number) is required\n')
+      expect(r.stderr).toBe('task stop: <pid> or <task id> is required\n')
       expect(r.stdout).toBe('')
       expect(connections).toBe(0)
     })
+
+    it.each([['toolu_01ABCdef'], ['functions.exec:3'], ['1.5'], ['0x10']])(
+      'FU-5d2 %s → 不是纯数字就按任务 id 发出去',
+      async (id) => {
+        const r = await cli(['task', 'stop', id], { SHUVIX_SESSION_ID: 'sess-1' })
+
+        expect(r.code).toBe(0)
+        expect(requests[0]).toEqual({
+          token: TOKEN,
+          command: 'task.stop',
+          params: { task: id },
+          sessionId: 'sess-1'
+        })
+      }
+    )
 
     it.each([[['task']], [['task', 'kill', '5']]])(
       'FU-5e %j → 打印用法，退出 1，不连 ShuviX',
@@ -185,7 +198,7 @@ describe.skipIf(process.platform === 'win32')(
 
         expect(r.code).toBe(1)
         expect(r.stderr).toContain('Usage:')
-        expect(r.stderr).toContain('shuvix task stop <pid>')
+        expect(r.stderr).toContain('shuvix task stop <pid|id>')
         expect(connections).toBe(0)
       }
     )
@@ -193,11 +206,11 @@ describe.skipIf(process.platform === 'win32')(
     it.each([
       [['--help'], 0],
       [[], 1]
-    ] as const)('FU-5f %j → 用法里有 shuvix task stop <pid>，退出 %i', async (args, code) => {
+    ] as const)('FU-5f %j → 用法里有 shuvix task stop <pid|id>，退出 %i', async (args, code) => {
       const r = await cli([...args])
 
       expect(r.code).toBe(code)
-      expect(r.stderr).toContain('shuvix task stop <pid>')
+      expect(r.stderr).toContain('shuvix task stop <pid|id>')
       expect(connections).toBe(0)
     })
   }

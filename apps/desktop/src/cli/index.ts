@@ -66,7 +66,7 @@ function printUsage(): void {
   process.stderr.write(
     [
       'Usage:',
-      '  shuvix task stop <pid>        stop a background task this conversation started',
+      '  shuvix task stop <pid|id>     stop a background task this conversation started',
       '  shuvix policy check [<file>] [--from <ip>] [--device <id>] [--channel <name> | ...]',
       "                                check a network access or redaction policy, or what a bot's scheduled runs",
       '                                may do without asking (--bot <name>; shuvix policy check --help)',
@@ -85,12 +85,17 @@ function widgetCommandRemoved(): never {
 
 function parseTask(rest: string[]): ParsedCommand | null {
   if (rest[0] !== 'stop') return null
-  const pid = rest[1]
-  if (!pid || !/^\d+$/.test(pid)) {
-    process.stderr.write('task stop: <pid> (a number) is required\n')
+  const target = rest[1]
+  // 任务 id 是发起它的 tool call id，长什么样归模型供应商（有的带 `.` `:`），所以只拒「不可能是」的：
+  // 空的、像选项的、带空白的
+  if (!target || target.startsWith('-') || /\s/.test(target)) {
+    process.stderr.write('task stop: <pid> or <task id> is required\n')
     process.exit(1)
   }
-  return { command: 'task.stop', params: { pid: Number(pid) } }
+  // 纯数字 = 本机进程号；其余是任务 id（ssh 远端任务的启动回执给的就是它）
+  return /^\d+$/.test(target)
+    ? { command: 'task.stop', params: { pid: Number(target) } }
+    : { command: 'task.stop', params: { task: target } }
 }
 
 /**

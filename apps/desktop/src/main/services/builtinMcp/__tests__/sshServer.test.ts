@@ -40,7 +40,7 @@
  * 另有一条装配期的对账：内置工厂表的键必须与迁移种下的那一行同名 —— 两边一旦对不上，
  * 会话里那台服务器会在建连的一瞬间抛「没注册」。
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -248,6 +248,36 @@ vi.mock('../sshControl', async (importOriginal) => {
       control.closeSession.push({ sessionId, aliases })
       return 0
     }
+  }
+})
+/**
+ * 远端任务层（sshRemoteTasks）：缺省走原件 —— 没注入枢纽，hostMode 交回「静默直连」，于是上面那一大组
+ * 直连用例照旧。`remote.mode` 一置位，这台主机就按它走（runner / direct / unreachable），runRemoteCommand 只记账、
+ * 交回 `remote.outcome`；runner 本身的行为在 sshRemoteTasks.test 里对真 shell 测。
+ */
+const remote = vi.hoisted(() => ({
+  mode: undefined as Record<string, unknown> | undefined,
+  runs: [] as Array<Record<string, unknown>>,
+  outcome: {
+    kind: 'settled',
+    output: '',
+    exitCode: 0,
+    reason: 'finished',
+    status: 'done'
+  } as Record<string, unknown>,
+  running: 0
+}))
+vi.mock('../sshRemoteTasks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sshRemoteTasks')>()
+  return {
+    ...actual,
+    hostMode: (opts: Parameters<typeof actual.hostMode>[0]) =>
+      remote.mode ? Promise.resolve(remote.mode) : actual.hostMode(opts),
+    runRemoteCommand: async (p: Record<string, unknown>) => {
+      remote.runs.push(p)
+      return remote.outcome
+    },
+    runningRemoteBackgroundCount: () => remote.running
   }
 })
 vi.mock('../../../logger', () => ({
@@ -2746,5 +2776,161 @@ describe('P2-07 ssh 的调用身份', () => {
     ])
     expect(s1.asks.map((a) => a.id)).toEqual(['tc-a'])
     expect(s2.asks.map((a) => a.id)).toEqual(['tc-b'])
+  })
+})
+
+describe('ssh exec 经远端任务（runner）', () => {
+  const RUNNER = {
+    kind: 'runner',
+    systemd: false,
+    probe: { os: 'Linux', group: 'setsid', homeWritable: true, killUserProcesses: false }
+  }
+  beforeEach(() => {
+    remote.mode = undefined
+    remote.runs = []
+    remote.running = 0
+    remote.outcome = {
+      kind: 'settled',
+      output: 'ok\n',
+      exitCode: 0,
+      reason: 'finished',
+      status: 'done'
+    }
+  })
+  afterEach(() => {
+    remote.mode = undefined
+  })
+
+  it('SSHS-R-1: runner 主机的前台命令交给 runRemoteCommand，直连那条路一次都不走', async () => {
+    writeConfig('Host web\n')
+    remote.mode = RUNNER
+    remote.outcome = {
+      kind: 'settled',
+      output: 'boom\n',
+      exitCode: 7,
+      reason: 'finished',
+      status: 'error'
+    }
+    const { client } = await open()
+    const r = await callTool(
+      client,
+      'exec',
+      execArgs({ command: 'make', description: 'build', timeout: 30 }),
+      { 'shuvix.dev/toolCallId': 'tc-r1' }
+    )
+    expect(textOf(r)).toBe('boom\n\n[Exit code: 7]')
+    expect(control.exec).toHaveLength(0)
+    expect(remote.runs).toHaveLength(1)
+    expect(remote.runs[0]).toMatchObject({
+      toolCallId: 'tc-r1',
+      alias: 'web',
+      command: 'make',
+      description: 'build',
+      background: false,
+      timeoutSec: 30,
+      mode: RUNNER
+    })
+    // 前台接中止信号：停止生成 = 停掉远端那条命令
+    expect(remote.runs[0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('SSHS-R-2: 超时说「超时」，中止交回 Aborted，起不来交回原因（isError）', async () => {
+    writeConfig('Host web\n')
+    remote.mode = RUNNER
+    const { client } = await open()
+    remote.outcome = {
+      kind: 'settled',
+      output: 'partial\n',
+      exitCode: 143,
+      reason: 'timeout',
+      status: 'killed'
+    }
+    expect(textOf(await callTool(client, 'exec', execArgs({ timeout: 5 })))).toBe(
+      'partial\n\n[Command timed out after 5s]'
+    )
+    remote.outcome = {
+      kind: 'settled',
+      output: '',
+      exitCode: 143,
+      reason: 'abort',
+      status: 'killed'
+    }
+    const aborted = await callTool(client, 'exec', execArgs())
+    expect(aborted.isError).toBe(true)
+    expect(textOf(aborted)).toBe('Aborted')
+    remote.outcome = { kind: 'failed', message: 'Authentication to "web" was refused' }
+    const failed = await callTool(client, 'exec', execArgs())
+    expect(failed.isError).toBe(true)
+    expect(textOf(failed)).toContain('Authentication to "web" was refused')
+  })
+
+  it('SSHS-R-3: 后台 —— 询问卡片标后台、不接中止、回执给任务 id 与本机镜像路径', async () => {
+    writeConfig('Host web\n')
+    remote.mode = RUNNER
+    remote.outcome = {
+      kind: 'background',
+      taskId: 'tc-bg',
+      logPath: '/tr/S/tc-bg.log',
+      logBytes: 12
+    }
+    const { client } = await open()
+    const r = await callTool(
+      client,
+      'exec',
+      execArgs({ command: 'make all', run_in_background: true }),
+      {
+        'shuvix.dev/toolCallId': 'tc-bg'
+      }
+    )
+    expect(gate.calls[0].opts).toMatchObject({ background: true })
+    expect(remote.runs[0]).toMatchObject({ background: true, signal: undefined })
+    expect(textOf(r)).toBe(
+      'Background task started on "web", task id tc-bg (12 bytes of output so far). Its output is being copied to:\n/tr/S/tc-bg.log'
+    )
+  })
+
+  it('SSHS-R-4: 后台任务满了 —— 先停一个，runRemoteCommand 一次都不调', async () => {
+    writeConfig('Host web\n')
+    remote.mode = RUNNER
+    remote.running = 8
+    const { client } = await open()
+    const r = await callTool(client, 'exec', execArgs({ run_in_background: true }))
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toContain('shuvix task stop <task id>')
+    expect(remote.runs).toHaveLength(0)
+  })
+
+  it('SSHS-R-5: 只能直连的主机 —— 前台照跑并说一次为什么，后台直接拒绝', async () => {
+    writeConfig('Host win\n')
+    remote.mode = { kind: 'direct', reason: 'it has no POSIX shell that ShuviX can drive' }
+    control.result = { stdout: 'C:\\>', stderr: '', exitCode: 0, timedOut: false }
+    const { client } = await open()
+    const first = await callTool(client, 'exec', execArgs({ host: 'win' }))
+    expect(textOf(first)).toContain('[Note: commands on "win" run over a plain connection')
+    const second = await callTool(client, 'exec', execArgs({ host: 'win' }))
+    expect(textOf(second)).toBe('C:\\>')
+    const bg = await callTool(client, 'exec', execArgs({ host: 'win', run_in_background: true }))
+    expect(bg.isError).toBe(true)
+    expect(textOf(bg)).toContain('"win" cannot run background tasks')
+    expect(remote.runs).toHaveLength(0)
+  })
+
+  it('SSHS-R-6: 探测时就连不上 —— 翻译成可操作的说明，不跑命令', async () => {
+    writeConfig('Host web\n')
+    remote.mode = {
+      kind: 'unreachable',
+      result: {
+        stdout: '',
+        stderr: 'Host key verification failed.',
+        exitCode: 255,
+        timedOut: false
+      }
+    }
+    const { client } = await open()
+    const r = await callTool(client, 'exec', execArgs())
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toContain('known_hosts')
+    expect(control.exec).toHaveLength(0)
+    expect(remote.runs).toHaveLength(0)
   })
 })

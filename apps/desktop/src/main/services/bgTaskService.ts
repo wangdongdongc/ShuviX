@@ -218,7 +218,7 @@ export function readBgTaskLog(params: {
   fromByte?: number
   maxBytes?: number
 }): BgTaskLogChunk {
-  const logPath = procs.get(params.toolCallId)?.logPath
+  const logPath = procs.get(params.toolCallId)?.logPath ?? remoteLogPathOf(params.toolCallId)
   if (!logPath || !existsSync(logPath)) {
     return { exists: false, text: '', fromByte: 0, nextByte: 0, size: 0 }
   }
@@ -245,6 +245,15 @@ export function readBgTaskLog(params: {
     nextByte: end,
     size
   }
+}
+
+/**
+ * ssh 远端任务的本机镜像（services/builtinMcp/sshRemoteTasks）：它们没有本地进程、不在 procs 里，
+ * 日志路径记在枢纽的 subject 上。面板读日志、移除时删日志都按它找。
+ */
+function remoteLogPathOf(toolCallId: string): string | undefined {
+  const task = taskRegistry.get(toolCallId)
+  return task?.subject.kind === 'bash' && task.subject.host ? task.subject.logPath : undefined
 }
 
 /** 同步读取文件的 [start, end) 区间 */
@@ -577,6 +586,20 @@ export function stopBgTaskByAgent(
   return taskRegistry.stop(info.toolCallId, { by: 'agent' }) ? 'stopped' : 'not-running'
 }
 
+/**
+ * 智能体按**任务 id** 停本会话的一条后台任务（`shuvix task stop <task id>`）。ssh 的远端任务没有本机 pid
+ * （远端进程组号与本机 pid 会撞），启动回执给的是任务 id；本机任务也认这个 id（就是发起它的 tool call id）。
+ */
+export function stopTaskByAgentId(
+  sessionId: string,
+  taskId: string
+): 'stopped' | 'not-found' | 'not-running' {
+  const task = taskRegistry.get(taskId)
+  if (!task || task.sessionId !== sessionId || task.kind !== 'bash') return 'not-found'
+  if (task.endedAt !== null) return 'not-running'
+  return taskRegistry.stop(taskId, { by: 'agent' }) ? 'stopped' : 'not-running'
+}
+
 /** 丢掉本地簿记（可选连日志文件一起删） */
 function forget(toolCallId: string, opts: { removeLog?: boolean } = {}): void {
   const proc = procs.get(toolCallId)
@@ -594,8 +617,10 @@ function forget(toolCallId: string, opts: { removeLog?: boolean } = {}): void {
 
 /** 移除一条已结束的任务（连同日志文件）。运行中的任务不移除 */
 export function dismissBgTask(toolCallId: string): boolean {
+  const remoteLog = remoteLogPathOf(toolCallId)
   if (!taskRegistry.dismiss(toolCallId)) return false
   forget(toolCallId, { removeLog: true })
+  if (remoteLog) rmSync(remoteLog, { force: true })
   return true
 }
 
@@ -604,6 +629,12 @@ export function dismissBgTask(toolCallId: string): boolean {
  * bash 那些顺带把日志文件删掉，其余的枢纽自己销账即可。
  */
 export function clearFinishedBgTasks(sessionId: string): number {
+  // 远端任务的本机镜像（没有 procs 条目）
+  for (const task of taskRegistry.list(sessionId)) {
+    if (task.endedAt === null) continue
+    const remoteLog = remoteLogPathOf(task.taskId)
+    if (remoteLog) rmSync(remoteLog, { force: true })
+  }
   for (const [toolCallId, proc] of [...procs.entries()]) {
     if (proc.sessionId !== sessionId) continue
     if (taskRegistry.get(toolCallId)?.endedAt !== null) forget(toolCallId, { removeLog: true })

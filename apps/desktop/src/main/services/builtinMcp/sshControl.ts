@@ -14,11 +14,22 @@
  * 代价是首次连一台陌生主机会直接失败，这被刻意转成一条可操作的说明（见 classifySshFailure）。
  */
 import { spawn } from 'child_process'
-import { createHash } from 'crypto'
-import { mkdirSync, rmSync, rmdirSync, existsSync, readdirSync, statSync, chmodSync } from 'fs'
+import { createHash, randomBytes } from 'crypto'
+import {
+  mkdirSync,
+  rmSync,
+  rmdirSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  chmodSync,
+  writeFileSync,
+  openSync,
+  closeSync
+} from 'fs'
 import { readdir } from 'fs/promises'
 import { join } from 'path'
-import { userInfo } from 'os'
+import { tmpdir, userInfo } from 'os'
 import { buildSpawnEnv } from '../../utils/paths'
 import { createLogger } from '../../logger'
 
@@ -48,6 +59,8 @@ const isWindows = process.platform === 'win32'
 
 export interface SshExecResult {
   stdout: string
+  /** stdout 的原始字节（按字节偏移续读远端日志的那一侧要它：拆开的多字节字符不能先解码再拼） */
+  stdoutBytes?: Buffer
   stderr: string
   /** 命令的退出码；超时为 124；ssh 自身失败（连不上等）为 255 */
   exitCode: number
@@ -171,7 +184,12 @@ function multiplexArgs(sock: string | undefined): string[] {
 function runProcess(
   bin: string,
   args: string[],
-  opts: { timeoutSec: number; signal?: AbortSignal }
+  opts: {
+    timeoutSec: number
+    signal?: AbortSignal
+    /** 交给 stdin 的全文（写完即关）；缺省 stdin 直接关掉 */
+    input?: string
+  }
 ): Promise<SshExecResult> {
   return new Promise((resolve, reject) => {
     if (opts.signal?.aborted) {
@@ -180,13 +198,15 @@ function runProcess(
     }
     const child = spawn(bin, args, {
       env: buildSpawnEnv() as NodeJS.ProcessEnv,
-      // stdin 直接关掉：BatchMode 下没有交互，留着只会让读 stdin 的远端命令等到超时
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // stdin 直接关掉：BatchMode 下没有交互，留着只会让读 stdin 的远端命令等到超时。
+      // 交了 input 的（远端脚本经 `sh -s` 读 stdin）写完就关，同样不会有人等着交互
+      stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       // Windows 上 ssh.exe / scp.exe 是控制台程序，不隐藏就每次弹一个空控制台窗口
       windowsHide: true
     })
 
-    let stdout = ''
+    // 按字节收：逐块 toString 会把切在块边界上的多字节字符拆坏
+    const stdoutChunks: Buffer[] = []
     let stderr = ''
     let timedOut = false
     let settled = false
@@ -221,10 +241,15 @@ function runProcess(
     }
     opts.signal?.addEventListener('abort', onAbort, { once: true })
 
-    child.stdout.on('data', (d: Buffer) => {
-      stdout += d.toString('utf-8')
+    if (opts.input !== undefined && child.stdin) {
+      // 远端早早退出（连不上）时写端会 EPIPE —— 结局由退出码说，这里不能让它变成未捕获异常
+      child.stdin.on('error', () => {})
+      child.stdin.end(opts.input)
+    }
+    child.stdout?.on('data', (d: Buffer) => {
+      stdoutChunks.push(d)
     })
-    child.stderr.on('data', (d: Buffer) => {
+    child.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString('utf-8')
     })
     child.on('error', (err) => {
@@ -252,7 +277,16 @@ function runProcess(
      * 宽限窗口收尾巴，窗口到了就拿现有输出落定。
      */
     const settle = (code: number | null): void =>
-      done(() => resolve({ stdout, stderr, exitCode: timedOut ? 124 : (code ?? 1), timedOut }))
+      done(() => {
+        const stdoutBytes = Buffer.concat(stdoutChunks)
+        resolve({
+          stdout: stdoutBytes.toString('utf-8'),
+          stdoutBytes,
+          stderr,
+          exitCode: timedOut ? 124 : (code ?? 1),
+          timedOut
+        })
+      })
 
     child.on('exit', (code) => {
       exited = true
@@ -289,6 +323,82 @@ export async function sshExec(opts: {
   ]
   log.info(`exec ${opts.alias}: ${opts.command.slice(0, 80)}`)
   return runProcess('ssh', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
+}
+
+/**
+ * 远端跑一段 POSIX sh 脚本：远端命令行只有 `sh -s`，脚本本身经 **stdin** 送过去。
+ *
+ * 不走命令行参数，是因为 ssh 把参数拼成一行交给远端**登录 shell** 再解析一遍 —— 登录 shell 是
+ * fish / csh 的用户那里引号规则全变了。`sh -s` 在任何登录 shell 里都是同一个意思，脚本一个字节都
+ * 不经它的手。远端任务（sshRemoteTasks）的启动、轮询、停止全走这里，复用同一个 control socket。
+ */
+export async function sshScript(opts: {
+  sessionId: string
+  alias: string
+  script: string
+  timeoutSec: number
+  signal?: AbortSignal
+  configPath?: string
+}): Promise<SshExecResult> {
+  ensureSessionControlDir(opts.sessionId)
+  const sock = controlPath(opts.sessionId, opts.alias)
+  const args = [...connectArgs(opts.configPath), ...multiplexArgs(sock), '--', opts.alias, 'sh -s']
+  return runProcess('ssh', args, {
+    timeoutSec: opts.timeoutSec,
+    signal: opts.signal,
+    input: opts.script
+  })
+}
+
+/**
+ * 发一段脚本出去就不管了：ssh 子进程**脱离** ShuviX，App 退出后照样把脚本送到。
+ *
+ * 退出 / 删会话时停远端任务用它 —— 这两个时刻都不能等网络。所以：
+ *  - 不复用 control socket（各自一条连接）：会话关停会 `-O exit` 掉它的 master，复用的话脚本可能
+ *    送到一半就跟着断了；
+ *  - 脚本先落进一个临时文件当 stdin：管道里的字节要等写端真的写出去，进程退出前不一定来得及；
+ *    POSIX 上由一层 `sh` 在 ssh 结束后删掉它，Windows 上留在系统临时目录里。
+ * 脚本自己也得经得起连接中途断开（见 sshRemoteScripts.buildKillScript：远端先把活儿放进后台）。
+ */
+export function sshScriptDetached(opts: {
+  alias: string
+  script: string
+  configPath?: string
+}): void {
+  const dir = join(tmpdir(), 'shuvix-ssh-detached')
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const file = join(dir, `${Date.now()}-${randomBytes(6).toString('hex')}.sh`)
+  writeFileSync(file, opts.script, { mode: 0o600 })
+  const sshArgs = [
+    ...connectArgs(opts.configPath),
+    '-o',
+    'ControlMaster=no',
+    '-o',
+    'ControlPath=none',
+    '--',
+    opts.alias,
+    'sh -s'
+  ]
+  const fd = openSync(file, 'r')
+  try {
+    const child = isWindows
+      ? spawn('ssh', sshArgs, {
+          stdio: [fd, 'ignore', 'ignore'],
+          detached: true,
+          windowsHide: true
+        })
+      : // `"$@"` 原样转交 ssh 的每个参数（别名、选项都不经这层 sh 解析）；删文件用 $0
+        spawn('/bin/sh', ['-c', 'ssh "$@"; rm -f "$0"', file, ...sshArgs], {
+          stdio: [fd, 'ignore', 'ignore'],
+          detached: true,
+          env: buildSpawnEnv() as NodeJS.ProcessEnv
+        })
+    child.on('error', (err) => log.warn(`detached ssh to ${opts.alias}: ${err.message}`))
+    child.unref()
+  } finally {
+    closeSync(fd)
+  }
+  log.info(`detached script sent to ${opts.alias}`)
 }
 
 /** 传输方向：up = 本地→远端，down = 远端→本地 */

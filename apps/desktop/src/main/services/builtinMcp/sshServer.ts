@@ -34,6 +34,13 @@ import {
   CONTROL_PERSIST_MS,
   type TransferDirection
 } from './sshControl'
+import {
+  hostMode,
+  runRemoteCommand,
+  runningRemoteBackgroundCount,
+  formatRemoteStartReceipt,
+  MAX_REMOTE_BACKGROUND_PER_SESSION
+} from './sshRemoteTasks'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import { getDesktopSecurityContext, resolveProjectConfig, TOOL_ABORTED } from '../toolContext'
 import { isAbsolute, resolve as resolvePath } from 'path'
@@ -54,7 +61,7 @@ const EXEC_TOOL = {
   name: 'exec',
   title: 'Run a command over SSH',
   description:
-    "Run a shell command on a remote machine. `host` must be one of the aliases returned by list-hosts — there is no way to give a hostname, user, port or credential here, because ssh resolves all of that from the user's own config. The connection is multiplexed and reused, so several hosts can be worked with in parallel simply by varying `host`. Every command asks the user for confirmation before it runs.",
+    "Run a shell command on a remote machine. `host` must be one of the aliases returned by list-hosts — there is no way to give a hostname, user, port or credential here, because ssh resolves all of that from the user's own config. The connection is multiplexed and reused, so several hosts can be worked with in parallel simply by varying `host`. Every command asks the user for confirmation before it runs. On most Unix hosts the command runs detached from the connection: if the network drops, it keeps running there and ShuviX reconnects to collect its result, so do not run it again.",
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -66,7 +73,12 @@ const EXEC_TOOL = {
       },
       timeout: {
         type: 'integer',
-        description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}).`
+        description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}). Ignored with run_in_background.`
+      },
+      run_in_background: {
+        type: 'boolean',
+        description:
+          'Run the command as a background task bound to this session: it keeps running on the remote machine after this call returns, with no timeout, and you are notified when it ends. Use for long builds, jobs and servers. Returns a task id and a local file path right away; the remote output is copied into that file as it arrives, so read it with the read tool (no approval needed) to check progress. Stop the task with `shuvix task stop <task id>`. Write the command as you would in the foreground — do NOT append `&`, use nohup or redirect the output yourself. There is no stdin, and forwarded SSH agent keys or X11 do not reach a background task.'
       }
     },
     required: ['host', 'command', 'description'],
@@ -428,6 +440,8 @@ export async function createSshMcpServer(
     const command = typeof args.command === 'string' ? args.command : ''
     if (!command.trim()) return err('A `command` is required.')
     const timeoutSec = clampTimeout(args.timeout)
+    const background = args.run_in_background === true
+    const description = typeof args.description === 'string' ? args.description : undefined
 
     // 命令级安全门。**这是内置服务器相对第三方 server 的实质特权**：它拿得到会话的
     // SecurityContext，于是远端命令走的是和 bash 同一条命令客体（channel: 'ssh'），
@@ -439,10 +453,12 @@ export async function createSshMcpServer(
         toolCallId,
         ...owner,
         toolName: 'mcp__ssh__exec',
-        description: typeof args.description === 'string' ? args.description : undefined,
+        description,
         abortError: TOOL_ABORTED,
         // 询问点的审查随这次调用一起中止
         signal,
+        // 后台任务的询问卡片要标出来 —— 用户批准的是一个不会随这次调用结束的远端进程
+        ...(background ? { background: true } : {}),
         onOther: 'return',
         missingChannel: 'deny'
       }
@@ -462,6 +478,68 @@ export async function createSshMcpServer(
     // 但「用户点开卡片时早已中止，approve 后却还是连上去跑了」必须不发生。
     if (signal?.aborted) return err('Aborted')
 
+    // 这台远端怎么跑：多数 Unix 主机走 runner（断线续跑、可后台，见 sshRemoteTasks）；
+    // 跑不了的（Windows、受限 shell、home 不可写）退回直连。每台主机每次运行探测一次
+    const mode = await hostMode({
+      sessionId: scope.sessionId,
+      alias: alias.alias,
+      configPath: configPathOverride
+    })
+    if (mode.kind === 'unreachable') {
+      await publishConnections(alias.alias)
+      const explained = classifySshFailure(alias.alias, mode.result.stderr, mode.result.stdout)
+      return err(
+        explained ??
+          `Could not reach "${alias.alias}": ${mode.result.stderr.trim() || `ssh exited with ${mode.result.exitCode}`}`
+      )
+    }
+    if (mode.kind === 'runner') {
+      if (
+        background &&
+        runningRemoteBackgroundCount(scope.sessionId) >= MAX_REMOTE_BACKGROUND_PER_SESSION
+      ) {
+        return err(
+          `Too many remote background tasks in this session (${MAX_REMOTE_BACKGROUND_PER_SESSION}). Stop one with \`shuvix task stop <task id>\` before starting another.`
+        )
+      }
+      const run = await runRemoteCommand({
+        sessionId: scope.sessionId,
+        toolCallId,
+        alias: alias.alias,
+        configPath: configPathOverride,
+        command,
+        description: description ?? command.slice(0, 80),
+        background,
+        timeoutSec,
+        // 后台任务不接中止：用户点「停止生成」不该杀掉它，那正是后台的意义
+        signal: background ? undefined : signal,
+        mode
+      })
+      await publishConnections(alias.alias)
+      if (run.kind === 'failed') return err(run.message)
+      if (run.kind === 'background') {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: formatRemoteStartReceipt(alias.alias, run.taskId, run.logPath, run.logBytes)
+            }
+          ]
+        }
+      }
+      if (run.reason === 'abort') return err('Aborted')
+      // 日志末尾的换行收掉，免得和下面的标注之间空出三行
+      let out = collapseProgressOutput(run.output, command).trimEnd()
+      if (run.reason === 'timeout') out += `\n\n[Command timed out after ${timeoutSec}s]`
+      else if (run.exitCode !== null && run.exitCode !== 0)
+        out += `\n\n[Exit code: ${run.exitCode}]`
+      return { content: [{ type: 'text' as const, text: out.trim() || '(no output)' }] }
+    }
+
+    // 直连：命令绑在这条连接上，断线即失败。后台形态要的「脱离连接」这里给不了
+    if (background) {
+      return err(`"${alias.alias}" cannot run background tasks: ${mode.reason}.`)
+    }
     const result = await sshExec({
       sessionId: scope.sessionId,
       alias: alias.alias,
@@ -485,8 +563,15 @@ export async function createSshMcpServer(
     let text = collapseProgressOutput(sanitizeBinaryOutput(raw), command)
     if (result.timedOut) text += `\n\n[Command timed out after ${timeoutSec}s]`
     else if (result.exitCode !== 0) text += `\n\n[Exit code: ${result.exitCode}]`
+    // 每台主机说一次：这里的命令不扛断线（agent 据此决定要不要把长活拆小）
+    if (!mode.quiet && !directNoted.has(alias.alias)) {
+      directNoted.add(alias.alias)
+      text += `\n\n[Note: commands on "${alias.alias}" run over a plain connection (${mode.reason}), so a dropped connection stops them and background tasks are not available]`
+    }
     return { content: [{ type: 'text' as const, text: text.trim() || '(no output)' }] }
   }
+  /** 已经提醒过「这台只能直连」的主机（每个会话实例一次） */
+  const directNoted = new Set<string>()
 
   /**
    * 传输类工具的公共部分：核对别名、把本地路径解析成绝对路径、过**文件访问策略**。

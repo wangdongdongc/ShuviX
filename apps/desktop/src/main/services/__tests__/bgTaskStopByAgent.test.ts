@@ -21,14 +21,20 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
 
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { taskRegistry } from '../taskRegistry'
 import {
+  clearFinishedBgTasks,
   dismissBgTask,
   getBgTask,
   killAllBgTasks,
+  readBgTaskLog,
   setBgTaskNotifier,
   stopBgTask,
-  stopBgTaskByAgent
+  stopBgTaskByAgent,
+  stopTaskByAgentId
 } from '../bgTaskService'
 
 const S1 = 'sess-stop-1'
@@ -206,5 +212,73 @@ describe('FU-3 pid 复用：先认正在跑的那条', () => {
     expect(stopBgTaskByAgent(S1, 4242)).toBe('not-running')
     expect(a.stop).not.toHaveBeenCalled()
     expect(b.stop).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * FU-6 ssh 远端任务（services/builtinMcp/sshRemoteTasks）在枢纽里也是 bash 任务，但没有本机进程：
+ * pid 恒为 -1、subject 带 host、logPath 是本机镜像。智能体按任务 id 停它；面板读日志、移除、清空都按
+ * subject 上的镜像路径走（bgTaskService 的 procs 里没有它）。
+ */
+describe('FU-6 远端任务：按 id 停、镜像日志的读与删', () => {
+  let dir = ''
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'shuvix-remote-mirror-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function makeRemote(sessionId: string): { id: string; log: string; stop: Made['stop'] } {
+    const id = `tc-remote-${++seq}`
+    const log = join(dir, `${id}.log`)
+    writeFileSync(log, 'line 1\nline 2\n')
+    const stop = vi.fn<(force: boolean) => void>()
+    taskRegistry.create({
+      taskId: id,
+      kind: 'bash',
+      sessionId,
+      title: 'remote',
+      subject: {
+        kind: 'bash',
+        command: 'make',
+        cwd: 'web:~',
+        pid: -1,
+        logPath: log,
+        exitCode: null,
+        signal: null,
+        logCapped: false,
+        host: 'web'
+      },
+      stop
+    })
+    return { id, log, stop }
+  }
+
+  it('FU-6a 按 id 停：本会话跑着的 → stopped（智能体停的，之后不通知）；别的会话 / 没有 / 已结束', async () => {
+    const t = makeRemote(S1)
+    expect(stopTaskByAgentId(S2, t.id)).toBe('not-found')
+    expect(stopTaskByAgentId(S1, 'tc-nope')).toBe('not-found')
+    expect(stopTaskByAgentId(S1, t.id)).toBe('stopped')
+    expect(t.stop.mock.calls).toEqual([[false]])
+    exitAsKilled(t.id)
+    await vi.advanceTimersByTimeAsync(PAST_COALESCE_MS)
+    expect(notifySpy).not.toHaveBeenCalled()
+    expect(stopTaskByAgentId(S1, t.id)).toBe('not-running')
+  })
+
+  it('FU-6b 面板读日志读的是镜像；移除 / 清空连镜像一起删', () => {
+    const a = makeRemote(S1)
+    const b = makeRemote(S1)
+    expect(readBgTaskLog({ toolCallId: a.id })).toMatchObject({
+      exists: true,
+      text: 'line 1\nline 2\n'
+    })
+    taskRegistry.settle(a.id, { status: 'done' })
+    expect(dismissBgTask(a.id)).toBe(true)
+    expect(existsSync(a.log)).toBe(false)
+    taskRegistry.settle(b.id, { status: 'error' })
+    expect(clearFinishedBgTasks(S1)).toBeGreaterThanOrEqual(1)
+    expect(existsSync(b.log)).toBe(false)
   })
 })

@@ -149,7 +149,7 @@ describe.skipIf(process.platform === 'win32')('shuvix widget 删掉了（CLI）[
     expect(r.code).toBe(code)
     expect(r.stderr).toContain('Usage:')
     expect(r.stderr).not.toContain('shuvix widget')
-    expect(r.stderr).toContain('shuvix task stop <pid>')
+    expect(r.stderr).toContain('shuvix task stop <pid|id>')
     expect(r.stderr).toContain('shuvix policy check')
     expect(r.stderr).toContain('--bot <name>')
     expect(connections).toBe(0)

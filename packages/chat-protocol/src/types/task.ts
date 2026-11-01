@@ -40,6 +40,12 @@ export interface BashTaskSubject {
   signal: string | null
   /** 日志超过告警阈值（输出不经主进程，只能定期 fstat 近似发现） */
   logCapped: boolean
+  /**
+   * 跑在哪台远端上（ssh 能力服务器的 host 别名）；本机命令没有。
+   * 远端任务的 `pid` 恒为 -1（停它走任务 id，见 `shuvix task stop`），`logPath` 是本机的镜像副本 ——
+   * 远端日志每轮轮询追加进来，于是读日志、面板实时输出与退出通知都与本机任务同一条路。
+   */
+  host?: string
 }
 
 /** 派生 agent 的专属面 —— `agentId` 即 taskId（它同时是派生期间全部 ChatEvent 的频道） */

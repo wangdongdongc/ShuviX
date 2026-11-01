@@ -23,7 +23,7 @@ import { join } from 'path'
 import { homedir, platform, userInfo } from 'os'
 import { createLogger } from '../logger'
 import { verifiedCliSession } from './cliSession'
-import { stopBgTaskByAgent } from './bgTaskService'
+import { stopBgTaskByAgent, stopTaskByAgentId } from './bgTaskService'
 import { runPolicyCheck, type PolicyCheckDeps } from './policyCheck'
 
 const log = createLogger('cliServer')
@@ -247,6 +247,15 @@ class CliServer {
     this.handlers.set('task.stop', async (p, sessionId) => {
       if (!sessionId)
         throw new Error('SHUVIX_SESSION_ID is not set — run this from a ShuviX command')
+      // 任务 id（ssh 远端任务的回执给的就是它）：不是纯数字的一律按 id 认
+      if (typeof p.task === 'string' && p.task !== '') {
+        const result = stopTaskByAgentId(sessionId, p.task)
+        if (result === 'not-found')
+          throw new Error(`no background task with id ${p.task} in this session`)
+        return result === 'stopped'
+          ? `stopping background task ${p.task}`
+          : `task ${p.task} is not running`
+      }
       const raw = p.pid
       const pid =
         typeof raw === 'number'

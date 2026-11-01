@@ -34,6 +34,8 @@ import './tools/allTools'
 import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
 import { killAllBgTasks } from './services/bgTaskService'
+import { taskRegistry } from './services/taskRegistry'
+import { setRemoteTaskHost, killAllRemoteTasks } from './services/builtinMcp/sshRemoteTasks'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
 import {
   focusSession,
@@ -48,6 +50,7 @@ import { subSessionRunner } from './services/subSessionRunner'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { initPreviewWindowService } from './services/previewWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
+import { getToolResultsDir } from './utils/paths'
 import { loadRendererPage } from './utils/rendererPage'
 import { appLogPath } from './services/appLogService'
 import {
@@ -1077,6 +1080,17 @@ app.whenReady().then(async () => {
   })
   // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）
   step('builtin MCP agent resolver', () => setBuiltinMcpAgentResolver(sessionAgentResolver()))
+  // ssh 的远端任务登记在后台任务枢纽里（与本机命令同一份）：内聚模块不能 import 平铺服务，同样注入
+  step('ssh remote task host', () =>
+    setRemoteTaskHost({
+      registry: taskRegistry,
+      settings: {
+        get: (key) => settingsDao.findByKey(key),
+        set: (key, value) => settingsDao.upsert(key, value)
+      },
+      toolResultsDir: getToolResultsDir
+    })
+  )
   // 任务列表 server（`plan`）从开着的 durable 会话读当前列表：同样注入（见 mcpService）
   step('builtin MCP task list reader', () =>
     setBuiltinMcpTaskListReader(async (sessionId, before) => {
@@ -1241,6 +1255,8 @@ const sessionHostQuit = installSessionHostQuitHook(app, {
   teardown: () => {
     destroyBrowserWindow()
     destroyAllTabs()
+    // 远端任务先走：经脱离的 ssh 停掉并删目录（不等网络）；之后枢纽的级联对它们什么也不做
+    killAllRemoteTasks()
     killAllBgTasks()
     mcpService.disconnectAll().catch(() => {})
     widgetServer.dispose()
