@@ -38,6 +38,7 @@ import { settingsDao } from '../../dao/settingsDao'
 import { browserCdpManager } from './browserCdpService'
 import { clipUrl, externalOpenDecision, routeExternalUrl } from '../externalOpen'
 import { appEventBus } from '../../utils/appEventBus'
+import { rendersOffscreen } from '../../utils/headless'
 import { destroyStagingWindow, getStagingWindow, STAGING_SIZE } from './stagingWindow'
 import { agentActing, agentOpInFlight, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { browserShortcutFor, nextZoomPercent, type BrowserShortcut } from './shortcuts'
@@ -463,7 +464,9 @@ export function createTab(
       // 都救不回来）。浏览器窗口是懒创建、以隐藏态起步的，agent 完全可能在它第一次露面之前
       // 就开 tab 并 attach —— 构造时设则在任何窗口状态下都安全（2026-09-22 实测）。
       // 代价是用户自己开的 tab 也不节流 —— 上限 12 个 tab，这个代价换的是截图始终可用。
-      backgroundThrottling: false
+      backgroundThrottling: false,
+      // Linux 上无头运行：停放窗口是离屏的，view 也得离屏 —— 离屏窗口里的普通 view 收不到输入、截不了图（见 rendersOffscreen）
+      ...(rendersOffscreen() ? { offscreen: true } : {})
       // 无 preload — 纯 Web 内容，与主 renderer 完全隔离
     }
   })

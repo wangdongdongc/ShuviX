@@ -14,6 +14,9 @@
  * `disable-backgrounding-occluded-windows` 开关（main/index.ts 启动时加）：没有它，被遮挡 / 隐藏 /
  * 从不显示的窗口里新出生的 view 都拿不到第一帧。
  *
+ * Linux 上无头运行时它与其中的 view 都离屏渲染（`rendersOffscreen`）：Ozone 的 headless 平台上普通窗口一建就让进程
+ * SIGSEGV；离屏的窗口照样有 1280×800 的视口，点击、输入、截图都照常。
+ *
  * 生命周期：第一个 tab 建出时懒创建；app 退出时销毁。主窗口关闭时，非 macOS 平台也销毁它
  * （隐藏窗口仍算「开着」，会挡住 window-all-closed → app.quit）；macOS 上留着，好让主窗口关着时
  * 仍在后台跑的 agent 继续用浏览器。
@@ -21,6 +24,7 @@
 
 import { BrowserWindow } from 'electron'
 import { guardAppWindow } from '../externalOpen'
+import { rendersOffscreen } from '../../utils/headless'
 
 /** 停放窗口的内容区尺寸 = 停放中的 tab 的视口：按常见桌面宽度排版，截图与坐标都按这个来 */
 export const STAGING_SIZE = { width: 1280, height: 800 } as const
@@ -37,7 +41,8 @@ export function getStagingWindow(): BrowserWindow {
     show: false,
     focusable: false,
     skipTaskbar: true,
-    title: 'ShuviX browser staging'
+    title: 'ShuviX browser staging',
+    ...(rendersOffscreen() ? { webPreferences: { offscreen: true } } : {})
   })
   // 它自己不加载任何页面；守卫是全体自有窗口的不变量（见 guardedWindows.test.ts），装上无副作用
   guardAppWindow(win)

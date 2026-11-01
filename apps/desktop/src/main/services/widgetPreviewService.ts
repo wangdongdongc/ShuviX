@@ -6,7 +6,8 @@
  *   桌面浏览器的标签页（宽，鼠标），`phone` = 手机浏览器（窄，触屏：`pointer: coarse`、`hover: none` 都成立）。
  * - 渲染用一个从不显示的普通窗口（show:false、不可聚焦、不进任务栏），与内置浏览器的 staging 窗口同一条路：
  *   主进程启动时带着 `disable-backgrounding-occluded-windows`，没显示过的窗口照样出帧、capturePage 拿得到图。
- *   不用离屏渲染（offscreen）：它加 CDP 的设备模拟在这台机器上直接把主进程打崩（SIGSEGV，2026-10-17 实测）。
+ *   不用离屏渲染（offscreen）：它加 CDP 的设备模拟在 macOS 上直接把主进程打崩（SIGSEGV，2026-10-17 实测）。唯一的
+ *   例外是 Linux 上无头运行（`rendersOffscreen`）：那里反过来，不离屏的窗口一建就崩，离屏 + 设备模拟实测可用（2026-11-01）。
  *   视口、触屏与移动视口都经 CDP 的 Emulation 设，截图缩回 CSS 像素（高分屏上截出来是 2 倍） —— 先载入 about:blank 再设（没有
  *   渲染进程时 CDP 命令会挂住），设好的模拟随后续导航保留；颜色方案缺省跟应用（页面骨架按用户的主题设置选那一套），
  *   给了 `theme` 就在地址上带 `shuvix-scheme`（页面骨架强制那一档，浅色 / 深色用哪套主题仍跟设置，见
@@ -35,6 +36,7 @@ import { getToolResultsDir, isSafeSessionId } from '../utils/paths'
 import { widgetServer, widgetService } from './widget'
 import { installWidgetTokens, issueWidgetToken } from './widget/widgetToken'
 import { WIDGET_SCHEME_PARAM } from './widget/widgetTheme'
+import { rendersOffscreen } from '../utils/headless'
 
 const log = createLogger('WidgetPreview')
 
@@ -279,7 +281,10 @@ async function captureOne(
       contextIsolation: true,
       nodeIntegration: false,
       session: previewSession(),
-      backgroundThrottling: false
+      backgroundThrottling: false,
+      // Linux 上无头运行：不离屏的窗口一建就让进程 SIGSEGV（见 rendersOffscreen）。那里离屏 + 设备模拟实测可用；
+      // 别处不离屏 —— macOS 上离屏 + 设备模拟会让主进程崩溃（见文件头）
+      ...(rendersOffscreen() ? { offscreen: true } : {})
     }
   })
   const wc = win.webContents

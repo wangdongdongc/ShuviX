@@ -35,6 +35,12 @@
  *   ST-U12  initBrowserWindowService 幂等；
  *   BW-H1   无头运行：openBrowserWindow 不建窗口、不 show / focus（再点也一样）；createTab 照常 —— tab 落在
  *           show:false 的停放窗口里、从不显示；
+ *   BW-H2   Linux 上无头运行（rendersOffscreen）：停放窗口的 webPreferences 恰是 {offscreen:true}、其余选项照旧；
+ *           每个 tab 的 view 在桌面的四项之外恰多一项 offscreen:true、挂在同一个停放窗口上；第二个 tab 复用它；
+ *   BW-H3   同上：agent 够得着的每条开 tab 的路（前台建 / 空白建 / 页面 window.open / 用户关掉后重开）建出的 view
+ *           都离屏、都不节流；
+ *   BW-H4   不离屏的三种：桌面模式（linux）、无头 + darwin、无头 + win32 —— 停放窗口没有 webPreferences，view 没有
+ *           offscreen 键（其余四项照旧）；桌面模式下用户打开的浏览器窗口哪一层都没有 offscreen；
  *   BV-H1   停放窗口建不出来（new BrowserWindow 抛 `no display`）：createTab 抛
  *           `Could not create the browser's hidden window: no display`、收掉这个 view（webContents.close）、
  *           listTabs 仍空、不发 browser.tabsChanged、不给浏览器窗口发 browser-view:tab-created；
@@ -1016,6 +1022,106 @@ describe('无头运行（BW-H1）', () => {
     expect(fx.allSurfacing()).toEqual([])
     expect(staging.visible).toBe(false)
   })
+
+  /** tab 的 view 在桌面上的四项 webPreferences（离屏与否之外一项不多一项不少） */
+  const TAB_PREFS = {
+    sandbox: true,
+    contextIsolation: true,
+    partition: 'persist:shuvix-browser',
+    backgroundThrottling: false
+  }
+
+  /** 对象里任何一层有没有叫 key 的键 */
+  const hasKeyDeep = (value: unknown, key: string): boolean =>
+    typeof value === 'object' &&
+    value !== null &&
+    Object.entries(value).some(([k, v]) => k === key || hasKeyDeep(v, key))
+
+  it('BW-H2 Linux 上无头运行：停放窗口与 tab 的 view 都离屏渲染，其余选项照旧；第二个 tab 复用停放窗口', async () => {
+    stubPlatform('linux')
+    const { views, wins } = await load()
+    const headless = await import('../../../utils/headless')
+    headless.enableHeadlessMode()
+
+    views.createTab('https://x.test/')
+    views.createTab('https://y.test/')
+
+    expect(fx.windows).toHaveLength(1)
+    const staging = theStaging()
+    expect(staging.opts.webPreferences).toStrictEqual({ offscreen: true })
+    expect(staging.opts).toMatchObject({
+      show: false,
+      focusable: false,
+      skipTaskbar: true,
+      useContentSize: true,
+      width: 1280,
+      height: 800,
+      title: 'ShuviX browser staging'
+    })
+    expect(fx.views).toHaveLength(2)
+    for (const view of fx.views) {
+      expect(view.opts.webPreferences, view.label).toStrictEqual({ ...TAB_PREFS, offscreen: true })
+    }
+    expect(staging.children).toEqual(fx.views)
+    expect(fx.browserWindows()).toEqual([])
+    expect(wins.isBrowserWindowOpen()).toBe(false)
+    expect(fx.allSurfacing()).toEqual([])
+    expect(staging.visible).toBe(false)
+  })
+
+  it('BW-H3 Linux 上无头运行：agent 够得着的每条开 tab 的路都离屏（前台建 / 空白建 / 页面 window.open / ⌘⇧T 重开）', async () => {
+    stubPlatform('linux')
+    const { views } = await load()
+    const headless = await import('../../../utils/headless')
+    headless.enableHeadlessMode()
+
+    const a = views.createTab('https://a.example/', { activate: true })
+    views.createTab()
+    expect(popup(fx.views[0], 'https://b.example/')).toStrictEqual({ action: 'deny' })
+    expect(fx.views).toHaveLength(3)
+    views.closeTab(a, { remember: true })
+    expect(views.reopenClosedTab()).not.toBeNull()
+    expect(fx.views).toHaveLength(4)
+    expect(fx.views[3].webContents.loaded).toEqual(['https://a.example/'])
+
+    for (const view of fx.views) {
+      expect(view.opts.webPreferences.offscreen, view.label).toBe(true)
+      expect(view.opts.webPreferences.backgroundThrottling, view.label).toBe(false)
+    }
+    expect(theStaging().opts.webPreferences).toStrictEqual({ offscreen: true })
+    expect(fx.browserWindows()).toEqual([])
+    expect(fx.allSurfacing()).toEqual([])
+  })
+
+  it.each([
+    ['a', '桌面模式（linux）', false, 'linux'],
+    ['b', '无头运行（darwin）', true, 'darwin'],
+    ['c', '无头运行（win32）', true, 'win32']
+  ] as const)(
+    'BW-H4 (%s) %s：不离屏 —— 停放窗口没有 webPreferences，tab 的 view 没有 offscreen 键',
+    async (row, _label, headlessOn, platform) => {
+      stubPlatform(platform)
+      const { views, wins } = await load()
+      if (headlessOn) (await import('../../../utils/headless')).enableHeadlessMode()
+
+      views.createTab('https://x.test/')
+      views.createTab()
+      const staging = theStaging()
+      expect('webPreferences' in staging.opts).toBe(false)
+      expect(fx.views).toHaveLength(2)
+      for (const view of fx.views) {
+        expect('offscreen' in view.opts.webPreferences, view.label).toBe(false)
+        expect(view.opts.webPreferences, view.label).toStrictEqual(TAB_PREFS)
+      }
+
+      if (row === 'a') {
+        // 桌面上用户打开的浏览器窗口也一处 offscreen 都没有
+        wins.openBrowserWindow()
+        const bw = theBrowserWindow()
+        expect(hasKeyDeep(bw.opts, 'offscreen')).toBe(false)
+      }
+    }
+  )
 })
 
 describe('停放窗口建不出来（BV-H1）', () => {

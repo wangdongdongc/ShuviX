@@ -15,6 +15,9 @@
  *   U-PV-10…15 某个尺寸失败别的照截、加载超时、收尾、console 与 did-fail-load、错误上限（B11）
  *   U-PV-16…19 导航守卫（B7）、分区、排队、挂载等待
  *   U-PV-20…23 每一步的超时（B3）、弹框（B4）、会话 id（B5）、窗口选项（不打扰用户，SIGSEGV 回归）
+ *   U-PV-23b  Linux 上无头运行：三扇窗口都只在 webPreferences 里多一项 offscreen:true（与桌面模式的选项只差这一项），
+ *             照样截到三张图、手机照样设移动视口与触屏，谁都没被显示或聚焦
+ *   U-PV-23c  桌面模式（linux）、无头 + darwin、无头 + win32：webPreferences 里都没有 offscreen
  *   U-PV-24   previewUrl：不给明暗原样交回；给了就在地址上带 shuvix-scheme（已有的参数留着；已有的 shuvix-scheme 换掉、不重复）
  *   U-PV-25   导航守卫放行这个组件自己带 shuvix-scheme 的地址，别的组件的照样拒
  *   WT4-PV-15 预览分区的补令牌钩子（真的跑 webRequest 监听者）：预览进行中，这个组件自己页面发的请求带 `preview` 令牌、
@@ -1057,6 +1060,114 @@ describe('previewWidget: session id and window options', () => {
         expect(spy, w.size).not.toHaveBeenCalled()
       }
     }
+  })
+
+  describe('Linux 上无头运行（rendersOffscreen）', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const setPlatform = (value: NodeJS.Platform): void => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value })
+    }
+    /** 与被测模块同一份实例（beforeEach 的 resetModules 之后、svc 导入时才载入） */
+    const headless = (): Promise<typeof import('../../utils/headless')> =>
+      import('../../utils/headless')
+
+    afterEach(async () => {
+      ;(await headless()).resetHeadlessModeForTests()
+      Object.defineProperty(process, 'platform', platformDescriptor)
+    })
+
+    /** 窗口选项去掉 webPreferences.offscreen 之后的样子 */
+    const withoutOffscreen = (opts: Record<string, unknown>): Record<string, unknown> => {
+      const { offscreen: _offscreen, ...prefs } = opts.webPreferences as Record<string, unknown>
+      return { ...opts, webPreferences: prefs }
+    }
+
+    it('U-PV-23b 三扇窗口的 webPreferences 都离屏（只在 webPreferences 里），其余选项与桌面上一模一样；照样截图、手机照样模拟触屏', async () => {
+      setPlatform('linux')
+      // 先在桌面模式下跑一遍，留下作比较的窗口选项
+      await run(svc.previewWidget(ID, { sessionId: 'sess-1' }))
+      const desktopOpts = windows().map((w) => w.opts)
+      expect(desktopOpts).toHaveLength(3)
+      fx.FakeWindow.all = []
+      fx.log.length = 0
+      ;(await headless()).enableHeadlessMode()
+      const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1' }))
+
+      expect(windows().map((w) => w.size)).toEqual(ALL)
+      for (const [i, w] of windows().entries()) {
+        const { width, height } = fx.SPEC[w.size]
+        expect('offscreen' in w.opts, w.size).toBe(false)
+        const prefs = w.opts.webPreferences as Record<string, unknown>
+        expect(prefs.offscreen, w.size).toBe(true)
+        expect(w.opts, w.size).toMatchObject({
+          show: false,
+          focusable: false,
+          skipTaskbar: true,
+          frame: false,
+          paintWhenInitiallyHidden: true,
+          useContentSize: true,
+          width,
+          height
+        })
+        expect(prefs, w.size).toMatchObject({
+          disableDialogs: true,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          backgroundThrottling: false
+        })
+        expect(prefs.session, w.size).toBe(fx.fakeSession)
+        // 与桌面模式下建的窗口只差 webPreferences.offscreen 这一项
+        expect(withoutOffscreen(w.opts), w.size).toStrictEqual(desktopOpts[i])
+        for (const spy of [w.show, w.showInactive, w.focus, w.moveTop, w.restore]) {
+          expect(spy, w.size).not.toHaveBeenCalled()
+        }
+      }
+
+      expect(out.images.map((img) => img.size)).toEqual(ALL)
+      expect(out.errors).toEqual([])
+      // 离屏照样走 CDP 的设备模拟：手机尺寸仍是移动视口 + 触屏
+      const cdpOf = (size: Size): Array<{ method: string; params: Record<string, unknown> }> =>
+        fx.log
+          .filter((e) => e.size === size && e.op === 'cdp')
+          .map((e) => e.arg as { method: string; params: Record<string, unknown> })
+      const phone = cdpOf('phone')
+      expect(phone.find((c) => c.method === 'Emulation.setDeviceMetricsOverride')?.params).toEqual({
+        width: 390,
+        height: 780,
+        deviceScaleFactor: 1,
+        mobile: true
+      })
+      expect(phone.find((c) => c.method === 'Emulation.setTouchEmulationEnabled')?.params).toEqual({
+        enabled: true,
+        maxTouchPoints: 5
+      })
+      for (const size of ['panel', 'window'] as const) {
+        expect(
+          cdpOf(size).some((c) => c.method === 'Emulation.setTouchEmulationEnabled'),
+          size
+        ).toBe(false)
+      }
+    })
+
+    it.each([
+      ['桌面模式（linux）', false, 'linux'],
+      ['无头运行（darwin）', true, 'darwin'],
+      ['无头运行（win32）', true, 'win32']
+    ] as const)(
+      'U-PV-23c %s：三扇窗口的 webPreferences 都没有 offscreen 键',
+      async (_label, headlessOn, platform) => {
+        setPlatform(platform)
+        if (headlessOn) (await headless()).enableHeadlessMode()
+        await run(svc.previewWidget(ID, { sessionId: 'sess-1' }))
+        expect(windows()).toHaveLength(3)
+        for (const w of windows()) {
+          expect('offscreen' in w.opts, w.size).toBe(false)
+          const prefs = w.opts.webPreferences as Record<string, unknown>
+          expect('offscreen' in prefs, w.size).toBe(false)
+        }
+      }
+    )
   })
 })
 

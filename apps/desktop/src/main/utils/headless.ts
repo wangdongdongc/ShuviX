@@ -273,6 +273,18 @@ export function isHeadless(): boolean {
   return mode !== null
 }
 
+/**
+ * 不显示的窗口与 view 要不要离屏渲染（`webPreferences.offscreen`）：Linux 上无头运行时要。那里 Chromium 跑在 Ozone 的
+ * headless 平台上，Electron 39 在它上面建任何**不离屏**的 BrowserWindow（显不显示都一样）都当场 SIGSEGV、整个进程退出 ——
+ * agent 打开第一个浏览器 tab 就把服务带走（2026-11-01 在 Ubuntu 24.04 上用纯 Electron 39.8.2 复现）。离屏的窗口里挂离屏的
+ * WebContentsView 一切照常：加载、CDP、点击与输入、capturePage / Page.captureScreenshot、设备模拟（同日实测）；两者缺一不可
+ * （离屏窗口里的普通 view 收不到输入、截不了图）。macOS / Windows 的无头运行底下仍是真的窗口系统，隐藏窗口照常工作，不动它们 ——
+ * macOS 上离屏 + 设备模拟反倒会让主进程崩溃（见 widgetPreviewService）
+ */
+export function rendersOffscreen(platform: NodeJS.Platform = process.platform): boolean {
+  return isHeadless() && platform === 'linux'
+}
+
 /** `--port` 给的端口（没给 / 不是无头 → undefined） */
 export function headlessPortOverride(): number | undefined {
   return mode?.port

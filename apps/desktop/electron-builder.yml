@@ -124,6 +124,21 @@ appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
 deb:
   artifactName: ${name}-${version}-${arch}.${ext}
+  # 写了 depends 就整份替换 electron-builder 的缺省清单：前九项照抄缺省（v0.2.47 的包就是这些），只多一项 ALSA ——
+  # Electron 链接着 libasound.so.2，缺省清单没有它，桌面版 Ubuntu 自带、最小化的服务器（无头运行）上没有，服务一启动就
+  # 「cannot open shared object file」退出（2026-11-01，Ubuntu 24.04）。24.04 起包名是 libasound2t64，更早的系统
+  # （下限 20.04、Debian）叫 libasound2，故写成二选一
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - libasound2t64 | libasound2
 publish:
   provider: github
   owner: wangdongdongc

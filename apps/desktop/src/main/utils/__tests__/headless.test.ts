@@ -40,6 +40,10 @@
  *   HL-M2  headlessWindowError：Error、code 'headless'、固定措辞
  *   HL-M3  headlessLan：缺省 false；{lan:true} → true；非布尔的 lan 不算
  *   HL-M4  headlessBind：{bind} → bind，隐含 lan（{lan:false, bind} 也是）；没给 / reset → undefined
+ *   HL-O1  rendersOffscreen：桌面模式下 linux / darwin / win32 / freebsd 一律 false
+ *   HL-O2  无头（不带参数 / 带 port 与 bind）：只有 linux → true；darwin / win32 / freebsd → false
+ *   HL-O3  缺省平台 = 调用那一刻的 process.platform（linux → true，darwin / win32 → false）
+ *   HL-O4  跟着模式开关走：打开 → true；reset → false；再打开 → true
  *   HL-W1  printHeadlessLine 只在缺换行时补一个；写到给定的 fd（缺省 1）
  *   HL-W2  每次只写进 7 字节：按字节拼回恰好 line + '\n'（含多字节的 —）
  *   HL-W3  EAGAIN 两次后成功 → 全部写完
@@ -51,6 +55,8 @@
  *   HL-X2  electron-builder.yml 的 AppImage / deb 产物名与包名（安装脚本按它拼下载地址）
  *   HL-X3  RELEASE_REPO 与 electron-builder.yml 的 publish（owner/repo）、install-linux.sh 的缺省 REPO 一致
  *   HL-X4  release.yml 的 publish job 把 install-linux.sh 拷进 dist/，Release 那一步上传 dist/*（升级命令按它下载脚本）
+ *   HL-X5  electron-builder.yml 的 deb.depends：写了它就整份替换缺省清单 —— 不重复的字符串数组，含装着的
+ *          electron-builder 的全部缺省项，外加恰一项 ALSA（`libasound2t64 | libasound2`），共 10 项
  *   HL-UP1 headlessUpdateCommand 在 linux 上收的形状：x.y.z / vx.y.z（不重复 v）/ 预发布后缀 / 多位数 → 固定的那条命令
  *   HL-UP2 收下的每条命令都恰是「curl 那个版本的脚本 | bash -s -- --version 同一个 tag」，不带 --service / --port / --lan
  *   HL-UP3 不是 x.y.z[-pre] 的一律 null：空串、latest、段数不对、空的 / 带 + 的后缀、大写 V、vv、两边空白、换行、全角数字、
@@ -60,6 +66,7 @@
  *   HL-UP6 headlessUpdateError：Error、code 'headless'、固定措辞、每次新的对象
  */
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse as parseYaml } from 'yaml'
@@ -85,6 +92,7 @@ import {
   parseHeadlessArgs,
   printHeadlessLine,
   RELEASE_REPO,
+  rendersOffscreen,
   resetHeadlessModeForTests
 } from '../headless'
 
@@ -598,6 +606,54 @@ describe('HL-M 进程级的模式开关', () => {
   })
 })
 
+describe('HL-O rendersOffscreen', () => {
+  const OTHERS = ['darwin', 'win32', 'freebsd'] as const
+
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const setPlatform = (value: NodeJS.Platform): void => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value })
+  }
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platformDescriptor)
+  })
+
+  it('HL-O1 桌面模式：哪个平台都不离屏', () => {
+    expect(isHeadless()).toBe(false)
+    for (const platform of ['linux', ...OTHERS] as const) {
+      expect(rendersOffscreen(platform), platform).toBe(false)
+    }
+  })
+
+  it('HL-O2 无头运行：只有 linux 离屏（带不带 port / bind 都一样）', () => {
+    for (const options of [undefined, { port: 8123, bind: 'eth1' }]) {
+      enableHeadlessMode(options)
+      expect(rendersOffscreen('linux'), JSON.stringify(options)).toBe(true)
+      for (const platform of OTHERS) {
+        expect(rendersOffscreen(platform), `${platform} ${JSON.stringify(options)}`).toBe(false)
+      }
+    }
+  })
+
+  it('HL-O3 缺省平台 = 调用那一刻的 process.platform', () => {
+    enableHeadlessMode()
+    setPlatform('linux')
+    expect(rendersOffscreen()).toBe(true)
+    setPlatform('darwin')
+    expect(rendersOffscreen()).toBe(false)
+    setPlatform('win32')
+    expect(rendersOffscreen()).toBe(false)
+  })
+
+  it('HL-O4 跟着模式开关走：打开 → true；reset → false；再打开 → true', () => {
+    enableHeadlessMode()
+    expect(rendersOffscreen('linux')).toBe(true)
+    resetHeadlessModeForTests()
+    expect(rendersOffscreen('linux')).toBe(false)
+    enableHeadlessMode()
+    expect(rendersOffscreen('linux')).toBe(true)
+  })
+})
+
 describe('HL-W printHeadlessLine', () => {
   const errno = (code: string): NodeJS.ErrnoException =>
     Object.assign(new Error(code), { code }) as NodeJS.ErrnoException
@@ -786,6 +842,50 @@ describe('HL-X 跨文件的措辞守卫', () => {
     expect(copyAt, 'the cp step is in the release job').toBeGreaterThanOrEqual(0)
     expect(copyAt).toBeLessThan(releaseAt)
     expect(steps[releaseAt].with?.files).toBe('dist/*')
+  })
+
+  it('HL-X5 deb.depends：整份替换缺省清单 —— 缺省九项一项不少，只多一项 ALSA', () => {
+    const builder = parseYaml(read(join(DESKTOP_ROOT, 'electron-builder.yml'))) as {
+      deb?: { depends?: unknown }
+    }
+    const depends = builder.deb?.depends
+    expect(Array.isArray(depends), 'deb.depends is a list').toBe(true)
+    const list = depends as unknown[]
+    for (const entry of list) expect(typeof entry, String(entry)).toBe('string')
+    const names = list as string[]
+    expect(new Set(names).size, 'no duplicates').toBe(names.length)
+
+    // 写了 depends 就不再用 electron-builder 的缺省清单：今天的九项照抄
+    for (const name of [
+      'libgtk-3-0',
+      'libnotify4',
+      'libnss3',
+      'libxss1',
+      'libxtst6',
+      'xdg-utils',
+      'libatspi2.0-0',
+      'libuuid1',
+      'libsecret-1-0'
+    ]) {
+      expect(names, name).toContain(name)
+    }
+    // 装着的那版 electron-builder 的缺省清单（升级后多了哪一项，这里会红）
+    const requireFromHere = createRequire(import.meta.url)
+    const fpm = requireFromHere('app-builder-lib/out/targets/FpmTarget') as {
+      default: { prototype: { getDefaultDepends(this: unknown, target: string): string[] } }
+    }
+    const defaults = fpm.default.prototype.getDefaultDepends.call(null, 'deb')
+    expect(defaults.length, 'electron-builder default deb depends').toBeGreaterThan(0)
+    for (const name of defaults) expect(names, `electron-builder default ${name}`).toContain(name)
+
+    // ALSA：24.04 起叫 libasound2t64，更早的叫 libasound2 —— 二选一写在同一项里
+    const alsa = names.filter((name) => name.includes('libasound'))
+    expect(alsa).toHaveLength(1)
+    expect(alsa[0].split('|').map((part) => part.trim())).toStrictEqual([
+      'libasound2t64',
+      'libasound2'
+    ])
+    expect(names).toHaveLength(10)
   })
 })
 
