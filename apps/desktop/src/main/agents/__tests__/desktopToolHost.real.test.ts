@@ -73,7 +73,8 @@ vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } 
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: mocks.sandboxGloballyActive,
   planFor: () => null,
-  whyUnconfined: () => 'disabled'
+  whyUnconfined: () => 'disabled',
+  sessionTempEnv: () => null
 }))
 vi.mock('../../services/botService', () => ({ botService: { forSession: () => null } }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))

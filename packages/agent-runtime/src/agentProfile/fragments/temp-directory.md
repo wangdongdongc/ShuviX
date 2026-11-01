@@ -1,0 +1,1 @@
+- Temporary files: `<<dir>>` — this session's own scratch folder<!-- shuvix:commands-start -->, also its commands' temp directory<!-- shuvix:commands-end -->. Writing there needs no approval, unlike `/tmp`. It is deleted with the session, so keep nothing there the user needs.

@@ -9,11 +9,13 @@
  *  - MG-1 开关的读取；MG-2 后端选择 + 探测缓存 + 交给探测的宿主路径（含 ShuviX 自己的程序目录）；
  *  - MG-3 planFor 不看开关；MG-4 / MG-5 planFor 的正常路径与 null（规格的读写范围就是请求里权限表的行；
  *    工作目录正是别的会话的临时工作区 —— 临时会话的 fork 共用源会话的 —— 照给计划；真链接按指向判）；
- *    MG-6 plan.explain；MG-7 cleanupSession；
+ *    MG-6 plan.explain；MG-7 cleanupSession（MG-7x：每个平台都删，与沙箱无关）；
  *  - MG-8 whyUnconfined（命令没进沙箱的原因：此刻的；从不探测）；
  *  - MG-9 sessionOwnDirsView（权限表 workdir / system 行的来源）与 settingDirForAcl（knowledge / skill 行的
  *    写法）：与开关 / 探测 / 平台都无关，照它们拼的行交给 planFor 就是规格的可写根；算不出来给 null
- *    （一行都不派生 —— 多问，绝不因此放行）。
+ *    （一行都不派生 —— 多问，绝不因此放行）；
+ *  - MG-10 ensureSessionTempDir / sessionTempEnv：会话临时目录在每个平台都有（提示词那一行、不受限命令的
+ *    TMPDIR / TMP / TEMP），与开关 / 探测无关；它就是权限表 system/tmp 那一行、执行计划里的那个目录。
  *
  * 请求里的行照 acl/derive.ts 的写法拼（{@link ownRowsOf} / {@link rowsFrom}）；真权限表要数据库，这里不起。
  */
@@ -106,6 +108,15 @@ async function load(reader?: () => string | undefined): Promise<Manager> {
 
 const sha8 = (id: string): string => createHash('sha256').update(id).digest('hex').slice(0, 8)
 const tmpDirOf = (id: string): string => `${TMP_ROOT}/${sha8(id)}`
+/**
+ * 没有沙箱后端的平台上会话临时目录的父目录：系统临时目录（真实路径）下，Linux 按 uid 分、Windows 一份
+ * （本机跑的是 POSIX 的 path，模拟 win32 时拼出来的也是 `/` 分隔 —— 测的是选哪个父目录，不是分隔符）
+ */
+async function otherPlatformTmpRoot(platform: 'linux' | 'win32'): Promise<string> {
+  const fs = await vi.importActual<typeof import('fs')>('fs')
+  const os = await vi.importActual<typeof import('os')>('os')
+  return join(fs.realpathSync(os.tmpdir()), platform === 'win32' ? 'shuvix' : `shuvix-${UID}`)
+}
 /** 正常工作目录下会话 id 派生的四行的路径（与 acl/derive.ts 的顺序一致） */
 const sessionDirsOf = (id: string, ws = WS): string[] => [
   ws,
@@ -277,7 +288,7 @@ describe('MG-1 开关的读取', () => {
 
 describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
   it.each(['linux', 'win32'] as const)(
-    'MG-2 %s：没有后端 → 不支持、不可用；全局不启用、没有计划、清理不删任何东西',
+    'MG-2 %s：没有后端 → 不支持、不可用；全局不启用、没有计划；清理照删本会话在系统临时目录下的那个目录',
     async (platform) => {
       setPlatform(platform)
       const m = await load(() => 'true')
@@ -290,7 +301,11 @@ describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
       expect(m.sandboxGloballyActive()).toBe(false)
       expect(m.planFor(request())).toBeNull()
       m.cleanupSession('s1')
-      expect(mocks.rmSync).not.toHaveBeenCalled()
+      expect(mocks.rmSync).toHaveBeenCalledTimes(1)
+      expect(mocks.rmSync).toHaveBeenCalledWith(
+        join(await otherPlatformTmpRoot(platform), sha8('s1')),
+        { recursive: true, force: true }
+      )
       expect(mocks.probe).not.toHaveBeenCalled()
     }
   )
@@ -665,6 +680,252 @@ describe('MG-7 cleanupSession', () => {
   })
 })
 
+describe('MG-7x cleanupSession：每个平台都删（临时目录不再只属于沙箱）', () => {
+  it.each(['darwin', 'linux', 'win32'] as const)(
+    'MG-7x %s：删的就是 ensureSessionTempDir 交出的那个目录',
+    async (platform) => {
+      setPlatform(platform)
+      const m = await load(() => 'true')
+      const dir = m.ensureSessionTempDir('s1')
+      expect(dir).not.toBeNull()
+      m.cleanupSession('s1')
+      expect(mocks.rmSync).toHaveBeenCalledTimes(1)
+      expect(mocks.rmSync).toHaveBeenCalledWith(dir, { recursive: true, force: true })
+    }
+  )
+
+  it.each([
+    ['设置关着', (): string | undefined => 'false', true],
+    ['探测失败', (): string | undefined => 'true', false]
+  ] as const)('MG-7x darwin %s：照样删', async (_label, reader, probeOk) => {
+    if (!probeOk) mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
+    const m = await load(reader)
+    m.cleanupSession('s1')
+    expect(mocks.rmSync).toHaveBeenCalledWith(tmpDirOf('s1'), { recursive: true, force: true })
+  })
+})
+
+/**
+ * MG-10 ensureSessionTempDir / sessionTempEnv：本会话的临时目录在**每个平台**都有（提示词里的那一行、
+ * 不受限命令的 TMPDIR / TMP / TEMP），与沙箱开没开、探测过没过都无关。macOS 固定在 /private/tmp/shuvix-<uid>
+ * 下（不看 os.tmpdir()），Linux 在系统临时目录（真实路径）的 shuvix-<uid> 下，Windows 在系统临时目录的
+ * shuvix 下且不查属主 / 权限位。建不了 → null（调用方不提它，命令照用系统的临时目录）。
+ */
+describe('MG-10 ensureSessionTempDir / sessionTempEnv：每个平台的会话临时目录', () => {
+  const PLATFORMS = ['darwin', 'linux', 'win32'] as const
+  /** 各平台的父目录 */
+  async function rootOf(platform: (typeof PLATFORMS)[number]): Promise<string> {
+    return platform === 'darwin' ? TMP_ROOT : otherPlatformTmpRoot(platform)
+  }
+  const MODE = { recursive: true, mode: 0o700 }
+
+  /** 跑一段时把 TMPDIR 换掉，finally 里还原 */
+  async function withTmpdirEnv<T>(value: string, fn: () => Promise<T>): Promise<T> {
+    const saved = process.env.TMPDIR
+    process.env.TMPDIR = value
+    try {
+      return await fn()
+    } finally {
+      if (saved === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = saved
+    }
+  }
+
+  it('MG-10a darwin：/private/tmp/shuvix-<uid>/<sha8>；先建父目录再建会话目录（都 0700），查父目录的 lstat', async () => {
+    const m = await load()
+    expect(m.ensureSessionTempDir('s1')).toBe(join(TMP_ROOT, sha8('s1')))
+    expect(mocks.mkdirSync.mock.calls).toEqual([
+      [TMP_ROOT, MODE],
+      [join(TMP_ROOT, sha8('s1')), MODE]
+    ])
+    expect(mocks.lstatSync).toHaveBeenCalledWith(TMP_ROOT)
+    expect(mocks.chmodSync).not.toHaveBeenCalled()
+  })
+
+  it('MG-10b darwin 不看 os.tmpdir()：TMPDIR 指到别处也照旧在 /private/tmp/shuvix-<uid> 下', async () => {
+    const [elsewhere] = await realSymlink('sbx-mg10b-')
+    await withTmpdirEnv(elsewhere, async () => {
+      const m = await load()
+      expect(m.ensureSessionTempDir('s1')).toBe(tmpDirOf('s1'))
+    })
+  })
+
+  it('MG-10c linux：系统临时目录（真实路径）下的 shuvix-<uid>/<sha8>；两层都 0700，查父目录的 lstat', async () => {
+    setPlatform('linux')
+    const root = await otherPlatformTmpRoot('linux')
+    const m = await load()
+    expect(m.ensureSessionTempDir('s1')).toBe(join(root, sha8('s1')))
+    expect(mocks.mkdirSync.mock.calls).toEqual([
+      [root, MODE],
+      [join(root, sha8('s1')), MODE]
+    ])
+    expect(mocks.lstatSync).toHaveBeenCalledWith(root)
+  })
+
+  it.each([
+    ['正常的目录', tmpRootStat()],
+    ['符号链接', tmpRootStat({ symlink: true })],
+    ['别人的', tmpRootStat({ uid: UID + 1 })],
+    ['权限太宽', tmpRootStat({ mode: 0o40777 })]
+  ])(
+    'MG-10d win32（父目录 lstat 会说「%s」）：shuvix/<sha8>；不查属主与权限位，照样交出路径',
+    async (_label, stat) => {
+      setPlatform('win32')
+      mocks.lstatSync.mockReturnValue(stat)
+      const root = await otherPlatformTmpRoot('win32')
+      const m = await load()
+      expect(m.ensureSessionTempDir('s1')).toBe(join(root, sha8('s1')))
+      expect(mocks.mkdirSync.mock.calls).toEqual([
+        [root, MODE],
+        [join(root, sha8('s1')), MODE]
+      ])
+      expect(mocks.lstatSync).not.toHaveBeenCalled()
+      expect(mocks.chmodSync).not.toHaveBeenCalled()
+    }
+  )
+
+  it('MG-10e linux：系统临时目录经符号链接到达 → 父目录在链接指向的真实路径下，不在链接下', async () => {
+    setPlatform('linux')
+    const [link, target] = await realSymlink('sbx-mg10e-')
+    await withTmpdirEnv(link, async () => {
+      // load 重置模块：realpath 的缓存是模块级的，新模块按此刻的 TMPDIR 算
+      const m = await load()
+      const dir = m.ensureSessionTempDir('s1')
+      expect(dir).toBe(join(target, `shuvix-${UID}`, sha8('s1')))
+      expect(dir).not.toContain(link)
+    })
+  })
+
+  it.each(['darwin', 'linux'] as const)(
+    'MG-10f %s：父目录不是自己的（不是目录 / 符号链接 / 别人的）→ null、一条警告，会话目录不建',
+    async (platform) => {
+      for (const stat of [
+        tmpRootStat({ dir: false }),
+        tmpRootStat({ symlink: true }),
+        tmpRootStat({ uid: UID + 1 })
+      ]) {
+        setPlatform(platform)
+        mocks.mkdirSync.mockReset()
+        mocks.log.warn.mockReset()
+        mocks.lstatSync.mockReturnValue(stat)
+        const root = await rootOf(platform)
+        const m = await load()
+        expect(m.ensureSessionTempDir('s1')).toBeNull()
+        expect(mocks.log.warn).toHaveBeenCalledTimes(1)
+        expect(mocks.mkdirSync.mock.calls).toEqual([[root, MODE]])
+      }
+    }
+  )
+
+  it.each([
+    ['0755', 0o40755, true],
+    ['0777', 0o40777, true],
+    ['0700', 0o40700, false]
+  ] as const)(
+    'MG-10g darwin 父目录权限 %s：宽于 0700 才先 chmod 回 0700，都照样交出路径',
+    async (_label, mode, chmod) => {
+      mocks.lstatSync.mockReturnValue(tmpRootStat({ mode }))
+      const m = await load()
+      expect(m.ensureSessionTempDir('s1')).toBe(tmpDirOf('s1'))
+      if (chmod) expect(mocks.chmodSync).toHaveBeenCalledWith(TMP_ROOT, 0o700)
+      else expect(mocks.chmodSync).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(PLATFORMS)('MG-10h %s：mkdirSync 抛错 → null、一条警告，不往外抛', async (platform) => {
+    setPlatform(platform)
+    mocks.mkdirSync.mockImplementation(() => {
+      throw new Error('EACCES')
+    })
+    const m = await load()
+    let dir: string | null | undefined
+    expect(() => {
+      dir = m.ensureSessionTempDir('s1')
+    }).not.toThrow()
+    expect(dir).toBeNull()
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1)
+    expect(String(mocks.log.warn.mock.calls[0][0])).toContain('EACCES')
+  })
+
+  it.each(['', '.', '..', 'a/b', 'a\\b', 'x..y'])(
+    'MG-10i 不安全的会话 id %j → null，一个文件系统调用都没有',
+    async (sid) => {
+      const m = await load()
+      expect(m.ensureSessionTempDir(sid)).toBeNull()
+      expect(m.sessionTempEnv(sid)).toBeNull()
+      expect(mocks.mkdirSync).not.toHaveBeenCalled()
+      expect(mocks.lstatSync).not.toHaveBeenCalled()
+      expect(mocks.chmodSync).not.toHaveBeenCalled()
+    }
+  )
+
+  it('MG-10j darwin 与沙箱无关：读取口没注入 / 设置关着 / 探测失败，都是同一个路径，且从不探测', async () => {
+    const dirs: Array<string | null> = []
+    dirs.push((await load()).ensureSessionTempDir('s1'))
+    dirs.push((await load(() => 'false')).ensureSessionTempDir('s1'))
+    mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
+    dirs.push((await load(() => 'true')).ensureSessionTempDir('s1'))
+    expect(dirs).toEqual([tmpDirOf('s1'), tmpDirOf('s1'), tmpDirOf('s1')])
+    expect(mocks.probe).not.toHaveBeenCalled()
+  })
+
+  it.each(PLATFORMS)(
+    'MG-10k %s：就是会话权限表 system/tmp 那一行（sessionOwnDirsView 的 tmp）',
+    async (platform) => {
+      setPlatform(platform)
+      const m = await load()
+      const dir = m.ensureSessionTempDir('s1')
+      expect(dir).not.toBeNull()
+      expect(dir).toBe(m.sessionOwnDirsView('s1', WS)!.tmp)
+    }
+  )
+
+  it('MG-10k darwin 沙箱可用：也是执行计划里的临时目录', async () => {
+    const m = await load(() => 'true')
+    expect(m.ensureSessionTempDir('s1')).toBe(m.planFor(request({ sessionId: 's1' }))!.spec.tmpDir)
+  })
+
+  it.each(PLATFORMS)(
+    'MG-10l %s：sessionTempEnv 的三个变量（只有 POSIX 的 TMPDIR 以 / 结尾）',
+    async (platform) => {
+      setPlatform(platform)
+      const m = await load()
+      const dir = join(await rootOf(platform), sha8('s1'))
+      expect(m.sessionTempEnv('s1')).toEqual(
+        platform === 'win32'
+          ? { TMPDIR: dir, TMP: dir, TEMP: dir }
+          : { TMPDIR: `${dir}/`, TMP: dir, TEMP: dir }
+      )
+    }
+  )
+
+  it('MG-10m sessionTempEnv 在目录建不了时为 null：不安全的会话 id / 父目录不是自己的 / mkdirSync 抛错', async () => {
+    expect((await load()).sessionTempEnv('../x')).toBeNull()
+
+    mocks.lstatSync.mockReturnValue(tmpRootStat({ uid: UID + 1 }))
+    expect((await load()).sessionTempEnv('s1')).toBeNull()
+
+    mocks.lstatSync.mockReturnValue(tmpRootStat())
+    mocks.mkdirSync.mockImplementation(() => {
+      throw new Error('ENOSPC')
+    })
+    expect((await load()).sessionTempEnv('s1')).toBeNull()
+  })
+
+  it('MG-10n darwin 沙箱可用：不受限命令拿到的变量与受限命令（执行计划）的一字不差', async () => {
+    const m = await load(() => 'true')
+    expect(m.sessionTempEnv('s1')).toEqual(m.planFor(request({ sessionId: 's1' }))!.env)
+  })
+
+  it('MG-10o 每次都现建：第二次调用照样再建会话目录（/tmp 会被系统清）', async () => {
+    const m = await load()
+    m.ensureSessionTempDir('s1')
+    m.ensureSessionTempDir('s1')
+    const sessionDirCalls = mocks.mkdirSync.mock.calls.filter((call) => call[0] === tmpDirOf('s1'))
+    expect(sessionDirCalls).toHaveLength(2)
+  })
+})
+
 describe('MG-8 whyUnconfined：命令没进沙箱的原因（不触发探测）', () => {
   type Reader = (() => string | undefined) | undefined
   const throwing: Reader = () => {
@@ -762,11 +1023,14 @@ describe('MG-9 sessionOwnDirsView / settingDirForAcl：权限表派生行的来�
   })
 
   it.each(['linux', 'win32'] as const)(
-    'MG-9b %s（没有沙箱后端）：照给 —— 文件工具一样只在权限表以外询问；不探测',
+    'MG-9b %s（没有沙箱后端）：照给 —— 文件工具一样只在权限表以外询问；临时目录在系统临时目录下；不探测',
     async (platform) => {
       setPlatform(platform)
       const m = await load(() => 'true')
-      expect(m.sessionOwnDirsView('s1', WS)).toEqual(EXPECTED)
+      expect(m.sessionOwnDirsView('s1', WS)).toEqual({
+        ...EXPECTED,
+        tmp: join(await otherPlatformTmpRoot(platform), sha8('s1'))
+      })
       expect(m.settingDirForAcl(SKILLS)).toBe(SKILLS)
       expect(mocks.probe).not.toHaveBeenCalled()
     }

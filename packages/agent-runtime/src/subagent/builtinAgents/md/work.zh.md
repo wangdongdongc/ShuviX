@@ -33,6 +33,7 @@ shuvix-project-awareness: true
 ## 环境信息
 
 - 工作目录: {{shuvix:workingDirectory}}
+{{shuvix:tempDirectory}}
 - Git 仓库: {{shuvix:isGitRepo}}
 - Platform: {{shuvix:platform}}
 - Shell: {{shuvix:shell}}

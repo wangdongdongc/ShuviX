@@ -22,9 +22,13 @@ import visualGuideJa from './visual-guide.ja.md?raw'
 import documentKindEn from './document-kind.md?raw'
 import documentKindZh from './document-kind.zh.md?raw'
 import documentKindJa from './document-kind.ja.md?raw'
+import tempDirectoryEn from './temp-directory.md?raw'
+import tempDirectoryZh from './temp-directory.zh.md?raw'
+import tempDirectoryJa from './temp-directory.ja.md?raw'
 
 const VISUAL_GUIDE_SOURCES = { en: visualGuideEn, zh: visualGuideZh, ja: visualGuideJa }
 const DOCUMENT_KIND_SOURCES = { en: documentKindEn, zh: documentKindZh, ja: documentKindJa }
+const TEMP_DIRECTORY_SOURCES = { en: tempDirectoryEn, zh: tempDirectoryZh, ja: tempDirectoryJa }
 
 /**
  * **作图的契约与手艺全在 `builtin:drawing` 技能里，系统提示只留「先加载」**（2026-09-24，用户裁决，
@@ -184,4 +188,32 @@ export function renderDocumentKind(
     guide = guide.split(MANUAL_DIR_TOKEN).join(rawDir.replace(/[\\/]+$/, '') + sep)
   }
   return guide.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/** 临时目录占位（片段手写 `<<dir>>`，渲染时换成本会话临时目录的绝对路径） */
+const TEMP_DIR_TOKEN = '<<dir>>'
+
+export interface TempDirectoryOptions {
+  /** 本会话临时目录的绝对路径（宿主建好了的）；缺省 / 空串 = 没有，整行不出 —— 不指一个不存在的地方 */
+  dir?: string
+  /** 这个 agent 手里有命令工具（bash / powershell）：才说「命令的临时目录也是它」 */
+  commands?: boolean
+}
+
+/**
+ * `{{shuvix:tempDirectory}}` 的取值 —— 环境清单里的一行：本会话自己的临时目录在哪儿。
+ *
+ * 宿主早就给每个会话备了一个临时目录（会话权限表里可写的一行，命令的 TMPDIR），可提示词从没说过它：
+ * 模型照习惯往 `/tmp` 写，文件工具每写一次都问用户，受限命令被沙箱拒、再申请越界交给审查。
+ * 路径按会话 id 算、不随时间变，随人设冻结没有问题。自含块：值就是一整行列表项，没有目录时为空串。
+ */
+export function renderTempDirectory(
+  language: string | undefined,
+  options: TempDirectoryOptions
+): string {
+  const dir = options.dir
+  if (!dir) return ''
+  let line = pickLocalizedSource(TEMP_DIRECTORY_SOURCES, language)
+  line = applySection(line, 'commands', options.commands === true)
+  return line.split(TEMP_DIR_TOKEN).join(dir).trim()
 }

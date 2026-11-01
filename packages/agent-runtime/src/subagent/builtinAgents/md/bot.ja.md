@@ -34,6 +34,7 @@ shuvix-project-awareness: true
 ## 環境
 
 - 作業ディレクトリ: {{shuvix:workingDirectory}}
+{{shuvix:tempDirectory}}
 - Git リポジトリ: {{shuvix:isGitRepo}}
 - プラットフォーム: {{shuvix:platform}}
 - シェル: {{shuvix:shell}}

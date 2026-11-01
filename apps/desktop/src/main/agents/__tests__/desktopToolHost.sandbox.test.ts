@@ -49,7 +49,9 @@ vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } 
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: mocks.sandboxGloballyActive,
   planFor: mocks.planFor,
-  whyUnconfined: mocks.whyUnconfined
+  whyUnconfined: mocks.whyUnconfined,
+  // 没套沙箱的命令要本会话临时目录的变量（工厂替身缺这个导出时，执行在 runCommand 之前就抛了）
+  sessionTempEnv: () => null
 }))
 vi.mock('../../services/bgTaskService', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/bgTaskService')>()
@@ -175,6 +177,10 @@ describe('沙箱钉子 → 真 BashTool', () => {
     expect(object.sandboxed).toBeUndefined()
     const opts = mocks.enforceCommand.mock.calls[0][1] as Record<string, unknown>
     expect(opts.unsandboxed).toBeUndefined()
+    // 命令真的跑了（不受限，不带计划）—— 执行路径上缺一个替身导出时，询问照样发生、命令却没跑
+    expect(mocks.runCommand).toHaveBeenCalledTimes(1)
+    expect(mocks.runCommand.mock.calls[0][0]).toMatchObject({ command: 'ls' })
+    expect(mocks.runCommand.mock.calls[0][0].sandbox).toBeUndefined()
   })
 
   it.each(['unsupported', 'disabled', 'unavailable'] as const)(

@@ -69,6 +69,7 @@ import { runCommand, killAllBgTasks, type CommandOutcome } from '../../services/
 import { getBashConfig } from '../../utils/toolUtils/shell'
 import { getShuvixCliEnv } from '../../utils/paths'
 import { BashTool } from '../bash'
+import { cleanupSession } from '../../services/sandbox'
 
 // ─── 夹具 ────────────────────────────────────────────────────────────────────
 
@@ -129,6 +130,8 @@ beforeAll(() => {
 afterAll(() => {
   for (const dir of [FAKE_HOME, USER_DATA_DIR, WORK_DIR])
     rmSync(dir, { recursive: true, force: true })
+  // 真的沙箱管理器给本会话建了临时目录（没套沙箱的命令也拿它当 TMPDIR）
+  cleanupSession(SESSION_ID)
 })
 
 beforeEach(() => {

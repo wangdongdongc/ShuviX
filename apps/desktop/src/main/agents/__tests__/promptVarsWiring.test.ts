@@ -30,6 +30,10 @@
  *     ShuviX 文件（chat-protocol `shuvixFileKindOfProject`），说明书目录取 knowledge 的 `builtinManualDir()`，
  *     名单里有 `read` 才指路；不是 ShuviX 文件 → 空串，notebook 正文里那一段整块收敛。
  *
+ *  5. `{{shuvix:tempDirectory}}`（PVW-T1…T5，2026-11-01）：组装出的环境清单里，工作目录那一行之后紧跟「临时文件」
+ *     一行（目录来自注入的解析器，命令那半句只给名单里有 bash / powershell 的档案）；没有目录时那一行整行消失，
+ *     清单中间不留空行；别的档案不提它。
+ *
  * P1-11 起变量表是 agentHost 直接导出的 `desktopPromptVars`（会话核心在冻结人设时调它），这里直接
  * 调它（旧的创建工厂已由 P2-13 删掉）。其余 mock 只为让模块能加载（dao 会开 SQLite，
  * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findModelInvocable —— 真服务的构造函数会去碰
@@ -95,15 +99,17 @@ vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
 
 import i18next from 'i18next'
 import {
+  BASE_PROFILE_NAMES,
   buildBuiltinProfiles,
   normalizeToolNames,
   renderDocumentKind,
   renderProfileSystemPrompt,
+  renderTempDirectory,
   type AgentProfile
 } from '@shuvix/agent-runtime'
 import type { ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
-import { desktopPromptVars } from '../agentHost'
+import { desktopPromptVars, setSessionTempDirResolver } from '../agentHost'
 
 const LANGUAGES = ['en', 'zh', 'ja']
 const SID = 'sess-desktop-1'
@@ -778,5 +784,131 @@ describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', (
       })
     }
     expect(checked).toBe(3)
+  })
+})
+
+describe('desktopPromptVars —— 本会话临时目录那一行（PVW-T）', () => {
+  const DIR = '/fixture/tmp/shuvix-501/abcd1234'
+  /** 引用 tempDirectory 的档案，及它们组装出来该不该带「命令的临时目录也是它」 */
+  const OWNERS: Record<string, boolean> = { work: true, chat: true, coding: true, bot: false }
+  const OTHERS = ['notebook', 'tab', 'explore', 'titler', 'permission-reviewer', 'knowledge-writer']
+
+  afterEach(() => setSessionTempDirResolver(() => null))
+
+  /** 正文里工作目录那一行代入变量后的样子 */
+  const workingDirectoryLine = (profile: AgentProfile, vars: PromptVars): string => {
+    const line = profile.systemPrompt
+      .split('\n')
+      .find((l) => l.includes('{{shuvix:workingDirectory}}'))
+    expect(line, `${profile.name} 应当有工作目录那一行`).toBeDefined()
+    return renderProfileSystemPrompt({ systemPrompt: line! }, vars)
+  }
+
+  it('PVW-T1 work / chat / coding / bot × 三语言（根会话）：恰好一整行，紧跟工作目录那一行、下一行仍是列表项；命令那半句只给有 bash 的档案', async () => {
+    setSessionTempDirResolver(() => DIR)
+    let checked = 0
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        for (const [name, commands] of Object.entries(OWNERS)) {
+          const profile = builtins(language).find((p) => p.name === name)!
+          const what = `${name}.${language}`
+          // 自检：commands 的期望与档案名单一致（有 bash / powershell 的才带）
+          expect(
+            profile.tools.some((t) => t === 'bash' || t === 'powershell'),
+            what
+          ).toBe(commands)
+          const vars = await varsFor({ kind: 'root', toolNames: profile.tools })
+          const out = renderProfileSystemPrompt(profile, vars)
+          const line = renderTempDirectory(language, { dir: DIR, commands })
+          const other = renderTempDirectory(language, { dir: DIR, commands: !commands })
+          expect(countOf(out, line), what).toBe(1)
+          expect(out, what).not.toContain(other)
+          const lines = out.split('\n')
+          const at = lines.indexOf(line)
+          expect(at, `${what}：应当是一整行`).toBeGreaterThan(0)
+          expect(lines[at - 1], what).toBe(workingDirectoryLine(profile, vars))
+          expect(lines[at + 1]?.startsWith('- '), what).toBe(true)
+          checked++
+        }
+      })
+    }
+    expect(checked).toBe(12)
+  })
+
+  it('PVW-T2 别的内置档案 × 三语言：提示里没有这个目录、没有残留占位符（根，以及能派发的那几个的派生形态）', async () => {
+    setSessionTempDirResolver(() => DIR)
+    const seen = new Set<string>()
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        for (const profile of builtins(language).filter((p) => OTHERS.includes(p.name))) {
+          const kinds = BASE_PROFILE_NAMES.has(profile.name)
+            ? (['root'] as const)
+            : (['root', 'spawned'] as const)
+          for (const kind of kinds) {
+            const vars = await varsFor({
+              kind,
+              ...(kind === 'spawned' ? { sessionId: 'agent-1', rootSessionId: SID, cwd: '' } : {}),
+              toolNames: profile.tools
+            })
+            const out = renderProfileSystemPrompt(profile, vars)
+            const what = `${profile.name}.${language}.${kind}`
+            expect(out, what).not.toContain(DIR)
+            expect(out, what).not.toContain('{{shuvix:')
+          }
+          seen.add(profile.name)
+        }
+      })
+    }
+    expect([...seen].sort()).toEqual([...OTHERS].sort())
+  })
+
+  it('PVW-T3 / PVW-T4 解析器给不出目录：那一行整行消失 —— 没有残留占位符、没有三连换行，工作目录那一行之后紧跟下一项', async () => {
+    setSessionTempDirResolver(() => null)
+    let checked = 0
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        // 那一行的开头（目录之前的部分），用来确认它真的不在
+        const head = renderTempDirectory(language, { dir: 'X' }).split('`X`')[0]
+        expect(head.length, `${language}：取不到行首`).toBeGreaterThan(2)
+        for (const name of Object.keys(OWNERS)) {
+          const profile = builtins(language).find((p) => p.name === name)!
+          const what = `${name}.${language}`
+          const vars = await varsFor({ kind: 'root', toolNames: profile.tools })
+          expect(vars.tempDirectory, what).toBe('')
+          const out = renderProfileSystemPrompt(profile, vars)
+          expect(out, what).not.toContain('{{shuvix:')
+          expect(out, what).not.toMatch(/\n{3,}/)
+          expect(out, what).not.toContain(head)
+          // PVW-T4：环境清单中间不留空行
+          const lines = out.split('\n')
+          const at = lines.indexOf(workingDirectoryLine(profile, vars))
+          expect(at, `${what}：找不到工作目录那一行`).toBeGreaterThanOrEqual(0)
+          expect(
+            lines[at + 1]?.startsWith('- '),
+            `${what}：下一行 ${JSON.stringify(lines[at + 1])}`
+          ).toBe(true)
+          checked++
+        }
+      })
+    }
+    expect(checked).toBe(12)
+  })
+
+  it('PVW-T5 派生的 coding（cwd 空、根会话 sess-root）：说的是根会话的目录，带命令那半句；解析器只被问到根会话', async () => {
+    const resolver = vi.fn((id: string) => `/fixture/tmp/${id}`)
+    setSessionTempDirResolver(resolver)
+    const coding = builtins('en').find((p) => p.name === 'coding')!
+    const vars = await varsFor({
+      kind: 'spawned',
+      sessionId: 'agent-1',
+      rootSessionId: 'sess-root',
+      cwd: '',
+      toolNames: coding.tools
+    })
+    const out = renderProfileSystemPrompt(coding, vars)
+    expect(out).toContain(
+      renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: true })
+    )
+    expect(resolver.mock.calls.map((call) => call[0])).toEqual(['sess-root'])
   })
 })

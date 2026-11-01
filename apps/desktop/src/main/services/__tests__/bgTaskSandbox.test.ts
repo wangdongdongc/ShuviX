@@ -12,6 +12,9 @@
  *         有计划时记的是包装后的调用、计划的变量在前；项目变量只列名字、值不落盘；与计划同名的项目变量
  *         按实际生效的那份写一次、不再列为隐藏；没有 extraEnv 就既无会话 id 也无说明行；后台任务当场
  *         就有记录；日志被收走记录还在；spawn 失败也有记录；记录写不下去不挡命令。
+ *  - BT-TE 没套沙箱时的本会话临时目录（`tempEnv`：TMPDIR / TMP / TEMP）：注入子进程、盖过同名的项目变量；
+ *         有计划时不看它（计划的变量说了算）；两样都没有时子进程的 TMPDIR 就是继承来的。
+ *  - BT-INV-TE 它和计划的变量一样写进「实际执行的命令」：按实际生效的值写一次赋值，同名的项目变量不再列为隐藏。
  *
  * [posix]：假计划用 /usr/bin/env 包 bash，Windows 上整组跳过。
  */
@@ -120,6 +123,7 @@ async function runSync(
   command: string,
   opts: {
     plan?: SandboxPlan
+    tempEnv?: Record<string, string>
     extraEnv?: Record<string, string>
     timeoutMs?: number
     toolCallId?: string
@@ -135,6 +139,7 @@ async function runSync(
     cwd: opts.cwd ?? tmpdir(),
     extraEnv: opts.extraEnv,
     sandbox: opts.plan,
+    tempEnv: opts.tempEnv,
     background: false,
     timeoutMs: opts.timeoutMs
   })
@@ -489,6 +494,113 @@ describe.skipIf(process.platform === 'win32')('bgTaskService × 沙箱计划 [po
       const warnings = invocationWarnings()
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain(toolCallId)
+    })
+  })
+
+  describe('BT-TE 本会话临时目录（没套沙箱时的 tempEnv）', () => {
+    const T = '/fixture/session-tmp/abcd1234'
+    const TE = { TMPDIR: `${T}/`, TMP: T, TEMP: T }
+    const COMMAND = 'echo "[$TMPDIR|$TMP|$TEMP|$OTHER]"'
+
+    it('BT-TE1 没有计划 + tempEnv：子进程拿到这三个变量', async () => {
+      const outcome = await runSync(COMMAND, { tempEnv: TE })
+
+      expect(outcome.info.exitCode).toBe(0)
+      expect(outcome.output.trim()).toBe(`[${T}/|${T}|${T}|]`)
+    })
+
+    it('BT-TE2 tempEnv 盖过同名的项目变量，别的项目变量照旧', async () => {
+      const outcome = await runSync(COMMAND, {
+        tempEnv: TE,
+        extraEnv: { TMPDIR: '/from/extra-env/', TMP: 'x', TEMP: 'y', OTHER: 'keep' }
+      })
+
+      expect(outcome.output.trim()).toBe(`[${T}/|${T}|${T}|keep]`)
+    })
+
+    it('BT-TE3 计划与 tempEnv 都给了：计划说了算（TMPDIR 是计划的，TMP / TEMP 不是 T），记录里也没有 T', async () => {
+      const { plan } = fakePlan()
+      const toolCallId = nextId()
+      const outcome = await runSync(COMMAND, { plan, tempEnv: TE, toolCallId })
+
+      expect(outcome.info.exitCode).toBe(0)
+      const [tmpdirSeen, tmpSeen, tempSeen] = outcome.output.trim().slice(1, -1).split('|')
+      expect(tmpdirSeen).toBe(PLAN_TMPDIR)
+      expect(tmpSeen).not.toBe(T)
+      expect(tempSeen).not.toBe(T)
+
+      const text = readInvocation(SESSION_ID, toolCallId)!
+      expect(text).toContain(`TMPDIR=${PLAN_TMPDIR}`)
+      expect(text).not.toContain(T)
+    })
+
+    it('BT-TE4 后台形态（预热窗口内就结束）：子进程同样拿到 tempEnv', async () => {
+      const outcome = await runCommand({
+        sessionId: SESSION_ID,
+        toolCallId: nextId(),
+        shell: 'bash',
+        command: COMMAND,
+        description: 'background with temp env',
+        cwd: tmpdir(),
+        tempEnv: TE,
+        background: true
+      })
+      expect(outcome.kind).toBe('settled')
+      if (outcome.kind !== 'settled') return
+      expect(outcome.output.trim()).toBe(`[${T}/|${T}|${T}|]`)
+    })
+
+    it('BT-TE5 两样都没有：子进程的 TMPDIR 就是继承来的，记录里没有 TMPDIR 赋值', async () => {
+      const toolCallId = nextId()
+      const outcome = await runSync('echo "[$TMPDIR]"', { toolCallId })
+
+      expect(outcome.output.trim()).toBe(`[${process.env.TMPDIR ?? ''}]`)
+      expect(readInvocation(SESSION_ID, toolCallId)).not.toContain('TMPDIR=')
+    })
+
+    it('BT-INV-TE1 没有计划时记录写出 tempEnv 的三个变量（在会话 id 之前），与按原样调用格式化的一致', async () => {
+      const toolCallId = nextId()
+      const command = 'echo recorded'
+      await runSync(command, {
+        toolCallId,
+        tempEnv: TE,
+        extraEnv: { SHUVIX_SESSION_ID: SESSION_ID }
+      })
+
+      expect(readInvocation(SESSION_ID, toolCallId)).toBe(
+        formatInvocation({
+          shell: 'bash',
+          invocation: shellInvocation('bash', command),
+          cwd: tmpdir(),
+          env: { ...TE, SHUVIX_SESSION_ID: SESSION_ID },
+          hiddenEnv: []
+        })
+      )
+    })
+
+    it('BT-INV-TE2 与 tempEnv 同名的项目变量（TMP）：按 tempEnv 的值写一次，不再列为隐藏', async () => {
+      const toolCallId = nextId()
+      const outcome = await runSync('echo "tmp=$TMP"', {
+        toolCallId,
+        tempEnv: TE,
+        extraEnv: { TMP: 'x', API_TOKEN: 'y', SHUVIX_SESSION_ID: SESSION_ID }
+      })
+      // 进程真正拿到的是 tempEnv 的值 —— 记录写的也是它
+      expect(outcome.output.trim()).toBe(`tmp=${T}`)
+
+      const text = readInvocation(SESSION_ID, toolCallId)!
+      expect(text).toBe(
+        formatInvocation({
+          shell: 'bash',
+          invocation: shellInvocation('bash', 'echo "tmp=$TMP"'),
+          cwd: tmpdir(),
+          env: { ...TE, SHUVIX_SESSION_ID: SESSION_ID },
+          hiddenEnv: ['API_TOKEN']
+        })
+      )
+      expect(text.split('\n')[0]).toBe(": 'Also set (values not shown): API_TOKEN'")
+      expect(text).not.toContain('TMP=x')
+      expect(text.match(/\bTMP=/g)).toHaveLength(1)
     })
   })
 })

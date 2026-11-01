@@ -162,6 +162,11 @@ export interface RunCommandParams {
    * 注入沙箱的环境变量（TMPDIR 等），退出时把「沙箱拦了什么」追加进日志。
    */
   sandbox?: SandboxPlan
+  /**
+   * 不受限的命令也用本会话的临时目录（TMPDIR / TMP / TEMP，见 sandbox 的 sessionTempEnv）。
+   * 与沙箱的变量同一个地位：盖过同名的项目变量、写进「实际执行命令」的记录。有 `sandbox` 时不看它
+   */
+  tempEnv?: Record<string, string>
 }
 
 /** 退出通知实现的注入口 —— 保留旧名，转接到枢纽（调用方是 sessionService） */
@@ -354,13 +359,15 @@ export async function runCommand(params: RunCommandParams): Promise<CommandOutco
   const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
   const base = shellInvocation(params.shell, command)
   const invocation = params.sandbox ? params.sandbox.wrap(base) : base
-  // 工具卡上「实际执行命令」的那份记录：写出复现需要的变量（沙箱的 TMPDIR 等、会话 id），
+  // 宿主给的变量：沙箱计划的（TMPDIR 等），没套沙箱时是本会话的临时目录 —— 都盖过同名的项目变量
+  const hostEnv = params.sandbox ? params.sandbox.env : (params.tempEnv ?? {})
+  // 工具卡上「实际执行命令」的那份记录：写出复现需要的变量（TMPDIR 等、会话 id），
   // 项目环境变量只列名字（见 commandInvocation.ts）
-  // （与沙箱变量同名的项目变量被沙箱的值盖掉，只按实际生效的那份写一次）
+  // （与宿主变量同名的项目变量被宿主的值盖掉，只按实际生效的那份写一次）
   // 会话 key（SHUVIX_SESSION_KEY，见 cliSession.ts）是凭据：不写进记录，连名字也不列
   const { SHUVIX_SESSION_ID, SHUVIX_SESSION_KEY: _sessionKey, ...projectEnv } = extraEnv ?? {}
   const shownEnv: Record<string, string> = {
-    ...(params.sandbox?.env ?? {}),
+    ...hostEnv,
     ...(SHUVIX_SESSION_ID !== undefined ? { SHUVIX_SESSION_ID } : {})
   }
   recordInvocation(sessionId, toolCallId, {
@@ -382,7 +389,7 @@ export async function runCommand(params: RunCommandParams): Promise<CommandOutco
   try {
     child = spawn(invocation.file, invocation.args, {
       cwd,
-      env: buildSpawnEnv(params.sandbox ? { ...extraEnv, ...params.sandbox.env } : extraEnv),
+      env: buildSpawnEnv({ ...extraEnv, ...hostEnv }),
       // stdin 恒为 /dev/null（见文件头第 6 点）；stdout/stderr 同一个 fd
       stdio: ['ignore', fd, fd],
       detached: process.platform !== 'win32',

@@ -1,8 +1,10 @@
 /**
- * {{shuvix:*}} 变量表：标量替换、空块收敛、未知占位符保留、项目会话取值。
+ * {{shuvix:*}} 变量表：标量替换、空块收敛、未知占位符保留、项目会话取值；「临时文件」那一行
+ * （主进程启动时注入的会话临时目录解析器 —— 单测替身够不到这处接线）。
  */
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { platform } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -30,6 +32,26 @@ describe('内置基座 body 的变量替换', () => {
     expect(sp).toMatch(/\n- Working directory: \//)
     expect(sp).not.toMatch(/\n{3,}/)
     expect(sp).toBe(sp.trim())
+  })
+
+  it('「临时文件」一行：紧跟工作目录那一行，路径是本会话的临时目录、已经建好（启动时注入的解析器接上了）', async () => {
+    const { sid, systemPrompt: sp } = await createAgentSession(app.main)
+    // chat 基座带 bash：那一行连「命令的临时目录也是它」一起说
+    const line = sp.match(
+      /^- Temporary files: `([^`]+)` — .*, also its commands' temp directory\./m
+    )
+    expect(line, sp).not.toBeNull()
+    const dir = line![1]
+    if (process.platform === 'darwin') {
+      expect(sp).toMatch(
+        /^- Temporary files: `\/private\/tmp\/shuvix-\d+\/[0-9a-f]{8}` — .*, also its commands' temp directory\./m
+      )
+    }
+    // 是这条会话自己的那一个（目录名按会话 id 算）
+    expect(basename(dir)).toBe(createHash('sha256').update(sid).digest('hex').slice(0, 8))
+    expect(existsSync(dir)).toBe(true)
+    // 环境清单里紧跟工作目录那一行
+    expect(sp).toMatch(/\n- Working directory: [^\n]+\n- Temporary files: `/)
   })
 
   it('项目会话（work 基座）：workingDirectory=项目路径、git 检测生效', async () => {

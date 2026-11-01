@@ -40,7 +40,7 @@ vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } 
 
 import { BashTool } from '../bash'
 import { killAllBgTasks, MAX_RUNNING_PER_SESSION } from '../../services/bgTaskService'
-import { sandboxGloballyActive } from '../../services/sandbox'
+import { cleanupSession, sandboxGloballyActive } from '../../services/sandbox'
 
 const SID = `sess-bgcap-${STAMP}`
 const CTX = { sessionId: SID } as ToolContext
@@ -55,6 +55,8 @@ afterEach(() => {
 
 afterAll(() => {
   rmSync(USER_DATA_DIR, { recursive: true, force: true })
+  // 真的沙箱管理器给本会话建了临时目录（sessionTempEnv）：会话 id 每次运行都不同，不收就越积越多
+  cleanupSession(SID)
 })
 
 describe.skipIf(process.platform === 'win32')('bash 后台任务并发上限（真 bgTaskService）', () => {

@@ -26,7 +26,11 @@
  *  - SC-UR2 pin 为真的实例（计划为 null → 'unavailable'，申请越界 → 'escalated'）不问 whyUnconfined ——
  *           它答的是「这条会话为什么没固定成套」，而这条会话固定成了套。
  *
- * 替身：sandbox 管理器（planFor / sandboxGloballyActive / whyUnconfined 都是 spy）、toolContext
+ *  - SC-TE 本会话临时目录的变量（runCommand 的 `tempEnv`）：只给没进沙箱的命令（申请越界、计划为 null、
+ *          pin 为假的 bash、PowerShell）—— 受限命令的那份随计划给，不问 sessionTempEnv；sessionTempEnv
+ *          给不出（null）时命令照跑、不带 tempEnv。前台与后台两种形态都一样。
+ *
+ * 替身：sandbox 管理器（planFor / sandboxGloballyActive / whyUnconfined / sessionTempEnv 都是 spy）、toolContext
  * （安全门是 spy）、会话权限表（sandboxEntries 是 spy）、bgTaskService 的三个执行入口、i18n。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -42,7 +46,8 @@ const mocks = vi.hoisted(() => ({
   sandboxEntries: vi.fn(),
   planFor: vi.fn(),
   sandboxGloballyActive: vi.fn(),
-  whyUnconfined: vi.fn()
+  whyUnconfined: vi.fn(),
+  sessionTempEnv: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -57,7 +62,8 @@ vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: mocks.sandb
 vi.mock('../../services/sandbox', () => ({
   planFor: mocks.planFor,
   sandboxGloballyActive: mocks.sandboxGloballyActive,
-  whyUnconfined: mocks.whyUnconfined
+  whyUnconfined: mocks.whyUnconfined,
+  sessionTempEnv: mocks.sessionTempEnv
 }))
 vi.mock('../../services/bgTaskService', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/bgTaskService')>()
@@ -85,6 +91,13 @@ const ENTRIES = [
   { path: '/granted/write', access: 'write', granted: true },
   { path: '/granted/read', access: 'read', granted: true }
 ]
+
+/** 本会话临时目录的变量（sessionTempEnv 的替身返回值） */
+const TEMP_ENV = {
+  TMPDIR: '/tmp/shuvix-test/abcd1234/',
+  TMP: '/tmp/shuvix-test/abcd1234',
+  TEMP: '/tmp/shuvix-test/abcd1234'
+}
 
 /** 一份假计划：工具层只负责把它原样交给 runCommand，不调用它的任何方法 */
 const PLAN = {
@@ -206,6 +219,9 @@ beforeEach(() => {
   mocks.planFor.mockReturnValue(PLAN)
   mocks.sandboxGloballyActive.mockReset()
   mocks.sandboxGloballyActive.mockReturnValue(false)
+  // 没套沙箱的命令拿到的本会话临时目录变量（套了沙箱的随计划给，不问它）
+  mocks.sessionTempEnv.mockReset()
+  mocks.sessionTempEnv.mockReturnValue(TEMP_ENV)
 })
 
 describe('SC-1 schema 与描述跟着构造时的 pin 走', () => {
@@ -643,6 +659,92 @@ describe('SC-SB 工具结果 details 的 sandbox（工具卡上的沙箱标记�
       expect(mocks.runCommand).not.toHaveBeenCalled()
       expect(r.text).toContain('Command was not executed')
       expect(r.details).not.toHaveProperty('sandbox')
+    }
+  )
+})
+
+describe('SC-TE 本会话临时目录的变量（runCommand 的 tempEnv）', () => {
+  /** 前台 / 后台两种形态：后台给转后台的结局 */
+  const MODES = [
+    { mode: '前台', background: false },
+    { mode: '后台', background: true }
+  ]
+  const runIn = async (
+    tool: BashTool | PowerShellTool,
+    background: boolean,
+    extra: Record<string, unknown> = {}
+  ): Promise<{ text: string; details: BashToolDetails }> => {
+    if (background) mocks.runCommand.mockResolvedValueOnce(detached())
+    return runFull(tool, params({ ...extra, run_in_background: background }))
+  }
+
+  it.each(MODES)(
+    'SC-TE1 $mode 受限（pin 为真、有计划）：不问 sessionTempEnv，不带 tempEnv，计划照给',
+    async ({ background }) => {
+      await runIn(bashWithPin(true), background)
+
+      expect(mocks.sessionTempEnv).not.toHaveBeenCalled()
+      expect(runArgs().tempEnv).toBeUndefined()
+      expect(runArgs().sandbox).toBe(PLAN)
+      expect(runArgs()).toMatchObject({ background })
+    }
+  )
+
+  it.each(MODES)(
+    'SC-TE2 $mode 申请越界：问一次本会话的 sessionTempEnv，tempEnv 原样交给 runCommand，不带计划',
+    async ({ background }) => {
+      await runIn(bashWithPin(true), background, { dangerouslyDisableSandbox: true })
+
+      expect(mocks.sessionTempEnv).toHaveBeenCalledTimes(1)
+      expect(mocks.sessionTempEnv).toHaveBeenCalledWith(SID)
+      expect(runArgs().tempEnv).toEqual(TEMP_ENV)
+      expect(runArgs().sandbox).toBeUndefined()
+    }
+  )
+
+  it.each(MODES)('SC-TE3 $mode pin 为真但计划为 null：同样拿 tempEnv', async ({ background }) => {
+    mocks.planFor.mockReturnValue(null)
+    await runIn(bashWithPin(true), background)
+
+    expect(mocks.sessionTempEnv).toHaveBeenCalledWith(SID)
+    expect(runArgs().tempEnv).toEqual(TEMP_ENV)
+    expect(runArgs().sandbox).toBeUndefined()
+  })
+
+  it.each(
+    MODES.flatMap((m) => [
+      {
+        ...m,
+        shell: 'bash（pin 为假）',
+        make: (): BashTool | PowerShellTool => bashWithPin(false)
+      },
+      { ...m, shell: 'powershell', make: (): BashTool | PowerShellTool => new PowerShellTool(CTX) }
+    ])
+  )('SC-TE4 $mode $shell：拿 tempEnv、问的是本会话', async ({ background, make }) => {
+    await runIn(make(), background)
+
+    expect(mocks.sessionTempEnv).toHaveBeenCalledTimes(1)
+    expect(mocks.sessionTempEnv).toHaveBeenCalledWith(SID)
+    expect(runArgs().tempEnv).toEqual(TEMP_ENV)
+    expect(runArgs().sandbox).toBeUndefined()
+    expect(mocks.planFor).not.toHaveBeenCalled()
+  })
+
+  it.each(MODES)(
+    'SC-TE5 $mode sessionTempEnv 给不出（null）：命令照跑，不带 tempEnv，不报错',
+    async ({ background }) => {
+      mocks.sessionTempEnv.mockReturnValue(null)
+      const r = await runIn(bashWithPin(false), background)
+
+      expect(mocks.runCommand).toHaveBeenCalledTimes(1)
+      expect(runArgs().tempEnv).toBeUndefined()
+      if (background) {
+        expect(r.details.background).toBe(true)
+        expect(r.text).toContain('777')
+      } else {
+        expect(r.text).toBe('out')
+        expect(r.details.exitCode).toBe(0)
+      }
     }
   )
 })

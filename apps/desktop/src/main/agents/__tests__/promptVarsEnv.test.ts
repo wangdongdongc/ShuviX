@@ -15,6 +15,11 @@
  *     那一刻。两个方向各一次（东八区凌晨 1 点 / 夏威夷晚上 7 点）；先自检 getHours()，池换了、TZ 没生效时
  *     大声失败而不是碰巧通过。不选 America/Los_Angeles：开发机本身就在那个时区，TZ 没切也会过。
  *
+ *  4. tempDirectory（「临时文件」那一行，TMP-1…7）：目录由主进程启动时注入的解析器给（`setSessionTempDirResolver`），
+ *     **只按根会话问**（派生 agent 用根会话的临时目录）；根会话行已不在时不问、不出这一行（不把删掉的目录建回来）；
+ *     解析器给不出（null / 空串）同样不出；commands 那半句只看这一个 agent 的名单里有没有 bash / powershell。
+ *     值一律与 renderTempDirectory 的输出比，不抄措辞。
+ *
  * mock 集合同 promptVarsWiring.test.ts（dao 会开 SQLite，electron / mcp 在 node 下起不来）；另把 resolveProjectConfig
  * 桩成可控的、把 os.homedir 桩成可换的（缺省仍是真的家目录）—— ENV-5 要一个能挡住祖先目录的家目录边界。
  */
@@ -71,8 +76,8 @@ vi.mock('../../services/knowledge', () => ({
 vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
 
 import i18next from 'i18next'
-import { localDate } from '@shuvix/agent-runtime'
-import { desktopPromptVars, gitRepoLine } from '../agentHost'
+import { localDate, renderTempDirectory } from '@shuvix/agent-runtime'
+import { desktopPromptVars, gitRepoLine, setSessionTempDirResolver } from '../agentHost'
 
 const SPAWNED: PromptVarsCtx = {
   kind: 'spawned',
@@ -371,5 +376,146 @@ describe('desktopPromptVars —— date 是本地日历日（ENV-11）', () => {
     expect(honolulu.date).toBe('2026-10-28')
     expect(honolulu.date).toBe(honolulu.local)
     expect(honolulu.date).not.toBe(honolulu.utc)
+  })
+})
+
+describe('desktopPromptVars —— 本会话临时目录那一行（TMP-1…7）', () => {
+  /** 注入的解析器：给哪个会话就答哪个会话的目录（看得出问的是谁） */
+  const resolver = vi.fn((id: string): string | null => `/fixture/tmp/${id}`)
+  const ROOT: PromptVarsCtx = { kind: 'root', sessionId: 'sess-1', cwd: '/w/x', toolNames: [] }
+
+  /** 只有给定的会话 id 有会话行 */
+  function rows(...ids: string[]): void {
+    mocks.pick.mockImplementation((id: string) => (ids.includes(id) ? { id } : undefined))
+  }
+
+  beforeEach(() => {
+    resolver.mockReset()
+    resolver.mockImplementation((id: string) => `/fixture/tmp/${id}`)
+  })
+
+  afterEach(() => {
+    // 复位成「没注入」的样子：别的用例（与别的测试文件）不受影响
+    setSessionTempDirResolver(() => null)
+  })
+
+  it('TMP-1 从没注入解析器（新加载的模块）→ 空串，根会话行在也一样', async () => {
+    rows('sess-1')
+    vi.resetModules()
+    const fresh = await import('../agentHost')
+    const vars = await fresh.desktopPromptVars({ ...ROOT, toolNames: ['bash'] })
+    expect(vars.tempDirectory).toBe('')
+    // 正控制组：同一份新模块注入之后就有这一行 —— 上面的空串确实来自「没注入」
+    fresh.setSessionTempDirResolver(resolver)
+    expect((await fresh.desktopPromptVars({ ...ROOT, toolNames: ['bash'] })).tempDirectory).toBe(
+      renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands: true })
+    )
+  })
+
+  it('TMP-2 根 ctx：值是根会话目录那一行；没传 rootSessionId 按 sessionId 问，传了按 rootSessionId 问，都只问一次', async () => {
+    setSessionTempDirResolver(resolver)
+    rows('sess-1', 'sess-root')
+
+    const legacy = await desktopPromptVars(ROOT)
+    expect(legacy.tempDirectory).toBe(renderTempDirectory('en', { dir: '/fixture/tmp/sess-1' }))
+    expect(resolver).toHaveBeenCalledTimes(1)
+    expect(resolver).toHaveBeenCalledWith('sess-1')
+
+    resolver.mockClear()
+    const rooted = await desktopPromptVars({
+      ...ROOT,
+      sessionId: 'sess-root',
+      rootSessionId: 'sess-root',
+      toolNames: ['bash']
+    })
+    expect(rooted.tempDirectory).toBe(
+      renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: true })
+    )
+    expect(resolver).toHaveBeenCalledTimes(1)
+    expect(resolver).toHaveBeenCalledWith('sess-root')
+    // 正控制组：确实是一行内容，而不是两边都空
+    expect(rooted.tempDirectory).toContain('/fixture/tmp/sess-root')
+  })
+
+  it('TMP-3 派生 ctx（sessionId 是 agentId、cwd 空）：只按根会话问，值说的是根会话的目录', async () => {
+    setSessionTempDirResolver(resolver)
+    workingDirectories({ 'sess-root': '/w/root' })
+
+    const vars = await desktopPromptVars(SPAWNED)
+
+    expect(resolver.mock.calls.map((call) => call[0])).toEqual(['sess-root'])
+    expect(vars.tempDirectory).toBe(renderTempDirectory('en', { dir: '/fixture/tmp/sess-root' }))
+    expect(vars.tempDirectory).not.toContain('agent-xyz')
+  })
+
+  it('TMP-4 根会话行已不在：空串，而且根本不去问解析器（问了就会把删掉的目录建回来）', async () => {
+    setSessionTempDirResolver(resolver)
+    rows()
+
+    expect((await desktopPromptVars({ ...ROOT, toolNames: ['bash'] })).tempDirectory).toBe('')
+    expect(
+      (await desktopPromptVars({ ...SPAWNED, rootSessionId: 'gone', toolNames: ['bash'] }))
+        .tempDirectory
+    ).toBe('')
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['null', null],
+    ['空串', '']
+  ])('TMP-5 解析器给不出目录（%s）→ 空串', async (_label, answer) => {
+    setSessionTempDirResolver(() => answer)
+    rows('sess-1')
+    expect((await desktopPromptVars({ ...ROOT, toolNames: ['bash'] })).tempDirectory).toBe('')
+  })
+
+  it.each([
+    [[], false],
+    [['read', 'write'], false],
+    [['bash'], true],
+    [['powershell'], true],
+    [['bash', 'powershell'], true],
+    [['read', 'bash'], true],
+    [['Bash', 'shell', 'mcp:bash'], false]
+  ] as Array<[string[], boolean]>)(
+    'TMP-6 根 ctx 名单 %j → commands=%s（只认这个 agent 名单里的 bash / powershell）',
+    async (toolNames, commands) => {
+      setSessionTempDirResolver(resolver)
+      rows('sess-1')
+      const vars = await desktopPromptVars({ ...ROOT, toolNames })
+      expect(vars.tempDirectory).toBe(
+        renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands })
+      )
+    }
+  )
+
+  it('TMP-6 派生 ctx 名单有 bash → commands 那半句在（按派生 agent 自己的名单，不按根的）', async () => {
+    setSessionTempDirResolver(resolver)
+    workingDirectories({ 'sess-root': '/w/root' })
+    const vars = await desktopPromptVars({ ...SPAWNED, toolNames: ['bash'] })
+    expect(vars.tempDirectory).toBe(
+      renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: true })
+    )
+    // 两版确实不同 —— 否则上面这条分不出 commands 的真假
+    expect(vars.tempDirectory).not.toBe(
+      renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: false })
+    )
+  })
+
+  it.each(['zh', 'ja'])('TMP-7 界面语言 %s：取那一语言的片段', async (language) => {
+    setSessionTempDirResolver(resolver)
+    rows('sess-1')
+    await i18next.changeLanguage(language)
+    try {
+      const vars = await desktopPromptVars({ ...ROOT, toolNames: ['bash'] })
+      expect(vars.tempDirectory).toBe(
+        renderTempDirectory(language, { dir: '/fixture/tmp/sess-1', commands: true })
+      )
+      expect(vars.tempDirectory).not.toBe(
+        renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands: true })
+      )
+    } finally {
+      await i18next.changeLanguage('en')
+    }
   })
 })

@@ -50,6 +50,10 @@
  * `{{shuvix:documentKind}}` 说这是什么文件、规范在说明书哪一条、改动会不会被检查。同样只凭三语一字
  * 不差的记号认段落：每种文件的自述行（`shuvix: agent v1` …，技能是 `SKILL.md`、知识库是 `shuvix: okf v0.2`）、
  * 说明书目录（用例里传 `/m`）、「改动会被检查」那段里的 `doc_read`。
+ *
+ * 第三份片段 `renderTempDirectory`（TD 组，2026-11-01）：`{{shuvix:tempDirectory}}` 是环境清单里的
+ * 一行 —— 本会话自己的临时目录。同样只凭代码记号认：目录本身（反引号包着）、`/tmp`（「写那里要问」
+ * 那半句）；命令那半句只凭「多出来的一段连续文字」认，不认措辞。
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -58,6 +62,7 @@ import {
 } from '@shuvix/chat-protocol/shuvixFileNotes'
 import {
   renderDocumentKind,
+  renderTempDirectory,
   renderVisualCraft,
   renderVisualGuide,
   type DocumentKindOptions,
@@ -904,5 +909,154 @@ describe('renderDocumentKind —— 笔记本文档是哪种 ShuviX 文件（DK�
       expect(at, language).toBeGreaterThan(headings[0] + 1)
       expect(at, language).toBeLessThan(headings[1])
     }
+  })
+})
+
+/**
+ * `renderTempDirectory`（TD 组）—— 环境清单里「临时文件」那一行：本会话自己的临时目录（宿主建好了的绝对路径）。
+ * 没有目录 ⇒ 空串（占位符独占一行，整行连同换行一起去掉，见 promptVars 的 PV-EL）；有目录 ⇒ 恰好一行
+ * 列表项。`commands` 只往这一行里插一段连续的话（「命令的临时目录也是它」）—— 用公共前缀 + 公共后缀
+ * 还原另一版来认，不认措辞。
+ */
+describe('renderTempDirectory —— 本会话临时目录那一行（TD）', () => {
+  const DIR = '/fixture/tmp/shuvix-501/abcd1234'
+  const COMMANDS = [undefined, false, true] as const
+  /** 归属 tempDirectory 的档案（三语各一份正文） */
+  const OWNERS = ['bot', 'chat', 'coding', 'work']
+  const PLACEHOLDER = '{{shuvix:tempDirectory}}'
+
+  /** 两个字符串的最长公共前缀 / 后缀长度（后缀不与前缀重叠，上限是短的那个减去前缀） */
+  const commonPrefix = (a: string, b: string): number => {
+    let i = 0
+    while (i < a.length && i < b.length && a[i] === b[i]) i++
+    return i
+  }
+  const commonSuffix = (a: string, b: string, limit: number): number => {
+    let i = 0
+    while (i < limit && a[a.length - 1 - i] === b[b.length - 1 - i]) i++
+    return i
+  }
+
+  it('TD-1 没有目录（缺省 / 空串）⇒ 空串：任何语言、commands 怎么给都一样', () => {
+    for (const dir of [undefined, '']) {
+      for (const language of ['en', 'zh', 'ja', undefined, 'ko']) {
+        for (const commands of COMMANDS) {
+          const what = `dir=${JSON.stringify(dir)} ${JSON.stringify(language)} commands=${commands}`
+          expect(renderTempDirectory(language, { dir, commands }), what).toBe('')
+        }
+      }
+    }
+    // 正控制组：同样的调用给了目录就有内容 —— 否则上面那圈可能只是函数整个坏了
+    expect(renderTempDirectory('en', { dir: DIR })).not.toBe('')
+  })
+
+  it('TD-2 有目录：恰好一行列表项，目录用反引号包着出现一次、提到 `/tmp`，不漏片段的记号', () => {
+    for (const language of LANGUAGES) {
+      for (const commands of COMMANDS) {
+        const out = renderTempDirectory(language, { dir: DIR, commands })
+        const what = `${language} commands=${commands}`
+        expect(out, what).not.toContain('\n')
+        expect(out, what).toBe(out.trim())
+        expect(out.startsWith('- '), what).toBe(true)
+        expect(countOf(out, `\`${DIR}\``), what).toBe(1)
+        expect(countOf(out, DIR), what).toBe(1)
+        expect(out, what).toContain('`/tmp`')
+        for (const leak of ['<<', '<!--', 'shuvix:', '{{'])
+          expect(out, `${what} ${leak}`).not.toContain(leak)
+      }
+    }
+  })
+
+  it.each(LANGUAGES)(
+    'TD-3 %s：commands 为真只多一段连续的话（公共前缀 + 公共后缀还原出另一版）；缺省等于 false',
+    (language) => {
+      const without = renderTempDirectory(language, { dir: DIR, commands: false })
+      const withCommands = renderTempDirectory(language, { dir: DIR, commands: true })
+      expect(withCommands.length).toBeGreaterThan(without.length)
+      const p = commonPrefix(without, withCommands)
+      const s = commonSuffix(without, withCommands, without.length - p)
+      expect(p + s, '去掉插入的那一段，其余应当原样').toBe(without.length)
+      expect(withCommands.slice(0, p) + withCommands.slice(withCommands.length - s)).toBe(without)
+      // 插进去的那一段不碰目录本身
+      expect(withCommands.slice(p, withCommands.length - s)).not.toContain(DIR)
+      expect(renderTempDirectory(language, { dir: DIR })).toBe(without)
+    }
+  )
+
+  it('TD-4 语言回退：缺省 / 空串 / 未翻译 → en；zh-CN / ZH → zh；ja-JP → ja；三语各不相同', () => {
+    for (const commands of COMMANDS) {
+      const render = (language: string | undefined): string =>
+        renderTempDirectory(language, { dir: DIR, commands })
+      const [en, zh, ja] = LANGUAGES.map(render)
+      for (const language of [undefined, '', 'ko']) {
+        expect(render(language), `${JSON.stringify(language)} commands=${commands}`).toBe(en)
+      }
+      expect(render('zh-CN')).toBe(zh)
+      expect(render('ZH')).toBe(zh)
+      expect(render('ja-JP')).toBe(ja)
+      // 漏译会让某一语言静默拿到英文原文
+      expect(new Set([en, zh, ja]).size, `commands=${commands}`).toBe(3)
+    }
+  })
+
+  it('TD-5 路径原样写进去：Windows 的反斜杠不动，`$&` / `$1` 不被当成替换记号', () => {
+    const windows = 'C:\\Users\\u\\AppData\\Local\\Temp\\shuvix\\abcd1234'
+    const dollars = '/t/$&/$1'
+    for (const language of LANGUAGES) {
+      expect(renderTempDirectory(language, { dir: windows }), language).toContain(`\`${windows}\``)
+      const out = renderTempDirectory(language, { dir: dollars, commands: true })
+      expect(out, language).toContain(`\`${dollars}\``)
+      expect(countOf(out, dollars), language).toBe(1)
+    }
+  })
+
+  it('TD-6 恰好 bot / chat / coding / work 引用它，三语每份正文各恰好一次；别的内置档案三语都在、都不引用', () => {
+    expect(profilesUsing('tempDirectory')).toEqual(OWNERS)
+    let bodies = 0
+    for (const language of LANGUAGES) {
+      const profiles = buildBuiltinProfiles({ language, readMd })
+      for (const name of OWNERS) {
+        const profile = profiles.find((p) => p.name === name)
+        expect(profile, `${name}.${language}`).toBeDefined()
+        expect(countOf(profile!.systemPrompt, PLACEHOLDER), `${name}.${language}`).toBe(1)
+        bodies++
+      }
+      // 自检：下面这几个确实被查过（profilesUsing 的「不引用」不是因为档案不存在）
+      for (const name of [
+        'notebook',
+        'tab',
+        'explore',
+        'titler',
+        'permission-reviewer',
+        'knowledge-writer'
+      ]) {
+        const profile = profiles.find((p) => p.name === name)
+        expect(profile, `${name}.${language} 应当存在`).toBeDefined()
+        expect(profile!.systemPrompt, `${name}.${language}`).not.toContain(PLACEHOLDER)
+      }
+    }
+    expect(bodies).toBe(12)
+  })
+
+  it('TD-7 每份正文里占位符独占一行，紧跟在工作目录那一行之后，下一行也是列表项（环境清单中间）', () => {
+    let checked = 0
+    for (const language of LANGUAGES) {
+      const profiles = buildBuiltinProfiles({ language, readMd })
+      for (const name of OWNERS) {
+        const what = `${name}.${language}`
+        const lines = profiles.find((p) => p.name === name)!.systemPrompt.split('\n')
+        const at = lines.findIndex((line) => line.includes(PLACEHOLDER))
+        expect(at, what).toBeGreaterThan(0)
+        expect(lines[at], `${what}：占位符应当独占一行`).toBe(PLACEHOLDER)
+        expect(lines[at - 1].startsWith('- '), what).toBe(true)
+        expect(lines[at - 1], what).toContain('{{shuvix:workingDirectory}}')
+        expect(
+          lines[at + 1]?.startsWith('- '),
+          `${what}：下一行 ${JSON.stringify(lines[at + 1])}`
+        ).toBe(true)
+        checked++
+      }
+    }
+    expect(checked).toBe(12)
   })
 })

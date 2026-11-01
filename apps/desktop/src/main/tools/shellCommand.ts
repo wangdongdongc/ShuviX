@@ -33,7 +33,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import { planFor, whyUnconfined, type SandboxPlan } from '../services/sandbox'
+import { planFor, sessionTempEnv, whyUnconfined, type SandboxPlan } from '../services/sandbox'
 import { sessionAcl } from '../services/acl'
 import { CLI_SESSION_KEY_ENV, cliSessionKey } from '../services/cliSession'
 import {
@@ -265,6 +265,9 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       SHUVIX_SESSION_ID: this.ctx.sessionId,
       [CLI_SESSION_KEY_ENV]: cliSessionKey(this.ctx.sessionId)
     }
+    // 没进沙箱的命令也用本会话的临时目录（受限的那份随计划给）：系统提示词让模型把临时文件放这里，
+    // mktemp 之类就不该落到另一个地方
+    const tempEnv = plan ? undefined : (sessionTempEnv(this.ctx.sessionId) ?? undefined)
 
     if (params.run_in_background) {
       return this.runInBackground(
@@ -273,6 +276,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         config.workingDirectory,
         extraEnv,
         plan,
+        tempEnv,
         sandbox
       )
     }
@@ -288,6 +292,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       cwd: config.workingDirectory,
       extraEnv,
       sandbox: plan ?? undefined,
+      tempEnv,
       background: false,
       timeoutMs: timeout > 0 ? timeout * 1000 : 0,
       signal
@@ -324,6 +329,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     cwd: string,
     extraEnv: Record<string, string>,
     plan: SandboxPlan | null,
+    tempEnv: Record<string, string> | undefined,
     sandbox: ShellSandboxState
   ): Promise<ToolResult<BashToolDetails>> {
     const sessionId = this.ctx.sessionId
@@ -350,6 +356,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       cwd,
       extraEnv,
       sandbox: plan ?? undefined,
+      tempEnv,
       background: true
     })
 

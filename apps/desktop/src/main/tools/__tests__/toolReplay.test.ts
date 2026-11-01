@@ -56,7 +56,8 @@ vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } 
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: () => false,
   planFor: () => null,
-  whyUnconfined: () => 'disabled'
+  whyUnconfined: () => 'disabled',
+  sessionTempEnv: () => null
 }))
 vi.mock('../../services/skillService', () => ({
   skillService: {

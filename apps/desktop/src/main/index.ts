@@ -85,7 +85,12 @@ import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { shownImageFilePath } from './services/shownImages'
 import { cliServer } from './services/cliServer'
-import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
+import {
+  ensureSessionTempDir,
+  SANDBOX_ENABLED_KEY,
+  setSandboxSettingReader
+} from './services/sandbox'
+import { setSessionTempDirResolver } from './agents/agentHost'
 import { sessionAcl, setAclBotFile, setAclSkillRoots } from './services/acl'
 import { skillService } from './services/skillService'
 import { mdMetaStore } from './services/mdMeta'
@@ -1123,6 +1128,8 @@ app.whenReady().then(async () => {
   // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
   // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
+  // 系统提示词里「临时文件」那一行的目录（每个平台都有，与沙箱开不开无关）
+  setSessionTempDirResolver(ensureSessionTempDir)
   // 会话权限表的技能目录行（acl 是独立模块，不反向依赖 skillService）
   setAclSkillRoots(() => skillService.enabledSkillRoots())
   // bot 会话自己那份 bot 文件的可写行（形态判定在 sessionService.ownBotFile —— 与人设注入同一个）

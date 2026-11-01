@@ -16,7 +16,7 @@
  * 不受限（或反过来）。本模块不再按会话登记钉子。
  */
 import { mkdirSync, lstatSync, chmodSync, realpathSync, rmSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
 import { app } from 'electron'
 import { createLogger } from '../../logger'
@@ -113,9 +113,16 @@ function currentUid(): number {
   return process.getuid?.() ?? 0
 }
 
-/** 每会话临时目录的父目录：/private/tmp/shuvix-<uid>（短路径，远在 AF_UNIX 的 104 字节上限以内） */
+/**
+ * 每会话临时目录的父目录。macOS：/private/tmp/shuvix-<uid> —— 系统的 TMPDIR（/var/folders/…）太长，
+ * 命令在里面建的 socket 会撞 AF_UNIX 的 104 字节上限；/private/tmp 是真实路径，与 Seatbelt 比对的写法一致。
+ * 别的平台没有沙箱后端，临时目录照样有（会话权限表的 system/tmp 行、命令的 TMPDIR、提示词里的那一行）：
+ * 放在系统临时目录下 —— Linux 按 uid 分；Windows 的系统临时目录本来就是每个用户一份
+ */
 function tmpRootPath(): string {
-  return `/private/tmp/shuvix-${currentUid()}`
+  if (process.platform === 'darwin') return `/private/tmp/shuvix-${currentUid()}`
+  const name = process.platform === 'win32' ? 'shuvix' : `shuvix-${currentUid()}`
+  return join(real(tmpdir()), name)
 }
 
 /** 可执行文件所在的应用包（`…/X.app`）；不在应用包里就取它的目录 —— Electron 要读包里的 Frameworks */
@@ -258,22 +265,60 @@ export function settingDirForAcl(dir: string): string | null {
   }
 }
 
-/** 建本会话临时目录：父目录 0700 且属于当前用户（/private/tmp 人人可写，别人可以抢先建同名目录） */
+/**
+ * 建本会话临时目录：父目录 0700 且属于当前用户（/tmp 人人可写，别人可以抢先建同名目录）。
+ * Windows 不查属主与权限位：系统临时目录本来就是这个用户自己的，lstat 也给不出有意义的 uid / mode
+ */
 function ensureTmpDir(tmpRoot: string, dir: string, uid: number): boolean {
   try {
     mkdirSync(tmpRoot, { recursive: true, mode: 0o700 })
-    const st = lstatSync(tmpRoot)
-    if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== uid) {
-      log.warn(`sandbox tmp root ${tmpRoot} is not ours; running unconfined`)
-      return false
+    if (process.platform !== 'win32') {
+      const st = lstatSync(tmpRoot)
+      if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== uid) {
+        log.warn(`session tmp root ${tmpRoot} is not ours; not using it`)
+        return false
+      }
+      if ((st.mode & 0o077) !== 0) chmodSync(tmpRoot, 0o700)
     }
-    if ((st.mode & 0o077) !== 0) chmodSync(tmpRoot, 0o700)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     return true
   } catch (err) {
-    log.warn(`cannot create sandbox tmp dir ${dir}: ${(err as Error).message}`)
+    log.warn(`cannot create session tmp dir ${dir}: ${(err as Error).message}`)
     return false
   }
+}
+
+/** 交给命令的临时目录变量 —— 受限与不受限的命令同一份（macOS 的 TMPDIR 惯例以 `/` 结尾） */
+function tempEnvOf(dir: string): Record<string, string> {
+  return {
+    TMPDIR: process.platform === 'win32' ? dir : dir + '/',
+    TMP: dir,
+    TEMP: dir
+  }
+}
+
+/**
+ * 本会话的临时目录：建好（见 ensureTmpDir）并返回路径 —— 就是会话权限表 system/tmp 那一行
+ * （{@link sessionOwnDirsView} 的 `tmp`），所以往里写不询问。**不看沙箱**：每个平台、开关开不开都有。
+ * 坏会话 id、父目录不是自己的、建不了 → null：调用方不提它、命令照用系统的临时目录。
+ *
+ * 每次都现建：/tmp 重启会清、macOS 还会定期清掉久没碰的文件，路径却随人设冻结在提示词里
+ */
+export function ensureSessionTempDir(sessionId: string): string | null {
+  if (!isSafeSessionId(sessionId)) return null
+  const root = tmpRootPath()
+  const dir = join(root, sessionTmpName(sessionId))
+  return ensureTmpDir(root, dir, currentUid()) ? dir : null
+}
+
+/**
+ * 不受限的命令（申请越界、沙箱关着、没有后端的平台、PowerShell）也拿本会话的临时目录当 TMPDIR / TMP / TEMP
+ * —— 否则 mktemp、Python 的 tempfile 落到系统临时目录，模型自己写的临时文件又在会话目录里，同一场会话
+ * 有两个临时位置。受限命令的这几个变量随执行计划给（{@link planFor}）。建不了 → null，命令照用系统的
+ */
+export function sessionTempEnv(sessionId: string): Record<string, string> | null {
+  const dir = ensureSessionTempDir(sessionId)
+  return dir ? tempEnvOf(dir) : null
 }
 
 export interface PlanRequest {
@@ -307,7 +352,7 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
   if (!ensureTmpDir(paths.tmpRoot, spec.tmpDir, paths.uid)) return null
   return {
     spec,
-    env: { TMPDIR: spec.tmpDir + '/', TMP: spec.tmpDir, TEMP: spec.tmpDir },
+    env: tempEnvOf(spec.tmpDir),
     wrap: (invocation: ShellInvocation) => b.wrap(spec, invocation),
     explain: (outputTail, exitCode) => {
       const failure = b.startupFailure(outputTail, exitCode)
@@ -320,12 +365,12 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
   }
 }
 
-/** 会话删除时清掉它的临时目录 */
+/** 会话删除时清掉它的临时目录（每个平台都有这个目录，见 {@link ensureSessionTempDir}） */
 export function cleanupSession(sessionId: string): void {
-  if (!isSafeSessionId(sessionId) || !getBackend()) return
+  if (!isSafeSessionId(sessionId)) return
   try {
     rmSync(join(tmpRootPath(), sessionTmpName(sessionId)), { recursive: true, force: true })
   } catch {
-    /* 忽略：/private/tmp 本来就会被系统清理 */
+    /* 忽略：临时目录本来就会被系统清理 */
   }
 }

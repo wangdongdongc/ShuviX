@@ -34,6 +34,7 @@ Confirm anything destructive, or anything that reaches beyond this machine, befo
 ## Environment
 
 - Working directory: {{shuvix:workingDirectory}}
+{{shuvix:tempDirectory}}
 - Git repository: {{shuvix:isGitRepo}}
 - Platform: {{shuvix:platform}}
 - Shell: {{shuvix:shell}}

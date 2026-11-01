@@ -9,7 +9,8 @@
  * 约定：
  * - 标量（workingDirectory/platform/date/…）：md 自己组织句子与列表；
  * - 自含块（workspaceIntro 等）：值携带引导句，
- *   无内容时为空串，替换后的空行收敛（\n{3,} → \n\n）让空块整体消失；
+ *   无内容时为空串 —— 独占一行的占位符连行一起去掉（列表中间不留空行），再经空行收敛
+ *   （\n{3,} → \n\n）让空块整体消失；
  * - 未知/宿主不支持的占位符原样保留并 warn（信息面板可见，便于发现 typo）。
  */
 import type { RuntimeLogger } from '../types'
@@ -55,13 +56,21 @@ export function formatLanguageDisplay(lang: string | undefined): string {
   return native ? `${native} (${base})` : base
 }
 
+/** 独占一行的占位符（连同行尾换行）—— 取值为空串时整行去掉 */
+const PLACEHOLDER_LINE_RE = /^[ \t]*\{\{shuvix:([A-Za-z][\w-]*)\}\}[ \t]*(?:\r?\n|$)/gm
+
 /** 对文本做 {{shuvix:*}} 替换 + 空行收敛（导出供宿主的独立渲染路径复用） */
 export function substitutePromptVars(
   text: string,
   vars: PromptVars,
   logger?: RuntimeLogger
 ): string {
-  const substituted = text.replace(PLACEHOLDER_RE, (match, name: string) => {
+  // 独占一行、取值为空的自含块连行一起走：夹在列表项之间时（环境清单里的「临时文件」行）只换成空串
+  // 会在列表中间留一个空行；段落之间的块本来就靠下面的空行收敛消失，去掉整行结果相同
+  const withoutEmptyLines = text.replace(PLACEHOLDER_LINE_RE, (line, name: string) =>
+    vars[name] === '' ? '' : line
+  )
+  const substituted = withoutEmptyLines.replace(PLACEHOLDER_RE, (match, name: string) => {
     const value = vars[name]
     if (value === undefined) {
       logger?.warn(`[promptVars] unknown placeholder "${match}" — kept verbatim`)

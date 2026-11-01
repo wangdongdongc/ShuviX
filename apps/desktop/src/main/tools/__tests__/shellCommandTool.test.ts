@@ -18,7 +18,7 @@
  * 替身：toolContext（安全门是 spy、项目配置固定）、bgTaskService 的三个执行入口（回执与停止命令
  * 的文案用真的）、i18n。getPowerShellConfig 可按用例换成固定版本（D5）。
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { executeTool, invokeTool, resultText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
@@ -70,7 +70,7 @@ import {
   powerShellCommandLineLength
 } from '../../utils/toolUtils/shell'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
-import { whyUnconfined } from '../../services/sandbox'
+import { cleanupSession, whyUnconfined } from '../../services/sandbox'
 import { isBackgroundCall } from '@shuvix/chat-protocol/types/chatMessage'
 
 type ShellName = 'bash' | 'powershell'
@@ -151,6 +151,16 @@ beforeEach(() => {
   mocks.runningBackgroundTasks.mockReset()
   mocks.runningBackgroundTasks.mockReturnValue([])
   mocks.psConfig = null
+})
+
+afterAll(() => {
+  // 沙箱管理器是真的：没套沙箱的命令会给本会话建临时目录（sessionTempEnv，每个平台都有）。
+  // D2 在模拟的 win32 上也建了一份（系统临时目录下的 shuvix/），两处都收走
+  for (const platform of [REAL_PLATFORM_DESC.value as NodeJS.Platform, 'win32' as const]) {
+    setPlatform(platform)
+    cleanupSession(SID)
+  }
+  Object.defineProperty(process, 'platform', REAL_PLATFORM_DESC)
 })
 
 afterEach(() => {

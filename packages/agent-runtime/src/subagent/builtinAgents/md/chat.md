@@ -23,6 +23,7 @@ Confirm with `ask` before anything destructive or anything that reaches beyond t
 ## Environment
 
 - Working directory: {{shuvix:workingDirectory}}
+{{shuvix:tempDirectory}}
 - Git repository: {{shuvix:isGitRepo}}
 - Platform: {{shuvix:platform}}
 - Shell: {{shuvix:shell}}

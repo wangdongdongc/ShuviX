@@ -17,7 +17,8 @@
  *    那份命令（sandbox-exec 包装、TMPDIR 等变量、会话 id、原命令）经 IPC 取得到、坏的会话 id / 调用 id
  *    取不到；卡片展开后才出标记与开关，点开显示的就是 IPC 那份；切走再切回照旧；
  *  - E2E-7 沙箱关着 + 一条没跑起来的命令：拒绝的那条没有记录、落库块没有标记；允许的那条标 disabled，
- *    记录里是裸的 `/bin/bash --norc -c …`（没有 sandbox-exec、没有 TMPDIR）；
+ *    记录里是裸的 `/bin/bash --norc -c …`（没有 sandbox-exec；TMPDIR 照样是本会话的临时目录 —— 不受限的
+ *    命令也拿它，2026-11-01 起）；
  *  - E2E-8 读的那一面：家目录里会话目录以外的一律读不到（~/Downloads、~/.ssh、~/.shuvix/.session-state
  *    都一样，凭据不再特殊）、结果里带 `cannot read`；家目录以外照读；read 工具同一个口径 ——
  *    家目录以外不问，读 ~/.ssh 要问（ask-on-external-path#0）；
@@ -459,8 +460,12 @@ describe('E2E-4 按会话固定', () => {
     await events.waitFor('agent_end', { sessionId: sids.pinB })
     await chat.waitIdle()
     const b = String((await toolResult(sids.pinB, 'call_b1')).result)
-    // 不受限：TMPDIR 是宿主自己的，不是沙箱给的本会话临时目录
-    expect(b).not.toMatch(/TMP=\/private\/tmp\/shuvix-\d+\/[0-9a-f]{8}\//)
+    // 不受限的命令也拿本会话的临时目录（2026-11-01 起，见 sandbox 的 sessionTempEnv）：B 自己的那个，不是 A 的
+    const tmpOf = (out: string): string | undefined =>
+      /TMP=(\/private\/tmp\/shuvix-\d+\/[0-9a-f]{8}\/)/.exec(out)?.[1]
+    const a = String((await toolResult(sids.pinA, 'call_a1')).result)
+    expect(tmpOf(b)).toBeDefined()
+    expect(tmpOf(b)).not.toBe(tmpOf(a))
   })
 })
 
@@ -633,8 +638,10 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
     const lines = text!.split('\n')
     expect(lines).toContain("/bin/bash --norc -c 'echo off'")
     expect(text).not.toContain('sandbox-exec')
-    expect(text).not.toContain('TMPDIR=')
-    expect(text).toContain(`SHUVIX_SESSION_ID=${sid}`)
+    // 没套沙箱也照样交本会话的临时目录（记录里写的就是实际生效的那份）
+    expect(text).toMatch(
+      new RegExp(`TMPDIR=/private/tmp/shuvix-\\d+/[0-9a-f]{8}/ .*SHUVIX_SESSION_ID=${sid}`)
+    )
 
     // 卡片：拒绝的那行（0）展开也没有标记和开关；允许的那行（1）标 disabled，点开就是 IPC 那份
     await until(async () => (await chat.toolRows()).length === 2, 'two tool rows in S-off')

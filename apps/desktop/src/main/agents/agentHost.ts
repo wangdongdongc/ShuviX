@@ -35,6 +35,7 @@ import {
   renderBotContext,
   renderDocumentKind,
   renderKnowledgeGuide,
+  renderTempDirectory,
   renderVisualCraft,
   renderVisualGuide,
   type AgentToolSet,
@@ -498,6 +499,23 @@ function hasDrawingSkill(names: readonly string[]): boolean {
 }
 
 /**
+ * 会话的临时目录（建好了的绝对路径，建不了为 null）—— 由主进程启动时注入（sandbox 的 ensureSessionTempDir）。
+ * 没注入 = 没有，提示词里那一行整行不出：单测默认如此（许多用例替身掉了 sandbox 模块），本文件也就不直接
+ * 依赖它
+ */
+let sessionTempDirOf: (sessionId: string) => string | null = () => null
+
+export function setSessionTempDirResolver(resolver: (sessionId: string) => string | null): void {
+  sessionTempDirOf = resolver
+}
+
+/** 根会话的临时目录；会话行已不在时为 undefined —— 与 rootWorkingDirectory 同理，不把删掉的目录建回来 */
+function rootTempDirectory(rootSessionId: string): string | undefined {
+  if (!sessionRecords.pick(rootSessionId, ['id'])) return undefined
+  return sessionTempDirOf(rootSessionId) ?? undefined
+}
+
+/**
  * 根会话的工作目录；会话行已不在（派发途中根会话被删）时为 ''。先查行：resolveProjectConfig 对查不到的
  * 会话会回落到临时工作区并把目录建出来 —— 删除路径刚删掉的文件夹不该被一次派发重新建回来
  */
@@ -600,6 +618,12 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
     visualGuide: renderVisualGuide(i18next.language, visual),
     visualCraft: renderVisualCraft(i18next.language, visual),
     projectName: project?.name ?? '',
+    // 本会话的临时目录（环境清单里的一行）：派生 agent 用根会话的 —— 它的工具也按根会话的权限表走。
+    // 不提就是模型照习惯写 /tmp：文件工具每写一次都问，受限命令被沙箱拒了再申请越界
+    tempDirectory: renderTempDirectory(i18next.language, {
+      dir: rootTempDirectory(rootSessionId),
+      commands: ctx.toolNames.some((name) => name === 'bash' || name === 'powershell')
+    }),
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
     // 占位符原样保留并 warn（派生档案本就不该引用它）。{{shuvix:documentKind}} 同口径：文档是 ShuviX
