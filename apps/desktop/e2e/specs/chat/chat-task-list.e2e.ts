@@ -3,18 +3,20 @@
  * taskListReader / taskListParity 的 server 侧读者、planServer.test.ts 的工具、migrationV37.test.ts 的种子行、
  * taskListPanel / assistantBubbleTaskList 的界面），这里只走一遍它们都替身掉的那条链：v37 在真库上种下内置行 →
  * 会话默认不勾 → 勾上后模型真调 `mcp__plan__update` → main 启动时注册的读者（`setBuiltinMcpTaskListReader`）
- * 从已提交的条目折叠出上一次的列表 → 结果行回给模型 → 渲染端把列表钉在输入框上方、卡片里不出行。
+ * 从已提交的条目折叠出上一次的列表 → 结果行回给模型 → 渲染端把列表钉在输入框上方，每次调用在卡片里照普通
+ * 工具行显示。
  *
  *   TLE-1 `mcp.list()` 有内置的 `plan` 行（inproc、启用）；设置 → MCP 那一行带内置徽章与「实验」标签
  *   TLE-2 没勾的会话：`tools.list` 列出 `mcp:plan`（内置、没有档案声明、不在勾选里），选择器那一行带「实验」标签、
  *         没勾；发一条消息，请求里没有 `mcp__plan__update`
  *   TLE-3 勾上的会话，三轮脚本（列表与第一次真调用同一条消息 → 推进 → 终答）：
  *         a 第二轮挂着时列表在跑、0/3、摘要是第一步、展开、各步状态；
- *         b 同一时刻卡片里没有列表调用那一行（正在流式生成的那一次也没有）；
+ *         b 同一时刻卡片里：第一轮的列表调用和 ls 并成一个合并行（摘要里有第一步），第二轮正在流式生成的
+ *           那次是一条 generating 的列表行；
  *         c 两次调用的结果是 `Plan shown (3 steps).` / `Plan updated: step 2 of 3 is in progress.` —— 后一句
  *           证明读者接上了（没接上就是「这个请求里还没有列表」）；第三轮的请求里带着这两句；
  *         d 跑完：完成、3/3、默认折叠，展开后每一步都是完成；
- *         e 卡片里的工具行只有 `ls`，没有合并行
+ *         e 卡片里三步（列表、ls、推进）并成一个合并行，展开后两条列表行一条 ls 行
  *   TLE-4 同一会话发新请求、第一轮只推进：新请求的消息一出现旧列表就让位；推进失败成一条红行，结果是
  *         「这个请求里还没有列表」，列表一直不出现
  *   TLE-5 中止（S1）：发过列表、终答流到一半被中止 → 最后一张卡带 `stopped`，列表是「已停止」、计数照实，
@@ -234,7 +236,7 @@ describe('默认不勾', () => {
 })
 
 describe('勾上之后', () => {
-  it('TLE-3 列表随第一次真调用发出、推进一步、终答收尾：输入框上方的列表，卡片里没有它的行，结果行出自真读者', async () => {
+  it('TLE-3 列表随第一次真调用发出、推进一步、终答收尾：输入框上方的列表，卡片里照常有它的行，结果行出自真读者', async () => {
     provider.reset()
     await events.clear()
     provider.script(
@@ -271,12 +273,19 @@ describe('勾上之后', () => {
       [3, 'pending', STEPS[2]]
     ])
 
-    // TLE-3b 同一时刻：卡片里没有列表调用那一行 —— 第一轮成功的那次、第二轮正在生成的那次都没有
-    const heldRows = await until(async () => {
-      const rows = await chat.toolRows()
-      return rows.some((r) => r.name === 'ls') ? rows : null
-    }, 'first-turn card on screen')
-    expect(heldRows.filter((r) => r.name === PLAN)).toEqual([])
+    // TLE-3b 同一时刻：第一轮成功的列表调用和 ls 并成一个合并行（摘要里有列表那时进行中的一步），
+    // 第二轮正在生成的那次是一条 generating 的列表行
+    const heldGroup = await until(async () => {
+      const groups = await chat.stepGroupShots()
+      return groups.find((g) => g.size === 2) ?? null
+    }, 'first-turn step group on screen')
+    expect(heldGroup).toMatchObject({ state: 'collapsed', count: 2 })
+    expect(heldGroup.detail).toContain(STEPS[0])
+    const generating = await until(async () => {
+      const rows = (await chat.toolRows()).filter((r) => r.name === PLAN)
+      return rows.length > 0 ? rows : null
+    }, 'second-turn plan call on screen')
+    expect(generating).toEqual([{ name: PLAN, status: 'generating' }])
 
     provider.release()
     await events.waitFor('agent_end', { sessionId: sids.on })
@@ -307,9 +316,16 @@ describe('勾上之后', () => {
       [3, 'completed', STEPS[2]]
     ])
 
-    // TLE-3e 卡片里只有 ls 一行：列表调用既不出行，也不把相邻的步骤凑成合并行
-    expect(await chat.toolRows()).toEqual([{ name: 'ls', status: 'done' }])
-    expect(await chat.stepGroupShots()).toEqual([])
+    // TLE-3e 卡片里三步（列表、ls、推进）并成一个合并行；展开后各是一行
+    const groups = await chat.stepGroupShots()
+    expect(groups.map((g) => [g.state, g.size, g.count])).toEqual([['collapsed', 3, 3]])
+    expect(groups[0].detail).toContain(STEPS[0])
+    await chat.expandGroups()
+    expect(await chat.toolRows()).toEqual([
+      { name: PLAN, status: 'done' },
+      { name: 'ls', status: 'done' },
+      { name: PLAN, status: 'done' }
+    ])
   }, 120_000)
 
   it('TLE-4 新请求：旧列表让位；只推进的调用失败成红行（这个请求里还没有列表），列表不出现', async () => {
@@ -339,11 +355,12 @@ describe('勾上之后', () => {
     expect(failed?.isError).toBe(true)
     expect(resultText(failed)).toContain('No task list in this request yet')
 
-    const planRows = await until(async () => {
-      const rows = (await chat.toolRows()).filter((r) => r.name === PLAN)
+    // 上一个请求展开过的合并行里还有两条成功的列表行，这里只数红行
+    const failedRows = await until(async () => {
+      const rows = (await chat.toolRows()).filter((r) => r.name === PLAN && r.status === 'error')
       return rows.length > 0 ? rows : null
     }, 'failed plan row rendered')
-    expect(planRows).toEqual([{ name: PLAN, status: 'error' }])
+    expect(failedRows).toHaveLength(1)
     expect(await list.present()).toBe(false)
   }, 120_000)
 

@@ -221,15 +221,3 @@ export function taskListOfMessages(messages: readonly ChatMessage[]): TaskListSn
     !last.blocks.some((block) => block.type === 'tool')
   return { items, endedWithAnswer, requestId: start > 0 ? messages[start - 1].id : '' }
 }
-
-/**
- * 卡片里不显示的列表调用：没失败的（在跑的、成功的）—— 全部信息就在输入框上方那张列表里，它们一闪而过地
- * 占一行只是噪音。失败的照常是红行：模型要重发，用户也该看到。
- */
-export function isHiddenTaskListBlock(block: {
-  type: string
-  toolName?: string
-  isError?: boolean
-}): boolean {
-  return block.type === 'tool' && block.toolName === TASK_LIST_TOOL_NAME && !block.isError
-}

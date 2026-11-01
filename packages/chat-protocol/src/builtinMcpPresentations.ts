@@ -169,7 +169,7 @@ export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentat
             .join(' · ') || undefined
         : undefined
   },
-  // 任务列表（实验）：成功的调用在卡片里不出行（chat-protocol taskList.ts），这条呈现给失败的红行、监视器等处
+  // 任务列表（实验）：每次调用照普通工具行显示（让人看得到列表是什么时候怎么改的），摘要是那时进行中的步骤
   plan: {
     labelKey: 'tool.taskListLabel',
     hintKey: 'tool.taskListHint',

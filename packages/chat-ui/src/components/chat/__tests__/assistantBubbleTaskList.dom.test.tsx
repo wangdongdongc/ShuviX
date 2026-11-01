@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 /**
- * 卡片里的任务列表调用（AssistantBubble，docs/task-list-design.md §3.4；jsdom）：没失败的 `mcp__plan__update`
- * 调用不出行（全部信息在输入框上方那张列表里），失败的照常是红行。
+ * 卡片里的任务列表调用（AssistantBubble，docs/task-list-design.md §3.4；jsdom）：`mcp__plan__update` 调用照普通
+ * 工具行显示 —— 用户要看得到列表是什么时候、怎么改的（输入框上方那张列表只给出现在的样子）。
  *
- *   TLC-1  落定的卡：成功的列表调用没有行，旁边的 read 照常有
- *   TLC-2  还在跑的列表调用（没有结果）也没有行
+ *   TLC-1  落定的卡：成功的列表调用和旁边的 read 并成一个步骤组，展开后两行都在，列表行的摘要是进行中的步骤
+ *   TLC-2  还在跑的列表调用（没有结果）：一行，不进步骤组
  *   TLC-3  失败的列表调用：一条红行（任务列表的标签 + 摘要），不并进步骤组
- *   TLC-4  步骤合并跳过藏起来的块：它既不切断一串，也不计进徽章
- *   TLC-5  只有藏起来的列表调用的卡：没有过程区；卡片外壳与操作行的去留钉在这里
- *   TLC-6  流式卡的最后一块是正在生成的列表调用：没有 generating 行（Z S2）
- *   TLC-7  流式卡里已生成完、待执行的列表调用：没有 pending 行（Z S2）
- *   TLC-8  末条是 [正文, 列表调用]：藏起来的工具块照样算「这条带工具」，正文进过程区、不是终答（O4）
+ *   TLC-4  [read, 列表调用, read]：一个步骤组，三步都计进徽章
+ *   TLC-5  只有一个列表调用的卡：有一行，不再是空壳
+ *   TLC-6  流式卡的最后一块是正在生成的列表调用：有 generating 行
+ *   TLC-7  流式卡里已生成完、待执行的列表调用：有 pending 行
+ *   TLC-8  末条是 [正文, 列表调用]：这条带工具，正文进过程区、不是终答
  *
  * 真组件（StepGroupView / StepGroup / ToolCallBlock 都不桩）；数据走真的 chatStore（流式用 `applySessionView`
  * 推实时卡，同 assistantBubbleLive.dom.test.tsx 的 A-9）。文件是 .tsx 但不写 JSX，一律 createElement。
@@ -143,21 +143,37 @@ afterEach(() => {
   container.remove()
 })
 
+/** 展开第 n 个步骤组 */
+function expandGroup(n = 0): void {
+  const header = stepGroups()[n].querySelector<HTMLElement>('[role="button"], button')!
+  act(() => header.click())
+}
+
 describe('落定的卡（TLC-1…TLC-5）', () => {
-  it('TLC-1 [A1: 正文 + 成功的列表调用 + read][A2: 终答]：卡里没有列表调用的行，read 那一行照常有', () => {
+  it('TLC-1 [A1: 正文 + 成功的列表调用 + read][A2: 终答]：两步并成一组，展开后列表调用一行、摘要是进行中的步骤', () => {
     show([
       assistant('a1', [text('start'), planOk('p1'), readOk('r1')], SID),
       assistant('a2', [text('final')], SID)
     ])
-    expect(planRows()).toHaveLength(0)
+    const groups = stepGroups()
+    expect(groups).toHaveLength(1)
+    expect(groups[0].getAttribute('data-group-size')).toBe('2')
+    expect(groups[0].textContent).toContain(en.tool.taskListLabel)
+    expandGroup()
+    const [row, ...more] = planRows()
+    expect(more).toHaveLength(0)
+    expect(row.getAttribute('data-tool-status')).toBe('done')
+    expect(row.querySelector('span.font-mono')?.textContent).toBe('Read the code')
     expect(rows('read')).toHaveLength(1)
     expect(container.textContent).toContain('start')
     expect(container.textContent).toContain('final')
   })
 
-  it('TLC-2 还在跑的列表调用（没有结果）也没有行', () => {
+  it('TLC-2 还在跑的列表调用（没有结果）：一行，不进步骤组', () => {
     show([assistant('a1', [text('start'), toolBlock('p1', PLAN, ITEMS), readOk('r1')], SID)])
-    expect(planRows()).toHaveLength(0)
+    const [row, ...more] = planRows()
+    expect(more).toHaveLength(0)
+    expect(row.closest('[data-step-group]')).toBeNull()
     expect(rows('read')).toHaveLength(1)
   })
 
@@ -187,74 +203,60 @@ describe('落定的卡（TLC-1…TLC-5）', () => {
     expect(rows('read')).toHaveLength(2)
   })
 
-  it('TLC-4 [read a, 成功的列表调用, read b]：一个步骤组、计数 2 —— 藏起来的块不切断这一串，也不计数', () => {
+  it('TLC-4 [read a, 成功的列表调用, read b]：一个步骤组、计数 3', () => {
     show([
       assistant('a1', [readOk('ra'), planOk('p1'), readOk('rb')], SID),
       assistant('a2', [text('final')], SID)
     ])
     const groups = stepGroups()
     expect(groups).toHaveLength(1)
-    expect(groups[0].getAttribute('data-group-size')).toBe('2')
-    expect(groups[0].querySelector('[data-group-count]')?.textContent).toBe('2')
-    expect(planRows()).toHaveLength(0)
+    expect(groups[0].getAttribute('data-group-size')).toBe('3')
+    expect(groups[0].querySelector('[data-group-count]')?.textContent).toBe('3')
+    expandGroup()
+    expect(planRows()).toHaveLength(1)
+    expect(rows('read')).toHaveLength(2)
   })
 
-  it('TLC-5 只有藏起来的列表调用的卡（后面是用户消息）：没有过程区、没有正文；不给按钮时卡里什么都没有', () => {
-    show([assistant('a1', [planOk('p1')], SID)])
-    expect(planRows()).toHaveLength(0)
-    expect(stepGroups()).toHaveLength(0)
-    expect(container.querySelector('.markdown-body')).toBeNull()
-    expect(actions()).toBeNull()
-    // 卡片外壳（`div.group` > `div.min-w-0`）还在，只是空的
-    expect(content().childElementCount).toBe(0)
-  })
-
-  it('TLC-5 同一张卡带分支 / 重新生成按钮（会话列表里每张定稿的卡都带分支）：外壳里只剩一行操作按钮', () => {
+  it('TLC-5 只有一个列表调用的卡（后面是用户消息）：卡里有这一行，不是空壳', () => {
     const fork = vi.fn()
     const regenerate = vi.fn()
     show([assistant('a1', [planOk('p1')], SID)], { onFork: fork, onRegenerate: regenerate })
     expect(container.querySelector('.markdown-body')).toBeNull()
-    expect(stepGroups()).toHaveLength(0)
-    // 钉住现状：操作行照样画出来，卡里只有它（没有复制 / 朗读 —— 没有正文）
-    const row = actions()
-    expect(row).not.toBeNull()
-    expect([...content().children]).toEqual([row])
-    expect([...row!.querySelectorAll('button')].map((b) => b.title)).toEqual([
-      en.message.regenerate,
-      en.message.fork
-    ])
+    const [row, ...more] = planRows()
+    expect(more).toHaveLength(0)
+    expect(row.getAttribute('data-tool-status')).toBe('done')
+    expect(row.querySelector('[data-step-label]')?.textContent).toBe(en.tool.taskListLabel)
+    expect(actions()).not.toBeNull()
   })
 })
 
 describe('流式卡（TLC-6 / TLC-7）', () => {
-  it('TLC-6 实时卡最后一块是还没执行的列表调用：没有 generating 行，也没有任何列表调用的行', () => {
+  it('TLC-6 实时卡最后一块是还没执行的列表调用：有一行 generating', () => {
     showLive([text('planning'), toolBlock('p1', PLAN, ITEMS)])
-    expect(planRows()).toHaveLength(0)
-    expect(liveRows()).toEqual([])
-
-    // 对照：最后一块换成 read → 有一行 generating
-    showLive([text('planning'), toolBlock('r1', 'read', { path: 'a' })])
-    expect(liveRows()).toEqual([['read', 'generating']])
+    expect(liveRows()).toEqual([[PLAN, 'generating']])
   })
 
-  it('TLC-7 实时卡 [列表调用, read]（都没进 toolRuns）：流式工具行只有 read；[read, 列表调用] 也只有 read', () => {
+  it('TLC-7 实时卡 [列表调用, read]（都没进 toolRuns）：列表调用 pending、read generating；反过来也一样', () => {
     showLive([toolBlock('p1', PLAN, ITEMS), toolBlock('r1', 'read', { path: 'a' })])
-    expect(liveRows()).toEqual([['read', 'generating']])
-    expect(planRows()).toHaveLength(0)
+    expect(liveRows()).toEqual([
+      [PLAN, 'pending'],
+      ['read', 'generating']
+    ])
 
     showLive([toolBlock('r1', 'read', { path: 'a' }), toolBlock('p1', PLAN, { advance: true })])
-    expect(liveRows()).toEqual([['read', 'pending']])
-    expect(planRows()).toHaveLength(0)
+    expect(liveRows()).toEqual([
+      ['read', 'pending'],
+      [PLAN, 'generating']
+    ])
   })
 })
 
-describe('末条带一个藏起来的列表调用（TLC-8，O4）', () => {
+describe('末条带一个列表调用（TLC-8）', () => {
   it('TLC-8 末条 [正文, 成功的列表调用]：正文画在过程区，不是终答（没有复制按钮）', () => {
     show([
       assistant('a1', [readOk('r1')], SID),
       assistant('a2', [text('all set'), planOk('p2', { advance: true })], SID)
     ])
-    expect(planRows()).toHaveLength(0)
     const md = [...container.querySelectorAll<HTMLElement>('.markdown-body')]
     expect(md).toHaveLength(1)
     expect(md[0].textContent).toBe('all set')

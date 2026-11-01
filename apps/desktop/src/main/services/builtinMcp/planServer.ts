@@ -17,7 +17,7 @@
  * （`agentOf`）直接回错误，免得它推进根 agent 的列表、也免得它以为有人看得到。认不出（宿主没接）按根处理。
  *
  * 为什么是内置能力服务器：实验功能要按会话默认不勾、用户自己勾上，`settings.enabledTools` 只收 `mcp:` 名；
- * 用到的特权是「专属渲染」（输入框上方的列表、卡片里不出行，chat-protocol `taskList.ts`）。
+ * 用到的特权是「专属渲染」（输入框上方的列表，chat-protocol `taskList.ts`；每次调用本身照普通工具行显示）。
  *
  * 用**低层 `Server`**（纯 JSON Schema），理由同 ssh / database。
  */

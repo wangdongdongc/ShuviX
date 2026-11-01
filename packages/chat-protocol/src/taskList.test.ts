@@ -9,7 +9,6 @@
  *   TL-F   `foldTaskList`：request 清空；解析或套用失败的调用跳过、不清空
  *   TL-B   `startsTaskListRequest`：只有「用户发起一轮」的消息开始新请求
  *   TL-M   `taskListOfMessages`：从投影消息折出当前请求的列表 + 是否以终答收尾 + 开始这个请求的消息 id
- *   TL-H   `isHiddenTaskListBlock`：没失败的列表调用在卡片里不出行
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -21,7 +20,6 @@ import {
   applyTaskListUpdate,
   describeTaskList,
   foldTaskList,
-  isHiddenTaskListBlock,
   parseTaskListUpdate,
   startsTaskListRequest,
   taskListOfMessages,
@@ -772,26 +770,5 @@ describe('taskListOfMessages', () => {
     ])
     expect(snapshot?.requestId).toBe('u2')
     expect(snapshot?.items).toStrictEqual(list(C, I, P))
-  })
-})
-
-// ─── isHiddenTaskListBlock ─────────────────────────────
-
-describe('isHiddenTaskListBlock', () => {
-  it('TL-H-1 没失败的列表调用（在跑的、成功的）→ 隐藏', () => {
-    expect(isHiddenTaskListBlock(planItems('p1', X, { result: null }))).toBe(true)
-    expect(isHiddenTaskListBlock(planItems('p1', X))).toBe(true)
-    expect(isHiddenTaskListBlock(planItems('p1', X, { isError: false }))).toBe(true)
-  })
-
-  it('TL-H-2 失败的列表调用 → 照常出（红行）', () => {
-    expect(isHiddenTaskListBlock(planItems('p1', X, { isError: true }))).toBe(false)
-  })
-
-  it('TL-H-3 别的工具、正文块、思考块 → 不隐藏；非工具块带着列表工具名也不算', () => {
-    expect(isHiddenTaskListBlock(tool('c1', 'read', { path: 'a' }))).toBe(false)
-    expect(isHiddenTaskListBlock({ type: 'text', text: 'x' } as AssistantBlock)).toBe(false)
-    expect(isHiddenTaskListBlock({ type: 'thinking', text: 'x' } as AssistantBlock)).toBe(false)
-    expect(isHiddenTaskListBlock({ type: 'text', toolName: TASK_LIST_TOOL_NAME })).toBe(false)
   })
 })
