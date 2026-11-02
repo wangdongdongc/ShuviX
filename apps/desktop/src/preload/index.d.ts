@@ -901,6 +901,8 @@ declare global {
       openWindow: () => Promise<void>
       /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false） */
       isWindowOpen: () => Promise<boolean>
+      /** 这台电脑上的浏览器宿主：无头运行（headless）时没有浏览器窗口可开、地址栏的设置也不起作用 */
+      hostInfo: () => Promise<{ headless: boolean }>
       /**
        * 用户新开一个 tab（开在前台、成为选中的那页）。`transition`：从地址栏开的（typed = 网址、
        * generated = 搜索），记进历史用

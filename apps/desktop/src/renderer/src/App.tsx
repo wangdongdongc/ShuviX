@@ -10,6 +10,7 @@ import { ChatView } from './components/chat/ChatView'
 import { PinnedChatShell } from './components/chat/PinnedChatShell'
 import { WidgetWindowShell } from './components/widget/WidgetWindowShell'
 import { BrowserWindowShell } from './components/browser/BrowserWindowShell'
+import { BrowserManagerShell } from './components/browser/BrowserManagerShell'
 import { MarkdownWindowShell } from './components/notebook/MarkdownWindowShell'
 import { FilePreviewWindowShell } from './components/preview/FilePreviewWindowShell'
 import { RightPanel } from './components/browser/RightPanel'
@@ -32,6 +33,8 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
 const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 const isWidgetWindow = window.location.hash.startsWith('#widget-window')
 const isBrowserWindow = window.location.hash.startsWith('#browser-window')
+/** web 客户端的浏览器管理页（只在浏览器里开；桌面应用没有入口） */
+const isBrowserManager = /^#browser-manager(?:[?/]|$)/.test(window.location.hash)
 const isMarkdownWindow = window.location.hash.startsWith('#markdown-window')
 const isFilePreviewWindow = window.location.hash.startsWith('#file-preview')
 
@@ -50,11 +53,12 @@ function openInMainView(sessionId: string): void {
 
 /**
  * 应用主入口
- * 根据 hash 区分七种渲染：
+ * 根据 hash 区分八种渲染：
  * - 设置窗口（#settings）
  * - 悬浮聊天窗口（#pinned-chat）
  * - Widget 独立窗口（#widget-window）
  * - 浏览器独立窗口（#browser-window）
+ * - 浏览器管理页（#browser-manager：web 客户端里管理那台电脑上的内置浏览器）
  * - md 协作编辑窗口（#markdown-window：从系统打开，或在应用里点开的 md）
  * - 文件预览窗口（#file-preview：在应用里点开的其余可预览文件）
  * - 主窗口（侧边栏 + 聊天区 + 右侧面板）
@@ -78,6 +82,11 @@ function App(): React.JSX.Element {
   // 浏览器独立窗口：网格卡片墙，同样只加载设置
   if (isBrowserWindow) {
     return <BrowserWindowShell />
+  }
+
+  // 浏览器管理页：标签页与设置，同样只加载设置
+  if (isBrowserManager) {
+    return <BrowserManagerShell />
   }
 
   // 从系统打开的 md 窗口：笔记本会话（编辑器 + 输入卡片），内存会话随窗口销毁

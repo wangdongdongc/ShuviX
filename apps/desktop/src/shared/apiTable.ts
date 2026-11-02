@@ -357,6 +357,7 @@ export const API_TABLE = {
   browserView: {
     openWindow: invoke('browser-view:open-window', 0),
     isWindowOpen: invoke('browser-view:is-window-open', 0),
+    hostInfo: invoke('browser-view:host-info', 0),
     createTab: invoke('browser-view:create-tab', 2),
     closeTab: invoke('browser-view:close-tab', 1),
     reopenClosedTab: invoke('browser-view:reopen-closed-tab', 0),

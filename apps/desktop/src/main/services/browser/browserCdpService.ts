@@ -10,7 +10,7 @@
  */
 
 import { CdpAttachManager, type CdpTabTransportFactory } from '@shuvix/agent-runtime'
-import { getBrowserHostWindow, getTabView } from './browserViewService'
+import { getBrowserHostWindow, getTabView, noteTabStateChanged } from './browserViewService'
 import { installAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { noteAgentCaptureChange } from './agentDevtools'
 import { createLogger } from '../../logger'
@@ -122,6 +122,8 @@ const factory: CdpTabTransportFactory = {
  * 这条事件是用户能看见"该 tab 被 agent 接入/内容可能被改写"的唯一通道。
  */
 function broadcastCdpState(tabId: string): void {
+  // web 客户端的浏览器管理页（没有浏览器窗口也要知道 agent 接上 / 断开了）
+  noteTabStateChanged()
   const win = getBrowserHostWindow()
   if (!win || win.isDestroyed()) return
   const state = browserCdpManager.cdpState(tabId)

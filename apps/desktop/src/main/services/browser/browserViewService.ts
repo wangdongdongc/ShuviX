@@ -263,12 +263,42 @@ function publishTabCount(): void {
   appEventBus.publish({ type: 'browser.tabsChanged', count: tabs.size })
 }
 
+/** 状态变化后多久合并发一次 `browser.tabsChanged`（标题、加载这类事件一秒能来好几条） */
+export const TAB_STATE_NOTIFY_MS = 250
+
+let tabStateTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 标签页的状态变了（标题、地址、加载、崩溃、agent 接入 / 使用）：合并成一条 `browser.tabsChanged` 发出去。
+ * `browser-view:*` 那些细事件只推给浏览器窗口；app 事件推给所有客户端 —— web 客户端的浏览器管理页收到它就重新
+ * 列一次标签页（无头运行时根本没有浏览器窗口，这是它唯一的信号）。
+ */
+export function noteTabStateChanged(): void {
+  if (tabStateTimer) return
+  tabStateTimer = setTimeout(() => {
+    tabStateTimer = null
+    publishTabCount()
+  }, TAB_STATE_NOTIFY_MS)
+}
+
+/** 会改变 listTabs 结果的那几条推送（发给浏览器窗口的同时，也合并通知所有客户端） */
+const TAB_STATE_CHANNELS: ReadonlySet<string> = new Set([
+  'browser-view:did-start-loading',
+  'browser-view:did-stop-loading',
+  'browser-view:did-navigate',
+  'browser-view:did-fail-load',
+  'browser-view:tab-title-updated',
+  'browser-view:tab-activated',
+  'browser-view:tab-agent'
+])
+
 /** 布局表只认宿主窗口上报的矩形（别的窗口发来的会把表清空） */
 export function isHostWebContents(webContentsId: number): boolean {
   return !!hostWindow && !hostWindow.isDestroyed() && hostWindow.webContents.id === webContentsId
 }
 
 function sendToRenderer(channel: string, payload: unknown): void {
+  if (TAB_STATE_CHANNELS.has(channel)) noteTabStateChanged()
   if (!hostWindow || hostWindow.isDestroyed()) return
   hostWindow.webContents.send(channel, payload)
 }
@@ -696,6 +726,11 @@ export function closeTab(tabId: string, opts?: { remember?: boolean }): void {
   wc.close()
 }
 
+/** 下一次 reopenClosedTab 会重开的地址（不取出来）；没有 → undefined */
+export function peekClosedTabUrl(): string | undefined {
+  return closedUrls[closedUrls.length - 1]
+}
+
 /** 重开最近被用户关掉的页面（⌘⇧T），开在前台；没有可重开的回 null */
 export function reopenClosedTab(): string | null {
   // 开满了就什么也不做、记录留着 —— 先取出来再建会在 createTab 抛错时把那个地址弄丢
@@ -829,14 +864,16 @@ export function isInternalTab(tabId: string): boolean {
  * 打开一个内部页面（⋮ → 设置、站点信息里的「网站设置」、主设置窗口里的「打开浏览器设置」）：
  * 照 Chrome，已经开着就选中那一页，否则新开一个并选中。回 tabId。
  */
-export function openInternalPage(page: InternalPage): string {
+export function openInternalPage(page: InternalPage, opts?: { activate?: boolean }): string {
+  // activate: false —— 别的设备开的：已经开着就回它、不选中；没开着就在后台新开（选中的页留给这台电脑前的人）
+  const activate = opts?.activate !== false
   for (const [id, p] of internalPages) {
     if (p === page && tabs.has(id)) {
-      activateTab(id)
+      if (activate) activateTab(id)
       return id
     }
   }
-  return createTab(undefined, { activate: true, internalPage: page })
+  return createTab(undefined, { activate, internalPage: page })
 }
 
 /**

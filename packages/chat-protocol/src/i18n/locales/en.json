@@ -1505,7 +1505,8 @@
       "clearHistoryDesc": "Every page in History, including the ones agents opened. The address bar stops suggesting them.",
       "clearHistoryButton": "Delete…",
       "clearHistoryConfirm": "Confirm",
-      "viewHistory": "View history"
+      "viewHistory": "View history",
+      "headlessSearchNote": "Running headless there is no address bar, so the search engine and search suggestions have no effect."
     },
     "certError": {
       "title": "Your connection is not private",
@@ -1565,7 +1566,8 @@
       "total_one": "{{count}} site, {{size}} in total",
       "total_other": "{{count}} sites, {{size}} in total",
       "openSite": "View this site’s data",
-      "loadFailed": "Couldn’t read this site’s data. Try again later."
+      "loadFailed": "Couldn’t read this site’s data. Try again later.",
+      "valueHidden": "Cookie values are only shown on the computer running ShuviX."
     },
     "pageMenu": {
       "openLinkInNewTab": "Open link in new tab",
@@ -1642,6 +1644,39 @@
       "visits_other": "{{count}} visits",
       "openedByAgent": "Opened by the agent in “{{title}}” · View conversation",
       "deletedSession": "Deleted conversation"
+    },
+    "manager": {
+      "title": "Browser",
+      "subtitle": "The in-app browser on the computer running ShuviX",
+      "tabs": "Tabs",
+      "settings": "Settings",
+      "headlessNote": "That computer runs headless: pages are used by agents in the background. Here you can manage tabs and browser data, but not see the pages themselves.",
+      "remoteNote": "The browser window is on the computer running ShuviX; here you can manage its tabs and browser data.",
+      "tabCount_one": "{{count}} tab",
+      "tabCount_other": "{{count}} tabs",
+      "noTabs": "No tabs are open",
+      "newTabPlaceholder": "Enter an address or search; leave empty for a blank tab",
+      "open": "Open",
+      "go": "Go",
+      "cancel": "Cancel",
+      "changeAddress": "Change address",
+      "loading": "Loading",
+      "crashed": "Page crashed",
+      "intercepting": "Intercepting network requests",
+      "notAllowed": "This device may not see the tabs: {{reason}}",
+      "actionFailed": "That did not work: {{reason}}",
+      "refreshList": "Refresh list",
+      "openedRemotely": "New tabs open in the background and do not switch the page being viewed on that computer.",
+      "remoteUrlRefused": "Only web pages (http, https), blank pages and shuvix:// pages can be opened from another device — not local files or other addresses.",
+      "showScreenshot": "Show screenshot",
+      "hideScreenshot": "Hide screenshot",
+      "retakeScreenshot": "Take again",
+      "screenshotLoading": "Taking a screenshot…",
+      "screenshotNote": "A picture of the moment you opened it; it does not update by itself.",
+      "screenshotTakenAt": "Taken at {{time}}; it does not update by itself",
+      "screenshotEmpty": "No picture: the page may still be loading, or it crashed.",
+      "screenshotFailed": "Could not take a screenshot: {{reason}}",
+      "screenshotAlt": "Screenshot of this tab"
     }
   },
   "builtinSkill": {

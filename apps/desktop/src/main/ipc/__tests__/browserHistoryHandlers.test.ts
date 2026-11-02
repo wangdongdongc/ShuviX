@@ -1,13 +1,15 @@
 /**
  * browserHistoryHandlers —— 内置浏览器的历史记录（地址栏建议、历史记录页、删除）与地址栏的搜索建议。
- * 只认浏览器窗口外壳发来的（历史里的网址可能带着登录令牌）。
+ * 读只认浏览器窗口外壳发来的（历史里的网址可能带着登录令牌）；删除另外也认网络客户端。
  *
  *   BHI-1  外壳（宿主 webContents 7）发来的：suggest → suggestHistory(text)；list → listHistory(q, agentSessionTitle)；
  *          remove → removeHistoryItems(keys)；remove-url → removeHistoryUrl(url)；clear → clearHistory()；
  *          search-suggest → fetchSearchSuggestions(text, engine)，各自原样回服务的值
  *   BHI-2  别的窗口（9）：suggest / search-suggest 回 []、list 回 {items:[], next:null}，删除类什么也不做，
  *          一个服务都不调
- *   BHI-3  网络客户端（服务器模式的局域网浏览器）：同 BHI-2
+ *   BHI-3  网络客户端（服务器模式的局域网浏览器；web 客户端的浏览器管理页）：读同 BHI-2（一个读服务都不调）；
+ *          BHI-3b 删除照办 —— remove(keys) → removeHistoryItems(keys)、remove-url → removeHistoryUrl、
+ *          clear → clearHistory 一次；BHI-3c remove-url(42 | null) → 不抛、不调
  *   BHI-4  外壳发来的参数校验：suggest(42) → []；search-suggest(42) → []；search-suggest('x', 42) → 引擎 ''；
  *          list(null) / list('x') → listHistory({})；remove-url(42) → 不调；remove 的参数原样交给服务（由它挑）
  *
@@ -130,23 +132,51 @@ describe('外壳发来的（BHI-1）', () => {
   })
 })
 
-describe.each([
-  ['别的窗口（BHI-2）', (channel: string, ...args: unknown[]) => invoke(channel, OTHER, ...args)],
-  ['网络客户端（BHI-3）', fromNet]
-] as const)('%s', (label, call) => {
-  const id = label.includes('BHI-2') ? 'BHI-2' : 'BHI-3'
+describe('别的窗口（BHI-2）', () => {
+  const call = (channel: string, ...args: unknown[]): Promise<unknown> =>
+    invoke(channel, OTHER, ...args)
 
-  it(`${id} 读：suggest / search-suggest → []，list → {items:[], next:null}`, async () => {
+  it('BHI-2 读：suggest / search-suggest → []，list → {items:[], next:null}', async () => {
     expect(await call('browser-history:suggest', 'git')).toEqual([])
     expect(await call('browser-history:search-suggest', 'git', 'google')).toEqual([])
     expect(await call('browser-history:list', { search: '' })).toEqual({ items: [], next: null })
     noServiceCalled()
   })
 
-  it(`${id} 删除类：什么也不做`, async () => {
+  it('BHI-2 删除类：什么也不做', async () => {
     await call('browser-history:remove', ['2026-10-29|1|'])
     await call('browser-history:remove-url', 'https://a.test/')
     await call('browser-history:clear')
+    noServiceCalled()
+  })
+})
+
+describe('网络客户端（BHI-3）：读不给，删除照办', () => {
+  it('BHI-3 读：suggest / search-suggest → []，list → {items:[], next:null}，一个读服务都不调', async () => {
+    expect(await fromNet('browser-history:suggest', 'git')).toEqual([])
+    expect(await fromNet('browser-history:search-suggest', 'git', 'google')).toEqual([])
+    expect(await fromNet('browser-history:list', { search: '' })).toEqual({
+      items: [],
+      next: null
+    })
+    noServiceCalled()
+  })
+
+  it('BHI-3b remove(keys) → removeHistoryItems(keys)；remove-url → removeHistoryUrl；clear → clearHistory 一次', async () => {
+    await fromNet('browser-history:remove', ['2026-10-29|1|'])
+    await fromNet('browser-history:remove-url', 'https://a.test/')
+    await fromNet('browser-history:clear')
+    expect(state.removeHistoryItems.mock.calls).toEqual([[['2026-10-29|1|']]])
+    expect(state.removeHistoryUrl.mock.calls).toEqual([['https://a.test/']])
+    expect(state.clearHistory).toHaveBeenCalledTimes(1)
+    // 读服务一个都没碰
+    expect(state.suggestHistory).not.toHaveBeenCalled()
+    expect(state.listHistory).not.toHaveBeenCalled()
+    expect(state.fetchSearchSuggestions).not.toHaveBeenCalled()
+  })
+
+  it.each([[42], [null]])('BHI-3c remove-url(%j) 从网络来 → 不抛、什么也不做', async (arg) => {
+    await expect(fromNet('browser-history:remove-url', arg)).resolves.toBeUndefined()
     noServiceCalled()
   })
 })

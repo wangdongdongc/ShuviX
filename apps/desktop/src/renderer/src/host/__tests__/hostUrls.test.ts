@@ -12,10 +12,15 @@
  *   HU-7 webPreviewUrl 的 `shown:` 引用（会话里摆给用户看的图）→ 会话那条路由 `/sessions/shown-image`；形状不对的
  *        `shown:` 照普通路径走 `/files/preview`
  *   （外加：webPreviewUrl 就是网络服务的 `/files/preview` 地址）
+ *   HU-8 browserManagerPageUrl（web 客户端的浏览器管理页，2026-11-01）：保留 origin 与 pathname；缺省 / 'tabs' →
+ *        `#browser-manager`，'settings' → `#browser-manager?section=settings`
+ *   HU-9 browserManagerSectionOf：只认 `section=settings`（在查询串里任何位置）；没有 / 空 / 认不出 / 空 hash → tabs
  */
 import { describe, expect, it } from 'vitest'
 import { networkPreviewUrl, networkShownImageUrl } from '../../../../shared/networkRoutes'
 import {
+  browserManagerPageUrl,
+  browserManagerSectionOf,
   filePreviewPageUrl,
   isWebPlatform,
   sandboxLibBaseFor,
@@ -152,5 +157,38 @@ describe('HU-7 webPreviewUrl 的 shown: 引用', () => {
       expect(webPreviewUrl('s 1', raw), raw).toBe(networkPreviewUrl('s 1', raw))
     }
     expect(webPreviewUrl('s 1', 'sub/b.png')).toBe(networkPreviewUrl('s 1', 'sub/b.png'))
+  })
+})
+
+describe('HU-8 browserManagerPageUrl', () => {
+  const loc = { origin: 'http://h:7', pathname: '/app/' }
+
+  it('HU-8 缺省与 tabs → #browser-manager；settings → #browser-manager?section=settings', () => {
+    expect(browserManagerPageUrl(loc)).toBe('http://h:7/app/#browser-manager')
+    expect(browserManagerPageUrl(loc, 'tabs')).toBe('http://h:7/app/#browser-manager')
+    expect(browserManagerPageUrl(loc, 'settings')).toBe(
+      'http://h:7/app/#browser-manager?section=settings'
+    )
+  })
+
+  it('HU-8 拼出来的地址读回去是同一节', () => {
+    for (const section of ['tabs', 'settings'] as const) {
+      const hash = new URL(browserManagerPageUrl(loc, section)).hash
+      expect(browserManagerSectionOf(hash)).toBe(section)
+    }
+  })
+})
+
+describe('HU-9 browserManagerSectionOf', () => {
+  it.each([
+    ['#browser-manager', 'tabs'],
+    ['#browser-manager?section=settings', 'settings'],
+    ['#browser-manager?x=1&section=settings', 'settings'],
+    ['#browser-manager?section=bogus', 'tabs'],
+    ['#browser-manager?section=', 'tabs'],
+    ['#browser-manager?section=Settings', 'tabs'],
+    ['', 'tabs']
+  ])('HU-9 %j → %s', (hash, section) => {
+    expect(browserManagerSectionOf(hash)).toBe(section)
   })
 })

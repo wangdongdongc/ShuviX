@@ -14960,3 +14960,191 @@ export function fmCardRowKeys(main: CdpClient): Promise<FmCardRowKey[]> {
     }))`
   )
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// web 客户端的浏览器管理页（`#browser-manager[?section=settings]`，2026-11-01）—— 别的设备上管理运行 ShuviX 的那台
+// 电脑上内置浏览器的标签页与设置。设置那一节是同一个 BrowserSettingsPage：网站列表 / 站点详情照样用
+// browserSettingsPagePane / browserSiteDetailsPane（传管理页的 CDP 客户端）。
+
+/** web 客户端顶栏的「浏览器窗口」按钮（web 里点它在新标签页开浏览器管理页） */
+export interface WebBrowserButtonPane {
+  present(): Promise<boolean>
+  /** 带一次用户手势点它（`window.open` 开新标签页要手势） */
+  clickWithGesture(): Promise<void>
+}
+
+export function webBrowserButtonPane(client: CdpClient): WebBrowserButtonPane {
+  const BTN = `document.querySelector('[data-open-browser-window]')`
+  const present = (): Promise<boolean> => client.eval<boolean>(`!!${BTN}`)
+  return {
+    present,
+    clickWithGesture: async () => {
+      await until(present, 'web client open-browser-window button mounted')
+      const r = await client.send<{ exceptionDetails?: unknown }>('Runtime.evaluate', {
+        expression: `${BTN}.click()`,
+        userGesture: true,
+        returnByValue: true
+      })
+      if (r.exceptionDetails) {
+        throw new Error('open-browser-window click: ' + JSON.stringify(r.exceptionDetails))
+      }
+    }
+  }
+}
+
+export interface BrowserManagerRow {
+  id: string
+  /** 行里的标题那一行字 */
+  title: string
+  /** 地址那一行字（改地址时没有 → ''） */
+  url: string
+  /** 截图面板的状态（`data-browser-tab-screenshot`：loading / shown / empty / failed）；没开 → null */
+  screenshot: string | null
+  /** 截图开关的 aria-expanded（'true' / 'false'）；这一行没有开关（内部页面）→ null */
+  shotExpanded: string | null
+  /** 截图 img 的 src 前 30 个字（没有图 → null） */
+  shotSrcPrefix: string | null
+  /** 截不到图的那一句（`data-browser-tab-screenshot-failed`）；没有 → null */
+  shotFailed: string | null
+}
+
+export interface BrowserManagerShot {
+  /** `[data-browser-manager]` 挂着 */
+  present: boolean
+  /** `data-browser-manager-section`：tabs / settings */
+  section: string | null
+  /** `data-headless` 的值（没有 → null） */
+  headless: string | null
+  /** 标签页那一节顶上的说明（`data-browser-manager-note`）；不在标签页 → null */
+  note: string | null
+  /** 标签页的行（DOM 序） */
+  rows: BrowserManagerRow[]
+  /** 动作失败的那一句（`data-browser-manager-error`）；没有 → null */
+  error: string | null
+  /** 列不出标签页的那一句（`data-browser-tabs-denied`）；没有 → null */
+  denied: string | null
+  /** 新建输入框里的字（不在标签页 → null） */
+  newTabText: string | null
+  /** 设置那一节（`[data-browser-settings-page]`）挂着 */
+  settingsPage: boolean
+  /** 设置里有「View history」（`[data-open-history]`） */
+  openHistory: boolean
+  /** 设置里有无头运行的说明（`[data-headless-search-note]`） */
+  headlessSearchNote: boolean
+}
+
+export interface BrowserManagerPane {
+  shot(): Promise<BrowserManagerShot>
+  /** 页面上看得见的全部文字（document.body.innerText） */
+  text(): Promise<string>
+  /** 点顶上的分段切换：标签页 / 设置（按位置，文案随语言变） */
+  switchSection(section: 'tabs' | 'settings'): Promise<void>
+  /** 往新建标签页的输入框里打字（整段替换） */
+  typeNewTab(text: string): Promise<void>
+  /** 点 Open */
+  clickOpen(): Promise<void>
+  /** 点某一行的截图开关（点开 / 收起） */
+  toggleScreenshot(tabId: string): Promise<void>
+  /** 点某一行截图面板里的「重新截图」（截图中禁用 → 等它可点） */
+  retakeScreenshot(tabId: string): Promise<void>
+  /** 设置里「Delete browsing history」→ 确认 */
+  clearHistory(): Promise<void>
+  /** 站点详情里某条 Cookie（key = `<域>|<路径>|<名字>`）展开后：值那一格是「只在那台电脑上显示」的说明 */
+  cookieValueHidden(key: string): Promise<boolean>
+}
+
+export function browserManagerPane(client: CdpClient): BrowserManagerPane {
+  const ROOT = `document.querySelector('[data-browser-manager]')`
+  const clickIn = async (expr: string, what: string): Promise<void> => {
+    await until(
+      () =>
+        client.eval<boolean>(`(() => {
+          const el = ${expr}
+          if (!el || el.disabled) return false
+          el.click()
+          return true
+        })()`),
+      `browser manager: ${what}`
+    )
+    await sleep(150)
+  }
+  return {
+    shot: () =>
+      client.eval<BrowserManagerShot>(`(() => {
+        const root = ${ROOT}
+        if (!root) {
+          return { present: false, section: null, headless: null, note: null, rows: [], error: null,
+            denied: null, newTabText: null, settingsPage: false, openHistory: false,
+            headlessSearchNote: false }
+        }
+        const input = root.querySelector('[data-browser-new-tab-input]')
+        return {
+          present: true,
+          section: root.getAttribute('data-browser-manager-section'),
+          headless: root.getAttribute('data-headless'),
+          note: root.querySelector('[data-browser-manager-note]')?.textContent?.trim() ?? null,
+          rows: [...root.querySelectorAll('[data-browser-manager-tab]')].map((r) => ({
+            id: r.getAttribute('data-browser-manager-tab') ?? '',
+            title: (r.querySelector('.min-w-0.flex-1 > div')?.textContent ?? '').trim(),
+            url: (r.querySelector('[data-browser-tab-url]')?.textContent ?? '').trim(),
+            screenshot:
+              r.querySelector('[data-browser-tab-screenshot]')?.getAttribute('data-browser-tab-screenshot') ?? null,
+            shotExpanded:
+              r.querySelector('[data-browser-tab-screenshot-toggle]')?.getAttribute('aria-expanded') ?? null,
+            shotSrcPrefix:
+              r.querySelector('[data-browser-tab-screenshot-image]')?.getAttribute('src')?.slice(0, 30) ?? null,
+            shotFailed:
+              r.querySelector('[data-browser-tab-screenshot-failed]')?.textContent?.trim() ?? null
+          })),
+          error: root.querySelector('[data-browser-manager-error]')?.textContent?.trim() ?? null,
+          denied: root.querySelector('[data-browser-tabs-denied]')?.textContent?.trim() ?? null,
+          newTabText: input ? input.value : null,
+          settingsPage: !!root.querySelector('[data-browser-settings-page]'),
+          openHistory: !!root.querySelector('[data-open-history]'),
+          headlessSearchNote: !!root.querySelector('[data-headless-search-note]')
+        }
+      })()`),
+    text: () => client.eval<string>('document.body?.innerText ?? ""'),
+    switchSection: (section) =>
+      clickIn(
+        `${ROOT}?.querySelectorAll('[data-browser-manager-nav] button')[${section === 'tabs' ? 0 : 1}]`,
+        `switch to ${section}`
+      ),
+    typeNewTab: async (text) => {
+      const ok = await client.eval<boolean>(`(() => {
+        const el = ${ROOT}?.querySelector('[data-browser-new-tab-input]')
+        if (!el) return false
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+        setter.call(el, ${JSON.stringify(text)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('browser manager: new-tab input not found')
+      await sleep(100)
+    },
+    clickOpen: () => clickIn(`${ROOT}?.querySelector('[data-browser-new-tab-open]')`, 'Open'),
+    toggleScreenshot: (tabId) =>
+      clickIn(
+        `${ROOT}?.querySelector('[data-browser-manager-tab=${JSON.stringify(tabId)}] [data-browser-tab-screenshot-toggle]')`,
+        `screenshot toggle of ${tabId}`
+      ),
+    retakeScreenshot: (tabId) =>
+      clickIn(
+        `${ROOT}?.querySelector('[data-browser-manager-tab=${JSON.stringify(tabId)}] [data-browser-tab-screenshot-retake]')`,
+        `retake screenshot of ${tabId}`
+      ),
+    clearHistory: async () => {
+      await clickIn(`${ROOT}?.querySelector('[data-clear-history]')`, 'delete browsing history')
+      await clickIn(
+        `${ROOT}?.querySelector('[data-clear-history-confirm]')`,
+        'confirm delete browsing history'
+      )
+    },
+    cookieValueHidden: (key) =>
+      client.eval<boolean>(`(() => {
+        const row = ${ROOT}?.querySelector('[data-site-cookie-key=${JSON.stringify(key)}]')
+        return !!row?.querySelector('[data-site-cookie-value-hidden]') &&
+          !row.querySelector('[data-site-cookie-value]')
+      })()`)
+  }
+}

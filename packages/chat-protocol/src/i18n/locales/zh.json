@@ -1505,7 +1505,8 @@
       "clearHistoryDesc": "历史记录里的所有网页，包括 agent 打开的。地址栏也不会再建议它们。",
       "clearHistoryButton": "删除…",
       "clearHistoryConfirm": "确认删除",
-      "viewHistory": "查看历史记录"
+      "viewHistory": "查看历史记录",
+      "headlessSearchNote": "无头运行时没有地址栏，搜索引擎和搜索建议不起作用。"
     },
     "certError": {
       "title": "你的连接不是私密连接",
@@ -1565,7 +1566,8 @@
       "total_one": "共 {{count}} 个网站，占用 {{size}}",
       "total_other": "共 {{count}} 个网站，占用 {{size}}",
       "openSite": "查看这个网站的数据",
-      "loadFailed": "读不到这个网站的数据，稍后再试。"
+      "loadFailed": "读不到这个网站的数据，稍后再试。",
+      "valueHidden": "Cookie 的值只在运行 ShuviX 的那台电脑上显示。"
     },
     "pageMenu": {
       "openLinkInNewTab": "在新标签页中打开链接",
@@ -1642,6 +1644,39 @@
       "visits_other": "访问了 {{count}} 次",
       "openedByAgent": "由「{{title}}」里的 agent 打开 · 查看对话",
       "deletedSession": "已删除的对话"
+    },
+    "manager": {
+      "title": "浏览器",
+      "subtitle": "运行 ShuviX 的那台电脑上的内置浏览器",
+      "tabs": "标签页",
+      "settings": "设置",
+      "headlessNote": "那台电脑在无头运行：页面只在后台给 agent 用。这里可以管理标签页和浏览器数据，但看不到页面本身。",
+      "remoteNote": "浏览器窗口在运行 ShuviX 的那台电脑上；这里可以管理它的标签页和浏览器数据。",
+      "tabCount_one": "{{count}} 个标签页",
+      "tabCount_other": "{{count}} 个标签页",
+      "noTabs": "没有打开的标签页",
+      "newTabPlaceholder": "输入网址或搜索词，留空则开空白页",
+      "open": "打开",
+      "go": "前往",
+      "cancel": "取消",
+      "changeAddress": "换个地址",
+      "loading": "加载中",
+      "crashed": "页面崩溃了",
+      "intercepting": "拦截了网络请求",
+      "notAllowed": "这台设备不能查看标签页：{{reason}}",
+      "actionFailed": "没有成功：{{reason}}",
+      "refreshList": "刷新列表",
+      "openedRemotely": "新标签页在后台打开，不会切换那台电脑上正在看的页面。",
+      "remoteUrlRefused": "只能打开网页（http、https）、空白页和 shuvix:// 页，本地文件这类地址从别的设备打不开。",
+      "showScreenshot": "看截图",
+      "hideScreenshot": "收起截图",
+      "retakeScreenshot": "重新截图",
+      "screenshotLoading": "正在截图…",
+      "screenshotNote": "点开时截的那一刻的画面，不会自动更新。",
+      "screenshotTakenAt": "{{time}} 的画面，不会自动更新",
+      "screenshotEmpty": "截不到画面：页面可能还在加载，或者崩溃了。",
+      "screenshotFailed": "截不到图：{{reason}}",
+      "screenshotAlt": "这个标签页的截图"
     }
   },
   "builtinSkill": {

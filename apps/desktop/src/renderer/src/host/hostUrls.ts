@@ -68,3 +68,23 @@ export function filePreviewPageUrl(
 export function widgetPageUrl(location: PageLocation, widgetId: string): string {
   return webPageUrl(location, `widget-window?${new URLSearchParams({ widgetId }).toString()}`)
 }
+
+/** 浏览器管理页的两节 */
+export type BrowserManagerSection = 'tabs' | 'settings'
+
+/** web 客户端的浏览器管理页（`#browser-manager[?section=settings]`）：别的设备上管理那台电脑的内置浏览器 */
+export function browserManagerPageUrl(
+  location: PageLocation,
+  section: BrowserManagerSection = 'tabs'
+): string {
+  return webPageUrl(
+    location,
+    section === 'tabs' ? 'browser-manager' : `browser-manager?section=${section}`
+  )
+}
+
+/** `#browser-manager?section=…` → 那一节（认不出 → 标签页） */
+export function browserManagerSectionOf(hash: string): BrowserManagerSection {
+  const query = hash.split('?')[1] ?? ''
+  return new URLSearchParams(query).get('section') === 'settings' ? 'settings' : 'tabs'
+}

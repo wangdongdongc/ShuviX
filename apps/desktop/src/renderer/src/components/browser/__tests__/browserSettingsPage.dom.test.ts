@@ -32,6 +32,13 @@
  *           同样回到按钮、没有未处理的拒绝
  *   BSP-4   「View history」→ browserView.openInternal('history')
  *
+ * 别的设备上的浏览器管理页（2026-11-01，props `remote` / `headless`）：
+ *   BSP-R1  remote：没有「View history」，「Delete browsing history」确认照样 browserHistory.clear()；不带 remote 有按钮
+ *   BSP-H1  headless：搜索那一节有说明 [data-headless-search-note]；搜索设置的外层标 data-search-settings-disabled="true"、
+ *           aria-disabled="true"、pointer-events-none、inert；点开关什么也不写
+ *   BSP-H2  不 headless：没有说明、没有这些标记，开关与下拉框照常写
+ *   BSP-H3  headless：下拉框上直接触发 change 也不写 browser.searchEngine
+ *
  * `window.api` 是 browserDomSupport 的假件；store 是真的；SettingsPrimitives 走 vitest 别名到 app-shell 的真组件；
  * 真 en 文案。jsdom 没有 scrollIntoView：换成间谍（按 this 认是哪一节）。
  */
@@ -67,7 +74,9 @@ const $$ = <T extends Element = HTMLElement>(sel: string): T[] => [
   ...m!.container.querySelectorAll<T>(sel)
 ]
 
-async function mount(props: { compact?: boolean } = {}): Promise<void> {
+async function mount(
+  props: { compact?: boolean; remote?: boolean; headless?: boolean } = {}
+): Promise<void> {
   m = await mountInto(BrowserSettingsPage, props)
   await flush()
 }
@@ -781,5 +790,73 @@ describe('删除浏览历史与查看历史（BSP-3 / BSP-4）', () => {
     await mount()
     click($('[data-open-history]')!)
     expect(api.browserView.openInternal.mock.calls).toEqual([['history']])
+  })
+})
+
+describe('别的设备上的浏览器管理页（BSP-R1 / BSP-H1 … H3）', () => {
+  const SUGGEST_KEY = 'browser.searchSuggest'
+  const NOTE = 'Running headless there is no address bar'
+  const disabledWrap = (): HTMLElement | null => $('[data-search-settings-disabled]')
+  const suggestToggle = (): HTMLButtonElement =>
+    $('[data-search-suggest-toggle]')!.querySelector('button')!
+
+  it('BSP-R1 remote：没有 View history；Delete browsing history 确认 → browserHistory.clear() 一次', async () => {
+    await mount({ remote: true })
+    expect($('[data-open-history]')).toBeNull()
+    click($('[data-clear-history]')!)
+    click($('[data-clear-history-confirm]')!)
+    await flush()
+    expect(api.browserHistory.clear).toHaveBeenCalledTimes(1)
+    expect(api.browserView.openInternal).not.toHaveBeenCalled()
+  })
+
+  it('BSP-R1 不带 remote：View history 在', async () => {
+    await mount()
+    expect($('[data-open-history]')).not.toBeNull()
+  })
+
+  it('BSP-H1 headless：说明、置灰标记（data-search-settings-disabled / aria-disabled / pointer-events-none / inert）；点开关不写', async () => {
+    await mount({ headless: true })
+    const note = $('[data-headless-search-note]')
+    expect(note).not.toBeNull()
+    expect(note!.textContent).toContain(NOTE)
+    expect(section('search').contains(note)).toBe(true)
+    const wrap = disabledWrap()!
+    expect(wrap).not.toBeNull()
+    expect(wrap.getAttribute('data-search-settings-disabled')).toBe('true')
+    expect(wrap.getAttribute('aria-disabled')).toBe('true')
+    expect(wrap.className).toContain('pointer-events-none')
+    expect(wrap.hasAttribute('inert')).toBe(true)
+    expect(wrap.contains(engineSelect())).toBe(true)
+    expect(wrap.contains(suggestToggle())).toBe(true)
+
+    click(suggestToggle())
+    await flush()
+    expect(api.settings.set).not.toHaveBeenCalled()
+    expect($('[data-search-suggest-toggle]')!.getAttribute('data-search-suggest-toggle')).toBe(
+      'true'
+    )
+  })
+
+  it('BSP-H2 不 headless：没有说明、没有置灰标记；开关与下拉框照常写', async () => {
+    await mount()
+    expect($('[data-headless-search-note]')).toBeNull()
+    expect(disabledWrap()).toBeNull()
+    expect($('[aria-disabled="true"]')).toBeNull()
+    expect($('[inert]')).toBeNull()
+    click(suggestToggle())
+    choose(engineSelect(), 'bing')
+    expect(api.settings.set.mock.calls).toEqual([
+      [{ key: SUGGEST_KEY, value: 'false' }],
+      [{ key: ENGINE_KEY, value: 'bing' }]
+    ])
+  })
+
+  it('BSP-H3 headless：下拉框上直接触发 change 也不写 browser.searchEngine', async () => {
+    await mount({ headless: true })
+    choose(engineSelect(), 'bing')
+    await flush()
+    expect(api.settings.set.mock.calls.filter(([arg]) => arg.key === ENGINE_KEY)).toEqual([])
+    expect(api.settings.set).not.toHaveBeenCalled()
   })
 })

@@ -11,6 +11,8 @@
  *           (c) 回来之后防护还没装完（Page.enable 迟迟不回）时的动作先等它装完、打开拦截，再开始；
  *           (d) 页面回来之前主动 detach / 调试目标没了（debugger 的 detach 事件，`target closed`）：
  *              等页面回来的那个监听一并摘掉，之后页面回来也什么都不装。
+ *   CDP-1  没有浏览器窗口（getBrowserHostWindow → null）：attach / 拦截翻转 / detach 的状态推送各调一次
+ *          noteTabStateChanged（web 客户端的浏览器管理页靠它知道 agent 接上 / 断开了），什么都不抛。
  *
  * browserViewService 换成一个假 tab：webContents 带 ./fakeElectron.ts 的假 debugger 与可拨的 isCrashed；
  * 假 debugger 像真的崩溃页那样回命令 —— Inspector.enable 先补报 Inspector.targetCrashed 再回包，
@@ -23,6 +25,9 @@ vi.mock('electron', async () => (await import('./fakeElectron')).fakeElectron().
 
 const state = vi.hoisted(() => ({
   view: null as unknown,
+  /** getBrowserHostWindow 回 null（没有浏览器窗口：无头 / 从没开过） */
+  noHost: false,
+  noteTabStateChanged: vi.fn(),
   host: {
     isDestroyed: () => false,
     webContents: { send: (_channel: string, _payload: unknown): void => {} }
@@ -32,8 +37,9 @@ const state = vi.hoisted(() => ({
 // mock 路径按**测试文件**解析：被测模块在 services/browser/，测试在其 __tests__/ 下
 vi.mock('../browserViewService', () => ({
   getTabView: (id: string) => (id === 't' ? state.view : null),
-  getBrowserHostWindow: () => state.host,
-  browserWindowInFront: () => null
+  getBrowserHostWindow: () => (state.noHost ? null : state.host),
+  browserWindowInFront: () => null,
+  noteTabStateChanged: () => state.noteTabStateChanged()
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} })
@@ -98,6 +104,8 @@ async function attachCrashed(): Promise<Awaited<ReturnType<typeof browserCdpMana
 beforeEach(() => {
   dbg = createFakeDebugger()
   crashed = true
+  state.noHost = false
+  state.noteTabStateChanged.mockClear()
   heldPageEnable = null
   dbg.sendCommand.mockImplementation((method: string) => {
     if (method === 'Inspector.enable') {
@@ -206,4 +214,26 @@ describe('接管一个渲染进程已经崩了的 tab：防护等页面回来再
       expect(session.ended).not.toBeNull()
     }
   )
+})
+
+describe('没有浏览器窗口时照样通知 tab 状态（CDP-1）', () => {
+  it('CDP-1 attach、拦截开 / 关、detach 各调一次 noteTabStateChanged，不抛', async () => {
+    state.noHost = true
+    crashed = false
+
+    const session = await browserCdpManager.session('t')
+    await flush()
+    expect(state.noteTabStateChanged).toHaveBeenCalledTimes(1)
+
+    await session.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] })
+    expect(browserCdpManager.cdpState('t').intercepting).toBe(true)
+    expect(state.noteTabStateChanged).toHaveBeenCalledTimes(2)
+
+    await session.send('Fetch.disable')
+    expect(state.noteTabStateChanged).toHaveBeenCalledTimes(3)
+
+    await browserCdpManager.detach('t')
+    expect(state.noteTabStateChanged).toHaveBeenCalledTimes(4)
+    expect(browserCdpManager.cdpState('t').attached).toBe(false)
+  })
 })

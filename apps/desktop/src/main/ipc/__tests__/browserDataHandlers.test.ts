@@ -1,9 +1,10 @@
 /**
  * browserDataHandlers —— 浏览器设置页的网站数据、站点信息气泡与「证书」一节用到的通道（2026-10-16）。
  *
- *   SD-U20 list-sites 原样转给 listSites()；site-details 只回应桌面窗口：窗口客户端 → siteDetails(site) 的结果，
- *          网络客户端（服务器模式的局域网浏览器，没有鉴权）→ null、连服务都不调（Cookie 的值是登录令牌）；
- *          不合法的 site（空串 / 非字符串）→ null、不调；
+ *   SD-U20 list-sites 原样转给 listSites()；site-details：窗口客户端（宿主与别的窗口）→ siteDetails(site) 的结果原样
+ *          （值都在、没有 cookieValuesHidden）；网络客户端（web 客户端的浏览器管理页，远程访问没有鉴权）→ 同一份详情，
+ *          但每个 Cookie 的值换成空串、带 cookieValuesHidden: true，其余一字不差，服务回的对象不被改（SD-U20b … f）；
+ *          服务回 null → null；不合法的 site（空串 / 非字符串）→ null、不调；
  *   SD-U21 删除通道的校验：clear-site 只收非空字符串；clear-site-category 只收六个类别（别的串、原型上的键、
  *          非字符串都忽略）且网站要是非空字符串；clear-origin 只收字符串；remove-cookie 只收对象；
  *   SD-U22 site-info 对网页地址多回一个 `site`（siteOfUrl 给出分组键时；给不出就没有这个键）；非网页照旧
@@ -299,10 +300,92 @@ describe('网站列表与站点详情（SD-U20）', () => {
     expect(state.siteDetails.mock.calls.at(-1)).toEqual(['nope.test'])
   })
 
-  it('SD-U20 site-details 从网络客户端来：null，连 siteDetails 都不调（Cookie 的值是登录令牌）', async () => {
-    state.siteDetails.mockResolvedValue({ site: 'github.com', cookies: [{ value: 'secret' }] })
-    expect(await callAs(NET_CTX, 'browser-data:site-details', 'github.com')).toBeNull()
-    expect(state.siteDetails).not.toHaveBeenCalled()
+  /** 一张带两个 Cookie（有值）的详情 */
+  const detailsWithValues = (): Record<string, unknown> => ({
+    ...SITES[0],
+    origins: [{ origin: 'https://github.com', usageBytes: 1000 }],
+    cookies: [
+      {
+        name: 'sid',
+        value: 'secret-token',
+        domain: '.github.com',
+        path: '/',
+        secure: true,
+        httpOnly: true,
+        hostOnly: false,
+        sameSite: 'lax',
+        expires: 1_800_000_000_000,
+        size: 15
+      },
+      {
+        name: 'pref',
+        value: 'dark',
+        domain: 'github.com',
+        path: '/settings',
+        secure: false,
+        httpOnly: false,
+        hostOnly: true,
+        sameSite: 'unspecified',
+        size: 8
+      }
+    ]
+  })
+
+  it('SD-U20b site-details 从网络客户端来：siteDetails 调一次；每个 Cookie 的值是空串、带 cookieValuesHidden，其余一字不差', async () => {
+    const details = detailsWithValues()
+    state.siteDetails.mockResolvedValueOnce(details)
+    const result = (await callAs(NET_CTX, 'browser-data:site-details', 'github.com')) as Record<
+      string,
+      unknown
+    > & { cookies: Array<Record<string, unknown>> }
+    expect(state.siteDetails.mock.calls).toEqual([['github.com']])
+    const expected = detailsWithValues() as { cookies: Array<Record<string, unknown>> }
+    expect(result).toEqual({
+      ...expected,
+      cookies: expected.cookies.map((c) => ({ ...c, value: '' })),
+      cookieValuesHidden: true
+    })
+    expect(JSON.stringify(result)).not.toContain('secret-token')
+  })
+
+  it.each([
+    ['宿主窗口', 7],
+    ['别的窗口', 9]
+  ])(
+    'SD-U20c site-details 从%s来：原样回服务的结果，值都在、没有 cookieValuesHidden 这个键',
+    async (_l, senderId) => {
+      state.siteDetails.mockResolvedValueOnce(detailsWithValues())
+      const fn = state.handlers.get('browser-data:site-details')
+      if (!fn) throw new Error('no handler for browser-data:site-details')
+      const result = await Promise.resolve(fn({ sender: { id: senderId } }, 'github.com'))
+      expect(result).toEqual(detailsWithValues())
+      expect(result).not.toHaveProperty('cookieValuesHidden')
+    }
+  )
+
+  it('SD-U20d site-details 从网络客户端来、服务回 null → null', async () => {
+    state.siteDetails.mockResolvedValueOnce(null)
+    expect(await callAs(NET_CTX, 'browser-data:site-details', 'nope.test')).toBeNull()
+    expect(state.siteDetails.mock.calls).toEqual([['nope.test']])
+  })
+
+  it.each([[''], [42], [null], [{}]])(
+    'SD-U20e site-details(%j) 从网络客户端来：不合法 → null，不调',
+    async (site) => {
+      expect(await callAs(NET_CTX, 'browser-data:site-details', site)).toBeNull()
+      expect(state.siteDetails).not.toHaveBeenCalled()
+    }
+  )
+
+  it('SD-U20f 给网络客户端去掉值时不改服务回的那个对象', async () => {
+    const details = detailsWithValues() as { cookies: Array<Record<string, unknown>> }
+    const firstCookie = details.cookies[0]
+    state.siteDetails.mockResolvedValueOnce(details)
+    await callAs(NET_CTX, 'browser-data:site-details', 'github.com')
+    expect(details).toEqual(detailsWithValues())
+    expect(details).not.toHaveProperty('cookieValuesHidden')
+    expect(details.cookies[0]).toBe(firstCookie)
+    expect(firstCookie.value).toBe('secret-token')
   })
 
   it('SD-U20 网络客户端照样能列网站（列表里没有 Cookie 的值）', async () => {

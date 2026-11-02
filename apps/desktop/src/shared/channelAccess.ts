@@ -286,19 +286,21 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   // ─── browserView：内置浏览器 ───
   'browser-view:open-window': 'write',
   'browser-view:is-window-open': 'read',
+  'browser-view:host-info': 'read', // 这台电脑有没有浏览器窗口可开（无头运行）
   'browser-view:create-tab': 'write',
   'browser-view:close-tab': 'write',
   'browser-view:reopen-closed-tab': 'write',
   'browser-view:activate-tab': 'write',
-  'browser-view:list-tabs': 'read',
+  // 标签页的地址与截图：地址里可能带登录令牌（与 browser-history:list 同理），截图给的比地址还多 —— 按带机密归
+  'browser-view:list-tabs': 'admin',
   'browser-view:navigate': 'write',
   'browser-view:go-back': 'write',
   'browser-view:go-forward': 'write',
   'browser-view:reload': 'write',
   'browser-view:stop': 'write',
-  'browser-view:get-url': 'read',
+  'browser-view:get-url': 'admin',
   'browser-view:set-layout': 'write',
-  'browser-view:capture': 'read', // 页面截图
+  'browser-view:capture': 'admin', // 页面截图
   'browser-view:zoom': 'write',
   'browser-view:open-session': 'write',
   'browser-view:open-settings': 'write',
@@ -319,7 +321,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   // ─── browserData：内置浏览器的分区数据 ───
   'browser-data:list-sites': 'read',
   'browser-data:clear-site': 'write',
-  'browser-data:site-details': 'admin', // 返回值带 Cookie 的值（登录令牌）
+  'browser-data:site-details': 'read', // 桌面窗口拿到 Cookie 的值；网络客户端拿到的一律没有值（cookieValuesHidden）
   'browser-data:clear-site-category': 'write',
   'browser-data:clear-origin': 'write',
   'browser-data:remove-cookie': 'write',

@@ -130,7 +130,7 @@ appearance, the default model, the command classifier and network access at once
 | `projects` | creating, changing, deleting and listing projects — projects carry environment variables, so listing them is `admin` | sidebar projects, project settings |
 | `files` | listing, reading, writing, previewing and downloading working-directory files, notebooks, artifacts, browsing folders | the file tree, previews, notebooks |
 | `terminal` | the terminal (only the `write` level) | the bottom terminal panel |
-| `browser` | the in-app browser: tabs, browsing, screenshots, DevTools, site data and cookies, certificate exceptions; its settings | the in-app browser, Settings → MCP → browser |
+| `browser` | the in-app browser: tabs, browsing, screenshots, DevTools, site data and cookies, certificate exceptions; its settings. `read` is only the site list, site details (another device never sees cookie values) and certificate exceptions; deleting browsing history is `write`, reading it stays on this computer; tab addresses and screenshots are `admin` (an address can carry a login token); another device can only make it open http(s) pages, `about:blank` and `shuvix://` pages — a local file can be neither opened nor screenshotted | the in-app browser, Settings → MCP → browser |
 | `widgets` | listing, opening, renaming, archiving, deleting and exporting widgets, their own windows | sidebar Widgets, Settings → Archived |
 | `knowledge` | listing, creating and opening knowledge bases and entries | sidebar knowledge, @ in the input box |
 | `agents` | agent profiles and bots, the default agents | sidebar agents / Bots |

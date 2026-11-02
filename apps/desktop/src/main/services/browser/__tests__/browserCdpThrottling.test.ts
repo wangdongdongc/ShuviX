@@ -52,7 +52,8 @@ const state = vi.hoisted(() => ({
 vi.mock('../browserViewService', () => ({
   getTabView: (id: string) => (id === 't' ? state.view : null),
   getBrowserHostWindow: () => state.host,
-  browserWindowInFront: () => null
+  browserWindowInFront: () => null,
+  noteTabStateChanged: vi.fn()
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} })

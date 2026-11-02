@@ -34,6 +34,7 @@ export {
   createTab,
   closeTab,
   reopenClosedTab,
+  peekClosedTabUrl,
   requestOmniboxFocus,
   activateTab,
   zoomTab,

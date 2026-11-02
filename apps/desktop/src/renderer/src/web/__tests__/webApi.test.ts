@@ -6,7 +6,7 @@
  *   WA-1 app:open-settings：`#settings/<tab>`（带上当前 pathname），没给 / 空 / 非字符串 → `#settings`；回 {success:true}
  *   WA-2 app:open-external：http / https / mailto 用归一后的 href 在新标签页（noopener,noreferrer）开、回 {success:true}；
  *        javascript / file / data / ftp / 自定义协议 / 不是 URL / 空 / undefined → {success:false}，open 不调
- *   WA-3 webDesktopOnlyChannels：桌面专属表减去本地实现（剩 5 条：悬浮窗两条、内置浏览器窗口与它的设置页、保存框）；
+ *   WA-3 webDesktopOnlyChannels：桌面专属表减去本地实现（剩 3 条：悬浮窗两条、保存框）；
  *        {} → 23；只认自有属性
  *   WA-4 本地实现的每个键都是桌面专属键、也是通道表里的 invoke 通道（服务端反正会拒它们）
  *   WA-5 createWebApi：platform 'web'、sync 的成员就是连接 sync 的那几个函数；命名空间 = 表 + events / liveDoc / knowledge / sync；
@@ -34,6 +34,13 @@
  *         invoke 拒绝 → 照样 resolve {success:false}、不显示（从不拒绝）
  *   WA-11 缺省依赖（resetModules）：app:open-folder 的卡片进 webPathNotice；dialog:openDirectory 挂起一次 webDirectoryPick，
  *         settle 之后 resolve 那个路径
+ *
+ * 浏览器管理页（2026-11-01）：
+ *
+ *   WA-8b browser-view:open-window → 新标签页开 `<origin><pathname>#browser-manager`（恰一次，'_blank'），回 undefined；
+ *         browser-view:open-settings → `…#browser-manager?section=settings`
+ *   WA-9b 经装好的 web api（createWsConnection + createWebApi，与 web/main.tsx 同样接）：browserView.openWindow() resolve，
+ *         不经 socket、不给「只在桌面应用里」的提示
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../../shared/apiTable'
@@ -46,7 +53,7 @@ import {
   webDesktopOnlyChannels,
   webLocalHandlers
 } from '../webApi'
-import type { WsConnection } from '../wsConnection'
+import { createWsConnection, type WebSocketLike, type WsConnection } from '../wsConnection'
 
 let fakeWin: {
   location: { origin: string; pathname: string }
@@ -128,17 +135,13 @@ describe('WA-2 app:open-external', () => {
 })
 
 describe('WA-3 webDesktopOnlyChannels', () => {
-  it('WA-3 减去本地实现：剩 5 条', () => {
+  it('WA-3 减去本地实现：剩 3 条', () => {
     const set = webDesktopOnlyChannels(webLocalHandlers(fakeWin))
     expect([...set].sort()).toStrictEqual(
-      [
-        'browser-view:open-settings',
-        'browser-view:open-window',
-        'pinChat:focus',
-        'pinChat:pin',
-        'widget:pickExportTarget'
-      ].sort()
+      ['pinChat:focus', 'pinChat:pin', 'widget:pickExportTarget'].sort()
     )
+    expect(set.has('browser-view:open-window')).toBe(false)
+    expect(set.has('browser-view:open-settings')).toBe(false)
     expect(set.has('app:open-folder')).toBe(false)
     expect(set.has('files:open')).toBe(false)
     expect(set.has('app:open-settings')).toBe(false)
@@ -170,6 +173,8 @@ describe('WA-4 本地实现的通道', () => {
         'app:open-settings',
         'app:reveal-path',
         'bot:openFolder',
+        'browser-view:open-settings',
+        'browser-view:open-window',
         'dialog:openDirectory',
         'files:open',
         'hook:openFolder',
@@ -618,5 +623,62 @@ describe('WA-SD app:open-session-draft（远程访问策略的引导）', () => 
       expect(handlers['app:open-session-draft'](bad)).toEqual({ success: false })
     }
     expect(openChatWithDraft).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('WA-8b 浏览器管理页', () => {
+  it('WA-8b open-window → 新标签页开 #browser-manager（恰一次），回 undefined', async () => {
+    fakeWin.location = { origin: 'http://192.168.1.10:7766', pathname: '/app/' }
+    const handlers = webLocalHandlers(fakeWin)
+    expect(await handlers['browser-view:open-window']()).toBeUndefined()
+    expect(fakeWin.open.mock.calls).toEqual([
+      ['http://192.168.1.10:7766/app/#browser-manager', '_blank']
+    ])
+  })
+
+  it('WA-8b open-settings → 新标签页开 #browser-manager?section=settings（恰一次）', async () => {
+    const handlers = webLocalHandlers(fakeWin)
+    expect(await handlers['browser-view:open-settings']()).toBeUndefined()
+    expect(fakeWin.open.mock.calls).toEqual([
+      ['http://192.168.1.10:7766/#browser-manager?section=settings', '_blank']
+    ])
+  })
+})
+
+describe('WA-9b 经装好的 web api 开浏览器管理页', () => {
+  it('WA-9b browserView.openWindow() resolve，不经 socket、不给桌面专属的提示', async () => {
+    const sockets: Array<{ send: ReturnType<typeof vi.fn> }> = []
+    const createSocket = vi.fn((_url: string): WebSocketLike => {
+      const socket = {
+        readyState: 0,
+        send: vi.fn(),
+        close: vi.fn(),
+        onopen: null,
+        onclose: null,
+        onerror: null,
+        onmessage: null
+      }
+      sockets.push(socket)
+      return socket
+    })
+    const localInvoke = webLocalHandlers(fakeWin)
+    const onDesktopOnly = vi.fn()
+    const conn = createWsConnection({
+      url: 'ws://h/ws',
+      createSocket,
+      localInvoke,
+      desktopOnly: webDesktopOnlyChannels(localInvoke),
+      onDesktopOnly,
+      timers: { setTimeout: () => 0, clearTimeout: () => {} }
+    })
+    const api = createWebApi(conn)
+
+    await expect(api.browserView.openWindow()).resolves.toBeUndefined()
+    expect(fakeWin.open.mock.calls).toEqual([
+      ['http://192.168.1.10:7766/#browser-manager', '_blank']
+    ])
+    expect(onDesktopOnly).not.toHaveBeenCalled()
+    for (const socket of sockets) expect(socket.send).not.toHaveBeenCalled()
+    conn.dispose()
   })
 })

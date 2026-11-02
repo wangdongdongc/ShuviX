@@ -23,6 +23,38 @@
  *   BVI-2 go-back / go-forward / reload 是用户的动作：先 historyNoteUser(tabId) 再导航，而且只在真的会发生时
  *       （canGoBack / canGoForward 假 → 不记、不导航；没有这个 tab → 什么也不做）
  *
+ * 网络客户端（远程访问）能让浏览器去哪儿（2026-11-01，shared/browserRemoteUrls.ts —— `file:` 页加上截图就是一次绕过
+ * files scope 的本地文件读取）。拒绝 = 处理函数同步抛、`.code === 'remote_url_refused'`；桌面窗口不限：
+ *   BR-1  网络客户端 create-tab 带 file: / view-source:file: / data: / javascript: / 裸域名 / 数字 / 只有空白 /
+ *         不认识的 shuvix:// → 抛，createTab / openInternalPage / requestOmniboxFocus 都不调
+ *   BR-2  网络客户端 create-tab 带 https / about:blank（2b）→ createTab(url, {activate:false}) —— 开在后台，回它的 id，
+ *         不聚焦地址栏；shuvix://history（2c）→ openInternalPage('history', {activate:false})；('https://…', 'typed')（2d）
+ *         → {activate:false, transition:'typed'}
+ *   BR-3  网络客户端 create-tab 不带地址 / undefined / null / '' → 不抛、createTab(…, {activate:false})，从不聚焦地址栏
+ *   BR-4  窗口（宿主 7、主窗口 9）create-tab 带 file: / view-source:file: / data: → 照样交给 createTab；窗口 create-tab()
+ *         → {activate:true} 且聚焦地址栏一次；窗口 'shuvix://settings' → openInternalPage 恰好一个参数（桌面不变）
+ *   HI-1  host-info 回 { headless: isHeadless() }（true / false 两头，窗口与网络客户端一样）
+ *   HI-2  经真的网络分发器：host-info → ok:true {headless:false}；判官拒绝 browser scope 的 admin 时照样 ok（它是 read，
+ *         判官用 channelCallFactsOf 看访问级别）
+ *   BR-5  网络客户端 navigate：file: / view-source: / data: / blob: / 不认识的 shuvix:// → 抛、navigateTab 不调；
+ *         https / about:blank / shuvix://settings → navigateTab(T, url, transition)；非字符串 → 不抛、不调
+ *   BR-6  窗口 navigate 去 file: → navigateTab 照调
+ *   BR-7  网络客户端 go-back：核对 active-1 那一条，放行 → 先 historyNoteUser(T) 再 goToIndex(那一条)，不调
+ *         goBack；那一条是 file: → 抛，不记、不导航
+ *   BR-8  网络客户端 go-forward：核对 active+1 那一条（再往后的 file: 不管）；那一条是 file: → 抛
+ *   BR-9  canGoBack / canGoForward 真但那一条取不到（null / undefined）→ 抛、不导航；不能退 / 进、没有这个 tab →
+ *         不抛、什么也不做
+ *   BR-10 窗口 go-back / go-forward 去 file: → goBack() / goForward()，从不读那一条
+ *   BR-11 网络客户端 reopen-closed-tab：要重开的是 file: → 抛、reopenClosedTab 不调（记录留着，之后窗口照样能重开）；
+ *         https / shuvix://settings → 调、回它的值；没有记录 → 调、回 null
+ *   BR-12 窗口 reopen-closed-tab，要重开的是 file: → 照调、回它的值
+ *   BR-13 网络客户端 capture：tab 正显示 https / about:blank / shuvix://settings → captureTab(T, 1600) 回它的值；
+ *         maxWidth '800' → undefined；正显示 file: / view-source:file: / data: → 抛、captureTab 不调
+ *   BR-14 网络客户端 capture：显示地址是空串（没有这个 tab）→ ''、不抛、不抓；tabId 不是字符串 → ''、
+ *         tabDisplayUrl 与 captureTab 都不调
+ *   BR-15 经真的网络分发器（createNetworkDispatcher）：create-tab file: → `ok:false`、code remote_url_refused、
+ *         消息里没有路径；create-tab https → `ok:true`、'tab-new'；capture 一个正显示 file: 的 tab → 同一个 code
+ *
  * electron 是替身（on / handle 收进 Map）；services/browser 整个换成间谍 —— 宿主判断固定为
  * 「webContents id 7 是宿主」。
  */
@@ -40,10 +72,13 @@ const state = vi.hoisted(() => ({
   isBrowserWindowOpen: vi.fn<() => boolean>(() => false),
   closeTab: vi.fn<(tabId: string, opts?: { remember?: boolean }) => void>(),
   reopenClosedTab: vi.fn<() => string | null>(() => null),
+  peekClosedTabUrl: vi.fn<() => string | undefined>(() => undefined),
   zoomTab: vi.fn<(tabId: string, direction: string) => void>(),
   openAgentSession: vi.fn<(sessionId: string) => boolean>(() => false),
   requestOmniboxFocus: vi.fn<() => void>(),
-  openInternalPage: vi.fn<(page: string) => string>(() => 'tab-settings'),
+  openInternalPage: vi.fn<(...args: unknown[]) => string>(() => 'tab-settings'),
+  /** isHeadless() 的回答 */
+  headless: false,
   navigateTab: vi.fn<(tabId: string, url: string, transition?: string) => void>(),
   historyNoteUser: vi.fn<(tabId: string) => void>(),
   /** getTabView 回的假 view（null = 没有这个 tab） */
@@ -74,9 +109,11 @@ vi.mock('../../services/browser', () => ({
   isBrowserWindowOpen: () => state.isBrowserWindowOpen(),
   requestOmniboxFocus: () => state.requestOmniboxFocus(),
   reopenClosedTab: () => state.reopenClosedTab(),
+  peekClosedTabUrl: () => state.peekClosedTabUrl(),
   zoomTab: (tabId: string, direction: string) => state.zoomTab(tabId, direction),
   openAgentSession: (sessionId: string) => state.openAgentSession(sessionId),
-  openInternalPage: (page: string) => state.openInternalPage(page),
+  // 原样转交全部实参：网络客户端那条路多给一个 {activate:false}，桌面那条路恰好一个参数
+  openInternalPage: (...args: unknown[]) => state.openInternalPage(...args),
   navigateTab: (tabId: string, url: string, transition?: string) =>
     state.navigateTab(tabId, url, transition),
   historyNoteUser: (tabId: string) => state.historyNoteUser(tabId),
@@ -85,10 +122,17 @@ vi.mock('../../services/browser', () => ({
   tabDisplayUrl: (tabId: string) => state.tabDisplayUrl(tabId)
 }))
 
+vi.mock('../../utils/headless', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/headless')>()),
+  isHeadless: () => state.headless
+}))
+
 import { registerBrowserViewHandlers } from '../browserViewHandlers'
 import { attachIpcAdapter } from '../ipcAdapter'
 import { listDefinitions } from '../registry'
 import { netCtx } from '../../frontend/network/__tests__/support/fakeNetworkConnection'
+import { createNetworkDispatcher } from '../../frontend/network/dispatch'
+import { channelCallFactsOf } from '../../../shared/channelAccess'
 
 registerBrowserViewHandlers()
 // 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
@@ -135,8 +179,13 @@ beforeEach(() => {
   state.tabView = null
   state.proceedPastCertError.mockReset()
   state.proceedPastCertError.mockReturnValue(true)
-  state.tabDisplayUrl.mockClear()
+  // 各用例会 mockReturnValue：每条都回到缺省值，免得漏到下一条
+  state.tabDisplayUrl.mockReset()
+  state.tabDisplayUrl.mockReturnValue('shuvix://settings')
+  state.peekClosedTabUrl.mockReset()
+  state.peekClosedTabUrl.mockReturnValue(undefined)
   state.captureTab.mockClear()
+  state.headless = false
 })
 
 describe('browserViewHandlers：布局只认宿主窗口', () => {
@@ -502,5 +551,485 @@ describe('后退 / 前进 / 刷新记在用户头上（BVI-2）', () => {
     await invoke('browser-view:go-forward', HOST, 'T')
     await invoke('browser-view:reload', HOST, 'T')
     expect(state.historyNoteUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('网络客户端能让浏览器去哪儿（BR-1 … BR-15）', () => {
+  type Spy = ReturnType<typeof vi.fn>
+  const REFUSED = 'remote_url_refused'
+
+  const fromNet = (channel: string, ...args: unknown[]): unknown => {
+    const definition = listDefinitions().find((d) => d.channel === channel)
+    if (!definition) throw new Error(`no definition for ${channel}`)
+    return definition.fn(netCtx(1), ...args)
+  }
+
+  /** 网络客户端的这次调用**同步**抛了拒绝：回那个错误（没抛 / 抛的不是它 → 用例红） */
+  const refusedFromNet = (channel: string, ...args: unknown[]): Error & { code?: string } => {
+    let caught: unknown
+    try {
+      fromNet(channel, ...args)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught, `${channel}(${JSON.stringify(args)}) should be refused`).toBeInstanceOf(Error)
+    const error = caught as Error & { code?: string }
+    expect(error.code).toBe(REFUSED)
+    return error
+  }
+
+  /**
+   * 一个带完整导航历史的假 view：`entries` 是各条的地址，`active` 是当前那一条。网络客户端那条路读
+   * getActiveIndex / getEntryAtIndex 再 goToIndex；窗口那条路只调 goBack / goForward
+   */
+  function historyView(
+    entries: string[],
+    active: number,
+    over: { entryAt?: (index: number) => unknown } = {}
+  ): { goBack: Spy; goForward: Spy; goToIndex: Spy; getEntryAtIndex: Spy; getActiveIndex: Spy } {
+    const spies = {
+      goBack: vi.fn(),
+      goForward: vi.fn(),
+      goToIndex: vi.fn(),
+      getEntryAtIndex: vi.fn(
+        over.entryAt ??
+          ((index: number) =>
+            index >= 0 && index < entries.length ? { url: entries[index], title: '' } : null)
+      ),
+      getActiveIndex: vi.fn(() => active)
+    }
+    state.tabView = {
+      webContents: {
+        navigationHistory: {
+          canGoBack: () => active > 0,
+          canGoForward: () => active < entries.length - 1,
+          ...spies
+        }
+      }
+    }
+    return spies
+  }
+
+  const FILE = 'file:///Users/me/secret.txt'
+  const HTTPS = 'https://a.example/'
+
+  describe('create-tab', () => {
+    it.each<[string, unknown]>([
+      ['file:', FILE],
+      ['view-source:file:', 'view-source:file:///x'],
+      ['data:', 'data:text/html,x'],
+      ['javascript:', 'javascript:1'],
+      ['裸域名', 'a.example'],
+      ['数字', 42],
+      ['只有空白', '   '],
+      ['不认识的 shuvix://', 'shuvix://unknown']
+    ])('BR-1 网络客户端 create-tab(%s) → 抛 remote_url_refused，什么也不建', (_l, url) => {
+      refusedFromNet('browser-view:create-tab', url)
+      expect(state.createTab).not.toHaveBeenCalled()
+      expect(state.openInternalPage).not.toHaveBeenCalled()
+      expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+    })
+
+    it('BR-1 拒绝的消息只说协议，不复述地址', () => {
+      const error = refusedFromNet('browser-view:create-tab', FILE)
+      expect(error.message).toContain('file:')
+      expect(error.message).not.toContain('/Users/me')
+      expect(error.message).not.toContain('secret')
+    })
+
+    it('BR-2 网络客户端 create-tab(https) → createTab(url, {activate:false})（开在后台），回它的 id；不聚焦地址栏', () => {
+      expect(fromNet('browser-view:create-tab', HTTPS)).toBe('tab-new')
+      expect(state.createTab.mock.calls).toEqual([[HTTPS, { activate: false }]])
+      expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+    })
+
+    it('BR-2b 网络客户端 create-tab(about:blank) → createTab(…, {activate:false})；不聚焦地址栏', () => {
+      expect(fromNet('browser-view:create-tab', 'about:blank')).toBe('tab-new')
+      expect(state.createTab.mock.calls).toEqual([['about:blank', { activate: false }]])
+      expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+    })
+
+    it("BR-2c 网络客户端 create-tab(shuvix://history) → openInternalPage('history', {activate:false})，不 createTab", () => {
+      expect(fromNet('browser-view:create-tab', 'shuvix://history')).toBe('tab-settings')
+      expect(state.openInternalPage.mock.calls).toEqual([['history', { activate: false }]])
+      expect(state.createTab).not.toHaveBeenCalled()
+      expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+    })
+
+    it("BR-2d 网络客户端 create-tab(https, 'typed') → {activate:false, transition:'typed'}", () => {
+      fromNet('browser-view:create-tab', HTTPS, 'typed')
+      expect(state.createTab.mock.calls).toEqual([
+        [HTTPS, { activate: false, transition: 'typed' }]
+      ])
+    })
+
+    it('BR-3 网络客户端 create-tab 不带地址 / undefined / null / 空串 → 不抛、建空白页（各 {activate:false}）、从不聚焦地址栏', () => {
+      const calls: unknown[][] = [[], [undefined], [null], ['']]
+      for (const args of calls) {
+        expect(
+          () => fromNet('browser-view:create-tab', ...args),
+          JSON.stringify(args)
+        ).not.toThrow()
+      }
+      expect(state.createTab).toHaveBeenCalledTimes(4)
+      expect(state.createTab.mock.calls).toEqual([
+        [undefined, { activate: false }],
+        [undefined, { activate: false }],
+        [null, { activate: false }],
+        ['', { activate: false }]
+      ])
+      expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+    })
+
+    it('BR-4 窗口 create-tab() → createTab(undefined, {activate:true})，聚焦地址栏一次（桌面不变）', async () => {
+      await invoke('browser-view:create-tab', HOST)
+      expect(state.createTab.mock.calls).toEqual([[undefined, { activate: true }]])
+      expect(state.requestOmniboxFocus).toHaveBeenCalledTimes(1)
+    })
+
+    it("BR-4 窗口 create-tab('shuvix://settings') → openInternalPage 恰好收到一个参数（'settings'）", async () => {
+      await invoke('browser-view:create-tab', OTHER, 'shuvix://settings')
+      expect(state.openInternalPage).toHaveBeenCalledTimes(1)
+      expect(state.openInternalPage.mock.calls[0]).toEqual(['settings'])
+      expect(state.openInternalPage.mock.calls[0]).toHaveLength(1)
+      expect(state.createTab).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['宿主窗口 7', HOST],
+      ['主窗口 9', OTHER]
+    ])(
+      'BR-4 %s create-tab 带 file: / view-source:file: / data: → 照样 createTab',
+      async (_l, sender) => {
+        const urls = [FILE, 'view-source:file:///x', 'data:text/html,x']
+        for (const url of urls) {
+          expect(await invoke('browser-view:create-tab', sender, url)).toBe('tab-new')
+        }
+        expect(state.createTab.mock.calls).toEqual(urls.map((url) => [url, { activate: true }]))
+      }
+    )
+  })
+
+  describe('navigate', () => {
+    it.each([
+      ['file:', 'file:///x'],
+      ['view-source:', 'view-source:https://a.example/'],
+      ['data:', 'data:text/html,x'],
+      ['blob:', 'blob:https://a.example/uuid'],
+      ['不认识的 shuvix://', 'shuvix://unknown']
+    ])('BR-5 网络客户端 navigate(T, %s) → 抛，navigateTab 不调', (_l, url) => {
+      refusedFromNet('browser-view:navigate', 'T', url)
+      expect(state.navigateTab).not.toHaveBeenCalled()
+    })
+
+    it('BR-5 网络客户端 navigate 去 https / about:blank / shuvix://settings → navigateTab(T, url, transition)', () => {
+      fromNet('browser-view:navigate', 'T', HTTPS, 'typed')
+      fromNet('browser-view:navigate', 'T', 'about:blank')
+      fromNet('browser-view:navigate', 'T', 'shuvix://settings', 'generated')
+      expect(state.navigateTab.mock.calls).toEqual([
+        ['T', HTTPS, 'typed'],
+        ['T', 'about:blank', undefined],
+        ['T', 'shuvix://settings', 'generated']
+      ])
+    })
+
+    it('BR-5 网络客户端 navigate 参数不是字符串 → 不抛、不调', () => {
+      expect(() => fromNet('browser-view:navigate', 42, 'file:///x')).not.toThrow()
+      expect(() => fromNet('browser-view:navigate', 'T', 42)).not.toThrow()
+      expect(state.navigateTab).not.toHaveBeenCalled()
+    })
+
+    it('BR-6 窗口 navigate 去 file: → navigateTab 照调', async () => {
+      await invoke('browser-view:navigate', HOST, 'T', 'file:///x')
+      expect(state.navigateTab.mock.calls).toEqual([['T', 'file:///x', undefined]])
+    })
+  })
+
+  describe('后退 / 前进', () => {
+    /** historyNoteUser 在这个导航动作之前被调 */
+    const notedBefore = (nav: Spy): void => {
+      expect(state.historyNoteUser.mock.invocationCallOrder[0]).toBeLessThan(
+        nav.mock.invocationCallOrder[0]
+      )
+    }
+
+    it('BR-7 网络客户端 go-back，前一条是网页（再往前是 file:）→ 先 historyNoteUser(T)、再 goToIndex(1)；不调 goBack', () => {
+      const view = historyView([FILE, HTTPS, 'https://b.example/'], 2)
+      expect(() => fromNet('browser-view:go-back', 'T')).not.toThrow()
+      expect(view.getEntryAtIndex.mock.calls).toEqual([[1]])
+      expect(state.historyNoteUser.mock.calls).toEqual([['T']])
+      expect(view.goToIndex.mock.calls).toEqual([[1]])
+      notedBefore(view.goToIndex)
+      expect(view.goBack).not.toHaveBeenCalled()
+      expect(view.goForward).not.toHaveBeenCalled()
+    })
+
+    it('BR-7 网络客户端 go-back，前一条是 file: → 抛，不记、不导航', () => {
+      const view = historyView([HTTPS, FILE, 'https://b.example/'], 2)
+      refusedFromNet('browser-view:go-back', 'T')
+      expect(state.historyNoteUser).not.toHaveBeenCalled()
+      expect(view.goToIndex).not.toHaveBeenCalled()
+      expect(view.goBack).not.toHaveBeenCalled()
+    })
+
+    it('BR-8 网络客户端 go-forward，后一条是网页 → goToIndex(1)；不调 goForward', () => {
+      const view = historyView([HTTPS, 'https://b.example/'], 0)
+      fromNet('browser-view:go-forward', 'T')
+      expect(view.getEntryAtIndex.mock.calls).toEqual([[1]])
+      expect(state.historyNoteUser.mock.calls).toEqual([['T']])
+      expect(view.goToIndex.mock.calls).toEqual([[1]])
+      notedBefore(view.goToIndex)
+      expect(view.goForward).not.toHaveBeenCalled()
+    })
+
+    it('BR-8 网络客户端 go-forward，后一条是 file: → 抛，不记、不导航', () => {
+      const view = historyView([HTTPS, FILE], 0)
+      refusedFromNet('browser-view:go-forward', 'T')
+      expect(state.historyNoteUser).not.toHaveBeenCalled()
+      expect(view.goToIndex).not.toHaveBeenCalled()
+      expect(view.goForward).not.toHaveBeenCalled()
+    })
+
+    it('BR-8 网络客户端 go-forward 只看紧挨着的那一条：再往后的 file: 不管 → goToIndex(2)', () => {
+      const view = historyView([HTTPS, 'https://b.example/', 'https://c.example/', FILE], 1)
+      fromNet('browser-view:go-forward', 'T')
+      expect(view.goToIndex.mock.calls).toEqual([[2]])
+      expect(state.historyNoteUser.mock.calls).toEqual([['T']])
+    })
+
+    it.each<[string, unknown]>([
+      ['null', null],
+      ['undefined', undefined]
+    ])('BR-9 能退 / 能进，但那一条取不到（%s）→ 抛，不记、不导航', (_l, entry) => {
+      const view = historyView([HTTPS, HTTPS, HTTPS], 1, { entryAt: () => entry })
+      refusedFromNet('browser-view:go-back', 'T')
+      refusedFromNet('browser-view:go-forward', 'T')
+      expect(state.historyNoteUser).not.toHaveBeenCalled()
+      expect(view.goToIndex).not.toHaveBeenCalled()
+      expect(view.goBack).not.toHaveBeenCalled()
+      expect(view.goForward).not.toHaveBeenCalled()
+    })
+
+    it('BR-9 不能退 / 不能进 → 不抛、不读、不记、不导航', () => {
+      const view = historyView([HTTPS], 0)
+      expect(() => fromNet('browser-view:go-back', 'T')).not.toThrow()
+      expect(() => fromNet('browser-view:go-forward', 'T')).not.toThrow()
+      expect(view.getEntryAtIndex).not.toHaveBeenCalled()
+      expect(state.historyNoteUser).not.toHaveBeenCalled()
+      expect(view.goToIndex).not.toHaveBeenCalled()
+    })
+
+    it('BR-9 没有这个 tab → 不抛、什么也不做', () => {
+      state.tabView = null
+      expect(() => fromNet('browser-view:go-back', 'T')).not.toThrow()
+      expect(() => fromNet('browser-view:go-forward', 'T')).not.toThrow()
+      expect(state.historyNoteUser).not.toHaveBeenCalled()
+    })
+
+    it('BR-10 窗口 go-back 去 file: → historyNoteUser 再 goBack()；从不读那一条', async () => {
+      const view = historyView([FILE, HTTPS], 1)
+      await invoke('browser-view:go-back', HOST, 'T')
+      expect(view.goBack).toHaveBeenCalledTimes(1)
+      notedBefore(view.goBack)
+      expect(view.goToIndex).not.toHaveBeenCalled()
+      expect(view.getEntryAtIndex).not.toHaveBeenCalled()
+      expect(view.getActiveIndex).not.toHaveBeenCalled()
+    })
+
+    it('BR-10 窗口 go-forward 去 file: → goForward()；从不读那一条', async () => {
+      const view = historyView([HTTPS, FILE], 0)
+      await invoke('browser-view:go-forward', OTHER, 'T')
+      expect(view.goForward).toHaveBeenCalledTimes(1)
+      expect(view.goToIndex).not.toHaveBeenCalled()
+      expect(view.getEntryAtIndex).not.toHaveBeenCalled()
+      expect(view.getActiveIndex).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('reopen-closed-tab', () => {
+    it('BR-11 网络客户端，要重开的是 file: → 抛、reopenClosedTab 不调；记录留着，窗口照样能重开', async () => {
+      state.peekClosedTabUrl.mockReturnValue('file:///x')
+      state.reopenClosedTab.mockReturnValue('tab-reopened')
+      refusedFromNet('browser-view:reopen-closed-tab')
+      expect(state.reopenClosedTab).not.toHaveBeenCalled()
+
+      expect(await invoke('browser-view:reopen-closed-tab', HOST)).toBe('tab-reopened')
+      expect(state.reopenClosedTab).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['https://b.test/', 'shuvix://settings'])(
+      'BR-11 网络客户端，要重开的是 %s → reopenClosedTab、回它的值',
+      (next) => {
+        state.peekClosedTabUrl.mockReturnValue(next)
+        state.reopenClosedTab.mockReturnValue('tab-reopened')
+        expect(fromNet('browser-view:reopen-closed-tab')).toBe('tab-reopened')
+        expect(state.reopenClosedTab).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('BR-11 网络客户端，没有可重开的 → reopenClosedTab、回 null', () => {
+      state.peekClosedTabUrl.mockReturnValue(undefined)
+      expect(fromNet('browser-view:reopen-closed-tab')).toBeNull()
+      expect(state.reopenClosedTab).toHaveBeenCalledTimes(1)
+    })
+
+    it('BR-12 窗口，要重开的是 file: → reopenClosedTab 照调、回它的值', async () => {
+      state.peekClosedTabUrl.mockReturnValue('file:///x')
+      state.reopenClosedTab.mockReturnValue('tab-file')
+      expect(await invoke('browser-view:reopen-closed-tab', OTHER)).toBe('tab-file')
+      expect(state.reopenClosedTab).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('capture', () => {
+    it.each(['https://a.example/', 'about:blank', 'shuvix://settings'])(
+      'BR-13 网络客户端 capture，tab 正显示 %s → captureTab(T, 1600)，回它的值',
+      async (shown) => {
+        state.tabDisplayUrl.mockReturnValue(shown)
+        expect(await fromNet('browser-view:capture', 'T', 1600)).toBe('data:x')
+        expect(state.tabDisplayUrl.mock.calls).toEqual([['T']])
+        expect(state.captureTab.mock.calls).toEqual([['T', 1600]])
+      }
+    )
+
+    it("BR-13 网络客户端 capture(T, '800') → captureTab(T, undefined)", async () => {
+      state.tabDisplayUrl.mockReturnValue(HTTPS)
+      await fromNet('browser-view:capture', 'T', '800')
+      expect(state.captureTab.mock.calls).toEqual([['T', undefined]])
+    })
+
+    it.each(['file:///x', 'view-source:file:///x', 'data:text/html,<b>x</b>'])(
+      'BR-13 网络客户端 capture，tab 正显示 %s → 抛，captureTab 不调',
+      (shown) => {
+        state.tabDisplayUrl.mockReturnValue(shown)
+        refusedFromNet('browser-view:capture', 'T', 1600)
+        expect(state.captureTab).not.toHaveBeenCalled()
+      }
+    )
+
+    it("BR-14 网络客户端 capture，显示地址是空串（没有这个 tab）→ ''、不抛、不抓", () => {
+      state.tabDisplayUrl.mockReturnValue('')
+      expect(fromNet('browser-view:capture', 'gone', 800)).toBe('')
+      expect(state.captureTab).not.toHaveBeenCalled()
+    })
+
+    it.each<[string, unknown]>([
+      ['42', 42],
+      ['undefined', undefined]
+    ])("BR-14 网络客户端 capture(%s) → ''，tabDisplayUrl / captureTab 都不调", (_l, tabId) => {
+      expect(fromNet('browser-view:capture', tabId, 800)).toBe('')
+      expect(state.tabDisplayUrl).not.toHaveBeenCalled()
+      expect(state.captureTab).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('经真的网络分发器（BR-15）', () => {
+    const dispatcher = createNetworkDispatcher({
+      definitionOf: (channel) => listDefinitions().find((d) => d.channel === channel)
+    })
+    const call = (
+      id: number,
+      channel: string,
+      args: unknown[]
+    ): ReturnType<typeof dispatcher.invoke> =>
+      dispatcher.invoke(netCtx(1), { t: 'invoke', id, channel, args })
+
+    it('BR-15 create-tab file: → ok:false、code remote_url_refused，消息里没有路径；什么也不建', async () => {
+      const result = await call(1, 'browser-view:create-tab', [FILE])
+      expect(result).toMatchObject({ t: 'result', id: 1, ok: false, error: { code: REFUSED } })
+      const error = (result as { error: { message: string } }).error
+      expect(typeof error.message).toBe('string')
+      expect(error.message).not.toContain('/Users/me')
+      expect(error.message).not.toContain('secret')
+      expect(state.createTab).not.toHaveBeenCalled()
+    })
+
+    it("BR-15 create-tab https → ok:true、value 'tab-new'", async () => {
+      expect(await call(2, 'browser-view:create-tab', [HTTPS])).toStrictEqual({
+        t: 'result',
+        id: 2,
+        ok: true,
+        value: 'tab-new'
+      })
+    })
+
+    it('BR-15 capture 一个正显示 file: 的 tab → ok:false、同一个 code，不抓', async () => {
+      state.tabDisplayUrl.mockReturnValue('file:///Users/me/secret.txt')
+      const result = await call(3, 'browser-view:capture', ['T', 800])
+      expect(result).toMatchObject({ t: 'result', id: 3, ok: false, error: { code: REFUSED } })
+      expect((result as { error: { message: string } }).error.message).not.toContain('secret')
+      expect(state.captureTab).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('浏览器宿主的样子（HI-1 / HI-2）', () => {
+  const fromNet = (channel: string, ...args: unknown[]): unknown => {
+    const definition = listDefinitions().find((d) => d.channel === channel)
+    if (!definition) throw new Error(`no definition for ${channel}`)
+    return definition.fn(netCtx(1), ...args)
+  }
+
+  it.each([true, false])(
+    'HI-1 isHeadless() = %s → 窗口与网络客户端都回 { headless: %s }',
+    async (h) => {
+      state.headless = h
+      expect(await invoke('browser-view:host-info', HOST)).toEqual({ headless: h })
+      expect(await invoke('browser-view:host-info', OTHER)).toEqual({ headless: h })
+      expect(await Promise.resolve(fromNet('browser-view:host-info'))).toEqual({ headless: h })
+    }
+  )
+
+  it('HI-2 经真的网络分发器：ok:true、{headless:false}', async () => {
+    const dispatcher = createNetworkDispatcher({
+      definitionOf: (channel) => listDefinitions().find((d) => d.channel === channel)
+    })
+    expect(
+      await dispatcher.invoke(netCtx(1), {
+        t: 'invoke',
+        id: 1,
+        channel: 'browser-view:host-info',
+        args: []
+      })
+    ).toStrictEqual({ t: 'result', id: 1, ok: true, value: { headless: false } })
+  })
+
+  it('HI-2 判官拒绝 browser scope 的 admin：host-info（read）照样 ok；list-tabs（admin）被拒 —— 判官确实在判', async () => {
+    const judged: Array<{ channel: string; scope: string; access: string }> = []
+    const dispatcher = createNetworkDispatcher({
+      definitionOf: (channel) => listDefinitions().find((d) => d.channel === channel),
+      judge: (_ctx, call) => {
+        const facts = channelCallFactsOf(call.channel, call.args)
+        judged.push({ channel: call.channel, ...facts })
+        return facts.scope === 'browser' && facts.access === 'admin'
+          ? {
+              allowed: false,
+              decision: { effect: 'deny', matched: ['no-admin'], winning: 'no-admin' },
+              downgraded: false,
+              message: 'no admin from this device'
+            }
+          : undefined
+      }
+    })
+    expect(
+      await dispatcher.invoke(netCtx(1), {
+        t: 'invoke',
+        id: 2,
+        channel: 'browser-view:host-info',
+        args: []
+      })
+    ).toStrictEqual({ t: 'result', id: 2, ok: true, value: { headless: false } })
+    expect(
+      await dispatcher.invoke(netCtx(1), {
+        t: 'invoke',
+        id: 3,
+        channel: 'browser-view:list-tabs',
+        args: []
+      })
+    ).toMatchObject({ t: 'result', id: 3, ok: false, error: { code: 'denied' } })
+    expect(judged).toEqual([
+      { channel: 'browser-view:host-info', scope: 'browser', access: 'read' },
+      { channel: 'browser-view:list-tabs', scope: 'browser', access: 'admin' }
+    ])
   })
 })

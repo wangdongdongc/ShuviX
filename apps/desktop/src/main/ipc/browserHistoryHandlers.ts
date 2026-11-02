@@ -1,8 +1,9 @@
 /**
  * Browser history IPC handlers —— 内置浏览器的历史记录（地址栏建议、历史记录页、删除）与地址栏的搜索建议。
  *
- * **只认浏览器窗口外壳发来的**（别的窗口、网络客户端一律当没有）：地址栏与历史记录页都只在浏览器窗口里，
+ * **读只认浏览器窗口外壳发来的**（别的窗口、网络客户端一律当没有）：地址栏与历史记录页都只在浏览器窗口里，
  * 而历史里的网址可能带着登录令牌（重置密码链接、OAuth 回调的 code）。agent 那一侧没有任何读历史的路。
+ * 删除另外也认网络客户端（mayDeleteHistory）。
  */
 
 import { defineHandler, type ClientContext } from './registry'
@@ -24,6 +25,15 @@ import type {
 
 function fromHostWindow(ctx: ClientContext): boolean {
   return ctx.client.kind === 'window' && isHostWebContents(ctx.client.webContentsId)
+}
+
+/**
+ * 删除历史的那几条另外也认网络客户端（web 客户端的浏览器管理页：无头运行时没有浏览器窗口）—— 删除不往外给任何
+ * 东西。**读**历史（地址栏建议、历史记录页）仍只认浏览器窗口外壳：远程访问还没有身份认证，而本机上的 agent 也能连
+ * 网络访问的端口，读历史对网络客户端开放就等于对 agent 开放
+ */
+function mayDeleteHistory(ctx: ClientContext): boolean {
+  return fromHostWindow(ctx) || ctx.client.kind === 'network'
 }
 
 export function registerBrowserHistoryHandlers(): void {
@@ -50,16 +60,16 @@ export function registerBrowserHistoryHandlers(): void {
 
   /** 历史记录页上删几行 */
   defineHandler('browser-history:remove', (ctx, keys: unknown): void => {
-    if (fromHostWindow(ctx)) removeHistoryItems(keys)
+    if (mayDeleteHistory(ctx)) removeHistoryItems(keys)
   })
 
   /** 地址栏建议上的 Shift+Delete / ×：把这个网址从历史里整个删掉 */
   defineHandler('browser-history:remove-url', (ctx, url: unknown): void => {
-    if (fromHostWindow(ctx) && typeof url === 'string') removeHistoryUrl(url)
+    if (mayDeleteHistory(ctx) && typeof url === 'string') removeHistoryUrl(url)
   })
 
   /** 删除全部浏览历史（历史记录页、设置页的隐私一节） */
   defineHandler('browser-history:clear', (ctx): void => {
-    if (fromHostWindow(ctx)) clearHistory()
+    if (mayDeleteHistory(ctx)) clearHistory()
   })
 }

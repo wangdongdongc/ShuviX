@@ -20,6 +20,7 @@ import {
   openBrowserWindow,
   isBrowserWindowOpen,
   reopenClosedTab,
+  peekClosedTabUrl,
   requestOmniboxFocus,
   zoomTab,
   openAgentSession,
@@ -42,6 +43,8 @@ import {
 } from '../../shared/browserInternalPages'
 import type { AgentDevtoolsSnapshot, DevtoolsDockPanel } from '../../shared/browserAgentDevtools'
 import type { HistoryTransition } from '../../shared/browserHistory'
+import { remoteOpenableUrl, remoteUrlRefusedError } from '../../shared/browserRemoteUrls'
+import { isHeadless } from '../utils/headless'
 
 /** 地址栏报来的这次导航是怎么来的（记进历史用）；认不出的当没给 */
 function transitionOf(value: unknown): HistoryTransition | undefined {
@@ -51,6 +54,31 @@ function transitionOf(value: unknown): HistoryTransition | undefined {
 /** 只认浏览器窗口外壳发来的（别的窗口、网络客户端碰不到停靠区，也读不到 agent 在页面上拿到的东西） */
 function fromHostWindow(ctx: ClientContext): boolean {
   return ctx.client.kind === 'window' && isHostWebContents(ctx.client.webContentsId)
+}
+
+/**
+ * 网络客户端要让浏览器去的地址不是网页 / 空白页 / 内部页面 → 抛（见 shared/browserRemoteUrls.ts：`file:` 页加上
+ * 截图就是绕过 files scope 的本地文件读取）。桌面窗口不限
+ */
+function assertRemoteOpenable(ctx: ClientContext, url: unknown): void {
+  if (ctx.client.kind === 'network' && !remoteOpenableUrl(url)) throw remoteUrlRefusedError(url)
+}
+
+/**
+ * 网络客户端的后退 / 前进：先核对紧挨着的那一条（active ± 1）的地址，再**正好去那一条**（goToIndex）。不用
+ * goBack / goForward —— Chromium 会跳过没有用户手势留下的条目（history manipulation intervention），核对过的那条
+ * 可能被跳过、落到更早的本地文件页上
+ */
+function remoteHistoryStep(
+  ctx: ClientContext,
+  tabId: string,
+  history: Electron.NavigationHistory,
+  offset: -1 | 1
+): void {
+  const index = history.getActiveIndex() + offset
+  assertRemoteOpenable(ctx, history.getEntryAtIndex(index)?.url)
+  historyNoteUser(tabId)
+  history.goToIndex(index)
 }
 
 export function registerBrowserViewHandlers(): void {
@@ -89,19 +117,29 @@ export function registerBrowserViewHandlers(): void {
   /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false）；只读 */
   defineHandler('browser-view:is-window-open', () => isBrowserWindowOpen())
 
+  /**
+   * 浏览器宿主的样子（web 客户端的浏览器管理页用）：无头运行时这台电脑上没有浏览器窗口，地址栏的搜索引擎 / 搜索建议
+   * 这类设置也就不起作用
+   */
+  defineHandler('browser-view:host-info', () => ({ headless: isHeadless() }))
+
   // ====== tab 生命周期 ======
 
   /**
    * 用户新开 tab（开在前台）；空白页顺手把光标放进地址栏（照 Chrome）。`transition`：从地址栏开的
    * （没有选中的页时敲的网址 / 搜索），记进历史用
    */
-  defineHandler('browser-view:create-tab', (_ctx, url?: string, transition?: unknown) => {
+  defineHandler('browser-view:create-tab', (ctx, url?: string, transition?: unknown) => {
+    // 网络客户端：不带地址（空白页）照常，带了就只认网页 / 空白页 / 内部页面；开在后台 —— 浏览器窗口里选中的那页
+    // 是坐在这台电脑前的人的，别的设备开的页不抢它，也不动地址栏的光标
+    const remote = ctx.client.kind === 'network'
+    if (url !== undefined && url !== null && url !== '') assertRemoteOpenable(ctx, url)
     // 内部页面（地址栏 / 新标签页里敲的 shuvix://settings、复制设置页）：打开那一页（已开着就选中它）
     const page = typeof url === 'string' ? internalPageOf(url) : null
-    if (page) return openInternalPage(page)
+    if (page) return remote ? openInternalPage(page, { activate: false }) : openInternalPage(page)
     const how = transitionOf(transition)
-    const id = createTab(url, { activate: true, ...(how ? { transition: how } : {}) })
-    if (!url) requestOmniboxFocus()
+    const id = createTab(url, { activate: !remote, ...(how ? { transition: how } : {}) })
+    if (!url && !remote) requestOmniboxFocus()
     return id
   })
 
@@ -110,7 +148,12 @@ export function registerBrowserViewHandlers(): void {
     closeTab(tabId, { remember: true })
   })
 
-  defineHandler('browser-view:reopen-closed-tab', () => reopenClosedTab())
+  /** 网络客户端：要重开的那页不是网页 / 空白页 / 内部页面（这台电脑上关掉的本地文件）→ 抛，记录留着 */
+  defineHandler('browser-view:reopen-closed-tab', (ctx) => {
+    const next = peekClosedTabUrl()
+    if (next !== undefined) assertRemoteOpenable(ctx, next)
+    return reopenClosedTab()
+  })
 
   defineHandler('browser-view:activate-tab', (_ctx, tabId: string) => {
     activateTab(tabId)
@@ -126,27 +169,33 @@ export function registerBrowserViewHandlers(): void {
    */
   defineHandler(
     'browser-view:navigate',
-    (_ctx, tabId: string, url: string, transition?: unknown) => {
+    (ctx, tabId: string, url: string, transition?: unknown) => {
       if (typeof tabId === 'string' && typeof url === 'string') {
+        assertRemoteOpenable(ctx, url)
         navigateTab(tabId, url, transitionOf(transition))
       }
     }
   )
 
-  // 后退 / 前进 / 刷新是用户的动作：之后的导航记在用户头上（历史）
-  defineHandler('browser-view:go-back', (_ctx, tabId: string) => {
+  // 后退 / 前进 / 刷新是用户的动作：之后的导航记在用户头上（历史）。网络客户端退 / 进到的那一页同样只认网页 /
+  // 空白页 / 内部页面（这个 tab 早先可能开过本地文件），见 remoteHistoryStep
+  defineHandler('browser-view:go-back', (ctx, tabId: string) => {
     const view = getTabView(tabId)
-    if (view && view.webContents.navigationHistory.canGoBack()) {
+    const history = view?.webContents.navigationHistory
+    if (view && history && history.canGoBack()) {
+      if (ctx.client.kind === 'network') return remoteHistoryStep(ctx, tabId, history, -1)
       historyNoteUser(tabId)
-      view.webContents.navigationHistory.goBack()
+      history.goBack()
     }
   })
 
-  defineHandler('browser-view:go-forward', (_ctx, tabId: string) => {
+  defineHandler('browser-view:go-forward', (ctx, tabId: string) => {
     const view = getTabView(tabId)
-    if (view && view.webContents.navigationHistory.canGoForward()) {
+    const history = view?.webContents.navigationHistory
+    if (view && history && history.canGoForward()) {
+      if (ctx.client.kind === 'network') return remoteHistoryStep(ctx, tabId, history, 1)
       historyNoteUser(tabId)
-      view.webContents.navigationHistory.goForward()
+      history.goForward()
     }
   })
 
@@ -178,10 +227,19 @@ export function registerBrowserViewHandlers(): void {
     openAgentSession(sessionId)
   })
 
-  /** 抓 tab 画面（平铺墙滚动时的占位图） */
-  defineHandler('browser-view:capture', (_ctx, tabId: string, maxWidth?: number) =>
-    captureTab(tabId, typeof maxWidth === 'number' && maxWidth > 0 ? maxWidth : undefined)
-  )
+  /**
+   * 抓 tab 画面（平铺墙滚动时的占位图）。网络客户端只能抓正显示着网页 / 空白页 / 内部页面的 tab —— 这台电脑上开着的
+   * 本地文件页对别的设备一样是文件读取
+   */
+  defineHandler('browser-view:capture', (ctx, tabId: string, maxWidth?: number) => {
+    if (ctx.client.kind === 'network') {
+      if (typeof tabId !== 'string') return ''
+      const url = tabDisplayUrl(tabId)
+      if (url === '') return ''
+      assertRemoteOpenable(ctx, url)
+    }
+    return captureTab(tabId, typeof maxWidth === 'number' && maxWidth > 0 ? maxWidth : undefined)
+  })
 
   defineHandler('browser-view:get-url', (_ctx, tabId: string) => tabDisplayUrl(tabId))
 

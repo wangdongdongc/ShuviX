@@ -14,6 +14,12 @@
  *   CB-U20  ⌘⇧T：closeTab(…, {remember}) 记下地址，reopenClosedTab 开在前台、后进先出；空 → null 不建 tab；
  *           agent 的关闭、空白页、页面自己关掉的都不记；最多记 10 个；
  *   CB-U21  开满 12 个时 reopenClosedTab → null、记录留着；关掉一个之后能重开那个地址；
+ *   PK-1..3 peekClosedTabUrl（远程访问先核对要重开的地址，2026-11-01）：只看不取 —— 没有记录 → undefined；
+ *           回的是下一次 reopenClosedTab 会开的那个（后进先出），看几次都一样，重开一个之后轮到前一个；
+ *           agent 的关闭、空白页、页面自己关掉的不留记录；开满 12 个时重开回 null，记录照样看得到；
+ *   SEL-1..4 别的设备开的页（2026-11-01，web 客户端的浏览器管理页）：createTab(url, {activate:false}) 不动选中、
+ *           不发 tab-activated；openInternalPage(page, {activate:false}) 已开着 → 回那个 id 不选中、不多建，没开着 →
+ *           后台新建（一个都没选中时照样成为选中的那页）；不给选项 / {activate:true} 照旧选中（桌面不变）；
  *   CB-U22  弹出页选不选中：用户正看着浏览器窗口 + 开它的就是选中的那页 + agent 没在那页上动作 → 选中、
  *           不带 openerSessionId；其余（开它的没选中 / agent 正在动作 / 窗口隐藏、没焦点、最小化）开在后台，
  *           agent 动作出来的记在那个会话名下；
@@ -511,6 +517,129 @@ describe('⌘⇧T 重开（CB-U20 / CB-U21）', () => {
     expect(fx.views.at(-1)?.webContents.loaded).toEqual(['https://kept.test/page'])
     expect(selected()).toBe(id)
   })
+})
+
+describe('peekClosedTabUrl 只看不取（PK-1 … PK-3）', () => {
+  it('PK-1 没有记录 → undefined；后进先出、看几次都一样；重开一个之后轮到前一个；都重开了 → undefined', () => {
+    expect(views.peekClosedTabUrl()).toBeUndefined()
+    const a = tab('https://a.test/x', { activate: true })
+    const b = tab('https://b.test/y')
+    views.closeTab(a.id, { remember: true })
+    expect(views.peekClosedTabUrl()).toBe('https://a.test/x')
+    views.closeTab(b.id, { remember: true })
+    expect(views.peekClosedTabUrl()).toBe('https://b.test/y')
+    // 看不改记录
+    expect(views.peekClosedTabUrl()).toBe('https://b.test/y')
+    expect(fx.views).toHaveLength(2)
+
+    expect(views.reopenClosedTab()).not.toBeNull()
+    expect(fx.views.at(-1)?.webContents.loaded).toEqual(['https://b.test/y'])
+    expect(views.peekClosedTabUrl()).toBe('https://a.test/x')
+
+    expect(views.reopenClosedTab()).not.toBeNull()
+    expect(fx.views.at(-1)?.webContents.loaded).toEqual(['https://a.test/x'])
+    expect(views.peekClosedTabUrl()).toBeUndefined()
+  })
+
+  it('PK-2 不留记录的关闭：agent 的（不带 remember）、空白页、about:blank、页面自己关掉的 → undefined', () => {
+    const viaAgent = tab('https://agent.test/')
+    views.closeTab(viaAgent.id)
+    expect(views.peekClosedTabUrl()).toBeUndefined()
+    const blank = tab()
+    views.closeTab(blank.id, { remember: true })
+    const blank2 = tab('about:blank')
+    views.closeTab(blank2.id, { remember: true })
+    expect(views.peekClosedTabUrl()).toBeUndefined()
+    const selfClosed = tab('https://self.test/')
+    selfClosed.view.webContents.destroyed = true
+    selfClosed.view.webContents.fire('destroyed')
+    expect(views.listTabs()).toEqual([])
+    expect(views.peekClosedTabUrl()).toBeUndefined()
+  })
+
+  it('PK-3 开满 12 个：reopenClosedTab → null，peek 照样回那条记录', () => {
+    const x = tab('https://kept.test/page')
+    views.closeTab(x.id, { remember: true })
+    for (let i = 0; i < MAX_TABS; i++) tab(`https://full${i}.test/`)
+    expect(views.listTabs()).toHaveLength(MAX_TABS)
+
+    expect(views.reopenClosedTab()).toBeNull()
+    expect(views.peekClosedTabUrl()).toBe('https://kept.test/page')
+  })
+})
+
+describe('别的设备开的页不抢选中（SEL-1 … SEL-4）', () => {
+  it('SEL-1 已选中 A：createTab(url, {activate:false}) → A 仍选中，不发 tab-activated', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    bw.webContents.send.mockClear()
+
+    const b = tab('https://b.test/', { activate: false })
+    expect(selected()).toBe(a.id)
+    expect(sent(bw, 'browser-view:tab-activated')).toEqual([])
+    expect(sent(bw, 'browser-view:tab-created')).toEqual([
+      { tabId: b.id, url: 'https://b.test/', active: false }
+    ])
+  })
+
+  it("SEL-2 设置页已开着但没选中：openInternalPage('settings', {activate:false}) → 回那个 id，A 仍选中，不多建", () => {
+    const bw = openByUser()
+    const s = views.openInternalPage('settings')
+    const a = tab('https://a.test/', { activate: true })
+    expect(selected()).toBe(a.id)
+    const before = views.listTabs().length
+    bw.webContents.send.mockClear()
+
+    expect(views.openInternalPage('settings', { activate: false })).toBe(s)
+    expect(selected()).toBe(a.id)
+    expect(views.listTabs()).toHaveLength(before)
+    expect(sent(bw, 'browser-view:tab-activated')).toEqual([])
+    expect(sent(bw, 'browser-view:tab-created')).toEqual([])
+  })
+
+  it("SEL-3 没开设置页：openInternalPage('settings', {activate:false}) → 在后台新建（internalPage settings），A 仍选中", () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    bw.webContents.send.mockClear()
+
+    const s = views.openInternalPage('settings', { activate: false })
+    expect(s).not.toBe(a.id)
+    expect(row(s)?.internalPage).toBe('settings')
+    expect(row(s)?.active).toBe(false)
+    expect(selected()).toBe(a.id)
+    expect(sent(bw, 'browser-view:tab-activated')).toEqual([])
+    expect(sent(bw, 'browser-view:tab-created')).toEqual([
+      { tabId: s, url: 'shuvix://settings', active: false }
+    ])
+  })
+
+  it("SEL-3 一个都没选中：openInternalPage('settings', {activate:false}) 照样成为选中的那页（同 createTab 的规矩）", () => {
+    openByUser()
+    const s = views.openInternalPage('settings', { activate: false })
+    expect(selected()).toBe(s)
+    expect(row(s)?.internalPage).toBe('settings')
+  })
+
+  it.each([
+    ['不给选项', undefined],
+    ['{activate:true}', { activate: true }]
+  ] as const)(
+    "SEL-4 openInternalPage('settings')（%s）：新建时选中它；已开着没选中时也选中它（桌面不变）",
+    (_l, opts) => {
+      const bw = openByUser()
+      const a = tab('https://a.test/', { activate: true })
+      const s = views.openInternalPage('settings', opts)
+      expect(selected()).toBe(s)
+      expect(row(s)?.internalPage).toBe('settings')
+
+      views.activateTab(a.id)
+      expect(selected()).toBe(a.id)
+      bw.webContents.send.mockClear()
+      expect(views.openInternalPage('settings', opts)).toBe(s)
+      expect(selected()).toBe(s)
+      expect(sent(bw, 'browser-view:tab-activated')).toEqual([{ tabId: s }])
+    }
+  )
 })
 
 describe('弹出页选不选中（CB-U22）', () => {

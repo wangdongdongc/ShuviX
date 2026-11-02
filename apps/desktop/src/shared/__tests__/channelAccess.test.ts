@@ -27,6 +27,14 @@
  *   CS-9 内置浏览器的历史记录（2026-10-29）：browser-history:suggest / :list 是 admin（历史里的网址可能带着登录
  *        令牌），:search-suggest / :remove / :remove-url / :clear 是 write，都在 browser scope（browserHistory 分组）；
  *        settings:set 写 browser.searchSuggest → browser + write（落在 browser. 前缀上）
+ *
+ * 内置浏览器的标签页（2026-11-01，远程访问的本地文件读取修复）：
+ *   AC-1 browser-view:list-tabs / get-url / capture 是 admin 的请求通道（地址里可能带登录令牌，截图给的比地址还多）；
+ *        browser-view 里的 read 恰好是 host-info 与 is-window-open；create-tab / navigate / go-back / go-forward /
+ *        reopen-closed-tab 仍是 write
+ *   AC-2 channelCallFactsOf 对这三条回 { scope: 'browser', access: 'admin' }
+ *   AC-3 browser-view:host-info → { browser, read }；browser-data:site-details 是 read（网络客户端拿到的没有 Cookie 值）
+ *   AC-4 历史记录：clear / remove / remove-url 是 write，list / suggest 是 admin（经 channelCallFactsOf 看）
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
@@ -121,7 +129,7 @@ describe('CA-5 抽查', () => {
     // 返回值带机密
     ['provider:listAll', 'admin'],
     ['mcp:list', 'admin'],
-    ['browser-data:site-details', 'admin'],
+    ['browser-data:site-details', 'read'],
     // 驱动 agent / 改用户数据
     ['agent:prompt', 'write'],
     ['agent:abort', 'write'],
@@ -469,5 +477,73 @@ describe('CS-9 内置浏览器的历史记录', () => {
     expect(
       channelCallFactsOf('settings:set', [{ key: 'browser.searchSuggest', value: 'false' }])
     ).toEqual({ scope: 'browser', access: 'write' })
+  })
+})
+
+describe('AC-1 / AC-2 内置浏览器的标签页', () => {
+  const ADMIN = ['browser-view:list-tabs', 'browser-view:get-url', 'browser-view:capture']
+
+  it.each(ADMIN)('AC-1 %s 是 admin 的请求通道', (channel) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(CHANNEL_ACCESS[channel]).toBe('admin')
+    expect(channelAccessOf(channel)).toBe('admin')
+  })
+
+  it('AC-1 browser-view 里的 read 恰好是 host-info 与 is-window-open', () => {
+    const reads = KEYS.filter(
+      (c) => c.startsWith('browser-view:') && CHANNEL_ACCESS[c] === 'read'
+    ).sort()
+    expect(reads).toEqual(['browser-view:host-info', 'browser-view:is-window-open'])
+    expect(REQUEST_CHANNELS.has('browser-view:is-window-open')).toBe(true)
+    expect(REQUEST_CHANNELS.has('browser-view:host-info')).toBe(true)
+  })
+
+  it.each([
+    'browser-view:create-tab',
+    'browser-view:navigate',
+    'browser-view:go-back',
+    'browser-view:go-forward',
+    'browser-view:reopen-closed-tab'
+  ])('AC-1 %s 仍是 write', (channel) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelAccessOf(channel)).toBe('write')
+  })
+
+  it.each(ADMIN)(
+    "AC-2 channelCallFactsOf(%s) → { scope: 'browser', access: 'admin' }",
+    (channel) => {
+      expect(channelCallFactsOf(channel, [])).toEqual({ scope: 'browser', access: 'admin' })
+      expect(channelCallFactsOf(channel, ['tab-1', 800])).toEqual({
+        scope: 'browser',
+        access: 'admin'
+      })
+    }
+  )
+})
+
+describe('AC-3 / AC-4 浏览器管理页用到的通道', () => {
+  it("AC-3 channelCallFactsOf('browser-view:host-info', []) → { browser, read }", () => {
+    expect(channelCallFactsOf('browser-view:host-info', [])).toEqual({
+      scope: 'browser',
+      access: 'read'
+    })
+  })
+
+  it('AC-3 browser-data:site-details 是 read：channelCallFactsOf → { browser, read }', () => {
+    expect(CHANNEL_ACCESS['browser-data:site-details']).toBe('read')
+    expect(channelCallFactsOf('browser-data:site-details', ['github.com'])).toEqual({
+      scope: 'browser',
+      access: 'read'
+    })
+  })
+
+  it.each<[string, ChannelAccess]>([
+    ['browser-history:clear', 'write'],
+    ['browser-history:remove', 'write'],
+    ['browser-history:remove-url', 'write'],
+    ['browser-history:list', 'admin'],
+    ['browser-history:suggest', 'admin']
+  ])('AC-4 %s → %s（browser）', (channel, access) => {
+    expect(channelCallFactsOf(channel, [])).toEqual({ scope: 'browser', access })
   })
 })

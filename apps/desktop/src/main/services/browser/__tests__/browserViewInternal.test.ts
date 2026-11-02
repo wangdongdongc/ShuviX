@@ -16,6 +16,7 @@
  *          地址（后退 / 前进）也让它变回来；子框架、同文档的导航不算；
  *   BS-U7  不存在的 id / 已销毁的 webContents：navigateTab 不抛、什么也不加载；closeTab(S) 之后忘掉它；
  *          closeTab(S, {remember}) 之后 reopenClosedTab() 开回一个设置页（单例：已经开着就回那一个）；
+ *          PK-2 关掉的设置页（remember）在 peekClosedTabUrl 里是 shuvix://settings（不是占位的 about:blank）；
  *          destroyAllTabs 清掉；tabDisplayUrl(S) 是 shuvix://settings。
  *
  * electron 是 ./fakeElectron.ts；agentGuards / browserCdpService 是间谍；browserViewService /
@@ -409,6 +410,13 @@ describe('边角与收尾（BS-U7）', () => {
     expect(viewOf(reopened!).webContents.loaded).toEqual(['about:blank'])
     // 记录用掉了
     expect(views.reopenClosedTab()).toBeNull()
+  })
+
+  it('PK-2 closeTab(S, {remember}) 之后 peekClosedTabUrl() 是 shuvix://settings', () => {
+    const s = views.openInternalPage('settings')
+    expect(views.peekClosedTabUrl()).toBeUndefined()
+    views.closeTab(s, { remember: true })
+    expect(views.peekClosedTabUrl()).toBe(SETTINGS)
   })
 
   it('BS-U7 重开时设置页已经开着：回那一个、选中它，不多建', () => {

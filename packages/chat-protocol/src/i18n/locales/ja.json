@@ -1505,7 +1505,8 @@
       "clearHistoryDesc": "エージェントが開いたものも含め、履歴のすべてのページ。アドレスバーにも候補として表示されなくなります。",
       "clearHistoryButton": "削除…",
       "clearHistoryConfirm": "削除する",
-      "viewHistory": "履歴を表示"
+      "viewHistory": "履歴を表示",
+      "headlessSearchNote": "ヘッドレスではアドレスバーがないため、検索エンジンと検索候補は効果がありません。"
     },
     "certError": {
       "title": "この接続ではプライバシーが保護されません",
@@ -1565,7 +1566,8 @@
       "total_one": "{{count}} サイト、合計 {{size}}",
       "total_other": "{{count}} サイト、合計 {{size}}",
       "openSite": "このサイトのデータを表示",
-      "loadFailed": "このサイトのデータを読み込めませんでした。しばらくしてからもう一度お試しください。"
+      "loadFailed": "このサイトのデータを読み込めませんでした。しばらくしてからもう一度お試しください。",
+      "valueHidden": "Cookie の値は ShuviX を実行しているコンピューターでのみ表示されます。"
     },
     "pageMenu": {
       "openLinkInNewTab": "リンクを新しいタブで開く",
@@ -1642,6 +1644,39 @@
       "visits_other": "{{count}} 回アクセス",
       "openedByAgent": "「{{title}}」のエージェントが開きました · 会話を表示",
       "deletedSession": "削除された会話"
+    },
+    "manager": {
+      "title": "ブラウザー",
+      "subtitle": "ShuviX を実行しているコンピューター上のアプリ内ブラウザー",
+      "tabs": "タブ",
+      "settings": "設定",
+      "headlessNote": "そのコンピューターはヘッドレスで動作しています。ページはバックグラウンドでエージェントが使います。ここではタブとブラウザーのデータを管理できますが、ページそのものは見えません。",
+      "remoteNote": "ブラウザーのウィンドウは ShuviX を実行しているコンピューターにあります。ここではそのタブとブラウザーのデータを管理できます。",
+      "tabCount_one": "{{count}} 個のタブ",
+      "tabCount_other": "{{count}} 個のタブ",
+      "noTabs": "開いているタブはありません",
+      "newTabPlaceholder": "アドレスまたは検索語を入力（空欄なら空白のタブ）",
+      "open": "開く",
+      "go": "移動",
+      "cancel": "キャンセル",
+      "changeAddress": "アドレスを変更",
+      "loading": "読み込み中",
+      "crashed": "ページがクラッシュしました",
+      "intercepting": "ネットワークリクエストを傍受中",
+      "notAllowed": "このデバイスはタブを見られません：{{reason}}",
+      "actionFailed": "うまくいきませんでした：{{reason}}",
+      "refreshList": "一覧を更新",
+      "openedRemotely": "新しいタブはバックグラウンドで開き、そのコンピューターで表示中のページは切り替わりません。",
+      "remoteUrlRefused": "ほかのデバイスから開けるのは Web ページ（http、https）、空白のページ、shuvix:// のページだけで、ローカルファイルなどは開けません。",
+      "showScreenshot": "スクリーンショットを見る",
+      "hideScreenshot": "スクリーンショットを閉じる",
+      "retakeScreenshot": "撮り直す",
+      "screenshotLoading": "スクリーンショットを撮っています…",
+      "screenshotNote": "開いた時点の画面で、自動では更新されません。",
+      "screenshotTakenAt": "{{time}} の画面（自動では更新されません）",
+      "screenshotEmpty": "画面を取得できません：ページがまだ読み込み中か、クラッシュした可能性があります。",
+      "screenshotFailed": "スクリーンショットを撮れませんでした：{{reason}}",
+      "screenshotAlt": "このタブのスクリーンショット"
     }
   },
   "builtinSkill": {

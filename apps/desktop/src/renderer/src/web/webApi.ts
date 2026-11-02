@@ -10,20 +10,26 @@
  *  - `app:open-external(url)` → 新标签页里开那个地址（只认 http / https / mailto，其余回 `success:false`）；
  *  - `files:open` → 新标签页里开 `#file-preview?…`（只读预览；md 也在那里只读渲染 —— 协作编辑窗口仍只在桌面）；
  *  - `widgetWindow:open` → 新标签页里开 `#widget-window?widgetId=…`（widget 经网络服务的 `/w/` 转发）；
+ *  - `browser-view:open-window` / `open-settings` → 新标签页里开浏览器管理页 `#browser-manager`（标签页 / 设置）——
+ *    浏览器窗口在运行 ShuviX 的那台电脑上（无头时根本没有），这里能管理它的标签页与数据，看不到页面；
  *    `widgetWindow:status` → 两张空表、`widgetWindow:setPreferWindow` 不记（那些标签页宿主看不见）；
  *  - `dialog:openDirectory` / `skill:pickExternalDir` → 页面里的目录浏览器（列的是服务端的目录）；
  *  - `app:open-folder` / `app:reveal-path` / `widget:revealExport` → 显示那个服务端路径、给一个复制按钮；
  *    `*:openFolder` / `knowledge:revealFile` 先经 `fs:locateFolder` 问到路径，再同样显示。
  *
- * 剩下的（`pinChat:pin` / `pinChat:focus` / `browser-view:open-window` / `browser-view:open-settings` /
- * `widget:pickExportTarget`）浏览器里没有
+ * 剩下的（`pinChat:pin` / `pinChat:focus` / `widget:pickExportTarget`）浏览器里没有
  * 对应的东西：入口在 web 上是藏起来的，万一被调到就当场拒绝并给一条看得见的提示（不悄悄假装成功）。
  */
 import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../shared/apiTable'
 import { buildApi, createCommonOverrides, type WebApi } from '../../../shared/buildApi'
 import type { ServerFolderKind } from '../../../shared/serverFs'
 import { shownImageFileOfRef } from '@shuvix/chat-protocol/shownImages'
-import { filePreviewPageUrl, webPreviewUrl, widgetPageUrl } from '../host/hostUrls'
+import {
+  browserManagerPageUrl,
+  filePreviewPageUrl,
+  webPreviewUrl,
+  widgetPageUrl
+} from '../host/hostUrls'
 import { stashPendingSessionDraft } from '../host/sessionDraftStash'
 import { requestDirectoryPick } from './webDirectoryPick'
 import { showServerPath, type WebPathNotice } from './webPathNotice'
@@ -140,6 +146,12 @@ export function webLocalHandlers(
         '_blank'
       )
       return true
+    },
+    'browser-view:open-window': () => {
+      win.open(browserManagerPageUrl(win.location), '_blank')
+    },
+    'browser-view:open-settings': () => {
+      win.open(browserManagerPageUrl(win.location, 'settings'), '_blank')
     },
     'widgetWindow:open': (id) => {
       if (!isNonEmptyString(id)) return { success: false, error: 'missing widget id' }

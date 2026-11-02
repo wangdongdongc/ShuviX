@@ -20,7 +20,12 @@ import {
   siteDetails,
   siteOfUrl
 } from '../services/browser'
-import type { SiteDataCategory, SiteDetails, SiteSummary } from '../../shared/browserSiteData'
+import {
+  withoutCookieValues,
+  type SiteDataCategory,
+  type SiteDetails,
+  type SiteSummary
+} from '../../shared/browserSiteData'
 
 const CATEGORIES: readonly SiteDataCategory[] = [
   'cookies',
@@ -60,16 +65,18 @@ export function registerBrowserDataHandlers(): void {
   defineHandler('browser-data:list-sites', (): Promise<SiteSummary[]> => listSites())
 
   /**
-   * 一个网站的详情（各来源的占用、全部 Cookie —— **含 Cookie 的值**，也就是登录令牌）；没有数据回 null。
-   * 只回应桌面窗口：服务器模式下局域网客户端没有鉴权，不能经它读走内置浏览器里的登录态
-   * （网络客户端本来也没有浏览器窗口、用不到这张详情）。
+   * 一个网站的详情（各来源的占用、全部 Cookie —— 桌面窗口拿到的**含 Cookie 的值**，也就是登录令牌）；没有数据回 null。
+   * 网络客户端（web 客户端的浏览器管理页）拿到的 Cookie 一律没有值（`cookieValuesHidden`）：远程访问还没有身份认证、
+   * 走的是明文 HTTP，本机上的 agent 也能连那个端口 —— 名字、域名、大小、过期时间够管理用了，值留在这台电脑上。
    */
   defineHandler(
     'browser-data:site-details',
-    (ctx, site: string): Promise<SiteDetails | null> =>
-      ctx.client.kind === 'window' && typeof site === 'string' && site
-        ? siteDetails(site)
-        : Promise.resolve(null)
+    async (ctx, site: string): Promise<SiteDetails | null> => {
+      if (typeof site !== 'string' || !site) return null
+      const details = await siteDetails(site)
+      if (!details || ctx.client.kind === 'window') return details
+      return withoutCookieValues(details)
+    }
   )
 
   /** 删除一个网站的全部数据 */

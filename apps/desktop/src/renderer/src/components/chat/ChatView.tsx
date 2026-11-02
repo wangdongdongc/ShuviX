@@ -160,8 +160,9 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
             <PictureInPicture2 size={14} />
           </button>
         )}
-        {/* 浏览器是独立窗口：这里开 / 聚焦它；agent 开 tab 不会弹窗，这里的计数告诉用户有页面 */}
-        {!isWeb && <BrowserWindowButton />}
+        {/* 浏览器是独立窗口：这里开 / 聚焦它；agent 开 tab 不会弹窗，这里的计数告诉用户有页面。
+            web 客户端里点它在新标签页开浏览器管理页（#browser-manager：那台电脑上浏览器的标签页与设置） */}
+        <BrowserWindowButton />
         <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />
         {/* 底部栏（终端）：浏览器里也能用（终端输出经网络客户端的推送回来） */}
         <PanelToggleButton

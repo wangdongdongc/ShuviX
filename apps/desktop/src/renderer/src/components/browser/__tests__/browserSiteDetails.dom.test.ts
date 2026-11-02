@@ -16,6 +16,9 @@
  *   SD-U36  每一种删除失败：不重读、没有未处理的拒绝、没有转圈、确认收起、数据照旧；
  *   SD-U37  挂在设置页下、换了网站（key = 网站）：上一个网站的数据、待确认的删除、展开的 Cookie 一样都不带过来；
  *           上一个网站的回答迟到也不盖掉这一个。
+ *   SDD-H1  别的设备看的详情（cookieValuesHidden，值都是空串，2026-11-01）：展开一条 Cookie → [data-site-cookie-value-hidden]
+ *           写本地化的说明，没有 [data-site-cookie-value]、不显示 `""`；域 + 路径 / 标志那一行照有；删一条照样 removeCookie；
+ *   SDD-H2  回归：没有这个标记时空值照写 `""`、有值写值。
  *
  * `window.api` 是 browserDomSupport 的假件；SettingsPrimitives 走 vitest 别名到 app-shell 的真组件；真 en 文案。
  */
@@ -668,5 +671,48 @@ describe('挂在设置页下、换了网站（SD-U37）', () => {
     expect(root()?.getAttribute('data-site-details')).toBe('b.test')
     expect(headerLine()).toBe('1 KB · 1 cookie · 1 origin')
     expect(text()).not.toContain('github.com')
+  })
+})
+
+describe('别的设备看的详情：Cookie 的值没给（SDD-H1 / SDD-H2）', () => {
+  const HIDDEN = 'Cookie values are only shown on the computer running ShuviX.'
+
+  function hiddenDetails(): SiteDetails {
+    const d = githubDetails()
+    return {
+      ...d,
+      cookies: d.cookies.map((c) => ({ ...c, value: '' })),
+      cookieValuesHidden: true
+    }
+  }
+
+  it('SDD-H1 展开：说明文字、没有值那一格、没有 ""；标志一行照有；删一条照样 removeCookie', async () => {
+    api.browserData.siteDetails.mockImplementation(async () => hiddenDetails())
+    await mount()
+    toggleCookie('.github.com|/|sid')
+    const row = cookieRow('.github.com|/|sid')
+    const hidden = row.querySelector('[data-site-cookie-value-hidden]')
+    expect(hidden?.textContent).toBe(HIDDEN)
+    expect(row.querySelector('[data-site-cookie-value]')).toBeNull()
+    expect(row.textContent).not.toContain('""')
+    expect(row.querySelector('[data-site-cookie-value-hidden] + p')?.textContent).toBe(
+      '.github.com/ · Secure · HttpOnly · SameSite=Lax'
+    )
+
+    click(row.querySelector('[data-site-cookie-delete]')!)
+    await flush()
+    expect(api.browserData.removeCookie.mock.calls).toEqual([
+      [{ name: 'sid', domain: '.github.com', path: '/', secure: true }]
+    ])
+  })
+
+  it('SDD-H2 没有标记：空值写 ""、有值写值，没有说明文字', async () => {
+    await mount()
+    toggleCookie('www.github.com|/login|csrf')
+    expect(cookieValue('www.github.com|/login|csrf')).toBe('""')
+    expect($('[data-site-cookie-value-hidden]')).toBeNull()
+    toggleCookie('.github.com|/|sid')
+    expect(cookieValue('.github.com|/|sid')).toBe('secret-token')
+    expect(text()).not.toContain(HIDDEN)
   })
 })

@@ -68,6 +68,17 @@ export interface SiteCookie {
 export interface SiteDetails extends SiteSummary {
   origins: SiteOriginData[]
   cookies: SiteCookie[]
+  /** Cookie 的值没给（别的设备看的详情：每个 `value` 都是空串）；桌面窗口拿到的没有这一项 */
+  cookieValuesHidden?: true
+}
+
+/** 给别的设备看的详情：每个 Cookie 的值换成空串，并标上 `cookieValuesHidden` */
+export function withoutCookieValues(details: SiteDetails): SiteDetails {
+  return {
+    ...details,
+    cookies: details.cookies.map((c) => ({ ...c, value: '' })),
+    cookieValuesHidden: true
+  }
 }
 
 /** 字节数 → 人读的大小（1 KB = 1024 B，一位小数，整数时不带小数） */

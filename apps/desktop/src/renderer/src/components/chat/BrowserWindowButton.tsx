@@ -4,7 +4,8 @@ import { Globe } from 'lucide-react'
 import { useAppEvent } from '@shuvix/chat-ui'
 
 /**
- * 顶栏右侧窗口控制簇里的「浏览器窗口」按钮：开 / 聚焦独立浏览器窗口，并显示当前 tab 数。
+ * 顶栏右侧窗口控制簇里的「浏览器窗口」按钮：开 / 聚焦独立浏览器窗口，并显示当前 tab 数。web 客户端里同一个按钮
+ * 在新标签页开浏览器管理页（openWindow 的本地实现，见 web/webApi.ts）。
  * 放在顶栏而不是侧栏，侧栏收起时它也还在 —— 计数是用户唯一的提示，不能跟着侧栏一起藏起来。
  *
  * agent 开 tab 不会把浏览器窗口弄出来（不能打扰用户在主窗口里打字和操作），
@@ -17,9 +18,13 @@ export function BrowserWindowButton(): React.JSX.Element {
   // 初值：主进程的 tab 真源（窗口重载后也对得上）；之后跟 browser.tabsChanged 走
   useEffect(() => {
     let cancelled = false
-    void window.api.browserView.listTabs().then((list) => {
-      if (!cancelled) setCount(list.length)
-    })
+    // 列 tab 是 admin（地址里可能带登录令牌）：web 客户端所在的设备可能被策略拒了，那就只靠事件里的计数
+    window.api.browserView
+      .listTabs()
+      .then((list) => {
+        if (!cancelled) setCount(list.length)
+      })
+      .catch(() => undefined)
     return () => {
       cancelled = true
     }

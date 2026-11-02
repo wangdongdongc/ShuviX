@@ -51,7 +51,20 @@ const siteBytes = (s: SiteSummary): number => s.usageBytes + s.cookieBytes
  * 证书（忽略全部证书错误 —— Chrome 没有这个开关，留给内网自签名证书用 —— 与本次运行里放行过的网站）。
  * 页面是浏览器窗口外壳里的 DOM，agent 碰不到（它那一侧根本看不到这个 tab）。
  */
-export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.JSX.Element {
+export function BrowserSettingsPage({
+  compact,
+  remote,
+  headless
+}: {
+  compact?: boolean
+  /**
+   * 别的设备上的 web 客户端（浏览器管理页 #browser-manager）里显示：「查看历史记录」不给 —— 历史只在这台电脑的浏览器
+   * 窗口里读（远程访问还没有身份认证）
+   */
+  remote?: boolean
+  /** 那台电脑在无头运行：没有地址栏，搜索引擎与搜索建议置灰并说明原因 */
+  headless?: boolean
+}): React.JSX.Element {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const focus = useBrowserTabsStore((s) => s.settingsFocus)
@@ -130,12 +143,15 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
   }, [focus, clearSettingsFocus, detailSite, loadSites])
 
   const changeEngine = (value: string): void => {
+    // 无头：这一节置灰（inert），这里再挡一道 —— 改了也不起作用，不往设置里写
+    if (headless) return
     const next = searchEngineOf(value)
     setEngine(next)
     void window.api.settings.set({ key: SEARCH_ENGINE_SETTING, value: next })
   }
 
   const toggleSearchSuggest = (): void => {
+    if (headless) return
     const next = !searchSuggest
     setSearchSuggest(next)
     void window.api.settings.set({ key: SEARCH_SUGGEST_SETTING, value: String(next) })
@@ -253,30 +269,50 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
               {/* ── 搜索引擎 ── */}
               <div data-settings-section="search" className="scroll-mt-4">
                 <SettingsSection title={t('browser.settingsPage.search')}>
-                  <SettingsRow
-                    title={t('settings.toolBrowserSearchEngine')}
-                    description={t('settings.toolBrowserSearchEngineHint')}
-                    control={
-                      <InlineSelect value={engine} onChange={changeEngine} width={160}>
-                        {(Object.keys(SEARCH_ENGINES) as SearchEngineId[]).map((id) => (
-                          <option key={id} value={id}>
-                            {SEARCH_ENGINES[id].name}
-                          </option>
-                        ))}
-                      </InlineSelect>
-                    }
-                  />
-                  <SettingsRow
-                    title={t('browser.settingsPage.searchSuggest')}
-                    description={t('browser.settingsPage.searchSuggestDesc', {
-                      engine: SEARCH_ENGINES[engine].name
-                    })}
-                    control={
-                      <span className="flex" data-search-suggest-toggle={String(searchSuggest)}>
-                        <Toggle on={searchSuggest} onClick={toggleSearchSuggest} />
-                      </span>
-                    }
-                  />
+                  {headless && (
+                    <p
+                      className="px-4 pt-3 text-[11px] text-text-tertiary leading-relaxed"
+                      data-headless-search-note
+                    >
+                      {t('browser.settingsPage.headlessSearchNote')}
+                    </p>
+                  )}
+                  <div
+                    className={headless ? 'opacity-50 pointer-events-none select-none' : undefined}
+                    aria-disabled={headless || undefined}
+                    // 不只是点不到：键盘也进不去（下拉框没有 disabled）
+                    inert={headless || undefined}
+                    data-search-settings-disabled={headless ? 'true' : undefined}
+                  >
+                    <SettingsRow
+                      title={t('settings.toolBrowserSearchEngine')}
+                      description={t('settings.toolBrowserSearchEngineHint')}
+                      control={
+                        <InlineSelect value={engine} onChange={changeEngine} width={160}>
+                          {(Object.keys(SEARCH_ENGINES) as SearchEngineId[]).map((id) => (
+                            <option key={id} value={id}>
+                              {SEARCH_ENGINES[id].name}
+                            </option>
+                          ))}
+                        </InlineSelect>
+                      }
+                    />
+                    <SettingsRow
+                      title={t('browser.settingsPage.searchSuggest')}
+                      description={t('browser.settingsPage.searchSuggestDesc', {
+                        engine: SEARCH_ENGINES[engine].name
+                      })}
+                      control={
+                        <span className="flex" data-search-suggest-toggle={String(searchSuggest)}>
+                          <Toggle
+                            on={searchSuggest}
+                            onClick={toggleSearchSuggest}
+                            disabled={headless}
+                          />
+                        </span>
+                      }
+                    />
+                  </div>
                 </SettingsSection>
               </div>
 
@@ -308,13 +344,15 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
                         </div>
                       ) : (
                         <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => void window.api.browserView.openInternal('history')}
-                            className="px-2.5 py-1 text-[11px] rounded-md text-text-secondary hover:bg-bg-hover/60 transition-colors"
-                            data-open-history
-                          >
-                            {t('browser.settingsPage.viewHistory')}
-                          </button>
+                          {!remote && (
+                            <button
+                              onClick={() => void window.api.browserView.openInternal('history')}
+                              className="px-2.5 py-1 text-[11px] rounded-md text-text-secondary hover:bg-bg-hover/60 transition-colors"
+                              data-open-history
+                            >
+                              {t('browser.settingsPage.viewHistory')}
+                            </button>
+                          )}
                           <button
                             onClick={() => setConfirmHistory(true)}
                             className="px-2.5 py-1 text-[11px] rounded-md border border-border-secondary/60 text-text-secondary hover:bg-bg-hover/60 transition-colors"

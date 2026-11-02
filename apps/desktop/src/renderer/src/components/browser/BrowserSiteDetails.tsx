@@ -333,6 +333,7 @@ export function BrowserSiteDetails({
                 )
               }
               expiresText={c.expires ? dateText(c.expires) : t('browser.siteData.sessionCookie')}
+              valueHidden={details.cookieValuesHidden === true}
             />
           ))
         )}
@@ -354,13 +355,16 @@ function CookieRow({
   open,
   onToggle,
   onDelete,
-  expiresText
+  expiresText,
+  valueHidden
 }: {
   cookie: SiteCookie
   open: boolean
   onToggle: () => void
   onDelete: () => void
   expiresText: string
+  /** 别的设备看的详情没有 Cookie 的值（cookieValuesHidden）：展开后说明在哪儿看，而不是显示成空值 `""` */
+  valueHidden: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   const flags = [
@@ -409,9 +413,18 @@ function CookieRow({
       </div>
       {open && (
         <div className="mt-1.5 ml-5 space-y-1">
-          <p className="font-mono text-text-secondary break-all select-text" data-site-cookie-value>
-            {c.value || '""'}
-          </p>
+          {valueHidden ? (
+            <p className="text-text-tertiary italic" data-site-cookie-value-hidden>
+              {t('browser.siteData.valueHidden')}
+            </p>
+          ) : (
+            <p
+              className="font-mono text-text-secondary break-all select-text"
+              data-site-cookie-value
+            >
+              {c.value || '""'}
+            </p>
+          )}
           <p className="text-text-tertiary">
             {[`${c.domain}${c.path}`, ...flags, c.hostOnly ? t('browser.siteData.hostOnly') : '']
               .filter(Boolean)

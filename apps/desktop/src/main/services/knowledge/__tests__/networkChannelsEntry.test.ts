@@ -7,6 +7,9 @@
  *
  *   NCE-1 三种语言的清单 = 按通道表生成的那一份（逐字）
  *   NCE-2 生成的清单在 read / write / admin 行里覆盖 CHANNEL_ACCESS 的每一条、每条恰出现一次；每个 scope 一节
+ *   NPE-1 三种语言的 `network-policy` 条目里 `browser` 那一行（scope 表）说了：标签页的地址与截图是 `admin`，别的设备
+ *         只能让内置浏览器打开 http(s)、about:blank 与 shuvix:// 页（2026-11-01 远程访问的本地文件读取修复）
+ *   NPE-2 同一行把三个访问级别都点到了：`read`（网站列表、详情）、`write`（删除浏览历史）、`admin`（地址与截图）
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -110,5 +113,27 @@ describe('network-channels 条目', () => {
     expect(listed.sort()).toEqual(Object.keys(CHANNEL_ACCESS).sort())
     const headings = [...generated().matchAll(/^### `([a-z]+)`$/gm)].map((m) => m[1])
     expect(headings).toEqual([...CHANNEL_SCOPES])
+  })
+})
+
+describe('network-policy 条目的 browser 行', () => {
+  it.each(LANGS)('NPE-1 %s：`browser` 行说了 admin、http(s)、about:blank、shuvix://', (lang) => {
+    const text = readFileSync(join(DIR, lang, 'network-policy.md'), 'utf-8')
+    const rows = text.split('\n').filter((line) => line.startsWith('| `browser` |'))
+    expect(rows, `${lang}: exactly one \`browser\` row`).toHaveLength(1)
+    for (const words of ['`admin`', 'about:blank', 'shuvix://', 'http(s)']) {
+      expect(rows[0], `${lang}: ${words}`).toContain(words)
+    }
+  })
+})
+
+describe('network-policy 条目的 browser 行说了三个访问级别', () => {
+  it.each(LANGS)('NPE-2 %s：`browser` 行同时写着 `read`、`write`、`admin`', (lang) => {
+    const text = readFileSync(join(DIR, lang, 'network-policy.md'), 'utf-8')
+    const rows = text.split('\n').filter((line) => line.startsWith('| `browser` |'))
+    expect(rows, `${lang}: exactly one \`browser\` row`).toHaveLength(1)
+    for (const access of ['`read`', '`write`', '`admin`']) {
+      expect(rows[0], `${lang}: ${access}`).toContain(access)
+    }
   })
 })
