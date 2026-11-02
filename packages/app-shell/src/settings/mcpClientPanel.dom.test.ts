@@ -349,6 +349,53 @@ describe('保存失败 —— 对话框不关，原因写在按钮上方', () =>
   })
 })
 
+describe('编辑对话框 —— env / headers 到这里已是明文 JSON（落库的密文由主进程的 DAO 解开）', () => {
+  /** 打开一台用户自己的 http server 的编辑对话框 */
+  async function openEdit(server: McpServerInfo): Promise<void> {
+    servers = [server]
+    toolsById = { [server.id]: [] }
+    await renderPanel()
+    const pencil = serverRow(server.name).querySelector('svg.lucide-pencil')?.closest('button')
+    expect(pencil, 'http 行应当可以编辑').toBeTruthy()
+    await click(pencil as HTMLButtonElement)
+    expect(dialogTitle()).toBe(i18n.t('settings.mcpEditTitle'))
+  }
+  const headersArea = (): HTMLTextAreaElement =>
+    container.querySelector('.dialog-panel textarea') as HTMLTextAreaElement
+
+  it('MP-1 有值的行：环境变量显示那一对键值，请求头显示 `Authorization: Bearer sk-h` 那一行', async () => {
+    await openEdit(
+      row({
+        id: 'mcp-secret',
+        name: 'secret',
+        url: 'https://secret.example/mcp',
+        env: '{"TOKEN":"sk-env"}',
+        headers: '{"Authorization":"Bearer sk-h"}'
+      })
+    )
+    expect(inputByPlaceholder(i18n.t('settings.mcpEnvKeyPlaceholder')).value).toBe('TOKEN')
+    expect(inputByPlaceholder(i18n.t('settings.mcpEnvValuePlaceholder')).value).toBe('sk-env')
+    expect(headersArea().value).toBe('Authorization: Bearer sk-h')
+  })
+
+  it('MP-2 `{}`/`{}` 的行（也是解不开时读到的样子）打开是空的，不改就保存发的是空对象', async () => {
+    await openEdit(row({ id: 'mcp-empty', name: 'empty', url: 'https://empty.example/mcp' }))
+    expect(
+      container.querySelector(`input[placeholder="${i18n.t('settings.mcpEnvKeyPlaceholder')}"]`)
+    ).toBeNull()
+    expect(headersArea().value).toBe('')
+
+    await click(buttonByText(i18n.t('common.save')))
+
+    expect(api.update).toHaveBeenCalledTimes(1)
+    const sent = api.update.mock.calls[0][0] as { id: string; env: unknown; headers: unknown }
+    expect(sent.id).toBe('mcp-empty')
+    expect(sent.env).toEqual({})
+    expect(sent.headers).toEqual({})
+    expect(dialogTitle()).toBeNull()
+  })
+})
+
 describe('实验性质的内置 server（任务列表 plan）', () => {
   /** 内置 plan：inproc、设置页里恒「未启动」、没有工具 */
   const PLAN = row({ id: 'builtin-mcp-plan', name: 'plan', type: 'inproc', isBuiltin: 1 })

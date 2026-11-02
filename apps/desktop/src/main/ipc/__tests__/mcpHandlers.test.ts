@@ -163,3 +163,18 @@ describe('mcp:update 的名字校验', () => {
     expect(vi.mocked(mcpDao.update).mock.calls).toEqual([['builtin-mcp-browser', { isEnabled: 0 }]])
   })
 })
+
+describe('空的 env / headers 交给 DAO 的写法', () => {
+  // mcpDao 判断「空值不加密、不覆盖解不开的密文」靠的就是字面量 `{}`，这里换一种写法（`{ }`、null）那条判断就失效了
+  it('MH-6 mcp:update 的 {} → 恰好是字符串 `{}`；mcp:add 两个字段都不给也是 `{}`', async () => {
+    expect(await invoke('mcp:update', { id: 'u1', env: {}, headers: {} })).toEqual({
+      success: true
+    })
+    expect(vi.mocked(mcpDao.update).mock.calls).toEqual([['u1', { env: '{}', headers: '{}' }]])
+
+    await invoke('mcp:add', { name: 'fresh', type: 'stdio', command: 'npx' })
+    const inserted = vi.mocked(mcpDao.insert).mock.calls[0][0] as unknown as Row
+    expect(inserted.env).toBe('{}')
+    expect(inserted.headers).toBe('{}')
+  })
+})
