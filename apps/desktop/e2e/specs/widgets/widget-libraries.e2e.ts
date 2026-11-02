@@ -18,6 +18,13 @@
  *       面板）：iframe 是沙箱（不透明源），模块脚本成了跨源请求，要转发过来的 `access-control-allow-origin: *`，import map
  *       的地址经 widgetProxy 落在网络服务的源上 —— 断 E-1 的第 1、2、4 步。不断资源计时（不透明源的文档里每个资源都是
  *       跨源的，没有 Timing-Allow-Origin 时 Chromium 报 0）
+ *   E-3 第二个组件（`~/模型 1/tri.gltf` + tri.bin + `tex/红 色.png`，贴图的 uri 是百分号编码的）开在桌面的面板里：import GLTFLoader、
+ *       DRACOLoader、KTX2Loader、EffectComposer、UnrealBloomPass、MeshoptDecoder，都不给解码器路径：`new DRACOLoader()._initDecoder()`
+ *       + 一个真的 blob worker 答了一次（喂坏数据，worker 里 wasm 跑起来才答得出错误）、`new KTX2Loader().detectSupport(renderer).init()`、
+ *       `MeshoptDecoder.ready`、`WebAssembly.compileStreaming(fetch(import.meta.resolve('three/addons/libs/draco/draco_decoder.wasm')))`
+ *       （真的 MIME），从 `fs/path/~/…` 载入模型：网格数 > 0、贴图宽度 > 0；资源计时里 .bin、png、.wasm 都是 200，地址正是旁边的文件；
+ *       重新加载之后没有错误日志。单测里没有的就是这些：import map、子资源上的令牌、真的 MIME、blob worker、浏览器解析相对地址
+ *   E-4 同一个组件经 web 客户端的沙箱 iframe（不透明源）：解码器初始化、模型载入 —— 经转发的 `fs/path` 与 `.wasm` 带 ACAO。不断资源计时（同 E-2）
  *
  * 组件页面在 Widget 面板的跨源 iframe 里，自己有一个 CDP target（`iframe`）；页面里的 DOM 是这个 spec 自己写的组件，
  * 读它不经 pages.ts（与 widget-theme.e2e.ts 同一种做法）。harness 的 CDP 客户端丢掉事件，所以第 5 步自己连一条。
@@ -32,6 +39,10 @@ import { rightPanelPane, widgetPanelPane } from '../../harness/pages'
 
 const WIDGET = 'libs-probe'
 const THREE_BASE = `/w/${WIDGET}/lib/three@0.187.0/`
+const MODEL_WIDGET = 'libs-model'
+const MODEL_THREE_BASE = `/w/${MODEL_WIDGET}/lib/three@0.187.0/`
+const MODEL_DIR = '模型 1'
+const TEXTURE_FILE = '红 色.png'
 
 /** 组件界面：每个库各用一下，结果写到 window.__probe */
 const SCREEN_TSX = `import { createRoot } from 'react-dom/client'
@@ -86,24 +97,164 @@ const root = document.getElementById('root')
 if (root) createRoot(root).render(<App />)
 `
 
+/**
+ * 第二个组件的界面：技能（references/libraries.md、files.md）教的写法，解码器都不给路径。结果写到 window.__model，
+ * 出错写到 window.__modelError，都设 body[data-ready]
+ */
+const MODEL_SCREEN_TS = `import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
+
+const WIDGET = ${JSON.stringify(MODEL_WIDGET)}
+const fileAtUrl = (path) =>
+  '/w/' + WIDGET + '/fs/path/' + path.replace(/^\\//, '').split('/').map(encodeURIComponent).join('/')
+
+const w = window
+const root = document.getElementById('root')
+root.innerHTML = '<div data-three=""></div>'
+
+;(async () => {
+  const renderer = new THREE.WebGLRenderer()
+  renderer.setSize(64, 64)
+  root.firstElementChild.appendChild(renderer.domElement)
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100)
+  camera.position.z = 3
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x3366ff })))
+  const composer = new EffectComposer(renderer)
+  composer.addPass(new RenderPass(scene, camera))
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(64, 64), 1, 0.4, 0.85))
+  composer.render()
+
+  const draco = new DRACOLoader()
+  await draco._initDecoder()
+  // 喂一段坏数据：真的 blob worker 把 wasm 跑起来，才答得出「不是 Draco 文件」
+  const workerAnswer = await new Promise((resolve) => {
+    draco.decodeDracoFile(
+      new ArrayBuffer(16),
+      () => resolve('decoded'),
+      undefined,
+      undefined,
+      undefined,
+      (message) => resolve(String(message?.error ?? message))
+    )
+    setTimeout(() => resolve('no answer'), 20000)
+  })
+
+  const ktx = new KTX2Loader().detectSupport(renderer)
+  await ktx.init()
+  await MeshoptDecoder.ready
+  const module = await WebAssembly.compileStreaming(
+    fetch(import.meta.resolve('three/addons/libs/draco/draco_decoder.wasm'))
+  )
+
+  const gltf = await new GLTFLoader()
+    .setDRACOLoader(draco)
+    .setKTX2Loader(ktx)
+    .setMeshoptDecoder(MeshoptDecoder)
+    .loadAsync(fileAtUrl('~/${MODEL_DIR}/tri.gltf'))
+  let meshes = 0
+  let textureWidth = 0
+  gltf.scene.traverse((node) => {
+    if (!node.isMesh) return
+    meshes++
+    textureWidth = node.material.map?.image?.width ?? 0
+  })
+  w.__model = {
+    passes: composer.passes.length,
+    workerAnswer,
+    compiled: module instanceof WebAssembly.Module,
+    meshes,
+    textureWidth
+  }
+  draco.dispose()
+  ktx.dispose()
+})()
+  .catch((error) => {
+    w.__modelError = String(error?.stack ?? error)
+  })
+  .finally(() => {
+    document.body.dataset.ready = '1'
+  })
+`
+
+/** 1×1 的 PNG */
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64'
+)
+
 let app: E2EApp
 let frame: CdpClient | null = null
 let recorder: EventRecorder | null = null
 let web: WebClientHandle | null = null
+let webPort = 0
 let webFrame: CdpClient | null = null
+let modelFrame: CdpClient | null = null
+let modelRecorder: EventRecorder | null = null
+let webModelFrame: CdpClient | null = null
 
-function seedWidget(home: string): void {
-  const dir = join(home, '.shuvix', 'widgets', WIDGET)
+function seedWidget(
+  home: string,
+  id: string,
+  name: string,
+  source: string,
+  createdAt: number
+): void {
+  const dir = join(home, '.shuvix', 'widgets', id)
   mkdirSync(dir, { recursive: true })
   writeFileSync(
     join(dir, 'widget.json'),
-    JSON.stringify(
-      { id: WIDGET, name: 'Libs probe', description: '', entryFile: 'index.tsx', createdAt: 1000 },
-      null,
-      2
-    ) + '\n'
+    JSON.stringify({ id, name, description: '', entryFile: 'index.tsx', createdAt }, null, 2) + '\n'
   )
-  writeFileSync(join(dir, 'index.tsx'), SCREEN_TSX)
+  writeFileSync(join(dir, 'index.tsx'), source)
+}
+
+/** 家目录里的模型：一个带贴图的三角形，引用的文件都在它旁边，贴图的 uri 是百分号编码的 */
+function seedModel(home: string): void {
+  const dir = join(home, MODEL_DIR)
+  mkdirSync(join(dir, 'tex'), { recursive: true })
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])
+  const uvs = new Float32Array([0, 0, 1, 0, 0, 1])
+  writeFileSync(
+    join(dir, 'tri.bin'),
+    Buffer.concat([Buffer.from(positions.buffer), Buffer.from(uvs.buffer)])
+  )
+  writeFileSync(join(dir, 'tex', TEXTURE_FILE), TINY_PNG)
+  writeFileSync(
+    join(dir, 'tri.gltf'),
+    JSON.stringify({
+      asset: { version: '2.0' },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ mesh: 0 }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, material: 0 }] }],
+      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      textures: [{ source: 0 }],
+      images: [{ uri: `tex/${encodeURIComponent(TEXTURE_FILE)}` }],
+      accessors: [
+        {
+          bufferView: 0,
+          componentType: 5126,
+          count: 3,
+          type: 'VEC3',
+          min: [0, 0, 0],
+          max: [1, 1, 0]
+        },
+        { bufferView: 1, componentType: 5126, count: 3, type: 'VEC2' }
+      ],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: 36 },
+        { buffer: 0, byteOffset: 36, byteLength: 24 }
+      ],
+      buffers: [{ uri: 'tri.bin', byteLength: 60 }]
+    })
+  )
 }
 
 // ─── 第 5 步：自己的一条 CDP 连接，收事件 ─────────
@@ -180,6 +331,14 @@ interface Probe {
   webgl: boolean
 }
 
+interface ModelProbe {
+  passes: number
+  workerAnswer: string
+  compiled: boolean
+  meshes: number
+  textureWidth: number
+}
+
 interface ResourceEntry {
   name: string
   responseStatus: number
@@ -187,14 +346,33 @@ interface ResourceEntry {
   decodedBodySize: number
 }
 
-const resources = (): Promise<ResourceEntry[]> =>
-  frame!.eval<ResourceEntry[]>(
+const resources = (from: CdpClient = frame!): Promise<ResourceEntry[]> =>
+  from.eval<ResourceEntry[]>(
     `performance.getEntriesByType('resource').map((e) => ({ name: e.name, responseStatus: e.responseStatus, encodedBodySize: e.encodedBodySize, decodedBodySize: e.decodedBodySize }))`
   )
 
+/** 等模型组件跑完，核对 window.__model（E-3 与 E-4 一样） */
+async function expectModelLoaded(from: CdpClient): Promise<void> {
+  await until(
+    () => from.eval<boolean>(`document.body?.dataset.ready === '1'`),
+    'the model widget finished (body[data-ready])',
+    60_000
+  )
+  expect(await from.eval<string | null>('window.__modelError ?? null')).toBeNull()
+  const model = await from.eval<ModelProbe>('window.__model')
+  expect(model.passes).toBe(2)
+  // worker 里的 wasm 跑起来了，才说得出这不是 Draco 文件（没答、或答了「解码成功」都不对）
+  expect(model.workerAnswer).toContain('Not a Draco file')
+  expect(model.compiled).toBe(true)
+  expect(model.meshes).toBeGreaterThan(0)
+  expect(model.textureWidth).toBeGreaterThan(0)
+}
+
 beforeAll(async () => {
   app = await launchApp()
-  seedWidget(app.home)
+  seedWidget(app.home, WIDGET, 'Libs probe', SCREEN_TSX, 1000)
+  seedWidget(app.home, MODEL_WIDGET, 'Libs model', MODEL_SCREEN_TS, 1001)
+  seedModel(app.home)
 
   await until(
     () => app.main.eval<boolean>(`!!document.querySelector('button[data-side="right"]')`),
@@ -210,8 +388,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   recorder?.close()
+  modelRecorder?.close()
   frame?.close()
+  modelFrame?.close()
   webFrame?.close()
+  webModelFrame?.close()
   if (web) await web.close().catch(() => undefined)
   if (app) {
     await app.main.eval(`window.api.network.setEnabled(false)`).catch(() => undefined)
@@ -301,6 +482,7 @@ describe('widget libraries', () => {
   it('E-2 the same widget through the web client: a sandboxed iframe loads three through the network server', async () => {
     let port = await freePort()
     while (port === 7766) port = await freePort()
+    webPort = port
     await app.main.eval(`window.api.network.setPort(${JSON.stringify(port)})`)
     const status = await app.main.eval<{ listening: boolean }>(
       `window.api.network.setEnabled(true)`
@@ -354,4 +536,91 @@ describe('widget libraries', () => {
     expect(bundle).toContain('from"three"')
     expect(bundle).not.toContain('Three.js Authors')
   }, 120_000)
+
+  it('E-3 decoders with no decoder path and a model read through fs/path, in the desktop panel', async () => {
+    const panel = widgetPanelPane(app.main)
+    await panel.back()
+    await until(async () => (await panel.cardIds()).includes(MODEL_WIDGET) || null, 'the card')
+    await panel.clickCard(MODEL_WIDGET)
+    await until(
+      async () => (await panel.foregroundApp()) === MODEL_WIDGET || null,
+      'the model widget opened in the panel'
+    )
+    const target = await until(
+      async () =>
+        (await listTargets(app.port)).find(
+          (t) => t.type === 'iframe' && t.url.includes(`/w/${MODEL_WIDGET}/`)
+        ),
+      'the model widget iframe target',
+      30_000
+    )
+    modelFrame = await connect(target.webSocketDebuggerUrl)
+    await expectModelLoaded(modelFrame)
+
+    // 模型引用的文件按它旁边的地址取到（浏览器解析相对地址），解码器的 .wasm 经 import map 从库路由来
+    const dir = encodeURIComponent(MODEL_DIR)
+    const fileBase = `/w/${MODEL_WIDGET}/fs/path/~/${dir}/`
+    const entries = await resources(modelFrame)
+    const statusOf = (path: string): number | undefined =>
+      entries.find((e) => new URL(e.name).pathname === path)?.responseStatus
+    for (const path of [
+      `${fileBase}tri.gltf`,
+      `${fileBase}tri.bin`,
+      `${fileBase}tex/${encodeURIComponent(TEXTURE_FILE)}`,
+      `${MODEL_THREE_BASE}examples/jsm/libs/draco/draco_decoder.wasm`,
+      `${MODEL_THREE_BASE}examples/jsm/libs/draco/draco_wasm_wrapper.js`,
+      `${MODEL_THREE_BASE}examples/jsm/libs/basis/basis_transcoder.wasm`,
+      `${MODEL_THREE_BASE}examples/jsm/libs/basis/basis_transcoder.js`
+    ]) {
+      expect(statusOf(path), `${path} in ${JSON.stringify(entries.map((e) => e.name))}`).toBe(200)
+    }
+
+    // 重新加载一遍，收着事件：没有异常、没有 error 级的日志
+    modelRecorder = await recordEvents(target.webSocketDebuggerUrl)
+    await modelRecorder.send('Runtime.enable')
+    await modelRecorder.send('Log.enable')
+    await modelFrame.eval(
+      `(window.__beforeReload = true, setTimeout(() => location.reload(), 0), true)`
+    )
+    await until(
+      () =>
+        modelFrame!.eval<boolean>(`!window.__beforeReload && document.body?.dataset.ready === '1'`),
+      'the model widget ran again after reload',
+      60_000
+    )
+    await expectModelLoaded(modelFrame)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(
+      modelRecorder.events.some((e) => e.method === 'Runtime.executionContextCreated'),
+      'the recorder saw the reloaded page'
+    ).toBe(true)
+    // 那段坏数据是这个组件自己喂的：worker 照样 console.error 一句，别的都不该有
+    expect(
+      errorsIn(modelRecorder.events).filter((line) => !line.includes('Not a Draco file'))
+    ).toEqual([])
+  }, 180_000)
+
+  it('E-4 the same widget through the web client: decoders and the model load from an opaque origin', async () => {
+    expect(web, 'E-2 opened the web client').not.toBeNull()
+    const page = web!.page
+    const panel = widgetPanelPane(page)
+    await panel.back()
+    await until(async () => (await panel.cardIds()).includes(MODEL_WIDGET) || null, 'the card')
+    await panel.clickCard(MODEL_WIDGET)
+    await until(
+      async () => (await panel.foregroundApp()) === MODEL_WIDGET || null,
+      'the model widget opened in the web client panel'
+    )
+    const frameUrl = `http://127.0.0.1:${webPort}/w/${MODEL_WIDGET}/`
+    const target = await until(
+      async () =>
+        (await listTargets(app.port)).find((t) => t.type === 'iframe' && t.url === frameUrl),
+      'the model widget iframe target in the web client',
+      30_000
+    )
+    webModelFrame = await connect(target.webSocketDebuggerUrl)
+    // 沙箱：不透明源，取 fs/path 与 .wasm 都是跨源请求
+    expect(await webModelFrame.eval<string>('window.origin')).toBe('null')
+    await expectModelLoaded(webModelFrame)
+  }, 180_000)
 })

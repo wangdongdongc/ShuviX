@@ -1,11 +1,12 @@
 # 读取用户电脑上的文件
 
-小组件（widget）通过它自己地址下的两条路由读取本地文件。它们是只读的：小组件要写的东西通过它的 API 进它的数据库（`api.md`）。
+小组件（widget）通过它自己地址下的三条路由读取本地文件。它们是只读的：小组件要写的东西通过它的 API 进它的数据库（`api.md`）。
 
 | 请求                             | 应答                                                                                          |
 | -------------------------------- | --------------------------------------------------------------------------------------------- |
 | `GET /w/<id>/fs/file?path=<p>`   | 文件的字节，`Content-Type` 按扩展名给出，支持 `Range`（视频和音频可以拖动进度）。             |
 | `HEAD /w/<id>/fs/file?path=<p>`  | 只有响应头：`Content-Length`、`Content-Type`。把它当作一个廉价的「这个文件存在吗」。          |
+| `GET /w/<id>/fs/path/<p>`        | 与 `fs/file` 相同，只是路径写在地址里。用于文件里提到旁边其他文件的情况。                     |
 | `GET /w/<id>/fs/list?path=<dir>` | 以 JSON 表示的目录（见下）。                                                                  |
 
 **只有这些地址在哪里都能用。** 在桌面端，小组件由这台电脑提供；用户从另一台设备打开 ShuviX 的网页时，同样的 `/w/<id>/…` 路径会被转发到这台电脑。`shuvix-media://…`、`file://…` 和 `http://127.0.0.1:<port>/…` 只在桌面端存在：用了它们的小组件在浏览器里什么都显示不出来。
@@ -23,6 +24,9 @@
 const WIDGET = 'photo-wall'
 export const fileUrl = (path: string) => `/w/${WIDGET}/fs/file?path=${encodeURIComponent(path)}`
 export const listUrl = (path: string) => `/w/${WIDGET}/fs/list?path=${encodeURIComponent(path)}`
+// 逐段编码，斜杠留着。在 Windows 上路径也用 `/` 写
+export const fileAtUrl = (path: string) =>
+  `/w/${WIDGET}/fs/path/${path.replace(/^\//, '').split('/').map(encodeURIComponent).join('/')}`
 ```
 
 ## 使用文件
@@ -37,6 +41,8 @@ const res = await fetch(fileUrl('~/notes/todo.md'))
 if (!res.ok) throw new Error(await res.text())
 const text = await res.text()
 ```
+
+文件里用相对地址提到其他文件时（`.gltf` 和它的 `.bin`、贴图，`.obj` 和它的 `.mtl`，`.m3u8` 和它的分片），通过 `fileAtUrl` 加载，那些地址就会解析到它旁边的文件，不用再做别的。用 `fileUrl` 不行：路径在查询串里，浏览器会相对 `fs/` 去解析。
 
 图片、PDF、音频和视频扩展名有各自的 `Content-Type`；其余一律是 `application/octet-stream`，`fetch().text()`、`.json()` 和 `.arrayBuffer()` 都能正常读取。要把图片画到 `<canvas>` 上再读回像素，就在 `<img>` 上设 `crossOrigin="anonymous"`，否则小组件从浏览器打开时 canvas 会被污染（tainted）。
 

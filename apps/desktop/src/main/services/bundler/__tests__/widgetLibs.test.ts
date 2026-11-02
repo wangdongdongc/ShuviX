@@ -14,8 +14,9 @@
  *   WL-7  widgetImportMap：键 = 每个 served 库的 served 键；值落在 `<base>lib/<name>@<ver>/…`；`/` 结尾的键值也 `/` 结尾
  *   WL-8  widgetLibraryNames：按表的顺序、逗号加空格
  *   WL-9  表的不变量：版本精确、blocked 键属于自己的库、served 键与目标形状一致、exportTypes 都是 @types/、
- *         files 的 glob 只用 `*` / `**`、skipDependencies 里没有表里的库
- *   WL-10 served 库在 vendor 里的每个 .js 都能从库路由取到（F-1：`build/three.core.js`）
+ *         files 的 glob 只用 `*` / `**`（`!` 只能在开头）、skipDependencies 里没有表里的库
+ *   WL-10 served 库在 vendor 里的每个文件（package.json、LICENSE 除外，.wasm 也算）都能从库路由取到（F-1：`build/three.core.js`）
+ *   WL-11 DRACOLoader / KTX2Loader 默认取解码器的地址（import map 的 three/addons/ + 它们自己的相对路径）经库路由落到 vendor
  *   VR-1  manifest.libraries = 表的 {name: version}，键按表的顺序
  *   VR-2  manifest.packages 的每个包都在，package.json 的 version / name 对得上
  *   VR-3  manifest.fileCount = vendor/node_modules 下的普通文件数（afterPack 核对的就是它）
@@ -23,10 +24,22 @@
  *   VR-5  skipDependencies 一个都不在
  *   VR-6  没有覆盖规则的包只带默认那套（package.json、许可证、.js/.mjs/.cjs/.css；没有 .map / .d.ts、test / docs …）
  *   VR-7  覆盖规则生效：lucide-react 只有 dist/esm（图标数与安装的一样）、chart.js 没有 cjs / umd、d3-* 只有 src
- *   VR-8  three 的文件正好是那几份 + 相对 import 补进来的两份 utils
- *   VR-9  three 的 JS 压缩过、原来有 @license 的保留、没有 sourceMappingURL；three.module.js 以许可证块开头
+ *   VR-8  three 里该在的在（WebGL 能用的 addon、解码器的 loader、后处理、libs），不该在的不在（tsl、lines/webgpu、TTFLoader 等）
+ *   VR-9  three 的 JS 压缩过（build/three.*.js 与 GLTFLoader.js 严格变小，别的最多大 1%：本来就压过的 libs）、原来有 @license 的
+ *         保留、没有 sourceMappingURL；three.module.js 以许可证块开头
  *   VR-10 three 的 JS 里每个相对 import 都指向 vendor 里有的文件，而且库路由取得到（F-1 从另一头看）
  *   VR-11 不是 served 的文件逐字节拷贝
+ *   VR-12 解码器都在：libs/draco/{draco_decoder.js,draco_decoder.wasm,draco_wasm_wrapper.js}、libs/draco/gltf/{draco_decoder.wasm,
+ *         draco_wasm_wrapper.js}、libs/basis/{basis_transcoder.js,basis_transcoder.wasm}；.wasm 与安装的逐字节相同
+ *   VR-13 vendor 里 three 的每个 .js（esbuild 解析，不用正则）：静态与字面量动态 import 只能是 three、存在的 three/addons/…、
+ *         包里存在的相对路径；没有网址、three/webgpu、three/tsl
+ *   VR-14 widgetLibs.json 里每条 `!`：安装的 three 里还有（升级时发现过期的）、vendor 里没有；要么顺着 import 碰到 webgpu、tsl、
+ *         网址，要么在审过的名单上（exporters/DRACOExporter.js、loaders/3DMLoader.js）
+ *   VR-15 完整：安装的 examples/jsm 下没进 vendor 的 .js，都得由同一条规则或审过的名单解释（Addons.js、physics/、transpiler/、
+ *         exporters/DRACOExporter.js、loaders/3DMLoader.js、capabilities/WebGPU.js、lighting/、libs/）
+ *   VR-16 vendor 的 JS 里每个 `new URL('<相对路径>', import.meta.url)` 都指向随包的文件（DRACOLoader 不给 decoder 路径也取得到）；
+ *         解码器走的是这条闭包，表里没有它们的 glob
+ *   VR-17 压缩之后解码器脚本仍定义 worker 调的全局：DracoDecoderModule、BASIS（new Function 里跑）
  *   PKG-1 根 package-lock.json 装的版本 = 表里的版本
  *   PKG-2 apps/desktop/package.json 精确钉住每个库（F-5 裁决：钉死，不带 ^）
  *   PKG-3 根 postinstall 先跑 vendor 脚本、不看 CI；electron-rebuild 仍看 CI；desktop 有 vendor:widget-libs
@@ -37,6 +50,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, posix, resolve } from 'node:path'
+import { build as nativeBuild } from 'esbuild'
 import { describe, expect, it } from 'vitest'
 import table from '../widgetLibs.json'
 import {
@@ -147,6 +161,90 @@ function overrideOf(name: string): string[] | null {
 const libRoute = (lib: { name: string; version: string }, file: string): string =>
   `/lib/${lib.name}@${lib.version}/${file}`
 
+const VENDOR_THREE_JSM = join(VENDOR_MODULES, 'three/examples/jsm')
+const INSTALLED_THREE_JSM = join(INSTALLED, 'three/examples/jsm')
+/** 几百个文件各解析一次 */
+const GRAPH_TIMEOUT = 120_000
+
+const importCache = new Map<string, Promise<string[]>>()
+
+/**
+ * 这个文件的静态与字面量动态 import。用 esbuild 解析（只记不跟）：正则会把字符串与注释里的 `from '…'` 当成 import
+ * （GLTFLoader.js 里就有一段）。解码器脚本里的 require 不算：它们不是模块，浏览器不走 import map
+ */
+function importsIn(file: string): Promise<string[]> {
+  const cached = importCache.get(file)
+  if (cached) return cached
+  const found: string[] = []
+  const done = nativeBuild({
+    entryPoints: [file],
+    bundle: true,
+    write: false,
+    format: 'esm',
+    outdir: 'out',
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'record-imports',
+        setup(build) {
+          build.onResolve({ filter: /.*/ }, (args) => {
+            if (args.kind === 'entry-point') return undefined
+            if (args.kind === 'import-statement' || args.kind === 'dynamic-import') {
+              found.push(args.path)
+            }
+            return { path: args.path, external: true }
+          })
+        }
+      }
+    ]
+  }).then(() => found)
+  importCache.set(file, done)
+  return done
+}
+
+/**
+ * 这个 addon（安装的那份，相对 examples/jsm）为什么进不了 vendor：顺着 import 往下找 three/webgpu、three/tsl、网址
+ * （served 文件只能 import 页面 import map 答得上来的东西）。都没有 → null
+ */
+async function leftOutBecause(file: string, seen = new Set<string>()): Promise<string | null> {
+  if (seen.has(file)) return null
+  seen.add(file)
+  for (const spec of await importsIn(join(INSTALLED_THREE_JSM, file))) {
+    if (spec === 'three/webgpu' || spec === 'three/tsl' || /^[a-z][a-z0-9+.-]*:/i.test(spec)) {
+      return spec
+    }
+    const next = spec.startsWith('three/addons/')
+      ? spec.slice('three/addons/'.length)
+      : spec.startsWith('./') || spec.startsWith('../')
+        ? posix.normalize(posix.join(posix.dirname(file), spec))
+        : null
+    if (!next || next.startsWith('../')) continue
+    const reason = await leftOutBecause(next, seen)
+    if (reason) return reason
+  }
+  return null
+}
+
+/** 表里 `!` 掉的、又不碰 webgpu / tsl / 网址的（要别处来的库）：审过 */
+const REVIEWED_EXCLUSIONS = ['exporters/DRACOExporter.js', 'loaders/3DMLoader.js']
+/** 没进 vendor、又不碰 webgpu / tsl / 网址的：审过 */
+const REVIEWED_LEFT_OUT = [
+  /^Addons\.js$/,
+  /^physics\//,
+  /^transpiler\//,
+  /^exporters\/DRACOExporter\.js$/,
+  /^loaders\/3DMLoader\.js$/,
+  /^capabilities\/WebGPU\.js$/,
+  /^lighting\//,
+  /^libs\//,
+  // 只给被排除的文件用的零件：MaterialXLoader、Inspector、WebGPU 的城市生成器
+  /^loaders\/materialx\//,
+  /^inspector\//,
+  /^generators\//,
+  // 没有人 import 的演示
+  /^offscreen\//
+]
+
 // ────────────────────────────── A. 表与辅助函数 ──────────────────────────────
 
 describe('WL 表与辅助函数（widgetLibs.ts）', () => {
@@ -254,18 +352,19 @@ describe('WL 表与辅助函数（widgetLibs.ts）', () => {
       ...Object.values(DEPENDENCY_FILES).flat()
     ]
     expect(globs.length).toBeGreaterThan(0)
-    for (const glob of globs) expect(glob).not.toMatch(/[?[\]{}!()+@]/)
+    for (const glob of globs) expect(glob.replace(/^!/, ''), glob).not.toMatch(/[?[\]{}!()+@]/)
     // (f) skipDependencies 里没有表里的库
     for (const dep of SKIP) expect(names.has(dep), dep).toBe(false)
   })
 
-  it('WL-10 served 库在 vendor 里的每个 .js 都能从库路由取到（F-1）', () => {
+  it('WL-10 served 库在 vendor 里的每个文件（清单与许可证除外）都能从库路由取到（F-1）', () => {
     readManifest()
     const served = WIDGET_LIBRARIES.filter((lib) => lib.served)
     expect(served.length).toBeGreaterThan(0)
     for (const lib of served) {
-      const files = listFiles(join(VENDOR_MODULES, lib.name)).filter((f) => f.endsWith('.js'))
+      const files = listFiles(join(VENDOR_MODULES, lib.name)).filter((f) => !isKeptAlways(f))
       expect(files.length, lib.name).toBeGreaterThan(0)
+      expect(files.some((f) => f.endsWith('.wasm')) || lib.name !== 'three', lib.name).toBe(true)
       for (const file of files) {
         expect(resolveWidgetLibFile(libRoute(lib, file), VENDOR), file).toBe(
           join(VENDOR_MODULES, lib.name, ...file.split('/'))
@@ -273,6 +372,23 @@ describe('WL 表与辅助函数（widgetLibs.ts）', () => {
       }
     }
     expect(resolveWidgetLibFile(libRoute(three, 'build/three.core.js'), VENDOR)).not.toBeNull()
+  })
+
+  it.each([
+    ['loaders/DRACOLoader.js', '../libs/draco/draco_decoder.wasm'],
+    ['loaders/DRACOLoader.js', '../libs/draco/draco_wasm_wrapper.js'],
+    ['loaders/DRACOLoader.js', '../libs/draco/draco_decoder.js'],
+    ['loaders/DRACOLoader.js', '../libs/draco/gltf/draco_decoder.wasm'],
+    ['loaders/KTX2Loader.js', '../libs/basis/basis_transcoder.wasm'],
+    ['loaders/KTX2Loader.js', '../libs/basis/basis_transcoder.js']
+  ])('WL-11 %s 默认取的 %s 经 import map 与库路由落到 vendor', (loader, relative) => {
+    readManifest()
+    const base = `http://h${widgetImportMap('/w/a-b/').imports['three/addons/']}`
+    const { pathname } = new URL(relative, new URL(loader, base))
+    expect(pathname.startsWith('/w/a-b/lib/')).toBe(true)
+    expect(resolveWidgetLibFile(pathname.slice('/w/a-b'.length), VENDOR)).toBe(
+      join(VENDOR_MODULES, 'three/examples/jsm', ...relative.replace('../', '').split('/'))
+    )
   })
 })
 
@@ -414,28 +530,59 @@ describe('VR 仓库里拷好的 vendor 目录（只读）', () => {
     }
   })
 
-  it('VR-8 three 的文件正好是挑出来的那几份 + 相对 import 补进来的两份', () => {
+  it('VR-8 three 里该在的在、不该在的不在', () => {
     readManifest()
-    const controls = readdirSync(join(INSTALLED, 'three/examples/jsm/controls'), {
-      withFileTypes: true
-    })
-      .filter((e) => e.isFile() && e.name.endsWith('.js'))
-      .map((e) => `examples/jsm/controls/${e.name}`)
-    expect(controls.length).toBeGreaterThan(3)
-    const expected = [
+    const dir = join(VENDOR_MODULES, 'three')
+    const jsm = (rel: string): string => `examples/jsm/${rel}`
+    const shipped = (rel: string): boolean => existsSync(join(dir, rel))
+    for (const file of [
       'package.json',
       'LICENSE',
       'build/three.module.js',
       'build/three.core.js',
-      ...controls,
-      ...['GLTF', 'OBJ', 'MTL', 'STL', 'PLY'].map((l) => `examples/jsm/loaders/${l}Loader.js`),
-      'examples/jsm/environments/RoomEnvironment.js',
-      'examples/jsm/renderers/CSS2DRenderer.js',
-      'examples/jsm/geometries/RoundedBoxGeometry.js',
-      'examples/jsm/utils/BufferGeometryUtils.js',
-      'examples/jsm/utils/SkeletonUtils.js'
-    ]
-    expect(listFiles(join(VENDOR_MODULES, 'three')).sort()).toEqual(expected.sort())
+      jsm('capabilities/WebGL.js'),
+      jsm('controls/OrbitControls.js'),
+      jsm('loaders/GLTFLoader.js'),
+      jsm('loaders/FBXLoader.js'),
+      jsm('loaders/HDRLoader.js'),
+      jsm('loaders/ColladaLoader.js'),
+      jsm('loaders/3MFLoader.js'),
+      jsm('loaders/EXRLoader.js'),
+      jsm('loaders/KTX2Loader.js'),
+      jsm('loaders/DRACOLoader.js'),
+      jsm('loaders/collada/ColladaParser.js'),
+      jsm('postprocessing/EffectComposer.js'),
+      jsm('postprocessing/UnrealBloomPass.js'),
+      jsm('utils/BufferGeometryUtils.js'),
+      jsm('utils/SkeletonUtils.js'),
+      jsm('lighting/LightProbeGridWebGL.js'),
+      jsm('libs/lil-gui.module.min.js'),
+      jsm('libs/stats.module.js'),
+      jsm('libs/tween.module.js'),
+      jsm('libs/meshopt_decoder.module.js'),
+      jsm('libs/mikktspace.module.js')
+    ]) {
+      expect(shipped(file), file).toBe(true)
+    }
+    for (const folder of ['interaction', 'webxr']) {
+      const installed = listFiles(join(INSTALLED, 'three', jsm(folder))).filter((f) =>
+        f.endsWith('.js')
+      )
+      expect(installed.length, folder).toBeGreaterThan(0)
+      for (const file of installed) expect(shipped(jsm(`${folder}/${file}`)), file).toBe(true)
+    }
+    for (const gone of [
+      jsm('tsl'),
+      jsm('lines/webgpu'),
+      jsm('loaders/TTFLoader.js'),
+      jsm('loaders/3DMLoader.js'),
+      jsm('exporters/DRACOExporter.js'),
+      jsm('libs/demuxer_mp4.js'),
+      jsm('physics'),
+      jsm('Addons.js')
+    ]) {
+      expect(shipped(gone), gone).toBe(false)
+    }
   })
 
   it('VR-9 three 的 JS 压缩过、许可证保留、没有 sourceMappingURL', () => {
@@ -445,9 +592,19 @@ describe('VR 仓库里拷好的 vendor 目录（只读）', () => {
     for (const file of files) {
       const vendored = readFileSync(join(VENDOR_MODULES, 'three', file), 'utf8')
       const original = readFileSync(join(INSTALLED, 'three', file), 'utf8')
-      expect(vendored.length, file).toBeLessThan(original.length)
+      expect(vendored.length, file).toBeLessThanOrEqual(original.length * 1.01)
       if (original.includes('@license')) expect(vendored, file).toContain('@license')
       expect(vendored, file).not.toContain('sourceMappingURL')
+    }
+    // 没压过的那些，压了一定变小（libs 里有本来就压过的，重压可能大一点点）
+    for (const file of [
+      'build/three.module.js',
+      'build/three.core.js',
+      'examples/jsm/loaders/GLTFLoader.js'
+    ]) {
+      const vendored = readFileSync(join(VENDOR_MODULES, 'three', file), 'utf8')
+      const original = readFileSync(join(INSTALLED, 'three', file), 'utf8')
+      expect(vendored.length, file).toBeLessThan(original.length)
     }
     for (const build of ['build/three.module.js', 'build/three.core.js']) {
       expect(readFileSync(join(VENDOR_MODULES, 'three', build), 'utf8'), build).toContain(
@@ -489,6 +646,133 @@ describe('VR 仓库里拷好的 vendor 目录（只读）', () => {
     const vendored = readFileSync(join(VENDOR_MODULES, file))
     const original = readFileSync(join(INSTALLED, file))
     expect(vendored.equals(original)).toBe(true)
+  })
+
+  it.each([
+    'libs/draco/draco_decoder.js',
+    'libs/draco/draco_decoder.wasm',
+    'libs/draco/draco_wasm_wrapper.js',
+    'libs/draco/gltf/draco_decoder.wasm',
+    'libs/draco/gltf/draco_wasm_wrapper.js',
+    'libs/basis/basis_transcoder.js',
+    'libs/basis/basis_transcoder.wasm'
+  ])('VR-12 解码器在：%s（.wasm 逐字节相同）', (file) => {
+    readManifest()
+    const vendored = join(VENDOR_THREE_JSM, file)
+    expect(existsSync(vendored)).toBe(true)
+    if (file.endsWith('.wasm')) {
+      expect(readFileSync(vendored).equals(readFileSync(join(INSTALLED_THREE_JSM, file)))).toBe(
+        true
+      )
+    }
+  })
+
+  it(
+    'VR-13 vendor 里 three 的 JS 只 import 三种东西（three、存在的 addon、包里存在的相对路径）',
+    async () => {
+      readManifest()
+      const dir = join(VENDOR_MODULES, 'three')
+      const files = listFiles(dir).filter((f) => f.endsWith('.js'))
+      const bad: string[] = []
+      let imports = 0
+      for (const file of files) {
+        for (const spec of await importsIn(join(dir, file))) {
+          imports++
+          if (spec === 'three') continue
+          let target: string
+          if (spec.startsWith('three/addons/')) {
+            target = `examples/jsm/${spec.slice('three/addons/'.length)}`
+          } else if (spec.startsWith('./') || spec.startsWith('../')) {
+            target = posix.normalize(posix.join(posix.dirname(file), spec))
+          } else {
+            bad.push(`${file} -> ${spec}`)
+            continue
+          }
+          if (target.startsWith('../') || !existsSync(join(dir, target))) {
+            bad.push(`${file} -> ${spec}`)
+          }
+        }
+      }
+      expect(imports).toBeGreaterThan(100)
+      expect(bad).toEqual([])
+    },
+    GRAPH_TIMEOUT
+  )
+
+  it(
+    'VR-14 每条 `!`：装的里面有、vendor 里没有，且说得出为什么',
+    async () => {
+      readManifest()
+      const excluded = LIBS.three
+        .files!.filter((g) => g.startsWith('!'))
+        .map((g) => g.slice('!examples/jsm/'.length))
+      expect(excluded.length).toBeGreaterThan(10)
+      for (const file of excluded) {
+        expect(existsSync(join(INSTALLED_THREE_JSM, file)), `stale: ${file}`).toBe(true)
+        expect(existsSync(join(VENDOR_THREE_JSM, file)), `shipped: ${file}`).toBe(false)
+        const reason = await leftOutBecause(file)
+        expect(
+          reason ?? (REVIEWED_EXCLUSIONS.includes(file) ? 'reviewed' : null),
+          file
+        ).not.toBeNull()
+      }
+    },
+    GRAPH_TIMEOUT
+  )
+
+  it(
+    'VR-15 没进 vendor 的 addon 都解释得了',
+    async () => {
+      readManifest()
+      const installed = listFiles(INSTALLED_THREE_JSM).filter((f) => f.endsWith('.js'))
+      expect(installed.length).toBeGreaterThan(300)
+      const unexplained: string[] = []
+      for (const file of installed) {
+        if (existsSync(join(VENDOR_THREE_JSM, file))) continue
+        if (REVIEWED_LEFT_OUT.some((re) => re.test(file))) continue
+        if (await leftOutBecause(file)) continue
+        unexplained.push(file)
+      }
+      expect(unexplained).toEqual([])
+    },
+    GRAPH_TIMEOUT
+  )
+
+  it('VR-16 每个 new URL(相对路径, import.meta.url) 都指向随包的文件', () => {
+    readManifest()
+    const dir = join(VENDOR_MODULES, 'three')
+    const seen: string[] = []
+    for (const file of listFiles(dir).filter((f) => f.endsWith('.js'))) {
+      for (const m of readFileSync(join(dir, file), 'utf8').matchAll(
+        /\bnew URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g
+      )) {
+        const target = posix.normalize(posix.join(posix.dirname(file), m[1]))
+        seen.push(target)
+        expect(existsSync(join(dir, target)), `${file} -> ${m[1]}`).toBe(true)
+      }
+    }
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        'examples/jsm/libs/draco/draco_decoder.wasm',
+        'examples/jsm/libs/draco/draco_wasm_wrapper.js',
+        'examples/jsm/libs/draco/draco_decoder.js',
+        'examples/jsm/libs/draco/gltf/draco_decoder.wasm',
+        'examples/jsm/libs/basis/basis_transcoder.wasm',
+        'examples/jsm/libs/basis/basis_transcoder.js'
+      ])
+    )
+    expect(LIBS.three.files!.filter((g) => /libs\/(draco|basis)/.test(g))).toEqual([])
+  })
+
+  it.each([
+    ['libs/draco/draco_decoder.js', 'DracoDecoderModule'],
+    ['libs/draco/draco_wasm_wrapper.js', 'DracoDecoderModule'],
+    ['libs/draco/gltf/draco_wasm_wrapper.js', 'DracoDecoderModule'],
+    ['libs/basis/basis_transcoder.js', 'BASIS']
+  ])('VR-17 %s 压缩之后仍定义 %s', (file, global) => {
+    readManifest()
+    const source = readFileSync(join(VENDOR_THREE_JSM, file), 'utf8')
+    expect(new Function(`${source}\n;return typeof ${global}`)()).toBe('function')
   })
 })
 

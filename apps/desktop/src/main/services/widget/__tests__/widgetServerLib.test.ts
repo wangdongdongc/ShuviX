@@ -18,12 +18,17 @@
  *   LS-8  没注册的 widget（带它自己的令牌）→ 404 `Widget … not registered`
  *   LS-9  带查询串 `?v=1` → 200（路由之前剥掉）
  *   LS-10 vendor 目录不存在 → 404，不崩、不 500
+ *   LS-11 GET basis_transcoder.wasm → 200、application/wasm、一年 immutable、Vary、ACAO *，正文 = 文件
+ *   LS-12 Accept-Encoding: gzip → 解开 = 文件、类型还是 application/wasm；HEAD → 同样的头、空正文
+ *   LS-13 不带令牌 → 403 不出字节；preview 令牌 → 200，判定一次都不问
  *   IM-1  页面里恰好一段 `<script type="importmap">`，JSON = widgetImportMap('/w/abc-def/')
  *   IM-2  顺序：主题脚本仍是第一个 <script、就绪脚本在 bundle 之前；import map 在 <base> 之后、第一个模块脚本之前，
  *         之前没有 modulepreload；带 ?shuvix-scheme=dark 也一样
  *   IM-3  map 里的每个地址（three、three/addons/ + controls/OrbitControls.js）带令牌取 → 200
  *   IM-3b 按 three 的地址解析 `./three.core.js` 再取 → 200（F-1 修好之后）
  *   IM-4  构建失败页照旧（WS-RD2 管细节；这里只看它还出得来）
+ *   IM-5  按 map 的 three/addons/ 取 libs/draco/ 的 draco_decoder.wasm、draco_wasm_wrapper.js 与 libs/basis/basis_transcoder.js
+ *         → 200，类型各自对
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
@@ -320,6 +325,59 @@ describe('LS 库文件路由（真的 WidgetServer）', () => {
     expect(res.body.equals(readFileSync(MODULE_FILE))).toBe(true)
   })
 
+  describe('LS-11..13 解码器的 .wasm', () => {
+    const WASM_URL = `${LIB}/examples/jsm/libs/basis/basis_transcoder.wasm`
+    const WASM_FILE = join(
+      REAL_VENDOR,
+      'node_modules/three/examples/jsm/libs/basis/basis_transcoder.wasm'
+    )
+
+    it('LS-11 GET .wasm → 200、application/wasm、长缓存、Vary、ACAO *，正文 = 文件', async () => {
+      requireVendor()
+      const res = await http(WASM_URL)
+      const file = readFileSync(WASM_FILE)
+      expect(res.status).toBe(200)
+      expect(res.headers['content-type']).toBe('application/wasm')
+      expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+      expect(res.headers.vary).toBe('Accept-Encoding')
+      expect(res.headers['access-control-allow-origin']).toBe('*')
+      expect(res.headers['content-length']).toBe(String(file.length))
+      expect(res.body.equals(file)).toBe(true)
+    })
+
+    it('LS-12 gzip：解开 = 文件，类型不变；HEAD → 同样的头、空正文', async () => {
+      requireVendor()
+      const headers = { 'accept-encoding': 'gzip' }
+      const res = await http(WASM_URL, { headers })
+      expect(res.status).toBe(200)
+      expect(res.headers['content-encoding']).toBe('gzip')
+      expect(res.headers['content-type']).toBe('application/wasm')
+      expect(gunzipSync(res.body).equals(readFileSync(WASM_FILE))).toBe(true)
+
+      const head = await http(WASM_URL, { headers, method: 'HEAD' })
+      expect(head.status).toBe(200)
+      expect(head.body.length).toBe(0)
+      for (const name of ['content-type', 'content-length', 'cache-control', 'content-encoding']) {
+        expect(head.headers[name], name).toEqual(res.headers[name])
+      }
+    })
+
+    it('LS-13 不带令牌 → 403 不出字节；preview 令牌 → 200，判定不问', async () => {
+      requireVendor()
+      const denied = await http(WASM_URL, { token: null })
+      expect(denied.status).toBe(403)
+      expect(denied.body.includes(readFileSync(WASM_FILE).subarray(0, 64))).toBe(false)
+
+      const judge = { widget: vi.fn(() => false), readPath: vi.fn(() => false) }
+      setWidgetPreviewJudge(judge)
+      const res = await http(WASM_URL, { token: issueWidgetToken(ID, 'preview', 's1') })
+      expect(res.status).toBe(200)
+      expect(res.body.equals(readFileSync(WASM_FILE))).toBe(true)
+      expect(judge.widget).not.toHaveBeenCalled()
+      expect(judge.readPath).not.toHaveBeenCalled()
+    })
+  })
+
   it('LS-10 vendor 目录不存在 → 404，不崩', async () => {
     mocks.vendor = join(tmp, 'no-vendor-here')
     const res = await http(MODULE_URL)
@@ -403,6 +461,21 @@ describe('IM 页面骨架里的 import map', () => {
     expect(res.status).toBe(200)
     expect(
       res.body.equals(readFileSync(join(REAL_VENDOR, 'node_modules/three/build/three.core.js')))
+    ).toBe(true)
+  })
+
+  it.each([
+    ['libs/draco/draco_decoder.wasm', 'application/wasm'],
+    ['libs/draco/draco_wasm_wrapper.js', 'text/javascript; charset=utf-8'],
+    ['libs/basis/basis_transcoder.js', 'text/javascript; charset=utf-8']
+  ])('IM-5 经 map 的 three/addons/ 取 %s → 200，类型对', async (file, type) => {
+    requireVendor()
+    const { imports } = importMapOf(await page()) as { imports: Record<string, string> }
+    const res = await http(`${imports['three/addons/']}${file}`)
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toBe(type)
+    expect(
+      res.body.equals(readFileSync(join(REAL_VENDOR, 'node_modules/three/examples/jsm', file)))
     ).toBe(true)
   })
 

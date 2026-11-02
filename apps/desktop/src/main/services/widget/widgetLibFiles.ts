@@ -24,7 +24,9 @@ const LIB_PATH = /^\/lib\/((?:@[^/@]+\/)?[^/@]+)@([^/]+)\/(.+)$/
 const CONTENT_TYPES: Record<string, string> = {
   js: 'text/javascript; charset=utf-8',
   mjs: 'text/javascript; charset=utf-8',
-  css: 'text/css; charset=utf-8'
+  css: 'text/css; charset=utf-8',
+  // three 的解码器（Draco、Basis）
+  wasm: 'application/wasm'
 }
 
 /** 压过的文件（绝对路径 → gzip 字节）：vendor 只在安装时变，进程内不用失效 */

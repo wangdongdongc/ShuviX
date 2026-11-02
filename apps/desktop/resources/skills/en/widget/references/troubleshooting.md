@@ -5,11 +5,11 @@
 A failed `build` lists esbuild messages with file, line and column. Fix and build again.
 
 - `"<package>" is not available in widgets`: the package is not among the libraries ShuviX ships, which the message lists (`libraries.md`). Write it with those, or with React, `Intl` and `Date`. `api.ts` imports only `shuvix/widget-api` and `zod`.
-- `"three/addons/…" is not among the three files ShuviX ships`: use one of the addons the message lists.
+- `"three/addons/…" is not among the three files ShuviX ships`: use one the message lists, or bring that file into the widget (`libraries.md`).
 - `Importing "highlight.js" bundles every language`: import `highlight.js/lib/core` and register languages (`libraries.md`).
 - `"shuvix/widget-api" runs on ShuviX's side, not in the widget's screen`: the screen imported `api.ts` (or zod) as a value. Write `import type Api from './api'`.
 - `api.ts: …`: the API did not check out: an operation without `description` or `input`, a bad name, a schema agents cannot read (`z.date()`, `z.bigint()`, `z.map()`). The message names it; the screen was not rebuilt either.
-- `No loader is configured for ".<ext>" files`: besides code, only `.css`, `.json`, `.txt` and the images `.svg`, `.png`, `.jpg`, `.gif` import. Read other files from disk through `fs/file` (`files.md`).
+- `No loader is configured for ".<ext>" files`: besides code, only `.css`, `.json`, `.txt` and the images `.svg`, `.png`, `.jpg`, `.gif` import. Import any other text file with `?raw`, and read the rest from disk through `fs/file` (`files.md`).
 - `Build already in progress`: another build of the same widget is running; build again.
 
 ## The window is blank or shows a message

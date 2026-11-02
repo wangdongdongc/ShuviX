@@ -41,6 +41,14 @@
  *         stderr 说 `dup: both <源 1> and <源 2> would be vendored to <vendor 里同一个位置>`，没有 manifest（F-6）
  *   VS-13 重跑干净且稳定：种一个 vendor/node_modules/stale/x.js 再跑 → stale 没了，两次的文件清单、内容与 manifest 一样
  *   VS-14 两个库共用的 depc@1 只拷一次、只数一次：manifest.fileCount = 实际文件数
+ *   VS-15 files 里 `!` 开头的 glob 把文件拿回去：skip.js 不在，package.json 照在，fileCount = 实际文件数
+ *   VS-16 files 带上的二进制（字节里有 0xFF）→ 逐字节拷贝、算进 fileCount、不压缩；旁边的 .js 照压
+ *   VS-17 served 文件 `from 'libs/addons/y.js'`（经 import map 指回包里）：y 不在 files 里也拷，y 再相对 import 的 z 也拷
+ *   VS-18 经 import map 指回的文件不存在 → 非 0，`libs/addons/x.js imports addons/nope.js, which does not exist`，没有 manifest
+ *   VS-19 钉住：被 `!` 拿掉、却被拷进来的文件相对 import 的 → 又回来了（脚本不替排除兜底，VR-13 / VR-14 查真 vendor）
+ *   VS-20 `from 'libs/addons/../../outside.js'` → 与 VS-11b 一样是「出了包」，外面的文件不进 vendor
+ *   VS-21 `new URL('<相对路径>', import.meta.url)`（three 的解码器）也进闭包：非 JS 的目标逐字节拷贝、不当代码解析（里面写着
+ *         from './nope.js' 也不报错），JS 的目标压缩且接着往下找；目标不存在 → 非 0；非字面量、绝对网址、别的基址都不跟
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -521,5 +529,171 @@ describe('VS-8..13 失败要响亮、重跑要干净', () => {
     expect(second.status).toBe(0)
     expect(existsSync(join(fx.modules, 'stale'))).toBe(false)
     expect(snapshot(fx.vendor)).toEqual(first)
+  })
+})
+
+// ────────────────────────────── files 的排除、经 import map 指回包里 ──────────────────────────────
+
+describe('VS-15..21 served 库的挑法与闭包', () => {
+  let fx: Fixture
+
+  beforeEach(() => {
+    fx = makeFixture()
+  })
+
+  afterEach(() => {
+    rmSync(fx.tmp, { recursive: true, force: true })
+  })
+
+  const libsDir = (): string => join(fx.app, 'node_modules/libs')
+  const vendored = (file: string): string => join(fx.modules, 'libs', file)
+
+  /** 只改 libs 的 files（served 照旧：`libs`、`libs/addons/`） */
+  const withFiles = (files: string[]): void => {
+    const table = structuredClone(BASE_TABLE) as Table
+    table.libraries.libs = { ...table.libraries.libs, files }
+    writeTable(fx, table)
+  }
+
+  it('VS-15 `!` 把文件拿回去；package.json 照在；fileCount = 实际文件数', () => {
+    put(join(libsDir(), 'addons/skip.js'), 'export const skip = 1\n')
+    put(join(libsDir(), 'addons/keep.js'), 'export const keep = 1\n')
+    withFiles(['build/main.js', 'addons/*.js', '!addons/skip.js'])
+
+    const r = run(fx)
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(0)
+    expect(existsSync(vendored('addons/skip.js'))).toBe(false)
+    expect(existsSync(vendored('addons/keep.js'))).toBe(true)
+    expect(existsSync(vendored('addons/x.js'))).toBe(true)
+    expect(existsSync(vendored('package.json'))).toBe(true)
+    expect(manifestOf(fx).fileCount).toBe(listFiles(fx.modules).length)
+  })
+
+  it('VS-16 二进制逐字节拷贝、算进 fileCount、不压缩；旁边的 .js 照压', () => {
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x61, 0x73, 0x6d, 0xff, 0x0a, 0x20, 0x20, 0x80])
+    const glue = '// a comment that goes away\nexport function glue() {\n    return 1\n}\n'
+    mkdirSync(join(libsDir(), 'wasm'), { recursive: true })
+    writeFileSync(join(libsDir(), 'wasm/d.wasm'), bytes)
+    put(join(libsDir(), 'wasm/glue.js'), glue)
+    withFiles(['build/main.js', 'addons/x.js', 'wasm/*'])
+
+    const r = run(fx)
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(0)
+    expect(readFileSync(vendored('wasm/d.wasm')).equals(bytes)).toBe(true)
+    const code = readFileSync(vendored('wasm/glue.js'), 'utf8')
+    expect(code).not.toContain('a comment that goes away')
+    expect(code.length).toBeLessThan(glue.length)
+    expect(manifestOf(fx).fileCount).toBe(listFiles(fx.modules).length)
+    expect(listFiles(fx.modules)).toContain('libs/wasm/d.wasm')
+  })
+
+  it('VS-17 经 import map 指回包里的文件也进闭包，它相对 import 的也进', () => {
+    put(join(libsDir(), 'addons/x.js'), "import y from 'libs/addons/y.js'\nexport default y\n")
+    put(join(libsDir(), 'addons/y.js'), "import z from './z.js'\nexport default z\n")
+    put(join(libsDir(), 'addons/z.js'), 'export default 26\n')
+    withFiles(['build/main.js', 'addons/x.js'])
+
+    const r = run(fx)
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(0)
+    expect(existsSync(vendored('addons/y.js'))).toBe(true)
+    expect(existsSync(vendored('addons/z.js'))).toBe(true)
+    expect(manifestOf(fx).fileCount).toBe(listFiles(fx.modules).length)
+  })
+
+  it('VS-18 经 import map 指回的文件不存在 → 非 0，点名文件，没有 manifest', () => {
+    put(join(libsDir(), 'addons/x.js'), "import n from 'libs/addons/nope.js'\nexport default n\n")
+
+    const r = run(fx)
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('libs/addons/x.js imports addons/nope.js, which does not exist')
+    expect(existsSync(join(fx.vendor, 'manifest.json'))).toBe(false)
+  })
+
+  it('VS-19 钉住：被 `!` 拿掉、却被拷进来的文件相对 import 的 → 又回来了', () => {
+    put(join(libsDir(), 'addons/x.js'), "import s from './skip.js'\nexport default s\n")
+    put(join(libsDir(), 'addons/skip.js'), 'export default 1\n')
+    withFiles(['build/main.js', 'addons/*.js', '!addons/skip.js'])
+
+    const r = run(fx)
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(0)
+    expect(existsSync(vendored('addons/skip.js'))).toBe(true)
+  })
+
+  it('VS-20 经 import map 指回、又用 .. 跑出包 → 非 0，外面的文件不进 vendor', () => {
+    put(join(fx.app, 'node_modules/outside.js'), 'export default 0\n')
+    put(
+      join(libsDir(), 'addons/x.js'),
+      "import o from 'libs/addons/../../outside.js'\nexport default o\n"
+    )
+
+    const r = run(fx)
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain(
+      'libs/addons/x.js imports ../outside.js, which is outside the package'
+    )
+    expect(existsSync(join(fx.vendor, 'manifest.json'))).toBe(false)
+    expect(listFiles(fx.vendor).filter((p) => p.endsWith('outside.js'))).toEqual([])
+  })
+
+  describe('VS-21 new URL(相对路径, import.meta.url)', () => {
+    /** 字节里写着一句 import：当代码解析的话会报 ./nope.js 不存在 */
+    const WASM = Buffer.concat([
+      Buffer.from([0x00, 0x61, 0x73, 0x6d, 0xff]),
+      Buffer.from(`from './nope.js'\nimport('./nope.js')\n`)
+    ])
+
+    const withLoader = (extra = ''): void => {
+      put(
+        join(libsDir(), 'addons/x.js'),
+        `export const a = new URL('../dec/d.wasm', import.meta.url)
+export const b = new URL( "../dec/wrap.js", import.meta.url ).toString()
+${extra}
+`
+      )
+      mkdirSync(join(libsDir(), 'dec'), { recursive: true })
+      writeFileSync(join(libsDir(), 'dec/d.wasm'), WASM)
+      put(
+        join(libsDir(), 'dec/wrap.js'),
+        "// wrapper comment\nexport const w = new URL('./inner.txt', import.meta.url)\n"
+      )
+      writeFileSync(join(libsDir(), 'dec/inner.txt'), "from './nope.js'\n")
+    }
+
+    it('VS-21 非 JS 的目标逐字节拷贝、不解析；JS 的目标压缩且接着往下找', () => {
+      withLoader()
+      const r = run(fx)
+      expect(r.stderr).toBe('')
+      expect(r.status).toBe(0)
+      expect(readFileSync(vendored('dec/d.wasm')).equals(WASM)).toBe(true)
+      expect(readFileSync(vendored('dec/inner.txt'), 'utf8')).toBe("from './nope.js'\n")
+      expect(readFileSync(vendored('dec/wrap.js'), 'utf8')).not.toContain('wrapper comment')
+      expect(manifestOf(fx).fileCount).toBe(listFiles(fx.modules).length)
+    })
+
+    it('VS-21 目标不存在 → 非 0，点名文件，没有 manifest', () => {
+      withLoader(`export const c = new URL('../dec/nope.wasm', import.meta.url)`)
+      const r = run(fx)
+      expect(r.status).not.toBe(0)
+      expect(r.stderr).toContain('libs/addons/x.js imports ../dec/nope.wasm, which does not exist')
+      expect(existsSync(join(fx.vendor, 'manifest.json'))).toBe(false)
+    })
+
+    it('VS-21 非字面量、绝对网址、别的基址都不跟', () => {
+      withLoader(`const name = 'unused'
+export const c = new URL(name + '.js', import.meta.url)
+export const d = new URL('https://example.com/x.wasm', import.meta.url)
+export const e = new URL('../dec/other.wasm', location.href)
+`)
+      writeFileSync(join(libsDir(), 'dec/other.wasm'), 'other\n')
+      const r = run(fx)
+      expect(r.stderr).toBe('')
+      expect(r.status).toBe(0)
+      expect(existsSync(vendored('dec/other.wasm'))).toBe(false)
+      expect(existsSync(vendored('dec/d.wasm'))).toBe(true)
+    })
   })
 })

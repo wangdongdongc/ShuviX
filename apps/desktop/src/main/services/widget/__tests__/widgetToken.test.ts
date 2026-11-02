@@ -10,6 +10,7 @@
  *         别的源、没有发起页面 → 不补
  *   WT-5  widgetToInject 文档加载：ShuviX 自己的界面（父 frame 是应用页面）、没有 Referer、同一 widget 的重载 → 补；
  *         父 frame 或 Referer 是**别的** widget 的页面 → 不补；目标不是 widget 路由 → 不补
+ *   WT-P1 fs/path 的地址：widgetIdOf 认得出；页面里取它旁边的文件（图片这样的子资源）→ 补那个 widget 的；别的 widget 的页面 → 不补
  *   WT-6  installWidgetTokens：钩在 127.0.0.1 / localhost 上；该补的补上那个 widget 的 ui 令牌（服务端认得出）；页面
  *         冒充的同名头（任何大小写）一律去掉；其余头原样；frame 访问抛错当作没有；端口现取
  *   WT4-PV-01 preview 令牌带会话：载荷 `{w, s:'preview', sid}`，验出 `{scope:'preview', sessionId}`；ui 验出来没有
@@ -104,6 +105,10 @@ describe('认 widget 路由', () => {
     expect(widgetIdOf(url as string | undefined, PORT)).toBe(id)
   })
 
+  it('WT-P1 fs/path 的地址 → 路径里的 id', () => {
+    expect(widgetIdOf(`${BASE}/w/a-b/fs/path/~/m.gltf`, PORT)).toBe('a-b')
+  })
+
   it('WT-3 端口 0（服务还没起来）→ null', () => {
     expect(widgetIdOf('http://127.0.0.1:0/w/a-b/', 0)).toBeNull()
   })
@@ -136,6 +141,18 @@ describe('补给谁', () => {
     ['别的 widget 跳过来', 'mainFrame', { referrer: `${BASE}/w/c-d/` }, null]
   ])('WT-5 文档加载：%s', (_label, resourceType, facts, expected) => {
     expect(widgetToInject({ url: `${BASE}/w/a-b/`, resourceType, ...facts }, PORT)).toBe(expected)
+  })
+
+  it.each([
+    ['那个 widget 的页面', `${BASE}/w/a-b/`, 'a-b'],
+    ['别的 widget 的页面', `${BASE}/w/c-d/`, null]
+  ])('WT-P1 fs/path 上的图片子资源，发起它的是%s', (_label, frameUrl, expected) => {
+    expect(
+      widgetToInject(
+        { url: `${BASE}/w/a-b/fs/path/~/m/tex.png`, resourceType: 'image', frameUrl },
+        PORT
+      )
+    ).toBe(expected)
   })
 
   it('WT-5 目标不是 widget 路由 → 不补', () => {

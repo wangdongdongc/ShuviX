@@ -69,7 +69,29 @@ const html = hljs.highlight(code, { language: 'javascript' }).value
 
 不提供 highlight.js 的主题：在小组件的 `.css` 文件里用主题变量给它的类上色（`.hljs-keyword { color: var(--widget-accent) }`、`.hljs-string { color: var(--widget-viz-2-ink) }`、`.hljs-comment { color: var(--widget-fg-subtle) }`）。
 
-**three.js** 很大，所以不打进小组件：ShuviX 提供共用的一份，import 照样写 `import * as THREE from 'three'`。addon 从 `three/addons/…` import；提供的有：`controls/` 里的所有控制器（`OrbitControls`、`MapControls`、`TrackballControls`、`TransformControls` …），加载器 `GLTFLoader`、`OBJLoader`、`MTLLoader`、`STLLoader` 和 `PLYLoader`，`environments/RoomEnvironment.js`、`renderers/CSS2DRenderer.js`、`geometries/RoundedBoxGeometry.js`，以及 `utils/BufferGeometryUtils.js` 和 `utils/SkeletonUtils.js`。别的 addon 会让构建失败，报错里会列出提供了哪些。没有 React Three Fiber。在一个容器 `ref` 上的 effect 里创建渲染器，用 `ResizeObserver` 定大小，用 `renderer.setAnimationLoop` 跑循环，在清理函数里停掉循环并 dispose 渲染器和控制器。背景和材质的颜色取自 `themeColor()`（`new THREE.Color(themeColor('surface'))`）。用户电脑上的模型和别的文件一样，从它的 `fs/file` 地址加载（`files.md`）。
+**three.js** 很大，所以不打进小组件：ShuviX 提供共用的一份，import 照样写 `import * as THREE from 'three'`。addon 从 `three/addons/…` import，能在 WebGL 渲染器上跑的都有：控制器、加载器（glTF、FBX、OBJ、STL、PLY、Collada、3MF、HDR、EXR、KTX2 等等）、后处理、着色器、几何体、辅助对象和工具。没有的：WebGPU 与 TSL 那些文件、`Addons.js`（每个 addon 按自己的路径 import），以及要用别处的库的 `TTFLoader`、`3DMLoader`、`DRACOExporter` 和 `physics/`。构建报错会说那个文件夹里有什么。没有 React Three Fiber。在一个容器 `ref` 上的 effect 里创建渲染器，用 `ResizeObserver` 定大小，用 `renderer.setAnimationLoop` 跑循环，在清理函数里停掉循环并 dispose 渲染器和控制器。背景和材质的颜色取自 `themeColor()`（`new THREE.Color(themeColor('surface'))`）。
+
+**用户电脑上的模型**从它的 `fileAtUrl` 地址加载（`files.md`），不要用 `fileUrl`：模型大多提到旁边的其他文件，加载器从这个地址能自己找到它们，不用 `LoadingManager` 改写。压缩过的模型还要解码器，这些也提供，加载器不用指定解码器路径就能找到：
+
+```ts
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
+
+new GLTFLoader()
+  .setDRACOLoader(new DRACOLoader())
+  .setKTX2Loader(new KTX2Loader().detectSupport(renderer))
+  .setMeshoptDecoder(MeshoptDecoder)
+  .load(fileAtUrl('~/models/robot/robot.gltf'), (gltf) => {
+    scene.add(gltf.scene)
+    document.body.dataset.ready = '1'
+  })
+```
+
+**检查 3D 界面**：`preview` 会等页面的请求，但不等解析和第一次绘制。像上面那样在模型画好时标个记号，再用 `wait_for: "[data-ready]"` 预览。没有 GPU 的服务器上它也能渲染 WebGL，走软件渲染，所以重的场景在那里会慢。着色器错误会出现在它返回的错误里。
+
+**没有提供的 addon**，比如 three 已经删掉的（`.pmx` 用的 `MMDLoader` 最后出现在 three 0.171.0）：把它和它 import 的文件从那个版本下载到小组件的文件夹里，例如 `curl -L https://unpkg.com/three@0.171.0/examples/jsm/loaders/MMDLoader.js`，保持相对目录，用相对路径 import。这样它就是小组件自己的代码，离线也能用。里面的 `from 'three'` 不要动，让它跑在共用的那一份上，然后预览。只有出现着色器错误时才需要它原本配的引擎：把那个版本的 `build/three.module.min.js` 也下载下来（小组件会多大约 700 KB），把 addon 和你自己文件里每一处 `from 'three'` 都改成指向它的相对路径，再用 `grep -rn "from 'three'" .` 确认一处不剩。一个页面上有两份 three，模型会不声不响地显示不出来。不要为了绕开这些去造带自己 import map 或 blob 地址的 iframe。
 
 ## 导出
 

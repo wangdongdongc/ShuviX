@@ -1,9 +1,10 @@
 /**
- * widget 的文件路由（`/w/<id>/fs/file`、`/w/<id>/fs/list`，路由表与理由见 `shared/widgetRoutes.ts`）——
+ * widget 的文件路由（`/w/<id>/fs/file`、`/w/<id>/fs/path/…`、`/w/<id>/fs/list`，路由表与理由见 `shared/widgetRoutes.ts`）——
  * widget 代码读本机文件的写法，桌面直连与远程转发是同一个地址。只读：要存东西用 widget 的数据库。
  *
  *  - `fs/file?path=`：回文件字节（`utils/httpFile.ts`，与网络服务的 `/files/media` 同一段：按扩展名给 MIME、
  *    Range → 206 / 416、HEAD 只回头；不在 / 不是文件 → 404，没权限 → 403）；
+ *  - `fs/path/<路径>`：同 `fs/file`，路径写在 URL 的路径里（文件里记的相对地址由浏览器解析到它旁边的文件）；
  *  - `fs/list?path=`：回 `WidgetDirListing`（JSON，按名字排序、跟随符号链接看类型，超过上限截断）；出错也回
  *    JSON `{ code, message }`，与 `db/` 的错误同一个形状，widget 照样 `res.json()`。
  *
@@ -14,9 +15,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import {
+  WIDGET_FILE_PATH_PREFIX,
   WIDGET_FILE_ROUTE,
   WIDGET_LIST_LIMIT,
   WIDGET_LIST_ROUTE,
+  widgetPathFromRoute,
   type WidgetDirEntry,
   type WidgetDirListing
 } from '../../../shared/widgetRoutes'
@@ -36,6 +39,13 @@ export function resolveWidgetFilePath(
   else if (path.startsWith('~/') || path.startsWith('~\\')) path = join(home, path.slice(2))
   if (!isAbsolute(path)) return undefined
   return resolve(path)
+}
+
+/** 这次请求要读的路径（已展开、归一）：`fs/path/…` 在 URL 的路径里，别的在查询串的 `path`。没有或不合法 → undefined */
+export function widgetRequestPath(route: string, search: URLSearchParams): string | undefined {
+  return resolveWidgetFilePath(
+    route.startsWith(WIDGET_FILE_PATH_PREFIX) ? widgetPathFromRoute(route) : search.get('path')
+  )
 }
 
 /** JSON 应答（HEAD 的正文由 node:http 自己丢掉） */
@@ -100,7 +110,7 @@ export async function serveWidgetFiles(
   search: URLSearchParams
 ): Promise<void> {
   const isList = route === WIDGET_LIST_ROUTE
-  if (route !== WIDGET_FILE_ROUTE && !isList) {
+  if (route !== WIDGET_FILE_ROUTE && !isList && !route.startsWith(WIDGET_FILE_PATH_PREFIX)) {
     plainResponse(res, 404, 'Not found.')
     return
   }
@@ -110,7 +120,7 @@ export async function serveWidgetFiles(
     else plainResponse(res, 405, 'Method not allowed.')
     return
   }
-  const path = resolveWidgetFilePath(search.get('path'))
+  const path = widgetRequestPath(route, search)
   if (path === undefined) {
     const message = 'path must be an absolute path or start with ~'
     if (isList) respondJson(res, 400, { code: 'BAD_PATH', message })

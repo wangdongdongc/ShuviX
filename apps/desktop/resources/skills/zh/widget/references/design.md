@@ -70,7 +70,7 @@ const colors = useMemo(() => ({ line: themeColor('viz-1'), grid: themeColor('lin
 ## 资源
 
 - 随小组件一起提供的图片放在它的目录里，并通过 import 引入（`import logo from './logo.svg'`）：`.svg`、`.png`、`.jpg` 和 `.gif` 会变成内联 data URL，所以要保持小。其他图片格式不能 import；改为通过 `fs/file` 从磁盘读取（`files.md`）。
-- 随小组件提供的固定数据也可以 import：`.json` 得到解析后的值，`.txt` 得到字符串。
+- 随小组件提供的固定数据也可以 import：`.json` 得到解析后的值，`.txt` 得到字符串，别的文件加上 `?raw` 也得到字符串（`import vertex from './shader.vert?raw'`）。
 - 样式写在 `className` 里。组件里 import 的 `.css` 文件也会被打包，用于 Tailwind 表达不了的东西。
 - 图标用 `lucide-react`（`libraries.md`）：`<Trash2 className="size-4" />`。它们用 `currentColor` 画，所以用文字颜色名给它们上色。
 
@@ -80,3 +80,4 @@ const colors = useMemo(() => ({ line: themeColor('viz-1'), grid: themeColor('lin
 
 - `sizes: ["phone", "panel"]` 只预览这几种尺寸；`theme: "light"` 或 `"dark"` 显示用户的浅色或深色主题（缺省是应用此刻显示的那套）。另一侧也看一次：写在主题颜色名之外的颜色会在那里露出来。
 - 它显示的是上一次构建的结果：每次预览之前先构建。
+- 它会等页面的请求结束（最多 10 秒，没结束会说一声）。请求之后的事，比如解析和绘制模型，让页面在完成时标个记号（`document.body.dataset.ready = '1'`），再传 `wait_for: "[data-ready]"`。`wait_for` 一直没出现会写在错误里，这也是你得知它没做完的办法。窗口在截图后马上关闭，所以那时还在跑的事情不会完成。

@@ -23,6 +23,10 @@
  *   PV-E7  已注册但上一次构建失败（B2）→ `build` 的结果是错误、预览没有图、一句「先 build」
  *   PV-E8  页面出不去：弹窗被拒、导航到别处被拦、通知权限被拒；夹具服务器一个请求都没收到；只建了一扇窗
  *   PV-E11 两条会话同时预览：各自的结果、互不串
+ *   PV-E13 页面串着取六次 `theme.css?i`（间隔 300ms）之后才涂绿：`preview` 面板尺寸 → 正中是绿的、没有错误。同时证明真的
+ *          EventSource（页面骨架连着 /sse）不拖住等待（PV-E1 钉着普通页面没有错误）
+ *   PV-E14 页面 3s 定时器之后涂蓝、设 body[data-ready]，其间不发请求：`wait_for: '[data-ready]'`、面板 + 手机 → 都是蓝的；
+ *          不给 wait_for → 不是蓝的；`wait_for: 'a[['` → 一句选择器写错、照样有图。等 30s 的那条只在单测里
  *   PV-E12 应用活着、没有未捕获异常、没留下窗口、所有预览窗都没显示过、没弹原生框、没交给系统打开任何东西；问过的恰是每条会话
  *          第一次碰的那几个组件
  *
@@ -134,6 +138,30 @@ throw new Error('boom-preview')
 `
 
 const BROKEN_SOURCE = 'const x = ;\n'
+
+const fullScreen = (color: string): string =>
+  `<div style="position:fixed;inset:0;background:${color}"></div>`
+
+/** 串着取六次（每次之间隔 300ms）之后才涂绿：只等 settle 的话截到的是还没涂的 */
+const CHAIN_SOURCE = `const root = document.getElementById('root')
+if (root) root.innerHTML = '<p>loading</p>'
+;(async () => {
+  for (let i = 0; i < 6; i++) {
+    await fetch('theme.css?' + i).then((r) => r.text())
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  if (root) root.innerHTML = ${JSON.stringify(fullScreen('rgb(0,255,0)'))}
+})()
+`
+
+/** 3s 之后涂蓝、标个记号，其间一个请求都不发（请求那条等待等不到它） */
+const LATE_SOURCE = `const root = document.getElementById('root')
+if (root) root.innerHTML = '<p>waiting</p>'
+setTimeout(() => {
+  if (root) root.innerHTML = ${JSON.stringify(fullScreen('rgb(0,0,255)'))}
+  document.body.dataset.ready = '1'
+}, 3000)
+`
 
 const escapeSource = (): string => `const root = document.getElementById('root')
 if (root) root.innerHTML = ${JSON.stringify(RED_BLOCK)}
@@ -332,13 +360,14 @@ async function runWidget(session: string, args: Record<string, unknown>): Promis
 
 const preview = (
   id: string,
-  opts: { sizes?: string[]; theme?: string; session?: string } = {}
+  opts: { sizes?: string[]; theme?: string; session?: string; waitFor?: string } = {}
 ): Promise<WidgetRun> =>
   runWidget(opts.session ?? sid, {
     action: 'preview',
     widget: id,
     ...(opts.sizes ? { sizes: opts.sizes } : {}),
-    ...(opts.theme ? { theme: opts.theme } : {})
+    ...(opts.theme ? { theme: opts.theme } : {}),
+    ...(opts.waitFor ? { wait_for: opts.waitFor } : {})
   })
 
 const build = (id: string): Promise<WidgetRun> => runWidget(sid, { action: 'build', widget: id })
@@ -416,7 +445,9 @@ beforeAll(async () => {
     ['pv-broken', BROKEN_SOURCE],
     ['pv-regress', plainSource()],
     ['pv-escape', escapeSource()],
-    ['pv-unused', plainSource()]
+    ['pv-unused', plainSource()],
+    ['pv-chain', CHAIN_SOURCE],
+    ['pv-late', LATE_SOURCE]
   ].forEach(([id, source], i) => seedWidget(id, source, i))
   probe = syncProbe(app.main)
   await probe.install()
@@ -760,6 +791,43 @@ describe('widget tool: preview', () => {
   )
 
   it(
+    "PV-E13 waits for a chain of requests before capturing; the page's EventSource does not hold it",
+    async () => {
+      const text = ok(await preview('pv-chain', { sizes: ['panel'] }))
+      expect(headers(text)).toEqual(['panel (380×760, app theme):'])
+      expect(errorsOf(text)).toEqual([])
+      const [center] = await pixelsOf(shotPath('pv-chain', 'panel'), [[190, 380]])
+      expect(isGreen(center), JSON.stringify(center)).toBe(true)
+    },
+    IT_TIMEOUT
+  )
+
+  it(
+    'PV-E14 wait_for holds the capture until the marker; without it the page is caught early; a bad selector is one line',
+    async () => {
+      const waited = ok(
+        await preview('pv-late', { sizes: ['panel', 'phone'], waitFor: '[data-ready]' })
+      )
+      expect(errorsOf(waited)).toEqual([])
+      const [panelCenter] = await pixelsOf(shotPath('pv-late', 'panel'), [[190, 380]])
+      const [phoneCenter] = await pixelsOf(shotPath('pv-late', 'phone'), [[195, 390]])
+      expect(isBlue(panelCenter), JSON.stringify(panelCenter)).toBe(true)
+      expect(isBlue(phoneCenter), JSON.stringify(phoneCenter)).toBe(true)
+
+      // 对照：不给 wait_for，页面没发请求，1s 不到就截了
+      const early = ok(await preview('pv-late', { sizes: ['panel'] }))
+      expect(errorsOf(early)).toEqual([])
+      const [earlyCenter] = await pixelsOf(shotPath('pv-late', 'panel'), [[190, 380]])
+      expect(isBlue(earlyCenter), JSON.stringify(earlyCenter)).toBe(false)
+
+      const invalid = ok(await preview('pv-late', { sizes: ['panel'], waitFor: 'a[[' }))
+      expect(errorsOf(invalid)).toEqual(['wait_for "a[[" is not a valid CSS selector'])
+      expect(headers(invalid)).toEqual(['panel (380×760, app theme):'])
+    },
+    IT_TIMEOUT
+  )
+
+  it(
     'PV-E12 the app is alive and nothing leaked, nothing was shown, nothing was handed to the system',
     async () => {
       expect(() => process.kill(app.pid, 0)).not.toThrow()
@@ -768,8 +836,8 @@ describe('widget tool: preview', () => {
       await backToBaseline()
 
       const wins = await expectUnseenAndClosed(0)
-      // 每次预览每个尺寸恰一扇：E1 3 + E2 3 + E3 6 + E5 3 + E4 2 + E7 1 + E8 1 + E11 2
-      expect(wins).toHaveLength(21)
+      // 每次预览每个尺寸恰一扇：E1 3 + E2 3 + E3 6 + E5 3 + E4 2 + E7 1 + E8 1 + E11 2 + E13 1 + E14 4
+      expect(wins).toHaveLength(26)
       expect(nativeDialogRequests(app)).toEqual([])
       expect(externalOpens(app)).toEqual([])
       // 每条会话第一次碰的那几个组件各问了一次，别的没问
@@ -780,7 +848,9 @@ describe('widget tool: preview', () => {
         { session: sid, widgetId: 'pv-broken', access: 'read', operation: 'preview' },
         { session: sid, widgetId: 'pv-regress', access: 'write', operation: 'build' },
         { session: sid, widgetId: 'pv-escape', access: 'read', operation: 'preview' },
-        { session: sid2, widgetId: 'pv-probe', access: 'read', operation: 'preview' }
+        { session: sid2, widgetId: 'pv-probe', access: 'read', operation: 'preview' },
+        { session: sid, widgetId: 'pv-chain', access: 'read', operation: 'preview' },
+        { session: sid, widgetId: 'pv-late', access: 'read', operation: 'preview' }
       ])
     },
     IT_TIMEOUT

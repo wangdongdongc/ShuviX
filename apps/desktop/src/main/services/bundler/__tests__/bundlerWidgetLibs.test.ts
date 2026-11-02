@@ -31,9 +31,20 @@
  *   B-9c  highlight.js/lib/common → 照样成功（F-9 裁决：只挡裸的 highlight.js）
  *   B-10  three 外置：three、OrbitControls、GLTFLoader 都留作外部模块；three 本身不进产物；比基线多不到 20 KB
  *   B-10b `await import('three')` → 留着 `import("three")`
- *   B-11  没随包的 addon → 「not among the three files … Available: …」，清单排好序、以 three 开头、每项 vendor 里都有
+ *   B-11  没随包的 addon（TTFLoader）→ 「not among the three files … Available: …」，清单正好是 vendor 里 loaders/ 下直接的
+ *         .js，排好序，没有 three、没有子目录里的文件
  *   B-12  别的写法（不带 .js、examples/jsm 直写、build 直写、webgpu、addons/ 本身）→ B-11 的形状，不内联那 1 MB
  *   B-12e 带 `..` 的 addon 路径 → B-11 的形状（F-3）
+ *   B-25  问的文件夹在 vendor 里（`loaders/Nope.js`、`loaders/`）→ 只列那个文件夹直接的文件：都带前缀、不再有 `/`、排好序、
+ *         每项 vendor 里都有
+ *   B-26  问的不在任何文件夹里（Addons.js、tsl/…、three/tsl、three/webgpu、physics/…）→ three 打头，其余都是 `/` 结尾的文件夹，
+ *         少于 40 项，含 three/addons/libs/draco/gltf/
+ *   B-27  每句 not among 都以「To use another file, copy it …from three@<版本>…」收尾
+ *   B-28  文件夹本身（`three/addons/loaders`，不带斜杠）→ not among，不留作外部模块（运行时才 404）
+ *   B-29  `.wasm` 当 JS import → not among（浏览器不能当模块加载）
+ *   B-30  postprocessing/EffectComposer.js、loaders/collada/ColladaParser.js、libs/meshopt_decoder.module.js → 成功，留作
+ *         `from"three/addons/…"`，不内联
+ *   B-31  `import.meta.resolve('three/addons/libs/draco/gltf/')` 原样留在产物里，构建不报错
  *   B-13  process.env.NODE_ENV 换成 "production"：开发分支被摇掉，产物里一处 process.env 都没有
  *   B-14  压缩不改名字：`function keepThisName(a){return a+1}`
  *   B-15  vendor 目录不存在：只用 React 照样成功；dayjs、three → 「libraries are missing」；left-pad → B-7；
@@ -50,7 +61,21 @@
  *   B-23  组件自己 tsconfig 的 paths 别名：落在组件目录里（不在 node_modules 下）→ 照收；指到外面或组件的
  *         node_modules → 不可用（F-12 裁决）
  *   B-24  bundlerWidgetClient.test.ts 的 WC-70..81 照旧（那边跑）
+ *   BR-1  `./x?raw`（.js / .ts / .css / .json / .vert / 没扩展名）→ 文件的文本：字符串、与文件一字不差；模块没跑、CSS 没进
+ *         outputCSS、JSON 没解析（JSDOM 里跑）
+ *   BR-2  文本里有 é中文、反引号、`${x}`、`</script>`、CRLF、process.env.NODE_ENV、字面的 `\n` → 严格相等（define 与压缩都不碰）
+ *   BR-3  `./a.js` 与 `./a.js?raw` 同在一次构建：模块只跑一次、回 MODULE；raw 是文本；两处 raw 是同一个字符串
+ *   BR-4  raw 文件的文本里写着 import "../../outside.txt" → 成功，不跟进去，外面的内容不在产物里
+ *   BR-5  `(await import('./a.js?raw')).default` 与 `require('./a.js?raw')` → 文本
+ *   BR-6  `./mod?raw`（只有 mod.ts）→ TS 的文本
+ *   BR-7  `./nope.txt?raw`、`./sub?raw`（目录、没有 index）→ `Could not resolve "<spec>"`，位置 index.tsx:1:…
+ *   BR-8  外面的：`../secret.txt?raw`、`../only?raw`、`./link.txt?raw`、`./ldir/f.txt?raw`、sub/x.ts 的 `../../secret.txt?raw` →
+ *         outside；`../secret?raw`、`../pkg?raw` → Could not resolve（?raw 不落到 esbuild 自己的解析）；都不带标记。
+ *         对照：sub/ 里的 `../a.js?raw` 成功
+ *   BR-9  `./data?raw`（只有 data.json）→ `Could not resolve "./data?raw"`，绝不是解析好的模块
+ *   BR-10 CSS 里 `?raw` 是个普通后缀：`url(./a.svg?raw)` 与 `?v=1` 同样是 image/svg+xml 的 data URL；`@import "./s.css?raw"` 内联
  *   BA-1  api.ts import 表里的库 → 照旧拒绝（库只给界面）
+ *   （api.ts 的 `?raw` 是 bundlerBuildApi.test.ts 的 BR-11）
  */
 import {
   existsSync,
@@ -779,71 +804,177 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'`,
     T
   )
 
-  /** B-11 那句的 Available 清单 */
+  /** B-11 那句的 Available 清单（句子后面还跟着「To use another file …」） */
   function availableOf(r: Built, spec: string): string[] {
     const message = messages(r).find((m) => m.startsWith(NOT_SHIPPED(spec)))
     expect(message, (r.errors ?? []).join('\n')).toBeDefined()
-    const m = / Available: (.*)\.$/.exec(message!)
+    const m = / Available: (.*?)\. To use another file/.exec(message!)
     expect(m, message).not.toBeNull()
     return m![1].split(', ')
   }
 
+  const importingAll = (spec: string): string => `import * as X from '${spec}'\nconsole.log(X)\n`
+
+  /** vendor 里 three 的 loaders/ 下直接的 .js，写成 import 的样子 */
+  const loadersInVendor = (): string[] =>
+    readdirSync(join(THREE_JSM, 'loaders'), { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith('.js'))
+      .map((e) => `three/addons/loaders/${e.name}`)
+      .sort()
+
   it(
-    'B-11 没随包的 addon → not among … Available: 排好序的清单，每项 vendor 里都有',
+    'B-11 没随包的 addon → not among，Available 正好是 loaders/ 下直接的 .js',
     async () => {
       requireVendor()
-      const spec = 'three/addons/postprocessing/EffectComposer.js'
-      const r = await build({
-        'index.tsx': `import { EffectComposer } from '${spec}'\nconsole.log(EffectComposer)\n`
-      })
+      const spec = 'three/addons/loaders/TTFLoader.js'
+      expect(existsSync(join(THREE_JSM, 'loaders/TTFLoader.js'))).toBe(false)
+      const r = await build({ 'index.tsx': importingAll(spec) })
       expect(r.success).toBe(false)
       expect(r.outputJS).toBeUndefined()
       const list = availableOf(r, spec)
-      expect(list).toEqual([...list].sort())
-      expect(list[0]).toBe('three')
-      for (const addon of [
-        'three/addons/controls/OrbitControls.js',
-        'three/addons/loaders/GLTFLoader.js',
-        'three/addons/utils/BufferGeometryUtils.js'
-      ]) {
-        expect(list).toContain(addon)
-      }
-      for (const addon of list.slice(1)) {
-        expect(addon.startsWith('three/addons/'), addon).toBe(true)
-        expect(existsSync(join(THREE_JSM, addon.slice('three/addons/'.length))), addon).toBe(true)
-      }
-      // vendor 里 examples/jsm 下的每个 .js 都列出来了
-      const listed = (dir: string, rel = ''): string[] =>
-        readdirSync(join(dir, rel), { withFileTypes: true }).flatMap((e) => {
-          const p = rel ? `${rel}/${e.name}` : e.name
-          return e.isDirectory()
-            ? listed(dir, p)
-            : e.name.endsWith('.js')
-              ? [`three/addons/${p}`]
-              : []
-        })
-      expect(list.slice(1).sort()).toEqual(listed(THREE_JSM).sort())
+      expect(list).toEqual(loadersInVendor())
+      expect(list).not.toContain('three')
+      expect(list).not.toContain('three/addons/loaders/collada/ColladaParser.js')
     },
     T
   )
 
   it.each([
-    'three/addons/controls/OrbitControls',
-    'three/examples/jsm/controls/OrbitControls.js',
-    'three/build/three.module.js',
-    'three/webgpu',
-    'three/addons/',
+    // 文件夹在 vendor 里：只列那个文件夹
+    ['three/addons/controls/OrbitControls', 'three/addons/controls/ArcballControls.js'],
+    ['three/examples/jsm/controls/OrbitControls.js', 'three'],
+    ['three/build/three.module.js', 'three'],
+    ['three/webgpu', 'three'],
+    ['three/addons/', 'three'],
     // F-3
-    'three/addons/../build/three.core.js',
-    'three/addons/controls/../../../../../../etc/hosts'
+    ['three/addons/../build/three.core.js', 'three'],
+    ['three/addons/controls/../../../../../../etc/hosts', 'three']
   ])(
     'B-12 %j → B-11 的形状，不内联',
-    async (spec) => {
+    async (spec, first) => {
       requireVendor()
-      const r = await build({ 'index.tsx': `import * as X from '${spec}'\nconsole.log(X)\n` })
+      const r = await build({ 'index.tsx': importingAll(spec) })
       expect(r.success).toBe(false)
       expect(r.outputJS).toBeUndefined()
-      expect(availableOf(r, spec)[0]).toBe('three')
+      expect(availableOf(r, spec)[0]).toBe(first)
+    },
+    T
+  )
+
+  it.each(['three/addons/loaders/Nope.js', 'three/addons/loaders/'])(
+    'B-25 %j → 只列 loaders/ 下直接的文件',
+    async (spec) => {
+      requireVendor()
+      const list = availableOf(await build({ 'index.tsx': importingAll(spec) }), spec)
+      expect(list.length).toBeGreaterThan(40)
+      expect(list).toEqual([...list].sort())
+      for (const file of list) {
+        expect(file.startsWith('three/addons/loaders/'), file).toBe(true)
+        expect(file.slice('three/addons/loaders/'.length), file).not.toContain('/')
+        expect(existsSync(join(THREE_JSM, file.slice('three/addons/'.length))), file).toBe(true)
+      }
+      expect(list).toEqual(loadersInVendor())
+    },
+    T
+  )
+
+  it.each([
+    'three/addons/Addons.js',
+    'three/addons/tsl/display/BloomNode.js',
+    'three/tsl',
+    'three/webgpu',
+    'three/addons/physics/RapierPhysics.js'
+  ])(
+    'B-26 %j 不在任何文件夹里 → three 打头，其余都是文件夹',
+    async (spec) => {
+      requireVendor()
+      const list = availableOf(await build({ 'index.tsx': importingAll(spec) }), spec)
+      expect(list[0]).toBe('three')
+      expect(list.length).toBeLessThan(40)
+      for (const folder of list.slice(1)) expect(folder.endsWith('/'), folder).toBe(true)
+      expect(list).toContain('three/addons/libs/draco/gltf/')
+      expect(list).toContain('three/addons/loaders/')
+    },
+    T
+  )
+
+  it.each([
+    'three/addons/loaders/TTFLoader.js',
+    'three/addons/loaders/',
+    'three/addons/Addons.js',
+    'three/webgpu',
+    'three/addons/loaders',
+    'three/addons/libs/basis/basis_transcoder.wasm'
+  ])(
+    'B-27 %j 那句以「怎么带进组件」收尾',
+    async (spec) => {
+      requireVendor()
+      const r = await build({ 'index.tsx': importingAll(spec) })
+      const message = messages(r).find((m) => m.startsWith(NOT_SHIPPED(spec)))
+      expect(message, (r.errors ?? []).join('\n')).toBeDefined()
+      expect(
+        message!.endsWith(
+          ` To use another file, copy it and the files it imports from three@${table.libraries.three.version} into this widget and import it by a relative path.`
+        ),
+        message
+      ).toBe(true)
+    },
+    T
+  )
+
+  it(
+    'B-28 文件夹本身（不带斜杠）→ not among，不留作外部模块',
+    async () => {
+      requireVendor()
+      const spec = 'three/addons/loaders'
+      expect(existsSync(join(THREE_JSM, 'loaders'))).toBe(true)
+      const r = await build({ 'index.tsx': importingAll(spec) })
+      expect(r.success).toBe(false)
+      expect(r.outputJS).toBeUndefined()
+      expect(messages(r).some((m) => m.startsWith(NOT_SHIPPED(spec)))).toBe(true)
+    },
+    T
+  )
+
+  it(
+    'B-29 .wasm 当 JS import → not among（文件在，但浏览器不能当模块加载）',
+    async () => {
+      requireVendor()
+      const spec = 'three/addons/libs/basis/basis_transcoder.wasm'
+      expect(existsSync(join(THREE_JSM, 'libs/basis/basis_transcoder.wasm'))).toBe(true)
+      const r = await build({ 'index.tsx': importingAll(spec) })
+      expect(r.success).toBe(false)
+      expect(r.outputJS).toBeUndefined()
+      expect(availableOf(r, spec)).toEqual(['three/addons/libs/basis/basis_transcoder.js'])
+    },
+    T
+  )
+
+  it.each([
+    'three/addons/postprocessing/EffectComposer.js',
+    'three/addons/loaders/collada/ColladaParser.js',
+    'three/addons/libs/meshopt_decoder.module.js'
+  ])(
+    'B-30 %j → 成功，留作外部模块',
+    async (spec) => {
+      requireVendor()
+      const { js } = expectOk(await build({ 'index.tsx': importingAll(spec) }))
+      expect(js).toContain(`from"${spec}"`)
+      expect(js.length).toBeLessThan(2 * 1024)
+    },
+    T
+  )
+
+  it(
+    'B-31 import.meta.resolve 原样留在产物里',
+    async () => {
+      requireVendor()
+      const { js } = expectOk(
+        await build({
+          'index.tsx': `console.log(import.meta.resolve('three/addons/libs/draco/gltf/'))\n`
+        })
+      )
+      expect(js).toContain('import.meta.resolve("three/addons/libs/draco/gltf/")')
     },
     T
   )
@@ -1186,6 +1317,273 @@ describe('B-23 组件自己的 tsconfig paths 别名（F-12）', () => {
         'index.tsx': `import { P } from 'nm/pkg'\nconsole.log(P)\n`
       })
       expectFails(r, NOT_AVAILABLE('nm/pkg'))
+    },
+    T
+  )
+})
+
+// ────────────────────────────── `?raw` ──────────────────────────────
+
+describe('BR `./x?raw` 是文件的文本', () => {
+  const MARKER = 'OUTSIDE_MARKER_Zq7'
+  /** 错误里点名的是 `?raw` 之前的那段 */
+  const OUTSIDE = (spec: string): string =>
+    `"${spec.replace(/\?raw$/, '')}" is outside this widget's directory; a widget can only import its own files.`
+
+  /** 把 `imports` 的值放到 window.__out 上，在 JSDOM 里跑，交回它 */
+  async function rawValues(
+    js: string,
+    done: string = '__out'
+  ): Promise<{ out: Record<string, unknown>; win: Record<string, unknown> }> {
+    const page = runInJsdom(js)
+    try {
+      await waitFor(() => page.win[done] !== undefined)
+      expect(page.errors).toEqual([])
+      return { out: page.win[done] as Record<string, unknown>, win: page.win }
+    } finally {
+      page.close()
+    }
+  }
+
+  it(
+    'BR-1 各种扩展名都是字符串、一字不差；模块没跑、CSS 没进产物、JSON 没解析',
+    async () => {
+      const texts: Record<string, string> = {
+        // 都写在一行：runInJsdom 查产物里有没有行首的 export，模板字符串里的那行会被它当成顶层语句
+        'a.js': `window.__ran = true; export default 'MODULE'\n`,
+        'b.ts': `export const b: number = 1\n`,
+        'c.css': `.raw-c { color: red }\n`,
+        'd.json': `{ "d":   1 }\n`,
+        'e.vert': `void main() { gl_Position = vec4(0.0); }\n`,
+        LICENSE: `MIT License\n`
+      }
+      const names = Object.keys(texts)
+      const { js, css } = expectOk(
+        await build({
+          ...texts,
+          'index.tsx':
+            names.map((name, i) => `import v${i} from './${name}?raw'`).join('\n') +
+            `\nwindow.__out = { ${names.map((name, i) => `${JSON.stringify(name)}: v${i}`).join(', ')} }\n`
+        })
+      )
+      expect(css).toBe('')
+      const { out, win } = await rawValues(js)
+      for (const name of names) {
+        expect(typeof out[name], name).toBe('string')
+        expect(out[name], name).toBe(texts[name])
+      }
+      expect(win.__ran).toBeUndefined()
+    },
+    T
+  )
+
+  it(
+    'BR-2 难写的内容严格相等',
+    async () => {
+      const tricky =
+        'é中文 `tick` ${x} </script> <!-- \r\nline2\r\nprocess.env.NODE_ENV \\n literal\n'
+      const { js } = expectOk(
+        await build({
+          't.glsl': tricky,
+          'index.tsx': `import t from './t.glsl?raw'\nwindow.__out = { t }\n`
+        })
+      )
+      expect((await rawValues(js)).out.t).toBe(tricky)
+    },
+    T
+  )
+
+  it(
+    'BR-3 模块与 raw 同在一次构建：模块跑一次，raw 是文本，两处 raw 是同一个字符串',
+    async () => {
+      const source = `window.__runs = (window.__runs || 0) + 1; export default 'MODULE'\n`
+      const { js } = expectOk(
+        await build({
+          'a.js': source,
+          'other.ts': `import r from './a.js?raw'\nexport default r\n`,
+          'index.tsx': `import m from './a.js'
+import r1 from './a.js?raw'
+import r2 from './other'
+window.__out = { m, r1, r2 }
+`
+        })
+      )
+      const { out, win } = await rawValues(js)
+      expect(out.m).toBe('MODULE')
+      expect(out.r1).toBe(source)
+      expect(out.r2).toBe(source)
+      expect(win.__runs).toBe(1)
+    },
+    T
+  )
+
+  it(
+    'BR-4 raw 文件文本里的 import 不跟进去',
+    async () => {
+      put('outside.txt', MARKER, root)
+      const text = `import "../../outside.txt"\nrequire('../../outside.txt')\n`
+      const { js } = expectOk(
+        await build({
+          'sub/raw.txt': text,
+          'index.tsx': `import t from './sub/raw.txt?raw'\nwindow.__out = { t }\n`
+        })
+      )
+      expect(js).not.toContain(MARKER)
+      expect((await rawValues(js)).out.t).toBe(text)
+    },
+    T
+  )
+
+  it(
+    'BR-5 动态 import 与 require 也是文本',
+    async () => {
+      const source = `window.__ran = true; export default 'MODULE'\n`
+      const { js } = expectOk(
+        await build({
+          'a.js': source,
+          'index.tsx': `;(async () => {
+  const dyn = (await import('./a.js?raw')).default
+  const req = require('./a.js?raw')
+  window.__out = { dyn, req }
+})()
+`
+        })
+      )
+      const { out, win } = await rawValues(js)
+      expect(out.dyn).toBe(source)
+      expect(out.req).toBe(source)
+      expect(win.__ran).toBeUndefined()
+    },
+    T
+  )
+
+  it(
+    'BR-6 ./mod?raw 补扩展名：mod.ts 的文本',
+    async () => {
+      const source = `export const m: number = 1\n`
+      const { js } = expectOk(
+        await build({
+          'mod.ts': source,
+          'index.tsx': `import t from './mod?raw'\nwindow.__out = { t }\n`
+        })
+      )
+      expect((await rawValues(js)).out.t).toBe(source)
+    },
+    T
+  )
+
+  it.each(['./nope.txt?raw', './sub?raw'])(
+    'BR-7 %j 找不到 → Could not resolve，带位置',
+    async (spec) => {
+      const r = await build({
+        'sub/other.txt': 'x',
+        'index.tsx': `import t from '${spec}'\nconsole.log(t)\n`
+      })
+      expectFails(r, `Could not resolve "${spec}"`)
+      expect((r.errors ?? []).join('\n')).toMatch(/index\.tsx:1:\d+/)
+    },
+    T
+  )
+
+  describe('BR-8 组件目录外面的文件', () => {
+    beforeEach(() => {
+      put('secret.txt', MARKER, root)
+      put('secret.json', JSON.stringify({ m: MARKER }), root)
+      put('only.ts', `export default '${MARKER}'\n`, root)
+      put('pkg/package.json', JSON.stringify({ main: 'lib.js' }), root)
+      put('pkg/lib.js', `export default '${MARKER}'\n`, root)
+      put('sdir/f.txt', MARKER, root)
+      symlinkSync(join(root, 'secret.txt'), join(widgetDir, 'link.txt'))
+      symlinkSync(join(root, 'sdir'), join(widgetDir, 'ldir'))
+    })
+
+    const expectNoMarker = (r: Built): void => {
+      expect(r.outputJS).toBeUndefined()
+      expect((r.errors ?? []).join('\n')).not.toContain(MARKER)
+    }
+
+    it.each(['../secret.txt?raw', '../only?raw', './link.txt?raw', './ldir/f.txt?raw'])(
+      'BR-8 %j → 外面的，拒绝',
+      async (spec) => {
+        const r = await build({ 'index.tsx': `import t from '${spec}'\nconsole.log(t)\n` })
+        expectFails(r, OUTSIDE(spec))
+        expectNoMarker(r)
+      },
+      T
+    )
+
+    it.each(['../secret?raw', '../pkg?raw'])(
+      'BR-8 %j → Could not resolve：?raw 不落到 esbuild 自己的解析（.json、main）',
+      async (spec) => {
+        const r = await build({ 'index.tsx': `import t from '${spec}'\nconsole.log(t)\n` })
+        expectFails(r, `Could not resolve "${spec}"`)
+        expectNoMarker(r)
+      },
+      T
+    )
+
+    it(
+      'BR-8 从子目录爬出去 → 拒绝',
+      async () => {
+        const spec = '../../secret.txt?raw'
+        const r = await build({
+          'sub/x.ts': `import t from '${spec}'\nexport default t\n`,
+          'index.tsx': `import x from './sub/x'\nconsole.log(x)\n`
+        })
+        expectFails(r, OUTSIDE(spec))
+        expectNoMarker(r)
+      },
+      T
+    )
+
+    it(
+      'BR-8 对照：子目录里的 ../a.js?raw 在组件里面 → 成功',
+      async () => {
+        const source = `export default 'MODULE'\n`
+        const { js } = expectOk(
+          await build({
+            'a.js': source,
+            'sub/x.ts': `import t from '../a.js?raw'\nexport default t\n`,
+            'index.tsx': `import x from './sub/x'\nwindow.__out = { x }\n`
+          })
+        )
+        expect((await rawValues(js)).out.x).toBe(source)
+      },
+      T
+    )
+  })
+
+  it(
+    'BR-9 ./data?raw（只有 data.json）→ Could not resolve，不是解析好的模块',
+    async () => {
+      const r = await build({
+        'data.json': '{"d":1}\n',
+        'index.tsx': `import t from './data?raw'\nconsole.log(t)\n`
+      })
+      expectFails(r, `Could not resolve "./data?raw"`)
+    },
+    T
+  )
+
+  it(
+    'BR-10 CSS 里 ?raw 是个普通后缀',
+    async () => {
+      const { css } = expectOk(
+        await build({
+          'a.svg': '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+          's.css': `.imported-raw { color: blue }\n`,
+          'st.css': `@import "./s.css?raw";
+.a { background: url(./a.svg?raw); }
+.b { background: url(./a.svg?v=1); }
+`,
+          'index.tsx': `import './st.css'\nconsole.log(1)\n`
+        })
+      )
+      expect(css).toContain('.imported-raw')
+      const urlIn = (rule: string): string | undefined =>
+        new RegExp(`\\${rule}\\{[^}]*url\\('?([^')]*)'?\\)`).exec(css)?.[1]
+      expect(urlIn('.a')).toMatch(/^data:image\/svg\+xml[,;]/)
+      expect(urlIn('.a')).toBe(urlIn('.b'))
     },
     T
   )

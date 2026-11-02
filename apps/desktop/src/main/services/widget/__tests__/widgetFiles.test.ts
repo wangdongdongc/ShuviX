@@ -1,5 +1,5 @@
 /**
- * `services/widget/widgetFiles.ts` —— widget 的文件路由（`/w/<id>/fs/file`、`/w/<id>/fs/list`）。
+ * `services/widget/widgetFiles.ts` —— widget 的文件路由（`/w/<id>/fs/file`、`/w/<id>/fs/path/…`、`/w/<id>/fs/list`）。
  * `resolveWidgetFilePath` 直接调（显式给 home）；HTTP 用一个裸的 `node:http` 服务（127.0.0.1 随机端口），handler 把
  * `/w/<id>` 剥掉后交给 `serveWidgetFiles`（两道门在 widgetServer，不在这里）。文件是临时目录里的真文件；
  * `~` 走 HTTP 时 `node:os` 的 homedir 换成临时家目录。请求用 `node:http`（`agent:false`，正文按字节收）。
@@ -8,6 +8,8 @@
  *   WF-P2 `~`、`~/` → home；`~/Pictures/2024` → home 下
  *   WF-P3 归一：`..`、尾斜杠、双斜杠；`~/../x` → home 的上一层
  *   WF-P4 Windows 盘符路径：win32 原样；posix 不是绝对路径 → undefined
+ *   WF-P5 widgetRequestPath：fs/path 只看 URL 的路径（编码写错 → undefined，绝不退回查询串），fs/file、fs/list 只看查询串；
+ *         `..` 归一，`~` 展开
  *   WF-F1 GET png → 200 image/png、accept-ranges、content-length、no-cache、nosniff、字节一致、没有 ACAO
  *   WF-F2 MIME：txt / json → octet-stream；大写 .MP4 → video/mp4；svg 带 `CSP: sandbox`；html → octet-stream 不带 CSP
  *   WF-F3 Range：一段 → 206；后缀 → 最后 N 个字节；落在外 → 416（content-range 不带范围、length 0、空正文）
@@ -30,6 +32,17 @@
  *   WF-L7 没权限 → 403 FORBIDDEN：目录本身 000（readdir）；上层 000（stat）（root / win32 跳过）
  *   WF-L8 HEAD → 200，content-length 等于 GET 正文的字节数，空正文
  *   WF-L9 POST / PUT / DELETE / OPTIONS → 405 JSON METHOD_NOT_ALLOWED + allow: GET, HEAD
+ *   WF-PR1 同一个文件经 fs/path 与 fs/file：状态、头、字节都一样，没有 ACAO
+ *   WF-PR2 技能教的 fileAtUrl 拼的地址：`a b.txt`、`a+b.txt`（两个都在、内容不同）、`a%b.txt`、`a#b?c.txt`、`a&b=c.txt`、
+ *          `照片 一.png`、`🎉.mp3` → 200 字节一致
+ *   WF-PR3 `~/notes/a.txt`、`%7E/notes/a.txt` → 家目录下的文件；`/fs/path/~` → 404（是目录）
+ *   WF-PR4 `%ZZ`、`%E4%BD`、结尾的 `%`、`%00` → 400 那句话，带着指向真文件的 `?path=` 也一样
+ *   WF-PR5 `<文件>?v=1`、`<文件>?path=/other` 回 URL 路径的文件；Range → 206 / 416；HEAD 只回头；空文件 → 200 length 0
+ *   WF-PR6 POST、OPTIONS → 405 + Allow；svg 带 `CSP: sandbox`；html → octet-stream
+ *   WF-PR7 不在 / 是目录 → 404 `Not found.`；没有读权限 → 403（root / win32 跳过）
+ *   WF-PR8 相对地址按 URL 解析再取（基准 `<dir>/m/scene.gltf`）：`scene.bin`、`tex/红 色.png`、`../shared/x.bin` → 各自的字节
+ *   WF-PR9 `/fs/path`（不带斜杠）、`/fs/pathx/a`、`/fs/Path/a` → 404；`/fs/path/` → 404（根目录是目录）
+ *   WF-PR10 win32：`/fs/path/C:/…`、`C%3A/…` → 那个文件；posix：`C:/x`、`a:b/c.txt` → 400（钉住：`/a:b/c.txt` 这种名字只有 fs/file 够得着）
  */
 import { randomBytes } from 'node:crypto'
 import {
@@ -48,7 +61,7 @@ import {
   type Server
 } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { WIDGET_LIST_LIMIT, widgetFileUrl, widgetListUrl } from '../../../../shared/widgetRoutes'
 
@@ -59,7 +72,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => osState.home }
 })
 
-import { resolveWidgetFilePath, serveWidgetFiles } from '../widgetFiles'
+import { resolveWidgetFilePath, serveWidgetFiles, widgetRequestPath } from '../widgetFiles'
 
 const BAD_PATH_TEXT = 'Bad request: path must be an absolute path or start with ~.'
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
@@ -174,6 +187,27 @@ describe('WF-P resolveWidgetFilePath（纯）', () => {
 
   it.runIf(process.platform !== 'win32')('WF-P4 posix：盘符路径不是绝对路径 → undefined', () => {
     expect(resolveWidgetFilePath('C:\\x', HOME)).toBeUndefined()
+  })
+})
+
+describe('WF-P5 widgetRequestPath', () => {
+  const search = (path: string): URLSearchParams => new URLSearchParams({ path })
+
+  it('WF-P5 fs/path 只看 URL 的路径；编码写错 → undefined，不退回查询串', () => {
+    expect(widgetRequestPath('/fs/path/a', search('/b'))).toBe(resolve('/a'))
+    expect(widgetRequestPath('/fs/path/%ZZ', search('/b'))).toBeUndefined()
+  })
+
+  it('WF-P5 fs/file、fs/list 只看查询串', () => {
+    expect(widgetRequestPath('/fs/file', search('/b'))).toBe(resolve('/b'))
+    expect(widgetRequestPath('/fs/list', search('/b'))).toBe(resolve('/b'))
+    expect(widgetRequestPath('/fs/file', new URLSearchParams())).toBeUndefined()
+  })
+
+  it('WF-P5 `..` 归一，`~` 展开', () => {
+    expect(widgetRequestPath('/fs/path/a/b/../../c', new URLSearchParams())).toBe(resolve('/c'))
+    expect(widgetRequestPath('/fs/path/a/%2E%2E/c', new URLSearchParams())).toBe(resolve('/c'))
+    expect(widgetRequestPath('/fs/path/~/x', new URLSearchParams())).toBe(join(fakeHome, 'x'))
   })
 })
 
@@ -528,6 +562,219 @@ describe('WF-L fs/list', () => {
       expect(res.headers.allow).toBe('GET, HEAD')
       expectJsonHeaders(res)
       expect(json(res).code).toBe('METHOD_NOT_ALLOWED')
+    }
+  )
+})
+
+describe('WF-PR fs/path', () => {
+  /** 技能 references/files.md 的 fileAtUrl，一字不改 */
+  const WIDGET = 'photo-wall'
+  const fileAtUrl = (path: string): string =>
+    `/w/${WIDGET}/fs/path/${path.replace(/^\//, '').split('/').map(encodeURIComponent).join('/')}`
+  const route = (tail: string): string => `/w/${WIDGET}/fs/path/${tail}`
+
+  it('WF-PR1 与 fs/file 状态、头、字节都一样，没有 ACAO', async () => {
+    const dir = freshDir()
+    const bytes = randomBytes(2048)
+    const file = join(dir, 'a.png')
+    writeFileSync(file, bytes)
+
+    const viaPath = await http(fileAtUrl(file))
+    const viaQuery = await http(fileUrl(file))
+    expect(viaPath.status).toBe(200)
+    expect(viaPath.status).toBe(viaQuery.status)
+    const withoutDate = (h: IncomingHttpHeaders): IncomingHttpHeaders => {
+      const { date: _date, ...rest } = h
+      return rest
+    }
+    expect(withoutDate(viaPath.headers)).toEqual(withoutDate(viaQuery.headers))
+    expect(viaPath.headers['access-control-allow-origin']).toBeUndefined()
+    expect(viaPath.body.equals(bytes)).toBe(true)
+    expect(viaPath.body.equals(viaQuery.body)).toBe(true)
+  })
+
+  it('WF-PR2 fileAtUrl 拼的地址：怪名字都取得到，a b 与 a+b 不混', async () => {
+    const dir = freshDir()
+    for (const name of [
+      'a b.txt',
+      'a+b.txt',
+      'a%b.txt',
+      'a#b?c.txt',
+      'a&b=c.txt',
+      '照片 一.png',
+      '🎉.mp3'
+    ]) {
+      writeFileSync(join(dir, name), `content of ${name}`)
+    }
+    for (const name of [
+      'a b.txt',
+      'a+b.txt',
+      'a%b.txt',
+      'a#b?c.txt',
+      'a&b=c.txt',
+      '照片 一.png',
+      '🎉.mp3'
+    ]) {
+      const res = await http(fileAtUrl(join(dir, name)))
+      expect(res.status, name).toBe(200)
+      expect(res.body.toString(), name).toBe(`content of ${name}`)
+    }
+  })
+
+  it('WF-PR3 `~/…` 与 `%7E/…` → 家目录下；`~` 本身是目录 → 404', async () => {
+    mkdirSync(join(fakeHome, 'notes'), { recursive: true })
+    writeFileSync(join(fakeHome, 'notes', 'a.txt'), 'home note')
+    for (const tail of ['~/notes/a.txt', '%7E/notes/a.txt']) {
+      const res = await http(route(tail))
+      expect(res.status, tail).toBe(200)
+      expect(res.body.toString(), tail).toBe('home note')
+    }
+    const home = await http(route('~'))
+    expect(home.status).toBe(404)
+    expect(home.body.toString()).toBe('Not found.')
+  })
+
+  it.each(['%ZZ', '%E4%BD', 'a%', '%00'])(
+    'WF-PR4 fs/path/%s → 400 那句话，有 ?path= 也不用它',
+    async (tail) => {
+      const dir = freshDir()
+      const real = join(dir, 'real.txt')
+      writeFileSync(real, 'real')
+      for (const path of [route(tail), `${route(tail)}?path=${encodeURIComponent(real)}`]) {
+        const res = await http(path)
+        expect(res.status, path).toBe(400)
+        expect(res.headers['content-type'], path).toBe('text/plain; charset=utf-8')
+        expect(res.body.toString(), path).toBe(BAD_PATH_TEXT)
+      }
+    }
+  )
+
+  it('WF-PR5 查询串不影响路径；Range；HEAD；空文件', async () => {
+    const dir = freshDir()
+    const file = join(dir, 'ten.bin')
+    const other = join(dir, 'other.bin')
+    writeFileSync(file, Buffer.from('0123456789'))
+    writeFileSync(other, 'other')
+    const url = fileAtUrl(file)
+
+    for (const query of ['?v=1', `?path=${encodeURIComponent(other)}`]) {
+      const res = await http(url + query)
+      expect(res.status, query).toBe(200)
+      expect(res.body.toString(), query).toBe('0123456789')
+    }
+
+    const part = await http(url, { headers: { Range: 'bytes=2-5' } })
+    expect(part.status).toBe(206)
+    expect(part.headers['content-range']).toBe('bytes 2-5/10')
+    expect(part.body.toString()).toBe('2345')
+    const out = await http(url, { headers: { Range: 'bytes=20-30' } })
+    expect(out.status).toBe(416)
+    expect(out.headers['content-range']).toBe('bytes */10')
+    expect(out.body.length).toBe(0)
+
+    const head = await http(url, { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.headers['content-length']).toBe('10')
+    expect(head.body.length).toBe(0)
+
+    const empty = join(dir, 'empty.png')
+    writeFileSync(empty, '')
+    const none = await http(fileAtUrl(empty))
+    expect(none.status).toBe(200)
+    expect(none.headers['content-length']).toBe('0')
+    expect(none.body.length).toBe(0)
+  })
+
+  it('WF-PR6 POST、OPTIONS → 405 + Allow；svg 带 CSP sandbox；html 是 octet-stream', async () => {
+    const dir = freshDir()
+    const svg = join(dir, 'a.svg')
+    const html = join(dir, 'a.html')
+    writeFileSync(svg, '<svg/>')
+    writeFileSync(html, '<p>x</p>')
+    for (const method of ['POST', 'OPTIONS']) {
+      const res = await http(fileAtUrl(svg), { method })
+      expect(res.status, method).toBe(405)
+      expect(res.headers.allow, method).toBe('GET, HEAD')
+    }
+    const image = await http(fileAtUrl(svg))
+    expect(image.headers['content-type']).toBe('image/svg+xml')
+    expect(image.headers['content-security-policy']).toBe('sandbox')
+    const page = await http(fileAtUrl(html))
+    expect(page.headers['content-type']).toBe('application/octet-stream')
+    expect(page.headers['content-security-policy']).toBeUndefined()
+  })
+
+  it('WF-PR7 不在 / 是目录 → 404 `Not found.`', async () => {
+    const dir = freshDir()
+    for (const p of [join(dir, 'nope.png'), dir]) {
+      const res = await http(fileAtUrl(p))
+      expect(res.status, p).toBe(404)
+      expect(res.body.toString(), p).toBe('Not found.')
+    }
+  })
+
+  it.runIf(posixNonRoot)('WF-PR7 没有读权限 → 403 `Forbidden.`', async () => {
+    const dir = freshDir()
+    const file = join(dir, 'secret.png')
+    writeFileSync(file, 'secret-bytes')
+    chmodSync(file, 0o000)
+    locked.push(file)
+    const res = await http(fileAtUrl(file))
+    expect(res.status).toBe(403)
+    expect(res.body.toString()).toBe('Forbidden.')
+  })
+
+  it('WF-PR8 相对地址按 URL 解析，取到旁边的文件', async () => {
+    const dir = freshDir()
+    const put = (rel: string, content: string): void => {
+      mkdirSync(dirname(join(dir, rel)), { recursive: true })
+      writeFileSync(join(dir, rel), content)
+    }
+    put('m/scene.gltf', 'gltf')
+    put('m/scene.bin', 'bin bytes')
+    put('m/tex/红 色.png', 'png bytes')
+    put('shared/x.bin', 'shared bytes')
+    const base = `http://h${fileAtUrl(join(dir, 'm/scene.gltf'))}`
+    for (const [relative, content] of [
+      ['scene.bin', 'bin bytes'],
+      ['tex/红 色.png', 'png bytes'],
+      ['../shared/x.bin', 'shared bytes']
+    ]) {
+      const res = await http(new URL(relative, base).pathname)
+      expect(res.status, relative).toBe(200)
+      expect(res.body.toString(), relative).toBe(content)
+    }
+  })
+
+  it.each(['/fs/path', '/fs/pathx/a', '/fs/Path/a', '/fs/path/'])(
+    'WF-PR9 %s → 404 `Not found.`',
+    async (tail) => {
+      const res = await http(`/w/${WIDGET}${tail}`)
+      expect(res.status).toBe(404)
+      expect(res.body.toString()).toBe('Not found.')
+    }
+  )
+
+  it.runIf(process.platform === 'win32')('WF-PR10 win32：盘符路径取得到', async () => {
+    const dir = freshDir()
+    const file = join(dir, 'a.txt')
+    writeFileSync(file, 'on drive')
+    const posixStyle = file.replace(/\\/g, '/')
+    for (const tail of [posixStyle, posixStyle.replace(':', '%3A')]) {
+      const res = await http(route(tail))
+      expect(res.status, tail).toBe(200)
+      expect(res.body.toString(), tail).toBe('on drive')
+    }
+  })
+
+  it.runIf(process.platform !== 'win32')(
+    'WF-PR10 posix：`C:/x`、`a:b/c.txt` → 400（钉住：这种名字只有 fs/file 够得着）',
+    async () => {
+      for (const tail of ['C:/x', 'a:b/c.txt']) {
+        const res = await http(route(tail))
+        expect(res.status, tail).toBe(400)
+        expect(res.body.toString(), tail).toBe(BAD_PATH_TEXT)
+      }
     }
   )
 })

@@ -1,11 +1,12 @@
 # Reading files on the user's computer
 
-A widget reads local files through two routes under its own address. They are read-only: what a widget writes goes into its database, through its API (`api.md`).
+A widget reads local files through three routes under its own address. They are read-only: what a widget writes goes into its database, through its API (`api.md`).
 
 | Request                          | Answer                                                                                                     |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `GET /w/<id>/fs/file?path=<p>`   | The file's bytes, with a `Content-Type` from its extension and `Range` support (seekable video and audio). |
 | `HEAD /w/<id>/fs/file?path=<p>`  | Only the headers: `Content-Length`, `Content-Type`. Use it as a cheap "does this file exist".              |
+| `GET /w/<id>/fs/path/<p>`        | The same as `fs/file`, with the path in the address. Use it for a file that names other files beside it.   |
 | `GET /w/<id>/fs/list?path=<dir>` | The directory as JSON (below).                                                                             |
 
 **These are the only addresses that work everywhere.** On the desktop the widget is served from this computer; when the user opens ShuviX's web page from another device, the same `/w/<id>/…` path is forwarded to it. `shuvix-media://…`, `file://…` and `http://127.0.0.1:<port>/…` only exist on the desktop: a widget that uses them shows nothing in a browser.
@@ -23,6 +24,9 @@ Put the two URL builders in one module and use them everywhere:
 const WIDGET = 'photo-wall'
 export const fileUrl = (path: string) => `/w/${WIDGET}/fs/file?path=${encodeURIComponent(path)}`
 export const listUrl = (path: string) => `/w/${WIDGET}/fs/list?path=${encodeURIComponent(path)}`
+// One segment at a time, so the slashes stay. On Windows write the path with `/`
+export const fileAtUrl = (path: string) =>
+  `/w/${WIDGET}/fs/path/${path.replace(/^\//, '').split('/').map(encodeURIComponent).join('/')}`
 ```
 
 ## Using a file
@@ -37,6 +41,8 @@ const res = await fetch(fileUrl('~/notes/todo.md'))
 if (!res.ok) throw new Error(await res.text())
 const text = await res.text()
 ```
+
+A file that names other files by relative address (a `.gltf` with its `.bin` and textures, an `.obj` with its `.mtl`, an `.m3u8` with its segments) loads through `fileAtUrl`, and those addresses then resolve to the files beside it with nothing else to do. Behind `fileUrl` they cannot: the path sits in the query, so the browser resolves them against `fs/`.
 
 Image, PDF, audio and video extensions get their own `Content-Type`; everything else is `application/octet-stream`, which `fetch().text()`, `.json()` and `.arrayBuffer()` read fine. To draw an image onto a `<canvas>` and read its pixels back, set `crossOrigin="anonymous"` on the `<img>`, or the canvas is tainted when the widget is opened from a browser.
 

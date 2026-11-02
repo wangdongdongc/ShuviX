@@ -3,6 +3,9 @@
  *
  *  - `GET|HEAD /w/<id>/fs/file?path=<路径>`   回文件字节（按扩展名给 MIME，支持 Range）
  *  - `GET|HEAD /w/<id>/fs/list?path=<目录>`   回目录列表（JSON）
+ *  - `GET|HEAD /w/<id>/fs/path/<路径>`        回文件字节，同 `fs/file`，只是路径写在 URL 的路径里：文件里记的相对地址
+ *    （glTF 的 .bin 与贴图、.obj 的 .mtl、.pmx 的贴图、HLS 的分片）按浏览器的规则就解析到它旁边的文件 ——
+ *    `fs/file?path=` 的查询串解析不出来，加载器只好靠改写地址绕
  *
  * 为什么挂在 `/w/<id>/` 下：widget 页面在两种模式下都能用同一个字符串够到的只有这个前缀 —— 桌面直接连
  * 127.0.0.1 的 widget 服务，远程由网络服务把 `/w/…` 原样转过去（frontend/network/widgetProxy.ts）。
@@ -23,6 +26,9 @@ export const WIDGET_FILE_ROUTE = '/fs/file'
 
 /** 列目录 */
 export const WIDGET_LIST_ROUTE = '/fs/list'
+
+/** 读文件，路径写在 URL 的路径里：`/fs/path/~/models/a.gltf`、`/fs/path/Users/me/a.gltf`、`/fs/path/C:/models/a.gltf` */
+export const WIDGET_FILE_PATH_PREFIX = '/fs/path/'
 
 /** 一次列目录最多回多少条（再多就截断并标 `truncated`） */
 export const WIDGET_LIST_LIMIT = 10_000
@@ -53,6 +59,26 @@ export function isWidgetFilesPath(pathname: string): boolean {
 /** widget 读一个文件的地址 */
 export function widgetFileUrl(widgetId: string, path: string): string {
   return `/w/${widgetId}${WIDGET_FILE_ROUTE}?path=${encodeURIComponent(path)}`
+}
+
+/**
+ * `fs/path/` 之后的那段 → 路径的原文（`~/…` 或绝对路径，还没展开）：逐段解码；开头的 `/` 不在地址里，补回来（`~` 与
+ * Windows 盘符不补）。编码写错 → null
+ */
+export function widgetPathFromRoute(route: string): string | null {
+  let decoded: string
+  try {
+    decoded = route
+      .slice(WIDGET_FILE_PATH_PREFIX.length)
+      .split('/')
+      .map(decodeURIComponent)
+      .join('/')
+  } catch {
+    return null
+  }
+  return decoded === '~' || decoded.startsWith('~/') || /^[A-Za-z]:/.test(decoded)
+    ? decoded
+    : `/${decoded}`
 }
 
 /** widget 列一个目录的地址 */

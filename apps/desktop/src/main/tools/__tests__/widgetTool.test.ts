@@ -13,6 +13,10 @@
  *               纯界面操作只在 dry run 里够得着；失败的几种文案（invalid_args 附 schema、internal 说是组件的代码出错）
  *   WT4-TL-17..18 create：不问，造它的会话得到读写（来源 widget）；失败不授予
  *   WT4-TL-19..25 build / preview / sql / export / open 各自的门、参数与结果
+ *   WT4-TL-32   preview 的 `wait_for` 到 previewWidget 成 `waitFor`；没给或空串 → 没有 waitFor 键
+ *   WT4-TL-33   signal 交给 previewWidget；previewWidget 返回之后才发现中止了 → 以取消收场，结果里没有内容
+ *   WT4-TL-34   等待的那几句（wait_for 没等到、请求没停）进 <errors>，图照样在
+ *   WT4-TL-35   schema：全量的 wait_for 是字符串、说明里写着最多 30s；用的那份没有 wait_for
  *   WC-S40..43 sql 的 `legacy: true`：没有旧数据 → 先过写门、再报「no data in the older shared database」，两个库都不查；
  *               有旧数据（含已换成 SQLite 的）→ 查 PGlite；不带 legacy → 组件自己的库，不管有没有旧数据；门拒绝 →
  *               不问有没有旧数据
@@ -454,6 +458,15 @@ describe('WT4-TL-01 描述与 schema 按根 agent 的货架定', () => {
     const forbidden = /\b(create|build|preview|sql|export|open|dry_run|skill)\b/i
     expect(tool.description).not.toMatch(forbidden)
     expect(JSON.stringify(tool.parameters)).not.toMatch(forbidden)
+  })
+
+  it('WT4-TL-35 wait_for：全量是字符串、说明里写着最多 30s；用的那份没有', () => {
+    const full = propsOf(new WidgetTool(ctx)).wait_for as { type: string; description: string }
+    expect(full.type).toBe('string')
+    expect(full.description).toContain('up to 30s')
+    expect(propsOf(new WidgetTool({ sessionId: 's1' }))).not.toHaveProperty('wait_for')
+    expect(new WidgetTool(ctx).description).toContain('wait_for')
+    expect(new WidgetTool({ sessionId: 's1' }).description).not.toContain('wait_for')
   })
 
   it('描述里没有组件名单：注册了哪些组件都一样，构造时也不读组件表', () => {
@@ -1261,6 +1274,89 @@ describe('WT4-TL-20..21 preview', () => {
     expect(state.previewWidget.mock.calls[1][1]).toStrictEqual({
       sizes: ['panel', 'window', 'phone'],
       sessionId: 's1'
+    })
+  })
+
+  it('WT4-TL-32 wait_for → waitFor；没给或空串 → 没有 waitFor 键', async () => {
+    state.previewWidget.mockResolvedValue({
+      id: 'reading-list',
+      theme: 'app',
+      images: [],
+      errors: []
+    })
+    await preview({ wait_for: '[data-ready]' })
+    expect(state.previewWidget.mock.calls[0][1]).toStrictEqual({
+      sizes: ['panel', 'window', 'phone'],
+      waitFor: '[data-ready]',
+      sessionId: 's1'
+    })
+    for (const args of [{}, { wait_for: '' }]) {
+      state.previewWidget.mockClear()
+      await preview(args)
+      expect('waitFor' in state.previewWidget.mock.calls[0][1], JSON.stringify(args)).toBe(false)
+    }
+  })
+
+  it('WT4-TL-33 signal 交给 previewWidget；返回之后发现中止了 → 以取消收场，没有内容', async () => {
+    const png = join(tmp, 'aborted.png')
+    writeFileSync(png, Buffer.from([1, 2, 3]))
+    const ac = new AbortController()
+    state.previewWidget.mockImplementation(async (_id, options) => {
+      expect((options as { signal?: AbortSignal }).signal).toBe(ac.signal)
+      ac.abort()
+      return {
+        id: 'reading-list',
+        theme: 'app',
+        images: [{ size: 'panel', width: 380, height: 760, path: png }],
+        errors: []
+      }
+    })
+    await expect(
+      run(
+        new WidgetTool(ctx),
+        { action: 'preview', widget: 'reading-list' },
+        { caller: 'build', signal: ac.signal }
+      )
+    ).rejects.toThrow('Aborted')
+    expect(state.previewWidget).toHaveBeenCalledTimes(1)
+  })
+
+  it('WT4-TL-33 没中止：signal 也交给 previewWidget，结果照常', async () => {
+    const ac = new AbortController()
+    state.previewWidget.mockResolvedValue({
+      id: 'reading-list',
+      theme: 'app',
+      images: [],
+      errors: []
+    })
+    const inv = await run(
+      new WidgetTool(ctx),
+      { action: 'preview', widget: 'reading-list' },
+      { caller: 'build', signal: ac.signal }
+    )
+    expect(state.previewWidget.mock.calls[0][1]).toMatchObject({ signal: ac.signal })
+    expect(textOf(inv)).toBe('Nothing was captured.')
+  })
+
+  it('WT4-TL-34 等待的那几句进 <errors>，与图并存', async () => {
+    const png = join(tmp, 'waits.png')
+    writeFileSync(png, Buffer.from([1, 2, 3]))
+    const lines = [
+      '[panel] wait_for "[data-ready]" did not appear within 30s; captured without it, and no other size waited for it',
+      '[panel] the page was still loading after 10s when this was captured'
+    ]
+    state.previewWidget.mockResolvedValue({
+      id: 'reading-list',
+      theme: 'app',
+      images: [{ size: 'panel', width: 380, height: 760, path: png }],
+      errors: lines
+    })
+    const inv = await preview({ wait_for: '[data-ready]' })
+    expect(inv.result.isError).not.toBe(true)
+    expect(inv.result.content.map((c) => c.type)).toEqual(['text', 'image', 'text'])
+    expect(inv.result.content.at(-1)).toEqual({
+      type: 'text',
+      text: `<errors>\n${lines.join('\n')}\n</errors>`
     })
   })
 

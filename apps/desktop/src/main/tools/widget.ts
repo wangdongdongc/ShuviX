@@ -107,6 +107,12 @@ const buildFields = {
       description: 'For "preview": the color scheme (default the app\'s).'
     })
   ),
+  wait_for: Type.Optional(
+    Type.String({
+      description:
+        'For "preview": a CSS selector to wait for (up to 30s) before each screenshot. Have the page add it once slow content, such as a 3D model, has drawn.'
+    })
+  ),
   sql: Type.Optional(Type.String({ description: 'For "sql": the SQL to run.' })),
   legacy: Type.Optional(
     Type.Boolean({
@@ -153,7 +159,7 @@ export const WIDGET_DESCRIPTION = `${WIDGET_USE_DESCRIPTION}
 Building widgets (the widget skill says how):
 - "create": scaffold a new widget (\`widget\` = its id, kebab-case with at least one dash; \`name\`, \`description\`) and build it once. This session may then use and change it, and edit its folder.
 - "build": build its screen and API after you edited its files; \`message\` says what changed (the build is committed).
-- "preview": screenshots of its screen at \`sizes\` in \`theme\`, plus the errors the page logged. The page's own calls run as this session.
+- "preview": screenshots of its screen at \`sizes\` in \`theme\`, plus the errors the page logged. It waits for the page's requests to finish, and for \`wait_for\` if given. The page's own calls run as this session.
 - "sql": run \`sql\` on its database — create tables, look at rows, fix data. \`legacy: true\` runs it on an older widget's data in the shared PostgreSQL database.
 - "export": package it as a standalone Vite project zip at \`path\`.
 - "open": open it in its own window, only when the user asks.
@@ -171,6 +177,7 @@ type WidgetToolParams = {
   message?: string
   sizes?: string[]
   theme?: string
+  wait_for?: string
   sql?: string
   legacy?: boolean
   path?: string
@@ -551,8 +558,11 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     const result = await previewWidget(widget.id, {
       sizes,
       ...(theme ? { theme } : {}),
-      sessionId: this.ctx.sessionId
+      ...(params.wait_for ? { waitFor: params.wait_for } : {}),
+      sessionId: this.ctx.sessionId,
+      ...(signal ? { signal } : {})
     })
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
     const content: Result['content'] = []
     for (const image of result.images) {
       content.push({

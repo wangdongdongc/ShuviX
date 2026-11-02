@@ -91,8 +91,11 @@ function selectFiles(pkgDir, override) {
   const all = listFiles(pkgDir)
   const keep = (path) => path === 'package.json' || (!path.includes('/') && LICENSE_FILE.test(path))
   if (override) {
-    const res = override.map(globToRegExp)
-    return all.filter((p) => keep(p) || res.some((re) => re.test(p)))
+    const res = override.filter((g) => !g.startsWith('!')).map(globToRegExp)
+    const out = override.filter((g) => g.startsWith('!')).map((g) => globToRegExp(g.slice(1)))
+    return all.filter(
+      (p) => keep(p) || (res.some((re) => re.test(p)) && !out.some((re) => re.test(p)))
+    )
   }
   return all.filter((p) => {
     if (keep(p)) return true
@@ -120,11 +123,27 @@ function vendorPathOf(pkgDir) {
   return join(outModules, ...parts.slice(first + 1).filter((p) => p !== ''))
 }
 
-/** served 文件里的相对 import（`from './x.js'` / `import './x.js'` / `import('./x.js')`） */
+/**
+ * served 文件里按相对路径用到的文件：`from './x.js'` / `import './x.js'` / `import('./x.js')`，以及运行时按自己的位置取的
+ * `new URL('../libs/x.wasm', import.meta.url)`（three 的 DRACOLoader、KTX2Loader 这样找解码器）
+ */
 function relativeImportsOf(source) {
   const out = new Set()
   const re = /(?:\bfrom\s*|\bimport\s*\(?\s*)['"](\.{1,2}\/[^'"]+)['"]/g
   for (const m of source.matchAll(re)) out.add(m[1])
+  const urls = /\bnew URL\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g
+  for (const m of source.matchAll(urls)) out.add(m[1])
+  return [...out]
+}
+
+/** served 文件里经 import map 指回包里的 import（`three/addons/x.js`）→ 包里的路径 */
+function servedImportsOf(source, served) {
+  const out = new Set()
+  const prefixes = Object.entries(served).filter(([key]) => key.endsWith('/'))
+  for (const m of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)['"]([^'"./][^'"]*)['"]/g)) {
+    const hit = prefixes.find(([key]) => m[1].startsWith(key))
+    if (hit) out.add(posix.normalize(hit[1] + m[1].slice(hit[0].length)))
+  }
   return [...out]
 }
 
@@ -153,8 +172,15 @@ function copyPackage(pkgDir, { libraryFiles, served } = {}) {
     const queue = [...files].filter((p) => p.endsWith('.js'))
     while (queue.length > 0) {
       const file = queue.pop()
-      for (const spec of relativeImportsOf(readFileSync(join(pkgDir, file), 'utf-8'))) {
-        const target = posix.normalize(posix.join(posix.dirname(file), spec))
+      const source = readFileSync(join(pkgDir, file), 'utf-8')
+      const targets = [
+        ...relativeImportsOf(source).map((spec) => ({
+          spec,
+          target: posix.normalize(posix.join(posix.dirname(file), spec))
+        })),
+        ...servedImportsOf(source, served).map((target) => ({ spec: target, target }))
+      ]
+      for (const { spec, target } of targets) {
         if (target.startsWith('../')) {
           throw new Error(`${pkg.name}/${file} imports ${spec}, which is outside the package`)
         }
@@ -163,7 +189,7 @@ function copyPackage(pkgDir, { libraryFiles, served } = {}) {
           throw new Error(`${pkg.name}/${file} imports ${spec}, which does not exist`)
         }
         files.add(target)
-        queue.push(target)
+        if (target.endsWith('.js')) queue.push(target)
       }
     }
   }
@@ -215,7 +241,7 @@ rmSync(vendorDir, { recursive: true, force: true })
 mkdirSync(outModules, { recursive: true })
 
 for (const { name, lib, pkgDir } of libraryDirs) {
-  copyPackage(pkgDir, { libraryFiles: lib.files, served: !!lib.served })
+  copyPackage(pkgDir, { libraryFiles: lib.files, served: lib.served })
   manifest.libraries[name] = lib.version
 }
 

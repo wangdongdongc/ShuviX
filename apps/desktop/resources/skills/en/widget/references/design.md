@@ -70,7 +70,7 @@ In a `.css` file the same names are variables: `var(--widget-accent)`, `var(--wi
 ## Assets
 
 - Images that ship with the widget live in its directory and are imported (`import logo from './logo.svg'`): `.svg`, `.png`, `.jpg` and `.gif` become inline data URLs, so keep them small. Other image formats do not import; read them from disk through `fs/file` instead (`files.md`).
-- Fixed data that ships with the widget can be imported too: `.json` as a parsed value, `.txt` as a string.
+- Fixed data that ships with the widget can be imported too: `.json` as a parsed value, `.txt` as a string, any other file as a string with `?raw` (`import vertex from './shader.vert?raw'`).
 - Styles go in `className`. A `.css` file imported from a component is bundled too, for what Tailwind cannot express.
 - Icons come from `lucide-react` (`libraries.md`): `<Trash2 className="size-4" />`. They draw in `currentColor`, so the text color names color them.
 
@@ -80,3 +80,4 @@ After a green build, `preview` it. It renders the widget in a hidden window, so 
 
 - `sizes: ["phone", "panel"]` previews only those sizes; `theme: "light"` or `"dark"` shows the user's light or dark theme (by default the one the app shows now). Check the other side once: a color written outside the theme names shows up there.
 - It shows the last build: build before every preview.
+- It waits for the page's requests to finish (up to 10 s, and says so if they had not). For what comes after them, such as a model being parsed and drawn, have the page add a marker when it is done (`document.body.dataset.ready = '1'`) and pass `wait_for: "[data-ready]"`. A `wait_for` that never appears is in the errors, which is also how you learn that it never finished. The window closes right after the screenshot, so work still running then never completes.

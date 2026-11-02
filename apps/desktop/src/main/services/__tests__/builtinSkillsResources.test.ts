@@ -44,7 +44,8 @@
  *        （.tsx 里没用到的 import 会被 esbuild 直接丢掉，测试就空转了），真的 esbuild-wasm + 仓库的 resources/bundler；
  *        对照：多一句 `import x from 'left-pad'` 就失败
  *   SK-3 troubleshooting.md 引的三句报错（不在小组件里 / 不在 three 随带的文件里 / highlight.js 整包）各是打包器真实报错的子串
- *   SK-4 libraries.md 里 three 那段点名的 addon 在 vendor 的 three/examples/jsm/ 下都真的有
+ *   SK-5 三语：libraries.md 代码块里每个 three/addons/… 在 vendor 里都有；three 那段说不带的（Addons.js、TTFLoader、3DMLoader、
+ *        DRACOExporter、physics/）vendor 里确实没有；files.md 讲 fs/path、tool.md 讲 wait_for、design.md 讲 ?raw
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import {
@@ -807,7 +808,7 @@ describe('SK widget 技能教的库与打包器、库表对得上', () => {
       {
         phrase: 'is not among the three files ShuviX ships',
         source:
-          "import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'\nconsole.log(EffectComposer)\n"
+          "import { TTFLoader } from 'three/addons/loaders/TTFLoader.js'\nconsole.log(TTFLoader)\n"
       },
       {
         phrase: 'Importing "highlight.js" bundles every language',
@@ -824,42 +825,50 @@ describe('SK widget 技能教的库与打包器、库表对得上', () => {
     }
   }, 60_000)
 
-  it.each(LANGS)('SK-4 %s：three 那段点名的 addon 在 vendor 里都有', (lang) => {
+  it.each(LANGS)('SK-5 %s：libraries.md 说的 three 与 vendor 对得上；三个新本事都写了', (lang) => {
     expect(
       existsSync(VENDOR_THREE_JSM),
       `${VENDOR_THREE_JSM} is missing: run npm install (it runs scripts/vendor-widget-libs.mjs)`
     ).toBe(true)
-    const paragraph = librariesMd(lang)
-      .split('\n')
-      .find((line) => line.startsWith('**three.js**'))
-    expect(paragraph, `${lang} libraries.md 没有 three.js 那段`).toBeDefined()
+    const text = librariesMd(lang)
 
-    const named = new Set<string>()
-    for (const [, token] of paragraph!.matchAll(/`([^`]+)`/g)) {
-      if (/^[A-Z]\w*Controls$/.test(token)) named.add(`controls/${token}.js`)
-      else if (/^[A-Z]\w*Loader$/.test(token)) named.add(`loaders/${token}.js`)
-      else if (/^[a-z]+\/[A-Za-z0-9]+\.js$/.test(token)) named.add(token)
+    // 代码块里教的 addon 都随包
+    const taught = new Set<string>()
+    for (const block of text.matchAll(/```\w*\n([\s\S]*?)```/g)) {
+      for (const m of block[1].matchAll(/from\s+['"]three\/addons\/([^'"]+)['"]/g)) {
+        taught.add(m[1])
+      }
     }
-    expect([...named]).toEqual(
+    expect([...taught]).toEqual(
       expect.arrayContaining([
-        'controls/OrbitControls.js',
-        'controls/MapControls.js',
-        'controls/TrackballControls.js',
-        'controls/TransformControls.js',
         'loaders/GLTFLoader.js',
-        'loaders/OBJLoader.js',
-        'loaders/MTLLoader.js',
-        'loaders/STLLoader.js',
-        'loaders/PLYLoader.js',
-        'environments/RoomEnvironment.js',
-        'renderers/CSS2DRenderer.js',
-        'geometries/RoundedBoxGeometry.js',
-        'utils/BufferGeometryUtils.js',
-        'utils/SkeletonUtils.js'
+        'loaders/DRACOLoader.js',
+        'loaders/KTX2Loader.js',
+        'libs/meshopt_decoder.module.js'
       ])
     )
-    for (const rel of named) {
+    for (const rel of taught) {
       expect(existsSync(join(VENDOR_THREE_JSM, rel)), `${lang}: three/addons/${rel}`).toBe(true)
     }
+
+    // three 那段说不带的，确实没带
+    const paragraph = text.split('\n').find((line) => line.startsWith('**three.js**'))
+    expect(paragraph, `${lang} libraries.md 没有 three.js 那段`).toBeDefined()
+    for (const [named, rel] of [
+      ['`Addons.js`', 'Addons.js'],
+      ['`TTFLoader`', 'loaders/TTFLoader.js'],
+      ['`3DMLoader`', 'loaders/3DMLoader.js'],
+      ['`DRACOExporter`', 'exporters/DRACOExporter.js'],
+      ['`physics/`', 'physics']
+    ]) {
+      expect(paragraph, `${lang}: ${named}`).toContain(named)
+      expect(existsSync(join(VENDOR_THREE_JSM, rel)), `${lang}: ${rel}`).toBe(false)
+    }
+
+    const reference = (name: string): string =>
+      readFileSync(join(skillDir(lang, 'widget'), 'references', name), 'utf8')
+    expect(reference('files.md'), `${lang} files.md`).toContain('fs/path')
+    expect(reference('tool.md'), `${lang} tool.md`).toContain('wait_for')
+    expect(reference('design.md'), `${lang} design.md`).toContain('?raw')
   })
 })

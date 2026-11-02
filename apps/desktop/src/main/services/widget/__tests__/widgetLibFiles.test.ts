@@ -15,6 +15,7 @@
  *   L-8  served 库里不是 .js/.mjs/.css 的文件（package.json、LICENSE）→ null
  *   L-9  假 vendor：.js / .mjs / .css 与子目录里的发；.json / .html / 名叫 dir.js 的目录 / 不存在的 / 末尾带 `/` → null
  *   L-10 钉住：vendor 里指向外面的符号链接照发（statSync 跟着链接走；vendor 由安装控制，可以接受）
+ *   L-11 解码器的 .wasm：真 vendor 里 draco、basis 的路由 → 绝对路径；假 vendor 里 x.wasm 发，没有的、名叫 dir.wasm 的目录 → null
  *   F-13 acceptsGzip：gzip / `*` 且 q 不是 0 才收；`gzip;q=0`、`x-gzip`、deflate / br、空的 → 不收
  */
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
@@ -51,10 +52,11 @@ beforeAll(() => {
     writeFileSync(path, content)
   }
   put(join(fixture, 'node_modules/three/build/three.module.js'), 'export {}')
-  for (const name of ['a.js', 'b.mjs', 'c.css', 'd.json', 'e.html', 'sub/f.js']) {
+  for (const name of ['a.js', 'b.mjs', 'c.css', 'd.json', 'e.html', 'sub/f.js', 'x.wasm']) {
     put(join(jsm, name))
   }
   mkdirSync(join(jsm, 'dir.js'))
+  mkdirSync(join(jsm, 'dir.wasm'))
   put(join(tmp, 'outside/secret.js'), 'outside the vendor')
   symlinkSync(join(tmp, 'outside/secret.js'), join(jsm, 'link.js'))
 })
@@ -137,20 +139,32 @@ describe('L resolveWidgetLibFile，仓库里的 vendor', () => {
       expect(resolveWidgetLibFile(rest, VENDOR)).toBeNull()
     }
   )
+
+  it.each([
+    'examples/jsm/libs/draco/draco_decoder.wasm',
+    'examples/jsm/libs/draco/gltf/draco_decoder.wasm',
+    'examples/jsm/libs/basis/basis_transcoder.wasm'
+  ])('L-11 %s → 绝对路径', (file) => {
+    requireVendor()
+    expect(resolveWidgetLibFile(`/lib/three@0.187.0/${file}`, VENDOR)).toBe(join(THREE, file))
+  })
 })
 
 describe('L resolveWidgetLibFile，假 vendor', () => {
   const base = '/lib/three@0.187.0/examples/jsm/'
 
-  it.each(['a.js', 'b.mjs', 'c.css', 'sub/f.js'])('L-9 %s → 绝对路径', (file) => {
+  it.each(['a.js', 'b.mjs', 'c.css', 'sub/f.js', 'x.wasm'])('L-9 / L-11 %s → 绝对路径', (file) => {
     expect(resolveWidgetLibFile(base + file, fixture)).toBe(
       join(fixture, 'node_modules/three/examples/jsm', ...file.split('/'))
     )
   })
 
-  it.each(['d.json', 'e.html', 'dir.js', 'missing.js'])('L-9 %s → null', (file) => {
-    expect(resolveWidgetLibFile(base + file, fixture)).toBeNull()
-  })
+  it.each(['d.json', 'e.html', 'dir.js', 'missing.js', 'dir.wasm', 'missing.wasm'])(
+    'L-9 / L-11 %s → null',
+    (file) => {
+      expect(resolveWidgetLibFile(base + file, fixture)).toBeNull()
+    }
+  )
 
   it('L-9 文件路径末尾带 `/` → null', () => {
     expect(resolveWidgetLibFile('/lib/three@0.187.0/build/three.module.js', fixture)).not.toBeNull()

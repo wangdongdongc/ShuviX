@@ -14,12 +14,43 @@
  *   U-PV-5…9  正常路径：窗口顺序、图片路径与内容、尺寸子集、CDP 顺序、没有会话的目录（B6）、高分屏缩回
  *   U-PV-10…15 某个尺寸失败别的照截、加载超时、收尾、console 与 did-fail-load、错误上限（B11）
  *   U-PV-16…19 导航守卫（B7）、分区、排队、挂载等待
- *   U-PV-20…23 每一步的超时（B3）、弹框（B4）、会话 id（B5）、窗口选项（不打扰用户，SIGSEGV 回归）
+ *   U-PV-20…23 主线程不回话（说一句、照截）、每一步的超时（B3，含 Network.enable）、弹框（B4）、会话 id（B5）、窗口选项（不打扰用户，
+ *             SIGSEGV 回归）
  *   U-PV-23b  Linux 上无头运行：三扇窗口都只在 webPreferences 里多一项 offscreen:true（与桌面模式的选项只差这一项），
  *             照样截到三张图、手机照样设移动视口与触屏，谁都没被显示或聚焦
  *   U-PV-23c  桌面模式（linux）、无头 + darwin、无头 + win32：webPreferences 里都没有 offscreen
  *   U-PV-24   previewUrl：不给明暗原样交回；给了就在地址上带 shuvix-scheme（已有的参数留着；已有的 shuvix-scheme 换掉、不重复）
  *   U-PV-25   导航守卫放行这个组件自己带 shuvix-scheme 的地址，别的组件的照样拒
+ *   等请求（CDP 的 Network 事件，wc.cdpEvent 替页面发；一个请求发出去、回来都是假计时器上的一步）：
+ *   U-PV-26   没有请求：挂上之后 800～900ms 截，没有错误
+ *   U-PV-27   请求在 +2000 回来 → 不早于 +2500、早于 +2700 截；U-PV-27b 同样的时刻 loadingFailed
+ *   U-PV-28   一串请求、间隔 300ms：最后一个回来 500ms 之后才截
+ *   U-PV-29   请求一直不回：10s 时说一句 `[panel] the page was still loading after 10s when this was captured`，照截；每个尺寸各说各的
+ *   U-PV-30   轮询（每 300ms 一个，总回来，安静不到 500ms）：同样 10s 那句
+ *   U-PV-31   EventSource 不算；它后来的 loadingFinished 也不重置安静的时钟
+ *   U-PV-32   dataReceived、responseReceived、没有 requestId 的事件、没见过的 id 的 loadingFinished 都不重置时钟
+ *   U-PV-33   重定向（同一个 requestId 发两次、回来一次）→ 不再算没回来
+ *   U-PV-34   panel 里卡住的请求不拖累 window（每扇窗口一个计数）
+ *   U-PV-35   message 监听先于 Network.enable；Network.enable 被拒只让那个尺寸失败
+ *   等选择器（`waitFor`）：
+ *   U-PV-36   第三次问才有：每 100ms 问一次，没有错误；之后等安静、等一帧、截图
+ *   U-PV-37   先有记号后有请求、先有请求后有记号：都在两样都齐了之后截
+ *   U-PV-38   选择器的代码放进 vm 跑（假 document）：`"`、`\`、换行、`</script>`、`"]);globalThis.x=1;//` 原样到 querySelector，
+ *             注入的代码没跑；querySelector 抛错 → 'invalid'
+ *   U-PV-39   一直没有：恰好一句（第一个尺寸的名字、30s、别的尺寸不再等）；三张图；只有 panel 问过
+ *   U-PV-40   写错了：一句 `wait_for "a[[" is not a valid CSS selector`（没有尺寸前缀），不等 30s，别的尺寸不问，三张图
+ *   U-PV-41   panel 里等到了：window、phone 照样各等一遍；U-PV-42 panel 在等选择器之前就失败（载入超时）：下一个尺寸照等
+ *   U-PV-43   两个排队的预览 `waitFor` 不同：A 等不到不影响 B
+ *   U-PV-44   页面忙：问一次超时算「还没好」（之后问到了 → 没有错误）；一直不回 → 30s 那句 + 35s 内有图；问的时候被拒（上下文没了）算
+ *             「还没好」；等一帧不回 → 最多 2s、不算错；截图超时仍是失败（U-PV-20c）
+ *   U-PV-45   钉住：10s 的请求上限从等完选择器算起（记号 +25s、请求卡住 → 约 +35s 截）
+ *   U-PV-46   页面报了 12 条以上的错误：等待的那几句不占上限，都还在 errors 里
+ *   中止（`signal`）：
+ *   U-PV-47   等选择器 / 等挂载 / 等安静时中止：100ms 内停下；promise 是 resolve，`[panel] preview failed: aborted`；窗口断开并销毁；不再开窗
+ *   U-PV-48   第二个尺寸时中止：第一张图留着，第三个尺寸不开始
+ *   U-PV-49   开始之前就中止了：没有窗口，images []
+ *   U-PV-50   排队时中止：没有窗口，等前一个跑完才 settle（钉住），后面排的照跑；之后补令牌钩子什么都不发
+ *   U-PV-51   页面卡住时中止：5s 内回来
  *   WT4-PV-15 预览分区的补令牌钩子（真的跑 webRequest 监听者）：预览进行中，这个组件自己页面发的请求带 `preview` 令牌、
  *             载荷是发起预览的会话；别的组件的请求什么都不带；跑完之后（含每个尺寸都失败的那次）谁都不带，页面冒充的
  *             头去掉；从来不是 ui 令牌
@@ -82,6 +113,8 @@ const fx = vi.hoisted(() => {
     loadURL(wc: FakeWebContents, url: string): Promise<void>
     mount(wc: FakeWebContents, n: number): Promise<unknown>
     fonts(wc: FakeWebContents): Promise<unknown>
+    frame(wc: FakeWebContents): Promise<unknown>
+    selector(wc: FakeWebContents, code: string): Promise<unknown>
     capture(wc: FakeWebContents): Promise<FakeImage>
     cdp(wc: FakeWebContents, method: string, params: unknown): Promise<unknown>
     detach(wc: FakeWebContents): void
@@ -91,6 +124,8 @@ const fx = vi.hoisted(() => {
     loadURL: () => Promise.resolve(),
     mount: () => Promise.resolve(true),
     fonts: () => Promise.resolve(true),
+    frame: () => Promise.resolve(true),
+    selector: () => Promise.resolve(true),
     capture: (wc) => Promise.resolve(new FakeImage(wc.spec.width, wc.spec.height, wc.size)),
     cdp: () => Promise.resolve({}),
     detach: () => {}
@@ -99,6 +134,7 @@ const fx = vi.hoisted(() => {
 
   class FakeWebContents {
     readonly listeners = new Map<string, Listener[]>()
+    readonly debuggerListeners = new Map<string, Listener[]>()
     openHandler: ((details: { url: string }) => unknown) | null = null
     attached = false
     mountProbes = 0
@@ -117,6 +153,14 @@ const fx = vi.hoisted(() => {
       if (code.includes('document.fonts')) {
         log.push({ size: this.size, op: 'fonts' })
         return hooks.fonts(this)
+      }
+      if (code.includes('requestAnimationFrame')) {
+        log.push({ size: this.size, op: 'frame' })
+        return hooks.frame(this)
+      }
+      if (code.includes('querySelector')) {
+        log.push({ size: this.size, op: 'selector', arg: code })
+        return hooks.selector(this, code)
       }
       log.push({ size: this.size, op: 'mount' })
       return hooks.mount(this, ++this.mountProbes)
@@ -139,6 +183,9 @@ const fx = vi.hoisted(() => {
       sendCommand: vi.fn((method: string, params: unknown) => {
         log.push({ size: this.size, op: 'cdp', arg: { method, params } })
         return hooks.cdp(this, method, params)
+      }),
+      on: vi.fn((event: string, fn: Listener) => {
+        this.debuggerListeners.set(event, [...(this.debuggerListeners.get(event) ?? []), fn])
       })
     }
     constructor(readonly win: FakeWindow) {}
@@ -150,6 +197,10 @@ const fx = vi.hoisted(() => {
     }
     fire(event: string, ...args: unknown[]): void {
       for (const fn of this.listeners.get(event) ?? []) fn(...args)
+    }
+    /** 一条 CDP 事件（`wc.debugger.on('message', …)`） */
+    cdpEvent(method: string, params: unknown): void {
+      for (const fn of this.debuggerListeners.get('message') ?? []) fn({}, method, params)
     }
   }
 
@@ -236,6 +287,8 @@ vi.mock('../../logger', () => ({
 
 type Svc = typeof import('../widgetPreviewService')
 let svc: Svc
+
+type FakeWc = InstanceType<typeof fx.FakeWindow>['webContents']
 
 const ID = 'pv-x'
 const PORT = 4567
@@ -558,6 +611,7 @@ describe('previewWidget: the normal path', () => {
         const expected: unknown[] = [
           { size, op: 'loadURL', arg: 'about:blank' },
           { size, op: 'attach', arg: '1.3' },
+          { method: 'Network.enable', params: {} },
           {
             method: 'Page.addScriptToEvaluateOnNewDocument',
             params: { source: expect.stringContaining('window.alert') }
@@ -962,18 +1016,24 @@ describe('previewWidget: queue and waits', () => {
 })
 
 describe('previewWidget: every step is bounded (B3)', () => {
-  it('U-PV-20 a page whose main thread never answers fails that size, is destroyed, and does not block the queue', async () => {
-    fx.hooks.mount = (wc) => (wc.size === 'panel' ? never() : Promise.resolve(true))
-    fx.hooks.fonts = (wc) => (wc.size === 'panel' ? never() : Promise.resolve(true))
+  it('U-PV-20 a page whose main thread never answers: one line per affected size, still captured, destroyed, the queue intact', async () => {
+    const stuck = (wc: { size: Size }): boolean => wc.size === 'panel' || wc.size === 'phone'
+    fx.hooks.mount = (wc) => (stuck(wc) ? never() : Promise.resolve(true))
+    fx.hooks.fonts = (wc) => (stuck(wc) ? never() : Promise.resolve(true))
+    fx.hooks.frame = (wc) => (stuck(wc) ? never() : Promise.resolve(true))
     const first = svc.previewWidget(ID, { sessionId: 'sess-1' })
     const queued = svc.previewWidget('pv-y', { sizes: ['window'], sessionId: 'sess-1' })
 
     const out = await run(first)
-    expect(out.errors).toEqual(['[panel] preview failed: checking the page timed out after 5000ms'])
-    expect(out.images.map((i) => i.size)).toEqual(['window', 'phone'])
-    const panel = windows().find((w) => w.size === 'panel')!
-    expect(panel.destroy).toHaveBeenCalledTimes(1)
-    expect(panel.webContents.debugger.detach).toHaveBeenCalledTimes(1)
+    expect(out.errors).toEqual([
+      '[panel] the page did not answer for 5s (its main thread is busy or stuck)',
+      '[phone] the page did not answer for 5s (its main thread is busy or stuck)'
+    ])
+    expect(out.images.map((i) => i.size)).toEqual(ALL)
+    for (const w of windows()) {
+      expect(w.destroy, w.size).toHaveBeenCalledTimes(1)
+      expect(w.webContents.debugger.detach, w.size).toHaveBeenCalledTimes(1)
+    }
 
     const next = await run(queued)
     expect(next.id).toBe('pv-y')
@@ -981,6 +1041,7 @@ describe('previewWidget: every step is bounded (B3)', () => {
   })
 
   it.each([
+    ['Network.enable', 'panel'],
     ['Page.addScriptToEvaluateOnNewDocument', 'panel'],
     ['Emulation.setDeviceMetricsOverride', 'window'],
     ['Emulation.setTouchEmulationEnabled', 'phone'],
@@ -1011,6 +1072,598 @@ describe('previewWidget: every step is bounded (B3)', () => {
     ])
     expect(out.images.map((i) => i.size)).toEqual(['panel', 'phone'])
     expect(windowOf('window').destroy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('previewWidget: waiting for the page requests', () => {
+  /** 这条用例里记下的时刻 */
+  let at: { mounted: number; captured: number; capturedBySize: Partial<Record<Size, number>> }
+
+  /** `size` 的页面挂上时跑 `then`（缺省所有尺寸；挂载的第一次探测就答「有了」）；记下时刻 */
+  function onMount(then: (wc: FakeWc) => void, size?: Size): void {
+    fx.hooks.mount = (wc) => {
+      if (!size || wc.size === size) at.mounted = Date.now()
+      if (!size || wc.size === size) then(wc)
+      return Promise.resolve(true)
+    }
+  }
+
+  const sent = (wc: FakeWc, requestId: string, type = 'Fetch'): void =>
+    wc.cdpEvent('Network.requestWillBeSent', { requestId, type })
+  const finished = (wc: FakeWc, requestId: string): void =>
+    wc.cdpEvent('Network.loadingFinished', { requestId })
+  const failed = (wc: FakeWc, requestId: string): void =>
+    wc.cdpEvent('Network.loadingFailed', { requestId })
+
+  beforeEach(() => {
+    at = { mounted: 0, captured: 0, capturedBySize: {} }
+    fx.hooks.capture = (wc) => {
+      at.captured = Date.now()
+      at.capturedBySize[wc.size] = at.captured
+      return Promise.resolve(new fx.FakeImage(wc.spec.width, wc.spec.height, wc.size))
+    }
+  })
+
+  const panelOnly = (extra: Record<string, unknown> = {}): ReturnType<typeof svc.previewWidget> =>
+    svc.previewWidget(ID, { sizes: ['panel'], sessionId: 'sess-1', ...extra })
+
+  it('U-PV-26 no requests: captured 800 to 900 ms after mount, no errors', async () => {
+    onMount(() => {})
+    const out = await run(panelOnly())
+    expect(out.errors).toEqual([])
+    expect(out.images).toHaveLength(1)
+    expect(at.captured - at.mounted).toBeGreaterThanOrEqual(800)
+    expect(at.captured - at.mounted).toBeLessThanOrEqual(900)
+  })
+
+  it.each([
+    ['U-PV-27 loadingFinished', finished],
+    ['U-PV-27b loadingFailed', failed]
+  ] as const)(
+    '%s at +2000: captured no earlier than +2500 and before +2700',
+    async (_label, end) => {
+      onMount((wc) => {
+        sent(wc, 'r1')
+        setTimeout(() => end(wc, 'r1'), 2_000)
+      })
+      const out = await run(panelOnly())
+      expect(out.errors).toEqual([])
+      expect(at.captured - at.mounted).toBeGreaterThanOrEqual(2_500)
+      expect(at.captured - at.mounted).toBeLessThan(2_700)
+    }
+  )
+
+  it('U-PV-28 sequential requests with 300 ms gaps: captured only 500 ms after the last one ends', async () => {
+    const lastEnds = 3 * (200 + 300) + 200
+    onMount((wc) => {
+      for (let i = 0; i < 4; i++) {
+        const start = i * (200 + 300)
+        setTimeout(() => sent(wc, `r${i}`), start)
+        setTimeout(() => finished(wc, `r${i}`), start + 200)
+      }
+    })
+    const out = await run(panelOnly())
+    expect(out.errors).toEqual([])
+    expect(at.captured - at.mounted).toBeGreaterThanOrEqual(lastEnds + 500)
+    expect(at.captured - at.mounted).toBeLessThan(lastEnds + 700)
+  })
+
+  it('U-PV-29 a request that never finishes: the 10 s line per size, each image still written', async () => {
+    onMount((wc) => sent(wc, 'stuck'))
+    const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1' }))
+    expect(out.errors).toEqual(
+      ALL.map((size) => `[${size}] the page was still loading after 10s when this was captured`)
+    )
+    expect(out.images.map((i) => i.size)).toEqual(ALL)
+    for (const img of out.images) expect(existsSync(img.path), img.size).toBe(true)
+    expect(at.captured - at.mounted).toBeGreaterThanOrEqual(10_000)
+    expect(at.captured - at.mounted).toBeLessThan(10_200)
+  })
+
+  it('U-PV-30 polling that always finishes (idle never reaches 500): the same 10 s line', async () => {
+    let timer: ReturnType<typeof setInterval> | undefined
+    onMount((wc) => {
+      let n = 0
+      timer = setInterval(() => {
+        const id = `poll-${++n}`
+        sent(wc, id)
+        finished(wc, id)
+      }, 300)
+    })
+    const capture = fx.hooks.capture
+    fx.hooks.capture = (wc) => {
+      clearInterval(timer)
+      return capture(wc)
+    }
+    const out = await run(panelOnly())
+    expect(out.errors).toEqual([
+      '[panel] the page was still loading after 10s when this was captured'
+    ])
+    expect(out.images).toHaveLength(1)
+    expect(at.captured - at.mounted).toBeGreaterThanOrEqual(10_000)
+  })
+
+  it('U-PV-31 an EventSource never counts; its later loadingFinished does not reset the quiet clock', async () => {
+    onMount((wc) => {
+      sent(wc, 'sse', 'EventSource')
+      setTimeout(() => finished(wc, 'sse'), 700)
+    })
+    const out = await run(panelOnly())
+    expect(out.errors).toEqual([])
+    expect(at.captured - at.mounted).toBeGreaterThanOrEqual(800)
+    expect(at.captured - at.mounted).toBeLessThanOrEqual(900)
+  })
+
+  it('U-PV-32 dataReceived, responseReceived, no requestId, an unseen id do not reset the clock', async () => {
+    let timer: ReturnType<typeof setInterval> | undefined
+    onMount((wc) => {
+      sent(wc, 'r1')
+      finished(wc, 'r1')
+      timer = setInterval(() => {
+        wc.cdpEvent('Network.dataReceived', { requestId: 'r1' })
+        wc.cdpEvent('Network.responseReceived', { requestId: 'r1' })
+        wc.cdpEvent('Network.loadingFinished', {})
+        wc.cdpEvent('Network.requestWillBeSent', {})
+        wc.cdpEvent('Page.frameNavigated', { frame: {} })
+        finished(wc, 'never-sent')
+      }, 100)
+    })
+    const capture = fx.hooks.capture
+    fx.hooks.capture = (wc) => {
+      clearInterval(timer)
+      return capture(wc)
+    }
+    const out = await run(panelOnly())
+    expect(out.errors).toEqual([])
+    expect(at.captured - at.mounted).toBeGreaterThanOrEqual(800)
+    expect(at.captured - at.mounted).toBeLessThanOrEqual(900)
+  })
+
+  it('U-PV-33 a redirect (the same requestId twice, one finish) is no longer in flight', async () => {
+    onMount((wc) => {
+      sent(wc, 'r1')
+      setTimeout(() => sent(wc, 'r1'), 100)
+      setTimeout(() => finished(wc, 'r1'), 300)
+    })
+    const out = await run(panelOnly())
+    expect(out.errors).toEqual([])
+    expect(at.captured - at.mounted).toBeLessThan(1_000)
+  })
+
+  it('U-PV-34 a stuck request in panel does not delay window (a tracker per window)', async () => {
+    const mounted: Partial<Record<Size, number>> = {}
+    fx.hooks.mount = (wc) => {
+      mounted[wc.size] = Date.now()
+      if (wc.size === 'panel') sent(wc, 'stuck')
+      return Promise.resolve(true)
+    }
+    const out = await run(svc.previewWidget(ID, { sizes: ['panel', 'window'], sessionId: 's' }))
+    expect(out.errors).toEqual([
+      '[panel] the page was still loading after 10s when this was captured'
+    ])
+    const windowTook = at.capturedBySize.window! - mounted.window!
+    expect(windowTook).toBeGreaterThanOrEqual(800)
+    expect(windowTook).toBeLessThanOrEqual(900)
+  })
+
+  it('U-PV-35 the message listener is attached before Network.enable; a rejection fails only that size', async () => {
+    const listenersAtEnable: number[] = []
+    fx.hooks.cdp = (wc, method) => {
+      if (method === 'Network.enable') {
+        listenersAtEnable.push(wc.debuggerListeners.get('message')?.length ?? 0)
+        if (wc.size === 'window') return Promise.reject(new Error('no network domain'))
+      }
+      return Promise.resolve({})
+    }
+    const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1' }))
+    expect(listenersAtEnable).toEqual([1, 1, 1])
+    expect(out.errors).toEqual(['[window] preview failed: no network domain'])
+    expect(out.images.map((i) => i.size)).toEqual(['panel', 'phone'])
+    expect(windowOf('window').destroy).toHaveBeenCalledTimes(1)
+    expect(windowOf('window').webContents.debugger.detach).toHaveBeenCalledTimes(1)
+  })
+
+  describe('waitFor', () => {
+    const SELECTOR = '[data-ready]'
+    const selectorOps = (): Array<(typeof fx.log)[number]> =>
+      fx.log.filter((e) => e.op === 'selector')
+
+    it('U-PV-36 true on the third poll: polls 100 ms apart, no errors, then quiet, then frame, then capture', async () => {
+      const asked: number[] = []
+      fx.hooks.selector = () => {
+        asked.push(Date.now())
+        return Promise.resolve(asked.length === 3)
+      }
+      const out = await run(panelOnly({ waitFor: SELECTOR }))
+      expect(out.errors).toEqual([])
+      expect(asked).toHaveLength(3)
+      expect(asked[1] - asked[0]).toBe(100)
+      expect(asked[2] - asked[1]).toBe(100)
+      const ops = opsOf('panel')
+      const lastSelector = ops.lastIndexOf('selector')
+      expect(lastSelector).toBeGreaterThan(-1)
+      expect(ops.indexOf('frame')).toBeGreaterThan(lastSelector)
+      expect(ops.indexOf('capturePage')).toBeGreaterThan(ops.indexOf('frame'))
+      // 等够了 settle
+      expect(at.captured - asked[0]).toBeGreaterThanOrEqual(800)
+    })
+
+    it('U-PV-37 the marker first and a request later: captured after both', async () => {
+      let markerAt = 0
+      onMount((wc) => {
+        setTimeout(() => (markerAt = Date.now()), 100)
+        setTimeout(() => sent(wc, 'r1'), 500)
+        setTimeout(() => finished(wc, 'r1'), 2_000)
+      })
+      fx.hooks.selector = () => Promise.resolve(markerAt > 0)
+      const out = await run(panelOnly({ waitFor: SELECTOR }))
+      expect(out.errors).toEqual([])
+      expect(at.captured - at.mounted).toBeGreaterThanOrEqual(2_500)
+      expect(at.captured - at.mounted).toBeLessThan(2_700)
+    })
+
+    it('U-PV-37 the request first and the marker later: captured after both', async () => {
+      let markerAt = 0
+      onMount((wc) => {
+        sent(wc, 'r1')
+        setTimeout(() => finished(wc, 'r1'), 300)
+        setTimeout(() => (markerAt = Date.now()), 3_000)
+      })
+      fx.hooks.selector = () => Promise.resolve(markerAt > 0)
+      const out = await run(panelOnly({ waitFor: SELECTOR }))
+      expect(out.errors).toEqual([])
+      expect(at.captured - at.mounted).toBeGreaterThanOrEqual(3_000)
+      expect(at.captured - at.mounted).toBeLessThan(3_200)
+    })
+
+    it.each([
+      'a"b',
+      'a\\b',
+      'a\nb',
+      '</script><script>globalThis.x=1</script>',
+      '"]);globalThis.x=1;//'
+    ])(
+      'U-PV-38 selector %j reaches querySelector as written; nothing injected runs',
+      async (raw) => {
+        const codes: string[] = []
+        fx.hooks.selector = (_wc, code) => {
+          codes.push(code)
+          return Promise.resolve(true)
+        }
+        await run(panelOnly({ waitFor: raw }))
+        expect(codes).toHaveLength(1)
+        const asked: string[] = []
+        const sandbox: Record<string, unknown> = {
+          document: {
+            querySelector: (s: string) => {
+              asked.push(s)
+              return {}
+            }
+          }
+        }
+        expect(runInNewContext(codes[0], sandbox)).toBe(true)
+        expect(asked).toEqual([raw])
+        expect(sandbox.x).toBeUndefined()
+      }
+    )
+
+    it('U-PV-38 a throwing querySelector answers invalid', async () => {
+      const codes: string[] = []
+      fx.hooks.selector = (_wc, code) => {
+        codes.push(code)
+        return Promise.resolve(true)
+      }
+      await run(panelOnly({ waitFor: 'a[[' }))
+      const verdict = runInNewContext(codes[0], {
+        document: {
+          querySelector: () => {
+            throw new Error('not a valid selector')
+          }
+        }
+      })
+      expect(verdict).toBe('invalid')
+    })
+
+    it('U-PV-39 never appears: exactly one line, three images, only the panel window asked', async () => {
+      fx.hooks.selector = () => Promise.resolve(false)
+      const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1', waitFor: SELECTOR }))
+      expect(out.errors).toEqual([
+        '[panel] wait_for "[data-ready]" did not appear within 30s; captured without it, and no other size waited for it'
+      ])
+      expect(out.images.map((i) => i.size)).toEqual(ALL)
+      expect(new Set(selectorOps().map((e) => e.size))).toEqual(new Set(['panel']))
+    })
+
+    it('U-PV-40 invalid: one line with no size prefix, no 30 s wait, no later size asks, three images', async () => {
+      fx.hooks.selector = () => Promise.resolve('invalid')
+      const started = Date.now()
+      const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1', waitFor: 'a[[' }))
+      expect(out.errors).toEqual(['wait_for "a[[" is not a valid CSS selector'])
+      expect(out.images.map((i) => i.size)).toEqual(ALL)
+      expect(selectorOps().map((e) => e.size)).toEqual(['panel'])
+      expect(at.capturedBySize.panel! - started).toBeLessThan(2_000)
+    })
+
+    it('U-PV-41 found in panel: window and phone still wait for it, each afresh', async () => {
+      const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1', waitFor: SELECTOR }))
+      expect(out.errors).toEqual([])
+      expect(selectorOps().map((e) => e.size)).toEqual(ALL)
+    })
+
+    it('U-PV-42 panel fails before the selector stage (load timeout): the next size still waits', async () => {
+      fx.hooks.loadURL = (wc, url) =>
+        wc.size === 'panel' && url !== 'about:blank' ? never() : Promise.resolve()
+      const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1', waitFor: SELECTOR }))
+      expect(out.errors).toEqual([
+        '[panel] preview failed: loading the widget timed out after 15000ms'
+      ])
+      expect(selectorOps().map((e) => e.size)).toEqual(['window', 'phone'])
+    })
+
+    it('U-PV-43 two queued previews with different waitFor: A timing out does not clear B', async () => {
+      fx.hooks.selector = (_wc, code) => Promise.resolve(code.includes('[b]'))
+      const a = svc.previewWidget(ID, { sizes: ['panel'], sessionId: 'sess-1', waitFor: '[a]' })
+      const b = svc.previewWidget('pv-y', { sizes: ['panel'], sessionId: 'sess-1', waitFor: '[b]' })
+      const [outA, outB] = await run(Promise.all([a, b]))
+      expect(outA.errors).toEqual([
+        '[panel] wait_for "[a]" did not appear within 30s; captured without it, and no other size waited for it'
+      ])
+      expect(outB.errors).toEqual([])
+      expect(selectorOps().some((e) => String(e.arg).includes('[b]'))).toBe(true)
+    })
+
+    describe('U-PV-44 a busy page', () => {
+      it('U-PV-44 the selector ask never answers, then a later ask finds it: no failure', async () => {
+        let n = 0
+        const asked: number[] = []
+        fx.hooks.selector = () => {
+          asked.push(Date.now())
+          return ++n === 1 ? never() : Promise.resolve(true)
+        }
+        const out = await run(panelOnly({ waitFor: SELECTOR }))
+        expect(out.errors).toEqual([])
+        expect(out.images).toHaveLength(1)
+        expect(asked).toHaveLength(2)
+        // 问一次最多等 5s，再隔一个轮询
+        expect(asked[1] - asked[0]).toBe(5_000 + 100)
+      })
+
+      it('U-PV-44 it never answers at all: the 30 s line and an image within 35 s', async () => {
+        fx.hooks.selector = () => never()
+        onMount(() => {})
+        const out = await run(panelOnly({ waitFor: SELECTOR }))
+        expect(out.errors).toEqual([
+          '[panel] wait_for "[data-ready]" did not appear within 30s; captured without it, and no other size waited for it'
+        ])
+        expect(out.images).toHaveLength(1)
+        expect(at.captured - at.mounted).toBeGreaterThanOrEqual(30_000)
+        expect(at.captured - at.mounted).toBeLessThanOrEqual(35_000)
+      })
+
+      it('U-PV-44 the ask rejects (context destroyed): treated as not yet', async () => {
+        let n = 0
+        fx.hooks.selector = () =>
+          ++n === 1
+            ? Promise.reject(new Error('Execution context was destroyed'))
+            : Promise.resolve(true)
+        const out = await run(panelOnly({ waitFor: SELECTOR }))
+        expect(out.errors).toEqual([])
+        expect(n).toBe(2)
+      })
+
+      it('U-PV-44 the frame step never answers: bounded at 2 s, not an error', async () => {
+        let frameAt = 0
+        fx.hooks.frame = () => {
+          frameAt = Date.now()
+          return never()
+        }
+        const out = await run(panelOnly())
+        expect(out.errors).toEqual([])
+        expect(out.images).toHaveLength(1)
+        expect(at.captured - frameAt).toBe(2_000)
+      })
+    })
+
+    it('U-PV-45 the 10 s network limit starts after the selector stage', async () => {
+      let markerAt = 0
+      onMount((wc) => {
+        sent(wc, 'stuck')
+        setTimeout(() => (markerAt = Date.now()), 25_000)
+      })
+      fx.hooks.selector = () => Promise.resolve(markerAt > 0)
+      const out = await run(panelOnly({ waitFor: SELECTOR }))
+      expect(out.errors).toEqual([
+        '[panel] the page was still loading after 10s when this was captured'
+      ])
+      expect(at.captured - at.mounted).toBeGreaterThanOrEqual(35_000)
+      expect(at.captured - at.mounted).toBeLessThan(35_300)
+    })
+
+    it('U-PV-46 twelve or more console errors do not push the wait lines out', async () => {
+      fx.hooks.loadURL = (wc, url) => {
+        if (url !== 'about:blank') {
+          for (let i = 0; i < 15; i++) {
+            wc.fire('console-message', { level: 'error', message: `e${i}` })
+          }
+        }
+        return Promise.resolve()
+      }
+      onMount((wc) => sent(wc, 'stuck'))
+      fx.hooks.selector = () => Promise.resolve(false)
+      const out = await run(panelOnly({ waitFor: SELECTOR }))
+      expect(out.errors).toEqual([
+        '[panel] wait_for "[data-ready]" did not appear within 30s; captured without it, and no other size waited for it',
+        '[panel] the page was still loading after 10s when this was captured',
+        ...Array.from({ length: 12 }, (_, i) => `[panel] e${i}`)
+      ])
+    })
+  })
+
+  describe('abort', () => {
+    /** 跑到 `ms` 再中止，交回中止的时刻 */
+    async function abortAfter(ac: AbortController, ms: number): Promise<number> {
+      await vi.advanceTimersByTimeAsync(ms)
+      ac.abort()
+      return Date.now()
+    }
+
+    it.each<[string, () => void, Record<string, unknown>]>([
+      [
+        'the selector wait',
+        () => {
+          fx.hooks.selector = () => Promise.resolve(false)
+        },
+        { waitFor: '[data-ready]' }
+      ],
+      [
+        'the mount wait',
+        () => {
+          fx.hooks.mount = () => Promise.resolve(false)
+        },
+        {}
+      ],
+      [
+        'the quiet wait',
+        () => {
+          onMount((wc) => sent(wc, 'stuck'))
+        },
+        {}
+      ]
+    ])(
+      'U-PV-47 abort during %s: stops within 100 ms, resolves, detached and destroyed, no later window',
+      async (_label, arrange, options) => {
+        arrange()
+        let detachedAt = 0
+        fx.hooks.detach = () => {
+          detachedAt = Date.now()
+        }
+        const ac = new AbortController()
+        const p = svc.previewWidget(ID, { sessionId: 'sess-1', signal: ac.signal, ...options })
+        const abortedAt = await abortAfter(ac, 1_000)
+        const out = await run(p)
+        expect(out.images).toEqual([])
+        expect(out.errors).toEqual(['[panel] preview failed: aborted'])
+        expect(detachedAt - abortedAt).toBeLessThanOrEqual(100)
+        expect(windows().map((w) => w.size)).toEqual(['panel'])
+        expect(windowOf('panel').destroy).toHaveBeenCalledTimes(1)
+        expect(windowOf('panel').webContents.debugger.detach).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('U-PV-48 abort during the second size: the first image is kept, the third never starts', async () => {
+      fx.hooks.selector = (wc) => Promise.resolve(wc.size === 'panel')
+      const ac = new AbortController()
+      const p = svc.previewWidget(ID, {
+        sessionId: 'sess-1',
+        signal: ac.signal,
+        waitFor: '[data-ready]'
+      })
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(windows().map((w) => w.size)).toEqual(['panel', 'window'])
+      ac.abort()
+      const out = await run(p)
+      expect(out.images.map((i) => i.size)).toEqual(['panel'])
+      expect(out.errors).toEqual(['[window] preview failed: aborted'])
+      expect(windows().map((w) => w.size)).toEqual(['panel', 'window'])
+    })
+
+    it('U-PV-49 already aborted before the run: no windows, images []', async () => {
+      const ac = new AbortController()
+      ac.abort()
+      const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1', signal: ac.signal }))
+      expect(out.images).toEqual([])
+      expect(out.errors).toEqual([])
+      expect(windows()).toHaveLength(0)
+    })
+
+    it('U-PV-50 aborted while queued: no window, settles only once the earlier preview ends, the next one still runs, then no tokens', async () => {
+      let release!: (v: { url: string; buildSuccess: boolean }) => void
+      fx.startWidget.mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            release = r
+          })
+      )
+      const ac = new AbortController()
+      const first = svc.previewWidget('pv-one', { sizes: ['panel'], sessionId: 'sess-1' })
+      const queued = svc.previewWidget('pv-two', {
+        sizes: ['window'],
+        sessionId: 'sess-1',
+        signal: ac.signal
+      })
+      const third = svc.previewWidget('pv-three', { sizes: ['phone'], sessionId: 'sess-1' })
+      let settled = false
+      void queued.then(() => (settled = true))
+
+      await vi.advanceTimersByTimeAsync(10)
+      ac.abort()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(settled).toBe(false)
+      expect(windows()).toHaveLength(0)
+
+      release({ url: URL_OF('pv-one'), buildSuccess: true })
+      const [a, b, c] = await run(Promise.all([first, queued, third]))
+      expect(a.images.map((i) => i.size)).toEqual(['panel'])
+      expect(b.images).toEqual([])
+      expect(b.errors).toEqual([])
+      expect(c.images.map((i) => i.size)).toEqual(['phone'])
+      expect(windows().map((w) => w.size)).toEqual(['panel', 'phone'])
+
+      // 都跑完了：补令牌的钩子谁都不补
+      const listener = fx.fakeSession.webRequest.onBeforeSendHeaders.mock.calls.at(-1)![1] as (
+        details: Record<string, unknown>,
+        cb: (r: { requestHeaders: Record<string, string> }) => void
+      ) => void
+      for (const id of ['pv-one', 'pv-two', 'pv-three']) {
+        let out: Record<string, string> = {}
+        listener(
+          {
+            url: `${URL_OF(id)}api/x`,
+            referrer: '',
+            resourceType: 'xhr',
+            frame: { url: URL_OF(id) },
+            requestHeaders: { Accept: '*/*' }
+          },
+          (r) => (out = r.requestHeaders)
+        )
+        expect(out, id).toEqual({ Accept: '*/*' })
+      }
+    })
+
+    it.each<[string, () => void, Record<string, unknown>]>([
+      [
+        'the mount stage',
+        () => {
+          fx.hooks.mount = () => never()
+          fx.hooks.fonts = () => never()
+        },
+        {}
+      ],
+      [
+        'the selector stage',
+        () => {
+          fx.hooks.selector = () => never()
+        },
+        { waitFor: '[data-ready]' }
+      ]
+    ])(
+      'U-PV-51 abort with a page hung in %s: returns within 5 s',
+      async (_label, arrange, options) => {
+        arrange()
+        let detachedAt = 0
+        fx.hooks.detach = () => {
+          detachedAt = Date.now()
+        }
+        const ac = new AbortController()
+        const p = svc.previewWidget(ID, { sessionId: 'sess-1', signal: ac.signal, ...options })
+        const abortedAt = await abortAfter(ac, 1_000)
+        const out = await run(p)
+        expect(out.images).toEqual([])
+        expect(out.errors.at(-1)).toBe('[panel] preview failed: aborted')
+        expect(detachedAt - abortedAt).toBeLessThanOrEqual(5_000)
+        expect(windows().map((w) => w.size)).toEqual(['panel'])
+      }
+    )
   })
 })
 

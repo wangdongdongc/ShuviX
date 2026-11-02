@@ -20,6 +20,27 @@
  *   B-5 没有默认导出 / TS 语法错 → success false，错误是格式化好的文本，带文件名与行号
  *   B-6 用 scripts/bundle-widget-api.mjs 的选项重打 sandboxRuntime.ts → 与 resources/bundler/deps/widget-api.esm.js
  *       逐字节相同（改了运行时却没重跑脚本，这里就红）
+ *
+ * 打包从不带进组件目录外面的文件（后缀、package.json、符号链接、CSS 都绕不出去）。根目录下放 secret.txt / .json / .png、
+ * o.css、only.ts、pkg（main）、pkgm（module）、sdir/f.txt，内容都带同一个标记；组件里放 link.txt、link.png、ldir（指向
+ * 外面的符号链接）、opkg（main 指到外面）、bpkg（browser 字段把 ./m.js 映射到外面）。失败都断：success false、没有产物、
+ * 错误里没有标记也没有它的 base64、错误带 file:line:col。
+ *   BE-1  界面 import：`?a` / `#a` / `?a#b` 后缀、`../secret`（补 .json）、`../only.js`（TS 的 .js → .ts）、`../pkg`、`../pkgm`、
+ *         `./sub/../../secret.txt?a`、`./link.txt?a`、`./ldir/f.txt?a`、`./opkg` → `"X" is outside this widget's directory`
+ *   BE-2  `./bpkg` 的 index.ts import ./m.js，browser 字段映射到外面 → 拒绝，点名 ./m.js
+ *   BE-3  别的写法：require、动态 import、export *、import './x.css' → 一样拒绝
+ *   BE-4  裸写的 `a/../../secret.txt`，有没有 tsconfig baseUrl → 不可用，不带标记
+ *   BE-5  api.ts：`?a`、`#a`、`../secret`、`../only.js`、`./link.txt?a`、`../secret.txt?raw` → 拒绝
+ *   BE-6  api.ts：`../pkg`、`./opkg` → Could not resolve（neutral 平台不看 main），不带标记
+ *   BE-7  CSS 的 url(…)：各种写法与符号链接 → 拒绝，位置在 st.css:1:…，产物里没有 base64
+ *   BE-8  CSS 的 @import：`"../o.css?x"`、`"a/../../o.css"`、`url(a/../../o.css)` → 拒绝；`"a/../../o.css?x"` → 不可用
+ *   BE-9  CSS 的 url(%2e%2e/…)、url(..%2F…) → Could not resolve，不漏内容
+ *   BE-10 组件目录里的照常（JS）：`?a`、`#a`、`.json?x`、`./data`、`.png?v=1`、main 在里面的包、子目录、指向里面的符号链接带后缀。
+ *         临时目录不 realpath（macOS 的 /var → /private/var 正好走到真实路径的比较）
+ *   BE-11 组件目录里的照常（CSS）：url 带后缀 → image/png 的 data URL（只有纯 `#h` 留着），@import "s.css?x" 内联；
+ *         url(#frag)、url(data:…)、url(https://…) 原样
+ *   BE-12 api.ts：`./x.txt?a`、`./data` → 成功，内容在产物里
+ *   BR-11 `?raw` 只给界面：api.ts 的 `./mod.js?raw` 走的是模块（`No matching export`），不是文本
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -336,5 +357,254 @@ describe('B-6 随包的 widget-api.esm.js 与源码一致', () => {
     // 先比文本（失败时的 diff 可读），再比字节
     expect(rebuilt.toString('utf8')).toBe(shipped.toString('utf8'))
     expect(rebuilt.equals(shipped)).toBe(true)
+  })
+})
+
+describe('BE 打包不带进组件目录外面的文件', () => {
+  const MARKER = 'OUTSIDE_MARKER_Zq7'
+  const MARKER_B64 = Buffer.from(MARKER).toString('base64')
+  const OUTSIDE = (spec: string): string => `"${spec}" is outside this widget's directory`
+  const INDEX_AT = /index\.tsx:1:\d+/
+
+  /** 在根目录（组件目录外面）写文件 */
+  const out = (name: string, content: string): void => {
+    const full = join(root, name)
+    mkdirSync(dirname(full), { recursive: true })
+    writeFileSync(full, content)
+  }
+
+  beforeEach(() => {
+    out('secret.txt', MARKER)
+    out('secret.json', JSON.stringify({ m: MARKER }))
+    out('secret.png', MARKER)
+    out('o.css', `.o-${MARKER} { color: red }\n`)
+    out('only.ts', `export default '${MARKER}'\n`)
+    out('pkg/package.json', JSON.stringify({ main: 'lib.js' }))
+    out('pkg/lib.js', `export default '${MARKER}'\n`)
+    out('pkgm/package.json', JSON.stringify({ module: 'lib.js' }))
+    out('pkgm/lib.js', `export default '${MARKER}'\n`)
+    out('sdir/f.txt', MARKER)
+    symlinkSync(join(root, 'secret.txt'), join(widgetDir, 'link.txt'))
+    symlinkSync(join(root, 'secret.png'), join(widgetDir, 'link.png'))
+    symlinkSync(join(root, 'sdir'), join(widgetDir, 'ldir'))
+    put('opkg/package.json', JSON.stringify({ main: '../../secret.txt' }))
+    put('bpkg/package.json', JSON.stringify({ browser: { './m.js': '../../secret.txt' } }))
+    put('bpkg/index.ts', `import m from './m.js'\nexport default m\n`)
+  })
+
+  interface Built {
+    success: boolean
+    outputJS?: string
+    outputCSS?: string
+    errors?: string[]
+  }
+
+  const screen = (source: string): Promise<Built> => {
+    const entry = put('index.tsx', source)
+    return bundler.build(entry, widgetDir)
+  }
+  const importingAndLogging = (spec: string): string =>
+    `import t from ${JSON.stringify(spec)}\nconsole.log(t)\n`
+  /** 一份只引一个样式表的界面 */
+  const styled = (css: string): Promise<Built> => {
+    put('st.css', css)
+    return screen(`import './st.css'\nconsole.log(1)\n`)
+  }
+
+  function expectRefused(r: Built, text: string, at: RegExp): void {
+    const all = (r.errors ?? []).join('\n')
+    expect(r.success, all).toBe(false)
+    expect(r.outputJS).toBeUndefined()
+    expect(r.outputCSS).toBeUndefined()
+    expect(all).toContain(text)
+    expect(all).toMatch(at)
+    expect(all).not.toContain(MARKER)
+    expect(all).not.toContain(MARKER_B64)
+  }
+
+  function expectBuilt(r: Built): { js: string; css: string } {
+    expect(r.errors, (r.errors ?? []).join('\n')).toBeUndefined()
+    expect(r.success).toBe(true)
+    return { js: r.outputJS ?? '', css: r.outputCSS ?? '' }
+  }
+
+  it.each([
+    '../secret.txt?a',
+    '../secret.txt#a',
+    '../secret.txt?a#b',
+    '../secret',
+    '../only.js',
+    '../pkg',
+    '../pkgm',
+    './sub/../../secret.txt?a',
+    './link.txt?a',
+    './ldir/f.txt?a',
+    './opkg'
+  ])('BE-1 界面 import %j → 拒绝', async (spec) => {
+    expectRefused(await screen(importingAndLogging(spec)), OUTSIDE(spec), INDEX_AT)
+  })
+
+  it('BE-2 browser 字段把 ./m.js 映射到外面 → 拒绝，点名 ./m.js', async () => {
+    expectRefused(
+      await screen(importingAndLogging('./bpkg')),
+      OUTSIDE('./m.js'),
+      /bpkg\/index\.ts:1:\d+/
+    )
+  })
+
+  it.each([
+    ['require', `const t = require('../secret.txt?a')\nconsole.log(t)\n`, '../secret.txt?a'],
+    ['动态 import', `import('../secret.txt#a').then(console.log)\n`, '../secret.txt#a'],
+    ['export *', `export * from '../secret.json?x'\n`, '../secret.json?x'],
+    ['import 样式表', `import '../o.css?x'\n`, '../o.css?x']
+  ])('BE-3 %s → 拒绝', async (_what, source, spec) => {
+    expectRefused(await screen(source), OUTSIDE(spec), INDEX_AT)
+  })
+
+  it.each([
+    ['没有 tsconfig', undefined],
+    ['tsconfig baseUrl', JSON.stringify({ compilerOptions: { baseUrl: '.' } })]
+  ])('BE-4 裸写的 a/../../secret.txt（%s）→ 不可用', async (_what, tsconfig) => {
+    if (tsconfig) put('tsconfig.json', tsconfig)
+    expectRefused(
+      await screen(importingAndLogging('a/../../secret.txt')),
+      '"a/../../secret.txt" is not available in widgets',
+      INDEX_AT
+    )
+  })
+
+  it.each([
+    '../secret.txt?a',
+    '../secret.txt#a',
+    '../secret',
+    '../only.js',
+    './link.txt?a',
+    '../secret.txt?raw'
+  ])('BE-5 api.ts import %j → 拒绝', async (spec) => {
+    put('api.ts', importing(spec))
+    expectRefused(await bundler.buildApi(widgetDir), OUTSIDE(spec), /api\.ts:1:\d+/)
+  })
+
+  it.each(['../pkg', './opkg'])(
+    'BE-6 api.ts import %j → Could not resolve（neutral 平台不看 main）',
+    async (spec) => {
+      put('api.ts', importing(spec))
+      expectRefused(
+        await bundler.buildApi(widgetDir),
+        `Could not resolve "${spec}"`,
+        /api\.ts:1:\d+/
+      )
+    }
+  )
+
+  it.each([
+    '../secret.png',
+    '../secret.png?v=1',
+    '../secret.png#a',
+    '"../secret.png?a#b"',
+    'a/../../secret.png',
+    './a/../../secret.png?x',
+    'a/../../secret.png?x',
+    'link.png',
+    'link.png?x'
+  ])('BE-7 CSS 的 url(%s) → 拒绝，位置在样式表里', async (written) => {
+    const spec = written.replace(/"/g, '')
+    expectRefused(
+      await styled(`.a { background: url(${written}); }\n`),
+      OUTSIDE(spec),
+      /st\.css:1:\d+/
+    )
+  })
+
+  it.each([
+    ['"../o.css?x"', OUTSIDE('../o.css?x')],
+    // esbuild 先按样式表旁边的文件试一遍：报错里是它补了 ./ 的那一次
+    ['"a/../../o.css"', OUTSIDE('./a/../../o.css')],
+    ['url(a/../../o.css)', OUTSIDE('./a/../../o.css')],
+    ['"a/../../o.css?x"', '"a/../../o.css?x" is not available in widgets']
+  ])('BE-8 CSS 的 @import %s → 拒绝', async (written, text) => {
+    expectRefused(await styled(`@import ${written};\n.m { color: red; }\n`), text, /st\.css:1:\d+/)
+  })
+
+  it.each(['%2e%2e/secret.png', '..%2Fsecret.png'])(
+    'BE-9 CSS 的 url(%s) → Could not resolve，不漏内容',
+    async (written) => {
+      expectRefused(
+        await styled(`.a { background: url(${written}); }\n`),
+        `Could not resolve "${written}"`,
+        /st\.css:1:\d+/
+      )
+    }
+  )
+
+  describe('BE-10..12 组件目录里的照常', () => {
+    const INSIDE = 'INSIDE_MARKER_k2'
+    /** esbuild 的 data URL 取短的那种编码：这份内容不用 base64 */
+    const PNG_URL = `data:image/png,${INSIDE}`
+
+    beforeEach(() => {
+      put('x.txt', INSIDE)
+      put('data.json', JSON.stringify({ m: INSIDE }))
+      put('img.png', INSIDE)
+      put('ipkg/package.json', JSON.stringify({ main: 'lib.js' }))
+      put('ipkg/lib.js', `export default '${INSIDE}'\n`)
+      put('sub/k.txt', INSIDE)
+      symlinkSync(join(widgetDir, 'x.txt'), join(widgetDir, 'alias.txt'))
+    })
+
+    it.each([
+      ['./x.txt?a', INSIDE],
+      ['./x.txt#a', INSIDE],
+      ['./data.json?x', INSIDE],
+      ['./data', INSIDE],
+      ['./img.png?v=1', PNG_URL],
+      ['./ipkg', INSIDE],
+      ['./sub/k.txt?z', INSIDE],
+      ['./alias.txt?a', INSIDE]
+    ])('BE-10 界面 import %j → 成功，内容在产物里', async (spec, content) => {
+      expect(expectBuilt(await screen(importingAndLogging(spec))).js).toContain(content)
+    })
+
+    it('BE-11 CSS：url 带后缀是 data URL，@import 带后缀内联；url(#frag)、data:、https: 原样', async () => {
+      put('s.css', `.imported-${INSIDE} { color: blue }\n`)
+      const svg = 'data:image/svg+xml,%3Csvg%3E%3C/svg%3E'
+      const { css } = expectBuilt(
+        await styled(`@import "s.css?x";
+.a { background: url(img.png?v=1#h); }
+.b { background: url(img.png#h); }
+.c { background: url(./img.png?x); }
+.d { fill: url(#frag); }
+.e { background: url("${svg}"); }
+.f { background: url(https://example.com/x.png); }
+`)
+      )
+      /** 这条规则的 url(…) 里写的是什么 */
+      const urlIn = (rule: string): string | undefined =>
+        new RegExp(`\\${rule}\\s*\\{[^}]*url\\("?([^")]*)"?\\)`).exec(css)?.[1]
+      expect(urlIn('.a')).toBe(PNG_URL)
+      // 只有纯 `#` 片段留在 data URL 后面（SVG 精灵图靠它）；`?` 起头的后缀整段去掉
+      expect(urlIn('.b')).toBe(`${PNG_URL}#h`)
+      expect(urlIn('.c')).toBe(PNG_URL)
+      expect(css).toContain('url(#frag)')
+      expect(css).toContain(svg)
+      expect(css).toContain('https://example.com/x.png')
+    })
+
+    it.each(['./x.txt?a', './data'])(
+      'BE-12 api.ts import %j → 成功，内容在产物里',
+      async (spec) => {
+        put('api.ts', importing(spec))
+        expect(expectBuilt(await bundler.buildApi(widgetDir)).js).toContain(INSIDE)
+      }
+    )
+  })
+
+  it('BR-11 `?raw` 只给界面：api.ts 的 ./mod.js?raw 仍是模块（No matching export）', async () => {
+    put('mod.js', 'export const named = 1\n')
+    put('api.ts', importing('./mod.js?raw'))
+    const r = await bundler.buildApi(widgetDir)
+    expect(r.success).toBe(false)
+    expect(r.outputJS).toBeUndefined()
+    expect((r.errors ?? []).join('\n')).toContain('No matching export')
   })
 })

@@ -19,7 +19,8 @@ import {
   packageNameOf,
   servedFileOf,
   widgetLibraryNames,
-  widgetLibraryOf
+  widgetLibraryOf,
+  type WidgetLibrary
 } from './widgetLibs'
 
 // 通过 createRequire 拿到 child_process 的 CJS exports 对象本身。
@@ -136,8 +137,11 @@ const ABSOLUTE_IMPORT = /^(\/|[A-Za-z]:[\\/])/
 /** 网址形式的 specifier（`https:`、`data:` …）：组件的代码与样式表不从网上来。`node:fs` 不是网址，走「不可用」那句 */
 const URL_SPECIFIER = /^(?!node:)[a-z][a-z0-9+.-]*:/i
 
-/** 插件自己调 build.resolve 时带的标记：那一轮不再进裸模块的拦截，交给 esbuild 自己的解析 */
-const VENDOR_RESOLVE = 'shuvixVendorResolve'
+/** 插件自己调 build.resolve 时带的标记：那一轮不再进路径的拦截，交给 esbuild 自己的解析 */
+const NATIVE_RESOLVE = 'shuvixNativeResolve'
+
+/** `./x?raw`：文件的文本，与导出的 Vite 项目同一个写法 */
+const RAW_IMPORT = /^\.{1,2}\/.*\?raw$/
 
 function importError(text: string): esbuild.OnResolveResult {
   return { errors: [{ text }] }
@@ -149,6 +153,11 @@ function realpathOrNull(path: string): string | null {
   } catch {
     return null
   }
+}
+
+/** 浏览器能当模块加载的文件（不是目录，也不是解码器的 .wasm） */
+function isModuleFile(path: string): boolean {
+  return /\.m?js$/.test(path) && !!statSync(path, { throwIfNoEntry: false })?.isFile()
 }
 
 /** served 库在 vendor 里带了哪些 addon（报错时列给人看）：`three/addons/controls/OrbitControls.js` … */
@@ -178,6 +187,23 @@ function listServedAddons(vendorDir: string, name: string): string[] {
     walk('')
   }
   return out.sort()
+}
+
+/**
+ * 报错时列哪些：问的那个文件夹里的文件（清单有几百项，全列出来就是一大段）；问的不在任何文件夹里 → 不带文件夹的那几项，
+ * 加上各个文件夹（`three/addons/loaders/`）
+ */
+function nearbyServedFiles(all: readonly string[], specifier: string): string[] {
+  const folder = specifier.slice(0, specifier.lastIndexOf('/') + 1)
+  const near = all.filter(
+    (file) => file.startsWith(folder) && !file.slice(folder.length).includes('/')
+  )
+  if (folder && near.length > 0) return near
+  const folderOf = (file: string): string => file.slice(0, file.lastIndexOf('/') + 1)
+  return [
+    ...all.filter((file) => !folderOf(file)),
+    ...new Set(all.map(folderOf).filter(Boolean))
+  ].sort()
 }
 
 /**
@@ -218,6 +244,26 @@ function findRelativeImport(
     if (existsSync(indexPath)) return { path: indexPath }
   }
   return undefined
+}
+
+/**
+ * 上面解析不了的相对路径与 CSS 的 url(…) 交给 esbuild 自己解析（它还认 `?x` / `#x` 后缀、.json、目录里 package.json 的
+ * main）：结果同样只许落在组件目录里，否则 `../secret.txt?x` 就把外面的文件打进了产物。解析不了或不是文件 → undefined，
+ * 让 esbuild 自己接着走（报错带行号与代码框；`url(#x)`、`url(data:…)` 留在原地）
+ */
+async function refuseNativeEscape(
+  build: esbuild.PluginBuild,
+  args: esbuild.OnResolveArgs,
+  projectDir: string
+): Promise<esbuild.OnResolveResult | undefined> {
+  const result = await build.resolve(args.path, {
+    kind: args.kind,
+    resolveDir: args.resolveDir,
+    importer: args.importer,
+    pluginData: { [NATIVE_RESOLVE]: true }
+  })
+  if (result.errors.length > 0 || result.external || result.namespace !== 'file') return undefined
+  return isInsideDir(projectDir, result.path) ? undefined : outsideWidgetError(args.path)
 }
 
 /**
@@ -407,9 +453,12 @@ export class BundlerService {
       importError(
         `ShuviX's widget libraries are missing (${vendorDir}); "${specifier}" cannot be bundled. Reinstall ShuviX, or run npm install in a development checkout.`
       )
-    const servedHint = (name: string): string => {
-      const addons = listServedAddons(vendorDir, name)
-      return addons.length > 0 ? ` Available: ${addons.join(', ')}.` : ''
+    const servedHint = (lib: WidgetLibrary, specifier: string): string => {
+      const available = nearbyServedFiles(listServedAddons(vendorDir, lib.name), specifier)
+      return (
+        (available.length > 0 ? ` Available: ${available.join(', ')}.` : '') +
+        ` To use another file, copy it and the files it imports from ${lib.name}@${lib.version} into this widget and import it by a relative path.`
+      )
     }
     const allInOnePath = resolve(depsDir, ALL_IN_ONE_BUNDLE)
     const allInOneContent = readFileSync(allInOnePath, 'utf-8')
@@ -497,12 +546,31 @@ export class BundlerService {
           ]
         }))
 
-        // 5) relative imports → 自动补全扩展名（只许组件目录里的文件）；库自己文件之间的相对 import 照常解析
-        build.onResolve({ filter: /^\./ }, (args) =>
-          inVendor(args.importer)
-            ? undefined
-            : resolveRelativeImport(args.path, args.importer, projectDir)
-        )
+        // 5a) JS 里的 `./x?raw` → 文件的文本。esbuild 自己只会去掉后缀、照常解析那个文件（.js 成了模块），import 到的不是
+        //     文本，所以找不到就报错，不往下走。CSS 里 `?raw` 只是个普通后缀
+        build.onResolve({ filter: RAW_IMPORT }, (args) => {
+          if (inVendor(args.importer) || args.pluginData?.[NATIVE_RESOLVE]) return undefined
+          if (args.kind === 'url-token' || args.kind === 'import-rule') return undefined
+          const found = resolveRelativeImport(
+            args.path.slice(0, -'?raw'.length),
+            args.importer,
+            projectDir
+          )
+          if (!found) return importError(`Could not resolve "${args.path}"`)
+          return found.path ? { path: found.path, namespace: 'widget-raw' } : found
+        })
+        build.onLoad({ filter: /.*/, namespace: 'widget-raw' }, (args) => ({
+          contents: readFileSync(args.path),
+          loader: 'text'
+        }))
+        // 5b) relative imports → 自动补全扩展名（只许组件目录里的文件）；库自己文件之间的相对 import 照常解析
+        build.onResolve({ filter: /^\./ }, (args) => {
+          if (inVendor(args.importer) || args.pluginData?.[NATIVE_RESOLVE]) return undefined
+          return (
+            resolveRelativeImport(args.path, args.importer, projectDir) ??
+            refuseNativeEscape(build, args, projectDir)
+          )
+        })
         // 6) 绝对路径：一律不收（组件只 import 自己目录里的文件）
         build.onResolve({ filter: ABSOLUTE_IMPORT }, (args) =>
           // 入口文件本身是绝对路径，它也会经过 onResolve
@@ -522,7 +590,7 @@ export class BundlerService {
           const result = await build.resolve(specifier, {
             kind,
             resolveDir,
-            pluginData: { [VENDOR_RESOLVE]: true }
+            pluginData: { [NATIVE_RESOLVE]: true }
           })
           if (result.errors.length > 0) return { errors: result.errors }
           if (!inVendor(result.path)) {
@@ -545,7 +613,7 @@ export class BundlerService {
             kind: args.kind,
             resolveDir: args.resolveDir,
             importer: args.importer,
-            pluginData: { [VENDOR_RESOLVE]: true }
+            pluginData: { [NATIVE_RESOLVE]: true }
           })
           if (result.errors.length > 0 || !result.path || result.external) return null
           if (!isInsideDir(projectDir, result.path)) return null
@@ -554,9 +622,9 @@ export class BundlerService {
         }
         build.onResolve({ filter: /^[^./]/ }, async (args) => {
           if (args.kind === 'entry-point' || args.namespace !== 'file') return undefined
-          if (ABSOLUTE_IMPORT.test(args.path) || args.pluginData?.[VENDOR_RESOLVE]) return undefined
-          // CSS 的 url(…)（图片、字体、data:、#片段）照旧交给 esbuild
-          if (args.kind === 'url-token') return undefined
+          if (ABSOLUTE_IMPORT.test(args.path) || args.pluginData?.[NATIVE_RESOLVE]) return undefined
+          // CSS 的 url(…)（图片、字体、data:、#片段）照旧交给 esbuild，只是不许走到组件目录外面（`url(a/../../x.png)`）
+          if (args.kind === 'url-token') return refuseNativeEscape(build, args, projectDir)
           // 库内部的 import（它的依赖、包内子路径）：只许落在 vendor 里
           if (inVendor(args.importer)) return resolveInVendor(args.path, args.resolveDir, args.kind)
           // 从网址拿代码或样式表：不收 —— 组件得能离线，网上来的代码还会带着组件读本机文件的权限跑
@@ -590,9 +658,10 @@ export class BundlerService {
           if (lib.served) {
             // 由宿主单独发：留作外部模块（页面的 import map 指到 widget 服务），但文件得真在，否则运行时才 404
             const served = servedFileOf(args.path)
-            if (!served || !existsSync(join(vendorDir, 'node_modules', lib.name, served.file))) {
+            const file = served && join(vendorDir, 'node_modules', lib.name, served.file)
+            if (!file || !isModuleFile(file)) {
               return importError(
-                `"${args.path}" is not among the ${lib.name} files ShuviX ships for widgets.${servedHint(lib.name)}`
+                `"${args.path}" is not among the ${lib.name} files ShuviX ships for widgets.${servedHint(lib, args.path)}`
               )
             }
             return { path: args.path, external: true }
@@ -640,9 +709,13 @@ export class BundlerService {
           }
         })
         // 相对路径：与界面打包同一套解析（自动补扩展名、index 文件，只许组件目录里的文件）；绝对路径不收
-        build.onResolve({ filter: /^\./ }, (args) =>
-          resolveRelativeImport(args.path, args.importer, projectDir)
-        )
+        build.onResolve({ filter: /^\./ }, (args) => {
+          if (args.pluginData?.[NATIVE_RESOLVE]) return undefined
+          return (
+            resolveRelativeImport(args.path, args.importer, projectDir) ??
+            refuseNativeEscape(build, args, projectDir)
+          )
+        })
         build.onResolve({ filter: ABSOLUTE_IMPORT }, (args) => outsideWidgetError(args.path))
       }
     }

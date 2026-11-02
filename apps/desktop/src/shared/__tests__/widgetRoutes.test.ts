@@ -6,16 +6,23 @@
  *   WR-2 widgetFileUrl / widgetListUrl：前缀固定；`path` 经 URL 解析后原样取回（空格、`&` `#` `?` `+` `%`、
  *        `~`、中文、Windows 路径、emoji、换行）；pathname 仍是文件路由；`+` 编成 `%2B`
  *   WR-3 路由常量都以 WIDGET_FILES_SEGMENT 开头；WIDGET_LIST_LIMIT 是 10000
+ *   WR-4 widgetPathFromRoute：`~` / `~/…` 不补 `/`（`%7E` 同样），Windows 盘符不补（`%3A` 同样、小写也认），别的补回开头的 `/`；
+ *        逐段解码（中文、空格、`%2F` 解成 `/`、`+` 不动、`%2520` 只解一层）；`~user/x` 不是家目录 → `/~user/x`
+ *   WR-5 编码写错（`%ZZ`、`%`、`%0`、半个字符 `%E4%BD`）→ null
+ *   WR-6 isWidgetFilesPath 认 `/w/x/fs/path/~/a`；WIDGET_FILE_PATH_PREFIX 以 WIDGET_FILES_SEGMENT 开头
+ *   WR-7 文件里记的相对地址按浏览器的规则解析（`tex/红 色.png`、`../b.bin`、`./c`）：还在 fs/path 下，解码回旁边的文件
  */
 import { describe, expect, it } from 'vitest'
 import {
   WIDGET_FILES_SEGMENT,
+  WIDGET_FILE_PATH_PREFIX,
   WIDGET_FILE_ROUTE,
   WIDGET_LIST_LIMIT,
   WIDGET_LIST_ROUTE,
   isWidgetFilesPath,
   widgetFileUrl,
-  widgetListUrl
+  widgetListUrl,
+  widgetPathFromRoute
 } from '../widgetRoutes'
 
 describe('WR-1 isWidgetFilesPath', () => {
@@ -84,5 +91,46 @@ describe('WR-3 常量', () => {
     expect(WIDGET_FILE_ROUTE.startsWith(WIDGET_FILES_SEGMENT)).toBe(true)
     expect(WIDGET_LIST_ROUTE.startsWith(WIDGET_FILES_SEGMENT)).toBe(true)
     expect(WIDGET_LIST_LIMIT).toBe(10000)
+  })
+})
+
+describe('WR-4..5 widgetPathFromRoute', () => {
+  it.each([
+    ['~/m/a.gltf', '~/m/a.gltf'],
+    ['~', '~'],
+    ['%7E/x', '~/x'],
+    ['Users/me/a', '/Users/me/a'],
+    ['', '/'],
+    ['C:/m/a', 'C:/m/a'],
+    ['C%3A/m/a', 'C:/m/a'],
+    ['c:/x', 'c:/x'],
+    ['%E6%A8%A1%E5%9E%8B%201/a', '/模型 1/a'],
+    ['a%2Fb', '/a/b'],
+    ['a+b', '/a+b'],
+    ['%2520', '/%20'],
+    ['~user/x', '/~user/x']
+  ])('WR-4 fs/path/%s → %j', (tail, expected) => {
+    expect(widgetPathFromRoute(`${WIDGET_FILE_PATH_PREFIX}${tail}`)).toBe(expected)
+  })
+
+  it.each(['%ZZ', '%', '%0', '%E4%BD', 'ok/%ZZ/x'])('WR-5 fs/path/%s → null', (tail) => {
+    expect(widgetPathFromRoute(`${WIDGET_FILE_PATH_PREFIX}${tail}`)).toBeNull()
+  })
+})
+
+describe('WR-6..7 fs/path 是文件路由，相对地址落在它旁边', () => {
+  it('WR-6 isWidgetFilesPath；前缀以 WIDGET_FILES_SEGMENT 开头', () => {
+    expect(isWidgetFilesPath('/w/x/fs/path/~/a')).toBe(true)
+    expect(WIDGET_FILE_PATH_PREFIX.startsWith(WIDGET_FILES_SEGMENT)).toBe(true)
+  })
+
+  it.each([
+    ['tex/红 色.png', '~/m/tex/红 色.png'],
+    ['../b.bin', '~/b.bin'],
+    ['./c', '~/m/c']
+  ])('WR-7 %s 相对 ~/m/a.gltf → %s', (relative, sibling) => {
+    const { pathname } = new URL(relative, 'http://h/w/x/fs/path/~/m/a.gltf')
+    expect(pathname.startsWith('/w/x/fs/path/')).toBe(true)
+    expect(widgetPathFromRoute(pathname.slice('/w/x'.length))).toBe(sibling)
   })
 })

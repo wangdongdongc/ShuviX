@@ -14,6 +14,7 @@
  *   WS-C5 没注册的 widget 的文件路由 → 404 `Widget … not registered`；id 不合规 → 404 `Not found`；都不带 ACAO、不出文件
  *   WS-C6 长得像文件路由的（`//fs/`、`FS`、`%66s`）→ 落到页面或 404，正文里没有秘密文件的内容
  *   WS-C7 unregisterWidget 之后文件路由 → 404 not registered
+ *         （WS-G2、WS-C3..C7、WS-K1、WS-K2、WT4-PV-04 的路由表都有 fs/path 一行）
  *   WS-R1 fs/file png → 200 image/png 字节一致；Range → 206
  *   WS-R2 fs/list → 200 JSON，名字对得上
  *   WS-K1 每个路由（页面、bundle、tailwind、theme.css、sse、db、fs/file、fs/list）不带令牌 / 带空的 / 带乱写的 → 403，
@@ -27,7 +28,12 @@
  *         (s1, 展开归一后的绝对路径)
  *   WT4-PV-06 判定不放行 / 没注入判定 → fs/file 403 纯文本、fs/list 403 JSON FORBIDDEN（都点名那个路径、不出内容）；
  *         preview 令牌不带会话 → 403，判定一次都不问
+ *   WT4-PV-05b fs/path：`<绝对路径>`、`~/x` 照常；判定拿到 (s1, 展开归一后的绝对路径)
+ *   WT4-PV-06b fs/path：判定不放行 → 403 纯文本、点名路径、不出内容；没注入判定、preview 令牌不带会话 → 一样 403
+ *   WT4-PV-06c fs/path 带 `..`（字面、`%2E%2E`）：判定看到的是归一后的那个秘密文件的路径，答 403
+ *   WT4-PV-06d `fs/path/<不放行的>?path=<放行的>` → 按 URL 路径判，拒绝
  *   WT4-PV-07 preview 令牌 + 没有 path / 相对路径 / 带 \0 → 400（与 ui 一样），判定不问
+ *   WT4-PV-07b preview 令牌 + fs/path 的编码写错（`%ZZ`）或 `%00` → 400，判定不问
  *   WT4-PV-08 preview 令牌打老组件的 db/：GET 问 read、别的方法（含 HEAD）问 write；不放行 → 403 JSON FORBIDDEN，
  *         数据库不调；放行 → 照常处理；ui 令牌从不问判定
  *   WT4-PV-09 preview 令牌拿页面、bundle、theme.css、sse → 照常，不问判定
@@ -152,6 +158,9 @@ function http(
 }
 
 const q = (p: string): string => encodeURIComponent(p)
+/** 技能 references/files.md 的 fileAtUrl */
+const fsPath = (p: string): string =>
+  `/w/photo-wall/fs/path/${p.replace(/^\//, '').split('/').map(encodeURIComponent).join('/')}`
 
 beforeEach(async () => {
   mocks.build.mockClear()
@@ -206,6 +215,7 @@ describe('WS-G Host 那道门', () => {
       { path: '/w/photo-wall/db/todos', method: 'OPTIONS' },
       { path: `/w/photo-wall/fs/file?path=${q(secretFile)}` },
       { path: `/w/photo-wall/fs/list?path=${q(tmp)}` },
+      { path: fsPath(secretFile) },
       { path: '/w/nope-x/' },
       { path: '/' }
     ]
@@ -272,7 +282,10 @@ describe('WS-C CORS 头：只有非文件路由带', () => {
       [`/w/photo-wall/fs/file?path=${q(secretFile)}`, 200],
       [`/w/photo-wall/fs/list?path=${q(tmp)}`, 200],
       [`/w/photo-wall/fs/file?path=${q(join(tmp, 'nope.txt'))}`, 404],
-      ['/w/photo-wall/fs/list?path=rel', 400]
+      ['/w/photo-wall/fs/list?path=rel', 400],
+      [fsPath(secretFile), 200],
+      [fsPath(join(tmp, 'nope.txt')), 404],
+      ['/w/photo-wall/fs/path/%ZZ', 400]
     ]
     for (const [path, status] of cases) {
       const res = await http(path)
@@ -300,6 +313,13 @@ describe('WS-C CORS 头：只有非文件路由带', () => {
     expect(JSON.parse(list.body.toString()).code).toBe('METHOD_NOT_ALLOWED')
     expect(list.headers.allow).toBe('GET, HEAD')
     expect(list.headers['access-control-allow-origin']).toBeUndefined()
+
+    const atPath = await http(fsPath(secretFile), { method: 'OPTIONS', headers })
+    expect(atPath.status).toBe(405)
+    expect(atPath.headers['content-type']).toBe('text/plain; charset=utf-8')
+    expect(atPath.headers.allow).toBe('GET, HEAD')
+    expect(atPath.headers['access-control-allow-origin']).toBeUndefined()
+    expect(atPath.body.toString()).not.toContain(SECRET)
   })
 
   it('WS-C5 没注册 / id 不合规的文件路由 → 404，没有 ACAO，不出文件', async () => {
@@ -312,13 +332,27 @@ describe('WS-C CORS 头：只有非文件路由带', () => {
     expect(invalid.status).toBe(404)
     expect(invalid.body.toString()).toBe('Not found')
     expect(invalid.headers['access-control-allow-origin']).toBeUndefined()
+
+    const tail = secretFile.replace(/^\//, '')
+    const notThere = await http(`/w/nope-x/fs/path/${tail}`)
+    expect(notThere.status).toBe(404)
+    expect(notThere.body.toString()).toBe('Widget nope-x not registered')
+    expect(notThere.headers['access-control-allow-origin']).toBeUndefined()
+
+    const badId = await http(`/w/NotValid/fs/path/${tail}`)
+    expect(badId.status).toBe(404)
+    expect(badId.body.toString()).toBe('Not found')
+    expect(badId.headers['access-control-allow-origin']).toBeUndefined()
   })
 
   it('WS-C6 长得像文件路由的 → 页面或 404，不出秘密文件', async () => {
     for (const path of [
       `/w/photo-wall//fs/file?path=${q(secretFile)}`,
       `/w/photo-wall/FS/file?path=${q(secretFile)}`,
-      `/w/photo-wall/%66s/file?path=${q(secretFile)}`
+      `/w/photo-wall/%66s/file?path=${q(secretFile)}`,
+      `/w/photo-wall//fs/path/${secretFile.replace(/^\//, '')}`,
+      `/w/photo-wall/FS/path/${secretFile.replace(/^\//, '')}`,
+      `/w/photo-wall/%66s/path/${secretFile.replace(/^\//, '')}`
     ]) {
       const res = await http(path)
       if (res.status === 200) {
@@ -336,6 +370,11 @@ describe('WS-C CORS 头：只有非文件路由带', () => {
     expect(res.status).toBe(404)
     expect(res.body.toString()).toBe('Widget photo-wall not registered')
     expect(res.body.toString()).not.toContain(SECRET)
+
+    const atPath = await http(fsPath(secretFile))
+    expect(atPath.status).toBe(404)
+    expect(atPath.body.toString()).toBe('Widget photo-wall not registered')
+    expect(atPath.body.toString()).not.toContain(SECRET)
   })
 })
 
@@ -378,7 +417,8 @@ describe('WS-K 每个路由要那个 widget 的令牌', () => {
     '/w/photo-wall/theme.css',
     '/w/photo-wall/db/items',
     `/w/photo-wall/fs/file?path=${q(secretFile)}`,
-    `/w/photo-wall/fs/list?path=${q(tmp)}`
+    `/w/photo-wall/fs/list?path=${q(tmp)}`,
+    fsPath(secretFile)
   ]
   const forbidden = (res: HttpResult, path: string): void => {
     expect(res.status, path).toBe(403)
@@ -458,7 +498,8 @@ describe('WT4-PV 预览令牌（按发起预览的会话判）', () => {
       { path: `/w/${ID}/api/x`, method: 'POST', body: '{}' },
       { path: `/w/${ID}/db/items` },
       { path: `/w/${ID}/fs/file?path=${q(secretFile)}` },
-      { path: `/w/${ID}/fs/list?path=${q(tmp)}` }
+      { path: `/w/${ID}/fs/list?path=${q(tmp)}` },
+      { path: fsPath(secretFile) }
     ]
     for (const route of routes) {
       const res = await http(route.path, {
@@ -562,6 +603,96 @@ describe('WT4-PV 预览令牌（按发起预览的会话判）', () => {
       expect(asPreview.status, path).toBe(asUi.status)
       expect(asPreview.body.toString(), path).toBe(asUi.body.toString())
     }
+    expect(j.readPath).not.toHaveBeenCalled()
+  })
+
+  it('WT4-PV-05b fs/path：判定放行 → 绝对路径与 `~/x` 照常；判定拿到 (会话, 展开后的绝对路径)', async () => {
+    const j = judge({ readPath: true })
+    vi.stubEnv('HOME', tmp)
+    writeFileSync(join(tmp, 'x'), 'home-file')
+
+    const file = await http(fsPath(secretFile), { token: preview('s1') })
+    expect(file.status).toBe(200)
+    expect(file.body.toString()).toBe(SECRET)
+
+    const home = await http(`/w/${ID}/fs/path/~/x`, { token: preview('s1') })
+    expect(home.status).toBe(200)
+    expect(home.body.toString()).toBe('home-file')
+
+    expect(j.readPath.mock.calls).toEqual([
+      ['s1', secretFile],
+      ['s1', join(tmp, 'x')]
+    ])
+    expect(j.widget).not.toHaveBeenCalled()
+  })
+
+  it('WT4-PV-06b fs/path：判定不放行 → 403 纯文本、点名路径、不出内容', async () => {
+    const j = judge({ readPath: false })
+    const res = await http(fsPath(secretFile), { token: preview('s1') })
+    expect(res.status).toBe(403)
+    expect(res.headers['content-type']).toBe('text/plain; charset=utf-8')
+    expect(res.body.toString()).toBe(
+      `This preview's session may not read ${secretFile} without asking.`
+    )
+    expect(j.readPath.mock.calls).toEqual([['s1', secretFile]])
+  })
+
+  it('WT4-PV-06b fs/path：没注入判定 → 403', async () => {
+    setWidgetPreviewJudge(null)
+    const res = await http(fsPath(secretFile), { token: preview('s1') })
+    expect(res.status).toBe(403)
+    expect(res.body.toString()).not.toContain(SECRET)
+  })
+
+  it('WT4-PV-06b fs/path：preview 令牌不带会话 → 403，判定不问', async () => {
+    const j = judge({ readPath: true })
+    for (const token of [preview(), preview('')]) {
+      const res = await http(fsPath(secretFile), { token })
+      expect(res.status).toBe(403)
+      expect(res.body.toString()).not.toContain(SECRET)
+    }
+    expect(j.readPath).not.toHaveBeenCalled()
+  })
+
+  /** 判定：只放行 `allowed` 下面的路径 */
+  const judgeAllowing = (allowed: string): ReturnType<typeof vi.fn> => {
+    const readPath = vi.fn((_sid: string, path: string) => path.startsWith(`${allowed}/`))
+    setWidgetPreviewJudge({ widget: () => false, readPath })
+    return readPath
+  }
+
+  it.each([
+    ['字面的 ..', '/../../secret.txt'],
+    ['%2E%2E', '/%2E%2E/%2E%2E/secret.txt']
+  ])('WT4-PV-06c fs/path 带 %s：判定看到归一后的秘密路径 → 403', async (_label, tail) => {
+    const allowed = join(tmp, 'allowed', 'sub')
+    mkdirSync(allowed, { recursive: true })
+    const readPath = judgeAllowing(allowed)
+    const res = await http(`${fsPath(allowed)}${tail}`, { token: preview('s1') })
+    expect(res.status).toBe(403)
+    expect(res.body.toString()).not.toContain(SECRET)
+    expect(readPath.mock.calls).toEqual([['s1', secretFile]])
+  })
+
+  it('WT4-PV-06d `fs/path/<不放行的>?path=<放行的>` → 按 URL 路径判，拒绝', async () => {
+    const allowed = join(tmp, 'allowed')
+    mkdirSync(allowed)
+    const okFile = join(allowed, 'ok.txt')
+    writeFileSync(okFile, 'ok')
+    const readPath = judgeAllowing(allowed)
+    const res = await http(`${fsPath(secretFile)}?path=${q(okFile)}`, { token: preview('s1') })
+    expect(res.status).toBe(403)
+    expect(res.body.toString()).not.toContain(SECRET)
+    expect(readPath.mock.calls).toEqual([['s1', secretFile]])
+  })
+
+  it.each(['%ZZ', '%00'])('WT4-PV-07b fs/path/%s → 400（与 ui 一样），判定不问', async (tail) => {
+    const j = judge({ readPath: true })
+    const path = `/w/${ID}/fs/path/${tail}`
+    const asPreview = await http(path, { token: preview('s1') })
+    const asUi = await http(path)
+    expect(asPreview.status).toBe(400)
+    expect(asPreview.body.toString()).toBe(asUi.body.toString())
     expect(j.readPath).not.toHaveBeenCalled()
   })
 

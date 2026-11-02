@@ -69,7 +69,29 @@ const html = hljs.highlight(code, { language: 'javascript' }).value
 
 No highlight.js theme ships: color its classes with the theme's variables in the widget's `.css` file (`.hljs-keyword { color: var(--widget-accent) }`, `.hljs-string { color: var(--widget-viz-2-ink) }`, `.hljs-comment { color: var(--widget-fg-subtle) }`).
 
-**three.js** is large, so it is not bundled into the widget: ShuviX serves one shared copy and the import still reads `import * as THREE from 'three'`. Addons import from `three/addons/…`; these ship: every control in `controls/` (`OrbitControls`, `MapControls`, `TrackballControls`, `TransformControls` …), the loaders `GLTFLoader`, `OBJLoader`, `MTLLoader`, `STLLoader` and `PLYLoader`, `environments/RoomEnvironment.js`, `renderers/CSS2DRenderer.js`, `geometries/RoundedBoxGeometry.js`, and `utils/BufferGeometryUtils.js` and `utils/SkeletonUtils.js`. Any other addon fails the build, and the error lists the ones that ship. React Three Fiber is not available. Create the renderer in an effect on a container `ref`, size it with a `ResizeObserver`, run the loop with `renderer.setAnimationLoop`, and in the cleanup stop the loop and dispose the renderer and the controls. Take the background and material colors from `themeColor()` (`new THREE.Color(themeColor('surface'))`). A model on the user's computer loads from its `fs/file` address like any other file (`files.md`).
+**three.js** is large, so it is not bundled into the widget: ShuviX serves one shared copy and the import still reads `import * as THREE from 'three'`. Addons import from `three/addons/…`, and everything that runs on the WebGL renderer is there: controls, loaders (glTF, FBX, OBJ, STL, PLY, Collada, 3MF, HDR, EXR, KTX2 and the rest), postprocessing, shaders, geometries, helpers and utils. Not there: the WebGPU and TSL files, `Addons.js` (import each addon by its own path), and `TTFLoader`, `3DMLoader`, `DRACOExporter` and `physics/`, which need libraries from elsewhere. A build error names what that folder has. React Three Fiber is not available. Create the renderer in an effect on a container `ref`, size it with a `ResizeObserver`, run the loop with `renderer.setAnimationLoop`, and in the cleanup stop the loop and dispose the renderer and the controls. Take the background and material colors from `themeColor()` (`new THREE.Color(themeColor('surface'))`).
+
+**A model on the user's computer** loads from its `fileAtUrl` address (`files.md`), never `fileUrl`: most models name other files beside them, and the loader finds those by itself from that address, with no `LoadingManager` rewriting. Compressed models also need a decoder; those ship too, and the loaders find them without a decoder path:
+
+```ts
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
+
+new GLTFLoader()
+  .setDRACOLoader(new DRACOLoader())
+  .setKTX2Loader(new KTX2Loader().detectSupport(renderer))
+  .setMeshoptDecoder(MeshoptDecoder)
+  .load(fileAtUrl('~/models/robot/robot.gltf'), (gltf) => {
+    scene.add(gltf.scene)
+    document.body.dataset.ready = '1'
+  })
+```
+
+**Checking a 3D screen**: `preview` waits for the page's requests, but not for parsing and the first draw. Set a marker when the model has drawn, as above, and preview with `wait_for: "[data-ready]"`. It renders WebGL even on a server with no GPU, in software, so a heavy scene is slow there. A shader error shows up in its errors.
+
+**An addon that does not ship**, such as one three has removed (`MMDLoader` for `.pmx` was last in three 0.171.0): download it and the files it imports from that version into the widget's folder, for example `curl -L https://unpkg.com/three@0.171.0/examples/jsm/loaders/MMDLoader.js`, keep their relative folders, and import it by a relative path. It is then the widget's own code, so it works offline. Leave `from 'three'` inside it alone, so it runs on the shared copy, and preview it. Only if that gives shader errors does it need the engine it was written for: download that version's `build/three.module.min.js` too (it adds about 700 KB to the widget), change every `from 'three'` in the addon and in your files to a relative path to it, and check with `grep -rn "from 'three'" .` that none is left. Two copies of three on one page make a model silently not appear. Never build an iframe with its own import map or blob URLs to get around any of this.
 
 ## Exporting
 

@@ -22,6 +22,10 @@
  *   能被别人预先占住）。
  * - 页面的请求带 `preview` 令牌（widget/widgetToken.ts），载荷里是发起预览的会话：页面调 `/api`、读 `fs/` 都按那条
  *   会话的授权判（widgetServer）。只给正在预览的那个组件发令牌 —— 排队保证同一时刻只有一个。
+ * - 什么时候截：`#root` 有了东西之后，等页面的请求都回来、安静一小会儿（Network 事件，含 iframe 与加载器取的文件；
+ *   SSE 这种长连接不算），最多 `NETWORK_WAIT_MS`，还没停就截并说一句。模型解析、贴图上传这类不发请求的活儿靠
+ *   `waitFor`：页面在画好时给自己标个记号，这里等那个选择器出现，最多 `WAIT_FOR_MS`，等不到说一句（别的尺寸就不再
+ *   等了）。这些等待里主线程可能一直忙（解析、软件渲染的第一帧），问页面超时只算「还没好」，不算这个尺寸失败。
  * - 一次只跑一个预览（排队）；每一步都有超时（页面主线程卡死时 executeJavaScript / capturePage 也会一直不回），
  *   超时即这个尺寸失败、窗口照样销毁，排在后面的预览不受连累；某个尺寸失败只记进 errors，别的照截。
  * - 无头模式（headless）不拒绝：预览的窗口从不显示，不违反「无头不开窗」的本意；截不到图时这个尺寸报失败。
@@ -60,8 +64,18 @@ const PARTITION = 'widget-preview'
 const LOAD_TIMEOUT_MS = 15_000
 /** 等 #root 里出现东西最多多久（挂载失败时宿主页面自己会画一块诊断，那也照截） */
 const MOUNT_WAIT_MS = 5_000
-/** 挂上之后再等一会儿：从数据库 / 磁盘取数据、字体、首轮动效 */
+/** 挂上之后至少再等这么久：字体、首轮动效 */
 const SETTLE_MS = 800
+/** 这么久没有请求开始或结束，才算页面安静了 */
+const NETWORK_QUIET_MS = 500
+/** 等页面的请求最多多久 */
+const NETWORK_WAIT_MS = 10_000
+/** `waitFor` 的选择器最多等多久 */
+const WAIT_FOR_MS = 30_000
+/** 截图之前等页面画完下一帧最多多久 */
+const NEXT_FRAME_MS = 2_000
+/** 这些等待里多久看一次 */
+const POLL_MS = 100
 /** 页面报的错误最多带回几条（同一个错误在三个尺寸里各报一次是常事）；某个尺寸失败的那一行不占这个数 */
 const MAX_PAGE_ERRORS = 12
 /** 单个 CDP 命令 / executeJavaScript / capturePage 最多等多久 */
@@ -96,6 +110,10 @@ export interface PreviewOptions {
   theme?: PreviewTheme
   /** 调用的会话（截图写进它的 tool_results 目录） */
   sessionId?: string
+  /** CSS 选择器：出现了才截图（页面在模型这类慢内容画好时标的记号） */
+  waitFor?: string
+  /** 中止：不再等、不再截下一个尺寸 */
+  signal?: AbortSignal
 }
 
 /**
@@ -171,11 +189,17 @@ async function runPreview(id: string, options: PreviewOptions): Promise<PreviewR
   const failures: string[] = []
   const pageErrors: string[] = []
   const images: PreviewImage[] = []
+  const wait: PreviewWait = {
+    selector: options.waitFor,
+    signal: options.signal,
+    note: (line) => failures.push(line)
+  }
   previewing = { widgetId: id, ...(options.sessionId ? { sessionId: options.sessionId } : {}) }
   try {
     for (const size of sizes) {
+      if (options.signal?.aborted) break
       try {
-        const png = await captureOne(url, size, theme, (message) => {
+        const png = await captureOne(url, size, theme, wait, (message) => {
           if (!pageErrors.includes(message)) pageErrors.push(message)
         })
         const path = join(dir, `${id}-${size}.png`)
@@ -259,10 +283,93 @@ export function previewUrl(url: string, theme: PreviewTheme | undefined): string
   return u.toString()
 }
 
+/** 一次预览里各尺寸共用的等待：`selector` 等不到之后清掉，别的尺寸不再等一遍 */
+interface PreviewWait {
+  selector: string | undefined
+  signal: AbortSignal | undefined
+  /** 等待的结果说一句（与页面自己报的错误分开：那些有上限，这一句不能被挤掉） */
+  note: (line: string) => void
+}
+
+/** 页面还有多少请求没回来（CDP 的 Network 事件，这个页面和它的 iframe）；长连接不算 */
+function trackRequests(wc: Electron.WebContents): { idleFor: () => number } {
+  const inFlight = new Set<string>()
+  let lastActivity = Date.now()
+  wc.debugger.on('message', (_event, method, params) => {
+    const requestId = (params as { requestId?: string }).requestId
+    if (!requestId) return
+    if (method === 'Network.requestWillBeSent') {
+      if ((params as { type?: string }).type === 'EventSource') return
+      inFlight.add(requestId)
+    } else if (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') {
+      if (!inFlight.delete(requestId)) return
+    } else return
+    lastActivity = Date.now()
+  })
+  return { idleFor: () => (inFlight.size > 0 ? 0 : Date.now() - lastActivity) }
+}
+
+/** 问页面一句；主线程忙得回不了话 → undefined（「还没好」） */
+function askPage<T>(wc: Electron.WebContents, code: string): Promise<T | undefined> {
+  return withTimeout<T>(wc.executeJavaScript(code), STEP_TIMEOUT_MS, 'asking the page').catch(
+    () => undefined
+  )
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error('aborted')
+}
+
+/** 等 `wait.selector` 出现：等到了、没给 → 不说话；选择器写错、等不到 → 说一句，这次预览不再等它 */
+async function waitForSelector(
+  wc: Electron.WebContents,
+  wait: PreviewWait,
+  size: PreviewSize
+): Promise<void> {
+  const selector = wait.selector
+  if (!selector) return
+  const code = `(() => { try { return !!document.querySelector(${JSON.stringify(selector)}) } catch { return 'invalid' } })()`
+  const deadline = Date.now() + WAIT_FOR_MS
+  while (Date.now() < deadline) {
+    throwIfAborted(wait.signal)
+    const found = await askPage<boolean | 'invalid'>(wc, code)
+    if (found === true) return
+    if (found === 'invalid') {
+      wait.selector = undefined
+      wait.note(`wait_for "${selector}" is not a valid CSS selector`)
+      return
+    }
+    await sleep(POLL_MS)
+  }
+  wait.selector = undefined
+  wait.note(
+    `[${size}] wait_for "${selector}" did not appear within ${WAIT_FOR_MS / 1000}s; captured without it, and no other size waited for it`
+  )
+}
+
+/** 等页面的请求停下来，也等够 `SETTLE_MS`。到点还没停 → 说一句，照截 */
+async function waitForQuiet(
+  requests: { idleFor: () => number },
+  settleFrom: number,
+  wait: PreviewWait,
+  size: PreviewSize
+): Promise<void> {
+  const deadline = Date.now() + NETWORK_WAIT_MS
+  while (Date.now() < deadline) {
+    throwIfAborted(wait.signal)
+    if (requests.idleFor() >= NETWORK_QUIET_MS && Date.now() - settleFrom >= SETTLE_MS) return
+    await sleep(POLL_MS)
+  }
+  wait.note(
+    `[${size}] the page was still loading after ${NETWORK_WAIT_MS / 1000}s when this was captured`
+  )
+}
+
 async function captureOne(
   url: string,
   size: PreviewSize,
   theme: PreviewTheme | undefined,
+  wait: PreviewWait,
   report: (message: string) => void
 ): Promise<{ data: Buffer; width: number; height: number }> {
   const spec = PREVIEW_SIZES[size]
@@ -307,6 +414,8 @@ async function captureOne(
     wc.debugger.attach('1.3')
     const cdp = (method: string, params: Record<string, unknown>): Promise<unknown> =>
       withTimeout(wc.debugger.sendCommand(method, params), STEP_TIMEOUT_MS, method)
+    const requests = trackRequests(wc)
+    await cdp('Network.enable', {})
     await cdp('Page.addScriptToEvaluateOnNewDocument', { source: SILENCE_DIALOGS })
     await cdp('Emulation.setDeviceMetricsOverride', {
       width: spec.width,
@@ -325,23 +434,39 @@ async function captureOne(
 
     await withTimeout(wc.loadURL(previewUrl(url, theme)), LOAD_TIMEOUT_MS, 'loading the widget')
     const deadline = Date.now() + MOUNT_WAIT_MS
+    let answered = false
     while (Date.now() < deadline) {
-      const mounted = await withTimeout(
-        wc.executeJavaScript(
-          `(() => { const r = document.getElementById('root'); return !!r && r.childElementCount > 0 })()`
-        ),
-        STEP_TIMEOUT_MS,
-        'checking the page'
+      throwIfAborted(wait.signal)
+      const mounted = await askPage<boolean>(
+        wc,
+        `(() => { const r = document.getElementById('root'); return !!r && r.childElementCount > 0 })()`
       )
+      if (mounted !== undefined) answered = true
       if (mounted) break
-      await sleep(100)
+      await sleep(POLL_MS)
     }
+    if (!answered) {
+      wait.note(
+        `[${size}] the page did not answer for ${MOUNT_WAIT_MS / 1000}s (its main thread is busy or stuck)`
+      )
+    }
+    throwIfAborted(wait.signal)
     await withTimeout(
       wc.executeJavaScript('document.fonts.ready.then(() => true)'),
       2_000,
       'waiting for fonts'
     ).catch(() => undefined)
-    await sleep(SETTLE_MS)
+    const settleFrom = Date.now()
+    await waitForSelector(wc, wait, size)
+    await waitForQuiet(requests, settleFrom, wait, size)
+    // 刚到的东西（模型加进场景、请求回来之后的 setState）要到下一帧才画出来
+    await withTimeout(
+      wc.executeJavaScript(
+        'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))'
+      ),
+      NEXT_FRAME_MS,
+      'waiting for a frame'
+    ).catch(() => undefined)
     const captured = await withTimeout(wc.capturePage(), STEP_TIMEOUT_MS, 'capturing the page')
     if (captured.isEmpty()) throw new Error('the page rendered nothing to capture')
     // 高分屏上截出来是 2 倍（或更多）：缩回 CSS 像素，图小一半以上，看排版也够用

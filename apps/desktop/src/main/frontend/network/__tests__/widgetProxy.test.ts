@@ -27,6 +27,8 @@
  *         d 转发自己回的 503（target 不在）/ 502（上游没在听）：文件路由带，别的路由不带
  *         e 不是文件路由（页面、db、`fsx`、`FS`、`//fs`）且上游不带 → 不补
  *         f 文件路由上 text/html 的应答照样加沙箱 CSP，也带 ACAO
+ *         g `fs/path/~/m/a%20b.gltf`：上游收到一字不差的编码地址；200、206、HEAD、404 都带 ACAO *，转发自己回的 503 / 502 也带；
+ *           补上 ui 令牌、客户端带的丢掉
  *   WP-13 widget 的令牌（services/widget/widgetToken.ts）：`/w/<id>/…` 的每个请求（页面、bundle、db、fs）补上那个
  *         widget 的 ui 令牌，客户端自己带来的同名头（任何大小写、任何值，哪怕是别的 widget 的真令牌）丢掉
  */
@@ -730,6 +732,73 @@ describe('WP-12 widget 文件路由补 ACAO *', () => {
     const res = await http('/w/demo-widget/fs/file?path=%2Fa.html')
     expect(res.headers['content-security-policy']).toBe(WIDGET_DOCUMENT_CSP)
     expect(res.headers['access-control-allow-origin']).toBe('*')
+  })
+})
+
+describe('WP-12g fs/path 经转发', () => {
+  const URL_PATH = '/w/demo-widget/fs/path/~/m/a%20b.gltf'
+
+  beforeEach(async () => {
+    await boot()
+  })
+
+  it('WP-12g 上游收到一字不差的地址；200、206、HEAD、404 都带 ACAO *', async () => {
+    script = (req, res) => {
+      if (req.headers.range) {
+        res.writeHead(206, { 'content-type': 'model/gltf+json', 'content-range': 'bytes 0-1/4' })
+        res.end('ab')
+        return
+      }
+      res.writeHead(200, { 'content-type': 'model/gltf+json', 'content-length': '4' })
+      res.end(req.method === 'HEAD' ? undefined : 'abcd')
+    }
+    const get = await http(URL_PATH)
+    expect(get.status).toBe(200)
+    expect(get.headers['access-control-allow-origin']).toBe('*')
+    expect(get.body.toString()).toBe('abcd')
+    expect(seen.at(-1)!.url).toBe(URL_PATH)
+
+    const range = await http(URL_PATH, { headers: { range: 'bytes=0-1' } })
+    expect(range.status).toBe(206)
+    expect(range.headers['access-control-allow-origin']).toBe('*')
+    expect(range.body.toString()).toBe('ab')
+
+    const head = await http(URL_PATH, { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.headers['access-control-allow-origin']).toBe('*')
+    expect(head.body.length).toBe(0)
+
+    script = (_req, res) => {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('Not found.')
+    }
+    const missing = await http(URL_PATH)
+    expect(missing.status).toBe(404)
+    expect(missing.headers['access-control-allow-origin']).toBe('*')
+    expect(missing.body.toString()).toBe('Not found.')
+  })
+
+  it('WP-12g 转发自己回的 503 / 502 也带 ACAO *', async () => {
+    current = undefined
+    const down = await http(URL_PATH)
+    expect(down.status).toBe(503)
+    expect(down.body.toString()).toBe(NOT_RUNNING)
+    expect(down.headers['access-control-allow-origin']).toBe('*')
+
+    current = { host: '127.0.0.1', port: await freePort() }
+    const gone = await http(URL_PATH)
+    expect(gone.status).toBe(502)
+    expect(gone.body.toString()).toBe(NO_ANSWER)
+    expect(gone.headers['access-control-allow-origin']).toBe('*')
+  })
+
+  it('WP-12g 补上 ui 令牌，客户端带的丢掉', async () => {
+    await http(URL_PATH, {
+      headers: { 'X-Shuvix-Widget-Token': issueWidgetToken('other-widget', 'ui') }
+    })
+    const token = seen.at(-1)!.headers[WIDGET_TOKEN_HEADER]
+    expect(widgetTokenScope(token, 'demo-widget')).toBe('ui')
+    expect(widgetTokenScope(token, 'other-widget')).toBeNull()
   })
 })
 

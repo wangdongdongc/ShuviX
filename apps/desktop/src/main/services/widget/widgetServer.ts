@@ -10,7 +10,7 @@
  *   GET /w/<id>/lib/<name>@<version>/… → 由宿主单独发的库（three；页面的 import map 指过来，widgetLibFiles.ts）
  *   GET /w/<id>/sse           → Server-Sent Events，推送 reload / data / theme 事件
  *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
- *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
+ *   GET /w/<id>/fs/file|path/…|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
  *   POST /w/<id>/api/<op>     → 组件自己的 API（api/widgetApi.ts；只有 SQLite 组件有，调用方是用户）
  *
  * SQLite 组件没有 `/db/`（读写都走 API，见 docs/widget-tool-design.md D10）；`/sse` 除了 `reload` 还推 `data`
@@ -42,7 +42,7 @@ import { widgetImportMap } from '../bundler/widgetLibs'
 import { serveWidgetLib, WIDGET_LIB_SEGMENT } from './widgetLibFiles'
 import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
-import { resolveWidgetFilePath, serveWidgetFiles } from './widgetFiles'
+import { serveWidgetFiles, widgetRequestPath } from './widgetFiles'
 import { verifyWidgetToken, WIDGET_TOKEN_HEADER, type WidgetTokenClaims } from './widgetToken'
 import {
   currentWidgetTheme,
@@ -453,12 +453,12 @@ export class WidgetServer {
       return
     }
 
-    // /fs/file、/fs/list —— 读本机文件（令牌在上面验过；预览页面按发起预览的会话的权限表判）
+    // /fs/file、/fs/path/…、/fs/list —— 读本机文件（令牌在上面验过；预览页面按发起预览的会话的权限表判）
     if (rest.startsWith(WIDGET_FILES_SEGMENT)) {
       const qsIdx = url.indexOf('?')
       const search = new URLSearchParams(qsIdx === -1 ? '' : url.slice(qsIdx + 1))
       if (claims.scope === 'preview') {
-        const path = resolveWidgetFilePath(search.get('path'))
+        const path = widgetRequestPath(rest, search)
         const allowed =
           !!path && !!claims.sessionId && !!previewJudge?.readPath(claims.sessionId, path)
         if (!allowed && path) {

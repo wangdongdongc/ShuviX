@@ -9,7 +9,7 @@
 | `create`  | `widget`（新的 id）、`name`、`description`     | 为新小组件搭好脚手架并运行它的第一次构建。返回它的文件夹、它的文件和这次构建的结果。                                                                         |
 | `build`   | `widget`、`message`                            | 构建界面和 API。返回错误，或者现在生效的操作、警告和提交。构建失败不会改动任何正在运行的东西。                                                               |
 | `call`    | `widget`、`op`、`args`、`dry_run`              | 运行一个操作，和界面调用时完全一样。带 `dry_run: true` 时，它写入的一切事后都会回滚，而且只供界面使用的操作也能调用。                                         |
-| `preview` | `widget`、`sizes`、`theme`                     | 界面在 `panel`、`window` 和 `phone`（缺省三种都截）、`light` 或 `dark`（缺省跟应用）下的截图，以图片形式放在结果里，外加页面报出的错误。屏幕上什么都不会打开。 |
+| `preview` | `widget`、`sizes`、`theme`、`wait_for`         | 界面在 `panel`、`window` 和 `phone`（缺省三种都截）、`light` 或 `dark`（缺省跟应用）下的截图，以图片形式放在结果里，外加页面报出的错误。屏幕上什么都不会打开。`wait_for` 是要先等它出现的 CSS 选择器（最多 30 秒）。 |
 | `sql`     | `widget`、`sql`、`legacy`                      | 在小组件的数据库上运行 SQL：建表和改表、查看行、修数据。多条语句的脚本在一个事务里运行。`legacy: true` 让它运行在旧小组件放在共享 PostgreSQL 数据库里的数据上。 |
 | `export`  | `widget`、`path`                               | 把一个独立的 Vite 项目打包成一个 .zip（`export.md`）。                                                                                                       |
 | `open`    | `widget`                                       | 在运行 ShuviX 的那台电脑上用它自己的窗口打开它。只在用户要你打开时用。                                                                                       |
