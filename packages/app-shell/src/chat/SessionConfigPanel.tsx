@@ -23,7 +23,7 @@ export interface SessionConfigPanelProps {
  *
  * MCP 的勾选会话已有运行时也能改（2026-10-26）：后端当场重配那个 agent，会打穿提示词缓存的改动
  * 先问一句（确认框由这里挂的 CacheBreakConfirmHost 画，压在弹窗上面）。知识库一行本来就随时可改：知识库
- * 不进工具表，是 `knowledge` 工具每次调用时现查的；没设过时一个都不勾（缺省就是空的，见
+ * 不进工具表，是 `knowledge` 工具每次调用时现查的；没设过时只勾着内置说明书（缺省，见
  * sessionBundle.selectedBaseNames），勾一下就固定成这条会话自己的那一份。
  *
  * 弹窗可能开在一条非当前会话上，所以挂载时自己向后端拉一次勾选，不依赖当前会话

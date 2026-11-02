@@ -26,6 +26,68 @@ sources:
   不会被当成人设读进去。版本不检查。
 - 存在即生效，没有启用开关。ShuviX 第一次启动时往这个目录写一份 bot（日记 bot，见「触发绑定」），之后它就是普通文件。
 
+## 替用户新建一个 bot
+
+这一节给替用户动手的 agent。照它做就够了，不用先摸清目录：
+
+- 用 `write` 写 `~/.shuvix/bots/<name>.md`，一次写完整。`write` 会连目录一起建，不用 `mkdir`；名字起得具体一点（`recap`、`standup`）。
+- **不要为了弄清结构去列 `~`、`~/.shuvix`，不要读 `daily.md` 或别的 bot 当范本，也不要去应用包里翻格式、字段或枚举值。** `~/.shuvix` 里每次读写都要过一次权限检查；这些东西都在本条目和 `policy-md` 里，读说明书不用询问。
+- 不要用 `bash` 碰 `~/.shuvix`：受限的命令够不到那里，放开沙箱又是一次审查。读说明书用 `read` / `grep`。
+- 写完看工具结果：解析判定、接下来几次触发、无人值守权限核对都在里面，不用再 `read` 一遍，也不用另跑 `shuvix policy check`。
+
+只有人设的 bot 就是一份文件（见下面的「示例」）。定时运行、要读别的会话或写工作文件夹之外的 bot，再加一份配套策略。「每天早上看昨天的会话、把要点写进一个文件」的完整两份：
+
+`~/.shuvix/bots/recap.md`：
+
+```markdown
+---
+shuvix: bot v2
+name: recap
+shuvix-displayName: 每日回顾
+description: 每天早上看看昨天的会话，把要点写进 ~/notes/daily-summary.md。
+shuvix-bot-on:
+  - trigger: timer.fired
+    when: event.local.time == '09:00'
+    message: 看看昨天的会话，把要点写进 ~/notes/daily-summary.md。
+---
+
+## 我是谁
+
+你是每日回顾：每天早上把前一天的会话压成几条要点。
+
+## 我记得什么
+```
+
+`~/.shuvix/policies/recap-access.md`（先告诉用户它会放行什么，用户同意后再写）：
+
+```markdown
+---
+shuvix: policy v1
+name: recap-access
+description: 每日回顾不用问你，就能读最近两天有过消息的会话，并读写 ~/notes/daily-summary.md。
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: force-allow
+    object.type: [session]
+    action: [read]
+    match: >-
+      has(subject.bot) && subject.bot == 'recap' && subject.agentKind == 'root'
+      && timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('48h')
+    prompt: 读昨天的会话就是它的工作。
+  - effect: force-allow
+    object.type: [path]
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == 'recap' && subject.agentKind == 'root'
+      && object.path == vars.home + '/notes/daily-summary.md'
+    prompt: 它的汇总写在这里。
+---
+```
+
+这里用到的取值：`subject.agentKind` 是 `'root'` 或 `'spawned'`，定时运行的是 `root`；文件不写 `shuvix-id` 时 `subject.bot` 就是 bot 的 `name`；`vars.home` 是家目录，`vars.now` 是现在；`object.lastActiveAt` 是那条会话最后一次有用户消息的时间。`object.path` 是解析过符号链接的真实路径：在 Windows 上，或家目录本身是个链接时，`==` 比不上，改用 `inDir(object.path, vars.home + '/notes')`。要放行别的东西时，客体和变量的完整列表在 `policy-md`。
+
 ## 示例
 
 ```markdown
@@ -111,7 +173,7 @@ agent 写下一份 bot 文件时，工具结果里会说每条 `timer.fired` 绑
 所以一个 bot 的工作要用到这些时，就给它配一份它自己的**配套策略**，就像日记 bot 有 `daily-bot-access`：
 `~/.shuvix/policies/` 里的一个文件（约定叫 `<bot>-access.md`），每条规则都是 `force-allow`（普通的 `allow` 压不过
 询问），并且都匹配 `has(subject.bot) && subject.bot == '<这个 bot>' && subject.agentKind == 'root'`，再加上对客体
-最窄的那个条件。模板在 `policy-md`（放宽与收紧）。替用户设置 bot 时：先想清楚它的运行要在工作文件夹之外读写什么、要不要
+最窄的那个条件。模板见上面的「替用户新建一个 bot」。替用户设置 bot 时：先想清楚它的运行要在工作文件夹之外读写什么、要不要
 读别的会话，告诉用户它需要什么、为什么需要，用户同意之后再写策略。
 
 写下一份带绑定的 bot 文件时，工具结果里有一段**无人值守权限核对**：按这个 bot 的一次定时运行会遇到的样子（它的根
@@ -123,7 +185,7 @@ bot 改名就会让策略失效）—— 点出写成普通 `allow` 的规则，
 也能打印它。
 
 命中时 ShuviX 新开一条绑定这个 bot 的会话 —— 在绑定写的项目里，或在临时工作区里（标题是「显示名 · 触发时间」；侧栏里它
-折在这个 bot 的「定时运行」那一行下面），把 `message` 作为来源为
+和这个 bot 别的会话排在一起，行首是定时器图标），把 `message` 作为来源为
 「触发器」的用户消息发进去，后面附一个 `<trigger_event>` 围栏：事件的全部字段，外加 `lastFiredAt` —— 这条绑定上一次
 触发的时刻，据它处理「自上次以来」的东西。同一条绑定上一次还没跑完（包括停在询问卡上）就跳过这次；电脑睡着、
 ShuviX 没开时错过的分钟不补。触发消息不算人的意思：自动审查把它当作委派，不当作授权。触发源本身不知道谁会响应；每次命中（开出的会话与它的结局、跳过、条件出错）都记在 设置 → 触发源 的触发日志里，那里也能看到上一次触发的原始事件 —— 就是 `when` 里的 `event`。

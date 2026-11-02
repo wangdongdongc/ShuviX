@@ -142,3 +142,41 @@ describe('KG-5..8 列表行带库目录', () => {
     ])
   })
 })
+
+/**
+ * 只读的库（2026-11-02）：说明书默认启用之后，「搜了再干、记下来」那段不再是每条会话都该付的 —— 手头全是只读的库时
+ * 记不了，而说明书也不是每件事都该先搜的。库自己的说明（`note`，宿主给）印在通用说明之后，什么时候来这个库由它说。
+ */
+describe('KG-R 只读的库与库自己的说明', () => {
+  const NOTE = 'When a task touches this manual, read it first.'
+  const paragraphsOf = (text: string): string[] => text.split('\n\n')
+  /** 通用说明那一段（靠它教的两个动作认：搜索、提交） */
+  const isRecordParagraph = (p: string): boolean => p.includes('`search`') && p.includes('submit')
+
+  it('KG-R1 全是只读的库：没有搜索 / 记录那段，清单与说明照印', () => {
+    const text = renderKnowledgeGuide([
+      { name: 'shuvix', label: 'manual', dir: '/app/kb/en', readonly: true, note: NOTE }
+    ])!
+
+    expect(paragraphsOf(text).filter(isRecordParagraph)).toEqual([])
+    expect(text).not.toContain('`search`')
+    expect(text).not.toContain('submit')
+    expect(text).toContain('- shuvix — manual — /app/kb/en')
+    expect(paragraphsOf(text).at(-1)).toBe(NOTE)
+  })
+
+  it('KG-R2 一个可写加一个只读：那段只出现一次，说明排在它之后；只有可写的库时没有说明这一段', () => {
+    const text = renderKnowledgeGuide([
+      { name: 'shuvix', label: 'manual', readonly: true, note: NOTE },
+      { name: 'notes', dir: '/u/notes' }
+    ])!
+    const paragraphs = paragraphsOf(text)
+
+    expect(paragraphs.filter(isRecordParagraph)).toHaveLength(1)
+    expect(paragraphs.findIndex(isRecordParagraph)).toBeLessThan(paragraphs.indexOf(NOTE))
+    expect(paragraphs).toHaveLength(3)
+
+    // 反过来：没有库带说明，就只有清单与通用说明两段
+    expect(paragraphsOf(renderKnowledgeGuide([{ name: 'notes' }])!)).toHaveLength(2)
+  })
+})

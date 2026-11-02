@@ -296,7 +296,7 @@ async function collectUnhandled(run: () => Promise<void>): Promise<unknown[]> {
 function seedWelcome(opts: {
   draft?: string[]
   /** 知识库草稿（缺省空） */
-  kbDraft?: string[]
+  kbDraft?: string[] | null
   thinkingLevel?: string
   slashCommands?: ReturnType<typeof store>['slashCommands']
   model?: string
@@ -312,7 +312,7 @@ function seedWelcome(opts: {
     thinkingLevel: opts.thinkingLevel ?? 'low',
     thinkingLevelIsDefault: false,
     welcomeEnabledTools: opts.draft ?? [],
-    welcomeKnowledgeBases: opts.kbDraft ?? [],
+    welcomeKnowledgeBases: opts.kbDraft === undefined ? null : opts.kbDraft,
     slashCommands: opts.slashCommands ?? [],
     inputText: '',
     pendingImages: []
@@ -438,7 +438,25 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
       [{ id: NEW, knowledgeBases: ['notes'] }]
     ])
     expect(store().welcomeEnabledTools).toEqual([])
-    expect(store().welcomeKnowledgeBases).toEqual([])
+    expect(store().welcomeKnowledgeBases).toBeNull()
+  })
+
+  it('WS-K-1 知识库草稿没动过（null）→ 不写，新会话跟缺省走', async () => {
+    seedWelcome({ draft: [], kbDraft: null })
+    await mount()
+    await type('hello')
+    await pressEnter()
+    expect(callsOf('session.updateKnowledgeBases')).toEqual([])
+    expect(store().welcomeKnowledgeBases).toBeNull()
+  })
+
+  it('WS-K-2 知识库草稿是空列表（用户取消了缺省）→ 照写，这条会话不用知识库', async () => {
+    seedWelcome({ draft: [], kbDraft: [] })
+    await mount()
+    await type('hello')
+    await pressEnter()
+    expect(callsOf('session.updateKnowledgeBases')).toEqual([[{ id: NEW, knowledgeBases: [] }]])
+    expect(store().welcomeKnowledgeBases).toBeNull()
   })
 
   it('WS-D-2 草稿为空 → 不调 updateEnabledTools，其余照常', async () => {

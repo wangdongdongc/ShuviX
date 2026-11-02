@@ -35,6 +35,32 @@ const {
 const userData = process.env.SHUVIX_VERIFY_USERDATA
 if (userData) app.setPath('userData', userData)
 
+/**
+ * 探针专用：按打包后的目录形状跑（`SHUVIX_E2E_STAGED_RESOURCES` = 摆好的 Resources 目录，见 live/packagedStage.ts）。
+ * 手册、技能的绝对路径写在提示词里，agent 会顺着它往上走：开发态走到的是整份源码，测不出用户真实碰到的样子。
+ * `app.isPackaged` 是不可重定义的 getter，所以交给产品代码的是一个说「已打包」的 `app` 视图。
+ */
+const stagedResources = process.env.SHUVIX_E2E_STAGED_RESOURCES
+if (stagedResources) {
+  Object.defineProperty(process, 'resourcesPath', { value: stagedResources, configurable: true })
+  const appView = new Proxy(app, {
+    get(target, key) {
+      if (key === 'isPackaged') return true
+      if (key === 'getAppPath') return () => join(stagedResources, 'app.asar.unpacked')
+      const value = Reflect.get(target, key)
+      return typeof value === 'function' ? value.bind(target) : value
+    }
+  })
+  const electronView = new Proxy(electron, {
+    get: (target, key) => (key === 'app' ? appView : Reflect.get(target, key))
+  })
+  const Module = require('module')
+  const originalLoad = Module._load
+  Module._load = function (request, ...rest) {
+    return request === 'electron' ? electronView : originalLoad.call(this, request, ...rest)
+  }
+}
+
 /** 本文件往 userData 里追加的所有记录都走它：每个文件到 5 MB 封顶（见 instanceGuards.cjs） */
 const appendBounded = createBoundedAppender()
 

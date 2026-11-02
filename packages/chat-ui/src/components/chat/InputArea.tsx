@@ -472,7 +472,7 @@ export function InputArea({
         })
       }
       // 知识库没有锁，但系统提示词里的 `<knowledge_bases>` 围栏在创建 Agent 那一刻定型 —— 同样要先落下
-      if (welcome.welcomeKnowledgeBases.length > 0) {
+      if (welcome.welcomeKnowledgeBases !== null) {
         await host.session.updateKnowledgeBases({
           id: sid,
           knowledgeBases: welcome.welcomeKnowledgeBases
@@ -484,7 +484,7 @@ export function InputArea({
       throw err
     }
     welcome.setWelcomeEnabledTools([])
-    welcome.setWelcomeKnowledgeBases([])
+    welcome.setWelcomeKnowledgeBases(null)
     await getSessionChannelApi().agent.init({ sessionId: sid })
     const sessions = await host.session.list()
     const s = useChatStore.getState()

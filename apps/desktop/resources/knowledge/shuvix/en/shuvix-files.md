@@ -98,7 +98,8 @@ Related rules shared by all types:
   must not misread a generic key such as `tools`. Unknown keys without the prefix are ignored;
   what happens to unknown `shuvix-` keys is type-specific (hooks reject them).
 - `shuvix-builtin: true` appears in files ShuviX ships. Parsers do not read it; it only states
-  "this text came from the builtin set". Do not add it to user files — it does nothing.
+  "this text came from the builtin set", shown as a Built-in tag on the property card. Do not add
+  it to user files — it does nothing but put that tag there.
 - `shuvix-id` is the **object id** of an agent, bot, policy or hook file: the identity ShuviX
   keeps for the file however it is moved or renamed. ShuviX writes it — a fresh UUID into every
   file it creates, `<type>:builtin:<name>` into the files it ships (for example
@@ -148,7 +149,8 @@ use.
 When you create or change one of these files on the user's behalf:
 
 - Write the whole file with the `write` tool (or `edit` an existing one) at the exact path in
-  the table above; the directory may not exist yet — create it. Use the current text of a
+  the table above; `write` creates the directory too, so no `mkdir` and no need to list the
+  folder first. Use the current text of a
   builtin ("Create override copy" on the builtin row in the sidebar, or the builtin's `md` as
   quoted in these entries) as
   the model for an override.

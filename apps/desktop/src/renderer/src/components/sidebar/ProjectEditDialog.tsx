@@ -32,7 +32,7 @@ export function ProjectEditDialog({
   const [loading, setLoading] = useState(true)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
-  // 知识库：候选项来自宿主，勾选来自项目设置；没设过就一个都不勾（缺省本身就是空的，
+  // 知识库：候选项来自宿主，勾选来自项目设置；没设过就显示宿主给的缺省（只有内置说明书，
   // 见 sessionBundle.selectedBaseNames），而且不写回 —— 用户动过才存，否则一次
   // 「打开看看就关掉」会把此刻这份冻成快照，这个项目从此不再跟着缺省走
   const [kbOptions, setKbOptions] = useState<{ name: string; label: string }[]>([])
@@ -56,7 +56,9 @@ export function ProjectEditDialog({
         const settings = project.settings || {}
         // 没保存过扩展能力 = 一个都不勾：新会话照此继承，与无项目的聊天会话一致
         setEnabledTools(Array.isArray(settings.enabledTools) ? settings.enabledTools : [])
-        setKnowledgeBases(Array.isArray(settings.knowledgeBases) ? settings.knowledgeBases : [])
+        setKnowledgeBases(
+          Array.isArray(settings.knowledgeBases) ? settings.knowledgeBases : kb.selected
+        )
         if (Array.isArray(settings.tool?.envVars)) {
           setEnvVars(settings.tool.envVars)
         }

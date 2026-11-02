@@ -813,7 +813,7 @@ export async function createAgentSession(
     /** 绑定一个 bot ⇒ 建出来的是 bot 会话：有根，根档案为基座 bot */
     bot?: string
     /**
-     * 这条会话用哪几个知识库，**在根 Agent 起来之前**写下 —— 缺省是一个都不启用。
+     * 这条会话用哪几个知识库，**在根 Agent 起来之前**写下 —— 缺省只启用内置说明书，`[]` 是一个都不启用。
      * `<knowledge_bases>` 是活段落（pi-durable 起改选择即生效，KBF-E-4），先放好只是让返回的
      * systemPrompt 一上来就带着围栏。
      */

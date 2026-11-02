@@ -21,6 +21,10 @@
  * 「放宽与收紧」里给一个 bot 配的配套策略模板（三语的判定字段逐字相同、每条规则都是带三个条件的 force-allow、
  * 拿真实引擎核对恰是它说的样子），以及 bot-md「定时运行与权限」一节讲到 force-allow、daily-bot-access、根 agent
  * 的条件与 `shuvix policy check [<file>] --bot`。
+ *
+ * BK-29..BK-40 守 bot-md「替用户新建 bot」那一节的完整示例（`recap` bot + `recap-access` 策略，2026-11-02）：agent 会
+ * 照抄这两份文件，所以这里拿真解析器、真排期、真引擎核对它们恰是说明书说的样子，且三语只差人读的话。BK-41 不做
+ * （示例刻意用 `==`，Windows 原生路径另有散文给替代写法）。BK-42 守 shuvix-files 那句「`write` 会建目录」。
  */
 import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -28,12 +32,18 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   botAccessNote,
+  botIdentitiesNamedBy,
+  botScheduleNote,
   buildBuiltinPolicies,
   buildBuiltinProfiles,
   createSecurityContext,
+  parseBotDefinitionFile,
   parsePolicyDefinitionFile,
   policyNamesBot,
+  previewTimerBinding,
   resolvePolicyFiles,
+  reviewShuvixMdWrite,
+  type ParsedBotFile,
   type ParsedPolicyFile,
   type PolicyRuleSpec,
   headingsOf,
@@ -103,6 +113,33 @@ const bundleOf = (lang: string): BundleFile[] =>
   }))
 
 const LANGS = langDirs()
+
+/** 列表项：`- ` 开头的一行 + 其后缩进的续行（续行之外的段落不算这一条） */
+const bulletsOf = (body: string): string[] => {
+  const out: string[] = []
+  let current: string[] | null = null
+  for (const line of body.split('\n')) {
+    if (line.startsWith('- ')) {
+      if (current) out.push(current.join('\n'))
+      current = [line]
+    } else if (current && /^ {2,}\S/.test(line)) {
+      current.push(line)
+    } else {
+      if (current) out.push(current.join('\n'))
+      current = null
+    }
+  }
+  if (current) out.push(current.join('\n'))
+  return out
+}
+
+/** 判定字段（剥掉人读的 prompt / description / body）—— 三语只该差人读的话 */
+const machine = (p: ParsedPolicyFile): Record<string, unknown> => ({
+  name: p.name,
+  scope: p.scope,
+  lets: p.lets,
+  rules: p.rules.map(({ prompt: _prompt, ...rest }: PolicyRuleSpec) => rest)
+})
 
 describe('BK 内置知识库：随应用发布的说明书', () => {
   it('BK-1 三语同名同数：语言目录就是界面语言那三种，各自的 md 文件名集合逐字相等', () => {
@@ -311,24 +348,6 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
    * `browser` / `ssh` / `database`、并点名三台内置 server；bot-md.md 抄的 bot 基座工具清单与 bot 档案的
    * shuvix-tools 一致、并说明三台 server 都没被声明（用户仍可在会话里勾上）。
    */
-  /** 列表项：`- ` 开头的一行 + 其后缩进的续行（续行之外的段落不算这一条） */
-  const bulletsOf = (body: string): string[] => {
-    const out: string[] = []
-    let current: string[] | null = null
-    for (const line of body.split('\n')) {
-      if (line.startsWith('- ')) {
-        if (current) out.push(current.join('\n'))
-        current = [line]
-      } else if (current && /^ {2,}\S/.test(line)) {
-        current.push(line)
-      } else {
-        if (current) out.push(current.join('\n'))
-        current = null
-      }
-    }
-    if (current) out.push(current.join('\n'))
-    return out
-  }
   /** 现役的内置工具名（agent md 里能写的那一批；`agent` 是派发开关，单独一条） */
   const BUILTIN_TOOL_NAMES = [
     'bash',
@@ -657,14 +676,6 @@ describe('BK-27 policy-md 里给一个 bot 配的配套策略模板', () => {
     expect(parsed, lang).not.toBeNull()
     return parsed!
   }
-  /** 判定字段（剥掉人读的 prompt / description / body） */
-  const machine = (p: ParsedPolicyFile): Record<string, unknown> => ({
-    name: p.name,
-    scope: p.scope,
-    lets: p.lets,
-    rules: p.rules.map(({ prompt: _prompt, ...rest }: PolicyRuleSpec) => rest)
-  })
-
   it.each(EXPECTED_LANGS)(
     'BK-27 %s：解析得过；每条规则都是 force-allow，带 has(subject.bot)、身份与根 agent 三个条件',
     (lang) => {
@@ -808,5 +819,423 @@ describe.each(LANGS)('BK-28 bot-md「定时运行与权限」 · %s', (lang) => 
     ]) {
       expect(section, `${lang}: ${needle}`).toContain(needle)
     }
+  })
+})
+
+/**
+ * BK-29..BK-40 bot-md「替用户新建 bot」那一节的完整示例：`~/.shuvix/bots/recap.md` + `~/.shuvix/policies/recap-access.md`。
+ * 找块要认 `/^name: recap$/m` —— `name: recap` 是 `recap-access` 的前缀。
+ */
+const RECAP_BOT = /^name: recap$/m
+const RECAP_POLICY = /^name: recap-access$/m
+const RECAP_SUMMARY = '~/notes/daily-summary.md'
+const recapMd = (lang: string): string => readFileSync(join(BASE_DIR, lang, 'bot-md.md'), 'utf8')
+
+/** 这一语言 bot-md.md 里所有 ```markdown 块（块里可以有 `## ` 标题，所以不能按标题切） */
+const markdownBlocksOf = (md: string): string[] =>
+  [...md.matchAll(/```markdown\n([\s\S]*?)```/g)].map((m) => m[1])
+
+const recapBlock = (lang: string, pattern: RegExp): string => {
+  const hits = markdownBlocksOf(recapMd(lang)).filter((block) => pattern.test(block))
+  expect(hits, `${lang}/bot-md.md：${pattern} 应当恰有一块`).toHaveLength(1)
+  return hits[0]
+}
+
+const parseRecapBot = (lang: string): ParsedBotFile => {
+  const warnings: string[] = []
+  const bot = parseBotDefinitionFile(recapBlock(lang, RECAP_BOT), 'recap', (m) => warnings.push(m))
+  expect(warnings, lang).toEqual([])
+  expect(bot, lang).not.toBeNull()
+  return bot!
+}
+
+const parseRecapPolicy = (lang: string): ParsedPolicyFile => {
+  const warnings: string[] = []
+  const policy = parsePolicyDefinitionFile(recapBlock(lang, RECAP_POLICY), 'recap-access', (m) =>
+    warnings.push(m)
+  )
+  expect(warnings, lang).toEqual([])
+  expect(policy, lang).not.toBeNull()
+  return policy!
+}
+
+/** 引擎核对用的固定时刻与家目录（BK-27 的夹具） */
+const RECAP_NOW = '2026-06-10T10:00:00.000Z'
+const RECAP_HOME = '/Users/u'
+const RECAP_WORKDIR = '/Users/u/work/recap-run'
+const RECAP_BOT_FILE = '/Users/u/.shuvix/bots/recap.md'
+const RECAP_POLICY_FILE = '/Users/u/.shuvix/policies/recap-access.md'
+const SUMMARY_PATH = '/Users/u/notes/daily-summary.md'
+const HOUR = 3_600_000
+const MINUTE = 60_000
+const ago = (ms: number): string => new Date(Date.parse(RECAP_NOW) - ms).toISOString()
+
+type SessionObjectShape = { type: string } & Record<string, string | boolean>
+type PathObjectShape = { type: string; path: string; displayPath: string }
+
+const sessionObject = (lastActiveAt: string): SessionObjectShape => ({
+  type: 'session',
+  sessionId: 'someone-else',
+  title: '',
+  ownTurn: false,
+  lastActiveAt,
+  bot: ''
+})
+const pathObject = (path: string): PathObjectShape => ({
+  type: 'path',
+  path,
+  displayPath: path
+})
+const READ_SESSION = { name: 'session', operation: 'read-session' }
+const RECAP_VARS = {
+  home: RECAP_HOME,
+  workspace: RECAP_WORKDIR,
+  aclRead: [RECAP_WORKDIR, RECAP_BOT_FILE],
+  aclWrite: [RECAP_WORKDIR, RECAP_BOT_FILE],
+  aclSessionRead: [],
+  aclSessionWrite: [],
+  aclWidgetRead: [],
+  aclWidgetWrite: [],
+  now: RECAP_NOW,
+  dailyDir: '/Users/u/.shuvix/daily'
+}
+
+interface RecapSubject {
+  attrs?: Record<string, unknown>
+  agentKind?: 'root' | 'spawned'
+}
+
+interface RecapContext {
+  context: ReturnType<typeof createSecurityContext>
+  vars: typeof RECAP_VARS
+  warnings: string[]
+  user: ParsedPolicyFile & { fileName: string }
+  readMd: ReturnType<typeof createInlinePolicyMdReader>
+}
+
+/** 这一语言的 recap-access 装进真实引擎（内置策略 + 它）；`subject` 是这次运行的主体 */
+const recapContext = (
+  lang: string,
+  subject: RecapSubject = { attrs: { bot: 'recap' } }
+): RecapContext => {
+  const readMd = createInlinePolicyMdReader()
+  const user = { ...parseRecapPolicy(lang), fileName: 'recap-access.md' }
+  const vars = RECAP_VARS
+  const warnings: string[] = []
+  const context = createSecurityContext(
+    {
+      kind: 'agent',
+      sessionId: '',
+      agentKind: subject.agentKind ?? 'root',
+      profileName: 'bot',
+      ...(subject.attrs ? { attrs: subject.attrs } : {})
+    },
+    { host: 'desktop' },
+    {
+      host: 'desktop',
+      pathSep: '/',
+      getVars: () => vars,
+      readBuiltinPolicyMd: readMd,
+      getUserPolicies: () => [user],
+      logger: {
+        info: () => {},
+        warn: (m) => void warnings.push(m),
+        error: (m) => void warnings.push(m)
+      }
+    }
+  )
+  return { context, vars, warnings, user, readMd }
+}
+
+describe.each(EXPECTED_LANGS)('BK-29..BK-33 bot-md 的完整示例 · %s', (lang) => {
+  it('BK-29 两块各恰一处、在同一个 `## ` 节里；节里两个路径各排在自己那一块之前', () => {
+    const botBlock = recapBlock(lang, RECAP_BOT)
+    const policyBlock = recapBlock(lang, RECAP_POLICY)
+    // 按 `## ` 切节要认代码块：bot 那一块里自己就有 `## ` 标题（同 BK-28 的循环）
+    const sections: string[][] = [[]]
+    let fenced = false
+    for (const line of recapMd(lang).split('\n')) {
+      if (line.startsWith('```')) fenced = !fenced
+      if (!fenced && /^#{1,2} /.test(line)) sections.push([])
+      sections[sections.length - 1].push(line)
+    }
+    const holding = sections
+      .map((lines) => lines.join('\n'))
+      .filter((text) => text.includes(botBlock) || text.includes(policyBlock))
+    expect(holding, '两块应当落在同一节').toHaveLength(1)
+    const section = holding[0]
+    expect(section).toContain(botBlock)
+    expect(section).toContain(policyBlock)
+
+    const botPath = section.indexOf('~/.shuvix/bots/recap.md')
+    const policyPath = section.indexOf('~/.shuvix/policies/recap-access.md')
+    expect(botPath, '节里点名 bot 文件的路径').toBeGreaterThanOrEqual(0)
+    expect(policyPath, '节里点名策略文件的路径').toBeGreaterThanOrEqual(0)
+    expect(botPath).toBeLessThan(section.indexOf(botBlock))
+    expect(policyPath).toBeLessThan(section.indexOf(policyBlock))
+  })
+
+  it('BK-30 bot 那一块解析得过：零警告、没有 objectId、一条 timer.fired 绑定（有 message、没有 project）、正文两个 `## ` 标题', () => {
+    const bot = parseRecapBot(lang)
+    expect(bot.name).toBe('recap')
+    expect(bot.objectId).toBeUndefined()
+    expect(bot.bindings).toHaveLength(1)
+    const [binding] = bot.bindings!
+    expect(binding.trigger).toBe('timer.fired')
+    expect(binding.message.trim()).not.toBe('')
+    expect(binding.project).toBeUndefined()
+    expect(bot.body.split('\n').filter((line) => line.startsWith('## '))).toHaveLength(2)
+  })
+
+  it('BK-31 排期：14 天里每天 09:00 触发一次、七个星期几都有；此刻正好 09:00 时从明天起；回执里没有报错的话', () => {
+    const { bindings } = parseRecapBot(lang)
+    const when = bindings![0].when
+    const before = previewTimerBinding(when, { now: new Date(2026, 5, 1, 8, 59, 30), limit: 100 })
+    expect(before.kind).toBe('fires')
+    if (before.kind !== 'fires') return
+    expect(before.error).toBeUndefined()
+    expect(before.at).toHaveLength(14)
+    expect(before.at.every((hit) => hit.local.time === '09:00')).toBe(true)
+    expect(before.at[0].local.date).toBe('2026-06-01')
+    expect(before.at[13].local.date).toBe('2026-06-14')
+    expect(new Set(before.at.map((hit) => hit.local.weekday)).size).toBe(7)
+
+    const onTheDot = previewTimerBinding(when, { now: new Date(2026, 5, 1, 9, 0, 0), limit: 100 })
+    expect(onTheDot.kind).toBe('fires')
+    if (onTheDot.kind !== 'fires') return
+    expect(onTheDot.at[0].local.date).toBe('2026-06-02')
+
+    const note = botScheduleNote(bindings!, { now: new Date(2026, 5, 1, 8, 59, 30) })
+    expect(note).toContain('09:00')
+    for (const trouble of ['never fires', 'fails to evaluate', 'fires every minute']) {
+      expect(note, trouble).not.toContain(trouble)
+    }
+  })
+
+  it('BK-32 策略那一块解析得过：只有两条 force-allow（会话读 / 路径读写），每条都带三个条件、不按会话 id 选；点名的 bot 恰是 recap', () => {
+    const policy = parseRecapPolicy(lang)
+    expect(policy.name).toBe('recap-access')
+    expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'env.host': ['desktop'] })
+    expect(policy.lets).toBeUndefined()
+    expect(policy.rules).toHaveLength(2)
+    const [session, path] = policy.rules
+    expect(session.conditions).toMatchObject({ 'object.type': ['session'], action: ['read'] })
+    expect(path.conditions).toMatchObject({ 'object.type': ['path'], action: ['read', 'write'] })
+    for (const rule of policy.rules) {
+      expect(rule.effect).toBe('force-allow')
+      expect(rule.disposition).toBeUndefined()
+      expect(rule.match).toContain('has(subject.bot)')
+      expect(rule.match).toContain("subject.bot == 'recap'")
+      expect(rule.match).toContain("subject.agentKind == 'root'")
+      // 按 id 选会话的规则盖不到以后每一次运行的会话（accessCheck 也会指出这一点）
+      expect(rule.match).not.toContain('object.sessionId')
+    }
+    expect(botIdentitiesNamedBy(policy)).toEqual(['recap'])
+  })
+
+  it('BK-33 两份文件对得上：身份 = bot 的 name，策略名 = <bot>-access，那份笔记的路径处处是同一个（规则里拼出来的也是）', () => {
+    const bot = parseRecapBot(lang)
+    const policy = parseRecapPolicy(lang)
+    expect(botIdentitiesNamedBy(policy)).toEqual([bot.name])
+    expect(policy.name).toBe(`${bot.name}-access`)
+
+    expect(bot.bindings![0].message).toContain(RECAP_SUMMARY)
+    expect(bot.description).toContain(RECAP_SUMMARY)
+    expect(policy.description).toContain(RECAP_SUMMARY)
+
+    const literal = /vars\.home \+ '([^']+)'/.exec(policy.rules[1].match ?? '')?.[1]
+    expect(`~${literal}`).toBe(RECAP_SUMMARY)
+  })
+})
+
+describe('BK-34 完整示例的三语只差人读的话', () => {
+  it('BK-34 策略的判定字段逐字相同，bot 的 name / trigger / when 逐字相同；message 三语各不相同（漏翻会露馅）', () => {
+    const [firstLang, ...restLangs] = EXPECTED_LANGS
+    const fieldsOf = (lang: string): Record<string, unknown> => {
+      const bot = parseRecapBot(lang)
+      const { trigger, when } = bot.bindings![0]
+      return { policy: machine(parseRecapPolicy(lang)), name: bot.name, trigger, when }
+    }
+    const first = fieldsOf(firstLang)
+    for (const lang of restLangs) {
+      expect({ lang, fields: fieldsOf(lang) }).toEqual({ lang, fields: first })
+    }
+    const messages = EXPECTED_LANGS.map((lang) => parseRecapBot(lang).bindings![0].message)
+    expect(new Set(messages).size).toBe(EXPECTED_LANGS.length)
+  })
+})
+
+describe.each(EXPECTED_LANGS)('BK-35..BK-40 完整示例过真实引擎 · %s', (lang) => {
+  it('BK-35 读会话看最后活跃的时刻：48 小时以内放行（recap-access#0，force-allow），恰好 48 小时及更早照旧询问', () => {
+    const { context, warnings } = recapContext(lang)
+    const read = (lastActiveAt: string): ReturnType<typeof context.judgeGate> =>
+      context.judgeGate('read', sessionObject(lastActiveAt), { tool: READ_SESSION })
+
+    for (const age of [0, 24 * HOUR, 33 * HOUR, 47 * HOUR + 59 * MINUTE]) {
+      const verdict = read(ago(age))
+      expect(verdict.allowed, `${age}ms`).toBe(true)
+      expect(verdict.decision.winning, `${age}ms`).toBe('recap-access#0')
+      expect(verdict.decision.tier, `${age}ms`).toBe('force-allow')
+    }
+    for (const lastActiveAt of [ago(48 * HOUR), ago(49 * HOUR), new Date(0).toISOString()]) {
+      const verdict = read(lastActiveAt)
+      expect(verdict.allowed, lastActiveAt).toBe(false)
+      expect(verdict.decision.winning, lastActiveAt).toBe('ask-on-session-access#0')
+    }
+    expect(warnings).toEqual([])
+  })
+
+  it('BK-36 路径只放行那一份笔记（recap-access#1）；旁边的文件、前缀相同的、它底下的、家目录别处和策略文件自己都照旧询问', () => {
+    const { context, warnings } = recapContext(lang)
+
+    for (const [action, tool] of [
+      ['read', 'read'],
+      ['write', 'write'],
+      ['write', 'edit']
+    ] as const) {
+      const verdict = context.judgeGate(action, pathObject(SUMMARY_PATH), { tool: { name: tool } })
+      expect(verdict.allowed, tool).toBe(true)
+      expect(verdict.decision.winning, tool).toBe('recap-access#1')
+    }
+
+    const stillAsks = [
+      '/Users/u/notes/other.md',
+      `${SUMMARY_PATH}.bak`,
+      `${SUMMARY_PATH}/x`,
+      '/Users/u/.ssh/id_rsa',
+      // bot 不能放宽它自己的策略
+      RECAP_POLICY_FILE
+    ]
+    for (const path of stillAsks) {
+      for (const action of ['read', 'write']) {
+        const what = `${action} ${path}`
+        const verdict = context.judgeGate(action, pathObject(path), { tool: { name: action } })
+        expect(verdict.allowed, what).toBe(false)
+        expect(verdict.decision.winning, what).toMatch(/^ask-on-external-path#/)
+      }
+    }
+    const outside = context.judgeGate('write', pathObject('/etc/x'), { tool: { name: 'write' } })
+    expect(outside.allowed).toBe(false)
+    expect(outside.decision.winning).toMatch(/^ask-on-external-path#/)
+
+    // 读家目录以外的文件本来就不问：这是缺省（no policy = allow），不是这份策略放的
+    const hosts = context.judgeGate('read', pathObject('/etc/hosts'), { tool: { name: 'read' } })
+    expect(hosts.allowed).toBe(true)
+    expect(hosts.decision.winning).toBe('default:path')
+    expect(warnings).toEqual([])
+  })
+
+  it.each(['prompt-session', 'steer-session'])(
+    'BK-37 %s：往别的会话里写不放行（ask-on-session-access#1，tier ask），哪怕它一小时前还活跃',
+    (operation) => {
+      const { context, warnings } = recapContext(lang)
+      const verdict = context.judgeGate('write', sessionObject(ago(HOUR)), {
+        tool: { name: 'session', operation }
+      })
+      expect(verdict.allowed).toBe(false)
+      expect(verdict.decision.winning).toBe('ask-on-session-access#1')
+      expect(verdict.decision.tier).toBe('ask')
+      expect(warnings).toEqual([])
+    }
+  )
+
+  it.each<[string, RecapSubject]>([
+    ['别的 bot', { attrs: { bot: 'other' } }],
+    ['名字以 recap 开头的 bot', { attrs: { bot: 'recap2' } }],
+    ['空串身份', { attrs: { bot: '' } }],
+    ['没有 attrs', {}],
+    ['recap 派出的子 agent', { attrs: { bot: 'recap' }, agentKind: 'spawned' }]
+  ])('BK-38 %s：同样的操作一条都不放行，胜出的是内置规则；不产生求值警告', (_label, subject) => {
+    const { context, warnings } = recapContext(lang, subject)
+    const session = context.judgeGate('read', sessionObject(ago(HOUR)), {
+      tool: READ_SESSION
+    })
+    expect(session.allowed).toBe(false)
+    expect(session.decision.winning).toMatch(/^ask-on-session-access#/)
+    for (const action of ['read', 'write']) {
+      const path = context.judgeGate(action, pathObject(SUMMARY_PATH), { tool: { name: action } })
+      expect(path.allowed, action).toBe(false)
+      expect(path.decision.winning, action).toMatch(/^ask-on-external-path#/)
+    }
+    expect(warnings).toEqual([])
+  })
+
+  it('BK-39 真实的 botAccessNote：读会话放行、发消息会停、那份笔记读写放行，其余询问；没有多放，也不再提示要配策略', () => {
+    const { context, vars, warnings, user, readMd } = recapContext(lang)
+    const naming = resolvePolicyFiles(buildBuiltinPolicies({ readMd }), [user])
+      .filter((e) => !e.shadowedBy)
+      .map((e) => e.policy)
+      .filter((p) => policyNamesBot(p, 'recap'))
+    const note = botAccessNote({
+      botName: 'recap',
+      identity: 'recap',
+      identityFrom: 'name',
+      naming,
+      locations: [
+        {
+          label: 'a temporary folder',
+          vars,
+          judge: (action, object, tool) => context.judgeGate(action, object, { tool })
+        }
+      ],
+      reviewActive: true,
+      host: { home: RECAP_HOME, root: '/', sep: '/', vars, isDirectory: () => false },
+      policiesDirLabel: '~/.shuvix/policies/',
+      now: new Date(RECAP_NOW),
+      warnings: () => warnings
+    })
+    const lines = note.split('\n')
+    expect(lines).toContain('- read other sessions: allowed (recap-access).')
+    expect(lines).toContain(
+      '- send messages into other sessions: asks (ask-on-session-access; only the user can answer, so the run would stop).'
+    )
+    expect(lines).toContain('- ~/notes/daily-summary.md: read and write allowed (recap-access).')
+    expect(note).toContain('Policies that name it: recap-access.')
+    const elsewhere = lines.filter((line) => line.startsWith('- elsewhere'))
+    expect(elsewhere).toHaveLength(1)
+    expect(elsewhere[0]).toContain('asks (ask-on-external-path')
+    for (const trouble of [
+      'also allowed',
+      'plain `allow`',
+      'companion policy',
+      'Some rules failed',
+      'object.sessionId'
+    ]) {
+      expect(note, trouble).not.toContain(trouble)
+    }
+  })
+
+  it('BK-40 写入回执没话说也不改文件（没盖 shuvix-id —— 盖了 subject.bot 就不再是名字）；示例用的 vars 都在 policy-md 的变量表里', () => {
+    const ctx = { today: '2026-06-10' }
+    expect(reviewShuvixMdWrite(recapBlock(lang, RECAP_BOT), 'recap.md', ctx)).toBeNull()
+    expect(reviewShuvixMdWrite(recapBlock(lang, RECAP_POLICY), 'recap-access.md', ctx)).toBeNull()
+
+    const lines = readFileSync(join(BASE_DIR, lang, 'policy-md.md'), 'utf8').split('\n')
+    const start = lines.findIndex((line) => line.startsWith('### `vars`'))
+    expect(start, `${lang}/policy-md.md 没有变量表`).toBeGreaterThanOrEqual(0)
+    const rest = lines.slice(start + 1)
+    const end = rest.findIndex((line) => /^#{1,3} /.test(line))
+    const names = (end < 0 ? rest : rest.slice(0, end)).flatMap((line) => {
+      const cell = /^\| `([^`]+)`/.exec(line)
+      return cell ? [cell[1]] : []
+    })
+    expect(names).toContain('home')
+    expect(names).toContain('now')
+  })
+})
+
+describe.each(EXPECTED_LANGS)('BK-42 shuvix-files 讲写这些文件 · %s', (lang) => {
+  const REMOVED: Record<string, string> = {
+    en: 'create it',
+    zh: '建出来',
+    ja: '作成してください'
+  }
+
+  it('BK-42 恰有一条列表项同时讲 `write` 与 `mkdir`（write 会建目录），这一条里不再叫人自己建', () => {
+    const body = readFileSync(join(BASE_DIR, lang, 'shuvix-files.md'), 'utf8')
+    const bullets = bulletsOf(body).filter((b) => b.includes('`write`') && b.includes('`mkdir`'))
+    expect(bullets, lang).toHaveLength(1)
+    expect(REMOVED[lang], lang).toBeDefined()
+    expect(bullets[0]).not.toContain(REMOVED[lang])
   })
 })

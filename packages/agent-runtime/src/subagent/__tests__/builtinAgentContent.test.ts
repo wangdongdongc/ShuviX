@@ -185,3 +185,24 @@ describe('BA show_image', () => {
     expect(holders).toStrictEqual(HOLDERS.flatMap(localized).sort())
   })
 })
+
+/**
+ * 知识库的工具只给入口，条目本身要靠 `read` 读（2026-11-02 起内置说明书默认启用，它的说明直接叫 agent `read` 那几篇）：
+ * 持有 `knowledge` 却没有 `read` 的档案，围栏教的是一条走不通的路。
+ */
+describe('BA knowledge 与 read', () => {
+  const toolsOf = (file: string): string[] => {
+    const text = readFileSync(join(MD_DIR, file), 'utf8')
+    const line = /^shuvix-tools: (.*)$/m.exec(text)?.[1] ?? ''
+    return line.split(',').map((t) => t.trim())
+  }
+
+  it('BA-KR 目录里每个持有 knowledge 的 md 也持有 read', () => {
+    const holders = readdirSync(MD_DIR)
+      .filter((f) => f.endsWith('.md'))
+      .filter((f) => toolsOf(f).includes('knowledge'))
+    // 语料自检：至少三条主路线的三语都在里面
+    expect(holders).toEqual(expect.arrayContaining(['work', 'chat', 'coding'].flatMap(localized)))
+    for (const file of holders) expect(toolsOf(file), file).toContain('read')
+  })
+})

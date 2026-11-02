@@ -36,7 +36,8 @@ function flip(names: readonly string[], name: string): string[] {
  * 两个界面因此一处改了另一处跟着变。
  *
  * 没有会话（欢迎页）时勾的是 store 里的草稿 `welcomeKnowledgeBases`，直接发送新建会话时由输入框
- * 写进新会话（InputArea 的 `createSessionForSend`），之后清空。
+ * 写进新会话（InputArea 的 `createSessionForSend`），之后清空。草稿没动过（`null`）时显示宿主给的缺省，
+ * 第一次勾选在缺省上改 —— 否则勾一个库会把缺省启用的内置说明书悄悄去掉。
  */
 export function useSessionKnowledgeBases(sessionId: string | null): SessionKnowledgeBasesState {
   // 连同它是哪条会话的一起存：会话一换，上一条的那份不上屏
@@ -79,7 +80,9 @@ export function useSessionKnowledgeBases(sessionId: string | null): SessionKnowl
     if (!host) return
     if (!sessionId) {
       const store = useChatStore.getState()
-      store.setWelcomeKnowledgeBases(flip(store.welcomeKnowledgeBases, name))
+      store.setWelcomeKnowledgeBases(
+        flip(store.welcomeKnowledgeBases ?? result?.selected ?? NO_NAMES, name)
+      )
       return
     }
     if (!result) return
@@ -95,7 +98,7 @@ export function useSessionKnowledgeBases(sessionId: string | null): SessionKnowl
 
   return {
     options: result?.options ?? NO_OPTIONS,
-    selected: sessionId ? (result?.selected ?? NO_NAMES) : draft,
+    selected: sessionId ? (result?.selected ?? NO_NAMES) : (draft ?? result?.selected ?? NO_NAMES),
     explicit: !!sessionId && !!result?.explicit,
     toggle
   }

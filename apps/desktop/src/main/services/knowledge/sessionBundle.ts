@@ -6,7 +6,7 @@
  * 用户先勾一下。存量选择里残留的 `project` 读时剔掉（有项目时它本来就在，没项目时它解析不出来）。
  *
  * 其余的库由用户圈定，是一条**活的回落链**（不落库、不快照）：
- *   会话设过 → 父会话设过（子会话抄上一级）→ 项目设过 → 缺省**一个都不启用**。
+ *   会话设过 → 父会话设过（子会话抄上一级）→ 项目设过 → 缺省**只启用内置说明书**。
  * 与扩展能力勾选（`enabledTools`）的快照语义刻意不同：那一份在创建 Agent 时读死、之后只读，因为
  * 工具表烤进了 pi；知识库是这里每次调用现查的，所以新建一个库、改一次选择，下一次工具调用就作数。
  *
@@ -67,12 +67,18 @@ const NO_PROJECT =
 /** 保留名：工具里优先于同名用户库 */
 const RESERVED_BASE_NAMES: readonly string[] = [KNOWLEDGE_PROJECT_BASE, KNOWLEDGE_BUILTIN_BASE]
 
+/** 内置库在 `<knowledge_bases>` 围栏里的那一行（英文：那是提示词）：只读，免得它把笔记往这里记 */
+const BUILTIN_GUIDE_LABEL = "ShuviX's own manual (read-only)"
+
 /**
- * 内置库在 `<knowledge_bases>` 围栏里的一句说明（英文：那是提示词）。要说清两件事 —— 里面是什么
- * （模型才知道什么问题该来这里查）、只读（免得它把笔记往这里记）。
+ * 内置库在围栏里的说明：什么时候来这里、读哪一篇、别去哪里。
+ *
+ * 实测（2026-11-02，`e2e/live/botKnowledge.probe.ts`）：不知道说明书的 agent 替用户新建 bot 时会列主目录和
+ * `~/.shuvix`，再顺着技能的路径进应用包反推格式和枚举值，每一步都惊动一次权限审查。只指路，不贴内容（`policy-md`
+ * 一篇就 50 KB）。
  */
-const BUILTIN_GUIDE_LABEL =
-  "ShuviX's own reference (read-only): how its agent, bot, policy and hook files, knowledge entries and skills are written, and where they live"
+const BUILTIN_GUIDE_NOTE =
+  "When a task touches ShuviX itself — creating, changing or explaining a bot, agent, security policy, hook or skill — `read` the spec in `shuvix`'s directory first: `bot-md.md`, `agent-md.md`, `policy-md.md`, `hook-md.md`, `skills.md` (overview: `shuvix-files.md`). Reading it never asks. Those files live under `~/.shuvix/`, where every read or write goes through a permission check, so don't list that folder or the home folder to learn the layout, and don't look inside the app package: the manual has the paths, formats and values."
 
 /**
  * 会话所属的项目（bot 会话：它引用的工作项目 —— 它不是项目的成员，项目知识库照样跟着项目来）。隐藏载体项目
@@ -127,10 +133,10 @@ export function builtinManualDir(): string | null {
 /**
  * 用户为这条会话圈定的库（回落链，见文件头；不含隐式的项目库）。
  *
- * **缺省是空的**（2026-09-17 裁决）：谁都没设过 = 用户库与内置库一个都不启用（项目会话仍有隐式的
- * 项目库；无项目会话则围栏整个不注入，工具答「本会话没有启用任何知识库」）。此前缺省是「全部用户库 + 项目库 + 内置库」，理由是「建了库就用得上，不必先去勾
- * 一遍」；实际用下来相反 —— 新会话开箱就把用户所有库（常常跨领域）摊给 agent，搜出来的多是无关条目。
- * 范围由用户圈定才有意义，所以改成显式勾选，内置的说明书也不例外。
+ * **谁都没设过时只启用内置说明书**（2026-11-02 裁决）。用户自己的库仍然一个都不默认启用（2026-09-17：
+ * 新会话开箱就把用户所有库 —— 常常跨领域 —— 摊给 agent，搜出来的多是无关条目）；说明书不同，它讲的是 ShuviX
+ * 自己，条目少、不跨领域，而不知道它的 agent 只能去翻 `~/.shuvix` 和应用包。显式的空列表仍然是「这条会话不用
+ * 知识库」。这是活的回落链，所以从没选过的存量会话也一样。
  */
 export function selectedBaseNames(rootSessionId: string): string[] {
   const row = sessionRecords.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
@@ -146,7 +152,7 @@ export function selectedBaseNames(rootSessionId: string): string[] {
   const fromProject = projectSelection(projectContextIdOf(row) ?? projectContextIdOf(parent))
   if (fromProject) return fromProject
 
-  return []
+  return [KNOWLEDGE_BUILTIN_BASE]
 }
 
 /** 本会话所属项目的库（目录可能还不存在 —— 那就是一个空库） */
@@ -229,6 +235,8 @@ export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] 
   return enabledTargets(rootSessionId).map(({ name, target }) => ({
     name,
     dir: target.dir,
+    readonly: target.readonly,
+    note: name === KNOWLEDGE_BUILTIN_BASE ? BUILTIN_GUIDE_NOTE : undefined,
     label:
       name === KNOWLEDGE_PROJECT_BASE
         ? projectName
@@ -251,8 +259,8 @@ export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInf
 }
 
 /**
- * 配置界面的候选项与此刻生效的选择。`explicit` 为假表示这条会话（及其项目）从没设过 —— 缺省是空的，
- * 所以界面上一个也没勾；用户一勾就落成这条会话自己的。项目库不是候选项：有项目就恒启用（见文件头）。
+ * 配置界面的候选项与此刻生效的选择。`explicit` 为假表示这条会话（及其项目）从没设过 —— 缺省只启用内置
+ * 说明书，所以界面上只勾着它；用户一改就落成这条会话自己的。项目库不是候选项：有项目就恒启用（见文件头）。
  * ShuviX 文件笔记本里的说明书同理：它在那里恒启用，列成一个没勾的选项只会让人以为它关着、勾了也没用。
  */
 export function knowledgeBaseOptions(rootSessionId?: string): {
@@ -266,7 +274,11 @@ export function knowledgeBaseOptions(rootSessionId?: string): {
     : []
   const userOptions = userBaseNames().map((name) => ({ name, label: name }))
   if (!rootSessionId)
-    return { options: [...userOptions, ...builtinOption], selected: [], explicit: false }
+    return {
+      options: [...userOptions, ...builtinOption],
+      selected: builtinOption.map((o) => o.name),
+      explicit: false
+    }
   const row = sessionRecords.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
   const options = shuvixFileKindOfProject(row?.projectId)
     ? userOptions

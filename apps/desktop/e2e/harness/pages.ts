@@ -3386,7 +3386,7 @@ async function toggleKnowledgeIn(
  * scope 内知识库那一段说明：扩展能力卡标题旁的问号气泡里，排在卡片说明之后的那一段
  * （`data-knowledge-hint`）。没有这张卡、没有知识库一行、或没有这段说明时回空串。
  *
- * 「还没选过（一个都没勾）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
+ * 「还没选过（只勾着内置说明书）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
  * （三语取自 chat-protocol 的语言包），不是这里的结构。
  */
 const KNOWLEDGE_HINT = (scope: string): string =>

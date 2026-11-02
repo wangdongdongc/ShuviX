@@ -21,6 +21,10 @@ export interface KnowledgeGuideBase {
   label?: string
   /** 库目录（绝对路径）；缺省不印 */
   dir?: string
+  /** 只读：手头全是只读的库时不教「搜了再干、记下来」—— 记不了，而说明书也不是每件事都该先搜的 */
+  readonly?: boolean
+  /** 这个库自己的一段说明（什么时候用它），由宿主给；印在通用说明之后 */
+  note?: string
 }
 
 /** 围栏正文；一个库都没启用返回 null —— 整段不注入，零成本 */
@@ -29,12 +33,16 @@ export function renderKnowledgeGuide(bases: readonly KnowledgeGuideBase[]): stri
   const lines = bases.map(
     (b) => `- ${b.name}${b.label ? ` — ${b.label}` : ''}${b.dir ? ` — ${b.dir}` : ''}`
   )
-  return `Knowledge bases this session works with — name one with \`base\`:
-${lines.join('\n')}
-
-\`search\` them with the \`knowledge\` tool before working on something you do not already know the
+  const paragraphs = [
+    `Knowledge bases this session works with — name one with \`base\`:\n${lines.join('\n')}`
+  ]
+  if (bases.some((b) => !b.readonly)) {
+    paragraphs.push(`\`search\` them with the \`knowledge\` tool before working on something you do not already know the
 answer for. Record what will be looked up again — a decision and why, a pitfall that cost time, a
 convention the code does not state — in the base the subject belongs to, and submit it. Not what the
 repository already states, or what only matters to this conversation. Say in one line what you
-recorded.`
+recorded.`)
+  }
+  for (const b of bases) if (b.note) paragraphs.push(b.note)
+  return paragraphs.join('\n\n')
 }

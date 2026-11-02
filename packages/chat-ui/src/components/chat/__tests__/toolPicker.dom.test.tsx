@@ -992,6 +992,50 @@ describe('知识库一组：与配置卡同一份数据，从不预判', () => {
     expect(kbCount()).toBe('1')
   })
 
+  it('TP-K3b 欢迎页草稿没动过：显示宿主的缺省，不写草稿；第一次勾选在缺省上改', async () => {
+    seedSession([], true)
+    useChatStore.setState({ welcomeKnowledgeBases: null })
+    useChatStore.getState().setActiveSessionId(null)
+    mocks.baseOptions.mockResolvedValue({
+      options: OPTIONS,
+      selected: ['shuvix'],
+      explicit: false
+    })
+    await renderPicker()
+    await openPanel()
+    expect(kbBox('shuvix').checked).toBe(true)
+    expect(kbCount()).toBe('1')
+    expect(useChatStore.getState().welcomeKnowledgeBases).toBeNull()
+
+    // 勾一个用户库：缺省启用的说明书不能被悄悄去掉
+    await act(async () => {
+      kbBox('notes').click()
+    })
+    await flush()
+    expect(useChatStore.getState().welcomeKnowledgeBases).toEqual(['shuvix', 'notes'])
+    expect(kbCount()).toBe('2')
+    expect(mocks.updateKnowledgeBases).not.toHaveBeenCalled()
+  })
+
+  it('TP-K3c 欢迎页取消缺省的说明书：草稿是空列表，不退回「没动过」', async () => {
+    seedSession([], true)
+    useChatStore.setState({ welcomeKnowledgeBases: null })
+    useChatStore.getState().setActiveSessionId(null)
+    mocks.baseOptions.mockResolvedValue({
+      options: OPTIONS,
+      selected: ['shuvix'],
+      explicit: false
+    })
+    await renderPicker()
+    await openPanel()
+    await act(async () => {
+      kbBox('shuvix').click()
+    })
+    await flush()
+    expect(useChatStore.getState().welcomeKnowledgeBases).toEqual([])
+    expect(kbBox('shuvix').checked).toBe(false)
+  })
+
   it('TP-K4 宿主没有知识库：没有这一组、没有计数，也不订阅事件', async () => {
     mocks.knowledge = false
     seedSession([])

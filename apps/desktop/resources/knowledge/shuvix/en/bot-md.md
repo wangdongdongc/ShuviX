@@ -28,6 +28,68 @@ session's business.
   dropped into `bots/` is refused, not read as a persona. The version is not checked.
 - Live on presence, no enable switch. ShuviX writes one bot into this folder on first start (the diary bot, see "Trigger bindings"); after that it is an ordinary file.
 
+## Creating a bot for someone
+
+This section is for the agent doing it. Following it is enough; you don't need to learn the folders first:
+
+- `write` `~/.shuvix/bots/<name>.md`, the whole file in one go. `write` creates the directory too, so no `mkdir`. Pick a specific name (`recap`, `standup`).
+- **Don't list `~` or `~/.shuvix` to learn the layout, don't read `daily.md` or another bot as a model, and don't look inside the app package for formats, fields or enum values.** Every read or write inside `~/.shuvix` goes through a permission check; all of this is in this entry and `policy-md`, and reading the manual never asks.
+- Don't use `bash` on `~/.shuvix`: a confined command can't reach it, and leaving the sandbox is another review. Read the manual with `read` / `grep`.
+- Then read the tool result: the parser's verdict, the next firings and the unattended access check are all there, so there is no need to `read` the file back or run `shuvix policy check` as well.
+
+A bot that is only a persona is one file (see "Example" below). A bot that runs on a schedule and reads other sessions or writes outside its working folder also needs a companion policy. Both files in full for "every morning, look at yesterday's sessions and write the main points to a file":
+
+`~/.shuvix/bots/recap.md`:
+
+```markdown
+---
+shuvix: bot v2
+name: recap
+shuvix-displayName: Daily recap
+description: Looks at yesterday's sessions every morning and writes the main points to ~/notes/daily-summary.md.
+shuvix-bot-on:
+  - trigger: timer.fired
+    when: event.local.time == '09:00'
+    message: Look at yesterday's sessions and write the main points to ~/notes/daily-summary.md.
+---
+
+## Who I am
+
+You are Daily recap: every morning you boil the previous day's sessions down to a few points.
+
+## What I remember
+```
+
+`~/.shuvix/policies/recap-access.md` (tell the user what it allows first, and write it once they agree):
+
+```markdown
+---
+shuvix: policy v1
+name: recap-access
+description: Daily recap can read sessions with messages in the last two days, and read and write ~/notes/daily-summary.md, without asking you.
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: force-allow
+    object.type: [session]
+    action: [read]
+    match: >-
+      has(subject.bot) && subject.bot == 'recap' && subject.agentKind == 'root'
+      && timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('48h')
+    prompt: Reading yesterday's sessions is its job.
+  - effect: force-allow
+    object.type: [path]
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == 'recap' && subject.agentKind == 'root'
+      && object.path == vars.home + '/notes/daily-summary.md'
+    prompt: Its summary goes here.
+---
+```
+
+The values used here: `subject.agentKind` is `'root'` or `'spawned'`, and a scheduled run is `root`; when the file has no `shuvix-id`, `subject.bot` is the bot's `name`; `vars.home` is the home folder and `vars.now` is the current time; `object.lastActiveAt` is when that session last had a user message. `object.path` is the real path with symlinks resolved: on Windows, or when the home folder is itself a link, `==` will not match, so use `inDir(object.path, vars.home + '/notes')` instead. To allow anything else, `policy-md` has the full list of objects and variables.
+
 ## Example
 
 ```markdown
@@ -134,7 +196,7 @@ So a bot whose job needs any of that gets a **companion policy** of its own, the
 `daily-bot-access`: one file in `~/.shuvix/policies/` (by convention `<bot>-access.md`) whose rules are all
 `force-allow` (a plain `allow` never overrides an ask) and each match
 `has(subject.bot) && subject.bot == '<the bot>' && subject.agentKind == 'root'` plus the narrowest condition on the
-object. `policy-md` (Loosening and tightening) has the template. When you set a bot up for someone: work out what its
+object. "Creating a bot for someone" above has the template. When you set a bot up for someone: work out what its
 runs read or write outside the working folder and whether they read other sessions, tell the user what it needs and
 why, and write the policy only after they agree.
 
@@ -150,7 +212,7 @@ when the file has none, in which case renaming the bot breaks the policy — nam
 `shuvix policy check [<file>] --bot <name>` prints it too.
 
 When a binding fires, ShuviX opens a new session bound to this bot — in the binding's project, or in a temporary
-workspace — (titled "display name · time"; in the sidebar it is folded into the bot's **Scheduled runs** row),
+workspace — (titled "display name · time"; in the sidebar it sits with the bot's other sessions, marked by a timer icon),
 sends `message` as a user message whose origin is "trigger", and appends a `<trigger_event>` fence: every field of
 the event plus `lastFiredAt` — when this binding fired last, so the bot can handle what happened since. While the
 previous run of the same binding is still going (waiting on an approval card included) a firing is skipped;

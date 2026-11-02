@@ -10,6 +10,9 @@
  *（AT-20 用它），所以凡是要断「没有知识行 / 候选恰为某几条」的用例都放在 AtProjB —— 那个项目的
  * 项目库是空的（目录都没建），隐式启用也不产生任何候选。
  *
+ * 内置说明书是缺省的（2026-11-02）：谁都没设过的会话，它的条目也进候选。这里的用例要数的是种下去的文件行与条目，
+ * 所以「不勾任何库」一律写成明确的 `[]`（说明书也跟着没有），不留给缺省。
+ *
  * 种子约定（seedKnowledgeBase 的说明同样适用）：知识库条目必须**在会话于 UI 里激活之前**
  * 铺好 —— 渲染端 provider 按 sessionId 缓存候选表。AT-14 / AT-15 是「会话激活后改启用库
  * 选择要即时反映到候选」的期望用例：它们依赖 knowledge provider 同时订阅
@@ -236,34 +239,34 @@ beforeAll(async () => {
   const inP2 = (title: string, kb?: string[]): Promise<string> =>
     createSession(title, kb, project2.id)
   sids['AT-1'] = await inP1('AT-1', ['kb-a'])
-  sids['AT-2'] = await inP2('AT-2', undefined)
+  sids['AT-2'] = await inP2('AT-2', [])
   sids['AT-3'] = await inP2('AT-3', ['kb-empty'])
   sids['AT-4'] = await inP1('AT-4', ['kb-7'])
   sids['AT-5'] = await inP2('AT-5', ['kb-a'])
   sids['AT-6'] = await inP2('AT-6', ['kb-a'])
   sids['AT-7'] = await inP1('AT-7', ['kb-a'])
   sids['AT-8'] = await inP1('AT-8', ['kb-a'])
-  sids['AT-9'] = await inP1('AT-9', undefined)
+  sids['AT-9'] = await inP1('AT-9', [])
   sids['AT-10'] = await inP1('AT-10', ['kb-a'])
   sids['AT-11'] = await inP1('AT-11', ['kb-a', 'kb-b'])
   sids['AT-13'] = await inP1('AT-13', ['kb-a'])
-  sids['AT-14'] = await inP2('AT-14', undefined)
+  sids['AT-14'] = await inP2('AT-14', [])
   sids['AT-15'] = await inP2('AT-15', ['kb-a'])
   sids['AT-16'] = await inP1('AT-16', ['kb-a'])
   // 不勾任何库：项目库是隐式启用的，它的条目照样进候选
-  sids['AT-20'] = await inP1('AT-20', undefined)
-  sids['AT-27'] = await inP1('AT-27', undefined)
-  sids['AT-28'] = await inP1('AT-28', undefined)
+  sids['AT-20'] = await inP1('AT-20', [])
+  sids['AT-27'] = await inP1('AT-27', [])
+  sids['AT-28'] = await inP1('AT-28', [])
   sids['AT-29'] = await inP1('AT-29', ['kb-a'])
-  sids.scratch = await inP1('AT-scratch', undefined)
+  sids.scratch = await inP1('AT-scratch', [])
   sids['AT-17'] = await inP2('AT-17', ['kb-a'])
-  sids['AT-21'] = await inP2('AT-21', undefined)
+  sids['AT-21'] = await inP2('AT-21', [])
   sids['AT-22'] = await inP2('AT-22', ['kb-a'])
   sids['AT-23'] = await inP2('AT-23', ['kb-a'])
   sids['AT-24'] = await inP2('AT-24', ['kb-a', 'kb-b'])
   sids['AT-25'] = await inP2('AT-25', ['kb-a'])
   sids['AT-26'] = await inP2('AT-26', ['kb-a'])
-  sids.scratchE = await inP2('AT-scratch-e', undefined)
+  sids.scratchE = await inP2('AT-scratch-e', [])
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -855,7 +858,7 @@ describe('I · Files 面板的条目右键（桌面）', () => {
     }
     const filesBefore = treeOf(dir)
     const project = await createProject(app.main, { name: 'AtProjFiles', path: dir })
-    const sid = await createSession('AT-30', undefined, project.id)
+    const sid = await createSession('AT-30', [], project.id)
     await until(async () => (await sidebar.titles()).includes('AT-30'), 'AT-30 in the sidebar')
     expect(await sidebar.openSession('AT-30')).toBe(true)
     await chat.ready()

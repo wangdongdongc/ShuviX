@@ -27,6 +27,68 @@ sources:
   ファイルは人格として読まれず、拒否されます。バージョンは検査されません。
 - 存在すれば有効で、有効化スイッチはありません。ShuviX は初回起動時にこのフォルダへ bot を一つ書き込みます（日記ボット、「トリガーのバインディング」を参照）。その後は普通のファイルです。
 
+## ユーザーの代わりに bot を作る
+
+この節は作業するエージェント向けです。これに従えば十分で、先にフォルダを調べる必要はありません：
+
+- `~/.shuvix/bots/<name>.md` を `write` で一度に全部書きます。`write` がディレクトリも作るので `mkdir` は不要です。名前は具体的に（`recap`、`standup`）。
+- **構成を知るために `~` や `~/.shuvix` を一覧しないこと、`daily.md` や他の bot をひな型として読まないこと、形式・フィールド・列挙値をアプリのパッケージの中で探さないこと。** `~/.shuvix` の中の読み書きは毎回権限チェックを通ります。必要なことはこのエントリと `policy-md` にあり、マニュアルを読むときに確認は出ません。
+- `~/.shuvix` に `bash` を使わないこと：サンドボックス内のコマンドは届かず、外に出ればまた審査になります。マニュアルは `read` / `grep` で読みます。
+- 書いたらツールの結果を読みます：パーサーの判定、次の発火時刻、無人実行の権限チェックがすべて入っているので、読み直しも `shuvix policy check` も不要です。
+
+人格だけの bot はファイル一つです（下の「例」）。定時に動き、他のセッションを読んだり作業フォルダの外に書いたりする bot には付属ポリシーも要ります。「毎朝、昨日のセッションを見て要点をファイルに書く」場合の二つのファイル全文：
+
+`~/.shuvix/bots/recap.md`：
+
+```markdown
+---
+shuvix: bot v2
+name: recap
+shuvix-displayName: 毎日の振り返り
+description: 毎朝、昨日のセッションを見て要点を ~/notes/daily-summary.md に書きます。
+shuvix-bot-on:
+  - trigger: timer.fired
+    when: event.local.time == '09:00'
+    message: 昨日のセッションを見て、要点を ~/notes/daily-summary.md に書いてください。
+---
+
+## 私は誰か
+
+あなたは「毎日の振り返り」です。毎朝、前日のセッションをいくつかの要点にまとめます。
+
+## 覚えていること
+```
+
+`~/.shuvix/policies/recap-access.md`（何を許可するかを先にユーザーに伝え、同意を得てから書きます）：
+
+```markdown
+---
+shuvix: policy v1
+name: recap-access
+description: 毎日の振り返りは確認なしで、直近 2 日にメッセージのあったセッションを読み、~/notes/daily-summary.md を読み書きできます。
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: force-allow
+    object.type: [session]
+    action: [read]
+    match: >-
+      has(subject.bot) && subject.bot == 'recap' && subject.agentKind == 'root'
+      && timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('48h')
+    prompt: 昨日のセッションを読むのがこの bot の仕事です。
+  - effect: force-allow
+    object.type: [path]
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == 'recap' && subject.agentKind == 'root'
+      && object.path == vars.home + '/notes/daily-summary.md'
+    prompt: まとめはここに書きます。
+---
+```
+
+ここで使っている値：`subject.agentKind` は `'root'` か `'spawned'` で、定時実行は `root` です。ファイルに `shuvix-id` がなければ `subject.bot` は bot の `name` です。`vars.home` はホームフォルダ、`vars.now` は現在時刻、`object.lastActiveAt` はそのセッションに最後にユーザーのメッセージがあった時刻です。`object.path` はシンボリックリンクを解決した実パスです。Windows や、ホームフォルダ自体がリンクの場合は `==` では一致しないので、`inDir(object.path, vars.home + '/notes')` を使います。他のものを許可するときのオブジェクトと変数の全一覧は `policy-md` にあります。
+
 ## 例
 
 ```markdown
@@ -129,7 +191,7 @@ frontmatter がマッピングでない、`shuvix` マーカーが別の種別�
 そこで、仕事にそれらが要る bot には、日記 bot の `daily-bot-access` のように、その bot 専用の**付属ポリシー**を一つ
 用意します：`~/.shuvix/policies/` のファイル一つ（慣例で `<bot>-access.md`）で、規則はすべて `force-allow`
 （ただの `allow` は確認に勝てません）、どれも `has(subject.bot) && subject.bot == '<その bot>' && subject.agentKind == 'root'`
-に、オブジェクトへのいちばん狭い条件を加えたものです。テンプレートは `policy-md`（緩める、締める）にあります。誰かのために
+に、オブジェクトへのいちばん狭い条件を加えたものです。テンプレートは上の「ユーザーの代わりに bot を作る」にあります。誰かのために
 bot を設定するときは、その実行が作業フォルダの外で何を読み書きするか、別のセッションを読むかを見極め、何がなぜ要るのかを
 ユーザーに伝え、同意を得てからポリシーを書きます。
 
@@ -144,7 +206,7 @@ bot を設定するときは、その実行が作業フォルダの外で何を�
 でも表示できます。
 
 発火すると ShuviX はこの bot に紐づくセッションを新しく開き —— バインディングのプロジェクトの中、または一時ワーク
-スペースで ——（タイトルは「表示名 · 時刻」。サイドバーではその bot の「定期実行」の行に折りたたまれます）、`message` を
+スペースで ——（タイトルは「表示名 · 時刻」。サイドバーではその bot の他のセッションと並び、タイマーのアイコンが付きます）、`message` を
 出所が「トリガー」のユーザーメッセージとして送り、後ろに `<trigger_event>` の囲みを付けます：イベントの全フィールドと
 `lastFiredAt` —— このバインディングが前回発火した時刻で、bot はそれを手がかりに「前回以降」のことを扱います。
 同じバインディングの前回の実行がまだ終わっていなければ（確認カードで止まっている場合も）今回は飛ばし、スリープ中や

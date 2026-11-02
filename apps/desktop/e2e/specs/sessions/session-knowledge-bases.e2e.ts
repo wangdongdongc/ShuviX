@@ -3,7 +3,7 @@
  * （session-extensions.e2e.ts）**处处相反**，所以这份 spec 处处拿它作对照：
  *
  *   - 扩展能力在 `create` 时**恒写键**（快照）；知识库**恒不写键** —— 它是一条活的回落链
- *     （会话 → 父会话 → 项目 → **缺省一个都不启用**），写键就等于替用户做了选择。
+ *     （会话 → 父会话 → 项目 → **缺省只启用内置说明书 `shuvix`**），写键就等于替用户做了选择。
  *   - 项目库（`project`）**不归选择管**：项目会话里它隐式启用（接替退役的项目记忆），所以它从不是
  *     候选项、配置卡与项目对话框里都没有这个 chip；存量选择里残留的 `project` 读时剔掉（KB-E-10）。
  *   - 扩展能力在运行时存在期间改了要**重配**那个 agent（2026-10-26 起当场生效，此前只读）；知识库
@@ -51,7 +51,7 @@ const P3_NAME = 'KB-项目三'
 
 /**
  * 卡片说明气泡里的两句话（三语全收）—— 隔离实例跟系统语言走，断言比的是「是哪一句」而不是哪门语言。
- * `sessionConfig.knowledgeDefault` = 还没选过（一个都没勾）；`knowledgeDesc` = 已明确设过。
+ * `sessionConfig.knowledgeDefault` = 还没选过（只勾着内置说明书）；`knowledgeDesc` = 已明确设过。
  * 2026-09-17 起这两句只在悬浮 / 聚焦标题旁的问号时才在 DOM 里（见 pages.ts 的 SECTION_HINT）。
  */
 const HINT_DEFAULT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDefault)
@@ -185,8 +185,8 @@ afterAll(async () => {
   await app?.stop()
 })
 
-describe('恒不写键、缺省一个都不勾（IPC）', () => {
-  it('KB-E-1 无项目 / 项目 / 子会话三种会话都不写键；baseOptions 候选照列、一个没勾、explicit 为假', async () => {
+describe('恒不写键、缺省只勾内置说明书（IPC）', () => {
+  it('KB-E-1 无项目 / 项目 / 子会话三种会话都不写键；baseOptions 候选照列、用户库一个没勾、只选着 shuvix、explicit 为假', async () => {
     const parent = await createSession({ title: 'KB-E1-父', projectId: p1 })
     const cases: Array<[string, string]> = [
       ['无项目', await createSession({ title: 'KB-E1-无项目' })],
@@ -210,22 +210,25 @@ describe('恒不写键、缺省一个都不勾（IPC）', () => {
     ])
     // 内置库的人读名按界面语言取（隔离实例跟系统语言走），名字本身在三语里各一份
     expect(BUILTIN_NAMES).toContain(opts0.options[2].label)
-    // 缺省一个都不启用：库都在、候选都列，但范围得用户自己圈（内置的说明书也不例外）
-    expect(opts0.selected).toEqual([])
+    // 缺省只启用内置说明书：用户库都在、候选都列，但范围得用户自己圈
+    expect(opts0.selected).toEqual(['shuvix'])
     expect(opts0.explicit).toBe(false)
 
-    // 项目会话与子会话：候选一模一样 —— 不多出项目库那一项，同样一个都没勾
+    // 项目会话与子会话：候选一模一样 —— 不多出项目库那一项，同样只选着内置说明书
     for (const [label, sid] of cases.slice(1)) {
       const opts = await baseOptions(sid)
       expect(
         opts.options.map((o) => o.name),
         label
       ).toEqual([BASE_A, BASE_B, 'shuvix'])
-      expect(opts.selected, label).toEqual([])
+      expect(opts.selected, label).toEqual(['shuvix'])
       expect(opts.explicit, label).toBe(false)
     }
-    // 不传会话（项目对话框口径）同样没有它
-    expect((await baseOptions()).options.map((o) => o.name)).toEqual([BASE_A, BASE_B, 'shuvix'])
+    // 不传会话的口径：候选里同样没有项目库，选择同样是缺省的那一份
+    const noSession = await baseOptions()
+    expect(noSession.options.map((o) => o.name)).toEqual([BASE_A, BASE_B, 'shuvix'])
+    expect(noSession.selected).toEqual(['shuvix'])
+    expect(noSession.explicit).toBe(false)
   })
 })
 
@@ -259,8 +262,8 @@ describe('新建的库立刻进候选，围栏随运行时定型（IPC）', () =
     // 候选每次现查：新建的库立刻在候选里（不用重开面板、不用重建会话）
     const opts = await baseOptions(sid)
     expect(opts.options.map((o) => o.name)).toContain(fresh)
-    // 但**不自动勾上** —— 缺省是空的，新库进来只是多一个可勾的，不是多一个在用的
-    expect(opts.selected).toEqual([])
+    // 但**不自动勾上** —— 缺省里没有用户库，新库进来只是多一个可勾的，不是多一个在用的
+    expect(opts.selected).toEqual(['shuvix'])
     expect(opts.explicit).toBe(false)
 
     // 已接受的边界：围栏住在系统提示词里、创建 Agent 那一刻定型 —— 改选择刻意不失效运行时
@@ -279,7 +282,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     }
   })
 
-  it('KB-E-4 没设过时一个都没勾、说明是缺省那一句；有运行时也点得动（扩展能力那两行同样可点）；面板开着新建的库跟着长出来', async () => {
+  it('KB-E-4 没设过时只勾着内置说明书、说明是缺省那一句；有运行时也点得动（扩展能力那两行同样可点）；面板开着新建的库跟着长出来', async () => {
     const title = 'KB-E4-卡片'
     const live = 'kb-live-dom'
     const sid = await createSession({ title, projectId: p2 })
@@ -293,7 +296,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     await sessionConfig.waitOpen()
     expect(await sessionConfig.titleValue()).toBe(title)
 
-    // ① 没设过：候选一个都没勾，但这张卡**不随运行时上锁**（可点，只是没勾）
+    // ① 没设过：用户库都没勾、内置说明书勾着，这张卡**不随运行时上锁**（都可点）
     const items = await until(async () => {
       const shot = await sessionConfig.knowledgeItems()
       return shot.length >= 3 ? shot : null
@@ -301,6 +304,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     for (const name of [BASE_A, BASE_B]) {
       expect(kbItem(items, name), name).toMatchObject({ checked: false, disabled: false })
     }
+    expect(kbItem(items, 'shuvix')).toMatchObject({ checked: true, disabled: false })
     // 项目会话也没有项目库那个 chip：它隐式启用，不是勾不勾的事
     expect(kbItem(items, 'project')).toBeUndefined()
     expect(HINT_DEFAULT).toContain(await sessionConfig.knowledgeHint())
@@ -313,11 +317,11 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     expect(ext.every((it: ExtItemShot) => !it.disabled)).toBe(true)
 
     // ② 点一下某个 chip：立刻落库（没有锁、不用等关停），说明换成「已明确设过」那一句。
-    // 一个都没勾，所以这一下是**勾上**，写下的就是这一个
+    // 卡片写的是「此刻生效的选择 + 刚勾的那一个」，所以缺省的说明书一起落成这条会话自己的
     await sessionConfig.toggleKnowledgeBase(BASE_B)
     await until(
-      async () => sameList(await storedBases(sid), [BASE_B]),
-      `the card wrote the session selection ${JSON.stringify([BASE_B])}`
+      async () => sameList(await storedBases(sid), ['shuvix', BASE_B]),
+      `the card wrote the session selection ${JSON.stringify(['shuvix', BASE_B])}`
     )
     await until(
       async () => HINT_EXPLICIT.includes(await sessionConfig.knowledgeHint()),
@@ -335,7 +339,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     await sessionConfig.close()
   })
 
-  it('KB-E-5 项目对话框：从没保存过就一个都不勾；直接保存不写键；动过一下再保存写下整份', async () => {
+  it('KB-E-5 项目对话框：从没保存过就只勾着内置说明书；直接保存不写键；动过一下再保存写下整份', async () => {
     const openProject = async (name: string): Promise<KnowledgeItemShot[]> => {
       await sidebar.pickGroupMenu({ project: name }, 'edit-project')
       await projectEdit.waitOpen()
@@ -346,22 +350,24 @@ describe('会话设置卡与项目对话框（DOM）', () => {
       }, `project "${name}": knowledge bases listed`)
     }
 
-    // ① 从没保存过 → 卡里一个都不勾（缺省本身就是空的，不是「还没读到」）；没有项目库那个 chip
+    // ① 从没保存过 → 卡里显示缺省：只勾着内置说明书（对话框与它的新会话看到的是同一份）
     const items = await openProject(P1_NAME)
-    for (const it of items) expect(it, it.name).toMatchObject({ checked: false, disabled: false })
+    for (const it of items) {
+      expect(it, it.name).toMatchObject({ checked: it.name === 'shuvix', disabled: false })
+    }
     expect(kbItem(items, 'project')).toBeUndefined()
 
     // ② 不动知识库直接保存：这个键不写 —— 「打开看看就关掉」不该替这个项目做选择
     await projectEdit.save()
     expect(await projectBases(p1)).toBeUndefined()
 
-    // ③ 再打开、动一下再保存：写下的是动过之后的整份（这里就是刚勾上的那一个）
+    // ③ 再打开、动一下再保存：写下的是动过之后的整份（缺省的说明书 + 刚勾上的那一个）
     const again = await openProject(P1_NAME)
     const picked = again[0].name
     await projectEdit.toggleKnowledgeBase(picked)
     await projectEdit.save()
     await until(async () => Array.isArray(await projectBases(p1)), 'P1 saved its knowledge bases')
-    expect(await projectBases(p1)).toEqual([picked])
+    expect(await projectBases(p1)).toEqual(['shuvix', picked])
   })
 
   it('KB-E-6 项目缺省流向新会话：会话卡勾的正是项目留下的那一个，脚注是「已明确设过」', async () => {
@@ -426,6 +432,8 @@ describe('会话设置卡与项目对话框（DOM）', () => {
 
   it('KB-E-8 勾上 `shuvix` 并落库；再取消恢复成空', async () => {
     const title = 'KB-E8-取消内置'
+    // 起点固定成一份不含说明书的选择（谁都没设过时它是勾着的）：这条要的是「勾上再取消」
+    await saveProjectBases(p1, [BASE_A])
     const sid = await createSession({ title, projectId: p1 })
     expect(await storedBases(sid)).toBeUndefined()
 
@@ -441,7 +449,6 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     expect(kbItem(items, 'shuvix')).toMatchObject({ checked: false })
 
     // 期望值从**此刻生效的选择**推，不从 chip 的 DOM 顺序推：卡片写的是「selected 去掉/追加一个」。
-    // 这条会话所在的项目可能被前面的用例保存过一份，所以 before 未必是空的
     const before = (await baseOptions(sid)).selected
     expect(before).not.toContain('shuvix')
     const withBuiltin = [...before, 'shuvix']
@@ -464,7 +471,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     await sessionConfig.close()
   })
 
-  it('KB-E-9 项目对话框：从没保存过时 `shuvix` 在候选里、没勾且垫底；勾上再保存，写下的整份里有它', async () => {
+  it('KB-E-9 项目对话框：从没保存过时 `shuvix` 在候选里、已勾且垫底；取消再保存，写下的是空列表', async () => {
     // 前置自检：P3 是唯一一个从没保存过知识库的项目（P1 / P2 被 KB-E-5 / KB-E-6 写过了）
     expect(await projectBases(p3)).toBeUndefined()
 
@@ -477,16 +484,16 @@ describe('会话设置卡与项目对话框（DOM）', () => {
       return kbItem(shot, 'shuvix') ? shot : null
     }, 'project dialog: the builtin base chip is listed')
 
-    // 项目对话框配的是「这个项目的新会话用哪些」—— 内置库是候选里的最后一项，缺省同样不勾
-    expect(kbItem(items, 'shuvix')).toMatchObject({ checked: false, disabled: false })
+    // 项目对话框配的是「这个项目的新会话用哪些」—— 内置库是候选里的最后一项，没设过时缺省勾着它
+    expect(kbItem(items, 'shuvix')).toMatchObject({ checked: true, disabled: false })
     expect(items[items.length - 1].name).toBe('shuvix')
     expect(kbItem(items, 'project')).toBeUndefined()
 
-    // 勾上它再保存：写下的是动过之后的**整份**（不是只写差集）
+    // 取消它再保存：写下的是动过之后的**整份** —— 空列表就是「这个项目的新会话不用这些库」
     await projectEdit.toggleKnowledgeBase('shuvix')
     await projectEdit.save()
     await until(async () => Array.isArray(await projectBases(p3)), 'P3 saved its knowledge bases')
-    expect(await projectBases(p3)).toEqual(['shuvix'])
+    expect(await projectBases(p3)).toEqual([])
   })
 
   it('KB-E-10 存量选择里残留的 `project`：读时剔掉（explicit 照算）、卡上没有那个 chip；再勾一个，写回去的整份里也没有它', async () => {
@@ -538,17 +545,25 @@ describe('输入框的工具选择器（DOM）', () => {
 
     await waitRow(title)
     expect(await sidebar.openSession(title)).toBe(true)
-    await until(async () => (await picker.knowledgeCount()) === 0, 'picker present, no base ticked')
+    await until(
+      async () => (await picker.knowledgeCount()) === 1,
+      'picker present, only the builtin base ticked'
+    )
 
     await picker.open()
     const items = await until(async () => {
       const shot = await picker.knowledgeItems()
       return kbItem(shot, BASE_B) ? shot : null
     }, 'knowledge bases listed in the picker')
-    for (const name of [BASE_A, BASE_B, 'shuvix']) {
+    for (const name of [BASE_A, BASE_B]) {
       expect(kbItem(items, name), name).toMatchObject({ checked: false, disabled: false })
     }
-    expect(kbItem(items, 'shuvix')).toMatchObject({ identifier: 'shuvix', builtin: true })
+    expect(kbItem(items, 'shuvix')).toMatchObject({
+      checked: true,
+      disabled: false,
+      identifier: 'shuvix',
+      builtin: true
+    })
     expect(BUILTIN_NAMES).toContain(kbItem(items, 'shuvix')?.label)
     expect(BUILTIN_HINTS).toContain(kbItem(items, 'shuvix')?.hint)
     expect(kbItem(items, BASE_A)).toMatchObject({ builtin: false, hint: '' })
@@ -557,16 +572,16 @@ describe('输入框的工具选择器（DOM）', () => {
     // 勾一下：立刻落库（没有锁），触发钮上的计数跟着变
     await picker.toggleKnowledgeBase(BASE_A)
     await until(
-      async () => sameList(await storedBases(sid), [BASE_A]),
+      async () => sameList(await storedBases(sid), ['shuvix', BASE_A]),
       'the picker wrote the selection'
     )
-    await until(async () => (await picker.knowledgeCount()) === 1, 'picker count 1')
+    await until(async () => (await picker.knowledgeCount()) === 2, 'picker count 2')
     await picker.close()
 
     // 别处改了（同一个写入口）→ 选择器重取，计数跟着变
-    expect(await writeBases(sid, [BASE_A, BASE_B])).toEqual({ success: true })
+    expect(await writeBases(sid, [BASE_A, BASE_B, 'shuvix'])).toEqual({ success: true })
     await until(
-      async () => (await picker.knowledgeCount()) === 2,
+      async () => (await picker.knowledgeCount()) === 3,
       'picker followed an outside change'
     )
 
@@ -581,10 +596,10 @@ describe('输入框的工具选择器（DOM）', () => {
     expect(kbItem(card, BASE_B)).toMatchObject({ checked: true })
     await sessionConfig.toggleKnowledgeBase(BASE_B)
     await until(
-      async () => sameList(await storedBases(sid), [BASE_A]),
+      async () => sameList(await storedBases(sid), [BASE_A, 'shuvix']),
       'the card wrote the selection'
     )
     await sessionConfig.close()
-    await until(async () => (await picker.knowledgeCount()) === 1, 'picker followed the card')
+    await until(async () => (await picker.knowledgeCount()) === 2, 'picker followed the card')
   })
 })

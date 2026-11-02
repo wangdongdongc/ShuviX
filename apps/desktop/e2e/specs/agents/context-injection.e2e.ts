@@ -256,13 +256,14 @@ describe('覆盖 work 的清单省略语义', () => {
  * 它**不跟项目感知走**：库是用户按会话选的，与「知不知道自己在哪个项目里」无关，所以不属于任何
  * 项目的会话照样有围栏（只要它有库）。唯一的门是档案的工具清单里有没有 `knowledge`。
  *
- * 2026-09-17 起用户库与内置库**缺省一个都不启用**；2026-10-10 起项目会话的**项目库隐式启用**、
- * 排在最前（不归选择管）。所以项目会话恒有围栏、至少一行 `- project — <项目名>`；不属于项目的会话
- * 要围栏得有人勾过 —— 那些用例靠 `createAgentSession({ knowledgeBases })` 在根 Agent 起来之前把选择
- * 放好。项目库之后的次序就是选择里的次序。
+ * 用户库**缺省一个都不启用**（2026-09-17）；2026-10-10 起项目会话的**项目库隐式启用**、排在最前（不归选择管）；
+ * 2026-11-02 起谁都没设过时**内置说明书启用**。所以谁都没设过的会话恒有围栏；要圈别的库、或明确不要说明书，
+ * 用例靠 `createAgentSession({ knowledgeBases })` 在根 Agent 起来之前把选择放好（`[]` = 不用知识库）。项目库之后的
+ * 次序就是选择里的次序。
  *
  * 围栏里**只有清单、没有内容**：不列条目文件名、不报条目数；每个库带它的**目录**（2026-10-12 起：条目
- * 由 agent 直接 `write` 进库目录再 `submit` 过门，印目录正是为了让它写得进去）。
+ * 由 agent 直接 `write` 进库目录再 `submit` 过门，印目录正是为了让它写得进去）。例外是内置说明书自己那段说明
+ * （2026-11-02）：它点名该读哪几篇，不是库的内容，也不是计数。
  *
  * 选择改了之后围栏**当场跟上**（pi-durable 起，P3-06 PIN-08 / P3-15）：知识库是活段落
  * （`shuvix.prompt.knowledge`，`durable/prompt/sections.ts`），只有人设冻结 —— 下一次请求把变了的那段作为
@@ -285,8 +286,16 @@ describe('知识库围栏', () => {
     return start === -1 || end === -1 ? '' : sp.slice(start + OPEN.length, end)
   }
 
-  /** 围栏只给入口不给内容：每行 `- 名字 — 标签 — /库目录`，目录之外不该有路径与计数 */
-  const expectNoContent = (body: string): void => {
+  /** 内置说明书那段说明（靠它点名的第一篇认）：它是指路，不算库的内容 */
+  const withoutManualNote = (body: string): string =>
+    body
+      .split('\n\n')
+      .filter((paragraph) => !paragraph.includes('`bot-md.md`'))
+      .join('\n\n')
+
+  /** 围栏只给入口不给内容：每行 `- 名字 — 标签 — /库目录`，目录之外不该有路径与计数（说明书那段说明除外） */
+  const expectNoContent = (fence: string): void => {
+    const body = withoutManualNote(fence)
     expect(body, 'the fence is there at all').not.toBe('')
     expect(body, 'no entry file names').not.toContain('.md')
     // 目录（临时 HOME、项目 uuid 都可能带数字）摘掉之后，计数与别的路径都不该出现：数字与斜杠是它们
@@ -303,8 +312,8 @@ describe('知识库围栏', () => {
         .then((info) => info.systemPrompt)`
     )
 
-  it('KBF-E-1 项目会话谁都没勾：围栏照样在、排在项目提示词之后，列出 `- project — <项目名> — <库目录>`，不带任何条目/计数；没有项目记忆那段', async () => {
-    // 不传 knowledgeBases：项目库是隐式启用的，不用勾
+  it('KBF-E-1 项目会话谁都没勾：围栏照样在、排在项目提示词之后，列出 `- project — <项目名> — <库目录>` 与缺省的说明书，不带任何条目/计数；没有项目记忆那段', async () => {
+    // 不传 knowledgeBases：项目库是隐式启用的，说明书是缺省的，都不用勾
     const { systemPrompt: sp } = await createAgentSession(app.main, {
       projectId,
       title: 'e2e-kbf-1'
@@ -316,6 +325,7 @@ describe('知识库围栏', () => {
     expect(fence).toContain(
       `- project — InjProj — ${join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', projectId)}`
     )
+    expect(fence).toMatch(/\n- shuvix — .*read-only/)
     expectNoContent(fence)
     // 项目记忆已退役：项目库接替了它，不再有那一段
     expect(sp).not.toContain('<project_memory>')
@@ -338,7 +348,7 @@ describe('知识库围栏', () => {
     expect(sp).not.toContain('<project_memory>')
   })
 
-  it('KBF-E-3 一个库都没有 → 整段不注入，也不因此多出空行：谁都没设过（缺省）与明确设成空，两条路同样', async () => {
+  it('KBF-E-3 谁都没设过（缺省）→ 围栏只列内置说明书、带它的说明、不教记录；明确设成空 → 整段不注入，也不因此多出空行', async () => {
     // 库在磁盘上、内置库也随应用发布着 —— 「没有库」说的是**没启用**，不是没有
     mkdirSync(userBaseDir(), { recursive: true })
 
@@ -352,13 +362,19 @@ describe('知识库围栏', () => {
       )
     }
 
-    // (a) 谁都没设过 —— 这是新会话的常态（2026-09-17 起缺省一个都不启用）
-    noFence(
-      (await createAgentSession(app.main, { title: 'e2e-kbf-3-default' })).systemPrompt,
-      'never picked'
+    // (a) 谁都没设过 —— 这是新会话的常态（2026-11-02 起缺省只启用内置说明书，磁盘上的用户库不算）
+    const fence = fenceBodyOf(
+      (await createAgentSession(app.main, { title: 'e2e-kbf-3-default' })).systemPrompt
     )
+    const listed = fence.split('\n').filter((line) => line.startsWith('- '))
+    expect(listed).toHaveLength(1)
+    expect(listed[0]).toMatch(/^- shuvix — .*read-only/)
+    // 手头全是只读的库：不教「记下来」，只说什么时候来查
+    expect(fence).not.toContain('submit')
+    expect(fence).toContain('`bot-md.md`')
+    expectNoContent(fence)
 
-    // (b) 明确设成空：走的是另一条分支（「设过」的判据是是不是数组），结果必须一样
+    // (b) 明确设成空：走的是另一条分支（「设过」的判据是是不是数组），说明书也跟着没有
     noFence(
       (await createAgentSession(app.main, { title: 'e2e-kbf-3-empty', knowledgeBases: [] }))
         .systemPrompt,

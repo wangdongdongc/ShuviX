@@ -290,9 +290,10 @@ interface ChatState {
   welcomeEnabledTools: string[]
   /**
    * 欢迎页上勾的知识库（库名）—— 同理，直接发送新建会话时写进那条会话的 `settings.knowledgeBases`，
-   * 随后清空。见 useSessionKnowledgeBases。
+   * 随后清空。`null` = 没动过：界面显示缺省，新会话跟缺省走；动过（哪怕全取消）才落成那条会话自己的。
+   * 见 useSessionKnowledgeBases。
    */
-  welcomeKnowledgeBases: string[]
+  welcomeKnowledgeBases: string[] | null
   /**
    * 各 session 正在发送、还没被会话受理的那条用户消息（乐观占位，Q-P3-07；**只在发送方本端**）。
    *
@@ -405,7 +406,7 @@ interface ChatState {
   /** 整份替换欢迎页的扩展能力勾选 */
   setWelcomeEnabledTools: (tools: string[]) => void
   /** 整份替换欢迎页的知识库勾选 */
-  setWelcomeKnowledgeBases: (names: string[]) => void
+  setWelcomeKnowledgeBases: (names: string[] | null) => void
   /** 设 / 撤某会话的乐观占位用户消息（null = 撤）。设的那一刻记下视图里已有的消息 id（PIN-17） */
   setPendingPrompt: (sessionId: string, message: UserTextMessage | null) => void
   /** 某会话创建运行时期间：某台 MCP 开始连 / 落定（`mcp_connecting` 事件驱动） */
@@ -777,7 +778,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionClosing: {},
   sessionAgentCreated: {},
   welcomeEnabledTools: [],
-  welcomeKnowledgeBases: [],
+  welcomeKnowledgeBases: null,
   sessionPendingPrompt: {},
   sessionMcpConnecting: {},
   sessionToolExecutions: {},
