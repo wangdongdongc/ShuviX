@@ -463,7 +463,7 @@ export class SessionService {
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
         ...(workProject ? { workProject } : {}),
-        // 触发器开出来的运行会话（只有 botTriggerService 给）：侧栏折进 bot 组的「定时运行」
+        // 触发器开出来的运行会话（只有 botTriggerService 给）：侧栏行首是定时器图标
         ...(bot && !parentId && options?.triggerRun ? { triggerRun: true } : {}),
         // 路径授权不在设置里：会话权限表（services/acl）在下面 insert 之后生成，子会话复制父会话的授予行
         ...(chromeTab ? { chromeTab } : {}),

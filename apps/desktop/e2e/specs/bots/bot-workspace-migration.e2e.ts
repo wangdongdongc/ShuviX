@@ -4,7 +4,7 @@
  * 2026-10-31 起 bot 会话只归属 bot。之前在项目组里开的 bot 会话（连同它下面的子会话）是项目的**成员**
  * （`projectId` = 项目），升级后：`projectId` 清空、项目记进 `settings.workProject`、项目路径记进
  * `settings.workingDirectory`（项目删了就退回这里）。触发器开的运行会话（第一条非 'created' 的
- * `session_day_prompts.origin` 是 'trigger'）打上 `settings.triggerRun`，侧栏把它们折进 bot 组的「定时运行」。
+ * `session_day_prompts.origin` 是 'trigger'）打上 `settings.triggerRun`，侧栏行首是定时器图标。
  * 普通的项目会话与第一条是人打的 bot 会话不动。
  *
  * 做法同 browser-migration / database-migration：「停机 → 改库 → 用同一个 HOME 再起」（`launchApp({ home })` /
@@ -131,7 +131,7 @@ describe('迁移 v38', () => {
     expect((await getSession(ownSid))!.settings.triggerRun).toBeUndefined()
   })
 
-  it('E-4d 侧栏：迁过来的根会话在 migbot 组里、行尾标项目名，子会话在它下面；运行会话折进 runbot 的「定时运行」，人打的那条在外面；项目组里只剩成员', async () => {
+  it('E-4d 侧栏：迁过来的根会话在 migbot 组里、行尾标项目名，子会话在它下面；运行会话在 runbot 组里、行首定时器图标，人打的那条没有；项目组里只剩成员', async () => {
     const bots = botsPane(app!.main)
     const sidebar = sidebarPane(app!.main)
     await bots.waitGroup('migbot')
@@ -146,12 +146,11 @@ describe('迁移 v38', () => {
       { title: 'MIG-child', location: '', active: false, sub: true }
     ])
 
-    const runs = await bots.runs('runbot')
-    expect(runs).not.toBeNull()
-    expect(runs!.state).toBe('collapsed')
-    expect(runs!.count).toBe(1)
-    expect(runs!.rows.map((r) => r.title)).toEqual(['MIG-run'])
-    expect((await bots.groupSessions('runbot')).map((r) => r.title)).toEqual(['MIG-own'])
+    expect((await bots.groupSessions('runbot')).map((r) => r.title).sort()).toEqual([
+      'MIG-own',
+      'MIG-run'
+    ])
+    expect(await bots.triggerRunTitles('runbot')).toEqual(['MIG-run'])
 
     await sidebar.setGroupExpanded({ project: PROJECT }, true)
     expect((await sidebar.groupRows({ project: PROJECT })).map((r) => r.title)).toEqual([

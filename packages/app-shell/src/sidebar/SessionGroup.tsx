@@ -81,7 +81,7 @@ export interface SessionGroupProps {
   showDividerAbove?: boolean
   /** 组头菜单（右键标题行 / 点 ⋮ 走同一个回调）；缺省即两者都无 */
   onMenu?: (e: React.MouseEvent) => void
-  /** 实验功能：标签后缀一枚「实验」小标签（只在可折叠形态的组头上画） */
+  /** 实验功能：标签后缀一枚「实验」小标签 */
   experimental?: ExperimentalFeature
   /** 分组内的会话项（SessionItem 列表） */
   children: React.ReactNode
@@ -163,11 +163,11 @@ export function SessionGroup({
           >
             <span
               data-has-add={onAdd ? '' : undefined}
-              className={`flex-1 min-w-0 truncate ${
+              className={`flex items-center gap-[var(--sb-gap)] flex-1 min-w-0 ${
                 onAdd ? 'group-hover/header:pr-12' : 'group-hover/header:pr-6'
               }`}
             >
-              {label}
+              <span className="truncate">{label}</span>
               {experimental && <ExperimentalTag feature={experimental} />}
             </span>
             {onAdd && addButton(onAdd, addLabel)}

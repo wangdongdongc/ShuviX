@@ -86,7 +86,6 @@
     "botTempLocation": "一時",
     "botProjectGone": "プロジェクト削除済み",
     "botFileMissing": "この bot のファイルが見つかりません —— 同じ名前のファイルを bots フォルダに戻すと、これらの会話はその下に戻ります",
-    "botTriggerRuns": "定期実行",
     "moreActions": "その他の操作",
     "interrupted": "ShuviX の終了時に中断されました。開くと続行できます",
     "trackingGroup": "追跡項目",

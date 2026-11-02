@@ -12,11 +12,18 @@
  * （`sb-depth-1`，同知识库子目录；不是每行一条竖线），折叠钮就是行首那枚
  * 图标（同 KnowledgeGroup 的 FolderClosed/FolderOpen 整行可点），数量是标题后一个暗淡的
  * 小数字而不是一枚药丸。有子会话的行，行首图标外面包一层折叠钮：
- * 普通会话的图标换成 MessagesSquare（两片叠起来的对话框 = 这里不止一场对话），bot / 悬浮
+ * 普通会话的图标换成 MessagesSquare（两片叠起来的对话框 = 这里不止一场对话），bot / 定时运行 / 悬浮
  * 会话保留自己的身份图标 —— 身份图标若顶掉折叠钮，它们的子会话在侧栏里就够不着了（bot 恰恰
  * 把活全交给子会话）。
  */
-import { Bot, MessageSquare, MessagesSquare, FileText, PictureInPicture2 } from 'lucide-react'
+import {
+  Bot,
+  MessageSquare,
+  MessagesSquare,
+  FileText,
+  PictureInPicture2,
+  Timer
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { RowMenuButton } from './RowMenuButton'
 import { RedactedText, RedactionSessionProvider } from '@shuvix/chat-ui'
@@ -37,6 +44,8 @@ export interface SessionItemProps {
   isNotebook?: boolean
   /** bot 会话（绑定了 bot）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
   isBot?: boolean
+  /** 触发器开出来的运行会话（settings.triggerRun）—— 图标换成定时器，其余与别的 bot 会话一样 */
+  isTriggerRun?: boolean
   /** 子会话行：缩进一级（`sb-depth-1`，同知识库的子目录行）。其余与顶层行完全一致 */
   isSub?: boolean
   /** 拥有的子会话数（>0 时行首图标可点折叠 —— 普通会话换成 MessagesSquare；标题后跟一个计数） */
@@ -65,6 +74,7 @@ export function SessionItem({
   dim = false,
   isNotebook = false,
   isBot = false,
+  isTriggerRun = false,
   isSub = false,
   subCount = 0,
   subCollapsed = false,
@@ -78,7 +88,9 @@ export function SessionItem({
   const pulse = isStreaming ? 'animate-pulse ' : ''
   const lit = isStreaming || active ? 'text-accent' : 'text-text-tertiary'
   // 行首图标说的是「这是哪种会话」；有子会话时它外面再包一层折叠钮（见下）
-  const icon = isBot ? (
+  const icon = isTriggerRun ? (
+    <Timer className={`sb-icon ${pulse}${lit}`} />
+  ) : isBot ? (
     <Bot className={`sb-icon ${pulse}${lit}`} />
   ) : isNotebook ? (
     <FileText className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'}`} />
@@ -100,6 +112,7 @@ export function SessionItem({
       // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
       // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
       data-session-row=""
+      data-trigger-run={isTriggerRun ? '' : undefined}
       data-sub={isSub ? '' : undefined}
       data-sub-count={subCount > 0 ? subCount : undefined}
       data-subs={subCount > 0 ? (subCollapsed ? 'collapsed' : 'expanded') : undefined}

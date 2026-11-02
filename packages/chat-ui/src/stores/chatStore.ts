@@ -106,7 +106,7 @@ export interface SessionSettings {
    * 判定经 chat-protocol 的 projectContextIdOf / workProjectOf
    */
   workProject?: string
-  /** 触发器开出来的运行会话（侧栏折进 bot 组的「定时运行」那一行） */
+  /** 触发器开出来的运行会话（侧栏行首是定时器图标） */
   triggerRun?: boolean
   /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
   agentProfile?: string

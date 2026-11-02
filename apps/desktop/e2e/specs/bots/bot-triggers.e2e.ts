@@ -4,7 +4,7 @@
  *   BT-E1 绑定命中 → 新开一条绑定该 bot 的临时会话（无项目、无父会话、无工作项目引用，标着 triggerRun），
  *         标题「显示名 · MM-DD HH:MM」
  *   BT-E2 发给模型的就是「绑定里的 message + 空行 + <trigger_event> 围栏」，围栏 YAML 里是这一分钟的事实，第一次没有 lastFiredAt
- *   BT-E3 侧栏里它折在 ticker 组的「定时运行」那一行里（缺省收起，不在用户自己开的会话之列）；照样点得开：
+ *   BT-E3 侧栏里它就在 ticker 组的会话列表里，行首是定时器图标（没有单独折起来的一行）；点得开：
  *         用户气泡带「触发器」来源标签（悬停说出 bot 与埋点），脚本回复照常渲染
  *   BT-E4 `when: "false"` 与求值出错（函数名拼错）的绑定都不建会话；出错只记一次日志
  *   BT-E5 设置 → 触发源：tab 带实验标签；开关缺省开（设置项没写）；副标题是上次触发的时刻；**不列订阅者**（触发源与
@@ -109,7 +109,7 @@ interface TickerSession {
   projectId: string | null
   parentId: string | null
   bot: string
-  /** 触发器开出来的运行会话（侧栏折进「定时运行」） */
+  /** 触发器开出来的运行会话（侧栏行首是定时器图标） */
   triggerRun: boolean
   /** 工作项目的引用（绑定没写 project → 没有） */
   workProject: string | null
@@ -289,20 +289,18 @@ describe('timer.fired 叫起 bot', () => {
     expect(first.title).toBe(`Ticker · ${firstFence.local.date.slice(5)} ${firstFence.local.time}`)
   })
 
-  it('BT-E3 侧栏里它折在 ticker 组的「定时运行」里；点开：用户气泡带「触发器」来源标签（悬停说出 ticker 与 timer.fired），脚本回复照常渲染', async () => {
+  it('BT-E3 侧栏里它在 ticker 组的会话列表里、行首定时器图标；点开：用户气泡带「触发器」来源标签（悬停说出 ticker 与 timer.fired），脚本回复照常渲染', async () => {
     const bots = botsPane(app.main)
     // 分节一挂上就扫了（那时 ticker.md 还没落盘）—— 刷新一次，组头才是生效的 ticker 组
     await bots.refresh()
     await bots.waitGroup('ticker')
-    const runs = await until(async () => {
-      const r = await bots.runs('ticker')
-      return r && r.rows.some((row) => row.title === first.title) ? r : null
-    }, "the first run inside the ticker group's scheduled-runs row")
-    expect(runs.state).toBe('collapsed')
-    expect(runs.count).toBe(runs.rows.length)
-    expect(await bots.groupSessions('ticker')).toEqual([])
+    await until(
+      async () => (await bots.groupSessions('ticker')).some((row) => row.title === first.title),
+      'the first run in the ticker group'
+    )
+    expect(await bots.triggerRunTitles('ticker')).toContain(first.title)
 
-    // 折叠只收高度，行仍在 DOM 里：照样点得开
+    // 组缺省折叠，折叠只收高度，行仍在 DOM 里：照样点得开
     const sidebar = sidebarPane(app.main)
     await until(() => sidebar.openSession(first.title), `sidebar row "${first.title}"`)
     const chat = chatPane(app.main)

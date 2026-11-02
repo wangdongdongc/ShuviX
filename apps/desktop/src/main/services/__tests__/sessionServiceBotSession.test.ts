@@ -205,7 +205,7 @@ describe('BSess-4 / 5 —— 判定与「没有换绑入口」', () => {
 
 describe('BSess-6 —— 主进程专用的创建选项与 workProject 的适用范围', () => {
   it('BSess-6 options.triggerRun 只给 bot 根会话写 settings.triggerRun: true；不给就没有这个键', () => {
-    // 触发器开出来的运行会话（botTriggerService）被侧栏折进「定时运行」—— 它只能由主进程在创建时标，
+    // 触发器开出来的运行会话（botTriggerService）在侧栏行首是定时器图标 —— 它只能由主进程在创建时标，
     // 所以是 options 而不是 SessionCreateParams 里的字段（IPC 传不进来）
     sessionService.create({ bot: 'scout' }, { triggerRun: true })
     expect(inserted().settings.triggerRun).toBe(true)

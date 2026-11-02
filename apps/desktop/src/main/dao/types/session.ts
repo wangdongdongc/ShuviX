@@ -46,8 +46,8 @@ export interface SessionSettings {
    */
   workProject?: string
   /**
-   * 这条会话是触发器开出来的运行会话（bot 的 `shuvix-bot-on` 绑定命中时，botTriggerService 建它）。侧栏把它们折进 bot
-   * 组里那一行「定时运行」，免得淹掉用户自己开的对话。只由主进程在创建时写
+   * 这条会话是触发器开出来的运行会话（bot 的 `shuvix-bot-on` 绑定命中时，botTriggerService 建它）。侧栏里它和这个
+   * bot 别的会话排在一起，行首图标换成定时器。只由主进程在创建时写
    */
   triggerRun?: boolean
   /**

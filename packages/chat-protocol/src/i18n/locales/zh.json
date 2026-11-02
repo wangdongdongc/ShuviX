@@ -86,7 +86,6 @@
     "botTempLocation": "临时",
     "botProjectGone": "项目已删除",
     "botFileMissing": "找不到这个 bot 的文件 —— 同名的文件放回 bots 文件夹，这些会话就回到它名下",
-    "botTriggerRuns": "定时运行",
     "moreActions": "更多操作",
     "interrupted": "ShuviX 关闭时被中断——打开即可继续",
     "trackingGroup": "跟踪项",

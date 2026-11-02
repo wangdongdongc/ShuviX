@@ -86,7 +86,6 @@
     "botTempLocation": "Temporary",
     "botProjectGone": "Project deleted",
     "botFileMissing": "This bot's file is gone — put a file with the same name back in the bots folder and these chats return to it",
-    "botTriggerRuns": "Scheduled runs",
     "moreActions": "More actions",
     "interrupted": "Interrupted when ShuviX closed — open it to continue",
     "trackingGroup": "Tracked items",

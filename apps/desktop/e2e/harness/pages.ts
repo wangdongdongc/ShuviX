@@ -5134,8 +5134,8 @@ export function metaStripPane(main: CdpClient): MetaStripPane {
 // `data-group="bot"`，**缺省折叠**；清单还没扫回来时先按会话里的 bot 名列出来的那几组另带
 // `data-bot-group-pending`，它们没有菜单也没有「+」），组头 ⋮ 旁一颗「+」`[data-group-add]`（新对话 → 位置选择）。
 // 组里的会话行是 SessionItem（`data-session-row`；行尾工作位置 `[data-session-location]`：项目名 /「项目已删除」/
-// 「临时」），还没有会话时只有一行 `[data-bot-new-chat]`；触发器开的运行会话（`settings.triggerRun`）折进
-// `[data-bot-runs]`（开关 `[data-bot-runs-toggle]` = collapsed / expanded，缺省收起）。所有组之后是同名里输掉的
+// 「临时」），还没有会话时只有一行 `[data-bot-new-chat]`；触发器开的运行会话（`settings.triggerRun`）是同一列表里
+// 带 `data-trigger-run` 的行（行首定时器图标）。所有组之后是同名里输掉的
 // 文件行 `[data-bot-shadowed-row=<fileName>]`（划线 + 覆盖徽标）与解析不过的琥珀行
 // `[data-bot-invalid-row=<fileName>]`，最后是找不到 bot 文件的那几组 `[data-bot-missing-group=<name>]`（淡显，
 // 菜单只有「删除这些会话」）。归档了的 bot 连同它的会话整组不画。
@@ -5187,18 +5187,11 @@ export interface BotSessionRowShot {
   sub: boolean
 }
 
-/** bot 组里「定时运行」那一行（`data-bot-runs`） */
-export interface BotRunsShot {
-  /** 行上的条数 */
-  count: number
-  state: 'collapsed' | 'expanded'
-  /** 折在里面的会话行（折叠只收高度，行都在 DOM 里） */
-  rows: BotSessionRowShot[]
-}
-
 export interface BotsPane {
   /** 分节标题的标签（不含「实验」小标签） */
   sectionLabel(): Promise<string>
+  /** 「实验」小标签相对标签的位置（px）：竖直中心差、左缘距标签右缘的间距；不在 → null */
+  sectionTagLayout(): Promise<{ centerDelta: number; gap: number } | null>
   /** 侧栏里 Bots 分节的个数（只该有一个；日历那份不在主窗侧栏的 DOM 前面，但这里数的是全部） */
   sectionCount(): Promise<number>
   /**
@@ -5217,12 +5210,10 @@ export interface BotsPane {
   groupExpanded(name: string): Promise<boolean>
   /** 把组设成指定展开态并等它落定（幂等） */
   setGroupExpanded(name: string, open: boolean): Promise<void>
-  /** 组里用户自己开的会话行（DOM 序，含子会话行；不含「定时运行」里的）。组不在 → [] */
+  /** 组里的会话行（DOM 序，含子会话行与定时运行的会话）。组不在 → [] */
   groupSessions(name: string): Promise<BotSessionRowShot[]>
-  /** 组里「定时运行」那一行；没有 → null */
-  runs(name: string): Promise<BotRunsShot | null>
-  /** 点「定时运行」那一行并等它翻转 */
-  toggleRuns(name: string): Promise<void>
+  /** 组里触发器开的运行会话的标题（`data-trigger-run`，行首定时器图标；DOM 序）。组不在 → [] */
+  triggerRunTitles(name: string): Promise<string[]>
   /** 组里那一行「新对话」（还没有会话的 bot 才有）在不在 */
   newChatRow(name: string): Promise<boolean>
   /** 找不到 bot 文件的那几组（DOM 序） */
@@ -5306,14 +5297,12 @@ export function botsPane(main: CdpClient): BotsPane {
     active: r.className.includes('bg-bg-active'),
     sub: r.hasAttribute('data-sub')
   }))`
-  /** 组正文里的会话行（先把「查看更多」都点开；`inRuns` 选「定时运行」里面 / 外面的） */
-  const ROWS_IN = (header: string, inRuns: boolean): string => `(() => {
+  /** 组正文里的会话行（先把「查看更多」都点开） */
+  const ROWS_IN = (header: string): string => `(() => {
     const body = ${BODY(header)}
     if (!body) return []
     for (const more of body.querySelectorAll('[data-view-more]')) more.click()
-    return [...body.querySelectorAll('[data-session-row]')]
-      .filter((r) => ${inRuns ? '' : '!'}r.closest('[data-bot-runs]'))
-      .map(${ROW_SHOT})
+    return [...body.querySelectorAll('[data-session-row]')].map(${ROW_SHOT})
   })()`
 
   const groupExpanded = (name: string): Promise<boolean> =>
@@ -5344,6 +5333,17 @@ export function botsPane(main: CdpClient): BotsPane {
       main.eval<string>(
         `(${BOTS_SECTION_HEADER}?.querySelector('span.truncate')?.firstChild?.textContent ?? '').trim()`
       ),
+
+    sectionTagLayout: () =>
+      main.eval<{ centerDelta: number; gap: number } | null>(`(() => {
+        const header = ${BOTS_SECTION_HEADER}
+        const tag = header?.querySelector('[data-experimental]')
+        const label = header?.querySelector('span.truncate')
+        if (!tag || !label) return null
+        const t = tag.getBoundingClientRect()
+        const l = label.getBoundingClientRect()
+        return { centerDelta: t.top + t.height / 2 - (l.top + l.height / 2), gap: t.left - l.right }
+      })()`),
 
     sectionCount: () =>
       main.eval<number>(`document.querySelectorAll('[data-sidebar-section="bots"]').length`),
@@ -5390,34 +5390,14 @@ export function botsPane(main: CdpClient): BotsPane {
       await sleep(200)
     },
 
-    groupSessions: (name) => main.eval<BotSessionRowShot[]>(ROWS_IN(HEADER(name), false)),
+    groupSessions: (name) => main.eval<BotSessionRowShot[]>(ROWS_IN(HEADER(name))),
 
-    runs: (name) =>
-      main.eval<BotRunsShot | null>(`(() => {
-        const runs = ${BODY(HEADER(name))}?.querySelector('[data-bot-runs]')
-        if (!runs) return null
-        const toggle = runs.querySelector('[data-bot-runs-toggle]')
-        const spans = [...(toggle?.querySelectorAll(':scope > span') ?? [])]
-        return {
-          count: Number((spans[spans.length - 1]?.textContent ?? '').trim()),
-          state: toggle?.getAttribute('data-bot-runs-toggle') ?? '',
-          rows: [...runs.querySelectorAll('[data-session-row]')].map(${ROW_SHOT})
-        }
-      })()`),
-
-    toggleRuns: async (name) => {
-      const TOGGLE_ROW = `${BODY(HEADER(name))}?.querySelector('[data-bot-runs-toggle]')`
-      await until(() => main.eval<boolean>(`!!${TOGGLE_ROW}`), `scheduled runs row of "${name}"`)
-      const before = await main.eval<string>(`${TOGGLE_ROW}.getAttribute('data-bot-runs-toggle')`)
-      await main.eval(`${TOGGLE_ROW}.click()`)
-      await until(
-        async () =>
-          (await main.eval<string>(`${TOGGLE_ROW}?.getAttribute('data-bot-runs-toggle') ?? ''`)) !==
-          before,
-        `scheduled runs row of "${name}" toggled`
-      )
-      await sleep(200)
-    },
+    triggerRunTitles: (name) =>
+      main.eval<string[]>(
+        `[...(${BODY(HEADER(name))}?.querySelectorAll('[data-session-row][data-trigger-run]') ?? [])].map(
+          (r) => (r.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim()
+        )`
+      ),
 
     newChatRow: (name) =>
       main.eval<boolean>(`!!${BODY(HEADER(name))}?.querySelector('[data-bot-new-chat]')`),
@@ -5427,8 +5407,7 @@ export function botsPane(main: CdpClient): BotsPane {
         `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-missing-group]') ?? [])].map((g) => g.getAttribute('data-bot-missing-group') ?? '')`
       ),
 
-    missingGroupSessions: (name) =>
-      main.eval<BotSessionRowShot[]>(ROWS_IN(MISSING_HEADER(name), false)),
+    missingGroupSessions: (name) => main.eval<BotSessionRowShot[]>(ROWS_IN(MISSING_HEADER(name))),
 
     openPicker: async (name, pick, via = 'add') => {
       await waitGroupHeader(name)

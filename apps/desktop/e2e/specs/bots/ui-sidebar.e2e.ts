@@ -59,6 +59,12 @@ describe('还没有任何会话与项目', () => {
     await bots.refresh()
     await bots.waitScanned()
     expect(await bots.sectionCount()).toBe(1)
+    // 实验标与标签同一行居中、留出间距（DOM 单测没有布局，量不到）
+    const tag = await bots.sectionTagLayout()
+    expect(tag).not.toBeNull()
+    expect(Math.abs(tag!.centerDelta)).toBeLessThanOrEqual(1)
+    expect(tag!.gap).toBeGreaterThanOrEqual(4)
+
     const label = await bots.sectionLabel()
     expect(label).toBeTruthy()
     expect(label).not.toMatch(/旧|legacy/i)

@@ -1043,7 +1043,7 @@ export const migrations: Migration[] = [
         update.run(JSON.stringify(settings), r.id)
       }
 
-      // 触发器开出来的运行会话打上 triggerRun（侧栏把它们折进 bot 组的「定时运行」那一行）：它的第一条用户条目是
+      // 触发器开出来的运行会话打上 triggerRun（侧栏行首是定时器图标）：它的第一条用户条目是
       // 触发器发的（session_day_prompts.origin，v34 起记；会话建成那一行 entryId = 'created' 不算）。v34 之前没有
       // 记来源的那些认不出，就照普通会话列着
       // 设置是坏 JSON 的行在 SQL 里一 json_extract 就整条迁移报错 —— 拿出来在 JS 里认

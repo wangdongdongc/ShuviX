@@ -95,7 +95,7 @@ export interface SessionSettings {
    * 地方 —— 项目的设置照常生效，项目的归档与删除不碰它。判定经 `botSession.ts` 的 `projectContextIdOf`
    */
   workProject?: string
-  /** 触发器开出来的运行会话（侧栏折进 bot 组的「定时运行」那一行）；只由主进程在创建时写 */
+  /** 触发器开出来的运行会话（侧栏行首是定时器图标）；只由主进程在创建时写 */
   triggerRun?: boolean
 
   /**

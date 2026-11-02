@@ -6,7 +6,7 @@ import {
 } from '@shuvix/chat-protocol/botSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Timer } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import {
   BotAvatar,
   useChatStore,
@@ -352,16 +352,6 @@ export function ProjectSessionGroups({
   const expandBot = (key: string): void => {
     if (botCollapsed(key)) toggleBot(key)
   }
-  // 组里那一行「定时运行」的展开：侧栏缺省收起（日记 bot 一天一条，摊开就淹掉用户自己开的对话），日历缺省摊开
-  const [runsToggled, setRunsToggled] = useState<Set<string>>(() => new Set())
-  const runsOpen = (key: string): boolean =>
-    hideEmptyGroups ? !runsToggled.has(key) : runsToggled.has(key)
-  const toggleRuns = (key: string): void =>
-    setRunsToggled((prev) => {
-      const next = new Set(prev)
-      if (!next.delete(key)) next.add(key)
-      return next
-    })
 
   /**
    * 「在哪里工作？」—— 开一条 bot 会话前必须先选位置（用户 2026-10-30：不给缺省）：最近用过的项目在前，其余收进
@@ -513,6 +503,7 @@ export function ProjectSessionGroups({
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
               isBot={isBotSessionSettings(item.settings)}
+              isTriggerRun={!!item.settings.triggerRun}
               isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
               isSub={isSub}
               subCount={isSub ? 0 : children.length}
@@ -617,41 +608,6 @@ export function ProjectSessionGroups({
     )
   }
 
-  /**
-   * 一组 bot 会话的正文：用户自己开的在前；触发器开出来的运行会话（settings.triggerRun）折进末尾一行「定时运行 · N」，
-   * 最近一次在跑时那一行带一个运行点
-   */
-  const renderBotRows = (key: string, groupSessions: Session[]): React.JSX.Element => {
-    const own = groupSessions.filter((s) => !s.settings.triggerRun)
-    const runs = groupSessions.filter((s) => s.settings.triggerRun)
-    const open = runsOpen(key)
-    const running = runs.some((s) => streamingSessions[s.id])
-    return (
-      <>
-        {renderRows(key, own, locationOf)}
-        {runs.length > 0 && (
-          <div data-bot-runs="">
-            <div
-              data-bot-runs-toggle={open ? 'expanded' : 'collapsed'}
-              onClick={() => toggleRuns(key)}
-              className="sb-row cursor-pointer text-text-tertiary hover:bg-bg-hover/60 hover:text-text-primary"
-            >
-              <Timer className={`sb-icon ${running ? 'animate-pulse text-accent' : ''}`} />
-              <span className="truncate">{t('sidebar.botTriggerRuns')}</span>
-              <span className="text-[0.8em] tabular-nums text-text-tertiary/70">{runs.length}</span>
-            </div>
-            <AnimatedCollapse open={open}>
-              {/* 再进一级：这几行挂在「定时运行」下面 */}
-              <div style={{ ['--sb-base' as string]: 'calc(var(--sb-indent) * 2)' }}>
-                {renderRows(`${key}:runs`, runs, locationOf)}
-              </div>
-            </AnimatedCollapse>
-          </div>
-        )}
-      </>
-    )
-  }
-
   /** 一个 bot 组：头像 + 显示名，正文是它的会话（行尾标位置）；还没有会话时是一行「新对话」 */
   const renderBotGroup = (bot: BotGroupItem): React.JSX.Element | null => {
     const key = botGroupKey(bot.name)
@@ -681,7 +637,7 @@ export function ProjectSessionGroups({
               <span className="truncate">{t('sidebar.newChat')}</span>
             </div>
           ) : (
-            renderBotRows(key, groupSessions)
+            renderRows(key, groupSessions, locationOf)
           )}
         </SessionGroup>
       </div>
@@ -750,7 +706,7 @@ export function ProjectSessionGroups({
                   active={activeGroupKey === key}
                   dim={dim && activeGroupKey !== key}
                 >
-                  {renderBotRows(key, botSessions.get(name) ?? [])}
+                  {renderRows(key, botSessions.get(name) ?? [], locationOf)}
                 </SessionGroup>
               </div>
             )
@@ -837,7 +793,7 @@ export function ProjectSessionGroups({
                   }
                 >
                   <div className="sb-hint">{t('sidebar.botFileMissing')}</div>
-                  {renderBotRows(key, orphans)}
+                  {renderRows(key, orphans, locationOf)}
                 </SessionGroup>
               </div>
             )

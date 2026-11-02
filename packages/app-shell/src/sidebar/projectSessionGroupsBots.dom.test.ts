@@ -7,7 +7,8 @@
  * 不再出现在项目组与「临时对话」里；行尾标这条会话在哪干活（`[data-session-location]`）。
  *
  *   PG-1 分组与次序：bot 组按显示名排；bot 会话（临时的、引用项目的、旧的项目成员）只在 bot 组里，子会话折在父行下；
- *        普通会话照旧在项目组 / 临时组；「Bots」分节在「项目」分节之前；不注入 bots → 没有这一节，bot 会话照旧分组
+ *        普通会话照旧在项目组 / 临时组；「Bots」分节在「项目」分节之前；不注入 bots → 没有这一节，bot 会话照旧分组；
+ *        分节的实验标与标签是同一 flex 行里的兄弟（居中、有间距）；真实像素的对齐见 e2e bots/ui-sidebar 的 UI-1
  *   PG-2 折叠：侧栏里 bot 组缺省收起、点组头展开；日历（hideEmptyGroups）里缺省摊开、只画当天有会话的 bot、
  *        组上没有菜单与「+」、整节没有菜单；当天一条 bot 会话都没有 → 整节不画
  *   PG-3 位置标签（只在顶层行）：项目名 / 归档项目的名字 / 名字为空 →「Unnamed Project」/ 都不在 →「Project deleted」/
@@ -20,8 +21,8 @@
  *        组头「+」与组菜单里的「New Chat」都开同一个选择
  *   PG-6 菜单：bot 组头 = New Chat / Edit bot / 分隔线 / Archive（Edit → open(文件名, 显示名)，Archive → archive(那个 bot)）；
  *        项目组 / 临时组的菜单里没有 new-bot-chat；分节头 = New bot / 打开文件夹 / 分隔线 / 刷新（刷新重扫）
- *   PG-7 定时运行：triggerRun 的会话折进组末一行 `[data-bot-runs]`（Scheduled runs + 条数），缺省收起、点它展开；
- *        其中有一条在跑 → Timer 图标脉动（用户自己开的那条在跑不算）；没有 → 没有这一行；折进去的行也带位置标签
+ *   PG-7 定时运行：triggerRun 的会话不折叠，和别的会话按原次序排在一起、带位置标签、一起算进条数限额；只是行首图标
+ *        换成 Timer（`data-trigger-run`；在跑时脉动并点亮，有子会话时它就是折叠钮）；子会话行不算
  *   PG-8 找不到 / 归档：注册表里没有、也没归档的名字 → 置灰的 `[data-bot-missing-group]`（提示 + 会话，菜单只有
  *        「删掉这些会话」→ deleteSessions(name, 条数)；宿主不给 deleteSessions → 没有菜单）；归档的名字整组藏起来；
  *        list() 还没回来 / 一次都没成功（拒绝）→ 先按会话里的名字列出 `data-bot-group-pending` 的组（没有菜单、没有「+」、
@@ -328,6 +329,20 @@ describe('PG-1 分组与次序', () => {
     ).toBeTruthy()
   })
 
+  it('PG-1 Bots 分节的实验标是标签的兄弟（同在 flex 行里，居中、有间距），不在会截断的文字里', async () => {
+    store.sessions = []
+    await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
+
+    const tag = sectionHeader('Bots').querySelector<HTMLElement>('[data-experimental="bots"]')!
+    expect(tag.closest('.truncate')).toBeNull()
+    expect(tag.previousElementSibling!.textContent).toBe(S.botsGroup)
+    expect(tag.previousElementSibling!.classList.contains('truncate')).toBe(true)
+    const line = tag.parentElement!.classList
+    expect(line.contains('flex')).toBe(true)
+    expect(line.contains('items-center')).toBe(true)
+    expect(line.contains('gap-[var(--sb-gap)]')).toBe(true)
+  })
+
   it('PG-1 不注入 bots：没有 Bots 分节，bot 会话照旧按项目 / 临时分组', async () => {
     store.sessions = [botRow('b1', 'zed'), botRow('b2', 'zed', {}, { projectId: 'p1' })]
     await mount(undefined)
@@ -352,7 +367,7 @@ describe('PG-2 折叠：侧栏与日历', () => {
     expect(isCollapsed(groupEl('scout'))).toBe(true)
   })
 
-  it('PG-2 日历：有会话的 bot 组摊开、定时运行也摊开；没有会话的 bot 不画；组上没有菜单与「+」，分节也没有菜单', async () => {
+  it('PG-2 日历：有会话的 bot 组摊开，定时运行的会话在组里；没有会话的 bot 不画；组上没有菜单与「+」，分节也没有菜单', async () => {
     store.sessions = [
       botRow('b1', 'scout'),
       botRow('r1', 'scout', { triggerRun: true }),
@@ -366,9 +381,7 @@ describe('PG-2 折叠：侧栏与日历', () => {
 
     expect(groupOrder()).toEqual(['scout'])
     expect(isCollapsed(groupEl('scout'))).toBe(false)
-    expect(
-      groupEl('scout').querySelector('[data-bot-runs-toggle]')!.getAttribute('data-bot-runs-toggle')
-    ).toBe('expanded')
+    expect(rowIds(groupEl('scout'))).toEqual(['b1', 'r1'])
     expect(container.querySelector('[data-group-add]')).toBeNull()
     expect(container.querySelector('[data-bot-new-chat]')).toBeNull()
 
@@ -641,51 +654,62 @@ describe('PG-6 菜单', () => {
 // ─── PG-7 ─────────────────────────────────────
 
 describe('PG-7 定时运行', () => {
-  const runsToggle = (name: string): HTMLElement =>
-    groupEl(name).querySelector<HTMLElement>('[data-bot-runs-toggle]')!
-  const timerIcon = (name: string): Element => runsToggle(name).querySelector('svg')!
+  const iconClass = (id: string): string => rowEl(id).querySelector('svg')!.getAttribute('class')!
 
-  it('PG-7 triggerRun 的会话折进末尾一行（条数）；缺省收起，点它展开；折进去的行也带位置标签', async () => {
+  it('PG-7 triggerRun 的会话不折叠：和别的会话按原次序排在一起、带位置标签，没有单独的一行', async () => {
     store.sessions = [
-      botRow('own', 'scout', { workProject: 'p1' }),
       botRow('run1', 'scout', { triggerRun: true }),
+      botRow('own', 'scout', { workProject: 'p1' }),
       botRow('run2', 'scout', { triggerRun: true, workProject: 'p1' })
     ]
     await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
 
-    const runs = groupEl('scout').querySelector('[data-bot-runs]')!
-    expect(rowIds(runs)).toEqual(['run1', 'run2'])
-    // 自己开的那条在前，不在定时运行里
-    expect(rowIds(groupEl('scout'))).toEqual(['own', 'run1', 'run2'])
-    expect(runsToggle('scout').textContent).toBe(`${S.botTriggerRuns}2`)
-    expect(runsToggle('scout').getAttribute('data-bot-runs-toggle')).toBe('collapsed')
-    expect(isCollapsed(runs)).toBe(true)
-
-    await click(runsToggle('scout'))
-    expect(runsToggle('scout').getAttribute('data-bot-runs-toggle')).toBe('expanded')
-    expect(isCollapsed(runs)).toBe(false)
-
+    expect(rowIds(groupEl('scout'))).toEqual(['run1', 'own', 'run2'])
+    expect(groupEl('scout').querySelector('[data-bot-runs]')).toBeNull()
     expect(locationOf('run1')).toBe(S.botTempLocation)
     expect(locationOf('run2')).toBe('Proj')
   })
 
-  it('PG-7 有一条运行在跑 → Timer 图标脉动；只有自己开的那条在跑 → 不脉动', async () => {
+  it('PG-7 只有图标不同：定时运行的行是 Timer（data-trigger-run），别的 bot 会话还是 Bot', async () => {
     store.sessions = [botRow('own', 'scout'), botRow('run1', 'scout', { triggerRun: true })]
-    store.streaming = { own: true }
     await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
-    expect(timerIcon('scout').getAttribute('class')).not.toContain('animate-pulse')
-    act(() => root.unmount())
 
-    root = createRoot(container)
-    store.streaming = { run1: true }
-    await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
-    expect(timerIcon('scout').getAttribute('class')).toContain('animate-pulse')
+    expect(rowEl('run1').hasAttribute('data-trigger-run')).toBe(true)
+    expect(iconClass('run1')).toContain('lucide-timer')
+    expect(rowEl('own').hasAttribute('data-trigger-run')).toBe(false)
+    expect(iconClass('own')).toContain('lucide-bot')
   })
 
-  it('PG-7 没有定时运行 → 没有这一行', async () => {
-    store.sessions = [botRow('own', 'scout')]
+  it('PG-7 在跑的定时运行：Timer 脉动并点亮；别的行不受影响', async () => {
+    store.sessions = [botRow('own', 'scout'), botRow('run1', 'scout', { triggerRun: true })]
+    store.streaming = { run1: true }
     await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
-    expect(groupEl('scout').querySelector('[data-bot-runs]')).toBeNull()
+
+    expect(iconClass('run1')).toContain('animate-pulse')
+    expect(iconClass('run1')).toContain('text-accent')
+    expect(iconClass('own')).not.toContain('animate-pulse')
+  })
+
+  it('PG-7 定时运行带子会话：Timer 就是折叠钮；子会话行不是定时运行', async () => {
+    store.sessions = [
+      botRow('run1', 'scout', { triggerRun: true }),
+      row('child', { parentId: 'run1', createdAt: 2 })
+    ]
+    await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
+
+    const toggle = rowEl('run1').querySelector<HTMLElement>('[data-subs-toggle]')!
+    expect(toggle.querySelector('svg')!.getAttribute('class')).toContain('lucide-timer')
+    expect(rowEl('child').hasAttribute('data-trigger-run')).toBe(false)
+  })
+
+  it('PG-7 定时运行与别的会话一起算进每组的条数限额，超出的收进「查看更多」', async () => {
+    store.sessions = Array.from({ length: 9 }, (_, i) =>
+      botRow(`s${i}`, 'scout', i % 2 ? { triggerRun: true } : {})
+    )
+    await mount({ adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) })
+
+    expect(rowIds(groupEl('scout'))).toHaveLength(8)
+    expect(groupEl('scout').querySelector('[data-view-more]')).not.toBeNull()
   })
 })
 
