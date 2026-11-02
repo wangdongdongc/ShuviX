@@ -52,6 +52,7 @@ import {
 } from '@shuvix/agent-runtime'
 import { getBuiltinHooksDir, getDefaultHooksDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
+import { removeBuiltinMarkerLine } from '@shuvix/chat-protocol/mdMeta'
 import { ensureObjectId } from '../utils/mdObjectId'
 import { isKnownDisableableBuiltin } from '../utils/builtinDisable'
 import { agentManager } from '../agents/AgentManager'
@@ -403,7 +404,7 @@ class HookService {
   /**
    * 取 md 原文。两侧都是**盘上文件逐字原文**：用户文件读生效那份；内置读随包发布目录里
    * 当前语言那一版（与 builtinSourceFile / 构建的语言回退同一条候选序）—— 这就是
-   * 「创建覆盖副本」的初值，副本与运行时读的那一份逐字节相同。
+   * 「创建覆盖副本」的初值，副本与运行时读的那一份只差 `shuvix-builtin` 一行。
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
@@ -440,13 +441,16 @@ class HookService {
 
   /**
    * 新建用户 hook（「新建」与「创建覆盖副本」共用）；文件名由 name 净化派生。
-   * 新文件一出生就带 `shuvix-id`：覆盖副本逐字复制内置原文，内置 id 跟着来；「新建」的模板补一个新的。
+   * 新文件一出生就带 `shuvix-id`：覆盖副本复制内置原文（只去掉 `shuvix-builtin` 一行），内置 id 跟着来；「新建」的模板补一个新的。
    */
   create(text: string): { success: boolean; name?: string; error?: string } {
     const parsed = this.parseForWrite(text, 'hook')
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.file.name
-    const content = ensureObjectId(text, (t) => parseHookDefinitionFile(t, 'hook'))
+    // 副本是用户的文件，不留内置的自述标记
+    const content = ensureObjectId(removeBuiltinMarkerLine(text), (t) =>
+      parseHookDefinitionFile(t, 'hook')
+    )
     if (this.scanDir().valid.some((u) => u.file.name === name)) {
       return { success: false, error: `Hook "${name}" already exists` }
     }

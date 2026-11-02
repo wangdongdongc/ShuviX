@@ -898,6 +898,17 @@ class FrontmatterCardWidget extends WidgetType {
         `${descriptor?.badge ?? `ShuviX ${this.marker.type}`}${version}`
       )
     )
+    // tag：文件的性质（如「内置」）—— 一枚只读标签，不是一行能拨的开关
+    for (const f of descriptor?.fields ?? []) {
+      if (f.kind !== 'tag' || fields?.[f.key] !== true) continue
+      const tag = el(
+        'span',
+        'cm-shuvix-fmcard-tag shrink-0 text-[10px] leading-none px-1 py-0.5 rounded border border-border-secondary text-text-tertiary',
+        t(f.labelKey)
+      )
+      tag.dataset.key = f.key
+      head.appendChild(tag)
+    }
     if (fields === null) {
       head.appendChild(
         el(
@@ -1007,8 +1018,8 @@ class FrontmatterCardWidget extends WidgetType {
       const known = descriptor?.fields ?? []
       const seen = new Set<string>([SHUVIX_MARKER_KEY, ...known.map((f) => f.key)])
       for (const f of known) {
-        // hidden：已知但不渲染（机器面的所有权声明之类）—— 留在 seen 里防落通用行
-        if (f.kind === 'hidden') continue
+        // hidden：已知但不渲染（机器面的所有权声明之类）；tag 画在标题行 —— 都留在 seen 里防落通用行
+        if (f.kind === 'hidden' || f.kind === 'tag') continue
         box.appendChild(
           buildFieldRow(
             view,

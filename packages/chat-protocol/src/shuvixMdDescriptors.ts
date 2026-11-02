@@ -14,7 +14,7 @@
  */
 
 import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
-import { SHUVIX_ID_KEY } from './mdMeta'
+import { SHUVIX_BUILTIN_KEY, SHUVIX_ID_KEY } from './mdMeta'
 
 /**
  * 字段渲染方式。前五种是可编辑/可点选的标量面：
@@ -28,6 +28,8 @@ import { SHUVIX_ID_KEY } from './mdMeta'
  *   sources OKF 来源数组（`{id, resource, title}` 映射或裸定位符字符串，逐条一行）
  *   stamp OKF 的宿主章（`generated` / `verified`：`{by, at}` 单值或列表）—— 只读**不是**排版
  *     偏好而是契约：`generated` 由写钩子盖、`verified` 只由 UI 动作盖，谁都不该在卡上手改
+ * 另有 tag：值为 `true` 时在卡片标题行画一枚只读标签（文案是 labelKey），不占一行、没有控件；没写、写成别的都什么也不画。
+ * `shuvix-builtin` 就是这一类 —— 它说的是「这份文件是什么」，不是一个能拨的设置；真有人手写进源码，卡片照着显示，不管。
  * 另有 hidden：已知但不渲染（机器面的所有权声明之类对人只是噪音 —— 列进描述符防它落通用行，
  * 渲染时整行跳过；源码视图仍可见）。`shuvix-id`（扩展元数据的对象 id，见 mdMeta.ts）就是这一类：
  * 一串 UUID 摆在卡上只是噪音，而且不该被当成普通字段随手改。
@@ -45,6 +47,7 @@ export type ShuvixMdFieldKind =
   | 'hookBindings'
   | 'sources'
   | 'stamp'
+  | 'tag'
   | 'hidden'
 
 /**
@@ -77,13 +80,13 @@ export interface ShuvixMdTypeDescriptor {
 
 /**
  * 随包发布的内置文件的自述标记（`shuvix-builtin: true`）：agent / policy / hook 三类内置 md 都写着它，
- * 解析器不读（内置与否由文件来自哪个目录决定）。列进描述符只为让这一行有本地化的行名，
- * 而不是落通用行、把原始键名摆给人看；内置笔记本只读，开关因此也只读。
+ * 解析器不读（内置与否由文件来自哪个目录决定）。列进描述符只为让它显示成一枚本地化的标签，
+ * 而不是落通用行、把原始键名摆给人看。
  */
 const BUILTIN_MARKER_FIELD: ShuvixMdFieldSpec = {
-  key: 'shuvix-builtin',
+  key: SHUVIX_BUILTIN_KEY,
   labelKey: 'tool.subAgentBuiltin',
-  kind: 'boolean'
+  kind: 'tag'
 }
 
 /** 对象 id 行：agent / policy / hook / bot 四类都有，卡上不显示（见 ShuvixMdFieldKind 的 hidden） */

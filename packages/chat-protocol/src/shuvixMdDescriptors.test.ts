@@ -174,3 +174,39 @@ describe('对象 id 行（shuvix-id）', () => {
     expect(d!.fields.map((f) => f.key)).not.toContain('shuvix-id')
   })
 })
+
+/**
+ * 内置标记（`shuvix-builtin`）：它说的是「这份文件是什么」，卡片标题行上一枚只读标签，不是一个能拨的设置。
+ * 键名写字面量：内置 md 里写的就是这串字，两边都引常量就什么都钉不住。只有随包发布内置文件的三类才列它。
+ */
+describe('内置标记（shuvix-builtin）', () => {
+  const lookup = (tree: unknown, key: string): unknown =>
+    key
+      .split('.')
+      .reduce<unknown>((node, seg) => (node as Record<string, unknown> | undefined)?.[seg], tree)
+
+  it.each(['agent', 'policy', 'hook'])(
+    'SMD-TAG1 %s：恰一个 shuvix-builtin 字段，kind tag，标签 tool.subAgentBuiltin 三语都有',
+    (type) => {
+      const fields = descriptorForType(type)!.fields.filter((f) => f.key === 'shuvix-builtin')
+      expect(fields).toHaveLength(1)
+      expect(fields[0].kind).toBe('tag')
+      expect(fields[0].labelKey).toBe('tool.subAgentBuiltin')
+      for (const [lang, tree] of [
+        ['en', en],
+        ['zh', zh],
+        ['ja', ja]
+      ] as const) {
+        const label = lookup(tree, fields[0].labelKey)
+        expect(typeof label, lang).toBe('string')
+        expect((label as string).trim(), lang).not.toBe('')
+      }
+    }
+  )
+
+  it.each(['bot', 'okf', 'skill', 'daily', 'track'])('SMD-TAG1 %s 没有 tag 字段', (type) => {
+    const d = descriptorForType(type)
+    expect(d, type).toBeTruthy()
+    expect(d!.fields.filter((f) => f.kind === 'tag')).toEqual([])
+  })
+})

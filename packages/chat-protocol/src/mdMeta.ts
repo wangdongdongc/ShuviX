@@ -16,6 +16,9 @@
 /** frontmatter 里的对象 id 键 */
 export const SHUVIX_ID_KEY = 'shuvix-id'
 
+/** 随包发布的内置文件的自述标记（解析器不读，属性卡上是一枚标签；用户目录里的文件不该带它） */
+export const SHUVIX_BUILTIN_KEY = 'shuvix-builtin'
+
 /** 能挂元数据的文件类型 —— 与各自的 `shuvix: <type>` 标记同名 */
 export const MD_OBJECT_KINDS = ['agent', 'bot', 'hook', 'policy'] as const
 export type MdObjectKind = (typeof MD_OBJECT_KINDS)[number]
@@ -257,5 +260,26 @@ export function setShuvixIdLine(text: string, id: string): string | null {
     lines.splice(marker >= 0 ? entryEnd(lines, marker) : 0, 0, idLine)
   }
 
+  return lead + rest.slice(0, openLen) + lines.join('') + rest.slice(openLen + yaml.length)
+}
+
+/** 顶层的 `shuvix-builtin:` 行（不缩进；键可带引号，同 ID_KEY_LINE_RE） */
+const BUILTIN_KEY_LINE_RE = /^(?:shuvix-builtin|"shuvix-builtin"|'shuvix-builtin')[ \t]*:/
+
+/**
+ * 去掉 frontmatter 顶层的 `shuvix-builtin` 那一行（连同它的续行），其余逐字不动。策略 / Hook 的「创建覆盖副本」是逐字复制
+ * 内置原文，而副本是用户的文件，不该在属性卡上还标着「内置」。没有这一行、或没有 frontmatter → 原样返回
+ */
+export function removeBuiltinMarkerLine(text: string): string {
+  const lead = /^\s*/.exec(text)![0]
+  const rest = text.slice(lead.length)
+  const m = FRONTMATTER_RE.exec(rest)
+  if (!m) return text
+  const openLen = rest.startsWith('---\r\n') ? 5 : 4
+  const yaml = m[1]
+  const lines = yaml === '' ? [] : yaml.split(/(?<=\n)/)
+  const at = lines.findIndex((line) => BUILTIN_KEY_LINE_RE.test(line))
+  if (at < 0) return text
+  lines.splice(at, entryEnd(lines, at) - at)
   return lead + rest.slice(0, openLen) + lines.join('') + rest.slice(openLen + yaml.length)
 }

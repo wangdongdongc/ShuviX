@@ -262,19 +262,26 @@ describe('frontmatter 属性卡', () => {
       )
     ).toBe('AGENTS.md, CLAUDE.md')
 
-    // 布尔行两个：项目感知（缺省 unset —— instruction-files 是清单不是开关，项目提示词与项目记忆
-    // 已合成项目感知一个开关，会话感知已退役），以及夹具里写着 true 的内置自述标记 shuvix-builtin
-    // （描述符给了它本地化行名，见 8ec3412d）
+    // 布尔行只有项目感知（缺省 unset —— instruction-files 是清单不是开关，项目提示词与项目记忆
+    // 已合成项目感知一个开关，会话感知已退役）；夹具里写着 true 的内置自述标记 shuvix-builtin
+    // 不是开关，是标题行上一枚只读标签（文案是本地化的「内置」）
     const toggles = await app.main.eval<string[][]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((n) => [n.closest('.cm-shuvix-fmcard-row')?.dataset.key ?? '', n.dataset.state])`
     )
-    expect(toggles).toEqual([
-      ['shuvix-project-awareness', 'unset'],
-      ['shuvix-builtin', 'on']
-    ])
+    expect(toggles).toEqual([['shuvix-project-awareness', 'unset']])
+    expect(
+      await app.main.eval<string | null>(
+        `document.querySelector('.cm-shuvix-fmcard-head .cm-shuvix-fmcard-tag[data-key="shuvix-builtin"]')?.textContent ?? null`
+      )
+    ).toBeTruthy()
+    expect(
+      await app.main.eval<boolean>(
+        `document.querySelector('.cm-shuvix-fmcard-row[data-key="shuvix-builtin"]') !== null`
+      )
+    ).toBe(false)
 
-    // 未知键（x-e2e-note）落通用 key/value 行、行名就是原始键；shuvix-builtin 有本地化行名，
-    // 不再摆原始键；类型标记键本身不成行
+    // 未知键（x-e2e-note）落通用 key/value 行、行名就是原始键；shuvix-builtin 不成行，
+    // 也不摆原始键；类型标记键本身不成行
     const labels = await app.main.eval<string[]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-label')].map((n) => n.textContent)`
     )

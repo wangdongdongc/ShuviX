@@ -50,6 +50,7 @@ import {
 import i18next from 'i18next'
 import { getBuiltinPoliciesDir, getDefaultPoliciesDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
+import { removeBuiltinMarkerLine } from '@shuvix/chat-protocol/mdMeta'
 import { ensureObjectId } from '../utils/mdObjectId'
 import { isKnownDisableableBuiltin } from '../utils/builtinDisable'
 import { createLogger } from '../logger'
@@ -376,7 +377,7 @@ class PolicyService {
    * 取策略的 md 原文。两侧都是**盘上文件逐字原文**（注释、键序原样）：用户策略读生效那份
    * 用户文件；内置策略读随包发布目录里当前语言那一版（与 builtinSourceFile / 装配的语言回退
    * 同一条候选序：精确语言 → 基础语言 → en）。这就是「创建覆盖副本」的初值 —— 副本与
-   * 运行时读的那一份逐字节相同（对齐 agent 的 create override copy）。
+   * 运行时读的那一份只差 `shuvix-builtin` 一行（对齐 agent 的 create override copy）。
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
@@ -416,13 +417,16 @@ class PolicyService {
   /**
    * 新建用户策略文件（设置页「新建」与「创建覆盖副本」共用）。文件名由 frontmatter
    * `name` 净化派生（冲突追加数字后缀）；与既有用户策略重名拒绝，覆盖内置放行。
-   * 新文件一出生就带 `shuvix-id`：覆盖副本逐字复制内置原文，内置 id 跟着来；「新建」的模板补一个新的。
+   * 新文件一出生就带 `shuvix-id`：覆盖副本复制内置原文（只去掉 `shuvix-builtin` 一行），内置 id 跟着来；「新建」的模板补一个新的。
    */
   createPolicy(text: string): { success: boolean; name?: string; error?: string } {
     const parsed = this.parseForWrite(text, 'policy')
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.policy.name
-    const content = ensureObjectId(text, (t) => parsePolicyDefinitionFile(t, 'policy'))
+    // 副本是用户的文件，不留内置的自述标记
+    const content = ensureObjectId(removeBuiltinMarkerLine(text), (t) =>
+      parsePolicyDefinitionFile(t, 'policy')
+    )
 
     if (this.scanned('fresh').scan.valid.some((u) => u.policy.name === name)) {
       return { success: false, error: `Policy "${name}" already exists` }

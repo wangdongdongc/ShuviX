@@ -443,7 +443,7 @@ describe('policyService —— 退役的内置策略照抄进策略目录即生�
 
 /**
  * 对象 id（`shuvix-id`，设计 docs/md-metadata-design.md）—— 新建的策略一出生就带 id：
- * 原文已有合法 id（「创建覆盖副本」逐字复制内置原文，`policy:builtin:<name>` 跟着来）就原样落盘，
+ * 原文已有合法 id（「创建覆盖副本」复制内置原文，`policy:builtin:<name>` 跟着来，只去掉 `shuvix-builtin` 那一行）就这样落盘，
  * 没有或写坏 → 标记之后补 / 原位换一个新的 UUIDv7。id 是身份不是安全语义：写坏了策略照样生效、
  * 照样参与装配、照样遮蔽同名内置。
  */
@@ -479,7 +479,7 @@ describe('policyService —— 对象 id（shuvix-id）', () => {
     ['ask-on-external-path', 'en'],
     ['ask-on-external-path', 'zh']
   ])(
-    'PU-ID2 「创建覆盖副本」%s（%s）：用内置原文新建 → 用户文件逐字节是那份原文，id 是 policy:builtin:<name>',
+    'PU-ID2 「创建覆盖副本」%s（%s）：用内置原文新建 → 用户文件是那份原文去掉 shuvix-builtin 一行，id 是 policy:builtin:<name>',
     (name, language) => {
       i18next.language = language
       const source = policyService.getSource(name, 'builtin')
@@ -487,7 +487,8 @@ describe('policyService —— 对象 id（shuvix-id）', () => {
       const text = (source as { text: string }).text
       expect(policyService.createPolicy(text)).toEqual({ success: true, name })
       const written = fileText(`${name}.md`)
-      expect(written).toBe(text)
+      expect(written).toBe(text.replace(/^shuvix-builtin: true\r?\n/m, ''))
+      expect(written).not.toContain('shuvix-builtin')
       expect(idValues(written)).toEqual([`policy:builtin:${name}`])
     }
   )

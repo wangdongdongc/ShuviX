@@ -8,7 +8,7 @@
  *        菜单变成 Enable；mdMeta.get 的 enabled 为 false；开着的卡片翻成关、写着 metaHookDisabled
  *   HD-3 停用期间新会话的第一条 prompt：根会话这一轮照常收尾，没有 titler 的 run、标题仍是默认
  *   HD-4 在卡片的开关上启用 → 侧栏徽标消失（hook.changed）；新会话又拿到快速标题
- *   HD-6 停用状态下建覆盖副本 → 副本逐字照抄、带内置 id；用户行「已停用」、菜单 = toggle-enabled + delete-hook；
+ *   HD-6 停用状态下建覆盖副本 → 副本照抄（只去掉 shuvix-builtin 一行）、带内置 id；用户行「已停用」、菜单 = toggle-enabled + delete-hook；
  *        内置行划线 + 已覆盖、不叠「已停用」；titler 仍不跑；在副本行上启用 → 两份一起启用；再停用后删掉副本 →
  *        内置恢复生效、仍是停用（开关挂在内置 id 上）
  *   HD-7 停用跨重启还在、照样不跑 —— 放最后，它换了实例
@@ -270,7 +270,7 @@ describe('内置 hook 的停用开关', () => {
     const copyPath = join(app.hooksDir, `${SAMPLE}.md`)
     await until(() => existsSync(copyPath), 'override copy written')
     const copy = readFileSync(copyPath, 'utf8')
-    expect(copy).toBe(source.text)
+    expect(copy).toBe(source.text!.replace(/^shuvix-builtin: true\r?\n/m, ''))
     expect(copy).toMatch(new RegExp(`^shuvix-id: ${SAMPLE_ID}$`, 'm'))
 
     await until(async () => (await hookRow('user'))?.disabled === true, 'copy listed, disabled')

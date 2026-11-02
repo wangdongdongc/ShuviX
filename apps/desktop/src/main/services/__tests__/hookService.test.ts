@@ -1470,7 +1470,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
 
 /**
  * 对象 id（`shuvix-id`，设计 docs/md-metadata-design.md）—— 新建的 hook 一出生就带 id：
- * 原文已有合法 id（「创建覆盖副本」逐字复制内置原文，`hook:builtin:<name>` 跟着来）就原样落盘，
+ * 原文已有合法 id（「创建覆盖副本」复制内置原文，`hook:builtin:<name>` 跟着来，只去掉 `shuvix-builtin` 那一行）就这样落盘，
  * 没有或写坏 → 标记之后补 / 原位换一个新的 UUIDv7。写坏的 id 不让文件非法，它照常生效。
  */
 describe('hookService — 对象 id（shuvix-id）', () => {
@@ -1512,7 +1512,8 @@ describe('hookService — 对象 id（shuvix-id）', () => {
       const text = (source as { text: string }).text
       expect(hookService.create(text)).toEqual({ success: true, name })
       const written = fileText(`${name}.md`)
-      expect(written).toBe(text)
+      expect(written).toBe(text.replace(/^shuvix-builtin: true\r?\n/m, ''))
+      expect(written).not.toContain('shuvix-builtin')
       expect(idValues(written)).toEqual([`hook:builtin:${name}`])
     }
   )

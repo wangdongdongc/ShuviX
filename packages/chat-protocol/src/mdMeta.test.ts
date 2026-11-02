@@ -7,7 +7,8 @@
  *     原样、大小写敏感；不是字符串 / 空 / 形似而非 → null）；
  *   - isJsonValue：`md_attrs.value` 能原样存回的值（YAML core 解析树里 JSON 表达得了的部分）；
  *   - setShuvixIdLine：**只改一行文本**的 frontmatter 写入 —— 落点、换行符、BOM、续行、引号、
- *     返回 null 的场合、幂等与逐字节保真。
+ *     返回 null 的场合、幂等与逐字节保真；
+ *   - removeBuiltinMarkerLine：策略 / Hook 的覆盖副本摘掉内置标记 —— 只摘顶层那一条，其余逐字不动。
  *
  *   MM-1…3    常量与 builtinObjectId
  *   MM-4…10   parseObjectId 接受
@@ -19,6 +20,7 @@
  *   MM-34…44  已有条目的替换、续行、标记块标量
  *   MM-45…47  值的引号规则
  *   MM-48…49  幂等与保真
+ *   MM-50…55  removeBuiltinMarkerLine：写法与保真、续行、CRLF / BOM、只剩这一个键、原样返回、只摘顶层那一处
  *   MD-1…4    停用开关：能停用的类型、键名、isDisableableObjectId 的接受 / 拒绝表
  */
 import { describe, it, expect } from 'vitest'
@@ -35,6 +37,7 @@ import {
   isJsonValue,
   normalizeObjectId,
   parseObjectId,
+  removeBuiltinMarkerLine,
   setShuvixIdLine,
   type MdObjectKind
 } from './mdMeta'
@@ -621,6 +624,120 @@ describe('MM-48…49 setShuvixIdLine —— 幂等与保真', () => {
     const out = stamp(input)
     expect(out.split('\n')[4]).toBe(`shuvix-id: ${U}`)
     expect(out.replace(`shuvix-id: ${U}\n`, '')).toBe(input)
+  })
+})
+
+describe('MM-50…55 removeBuiltinMarkerLine —— 覆盖副本摘掉内置标记', () => {
+  it('MM-50 摘掉这一行，其余逐字不动；幂等，摘完的结果 setShuvixIdLine 同 id 不改一字', () => {
+    const out = removeBuiltinMarkerLine(
+      '---\nshuvix: policy v1\nshuvix-id: policy:builtin:x\nshuvix-builtin: true\nname: x\n---\n\nbody\n'
+    )
+    expect(out).toBe('---\nshuvix: policy v1\nshuvix-id: policy:builtin:x\nname: x\n---\n\nbody\n')
+    expect(removeBuiltinMarkerLine(out)).toBe(out)
+    expect(setShuvixIdLine(out, 'policy:builtin:x')).toBe(out)
+  })
+
+  it.each([
+    'shuvix-builtin : true',
+    'shuvix-builtin: true # shipped',
+    '"shuvix-builtin": true',
+    "'shuvix-builtin' : true"
+  ])('MM-50 写法 %s 都认得；再摘一次不变', (line) => {
+    const out = removeBuiltinMarkerLine(`---\n${line}\nname: x\n---\n`)
+    expect(out).toBe('---\nname: x\n---\n')
+    expect(removeBuiltinMarkerLine(out)).toBe(out)
+  })
+
+  it.each([
+    ['块标量（中间有空行）', 'shuvix-builtin: |\n  a\n\n  b'],
+    ['值在下一行', 'shuvix-builtin:\n  true'],
+    ['零缩进的序列', 'shuvix-builtin:\n- a\n- b']
+  ])('MM-51 续行一并摘掉：%s', (_label, entry) => {
+    expect(removeBuiltinMarkerLine(`---\n${entry}\nname: x\n---\n`)).toBe('---\nname: x\n---\n')
+  })
+
+  it.each([
+    ['条目后面的空行', '\nname: x\n'],
+    ['条目后面的顶层注释', '# keep\nname: x\n'],
+    ['以短横线开头的键', '-foo: bar\nname: x\n']
+  ])('MM-51 不是续行的留着：%s', (_label, after) => {
+    expect(removeBuiltinMarkerLine(`---\nshuvix-builtin: true\n${after}---\n`)).toBe(
+      `---\n${after}---\n`
+    )
+  })
+
+  it('MM-52 CRLF：其余行的换行符原样', () => {
+    expect(
+      removeBuiltinMarkerLine(
+        '---\r\nshuvix: hook v1\r\nshuvix-builtin: true\r\nname: x\r\n---\r\nbody\r\n'
+      )
+    ).toBe('---\r\nshuvix: hook v1\r\nname: x\r\n---\r\nbody\r\n')
+  })
+
+  it('MM-52 混用换行：每一行的换行符各自原样', () => {
+    expect(
+      removeBuiltinMarkerLine(
+        '---\nshuvix: hook v1\r\nshuvix-builtin: true\r\nname: x\n---\nbody\n'
+      )
+    ).toBe('---\nshuvix: hook v1\r\nname: x\n---\nbody\n')
+  })
+
+  it('MM-52 BOM 与前导空行逐字节留着', () => {
+    expect(removeBuiltinMarkerLine('\uFEFF\n\n---\nshuvix-builtin: true\nname: x\n---\nb\n')).toBe(
+      '\uFEFF\n\n---\nname: x\n---\nb\n'
+    )
+  })
+
+  it.each([
+    ['有正文', '---\nshuvix-builtin: true\n---\nbody', '---\n---\nbody'],
+    ['闭合线后面没有换行', '---\nshuvix-builtin: true\n---', '---\n---'],
+    ['CRLF', '---\r\nshuvix-builtin: true\r\n---\r\nbody', '---\r\n---\r\nbody'],
+    ['闭合线带行尾空白', '---\nshuvix-builtin: true\n---  \nbody', '---\n---  \nbody']
+  ])(
+    'MM-53 frontmatter 只有这一个键（%s）→ 留下一个读得成空映射的 frontmatter',
+    (_label, input, want) => {
+      const out = removeBuiltinMarkerLine(input)
+      expect(out).toBe(want)
+      expect(frontmatter(out)).toEqual({})
+    }
+  )
+
+  it.each([
+    ['空串', ''],
+    ['只有空白', '  \n\t\n'],
+    ['没有 frontmatter', '# T\n\nbody\n'],
+    ['frontmatter 没闭合', '---\nshuvix-builtin: true\nname: x\n'],
+    ['开头的定界线带空格', '--- \nshuvix-builtin: true\n---\n'],
+    ['空 frontmatter', '---\n---\nbody\n'],
+    ['没有这个键', '---\nshuvix: policy v1\nname: x\n---\nbody\n'],
+    ['键只在正文里', '---\nname: x\n---\nshuvix-builtin: true\n'],
+    ['frontmatter 不在文件开头', '# T\n\n---\nshuvix-builtin: true\n---\n'],
+    ['嵌套在别的键下面', '---\nparent:\n  shuvix-builtin: true\n---\n'],
+    ['块标量里', '---\ndescription: |\n  shuvix-builtin: true\n---\n'],
+    ['注释里', '---\n# shuvix-builtin: true\nname: x\n---\n'],
+    ['相近的键 shuvix-builtins', '---\nshuvix-builtins: true\n---\n'],
+    ['相近的键 shuvix-builtin-note', '---\nshuvix-builtin-note: true\n---\n'],
+    ['大小写不同 Shuvix-Builtin', '---\nShuvix-Builtin: true\n---\n'],
+    ['前缀不同 xshuvix-builtin', '---\nxshuvix-builtin: true\n---\n'],
+    ['整块 flow 写法', '---\n{shuvix-builtin: true, name: x}\n---\n'],
+    ['整体缩进', '---\n  shuvix-builtin: true\n  name: x\n---\n']
+  ])('MM-54 原样返回：%s', (_label, text) => {
+    expect(removeBuiltinMarkerLine(text)).toBe(text)
+  })
+
+  it('MM-55 frontmatter 与正文都有：只摘 frontmatter 那一行', () => {
+    const body = 'shuvix-builtin: true\n\n---\nshuvix-builtin: true\n---\n'
+    expect(removeBuiltinMarkerLine(`---\nshuvix-builtin: true\nname: x\n---\n${body}`)).toBe(
+      `---\nname: x\n---\n${body}`
+    )
+  })
+
+  it('MM-55 嵌套的在前、顶层的在后：只摘顶层那一条', () => {
+    expect(
+      removeBuiltinMarkerLine(
+        '---\nparent:\n  shuvix-builtin: keep\nshuvix-builtin: true\nname: x\n---\n'
+      )
+    ).toBe('---\nparent:\n  shuvix-builtin: keep\nname: x\n---\n')
   })
 })
 

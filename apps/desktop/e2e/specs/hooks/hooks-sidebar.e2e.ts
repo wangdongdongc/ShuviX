@@ -424,10 +424,10 @@ describe('侧栏 Hooks 分组', () => {
     expect(items?.find((i) => i.id === 'toggle-enabled')?.label).toBe(en.common.disable)
   })
 
-  it('HS-C4 内置行菜单「创建覆盖副本」：同名用户文件逐字节等于盘上当前语言那份 md 并可解析；内置行划线带徽标（锁仍在）、覆盖入口置灰而非消失（停用开关照在）、副本笔记成活动行', async () => {
+  it('HS-C4 内置行菜单「创建覆盖副本」：同名用户文件是盘上当前语言那份 md 去掉 shuvix-builtin 一行，并可解析；内置行划线带徽标（锁仍在）、覆盖入口置灰而非消失（停用开关照在）、副本笔记成活动行', async () => {
     // getSource(builtin) 的契约 = 随包目录里当前语言那份 md 的逐字原文（YAML 注释与键序
     // 原样；dev 实例即本仓 packages/agent-runtime/src/hook/builtinHooks/md/）——
-    // 副本必须与它逐字节相等。basePath 是列表裁决时按同一候选序挑中的那份文件的路径
+    // 副本与它只差 shuvix-builtin 那一行（副本是用户的文件）。basePath 是列表裁决时按同一候选序挑中的那份文件的路径
     const source = await app.main.eval<{ text?: string; error?: string }>(
       `window.api.hook.getSource(${JSON.stringify({ name: BUILTIN_SAMPLE, source: 'builtin' })})`
     )
@@ -437,7 +437,9 @@ describe('侧栏 Hooks 分组', () => {
 
     await pane.pickBuiltinRowMenu(BUILTIN_SAMPLE, 'create-override')
     await until(() => existsSync(hookPath(`${BUILTIN_SAMPLE}.md`)), 'override copy written')
-    expect(readFileSync(hookPath(`${BUILTIN_SAMPLE}.md`), 'utf8')).toBe(source.text)
+    expect(readFileSync(hookPath(`${BUILTIN_SAMPLE}.md`), 'utf8')).toBe(
+      source.text!.replace(/^shuvix-builtin: true\r?\n/m, '')
+    )
 
     // 落出来的副本过得了真解析器，且进了同名裁决
     await until(async () => {
