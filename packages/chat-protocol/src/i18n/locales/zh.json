@@ -1168,6 +1168,7 @@
     "updateReady": "v{{version}} 已准备好安装",
     "updateInstall": "安装并重启",
     "updateError": "更新出错：{{message}}",
+    "updateRestartRequired": "ShuviX 这次运行拿不到安装更新所需的管理员权限（之前的更新自动重启后会这样）。请完全退出 ShuviX，从应用菜单重新打开后再安装。",
     "autoCheckUpdate": "启动时自动检查更新",
     "updateGroup": "更新",
     "updateManual": "请在运行 ShuviX 的那台电脑上执行下面的命令来更新（服务原有的端口和局域网设置保持不变）：",

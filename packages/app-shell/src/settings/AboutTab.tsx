@@ -149,9 +149,11 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
         )
       case 'error':
         return (
-          <span className="inline-flex items-center gap-1 text-error">
-            <AlertCircle size={10} />
-            {t('about.updateError', { message: e.message })}
+          <span className="inline-flex items-start gap-1 text-error">
+            <AlertCircle size={10} className="mt-[3px] flex-shrink-0" />
+            {e.code === 'restart-required'
+              ? t('about.updateRestartRequired')
+              : t('about.updateError', { message: e.message })}
           </span>
         )
       default:

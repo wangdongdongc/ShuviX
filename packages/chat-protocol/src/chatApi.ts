@@ -230,7 +230,15 @@ export type UpdateEvent =
       total: number
     }
   | { type: 'ready'; version: string }
-  | { type: 'error'; message: string }
+  | {
+      type: 'error'
+      message: string
+      /**
+       * `restart-required`：这次运行拿不到安装要的管理员权限（Linux deb，进程带着 NoNewPrivs），退出重开就好；
+       * 界面显示本地化的说明，而不是 `message`
+       */
+      code?: 'restart-required'
+    }
 
 /** Telegram Bot 信息（返回给前端，不含 token） */
 /** 已登记的 Telegram Bot —— 纯登记信息，无运行时状态（不轮询、不绑定会话） */

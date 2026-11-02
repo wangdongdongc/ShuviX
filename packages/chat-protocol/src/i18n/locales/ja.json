@@ -1168,6 +1168,7 @@
     "updateReady": "v{{version}} はインストール準備完了",
     "updateInstall": "インストールして再起動",
     "updateError": "更新エラー：{{message}}",
+    "updateRestartRequired": "今回の起動では、インストールに必要な管理者権限を ShuviX が取得できません（以前の更新による自動再起動が原因です）。ShuviX を完全に終了し、アプリメニューから開き直してからインストールしてください。",
     "autoCheckUpdate": "起動時に自動更新を確認",
     "updateGroup": "アップデート",
     "updateManual": "ShuviX を実行しているコンピューターで次のコマンドを実行して更新してください（サービスのポートとネットワーク設定はそのまま残ります）：",

@@ -4,7 +4,9 @@
  * `update:download` / `update:install` 以 `code: 'headless'` 拒绝，退出时也不顺手装；桌面模式照旧。
  *
  * electron-updater 是手搓的发射器替身（字段每条用例重置成哨兵值），通道注册表用真的（定义经 `listDefinitions`
- * 取出、按网络 / IPC 的上下文调用），广播经挂在注册表上的一条假传输记进 spy。每条用例 `vi.resetModules()` 后重新导入
+ * 取出、按网络 / IPC 的上下文调用），广播经挂在注册表上的一条假传输记进 spy。Electron 自己的 autoUpdater 也是替身（deb 的
+ * 重启挂在它的 before-quit-for-update 上），linuxRelaunch 打桩（它本身的行为在 utils/__tests__/linuxRelaunch.test.ts）。
+ * 每条用例 `vi.resetModules()` 后重新导入
  * （模式开关、更新服务、注册表都是模块级状态）；无头用例先在新导入的 headless 模块上 `enableHeadlessMode()`，
  * 再导入服务。平台经 `process.platform` 打桩（`headlessUpdateCommand` 缺省读它）。
  *
@@ -23,6 +25,16 @@
  *   US-H5 桌面 download 失败 → 仍回 {success:true}，广播 {type:'error', message}
  *   US-N1 无头经真的网络分发器：update:install / update:download → {t:'result', id, ok:false, error:{message, code:'headless'}}；
  *         update:check → ok:true、value {success:true}
+ *   US-D1 桌面 deb：不用 electron-updater 自带的重启（autoRunAppAfterInstall false）；before-quit-for-update 发出前不重启，
+ *         发出后 relaunchAfterExit 恰调一次；app.relaunch 从不调
+ *   US-D2 桌面非 deb（AppImage、macOS、Windows）：自带的重启不动，不挂监听；before-quit-for-update 也不重启
+ *   US-D3 无头 deb：同样不动（本来就不装）
+ *   US-D4 deb、普通用户、带 NoNewPrivs：update:install 回 {success:true}，quitAndInstall 不调，广播 error（code restart-required），
+ *         退出时不顺手装，也不重启
+ *   US-D5 deb、没有 NoNewPrivs：照旧 quitAndInstall (false, true)，不广播 error，退出时安装
+ *   US-D6 deb、root、带 NoNewPrivs：root 不提权，照旧安装
+ *   US-D7 AppImage、带 NoNewPrivs：不经 pkexec，照旧安装
+ *   US-D8 deb 安装失败（electron-updater 发 error，不发 before-quit-for-update）：只转发错误，没有 code，不重启
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChannelDefinition, ClientContext } from '../../ipc/registry'
@@ -40,6 +52,7 @@ interface FakeUpdater {
   logger: unknown
   autoDownload: unknown
   autoInstallOnAppQuit: unknown
+  autoRunAppAfterInstall: unknown
   forceDevUpdateConfig: unknown
   on: ReturnType<typeof vi.fn>
   emit(event: string, ...args: unknown[]): void
@@ -48,26 +61,48 @@ interface FakeUpdater {
   quitAndInstall: ReturnType<typeof vi.fn>
 }
 
-const state = vi.hoisted(() => ({
-  updater: null as unknown
-}))
+const state = vi.hoisted(() => {
+  const nativeListeners = new Map<string, Array<() => void>>()
+  return {
+    updater: null as unknown,
+    /** electron-updater 的 DebUpdater 替身：`makeUpdater('deb')` 的原型 */
+    DebUpdater: class {},
+    nativeListeners,
+    relaunch: vi.fn<() => void>(),
+    appRelaunch: vi.fn<() => void>(),
+    hasNoNewPrivs: vi.fn<() => boolean>()
+  }
+})
 
-vi.mock('electron', () => ({ app: { isPackaged: true } }))
+vi.mock('electron', () => ({
+  app: { isPackaged: true, relaunch: state.appRelaunch },
+  autoUpdater: {
+    on: (event: string, listener: () => void) => {
+      state.nativeListeners.set(event, [...(state.nativeListeners.get(event) ?? []), listener])
+    }
+  }
+}))
 vi.mock('electron-updater', () => ({
   get autoUpdater() {
     return state.updater
-  }
+  },
+  DebUpdater: state.DebUpdater
+}))
+vi.mock('../../utils/linuxRelaunch', () => ({
+  hasNoNewPrivs: state.hasNoNewPrivs,
+  relaunchAfterExit: state.relaunch
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 }))
 
-function makeUpdater(): FakeUpdater {
+function makeUpdater(kind: 'deb' | 'other' = 'other'): FakeUpdater {
   const listeners = new Map<string, Listener[]>()
   const updater: FakeUpdater = {
     logger: SENTINEL,
     autoDownload: SENTINEL,
     autoInstallOnAppQuit: SENTINEL,
+    autoRunAppAfterInstall: SENTINEL,
     forceDevUpdateConfig: SENTINEL,
     on: vi.fn((event: string, listener: Listener) => {
       listeners.set(event, [...(listeners.get(event) ?? []), listener])
@@ -80,7 +115,13 @@ function makeUpdater(): FakeUpdater {
     downloadUpdate: vi.fn(async () => []),
     quitAndInstall: vi.fn()
   }
+  if (kind === 'deb') Object.setPrototypeOf(updater, state.DebUpdater.prototype)
   return updater
+}
+
+/** Electron 自己的 autoUpdater 发 before-quit-for-update（BaseUpdater.quitAndInstall 装成功后发的那个） */
+const emitBeforeQuitForUpdate = (): void => {
+  for (const listener of state.nativeListeners.get('before-quit-for-update') ?? []) listener()
 }
 
 const HEADLESS_MESSAGE =
@@ -145,11 +186,16 @@ beforeEach(() => {
   vi.resetModules()
   updater = makeUpdater()
   state.updater = updater
+  state.nativeListeners.clear()
+  state.relaunch.mockReset()
+  state.appRelaunch.mockReset()
+  state.hasNoNewPrivs.mockReset().mockReturnValue(false)
   broadcast = vi.fn<(channel: string, ...payload: unknown[]) => void>()
 })
 
 afterEach(() => {
   Object.defineProperty(process, 'platform', platformDescriptor)
+  vi.restoreAllMocks()
 })
 
 describe('US-E update-available / update-not-available 的广播', () => {
@@ -332,5 +378,110 @@ describe('US-N 经真的网络分发器', () => {
     expect(updater.quitAndInstall).not.toHaveBeenCalled()
     expect(updater.downloadUpdate).not.toHaveBeenCalled()
     expect(updater.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('US-D deb 更新：自己重启，带 NoNewPrivs 时不试', () => {
+  const useDebUpdater = (): void => {
+    updater = makeUpdater('deb')
+    state.updater = updater
+  }
+  const asUser = (): void => {
+    vi.spyOn(process, 'getuid').mockReturnValue(1000)
+  }
+
+  it('US-D1 桌面 deb：不用自带的重启；装成功（before-quit-for-update）才重启，不经 app.relaunch', async () => {
+    useDebUpdater()
+    asUser()
+    await boot('desktop')
+    expect(updater.autoRunAppAfterInstall).toBe(false)
+
+    await expect(handlerOf('update:install')(winCtx())).resolves.toStrictEqual({ success: true })
+    expect(updater.quitAndInstall.mock.calls).toStrictEqual([[false, true]])
+    expect(state.relaunch).not.toHaveBeenCalled()
+
+    emitBeforeQuitForUpdate()
+    expect(state.relaunch).toHaveBeenCalledTimes(1)
+    expect(state.appRelaunch).not.toHaveBeenCalled()
+  })
+
+  it('US-D2 桌面非 deb：自带的重启不动，不挂监听', async () => {
+    asUser()
+    await boot('desktop')
+    expect(updater.autoRunAppAfterInstall).toBe(SENTINEL)
+    expect(state.nativeListeners.size).toBe(0)
+    emitBeforeQuitForUpdate()
+    expect(state.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('US-D3 无头 deb：同样不动', async () => {
+    useDebUpdater()
+    asUser()
+    await boot('headless')
+    expect(updater.autoRunAppAfterInstall).toBe(SENTINEL)
+    expect(state.nativeListeners.size).toBe(0)
+  })
+
+  it('US-D4 deb、普通用户、带 NoNewPrivs：不试 pkexec，广播 restart-required，退出时不装', async () => {
+    useDebUpdater()
+    asUser()
+    state.hasNoNewPrivs.mockReturnValue(true)
+    await boot('desktop')
+    expect(updater.autoInstallOnAppQuit).toBe(false)
+
+    await expect(handlerOf('update:install')(winCtx())).resolves.toStrictEqual({ success: true })
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
+    const events = updateEvents() as Array<Extract<UpdateEvent, { type: 'error' }>>
+    expect(events.length).toBe(1)
+    expect(events[0].type).toBe('error')
+    expect(events[0].code).toBe('restart-required')
+    expect(events[0].message).toContain('open it again')
+    expect(updateService.getLastEvent()).toBe(events[0])
+    expect(state.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('US-D5 deb、没有 NoNewPrivs：照旧安装，退出时也安装', async () => {
+    useDebUpdater()
+    asUser()
+    await boot('desktop')
+    expect(updater.autoInstallOnAppQuit).toBe(true)
+    await handlerOf('update:install')(winCtx())
+    expect(updater.quitAndInstall.mock.calls).toStrictEqual([[false, true]])
+    expect(updateEvents()).toStrictEqual([])
+  })
+
+  it('US-D6 deb、root、带 NoNewPrivs：root 不提权，照旧安装', async () => {
+    useDebUpdater()
+    vi.spyOn(process, 'getuid').mockReturnValue(0)
+    state.hasNoNewPrivs.mockReturnValue(true)
+    await boot('desktop')
+    expect(updater.autoInstallOnAppQuit).toBe(true)
+    await handlerOf('update:install')(winCtx())
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(updateEvents()).toStrictEqual([])
+  })
+
+  it('US-D7 AppImage、带 NoNewPrivs：不经 pkexec，照旧安装', async () => {
+    asUser()
+    state.hasNoNewPrivs.mockReturnValue(true)
+    await boot('desktop')
+    expect(updater.autoInstallOnAppQuit).toBe(true)
+    await handlerOf('update:install')(winCtx())
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(updateEvents()).toStrictEqual([])
+  })
+
+  it('US-D8 deb 安装失败：只转发错误，不带 code，不重启', async () => {
+    useDebUpdater()
+    asUser()
+    await boot('desktop')
+    updater.quitAndInstall.mockImplementationOnce(() => {
+      updater.emit('error', new Error('Command pkexec exited with code 126'))
+    })
+    await handlerOf('update:install')(winCtx())
+    expect(updateEvents()).toStrictEqual([
+      { type: 'error', message: 'Command pkexec exited with code 126' }
+    ])
+    expect(state.relaunch).not.toHaveBeenCalled()
   })
 })

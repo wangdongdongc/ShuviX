@@ -21,4 +21,12 @@ export type UpdateEvent =
       total: number
     }
   | { type: 'ready'; version: string }
-  | { type: 'error'; message: string }
+  | {
+      type: 'error'
+      message: string
+      /**
+       * `restart-required`：这次运行拿不到安装要的管理员权限（Linux deb，进程带着 NoNewPrivs），退出重开就好；
+       * 界面显示本地化的说明，而不是 `message`
+       */
+      code?: 'restart-required'
+    }

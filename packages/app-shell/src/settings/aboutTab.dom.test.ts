@@ -13,6 +13,7 @@
  *   AB-7 appLog：日志区块写着路径；「查看」调 onView；复制钮复制路径并显示 about.pathCopied 1500ms；给了 onReveal 才有
  *        「在文件夹中显示」，点它调 onReveal
  *   AB-8 不给 appLog（扩展）→ 没有日志区块
+ *   AB-9 error：带 code restart-required → 显示 about.updateRestartRequired，不显示 message；不带 code → about.updateError + message
  *
  * `@shuvix/chat-ui` 的包入口很重（mermaid 等），这里只给它一个 copyToClipboard 替身。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
@@ -181,6 +182,18 @@ describe('AboutTab 的手动更新区块', () => {
     await render(null)
     expect(manualBlock()).toBeNull()
     expect(container.querySelector('[data-update-command]')).toBeNull()
+  })
+
+  it('AB-9 error：restart-required 显示本地化说明；其余显示 message', async () => {
+    await render({ type: 'error', message: 'raw english', code: 'restart-required' })
+    expect(container.textContent).toContain(i18n.t('about.updateRestartRequired'))
+    expect(container.textContent).not.toContain('raw english')
+
+    await render({ type: 'error', message: 'Command pkexec exited with code 126' })
+    expect(container.textContent).toContain(
+      i18n.t('about.updateError', { message: 'Command pkexec exited with code 126' })
+    )
+    expect(container.textContent).not.toContain(i18n.t('about.updateRestartRequired'))
   })
 
   it('AB-6 协议那行的 GitHub 图标钮打开仓库；没有「项目」区块', async () => {

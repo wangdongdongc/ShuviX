@@ -1,11 +1,24 @@
-import { app } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import { app, autoUpdater as electronAutoUpdater } from 'electron'
+import { autoUpdater, DebUpdater } from 'electron-updater'
 import { createLogger } from '../logger'
 import { broadcastToClients } from '../ipc/registry'
 import type { UpdateEvent } from '../types'
 import { headlessUpdateCommand, headlessUpdateError, isHeadless } from '../utils/headless'
+import { hasNoNewPrivs, relaunchAfterExit } from '../utils/linuxRelaunch'
 
 const log = createLogger('Updater')
+
+/** 界面按 `code: 'restart-required'` 显示本地化的说明；这句进日志，也是没有那条文案时的回退 */
+const RESTART_REQUIRED_MESSAGE =
+  'ShuviX cannot get administrator rights in this run. Quit it, open it again from the app menu, then install the update.'
+
+/**
+ * 这次运行装不了 deb：`dpkg -i` 要经 pkexec 提权，而进程带着 NoNewPrivs 时 setuid 不生效（见 utils/linuxRelaunch.ts，
+ * 旧版的自动重启把这个标记带进来）。root 不用提权，不受影响
+ */
+function cannotInstallDeb(): boolean {
+  return autoUpdater instanceof DebUpdater && process.getuid?.() !== 0 && hasNoNewPrivs()
+}
 
 /**
  * 自动更新服务 — 封装 electron-updater。
@@ -15,6 +28,10 @@ const log = createLogger('Updater')
  * 要么以 root 直接 `dpkg -i` 后正常退出再自己拉起 —— systemd 的 `Restart=on-failure` 不管正常退出，还会把拉起
  * 的进程一起杀掉，服务就停了。所以 `available` 带上 `manual`（Linux 上是重跑安装脚本的命令），下载 / 安装
  * 一律拒绝，退出时也不顺手装（`autoInstallOnAppQuit`：`systemctl stop` 时装到一半会被杀）。
+ *
+ * 桌面上的 deb 更新装完由这里重启，不用 electron-updater 自带的 `app.relaunch()` —— 那样重启出来的进程带着
+ * NoNewPrivs，下一次更新的 pkexec 必败（见 utils/linuxRelaunch.ts）。已经带着它的进程（从旧版更新过来的那一次运行）
+ * 不去试：安装时直接说要退出重开，退出时也不顺手装。
  */
 class UpdateService {
   private initialized = false
@@ -30,7 +47,16 @@ class UpdateService {
     autoUpdater.logger = log as any
 
     autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = !isHeadless()
+    autoUpdater.autoInstallOnAppQuit = !isHeadless() && !cannotInstallDeb()
+
+    if (autoUpdater instanceof DebUpdater && !isHeadless()) {
+      autoUpdater.autoRunAppAfterInstall = false
+      // Linux 上这个事件只有 quitAndInstall 装成功之后才发，紧接着就是 app.quit()；装失败不发，也就不会重启
+      electronAutoUpdater.on('before-quit-for-update', () => {
+        log.info('Update installed; relaunching after exit')
+        relaunchAfterExit()
+      })
+    }
 
     // 开发模式下需要 dev-app-update.yml 才能测试更新流程
     if (!app.isPackaged) {
@@ -100,6 +126,11 @@ class UpdateService {
 
   quitAndInstall(): void {
     if (isHeadless()) throw headlessUpdateError()
+    if (cannotInstallDeb()) {
+      log.warn(`Not installing: ${RESTART_REQUIRED_MESSAGE}`)
+      this.broadcast({ type: 'error', message: RESTART_REQUIRED_MESSAGE, code: 'restart-required' })
+      return
+    }
     autoUpdater.quitAndInstall(false, true)
   }
 

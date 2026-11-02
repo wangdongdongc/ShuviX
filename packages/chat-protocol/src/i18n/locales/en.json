@@ -1168,6 +1168,7 @@
     "updateReady": "v{{version}} ready to install",
     "updateInstall": "Install & Restart",
     "updateError": "Update error: {{message}}",
+    "updateRestartRequired": "ShuviX cannot get the administrator rights installing needs in this run (an earlier update's automatic restart causes this). Quit ShuviX, open it again from the app menu, then install the update.",
     "autoCheckUpdate": "Check for updates on startup",
     "updateGroup": "Updates",
     "updateManual": "Update it on the computer running ShuviX by running this there (the service keeps its port and network settings):",
