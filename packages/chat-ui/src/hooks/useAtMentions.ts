@@ -200,6 +200,9 @@ export interface UseAtMentions {
   restoreFromTokens: (tokens: InlineToken[]) => void
   /** 发送后清空引用登记与触发态 */
   reset: () => void
+  /** 此刻登记的引用（清空输入框之前记下，发送没成时经 restore 放回） */
+  snapshot: () => AtMention[]
+  restore: (snapshot: AtMention[]) => void
 }
 
 export function useAtMentions(sessionId: string | null): UseAtMentions {
@@ -478,6 +481,9 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     setTrigger(null)
   }, [])
 
+  const snapshot = useCallback((): AtMention[] => mentionsRef.current, [])
+  const restore = useCallback((saved: AtMention[]): void => setMentions(saved), [])
+
   return {
     showPopover,
     suggestions,
@@ -492,6 +498,8 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     buildOutgoing,
     resolveInline,
     restoreFromTokens,
-    reset
+    reset,
+    snapshot,
+    restore
   }
 }

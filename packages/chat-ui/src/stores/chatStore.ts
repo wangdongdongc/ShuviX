@@ -21,6 +21,9 @@
  */
 import { create } from 'zustand'
 import { forgetRedactions } from './redactionCache'
+import type { AtMention } from '../hooks/useAtMentions'
+import type { PasteChipsSnapshot } from '../hooks/usePasteChips'
+import type { SecretChipsSnapshot } from '../hooks/useSecretChips'
 import type { InlineToken, ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { AtMentionRef } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
@@ -163,7 +166,28 @@ export interface SessionResourceInfo {
 }
 
 /** 每个会话的输入框草稿状态 */
-type PendingImage = { data: string; mimeType: string; preview: string }
+export type PendingImage = { data: string; mimeType: string; preview: string }
+
+/** 输入框里的斜杠命令芯片 */
+export interface SlashChip {
+  commandId: string
+  name: string
+  description: string
+  template: string
+  /** 命令来源（'skill' 走 skill 徽章渲染） */
+  kind?: 'project' | 'skill'
+}
+
+/** 清空输入框之前记下的输入态（话没发出去时放回） */
+export interface ComposerSnapshot {
+  text: string
+  images: PendingImage[]
+  slashChip: SlashChip | null
+  at: AtMention[]
+  paste: PasteChipsSnapshot
+  secrets: SecretChipsSnapshot
+}
+
 interface SessionDraft {
   inputText: string
   pendingImages: PendingImage[]
@@ -232,6 +256,12 @@ interface ChatState {
     inlineTokens?: Record<string, InlineToken>
     nonce: number
   } | null
+  /**
+   * 一句话没发出去：把输入态放回这条会话的输入框，并报失败的原因（`error`）。由该会话的 InputArea 消费后 clear ——
+   * 经这里而不是由发送那段异步代码直接写：手机上返回列表会卸掉 InputArea，胶囊的登记在组件里，回来之后的新实例才写得进去。
+   * 含要藏的真值（只在内存，消费后即清）
+   */
+  composerRestoreRequest: { sessionId: string; snapshot: ComposerSnapshot; error: string } | null
   /**
    * 请求往某会话的输入框里插一个 @ 引用的信号（Files 面板右键「在对话中引用」）。
    * 由该会话的 InputArea 消费：在光标处插入胶囊并登记引用（与在 @ 弹层里选中同一结果），消费后 clear。
@@ -388,6 +418,12 @@ interface ChatState {
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
+  requestComposerRestore: (request: {
+    sessionId: string
+    snapshot: ComposerSnapshot
+    error: string
+  }) => void
+  clearComposerRestore: () => void
   /** 请求往某会话输入框插入 @ 引用（Files 面板右键触发）；由该会话的 InputArea 消费后 clear */
   requestMentionInsert: (sessionId: string, ref: AtMentionRef, displayText: string) => void
   clearMentionInsert: () => void
@@ -769,6 +805,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   taskRevealRequest: null,
   artifactRevealRequest: null,
   draftRestoreRequest: null,
+  composerRestoreRequest: null,
   mentionInsertRequest: null,
   composerSessionId: null,
   scrollToMessageRequest: null,
@@ -868,6 +905,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })),
   clearScrollToMessage: () => set({ scrollToMessageRequest: null }),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
+  requestComposerRestore: (request) => set({ composerRestoreRequest: request }),
+  clearComposerRestore: () => set({ composerRestoreRequest: null }),
   requestMentionInsert: (sessionId, ref, displayText) =>
     set((state) => ({
       mentionInsertRequest: {

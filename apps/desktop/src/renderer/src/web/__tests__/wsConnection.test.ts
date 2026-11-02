@@ -8,8 +8,8 @@
  *   WC-2  第一次连上之前的两次 invoke：不发；open → 按调用顺序发出（id 1、2）；乱序的结果各自落到对的 Promise
  *   WC-3  线上：invoke('tools:list', undefined, {profile}) → args:[null,{…}]、u:[0]
  *   WC-4  结果：ok 无 value → undefined；null → null；失败带 code → 那个 code 的 Error；不带 → 'handler_error'
- *   WC-5  在途的调用遇上断开 → Error('disconnected')、code 'disconnected'；新 socket 上迟到的结果被忽略、不抛
- *   WC-6  断过之后、重连之前的 invoke 当场拒绝；重连之后也不补发
+ *   WC-5  在途的调用遇上断开 → Error('disconnected')、code 'disconnected'（发出去了，结果未知）；新 socket 上迟到的结果被忽略、不抛
+ *   WC-6  断过之后、重连之前的 invoke 当场拒绝，code 'not_connected'（没发出去）；重连之后也不补发
  *   WC-7  从没连上过就断：排着的调用不拒；state 仍 'connecting'、onState 不调；重连成功后发出并落定
  *   WC-8  send：开着 → {t:'send'}（带 u）；连接中 / 重连中 → 丢掉、连上后也不补发
  *   WC-9  退避：500 起，每次失败翻倍，封顶 5000；连上一次就复位；每个计时器建一个 socket；初次失败也从 500 起；自定义 min/max
@@ -29,8 +29,12 @@
  *   WC-19 参数编不成 JSON（BigInt）：开着 → TypeError 拒绝、不留在途、不影响别的调用；排着的 → 连上时拒绝、别的照发
  *   WC-20 服务端的垃圾忽略、不抛：非 JSON、未知 t、未知 id 的结果
  *   WC-21 DEFAULT_RESYNC_EVENTS：12 条、type 不重复、含 network.changed 与 session.listChanged、每条只有 type
+ *   WC-22 同一次断线的两种失败：在途的 → lost，断着时调的 → not-sent（connectionFailureOf）；两帧都不上新 socket
+ *   WC-23 在途调用的拒绝处理函数里：isUp false、onDown 已调一次、state 'reconnecting'；在那里登记的 onUp 重连时照调
+ *   WC-24 readyState 已是 CLOSING、onclose 还没到：invoke → not_connected，什么都不发
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { connectionFailureOf } from '@shuvix/chat-protocol/connectionErrors'
 import {
   decodeClientMessage,
   encodeServerMessage,
@@ -230,7 +234,7 @@ describe('WC-5 / WC-6 断开', () => {
     const conn = make()
     last().open()
     last().drop()
-    await expect(conn.transport.invoke('c:x')).rejects.toMatchObject({ code: 'disconnected' })
+    await expect(conn.transport.invoke('c:x')).rejects.toMatchObject({ code: 'not_connected' })
     runTimer()
     last().open()
     expect(last().sent).toStrictEqual([])
@@ -571,8 +575,8 @@ describe('WC-18 dispose', () => {
     expect(sock.closeCalls).toStrictEqual([[1000, 'disposed']])
 
     await expect(conn.transport.invoke('c:y')).rejects.toMatchObject({
-      message: 'disconnected',
-      code: 'disconnected'
+      message: 'not connected',
+      code: 'not_connected'
     })
     const sentBefore = sock.sent.length
     conn.transport.send('terminal:write', 'x')
@@ -595,7 +599,7 @@ describe('WC-18 dispose', () => {
     conn.sync.onDown!(down)
     const queued = conn.transport.invoke('c:x')
     conn.dispose()
-    await expect(queued).rejects.toMatchObject({ code: 'disconnected' })
+    await expect(queued).rejects.toMatchObject({ code: 'not_connected' })
     expect(down).not.toHaveBeenCalled()
     expect(conn.state()).toBe('closed')
     last().open()
@@ -683,5 +687,49 @@ describe('WC-21 DEFAULT_RESYNC_EVENTS', () => {
     // 断线期间记下的产物新版：重连后会话面板的「产物」页要跟上（不带 sessionIds = 开着的都重拉）
     expect(types).toContain('artifacts.changed')
     for (const event of DEFAULT_RESYNC_EVENTS) expect(Object.keys(event)).toStrictEqual(['type'])
+  })
+})
+
+describe('WC-22 … WC-24 连接类失败的两种 code', () => {
+  it('WC-22 在途的 → lost，断着时调的 → not-sent；两帧都不上新 socket', async () => {
+    const conn = make()
+    last().open()
+    const inFlight = conn.transport.invoke('c:a').catch((error: unknown) => error)
+    last().drop()
+    const whileDown = await conn.transport.invoke('c:b').catch((error: unknown) => error)
+    runTimer()
+    last().open()
+    expect(connectionFailureOf(await inFlight)).toBe('lost')
+    expect(connectionFailureOf(whileDown)).toBe('not-sent')
+    expect(last().sent).toStrictEqual([])
+  })
+
+  it('WC-23 拒绝处理函数里看到的已是断线之后；在那里登记的 onUp 重连时照调', async () => {
+    const conn = make()
+    last().open()
+    const down = vi.fn()
+    const up = vi.fn()
+    conn.sync.onDown!(down)
+    let seen: unknown
+    const handled = conn.transport.invoke('c:x').catch(() => {
+      seen = { isUp: conn.sync.isUp!(), downs: down.mock.calls.length, state: conn.state() }
+      conn.sync.onUp!(up)
+    })
+    last().drop()
+    await handled
+    expect(seen).toStrictEqual({ isUp: false, downs: 1, state: 'reconnecting' })
+    expect(up).not.toHaveBeenCalled()
+    runTimer()
+    last().open()
+    expect(up).toHaveBeenCalledTimes(1)
+  })
+
+  it('WC-24 CLOSING、onclose 还没到：invoke → not_connected，什么都不发', async () => {
+    const conn = make()
+    const sock = last()
+    sock.open()
+    sock.readyState = 2
+    await expect(conn.transport.invoke('c:x')).rejects.toMatchObject({ code: 'not_connected' })
+    expect(sock.sent).toStrictEqual([])
   })
 })

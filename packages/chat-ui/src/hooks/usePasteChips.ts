@@ -105,6 +105,14 @@ export interface UsePasteChips {
   restoreFromTokens: (tokens: InlineToken[]) => void
   /** 发送后清空芯片登记与序号 */
   reset: () => void
+  /** 此刻的芯片与序号（清空输入框之前记下，发送没成时经 restore 放回） */
+  snapshot: () => PasteChipsSnapshot
+  restore: (snapshot: PasteChipsSnapshot) => void
+}
+
+export interface PasteChipsSnapshot {
+  chips: PasteChip[]
+  seq: number
 }
 
 export function usePasteChips(): UsePasteChips {
@@ -231,6 +239,15 @@ export function usePasteChips(): UsePasteChips {
     seqRef.current = 0
   }, [])
 
+  const snapshot = useCallback(
+    (): PasteChipsSnapshot => ({ chips: chipsRef.current, seq: seqRef.current }),
+    []
+  )
+  const restore = useCallback((saved: PasteChipsSnapshot): void => {
+    setChips(saved.chips)
+    seqRef.current = saved.seq
+  }, [])
+
   return {
     chips,
     capture,
@@ -239,6 +256,8 @@ export function usePasteChips(): UsePasteChips {
     buildOutgoing,
     resolveInline,
     restoreFromTokens,
-    reset
+    reset,
+    snapshot,
+    restore
   }
 }

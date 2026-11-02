@@ -8,6 +8,7 @@ import {
   BRIDGE_ERROR_DESKTOP_OFFLINE,
   type PanelRequestMap
 } from '@shuvix/chat-protocol/chromeBridge'
+import { CONNECTION_LOST_CODE, NOT_CONNECTED_CODE } from '@shuvix/chat-protocol/connectionErrors'
 import {
   PANEL_PORT_PREFIX,
   type PanelLinkState,
@@ -17,6 +18,10 @@ import {
 } from '../shared/panelLink'
 
 type Listener<T> = (value: T) => void
+
+/** 「桌面不在」的失败，带上是没发出去还是发出去了没等到结果（chat-protocol connectionErrors） */
+const offline = (code: string, message: string = BRIDGE_ERROR_DESKTOP_OFFLINE): Error =>
+  Object.assign(new Error(message), { code })
 
 export class PanelLink {
   state: PanelLinkState = 'connecting'
@@ -65,6 +70,8 @@ export class PanelLink {
         if (!entry) return
         this.pending.delete(message.id)
         if (message.ok) entry.resolve(message.result)
+        else if (message.error === BRIDGE_ERROR_DESKTOP_OFFLINE)
+          entry.reject(offline(CONNECTION_LOST_CODE))
         else entry.reject(new Error(message.error || 'ShuviX reported an error.'))
         return
       }
@@ -88,7 +95,7 @@ export class PanelLink {
   }
 
   private failAll(error: string): void {
-    for (const [, entry] of this.pending) entry.reject(new Error(error))
+    for (const [, entry] of this.pending) entry.reject(offline(CONNECTION_LOST_CODE, error))
     this.pending.clear()
   }
 
@@ -97,7 +104,7 @@ export class PanelLink {
     params: PanelRequestMap[M]['params']
   ): Promise<PanelRequestMap[M]['result']> {
     const port = this.port
-    if (!port) return Promise.reject(new Error(BRIDGE_ERROR_DESKTOP_OFFLINE))
+    if (!port) return Promise.reject(offline(NOT_CONNECTED_CODE))
     const id = ++this.seq
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject })
@@ -106,7 +113,7 @@ export class PanelLink {
         port.postMessage(message)
       } catch {
         this.pending.delete(id)
-        reject(new Error(BRIDGE_ERROR_DESKTOP_OFFLINE))
+        reject(offline(NOT_CONNECTED_CODE))
       }
     })
   }

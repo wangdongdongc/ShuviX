@@ -74,6 +74,15 @@ export interface UseSecretChips {
   /** 已经要藏的值（提示不再提它们） */
   isHidden: (value: string) => boolean
   reset: () => void
+  /** 此刻的胶囊（清空输入框之前记下，发送没成时经 restore 放回 —— 真值只在这里，放回文本里的是占位明文） */
+  snapshot: () => SecretChipsSnapshot
+  restore: (snapshot: SecretChipsSnapshot) => void
+}
+
+export interface SecretChipsSnapshot {
+  chips: SecretChip[]
+  extra: SecretChip[]
+  seq: number
 }
 
 export function useSecretChips(): UseSecretChips {
@@ -186,5 +195,32 @@ export function useSecretChips(): UseSecretChips {
     setChips([])
   }, [])
 
-  return { chips, insert, hide, prune, backspace, expand, maskForDisplay, isHidden, reset }
+  const snapshot = useCallback(
+    (): SecretChipsSnapshot => ({
+      chips: chipsRef.current,
+      extra: extraRef.current,
+      seq: seqRef.current
+    }),
+    []
+  )
+  const restore = useCallback((saved: SecretChipsSnapshot): void => {
+    chipsRef.current = saved.chips
+    extraRef.current = saved.extra
+    seqRef.current = saved.seq
+    setChips(saved.chips)
+  }, [])
+
+  return {
+    chips,
+    insert,
+    hide,
+    prune,
+    backspace,
+    expand,
+    maskForDisplay,
+    isHidden,
+    reset,
+    snapshot,
+    restore
+  }
 }

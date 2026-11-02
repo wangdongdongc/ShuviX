@@ -654,7 +654,7 @@ describe('network access: the web client in a real page', () => {
     expect(await pane.connectionBannerText()).toBe(en.web.reconnecting)
 
     // 断着的时候
-    expect(await settleInWeb('session.list()')).toMatchObject({ ok: false, code: 'disconnected' })
+    expect(await settleInWeb('session.list()')).toMatchObject({ ok: false, code: 'not_connected' })
     // 本地当场拒的桌面专属通道不需要连接（phase D 之后 app.openFolder 有本地实现，换成悬浮窗）
     expect(await settleInWeb(`pinChat.pin('x')`)).toMatchObject({
       ok: false,
@@ -752,7 +752,7 @@ describe('network access: the web client in a real page', () => {
       async () => (await pane.connectionBanner()) === 'reconnecting',
       'the page shows the reconnecting banner'
     )
-    expect(await settleInWeb('session.list()')).toMatchObject({ ok: false, code: 'disconnected' })
+    expect(await settleInWeb('session.list()')).toMatchObject({ ok: false, code: 'not_connected' })
     expect(await httpProbe({ port: P1 })).toMatchObject({ error: 'ECONNREFUSED' })
 
     const shot = await settingsShotWhen((s) => s.toggle === 'off', 'settings show the switch off')

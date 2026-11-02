@@ -265,6 +265,7 @@
     "imageOnly": "(图片)",
     "selectModel": "选择模型",
     "sendFailed": "发送失败：{{error}}",
+    "connectionLost": "连接断开了，连上后再发一次",
     "pasteChipLines": "[粘贴文本 #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
     "pasteName": "粘贴文本 #{{seq}}",

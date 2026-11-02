@@ -7,6 +7,14 @@
  *   P3-12-10 点 [继续]：`agent.continue(sid)` 恰一次，等待期间按钮禁用、连点只发一次；横幅不乐观收起，
  *            视图离开 interrupted 才消失；变成 busy 时横幅没了、分档按钮出来；agent 关停中按钮禁用
  *   P3-12-11 继续失败（reject / {success:false}）：`[data-send-error]` 显示原因，按钮恢复，横幅还在
+ *   CT-1..7 继续遇上断线（`agent.continue` 也要等整轮落定才回）：
+ *     CT-1 lost → 不算失败：没有提示、按钮恢复、横幅还在、再点是第二次调用
+ *     CT-2 接着视图变 busy → 横幅走、没有提示
+ *     CT-3 not-sent → 本地化的那句、按钮恢复、横幅还在
+ *     CT-4 {success:false,error} / 处理函数拒绝 → 报原因；切到 B 看不到
+ *     CT-5 拒绝在切到 B 之后才到（两种 code）→ 两边都没有提示；回 A 按钮能用
+ *     CT-6 继续的提示：视图变 busy 清，敲一个键也清
+ *     CT-7 输入框里有字时继续失败 → 字不动
  *   P3-12-12 被中断时发消息 = abort-then-send：只走 `agent.prompt`（不 steer、不 continue）；占位气泡出现、
  *            输入框清空；横幅要等不再是 interrupted 的视图到了才消失
  *   P3-12-13 横幅的宿主：笔记本 / 抽屉里的 InputArea（thread 插槽）与没有 HostApi 的渠道端（Chrome 侧边栏）
@@ -49,10 +57,16 @@ vi.mock('@shuvix/chat-ui', () => {
   }
 })
 
-import { applySessionView, selectPendingPrompt, useChatStore } from '../../../stores/chatStore'
+import {
+  applySessionView,
+  releaseSessionView,
+  selectPendingPrompt,
+  useChatStore
+} from '../../../stores/chatStore'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { InputArea, type InputAreaProps } from '../InputArea'
 import { V, assistant, resetStore, store, text, user } from '../../../__tests__/support/views'
+import { handlerError, lost, notSent } from '../../../__tests__/support/sendFailure'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -353,6 +367,145 @@ describe('P3-12-10 / 11 continue', () => {
       expect(banner()).not.toBeNull()
     }
   )
+})
+
+describe('CT continue when the connection drops', () => {
+  const sendError = (): string | null =>
+    container.querySelector('[data-send-error]')?.textContent ?? null
+  const sentence = (reason: string): string => en.input.sendFailed.replace('{{error}}', reason)
+  const ERR = sentence(en.input.connectionLost)
+
+  async function continueThenFail(fail: () => void): Promise<void> {
+    await click(continueButton())
+    expect(continueButton().disabled).toBe(true)
+    await act(async () => fail())
+    await flush()
+  }
+
+  /** Leave for B (the host releases A's view); `B` has no interrupted run */
+  async function switchToB(): Promise<void> {
+    await act(async () => {
+      store().setActiveSessionId('s2')
+      releaseSessionView(SID)
+      applySessionView('s2', V('s2', { run: { state: 'idle' } }))
+    })
+    await flush()
+  }
+
+  async function backToA(): Promise<void> {
+    await act(async () => {
+      store().setActiveSessionId(SID)
+      releaseSessionView('s2')
+      applySessionView(SID, view({ state: 'interrupted' }))
+    })
+    await flush()
+  }
+
+  beforeEach(() => {
+    // Module-level drafts survive resetStore
+    for (const sid of ['s2', SID]) {
+      store().setActiveSessionId(sid)
+      store().setInputText('')
+    }
+  })
+
+  it('CT-1 lost is not a failure: no error, the button re-enabled, the banner stays, a second click is a second call', async () => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await continueThenFail(() => continueCall.reject(lost()))
+    expect(sendError()).toBeNull()
+    expect(continueButton().disabled).toBe(false)
+    expect(banner()).not.toBeNull()
+
+    continueCall = deferred()
+    await click(continueButton())
+    expect(api.agent.continue.mock.calls).toEqual([[SID], [SID]])
+  })
+
+  it('CT-2 after a lost continue the view goes busy: the banner leaves, no error', async () => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await continueThenFail(() => continueCall.reject(lost()))
+    await apply(view({ state: 'busy' }))
+    expect(banner()).toBeNull()
+    expect(sendError()).toBeNull()
+  })
+
+  it('CT-3 not-sent: the localized sentence, the button re-enabled, the banner stays', async () => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await continueThenFail(() => continueCall.reject(notSent()))
+    expect(sendError()).toBe(ERR)
+    expect(sendError()).not.toMatch(/disconnected|not connected|not_connected/)
+    expect(continueButton().disabled).toBe(false)
+    expect(banner()).not.toBeNull()
+  })
+
+  it.each<[string, () => void]>([
+    ['{success:false,error}', () => continueCall.resolve({ success: false, error: 'x' })],
+    ['a handler rejection', () => continueCall.reject(handlerError('x'))]
+  ])('CT-4 %s: its own message; hidden after going to B', async (_l, fail) => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await continueThenFail(fail)
+    expect(sendError()).toBe(sentence('x'))
+    await switchToB()
+    expect(sendError()).toBeNull()
+  })
+
+  it.each<[string, () => Error]>([
+    ['lost', lost],
+    ['not-sent', notSent]
+  ])(
+    'CT-5 %s arriving after going to B: no error in either; back in A the button works',
+    async (_l, error) => {
+      await apply(view({ state: 'interrupted' }))
+      await mount()
+      await click(continueButton())
+      await switchToB()
+      await act(async () => continueCall.reject(error()))
+      await flush()
+      expect(sendError()).toBeNull()
+
+      await backToA()
+      expect(sendError()).toBeNull()
+      expect(continueButton().disabled).toBe(false)
+      continueCall = deferred()
+      await click(continueButton())
+      expect(api.agent.continue).toHaveBeenCalledTimes(2)
+    }
+  )
+
+  it('CT-6 a Continue error clears when the view goes busy', async () => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await continueThenFail(() => continueCall.reject(notSent()))
+    expect(sendError()).toBe(ERR)
+    await apply(view({ state: 'busy' }))
+    expect(sendError()).toBeNull()
+  })
+
+  it('CT-6 a Continue error clears on a keystroke', async () => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await continueThenFail(() => continueCall.reject(notSent()))
+    expect(sendError()).toBe(ERR)
+    await type('x')
+    expect(sendError()).toBeNull()
+  })
+
+  it.each<[string, () => Error]>([
+    ['lost', lost],
+    ['not-sent', notSent],
+    ['a handler error', () => handlerError('x')]
+  ])('CT-7 %s with text in the composer: the text is untouched', async (_l, error) => {
+    await apply(view({ state: 'interrupted' }))
+    await mount()
+    await type('my draft')
+    await continueThenFail(() => continueCall.reject(error()))
+    expect(container.querySelector('textarea')!.value).toBe('my draft')
+    expect(store().composerRestoreRequest).toBeNull()
+  })
 })
 
 describe('P3-12-12 send while interrupted = abort-then-send', () => {

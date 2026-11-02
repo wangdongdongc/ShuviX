@@ -265,6 +265,7 @@
     "imageOnly": "(image)",
     "selectModel": "Select a model",
     "sendFailed": "Couldn't send: {{error}}",
+    "connectionLost": "the connection dropped. Send it again once reconnected.",
     "pasteChipLines": "[Pasted text #{{seq}} · {{lines}} lines]",
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}",

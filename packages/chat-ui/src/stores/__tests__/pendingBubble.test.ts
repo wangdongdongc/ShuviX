@@ -6,6 +6,7 @@
  *            第一条新的用户条目才算；运行中 steer / followUp 不建占位
  *   P3-08-36 占位只在发送方本端：另一份 store（另一个窗口）从来没有它，受理之后照样显示 u_new
  *   P3-08-37 发送后受理前切走：B 从不显示 A 的占位；切回 A 时快照带着 u_new，同一次更新里占位消失
+ *   PB-1     重连后的快照与此刻的视图一模一样：占位留着，store 一动不动（等受理的那段宽限靠它不被打断）
  *
  * 不起 jsdom：纯 store 读写；P3-08-36 用 `vi.resetModules` 起第二份 store。
  */
@@ -96,6 +97,19 @@ describe('P3-08-33 什么算「新的用户条目」（PIN-17）', () => {
     expect(body).not.toMatch(/setPendingPrompt/)
     applySessionView('s1', V('s1', { run: { state: 'busy' } }))
     expect(selectPendingPrompt(store())).toBeNull()
+  })
+})
+
+describe('PB-1 一模一样的重新同步', () => {
+  it('占位留着，state 还是同一个引用', () => {
+    const snapshot = (): ReturnType<typeof V> =>
+      V('s1', { messages: [user('u1', 'old')], run: { state: 'idle' } })
+    applySessionView('s1', snapshot())
+    store().setPendingPrompt('s1', pendingPromptMessage('s1', 'hello'))
+    const before = useChatStore.getState()
+    applySessionView('s1', snapshot())
+    expect(useChatStore.getState()).toBe(before)
+    expect('s1' in store().sessionPendingPrompt).toBe(true)
   })
 })
 

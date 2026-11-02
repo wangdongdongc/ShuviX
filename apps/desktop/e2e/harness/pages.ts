@@ -285,6 +285,8 @@ export interface ChatPane {
   typeAndSend(text: string): Promise<void>
   /** 点发送按钮（禁用态下浏览器本就不派发 onClick，用于验证「点不动」） */
   clickSend(): Promise<void>
+  /** 输入卡片里那行发送失败的文字（`[data-send-error]`；没有 = null） */
+  sendError(): Promise<string | null>
   /** 运行中点某个档位按钮（`data-queue-tier`：steer = 立即，followUp = 追加） */
   clickQueueTier(tier: 'steer' | 'followUp'): Promise<void>
   /** 队列面板的行（折叠着就先展开；面板不在 = 空数组） */
@@ -679,6 +681,8 @@ export function chatPane(main: CdpClient): ChatPane {
       await main.eval(`${SEND_BTN}?.click()`)
       await new Promise((r) => setTimeout(r, 200))
     },
+    sendError: () =>
+      main.eval<string | null>(`document.querySelector('[data-send-error]')?.textContent ?? null`),
     clickQueueTier: async (tier) => {
       const clicked = await main.eval<boolean>(`(() => {
         const button = document.querySelector('[data-queue-tier=${JSON.stringify(tier)}]')

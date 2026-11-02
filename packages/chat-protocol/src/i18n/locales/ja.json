@@ -265,6 +265,7 @@
     "imageOnly": "(画像)",
     "selectModel": "モデルを選択",
     "sendFailed": "送信できませんでした：{{error}}",
+    "connectionLost": "接続が切れました。再接続後にもう一度送信してください",
     "pasteChipLines": "[貼り付けテキスト #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}",

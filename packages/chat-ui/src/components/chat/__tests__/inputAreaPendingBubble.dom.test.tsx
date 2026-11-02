@@ -5,6 +5,7 @@
  *   P3-08-31 空闲时经输入框发送：任何视图帧到达之前占位就在，列表是 […, pending-prompt, streaming-live]；
  *            MCP 连接态照常记下
  *   P3-08-34 prompt 先落定：以 {error} 落定（没被受理）→ 占位撤下、没有用户项；被拒 → 占位撤下、显示发送失败
+ *   P3-08-34b 被拒且不是连接造成的：报它自己的原因，话放回输入框，占位撤下，连接一下都不碰
  *
  * 后端是假的 `window.api`（同 inputAreaWelcomeSend.dom.test.tsx 的做法），`agent.prompt` 由用例掌握何时落定。
  */
@@ -47,6 +48,7 @@ import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { InputArea, type InputAreaProps } from '../InputArea'
 import { buildVisibleItems } from '../conversationItems'
 import { V, assistant, resetStore, store, text, user } from '../../../__tests__/support/views'
+import { fakeLink, type FakeLink } from '../../../__tests__/support/sendFailure'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -72,9 +74,12 @@ function deferred<T>(): Deferred<T> {
 }
 
 let prompt: Deferred<{ error?: string }>
+let link: FakeLink
 
 function buildApi(): Record<string, unknown> {
+  link = fakeLink()
   return {
+    sync: link,
     session: { list: async () => [] },
     agent: {
       init: async () => ({
@@ -245,5 +250,21 @@ describe('乐观占位：经输入框发送（Q-P3-07）', () => {
     await flush()
     expect(selectPendingPrompt(store())).toBeNull()
     expect(container.querySelector('[data-send-error]')?.textContent).toContain('IPC exploded')
+  })
+
+  it('P3-08-34b 被拒且不是连接造成的：报原因、话放回、占位撤下、连接一下都不碰', async () => {
+    await mount()
+    await typeAndSend('boom')
+    expect(container.querySelector('textarea')!.value).toBe('')
+    await act(async () => prompt.reject(new Error('IPC exploded')))
+    await flush()
+    expect(container.querySelector('[data-send-error]')?.textContent).toBe(
+      i18n.t('input.sendFailed', { error: 'IPC exploded' })
+    )
+    expect(container.querySelector('textarea')!.value).toBe('boom')
+    expect(selectPendingPrompt(store())).toBeNull()
+    expect(link.isUp).not.toHaveBeenCalled()
+    expect(link.onUp).not.toHaveBeenCalled()
+    expect(link.onDown).not.toHaveBeenCalled()
   })
 })

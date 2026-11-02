@@ -12,6 +12,14 @@
  *   SC-5 退格紧贴胶囊尾部 → 整个删掉；删掉之后发送不再带它
  *   SC-6 （触屏）「+」→ 底部面板 → 「添加敏感信息」→ 表单面板（16px 输入框）→ 添加 → 胶囊
  *   SC-7 宿主没有 inspect（旧宿主 / 渠道端）：不提示、照常发
+ *
+ * 话没发出去放回输入框时（真值只在胶囊的登记里）：
+ *   SC-8  胶囊经 notSent 放回：textarea 里是胶囊文字、镜像层有 data-secret-chip、整个 DOM 里没有真值；重发带真值与 secrets
+ *   SC-9  经 lost + 宽限放回：每个检查点（占位、被拒、等待、放回）DOM 里都没有真值
+ *   SC-10 粘贴芯片里确认的（没有胶囊、只有值）：放回之后粘贴芯片回来，重发的 secrets 还带着它
+ *   SC-11 放回之后：藏起来的值不再提示；新加的胶囊编号 #2
+ *   SC-12 放回之后：退格紧贴胶囊尾部、或改了占位里的字 → 胶囊没了，下一次发送不带它
+ *   SC-13 steer / followUp /「其它」失败：同 SC-8
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -44,6 +52,18 @@ import { InputArea, type InputAreaProps } from '../InputArea'
 import { V, resetStore } from '../../../__tests__/support/views'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 import { HINT_DEBOUNCE_MS } from '../../../hooks/useRedactionHints'
+import { PROMPT_OUTCOME_GRACE_MS as GRACE } from '../../../stores/promptOutcome'
+import {
+  advance,
+  composerShot,
+  fakeLink,
+  longPaste,
+  lost,
+  notSent,
+  pasteInto,
+  useFakeClock
+} from '../../../__tests__/support/sendFailure'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -65,6 +85,7 @@ function buildApi(withInspect = true): Record<string, unknown> {
     ? vi.fn(async (params: { texts: string[] }) => params.texts.map((t) => hintsFor(t)))
     : undefined
   return {
+    sync: fakeLink(),
     session: { list: async () => [], updateEnabledTools: vi.fn(async () => ({ success: true })) },
     agent: {
       init: async () => ({ success: true }),
@@ -111,6 +132,10 @@ let container: HTMLDivElement
 let root: Root
 
 async function flush(ms = 0): Promise<void> {
+  if (vi.isFakeTimers()) {
+    await advance(ms)
+    return
+  }
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, ms))
   })
@@ -220,6 +245,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  vi.useRealTimers()
 })
 
 describe('+ 添加敏感信息', () => {
@@ -378,4 +404,204 @@ describe('胶囊的编辑与触屏', () => {
     expect(q('[data-touch-sheet="secret"]')).toBeNull()
     expect(textarea().value).toBe('[🔒 Password #1]')
   })
+})
+
+describe('话没发出去，放回输入框', () => {
+  const ALSO = 'Second#Value9'
+  const chipOf = (seq: number): string => `[🔒 Password #${seq}]`
+  const hidden = (...values: string[]): Array<{ value: string; category: string }> =>
+    values.map((value) => ({ value, category: 'PASSWORD' }))
+  const hintEverywhere = (text: string): RedactionHint[] => {
+    const i = text.indexOf(PASSWORD)
+    return i === -1 ? [] : [{ start: i, end: i + PASSWORD.length, category: 'PASSWORD' }]
+  }
+
+  async function addChip(value: string): Promise<void> {
+    await click(plus())
+    await click(q('[data-plus-secret]')!)
+    await fillSecret(value)
+  }
+
+  const failOnce = (fn: ReturnType<typeof vi.fn>, error: Error): void => {
+    fn.mockImplementationOnce(() => Promise.reject(error))
+  }
+
+  const expectChipBack = (value: string, seq = 1): void => {
+    expect(textarea().value).toBe(value)
+    expect(container.querySelector('[data-secret-chip]')!.textContent).toBe(chipOf(seq))
+    expect(document.body.innerHTML).not.toContain(PASSWORD)
+    expect(textarea().value).not.toContain(PASSWORD)
+  }
+
+  /** 发一条带胶囊的（第一次经 notSent 失败），放回之后的样子断言过 */
+  async function sendAndRestore(): Promise<void> {
+    failOnce(prompt, notSent())
+    await mountInput()
+    await type('use ')
+    await addChip(PASSWORD)
+    await key(textarea(), 'Enter')
+    expectChipBack(`use ${chipOf(1)}`)
+  }
+
+  it('SC-8 经 notSent：胶囊回来，DOM 里没有真值；重发带真值与 secrets', async () => {
+    await sendAndRestore()
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0]).toEqual({
+      sessionId: 's1',
+      text: `use ${PASSWORD}`,
+      secrets: hidden(PASSWORD)
+    })
+  })
+
+  it('SC-9 经 lost + 宽限：每个检查点 DOM 里都没有真值', async () => {
+    useFakeClock()
+    let reject: (error: unknown) => void = () => {}
+    prompt.mockImplementationOnce(() => new Promise((_resolve, rej) => (reject = rej)))
+    await mountInput()
+    await type('use ')
+    await addChip(PASSWORD)
+    const clean = (): void => {
+      expect(document.body.innerHTML).not.toContain(PASSWORD)
+      expect(textarea().value).not.toContain(PASSWORD)
+      expect(JSON.stringify(useChatStore.getState().sessionPendingPrompt)).not.toContain(PASSWORD)
+    }
+    clean()
+
+    await key(textarea(), 'Enter')
+    expect(prompt).toHaveBeenCalledTimes(1)
+    clean()
+    await act(async () => reject(lost()))
+    await flush()
+    clean()
+    await advance(GRACE - 1)
+    clean()
+    expect(textarea().value).toBe('')
+    await advance(1)
+    clean()
+    expectChipBack(`use ${chipOf(1)}`)
+    expect(container.querySelector('[data-send-error]')).not.toBeNull()
+
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0].secrets).toEqual(hidden(PASSWORD))
+  })
+
+  /** 一段含真值的长文折叠成粘贴芯片，提示里确认隐藏（只记下值），发一次、经 notSent 放回 */
+  async function hideInsidePasteAndRestore(): Promise<string> {
+    hintsFor = hintEverywhere
+    failOnce(prompt, notSent())
+    await mountInput()
+    await pasteInto(textarea(), longPaste('line', `pw ${PASSWORD}`))
+    await flush(HINT_DEBOUNCE_MS + 50)
+    await click(q('[data-redaction-hide-all]')!)
+    expect(q('[data-redaction-hints]')).toBeNull()
+    const chip = textarea().value
+    expect(chip).not.toContain(PASSWORD)
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[0]![0].secrets).toEqual(hidden(PASSWORD))
+    expect(textarea().value).toBe(chip)
+    expect(composerShot(container).chips).toEqual([chip])
+    return chip
+  }
+
+  it('SC-10 粘贴芯片里确认的：放回之后芯片回来，重发的 secrets 还带着它', async () => {
+    await hideInsidePasteAndRestore()
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0]).toEqual(prompt.mock.calls[0]![0])
+  })
+
+  it('SC-11 粘贴里藏起来的值：放回之后问了宿主也不再提示；新胶囊编号 #2', async () => {
+    await hideInsidePasteAndRestore()
+    const asked = inspect!.mock.calls.length
+    await flush(HINT_DEBOUNCE_MS + 50)
+    expect(inspect!.mock.calls.length).toBeGreaterThan(asked)
+    expect(q('[data-redaction-hints]')).toBeNull()
+
+    await addChip(ALSO)
+    expect(container.querySelector('[data-secret-chip]')!.textContent).toBe(chipOf(2))
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0].secrets).toEqual(hidden(ALSO, PASSWORD))
+  })
+
+  it('SC-11 胶囊：放回之后新加的编号 #2，两个值都发得出去', async () => {
+    await sendAndRestore()
+    await addChip(ALSO)
+    expect(textarea().value).toBe(`use ${chipOf(1)}${chipOf(2)}`)
+    expect(
+      [...container.querySelectorAll('[data-secret-chip]')].map((chip) => chip.textContent)
+    ).toEqual([chipOf(1), chipOf(2)])
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0]).toEqual({
+      sessionId: 's1',
+      text: `use ${PASSWORD}${ALSO}`,
+      secrets: hidden(PASSWORD, ALSO)
+    })
+  })
+
+  it('SC-12 放回之后退格紧贴胶囊尾部 → 整个删掉，下一次发送不带它', async () => {
+    await sendAndRestore()
+    const el = textarea()
+    el.selectionStart = el.selectionEnd = el.value.length
+    await key(el, 'Backspace')
+    expect(textarea().value).toBe('use ')
+    expect(container.querySelector('[data-secret-chip]')).toBeNull()
+    await type('use nothing')
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0]).toEqual({
+      sessionId: 's1',
+      text: 'use nothing',
+      secrets: []
+    })
+  })
+
+  it('SC-12 放回之后改了占位里的字 → 胶囊没了，下一次发送不带它', async () => {
+    await sendAndRestore()
+    const edited = `use ${chipOf(1).replace('Password', 'Pasword')}`
+    await type(edited)
+    expect(container.querySelector('[data-secret-chip]')).toBeNull()
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[1]![0]).toEqual({ sessionId: 's1', text: edited, secrets: [] })
+  })
+
+  const ASK: InputRequest = { id: 'r1', kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 }
+
+  it.each<[string, 'steer' | 'followUp' | 'respondToInput', boolean]>([
+    ['steer', 'steer', false],
+    ['followUp', 'followUp', false],
+    ['「其它」', 'respondToInput', true]
+  ])(
+    'SC-13 %s 失败：胶囊回来，DOM 里没有真值，重发带真值与 secrets',
+    async (_label, method, ask) => {
+      const agent = (
+        window as unknown as { api: { agent: Record<string, ReturnType<typeof vi.fn>> } }
+      ).api.agent
+      failOnce(agent[method]!, notSent())
+      await mountInput()
+      act(() => applySessionView('s1', V('s1', { run: { state: 'busy' }, asks: ask ? [ASK] : [] })))
+      await flush()
+      await type('use ')
+      await addChip(PASSWORD)
+
+      const fire = async (): Promise<void> => {
+        if (method === 'followUp')
+          await click(container.querySelector('[data-queue-tier="followUp"]')!)
+        else await key(textarea(), 'Enter')
+      }
+      await fire()
+      expect(agent[method]).toHaveBeenCalledTimes(1)
+      expectChipBack(`use ${chipOf(1)}`)
+      expect(container.querySelector('[data-send-error]')).not.toBeNull()
+
+      await fire()
+      expect(agent[method]).toHaveBeenCalledTimes(2)
+      expect(agent[method]!.mock.calls[1]![0]).toEqual(
+        ask
+          ? {
+              sessionId: 's1',
+              requestId: 'r1',
+              response: { kind: 'other', text: `use ${PASSWORD}`, secrets: hidden(PASSWORD) }
+            }
+          : { sessionId: 's1', text: `use ${PASSWORD}`, secrets: hidden(PASSWORD) }
+      )
+    }
+  )
 })

@@ -13,6 +13,7 @@ import {
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import { connectionFailureOf } from '@shuvix/chat-protocol/connectionErrors'
 import {
   useChatStore,
   selectIsStreaming,
@@ -21,8 +22,11 @@ import {
   selectSessionCapabilities,
   selectSessionRun,
   selectSessionSource,
-  pendingPromptMessage
+  pendingPromptMessage,
+  type ComposerSnapshot,
+  type SlashChip
 } from '../../stores/chatStore'
+import { waitForPromptOutcome } from '../../stores/promptOutcome'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
@@ -189,14 +193,7 @@ export function InputArea({
   const pendingCaretRef = useRef<number | null>(null)
 
   // 斜杠命令芯片：选中命令后以 badge 展示，输入框只显示参数
-  const [slashChip, setSlashChip] = useState<{
-    commandId: string
-    name: string
-    description: string
-    template: string
-    /** 命令来源（'skill' 走 skill 徽章渲染） */
-    kind?: 'project' | 'skill'
-  } | null>(null)
+  const [slashChip, setSlashChip] = useState<SlashChip | null>(null)
   const [chipWidth, setChipWidth] = useState(0)
   const chipRef = useCallback((node: HTMLSpanElement | null) => {
     setChipWidth(node?.offsetWidth ?? 0)
@@ -216,10 +213,40 @@ export function InputArea({
   )
 
   /**
-   * 发送失败的原因（建会话 / 写配置 / 发出消息任一步抛错）。显示在卡片里，下一次输入或发送时清掉 ——
-   * 失败时输入框文本与欢迎页草稿都还在，原样重试即可。
+   * 发送失败的原因（建会话 / 写配置 / 发出消息任一步抛错）。显示在卡片里，下一次输入或发送时清掉，那条会话跑起来了也清掉
+   * （这个窗口发的、别的设备发的、后台通知续上的：那次失败已经过去了）—— 失败时输入框文本与欢迎页草稿都还在
+   * （没发出去的话放回输入框，见 composerRestoreRequest），原样重试即可。记着是哪条会话的：InputArea 不按会话重挂。
+   * `running`：那条会话此刻在不在跑（失败可能就发生在运行中，所以要从「没在跑」变成「在跑」才算跑起来了）
    */
-  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<{
+    sessionId: string | null
+    text: string
+    running: boolean
+  } | null>(null)
+  const shownSendError = sendError?.sessionId === activeSessionId ? sendError?.text : null
+  const sendErrorText = (err: unknown): string =>
+    connectionFailureOf(err) !== null
+      ? t('input.connectionLost')
+      : err instanceof Error
+        ? err.message
+        : String(err)
+  const isSessionRunning = (sessionId: string | null): boolean =>
+    !!sessionId && !!useChatStore.getState().sessionStreams[sessionId]?.isStreaming
+  const showSendError = (sessionId: string | null, text: string): void =>
+    setSendError({ sessionId, text, running: isSessionRunning(sessionId) })
+  /** 清掉当前会话的失败提示（别的会话的那条等回到那条会话再说） */
+  const clearSendError = useCallback((): void => {
+    const current = useChatStore.getState().activeSessionId
+    setSendError((prev) => (prev?.sessionId === current ? null : prev))
+  }, [])
+  const errorSessionId = sendError?.sessionId ?? null
+  const errorSessionRunning = useChatStore(
+    (s) => !!errorSessionId && !!s.sessionStreams[errorSessionId]?.isStreaming
+  )
+  if (sendError && sendError.running !== errorSessionRunning) {
+    // 渲染期调整状态（同上面的 menuRunState）
+    setSendError(errorSessionRunning ? null : { ...sendError, running: false })
+  }
 
   /**
    * 「继续」按下之后的那条会话（PIN-17）：按钮保持禁用，直到视图离开 interrupted 或调用失败 —— 调用本身要等
@@ -239,7 +266,7 @@ export function InputArea({
     if (!sid || continuingRef.current || isAgentClosing) return
     continuingRef.current = true
     setContinuingFor(sid)
-    setSendError(null)
+    clearSendError()
     try {
       const result = await getSessionChannelApi().agent.continue(sid)
       if (!result.success) throw new Error(result.error ?? 'continue failed')
@@ -247,14 +274,16 @@ export function InputArea({
       if (useChatStore.getState().activeSessionId !== sid) return
       continuingRef.current = false
       setContinuingFor(null)
-      setSendError(err instanceof Error ? err.message : String(err))
+      // 这条调用要等整轮落定才回：发出去之后断线不算失败，视图连回来之后自己说清楚（还是中断态，按钮也回来了）
+      if (connectionFailureOf(err) === 'lost') return
+      showSendError(sid, sendErrorText(err))
     }
   }
 
   /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片；同步 @ 引用触发态与登记表 */
   const handleInputChange = useCallback(
     (value: string, caret: number) => {
-      setSendError(null)
+      clearSendError()
       setQueueMenuFor(null)
       if (!slashChip && value.startsWith('/') && value.includes(' ')) {
         const spaceIdx = value.indexOf(' ')
@@ -281,7 +310,16 @@ export function InputArea({
       secrets.prune(value)
       at.refresh(value, caret)
     },
-    [slashChip, slashCommands, setInputText, at, paste, secrets, autoEnableRequiredTools]
+    [
+      slashChip,
+      slashCommands,
+      setInputText,
+      at,
+      paste,
+      secrets,
+      autoEnableRequiredTools,
+      clearSendError
+    ]
   )
 
   // 消息回退：把历史消息重建为可编辑草稿——paste/at 重新登记恢复胶囊，cmd 转 /id 明文（发送时重新解析）。
@@ -299,6 +337,29 @@ export function InputArea({
     setInputText(text)
     setTimeout(() => textareaRef.current?.focus(), 0)
   }, [draftRestore, at, paste, setInputText])
+
+  // 话没发出去：放回输入框（胶囊原样）、报原因。用户已经写了新内容就只报原因：不盖掉，也不掺在一起
+  const composerRestore = useChatStore((s) => s.composerRestoreRequest)
+  useEffect(() => {
+    if (!composerRestore || composerRestore.sessionId !== activeSessionId) return
+    const store = useChatStore.getState()
+    store.clearComposerRestore()
+    showSendError(composerRestore.sessionId, composerRestore.error)
+    const { snapshot } = composerRestore
+    // 「其它」反馈与队列通道发送时本来就不带走图片和命令芯片：还是原来那份，不算新内容
+    const newImages = store.pendingImages.length > 0 && store.pendingImages !== snapshot.images
+    const newChip = slashChip !== null && slashChip !== snapshot.slashChip
+    if (store.inputText.trim() || newImages || newChip) return
+    store.setInputText(snapshot.text)
+    if (store.pendingImages.length === 0) {
+      for (const image of snapshot.images) store.addPendingImage(image)
+    }
+    setSlashChip(snapshot.slashChip)
+    at.restore(snapshot.at)
+    paste.restore(snapshot.paste)
+    secrets.restore(snapshot.secrets)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只由请求触发；其余都读这一刻的值
+  }, [composerRestore, activeSessionId])
 
   // 登记「这个会话有输入框」（Files 面板据此给「在对话中引用」）。撤的时候只撤自己那条：换会话时
   // React 先跑旧的清理再跑新的登记，但别处的输入框若已登记了别的会话，不能被这里清掉
@@ -493,6 +554,16 @@ export function InputArea({
     return sid
   }
 
+  /** 此刻的输入态：清空输入框之前记下，话没发出去时放回（渲染这一刻的值，建会话会把 store 里的草稿换掉） */
+  const takeComposerSnapshot = (): ComposerSnapshot => ({
+    text: inputText,
+    images: pendingImages,
+    slashChip,
+    at: at.snapshot(),
+    paste: paste.snapshot(),
+    secrets: secrets.snapshot()
+  })
+
   /** 清空输入态（正文 / 图片 / 命令芯片 / @ 引用 / 粘贴芯片） */
   const resetComposer = (): void => {
     const store = useChatStore.getState()
@@ -504,12 +575,13 @@ export function InputArea({
     secrets.reset()
   }
 
-  /** 把一条用户消息发给主会话 Agent：清空输入态 → 乐观占位（同时即流式态）→ agent.prompt */
+  /** 把一条用户消息发给主会话 Agent：清空输入态 → 乐观占位 + agent.prompt */
   const sendToMainAgent = async (
     sid: string,
     outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
     images: typeof pendingImages,
-    hidden: UserSecret[]
+    hidden: UserSecret[],
+    snapshot: ComposerSnapshot
   ): Promise<void> => {
     // 乐观占位气泡里不出现要藏的真值（换回胶囊文字）：要在清空胶囊之前算
     const shown = {
@@ -518,6 +590,18 @@ export function InputArea({
         outgoing.inlineTokens && maskTokenPayloads(outgoing.inlineTokens, secrets.maskForDisplay)
     }
     resetComposer()
+    await promptWithPlaceholder(sid, outgoing, shown, images, hidden, snapshot)
+  }
+
+  /** 乐观占位（同时即流式态）→ agent.prompt → 收尾。失败在这里接住（放回输入框 / 报原因），不往外抛 */
+  const promptWithPlaceholder = async (
+    sid: string,
+    outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
+    shown: { contentText: string; inlineTokens?: Record<string, InlineToken> },
+    images: typeof pendingImages,
+    hidden: UserSecret[],
+    snapshot: ComposerSnapshot
+  ): Promise<void> => {
     const store = useChatStore.getState()
     // 乐观占位（Q-P3-07）：用户消息要等会话受理才出现在视图里，而创建运行时（含 MCP 惰性连接）
     // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上（它在的时候界面就是
@@ -547,6 +631,21 @@ export function InputArea({
         // 带上（哪怕是空的）= 输入框处理过：宿主只换这些，其余照原样发
         secrets: hidden
       })
+    } catch (err) {
+      // prompt 要等整轮落定才回，断线多半只是没等到结尾：受理了（占位已被视图换成真的，或连回来之后被换掉）就不是失败，
+      // 这一轮照常跑。等结果的这段时间占位留着，界面还是「在跑」的形态
+      if (
+        connectionFailureOf(err) === 'lost' &&
+        (await waitForPromptOutcome(sid, getSessionChannelApi().sync))
+      )
+        return
+      // 视图里还没有这句话 = 没发出去，放回输入框；受理之后才抛的话已经在会话里了，只报原因
+      const text = sendErrorText(err)
+      if (useChatStore.getState().sessionPendingPrompt[sid]) {
+        useChatStore.getState().requestComposerRestore({ sessionId: sid, snapshot, error: text })
+      } else {
+        showSendError(sid, text)
+      }
     } finally {
       // 占位的兜底收尾。正常路径上视图早就把它换成真的了，这里兜两种它到不了的情况：整轮跑完仍没
       // 受理（发送被拒、prompt 以 {error} 落定），以及 prompt 本身抛出（IPC 把主进程的异常原样拒绝
@@ -564,15 +663,22 @@ export function InputArea({
     // 该通道不携带 inlineTokens → 粘贴芯片就地展开为完整原文；要藏的值展开回真值、随 secrets 交出去
     const { text, secrets: hidden } = secrets.expand(paste.resolveInline(inputText.trim()))
     if (!text) return
+    const snapshot = takeComposerSnapshot()
     useChatStore.getState().setInputText('')
     at.reset()
     paste.reset()
     secrets.reset()
-    await getSessionChannelApi().agent.respondToInput({
-      sessionId: activeSessionId,
-      requestId: activePendingInput.id,
-      response: { kind: 'other', text, secrets: hidden }
-    })
+    try {
+      await getSessionChannelApi().agent.respondToInput({
+        sessionId: activeSessionId,
+        requestId: activePendingInput.id,
+        response: { kind: 'other', text, secrets: hidden }
+      })
+    } catch (err) {
+      useChatStore
+        .getState()
+        .requestComposerRestore({ sessionId: activeSessionId, snapshot, error: sendErrorText(err) })
+    }
     // 询问落定后视图里就没有它了 → store 自动移除该 pending
   }
 
@@ -581,11 +687,13 @@ export function InputArea({
    * 否则是一条没人处理的 rejection，用户眼里什么也没发生
    */
   const handleSend = async (): Promise<void> => {
-    setSendError(null)
+    const from = activeSessionId
+    clearSendError()
     try {
       await sendMessage()
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : String(err))
+      // 走到这里的都还没动输入框（发出消息那一步的失败由 promptWithPlaceholder 接住）
+      showSendError(from, sendErrorText(err))
     }
   }
 
@@ -613,6 +721,8 @@ export function InputArea({
     )
       return
 
+    const snapshot = takeComposerSnapshot()
+
     // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）。
     let sid = activeSessionId
     if (!sid) {
@@ -633,7 +743,8 @@ export function InputArea({
         inlineTokens: outgoing.inlineTokens
       },
       images,
-      expanded.secrets
+      expanded.secrets,
+      snapshot
     )
   }
 
@@ -653,20 +764,40 @@ export function InputArea({
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
     const { text, secrets: hidden } = secrets.expand(paste.resolveInline(inputText.trim()))
     if (!text || !activeSessionId) return
+    // 关停中哪儿也不发（话留在输入框里）
+    if (useChatStore.getState().sessionClosing[activeSessionId]) return
+    const snapshot = takeComposerSnapshot()
+    const shown = { contentText: secrets.maskForDisplay(text) }
     const store = useChatStore.getState()
     store.setInputText('')
     paste.reset()
     secrets.reset()
-    const api = getSessionChannelApi().agent
+    clearSendError()
     // 竞态保护：点下去的那一刻 run 可能刚好结束（视图已是 idle / interrupted）—— 两档都退回普通 prompt
-    // （中断态的发送由运行时先中止再发）；关停中哪儿也不发
-    if (useChatStore.getState().sessionClosing[activeSessionId]) return
-    const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
-    if (!stillStreaming) {
-      await api.prompt({ sessionId: activeSessionId, text, secrets: hidden })
+    // （中断态的发送由运行时先中止再发）
+    if (!store.sessionStreams[activeSessionId]?.isStreaming) {
+      await promptWithPlaceholder(
+        activeSessionId,
+        { contentText: text },
+        shown,
+        [],
+        hidden,
+        snapshot
+      )
       return
     }
-    await api[tier]({ sessionId: activeSessionId, text, secrets: hidden })
+    try {
+      await getSessionChannelApi().agent[tier]({
+        sessionId: activeSessionId,
+        text,
+        secrets: hidden
+      })
+    } catch (err) {
+      // 这两档当场就回：断在这一下才不知道到没到，窗口很窄，放回去让用户看着办（到了的话列表里也看得见）
+      useChatStore
+        .getState()
+        .requestComposerRestore({ sessionId: activeSessionId, snapshot, error: sendErrorText(err) })
+    }
   }
 
   /** 斜杠命令选中回调：设置芯片，输入框只保留参数；自动启用依赖工具 */
@@ -943,7 +1074,7 @@ export function InputArea({
       {activePendingInput ? (
         // 待处理请求优先：这个按钮投「其它」反馈，不进队列
         <button
-          onClick={handleSubmitOther}
+          onClick={handleSend}
           disabled={queueDisabled}
           className={`${touch ? roundCls : 'p-1.5 rounded-lg transition-colors'} ${
             queueDisabled
@@ -1143,9 +1274,9 @@ export function InputArea({
                 </div>
               )}
 
-              {sendError && (
+              {shownSendError && (
                 <div data-send-error className="px-4 pt-2 text-xs text-error break-words">
-                  {t('input.sendFailed', { error: sendError })}
+                  {t('input.sendFailed', { error: shownSendError })}
                 </div>
               )}
 

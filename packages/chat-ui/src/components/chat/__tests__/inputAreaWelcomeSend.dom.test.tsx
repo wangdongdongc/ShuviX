@@ -21,6 +21,15 @@
  *
  * 外加斜杠命令的依赖项落到它被发往的那条会话（新会话），以及已有会话 / 没选模型 / 新建失败三条边界。
  *
+ * 连接断开（`lost` / `notSent`，chat-protocol connectionErrors）：
+ *
+ *   - WS-D-12 新会话建好了、prompt 经 notSent 被拒 → 当前会话就是新会话，话放回那里、报本地化的那句；欢迎页草稿已清，不删会话；
+ *   - WS-D-13 session.create / agent.init 被拒（两种 code）→ 输入框不动、本地化的那句、不发 prompt；
+ *   - WS-D-14 setModel 被拒且收尾的 delete 也被拒 → delete 试过、它的失败吞掉，报本地化的那句，输入框不动；
+ *     WS-D-14b setModel 的错误不是连接造成的 → 报的还是它，不被 delete 的失败顶掉；
+ *   - WS-D-15 prompt 经 lost 被拒、视图带来用户条目（基线是空的）→ 没有提示、不放回；
+ *   - WS-D-16 lost 之后等待期间切到 B，10×GRACE → B 里没有提示。
+ *
  * 缓存确认（RU-22 / RU-23，2026-10-26）：输入框挂着一个 CacheBreakConfirmHost —— 有 agent 的会话里在输入卡
  * 上换模型、缓存保不住时，确认框由它画（portal 到 body）；欢迎页直接发送那一路从不预判（`agent.previewChange`
  * 也记进 timeline，所以上面每一条时间线同时钉着这一点）。
@@ -65,10 +74,25 @@ vi.mock('@shuvix/chat-ui', () => {
   }
 })
 
-import { useChatStore, type Session } from '../../../stores/chatStore'
+import {
+  applySessionView,
+  releaseSessionView,
+  selectPendingPrompt,
+  useChatStore,
+  type Session
+} from '../../../stores/chatStore'
+import { PROMPT_OUTCOME_GRACE_MS as GRACE } from '../../../stores/promptOutcome'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { useSessionInit } from '../../../hooks/useSessionInit'
 import { InputArea, type InputAreaProps } from '../InputArea'
+import { V, user } from '../../../__tests__/support/views'
+import {
+  advance,
+  fakeLink,
+  lost,
+  notSent,
+  useFakeClock
+} from '../../../__tests__/support/sendFailure'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -90,6 +114,12 @@ let createImpl: () => Promise<Session>
 let setModelImpl: () => Promise<{ success: boolean }>
 /** agent.previewChange 的回答（缺省：保得住） */
 let previewImpl: () => Promise<unknown>
+/** agent.prompt 的行为（可换成 reject：连接断了） */
+let promptImpl: () => Promise<unknown>
+/** agent.init 之前的那一下（可换成 reject） */
+let initGate: () => Promise<void>
+/** session.delete 之前的那一下（可换成 reject） */
+let deleteGate: () => Promise<void>
 /** agent.init 按会话回的能力点与模型元信息（没有的会话回空对象） */
 let initMeta: Map<
   string,
@@ -119,6 +149,7 @@ function record<A extends unknown[], R>(
 
 function buildApi(): Record<string, unknown> {
   return {
+    sync: fakeLink(),
     session: {
       create: record('session.create', () => createImpl()),
       list: record('session.list', async () => [...rows.values()].map((r) => structuredClone(r))),
@@ -134,6 +165,7 @@ function buildApi(): Record<string, unknown> {
         success: true
       })),
       delete: record('session.delete', async (id: string) => {
+        await deleteGate()
         rows.delete(id)
         return { success: true }
       })
@@ -142,17 +174,20 @@ function buildApi(): Record<string, unknown> {
       setModel: record('agent.setModel', () => setModelImpl()),
       previewChange: record('agent.previewChange', () => previewImpl()),
       setThinkingLevel: record('agent.setThinkingLevel', async () => ({ success: true })),
-      init: record('agent.init', async (params: { sessionId: string }) => ({
-        success: true,
-        created: false,
-        provider: P,
-        model: M,
-        capabilities: initMeta.get(params.sessionId)?.capabilities ?? {},
-        modelMetadata: initMeta.get(params.sessionId)?.modelMetadata ?? {},
-        workingDirectory: '/w',
-        enabledTools: rows.get(params.sessionId)?.settings.enabledTools ?? []
-      })),
-      prompt: record('agent.prompt', async () => ({ success: true })),
+      init: record('agent.init', async (params: { sessionId: string }) => {
+        await initGate()
+        return {
+          success: true,
+          created: false,
+          provider: P,
+          model: M,
+          capabilities: initMeta.get(params.sessionId)?.capabilities ?? {},
+          modelMetadata: initMeta.get(params.sessionId)?.modelMetadata ?? {},
+          workingDirectory: '/w',
+          enabledTools: rows.get(params.sessionId)?.settings.enabledTools ?? []
+        }
+      }),
+      prompt: record('agent.prompt', () => promptImpl()),
       abort: record('agent.abort', async () => ({ success: true })),
       respondToInput: record('agent.respondToInput', async () => ({ success: true }))
     },
@@ -186,6 +221,10 @@ let container: HTMLDivElement
 let root: Root
 
 async function flush(): Promise<void> {
+  if (vi.isFakeTimers()) {
+    await advance(0)
+    return
+  }
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
@@ -373,6 +412,9 @@ beforeEach(() => {
   }
   setModelImpl = async () => ({ success: true })
   previewImpl = async () => ({ locked: true, cache: 'kept', reasons: [], promptTokens: 0 })
+  promptImpl = async () => ({ success: true })
+  initGate = async () => {}
+  deleteGate = async () => {}
   initMeta = new Map()
   ;(window as unknown as { api: unknown }).api = buildApi()
   useModelCatalogStore.setState({ loaded: true, providers: [PROVIDER], availableModels: [MODEL] })
@@ -381,10 +423,14 @@ beforeEach(() => {
   root = createRoot(container)
 })
 
-afterEach(() => {
+afterEach(async () => {
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  // 还在等结果的那次发送：占位一撤就收工，不把订阅带进下一个用例
+  useChatStore.setState({ sessionPendingPrompt: {}, composerRestoreRequest: null })
+  await Promise.resolve()
+  vi.useRealTimers()
 })
 
 describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', () => {
@@ -825,5 +871,125 @@ describe('缓存确认框：输入框挂着宿主（RU-22 / RU-23）', () => {
     expect(callsOf('session.updateEnabledTools').length).toBeGreaterThan(0)
     expect(callsOf('agent.previewChange')).toEqual([])
     expect(confirmDialog()).toBeNull()
+  })
+})
+
+describe('连接断开', () => {
+  const ERR = (): string => i18n.t('input.sendFailed', { error: i18n.t('input.connectionLost') })
+
+  it('WS-D-12 prompt 经 notSent 被拒：当前会话是新会话，话放回那里、ERR；草稿已清，不删会话', async () => {
+    seedWelcome({ draft: ['mcp:a'], kbDraft: ['notes'] })
+    promptImpl = () => Promise.reject(notSent())
+    await mount()
+    await type('hello')
+    await pressEnter()
+
+    expect(callsOf('agent.prompt')).toHaveLength(1)
+    expect(store().activeSessionId).toBe(NEW)
+    expect(textarea().value).toBe('hello')
+    expect(store().inputText).toBe('hello')
+    expect(sendErrorText()).toBe(ERR())
+    expect(store().welcomeEnabledTools).toEqual([])
+    expect(store().welcomeKnowledgeBases).toBeNull()
+    expect(callsOf('session.delete')).toEqual([])
+    expect(selectPendingPrompt(store())).toBeNull()
+  })
+
+  it.each<[string, string, () => Error]>([
+    ['session.create', 'lost', lost],
+    ['session.create', 'notSent', notSent],
+    ['agent.init', 'lost', lost],
+    ['agent.init', 'notSent', notSent]
+  ])('WS-D-13 %s 被拒（%s）：输入框不动、本地化的那句、不发 prompt', async (step, _code, error) => {
+    seedWelcome({ draft: [] })
+    if (step === 'session.create') createImpl = () => Promise.reject(error())
+    else initGate = () => Promise.reject(error())
+    await mount()
+    await type('hello')
+    const unhandled = await collectUnhandled(async () => {
+      await pressEnter()
+      await flush()
+    })
+
+    expect(unhandled).toEqual([])
+    expect(textarea().value).toBe('hello')
+    expect(sendErrorText()).toBe(ERR())
+    expect(callsOf('agent.prompt')).toEqual([])
+    expect(store().activeSessionId).toBeNull()
+  })
+
+  it('WS-D-14 setModel 经 lost 被拒、收尾的 delete 经 notSent 也被拒：delete 试过、失败吞掉，本地化的那句，输入框不动', async () => {
+    seedWelcome({ draft: ['mcp:a'] })
+    setModelImpl = () => Promise.reject(lost())
+    deleteGate = () => Promise.reject(notSent())
+    await mount()
+    await type('hello')
+    const unhandled = await collectUnhandled(async () => {
+      await pressEnter()
+      await flush()
+    })
+
+    expect(unhandled).toEqual([])
+    expect(callsOf('session.delete')).toEqual([[NEW]])
+    expect(sendErrorText()).toBe(ERR())
+    expect(textarea().value).toBe('hello')
+    expect(callsOf('agent.prompt')).toEqual([])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a'])
+  })
+
+  it('WS-D-14b 收尾的 delete 失败不顶掉真正的原因：setModel 的错误照报', async () => {
+    seedWelcome({ draft: [] })
+    setModelImpl = () => Promise.reject(new Error('set model failed'))
+    deleteGate = () => Promise.reject(notSent())
+    await mount()
+    await type('hello')
+    await pressEnter()
+
+    expect(callsOf('session.delete')).toEqual([[NEW]])
+    expect(sendErrorText()).toBe(i18n.t('input.sendFailed', { error: 'set model failed' }))
+    expect(textarea().value).toBe('hello')
+  })
+
+  it('WS-D-15 prompt 经 lost 被拒、视图带来用户条目（基线是空的）：没有提示、不放回', async () => {
+    seedWelcome({ draft: [] })
+    promptImpl = () => Promise.reject(lost())
+    await mount()
+    await type('hello')
+    await pressEnter()
+    expect(selectPendingPrompt(store())?.content).toBe('hello')
+    expect(sendErrorText()).toBeNull()
+
+    await act(async () =>
+      applySessionView(
+        NEW,
+        V(NEW, { messages: [user('u_new', 'hello', NEW)], run: { state: 'busy' } })
+      )
+    )
+    await flush()
+    expect(selectPendingPrompt(store())).toBeNull()
+    expect(sendErrorText()).toBeNull()
+    expect(textarea().value).toBe('')
+    expect(store().composerRestoreRequest).toBeNull()
+  })
+
+  it('WS-D-16 lost 之后等待期间切到 B，10×GRACE：B 里没有提示', async () => {
+    useFakeClock()
+    seedWelcome({ draft: [] })
+    promptImpl = () => Promise.reject(lost())
+    await mount()
+    await type('hello')
+    await pressEnter()
+    expect(store().activeSessionId).toBe(NEW)
+
+    await act(async () => {
+      store().setActiveSessionId('B')
+      releaseSessionView(NEW)
+    })
+    await flush()
+    await advance(10 * GRACE)
+    expect(sendErrorText()).toBeNull()
+    expect(textarea().value).toBe('')
+    expect(store().sessionPendingPrompt[NEW]).toBeDefined()
+    expect(store().composerRestoreRequest).toBeNull()
   })
 })

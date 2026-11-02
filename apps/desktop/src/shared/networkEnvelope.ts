@@ -35,8 +35,10 @@ export type EnvelopeErrorCode =
   | 'handler_error'
   /** 认得出 id、其余不合形状的 invoke */
   | 'bad_request'
-  /** 连接断了（只在客户端本地用：在途的调用被拒） */
+  /** 连接断了（只在客户端本地用：在途的调用被拒，结果未知） */
   | 'disconnected'
+  /** 没连着（只在客户端本地用：调用没有发出去） */
+  | 'not_connected'
 
 export interface EnvelopeError {
   readonly message: string

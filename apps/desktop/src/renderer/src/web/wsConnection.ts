@@ -4,8 +4,9 @@
  *
  *  - `transport`（`ApiTransport`，交给 `buildApi`）：
  *    - `invoke`：连着 → 发 `{t:'invoke'}`、等结果；**第一次连上之前**的调用先排着（页面启动时的初始化不能因为
- *      socket 还在握手就失败），连上后按顺序发出；**断过之后**、重连成功之前的调用当场以 `Error('disconnected')`
- *      拒绝；已经发出、还没等到结果的调用在连接断开时同样拒绝（不挂着）。
+ *      socket 还在握手就失败），连上后按顺序发出；**断过之后**、重连成功之前的调用当场拒绝（`code: 'not_connected'`：
+ *      没发出去）；已经发出、还没等到结果的调用在连接断开时同样拒绝（`code: 'disconnected'`：结果未知，服务端多半
+ *      照常在处理；不挂着）。两种的含义见 chat-protocol `connectionErrors`。
  *    - 本地实现的通道（`localInvoke`：`app:open-settings` / `app:open-external` 在新标签页里开）不走网络；
  *      只有桌面应用能用的通道（`desktopOnly`）当场拒绝（`code: 'desktop_only'`）并回调 `onDesktopOnly`
  *      让页面给一条看得见的提示 —— 不悄悄假装成功。
@@ -20,6 +21,7 @@
  * 不碰 `window` / 全局 `WebSocket`：都由调用方交进来（单测给假的）。
  */
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
+import { CONNECTION_LOST_CODE, NOT_CONNECTED_CODE } from '@shuvix/chat-protocol/connectionErrors'
 import type { JsonValue, SyncLinkChannel } from '@shuvix/chat-protocol/sync'
 import type { ApiTransport } from '../../../shared/buildApi'
 import {
@@ -106,6 +108,11 @@ const APP_EVENT_CHANNEL = 'app:event'
 function codedError(message: string, code: string): Error {
   return Object.assign(new Error(message), { code })
 }
+
+/** 已经发出的调用没等到结果 */
+const connectionLost = (): Error => codedError('disconnected', CONNECTION_LOST_CODE)
+/** 这次调用没有发出去 */
+const notConnected = (): Error => codedError('not connected', NOT_CONNECTED_CODE)
 
 interface Pending {
   resolve(value: unknown): void
@@ -196,7 +203,7 @@ export function createWsConnection(options: WsConnectionOptions): WsConnection {
   function rejectInflight(): void {
     const pending = [...inflight.values()]
     inflight.clear()
-    for (const p of pending) p.reject(codedError('disconnected', 'disconnected'))
+    for (const p of pending) p.reject(connectionLost())
   }
 
   function scheduleReconnect(): void {
@@ -234,7 +241,7 @@ export function createWsConnection(options: WsConnectionOptions): WsConnection {
         } catch (error) {
           inflight.delete(item.id)
           item.pending.reject(
-            error instanceof Error ? error : codedError(String(error), 'disconnected')
+            error instanceof Error ? error : codedError(String(error), NOT_CONNECTED_CODE)
           )
         }
       }
@@ -272,7 +279,7 @@ export function createWsConnection(options: WsConnectionOptions): WsConnection {
           codedError(`"${channel}" is only available in the desktop app for now`, 'desktop_only')
         )
       }
-      if (disposed) return Promise.reject(codedError('disconnected', 'disconnected'))
+      if (disposed) return Promise.reject(notConnected())
       return new Promise((resolve, reject) => {
         const id = nextId++
         const pending: Pending = { resolve, reject }
@@ -283,12 +290,12 @@ export function createWsConnection(options: WsConnectionOptions): WsConnection {
           } catch (error) {
             // 参数编不成 JSON（BigInt / 循环引用）或 socket 刚好断了：这次调用当场失败
             inflight.delete(id)
-            reject(error instanceof Error ? error : codedError(String(error), 'disconnected'))
+            reject(error instanceof Error ? error : codedError(String(error), NOT_CONNECTED_CODE))
           }
         } else if (!everOpened) {
           queued.push({ id, channel, args, pending })
         } else {
-          reject(codedError('disconnected', 'disconnected'))
+          reject(notConnected())
         }
       })
     },
@@ -373,7 +380,7 @@ export function createWsConnection(options: WsConnectionOptions): WsConnection {
       if (wasOpen) emit(downListeners, 'disposed')
       setState('closed')
       for (const item of queued.splice(0)) {
-        item.pending.reject(codedError('disconnected', 'disconnected'))
+        item.pending.reject(notConnected())
       }
       try {
         current?.close(1000, 'disposed')
