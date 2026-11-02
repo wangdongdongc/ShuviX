@@ -7,20 +7,6 @@ import { RedactedText } from './RedactedText'
 import { useRestoreForCopy, useRestoredText } from '../../hooks/useRedaction'
 import { useChatDensity } from '../../host/chatHostContext'
 
-/**
- * 提示符里的 cwd：先折 home，再长则只留末两段 —— 终端提示符本来也不显示全路径。
- * Windows 路径（`C:\Users\<name>\…`，powershell 工具的 cwd）同样折，并保留反斜杠。
- */
-function shortCwd(cwd: string): string {
-  const sep = /^[A-Za-z]:\\/.test(cwd) ? '\\' : '/'
-  const home = cwd
-    .replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
-    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, '~')
-  if (home.length <= 34) return home
-  const segs = home.split(/[/\\]/).filter(Boolean)
-  return segs.length > 2 ? `…${sep}${segs.slice(-2).join(sep)}` : home
-}
-
 interface TerminalViewProps {
   command: string
   /** 命令输出（stdout + stderr 已由工具合并） */
@@ -77,7 +63,7 @@ export function TerminalView({
     if (el && stuckRef.current) el.scrollTop = el.scrollHeight
   }, [output, stickToBottom])
   const failed = typeof exitCode === 'number' && exitCode !== 0
-  const location = host || (cwd ? shortCwd(cwd) : '')
+  const location = host || cwd || ''
   // 悬停提示是纯文本，显示不了标记：直接换成真值
   const locationTitle = useRestoredText(host || cwd || '')
 
@@ -111,7 +97,9 @@ export function TerminalView({
         )}
         {location && (
           <span
-            className="inline-block max-w-[45%] truncate align-top mr-1.5 text-accent/80"
+            className={`mr-1.5 text-accent/80 ${
+              host ? 'inline-block max-w-[45%] truncate align-top' : 'break-all'
+            }`}
             title={locationTitle}
           >
             <RedactedText text={location} />

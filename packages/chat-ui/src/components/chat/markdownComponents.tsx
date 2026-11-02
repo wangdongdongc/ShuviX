@@ -221,28 +221,9 @@ function renderPathIcon(p: string): React.ReactNode {
   return <Icon size={12} className={CHIP_ICON} />
 }
 
-const PATH_BUDGET = 58
-
-/**
- * 路径展示文本 —— 先把 home 折成 `~`，再从尾部往前塞段落直到超出预算。
- * 末段（文件名/目录名）永远保留：那才是这条路径里唯一有辨识度的部分。
- */
-function displayPath(raw: string): string {
-  const home = raw.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
-  if (home.length <= PATH_BUDGET) return home
-
-  const trailing = /[/\\]$/.test(home) ? '/' : ''
-  const segs = home.split('/').filter(Boolean)
-  const root = home.startsWith('~') ? '~' : ''
-  const kept: string[] = []
-  let len = root.length + 2 // 预留 "/…"
-  for (let i = segs.length - 1; i >= 0; i--) {
-    const next = len + segs[i].length + 1
-    if (kept.length > 0 && next > PATH_BUDGET) break
-    kept.unshift(segs[i])
-    len = next
-  }
-  return `${root}/…/${kept.join('/')}${trailing}`
+/** 可见文本只留文件名；完整路径仍由 title、复制和预览使用 */
+function pathBasename(path: string): string {
+  return path.split(/[/\\]/).pop() || path
 }
 
 /** 目录（结尾是分隔符，或末段不含点）—— 预览面板只认文件，目录点击退回复制 */
@@ -266,9 +247,9 @@ function resolveForPreview(p: string, projectPath: string | null): string | null
 }
 
 /**
- * 路径 —— 与链接同形：前置文件类型图标 + 紧凑文本，无底色块。
+ * 文件路径 —— 与普通链接同形：前置文件类型图标 + accent 文件名，无容器底色。
  * 点击在独立窗口打开该文件（走 requestFilePreview，与 Files 面板点文件同一条信号）；
- * 目录 / 无法解析的路径退回复制，⌘（Ctrl）+ 点击始终复制。完整路径留在 title 里。
+ * 无法解析的路径退回复制，⌘（Ctrl）+ 点击始终复制。完整路径留在 title 里。
  */
 function PathChip({ path }: { path: string }): React.JSX.Element {
   const { t } = useTranslation()
@@ -293,19 +274,19 @@ function PathChip({ path }: { path: string }): React.JSX.Element {
         }
         copy()
       }}
-      className={`inline align-[-2px] max-w-full rounded px-1 -mx-0.5 font-mono text-[0.9em] break-all text-left transition-colors hover:bg-bg-tertiary/50 ${
-        copied ? 'text-success' : 'text-text-secondary hover:text-text-primary'
+      className={`inline max-w-full break-all text-left hover:underline underline-offset-[3px] decoration-accent/45 decoration-1 ${
+        copied ? 'text-success' : 'text-accent'
       }`}
     >
       {renderPathIcon(path)}
-      {displayPath(path)}
+      {pathBasename(path)}
     </button>
   )
 }
 
 // ─── 统一的 markdown 渲染组件表 ────────────────────────
 
-/** 行内代码：路径形状的走 PathChip，其余保持原样（`foo()` 这类短 token 底色是对的） */
+/** 行内代码：明确是文件的路径走 PathChip，目录与其它 token 保持模型源文本 */
 function InlineCode({
   className,
   children,
@@ -320,8 +301,9 @@ function InlineCode({
   // 只换模型收到的就是真值的那些：还剩占位符（模型看到的是占位符）就不当路径，照样显示占位符
   const text = useRestoredText(isBlock ? '' : plainTextOf(children), { onlyDisclosed: true })
 
-  if (!isBlock && !hasPlaceholder(text) && isPathLike(text.trim())) {
-    return <PathChip path={text.trim()} />
+  const path = text.trim()
+  if (!isBlock && !hasPlaceholder(text) && isPathLike(path) && !isDirPath(path)) {
+    return <PathChip path={path} />
   }
   return (
     <code className={className} {...props}>

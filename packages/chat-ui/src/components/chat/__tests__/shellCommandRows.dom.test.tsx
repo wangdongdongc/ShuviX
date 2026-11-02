@@ -7,7 +7,7 @@
  *     命令文本经高亮器转义，不会被当成 HTML；
  *   - F4 工具卡的终端形态：同样的 details（cwd / exitCode / background）画出同样的提示符位置、
  *     退出码标记与后台标签 —— 判别收在 isShellCommandDetails / isBackgroundCall，不再只认 'bash'；
- *   - F6 提示符里的 cwd：Windows 路径（`C:\Users\<name>\…`）同样折成 `~`，缩短时保留反斜杠。
+ *   - F6 提示符里的 cwd：完整展示 POSIX / Windows 路径，不折 home、不省略长路径。
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（AskForm 从入口取 getHostApi —— 同 builtinMcpRows.dom.test.tsx）。
  * i18n 走真 zh 资源。文件是 .tsx 但不写 JSX，一律 createElement（与同目录其它 DOM 用例一致）。
@@ -248,32 +248,28 @@ describe('ToolCallBlock — bash 与 powershell 画成同一个终端', () => {
 
 // ─── F6：提示符里的 cwd ──────────────────────────────────────────────────────
 
-describe('TerminalView — 提示符里的 cwd 怎么缩', () => {
+describe('TerminalView — 提示符里的完整 cwd', () => {
   const locationFor = (cwd: string): { text: string; title: string } | null => {
     render(createElement(TerminalView, { command: 'ls', cwd }))
     return terminalLocation()
   }
 
   it.each([
-    // Windows：家目录折成 ~，大小写不敏感，保留反斜杠
-    ['C:\\Users\\alice\\proj', '~\\proj'],
-    ['c:\\users\\Alice', '~'],
-    ['C:\\Users\\alice\\projects\\some-very-long-directory\\seg1\\seg2', '…\\seg1\\seg2'],
-    ['D:\\work\\a-rather-long-folder-name\\nested\\seg1\\seg2', '…\\seg1\\seg2'],
-    ['D:\\work\\x', 'D:\\work\\x'],
-    // POSIX：原有行为不变
-    ['/Users/bob/code', '~/code'],
-    ['/home/bob', '~'],
-    ['/Users/bob/projects/very-long-directory-name/a/b', '…/a/b'],
-    ['/opt/some/really/long/path/that/goes/on/a/b', '…/a/b']
-  ])('F6 — %s → %s（title 仍是完整路径）', (cwd, shown) => {
-    expect(locationFor(cwd)).toEqual({ text: shown, title: cwd })
+    'C:\\Users\\alice\\proj',
+    'c:\\users\\Alice',
+    'C:\\Users\\alice\\projects\\some-very-long-directory\\seg1\\seg2',
+    'D:\\work\\a-rather-long-folder-name\\nested\\seg1\\seg2',
+    'D:\\work\\x',
+    '/Users/bob/code',
+    '/home/bob',
+    '/Users/bob/projects/very-long-directory-name/a/b',
+    '/opt/some/really/long/path/that/goes/on/a/b'
+  ])('F6 — %s 原样展示（title 也是完整路径）', (cwd) => {
+    expect(locationFor(cwd)).toEqual({ text: cwd, title: cwd })
   })
 
-  it('F6 — 折的是 `<盘符>:\\Users\\<一整段用户名>`：用户名整段折掉；`C:\\UsersX\\…` 不是家目录', () => {
-    // 用户名整段进 ~，不留尾巴（不是按某个固定用户名做字符串前缀替换）
-    expect(locationFor('C:\\Users\\alice2\\x')?.text).toBe('~\\x')
-    // Users 必须是完整的一段
+  it('F6 — Users 与 UsersX 都保留源文本，不做家目录替换', () => {
+    expect(locationFor('C:\\Users\\alice2\\x')?.text).toBe('C:\\Users\\alice2\\x')
     expect(locationFor('C:\\UsersX\\alice\\x')?.text).toBe('C:\\UsersX\\alice\\x')
   })
 })

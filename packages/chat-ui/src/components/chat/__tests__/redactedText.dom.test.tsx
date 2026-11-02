@@ -7,8 +7,8 @@
  *   RD-2 模型收到真值的（disclosed）：原样显示真值，没有占位符、不浮出
  *   RD-3 查到但解不开 / 表里没有：显示占位符，浮层说明读不出；刚问过的不重复问；几处攒成一次查询
  *   RD-4 归属：缺省按当前会话问；RedactionSessionProvider 指明的会话按它问
- *   RD-5 markdown：正文与代码块按模型看到的样子；复制用的文本换回真值；行内代码里只有模型收到真值的才换，换完是路径
- *        才认成路径
+ *   RD-5 markdown：正文与代码块按模型看到的样子；复制用的文本换回真值；行内代码里只有模型收到真值的才换，换完是文件路径
+ *        才认成轻量链接，目录仍显示源文本
  *   RD-6 浮出期间真值查到了：浮层就地换成真值
  *   RD-7 策略变了（policy.changed）：记下的重问一遍，模型收到的样子跟着变
  *   RD-8 没有占位符的文本原样，不发查询
@@ -217,18 +217,28 @@ describe('脱敏占位符的显示', () => {
     expect(container.textContent).toBe(`${KEY} / sk-other-session`)
   })
 
-  it('RD-5 markdown：模型看到的样子；复制换回真值；行内路径只换模型收到真值的', async () => {
-    const md = `Use ${KEY} here.\n\n\`\`\`bash\nexport OPENAI_API_KEY="${KEY}"\n\`\`\`\n\nOpen \`/Users/${USER}/proj/app.ts\` and \`/srv/${KEY}/x\``
+  it('RD-5 markdown：模型看到的样子；复制换回真值；行内文件路径只换模型收到真值的', async () => {
+    const md = `Use ${KEY} here.\n\n\`\`\`bash\nexport OPENAI_API_KEY="${KEY}"\n\`\`\`\n\nOpen \`/Users/${USER}/proj/app.ts\` inside \`/Users/${USER}/proj\` and \`/srv/${KEY}/x\``
     await show(createElement(MarkdownText, { text: md }))
     const text = container.textContent ?? ''
     expect(text).toContain(`Use ${KEY} here.`)
     expect(text).toContain(`export OPENAI_API_KEY="${KEY}"`)
     expect(text).not.toContain('sk-real')
-    // 用户名模型收到的是真值：换完是路径，认成路径（悬停是完整路径）
+    // 用户名模型收到的是真值：换完是文件路径，认成轻量链接（可见文本只有 basename，悬停是完整路径）
     const chip = [...container.querySelectorAll('button')].find((b) =>
       b.title.startsWith('/Users/alice/proj/app.ts')
     )
     expect(chip).toBeDefined()
+    expect(chip?.textContent).toBe('app.ts')
+    expect(chip?.className).toContain('text-accent')
+    expect(chip?.className).not.toContain('rounded-full')
+    expect(chip?.className).not.toContain('border')
+    expect(chip?.className).not.toContain('bg-bg-secondary/70')
+    // 目录不缩写、不做链接，仍按模型源文本显示
+    const directory = [...container.querySelectorAll('code')].find(
+      (code) => code.textContent === '/Users/alice/proj'
+    )
+    expect(directory).toBeDefined()
     // 路径里有模型收到占位符的部分：不当路径，照样显示占位符
     expect(text).toContain(`/srv/${KEY}/x`)
     expect(restoreForCopy('s1', `export K="${KEY}"`)).toBe('export K="sk-real-0123456789"')
