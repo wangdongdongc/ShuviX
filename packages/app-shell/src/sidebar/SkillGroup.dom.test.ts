@@ -2,14 +2,28 @@
 /**
  * SkillGroup 的共用目录（jsdom）—— `~/.claude/skills` / `~/.agents/skills` 由宿主固定列出（`isShared`）：
  *
- *   SKG-1 行上的字：共用目录显示宿主给的 `label`（路径写法），外部目录没给 label 就显示 dirName，
- *         内置那行永远是本地化的「内置」（哪怕宿主给了 label）；title 是 dirPath；锁只给内置；
- *   SKG-2 目录菜单：共用 = 开关 + 打开（没有移除，同内置）；外部 = 开关、打开、分隔线、移除；
+ *   SKG-1 行上的字：共用目录显示宿主给的 `label`（路径写法），外部目录没给 label 就显示 dirName；
+ *         title 是 dirPath；文件夹行都不挂锁，内置目录也不画文件夹行；
+ *   SKG-2 目录菜单：共用 = 开关 + 打开（没有移除）；外部 = 开关、打开、分隔线、移除；
  *         在关着的共用目录上点开关 → setFolderEnabled(folder, true)，removeFolder 从不被调；
  *   SKG-3 关着的共用目录：文件夹行与组内每一行都带 data-skill-off，开关项写 Enable；
  *   SKG-4 共用目录里技能行的菜单只有开关（删除只对默认目录开放）；
  *   SKG-5 当前笔记高亮：共用目录的载体 id 是 `__skills:<dirName>__` —— agents:pdf 亮，同一个 dirEntry 的
  *         claude:pdf 不亮。
+ *
+ * 内置技能平铺（不占文件夹行，行首一把锁），整组开关在组头菜单里（`toggle-builtin`）：
+ *
+ *   SKG-6 画的顺序：内置 → 共用 → 外部 → 默认；宿主把清单倒过来给，内置仍在最前、默认仍在最后；
+ *   SKG-7 行的样子：内置 = 图标位一把锁、本地化名字（与标识名不只差大小写时并排留标识名）、title 是界面说明；
+ *         没有文案的内置退回原名与 description；默认目录里同名的 `drawing` 是普通的书图标；目录下的行缩进；
+ *   SKG-8 点内置行 = open 那个技能对象；⋮ 只开菜单不开笔记；菜单只有开关，点不出删除；
+ *   SKG-9 组头菜单（开着）：有 toggle-builtin，文案 Disable Built-in Skills，点它 = setFolderEnabled(builtin, false)；
+ *         宿主没给内置目录就没有这一项；
+ *   SKG-10 组头菜单（关着）：每一行内置都变淡（技能自己那一级仍开着），文案换 Enable；
+ *          toggle-default 与 toggle-builtin 不串线；
+ *   SKG-11 重扫跟状态：单个技能关着 → 只有它淡；整组关掉 → 全淡，组头文案跟着换；
+ *   SKG-12 空态表：连一行可画的都没有才显示提示（空的外部目录也算一行）；
+ *   SKG-13 跨载体高亮：同一个 `drawing/SKILL.md`，内置载体只亮内置那行，默认载体只亮默认那行。
  *
  * 右键菜单走 ContextMenuProvider 的 `render` 注入：记录菜单项、按预设回一个 id（模拟用户点了它）——
  * 预设的 id 不在这份菜单里就回 null（真菜单点不出一个它没有的项）。`@shuvix/chat-ui` 替掉
@@ -60,6 +74,8 @@ let menus: ContextMenuItem[][]
 let pick: string | null
 
 type Adapter = SkillGroupAdapter & {
+  list: ReturnType<typeof vi.fn<SkillGroupAdapter['list']>>
+  open: ReturnType<typeof vi.fn<SkillGroupAdapter['open']>>
   setFolderEnabled: ReturnType<typeof vi.fn<SkillGroupAdapter['setFolderEnabled']>>
   removeFolder: ReturnType<typeof vi.fn<SkillGroupAdapter['removeFolder']>>
   setSkillEnabled: ReturnType<typeof vi.fn<SkillGroupAdapter['setSkillEnabled']>>
@@ -126,18 +142,25 @@ const extFolder = (over: Partial<SkillGroupFolder> = {}): SkillGroupFolder =>
     skills: [skill('my-ext:tool', 'tool')],
     ...over
   })
-const defaultFolder = (): SkillGroupFolder =>
+const defaultFolder = (over: Partial<SkillGroupFolder> = {}): SkillGroupFolder =>
   folder({
     dirName: 'default',
     dirPath: '/home/u/.shuvix/skills',
     isDefault: true,
-    skills: [skill('mine', 'mine')]
+    skills: [skill('mine', 'mine')],
+    ...over
+  })
+/** 两个有界面文案的内置技能 */
+const twoBuiltins = (over: Partial<SkillGroupFolder> = {}): SkillGroupFolder =>
+  builtinFolder({
+    skills: [skill('builtin:drawing', 'drawing'), skill('builtin:widget', 'widget')],
+    ...over
   })
 
 function makeAdapter(folders: SkillGroupFolder[]): Adapter {
   return {
-    list: vi.fn(async () => folders),
-    open: vi.fn(),
+    list: vi.fn<SkillGroupAdapter['list']>(async () => folders),
+    open: vi.fn<SkillGroupAdapter['open']>(),
     setSkillEnabled: vi.fn<SkillGroupAdapter['setSkillEnabled']>(),
     setFolderEnabled: vi.fn<SkillGroupAdapter['setFolderEnabled']>(),
     addFolder: vi.fn(),
@@ -214,6 +237,44 @@ const ids = (items: ContextMenuItem[]): string[] => items.map((item) => item.id 
 const labelOf = (items: ContextMenuItem[], id: string): string | undefined =>
   items.find((item) => item.id === id)?.label
 
+/** 组头（右键它与点它的 ⋮ 是同一份菜单） */
+const GROUP = '[data-group="skills"]'
+/** 分组里所有行（技能行 + 文件夹行）按 DOM 序 */
+const drawOrder = (): Array<string | null> =>
+  [...container.querySelectorAll('[data-skill-row],[data-skill-folder]')].map(
+    (node) => node.getAttribute('data-skill-row') ?? node.getAttribute('data-skill-folder')
+  )
+/** 技能行的图标位 */
+const iconCell = (name: string): Element | null => el(rowSel(name)).querySelector('.sb-icon')
+/** 技能行上显示名字的那个 span */
+const rowLabel = (name: string): HTMLElement => {
+  const label = el(rowSel(name)).querySelector('span.truncate') as HTMLElement | null
+  if (!label) throw new Error(`${name} has no label`)
+  return label
+}
+const offRows = (): Array<string | null> =>
+  [...container.querySelectorAll('[data-skill-row][data-skill-off]')].map((row) =>
+    row.getAttribute('data-skill-row')
+  )
+const activeRows = (): Array<string | null> =>
+  [...container.querySelectorAll('[data-skill-row]')]
+    .filter((row) => row.className.includes('bg-bg-active'))
+    .map((row) => row.getAttribute('data-skill-row'))
+/** 点这一行的 ⋮，回到弹出的菜单项 */
+async function clickMore(name: string): Promise<ContextMenuItem[]> {
+  const button = el(rowSel(name)).querySelector(
+    `button[aria-label="${en.sidebar.moreActions}"]`
+  ) as HTMLButtonElement | null
+  if (!button) throw new Error(`${name} has no menu button`)
+  const before = menus.length
+  await act(async () => {
+    button.click()
+  })
+  await flush()
+  expect(menus.length).toBe(before + 1)
+  return menus[menus.length - 1]
+}
+
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
     lng: 'en',
@@ -238,35 +299,26 @@ afterEach(() => {
 })
 
 describe('SkillGroup —— 共用目录的行', () => {
-  it('SKG-1 行上的字：共用目录 = label，外部（无 label）= dirName，内置 = 本地化的「内置」（哪怕给了 label）；title = dirPath；锁只给内置', async () => {
+  it('SKG-1 行上的字：共用目录 = label，外部（无 label）= dirName；title = dirPath；文件夹行不挂锁，内置目录不画文件夹行', async () => {
     await mount(
-      makeAdapter([
-        builtinFolder({ label: '/should/not/show' }),
-        claudeFolder(),
-        agentsFolder(),
-        extFolder(),
-        defaultFolder()
-      ])
+      makeAdapter([builtinFolder(), claudeFolder(), agentsFolder(), extFolder(), defaultFolder()])
     )
 
     expect(
       [...container.querySelectorAll('[data-skill-folder]')].map((f) =>
         f.getAttribute('data-skill-folder')
       )
-    ).toEqual(['builtin', 'claude', 'agents', 'my-ext'])
+    ).toEqual(['claude', 'agents', 'my-ext'])
 
-    expect(folderLabel('builtin')).toBe(en.settings.skillDirBuiltin)
     expect(folderLabel('claude')).toBe('~/.claude/skills')
     expect(folderLabel('agents')).toBe('~/.agents/skills')
     expect(folderLabel('my-ext')).toBe('my-ext')
 
-    expect(el(folderSel('builtin')).title).toBe('/app/Resources/skills/en')
     expect(el(folderSel('claude')).title).toBe('/home/u/.claude/skills')
     expect(el(folderSel('agents')).title).toBe('/home/u/.agents/skills')
     expect(el(folderSel('my-ext')).title).toBe('/home/u/work/skills')
 
     // 锁 = 只读；共用目录是用户自己的文件（可编辑），不挂锁
-    expect(isLocked('builtin')).toBe(true)
     expect(isLocked('claude')).toBe(false)
     expect(isLocked('agents')).toBe(false)
     expect(isLocked('my-ext')).toBe(false)
@@ -295,13 +347,12 @@ describe('SkillGroup —— 共用目录的行', () => {
 })
 
 describe('SkillGroup —— 共用目录的菜单', () => {
-  it('SKG-2 目录菜单：共用 / 内置 = [toggle, open]，外部 = [toggle, open, separator, remove]；在关着的共用目录上点开关 → setFolderEnabled(folder, true)', async () => {
-    const adapter = makeAdapter([builtinFolder(), claudeFolder(), agentsFolder(), extFolder()])
+  it('SKG-2 目录菜单：共用 = [toggle, open]，外部 = [toggle, open, separator, remove]；在关着的共用目录上点开关 → setFolderEnabled(folder, true)', async () => {
+    const adapter = makeAdapter([claudeFolder(), agentsFolder(), extFolder()])
     await mount(adapter)
 
     expect(ids(await menuOf(folderSel('claude')))).toEqual(['toggle', 'open'])
     expect(ids(await menuOf(folderSel('agents')))).toEqual(['toggle', 'open'])
-    expect(ids(await menuOf(folderSel('builtin')))).toEqual(['toggle', 'open'])
     expect(ids(await menuOf(folderSel('my-ext')))).toEqual([
       'toggle',
       'open',
@@ -356,4 +407,295 @@ describe('SkillGroup —— 当前笔记高亮', () => {
     expect(active).toEqual(['agents:pdf'])
     expect(el(rowSel('claude:pdf')).className).not.toContain('bg-bg-active')
   })
+})
+
+describe('SkillGroup —— 内置技能平铺', () => {
+  it('SKG-6 画的顺序：内置 → 共用 → 外部 → 默认', async () => {
+    await mount(
+      makeAdapter([twoBuiltins(), claudeFolder(), agentsFolder(), extFolder(), defaultFolder()])
+    )
+    expect(drawOrder()).toEqual([
+      'builtin:drawing',
+      'builtin:widget',
+      'claude',
+      'claude:pdf',
+      'agents',
+      'agents:pdf',
+      'agents:docx',
+      'my-ext',
+      'my-ext:tool',
+      'mine'
+    ])
+  })
+
+  it('SKG-6 宿主给的顺序倒过来：内置仍在最前，默认仍在最后', async () => {
+    await mount(makeAdapter([defaultFolder(), extFolder(), twoBuiltins()]))
+    expect(drawOrder()).toEqual([
+      'builtin:drawing',
+      'builtin:widget',
+      'my-ext',
+      'my-ext:tool',
+      'mine'
+    ])
+  })
+
+  it('SKG-7 内置行：图标位是锁（无障碍名「内置」）、不缩进；本地化名字，title 是界面说明', async () => {
+    await mount(makeAdapter([builtinFolder(), defaultFolder()]))
+    const row = el(rowSel('builtin:drawing'))
+
+    const cell = iconCell('builtin:drawing')
+    expect(cell?.querySelector('.lucide-lock')).not.toBeNull()
+    expect(cell?.getAttribute('aria-label')).toBe(en.tool.subAgentBuiltin)
+    expect(row.querySelector('.lucide-book-open')).toBeNull()
+    expect(row.classList.contains('sb-depth-1')).toBe(false)
+
+    expect(rowLabel('builtin:drawing').textContent).toBe(en.builtinSkill.drawing.label)
+    // 英文名 Drawing 与标识名 drawing 只差大小写：sameAsIdentifier 不让它并排再写一遍
+    expect(row.querySelector('[data-skill-identifier]')).toBeNull()
+    expect(row.title).toBe(en.builtinSkill.drawing.hint)
+    expect(row.title).not.toBe('builtin:drawing description')
+  })
+
+  it('SKG-7 名字与标识名不只差大小写（Widgets / widget）：标识名并排留着', async () => {
+    await mount(makeAdapter([twoBuiltins()]))
+    const row = el(rowSel('builtin:widget'))
+
+    expect(rowLabel('builtin:widget').textContent).toBe(en.builtinSkill.widget.label)
+    expect(row.querySelector('[data-skill-identifier]')?.textContent).toBe('widget')
+    expect(row.title).toBe(en.builtinSkill.widget.hint)
+  })
+
+  it('SKG-7 没有文案的内置（builtin:zzz）：锁还在；显示原名、没有标识名，title 退回 description', async () => {
+    await mount(makeAdapter([builtinFolder({ skills: [skill('builtin:zzz', 'zzz')] })]))
+    const row = el(rowSel('builtin:zzz'))
+
+    expect(iconCell('builtin:zzz')?.querySelector('.lucide-lock')).not.toBeNull()
+    expect(rowLabel('builtin:zzz').textContent).toBe('zzz')
+    expect(row.querySelector('[data-skill-identifier]')).toBeNull()
+    expect(row.title).toBe('builtin:zzz description')
+  })
+
+  it('SKG-7 默认目录里恰好叫 drawing 的技能：书图标、原名、不缩进（文案只认内置）', async () => {
+    await mount(makeAdapter([defaultFolder({ skills: [skill('drawing', 'drawing')] })]))
+    const row = el(rowSel('drawing'))
+
+    expect(row.querySelector('.lucide-book-open')).not.toBeNull()
+    expect(row.querySelector('.lucide-lock')).toBeNull()
+    expect(rowLabel('drawing').textContent).toBe('drawing')
+    expect(row.querySelector('[data-skill-identifier]')).toBeNull()
+    expect(row.title).toBe('drawing description')
+    expect(row.classList.contains('sb-depth-1')).toBe(false)
+  })
+
+  it('SKG-7 目录下的行：书图标、缩进一层', async () => {
+    await mount(makeAdapter([extFolder()]))
+    const row = el(rowSel('my-ext:tool'))
+
+    expect(row.querySelector('.lucide-book-open')).not.toBeNull()
+    expect(row.querySelector('.lucide-lock')).toBeNull()
+    expect(row.classList.contains('sb-depth-1')).toBe(true)
+  })
+
+  it('SKG-8 点内置行 = open 那个技能对象一次；点 ⋮ 只开菜单、不开笔记', async () => {
+    const item = skill('builtin:drawing', 'drawing')
+    const adapter = makeAdapter([builtinFolder({ skills: [item] }), defaultFolder()])
+    await mount(adapter)
+
+    await act(async () => {
+      el(rowSel('builtin:drawing')).click()
+    })
+    expect(adapter.open).toHaveBeenCalledTimes(1)
+    expect(adapter.open.mock.calls[0][0]).toBe(item)
+
+    adapter.open.mockClear()
+    expect(ids(await clickMore('builtin:drawing'))).toEqual(['toggle'])
+    expect(adapter.open).not.toHaveBeenCalled()
+  })
+
+  it('SKG-8 内置行的菜单只有开关：Disable → setSkillEnabled(skill, false)，不碰整组；点不出删除', async () => {
+    const item = skill('builtin:drawing', 'drawing')
+    const adapter = makeAdapter([builtinFolder({ skills: [item] }), defaultFolder()])
+    await mount(adapter)
+
+    const items = await menuOf(rowSel('builtin:drawing'))
+    expect(ids(items)).toEqual(['toggle'])
+    expect(labelOf(items, 'toggle')).toBe(en.common.disable)
+
+    pick = 'toggle'
+    await menuOf(rowSel('builtin:drawing'))
+    expect(adapter.setSkillEnabled).toHaveBeenCalledTimes(1)
+    expect(adapter.setSkillEnabled.mock.calls[0][0]).toBe(item)
+    expect(adapter.setSkillEnabled.mock.calls[0][1]).toBe(false)
+    expect(adapter.setFolderEnabled).not.toHaveBeenCalled()
+
+    pick = 'delete'
+    await menuOf(rowSel('builtin:drawing'))
+    expect(adapter.deleteSkill).not.toHaveBeenCalled()
+  })
+})
+
+describe('SkillGroup —— 内置技能的组头开关', () => {
+  it('SKG-9 开着：菜单里有 toggle-builtin（Disable Built-in Skills），点它 = setFolderEnabled(builtin, false)', async () => {
+    const adapter = makeAdapter([builtinFolder(), defaultFolder()])
+    await mount(adapter)
+
+    const items = await menuOf(GROUP)
+    expect(ids(items)).toEqual([
+      'add-folder',
+      'open-default',
+      'toggle-default',
+      'toggle-builtin',
+      'separator',
+      'refresh'
+    ])
+    expect(labelOf(items, 'toggle-builtin')).toBe(en.settings.skillBuiltinDisable)
+    expect(labelOf(items, 'toggle-default')).toBe(en.settings.skillDefaultDisable)
+
+    pick = 'toggle-builtin'
+    await menuOf(GROUP)
+    expect(adapter.setFolderEnabled).toHaveBeenCalledTimes(1)
+    expect(adapter.setFolderEnabled.mock.calls[0][0]).toMatchObject({ dirName: 'builtin' })
+    expect(adapter.setFolderEnabled.mock.calls[0][1]).toBe(false)
+  })
+
+  it('SKG-9 宿主没给内置目录：没有 toggle-builtin，点也点不出东西', async () => {
+    const adapter = makeAdapter([extFolder(), defaultFolder()])
+    await mount(adapter)
+
+    expect(ids(await menuOf(GROUP))).not.toContain('toggle-builtin')
+
+    pick = 'toggle-builtin'
+    await menuOf(GROUP)
+    expect(adapter.setFolderEnabled).not.toHaveBeenCalled()
+  })
+
+  it('SKG-10 关着：每一行内置都变淡（技能自己那一级仍开着），别的组不受牵连；文案换 Enable，点它 = setFolderEnabled(builtin, true)', async () => {
+    const adapter = makeAdapter([twoBuiltins({ isEnabled: false }), extFolder(), defaultFolder()])
+    await mount(adapter)
+
+    for (const name of ['builtin:drawing', 'builtin:widget']) {
+      expect(el(rowSel(name)).hasAttribute('data-skill-off'), name).toBe(true)
+      expect(iconCell(name)?.className, name).toContain('opacity-40')
+      expect(rowLabel(name).className, name).toContain('line-through')
+    }
+    expect(el(rowSel('mine')).hasAttribute('data-skill-off')).toBe(false)
+    expect(el(rowSel('my-ext:tool')).hasAttribute('data-skill-off')).toBe(false)
+
+    expect(labelOf(await menuOf(GROUP), 'toggle-builtin')).toBe(en.settings.skillBuiltinEnable)
+
+    pick = 'toggle-builtin'
+    await menuOf(GROUP)
+    expect(adapter.setFolderEnabled).toHaveBeenCalledTimes(1)
+    expect(adapter.setFolderEnabled.mock.calls[0][0]).toMatchObject({ dirName: 'builtin' })
+    expect(adapter.setFolderEnabled.mock.calls[0][1]).toBe(true)
+  })
+
+  it('SKG-10 不串线：内置关着时点 toggle-default，只动默认目录', async () => {
+    const adapter = makeAdapter([twoBuiltins({ isEnabled: false }), defaultFolder()])
+    await mount(adapter)
+
+    pick = 'toggle-default'
+    await menuOf(GROUP)
+    expect(adapter.setFolderEnabled).toHaveBeenCalledTimes(1)
+    expect(adapter.setFolderEnabled.mock.calls[0][0]).toMatchObject({ dirName: 'default' })
+    expect(adapter.setFolderEnabled.mock.calls[0][1]).toBe(false)
+  })
+
+  it('SKG-11 重扫跟状态：单个技能关着 → 只有它淡；整组关掉 → 全淡，组头文案跟着换', async () => {
+    const skills = [
+      skill('builtin:drawing', 'drawing', { isEnabled: false }),
+      skill('builtin:widget', 'widget')
+    ]
+    const adapter = makeAdapter([builtinFolder({ skills }), defaultFolder()])
+    await mount(adapter)
+
+    expect(offRows()).toEqual(['builtin:drawing'])
+    expect(labelOf(await menuOf(GROUP), 'toggle-builtin')).toBe(en.settings.skillBuiltinDisable)
+
+    adapter.list.mockResolvedValue([builtinFolder({ skills, isEnabled: false }), defaultFolder()])
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await flush()
+
+    expect(offRows()).toEqual(['builtin:drawing', 'builtin:widget'])
+    expect(labelOf(await menuOf(GROUP), 'toggle-builtin')).toBe(en.settings.skillBuiltinEnable)
+  })
+})
+
+describe('SkillGroup —— 空态', () => {
+  const rejecting = (): Adapter => {
+    const adapter = makeAdapter([])
+    adapter.list.mockRejectedValue(new Error('scan failed'))
+    return adapter
+  }
+
+  it.each<[string, () => Adapter, boolean, number]>([
+    ['清单是空的', () => makeAdapter([]), true, 0],
+    ['清单读取失败', rejecting, true, 0],
+    [
+      '内置与默认都没有技能',
+      () => makeAdapter([builtinFolder({ skills: [] }), defaultFolder({ skills: [] })]),
+      true,
+      0
+    ],
+    [
+      '内置有一个、默认没有',
+      () => makeAdapter([builtinFolder(), defaultFolder({ skills: [] })]),
+      false,
+      1
+    ],
+    ['默认有一个', () => makeAdapter([defaultFolder()]), false, 1],
+    [
+      '三组都没有技能，但有一个空的外部目录',
+      () =>
+        makeAdapter([
+          builtinFolder({ skills: [] }),
+          extFolder({ skills: [] }),
+          defaultFolder({ skills: [] })
+        ]),
+      false,
+      0
+    ]
+  ])('SKG-12 %s', async (_label, makeIt, hint, rowCount) => {
+    await mount(makeIt())
+
+    const shown = container.querySelector('.sb-hint')
+    if (hint) expect(shown?.textContent).toBe(en.settings.skillEmpty)
+    else expect(shown).toBeNull()
+    expect(container.querySelectorAll('[data-skill-row]')).toHaveLength(rowCount)
+  })
+
+  it('SKG-12 空的外部目录照样画文件夹行（移除入口只长在那一行的菜单上）', async () => {
+    await mount(
+      makeAdapter([
+        builtinFolder({ skills: [] }),
+        extFolder({ skills: [] }),
+        defaultFolder({ skills: [] })
+      ])
+    )
+    expect(container.querySelector(folderSel('my-ext'))).not.toBeNull()
+  })
+})
+
+describe('SkillGroup —— 跨载体高亮', () => {
+  it.each([
+    ['__skills_builtin__', 'builtin:drawing'],
+    ['__skills__', 'drawing']
+  ])(
+    'SKG-13 活动会话在 %s 下的 drawing/SKILL.md：只亮 %s',
+    async (projectId: string, lit: string) => {
+      store.sessions = [{ id: 's1', projectId, settings: { notebookPath: 'drawing/SKILL.md' } }]
+      store.activeSessionId = 's1'
+      await mount(
+        makeAdapter([
+          builtinFolder(),
+          agentsFolder({ skills: [skill('agents:drawing', 'drawing')] }),
+          defaultFolder({ skills: [skill('drawing', 'drawing')] })
+        ])
+      )
+
+      expect(activeRows()).toEqual([lit])
+    }
+  )
 })

@@ -6372,10 +6372,10 @@ export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
 // 侧栏「技能」分组（SkillGroup）+ 「添加外部技能目录」取名框（SkillDirDialog）
 //
 // 这一组比智能体那组**多一层**：技能是目录，所以目录成行、可折叠（`[data-skill-folder]`），
-// 而默认目录（`~/.shuvix/skills/`）刻意**不画文件夹行**，它的技能平铺在最后（不带 `sb-depth-1`，
-// 不再进一级）。于是「这一行归谁」不能靠全局选择器回答 —— 平铺行与某个目录下的行长得一样，只差
+// 而内置技能（行首一把锁，平铺在最前面）与默认目录（`~/.shuvix/skills/`，平铺在最后）刻意**不画文件夹行**
+// （不带 `sb-depth-1`，不再进一级）。于是「这一行归谁」不能靠全局选择器回答 —— 平铺行与某个目录下的行长得一样，只差
 // 缩进。`rowsUnder(dirName)` 从那行文件夹的 `nextElementSibling`（AnimatedCollapse 那层）里取，
-// `flatRows()` 取分组正文的**直接子元素**里带 `data-skill-row` 的那些，两者合起来才是全集。
+// `builtinRows()` / `flatRows()` 取分组正文的**直接子元素**里带 `data-skill-row` 的那些（有锁 / 没锁），三者合起来才是全集。
 //
 // 锚点：组头 `[data-group="skills"]`、目录行 `[data-skill-folder=<dirName>]`、技能行
 // `[data-skill-row=<skill.name>]`（是**技能标识**，外部技能带 `<dirName>:` 前缀，与行上显示的
@@ -6384,12 +6384,10 @@ export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
 // 这是本组唯一按字形认的东西，动画本身不测。
 
 export interface SkillFolderShot {
-  /** 目录键：内置固定 `builtin`，外部是用户取的名字（默认目录不画行，不会出现在这里） */
+  /** 目录键：共用目录是 `claude` / `agents`，外部是用户取的名字（内置与默认目录不画行，不会出现在这里） */
   dirName: string
-  /** 行上显示的字（内置是本地化的「内置」，外部就是目录名） */
+  /** 行上显示的字（共用目录是路径写法，外部就是目录名） */
   label: string
-  /** 内置目录的锁徽标 */
-  locked: boolean
   /** 整组开关关掉（`data-skill-off`） */
   off: boolean
   /** 展开态（文件夹图标为打开形） */
@@ -6430,7 +6428,7 @@ export interface SkillsSidebarPane {
   label(): Promise<string>
   /** 展开分组并等首次扫描落定 */
   expand(): Promise<void>
-  /** 目录行（DOM 序 = 展示序：内置置顶 → 外部按添加顺序） */
+  /** 目录行（DOM 序 = 展示序：共用 → 外部按添加顺序） */
   folders(): Promise<SkillFolderShot[]>
   /** 点一行目录并等折叠态翻面 */
   toggleFolder(dirName: string): Promise<void>
@@ -6438,7 +6436,9 @@ export interface SkillsSidebarPane {
   rows(): Promise<SkillRowShot[]>
   /** 某个目录行下面的技能行（全局选择器分不出归属，见本节开头） */
   rowsUnder(dirName: string): Promise<SkillRowShot[]>
-  /** 默认目录那一摞平铺行（分组正文的直接子元素） */
+  /** 内置技能的平铺行（分组正文的直接子元素，行首有锁） */
+  builtinRows(): Promise<SkillRowShot[]>
+  /** 默认目录那一摞平铺行（分组正文的直接子元素，行首没有锁） */
   flatRows(): Promise<SkillRowShot[]>
   /** 点一行技能并等它成为活动行（= 这份 SKILL.md 的笔记本成了活动会话） */
   openSkill(name: string): Promise<void>
@@ -6484,7 +6484,6 @@ export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
   const FOLDER_SHOT = `((f) => ({
     dirName: f.getAttribute('data-skill-folder') ?? '',
     label: (f.querySelector('span.truncate')?.textContent ?? '').trim(),
-    locked: !!f.querySelector('.lucide-lock'),
     off: f.hasAttribute('data-skill-off'),
     open: !!f.querySelector('.lucide-folder-open')
   }))`
@@ -6556,8 +6555,15 @@ export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
         `[...(${FOLDER(dirName)}?.nextElementSibling?.querySelectorAll('[data-skill-row]') ?? [])]`
       ),
 
+    builtinRows: () =>
+      shotsOf(
+        `[...(${BODY}?.children ?? [])].filter((el) => el.hasAttribute('data-skill-row') && el.querySelector('.lucide-lock'))`
+      ),
+
     flatRows: () =>
-      shotsOf(`[...(${BODY}?.children ?? [])].filter((el) => el.hasAttribute('data-skill-row'))`),
+      shotsOf(
+        `[...(${BODY}?.children ?? [])].filter((el) => el.hasAttribute('data-skill-row') && !el.querySelector('.lucide-lock'))`
+      ),
 
     openSkill: async (name) => {
       await until(() => main.eval<boolean>(`${ROW(name)} !== null`), `skill row "${name}"`)

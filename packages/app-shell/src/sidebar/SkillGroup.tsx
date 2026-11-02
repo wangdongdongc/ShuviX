@@ -2,13 +2,14 @@
  * SkillGroup —— 侧栏的「技能」分组。一个技能是**目录**（`SKILL.md` + `references/` 那些伴随
  * 文件），所以这一组比智能体那组多一层：
  *
- *   - **目录成行、可折叠**：内置目录置顶（锁徽标、只读），其后是与别的智能体共用的
- *     `~/.claude/skills` / `~/.agents/skills`（宿主固定列出、移不掉、整组缺省关着），再是用户
- *     添加的外部目录；
+ *   - **内置技能（只读）不占文件夹行**，平铺在最上面，行首一把锁 —— 和内置智能体 / 策略 / Hook 的行同一副样子；
+ *   - **目录成行、可折叠**：与别的智能体共用的 `~/.claude/skills` / `~/.agents/skills`（宿主固定
+ *     列出、移不掉、整组缺省关着），再是用户添加的外部目录；
  *   - **默认目录（`~/.shuvix/skills/`）不占一行**，它的技能直接平铺在最后 —— 它是「你自己的
  *     技能」的那一摞，和智能体那组的用户档案同一副样子，多包一层文件夹只是多一次点击。
  *
- * 顺序由宿主给（内置 → 共用 → 外部目录 → 默认），这里只按 `isDefault` 决定「画不画那行文件夹」。
+ * 顺序由宿主给（内置 → 共用 → 外部目录 → 默认），这里只按 `isBuiltin` / `isDefault` 决定「画不画那行文件夹」。
+ * 没有文件夹行的那两组，整组开关收在组头菜单里。
  *
  * 点任一行技能 = 打开 / 复用它 `SKILL.md` 的**笔记本会话**（内置那份只读）—— 与 Bots、智能体
  * 档案、知识库条目同一条路。技能比它们多一样东西：**启用开关**（单个技能 + 整个目录两级）。
@@ -62,7 +63,7 @@ export interface SkillGroupFolder {
   dirPath: string
   /** 默认目录：**不画文件夹行**，技能平铺在最后 */
   isDefault: boolean
-  /** 内置目录：只读（不能移除、里面的技能不能删） */
+  /** 内置目录：**不画文件夹行**，技能平铺在最前面、行首挂锁；只读（不能移除、里面的技能不能删） */
   isBuiltin: boolean
   /**
    * 与别的智能体共用的目录（`~/.claude/skills` / `~/.agents/skills`）：宿主固定列出，不能移除，
@@ -173,6 +174,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
 
   const openGroupMenu = (e: React.MouseEvent): void => {
     const def = scanned?.find((f) => f.isDefault)
+    const builtin = scanned?.find((f) => f.isBuiltin)
     const items: ContextMenuItem[] = [
       { id: 'add-folder', label: t('settings.skillDirAdd') },
       { id: 'open-default', label: t('settings.skillOpenDir') },
@@ -180,7 +182,19 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
         ? [
             {
               id: 'toggle-default',
-              label: def.isEnabled ? t('common.disable') : t('common.enable')
+              label: def.isEnabled
+                ? t('settings.skillDefaultDisable')
+                : t('settings.skillDefaultEnable')
+            }
+          ]
+        : []),
+      ...(builtin
+        ? [
+            {
+              id: 'toggle-builtin',
+              label: builtin.isEnabled
+                ? t('settings.skillBuiltinDisable')
+                : t('settings.skillBuiltinEnable')
             }
           ]
         : []),
@@ -191,6 +205,8 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
       if (action === 'add-folder') void adapter.addFolder()
       if (action === 'open-default' && def) void adapter.openFolder(def)
       if (action === 'toggle-default' && def) void adapter.setFolderEnabled(def, !def.isEnabled)
+      if (action === 'toggle-builtin' && builtin)
+        void adapter.setFolderEnabled(builtin, !builtin.isEnabled)
       if (action === 'refresh') void scan()
     })
   }
@@ -199,8 +215,8 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
     const items: ContextMenuItem[] = [
       { id: 'toggle', label: folder.isEnabled ? t('common.disable') : t('common.enable') },
       { id: 'open', label: t('settings.skillOpenDir') },
-      // 内置与共用目录都是宿主固定列出的，没有「移除」可言
-      ...(folder.isBuiltin || folder.isShared
+      // 共用目录是宿主固定列出的，没有「移除」可言
+      ...(folder.isShared
         ? []
         : [{ type: 'separator' as const }, { id: 'remove', label: t('settings.skillDirRemove') }])
     ]
@@ -255,12 +271,23 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
         onClick={() => void adapter.open(skill)}
         onContextMenu={(e) => openSkillMenu(folder, skill, e)}
         title={copy?.hint ?? skill.description}
-        className={rowClass(active, !folder.isDefault)}
+        className={rowClass(active, !folder.isDefault && !folder.isBuiltin)}
       >
-        {/* 与分组头同一个 BookOpen；着色同知识库条目行（选中 accent，否则淡） */}
-        <BookOpen
-          className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'} ${off ? 'opacity-40' : ''}`}
-        />
+        {folder.isBuiltin ? (
+          // 与内置智能体 / 策略 / Hook 同一副锁（= 这行只能看）
+          <span
+            title={t('tool.subAgentBuiltin')}
+            aria-label={t('tool.subAgentBuiltin')}
+            className={`sb-icon text-text-tertiary ${off ? 'opacity-40' : ''}`}
+          >
+            <Lock size={11} />
+          </span>
+        ) : (
+          // 与分组头同一个 BookOpen；着色同知识库条目行（选中 accent，否则淡）
+          <BookOpen
+            className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'} ${off ? 'opacity-40' : ''}`}
+          />
+        )}
         <span
           className={`flex-1 min-w-0 truncate ${showIdentifier ? '' : 'group-hover:pr-5'} ${off ? 'line-through opacity-60' : ''}`}
         >
@@ -293,17 +320,21 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
       onMenu={openGroupMenu}
     >
       {scanned !== null &&
-        // 空态 = 连一个可画的目录行都没有，且默认目录也没有技能（外部目录哪怕是空的也占一行）
-        (scanned.every((f) => f.isDefault && f.skills.length === 0) ? (
+        // 空态 = 连一个可画的目录行都没有，且平铺的那两组也没有技能（外部目录哪怕是空的也占一行）
+        (scanned.every((f) => (f.isDefault || f.isBuiltin) && f.skills.length === 0) ? (
           <div className="sb-hint">{t('settings.skillEmpty')}</div>
         ) : (
           <>
-            {/* 目录（内置置顶 → 共用 → 外部），顺序由宿主给 */}
+            {/* 内置技能：不画文件夹行，平铺在最前面 */}
+            {scanned
+              .filter((f) => f.isBuiltin)
+              .flatMap((folder) => folder.skills.map((skill) => skillRow(folder, skill)))}
+            {/* 目录（共用 → 外部），顺序由宿主给 */}
             {scanned
               // 空目录也画行：移除入口只长在文件夹行的菜单上，把空目录藏起来就等于
               // 「加错了一个目录，从此只能手改 .config.json」。一个技能都没有的目录展开是空的，
-              // 那正是它的实情（内置那组由宿主在空时整个不给，不会走到这里）
-              .filter((f) => !f.isDefault)
+              // 那正是它的实情
+              .filter((f) => !f.isDefault && !f.isBuiltin)
               .map((folder) => {
                 const open = openDirs.has(folder.dirName)
                 return (
@@ -326,23 +357,10 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                         )}
                       </span>
                       <span
-                        className={`flex-1 min-w-0 truncate ${folder.isBuiltin ? '' : 'group-hover:pr-5'} ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
+                        className={`flex-1 min-w-0 truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
                       >
-                        {folder.isBuiltin
-                          ? t('settings.skillDirBuiltin')
-                          : (folder.label ?? folder.dirName)}
+                        {folder.label ?? folder.dirName}
                       </span>
-                      {folder.isBuiltin && (
-                        // 与知识库内置库（ShuviX 系统说明）同一副锁：小号、淡、悬停不隐去
-                        <span
-                          title={t('tool.subAgentBuiltin')}
-                          aria-label={t('tool.subAgentBuiltin')}
-                          // 悬停时往左让出 ⋮ 的位置（让位从名字挪到锁上），否则两颗图标叠在一起
-                          className="flex shrink-0 pr-1 group-hover:pr-5"
-                        >
-                          <Lock size={9} className="text-text-tertiary/50" />
-                        </span>
-                      )}
                       <RowMenuButton
                         className="absolute right-1.5 opacity-0 group-hover:opacity-100"
                         onOpen={(e) => openFolderMenu(folder, e)}

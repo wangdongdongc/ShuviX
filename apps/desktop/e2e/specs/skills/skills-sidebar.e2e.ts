@@ -3,7 +3,7 @@
  * 之后的同一批用例。
  *
  * 这一组比智能体那组**多一层**，因为技能是**目录**而不是单文件（`SKILL.md` 旁边还有
- * `references/`）：内置目录置顶（文件夹行、带锁、只读）→ 用户添加的外部目录（文件夹行，按添加
+ * `references/`）：内置技能平铺在最前面（不占文件夹行，行首一把锁、只读）→ 用户添加的外部目录（文件夹行，按添加
  * 顺序）→ **默认目录的技能平铺，不占文件夹行**（它是「你自己的技能」那一摞，多包一层只是多一次
  * 点击）。项目级技能刻意不列 —— 它随当前会话的项目变，而这一组是全局的。点任一行打开的是那个
  * 技能 `SKILL.md` 的**笔记本会话**（承载项目见 chat-protocol/skillNotes：默认 / 内置 / 每个外部
@@ -211,17 +211,18 @@ afterAll(async () => {
 })
 
 describe('侧栏技能分组', () => {
-  it('SK-1 两层结构与顺序：内置置顶带锁 → 外部按添加顺序；默认目录不画文件夹行，它的技能不缩进', async () => {
+  it('SK-1 两层结构与顺序：内置技能平铺在最前、行首带锁 → 外部按添加顺序；内置与默认目录都不画文件夹行，它们的技能不缩进', async () => {
     const folders = await pane.folders()
-    expect(folders.map((f) => f.dirName)).toEqual(['builtin', 'ext-a', 'ext-b'])
-    // 锁是「内置」的标记（只读，不能移除、里面的技能不能删）
-    expect(folders.map((f) => f.locked)).toEqual([true, false, false])
+    expect(folders.map((f) => f.dirName)).toEqual(['ext-a', 'ext-b'])
     expect(folders.every((f) => !f.off)).toBe(true)
-    // 内置那行显示的是本地化的「内置」，外部行就是用户取的目录名
-    expect(folders[0].label).toBe(en.settings.skillDirBuiltin)
-    expect(folders.slice(1).map((f) => f.label)).toEqual(['ext-a', 'ext-b'])
+    expect(folders.map((f) => f.label)).toEqual(['ext-a', 'ext-b'])
     // 默认目录**没有**文件夹行 —— 它是这一组与智能体那组长得一样的那一半
     expect(folders.map((f) => f.dirName)).not.toContain('default')
+
+    // 内置技能：行首的锁是「内置」的标记（只读，不能移除、不能删），同内置智能体 / 策略 / Hook 的行
+    const builtin = await pane.builtinRows()
+    expect(builtin.map((r) => r.name)).toContain(BUILTIN_SKILL)
+    expect(builtin.every((r) => !r.indented)).toBe(true)
 
     // 目录下的行缩进，默认目录那一摞不缩进
     const under = await pane.rowsUnder('ext-a')
@@ -350,8 +351,6 @@ describe('侧栏技能分组', () => {
     // 这正是渲染端 `off = !skill.isEnabled || !folder.isEnabled` 存在的理由：组关掉时
     // 单个技能的 isEnabled **不被改写**，行上要看得出来，否则「我明明开着」是个谜
     expect(await pane.folderMenuIds('ext-a')).toEqual(['toggle', 'open', 'remove'])
-    // 内置目录不给「移除」（它随包发布）
-    expect(await pane.folderMenuIds('builtin')).toEqual(['toggle', 'open'])
 
     await pane.pickFolderMenu('ext-a', 'toggle')
     await until(
@@ -377,11 +376,12 @@ describe('侧栏技能分组', () => {
   })
 
   it('SK-7 默认目录的组开关在组头菜单里：切换后最后那批平铺行全部变淡', async () => {
-    // 默认目录没有文件夹行，它的开关只能收在组头 —— 少了这一项，那一摞就没有关法
+    // 默认目录没有文件夹行，它的开关只能收在组头 —— 少了这一项，那一摞就没有关法。内置技能同理
     expect(await pane.groupMenuIds()).toEqual([
       'add-folder',
       'open-default',
       'toggle-default',
+      'toggle-builtin',
       'refresh'
     ])
 
@@ -395,6 +395,29 @@ describe('侧栏技能分组', () => {
 
     await pane.pickGroupMenu('toggle-default')
     await until(async () => (await pane.flatRows()).every((r) => !r.off), 'default skills back on')
+  })
+
+  it('SK-7b 内置技能的组开关也在组头菜单里：切换后每一行内置都变淡，默认目录那一摞不受牵连；再点一次复原', async () => {
+    const builtinEnabled = async (): Promise<boolean | undefined> =>
+      (await listGroups()).find((g) => g.dirName === 'builtin')?.isEnabled
+
+    expect((await pane.builtinRows()).length).toBeGreaterThan(0)
+    expect(await builtinEnabled()).toBe(true)
+
+    await pane.pickGroupMenu('toggle-builtin')
+    await until(async () => (await pane.builtinRows()).every((r) => r.off), 'builtin skills dimmed')
+    // 行变淡不只是样式：宿主那边整组真的关了
+    expect(await builtinEnabled()).toBe(false)
+    const flat = await pane.flatRows()
+    expect(flat).toHaveLength(2)
+    expect(flat.every((r) => !r.off)).toBe(true)
+
+    await pane.pickGroupMenu('toggle-builtin')
+    await until(
+      async () => (await pane.builtinRows()).every((r) => !r.off),
+      'builtin skills back on'
+    )
+    expect(await builtinEnabled()).toBe(true)
   })
 
   it('SK-8 添加外部目录两步走：桩选择器 → 取名框预填目录名 → 落地成一行文件夹（排在已有的之后）', async () => {
@@ -415,12 +438,7 @@ describe('侧栏技能分组', () => {
       'ext-c folder listed'
     )
     // 新目录排在已有外部目录之后（配置里的顺序就是展示顺序）
-    expect((await pane.folders()).map((f) => f.dirName)).toEqual([
-      'builtin',
-      'ext-a',
-      'ext-b',
-      'ext-c'
-    ])
+    expect((await pane.folders()).map((f) => f.dirName)).toEqual(['ext-a', 'ext-b', 'ext-c'])
     // 标识带目录前缀，行上只显示后半截
     const rows = await pane.rowsUnder('ext-c')
     expect(rows.map((r) => r.name)).toEqual(['ext-c:ext-c-one', 'ext-c:ext-c-two'])
@@ -443,12 +461,7 @@ describe('侧栏技能分组', () => {
     expect(await dialog.error()).toBe('Directory name "ext-a" already exists')
     expect(await dialog.isOpen()).toBe(true)
     // 配置一个字没动
-    expect((await pane.folders()).map((f) => f.dirName)).toEqual([
-      'builtin',
-      'ext-a',
-      'ext-b',
-      'ext-c'
-    ])
+    expect((await pane.folders()).map((f) => f.dirName)).toEqual(['ext-a', 'ext-b', 'ext-c'])
 
     await dialog.cancel()
     await dialog.waitClosed()
@@ -665,8 +678,8 @@ describe('侧栏技能分组', () => {
 
     const folders = await pane.folders()
     const order = folders.map((f) => f.dirName)
-    // 内置 → 共用（claude、agents）→ 外部目录（按配置顺序）
-    expect(order.slice(0, 3)).toEqual(['builtin', 'claude', 'agents'])
+    // 共用（claude、agents）→ 外部目录（按配置顺序）；内置不画文件夹行
+    expect(order.slice(0, 2)).toEqual(['claude', 'agents'])
     const externals = ['ext-a', 'ext-b', 'ext-c']
     for (const ext of externals) {
       expect(order.indexOf(ext), ext).toBeGreaterThan(order.indexOf('agents'))
@@ -683,9 +696,6 @@ describe('侧栏技能分组', () => {
     // 缺省关着（那两个目录是别的工具的：列出来是让它们找得到，开不开由用户定）
     expect(claude.off).toBe(true)
     expect(agents.off).toBe(true)
-    // 锁 = 只读；共用目录是用户自己的文件
-    expect(claude.locked).toBe(false)
-    expect(agents.locked).toBe(false)
 
     expect((await pane.rowsUnder('claude')).map((r) => r.name)).toEqual(['claude:cc-one'])
     const agentRows = await pane.rowsUnder('agents')
