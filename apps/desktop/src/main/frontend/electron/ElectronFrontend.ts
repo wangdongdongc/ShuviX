@@ -1,10 +1,9 @@
 import type { BrowserWindow } from 'electron'
-import type { ChatFrontend, ChatFrontendCapabilities, ChatEvent } from '../core'
+import type { ChatFrontend, ChatEvent } from '../core'
 
 /** Electron BrowserWindow 前端实现（通过 IPC 'agent:event' 通道发送） */
 export class ElectronFrontend implements ChatFrontend {
   readonly id: string
-  readonly capabilities: ChatFrontendCapabilities = { userInput: true }
 
   constructor(
     private window: BrowserWindow,

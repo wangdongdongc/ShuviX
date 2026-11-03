@@ -129,6 +129,9 @@ export function registerAgentHandlers(): void {
     chatGateway.previewAgentChange(sessionId, change)
   )
 
+  /** 各会话挂着几条询问（只读）：窗口重建 / 客户端重连后补侧栏徽标 */
+  defineHandler('agent:askCounts', () => chatGateway.pendingAskCounts())
+
   /**
    * 销毁会话的根 Agent 运行时（会话横幅 agent 胶囊上的 X）：会话与历史都在，下一条消息按
    * 那时的模型与扩展能力重建。等关停落定才返回；关停前后经 agent_closing 事件广播。

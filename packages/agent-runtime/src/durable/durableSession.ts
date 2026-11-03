@@ -909,7 +909,7 @@ export class DurableSessionImpl implements DurableSession {
     this.raw = deps.harness
     this.processRecord = deps.processRecord ?? newSessionProcessRecord()
     this.harness = observeResumes(deps.harness, () => this.markResumed())
-    this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink, {}, deps.logger)
+    this.inputs = new PendingInputRequests(deps.sessionId, {}, deps.logger)
     this.directory = new AgentDirectory({ sessionId: deps.sessionId, logger: deps.logger })
     this.redaction =
       deps.redaction === undefined

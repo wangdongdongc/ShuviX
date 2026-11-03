@@ -108,7 +108,7 @@ export interface SessionHostDeps {
   env?: HarnessOptions['env']
   /** 额外的对话创建钩子（ShuviX 文档补种之后运行） */
   conversationCreated?: HarnessOptions['conversationCreated']
-  /** 询问的广播与「有没有前端能展示询问面板」 */
+  /** 余项事件的广播 */
   eventSink: RuntimeEventSink
   /**
    * 运行状态变化（idle / busy / interrupted）。关停一个忙碌的会话**不**发事件（DB 里的运行标记

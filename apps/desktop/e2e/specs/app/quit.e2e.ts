@@ -17,12 +17,16 @@
  *   QUIT-3 从没建过会话宿主（只开着主窗口）：一次退出退掉，清理一次
  *   QUIT-4 退出被一个窗口拒绝（设置窗口的 beforeunload 取消了关闭）：会话已关、宿主已封存、主窗口已关，
  *          进程还在；第二个实例把主窗口重新建出来 —— 会话照样读得出消息（宿主撤销了封存），主日志记下这件事
+ *   QUIT-5 退出时有询问挂着（询问一直等人，退出是它落定的方式之一，2026-11-02）：进程自己退掉；同一个 HOME 再起，
+ *          askCounts 是 {}，打开那条会话没有卡片
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, spawnSecondInstance, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
+import { chatPane, sidebarPane } from '../../harness/pages'
 import { seedFakeProvider, waitRendererReady } from '../../harness/seed'
+import { syncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 /** 其余退出清理留在主日志里的两行（destroyAllTabs / mcpService.disconnectAll） */
@@ -192,5 +196,49 @@ describe('QUIT-4 a quit a window refused', () => {
     } finally {
       main.close()
     }
+  }, 180_000)
+})
+
+describe('QUIT-5 one quit with an ask waiting', () => {
+  it('the process exits on its own; the next launch has no count and no card', async () => {
+    const TITLE = 'QUIT-ask'
+    const first = await launch()
+    const provider = await fakeProvider(first)
+    const sid = await createSession(first, TITLE)
+    provider.script({
+      toolCalls: [
+        {
+          id: 'call_quit',
+          name: 'ask',
+          args: JSON.stringify({
+            question: 'Which one?',
+            options: [
+              { label: 'A', description: 'first' },
+              { label: 'B', description: 'second' }
+            ]
+          })
+        }
+      ]
+    })
+    await first.main.eval(
+      `(window.api.agent.prompt(${JSON.stringify({ sessionId: sid, text: 'ask me' })}).catch(() => undefined), true)`
+    )
+    await syncProbe(first.main).waitView(sid, (view) => view.asks.length === 1, 20_000)
+    expect(await first.main.eval('window.api.agent.askCounts()')).toEqual({ [sid]: 1 })
+
+    const outcome = await first.quit()
+    expect(outcome, first.output().slice(-2000)).toMatchObject({ exited: true, jsExited: true })
+
+    const next = await relaunch(first)
+    expect(await next.main.eval('window.api.agent.askCounts()')).toEqual({})
+    const sidebar = sidebarPane(next.main)
+    await until(async () => (await sidebar.titles()).includes(TITLE), 'the session is listed')
+    expect(await sidebar.pendingAsks(TITLE)).toBeNull()
+    expect(await sidebar.openSession(TITLE)).toBe(true)
+    const chat = chatPane(next.main)
+    await chat.ready()
+    expect((await syncProbe(next.main).viewOf(sid))?.asks).toEqual([])
+    expect((await chat.pendingPanel()).open).toBe(false)
+    expect(await next.main.eval('window.api.agent.askCounts()')).toEqual({})
   }, 180_000)
 })

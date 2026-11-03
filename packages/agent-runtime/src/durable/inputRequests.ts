@@ -12,13 +12,16 @@
  *     （发送 / steer / followUp / 继续 / 自动续跑）经 `reopenInputs()` 重新受理。
  *  2. **同 id 只认最新一条**（裁决 R12）：重复 id 的询问到来时，先前那条以 `superseded` 取消，
  *     绝不让它变成永远没人应答的孤儿。
- *  3. **每个 id 的 onRequest / onResolved 恰好各一次**；被闸门拒收（窗口关闭 / 没有前端能展示）的
- *     询问两者都没有。
+ *  3. **每个 id 的 onRequest / onResolved 恰好各一次**；受理窗口关闭时被拒收的询问两者都没有。
+ *
+ * **询问一律等人，不看此刻有没有前端**（2026-11-02 用户裁定）：这里原有一道闸门，一个能答的前端都没有就当场
+ * 取消，于是同一个询问在关了窗的 macOS、没有客户端的无头实例、断了线的手机上变成工具报错 `Aborted`，而前端走开
+ * 之前发起的询问却能一直等 —— 结局取决于发起那一刻。询问经视图到达每个前端，谁之后连上来都看得到、答得了；
+ * 挂起的询问只在被应答、中止、关停（含退出）、被同 id 顶替时落定。
  *
  * **不再广播**（P3-08，plan §D / Q-P3-04）：询问经视图（`SessionView.asks`，投影挂的钩子）到达每个前端，
- * 主进程的消费方（通知、侧栏计数）也挂钩子 —— 前端线路上没有 `input_request` / `_resolved` 了。sink 只剩
- * `hasUserInputCapability` 这道闸门。应答带上答题方（`{clientId}`，P3-08 PIN-20），原样交给 onResolved
- * 供审计；不记应答内容。
+ * 主进程的消费方（通知、侧栏计数）也挂钩子 —— 前端线路上没有 `input_request` / `_resolved` 了。应答带上答题方
+ * （`{clientId}`，P3-08 PIN-20），原样交给 onResolved 供审计；不记应答内容。
  *
  * 钩子可以有多份（P3-03 PIN-02）：构造时的那一份（旧接口）之外，`subscribe()` 再挂任意多份（界面投影、
  * 通知中心……），逐个隔离 —— 一份抛错只记日志，不影响其余几份，也不影响询问本身。`list()` 给出此刻
@@ -30,7 +33,7 @@ import type {
   InputResponse,
   DrivingSessionRef
 } from '@shuvix/chat-protocol/types/inputRequest'
-import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import type { RuntimeLogger } from '../types'
 
 interface PendingInput {
   request: InputRequest
@@ -71,7 +74,6 @@ export class PendingInputRequests {
 
   constructor(
     private readonly sessionId: string,
-    private readonly sink: RuntimeEventSink,
     private readonly hooks: PendingInputHooks = {},
     private readonly logger?: RuntimeLogger
   ) {}
@@ -96,9 +98,6 @@ export class PendingInputRequests {
   /** 发起一条询问并挂起，直到被应答、取消或被同 id 的新询问顶替 */
   request(request: InputRequest): Promise<InputResponse> {
     if (this.closedReason !== undefined) return Promise.resolve(cancelled(this.closedReason))
-    if (!this.sink.hasUserInputCapability(this.sessionId)) {
-      return Promise.resolve(cancelled('aborted'))
-    }
     // 同 id 又来一条：先前那条作废（只有最新一条能被应答）
     this.settle(request.id, cancelled('superseded'))
     return new Promise<InputResponse>((resolve) => {

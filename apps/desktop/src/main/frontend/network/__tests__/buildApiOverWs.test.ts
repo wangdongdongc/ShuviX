@@ -15,6 +15,7 @@
  *   BW-8  liveDoc.respond('r', res) → (ctx, {requestId, result})；knowledge.baseOptions() → (ctx, {})
  *   BW-9  直接 invoke 推送通道 agent:event / sync:frame → unknown_channel
  *   BW-10 sync.send('L1', HELLO) → socket 收到 {t:'sync', link, frame}；app.platform === 'web'
+ *   PAC-4 api.agent.askCounts() 经 WS：帧上 args 是空的，处理函数只收到 ctx，答案原样回来
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { API_TABLE } from '../../../../shared/apiTable'
@@ -95,6 +96,7 @@ let api: ReturnType<typeof createWebApi>
 const spies = {
   toolsList: vi.fn(),
   getInfo: vi.fn(),
+  askCounts: vi.fn(),
   liveDocRespond: vi.fn(),
   baseOptions: vi.fn(),
   openFolder: vi.fn(),
@@ -107,6 +109,7 @@ function setup(desktopOnly: ReadonlySet<string>): void {
   transport = createNetworkTransport()
   transport.serve({ kind: 'handle', channel: 'tools:list', fn: spies.toolsList })
   transport.serve({ kind: 'handle', channel: 'agent:getInfo', fn: spies.getInfo })
+  transport.serve({ kind: 'handle', channel: 'agent:askCounts', fn: spies.askCounts })
   transport.serve({ kind: 'handle', channel: 'liveDoc:respond', fn: spies.liveDocRespond })
   transport.serve({ kind: 'handle', channel: 'knowledge:baseOptions', fn: spies.baseOptions })
   transport.serve({ kind: 'handle', channel: 'app:open-folder', fn: spies.openFolder })
@@ -286,6 +289,18 @@ describe('BW-8 override 通道', () => {
     ])
     await api.knowledge.baseOptions()
     expect(spies.baseOptions.mock.calls[0]).toStrictEqual([netCtx(1), {}])
+  })
+})
+
+describe('PAC-4 询问计数', () => {
+  it('PAC-4 api.agent.askCounts() 零参数：与 IPC 基准一样，帧上 args 是空的，处理函数只收到 ctx，答案原样回来', async () => {
+    const counts = { a: 1, b: 2 }
+    spies.askCounts.mockReturnValue(counts)
+    expect(ipcArgs((ipcApi) => ipcApi.agent.askCounts())).toStrictEqual([])
+    await expect(api.agent.askCounts()).resolves.toStrictEqual(counts)
+    expect(spies.askCounts.mock.calls).toStrictEqual([[netCtx(1)]])
+    const frame = sock.frames().find((f) => f.t === 'invoke' && f.channel === 'agent:askCounts')
+    expect(frame).toMatchObject({ args: [] })
   })
 })
 

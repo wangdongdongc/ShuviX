@@ -86,6 +86,7 @@ export const API_TABLE = {
     continue: invoke('agent:continue', 1),
     setModel: invoke('agent:setModel', 1),
     previewChange: invoke('agent:previewChange', 1),
+    askCounts: invoke('agent:askCounts', 0),
     destroy: invoke('agent:destroy', 1),
     setThinkingLevel: invoke('agent:setThinkingLevel', 1),
     getInfo: invoke('agent:getInfo', 2),

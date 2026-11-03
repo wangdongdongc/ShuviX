@@ -306,6 +306,10 @@ export class DefaultChatGateway implements ChatGateway {
     return respondToUserInput(requestId, answer, meta)
   }
 
+  pendingAskCounts(): Record<string, number> {
+    return sessionService.pendingAskCounts()
+  }
+
   // ─── 运行时调整 ────────────────────────────────
 
   /**

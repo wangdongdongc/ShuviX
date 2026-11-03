@@ -823,7 +823,7 @@ async function buildRig(
       storages.delete(sessionId)
     },
     isEphemeral: () => true,
-    eventSink: { broadcast: (event) => events.push(event), hasUserInputCapability: () => false },
+    eventSink: { broadcast: (event) => events.push(event) },
     logger: probeLogger
   })
   await host.open(PROBE_SESSION)

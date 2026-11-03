@@ -2,7 +2,7 @@
  * ChromeFrontend —— 一条标签页会话在一条桥连接上的推送口。
  *
  * 契约：
- *   - id `chrome:<连接 id>:<会话 id>`，能力 {userInput}（询问卡片在侧边栏里弹、里答）；
+ *   - id `chrome:<连接 id>:<会话 id>`；
  *   - 收到的每条事件都原样经桥发出：`chat.event {sessionId: <绑定的会话>, event}` —— 子会话的事件
  *     被注册表回溯送到父会话的前端时，外层 sessionId 仍是它绑定的那条，事件自带自己的 id；
  *   - 它**只管推送**：不记轮次、不碰浏览器状态（调试租约由桌面事件流旁听，见 observeChromeTabRun）；
@@ -47,11 +47,10 @@ beforeEach(() => {
 const frontendFor = (sessionId: string, c: FakeConn = conn): ChromeFrontend =>
   new ChromeFrontend(c as unknown as BridgeConnection, sessionId)
 
-describe('CF-1 身份与能力', () => {
-  it('CF-1 / P3-08-46 id = chrome:<连接 id>:<会话 id>；能力只剩 userInput（streaming 已删）', () => {
+describe('CF-1 身份', () => {
+  it('CF-1 id = chrome:<连接 id>:<会话 id>', () => {
     const f = frontendFor('tab-s1')
     expect(f.id).toBe('chrome:conn-7:tab-s1')
-    expect(f.capabilities).toStrictEqual({ userInput: true })
   })
 })
 
@@ -113,7 +112,6 @@ describe('CF-5 挂在真的 ChatFrontendRegistry 上', () => {
     registry.broadcast(ask)
     registry.broadcast(delta)
     expect(conn.emit.mock.calls.map(([, p]) => p.event)).toEqual([ask, delta])
-    expect(registry.hasCapability('tab-s1', 'userInput')).toBe(true)
 
     // 连接断了：广播时被剪掉，之后连接「恢复」也不会再收到（重连会重新 open / bind）
     conn.ready = false
@@ -123,7 +121,6 @@ describe('CF-5 挂在真的 ChatFrontendRegistry 上', () => {
     conn.ready = true
     registry.broadcast(delta)
     expect(conn.emit).toHaveBeenCalledTimes(2)
-    expect(registry.hasCapability('tab-s1', 'userInput')).toBe(false)
   })
 
   it('CF-5 只绑在自己那条会话上：别的会话的事件收不到', () => {

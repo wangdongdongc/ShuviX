@@ -1,7 +1,6 @@
 /**
- * 挂起的用户询问：应答 / 取消 / 摘要 / 恰好一次的钩子 / 关闭受理窗口 / 全部取消 / 能力闸门 /
- * 重复 id 顶替（裁决 R12）。P3-08 起询问不再广播（`events` 改由一份 `subscribe` 钩子记，`broadcasts`
- * 记 sink 的广播 —— 恒空），应答可带答题方（PIN-20）。
+ * 挂起的用户询问：应答 / 取消 / 摘要 / 恰好一次的钩子 / 关闭受理窗口 / 全部取消 / 没有前端也等（AW-U1） /
+ * 重复 id 顶替（裁决 R12）。P3-08 起询问不再广播（`events` 改由一份 `subscribe` 钩子记），应答可带答题方（PIN-20）。
  *
  * 关闭窗口这一条是会话关停链路的命门：宿主按「当前绑定的运行时」路由用户应答，正在关停的运行时
  * 已不在绑定表里；中止之后若还接受新询问，那条挂起就再也没人应答 —— 双方互等，会话卡死。
@@ -14,33 +13,24 @@ import type {
 } from '@shuvix/chat-protocol/types/inputRequest'
 import { PendingInputRequests } from '../inputRequests'
 
-function makeInputs(capability = true): {
+function makeInputs(): {
   inputs: PendingInputRequests
   events: string[]
-  broadcasts: unknown[]
   requested: string[]
   resolved: [string, InputResponse][]
 } {
   const events: string[] = []
-  const broadcasts: unknown[] = []
   const requested: string[] = []
   const resolved: [string, InputResponse][] = []
-  const inputs = new PendingInputRequests(
-    's1',
-    {
-      broadcast: (event) => broadcasts.push(event),
-      hasUserInputCapability: () => capability
-    },
-    {
-      onRequest: (request) => requested.push(request.id),
-      onResolved: (id, response) => resolved.push([id, response])
-    }
-  )
+  const inputs = new PendingInputRequests('s1', {
+    onRequest: (request) => requested.push(request.id),
+    onResolved: (id, response) => resolved.push([id, response])
+  })
   inputs.subscribe({
     onRequest: (request) => events.push(`request:${request.id}`),
     onResolved: (id) => events.push(`resolved:${id}`)
   })
-  return { inputs, events, broadcasts, requested, resolved }
+  return { inputs, events, requested, resolved }
 }
 
 const ask = (id: string, command = 'ls'): InputRequest => ({
@@ -166,12 +156,22 @@ describe('PendingInputRequests', () => {
     expect(inputs.inputsClosed).toBe(false)
   })
 
-  it('IR-08 no front end can show the panel → immediate cancel, no event', async () => {
-    const { inputs, events, requested } = makeInputs(false)
-    await expect(inputs.request(ask('r1'))).resolves.toEqual({ kind: 'cancel', reason: 'aborted' })
+  it('AW-U1 no subscriber at all: the ask stays pending past a macrotask, is listed, and only respond settles it', async () => {
+    // 没有 subscribe、没有构造钩子 = 没有任何前端在看。询问不看有没有前端（2026-11-02）
+    const inputs = new PendingInputRequests('s1')
+    const request = ask('r1')
+    let settled: InputResponse | undefined
+    void inputs.request(request).then((response) => (settled = response))
+    await flush()
+    expect(settled).toBeUndefined()
+    expect(inputs.count).toBe(1)
+    expect(inputs.list()).toEqual([request])
+    const response: InputResponse = { kind: 'ask', allowed: true }
+    expect(inputs.respond('r1', response)).toBe(true)
+    await flush()
+    expect(settled).toEqual(response)
     expect(inputs.count).toBe(0)
-    expect(events).toEqual([])
-    expect(requested).toEqual([])
+    expect(inputs.list()).toEqual([])
   })
 
   it('IR-09 a duplicate pending id supersedes the earlier request (R12)', async () => {
@@ -208,7 +208,6 @@ describe('PendingInputRequests', () => {
     const warnings: string[] = []
     const inputs = new PendingInputRequests(
       's1',
-      { broadcast: () => {}, hasUserInputCapability: () => true },
       {},
       { info: () => {}, warn: (m) => warnings.push(m), error: () => {} }
     )
@@ -238,14 +237,13 @@ describe('PendingInputRequests', () => {
     inputs.cancelAll()
   })
 
-  it('P3-08-45 request / settle never broadcast; the constructor hooks and each subscriber fire once', async () => {
-    const { inputs, events, broadcasts, requested, resolved } = makeInputs()
+  it('P3-08-45 the constructor hooks and each subscriber fire once per request / settle', async () => {
+    const { inputs, events, requested, resolved } = makeInputs()
     const pending = inputs.request(ask('r1'))
     expect(inputs.respond('r1', { kind: 'ask', allowed: true })).toBe(true)
     await pending
     void inputs.request(ask('r2'))
     inputs.cancelAll()
-    expect(broadcasts).toEqual([])
     expect(requested).toEqual(['r1', 'r2'])
     expect(resolved.map(([id]) => id)).toEqual(['r1', 'r2'])
     expect(events).toEqual(['request:r1', 'resolved:r1', 'request:r2', 'resolved:r2'])
@@ -253,11 +251,9 @@ describe('PendingInputRequests', () => {
 
   it('P3-08-60 respond(…, {clientId}) hands the answerer to every onResolved as a third argument; cancels carry none', async () => {
     const seen: unknown[][] = []
-    const inputs = new PendingInputRequests(
-      's1',
-      { broadcast: () => {}, hasUserInputCapability: () => true },
-      { onResolved: (...args) => seen.push(['ctor', ...args]) }
-    )
+    const inputs = new PendingInputRequests('s1', {
+      onResolved: (...args) => seen.push(['ctor', ...args])
+    })
     inputs.subscribe({ onResolved: (...args) => seen.push(['sub', ...args]) })
     void inputs.request(ask('r1'))
     void inputs.request(ask('r2'))
@@ -298,11 +294,9 @@ describe('PendingInputRequests · 答题方（WP2）', () => {
   /** 构造时钩子 + 一份 subscribe 钩子都记下 onResolved 的完整参数 */
   function recorded(): { inputs: PendingInputRequests; seen: unknown[][] } {
     const seen: unknown[][] = []
-    const inputs = new PendingInputRequests(
-      's1',
-      { broadcast: () => {}, hasUserInputCapability: () => true },
-      { onResolved: (...args) => seen.push(['ctor', ...args]) }
-    )
+    const inputs = new PendingInputRequests('s1', {
+      onResolved: (...args) => seen.push(['ctor', ...args])
+    })
     inputs.subscribe({ onResolved: (...args) => seen.push(['sub', ...args]) })
     return { inputs, seen }
   }

@@ -3,7 +3,7 @@
  *
  * 允许 / 拒绝 / 卡片挂着时中止（不死锁，PIN-4：断言实现给出的那段确定的文字，并重复几遍证明不赛跑）/
  * 同一轮里两张卡 / 两张卡挂着时崩溃、重开、继续（ask 重问同一个 id，write 记为「中断，可能已部分执行」）/
- * taskId 一路穿到审查接缝（P1-06）/ 没有前端。
+ * taskId 一路穿到审查接缝（P1-06）。
  */
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { LiveDoc, type EntryRecord } from '@earendil-works/pi-durable'
@@ -14,7 +14,7 @@ import type { DurableSession } from '../../durableSession'
 import { answer, callTool } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
 import { transcript } from '../support/transcript'
-import { sleep, waitFor, withTimeout } from '../support/wait'
+import { sleep, withTimeout } from '../support/wait'
 import {
   diagnosticsOf,
   harnessErrorText,
@@ -306,19 +306,45 @@ describe('P1-12 · asks', () => {
   )
 
   it(
-    'I2-07 no frontend: the write fails fast with the abort text, nothing is broadcast, the run goes on',
+    'AW-U3 a real write and a real ask with nobody answering: the run waits (no second request, no result, no write); once answered both succeed and nothing says Aborted',
     async () => {
       const world = await makeWorld()
       const session = await lockedSession(world)
-      world.t.capability = false
-      world.chat(callTool('write', WRITE_ARGS, 'c-w'), answer('no card'))
-      expect(await withTimeout(session.submitUser('save'), 5000, 'save')).toEqual({})
-      const entry = await entryFor(session, 'c-w')
-      expect(resultMessage(entry).isError).toBe(true)
-      expect(resultMessage(entry).content).toEqual([{ type: 'text', text: 'Aborted' }])
-      expect(world.t.asksOf('input_request')).toEqual([])
+      const requestsBefore = world.model.chats.length
+      world.chat(
+        callTools(['ask', ASK_ARGS, 'c-a'], ['write', WRITE_ARGS, 'c-w']),
+        answer('both done')
+      )
+      let settled = false
+      const sending = session.submitUser('ask and save').then((result) => {
+        settled = true
+        return result
+      })
+      await nextInput(world, 'c-a')
+      await nextInput(world, 'c-w')
+
+      await sleep(300)
+      expect(world.model.chats.length - requestsBefore).toBe(1)
+      expect(await resultEntries(await session.currentConversation())).toEqual([])
+      expect(settled).toBe(false)
+      expect(session.pendingInputCount).toBe(2)
       expect(world.fs.writes).toEqual([])
-      await waitFor(() => session.runState === 'idle', 1000, 'idle')
+
+      allow(world, 'c-w')
+      choose(world, 'c-a', ['A'])
+      expect(await withTimeout(sending, 5000, 'send')).toEqual({})
+
+      expect(world.model.chats.length - requestsBefore).toBe(2)
+      const conversation = await session.currentConversation()
+      const direct = await directWrite({ kind: 'ask', allowed: true })
+      const asked = await resultEntry(conversation, 'c-a')
+      const wrote = await resultEntry(conversation, 'c-w')
+      expect(resultMessage(asked).isError).toBe(false)
+      expect(resultText(asked)).toBe('User selected: A')
+      expect(resultMessage(wrote).isError).toBe(false)
+      expect(resultText(wrote)).toBe(textOfContent(direct))
+      for (const line of lines(world.model.chats.at(-1)!)) expect(line).not.toContain('Aborted')
+      expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
     },
     TIMEOUT
   )

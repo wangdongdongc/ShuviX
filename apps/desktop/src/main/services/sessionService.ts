@@ -1191,6 +1191,20 @@ export class SessionService {
    *
    * 响应入口本身在 `userInputBroker`：那里同时握着请求与答复两个方向。
    */
+  /**
+   * 每条打开着的会话此刻挂着几条询问（只列 > 0 的）。`ask_count` 是事件，窗口重建、客户端连上来之前发的都错过了，
+   * 而询问会一直等人（2026-11-02）—— 新来的前端靠这份补上侧栏徽标。每个窗口挂载都会来问，所以从不建宿主：
+   * 宿主还没建，就不可能有挂着的询问。
+   */
+  pendingAskCounts(): Record<string, number> {
+    const counts: Record<string, number> = {}
+    if (!peekSessionHost()) return counts
+    for (const session of this.liveAgentSessions()) {
+      if (session.pendingInputCount > 0) counts[session.sessionId] = session.pendingInputCount
+    }
+    return counts
+  }
+
   liveAgentSessions(): AgentSession[] {
     const sessions: AgentSession[] = []
     for (const sessionId of this.host.openSessionIds()) {

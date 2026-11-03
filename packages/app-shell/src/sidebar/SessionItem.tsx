@@ -175,6 +175,7 @@ export function SessionItem({
         )}
         {pendingCount > 0 && (
           <span
+            data-pending-asks={pendingCount}
             className={`flex items-center gap-1 shrink-0 ${interrupted && !isStreaming ? '' : 'ml-auto'}`}
           >
             <span className="relative flex h-1.5 w-1.5">

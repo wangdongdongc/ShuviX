@@ -90,8 +90,7 @@ vi.mock('../../agents/agentHost', () => ({
 // 运行时的事件经桌面的 electronEventSink 到前端注册表（这里直通假的注册表）
 vi.mock('../agentRuntimeAdapters', () => ({
   electronEventSink: {
-    broadcast: (event: Record<string, unknown>) => mocks.broadcast(event),
-    hasUserInputCapability: () => true
+    broadcast: (event: Record<string, unknown>) => mocks.broadcast(event)
   }
 }))
 vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))

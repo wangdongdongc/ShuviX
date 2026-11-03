@@ -3,11 +3,11 @@
  * `agent:event`，连接断了 `isAlive` 即假。每条用例 `vi.resetModules()` 后重新导入 `ipc/registry` 与 NetworkFrontend
  * （注册表有模块级状态），挂上真的网络传输；连接是假的。logger 替身（真的拉 electron-log）。
  *
- *   NF-1 networkFrontendId('ws:3') === 'network:ws:3'；id = 'network:' + client.id；capabilities 恰是 {userInput:true}
+ *   NF-1 networkFrontendId('ws:3') === 'network:ws:3'；id = 'network:' + client.id
  *   NF-2 开着：sendEvent → 那条连接收到 {t:'push', channel:'agent:event', args:[ev]}；isAlive 真
  *   NF-3 连接关了：isAlive 假，sendEvent 什么也不发、不抛
  *   NF-4 根本没挂网络传输：isAlive 假，sendEvent 无操作
- *   NF-5 真的 ChatFrontendRegistry：registerDefault 后 hasCapability(userInput) 真；broadcast 推到；连接关了之后一次
+ *   NF-5 真的 ChatFrontendRegistry：registerDefault 后 broadcast 推到；连接关了之后一次
  *        broadcast 把它剪掉；unregister(networkFrontendId(id)) 移除
  */
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
@@ -34,13 +34,12 @@ beforeEach(async () => {
 
 const ev = { type: 'agent_start', sessionId: 's9' } as ChatEvent
 
-describe('NF-1 id 与能力', () => {
-  it('NF-1 networkFrontendId / id / capabilities', () => {
+describe('NF-1 id', () => {
+  it('NF-1 networkFrontendId / id', () => {
     expect(mod.networkFrontendId('ws:3')).toBe('network:ws:3')
     const c = netClient(4)
     const frontend = new mod.NetworkFrontend(c)
     expect(frontend.id).toBe('network:' + c.id)
-    expect(frontend.capabilities).toStrictEqual({ userInput: true })
   })
 })
 
@@ -86,7 +85,6 @@ describe('NF-5 真的 ChatFrontendRegistry', () => {
     transport.add(conn)
     const frontend = new mod.NetworkFrontend(netClient(1))
     chat.registerDefault(frontend)
-    expect(chat.hasCapability('s9', 'userInput')).toBe(true)
 
     chat.broadcast(ev)
     expect(conn.sent).toStrictEqual([{ t: 'push', channel: 'agent:event', args: [ev] }])
@@ -95,7 +93,6 @@ describe('NF-5 真的 ChatFrontendRegistry', () => {
     expect(chat.getFrontends('s9').map((f) => f.id)).toContain(frontend.id)
     chat.broadcast(ev)
     expect(chat.getFrontends('s9').map((f) => f.id)).not.toContain(frontend.id)
-    expect(chat.hasCapability('s9', 'userInput')).toBe(false)
 
     const conn2 = fakeConnection(netClient(2))
     transport.add(conn2)

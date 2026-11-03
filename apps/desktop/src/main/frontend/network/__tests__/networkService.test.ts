@@ -19,7 +19,7 @@
  *   NSV-9 setPort：1024 / 65535 写成字符串、状态的端口跟着变；不合法 → 拒绝（固定的一句话），什么也不写
  *   NSV-10 存着的端口 'abc' → status().port === 7766
  *   NSV-11 客户端列表：id / remoteAddress / userAgent / device / connectedAt；断开之后为空
- *   NSV-12 连上：registerDefault 收到 id 'network:'+clientId、userInput 的前端；连上与断开各发一次 changed
+ *   NSV-12 连上：registerDefault 收到 id 'network:'+clientId 的前端；连上与断开各发一次 changed
  *   NSV-13 init（注入传输）：registerViewAuthorizer('network', fn) 且 fn() 为真；settings.changed 只在 keys 缺失或含
  *          network.* 时对账；init 两次只订阅、登记一次
  *   NSV-14 init 不注入传输：传输挂到注册表（isClientAlive 认得连着的客户端）；第二次 init 不抛；注入传输时不挂（测试接缝）
@@ -510,7 +510,6 @@ describe('NSV-11 / NSV-12 客户端', () => {
     const id = svc.status().clients[0].id
     const frontend = mocks.registerDefault.mock.calls[0][0]
     expect(frontend.id).toBe('network:' + id)
-    expect(frontend.capabilities.userInput).toBe(true)
     expect(changed.mock.calls.length - base).toBe(1)
     client.ws.close()
     await vi.waitFor(() => expect(changed.mock.calls.length - base).toBe(2))

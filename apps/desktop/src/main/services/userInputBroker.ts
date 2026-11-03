@@ -5,8 +5,8 @@
  * AgentManager → sessionService → agentSession → agentToolBuilder → AgentTool → AgentManager。
  * 参与方在模块初始化时把自己注册进来，AgentManager（子代理工具装配）消费。
  *
- * 第二个理由是**请求与答复要落在同一处**。派生 agent 自身没有输入面板（`hasUserInputCapability`
- * 恒 false），它的询问一律带着**根会话 id** 走到这里，由认领该会话的参与方送达。今天只有
+ * 第二个理由是**请求与答复要落在同一处**。派生 agent 自身没有输入面板，它的询问一律带着
+ * **根会话 id** 走到这里，由认领该会话的参与方送达。今天只有
  * 一个参与方（sessionService：有根 agent 的会话）；注册表的形状留给将来别的会话形态。
  *
  * **两个方向都在这里**：请求按 sessionId 找归属，答复按 requestId 找归属。它们是同一件

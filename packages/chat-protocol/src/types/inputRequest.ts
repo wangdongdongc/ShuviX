@@ -218,7 +218,7 @@ export interface OtherResponse extends InputResponseBase {
 
 /**
  * 取消原因:
- * - `aborted`:有人中止了会话(agent.abort),或没有前端能展示询问面板;
+ * - `aborted`:有人中止了会话(agent.abort);
  * - `closed`:会话运行时被关停(LRU 回收 / 退出 / 删除),这条询问再也不会有人应答;
  * - `superseded`:同一个 id 又发起了一次询问,先前那条作废(只有最新的一条能被应答)。
  */

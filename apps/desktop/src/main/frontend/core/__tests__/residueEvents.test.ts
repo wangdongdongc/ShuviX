@@ -1,12 +1,10 @@
 /**
  * ChatEvent 缩成余项之后的主进程一侧（P3-08-45 / -46）：
  *
- *   P3-08-46 `streaming` 能力删了：`ChatFrontendCapabilities` 只剩 userInput；Electron / Chrome 前端都是
- *            `{userInput:true}`；注册表把每一种余项发给每个存活的绑定前端（不再按能力过滤）；
- *            `hasCapability(sid, 'userInput')` 照旧
+ *   P3-08-46 注册表把每一种余项发给每个存活的绑定前端（前端不声明能力，2026-11-02 起连 userInput 也没有了）
  *   P3-08-45 静态：产品源码里没有任何一处 `type: '<已删除的事件>'` 字面量（`__tests__`、`legacy/`、e2e 除外）
  */
-import { describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,20 +15,13 @@ vi.mock('../../../logger', () => ({
 }))
 
 import { ChatFrontendRegistry } from '../ChatFrontendRegistry'
-import type { ChatFrontend, ChatFrontendCapabilities } from '../ChatFrontend'
-// eslint-disable-next-line boundaries/dependencies -- 能力删了之后两个具体前端各自的声明，与注册表放在一个用例里核对
-import { ElectronFrontend } from '../../electron/ElectronFrontend'
-// eslint-disable-next-line boundaries/dependencies -- 同上（Chrome 侧边栏的前端）
-import { ChromeFrontend } from '../../chrome/ChromeFrontend'
+import type { ChatFrontend } from '../ChatFrontend'
 
-function fake(
-  id: string,
-  capabilities: ChatFrontendCapabilities
-): ChatFrontend & {
+function fake(id: string): ChatFrontend & {
   sent: ChatEvent[]
 } {
   const sent: ChatEvent[] = []
-  return { id, capabilities, sent, sendEvent: (e) => void sent.push(e), isAlive: () => true }
+  return { id, sent, sendEvent: (e) => void sent.push(e), isAlive: () => true }
 }
 
 const RESIDUE: ChatEvent[] = [
@@ -46,31 +37,21 @@ const RESIDUE: ChatEvent[] = [
   { type: 'ask_count', sessionId: 's1', count: 1 }
 ]
 
-describe('P3-08-46 streaming 能力删了', () => {
-  it('能力只剩 userInput；Electron / Chrome 前端都是 {userInput:true}', () => {
-    expectTypeOf<keyof ChatFrontendCapabilities>().toEqualTypeOf<'userInput'>()
-    const electron = new ElectronFrontend({ isDestroyed: () => false } as never)
-    const chrome = new ChromeFrontend({ id: 'c1', ready: true, emit: () => {} } as never, 's1')
-    expect(electron.capabilities).toStrictEqual({ userInput: true })
-    expect(chrome.capabilities).toStrictEqual({ userInput: true })
-  })
-
-  it('注册表把每一种余项发给每个存活的绑定前端（没有能力的也照收）；hasCapability 照旧', () => {
+describe('P3-08-46 注册表不按能力过滤', () => {
+  it('注册表把每一种余项发给每个存活的绑定前端', () => {
     const registry = new ChatFrontendRegistry()
-    const plain = fake('plain', {})
-    const asker = fake('asker', { userInput: true })
+    const plain = fake('plain')
+    const asker = fake('asker')
     registry.registerDefault(plain)
     registry.bind('s1', asker)
     for (const event of RESIDUE) registry.broadcast(event)
     expect(plain.sent).toEqual(RESIDUE)
     expect(asker.sent).toEqual(RESIDUE)
-    expect(registry.hasCapability('s1', 'userInput')).toBe(true)
-    expect(registry.hasCapability('s2', 'userInput')).toBe(false)
   })
 
   it('P3-08-49 绑在根会话上的前端经 sub→parent 映射收到派生 agent 的那一对（end 之前）', () => {
     const registry = new ChatFrontendRegistry()
-    const chrome = fake('chrome:c1:s1', { userInput: true })
+    const chrome = fake('chrome:c1:s1')
     registry.bind('s1', chrome)
     const sequence: ChatEvent[] = [
       {

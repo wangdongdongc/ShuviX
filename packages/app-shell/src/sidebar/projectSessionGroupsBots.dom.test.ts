@@ -28,6 +28,9 @@
  *        list() 还没回来 / 一次都没成功（拒绝）→ 先按会话里的名字列出 `data-bot-group-pending` 的组（没有菜单、没有「+」、
  *        不当成找不到）；成功过之后再失败 → 留着上一次的分组
  *
+ *   SB-1 询问徽标：选择器说 `{run:2}` → 项目组里那一行与展开的 bot 组里那一行都带 `data-pending-asks="2"`；
+ *        `{}` → 没有徽标
+ *
  * 右键菜单走 ContextMenuProvider 的 `render` 注入：记录每次弹出的菜单；「用户」点哪一项从 `picks` 队列里按次序取
  * （取空 = 取消），在这一份菜单与它的子菜单里找，找不到或置灰也当取消。`@shuvix/chat-ui` 同 fork 那份测试换成替身，
  * 另给 BotAvatar。文件是 `.ts`，一律 createElement。
@@ -56,7 +59,8 @@ const store = vi.hoisted(() => ({
   activeSessionId: null as string | null,
   setActiveSessionId: (_id: string | null) => {},
   streaming: {} as Record<string, boolean>,
-  interrupted: {} as Record<string, boolean>
+  interrupted: {} as Record<string, boolean>,
+  pending: {} as Record<string, number>
 }))
 
 vi.mock('@shuvix/chat-ui', async () => {
@@ -70,7 +74,7 @@ vi.mock('@shuvix/chat-ui', async () => {
     }),
     selectStreamingSessions: (s: typeof store) => s.streaming,
     selectInterruptedSessions: (s: typeof store) => s.interrupted,
-    selectAllPendingCounts: () => ({}),
+    selectAllPendingCounts: (s: typeof store) => s.pending,
     useChatHost: () => ({ appearance: { focusMode: false } }),
     useAppEvent: () => {},
     getChatApi: () => ({ message: { list: async () => [] } })
@@ -279,6 +283,7 @@ beforeEach(() => {
   store.activeSessionId = null
   store.streaming = {}
   store.interrupted = {}
+  store.pending = {}
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -355,6 +360,35 @@ describe('PG-1 分组与次序', () => {
 })
 
 // ─── PG-2 ─────────────────────────────────────
+
+describe('SB-1 询问徽标', () => {
+  const badge = (id: string): string | null | undefined =>
+    rowEl(id).querySelector('[data-pending-asks]')?.getAttribute('data-pending-asks')
+
+  it('SB-1 选择器说 {run:2}：项目组的行与展开的 bot 组的行都带徽标；别的行没有', async () => {
+    store.sessions = [
+      row('run', { projectId: 'p1' }),
+      row('idle', { projectId: 'p1' }),
+      botRow('botrun', 'buddy')
+    ]
+    store.pending = { run: 2, botrun: 2 }
+    await mount({ adapter: makeAdapter(registryOf({ bots: [bot('buddy')] })) })
+    await click(toggleButtonOf('buddy'))
+    expect(isCollapsed(groupEl('buddy'))).toBe(false)
+    expect(badge('run')).toBe('2')
+    expect(badge('botrun')).toBe('2')
+    expect(badge('idle')).toBeUndefined()
+  })
+
+  it('SB-1 选择器说 {}：一个徽标都没有', async () => {
+    store.sessions = [row('run', { projectId: 'p1' }), botRow('botrun', 'buddy')]
+    await mount({ adapter: makeAdapter(registryOf({ bots: [bot('buddy')] })) })
+    await click(toggleButtonOf('buddy'))
+    expect(rowEl('run')).toBeTruthy()
+    expect(rowEl('botrun')).toBeTruthy()
+    expect(container.querySelector('[data-pending-asks]')).toBeNull()
+  })
+})
 
 describe('PG-2 折叠：侧栏与日历', () => {
   it('PG-2 侧栏：bot 组缺省收起，点组头展开、再点收起', async () => {

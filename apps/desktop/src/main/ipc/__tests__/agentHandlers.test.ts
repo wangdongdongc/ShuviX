@@ -22,6 +22,7 @@
  *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
  *   P3-11-07 `agent:withdrawQueued` 在 `createClientContext(ctx, sessionId)` 的上下文里把 `(sessionId, submissionId)`
  *           交给网关，回 `{ result }`；「下一轮」的通道不再注册。
+ *   PAC-2   `agent:askCounts` 把网关的那份原样交回（不包、不改）。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -35,6 +36,7 @@ const state = vi.hoisted(() => ({
   gateway: {
     setModel: vi.fn<(sessionId: string, ...rest: unknown[]) => Promise<boolean>>(),
     previewAgentChange: vi.fn<(sessionId: string, change: unknown) => Promise<unknown>>(),
+    pendingAskCounts: vi.fn<() => Record<string, number>>(),
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
     getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
@@ -174,6 +176,15 @@ describe('RD-8 agent:previewChange', () => {
     await expect(invoke('agent:previewChange', { sessionId: SID })).rejects.toThrow(
       'preview failed'
     )
+  })
+})
+
+describe('PAC-2 agent:askCounts', () => {
+  it('PAC-2 网关的那份原样交回：同一个对象，不包成 { success }，不带参数调', () => {
+    const counts = { a: 1, b: 2 }
+    state.gateway.pendingAskCounts.mockReset().mockReturnValue(counts)
+    expect(invoke('agent:askCounts')).toBe(counts)
+    expect(state.gateway.pendingAskCounts.mock.calls).toEqual([[]])
   })
 })
 

@@ -407,6 +407,8 @@ declare global {
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（只读） */
       previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
+      /** 各会话此刻挂着几条询问（只列 > 0 的；窗口重建 / 客户端重连后补侧栏徽标） */
+      askCounts: () => Promise<Record<string, number>>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */
       destroy: (sessionId: string) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>

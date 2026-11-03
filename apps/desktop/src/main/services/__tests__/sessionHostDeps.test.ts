@@ -70,7 +70,7 @@ const mocks = vi.hoisted(() => ({
   settingsGet: vi.fn<(key: string) => string | undefined>(),
   registry: { models: { tag: 'models' }, modelRefOf: () => undefined, tag: 'registry' },
   port: { tag: 'port', listProviders: () => [] },
-  sink: { tag: 'sink', broadcast: () => {}, hasUserInputCapability: () => true },
+  sink: { tag: 'sink', broadcast: () => {} },
   toolHost: {
     tag: 'toolHost',
     buildBuiltinTools: () => [],

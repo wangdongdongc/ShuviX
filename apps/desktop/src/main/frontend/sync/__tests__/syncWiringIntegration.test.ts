@@ -18,6 +18,8 @@
  *   DI-7 (P3-05-24)  清空旧格式会话 → none 视图 send:true；存储类型换成 durable-sqlite-1；不 deleteSession
  *   DI-8 (P3-10b-10) 回退 → 一次 settle 之内 view.messages = listMessages；没有 loading / unavailable，不重新 hold
  *   DI-9 (P3-08-62)  一轮工具 + 终答：store 的视图 = viewSnapshot；卡片 key 一路不变；放手之后不再钉住
+ *   LV-1             询问发起时一个前端都没有（2026-11-02：询问一直等人）：第一个连上来的窗口，第一帧视图里就有它；
+ *                    那个窗口答了（答题方记成它）→ 第二个窗口的视图里也没了，发问方拿到答复
  *
  * 夹具必须第一个 import（它登记 vi.mock）。`syncHandlers` / `syncWiring` 有模块级单例，`bootProcess()` 每次
  * `vi.resetModules()`，所以每个进程动态 import 它们（与会话宿主同一张模块图）。
@@ -39,6 +41,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { replicatedState } from '@earendil-works/chord'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import {
   answer,
@@ -712,6 +715,61 @@ describe('DI-8 回退之后视图不用重拉', () => {
 })
 
 // ─── DI-9 ─────────────────────────────────────────────
+
+describe('LV-1 前端晚于询问连上来', () => {
+  it(
+    'LV-1 第一个窗口的第一帧就有那条询问；它答了，第二个窗口里也没了，发问方拿到答复',
+    async () => {
+      await bootProcess()
+      const { p, window } = await wire()
+      insert('s1')
+      await seed(p, 's1')
+
+      // 这一刻一个窗口都没有：询问照样挂着
+      const session = p.host.get('s1')!
+      const request: InputRequest = {
+        id: 'late-ask',
+        kind: 'choice',
+        toolName: 'ask',
+        question: 'Which one?',
+        options: [
+          { label: 'A', description: 'first' },
+          { label: 'B', description: 'second' }
+        ],
+        createdAt: 1
+      }
+      let settled: InputResponse | undefined
+      void session.requestUserInput(request).then((response) => (settled = response))
+      await settle()
+      expect(session.pendingInputCount).toBe(1)
+      expect(settled).toBeUndefined()
+
+      const first = await live(window(7), S('s1'))
+      const firstValue = first.events.find((event) => event.kind === 'value')
+      expect(firstValue).toMatchObject({ kind: 'value', delivery: 'hydrate' })
+      expect(firstValue?.kind === 'value' ? firstValue.value.asks : undefined).toEqual([request])
+
+      const second = await live(window(8), S('s1'))
+      expect(second.value()?.asks).toEqual([request])
+
+      // 答题的路径（窗口 → 网关 → broker → 运行时）在 agentHandlers / sessionServiceUserInput 的用例里；这里的 broker 是
+      // 夹具的替身，所以直接交给运行时
+      const reply: InputResponse = { kind: 'choice', selections: ['A'] }
+      expect(session.respondToInput('late-ask', reply, { clientId: 'ipc:7' })).toBe(true)
+      await waitFor(
+        () => first.value()?.asks.length === 0 && second.value()?.asks.length === 0,
+        5000,
+        'the ask leaves both views'
+      )
+      expect(session.pendingInputCount).toBe(0)
+      await settle()
+      expect(settled).toEqual(reply)
+      expect(first.statuses()).not.toContain('error')
+      expect(second.statuses()).not.toContain('error')
+    },
+    T
+  )
+})
 
 describe('DI-9 IPC 端到端：chat-ui 的 store', () => {
   it(

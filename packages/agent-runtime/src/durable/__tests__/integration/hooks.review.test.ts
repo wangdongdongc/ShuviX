@@ -232,6 +232,50 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
   )
 
   it(
+    'AW-U4 the reviewer answers ask: the card carries its opinion and outlives its run; answering finishes the tool',
+    async () => {
+      const { sw, session } = await reviewWorld()
+      const { world } = sw
+      const verdict = { decision: 'ask', risk: 'medium', summary: 'REVIEW-SUMMARY', reason: 'WHY' }
+      world.chat(callTool('write', WRITE_ARGS, 'r-w'), answer('saved'))
+      world.model.chatIn('reviewer', callTool('next', verdict, 'v1'))
+      let settled = false
+      const saving = session.submitUser('save').then((result) => {
+        settled = true
+        return result
+      })
+      const card = await nextInput(world, 'r-w')
+      expect(card).toMatchObject({
+        kind: 'ask',
+        review: { risk: 'medium', summary: 'REVIEW-SUMMARY', reason: 'WHY' }
+      })
+
+      // 审查员已经收场，卡片还在等人：工具没有结果，什么也没写
+      const T_w = await toolTaskOf(session, 1, 'r-w')
+      const [R] = await ownedBy(session, T_w.id)
+      await waitFor(
+        async () => (await liveTasks(session)).every((task) => task.conversationId !== R),
+        2000,
+        'reviewer stopped'
+      )
+      expect(sw.ends('auto-review')).toEqual([expect.objectContaining({ ok: true })])
+      await sleep(150)
+      expect(session.pendingInputCount).toBe(1)
+      expect(settled).toBe(false)
+      expect(world.fs.writes).toEqual([])
+
+      allow(world, 'r-w')
+      expect(session.pendingInputCount).toBe(0)
+      expect(await withTimeout(saving, 5000, 'save')).toEqual({})
+      const result = await resultOf(session, 1, 'r-w')
+      expect(result.isError).toBe(false)
+      expect(result.text).toBe(contentText(await directWrite({ kind: 'ask', allowed: true })))
+      expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
+    },
+    TIMEOUT
+  )
+
+  it(
     "J7-05 a mixed batch cancels the reviewer's MCP call: the verdict is captured once, the reviewer is aborted, no nudge",
     async () => {
       const { sw, session } = await reviewWorld({

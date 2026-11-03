@@ -13,7 +13,9 @@
  *   - `agent.respondToInput` 只送进这条会话自己的运行时（答题方记成 `chrome:<connId>`，审计用）；没人认领
  *     什么也不发（卡片跟着视图走，P3-08）—— 别的会话的 requestId 永远送不到那条会话；
  *   - `agent.continue` / `agent.withdrawQueued`（P3-09-15）：过了归属核对才调网关，回包与 IPC 同形；
- *   - 视图同步不在这里（pi 1.2：每个侧边栏一条 chord 链路，走桥事件 `sync.link`，见 chromeLinks.ts）。
+ *   - 视图同步不在这里（pi 1.2：每个侧边栏一条 chord 链路，走桥事件 `sync.link`，见 chromeLinks.ts）；
+ *   - CHR-1 询问一直等人（2026-11-02）：侧边栏关了（SW 替它补 `bye`，链路结束）会话还在、询问还挂着；同一个浏览器
+ *     这一轮、同一个标签页再打开拿回同一条会话，经通道答复落定那条询问。
  *
  * 归属判定用真的 `../tabSessions`（规则住在那里），sessionDao 是一张 pickSettings 的内存表。
  */
@@ -54,7 +56,9 @@ const mocks = vi.hoisted(() => {
     presentations: vi.fn(),
     definitions: vi.fn(),
     grantSite: vi.fn(),
-    pickSettings: vi.fn()
+    pickSettings: vi.fn(),
+    createSession: vi.fn(),
+    deleteSession: vi.fn()
   }
 })
 
@@ -68,7 +72,12 @@ vi.mock('../../core', () => ({
   operationContext: { run: mocks.runInContext }
 }))
 vi.mock('../../../services/sessionService', () => ({
-  sessionService: { getById: mocks.getById, getAgentSession: mocks.getAgentSession }
+  sessionService: {
+    getById: mocks.getById,
+    getAgentSession: mocks.getAgentSession,
+    create: mocks.createSession,
+    delete: mocks.deleteSession
+  }
 }))
 vi.mock('../../../services/taskRegistry', () => ({ taskRegistry: { list: mocks.taskList } }))
 vi.mock('../../../services/toolRegistry', () => ({
@@ -81,7 +90,12 @@ vi.mock('../../../services/chromeBridge', () => ({
   grantSite: mocks.grantSite,
   existingChromeBrowserState: vi.fn()
 }))
-vi.mock('../../../dao/sessionDao', () => ({ sessionDao: { pickSettings: mocks.pickSettings } }))
+vi.mock('../../../dao/sessionDao', () => ({
+  sessionDao: {
+    pickSettings: mocks.pickSettings,
+    findAll: () => [...mocks.settings].map(([id, settings]) => ({ id, settings }))
+  }
+}))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -94,8 +108,11 @@ vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
   }
 })
 
-import { validateShuvixMdText } from '@shuvix/agent-runtime'
+import { PendingInputRequests, validateShuvixMdText } from '@shuvix/agent-runtime'
+import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { callPanelChannel, isPanelChannelPath, NOT_YOUR_SESSION } from '../channel'
+import { createChromeLinkHub } from '../chromeLinks'
+import { openTabSession } from '../tabSessions'
 
 const OWNED = 'tab-owned'
 const OTHER_RUN = 'tab-other-run'
@@ -207,7 +224,9 @@ beforeEach(() => {
     mocks.taskList,
     mocks.presentations,
     mocks.definitions,
-    mocks.grantSite
+    mocks.grantSite,
+    mocks.createSession,
+    mocks.deleteSession
   ]) {
     spy.mockReset()
   }
@@ -514,6 +533,62 @@ describe('CH-9 respondToInput 拿着别的会话的 requestId 也送不到那条
     expect(mocks.gateway.respondToInput).not.toHaveBeenCalled()
     // 本会话没有这个请求 → 什么都不发（P3-08：没有 input_request_resolved 了）
     expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+})
+
+describe('CHR-1 侧边栏关了，询问还在等', () => {
+  it('CHR-1 链路结束之后会话还在、询问还挂着；再打开拿回同一条会话；经通道答复落定它', async () => {
+    const inputs = new PendingInputRequests(OWNED)
+    const agent = {
+      respondToInput: vi.fn((id: string, response: InputResponse, meta: { clientId?: string }) =>
+        inputs.respond(id, response, meta)
+      )
+    }
+    mocks.getAgentSession.mockImplementation((sid: string) => (sid === OWNED ? agent : undefined))
+    let settled: InputResponse | undefined
+    void inputs
+      .request({ id: 'req-tab', kind: 'ask', toolName: 'read', command: 'read x', createdAt: 0 })
+      .then((response) => (settled = response))
+
+    // 侧边栏连上来，然后端口断开：SW 替它在用过的链路上补一帧 bye
+    expect(await openTabSession(conn as unknown as BridgeConnection, { tabId: 5 })).toBe(OWNED)
+    const accept = vi.fn()
+    const hub = createChromeLinkHub({ accept })
+    const bridge = { id: 'conn-1', ready: true, info: conn.info, emit: vi.fn() }
+    const panel = { panelId: 'panel:5', link: 'L1' }
+    hub.receive(bridge, {
+      ...panel,
+      frame: { t: 'hello', name: 'panel', kind: 'client', epoch: 1 }
+    })
+    expect(accept).toHaveBeenCalledTimes(1)
+    expect(hub.linkCount('conn-1')).toBe(1)
+    hub.receive(bridge, { ...panel, frame: { t: 'bye' } })
+    expect(hub.linkCount('conn-1')).toBe(0)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(settled).toBeUndefined()
+    expect(inputs.count).toBe(1)
+    expect(mocks.deleteSession).not.toHaveBeenCalled()
+
+    // 再打开：同一个浏览器、同一轮、同一个标签页（新的桥连接也一样）→ 同一条会话，没有新建
+    const reopened: FakeConn = { ...makeConn(), id: 'conn-2' }
+    expect(await openTabSession(reopened as unknown as BridgeConnection, { tabId: 5 })).toBe(OWNED)
+    expect(mocks.createSession).not.toHaveBeenCalled()
+
+    const reply: InputResponse = { kind: 'ask', allowed: true }
+    expect(
+      await call(
+        'agent.respondToInput',
+        [{ sessionId: OWNED, requestId: 'req-tab', response: reply }],
+        reopened
+      )
+    ).toStrictEqual({ success: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(settled).toEqual(reply)
+    expect(inputs.count).toBe(0)
+    expect(agent.respondToInput.mock.calls).toEqual([
+      ['req-tab', reply, { clientId: 'chrome:conn-2' }]
+    ])
   })
 })
 

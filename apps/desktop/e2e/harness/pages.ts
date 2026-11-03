@@ -2758,6 +2758,8 @@ export interface SidebarPane {
    * `bg-bg-hover`，不会误命中）—— 它直接映射 `activeSessionId === s.id`。
    */
   openSession(title: string): Promise<boolean>
+  /** 这一行上的询问徽标（`[data-pending-asks]`）的数；没有徽标或没有这一行 → null（行不在折起来的组里才查得到） */
+  pendingAsks(title: string): Promise<number | null>
   /**
    * 走分组头菜单的「新建对话」并等列表落定（第一个非知识库组头的 ⋮ → new-chat）。
    *
@@ -3080,6 +3082,11 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     rowIcon: (title) => main.eval<SessionRowIcon | ''>(`${ROW_ICON_OF}(${ROW(title)})`),
     interruptedOf: (title) =>
       main.eval<boolean>(`!!${ROW(title)}?.querySelector('[data-interrupted]')`),
+    pendingAsks: (title) =>
+      main.eval<number | null>(`(() => {
+        const badge = (${ROW(title)})?.querySelector('[data-pending-asks]')
+        return badge ? Number(badge.getAttribute('data-pending-asks')) : null
+      })()`),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {

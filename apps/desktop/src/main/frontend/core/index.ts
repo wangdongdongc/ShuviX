@@ -10,7 +10,7 @@ export type {
   ChatErrorEvent
 } from '@shuvix/chat-protocol/events'
 
-export type { ChatFrontend, ChatFrontendCapabilities } from './ChatFrontend'
+export type { ChatFrontend } from './ChatFrontend'
 
 export { ChatFrontendRegistry, chatFrontendRegistry } from './ChatFrontendRegistry'
 

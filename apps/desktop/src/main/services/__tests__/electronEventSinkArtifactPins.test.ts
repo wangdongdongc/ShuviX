@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../frontend/core', () => ({
-  chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
+  chatFrontendRegistry: { broadcast: mocks.frontendBroadcast }
 }))
 vi.mock('../notificationService', () => ({ notifyOnChatEvent: mocks.notify }))
 vi.mock('../chromeBridge', () => ({ observeChromeTabRun: mocks.observe }))

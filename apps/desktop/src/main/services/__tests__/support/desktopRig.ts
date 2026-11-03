@@ -162,8 +162,7 @@ vi.mock('../../models', () => ({
 // 运行时事件与前端广播都进同一张表（electronEventSink = 注册表 + 通知旁路，这里直通）
 vi.mock('../../agentRuntimeAdapters', () => ({
   electronEventSink: {
-    broadcast: (event: Record<string, unknown>) => void rig.broadcasts.push(event),
-    hasUserInputCapability: () => true
+    broadcast: (event: Record<string, unknown>) => void rig.broadcasts.push(event)
   },
   runtimeLogger: {
     info: (m: string) => void rig.logs.push({ level: 'info', scope: 'runtime', msg: m }),

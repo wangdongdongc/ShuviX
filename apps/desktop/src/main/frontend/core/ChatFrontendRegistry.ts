@@ -1,11 +1,11 @@
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import type { ChatFrontend, ChatFrontendCapabilities } from './ChatFrontend'
+import type { ChatFrontend } from './ChatFrontend'
 import { createLogger } from '../../logger'
 
 const log = createLogger('ChatFrontend')
 
 /**
- * 聊天前端注册中心 — 会话级绑定 + 能力感知广播
+ * 聊天前端注册中心 — 会话级绑定 + 广播
  *
  * 绑定模型：
  * - 默认前端（registerDefault）：自动绑定到所有会话
@@ -69,11 +69,6 @@ export class ChatFrontendRegistry {
       }
     }
     return Array.from(result.values())
-  }
-
-  /** 检查指定会话是否有支持某能力的存活前端 */
-  hasCapability(sessionId: string, cap: keyof ChatFrontendCapabilities): boolean {
-    return this.getFrontends(sessionId).some((f) => f.isAlive() && f.capabilities[cap])
   }
 
   /**

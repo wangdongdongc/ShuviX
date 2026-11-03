@@ -91,8 +91,7 @@ vi.mock('../../agents/agentHost', () => ({
 }))
 vi.mock('../agentRuntimeAdapters', () => ({
   electronEventSink: {
-    broadcast: (event: Record<string, unknown>) => mocks.broadcast(event),
-    hasUserInputCapability: () => true
+    broadcast: (event: Record<string, unknown>) => mocks.broadcast(event)
   }
 }))
 vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))

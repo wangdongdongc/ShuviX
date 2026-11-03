@@ -148,8 +148,6 @@ export interface TestHost {
   readonly broadcasts: ChatEvent[]
   /** 每条打开着的会话的询问挂起 / 落定（`subscribeInputs`，按顺序；本进程） */
   readonly asks: AskRecord[]
-  /** 有没有前端能展示询问面板 */
-  capability: boolean
   /** 下一次打开这些会话时失败 */
   readonly failNextOpen: Set<string>
   readonly memory: Map<string, MemoryStorage>
@@ -230,7 +228,6 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     pinned,
     broadcasts,
     asks,
-    capability: true,
     failNextOpen,
     memory,
     warnings,
@@ -333,8 +330,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     ...(options.maxIdleOpen === undefined ? {} : { maxIdleOpen: options.maxIdleOpen }),
     settingsOverrides: options.settingsOverrides ?? TEST_SETTINGS_OVERRIDES,
     eventSink: {
-      broadcast: (event) => broadcasts.push(event),
-      hasUserInputCapability: () => testHost.capability
+      broadcast: (event) => broadcasts.push(event)
     },
     onRunStateChange: (sessionId, state) => {
       states.push([sessionId, state])

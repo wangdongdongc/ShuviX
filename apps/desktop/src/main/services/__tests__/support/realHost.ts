@@ -72,15 +72,13 @@ export function toolsToolHost(make: (sessionId: string) => readonly ToolRegistra
 export interface RecordingSink {
   readonly events: ChatEvent[]
   broadcast(event: ChatEvent): void
-  hasUserInputCapability(): boolean
 }
 
 export function recordingSink(): RecordingSink {
   const events: ChatEvent[] = []
   return {
     events,
-    broadcast: (event) => void events.push(event),
-    hasUserInputCapability: () => true
+    broadcast: (event) => void events.push(event)
   }
 }
 
@@ -112,11 +110,16 @@ export function makeRealHost(options: {
   isEphemeral?: (sessionId: string) => boolean
   agentConfig?: () => AgentConfig
   kit?: FauxKit
+  /** 缺省 `emptyToolHost`（用例要真工具时给 `toolsToolHost(…)`） */
+  toolHost?: ToolHost
 }): { host: SessionHost; kit: FauxKit; sink: RecordingSink } {
   const kit = options.kit ?? fauxKit()
   const sink = recordingSink()
   const host = createSessionHost({
-    ...(testDepsOverrides(kit) as Pick<SessionHostDeps, 'models' | 'modelCatalog' | 'toolHost'>),
+    ...(testDepsOverrides(kit, options.toolHost ? { toolHost: options.toolHost } : {}) as Pick<
+      SessionHostDeps,
+      'models' | 'modelCatalog' | 'toolHost'
+    >),
     resolveAgentConfig: options.agentConfig ?? (() => defaultAgentConfig()),
     ...options.storage,
     ...(options.isEphemeral === undefined ? {} : { isEphemeral: options.isEphemeral }),

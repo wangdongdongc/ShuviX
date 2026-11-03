@@ -30,8 +30,6 @@ export interface RuntimeLogger {
 export interface RuntimeEventSink {
   /** 向前端广播一个 ChatEvent */
   broadcast: (event: ChatEvent) => void
-  /** 是否有任一前端声明了「能展示用户输入面板」的能力（无则 requestUserInput 立即 cancel） */
-  hasUserInputCapability: (sessionId: string) => boolean
 }
 
 // ─────────────────────────── RuntimeNetwork ───────────────────────────

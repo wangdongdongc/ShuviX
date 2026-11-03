@@ -456,6 +456,8 @@ interface ChatState {
   markSessionRunning: (sessionId: string, running: boolean) => void
   /** `ask_count` 余项：某会话挂着几条询问（PIN-01） */
   setAskCount: (sessionId: string, count: number) => void
+  /** 整份换掉询问计数（`agent.askCounts`）：新来的前端补上错过的 `ask_count`，已经落定的也随之消失 */
+  setAskCounts: (counts: Record<string, number>) => void
   /** 本地错误行（没有条目的 `error` 事件，PIN-02）：只给当前会话记，挂在此刻最后一条消息后面 */
   addLocalError: (sessionId: string, content: string) => void
   setInputText: (text: string) => void
@@ -1022,6 +1024,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const next = withKey(state.sessionAskCounts, sessionId, value)
       return next === state.sessionAskCounts ? {} : { sessionAskCounts: next }
     }),
+
+  setAskCounts: (counts) =>
+    set((state) =>
+      sameCounts(state.sessionAskCounts, counts) ? {} : { sessionAskCounts: counts }
+    ),
 
   addLocalError: (sessionId, content) =>
     set((state) => {

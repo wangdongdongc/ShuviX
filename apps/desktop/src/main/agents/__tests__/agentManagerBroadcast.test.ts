@@ -43,7 +43,7 @@ vi.mock('../../services/sessionHost', () => ({
 vi.mock('../../services/taskRegistry', () => ({ taskRegistry: { tag: 'tasks' } }))
 // electronEventSink 的两个下游出口 —— 断言就下在这里
 vi.mock('../../frontend/core', () => ({
-  chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
+  chatFrontendRegistry: { broadcast: mocks.frontendBroadcast }
 }))
 vi.mock('../../services/notificationService', () => ({ notifyOnChatEvent: mocks.notify }))
 vi.mock('../../services/chromeBridge', () => ({ observeChromeTabRun: vi.fn() }))

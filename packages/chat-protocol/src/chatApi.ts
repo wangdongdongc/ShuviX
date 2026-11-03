@@ -829,6 +829,11 @@ export interface HostApi {
      */
     previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
     /**
+     * 各会话此刻挂着几条询问（只列 > 0 的）。`ask_count` 是事件，窗口重建、客户端连上来之前发的都错过了，
+     * 新来的前端靠这份补侧栏徽标。
+     */
+    askCounts: () => Promise<Record<string, number>>
+    /**
      * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的设置重建（正在跑的 run
      * 会被中止）。换模型 / 扩展能力用不着它（那些当场重配）；它是「整个重建」的出口：档案 md 改了、MCP 工具
      * 列表变了、沙箱开关变了。等关停落定才返回，前后经 `agent_closing` 广播。没有运行时则无操作（同样回

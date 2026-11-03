@@ -42,8 +42,7 @@ function pinFinalReplyAfterRun(sessionId: string): void {
  * Chrome 标签页会话的调试租约（一轮跑完就释放 Chrome 里的调试横幅 —— 与侧边栏开没开无关），
  * 以及产物引用的版本（一轮的终答落定时钉住它引用的那些）。
  *
- * 通知**不走 ChatFrontend**：为通知造一个声明了输入能力却答不了的假前端，会让
- * `hasUserInputCapability` 在关窗后也返回 true，反过来改变询问的语义 —— 不如在这里明着分一路旁听。
+ * 通知**不走 ChatFrontend**：它不是一个显示会话内容的前端，在这里明着分一路旁听。
  * 询问本身不经这里（P3-08）：通知从会话的询问钩子拿（`services/sessionSignals`）。
  */
 export const electronEventSink: RuntimeEventSink = {
@@ -54,6 +53,5 @@ export const electronEventSink: RuntimeEventSink = {
     tap('chrome-lease', () => observeChromeTabRun(event))
     if (event.type === 'agent_end')
       tap('artifact-pins', () => pinFinalReplyAfterRun(event.sessionId))
-  },
-  hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
+  }
 }

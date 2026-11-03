@@ -16,6 +16,11 @@
  *   P3-14 订阅着视图时 agent_start 照样拨回 running（PIN-14）；detachAgentView；deriveAgentViewFields 的共享
  *   25 legacy 视图：消息照显，能力 send:false，没有流式态
  *
+ * 询问计数的种子（`setAskCounts`，`agent.askCounts`，2026-11-02）：
+ *   STR-1 整份替换：不在新表里的键从 selectAllPendingCounts 消失，selectSessionAskCount → 0
+ *   STR-2 等值的表：sessionAskCounts 与选择器的输出都保持引用（空表也一样）
+ *   STR-3 订阅着视图的会话看视图，种子不算；视图没了种子生效；之后的 ask_count 盖过种子
+ *
  * 不起 jsdom：纯 store 读写。
  */
 import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest'
@@ -25,6 +30,7 @@ import { buildVisibleItems } from '../../components/chat/conversationItems'
 import {
   EMPTY_TOOLS,
   applySessionView,
+  releaseSessionView,
   selectAllPendingCounts,
   selectActivePendingInput,
   selectCompletedStreamingToolCalls,
@@ -32,6 +38,7 @@ import {
   selectIsStreaming,
   selectPendingInputs,
   selectPendingPrompt,
+  selectSessionAskCount,
   selectSessionCapabilities,
   selectSessionQueueItems,
   selectSessionRun,
@@ -254,6 +261,66 @@ describe('P3-08-18…20 询问、上下文、运行状态', () => {
     expect(selectIsStreaming(store())).toBe(false)
     applySessionView('s1', V('s1', { messages: [user('1', 'hi')], run: { state: 'interrupted' } }))
     expect(selectIsStreaming(store())).toBe(false)
+  })
+})
+
+describe('STR 询问计数的种子', () => {
+  it('STR-1 setAskCounts 整份替换：不在新表里的键消失，selectSessionAskCount 回 0', () => {
+    store().setAskCounts({ gone: 2, stays: 1 })
+    expect(selectAllPendingCounts(store())).toEqual({ gone: 2, stays: 1 })
+    expect(selectSessionAskCount('gone')(store())).toBe(2)
+
+    store().setAskCounts({ stays: 3 })
+    expect(store().sessionAskCounts).toEqual({ stays: 3 })
+    expect(selectAllPendingCounts(store())).toEqual({ stays: 3 })
+    expect(selectSessionAskCount('gone')(store())).toBe(0)
+    expect(selectSessionAskCount('stays')(store())).toBe(3)
+
+    store().setAskCounts({})
+    expect(selectAllPendingCounts(store())).toEqual({})
+    expect(selectSessionAskCount('stays')(store())).toBe(0)
+  })
+
+  it('STR-2 等值的表不换引用：sessionAskCounts 与选择器的输出都还是原来那个（空表也一样）', () => {
+    store().setAskCounts({ a: 1, b: 2 })
+    const map = store().sessionAskCounts
+    const output = selectAllPendingCounts(store())
+    store().setAskCounts({ b: 2, a: 1 })
+    expect(store().sessionAskCounts).toBe(map)
+    expect(selectAllPendingCounts(store())).toBe(output)
+
+    store().setAskCounts({})
+    const emptyMap = store().sessionAskCounts
+    const emptyOutput = selectAllPendingCounts(store())
+    expect(emptyOutput).toEqual({})
+    store().setAskCounts({})
+    expect(store().sessionAskCounts).toBe(emptyMap)
+    expect(selectAllPendingCounts(store())).toBe(emptyOutput)
+  })
+
+  it('STR-3 视图优先于种子；视图没了种子生效；之后的 ask_count 盖过种子', () => {
+    store().setAskCounts({ s1: 5 })
+    expect(selectAllPendingCounts(store())).toEqual({ s1: 5 })
+
+    // 订阅着视图：看视图的，种子不算
+    applySessionView('s1', V('s1', { asks: [ask('r1')] }))
+    expect(selectAllPendingCounts(store())).toEqual({ s1: 1 })
+    expect(selectSessionAskCount('s1')(store())).toBe(1)
+    applySessionView('s1', V('s1', { asks: [] }))
+    expect(selectAllPendingCounts(store())).toEqual({})
+    expect(selectSessionAskCount('s1')(store())).toBe(0)
+
+    // 视图没了：种子生效
+    releaseSessionView('s1')
+    expect(selectAllPendingCounts(store())).toEqual({ s1: 5 })
+    expect(selectSessionAskCount('s1')(store())).toBe(5)
+
+    // ask_count 事件（setAskCount）盖过种子
+    store().setAskCount('s1', 2)
+    expect(selectAllPendingCounts(store())).toEqual({ s1: 2 })
+    store().setAskCount('s1', 0)
+    expect(selectAllPendingCounts(store())).toEqual({})
+    expect(selectSessionAskCount('s1')(store())).toBe(0)
   })
 })
 

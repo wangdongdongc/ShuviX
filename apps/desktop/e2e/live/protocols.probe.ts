@@ -716,7 +716,7 @@ async function buildRig(
       storages.delete(sessionId)
     },
     isEphemeral: () => true,
-    eventSink: { broadcast: () => {}, hasUserInputCapability: () => false },
+    eventSink: { broadcast: () => {} },
     logger: probeLogger
   })
   return { registry, models, model, selection, thinkingLevel, host, tap, nonce }

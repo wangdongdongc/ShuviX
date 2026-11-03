@@ -15,10 +15,16 @@
  * 要让 sessionService 模块加载时的注册真的落进注册表，否则测的只是一个空壳。
  * 今天注册表里本来就只有 session 这一个参与方。
  * 也**不调** `resetUserInputParticipantsForTests()`：那会把被测对象自己摘掉。
+ *
+ * 询问不看有没有前端（2026-11-02，根 CLAUDE.md「Tool execution flow」）—— 前端注册表用真的：
+ *   AW-U5 注册表是空的、或只有一个 `isAlive()` 为 false 的前端：请求照样挂着，只有应答能落定它
+ *   PAC-1 `pendingAskCounts`：只列 > 0 的打开着的会话；关了的不在；宿主没建 = `{}` 且不建；派生 agent 的询问记在根上
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { PendingInputRequests } from '@shuvix/agent-runtime'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentSession } from '../agentSession'
+import { fakeHost, resetFakeHost } from './support/fakeSessionHost'
 
 const mocks = vi.hoisted(() => ({
   daoPick: vi.fn(),
@@ -69,10 +75,19 @@ vi.mock('../toolAggregator', () => ({
 // 会话权限表（services/acl）不在这组用例里：建会话时的生成、删会话时的清理换成空操作
 vi.mock('../acl', () => ({ sessionAcl: { initialize: vi.fn(), deleteSession: vi.fn() } }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
-// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
-vi.mock('../sessionHost', async () =>
-  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
-)
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）。两个取宿主的入口是 spy：
+// PAC-1 要看得见「宿主没建时不去建」
+const hostSpies = vi.hoisted(() => ({ get: vi.fn(), peek: vi.fn() }))
+vi.mock('../sessionHost', async () => {
+  const fake = await import('./support/fakeSessionHost')
+  hostSpies.get.mockImplementation(() => fake.fakeHost)
+  hostSpies.peek.mockImplementation(() => fake.fakeHost)
+  return {
+    ...fake.sessionHostModuleMock(),
+    getSessionHost: hostSpies.get,
+    peekSessionHost: hostSpies.peek
+  }
+})
 vi.mock('../agentSession', async () =>
   (await import('./support/fakeSessionHost')).agentSessionModuleMock()
 )
@@ -83,13 +98,11 @@ vi.mock('../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionListChanged: vi.fn(),
   broadcastSessionTitleChanged: vi.fn()
 }))
-vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
-  chatFrontendRegistry: { broadcast: vi.fn() }
-}))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: mocks.info, warn: mocks.warn, error: () => {} })
 }))
 
+import { chatFrontendRegistry } from '../../frontend/core/ChatFrontendRegistry'
 import { requestUserInputFor, respondToUserInput } from '../userInputBroker'
 
 let sessionService: (typeof import('../sessionService'))['sessionService']
@@ -135,8 +148,13 @@ function bound(agent: Fake | undefined): void {
   getAgentSpy.mockReturnValue(agent as unknown as AgentSession | undefined)
 }
 
+let realGetAgentSession: (sessionId: string) => AgentSession | undefined
+let realLiveAgentSessions: () => AgentSession[]
+
 beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
+  realGetAgentSession = sessionService.getAgentSession.bind(sessionService)
+  realLiveAgentSessions = sessionService.liveAgentSessions.bind(sessionService)
   getAgentSpy = vi.spyOn(sessionService, 'getAgentSession')
   liveSpy = vi.spyOn(sessionService, 'liveAgentSessions')
 })
@@ -272,5 +290,102 @@ describe('P3-08-60 / 61 应答的审计（PIN-20）', () => {
     const warns = mocks.warn.mock.calls.map((c) => String(c[0]))
     expect(warns).toHaveLength(1)
     expect(warns[0]).toContain('ask not claimed requestId=r by=chrome:c1 kind=ask')
+  })
+})
+
+const macrotask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+describe('AW-U5 询问不看有没有前端', () => {
+  /** 活着的运行时，询问落进真的挂起询问表（门面的两个方法与真 AgentSession 同一形状） */
+  function agentWithRealInputs(): { agent: Fake; inputs: PendingInputRequests } {
+    const inputs = new PendingInputRequests(SID)
+    const agent = fakeAgent('a')
+    agent.requestUserInput.mockImplementation((request: InputRequest) => inputs.request(request))
+    agent.respondToInput.mockImplementation((id: string, response: InputResponse) =>
+      inputs.respond(id, response)
+    )
+    return { agent, inputs }
+  }
+
+  async function expectWaitsUntilAnswered(): Promise<void> {
+    expect(chatFrontendRegistry.getFrontends(SID).filter((f) => f.isAlive())).toEqual([])
+    const { agent, inputs } = agentWithRealInputs()
+    bound(agent)
+    live(agent)
+    let settled: InputResponse | undefined
+    void requestUserInputFor(SID, REQ).then((response) => (settled = response))
+    await macrotask()
+    expect(settled).toBeUndefined()
+    expect(inputs.count).toBe(1)
+    expect(respondToUserInput(REQ.id, ANSWER)).toBe(true)
+    await macrotask()
+    expect(settled).toEqual(ANSWER)
+    expect(inputs.count).toBe(0)
+  }
+
+  it('AW-U5 真的注册表、一个前端都没有：请求挂着，应答送到', async () => {
+    expect(chatFrontendRegistry.getFrontends(SID)).toEqual([])
+    await expectWaitsUntilAnswered()
+  })
+
+  it('AW-U5 注册表里只有一个死了的前端：请求挂着，应答送到', async () => {
+    const dead = { id: 'dead-frontend', sendEvent: vi.fn(), isAlive: () => false }
+    chatFrontendRegistry.registerDefault(dead)
+    try {
+      expect(chatFrontendRegistry.getFrontends(SID)).toEqual([dead])
+      await expectWaitsUntilAnswered()
+    } finally {
+      chatFrontendRegistry.unregister(dead.id)
+    }
+  })
+})
+
+describe('PAC-1 pendingAskCounts', () => {
+  beforeEach(() => {
+    resetFakeHost()
+    hostSpies.get.mockClear()
+    hostSpies.peek.mockClear()
+    hostSpies.peek.mockImplementation(() => fakeHost)
+    getAgentSpy.mockImplementation(realGetAgentSession)
+    liveSpy.mockImplementation(realLiveAgentSessions)
+  })
+
+  it('PAC-1 三条打开着的会话，挂着 1 / 2 / 0 条：只列 > 0 的', () => {
+    fakeHost.put('one', { pendingInputCount: 1 })
+    fakeHost.put('two', { pendingInputCount: 2 })
+    fakeHost.put('none', { pendingInputCount: 0 })
+    expect(sessionService.pendingAskCounts()).toEqual({ one: 1, two: 2 })
+  })
+
+  it('PAC-1 一条询问都没有 → {}', () => {
+    fakeHost.put('none')
+    expect(sessionService.pendingAskCounts()).toEqual({})
+  })
+
+  it('PAC-1 关了的会话不在里面（询问随关停落定，表里也不留）', async () => {
+    fakeHost.put('open', { pendingInputCount: 1 })
+    fakeHost.put('closing', { pendingInputCount: 3 })
+    await fakeHost.close('closing')
+    expect(sessionService.pendingAskCounts()).toEqual({ open: 1 })
+  })
+
+  it('PAC-1 宿主还没建：{}，且不会为了问这一句去建它', () => {
+    hostSpies.peek.mockImplementation(() => undefined)
+    expect(sessionService.pendingAskCounts()).toEqual({})
+    expect(hostSpies.peek).toHaveBeenCalled()
+    expect(hostSpies.get).not.toHaveBeenCalled()
+  })
+
+  it('PAC-1 派生 agent 的询问带根会话 id 进来，记在根上；答完就没了', async () => {
+    const root = fakeHost.put('root', { respondResult: true })
+    root.requestUserInput = (request: InputRequest) => {
+      root.pendingRequests.push(request)
+      return new Promise<InputResponse>(() => {})
+    }
+    fakeHost.put('other')
+    void requestUserInputFor('root', { ...REQ, id: 'child-call' })
+    expect(sessionService.pendingAskCounts()).toEqual({ root: 1 })
+    expect(respondToUserInput('child-call', ANSWER)).toBe(true)
+    expect(sessionService.pendingAskCounts()).toEqual({})
   })
 })
