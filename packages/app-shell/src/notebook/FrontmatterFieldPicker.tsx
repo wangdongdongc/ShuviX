@@ -76,6 +76,9 @@ const FLAT_CONTROL =
  * 弹层经 portal 渲染到 body（fixed 定位 + 空间不足时上翻）—— 属性卡的圆角盒子带
  * `overflow-hidden`（分隔线与圆角要它），absolute 定位的弹层会被裁掉；ModelSelect
  * 早就是这么逃逸的，这里同策。
+ *
+ * 触发器上的清单**折行、不截断**：内置档案只读，触发器禁用、弹层打不开，这一行就是看见清单的
+ * 唯一地方。箭头留在首行（mt-1 = (20px 行高 - 12px 图标) / 2），只有一行时高度不变。
  */
 function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -187,12 +190,12 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
           e.stopPropagation()
           if (!readOnly) toggleOpen()
         }}
-        className={`${FLAT_CONTROL} border-transparent flex items-center gap-1.5 max-w-full px-2 py-px text-[12px] leading-5 text-text-primary disabled:cursor-default disabled:text-text-secondary`}
+        className={`${FLAT_CONTROL} border-transparent flex items-start gap-1.5 max-w-full px-2 py-px text-left text-[12px] leading-5 text-text-primary disabled:cursor-default disabled:text-text-secondary`}
       >
-        <span className="truncate font-mono">
+        <span className="min-w-0 whitespace-normal break-words font-mono">
           {enabled.length > 0 ? enabled.join(', ') : t('notebook.frontmatter.unset')}
         </span>
-        <ChevronDown size={12} className="shrink-0 text-text-tertiary" />
+        <ChevronDown size={12} className="mt-1 shrink-0 text-text-tertiary" />
       </button>
       {open &&
         panelStyle &&

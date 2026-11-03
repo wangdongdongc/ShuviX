@@ -10,7 +10,8 @@
  *   - 工具字段（B 组）：弹层 portal 到 body（卡片盒子 overflow-hidden，absolute 会被裁）、
  *     候选项 = tools.list() ∪ 合成的 agent、**关闭时一次性写回**（开合期间只改草稿，
  *     故连勾多项弹层不会消失），写回走行级 scoped edit —— 注释/未知键/键序/正文/末尾换行
- *     全部逐字节保真，弹层里没有的条目（离线 mcp:）不被吞掉。
+ *     全部逐字节保真，弹层里没有的条目（离线 mcp:）不被吞掉。触发器上的清单折行不截断
+ *     （内置档案打不开弹层，这一行是看见清单的唯一地方，AC-28 / AC-29）。
  *   - 模型字段（C 组）：面板只列**已启用**提供商；写出恒带 providerId 前缀；含 `: ` 的
  *     模型 id 必须加引号写出且能读回；解析不出的 ref 保留原文当占位（不静默改档案）。
  *   - 关闭语义与生命周期（D 组）、宿主差异（E 组）、零副作用（F 组）。
@@ -890,6 +891,79 @@ describe('E 组 · 宿主差异', () => {
     ).toBe(true)
   })
 
+  it('AC-28 内置档案的长工具清单：折行显示全部条目、一个字都不裁，卡片把正文往下推', async () => {
+    const pane = agentsSidebarPane(app.main)
+    await pane.expand()
+    await pane.openBuiltin('work')
+    await card.waitReady()
+
+    const source = await app.main.eval<{ text: string }>(
+      `window.api.subAgent.getSource({ name: 'work', source: 'builtin' })`
+    )
+    const declared = /^shuvix-tools: (.+)$/m.exec(source.text)?.[1]
+    expect(declared).toBeTruthy()
+
+    const shot = await toolsTriggerGeometry()
+    expect(shot.disabled).toBe(true)
+    expect(shot.text).toBe(declared)
+    // 旧版本是单行 + 省略号：scrollWidth 932 / clientWidth 456，这三条同时红
+    expect(shot.lines).toBeGreaterThan(1)
+    expect(shot.clipped).toBe(false)
+    expect(shot.textRight).toBeLessThanOrEqual(shot.slotRight)
+    // 箭头与标签都留在首行，不随折行跑到中间
+    expect(Math.abs(shot.chevronCenter - shot.firstLineCenter)).toBeLessThanOrEqual(1)
+    expect(shot.labelTop).toBeLessThanOrEqual(shot.rowTop + 1)
+    // 块级 widget 长高后，CM6 的高度表要跟上：正文不能被卡片盖住
+    expect(shot.cardBottom).toBeLessThanOrEqual(shot.bodyTop)
+  })
+
+  it('AC-28b 只有一行的工具清单：行高仍是 26px（折行不改变短清单的长相）', async () => {
+    const pane = agentsSidebarPane(app.main)
+    await pane.openBuiltin('titler')
+    await card.waitReady()
+
+    const shot = await toolsTriggerGeometry()
+    expect(shot.lines).toBe(1)
+    expect(shot.rowHeight).toBe(26)
+    expect(Math.abs(shot.chevronCenter - shot.firstLineCenter)).toBeLessThanOrEqual(1)
+  })
+
+  it('AC-29 可编辑档案的长工具清单同样折行，弹层照常打开、在视口内，开合不写盘', async () => {
+    const tools = Array.from({ length: 30 }, (_, i) => `mcp:e2e-long-server-name-${i}`).join(', ')
+    const content = md(
+      '---',
+      'shuvix: agent v1',
+      'name: ac29-long-tools',
+      `shuvix-tools: ${tools}`,
+      'description: AC-29 long tools list',
+      '---',
+      '',
+      'AC-29 BODY MARKER.'
+    )
+    mkdirSync(app.agentsDir, { recursive: true })
+    const path = join(app.agentsDir, 'ac29-long-tools.md')
+    writeFileSync(path, content)
+    const pane = agentsSidebarPane(app.main)
+    await pane.expand()
+    await pane.refresh()
+    await pane.selectUserRow('ac29-long-tools.md')
+    await card.waitReady()
+    await until(() => toolsTriggerGeometry().then((g) => g.text === tools), 'long tools on card')
+
+    const shot = await toolsTriggerGeometry()
+    expect(shot.disabled).toBe(false)
+    expect(shot.lines).toBeGreaterThan(1)
+    expect(shot.clipped).toBe(false)
+
+    await card.openTools()
+    const geo = await card.toolsGeometry()
+    expect(geo?.withinViewport).toBe(true)
+    expect(geo?.centerHitsPanel).toBe(true)
+    await card.pressEscape()
+    expect(await card.toolsOpen()).toBe(false)
+    await expectFileUnchanged(path, content)
+  })
+
   it('AC-22 只读宿主（文件预览窗口）：控件形态与可编辑态一致，全部禁用；无跳源码按钮', async () => {
     await openNotebook(byFile('e-host.md'))
     const LINK = `document.querySelector('.cm-atomic-wiki-link-resolved[data-wiki-link-target="readonly-card.mdx"]')`
@@ -970,6 +1044,52 @@ function rowExists(key: string): string {
 }
 function rowHasSlot(key: string): string {
   return `${rowSelector(key)}?.querySelector('.cm-shuvix-fmcard-slot') != null`
+}
+/** 工具触发器的实际排版：文字占几行、有没有被裁、箭头与标签落在哪、卡片和正文的上下关系 */
+function toolsTriggerGeometry(): Promise<{
+  text: string
+  disabled: boolean
+  lines: number
+  clipped: boolean
+  textRight: number
+  slotRight: number
+  firstLineCenter: number
+  chevronCenter: number
+  labelTop: number
+  rowTop: number
+  rowHeight: number
+  cardBottom: number
+  bodyTop: number
+}> {
+  return app.main.eval(`(() => {
+    const row = ${rowSelector('shuvix-tools')}
+    const slot = row.querySelector('.cm-shuvix-fmcard-slot')
+    const button = slot.querySelector('button')
+    const span = button.querySelector('span')
+    const range = document.createRange()
+    range.selectNodeContents(span)
+    const rects = [...range.getClientRects()]
+    const first = rects[0]
+    const chevron = button.querySelector('svg').getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    const card = row.closest('.cm-shuvix-fmcard')
+    const body = card.closest('.cm-content').querySelector('.cm-line')
+    return {
+      text: span.textContent,
+      disabled: button.disabled,
+      lines: new Set(rects.map((r) => Math.round(r.top))).size,
+      clipped: span.scrollWidth > span.clientWidth || span.scrollHeight > span.clientHeight,
+      textRight: range.getBoundingClientRect().right,
+      slotRight: slot.getBoundingClientRect().right,
+      firstLineCenter: first.top + first.height / 2,
+      chevronCenter: chevron.top + chevron.height / 2,
+      labelTop: row.querySelector('.cm-shuvix-fmcard-label').getBoundingClientRect().top,
+      rowTop: rowRect.top,
+      rowHeight: rowRect.height,
+      cardBottom: card.getBoundingClientRect().bottom,
+      bodyTop: body.getBoundingClientRect().top
+    }
+  })()`)
 }
 function rowValueText(key: string): Promise<string> {
   return app.main.eval<string>(
