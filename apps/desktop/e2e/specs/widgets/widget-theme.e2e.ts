@@ -26,7 +26,7 @@ import { rightPanelPane, widgetPanelPane } from '../../harness/pages'
 const WIDGET = 'theme-probe'
 const THEME_KEYS = ['general.theme', 'general.darkTheme', 'general.lightTheme'] as const
 const DEFAULTS: Record<(typeof THEME_KEYS)[number], string> = {
-  'general.theme': 'dark',
+  'general.theme': 'system',
   'general.darkTheme': 'github-dark',
   'general.lightTheme': 'github-light'
 }

@@ -473,7 +473,7 @@ describe('W-6 SSE 的 data 事件', () => {
       await tick()
       // 连上时先来一条 theme（此刻的主题选择；单测没注入设置读取 = 默认那一对）
       const theme =
-        'event: theme\ndata: {"mode":"dark","light":"github-light","dark":"github-dark"}\n\n'
+        'event: theme\ndata: {"mode":"system","light":"github-light","dark":"github-dark"}\n\n'
       expect(a1.text()).toBe(':\n\n' + theme + expected)
       expect(b.text()).toBe(':\n\n' + theme)
     } finally {

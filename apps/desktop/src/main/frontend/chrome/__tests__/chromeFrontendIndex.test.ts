@@ -12,7 +12,7 @@
  *     与会话层无关；
  *   - 应用事件只转侧边栏该看的：设置变化发给每条就绪连接；本连接标签页会话的标题 / 配置变化只发给
  *     拥有它的连接；项目、会话列表、知识库、bot 之类一概不出桌面进程；
- *   - 外观：与桌面渲染层同一套取值与缺省（dark / github-dark / github-light / 14 / 专注开 /
+ *   - 外观：与桌面渲染层同一套取值与缺省（system / github-dark / github-light / 14 / 专注开 /
  *     存的语言 → i18next 当前语言 → en）；
  *   - 视图同步（pi 1.2）：装好之后登记了 `chrome` 主体的核对（只能看本浏览器这一轮的标签页会话）；装它不建
  *     视图服务端（第一条链路的第一帧才建，P3-05 PIN-12）；
@@ -344,7 +344,7 @@ describe('PA-1 / PA-2 panelAppearance', () => {
   it('PA-1 什么都没存 → 桌面的缺省，语言取 i18next 当前语言', () => {
     i18next.language = 'ja'
     expect(panelAppearance()).toStrictEqual({
-      theme: 'dark',
+      theme: 'system',
       darkTheme: 'github-dark',
       lightTheme: 'github-light',
       fontSize: 14,
@@ -365,7 +365,7 @@ describe('PA-1 / PA-2 panelAppearance', () => {
     ['system', 'system'],
     ['dark', 'dark'],
     ['weird', 'dark'],
-    ['', 'dark']
+    ['', 'system']
   ])('PA-2 general.theme = %s → %s', (stored, expected) => {
     mocks.settings.set('general.theme', stored)
     expect(panelAppearance().theme).toBe(expected)

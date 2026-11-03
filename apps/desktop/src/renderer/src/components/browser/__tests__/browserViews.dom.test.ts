@@ -119,6 +119,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   api = installFakeApi()
+  // jsdom 没有 matchMedia；外壳按缺省的「跟随系统」要读它
+  window.matchMedia = vi.fn((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn()
+  })) as unknown as typeof window.matchMedia
   installRaf()
   ro = installResizeObserver()
   pop = installPopoverWindow()

@@ -21,7 +21,7 @@
       // 在 CSS 加载前同步设置主题，避免闪烁。样式要等入口脚本跑起来才动态加载，那之前是浏览器的缺省底色（亮色就是白）
       // —— 先垫上明暗与上次记下的这个主题的底色，样式到了再撤掉（src/web/firstPaintBackground.ts）
       ;(function () {
-        var mode = localStorage.getItem('theme') || 'dark'
+        var mode = localStorage.getItem('theme') || 'system'
         if (mode === 'system') {
           mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         }

@@ -146,6 +146,7 @@ export function GeneralSettings(): React.JSX.Element {
         }}
         onLanguageChange={(lng) => {
           i18nInstance.changeLanguage(lng)
+          localStorage.setItem('language', lng)
           window.api.settings.set({ key: 'general.language', value: lng })
         }}
       />

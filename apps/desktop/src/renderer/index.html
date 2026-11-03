@@ -10,7 +10,7 @@
     <script>
       // 在 CSS 加载前同步设置主题，避免闪烁
       ;(function () {
-        var mode = localStorage.getItem('theme') || 'dark'
+        var mode = localStorage.getItem('theme') || 'system'
         if (mode === 'system') {
           mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         }

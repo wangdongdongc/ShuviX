@@ -4,7 +4,7 @@
  * 都由它生成。纯函数，读仓库里的真文件对照（AppearanceTab.tsx 的名单、themes.css、Tailwind 自己的 theme.css）。
  *
  *   TH-1  widgetThemeSchemes()：正好 11 套（7 深 4 浅），与 AppearanceTab.tsx 文本里 DARK_THEMES / LIGHT_THEMES 的 id 一致
- *   TH-2  widgetThemeStateOf 表：缺省 = 深色 + GitHub 那一对；三种模式保留，别的（auto、空串、Dark）→ dark；放对一侧的 id
+ *   TH-2  widgetThemeStateOf 表：缺省 = 跟随系统 + GitHub 那一对（没存、空串 → system）；三种模式保留，别的（auto、Dark）→ dark；放对一侧的 id
  *         保留；旧值 light / dark、放错一侧的、认不得的（nord-light、NORD、空串）、深色那格写 light → GitHub 那一对
  *   TH-3  currentWidgetTheme()：没注入 = 缺省；读取函数每次调用都现读；setWidgetThemeReader(null) 回到缺省
  *   TH-4  parseWidgetScheme：只认 light / dark；null、undefined、空串、Dark、system、' dark' → null
@@ -134,8 +134,8 @@ describe('TH 主题名单与设置', () => {
     expect(lightHere.sort()).toEqual([...light].sort())
   })
 
-  it('TH-2 缺省 = 深色 + GitHub 那一对', () => {
-    expect(widgetThemeStateOf({})).toEqual({ mode: 'dark', ...GITHUB })
+  it('TH-2 缺省 = 跟随系统 + GitHub 那一对', () => {
+    expect(widgetThemeStateOf({})).toEqual({ mode: 'system', ...GITHUB })
   })
 
   it.each<[string | undefined, WidgetThemeState['mode']]>([
@@ -143,9 +143,9 @@ describe('TH 主题名单与设置', () => {
     ['system', 'system'],
     ['dark', 'dark'],
     ['auto', 'dark'],
-    ['', 'dark'],
+    ['', 'system'],
     ['Dark', 'dark'],
-    [undefined, 'dark']
+    [undefined, 'system']
   ])('TH-2 模式 %j → %s', (mode, expected) => {
     expect(widgetThemeStateOf({ mode }).mode).toBe(expected)
   })
@@ -176,7 +176,7 @@ describe('TH 主题名单与设置', () => {
   })
 
   it('TH-3 currentWidgetTheme：没注入 = 缺省；每次现读；注入 null 回到缺省', () => {
-    expect(currentWidgetTheme()).toEqual({ mode: 'dark', ...GITHUB })
+    expect(currentWidgetTheme()).toEqual({ mode: 'system', ...GITHUB })
 
     let value: { mode?: string; light?: string; dark?: string } = {
       mode: 'system',
@@ -195,7 +195,7 @@ describe('TH 主题名单与设置', () => {
     expect(reader).toHaveBeenCalledTimes(2)
 
     setWidgetThemeReader(null)
-    expect(currentWidgetTheme()).toEqual({ mode: 'dark', ...GITHUB })
+    expect(currentWidgetTheme()).toEqual({ mode: 'system', ...GITHUB })
     expect(reader).toHaveBeenCalledTimes(2)
   })
 

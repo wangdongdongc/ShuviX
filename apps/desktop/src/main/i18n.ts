@@ -5,7 +5,6 @@
  */
 
 import i18next from 'i18next'
-import { app } from 'electron'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
@@ -14,18 +13,9 @@ import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 export const SUPPORTED_LANGUAGES = ['zh', 'en', 'ja'] as const
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number]
 
-/** 将系统 locale 映射到支持的语言（如 zh-CN → zh、en-US → en） */
-function resolveLocale(locale: string): SupportedLanguage {
-  const lang = locale.split('-')[0].toLowerCase()
-  if (SUPPORTED_LANGUAGES.includes(lang as SupportedLanguage)) {
-    return lang as SupportedLanguage
-  }
-  return 'en'
-}
-
 /** 初始化 i18next（在 app ready 后调用） */
 export function initI18n(savedLanguage?: string): void {
-  const lng = savedLanguage || resolveLocale(app.getLocale())
+  const lng = savedLanguage || 'en'
 
   i18next.init({
     lng,

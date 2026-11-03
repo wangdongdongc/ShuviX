@@ -43,7 +43,7 @@ export function useAppInit(): void {
         .getState()
         .seedDefaultThinkingLevel(useSettingsStore.getState().defaultThinkingLevel)
 
-      // 同步前端 i18n 语言（优先用户设置，否则保持检测值）
+      // 同步前端 i18n 语言（优先用户设置，否则保持初始值）
       const savedLang = settings['general.language']
       if (savedLang && savedLang !== i18next.language) {
         i18next.changeLanguage(savedLang)

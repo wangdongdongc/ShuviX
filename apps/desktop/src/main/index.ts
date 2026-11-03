@@ -263,7 +263,7 @@ const THEME_BG_COLORS: Record<string, string> = {
 /** 根据用户主题设置返回窗口背景色 */
 function getThemeBgColor(): string {
   try {
-    const mode = settingsDao.findByKey('general.theme') || 'dark'
+    const mode = settingsDao.findByKey('general.theme') || 'system'
     let themeId: string
     if (mode === 'system') {
       const dark = step('nativeTheme.shouldUseDarkColors', () => nativeTheme.shouldUseDarkColors)
@@ -1013,7 +1013,7 @@ app.whenReady().then(async () => {
     }
   })
 
-  // 初始化 i18n（从 DB 读取用户语言偏好，无则跟随系统）
+  // 初始化 i18n（从 DB 读取用户语言偏好，无则英文）
   measure('initI18n', () => {
     const savedLang = settingsDao.findByKey('general.language')
     initI18n(savedLang || undefined)

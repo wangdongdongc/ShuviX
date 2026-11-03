@@ -109,15 +109,33 @@ interface SettingsState {
   ) => void
 }
 
+/**
+ * 设置读回来之前的主题：上次记下的那份（loadSettings 写、HTML 内联脚本读的同一组 localStorage 键，
+ * 取值规则也与内联脚本一致）。各窗口的外壳一挂载就按 store 写 data-theme，而 md、文件预览、widget、
+ * 悬浮窗都在首帧（ready-to-show）就显示 —— 这里要是写死缺省，窗口就先闪一下 github-dark，
+ * 等设置读回来才变回用户的主题。
+ */
+function lastKnownTheme(): Pick<SettingsState, 'theme' | 'darkTheme' | 'lightTheme'> {
+  try {
+    const mode = localStorage.getItem('theme') || 'system'
+    return {
+      theme: mode === 'light' || mode === 'system' ? mode : 'dark',
+      darkTheme: (localStorage.getItem('darkTheme') as DarkThemeId | null) || 'github-dark',
+      lightTheme: (localStorage.getItem('lightTheme') as LightThemeId | null) || 'github-light'
+    }
+  } catch {
+    // 拿不到 localStorage（站点数据被禁用、非浏览器环境）：内联脚本同样什么也没设，等设置读回来
+    return { theme: 'system', darkTheme: 'github-dark', lightTheme: 'github-light' }
+  }
+}
+
 export const useSettingsStore = create<SettingsState>((set) => ({
   providers: [],
   availableModels: [],
   activeProvider: '',
   activeModel: '',
   defaultThinkingLevel: defaultThinkingLevelOf(undefined),
-  theme: 'dark',
-  darkTheme: 'github-dark',
-  lightTheme: 'github-light',
+  ...lastKnownTheme(),
   notebookTheme: 'default',
   fontSize: 14,
   uiZoom: 100,
@@ -161,7 +179,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     const rawLight = settings['general.lightTheme'] || 'github-light'
     const lightTheme = (rawLight === 'light' ? 'github-light' : rawLight) as LightThemeId
     set({
-      theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
+      theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'system',
       darkTheme,
       lightTheme,
       notebookTheme: (settings['appearance.notebookTheme'] as NotebookThemeId) || 'default',
@@ -180,9 +198,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       autoCheckUpdate: settings['updates.autoCheck'] !== 'false',
       loaded: true
     })
-    // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁
-    localStorage.setItem('theme', settings['general.theme'] || 'dark')
+    // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁；语言同理，i18n.ts 初始化时读
+    localStorage.setItem('theme', settings['general.theme'] || 'system')
     localStorage.setItem('darkTheme', darkTheme)
     localStorage.setItem('lightTheme', lightTheme)
+    localStorage.setItem('language', settings['general.language'] || 'en')
   }
 }))

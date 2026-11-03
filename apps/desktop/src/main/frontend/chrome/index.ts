@@ -38,7 +38,7 @@ export function panelAppearance(): ChromePanelAppearance {
   const get = (key: string): string | undefined => settingsDao.findByKey(key) || undefined
   const rawDark = get('general.darkTheme') || 'github-dark'
   const rawLight = get('general.lightTheme') || 'github-light'
-  const theme = get('general.theme')
+  const theme = get('general.theme') || 'system'
   return {
     theme: theme === 'light' || theme === 'system' ? theme : 'dark',
     darkTheme: rawDark === 'dark' ? 'github-dark' : rawDark,

@@ -84,9 +84,10 @@ function themeIdFor(raw: string | undefined, scheme: WidgetScheme): string {
   return THEME_SCHEMES.get(raw) === scheme ? raw : fallback
 }
 
-/** 从三个设置值算出选择（缺省与设置页一致：模式默认 dark） */
+/** 从三个设置值算出选择（缺省与设置页一致：模式默认 system） */
 export function widgetThemeStateOf(settings: WidgetThemeSettings): WidgetThemeState {
-  const mode = settings.mode === 'light' || settings.mode === 'system' ? settings.mode : 'dark'
+  const raw = settings.mode || 'system'
+  const mode = raw === 'light' || raw === 'system' ? raw : 'dark'
   return {
     mode,
     light: themeIdFor(settings.light, 'light'),

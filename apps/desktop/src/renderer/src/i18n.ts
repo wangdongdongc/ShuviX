@@ -13,18 +13,22 @@ import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 /** 支持的语言列表 */
 export const SUPPORTED_LANGUAGES = ['zh', 'en', 'ja'] as const
 
-/** 将浏览器 locale 映射到支持的语言 */
-function resolveLocale(locale: string): string {
-  const lang = locale.split('-')[0].toLowerCase()
-  if ((SUPPORTED_LANGUAGES as readonly string[]).includes(lang)) return lang
+/**
+ * 初始语言：上次记下的那份（loadSettings 写），没有就是英文（不看系统语言）。设置要等 IPC 回来，而 md、
+ * 文件预览等窗口在首帧就显示：这里要是写死英文，选了别的语言的用户每开一扇窗都会先闪一下英文。
+ */
+function lastKnownLanguage(): string {
+  try {
+    const saved = localStorage.getItem('language')
+    if (saved && (SUPPORTED_LANGUAGES as readonly string[]).includes(saved)) return saved
+  } catch {
+    // 拿不到 localStorage（站点数据被禁用、非浏览器环境）：等设置读回来
+  }
   return 'en'
 }
 
-/** 检测初始语言：优先用户设置，其次系统语言 */
-const detectedLang = resolveLocale(navigator.language)
-
 i18next.use(initReactI18next).init({
-  lng: detectedLang,
+  lng: lastKnownLanguage(),
   fallbackLng: 'en',
   interpolation: { escapeValue: false },
   resources: {
