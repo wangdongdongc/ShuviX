@@ -20,7 +20,8 @@
  *          不是被驱动的 prompt 带着它 → options 只多一个 source；被驱动时来源恒取 drivingSourceOf，章不顶替它
  *   WP2-90 session.prompt-accepted 的 payload 带 `origin` = 这次发送的来源种类（local / remote / trigger /
  *          parent-session），没有来源为 ''；别的键不变（2026-10-24）
- *   AS-1 maskTexts：会话没开脱敏 → 内容相同的新数组；开了 → 委托给 redaction.maskTexts，结果原样交回
+ *   AS-1 maskTexts（触发消息，§16）：没开脱敏 → 内容相同的新数组，不调；开了 → 委托给 redaction.maskTexts，结果原样交回；
+ *        按哪个模型判：锁住的优先，没有锁按调用方给的会话设定，都没有 = 不带 model
  * （D10-33「门面从不授予已读」在 agentSessionBot.test.ts。）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -125,14 +126,52 @@ describe('AS-1 maskTexts', () => {
     expect(out).not.toBe(input)
   })
 
-  it('AS-1 开了脱敏：委托给 redaction.maskTexts，结果原样交回', async () => {
+  it('AS-1 没开脱敏：给了设定的模型也一样', async () => {
+    const { durable, session } = facade()
+    expect(durable.redaction).toBeUndefined()
+    const input = ['a', 'b'] as const
+    const out = await session.maskTexts(input, { provider: 'home', modelId: 'm2' })
+    expect(out).toEqual(['a', 'b'])
+    expect(out).not.toBe(input)
+  })
+
+  describe('开了脱敏：委托给 redaction.maskTexts，结果原样交回', () => {
     const masked = ['{{X_aaaaaaaa}}', 'b']
-    const maskTexts = vi.fn(async () => masked)
-    const { session } = facade({ redaction: { maskTexts } } as never)
     const input = ['secret', 'b']
-    expect(await session.maskTexts(input)).toBe(masked)
-    expect(maskTexts).toHaveBeenCalledTimes(1)
-    expect(maskTexts).toHaveBeenCalledWith(input)
+    const LOCKED = { provider: 'cloud', modelId: 'm1' }
+    const CONFIGURED = { provider: 'home', modelId: 'm2' }
+
+    function opened(lock?: { model: typeof LOCKED }): {
+      session: AgentSession
+      maskTexts: ReturnType<typeof vi.fn>
+    } {
+      const maskTexts = vi.fn(async () => masked)
+      const { session } = facade({
+        redaction: { maskTexts },
+        ...(lock === undefined ? {} : { lock: lockRecord({ model: lock.model }) })
+      } as never)
+      return { session, maskTexts }
+    }
+
+    it('AS-1 锁与设定都有 → 按锁住的模型', async () => {
+      const { session, maskTexts } = opened({ model: LOCKED })
+      expect(await session.maskTexts(input, CONFIGURED)).toBe(masked)
+      expect(maskTexts).toHaveBeenCalledTimes(1)
+      expect(maskTexts).toHaveBeenCalledWith(input, { model: LOCKED })
+    })
+
+    it('AS-1 只有设定 → 按设定的模型', async () => {
+      const { session, maskTexts } = opened()
+      expect(await session.maskTexts(input, CONFIGURED)).toBe(masked)
+      expect(maskTexts).toHaveBeenCalledWith(input, { model: CONFIGURED })
+    })
+
+    it('AS-1 都没有 → 不带 model', async () => {
+      const { session, maskTexts } = opened()
+      expect(await session.maskTexts(input)).toBe(masked)
+      expect(maskTexts).toHaveBeenCalledTimes(1)
+      expect(maskTexts).toHaveBeenCalledWith(input, {})
+    })
   })
 })
 

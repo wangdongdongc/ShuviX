@@ -280,7 +280,7 @@ class SessionHostImpl implements SessionHost {
         harness = await Harness.open(
           storage,
           {
-            // 自动脱敏的出口：这条会话的每个模型调用按策略改写（会话对象出生之后才有对照表）
+            // 自动脱敏的出口：这条会话的每个模型调用问一次策略（第一层拒发不发请求；判定留给写入时用；会话对象出生之后才有对照表）
             models:
               this.deps.redaction !== undefined && this.deps.redactionPolicy !== undefined
                 ? withRedactionEgress(this.deps.models, {
@@ -346,6 +346,9 @@ class SessionHostImpl implements SessionHost {
             : { maxAgentDepth: this.deps.maxAgentDepth }),
           processRecord: this.processRecordOf(sessionId),
           ...(this.deps.redaction === undefined ? {} : { redaction: this.deps.redaction }),
+          ...(this.deps.redactionPolicy === undefined
+            ? {}
+            : { redactionPolicy: this.deps.redactionPolicy }),
           settings
         })
         lockedSession = session

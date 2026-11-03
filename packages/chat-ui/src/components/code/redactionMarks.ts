@@ -23,10 +23,9 @@ import {
   type RedactionReveal
 } from '../chat/redactionPopover'
 
-/** 一处占位符怎么显示：类别、模型收到的是不是真值、真值，以及浮层内容 */
+/** 一处占位符怎么显示：类别、真值，以及浮层内容 */
 export type RedactionResolver = (placeholder: string) => {
   category: string
-  disclosed: boolean
   value?: string
   reveal: RedactionReveal
 }
@@ -42,7 +41,6 @@ class RedactionWidget extends WidgetType {
   eq(other: RedactionWidget): boolean {
     return (
       other.placeholder === this.placeholder &&
-      other.shown.disclosed === this.shown.disclosed &&
       other.shown.value === this.shown.value &&
       other.shown.reveal.label === this.shown.reveal.label &&
       other.shown.reveal.note === this.shown.reveal.note
@@ -52,12 +50,6 @@ class RedactionWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement('span')
     span.dataset.redaction = this.shown.category
-    if (this.shown.disclosed && this.shown.value !== undefined) {
-      // 模型收到的就是真值：照原样
-      span.dataset.redactionSent = ''
-      span.textContent = this.shown.value
-      return span
-    }
     span.dataset.redactionPlaceholder = ''
     span.className = 'cm-redaction-placeholder'
     span.textContent = this.placeholder

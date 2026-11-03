@@ -25,6 +25,8 @@
  * 翻译漂移在此立刻红，而不是静默存在一份「看起来生效实际被忽略」的规则拷贝。
  * 唯一例外是 `prompt`（人读提示语，不参与匹配）：它按语言 overlay，比较时剥掉。
  */
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import { builtinObjectId } from '@shuvix/chat-protocol/mdMeta'
 import { sessionAclView, widgetAclView, type AclEntry } from '@shuvix/chat-protocol/sessionAcl'
@@ -3366,4 +3368,51 @@ describe('内置策略的对象 id（shuvix-id）', () => {
       )
     }
   )
+})
+
+describe('GD 脱敏的文案写明不处理历史（docs/auto-redaction-design.md §16）', () => {
+  const MANUAL = join(__dirname, '../../../../../apps/desktop/resources/knowledge/shuvix')
+  const manual = (lang: string, file: string): string =>
+    readFileSync(join(MANUAL, lang, file), 'utf8')
+  const LANGS = ['en', 'zh', 'ja'] as const
+  const POLICY: Record<(typeof LANGS)[number], string> = {
+    en: 'It never touches the conversation history',
+    zh: '它不会处理历史对话记录',
+    ja: '会話の履歴には触れません'
+  }
+  const HEADING: Record<(typeof LANGS)[number], string> = {
+    en: '### Only new content',
+    zh: '### 只对新内容生效',
+    ja: '### 新しい内容だけが対象'
+  }
+  const POLICY_ROW: Record<(typeof LANGS)[number], string> = {
+    en: "it never touches what a conversation's history already holds",
+    zh: '不处理对话历史',
+    ja: '新しい内容だけが対象'
+  }
+
+  it.each(LANGS)('GD-1 %s：内置策略 md 写明它不碰对话历史', (lang) => {
+    expect(sourcesOf('redact-sensitive')[lang]).toContain(POLICY[lang])
+  })
+
+  it.each(LANGS)('GD-2 %s：手册 redaction.md 有「只对新内容」这一节', (lang) => {
+    expect(manual(lang, 'redaction.md')).toContain(HEADING[lang])
+  })
+
+  it.each(LANGS)('GD-3 %s：手册 policy-md.md 的 redact-sensitive 一行写明不处理历史', (lang) => {
+    const row = manual(lang, 'policy-md.md')
+      .split('\n')
+      .find((line) => line.startsWith('| `redact-sensitive`'))
+    expect(row).toBeDefined()
+    expect(row).toContain(POLICY_ROW[lang])
+  })
+
+  it.each(LANGS)('GD-4 %s：手册与策略 md 都不再提第一个读者', (lang) => {
+    const stale = /first reader|第一个读者|disclosedTo/
+    expect(sourcesOf('redact-sensitive')[lang]).not.toMatch(stale)
+    for (const file of readdirSync(join(MANUAL, lang))) {
+      if (!file.endsWith('.md')) continue
+      expect(manual(lang, file), `${lang}/${file}`).not.toMatch(stale)
+    }
+  })
 })

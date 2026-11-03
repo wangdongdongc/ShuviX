@@ -35,7 +35,6 @@ import 'katex/dist/katex.min.css'
 import { CodeBlock } from './CodeBlock'
 import { useChatStore } from '../../stores/chatStore'
 import { copyToClipboard } from '../../utils/clipboard'
-import { useRestoredText } from '../../hooks/useRedaction'
 import { hasPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { RedactedMark } from './RedactedText'
 import { HeldImage } from './HeldImage'
@@ -297,9 +296,8 @@ function InlineCode({
   [key: string]: unknown
 }): React.JSX.Element {
   const isBlock = !!className && /language-|hljs/.test(className)
-  // 路径里常有占位符（家目录里的用户名）：按真值认路径、点开的也是真实那个文件
-  // 只换模型收到的就是真值的那些：还剩占位符（模型看到的是占位符）就不当路径，照样显示占位符
-  const text = useRestoredText(isBlock ? '' : plainTextOf(children), { onlyDisclosed: true })
+  // 带占位符的（模型看到的就是占位符）不当路径，照常显示
+  const text = isBlock ? '' : plainTextOf(children)
 
   const path = text.trim()
   if (!isBlock && !hasPlaceholder(text) && isPathLike(path) && !isDirPath(path)) {

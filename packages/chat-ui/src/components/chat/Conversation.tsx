@@ -12,7 +12,7 @@ import { useChatActions } from '../../hooks/useChatActions'
 import { forkRefusalKey, selectSessionForkable, useSessionFork } from '../../hooks/useSessionFork'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
-import { buildVisibleItems, isAssistantMessage, messageReaders } from './conversationItems'
+import { buildVisibleItems, isAssistantMessage } from './conversationItems'
 import { SuggestionContext } from './SuggestionCards'
 import { suggestionStatesOf } from '@shuvix/chat-protocol/suggestions'
 import { StreamingFooter } from './StreamingFooter'
@@ -345,7 +345,6 @@ export function Conversation({
     () => buildVisibleItems(messages, isStreaming, pendingPrompt),
     [messages, isStreaming, pendingPrompt]
   )
-  const readers = useMemo(() => messageReaders(visibleItems), [visibleItems])
   // 每组提议开着还是关了、采纳的是哪一条：按整条消息列表算（之后用户说了别的话就关），卡片从 context 里取
   const suggestionContext = useMemo(
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
@@ -377,10 +376,9 @@ export function Conversation({
         onRollback={onRollback}
         onRegenerate={onRegenerate}
         onFork={onFork}
-        redactionReaders={readers.get(item.key)}
       />
     ),
-    [lastAssistantId, onRollback, onRegenerate, onFork, readers]
+    [lastAssistantId, onRollback, onRegenerate, onFork]
   )
 
   return (

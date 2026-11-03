@@ -1,10 +1,11 @@
 /**
- * 一条会话的脱敏（docs/auto-redaction-design.md §2）：写入对话记录之前把认出的内容换成占位符、记进对照表
- * （默认照发的几类照原样存，categories.ts isKeptAsWritten）；输入框发来的只换用户交来的那几项（§14）；
- * 工具执行之前把参数里的占位符换回真值（命令按引号环境转义）。宿主无关：占位符怎么签、真值怎么加密由宿主交进来（RedactionHost）。
+ * 一条会话的脱敏（docs/auto-redaction-design.md §16）：工具结果与自动触发的消息写进对话记录之前，按策略判定把认出的内容
+ * 换成占位符、记进对照表；策略说照发的、或这个模型不适用脱敏的，照原样存。记录里存什么，模型就收到什么。输入框发来的只换
+ * 用户交来的那几项（§14）；工具执行之前把参数里的占位符换回真值（命令按引号环境转义）。宿主无关：占位符怎么签、真值怎么
+ * 加密由宿主交进来（RedactionHost）。
  *
- * 出错的处置（§4.4）：替换的任何一步抛错 → 记 error、按原样写入（当作漏检）；还原时表项解不开 → 那个占位符
- * 记为「查不到」，由调用方拦下这次工具调用（不会把占位符写进文件）。
+ * 出错的处置（§4.4）：替换的任何一步抛错 → 记 error、按原样写入（当作漏检）；判不出策略 → 按内置策略的默认（只有默认照发
+ * 的几类照原样存）；还原时表项解不开 → 那个占位符记为「查不到」，由调用方拦下这次工具调用（不会把占位符写进文件）。
  */
 import type { Context } from '@earendil-works/chord'
 import {
@@ -35,6 +36,7 @@ import {
 import type { RuntimeLogger } from '../types'
 import { backgroundContext as BG, errorText } from './context'
 import type { EgressDecision } from './redactionEgress'
+import type { RedactionPolicy } from './redactionModels'
 import {
   entriesReferencedBy,
   loadRedactionTable,
@@ -77,9 +79,13 @@ export interface RestoreCommandOptions {
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
 
-/** 写入时的选项：内容进的是哪个对话（工具结果；默认照发的几类按它最近一次请求的目的地判，§15.2） */
+/**
+ * 写入时的选项：按哪个模型判。model 给了就现问策略（还没发过请求的对话：触发消息、派给 hook 的任务）；否则取这个对话
+ * 最近一次请求的判定（工具结果）。都没有 = 判不出，按内置策略的默认。
+ */
 export interface MaskOptions {
   conversationId?: number
+  model?: { provider: string; modelId: string }
 }
 
 function escapeRegExp(s: string): string {
@@ -117,6 +123,8 @@ export class SessionRedaction {
       /** 未包装的 Harness：对照表的读写不开启调度器 */
       harness: Harness
       host: RedactionHost
+      /** 宿主的策略（没配 = 判不出，按内置策略的默认） */
+      policy?: RedactionPolicy
       logger: RuntimeLogger
     }
   ) {}
@@ -144,9 +152,12 @@ export class SessionRedaction {
   async maskTexts(texts: readonly string[], opts: MaskOptions = {}): Promise<string[]> {
     if (!texts.some((t) => t.length >= 3)) return [...texts]
     try {
+      const decision = await this.decisionFor(opts)
+      // 这个模型不适用脱敏（策略关了、信任它）：不检测、不换
+      if (decision !== undefined && !decision.blocked && !decision.applies) return [...texts]
       const table = await this.table()
       const entries: RedactionEntry[] = []
-      const keep = this.keptAsWritten(opts.conversationId)
+      const keep = this.keptAsWritten(decision)
       const out = texts.map((text) => this.maskOne(text, table, entries, keep))
       if (entries.length === 0) return out
       await recordRedactions(this.deps.harness, table, entries, this.deps.host.vault)
@@ -165,19 +176,34 @@ export class SessionRedaction {
     }
   }
 
-  /**
-   * 默认照发的几类照原样存（§13.8）；但内容进的对话最近一次请求的目的地要它们保持占位符时，写入时就换 —— 出口不再在
-   * 记录上现换（§15.2）。不知道对话或它还没发过请求 = 照原样存；策略抛错 = 换。
-   */
+  /** 这次写入按哪份判定（见 MaskOptions）；问策略抛错 = 判不出 */
+  private async decisionFor(opts: MaskOptions): Promise<EgressDecision | undefined> {
+    const { model, conversationId } = opts
+    if (model !== undefined && this.deps.policy !== undefined) {
+      try {
+        return await this.deps.policy({
+          sessionId: this.deps.sessionId,
+          ...(conversationId === undefined ? {} : { conversationId }),
+          provider: model.provider,
+          model: model.modelId
+        })
+      } catch (error) {
+        this.deps.logger.warn(
+          `session ${this.deps.sessionId}: no redaction decision for ${model.provider}/${model.modelId}: ${errorText(error)}`
+        )
+        return undefined
+      }
+    }
+    return conversationId === undefined ? undefined : this.decisions.get(conversationId)
+  }
+
+  /** 这一处照不照原样存：按判定的第二层（判定抛错 = 换）；判不出 = 内置策略的默认；第一层拒发的请求不会发，一律换 */
   private keptAsWritten(
-    conversationId: number | undefined
+    decision: EgressDecision | undefined
   ): (category: string, value: string, rule: string) => boolean {
-    const decision = conversationId === undefined ? undefined : this.decisions.get(conversationId)
     return (category, value, rule) => {
-      if (!isKeptAsWritten(category)) return false
-      if (decision === undefined) return true
+      if (decision === undefined) return isKeptAsWritten(category)
       if (decision.blocked) return false
-      if (!decision.applies) return true
       try {
         return decision.disclose({ category, rule, value }) === 'send'
       } catch {
@@ -193,7 +219,7 @@ export class SessionRedaction {
     keptAsWritten: (category: string, value: string, rule: string) => boolean
   ): string {
     if (text.length < 3) return text
-    // 默认照发的几类按上面判；用户照原样发过的值不换
+    // 策略照发的按上面判；用户照原样发过的值不换
     const signer = this.deps.host.signer
     const findings = detectSensitive(text, table.known, {
       except: (category, value, rule) =>
@@ -233,7 +259,7 @@ export class SessionRedaction {
     const table = await this.table()
     const { entries, replace } = this.secretReplacer(table, secrets)
     const out = texts.map(replace)
-    // 默认照发的几类不记：它们本来就照原样存，给不给模型由出口按策略判
+    // 默认照发的几类不记：它们照原样存与否由写入时的策略判
     const asWritten: string[] = []
     for (const text of out) {
       for (const f of detectSensitive(text, table.known, { except: isKeptAsWritten })) {
@@ -301,16 +327,6 @@ export class SessionRedaction {
     return (
       table.asWritten.size > 0 && table.asWritten.has(asWrittenKey(this.deps.host.signer, value))
     )
-  }
-
-  /** 用户输入（字符串，或文本块与图片块）：文本部分换掉，图片不动 */
-  async maskInput(content: UserInput): Promise<UserInput> {
-    if (typeof content === 'string') return this.maskText(content)
-    const texts = content.flatMap((block) => (block.type === 'text' ? [block.text] : []))
-    if (texts.length === 0) return content
-    const masked = await this.maskTexts(texts)
-    let i = 0
-    return content.map((block) => (block.type === 'text' ? { ...block, text: masked[i++] } : block))
   }
 
   /** JSON 值里的每个字符串都换一遍 */
@@ -408,20 +424,14 @@ export class SessionRedaction {
 
   // ─────────────────────────── 出口用 ───────────────────────────
 
-  /** 占位符的签名（出口兜底检测新认出的要用） */
-  get signer(): PlaceholderSigner {
-    return this.deps.host.signer
-  }
-
-  /** 出口记下：这个对话这次请求的目的地的判定（写入时判默认照发的几类用，§15.2） */
+  /** 出口记下：这个对话这次请求的目的地的判定（之后写进这个对话的工具结果按它判） */
   noteDecision(conversationId: number, decision: EgressDecision): void {
     this.decisions.set(conversationId, decision)
   }
 
-  /** 把出口兜底新认出的记进对照表 */
-  async record(entries: readonly RedactionEntry[]): Promise<void> {
-    if (entries.length === 0) return
-    await recordRedactions(this.deps.harness, await this.table(), entries, this.deps.host.vault)
+  /** 出口问不到策略：这个对话的工具结果按判不出处理 */
+  forgetDecision(conversationId: number): void {
+    this.decisions.delete(conversationId)
   }
 
   /** provider 会话 id（pi-durable 每个对话一份，随请求的 options 交给模型层）→ 对话 */

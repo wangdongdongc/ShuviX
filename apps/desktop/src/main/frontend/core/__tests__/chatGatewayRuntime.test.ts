@@ -121,7 +121,6 @@ vi.mock('../../../services/sessionDayPromptService', () => ({
 
 import { buildBuiltinProfiles, KnownValues } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
-import { readerKey } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { setRedactionPolicy } from '../../../services/redactionPolicySeam'
 
 let chatGateway: (typeof import('../DefaultChatGateway'))['chatGateway']
@@ -468,9 +467,7 @@ describe('自动脱敏：resolveRedactions', () => {
     [KEY]: { category: 'API_KEY', rule: 'sk-key', value: 'sk-real' },
     [SEALED]: { category: 'SECRET', rule: 'secret-field' }
   }
-  const sessionWith = (redaction: unknown, lock?: unknown): unknown => ({
-    durable: { redaction, lock }
-  })
+  const sessionWith = (redaction: unknown): unknown => ({ durable: { redaction } })
   const table = { get: (p: string) => items[p] }
 
   beforeEach(() => {
@@ -490,17 +487,19 @@ describe('自动脱敏：resolveRedactions', () => {
       42 as unknown as string
     ])
     expect(result).toEqual({
-      [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false },
+      [KEY]: { category: 'API_KEY', value: 'sk-real' },
       [SEALED]: { category: 'SECRET' }
     })
+    expect(result[KEY]).toStrictEqual({ category: 'API_KEY', value: 'sk-real' })
+    expect(result[SEALED]).toStrictEqual({ category: 'SECRET' })
     expect(mocks.peekAgentSession).not.toHaveBeenCalled()
   })
 
   it('RR-2 没开着就 peek；peek 不到 / 会话没有脱敏 / 什么都没问 → 空', async () => {
     mocks.getAgentSession.mockReturnValue(undefined)
     mocks.peekAgentSession.mockResolvedValue(sessionWith({ table: async () => table }))
-    expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
-      [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false }
+    expect(await chatGateway.resolveRedactions(SID, [KEY])).toStrictEqual({
+      [KEY]: { category: 'API_KEY', value: 'sk-real' }
     })
     mocks.peekAgentSession.mockResolvedValue(undefined)
     expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({})
@@ -511,80 +510,25 @@ describe('自动脱敏：resolveRedactions', () => {
     expect(mocks.peekAgentSession).not.toHaveBeenCalled()
   })
 
-  it('RR-3 模型收到的是不是真值：按会话锁住的模型、与出口同一份判定；没有锁按设定的模型，也没有就当占位符', async () => {
-    const seen: unknown[] = []
-    setRedactionPolicy((request) => {
-      seen.push(request)
-      return request.provider === 'home'
-        ? { applies: false, disclose: () => 'redact' }
-        : {
-            applies: true,
-            disclose: ({ category }) => (category === 'API_KEY' ? 'redact' : 'send')
-          }
+  it('RR-5 不问策略，也不读锁和会话设定：占位符就是占位符', async () => {
+    const policy = vi.fn(() => {
+      throw new Error('resolveRedactions must not ask the policy')
     })
-    const withLock = (provider: string): unknown =>
-      sessionWith({ table: async () => table }, { model: { provider, modelId: 'm1' } })
-    mocks.getAgentSession.mockReturnValue(withLock('cloud'))
-    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
-    expect(seen).toEqual([{ sessionId: SID, provider: 'cloud', model: 'm1' }])
-    mocks.getAgentSession.mockReturnValue(withLock('home'))
-    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(true)
-    // 没有锁（这次启动后还没跑过）：按会话设定的模型判
-    mocks.getAgentSession.mockReturnValue(sessionWith({ table: async () => table }))
-    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
-    mocks.resolveRunConfig.mockResolvedValue({
-      model: { provider: 'home', model: 'm2', capabilities: {} },
-      thinkingLevel: 'off'
+    setRedactionPolicy(policy)
+    const lockRead = vi.fn(() => undefined)
+    const durable = {
+      redaction: { table: async () => table },
+      get lock() {
+        return lockRead()
+      }
+    }
+    mocks.getAgentSession.mockReturnValue({ durable })
+    expect(await chatGateway.resolveRedactions(SID, [KEY])).toStrictEqual({
+      [KEY]: { category: 'API_KEY', value: 'sk-real' }
     })
-    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(true)
-    expect(seen.at(-1)).toEqual({ sessionId: SID, provider: 'home', model: 'm2' })
-    mocks.resolveRunConfig.mockRejectedValue(new Error('gone'))
-    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
-    setRedactionPolicy((request) => {
-      throw new Error(`no policy for ${request.sessionId}`)
-    })
-    mocks.getAgentSession.mockReturnValue(withLock('cloud'))
-    // 判定抛错：当作收到的是占位符，真值照样交回
-    expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
-      [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false }
-    })
-  })
-
-  it('RR-4 第一个读者（§15.2）：每个读者按同一份策略判 disclosedTo；不是 readerKey 的丢掉、重复的只判一次、判不出 = 不照发', async () => {
-    const seen: unknown[] = []
-    setRedactionPolicy((request) => {
-      seen.push(request)
-      if (request.provider === 'gone') throw new Error('no such provider')
-      return request.provider === 'home'
-        ? { applies: false, disclose: () => 'redact' }
-        : { applies: true, disclose: () => 'redact' }
-    })
-    mocks.getAgentSession.mockReturnValue(
-      sessionWith({ table: async () => table }, { model: { provider: 'home', modelId: 'm1' } })
-    )
-    const HOME = readerKey('home', 'm1')
-    const CLOUD = readerKey('cloud', 'c1')
-    const GONE = readerKey('gone', 'x')
-    const result = await chatGateway.resolveRedactions(
-      SID,
-      [KEY, SEALED],
-      [CLOUD, HOME, CLOUD, GONE, 'no-separator', 7 as unknown as string]
-    )
-    expect(result).toEqual({
-      [KEY]: {
-        category: 'API_KEY',
-        value: 'sk-real',
-        disclosed: true,
-        disclosedTo: { [CLOUD]: false, [HOME]: true, [GONE]: false }
-      },
-      [SEALED]: { category: 'SECRET' }
-    })
-    expect(seen).toEqual([
-      { sessionId: SID, provider: 'home', model: 'm1' },
-      { sessionId: SID, provider: 'cloud', model: 'c1' },
-      { sessionId: SID, provider: 'home', model: 'm1' },
-      { sessionId: SID, provider: 'gone', model: 'x' }
-    ])
+    expect(policy).not.toHaveBeenCalled()
+    expect(lockRead).not.toHaveBeenCalled()
+    expect(mocks.resolveRunConfig).not.toHaveBeenCalled()
   })
 })
 

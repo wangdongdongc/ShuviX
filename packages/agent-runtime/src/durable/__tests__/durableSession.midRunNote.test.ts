@@ -11,7 +11,8 @@
  *   MRN-D-5  忙时带图的 steer：请求里图片原样、最后是说明文本块；投影带一张图、原文 + 标记
  *   MRN-D-6  被中断的会话（O1）：照「先让它跑完」排在后面的 steer 带说明、两边都不算新请求；
  *            `abort-then-send` 先中止，steer 成了普通请求，不带说明
- *   MRN-D-7  脱敏的次序：说明加在脱敏之后 —— 脱敏看不到说明；模型文本 = 脱敏后原文 + 原样的说明；侧车没有明文
+ *   MRN-D-7  脱敏的次序（输入框交来的值，§16）：说明加在脱敏之后 —— 脱敏看不到说明；模型文本 = 脱敏后原文 + 原样的说明；
+ *            侧车没有明文。没有 composer 的 steer 不脱敏：原文 + 说明
  *   MRN-D-8  被拒的 steer（没配模型、句柄已关）什么都不写
  *   MRN-D-9  两条忙时 steer：各自一份显示侧车，投影各自带说明 Token
  *   MRN-D-11 submitUser（重新生成的发送路径）从不加说明：空闲时如此，忙时排成 follow-up 也如此
@@ -339,15 +340,17 @@ describe('mid-run note on steers', () => {
 
   describe('MRN-D-7 redaction runs before the note', () => {
     it(
-      'maskInput never sees the note; the model text is the masked text + the byte-identical note; the display sidecar is the masked text + marker',
+      'maskComposerInput never sees the note; the model text is the masked text + the byte-identical note; the display sidecar is the masked text + marker',
       async () => {
         const { t, session, sending, release } = await heldRound({ redaction: redactionHost })
-        const maskInput = vi.spyOn(session.redaction!, 'maskInput')
-        const admitted = await session.steer(`use DB_PASSWORD=${PASSWORD}`)
+        const maskComposerInput = vi.spyOn(session.redaction!, 'maskComposerInput')
+        const admitted = await session.steer(`use DB_PASSWORD=${PASSWORD}`, {
+          composer: { secrets: [{ value: PASSWORD, category: 'PASSWORD' }] }
+        })
         const requestId = await requestIdOf(session, admitted)
-        expect(maskInput).toHaveBeenCalled()
-        for (const [content] of maskInput.mock.calls) {
-          expect(JSON.stringify(content)).not.toContain(MID_RUN_NOTE_TEXT)
+        expect(maskComposerInput).toHaveBeenCalled()
+        for (const call of maskComposerInput.mock.calls) {
+          expect(JSON.stringify(call)).not.toContain(MID_RUN_NOTE_TEXT)
         }
         release()
         expect(await withTimeout(sending, 5000, 'round')).toEqual({})
@@ -360,6 +363,22 @@ describe('mid-run note on steers', () => {
         const display = (await displayItems(session))[requestId] as { content: string }
         expect(display.content).toBe(`${masked}${MARKER}`)
         expect(JSON.stringify(await displayItems(session))).not.toContain(PASSWORD)
+      },
+      TIMEOUT
+    )
+
+    it(
+      'a steer with no composer is stored as written: the note follows the original text, nothing is masked',
+      async () => {
+        const { t, session, sending, release } = await heldRound({ redaction: redactionHost })
+        const admitted = await session.steer(`use DB_PASSWORD=${PASSWORD}`)
+        const requestId = await requestIdOf(session, admitted)
+        release()
+        expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+        expect(requestTexts(t.kit, 1).at(-1)).toBe(`user:use DB_PASSWORD=${PASSWORD}${SUFFIX}`)
+        const display = (await displayItems(session))[requestId] as { content: string }
+        expect(display.content).toBe(`use DB_PASSWORD=${PASSWORD}${MARKER}`)
+        expect((await session.redaction!.table()).size).toBe(0)
       },
       TIMEOUT
     )

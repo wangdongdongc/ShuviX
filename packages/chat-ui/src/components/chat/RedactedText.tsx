@@ -37,9 +37,8 @@ export function revealOf(
 }
 
 /**
- * 一处占位符（docs/auto-redaction-design.md §2.3），显示的是模型收到的样子：
- *  - 模型收到的是真值（策略照发这一类，或信任这个服务商）→ 原样显示真值，不加标记；
- *  - 模型收到的是占位符 → 显示占位符原文；指到、聚焦或点一下才浮出真值（工具执行、文件里用的那个）。
+ * 一处占位符（docs/auto-redaction-design.md §2.3）：记录里存的、模型收到的都是它，所以显示占位符原文；指到、聚焦或点一下
+ * 才浮出真值（工具执行、文件里用的是真值）。
  */
 export const RedactedMark = memo(function RedactedMark({
   placeholder
@@ -63,13 +62,6 @@ export const RedactedMark = memo(function RedactedMark({
     }
   }, [])
 
-  if (info?.disclosed === true && info.value !== undefined) {
-    return (
-      <span data-redaction={category} data-redaction-sent="">
-        {info.value}
-      </span>
-    )
-  }
   return (
     <span
       ref={ref}
@@ -98,7 +90,7 @@ export const RedactedMark = memo(function RedactedMark({
   )
 })
 
-/** 一段纯文本：占位符按模型收到的样子显示，其余原样（没有占位符时就是那段字符串） */
+/** 一段纯文本：占位符显示成标记，其余原样（没有占位符时就是那段字符串） */
 export function RedactedText({ text }: { text: string }): React.ReactNode {
   const segments = useMemo(() => splitPlaceholders(text), [text])
   if (segments.length === 1 && typeof segments[0] === 'string') return segments[0]

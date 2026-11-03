@@ -1,14 +1,10 @@
 /**
- * 自动脱敏的出口装饰器（docs/auto-redaction-design.md §2.4 / §2.5）—— 一个完整的 pi-ai `Models` 装饰器，
- * 每条会话一份：SessionHost 打开会话时把它包在全局 Models 外面交给 Harness，于是这条会话里的每个模型调用
- * （根 agent、派生 agent、hook agent、审查员、压缩摘要）都经过它，而且都知道是哪条会话。
+ * 自动脱敏的出口装饰器（docs/auto-redaction-design.md §16）—— 一个完整的 pi-ai `Models` 装饰器，每条会话一份：
+ * SessionHost 打开会话时把它包在全局 Models 外面交给 Harness，于是这条会话里的每个模型调用（根 agent、派生 agent、
+ * hook agent、审查员、压缩摘要）都经过它，而且都知道是哪条会话。
  *
- *  - 请求：问宿主的策略（第一层 / 第二层，按这次请求来自的对话认 agent），按判定改写（redactionEgress）；
- *    记录里的模型回复是别的模型产出的，那几个模型也各问一次（§15 第一个读者）。兜底新认出的记进对照表；这次的
- *    判定留给写入时用（工具结果里默认照发的几类，§15.2）。第一层或第二层拒发 → 不发请求，交回一条出错的回复（不重试）。
- *  - 回复：这次以真值发出去过东西时，流式事件里累积的回复与最终结果都把那些真值换回占位符。
- *  - 改写本身出错（只可能是 bug）：记 error，按对话记录里存的样子原样发出 —— 存的本来就是占位符，原样发
- *    只是少了请求时现拼的那部分的兜底，与「检测器出错当作漏检」同一个处置。
+ * 它不改请求：记录里存什么就发什么。每次请求只做两件事：问宿主的策略（按这次请求来自的对话认 agent），第一层拒发 →
+ * 不发请求，交回一条出错的回复（不重试）；判定记下来，给之后写进这个对话的工具结果用。问策略本身出错：记 error，照发。
  *
  * 其余 `Models` 方法原样转交；对象字面量按 `Models` 标注，pi 升级多出的方法会在类型检查里报出来。
  */
@@ -27,13 +23,7 @@ import {
 } from '@earendil-works/pi-ai'
 import type { RuntimeLogger } from '../types'
 import { errorText } from './context'
-import {
-  EgressBlockedError,
-  prepareEgress,
-  type EgressDecision,
-  type ReaderDecisions,
-  type Remasker
-} from './redactionEgress'
+import { EgressBlockedError, type EgressDecision } from './redactionEgress'
 import type { SessionRedaction } from './sessionRedaction'
 
 /** 宿主据此判一次请求（第一层 + 第二层） */
@@ -80,120 +70,63 @@ function errorReply(model: Model<Api>, errorMessage: string): AssistantMessage {
   }
 }
 
-function remaskEvent(event: AssistantMessageEvent, remasker: Remasker): AssistantMessageEvent {
-  if (event.type === 'done') return { ...event, message: remasker.message(event.message) }
-  if (event.type === 'error') return { ...event, error: remasker.message(event.error) }
-  if ('partial' in event) return { ...event, partial: remasker.partial(event.partial) }
-  return event
-}
-
 function hasResult(
   source: AsyncIterable<AssistantMessageEvent>
 ): source is AsyncIterable<AssistantMessageEvent> & { result(): Promise<AssistantMessage> } {
   return typeof (source as { result?: unknown }).result === 'function'
 }
 
-/**
- * 记录里的模型回复是哪些模型产出的（§15.2 的第一个读者），每个问一次策略（同一个对话）；这次的目的地用这次的判定。
- * 问不到（策略抛错，比如服务商已经删了）= undefined，出口按不照发。
- */
-async function readerDecisions(
-  context: Context,
-  model: Model<Api>,
-  decision: EgressDecision,
-  decide: (provider: string, modelId: string) => EgressDecision | Promise<EgressDecision>,
-  deps: RedactionEgressDeps
-): Promise<ReaderDecisions> {
-  const key = (provider: string, modelId: string): string => `${provider}\u0000${modelId}`
-  const current = key(model.provider, model.id)
-  const decisions = new Map<string, EgressDecision | undefined>([[current, decision]])
-  for (const message of context.messages) {
-    if (message.role !== 'assistant') continue
-    const k = key(message.provider, message.model)
-    if (decisions.has(k)) continue
-    try {
-      decisions.set(k, await decide(message.provider, message.model))
-    } catch (error) {
-      decisions.set(k, undefined)
-      deps.logger.warn(
-        `session ${deps.sessionId}: no redaction decision for ${message.provider}/${message.model}; its earlier content keeps placeholders: ${errorText(error)}`
-      )
-    }
-  }
-  return (provider, modelId) => decisions.get(key(provider, modelId))
-}
-
 export function withRedactionEgress(inner: Models, deps: RedactionEgressDeps): Models {
-  /** 改写这次请求；拒发抛 EgressBlockedError，其余出错原样发 */
-  const prepare = async (
-    model: Model<Api>,
-    context: Context,
-    providerSessionId: string | undefined
-  ): Promise<{ context: Context; remasker: Remasker | undefined }> => {
+  /** 问这次请求的策略并记下判定；拒发抛 EgressBlockedError，其余出错照发 */
+  const judge = async (model: Model<Api>, providerSessionId: string | undefined): Promise<void> => {
     const redaction = deps.redaction()
-    if (!redaction) return { context, remasker: undefined }
+    if (!redaction) return
+    let conversationId: number | undefined
     try {
-      const conversationId = await redaction.conversationOf(providerSessionId)
-      const decide = (
-        provider: string,
-        modelId: string
-      ): EgressDecision | Promise<EgressDecision> =>
-        deps.policy({
-          sessionId: deps.sessionId,
-          ...(conversationId === undefined ? {} : { conversationId }),
-          provider,
-          model: modelId
-        })
-      const decision = await decide(model.provider, model.id)
+      conversationId = await redaction.conversationOf(providerSessionId)
+      const decision = await deps.policy({
+        sessionId: deps.sessionId,
+        ...(conversationId === undefined ? {} : { conversationId }),
+        provider: model.provider,
+        model: model.id
+      })
       if (conversationId !== undefined) redaction.noteDecision(conversationId, decision)
-      const readerOf = await readerDecisions(context, model, decision, decide, deps)
-      const prepared = prepareEgress(
-        context,
-        await redaction.table(),
-        redaction.signer,
-        decision,
-        readerOf
-      )
-      await redaction.record(prepared.entries)
-      return { context: prepared.context, remasker: prepared.remasker }
+      if (decision.blocked) throw new EgressBlockedError()
     } catch (error) {
       if (error instanceof EgressBlockedError) throw error
+      // 问不到：之后的工具结果不能沿用上一次的判定（那可能是另一个模型的），按判不出处理
+      if (conversationId !== undefined) redaction.forgetDecision(conversationId)
       deps.logger.error(
-        `session ${deps.sessionId}: preparing a model request for redaction failed; it is sent as stored: ${errorText(error)}`
+        `session ${deps.sessionId}: no redaction decision for this model request; it is sent as stored: ${errorText(error)}`
       )
-      return { context, remasker: undefined }
     }
   }
 
   const wrapStream = (
     model: Model<Api>,
-    context: Context,
     providerSessionId: string | undefined,
-    start: (context: Context) => AsyncIterable<AssistantMessageEvent>
+    start: () => AsyncIterable<AssistantMessageEvent>
   ): AssistantMessageEventStream => {
     const outer = createAssistantMessageEventStream()
     void (async () => {
-      let prepared: { context: Context; remasker: Remasker | undefined }
       try {
-        prepared = await prepare(model, context, providerSessionId)
+        await judge(model, providerSessionId)
       } catch (error) {
         const message = errorReply(model, errorText(error))
         outer.push({ type: 'error', reason: 'error', error: message })
         outer.end(message)
         return
       }
-      const { remasker } = prepared
       let terminated = false
       try {
-        const source = start(prepared.context)
+        const source = start()
         for await (const event of source) {
           if (event.type === 'done' || event.type === 'error') terminated = true
-          outer.push(remasker ? remaskEvent(event, remasker) : event)
+          outer.push(event)
         }
         if (terminated) return
         if (!hasResult(source)) throw new Error('the model stream ended without a result')
-        const result = await source.result()
-        outer.end(remasker ? remasker.message(result) : result)
+        outer.end(await source.result())
       } catch (error) {
         if (terminated) return
         const message = errorReply(model, errorText(error))
@@ -210,16 +143,16 @@ export function withRedactionEgress(inner: Models, deps: RedactionEgressDeps): M
       context: Context,
       streamOptions?: ModelsApiStreamOptions<TApi>
     ) =>
-      wrapStream(model, context, streamOptions?.sessionId, (prepared) =>
-        inner.stream(model, prepared, streamOptions)
+      wrapStream(model, streamOptions?.sessionId, () =>
+        inner.stream(model, context, streamOptions)
       ),
     streamSimple: (
       model: Model<Api>,
       context: Context,
       streamOptions?: ModelsSimpleStreamOptions
     ) =>
-      wrapStream(model, context, streamOptions?.sessionId, (prepared) =>
-        inner.streamSimple(model, prepared, streamOptions)
+      wrapStream(model, streamOptions?.sessionId, () =>
+        inner.streamSimple(model, context, streamOptions)
       ),
     complete: <TApi extends Api>(
       model: Model<TApi>,

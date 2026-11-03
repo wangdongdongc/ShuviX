@@ -3,8 +3,8 @@
  * 「信任家里的服务器」「邮箱照发」「私钥绝不发」之后，按装进去之后的样子把两层都判一遍给它看。判定走出口用的同一份
  * 逻辑（redactionJudge.ts），主体是一条普通会话的根 agent（`--bot` 给了就是那个 bot 的）。
  *
- *   - 不带 `--category` → 两张表：每个已启用的模型，请求脱不脱敏；每一类敏感内容 × 每个脱敏的服务商（取它的第一个
- *     模型），保持占位符、发真值还是整个请求不发。类别用一个样例值判（按值写的规则用 `--value` 试自己的）；
+ *   - 不带 `--category` → 两张表：每个已启用的模型，新内容脱不脱敏；每一类敏感内容 × 每个脱敏的服务商（取它的第一个
+ *     模型），存占位符还是存真值。类别用一个样例值判（按值写的规则用 `--value` 试自己的）；
  *   - 带 `--category` → 这一类发给每个（或 `--provider` / `--model` 指定的）模型时怎么处理，胜出的是哪条规则；
  *   - `--expect redact|send|block` 对不上 → 退出码 1（没给 `--category` 时比的是请求那一层）。
  *
@@ -44,12 +44,13 @@ export const REDACTION_CHECK_USAGE = [
   '       shuvix policy check [<file>] --redaction [--provider <name>] [--model <id>] [--bot <id>]',
   '                           [--category <CATEGORY> [--value <text>]] [--expect redact|send|block]',
   '',
-  '  --redaction       check auto-redaction: whether each model gets redacted requests, and what happens to',
+  '  --redaction       check auto-redaction: whether new content for each model is redacted, and what happens to',
   '                    each category of sensitive content (see the redaction knowledge entry)',
   '  --provider <name> a provider as Settings names it (builtin ones by slug); --model <id> one of its models',
   '  --bot <id>        judge for this bot (its shuvix-id), not for an ordinary session',
   '  --category <C>    one category (API_KEY, EMAIL, PRIVATE_KEY, …); --value <text> its value (default: a sample)',
-  '  --expect redact|send|block   with --redaction: placeholder / real value / not sent; exit 1 when it differs'
+  '  --expect redact|send|block   with --redaction: placeholder / real value / refused (a request: not sent;',
+  '                    a category: placeholder); exit 1 when it differs'
 ].join('\n')
 
 /** 每一类的样例值与认出它的规则（按值写的规则用 --value 试真正关心的那个） */
@@ -90,14 +91,14 @@ function ruleOf(verdict: GateVerdict): string {
 }
 
 const REQUEST_WORDS: Record<DiscloseAction, string> = {
-  redact: 'redacted',
-  send: 'real values (trusted)',
+  redact: 'new content redacted',
+  send: 'not redacted',
   block: 'not sent'
 }
 const CELL_WORDS: Record<DiscloseAction, string> = {
   redact: 'placeholder',
   send: 'real value',
-  block: 'not sent'
+  block: 'placeholder (denied)'
 }
 
 export function runRedactionCheck(
@@ -181,11 +182,13 @@ export function runRedactionCheck(
       const why =
         t.verdict.action === 'redact'
           ? ruleOf(result.verdict)
-          : `the request is ${REQUEST_WORDS[t.verdict.action]} — ${ruleOf(t.verdict.verdict)}`
-      const mismatch = expect !== undefined && expect !== result.action
+          : `this model's requests are ${REQUEST_WORDS[t.verdict.action]} — ${ruleOf(t.verdict.verdict)}`
+      // 这一类被 deny 也是存占位符，所以满足 `--expect redact`
+      const stored = t.verdict.action === 'redact' && result.action === 'block' ? 'redact' : null
+      const mismatch = expect !== undefined && expect !== result.action && expect !== stored
       if (mismatch) exitCode = 1
       out.push(
-        `${mismatch ? '✗' : '-'} ${t.provider} / ${t.model}: ${CELL_WORDS[result.action]} (${why})` +
+        `${mismatch ? '✗' : '-'} ${t.provider} / ${t.model}: ${t.verdict.action === 'block' ? REQUEST_WORDS.block : CELL_WORDS[result.action]} (${why})` +
           (mismatch ? ` — expected ${CELL_WORDS[expect as DiscloseAction]}` : '')
       )
     }
@@ -193,7 +196,7 @@ export function runRedactionCheck(
   }
 
   // ── 第一层：每个模型 ──
-  out.push(`Model requests, for ${who}:`)
+  out.push(`New content for each model, for ${who}:`)
   const requestRows = [['provider', 'model', 'request', 'rule']]
   for (const t of first) {
     const mismatch = expect !== undefined && expect !== t.verdict.action
@@ -215,11 +218,13 @@ export function runRedactionCheck(
       columns.push(t)
   }
   if (columns.length === 0) {
-    out.push('No model gets redacted requests, so no category is kept as a placeholder.')
+    out.push(
+      'New content is not redacted for any model, so no category is stored as a placeholder.'
+    )
     return { out: withWarnings(out, warnings), exitCode }
   }
   out.push(
-    'Sensitive content in redacted requests (a sample value per category; the first model of each provider —',
+    'Sensitive content in new tool results and trigger messages (a sample value per category; the first model of each provider —',
     'check another with --provider / --model, a value of your own with --category and --value):'
   )
   const header = ['category', ...columns.map((c) => `${c.provider} / ${c.model}`)]

@@ -1,12 +1,13 @@
 /**
  * 触发消息（chat-protocol `triggerEvent.ts`，CLAUDE.md「A trigger message's event is a chip」）在真实脱敏器上的
- * 流程：`botTriggerService` 先 `maskTexts([message, 围栏])`，再拼模型文本与显示侧车，然后作为来源 `trigger` 的用户消息
- * 提交。显示侧车与模型文本是同一份占位符；重新生成靠展开侧车逐字重发，所以「展开侧车 === 模型收到的文本」是这里的主轴。
+ * 流程：`botTriggerService` 先按会话的模型 `maskTexts([message, 围栏])`（§16：自动消息是自动脱敏的两个位置之一），再拼模型
+ * 文本与显示侧车，然后作为来源 `trigger` 的用户消息提交，提交时不再脱敏。显示侧车与模型文本是同一份内容；重新生成靠展开
+ * 侧车逐字重发，所以「展开侧车 === 模型收到的文本」是这里的主轴。
  *
  *   RE-1  值出现一次：展开侧车 === 请求里的模型文本；占位符相同；DisplayDoc 和请求里都没有明文
  *   RE-2  同一个值在 message 里出现两次（第二处光秃）：侧车无明文，展开侧车 === 模型文本
  *   RE-3  值在 message 里被认出、围栏字段里光秃出现；反过来也一样
- *   RE-5  幂等：已经是占位符的各种写法，maskTexts 两遍不变、对照表条数不变、全文 maskInput 不变
+ *   RE-5  幂等：已经是占位符的各种写法，maskTexts 两遍不变、对照表条数不变
  *   RE-6  往返：文本里的占位符在表里；工具参数写占位符，工具拿到真值；工具输出真值，记录里是同一个占位符
  *   RE-7  重发：回退到那条用户条目 + 展开原侧车 + submitUser：第二次请求逐字相同，说明只有一份；侧车 deepEqual；
  *         对照表条数不变；投影来源是 trigger、Token 还在；重复值的文本也相同
@@ -15,6 +16,10 @@
  *   RE-10 投影：content = M + 标记，inlineTokens.trigger 字段齐全（含 name），origin.kind 是 trigger；关闭重开后不变
  *   RE-11 旧会话（这之前的运行）：长文本、无显示侧车：content 就是长文本，没有 inlineTokens，开始新请求
  *   RE-12 真实的围栏（timerPayloadAt + 带 +08:00 的 lastFiredAt）：maskTexts 不变，表为空（时间戳不被误认）
+ *   RE-13 按模型判 · 第一层不适用：模型文本、侧车展开、记录、请求都含明文，表 0 项
+ *   RE-14 按模型判 · 第二层 send / block：send 明文不记表；block 占位符记一项；四处是同一份
+ *   RE-15 按模型判 · 第一层 deny：不发请求，错误回复，用户条目是占位符
+ *   RE-16 提交不再二次脱敏：submitUser(text) 之后记录 === text
  */
 import { createHmac } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
@@ -36,10 +41,12 @@ import { backgroundContext as BG } from '../context'
 import { DisplayDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
 import { freshMount } from '../projection/__tests__/projectorSupport'
-import type { RedactionHost } from '../sessionRedaction'
+import type { EgressDecision } from '../redactionEgress'
+import type { MaskOptions, RedactionHost } from '../sessionRedaction'
 import { answer, callTool } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup, type TestHost } from './support/host'
-import { allEntries, requestTexts } from './support/transcript'
+import { DENY1, DENY2, EXEMPT, recordEqualsRequest, SEND } from './support/redaction'
+import { allEntries, messageText, requestTexts } from './support/transcript'
 
 registerHostCleanup()
 
@@ -73,12 +80,13 @@ const MARKER = makeTokenMarker(TRIGGER_EVENT_UID)
 async function build(
   session: DurableSession,
   message: string,
-  fence: string
+  fence: string,
+  options: MaskOptions = {}
 ): Promise<TriggerEventMessage> {
   const [m, f] =
     session.redaction === undefined
       ? [message, fence]
-      : await session.redaction.maskTexts([message, fence])
+      : await session.redaction.maskTexts([message, fence], options)
   return triggerEventMessage({
     message: m!,
     fence: f!,
@@ -219,7 +227,7 @@ describe('trigger messages on the real redactor', () => {
   })
 
   it(
-    'RE-5 already-masked text stays as it is: maskTexts twice, the table size, maskInput on the whole text',
+    'RE-5 already-masked text stays as it is: maskTexts twice, the table size',
     async () => {
       const t = await makeHost({ redaction })
       const session = await t.open()
@@ -242,14 +250,6 @@ describe('trigger messages on the real redactor', () => {
         const once = await redactor.maskTexts([form, fence])
         expect(once, form).toEqual([form, fence])
         expect(await redactor.maskTexts(once), form).toEqual([form, fence])
-        expect(table.size, form).toBe(size)
-        const { text } = triggerEventMessage({
-          message: form,
-          fence,
-          trigger: 'timer.fired',
-          firedLabel: LABEL
-        })
-        expect(await redactor.maskInput(text), form).toBe(text)
         expect(table.size, form).toBe(size)
       }
     },
@@ -454,5 +454,112 @@ describe('trigger messages on the real redactor', () => {
         TIMEOUT
       )
     }
+  })
+
+  describe('按会话的模型判（§16）', () => {
+    const MODEL = { provider: 'faux', modelId: 'faux-1' }
+
+    /** 一次触发：策略判 decision，脱敏按模型现问（botTriggerService 交的就是这个） */
+    async function fireUnder(
+      decision: EgressDecision,
+      message = `DB_PASSWORD=${SECRET}`
+    ): Promise<Fired & { result: Awaited<ReturnType<DurableSession['submitUser']>> }> {
+      const t = await makeHost({ redaction, redactionPolicy: () => decision })
+      const session = await t.open()
+      await primeRoot(session)
+      const built = await build(session, message, FENCE, { model: MODEL })
+      t.kit.queue(answer('ok'))
+      const result = await session.submitUser(built.text, {
+        display: asDisplay(built),
+        source: SOURCE
+      })
+      return {
+        t,
+        session,
+        built,
+        result,
+        seen: t.kit.requests.length > 0 ? requestTexts(t.kit, 0).at(-1)! : '',
+        expanded: `user:${resolveTokensForAgent(built.display.content, built.display.tokens)}`
+      }
+    }
+
+    /** 模型文本、侧车展开、记录、请求四处是同一份 */
+    async function expectSameEverywhere(fired: Fired): Promise<void> {
+      expect(fired.seen).toBe(`user:${fired.built.text}`)
+      expect(fired.expanded).toBe(fired.seen)
+      expect(messageText((await userEntry(fired.session)).model?.[0])).toBe(fired.built.text)
+      await recordEqualsRequest(fired.session, fired.t.kit, 0)
+    }
+
+    it(
+      'RE-13 第一层不适用：模型文本、侧车展开、记录、请求都含明文，表 0 项',
+      async () => {
+        const fired = await fireUnder(EXEMPT)
+        expect(fired.result).toEqual({})
+        expect(fired.built.text).toContain(`DB_PASSWORD=${SECRET}`)
+        await expectSameEverywhere(fired)
+        expect(JSON.stringify(await displayItems(fired.session))).toContain(SECRET)
+        expect((await fired.session.redaction!.table()).size).toBe(0)
+      },
+      TIMEOUT
+    )
+
+    it(
+      'RE-14 第二层 send：明文不记表；四处是同一份',
+      async () => {
+        const fired = await fireUnder(SEND)
+        expect(fired.built.text).toContain(`DB_PASSWORD=${SECRET}`)
+        await expectSameEverywhere(fired)
+        expect((await fired.session.redaction!.table()).size).toBe(0)
+      },
+      TIMEOUT
+    )
+
+    it(
+      'RE-14 第二层 block：占位符记一项，请求照发；四处是同一份',
+      async () => {
+        const fired = await fireUnder(DENY2)
+        expect(fired.result).toEqual({})
+        expect(fired.built.text).not.toContain(SECRET)
+        expect(fired.built.text).toMatch(PLACEHOLDER)
+        await expectSameEverywhere(fired)
+        expect((await fired.session.redaction!.table()).size).toBe(1)
+      },
+      TIMEOUT
+    )
+
+    it(
+      'RE-15 第一层 deny：不发请求，错误回复，用户条目是占位符',
+      async () => {
+        const fired = await fireUnder(DENY1)
+        expect(fired.t.kit.requests).toHaveLength(0)
+        expect(fired.result.error).toMatch(/does not allow sending requests/)
+        const entry = await userEntry(fired.session)
+        const text = messageText(entry.model?.[0])
+        expect(text).toBe(fired.built.text)
+        expect(text).not.toContain(SECRET)
+        expect(text).toMatch(PLACEHOLDER)
+        const entries = await allEntries(await fired.session.currentConversation())
+        expect(entries.at(-1)!.model?.[0]).toMatchObject({ role: 'assistant', stopReason: 'error' })
+        expect(JSON.stringify(await displayItems(fired.session))).not.toContain(SECRET)
+      },
+      TIMEOUT
+    )
+
+    it(
+      'RE-16 提交不再二次脱敏：submitUser(text) 之后记录 === text，表不变',
+      async () => {
+        const t = await makeHost({ redaction })
+        const session = await t.open()
+        await primeRoot(session)
+        const text = `DB_PASSWORD=${SECRET}\n\n${FENCE}`
+        t.kit.queue(answer('ok'))
+        expect(await session.submitUser(text, { source: SOURCE })).toEqual({})
+        expect(messageText((await userEntry(session)).model?.[0])).toBe(text)
+        expect(requestTexts(t.kit, 0).at(-1)).toBe(`user:${text}`)
+        expect((await session.redaction!.table()).size).toBe(0)
+      },
+      TIMEOUT
+    )
   })
 })

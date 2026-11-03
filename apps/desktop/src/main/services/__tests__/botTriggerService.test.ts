@@ -37,8 +37,10 @@
  * 显示侧车与脱敏（BST，2026-11-02，chat-protocol triggerEvent.ts）：
  *   BST-1 prompt 的第 3 个参数逐字是侧车的形状，Token 的 name 是会话标题里的时间
  *   BST-2 模型文本等于侧车展开
- *   BST-3 prompt 之前只调一次 maskTexts，入参恰为 [message, 围栏]；模型文本和侧车都用脱敏后的值
+ *   BST-3 prompt 之前只调一次 maskTexts，入参恰为 [message, 围栏]，第二个参数是会话设定的模型 {provider, modelId}；模型文本和
+ *         侧车都用脱敏后的值
  *   BST-4 maskTexts reject → 不 prompt、日志 failed、lastFired 不推进、在跑标记释放
+ *   BST-5 resolveRunConfig reject → 第二个参数 undefined，运行照常
  *
  * mock 面：botService（listAll 给什么就是什么）、projectService（只有 projectsNamed）、sessionService、settingsService（内存表）、trackingNotes、
  * triggerLogService（record / finish 两个桩）、logger。
@@ -57,6 +59,7 @@ const mocks = vi.hoisted(() => ({
   projects: [] as Array<{ id: string; name: string }>,
   create: vi.fn<(input: Record<string, unknown>) => { id: string }>(),
   ensure: vi.fn<(id: string) => Promise<unknown>>(),
+  resolveRunConfig: vi.fn<(id: string) => Promise<unknown>>(),
   prompt: vi.fn<(...args: unknown[]) => Promise<{ error?: string }>>(),
   commit: vi.fn<(message: string) => Promise<void>>(),
   ensureDir: vi.fn<() => void>(),
@@ -80,7 +83,11 @@ vi.mock('../projectService', () => ({
   }
 }))
 vi.mock('../sessionService', () => ({
-  sessionService: { create: mocks.create, ensureAgentSession: mocks.ensure }
+  sessionService: {
+    create: mocks.create,
+    ensureAgentSession: mocks.ensure,
+    resolveRunConfig: mocks.resolveRunConfig
+  }
 }))
 vi.mock('../settingsService', () => ({
   settingsService: {
@@ -199,6 +206,7 @@ beforeEach(() => {
     mocks.listAll,
     mocks.create,
     mocks.ensure,
+    mocks.resolveRunConfig,
     mocks.prompt,
     mocks.commit,
     mocks.ensureDir,
@@ -213,6 +221,10 @@ beforeEach(() => {
   mocks.warn.mockReset()
   mocks.create.mockImplementation(() => ({ id: `s-${++seq}` }))
   mocks.ensure.mockImplementation(async () => ({ prompt: mocks.prompt, maskTexts }))
+  mocks.resolveRunConfig.mockResolvedValue({
+    model: { provider: 'home', model: 'qwen', capabilities: {} },
+    thinkingLevel: 'off'
+  })
   mocks.prompt.mockResolvedValue({})
   mocks.commit.mockResolvedValue(undefined)
   svc = new BotTriggerService()
@@ -1375,6 +1387,9 @@ describe('BST 触发消息的显示侧车与脱敏', () => {
     expect(masking).toHaveBeenCalledTimes(1)
     const firstArgs = masking.mock.calls[0]![0]
     expect(firstArgs).toHaveLength(2)
+    // 第二个参数：会话设定的模型（AgentSession 按锁优先，刚建的会话还没有锁）
+    expect(mocks.resolveRunConfig).toHaveBeenCalledWith('s-1')
+    expect((masking.mock.calls[0] as unknown[])[1]).toEqual({ provider: 'home', modelId: 'qwen' })
     expect(firstArgs[0]).toBe(TICK.message)
     const firstFence = firstArgs[1]!
     expect(firstFence).toMatch(
@@ -1420,5 +1435,25 @@ describe('BST 触发消息的显示侧车与脱敏', () => {
     expect(lastFired()).toStrictEqual({ 'bot:x#0#timer.fired': next.firedAt })
     // 第二次的围栏没有 lastFiredAt：上一次没跑成
     expect(fenceOf(promptText(0))).not.toHaveProperty('lastFiredAt')
+  })
+
+  it.each([
+    ['reject', () => mocks.resolveRunConfig.mockRejectedValue(new Error('gone'))],
+    ['没有模型', () => mocks.resolveRunConfig.mockResolvedValue({ model: null })],
+    ['没有配置', () => mocks.resolveRunConfig.mockResolvedValue(null)]
+  ])('BST-5 resolveRunConfig %s：第二个参数 undefined，运行照常', async (_name, arrange) => {
+    arrange()
+    const masking = vi.fn(async (texts: readonly string[]) => [...texts])
+    mocks.ensure.mockImplementation(async () => ({ prompt: mocks.prompt, maskTexts: masking }))
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+
+    const firing = minute(18, 0)
+    svc.fire('timer.fired', firing)
+    await settle()
+    expect(masking).toHaveBeenCalledTimes(1)
+    expect((masking.mock.calls[0] as unknown[])[1]).toBeUndefined()
+    expect(mocks.prompt).toHaveBeenCalledTimes(1)
+    expect(mocks.finish).toHaveBeenCalledWith('log-1', 'completed')
+    expect(lastFired()).toStrictEqual({ 'bot:x#0#timer.fired': firing.firedAt })
   })
 })

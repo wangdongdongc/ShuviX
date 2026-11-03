@@ -7,6 +7,10 @@
  *   RP-3 第二层的用户策略：某一类照发、按值放行测试 key、某一类绝不发
  *   RP-4 第一层 deny：整个请求不发
  *   RP-5 主体：有对话时按它认 agent，没有就按根 agent
+ *   RP-6 内置策略被禁用（isPolicyDisabled）：每个模型都不脱敏，也不拒发
+ *   RP-7 用户写的 ask（这里没人可问）：第一层 → 拒发；第二层 → block（写入时存占位符）
+ *   RP-8 信任服务商 + 某一类 deny：第一层不适用，这一类不再起作用
+ *   RP-9 守卫：内置策略逐类判 send ⇔ isKeptAsWritten（判不出时的回退与内置策略不分叉）
  */
 import { describe, expect, it, vi } from 'vitest'
 import type {
@@ -16,10 +20,15 @@ import type {
   UserPolicyFile
 } from '@shuvix/agent-runtime'
 import { parsePolicyDefinitionFile } from '@shuvix/agent-runtime'
+import {
+  isKeptAsWritten,
+  SENSITIVE_CATEGORIES
+} from '../../../../../../packages/agent-runtime/src/redaction/categories'
 
 const state = vi.hoisted(() => ({
   userPolicies: [] as UserPolicyFile[],
   contexts: [] as Array<{ sessionId: string; agent?: { kind: string; profileName?: string } }>,
+  disabled: new Set<string>(),
   providers: [] as Array<Pick<ProviderRow, 'id' | 'name' | 'isBuiltin'>>
 }))
 
@@ -47,7 +56,8 @@ vi.mock('../toolContext', async () => {
           pathSep: '/',
           getVars: () => ({}),
           readBuiltinPolicyMd: reader,
-          getUserPolicies: () => state.userPolicies
+          getUserPolicies: () => state.userPolicies,
+          isPolicyDisabled: (policy: { name: string }) => state.disabled.has(policy.name)
         }
       )
     }
@@ -83,6 +93,7 @@ const item = (
 function reset(policies: UserPolicyFile[] = []): void {
   state.userPolicies = policies
   state.contexts = []
+  state.disabled = new Set()
   state.providers = [
     { id: 'row-anthropic', name: 'Anthropic', isBuiltin: true },
     { id: 'row-home', name: 'home-server', isBuiltin: false }
@@ -164,5 +175,67 @@ describe('自动脱敏的策略判定', () => {
     desktopRedactionPolicy({ sessionId: 's1', provider: 'anthropic', model: 'm' }, agentOf)
     expect(asked).toEqual([['s1', 7]])
     expect(state.contexts.map((ctx) => ctx.agent?.kind)).toEqual(['spawned', undefined])
+  })
+
+  it('RP-6 内置策略被禁用：每个模型都不脱敏，也不拒发', () => {
+    reset()
+    state.disabled.add('redact-sensitive')
+    for (const [provider, model] of [
+      ['anthropic', 'claude-x'],
+      ['row-home', 'qwen'],
+      ['openai', 'gpt-x']
+    ] as const) {
+      const decision = judge(provider, model)
+      expect(decision.applies, model).toBe(false)
+      expect(decision.blocked, model).toBeUndefined()
+    }
+  })
+
+  it('RP-7 用户写的 ask（没人可问）：第一层 → 拒发；第二层 → block', () => {
+    reset([
+      userPolicy(`  - effect: ask
+    subject.kind: [agent]
+    action: [send]
+    object.type: [modelRequest]
+    match: "object.model == 'claude-x'"
+  - effect: ask
+    subject.kind: [agent]
+    action: [disclose]
+    object.type: [sensitive]
+    match: "object.category == 'PHONE'"`)
+    ])
+    expect(judge('anthropic', 'claude-x').blocked).toBe(true)
+    const other = judge('anthropic', 'claude-y')
+    expect(other.blocked).toBeUndefined()
+    expect(other.applies).toBe(true)
+    expect(other.disclose(item('PHONE'))).toBe('block')
+    expect(other.disclose(item('EMAIL'))).toBe('redact')
+  })
+
+  it('RP-8 信任服务商 + 某一类 deny：第一层不适用，这一类不再起作用', () => {
+    reset([
+      userPolicy(`  - effect: force-allow
+    subject.kind: [agent]
+    action: [send]
+    object.type: [modelRequest]
+    match: "object.provider == 'home-server'"
+  - effect: deny
+    subject.kind: [agent]
+    action: [disclose]
+    object.type: [sensitive]
+    match: "object.category == 'PRIVATE_KEY'"`)
+    ])
+    const trusted = judge('row-home')
+    expect(trusted.applies).toBe(false)
+    expect(trusted.blocked).toBeUndefined()
+    expect(judge('anthropic').disclose(item('PRIVATE_KEY'))).toBe('block')
+  })
+
+  it('RP-9 守卫：内置策略逐类判 send ⇔ isKeptAsWritten', () => {
+    reset()
+    const decision = judge()
+    for (const category of SENSITIVE_CATEGORIES) {
+      expect(decision.disclose(item(category)) === 'send', category).toBe(isKeptAsWritten(category))
+    }
   })
 })

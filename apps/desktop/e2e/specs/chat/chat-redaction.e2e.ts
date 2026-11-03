@@ -1,15 +1,18 @@
 /**
- * 自动脱敏（docs/auto-redaction-design.md）的整条链路，真应用 + 假模型：
+ * 自动脱敏（docs/auto-redaction-design.md §16：记录即所发）的整条链路，真应用 + 假模型：
  *
  *   RD-1 缺省（内置 redact-sensitive）：输入框提示那个 key（虚线 + 提示行），点「隐藏」换成胶囊再发 —— 发给模型时是
- *        占位符；模型照抄占位符调 write，磁盘上写的是真值；对话记录（message.list）里只有占位符；界面显示模型收到的
- *        样子（占位符），指到占位符才浮出真值
- *   RD-2 信任这个服务商（用户策略 force-allow modelRequest）：隐藏了的 key 模型收到真值；它在回复里写出的真值存成
- *        占位符、界面上仍显示真值
+ *        占位符；模型照抄占位符调 write，磁盘上写的是真值；对话记录（message.list）里只有占位符；界面显示占位符，
+ *        指到占位符才浮出真值
+ *   RD-2 信任这个服务商（真策略文件 force-allow modelRequest，真 HTTP 请求体）：read 读到的 key 按真值存、按真值发，界面没有
+ *        它的占位符；+ 加的值在请求里仍是占位符。删掉策略再读一次：历史真值照发、新结果存占位符，请求与 message.list 里
+ *        两种形式并存，界面指到占位符才出真值
  *   RD-3 第一层拒发（用户策略 deny modelRequest）：请求不发，这一轮以出错结束
  *   RD-4 提示了不理会：照原样发（模型与记录里都是真值，§14 用户说了算）
  *   RD-5 + → 添加敏感信息（值里有 `$`、`'`、`"`）：模型只见占位符；它在 bash 里把占位符放进双引号、单引号、裸词，
  *        真 bash 打出来的都是那个值（还原时按引号转义）。沙箱不可用就跳过（受限命令才不问）
+ *   RD-6 关掉内置策略（真开关 mdMeta.setEnabled）：新读到的按真值存、按真值发，旧占位符还在请求里；模型用旧占位符写文件，
+ *        磁盘上是真值；输入框不再提示。之后重新打开
  *
  * 前置：会话绑项目，write 的目标在项目目录里（ask-on-external-path 不问）。占位符的 8 位摘要用这个实例自己的密钥，
  * 用例里算不出来 —— 假模型用 `build` 从请求里取。
@@ -157,6 +160,7 @@ beforeAll(async () => {
   sids.deny = await createSession('R-deny', project.id)
   sids.plain = await createSession('R-plain', project.id)
   sids.quote = await createSession('R-quote', project.id)
+  sids.off = await createSession('R-off', project.id)
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -172,7 +176,7 @@ afterAll(async () => {
 })
 
 describe('自动脱敏', () => {
-  it('RD-1 缺省：模型见占位符，工具写真值，记录存占位符，界面显示真值', async () => {
+  it('RD-1 缺省：模型见占位符，工具写真值，记录存占位符，界面显示占位符', async () => {
     provider.reset()
     await events.clear()
     const envPath = join(projDir, '.env')
@@ -229,7 +233,7 @@ describe('自动脱敏', () => {
     expect(stored).not.toContain(KEY)
     expect(stored).toMatch(PLACEHOLDER)
 
-    // 界面：显示模型收到的样子 —— 用户气泡与助手正文里是占位符，不是真值
+    // 界面：记录里是占位符就显示占位符 —— 用户气泡与助手正文里都不是真值
     const placeholder = PLACEHOLDER.exec(requests[0]!.lastUserText)![0]
     await until(
       async () => (await marks()).filter((m) => m === `API_KEY:${placeholder}`).length >= 2,
@@ -252,37 +256,92 @@ describe('自动脱敏', () => {
     rmSync(envPath, { force: true })
   })
 
-  it('RD-2 信任这个服务商：模型见真值，回复里的真值存成占位符', async () => {
+  it('RD-2 信任这个服务商：新内容按真值存、按真值发；删掉策略后旧的不回头，新的存占位符', async () => {
+    const notes = join(projDir, 'notes.txt')
+    writeFileSync(notes, `OPENAI_API_KEY=${KEY}\n`)
+    const PW = 'Plus-Added-Pw-9931'
+    const READ_ARGS = JSON.stringify({ path: notes })
     await writePolicy(
       'trust-fake',
       `  - effect: force-allow\n    subject.kind: [agent]\n    action: [send]\n    object.type: [modelRequest]\n    match: "object.provider == '${PROVIDER_NAME}'"`
     )
     provider.reset()
     await events.clear()
-    provider.script({ build: (req) => ({ text: `echo: ${req.lastUserText}` }) })
+    provider.script(
+      { toolCalls: [{ id: 'call_r1', name: 'read', args: READ_ARGS }] },
+      { text: `the file has ${KEY}` }
+    )
 
     expect(await sidebar.openSession('R-trust')).toBe(true)
     await chat.ready()
-    await chat.type(`my key is ${KEY}`)
-    // 信任的目的地不提示（模型会收到真值）：自己从 + 加
+    await chat.type(`read the notes, my key is ${KEY}`)
+    // 这个模型不脱敏：输入框不提示
     await new Promise((r) => setTimeout(r, 700))
     expect(await hintCategories()).toEqual([])
-    await chat.type('my key is ')
-    await addSecret(KEY, 'API_KEY')
+    await chat.type('read the notes, the password is ')
+    await addSecret(PW, 'PASSWORD')
     await chat.clickSend()
     await events.waitFor('agent_end', { sessionId: sids.trust })
     await chat.waitIdle()
 
-    expect(provider.requests()[0]!.lastUserText).toBe(`my key is ${KEY}`)
+    // 真 HTTP 请求体：工具结果是真值；+ 加的值还是占位符
+    const first = provider.requests()
+    expect(first).toHaveLength(2)
+    expect(first[0]!.lastUserText).toMatch(
+      /^read the notes, the password is \{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\}$/
+    )
+    expect(first[1]!.raw).toContain(`OPENAI_API_KEY=${KEY}`)
+    expect(first[1]!.raw).not.toMatch(PLACEHOLDER)
+    for (const req of first) expect(req.raw).not.toContain(PW)
+    // 记录与请求一样
     const stored = await listedText(sids.trust)
-    expect(stored).not.toContain(KEY)
-    expect(stored).toMatch(/echo: my key is \{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}/)
+    expect(stored).toContain(`OPENAI_API_KEY=${KEY}`)
+    expect(stored).toContain(`the file has ${KEY}`)
+    expect(stored).not.toMatch(PLACEHOLDER)
+    expect(stored).not.toContain(PW)
+    // 界面：回复里是真值，这把 key 没有占位符
     await until(
       async () =>
         ((await chat.settledItems()).find((i) => i.role === 'assistant')?.text ?? '').includes(KEY),
-      'assistant reply shows the real value'
+      'assistant reply shows the value as written'
     )
+    expect((await marks()).filter((m) => m.startsWith('API_KEY:'))).toEqual([])
+
+    // 删掉策略：历史不动、照发，新的工具结果存占位符
     await removePolicy('trust-fake')
+    provider.reset()
+    await events.clear()
+    provider.script(
+      { toolCalls: [{ id: 'call_r2', name: 'read', args: READ_ARGS }] },
+      { build: (req) => ({ text: `now it reads ${PLACEHOLDER.exec(req.raw)?.[0]}` }) }
+    )
+    await chat.typeAndSend('read it again')
+    await events.waitFor('agent_end', { sessionId: sids.trust })
+    await chat.waitIdle()
+
+    const second = provider.requests()
+    expect(second).toHaveLength(2)
+    const last = second[1]!.raw
+    expect(last).toContain(`OPENAI_API_KEY=${KEY}`)
+    const placeholder = /OPENAI_API_KEY=(\{\{REDACTED_API_KEY_[a-z2-7]{8}\}\})/.exec(last)?.[1]
+    expect(placeholder).toBeDefined()
+    const listed = await listedText(sids.trust)
+    expect(listed).toContain(`OPENAI_API_KEY=${KEY}`)
+    expect(listed).toContain(`OPENAI_API_KEY=${placeholder}`)
+    expect(listed).toContain(`now it reads ${placeholder}`)
+    // 界面：显示占位符，指到才出真值
+    await until(
+      async () => (await marks()).includes(`API_KEY:${placeholder}`),
+      'the new placeholder shown'
+    )
+    const revealed = await app.main.eval<string | null>(`(async () => {
+      const el = document.querySelector('[data-redaction="API_KEY"]')
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 50))
+      return document.querySelector('[data-redaction-popover] [data-redaction-value]')?.textContent ?? null
+    })()`)
+    expect(revealed).toBe(KEY)
+    rmSync(notes, { force: true })
   })
 
   it('RD-3 第一层拒发：请求不发，这一轮以出错结束', async () => {
@@ -366,5 +425,76 @@ describe('自动脱敏', () => {
     expect(readFileSync(out, 'utf-8')).toBe(`${PASSWORD}\n${PASSWORD}\n${PASSWORD}\n`)
     expect(await listedText(sids.quote)).not.toContain(PASSWORD)
     rmSync(out, { force: true })
+  })
+
+  it('RD-6 关掉内置策略：新内容按真值存、按真值发；旧占位符留着，工具照样还原；输入框不再提示', async () => {
+    const notes = join(projDir, 'off-notes.txt')
+    const written = join(projDir, 'off-written.txt')
+    writeFileSync(notes, `OPENAI_API_KEY=${KEY}\n`)
+    const READ_ARGS = JSON.stringify({ path: notes })
+    const setBuiltin = (enabled: boolean): Promise<{ success: boolean }> =>
+      app.main.eval<{ success: boolean }>(
+        `window.api.mdMeta.setEnabled({ objectId: 'policy:builtin:redact-sensitive', enabled: ${enabled} })`
+      )
+
+    // 开着：工具结果存占位符
+    provider.reset()
+    await events.clear()
+    provider.script(
+      { toolCalls: [{ id: 'call_o1', name: 'read', args: READ_ARGS }] },
+      { text: 'noted' }
+    )
+    expect(await sidebar.openSession('R-off')).toBe(true)
+    await chat.ready()
+    await chat.typeAndSend('read the notes')
+    await events.waitFor('agent_end', { sessionId: sids.off })
+    await chat.waitIdle()
+    const old = PLACEHOLDER.exec(provider.requests()[1]!.raw)?.[0]
+    expect(old).toBeDefined()
+    expect(provider.requests()[1]!.raw).not.toContain(KEY)
+
+    expect((await setBuiltin(false)).success).toBe(true)
+    try {
+      provider.reset()
+      await events.clear()
+      provider.script(
+        { toolCalls: [{ id: 'call_o2', name: 'read', args: READ_ARGS }] },
+        {
+          toolCalls: [
+            {
+              id: 'call_o3',
+              name: 'write',
+              args: JSON.stringify({ path: written, content: `OPENAI_API_KEY=${old}\n` })
+            }
+          ]
+        },
+        { text: 'done' }
+      )
+      await chat.typeAndSend('read it again and save a copy')
+      await events.waitFor('agent_end', { sessionId: sids.off })
+      await chat.waitIdle()
+
+      // 新读到的：请求与记录都是真值；旧占位符还在请求里，没被换
+      const requests = provider.requests()
+      expect(requests).toHaveLength(3)
+      for (const req of requests.slice(1)) {
+        expect(req.raw).toContain(`OPENAI_API_KEY=${KEY}`)
+        expect(req.raw).toContain(`OPENAI_API_KEY=${old}`)
+      }
+      const listed = await listedText(sids.off)
+      expect(listed).toContain(`OPENAI_API_KEY=${KEY}`)
+      expect(listed).toContain(`OPENAI_API_KEY=${old}`)
+      // 模型写旧占位符，磁盘上是真值
+      expect(readFileSync(written, 'utf-8')).toBe(`OPENAI_API_KEY=${KEY}\n`)
+      // 输入框不再提示
+      await chat.type(`use this key ${KEY}`)
+      await new Promise((r) => setTimeout(r, 700))
+      expect(await hintCategories()).toEqual([])
+      await chat.type('')
+    } finally {
+      await setBuiltin(true)
+      rmSync(notes, { force: true })
+      rmSync(written, { force: true })
+    }
   })
 })

@@ -191,10 +191,18 @@ export class AgentSession {
     return result
   }
 
-  /** 写进对话记录之前的脱敏（没开脱敏 = 原样）：调用方要拿同一份占位符再拼模型文本与显示侧车时用（触发消息） */
-  async maskTexts(texts: readonly string[]): Promise<string[]> {
+  /**
+   * 自动触发的消息写进对话记录之前按策略脱敏（docs/auto-redaction-design.md §16）：按会话锁住的模型判，还没有锁（刚建的
+   * 会话）按调用方给的会话设定的模型。调用方拿同一份结果拼模型文本与显示侧车。
+   */
+  async maskTexts(
+    texts: readonly string[],
+    configuredModel?: { provider: string; modelId: string }
+  ): Promise<string[]> {
     const redaction = this.durable.redaction
-    return redaction === undefined ? [...texts] : await redaction.maskTexts(texts)
+    if (redaction === undefined) return [...texts]
+    const model = this.durable.lock?.model ?? configuredModel
+    return await redaction.maskTexts(texts, model === undefined ? {} : { model })
   }
 
   /** 运行中插话（空闲时起一轮）；`source` = 这条输入从哪来（网关盖的章）。被拒 → reject（调用方把文案报给界面） */

@@ -38,7 +38,7 @@ export interface RedactionTableItem {
 /** 会话对照表的内存视图 */
 export class RedactionTable {
   private readonly items = new Map<string, RedactionTableItem>()
-  /** 解得开的真值，供原文匹配（写入时的已知值、出口把回复里的真值换回占位符） */
+  /** 解得开的真值，供原文匹配（写入时的已知值） */
   readonly known = new KnownValues()
   /** 用户照原样发的值（asWrittenKey，§14.2）：检测跳过它们 */
   readonly asWritten = new Set<string>()

@@ -703,10 +703,13 @@ describe('DG · 运行中插话不算用户的话（docs/task-list-design.md §2
     'DG-1 a busy steer with an image and a masked secret: the digest user item is the masked text, with no marker and no note',
     async () => {
       const { t, session, sending, release } = await heldRound({ redaction: redactionHost })
-      const admitted = await session.steer([
-        { type: 'text', text: `use DB_PASSWORD=${PASSWORD}` },
-        { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }
-      ])
+      const admitted = await session.steer(
+        [
+          { type: 'text', text: `use DB_PASSWORD=${PASSWORD}` },
+          { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }
+        ],
+        { composer: { secrets: [{ value: PASSWORD, category: 'PASSWORD' }] } }
+      )
       expect(admitted.submissionId).toBeDefined()
       release()
       expect(await withTimeout(sending, 5000, 'round')).toEqual({})

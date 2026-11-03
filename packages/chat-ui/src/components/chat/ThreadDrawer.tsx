@@ -35,7 +35,6 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { buildVisibleItems } from './Conversation'
-import { messageReaders } from './conversationItems'
 import { RedactedText } from './RedactedText'
 
 /** 助手消息（与 Conversation 同口径） */
@@ -97,7 +96,6 @@ export function ThreadDrawer({ sessionId }: { sessionId: string }): React.JSX.El
     () => buildVisibleItems(messages, isStreaming),
     [messages, isStreaming]
   )
-  const readers = useMemo(() => messageReaders(visibleItems), [visibleItems])
   // 仅当最后一条消息是助手消息时才允许重新生成（与 Conversation 同口径）
   const lastAssistantId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -161,7 +159,6 @@ export function ThreadDrawer({ sessionId }: { sessionId: string }): React.JSX.El
                 lastAssistantId={lastAssistantId}
                 onRollback={canRollback ? handleRollback : undefined}
                 onRegenerate={canRollback ? handleRegenerate : undefined}
-                redactionReaders={readers.get(item.key)}
               />
             ))}
             <StreamingFooter />

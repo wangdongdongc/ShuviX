@@ -1,19 +1,19 @@
 // @vitest-environment jsdom
 /**
- * 自动脱敏的占位符怎么显示（RedactedText / RedactedMark / 浮层 / 缓存 / markdown，docs/auto-redaction-design.md §2.3，jsdom）：
- * 界面显示模型收到的样子。
+ * 自动脱敏的占位符怎么显示（RedactedText / RedactedMark / 浮层 / 缓存 / markdown，docs/auto-redaction-design.md §16，jsdom）：
+ * 记录里有占位符的地方，界面就显示占位符（模型收到的就是它），指到才浮出真值。
  *
- *   RD-1 模型收到占位符的：显示占位符原文；指到浮出真值（类别、说明、复制）；离开收起；点一下钉住，再点收起
- *   RD-2 模型收到真值的（disclosed）：原样显示真值，没有占位符、不浮出
+ *   RD-1 显示占位符原文；指到浮出真值（类别、说明、复制）；离开收起；点一下钉住，再点收起
+ *   RD-2 USERNAME 这类默认照发的，有真值时也显示占位符、可浮出；没有 data-redaction-sent 这回事
  *   RD-3 查到但解不开 / 表里没有：显示占位符，浮层说明读不出；刚问过的不重复问；几处攒成一次查询
- *   RD-4 归属：缺省按当前会话问；RedactionSessionProvider 指明的会话按它问
- *   RD-5 markdown：正文与代码块按模型看到的样子；复制用的文本换回真值；行内代码里只有模型收到真值的才换，换完是文件路径
- *        才认成轻量链接，目录仍显示源文本
+ *   RD-4 归属：缺省按当前会话问；RedactionSessionProvider 指明的会话按它问，浮出的是那条会话的真值
+ *   RD-5 markdown：正文与代码块是占位符；行内代码含占位符（真值已查到且是文件路径）显示占位符、不成链接；普通路径照成
+ *        链接；复制用的文本换回真值
  *   RD-6 浮出期间真值查到了：浮层就地换成真值
- *   RD-7 策略变了（policy.changed）：记下的重问一遍，模型收到的样子跟着变
+ *   RD-7 policy.changed：不重问，显示不变
  *   RD-8 没有占位符的文本原样，不发查询
- *   RD-9 对话记录里的消息（RedactionReadersProvider，§15.2）：会话的模型与每个第一个读者都照发才显示真值；查询带上
- *        读者，已经查到的占位符遇到没判过的读者再问一次；markdown 行内代码同样按读者判
+ *   RD-10 查询入参严格是 {sessionId, placeholders}，没有 readers
+ *   RD-11 服务端多带 disclosed：不理它，仍显示占位符
  *
  * 后端是注入的 SessionChannelApi（redaction.resolve 与 events）；i18n 走真 en 资源；不写 JSX，一律 createElement。
  */
@@ -28,8 +28,12 @@ import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { RedactionMarkInfo } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { setSessionChannelApi } from '../../../api/chatApi'
 import { useChatStore } from '../../../stores/chatStore'
-import { resetRedactionCacheForTests, restoreForCopy } from '../../../stores/redactionCache'
-import { RedactionReadersProvider, RedactionSessionProvider } from '../../../hooks/useRedaction'
+import {
+  redactionInfo,
+  resetRedactionCacheForTests,
+  restoreForCopy
+} from '../../../stores/redactionCache'
+import { RedactionSessionProvider } from '../../../hooks/useRedaction'
 import { hideRedaction } from '../redactionPopover'
 import { RedactedText } from '../RedactedText'
 import { MarkdownText } from '../markdownComponents'
@@ -45,27 +49,20 @@ const SEALED = '{{REDACTED_SECRET_aaaaaaaa}}'
 // v0.2.30 / v0.2.31 存下的旧写法照样认
 const GONE = '{{TOKEN_bbbbbbbb}}'
 const USER = '{{USERNAME_cccccccc}}'
-/** 两个第一个读者：旧模型保持占位符，新模型照发 */
-const OLD = 'faux\u0000old'
-const NEW = 'faux\u0000new'
 
-/** 每条会话的对照表；disclosed = 模型收到的是真值 */
+/** 每条会话的对照表 */
 const tables: Record<string, Record<string, RedactionMarkInfo>> = {}
 function resetTables(): void {
   tables.s1 = {
-    [KEY]: { category: 'API_KEY', value: 'sk-real-0123456789', disclosed: false },
-    [MAIL]: { category: 'EMAIL', value: 'alice@acme-corp.cn', disclosed: false },
+    [KEY]: { category: 'API_KEY', value: 'sk-real-0123456789' },
+    [MAIL]: { category: 'EMAIL', value: 'alice@acme-corp.cn' },
     [SEALED]: { category: 'SECRET' },
-    [USER]: {
-      category: 'USERNAME',
-      value: 'alice',
-      disclosed: true,
-      disclosedTo: { [OLD]: false, [NEW]: true }
-    }
+    [USER]: { category: 'USERNAME', value: 'alice' }
   }
-  tables.other = { [KEY]: { category: 'API_KEY', value: 'sk-other-session', disclosed: true } }
+  tables.other = { [KEY]: { category: 'API_KEY', value: 'sk-other-session' } }
 }
-const calls: Array<{ sessionId: string; placeholders: string[]; readers?: string[] }> = []
+/** 每次查询的入参，原样 */
+const calls: Array<Record<string, unknown>> = []
 const eventListeners = new Set<(event: AppEvent) => void>()
 /** 第一次查询先挂着，放行前浮层里是「正在查」 */
 let gate: Promise<void> | null = null
@@ -77,25 +74,12 @@ beforeAll(async () => {
   await i18n.use(initReactI18next).init({ lng: 'en', resources: { en: { translation: en } } })
   setSessionChannelApi({
     redaction: {
-      resolve: async ({ sessionId, placeholders, readers }) => {
-        calls.push({
-          sessionId,
-          placeholders: [...placeholders],
-          ...(readers === undefined ? {} : { readers: [...readers] })
-        })
+      resolve: async (input: { sessionId: string; placeholders: string[] }) => {
+        calls.push(structuredClone(input))
         if (gate) await gate
-        const table = tables[sessionId] ?? {}
-        const answer = (info: RedactionMarkInfo): RedactionMarkInfo =>
-          readers === undefined
-            ? info
-            : {
-                ...info,
-                disclosedTo: Object.fromEntries(
-                  readers.map((key) => [key, info.disclosedTo?.[key] === true])
-                )
-              }
+        const table = tables[input.sessionId] ?? {}
         return Object.fromEntries(
-          placeholders.filter((p) => table[p]).map((p) => [p, answer(table[p]!)])
+          input.placeholders.filter((p) => table[p]).map((p) => [p, table[p]!])
         )
       }
     },
@@ -154,7 +138,7 @@ const leave = async (el: HTMLElement): Promise<void> => {
 }
 
 describe('脱敏占位符的显示', () => {
-  it('RD-1 模型收到占位符的：显示占位符，指到浮出真值，离开收起，点一下钉住', async () => {
+  it('RD-1 显示占位符，指到浮出真值，离开收起，点一下钉住', async () => {
     await show(createElement(RedactedText, { text: `key ${KEY}, mail ${MAIL}.` }))
     expect(container.textContent).toBe(`key ${KEY}, mail ${MAIL}.`)
     const [key] = marks()
@@ -177,13 +161,15 @@ describe('脱敏占位符的显示', () => {
     expect(popover()).toBeNull()
   })
 
-  it('RD-2 模型收到真值的：原样显示，不浮出', async () => {
+  it('RD-2 默认照发的 USERNAME：有真值也显示占位符，可浮出；没有 data-redaction-sent', async () => {
     await show(createElement(RedactedText, { text: `home /Users/${USER}/proj` }))
-    expect(container.textContent).toBe('home /Users/alice/proj')
+    expect(container.textContent).toBe(`home /Users/${USER}/proj`)
+    expect(container.textContent).not.toContain('alice')
     const [user] = marks()
-    expect(user!.hasAttribute('data-redaction-sent')).toBe(true)
+    expect(user!.hasAttribute('data-redaction-placeholder')).toBe(true)
     hover(user!)
-    expect(popover()).toBeNull()
+    expect(popover()?.querySelector('[data-redaction-value]')?.textContent).toBe('alice')
+    expect(document.querySelector('[data-redaction-sent]')).toBeNull()
   })
 
   it('RD-3 解不开 / 表里没有：显示占位符，浮层说明读不出；刚问过的不重复问；攒成一次查询', async () => {
@@ -197,7 +183,7 @@ describe('脱敏占位符的显示', () => {
     expect(marks()[1]!.dataset.redaction).toBe('TOKEN')
     expect(marks()[0]!.dataset.redaction).toBe('SECRET')
     await show(createElement(RedactedText, { text: `${GONE} ${SEALED} !` }))
-    expect(calls).toEqual([{ sessionId: 's1', placeholders: [SEALED, GONE] }])
+    expect(calls).toStrictEqual([{ sessionId: 's1', placeholders: [SEALED, GONE] }])
   })
 
   it('RD-4 归属：缺省当前会话，Provider 指明的按它', async () => {
@@ -213,34 +199,45 @@ describe('脱敏占位符的显示', () => {
         )
       )
     )
-    // s1 里这把 key 以占位符发出，other 会话里以真值发出
-    expect(container.textContent).toBe(`${KEY} / sk-other-session`)
+    // 两处都显示占位符；各问各的会话，浮出的是各自对照表里的真值
+    expect(container.textContent).toBe(`${KEY} / ${KEY}`)
+    expect(calls).toStrictEqual([
+      { sessionId: 's1', placeholders: [KEY] },
+      { sessionId: 'other', placeholders: [KEY] }
+    ])
+    const [mine, theirs] = marks()
+    hover(mine!)
+    expect(popover()?.querySelector('[data-redaction-value]')?.textContent).toBe(
+      'sk-real-0123456789'
+    )
+    hover(theirs!)
+    expect(popover()?.querySelector('[data-redaction-value]')?.textContent).toBe('sk-other-session')
   })
 
-  it('RD-5 markdown：模型看到的样子；复制换回真值；行内文件路径只换模型收到真值的', async () => {
-    const md = `Use ${KEY} here.\n\n\`\`\`bash\nexport OPENAI_API_KEY="${KEY}"\n\`\`\`\n\nOpen \`/Users/${USER}/proj/app.ts\` inside \`/Users/${USER}/proj\` and \`/srv/${KEY}/x\``
+  it('RD-5 markdown：占位符照样显示；带占位符的路径不成链接，普通路径照成链接；复制换回真值', async () => {
+    const md = `Use ${KEY} here.\n\n\`\`\`bash\nexport OPENAI_API_KEY="${KEY}"\n\`\`\`\n\nOpen \`/Users/${USER}/proj/app.ts\` then \`/srv/${KEY}/x\` and \`/srv/plain/app.ts\``
     await show(createElement(MarkdownText, { text: md }))
+    await settle()
     const text = container.textContent ?? ''
     expect(text).toContain(`Use ${KEY} here.`)
     expect(text).toContain(`export OPENAI_API_KEY="${KEY}"`)
     expect(text).not.toContain('sk-real')
-    // 用户名模型收到的是真值：换完是文件路径，认成轻量链接（可见文本只有 basename，悬停是完整路径）
-    const chip = [...container.querySelectorAll('button')].find((b) =>
-      b.title.startsWith('/Users/alice/proj/app.ts')
-    )
-    expect(chip).toBeDefined()
+    // 用户名的真值已经查到（换完是个文件路径），也还是占位符、不成链接
+    expect(redactionInfo('s1', USER)).toMatchObject({ value: 'alice' })
+    expect(text).toContain(`/Users/${USER}/proj/app.ts`)
+    expect(text).not.toContain('/Users/alice')
+    const buttons = [...container.querySelectorAll('button')]
+    expect(buttons.some((b) => b.title.includes('/Users/'))).toBe(false)
+    expect(buttons.some((b) => b.title.includes('/srv/{{'))).toBe(false)
+    expect(text).toContain(`/srv/${KEY}/x`)
+    // 没有占位符的路径照旧认成轻量链接（可见文本只有 basename，悬停是完整路径）
+    const chip = buttons.find((b) => b.title.startsWith('/srv/plain/app.ts'))
     expect(chip?.textContent).toBe('app.ts')
     expect(chip?.className).toContain('text-accent')
     expect(chip?.className).not.toContain('rounded-full')
     expect(chip?.className).not.toContain('border')
     expect(chip?.className).not.toContain('bg-bg-secondary/70')
-    // 目录不缩写、不做链接，仍按模型源文本显示
-    const directory = [...container.querySelectorAll('code')].find(
-      (code) => code.textContent === '/Users/alice/proj'
-    )
-    expect(directory).toBeDefined()
-    // 路径里有模型收到占位符的部分：不当路径，照样显示占位符
-    expect(text).toContain(`/srv/${KEY}/x`)
+    // 复制得真值
     expect(restoreForCopy('s1', `export K="${KEY}"`)).toBe('export K="sk-real-0123456789"')
   })
 
@@ -258,16 +255,18 @@ describe('脱敏占位符的显示', () => {
     )
   })
 
-  it('RD-7 策略变了：重问一遍，显示跟着变', async () => {
+  it('RD-7 policy.changed：不重问，显示不变', async () => {
     await show(createElement(RedactedText, { text: KEY }))
     expect(container.textContent).toBe(KEY)
-    tables.s1![KEY] = { category: 'API_KEY', value: 'sk-real-0123456789', disclosed: true }
+    expect(calls).toHaveLength(1)
+    tables.s1![KEY] = { category: 'API_KEY', value: 'sk-rotated' }
     act(() => {
       for (const listener of eventListeners) listener({ type: 'policy.changed' })
     })
     await settle()
-    expect(container.textContent).toBe('sk-real-0123456789')
-    expect(calls).toHaveLength(2)
+    expect(container.textContent).toBe(KEY)
+    expect(calls).toHaveLength(1)
+    expect(redactionInfo('s1', KEY)).toMatchObject({ value: 'sk-real-0123456789' })
   })
 
   it('RD-8 没有占位符：原样，不发查询', async () => {
@@ -276,30 +275,23 @@ describe('脱敏占位符的显示', () => {
     expect(calls).toEqual([])
   })
 
-  it('RD-9 对话记录里的消息：会话的模型与第一个读者都照发才显示真值', async () => {
-    const text = `home /Users/${USER}/proj`
-    const under = (readers: string | undefined): React.ReactElement =>
-      createElement(RedactionReadersProvider, { readers }, createElement(RedactedText, { text }))
-    await show(under(OLD))
-    expect(container.textContent).toBe(text)
-    expect(calls).toEqual([{ sessionId: 's1', placeholders: [USER], readers: [OLD] }])
-    // 已经查到的占位符遇到没判过的读者：再问一次，带上用到过的全部读者
-    await show(under(NEW))
-    expect(container.textContent).toBe('home /Users/alice/proj')
-    expect(calls[1]).toEqual({ sessionId: 's1', placeholders: [USER], readers: [OLD, NEW] })
-    await show(under(`${NEW}\n${OLD}`))
-    expect(container.textContent).toBe(text)
-    await show(under(undefined))
-    expect(container.textContent).toBe('home /Users/alice/proj')
-    expect(calls).toHaveLength(2)
-    // markdown 行内代码只换模型收到真值的：按读者判
-    await show(
-      createElement(
-        RedactionReadersProvider,
-        { readers: OLD },
-        createElement(MarkdownText, { text: `open \`/Users/${USER}/proj\`` })
-      )
-    )
-    expect(container.textContent).toContain(`/Users/${USER}/proj`)
+  it('RD-10 查询入参严格是 {sessionId, placeholders}，没有 readers', async () => {
+    await show(createElement(RedactedText, { text: `${KEY} ${USER}` }))
+    expect(calls).toStrictEqual([{ sessionId: 's1', placeholders: [KEY, USER] }])
+    expect(calls[0]).not.toHaveProperty('readers')
+  })
+
+  it('RD-11 服务端多带 disclosed：不理它，仍显示占位符', async () => {
+    tables.s1![USER] = {
+      category: 'USERNAME',
+      value: 'alice',
+      disclosed: true,
+      disclosedTo: { 'faux\u0000m': true }
+    } as RedactionMarkInfo
+    await show(createElement(RedactedText, { text: `home /Users/${USER}/proj` }))
+    expect(container.textContent).toBe(`home /Users/${USER}/proj`)
+    expect(marks()[0]!.hasAttribute('data-redaction-placeholder')).toBe(true)
+    expect(container.querySelector('[data-redaction-sent]')).toBeNull()
+    expect(redactionInfo('s1', USER)).toStrictEqual({ category: 'USERNAME', value: 'alice' })
   })
 })

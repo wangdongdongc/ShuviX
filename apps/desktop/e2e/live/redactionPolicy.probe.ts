@@ -5,7 +5,7 @@
  * 每个场景：一条新会话（不属于项目、勾上 shuvix 知识库），发一句用户的话；ask 工具的问题与以提问结束的一轮都回
  * 「按你的建议来」（至多三轮）。结束后读隔离 HOME 的 `~/.shuvix/policies/`，在 node 里用引擎（同一个解析器、内置
  * 策略、出口同一份两层判定 redactionJudge.ts）对场景的请求表逐条判，与期望对照：
- *   - 一类内容发给某个模型的最终处理：保持占位符（redact）/ 发真值（send）/ 整个请求不发（block）；
+ *   - 一类内容给某个模型时的处理：存占位符（redact，第二层 deny 的 block 同样存占位符，算对）/ 存真值（send）/ 请求不发（第一层 block）；
  *   - 带还原秘密的命令：放行 / 询问 / 只由用户回答（force-ask）。
  * 表里也放着「不该变」的行（用户没提的类别、没提的服务商）—— 写出多余的规则会在那里露出来。
  *
@@ -148,8 +148,8 @@ const SCENARIOS: Scenario[] = [
       en: 'Private keys must never be sent to any model.'
     },
     cases: [
-      cat('private key to the cloud model: not sent', P, 'PRIVATE_KEY', 'block'),
-      cat('private key to home-ai: not sent', H, 'PRIVATE_KEY', 'block'),
+      cat('private key to the cloud model: placeholder', P, 'PRIVATE_KEY', 'block'),
+      cat('private key to home-ai: placeholder', H, 'PRIVATE_KEY', 'block'),
       cat('API key still a placeholder (request still sent)', P, 'API_KEY', 'redact'),
       cat('email still a placeholder', P, 'EMAIL', 'redact')
     ]
@@ -194,8 +194,8 @@ const SCENARIOS: Scenario[] = [
     cases: [
       cat('home-ai gets an API key as is', H, 'API_KEY', 'send'),
       cat('home-ai gets an email as is', H, 'EMAIL', 'send'),
-      cat('private key to home-ai: not sent', H, 'PRIVATE_KEY', 'block'),
-      cat('private key to the cloud model: not sent', P, 'PRIVATE_KEY', 'block'),
+      cat('private key to home-ai: placeholder', H, 'PRIVATE_KEY', 'block'),
+      cat('private key to the cloud model: placeholder', P, 'PRIVATE_KEY', 'block'),
       cat('the cloud model still gets an API key as a placeholder', P, 'API_KEY', 'redact')
     ]
   }
@@ -252,6 +252,12 @@ function contextOf(files: UserPolicyFile[], warnings: string[]): SecurityContext
     { host: 'desktop', platform: 'darwin' },
     provider
   )
+}
+
+/** 第二层 deny 与 redact 一样存占位符（design §16）：一类内容的这两个结果都算对；第一层拒发时 rule 以 `request:` 开头，判定处已分开 */
+function matches(c: Case, actual: string): boolean {
+  if (actual === c.expect) return true
+  return c.kind === 'category' && c.expect !== 'send' && (actual === 'redact' || actual === 'block')
 }
 
 function judgeCase(security: SecurityContext, c: Case): { actual: string; rule: string } {
@@ -387,7 +393,7 @@ it(
       const warnings: string[] = []
       const security = contextOf(files, warnings)
       const rows = scenario.cases.map((c) => ({ c, ...judgeCase(security, c) }))
-      const passed = rows.filter((r) => r.actual === r.c.expect).length
+      const passed = rows.filter((r) => matches(r.c, r.actual)).length
       total += rows.length
       passedAll += passed
       const transcript = await transcriptOf(app, sid)
@@ -420,7 +426,7 @@ it(
         '| --- | --- | --- | --- | --- |',
         ...rows.map(
           (r) =>
-            `| ${r.actual === r.c.expect ? 'ok' : '**MISMATCH**'} | ${r.c.label} | ${r.c.expect} | ${r.actual} | ${r.rule} |`
+            `| ${matches(r.c, r.actual) ? 'ok' : '**MISMATCH**'} | ${r.c.label} | ${r.c.expect} | ${r.actual} | ${r.rule} |`
         ),
         ''
       )

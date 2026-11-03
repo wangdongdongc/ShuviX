@@ -156,9 +156,11 @@ import {
   redactionRequestHook,
   redactionToolHook,
   SessionRedaction,
+  type MaskOptions,
   type RedactionHost,
   type UserSecret
 } from './sessionRedaction'
+import type { RedactionPolicy } from './redactionModels'
 import type { LockModel, ModelSelection } from '../models/lockModel'
 
 const GENERATION_TASK_KIND = 'pi.generation'
@@ -244,7 +246,7 @@ export interface UserSendOptions {
   onPlaced?: (info: PlacedInfo) => void
   /**
    * 输入框发来的（docs/auto-redaction-design.md §14）：只把用户交来的 secrets 换成占位符，其余照原样发，不再自动脱敏；
-   * 显示侧车里的 secrets 一并换掉。不给 = 自动脱敏（别的会话、触发器、Telegram 这类没有输入框的来源）。没配脱敏时带着
+   * 显示侧车里的 secrets 一并换掉。不给 = 原样写入（别的会话、Telegram……；触发消息由宿主先脱敏好，docs/auto-redaction-design.md §16）
    * 非空 secrets 的发送被拒：不能让用户以为藏住了。
    */
   composer?: ComposerInput
@@ -820,10 +822,12 @@ export interface DurableSessionDeps {
    */
   processRecord?: SessionProcessRecord
   /**
-   * 自动脱敏的两把钥匙（docs/auto-redaction-design.md）：给了就在写入对话记录之前把认出的内容换成占位符
-   * （用户输入、通知、派生 agent 的任务、工具结果），工具执行之前由宿主经 `redaction` 换回真值。缺省 = 不脱敏
+   * 自动脱敏的两把钥匙（docs/auto-redaction-design.md §16）：给了就在写入对话记录之前把认出的内容换成占位符
+   * （工具结果、后台通知、自动派发的任务），工具执行之前由宿主经 `redaction` 换回真值。缺省 = 不脱敏
    */
   redaction?: RedactionHost
+  /** 自动脱敏的策略：写入时判新内容脱不脱敏（没配 = 按内置策略的默认） */
+  redactionPolicy?: RedactionPolicy
 }
 
 interface LiveTask {
@@ -918,6 +922,7 @@ export class DurableSessionImpl implements DurableSession {
             sessionId: deps.sessionId,
             harness: deps.harness,
             host: deps.redaction,
+            ...(deps.redactionPolicy === undefined ? {} : { policy: deps.redactionPolicy }),
             logger: deps.logger
           })
     this.agentLock = new AgentLock({
@@ -973,7 +978,10 @@ export class DurableSessionImpl implements DurableSession {
       op: (work) => this.op(work),
       ...(this.redaction === undefined
         ? {}
-        : { maskInput: (text: string) => this.redaction!.maskText(text) })
+        : {
+            maskInput: (text: string, options: MaskOptions) =>
+              this.redaction!.maskText(text, options)
+          })
     })
   }
 
@@ -1365,8 +1373,6 @@ export class DurableSessionImpl implements DurableSession {
         } else if (options.composer.secrets.length > 0) {
           return { error: NO_REDACTION_FOR_SECRETS }
         }
-      } else if (this.redaction !== undefined) {
-        content = await this.redaction.maskInput(content)
       }
       return await this.op(async () => {
         if (options.driven !== undefined && options.requestId === undefined) {
@@ -1695,8 +1701,6 @@ export class DurableSessionImpl implements DurableSession {
         } else if (options.composer.secrets.length > 0) {
           return { error: NO_REDACTION_FOR_SECRETS }
         }
-      } else if (this.redaction !== undefined) {
-        content = await this.redaction.maskInput(content)
       }
       return await this.op(() =>
         this.inSection(async () => {
@@ -2005,12 +2009,18 @@ export class DurableSessionImpl implements DurableSession {
 
   // ─── 系统通知 ───────────────────────────────────
 
+  /** 后台命令的通知带着命令与输出尾部，是工具结果的延续：按会话锁住的模型判，与工具结果同一份策略 */
+  private async maskNotice(text: string): Promise<string> {
+    const model = this.lock?.model
+    return await this.redaction!.maskText(text, model === undefined ? {} : { model })
+  }
+
   async writeNotice(notice: NoticeInput): Promise<NoticeResult> {
     // 没配脱敏时不多等一拍：通知与输入的先后次序有用例钉着
     if (this.redaction === undefined) return this.writeNoticeNow(notice, true)
     let text: string
     try {
-      text = await this.redaction.maskText(notice.text)
+      text = await this.maskNotice(notice.text)
     } catch (error) {
       return {
         status: 'failed',
@@ -2076,7 +2086,7 @@ export class DurableSessionImpl implements DurableSession {
     if (this.closedFlag) return
     const kind = options.kind ?? 'background'
     try {
-      if (this.redaction !== undefined) text = await this.redaction.maskText(text)
+      if (this.redaction !== undefined) text = await this.maskNotice(text)
       await this.op(() =>
         this.inSection(async () => {
           // 去重在路由之前（PIN-09）：送过的、待送达的、窗口里的都不再送；竞态由 durable 的去重兜底

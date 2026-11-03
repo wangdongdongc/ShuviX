@@ -251,8 +251,12 @@ export class BotTriggerService {
       }
       // 这一轮结束才交回：这段时间里同一条绑定的后续触发都被跳过
       ran = `${entry.file.displayName} · ${localStamp(payload)} (session ${session.id})`
-      // 先脱敏再拼：显示侧车与模型文本同一份占位符，模型收到什么、界面显示什么都由安全策略判定（redact-sensitive）
-      const [message, maskedFence] = await agent.maskTexts([binding.message, fence])
+      // 先脱敏再拼：显示侧车与模型文本同一份内容，脱不脱敏由安全策略按这条会话的模型判定（redact-sensitive）
+      const config = await sessionService.resolveRunConfig(session.id).catch(() => undefined)
+      const [message, maskedFence] = await agent.maskTexts(
+        [binding.message, fence],
+        config?.model ? { provider: config.model.provider, modelId: config.model.model } : undefined
+      )
       const { text, display } = triggerEventMessage({
         message,
         fence: maskedFence,

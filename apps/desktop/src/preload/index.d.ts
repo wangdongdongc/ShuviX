@@ -563,7 +563,6 @@ declare global {
       resolve: (params: {
         sessionId: string
         placeholders: string[]
-        readers?: string[]
       }) => Promise<Record<string, RedactionMarkInfo>>
       inspect: (params: {
         sessionId?: string

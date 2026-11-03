@@ -16,7 +16,7 @@
  *   MA-U11 touch：点脱敏占位符（RedactedMark 自己 stopPropagation）不翻出操作；点旁边的文字才翻出
  *   UBT-1  触发消息：气泡 = message + 一枚 trigger 胶囊，来源徽章并存；正文里没有标记、围栏、说明，没有无效 Token 徽章
  *   UBT-2  复制恰是 message；message 里的占位符经 useRestoreForCopy 换回真值，仍然没有事件
- *   UBT-3  message 里的占位符按 redaction.resolve 显示：策略照发 → 真值，否则 → 占位符
+ *   UBT-3  message 里的占位符（§16）：查到了真值也显示占位符，界面没有「照发」这回事
  *   UBT-4  这之前的运行（长文本、没有 Token）：没有胶囊，全文显示，复制全文
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；剪贴板顶成 spy；脱敏查询走注入的 SessionChannelApi
@@ -57,9 +57,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const MAIL = '{{EMAIL_abcdefgh}}'
 const MAIL_VALUE = 'alice@example.com'
-/** 策略照发的那一类：模型收到的是真值，界面也显示真值 */
-const SENT = '{{REDACTED_USERNAME_abcdefgh}}'
-const SENT_VALUE = 'alice'
+const USER = '{{REDACTED_USERNAME_abcdefgh}}'
+const USER_VALUE = 'alice'
 
 let container: HTMLDivElement
 let root: Root
@@ -76,9 +75,8 @@ beforeAll(async () => {
       resolve: async ({ placeholders }: { sessionId: string; placeholders: string[] }) =>
         Object.fromEntries(
           placeholders.flatMap((p) => {
-            if (p === MAIL) return [[p, { category: 'EMAIL', value: MAIL_VALUE, disclosed: false }]]
-            if (p === SENT)
-              return [[p, { category: 'USERNAME', value: SENT_VALUE, disclosed: true }]]
+            if (p === MAIL) return [[p, { category: 'EMAIL', value: MAIL_VALUE }]]
+            if (p === USER) return [[p, { category: 'USERNAME', value: USER_VALUE }]]
             return []
           })
         )
@@ -483,16 +481,14 @@ describe('触发消息：事件收在一枚胶囊里，不算这条消息的话'
     expect(clip.copyToClipboard).toHaveBeenCalledWith(`mail ${MAIL_VALUE}`)
   })
 
-  it('UBT-3 占位符按 redaction.resolve 显示：策略照发 → 真值；否则 → 占位符', async () => {
+  it('UBT-3 占位符：查到了真值也显示占位符，文本里没有真值', async () => {
     useChatStore.setState({ activeSessionId: 's1' })
-    show('compact', bubble({ msg: fired(`from ${SENT} to ${MAIL}`) }))
+    show('compact', bubble({ msg: fired(`from ${USER} to ${MAIL}`) }))
     await settle()
-    const sent = bubbleOf().querySelector<HTMLElement>('[data-redaction-sent]')
-    expect(sent?.textContent).toBe(SENT_VALUE)
     const held = bubbleOf().querySelectorAll<HTMLElement>('[data-redaction-placeholder]')
-    expect(held).toHaveLength(1)
-    expect(held[0].textContent).toBe(MAIL)
-    expect(bubbleOf().textContent).not.toContain(SENT)
+    expect([...held].map((mark) => mark.textContent)).toEqual([USER, MAIL])
+    expect(bubbleOf().querySelector('[data-redaction-sent]')).toBeNull()
+    expect(bubbleOf().textContent).not.toContain(USER_VALUE)
     expect(bubbleOf().textContent).not.toContain(MAIL_VALUE)
   })
 

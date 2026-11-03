@@ -847,11 +847,8 @@ export {
 } from './durable/sessionRedaction'
 export {
   EgressBlockedError,
-  Remasker,
-  prepareEgress,
   type DiscloseAction,
-  type EgressDecision,
-  type PreparedEgress
+  type EgressDecision
 } from './durable/redactionEgress'
 export {
   withRedactionEgress,

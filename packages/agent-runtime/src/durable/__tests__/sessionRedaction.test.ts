@@ -1,7 +1,7 @@
 /**
  * 一条会话的脱敏（durable/sessionRedaction.ts，docs/auto-redaction-design.md §2）：真宿主 + faux 模型。
  *
- *   SR-1 用户输入：模型看到的、对话记录里存的都是占位符；对照表记下真值
+ *   SR-1 用户输入（没有 composer）不自动脱敏（§16）：模型看到的、记录里存的都是原样，对照表为空
  *   SR-2 工具结果（afterTool）：模型看到的输出与存下的 details 都是占位符
  *   SR-3 通知：存下的是占位符
  *   SR-4 还原：参数里的占位符（含写坏的形式）换回真值、报出还原了哪些类别；解不开的报为不可用
@@ -17,11 +17,25 @@
  *   MT-1 工具结果里同一个值第二处光秃：两处同一个占位符，对照表只新增一项
  *   MT-2 同一批 maskTexts：值在一段里被规则认出、在另一段里光秃，光秃的也换（两种次序）
  *   MT-3 没有新认出的值只扫一遍、不提交；短于 MIN_KNOWN 的已知值光秃处不换，规则认出的那处照换
+ * 写入按策略判（§16，MaskOptions）：
+ *   MO-1 第一层不适用：原样交回，不记表、不提交，表里已有的 + 值也不换，不问第二层
+ *   MO-2 第二层：send 存原文不记表；redact 存占位符记一项；block 与 redact 同一个占位符
+ *   MO-3 混合：同一段里按类别换，照发的不进表
+ *   MO-4 选项优先级：model 现问策略（带上对话，不看记下的判定）；只给 conversationId 用记下的，不问；都不给走默认
+ *   MO-5 判不出（没配策略 / 策略抛错 / 没记下 / 重启后）：每一类按内置默认，只有 USERNAME、HOSTNAME、IP、BUCKET 照原样
+ *   MO-6 disclose 抛错：每一类都存占位符（USERNAME 也是）
+ *   MO-7 第一层 deny 下写入：每一类都存占位符（USERNAME 也是）
+ *   MO-8 脱敏器内部出错（签名抛错）：不抛，原样交回，记 error
  */
 import { createHmac } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import {
+  isKeptAsWritten,
+  SENSITIVE_CATEGORIES,
+  type SensitiveCategory
+} from '../../redaction/categories'
 import { MIN_KNOWN } from '../../redaction/known'
 import { asWrittenKey } from '../../redaction/placeholder'
 import { initShellParser } from '../../security/shell'
@@ -30,9 +44,11 @@ import { backgroundContext as BG } from '../context'
 import { RedactionTableDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
 import type { EgressDecision } from '../redactionEgress'
+import type { RedactionPolicy } from '../redactionModels'
 import { SessionRedaction, type RedactionHost } from '../sessionRedaction'
 import { answer, callTool } from './support/faux'
 import { makeHost, registerHostCleanup } from './support/host'
+import { byCategory, DENY1, DENY2, EXEMPT, REDACT, SEND } from './support/redaction'
 import { allEntries, requestTexts } from './support/transcript'
 import { waitFor } from './support/wait'
 
@@ -75,18 +91,18 @@ const envTool = (): ToolRegistration =>
   })
 
 describe('会话脱敏', () => {
-  it('SR-1 用户输入：模型与记录里都是占位符，对照表有真值', async () => {
+  it('SR-1 用户输入（没有 composer）：模型与记录里都是原样，对照表为空', async () => {
     const t = await makeHost({ ephemeral: ['sr1'], redaction: host })
     const session = await t.open('sr1')
     t.kit.queue(answer('ok'))
     expect(await session.submitUser(`连上去，DB_PASSWORD=${PASSWORD}`)).toEqual({})
     const seen = requestTexts(t.kit, 0).join('\n')
-    expect(seen).not.toContain(PASSWORD)
-    expect(seen).toMatch(PLACEHOLDER)
+    expect(seen).toContain(`DB_PASSWORD=${PASSWORD}`)
+    expect(seen).not.toMatch(PLACEHOLDER)
     const stored = await storedText(session)
-    expect(stored).not.toContain(PASSWORD)
-    const table = await session.redaction!.table()
-    expect([...table.entries()].map(([, item]) => item.value)).toEqual([PASSWORD])
+    expect(stored).toContain(`DB_PASSWORD=${PASSWORD}`)
+    expect(stored).not.toMatch(PLACEHOLDER)
+    expect((await session.redaction!.table()).size).toBe(0)
   })
 
   it('SR-2 工具结果：模型看到的输出与存下的 details 都是占位符', async () => {
@@ -428,6 +444,302 @@ describe('会话脱敏', () => {
       expect(masked).toMatch(
         /^postgres:\/\/u:\{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\}@h\/db and abc123x$/
       )
+    })
+  })
+
+  describe('写入按策略判（§16，MaskOptions）', () => {
+    const MODEL = { provider: 'faux', modelId: 'faux-1' }
+    const EMAIL = 'someone@company-sample.net'
+    const MIXED = `key ${KEY} mail ${EMAIL}`
+
+    /** 每一类一段规则认得出的文本，value = 认出来的那个值 */
+    const SAMPLES: Record<SensitiveCategory, { text: string; value: string }> = {
+      PRIVATE_KEY: {
+        text: 'key:\n-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEA\n-----END PRIVATE KEY-----\n',
+        value:
+          '-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEA\n-----END PRIVATE KEY-----'
+      },
+      API_KEY: { text: `key ${KEY}`, value: KEY },
+      TOKEN: {
+        text: 'jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzYW1wbGUifQ.c2FtcGxlc2lnbmF0dXJl',
+        value: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzYW1wbGUifQ.c2FtcGxlc2lnbmF0dXJl'
+      },
+      PASSWORD: {
+        text: 'postgres://u:Sample-Pa55word!@db.example.com/app',
+        value: 'Sample-Pa55word!'
+      },
+      SECRET: {
+        text: '"client_secret":"sample-secret-0123456789"',
+        value: 'sample-secret-0123456789'
+      },
+      EMAIL: { text: `mail ${EMAIL} now`, value: EMAIL },
+      ID_CARD: { text: 'id 11010519491231002X ok', value: '11010519491231002X' },
+      PHONE: { text: 'call 13812345678 now', value: '13812345678' },
+      BANK_CARD: { text: 'card 4111111111111111 ok', value: '4111111111111111' },
+      SSN: { text: 'ssn 536-90-4399 ok', value: '536-90-4399' },
+      PASSPORT: { text: 'passport: E12345678', value: 'E12345678' },
+      IBAN: { text: 'iban GB82WEST12345698765432 ok', value: 'GB82WEST12345698765432' },
+      BIRTHDAY: { text: 'birthday: 1990-04-12', value: '1990-04-12' },
+      MAC: { text: 'mac 3c:22:fb:1a:2b:3c ok', value: '3c:22:fb:1a:2b:3c' },
+      SERIAL: { text: 'serial number: C02XK1ZZJGH5', value: 'C02XK1ZZJGH5' },
+      USERNAME: { text: 'cd /Users/alice/proj', value: 'alice' },
+      HOSTNAME: { text: 'ssh deploy@build-server-01', value: 'build-server-01' },
+      IP: { text: 'connect to 52.14.8.201 now', value: '52.14.8.201' },
+      BUCKET: { text: 'aws s3 cp s3://acme-backups/a .', value: 'acme-backups' }
+    }
+
+    const KEPT_BY_DEFAULT: readonly string[] = ['USERNAME', 'HOSTNAME', 'IP', 'BUCKET']
+
+    interface Rig {
+      redaction: SessionRedaction
+      warnings: string[]
+      errors: string[]
+      make: (policy?: RedactionPolicy, over?: Partial<RedactionHost>) => SessionRedaction
+      commit: ReturnType<typeof vi.spyOn>
+    }
+
+    /** 真 Harness 上的 SessionRedaction（deps 里的策略测试自己给） */
+    async function rig(id: string, policy?: RedactionPolicy): Promise<Rig> {
+      const t = await makeHost({ ephemeral: [id], redaction: host })
+      const session = await t.open(id)
+      const warnings: string[] = []
+      const errors: string[] = []
+      const make: Rig['make'] = (next, over = {}) =>
+        new SessionRedaction({
+          sessionId: id,
+          harness: session.harness,
+          host: { ...host, ...over },
+          ...(next === undefined ? {} : { policy: next }),
+          logger: {
+            info: () => {},
+            warn: (message) => warnings.push(message),
+            error: (message) => errors.push(message)
+          }
+        })
+      return {
+        redaction: make(policy),
+        warnings,
+        errors,
+        make,
+        commit: vi.spyOn(session.harness, 'commit')
+      }
+    }
+
+    /** 这一类存成了自己类别的占位符，没有明文，表里有这一项 */
+    async function expectRedacted(
+      redaction: SessionRedaction,
+      category: SensitiveCategory,
+      out: string
+    ): Promise<void> {
+      expect(out, category).not.toContain(SAMPLES[category].value)
+      const found = out.match(new RegExp(`\\{\\{REDACTED_${category}_[a-z2-7]{8}\\}\\}`))
+      expect(found, category).not.toBeNull()
+      expect((await redaction.table()).get(found![0])?.value, category).toBe(
+        SAMPLES[category].value
+      )
+    }
+
+    it('MO-1 第一层不适用：原样交回，不记表、不提交，表里已有的 + 值也不换，不问第二层', async () => {
+      const { redaction, commit } = await rig('mo1', () => EXEMPT)
+      const SECRET_VALUE = 'Added-By-Plus-42'
+      await redaction.maskComposerTexts(
+        [`pw ${SECRET_VALUE}`],
+        [{ value: SECRET_VALUE, category: 'PASSWORD' }]
+      )
+      const table = await redaction.table()
+      expect(table.size).toBe(1)
+      commit.mockClear()
+      const texts = [MIXED, `again ${SECRET_VALUE}`, 'cd /Users/alice/proj']
+      expect(await redaction.maskTexts(texts, { model: MODEL })).toEqual(texts)
+      expect(table.size).toBe(1)
+      expect(commit).not.toHaveBeenCalled()
+      expect((await redaction.table()).known.get(KEY)).toBeUndefined()
+    })
+
+    it('MO-1b 第一层不适用的会话：对照表一项都没有', async () => {
+      const { redaction, commit } = await rig('mo1b', () => EXEMPT)
+      expect(await redaction.maskText(MIXED, { model: MODEL })).toBe(MIXED)
+      expect((await redaction.table()).size).toBe(0)
+      expect(commit).not.toHaveBeenCalled()
+    })
+
+    it('MO-2 第二层：send 存原文不记表；redact 存占位符记一项；block 与 redact 同一个占位符', async () => {
+      const text = `key ${KEY}`
+      const sent = await rig('mo2a', () => SEND)
+      expect(await sent.redaction.maskText(text, { model: MODEL })).toBe(text)
+      expect((await sent.redaction.table()).size).toBe(0)
+
+      const redacted = await rig('mo2b', () => REDACT)
+      const a = await redacted.redaction.maskText(text, { model: MODEL })
+      expect(a).not.toContain(KEY)
+      expect(a).toMatch(PLACEHOLDER)
+      expect((await redacted.redaction.table()).size).toBe(1)
+
+      const denied = await rig('mo2c', () => DENY2)
+      expect(await denied.redaction.maskText(text, { model: MODEL })).toBe(a)
+      expect((await denied.redaction.table()).size).toBe(1)
+    })
+
+    it('MO-3 混合：同一段里只换 redact 的那类，照发的原样且不进表', async () => {
+      const { redaction } = await rig('mo3', () => byCategory({ API_KEY: 'redact', EMAIL: 'send' }))
+      const out = await redaction.maskText(MIXED, { model: MODEL })
+      expect(out).toMatch(
+        /^key \{\{REDACTED_API_KEY_[a-z2-7]{8}\}\} mail someone@company-sample\.net$/
+      )
+      const table = await redaction.table()
+      expect([...table.entries()].map(([, item]) => [item.category, item.value])).toEqual([
+        ['API_KEY', KEY]
+      ])
+      expect(table.known.get(EMAIL)).toBeUndefined()
+    })
+
+    describe('MO-4 选项优先级', () => {
+      const text = `key ${KEY}`
+
+      it('model + conversationId：策略收到两者，不看记下的判定', async () => {
+        const policy = vi.fn<RedactionPolicy>(() => REDACT)
+        const { redaction } = await rig('mo4a', policy)
+        redaction.noteDecision(7, SEND)
+        const out = await redaction.maskText(text, { model: MODEL, conversationId: 7 })
+        expect(out).toMatch(PLACEHOLDER)
+        expect(policy).toHaveBeenCalledTimes(1)
+        expect(policy).toHaveBeenCalledWith({
+          sessionId: 'mo4a',
+          conversationId: 7,
+          provider: 'faux',
+          model: 'faux-1'
+        })
+      })
+
+      it('只给 model：策略入参没有 conversationId 这个键', async () => {
+        const policy = vi.fn<RedactionPolicy>(() => REDACT)
+        const { redaction } = await rig('mo4b', policy)
+        await redaction.maskText(text, { model: MODEL })
+        expect(policy.mock.calls[0]![0]).toEqual({
+          sessionId: 'mo4b',
+          provider: 'faux',
+          model: 'faux-1'
+        })
+        expect(policy.mock.calls[0]![0]).not.toHaveProperty('conversationId')
+      })
+
+      it('只给 conversationId：用记下的判定，不问策略', async () => {
+        const policy = vi.fn<RedactionPolicy>(() => REDACT)
+        const { redaction } = await rig('mo4c', policy)
+        redaction.noteDecision(7, SEND)
+        expect(await redaction.maskText(text, { conversationId: 7 })).toBe(text)
+        expect(policy).not.toHaveBeenCalled()
+      })
+
+      it('都不给：走内置默认，不问策略、不看记下的判定', async () => {
+        const policy = vi.fn<RedactionPolicy>(() => SEND)
+        const { redaction } = await rig('mo4d', policy)
+        redaction.noteDecision(7, SEND)
+        const out = await redaction.maskText(`${text} cd /Users/alice/proj`)
+        expect(out).toMatch(/^key \{\{REDACTED_API_KEY_[a-z2-7]{8}\}\} cd \/Users\/alice\/proj$/)
+        expect(policy).not.toHaveBeenCalled()
+      })
+
+      it('forgetDecision 之后：记下的判定不再算数', async () => {
+        const { redaction } = await rig('mo4e')
+        redaction.noteDecision(7, SEND)
+        redaction.forgetDecision(7)
+        expect(await redaction.maskText(text, { conversationId: 7 })).toMatch(PLACEHOLDER)
+      })
+    })
+
+    describe('MO-5 判不出：每一类按内置默认', () => {
+      const expectDefaults = async (
+        redaction: SessionRedaction,
+        opts: Parameters<SessionRedaction['maskTexts']>[1]
+      ): Promise<void> => {
+        for (const category of SENSITIVE_CATEGORIES) {
+          const sample = SAMPLES[category]
+          const out = await redaction.maskText(sample.text, opts)
+          if (KEPT_BY_DEFAULT.includes(category)) {
+            expect(isKeptAsWritten(category), category).toBe(true)
+            expect(out, category).toBe(sample.text)
+            expect((await redaction.table()).known.get(sample.value), category).toBeUndefined()
+          } else {
+            expect(isKeptAsWritten(category), category).toBe(false)
+            await expectRedacted(redaction, category, out)
+          }
+        }
+      }
+
+      it('① 没配策略（给了 model 也没得问）', async () => {
+        const { redaction } = await rig('mo5a')
+        await expectDefaults(redaction, { model: MODEL })
+      })
+
+      it('② 策略抛错：不退回记下的判定，记 warn', async () => {
+        const { redaction, warnings } = await rig('mo5b', () => {
+          throw new Error('policy exploded')
+        })
+        redaction.noteDecision(7, SEND)
+        await expectDefaults(redaction, { model: MODEL, conversationId: 7 })
+        expect(warnings.length).toBeGreaterThan(0)
+        expect(warnings[0]).toContain('faux/faux-1')
+        expect(warnings[0]).toContain('policy exploded')
+      })
+
+      it('③ 这个对话没记下判定', async () => {
+        const { redaction } = await rig('mo5c', () => {
+          throw new Error('must not be asked')
+        })
+        redaction.noteDecision(7, SEND)
+        await expectDefaults(redaction, { conversationId: 8 })
+      })
+
+      it('④ 新的 SessionRedaction（重启后判定不在内存）', async () => {
+        const { redaction, make } = await rig('mo5d', () => {
+          throw new Error('must not be asked')
+        })
+        redaction.noteDecision(7, SEND)
+        await expectDefaults(
+          make(() => REDACT),
+          { conversationId: 7 }
+        )
+      })
+    })
+
+    it('MO-6 disclose 抛错：每一类都存占位符，USERNAME 也是', async () => {
+      const { redaction } = await rig('mo6', () => ({
+        applies: true,
+        disclose: () => {
+          throw new Error('policy exploded')
+        }
+      }))
+      for (const category of SENSITIVE_CATEGORIES) {
+        const out = await redaction.maskText(SAMPLES[category].text, { model: MODEL })
+        await expectRedacted(redaction, category, out)
+      }
+    })
+
+    it('MO-7 第一层 deny 下写入：每一类都存占位符，USERNAME 也是，不问第二层', async () => {
+      const disclose = vi.fn(DENY1.disclose)
+      const { redaction } = await rig('mo7', () => ({ ...DENY1, disclose }))
+      for (const category of SENSITIVE_CATEGORIES) {
+        const out = await redaction.maskText(SAMPLES[category].text, { model: MODEL })
+        await expectRedacted(redaction, category, out)
+      }
+      expect(disclose).not.toHaveBeenCalled()
+    })
+
+    it('MO-8 脱敏器内部出错（签名抛错）：不抛，原样交回，记 error', async () => {
+      const { make, errors } = await rig('mo8')
+      const broken = make(() => REDACT, {
+        signer: {
+          sign: () => {
+            throw new Error('keychain refused')
+          }
+        }
+      })
+      const texts = [MIXED, 'nothing here']
+      await expect(broken.maskTexts(texts, { model: MODEL })).resolves.toEqual(texts)
+      expect(errors).toHaveLength(1)
+      expect(errors[0]).toContain('masking failed')
+      expect(errors[0]).toContain('keychain refused')
     })
   })
 })

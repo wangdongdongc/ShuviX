@@ -34,6 +34,7 @@ vi.mock('../sessionService', () => ({
   sessionService: {
     create: mocks.create,
     ensureAgentSession: mocks.ensure,
+    resolveRunConfig: async () => undefined,
     resolveAgentProfileName: () => 'bot'
   }
 }))
