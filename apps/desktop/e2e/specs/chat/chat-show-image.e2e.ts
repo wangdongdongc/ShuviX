@@ -16,8 +16,8 @@
  *   E-3 点 E-1 那张图 → 按快照的真实路径开出预览窗口，窗口里解码出原图尺寸
  *   E-4 第三轮：suggest 两条各带一张图 → details 是两张快照（文件都在），下一次请求里每条都标着
  *       「(with image)」；以文字为主、每条一行（2026-11-01 用户裁决）：宽栏（CDP 模拟 1600 宽的视口）下也是上下两行、
- *       同一个 left；每行文字右边一个 96×64 的缩略图位，两行的缩略图位与文字列逐行对齐（30×20 与 32×20 两张不同
- *       尺寸的图不改变排布）、图在文字之后、都解码；点第二张卡的图 → 开出那张快照的预览窗口，500ms 后没有新请求、
+ *       同一个 left；每行文字右边一个 96 宽的缩略图位，两行的缩略图位与文字列逐行对齐、图在文字之后、都解码；文字短的那行
+ *       高 64（30×300 的竖长图也撑不高它），文字多的那行缩略图位和图的框都随文字列变高，下方不留白；点第二张卡的图 → 开出那张快照的预览窗口，500ms 后没有新请求、
  *       没有新的用户消息、组还开着、第二张卡的采纳按钮仍可点
  *   E-5 分支整个会话 → 快照目录按同样的文件名、同样的字节拷给 fork；在侧栏打开 fork，E-1 的图与提议卡的图都
  *       解码，地址里的 session 是 fork
@@ -82,7 +82,13 @@ const A = { t1: 'Here it is.', t2: 'Both versions above.', t3: 'Pick one.' } as 
 
 const SUGGESTIONS = [
   { title: 'Layout A', message: 'Go with layout A', image: 'layout-a.png' },
-  { title: 'Layout B', message: 'Go with layout B', image: 'layout-b.png' }
+  {
+    title: 'Layout B',
+    detail:
+      'Keeps the sidebar and the list on one screen, at the cost of a narrower column. '.repeat(3),
+    message: 'Go with layout B',
+    image: 'layout-b.png'
+  }
 ]
 
 interface ShownImageDetail {
@@ -196,7 +202,7 @@ beforeAll(async () => {
   mkdirSync(projDir, { recursive: true })
   writePng(fixture('chart.png'), { width: 40, height: 24 })
   copyFileSync(fixture('chart.png'), fixture('chart-copy.png'))
-  writePng(fixture('layout-a.png'), { width: 30, height: 20 })
+  writePng(fixture('layout-a.png'), { width: 30, height: 300 })
   writePng(fixture('layout-b.png'), { width: 32, height: 20 })
   writeFileSync(fixture('notes.txt'), 'NOTES CONTENT\n')
   writeFileSync(fixture('todo.txt'), 'TODO CONTENT\n')
@@ -383,7 +389,7 @@ describe('show_image：摆给用户看的图', () => {
     }
   }, 60_000)
 
-  it('E-4 带图的提议：快照、模型看到「(with image)」、每条一行、固定缩略图位逐行对齐；点图只是看图', async () => {
+  it('E-4 带图的提议：快照、模型看到「(with image)」、每条一行、缩略图位逐行对齐并随行高；点图只是看图', async () => {
     layoutFiles = SUGGESTIONS.map((s) => snapshotNameOf(fixture(s.image)))
     await runTurn(
       Q.t3,
@@ -411,7 +417,7 @@ describe('show_image：摆给用户看的图', () => {
         source: realpathSync(fixture(s.image)),
         mimeType: 'image/png',
         width: i === 0 ? 30 : 32,
-        height: 20,
+        height: i === 0 ? 300 : 20,
         bytes: readFileSync(fixture(s.image)).length
       }))
     })
@@ -457,13 +463,19 @@ describe('show_image：摆给用户看的图', () => {
       // 上下两行、同一个 left
       expect(c1!.rect.top).toBeGreaterThanOrEqual(c0!.rect.top + c0!.rect.height - 1)
       expect(c1!.rect.left).toBe(c0!.rect.left)
-      // 缩略图位固定 96×64、逐行对齐；两张图尺寸不同也不改变文字的排布
+      // 缩略图位定宽 96、逐行对齐；图铺满这个位置
       for (const c of [c0!, c1!]) {
         expect(Math.round(c.slot!.width)).toBe(96)
-        expect(Math.round(c.slot!.height)).toBe(64)
         // 图在文字之后
         expect(c.slot!.left).toBeGreaterThanOrEqual(c.text.left + c.text.width - 1)
+        expect(c.image!.box).toStrictEqual(c.slot)
       }
+      // 文字短的那行：最矮 64，竖长的图撑不高它
+      expect(Math.round(c0!.slot!.height)).toBe(64)
+      // 文字多的那行：缩略图位随文字列变高，下方不留白
+      expect(c1!.text.height).toBeGreaterThan(64)
+      expect(c1!.slot!.top).toBe(c1!.text.top)
+      expect(Math.round(c1!.slot!.height)).toBe(Math.round(c1!.text.height))
       expect(c1!.slot!.left).toBe(c0!.slot!.left)
       expect(c1!.text.left).toBe(c0!.text.left)
       expect(c1!.text.width).toBe(c0!.text.width)

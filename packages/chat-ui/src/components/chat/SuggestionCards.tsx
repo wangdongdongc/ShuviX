@@ -135,11 +135,15 @@ export function SuggestionCards({
                     </span>
                   </div>
                 </div>
-                {/* 固定大小的缩略图位：一组里有图就每行都留（没图的空着），逐行对齐 */}
+                {/* 定宽、随行高的缩略图位：一组里有图就每行都留（没图的空着），逐行对齐 */}
+                {/* 图绝对定位：行高只由文字决定，竖长的图撑不高这一行 */}
                 {thumbSlot && (
-                  <div data-suggestion-thumb-slot className={`flex-shrink-0 ${thumbBox}`}>
+                  <div
+                    data-suggestion-thumb-slot
+                    className={`relative flex-shrink-0 self-stretch ${thumbBox}`}
+                  >
                     {image && (
-                      <div data-suggestion-image>
+                      <div data-suggestion-image className="absolute inset-0">
                         <ShownImageView image={image} variant="thumb" />
                       </div>
                     )}

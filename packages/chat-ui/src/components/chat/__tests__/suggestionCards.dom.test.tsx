@@ -25,8 +25,9 @@
  *        都没有图
  *   C-11 点图：不采纳；`filePreviewRequest` = `'shown:' + (original ?? file)`；采纳按钮照样可点
  *   C-12 以文字为主、每条一行（2026-11-01 用户裁决，取代并排）：卡片总是竖排（`space-y-1.5`，没有 grid / `@container`）；
- *        一组里有图就**每行**都留一个固定大小的缩略图位（compact `h-16 w-24`，touch `h-14 w-20`），没图的那行空着；图在
- *        位里铺满、`object-contain`、不带 aspect-ratio —— 图多大都不改变文字的排布；动作位定宽（`min-w-[4.5rem]`），
+ *        一组里有图就**每行**都留一个定宽、随行高的缩略图位（compact `min-h-16 w-24`，touch `min-h-14 w-20`，`self-stretch`，
+ *        文字多时一起变高、下方不留白；真实尺寸见 e2e chat-show-image E-4），没图的那行空着；图绝对定位铺满这个位置、
+ *        `object-contain`、不带 aspect-ratio —— 图多大都不改变文字的排布；动作位定宽（`min-w-[4.5rem]`），
  *        按钮 / 「已采纳」/ 空着时缩略图位都对得齐；没有一条带图（全是 null / 坏项）→ 没有缩略图位
  *   C-13 没有详情 → 没有图、没有缩略图位、竖排（从前的样子）
  *   C-14 采纳了：采纳的那张卡留着图；压淡的卡里也有图
@@ -540,13 +541,13 @@ describe('带图的提议（C-10 … C-15）', () => {
     expect(container.querySelector('[data-suggestion-state="open"]')).not.toBeNull()
   })
 
-  describe('C-12 以文字为主、每条一行、固定缩略图位', () => {
-    it('C-12 都带图 → 仍然竖排；每行一个 h-16 w-24 的缩略图位', async () => {
+  describe('C-12 以文字为主、每条一行、定宽随行高的缩略图位', () => {
+    it('C-12 都带图 → 仍然竖排；每行一个 min-h-16 w-24、随行高的缩略图位', async () => {
       await renderImageCards({ images: [A, B, C] })
       stacked()
       for (const card of cards()) {
         expect(classes(slotOf(card)!)).toEqual(
-          expect.arrayContaining(['h-16', 'w-24', 'flex-shrink-0'])
+          expect.arrayContaining(['min-h-16', 'w-24', 'flex-shrink-0', 'self-stretch'])
         )
         expect(imageOf(card)).not.toBeNull()
       }
@@ -557,23 +558,31 @@ describe('带图的提议（C-10 … C-15）', () => {
       stacked()
       const slots = cards().map((c) => slotOf(c))
       expect(slots.every((slot) => slot !== null)).toBe(true)
-      expect(slots.map((slot) => classes(slot!).filter((c) => /^[hw]-/.test(c)))).toStrictEqual([
-        ['h-16', 'w-24'],
-        ['h-16', 'w-24'],
-        ['h-16', 'w-24']
+      expect(
+        slots.map((slot) => classes(slot!).filter((c) => /^(min-h|h|w)-/.test(c)))
+      ).toStrictEqual([
+        ['min-h-16', 'w-24'],
+        ['min-h-16', 'w-24'],
+        ['min-h-16', 'w-24']
       ])
       expect(slots[1]!.childElementCount).toBe(0)
       expect(cards().filter((c) => imageOf(c) !== null)).toHaveLength(2)
     })
 
-    it('C-12 图铺满缩略图位、object-contain、没有 aspect-ratio：图多大都不改变文字的排布', async () => {
+    it('C-12 图绝对定位铺满缩略图位、object-contain、没有 aspect-ratio：图多大都不改变文字的排布', async () => {
       const huge = shot(`${HASH_A}.png`, { width: 4000, height: 300 })
       await renderImageCards({ images: [huge, B, C] })
       const img = imageOf(cards()[0]!)!.querySelector('img')!
       expect(classes(img)).toEqual(expect.arrayContaining(['h-full', 'w-full', 'object-contain']))
       expect(img.style.aspectRatio).toBe('')
+      expect(classes(slotOf(cards()[0]!)!)).toContain('relative')
+      expect(classes(imageOf(cards()[0]!)!)).toEqual(
+        expect.arrayContaining(['absolute', 'inset-0'])
+      )
       const figure = imageOf(cards()[0]!)!.querySelector('figure')!
-      expect(classes(figure)).toEqual(expect.arrayContaining(['h-16', 'w-24']))
+      expect(classes(figure)).toEqual(expect.arrayContaining(['h-full', 'w-full']))
+      const button = figure.querySelector('button')!
+      expect(classes(button)).toEqual(expect.arrayContaining(['h-full', 'w-full']))
     })
 
     it('C-12 动作位定宽：开着、已采纳、关着都一样（缩略图位才对得齐）', async () => {
@@ -588,11 +597,11 @@ describe('带图的提议（C-10 … C-15）', () => {
       }
     })
 
-    it('C-12 touch 密度 → 竖排，缩略图位 h-14 w-20', async () => {
+    it('C-12 touch 密度 → 竖排，缩略图位 min-h-14 w-20', async () => {
       await renderImageCards({ suggestions: ITEMS.slice(0, 2), images: [A, B], density: 'touch' })
       stacked()
       for (const card of cards()) {
-        expect(classes(slotOf(card)!)).toEqual(expect.arrayContaining(['h-14', 'w-20']))
+        expect(classes(slotOf(card)!)).toEqual(expect.arrayContaining(['min-h-14', 'w-20']))
         expect(imageOf(card)).not.toBeNull()
       }
     })

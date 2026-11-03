@@ -2316,6 +2316,8 @@ export interface SuggestionCardImageShot {
   file: string
   naturalWidth: number
   complete: boolean
+  /** `<img>` 元素的框（图本身在框里 object-contain） */
+  box: BoxShot | null
 }
 
 /** 一张提议卡 */
@@ -2400,7 +2402,8 @@ export function suggestionsPane(main: CdpClient): SuggestionsPane {
                   ? {
                       file: figure.getAttribute('data-shown-image') ?? '',
                       naturalWidth: img?.naturalWidth ?? 0,
-                      complete: !!img?.complete
+                      complete: !!img?.complete,
+                      box: img ? box(img) : null
                     }
                   : null,
                 slot: slot ? box(slot) : null,

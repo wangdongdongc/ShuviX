@@ -42,15 +42,15 @@ export function ShownImagesBlock({ items }: { items: ShownImageItem[] }): React.
   )
 }
 
-/** 图的显示形态：单张（列宽内、高度封顶）/ 网格里的一格 / 提议卡片右边那个固定大小的缩略图位 */
+/** 图的显示形态：单张（列宽内、高度封顶）/ 网格里的一格 / 提议卡片右边的缩略图位（铺满那个位置） */
 type ShownImageVariant = 'single' | 'tile' | 'thumb'
 
 /**
- * 提议卡片缩略图位的尺寸（SuggestionCards 给每行留的空位用同一个，才对得齐）：固定大小，图多大都不改变文字的排布。
+ * 提议卡片缩略图位的尺寸（SuggestionCards 给每行留的空位用同一个，才对得齐）：定宽，这是最矮的高度，文字多时随这一行变高。
  * 触屏密度（手机）栏窄，略小一点
  */
 export function shownThumbBoxClass(touch: boolean): string {
-  return touch ? 'h-14 w-20' : 'h-16 w-24'
+  return touch ? 'min-h-14 w-20' : 'min-h-16 w-24'
 }
 
 const IMG_CLASS: Record<ShownImageVariant, string> = {
@@ -70,7 +70,6 @@ export function ShownImageView({
   variant: ShownImageVariant
 }): React.JSX.Element | null {
   const { t } = useTranslation()
-  const touch = useChatDensity() === 'touch'
   const sessionId = useChatStore((s) => s.activeSessionId)
   const [failed, setFailed] = useState(false)
   const hasResolver = useResolveMediaUrl() !== null
@@ -84,7 +83,7 @@ export function ShownImageView({
       data-shown-image-missing
       className={`rounded-md border border-dashed border-border-secondary text-text-tertiary ${
         thumb
-          ? `flex items-center justify-center p-1 text-center text-[10px] leading-tight ${shownThumbBoxClass(touch)}`
+          ? 'flex h-full w-full items-center justify-center p-1 text-center text-[10px] leading-tight'
           : 'px-3 py-2 text-[11px]'
       }`}
     >
@@ -95,7 +94,7 @@ export function ShownImageView({
       type="button"
       title={`${t('shownImage.openHint')}\n${image.source}`}
       className={`block cursor-zoom-in ${
-        variant === 'single' ? 'max-w-full' : thumb ? shownThumbBoxClass(touch) : 'w-full'
+        variant === 'single' ? 'max-w-full' : thumb ? 'h-full w-full' : 'w-full'
       }`}
       onClick={(e) => {
         // 提议卡片里：点图是看图，不是采纳
@@ -121,7 +120,7 @@ export function ShownImageView({
   )
 
   return (
-    <figure data-shown-image={image.file} className={thumb ? shownThumbBoxClass(touch) : 'min-w-0'}>
+    <figure data-shown-image={image.file} className={thumb ? 'h-full w-full' : 'min-w-0'}>
       {body}
       {caption && (
         <figcaption className="mt-1 text-xs text-text-secondary break-words">{caption}</figcaption>
