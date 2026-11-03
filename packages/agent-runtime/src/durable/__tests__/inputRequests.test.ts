@@ -1,6 +1,7 @@
 /**
  * 挂起的用户询问：应答 / 取消 / 摘要 / 恰好一次的钩子 / 关闭受理窗口 / 全部取消 / 没有前端也等（AW-U1） /
- * 重复 id 顶替（裁决 R12）。P3-08 起询问不再广播（`events` 改由一份 `subscribe` 钩子记），应答可带答题方（PIN-20）。
+ * 重复 id 顶替（裁决 R12） / 只中止几个对话（SCOPE-U1..3）。P3-08 起询问不再广播（`events` 改由一份 `subscribe` 钩子记），
+ * 应答可带答题方（PIN-20）。
  *
  * 关闭窗口这一条是会话关停链路的命门：宿主按「当前绑定的运行时」路由用户应答，正在关停的运行时
  * 已不在绑定表里；中止之后若还接受新询问，那条挂起就再也没人应答 —— 双方互等，会话卡死。
@@ -481,5 +482,138 @@ describe('PendingInputRequests · 答题方（WP2）', () => {
       inputs.respond('nope', { kind: 'choice', selections: ['A'] }, { answeredBy: PARENT })
     ).toBe(false)
     expect(seen).toEqual([])
+  })
+})
+
+describe('PendingInputRequests · stopping some conversations', () => {
+  const card = (id: string, conversationId?: number): InputRequest => ({
+    ...ask(id),
+    ...(conversationId === undefined ? {} : { conversationId })
+  })
+  const ABORTED: InputResponse = { kind: 'cancel', reason: 'aborted' }
+  const ALLOW: InputResponse = { kind: 'ask', allowed: true }
+
+  it('SCOPE-U1 cancels the named conversations and the unnamed card, once each; the other card stays and can be answered', async () => {
+    const { inputs, resolved } = makeInputs()
+    const c1 = inputs.request(card('c1', 1))
+    const c2 = inputs.request(card('c2', 2))
+    const c3 = inputs.request(card('c3', 3))
+    const none = inputs.request(card('none'))
+
+    inputs.cancelConversations(new Set([1, 2]))
+
+    expect(await c1).toStrictEqual(ABORTED)
+    expect(await c2).toStrictEqual(ABORTED)
+    expect(await none).toStrictEqual(ABORTED)
+    expect(resolved.map(([id]) => id).sort()).toEqual(['c1', 'c2', 'none'])
+    expect(inputs.list().map((request) => request.id)).toEqual(['c3'])
+    expect(inputs.respond('c1', ALLOW)).toBe(false)
+    expect(inputs.respond('c3', ALLOW)).toBe(true)
+    expect(await c3).toStrictEqual(ALLOW)
+    expect(resolved.map(([id]) => id).sort()).toEqual(['c1', 'c2', 'c3', 'none'])
+  })
+
+  it('SCOPE-U1 a set matching nothing cancels only the unnamed card', async () => {
+    const { inputs, resolved } = makeInputs()
+    void inputs.request(card('c1', 1))
+    const none = inputs.request(card('none'))
+    inputs.cancelConversations(new Set([99]))
+    expect(await none).toStrictEqual(ABORTED)
+    expect(resolved.map(([id]) => id)).toEqual(['none'])
+    expect(inputs.list().map((request) => request.id)).toEqual(['c1'])
+  })
+
+  it('SCOPE-U2 during a stop, a card from that conversation or an unnamed one is refused with no hooks and no count; another conversation is accepted', async () => {
+    const { inputs, requested, resolved } = makeInputs()
+    const release = inputs.cancelConversations(new Set([1]))
+
+    expect(await inputs.request(card('late-1', 1))).toStrictEqual(ABORTED)
+    expect(await inputs.request(card('late-none'))).toStrictEqual(ABORTED)
+    expect(requested).toEqual([])
+    expect(resolved).toEqual([])
+    expect(inputs.count).toBe(0)
+
+    const other = inputs.request(card('other', 2))
+    expect(requested).toEqual(['other'])
+    expect(inputs.count).toBe(1)
+
+    release()
+    expect(inputs.respond('other', ALLOW)).toBe(true)
+    expect(await other).toStrictEqual(ALLOW)
+  })
+
+  it("SCOPE-U2 a late card from the stopped conversation does not supersede another conversation's card with the same id", async () => {
+    const { inputs, resolved } = makeInputs()
+    const release = inputs.cancelConversations(new Set([1]))
+    let settled: InputResponse | undefined
+    void inputs.request(card('same', 2)).then((response) => (settled = response))
+
+    expect(await inputs.request(card('same', 1))).toStrictEqual(ABORTED)
+    await flush()
+    expect(settled).toBeUndefined()
+    expect(resolved).toEqual([])
+    expect(inputs.list()).toEqual([card('same', 2)])
+
+    release()
+    expect(inputs.respond('same', ALLOW)).toBe(true)
+    await flush()
+    expect(settled).toStrictEqual(ALLOW)
+  })
+
+  it('SCOPE-U2 after release the conversation and an unnamed card are accepted again', async () => {
+    const { inputs, requested } = makeInputs()
+    const release = inputs.cancelConversations(new Set([1]))
+    release()
+    const named = inputs.request(card('n', 1))
+    const unnamed = inputs.request(card('u'))
+    expect(requested).toEqual(['n', 'u'])
+    expect(inputs.count).toBe(2)
+    expect(inputs.respond('n', ALLOW)).toBe(true)
+    expect(inputs.respond('u', ALLOW)).toBe(true)
+    expect(await named).toStrictEqual(ALLOW)
+    expect(await unnamed).toStrictEqual(ALLOW)
+  })
+
+  it('SCOPE-U3 two overlapping stops with equal-content sets: refused until both are released; a double release is a no-op', async () => {
+    const { inputs } = makeInputs()
+    const first = inputs.cancelConversations(new Set([1]))
+    const second = inputs.cancelConversations(new Set([1]))
+
+    first()
+    expect(await inputs.request(card('a', 1))).toStrictEqual(ABORTED)
+    first()
+    expect(await inputs.request(card('b', 1))).toStrictEqual(ABORTED)
+    expect(inputs.count).toBe(0)
+
+    second()
+    void inputs.request(card('c', 1))
+    expect(inputs.count).toBe(1)
+    second()
+    expect(inputs.count).toBe(1)
+  })
+
+  it('SCOPE-U3 closeInputs then release leaves the window closed', async () => {
+    const { inputs } = makeInputs()
+    const release = inputs.cancelConversations(new Set([1]))
+    inputs.closeInputs('aborted')
+    release()
+    expect(inputs.inputsClosed).toBe(true)
+    expect(await inputs.request(card('n', 2))).toStrictEqual(ABORTED)
+    expect(inputs.count).toBe(0)
+  })
+
+  it('SCOPE-U3 closeInputs + cancelAll still takes every card, whichever conversation raised it and whichever stop is in force', async () => {
+    const { inputs, resolved } = makeInputs()
+    const stop = inputs.cancelConversations(new Set([1]))
+    const c2 = inputs.request(card('c2', 2))
+    const c3 = inputs.request(card('c3', 3))
+    inputs.closeInputs('aborted')
+    inputs.cancelAll('aborted')
+    expect(await c2).toStrictEqual(ABORTED)
+    expect(await c3).toStrictEqual(ABORTED)
+    expect(resolved.map(([id]) => id)).toEqual(['c2', 'c3'])
+    expect(inputs.count).toBe(0)
+    expect(await inputs.request(card('c4', 4))).toStrictEqual(ABORTED)
+    stop()
   })
 })

@@ -24,6 +24,11 @@ interface InputRequestBase {
   id: string
   kind: InputRequestKind
   toolName: string
+  /**
+   * 发起询问的对话(根对话或派生 agent 的子对话)。派生 agent 的询问也挂在根会话的询问表上,中止一个子对话时
+   * 按它认哪些卡片该跟着取消,别的卡片不受影响。
+   */
+  conversationId?: number
   createdAt: number
 }
 

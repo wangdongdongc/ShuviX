@@ -40,7 +40,7 @@ async function destroyWhileAsking(world: World): Promise<DurableSession> {
   const saving = session.submitUser('save')
   await nextInput(world, 'c-w')
   await withTimeout(session.destroyAgent(), 3000, 'destroy')
-  expect(await withTimeout(saving, 2000, 'save')).toEqual({})
+  expect(await withTimeout(saving, 2000, 'save')).toEqual({ cutShort: 'aborted' })
   return session
 }
 

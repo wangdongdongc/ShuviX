@@ -42,6 +42,8 @@ const OUTCOME_CLASS: Record<TriggerLogOutcome, string> = {
   started: 'text-accent',
   completed: 'text-green-600 dark:text-green-400',
   failed: 'text-red-600 dark:text-red-400',
+  stopped: 'text-text-tertiary',
+  interrupted: 'text-amber-600 dark:text-amber-400',
   skipped: 'text-text-tertiary',
   'condition-error': 'text-red-600 dark:text-red-400'
 }
@@ -50,6 +52,8 @@ const OUTCOME_KEY: Record<TriggerLogOutcome, string> = {
   started: 'settings.triggerLogStarted',
   completed: 'settings.triggerLogCompleted',
   failed: 'settings.triggerLogFailed',
+  stopped: 'settings.triggerLogStopped',
+  interrupted: 'settings.triggerLogInterrupted',
   skipped: 'settings.triggerLogSkipped',
   'condition-error': 'settings.triggerLogConditionError'
 }

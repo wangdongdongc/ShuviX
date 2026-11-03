@@ -1149,6 +1149,8 @@
     "triggerLogStarted": "実行中",
     "triggerLogCompleted": "完了",
     "triggerLogFailed": "失敗",
+    "triggerLogStopped": "停止済み",
+    "triggerLogInterrupted": "中断",
     "triggerLogSkipped": "スキップ（前回の実行が継続中）",
     "triggerLogConditionError": "条件エラー",
     "triggerLogOpenSession": "チャットを開く",

@@ -16,8 +16,12 @@
  *   TLS-8  库出错不往外抛：insert 抛 → record 交回 null、一条告警、不广播；updateOutcome 抛 → finish 一条告警、
  *          不广播；prune 抛 → record 不抛、一条告警、那一行照样写进了表
  *   TLS-9  clear：删光、广播一次
+ *   TLS-10 sweepInterrupted：有 started 的行 → 改成 interrupted、广播一次；没有 → 不广播；DAO 抛 → 不抛、一条告警、不广播；
+ *          index.ts 里它排在 builtinTimer.start 之前（定时器一开，新的 started 就混进来了）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 const h = vi.hoisted(() => ({
@@ -296,5 +300,56 @@ describe('clear', () => {
     expect(rowCount()).toBe(0)
     expect(service.list()).toEqual([])
     expect(publishedTypes()).toEqual([{ type: 'trigger.logged' }])
+  })
+})
+
+describe('sweepInterrupted', () => {
+  it('TLS-10 有 started 的行：改成 interrupted（updatedAt = 此刻，createdAt 不动），广播一次；别的结局不动', () => {
+    const left = service.record(input({ sessionId: 's-left' }))!
+    const done = service.record(input({ sessionId: 's-done' }))!
+    service.finish(done, 'completed')
+    h.publish.mockClear()
+
+    vi.setSystemTime(T0 + 9_000)
+    service.sweepInterrupted()
+
+    const rows = new Map(dao.list(10).map((row) => [row.id, row]))
+    expect(rows.get(left)).toMatchObject({
+      outcome: 'interrupted',
+      createdAt: T0,
+      updatedAt: T0 + 9_000
+    })
+    expect(rows.get(done)).toMatchObject({ outcome: 'completed', updatedAt: T0 })
+    expect(publishedTypes()).toEqual([{ type: 'trigger.logged' }])
+    expect(h.warn).not.toHaveBeenCalled()
+  })
+
+  it('TLS-10 没有 started 的行：不广播', () => {
+    service.sweepInterrupted()
+    const done = service.record(input())!
+    service.finish(done, 'failed', 'boom')
+    h.publish.mockClear()
+    service.sweepInterrupted()
+    expect(h.publish).not.toHaveBeenCalled()
+    expect(h.warn).not.toHaveBeenCalled()
+  })
+
+  it('TLS-10 DAO 抛错：不往外抛、一条告警、不广播', () => {
+    vi.spyOn(dao, 'markStartedInterrupted').mockImplementation(() => {
+      throw new Error('disk full')
+    })
+    expect(() => service.sweepInterrupted()).not.toThrow()
+    expect(h.warn).toHaveBeenCalledTimes(1)
+    expect(String(h.warn.mock.calls[0]![0])).toContain('disk full')
+    expect(h.publish).not.toHaveBeenCalled()
+  })
+
+  it('TLS-10 启动次序：index.ts 里 sweepInterrupted 排在 builtinTimer.start 之前', () => {
+    const source = readFileSync(resolve(__dirname, '../../index.ts'), 'utf8')
+    const sweep = source.indexOf('triggerLogService.sweepInterrupted()')
+    const timer = source.indexOf('builtinTimer.start(')
+    expect(sweep).toBeGreaterThan(-1)
+    expect(timer).toBeGreaterThan(-1)
+    expect(sweep).toBeLessThan(timer)
   })
 })

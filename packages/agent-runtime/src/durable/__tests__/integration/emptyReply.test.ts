@@ -367,7 +367,7 @@ describe('empty reply · aborts and errors', () => {
       const sending = session.submitUser('go')
       await empty.reached
       await withTimeout(session.abort(), 2000, 'abort')
-      expect(await withTimeout(sending, 2000, 'send')).toEqual({})
+      expect(await withTimeout(sending, 2000, 'send')).toEqual({ cutShort: 'aborted' })
       await waitFor(() => session.runState === 'idle', 3000, 'idle')
       expect(await noticeCount(session)).toBe(0)
       expect(world.model.chats).toHaveLength(2)
@@ -388,7 +388,7 @@ describe('empty reply · aborts and errors', () => {
       const sending = session.submitUser('go')
       await stall.reached
       await withTimeout(session.abort(), 2000, 'abort')
-      expect(await withTimeout(sending, 2000, 'send')).toEqual({})
+      expect(await withTimeout(sending, 2000, 'send')).toEqual({ cutShort: 'aborted' })
       await waitFor(() => session.runState === 'idle', 3000, 'idle')
       expect(await noticeCount(session)).toBe(1)
       expect(lines(world.model.chats[2]!).at(-1)).toBe(USER_N)

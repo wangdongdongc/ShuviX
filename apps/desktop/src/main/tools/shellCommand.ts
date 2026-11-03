@@ -241,8 +241,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         abortError: TOOL_ABORTED,
         // 用户选择"其它":不执行命令,把反馈文本作为正常 tool result 返回给 AI
         onOther: 'return',
-        // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道，
-        // 无前端时 harness 层已即时 cancel；此分支只防御未来的无通道调用方）
+        // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道；
+        // 此分支只防御未来的无通道调用方）
         missingChannel: 'deny'
       }
     )

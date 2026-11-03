@@ -100,8 +100,8 @@ describe('requestState', () => {
     const withdrawn = session.submitUser('W', { requestId: 'w', whenBusy: 'followUp' })
     await waitFor(async () => (await session.requestState('w')) === 'pending', 3000, 'queued w')
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await running).toEqual({})
-    expect(await withdrawn).toEqual({})
+    expect(await running).toEqual({ cutShort: 'aborted' })
+    expect(await withdrawn).toEqual({ cutShort: 'aborted' })
     expect(await session.requestState('w')).toBe('settled')
 
     await session.writeNotice({ text: 'N', kind: 'background', requestId: 'n' })
@@ -412,7 +412,7 @@ describe('lastAnswer', () => {
       isError: true
     })
     await withTimeout(other.abort(), 5000, 'abort')
-    expect(await pending).toEqual({})
+    expect(await pending).toEqual({ cutShort: 'aborted' })
   })
 
   it('P2-09-27 turn boundary: a new unanswered turn (held, or aborted before any token) → undefined; notices after the answer are skipped', async () => {
@@ -431,7 +431,7 @@ describe('lastAnswer', () => {
     await run.reached
     expect(await session.lastAnswer()).toBeUndefined()
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await pending).toEqual({})
+    expect(await pending).toEqual({ cutShort: 'aborted' })
     expect(await session.lastAnswer()).toBeUndefined()
   })
 

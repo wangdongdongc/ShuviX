@@ -484,7 +484,7 @@ export interface SecurityHostProvider {
     input: CommandObjectInput,
     opts: { signal?: AbortSignal; toolCallId?: string }
   ): Promise<CommandRisk | null>
-  /** 已共享的挂起/恢复原语；无前端时按 EnforceOpts.missingChannel 处置 */
+  /** 已共享的挂起/恢复原语；宿主没给这个通道时按 EnforceOpts.missingChannel 处置 */
   requestUserInput?(req: InputRequest): Promise<InputResponse>
   /**
    * 询问点的审查接缝（docs/permission-review-design.md）：策略判出 ask（**不含** force-ask）、弹卡片

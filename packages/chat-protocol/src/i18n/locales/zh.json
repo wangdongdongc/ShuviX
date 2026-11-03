@@ -1149,6 +1149,8 @@
     "triggerLogStarted": "运行中",
     "triggerLogCompleted": "已完成",
     "triggerLogFailed": "失败",
+    "triggerLogStopped": "已停止",
+    "triggerLogInterrupted": "已中断",
     "triggerLogSkipped": "已跳过（上一次还在跑）",
     "triggerLogConditionError": "条件出错",
     "triggerLogOpenSession": "打开会话",

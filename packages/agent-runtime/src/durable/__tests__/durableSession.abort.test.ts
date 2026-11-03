@@ -73,7 +73,7 @@ describe('abort', () => {
     ])
     const submission = await session.harness.submission(submissionId as never, BG)
     expect(await submission!.status(BG)).toMatchObject({ status: 'unanswered', reason: 'aborted' })
-    expect(await result).toEqual({})
+    expect(await result).toEqual({ cutShort: 'aborted' })
     expect(session.isBusy()).toBe(false)
     expect(t.kit.callCount).toBe(1)
   })
@@ -111,7 +111,7 @@ describe('abort', () => {
     expect(response).toEqual({ kind: 'cancel', reason: 'aborted' })
     expect(session.pendingInputCount).toBe(0)
     expect(t.asksOf('input_request')).toEqual([])
-    expect(await result).toEqual({})
+    expect(await result).toEqual({ cutShort: 'aborted' })
   })
 
   it('AB-04 abort while idle resolves; inputs stay closed until the next run-starting call', async () => {
@@ -135,7 +135,7 @@ describe('abort', () => {
     const first = session.submitUser('u1')
     await stall.reached
     await withTimeout(Promise.all([session.abort(), session.abort()]), 3000, 'two aborts')
-    expect(await first).toEqual({})
+    expect(await first).toEqual({ cutShort: 'aborted' })
 
     const run = held(answer('a2'))
     t.kit.queue(run.step)
@@ -143,7 +143,7 @@ describe('abort', () => {
     await run.reached
     run.release()
     await withTimeout(session.abort(), 3000, 'abort racing the answer')
-    expect(await second).toEqual({})
+    expect(await second).toEqual({ cutShort: 'aborted' })
     expect(session.isBusy()).toBe(false)
   })
 
@@ -162,7 +162,7 @@ describe('abort', () => {
     const submission = await other.submit({ type: 'input', content: 'side' }, BG)
     await side.reached
     await withTimeout(session.abort(), 3000, 'abort current')
-    expect(await mine).toEqual({})
+    expect(await mine).toEqual({ cutShort: 'aborted' })
     expect((await submission.status(BG)).status).toBe('placed')
     expect(session.runState).toBe('busy')
     side.release()

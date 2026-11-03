@@ -244,7 +244,7 @@ describe('P1-12 · retries', () => {
       const sending = session.submitUser('hi')
       await waitFor(() => retries(world).length === 1, 3000, 'retry window')
       await withTimeout(session.abort(), 1000, 'abort')
-      expect(await withTimeout(sending, 1000, 'send')).toEqual({})
+      expect(await withTimeout(sending, 1000, 'send')).toEqual({ cutShort: 'aborted' })
       await sleep(400)
       expect(world.model.chats).toHaveLength(1)
       const conversation = await session.currentConversation()

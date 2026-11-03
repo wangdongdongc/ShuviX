@@ -363,6 +363,7 @@ export async function executeDecision(args: {
     id: opts.toolCallId,
     kind: 'ask',
     toolName: opts.toolName,
+    ...(opts.conversationId === undefined ? {} : { conversationId: opts.conversationId }),
     command: askCommand,
     requestedPath: decision.ask?.requestedPath,
     description: opts.description,

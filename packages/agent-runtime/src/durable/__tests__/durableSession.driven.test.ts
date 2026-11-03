@@ -170,7 +170,7 @@ describe('driven marker · emission', () => {
     const pending = aborting.submitUser('task', { requestId: 'R', driven: DRIVEN })
     await stall.reached
     await withTimeout(aborting.abort(), 5000, 'abort')
-    expect(await pending).toEqual({})
+    expect(await pending).toEqual({ cutShort: 'aborted' })
     await waitFor(() => variants.mock.calls.length === 5, 3000, 'abort reported')
     expect(variants.mock.calls[4]![0]).toMatchObject({
       sessionId: 'a1',

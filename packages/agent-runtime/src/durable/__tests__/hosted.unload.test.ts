@@ -8,13 +8,16 @@
  *  根的中止级联 / 任务页软停止）· 57 混批捕获、协调器自己中止子对话之后也卸掉 · 58 面板追问装回来、落定再卸
  *  （titler 与审查员）· 59 忙着被拒的追问不卸在跑的 hook agent · 60 两个 hook agent 同时在跑，各卸各的 ·
  *  61 工具派发的子 agent 里发起的审查只卸审查员 · 62 卸载失败只记警告、不改结果；会话关在半路不挂住、不记警告 ·
- *  OS-H1 宿主派发不读 `oneShot`：给 false 照样卸，给 true 也不进记录
+ *  OS-H1 宿主派发不读 `oneShot`：给 false 照样卸，给 true 也不进记录 · SCOPE-I6 混批 `[next, 发卡片的工具]`：捕获之后
+ *  中止子对话，那张卡片跟着取消（否则中止等工具、工具等人），结果照交、照卸，根的卡片不受影响
  *
  * 断言的时机是固定的同步点，不是长 `waitFor`：没人会「过一会儿」再卸 —— 漏卸就永远列着。观察型在 `ends()`
  * 那一刻（runner 等 runTask，spawn 的 finally 已经跑过）；判定型正常交卷在 `decide` / askOp 返回那一刻；
  * 判定型超时 / 中止时 `decide` 先于协调器收尾返回，等 `runner.runningCount() === 0`（坑位留到收尾结束）。
  */
-import type { ConversationId } from '@earendil-works/pi-durable'
+import { Type } from '@earendil-works/pi-ai'
+import { defineTool, type ConversationId, type ToolRegistration } from '@earendil-works/pi-durable'
+import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { PermissionDecision } from '@shuvix/chat-protocol/types/permissionReview'
 import type { TaskStatus } from '@shuvix/chat-protocol/types/task'
 import { describe, expect, it, vi } from 'vitest'
@@ -35,6 +38,7 @@ import {
   queueRoles,
   REVIEWER,
   requestsOfRole,
+  rigConfig,
   type HookRig,
   type RoleScript
 } from './support/hookRig'
@@ -242,7 +246,7 @@ describe('P2-08 D · hook agents are unloaded once their dispatch settles', () =
         const sent = rig.session.submitUser('go')
         await review.reached
         await withTimeout(rig.session.abort(), 5000, 'abort')
-        expect(await withTimeout(sent, 5000, 'root send')).toEqual({})
+        expect(await withTimeout(sent, 5000, 'root send')).toEqual({ cutShort: 'aborted' })
         await waitFor(() => rig.askCalls.length === 1)
         expect(rig.askCalls[0]!.result).toBe('asked-human')
         await waitFor(() => rig.runner.runningCount() === 0, 3000, 'decide drained')
@@ -528,6 +532,85 @@ describe('P2-08 D · hook agents are unloaded once their dispatch settles', () =
         unknown
       >
       expect('oneShot' in state).toBe(false)
+    }
+  )
+  /** 发卡片的工具（真写工具的形状：写明对话、等人回答）；应答记进 `responses`（按调用 id） */
+  const cardTool = (
+    name: string,
+    rig: () => HookRig,
+    responses: Map<string, InputResponse>
+  ): ToolRegistration =>
+    defineTool({
+      name,
+      description: `${name}: waits on a card`,
+      parameters: Type.Object({}),
+      execute: async (_args, api) => {
+        const response = await rig().session.requestUserInput({
+          id: api.callId,
+          kind: 'ask',
+          toolName: name,
+          conversationId: api.conversationId,
+          command: `run ${name}`,
+          createdAt: 0
+        })
+        responses.set(api.callId, response)
+        return { output: [{ type: 'text', text: JSON.stringify(response) }] }
+      }
+    })
+
+  it.each([
+    { order: 'next first', cardFirst: false },
+    { order: 'card first', cardFirst: true }
+  ])(
+    "SCOPE-I6($order) a capture from a batch that also raised a card: the child's card is cancelled, the verdict comes back, the agent is unloaded, the root card is untouched",
+    async ({ cardFirst }) => {
+      const responses = new Map<string, InputResponse>()
+      const rig = await hookRig({
+        profiles: { ...HOOK_PROFILES, [REVIEWER_NAME]: { ...REVIEWER, tools: ['cardOp'] } },
+        config: rigConfig({}, ['rootCard']),
+        tools: (_sessionId, current) => [
+          cardTool('cardOp', current, responses),
+          cardTool('rootCard', current, responses)
+        ]
+      })
+      type Call = Parameters<typeof callTools>[0][number]
+      const verdict: Call = [
+        'next',
+        { decision: 'allow', risk: 'low', summary: 's', reason: 'r' },
+        'c1'
+      ]
+      const card: Call = ['cardOp', {}, 'h-card']
+      queueRoles(rig.kit, {
+        root: [
+          callTools([
+            ['askOp', {}, 'r-op'],
+            ['rootCard', {}, 'r-card']
+          ]),
+          answer('root done')
+        ],
+        reviewer: [callTools(cardFirst ? [card, verdict] : [verdict, card])]
+      })
+      const sent = rig.session.submitUser('go')
+
+      await waitFor(() => rig.askCalls.length === 1, 3000, 'the verdict')
+      expect(rig.askCalls[0]!.result).toBe('verdict:allow')
+      expect(requestsOfRole(rig.kit, 'reviewer')).toHaveLength(1)
+      await waitFor(() => responses.has('h-card'), 3000, "the child's card settled")
+      expect(responses.get('h-card')).toStrictEqual({ kind: 'cancel', reason: 'aborted' })
+      expect(
+        rig.session.respondToInput('h-card', { kind: 'ask', allowed: true }),
+        'the card is gone'
+      ).toBe(false)
+      await waitFor(() => rig.runner.runningCount() === 0, 3000, 'decide drained')
+      expect(rig.ends()[0]).toMatchObject({ ok: true })
+      await expectUnloaded(rig, hookAgent(rig, REVIEWER_NAME))
+
+      // 根的卡片还在等人，答了这一轮照常走完
+      expect(rig.session.pendingInputs().map((request) => request.id)).toEqual(['r-card'])
+      expect(responses.has('r-card')).toBe(false)
+      expect(rig.session.respondToInput('r-card', { kind: 'ask', allowed: true })).toBe(true)
+      expect(await withTimeout(sent, 5000, 'root send')).toEqual({})
+      expect(responses.get('r-card')).toStrictEqual({ kind: 'ask', allowed: true })
     }
   )
 })

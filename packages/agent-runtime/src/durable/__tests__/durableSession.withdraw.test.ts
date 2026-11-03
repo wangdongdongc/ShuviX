@@ -201,7 +201,7 @@ describe('P3-11 · withdrawQueued', () => {
       await stall.reached
       const S = (await session.followUp('q')).submissionId!
       forkedId(await withTimeout(session.rollbackTo(ids.u2), 5000, 'rollbackTo'))
-      expect(await withTimeout(sending, 3000, 'U4')).toEqual({})
+      expect(await withTimeout(sending, 3000, 'U4')).toEqual({ cutShort: 'aborted' })
       await expectRefused(session, S, 'not_found')
     },
     TIMEOUT

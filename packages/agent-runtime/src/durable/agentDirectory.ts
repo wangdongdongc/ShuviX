@@ -99,6 +99,22 @@ export class AgentDirectory {
     conversations.add(record.id)
   }
 
+  /** 这个对话连同它的任务派出去的所有对话（中止的原生级联范围，含它自己） */
+  subtreeOf(conversationId: ConversationId): Set<ConversationId> {
+    const subtree = new Set<ConversationId>([conversationId])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const [child, owner] of this.owners) {
+        if (subtree.has(owner) && !subtree.has(child)) {
+          subtree.add(child)
+          grew = true
+        }
+      }
+    }
+    return subtree
+  }
+
   /**
    * 一个任务拥有的对话是不是**全都**是辅助工作（至少一条）—— 宿主派发的锚（P2-08 PIN-02）。一条对话都
    * 不拥有的任务（后台压缩之类）不算：它们照样让会话忙。

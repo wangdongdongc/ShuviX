@@ -165,7 +165,7 @@ describe('P1-12 · asks', () => {
         await withTimeout(session.abort(), 2000, `abort ${round}`)
         expect(session.pendingInputCount).toBe(0)
         expect(resolvedCount(world, id)).toBe(1)
-        expect(await withTimeout(saving, 2000, `save ${round}`)).toEqual({})
+        expect(await withTimeout(saving, 2000, `save ${round}`)).toEqual({ cutShort: 'aborted' })
         const entry = await entryFor(session, id)
         expect(resultMessage(entry).isError).toBe(true)
         texts.push(resultText(entry))

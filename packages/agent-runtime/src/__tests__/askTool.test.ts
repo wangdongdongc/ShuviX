@@ -78,6 +78,7 @@ describe('ASK 询问与应答', () => {
       id: 'call-ask-1',
       kind: 'choice',
       toolName: 'ask',
+      conversationId: expect.any(Number),
       question: 'Which style?',
       options: ARGS.options,
       createdAt: expect.any(Number)

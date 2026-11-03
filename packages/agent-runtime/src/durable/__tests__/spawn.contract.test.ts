@@ -203,7 +203,7 @@ describe('SpawnCoordinator · result contract', () => {
     await running.promise
     const C = await firstChild(d.session)
     await withTimeout(d.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     await waitFor(() => d.outcomes.length > 0, 3000, 'outcome')
     expect(d.outcomes[0]!.error).toBe('aborted')
     const task = await dispatchTask(d.session)

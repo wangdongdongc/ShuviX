@@ -61,7 +61,7 @@ describe('SpawnCoordinator · root Esc', () => {
     const C = await firstChild(d.session)
     const record = await spawnedAgentRecordOf(d.session.harness, C, BG)
     await withTimeout(d.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     expect((await tasksOf(d.session, C)).at(-1)!.state).toMatchObject({
       outcome: { status: 'aborted' }
     })
@@ -91,7 +91,7 @@ describe('SpawnCoordinator · root Esc', () => {
     const record = await spawnedAgentRecordOf(d.session.harness, C, BG)
     expect(record?.oneShot).toBe(true)
     await withTimeout(d.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     await waitFor(() => d.outcomes.length > 0, 3000, 'outcome')
     expect(d.outcomes[0]!.error).toBe('aborted')
     // 结果交回时收尾已经跑过：这里不等 —— 漏卸就永远装着
@@ -121,7 +121,7 @@ describe('SpawnCoordinator · root Esc', () => {
     await Promise.all([g.reached, dStep.reached])
     expect(await conversationIds(d.session)).toHaveLength(4)
     await withTimeout(d.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     expect(await liveTasks(d.session)).toEqual([])
     for (const id of (await conversationIds(d.session)).slice(1)) {
       expect((await tasksOf(d.session, id)).at(-1)!.state).toMatchObject({
@@ -141,7 +141,7 @@ describe('SpawnCoordinator · root Esc', () => {
     const sent = d.session.submitUser('go')
     await resolving.promise
     await withTimeout(d.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     expect(await conversationIds(d.session)).toEqual([1])
     const agents = d.t
       .registryOf('s1')!
@@ -164,7 +164,7 @@ describe('SpawnCoordinator · root Esc', () => {
     await childStep.reached
     const C = await firstChild(d.session)
     await withTimeout(d.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     expect((await tasksOf(d.session, C)).at(-1)!.state).toMatchObject({
       outcome: { status: 'aborted' }
     })

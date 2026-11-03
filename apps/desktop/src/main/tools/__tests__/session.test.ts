@@ -1432,7 +1432,7 @@ describe('SessionTool — 授权回调转交给 assertSessionAccess 的参数（
       toolCallId: 'call-7',
       toolName: 'session',
       operation: 'prompt-session',
-      owner: { taskId: 7, conversationId: 3 },
+      owner: { taskId: 7, conversationId: 3, signal },
       signal,
       message: 'Please summarise the thread'
     })

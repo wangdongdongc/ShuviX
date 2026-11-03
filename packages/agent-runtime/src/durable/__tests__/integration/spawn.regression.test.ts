@@ -228,7 +228,7 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
       expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(true)
 
       await withTimeout(session.destroyAgent(), 3000, 'destroy')
-      expect(await withTimeout(sending, 2000, 'send settles')).toEqual({})
+      expect(await withTimeout(sending, 2000, 'send settles')).toEqual({ cutShort: 'aborted' })
       expect(beforeAbort).toBe(1)
       await waitFor(() => sw.router.ends().length === 1, 2000, 'router end')
       expect(sw.router.ends()).toEqual([

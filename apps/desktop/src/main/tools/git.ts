@@ -125,8 +125,8 @@ function makeDesktopAskOp(ctx: ToolContext) {
         toolName: GIT_TOOL_NAME,
         description: info.reason ? t(`tool.gitAsk.${info.reason}`) : undefined,
         abortError: TOOL_ABORTED,
-        // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道，
-        // 无前端时 harness 层已即时 cancel；此分支只防御未来的无通道调用方）
+        // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道；
+        // 此分支只防御未来的无通道调用方）
         missingChannel: 'deny'
       }
     )

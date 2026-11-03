@@ -11,7 +11,7 @@
  *    交回，所以「在跑」就是那次 `prompt` 还没交回 —— 停在一张询问卡上的运行同样算在跑，后面的触发不会越堆越多；
  *  - **这条绑定上一次跑成的时刻**随事件一起交给 bot（`lastFiredAt`，带本机时区偏移的 ISO —— bot 直接读它的日期当本地日；
  *    记在设置里，重启之后还在）：bot 据此处理「自上次以来」的东西。只有那一轮正常结束才记 —— 会话打不开、模型被拒、
- *    运行出错时不往前推，下一次接着从更早的时刻处理，错过与失败都不丢数据；
+ *    运行出错、被人喊停时不往前推，下一次接着从更早的时刻处理，错过、失败与喊停都不丢数据；
  *  - `when` 求值出错按「不命中」处置，同一条绑定同一个错误只记一次日志 —— 每分钟都会求值一次。
  *
  * 触发源不知道谁会响应（与 bot 解绑，用户 2026-10-24）：每次命中、跳过、条件出错与每次运行的结局都记进触发日志
@@ -267,6 +267,9 @@ export class BotTriggerService {
       if (result.error) {
         log.warn(`bot "${entry.file.name}" run in ${session.id} failed: ${result.error}`)
         triggerLogService.finish(logId, 'failed', result.error)
+      } else if (result.cutShort) {
+        log.info(`bot "${entry.file.name}" run in ${session.id} ended early: ${result.cutShort}`)
+        triggerLogService.finish(logId, 'stopped')
       } else {
         triggerLogService.finish(logId, 'completed')
         // 跑成了才往前推（现读一次：别的绑定可能刚写过这张表）

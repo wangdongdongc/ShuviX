@@ -56,7 +56,7 @@ async function escWithCardAndTitler(): Promise<{ cwText: string }> {
   const statesBefore = world.t.statesOf('s1').length
 
   await withTimeout(session.abort(), 2000, 'abort')
-  expect(await withTimeout(sending, 2000, 'send settles')).toEqual({})
+  expect(await withTimeout(sending, 2000, 'send settles')).toEqual({ cutShort: 'aborted' })
 
   // 子 agent 一侧
   expect(resolvedCount(world, 'c-w')).toBe(1)
@@ -118,7 +118,7 @@ async function escDuringReview(): Promise<{ cwText: string }> {
   const R_A = (await recordOf(session, R!))!.agentId
 
   await withTimeout(session.abort(), 2000, 'abort')
-  expect(await withTimeout(sending, 2000, 'send settles')).toEqual({})
+  expect(await withTimeout(sending, 2000, 'send settles')).toEqual({ cutShort: 'aborted' })
 
   await waitFor(async () => (await liveTasks(session)).length === 0, 2000, 'no live tasks')
   expect((await tasksIn(session, R!, 'pi.generation')).map(fate)).toEqual(['aborted'])
@@ -188,7 +188,7 @@ describe('P2-11 · J3 Esc cascade', () => {
       const A_G = (await recordOf(session, G))!.agentId
 
       await withTimeout(session.abort(), 2000, 'abort')
-      expect(await withTimeout(sending, 2000, 'send settles')).toEqual({})
+      expect(await withTimeout(sending, 2000, 'send settles')).toEqual({ cutShort: 'aborted' })
       await waitFor(
         () => world.mcpLog.callsOf('slow')[0]!.abortedBy === 'signal',
         2000,

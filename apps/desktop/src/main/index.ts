@@ -108,6 +108,7 @@ import { readTaskList, setWhenHostFunctions } from '@shuvix/agent-runtime'
 import { activeSessionsOnDay } from './services/sessionDayPromptService'
 import { builtinTimer } from './services/triggerTimer'
 import { botTriggers } from './services/botTriggerService'
+import { triggerLogService } from './services/triggerLogService'
 import { botService } from './services/botService'
 import { setBotScheduleProjectLookup } from './services/botScheduleHint'
 import { setBotAccessChecker } from './services/botAccessHint'
@@ -1043,6 +1044,8 @@ app.whenReady().then(async () => {
   // 内置 id 的认定记在设置库里（只认 ShuviX 自己写下的那份文件）
   botService.setBuiltinTrustStore(settingsService)
   step('botService.seedBuiltinBots', () => botService.seedBuiltinBots(i18next.language || 'en'))
+  // 定时器开始之前：上个进程没收尾的运行先记清楚
+  step('triggerLogService.sweepInterrupted', () => triggerLogService.sweepInterrupted())
   step('builtinTimer.start', () =>
     builtinTimer.start((payload) => botTriggers.fire('timer.fired', payload))
   )

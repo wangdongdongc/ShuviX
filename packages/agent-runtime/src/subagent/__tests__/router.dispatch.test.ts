@@ -190,7 +190,7 @@ describe('router · the dispatch tool on real durable', () => {
     const sent = r.session.submitUser('go')
     await stall.reached
     await withTimeout(r.session.abort(), 3000, 'abort')
-    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
     await waitFor(() => r.ends().length > 0, 3000, 'end')
     const A = r.registers()[0]!.sessionId
     const task = await taskRecord(r.session, await dispatchTask(r.session))

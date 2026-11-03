@@ -41,16 +41,23 @@ export function toolCallScope(api: ToolExecutionApi, context: Context): ToolCall
   }
 }
 
-/** 一次调用在安全模块眼里的归属 —— 并进 EnforceOpts 的那两个字段 */
+/** 一次调用在安全模块眼里的归属 —— 并进 EnforceOpts 的那几个字段 */
 export interface CallOwner {
   taskId?: number
   conversationId?: number
+  /** 这次调用的中止信号：它落下，这次调用发起的审查和询问卡片跟着收尾 */
+  signal?: AbortSignal
 }
 
 /**
- * 交给 PEP 的调用归属：`{ taskId, conversationId }`。没有 scope（单测直接调钩子、宿主自己的检查）
+ * 交给 PEP 的调用归属：`{ taskId, conversationId, signal }`。没有 scope（单测直接调钩子、宿主自己的检查）
  * 给空对象 —— 展开进 EnforceOpts 时不多出 undefined 键。
  */
 export function callOwnerOf(call: ToolCallScope | undefined): CallOwner {
-  return call ? { taskId: call.taskId, conversationId: call.conversationId } : {}
+  if (!call) return {}
+  return {
+    taskId: call.taskId,
+    conversationId: call.conversationId,
+    ...(call.signal ? { signal: call.signal } : {})
+  }
 }

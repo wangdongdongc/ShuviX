@@ -10,6 +10,7 @@
  *   TLD-4  event 列写坏（非 JSON / 数组 / null / 标量）→ 读出 {}
  *   TLD-5  clear 删光
  *   TLD-6  prune(keep)：只留最新的 keep 条（与 list 同一个顺序）；keep ≥ 行数不动；keep = 0 删光；空表不抛
+ *   TLD-7  markStartedInterrupted：started 改成 interrupted、updatedAt 换新，error 与 createdAt 不动；别的结局不动；交回改了几条
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -174,5 +175,37 @@ describe('TriggerLogDao', () => {
 
     triggerLogDao.prune(0)
     expect(triggerLogDao.list(100)).toEqual([])
+  })
+
+  it('TLD-7 markStartedInterrupted：started 改成 interrupted（updatedAt 换新，error 与 createdAt 不动）；别的结局一行不动；交回改了几条', () => {
+    expect(triggerLogDao.markStartedInterrupted(900)).toBe(0)
+
+    const started = [
+      entry({ id: 's1', createdAt: 10, updatedAt: 10 }),
+      entry({ id: 's2', createdAt: 20, updatedAt: 25, error: 'left over' })
+    ]
+    const others = (
+      ['completed', 'failed', 'skipped', 'stopped', 'condition-error', 'interrupted'] as const
+    ).map((outcome, index) =>
+      entry({ id: `o${index}`, createdAt: 30 + index, updatedAt: 30 + index, outcome })
+    )
+    for (const row of [...started, ...others]) triggerLogDao.insert(row)
+
+    expect(triggerLogDao.markStartedInterrupted(900)).toBe(2)
+
+    const byId = new Map(triggerLogDao.list(100).map((row) => [row.id, row]))
+    expect(byId.get('s1')).toStrictEqual({
+      ...started[0],
+      outcome: 'interrupted',
+      updatedAt: 900
+    })
+    expect(byId.get('s2')).toStrictEqual({
+      ...started[1],
+      outcome: 'interrupted',
+      updatedAt: 900
+    })
+    for (const row of others) expect(byId.get(row.id)).toStrictEqual(row)
+    // 再跑一遍没有可改的了
+    expect(triggerLogDao.markStartedInterrupted(901)).toBe(0)
   })
 })

@@ -6,12 +6,23 @@
  *
  * 一次性的工具派发（`oneShot`，知识库写手的形状）：OS-P1 落定即卸、缺省派发照样装着 · OS-P2 面板追问装回来、
  * 干活时列着、落定再卸（两次都是）· OS-P4 带结果契约时每一种收场都卸（捕获 / 追问后捕获 / 模型报错 / 软停止 / 混批）
+ *
+ * 中止的范围（SCOPE）：I3 信号聋的工具在停止开始之后才问 —— 当场取消、中止落定，同一段时间根发起的卡片照样挂着，
+ * 之后追问发起的询问照常受理 · I4 会话中止一张不留、关窗口、走中止前 seam；中止一个子对话这三样都不碰。
  */
-import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
-import type { ConversationId, SubmissionRecord } from '@earendil-works/pi-durable'
+import { fauxText, fauxToolCall, Type } from '@earendil-works/pi-ai'
+import {
+  defineTool,
+  type ConversationId,
+  type SubmissionRecord,
+  type ToolRegistration
+} from '@earendil-works/pi-durable'
+import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { spawnedAgentRecordOf } from '../agentRecord'
+import type { DurableSession } from '../durableSession'
+import type { PendingInputRequests } from '../inputRequests'
 import { AgentStateDoc, SourceDoc } from '../docs'
 import type { AgentMonitorRow } from '../monitorSnapshot'
 import { freshAgentMount } from '../projection/__tests__/projectorSupport'
@@ -513,6 +524,229 @@ describe('SpawnCoordinator · one-shot tool dispatch', () => {
       const C = await ending.run(d)
       await ending.check(d, C)
       await expectUnloadedTool(d, C, d.outcomes[0]!.agentId!, ending.kept)
+    }
+  )
+})
+
+/**
+ * 发起询问并写明对话的工具（真 ask 与安全模块的形状）。`gate` 对 signal 充耳不闻；应答记进 `responses`（按调用 id）
+ */
+function namedAskTool(
+  name: string,
+  getSession: () => DurableSession,
+  responses: Map<string, InputResponse>,
+  options: { gate?: Promise<unknown>; onStart?: (signal: AbortSignal | undefined) => void } = {}
+): ToolRegistration {
+  return defineTool({
+    name,
+    description: `${name}: asks the user`,
+    parameters: Type.Object({}),
+    execute: async (_args, api, context) => {
+      options.onStart?.(context.abortSignal)
+      if (options.gate !== undefined) await options.gate
+      const response = await getSession().requestUserInput({
+        id: api.callId,
+        kind: 'ask',
+        toolName: name,
+        conversationId: api.conversationId,
+        command: `run ${name}`,
+        createdAt: 0
+      })
+      responses.set(api.callId, response)
+      return { output: [{ type: 'text', text: JSON.stringify(response) }] }
+    }
+  })
+}
+
+const ABORTED: InputResponse = { kind: 'cancel', reason: 'aborted' }
+const ALLOWED: InputResponse = { kind: 'ask', allowed: true }
+
+const pendingIds = (session: DurableSession): string[] =>
+  session
+    .pendingInputs()
+    .map((request) => request.id)
+    .sort()
+
+describe('SpawnCoordinator · the scope of a stop', () => {
+  it('SCOPE-I3 a signal-deaf tool in C asks after interrupt(C) began: cancelled on the spot and the interrupt settles; a root card raised during the same stop stays; a follow-up can ask again', async () => {
+    const deafGate = deferred()
+    const rootGate = deferred()
+    const responses = new Map<string, InputResponse>()
+    let deafSignal: AbortSignal | undefined
+    const d = await hostD({
+      tools: (getSession) => [
+        namedAskTool('deafAsk', getSession, responses, {
+          gate: deafGate.promise,
+          onStart: (signal) => (deafSignal = signal)
+        }),
+        namedAskTool('rootAsk', getSession, responses, { gate: rootGate.promise }),
+        namedAskTool('plainAsk', getSession, responses)
+      ]
+    })
+    d.t.kit.queue(
+      callTools([
+        ['agent', { name: 'explore', prompt: 'find X', description: 'look' }, 'call-agent'],
+        ['rootAsk', {}, 'root-ask']
+      ]),
+      callTool('deafAsk', {}, 'deaf-ask'),
+      answer('root done')
+    )
+    const sent = d.session.submitUser('go')
+    await waitFor(() => deafSignal !== undefined, 3000, 'the deaf tool started')
+    const C = await firstChild(d.session)
+
+    let interrupted = false
+    const interrupting = d.session.agents.interrupt(C).then(() => (interrupted = true))
+    await waitFor(() => deafSignal!.aborted, 3000, 'the stop began')
+
+    // 同一段时间里根发起一张卡片：它不在这棵子树里，照常挂着
+    rootGate.resolve()
+    await waitFor(() => d.session.pendingInputCount === 1, 3000, 'the root card')
+    expect(pendingIds(d.session)).toEqual(['root-ask'])
+    expect(interrupted).toBe(false)
+
+    // 聋工具这才问：当场取消，中止才等得到它收尾
+    deafGate.resolve()
+    await withTimeout(interrupting, 3000, 'interrupt')
+    expect(responses.get('deaf-ask')).toStrictEqual(ABORTED)
+    expect(d.t.asksOf('input_request').map((event) => event.request.id)).toEqual(['root-ask'])
+    expect(pendingIds(d.session)).toEqual(['root-ask'])
+    expect(responses.has('root-ask')).toBe(false)
+
+    expect(d.session.respondToInput('root-ask', ALLOWED)).toBe(true)
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({})
+    expect(responses.get('root-ask')).toStrictEqual(ALLOWED)
+
+    // 中止已经落定，这个子对话的新询问又受理了
+    d.t.kit.queue(callTool('plainAsk', {}, 'ask-2'), answer('asked ok'))
+    const continued = d.session.agents.continue(C, 'go on')
+    await waitFor(() => d.session.pendingInputCount === 1, 3000, 'the follow-up ask')
+    expect(pendingIds(d.session)).toEqual(['ask-2'])
+    expect(d.session.respondToInput('ask-2', ALLOWED)).toBe(true)
+    const outcome = await withTimeout(continued, 3000, 'continue')
+    expect(outcome).toMatchObject({ result: 'asked ok' })
+    expect('error' in outcome).toBe(false)
+    expect(responses.get('ask-2')).toStrictEqual(ALLOWED)
+  })
+
+  /** 根批里派两个子 agent、自己也问一张（子 agent 按任务文本分路，互不依赖先后） */
+  function queueThreeCards(d: HostD): void {
+    queueRouted(d.t.kit, {
+      go: [
+        callTools([
+          ['agent', { name: 'explore', prompt: 'c', description: 'c' }, 'call-c'],
+          ['agent', { name: 'explore', prompt: 's', description: 's' }, 'call-s'],
+          ['plainAsk', {}, 'root-ask']
+        ])
+      ],
+      c: [callTool('plainAsk', {}, 'c-ask')],
+      s: [callTool('plainAsk', {}, 's-ask')]
+    })
+  }
+
+  const threeCardRig = async (
+    host: NonNullable<Parameters<typeof hostD>[0]>['host'],
+    responses: Map<string, InputResponse>
+  ): Promise<HostD> =>
+    hostD({
+      host,
+      tools: (getSession) => [namedAskTool('plainAsk', getSession, responses)]
+    })
+
+  it('SCOPE-I4(a) session.abort takes every card, runs beforeAbort once and refuses new asks until the next run starts', async () => {
+    let aborts = 0
+    const responses = new Map<string, InputResponse>()
+    const d = await threeCardRig({ beforeAbort: () => void aborts++ }, responses)
+    queueThreeCards(d)
+    const sent = d.session.submitUser('go')
+    await waitFor(() => d.session.pendingInputCount === 3, 3000, 'three cards')
+    const unnamed = d.session.requestUserInput({
+      id: 'unnamed',
+      kind: 'ask',
+      toolName: 'test',
+      command: 'no conversation named',
+      createdAt: 0
+    })
+    expect(pendingIds(d.session)).toEqual(['c-ask', 'root-ask', 's-ask', 'unnamed'])
+
+    await withTimeout(d.session.abort(), 3000, 'abort')
+
+    expect(await withTimeout(sent, 3000, 'root')).toEqual({ cutShort: 'aborted' })
+    expect(await unnamed).toStrictEqual(ABORTED)
+    expect(d.session.pendingInputCount).toBe(0)
+    expect(aborts).toBe(1)
+    for (const id of ['root-ask', 'c-ask', 's-ask']) {
+      expect(d.session.respondToInput(id, ALLOWED), id).toBe(false)
+    }
+
+    // 窗口关着：新询问当场取消，不挂起、不计数
+    const before = d.t.asksOf('input_request').length
+    expect(
+      await d.session.requestUserInput({
+        id: 'late',
+        kind: 'ask',
+        toolName: 'test',
+        conversationId: 1,
+        command: 'too late',
+        createdAt: 0
+      })
+    ).toStrictEqual(ABORTED)
+    expect(d.session.pendingInputCount).toBe(0)
+    expect(d.t.asksOf('input_request')).toHaveLength(before)
+
+    // 下一轮起跑就重开
+    d.t.kit.queue(callTool('plainAsk', {}, 'next-ask'), answer('done'))
+    const again = d.session.submitUser('again')
+    await waitFor(() => d.session.pendingInputCount === 1, 3000, 'the next ask')
+    expect(d.session.respondToInput('next-ask', ALLOWED)).toBe(true)
+    expect(await withTimeout(again, 3000, 'next run')).toEqual({})
+    expect(aborts).toBe(1)
+  })
+
+  it.each(['interrupt', 'destroy'] as const)(
+    'SCOPE-I4(b) %s(C) touches none of the session-wide machinery: no beforeAbort, no onInputsReopened, the input window stays open',
+    async (stop) => {
+      let aborts = 0
+      let reopened = 0
+      const responses = new Map<string, InputResponse>()
+      const d = await threeCardRig(
+        { beforeAbort: () => void aborts++, onInputsReopened: () => void reopened++ },
+        responses
+      )
+      queueThreeCards(d)
+      const sent = d.session.submitUser('go')
+      await waitFor(() => d.session.pendingInputCount === 3, 3000, 'three cards')
+      const C = d.session.pendingInputs().find((card) => card.id === 'c-ask')!.conversationId!
+      const reopenedBefore = reopened
+      const inputs = (d.session as unknown as { inputs: PendingInputRequests }).inputs
+
+      await withTimeout(d.session.agents[stop](C), 3000, stop)
+
+      expect(aborts).toBe(0)
+      expect(reopened).toBe(reopenedBefore)
+      expect(inputs.inputsClosed).toBe(false)
+      expect(responses.get('c-ask')).toStrictEqual(ABORTED)
+      expect(pendingIds(d.session)).toEqual(['root-ask', 's-ask'])
+
+      // 这时还能问：窗口真的开着
+      const extra = d.session.requestUserInput({
+        id: 'extra',
+        kind: 'ask',
+        toolName: 'test',
+        conversationId: 1,
+        command: 'still open',
+        createdAt: 0
+      })
+      expect(pendingIds(d.session)).toEqual(['extra', 'root-ask', 's-ask'])
+      expect(d.session.respondToInput('extra', ALLOWED)).toBe(true)
+      expect(await extra).toStrictEqual(ALLOWED)
+
+      // 兄弟与根各还要一次应答（谁先到无所谓）
+      d.t.kit.queue(answer('ok'), answer('ok'))
+      for (const id of ['s-ask', 'root-ask']) {
+        expect(d.session.respondToInput(id, ALLOWED), id).toBe(true)
+      }
+      expect(await withTimeout(sent, 3000, 'root')).toEqual({})
     }
   )
 })

@@ -19,6 +19,10 @@
  * 之前发起的询问却能一直等 —— 结局取决于发起那一刻。询问经视图到达每个前端，谁之后连上来都看得到、答得了；
  * 挂起的询问只在被应答、中止、关停（含退出）、被同 id 顶替时落定。
  *
+ * **中止分两层**：会话级的中止（`closeInputs` + `cancelAll`）一张不留；中止一个子对话只取消这棵子树发起的询问
+ * （`cancelConversations`，按询问带的 `conversationId` 认）—— 停掉一个派生 agent 不该连累根对话和兄弟 agent 正在等的
+ * 卡片，被停的工具也不该留下一张过后答了还会照样执行的卡片（2026-11-02）。
+ *
  * **不再广播**（P3-08，plan §D / Q-P3-04）：询问经视图（`SessionView.asks`，投影挂的钩子）到达每个前端，
  * 主进程的消费方（通知、侧栏计数）也挂钩子 —— 前端线路上没有 `input_request` / `_resolved` 了。应答带上答题方
  * （`{clientId}`，P3-08 PIN-20），原样交给 onResolved 供审计；不记应答内容。
@@ -71,6 +75,8 @@ export class PendingInputRequests {
   private closedReason: CancelReason | undefined
   /** `subscribe()` 挂上的钩子（构造时的那一份之后逐个调用） */
   private readonly subscribers = new Set<PendingInputHooks>()
+  /** 正在中止的子对话（`cancelConversations`，一次中止一份，落定时摘掉） */
+  private readonly stopping: ReadonlySet<number>[] = []
 
   constructor(
     private readonly sessionId: string,
@@ -98,6 +104,7 @@ export class PendingInputRequests {
   /** 发起一条询问并挂起，直到被应答、取消或被同 id 的新询问顶替 */
   request(request: InputRequest): Promise<InputResponse> {
     if (this.closedReason !== undefined) return Promise.resolve(cancelled(this.closedReason))
+    if (this.isStopping(request)) return Promise.resolve(cancelled('aborted'))
     // 同 id 又来一条：先前那条作废（只有最新一条能被应答）
     this.settle(request.id, cancelled('superseded'))
     return new Promise<InputResponse>((resolve) => {
@@ -132,6 +139,27 @@ export class PendingInputRequests {
   /** 取消全部挂起（逐条落定）；不改变受理窗口 */
   cancelAll(reason: CancelReason = 'aborted'): void {
     for (const requestId of [...this.pending.keys()]) this.settle(requestId, cancelled(reason))
+  }
+
+  /**
+   * 中止这些对话时调：取消它们发起的询问。交回的函数在中止落定之后调 —— 在那之前它们再发起的询问当场取消（信号
+   * 聋的工具中止之后才问，不能再挂起一张，否则中止等工具、工具等人）。没写明对话的询问认不出是谁的，一并取消：
+   * 多取消一张是工具报错，漏掉一张就可能卡住这次中止。
+   */
+  cancelConversations(conversationIds: ReadonlySet<number>): () => void {
+    this.stopping.push(conversationIds)
+    for (const [requestId, { request }] of [...this.pending]) {
+      if (this.isStopping(request)) this.settle(requestId, cancelled('aborted'))
+    }
+    return () => {
+      const at = this.stopping.indexOf(conversationIds)
+      if (at >= 0) this.stopping.splice(at, 1)
+    }
+  }
+
+  private isStopping(request: InputRequest): boolean {
+    const owner = request.conversationId
+    return this.stopping.some((ids) => owner === undefined || ids.has(owner))
   }
 
   /** 关闭受理窗口：之后的新询问当场以 `reason` 取消（不挂起、不计数、不调钩子） */

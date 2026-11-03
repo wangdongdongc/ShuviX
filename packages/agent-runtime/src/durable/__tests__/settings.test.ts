@@ -175,7 +175,7 @@ describe('ShuviX settings wired into a Harness', () => {
     expect(delay).toBeGreaterThanOrEqual(1500)
     expect(delay).toBeLessThanOrEqual(2100)
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await withTimeout(result, 5000, 'submit')).toEqual({})
+    expect(await withTimeout(result, 5000, 'submit')).toEqual({ cutShort: 'aborted' })
 
     const off = await makeHost()
     const other = await off.open()

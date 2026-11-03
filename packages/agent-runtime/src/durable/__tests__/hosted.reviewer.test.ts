@@ -176,7 +176,7 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
       dispatch: 'hook'
     })
     await withTimeout(rig.session.abort(), 5000, 'abort')
-    expect(await sent).toEqual({})
+    expect(await sent).toEqual({ cutShort: 'aborted' })
     await waitFor(() => rig.askCalls.length === 1)
     expect(rig.askCalls[0]!.result).toBe('asked-human')
     await waitFor(async () => (await liveTasks(rig.session)).length === 0)

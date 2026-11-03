@@ -55,6 +55,13 @@ export class TriggerLogDao extends BaseDao {
     )
   }
 
+  /** 把还停在 started 的都改成 interrupted，交回改了几条（启动时调，见 triggerLogService） */
+  markStartedInterrupted(updatedAt: number): number {
+    return this.stmt(
+      "UPDATE trigger_logs SET outcome = 'interrupted', updatedAt = ? WHERE outcome = 'started'"
+    ).run(updatedAt).changes
+  }
+
   /** 最新的 limit 条，按时间倒序（同一毫秒按 id —— uuidv7 随时间递增） */
   list(limit: number): TriggerLogEntry[] {
     const rows = this.stmt(

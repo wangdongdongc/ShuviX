@@ -80,6 +80,7 @@ export function createAskTool({
             id: api.callId,
             kind: 'choice',
             toolName: 'ask',
+            ...(api.conversationId === undefined ? {} : { conversationId: api.conversationId }),
             question: params.question,
             options: params.options,
             createdAt: Date.now()

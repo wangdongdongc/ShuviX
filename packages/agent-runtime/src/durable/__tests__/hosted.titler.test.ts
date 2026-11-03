@@ -367,7 +367,7 @@ describe('P2-08 B · titler dispatch (observe)', () => {
     fire(rig)
     await first.reached
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await sent).toEqual({})
+    expect(await sent).toEqual({ cutShort: 'aborted' })
     const T = await titlerConversation(session)
     const live = await liveTasks(session, T)
     expect(live.length).toBeGreaterThan(0)

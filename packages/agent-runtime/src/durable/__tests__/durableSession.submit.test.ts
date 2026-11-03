@@ -121,7 +121,7 @@ describe('submitUser', () => {
     expect(t.kit.callCount).toBe(0)
   })
 
-  it('U-07 abort while in flight → {}', async () => {
+  it('U-07 abort while in flight → {cutShort: aborted}', async () => {
     const t = await makeHost()
     const session = await t.open()
     await primeRoot(session, t.kit)
@@ -130,10 +130,10 @@ describe('submitUser', () => {
     const result = session.submitUser('u1')
     await stall.reached
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await withTimeout(result, 2000, 'submit')).toEqual({})
+    expect(await withTimeout(result, 2000, 'submit')).toEqual({ cutShort: 'aborted' })
   })
 
-  it('U-08 a withdrawn follow-up → {}', async () => {
+  it('U-08 a withdrawn follow-up → {cutShort: aborted}', async () => {
     const t = await makeHost()
     const session = await t.open()
     await primeRoot(session, t.kit)
@@ -144,8 +144,8 @@ describe('submitUser', () => {
     const second = session.submitUser('u2', { whenBusy: 'followUp' })
     await waitFor(async () => (await inboxModes(session)).length === 1, 3000, 'queued')
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await first).toEqual({})
-    expect(await withTimeout(second, 2000, 'withdrawn')).toEqual({})
+    expect(await first).toEqual({ cutShort: 'aborted' })
+    expect(await withTimeout(second, 2000, 'withdrawn')).toEqual({ cutShort: 'aborted' })
     expect(await inboxModes(session)).toEqual([])
   })
 
@@ -163,9 +163,9 @@ describe('submitUser', () => {
       { status: 'unanswered', reason: 'no_model' },
       { error: expect.any(String), code: 'no_model' }
     ],
-    [{ status: 'unanswered', reason: 'aborted' }, {}],
-    [{ status: 'unanswered', reason: 'stale' }, {}],
-    [{ status: 'unanswered', reason: 'reset' }, {}],
+    [{ status: 'unanswered', reason: 'aborted' }, { cutShort: 'aborted' }],
+    [{ status: 'unanswered', reason: 'stale' }, { cutShort: 'stale' }],
+    [{ status: 'unanswered', reason: 'reset' }, { cutShort: 'reset' }],
     [
       { status: 'unanswered', reason: 'faulted', detail: 'task bug' },
       { error: 'task bug', code: 'faulted' }
@@ -478,7 +478,7 @@ describe('followUp', () => {
     expect(notice.status).toBe('submitted')
     expect(await inboxModes(session)).toEqual(['followUp', 'write'])
     await withTimeout(session.abort(), 5000, 'abort')
-    expect(await first).toEqual({})
+    expect(await first).toEqual({ cutShort: 'aborted' })
     expect(await submissionStatus(session, followUp.submissionId!)).toMatchObject({
       status: 'unanswered',
       reason: 'aborted'

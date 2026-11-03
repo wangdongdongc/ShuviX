@@ -188,6 +188,11 @@ export type SubmitErrorCode =
 export interface SubmitResult {
   error?: string
   code?: SubmitErrorCode
+  /**
+   * 没有出错，但这一轮没有正常结束：有人喊停（`aborted`）、被压缩越过（`stale`）、被重置截断（`reset`）。
+   * 缺省 = 正常结束（或看 `error`）。
+   */
+  cutShort?: 'aborted' | 'stale' | 'reset'
 }
 
 /** steer / followUp 的结果：受理即返回（不等 run 结束），附 submission id 供需要时等待 */
@@ -599,7 +604,8 @@ function detailText(detail: unknown): string | undefined {
 /**
  * 把 durable 的 submission 落定记录映射成发送结果（R3）。
  *
- * aborted / stale / reset 都不是错误（有人喊停 / 被压缩越过 / 被重置截断）；model_error 带 provider 的
+ * aborted / stale / reset 都不是错误（有人喊停 / 被压缩越过 / 被重置截断），带 `cutShort` 让在意「跑完了没有」
+ * 的调用方分得清；model_error 带 provider 的
  * 原文；被孤立的 run 在 durable 里以「为什么接不上」作原因落定（missing_task / task_too_old /
  * migration_failed），这里一并归到 `orphaned`。
  */
@@ -617,7 +623,7 @@ export function settlementResult(
     case 'aborted':
     case 'stale':
     case 'reset':
-      return {}
+      return { cutShort: reason }
     case 'model_error':
       return { error: detail ?? MODEL_ERROR_FALLBACK, code: 'model_error' }
     case 'no_model':
@@ -2699,24 +2705,18 @@ export class DurableSessionImpl implements DurableSession {
   }
 
   /**
-   * 中止一个子对话（面板的软停止 / 销毁，P2-03 PIN-04）：与会话中止同一套次序（关询问窗口 → 中止前
-   * seam → 取消挂起的询问 → 中止对话），不记「显式喊停」；子对话停下之后重开询问窗口 —— 根的 run
-   * 可能还在跑，它之后的询问不该被一直挡着。
+   * 中止一个子对话（面板的软停止 / 销毁、hook 超时，P2-03 PIN-04），不记「显式喊停」。只取消这棵子树发起的询问：
+   * 根对话和别的子对话正在等的卡片不受影响，被停的工具也不会留下一张过后答了还照样执行的卡片（2026-11-02）。
+   * 所以不碰整条会话的询问窗口，也不走中止前 seam（它停整条会话的审查）；子树里在跑的审查随工具调用的信号收尾。
    */
   private async stopConversation(conversationId: ConversationId): Promise<void> {
     const conversation = await this.harness.conversation(conversationId, BG)
     if (conversation === undefined) return
-    this.inputs.closeInputs('aborted')
-    try {
-      this.deps.beforeAbort?.()
-    } catch (error) {
-      this.deps.logger.warn(`beforeAbort failed session=${this.sessionId}: ${errorText(error)}`)
-    }
-    this.inputs.cancelAll('aborted')
+    const release = this.inputs.cancelConversations(this.directory.subtreeOf(conversationId))
     try {
       await conversation.abort(BG)
     } finally {
-      if (!this.closedFlag) this.reopenInputs()
+      release()
     }
   }
 

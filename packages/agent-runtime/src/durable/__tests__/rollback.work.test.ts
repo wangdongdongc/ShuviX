@@ -86,7 +86,9 @@ describe('P3-10a · busy, queued, children and interrupted', () => {
       )
       await waitFor(() => lc.signals.length === 1, 3000, 'started')
       const F = forkedId(await withTimeout(session.rollbackTo(ids.u2), 5000, 'rollbackTo'))
-      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({})
+      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({
+        cutShort: 'aborted'
+      })
       const old = await entriesOf(session, ROOT_CONVERSATION_ID)
       const last = old.at(-1)!
       expect(last.kind).toBe('pi.assistant')
@@ -124,7 +126,9 @@ describe('P3-10a · busy, queued, children and interrupted', () => {
       await waitFor(() => session.pendingInputCount === 1, 3000, 'ask pending')
       expect(session.runState).toBe('busy')
       forkedId(await withTimeout(session.rollbackTo(ids.u2), 5000, 'rollbackTo'))
-      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({})
+      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({
+        cutShort: 'aborted'
+      })
       expect(session.pendingInputs()).toEqual([])
       expect((await viewOf(session)).asks).toEqual([])
       expect(session.runState).toBe('idle')
@@ -143,7 +147,9 @@ describe('P3-10a · busy, queued, children and interrupted', () => {
       const queued = await session.followUp('q')
       expect(queued.error).toBeUndefined()
       const F = forkedId(await withTimeout(session.rollbackTo(ids.u2), 5000, 'rollbackTo'))
-      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({})
+      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({
+        cutShort: 'aborted'
+      })
       const submission = await session.harness.submission(queued.submissionId!, BG)
       const record = await withTimeout(submission!.wait(BG), 3000, 'queued settles')
       expect(record.status).toBe('unanswered')
@@ -179,7 +185,9 @@ describe('P3-10a · busy, queued, children and interrupted', () => {
       expect(d.session.runState).toBe('busy')
 
       forkedId(await withTimeout(d.session.rollbackTo(ids.u2), 5000, 'rollbackTo'))
-      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({})
+      expect(await withTimeout(sending, 3000, 'original submitUser')).toEqual({
+        cutShort: 'aborted'
+      })
       for (const child of [C, B]) {
         await waitFor(() => allTerminal(d.session, child), 3000, `child ${child} terminal`)
         const last = (await tasksOf(d.session, child)).at(-1)!

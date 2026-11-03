@@ -8,6 +8,10 @@
  *   BT-INT-1 真宿主 + 真 AgentSession + 真 ask 工具：触发之后询问挂着，模型恰被调一次（旧的结局是当场 `Aborted`，紧接着
  *         第二次调用）；下一次触发记 skipped；答了之后第二次调用里没有 `Aborted`，completed，lastFired 记下
  *   BT-INT-2 同样的布置，等询问时 host.close：failed，lastFired 不动，在跑标记释放
+ *   BTL-13 prompt 交回 {cutShort}（aborted / reset / stale）：stopped 且没有 error，lastFired 停在上一次跑成的时刻，下一次
+ *         的围栏带上它，在跑标记释放；{error, cutShort} 算 failed
+ *   BT-INT-3 真宿主：停在询问上时 AgentSession.abort：stopped，lastFired 不动，下一次触发的围栏没有 lastFiredAt
+ *   BT-INT-4 同样的布置，等询问时 rollbackTo：同样是 stopped（这两条证明真的 prompt 把 cutShort 交了回来）
  *
  * botTriggerService.test.ts 另有 mock 面相同的那一大组（BTL / BTS / BST）。这里的 mock 面：botService、projectService、
  * sessionService（create / ensureAgentSession）、settingsService（内存表）、dailyNotes、trackingNotes、triggerLogService；
@@ -81,6 +85,7 @@ import { AgentSession } from '../agentSession'
 import { BotTriggerService, LAST_FIRED_KEY, bindingKey, localIso } from '../botTriggerService'
 import { timerPayloadAt } from '../triggerTimer'
 import {
+  allEntries,
   answer,
   callTool,
   fauxKit,
@@ -144,7 +149,8 @@ beforeEach(() => {
 })
 
 describe('运行停在询问上（prompt 是桩）', () => {
-  const prompt = vi.fn<(...args: unknown[]) => Promise<{ error?: string; code?: string }>>()
+  const prompt =
+    vi.fn<(...args: unknown[]) => Promise<{ error?: string; code?: string; cutShort?: string }>>()
   const maskTexts = async (texts: readonly string[]): Promise<string[]> => [...texts]
 
   beforeEach(() => {
@@ -211,6 +217,44 @@ describe('运行停在询问上（prompt 是桩）', () => {
     // 上一次没跑成：这一次的围栏没有 lastFiredAt
     expect(prompt.mock.calls[1]![0]).not.toContain('lastFiredAt')
     expect(lastFired()).toStrictEqual({ [KEY]: next.firedAt })
+  })
+
+  it.each(['aborted', 'reset', 'stale'])(
+    'BTL-13 prompt 交回 {cutShort:%s}：stopped 且没有 error、lastFired 停在上一次跑成的时刻、下一次的围栏带上它、在跑标记释放',
+    async (cutShort) => {
+      prompt.mockResolvedValueOnce({})
+      prompt.mockResolvedValueOnce({ cutShort })
+      prompt.mockResolvedValue({})
+
+      const ran = minute(0)
+      svc.fire('timer.fired', ran)
+      await settle()
+      expect(lastFired()).toStrictEqual({ [KEY]: ran.firedAt })
+
+      svc.fire('timer.fired', minute(1))
+      await settle()
+      expect(mocks.finish.mock.calls).toEqual([
+        ['log-1', 'completed'],
+        ['log-2', 'stopped']
+      ])
+      expect(lastFired()).toStrictEqual({ [KEY]: ran.firedAt })
+      expect(svc.isRunning(KEY)).toBe(false)
+
+      svc.fire('timer.fired', minute(2))
+      await settle()
+      expect(outcomes()).toEqual(['started', 'started', 'started'])
+      expect(prompt).toHaveBeenCalledTimes(3)
+      expect(prompt.mock.calls[2]![0]).toContain(`lastFiredAt: ${localIso(new Date(ran.firedAt))}`)
+    }
+  )
+
+  it('BTL-13 {error, cutShort} 算 failed（error 优先）：lastFired 不动', async () => {
+    prompt.mockResolvedValueOnce({ error: 'model refused', cutShort: 'aborted' })
+    svc.fire('timer.fired', minute(0))
+    await settle()
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'failed', 'model refused']])
+    expect(lastFired()).toBeUndefined()
+    expect(svc.isRunning(KEY)).toBe(false)
   })
 })
 
@@ -297,5 +341,44 @@ describe('BT-INT 真宿主 + 真 AgentSession + 真 ask', () => {
     expect(lastFired()).toBeUndefined()
     await waitFor(() => !svc.isRunning(KEY), 2000, 'in-flight cleared')
     expect(kit.callCount).toBe(1)
+  }, 20000)
+
+  /** 这一轮被截断之后：stopped、lastFired 不动、在跑标记释放，下一次触发开一条新运行，围栏没有 lastFiredAt */
+  async function expectStoppedThenNextRunIsFresh(): Promise<void> {
+    await waitFor(() => mocks.finish.mock.calls.length === 1, 5000, 'the run settled')
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'stopped']])
+    expect(lastFired()).toBeUndefined()
+    await waitFor(() => !svc.isRunning(KEY), 2000, 'in-flight cleared')
+    expect(kit.callCount).toBe(1)
+
+    const next = minute(5)
+    svc.fire('timer.fired', next)
+    await waitFor(() => mocks.finish.mock.calls.length === 2, 5000, 'the next run settled')
+    expect(outcomes()).toEqual(['started', 'started'])
+    expect(mocks.create).toHaveBeenCalledTimes(2)
+    expect(kit.callCount).toBe(2)
+    const fence = requestTexts(kit, 1).join('\n')
+    expect(fence).toContain('<trigger_event')
+    expect(fence).not.toContain('lastFiredAt')
+    expect(mocks.finish.mock.calls[1]).toEqual(['log-2', 'completed'])
+    expect(lastFired()).toStrictEqual({ [KEY]: next.firedAt })
+  }
+
+  it('BT-INT-3 停在询问上时 AgentSession.abort：stopped，lastFired 不动，下一次的围栏没有 lastFiredAt', async () => {
+    const agent = await fireUntilAsked()
+    await withTimeout(agent.abort(), 5000, 'abort')
+    expect(host.get('s-1')!.pendingInputCount).toBe(0)
+    await expectStoppedThenNextRunIsFresh()
+  }, 20000)
+
+  it('BT-INT-4 等询问时 rollbackTo：stopped，lastFired 不动，下一次的围栏没有 lastFiredAt', async () => {
+    await fireUntilAsked()
+    const session = host.get('s-1')!
+    const entries = await allEntries(await session.currentConversation())
+    const userEntry = entries.find((entry) => entry.kind === 'pi.user')!
+    const rolled = await withTimeout(session.rollbackTo(userEntry.id), 5000, 'rollbackTo')
+    expect(rolled.ok).toBe(true)
+    expect(session.pendingInputCount).toBe(0)
+    await expectStoppedThenNextRunIsFresh()
   }, 20000)
 })

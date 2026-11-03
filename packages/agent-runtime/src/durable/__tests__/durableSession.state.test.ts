@@ -55,7 +55,7 @@ describe('current conversation', () => {
     await run.reached
     await waitFor(() => session.isBusy(), 3000, 'busy on fork')
     await withTimeout(session.abort(), 5000, 'abort fork')
-    expect(await result).toEqual({})
+    expect(await result).toEqual({ cutShort: 'aborted' })
     expect(session.isBusy()).toBe(false)
     expect(await transcript(root)).toEqual(rootBefore)
   })
@@ -107,7 +107,7 @@ describe('isBusy', () => {
     expect(session.isBusy()).toBe(true)
     await withTimeout(session.abort(), 5000, 'abort')
     expect(session.isBusy()).toBe(false)
-    expect(await second).toEqual({})
+    expect(await second).toEqual({ cutShort: 'aborted' })
   })
 
   it('B-02 isBusy follows the current conversation; the host-level state still sees others', async () => {

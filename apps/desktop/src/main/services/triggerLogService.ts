@@ -4,6 +4,8 @@
  * failed）、或因为上一次还没跑完而跳过（skipped）；绑定的条件求值出错也记（condition-error，同一个错误只记一次，
  * 节流在分发侧）。每条带命中时的原始事件，设置 → 触发源 一页按时间倒序列出。
  *
+ * 一轮没跑完有两种：被喊停（stopped）、进程没了（interrupted，下次启动时由 sweepInterrupted 补记）。
+ *
  * 表是 trigger_logs（迁移 v35），只留最新的 MAX_ROWS 条。写日志失败只记一条告警，绝不影响触发本身；每次变动
  * 广播 `trigger.logged`，设置页据此刷新。
  */
@@ -52,7 +54,7 @@ class TriggerLogService {
     return id
   }
 
-  /** 一条运行结束：改成 completed / failed */
+  /** 一条运行结束：改成 completed / failed / stopped */
   finish(id: string | null, outcome: TriggerLogOutcome, error?: string): void {
     if (!id) return
     try {
@@ -64,6 +66,22 @@ class TriggerLogService {
       appEventBus.publish({ type: 'trigger.logged' })
     } catch (err) {
       log.warn(`更新触发日志失败：${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
+   * 启动时调一次，在定时器开始之前：这时还停在 started 的，都是上个进程没收尾的（崩溃、强杀、退出时超时）。
+   * 正在跑的运行只活在进程里，重启之后不会再有人把它改掉，不补记就永远读作「还在跑」。
+   */
+  sweepInterrupted(): void {
+    try {
+      const swept = triggerLogDao.markStartedInterrupted(Date.now())
+      if (swept > 0) {
+        log.info(`${swept} 条触发日志上次没收尾，记成 interrupted`)
+        appEventBus.publish({ type: 'trigger.logged' })
+      }
+    } catch (err) {
+      log.warn(`补记触发日志失败：${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

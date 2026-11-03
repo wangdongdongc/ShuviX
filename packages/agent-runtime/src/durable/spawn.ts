@@ -404,7 +404,7 @@ export interface SpawnHost {
   isClosed(): boolean
   /** 会话的当前对话（锚建在它里面，P2-08 PIN-01） */
   currentConversation(): Promise<Conversation>
-  /** 会话的中止次序作用在一个子对话上（关询问窗口 → 中止前 seam → 取消询问 → 中止对话 → 重开询问） */
+  /** 中止一个子对话：只取消这棵子树发起的询问，别的卡片不受影响 */
   stopConversation(conversationId: ConversationId): Promise<void>
   /** 起跑路径的重开询问（含 `onInputsReopened`） */
   reopenInputs(): void
@@ -1035,8 +1035,7 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
   /** 中止子对话（出错收尾 / 捕获后）：失败只记警告 */
   private async abortQuietly(conversationId: ConversationId): Promise<void> {
     try {
-      const conversation = await this.host.harness.conversation(conversationId, BG)
-      await conversation?.abort(BG)
+      await this.host.stopConversation(conversationId)
     } catch (error) {
       if (isClosedError(error)) return
       this.host.logger.warn(

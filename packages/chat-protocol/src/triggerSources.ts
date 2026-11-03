@@ -29,6 +29,10 @@ export type TriggerLogOutcome =
   | 'completed'
   /** 会话没开出来、模型被拒或这一轮出错（`error` 里是原因） */
   | 'failed'
+  /** 这一轮没出错也没跑完（`SubmitResult.cutShort`）：有人喊停，或被回退、清空、压缩截断 */
+  | 'stopped'
+  /** 这一轮还没结束进程就没了（崩溃、强杀、退出时超时）：下次启动时补记 */
+  | 'interrupted'
   /** 命中，但同一条绑定上一次还没跑完，这次没起 */
   | 'skipped'
   /** 绑定的 `when` 求值出错（同一个错误只记一次；`error` 里是 CEL 的报错） */
@@ -56,7 +60,7 @@ export interface TriggerLogEntry {
   /** 绑定的 `when` 原文（没写为空串） */
   when: string
   outcome: TriggerLogOutcome
-  /** 开出的运行会话（started / completed / failed 才有，会话没开出来的 failed 没有） */
+  /** 开出的运行会话（skipped 与 condition-error 没有，会话没开出来的 failed 也没有） */
   sessionId: string
   /** 失败与条件出错的原因 */
   error: string
