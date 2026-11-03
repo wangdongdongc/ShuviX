@@ -5,16 +5,19 @@
 
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { isMidRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
+import { isTriggerEventToken } from '@shuvix/chat-protocol/triggerEvent'
 
 /**
  * 展示层细分类型：at 按 id 前缀再分 文件 / 知识库（token 结构无类型字段，沿用 id 前缀判别）；`note` = 运行时
- * 加的插话说明（chat-protocol midRunNote.ts），只有标签、没有标题
+ * 加的插话说明（chat-protocol midRunNote.ts），只有标签、没有标题；`trigger` = 触发器发的消息里的事件
+ * （triggerEvent.ts），标题是触发时间
  */
-export type TokenKind = 'cmd' | 'file' | 'knowledge' | 'paste' | 'note' | 'other'
+export type TokenKind = 'cmd' | 'file' | 'knowledge' | 'paste' | 'note' | 'trigger' | 'other'
 
 /** 判别展示类型；at token 以 id 的 `knowledge:` 前缀区分知识条目与工作区文件 */
 export function tokenKind(token: InlineToken): TokenKind {
   if (isMidRunNoteToken(token)) return 'note'
+  if (isTriggerEventToken(token)) return 'trigger'
   if (token.type === 'cmd') return 'cmd'
   if (token.type === 'paste') return 'paste'
   if (token.type === 'at') return token.id.startsWith('knowledge:') ? 'knowledge' : 'file'
@@ -32,9 +35,11 @@ export function splitTokenTitle(displayText: string): { prefix: string; title: s
   return { prefix: displayText.slice(0, idx + 1), title: displayText.slice(idx + 1) }
 }
 
-/** 气泡/预览卡标题：知识条目去掉 `knowledge:` 前缀（含消歧后缀），其余类型标题即 displayText */
+/** 气泡/预览卡标题：知识条目去掉 `knowledge:` 前缀（含消歧后缀），触发事件是触发时间，其余类型标题即 displayText */
 export function tokenTitle(token: InlineToken): string {
-  if (tokenKind(token) === 'knowledge') return splitTokenTitle(token.displayText).title
+  const kind = tokenKind(token)
+  if (kind === 'knowledge') return splitTokenTitle(token.displayText).title
+  if (kind === 'trigger') return token.name ?? ''
   return token.displayText
 }
 

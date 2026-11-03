@@ -254,6 +254,7 @@
     "atSourceKnowledge": "Knowledge",
     "atSourcePaste": "Paste",
     "atSourceMidRun": "Sent mid-run",
+    "atSourceTimer": "Timer",
     "placeholderVision": "Type a message, drag & drop or paste images...",
     "placeholder": "Type a message... (Shift+Enter for new line)",
     "placeholderNoSession": "Please create or select a chat first",

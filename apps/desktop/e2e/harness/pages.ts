@@ -14595,6 +14595,72 @@ export function chatOriginBadges(main: CdpClient): Promise<OriginBadgeShot[]> {
   )
 }
 
+// ───────────────────────────────────────────────────────────
+// 触发消息气泡里的事件胶囊（chat-ui TokenChip，`[data-token-kind="trigger"]`）—— 文字是「定时器·触发时间」，
+// 悬停约 300 ms 浮出预览卡（portal 到 body 的 `div.fixed.z-40`，没有专门的锚点，按里面的 `pre` 认），点击弹
+// `.dialog-panel`（h3 标题 + pre 全文）。悬停派 mouseover / mouseout：React 的 onMouseEnter 从它们合成。
+
+const TRIGGER_CHIP = (msgId: string): string =>
+  `document.querySelector('[data-msg-id=${JSON.stringify(msgId)}] [data-token-kind="trigger"]')`
+const TOKEN_CARD = `[...document.querySelectorAll('div.fixed.z-40')].find((el) => el.querySelector('pre'))`
+const TOKEN_DIALOG = `[...document.querySelectorAll('.dialog-panel')].find((el) => el.querySelector('pre'))`
+
+/** 这条消息里事件胶囊的文字；没有胶囊 = null */
+export function triggerChipText(main: CdpClient, msgId: string): Promise<string | null> {
+  return main.eval<string | null>(`${TRIGGER_CHIP(msgId)}?.textContent ?? null`)
+}
+
+/** 悬停事件胶囊：等预览卡浮出、读下来（标题 / 右侧标签 / 正文预览），再移开、等它收起 */
+export async function triggerChipHoverCard(
+  main: CdpClient,
+  msgId: string
+): Promise<{ title: string; label: string; body: string }> {
+  const fire = (type: string): Promise<unknown> =>
+    main.eval(
+      `${TRIGGER_CHIP(msgId)}.dispatchEvent(new MouseEvent(${JSON.stringify(type)}, { bubbles: true, cancelable: true, relatedTarget: document.body }))`
+    )
+  await fire('mouseover')
+  const card = await until(
+    () =>
+      main.eval<{ title: string; label: string; body: string } | null>(`(() => {
+        const card = ${TOKEN_CARD}
+        if (!card) return null
+        return {
+          title: card.querySelector('span.font-semibold')?.textContent ?? '',
+          label: card.querySelector('span.ml-auto')?.textContent ?? '',
+          body: card.querySelector('pre')?.textContent ?? ''
+        }
+      })()`),
+    'token hover card'
+  )
+  await fire('mouseout')
+  await until(() => main.eval<boolean>(`!(${TOKEN_CARD})`), 'token hover card gone')
+  return card
+}
+
+/** 点开事件胶囊：读弹窗的标题与全文，点关闭钮、等它收起 */
+export async function triggerChipDialog(
+  main: CdpClient,
+  msgId: string
+): Promise<{ title: string; body: string }> {
+  await main.eval(`${TRIGGER_CHIP(msgId)}.click()`)
+  const shot = await until(
+    () =>
+      main.eval<{ title: string; body: string } | null>(`(() => {
+        const panel = ${TOKEN_DIALOG}
+        if (!panel) return null
+        return {
+          title: panel.querySelector('h3')?.textContent ?? '',
+          body: panel.querySelector('pre')?.textContent ?? ''
+        }
+      })()`),
+    'token payload dialog'
+  )
+  await main.eval(`(${TOKEN_DIALOG}).querySelector('button[aria-label="Close"]').click()`)
+  await until(() => main.eval<boolean>(`!(${TOKEN_DIALOG})`), 'token payload dialog gone')
+  return shot
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 设置窗口「触发源」页（TriggerSettings，实验；openSettings('triggers') 后调用）
 //

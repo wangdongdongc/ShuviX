@@ -3,9 +3,12 @@
  *
  *   BT-E1 绑定命中 → 新开一条绑定该 bot 的临时会话（无项目、无父会话、无工作项目引用，标着 triggerRun），
  *         标题「显示名 · MM-DD HH:MM」
- *   BT-E2 发给模型的就是「绑定里的 message + 空行 + <trigger_event> 围栏」，围栏 YAML 里是这一分钟的事实，第一次没有 lastFiredAt
+ *   BT-E2 发给模型的就是「绑定里的 message + 空行 + <trigger_event> 围栏 + 空行 + 固定说明」，围栏 YAML 里是这一分钟的事实，第一次没有 lastFiredAt
  *   BT-E3 侧栏里它就在 ticker 组的会话列表里，行首是定时器图标（没有单独折起来的一行）；点得开：
  *         用户气泡带「触发器」来源标签（悬停说出 bot 与埋点），脚本回复照常渲染
+ *   BT-E3b vault 的 message 带一处密钥：真实定时器触发后，provider 请求里是占位符、没有明文；气泡有胶囊，悬停和点开看得到
+ *         围栏与说明；「重新生成」的第二个请求与第一个逐字相同，胶囊还在，来源标签仍是触发器
+ *   BT-E3c 回退后输入框只有 message；发送后来源标签和胶囊都没了，请求里只有 message，没有事件和说明
  *   BT-E4 `when: "false"` 与求值出错（函数名拼错）的绑定都不建会话；出错只记一次日志
  *   BT-E5 设置 → 触发源：tab 带实验标签；开关缺省开（设置项没写）；副标题是上次触发的时刻；**不列订阅者**（触发源与
  *         bot 解绑，2026-10-24）；「上一次的事件」块缺省收起、点得开，JSON 就是 `when` 看到的 event（trigger + local.time）
@@ -20,6 +23,7 @@
  * 一次冷启动（缺省不带随应用提供的日报 bot）。timer 对齐整分钟，所以整份文件要跨三个分钟边界（约 3 分钟）。
  * 假提供商的脚本按 `<trigger_event` 围栏认领 —— 触发的运行与别的请求（自动标题之类）谁先到不确定，纯 FIFO 会错位。
  * 第二次运行要读到 lastFiredAt，第一次运行必须**正常跑完**（只有跑成了才记），所以第一次给脚本化的回复。
+ * vault 的 `when` 钉在一个整分钟上：只跑一次，重新生成的请求不会和后面几分钟的运行搞混。
  */
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -28,6 +32,7 @@ import { parse as parseYaml } from 'yaml'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
+import { TRIGGER_EVENT_NOTE_TEXT } from '@shuvix/chat-protocol/triggerEvent'
 import { until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -43,6 +48,9 @@ import {
   chatPane,
   confirmPane,
   sidebarPane,
+  triggerChipDialog,
+  triggerChipHoverCard,
+  triggerChipText,
   triggerSettingsPane,
   type TriggerSettingsPane
 } from '../../harness/pages'
@@ -76,6 +84,14 @@ const bindingLines = (file: string, index: number, trigger: string): string[] =>
   )
 /** BT-E8 切走主窗用的对照会话 */
 const CONTROL_TITLE = 'bt-e8-control'
+/** BT-E3b / E3c：message 里带一处规则认得出的密钥 */
+const SECRET = 'Tr0ub4dor3xqZZ'
+const VAULT_MESSAGE_PREFIX = 'Check DB_PASSWORD='
+const VAULT_MESSAGE = `${VAULT_MESSAGE_PREFIX}${SECRET} now.`
+const VAULT_REPLY = 'Vault reply: first run.'
+const VAULT_REPLY_AGAIN = 'Vault reply: regenerated.'
+const PLACEHOLDER = /\{\{REDACTED_[A-Z_]+_[a-z2-7]{8}\}\}/
+const TIMER_LABELS = LOCALES.map((l) => l.input.atSourceTimer)
 
 /** 围栏里的 YAML（TimerFiredPayload + 这条绑定上一次跑成的时刻） */
 interface TriggerFence {
@@ -122,6 +138,9 @@ let settings: CdpClient | null = null
 let triggers: TriggerSettingsPane
 let first: TickerSession
 let firstFence: TriggerFence
+/** vault 那次运行第一个请求里的 message（已脱敏）与全文 */
+let vaultMasked = ''
+let vaultFirstText = ''
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const dayKey = (d: Date): string =>
@@ -138,19 +157,25 @@ function localIso(at: Date): string {
   )
 }
 
-/** 一条触发的用户消息 → 围栏 YAML；形状不对就抛（消息必须是「message + 空行 + 围栏」，前后不多一个字） */
+/** 一条触发的用户消息 → 围栏 YAML；形状不对就抛（消息必须是「message + 空行 + 围栏 + 空行 + 说明」，前后不多一个字） */
 function fenceOf(text: string): TriggerFence {
   const m =
-    /^Tick check-in\.\n\n<trigger_event trigger="timer\.fired">\n([\s\S]*)\n<\/trigger_event>$/.exec(
+    /^Tick check-in\.\n\n<trigger_event trigger="timer\.fired">\n([\s\S]*)\n<\/trigger_event>\n\n([\s\S]*)$/.exec(
       text
     )
-  if (!m) throw new Error(`not a ticker trigger message: ${JSON.stringify(text)}`)
+  if (!m || m[2] !== TRIGGER_EVENT_NOTE_TEXT) {
+    throw new Error(`not a ticker trigger message: ${JSON.stringify(text)}`)
+  }
   return parseYaml(m[1]) as TriggerFence
 }
 
 /** 这次请求是 ticker 的一次触发运行（按围栏认，`raw` 是 JSON —— 引号被转义过，只能读解码后的文本） */
 const isTickRequest = (req: FakeRequest): boolean =>
   req.lastUserText.startsWith(MESSAGE) && req.lastUserText.includes(FENCE_OPEN)
+
+/** 这次请求是 vault 的那次触发运行（或它的重新生成） */
+const isVaultRequest = (req: FakeRequest): boolean =>
+  req.lastUserText.startsWith(VAULT_MESSAGE_PREFIX) && req.lastUserText.includes(FENCE_OPEN)
 
 /** 标题与围栏里的本地时刻对得上的那次触发请求 */
 function tickRequestFor(title: string): FakeRequest | undefined {
@@ -219,6 +244,21 @@ beforeAll(async () => {
     displayName: 'Ticker',
     rawLines: ['shuvix-bot-on:', '  - trigger: timer.fired', `    message: ${MESSAGE}`]
   })
+  // 只跑一次：钉在至少 5 秒之后的那个整分钟上（写完恰好撞上整分钟时，这一分钟不算）
+  const vaultAt = new Date(Math.ceil((Date.now() + 5_000) / 60_000) * 60_000)
+  provider.script(
+    { when: isVaultRequest, text: VAULT_REPLY, usage: { prompt: 300, completion: 12 } },
+    { when: isVaultRequest, text: VAULT_REPLY_AGAIN, usage: { prompt: 300, completion: 12 } }
+  )
+  writeBotMd(app, 'vault', {
+    displayName: 'Vault',
+    rawLines: [
+      'shuvix-bot-on:',
+      '  - trigger: timer.fired',
+      `    when: "event.local.time == '${pad(vaultAt.getHours())}:${pad(vaultAt.getMinutes())}'"`,
+      `    message: ${VAULT_MESSAGE}`
+    ]
+  })
   writeBotMd(app, 'never', {
     displayName: 'Never',
     rawLines: [
@@ -242,7 +282,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // 先拿掉 bot 文件：收尾期间不再有分钟触发去建会话
   if (app) {
-    for (const name of ['ticker', 'never', 'typo']) {
+    for (const name of ['ticker', 'vault', 'never', 'typo']) {
       rmSync(join(app.botsDir, `${name}.md`), { force: true })
     }
   }
@@ -266,11 +306,11 @@ describe('timer.fired 叫起 bot', () => {
     expect(first.title).toMatch(/^Ticker · \d{2}-\d{2} \d{2}:\d{2}$/)
   }, 120_000)
 
-  it('BT-E2 发给模型的是 message + 空行 + <trigger_event> 围栏：这一分钟的事实，第一次没有 lastFiredAt', async () => {
+  it('BT-E2 发给模型的是 message + 空行 + <trigger_event> 围栏 + 说明：这一分钟的事实，第一次没有 lastFiredAt', async () => {
     const req = await until(() => tickRequestFor(first.title), 'provider request of the first run')
-    // 整条消息逐字是「message + 空行 + 围栏」（fenceOf 的正则锚定首尾）
+    // 整条消息逐字是「message + 空行 + 围栏 + 空行 + 说明」（fenceOf 的正则锚定首尾）
     expect(req.lastUserText.startsWith(`${MESSAGE}\n\n${FENCE_OPEN}\n`)).toBe(true)
-    expect(req.lastUserText.endsWith('\n</trigger_event>')).toBe(true)
+    expect(req.lastUserText.endsWith(`\n</trigger_event>\n\n${TRIGGER_EVENT_NOTE_TEXT}`)).toBe(true)
     firstFence = fenceOf(req.lastUserText)
 
     expect(Object.keys(firstFence).sort()).toEqual(['firedAt', 'local', 'sourceId'])
@@ -320,9 +360,130 @@ describe('timer.fired 叫起 bot', () => {
     expect(ORIGIN_TRIGGER).toContain(badge.text)
     // 触发器不是一条会话：标签不是可点的按钮
     expect(badge.button).toBe(false)
-    // 气泡正文就是绑定里的那句话（围栏也在，渲染成正文的一部分）
+    // 气泡正文就是绑定里的那句话；围栏和说明收成一枚胶囊，不在正文里
     const userItem = (await chat.items()).find((it) => it.id === badge.msgId)
     expect(userItem?.text).toContain(MESSAGE)
+    expect(userItem?.text).not.toContain('trigger_event')
+    expect(userItem?.text).not.toContain('Sent automatically')
+  })
+
+  it('BT-E3b message 带密钥：请求里是占位符、没有明文；胶囊悬停和点开看得到围栏；重新生成的请求逐字相同，胶囊与来源标签都在', async () => {
+    const req = await until(
+      () => provider.requests().find(isVaultRequest),
+      'provider request of the vault run',
+      NEXT_FIRE_MS
+    )
+    expect(req.raw).not.toContain(SECRET)
+    const placeholder = PLACEHOLDER.exec(req.lastUserText)?.[0]
+    expect(placeholder).toBeDefined()
+    vaultMasked = `${VAULT_MESSAGE_PREFIX}${placeholder} now.`
+    vaultFirstText = req.lastUserText
+    expect(vaultFirstText.startsWith(`${vaultMasked}\n\n${FENCE_OPEN}\n`)).toBe(true)
+    expect(vaultFirstText.endsWith(`\n</trigger_event>\n\n${TRIGGER_EVENT_NOTE_TEXT}`)).toBe(true)
+
+    const sid = await until(
+      async () => (await sessionsBoundTo(app.main, 'vault'))[0],
+      'the vault session'
+    )
+    const title = await app.main.eval<string>(
+      `window.api.session.list().then((ss) => ss.find((s) => s.id === ${JSON.stringify(sid)}).title)`
+    )
+    const sidebar = sidebarPane(app.main)
+    const bots = botsPane(app.main)
+    await bots.refresh()
+    await bots.waitGroup('vault')
+    await until(() => sidebar.openSession(title), `sidebar row "${title}"`)
+    const chat = chatPane(app.main)
+    await chat.ready()
+    await until(
+      async () =>
+        (await chat.items()).some((it) => it.role === 'assistant' && it.text.includes(VAULT_REPLY)),
+      'vault reply rendered'
+    )
+    await chat.waitIdle()
+
+    // 气泡：message（占位符）+ 一枚胶囊 + 来源标签；围栏和说明不在正文里
+    const users = (await chat.settledItems()).filter((it) => it.role === 'user')
+    expect(users).toHaveLength(1)
+    const before = users[0]!
+    expect(before.text).toContain(vaultMasked)
+    expect(before.text).not.toContain(SECRET)
+    expect(before.text).not.toContain('trigger_event')
+    expect(before.text).not.toContain('{{shuvixInlineToken')
+    const stamp = title.slice('Vault · '.length)
+    const chip = await until(() => triggerChipText(app.main, before.id), 'trigger chip')
+    expect(TIMER_LABELS.map((label) => `${label}·${stamp}`)).toContain(chip)
+
+    const card = await triggerChipHoverCard(app.main, before.id)
+    expect(card.title).toBe(stamp)
+    expect(TIMER_LABELS).toContain(card.label)
+    expect(card.body.startsWith(FENCE_OPEN)).toBe(true)
+
+    const dialog = await triggerChipDialog(app.main, before.id)
+    expect(TIMER_LABELS.map((label) => `${label} · ${stamp}`)).toContain(dialog.title)
+    expect(dialog.body).toBe(vaultFirstText.slice(`${vaultMasked}\n\n`.length))
+    expect(dialog.body.endsWith(TRIGGER_EVENT_NOTE_TEXT)).toBe(true)
+
+    // 重新生成：第二个请求与第一个逐字相同（事件和说明各一份，占位符不变）
+    const reply = (await chat.settledItems()).find((it) => it.role === 'assistant')!
+    await chat.clickRegenerate(reply.id)
+    const same = await until(async () => {
+      const hits = provider.requests().filter((r) => r.lastUserText === vaultFirstText)
+      return hits.length === 2 ? hits : null
+    }, 'the regenerated request')
+    expect(same[1]!.raw).not.toContain(SECRET)
+    expect(provider.requests().filter(isVaultRequest)).toHaveLength(2)
+    await until(
+      async () =>
+        (await chat.items()).some(
+          (it) => it.role === 'assistant' && it.text.includes(VAULT_REPLY_AGAIN)
+        ),
+      'regenerated reply rendered'
+    )
+    await chat.waitIdle()
+
+    const after = await until(async () => {
+      const list = (await chat.settledItems()).filter((it) => it.role === 'user')
+      return list.length === 1 && list[0]!.id !== before.id ? list[0]! : null
+    }, 'the resent user message')
+    expect(await triggerChipText(app.main, after.id)).toBe(chip)
+    const badge = await until(
+      async () => (await chatOriginBadges(app.main)).find((b) => b.msgId === after.id),
+      'origin badge on the resent message'
+    )
+    expect(badge.origin).toBe('trigger')
+    expect(badge.title).toContain('vault')
+    expect(badge.title).toContain('timer.fired')
+    expect(
+      JSON.stringify(await app.main.eval(`window.api.message.list(${JSON.stringify(sid)})`))
+    ).not.toContain(SECRET)
+  }, 180_000)
+
+  it('BT-E3c 回退后输入框只有 message；发送后来源标签和胶囊都没了，请求里只有 message', async () => {
+    const chat = chatPane(app.main)
+    const user = (await chat.settledItems()).find((it) => it.role === 'user')!
+    await chat.clickRollback(user.id)
+    expect(await chat.confirmOpen()).toBe(true)
+    await chat.confirmAccept()
+    await until(async () => (await chat.inputValue()) === vaultMasked, 'draft restored')
+    await until(async () => (await chat.settledItems()).length === 0, 'history rolled back')
+
+    await chat.pressEnter()
+    const req = await until(
+      () => provider.requests().find((r) => r.lastUserText === vaultMasked),
+      'request of the resent draft'
+    )
+    expect(req.raw).not.toContain(SECRET)
+    expect((req.body.messages ?? []).filter((m) => m.role === 'user')).toHaveLength(1)
+    await chat.waitIdle()
+
+    const sent = await until(
+      async () => (await chat.settledItems()).find((it) => it.role === 'user'),
+      'the resent user message'
+    )
+    expect(sent.text).toBe(vaultMasked)
+    expect(await triggerChipText(app.main, sent.id)).toBeNull()
+    expect((await chatOriginBadges(app.main)).filter((b) => b.msgId === sent.id)).toEqual([])
   })
 
   it('BT-E4 when 为 false、when 求值出错的绑定都不建会话；出错只记一次日志', async () => {

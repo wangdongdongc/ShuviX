@@ -19,11 +19,15 @@
  *   RS-12 带内联 Token 的重发：按标记态原文比对，沿用来源，展开 / 侧车照旧
  *   RS-13 一切都在网络客户端的操作上下文里（2026-10-21 起网关按连接盖章）：沿用的来源压过连接的章；用不上沿用的
  *         （紧接着再发一次、改过的文字、被回退的是人打的）→ 连接的章 remote；被驱动的发送 → 不盖章
+ *   RS-14 回退一条触发消息后原样重发（标记文本 + Token），在网络连接的上下文里：模型文本、侧车与首发相同，来源 trigger
+ *   RS-15 回退后只发 message（回填草稿的样子）：来源是连接的章，没有侧车，模型文本只有 message
+ *   RS-16 这之前的运行（长文本、没有侧车）重发：来源 trigger，全文不变，不再加说明
  *
  * mock 骨架照抄 chatGatewaySteerDriven.test.ts，另替身 sessionRecords（`{parentId}`）与 messageService 的回退。
  * operationContext 用真的（RS-13）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { ClientContext } from '../../../ipc/registry'
 import { createClientContext, operationContext } from '../../../utils/operationContext'
@@ -364,5 +368,67 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       undefined
     ])
     expect(sourceOf(1)).toStrictEqual(REMOTE)
+  })
+
+  describe('触发消息（chat-protocol triggerEvent.ts）', () => {
+    const TRIGGER = {
+      kind: 'trigger',
+      trigger: 'timer.fired',
+      sourceId: 'timer:builtin:minute',
+      bot: 'ticker'
+    } as const
+    const M = 'Tick check-in.'
+    const FENCE = '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>'
+    const built = triggerEventMessage({
+      message: M,
+      fence: FENCE,
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    /** 顶层会话 t1 的现场：u9 是触发器发的，投影里的 content 是标记态 */
+    const triggerRun = (content: string): void => {
+      mocks.getAgentSession.mockReturnValue(
+        agentWith([{ id: 'u9', role: 'user', content }], [['u9', TRIGGER]])
+      )
+    }
+
+    it('RS-14 回退后原样重发（标记文本 + Token）：prompt 收到与首发相同的模型文本与侧车，来源 trigger（压过连接的章）', async () => {
+      triggerRun(built.display.content)
+      await remotely(async () => {
+        expect(await gateway.rollbackMessage('t1', 'u9')).toBe(true)
+        await gateway.prompt('t1', built.display.content, undefined, built.display.tokens)
+      })
+      const [text, images, display, drive, source] = prompt.mock.calls[0]!
+      expect(text).toBe(built.text)
+      expect(text).toBe(`${M}\n\n${FENCE}\n\n${TRIGGER_EVENT_NOTE_TEXT}`)
+      expect(images).toBeUndefined()
+      expect(display).toStrictEqual(built.display)
+      expect(drive).toBeUndefined()
+      expect(source).toStrictEqual(TRIGGER)
+    })
+
+    it('RS-15 回退后只发 message（回填草稿再发）：来源是连接的章，没有侧车，模型文本只有 message', async () => {
+      triggerRun(built.display.content)
+      await remotely(async () => {
+        expect(await gateway.rollbackMessage('t1', 'u9')).toBe(true)
+        await gateway.prompt('t1', M)
+      })
+      expect(prompt.mock.calls).toStrictEqual([
+        [M, undefined, undefined, undefined, REMOTE, undefined]
+      ])
+    })
+
+    it('RS-16 这之前的运行（长文本、没有侧车）重发：来源 trigger，全文不变，不再加说明', async () => {
+      const long = `${M}\n\n${FENCE}`
+      triggerRun(long)
+      await remotely(async () => {
+        expect(await gateway.rollbackMessage('t1', 'u9')).toBe(true)
+        await gateway.prompt('t1', long)
+      })
+      expect(prompt.mock.calls).toStrictEqual([
+        [long, undefined, undefined, undefined, TRIGGER, undefined]
+      ])
+      expect(prompt.mock.calls[0]![0]).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+    })
   })
 })

@@ -214,7 +214,10 @@ when the file has none, in which case renaming the bot breaks the policy — nam
 When a binding fires, ShuviX opens a new session bound to this bot — in the binding's project, or in a temporary
 workspace — (titled "display name · time"; in the sidebar it sits with the bot's other sessions, marked by a timer icon),
 sends `message` as a user message whose origin is "trigger", and appends a `<trigger_event>` fence: every field of
-the event plus `lastFiredAt` — when this binding fired last, so the bot can handle what happened since. While the
+the event plus `lastFiredAt` — when this binding fired last, so the bot can handle what happened since. A fixed sentence
+after the fence tells the model the message was sent automatically, that the user did not type it just now and may not
+be watching, and what waiting for an answer does; a later message without it is really from the user. On screen the fence
+and that sentence are one chip after `message` (timer icon and the firing time); point at it or click it to read them. While the
 previous run of the same binding is still going (waiting on an approval card included) a firing is skipped;
 minutes missed while the computer sleeps or ShuviX is closed are not made up. A trigger message is not the user's
 word: the automatic review treats it as a delegated task, not as authorization. The trigger source itself does not know who will respond; every match (the session it opened and how it ended, a skip, a condition error) is recorded in the trigger log under Settings → Triggers, which also shows the last raw event — the `event` a `when` sees.

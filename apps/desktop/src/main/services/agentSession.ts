@@ -191,6 +191,12 @@ export class AgentSession {
     return result
   }
 
+  /** 写进对话记录之前的脱敏（没开脱敏 = 原样）：调用方要拿同一份占位符再拼模型文本与显示侧车时用（触发消息） */
+  async maskTexts(texts: readonly string[]): Promise<string[]> {
+    const redaction = this.durable.redaction
+    return redaction === undefined ? [...texts] : await redaction.maskTexts(texts)
+  }
+
   /** 运行中插话（空闲时起一轮）；`source` = 这条输入从哪来（网关盖的章）。被拒 → reject（调用方把文案报给界面） */
   /** `secrets`：输入框发来的（docs/auto-redaction-design.md §14）—— 只把这些换成占位符，其余照原样 */
   async steer(text: string, source?: InputOrigin, secrets?: UserSecret[]): Promise<void> {

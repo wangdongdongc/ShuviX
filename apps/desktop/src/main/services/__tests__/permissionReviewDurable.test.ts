@@ -20,6 +20,7 @@
  *            形状坏的人的来源（`{kind:'remote'}`）照样算有记录、进 delegatedTasks（失败闭合）
  *   XS-22 / 23 别的会话（`{kind:'session'}`，2026-10-20）发来的消息与代答：顶层会话与子会话里都进 delegatedTasks，
  *            代答写「another session」；父会话代答仍写「the parent session」
+ *   TDT-2 触发消息的事件和说明不进审查的载荷：delegatedTasks 里只有 message（带「不是此刻有人打的」的引述），不进 userMessages
  *
  * 替身：hookService / messageService（spy）/ sessionRecords（`{parentId, storageKind}`）/ settingsService /
  * logger / frontend/core / sessionHost（`{peek, get, open}`，peek 交出真 MemoryStorage 会话或 undefined）。
@@ -40,6 +41,7 @@ import {
   type SessionHost,
   type SessionHostDeps
 } from '@shuvix/agent-runtime'
+import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { PermissionVerdict } from '@shuvix/chat-protocol/types/permissionReview'
 import {
@@ -1413,5 +1415,37 @@ describe('XS · 别的会话写进来的东西不算人的意思（XS-22 / XS-23
       byOther('From X?', parentText('b'))
     ])
     expect(payload.userMessages).toStrictEqual(['top intent', 'human line'])
+  })
+})
+
+describe('TDT · 触发消息进审查的载荷', () => {
+  it('TDT-2 delegatedTasks 含 message、不含事件和说明；userMessages 不含它；之后人打的照旧算人话', async () => {
+    const M = 'Tick check-in.'
+    const FENCE = '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>'
+    const built = triggerEventMessage({
+      message: M,
+      fence: FENCE,
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    const sid = await durable([
+      {
+        type: 'user',
+        ts: 1000,
+        content: built.text,
+        display: built.display,
+        source: { kind: 'trigger', trigger: 'timer.fired', bot: 'ticker' }
+      },
+      assistant(1100, 'on it'),
+      user(1200, 'typed later')
+    ])
+    const payload = await buildPermissionRequestPayload(makeEvent(sid))
+    expect(payload.userMessages).toStrictEqual(['typed later'])
+    expect(payload.delegatedTasks).toHaveLength(1)
+    expect(payload.delegatedTasks[0]).toContain(M)
+    const whole = JSON.stringify(payload)
+    expect(whole).not.toContain('trigger_event')
+    expect(whole).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+    expect(whole).not.toContain('shuvixInlineToken')
   })
 })

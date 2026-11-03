@@ -15,6 +15,7 @@
  *   TLP-7  一条消息里两次列表调用              TLP-8  跨消息重用 toolCallId
  *   TLP-9  中止截断的正文不算「以终答收尾」    TLP-11 带命令 Token 的用户消息开新请求
  *   TLP-12 带图的插话（带说明）不开新请求
+ *   TLT-2  旧列表之后来一条触发消息：新请求      TLT-3  触发消息 → 列表 → 插话 → 推进：两边都不重置
  * （TLP-10「消息原文恰好以说明结尾」两边判法不同，是接受的已知偏差 S9，不写用例。）
  */
 import type { EntryRecord, JsonObject } from '@earendil-works/pi-durable'
@@ -23,6 +24,7 @@ import {
   MID_RUN_NOTE_TEXT,
   midRunNoteDisplay
 } from '@shuvix/chat-protocol/midRunNote'
+import { triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import {
   applyTaskListUpdate,
   foldTaskList,
@@ -89,6 +91,23 @@ function steer(
 ): { entry: EntryRecord; display: [number, ReturnType<typeof display>] } {
   const noted = midRunNoteDisplay(said)
   return { entry: U(id, `${said}${SUFFIX}`), display: [id, display(noted.content, noted.tokens)] }
+}
+
+/** 触发消息：模型文本 = message + 围栏 + 说明；显示侧车 = message + trigger 标记（botTriggerService 写的形状） */
+function triggered(
+  id: number,
+  message: string
+): { entry: EntryRecord; display: [number, ReturnType<typeof display>] } {
+  const built = triggerEventMessage({
+    message,
+    fence: '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>',
+    trigger: 'timer.fired',
+    firedLabel: '11-02 18:00'
+  })
+  return {
+    entry: U(id, built.text),
+    display: [id, display(built.display.content, built.display.tokens)]
+  }
 }
 
 interface PlanCall {
@@ -387,6 +406,34 @@ describe('TLP · server and UI fold the same list', () => {
         ...planned(5, 'p2', ADVANCE)
       ],
       displays
+    )
+    expect(statuses(server)).toEqual(['completed', 'in_progress', 'pending'])
+    expect(snapshot?.requestId).toBe('1')
+  })
+
+  it('TLT-2 a trigger message after an old list starts a new request on both sides', () => {
+    const t = triggered(4, 'Tick.')
+    const displays: DisplayByEntry = new Map([t.display])
+    const cleared = expectParity(
+      [U(1, 'go'), ...planned(2, 'p1', ITEMS), t.entry, A(5, [text('ok')])],
+      displays
+    )
+    expect(cleared.server).toBeUndefined()
+    expect(cleared.snapshot).toBeUndefined()
+    const fresh = expectParity(
+      [U(1, 'go'), ...planned(2, 'p1', ITEMS), t.entry, ...planned(5, 'p2', OTHER)],
+      displays
+    )
+    expect(fresh.server).toEqual(OTHER.items)
+    expect(fresh.snapshot?.requestId).toBe('4')
+  })
+
+  it('TLT-3 trigger message, list, a noted steer, advance: the steer resets nothing on either side', () => {
+    const t = triggered(1, 'Tick.')
+    const s = steer(4, 'also this')
+    const { server, snapshot } = expectParity(
+      [t.entry, ...planned(2, 'p1', ITEMS), s.entry, ...planned(5, 'p2', ADVANCE)],
+      new Map([t.display, s.display])
     )
     expect(statuses(server)).toEqual(['completed', 'in_progress', 'pending'])
     expect(snapshot?.requestId).toBe('1')

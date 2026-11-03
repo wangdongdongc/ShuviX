@@ -16,11 +16,13 @@
  *             source 键），界面投影里每条用户消息的 `metadata.origin` 恰是它发送时带的（含排过队的 steer / followUp）
  *   DG-1 / 2  运行中插话（docs/task-list-design.md §2.4）：带图、带脱敏值的忙时 steer，摘要里是脱敏后的原文 ——
  *             没有说明的标记、没有说明；运行中采纳的提议照样 `suggested`、文本恰是提议的话
+ *   TDT-1 / 3 / 4  触发消息：摘要里只有 message；这之前的长文本保留全文；message 里的粘贴标记与不带触发 Token 的差分相同
  */
 import { createHmac } from 'node:crypto'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai'
-import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import { MID_RUN_NOTE_TEXT, MID_RUN_NOTE_UID } from '@shuvix/chat-protocol/midRunNote'
+import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { describe, expect, it } from 'vitest'
@@ -743,6 +745,82 @@ describe('DG · 运行中插话不算用户的话（docs/task-list-design.md §2
         { kind: 'user', text: 'go' },
         { kind: 'user', text: message, suggested: true }
       ])
+    },
+    TIMEOUT
+  )
+})
+
+describe('TDT · 触发事件不算这条消息的话', () => {
+  const M = 'Tick check-in.'
+  const FENCE = '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>'
+  const SOURCE = { kind: 'trigger', trigger: 'timer.fired', bot: 'ticker' } as const
+  const fired = (message: string): ReturnType<typeof triggerEventMessage> =>
+    triggerEventMessage({
+      message,
+      fence: FENCE,
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+
+  async function userTexts(send: (session: DurableSession) => Promise<unknown>): Promise<string[]> {
+    const t = await makeHost({ ephemeral: [SID] })
+    const session = await t.open(SID)
+    t.kit.queue(answer('ok'))
+    await send(session)
+    return (await digest(session))
+      .filter((item) => item.kind === 'user')
+      .map((item) => item.text as string)
+  }
+
+  it(
+    'TDT-1 摘要里用户那一项的文本就是 message，没有事件、说明和标记',
+    async () => {
+      const built = fired(M)
+      const texts = await userTexts((session) =>
+        session.submitUser(built.text, {
+          display: built.display as unknown as JsonObject,
+          source: SOURCE
+        })
+      )
+      expect(texts).toEqual([M])
+    },
+    TIMEOUT
+  )
+
+  it(
+    'TDT-3 这之前的运行（长文本、没有侧车）：摘要保留全文',
+    async () => {
+      const long = `${M}\n\n${FENCE}`
+      const texts = await userTexts((session) => session.submitUser(long, { source: SOURCE }))
+      expect(texts).toEqual([long])
+    },
+    TIMEOUT
+  )
+
+  it(
+    'TDT-4 message 里有粘贴标记：摘要与不带触发 Token 的差分相同（粘贴标记留着，触发标记去掉）',
+    async () => {
+      const paste = { type: 'paste', id: 'paste-1', displayText: '[p]', payload: 'PASTE-BODY' }
+      const said = 'see {{shuvixInlineToken:p1}} ok'
+      const built = fired(said)
+      const withTrigger = await userTexts((session) =>
+        session.submitUser(built.text.replace('{{shuvixInlineToken:p1}}', 'PASTE-BODY'), {
+          display: {
+            content: built.display.content,
+            tokens: { ...built.display.tokens, p1: paste }
+          } as unknown as JsonObject,
+          source: SOURCE
+        })
+      )
+      const without = await userTexts((session) =>
+        session.submitUser('see PASTE-BODY ok', {
+          display: { content: said, tokens: { p1: paste } },
+          source: SOURCE
+        })
+      )
+      expect(withTrigger).toEqual(without)
+      expect(withTrigger).toEqual([said])
+      expect(withTrigger.join('\n')).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
     },
     TIMEOUT
   )

@@ -57,11 +57,8 @@ import {
   type EntryRecord
 } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
-import {
-  MID_RUN_NOTE_SEPARATOR,
-  MID_RUN_NOTE_TEXT,
-  withoutMidRunNote
-} from '@shuvix/chat-protocol/midRunNote'
+import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol/midRunNote'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveInputSources, resolveSuggestedEntries, type InputSource } from './inputSource'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
@@ -328,9 +325,9 @@ export async function readTranscriptDigest(
       resolveSuggestedEntries(session.harness, conversation.id, view.entries)
     ])
     const displayTexts = new Map<EntryId, string>()
-    // 插话说明是系统写的，不进「用户说了什么」（docs/task-list-design.md §2.4）
+    // 插话说明与触发事件是系统写的，不进「用户说了什么」（docs/task-list-design.md §2.4）
     for (const [entryId, display] of displays) {
-      displayTexts.set(entryId, withoutMidRunNote(display.content, display.tokens))
+      displayTexts.set(entryId, withoutSystemTokens(display.content, display.tokens))
     }
     return { items: digestEntries(view.entries, displayTexts, sources, suggested) }
   } catch (error) {

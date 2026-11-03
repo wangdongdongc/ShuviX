@@ -29,6 +29,7 @@ import {
   type TaskListUpdate
 } from './taskList'
 import { midRunNoteDisplay } from './midRunNote'
+import { triggerEventMessage } from './triggerEvent'
 import type {
   AssistantBlock,
   AssistantMessage,
@@ -546,6 +547,19 @@ describe('startsTaskListRequest', () => {
   it('TL-B-4 助手消息、错误行 → 不算', () => {
     expect(startsTaskListRequest(assistant('a1', [text('hi')]))).toBe(false)
     expect(startsTaskListRequest(errorRow('e1'))).toBe(false)
+  })
+
+  it('TLT-1 带 trigger Token 的用户消息开始新请求；带插话说明的仍然不算', () => {
+    const { display } = triggerEventMessage({
+      message: 'Tick.',
+      fence: '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>',
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    expect(
+      startsTaskListRequest(user('u1', display.content, { inlineTokens: display.tokens }))
+    ).toBe(true)
+    expect(startsTaskListRequest(steer('u2', 'Tick.'))).toBe(false)
   })
 })
 

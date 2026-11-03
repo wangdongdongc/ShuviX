@@ -13,6 +13,8 @@
  *             带上新 user 条目 → 占位撤（Q-P3-07）；inputText 与草稿不动
  *   P3-10b-19 回退入口的门控（PIN-07）：乐观占位没有回退；视图 `capabilities.rollback` 为 false（旧格式 /
  *             none / 还没有视图）→ 没有回退 / 重新生成；durable 视图有（ThreadDrawer 与 Conversation 同一接线）
+ *   UCT-1     重新生成一条触发消息：事件跟着重发 —— prompt 的 text 是带标记的 content、inlineTokens 是原 Token，
+ *             乐观占位也带（与插话说明的 RG-1 / RG-2 相反）
  *
  * store 只经视图喂：`seed()` 把消息装进一份 `SessionView`，经 `applySessionView` 写进去（同生产路径）。
  *
@@ -39,6 +41,7 @@ import {
   midRunNoteDisplay,
   midRunNoteToken
 } from '@shuvix/chat-protocol/midRunNote'
+import { triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 
 interface Call {
   name: string
@@ -607,5 +610,29 @@ describe('重新生成 / 回退一条运行中插话', () => {
     await act(async () => actions.confirmRollback())
 
     expect(callsOf('store.requestDraftRestore')).toEqual([[steer.content, steer.tokens]])
+  })
+})
+
+describe('重新生成一条触发消息', () => {
+  it('UCT-1 事件跟着重发：prompt 的 text 就是带标记的 content，inlineTokens 就是原 Token；乐观占位也带（插话说明相反，见 RG-1）', async () => {
+    const { display } = triggerEventMessage({
+      message: 'Tick check-in.',
+      fence: '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>',
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    seed([user('3', display.content, display.tokens), assistant('4')])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('4'))
+
+    expect(names()).toEqual(['message.rollback', 'agent.init', 'agent.prompt'])
+    expect(callsOf('message.rollback')).toEqual([[{ sessionId: SID, messageId: '3' }]])
+    const prompts = callsOf('agent.prompt') as Array<
+      [{ sessionId: string; text: string; inlineTokens?: Record<string, InlineToken> }]
+    >
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]![0].text).toBe(display.content)
+    expect(prompts[0]![0].inlineTokens).toStrictEqual(display.tokens)
+    expect(pendingAtPrompt).toEqual([{ content: display.content, tokens: display.tokens }])
   })
 })

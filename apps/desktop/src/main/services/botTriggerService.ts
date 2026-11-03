@@ -1,7 +1,8 @@
 /**
  * bot 触发分发 —— 全局埋点（触发源的事件，今天只有内置 timer 的 `timer.fired`）→ 命中的 bot 绑定
  * （bot md 的 `shuvix-bot-on`）→ 新建一条绑定该 bot 的普通临时会话，把绑定里的 `message` 加上事件围栏
- * （`<trigger_event>`）作为来源 `trigger` 的用户消息发进去。
+ * （`<trigger_event>`）和一句「这条是自动发的」的说明，作为来源 `trigger` 的用户消息发进去；气泡上围栏和说明收成一枚
+ * 内联 Token（chat-protocol triggerEvent.ts）。
  *
  * 与 hook 共用埋点表与 CEL `when`（agent-runtime triggerPoints / when）；不同的只有命中之后做什么：hook 在所属会话下
  * 派一个 agent，bot 新开一条会话 —— 一次运行在侧栏、日历里都是一条看得见的会话，用户可以在里面接着说。
@@ -27,6 +28,7 @@ import {
   type GlobalTriggerId,
   type TriggerPayloadMap
 } from '@shuvix/agent-runtime'
+import { triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import type { TriggerOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { basename } from 'path'
 import { botService, type BotEntry } from './botService'
@@ -229,7 +231,7 @@ export class BotTriggerService {
         ...(typeof payload.sourceId === 'string' ? { sourceId: payload.sourceId } : {}),
         bot: entry.file.name
       }
-      const text = renderEventPrompt(TRIGGER_EVENT_TAG, binding.message, trigger, {
+      const fence = renderEventPrompt(TRIGGER_EVENT_TAG, '', trigger, {
         ...payload,
         ...(lastFiredAt ? { lastFiredAt } : {})
       })
@@ -249,7 +251,15 @@ export class BotTriggerService {
       }
       // 这一轮结束才交回：这段时间里同一条绑定的后续触发都被跳过
       ran = `${entry.file.displayName} · ${localStamp(payload)} (session ${session.id})`
-      const result = await agent.prompt(text, undefined, undefined, undefined, origin)
+      // 先脱敏再拼：显示侧车与模型文本同一份占位符，模型收到什么、界面显示什么都由安全策略判定（redact-sensitive）
+      const [message, maskedFence] = await agent.maskTexts([binding.message, fence])
+      const { text, display } = triggerEventMessage({
+        message,
+        fence: maskedFence,
+        trigger,
+        firedLabel: localStamp(payload)
+      })
+      const result = await agent.prompt(text, undefined, display, undefined, origin)
       if (result.error) {
         log.warn(`bot "${entry.file.name}" run in ${session.id} failed: ${result.error}`)
         triggerLogService.finish(logId, 'failed', result.error)

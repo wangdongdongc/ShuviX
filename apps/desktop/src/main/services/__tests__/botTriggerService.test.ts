@@ -3,7 +3,7 @@
  *
  * 契约（botTriggerService.ts 文件头 + 2026-10-24 的修订）：
  *  - 命中（无 `when` 或 `when` 为真）→ `sessionService.create({bot, title: '<显示名> · MM-DD HH:MM'})` → `ensureAgentSession`
- *    → `agent.prompt(message + <trigger_event> 围栏, …, origin)`；`fire` 本身同步返回，不等运行；
+ *    → `agent.prompt(message + <trigger_event> 围栏 + 说明, …, 显示侧车, …, origin)`；`fire` 本身同步返回，不等运行；
  *  - 同一条绑定上一次还在跑（prompt 没交回）→ 跳过这次；绑定之间、bot 之间互不阻塞；
  *  - `lastFiredAt`：设置 `triggers.bot.lastFired`（`{<objectId ?? name>#<index>#<trigger>: firedAt}`），**只在那一轮
  *    正常结束（prompt 没带 error）后**才往前推；上一次的值以本机时区偏移的 ISO（`localIso`）放进围栏；会话打不开、
@@ -34,6 +34,12 @@
  * timerPayloadAt(M) 真 fire 一次就起一次运行，M 的前一分钟不起 —— 日记 bot 的条件（全局注入 activeSessions → 1）、
  * 工作日 09:30；每分钟都触发的那条 M 就是此刻的下一分钟（前一分钟是此刻所在的分钟，在窗口外，不比）。
  *
+ * 显示侧车与脱敏（BST，2026-11-02，chat-protocol triggerEvent.ts）：
+ *   BST-1 prompt 的第 3 个参数逐字是侧车的形状，Token 的 name 是会话标题里的时间
+ *   BST-2 模型文本等于侧车展开
+ *   BST-3 prompt 之前只调一次 maskTexts，入参恰为 [message, 围栏]；模型文本和侧车都用脱敏后的值
+ *   BST-4 maskTexts reject → 不 prompt、日志 failed、lastFired 不推进、在跑标记释放
+ *
  * mock 面：botService（listAll 给什么就是什么）、projectService（只有 projectsNamed）、sessionService、settingsService（内存表）、trackingNotes、
  * triggerLogService（record / finish 两个桩）、logger。
  * `evaluateWhen` / `renderEventPrompt` / `setWhenHostFunctions` 是真的 —— CEL 的上下文、宿主函数、围栏都按真实走。
@@ -41,6 +47,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { previewTimerBinding, setWhenHostFunctions, type BotBinding } from '@shuvix/agent-runtime'
+import { TRIGGER_EVENT_NOTE_TEXT } from '@shuvix/chat-protocol/triggerEvent'
+import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { BotEntry } from '../botService'
 
 const mocks = vi.hoisted(() => ({
@@ -154,7 +163,7 @@ function promptText(i: number): string {
 /** 消息里的事件围栏 → YAML 解析出来的 payload */
 function fenceOf(text: string): Record<string, unknown> {
   const open = `<${TRIGGER_EVENT_TAG} trigger="timer.fired">\n`
-  const close = `\n</${TRIGGER_EVENT_TAG}>`
+  const close = `\n</${TRIGGER_EVENT_TAG}>\n\n${TRIGGER_EVENT_NOTE_TEXT}`
   const start = text.indexOf(open)
   expect(start, text).toBeGreaterThanOrEqual(0)
   expect(text.endsWith(close), text).toBe(true)
@@ -162,6 +171,11 @@ function fenceOf(text: string): Record<string, unknown> {
     string,
     unknown
   >
+}
+
+/** 没开脱敏的会话：原样交回 */
+async function maskTexts(texts: readonly string[]): Promise<string[]> {
+  return [...texts]
 }
 
 function lastFired(): Record<string, string> | undefined {
@@ -198,7 +212,7 @@ beforeEach(() => {
   mocks.info.mockReset()
   mocks.warn.mockReset()
   mocks.create.mockImplementation(() => ({ id: `s-${++seq}` }))
-  mocks.ensure.mockImplementation(async () => ({ prompt: mocks.prompt }))
+  mocks.ensure.mockImplementation(async () => ({ prompt: mocks.prompt, maskTexts }))
   mocks.prompt.mockResolvedValue({})
   mocks.commit.mockResolvedValue(undefined)
   svc = new BotTriggerService()
@@ -227,7 +241,8 @@ describe('派发的形状', () => {
     expect(mocks.prompt).toHaveBeenCalledTimes(1)
     const args = mocks.prompt.mock.calls[0]
     expect(args).toHaveLength(5)
-    expect(args.slice(1, 4)).toEqual([undefined, undefined, undefined])
+    expect(args[1]).toBeUndefined()
+    expect(args[3]).toBeUndefined()
     expect(args[4]).toStrictEqual({
       kind: 'trigger',
       trigger: 'timer.fired',
@@ -408,6 +423,7 @@ describe('在跑就跳过；绑定之间互不阻塞', () => {
       { text: string; run: ReturnType<typeof deferred<{ error?: string }>> }
     >()
     mocks.ensure.mockImplementation(async (id: string) => ({
+      maskTexts,
       prompt: (text: string) => {
         const run = deferred<{ error?: string }>()
         runs.set(id, { text, run })
@@ -976,6 +992,7 @@ describe('触发日志', () => {
     mocks.record.mockImplementation((input) => `log:${input.bot}#${input.bindingIndex}`)
     // s-2（a 的第二条）跑失败，其余跑成
     mocks.ensure.mockImplementation(async (id: string) => ({
+      maskTexts,
       prompt: async () => (id === 's-2' ? { error: 'boom' } : {})
     }))
     svc.fire('timer.fired', minute(18, 0))
@@ -1288,5 +1305,120 @@ describe('BTS 排期预演与触发源同口径', () => {
     await settle()
     expect(mocks.create).toHaveBeenCalledTimes(1)
     expect(mocks.create.mock.calls[0][0]).toMatchObject({ title: 'Buddy · 10-31 12:01' })
+  })
+})
+
+describe('BST 触发消息的显示侧车与脱敏', () => {
+  type Display = { content: string; tokens: Record<string, InlineToken> }
+
+  /** 第 i 次 prompt 的显示侧车（第 3 个参数） */
+  const displayOf = (i: number): Display => mocks.prompt.mock.calls[i][2] as Display
+
+  /** 围栏原文：`<trigger_event …>…</trigger_event>`，不含 message 和说明 */
+  function fenceIn(text: string): string {
+    const open = text.indexOf('<trigger_event')
+    const close = '</trigger_event>'
+    return text.slice(open, text.indexOf(close) + close.length)
+  }
+
+  it('BST-1 prompt 的第 3 个参数逐字是侧车的形状，Token 的 name 就是会话标题里的时间', async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { displayName: 'Ticker' })])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+
+    const title = mocks.create.mock.calls[0][0].title as string
+    expect(title).toBe('Ticker · 10-24 18:00')
+    const fence = fenceIn(promptText(0))
+    expect(displayOf(0)).toStrictEqual({
+      content: 'Tick check-in.{{shuvixInlineToken:trigger}}',
+      tokens: {
+        trigger: {
+          type: 'trigger',
+          id: 'timer.fired',
+          displayText: '',
+          name: '10-24 18:00',
+          payload: `\n\n${fence}\n\n${TRIGGER_EVENT_NOTE_TEXT}`
+        }
+      }
+    })
+    expect(title.endsWith(displayOf(0).tokens.trigger!.name!)).toBe(true)
+  })
+
+  it('BST-2 模型文本（第 1 个参数）等于侧车展开', async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK])])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    const display = displayOf(0)
+    expect(promptText(0)).toBe(resolveTokensForAgent(display.content, display.tokens))
+    expect(promptText(0)).toBe(
+      `Tick check-in.\n\n${fenceIn(promptText(0))}\n\n${TRIGGER_EVENT_NOTE_TEXT}`
+    )
+  })
+
+  it('BST-3 先脱敏再拼：prompt 之前只调一次 maskTexts，入参恰为 [message, 围栏]（围栏不含 message，第二次触发含 lastFiredAt）；模型文本和侧车都用脱敏后的值', async () => {
+    const order: string[] = []
+    const masking = vi.fn(async (texts: readonly string[]) => {
+      order.push('mask')
+      return texts.map((text) => `⟦${text}⟧`)
+    })
+    mocks.prompt.mockImplementation(async () => {
+      order.push('prompt')
+      return {}
+    })
+    mocks.ensure.mockImplementation(async () => ({ prompt: mocks.prompt, maskTexts: masking }))
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+
+    const first = minute(18, 0)
+    svc.fire('timer.fired', first)
+    await settle()
+    expect(order).toEqual(['mask', 'prompt'])
+    expect(masking).toHaveBeenCalledTimes(1)
+    const firstArgs = masking.mock.calls[0]![0]
+    expect(firstArgs).toHaveLength(2)
+    expect(firstArgs[0]).toBe(TICK.message)
+    const firstFence = firstArgs[1]!
+    expect(firstFence).toMatch(
+      /^<trigger_event trigger="timer\.fired">\n[\s\S]*\n<\/trigger_event>$/
+    )
+    expect(firstFence).not.toContain(TICK.message)
+    expect(firstFence).not.toContain('lastFiredAt')
+
+    const expectedPayload = `\n\n⟦${firstFence}⟧\n\n${TRIGGER_EVENT_NOTE_TEXT}`
+    expect(promptText(0)).toBe(`⟦${TICK.message}⟧${expectedPayload}`)
+    expect(displayOf(0).content).toBe(`⟦${TICK.message}⟧{{shuvixInlineToken:trigger}}`)
+    expect(displayOf(0).tokens.trigger!.payload).toBe(expectedPayload)
+    // 说明是系统写的，不进脱敏
+    expect(firstArgs.join('\n')).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+
+    svc.fire('timer.fired', minute(18, 1))
+    await settle()
+    expect(masking).toHaveBeenCalledTimes(2)
+    const second = masking.mock.calls[1]![0]
+    expect(second[0]).toBe(TICK.message)
+    expect(second[1]).toContain(`lastFiredAt: ${localIso(new Date(first.firedAt))}`)
+    expect(second[1]).not.toContain(TICK.message)
+  })
+
+  it('BST-4 maskTexts reject：不 prompt，日志 failed，lastFired 不推进，在跑标记释放（下一分钟能再触发）', async () => {
+    const masking = vi.fn(async (texts: readonly string[]) => [...texts])
+    masking.mockRejectedValueOnce(new Error('mask boom'))
+    mocks.ensure.mockImplementation(async () => ({ prompt: mocks.prompt, maskTexts: masking }))
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    expect(mocks.prompt).not.toHaveBeenCalled()
+    expect(mocks.finish).toHaveBeenCalledTimes(1)
+    expect(mocks.finish).toHaveBeenCalledWith('log-1', 'failed', 'mask boom')
+    expect(lastFired()).toBeUndefined()
+
+    const next = minute(18, 1)
+    svc.fire('timer.fired', next)
+    await settle()
+    expect(mocks.prompt).toHaveBeenCalledTimes(1)
+    expect(mocks.finish).toHaveBeenLastCalledWith('log-2', 'completed')
+    expect(lastFired()).toStrictEqual({ 'bot:x#0#timer.fired': next.firedAt })
+    // 第二次的围栏没有 lastFiredAt：上一次没跑成
+    expect(fenceOf(promptText(0))).not.toHaveProperty('lastFiredAt')
   })
 })

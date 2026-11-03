@@ -20,6 +20,7 @@
  *          不是被驱动的 prompt 带着它 → options 只多一个 source；被驱动时来源恒取 drivingSourceOf，章不顶替它
  *   WP2-90 session.prompt-accepted 的 payload 带 `origin` = 这次发送的来源种类（local / remote / trigger /
  *          parent-session），没有来源为 ''；别的键不变（2026-10-24）
+ *   AS-1 maskTexts：会话没开脱敏 → 内容相同的新数组；开了 → 委托给 redaction.maskTexts，结果原样交回
  * （D10-33「门面从不授予已读」在 agentSessionBot.test.ts。）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -113,6 +114,26 @@ beforeEach(() => {
   mocks.resolveAgentProfileName.mockReturnValue('chat')
   mocks.fire.mockImplementation((name) => void mocks.calls.push(`fire:${name}`))
   resetFakeHost()
+})
+
+describe('AS-1 maskTexts', () => {
+  it('AS-1 没开脱敏：内容相同的新数组', async () => {
+    const { session } = facade()
+    const input = ['a', 'b'] as const
+    const out = await session.maskTexts(input)
+    expect(out).toEqual(['a', 'b'])
+    expect(out).not.toBe(input)
+  })
+
+  it('AS-1 开了脱敏：委托给 redaction.maskTexts，结果原样交回', async () => {
+    const masked = ['{{X_aaaaaaaa}}', 'b']
+    const maskTexts = vi.fn(async () => masked)
+    const { session } = facade({ redaction: { maskTexts } } as never)
+    const input = ['secret', 'b']
+    expect(await session.maskTexts(input)).toBe(masked)
+    expect(maskTexts).toHaveBeenCalledTimes(1)
+    expect(maskTexts).toHaveBeenCalledWith(input)
+  })
 })
 
 describe('D10-25 prompt 的映射', () => {

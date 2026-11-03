@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import type { AssistantBlock, ChatMessage } from '../types/chatMessage'
 import { transcribeConversation } from './transcript'
 import { MID_RUN_NOTE_TEXT, midRunNoteDisplay } from '../midRunNote'
-import { makeTokenMarker } from './inlineTokens'
+import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '../triggerEvent'
+import { buildAtToken, buildPasteToken, makeTokenMarker } from './inlineTokens'
 
 let seq = 0
 function base(over: Record<string, unknown>): ChatMessage {
@@ -315,5 +316,74 @@ describe('transcribeConversation — 插话说明不记在 User 名下', () => {
     })
     expect(userBodies(expanded)).toEqual(['see PASTED BODY'])
     expect(expanded).not.toContain(MID_RUN_NOTE_TEXT)
+  })
+})
+
+describe('transcribeConversation — 触发事件不记在 User 名下', () => {
+  const M = 'Tick check-in.'
+  const FENCE = '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>'
+  const fired = (message: string, extra: Record<string, unknown> = {}): ChatMessage => {
+    const { display } = triggerEventMessage({
+      message,
+      fence: FENCE,
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    return userText(display.content, {
+      metadata: { inlineTokens: { ...display.tokens, ...extra } }
+    })
+  }
+  /** 只比用户分节：时间戳、id 每条不同 */
+  const userBodies = (md: string): string[] =>
+    md
+      .split(/\n(?=### )/)
+      .filter((section) => section.startsWith('### User'))
+      .map((section) => section.slice(section.indexOf('\n\n') + 2).trim())
+
+  it('TRT-1 展开与不展开都只有 message：没有 trigger_event、说明、标记', () => {
+    for (const expandInlineTokens of [false, true]) {
+      const md = transcribeConversation(
+        [fired(M), assistantCard([{ type: 'text', text: 'done' }])],
+        {
+          expandInlineTokens
+        }
+      )
+      expect(userBodies(md), String(expandInlineTokens)).toEqual([M])
+      expect(md).not.toContain('trigger_event')
+      expect(md).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+      expect(md).not.toContain('shuvixInlineToken')
+      expect(md).toContain('done')
+    }
+  })
+
+  it('TRT-2 message + 粘贴 + 引用 + 触发：展开时就地换 payload、不展开时换 displayText，与去掉触发 Token 的差分逐字相同', () => {
+    const paste = buildPasteToken({
+      payload: 'PASTED BODY',
+      displayText: '[pasted #1]',
+      seq: 1,
+      name: 'pasted #1'
+    })
+    const at = buildAtToken({ kind: 'file', rel: 'src/a.ts', base: 'a.ts' })
+    const said = `read ${makeTokenMarker('a1')} and ${makeTokenMarker('p1')} now`
+    const withTrigger = fired(said, { a1: at, p1: paste })
+    const without = userText(said, { metadata: { inlineTokens: { a1: at, p1: paste } } })
+
+    const expanded = userBodies(transcribeConversation([withTrigger], { expandInlineTokens: true }))
+    expect(expanded).toEqual([`read ${at.payload} and PASTED BODY now`])
+    expect(expanded).toEqual(
+      userBodies(transcribeConversation([without], { expandInlineTokens: true }))
+    )
+
+    const plain = userBodies(transcribeConversation([withTrigger]))
+    expect(plain).toEqual(['read a.ts and [pasted #1] now'])
+    expect(plain).toEqual(userBodies(transcribeConversation([without])))
+  })
+
+  it('TRT-3 这之前的运行（长文本、没有 Token）：两种模式都原样', () => {
+    const long = `${M}\n\n${FENCE}`
+    for (const expandInlineTokens of [false, true]) {
+      const md = transcribeConversation([userText(long)], { expandInlineTokens })
+      expect(userBodies(md), String(expandInlineTokens)).toEqual([long])
+    }
   })
 })

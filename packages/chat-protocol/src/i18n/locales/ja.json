@@ -254,6 +254,7 @@
     "atSourceKnowledge": "ナレッジ",
     "atSourcePaste": "貼り付け",
     "atSourceMidRun": "実行中に送信",
+    "atSourceTimer": "タイマー",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",
     "placeholderNoSession": "まずチャットを作成または選択してください",

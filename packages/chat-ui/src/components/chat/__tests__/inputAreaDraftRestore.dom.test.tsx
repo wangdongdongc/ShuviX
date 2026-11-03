@@ -20,6 +20,7 @@ import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { hasMidRunNote, midRunNoteDisplay } from '@shuvix/chat-protocol/midRunNote'
+import { triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 
 interface Call {
   name: string
@@ -240,5 +241,52 @@ describe('回退一条运行中插话：说明不回填', () => {
     expect(sent.sessionId).toBe(SID)
     expect(sent.text).toBe('pivot')
     expect(hasMidRunNote(sent.inlineTokens)).toBe(false)
+  })
+})
+
+describe('回退一条触发消息：事件不回填', () => {
+  const M = 'Tick check-in.'
+  const FENCE = '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>'
+  const { display: FIRED } = triggerEventMessage({
+    message: M,
+    fence: FENCE,
+    trigger: 'timer.fired',
+    firedLabel: '11-02 18:00'
+  })
+
+  it('DRT-1 输入框里只有 message，没有胶囊也没有 `{{`；再发时只有文本 message，不带 Token', async () => {
+    await mount()
+    await act(async () => {
+      store().requestDraftRestore(FIRED.content, FIRED.tokens)
+    })
+    await flush()
+
+    expect(textarea().value).toBe(M)
+    expect(store().inputText).toBe(M)
+    expect(store().draftRestoreRequest).toBeNull()
+    expect(textarea().value).not.toContain('{{')
+    expect(container.querySelector('[data-token-kind]')).toBeNull()
+
+    await pressEnter()
+    const prompts = callsOf('agent.prompt') as Array<
+      [{ sessionId: string; text: string; inlineTokens?: Record<string, InlineToken> }]
+    >
+    expect(prompts).toHaveLength(1)
+    const [sent] = prompts[0]!
+    expect(sent.sessionId).toBe(SID)
+    expect(sent.text).toBe(M)
+    expect(sent.inlineTokens).toBeUndefined()
+  })
+
+  it('DRT-2 这之前的运行（长文本、没有 Token）：回填全文', async () => {
+    const long = `${M}\n\n${FENCE}`
+    await mount()
+    await act(async () => {
+      store().requestDraftRestore(long, undefined)
+    })
+    await flush()
+    expect(textarea().value).toBe(long)
+    expect(store().inputText).toBe(long)
+    expect(container.querySelector('[data-token-kind]')).toBeNull()
   })
 })

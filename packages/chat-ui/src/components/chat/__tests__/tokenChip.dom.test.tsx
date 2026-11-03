@@ -5,7 +5,8 @@
  *     （气泡新增图标/标签后 textContent 已不等于 displayText，e2e tokenBadges 改读该锚点）；
  *   - 镜像变体（零布局约束）：无图标，at 知识拆两段 span，拼接后与底层原始子串逐字一致；
  *   - 悬停预览卡：~300ms 浮出（标题 + 源标签 + 来源路径 + payload 预览），移出即关、卡上可驻留，
- *     点击仍弹完整 TokenPayloadDialog。
+ *     点击仍弹完整 TokenPayloadDialog；
+ *   - 触发事件 Token（TKT-1..6）：胶囊 = 定时器 · 时间，悬停卡与弹窗显示事件围栏 + 说明（不带开头的分隔）。
  * i18n 走真 zh 资源，验证源标签本地化接线（en/ja 键存在性由 JSON 结构保证）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,6 +20,8 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { MID_RUN_NOTE_TEXT, midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
+import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
+import { payloadPreview, tokenTitle } from '../../../utils/tokenDisplay'
 import { TokenChip } from '../TokenChip'
 
 declare global {
@@ -284,5 +287,105 @@ describe('插话说明 Token —— 只有标签、没有标题', () => {
     expect(dialog!.querySelector('h3')?.textContent).toBe('运行中发送')
     expect(dialog!.querySelector('h3 + div')).toBeNull()
     expect(dialog!.querySelector('pre')?.textContent).toBe(MID_RUN_NOTE_TEXT)
+  })
+})
+
+describe('触发事件 Token —— 胶囊是「定时器 · 时间」，点开看围栏和说明', () => {
+  const FENCE =
+    '<trigger_event trigger="timer.fired">\nsourceId: timer:builtin:minute\nfiredAt: 2026-11-02T10:00:00.000Z\n</trigger_event>'
+  const FIRED = '11-02 18:00'
+  const TOKEN: InlineToken = triggerEventMessage({
+    message: 'Tick.',
+    fence: FENCE,
+    trigger: 'timer.fired',
+    firedLabel: FIRED
+  }).display.tokens.trigger!
+  const SHOWN = `${FENCE}\n\n${TRIGGER_EVENT_NOTE_TEXT}`
+  const LABELS = { zh: '定时器', en: 'Timer', ja: 'タイマー' } as const
+
+  const openCard = (chip: Element): HTMLDivElement => {
+    enter(chip)
+    act(() => {
+      vi.advanceTimersByTime(350)
+    })
+    return hoverCard()!
+  }
+  const openDialog = (chip: Element): HTMLElement => {
+    act(() => {
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    return document.body.querySelector<HTMLElement>('.dialog-panel')!
+  }
+
+  for (const [lng, label] of Object.entries(LABELS)) {
+    it(`TKT-1 胶囊（${lng}）：kind trigger、锚点空串，文字「${label}·时间」，有定时器图标和 ml-1.5`, async () => {
+      await act(async () => {
+        await i18n.changeLanguage(lng)
+      })
+      const chip = renderChip(TOKEN)
+      expect(chip.dataset.tokenKind).toBe('trigger')
+      expect(chip.getAttribute('data-token-display')).toBe('')
+      expect(chip.textContent).toBe(`${label}·${FIRED}`)
+      expect(chip.querySelector('svg.lucide-timer')).not.toBeNull()
+      expect(chip.classList.contains('ml-1.5')).toBe(true)
+    })
+  }
+
+  it('TKT-2 悬停卡：标题是时间，右侧是标签，正文是 payload 去掉开头分隔后的预览（以 <trigger_event 开头）', () => {
+    const card = openCard(renderChip(TOKEN))
+    expect(card.querySelector('span.font-semibold')?.textContent).toBe(FIRED)
+    expect(card.querySelector('span.ml-auto')?.textContent).toBe('定时器')
+    const pre = card.querySelector('pre')!.textContent!
+    expect(pre).toBe(payloadPreview(TOKEN.payload.trimStart()))
+    expect(pre.startsWith('<trigger_event')).toBe(true)
+  })
+
+  it('TKT-3 点开：标题「定时器 · 时间」，没有副标题节点，正文是 payload 去掉开头分隔（围栏 + 说明）', () => {
+    const dialog = openDialog(renderChip(TOKEN))
+    expect(dialog.querySelector('h3')?.textContent).toBe(`定时器 · ${FIRED}`)
+    expect(dialog.querySelector('h3 + div')).toBeNull()
+    const pre = dialog.querySelector('pre')!.textContent!
+    expect(pre).toBe(TOKEN.payload.trimStart())
+    expect(pre).toBe(SHOWN)
+    expect(pre.startsWith('\n')).toBe(false)
+  })
+
+  it('TKT-4 没配文案的触发点：胶囊、卡片、弹窗标题都用 id，不露 i18n key', () => {
+    const webhook: InlineToken = { ...TOKEN, id: 'webhook.received' }
+    const chip = renderChip(webhook)
+    expect(chip.dataset.tokenKind).toBe('trigger')
+    expect(chip.textContent).toBe(`webhook.received·${FIRED}`)
+    const card = openCard(chip)
+    expect(card.querySelector('span.ml-auto')?.textContent).toBe('webhook.received')
+    expect(card.textContent).not.toContain('atSource')
+    const dialog = openDialog(chip)
+    expect(dialog.querySelector('h3')?.textContent).toBe(`webhook.received · ${FIRED}`)
+    expect(dialog.textContent).not.toContain('atSource')
+  })
+
+  it('TKT-5 回归：粘贴的 payload 开头空行照留（trim 只对 trigger）；插话说明仍然只有标签', () => {
+    const paste: InlineToken = { ...PASTE_TOKEN, payload: '\n\n第一行\n第二行' }
+    const dialog = openDialog(renderChip(paste))
+    expect(dialog.querySelector('pre')?.textContent).toBe('\n\n第一行\n第二行')
+    act(() => root.unmount())
+    root = createRoot(container)
+
+    const pastedCard = openCard(renderChip(paste))
+    expect(pastedCard.querySelector('pre')?.textContent).toBe(payloadPreview('\n\n第一行\n第二行'))
+    act(() => root.unmount())
+    root = createRoot(container)
+
+    const note = renderChip(midRunNoteToken())
+    expect(note.dataset.tokenKind).toBe('note')
+    expect(note.textContent).toBe('运行中发送')
+  })
+
+  it('TKT-6 没有 name：tokenTitle 是空串，胶囊、卡片、弹窗都不崩', () => {
+    const { name: _name, ...bare } = TOKEN
+    expect(tokenTitle(bare)).toBe('')
+    const chip = renderChip(bare)
+    expect(chip.textContent).toBe('定时器·')
+    expect(openCard(chip).querySelector('pre')?.textContent).toBe(payloadPreview(SHOWN))
+    expect(openDialog(chip).querySelector('pre')?.textContent).toBe(SHOWN)
   })
 })

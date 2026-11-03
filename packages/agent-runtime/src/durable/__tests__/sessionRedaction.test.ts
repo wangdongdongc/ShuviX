@@ -14,11 +14,15 @@
  *   SR-10 还原进命令：按引号环境转义，转义后的写法记进已知值（回显时换得回占位符）；别的字段原样换
  *   SR-11 工具结果里默认照发的几类（§15.2）：对话最近一次请求的目的地要它们保持占位符 → 写入时就换；照发、不适用
  *         脱敏、还不知道目的地 → 照原样存；策略抛错 → 换。真宿主里出口记下判定，afterTool 按对话取用
+ *   MT-1 工具结果里同一个值第二处光秃：两处同一个占位符，对照表只新增一项
+ *   MT-2 同一批 maskTexts：值在一段里被规则认出、在另一段里光秃，光秃的也换（两种次序）
+ *   MT-3 没有新认出的值只扫一遍、不提交；短于 MIN_KNOWN 的已知值光秃处不换，规则认出的那处照换
  */
 import { createHmac } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { MIN_KNOWN } from '../../redaction/known'
 import { asWrittenKey } from '../../redaction/placeholder'
 import { initShellParser } from '../../security/shell'
 import { loadShellParserWasmFromNodeModules } from '../../security/shell/nodeWasm'
@@ -341,5 +345,89 @@ describe('会话脱敏', () => {
       /\{\{REDACTED_USERNAME_[a-z2-7]{8}\}\}\/proj/
     )
     expect(await storedText(live)).not.toContain('alexander')
+  })
+
+  describe('maskTexts：这一遍刚认出的值再换一遍', () => {
+    const VALUE = 'Tr0ub4dor3xqZZ'
+    const TOKEN = /\{\{[A-Z_]+_[a-z2-7]{8}\}\}/g
+
+    it('MT-1 工具结果里同一个值第二处光秃：两处是同一个占位符，没有明文；对照表只新增一项', async () => {
+      const t = await makeHost({ ephemeral: ['mt1'], redaction: host })
+      const session = await t.open('mt1')
+      const redaction = session.redaction!
+      const size = (await redaction.table()).size
+      const text = `DB_PASSWORD=${VALUE} ... ${VALUE}`
+      const result = await redaction.maskToolResult({
+        output: [{ type: 'text', text }],
+        details: { raw: text }
+      })
+      const block = result.output![0] as { text: string }
+      expect(block.text).not.toContain(VALUE)
+      const hits = block.text.match(TOKEN)!
+      expect(hits).toHaveLength(2)
+      expect(hits[0]).toBe(hits[1])
+      expect(block.text).toBe(`DB_PASSWORD=${hits[0]} ... ${hits[0]}`)
+      expect(JSON.stringify(result.details)).not.toContain(VALUE)
+      expect((await redaction.table()).size).toBe(size + 1)
+    })
+
+    it('MT-2 同一批 maskTexts：值在 a 里被规则认出、在 b 里光秃出现，b 也换；反过来的次序也一样', async () => {
+      const t = await makeHost({ ephemeral: ['mt2'], redaction: host })
+      const session = await t.open('mt2')
+      const redaction = session.redaction!
+      const [a, b] = await redaction.maskTexts([`DB_PASSWORD=${VALUE}`, `bare ${VALUE} here`])
+      const placeholder = a!.match(TOKEN)![0]
+      expect(b).toBe(`bare ${placeholder} here`)
+
+      const other = 'Zx9-another-Value42'
+      const [c, d] = await redaction.maskTexts([`bare ${other} here`, `DB_PASSWORD=${other}`])
+      const second = d!.match(TOKEN)![0]
+      expect(second).not.toBe(placeholder)
+      expect(c).toBe(`bare ${second} here`)
+    })
+
+    it('MT-3 没有新认出的值只扫一遍、不提交；已知值短于 MIN_KNOWN 的光秃处不换，规则认出的那处照换', async () => {
+      const t = await makeHost({ ephemeral: ['mt3'], redaction: host })
+      const session = await t.open('mt3')
+      const redaction = new SessionRedaction({
+        sessionId: session.sessionId,
+        harness: session.harness,
+        host,
+        logger: { info: () => {}, warn: () => {}, error: () => {} }
+      })
+      await redaction.table()
+      const commit = vi.spyOn(session.harness, 'commit')
+      const maskOne = vi.spyOn(redaction as unknown as { maskOne: () => string }, 'maskOne')
+
+      const plain = ['nothing to see here', 'and nothing here either']
+      expect(await redaction.maskTexts(plain)).toEqual(plain)
+      expect(maskOne).toHaveBeenCalledTimes(plain.length)
+      expect(commit).not.toHaveBeenCalled()
+
+      // 只有已知值（没有新认出的）：照换，仍只一遍，不提交
+      const known = await redaction.maskText(`DB_PASSWORD=${VALUE}`)
+      const placeholder = known.match(TOKEN)![0]
+      commit.mockClear()
+      maskOne.mockClear()
+      expect(await redaction.maskText(`bare ${VALUE}`)).toBe(`bare ${placeholder}`)
+      expect(maskOne).toHaveBeenCalledTimes(1)
+      expect(commit).not.toHaveBeenCalled()
+
+      // 新认出一个值：两遍，只记一次表
+      commit.mockClear()
+      maskOne.mockClear()
+      const text = await redaction.maskText('DB_PASSWORD=Zx9-another-Value42')
+      expect(text).toMatch(TOKEN)
+      expect(maskOne).toHaveBeenCalledTimes(2)
+      expect(commit).toHaveBeenCalledTimes(1)
+
+      // 7 个字符的值：规则认出的那处换，光秃的那处不按已知值换（短于 MIN_KNOWN）
+      const short = 'abc123x'
+      expect(short.length).toBeLessThan(MIN_KNOWN)
+      const masked = await redaction.maskText(`postgres://u:${short}@h/db and ${short}`)
+      expect(masked).toMatch(
+        /^postgres:\/\/u:\{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\}@h\/db and abc123x$/
+      )
+    })
   })
 })

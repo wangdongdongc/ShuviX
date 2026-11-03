@@ -148,10 +148,15 @@ export class SessionRedaction {
       const entries: RedactionEntry[] = []
       const keep = this.keptAsWritten(opts.conversationId)
       const out = texts.map((text) => this.maskOne(text, table, entries, keep))
-      if (entries.length > 0) {
-        await recordRedactions(this.deps.harness, table, entries, this.deps.host.vault)
+      if (entries.length === 0) return out
+      await recordRedactions(this.deps.harness, table, entries, this.deps.host.vault)
+      // 规则靠上下文认值（`DB_PASSWORD=x`），同一个值在别处光秃地出现这一遍认不出；记进表之后它是已知值，再换一遍
+      const more: RedactionEntry[] = []
+      const final = out.map((text) => this.maskOne(text, table, more, keep))
+      if (more.length > 0) {
+        await recordRedactions(this.deps.harness, table, more, this.deps.host.vault)
       }
-      return out
+      return final
     } catch (error) {
       this.deps.logger.error(
         `session ${this.deps.sessionId}: masking failed; the text is stored as written: ${errorText(error)}`

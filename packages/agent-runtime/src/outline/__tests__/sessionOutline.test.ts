@@ -16,6 +16,8 @@
  *     `reader.topLevel` 为 true 时没有记录的一律 `[user]`。见 C3。展开时 `</session` 同样拆开（XS-25，见 G2）。
  *   - **触发器**（2026-10-24，WP4-101/102）：来源 kind `trigger`（触发器替 bot 发的）→ `[trigger]`，排在读者判断之前，
  *     同样立锚点。见 C4。
+ *   - **触发事件**（2026-11-02，OLT-1..5）：触发消息的事件收在一枚 Token 里，大纲、展开、搜索都只见 message；
+ *     同一条消息去掉 Token 后输出应相同（差分）。旧的长文本消息照旧。见 M。
  *
  * 用例编号 WP4-xx 对应测试设计清单；期望以 §19.10 的裁决与当前源码为准（清单里标 ⚠ 的几条已按裁决改写）。
  */
@@ -46,6 +48,11 @@ import {
   MID_RUN_NOTE_UID,
   midRunNoteToken
 } from '@shuvix/chat-protocol/midRunNote'
+import {
+  TRIGGER_EVENT_NOTE_TEXT,
+  TRIGGER_EVENT_UID,
+  triggerEventMessage
+} from '@shuvix/chat-protocol/triggerEvent'
 import type { InputSource } from '../../durable/inputSource'
 import {
   OUTLINE_LIMITS,
@@ -2291,5 +2298,81 @@ describe('L. 插话说明不算这条消息的话', () => {
     })
     expect(outline(view(noted[0]!), ALL, TOP).turnCount).toBe(1)
     expect(outline(view(noted[1]!), ALL, TOP).turnCount).toBe(2)
+  })
+})
+
+// ───────────── M. 触发事件（chat-protocol triggerEvent.ts） ─────────────
+
+describe('M. 触发事件不算这条消息的话', () => {
+  const SAID = 'Tick check-in.'
+  const FENCE =
+    '<trigger_event trigger="timer.fired">\nsourceId: timer:builtin:minute\nfiredAt: 2026-11-02T10:00:00.000Z\n</trigger_event>'
+  const built = triggerEventMessage({
+    message: SAID,
+    fence: FENCE,
+    trigger: 'timer.fired',
+    firedLabel: '11-02 18:00'
+  })
+  const TOKEN = built.display.tokens[TRIGGER_EVENT_UID]!
+  const MARKER = `{{shuvixInlineToken:${TRIGGER_EVENT_UID}}}`
+  const SOURCE: InputSource = {
+    kind: 'trigger',
+    trigger: 'timer.fired',
+    sourceId: 'timer:builtin:minute',
+    bot: 'ticker'
+  }
+  const R: OutlineReader = { readerId: 'P', sources: new Map([['1', SOURCE]]) }
+  /** 显示侧车的样子：原文 + 触发标记，Token 里带事件 */
+  const fired = (
+    id: string,
+    said: string,
+    extra: UserTextMeta['inlineTokens'] = {}
+  ): UserTextMessage =>
+    U(id, `${said}${MARKER}`, { inlineTokens: { ...extra, [TRIGGER_EVENT_UID]: TOKEN } })
+
+  it('OLT-1 大纲行是 [trigger] M；与同一条不带 Token 的消息逐字相同', () => {
+    const v = view([fired('1', SAID), A('2', [TX('done')])])
+    const res = outline(v, ALL, R)
+    expect(res.lines).toEqual([`#1 [trigger] ${SAID}`, '#2.0 reply: done'])
+    expect(res).toEqual(outline(view([U('1', SAID), A('2', [TX('done')])]), ALL, R))
+  })
+
+  it("OLT-2 展开是 ['[trigger]', M]；与不带 Token 的相同", () => {
+    const v = view([fired('1', SAID)])
+    expect(item(v, '#1', R).lines).toEqual(['[trigger]', SAID])
+    expect(item(v, '#1', R)).toEqual(item(view([U('1', SAID)]), '#1', R))
+  })
+
+  it('OLT-3 搜 M 的词命中；搜事件、说明、标记的字都不命中', () => {
+    const v = view([fired('1', SAID)])
+    expect(search(v, 'check-in', {}, R).lines).toEqual([`#1 [trigger] ${SAID}`])
+    for (const needle of ['trigger_event', 'automatically', 'firedAt', 'shuvixInlineToken']) {
+      expect(search(v, needle, {}, R).hits, needle).toBe(0)
+    }
+    const everything = [...outline(v, ALL, R).lines, ...item(v, '#1', R).lines].join('\n')
+    expect(everything).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+    expect(everything).not.toContain(MARKER)
+  })
+
+  it('OLT-4 M 里有粘贴标记：粘贴那一枚的表现与不带触发 Token 的差分相同', () => {
+    const paste = { type: 'paste', id: 'paste-1', displayText: '[Pasted 3 lines]', payload: 'a\nb' }
+    const said = 'see {{shuvixInlineToken:p1}} ok'
+    const withTrigger = view([fired('1', said, { p1: paste })])
+    const without = view([U('1', said, { inlineTokens: { p1: paste } })])
+    expect(outline(withTrigger, ALL, R)).toEqual(outline(without, ALL, R))
+    expect(item(withTrigger, '#1', R)).toEqual(item(without, '#1', R))
+    for (const needle of ['see', 'shuvixInlineToken', 'p1', 'Pasted']) {
+      expect(search(withTrigger, needle, {}, R), needle).toEqual(search(without, needle, {}, R))
+    }
+    expect(outline(withTrigger, ALL, R).lines.join('\n')).not.toContain(MARKER)
+  })
+
+  it('OLT-5 这之前的运行（长文本、没有 Token）：行是截断的长文本，搜 trigger_event 命中', () => {
+    const long = `${SAID}\n\n${FENCE}`
+    const v = view([U('1', long)])
+    const [line] = outline(v, ALL, R).lines
+    expect(line).toBe(`#1 [trigger] ${clipLine(long.replace(/\s+/g, ' ').trim(), 80)}`)
+    expect(search(v, 'trigger_event', {}, R).hits).toBe(1)
+    expect(item(v, '#1', R).lines).toEqual(['[trigger]', ...long.split('\n')])
   })
 })

@@ -14,6 +14,10 @@
  *   MA-U10 两种密度：20 行的长消息，展开键一上来就在操作行里（touch 也不用先点气泡）；点它 → 「Collapse」，
  *          touch 下复制仍不出；再点气泡 → 复制出在同一个操作行里
  *   MA-U11 touch：点脱敏占位符（RedactedMark 自己 stopPropagation）不翻出操作；点旁边的文字才翻出
+ *   UBT-1  触发消息：气泡 = message + 一枚 trigger 胶囊，来源徽章并存；正文里没有标记、围栏、说明，没有无效 Token 徽章
+ *   UBT-2  复制恰是 message；message 里的占位符经 useRestoreForCopy 换回真值，仍然没有事件
+ *   UBT-3  message 里的占位符按 redaction.resolve 显示：策略照发 → 真值，否则 → 占位符
+ *   UBT-4  这之前的运行（长文本、没有 Token）：没有胶囊，全文显示，复制全文
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；剪贴板顶成 spy；脱敏查询走注入的 SessionChannelApi
  * （只有 MA-U7 让当前会话非空、真的去问）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX，一律 createElement。
@@ -25,12 +29,14 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
+import type { TriggerOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { UserTextMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import {
   MID_RUN_NOTE_TEXT,
   MID_RUN_NOTE_UID,
   midRunNoteDisplay
 } from '@shuvix/chat-protocol/midRunNote'
+import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 
 const clip = vi.hoisted(() => ({ copyToClipboard: vi.fn() }))
 
@@ -51,6 +57,9 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const MAIL = '{{EMAIL_abcdefgh}}'
 const MAIL_VALUE = 'alice@example.com'
+/** 策略照发的那一类：模型收到的是真值，界面也显示真值 */
+const SENT = '{{REDACTED_USERNAME_abcdefgh}}'
+const SENT_VALUE = 'alice'
 
 let container: HTMLDivElement
 let root: Root
@@ -66,9 +75,12 @@ beforeAll(async () => {
     redaction: {
       resolve: async ({ placeholders }: { sessionId: string; placeholders: string[] }) =>
         Object.fromEntries(
-          placeholders
-            .filter((p) => p === MAIL)
-            .map((p) => [p, { category: 'EMAIL', value: MAIL_VALUE, disclosed: false }])
+          placeholders.flatMap((p) => {
+            if (p === MAIL) return [[p, { category: 'EMAIL', value: MAIL_VALUE, disclosed: false }]]
+            if (p === SENT)
+              return [[p, { category: 'USERNAME', value: SENT_VALUE, disclosed: true }]]
+            return []
+          })
         )
     },
     events: { subscribe: () => () => {} }
@@ -408,5 +420,88 @@ describe('运行中插话：说明是一枚小标签，不算用户的话', () =
     click(copyIn()!)
     expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
     expect(clip.copyToClipboard).toHaveBeenCalledWith(`mail ${MAIL_VALUE}`)
+  })
+})
+
+describe('触发消息：事件收在一枚胶囊里，不算这条消息的话', () => {
+  const ORIGIN: TriggerOrigin = {
+    kind: 'trigger',
+    trigger: 'timer.fired',
+    sourceId: 'timer:builtin:minute',
+    bot: 'ticker'
+  }
+  const FENCE = '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>'
+  /** 宿主写的显示侧车：message + 触发标记，tokens 里只有事件那一枚；来源 trigger */
+  function fired(text: string): UserTextMessage {
+    const { display } = triggerEventMessage({
+      message: text,
+      fence: FENCE,
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    return message({
+      content: display.content,
+      metadata: { inlineTokens: display.tokens, origin: ORIGIN }
+    })
+  }
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  it('UBT-1 气泡 = message + 一枚 trigger 胶囊，来源徽章并存；没有标记、围栏、说明，没有无效 Token 徽章', () => {
+    show('compact', bubble({ msg: fired('Tick check-in.') }))
+    const chips = bubbleOf().querySelectorAll<HTMLElement>('[data-token-kind="trigger"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toBe(`${en.input.atSourceTimer}·11-02 18:00`)
+    const text = bubbleOf().textContent ?? ''
+    expect(text.startsWith('Tick check-in.')).toBe(true)
+    expect(text).not.toContain('{{shuvixInlineToken')
+    expect(text).not.toContain('trigger_event')
+    expect(text).not.toContain('Sent automatically')
+    expect(text).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+    // InvalidTokenBadge 是别的样子：胶囊之外没有第二枚 Token 类的东西
+    expect(bubbleOf().querySelectorAll('[data-token-kind]')).toHaveLength(1)
+    expect(container.querySelector('[data-user-meta] [data-origin="trigger"]')).not.toBeNull()
+  })
+
+  it.each<Host>(['compact', 'touch'])('UBT-2 %s：复制恰是 message', (host) => {
+    show(host, bubble({ msg: fired('Tick check-in.') }))
+    if (host === 'touch') click(bubbleOf())
+    click(copyIn()!)
+    expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
+    expect(clip.copyToClipboard).toHaveBeenCalledWith('Tick check-in.')
+  })
+
+  it('UBT-2 message 里有占位符：复制换回真值，仍然没有事件', async () => {
+    useChatStore.setState({ activeSessionId: 's1' })
+    show('compact', bubble({ msg: fired(`mail ${MAIL}`) }))
+    await settle()
+    click(copyIn()!)
+    expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
+    expect(clip.copyToClipboard).toHaveBeenCalledWith(`mail ${MAIL_VALUE}`)
+  })
+
+  it('UBT-3 占位符按 redaction.resolve 显示：策略照发 → 真值；否则 → 占位符', async () => {
+    useChatStore.setState({ activeSessionId: 's1' })
+    show('compact', bubble({ msg: fired(`from ${SENT} to ${MAIL}`) }))
+    await settle()
+    const sent = bubbleOf().querySelector<HTMLElement>('[data-redaction-sent]')
+    expect(sent?.textContent).toBe(SENT_VALUE)
+    const held = bubbleOf().querySelectorAll<HTMLElement>('[data-redaction-placeholder]')
+    expect(held).toHaveLength(1)
+    expect(held[0].textContent).toBe(MAIL)
+    expect(bubbleOf().textContent).not.toContain(SENT)
+    expect(bubbleOf().textContent).not.toContain(MAIL_VALUE)
+  })
+
+  it('UBT-4 这之前的运行（长文本、没有 Token）：没有胶囊，全文显示，复制全文', () => {
+    const long = `Tick check-in.\n\n${FENCE}`
+    show('compact', bubble({ msg: message({ content: long, metadata: { origin: ORIGIN } }) }))
+    expect(bubbleOf().querySelector('[data-token-kind]')).toBeNull()
+    expect(bubbleOf().textContent).toBe(long)
+    click(copyIn()!)
+    expect(clip.copyToClipboard).toHaveBeenCalledWith(long)
   })
 })

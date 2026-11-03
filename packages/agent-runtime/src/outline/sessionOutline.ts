@@ -29,7 +29,7 @@ import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
 import { clipLine } from '@shuvix/chat-protocol/utils/clipLine'
-import { withoutMidRunNote } from '@shuvix/chat-protocol/midRunNote'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import {
   formatStepSequence,
   groupConsecutiveSteps,
@@ -417,8 +417,8 @@ function userRow(
   reader: OutlineReader,
   author: MessageAuthor | undefined
 ): Row {
-  // 插话说明是系统写的，不算这条消息的话（docs/task-list-design.md §2.4）
-  const text = withoutMidRunNote(message.content, message.metadata?.inlineTokens)
+  // 插话说明与触发事件是系统写的，不算这条消息的话（docs/task-list-design.md §2.4）
+  const text = withoutSystemTokens(message.content, message.metadata?.inlineTokens)
   let line: string
   if (isNotice(message)) {
     line = `[notice] ${oneLine(firstLine(text), NOTICE_CLIP)}`

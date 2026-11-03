@@ -7,6 +7,7 @@ import {
   CornerDownRight,
   FileText,
   Terminal,
+  Timer,
   X,
   type LucideIcon
 } from 'lucide-react'
@@ -46,7 +47,14 @@ const KIND_META: Record<
     color: 'var(--theme-text-tertiary)',
     Icon: CornerDownRight,
     labelKey: 'input.atSourceMidRun'
-  }
+  },
+  // 触发器发的消息里的事件：标签说是哪种触发，标题是触发时间；与来源标签「触发器」同一个色槽
+  trigger: { color: 'var(--viz-7)', Icon: Timer, labelKey: 'input.atSourceTimer' }
+}
+
+/** 给人看的 payload：触发事件的 payload 开头是与 message 之间的分隔（模型文本要逐字相同），显示时不要那两个空行 */
+function shownPayload(token: InlineToken, kind: TokenKind): string {
+  return kind === 'trigger' ? token.payload.trimStart() : token.payload
 }
 
 /** 类型色淡底（color-mix 直接吃 CSS 变量；hover 加深一档） */
@@ -88,7 +96,9 @@ export function TokenChip({
   const kind = tokenKind(token)
   const meta = kind === 'other' ? null : KIND_META[kind]
   const color = meta?.color ?? 'var(--theme-accent)'
-  const label = meta ? t(meta.labelKey) : null
+  // 今天的触发只有定时器；以后的触发源没配文案就显示它的 id
+  const label =
+    kind === 'trigger' && token.id !== 'timer.fired' ? token.id : meta ? t(meta.labelKey) : null
 
   const clearOpenTimer = (): void => {
     if (openTimer.current) clearTimeout(openTimer.current)
@@ -147,6 +157,8 @@ export function TokenChip({
 
   const isNote = kind === 'note'
   const title = isNote ? (label ?? '') : tokenTitle(token)
+  // 系统写的两种都跟在文字后面：和前面的文字隔开一点
+  const trailing = isNote || kind === 'trigger'
   // 镜像层 at 知识：前缀段（`@knowledge:`，含冒号）弱化、标题段着色；两段拼接 = displayText 逐字一致
   const knowledgeSplit = inline && kind === 'knowledge' ? splitTokenTitle(token.displayText) : null
 
@@ -167,7 +179,7 @@ export function TokenChip({
         data-token-kind={kind}
         className={`rounded cursor-pointer transition-colors ${
           inline ? 'box-decoration-clone pointer-events-auto' : 'px-1.5'
-        } ${isNote ? 'ml-1.5' : ''} ${className}`}
+        } ${trailing ? 'ml-1.5' : ''} ${className}`}
         style={{
           color: inline ? color : undefined,
           backgroundColor: chipBg(color, hovered, inline)
@@ -217,12 +229,14 @@ export function TokenChip({
             title={
               isNote
                 ? title
-                : token.name && token.name !== token.id
-                  ? token.name
-                  : token.displayText
+                : kind === 'trigger'
+                  ? `${label} · ${title}`
+                  : token.name && token.name !== token.id
+                    ? token.name
+                    : token.displayText
             }
             subtitle={token.name && token.name !== token.id ? token.displayText : undefined}
-            payload={token.payload}
+            payload={shownPayload(token, kind)}
             onClose={() => setOpen(false)}
           />,
           document.body
@@ -274,7 +288,7 @@ function TokenHoverCard({
         <div className="mt-1 truncate font-mono text-[11px] text-text-tertiary">{sourcePath}</div>
       )}
       <pre className="mt-1.5 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-text-secondary">
-        {payloadPreview(token.payload)}
+        {payloadPreview(shownPayload(token, kind))}
       </pre>
     </div>
   )
