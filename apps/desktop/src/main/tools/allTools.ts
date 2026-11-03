@@ -14,6 +14,8 @@ import './edit'
 import './ask'
 // suggest：给用户留几条一键采纳的提议，不等回答（采纳 = 那条的话作为用户回复发进会话）
 import './suggest'
+// tool_search：查找并申请开启这条会话没选的 MCP 服务器
+import './toolSearch'
 // show_image：把本机的图片摆进对话给用户看（快照进会话目录；模型收不到图）
 import './showImage'
 // browser / database 不在这里：它们是按会话勾选的内置 MCP 能力服务器

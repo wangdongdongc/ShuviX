@@ -259,3 +259,18 @@ describe('buildToolSummary — session 的旧动作名', () => {
     }
   })
 })
+
+/** tool_search 的折叠摘要就是模型搜的词 */
+describe('buildToolSummary — tool_search', () => {
+  it('TS-S1 摘要 = query；没有 query → 没有摘要', () => {
+    expect(buildToolSummary('tool_search', { query: 'browser' })).toBe('browser')
+    expect(buildToolSummary('tool_search', { query: '浏览器 网页' })).toBe('浏览器 网页')
+    expect(buildToolSummary('tool_search', {})).toBeUndefined()
+  })
+
+  it('TS-S2 呈现：标签键、Puzzle 图标', () => {
+    const def = BUILTIN_TOOL_PRESENTATIONS.tool_search
+    expect(def.labelKey).toBe('tool.toolSearchLabel')
+    expect(def.presentation?.icon).toBe('Puzzle')
+  })
+})

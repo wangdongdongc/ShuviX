@@ -8,6 +8,7 @@ import {
   MessagesSquare,
   Shield,
   ShieldAlert,
+  Puzzle,
   Wrench
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -21,11 +22,13 @@ import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import powershell from 'highlight.js/lib/languages/powershell'
 import type {
+  AskExtensionPreview,
   AskInputRequest,
   AskPolicyPrompt,
   AskSessionTarget,
   AskWidgetTarget
 } from '@shuvix/chat-protocol/types/inputRequest'
+import { builtinMcpCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import type { InputFormProps } from './types'
 import type { AskDraft } from './drafts'
@@ -180,6 +183,44 @@ function WidgetPreview({ widget }: { widget: AskWidgetTarget }): React.JSX.Eleme
 }
 
 /**
+ * 开启扩展询问预览：要开启哪台服务器、它从哪来（第三方的会当场启动 / 连接）、会不会丢提示词缓存。
+ */
+function ExtensionPreview({ extension }: { extension: AskExtensionPreview }): React.JSX.Element {
+  const { t } = useTranslation()
+  const { server, source, cacheLoss } = extension
+  const name = source.type === 'builtin' ? (builtinMcpCopy(server, t)?.label ?? server) : server
+  const where =
+    source.type === 'command'
+      ? { label: t('toolCall.extensionAskCommand'), value: source.command }
+      : source.type === 'url'
+        ? { label: t('toolCall.extensionAskUrl'), value: source.host }
+        : null
+  return (
+    <div className="space-y-1" data-ask-extension={server}>
+      <div className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 min-w-0">
+        <div className="truncate text-text-primary">{name}</div>
+        {!sameAsIdentifier(name, server) && (
+          <div className="truncate font-mono text-[11px] text-text-tertiary">{server}</div>
+        )}
+      </div>
+      {where && (
+        <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-extension-source="">
+          {where.label}{' '}
+          <span className="font-mono break-all text-text-secondary">{where.value}</span>
+        </div>
+      )}
+      {cacheLoss && (
+        <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-extension-cache="">
+          {cacheLoss.promptTokens > 0
+            ? t('toolCall.extensionAskCacheTokens', { tokens: cacheLoss.promptTokens })
+            : t('toolCall.extensionAskCache')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * 命中策略的提示语 —— 收成操作栏左端的一枚角标：平时只留策略名，点开才铺出整句。
  *
  * 内置策略那几句每次询问都一字不差地重复（「放行后命令以你的完整系统权限运行…」），
@@ -268,6 +309,7 @@ export function AskForm({
   const presentation = hostPresentation ?? fallbackToolPresentation(toolName, t)
   const diffPreview = preview?.kind === 'diff' ? preview : null
   const messagePreview = preview?.kind === 'message' ? preview.text : undefined
+  const extensionPreview = preview?.kind === 'extension' ? preview : null
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"这条路径(或它所在的
   // 文件夹),记进会话权限表。会话类(request.session)可"允许并记住"那条会话。命令类(bash/ssh)与简单类(浏览器
@@ -361,62 +403,67 @@ export function AskForm({
   // 顶行的动作名：非路径类直接取工具自己的显示名，与上方步骤行共用一套词表
   const iconSize = touch ? 14 : 12
   const iconClass = 'flex-shrink-0'
-  const { icon, title } = widget
+  const { icon, title } = extensionPreview
     ? {
-        icon: <Wrench size={iconSize} className={iconClass} />,
-        title:
-          widget.access === 'write' ? t('toolCall.widgetAskWrite') : t('toolCall.widgetAskRead')
+        icon: <Puzzle size={iconSize} className={iconClass} />,
+        title: t('toolCall.extensionAskEnable')
       }
-    : session
-      ? session.access === 'write'
-        ? {
-            icon: <MessagesSquare size={iconSize} className={iconClass} />,
-            title: t('toolCall.sessionAskWrite')
-          }
-        : {
-            icon: <Eye size={iconSize} className={iconClass} />,
-            title: t('toolCall.sessionAskRead')
-          }
-      : diffPreview
-        ? diffPreview.isNewFile
+    : widget
+      ? {
+          icon: <Wrench size={iconSize} className={iconClass} />,
+          title:
+            widget.access === 'write' ? t('toolCall.widgetAskWrite') : t('toolCall.widgetAskRead')
+        }
+      : session
+        ? session.access === 'write'
           ? {
-              icon: <FileOutput size={iconSize} className={iconClass} />,
-              title: t('toolCall.pendingCreatePreview')
+              icon: <MessagesSquare size={iconSize} className={iconClass} />,
+              title: t('toolCall.sessionAskWrite')
             }
-          : toolName === 'edit'
-            ? {
-                icon: <FilePen size={iconSize} className={iconClass} />,
-                title: t('toolCall.pendingEditPreview')
-              }
-            : {
-                icon: <FileOutput size={iconSize} className={iconClass} />,
-                title: t('toolCall.pendingWritePreview')
-              }
-        : pathAsk
-          ? pathAsk.mode === 'write'
+          : {
+              icon: <Eye size={iconSize} className={iconClass} />,
+              title: t('toolCall.sessionAskRead')
+            }
+        : diffPreview
+          ? diffPreview.isNewFile
             ? {
                 icon: <FileOutput size={iconSize} className={iconClass} />,
-                title: t('toolCall.pendingPathWrite')
+                title: t('toolCall.pendingCreatePreview')
               }
-            : pathIsDirectory
+            : toolName === 'edit'
               ? {
-                  icon: <FolderOpen size={iconSize} className={iconClass} />,
-                  title: t('toolCall.pendingPathReadDir')
+                  icon: <FilePen size={iconSize} className={iconClass} />,
+                  title: t('toolCall.pendingEditPreview')
                 }
               : {
-                  icon: <FileText size={iconSize} className={iconClass} />,
-                  title: t('toolCall.pendingPathRead')
+                  icon: <FileOutput size={iconSize} className={iconClass} />,
+                  title: t('toolCall.pendingWritePreview')
                 }
-          : {
-              icon: presentation ? (
-                <span className={`${iconClass} flex items-center`}>
-                  {renderToolIcon(presentation)}
-                </span>
-              ) : (
-                <ShieldAlert size={iconSize} className={iconClass} />
-              ),
-              title: presentation?.label ?? t('toolCall.pendingAsk')
-            }
+          : pathAsk
+            ? pathAsk.mode === 'write'
+              ? {
+                  icon: <FileOutput size={iconSize} className={iconClass} />,
+                  title: t('toolCall.pendingPathWrite')
+                }
+              : pathIsDirectory
+                ? {
+                    icon: <FolderOpen size={iconSize} className={iconClass} />,
+                    title: t('toolCall.pendingPathReadDir')
+                  }
+                : {
+                    icon: <FileText size={iconSize} className={iconClass} />,
+                    title: t('toolCall.pendingPathRead')
+                  }
+            : {
+                icon: presentation ? (
+                  <span className={`${iconClass} flex items-center`}>
+                    {renderToolIcon(presentation)}
+                  </span>
+                ) : (
+                  <ShieldAlert size={iconSize} className={iconClass} />
+                ),
+                title: presentation?.label ?? t('toolCall.pendingAsk')
+              }
 
   // 标题：审查员那句大白话 > 工具自己的说明（agent 写的这一步要做什么）> 动作名本身。
   // 有审查意见时不再摆说明 —— 审查员只看人写的话与操作本身，说明是 agent 的说法
@@ -469,7 +516,9 @@ export function AskForm({
         ) : null}
 
         <div data-ask-preview="">
-          {widget ? (
+          {extensionPreview ? (
+            <ExtensionPreview extension={extensionPreview} />
+          ) : widget ? (
             <WidgetPreview widget={widget} />
           ) : session ? (
             <SessionPreview session={session} message={messagePreview} />

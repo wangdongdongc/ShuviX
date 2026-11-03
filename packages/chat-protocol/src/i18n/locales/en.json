@@ -514,7 +514,12 @@
     "widgetAskOperation": "Operation",
     "widgetAskUnnamed": "Unnamed widget",
     "askRememberWidgetRead": "Allow and remember: may read this widget",
-    "askRememberWidgetWrite": "Allow and remember: may read and change this widget"
+    "askRememberWidgetWrite": "Allow and remember: may read and change this widget",
+    "extensionAskEnable": "Enable an extension",
+    "extensionAskCommand": "Allowing this runs:",
+    "extensionAskUrl": "Allowing this connects to:",
+    "extensionAskCache": "The current model cannot take new tools mid-conversation and keep its cache, so the next request will miss part of the prompt cache.",
+    "extensionAskCacheTokens": "The current model cannot take new tools mid-conversation and keep its cache, so the next request will miss part of the prompt cache (the last request was about {{tokens}} tokens)."
   },
   "sessionConfig": {
     "title": "Session Config",
@@ -1231,6 +1236,9 @@
     },
     "sessionLabel": "Session",
     "sessionHint": "Read or change the session this task belongs to — rename it, and create and drive sub-sessions",
+    "toolSearchLabel": "Tool search",
+    "toolSearchHint": "Looks through the MCP servers that are off in this session and, once you confirm, turns on the one it needs",
+    "toolSearchAskQuery": "The agent searched for: {{query}}",
     "widgetLabel": "Widget",
     "widgetHint": "Use the user’s widgets through their own operations, and build widgets",
     "knowledgeLabel": "Knowledge Base",

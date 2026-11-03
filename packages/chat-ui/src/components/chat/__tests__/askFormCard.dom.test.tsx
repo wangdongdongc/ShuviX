@@ -21,6 +21,10 @@
  *   AC-11 各风险等级：风险标签的字；「需注意」那一句的颜色 class（低 text-text-secondary / 中 text-warning /
  *         高与严重 text-error，只断 class）
  *   AC-12 审批的选项行都不是勾选态：没有 aria-pressed
+ *   AC-13 开启扩展（preview kind extension）· 内置：本地化的名字，与标识名不同时再带标识名，没有来源那一行
+ *   AC-14 开启扩展 · 第三方：标识名就是名字；命令行 / 主机各一行来源
+ *   AC-15 缓存那一句：有规模 → 带规模；规模为 0 → 不带；没有 cacheLoss → 没有这一句。选项恰是允许 + 拒绝，有宿主也一样
+ *         （没有「允许并记住」：开启之后选择本身就是记忆）
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（AskForm 从那里取 getHostApi）；i18n 走真 en 资源。按键在目标元素上派发（bubbles +
  * cancelable + composed），每一下各自一个 act。文件是 .tsx 但不写 JSX，一律 createElement。
@@ -32,6 +36,7 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type {
+  AskExtensionPreview,
   AskInputRequest,
   AskReview,
   InputResponse
@@ -518,5 +523,112 @@ describe('AskForm：滚动段、风险等级、选项不是勾选态', () => {
       for (const r of rows())
         expect(r.hasAttribute('aria-pressed'), r.dataset.askOption).toBe(false)
     }
+  })
+})
+
+// ─── AC-13..15：开启扩展 ─────────────────────────────────────
+
+describe('AskForm：开启扩展的卡片', () => {
+  const extensionAsk = (
+    preview: Omit<AskExtensionPreview, 'kind' | 'server'> & { server?: string }
+  ): AskInputRequest =>
+    ask({
+      toolName: 'tool_search',
+      command: `Extension(${preview.server ?? 'browser'})`,
+      description: 'The agent searched for: browser',
+      preview: { kind: 'extension', server: 'browser', ...preview }
+    })
+
+  const card = (): HTMLElement => {
+    const el = container.querySelector<HTMLElement>('[data-ask-extension]')
+    if (!el) throw new Error('extension preview not rendered')
+    return el
+  }
+  const source = (): Element | null => container.querySelector('[data-ask-extension-source]')
+  const cache = (): Element | null => container.querySelector('[data-ask-extension-cache]')
+
+  it('AC-13 内置：本地化的名字 + 标识名，没有来源那一行；顶行是开启扩展', () => {
+    render(extensionAsk({ source: { type: 'builtin' } }))
+
+    expect(card().getAttribute('data-ask-extension')).toBe('browser')
+    expect(card().textContent).toContain(tr('tool.browserLabel'))
+    // 英文名字 Browser 与标识名只差大小写：不摆两遍
+    expect(card().textContent?.toLowerCase().split('browser')).toHaveLength(2)
+    expect(source()).toBeNull()
+    expect(container.querySelector('[data-ask-title]')?.textContent).toBe(
+      tr('toolCall.extensionAskEnable')
+    )
+  })
+
+  it('AC-13 名字和标识名不一样：两个都摆出来', () => {
+    render(extensionAsk({ server: 'plan', source: { type: 'builtin' } }))
+    expect(card().textContent).toContain(tr('tool.taskListLabel'))
+    expect(card().textContent).toContain('plan')
+  })
+
+  it('AC-14 第三方：标识名就是名字，只摆一遍', () => {
+    render(extensionAsk({ server: 'notes', source: { type: 'url', host: 'example.test' } }))
+    expect(card().textContent?.split('notes')).toHaveLength(2)
+  })
+
+  it('AC-13 内置但名字不认识（不该有）：退回标识名，不崩', () => {
+    render(extensionAsk({ server: 'mystery', source: { type: 'builtin' } }))
+    expect(card().textContent).toContain('mystery')
+  })
+
+  it('AC-14 第三方 · 命令行：标识名是名字，一行来源写着要运行什么', () => {
+    render(
+      extensionAsk({
+        server: 'notes',
+        source: { type: 'command', command: 'npx -y notes-mcp' }
+      })
+    )
+
+    expect(card().getAttribute('data-ask-extension')).toBe('notes')
+    expect(source()?.textContent).toContain(tr('toolCall.extensionAskCommand'))
+    expect(source()?.textContent).toContain('npx -y notes-mcp')
+  })
+
+  it('AC-14 第三方 · URL：一行来源写着要连到哪台主机', () => {
+    render(extensionAsk({ server: 'remote', source: { type: 'url', host: 'example.test:8443' } }))
+
+    expect(source()?.textContent).toContain(tr('toolCall.extensionAskUrl'))
+    expect(source()?.textContent).toContain('example.test:8443')
+  })
+
+  it('AC-14 第三方的名字恰好与内置同名：不冒用内置的本地化名字', () => {
+    render(extensionAsk({ server: 'browser', source: { type: 'url', host: 'evil.test' } }))
+    expect(card().textContent).not.toContain(tr('tool.browserLabel'))
+  })
+
+  it('AC-15 cacheLoss 带规模 → 那一句带数字', () => {
+    render(extensionAsk({ source: { type: 'builtin' }, cacheLoss: { promptTokens: 1234 } }))
+    expect(cache()?.textContent).toBe(tr('toolCall.extensionAskCacheTokens', { tokens: 1234 }))
+    expect(cache()?.textContent).toContain('1234')
+  })
+
+  it('AC-15 cacheLoss 规模为 0 → 不带数字的那一句', () => {
+    render(extensionAsk({ source: { type: 'builtin' }, cacheLoss: { promptTokens: 0 } }))
+    expect(cache()?.textContent).toBe(tr('toolCall.extensionAskCache'))
+  })
+
+  it('AC-15 没有 cacheLoss → 没有这一句', () => {
+    render(extensionAsk({ source: { type: 'builtin' } }))
+    expect(cache()).toBeNull()
+  })
+
+  it.each([
+    ['有宿主', {}],
+    ['没有宿主', null]
+  ])('AC-15 %s：选项恰是允许 + 拒绝；1 = 允许，2 = 拒绝', (_label, api) => {
+    host.api = api
+    const allow = render(extensionAsk({ source: { type: 'builtin' } }))
+    expect(rowIds()).toEqual(['allow', 'deny'])
+    expect(press('1')).toBe(false)
+    expect(allow.mock.lastCall![0]).toEqual({ kind: 'ask', allowed: true })
+
+    const deny = render(extensionAsk({ source: { type: 'builtin' } }))
+    expect(press('2')).toBe(false)
+    expect(deny.mock.lastCall![0]).toEqual({ kind: 'ask', allowed: false })
   })
 })

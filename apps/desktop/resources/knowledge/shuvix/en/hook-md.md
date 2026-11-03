@@ -136,8 +136,8 @@ output:
 - `sessionId` — the session the operation happens in (the run is dispatched under it).
 - `agent` — `profile` (agent name) and `kind` (`root` / `spawned`) of the agent asking.
 - `operation` — `tool` (with its operation, e.g. `session: create-sub-session`), `action`
-  (`read` / `write` / `execute` / `navigate`), `objectType` (`command` / `path` / `database` /
-  `gitTool` / `url` / `invocation`), `target` (the command, path, SQL or URL, clipped), and `facts`:
+  (`read` / `write` / `execute` / `navigate` / `enable`), `objectType` (`command` / `path` / `database` /
+  `gitTool` / `url` / `invocation` / `session` / `widget` / `extension`), `target` (the command, path, SQL or URL, clipped), and `facts`:
   for a command `channel`, `host` (ssh), `sandboxed`, `unconfinedReason`, `background`; for a path
   `path`, `requestedPath`, `diff` (clipped) and `isNewFile`; for a database `connection`, `dbType`,
   `readonly`; for a url `scheme`, `host`, `browser`; always `workingDirectory` and `platform`.
@@ -207,9 +207,8 @@ event.textMessageCount >= 3`; the titler applies the title with the `session` to
 `set-title`.
 
 `auto-review` names the `permission-reviewer` agent on every `permission.request` except access to
-another session (`when: event.operation.objectType != 'session'` — the session tool reading or
-talking to a session that is not its own sub-session is left to you, so "allow and remember" there
-is always your decision). That agent's
+another session, using a widget and turning on an extension (its `when` excludes those three object
+types): they are left to you, so what is granted there is always your decision. That agent's
 only tool is `read`, to look at a script before judging it; its reads never ask you — it can read
 what the reviewed agent may read without asking, and anything else is refused. It declares `shuvix-thinking: low` (with thinking off, some models answer in prose instead of calling `next`); its file is the review rules. Only ShuviX
 dispatches it: the `agent` tool cannot, and a sub-session cannot be opened with it.

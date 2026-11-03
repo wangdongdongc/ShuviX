@@ -35,6 +35,7 @@ import {
   renderBotContext,
   renderDocumentKind,
   renderKnowledgeGuide,
+  renderExtensionDiscovery,
   renderTempDirectory,
   renderVisualCraft,
   renderVisualGuide,
@@ -59,6 +60,7 @@ import {
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
+import { optedOutTools, TOOL_SEARCH_TOOL_NAME } from '@shuvix/chat-protocol/toolSelection'
 import { shuvixFileKindOfProject } from '@shuvix/chat-protocol/shuvixFileNotes'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import { existsSync, realpathSync } from 'fs'
@@ -73,6 +75,8 @@ import {
   powerShellEditionLabel
 } from '../utils/toolUtils/shell'
 import { recordRead } from '../utils/toolUtils/fileTime'
+import { untilAborted } from '../utils/untilAborted'
+import { extensionPromptEntries } from '../services/extensionDiscovery'
 import { SkillTool } from '../services/skillTool'
 import { skillService } from '../services/skillService'
 import { mcpService } from '../services/mcpService'
@@ -243,25 +247,6 @@ const SKILL_TOOL = 'skill'
 /** 名单里点了名的 MCP 服务器（去掉 `mcp:` 前缀，名单序） */
 function mcpServersOf(names: readonly string[]): string[] {
   return names.filter((name) => name.startsWith('mcp:')).map((name) => name.slice(4))
-}
-
-/** 等一个 promise，signal 一落就以它的 reason 失败（底下的连接照样连完，下次用到时直接复用） */
-function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason)
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => reject(signal.reason)
-    signal.addEventListener('abort', onAbort, { once: true })
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort)
-        resolve(value)
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort)
-        reject(error)
-      }
-    )
-  })
 }
 
 type ResolvedMcp = NonNullable<ResolvedAgentTools['mcp']>[number]
@@ -624,6 +609,19 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
       dir: rootTempDirectory(rootSessionId),
       commands: ctx.toolNames.some((name) => name === 'bash' || name === 'powershell')
     }),
+    // 这条会话可以申请开启哪些扩展（只有持有 tool_search 的 agent 才说）。创建时定下、记进人设，重配不动它 ——
+    // 之后才启用的服务器不在名单里，但照样搜得到
+    extensionDiscovery: renderExtensionDiscovery(
+      i18next.language,
+      ctx.toolNames.includes(TOOL_SEARCH_TOOL_NAME)
+        ? extensionPromptEntries({
+            names: ctx.toolNames,
+            optedOut: optedOutTools(
+              sessionRecords.pickSettings(rootSessionId, ['enabledTools'])?.enabledTools ?? []
+            )
+          })
+        : []
+    ),
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
     // 占位符原样保留并 warn（派生档案本就不该引用它）。{{shuvix:documentKind}} 同口径：文档是 ShuviX

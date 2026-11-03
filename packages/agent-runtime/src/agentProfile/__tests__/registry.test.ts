@@ -264,6 +264,7 @@ const SHARED_BASE_TOOLS = [
   'knowledge',
   'artifact',
   'widget',
+  'tool_search',
   'skill'
 ]
 
@@ -294,6 +295,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'knowledge',
       'artifact',
       'widget',
+      'tool_search',
       'skill'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
@@ -378,6 +380,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'knowledge',
       'artifact',
       'widget',
+      'tool_search',
       'skill'
     ])
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual(SHARED_BASE_TOOLS)
@@ -492,6 +495,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'knowledge',
       'artifact',
       'widget',
+      'tool_search',
       'skill'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
@@ -1259,6 +1263,44 @@ describe('内置档案的对象 id（shuvix-id）', () => {
           built.objectId
         )
       }
+    }
+  })
+})
+
+describe('{{shuvix:extensionDiscovery}} 的归属（RG）', () => {
+  const PLACEHOLDER = '{{shuvix:extensionDiscovery}}'
+  const count = (text: string): number => text.split(PLACEHOLDER).length - 1
+
+  it.each(LANGS.flatMap((language) => ['work', 'chat', 'coding'].map((name) => [name, language])))(
+    'RG-1 %s.%s：占位符恰好一次，手里有 tool_search，占位符前后都隔着空行',
+    (name, language) => {
+      const built = profile(name, language)
+      expect(count(built.systemPrompt)).toBe(1)
+      expect(built.tools).toContain('tool_search')
+      const lines = built.systemPrompt.split('\n')
+      const at = lines.indexOf(PLACEHOLDER)
+      expect(at).toBeGreaterThan(0)
+      expect(lines[at - 1]).toBe('')
+      expect(lines[at + 1]).toBe('')
+    }
+  )
+
+  it.each(LANGS.flatMap((language) => ['bot', 'notebook', 'tab'].map((name) => [name, language])))(
+    'RG-2 %s.%s：正文不提它，名单里也没有 tool_search',
+    (name, language) => {
+      const built = profile(name, language)
+      expect(count(built.systemPrompt)).toBe(0)
+      expect(built.tools).not.toContain('tool_search')
+    }
+  )
+
+  it('RG-3 全部内置档案里只有 work / chat / coding 引用它、声明 tool_search', () => {
+    for (const language of LANGS) {
+      const profiles = buildBuiltinProfiles({ ...ALL_PARAMS, language })
+      const holders = profiles.filter((p) => p.tools.includes('tool_search')).map((p) => p.name)
+      const users = profiles.filter((p) => count(p.systemPrompt) > 0).map((p) => p.name)
+      expect([...holders].sort(), language).toEqual(['chat', 'coding', 'work'])
+      expect([...users].sort(), language).toEqual(['chat', 'coding', 'work'])
     }
   })
 })

@@ -192,6 +192,7 @@ describe('内置安全策略的停用开关', () => {
     const builtins = (await listPolicies()).filter((p) => p.source === 'builtin')
     expect(builtins.map((p) => p.name).sort()).toEqual([
       COMMAND_GATE,
+      'ask-on-extension',
       PATH_GATE,
       'ask-on-session-access',
       'ask-on-widget-access',

@@ -180,6 +180,11 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
         .filter(Boolean)
         .join(' · ') || undefined
   },
+  tool_search: {
+    labelKey: 'tool.toolSearchLabel',
+    presentation: { icon: 'Puzzle', iconColor: '#8b5cf6' },
+    buildSummary: (args) => asStr(args.query)
+  },
   widget: {
     labelKey: 'tool.widgetLabel',
     presentation: { icon: 'Wrench', iconColor: '#f59e0b' },

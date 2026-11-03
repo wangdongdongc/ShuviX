@@ -58,7 +58,21 @@ export interface AskMessagePreview {
   text: string
 }
 
-export type AskPreview = AskDiffPreview | AskMessagePreview
+/**
+ * 「预览询问」的扩展载荷 —— `tool_search` 要开启的那台 MCP 服务器。来源摆在卡片上：开启一台第三方服务器
+ * 可能当场启动它的进程，用户批准的就是这一条。
+ */
+export interface AskExtensionPreview {
+  kind: 'extension'
+  /** 服务器名（内置服务器在卡片上按本地化的名字显示） */
+  server: string
+  /** 内置 / 要运行的命令行 / 要连接的主机（只有主机：地址里可能带 token） */
+  source: { type: 'builtin' } | { type: 'command'; command: string } | { type: 'url'; host: string }
+  /** 这次开启会让下一次请求丢掉一部分提示词缓存时给出；promptTokens = 上一次请求的规模，没有就是 0 */
+  cacheLoss?: { promptTokens: number }
+}
+
+export type AskPreview = AskDiffPreview | AskMessagePreview | AskExtensionPreview
 
 /**
  * 会话询问（`session` 工具要与一条不是自己子会话的会话交互）：卡片据此摆出目标会话与访问方式，

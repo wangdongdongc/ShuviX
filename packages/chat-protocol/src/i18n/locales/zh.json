@@ -514,7 +514,12 @@
     "widgetAskOperation": "操作",
     "widgetAskUnnamed": "未命名小组件",
     "askRememberWidgetRead": "允许，并记住：可以读这个小组件",
-    "askRememberWidgetWrite": "允许，并记住：可以读写这个小组件"
+    "askRememberWidgetWrite": "允许，并记住：可以读写这个小组件",
+    "extensionAskEnable": "开启扩展",
+    "extensionAskCommand": "确认后会运行：",
+    "extensionAskUrl": "确认后会连接：",
+    "extensionAskCache": "当前模型不能在对话中途加工具而保留缓存，开启后下一次请求会少命中一部分缓存。",
+    "extensionAskCacheTokens": "当前模型不能在对话中途加工具而保留缓存，开启后下一次请求会少命中一部分缓存（上一次请求约 {{tokens}} tokens）。"
   },
   "sessionConfig": {
     "title": "会话配置",
@@ -1231,6 +1236,9 @@
     },
     "sessionLabel": "会话",
     "sessionHint": "读改本任务所属的会话 —— 重命名，以及创建并驱动子会话",
+    "toolSearchLabel": "工具搜索",
+    "toolSearchHint": "在这条会话没开启的 MCP 服务器里查找需要的工具，经你确认后开启",
+    "toolSearchAskQuery": "智能体搜索的是：{{query}}",
     "widgetLabel": "小组件",
     "widgetHint": "经小组件自己的操作使用用户的小组件，以及造小组件",
     "knowledgeLabel": "知识库",

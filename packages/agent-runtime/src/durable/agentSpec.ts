@@ -14,7 +14,11 @@
  *（`prompt/persona.ts`），其余注入各是一个现解析的段落扩展（`prompt/sections.ts`）。
  */
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import { isSessionScopedToolName, optedOutTools } from '@shuvix/chat-protocol/toolSelection'
+import {
+  isSessionScopedToolName,
+  optedOutTools,
+  TOOL_SEARCH_TOOL_NAME
+} from '@shuvix/chat-protocol/toolSelection'
 import type { InProcessAgentType } from '../subagent/types'
 import type { AgentKind } from '../agentProfile/promptVars'
 
@@ -40,7 +44,13 @@ export function normalizeToolNames(
   profileTools: readonly string[],
   overlay: readonly string[] | undefined
 ): string[] {
-  if (kind !== 'root') return [...new Set([...profileTools, ...(overlay ?? [])])]
+  if (kind !== 'root') {
+    // `tool_search` 开启的是会话的选择，而选择只作用于根 agent：派生 agent 的档案写了也不给（工具名单相同的
+    // coding 既能是子会话的根，也能被派发）
+    return [...new Set([...profileTools, ...(overlay ?? [])])].filter(
+      (name) => name !== TOOL_SEARCH_TOOL_NAME
+    )
+  }
   const selection = overlay ?? []
   const removed = optedOutTools(selection)
   const added = selection.filter(isSessionScopedToolName)

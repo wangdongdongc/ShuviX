@@ -328,6 +328,11 @@ function factsOf(event: PermissionRequestEvent): PermissionRequestPayload['opera
       put('name', object.name)
       put('operation', object.operation)
       break
+    case 'extension':
+      // 出厂的 auto-review 同样不审开启扩展；用户自己的 hook 审它时看得到是哪台
+      put('server', object.server)
+      put('builtin', object.builtin)
+      break
     case 'invocation':
       put('mcpServer', object.mcpServer)
       put('mcpTool', object.mcpTool)

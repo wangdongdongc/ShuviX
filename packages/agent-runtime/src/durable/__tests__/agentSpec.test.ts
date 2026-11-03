@@ -181,6 +181,37 @@ describe('normalizeToolNames —— 工具名单归一（TN）', () => {
       'ls'
     ])
   })
+
+  // `tool_search` 开启的是会话的选择，而选择只作用于根 agent：派生 agent 手里有它只是一个永远开不到自己身上的工具
+  it('TN-9 spawned：档案写了 tool_search 也去掉，overlay 里的同样；别的工具原位', () => {
+    expect(normalizeToolNames('spawned', ['read', 'tool_search', 'grep'], undefined)).toEqual([
+      'read',
+      'grep'
+    ])
+    expect(normalizeToolNames('spawned', ['read'], ['tool_search', 'mcp:ctx'])).toEqual([
+      'read',
+      'mcp:ctx'
+    ])
+  })
+
+  it('TN-10 root：档案声明的 tool_search 原位留着；勾选、取消记号都动不了它', () => {
+    expect(normalizeToolNames('root', ['read', 'tool_search', 'skill'], undefined)).toEqual([
+      'read',
+      'tool_search',
+      'skill'
+    ])
+    expect(
+      normalizeToolNames('root', ['tool_search', 'skill'], ['mcp:ctx', '-tool_search'])
+    ).toEqual(['tool_search', 'skill', 'mcp:ctx'])
+  })
+
+  it('TN-11 root 的 overlay 加不上 tool_search：档案没写就是没有（bot / notebook / tab 的名单是结构保证）', () => {
+    expect(normalizeToolNames('root', ['read', 'ls'], ['tool_search', 'mcp:ctx'])).toEqual([
+      'read',
+      'ls',
+      'mcp:ctx'
+    ])
+  })
 })
 
 /**

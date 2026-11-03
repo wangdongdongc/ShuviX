@@ -178,6 +178,8 @@ export type AttrValue =
  *                                                           （action 'navigate'；browser: 'app' = 应用内
  *                                                           浏览器面板，'chrome' = 用户真实的 Chrome；
  *                                                           file:// 不走这里，按读那个路径处理）
+ *   { type:'extension', server, builtin }                   开启这条会话还没选的一台 MCP 服务器（action 'enable'；
+ *                                                           builtin = 随产品发布的内置服务器）
  *   { type:'modelRequest', provider, model }                发给模型的一次请求（action 'send'；provider =
  *                                                           设置里显示的服务商名字，model = 模型 id）。
  *                                                           处置 `detect` 落在这里
@@ -809,6 +811,16 @@ export interface WidgetObjectInput {
   operation: string
 }
 
+/**
+ * enforceExtension 的入参（对应 {type:'extension'} 客体的属性）—— `tool_search` 要开启的那台 MCP 服务器。
+ */
+export interface ExtensionObjectInput {
+  /** 服务器名（`mcp:<server>` 里的那段） */
+  server: string
+  /** 随产品发布的内置服务器 */
+  builtin: boolean
+}
+
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */
 export interface SecurityContext {
   /** 评估（不执行、不弹窗、不记日志）。includeForceAllow 缺省 true。 */
@@ -871,6 +883,12 @@ export interface SecurityContext {
    * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
    */
   enforceWidget(mode: AccessMode, object: WidgetObjectInput, opts: EnforceOpts): Promise<void>
+  /**
+   * 开启扩展守卫（`tool_search` 要开启一台这条会话还没选的 MCP 服务器）：客体 = `{type:'extension'}`，
+   * action = 'enable'。出厂的 ask-on-extension 每次都问，只由用户回答（auto-review 的 `when` 把它排除在外）；
+   * 没有「允许并记住」—— 开启之后这台就在会话的选择里，记忆就是选择本身。
+   */
+  enforceExtension(object: ExtensionObjectInput, opts: EnforceOpts): Promise<void>
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。

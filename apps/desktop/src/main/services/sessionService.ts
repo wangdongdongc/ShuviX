@@ -2,7 +2,9 @@ import { v7 as uuidv7 } from 'uuid'
 import {
   isSessionScopedToolName,
   isToolSelectionEntry,
-  toolOptOut
+  toolOptOut,
+  optedOutTools,
+  withToolsSelected
 } from '@shuvix/chat-protocol/toolSelection'
 import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
@@ -56,7 +58,12 @@ import {
   type DurableSession,
   type LockRecord
 } from '@shuvix/agent-runtime'
-import { HOST_ONLY_PROFILE_NAMES, type SubAgentModelConfig } from '@shuvix/agent-runtime'
+import {
+  HOST_ONLY_PROFILE_NAMES,
+  normalizeToolNames,
+  type McpToolDeclaration,
+  type SubAgentModelConfig
+} from '@shuvix/agent-runtime'
 import {
   isBotSessionSettings,
   projectContextIdOf,
@@ -728,6 +735,44 @@ export class SessionService {
       log.warn(`重配扩展能力失败 session=${id}: ${err instanceof Error ? err.message : err}`)
     }
     return true
+  }
+
+  /**
+   * 这条会话的根 agent 此刻该有的工具名单（档案声明 + 勾选 - 取消），与创建、重配同一条归一规则。
+   * `optedOut` 是用户明确取消的那些（`tool_search` 不拿它们去问）。
+   */
+  rootToolState(sessionId: string): {
+    names: string[]
+    selection: string[]
+    optedOut: Set<string>
+  } {
+    const selection = this.sessionEnabledTools(sessionId)
+    const profile = agentService.getProfile(this.resolveAgentProfileName(sessionId))
+    return {
+      names: normalizeToolNames('root', profile?.tools ?? [], selection),
+      selection,
+      optedOut: optedOutTools(selection)
+    }
+  }
+
+  /** 这台服务器现在有没有接到这条会话的 agent 上：有就回它的工具声明（连上过的才进锁，见 AgentLock.planReconfigure） */
+  lockedServerTools(sessionId: string, server: string): readonly McpToolDeclaration[] | undefined {
+    const mcp = this.host.get(sessionId)?.lock?.mcp
+    return mcp && Object.hasOwn(mcp, server) ? mcp[server] : undefined
+  }
+
+  /**
+   * 为这条会话开启一台 MCP 服务器（`tool_search` 经用户确认之后；调用方要先把它连上）：勾选里加上它，重配 agent。
+   * 读改写之间没有 await，不会和别的写入交错。答的是这台真的接上了没有 —— `updateEnabledTools` 与重配的结果都说明
+   * 不了这件事。
+   */
+  async enableServer(
+    sessionId: string,
+    server: string
+  ): Promise<readonly McpToolDeclaration[] | undefined> {
+    const next = withToolsSelected(this.sessionEnabledTools(sessionId), [`mcp:${server}`])
+    await this.updateEnabledTools(sessionId, next)
+    return this.lockedServerTools(sessionId, server)
   }
 
   /**

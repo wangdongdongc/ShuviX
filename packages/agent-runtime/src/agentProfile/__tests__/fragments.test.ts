@@ -54,6 +54,9 @@
  * 第三份片段 `renderTempDirectory`（TD 组，2026-11-01）：`{{shuvix:tempDirectory}}` 是环境清单里的
  * 一行 —— 本会话自己的临时目录。同样只凭代码记号认：目录本身（反引号包着）、`/tmp`（「写那里要问」
  * 那半句）；命令那半句只凭「多出来的一段连续文字」认，不认措辞。
+ *
+ * 第四份片段 `renderExtensionDiscovery`（RX 组，2026-11-03）：`{{shuvix:extensionDiscovery}}` 列这条会话能申请开启的
+ * 扩展。空表 ⇒ 空串（占位符整块消失）；同样只凭 `tool_search` 与名字认，不认措辞。
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -62,6 +65,7 @@ import {
 } from '@shuvix/chat-protocol/shuvixFileNotes'
 import {
   renderDocumentKind,
+  renderExtensionDiscovery,
   renderTempDirectory,
   renderVisualCraft,
   renderVisualGuide,
@@ -1058,5 +1062,39 @@ describe('renderTempDirectory —— 本会话临时目录那一行（TD）', ()
       }
     }
     expect(checked).toBe(12)
+  })
+})
+
+describe('renderExtensionDiscovery —— 可以申请开启的扩展（RX）', () => {
+  const ENTRIES = [{ name: 'browser', hint: 'Open and work with web pages' }, { name: 'mytool' }]
+
+  it('RX-1 空表 ⇒ 空串：任何语言都一样', () => {
+    for (const language of ['en', 'zh', 'ja', undefined, 'ko']) {
+      expect(renderExtensionDiscovery(language, [])).toBe('')
+    }
+  })
+
+  it.each(LANGUAGES)('RX-2 %s：列表在、占位记号不在、点名 tool_search、已 trim', (language) => {
+    const out = renderExtensionDiscovery(language, ENTRIES)
+    expect(out).toContain('\n- `browser`: Open and work with web pages')
+    expect(out).toContain('\n- `mytool`')
+    expect(out).not.toContain('`mytool`:')
+    expect(out).not.toContain('<<list>>')
+    expect(out).toContain('`tool_search`')
+    expect(out).toBe(out.trim())
+    expect(out.startsWith('## ')).toBe(true)
+  })
+
+  it('RX-3 三种语言的文字各不相同；不认识的语言回退英文', () => {
+    const [en, zh, ja] = LANGUAGES.map((language) => renderExtensionDiscovery(language, ENTRIES))
+    expect(new Set([en, zh, ja]).size).toBe(3)
+    expect(renderExtensionDiscovery('ko', ENTRIES)).toBe(en)
+    expect(renderExtensionDiscovery(undefined, ENTRIES)).toBe(en)
+    expect(renderExtensionDiscovery('zh-CN', ENTRIES)).toBe(zh)
+  })
+
+  it('RX-4 名字里的 $ 不被当替换模式（列表是用 split / join 放进去的）', () => {
+    const out = renderExtensionDiscovery('en', [{ name: '$&-$1' }])
+    expect(out).toContain('`$&-$1`')
   })
 })

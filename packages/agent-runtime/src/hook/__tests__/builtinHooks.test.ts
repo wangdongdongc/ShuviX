@@ -1,7 +1,7 @@
 /**
  * 内置 hook（builtinHooks/）—— auto-title，以及判定型的 auto-review（询问点的自动审查）。auto-review
- * 在这里只钉清单、交付与结构（HB-10…12），外加经真 runner 的两格：会话客体（XS-20）与组件客体（WT4-SE-17）
- * 不派审查员；判定型的
+ * 在这里只钉清单、交付与结构（HB-10…12），外加经真 runner 的三格：会话客体（XS-20）、组件客体（WT4-SE-17）与
+ * 扩展客体（XS-20x）不派审查员；判定型的
  * 派发与合并见 hookDecide.test.ts。
  *
  * md 是唯一事实源（随包发布成文件，运行时经宿主注入的 readMd 现读；本测试注入构建期内联
@@ -294,13 +294,13 @@ describe('auto-review（判定型）结构钉板', () => {
     return parsed!
   }
 
-  it('HB-10 / WT4-SE-16 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话与组件客体 —— 这两类访问只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
+  it('HB-10 / WT4-SE-16 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话、组件与扩展客体 —— 这三类只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
     const review = reviewOf('en')
     expect(review.agent).toBe('permission-reviewer')
     expect(review.bindings).toStrictEqual([
       {
         trigger: 'permission.request',
-        when: "event.operation.objectType != 'session' && event.operation.objectType != 'widget'"
+        when: "event.operation.objectType != 'session' && event.operation.objectType != 'widget' && event.operation.objectType != 'extension'"
       }
     ])
     const when = review.bindings[0].when!
@@ -312,6 +312,8 @@ describe('auto-review（判定型）结构钉板', () => {
     expect(evaluateWhen(when, { event: eventOf('session'), env })).toBe(false)
     // WT4-SE-16 组件访问同样只由人回答
     expect(evaluateWhen(when, { event: eventOf('widget'), env })).toBe(false)
+    // 开启扩展同样只由人回答（2026-11-03）
+    expect(evaluateWhen(when, { event: eventOf('extension'), env })).toBe(false)
     for (const objectType of ['path', 'command', 'gitTool', 'database', 'url', 'invocation']) {
       expect(evaluateWhen(when, { event: eventOf(objectType), env }), objectType).toBe(true)
     }
@@ -416,6 +418,81 @@ describe('XS-20 auto-review × 会话客体（经真 runner 的 decide）', () =
       expect(h.call(0).agentType.name).toBe('permission-reviewer')
 
       expect(h.warns().filter((msg) => msg.includes('when evaluation failed'))).toEqual([])
+      expect(h.warns()).toEqual([])
+    }
+  )
+})
+
+/**
+ * HB-10x / XS-20x XS-20 的扩展版：开启扩展（`objectType: 'extension'`）也只由人回答 —— 三门语言的 when 都排除它，
+ * 不派审查员、decide 交回 null（照旧问人）；同一个 runner 里路径客体照常派一次。
+ */
+describe('XS-20x auto-review × 扩展客体（经真 runner 的 decide）', () => {
+  const reviewer: InProcessAgentType = {
+    ...PROFILE,
+    name: 'permission-reviewer',
+    displayName: 'Permission Reviewer',
+    tools: ['read']
+  }
+
+  const EXTENSION_OPERATION = {
+    tool: 'tool_search: enable',
+    action: 'enable',
+    objectType: 'extension',
+    target: 'Extension(browser)',
+    facts: { server: 'browser', builtin: true }
+  }
+  const PATH_OPERATION = {
+    tool: 'write',
+    action: 'write',
+    objectType: 'path',
+    target: 'Write(/Users/u/notes.txt)',
+    facts: { path: '/Users/u/notes.txt', workingDirectory: '/ws' }
+  }
+
+  it.each(LANGS)('HB-10x %s：when 对 extension 为假（别的客体为真）', (lang) => {
+    const review = build(lang).find((hook) => hook.name === 'auto-review')!
+    const when = review.bindings[0].when!
+    const eventOf = (objectType: string): Record<string, unknown> => ({
+      trigger: 'permission.request',
+      operation: { objectType }
+    })
+    const env = { host: 'desktop' }
+    expect(evaluateWhen(when, { event: eventOf('extension'), env })).toBe(false)
+    expect(evaluateWhen(when, { event: eventOf('path'), env })).toBe(true)
+  })
+
+  it.each(LANGS)(
+    'XS-20x %s：objectType extension → 不派发、返回 null、没有事件；objectType path → 派 permission-reviewer 恰一次；零告警',
+    async (lang) => {
+      const review = build(lang).find((hook) => hook.name === 'auto-review')!
+      const h = makeRunner({
+        entries: [entryOf(review, 'builtin')],
+        resolveAgentProfile: (name) => (name === 'permission-reviewer' ? reviewer : null),
+        runTask: async () => verdictResult(verdict('allow'))
+      })
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({
+            operation: EXTENSION_OPERATION,
+            policy: { names: ['Ask Before Enabling an Extension'], prompt: 'p' }
+          })
+        )
+      ).toBeNull()
+      await settle()
+      expect(h.runTask).not.toHaveBeenCalled()
+      expect(h.events).toEqual([])
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({ operation: PATH_OPERATION })
+        )
+      ).toEqual({ result: verdict('allow'), hook: 'auto-review' })
+      expect(h.runTask).toHaveBeenCalledTimes(1)
+      expect(h.call(0).agentType.name).toBe('permission-reviewer')
       expect(h.warns()).toEqual([])
     }
   )

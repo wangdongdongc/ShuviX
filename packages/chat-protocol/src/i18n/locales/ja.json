@@ -514,7 +514,12 @@
     "widgetAskOperation": "操作",
     "widgetAskUnnamed": "名前のないウィジェット",
     "askRememberWidgetRead": "許可して記憶：このウィジェットを読める",
-    "askRememberWidgetWrite": "許可して記憶：このウィジェットを読み書きできる"
+    "askRememberWidgetWrite": "許可して記憶：このウィジェットを読み書きできる",
+    "extensionAskEnable": "拡張機能を有効にする",
+    "extensionAskCommand": "許可すると実行します：",
+    "extensionAskUrl": "許可すると接続します：",
+    "extensionAskCache": "現在のモデルは会話の途中でツールを追加するとキャッシュを保てないため、次のリクエストでプロンプトキャッシュの一部が外れます。",
+    "extensionAskCacheTokens": "現在のモデルは会話の途中でツールを追加するとキャッシュを保てないため、次のリクエストでプロンプトキャッシュの一部が外れます（前回のリクエストは約 {{tokens}} tokens）。"
   },
   "sessionConfig": {
     "title": "セッション設定",
@@ -1231,6 +1236,9 @@
     },
     "sessionLabel": "セッション",
     "sessionHint": "このタスクが属するセッションを読み書きする —— 名前の変更と、サブセッションの作成・実行",
+    "toolSearchLabel": "ツール検索",
+    "toolSearchHint": "このセッションでオフの MCP サーバーから必要なツールを探し、あなたの確認後に有効にします",
+    "toolSearchAskQuery": "エージェントの検索語：{{query}}",
     "widgetLabel": "ウィジェット",
     "widgetHint": "ウィジェット自身の操作でユーザーのウィジェットを使い、ウィジェットを作る",
     "knowledgeLabel": "ナレッジベース",

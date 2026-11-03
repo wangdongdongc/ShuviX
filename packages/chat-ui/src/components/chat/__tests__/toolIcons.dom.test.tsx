@@ -60,6 +60,12 @@ describe('TIc-1 内置工具的图标', () => {
     expect(withIcon.map(([name]) => name)).toContain('show_image')
   })
 
+  it('TIc-1 tool_search 的 Puzzle 真画成拼图（映射漏了就落回扳手）', () => {
+    expect(withIcon.map(([name]) => name)).toContain('tool_search')
+    const svg = draw(BUILTIN_TOOL_PRESENTATIONS.tool_search.presentation)
+    expect((svg.getAttribute('class') ?? '').split(/\s+/)).toContain('lucide-puzzle')
+  })
+
   it.each(withIcon)('TIc-1 %s：图标不落回扳手', (_name, def) => {
     const svg = draw(def.presentation)
     expect(isWrench(svg)).toBe(false)

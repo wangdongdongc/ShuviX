@@ -34,6 +34,9 @@
  *     一行（目录来自注入的解析器，命令那半句只给名单里有 bash / powershell 的档案）；没有目录时那一行整行消失，
  *     清单中间不留空行；别的档案不提它。
  *
+ *  6. `{{shuvix:extensionDiscovery}}`（PVW-E1…E5，2026-11-03）只对持有 `tool_search` 的 agent 说：列配置里有、这条
+ *     会话没开的服务器（已在名单里的、用户取消的都不列）；没持有就不去问 configuredServers，值是空串。
+ *
  * P1-11 起变量表是 agentHost 直接导出的 `desktopPromptVars`（会话核心在冻结人设时调它），这里直接
  * 调它（旧的创建工厂已由 P2-13 删掉）。其余 mock 只为让模块能加载（dao 会开 SQLite，
  * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findModelInvocable —— 真服务的构造函数会去碰
@@ -49,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   projectPick: vi.fn(),
   findEnabled: vi.fn(),
   findModelInvocable: vi.fn(),
+  /** 配置里启用、配齐了的 MCP 服务器（{{shuvix:extensionDiscovery}} 的候选）；每条用例复位成空 */
+  configuredServers: vi.fn(),
   /** builtinManualDir 的答复：内置说明书当前语言那一版的目录（null = 这台机器上没有）；每条用例复位 */
   manualDir: '/fixture/knowledge/shuvix/en' as string | null,
   /** Windows 上解析出的 PowerShell 版本（PVW-S*）；null = 用真的 getPowerShellConfig */
@@ -69,7 +74,9 @@ vi.mock('../../services/skillTool', () => ({ SkillTool: class {} }))
 vi.mock('../../services/skillService', () => ({
   skillService: { findEnabled: mocks.findEnabled, findModelInvocable: mocks.findModelInvocable }
 }))
-vi.mock('../../services/mcpService', () => ({ mcpService: {} }))
+vi.mock('../../services/mcpService', () => ({
+  mcpService: { configuredServers: mocks.configuredServers }
+}))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: {} }))
 vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: vi.fn() }))
@@ -186,6 +193,8 @@ beforeEach(() => {
   mocks.projectPick.mockReturnValue({ name: 'Proj', path: '/w/proj' })
   mocks.findEnabled.mockReset()
   mocks.findModelInvocable.mockReset()
+  mocks.configuredServers.mockReset()
+  mocks.configuredServers.mockReturnValue([])
   // 缺省：内置作图技能随包在架、没被停用、模型可调用
   mocks.findEnabled.mockReturnValue([BUILTIN])
   mocks.findModelInvocable.mockReturnValue([BUILTIN])
@@ -784,6 +793,90 @@ describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', (
       })
     }
     expect(checked).toBe(3)
+  })
+})
+
+describe('desktopPromptVars —— 可以申请开启的扩展（PVW-E）', () => {
+  const mcpServer = (
+    name: string,
+    type: 'stdio' | 'inproc' = 'stdio'
+  ): Record<string, unknown> => ({
+    id: `id-${name}`,
+    name,
+    type,
+    command: 'npx',
+    args: '[]',
+    env: '{}',
+    url: '',
+    headers: '{}',
+    cachedTools: JSON.stringify([{ name: 'take', description: 'SECRET_DESCRIPTION' }])
+  })
+
+  it('PVW-E1 持有 tool_search：列出没开的服务器（内置带说明、第三方只有名字），不带第三方的描述', async () => {
+    mocks.configuredServers.mockReturnValue([mcpServer('notes'), mcpServer('browser', 'inproc')])
+    const { extensionDiscovery } = await varsFor({ toolNames: ['tool_search'] })
+    expect(extensionDiscovery).toContain('`notes`')
+    expect(extensionDiscovery).toContain('`browser`: ')
+    expect(extensionDiscovery).toContain('`tool_search`')
+    expect(extensionDiscovery).not.toContain('<<list>>')
+    expect(extensionDiscovery).not.toContain('SECRET_DESCRIPTION')
+  })
+
+  it('PVW-E2 不持有 tool_search：空串，configuredServers 一次都不问', async () => {
+    mocks.configuredServers.mockReturnValue([mcpServer('notes')])
+    const { extensionDiscovery } = await varsFor({ toolNames: ['bash', 'read'] })
+    expect(extensionDiscovery).toBe('')
+    expect(mocks.configuredServers).not.toHaveBeenCalled()
+  })
+
+  it('PVW-E3 已在名单里的（勾着 / 档案声明的）不列；chrome 与 plan 不列', async () => {
+    mocks.configuredServers.mockReturnValue([
+      mcpServer('ticked'),
+      mcpServer('chrome', 'inproc'),
+      mcpServer('plan', 'inproc'),
+      mcpServer('free')
+    ])
+    const { extensionDiscovery } = await varsFor({ toolNames: ['tool_search', 'mcp:ticked'] })
+    expect(extensionDiscovery).toContain('`free`')
+    for (const name of ['ticked', 'chrome', 'plan']) {
+      expect(extensionDiscovery).not.toContain(`\`${name}\``)
+    }
+  })
+
+  it('PVW-E4 用户在这条会话取消的不列（取消记号读的是根会话的勾选）', async () => {
+    mocks.configuredServers.mockReturnValue([mcpServer('out'), mcpServer('free')])
+    mocks.pickSettings.mockReturnValue({ enabledTools: ['-mcp:out'] })
+    const { extensionDiscovery } = await varsFor({ toolNames: ['tool_search'] })
+    expect(extensionDiscovery).toContain('`free`')
+    expect(extensionDiscovery).not.toContain('`out`')
+  })
+
+  it('PVW-E5 持有但没有可开的 → 空串（整块收敛）；work 组装出来占位符不留、不留三连换行', async () => {
+    mocks.configuredServers.mockReturnValue([])
+    const work = builtins('en').find((p) => p.name === 'work')!
+    const vars = await varsFor({ toolNames: work.tools })
+    expect(vars.extensionDiscovery).toBe('')
+    const out = renderProfileSystemPrompt(work, vars)
+    expect(out).not.toContain('{{shuvix:extensionDiscovery}}')
+    expect(out).not.toContain('\n\n\n')
+  })
+
+  it('PVW-E6 work / chat / coding × 三语言组装：列表落在提示词里，占位符不留', async () => {
+    mocks.configuredServers.mockReturnValue([mcpServer('notes')])
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        for (const profile of builtins(language)) {
+          if (!['work', 'chat', 'coding'].includes(profile.name)) continue
+          const out = renderProfileSystemPrompt(
+            profile,
+            await varsFor({ toolNames: profile.tools })
+          )
+          const what = `${profile.name}.${language}`
+          expect(out, what).toContain('\n- `notes`')
+          expect(out, what).not.toContain('{{shuvix:extensionDiscovery}}')
+        }
+      })
+    }
   })
 })
 

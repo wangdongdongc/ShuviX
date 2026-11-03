@@ -39,6 +39,14 @@ export function toolOptOut(name: string): string {
   return `${TOOL_OPT_OUT_PREFIX}${name}`
 }
 
+/** 查找并申请开启这条会话没选的 MCP 服务器的那个内置工具 */
+export const TOOL_SEARCH_TOOL_NAME = 'tool_search'
+
+/** 输出给模型的服务器 / 工具名：只留字母数字和少数标点，并截断（服务器名是用户起的，工具名是服务器报的） */
+export function safeExtensionName(name: string): string {
+  return name.replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 64)
+}
+
 /** 勾选里能出现的条目：加的一项，或取消记号 —— 写入口据此过滤掉别的东西 */
 export function isToolSelectionEntry(entry: string): boolean {
   return isSessionScopedToolName(entry) || isToolOptOut(entry)

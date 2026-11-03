@@ -15,6 +15,7 @@
  *  - RL-22..29：合流、失败、取消（销毁 / 回退 / 关停取消，停下不取消 F3）、与创建 / 销毁串行；
  *  - RL-30..34：关了再开、重启、连续重配的差异形状；
  *  - RL-35（WT4-DL-04）：宿主启用了别的技能之后的重配不重装内置工具、不改记录的货架，重启后按锁记着的货架重装。
+ *  - LR-1：工具里等重配（`tool_search`）、回退已经立起闸门：只要工具的等待和 signal 竞争，回退就不会等死。
  */
 import { ROOT_CONVERSATION_ID, type Extension } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -815,6 +816,74 @@ describe('lock · reconfigure: serialization and cancellation', () => {
       expect(error).toMatchObject({ code: 'cancelled' })
       expect(session.lock).toBeUndefined()
       hold.release()
+    },
+    TIMEOUT
+  )
+
+  it(
+    'LR-1 a tool that races a reconfigure with its signal does not deadlock a rollback that raised the gate first',
+    async () => {
+      const config = scenarioConfig()
+      const gate = deferred()
+      const running = deferred()
+      const stopping = deferred()
+      const toolSettled = deferred()
+      let parked: Promise<ReconfigureOutcome> | undefined
+      const hold = holdTool('hold', gate.promise, {
+        // 闸门放行之前对中止充耳不闻：放行的时刻由用例定 —— 回退已经停在「等这次调用结束」的时候
+        signalAware: false,
+        onRun: () => running.resolve(),
+        afterGate: async (signal) => {
+          try {
+            parked = session.reconfigureAgent()
+            parked.catch(() => undefined)
+            await Promise.race([parked, aborted(signal!)])
+          } finally {
+            toolSettled.resolve()
+          }
+        }
+      })
+      const scenario = await scenarioW({
+        config,
+        toolHost: scenarioToolHost({
+          agentTools: [
+            {
+              ...hold,
+              // 只多听一下中止：听到了，回退就已经进了独占区、立起了闸门
+              execute: (args, api, context) => {
+                context.abortSignal?.addEventListener('abort', () => stopping.resolve())
+                return hold.execute(args, api, context)
+              }
+            }
+          ]
+        })
+      })
+      const { t } = scenario
+      const session = await t.open()
+      t.kit.queue(answer('first'))
+      expect(await session.submitUser('u1')).toEqual({})
+      const target = (await allEntries(await session.currentConversation())).filter(
+        (entry) => entry.kind === 'pi.user'
+      )[0]!.id as number
+
+      t.kit.queue(callTool('hold'))
+      const sending = session.submitUser('u2')
+      sending.catch(() => undefined)
+      await withTimeout(running.promise, 5000, 'hold runs')
+      expect(session.lock).toBeDefined()
+
+      config.toolOverlay = [...OVERLAY, 'mcp:new']
+      const rollback = session.rollbackTo(target)
+      await withTimeout(stopping.promise, 5000, 'the rollback stops the tool')
+      gate.resolve()
+
+      expect((await withTimeout(rollback, 5000, 'rollback')).ok).toBe(true)
+      await withTimeout(toolSettled.promise, 5000, 'tool settled')
+      expect(parked).toBeDefined()
+      expect(await withTimeout(parked!, 5000, 'parked reconfigure')).toEqual({ applied: false })
+      expect(session.lock).toBeUndefined()
+      expect(t.toolHost.reconfigureCalls).toEqual([])
+      await withTimeout(sending, 5000, 'send').catch(() => undefined)
     },
     TIMEOUT
   )

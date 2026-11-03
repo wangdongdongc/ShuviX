@@ -197,6 +197,11 @@ function buildAskMaterials(
       ? { command: entry, widget }
       : { command: entry, rememberEntry: entry, widget }
   }
+  // 扩展：卡片按 preview（名称、来源、缓存）渲染，这条文本给决策日志和旧客户端。没有记忆条目：开启之后这台就在
+  // 会话的选择里，选择本身就是记忆
+  if (object.type === 'extension' && typeof object.server === 'string') {
+    return { command: `Extension(${object.server})` }
+  }
   // 远端命令把目标机器写进卡片：用户批准一条 `rm -rf` 时，必须看得见它要跑在哪台机器上
   if (typeof object.command === 'string') {
     return {

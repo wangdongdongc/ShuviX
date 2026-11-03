@@ -20,6 +20,7 @@
  *   - PR-W1     main/index.ts 把审查者与「认审查员」的判断一并注入 toolContext（读源码）；
  *   - XS-21     会话客体（session 工具与别的会话交互）的 operation / facts：消息预览按 3000 截断，read 没有 message。
  *   - WT4-SE-18 组件客体（widget 工具用一个组件）的 operation / policy / facts。
+ *   - PR-E      扩展客体（tool_search 开启一台服务器）：facts 带 server 与 builtin（false 也带）。
  *   - PR-T      触发器替 bot 发的消息（来源 trigger）：进 delegatedTasks 并注明是哪个 bot 的触发，不算人写的。
  *               这几条按会话 id 换上 durable 摘要形状的转写项（digests），其余会话照旧走旧格式读者。
  *   - PR-SG     采纳的提议（`suggest` 工具，转写项 `suggested`，2026-10-25）：仍算人的话、进 userMessages，但逐字前缀
@@ -1137,6 +1138,41 @@ describe('PR —— 会话客体的 payload（XS-21）', () => {
       sessionId: 'X',
       ownTurn: false,
       ...COMMON_FACTS
+    })
+  })
+})
+
+// ─── 扩展客体（tool_search 开启一台 MCP 服务器） ─────────────
+
+/**
+ * PR-E 出厂的 auto-review 不审这类客体（见 builtinHooks 的 XS-20x），这里钉的是用户自己绑在 permission.request 上的
+ * hook 看到的那份：哪一台、是不是内置的。`builtin: false` 也要写进去 —— 第三方服务器才是要看的。
+ */
+describe('PR —— 扩展客体的 payload（PR-E）', () => {
+  const extensionEvent = (sid: string, builtin: boolean): PermissionRequestEvent =>
+    makeEvent(sid, {
+      action: 'enable',
+      tool: { name: 'tool_search', operation: 'enable' },
+      object: { type: 'extension', server: 'notes', builtin },
+      command: 'Extension(notes)'
+    })
+
+  it.each([false, true])('PR-E builtin %s：facts 带 server 与 builtin', async (builtin) => {
+    const payload = await buildPermissionRequestPayload(extensionEvent(newSession(), builtin))
+    expect(payload.operation.facts).toStrictEqual({
+      server: 'notes',
+      builtin,
+      ...COMMON_FACTS
+    })
+  })
+
+  it('PR-E operation：tool 带动作、objectType extension、target 是 Extension(x)', async () => {
+    const payload = await buildPermissionRequestPayload(extensionEvent(newSession(), false))
+    expect(payload.operation).toMatchObject({
+      tool: 'tool_search: enable',
+      action: 'enable',
+      objectType: 'extension',
+      target: 'Extension(notes)'
     })
   })
 })

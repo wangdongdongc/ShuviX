@@ -1102,6 +1102,11 @@ export class McpManager {
     return this.store.findEnabled().map((s) => `mcp:${s.name}`)
   }
 
+  /** 配置里启用、而且配齐了的服务器（url / headers 引用的 env 都有值）：缺 key 的连不上，不该拿去请用户批准 */
+  configuredServers(): McpServer[] {
+    return this.store.findEnabled().filter((server) => !this.resolveTemplates(server).missingKey)
+  }
+
   /**
    * 按服务器名取这条会话能用的全部注册项（宿主按服务器级注入）。没连上 = 空表（宿主先经
    * `ensureServerByName` 连起来）。`inproc` 按会话匹配，见 liveKeyByName。

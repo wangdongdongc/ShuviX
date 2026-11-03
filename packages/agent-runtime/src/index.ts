@@ -294,6 +294,7 @@ export {
   type GitObjectInput,
   type UrlObjectInput,
   type SessionObjectInput,
+  type ExtensionObjectInput,
   type WidgetObjectInput,
   urlObjectOf,
   type SecurityRule,
@@ -572,6 +573,7 @@ export {
   renderVisualGuide,
   renderVisualCraft,
   renderDocumentKind,
+  renderExtensionDiscovery,
   renderTempDirectory
 } from './agentProfile/fragments'
 export type { DocumentKindOptions } from './agentProfile/fragments'

@@ -32,6 +32,7 @@ import {
   Eye,
   Archive,
   Lightbulb,
+  Puzzle,
   ListChecks,
   Image,
   Bot,
@@ -94,6 +95,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Eye,
   Archive,
   Lightbulb,
+  Puzzle,
   ListChecks,
   Image,
   Bot

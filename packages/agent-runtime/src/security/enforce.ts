@@ -18,6 +18,7 @@
  * type 只做少数特判），新客体类型自动获得合理的兜底展示。
  * 拒绝文案与迁移前逐字一致（既有询问测试的等价护栏）；无通道文案随 ask 词汇统一改写过。
  */
+import { safeExtensionName } from '@shuvix/chat-protocol/toolSelection'
 import {
   isPermissionVerdict,
   type PermissionVerdict
@@ -70,6 +71,9 @@ function summarizeObject(request: SecurityRequest): string {
   if (object.type === 'widget' && typeof object.widgetId === 'string') {
     return `widget ${object.widgetId}`
   }
+  if (object.type === 'extension' && typeof object.server === 'string') {
+    return `extension ${object.server}`
+  }
   return object.type
 }
 
@@ -108,6 +112,10 @@ function displayName(request: SecurityRequest, opts: EnforceOpts): string {
   if (object.type === 'widget' && typeof object.name === 'string' && object.name) {
     return `widget "${object.name}" (${String(object.widgetId)})`
   }
+  // 这段文字会落进给模型的拒绝结果：名字过滤一下，日志（summarizeObject）留原样
+  if (object.type === 'extension' && typeof object.server === 'string') {
+    return `extension ${safeExtensionName(object.server)}`
+  }
   return summarizeObject(request)
 }
 
@@ -128,6 +136,8 @@ function deniedMessage(request: SecurityRequest, display: string): string {
       return request.action === 'write'
         ? `User denied changing data in ${display}`
         : `User denied reading ${display}`
+    case 'extension':
+      return `User denied enabling ${display}`
     default:
       return `User denied ${display}`
   }

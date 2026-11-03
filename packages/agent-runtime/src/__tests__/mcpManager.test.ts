@@ -704,6 +704,56 @@ describe('McpManager 可用性与批量装配', () => {
   })
 })
 
+describe('McpManager.configuredServers：拿得出来问的那些', () => {
+  it('MM-1 启用、没有模板 → 在；停用的不在；不连接任何东西', () => {
+    const h = setup([
+      row({ id: 'a-id', name: 'a' }),
+      row({ id: 'b-id', name: 'b', isEnabled: 0 }),
+      row({ id: 'c-id', name: 'c', type: 'stdio', command: 'node', url: '' })
+    ])
+
+    expect(h.mgr.configuredServers().map((server) => server.name)).toEqual(['a', 'c'])
+    expect(h.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('MM-2 url / headers 引用的 env 没给 → 不在', () => {
+    const h = setup([
+      row({ id: 'u-id', name: 'url-missing', url: 'https://{{HOST}}/mcp' }),
+      row({ id: 'h-id', name: 'header-missing', headers: '{"Authorization":"{{TOKEN}}"}' }),
+      row({ id: 'e-id', name: 'empty-value', url: 'https://{{HOST}}/mcp', env: '{"HOST":""}' }),
+      row({ id: 'p-id', name: 'partial', url: 'https://{{A}}/{{B}}', env: '{"A":"x"}' })
+    ])
+
+    expect(h.mgr.configuredServers()).toEqual([])
+  })
+
+  it('MM-3 env 配齐了 → 在，交回的是配置原样（模板不展开，地址里的 token 不会外流）', () => {
+    const filled = row({
+      id: 'f-id',
+      name: 'filled',
+      url: 'https://{{HOST}}/mcp',
+      headers: '{"Authorization":"{{TOKEN}}"}',
+      env: '{"HOST":"example.test","TOKEN":"secret"}'
+    })
+    const h = setup([filled])
+
+    const [server] = h.mgr.configuredServers()
+
+    expect(server).toBe(filled)
+    expect(server.url).toBe('https://{{HOST}}/mcp')
+  })
+
+  it('MM-4 只有 env、url / headers 不引用它 → 在（不是模板就没有缺的键）', () => {
+    const h = setup([row({ id: 'n-id', name: 'no-template', env: '{"UNUSED":""}' })])
+    expect(h.mgr.configuredServers().map((server) => server.name)).toEqual(['no-template'])
+  })
+
+  it('MM-5 内置（inproc）服务器没有模板 → 在', () => {
+    const h = setup([row({ id: 'i-id', name: 'browser', type: 'inproc', isBuiltin: 1, url: '' })])
+    expect(h.mgr.configuredServers().map((server) => server.name)).toEqual(['browser'])
+  })
+})
+
 describe('McpManager 连接中途的意外', () => {
   it('MCPL-U-13: 掉线后状态回落、工具清空；已构建的注册项下一次调用原地重连一次再调', async () => {
     const h = setup([row({ id: 'a-id', name: 'a' })])

@@ -22,6 +22,9 @@ import visualGuideJa from './visual-guide.ja.md?raw'
 import documentKindEn from './document-kind.md?raw'
 import documentKindZh from './document-kind.zh.md?raw'
 import documentKindJa from './document-kind.ja.md?raw'
+import extensionDiscoveryEn from './extension-discovery.md?raw'
+import extensionDiscoveryZh from './extension-discovery.zh.md?raw'
+import extensionDiscoveryJa from './extension-discovery.ja.md?raw'
 import tempDirectoryEn from './temp-directory.md?raw'
 import tempDirectoryZh from './temp-directory.zh.md?raw'
 import tempDirectoryJa from './temp-directory.ja.md?raw'
@@ -191,6 +194,40 @@ export function renderDocumentKind(
 }
 
 /** 临时目录占位（片段手写 `<<dir>>`，渲染时换成本会话临时目录的绝对路径） */
+const EXTENSION_DISCOVERY_SOURCES = {
+  en: extensionDiscoveryEn,
+  zh: extensionDiscoveryZh,
+  ja: extensionDiscoveryJa
+}
+
+const EXTENSION_LIST_TOKEN = '<<list>>'
+
+/** 提示词里的一台可开启的扩展：名字，内置服务器再带一句本地化的说明 */
+export interface ExtensionDiscoveryEntry {
+  name: string
+  hint?: string
+}
+
+/**
+ * `{{shuvix:extensionDiscovery}}`：这条会话可以申请开启哪些扩展。没有可开启的（或这个 agent 没有 `tool_search`，宿主
+ * 就传空表）→ 空串，占位符整块消失：提示词不指向够不着的东西。
+ *
+ * 只有名字和内置说明，从不带第三方服务器自己写的描述 —— 用户还没批准它，那段文字不该先进系统提示词。
+ */
+export function renderExtensionDiscovery(
+  language: string | undefined,
+  entries: readonly ExtensionDiscoveryEntry[]
+): string {
+  if (entries.length === 0) return ''
+  const list = entries
+    .map((entry) => `\n- \`${entry.name}\`${entry.hint ? `: ${entry.hint}` : ''}`)
+    .join('')
+  return pickLocalizedSource(EXTENSION_DISCOVERY_SOURCES, language)
+    .split(EXTENSION_LIST_TOKEN)
+    .join(list)
+    .trim()
+}
+
 const TEMP_DIR_TOKEN = '<<dir>>'
 
 export interface TempDirectoryOptions {

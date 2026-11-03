@@ -417,6 +417,7 @@ describe('policyService —— ask-on-read 不再是内置', () => {
         .sort()
     ).toEqual([
       'ask-on-command',
+      'ask-on-extension',
       'ask-on-external-path',
       'ask-on-session-access',
       'ask-on-widget-access',

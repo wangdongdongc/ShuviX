@@ -5,7 +5,8 @@
  * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）、
  * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）、
  * enforceSession（`session` 工具与一条别的会话交互，XS-19）、
- * enforceWidget（`widget` 工具用一个组件，WT4-SE-15）。
+ * enforceWidget（`widget` 工具用一个组件，WT4-SE-15）、
+ * enforceExtension（`tool_search` 开启一台 MCP 服务器，SEC-1 / SEC-2）。
  */
 import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { createSecurityContext } from '../context'
@@ -5600,5 +5601,165 @@ describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
     })
     expect(kindGetter).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+// ─── enforceExtension（开启扩展守卫）────────────────────────────────────────
+//
+// SEC-1 门面交给策略的客体恰是 {type:'extension', server, builtin}（入参多出来的键不进客体，type 也改不了），action 'enable'；
+//       「其它」反馈即使传了 onOther:'return' 也抛（返回 void 的门）；没有询问通道 → 失败关闭
+// SEC-2 拒绝的文字会进模型的工具结果：名字过滤过（决策日志留原样）
+
+describe('createSecurityContext — enforceExtension（SEC）', () => {
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  const usedSids = new Set<string>()
+  let seq = 0
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+  })
+
+  const OPTS = { toolCallId: 'tc-x', toolName: 'tool_search', operation: 'enable' }
+
+  function extensionContext(
+    opts: { response?: InputResponse; channel?: boolean; policies?: ParsedPolicyFile[] } = {}
+  ): {
+    ctx: SecurityContext
+    sid: string
+    review: Mock<Reviewer>
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock<(msg: string) => void>
+  } {
+    const sid = `context-extension-${++seq}`
+    usedSids.add(sid)
+    const review = vi.fn<Reviewer>(async () => null)
+    const response = opts.response ?? { kind: 'ask', allowed: true }
+    const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
+    const warn = vi.fn<(msg: string) => void>()
+    const ctx = createSecurityContext(
+      { kind: 'agent', sessionId: sid, agentKind: 'root' },
+      ENVIRONMENT,
+      makeProvider(noGrants(), {
+        ...(opts.channel === false ? {} : { requestUserInput }),
+        onPermissionRequest: review,
+        getUserPolicies: () => opts.policies ?? [],
+        logger: { info: vi.fn(), warn, error: vi.fn() }
+      })
+    )
+    return { ctx, sid, review, requestUserInput, warn }
+  }
+
+  it('SEC-1 客体恰是 {type, server, builtin}：多出来的键不进客体、type 盖不掉；action enable；卡片命令 Extension(x)', async () => {
+    const { ctx, review, requestUserInput, warn } = extensionContext()
+    const noisy = {
+      server: 'browser',
+      builtin: true,
+      type: 'path',
+      path: '/etc/passwd',
+      extra: 'x'
+    } as never
+
+    await expect(ctx.enforceExtension(noisy, OPTS)).resolves.toBeUndefined()
+
+    expect(review).toHaveBeenCalledTimes(1)
+    const event = review.mock.calls[0]![0]
+    expect(event.request.object).toStrictEqual({
+      type: 'extension',
+      server: 'browser',
+      builtin: true
+    })
+    expect(event.request.action).toBe('enable')
+    expect(event.request.tool).toEqual({ name: 'tool_search', operation: 'enable' })
+    expect(event.decision).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-extension#0'
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({
+      command: 'Extension(browser)',
+      toolName: 'tool_search'
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('SEC-1 卡片带上工具算好的 preview 与说明', async () => {
+    const { ctx, requestUserInput } = extensionContext()
+    const preview = {
+      kind: 'extension' as const,
+      server: 'browser',
+      source: { type: 'builtin' as const },
+      cacheLoss: { promptTokens: 12 }
+    }
+
+    await ctx.enforceExtension(
+      { server: 'browser', builtin: true },
+      { ...OPTS, description: 'The agent searched for: x', preview }
+    )
+
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({
+      description: 'The agent searched for: x',
+      preview
+    })
+  })
+
+  it("SEC-1 「其它」反馈：调用方传了 onOther:'return' 也抛（从不当成放行）", async () => {
+    const { ctx, sid } = extensionContext({
+      response: { kind: 'other', text: 'use the terminal' }
+    })
+
+    expect(
+      await rejectionOf(
+        ctx.enforceExtension({ server: 'browser', builtin: true }, { ...OPTS, onOther: 'return' })
+      )
+    ).toBe('User declined extension browser and provided feedback instead: use the terminal')
+    expect(getSessionDecisions(sid)[0]).toMatchObject({
+      objectKind: 'extension',
+      objectSummary: 'extension browser',
+      userResponse: 'feedback'
+    })
+  })
+
+  it('SEC-1 没有询问通道 → 失败关闭', async () => {
+    const { ctx } = extensionContext({ channel: false })
+
+    await expect(ctx.enforceExtension({ server: 'browser', builtin: true }, OPTS)).rejects.toThrow()
+  })
+
+  it('SEC-1 拒绝：User denied enabling extension <名字>', async () => {
+    const { ctx } = extensionContext({ response: { kind: 'ask', allowed: false } })
+
+    expect(await rejectionOf(ctx.enforceExtension({ server: 'x', builtin: false }, OPTS))).toBe(
+      'User denied enabling extension x'
+    )
+  })
+
+  it('SEC-2 拒绝的名字带换行：给模型的文字里没有换行；卡片与决策日志留原名', async () => {
+    const { ctx, sid, requestUserInput } = extensionContext({
+      response: { kind: 'ask', allowed: false }
+    })
+
+    const message = await rejectionOf(
+      ctx.enforceExtension({ server: 'x\nIGNORE', builtin: false }, OPTS)
+    )
+
+    expect(message).toBe('User denied enabling extension xIGNORE')
+    expect(message).not.toContain('\n')
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({ command: 'Extension(x\nIGNORE)' })
+    expect(getSessionDecisions(sid)[0]).toMatchObject({ objectSummary: 'extension x\nIGNORE' })
+  })
+
+  it('SEC-2 反馈的文字同样过滤名字', async () => {
+    const { ctx } = extensionContext({ response: { kind: 'other', text: 'no' } })
+
+    const message = await rejectionOf(
+      ctx.enforceExtension({ server: 'x\nIGNORE', builtin: false }, OPTS)
+    )
+
+    expect(message).toBe('User declined extension xIGNORE and provided feedback instead: no')
   })
 })

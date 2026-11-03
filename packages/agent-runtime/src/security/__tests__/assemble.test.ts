@@ -1058,6 +1058,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
       ['ask-on-session-access#1', 'builtin'],
       ['ask-on-widget-access#0', 'builtin'],
       ['ask-on-widget-access#1', 'builtin'],
+      ['ask-on-extension#0', 'builtin'],
       ['network-admission#0', 'builtin'],
       ['daily-bot-access#0', 'builtin'],
       ['daily-bot-access#1', 'builtin'],
@@ -1795,6 +1796,7 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access#1',
       'ask-on-widget-access#0',
       'ask-on-widget-access#1',
+      'ask-on-extension#0',
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
@@ -1845,14 +1847,15 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-external-path',
       'ask-on-session-access',
       'ask-on-widget-access',
+      'ask-on-extension',
       'network-admission',
       'daily-bot-access',
       'redact-sensitive',
       'ask-on-command',
       'extra'
     ])
-    expect(asked[6]).toBe(copy)
-    expect(asked[7]).toBe(extra)
+    expect(asked[7]).toBe(copy)
+    expect(asked[8]).toBe(extra)
     expect(asked[0].objectId).toBe(EXT_ID)
     // 内置 ask-on-command（被 copy 遮蔽）不在其中
     expect(asked.filter((p) => p.objectId === CMD_ID)).toEqual([])
@@ -1875,6 +1878,7 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access#1',
       'ask-on-widget-access#0',
       'ask-on-widget-access#1',
+      'ask-on-extension#0',
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
@@ -1913,6 +1917,7 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access#1',
       'ask-on-widget-access#0',
       'ask-on-widget-access#1',
+      'ask-on-extension#0',
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',

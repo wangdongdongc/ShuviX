@@ -42,6 +42,7 @@ import {
   type SecurityHostProvider,
   type SecuritySubject,
   type SessionObjectInput,
+  type ExtensionObjectInput,
   type WidgetObjectInput,
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
@@ -52,7 +53,11 @@ import { shuvixFileKindOfProject, type ShuvixFileKind } from '@shuvix/chat-proto
 import i18next from 'i18next'
 import { createLogger } from '../logger'
 
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  AskPreview,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 
 export type {
   InputRequest,
@@ -283,6 +288,34 @@ export async function assertWidgetAccess(
     ...opts.owner,
     toolName: opts.toolName,
     operation: opts.operation,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    abortError: TOOL_ABORTED
+  })
+}
+
+/**
+ * 开启扩展的 PEP（`tool_search`）：出厂的 ask-on-extension 每次都问，只由用户回答。卡片的内容（来源、缓存）
+ * 由工具算好经 `preview` 带上。拒绝 / 取消 / 反馈时抛错，文案给模型。
+ */
+export async function assertExtensionAccess(
+  ctx: ToolContext,
+  object: ExtensionObjectInput,
+  opts: {
+    toolCallId: string
+    toolName: string
+    description: string
+    preview: AskPreview
+    owner?: CallOwner
+    signal?: AbortSignal
+  }
+): Promise<void> {
+  await getDesktopSecurityContext(ctx).enforceExtension(object, {
+    toolCallId: opts.toolCallId,
+    ...opts.owner,
+    toolName: opts.toolName,
+    operation: 'enable',
+    description: opts.description,
+    preview: opts.preview,
     ...(opts.signal ? { signal: opts.signal } : {}),
     abortError: TOOL_ABORTED
   })
@@ -533,6 +566,7 @@ export function getDesktopSecurityContext(
       forCall(opts).enforceSession(mode, object, withRestored(opts)),
     enforceWidget: (mode, object, opts) =>
       forCall(opts).enforceWidget(mode, object, withRestored(opts)),
+    enforceExtension: (object, opts) => forCall(opts).enforceExtension(object, withRestored(opts)),
     enforceInvocation: (opts) => forCall(opts).enforceInvocation(withRestored(opts))
   }
 }

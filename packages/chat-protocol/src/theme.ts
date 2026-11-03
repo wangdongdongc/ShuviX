@@ -29,6 +29,7 @@ export type LucideIconName =
   | 'MessageCircleQuestion'
   | 'Monitor'
   | 'Palette'
+  | 'Puzzle'
   | 'Search'
   | 'SquareTerminal'
   | 'Terminal'

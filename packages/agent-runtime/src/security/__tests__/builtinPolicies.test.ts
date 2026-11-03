@@ -11,6 +11,8 @@
  * （XS-10 形态；XS-11…15 行为，见「内置策略行为判定」末尾的那一组）。
  * 第四份（组件访问）：ask-on-widget-access —— `widget` 工具读（read）/ 改（write）一个组件，不在会话权限表
  * （`vars.aclWidgetRead` / `vars.aclWidgetWrite`）里时询问（WT4-SE-01 形态；WT4-SE-02…08 行为，紧跟会话那一组）。
+ * 第五份（开启扩展，2026-11-03 用户裁定）：ask-on-extension —— `tool_search` 要开启一台这条会话还没选的 MCP 服务器，
+ * 每次都问（BP-E，紧跟组件那一组）。
  * 管远程访问的一份（2026-10-19 用户裁定）：network-admission —— network 主体、发送方不是本机的 HTTP 请求
  * 一律 deny。这是出厂唯一的 deny：网络点位没有人可问（ask 会降级为拒绝），只作用于 network 主体。
  *
@@ -93,21 +95,22 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 7 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 8 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(7)
+    expect(policies).toHaveLength(8)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-command',
       'ask-on-session-access',
       'ask-on-widget-access',
+      'ask-on-extension',
       'network-admission',
       'daily-bot-access',
       'redact-sensitive'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(7)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(8)
   })
 
   it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
@@ -221,6 +224,7 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-session-access#1', 'ask'],
       ['ask-on-widget-access#0', 'ask'],
       ['ask-on-widget-access#1', 'ask'],
+      ['ask-on-extension#0', 'ask'],
       ['network-admission#0', 'deny'],
       ['daily-bot-access#0', 'force-allow'],
       ['daily-bot-access#1', 'force-allow'],
@@ -2564,6 +2568,125 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         'allow'
       )
       expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── ask-on-extension：`tool_search` 开启一台 MCP 服务器 ─────────────────────────────────────
+  //
+  // BP-E 形态：一条 ask，只管 agent × extension × enable × desktop；三门语言判定字段一致、提示语各自翻译
+  // BP-E 行为：问（卡片命令 Extension(x)，没有「允许并记住」—— 开启之后选择本身就是记忆）；
+  //      用户 force-allow 只放过点名的那一台；plain allow 压不过 ask；user 主体 / 别的 action 不受它约束
+  describe('ask-on-extension（开启扩展，BP-E）', () => {
+    const extension = (server: string, builtin = false): SecurityObject => ({
+      type: 'extension',
+      server,
+      builtin
+    })
+
+    const userRule = (name: string, effect: 'force-allow' | 'allow'): ParsedPolicyFile => ({
+      name,
+      displayName: name,
+      description: '',
+      rules: [
+        {
+          effect,
+          conditions: { 'object.type': ['extension'], action: ['enable'] },
+          match: "object.server == 'browser'"
+        }
+      ],
+      body: ''
+    })
+
+    const expectAsked = (decision: SecurityDecision, server: string): void => {
+      expect(decision).toMatchObject({
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-extension#0',
+        matched: ['ask-on-extension#0']
+      })
+      expect(decision.ask).toStrictEqual({ command: `Extension(${server})` })
+      expect(decision.ask).not.toHaveProperty('rememberEntry')
+    }
+
+    it('BP-E 形态：一条 ask × extension × enable，desktop 限定；没有 match、没有 lets', () => {
+      const policy = byName('ask-on-extension')
+      expect(policy.scope).toStrictEqual({
+        'subject.kind': ['agent'],
+        'object.type': ['extension'],
+        'env.host': ['desktop']
+      })
+      expect(policy.lets).toBeUndefined()
+      expect(policy.rules.map(withoutPrompt)).toStrictEqual([
+        { effect: 'ask', conditions: { action: ['enable'] } }
+      ])
+      expect(policy.rules[0].prompt).toBeTruthy()
+      expect(policy.displayName).toBe('Ask Before Enabling an Extension')
+    })
+
+    it('BP-E 三门语言：都解析得出，判定字段与 en 一致，提示语与显示名各自翻译', () => {
+      const sources = sourcesOf('ask-on-extension')
+      expect(Object.keys(sources).sort()).toEqual(['en', 'ja', 'zh'])
+      const en = parsePolicyDefinitionFile(sources.en, 'ask-on-extension')!
+      for (const language of ['zh', 'ja']) {
+        const localized = parsePolicyDefinitionFile(sources[language]!, 'ask-on-extension')!
+        expect(localized.rules.map(withoutPrompt), language).toEqual(en.rules.map(withoutPrompt))
+        expect(localized.rules[0].prompt, language).toBeTruthy()
+        expect(localized.rules[0].prompt, language).not.toBe(en.rules[0].prompt)
+        expect(localized.displayName, language).not.toBe(en.displayName)
+      }
+    })
+
+    it.each(['en', 'zh', 'ja'])(
+      'BP-E %s：问，判定与语言无关，卡片上的提示语是那门语言的',
+      (language) => {
+        const provider = makeProvider({ getLanguage: () => language })
+        const decision = decide('enable', extension('x'), { provider })
+        expectAsked(decision, 'x')
+        const raw = parsePolicyDefinitionFile(
+          sourcesOf('ask-on-extension')[language]!,
+          'ask-on-extension'
+        )!
+        expect(decision.prompt?.text).toBe(raw.rules[0].prompt)
+        expect(decision.prompt?.policies).toEqual([raw.displayName])
+      }
+    )
+
+    it('BP-E 问：内置与第三方都一样；卡片命令 Extension(x)，没有 rememberEntry，零告警', () => {
+      const sinks = warnSinks()
+      const provider = makeProvider({ logger: sinks.logger })
+      for (const object of [extension('x'), extension('browser', true)]) {
+        expectAsked(
+          decide('enable', object, { provider, warn: sinks.evalWarn }),
+          String(object.server)
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-E 用户 force-allow 只放过点名的那一台，别的照问', () => {
+      const provider = makeProvider({
+        getUserPolicies: () => [userRule('trust-browser', 'force-allow')]
+      })
+      expect(decide('enable', extension('browser', true), { provider })).toMatchObject({
+        effect: 'allow',
+        tier: 'force-allow',
+        winning: 'trust-browser#0'
+      })
+      expectAsked(decide('enable', extension('ssh', true), { provider }), 'ssh')
+    })
+
+    it('BP-E 用户 plain allow 压不过 ask：照问', () => {
+      const provider = makeProvider({ getUserPolicies: () => [userRule('plain', 'allow')] })
+      expect(decide('enable', extension('browser', true), { provider })).toMatchObject({
+        effect: 'ask',
+        winning: 'ask-on-extension#0'
+      })
+    })
+
+    it('BP-E 不约束 user 主体与别的宿主', () => {
+      expect(decide('enable', extension('x'), { subjectKind: 'user' }).effect).toBe('allow')
+      expect(decide('enable', extension('x'), { host: 'extension' }).effect).toBe('allow')
     })
   })
 

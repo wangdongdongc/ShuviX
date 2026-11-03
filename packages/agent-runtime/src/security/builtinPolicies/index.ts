@@ -16,6 +16,8 @@
  *   - ask-on-widget-access（2026-10-27 用户裁定）：`widget` 工具用一个组件（调它的操作、构建、预览、跑 SQL、导出），
  *     会话权限表（`vars.aclWidgetRead` / `vars.aclWidgetWrite`）里没有覆盖这次访问的组件行时询问。同会话访问，
  *     **只由人回答**（auto-review 的 `when` 也把组件客体排除在外）。
+ *   - ask-on-extension（2026-11-03 用户裁定）：`tool_search` 要开启一台这条会话还没选的 MCP 服务器，每次都问，
+ *     **只由人回答**（auto-review 的 `when` 也把它排除在外）。开启之后这台就在会话的选择里，不再问。
  * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门；想要更多防护（系统目录拒写、
  * 灾难命令拒绝、git / 数据库 / 子会话 / 新站点询问……）写成自己的策略即可 —— 各个执行点都还在，
  * 只是出厂不再挂门。被删掉的出厂策略原文留作测试夹具（`__tests__/fixtures/`）。
@@ -74,6 +76,7 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-command' },
   { name: 'ask-on-session-access' },
   { name: 'ask-on-widget-access' },
+  { name: 'ask-on-extension' },
   { name: 'network-admission' },
   { name: 'daily-bot-access' },
   { name: 'redact-sensitive' }
