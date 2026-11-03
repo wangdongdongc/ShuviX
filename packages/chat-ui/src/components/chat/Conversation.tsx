@@ -350,12 +350,18 @@ export function Conversation({
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
     [sessionId, messages]
   )
-  // 列表等这条会话的视图到了再挂。视图到达之前 messages 是空的，却可能已经有东西要画：运行中的会话
-  // 退订时留下「还在跑」的余项（isStreaming，见 releaseSessionView），切回来就是一张孤零零的流式占位卡。
-  // 那时挂上列表，初始定位落在这一项上；等真消息到了，初始定位早已用掉，列表就停在会话开头。
+  // 列表与空态都等这条会话的视图到了再画。视图到达之前 messages 是空的，这个「空」不说明任何事：画空态，
+  // 每次打开有记录的会话都会先闪一下空态（桌面是整张会话设置面板）。
+  // 也可能已经有东西要画：运行中的会话退订时留下「还在跑」的余项（isStreaming，见 releaseSessionView），
+  // 切回来就是一张孤零零的流式占位卡。那时挂上列表，初始定位落在这一项上；等真消息到了，初始定位早已用掉，
+  // 列表就停在会话开头。
   // 乐观占位例外：那是刚建、还没有历史的会话，没有「底部」可找，刚发出的那句话也不能等后端
   const viewLoaded = useChatStore((s) => s.sessionViews[sessionId] !== undefined)
   const listReady = viewLoaded || !!pendingPrompt
+  // 空态只在**真的什么都没有**时才顶上：乐观占位也算内容 —— 漏掉它，「新会话第一条消息」
+  // 与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
+  // messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病
+  const isEmpty = messages.length === 0 && !isStreaming && !pendingPrompt
   // 仅当最后一条消息是助手消息时才允许重新生成
   const lastAssistantId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -385,12 +391,13 @@ export function Conversation({
     <>
       {/* 对话列 relative 锚点：悬浮输入卡片绝对贴底定位于此（与笔记本会话同构） */}
       <div ref={rootRef} className="relative flex-1 min-h-0 flex flex-col">
-        {/* 空态只在**真的什么都没有**时才顶上：乐观占位也算内容 —— 漏掉它，「新会话第一条消息」
-            与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
-            messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病 */}
-        {messages.length === 0 && !isStreaming && !pendingPrompt ? (
+        {!listReady ? (
+          // 视图还没到：先空着，等它带着真消息（或确实没有消息）到了再决定画什么（见 listReady）
+          <div className="flex-1 min-h-0" />
+        ) : isEmpty ? (
           // 空态同样按输入卡片高度留白，避免居中内容被悬浮卡片遮挡
           <div
+            data-conversation-empty
             className="flex-1 min-h-0 flex flex-col"
             style={{ paddingBottom: 'var(--chat-input-h, 0px)' }}
           >
@@ -400,9 +407,6 @@ export function Conversation({
               </div>
             )}
           </div>
-        ) : !listReady ? (
-          // 有余项占位、视图还没到：先空着，等视图带着真消息到了再挂列表（见 listReady）
-          <div className="flex-1 min-h-0" />
         ) : (
           // 按会话重挂：初始定位只在挂载那一刻生效，「在不在底部」的状态也只属于这一份列表
           <SuggestionContext.Provider value={suggestionContext}>

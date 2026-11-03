@@ -2,7 +2,7 @@
 /**
  * Conversation 的消息列表挂载时机、初始落点与「回到底部」按钮（jsdom）。
  *
- *   - 挂载门：视图到了（或有乐观占位）才挂 Virtuoso；只有运行中的余项、视图未到时什么都不挂（不画空态、
+ *   - 挂载门：视图到了（或有乐观占位）才挂 Virtuoso、才画空态；视图未到时什么都不挂（不画空态、
  *     不出按钮）。挂上时的初始位置是 `{index:'LAST', align:'end'}`（真底，含 Footer）；
  *   - 宽限期：挂上后先不认「不在底部」，直到第一次报「在底部」或过了 800ms；
  *   - 点击：离底超过三屏（严格大于）或拿不到滚动区 → `behavior:'auto'`，否则 `'smooth'`；
@@ -254,6 +254,34 @@ describe('挂载门', () => {
     expect(stubPresent()).toBe(false)
     expect(virt.mounts).toBe(0)
     expect(button()).toBeNull()
+  })
+
+  it('GATE-3a 视图未到、也没有余项：不画空态（打开有记录的会话不闪空态）；视图带着消息到了直接是列表', () => {
+    render(S1)
+    expect(emptyPresent()).toBe(false)
+    expect(virt.mounts).toBe(0)
+
+    loadView(S1, history(S1))
+    expect(emptyPresent()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+
+  it('GATE-3b 切到另一条视图未到的会话：同样不画空态，上一条的列表也不留着', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    expect(stubPresent()).toBe(true)
+
+    render(S2)
+    expect(emptyPresent()).toBe(false)
+    expect(stubPresent()).toBe(false)
+  })
+
+  it('GATE-3c 视图不可用（会话被删，视图回到空）：画空态', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    act(() => applySessionView(S1, null))
+    expect(emptyPresent()).toBe(true)
+    expect(stubPresent()).toBe(false)
   })
 
   it('GATE-4 列表的到底阈值是 160px', () => {
