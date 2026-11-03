@@ -147,7 +147,7 @@ beforeEach(() => {
   api = installFakeApi()
   installRaf()
   scrollSpy = stubScrollIntoView()
-  useBrowserTabsStore.setState({ settingsFocus: null, pageCover: null })
+  useBrowserTabsStore.setState({ settingsFocus: null })
 })
 
 afterEach(() => {

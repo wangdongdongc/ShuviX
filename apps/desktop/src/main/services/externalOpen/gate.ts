@@ -170,9 +170,16 @@ function isDevRendererUrl(url: string): boolean {
  * 开发环境的 HMR 地址放行，不然渲染端一刷新就被自己的守卫挡住 —— 比的是**源**而不是前缀：
  * `http://localhost:5173.evil.example/` 也 startsWith 得了 `http://localhost:5173`。
  */
-export function guardAppWindow(win: BrowserWindow, source?: ExternalOpenSource): void {
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void routeExternalUrl(url, { parent: win, source })
+export function guardAppWindow(
+  win: BrowserWindow,
+  source?: ExternalOpenSource,
+  /** 这个窗口自己要开的（浏览器窗口的弹层）：回非 null 就照它办，不走外链那条路 */
+  allowOpen?: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse | null
+): void {
+  win.webContents.setWindowOpenHandler((details) => {
+    const allowed = allowOpen?.(details)
+    if (allowed) return allowed
+    void routeExternalUrl(details.url, { parent: win, source })
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {

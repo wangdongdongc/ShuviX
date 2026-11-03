@@ -1,33 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileText, Globe, History, Lock, Settings, TriangleAlert, ZoomIn } from 'lucide-react'
 import {
   internalPageOfTab,
   useBrowserTabsStore,
-  type BrowserTabInfo,
-  type BrowserViewMode
+  type BrowserTabInfo
 } from '../../stores/browserTabsStore'
 import { resolveOmniboxInput, SEARCH_ENGINES, urlDisplayOf, type SearchEngineId } from './omnibox'
 import { buildOmniboxMatches, type OmniboxMatch } from './omniboxSuggest'
 import { useOmniboxSuggestions } from './useOmniboxSuggestions'
 import { OmniboxPopup } from './OmniboxPopup'
 import { SiteInfoBubble } from './SiteInfoBubble'
+import { BrowserPopover } from './BrowserPopover'
+import { POPOVER_FOCUS_SETTLE_MS } from './browserPopoverHost'
 
 const POPUP_ID = 'omnibox-suggestions'
 const NO_MATCHES = { matches: [] as OmniboxMatch[], inline: null as string | null }
-
-/** 这一页在页面区里是不是原生页面（空白页、内部页面、错误页是外壳的 DOM，不用截图顶） */
-function showsNativePage(tab: BrowserTabInfo | null): tab is BrowserTabInfo {
-  return (
-    !!tab && !!tab.url && tab.url !== 'about:blank' && !internalPageOfTab(tab) && !tab.loadError
-  )
-}
-
-/** 页面区宽度 × devicePixelRatio（截图按它抓，顶上去与原生页面一样清楚） */
-function pageAreaPixelWidth(): number {
-  const area = document.querySelector('[data-page-area]')?.getBoundingClientRect()
-  return Math.round((area?.width || window.innerWidth) * window.devicePixelRatio)
-}
 
 /**
  * 地址栏（Chrome 的 omnibox）：未聚焦时显示主机名突出、其余变淡，前面一个安全标识；聚焦时是完整地址、整段选中。
@@ -45,14 +33,12 @@ function pageAreaPixelWidth(): number {
 export function Omnibox({
   tab,
   engine,
-  searchSuggest,
-  viewMode
+  searchSuggest
 }: {
   tab: BrowserTabInfo | null
   engine: SearchEngineId
   /** 设置里开着「显示搜索建议」 */
   searchSuggest: boolean
-  viewMode: BrowserViewMode
 }): React.JSX.Element {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -62,8 +48,7 @@ export function Omnibox({
   const createTab = useBrowserTabsStore((s) => s.createTab)
   const activateTab = useBrowserTabsStore((s) => s.activateTab)
   const zoomTab = useBrowserTabsStore((s) => s.zoomTab)
-  const setPageCover = useBrowserTabsStore((s) => s.setPageCover)
-  const covered = useBrowserTabsStore((s) => !!s.pageCover)
+  const rootRef = useRef<HTMLDivElement>(null)
 
   const [editing, setEditing] = useState(false)
   /** 用户敲的字（不含内联补上的那段） */
@@ -103,10 +88,8 @@ export function Omnibox({
   )
   const { matches } = result
   const sel = Math.min(selected, Math.max(0, matches.length - 1))
-  /** 想开下拉：在编辑、敲过字、有建议 */
-  const wantPopup = editing && typed && matches.length > 0
-  /** 真开着：页面区已经换成截图（不然原生页面会把它盖住） */
-  const popupShown = wantPopup && covered
+  /** 下拉开着：在编辑、敲过字、有建议 */
+  const popupShown = editing && typed && matches.length > 0
   const inlineShown = sel === 0 && result.inline !== null
   const value = sel > 0 && matches[sel] ? matches[sel].fill : (result.inline ?? userText)
 
@@ -117,75 +100,41 @@ export function Omnibox({
     el.setSelectionRange(userText.length, value.length)
   }, [inlineShown, userText.length, value])
 
-  // ====== 页面区的截图：下拉要开时先抓一张顶上，抓到了才开（与站点信息气泡同一个机制） ======
-  /** null = 没顶；pending = 正在抓；set = 顶着 */
-  const coverState = useRef<'pending' | 'set' | null>(null)
-  useEffect(() => {
-    if (!wantPopup) {
-      if (coverState.current) {
-        coverState.current = null
-        setPageCover(null)
-      }
-      return
-    }
-    if (coverState.current) return
-    const tabId = tab?.id ?? ''
-    if (!showsNativePage(tab) || viewMode === 'wall') {
-      // 页面区本来就是 DOM（空白页、内部页面、错误页），或平铺墙（卡片用各自的快照）：不用抓
-      coverState.current = 'set'
-      setPageCover({ tabId, snapshot: '' })
-      return
-    }
-    coverState.current = 'pending'
-    void window.api.browserView
-      .capture(tabId, pageAreaPixelWidth())
-      .catch(() => '')
-      .then((snapshot) => {
-        if (coverState.current !== 'pending') return
-        coverState.current = 'set'
-        setPageCover({ tabId, snapshot })
-      })
-  }, [wantPopup, tab, viewMode, setPageCover])
-  useEffect(
-    () => () => {
-      if (coverState.current) useBrowserTabsStore.getState().setPageCover(null)
-    },
-    []
-  )
-
-  // 站点信息气泡因为换了 tab / 地址而失效：把页面区的截图撤掉（views 回到页面区）
+  // 站点信息气泡因为换了 tab / 地址而失效：把记录清掉
   useEffect(() => {
     if (siteInfoFor && !siteInfoOpen) {
-      const raf = requestAnimationFrame(() => {
-        setSiteInfoFor(null)
-        setPageCover(null)
-      })
+      const raf = requestAnimationFrame(() => setSiteInfoFor(null))
       return () => cancelAnimationFrame(raf)
     }
     return undefined
-  }, [siteInfoFor, siteInfoOpen, setPageCover])
+  }, [siteInfoFor, siteInfoOpen])
 
-  /**
-   * 打开站点信息气泡：先按页面区的宽度抓一张截图顶上（原生页面会盖住 DOM 气泡），再开气泡。
-   * 抓不到图也照开 —— 页面区那段时间空着而已。
-   */
-  const openSiteInfo = async (): Promise<void> => {
-    if (!tab) return
-    const snapshot = await window.api.browserView
-      .capture(tab.id, pageAreaPixelWidth())
-      .catch(() => '')
-    setPageCover({ tabId: tab.id, snapshot })
-    setSiteInfoFor({ tabId: tab.id, url: tab.url })
-  }
-  const closeSiteInfo = (): void => {
-    setSiteInfoFor(null)
-    setPageCover(null)
+  const closeSiteInfo = useCallback(() => setSiteInfoFor(null), [])
+
+  // ====== 下拉在透明 view 里：按它一下，系统会先把焦点给那块 view，主进程再还回来（browserPopover.ts） ======
+  /** 鼠标正按在下拉上 */
+  const popupPressed = useRef(false)
+  const onPopupPress = useCallback((pressed: boolean) => {
+    popupPressed.current = pressed
+  }, [])
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(blurTimer.current), [])
+  /** 地址栏失焦：等焦点落定再决定 —— 焦点已经回来了、或者正按在下拉上，就还在编辑 */
+  const onInputBlur = (): void => {
+    clearTimeout(blurTimer.current)
+    blurTimer.current = setTimeout(() => {
+      const kept = document.hasFocus() && document.activeElement === inputRef.current
+      if (kept || popupPressed.current) return
+      setEditing(false)
+      setTyped(false)
+    }, POPOVER_FOCUS_SETTLE_MS)
   }
 
   const url = tab && tab.url !== 'about:blank' ? tab.url : ''
 
   /** 进入编辑：填上完整地址、整段选中（下一帧做，input 才挂上） */
   const beginEdit = (): void => {
+    setSiteInfoFor(null)
     setUserText(url)
     setTyped(false)
     setAllowInline(false)
@@ -307,6 +256,7 @@ export function Omnibox({
 
   return (
     <div
+      ref={rootRef}
       className={`relative flex-1 min-w-0 flex items-center gap-2 h-8 mx-1 px-3 rounded-full transition-colors ${
         editing ? 'bg-bg-primary ring-2 ring-accent/50' : 'bg-bg-secondary hover:bg-bg-hover/60'
       }`}
@@ -335,10 +285,7 @@ export function Omnibox({
             setAllowInline(!deleting && !native.isComposing && atEnd)
           }}
           onMouseDown={acceptShown}
-          onBlur={() => {
-            setEditing(false)
-            setTyped(false)
-          }}
+          onBlur={onInputBlur}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
           spellCheck={false}
@@ -360,7 +307,9 @@ export function Omnibox({
               {hasSiteInfo ? (
                 <button
                   onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => (siteInfoOpen ? closeSiteInfo() : void openSiteInfo())}
+                  onClick={() =>
+                    setSiteInfoFor(siteInfoOpen || !tab ? null : { tabId: tab.id, url: tab.url })
+                  }
                   className={`flex-shrink-0 -ml-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded-full hover:bg-bg-hover ${
                     display.kind === 'insecure' ? 'text-text-secondary' : 'text-text-tertiary'
                   }`}
@@ -401,17 +350,19 @@ export function Omnibox({
         </button>
       )}
       {popupShown && (
-        <OmniboxPopup
-          id={POPUP_ID}
-          matches={matches}
-          selected={sel}
-          text={userText}
-          engine={engine}
-          onPick={(index) => openMatch(matches[index])}
-          onRemove={removeAt}
-        />
+        <BrowserPopover anchor={rootRef} gap={4} focus="keep-shell" onPressChange={onPopupPress}>
+          <OmniboxPopup
+            id={POPUP_ID}
+            matches={matches}
+            selected={sel}
+            text={userText}
+            engine={engine}
+            onPick={(index) => openMatch(matches[index])}
+            onRemove={removeAt}
+          />
+        </BrowserPopover>
       )}
-      {siteInfoOpen && tab && <SiteInfoBubble tab={tab} onClose={closeSiteInfo} />}
+      {siteInfoOpen && tab && <SiteInfoBubble tab={tab} anchor={rootRef} onClose={closeSiteInfo} />}
     </div>
   )
 }

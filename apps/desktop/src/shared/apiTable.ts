@@ -378,6 +378,7 @@ export const API_TABLE = {
     openInternal: invoke('browser-view:open-internal', 1),
     proceedUnsafe: invoke('browser-view:proceed-unsafe', 1),
     setVisible: send('browser-view:set-visible', 1),
+    setPopover: send('browser-view:set-popover', 1),
     openDevtools: invoke('browser-view:devtools-open', 2),
     closeDevtools: invoke('browser-view:devtools-close', 1),
     setDevtoolsLayout: send('browser-view:set-devtools-layout', 1),

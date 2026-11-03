@@ -13,20 +13,29 @@
  *   CB-U55  `browser.searchEngine` 决定地址栏的占位文字。
  *   BS-U33  单页视图选中设置页（shuvix://settings）：渲染 [data-browser-settings-page]（三个 [data-settings-nav]），
  *           没有页面区，布局表是空的（setLayout([]) + setVisible(true)）；
- *   BS-U34  单页视图的 pageCover（站点信息气泡开着）：setVisible(false)，[data-browser-page] 里一张
- *           <img data-page-cover>（截图为 '' 时没有图）；撤掉 → 布局恢复、setVisible(true)；
- *   BS-U35  平铺墙：pageCover → setVisible(false)；设置页的卡片是紧凑版（没有导航）、从不进布局表；一张卡片的地址
- *           变成 shuvix://settings → 下一次布局表里没有它；
+ *   BS-U35  平铺墙：设置页的卡片是紧凑版（没有导航）、从不进布局表；一张卡片的地址变成 shuvix://settings → 下一次
+ *           布局表里没有它；
  *   BS-U36  设置页在标签条、墙上卡片头、搜索标签页菜单里都叫 Settings，图标是设置图标（不是地球）。
- *   DD-U37  BrowserSinglePage 在 ResizeObserver 回调里**当场**报布局（setLayout 再 setVisible(true)，不等下一帧）；
- *           盖着 pageCover / 对话框时当场 setVisible(false)、不报布局；换了选中页、空白页变成网页之后，新的页面区
- *           同样当场报；窗口缩放排到下一帧（那一帧之前 ResizeObserver 先报了就只报一次）；
+ *   DD-U37  BrowserSinglePage 在 ResizeObserver 回调里**当场**报布局（不等下一帧，setVisible 不重发）；盖着对话框时
+ *           不报布局；换了选中页、空白页变成网页之后，新的页面区同样当场报；窗口缩放排到下一帧（那一帧之前
+ *           ResizeObserver 先报了就只报一次）；
  *   MN-2    新标签页的搜索框（单页视图）一拿到焦点就失焦、omniboxFocusNonce + 1，地址栏进编辑、光标在地址栏
  *           （空白页与没有 tab 两种）；不给 onFocusOmnibox 的 NewTabPage 焦点照留；shuvix://history 的标签与地址栏
  *           用历史记录图标、叫 History，不是设置图标。
  *   DD-U38  外壳里拖停靠区上沿：停靠区高度跟着鼠标实时变（夹在 [140, innerHeight − 120]），松手才写进设置
- *           `browser.devtoolsHeight`；拖动期间页面不让位（不 setVisible(false)、不截图、没有 pageCover）、原生
- *           DevTools 不报 null；单页视图里页面区与原生 DevTools 的尺寸变化当场报新矩形。
+ *           `browser.devtoolsHeight`；拖动期间页面不让位（不 setVisible(false)、不截图）、原生 DevTools 不报 null；
+ *           单页视图里页面区与原生 DevTools 的尺寸变化当场报新矩形。
+ *   SPL-1   拖窗口边框（矩形与窗口尺寸一起变、到边缘的距离不变）：一条 setLayout / setVisible 都不发；
+ *   SPL-2   距离真的变了（提示条把 y 推下去、停靠区开了 / 改高度、x 变了）：报一次、带 viewport；一样的再来一次不报；
+ *   SPL-3   距离一样，但换了 tab / devicePixelRatio 变了：各报一次；
+ *   SPL-4   对话框开关：setVisible 只发 [true, false, true]；开着时 ResizeObserver 不报，关掉也不重报布局；
+ *   SPL-5   对话框开着时换了 tab：关掉时先 setLayout(新 tab)，再 setVisible(true)；
+ *   SPL-6   网页 → 空白页 → 空白页 → 网页（距离一样）、零尺寸：[] 只发一次，回来时整张表重报；
+ *   SPL-7   外壳里 单页 → 平铺墙 → 单页：重新挂上的单页重新上报（不算重复）；
+ *   SPL-8   平铺墙：表项没有 viewport、有 zoom，距离一样也照报（卡片贴不了边）；
+ *   SPL-9   外壳（两种视图）：开气泡、在地址栏打字都不抓图、不动可见性与布局；store 上没有 pageCover / setPageCover；
+ *   SPL-10  外壳挂上：windowReady 之后 window.open('', 约定的名字) 一次，第一次开气泡不再开；
+ *   SIB-8   气泡开着时按在后台标签的 ✕ 上（它 stopPropagation）：气泡照样关掉。
  *
  * jsdom 没有布局：getBoundingClientRect 缺省回一个固定矩形（DD-U37/38 按元素给）、ResizeObserver 是手动触发的桩、
  * rAF 换成 setTimeout(0)。
@@ -48,15 +57,19 @@ import {
   flush,
   initEnI18n,
   installFakeApi,
+  installPopoverWindow,
   installRaf,
   installResizeObserver,
+  keyDown,
   lastMenu,
   mountInto,
   mouseDown,
   mouseMove,
   mouseUp,
   restoreInnerHeight,
+  restoreInnerWidth,
   stubInnerHeight,
+  stubInnerWidth,
   stubRects,
   stubRectsBy,
   stubScrollIntoView,
@@ -64,15 +77,19 @@ import {
   typeInto,
   type FakeApi,
   type Mounted,
+  type PopoverWindow,
   type ResizeObserverControl
 } from './browserDomSupport'
 
 let api: FakeApi
 let ro: ResizeObserverControl
+let pop: PopoverWindow
 let m: Mounted | null = null
 
 const RECT = { x: 0, y: 76, width: 550, height: 600 }
 const BOUNDS = { x: 0, y: 76, width: 550, height: 600 }
+/** jsdom 的缺省窗口尺寸；单页视图的布局表项都带着它 */
+const VIEWPORT = { width: 1024, height: 768 }
 
 const $ = <T extends Element = HTMLElement>(sel: string): T | null =>
   m!.container.querySelector<T>(sel)
@@ -104,13 +121,13 @@ beforeEach(() => {
   api = installFakeApi()
   installRaf()
   ro = installResizeObserver()
+  pop = installPopoverWindow()
   stubScrollIntoView()
   stubRects(RECT)
   useBrowserTabsStore.setState({
     tabs: [],
     activeTabId: null,
     omniboxFocusNonce: 0,
-    pageCover: null,
     settingsFocus: null
   })
 })
@@ -124,6 +141,8 @@ afterEach(() => {
   m = null
   document.querySelectorAll('.dialog-overlay').forEach((el) => el.remove())
   restoreInnerHeight()
+  restoreInnerWidth()
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 })
   vi.restoreAllMocks()
 })
 
@@ -136,7 +155,7 @@ describe('单页视图（CB-U52）', () => {
     m = await mountInto(BrowserSinglePage, { engine: 'google' })
     await flush()
     expect($('[data-browser-page]')?.getAttribute('data-browser-page')).toBe('b')
-    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'b', bounds: BOUNDS }])
+    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'b', bounds: BOUNDS, viewport: VIEWPORT }])
     for (const entries of layoutCalls() as Array<Array<Record<string, unknown>>>) {
       for (const e of entries) expect(e).not.toHaveProperty('zoom')
     }
@@ -148,7 +167,7 @@ describe('单页视图（CB-U52）', () => {
     // 用户选中另一页：布局表换成它
     act(() => useBrowserTabsStore.setState({ activeTabId: 'a' }))
     await flush()
-    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS }])
+    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }])
   })
 
   it('CB-U52 空白页：setLayout([])，显示新标签页；提交 example.org → navigate(id, https://example.org)', async () => {
@@ -202,7 +221,7 @@ describe('单页视图（CB-U52）', () => {
     expect(api.browserView.navigate.mock.calls).toEqual([['e', 'https://failed.test/']])
   })
 
-  it('CB-U52 对话框覆盖层出现 → setVisible(false)；撤掉 → 恢复布局与可见', async () => {
+  it('CB-U52 对话框覆盖层出现 → setVisible(false)；撤掉 → setVisible(true)，布局不重报', async () => {
     seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
     m = await mountInto(BrowserSinglePage, { engine: 'google' })
     await flush()
@@ -222,7 +241,8 @@ describe('单页视图（CB-U52）', () => {
       overlay.remove()
     })
     await flush()
-    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS }])
+    // 主进程手上的布局没变（那段时间只是墙级门关着）：只把门打开
+    expect(layoutCalls()).toEqual([])
     expect(visibleCalls().at(-1)).toBe(true)
   })
 })
@@ -381,7 +401,7 @@ describe('设置页在单页视图里（BS-U33）', () => {
     )
     m = await mountInto(BrowserSinglePage, { engine: 'google' })
     await flush()
-    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS }])
+    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }])
     act(() => useBrowserTabsStore.setState({ activeTabId: 's' }))
     await flush()
     expect(layoutCalls().at(-1)).toStrictEqual([])
@@ -390,66 +410,7 @@ describe('设置页在单页视图里（BS-U33）', () => {
   })
 })
 
-describe('单页视图的 pageCover（BS-U34）', () => {
-  it('BS-U34 盖上：setVisible(false)，页面区里一张截图；撤掉：布局恢复、setVisible(true)', async () => {
-    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
-    m = await mountInto(BrowserSinglePage, { engine: 'google' })
-    await flush()
-    expect(visibleCalls().at(-1)).toBe(true)
-    api.browserView.setLayout.mockClear()
-
-    act(() =>
-      useBrowserTabsStore
-        .getState()
-        .setPageCover({ tabId: 'a', snapshot: 'data:image/png;base64,C' })
-    )
-    await flush()
-    expect(visibleCalls().at(-1)).toBe(false)
-    expect(layoutCalls()).toEqual([])
-    const img = $<HTMLImageElement>('[data-browser-page="a"] img[data-page-cover]')
-    expect(img).not.toBeNull()
-    expect(img!.getAttribute('src')).toBe('data:image/png;base64,C')
-
-    act(() => useBrowserTabsStore.getState().setPageCover(null))
-    await flush()
-    expect($('[data-page-cover]')).toBeNull()
-    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS }])
-    expect(visibleCalls().at(-1)).toBe(true)
-  })
-
-  it("BS-U34 截图是 ''：照样让位（setVisible(false)），但没有图", async () => {
-    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
-    m = await mountInto(BrowserSinglePage, { engine: 'google' })
-    await flush()
-    act(() => useBrowserTabsStore.getState().setPageCover({ tabId: 'a', snapshot: '' }))
-    await flush()
-    expect(visibleCalls().at(-1)).toBe(false)
-    expect($('[data-browser-page="a"]')).not.toBeNull()
-    expect($('[data-page-cover]')).toBeNull()
-  })
-})
-
-describe('平铺墙里的设置页与 pageCover（BS-U35）', () => {
-  it('BS-U35 pageCover → setVisible(false)；撤掉 → 布局恢复', async () => {
-    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
-    m = await mountInto(BrowserWall, { engine: 'google' })
-    await flush()
-    expect(visibleCalls().at(-1)).toBe(true)
-    api.browserView.setLayout.mockClear()
-
-    act(() => useBrowserTabsStore.getState().setPageCover({ tabId: 'a', snapshot: 'data:x' }))
-    await flush()
-    expect(visibleCalls().at(-1)).toBe(false)
-    expect(layoutCalls()).toEqual([])
-
-    act(() => useBrowserTabsStore.getState().setPageCover(null))
-    await flush()
-    expect(layoutCalls().at(-1)).toStrictEqual([
-      { tabId: 'a', bounds: BOUNDS, zoom: cardZoomFor(RECT.width) }
-    ])
-    expect(visibleCalls().at(-1)).toBe(true)
-  })
-
+describe('平铺墙里的设置页（BS-U35）', () => {
   it('BS-U35 设置页的卡片：紧凑版设置页（没有导航），从不进布局表', async () => {
     seed(
       [
@@ -546,7 +507,7 @@ describe('单页视图在 ResizeObserver 回调里当场报布局（DD-U37）', 
     api.browserView.setVisible.mockClear()
   }
 
-  it('DD-U37 页面区尺寸变了：当场 setLayout(新矩形)，再 setVisible(true)', async () => {
+  it('DD-U37 页面区尺寸变了：当场 setLayout(新矩形)；setVisible 不重发', async () => {
     seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
     m = await mountInto(BrowserSinglePage, { engine: 'google' })
     await flush()
@@ -554,45 +515,29 @@ describe('单页视图在 ResizeObserver 回调里当场报布局（DD-U37）', 
 
     stubRects(NEW_RECT)
     ro.trigger(pageArea())
-    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT }]])
-    expect(visibleCalls()).toEqual([true])
-    expect(api.browserView.setLayout.mock.invocationCallOrder[0]).toBeLessThan(
-      api.browserView.setVisible.mock.invocationCallOrder[0]
-    )
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT, viewport: VIEWPORT }]])
+    expect(visibleCalls()).toEqual([])
   })
 
-  it.each([
-    [
-      'pageCover',
-      async (): Promise<void> => {
-        act(() => useBrowserTabsStore.getState().setPageCover({ tabId: 'a', snapshot: '' }))
-      }
-    ],
-    [
-      '.dialog-overlay',
-      async (): Promise<void> => {
-        const overlay = document.createElement('div')
-        overlay.className = 'dialog-overlay'
-        await act(async () => {
-          document.body.appendChild(overlay)
-        })
-      }
-    ]
-  ])('DD-U37 盖着 %s：当场 setVisible(false)，不报布局', async (_label, cover) => {
+  it('DD-U37 盖着 .dialog-overlay：不报布局，setVisible 也不重发', async () => {
     seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
     m = await mountInto(BrowserSinglePage, { engine: 'google' })
     await flush()
-    await cover()
+    const overlay = document.createElement('div')
+    overlay.className = 'dialog-overlay'
+    await act(async () => {
+      document.body.appendChild(overlay)
+    })
     await flush()
     expect(visibleCalls().at(-1)).toBe(false)
     clearLayout()
 
     stubRects(NEW_RECT)
     ro.trigger(pageArea())
-    expect(visibleCalls()).toEqual([false])
+    expect(visibleCalls()).toEqual([])
     expect(layoutCalls()).toEqual([])
     await flush()
-    expect(visibleCalls()).not.toContain(true)
+    expect(visibleCalls()).toEqual([])
     expect(layoutCalls()).toEqual([])
   })
 
@@ -609,8 +554,8 @@ describe('单页视图在 ResizeObserver 回调里当场报布局（DD-U37）', 
 
     stubRects(NEW_RECT)
     ro.trigger(pageArea())
-    expect(layoutCalls()).toEqual([[{ tabId: 'b', bounds: NEW_RECT }]])
-    expect(visibleCalls()).toEqual([true])
+    expect(layoutCalls()).toEqual([[{ tabId: 'b', bounds: NEW_RECT, viewport: VIEWPORT }]])
+    expect(visibleCalls()).toEqual([])
   })
 
   it('DD-U37 空白页变成网页：新出现的页面区同样当场报', async () => {
@@ -627,8 +572,8 @@ describe('单页视图在 ResizeObserver 回调里当场报布局（DD-U37）', 
 
     stubRects(NEW_RECT)
     ro.trigger(pageArea())
-    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT }]])
-    expect(visibleCalls()).toEqual([true])
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT, viewport: VIEWPORT }]])
+    expect(visibleCalls()).toEqual([])
   })
 
   it('DD-U37 窗口缩放后、那一帧之前 ResizeObserver 先报了：总共只报一次', async () => {
@@ -644,7 +589,7 @@ describe('单页视图在 ResizeObserver 回调里当场报布局（DD-U37）', 
     expect(layoutCalls()).toEqual([])
     ro.trigger(pageArea())
     await flush()
-    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT }]])
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT, viewport: VIEWPORT }]])
   })
 })
 
@@ -715,27 +660,18 @@ describe('外壳里拖停靠区（DD-U38）', () => {
       ])
     })
 
-    it('DD-U38 拖动期间页面不让位：不 setVisible(false)、不截图、没有 pageCover；原生 DevTools 不报 null', async () => {
+    it('DD-U38 拖动期间页面不让位：不 setVisible(false)、不截图；原生 DevTools 不报 null', async () => {
       await mountShell(mode)
-      const noCover = (): void => {
-        expect($('[data-page-cover]')).toBeNull()
-        expect(useBrowserTabsStore.getState().pageCover).toBeNull()
-      }
       mouseDown(edge(), 0, { clientY: 400 })
-      noCover()
       mouseMove(350)
-      noCover()
       mouseMove(300)
-      noCover()
       mouseUp()
-      noCover()
       await flush()
 
       const bv = api.browserView
       expect(visibleCalls()).not.toContain(false)
       expect(bv.capture).not.toHaveBeenCalled()
       expect(bv.setDevtoolsLayout.mock.calls).not.toContainEqual([null])
-      noCover()
     })
   })
 
@@ -755,9 +691,11 @@ describe('外壳里拖停靠区（DD-U38）', () => {
     )
     ro.trigger($('[data-page-area]')!)
     ro.trigger($('[data-devtools-native]')!)
-    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: PAGE }]])
-    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[{ tabId: 'a', bounds: SLOT }]])
-    expect(visibleCalls()).toEqual([true])
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: PAGE, viewport: VIEWPORT }]])
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
+      [{ tabId: 'a', bounds: SLOT, viewport: VIEWPORT }]
+    ])
+    expect(visibleCalls()).toEqual([])
   })
 })
 
@@ -839,5 +777,284 @@ describe('新标签页把光标交给地址栏、历史记录页的图标（MN-2
     await flush()
     expect($('[data-omnibox-display] svg.lucide-settings')).not.toBeNull()
     expect($('[data-omnibox-display] svg.lucide-history')).toBeNull()
+  })
+})
+
+describe('单页视图只在到边缘的距离变了时上报（SPL-1 … SPL-6）', () => {
+  const pageArea = (): HTMLElement => $('[data-page-area]')!
+
+  async function mountPage(tabs?: BrowserTabInfo[], active = 'a'): Promise<void> {
+    seed(tabs ?? [tabInfo({ id: 'a', url: 'https://a.test/' })], active)
+    m = await mountInto(BrowserSinglePage, { engine: 'google' })
+    await flush()
+  }
+  const clearCalls = (): void => {
+    api.browserView.setLayout.mockClear()
+    api.browserView.setVisible.mockClear()
+  }
+  const addOverlay = async (): Promise<HTMLElement> => {
+    const overlay = document.createElement('div')
+    overlay.className = 'dialog-overlay'
+    await act(async () => {
+      document.body.appendChild(overlay)
+    })
+    await flush()
+    return overlay
+  }
+  const dropOverlay = async (overlay: HTMLElement): Promise<void> => {
+    await act(async () => {
+      overlay.remove()
+    })
+    await flush()
+  }
+
+  it('SPL-1 矩形与窗口一起变、距离不变：一条 setLayout / setVisible 都不发', async () => {
+    await mountPage()
+    clearCalls()
+
+    stubRects({ ...RECT, width: RECT.width + 200, height: RECT.height + 100 })
+    stubInnerWidth(VIEWPORT.width + 200)
+    stubInnerHeight(VIEWPORT.height + 100)
+    ro.trigger(pageArea())
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    await flush()
+
+    expect(layoutCalls()).toEqual([])
+    expect(visibleCalls()).toEqual([])
+  })
+
+  it.each([
+    ['提示条把上沿推下去', { x: 0, y: 104, width: 550, height: 572 }],
+    ['停靠区开了（下沿上来）', { x: 0, y: 76, width: 550, height: 300 }],
+    ['停靠区改高度', { x: 0, y: 76, width: 550, height: 420 }],
+    ['左边变了', { x: 10, y: 76, width: 540, height: 600 }]
+  ])('SPL-2 %s：报一次、带 viewport；一样的再来一次不报', async (_label, next) => {
+    await mountPage()
+    clearCalls()
+
+    stubRects(next)
+    ro.trigger(pageArea())
+    const expected = [[{ tabId: 'a', bounds: next, viewport: VIEWPORT }]]
+    expect(layoutCalls()).toEqual(expected)
+
+    ro.trigger(pageArea())
+    await flush()
+    expect(layoutCalls()).toEqual(expected)
+  })
+
+  it('SPL-3 距离一样，换了 tab：报一次', async () => {
+    await mountPage([
+      tabInfo({ id: 'a', url: 'https://a.test/' }),
+      tabInfo({ id: 'b', url: 'https://b.test/' })
+    ])
+    clearCalls()
+    act(() => useBrowserTabsStore.setState({ activeTabId: 'b' }))
+    await flush()
+    expect(layoutCalls()).toEqual([[{ tabId: 'b', bounds: BOUNDS, viewport: VIEWPORT }]])
+  })
+
+  it('SPL-3 距离一样，devicePixelRatio 变了（换了显示器）：报一次', async () => {
+    await mountPage()
+    clearCalls()
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 })
+    ro.trigger(pageArea())
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }]])
+  })
+
+  it('SPL-4 对话框开关：setVisible 只有 [true, false, true]；开着时不报，关掉也不重报布局', async () => {
+    await mountPage()
+    ro.trigger(pageArea())
+    ro.trigger(pageArea())
+    expect(visibleCalls()).toEqual([true])
+
+    const overlay = await addOverlay()
+    expect(visibleCalls()).toEqual([true, false])
+    api.browserView.setLayout.mockClear()
+
+    ro.trigger(pageArea())
+    expect(visibleCalls()).toEqual([true, false])
+    expect(layoutCalls()).toEqual([])
+
+    await dropOverlay(overlay)
+    expect(visibleCalls()).toEqual([true, false, true])
+    expect(layoutCalls()).toEqual([])
+  })
+
+  it('SPL-5 对话框开着时换了 tab：关掉时先 setLayout(新 tab)，再 setVisible(true)', async () => {
+    await mountPage([
+      tabInfo({ id: 'a', url: 'https://a.test/' }),
+      tabInfo({ id: 'b', url: 'https://b.test/' })
+    ])
+    const overlay = await addOverlay()
+    act(() => useBrowserTabsStore.setState({ activeTabId: 'b' }))
+    await flush()
+    clearCalls()
+
+    await dropOverlay(overlay)
+
+    expect(layoutCalls()).toEqual([[{ tabId: 'b', bounds: BOUNDS, viewport: VIEWPORT }]])
+    expect(visibleCalls()).toEqual([true])
+    expect(api.browserView.setLayout.mock.invocationCallOrder[0]).toBeLessThan(
+      api.browserView.setVisible.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('SPL-6 网页 → 空白页 → 空白页 → 网页（距离一样）：[] 只发一次，回来时整张表重报', async () => {
+    await mountPage([
+      tabInfo({ id: 'a', url: 'https://a.test/' }),
+      tabInfo({ id: 'n1', url: 'about:blank' }),
+      tabInfo({ id: 'n2', url: 'about:blank' })
+    ])
+    clearCalls()
+
+    act(() => useBrowserTabsStore.setState({ activeTabId: 'n1' }))
+    await flush()
+    expect(layoutCalls()).toEqual([[]])
+
+    act(() => useBrowserTabsStore.setState({ activeTabId: 'n2' }))
+    await flush()
+    expect(layoutCalls()).toEqual([[]])
+
+    act(() => useBrowserTabsStore.setState({ activeTabId: 'a' }))
+    await flush()
+    expect(layoutCalls()).toEqual([[], [{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }]])
+  })
+
+  it('SPL-6 零尺寸：[] 只发一次；有尺寸了整张表重报', async () => {
+    await mountPage()
+    clearCalls()
+
+    stubRects({ ...RECT, width: 0 })
+    ro.trigger(pageArea())
+    ro.trigger(pageArea())
+    expect(layoutCalls()).toEqual([[]])
+
+    stubRects(RECT)
+    ro.trigger(pageArea())
+    expect(layoutCalls()).toEqual([[], [{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }]])
+  })
+})
+
+describe('外壳里的两种视图与弹层（SPL-7 … SPL-10 / SIB-8）', () => {
+  /** 主进程 listTabs 回的一行 */
+  const mainRow = (id: string, active: boolean): Record<string, unknown> => ({
+    id,
+    url: `https://${id}.test/`,
+    title: id,
+    active,
+    cdpAttached: false,
+    cdpIntercepting: false,
+    crashed: false,
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    zoomPercent: 100,
+    agentDevtoolsCalls: 0
+  })
+
+  const mountShell = async (mode: 'single' | 'wall'): Promise<void> => {
+    api.settingsMap = { 'browser.viewMode': mode }
+    api.browserView.listTabs.mockResolvedValue([mainRow('a', true), mainRow('b', false)])
+    m = await mountInto(BrowserWindowShell, {})
+    await flush(5)
+    expect($('[data-browser-window]')?.getAttribute('data-view-mode')).toBe(mode)
+  }
+  const bubble = (): HTMLElement | null => pop.doc.querySelector('[data-site-info]')
+
+  it('SPL-7 单页 → 平铺墙 → 单页：重新挂上的单页重新上报', async () => {
+    await mountShell('single')
+    expect(layoutCalls().at(-1)).toStrictEqual([{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }])
+    click($('[data-browser-view-toggle]')!)
+    await flush()
+    api.browserView.setLayout.mockClear()
+
+    click($('[data-browser-view-toggle]')!)
+    await flush()
+    expect($('[data-browser-single]')).not.toBeNull()
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: BOUNDS, viewport: VIEWPORT }]])
+  })
+
+  it('SPL-8 平铺墙：表项没有 viewport、有 zoom；同样的矩形再来一次照报', async () => {
+    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
+    m = await mountInto(BrowserWall, { engine: 'google' })
+    await flush()
+    const area = $('[data-browser-wall]')!.firstElementChild as HTMLElement
+    const entries = (): Array<Record<string, unknown>> =>
+      layoutCalls().at(-1) as Array<Record<string, unknown>>
+    expect(entries()[0]).not.toHaveProperty('viewport')
+    expect(entries()[0]).toHaveProperty('zoom', cardZoomFor(RECT.width))
+    expect(ro.observing(area)).toBe(1)
+    api.browserView.setLayout.mockClear()
+
+    ro.trigger(area)
+    await flush()
+    ro.trigger(area)
+    await flush()
+    expect(layoutCalls().length).toBeGreaterThanOrEqual(2)
+    for (const call of layoutCalls() as Array<Array<Record<string, unknown>>>) {
+      expect(call[0]).not.toHaveProperty('viewport')
+      expect(call[0]).toHaveProperty('zoom')
+    }
+  })
+
+  it.each(['single', 'wall'] as const)(
+    'SPL-9 %s：开气泡、在地址栏打字都不抓图、不动可见性与布局；store 上没有 pageCover',
+    async (mode) => {
+      await mountShell(mode)
+      const bv = api.browserView
+      for (const fn of [bv.capture, bv.setVisible, bv.setLayout]) fn.mockClear()
+
+      click($('[data-site-info-button]')!)
+      await flush()
+      expect(bubble()).not.toBeNull()
+      keyDown(pop.doc.body, 'Escape')
+      await flush()
+      expect(bubble()).toBeNull()
+
+      mouseDown($('[data-omnibox-display]')!)
+      await flush()
+      typeInto($<HTMLInputElement>('[data-omnibox-input]')!, 'git')
+      await flush()
+      expect(pop.doc.querySelector('[data-omnibox-popup]')).not.toBeNull()
+
+      expect(bv.capture).not.toHaveBeenCalled()
+      expect(bv.setVisible).not.toHaveBeenCalled()
+      expect(bv.setLayout).not.toHaveBeenCalled()
+      const store = useBrowserTabsStore.getState()
+      expect(store).not.toHaveProperty('pageCover')
+      expect(store).not.toHaveProperty('setPageCover')
+    }
+  )
+
+  it("SPL-10 外壳挂上：windowReady 之后 window.open('', 约定的名字) 一次；第一次开气泡不再开", async () => {
+    // 同一个文件里之前的用例可能已经开过：当它被关掉了，这次外壳要重新开
+    pop.forgetHost()
+    await mountShell('single')
+
+    expect(pop.open.mock.calls).toEqual([['', 'shuvix-browser-popover']])
+    expect(api.app.windowReady).toHaveBeenCalledTimes(1)
+    expect(api.app.windowReady.mock.invocationCallOrder[0]).toBeLessThan(
+      pop.open.mock.invocationCallOrder[0]
+    )
+
+    click($('[data-site-info-button]')!)
+    await flush()
+    expect(bubble()).not.toBeNull()
+    expect(pop.open).toHaveBeenCalledTimes(1)
+  })
+
+  it('SIB-8 气泡开着时按在后台标签的 ✕ 上（它 stopPropagation）：气泡关掉', async () => {
+    await mountShell('single')
+    click($('[data-site-info-button]')!)
+    await flush()
+    expect(bubble()).not.toBeNull()
+
+    mouseDown($('[data-browser-tab="b"] [data-browser-tab-close]')!)
+    await flush()
+
+    expect(bubble()).toBeNull()
+    expect(api.browserView.setPopover).toHaveBeenLastCalledWith(null)
   })
 })

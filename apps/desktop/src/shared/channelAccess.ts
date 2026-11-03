@@ -308,6 +308,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'browser-view:open-internal': 'write',
   'browser-view:proceed-unsafe': 'admin', // 越过证书错误、记下证书例外（安全决定）
   'browser-view:set-visible': 'write',
+  'browser-view:set-popover': 'write',
   'browser-view:devtools-open': 'write',
   'browser-view:devtools-close': 'write',
   'browser-view:set-devtools-layout': 'write',

@@ -73,7 +73,7 @@ beforeEach(() => {
   api = installFakeApi()
   installRaf()
   stubScrollIntoView()
-  useBrowserTabsStore.setState({ settingsFocus: null, pageCover: null })
+  useBrowserTabsStore.setState({ settingsFocus: null })
   hostInfo = vi.fn(async () => ({ headless: false }))
   api.browserView.hostInfo = hostInfo
   subscribers = new Set()

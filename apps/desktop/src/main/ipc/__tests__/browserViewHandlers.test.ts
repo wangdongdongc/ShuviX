@@ -6,6 +6,9 @@
  *       另外两条新通道：open-window 打开 / 聚焦窗口；is-window-open 原样回答窗口服务的判断。
  *       create-tab（主窗 / 浏览器窗口里的「新建 tab」）只建一个激活的 tab，**不**打开浏览器窗口 ——
  *       窗口只由 open-window 打开（ST-U6）。
+ *   BS-U45 set-popover（站点信息气泡、地址栏下拉那块透明 view）只认宿主窗口：矩形与 null 原样交给 setBrowserPopover；
+ *       别的窗口、网络客户端发来的不理、不抛；宿主发来的不是矩形（'x' / 1 / false / {}）→ setBrowserPopover(null)
+ *   BS-U46 宿主发的 set-layout / set-devtools-layout 带的 viewport 原样到服务（主进程按它算到窗口边缘的距离）
  *   NH-8 网络客户端（server mode phase B）发来的 set-layout / set-visible：不是宿主窗口 → 不理、不抛
  *   CB-U36 Chrome 化之后的几条通道：close-tab 是用户关的（记下地址给 ⌘⇧T）；reopen-closed-tab 原样回服务的值；
  *       zoom 只认 in / out / reset；open-session 只认窗口客户端发来的字符串；create-tab 不带地址时把光标
@@ -67,6 +70,8 @@ const state = vi.hoisted(() => ({
   handle: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   setLayout: vi.fn<(entries: unknown) => void>(),
   setPanelVisible: vi.fn<(visible: boolean) => void>(),
+  setBrowserPopover: vi.fn<(placement: unknown) => void>(),
+  setDevtoolsLayout: vi.fn<(slot: unknown) => void>(),
   openBrowserWindow: vi.fn<() => void>(),
   createTab: vi.fn<(url?: string, opts?: { activate?: boolean }) => string>(() => 'tab-new'),
   isBrowserWindowOpen: vi.fn<() => boolean>(() => false),
@@ -104,6 +109,8 @@ vi.mock('../../services/browser', () => ({
   captureTab: (tabId: string, maxWidth?: number) => state.captureTab(tabId, maxWidth),
   setLayout: (entries: unknown) => state.setLayout(entries),
   setPanelVisible: (visible: boolean) => state.setPanelVisible(visible),
+  setBrowserPopover: (placement: unknown) => state.setBrowserPopover(placement),
+  setDevtoolsLayout: (slot: unknown) => state.setDevtoolsLayout(slot),
   isHostWebContents: (id: number) => id === 7,
   openBrowserWindow: () => state.openBrowserWindow(),
   isBrowserWindowOpen: () => state.isBrowserWindowOpen(),
@@ -163,6 +170,8 @@ const ENTRIES = [
 beforeEach(() => {
   state.setLayout.mockClear()
   state.setPanelVisible.mockClear()
+  state.setBrowserPopover.mockClear()
+  state.setDevtoolsLayout.mockClear()
   state.openBrowserWindow.mockClear()
   state.createTab.mockClear()
   state.isBrowserWindowOpen.mockReset()
@@ -215,6 +224,52 @@ describe('browserViewHandlers：布局只认宿主窗口', () => {
     send('browser-view:set-visible', HOST, true)
     expect(state.setPanelVisible).toHaveBeenCalledTimes(2)
     expect(state.setPanelVisible).toHaveBeenLastCalledWith(true)
+  })
+})
+
+describe('弹层的透明 view 与贴边的布局（BS-U45 / BS-U46）', () => {
+  const PLACEMENT = { bounds: { x: 80, y: 42, width: 360, height: 244 }, focus: 'take' }
+  const fromNet = (channel: string, ...args: unknown[]): unknown => {
+    const definition = listDefinitions().find((d) => d.channel === channel)
+    if (!definition) throw new Error(`no definition for ${channel}`)
+    return definition.fn(netCtx(1), ...args)
+  }
+
+  it('BS-U45 宿主窗口：矩形原样交给 setBrowserPopover；null 就是关', () => {
+    send('browser-view:set-popover', HOST, PLACEMENT)
+    expect(state.setBrowserPopover.mock.calls).toEqual([[PLACEMENT]])
+    expect(state.setBrowserPopover.mock.calls[0][0]).toBe(PLACEMENT)
+    send('browser-view:set-popover', HOST, null)
+    expect(state.setBrowserPopover).toHaveBeenCalledTimes(2)
+    expect(state.setBrowserPopover).toHaveBeenLastCalledWith(null)
+  })
+
+  it('BS-U45 别的窗口（9）与网络客户端：不理、不抛', () => {
+    expect(() => send('browser-view:set-popover', OTHER, PLACEMENT)).not.toThrow()
+    expect(() => send('browser-view:set-popover', OTHER, null)).not.toThrow()
+    expect(() => fromNet('browser-view:set-popover', PLACEMENT)).not.toThrow()
+    expect(state.setBrowserPopover).not.toHaveBeenCalled()
+  })
+
+  it.each([['x'], [1], [false], [{}]])(
+    'BS-U45 宿主窗口发来的不是矩形（%j）：setBrowserPopover(null)',
+    (junk) => {
+      expect(() => send('browser-view:set-popover', HOST, junk)).not.toThrow()
+      expect(state.setBrowserPopover.mock.calls).toEqual([[null]])
+    }
+  )
+
+  it('BS-U46 set-layout / set-devtools-layout 带的 viewport 原样到服务', () => {
+    const viewport = { width: 1024, height: 768 }
+    const entries = [
+      { tabId: 'tab-a', bounds: { x: 0, y: 76, width: 1024, height: 692 }, viewport }
+    ]
+    send('browser-view:set-layout', HOST, entries)
+    expect(state.setLayout.mock.calls).toEqual([[entries]])
+
+    const slot = { tabId: 'tab-a', bounds: { x: 0, y: 500, width: 1024, height: 268 }, viewport }
+    send('browser-view:set-devtools-layout', HOST, slot)
+    expect(state.setDevtoolsLayout.mock.calls).toEqual([[slot]])
   })
 })
 

@@ -38,6 +38,10 @@
  *           什么也不做；前端已销毁不调；executeJavaScript 失败不成为未处理的 rejection；
  *   DD-U19  runShortcut 只作用于选中的那页（内部页面、没有 tab 什么也不做）；真按键经页面与前端的
  *           before-input-event 都走到这里，按住不放不连发。
+ *   DD-U39  窗口变了：resize 事件里 DevTools 跟着窗口底边走，高度不变；
+ *   DD-U40  页面与 DevTools 之间的缝隙（放页签条的那 32px）在窗口变大、变小时不变，缩放 1.25 时差不过 1 DIP，从不重叠；
+ *   DD-U41  窗口变了之后，外壳晚到的矩形（旧窗口尺寸）：还是现在的尺寸，不被拉回去；
+ *   DD-U42  门关着、停在「Agent」、没有矩形时 resize：前端不挂、不摆，不抛。
  *
  * electron 是 ./fakeElectron.ts；agentGuards / browserCdpService 是间谍（agentActing 按用例拨的 tab 集合回答）；
  * browserViewService / devtoolsDock / agentDevtools / browserWindowService / stagingWindow 都是真的。
@@ -1313,5 +1317,103 @@ describe('快捷键作用于选中的那页（DD-U19）', () => {
     expect(row(a.id)).not.toHaveProperty('devtools')
     expect(frontend.webContents.close).toHaveBeenCalledTimes(1)
     expect(jsCalls(frontend)).toEqual([[INSPECT]])
+  })
+})
+
+describe('窗口尺寸变了（DD-U39 – DD-U42）', () => {
+  const NATIVE: Rect = { x: 0, y: 500, width: 1000, height: 260 }
+  const PAGE_AREA: Rect = { x: 0, y: 76, width: 1000, height: 392 }
+  const VIEWPORT = { width: 1000, height: 760 }
+
+  /** 单页视图：页面 + 停靠区开在 DevTools 页签，窗口内容区 1000×760 */
+  function docked(zoom = 1): { bw: FakeWindow; page: FakeView; frontend: FakeView } {
+    const bw = openByUser()
+    bw.webContents.zoom = zoom
+    bw.contentSize = [1000 * zoom, 760 * zoom]
+    const a = tab('https://a.test/', { activate: true })
+    views.setPanelVisible(true)
+    views.setLayout([{ tabId: a.id, bounds: PAGE_AREA, viewport: VIEWPORT }])
+    dock.openDevtoolsDock(a.id, 'devtools')
+    dock.setDevtoolsLayout({ tabId: a.id, bounds: NATIVE, viewport: VIEWPORT })
+    return { bw, page: a.view, frontend: onlyFrontendOf(a.view) }
+  }
+
+  /** 缝隙（DIP）：DevTools 的上沿 − 页面的下沿 */
+  function gapBetween(page: FakeView, frontend: FakeView): number {
+    const p = page.setBounds.mock.lastCall![0]
+    const f = frontend.setBounds.mock.lastCall![0]
+    return f.y - (p.y + p.height)
+  }
+
+  it('DD-U39 窗口变大：DevTools 跟着底边走、宽度跟着窗口、高度不变', () => {
+    const { bw, frontend } = docked()
+    expect(frontend.setBounds).toHaveBeenLastCalledWith(NATIVE)
+
+    bw.contentSize = [1200, 900]
+    bw.emit('resize')
+
+    expect(frontend.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 640, width: 1200, height: 260 })
+  })
+
+  it('DD-U40 页面与 DevTools 之间的缝隙：变大、变小都是 32', () => {
+    const { bw, page, frontend } = docked()
+    expect(gapBetween(page, frontend)).toBe(32)
+
+    for (const size of [
+      [1200, 900],
+      [1100, 801],
+      [800, 600]
+    ] as const) {
+      bw.contentSize = [size[0], size[1]]
+      bw.emit('resize')
+      expect(gapBetween(page, frontend), `${size[0]}×${size[1]}`).toBe(32)
+    }
+  })
+
+  it('DD-U40 缩放 1.25：缝隙差不过 1 DIP，从不重叠', () => {
+    const { bw, page, frontend } = docked(1.25)
+    for (const size of [
+      [1500, 1125],
+      [1501, 1127],
+      [1003, 757]
+    ] as const) {
+      bw.contentSize = [size[0], size[1]]
+      bw.emit('resize')
+      const gap = gapBetween(page, frontend)
+      expect(Math.abs(gap - 40), `${size[0]}×${size[1]}: ${gap}`).toBeLessThanOrEqual(1)
+      expect(gap).toBeGreaterThan(0)
+    }
+  })
+
+  it('DD-U41 窗口变了之后，外壳晚到的矩形（旧窗口尺寸）：还是现在的尺寸', () => {
+    const { bw, frontend } = docked()
+    bw.contentSize = [1200, 900]
+    bw.emit('resize')
+    frontend.setBounds.mockClear()
+
+    const tabId = views.listTabs()[0].id
+    dock.setDevtoolsLayout({ tabId, bounds: NATIVE, viewport: VIEWPORT })
+
+    expect(frontend.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 640, width: 1200, height: 260 })
+    for (const [rect] of frontend.setBounds.mock.calls) expect(rect.width).toBe(1200)
+  })
+
+  it.each([
+    ['墙级门关着', (): void => views.setPanelVisible(false)],
+    ['停在「Agent」页签', (): void => dock.openDevtoolsDock(views.listTabs()[0].id, 'agent')],
+    ['没有矩形', (): void => dock.setDevtoolsLayout(null)]
+  ])('DD-U42 %s：resize 不挂前端、不摆，不抛', (_label, arrange) => {
+    const { bw, frontend } = docked()
+    arrange()
+    expect(bw.children).not.toContain(frontend)
+    frontend.setBounds.mockClear()
+    fx.log.length = 0
+
+    bw.contentSize = [1200, 900]
+    expect(() => bw.emit('resize')).not.toThrow()
+
+    expect(bw.children).not.toContain(frontend)
+    expect(frontend.setBounds).not.toHaveBeenCalled()
+    expect(fx.log.filter((line) => line.includes(`(${frontend.label})`))).toEqual([])
   })
 })

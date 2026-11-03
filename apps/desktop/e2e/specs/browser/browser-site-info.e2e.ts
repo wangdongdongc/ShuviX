@@ -1,10 +1,11 @@
 /**
  * 地址栏的站点信息气泡（2026-10-16，Chrome 的 page info）：连接状态、这页的 cookie 与「删除此网站的数据」、
- * 「网站设置」。气泡是 DOM 弹层、原生页面画在它上面，所以开着时页面区换成截图（`[data-page-cover]`）。
+ * 「网站设置」。气泡渲染在页面上方的透明 view 里，页面不受影响（BS-E7 钉它的视口与 document.hidden 不变）。
  * 夹具网站记下每一个请求（连同请求带的 Cookie 头）。一个实例按顺序走：
  *
  *   BS-E7  夹具页（http，写一个 cookie）上点站点信息按钮：气泡开出来，连接是 insecure，cookie 数与 IPC
- *          `browserData.siteInfo` 一致；开着时页面区有一张 `data:` 截图；Esc 关掉气泡并撤掉截图；
+ *          `browserData.siteInfo` 一致；开着时弹层文档的主题与外壳一样；页面从开到关一直没被动过（视口、可见性都没变，
+ *          resize / visibilitychange 一次都没发）；Esc 关掉气泡；
  *   BS-E8  删除此网站的数据 → 确认：页面重新加载（夹具 +1），那次加载的请求**没带**被删的 cookie，气泡关掉；
  *   SD-E2  IPC `siteInfo(url).site` 是网站数据的分组键 `127.0.0.1`；再开气泡 → 网站设置 → 设置页被选中、直接是
  *          `127.0.0.1` 的站点详情（`[data-site-details="127.0.0.1"]`，读出了那个 cookie）；返回 → 网站列表，搜索框是
@@ -25,6 +26,7 @@ import {
   type BrowserWallPane
 } from '../../harness/pages'
 import {
+  connectTabPage,
   FIXTURE_COOKIE,
   startFixtureServer,
   type FixtureServer
@@ -38,6 +40,15 @@ interface TabRow {
 }
 
 const PAGE = '/form.html?bs=site-info'
+
+/** BS-E7：页面自己看到的样子（从开气泡到关气泡都不该变） */
+interface PageView {
+  width: number
+  height: number
+  visibility: string
+  resizes: number
+  visibilityChanges: number
+}
 
 let app: E2EApp
 let fixture: FixtureServer
@@ -81,7 +92,7 @@ afterAll(async () => {
 })
 
 describe('站点信息气泡（BS-E7 / BS-E8 / SD-E2）', () => {
-  it('BS-E7 夹具页：气泡开出来（insecure、cookie 数与 IPC 一致），开着时页面区是 data: 截图；Esc 关掉、撤掉截图', async () => {
+  it('BS-E7 夹具页：气泡开出来（insecure、cookie 数与 IPC 一致），弹层跟着外壳的主题；页面一动不动；Esc 关掉', async () => {
     const url = fixture.url(PAGE)
     tab = await app.main.eval<string>(`window.api.browserView.createTab(${JSON.stringify(url)})`)
     await until(() => fixture.hits(PAGE) === 1, 'fixture page requested')
@@ -91,18 +102,35 @@ describe('站点信息气泡（BS-E7 / BS-E8 / SD-E2）', () => {
       'fixture cookie stored for this page'
     )
     await until(async () => (await wall.singlePageTabId()) === tab, 'page area shows the tab')
-    // 页面刚挂进页面区的头几帧 capturePage 会回一张空图（气泡照开，只是页面区那段时间空着 —— 产品接受的退路）：
-    // 先等它真的画出来，才断得了「开着时页面区是截图」
-    await until(
-      () =>
-        bw.eval<boolean>(
-          `window.api.browserView.capture(${JSON.stringify(tab)}, 64).then((s) => s.length > 0)`
-        ),
-      'the page has rendered a frame'
-    )
     await until(() => siteInfo.buttonPresent(), 'site-info button in the omnibox')
     expect(await siteInfo.bubble()).toBeNull()
-    expect(await siteInfo.coverSrc()).toBeNull()
+
+    // 页面自己看到的：视口、可见性，以及从现在起发生过几次 resize / visibilitychange
+    const pageClient = await until(
+      () => connectTabPage(app.port, (u) => u === url),
+      'DevTools connection to the page'
+    )
+    const pageView = (): Promise<PageView> =>
+      pageClient.eval<PageView>(`({
+        width: window.innerWidth,
+        height: window.innerHeight,
+        visibility: document.visibilityState,
+        resizes: window.__bsResizes,
+        visibilityChanges: window.__bsVisibilityChanges
+      })`)
+    // 页面刚从停放窗口搬到页面区，那次搬动的 resize 要到下一帧才发：等它发完再开始数
+    await pageClient.eval(
+      `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`
+    )
+    await pageClient.eval(`(() => {
+      window.__bsResizes = 0
+      window.__bsVisibilityChanges = 0
+      window.addEventListener('resize', () => window.__bsResizes++)
+      document.addEventListener('visibilitychange', () => window.__bsVisibilityChanges++)
+    })()`)
+    const before = await pageView()
+    expect(before.resizes).toBe(0)
+    expect(before.visibilityChanges).toBe(0)
 
     await siteInfo.clickButton()
     const bubble = await until(siteInfo.bubble, 'site-info bubble open')
@@ -114,13 +142,23 @@ describe('站点信息气泡（BS-E7 / BS-E8 / SD-E2）', () => {
       async () => (await siteInfo.bubble())?.cookies === String(expected),
       `bubble shows ${expected} cookie(s)`
     )
-    const src = await until(siteInfo.coverSrc, 'page cover while the bubble is open')
-    expect(src.startsWith('data:image/')).toBe(true)
+    expect(await pageView()).toEqual(before)
+
+    // 弹层的文档是外壳 window.open 出来的，主题从外壳的 <html> 抄过去
+    const themes = await bw.eval<{ popover: string | null; shell: string | null }>(`({
+      popover: window
+        .open('', 'shuvix-browser-popover')
+        .document.documentElement.getAttribute('data-theme'),
+      shell: document.documentElement.getAttribute('data-theme')
+    })`)
+    expect(themes.shell).toBeTruthy()
+    expect(themes.popover).toBe(themes.shell)
 
     await siteInfo.pressEscape()
     await until(async () => (await siteInfo.bubble()) === null, 'bubble closed by Escape')
-    await until(async () => (await siteInfo.coverSrc()) === null, 'page cover removed')
     expect(await wall.singlePageTabId()).toBe(tab)
+    expect(await pageView()).toEqual(before)
+    pageClient.close()
   }, 90_000)
 
   it('BS-E8 删除此网站的数据：重新加载（夹具 +1、那次请求没带 cookie）、气泡关掉', async () => {
@@ -141,7 +179,6 @@ describe('站点信息气泡（BS-E7 / BS-E8 / SD-E2）', () => {
     const reload = fixture.requests().filter((r) => r.path === PAGE)[before]
     expect(reload.cookie).not.toContain(`${FIXTURE_COOKIE}=`)
     await until(async () => (await siteInfo.bubble()) === null, 'bubble closed after delete')
-    await until(async () => (await siteInfo.coverSrc()) === null, 'page cover removed')
     // 重新加载那一页又写了一个 cookie（夹具每次都写）—— 网站数据里于是又有 127.0.0.1
     await until(async () => (await ipcSiteInfo(url)).cookieCount > 0, 'cookie set again on reload')
   }, 90_000)
@@ -174,7 +211,6 @@ describe('站点信息气泡（BS-E7 / BS-E8 / SD-E2）', () => {
     expect(shot.cookies.map((c) => c.name)).toContain(FIXTURE_COOKIE)
     expect(shot.empty).toBe(false)
     expect(await siteInfo.bubble()).toBeNull()
-    expect(await siteInfo.coverSrc()).toBeNull()
     // 在详情里：网站列表不在
     expect((await page.shot()).sites).toEqual([])
 

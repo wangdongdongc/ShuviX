@@ -88,7 +88,7 @@ export function BrowserToolbar({
         </button>
       )}
 
-      <Omnibox tab={tab} engine={engine} searchSuggest={searchSuggest} viewMode={viewMode} />
+      <Omnibox tab={tab} engine={engine} searchSuggest={searchSuggest} />
 
       <button
         className={iconBtn}

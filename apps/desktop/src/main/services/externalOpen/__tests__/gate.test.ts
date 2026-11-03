@@ -13,6 +13,8 @@
  *    静默；两份互不相干，且都是进程级一份而不是按窗口各算各的。
  *  - AG-39…53 guardAppWindow：弹窗一律 deny 但照样过闸，顶层导航一律 preventDefault 后过闸，
  *    只有 dev 渲染端地址（按**源**比较，每次导航现读环境变量）放行。
+ *  - AG-65 / 66 guardAppWindow 的第三个参数 allowOpen（浏览器窗口的弹层）：回非 null 就照它办，什么都不交出去；
+ *    回 null 走原来的路（名字对得上也一样）。
  *  - AG-59…64 guardAppWindow 装的第二个监听 will-frame-navigate（blockOpaqueFrameNavigation）：
  *    **发起方**是不透明源（`'null'`，即 sandbox 且不带 allow-same-origin 的 iframe —— 今天只有
  *    交互图）的子框架导航一律拦下、也不交给系统；发起方取不到（PDF 查看器那条路）、是真实的源、
@@ -41,7 +43,7 @@ interface MessageBoxOptions {
   detail: string
 }
 
-type PopupHandler = (details: { url: string }) => unknown
+type PopupHandler = (details: { url: string; frameName?: string }) => unknown
 type NavListener = (event: FakeNavEvent, url: string) => void
 
 /** will-navigate 的假事件：只关心 preventDefault 有没有被调 */
@@ -1118,6 +1120,39 @@ describe('guardAppWindow：自有窗口的弹窗与顶层导航', () => {
 
     answerB(1)
     await flush()
+  })
+})
+
+describe('guardAppWindow：窗口自己要开的（allowOpen）', () => {
+  const FRAME = 'shuvix-browser-popover'
+
+  it('AG-65 allowOpen 回一个答复：handler 回的就是它，什么都不交出去、也不问；allowOpen 拿到 url 与 frameName', async () => {
+    const gate = await load()
+    const win = makeWindow()
+    const response = { action: 'allow' as const, createWindow: vi.fn() }
+    const allowOpen = vi.fn(() => response)
+    gate.guardAppWindow(asWin(win), undefined, allowOpen as never)
+
+    const details = { url: 'about:blank', frameName: FRAME }
+    expect(popupHandler(win)(details)).toBe(response)
+    expect(allowOpen.mock.calls).toEqual([[details]])
+    await flush()
+    expect(state.openExternal).not.toHaveBeenCalled()
+    expect(state.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it('AG-66 allowOpen 回 null（https + 约定的名字）：deny，走 AG-41 那条路', async () => {
+    const gate = await load()
+    const win = makeWindow()
+    const allowOpen = vi.fn(() => null)
+    gate.guardAppWindow(asWin(win), undefined, allowOpen as never)
+
+    expect(popupHandler(win)({ url: 'https://x', frameName: FRAME })).toStrictEqual({
+      action: 'deny'
+    })
+    expect(allowOpen).toHaveBeenCalledTimes(1)
+    expect(state.openExternal.mock.calls).toEqual([['https://x/']])
+    expect(state.showMessageBox).not.toHaveBeenCalled()
   })
 })
 

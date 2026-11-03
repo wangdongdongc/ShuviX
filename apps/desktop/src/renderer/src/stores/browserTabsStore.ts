@@ -46,16 +46,6 @@ export interface SettingsFocus {
   nonce: number
 }
 
-/**
- * 页面被一个 DOM 弹层盖住的时候（站点信息气泡）：原生页面画在 DOM 之上、会把弹层盖住，所以这段时间
- * 页面区换成它的截图，原生 view 让位（布局表报 setVisible(false)），弹层关掉再换回来。
- */
-export interface PageCover {
-  tabId: string
-  /** 截图（dataURL）；还没抓到时为空串（页面区先空着） */
-  snapshot: string
-}
-
 /** 浏览器窗口的两种视图：单页（Chrome 的样子，缺省）与平铺墙（同时看多页） */
 export type BrowserViewMode = 'single' | 'wall'
 export const VIEW_MODE_SETTING = 'browser.viewMode'
@@ -77,7 +67,6 @@ interface BrowserTabsState {
   /** 每加一次，地址栏就聚焦一次（⌘L / ⌘T / 新标签页） */
   omniboxFocusNonce: number
   settingsFocus: SettingsFocus | null
-  pageCover: PageCover | null
 
   /** `transition`：从地址栏开的（typed = 网址、generated = 搜索），记进历史用 */
   createTab: (url?: string, transition?: HistoryTransition) => void
@@ -92,7 +81,6 @@ interface BrowserTabsState {
   requestOmniboxFocus: () => void
   /** 打开设置页并跳到某一节（站点信息气泡里的「网站设置」） */
   openSettings: (section?: SettingsFocus['section'], search?: string, site?: string) => void
-  setPageCover: (cover: PageCover | null) => void
   /** 设置页用掉了跳转请求 */
   clearSettingsFocus: () => void
 }
@@ -106,7 +94,6 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   activeTabId: null,
   omniboxFocusNonce: 0,
   settingsFocus: null,
-  pageCover: null,
 
   createTab: (url, transition) => {
     if (transition) void api()?.createTab(url, transition)
@@ -148,7 +135,6 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
       }))
     }
   },
-  setPageCover: (cover) => set({ pageCover: cover }),
   clearSettingsFocus: () => set({ settingsFocus: null })
 }))
 

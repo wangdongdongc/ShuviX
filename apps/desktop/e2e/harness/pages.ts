@@ -9198,6 +9198,12 @@ export interface BrowserOmniboxInput {
   selectionEnd: number | null
 }
 
+/**
+ * 浏览器窗口弹层（站点信息气泡、地址栏下拉）所在的文档（在外壳页面里求值）：页面上方那块透明 view，外壳 `window.open`
+ * 出来的。按名字开，已经开着就是原来那个。
+ */
+const BROWSER_POPOVER_DOC = `window.open('', 'shuvix-browser-popover').document`
+
 /** 地址栏下拉建议的一行（`[data-omnibox-match]`） */
 export interface BrowserOmniboxRow {
   /** url / search / history / tab */
@@ -9385,7 +9391,7 @@ export function browserShellPane(bw: CdpClient): BrowserShellPane {
     },
     omniboxPopupRows: () =>
       bw.eval<BrowserOmniboxRow[]>(
-        `[...document.querySelectorAll('[data-omnibox-match]')].map((el) => ({
+        `[...${BROWSER_POPOVER_DOC}.querySelectorAll('[data-omnibox-match]')].map((el) => ({
           kind: el.getAttribute('data-omnibox-match') ?? '',
           key: el.getAttribute('data-omnibox-key') ?? '',
           selected: el.getAttribute('data-selected') === 'true'
@@ -9535,8 +9541,8 @@ export function historyPagePane(bw: CdpClient): HistoryPagePane {
 //     值 = `[data-site-cookie-value]`，删这一条（不确认）= `[data-site-cookie-delete]`；
 //   - 站点信息按钮 = `[data-site-info-button]`（地址栏左端，只有网页 / 本地文件有）；气泡 = `[data-site-info="<host>"]`，
 //     连接一行 = `[data-site-connection="secure|insecure|local"]`，cookie 数 = `[data-site-cookies="<n>"]`，删除 =
-//     `[data-site-clear]` → `[data-site-clear-confirm]`，网站设置 = `[data-site-settings]`；气泡开着时页面区的截图 =
-//     `[data-page-cover]`（`<img>`）。Esc 是 document 上的 keydown；
+//     `[data-site-clear]` → `[data-site-clear-confirm]`，网站设置 = `[data-site-settings]`。气泡与地址栏下拉都渲染在
+//     页面上方那块透明 view 的文档里（`BROWSER_POPOVER_DOC`），不在外壳的 document 里。Esc 是 document 上的 keydown；
 //   - 证书警告 = `[data-cert-interstitial="<host:port>"]`（也是 `[data-page-error="cert"]`），高级 = `[data-cert-advanced]`，
 //     继续前往 = `[data-cert-proceed]`（高级展开后才有），返回 = `[data-cert-back]`。
 
@@ -9810,11 +9816,6 @@ export interface BrowserSiteInfoPane {
   clickButton(): Promise<void>
   /** 气泡的快照；没开回 null */
   bubble(): Promise<BrowserSiteInfoShot | null>
-  /**
-   * 页面区截图（`[data-page-cover]`）的 src 的**前 64 个字符**（整张 dataURL 动辄几 MB，经 CDP 回传会失败）；
-   * 没有回 null
-   */
-  coverSrc(): Promise<string | null>
   /** 在 document 上按 Esc */
   pressEscape(): Promise<void>
   /** 删除此网站的数据 → 确认 */
@@ -9825,7 +9826,7 @@ export interface BrowserSiteInfoPane {
 
 /** 地址栏的站点信息气泡 */
 export function browserSiteInfoPane(bw: CdpClient): BrowserSiteInfoPane {
-  const BUBBLE = `document.querySelector('[data-site-info]')`
+  const BUBBLE = `${BROWSER_POPOVER_DOC}.querySelector('[data-site-info]')`
   const clickIn = async (expr: string, what: string): Promise<void> => {
     await until(
       () =>
@@ -9855,10 +9856,6 @@ export function browserSiteInfoPane(bw: CdpClient): BrowserSiteInfoPane {
           cookies: cookies ? cookies.getAttribute('data-site-cookies') : null
         }
       })()`),
-    coverSrc: () =>
-      bw.eval<string | null>(
-        `document.querySelector('[data-page-cover]')?.getAttribute('src')?.slice(0, 64) ?? null`
-      ),
     pressEscape: async () => {
       await bw.eval(
         `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`

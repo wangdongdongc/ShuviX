@@ -10,7 +10,7 @@
  *          (1) 离屏 —— 引用 rendersOffscreen，恰是 stagingWindow / browserViewService / widgetPreviewService；
  *          (2) 无头时拒绝开窗 —— 引用 isHeadless 或 headlessWindowError，今天是 index / markdownWindowService /
  *              previewWindowService / widgetWindowService / browserWindowService；
- *          (3) 审过的少数几处（各带一句理由）：pinnedChatService、devtoolsDock、siteData；
+ *          (3) 审过的少数几处（各带一句理由）：pinnedChatService、devtoolsDock、browserPopover、siteData；
  *          一类都不落的报错说「rendersOffscreen() 为真时离屏，或无头时拒绝」；审过的清单里没有过期的条目
  *
  * 为什么要它：Linux 上无头运行时 Chromium 跑在 Ozone 的 headless 平台上，Electron 39 在那里建任何**不离屏**的
@@ -52,6 +52,8 @@ const REVIEWED_SITES: Record<string, string> = {
     'pin requests only come from a desktop window (pinChat:pin is desktop-only, so a browser cannot ask for one)',
   'services/browser/devtoolsDock.ts':
     "only reachable from the browser window's shell, which never opens headless",
+  'services/browser/browserPopover.ts':
+    "only reachable from the browser window's shell (window.open), which never opens headless",
   'services/browser/siteData.ts':
     "only reachable from the browser window's shell (its settings page), which never opens headless"
 }

@@ -7,10 +7,9 @@ import type { OmniboxMatch } from './omniboxSuggest'
 
 /**
  * 地址栏下面的建议列表（Chrome 的 omnibox popup）。只管画和鼠标：选中哪一行、键盘怎么走、回车开什么都在
- * Omnibox 里。行上 mousedown 一律 preventDefault —— 焦点留在地址栏，点完才由 Omnibox 决定去哪儿。
+ * Omnibox 里。行上 mousedown 一律 preventDefault，点完才由 Omnibox 决定去哪儿。
  *
- * 它是 DOM 弹层，会落在页面区上方；原生页面画在 DOM 之上，所以开着的时候页面区换成截图（store 的 pageCover，
- * 由 Omnibox 先抓好再打开），与站点信息气泡同一个机制。
+ * 它住在页面上方的透明 view 里（BrowserPopover，Omnibox 给它包的那层），键盘焦点始终留在地址栏。
  */
 export function OmniboxPopup({
   id,
@@ -37,7 +36,7 @@ export function OmniboxPopup({
       id={id}
       role="listbox"
       aria-label={t('browser.omnibox.suggestions')}
-      className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 py-1.5 rounded-xl bg-bg-primary border border-border-secondary/60 shadow-lg overflow-hidden"
+      className="py-1.5 rounded-xl bg-bg-primary text-text-primary border border-border-secondary/60 shadow-lg overflow-hidden"
       data-omnibox-popup
     >
       {matches.map((match, index) => (

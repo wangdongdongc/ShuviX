@@ -13,7 +13,8 @@
  *   SD-U38  「网站设置」带上 siteInfo 回的 `site`（网站数据的分组键）→ settingsFocus 多一个 site（设置页直接进那个网站的
  *           详情），search 照旧是主机名；siteInfo 还没回答 / 回答里没有 site → 没有 site 这个键；本地文件两个键都没有。
  *
- * `window.api` 是 browserDomSupport 的假件；store 是真的；真 en 文案。
+ * `window.api` 是 browserDomSupport 的假件；store 是真的；真 en 文案。气泡经 BrowserPopover 渲染进弹层的文档
+ * （installPopoverWindow 的 iframe），所以查询都在那份文档里。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { act } from 'react'
@@ -24,22 +25,28 @@ import {
   flush,
   initEnI18n,
   installFakeApi,
+  installPopoverWindow,
   installRaf,
+  installResizeObserver,
   mountInto,
   tabInfo,
+  warmPopoverHost,
   type FakeApi,
-  type Mounted
+  type Mounted,
+  type PopoverWindow
 } from './browserDomSupport'
 
 let api: FakeApi
+let pop: PopoverWindow
 let m: Mounted | null = null
 let onClose: Mock<() => void>
+/** 地址栏的替身（气泡放在它下方） */
+let anchorEl: HTMLDivElement
 
-const $ = <T extends Element = HTMLElement>(sel: string): T | null =>
-  m!.container.querySelector<T>(sel)
+const $ = <T extends Element = HTMLElement>(sel: string): T | null => pop.doc.querySelector<T>(sel)
 
 async function mount(tab: BrowserTabInfo): Promise<void> {
-  m = await mountInto(SiteInfoBubble, { tab, onClose })
+  m = await mountInto(SiteInfoBubble, { tab, anchor: { current: anchorEl }, onClose })
   await flush()
 }
 
@@ -68,21 +75,26 @@ beforeAll(async () => {
   await initEnI18n()
 })
 
-beforeEach(() => {
+beforeEach(async () => {
   api = installFakeApi()
   installRaf()
+  installResizeObserver()
+  pop = installPopoverWindow()
+  await warmPopoverHost()
+  anchorEl = document.createElement('div')
+  document.body.appendChild(anchorEl)
   onClose = vi.fn<() => void>()
   useBrowserTabsStore.setState({
     tabs: [],
     activeTabId: null,
-    settingsFocus: null,
-    pageCover: null
+    settingsFocus: null
   })
 })
 
 afterEach(() => {
   m?.unmount()
   m = null
+  anchorEl.remove()
 })
 
 describe('连接一行（BS-U30）', () => {
@@ -181,7 +193,7 @@ describe('删除与网站设置（BS-U32）', () => {
     api.browserData.siteInfo.mockResolvedValue({ cookieCount: 2, certException: false })
     await mount(tabInfo({ id: 't1', url: URL_X }))
     click(btn('[data-site-clear]'))
-    const cancel = [...m!.container.querySelectorAll('button')].find(
+    const cancel = [...pop.doc.querySelectorAll('button')].find(
       (b) => b.textContent?.trim() === 'Cancel'
     )
     click(cancel!)

@@ -13,6 +13,7 @@ import { AgentInfobar } from './AgentInfobar'
 import { BrowserSinglePage } from './BrowserSinglePage'
 import { BrowserWall } from './BrowserWall'
 import { BrowserDevtoolsDock } from './BrowserDevtoolsDock'
+import { warmBrowserPopover } from './browserPopoverHost'
 import { DOCK_DEFAULT_HEIGHT, clampDockHeight } from './dockHeight'
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_SETTING, searchEngineOf } from './omnibox'
 import {
@@ -63,7 +64,10 @@ export function BrowserWindowShell(): React.JSX.Element {
     }
     void loadSettings().then(() => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => window.api.app.windowReady())
+        requestAnimationFrame(() => {
+          window.api.app.windowReady()
+          warmBrowserPopover()
+        })
       })
     })
     return window.api.events.subscribe((event) => {

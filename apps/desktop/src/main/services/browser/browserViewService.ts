@@ -42,6 +42,8 @@ import { rendersOffscreen } from '../../utils/headless'
 import { destroyStagingWindow, getStagingWindow, STAGING_SIZE } from './stagingWindow'
 import { agentActing, agentOpInFlight, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { browserShortcutFor, nextZoomPercent, type BrowserShortcut } from './shortcuts'
+import { anchoredRect, scaledRect, type Rect, type Viewport } from './layoutAnchors'
+import { raiseBrowserPopover } from './browserPopover'
 import {
   applyDevtoolsLayout,
   closeDevtoolsDock,
@@ -101,16 +103,11 @@ const parentOf = new Map<string, BrowserWindow>()
 let activeTabId: string | null = null
 /** 浏览器窗口（卡片墙）；没开过 / 已销毁时为 null —— tab 照样活在停放窗口里 */
 let hostWindow: BrowserWindow | null = null
-interface Rect {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 /** 一个 tab 在面板里的落位：矩形 + 页面缩放（卡片小的时候按桌面宽度排版再整体缩小） */
 interface Slot {
   bounds: Rect
+  /** 外壳量矩形那一刻的窗口尺寸；给了就表示这块矩形贴着窗口边缘（单页视图），见 layoutAnchors.ts */
+  viewport?: Viewport
   /**
    * 页面 zoomFactor；1 = 原样。与宿主窗口的 UI zoom 无关。
    * 不给 = 用户自己按站点调的缩放（⌘+ / ⌘−，见 userZoom）—— 单页视图就是这样；平铺墙按卡片宽度给。
@@ -230,6 +227,8 @@ function attachTo(tabId: string, view: WebContentsView, target: BrowserWindow): 
   if (current && !current.isDestroyed()) current.contentView.removeChildView(view)
   target.contentView.addChildView(view)
   parentOf.set(tabId, target)
+  // 新挂上去的 view 在最上面，弹层不能被它盖住
+  if (target === hostWindow) raiseBrowserPopover()
 }
 
 /**
@@ -358,6 +357,19 @@ function userZoomPercentOf(view: WebContentsView): number {
   return Math.round(userZoomOf(view) * 100)
 }
 
+function contentSizeOf(win: BrowserWindow): Viewport {
+  const [width, height] = win.getContentSize()
+  return { width, height }
+}
+
+/**
+ * 窗口尺寸变了（拖边框、最大化、全屏）：当场重摆贴边的 view，不等外壳量完报回来，见 layoutAnchors.ts。
+ * 平铺墙的卡片贴不了边，仍由外壳上报。
+ */
+export function relayoutOnWindowResize(): void {
+  applyLayout()
+}
+
 /**
  * 把布局表 + panelVisible 施加到全部 view（窗口 zoom 现算）：表里有落位的挂进浏览器窗口、铺到
  * 自己的矩形上；其余停到停放窗口。**没有哪条分支 setVisible(false)**（原因见文件头）。
@@ -373,14 +385,12 @@ function applyLayout(): void {
       continue
     }
     attachTo(tabId, view, host)
-    const { bounds } = slot
     const zoom = slot.zoom ?? userZoomOf(view)
-    view.setBounds({
-      x: Math.round(bounds.x * winZoom),
-      y: Math.round(bounds.y * winZoom),
-      width: Math.round(bounds.width * winZoom),
-      height: Math.round(bounds.height * winZoom)
-    })
+    view.setBounds(
+      slot.viewport
+        ? anchoredRect(slot.bounds, slot.viewport, contentSizeOf(host), winZoom, 'stretch')
+        : scaledRect(slot.bounds, winZoom)
+    )
     // 页面缩放：卡片很小时按桌面宽度排版再整体缩小，避免只看到手机版局部。
     // 对 agent 透明 —— CDP 的坐标与 getBoundingClientRect 都是 CSS px，与 zoom 无关。
     if (Math.abs(view.webContents.getZoomFactor() - zoom) > 0.001) {
@@ -1183,12 +1193,18 @@ function showPageMenu(tabId: string, wc: WebContents, params: ContextMenuParams)
  * 未出现在 entries 里的 tab 一律回停放窗口（不隐藏，见文件头）—— 这是单视图/网格视图的唯一区别，
  * 也是不做逐 tab 增量更新的原因（拖拽/切模式时 N 次 IPC 会撕裂）。
  */
-export function setLayout(entries: Array<{ tabId: string; bounds: Rect; zoom?: number }>): void {
+export function setLayout(
+  entries: Array<{ tabId: string; bounds: Rect; viewport?: Viewport; zoom?: number }>
+): void {
   // 没给 zoom 的（单页视图）按用户在那个站点上调的缩放显示，见 Slot.zoom
   layout = new Map(
     entries.map((e): [string, Slot] => [
       e.tabId,
-      { bounds: e.bounds, ...(typeof e.zoom === 'number' ? { zoom: e.zoom } : {}) }
+      {
+        bounds: e.bounds,
+        ...(e.viewport ? { viewport: e.viewport } : {}),
+        ...(typeof e.zoom === 'number' ? { zoom: e.zoom } : {})
+      }
     ])
   )
   applyLayout()

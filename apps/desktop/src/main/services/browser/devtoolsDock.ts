@@ -21,14 +21,16 @@
 import { WebContentsView, type BrowserWindow, type WebContents } from 'electron'
 import { createLogger } from '../../logger'
 import type { DevtoolsDockPanel, DevtoolsDockState } from '../../../shared/browserAgentDevtools'
+import { anchoredRect, scaledRect, type Rect, type Viewport } from './layoutAnchors'
+import { raiseBrowserPopover } from './browserPopover'
 
 const log = createLogger('BrowserDevtools')
 
-interface Rect {
-  x: number
-  y: number
-  width: number
-  height: number
+/** 外壳上报的原生 DevTools 矩形（CSS px）；viewport = 量的那一刻的窗口尺寸 */
+interface NativeSlot {
+  tabId: string
+  bounds: Rect
+  viewport?: Viewport
 }
 
 interface Dock {
@@ -50,7 +52,7 @@ interface FrontendState {
 }
 const frontendStates = new WeakMap<WebContentsView, FrontendState>()
 /** renderer 上报的原生 DevTools 该铺在哪（CSS px）；停靠区没显示「DevTools」页签时为 null */
-let nativeSlot: { tabId: string; bounds: Rect } | null = null
+let nativeSlot: NativeSlot | null = null
 /** 正挂在浏览器窗口上的那个 frontend（同一时刻最多一个） */
 let mounted: { view: WebContentsView; parent: BrowserWindow } | null = null
 
@@ -239,7 +241,7 @@ export function noteDevtoolsClosed(tabId: string): void {
  * renderer 上报原生 DevTools 那块矩形（CSS px；没显示「DevTools」页签时 null）。
  * 只认开着停靠区、停在「DevTools」页签的那一页。
  */
-export function setDevtoolsLayout(slot: { tabId: string; bounds: Rect } | null): void {
+export function setDevtoolsLayout(slot: NativeSlot | null): void {
   nativeSlot = slot
   applyDevtoolsLayout()
 }
@@ -263,15 +265,19 @@ export function applyDevtoolsLayout(): void {
   if (mounted && mounted.view !== frontend) unmount(mounted.view)
   if (!mounted) {
     win.contentView.addChildView(frontend)
+    raiseBrowserPopover()
     mounted = { view: frontend, parent: win }
   }
   const zoom = win.webContents.getZoomFactor()
-  frontend.setBounds({
-    x: Math.round(slot.bounds.x * zoom),
-    y: Math.round(slot.bounds.y * zoom),
-    width: Math.round(slot.bounds.width * zoom),
-    height: Math.round(slot.bounds.height * zoom)
-  })
+  if (slot.viewport) {
+    // 停靠区贴着窗口底边、高度不变；窗口变的时候跟着走，见 layoutAnchors.ts
+    const [width, height] = win.getContentSize()
+    frontend.setBounds(
+      anchoredRect(slot.bounds, slot.viewport, { width, height }, zoom, 'pin-bottom')
+    )
+  } else {
+    frontend.setBounds(scaledRect(slot.bounds, zoom))
+  }
 }
 
 /** 浏览器窗口换了（建出来 / 销毁）：旧窗口上报的矩形作废，frontend 从旧窗口上摘下 */

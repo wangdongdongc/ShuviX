@@ -209,7 +209,7 @@ beforeEach(() => {
   api.browserData.siteDetails.mockImplementation(async (site: string) =>
     site === 'github.com' ? githubDetails() : null
   )
-  useBrowserTabsStore.setState({ settingsFocus: null, pageCover: null })
+  useBrowserTabsStore.setState({ settingsFocus: null })
 })
 
 afterEach(() => {

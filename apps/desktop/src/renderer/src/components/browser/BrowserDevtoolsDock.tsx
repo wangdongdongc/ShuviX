@@ -96,24 +96,35 @@ export function BrowserDevtoolsDock({
 function NativeDevtoolsSlot({ tabId }: { tabId: string }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef(0)
+  /** 主进程手上已经是什么；一样就不再发（拖窗口边框时主进程自己跟着窗口走，见 layoutAnchors.ts） */
+  const sentRef = useRef<string | null>(null)
 
   const reportNow = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
     const rect = ref.current?.getBoundingClientRect()
     const api = window.api.browserView
     if (!rect || rect.width <= 0 || rect.height <= 0) {
-      api.setDevtoolsLayout(null)
+      if (sentRef.current !== '') api.setDevtoolsLayout(null)
+      sentRef.current = ''
       return
     }
-    api.setDevtoolsLayout({
+    const bounds = {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height)
+    }
+    const viewport = { width: window.innerWidth, height: window.innerHeight }
+    const key = JSON.stringify([
       tabId,
-      bounds: {
-        x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height)
-      }
-    })
+      bounds.x,
+      bounds.height,
+      viewport.width - bounds.x - bounds.width,
+      viewport.height - bounds.y - bounds.height,
+      window.devicePixelRatio
+    ])
+    if (sentRef.current !== key) api.setDevtoolsLayout({ tabId, bounds, viewport })
+    sentRef.current = key
   }, [tabId])
 
   const report = useCallback(() => {
@@ -133,6 +144,7 @@ function NativeDevtoolsSlot({ tabId }: { tabId: string }): React.JSX.Element {
       window.removeEventListener('resize', report)
       cancelAnimationFrame(rafRef.current)
       window.api.browserView.setDevtoolsLayout(null)
+      sentRef.current = null
     }
   }, [report, reportNow])
 

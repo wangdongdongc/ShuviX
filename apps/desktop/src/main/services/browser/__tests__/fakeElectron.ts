@@ -32,7 +32,10 @@
  *  - `Menu.buildFromTemplate` 是间谍，回 `{ items, popup }`（popup 是间谍），建出来的菜单按顺序记进
  *    `fx.menus`；`clipboard.writeText` 是间谍；
  *  - `new WebContentsView()` 不带选项（停靠区的 DevTools 前端，用应用自己的 session）时 opts 记成
- *    `{ webPreferences: {} }`；
+ *    `{ webPreferences: {} }`；`new WebContentsView({ webContents })`（弹层的透明 view，webContents 是外壳
+ *    window.open 出来的）就用给的那个 —— `fx.mintWebContents()` 造一个，当 Electron 交给 createWindow 的；
+ *  - view 的 setBackgroundColor 是间谍；view 的 `webContents.isFocused()` 读 `focused`（用例直接拨）；
+ *  - 窗口的 `getContentSize()` 读可写的 `contentSize`（用例拨它，再 `win.emit('resize')`）；
  *  - `dialog.showOpenDialog` 是间谍（缺省回「用户取消」）—— 断「没弹原生文件框」用；
  *  - 停放窗口 = 构造选项 `focusable: false` 的那个（`fx.staging()`）；浏览器窗口 = 加载了
  *    `#browser-window` 的那些（`fx.browserWindows()`）；
@@ -138,6 +141,8 @@ export interface FakeViewWebContents {
   destroyed: boolean
   /** 渲染进程崩了（isCrashed 读它；用例直接拨） */
   crashed: boolean
+  /** isFocused 读它（用例直接拨） */
+  focused: boolean
   openHandler: ((details: { url: string }) => unknown) | undefined
   handlers: Map<string, Handler[]>
   setWindowOpenHandler(fn: (details: { url: string }) => unknown): void
@@ -146,6 +151,7 @@ export interface FakeViewWebContents {
   getTitle(): string
   isDestroyed(): boolean
   isCrashed(): boolean
+  isFocused(): boolean
   isLoading(): boolean
   /** 后退 / 前进（用例直接拨 canBack / canForward） */
   canBack: boolean
@@ -189,6 +195,7 @@ export interface FakeView {
   opts: { webPreferences: Record<string, unknown> }
   setVisible: Mock<(visible: boolean) => void>
   setBounds: Mock<(bounds: Rect) => void>
+  setBackgroundColor: Mock<(color: string) => void>
   webContents: FakeViewWebContents
 }
 
@@ -200,6 +207,8 @@ export interface FakeWindow {
   minimized: boolean
   focused: boolean
   destroyed: boolean
+  /** getContentSize 的回答（DIP）；用例直接拨 */
+  contentSize: [number, number]
   /** 此刻挂在它 contentView 上的 view */
   children: FakeView[]
   webContents: {
@@ -232,6 +241,7 @@ export interface FakeWindow {
   isFocused(): boolean
   isDestroyed(): boolean
   getBounds(): Rect
+  getContentSize(): [number, number]
 }
 
 export interface FakeSession {
@@ -287,6 +297,8 @@ export interface FakeElectron {
   fromPartition: Mock<(partition: string) => FakeSession>
   /** vi.mock('electron') 要回的模块 */
   module: Record<string, unknown>
+  /** 造一个还没有 view 的 webContents（当 Electron 交给 window.open 的 createWindow 的那个） */
+  mintWebContents(): FakeViewWebContents
   reset(): void
   staging(): FakeWindow | undefined
   browserWindows(): FakeWindow[]
@@ -329,6 +341,7 @@ function create(): FakeElectron {
     minimized = false
     focused = false
     destroyed = false
+    contentSize: [number, number] = [900, 700]
     children: FakeView[] = []
     webContents = {
       id: 0,
@@ -419,6 +432,75 @@ function create(): FakeElectron {
     getBounds(): Rect {
       return { ...fx.bounds }
     }
+    getContentSize(): [number, number] {
+      return [...this.contentSize]
+    }
+  }
+
+  fx.mintWebContents = () => {
+    const handlers = new Map<string, Handler[]>()
+    const wc: FakeViewWebContents = {
+      id: nextViewWcId++,
+      url: '',
+      loaded: [],
+      zoom: 1,
+      destroyed: false,
+      crashed: false,
+      focused: false,
+      openHandler: undefined,
+      handlers,
+      setWindowOpenHandler(fn) {
+        wc.openHandler = fn
+      },
+      loadURL: vi.fn(async (u: string) => {
+        wc.url = u
+        wc.loaded.push(u)
+      }),
+      getURL: () => wc.url,
+      getTitle: () => '',
+      isDestroyed: () => wc.destroyed,
+      isCrashed: () => wc.crashed,
+      isFocused: () => wc.focused,
+      isLoading: () => false,
+      canBack: false,
+      canForward: false,
+      navigationHistory: {
+        canGoBack: () => wc.canBack,
+        canGoForward: () => wc.canForward,
+        goBack: vi.fn(),
+        goForward: vi.fn()
+      },
+      reload: vi.fn(),
+      reloadIgnoringCache: vi.fn(),
+      focus: vi.fn(),
+      getZoomFactor: vi.fn(() => wc.zoom),
+      setZoomFactor: vi.fn((z: number) => {
+        wc.zoom = z
+      }),
+      close: vi.fn(() => {
+        wc.destroyed = true
+      }),
+      capturePage: vi.fn(async (_rect?: Rect) => fakeImage()),
+      print: vi.fn(),
+      setDevToolsWebContents: vi.fn(),
+      openDevTools: vi.fn(),
+      closeDevTools: vi.fn(),
+      inspectElement: vi.fn(),
+      executeJavaScript: vi.fn(async (_code: string): Promise<unknown> => undefined),
+      cut: vi.fn(),
+      copy: vi.fn(),
+      paste: vi.fn(),
+      selectAll: vi.fn(),
+      debugger: createFakeDebugger(),
+      on(event, fn) {
+        pushHandler(handlers, event, fn)
+        return wc
+      },
+      fire(event, ...args) {
+        return (handlers.get(event) ?? []).map((fn) => fn(...args))
+      }
+    }
+    return wc
   }
 
   class FakeWebContentsView implements FakeView {
@@ -426,72 +508,15 @@ function create(): FakeElectron {
     opts: { webPreferences: Record<string, unknown> }
     setVisible = vi.fn<(visible: boolean) => void>()
     setBounds = vi.fn<(bounds: Rect) => void>()
+    setBackgroundColor = vi.fn<(color: string) => void>()
     webContents: FakeViewWebContents
 
-    constructor(opts: { webPreferences: Record<string, unknown> } = { webPreferences: {} }) {
-      this.opts = opts
+    constructor(
+      opts: { webPreferences?: Record<string, unknown>; webContents?: FakeViewWebContents } = {}
+    ) {
+      this.opts = { webPreferences: opts.webPreferences ?? {} }
       this.label = `v${fx.views.length}`
-      const handlers = new Map<string, Handler[]>()
-      const wc: FakeViewWebContents = {
-        id: nextViewWcId++,
-        url: '',
-        loaded: [],
-        zoom: 1,
-        destroyed: false,
-        crashed: false,
-        openHandler: undefined,
-        handlers,
-        setWindowOpenHandler(fn) {
-          wc.openHandler = fn
-        },
-        loadURL: vi.fn(async (u: string) => {
-          wc.url = u
-          wc.loaded.push(u)
-        }),
-        getURL: () => wc.url,
-        getTitle: () => '',
-        isDestroyed: () => wc.destroyed,
-        isCrashed: () => wc.crashed,
-        isLoading: () => false,
-        canBack: false,
-        canForward: false,
-        navigationHistory: {
-          canGoBack: () => wc.canBack,
-          canGoForward: () => wc.canForward,
-          goBack: vi.fn(),
-          goForward: vi.fn()
-        },
-        reload: vi.fn(),
-        reloadIgnoringCache: vi.fn(),
-        focus: vi.fn(),
-        getZoomFactor: vi.fn(() => wc.zoom),
-        setZoomFactor: vi.fn((z: number) => {
-          wc.zoom = z
-        }),
-        close: vi.fn(() => {
-          wc.destroyed = true
-        }),
-        capturePage: vi.fn(async (_rect?: Rect) => fakeImage()),
-        print: vi.fn(),
-        setDevToolsWebContents: vi.fn(),
-        openDevTools: vi.fn(),
-        closeDevTools: vi.fn(),
-        inspectElement: vi.fn(),
-        executeJavaScript: vi.fn(async (_code: string): Promise<unknown> => undefined),
-        cut: vi.fn(),
-        copy: vi.fn(),
-        paste: vi.fn(),
-        selectAll: vi.fn(),
-        debugger: createFakeDebugger(),
-        on(event, fn) {
-          pushHandler(handlers, event, fn)
-          return wc
-        },
-        fire(event, ...args) {
-          return (handlers.get(event) ?? []).map((fn) => fn(...args))
-        }
-      }
-      this.webContents = wc
+      this.webContents = opts.webContents ?? fx.mintWebContents()
       fx.views.push(this)
     }
   }

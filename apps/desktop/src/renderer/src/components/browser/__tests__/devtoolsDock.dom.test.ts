@@ -4,7 +4,7 @@
  *
  *   DD-U30  停靠区只跟着**选中的那页**：那页没开着就什么也没有；开着就是页签条 + 当前页签；点页签 →
  *           browserView.openDevtools(tab, panel)，✕ → closeDevtools(tab)；Agent 页签带调用数；
- *   DD-U31  DevTools 页签：占位把自己的矩形报给 setDevtoolsLayout({tabId, bounds})；换到 Agent 页签（或停靠区
+ *   DD-U31  DevTools 页签：占位把自己的矩形报给 setDevtoolsLayout({tabId, bounds, viewport})；换到 Agent 页签（或停靠区
  *           关掉）报 null；Agent 页签不报矩形；
  *   DD-U32  Agent 页签：挂上就取一次快照；只在**这一页**的「变了」到来时再取；调用一行一条（data-tool /
  *           data-status：ok / failed / aborted / running），点开看参数与 agent 收到的结果（截断注明原长）；
@@ -14,12 +14,14 @@
  *   DD-U34  高度夹在 [140, 可用高度 − 120] 之间。
  *   DD-U35  拖上沿改高度（照 Chrome 实时变）：每次 mousemove → onHeight(按起点高度与起点 Y 算、夹过, false)；
  *           mouseup / 窗口失焦 / 左键已松开的 mousemove → onHeight(最后的高度, true) 一次，之后什么也不再报；
- *           只认左键；拖动中光标 row-resize、不可选中文字，结束复原；拖动期间不截图、不 setVisible、不盖
- *           pageCover、不报 null 矩形；
+ *           只认左键；拖动中光标 row-resize、不可选中文字，结束复原；拖动期间不截图、不 setVisible、不报 null 矩形；
  *   DD-U36  原生 DevTools 的占位在 ResizeObserver 回调里**当场**报矩形（零尺寸报 null）；窗口缩放仍排到下一帧
  *           （同一帧里 ResizeObserver 先报了就只报一次）；卸载之后旧占位的尺寸变化不再报。
+ *   DD-U43  拖窗口边框（占位跟着窗口变、高度和到边缘的距离不变）：不报；
+ *   DD-U44  高度、右边、底边、左边、devicePixelRatio 或 tab 变了：报一次，带 viewport；
+ *   DD-U45  零尺寸两次只报一个 null；卸载再挂上重新上报。
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { act, createElement } from 'react'
 import { BrowserDevtoolsDock } from '../BrowserDevtoolsDock'
 import { clampDockHeight } from '../dockHeight'
@@ -41,7 +43,9 @@ import {
   mouseMove,
   mouseUp,
   restoreInnerHeight,
+  restoreInnerWidth,
   stubInnerHeight,
+  stubInnerWidth,
   stubRects,
   tabInfo,
   windowBlur,
@@ -58,6 +62,9 @@ vi.mock('../sessionColor', () => ({
 let api: FakeApi
 let ro: ResizeObserverControl
 let m: Mounted | null = null
+
+/** jsdom 的缺省窗口尺寸 */
+const VIEWPORT = { width: 1024, height: 768 }
 
 const $ = <T extends Element = HTMLElement>(sel: string): T | null =>
   m!.container.querySelector<T>(sel)
@@ -113,8 +120,7 @@ beforeEach(() => {
   stubRects({ x: 0, y: 500, width: 1000, height: 260 })
   useBrowserTabsStore.setState({
     tabs: [],
-    activeTabId: null,
-    pageCover: null
+    activeTabId: null
   })
 })
 
@@ -126,6 +132,8 @@ afterEach(() => {
   m?.unmount()
   m = null
   restoreInnerHeight()
+  restoreInnerWidth()
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 })
   vi.restoreAllMocks()
 })
 
@@ -158,7 +166,8 @@ describe('原生 DevTools 的占位（DD-U31）', () => {
     await mountDock()
     expect(api.browserView.setDevtoolsLayout).toHaveBeenLastCalledWith({
       tabId: 'a',
-      bounds: { x: 0, y: 500, width: 1000, height: 260 }
+      bounds: { x: 0, y: 500, width: 1000, height: 260 },
+      viewport: VIEWPORT
     })
     api.browserView.setDevtoolsLayout.mockClear()
 
@@ -480,20 +489,17 @@ describe('拖上沿改高度（DD-U35）', () => {
     ])
   })
 
-  it('DD-U35 拖动期间：不截图、不 setVisible、不盖 pageCover、不报 null 矩形', () => {
+  it('DD-U35 拖动期间：不截图、不 setVisible、不报 null 矩形', () => {
     const bv = api.browserView
     for (const fn of [bv.capture, bv.setVisible, bv.setDevtoolsLayout]) fn.mockClear()
 
     mouseDown(edge(), 0, { clientY: 600 })
-    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
     mouseMove(550)
     mouseMove(500)
-    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
     mouseUp()
 
     expect(bv.capture).not.toHaveBeenCalled()
     expect(bv.setVisible).not.toHaveBeenCalled()
-    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
     expect(bv.setDevtoolsLayout.mock.calls).not.toContainEqual([null])
     expect(useBrowserTabsStore.getState()).not.toHaveProperty('dockResizing')
     expect(useBrowserTabsStore.getState()).not.toHaveProperty('setDockResizing')
@@ -514,7 +520,7 @@ describe('原生 DevTools 的占位当场报矩形（DD-U36）', () => {
     stubRects({ x: 0, y: 450, width: 1000, height: 310 })
     ro.trigger(native())
     expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
-      [{ tabId: 'a', bounds: { x: 0, y: 450, width: 1000, height: 310 } }]
+      [{ tabId: 'a', bounds: { x: 0, y: 450, width: 1000, height: 310 }, viewport: VIEWPORT }]
     ])
   })
 
@@ -532,7 +538,7 @@ describe('原生 DevTools 的占位当场报矩形（DD-U36）', () => {
     expect(api.browserView.setDevtoolsLayout).not.toHaveBeenCalled()
     await flush()
     expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
-      [{ tabId: 'a', bounds: { x: 0, y: 420, width: 1200, height: 280 } }]
+      [{ tabId: 'a', bounds: { x: 0, y: 420, width: 1200, height: 280 }, viewport: VIEWPORT }]
     ])
   })
 
@@ -545,7 +551,7 @@ describe('原生 DevTools 的占位当场报矩形（DD-U36）', () => {
     expect(api.browserView.setDevtoolsLayout).toHaveBeenCalledTimes(1)
     await flush()
     expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
-      [{ tabId: 'a', bounds: { x: 0, y: 420, width: 1200, height: 280 } }]
+      [{ tabId: 'a', bounds: { x: 0, y: 420, width: 1200, height: 280 }, viewport: VIEWPORT }]
     ])
   })
 
@@ -561,5 +567,83 @@ describe('原生 DevTools 的占位当场报矩形（DD-U36）', () => {
     ro.trigger(old)
     await flush()
     expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[null]])
+  })
+})
+
+describe('原生 DevTools 的占位只在距离变了时上报（DD-U43 – DD-U45）', () => {
+  /** 上报的基准：x 0、高 260，右边 24、底边 8（窗口 1024×768） */
+  const BASE = { x: 0, y: 500, width: 1000, height: 260 }
+  const native = (): HTMLElement => $('[data-devtools-native]')!
+  const layout = (): Mock => api.browserView.setDevtoolsLayout
+
+  beforeEach(async () => {
+    seed([tabInfo({ id: 'a', devtools: { panel: 'devtools' } })], 'a')
+    stubRects(BASE)
+    await mountDock()
+    layout().mockClear()
+  })
+
+  it('DD-U43 占位与窗口一起变宽：不报', async () => {
+    stubRects({ ...BASE, width: 1200 })
+    stubInnerWidth(1224)
+    ro.trigger(native())
+    await flush()
+    expect(layout()).not.toHaveBeenCalled()
+  })
+
+  it('DD-U43 窗口变高、占位跟着底边往下走（高度、底边不变）：不报', async () => {
+    stubRects({ ...BASE, y: 640 })
+    stubInnerHeight(908)
+    ro.trigger(native())
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    await flush()
+    expect(layout()).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['高度变了', { ...BASE, y: 450, height: 310 }],
+    ['右边变了', { ...BASE, width: 980 }],
+    ['底边变了', { ...BASE, y: 480 }],
+    ['左边变了', { ...BASE, x: 10, width: 990 }]
+  ])('DD-U44 %s：报一次，带 viewport', (_label, next) => {
+    stubRects(next)
+    ro.trigger(native())
+    expect(layout().mock.calls).toEqual([[{ tabId: 'a', bounds: next, viewport: VIEWPORT }]])
+    ro.trigger(native())
+    expect(layout()).toHaveBeenCalledTimes(1)
+  })
+
+  it('DD-U44 devicePixelRatio 变了（换了显示器）：报一次', () => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 })
+    ro.trigger(native())
+    expect(layout().mock.calls).toEqual([[{ tabId: 'a', bounds: BASE, viewport: VIEWPORT }]])
+  })
+
+  it('DD-U44 换了 tab（同样的矩形）：报一次，是新的 tab', async () => {
+    seed(
+      [
+        tabInfo({ id: 'a', devtools: { panel: 'devtools' } }),
+        tabInfo({ id: 'b', devtools: { panel: 'devtools' } })
+      ],
+      'b'
+    )
+    await flush()
+    const rects = layout().mock.calls.filter(([slot]) => slot !== null)
+    expect(rects).toEqual([[{ tabId: 'b', bounds: BASE, viewport: VIEWPORT }]])
+  })
+
+  it('DD-U45 零尺寸两次只报一个 null；卸载再挂上重新上报', async () => {
+    stubRects({ ...BASE, height: 0 })
+    ro.trigger(native())
+    ro.trigger(native())
+    expect(layout().mock.calls).toEqual([[null]])
+
+    m!.unmount()
+    stubRects(BASE)
+    layout().mockClear()
+    await mountDock()
+    expect(layout().mock.calls).toEqual([[{ tabId: 'a', bounds: BASE, viewport: VIEWPORT }]])
   })
 })

@@ -960,10 +960,12 @@ declare global {
         entries: Array<{
           tabId: string
           bounds: { x: number; y: number; width: number; height: number }
+          /** 量矩形那一刻的窗口尺寸；给了就表示矩形贴着窗口边缘，窗口变时主进程当场重摆（单页视图） */
+          viewport?: { width: number; height: number }
           zoom?: number
         }>
       ) => void
-      /** 抓 tab 画面（dataURL）；maxWidth 缺省 480（平铺墙的快照），站点信息气泡按页面区宽度要 */
+      /** 抓 tab 画面（dataURL）；maxWidth 缺省 480（平铺墙的快照） */
       capture: (tabId: string, maxWidth?: number) => Promise<string>
       /** 按站点调页面缩放（同一站点的 tab 一起换） */
       zoom: (tabId: string, direction: 'in' | 'out' | 'reset') => Promise<void>
@@ -976,6 +978,10 @@ declare global {
       /** 证书警告页上的「继续前往（不安全）」：放行这个 tab 刚被挡下的站点；回是否放行了 */
       proceedUnsafe: (tabId: string) => Promise<boolean>
       setVisible: (visible: boolean) => void
+      /** 弹层（站点信息气泡、地址栏下拉）那块透明 view 的矩形；null = 关 */
+      setPopover: (
+        placement: import('../shared/browserPopover').BrowserPopoverPlacement | null
+      ) => void
       /** 打开这一页的停靠区、停在某个页签（原生 DevTools / agent 的 devtool） */
       openDevtools: (
         tabId: string,
@@ -988,6 +994,8 @@ declare global {
         slot: {
           tabId: string
           bounds: { x: number; y: number; width: number; height: number }
+          /** 同 setLayout：DevTools 贴着窗口底边 */
+          viewport?: { width: number; height: number }
         } | null
       ) => void
       /** agent 在这一页上的 devtool 调用记录 + 它的网络 / 控制台采集（非浏览器窗口调用回 null） */

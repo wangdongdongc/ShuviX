@@ -14,16 +14,21 @@
  *   BS-U25  内部页面（shuvix://settings）：地址栏显示 shuvix://settings、没有站点信息按钮、刷新禁用；
  *   BS-U26  地址栏里敲 shuvix://settings + Enter → navigate(id, 'shuvix://settings')（交给主进程，不搜索）；
  *   BS-U27  站点信息按钮：https / http（写着 Not secure）/ file: 有；about:blank / 没有 tab / data: 没有；
- *   BS-U28  点它：先按页面区宽度 × devicePixelRatio（取整）capture，抓到之前没有气泡、没有 pageCover；抓到之后
- *           pageCover = {tabId, snapshot}、出现 [data-site-info]；capture 失败 → cover 的截图是 ''，气泡照开；
- *   BS-U29  关掉（气泡没了、pageCover 回 null）：Esc、在外面 mousedown、气泡上的 X、再点一次按钮（不再抓图）、
- *           选中的 tab 换了、地址变了、tab 关了；截图回来之前用户已经换了 tab → 不留气泡、pageCover 为 null。
+ *   SIB-1   点它（页面在、弹层文档备好）：[data-site-info] 在弹层文档里、外壳里没有；setPopover 的焦点 take、宽 360；
+ *           不抓图、不动页面的可见性与布局；
+ *   SIB-2   开着时再点它，照真实的顺序（按下、焦点换手、松手、click）：按下不关，click 关掉、不重开；下一次 click 开；
+ *   SIB-3   Esc（弹层文档 / 外壳文档）、按在工具条别的地方、按在留白上、气泡上的 X：关掉，最后一次 setPopover(null)；
+ *   SIB-4   按在气泡里、焦点在外壳与弹层之间来回：不关；
+ *   SIB-5   窗口没焦点了（两份文档都没有）：等焦点落定后关掉；
+ *   SIB-6   选中的 tab 换了（再换回来不重开）、地址变了、tab 关了：关掉；
+ *   SIB-7   开着时按在地址文字上、或 ⌘L（没有鼠标）：气泡没了、进编辑、setPopover(null)。
  *
  * store 直接灌；`window.api` 是 browserDomSupport 的假件；真 en 文案。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { act } from 'react'
 import { BrowserToolbar } from '../BrowserToolbar'
+import { POPOVER_FOCUS_SETTLE_MS } from '../browserPopoverHost'
 import {
   useBrowserTabsStore,
   type BrowserTabInfo,
@@ -35,18 +40,24 @@ import {
   flush,
   initEnI18n,
   installFakeApi,
+  installPopoverWindow,
   installRaf,
+  installResizeObserver,
   keyDown,
   mountInto,
   mouseDown,
-  stubRects,
+  mouseUpOn,
   tabInfo,
   typeInto,
+  warmPopoverHost,
+  windowBlur,
   type FakeApi,
-  type Mounted
+  type Mounted,
+  type PopoverWindow
 } from './browserDomSupport'
 
 let api: FakeApi
+let pop: PopoverWindow
 let m: Mounted | null = null
 let onViewMode: Mock<(mode: BrowserViewMode) => void>
 
@@ -83,9 +94,12 @@ beforeAll(async () => {
   await initEnI18n()
 })
 
-beforeEach(() => {
+beforeEach(async () => {
   api = installFakeApi()
   installRaf()
+  installResizeObserver()
+  pop = installPopoverWindow()
+  await warmPopoverHost()
   onViewMode = vi.fn<(mode: BrowserViewMode) => void>()
   useBrowserTabsStore.setState({ tabs: [], activeTabId: null, omniboxFocusNonce: 0 })
 })
@@ -93,6 +107,7 @@ beforeEach(() => {
 afterEach(() => {
   m?.unmount()
   m = null
+  vi.restoreAllMocks()
 })
 
 describe('未聚焦的地址栏（CB-U40）', () => {
@@ -409,38 +424,19 @@ describe('站点信息按钮（BS-U27）', () => {
   })
 })
 
-describe('站点信息气泡的开与关（BS-U28 / BS-U29）', () => {
-  const AREA_WIDTH = 550.3
-  const DPR = 2
-  let pageArea: HTMLDivElement | null = null
-  const realDpr = window.devicePixelRatio
+describe('站点信息气泡的开与关（SIB-1 … SIB-7）', () => {
+  const T1 = tabInfo({ id: 't1', url: 'https://example.com/a' })
+  const T2 = tabInfo({ id: 't2', url: 'https://other.test/' })
 
-  /** 一个还没回答的 capture */
-  function deferred(): {
-    promise: Promise<string>
-    resolve(v: string): void
-    reject(e: unknown): void
-  } {
-    let resolve!: (v: string) => void
-    let reject!: (e: unknown) => void
-    const promise = new Promise<string>((res, rej) => {
-      resolve = res
-      reject = rej
-    })
-    return { promise, resolve, reject }
-  }
-
-  const bubble = (): HTMLElement | null => document.querySelector('[data-site-info]')
-  const cover = (): unknown => useBrowserTabsStore.getState().pageCover
+  const bubble = (): HTMLElement | null => pop.doc.querySelector('[data-site-info]')
   const siteButton = (): HTMLButtonElement => {
     const b = $<HTMLButtonElement>('[data-site-info-button]')
     if (!b) throw new Error('no site-info button')
     return b
   }
+  const lastPopover = (): unknown => api.browserView.setPopover.mock.calls.at(-1)?.[0]
 
-  /** 点按钮、让 capture 回 snapshot，等气泡开出来 */
-  async function openBubble(snapshot = 'data:image/png;base64,AAA'): Promise<void> {
-    api.browserView.capture.mockResolvedValueOnce(snapshot)
+  async function openBubble(): Promise<void> {
     click(siteButton())
     await flush()
     if (!bubble()) throw new Error('site-info bubble did not open')
@@ -449,147 +445,175 @@ describe('站点信息气泡的开与关（BS-U28 / BS-U29）', () => {
   async function expectClosed(): Promise<void> {
     await flush()
     expect(bubble()).toBeNull()
-    expect(cover()).toBeNull()
+    expect(lastPopover()).toBeNull()
   }
 
-  beforeEach(() => {
-    useBrowserTabsStore.setState({ pageCover: null, settingsFocus: null })
-    pageArea = document.createElement('div')
-    pageArea.setAttribute('data-page-area', '')
-    document.body.appendChild(pageArea)
-    stubRects({ x: 0, y: 76, width: AREA_WIDTH, height: 600 })
-    Object.defineProperty(window, 'devicePixelRatio', { value: DPR, configurable: true })
-  })
-
-  afterEach(() => {
-    pageArea?.remove()
-    pageArea = null
-    Object.defineProperty(window, 'devicePixelRatio', { value: realDpr, configurable: true })
-    vi.restoreAllMocks()
-  })
-
-  it('BS-U28 先按页面区宽度 × dpr（取整）抓图；抓到之前没有气泡、没有 pageCover；抓到之后 pageCover + [data-site-info]', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
-    await mount()
-    const shot = deferred()
-    api.browserView.capture.mockImplementationOnce(() => shot.promise)
-
-    click(siteButton())
-    await flush()
-    expect(api.browserView.capture.mock.calls).toEqual([['t1', Math.round(AREA_WIDTH * DPR)]])
-    expect(Math.round(AREA_WIDTH * DPR)).toBe(1101)
-    expect(bubble()).toBeNull()
-    expect(cover()).toBeNull()
-
+  /** 等过外壳与弹层之间换手的那段时间（真时钟） */
+  async function focusSettled(): Promise<void> {
     await act(async () => {
-      shot.resolve('data:image/png;base64,SNAP')
+      await new Promise((resolve) => setTimeout(resolve, POPOVER_FOCUS_SETTLE_MS + 15))
     })
-    await flush()
-    expect(cover()).toEqual({ tabId: 't1', snapshot: 'data:image/png;base64,SNAP' })
-    expect(bubble()).not.toBeNull()
-    expect(bubble()!.getAttribute('data-site-info')).toBe('example.com')
-  })
+  }
 
-  it("BS-U28 capture 失败：cover 的截图是 ''，气泡照开", async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
-    await mount()
-    api.browserView.capture.mockRejectedValueOnce(new Error('capture failed'))
-    click(siteButton())
-    await flush()
-    expect(cover()).toEqual({ tabId: 't1', snapshot: '' })
-    expect(bubble()).not.toBeNull()
-  })
+  /** 这一刻哪份文档有焦点 */
+  function focusOn(where: 'shell' | 'popover' | 'neither'): void {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(where === 'shell')
+    vi.spyOn(pop.doc, 'hasFocus').mockReturnValue(where === 'popover')
+  }
 
-  it('BS-U29 Esc 关掉', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+  const popoverBlur = (): void => {
+    act(() => {
+      pop.win.dispatchEvent(new FocusEvent('blur'))
+    })
+  }
+
+  it('SIB-1 点它：气泡在弹层文档里、外壳里没有；focus take、宽 360；不抓图、不动页面', async () => {
+    seed([T1], 't1')
     await mount()
     await openBubble()
-    keyDown(document.body, 'Escape')
-    await expectClosed()
+    expect(bubble()?.getAttribute('data-site-info')).toBe('example.com')
+    expect(document.querySelector('[data-site-info]')).toBeNull()
+
+    const placement = lastPopover() as { bounds: { width: number }; focus: string }
+    expect(placement.focus).toBe('take')
+    expect(placement.bounds.width).toBe(360)
+    expect(api.browserView.capture).not.toHaveBeenCalled()
+    expect(api.browserView.setVisible).not.toHaveBeenCalled()
+    expect(api.browserView.setLayout).not.toHaveBeenCalled()
   })
 
-  it('BS-U29 在气泡外面 mousedown 关掉；在气泡里面 mousedown 不关', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+  it('SIB-2 开着时再点它（按下、焦点换手、松手、click）：按下不关，click 关掉、不重开；下一次 click 开', async () => {
+    seed([T1], 't1')
     await mount()
     await openBubble()
-    mouseDown(bubble()!)
-    await flush()
-    expect(bubble()).not.toBeNull()
-    mouseDown(document.body)
-    await expectClosed()
-  })
 
-  it('BS-U29 气泡上的 X 关掉', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
-    await mount()
-    await openBubble()
-    const x = bubble()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
-    expect(x).not.toBeNull()
-    click(x!)
-    await expectClosed()
-  })
-
-  it('BS-U29 再点一次按钮关掉，不再抓图', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
-    await mount()
-    await openBubble()
-    expect(api.browserView.capture).toHaveBeenCalledTimes(1)
+    // 按下：焦点从弹层回到外壳
     mouseDown(siteButton())
+    await flush()
+    expect(bubble()).not.toBeNull()
+    focusOn('shell')
+    popoverBlur()
+    mouseUpOn(siteButton())
     click(siteButton())
     await expectClosed()
-    expect(api.browserView.capture).toHaveBeenCalledTimes(1)
+
+    await focusSettled()
+    await flush()
+    expect(bubble()).toBeNull()
+
+    click(siteButton())
+    await flush()
+    expect(bubble()).not.toBeNull()
   })
 
-  it('BS-U29 选中的 tab 换了：关掉', async () => {
-    seed(
-      [
-        tabInfo({ id: 't1', url: 'https://example.com/a' }),
-        tabInfo({ id: 't2', url: 'https://other.test/' })
-      ],
-      't1'
-    )
+  it.each([
+    ['Esc（弹层文档）', (): void => keyDown(pop.doc.body, 'Escape')],
+    ['Esc（外壳文档）', (): void => keyDown(document.body, 'Escape')],
+    ['按在工具条别的地方', (): void => void mouseDown($('[data-browser-more]')!)],
+    ['按在放阴影的留白上', (): void => void mouseDown(pop.doc.body)],
+    [
+      '气泡上的 X',
+      (): void => click(bubble()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!)
+    ]
+  ])('SIB-3 %s：关掉，最后一次 setPopover(null)', async (_label, dismiss) => {
+    seed([T1], 't1')
+    await mount()
+    await openBubble()
+    dismiss()
+    await expectClosed()
+  })
+
+  it('SIB-4 按在气泡里、焦点在外壳与弹层之间来回：不关', async () => {
+    seed([T1], 't1')
+    await mount()
+    await openBubble()
+
+    mouseDown(bubble()!)
+    mouseUpOn(bubble()!)
+    await flush()
+    expect(bubble()).not.toBeNull()
+
+    // 外壳 → 弹层
+    focusOn('popover')
+    windowBlur()
+    await focusSettled()
+    expect(bubble()).not.toBeNull()
+
+    // 弹层 → 外壳
+    focusOn('shell')
+    popoverBlur()
+    await focusSettled()
+    await flush()
+    expect(bubble()).not.toBeNull()
+  })
+
+  it('SIB-5 窗口没焦点了（两份文档都没有）：等焦点落定后关掉', async () => {
+    seed([T1], 't1')
+    await mount()
+    await openBubble()
+    focusOn('neither')
+    windowBlur()
+    await flush(1)
+    expect(bubble()).not.toBeNull()
+    await focusSettled()
+    await expectClosed()
+  })
+
+  it('SIB-6 选中的 tab 换了：关掉；换回来不重开', async () => {
+    seed([T1, T2], 't1')
     await mount()
     await openBubble()
     act(() => useBrowserTabsStore.setState({ activeTabId: 't2' }))
     await expectClosed()
+    act(() => useBrowserTabsStore.setState({ activeTabId: 't1' }))
+    await flush()
+    expect(bubble()).toBeNull()
   })
 
-  it('BS-U29 地址变了：关掉', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+  it('SIB-6 地址变了：关掉；地址变回来不重开', async () => {
+    seed([T1], 't1')
     await mount()
     await openBubble()
     act(() =>
       useBrowserTabsStore.setState({ tabs: [tabInfo({ id: 't1', url: 'https://example.com/b' })] })
     )
     await expectClosed()
+    act(() => useBrowserTabsStore.setState({ tabs: [T1] }))
+    await flush()
+    expect(bubble()).toBeNull()
   })
 
-  it('BS-U29 tab 关了：关掉', async () => {
-    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+  it('SIB-6 tab 关了：关掉', async () => {
+    seed([T1], 't1')
     await mount()
     await openBubble()
     act(() => useBrowserTabsStore.setState({ tabs: [], activeTabId: null }))
     await expectClosed()
   })
 
-  it('BS-U29 截图回来之前用户换了 tab：不留气泡，pageCover 为 null', async () => {
-    seed(
-      [
-        tabInfo({ id: 't1', url: 'https://example.com/a' }),
-        tabInfo({ id: 't2', url: 'https://other.test/' })
-      ],
-      't1'
-    )
+  it('SIB-7 开着时按在地址文字上：气泡没了、进编辑、setPopover(null)', async () => {
+    seed([T1], 't1')
     await mount()
-    const shot = deferred()
-    api.browserView.capture.mockImplementationOnce(() => shot.promise)
-    click(siteButton())
+    await openBubble()
+    const host = [...display()!.querySelectorAll('span')].find(
+      (el) => el.textContent === 'example.com' && el.children.length === 0
+    )
+    mouseDown(host!)
     await flush()
-    act(() => useBrowserTabsStore.setState({ activeTabId: 't2' }))
+    expect(bubble()).toBeNull()
+    expect(input()).not.toBeNull()
+    expect(document.activeElement).toBe(input())
+    expect(api.browserView.setPopover).toHaveBeenLastCalledWith(null)
+  })
+
+  it('SIB-7 开着时 ⌘L（没有鼠标）：气泡没了、进编辑、setPopover(null)', async () => {
+    seed([T1], 't1')
+    await mount()
+    await openBubble()
+    act(() => useBrowserTabsStore.getState().requestOmniboxFocus())
     await flush()
-    await act(async () => {
-      shot.resolve('data:image/png;base64,LATE')
-    })
-    await expectClosed()
+    expect(bubble()).toBeNull()
+    expect(input()).not.toBeNull()
+    expect(api.browserView.setPopover).toHaveBeenLastCalledWith(null)
   })
 })

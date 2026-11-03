@@ -20,7 +20,13 @@ import { loadRendererPage } from '../../utils/rendererPage'
 import { isHeadless } from '../../utils/headless'
 import { t } from '../../i18n'
 import { guardAppWindow } from '../externalOpen'
-import { destroyAllTabs, installShortcuts, setHostWindow } from './browserViewService'
+import { destroyBrowserPopover, popoverWindowOpen } from './browserPopover'
+import {
+  destroyAllTabs,
+  installShortcuts,
+  relayoutOnWindowResize,
+  setHostWindow
+} from './browserViewService'
 
 const log = createLogger('BrowserWindow')
 
@@ -117,7 +123,7 @@ function create(): BrowserWindow {
   })
 
   // 外壳自己不该被带去外站（卡片里的页面是 WebContentsView，各有各的闸）
-  guardAppWindow(created)
+  guardAppWindow(created, undefined, popoverWindowOpen(created))
   // 焦点在标签条 / 地址栏上时的浏览器快捷键（焦点在页面里时由各 tab 自己的 webContents 接）
   installShortcuts(created.webContents)
 
@@ -125,6 +131,7 @@ function create(): BrowserWindow {
   loadRendererPage(created, hash)
 
   created.on('page-title-updated', (e) => e.preventDefault())
+  created.on('resize', relayoutOnWindowResize)
 
   // 关窗 = 隐藏：tab 与页面状态留着，重开即时。退出时才真关。
   created.on('close', (event) => {
@@ -139,6 +146,7 @@ function create(): BrowserWindow {
       win = null
       // view 暂时没有父窗口；tab 不销毁，下次开窗会被接回去
       setHostWindow(null)
+      destroyBrowserPopover()
     }
   })
 
@@ -174,6 +182,7 @@ export function closeBrowserWindowWithMain(): void {
     saveState() // destroy 不发 close 事件，位置尺寸在这里存
     // 先把墙上的 tab 停回停放窗口，再销毁窗口（'closed' 事件何时到不必依赖）
     setHostWindow(null)
+    destroyBrowserPopover()
     win.destroy()
   }
   win = null
@@ -189,6 +198,7 @@ export function destroyBrowserWindow(): void {
   if (win && !win.isDestroyed()) {
     // before-quit 里先于窗口自己的 close 事件销毁它，位置尺寸只能在这里存
     saveState()
+    destroyBrowserPopover()
     win.destroy()
   }
   win = null

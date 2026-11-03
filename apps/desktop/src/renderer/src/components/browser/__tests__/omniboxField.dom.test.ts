@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
 /**
- * 地址栏组件（OmniboxField.tsx 的 Omnibox）—— 下拉建议、内联补全、键盘、回车开什么、页面区的截图。
+ * 地址栏组件（OmniboxField.tsx 的 Omnibox）—— 下拉建议、内联补全、键盘、回车开什么、下拉住的透明 view。
  *
  *   OF-1   进编辑没打字：不问历史、不弹下拉；打字后每个键都 suggest(敲的字)
  *   OF-2   搜索建议：停手 120ms 才问一次 searchSuggest(trim 过的字, 引擎)；prop 关着、localhost:3000 / https://x
  *          不问；建议那几行补出来的部分加粗、没有「— Google Search」，「搜这段字」那行有
- *   OF-3   下拉先要一张页面区的截图顶上：原生页面 → capture(tabId, round(页面区宽 × dpr)) 一次，抓到之前不弹，
- *          抓到之后 pageCover {tabId, snapshot}、弹出；抓图失败 → snapshot ''、照弹；Esc / 失焦 / 回车 →
- *          pageCover null；空白页 / 内部页面 / 平铺墙 → 不抓图、snapshot ''、立刻弹
  *   OF-4   敲过的 github，打 git → 地址栏 github.com、选中 [3, 10]、aria-autocomplete both、第一行是网址
  *   OF-5   接着打 h（替换掉选中的部分）→ 仍是 github.com、[4, 10]；打 x → gitx、不补
  *   OF-6   退格（删掉补上的那段）→ git、不补、第一行是搜索；再打一个字又补
@@ -24,8 +21,19 @@
  *   OF-13  ⇧Delete 删选着的历史行：removeUrl 一次、在它回来之前那一行就没了、选中上移一行、回来之后再问一次历史；
  *          网址 / 搜索 / 切换行上什么也不做（不拦）；行尾的 × 同样删、不导航、仍在编辑
  *   OF-14  切换行有「Switch to this tab」标签；× 只在历史行上；敲的词（不分大小写）在网址与标题里加粗
+ *   OF-15  下拉在弹层文档里、外壳里没有（网页 / 空白页 / 内部页面 / 没有 tab 都一样）：不抓图、不动页面的可见性与布局；
+ *          focus keep-shell，宽 = 地址栏宽 + 40；
+ *   OF-16  输入框失焦 60ms 后才看焦点：回到了输入框 → 还在编辑；窗口没焦点 / 焦点去了别处 → 60ms 结束编辑；
+ *   OF-17  按在一行上（失焦、窗口没焦点、过了 60ms）：还在编辑；松手 click → navigate(t1, url, typed)、下拉关掉；
+ *   OF-18  同样的按法按在行尾的 ×：removeUrl 一次、不导航、还在编辑、字留着；
+ *   OF-19  按在下拉的留白上、输入框失焦、60ms 内焦点回来：还在编辑；
+ *   OF-20  连打三个字、行变了、盒子的观察者报：重报，两个键之间不报 null；
+ *   OF-21  Esc / 回车 / 失焦过 60ms / 字清空没有建议：setPopover(null)、下拉没了；
+ *   OF-22  按在一行上时下拉没了（Esc，松手再也到不了）：重新进编辑后失焦，60ms 照常结束编辑；
+ *   OF-23  等焦点落定时卸载：计时器作废。
  *
- * `window.api` 是 browserDomSupport 的假件；store 是真的；真 en 文案。假时钟（setTimeout / rAF / Date）：
+ * `window.api` 是 browserDomSupport 的假件；store 是真的；真 en 文案。下拉渲染在弹层的文档里（installPopoverWindow
+ * 的 iframe），行都在那边查。假时钟（setTimeout / rAF / Date）：
  * 打分用的「此刻」是进编辑时的 Date.now()，钉在 NOW。打字走原生 value setter + 光标放到末尾 + InputEvent。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -37,18 +45,27 @@ import {
   click,
   initEnI18n,
   installFakeApi,
+  installPopoverWindow,
   installRaf,
+  installResizeObserver,
   mountInto,
   mouseDown,
+  mouseUpOn,
+  stubRectsBy,
   tabInfo,
+  warmPopoverHost,
   type FakeApi,
-  type Mounted
+  type Mounted,
+  type PopoverWindow,
+  type ResizeObserverControl
 } from './browserDomSupport'
 
 const NOW = Date.UTC(2026, 9, 29, 12, 0, 0)
 const google = (q: string): string => `https://www.google.com/search?q=${encodeURIComponent(q)}`
 
 let api: FakeApi
+let ro: ResizeObserverControl
+let pop: PopoverWindow
 let m: Mounted | null = null
 
 const T1 = tabInfo({ id: 't1', url: 'https://example.com/page', title: 'Example' })
@@ -83,34 +100,29 @@ async function mount(
     tab?: BrowserTabInfo | null
     others?: BrowserTabInfo[]
     searchSuggest?: boolean
-    viewMode?: 'single' | 'wall'
   } = {}
 ): Promise<void> {
   const tab = props.tab === undefined ? T1 : props.tab
   useBrowserTabsStore.setState({
     tabs: [...(tab ? [tab] : []), ...(props.others ?? [])],
     activeTabId: tab?.id ?? null,
-    pageCover: null,
     omniboxFocusNonce: 0
   })
   m = await mountInto(Omnibox, {
     tab,
     engine: 'google',
-    searchSuggest: props.searchSuggest ?? true,
-    viewMode: props.viewMode ?? 'single'
+    searchSuggest: props.searchSuggest ?? true
   })
 }
 
 const $ = <T extends Element = HTMLElement>(sel: string): T | null =>
   m!.container.querySelector<T>(sel)
 const input = (): HTMLInputElement | null => $<HTMLInputElement>('[data-omnibox-input]')
-const popup = (): HTMLElement | null => $('[data-omnibox-popup]')
-const rows = (): HTMLElement[] => [
-  ...m!.container.querySelectorAll<HTMLElement>('[data-omnibox-match]')
-]
+const popup = (): HTMLElement | null => pop.doc.querySelector('[data-omnibox-popup]')
+const rows = (): HTMLElement[] => [...pop.doc.querySelectorAll<HTMLElement>('[data-omnibox-match]')]
 const rowKeys = (): string[] => rows().map((r) => r.getAttribute('data-omnibox-key') ?? '')
 const row = (key: string): HTMLElement => {
-  const el = $(`[data-omnibox-key="${key}"]`)
+  const el = pop.doc.querySelector<HTMLElement>(`[data-omnibox-key="${key}"]`)
   if (!el) throw new Error(`no row ${key} (have ${rowKeys().join(', ')})`)
   return el
 }
@@ -149,7 +161,7 @@ function type(
     )
   })
 }
-/** 打完一段字、等历史回来、截图顶上、下拉弹出 */
+/** 打完一段字、等历史回来、下拉弹出 */
 async function typeAndSettle(value: string, opts?: Parameters<typeof type>[1]): Promise<void> {
   type(value, opts)
   await settle()
@@ -168,29 +180,31 @@ beforeAll(async () => {
   await initEnI18n()
 })
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
   api = installFakeApi()
   installRaf()
+  ro = installResizeObserver()
+  pop = installPopoverWindow()
+  await warmPopoverHost()
 })
 
 afterEach(() => {
   m?.unmount()
   m = null
-  document.querySelectorAll('[data-page-area]').forEach((el) => el.remove())
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('什么时候问（OF-1 / OF-2）', () => {
-  it('OF-1 进编辑没打字：不问历史、不弹、不抓图', async () => {
+  it('OF-1 进编辑没打字：不问历史、不弹', async () => {
     await mount()
     const el = await beginEdit()
     expect(el.value).toBe('https://example.com/page')
     await tick(500)
     expect(api.browserHistory.suggest).not.toHaveBeenCalled()
     expect(api.browserHistory.searchSuggest).not.toHaveBeenCalled()
-    expect(api.browserView.capture).not.toHaveBeenCalled()
     expect(popup()).toBeNull()
   })
 
@@ -249,109 +263,6 @@ describe('什么时候问（OF-1 / OF-2）', () => {
     expect([...suggested.querySelectorAll('b')].map((b) => b.textContent)).toEqual(['hub desktop'])
     expect(suggested.textContent).not.toContain('Google Search')
     expect(row('search:git').textContent).toContain('git — Google Search')
-  })
-})
-
-describe('页面区的截图（OF-3）', () => {
-  /** 页面区：宽 801.6 CSS px（dpr 2 → 1603） */
-  function pageArea(): void {
-    const el = document.createElement('div')
-    el.setAttribute('data-page-area', '')
-    el.getBoundingClientRect = () =>
-      ({
-        x: 0,
-        y: 0,
-        width: 801.6,
-        height: 500,
-        top: 0,
-        left: 0,
-        right: 801.6,
-        bottom: 500
-      }) as DOMRect
-    document.body.appendChild(el)
-  }
-
-  it('OF-3 原生页面：capture(t1, round(宽 × dpr)) 一次；抓到之前不弹；抓到之后 pageCover、弹出', async () => {
-    pageArea()
-    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 })
-    let resolve!: (s: string) => void
-    api.browserView.capture.mockImplementation(() => new Promise<string>((r) => (resolve = r)))
-    try {
-      await mount()
-      await beginEdit()
-      await typeAndSettle('git')
-      expect(api.browserView.capture.mock.calls).toEqual([['t1', 1603]])
-      expect(popup()).toBeNull()
-      expect(useBrowserTabsStore.getState().pageCover).toBeNull()
-
-      type('gith')
-      await settle()
-      expect(api.browserView.capture).toHaveBeenCalledTimes(1)
-
-      await act(async () => resolve('data:image/png;base64,AAAA'))
-      await settle()
-      expect(useBrowserTabsStore.getState().pageCover).toEqual({
-        tabId: 't1',
-        snapshot: 'data:image/png;base64,AAAA'
-      })
-      expect(popup()).not.toBeNull()
-      expect(input()!.getAttribute('aria-expanded')).toBe('true')
-    } finally {
-      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 })
-    }
-  })
-
-  it("OF-3 抓图失败：snapshot ''，照弹", async () => {
-    api.browserView.capture.mockRejectedValue(new Error('no surface'))
-    await mount()
-    await beginEdit()
-    await typeAndSettle('git')
-    expect(useBrowserTabsStore.getState().pageCover).toEqual({ tabId: 't1', snapshot: '' })
-    expect(popup()).not.toBeNull()
-  })
-
-  it.each([
-    ['Esc', async () => void press('Escape')],
-    [
-      '失焦',
-      async () => {
-        act(() => input()!.blur())
-      }
-    ],
-    ['回车', async () => void press('Enter')]
-  ] as const)('OF-3 %s → pageCover 回 null、下拉没了', async (_l, end) => {
-    await mount()
-    await beginEdit()
-    await typeAndSettle('git')
-    expect(useBrowserTabsStore.getState().pageCover).not.toBeNull()
-    await end()
-    await settle()
-    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
-    expect(popup()).toBeNull()
-  })
-
-  it.each([
-    ['空白页', { tab: tabInfo({ id: 't1', url: 'about:blank' }) }],
-    ['内部页面', { tab: tabInfo({ id: 't1', url: 'shuvix://history' }) }],
-    ['平铺墙', { viewMode: 'wall' as const }]
-  ])("OF-3 %s：不抓图、snapshot ''、立刻弹", async (_l, props) => {
-    await mount(props)
-    await beginEdit()
-    type('git')
-    // 不等任何截图：一轮微任务（历史的回答）就够
-    await tick(0)
-    expect(api.browserView.capture).not.toHaveBeenCalled()
-    expect(useBrowserTabsStore.getState().pageCover).toEqual({ tabId: 't1', snapshot: '' })
-    expect(popup()).not.toBeNull()
-  })
-
-  it("OF-3 没有选中的页：不抓图、pageCover {tabId: '', snapshot: ''}", async () => {
-    await mount({ tab: null })
-    await beginEdit()
-    await typeAndSettle('git')
-    expect(api.browserView.capture).not.toHaveBeenCalled()
-    expect(useBrowserTabsStore.getState().pageCover).toEqual({ tabId: '', snapshot: '' })
-    expect(popup()).not.toBeNull()
   })
 })
 
@@ -771,5 +682,209 @@ describe('每一行的样子（OF-14）', () => {
     const searchRow = row('search:Git')
     expect(searchRow.querySelector('[data-omnibox-remove]')).toBeNull()
     expect(searchRow.querySelector('[data-omnibox-switch]')).toBeNull()
+  })
+})
+
+describe('下拉住在透明 view 里（OF-15 … OF-23）', () => {
+  const OMNIBOX_RECT = { x: 100, y: 8, width: 600, height: 32 }
+  const blurInput = (): void => {
+    act(() => input()!.blur())
+  }
+  /** 一条 blur 事件，但焦点其实没走（窗口没焦点时输入框仍是 activeElement） */
+  const blurEventOnly = (): void => {
+    act(() => {
+      input()!.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+  }
+  const popoverCalls = (): unknown[] => api.browserView.setPopover.mock.calls.map(([p]) => p)
+
+  beforeEach(() => {
+    stubRectsBy((el) =>
+      el.hasAttribute('data-omnibox') ? OMNIBOX_RECT : { x: 0, y: 0, width: 0, height: 0 }
+    )
+  })
+
+  it.each([
+    ['网页', T1],
+    ['空白页', tabInfo({ id: 't1', url: 'about:blank' })],
+    ['内部页面', tabInfo({ id: 't1', url: 'shuvix://history' })],
+    ['没有 tab', null]
+  ] as const)(
+    'OF-15 %s：打一个字，下拉在弹层文档里；不抓图、不动页面；keep-shell，宽 = 地址栏 + 40',
+    async (_label, tab) => {
+      await mount({ tab })
+      await beginEdit()
+      await typeAndSettle('g')
+
+      expect(popup()).not.toBeNull()
+      expect(document.querySelector('[data-omnibox-popup]')).toBeNull()
+      expect(input()!.getAttribute('aria-expanded')).toBe('true')
+      expect(api.browserView.capture).not.toHaveBeenCalled()
+      expect(api.browserView.setVisible).not.toHaveBeenCalled()
+      expect(api.browserView.setLayout).not.toHaveBeenCalled()
+      const placement = popoverCalls().at(-1) as { bounds: { width: number }; focus: string }
+      expect(placement.focus).toBe('keep-shell')
+      expect(placement.bounds.width).toBe(OMNIBOX_RECT.width + 40)
+    }
+  )
+
+  it.each([
+    ['焦点回到了输入框', true, blurEventOnly, true],
+    ['窗口没焦点了', false, blurEventOnly, false],
+    ['窗口有焦点，但焦点去了别处', true, blurInput, false]
+  ] as const)('OF-16 %s：59ms 还在编辑，60ms 见分晓', async (_label, hasFocus, blur, stays) => {
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+    vi.spyOn(document, 'hasFocus').mockReturnValue(hasFocus)
+
+    blur()
+    await tick(59)
+    expect(input()?.value).toBe('git')
+    expect(popup()).not.toBeNull()
+
+    await tick(1)
+    if (stays) {
+      expect(input()?.value).toBe('git')
+      expect(popup()).not.toBeNull()
+    } else {
+      expect(input()).toBeNull()
+      expect(popup()).toBeNull()
+    }
+  })
+
+  it('OF-17 按在一行上：失焦、窗口没焦点、过了 60ms 还在编辑；松手 click → navigate(typed)、下拉关掉', async () => {
+    api.browserHistory.suggest.mockResolvedValue([hist('https://git1.test/')])
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+    const target = row('history:https://git1.test/')
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    mouseDown(target)
+    blurInput()
+    await tick(60)
+    expect(input()).not.toBeNull()
+    expect(popup()).not.toBeNull()
+
+    mouseUpOn(target)
+    click(target)
+    expect(api.browserView.navigate.mock.calls).toEqual([['t1', 'https://git1.test/', 'typed']])
+    await settle()
+    expect(popup()).toBeNull()
+    expect(input()).toBeNull()
+  })
+
+  it('OF-18 同样的按法按在行尾的 ×：removeUrl 一次、不导航、还在编辑、字留着', async () => {
+    api.browserHistory.suggest.mockResolvedValue([hist('https://git1.test/')])
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+    const remove = row('history:https://git1.test/').querySelector('[data-omnibox-remove]')!
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    mouseDown(remove)
+    blurInput()
+    await tick(60)
+    expect(input()).not.toBeNull()
+    mouseUpOn(remove)
+    click(remove)
+    await settle()
+
+    expect(api.browserHistory.removeUrl.mock.calls).toEqual([['https://git1.test/']])
+    expect(api.browserView.navigate).not.toHaveBeenCalled()
+    expect(input()?.value).toBe('git')
+  })
+
+  it('OF-19 按在下拉的留白上、输入框失焦、60ms 内焦点回来：还在编辑', async () => {
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+
+    mouseDown(pop.doc.body)
+    blurInput()
+    expect(document.activeElement).not.toBe(input())
+    await tick(30)
+    act(() => input()!.focus())
+    await tick(60)
+
+    expect(input()?.value).toBe('git')
+    expect(popup()).not.toBeNull()
+  })
+
+  it('OF-20 连打三个字、行变了、盒子的观察者报：重报，两个键之间不报 null', async () => {
+    api.browserHistory.suggest.mockImplementation(async (text: string) =>
+      text.length >= 3 ? [hist('https://git1.test/'), hist('https://git2.test/')] : []
+    )
+    await mount()
+    await beginEdit()
+    await typeAndSettle('g')
+    const reportsAtFirst = popoverCalls().length
+    expect(reportsAtFirst).toBeGreaterThan(0)
+    await typeAndSettle('gi')
+    await typeAndSettle('git')
+    expect(rows()).toHaveLength(3)
+
+    ro.trigger(popup()!.parentElement!)
+    expect(popoverCalls().length).toBeGreaterThan(reportsAtFirst)
+    expect(popoverCalls()).not.toContain(null)
+  })
+
+  it.each([
+    ['Esc', async (): Promise<void> => void press('Escape')],
+    ['回车', async (): Promise<void> => void press('Enter')],
+    [
+      '失焦过了 60ms',
+      async (): Promise<void> => {
+        blurInput()
+        await tick(60)
+      }
+    ],
+    ['字清空，没有建议', async (): Promise<void> => type('')]
+  ])('OF-21 %s：setPopover(null)、下拉没了', async (_label, end) => {
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+    expect(popup()).not.toBeNull()
+    await end()
+    await settle()
+    expect(popup()).toBeNull()
+    expect(popoverCalls().at(-1)).toBeNull()
+  })
+
+  it('OF-22 按在一行上时下拉没了（Esc，松手再也到不了）：重新进编辑后失焦，60ms 照常结束编辑', async () => {
+    api.browserHistory.suggest.mockResolvedValue([hist('https://git1.test/')])
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+
+    mouseDown(row('history:https://git1.test/'))
+    press('Escape')
+    await settle()
+    expect(popup()).toBeNull()
+    expect(input()).toBeNull()
+
+    await beginEdit()
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    blurInput()
+    await tick(59)
+    expect(input()).not.toBeNull()
+    await tick(1)
+    expect(input()).toBeNull()
+  })
+
+  it('OF-23 等焦点落定时卸载：计时器作废', async () => {
+    await mount()
+    await beginEdit()
+    await typeAndSettle('git')
+    const before = vi.getTimerCount()
+    blurInput()
+    expect(vi.getTimerCount()).toBeGreaterThan(before)
+
+    m!.unmount()
+    m = null
+    expect(vi.getTimerCount()).toBe(before)
+    await tick(100)
   })
 })

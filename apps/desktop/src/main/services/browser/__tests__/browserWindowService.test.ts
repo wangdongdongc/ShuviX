@@ -45,6 +45,14 @@
  *           `Could not create the browser's hidden window: no display`、收掉这个 view（webContents.close）、
  *           listTabs 仍空、不发 browser.tabsChanged、不给浏览器窗口发 browser-view:tab-created；
  *           窗口建得出来之后再 createTab 照常（恰一个 tab）。
+ *   BRZ-1   单页视图拖窗口边框：resize 事件里当场（不等 IPC）按新尺寸重摆，页面缩放不动；
+ *   BRZ-2   之后外壳晚到的上报（旧矩形 + 旧窗口尺寸）：还是现在的尺寸，不会被拉回旧的；
+ *   BRZ-3   晚到的上报里距离真的变了（提示条出现）：用新距离，右、下仍贴着现在的窗口；
+ *   BRZ-4   宿主缩放 1.25：上报是 CSS px，算出来的 DIP 矩形边距不变；页面自己的缩放不动；
+ *   BRZ-5   平铺墙（没有 viewport）：resize 不动矩形（仍是按外壳量的取整），页面缩放不动；
+ *   BRZ-6   单页 → 平铺墙 → 单页：墙上 resize 不动，回单页又跟着窗口走；
+ *   BRZ-7   墙级门关着时 resize：页面继续停着；门开了（没有新上报）按现在的尺寸摆；
+ *   BRZ-8   开、隐藏、重开：resize 只挂了一个处理函数；resize 不把任何窗口弄到眼前、不藏 view、不改选中。
  *
  * electron 整个换成 ./fakeElectron.ts 的假件；browserViewService / browserWindowService / stagingWindow /
  * appEventBus 与 externalOpen 的裁决都用真的（externalOpen 只把 guardAppWindow 换成间谍）。模块级状态
@@ -1157,5 +1165,161 @@ describe('停放窗口建不出来（BV-H1）', () => {
     expect(counts).toEqual([1])
     expect(theStaging().children).toEqual([fx.views[1]])
     expect(fx.views[1].webContents.close).not.toHaveBeenCalled()
+  })
+})
+
+describe('窗口尺寸变了（BRZ-1 … BRZ-8）', () => {
+  const PAGE: Rect = { x: 0, y: 88, width: 800, height: 512 }
+  const VIEWPORT = { width: 800, height: 600 }
+
+  /** 单页视图：浏览器窗口开着（内容区 800×600），一个选中的 tab 铺在页面区里 */
+  async function singlePage(): Promise<{
+    views: ViewService
+    wins: WindowService
+    bw: FakeWindow
+    id: string
+    view: FakeView
+  }> {
+    const { views, wins } = await load()
+    wins.openBrowserWindow()
+    const bw = theBrowserWindow()
+    bw.contentSize = [800, 600]
+    const id = views.createTab('https://a.example/', { activate: true })
+    const view = fx.views[0]
+    views.setLayout([{ tabId: id, bounds: PAGE, viewport: VIEWPORT }])
+    views.setPanelVisible(true)
+    return { views, wins, bw, id, view }
+  }
+
+  it('BRZ-1 resize 事件返回之前就按新尺寸摆好（不等 IPC）；页面缩放不动', async () => {
+    const { bw, view } = await singlePage()
+    expect(view.setBounds).toHaveBeenLastCalledWith(PAGE)
+    view.webContents.setZoomFactor.mockClear()
+
+    bw.contentSize = [1000, 700]
+    bw.emit('resize')
+
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 88, width: 1000, height: 612 })
+    expect(view.webContents.setZoomFactor).not.toHaveBeenCalled()
+  })
+
+  it('BRZ-2 外壳晚到的上报（旧矩形 + 旧窗口尺寸）：还是现在的尺寸，从没摆成 800 宽', async () => {
+    const { views, bw, id, view } = await singlePage()
+    bw.contentSize = [1000, 700]
+    bw.emit('resize')
+    view.setBounds.mockClear()
+
+    views.setLayout([{ tabId: id, bounds: PAGE, viewport: VIEWPORT }])
+
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 88, width: 1000, height: 612 })
+    for (const [rect] of view.setBounds.mock.calls) expect(rect.width).toBe(1000)
+  })
+
+  it('BRZ-3 晚到的上报里距离真的变了：用新距离，右、下仍贴着现在的窗口', async () => {
+    const { views, bw, id, view } = await singlePage()
+    bw.contentSize = [1000, 700]
+    bw.emit('resize')
+
+    views.setLayout([
+      { tabId: id, bounds: { x: 0, y: 120, width: 800, height: 480 }, viewport: VIEWPORT }
+    ])
+
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 120, width: 1000, height: 580 })
+  })
+
+  it('BRZ-4 宿主缩放 1.25：DIP 矩形的边距不变；页面自己的缩放不动', async () => {
+    const { views, wins } = await load()
+    wins.openBrowserWindow()
+    const bw = theBrowserWindow()
+    bw.webContents.zoom = 1.25
+    bw.contentSize = [1000, 750]
+    const id = views.createTab('https://a.example/', { activate: true })
+    const view = fx.views[0]
+    // 右边距离 8 CSS px = 10 DIP
+    views.setLayout([
+      { tabId: id, bounds: { x: 0, y: 88, width: 792, height: 512 }, viewport: VIEWPORT }
+    ])
+    views.setPanelVisible(true)
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 110, width: 990, height: 640 })
+    view.webContents.setZoomFactor.mockClear()
+
+    bw.contentSize = [1250, 900]
+    bw.emit('resize')
+
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 110, width: 1240, height: 790 })
+    expect(view.webContents.setZoomFactor).not.toHaveBeenCalled()
+    expect(view.webContents.zoom).toBe(1)
+  })
+
+  it('BRZ-5 平铺墙（没有 viewport）：resize 不动矩形，页面缩放不动', async () => {
+    const { views, wins } = await load()
+    wins.openBrowserWindow()
+    const bw = theBrowserWindow()
+    bw.webContents.zoom = 1.25
+    const a = views.createTab('https://a.example/')
+    const b = views.createTab('https://b.example/')
+    const [va, vb] = fx.views
+    views.setLayout([
+      { tabId: a, bounds: { x: 3, y: 41, width: 577, height: 371 }, zoom: 0.5 },
+      { tabId: b, bounds: { x: 591, y: 41, width: 577, height: 371 }, zoom: 0.5 }
+    ])
+    views.setPanelVisible(true)
+    va.webContents.setZoomFactor.mockClear()
+
+    bw.contentSize = [1600, 1000]
+    bw.emit('resize')
+
+    expect(va.setBounds).toHaveBeenLastCalledWith({ x: 4, y: 51, width: 721, height: 464 })
+    expect(vb.setBounds).toHaveBeenLastCalledWith({ x: 739, y: 51, width: 721, height: 464 })
+    expect(va.webContents.setZoomFactor).not.toHaveBeenCalled()
+    expect(va.webContents.zoom).toBe(0.5)
+  })
+
+  it('BRZ-6 单页 → 平铺墙 → 单页：墙上 resize 留着上报的矩形，回单页又跟着窗口走', async () => {
+    const { views, bw, id, view } = await singlePage()
+    const CARD: Rect = { x: 10, y: 50, width: 400, height: 300 }
+
+    views.setLayout([{ tabId: id, bounds: CARD, zoom: 0.5 }])
+    bw.contentSize = [1000, 700]
+    bw.emit('resize')
+    expect(view.setBounds).toHaveBeenLastCalledWith(CARD)
+
+    views.setLayout([{ tabId: id, bounds: PAGE, viewport: VIEWPORT }])
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 88, width: 1000, height: 612 })
+    bw.contentSize = [1100, 800]
+    bw.emit('resize')
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 88, width: 1100, height: 712 })
+  })
+
+  it('BRZ-7 墙级门关着时 resize：页面继续停着；门开了（没有新上报）按现在的尺寸摆', async () => {
+    const { views, bw, view } = await singlePage()
+    views.setPanelVisible(false)
+    expect(view.setBounds).toHaveBeenLastCalledWith(STAGING_BOUNDS)
+    view.setBounds.mockClear()
+
+    bw.contentSize = [1000, 700]
+    bw.emit('resize')
+    for (const [rect] of view.setBounds.mock.calls) expect(rect).toEqual(STAGING_BOUNDS)
+    expect(theStaging().children).toContain(view)
+    expect(bw.children).not.toContain(view)
+
+    views.setPanelVisible(true)
+    expect(bw.children).toContain(view)
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 88, width: 1000, height: 612 })
+  })
+
+  it('BRZ-8 开、隐藏、重开：resize 只挂了一个；resize 不把窗口弄到眼前、不藏 view、不改选中', async () => {
+    const { views, wins, bw, id } = await singlePage()
+    fireClose(bw)
+    wins.openBrowserWindow()
+    expect(fx.browserWindows()).toEqual([bw])
+    expect(bw.handlerCount('resize')).toBe(1)
+
+    fx.clearCalls()
+    bw.contentSize = [1000, 700]
+    bw.emit('resize')
+    expect(fx.allSurfacing()).toEqual([])
+    expect(fx.hiddenViews()).toEqual([])
+    expect(views.listTabs().find((t) => t.active)?.id).toBe(id)
   })
 })

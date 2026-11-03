@@ -6,7 +6,7 @@
  *     `closeBrowserWindowWithMain` / `destroyBrowserWindow`（宿主窗口懒创建，关窗只隐藏）
  * - tab 生命周期 —— `setHostWindow` / `createTab` / `closeTab` / `reopenClosedTab` / `activateTab`
  *     （选中只由用户改）/ `destroyAllTabs`；查询 `getActiveView` / `getTabView` / `listTabs`；
- *     布局 `setLayout` / `setPanelVisible`；缩放 `zoomTab`；agent 在用哪页 `noteAgentUse`；
+ *     布局 `setLayout` / `setPanelVisible` / `setBrowserPopover`（弹层的透明 view）；缩放 `zoomTab`；agent 在用哪页 `noteAgentUse`；
  *     浏览器快捷键 `installShortcuts`
  * - `createDesktopBrowserBackend` —— 内置 browser MCP server（@shuvix/agent-runtime）
  *     的桌面 BrowserBackend 实现；`browserCdpManager` 是其 per-tab CDP 会话管理；
@@ -92,4 +92,5 @@ export {
   DESKTOP_BROWSER_CAPS
 } from './browserBackend'
 export { openDevtoolsDock, closeDevtoolsDock, setDevtoolsLayout } from './devtoolsDock'
+export { setBrowserPopover } from './browserPopover'
 export { agentDevtoolsSnapshot, clearAgentDevtoolsCalls } from './agentDevtools'

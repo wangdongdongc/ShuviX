@@ -10,7 +10,10 @@
  *    `installResizeObserver` 回一个手动触发器（`trigger(el)` 只叫醒还在看着 el 的观察者，observe 时不报），
  *    `stubRects` 所有元素同一个矩形、`stubRectsBy` 按元素给矩形，`stubInnerHeight` 改 window.innerHeight；
  *  - `tabInfo`：一行 BrowserTabInfo；`mountInto` / `typeInto` / `keyDown` / `mouseDown`；
- *  - 拖动：`mouseMove`（document 上，带 buttons）/ `mouseUp`（document 上）/ `windowBlur`。
+ *  - 拖动：`mouseMove`（document 上，带 buttons）/ `mouseUp`（document 上）/ `windowBlur`；
+ *  - 弹层的透明 view：`installPopoverWindow` 在 body 里放一个 iframe 当「外壳 window.open 出来的那份文档」（整个测试文件
+ *    一份，browserPopoverHost.ts 的模块状态也只有一份；React 测试文件不能 resetModules，那会多出一份 React），
+ *    `warmPopoverHost` 把它备好（打开、样式抄完、ready）。
  *
  * 一律 createElement（桌面 vitest 不带 react 插件）。
  */
@@ -21,6 +24,7 @@ import { initReactI18next } from 'react-i18next'
 import { vi, type Mock, type MockInstance } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { BrowserTabInfo } from '../../../stores/browserTabsStore'
+import { readyPopoverHost, warmBrowserPopover } from '../browserPopoverHost'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -129,6 +133,7 @@ const ACTIONS = [
   'proceedUnsafe',
   'setLayout',
   'setVisible',
+  'setPopover',
   'capture',
   'openDevtools',
   'closeDevtools',
@@ -322,6 +327,23 @@ export function stubRectsBy(rectOf: (el: HTMLElement) => RectLike): void {
   })
 }
 
+let savedInnerWidth: PropertyDescriptor | undefined | null = null
+
+/** window.innerWidth 改成 w（restoreInnerWidth 还原；没改过时还原什么也不做） */
+export function stubInnerWidth(w: number): void {
+  if (savedInnerWidth === null) {
+    savedInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+  }
+  Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: w })
+}
+
+export function restoreInnerWidth(): void {
+  if (savedInnerWidth === null) return
+  if (savedInnerWidth) Object.defineProperty(window, 'innerWidth', savedInnerWidth)
+  else delete (window as unknown as { innerWidth?: number }).innerWidth
+  savedInnerWidth = null
+}
+
 let savedInnerHeight: PropertyDescriptor | undefined | null = null
 
 /** window.innerHeight 改成 h（restoreInnerHeight 还原；没改过时还原什么也不做） */
@@ -424,6 +446,95 @@ export function windowBlur(): void {
   act(() => {
     window.dispatchEvent(new FocusEvent('blur'))
   })
+}
+
+/** el 上的 mouseup（弹层文档里的松手走它） */
+export function mouseUpOn(el: Element): void {
+  act(() => {
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+  })
+}
+
+export interface PopoverWindow {
+  frame: HTMLIFrameElement
+  win: Window & typeof globalThis
+  doc: Document
+  /** window.open 的间谍（这次 installPopoverWindow 以来的调用） */
+  open: Mock
+  /** 弹层盒子的尺寸：高度，以及没有 style.width 时的宽度（jsdom 没有布局） */
+  box: { width: number; height: number }
+  /** 用弹层那边的 ResizeObserver 建的观察者（到现在为止的个数） */
+  realmObservers(): number
+  /** 让下一次 openPopoverHost 重新开一遍（窗口被关掉了）：用例要看「还没备好 / 还没开过」时用 */
+  forgetHost(): void
+}
+
+let popoverFrame: HTMLIFrameElement | null = null
+const popoverBox = { width: 320, height: 200 }
+let realmObserverCount = 0
+
+/**
+ * window.open 回一个 iframe 的 window（jsdom 没实现 window.open，外壳一挂上就会调）。弹层文档那边的 ResizeObserver
+ * 是当前 installResizeObserver 的桩（数着个数），offsetWidth / offsetHeight 量的是 style.width 与 box。
+ */
+export function installPopoverWindow(): PopoverWindow {
+  if (!popoverFrame) {
+    popoverFrame = document.createElement('iframe')
+    document.body.appendChild(popoverFrame)
+    const frameWin = popoverFrame.contentWindow as Window & typeof globalThis
+    Object.defineProperty(frameWin, 'ResizeObserver', {
+      configurable: true,
+      get: () => {
+        const Base = globalThis.ResizeObserver
+        return class extends Base {
+          constructor(callback: ResizeObserverCallback) {
+            super(callback)
+            realmObserverCount++
+          }
+        }
+      }
+    })
+    Object.defineProperty(frameWin.HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return parseFloat(this.style.width) || popoverBox.width
+      }
+    })
+    Object.defineProperty(frameWin.HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: () => popoverBox.height
+    })
+  }
+  const frame = popoverFrame
+  const win = frame.contentWindow as Window & typeof globalThis
+  const setClosed = (closed: boolean): void => {
+    Object.defineProperty(win, 'closed', { configurable: true, value: closed })
+  }
+  popoverBox.width = 320
+  popoverBox.height = 200
+  const open = vi.fn(() => {
+    setClosed(false)
+    return win
+  })
+  window.open = open as unknown as typeof window.open
+  return {
+    frame,
+    win,
+    doc: win.document,
+    open,
+    box: popoverBox,
+    realmObservers: () => realmObserverCount,
+    forgetHost: () => setClosed(true)
+  }
+}
+
+/** 把弹层的文档备好：打开、样式抄完（没有样式表时只差几个微任务），之后 BrowserPopover 一挂就画 */
+export async function warmPopoverHost(): Promise<void> {
+  warmBrowserPopover()
+  await act(async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  })
+  if (!readyPopoverHost()) throw new Error('popover host is not ready')
 }
 
 export function click(el: Element): void {

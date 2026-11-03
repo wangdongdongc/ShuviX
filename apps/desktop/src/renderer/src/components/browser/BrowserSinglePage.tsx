@@ -18,12 +18,15 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
   const tab = useBrowserTabsStore(selectedTab)
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
   const requestOmniboxFocus = useBrowserTabsStore((s) => s.requestOmniboxFocus)
-  const dialogOpen = useDialogOverlay()
-  const cover = useBrowserTabsStore((s) => s.pageCover)
-  // 对话框、站点信息气泡开着：原生页面让位（它会盖住 DOM 弹层、吃掉鼠标），页面区由截图顶着
-  const overlay = dialogOpen || !!cover
+  // 对话框开着：原生页面让位（它会盖住对话框、吃掉鼠标）
+  const overlay = useDialogOverlay()
   const pageRef = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef(0)
+  /** 主进程手上已经是什么（布局的 key / 可见性）；一样就不再发，见 syncLayoutNow */
+  const sentRef = useRef<{ layout: string | null; visible: boolean | null }>({
+    layout: null,
+    visible: null
+  })
 
   const internal = tab ? internalPageOfTab(tab) : null
   const isBlank = !tab || !tab.url || tab.url === 'about:blank'
@@ -33,28 +36,40 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
   const syncLayoutNow = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
     const api = window.api.browserView
+    const sent = sentRef.current
     if (overlay) {
-      api.setVisible(false)
+      if (sent.visible !== false) api.setVisible(false)
+      sent.visible = false
       return
     }
     const el = pageRef.current
     const rect = el?.getBoundingClientRect()
     if (!tabId || !showsPage || !rect || rect.width <= 0 || rect.height <= 0) {
-      api.setLayout([])
+      if (sent.layout !== '') api.setLayout([])
+      sent.layout = ''
     } else {
-      api.setLayout([
-        {
-          tabId,
-          bounds: {
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height)
-          }
-        }
+      const bounds = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+      const viewport = { width: window.innerWidth, height: window.innerHeight }
+      // 矩形贴着窗口边缘，主进程按「到边缘的距离」摆（layoutAnchors.ts）：距离没变就不用报 —— 拖窗口边框的时候
+      // 一条 IPC 都不发，那段时间排版和 IPC 都在跟页面抢帧
+      const key = JSON.stringify([
+        tabId,
+        bounds.x,
+        bounds.y,
+        viewport.width - bounds.x - bounds.width,
+        viewport.height - bounds.y - bounds.height,
+        window.devicePixelRatio
       ])
+      if (sent.layout !== key) api.setLayout([{ tabId, bounds, viewport }])
+      sent.layout = key
     }
-    api.setVisible(true)
+    if (sent.visible !== true) api.setVisible(true)
+    sent.visible = true
   }, [overlay, tabId, showsPage])
 
   const syncLayout = useCallback(() => {
@@ -106,17 +121,7 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
         <PageErrorView tab={tab} onRetry={(url) => navigateTab(tab.id, url)} />
       ) : (
         /* WebContentsView 占位区域 —— 选中那页的 view 叠放在此 div 上方 */
-        <div ref={pageRef} className="absolute inset-0" data-page-area data-browser-page={tab.id}>
-          {cover?.tabId === tab.id && cover.snapshot && (
-            <img
-              src={cover.snapshot}
-              alt=""
-              draggable={false}
-              className="absolute inset-0 w-full h-full object-cover object-top"
-              data-page-cover
-            />
-          )}
-        </div>
+        <div ref={pageRef} className="absolute inset-0" data-page-area data-browser-page={tab.id} />
       )}
     </div>
   )

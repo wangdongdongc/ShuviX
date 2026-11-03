@@ -6,6 +6,7 @@
  * 导航类通道带 tabId 首参；bounds/visible 是面板级（只作用于激活 tab）。
  */
 
+import type { BrowserPopoverPlacement } from '../../shared/browserPopover'
 import { defineHandler, defineListener, type ClientContext } from './registry'
 import {
   createTab,
@@ -17,6 +18,7 @@ import {
   captureTab,
   setPanelVisible,
   isHostWebContents,
+  setBrowserPopover,
   openBrowserWindow,
   isBrowserWindowOpen,
   reopenClosedTab,
@@ -253,6 +255,7 @@ export function registerBrowserViewHandlers(): void {
       entries: Array<{
         tabId: string
         bounds: { x: number; y: number; width: number; height: number }
+        viewport?: { width: number; height: number }
         zoom?: number
       }>
     ) => {
@@ -267,6 +270,12 @@ export function registerBrowserViewHandlers(): void {
   defineListener('browser-view:set-visible', (ctx, visible: boolean) => {
     if (ctx.client.kind !== 'window' || !isHostWebContents(ctx.client.webContentsId)) return
     setPanelVisible(visible)
+  })
+
+  /** 弹层（站点信息气泡、地址栏下拉）那块透明 view 的矩形；null = 关 */
+  defineListener('browser-view:set-popover', (ctx, placement: BrowserPopoverPlacement | null) => {
+    if (!fromHostWindow(ctx)) return
+    setBrowserPopover(placement?.bounds ? placement : null)
   })
 
   // ====== 停靠区（页面下方：原生 DevTools + agent 的 devtool） ======
@@ -294,6 +303,7 @@ export function registerBrowserViewHandlers(): void {
       slot: {
         tabId: string
         bounds: { x: number; y: number; width: number; height: number }
+        viewport?: { width: number; height: number }
       } | null
     ) => {
       if (!fromHostWindow(ctx)) return
