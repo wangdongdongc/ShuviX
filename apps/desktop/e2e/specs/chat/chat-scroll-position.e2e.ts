@@ -466,6 +466,10 @@ describe('日历跳转', () => {
     await until(async () => (await sidebar.activeTitle()) === TITLES.l1, 'S-long-1 active')
     await expectAtTarget()
     await scroll.waitButton(true, Math.max(500, 2_000 - (Date.now() - t0)))
+    // 落在中间的列表没有贴底那一刻，骨架不能等它：按钮出来时骨架早就撤了
+    expect(
+      await app.main.eval<boolean>(`!document.querySelector('[data-conversation-skeleton]')`)
+    ).toBe(true)
     await scroll.clickButton()
     await scroll.waitAtBottom()
     await scroll.waitButton(false)

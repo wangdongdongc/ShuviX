@@ -295,6 +295,11 @@ interface ChatState {
    */
   sessionViews: Record<string, SessionView>
   /**
+   * 视图订阅失败的会话（`useSessionView` 写，放手即删）：失败不重试，视图不会来了，对话区不再等它。
+   * 只记「失败了」，切片仍然一个都不写（P3-08-04）
+   */
+  sessionViewFailed: Record<string, true>
+  /**
    * 各 session 的流式状态（按 sessionId 隔离）。订阅着视图的会话由视图派生；没人订阅的会话只有
    * `isStreaming`，由 `agent_start` / `agent_end` 余项维护（侧栏转圈）
    */
@@ -813,6 +818,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   scrollToMessageRequest: null,
   messages: [],
   sessionViews: {},
+  sessionViewFailed: {},
   sessionStreams: {},
   sessionClosing: {},
   sessionAgentCreated: {},
@@ -1323,6 +1329,14 @@ export function applySessionView(sessionId: string, view: SessionView | null): v
       }
     }
   }
+}
+
+/** 记下 / 撤掉一条会话的视图订阅失败（见 `sessionViewFailed`）；没变化不写 */
+export function markSessionViewFailed(sessionId: string, failed: boolean): void {
+  useChatStore.setState((state) => {
+    const next = withKey(state.sessionViewFailed, sessionId, failed ? true : undefined)
+    return next === state.sessionViewFailed ? state : { sessionViewFailed: next }
+  })
 }
 
 /**

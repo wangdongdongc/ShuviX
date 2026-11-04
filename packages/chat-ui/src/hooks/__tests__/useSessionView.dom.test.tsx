@@ -4,6 +4,7 @@
  *
  *   P3-08-01 挂上、等稳：store 里的视图 = 服务端的值；绑定没有错误
  *   P3-08-04 订阅失败：钩子状态 {error, code}、只订一次、这条会话的切片一个都不写
+ *   VF-1..3 订阅失败只记一个标记（对话区据此不再等视图）；放手才撤；接上一个早已失败的订阅也记
  *   P3-08-07 不可用：钩子报 unavailable、store 回到空视图的值（PIN-14）；之后 replaced → 又是 live、store 是新值
  *   P3-08-08 两个使用方：一次订阅；卸掉一个不退订、视图切片还在；都卸掉退订一次、切片丢掉
  *   P3-08-09 A → B → A（React 合批内）：最终 store 是 A 的；B 的切片不残留
@@ -18,7 +19,7 @@ import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import { emptySessionView, type AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { setSessionChannelApi } from '../../api/chatApi'
-import { useChatStore } from '../../stores/chatStore'
+import { markSessionViewFailed, useChatStore } from '../../stores/chatStore'
 import { useSubSessionStore } from '../../stores/subSessionStore'
 import { useSessionView } from '../useSessionView'
 import { useAgentView } from '../useAgentView'
@@ -147,6 +148,49 @@ describe('useSessionView', () => {
     await settle()
     expect(states.a).toEqual({ status: 'live' })
     expect(store().sessionViews.s1.messages.map((m) => m.id)).toEqual(['u9'])
+  })
+
+  it('VF-1 订阅失败：记下失败；放手就撤掉', async () => {
+    server.serve(S1, V('s1'))
+    server.failSubscribe('not_found')
+    render(createElement(SessionProbe, { id: 's1', tag: 'a' }))
+    await settle()
+    expect(store().sessionViewFailed.s1).toBe(true)
+
+    render(createElement(SessionProbe, { id: null, tag: 'a' }))
+    await settle()
+    expect(store().sessionViewFailed.s1).toBeUndefined()
+  })
+
+  it('VF-2 订阅成功：不记失败', async () => {
+    server.serve(S1, V('s1'))
+    render(createElement(SessionProbe, { id: 's1', tag: 'a' }))
+    await settle()
+    expect(store().sessionViews.s1).toBeDefined()
+    expect(store().sessionViewFailed.s1).toBeUndefined()
+  })
+
+  it('VF-3 接上一个早已失败的订阅：也记下；还有别的使用方时不撤', async () => {
+    server.serve(S1, V('s1'))
+    server.failSubscribe('not_found')
+    const a = createElement(SessionProbe, { key: 'a', id: 's1', tag: 'a' })
+    const b = createElement(SessionProbe, { key: 'b', id: 's1', tag: 'b' })
+    render(createElement('div', null, [a]))
+    await settle()
+    // 撤掉标记再接第二个使用方：它没有收到状态事件，只能从补报里知道
+    act(() => markSessionViewFailed('s1', false))
+    render(createElement('div', null, [a, b]))
+    await settle()
+    expect(states.b).toEqual({ status: 'error', code: 'not_found' })
+    expect(store().sessionViewFailed.s1).toBe(true)
+
+    render(createElement('div', null, [b]))
+    await settle()
+    expect(store().sessionViewFailed.s1).toBe(true)
+
+    render(createElement('div', null, []))
+    await settle()
+    expect(store().sessionViewFailed.s1).toBeUndefined()
   })
 
   it('P3-08-08 两个使用方：一次订阅；卸一个不退订、切片还在；都卸掉退订一次、切片丢掉', async () => {

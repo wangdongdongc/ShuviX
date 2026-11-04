@@ -229,6 +229,7 @@
     "welcomeShortcutNewChat": "New Chat",
     "startNewChat": "Start New Chat",
     "emptyHint": "Send a message to start the conversation",
+    "historyLoadFailed": "Couldn't load this conversation's history",
     "scrollToBottom": "Scroll to bottom",
     "rollbackConfirm": "Rollback to here",
     "rollbackWarning": "This will delete all messages after this point. This action cannot be undone.",

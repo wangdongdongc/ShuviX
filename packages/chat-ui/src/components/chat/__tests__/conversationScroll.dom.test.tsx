@@ -4,6 +4,7 @@
  *
  *   - 挂载门：视图到了（或有乐观占位）才挂 Virtuoso、才画空态；视图未到时什么都不挂（不画空态、
  *     不出按钮）。挂上时的初始位置是 `{index:'LAST', align:'end'}`（真底，含 Footer）；
+ *   - 骨架：消息 200ms 还没上屏才画，上屏后至少留 250ms；列表在骨架下面先挂、定位好才撤；订阅失败换成失败提示；
  *   - 宽限期：挂上后先不认「不在底部」，直到第一次报「在底部」或过了 800ms；
  *   - 点击：离底超过三屏（严格大于）或拿不到滚动区 → `behavior:'auto'`，否则 `'smooth'`；
  *   - 换会话（key 变）整个重来；按钮的显示 / 隐藏属性、aria-label；运行中且显示时的运行指示；
@@ -29,6 +30,8 @@ interface VirtuosoStubProps {
   scrollerRef?: (el: HTMLElement | Window | null) => void
   atBottomStateChange?: (atBottom: boolean) => void
   atBottomThreshold?: number
+  components: { List: (props: Record<string, unknown>) => ReactNode }
+  context: { landed: boolean }
 }
 
 const virt = vi.hoisted(() => ({
@@ -103,6 +106,7 @@ vi.mock('../../../hooks/useChatActions', () => ({
 
 import {
   applySessionView,
+  markSessionViewFailed,
   pendingPromptMessage,
   useChatStore,
   type ChatMessage
@@ -138,8 +142,18 @@ function fakeScroller(): HTMLElement {
   for (const key of ['scrollHeight', 'scrollTop', 'clientHeight'] as const) {
     Object.defineProperty(el, key, { configurable: true, get: () => metrics[key] })
   }
+  el.getBoundingClientRect = () => ({ top: 0, bottom: metrics.clientHeight }) as DOMRect
+  el.querySelectorAll = (() => renderedItems) as unknown as typeof el.querySelectorAll
   return el
 }
+
+/** 假滚动区里此刻渲染着的项（`hasLanded` 量的就是它们）：缺省一项、就是开头、底边在视口内 */
+const fakeItem = (index: number, top: number, bottom: number): HTMLElement =>
+  ({
+    dataset: { itemIndex: String(index) },
+    getBoundingClientRect: () => ({ top, bottom })
+  }) as unknown as HTMLElement
+let renderedItems: HTMLElement[] = [fakeItem(0, 0, 100)]
 
 /** 把假滚动区摆到「离真底 dist」的位置 */
 function distFromBottom(dist: number): void {
@@ -164,6 +178,10 @@ const button = (): HTMLButtonElement | null =>
   container.querySelector<HTMLButtonElement>('[data-scroll-to-bottom]')
 const stubPresent = (): boolean => container.querySelector('[data-virtuoso-stub]') !== null
 const emptyPresent = (): boolean => container.querySelector('[data-empty-marker]') !== null
+const skeletonPresent = (): boolean =>
+  container.querySelector('[data-conversation-skeleton]') !== null
+const failedPresent = (): boolean =>
+  container.querySelector('[data-conversation-load-failed]') !== null
 /** 按钮是否处于显示态（aria-hidden 是唯一不随样式类变的判据；样式类另由 BTN-ATTR 用例钉） */
 const shown = (): boolean => button()?.getAttribute('aria-hidden') === 'false'
 const dots = (): number =>
@@ -176,6 +194,11 @@ const advance = (ms: number): void => {
   act(() => {
     vi.advanceTimersByTime(ms)
   })
+}
+/** 列表定位好了：量到贴底，Virtuoso 也报到底 */
+const land = (): void => {
+  distFromBottom(0)
+  atBottom(true)
 }
 const click = (): void => {
   act(() => button()!.click())
@@ -203,6 +226,7 @@ beforeEach(() => {
   metrics.scrollHeight = 10_000
   metrics.clientHeight = 500
   metrics.scrollTop = 0
+  renderedItems = [fakeItem(0, 0, 100)]
   virt.scroller = fakeScroller()
   resetStore(S1)
   useChatStore.setState({ scrollToMessageRequest: null })
@@ -288,6 +312,311 @@ describe('挂载门', () => {
     loadView(S1, history(S1))
     render(S1)
     expect(virt.props!.atBottomThreshold).toBe(160)
+  })
+})
+
+describe('骨架', () => {
+  it('SKL-1 视图迟迟不到：200ms 之前什么都没有，到点才是骨架；不画空态、不挂列表、读屏跳过', () => {
+    render(S1)
+    advance(199)
+    expect(skeletonPresent()).toBe(false)
+    expect(emptyPresent()).toBe(false)
+
+    advance(1)
+    expect(skeletonPresent()).toBe(true)
+    expect(
+      container.querySelector('[data-conversation-skeleton]')!.getAttribute('aria-hidden')
+    ).toBe('true')
+    // 不吞操作：点击和滚轮穿给下面的列表
+    expect(container.querySelector('[data-conversation-skeleton]')!.className).toContain(
+      'pointer-events-none'
+    )
+    expect(emptyPresent()).toBe(false)
+    expect(virt.mounts).toBe(0)
+    expect(button()).toBeNull()
+  })
+
+  it('SKL-2 视图到了、列表也在 200ms 内定位好：骨架从头到尾不出现', () => {
+    render(S1)
+    advance(100)
+    loadView(S1, history(S1))
+    expect(virt.mounts).toBe(1)
+    advance(99)
+    land()
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+
+  it('SKL-3 视图很快到、列表迟迟没定位好：骨架盖在已经挂上的列表上，定位好且留满 250ms 才撤', () => {
+    render(S1)
+    advance(50)
+    loadView(S1, history(S1))
+    expect(virt.mounts).toBe(1)
+    advance(149)
+    expect(skeletonPresent()).toBe(false)
+    advance(1)
+    expect(skeletonPresent()).toBe(true)
+    expect(stubPresent()).toBe(true)
+
+    advance(100)
+    land()
+    advance(149)
+    expect(skeletonPresent()).toBe(true)
+    advance(1)
+    expect(skeletonPresent()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+
+  it('SKL-4 骨架上屏后视图才到：列表当场在骨架下面挂上（不等骨架撤），落在真底，只挂一次', () => {
+    render(S1)
+    advance(200)
+    advance(10)
+    loadView(S1, history(S1))
+    expect(skeletonPresent()).toBe(true)
+    expect(virt.mounts).toBe(1)
+    expect(virt.mountProps[0].initialTopMostItemIndex).toEqual(LIST_BOTTOM)
+    expect(virt.mountProps[0].data.map((item) => item.msg.id)).toEqual(history(S1).map((m) => m.id))
+
+    land()
+    advance(239)
+    expect(skeletonPresent()).toBe(true)
+    advance(1)
+    expect(skeletonPresent()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+
+  it('SKL-5 骨架已经留够：列表一定位好就撤，不再多等', () => {
+    render(S1)
+    advance(200)
+    advance(1000)
+    loadView(S1, history(S1))
+    land()
+    advance(0)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-15 初始定位不在底部（日历跳到中间）：列表自己揭开，骨架不等它，也不盖住「回到底部」', () => {
+    loadView(S1, history(S1))
+    request(S1, `${S1}-u2`)
+    render(S1)
+    expect(virt.mountProps[0].initialTopMostItemIndex).toEqual({ index: 2, align: 'start' })
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-16 初始定位不在底部、骨架已经上屏：留满 250ms 就撤，不等宽限期', () => {
+    render(S1)
+    advance(200)
+    request(S1, `${S1}-u2`)
+    loadView(S1, history(S1))
+    expect(virt.mountProps[0].initialTopMostItemIndex).toEqual({ index: 2, align: 'start' })
+    expect(skeletonPresent()).toBe(true)
+    advance(250)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-6 列表一直量不到贴底（窗口在后台）：过了 800ms 宽限期也撤', () => {
+    render(S1)
+    loadView(S1, history(S1))
+    advance(799)
+    expect(skeletonPresent()).toBe(true)
+    advance(1)
+    advance(0)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-7 等来的是一条空会话：骨架留满后是空态，不挂列表', () => {
+    render(S1)
+    advance(200)
+    loadView(S1, [])
+    advance(249)
+    expect(skeletonPresent()).toBe(true)
+    advance(1)
+    expect(skeletonPresent()).toBe(false)
+    expect(emptyPresent()).toBe(true)
+    expect(virt.mounts).toBe(0)
+  })
+
+  it('SKL-8 换会话：骨架不带过去，计时从头来；切回来也一样', () => {
+    render(S1)
+    advance(200)
+    expect(skeletonPresent()).toBe(true)
+
+    render(S2)
+    expect(skeletonPresent()).toBe(false)
+    advance(199)
+    expect(skeletonPresent()).toBe(false)
+    advance(1)
+    expect(skeletonPresent()).toBe(true)
+
+    render(S1)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-9 运行中的余项、视图迟迟不到：画骨架，不是孤零零的流式占位', () => {
+    act(() => useChatStore.getState().markSessionRunning(S1, true))
+    render(S1)
+    advance(200)
+    expect(skeletonPresent()).toBe(true)
+    expect(virt.mounts).toBe(0)
+  })
+
+  it('SKL-10 骨架显示中发出第一句话：列表带着这句话挂上，定位好且留满才撤', () => {
+    render(S1)
+    advance(200)
+    act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    expect(virt.mountProps[0].data.map((item) => item.msg.id)).toContain('pending-prompt')
+    expect(skeletonPresent()).toBe(true)
+    land()
+    advance(250)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-11 打开时是空会话，之后发第一句话：不算打开，骨架不出现', () => {
+    render(S1)
+    loadView(S1, [])
+    expect(emptyPresent()).toBe(true)
+    act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    expect(virt.mounts).toBe(1)
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-12 订阅失败：骨架留满后换成失败提示，不画空态', () => {
+    render(S1)
+    advance(200)
+    act(() => markSessionViewFailed(S1, true))
+    expect(skeletonPresent()).toBe(true)
+    advance(250)
+    expect(skeletonPresent()).toBe(false)
+    expect(failedPresent()).toBe(true)
+    expect(emptyPresent()).toBe(false)
+    expect(virt.mounts).toBe(0)
+  })
+
+  it('SKL-13 订阅在 200ms 内就失败：直接是失败提示，骨架不出现', () => {
+    render(S1)
+    act(() => markSessionViewFailed(S1, true))
+    expect(failedPresent()).toBe(true)
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+    expect(failedPresent()).toBe(true)
+  })
+
+  it('SKL-14 视图在、失败标记也在：照常是列表，不是失败提示', () => {
+    act(() => markSessionViewFailed(S1, true))
+    loadView(S1, history(S1))
+    render(S1)
+    expect(failedPresent()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+})
+
+describe('揭开列表', () => {
+  /** 按 Virtuoso 给的样式渲染一次真的 List 组件，读它最后用的 visibility */
+  const listVisibility = (): string => {
+    const host = document.createElement('div')
+    const listRoot = createRoot(host)
+    const List = virt.props!.components.List
+    act(() => {
+      listRoot.render(
+        createElement(List, {
+          context: virt.props!.context,
+          style: { visibility: 'hidden' },
+          'data-testid': 'list'
+        })
+      )
+    })
+    const el = host.querySelector<HTMLElement>('[data-testid=list]')!
+    const value = el.style.visibility
+    act(() => listRoot.unmount())
+    return value
+  }
+
+  it('REV-1 Virtuoso 报到底、量出来也贴底：揭开，不等它的定时器', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    expect(listVisibility()).toBe('hidden')
+    distFromBottom(0)
+    atBottom(true)
+    expect(listVisibility()).toBe('visible')
+  })
+
+  it('REV-2 Virtuoso 报到底、量出来还差很远（高度是估的）：不揭开，等真的滚到底', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    distFromBottom(6000)
+    atBottom(true)
+    expect(listVisibility()).toBe('hidden')
+
+    distFromBottom(0)
+    act(() => {
+      virt.scroller!.dispatchEvent(new Event('scroll'))
+    })
+    expect(listVisibility()).toBe('visible')
+  })
+
+  it('REV-3 差 4px 以内算贴底，再多不算', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    distFromBottom(5)
+    atBottom(true)
+    expect(listVisibility()).toBe('hidden')
+    distFromBottom(4)
+    act(() => {
+      virt.scroller!.dispatchEvent(new Event('scroll'))
+    })
+    expect(listVisibility()).toBe('visible')
+  })
+
+  it('REV-4 不贴底的初始定位（日历跳到中间）：一直不强行揭开，交给 Virtuoso 自己', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    distFromBottom(6000)
+    advance(1000)
+    expect(listVisibility()).toBe('hidden')
+  })
+
+  it('REV-6 一项都还没渲染（总高为零，正好「到底」）：不揭开', () => {
+    renderedItems = []
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    expect(listVisibility()).toBe('hidden')
+  })
+
+  it('REV-7 上沿没铺满（探测阶段只渲染了末项，上面还空着）：不揭开；铺满或渲染到开头才揭开', () => {
+    renderedItems = [fakeItem(5, 200, 400)]
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    expect(listVisibility()).toBe('hidden')
+
+    renderedItems = [fakeItem(3, -50, 100), fakeItem(5, 200, 400)]
+    act(() => {
+      virt.scroller!.dispatchEvent(new Event('scroll'))
+    })
+    expect(listVisibility()).toBe('visible')
+  })
+
+  it('REV-8 最后一项的底边还在视口下面（实际高度比估的高）：不揭开', () => {
+    renderedItems = [fakeItem(0, 0, 100), fakeItem(5, 200, 6000)]
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    expect(listVisibility()).toBe('hidden')
+  })
+
+  it('REV-5 组件引用稳定：重渲染不会让 Virtuoso 重挂列表', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    const before = virt.props!.components
+    distFromBottom(0)
+    atBottom(true)
+    loadView(S1, [...history(S1), user(`${S1}-u4`, 'fourth')])
+    expect(virt.props!.components).toBe(before)
+    expect(virt.mounts).toBe(1)
   })
 })
 

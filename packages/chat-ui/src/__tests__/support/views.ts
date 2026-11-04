@@ -111,6 +111,7 @@ export function resetStore(activeSessionId: string | null = null): void {
     activeSessionId,
     messages: [],
     sessionViews: {},
+    sessionViewFailed: {},
     sessionStreams: {},
     sessionClosing: {},
     sessionAgentCreated: {},

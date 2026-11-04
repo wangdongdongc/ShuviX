@@ -1,7 +1,13 @@
 import { useChatHost } from '@shuvix/chat-ui'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Virtuoso, type FlatIndexLocationWithAlign, type VirtuosoHandle } from 'react-virtuoso'
+import {
+  Virtuoso,
+  type ContextProp,
+  type FlatIndexLocationWithAlign,
+  type ListProps,
+  type VirtuosoHandle
+} from 'react-virtuoso'
 import {
   useChatStore,
   selectIsStreaming,
@@ -19,6 +25,7 @@ import { StreamingFooter } from './StreamingFooter'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
+import { ViewLoadGate } from './ConversationSkeleton'
 
 /** Virtuoso Footer：流式指示器 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
 function ConversationFooter(): React.JSX.Element {
@@ -31,12 +38,53 @@ function ConversationFooter(): React.JSX.Element {
 }
 
 /**
+ * Virtuoso 定位初始项的时候把列表藏着（visibility: hidden），定位完还要等一个固定 150ms 的定时器（看高度还变不变）
+ * 才揭开：不管会话多大，每次打开都要空白 250ms 以上，比数据到达（几十毫秒）慢得多。量到真的贴底（`landed`，
+ * 见 MessageList）就不必再藏：之后高度再变由下面的跟随贴底接住。初始定位不在底部（日历跳到中间）的照旧等
+ * Virtuoso 自己揭开
+ */
+const ConversationList = forwardRef<
+  HTMLDivElement,
+  Omit<ListProps, 'ref'> & ContextProp<{ landed: boolean }>
+>(function ConversationList({ context, style, ...rest }, ref) {
+  return (
+    <div ref={ref} {...rest} style={context.landed ? { ...style, visibility: 'visible' } : style} />
+  )
+})
+
+/** 模块级常量：每次渲染给新组件会让 Virtuoso 重挂列表 */
+const LIST_COMPONENTS = { Footer: ConversationFooter, List: ConversationList }
+
+/**
  * 列表的「底部」：最后一项的**底边**贴视口底边。Virtuoso 对最后一项 + `align: 'end'` 会把 Footer 高度
  * 一并算进去，所以落点是真正的底 —— 末尾那几行不压在悬浮输入卡片下面。
  * 从前用 `align: 'start'`（最后一项的顶边贴视口顶边）：一轮对话整个折成一张卡，最后一轮一长，
  * 打开会话看到的就是那一轮的开头，还得自己往下翻。模块级常量：每次渲染给新对象会让 Virtuoso 重算
  */
 const LIST_BOTTOM: FlatIndexLocationWithAlign = { index: 'LAST', align: 'end' }
+/** 离真底不超过这么多（px）才算贴底，见 hasLanded */
+const LANDED_SLACK_PX = 4
+
+/**
+ * 这一屏是不是已经是真内容、停在真底：有项渲染出来、上沿被铺满（第一项顶到视口上沿，或它就是开头）、最后一项的
+ * 底边在视口内、滚动条也到底了。都量真实 DOM —— Virtuoso 第一次报「在底部」时高度还是估的（实测真底还差 6000px），
+ * 只有一项的探测阶段总高也可能正好「到底」
+ */
+function hasLanded(scroller: HTMLElement): boolean {
+  const rendered = scroller.querySelectorAll<HTMLElement>('[data-item-index]')
+  if (rendered.length === 0) return false
+  const view = scroller.getBoundingClientRect()
+  const first = rendered[0]
+  const startsFilled =
+    first.dataset.itemIndex === '0' || first.getBoundingClientRect().top <= view.top
+  const dist = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+  return (
+    startsFilled &&
+    rendered[rendered.length - 1].getBoundingClientRect().bottom <= view.bottom &&
+    dist <= LANDED_SLACK_PX
+  )
+}
+
 /** 离底部多远（px）才算「不在底部」：末尾一两行被输入卡片挡住、流式时刚长出几行，都不该把按钮招出来 */
 const AT_BOTTOM_THRESHOLD = 160
 /**
@@ -82,6 +130,8 @@ interface MessageListProps {
    * 正文按滚动容器的内容区居中，悬浮在列表上的输入卡片与「回到底部」按钮要据此让出同一条，三者才同一根中线
    */
   onScrollbarWidthChange: (px: number) => void
+  /** 消息已经可见（量到贴底，或过了宽限期）：外面的骨架可以撤了 */
+  onLanded: () => void
 }
 
 function MessageList({
@@ -89,7 +139,8 @@ function MessageList({
   renderItem,
   running,
   scrollRequest,
-  onScrollbarWidthChange
+  onScrollbarWidthChange,
+  onLanded
 }: MessageListProps): React.JSX.Element {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const scrollerRef = useRef<HTMLElement | null>(null)
@@ -119,22 +170,43 @@ function MessageList({
     listenersRef.current = null
   }, [])
 
-  const handleAtBottomChange = useCallback((value: boolean) => {
-    setAtBottom(value)
-    if (value) {
-      setSettled(true)
-      landedRef.current = true
-    }
+  /** 量到真的贴底了：揭开列表（见 ConversationList） */
+  const [landed, setLanded] = useState(false)
+  const checkLanded = useCallback(() => {
+    const el = scrollerRef.current
+    if (!el || hasLanded(el)) setLanded(true)
   }, [])
+  // 初始定位不在底部（日历跳到中间）：不会有贴底那一刻，列表由 Virtuoso 自己揭开，不让骨架等它，也不盖住它
+  const startsAtBottom = initial.location === LIST_BOTTOM
   useEffect(() => {
-    const settle = setTimeout(() => setSettled(true), BOTTOM_STATE_GRACE_MS)
+    if (landed || !startsAtBottom) onLanded()
+  }, [landed, startsAtBottom, onLanded])
+  const listContext = useMemo(() => ({ landed }), [landed])
+
+  const handleAtBottomChange = useCallback(
+    (value: boolean) => {
+      setAtBottom(value)
+      if (value) {
+        setSettled(true)
+        landedRef.current = true
+        checkLanded()
+      }
+    },
+    [checkLanded]
+  )
+  useEffect(() => {
+    const settle = setTimeout(() => {
+      setSettled(true)
+      // 窗口在后台之类量不到贴底：到点也算上屏
+      onLanded()
+    }, BOTTOM_STATE_GRACE_MS)
     const release = setTimeout(unpin, PIN_TO_BOTTOM_MS)
     return () => {
       clearTimeout(settle)
       clearTimeout(release)
       unpin()
     }
-  }, [unpin])
+  }, [unpin, onLanded])
   // 贴底：直接把滚动容器滚到最底，合并到下一帧（一帧至多一次）。不在 Virtuoso / ResizeObserver 的回调里
   // 同步改滚动位置 —— 那会让同一帧里的尺寸观察再触发一轮（「ResizeObserver loop」）
   const stickFrame = useRef(0)
@@ -144,8 +216,9 @@ function MessageList({
       stickFrame.current = 0
       const el = scrollerRef.current
       if (el) el.scrollTop = el.scrollHeight
+      checkLanded()
     })
-  }, [])
+  }, [checkLanded])
   useEffect(() => () => cancelAnimationFrame(stickFrame.current), [])
   // 列表总高（含 Footer，所以输入卡片长高也算）变了：还在跟随就再贴一次底
   const handleTotalHeightChange = useCallback(() => {
@@ -225,12 +298,13 @@ function MessageList({
         () => {
           if (landedRef.current && scroller.scrollTop < lastTop - 1) unpin()
           lastTop = scroller.scrollTop
+          checkLanded()
         },
         options
       )
       listenersRef.current = listeners
     },
-    [unpin, stickToBottom, reportScrollbarWidth]
+    [unpin, stickToBottom, reportScrollbarWidth, checkLanded]
   )
   const scrollToBottom = useCallback(() => {
     const el = scrollerRef.current
@@ -250,7 +324,8 @@ function MessageList({
         className="relative z-0 flex-1 min-w-0 thin-scrollbar conversation-scroller"
         data={items}
         itemContent={renderItem}
-        components={{ Footer: ConversationFooter }}
+        components={LIST_COMPONENTS}
+        context={listContext}
         initialTopMostItemIndex={initial.location}
         increaseViewportBy={{ top: 200, bottom: 400 }}
         computeItemKey={(_index, item) => item.key}
@@ -350,14 +425,16 @@ export function Conversation({
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
     [sessionId, messages]
   )
-  // 列表与空态都等这条会话的视图到了再画。视图到达之前 messages 是空的，这个「空」不说明任何事：画空态，
-  // 每次打开有记录的会话都会先闪一下空态（桌面是整张会话设置面板）。
+  // 列表与空态都等这条会话的视图到了再画（久久没上屏就画骨架，见 ViewLoadGate）。视图到达之前 messages 是空的，
+  // 这个「空」不说明任何事：画空态，每次打开有记录的会话都会先闪一下空态（桌面是整张会话设置面板）。
   // 也可能已经有东西要画：运行中的会话退订时留下「还在跑」的余项（isStreaming，见 releaseSessionView），
   // 切回来就是一张孤零零的流式占位卡。那时挂上列表，初始定位落在这一项上；等真消息到了，初始定位早已用掉，
   // 列表就停在会话开头。
   // 乐观占位例外：那是刚建、还没有历史的会话，没有「底部」可找，刚发出的那句话也不能等后端
   const viewLoaded = useChatStore((s) => s.sessionViews[sessionId] !== undefined)
   const listReady = viewLoaded || !!pendingPrompt
+  // 订阅失败不重试（useSessionView），视图不会来了：不能让骨架一直转下去
+  const viewFailed = useChatStore((s) => !!s.sessionViewFailed[sessionId])
   // 空态只在**真的什么都没有**时才顶上：乐观占位也算内容 —— 漏掉它，「新会话第一条消息」
   // 与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
   // messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病
@@ -391,35 +468,49 @@ export function Conversation({
     <>
       {/* 对话列 relative 锚点：悬浮输入卡片绝对贴底定位于此（与笔记本会话同构） */}
       <div ref={rootRef} className="relative flex-1 min-h-0 flex flex-col">
-        {!listReady ? (
-          // 视图还没到：先空着，等它带着真消息（或确实没有消息）到了再决定画什么（见 listReady）
-          <div className="flex-1 min-h-0" />
-        ) : isEmpty ? (
-          // 空态同样按输入卡片高度留白，避免居中内容被悬浮卡片遮挡
-          <div
-            data-conversation-empty
-            className="flex-1 min-h-0 flex flex-col"
-            style={{ paddingBottom: 'var(--chat-input-h, 0px)' }}
-          >
-            {emptyState ?? (
-              <div className="flex-1 flex items-center justify-center px-6">
-                <p className="text-sm text-text-tertiary">{t('chat.emptyHint')}</p>
+        <ViewLoadGate
+          key={sessionId}
+          dataReady={listReady || viewFailed}
+          awaitsPaint={listReady && !isEmpty}
+        >
+          {(onPainted) =>
+            !listReady ? (
+              <div
+                data-conversation-load-failed
+                className="flex-1 min-h-0 flex items-center justify-center px-6"
+                style={{ paddingBottom: 'var(--chat-input-h, 0px)' }}
+              >
+                <p className="text-sm text-text-tertiary">{t('chat.historyLoadFailed')}</p>
               </div>
-            )}
-          </div>
-        ) : (
-          // 按会话重挂：初始定位只在挂载那一刻生效，「在不在底部」的状态也只属于这一份列表
-          <SuggestionContext.Provider value={suggestionContext}>
-            <MessageList
-              key={sessionId}
-              items={visibleItems}
-              renderItem={renderItem}
-              running={isStreaming}
-              scrollRequest={scrollRequest}
-              onScrollbarWidthChange={handleScrollbarWidthChange}
-            />
-          </SuggestionContext.Provider>
-        )}
+            ) : isEmpty ? (
+              // 空态同样按输入卡片高度留白，避免居中内容被悬浮卡片遮挡
+              <div
+                data-conversation-empty
+                className="flex-1 min-h-0 flex flex-col"
+                style={{ paddingBottom: 'var(--chat-input-h, 0px)' }}
+              >
+                {emptyState ?? (
+                  <div className="flex-1 flex items-center justify-center px-6">
+                    <p className="text-sm text-text-tertiary">{t('chat.emptyHint')}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              // 按会话重挂：初始定位只在挂载那一刻生效，「在不在底部」的状态也只属于这一份列表
+              <SuggestionContext.Provider value={suggestionContext}>
+                <MessageList
+                  key={sessionId}
+                  items={visibleItems}
+                  renderItem={renderItem}
+                  running={isStreaming}
+                  scrollRequest={scrollRequest}
+                  onScrollbarWidthChange={handleScrollbarWidthChange}
+                  onLanded={onPainted}
+                />
+              </SuggestionContext.Provider>
+            )
+          }
+        </ViewLoadGate>
 
         {/* 输入区（悬浮卡片）：待处理用户输入经 accessory 并入卡片顶格，与输入区同一张卡片 */}
         <div

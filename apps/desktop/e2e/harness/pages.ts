@@ -2761,6 +2761,11 @@ export interface SidebarPane {
    * `bg-bg-hover`，不会误命中）—— 它直接映射 `activeSessionId === s.id`。
    */
   openSession(title: string): Promise<boolean>
+  /**
+   * 过 `delayMs` 之后由页面自己点这一行，这里立刻返回（不等激活）：点的那一刻测试这边要做别的事
+   * （比如停住主进程 —— 主进程停着时 CDP 也不通）。没有这一行 → false
+   */
+  clickSessionAfter(title: string, delayMs: number): Promise<boolean>
   /** 这一行上的询问徽标（`[data-pending-asks]`）的数；没有徽标或没有这一行 → null（行不在折起来的组里才查得到） */
   pendingAsks(title: string): Promise<number | null>
   /**
@@ -3106,6 +3111,16 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       )
       return true
     },
+
+    clickSessionAfter: (title, delayMs) =>
+      main.eval<boolean>(
+        `(() => {
+          const row = ${ROW(title)}
+          if (!row) return false
+          setTimeout(() => row.click(), ${delayMs})
+          return true
+        })()`
+      ),
 
     groupMenuItems: async (target) => {
       await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
