@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * 生成 GitHub Release 的说明正文：tag 自带的说明（若有）+ 上一个版本 tag 以来 main 第一父链上的提交标题。
+ * 生成 GitHub Release 的说明正文：tag 自带的说明（若有）+ 上一个版本 tag 以来 main 第一父链上的提交标题
+ * （有说明时折叠）。
  *
  * 为什么需要它：工作流里的 `generate_release_notes` 只按**合并的 Pull Request** 列条目，而本项目直接
  * 往 main 提交、不走 PR，自动生成的说明就只剩一条 Full Changelog 链接。这里改用两样现成的素材 ——
@@ -47,6 +48,21 @@ const commits = git('log', '--first-parent', '--format=- %s (%h)', prev ? `${pre
 const summary = tagSummary()
 
 const lines = []
-if (summary) lines.push(summary, '')
-lines.push('## Changes', '', commits || '- (no commits)')
+const list = commits || '- (no commits)'
+// 提交标题是整段的工程说明，全部摊开就把版本说明淹没了：有说明时折叠起来，按需展开；<details> 里的 Markdown
+// 前后必须有空行才会被渲染。没有说明时列表就是全部内容，不折叠
+if (summary) {
+  const count = commits ? commits.split('\n').length : 0
+  lines.push(
+    summary,
+    '',
+    `<details><summary>All changes (${count})</summary>`,
+    '',
+    list,
+    '',
+    '</details>'
+  )
+} else {
+  lines.push('## Changes', '', list)
+}
 process.stdout.write(lines.join('\n') + '\n')
