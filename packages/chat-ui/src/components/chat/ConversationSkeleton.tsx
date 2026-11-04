@@ -54,20 +54,21 @@ export function ConversationSkeleton(): React.JSX.Element {
 }
 
 /**
- * 打开一条会话到内容上屏的这段时间：过了 SKELETON_DELAY_MS 内容还没上屏才画骨架，骨架至少留
- * SKELETON_MIN_SHOWN_MS。由 Conversation 按会话 key 重挂，计时只属于这一条会话；开过一次就不再回来
- * （之后才出现的列表，比如新会话发出第一句话，不算打开）。
+ * 打开一条会话、历史还没上屏的这段时间：过了 SKELETON_DELAY_MS 还没上屏才画骨架，骨架至少留
+ * SKELETON_MIN_SHOWN_MS。骨架只属于加载历史，`awaitsHistory` 为假（没有历史要等）就不画，多慢都不画。
+ * 由 Conversation 按会话 key 重挂，计时只属于这一条会话；开过一次就不再回来（之后才出现的列表，
+ * 比如新会话发出第一句话，不算打开）。
  *
  * 数据一到就挂 children，不等骨架撤：列表要几帧才定位好（期间 Virtuoso 自己藏着），放到骨架撤了才挂，
- * 就成了「骨架 → 又一段空白 → 消息」。`awaitsPaint` 的内容要等它调 `onPainted`，其余的挂上就算上屏。
+ * 就成了「骨架 → 又一段空白 → 消息」。历史上屏由列表调 `onPainted` 告知。
  */
 export function ViewLoadGate({
   dataReady,
-  awaitsPaint,
+  awaitsHistory,
   children
 }: {
   dataReady: boolean
-  awaitsPaint: boolean
+  awaitsHistory: boolean
   children: (onPainted: () => void) => ReactNode
 }): React.JSX.Element {
   /** 骨架上屏的时刻；null = 不在屏上 */
@@ -75,7 +76,7 @@ export function ViewLoadGate({
   const [painted, setPainted] = useState(false)
   const onPainted = useCallback(() => setPainted(true), [])
   const opened = useRef(false)
-  const ready = dataReady && (painted || !awaitsPaint)
+  const ready = painted || !awaitsHistory
 
   useEffect(() => {
     if (opened.current) return

@@ -425,7 +425,7 @@ export function Conversation({
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
     [sessionId, messages]
   )
-  // 列表与空态都等这条会话的视图到了再画（久久没上屏就画骨架，见 ViewLoadGate）。视图到达之前 messages 是空的，
+  // 列表与空态都等这条会话的视图到了再画（历史久久没上屏就画骨架，见 ViewLoadGate）。视图到达之前 messages 是空的，
   // 这个「空」不说明任何事：画空态，每次打开有记录的会话都会先闪一下空态（桌面是整张会话设置面板）。
   // 也可能已经有东西要画：运行中的会话退订时留下「还在跑」的余项（isStreaming，见 releaseSessionView），
   // 切回来就是一张孤零零的流式占位卡。那时挂上列表，初始定位落在这一项上；等真消息到了，初始定位早已用掉，
@@ -439,6 +439,16 @@ export function Conversation({
   // 与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
   // messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病
   const isEmpty = messages.length === 0 && !isStreaming && !pendingPrompt
+  // 有没有历史要等，骨架只为它出现。视图到了看消息；视图没到只能看别的：正发着第一句话（乐观占位）是刚建的会话，
+  // 会话行的 lastActiveAt 还停在建行那一刻则是没发过消息，等来的也是空态。fork、内存会话、Chrome 标签页会话
+  // 有历史也可能停在那一刻：这几种视图迟到时是一段空白，而不是骨架
+  const neverUsed = useChatStore((s) => {
+    const row = s.sessions.find((session) => session.id === sessionId)
+    return row !== undefined && row.lastActiveAt === row.createdAt
+  })
+  const awaitsHistory = viewLoaded
+    ? messages.length > 0
+    : !pendingPrompt && !viewFailed && !neverUsed
   // 仅当最后一条消息是助手消息时才允许重新生成
   const lastAssistantId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -471,7 +481,7 @@ export function Conversation({
         <ViewLoadGate
           key={sessionId}
           dataReady={listReady || viewFailed}
-          awaitsPaint={listReady && !isEmpty}
+          awaitsHistory={awaitsHistory}
         >
           {(onPainted) =>
             !listReady ? (

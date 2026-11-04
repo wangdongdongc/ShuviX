@@ -21,6 +21,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
+import type { Session } from '@shuvix/chat-protocol/chatApi'
 
 interface VirtuosoStubProps {
   data: Array<{ key: string; msg: { id: string } }>
@@ -158,6 +159,11 @@ let renderedItems: HTMLElement[] = [fakeItem(0, 0, 100)]
 /** 把假滚动区摆到「离真底 dist」的位置 */
 function distFromBottom(dist: number): void {
   metrics.scrollTop = metrics.scrollHeight - metrics.clientHeight - dist
+}
+
+/** 侧栏数据里这条会话的行：只有 createdAt / lastActiveAt 影响骨架 */
+function setRow(id: string, times: { createdAt: number; lastActiveAt: number }): void {
+  act(() => useChatStore.setState({ sessions: [{ id, ...times } as Session] }))
 }
 
 const emptyMarker = createElement('div', { 'data-empty-marker': '' })
@@ -462,14 +468,14 @@ describe('骨架', () => {
     expect(virt.mounts).toBe(0)
   })
 
-  it('SKL-10 骨架显示中发出第一句话：列表带着这句话挂上，定位好且留满才撤', () => {
+  it('SKL-10 骨架显示中发出第一句话：列表带着这句话挂上，骨架留满就撤，不等定位', () => {
     render(S1)
     advance(200)
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     expect(virt.mountProps[0].data.map((item) => item.msg.id)).toContain('pending-prompt')
+    advance(249)
     expect(skeletonPresent()).toBe(true)
-    land()
-    advance(250)
+    advance(1)
     expect(skeletonPresent()).toBe(false)
   })
 
@@ -478,6 +484,63 @@ describe('骨架', () => {
     loadView(S1, [])
     expect(emptyPresent()).toBe(true)
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    expect(virt.mounts).toBe(1)
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-17 欢迎页发第一句话（视图没到，只有乐观占位）：列表迟迟没定位好也不画骨架，视图带着这句话到了也不画', () => {
+    act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    render(S1)
+    expect(virt.mounts).toBe(1)
+    advance(400)
+    expect(skeletonPresent()).toBe(false)
+    loadView(S1, history(S1))
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+
+  it('SKL-18 视图到了、还没有消息，同时正发着第一句话：没有历史，不画骨架', () => {
+    loadView(S1, [])
+    act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    render(S1)
+    expect(virt.mounts).toBe(1)
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-19 视图到了、没有消息、已经在跑（从主进程发起的新会话）：没有历史，不画骨架', () => {
+    loadView(S1, [], true)
+    render(S1)
+    expect(virt.mounts).toBe(1)
+    advance(1000)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-20 从没发过消息的会话、视图迟迟不到：一直不画骨架，也不画空态；视图到了是空态', () => {
+    setRow(S1, { createdAt: 1000, lastActiveAt: 1000 })
+    render(S1)
+    advance(2000)
+    expect(skeletonPresent()).toBe(false)
+    expect(emptyPresent()).toBe(false)
+    loadView(S1, [])
+    expect(emptyPresent()).toBe(true)
+    expect(skeletonPresent()).toBe(false)
+  })
+
+  it('SKL-21 发过消息的会话、视图迟迟不到：照常画骨架', () => {
+    setRow(S1, { createdAt: 1000, lastActiveAt: 1001 })
+    render(S1)
+    advance(200)
+    expect(skeletonPresent()).toBe(true)
+  })
+
+  it('SKL-22 会话行说没发过消息、视图却带着历史到了（fork）：不补画骨架，列表照常挂上', () => {
+    setRow(S1, { createdAt: 1000, lastActiveAt: 1000 })
+    render(S1)
+    advance(300)
+    loadView(S1, history(S1))
     expect(virt.mounts).toBe(1)
     advance(1000)
     expect(skeletonPresent()).toBe(false)
