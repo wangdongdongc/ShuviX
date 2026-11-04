@@ -21,6 +21,7 @@ import {
   searchEngineOf
 } from './omnibox'
 import { INTERCEPTING_DOT_COLOR, sessionDotColor } from './sessionColor'
+import { ConfirmDialog } from '../common/ConfirmDialog'
 import type { SearchEngineId } from './omnibox'
 import { REMOTE_URL_REFUSED_CODE } from '../../../../shared/browserRemoteUrls'
 
@@ -33,6 +34,49 @@ function reasonOf(error: unknown, refusedText: string): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** agent 用着的页上要先问一声的动作；换地址带上要去的地方 */
+type GuardedRequest =
+  | { tabId: string; action: 'reload' | 'close' }
+  | { tabId: string; action: 'navigate'; target: string }
+type GuardedAction = GuardedRequest['action']
+
+/** 确认框里每个动作的文案 */
+const GUARD_COPY: Record<GuardedAction, { title: string; body: string; confirm: string }> = {
+  close: {
+    title: 'browser.manager.confirmCloseTitle',
+    body: 'browser.manager.confirmCloseBody',
+    confirm: 'browser.closeTab'
+  },
+  reload: {
+    title: 'browser.manager.confirmReloadTitle',
+    body: 'browser.manager.confirmReloadBody',
+    confirm: 'browser.refresh'
+  },
+  navigate: {
+    title: 'browser.manager.confirmNavigateTitle',
+    body: 'browser.manager.confirmNavigateBody',
+    confirm: 'browser.manager.go'
+  }
+}
+
+/**
+ * 这一页正被 agent 用着：行上写着「正被谁使用」的，或接着 CDP 但还没记下会话的（agent 点出来的新页，它还没动过）。
+ * CDP 接入跨轮持久，所以这不等于 agent 此刻正在动作。
+ */
+function usedByAgent(tab: TabRow): boolean {
+  return Boolean(tab.agentSessionId) || tab.cdpAttached
+}
+
+/** 这个动作要不要先问：agent 用着才问；崩了的页刷新、换地址不问（它已经什么都做不了，这两样就是恢复），关闭照问 */
+function needsConfirm(tab: TabRow, action: GuardedAction): boolean {
+  return usedByAgent(tab) && !(action !== 'close' && tab.crashed)
+}
+
+/** 行上和确认框里写的会话名：标题，没有就写 id */
+function sessionNameOf(tab: TabRow): string | undefined {
+  return tab.agentSessionTitle?.trim() || tab.agentSessionId
+}
+
 /**
  * 浏览器管理页的「标签页」一节（web 客户端，#browser-manager）：运行 ShuviX 的那台电脑上内置浏览器的全部标签页。
  *
@@ -40,7 +84,9 @@ function reasonOf(error: unknown, refusedText: string): string {
  *    重新取 —— 细粒度的 `browser-view:*` 事件只推给那台电脑上的浏览器窗口；
  *  - 新建的页开在后台（不切换那台电脑上正在看的页），换地址走 navigate；能去的地址主进程只认网页、空白页与
  *    `shuvix://` 页，被拒的那句话原样显示；
- *  - 列表、地址是 `admin`（地址里可能带登录令牌）：这台设备被策略拒了，就显示那句话，别的不画。
+ *  - 列表、地址是 `admin`（地址里可能带登录令牌）：这台设备被策略拒了，就显示那句话，别的不画；
+ *  - agent 用着的页，刷新、关闭和换地址先问一声：操作的人在另一台设备上，agent 正在那页上做的事会被打断。崩了的页
+ *    刷新、换地址不问（它已经什么都做不了，这两样就是恢复）。换地址在按「前往」时问，这时才知道要去哪。
  */
 export function BrowserTabsManager({
   headless,
@@ -60,7 +106,11 @@ export function BrowserTabsManager({
   const [editing, setEditing] = useState<{ tabId: string; text: string } | null>(null)
   /** 正看着截图的那一页（一次只开一张；点开才截，不自动刷新） */
   const [shotTabId, setShotTabId] = useState<string | null>(null)
+  /** 等用户确认的那个动作（agent 用着的页才有） */
+  const [guarded, setGuarded] = useState<GuardedRequest | null>(null)
   const loadSeq = useRef(0)
+  /** 正在改地址的输入框（确认框取消、换地址失败之后把焦点还给它） */
+  const addressInput = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current
@@ -75,10 +125,17 @@ export function BrowserTabsManager({
           ? cur
           : null
       )
+      // 确认框问的理由不在了（那页没了、agent 不用了、页面崩了）：收起，之后也不自己再弹
+      setGuarded((cur) =>
+        cur && list.some((tab) => tab.id === cur.tabId && needsConfirm(tab, cur.action))
+          ? cur
+          : null
+      )
     } catch (error) {
       if (seq !== loadSeq.current) return
       setListError(reasonOf(error, t('browser.manager.remoteUrlRefused')))
       setShotTabId(null)
+      setGuarded(null)
     }
   }, [t])
 
@@ -106,6 +163,28 @@ export function BrowserTabsManager({
     }
   }
 
+  const perform = async (request: GuardedRequest): Promise<void> => {
+    const { tabId } = request
+    if (request.action === 'navigate') {
+      // 去成了才收起输入框；失败了字留着，错误显示在上面
+      const go = (): Promise<unknown> =>
+        window.api.browserView.navigate(tabId, request.target, 'typed')
+      if (await run(go)) setEditing((cur) => (cur?.tabId === tabId ? null : cur))
+      else addressInput.current?.focus()
+    } else if (request.action === 'close') {
+      await run(() => window.api.browserView.closeTab(tabId))
+    } else {
+      await run(() => window.api.browserView.reload(tabId))
+    }
+  }
+
+  /** 刷新 / 关闭 / 换地址：agent 用着就先问，否则直接做 */
+  const requestAction = (request: GuardedRequest): void => {
+    const tab = tabs?.find((row) => row.id === request.tabId)
+    if (tab && needsConfirm(tab, request.action)) setGuarded(request)
+    else void perform(request)
+  }
+
   const openNew = async (): Promise<void> => {
     const target = resolveOmniboxInput(newUrl, engine)
     setOpening(true)
@@ -118,21 +197,29 @@ export function BrowserTabsManager({
     if (ok) setNewUrl('')
   }
 
-  const submitEdit = async (): Promise<void> => {
+  /** 收起输入框；确认框要是在问这次换地址，一起收（不然用户放弃了，点确认还是会去） */
+  const closeEditor = (): void => {
+    setEditing(null)
+    setGuarded((cur) => (cur?.action === 'navigate' ? null : cur))
+  }
+
+  const submitEdit = (): void => {
     if (!editing) return
     const target = resolveOmniboxInput(editing.text, engine)
     if (target === null) {
-      setEditing(null)
+      closeEditor()
       return
     }
-    const tabId = editing.tabId
-    if (await run(() => window.api.browserView.navigate(tabId, target, 'typed'))) setEditing(null)
+    requestAction({ tabId: editing.tabId, action: 'navigate', target })
   }
 
   /** 「查看对话」：把这个标签页带回聊天页、切到那条会话（web 上 openSessionWithDraft 的本地实现） */
   const openSession = (sessionId: string): void => {
     void window.api.app.openSessionWithDraft({ sessionId, draft: '' })
   }
+
+  const guardedTab = guarded && tabs?.find((tab) => tab.id === guarded.tabId)
+  const guardedSession = guardedTab ? sessionNameOf(guardedTab) : undefined
 
   const iconBtn =
     'p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-hover/60 transition-colors disabled:opacity-40'
@@ -277,15 +364,17 @@ export function BrowserTabsManager({
                           className="mt-1 flex items-center gap-1.5"
                           onSubmit={(e) => {
                             e.preventDefault()
-                            void submitEdit()
+                            submitEdit()
                           }}
                         >
                           <input
+                            ref={addressInput}
                             autoFocus
                             value={editing.text}
                             onChange={(e) => setEditing({ tabId: tab.id, text: e.target.value })}
                             onKeyDown={(e) => {
-                              if (e.key === 'Escape') setEditing(null)
+                              // 确认框开着时 Esc 是取消确认框，输入框和里面的字留着
+                              if (e.key === 'Escape' && !guarded) closeEditor()
                             }}
                             spellCheck={false}
                             autoCapitalize="off"
@@ -302,7 +391,7 @@ export function BrowserTabsManager({
                           </button>
                           <button
                             type="button"
-                            onClick={() => setEditing(null)}
+                            onClick={closeEditor}
                             className="px-2 py-1 rounded text-[11px] text-text-tertiary hover:text-text-secondary"
                           >
                             {t('browser.manager.cancel')}
@@ -317,7 +406,7 @@ export function BrowserTabsManager({
                           {tab.url || 'about:blank'}
                         </div>
                       )}
-                      {(tab.crashed || tab.agentSessionId || tab.cdpIntercepting) && (
+                      {(tab.crashed || usedByAgent(tab) || tab.cdpIntercepting) && (
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
                           {tab.crashed && (
                             <span className="text-error" data-browser-tab-crashed>
@@ -327,9 +416,7 @@ export function BrowserTabsManager({
                           {tab.agentSessionId && (
                             <span className="flex items-center gap-1 text-text-secondary min-w-0">
                               <span className="truncate">
-                                {t('browser.tabUsedBy', {
-                                  session: tab.agentSessionTitle || tab.agentSessionId
-                                })}
+                                {t('browser.tabUsedBy', { session: sessionNameOf(tab) })}
                               </span>
                               <button
                                 onClick={() => openSession(tab.agentSessionId as string)}
@@ -338,6 +425,11 @@ export function BrowserTabsManager({
                               >
                                 {t('browser.infobar.openSession')}
                               </button>
+                            </span>
+                          )}
+                          {!tab.agentSessionId && tab.cdpAttached && (
+                            <span className="text-text-secondary" data-browser-tab-agent-unknown>
+                              {t('browser.infobar.usingUnknown')}
                             </span>
                           )}
                           {tab.cdpIntercepting && (
@@ -392,7 +484,7 @@ export function BrowserTabsManager({
                         </button>
                       ) : (
                         <button
-                          onClick={() => void run(() => window.api.browserView.reload(tab.id))}
+                          onClick={() => requestAction({ tabId: tab.id, action: 'reload' })}
                           className={`${iconBtn} ${tab.crashed ? 'text-error hover:text-error' : ''}`}
                           title={t('browser.refresh')}
                           aria-label={t('browser.refresh')}
@@ -402,7 +494,7 @@ export function BrowserTabsManager({
                         </button>
                       )}
                       <button
-                        onClick={() => void run(() => window.api.browserView.closeTab(tab.id))}
+                        onClick={() => requestAction({ tabId: tab.id, action: 'close' })}
                         className={iconBtn}
                         title={t('browser.closeTab')}
                         aria-label={t('browser.closeTab')}
@@ -421,6 +513,43 @@ export function BrowserTabsManager({
           </ul>
         )}
       </div>
+
+      {guarded && guardedTab && (
+        <ConfirmDialog
+          title={t(GUARD_COPY[guarded.action].title)}
+          description={
+            <div className="space-y-1" data-browser-tab-agent-confirm={guarded.action}>
+              <p className="break-words">
+                {guardedSession
+                  ? t('browser.infobar.using', { session: guardedSession })
+                  : t('browser.infobar.usingUnknown')}
+              </p>
+              <p>{t(GUARD_COPY[guarded.action].body)}</p>
+              {guarded.action === 'navigate' && (
+                <p
+                  className="font-mono break-all line-clamp-3 text-text-primary"
+                  title={guarded.target}
+                  data-browser-tab-confirm-target
+                >
+                  {guarded.target}
+                </p>
+              )}
+            </div>
+          }
+          confirmText={t(GUARD_COPY[guarded.action].confirm)}
+          cancelText={t('browser.manager.cancel')}
+          danger={guarded.action === 'close'}
+          autoFocusConfirm={guarded.action === 'navigate'}
+          onConfirm={() => {
+            setGuarded(null)
+            void perform(guarded)
+          }}
+          onCancel={() => {
+            setGuarded(null)
+            addressInput.current?.focus()
+          }}
+        />
+      )}
     </div>
   )
 }

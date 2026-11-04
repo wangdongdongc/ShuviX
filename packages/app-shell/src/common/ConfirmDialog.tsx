@@ -17,6 +17,8 @@ export interface ConfirmDialogProps {
   cancelText?: string
   /** 确认按钮是否为危险操作样式（红色），默认 true */
   danger?: boolean
+  /** 弹出时把焦点放到确认按钮上（回车就是确认；手机上输入框失焦，软键盘收起），默认不动焦点 */
+  autoFocusConfirm?: boolean
   /** 确认回调 */
   onConfirm: () => void
   /** 取消/关闭回调 */
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   confirmText,
   cancelText,
   danger = true,
+  autoFocusConfirm = false,
   onConfirm,
   onCancel
 }: ConfirmDialogProps): React.JSX.Element {
@@ -75,6 +78,7 @@ export function ConfirmDialog({
             </button>
           )}
           <button
+            autoFocus={autoFocusConfirm}
             onClick={onConfirm}
             className={`px-4 py-1.5 rounded-lg text-xs text-white transition-colors ${
               danger ? 'bg-error hover:bg-error/90' : 'bg-accent hover:bg-accent-hover'

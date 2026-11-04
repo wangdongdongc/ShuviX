@@ -1696,7 +1696,13 @@
       "screenshotTakenAt": "{{time}} 的画面，不会自动更新",
       "screenshotEmpty": "截不到画面：页面可能还在加载，或者崩溃了。",
       "screenshotFailed": "截不到图：{{reason}}",
-      "screenshotAlt": "这个标签页的截图"
+      "screenshotAlt": "这个标签页的截图",
+      "confirmCloseTitle": "关闭这个标签页？",
+      "confirmReloadTitle": "刷新这个页面？",
+      "confirmCloseBody": "关闭后，它在这一页上正做的事会中断，页面上没保存的内容也会丢失。",
+      "confirmReloadBody": "刷新可能打断它在这一页上正做的事，页面上没保存的内容也会丢失。",
+      "confirmNavigateTitle": "让这个页面换到新地址？",
+      "confirmNavigateBody": "换地址后，它在这一页上正做的事会中断，页面上没保存的内容也会丢失。"
     }
   },
   "builtinSkill": {

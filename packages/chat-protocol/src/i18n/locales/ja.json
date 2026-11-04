@@ -1696,7 +1696,13 @@
       "screenshotTakenAt": "{{time}} の画面（自動では更新されません）",
       "screenshotEmpty": "画面を取得できません：ページがまだ読み込み中か、クラッシュした可能性があります。",
       "screenshotFailed": "スクリーンショットを撮れませんでした：{{reason}}",
-      "screenshotAlt": "このタブのスクリーンショット"
+      "screenshotAlt": "このタブのスクリーンショット",
+      "confirmCloseTitle": "このタブを閉じますか？",
+      "confirmReloadTitle": "このページを再読み込みしますか？",
+      "confirmCloseBody": "閉じると、このページで行っている作業は中断され、ページ上の未保存の内容も失われます。",
+      "confirmReloadBody": "再読み込みすると、このページで行っている作業が中断されることがあり、ページ上の未保存の内容も失われます。",
+      "confirmNavigateTitle": "このページを別のアドレスに移動しますか？",
+      "confirmNavigateBody": "移動すると、このページで行っている作業は中断され、ページ上の未保存の内容も失われます。"
     }
   },
   "builtinSkill": {

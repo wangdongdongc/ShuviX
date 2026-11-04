@@ -1696,7 +1696,13 @@
       "screenshotTakenAt": "Taken at {{time}}; it does not update by itself",
       "screenshotEmpty": "No picture: the page may still be loading, or it crashed.",
       "screenshotFailed": "Could not take a screenshot: {{reason}}",
-      "screenshotAlt": "Screenshot of this tab"
+      "screenshotAlt": "Screenshot of this tab",
+      "confirmCloseTitle": "Close this tab?",
+      "confirmReloadTitle": "Refresh this page?",
+      "confirmCloseBody": "Closing it interrupts what the agent is doing here, and anything not saved on the page is lost.",
+      "confirmReloadBody": "Refreshing can interrupt what the agent is doing here, and anything not saved on the page is lost.",
+      "confirmNavigateTitle": "Go to another address?",
+      "confirmNavigateBody": "Leaving this address interrupts what the agent is doing here, and anything not saved on the page is lost."
     }
   },
   "builtinSkill": {
