@@ -388,6 +388,8 @@ declare global {
       getVersion: () => Promise<string>
       /** 在调用方窗口上弹出文件夹选择对话框；取消（或没有窗口）→ null */
       openDirectoryDialog: () => Promise<string | null>
+      /** 文件在本机的绝对路径（拿不到 → 空串）。只有桌面 preload 给，web 客户端里没有 */
+      pathForFile?: (file: File) => string
     }
     agent: {
       init: (params: AgentInitParams) => Promise<AgentInitResult>

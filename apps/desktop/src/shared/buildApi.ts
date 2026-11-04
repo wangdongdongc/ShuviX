@@ -151,7 +151,7 @@ export type CommonApiOverrides = {
 
 /** 桌面 preload 交给 `buildApi` 的 override（公共的 + 本宿主的平台与视图同步桥） */
 export type DesktopApiOverrides = CommonApiOverrides & {
-  app: { platform: 'darwin' | 'win32' | 'linux' }
+  app: { platform: 'darwin' | 'win32' | 'linux'; pathForFile: (file: File) => string }
   sync: SyncLinkChannel
 }
 

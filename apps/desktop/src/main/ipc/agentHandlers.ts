@@ -4,6 +4,7 @@ import { inputOriginOfClient } from '../utils/operationContext'
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
 import { getBuiltinToolDefinitions } from '../services/agentToolBuilder'
 import { agentManager } from '../agents/AgentManager'
+import { sessionAcl } from '../services/acl'
 import { getAgentRuntimeDetail, listAgentRuntimes } from '../services/agentMonitorService'
 import type {
   AgentInitParams,
@@ -36,6 +37,8 @@ export function registerAgentHandlers(): void {
   /** 向指定 session 发送消息（支持附带图片） */
   defineHandler('agent:prompt', (ctx, params: AgentPromptParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), async () => {
+      // 先授权再开跑：agent 的第一步就可能读它们
+      sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
       await chatGateway.prompt(
         params.sessionId,
         params.text,
@@ -69,6 +72,7 @@ export function registerAgentHandlers(): void {
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   defineHandler('agent:steer', (ctx, params: AgentSteerParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
+      sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
       chatGateway.steer(params.sessionId, params.text, params.secrets)
       return { success: true }
     })
@@ -77,6 +81,7 @@ export function registerAgentHandlers(): void {
   /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
   defineHandler('agent:followUp', (ctx, params: AgentFollowUpParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
+      sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
       chatGateway.followUp(params.sessionId, params.text, params.secrets)
       return { success: true }
     })
@@ -158,8 +163,17 @@ export function registerAgentHandlers(): void {
    */
   defineHandler(
     'agent:respondToInput',
-    (ctx, params: { sessionId: string; requestId: string; response: InputResponse }) =>
+    (
+      ctx,
+      params: {
+        sessionId: string
+        requestId: string
+        response: InputResponse
+        attachedPaths?: string[]
+      }
+    ) =>
       operationContext.run(createClientContext(ctx, params.sessionId), () => {
+        sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
         // 答题方 = 这个窗口（`ipc:<webContentsId>`），只进审计日志（P3-08 PIN-20）
         chatGateway.respondToInput(params.sessionId, params.requestId, params.response, {
           clientId: ctx.client.id

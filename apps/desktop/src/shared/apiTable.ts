@@ -595,7 +595,8 @@ export interface ApiOverrideChannel {
  */
 export const API_OVERRIDE_CHANNELS = {
   app: {
-    platform: null
+    platform: null,
+    pathForFile: null
   },
   events: {
     subscribe: {

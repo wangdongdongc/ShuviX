@@ -562,3 +562,29 @@ describe('AC-3 / AC-4 浏览器管理页用到的通道', () => {
     expect(channelCallFactsOf(channel, [])).toEqual({ scope: 'browser', access })
   })
 })
+
+/**
+ * AF-CA 发送时带 `attachedPaths`（输入框添加的文件）是往会话权限表里写行：与 session:grantAcl 同一格，只许 write 的设备
+ * 送一条带路径的消息不能绕过去。不带 / 空数组照通道那一档。
+ */
+describe('AF-CA 添加的文件要 admin', () => {
+  it.each(['agent:prompt', 'agent:steer', 'agent:followUp', 'agent:respondToInput'])(
+    'AF-CA-1 %s：带路径 → security + admin；不带 / 空 / 不是数组 → 通道那一档',
+    (channel) => {
+      const call = (attachedPaths?: unknown): unknown[] => [{ sessionId: 's1', attachedPaths }]
+      expect(channelCallFactsOf(channel, call(['/etc/hosts']))).toEqual({
+        scope: 'security',
+        access: 'admin'
+      })
+      const plain = channelCallFactsOf(channel, [])
+      expect(plain.access).toBe('write')
+      expect(channelCallFactsOf(channel, call())).toEqual(plain)
+      expect(channelCallFactsOf(channel, call([]))).toEqual(plain)
+      expect(channelCallFactsOf(channel, call('/etc/hosts'))).toEqual(plain)
+    }
+  )
+
+  it('AF-CA-2 别的通道带这个键也照通道那一档', () => {
+    expect(channelCallAccessOf('session:list', [{ attachedPaths: ['/x'] }])).toBe('read')
+  })
+})

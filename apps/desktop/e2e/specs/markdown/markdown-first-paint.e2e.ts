@@ -172,8 +172,8 @@ describe('独立窗口的首帧主题', () => {
         win.eval<string[]>(`window.__placeholders`).then((seen) => (seen.length > 0 ? seen : null)),
       'composer placeholder seen'
     )
-    expect(placeholders).toEqual([zh.input.placeholder])
-    expect(placeholders).not.toContain(en.input.placeholder)
+    expect(placeholders).toEqual([zh.input.placeholderFiles])
+    expect(placeholders).not.toContain(en.input.placeholderFiles)
 
     await setSetting('general.language', 'en')
     closeWindow(win)

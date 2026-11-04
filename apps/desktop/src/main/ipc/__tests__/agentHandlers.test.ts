@@ -40,11 +40,16 @@ const state = vi.hoisted(() => ({
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
     getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
+    prompt: vi.fn(),
+    steer: vi.fn(),
+    followUp: vi.fn(),
     respondToInput: vi.fn(),
     withdrawQueued: vi.fn<(sessionId: string, submissionId: number) => Promise<string>>(),
     continue: vi.fn<(sessionId: string) => Promise<{ error?: string; code?: string }>>()
   },
   contexts: [] as unknown[],
+  /** sessionAcl.grantAttachedFiles 收到的参数 */
+  grants: [] as unknown[][],
   /** createClientContext 收到的调用上下文的传输（经 IPC 适配器来的都是 'ipc'） */
   transports: [] as string[],
   /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
@@ -85,6 +90,9 @@ vi.mock('../../frontend', () => ({
 vi.mock('../../services/toolRegistry', () => ({ getBuiltinToolPresentations: vi.fn(() => ({})) }))
 vi.mock('../../services/agentToolBuilder', () => ({ getBuiltinToolDefinitions: vi.fn(() => []) }))
 vi.mock('../../agents/AgentManager', () => ({ agentManager: state.router }))
+vi.mock('../../services/acl', () => ({
+  sessionAcl: { grantAttachedFiles: (...args: unknown[]) => state.grants.push(args) }
+}))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: state.warn, error: () => {} })
 }))
@@ -510,5 +518,42 @@ describe('P3-12-07 agent:continue', () => {
     })
     state.gateway.continue.mockReset().mockResolvedValue({ error: 'boom' })
     await expect(invoke('agent:continue', SID)).resolves.toEqual({ success: false, error: 'boom' })
+  })
+})
+
+describe('AF-H 添加的文件：先授权，再发送', () => {
+  it.each([
+    ['agent:prompt', 'prompt'],
+    ['agent:steer', 'steer'],
+    ['agent:followUp', 'followUp']
+  ] as const)('AF-H-1 %s：授权在发送之前', async (channel, method) => {
+    state.grants.length = 0
+    const order: string[] = []
+    state.gateway[method].mockImplementationOnce(() => {
+      order.push(`send grants=${state.grants.length}`)
+      return undefined as never
+    })
+    const handler = state.handlers.get(channel)!
+    await handler(
+      { sender: { id: 7 } },
+      { sessionId: SID, text: 't', attachedPaths: ['/Users/u/a.pdf'] }
+    )
+    expect(state.grants).toEqual([[SID, ['/Users/u/a.pdf']]])
+    expect(order).toEqual(['send grants=1'])
+  })
+
+  it('AF-H-2 agent:respondToInput：先授权，再回答', async () => {
+    state.grants.length = 0
+    const handler = state.handlers.get('agent:respondToInput')!
+    await handler(
+      { sender: { id: 7 } },
+      {
+        sessionId: SID,
+        requestId: 'r',
+        response: { kind: 'other', text: 't' },
+        attachedPaths: ['/Users/u/a.pdf']
+      }
+    )
+    expect(state.grants).toEqual([[SID, ['/Users/u/a.pdf']]])
   })
 })

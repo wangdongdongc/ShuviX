@@ -45,7 +45,7 @@ describe('什么都没选过的实例', () => {
     expect(await app.main.eval<string>('navigator.language')).toMatch(/^zh/)
     expect(await app.main.eval(`window.api.settings.get('general.language')`)).toBeFalsy()
     await until(
-      async () => (await placeholder()) === en.input.placeholder,
+      async () => (await placeholder()) === en.input.placeholderFiles,
       'composer placeholder in English'
     )
     await until(
@@ -82,7 +82,7 @@ describe('什么都没选过的实例', () => {
     )
     await waitRendererReady(app.main)
     await until(
-      async () => (await placeholder()) === zh.input.placeholder,
+      async () => (await placeholder()) === zh.input.placeholderFiles,
       'composer placeholder in Chinese'
     )
   })

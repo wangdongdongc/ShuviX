@@ -179,13 +179,15 @@ export interface UseAtMentions {
   select: (suggestion: AtSuggestion, text: string, caret: number) => { text: string; caret: number }
   /**
    * 不经弹层，在光标处直接插入一个引用（Files 面板右键「在对话中引用」）：登记与胶囊明文同 select，
-   * 光标前紧挨着非空白时先补一个空格（胶囊要两侧边界成立才算数）
+   * 光标前紧挨着非空白时先补一个空格（胶囊要两侧边界成立才算数）。`disambiguator`：明文撞上已登记的另一目标时的
+   * 消歧后缀（同名的两个添加文件）
    */
   insert: (
     ref: AtMentionRef,
     displayText: string,
     text: string,
-    caret: number
+    caret: number,
+    disambiguator?: string
   ) => { text: string; caret: number }
   /** 光标紧邻引用尾部时，一次退格整体删除；否则返回 null */
   backspace: (text: string, caret: number) => { text: string; caret: number } | null
@@ -196,6 +198,10 @@ export interface UseAtMentions {
   }
   /** 斜杠命令场景：把引用就地展开为 payload 文本内联进参数（cmd payload 为整条替换，无法混用 token） */
   resolveInline: (text: string) => string
+  /** 这段文字里添加的文件的绝对路径（发送时一起交给宿主，授予会话读权限；一段文字可以来自任何发送通道） */
+  attachedPaths: (text: string) => string[]
+  /** 不带 inlineTokens 的发送通道（排队、「其它」反馈）：只把添加的文件就地展开，否则智能体只看到一个文件名 */
+  resolveAttached: (text: string) => string
   /** 回退草稿重建：按 at 类型 token 重新登记引用（text=`@displayText`），配合明文回填恢复胶囊 */
   restoreFromTokens: (tokens: InlineToken[]) => void
   /** 发送后清空引用登记与触发态 */
@@ -382,15 +388,20 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
       ref: AtMentionRef,
       displayText: string,
       text: string,
-      caret: number
+      caret: number,
+      disambiguator?: string
     ): { text: string; caret: number } => {
       const entry = buildMentionEntry(
-        { source: ref.kind, label: displayText, displayText, ref },
+        { source: ref.kind, label: displayText, displayText, disambiguator, ref },
         mentionsRef.current
       )
       const before = text.slice(0, caret)
       const after = text.slice(caret)
       const insertText = `${before === '' || /\s$/.test(before) ? '' : ' '}${entry.text} `
+      // 一次添加多个文件时连着调：下一个的消歧要看得见这一个，等不到渲染后的 effect
+      if (!mentionsRef.current.some((m) => m.text === entry.text)) {
+        mentionsRef.current = [...mentionsRef.current, entry]
+      }
       setMentions((prev) => (prev.some((m) => m.text === entry.text) ? prev : [...prev, entry]))
       setTrigger(null)
       return { text: before + insertText + after, caret: before.length + insertText.length }
@@ -456,6 +467,25 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     return out + text.slice(last)
   }, [])
 
+  const attachedPaths = useCallback((text: string): string[] => {
+    const paths = matchMentions(text, mentionsRef.current).flatMap((mt) =>
+      mt.mention.ref.kind === 'path' ? [mt.mention.ref.path] : []
+    )
+    return [...new Set(paths)]
+  }, [])
+
+  const resolveAttached = useCallback((text: string): string => {
+    let out = ''
+    let last = 0
+    for (const mt of matchMentions(text, mentionsRef.current)) {
+      if (mt.mention.ref.kind !== 'path') continue
+      out +=
+        text.slice(last, mt.start) + buildAtToken(mt.mention.ref, mt.mention.displayText).payload
+      last = mt.end
+    }
+    return out + text.slice(last)
+  }, [])
+
   const restoreFromTokens = useCallback((tokens: InlineToken[]): void => {
     if (tokens.length === 0) return
     setMentions((prev) => {
@@ -497,6 +527,8 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     backspace,
     buildOutgoing,
     resolveInline,
+    attachedPaths,
+    resolveAttached,
     restoreFromTokens,
     reset,
     snapshot,

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { API_TABLE } from '../shared/apiTable'
 import {
   buildApi,
@@ -32,7 +32,9 @@ const overrides: DesktopApiOverrides = {
   ...createCommonOverrides(transport),
   app: {
     /** 当前运行平台 */
-    platform: process.platform as 'darwin' | 'win32' | 'linux'
+    platform: process.platform as 'darwin' | 'win32' | 'linux',
+    /** 拖进来 / 选中 / 粘贴的文件在本机的路径（只有 preload 够得着 webUtils） */
+    pathForFile: (file: File) => webUtils.getPathForFile(file)
   },
   /** 视图同步（pi 1.2 / chord2）：chord 链路的帧经 `sync:frame` 两个方向走（带链路 id） */
   sync: createSyncBridge(ipcRenderer)

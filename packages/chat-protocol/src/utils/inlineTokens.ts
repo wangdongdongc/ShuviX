@@ -85,6 +85,13 @@ export type AtMentionRef =
       base: string
     }
   | {
+      kind: 'path'
+      /** 文件在宿主上的绝对路径（从输入框「+」、拖放、粘贴添加的文件），作实体标识与展开正文 */
+      path: string
+      /** 文件名（含扩展名），作胶囊展示名 */
+      base: string
+    }
+  | {
       kind: 'knowledge'
       /** 条目 id（`knowledge/<库名>/x.md` / `projects/<id>/x.md` / `builtin/<库名>/x.md`），作实体标识 */
       entryPath: string
@@ -105,6 +112,7 @@ export type AtMentionRef =
 /** 实体引用的稳定标识（同一目标在一次发送内只构造一个 token） */
 export function mentionRefId(ref: AtMentionRef): string {
   if (ref.kind === 'file') return ref.rel
+  if (ref.kind === 'path') return ref.path
   return ref.kind === 'knowledge' ? `knowledge:${ref.entryPath}` : `session:${ref.sessionId}`
 }
 
@@ -113,9 +121,13 @@ export function sessionMentionPayload(sessionId: string, title: string): string 
   return `[session: id ${sessionId} — "${title.replace(/[\r\n]+/g, ' ').replace(/"/g, "'")}"]`
 }
 
+/** 添加的文件交给智能体的那一段的开头（atTokenRef 凭它认回 `path` 引用） */
+const PATH_PAYLOAD_PREFIX = '[file: '
+
 /**
  * 用选中的 `@` 引用目标构造 `at` 类型内联 Token（按 ref 分派 payload）。
  * - 文件：displayText = 文件名（与存量消息逐字一致，零迁移），payload 告知相对路径便于读取；
+ * - 添加的文件：displayText = 文件名，payload 告知绝对路径（发送时宿主给会话授予它的读权限）；
  * - 知识库条目：displayText = `knowledge:<标题>`（可能带调用方加的消歧后缀），payload 是
  *   指针（base + bundle 相对路径），agent 用 knowledge 工具自读。
  * - 会话：displayText = `session:<标题>`，payload 带上它的 id 与标题，agent 用 `session` 工具按 id 找它
@@ -131,6 +143,15 @@ export function buildAtToken(ref: AtMentionRef, displayText?: string): InlineTok
       id: ref.rel,
       displayText: displayText ?? ref.base,
       payload: `[workspace file: ${ref.rel}]`,
+      name: ref.base
+    }
+  }
+  if (ref.kind === 'path') {
+    return {
+      type: 'at',
+      id: ref.path,
+      displayText: displayText ?? ref.base,
+      payload: `${PATH_PAYLOAD_PREFIX}${ref.path}]`,
       name: ref.base
     }
   }
@@ -177,6 +198,9 @@ export function atTokenRef(token: InlineToken): AtMentionRef {
       sessionId: token.id.slice('session:'.length),
       title: token.name ?? token.displayText
     }
+  }
+  if (token.payload.startsWith(PATH_PAYLOAD_PREFIX)) {
+    return { kind: 'path', path: token.id, base: token.name ?? token.displayText }
   }
   return { kind: 'file', rel: token.id, base: token.displayText }
 }

@@ -26,6 +26,9 @@
  *   ACL-16 可写的 bot 行进 pathView 的 write 与 read；sandboxEntries 里是 { path, access: write, granted: false }
  *          （不过可写根检查）；改成只读后离开 write、留在 read，沙箱条目变 read
  *   ACL-17 子会话不复制父会话的 bot 行（fork: false）；fork 复制，派生目标相同时保留源会话用户改的只读
+ *   AF-ACL-1 grantAttachedFiles：外面的文件各一行读（来源 user，能删）；已读得到的（工作目录里的、再发一次的）不另起一行、
+ *            不广播；写过的行不降级
+ *   AF-ACL-2 坏载荷（不是数组、不是字符串、相对路径）、会话不在：什么都不写
  *
  * 会话种类的行（XS-27…XS-33）与组件种类的行（WT4-AC-03…WT4-AC-12）见文件末尾的两个 describe 块。
  */
@@ -1483,5 +1486,57 @@ describe('sessionAcl —— 组件种类的行', () => {
     sessionAcl.forgetReconciled('mem')
     expect(sessionAcl.entries('mem').some((e) => e.source === 'widget')).toBe(false)
     expect(sessionAcl.pathView('mem').write).not.toContain('/Users/u/.shuvix/widgets/w-b')
+  })
+})
+
+describe('添加的文件随消息授权', () => {
+  beforeEach(() => {
+    addSession('s1')
+    holder.derived.set('s1', [
+      { source: 'workdir', sourceKey: '', target: '/w/proj', access: 'write' }
+    ])
+    sessionAcl.initialize('s1')
+    holder.broadcasts.length = 0
+  })
+
+  const granted = (): Array<[string, string, string]> =>
+    sessionAcl
+      .entries('s1')
+      .filter((e) => e.source === 'user')
+      .map((e) => [e.target, e.access, e.kind])
+
+  it('AF-ACL-1 外面的文件一行读；读得到的不另起一行', () => {
+    sessionAcl.grantAttachedFiles('s1', ['/Users/u/a.pdf', '/w/proj/src/in.ts', '/Users/u/b.zip'])
+    expect(granted()).toEqual([
+      ['/Users/u/a.pdf', 'read', 'path'],
+      ['/Users/u/b.zip', 'read', 'path']
+    ])
+    expect(holder.broadcasts).toEqual(['s1', 's1'])
+    expect(sessionAcl.pathView('s1').read).toContain('/Users/u/a.pdf')
+
+    holder.broadcasts.length = 0
+    sessionAcl.grantAttachedFiles('s1', ['/Users/u/a.pdf'])
+    expect(granted()).toHaveLength(2)
+    expect(holder.broadcasts).toEqual([])
+
+    // 用户删掉之后再发一次：又是一行（这次发送就是授权）
+    const row = sessionAcl.entries('s1').find((e) => e.target === '/Users/u/a.pdf')!
+    expect(sessionAcl.remove('s1', row.id)).toBe(true)
+    sessionAcl.grantAttachedFiles('s1', ['/Users/u/a.pdf'])
+    expect(granted()).toHaveLength(2)
+
+    // 已经可写的不降级
+    sessionAcl.grantPath('s1', '/Users/u/w.txt', 'write')
+    sessionAcl.grantAttachedFiles('s1', ['/Users/u/w.txt'])
+    expect(granted()).toContainEqual(['/Users/u/w.txt', 'write', 'path'])
+  })
+
+  it('AF-ACL-2 坏载荷、会话不在：什么都不写', () => {
+    for (const bad of [undefined, null, '/x', 3, { 0: '/x' }, [3, null, 'rel/a.txt', '']]) {
+      sessionAcl.grantAttachedFiles('s1', bad)
+    }
+    expect(granted()).toEqual([])
+    sessionAcl.grantAttachedFiles('no-such', ['/x'])
+    expect(sessionAcl.entries('no-such')).toEqual([])
   })
 })

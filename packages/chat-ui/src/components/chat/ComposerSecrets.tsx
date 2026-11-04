@@ -1,12 +1,12 @@
 /**
  * 输入框里「对模型藏起来」的三件东西（docs/auto-redaction-design.md §14）：
- *  - ComposerPlusMenu：「+」—— 添加图片（模型能看图时）、添加敏感信息；桌面是弹出菜单，手机是底部面板；
+ *  - ComposerPlusMenu：「+」—— 添加文件（桌面）或添加图片（别的宿主，模型能看图时）、添加敏感信息；桌面是弹出菜单，手机是底部面板；
  *  - AddSecretForm：添加敏感信息的表单（类别 + 不回显的输入框）；
  *  - RedactionHintBar：提示行 —— 认出来的可能是敏感信息，点了才藏；不理会的照原样发。
  */
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, ImageIcon, KeyRound, Lock, Plus, X } from 'lucide-react'
+import { Eye, EyeOff, ImageIcon, KeyRound, Lock, Paperclip, Plus, X } from 'lucide-react'
 import { USER_SECRET_CATEGORIES } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { TouchSheet } from '../common/TouchSheet'
 import { useClickOutside } from '../../hooks/useClickOutside'
@@ -133,13 +133,16 @@ export function AddSecretForm({
  */
 export function ComposerPlusMenu({
   touch,
+  files,
   images,
   onImages,
   onSecret,
   selection
 }: {
   touch: boolean
-  /** 模型能看图：菜单里有「添加图片」 */
+  /** 这个宿主能按路径引用任意文件：菜单里是「添加文件」（图片也从这里加） */
+  files: boolean
+  /** 模型能看图：没有「添加文件」时菜单里有「添加图片」 */
   images: boolean
   onImages: () => void
   onSecret: (value: string, category: string, range: { start: number; end: number } | null) => void
@@ -162,7 +165,22 @@ export function ComposerPlusMenu({
     : 'flex w-full items-center gap-2 px-3 h-8 text-[13px] text-text-primary hover:bg-bg-hover'
   const menu = (
     <div className={touch ? 'pb-3' : 'py-1 w-[220px]'} role="menu">
-      {images && (
+      {files && (
+        <button
+          type="button"
+          role="menuitem"
+          data-plus-files=""
+          className={menuRow}
+          onClick={() => {
+            close()
+            onImages()
+          }}
+        >
+          <Paperclip size={touch ? 18 : 14} className="text-text-secondary" />
+          {t('input.attachFiles')}
+        </button>
+      )}
+      {!files && images && (
         <button
           type="button"
           role="menuitem"

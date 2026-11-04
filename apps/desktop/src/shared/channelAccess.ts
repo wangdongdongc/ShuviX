@@ -662,7 +662,8 @@ export function settingKeyFactsOf(key: unknown): CallFacts & { matched: string }
  *  - `settings:set`：按要写的 key（SETTING_KEY_FACTS）；
  *  - 回答询问卡时勾了「允许并记住」（`agent:respondToInput` 的 `response.extra.rememberPath` / 会话询问的
  *    `extra.remember`）是往会话权限表里写一行，与 `session:grantAcl` 同一格（security + admin）—— 否则只许 write
- *    的设备绕过权限表的那一档，答一张卡就给会话加上永久授权。
+ *    的设备绕过权限表的那一档，答一张卡就给会话加上永久授权；
+ *  - 发送消息时带了 `attachedPaths`（添加的文件）：同样是往权限表里写行，同一格。
  */
 export function channelCallFactsOf(channel: string, args: readonly unknown[]): CallFacts {
   if (channel === 'settings:set') {
@@ -672,11 +673,27 @@ export function channelCallFactsOf(channel: string, args: readonly unknown[]): C
   if (channel === 'agent:respondToInput' && remembersGrant(args[0])) {
     return { scope: 'security', access: 'admin' }
   }
+  if (ATTACH_CHANNELS.has(channel) && attachesFiles(args[0])) {
+    return { scope: 'security', access: 'admin' }
+  }
   return { scope: channelScopeOf(channel), access: channelAccessOf(channel) }
 }
 
 export function channelCallAccessOf(channel: string, args: readonly unknown[]): ChannelAccess {
   return channelCallFactsOf(channel, args).access
+}
+
+/** 能带 `attachedPaths` 的通道（输入框的每条发送路径） */
+const ATTACH_CHANNELS: ReadonlySet<string> = new Set([
+  'agent:prompt',
+  'agent:steer',
+  'agent:followUp',
+  'agent:respondToInput'
+])
+
+function attachesFiles(params: unknown): boolean {
+  const paths = (params as { attachedPaths?: unknown } | null)?.attachedPaths
+  return Array.isArray(paths) && paths.length > 0
 }
 
 function remembersGrant(params: unknown): boolean {

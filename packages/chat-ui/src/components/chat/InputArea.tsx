@@ -136,10 +136,10 @@ export function InputArea({
   const canEdit = hasHost
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste, handleImageFiles } =
-    useImageUpload(modelSupportsVision)
   // 「+」背后的文件选择（手机上没有拖放，粘贴图片也少见：这是那里唯一的附图入口）
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // 文件在本机的路径：只有桌面拿得到。别的宿主那里文件在用户的设备上，运行 agent 的电脑看不到它，只能附图片
+  const pathOfFile = getHostApi()?.app?.pathForFile
 
   // 默认模型
   const chatHost = useChatHost()
@@ -173,6 +173,18 @@ export function InputArea({
 
   // @ 引用自动补全（可在任意位置触发，可多个）：工作区文件
   const at = useAtMentions(activeSessionId)
+  const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste, handleImageFiles } =
+    useImageUpload(modelSupportsVision, {
+      pathOf: pathOfFile,
+      onPaths: (files) => attachPaths(files),
+      onRejected: (names) =>
+        setSendError({
+          sessionId: activeSessionId,
+          text: t('input.attachNoPath', { names: names.join(', ') }),
+          running: isSessionRunning(activeSessionId),
+          notice: true
+        })
+    })
   // 长文粘贴折叠为芯片（占位明文进 textarea，完整内容随 paste 类型 InlineToken 发送）
   const paste = usePasteChips()
   // 要对模型藏起来的值（docs/auto-redaction-design.md §14）：+ 添加的、确认了提示的。发送时随 secrets 交给宿主
@@ -216,12 +228,14 @@ export function InputArea({
    * 发送失败的原因（建会话 / 写配置 / 发出消息任一步抛错）。显示在卡片里，下一次输入或发送时清掉，那条会话跑起来了也清掉
    * （这个窗口发的、别的设备发的、后台通知续上的：那次失败已经过去了）—— 失败时输入框文本与欢迎页草稿都还在
    * （没发出去的话放回输入框，见 composerRestoreRequest），原样重试即可。记着是哪条会话的：InputArea 不按会话重挂。
-   * `running`：那条会话此刻在不在跑（失败可能就发生在运行中，所以要从「没在跑」变成「在跑」才算跑起来了）
+   * `running`：那条会话此刻在不在跑（失败可能就发生在运行中，所以要从「没在跑」变成「在跑」才算跑起来了）。
+   * `notice`：不是发送失败，是一句完整的话（文件加不进来），不套「发送失败」的前缀
    */
   const [sendError, setSendError] = useState<{
     sessionId: string | null
     text: string
     running: boolean
+    notice?: boolean
   } | null>(null)
   const shownSendError = sendError?.sessionId === activeSessionId ? sendError?.text : null
   const sendErrorText = (err: unknown): string =>
@@ -386,10 +400,30 @@ export function InputArea({
     setTimeout(() => textareaRef.current?.focus(), 0)
   }, [mentionInsert, activeSessionId, at, setInputText])
 
+  /**
+   * 添加的文件：在光标处插成 `@文件名` 胶囊（已经在这段文字里的不重复）。同名的两个文件靠所在目录消歧。
+   * 读权限在发送时才授予（发送路径里的 attachedPaths）：删掉胶囊、不发，就什么权限都没给
+   */
+  const attachPaths = (files: { path: string; name: string }[]): void => {
+    let text = useChatStore.getState().inputText
+    let caret = textareaRef.current?.selectionStart ?? text.length
+    for (const { path, name } of files) {
+      if (at.attachedPaths(text).includes(path)) continue
+      const dir = path.slice(0, Math.max(path.length - name.length - 1, 0))
+      const res = at.insert({ kind: 'path', path, base: name }, name, text, caret, dir || undefined)
+      text = res.text
+      caret = res.caret
+    }
+    setInputText(text)
+    pendingCaretRef.current = caret
+    setTimeout(() => textareaRef.current?.focus(), 0)
+  }
+
   /** 粘贴处理：图片交给 useImageUpload；超阈值长文本折叠为粘贴芯片（短文本走默认粘贴） */
   const handleTextareaPaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      handlePaste(e) // 图片粘贴（不 preventDefault，与文本分支互不影响）
+      // 图片粘贴不 preventDefault，与文本分支互不影响；磁盘上的文件（Finder 里复制的）已处理完，那段文字只是文件名
+      if (handlePaste(e)) return
       const clip = e.clipboardData.getData('text/plain')
       if (!clip) return
       const el = e.currentTarget
@@ -581,6 +615,7 @@ export function InputArea({
     outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
     images: typeof pendingImages,
     hidden: UserSecret[],
+    attached: string[],
     snapshot: ComposerSnapshot
   ): Promise<void> => {
     // 乐观占位气泡里不出现要藏的真值（换回胶囊文字）：要在清空胶囊之前算
@@ -590,7 +625,7 @@ export function InputArea({
         outgoing.inlineTokens && maskTokenPayloads(outgoing.inlineTokens, secrets.maskForDisplay)
     }
     resetComposer()
-    await promptWithPlaceholder(sid, outgoing, shown, images, hidden, snapshot)
+    await promptWithPlaceholder(sid, outgoing, shown, images, hidden, attached, snapshot)
   }
 
   /** 乐观占位（同时即流式态）→ agent.prompt → 收尾。失败在这里接住（放回输入框 / 报原因），不往外抛 */
@@ -600,6 +635,7 @@ export function InputArea({
     shown: { contentText: string; inlineTokens?: Record<string, InlineToken> },
     images: typeof pendingImages,
     hidden: UserSecret[],
+    attached: string[],
     snapshot: ComposerSnapshot
   ): Promise<void> => {
     const store = useChatStore.getState()
@@ -629,7 +665,8 @@ export function InputArea({
             : undefined,
         inlineTokens: outgoing.inlineTokens,
         // 带上（哪怕是空的）= 输入框处理过：宿主只换这些，其余照原样发
-        secrets: hidden
+        secrets: hidden,
+        attachedPaths: attached.length > 0 ? attached : undefined
       })
     } catch (err) {
       // prompt 要等整轮落定才回，断线多半只是没等到结尾：受理了（占位已被视图换成真的，或连回来之后被换掉）就不是失败，
@@ -660,8 +697,10 @@ export function InputArea({
    */
   const handleSubmitOther = async (): Promise<void> => {
     if (!activePendingInput || !activeSessionId) return
-    // 该通道不携带 inlineTokens → 粘贴芯片就地展开为完整原文；要藏的值展开回真值、随 secrets 交出去
-    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(inputText.trim()))
+    // 该通道不携带 inlineTokens → 添加的文件与粘贴芯片就地展开；要藏的值展开回真值、随 secrets 交出去
+    const raw = inputText.trim()
+    const attached = at.attachedPaths(raw)
+    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(at.resolveAttached(raw)))
     if (!text) return
     const snapshot = takeComposerSnapshot()
     useChatStore.getState().setInputText('')
@@ -672,7 +711,8 @@ export function InputArea({
       await getSessionChannelApi().agent.respondToInput({
         sessionId: activeSessionId,
         requestId: activePendingInput.id,
-        response: { kind: 'other', text, secrets: hidden }
+        response: { kind: 'other', text, secrets: hidden },
+        attachedPaths: attached.length > 0 ? attached : undefined
       })
     } catch (err) {
       useChatStore
@@ -711,6 +751,8 @@ export function InputArea({
 
     const rawText = inputText.trim()
     const images = pendingImages
+    // 添加的文件：发送时给会话读权限。此刻算（斜杠命令分支把引用展开进参数之后就没有 token 了）
+    const attached = at.attachedPaths(rawText)
 
     // 有芯片时即使参数为空也允许发送（纯命令）
     if (
@@ -744,6 +786,7 @@ export function InputArea({
       },
       images,
       expanded.secrets,
+      attached,
       snapshot
     )
   }
@@ -759,10 +802,12 @@ export function InputArea({
    * 把当前输入投进 pi 的某条用户消息队列（立即 / 追加）。
    *
    * 队列通道不携带 inlineTokens（harness 在 drain 那一刻才写 user 消息，
-   * 显示侧车没法紧邻它落盘）→ 粘贴芯片就地展开为完整原文。
+   * 显示侧车没法紧邻它落盘）→ 添加的文件与粘贴芯片就地展开。
    */
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
-    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(inputText.trim()))
+    const raw = inputText.trim()
+    const attached = at.attachedPaths(raw)
+    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(at.resolveAttached(raw)))
     if (!text || !activeSessionId) return
     // 关停中哪儿也不发（话留在输入框里）
     if (useChatStore.getState().sessionClosing[activeSessionId]) return
@@ -770,6 +815,8 @@ export function InputArea({
     const shown = { contentText: secrets.maskForDisplay(text) }
     const store = useChatStore.getState()
     store.setInputText('')
+    // 引用登记也清：留着的话，之后手打同样的文字会再算一次添加的文件
+    at.reset()
     paste.reset()
     secrets.reset()
     clearSendError()
@@ -782,6 +829,7 @@ export function InputArea({
         shown,
         [],
         hidden,
+        attached,
         snapshot
       )
       return
@@ -790,7 +838,8 @@ export function InputArea({
       await getSessionChannelApi().agent[tier]({
         sessionId: activeSessionId,
         text,
-        secrets: hidden
+        secrets: hidden,
+        attachedPaths: attached.length > 0 ? attached : undefined
       })
     } catch (err) {
       // 这两档当场就回：断在这一下才不知道到没到，窗口很窄，放回去让用户看着办（到了的话列表里也看得见）
@@ -967,11 +1016,12 @@ export function InputArea({
     paste.prune(text)
   }
 
-  // 「+」：添加图片（只在模型能看图时出现 —— 拖放、粘贴两条路也一样只对这种模型开）、添加敏感信息
+  // 「+」：桌面添加文件（图片也从这里加）；别的宿主添加图片（只在模型能看图时出现）。还有添加敏感信息
   const attachButton = !sendBlocked ? (
     <>
       <ComposerPlusMenu
         touch={touch}
+        files={!!pathOfFile}
         images={modelSupportsVision}
         onImages={() => fileInputRef.current?.click()}
         onSecret={addSecret}
@@ -985,11 +1035,11 @@ export function InputArea({
           }
         }}
       />
-      {modelSupportsVision && (
+      {(modelSupportsVision || !!pathOfFile) && (
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={pathOfFile ? undefined : 'image/*'}
           multiple
           hidden
           data-attach-input=""
@@ -1276,7 +1326,9 @@ export function InputArea({
 
               {shownSendError && (
                 <div data-send-error className="px-4 pt-2 text-xs text-error break-words">
-                  {t('input.sendFailed', { error: shownSendError })}
+                  {sendError?.notice
+                    ? shownSendError
+                    : t('input.sendFailed', { error: shownSendError })}
                 </div>
               )}
 
@@ -1369,9 +1421,11 @@ export function InputArea({
                                 t('input.placeholderTouch')
                               : slashChip
                                 ? t('input.placeholder')
-                                : modelSupportsVision
-                                  ? t('input.placeholderVision')
-                                  : t('input.placeholder')
+                                : pathOfFile
+                                  ? t('input.placeholderFiles')
+                                  : modelSupportsVision
+                                    ? t('input.placeholderVision')
+                                    : t('input.placeholder')
                   }
                   rows={1}
                   style={{

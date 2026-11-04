@@ -43,6 +43,7 @@ import { createLogger } from '../../logger'
 import { isSafeSessionId } from '../../utils/paths'
 import { broadcastSessionConfigChanged } from '../../utils/sessionConfigBroadcast'
 import type { SandboxPathEntry } from '../sandbox'
+import { isWithin } from '../sandbox/spec'
 import { sessionRecords } from '../sessionRecords'
 import { widgetRegistry, WIDGET_ID_REGEX } from '../widget/widgetRegistry'
 import { derivePathEntries, derivedKey, type DerivedPathEntry } from './derive'
@@ -271,6 +272,19 @@ export const sessionAcl = {
       opts.source ?? 'user',
       opts.sourceKey ?? ''
     )
+  },
+
+  /**
+   * 输入框里添加的文件：随消息一起给会话读权限（来源 user，权限表里看得见、删得掉）。已经读得到的不另起一行 ——
+   * 工作目录里的文件不该在表里多出一行。载荷来自渠道，不是字符串的跳过
+   */
+  grantAttachedFiles(sessionId: string, paths: unknown): void {
+    if (!Array.isArray(paths)) return
+    for (const path of paths) {
+      if (typeof path !== 'string') continue
+      if (this.pathView(sessionId).read.some((dir) => isWithin(path, dir))) continue
+      this.grantPath(sessionId, path, 'read')
+    }
   },
 
   /**

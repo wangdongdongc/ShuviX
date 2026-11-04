@@ -396,3 +396,27 @@ describe('插话说明（midRunNote）在人读的出口里不出现', () => {
     })
   })
 })
+
+describe('添加的文件（path 引用）', () => {
+  const ref = { kind: 'path' as const, path: '/Users/u/Downloads/a b.pdf', base: 'a b.pdf' }
+
+  it('AF-T1 payload 带绝对路径，displayText = 文件名，id = 路径', () => {
+    expect(buildAtToken(ref)).toEqual({
+      type: 'at',
+      id: '/Users/u/Downloads/a b.pdf',
+      displayText: 'a b.pdf',
+      payload: '[file: /Users/u/Downloads/a b.pdf]',
+      name: 'a b.pdf'
+    })
+    expect(mentionRefId(ref)).toBe('/Users/u/Downloads/a b.pdf')
+  })
+
+  it('AF-T2 从 token 认回 path 引用（消歧后缀只在 displayText，不进文件名）', () => {
+    expect(atTokenRef(buildAtToken(ref, 'a b.pdf (/Users/u/Downloads)'))).toEqual(ref)
+  })
+
+  it('AF-T3 工作区文件的 token 不受影响', () => {
+    const file = { kind: 'file' as const, rel: 'src/a.ts', base: 'a.ts' }
+    expect(atTokenRef(buildAtToken(file))).toEqual(file)
+  })
+})

@@ -326,6 +326,11 @@ export interface AgentPromptParams {
    * = 输入框自己处理过脱敏；不带 = 宿主自动脱敏（没有输入框的来源）
    */
   secrets?: UserSecret[]
+  /**
+   * 这条消息里添加的文件（宿主上的绝对路径）：发送时写进会话权限表，给会话读权限。非空时这次调用要 admin
+   * （与 `session:grantAcl` 同一格，见 channelAccess）
+   */
+  attachedPaths?: string[]
 }
 
 /** 继续与已存在子代理对话：向其追加一轮用户消息（复用该子会话的 Agent 与历史） */
@@ -342,6 +347,8 @@ export interface AgentSteerParams {
   text: string
   /** 同 `AgentPromptParams.secrets` */
   secrets?: UserSecret[]
+  /** 同 `AgentPromptParams.attachedPaths` */
+  attachedPaths?: string[]
 }
 
 /**
@@ -670,6 +677,8 @@ export interface SessionChannelApi {
       sessionId: string
       requestId: string
       response: InputResponse
+      /** 同 `AgentPromptParams.attachedPaths`（「其它」反馈里添加的文件） */
+      attachedPaths?: string[]
     }) => Promise<{ success: boolean }>
     onEvent: (callback: (event: ChatEvent) => void) => () => void
   }
@@ -813,6 +822,11 @@ export interface HostApi {
      * 可选：没有的宿主不显示「选择文件夹」入口
      */
     openDirectoryDialog?: () => Promise<string | null>
+    /**
+     * 拖进来 / 选中 / 粘贴的文件在本机的绝对路径（拿不到 → 空串，如网页里拖来的）。只有桌面有：别的宿主那里文件
+     * 在用户的设备上，运行 agent 的电脑看不到它，输入框就只收图片
+     */
+    pathForFile?: (file: File) => string
   }
   agent: {
     /**
