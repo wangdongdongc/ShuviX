@@ -12,7 +12,7 @@ shuvix-policy-rules:
   - effect: deny
     action: [request]
     match: "!inCidr(subject.address, ['127.0.0.0/8', '::1'])"
-    prompt: 这台 ShuviX 只接受来自它所在电脑的连接。要让这台设备连进来，请在那台电脑上（或经 SSH 隧道）打开 ShuviX，到 设置 → 通用 → 网络访问 里设置谁可以连接。
+    prompt: 这台 ShuviX 只接受来自它所在电脑的连接。要让这台设备连进来，请在那台电脑上（或经 SSH 隧道）打开 ShuviX，到 设置 → 网络访问 里设置谁可以连接。
 ---
 
 **它做什么**：远程访问让浏览器经网络使用 ShuviX —— 能做 ShuviX 在这台电脑上能做的一切，
@@ -22,7 +22,7 @@ shuvix-policy-rules:
 
 **要让其他设备连进来**：替换这份策略 —— 写一份你自己的
 `~/.shuvix/policies/network-admission.md`（`name` 相同）。另写一份带 `allow` 规则的策略
-不够：`deny` 压过一切 allow。设置 → 通用 → 网络访问 里有一个按钮，会开一个新会话并填好
+不够：`deny` 压过一切 allow。设置 → 网络访问 里有一个按钮，会开一个新会话并填好
 提示词：agent 会问清哪些设备要连、每台能做什么，读 ShuviX 知识库的 `network-policy`
 条目，然后写好这份文件。
 

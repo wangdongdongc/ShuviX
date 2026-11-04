@@ -34,7 +34,7 @@
  *   IL-19 `--lan` (deprecated, still passed on): helper and unit carry --lan, the output ends with the "policy is
  *         written on first start" line and the no-password risk line, no SSH hint
  *   IL-20 default (`--service`, no --lan): the output ends with exactly the five SSH-tunnel lines (the fourth names
- *         Settings → General → Network access and the policy file); no deprecation note
+ *         Settings → Network access and the policy file); no deprecation note
  *   IL-21 no `--service`: the same five lines after the "rerun with --service" line; `--port` shows in them
  *   IL-22 AppImage + `--lan`: the helper gets --lan, the launcher does not; the same two closing lines as IL-19
  *   IL-23 `--lan=1` is an unknown option; `--uninstall --lan` is the same as `--uninstall`
@@ -132,7 +132,7 @@ const deprecationNote = (option: string): string =>
 const sshHint = (port: number, user = 'alice'): string[] => [
   'ShuviX only accepts connections from this machine (127.0.0.1). From another computer, open an SSH tunnel:',
   `  ssh -L ${port}:127.0.0.1:${port} ${user}@<this machine's address>`,
-  `and open http://127.0.0.1:${port}/ there. To let other devices in, follow Settings → General → Network access`,
+  `and open http://127.0.0.1:${port}/ there. To let other devices in, follow Settings → Network access`,
   'in that browser (a prompt sets up the policy network-admission with an agent), or write ~/.shuvix/policies/network-admission.md.',
   `Network access has no password: anyone who can reach port ${port} on this machine (other users on it, or through a tunnel) can fully control it through ShuviX.`
 ]
@@ -322,7 +322,7 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(result.lines).toContain(
         "Who can connect is decided by ShuviX's security policy network-admission. By default only this"
       )
-      expect(result.stdout).toContain('Settings → General → Network access')
+      expect(result.stdout).toContain('Settings → Network access')
       expect(result.stdout).toContain('~/.shuvix/policies/network-admission.md')
       expect(result.stdout).not.toContain('listens only there')
       expect(result.stubCalls).toBeNull()

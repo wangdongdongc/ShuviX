@@ -12,7 +12,7 @@ shuvix-policy-rules:
   - effect: deny
     action: [request]
     match: "!inCidr(subject.address, ['127.0.0.0/8', '::1'])"
-    prompt: This ShuviX only accepts connections from the computer it runs on. To let this device in, open ShuviX on that computer (or through an SSH tunnel), go to Settings → General → Network access and set up who may connect.
+    prompt: This ShuviX only accepts connections from the computer it runs on. To let this device in, open ShuviX on that computer (or through an SSH tunnel), go to Settings → Network access and set up who may connect.
 ---
 
 **What it does**: remote access lets a browser use ShuviX over the network —
@@ -25,7 +25,7 @@ device sees the sentence above instead of ShuviX. An SSH tunnel arrives as
 **To let other devices in**: replace this policy — write your own
 `~/.shuvix/policies/network-admission.md` (same `name`). A second policy
 with an `allow` rule is not enough: a `deny` beats every allow. Settings →
-General → Network access has a button that opens a new conversation with a
+Network access has a button that opens a new conversation with a
 prompt for this: the agent asks which devices should connect and what each
 may do, reads the `network-policy` entry of the ShuviX knowledge base and
 writes the file.

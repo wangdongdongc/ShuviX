@@ -15,7 +15,8 @@ import {
   Send,
   Mic,
   Archive,
-  Timer
+  Timer,
+  Globe
 } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -25,6 +26,7 @@ import { ProviderSettings } from './ProviderSettings'
 import { MonitorSettings, MONITOR_SUB_TABS, type MonitorSubTab } from './MonitorSettings'
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
+import { NetworkAccessSettings } from './NetworkAccessSettings'
 import { ToolSettings } from './ToolSettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
 import { VoiceSettings } from './VoiceSettings'
@@ -36,6 +38,7 @@ const VALID_TABS = new Set([
   'providers',
   'tools',
   'mcp',
+  'network',
   'voice',
   'triggers',
   'telegramBots',
@@ -120,6 +123,16 @@ export function SettingsPanel({
       content: (
         <Scroll>
           <McpSettings />
+        </Scroll>
+      )
+    },
+    {
+      id: 'network',
+      label: t('settings.tabNetwork'),
+      icon: <Globe size={14} />,
+      content: (
+        <Scroll>
+          <NetworkAccessSettings />
         </Scroll>
       )
     },

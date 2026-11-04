@@ -43,7 +43,7 @@ ssh -L 7766:127.0.0.1:7766 you@your-server
 
 and open `http://127.0.0.1:7766/` in a browser there. Set up a provider (your API key)
 under Settings, as on the desktop. To open it from other devices without a tunnel, go to
-Settings → General → Network access there and set it up with an agent: it asks which
+Settings → Network access there and set it up with an agent: it asks which
 devices should connect and writes the policy `~/.shuvix/policies/network-admission.md` —
 or write that file yourself. Until then other devices get a page saying they are refused.
 
@@ -78,7 +78,7 @@ app has no setuid sandbox helper).
   Headless and desktop ShuviX share the same data, so only one of them runs at a time.
 - In headless mode the network access switch in Settings stays on; stop the service to turn
   access off. The port comes from the command line (the service file), not from Settings.
-- On the desktop, Settings → General → Network access turns on access from a browser; who
+- On the desktop, Settings → Network access turns on access from a browser; who
   may connect is the same `network-admission` policy (this computer only until you replace
   it).
 - `--lan` and `--bind <interface or address>` (for the installer, `shuvix-server` and

@@ -72,6 +72,7 @@ interface SettingsState {
     | 'hooks'
     | 'tools'
     | 'mcp'
+    | 'network'
     | 'voice'
     | 'triggers'
     | 'telegramBots'

@@ -905,6 +905,7 @@
     "toolBrowserNoSites": "No sites with saved data",
     "toolBrowserClearSite": "Clear this site's data",
     "tabMcp": "MCP",
+    "tabNetwork": "Network access",
     "mcpTitle": "MCP Server Management",
     "mcpDesc": "Configure MCP (Model Context Protocol) servers to extend AI with more tool capabilities.",
     "mcpAdd": "Add MCP Server",

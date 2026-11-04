@@ -2,6 +2,7 @@
  * 网络访问（server mode phase B / C）的门、静态路由、设置页那一节、监听失败的那一行、跨重启的持久化，以及经通用设置路径
  * 关掉 —— 全部从外面看：原始 HTTP / 升级握手打到服务上，状态经主窗口 IPC 读，设置页经 pages.ts 读。
  *
+ * NW-9  网络访问是设置里自己的 tab（#settings/network）；「通用」里不再有这一节
  * NW-10 缺省启动；关着时风险说明也看得见，没有准入引导
  * NW-11 输入校验：不合法的值什么也不改；旧的 setLan / setLanInterface 已经不在 window.api 上
  * NW-12 在设置页里打开：准入是内置那份（只放这台电脑）→ 只列 127.0.0.1，引导是 builtin 那一段（端口代进去）、
@@ -46,7 +47,11 @@ import {
   type NetworkStatus,
   type WebClientHandle
 } from '../../harness/networkFixtures'
-import { networkSettingsPane, type NetworkSettingsShot } from '../../harness/pages'
+import {
+  networkSettingsPane,
+  settingsTabsPane,
+  type NetworkSettingsShot
+} from '../../harness/pages'
 import { sqliteJson, waitRendererReady } from '../../harness/seed'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -121,7 +126,7 @@ beforeAll(async () => {
     Pb = await freePort()
   } while (Pb === P)
   fixture = await startFixtureServer()
-  settings = await app.openSettings('general')
+  settings = await app.openSettings('network')
   webHtml = readFileSync(join(RENDERER_OUT, 'web.html'))
 })
 
@@ -140,6 +145,34 @@ afterAll(async () => {
 })
 
 describe('network access: guards, routes and settings', () => {
+  it('NW-9 network access is its own settings tab, and General no longer holds it', async () => {
+    const tabs = await settingsTabsPane(settings!)
+    expect(await tabs.hash()).toBe('#settings/network')
+    expect(await tabs.activeLabel()).toBe(en.settings.tabNetwork)
+    expect((await networkSettingsPane(settings!).shot()).present).toBe(true)
+
+    const clickTab = (label: string): Promise<boolean> =>
+      settings!.eval<boolean>(`(() => {
+        const tab = [...document.querySelectorAll('[data-settings-nav] > button')].find(
+          (b) => b.querySelector('[data-tab-label]')?.textContent?.trim() === ${JSON.stringify(label)}
+        )
+        tab?.click()
+        return Boolean(tab)
+      })()`)
+    expect(await clickTab(en.settings.tabGeneral)).toBe(true)
+    await until(
+      async () => (await tabs.activeLabel()) === en.settings.tabGeneral,
+      'the General tab is active'
+    )
+    expect((await networkSettingsPane(settings!).shot()).present).toBe(false)
+
+    expect(await clickTab(en.settings.tabNetwork)).toBe(true)
+    await until(
+      async () => (await networkSettingsPane(settings!).shot()).present,
+      'the network section is back'
+    )
+  })
+
   it('NW-10 a default launch does not listen; the risk text is visible while off', async () => {
     const initial = await status()
     expect(initial).toStrictEqual({

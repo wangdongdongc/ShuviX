@@ -143,7 +143,7 @@ export const POLICY_CHECK_USAGE = [
   '  (no request)      a table: this computer, connected and recently refused devices, an outside address',
   '                    × page / read / write / admin',
   '  --from <ip>       the address of the device asking',
-  '  --device <id>     its device ID (Settings → General → Network access)',
+  '  --device <id>     its device ID (Settings → Network access)',
   '  --page [<path>]   open a page (default /)',
   '  --channel <name>  call a channel, e.g. session:list (see the network-channels knowledge entry)',
   '  --setting <key>   change one setting through settings:set, e.g. general.theme (its scope and access',

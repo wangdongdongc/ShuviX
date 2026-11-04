@@ -1,5 +1,5 @@
 /**
- * 设置 → 通用 → 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1；网络策略
+ * 设置 → 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1；网络策略
  * docs/network-policy/design.md §8）。
  *
  * 一个开关 + 端口：「允许从浏览器访问」开着时监听 0.0.0.0，**谁能连由安全策略 network-admission 定**（2026-10-19，
@@ -280,7 +280,7 @@ export function NetworkAccessSettings(): React.JSX.Element {
   const headless = status?.headless === true
 
   return (
-    <div className="px-5 pb-5" data-network-settings>
+    <div className="px-5 py-5" data-network-settings>
       <SettingsSection title={t('settings.networkTitle')} description={t('settings.networkDesc')}>
         <SettingsRow
           icon={<Globe size={11} className="text-text-tertiary shrink-0" />}

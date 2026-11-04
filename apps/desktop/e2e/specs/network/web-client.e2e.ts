@@ -10,7 +10,7 @@
  * NW-5  运行中的询问卡片在页面里答复：工具看见答复，运行继续
  * NW-6  只有桌面能用的通道在服务端被拒（主进程什么也不做）；页面里「在文件管理器中打开」换成显示服务端路径的卡片
  *       （phase D），浏览器里没有对应物的（悬浮窗）当场拒并给一条看得见的提示
- * NW-7  页面里打开设置 → 浏览器里一个新 tab 开 `#settings/general`
+ * NW-7  页面里打开设置 → 浏览器里一个新 tab 开 `#settings/network`
  * NW-8  换端口让服务重启 → 同一个页面重连回来，断着时错过的变化补上，整条链路恢复
  * NW-9  （最后）在设置里关掉 → 客户端被断开
  *
@@ -310,7 +310,7 @@ describe('network access: the web client in a real page', () => {
     expect(await pane.connectionBanner()).toBeNull()
     expect(await pane.desktopOnlyNotice()).toBeNull()
 
-    settings = await app.openSettings('general')
+    settings = await app.openSettings('network')
     const shot = await settingsShotWhen((s) => s.clients.length === 1, 'settings list the client')
     expect(shot).toStrictEqual({
       present: true,
@@ -593,12 +593,12 @@ describe('network access: the web client in a real page', () => {
     }, 'the helper socket is gone; only the page stays connected')
   })
 
-  it('NW-7 on the web, app.openSettings opens #settings/general in a new browser tab', async () => {
+  it('NW-7 on the web, app.openSettings opens #settings/network in a new browser tab', async () => {
     const desktopSettingsBefore = await desktopSettingsTargets()
-    const settingsUrl = `http://127.0.0.1:${P1}/#settings/general`
+    const settingsUrl = `http://127.0.0.1:${P1}/#settings/network`
     // window.open 带一次用户手势（与在页面上点一下等价）
     const opened = await webPage().send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
-      expression: `Promise.resolve(window.api.app.openSettings('general'))`,
+      expression: `Promise.resolve(window.api.app.openSettings('network'))`,
       awaitPromise: true,
       returnByValue: true,
       userGesture: true
@@ -612,13 +612,13 @@ describe('network access: the web client in a real page', () => {
             'window.api.browserView.listTabs()'
           )
         ).find((t) => t.url === settingsUrl) ?? null,
-      'a browser tab on #settings/general'
+      'a browser tab on #settings/network'
     )
     settingsTab.tabId = tab.id
     try {
       const page = await until(
         () => connectTabPage(app.port, (u) => u === settingsUrl),
-        'the #settings/general tab page target'
+        'the #settings/network tab page target'
       )
       settingsTab.page = page
       // 状态拉回来之前开关画成关着的（禁用态）—— 等它拿到状态

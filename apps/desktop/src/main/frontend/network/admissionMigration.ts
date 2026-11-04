@@ -74,7 +74,7 @@ export function legacyAdmissionPolicyText(sharing: LegacySharing, interfaces: In
       'computer) can connect — ShuviX never accepts connections from public addresses.',
       '',
       'To narrow it down — one or a few networks, particular devices, read-only devices —',
-      'edit the rules, or ask an agent: Settings → General → Network access has a prompt',
+      'edit the rules, or ask an agent: Settings → Network access has a prompt',
       'for this.',
       ''
     ].join('\n')
@@ -104,7 +104,7 @@ export function legacyAdmissionPolicyText(sharing: LegacySharing, interfaces: In
     `\`--bind\` start option) with this policy. It keeps what the setting did: only this`,
     `computer and ${who} can connect.`,
     '',
-    'To change who can connect, edit the rule, or ask an agent: Settings → General →',
+    'To change who can connect, edit the rule, or ask an agent: Settings →',
     'Network access has a prompt for this.',
     ''
   ].join('\n')

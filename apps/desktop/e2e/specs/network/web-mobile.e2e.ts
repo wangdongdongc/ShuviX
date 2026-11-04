@@ -1096,6 +1096,7 @@ describe('phone layout: the shell', () => {
       'providers',
       'tools',
       'mcp',
+      'network',
       'voice',
       'triggers',
       'telegramBots',
@@ -1136,14 +1137,14 @@ describe('phone layout: the shell', () => {
     expect(parseFloat(row.titleMinWidth)).toBeCloseTo(9 * parseFloat(row.titleFontSize), 1)
 
     await mobile().tap({ settingsBack: true })
-    await until(async () => (await mobile().settingsTabs()).length === 11, 'the list again')
+    await until(async () => (await mobile().settingsTabs()).length === 12, 'the list again')
     expect(await mobile().settingsHeader()).toBeNull()
 
     await mobile().tap({ settingsTab: 'agents' })
     await until(async () => (await mobile().settingsHeader()) === en.panel.agents, 'Agents')
     expect(en.panel.agents).toBe('Agents')
     await mobile().tap({ settingsBack: true })
-    await until(async () => (await mobile().settingsTabs()).length === 11, 'the list again')
+    await until(async () => (await mobile().settingsTabs()).length === 12, 'the list again')
     await mobile().tap({ tab: 'sessions' })
     await until(async () => (await mobile().activeTab()) === 'sessions', 'the sessions tab')
   })
@@ -2068,7 +2069,7 @@ describe('phone layout: the shell', () => {
     let flipped: ProviderRow | undefined
 
     const sectionList = (): Promise<unknown> =>
-      until(async () => (await pane.settingsTabs()).length === 11, 'the settings section list')
+      until(async () => (await pane.settingsTabs()).length === 12, 'the settings section list')
     const subList = (
       what: string,
       id?: string

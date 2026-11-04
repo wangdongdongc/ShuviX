@@ -12503,7 +12503,7 @@ export function webClientPane(client: CdpClient): WebClientPane {
   }
 }
 
-/** 设置 → 通用 → 网络访问一节（NetworkAccessSettings）的快照 */
+/** 设置 → 网络访问一节（NetworkAccessSettings）的快照 */
 export interface NetworkSettingsShot {
   /** 这一节在屏 */
   present: boolean

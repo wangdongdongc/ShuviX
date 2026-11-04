@@ -905,6 +905,7 @@
     "toolBrowserNoSites": "保存されたデータのあるサイトはありません",
     "toolBrowserClearSite": "このサイトのデータを消去",
     "tabMcp": "MCP",
+    "tabNetwork": "ネットワークアクセス",
     "mcpTitle": "MCP Server 管理",
     "mcpDesc": "MCP (Model Context Protocol) サーバーを設定して、AIにツール機能を追加します。",
     "mcpAdd": "MCP Server を追加",

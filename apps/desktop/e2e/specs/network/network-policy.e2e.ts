@@ -410,9 +410,9 @@ describe('network access: who may connect is a security policy', () => {
       await report('strict read-only, session opened')
 
       // web 的设置页：一个新标签页（window.open 要一次用户手势）
-      const settingsUrl = `http://${LAN}:${P}/#settings/general`
+      const settingsUrl = `http://${LAN}:${P}/#settings/network`
       expect(
-        await evalWithGesture(page, `Promise.resolve(window.api.app.openSettings('general'))`)
+        await evalWithGesture(page, `Promise.resolve(window.api.app.openSettings('network'))`)
       ).toStrictEqual({ success: true })
       settingsTabId = (await waitBrowserTab(app, (u) => u === settingsUrl, 'the web settings tab'))
         .id
@@ -607,7 +607,7 @@ describe('network access: who may connect is a security policy', () => {
       return st.clients.some((c) => c.device === FIXED_DEVICE) ? st : null
     }, 'the client with a device ID is listed')
 
-    settings = await app.openSettings('general')
+    settings = await app.openSettings('network')
     const shot = await shotWhen(
       (sh) =>
         sh.admission === 'builtin' &&
@@ -724,7 +724,7 @@ describe('network access: who may connect is a security policy', () => {
     }, 'listening again after the restart')
     expect(s.admission).toBe('override')
 
-    settings = await app.openSettings('general')
+    settings = await app.openSettings('network')
     const shot = await shotWhen((sh) => sh.admission === 'override', 'the override guide')
     expect(shot.admissionText).toBe(en.settings.networkAdmission_override)
     expect(shot.policyChat).toBe(en.settings.networkPolicyAdjust)

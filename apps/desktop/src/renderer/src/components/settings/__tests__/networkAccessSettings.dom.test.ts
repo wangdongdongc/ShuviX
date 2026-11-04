@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 设置 → 通用 → 网络访问（NetworkAccessSettings）：一个开关 + 端口；谁能连由安全策略 network-admission 定（2026-10-19，
+ * 设置 → 网络访问（NetworkAccessSettings）：一个开关 + 端口；谁能连由安全策略 network-admission 定（2026-10-19，
  * 局域网开关与「开放给」去掉了），开着时按准入策略的状态给引导与「让 agent 帮我设置」；无头运行时开关与端口锁住。
  *
  *   NAS-1  无头运行（开着、在监听）：开关显示为开且不可点、带无头说明；端口框不可改、值是端口、带「--port / 服务文件」说明；

@@ -14,7 +14,6 @@ import {
 import { AppearanceTab, ModelDefaultsSettings, type ThemeMode } from '@shuvix/app-shell'
 import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
-import { NetworkAccessSettings } from './NetworkAccessSettings'
 import { useCompactLayout } from '../../mobile/useCompactLayout'
 import { setPhoneFontSize, usePhoneFontSize } from '../../mobile/phoneFontSize'
 
@@ -166,8 +165,6 @@ export function GeneralSettings(): React.JSX.Element {
           onChange: persistClassifier
         }}
       />
-
-      <NetworkAccessSettings />
     </div>
   )
 }

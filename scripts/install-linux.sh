@@ -42,7 +42,7 @@ Usage: install-linux.sh [options]
 
 Who can connect is decided by ShuviX's security policy network-admission. By default only this
 machine (127.0.0.1) can, reachable from elsewhere through an SSH tunnel. To let other devices in, open
-ShuviX through the tunnel and follow Settings → General → Network access (a prompt sets up the policy
+ShuviX through the tunnel and follow Settings → Network access (a prompt sets up the policy
 with an agent), or write ~/.shuvix/policies/network-admission.md. If you have no such policy yet,
 --lan / --bind write one once, when ShuviX first starts with them.
 
@@ -479,7 +479,7 @@ access_hint() {
   else
     say "ShuviX only accepts connections from this machine (127.0.0.1). From another computer, open an SSH tunnel:"
     say "  ssh -L ${PORT}:127.0.0.1:${PORT} ${USER_NAME}@<this machine's address>"
-    say "and open http://127.0.0.1:${PORT}/ there. To let other devices in, follow Settings → General → Network access"
+    say "and open http://127.0.0.1:${PORT}/ there. To let other devices in, follow Settings → Network access"
     say "in that browser (a prompt sets up the policy network-admission with an agent), or write ~/.shuvix/policies/network-admission.md."
     say "Network access has no password: anyone who can reach port ${PORT} on this machine (other users on it, or through a tunnel) can fully control it through ShuviX."
   fi

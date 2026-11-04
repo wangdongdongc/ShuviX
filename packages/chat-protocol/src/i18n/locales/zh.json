@@ -905,6 +905,7 @@
     "toolBrowserNoSites": "暂无已保存数据的站点",
     "toolBrowserClearSite": "清除该站点数据",
     "tabMcp": "MCP",
+    "tabNetwork": "网络访问",
     "mcpTitle": "MCP Server 管理",
     "mcpDesc": "配置 MCP (Model Context Protocol) 服务器，为 AI 扩展更多工具能力。",
     "mcpAdd": "添加 MCP Server",

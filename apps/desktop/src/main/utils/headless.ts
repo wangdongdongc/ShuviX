@@ -177,7 +177,7 @@ export function headlessUsage(): string {
     'default only this computer can (127.0.0.1), e.g. through',
     '  ssh -L 7766:127.0.0.1:7766 <user>@<this server>',
     'To let other devices in, open ShuviX through the tunnel and follow Settings →',
-    'General → Network access, or write ~/.shuvix/policies/network-admission.md.',
+    'Network access, or write ~/.shuvix/policies/network-admission.md.',
     '',
     '--lan and --bind <interface or address> (SHUVIX_LAN / SHUVIX_BIND) are',
     'deprecated: on start they write that policy once, if you have none.',

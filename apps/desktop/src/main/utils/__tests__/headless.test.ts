@@ -399,7 +399,7 @@ describe('HL-U headlessUsage', () => {
       'security policy network-admission',
       'only this computer can (127.0.0.1)',
       'ssh -L 7766:127.0.0.1:7766',
-      'General → Network access',
+      'follow Settings →\nNetwork access, or write',
       '~/.shuvix/policies/network-admission.md',
       '--lan and --bind <interface or address> (SHUVIX_LAN / SHUVIX_BIND) are',
       'deprecated: on start they write that policy once, if you have none.',

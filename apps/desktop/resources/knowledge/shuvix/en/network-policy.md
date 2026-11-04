@@ -16,7 +16,7 @@ sources:
 
 # Remote access policy
 
-**Remote access** (Settings → General → Network access, or `shuvix --headless`) lets a browser
+**Remote access** (Settings → Network access, or `shuvix --headless`) lets a browser
 use ShuviX over the network — with everything ShuviX can do on this computer, and **without a
 password**. ShuviX itself only makes three fixed checks: the sender must be on a private network
 (or this computer), the `Host` header must be an IP address or `localhost` with ShuviX's port,
@@ -121,7 +121,7 @@ level and is covered by such rules; a list of channel names misses it.
 ### The 15 scopes
 
 A scope is about **what it governs**, not about which Settings tab shows it (General holds the
-appearance, the default model, the command classifier and network access at once).
+appearance, the default model and the command classifier at once).
 
 | `scope` | What it covers | Where it is in the app |
 | --- | --- | --- |
@@ -136,7 +136,7 @@ appearance, the default model, the command classifier and network access at once
 | `agents` | agent profiles and bots, the default agents | sidebar agents / Bots |
 | `extensions` | the tool list, MCP servers, skills, database connections, the Chrome extension | Settings → LLM tools / MCP, sidebar skills |
 | `models` | providers (API keys and subscription sign-in included), models, the default model and thinking level; `read` is only the model list, without keys | Settings → Providers, General → default model, the model picker in the input box |
-| `security` | security policies, hooks (auto-review is a hook), the session permission table, the command sandbox, the command classifier, remote access itself | sidebar policies / Hooks, Settings → General → Network access, LLM tools → bash |
+| `security` | security policies, hooks (auto-review is a hook), the session permission table, the command sandbox, the command classifier, remote access itself | sidebar policies / Hooks, Settings → Network access, LLM tools → bash |
 | `preferences` | appearance, language, font size, zoom, the notification switch, voice and TTS | Settings → General (appearance), Voice |
 | `telegram` | registering, changing and deleting Telegram bots | Settings → Telegram Bot |
 | `system` | app updates, config import / export, the monitor logs (LLM requests, the classifier, the app log) | Settings → About, Monitor |
@@ -247,7 +247,7 @@ an SSH tunnel arrives as `127.0.0.1` and gets in. Replace it with a user file of
 `name` (the sidebar's "Create override copy" writes the current text as a starting point). A
 replacement that fails to parse does not replace anything — the builtin keeps refusing — and is
 listed in amber in the sidebar's Security Policies. Disabling the builtin instead of replacing
-it lets every device on the local network in. Settings → General → Network access shows which
+it lets every device on the local network in. Settings → Network access shows which
 one is in effect.
 
 ## Recipes
@@ -392,7 +392,7 @@ user decide; the rules contain only what the user wants.
   request. `--scopes` gives the scope × device matrix: `r` / `w` / `a` = every call of that level
   is allowed, `-` = every one is refused, `~` = some are refused (the refused calls are listed
   under it), `.` = the scope has no call at that level, `E` = a rule failed to evaluate.
-- Settings → General → Network access shows the state of `network-admission`, the connected
+- Settings → Network access shows the state of `network-admission`, the connected
   browsers with their device IDs and **Recently refused**: what was refused, its scope, from
   where, by which rule — the quickest way to see a policy work.
 - Open the address on the device: a refused request shows the rule's `prompt` with the device ID
