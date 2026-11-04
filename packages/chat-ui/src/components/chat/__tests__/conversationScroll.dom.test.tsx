@@ -4,7 +4,7 @@
  *
  *   - 挂载门：视图到了（或有乐观占位）才挂 Virtuoso、才画空态；视图未到时什么都不挂（不画空态、
  *     不出按钮）。挂上时的初始位置是 `{index:'LAST', align:'end'}`（真底，含 Footer）；
- *   - 骨架：消息 400ms 还没上屏才画，上屏后至少留 250ms；列表在骨架下面先挂、定位好才撤；订阅失败换成失败提示；
+ *   - 进度条：有历史要等就从第一刻挂上（CSS 让它 100ms 后露面），上屏就撤；列表不等它，数据一到就挂、定位好就可见；
  *   - 宽限期：挂上后先不认「不在底部」，直到第一次报「在底部」或过了 800ms；
  *   - 点击：离底超过三屏（严格大于）或拿不到滚动区 → `behavior:'auto'`，否则 `'smooth'`；
  *   - 换会话（key 变）整个重来；按钮的显示 / 隐藏属性、aria-label；运行中且显示时的运行指示；
@@ -161,7 +161,7 @@ function distFromBottom(dist: number): void {
   metrics.scrollTop = metrics.scrollHeight - metrics.clientHeight - dist
 }
 
-/** 侧栏数据里这条会话的行：只有 createdAt / lastActiveAt 影响骨架 */
+/** 侧栏数据里这条会话的行：只有 createdAt / lastActiveAt 影响进度条 */
 function setRow(id: string, times: { createdAt: number; lastActiveAt: number }): void {
   act(() => useChatStore.setState({ sessions: [{ id, ...times } as Session] }))
 }
@@ -184,8 +184,11 @@ const button = (): HTMLButtonElement | null =>
   container.querySelector<HTMLButtonElement>('[data-scroll-to-bottom]')
 const stubPresent = (): boolean => container.querySelector('[data-virtuoso-stub]') !== null
 const emptyPresent = (): boolean => container.querySelector('[data-empty-marker]') !== null
-const skeletonPresent = (): boolean =>
-  container.querySelector('[data-conversation-skeleton]') !== null
+const BAR = '[data-conversation-load-bar]'
+/** 进度条在屏上且没在淡出 */
+const barShown = (): boolean => container.querySelector(`${BAR}:not(.opacity-0)`) !== null
+/** 进度条还在 DOM 里（淡出中也算） */
+const barInDom = (): boolean => container.querySelector(BAR) !== null
 const failedPresent = (): boolean =>
   container.querySelector('[data-conversation-load-failed]') !== null
 /** 按钮是否处于显示态（aria-hidden 是唯一不随样式类变的判据；样式类另由 BTN-ATTR 用例钉） */
@@ -321,253 +324,258 @@ describe('挂载门', () => {
   })
 })
 
-describe('骨架', () => {
-  it('SKL-1 视图迟迟不到：400ms 之前什么都没有，到点才是骨架；不画空态、不挂列表、读屏跳过', () => {
+describe('进度条', () => {
+  it('LB-1 视图迟迟不到：进度条从第一刻就挂着（露面交给 CSS）；不画空态、不挂列表、读屏跳过', () => {
     render(S1)
-    advance(399)
-    expect(skeletonPresent()).toBe(false)
-    expect(emptyPresent()).toBe(false)
-
-    advance(1)
-    expect(skeletonPresent()).toBe(true)
-    expect(
-      container.querySelector('[data-conversation-skeleton]')!.getAttribute('aria-hidden')
-    ).toBe('true')
-    // 不吞操作：点击和滚轮穿给下面的列表
-    expect(container.querySelector('[data-conversation-skeleton]')!.className).toContain(
-      'pointer-events-none'
+    expect(barShown()).toBe(true)
+    expect(container.querySelector(`${BAR} > div`)!.className).toContain(
+      'conversation-load-segment'
     )
+    expect(container.querySelector(BAR)!.getAttribute('aria-hidden')).toBe('true')
+    // 不吞操作：点击和滚轮穿给下面的列表
+    expect(container.querySelector(BAR)!.className).toContain('pointer-events-none')
+    advance(1000)
+    expect(barShown()).toBe(true)
     expect(emptyPresent()).toBe(false)
     expect(virt.mounts).toBe(0)
     expect(button()).toBeNull()
   })
 
-  it('SKL-2 视图到了、列表也在 400ms 内定位好：骨架从头到尾不出现', () => {
-    render(S1)
-    advance(100)
-    loadView(S1, history(S1))
-    expect(virt.mounts).toBe(1)
-    advance(299)
-    land()
-    advance(1000)
-    expect(skeletonPresent()).toBe(false)
-    expect(virt.mounts).toBe(1)
-  })
-
-  it('SKL-3 视图很快到、列表迟迟没定位好：骨架盖在已经挂上的列表上，定位好且留满 250ms 才撤', () => {
+  it('LB-2 视图到了、列表也在 100ms 内定位好：进度条还没露面，直接摘掉，不淡出', () => {
     render(S1)
     advance(50)
     loadView(S1, history(S1))
     expect(virt.mounts).toBe(1)
-    advance(349)
-    expect(skeletonPresent()).toBe(false)
-    advance(1)
-    expect(skeletonPresent()).toBe(true)
-    expect(stubPresent()).toBe(true)
-
-    advance(100)
+    advance(49)
     land()
-    advance(149)
-    expect(skeletonPresent()).toBe(true)
-    advance(1)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
+    advance(0)
+    expect(barInDom()).toBe(false)
     expect(virt.mounts).toBe(1)
   })
 
-  it('SKL-4 骨架上屏后视图才到：列表当场在骨架下面挂上（不等骨架撤），落在真底，只挂一次', () => {
+  it('LB-3 视图很快到、列表迟迟没定位好：进度条叠在已经挂上的列表上，定位好就淡出', () => {
     render(S1)
-    advance(400)
+    advance(50)
+    loadView(S1, history(S1))
+    expect(virt.mounts).toBe(1)
+    advance(150)
+    expect(barShown()).toBe(true)
+    expect(stubPresent()).toBe(true)
+
+    land()
+    expect(barShown()).toBe(false)
+    expect(virt.mounts).toBe(1)
+  })
+
+  it('LB-4 进度条出现后视图才到：列表当场挂上，落在真底，只挂一次；定位好才淡出', () => {
+    render(S1)
+    advance(100)
     advance(10)
     loadView(S1, history(S1))
-    expect(skeletonPresent()).toBe(true)
+    expect(barShown()).toBe(true)
     expect(virt.mounts).toBe(1)
     expect(virt.mountProps[0].initialTopMostItemIndex).toEqual(LIST_BOTTOM)
     expect(virt.mountProps[0].data.map((item) => item.msg.id)).toEqual(history(S1).map((m) => m.id))
 
     land()
-    advance(239)
-    expect(skeletonPresent()).toBe(true)
-    advance(1)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
     expect(virt.mounts).toBe(1)
   })
 
-  it('SKL-5 骨架已经留够：列表一定位好就撤，不再多等', () => {
+  it('LB-5 淡出 150ms 后离开 DOM，之后不再回来', () => {
     render(S1)
-    advance(400)
-    advance(1000)
+    advance(100)
     loadView(S1, history(S1))
     land()
-    advance(0)
-    expect(skeletonPresent()).toBe(false)
+    expect(barInDom()).toBe(true)
+    advance(149)
+    expect(barInDom()).toBe(true)
+    advance(1)
+    expect(barInDom()).toBe(false)
+    advance(2000)
+    expect(barInDom()).toBe(false)
   })
 
-  it('SKL-15 初始定位不在底部（日历跳到中间）：列表自己揭开，骨架不等它，也不盖住「回到底部」', () => {
+  it('LB-15 初始定位不在底部（日历跳到中间）：列表自己揭开，进度条不等它，也不盖住「回到底部」', () => {
     loadView(S1, history(S1))
     request(S1, `${S1}-u2`)
     render(S1)
     expect(virt.mountProps[0].initialTopMostItemIndex).toEqual({ index: 2, align: 'start' })
     advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-16 初始定位不在底部、骨架已经上屏：留满 250ms 就撤，不等宽限期', () => {
+  it('LB-16 初始定位不在底部、进度条已经出现：立刻淡出，不等宽限期', () => {
     render(S1)
-    advance(400)
+    advance(100)
     request(S1, `${S1}-u2`)
     loadView(S1, history(S1))
     expect(virt.mountProps[0].initialTopMostItemIndex).toEqual({ index: 2, align: 'start' })
-    expect(skeletonPresent()).toBe(true)
-    advance(250)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-6 列表一直量不到贴底（窗口在后台）：过了 800ms 宽限期也撤', () => {
+  it('LB-6 列表一直量不到贴底（窗口在后台）：过了 800ms 宽限期也淡出', () => {
     render(S1)
     loadView(S1, history(S1))
     advance(799)
-    expect(skeletonPresent()).toBe(true)
+    expect(barShown()).toBe(true)
     advance(1)
-    advance(0)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-7 等来的是一条空会话：骨架留满后是空态，不挂列表', () => {
+  it('LB-7 等来的是一条空会话：进度条淡出，当场是空态，不挂列表', () => {
     render(S1)
-    advance(400)
+    advance(100)
+    expect(barShown()).toBe(true)
     loadView(S1, [])
-    advance(249)
-    expect(skeletonPresent()).toBe(true)
-    advance(1)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
     expect(emptyPresent()).toBe(true)
     expect(virt.mounts).toBe(0)
   })
 
-  it('SKL-8 换会话：骨架不带过去，计时从头来；切回来也一样', () => {
+  it('LB-8 换会话：淡出不带过去，计时从头来', () => {
     render(S1)
-    advance(400)
-    expect(skeletonPresent()).toBe(true)
+    advance(100)
+    loadView(S1, history(S1))
+    land()
+    expect(barShown()).toBe(false)
 
+    act(() => useChatStore.getState().setActiveSessionId(S2))
     render(S2)
-    expect(skeletonPresent()).toBe(false)
-    advance(399)
-    expect(skeletonPresent()).toBe(false)
-    advance(1)
-    expect(skeletonPresent()).toBe(true)
-
-    render(S1)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(true)
+    advance(50)
+    loadView(S2, [])
+    expect(barShown()).toBe(false)
+    // S2 才过了 50ms，还没露面：直接摘掉。计时要是带着 S1 的，这里会走淡出
+    advance(0)
+    expect(barInDom()).toBe(false)
   })
 
-  it('SKL-9 运行中的余项、视图迟迟不到：画骨架，不是孤零零的流式占位', () => {
+  it('LB-9 运行中的余项、视图迟迟不到：出进度条，不是孤零零的流式占位', () => {
     act(() => useChatStore.getState().markSessionRunning(S1, true))
     render(S1)
-    advance(400)
-    expect(skeletonPresent()).toBe(true)
+    advance(100)
+    expect(barShown()).toBe(true)
     expect(virt.mounts).toBe(0)
   })
 
-  it('SKL-10 骨架显示中发出第一句话：列表带着这句话挂上，骨架留满就撤，不等定位', () => {
+  it('LB-10 进度条显示中发出第一句话：列表带着这句话挂上，进度条不等定位就淡出', () => {
     render(S1)
-    advance(400)
+    advance(100)
+    expect(barShown()).toBe(true)
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     expect(virt.mountProps[0].data.map((item) => item.msg.id)).toContain('pending-prompt')
-    advance(249)
-    expect(skeletonPresent()).toBe(true)
-    advance(1)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-11 打开时是空会话，之后发第一句话：不算打开，骨架不出现', () => {
+  it('LB-23 淡出途中又有历史要等（发第一句话时视图带着历史到了）：进度条回来，定位好才再淡出', () => {
+    render(S1)
+    advance(100)
+    act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    expect(barShown()).toBe(false)
+    advance(100)
+    loadView(S1, history(S1))
+    expect(barShown()).toBe(true)
+    advance(600)
+    expect(barInDom()).toBe(true)
+  })
+
+  it('LB-11 打开时是空会话，之后发第一句话：不算打开，进度条不出现', () => {
     render(S1)
     loadView(S1, [])
     expect(emptyPresent()).toBe(true)
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     expect(virt.mounts).toBe(1)
     advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-17 欢迎页发第一句话（视图没到，只有乐观占位）：列表迟迟没定位好也不画骨架，视图带着这句话到了也不画', () => {
+  it('LB-17 欢迎页发第一句话（视图没到，只有乐观占位）：列表迟迟没定位好也不出进度条', () => {
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     render(S1)
     expect(virt.mounts).toBe(1)
     advance(600)
-    expect(skeletonPresent()).toBe(false)
+    expect(barInDom()).toBe(false)
+  })
+
+  it('LB-24 第一句话发出之后视图才带着这句话到：不算打开，进度条不出现', () => {
+    act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
+    render(S1)
+    advance(100)
     loadView(S1, history(S1))
-    advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    advance(500)
+    expect(barInDom()).toBe(false)
     expect(virt.mounts).toBe(1)
   })
 
-  it('SKL-18 视图到了、还没有消息，同时正发着第一句话：没有历史，不画骨架', () => {
+  it('LB-18 视图到了、还没有消息，同时正发着第一句话：没有历史，不出进度条', () => {
     loadView(S1, [])
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     render(S1)
     expect(virt.mounts).toBe(1)
     advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-19 视图到了、没有消息、已经在跑（从主进程发起的新会话）：没有历史，不画骨架', () => {
+  it('LB-19 视图到了、没有消息、已经在跑（从主进程发起的新会话）：没有历史，不出进度条', () => {
     loadView(S1, [], true)
     render(S1)
     expect(virt.mounts).toBe(1)
     advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-20 从没发过消息的会话、视图迟迟不到：一直不画骨架，也不画空态；视图到了是空态', () => {
+  it('LB-20 从没发过消息的会话、视图迟迟不到：一直不出进度条，也不画空态；视图到了是空态', () => {
     setRow(S1, { createdAt: 1000, lastActiveAt: 1000 })
     render(S1)
+    expect(barInDom()).toBe(false)
     advance(2000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
     expect(emptyPresent()).toBe(false)
     loadView(S1, [])
     expect(emptyPresent()).toBe(true)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-21 发过消息的会话、视图迟迟不到：照常画骨架', () => {
+  it('LB-21 发过消息的会话、视图迟迟不到：照常出进度条', () => {
     setRow(S1, { createdAt: 1000, lastActiveAt: 1001 })
     render(S1)
-    advance(400)
-    expect(skeletonPresent()).toBe(true)
+    advance(100)
+    expect(barShown()).toBe(true)
   })
 
-  it('SKL-22 会话行说没发过消息、视图却带着历史到了（fork）：不补画骨架，列表照常挂上', () => {
+  it('LB-22 会话行说没发过消息、视图却带着历史到了（fork）：不补出进度条，列表照常挂上', () => {
     setRow(S1, { createdAt: 1000, lastActiveAt: 1000 })
     render(S1)
     advance(600)
     loadView(S1, history(S1))
     expect(virt.mounts).toBe(1)
     advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
   })
 
-  it('SKL-12 订阅失败：骨架留满后换成失败提示，不画空态', () => {
+  it('LB-12 订阅失败：进度条淡出，当场是失败提示，不画空态', () => {
     render(S1)
-    advance(400)
+    advance(100)
+    expect(barShown()).toBe(true)
     act(() => markSessionViewFailed(S1, true))
-    expect(skeletonPresent()).toBe(true)
-    advance(250)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
     expect(failedPresent()).toBe(true)
     expect(emptyPresent()).toBe(false)
     expect(virt.mounts).toBe(0)
   })
 
-  it('SKL-13 订阅在 400ms 内就失败：直接是失败提示，骨架不出现', () => {
+  it('LB-13 订阅在 100ms 内就失败：直接是失败提示，进度条不出现', () => {
     render(S1)
     act(() => markSessionViewFailed(S1, true))
     expect(failedPresent()).toBe(true)
     advance(1000)
-    expect(skeletonPresent()).toBe(false)
+    expect(barShown()).toBe(false)
     expect(failedPresent()).toBe(true)
   })
 
-  it('SKL-14 视图在、失败标记也在：照常是列表，不是失败提示', () => {
+  it('LB-14 视图在、失败标记也在：照常是列表，不是失败提示', () => {
     act(() => markSessionViewFailed(S1, true))
     loadView(S1, history(S1))
     render(S1)

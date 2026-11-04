@@ -1,14 +1,14 @@
 /**
  * 打开一条有记录的会话：空态（会话设置面板）一次都不出现，等视图到了直接是消息（chat-ui Conversation 的空态门）。
  * 从前只看「消息是空的」，而视图到达之前消息本来就是空的，于是每次切会话都先闪一下设置面板。
- * 消息上屏得慢时画骨架（ConversationSkeleton）：过 400ms 才出现，出现了至少留 250ms，消息可见了才撤。
+ * 加载历史时有顶部细进度条（ConversationLoadBar）：打开就挂上，过 100ms 才露面，消息可见了就淡出。
  *
- *   OPEN-1 两条有记录的会话来回切：每次 DOM 提交都没有空态，目标会话的消息最终上屏；不到 400ms 就上屏的那几次没有骨架
+ *   OPEN-1 两条有记录的会话来回切：每次 DOM 提交都没有空态，目标会话的消息最终上屏
  *   OPEN-2 从欢迎页（没有当前会话）打开：同上
  *   OPEN-3 停在有记录的会话上重载窗口：同上（整个页面从头来，看守脚本在页面脚本之前装好）
  *   OPEN-4 真正的空会话：空态照常出现并留在那里
  *   OPEN-6 长会话：第一次可见时已经停在底部，之后不跳（列表在 Virtuoso 的定时器之前就揭开，见 ConversationList）
- *   OPEN-5 视图迟到（主进程停住 900ms，真的一个视图都到不了）：空白 → 骨架 → 消息，骨架铺满对话区、不压输入卡片
+ *   OPEN-5 视图迟到（主进程停住 900ms，真的一个视图都到不了）：空白 → 进度条 → 消息，进度条是贴在对话区顶上的 2px 细线，真的在动
  *
  * 判据用 MutationObserver 而不是截帧：它看得到每一次提交，窗口在不在前台都一样，闪一帧也漏不掉。
  */
@@ -28,8 +28,8 @@ const LONG_ANSWER = Array.from(
   (_, i) => `paragraph ${i + 1}: the quick brown fox jumps over the lazy dog in the afternoon sun.`
 ).join('\n\n')
 const EMPTY = '[data-conversation-empty]'
-const SKELETON = '[data-conversation-skeleton]'
-/** 主进程停多久：远超骨架的 400ms + 250ms，骨架非出现不可 */
+const LOAD_BAR = '[data-conversation-load-bar]'
+/** 主进程停多久：远超进度条的 100ms，进度条非露面不可 */
 const STALL_MS = 900
 
 let app: E2EApp
@@ -41,7 +41,7 @@ const ids: Record<string, string[]> = {}
 
 /** 在页面里记下每次 DOM 提交时空态在不在、目标消息第一次上屏的时刻（幂等：页面脚本之前装也行） */
 const WATCH = `(() => {
-  window.__openWatch = { emptyCommits: 0, targets: [], t0: 0, shownAt: 0, skeletonAt: 0, skeletonGoneAt: 0, fit: null, firstDist: 0, maxDist: 0 }
+  window.__openWatch = { emptyCommits: 0, targets: [], t0: 0, shownAt: 0, barAt: 0, barGoneAt: 0, fit: null, firstDist: 0, maxDist: 0 }
   const distToBottom = () => {
     const s = document.querySelector('[data-virtuoso-scroller]')
     return s ? s.scrollHeight - s.scrollTop - s.clientHeight : 0
@@ -49,22 +49,6 @@ const WATCH = `(() => {
   const scan = () => {
     const w = window.__openWatch
     if (document.querySelector(${JSON.stringify(EMPTY)})) w.emptyCommits++
-    const skeleton = document.querySelector(${JSON.stringify(SKELETON)})
-    if (skeleton && !w.skeletonAt) {
-      w.skeletonAt = performance.now()
-      const area = skeleton.getBoundingClientRect()
-      const inputHeight = parseFloat(getComputedStyle(skeleton).paddingBottom)
-      const inner = skeleton.firstElementChild
-      const column = inner.getBoundingClientRect()
-      const bars = skeleton.querySelectorAll('.rounded')
-      w.fit = {
-        filled: column.top <= area.top,
-        lastBarBottom: bars[bars.length - 1].getBoundingClientRect().bottom,
-        inputTop: area.bottom - inputHeight,
-        pulsing: getComputedStyle(inner).animationName !== 'none'
-      }
-    }
-    if (!skeleton && w.skeletonAt && !w.skeletonGoneAt) w.skeletonGoneAt = performance.now()
     // 可见才算上屏：列表定位好之前 Virtuoso 把内容藏着（visibility: hidden）
     const visible = (id) => {
       const el = document.querySelector('[data-msg-id=' + JSON.stringify(id) + ']')
@@ -79,15 +63,54 @@ const WATCH = `(() => {
   }
   new MutationObserver(scan).observe(document, { childList: true, subtree: true, attributes: true })
   document.addEventListener('scroll', scan, { capture: true, passive: true })
+  // 进度条露面没有 DOM 变化（CSS 动画管的），逐帧看
+  const watchBar = () => {
+    const w = window.__openWatch
+    const bar = document.querySelector(${JSON.stringify(LOAD_BAR)})
+    if (bar) {
+      const segment = bar.firstElementChild
+      if (w.t0 && !w.barAt && getComputedStyle(segment).opacity === '1') {
+        w.barAt = performance.now()
+        const area = bar.getBoundingClientRect()
+        const column = bar.parentElement.getBoundingClientRect()
+        const line = segment.getBoundingClientRect()
+        w.fit = {
+          atTop: area.top === column.top,
+          fullWidth: area.width === column.width,
+          height: area.height,
+          // 从屏外滑进来就来不及露面了：露面时整段线都该在屏内
+          lineOnScreen: Math.min(line.right, area.right) - Math.max(line.left, area.left) >= line.width * 0.9,
+          // getAnimations 只认真的跑起来的动画：keyframes 不存在时只有 animationName 还在，这里是空的
+          moving: segment.getAnimations().some((a) => a.animationName === 'conversation-load-slide'),
+          // 露面要保持住（forwards）：否则主线程被渲染占住时合成线程退回透明度 0，等得最久的打开反而看不到。
+          // 录帧才看得出这个差别，这里钉住写法
+          revealHeld: segment
+            .getAnimations()
+            .some(
+              (a) => a.animationName === 'conversation-load-reveal' && a.effect.getTiming().fill === 'forwards'
+            )
+        }
+      }
+    } else if (w.barAt && !w.barGoneAt) w.barGoneAt = performance.now()
+    requestAnimationFrame(watchBar)
+  }
+  requestAnimationFrame(watchBar)
 })()`
 
 interface WatchShot {
   emptyCommits: number
   shownAt: number
   t0: number
-  skeletonAt: number
-  skeletonGoneAt: number
-  fit: { filled: boolean; lastBarBottom: number; inputTop: number; pulsing: boolean } | null
+  barAt: number
+  barGoneAt: number
+  fit: {
+    atTop: boolean
+    fullWidth: boolean
+    height: number
+    lineOnScreen: boolean
+    moving: boolean
+    revealHeld: boolean
+  } | null
   firstDist: number
   maxDist: number
 }
@@ -101,8 +124,8 @@ const arm = (targets: string[]): Promise<boolean> =>
         targets: ${JSON.stringify(targets)},
         t0: performance.now(),
         shownAt: 0,
-        skeletonAt: 0,
-        skeletonGoneAt: 0,
+        barAt: 0,
+        barGoneAt: 0,
         fit: null,
         firstDist: 0,
         maxDist: 0
@@ -113,8 +136,8 @@ const arm = (targets: string[]): Promise<boolean> =>
 
 const shot = (): Promise<WatchShot> =>
   app.main.eval<WatchShot>(`(() => {
-    const { emptyCommits, shownAt, t0, skeletonAt, skeletonGoneAt, fit, firstDist, maxDist } = window.__openWatch
-    return { emptyCommits, shownAt, t0, skeletonAt, skeletonGoneAt, fit, firstDist, maxDist }
+    const { emptyCommits, shownAt, t0, barAt, barGoneAt, fit, firstDist, maxDist } = window.__openWatch
+    return { emptyCommits, shownAt, t0, barAt, barGoneAt, fit, firstDist, maxDist }
   })()`)
 
 const hasMessage = (targets: string[]): Promise<boolean> =>
@@ -129,8 +152,6 @@ async function openWithHistory(title: string, sid: string): Promise<number> {
   await until(async () => (await shot()).shownAt > 0, `${title}: messages on screen`)
   const seen = await shot()
   expect(seen.emptyCommits).toBe(0)
-  // 上屏得比骨架的 400ms 还早：骨架不能出现（这次慢不慢由机器定，只有快的那几次才能这么断言）
-  if (seen.shownAt - seen.t0 < 390) expect(seen.skeletonAt).toBe(0)
   return seen.shownAt - seen.t0
 }
 
@@ -248,9 +269,14 @@ describe('长会话', () => {
 })
 
 describe('视图迟到', () => {
-  it('OPEN-5 主进程停住：空白 → 骨架 → 消息；骨架铺满对话区、不压输入卡片、留够 250ms', async () => {
+  it('OPEN-5 主进程停住：空白 → 进度条 → 消息；进度条贴顶、2px、在动，消息可见后很快就走', async () => {
     expect(await sidebar.openSession(TITLES.b)).toBe(true)
     await until(() => hasMessage(ids[sids.b]), 'b: messages on screen first')
+    // 上一次打开的进度条可能还在淡出：等它走了再布防，不然记到的是它
+    await until(
+      () => app.main.eval<boolean>(`!document.querySelector(${JSON.stringify(LOAD_BAR)})`),
+      'b: load bar gone'
+    )
     await arm(ids[sids.a])
     expect(await sidebar.clickSessionAfter(TITLES.a, 30)).toBe(true)
     // 主进程停着 CDP 也不通：这段时间里的事全由页面里的看守记下，恢复之后再读
@@ -261,25 +287,32 @@ describe('视图迟到', () => {
       process.kill(app.pid, 'SIGCONT')
     }
     await until(async () => (await shot()).shownAt > 0, 'messages on screen after the stall')
+    // 消息可见了进度条才开始淡出：等它走完再读
+    await until(async () => (await shot()).barGoneAt > 0, 'load bar gone after the messages')
     const seen = await shot()
     console.log(
-      `[OPEN-5] click → skeleton ${(seen.skeletonAt - seen.t0).toFixed(0)}ms, ` +
-        `skeleton → gone ${(seen.skeletonGoneAt - seen.skeletonAt).toFixed(0)}ms, ` +
+      `[OPEN-5] click → bar ${(seen.barAt - seen.t0).toFixed(0)}ms, ` +
+        `bar → gone ${(seen.barGoneAt - seen.barAt).toFixed(0)}ms, ` +
         `click → messages ${(seen.shownAt - seen.t0).toFixed(0)}ms`
     )
     expect(seen.emptyCommits).toBe(0)
-    // 400ms 之前没有骨架（看守从布防算起，点击又晚 30ms）
-    expect(seen.skeletonAt - seen.t0).toBeGreaterThanOrEqual(400)
-    // 主进程停着的时候骨架已经在屏上了：不是恢复之后才画的
-    expect(seen.skeletonAt - seen.t0).toBeLessThan(STALL_MS)
-    expect(seen.skeletonGoneAt - seen.skeletonAt).toBeGreaterThanOrEqual(240)
-    // 骨架撤的时候消息已经可见：没有「骨架 → 又一段空白 → 消息」
-    expect(seen.shownAt).toBeLessThanOrEqual(seen.skeletonGoneAt)
-    expect(seen.fit?.filled).toBe(true)
-    expect(seen.fit?.pulsing).toBe(true)
-    expect(seen.fit!.lastBarBottom).toBeLessThanOrEqual(seen.fit!.inputTop)
+    // 100ms 之前不露面（看守从布防算起，点击又晚 30ms）
+    expect(seen.barAt - seen.t0).toBeGreaterThanOrEqual(100)
+    // 主进程停着的时候进度条已经在屏上了：不是恢复之后才画的
+    expect(seen.barAt - seen.t0).toBeLessThan(STALL_MS)
+    // 消息先可见，进度条再走，而且走得快：它不拖着内容，也不在内容出来之后赖着
+    expect(seen.shownAt).toBeLessThanOrEqual(seen.barGoneAt)
+    expect(seen.barGoneAt - seen.shownAt).toBeLessThan(500)
+    expect(seen.fit).toEqual({
+      atTop: true,
+      fullWidth: true,
+      height: 2,
+      lineOnScreen: true,
+      moving: true,
+      revealHeld: true
+    })
     expect(
-      await app.main.eval<boolean>(`!document.querySelector(${JSON.stringify(SKELETON)})`)
+      await app.main.eval<boolean>(`!document.querySelector(${JSON.stringify(LOAD_BAR)})`)
     ).toBe(true)
   })
 })

@@ -201,6 +201,39 @@ span.sb-icon {
   background-clip: padding-box;
   border-radius: 9px 3px 3px 9px / 3px;
 }
+/*
+ * 加载会话历史时的顶部细进度条（chat-ui ConversationLoadBar）：一段 30% 宽的线从左滑到右。
+ * 挂上后先藏 100ms（与 LOAD_BAR_DELAY_MS 一致），滑动提前 300ms 起步，露面时整段线已经在屏内，
+ * 否则从屏外滑进来要两三百毫秒，消息很快就好的打开什么也看不到。
+ * reveal 要 forwards：主线程被渲染占住时全靠合成线程，动画一结束就退回主线程上次提交的透明度（0），
+ * 实测整段长任务里都露不出来
+ */
+@keyframes conversation-load-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes conversation-load-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(333.34%);
+  }
+}
+.conversation-load-segment {
+  animation:
+    conversation-load-reveal 100ms step-end forwards,
+    conversation-load-slide 1.2s ease-in-out -300ms infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .conversation-load-segment {
+    animation: conversation-load-reveal 100ms step-end forwards;
+  }
+}
 /* 「回到底部」按钮的运行指示：三点依次放大变亮，一道波从左扫到右（chat-ui ScrollToBottomButton） */
 @keyframes scroll-dot-wave {
   0%,

@@ -25,7 +25,7 @@ import { StreamingFooter } from './StreamingFooter'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
-import { ViewLoadGate } from './ConversationSkeleton'
+import { ViewLoadGate } from './ConversationLoadBar'
 
 /** Virtuoso Footer：流式指示器 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
 function ConversationFooter(): React.JSX.Element {
@@ -130,7 +130,7 @@ interface MessageListProps {
    * 正文按滚动容器的内容区居中，悬浮在列表上的输入卡片与「回到底部」按钮要据此让出同一条，三者才同一根中线
    */
   onScrollbarWidthChange: (px: number) => void
-  /** 消息已经可见（量到贴底，或过了宽限期）：外面的骨架可以撤了 */
+  /** 消息已经可见（量到贴底，或过了宽限期）：外面的进度条可以撤了 */
   onLanded: () => void
 }
 
@@ -176,7 +176,7 @@ function MessageList({
     const el = scrollerRef.current
     if (!el || hasLanded(el)) setLanded(true)
   }, [])
-  // 初始定位不在底部（日历跳到中间）：不会有贴底那一刻，列表由 Virtuoso 自己揭开，不让骨架等它，也不盖住它
+  // 初始定位不在底部（日历跳到中间）：不会有贴底那一刻，列表由 Virtuoso 自己揭开，进度条不等它
   const startsAtBottom = initial.location === LIST_BOTTOM
   useEffect(() => {
     if (landed || !startsAtBottom) onLanded()
@@ -425,7 +425,7 @@ export function Conversation({
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
     [sessionId, messages]
   )
-  // 列表与空态都等这条会话的视图到了再画（历史久久没上屏就画骨架，见 ViewLoadGate）。视图到达之前 messages 是空的，
+  // 列表与空态都等这条会话的视图到了再画（历史久久没上屏就出进度条，见 ViewLoadGate）。视图到达之前 messages 是空的，
   // 这个「空」不说明任何事：画空态，每次打开有记录的会话都会先闪一下空态（桌面是整张会话设置面板）。
   // 也可能已经有东西要画：运行中的会话退订时留下「还在跑」的余项（isStreaming，见 releaseSessionView），
   // 切回来就是一张孤零零的流式占位卡。那时挂上列表，初始定位落在这一项上；等真消息到了，初始定位早已用掉，
@@ -433,15 +433,15 @@ export function Conversation({
   // 乐观占位例外：那是刚建、还没有历史的会话，没有「底部」可找，刚发出的那句话也不能等后端
   const viewLoaded = useChatStore((s) => s.sessionViews[sessionId] !== undefined)
   const listReady = viewLoaded || !!pendingPrompt
-  // 订阅失败不重试（useSessionView），视图不会来了：不能让骨架一直转下去
+  // 订阅失败不重试（useSessionView），视图不会来了：不能让进度条一直走下去
   const viewFailed = useChatStore((s) => !!s.sessionViewFailed[sessionId])
   // 空态只在**真的什么都没有**时才顶上：乐观占位也算内容 —— 漏掉它，「新会话第一条消息」
   // 与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
   // messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病
   const isEmpty = messages.length === 0 && !isStreaming && !pendingPrompt
-  // 有没有历史要等，骨架只为它出现。视图到了看消息；视图没到只能看别的：正发着第一句话（乐观占位）是刚建的会话，
+  // 有没有历史要等，进度条只为它出现。视图到了看消息；视图没到只能看别的：正发着第一句话（乐观占位）是刚建的会话，
   // 会话行的 lastActiveAt 还停在建行那一刻则是没发过消息，等来的也是空态。fork、内存会话、Chrome 标签页会话
-  // 有历史也可能停在那一刻：这几种视图迟到时是一段空白，而不是骨架
+  // 有历史也可能停在那一刻：这几种视图迟到时是一段没有进度条的空白
   const neverUsed = useChatStore((s) => {
     const row = s.sessions.find((session) => session.id === sessionId)
     return row !== undefined && row.lastActiveAt === row.createdAt
