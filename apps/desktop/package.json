@@ -159,7 +159,7 @@
     "dayjs": "1.11.23",
     "dompurify": "3.4.17",
     "electron": "^39.8.2",
-    "electron-builder": "^26.0.12",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^5.0.0",
     "eslint": "^9.39.1",
     "eslint-import-resolver-typescript": "^4.4.4",

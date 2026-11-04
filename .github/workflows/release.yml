@@ -96,6 +96,11 @@ jobs:
       - name: Check each package carries its own platform packages
         run: node .github/scripts/check-packaged-natives.mjs apps/desktop/dist ${{ matrix.platform == 'mac' && 'darwin' || 'win32' }}
 
+      # 安装时解压用的 Nsis7z 读不了的过滤器会让它悄悄跳过文件（arm64 安装包曾经装不上 exe 和 dll），解包目录看不出来
+      - name: Check the Windows installers can extract every file
+        if: matrix.platform == 'win'
+        run: node .github/scripts/check-nsis-payload.mjs apps/desktop/dist
+
       # macOS 公证（提交后轮询结果，避免 --wait 超时导致失败）
       - name: Notarize macOS app
         if: matrix.platform == 'mac' && env.HAS_APPLE_CERTS == 'true'
