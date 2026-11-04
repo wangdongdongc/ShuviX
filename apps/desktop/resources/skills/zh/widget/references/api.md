@@ -57,7 +57,7 @@ export default defineApi({
 - **`op.read`** 从不改动数据：它的语句在只读连接上运行，会写入的语句会被拒绝。**`op.write`** 改动数据；它提交时，小组件每个打开着的副本都会重新获取数据。
 - **名称**用 camelCase 的动词 + 名词（`addBook`、`listBooks`），最多 48 个字符。
 - **`description`** 是写给将要调用它的智能体看的：它做什么、什么时候用、调用两次会怎样。关于这个操作，智能体看不到别的任何东西。
-- **`input`** 是一个 `z.object(...)`；用用户的说法（用户按书名来想时用 `title`，而不是 `bookId`），在显而易见的地方给缺省值，把 schema 表达不了的约束写进 `.describe()`。`z.date()`、`z.bigint()` 和 `z.map()` 无法向智能体描述，会让构建失败：日期用 ISO 字符串传。
+- **`input`** 是一个 `z.object(...)`；用用户的说法（用户按书名来想时用 `title`，而不是 `bookId`），在显而易见的地方给缺省值，把 schema 表达不了的约束写进 `.describe()`。`z.date()`、`z.bigint()` 和 `z.map()` 无法向智能体描述，会让构建失败：日期用 ISO 字符串传。递归的 schema 和 `.meta({ id })` 也会让构建失败，因为工具声明带不了 schema 引用。每个操作都会成为一个名为 `mcp__widget-<id>__<op>` 的工具，最长 64 个字符：id 长的话，`op` 要起短一点。
 - **`output`**（可选）会和处理函数的返回值核对，并展示给智能体；凡是智能体要读的，都给它。
 - **`agent: false`** 让一个操作只供界面使用（布局、显示偏好）。用户对自己的记录做的一切，都要让智能体看得见。
 - **能幂等就幂等**：添加时已存在就更新而不是重复添加，直接设定值而不是来回切换。智能体会重试。
@@ -74,7 +74,7 @@ export default defineApi({
 | `ctx.db.tx(async (tx) => …)`               | 必须一起发生的多次写入：回调返回时提交，抛异常时回滚。在里面用 `tx`（而不是 `ctx.db`）。                                   |
 | `ctx.fail(code, message)`                  | 以一个界面和智能体都能看到的错误结束这次调用：`code` 是小写 snake_case（`title_taken`），`message` 说明应该改做什么。       |
 | `ctx.caller`                               | `{ kind: 'user' }` 或 `{ kind: 'agent', sessionId, actor }`，带一个 `label`，用来记录是谁做的。                            |
-| `ctx.now()`、`ctx.uuid()`、`ctx.log(...)`  | 当前时间（ISO 8601）、一个随机 UUID、一行日志（`call` 会显示它们）。                                                       |
+| `ctx.now()`、`ctx.uuid()`、`ctx.log(...)`  | 当前时间（ISO 8601）、一个随机 UUID、一行日志（`test` 会显示它们）。                                                       |
 
 语句只能是 `SELECT`、`WITH`、`INSERT`、`UPDATE`、`DELETE`、`REPLACE` 和 `VALUES`，每次调用一条。表通过 `sql` 改动（`data.md`），绝不在处理函数里改。`op.write` 的每条语句各自提交，除非它在 `ctx.db.tx` 里面。
 
@@ -109,9 +109,9 @@ function Books() {
 
 ## 测试
 
-绿色的 `build` 之后，用 `call` 调一遍你加的或改的每个操作：
+绿色的 `build` 之后，用 `test` 试一遍你加的或改的每个操作：
 
-- 写操作用 `dry_run: true`：调用真的会运行，它写入的一切随后都会回滚。只供界面使用的操作也能这样调用。
+- 调用真的会运行，它写入的一切随后都会回滚。只供界面使用的操作也能这样试。
 - 输入不对时返回 `invalid_args`，附带操作的输入 schema；`ctx.fail` 返回 `[code] message`；处理函数里的异常返回 `Widget operation failed: …`。
 
 然后用 `preview` 检查界面。

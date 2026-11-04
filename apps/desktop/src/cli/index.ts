@@ -4,7 +4,7 @@
  * 通过 ELECTRON_RUN_AS_NODE=1 在 Electron 二进制内以 node 模式运行（无新增运行时依赖）。
  * 入口 shell 包装脚本位于 resources/cli/shuvix{,.cmd}，由 bash 工具把 wrapper 所在目录
  * prepend 到 PATH，AI 直接 `shuvix task …` / `shuvix policy …` 即可。组件的命令（`shuvix widget …`）删掉了：
- * 组件的操作全部经 `widget` 工具（它知道是哪条会话、过会话的授权，见 tools/widget.ts）。
+ * 造组件经 `widget` 工具，用组件经它的 MCP 服务器（都知道是哪条会话、过会话的授权，见 tools/widget.ts）。
  *
  * 职责：
  *   1. 解析 argv
@@ -78,7 +78,7 @@ function printUsage(): void {
 /** `shuvix widget …` 删掉了：说清楚该用什么，别让 agent 以为是自己拼错了 */
 function widgetCommandRemoved(): never {
   process.stderr.write(
-    'shuvix widget was removed: widgets are used and built with the `widget` tool (actions list, describe, call, create, build, preview, sql, export, open).\n'
+    'shuvix widget was removed: widgets are built with the `widget` tool (actions list, create, build, test, preview, sql, export, open). Once a widget is turned on in a session, its operations are tools named mcp__widget-<id>__<operation>.\n'
   )
   process.exit(2)
 }

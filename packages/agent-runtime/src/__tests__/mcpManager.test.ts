@@ -15,6 +15,7 @@
  * 所以普通 await 照常推进，只有真超时才需要 advanceTimersByTimeAsync。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage, JSONRPCRequest } from '@modelcontextprotocol/sdk/types.js'
@@ -3297,5 +3298,202 @@ describe('McpManager.registrationsFromDeclarations：按快照建，用到才连
 
     await invokeTool(search, { q: 'x' })
     expect(h.last('a').toolCalls).toEqual([{ name: 'search', args: { q: 'x' } }])
+  })
+})
+
+// ─── 整台服务器退役（retireServer） ─────────────────────────────────────────
+//
+// 组件的 API 变了、组件归档 / 恢复 / 删除时，这台服务器的连接要换：后来的调用新开一条、重新列工具。在途的调用不能被掐断 ——
+// 它可能是一次已经提交的写，或者是别的会话里一张等人回答的询问卡片，`disconnect` 会让它们以「连接已关」失败。
+
+describe('McpManager.retireServer', () => {
+  const twoSessions = async (opts: FakeOpts = {}): Promise<Harness> => {
+    const h = setup([
+      sshRow(),
+      row({ id: 'other-id', name: 'other', type: 'inproc', isBuiltin: 1 })
+    ])
+    h.plan.set('ssh', { tools: [tool('exec')], ...opts })
+    h.plan.set('other', { tools: [tool('run')] })
+    await h.mgr.connect('ssh-id', { sessionId: 's1' })
+    await h.mgr.connect('ssh-id', { sessionId: 's2' })
+    await h.mgr.connect('other-id', { sessionId: 's1' })
+    return h
+  }
+
+  it('RET-1 所有会话的连接都摘下、空闲的当场关；别的服务器不动', async () => {
+    const h = await twoSessions()
+    h.mgr.retireServer('ssh-id')
+    await settle()
+
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(h.mgr.getStatus('ssh-id', 's2')).toBe('disconnected')
+    expect(h.mgr.declarationsOf('ssh', 's1')).toEqual([])
+    expect(released(h.lastFor('ssh', 's1'))).toBe(true)
+    expect(released(h.lastFor('ssh', 's2'))).toBe(true)
+    expect(h.mgr.getStatus('other-id', 's1')).toBe('connected')
+    expect(released(h.lastFor('other', 's1'))).toBe(false)
+  })
+
+  it('RET-2 在途的调用（一张等人回答的卡片、一次已提交的写）跑完才关：结果照常回来，最后一个落定才释放', async () => {
+    const h = await twoSessions({
+      holdCalls: 'reply',
+      callResult: { content: [{ type: 'text', text: 'committed' }] }
+    })
+    const t = h.lastFor('ssh', 's1')
+    const first = h.mgr.callTool('ssh-id#s1', 'exec', {})
+    const second = h.mgr.callTool('ssh-id#s1', 'exec', {})
+    await settle()
+    expect(t.heldCalls).toHaveLength(2)
+
+    h.mgr.retireServer('ssh-id')
+    await settle()
+    expect(released(t), '还有两个在途').toBe(false)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+
+    t.heldCalls[0].reply()
+    await expect(first).resolves.toMatchObject({ content: [{ type: 'text', text: 'committed' }] })
+    expect(released(t), '还有一个在途').toBe(false)
+
+    t.heldCalls[1].reply()
+    await expect(second).resolves.toMatchObject({ content: [{ type: 'text', text: 'committed' }] })
+    await settle()
+    expect(released(t)).toBe(true)
+    expect(rejections).toEqual([])
+  })
+
+  it('RET-3 退役之后的调用新开一条连接、重新列工具，不落在旧实例上', async () => {
+    const h = await twoSessions()
+    const old = h.lastFor('ssh', 's1')
+    h.mgr.retireServer('ssh-id')
+    await settle()
+
+    h.plan.set('ssh', { tools: [tool('exec'), tool('fresh')] })
+    const result = await h.mgr.callTool('ssh-id#s1', 'exec', { q: 'x' })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'handled by s1' }])
+    expect(h.madeFor('ssh', 's1')).toHaveLength(2)
+    expect(old.toolCalls).toEqual([])
+    expect(h.lastFor('ssh', 's1').toolCalls).toEqual([{ name: 'exec', args: { q: 'x' } }])
+    expect(h.mgr.declarationsOf('ssh', 's1').map((d) => d.name)).toEqual(['exec', 'fresh'])
+    // 另一条会话不被这次调用连累：它下一次用到才连
+    expect(h.madeFor('ssh', 's2')).toHaveLength(1)
+  })
+
+  it('RET-4 连接中退役：那次连接答「没连上」、不留条目、实例收掉；下一次连接正常', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')], hold: true })
+    const connecting = h.mgr.connect('ssh-id', { sessionId: 's1' })
+    await settle()
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connecting')
+
+    h.mgr.retireServer('ssh-id')
+    await settle()
+    h.lastFor('ssh', 's1').release()
+
+    expect(await connecting).toEqual({ ok: false })
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(released(h.lastFor('ssh', 's1'))).toBe(true)
+    expect(h.mgr.declarationsOf('ssh', 's1')).toEqual([])
+
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    expect(await h.mgr.connect('ssh-id', { sessionId: 's1' })).toEqual({ ok: true })
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+    expect(rejections).toEqual([])
+  })
+
+  it('RET-5 不认识的 id 什么也不做；退役两次只释放一次（第二次已经没有这条了）', async () => {
+    const h = await twoSessions()
+    h.mgr.retireServer('nobody')
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+
+    h.mgr.retireServer('ssh-id')
+    await settle()
+    const closes = h.lastFor('ssh', 's1').closeCalls
+    expect(closes).toBeGreaterThan(0)
+    h.mgr.retireServer('ssh-id')
+    await settle()
+    expect(h.lastFor('ssh', 's1').closeCalls).toBe(closes)
+  })
+})
+
+// ─── 一次 tools/call 等多久 ──────────────────────────────────────────────
+//
+// 进程内的服务器不设实际上限：询问卡片就停在 tools/call 里，而询问要一直等到有人回答（2026-11-02）。外面的服务器照旧。
+// fake timers 与 Node 一样把超过 2^31-1 的 delay 当成 1ms，所以这里也拦得住「上限写大了，当场超时」。
+
+describe('McpManager tools/call 的超时', () => {
+  const FIVE_MINUTES = 5 * 60 * 1000
+  const TEN_MINUTES = 10 * 60 * 1000
+
+  it('TO-1 进程内：等多久都不超时（一天之后放行照样拿到结果）；上限是 setTimeout 接受的最大值', async () => {
+    const callTool = vi.spyOn(Client.prototype, 'callTool')
+    const h = setup([sshRow()])
+    h.plan.set('ssh', {
+      tools: [tool('exec')],
+      holdCalls: 'reply',
+      callResult: { content: [{ type: 'text', text: 'answered' }] }
+    })
+    await h.mgr.connect('ssh-id', { sessionId: 's1' })
+
+    const call = h.mgr.callTool('ssh-id#s1', 'exec', {})
+    await settle()
+    expect(callTool.mock.calls[0]![2]).toMatchObject({
+      timeout: 2_147_483_647,
+      maxTotalTimeout: 2_147_483_647
+    })
+    expect(callTool.mock.calls[0]![2]).not.toHaveProperty('resetTimeoutOnProgress')
+
+    let settled = false
+    void call.finally(() => {
+      settled = true
+    })
+    await settle(24 * 60 * 60 * 1000)
+    expect(settled).toBe(false)
+
+    h.lastFor('ssh', 's1').heldCalls[0].reply()
+    await expect(call).resolves.toMatchObject({ content: [{ type: 'text', text: 'answered' }] })
+    callTool.mockRestore()
+  })
+
+  it.each([
+    ['http', row({ id: 'a-id', name: 'a' })],
+    ['stdio', row({ id: 'a-id', name: 'a', type: 'stdio', command: 'x', url: '' })]
+  ] as const)(
+    'TO-2 外面的服务器（%s）：5 分钟 + progress 刷新 + 10 分钟总上限，到点失败',
+    async (_l, server) => {
+      const callTool = vi.spyOn(Client.prototype, 'callTool')
+      const h = setup([server])
+      h.plan.set('a', { tools: [tool('search')], holdCalls: 'reply' })
+      await h.mgr.connect('a-id')
+
+      const signal = new AbortController().signal
+      const call = h.mgr.callTool('a-id', 'search', {}, signal)
+      const failed = expect(call).rejects.toThrow(/timed out/i)
+      await settle()
+      expect(callTool.mock.calls[0]![2]).toMatchObject({
+        timeout: FIVE_MINUTES,
+        resetTimeoutOnProgress: true,
+        maxTotalTimeout: TEN_MINUTES,
+        signal
+      })
+
+      await settle(FIVE_MINUTES + 1)
+      await failed
+      callTool.mockRestore()
+    }
+  )
+
+  it('TO-3 进程内的调用照样随 signal 立刻结束：没有上限不等于停不下来', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')], holdCalls: 'reply' })
+    await h.mgr.connect('ssh-id', { sessionId: 's1' })
+
+    const controller = new AbortController()
+    const call = h.mgr.callTool('ssh-id#s1', 'exec', {}, controller.signal)
+    const failed = expect(call).rejects.toBeDefined()
+    await settle()
+
+    controller.abort()
+    await failed
   })
 })

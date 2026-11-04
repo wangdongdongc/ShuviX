@@ -271,13 +271,13 @@ export async function assertSessionAccess(
  * 记住」记进权限表（persistWidgetGrant）。拒绝 / 取消 / 反馈时抛错，文案给模型。
  */
 export async function assertWidgetAccess(
-  ctx: ToolContext,
+  ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput' | 'agent' | 'agentOf'>,
   access: 'read' | 'write',
   object: WidgetObjectInput,
   opts: {
     toolCallId: string
     toolName: string
-    /** `widget` 工具的动作名（策略里的 tool.operation） */
+    /** `widget` 工具的动作名，组件的 MCP 服务器上是 `call`（策略里的 tool.operation） */
     operation: string
     owner?: CallOwner
     signal?: AbortSignal

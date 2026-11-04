@@ -363,7 +363,7 @@ describe('headless: a default instance (this computer only)', () => {
     expect(result.code, result.stderr).toBe(2)
     expect(result.stdout).toBe('')
     expect(result.stderr).toBe(
-      'shuvix widget was removed: widgets are used and built with the `widget` tool (actions list, describe, call, create, build, preview, sql, export, open).\n'
+      'shuvix widget was removed: widgets are built with the `widget` tool (actions list, create, build, test, preview, sql, export, open). Once a widget is turned on in a session, its operations are tools named mcp__widget-<id>__<operation>.\n'
     )
     expect(await pageTargets()).toStrictEqual([])
   })

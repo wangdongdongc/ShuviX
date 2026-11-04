@@ -182,6 +182,25 @@ describe('lock · reconfigure: what changes and how it is committed', () => {
     expect(await toolDeltaCount(await session.currentConversation())).toBe(2)
   })
 
+  it('RL-1b a tool the host omitted at creation stays out: the reconfigure recomputes the requested names but never brings it back', async () => {
+    const config = scenarioConfig()
+    const scenario = await scenarioW({ config })
+    const { t } = scenario
+    t.toolHost.transformResolved = (resolved) => ({ ...resolved, omitBuiltin: ['artifact'] })
+    const session = await lockedTurn(scenario)
+    expect(session.lock!.toolNames).not.toContain('artifact')
+
+    config.toolOverlay = [...OVERLAY, 'mcp:new']
+    expect(await reconfigure(session)).toMatchObject({ applied: true })
+
+    expect(session.lock!.toolNames).toContain('mcp__new__fresh')
+    expect(session.lock!.toolNames).not.toContain('artifact')
+    await sendNext(t, session)
+    const after = offered(t, 1)
+    expect(after).toContain('mcp__new__fresh')
+    expect(after).not.toContain('artifact')
+  })
+
   it('RL-2 removing a server: the next delta removes exactly its tools and adds nothing; the server is not touched', async () => {
     const { t, config, session } = await lockedW()
     const ctx = t.toolHost.mcp('ctx')

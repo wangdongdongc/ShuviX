@@ -352,6 +352,11 @@ export interface ResolvedAgentTools extends AgentToolSet {
   }[]
   /** 技能工具列出的技能（记进锁，重建时按它造技能工具） */
   skills?: readonly string[]
+  /**
+   * 档案写了、但这个 agent 用不上的内置工具（宿主按这次的解析结果判，比如缺它依赖的技能）：不进它的工具名单。
+   * 内置工具按会话装配一份，所以不能在 `buildBuiltinTools` 里滤
+   */
+  omitBuiltin?: readonly string[]
   /** 命令沙箱钉子（K8），记进锁；`shuvix.builtin` 按它重装 */
   sandboxed: boolean
 }

@@ -3768,6 +3768,48 @@ export function widgetAskPane(main: CdpClient): WidgetAskPane {
   }
 }
 
+/** `tool_search` 那张「开启扩展」卡（chat-ui ExtensionPreview）的快照 */
+export interface ExtensionAskShot {
+  /** 服务器名（`data-ask-extension`） */
+  server: string
+  /** 整块的文字 */
+  text: string
+  /** 组件才有的那一句（「能读，要改还会再问」）；别的来源是 null */
+  widgetLine: string | null
+  /** 第三方的来源那一行（命令行 / 主机）；组件和内置是 null */
+  sourceLine: string | null
+  /** 缓存那一句；没有 cacheLoss 是 null */
+  cacheLine: string | null
+  /** 策略角标 */
+  policy: string
+}
+
+export interface ExtensionAskPane {
+  shot(): Promise<ExtensionAskShot | null>
+}
+
+export function extensionAskPane(main: CdpClient): ExtensionAskPane {
+  const BOX = `document.querySelector('[data-pending-inputs] [data-ask-extension]')`
+  const text = (selector: string): string =>
+    `(box.querySelector(${JSON.stringify(selector)})?.textContent ?? '').trim() || null`
+  return {
+    shot: () =>
+      main.eval<ExtensionAskShot | null>(`(() => {
+        const box = ${BOX}
+        if (!box) return null
+        const card = box.closest('[data-ask-card]')
+        return {
+          server: box.getAttribute('data-ask-extension') ?? '',
+          text: (box.textContent ?? '').trim(),
+          widgetLine: ${text('[data-ask-extension-widget]')},
+          sourceLine: ${text('[data-ask-extension-source]')},
+          cacheLine: ${text('[data-ask-extension-cache]')},
+          policy: (card?.querySelector('[data-ask-policy]')?.textContent ?? '').trim()
+        }
+      })()`)
+  }
+}
+
 /** 「组件访问」卡里的一行 */
 export interface WidgetAccessRowShot {
   /** 行 id（`data-acl-entry`） */

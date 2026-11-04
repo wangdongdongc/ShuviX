@@ -275,6 +275,29 @@ describe('SpawnCoordinator · creation', () => {
     expect(d.t.registryOf('s1')!.snapshot().extension('shuvix.builtin')).toBe(builtinBefore)
   })
 
+  it('P2-03-05b the host omits a builtin for this agent: the request still has the name, the persona variables and the record do not', async () => {
+    const seen: Array<{ kind: string; toolNames: string[] }> = []
+    const d = await hostD({
+      host: {
+        promptVars: (ctx) => {
+          seen.push({ kind: ctx.kind, toolNames: [...ctx.toolNames] })
+          return { marker: 'M1' }
+        }
+      }
+    })
+    d.t.toolHost.transformResolved = (resolved) => ({ ...resolved, omitBuiltin: ['knowledge'] })
+    d.t.kit.queue(callAgent('aware', 'find X'), answer('found'), answer('done'))
+    expect(await d.session.submitUser('go')).toEqual({})
+
+    expect(d.t.toolHost.resolveCalls.at(-1)!.names).toEqual(['probe', 'knowledge'])
+    const child = seen.filter((entry) => entry.kind === 'spawned')
+    expect(child).toHaveLength(1)
+    expect(child[0]!.toolNames).toEqual(['probe'])
+    const C = d.outcomes[0]!.conversationId!
+    const record = await spawnedAgentRecordOf(d.session.harness, C, BG)
+    expect(record!.toolNames).toEqual(['probe'])
+  })
+
   it('P2-03-06 install, then submit: the child request offers exactly the profile tools on faux-1', async () => {
     const d = await hostD()
     const rootExtension = d.t.registryOf('s1')!.snapshot().extension('shuvix.agent.1')

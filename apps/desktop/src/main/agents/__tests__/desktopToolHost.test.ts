@@ -235,6 +235,7 @@ const DARWIN_BUILTINS = [
   'edit',
   'ask',
   'suggest',
+  'tool_search',
   'show_image',
   'git',
   'artifact',
@@ -509,8 +510,7 @@ describe('buildBuiltinTools', () => {
     expect(sessionOf.mock.calls).toEqual([['s2']])
   })
 
-  // 根 agent 的技能货架经会话级 ctx 交给每个内置工具：`widget` 据此决定讲不讲造组件的那组动作
-  // （货架 → 描述 / schema 那一半在 tools/__tests__/widgetTool.test.ts 的 WT4-TL-01）
+  // 根 agent 的技能货架经会话级 ctx 交给每个内置工具：`widget` 在没有 durable 调用时按它判断（WT4-TL-05）
   it.each([
     ['有 widget 技能', ['builtin:drawing', 'builtin:widget']],
     ['只有别的技能', ['builtin:drawing']],

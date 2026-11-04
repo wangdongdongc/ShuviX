@@ -23,6 +23,9 @@
  *   WC-S26 换过的组件、目录删不掉 → 不 drop、不删数据目录，记号留着
  *   WC-S27 删掉换过的组件、再 init 同一个 id → 新数据目录里没有记号、没有旧库
  *   WC-S28 删换过的组件时 dropWidgetSchema 拒绝 → 数据目录（连记号）照样已经删掉、账目没了
+ *   SC-1..8 onServerChanged（组件给 agent 的工具可能变了，它的 MCP 服务器要重新列）：绿色构建改了 API（生效之后、恰一次）、
+ *       api.ts 删了、老组件第一次带 API；同一个 hash、构建失败、没有 API → 不通知；归档 / 恢复各一次；删除在 onDeleted 之前；
+ *       build 把 id 交给编译（否则声明的检查悄悄不跑）
  *   WT4-PV-18 onDeleted：delete 之后每个监听者各收到一次 id（那时账目里已经没有它）；一个监听者抛错 → 一条 warn，后面的照样
  *       收到、数据照样删；退订之后不再收到；组件目录删不掉 → 谁都不通知
  */
@@ -553,6 +556,206 @@ describe('S-6 db-init / db-query / delete 按存储归属分流', () => {
 })
 
 // ────────────────────────────── WT4-PV-18 ──────────────────────────────
+
+describe('SC onServerChanged', () => {
+  const hashOf = (code: string): string =>
+    createHash('sha256').update(code, 'utf8').digest('hex').slice(0, 32)
+
+  const manifestWith = (ops: OpManifest[]): void => {
+    runtime.manifest.mockImplementation(async () => {
+      h.order.push('manifest')
+      return { ops, errors: [] }
+    })
+  }
+
+  /** 注册一个监听者，测试结束退订（监听者表是模块级的） */
+  const offs: Array<() => void> = []
+  const listen = (fn: (id: string) => void = () => {}): ReturnType<typeof vi.fn> => {
+    const listener = vi.fn(fn)
+    offs.push(widgetService.onServerChanged(listener))
+    return listener
+  }
+
+  afterEach(() => {
+    for (const off of offs.splice(0)) off()
+  })
+
+  it('SC-1 绿色构建改了 API：恰一次，带 id；通知时新快照已经生效', async () => {
+    seed({ apiTs: true })
+    seedSnapshot([opOf('old')], 'old-hash')
+    manifestWith([opOf('fresh')])
+    let seen: unknown
+    const listener = listen(() => {
+      seen = readApiSnapshot(ID)?.ops.map((op) => op.name)
+    })
+
+    await widgetService.build(ID)
+
+    expect(listener.mock.calls).toEqual([[ID]])
+    expect(seen).toEqual(['fresh'])
+  })
+
+  it('SC-1 第一次有 API（之前没有快照）也算', async () => {
+    seed({ apiTs: true })
+    manifestWith([opOf('fresh')])
+    const listener = listen()
+    await widgetService.build(ID)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('SC-2 编译出来的 hash 没变：不通知（别的会话的连接不白退役）', async () => {
+    seed({ apiTs: true })
+    seedSnapshot([opOf('same')], hashOf('BUNDLE-CODE'))
+    manifestWith([opOf('same')])
+    const listener = listen()
+
+    const out = await widgetService.build(ID)
+
+    expect(out.buildSuccess).toBe(true)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('SC-3 api.ts 删了（快照跟着删）：通知', async () => {
+    seed()
+    seedSnapshot([opOf('old')])
+    const listener = listen()
+    await widgetService.build(ID)
+    expect(readApiSnapshot(ID)).toBeNull()
+    expect(listener.mock.calls).toEqual([[ID]])
+  })
+
+  it('SC-3 没有 api.ts 也没有快照：不通知', async () => {
+    seed()
+    const listener = listen()
+    await widgetService.build(ID)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('SC-4 API 编译失败 / 界面构建失败：什么都没生效，不通知', async () => {
+    seed({ apiTs: true })
+    seedSnapshot([opOf('old')])
+    const listener = listen()
+
+    buildApi.mockResolvedValueOnce({ success: false, errors: ['api.ts:1:1: boom'] })
+    expect((await widgetService.build(ID)).buildSuccess).toBe(false)
+
+    manifestWith([opOf('fresh')])
+    h.ui = { success: false, errors: ['index.tsx: boom'] }
+    expect((await widgetService.build(ID)).buildSuccess).toBe(false)
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('SC-5 老组件第一次带 API：换成 SQLite 之后通知（这时它才有服务器）', async () => {
+    seed({ sqlite: false, apiTs: true })
+    manifestWith([opOf('fresh')])
+    let storage: unknown
+    const listener = listen(() => {
+      storage = widgetStorageOf(ID)
+    })
+    await widgetService.build(ID)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(storage).toBe('sqlite')
+  })
+
+  it('SC-6 归档、恢复各一次；通知时账目已经改了', () => {
+    seed()
+    const seen: Array<number | undefined> = []
+    const listener = listen((id) => {
+      seen.push(widgetRegistry.findById(id)?.archivedAt)
+    })
+
+    widgetService.setArchived(ID, true)
+    widgetService.setArchived(ID, false)
+
+    expect(listener.mock.calls).toEqual([[ID], [ID]])
+    expect(seen[0]).toBeGreaterThan(0)
+    expect(seen[1]).toBe(0)
+  })
+
+  it('SC-7 删除：恰一次，账目已经没了，在 onDeleted 的监听者之前', async () => {
+    seed()
+    const order: string[] = []
+    const changed = listen((id) => {
+      order.push(`changed:${widgetRegistry.findById(id) === undefined}`)
+    })
+    const offDeleted = widgetService.onDeleted(() => {
+      order.push('deleted')
+    })
+    try {
+      await widgetService.delete(ID)
+    } finally {
+      offDeleted()
+    }
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['changed:true', 'deleted'])
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'SC-7 组件目录删不掉：组件还在，不通知',
+    async () => {
+      seed()
+      const listener = listen()
+      chmodSync(h.root, 0o555)
+      try {
+        await widgetService.delete(ID)
+      } finally {
+        chmodSync(h.root, 0o755)
+      }
+      expect(widgetRegistry.findById(ID)).toBeDefined()
+      expect(listener).not.toHaveBeenCalled()
+    }
+  )
+
+  it('SC-7 一个监听者抛错：warn 一条，后面的照样收到；退订之后收不到', () => {
+    seed()
+    listen(() => {
+      throw new Error('listener broke')
+    })
+    const second = vi.fn()
+    const off = widgetService.onServerChanged(second)
+
+    widgetService.setArchived(ID, true)
+
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(
+      h.warn.mock.calls.filter((call) =>
+        String(call[0]).startsWith('widget server listener failed')
+      )
+    ).toEqual([[`widget server listener failed widget=${ID}: listener broke`]])
+
+    off()
+    widgetService.setArchived(ID, false)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('SC-8 build 把 id 交给编译：给 agent 看的操作声明不合格 → 构建失败（api.ts 的错误），快照不动，不通知', async () => {
+    seed({ apiTs: true })
+    seedSnapshot([opOf('old')])
+    const before = snapshotBytes()
+    manifestWith([opOf('bad', { input: { type: 'string' } })])
+    const listener = listen()
+
+    const out = await widgetService.build(ID)
+
+    expect(out.buildSuccess).toBe(false)
+    expect(out.buildErrors).toEqual([
+      'api.ts: Operation "bad": its input must be a z.object(...) so agents can call it.'
+    ])
+    expect(snapshotBytes()).toEqual(before)
+    expect(server.registerAndBuild).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('SC-8 工具名按这个组件的 id 算：同一个操作名，换个长 id 就放不下', async () => {
+    const longId = `long-${'x'.repeat(50)}`
+    seed({ id: longId, apiTs: true })
+    manifestWith([opOf('listEverything')])
+    const out = await widgetService.build(longId)
+    expect(out.buildSuccess).toBe(false)
+    expect(out.buildErrors![0]).toContain('too long for agents')
+  })
+})
 
 describe('WT4-PV-18 onDeleted', () => {
   const listenerWarns = (): unknown[][] =>

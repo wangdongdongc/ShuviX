@@ -172,6 +172,24 @@ export type McpToolRegistration = ToolRegistration<TSchema> &
     readonly replay: 'unsafe'
   }
 
+/** setTimeout 能接受的最大值（约 24.8 天）：再大就会被当成 1 毫秒 */
+const LONGEST_TIMEOUT_MS = 2_147_483_647
+
+/**
+ * 一次 tools/call 等多久。SDK 默认 60 秒太短，外面的服务器抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限。
+ *
+ * 进程内的服务器不设实际上限：它们的询问卡片就停在 tools/call 里，而询问要一直等到有人回答（2026-11-02）。它们
+ * 不会掉线，耗时的操作各有自己的超时，用户按停止走 signal。
+ */
+function callTimeouts(kind: McpServer['type']): {
+  timeout: number
+  maxTotalTimeout: number
+  resetTimeoutOnProgress?: boolean
+} {
+  if (kind === 'inproc') return { timeout: LONGEST_TIMEOUT_MS, maxTotalTimeout: LONGEST_TIMEOUT_MS }
+  return { timeout: 5 * 60 * 1000, resetTimeoutOnProgress: true, maxTotalTimeout: 10 * 60 * 1000 }
+}
+
 /**
  * 连接键 —— 全局服务器（stdio/http）就是 serverId；`inproc` 内置能力服务器按会话分身，
  * 键是 `serverId#sessionId`。「一个会话一份 server 实例」落到记账上就是这一行。
@@ -893,7 +911,6 @@ export class McpManager {
     }
     conn.inflight++
     try {
-      // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
       const result = await conn.client.callTool(
         {
           name: toolName,
@@ -904,12 +921,7 @@ export class McpManager {
           _meta: Object.keys(_meta).length > 0 ? _meta : undefined
         },
         undefined,
-        {
-          timeout: 5 * 60 * 1000,
-          resetTimeoutOnProgress: true,
-          maxTotalTimeout: 10 * 60 * 1000,
-          signal
-        }
+        { ...callTimeouts(conn.kind), signal }
       )
       const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
       return { content: result.content as unknown[], isError }
@@ -949,6 +961,16 @@ export class McpManager {
     if (conn.status === 'connected') return err
     const message = withStderrTail(errorText(err), conn.transport)
     return message === errorText(err) ? err : new Error(message)
+  }
+
+  /**
+   * 这台服务器的全部连接退役（配置行还在，但它声明的工具变了或行刚没了）：后来的调用新开一条、重新列工具，在途的调用
+   * 跑完才关。`disconnect` 会当场掐断它们 —— 一个已经提交的写操作会报「连接已关」，别的会话等着的询问卡片会被取消。
+   */
+  retireServer(serverId: string): void {
+    for (const [key, conn] of [...this.connections]) {
+      if (conn.serverId === serverId) this.retire(key, conn)
+    }
   }
 
   /**

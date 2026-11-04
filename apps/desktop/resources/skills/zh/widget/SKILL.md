@@ -7,7 +7,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 
 小组件（widget）是一个小型 React 应用，放在 ShuviX 的 widgets 文件夹下属于它自己的目录里。ShuviX 负责打包它、在 `/w/<id>/` 下提供服务。用户在右侧面板的「Widget」标签页里打开它，它在面板里运行，或者在独立窗口里（远程使用 ShuviX 时是一个浏览器标签页）。
 
-存储记录的小组件有一套 **API**：在它的 `api.ts` 里定义的操作，在 ShuviX 这一侧针对小组件自己的 SQLite 数据库运行。它的界面只通过这些操作读写，智能体则用 `widget` 工具的 `call` 调用同样的操作 —— 所以同一件事无论谁来做，效果都相同，而且智能体写入时，打开着的界面会刷新。每个小组件还有自己的 git 仓库；每次构建成功后 ShuviX 都会提交，所以你从不自己运行 git。
+存储记录的小组件有一套 **API**：在它的 `api.ts` 里定义的操作，在 ShuviX 这一侧针对小组件自己的 SQLite 数据库运行。它的界面只通过这些操作读写，小组件在一条会话里开启后（用 `tool_search` 或在扩展选择器里），智能体就把同样的操作当普通工具调用，工具名是 `mcp__widget-<id>__<op>` —— 所以同一件事无论谁来做，效果都相同，而且智能体写入时，打开着的界面会刷新。每个小组件还有自己的 git 仓库；每次构建成功后 ShuviX 都会提交，所以你从不自己运行 git。
 
 本文件就是完整的工作流程。细节在参考文件里；文末索引的每一行都写明了什么时候读哪一份。
 
@@ -18,7 +18,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 
 ## 始终成立的规矩
 
-1. **构建一律走 `widget` 工具**（`create`、`build`、`preview`、`sql`、`export`、`open`；`references/tool.md`）。`build` 是唯一的构建：绝不安装包，绝不运行 npm、npx 或打包器，绝不在小组件里运行 git。
+1. **构建一律走 `widget` 工具**（`create`、`build`、`test`、`preview`、`sql`、`export`、`open`；`references/tool.md`）。`build` 是唯一的构建：绝不安装包，绝不运行 npm、npx 或打包器，绝不在小组件里运行 git。
 2. **固定的一组库。** 界面：React 19 加 TypeScript，通过 `className` 使用的 Tailwind CSS v4（颜色只用 `references/design.md` 里的主题颜色名，小组件就跟随应用的主题），只在确实是多页面的小组件里使用的 React Router（`react-router` 的 `createHashRouter`），用来调用 API 的 `shuvix/widget`，以及 ShuviX 随应用提供、列在 `references/libraries.md` 里的库（lucide 图标、Chart.js、CSV、日期、Markdown、拖拽、长列表、搜索、文本对比、二维码、YAML、代码高亮、three.js）。`api.ts`：`shuvix/widget-api` 和 `zod`。别的都解析不了，也不从网上加载任何东西；未知的 import 会让构建失败。
 3. **`index.tsx` 以挂载块结尾**，放在脚手架的 "DO NOT DELETE" 注释之内：
    ```tsx
@@ -38,7 +38,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 3. **写代码之前**，先决定它是否存储记录。如果存，写好 `schema.sql` 并用 `sql` 建表（`references/data.md`），然后写 `api.ts`（`references/api.md`）。再决定它是否读取用户的文件（`references/files.md`）。
 4. 按 `references/design.md` 实现界面。
 5. 用 `name` 的语言写一份简短的 `README.md`：它做什么、主要交互、它的操作和表、读取哪些文件、扩展点。
-6. 用 `build`，带一行 `message`。失败了就修好它报出的问题再构建。然后用 `call` 加 `dry_run: true` 把每个操作试一遍（`references/api.md` 的「测试」）。
+6. 用 `build`，带一行 `message`。失败了就修好它报出的问题再构建。然后用 `test` 把每个操作试一遍（`references/api.md` 的「测试」）。
 7. 用 `preview` 并查看截图；修改、构建、再预览，直到每个尺寸都没问题（`references/design.md` 的「检查」）。
 8. 汇报它已经在 Widget 面板里（规则 8）。
 
@@ -57,7 +57,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 只回复结果，几行即可：
 
 ```
-reading-list ("读书清单") — books the user wants to read, is reading or finished, with notes. 4 operations agents can call (listBooks, addBook, setStatus, addNote). Ready in the Widget panel.
+reading-list ("读书清单") — books the user wants to read, is reading or finished, with notes. 4 operations agents can use once it is turned on (listBooks, addBook, setStatus, addNote). Ready in the Widget panel.
 ```
 
 只有真正的偏离才加一行：你没能构建或实现的东西，或者你不得不打破的一条设计规矩。绝不贴源代码。

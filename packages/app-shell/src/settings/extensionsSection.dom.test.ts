@@ -355,6 +355,55 @@ describe('内置 MCP 以界面语言的名字为主', () => {
   })
 })
 
+/**
+ * 组件也是一台服务器（2026-11-04）：`isWidget` 的条目显示它的名字和说明、带组件的记号，不算内置（所以排在内置后面）。
+ * 勾上是普通的 `mcp:<server>` 加项 —— 项目的这张卡也是它：保存下来就是这个项目新会话的同意。
+ */
+describe('组件的条目', () => {
+  const WIDGET = mcp('widget-a-b', {
+    label: 'Reading list',
+    hint: 'Books to read.',
+    isBuiltin: false,
+    isWidget: true
+  })
+
+  it('ES-W1 显示名与说明，没有内置的记号；id 并排', () => {
+    render({ mcpTools: [WIDGET], enabledTools: [] })
+    const chip = item('mcp:widget-a-b')
+    expect(chip.querySelector('[data-chip-name]')?.textContent).toBe('Reading list')
+    expect(chip.querySelector('[data-chip-identifier]')?.textContent).toBe('widget-a-b')
+    expect(chip.title).toBe('Books to read.')
+    expect(chip.querySelector('[data-builtin-badge]')).toBeNull()
+  })
+
+  it('ES-W1b 组件的记号（data-widget-mark）', () => {
+    render({ mcpTools: [WIDGET], enabledTools: [] })
+    expect(
+      item('mcp:widget-a-b').querySelector('[data-widget-mark]')?.getAttribute('aria-label')
+    ).toBe(i18n.t('input.extensionWidgetBadge'))
+  })
+
+  it('ES-W1 别的条目没有这个记号；isBuiltin false 的组件排在内置后面', () => {
+    render({
+      mcpTools: [WIDGET, mcp('other'), mcp('ssh', { isBuiltin: true })],
+      enabledTools: []
+    })
+    expect(keys()).toEqual(['mcp:ssh', 'mcp:widget-a-b', 'mcp:other'])
+    expect(item('mcp:other').querySelector('[data-widget-mark]')).toBeNull()
+    expect(item('mcp:ssh').querySelector('[data-widget-mark]')).toBeNull()
+  })
+
+  it('ES-W2 勾上：交回普通的加项；取消：抹掉', () => {
+    render({ mcpTools: [WIDGET], enabledTools: ['mcp:foo'] })
+    act(() => item('mcp:widget-a-b').querySelector('input')!.click())
+    expect(onChange).toHaveBeenLastCalledWith(['mcp:foo', 'mcp:widget-a-b'])
+
+    render({ mcpTools: [WIDGET], enabledTools: ['mcp:foo', 'mcp:widget-a-b'] })
+    act(() => item('mcp:widget-a-b').querySelector('input')!.click())
+    expect(onChange).toHaveBeenLastCalledWith(['mcp:foo'])
+  })
+})
+
 describe('技能不在这张卡上（2026-10-28）', () => {
   it('ES-10 只有 MCP 与知识库两行：没有 Skills 组名、没有 skill: 条目；旧勾选里残留的 skill: / -skill: 条目原样交回、不画成任何东西', () => {
     const skillsGroup = i18n.t('projectForm.skillsGroup')

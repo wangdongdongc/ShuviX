@@ -751,6 +751,7 @@ declare global {
           serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
           isEnabled?: boolean
           isBuiltin?: boolean
+          isWidget?: boolean
           declaredBy?: string
         }>
       >

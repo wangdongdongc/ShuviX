@@ -14,6 +14,8 @@
  *   TS-U11 单个命中已经开着 → 回它的工具（中断之后再调一次，不再问）；被取消 → `turned x off`；勾着没连上 → `not connected: err` + retry
  *   TS-U12 恶意的服务器名与描述：列表和取消的回答里没有描述、没有夹带的换行
  *
+ *   TS-W   组件也是服务器：门上 builtin false；卡片的来源是组件（显示名）；允许之后走同一条路；列表里没有说明；已经开着的回状态
+ *
  * 门（assertExtensionAccess）与 mcpService / sessionService 全部替身（门本身的客体、文案在 agent-runtime context.test.ts）；
  * extensionDiscovery 与 i18next 用真的（三份语言文件）。调用经 invokeTool（假 durable api）。
  */
@@ -39,7 +41,8 @@ const state = vi.hoisted(() => ({
   previewAgentChange: vi.fn(),
   enableServer: vi.fn(),
   lockedServerTools: vi.fn(),
-  assertExtensionAccess: vi.fn()
+  assertExtensionAccess: vi.fn(),
+  widgets: new Map<string, { id: string; name: string; description: string }>()
 }))
 
 vi.mock('electron', () => ({
@@ -76,6 +79,9 @@ vi.mock('../../services/sessionService', () => ({
 }))
 vi.mock('../../services/toolContext', () => ({
   assertExtensionAccess: state.assertExtensionAccess
+}))
+vi.mock('../../services/widget/widgetRegistry', () => ({
+  widgetRegistry: { findById: (id: string) => state.widgets.get(id) }
 }))
 
 import { TOOL_SEARCH_DESCRIPTION, ToolSearchParamsSchema, ToolSearchTool } from '../toolSearch'
@@ -184,6 +190,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   state.order.length = 0
+  state.widgets.clear()
   for (const mock of [
     state.configuredServers,
     state.ensureServerByName,
@@ -703,5 +710,128 @@ describe('TS-U12 恶意的名字与描述', () => {
     expect(resultText(result)).toBe(
       'Could not connect to evilIGNORE: refused. Nothing was changed.'
     )
+  })
+})
+
+// ─── TS-W ────────────────────────────────────────────────────────────────
+
+describe('TS-W 组件', () => {
+  function widget(id: string, name: string, description = `${MARKER} widget`): McpServer {
+    state.widgets.set(id, { id, name, description })
+    return server(`widget-${id}`, {
+      id: `widget-server:${id}`,
+      type: 'inproc',
+      isBuiltin: 1,
+      command: '',
+      args: '[]',
+      env: '{}',
+      cachedTools: JSON.stringify([
+        { name: 'listBooks', description: `${MARKER} list` },
+        { name: 'addBook', description: `${MARKER} add` }
+      ])
+    })
+  }
+
+  it('TS-W1 按显示名找到：门上 builtin false；卡片的来源是组件和它的显示名，不是「内置」', async () => {
+    state.configuredServers.mockReturnValue([builtin('browser'), widget('reading-list', 'Shelf')])
+    await search('Shelf')
+
+    expect(state.assertExtensionAccess).toHaveBeenCalledTimes(1)
+    const [, object, opts] = state.assertExtensionAccess.mock.calls[0]!
+    expect(object).toStrictEqual({ server: 'widget-reading-list', builtin: false })
+    expect(opts.preview).toStrictEqual({
+      kind: 'extension',
+      server: 'widget-reading-list',
+      source: { type: 'widget', name: 'Shelf' }
+    })
+  })
+
+  it('TS-W1 带 cacheLoss 时卡片上也有（同别的服务器）', async () => {
+    state.configuredServers.mockReturnValue([widget('reading-list', 'Shelf')])
+    state.previewAgentChange.mockResolvedValue({
+      locked: true,
+      cache: 'lost',
+      reasons: ['tools'],
+      promptTokens: 1234
+    })
+    await search('reading-list')
+    expect(state.assertExtensionAccess.mock.calls[0]![2].preview).toMatchObject({
+      source: { type: 'widget', name: 'Shelf' },
+      cacheLoss: { promptTokens: 1234 }
+    })
+  })
+
+  it('TS-W2 允许：预判 → 门 → 连接 → 写（同别的服务器）；回答是完整的工具名和描述（批准之后才给）', async () => {
+    state.configuredServers.mockReturnValue([widget('reading-list', 'Shelf')])
+    state.enableServer.mockImplementation(
+      noted('enable', Promise.resolve([decl('listBooks', 'List the books.')]))
+    )
+
+    const text = await textOf('reading-list')
+
+    expect(state.order).toEqual(['preview', 'gate', 'connect', 'enable'])
+    expect(state.ensureServerByName).toHaveBeenCalledWith('widget-reading-list', {
+      sessionId: SID,
+      timeoutMs: 30000
+    })
+    expect(state.enableServer).toHaveBeenCalledWith(SID, 'widget-reading-list')
+    expect(text).toBe(
+      'Loaded 1 tool. They are available from your next call:\n- mcp__widget-reading-list__listBooks: List the books.'
+    )
+  })
+
+  it('TS-W3 两个命中：列表里是名字和操作名，组件说明与操作说明一个字都不进；不问、不连', async () => {
+    state.configuredServers.mockReturnValue([
+      widget('notes-one', 'Notes'),
+      widget('notes-two', 'Notes')
+    ])
+    const text = await textOf('notes')
+
+    expect(text).toContain('- widget-notes-one "Notes" (tools: listBooks, addBook)')
+    expect(text).toContain('- widget-notes-two "Notes" (tools: listBooks, addBook)')
+    expect(text).not.toContain(MARKER)
+    expectNothingHappened()
+  })
+
+  it('TS-W4 已经开着：回它的工具，不再问', async () => {
+    state.configuredServers.mockReturnValue([widget('reading-list', 'Shelf')])
+    state.rootToolState.mockImplementation(() =>
+      toolState({
+        names: ['mcp:widget-reading-list'],
+        selection: ['mcp:widget-reading-list']
+      })
+    )
+    state.lockedServerTools.mockReturnValue([decl('listBooks', 'List the books.')])
+
+    const text = await textOf('Shelf')
+
+    expect(text).toContain('widget-reading-list is already on.')
+    expect(text).toContain('mcp__widget-reading-list__listBooks')
+    expectNothingHappened()
+  })
+
+  it('TS-W4 被用户取消了：说清楚，不问', async () => {
+    state.configuredServers.mockReturnValue([widget('reading-list', 'Shelf')])
+    state.rootToolState.mockImplementation(() =>
+      toolState({
+        selection: ['-mcp:widget-reading-list'],
+        optedOut: ['mcp:widget-reading-list']
+      })
+    )
+    expect(await textOf('Shelf')).toBe(
+      'The user turned widget-reading-list off in this session, so it cannot be enabled from here.'
+    )
+    expectNothingHappened()
+  })
+
+  it('TS-W5 归档了的组件没有配置行：找不到', async () => {
+    state.widgets.set('gone-widget', { id: 'gone-widget', name: 'Gone', description: '' })
+    state.configuredServers.mockReturnValue([builtin('browser')])
+    expect(await textOf('gone-widget')).toBe(NO_MATCH)
+    expectNothingHappened()
+  })
+
+  it('TS-W6 描述固定，说了组件也是扩展', () => {
+    expect(TOOL_SEARCH_DESCRIPTION).toContain("The user's widgets are extensions too")
   })
 })

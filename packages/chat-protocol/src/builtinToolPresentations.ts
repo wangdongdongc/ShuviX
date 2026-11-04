@@ -188,7 +188,7 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
   widget: {
     labelKey: 'tool.widgetLabel',
     presentation: { icon: 'Wrench', iconColor: '#f59e0b' },
-    // action · 组件 · 操作（call）—— 用组件时一眼看出动的是哪个组件的哪个操作
+    // action · 组件 · 操作（test，旧会话里还有 call）—— 一眼看出动的是哪个组件的哪个操作
     buildSummary: (args) =>
       [asStr(args.action), asStr(args.widget), asStr(args.op)].filter(Boolean).join(' · ') ||
       undefined

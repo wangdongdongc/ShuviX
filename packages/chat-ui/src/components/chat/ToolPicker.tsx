@@ -1,7 +1,7 @@
 import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, Library, WifiOff, Loader2, Package, Puzzle } from 'lucide-react'
+import { Server, Library, WifiOff, Loader2, Package, Puzzle, Wrench } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import {
   builtinKnowledgeCopy,
@@ -175,7 +175,11 @@ export function ToolPicker(): React.JSX.Element | null {
   const anyEnabled = enabledMcpTools.length > 0 || enabledBases.length > 0
   // 内置项的界面文案（名字 + 说明）；自定义 MCP / 用户库没有
   const mcpCopy = (tool: ToolItem): BuiltinExtensionCopy | undefined =>
-    tool.isBuiltin ? builtinMcpCopy(tool.name, t) : undefined
+    tool.isWidget
+      ? { label: tool.label, hint: tool.hint ?? '' }
+      : tool.isBuiltin
+        ? builtinMcpCopy(tool.name, t)
+        : undefined
   const baseCopy = (name: string): BuiltinExtensionCopy | undefined => builtinKnowledgeCopy(name, t)
 
   const toggle = (tool: ToolItem): void => {
@@ -283,6 +287,17 @@ export function ToolPicker(): React.JSX.Element | null {
                 {itemText(
                   <>
                     {tool.isBuiltin && <BuiltinMark size={markSize} />}
+                    {tool.isWidget && (
+                      <span
+                        data-widget-mark
+                        role="img"
+                        aria-label={t('input.extensionWidgetBadge')}
+                        title={t('input.extensionWidgetBadge')}
+                        className="flex shrink-0 text-amber-500"
+                      >
+                        <Wrench size={markSize} aria-hidden />
+                      </span>
+                    )}
                     <ItemName
                       identifier={mcpShortName(tool.name)}
                       label={copy?.label}

@@ -198,6 +198,8 @@ export interface ChatGateway {
     group?: string
     defaultEnabled?: boolean
     serverStatus?: string
+    /** 这一项是组件（一个组件一台 MCP 服务器）：label 是它的名字，hint 是它的说明 */
+    isWidget?: boolean
     /** 会话的 agent 档案声明了这条 mcp: 项（值为档案显示名）：缺省勾上，可以取消 */
     declaredBy?: string
   }>

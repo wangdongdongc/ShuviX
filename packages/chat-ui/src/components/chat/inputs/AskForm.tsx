@@ -188,7 +188,12 @@ function WidgetPreview({ widget }: { widget: AskWidgetTarget }): React.JSX.Eleme
 function ExtensionPreview({ extension }: { extension: AskExtensionPreview }): React.JSX.Element {
   const { t } = useTranslation()
   const { server, source, cacheLoss } = extension
-  const name = source.type === 'builtin' ? (builtinMcpCopy(server, t)?.label ?? server) : server
+  const name =
+    source.type === 'builtin'
+      ? (builtinMcpCopy(server, t)?.label ?? server)
+      : source.type === 'widget'
+        ? source.name
+        : server
   const where =
     source.type === 'command'
       ? { label: t('toolCall.extensionAskCommand'), value: source.command }
@@ -207,6 +212,11 @@ function ExtensionPreview({ extension }: { extension: AskExtensionPreview }): Re
         <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-extension-source="">
           {where.label}{' '}
           <span className="font-mono break-all text-text-secondary">{where.value}</span>
+        </div>
+      )}
+      {source.type === 'widget' && (
+        <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-extension-widget="">
+          {t('toolCall.extensionAskWidget')}
         </div>
       )}
       {cacheLoss && (

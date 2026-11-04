@@ -551,6 +551,8 @@ export interface ToolInfo {
   defaultEnabled?: boolean
   serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
   isEnabled?: boolean
+  /** 这一项是组件（一个组件一台 MCP 服务器）：label 是它的名字，hint 是它的说明 */
+  isWidget?: boolean
   /**
    * 这条 mcp: 项由会话的 agent 档案在 `shuvix-tools` 里声明 —— 值是那个档案的显示名。
    * 档案声明的项缺省勾上，会话可以取消（勾选里写 `-mcp:<server>`）；选择器因此把它画成默认勾上，

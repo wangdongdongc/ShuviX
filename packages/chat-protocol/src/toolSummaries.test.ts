@@ -76,6 +76,10 @@ describe('buildToolSummary — widget', () => {
     ).toBe('call · reading-list · addBook')
     expect(buildToolSummary('widget', { action: 'list' })).toBe('list')
     expect(buildToolSummary('widget', {})).toBeUndefined()
+    // `test` 是今天唯一带 op 的动作；上面 `call` 那条是旧会话里的块，照样要能读
+    expect(
+      buildToolSummary('widget', { action: 'test', widget: 'reading-list', op: 'addBook' })
+    ).toBe('test · reading-list · addBook')
     expect(BUILTIN_TOOL_PRESENTATIONS.widget.presentation?.icon).toBe('Wrench')
     expect(BUILTIN_TOOL_PRESENTATIONS.widget.labelKey).toBe('tool.widgetLabel')
   })

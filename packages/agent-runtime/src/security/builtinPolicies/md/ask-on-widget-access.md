@@ -13,7 +13,7 @@ shuvix-policy-rules:
   - effect: ask
     action: [read]
     match: >-
-      !(object.widgetId in vars.aclWidgetRead)
+      !(object.widgetId in vars.aclWidgetRead) && !(has(object.selected) && object.selected)
     prompt: This lets the agent read the records you keep in this widget.
   - effect: ask
     action: [write]
@@ -22,10 +22,15 @@ shuvix-policy-rules:
     prompt: This lets the agent change the records in this widget, or change the widget itself, as you would in its own screen.
 ---
 
-**What it does**: the agent uses your widgets through the `widget` tool. Each
-widget has its own operations — the same ones its screen uses — and each one
-either reads or changes the widget's records. The agent works freely with:
+**What it does**: each widget has its own operations — the same ones its screen
+uses — and each one either reads or changes the widget's records. An agent calls
+them once the widget is turned on in its session, and agents that build widgets
+use the `widget` tool. The agent works freely with:
 
+- **reading a widget turned on in this session** — ticking it in the extensions
+  picker, allowing it when the agent asks through `tool_search`, or a project's
+  saved extensions are your consent to read its records. This covers its read
+  operations only; previewing and exporting it still need a row.
 - **the widgets in this session's permission table** — "allow and remember"
   on a question card writes a row there. A row is either **read** (call the
   widget's read operations and preview it) or **read and write** (call every

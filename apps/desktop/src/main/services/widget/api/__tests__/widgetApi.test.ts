@@ -18,6 +18,9 @@
  *   A-7 changedOps：之前没有快照 → []；消失 → `removed "x"`；input 的 JSON 变了 → `changed the input of "x"`；
  *       新增、说明 / mode 变了 → 不算；之后为 null → 全部 removed
  *   A-8 `agent: false`：agent 调用方 → unknown_op、清单里也不提；用户，以及带 allowUiOnly 的调用调得到
+ *   A-9 agentOpProblem + compileWidgetApi(dir, id)：给 agent 看的操作要能作为工具声明（工具名 ≤ 64、输入的根是 object、
+ *       没有 $ref / $defs）；纯界面的操作不查；叫 `$ref` 的属性、缺省值里的 `definitions` 不算引用；不给 id 就不查（只有 build 给）
+ *   A-10 expectedMode：授权按读判的、其间被重新构建成写 → changed，不调宿主
  *   WC-S10 compileWidgetApi 对老 PGlite 组件（带好的 api.ts）→ ok（hash、ops），存储不动（没有数据目录、没有记号）
  *   WC-S11 switchWidgetToSqlite → 数据目录 + `legacy-pglite`（一行 ISO 时间）；之后是 sqlite、有旧数据
  *   WC-S12 hasLegacyWidgetData：没有数据目录 → true；新组件（createWidgetDataDir）→ false；换过的 → true
@@ -40,6 +43,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import type { CallResult, WidgetCaller } from '../hostProtocol'
 import type { ApiManifest, OpManifest } from '../sandboxRuntime'
 
@@ -99,6 +103,7 @@ vi.mock('../../../../logger', () => ({
 
 import {
   activateWidgetApi,
+  agentOpProblem,
   callWidgetOp,
   changedOps,
   compileWidgetApi,
@@ -758,6 +763,185 @@ describe('A-8 agent:false 的操作只给界面（和 allowUiOnly）', () => {
   it('A-8 用户调不存在的操作 → 清单里列出全部（含 agent:false 的）', async () => {
     const err = await apiError(callWidgetOp(ID, 'nope', {}, USER))
     expect(err.message).toContain('Its operations: listBooks, saveLayout, addBook.')
+  })
+})
+
+// ────────────────────────────── A-9 ──────────────────────────────
+
+describe('A-9 能不能作为工具声明给 agent', () => {
+  /** `mcp__widget-a-b__` 是 17 个字符 */
+  const PREFIX = 'mcp__widget-a-b__'
+  const nameOfLength = (total: number): string => 'o'.repeat(total - PREFIX.length)
+  const objectInput = { type: 'object', properties: {} }
+  /** zod 真的会生成的 input（与 sandboxRuntime 的 describeOp 同一个调用） */
+  const inputOf = (schema: z.ZodType): unknown =>
+    z.toJSONSchema(schema, { io: 'input', unrepresentable: 'throw' })
+
+  it('A-9 工具名恰 64 放得下，65 不行；报错说出操作、完整工具名和上限', () => {
+    expect(agentOpProblem('a-b', opOf(nameOfLength(64), { input: objectInput }))).toBeUndefined()
+    const name = nameOfLength(65)
+    const problem = agentOpProblem('a-b', opOf(name, { input: objectInput }))
+    expect(problem).toContain(`Operation "${name}"`)
+    expect(problem).toContain(`mcp__widget-a-b__${name}`)
+    expect(problem).toContain('64 characters')
+  })
+
+  it.each<[string, unknown]>([
+    ['字符串', { type: 'string' }],
+    ['数组', { type: 'array', items: { type: 'string' } }],
+    ['联合', { anyOf: [{ type: 'object' }, { type: 'string' }] }],
+    ['null', null],
+    ['缺 input', undefined]
+  ])('A-9 输入的根是%s → 要 z.object', (_l, input) => {
+    expect(agentOpProblem('a-b', opOf('listBooks', { input }))).toContain(
+      'its input must be a z.object(...)'
+    )
+  })
+
+  it.each<[string, unknown]>([
+    ['属性里的 $ref', { type: 'object', properties: { x: { $ref: '#/$defs/X' } } }],
+    ['根上的 $defs', { type: 'object', properties: {}, $defs: { X: { type: 'string' } } }],
+    ['根上的 definitions', { type: 'object', definitions: { X: { type: 'string' } } }],
+    [
+      '数组 items 里',
+      { type: 'object', properties: { x: { type: 'array', items: { $ref: '#/$defs/X' } } } }
+    ],
+    [
+      'anyOf 里',
+      { type: 'object', properties: { x: { anyOf: [{ type: 'string' }, { $ref: '#/x' }] } } }
+    ],
+    [
+      '深一层的属性里',
+      {
+        type: 'object',
+        properties: { a: { type: 'object', properties: { b: { $ref: '#/$defs/X' } } } }
+      }
+    ]
+  ])('A-9 引用：%s → 不合格', (_l, input) => {
+    expect(agentOpProblem('a-b', opOf('listBooks', { input }))).toContain('schema references')
+  })
+
+  it.each<[string, unknown]>([
+    [
+      '叫 $ref / $defs / definitions / properties 的属性',
+      {
+        type: 'object',
+        properties: {
+          $ref: { type: 'string' },
+          $defs: { type: 'string' },
+          definitions: { type: 'string' },
+          properties: { type: 'string' }
+        },
+        required: ['$ref', '$defs', 'definitions']
+      }
+    ],
+    [
+      '深一层的同名属性',
+      {
+        type: 'object',
+        properties: {
+          a: { type: 'object', properties: { $ref: { type: 'string' } }, required: ['$ref'] }
+        }
+      }
+    ],
+    [
+      '缺省值、常量、枚举、示例里的同名键（那是数据）',
+      {
+        type: 'object',
+        properties: {
+          a: { type: 'object', default: { definitions: 'x', $ref: '#/y' } },
+          b: { const: { $defs: 1 } },
+          c: { enum: [{ $ref: 'x' }] },
+          d: { type: 'string', examples: [{ definitions: 'x' }] }
+        }
+      }
+    ]
+  ])('A-9 不是引用：%s', (_l, input) => {
+    expect(agentOpProblem('a-b', opOf('listBooks', { input }))).toBeUndefined()
+  })
+
+  it('A-9 zod 真生成的：递归与 .meta({ id }) 带引用 → 不合格；普通对象、带缺省值的对象合格', () => {
+    const Tree: z.ZodType = z.lazy(() => z.object({ kids: z.array(Tree).optional() }))
+    const Shared = z.string().meta({ id: 'SharedThing' })
+    expect(
+      agentOpProblem('a-b', opOf('a', { input: inputOf(z.object({ tree: Tree })) }))
+    ).toContain('schema references')
+    expect(
+      agentOpProblem('a-b', opOf('a', { input: inputOf(z.object({ x: Shared, y: Shared })) }))
+    ).toContain('schema references')
+    expect(
+      agentOpProblem(
+        'a-b',
+        opOf('a', {
+          input: inputOf(
+            z.object({
+              $ref: z.string(),
+              opts: z.object({ definitions: z.string() }).default({ definitions: 'x' })
+            })
+          )
+        })
+      )
+    ).toBeUndefined()
+  })
+
+  describe('compileWidgetApi 带 id（build 这样调）', () => {
+    const withManifest = (ops: OpManifest[]): void => {
+      createWidgetDataDir('a-b')
+      writeFileSync(join(projectDir, 'api.ts'), 'export default {}\n')
+      h.runtime.manifest.mockResolvedValue({ ops, errors: [] })
+    }
+    const refs = { type: 'object', properties: { x: { $ref: '#/x' } } }
+
+    it('A-9 给 agent 看的操作不合格 → 构建错误，每条带 `api.ts: `；几条一起报', async () => {
+      withManifest([
+        opOf('good'),
+        opOf(nameOfLength(65)),
+        opOf('notObject', { input: { type: 'string' } }),
+        opOf('withRefs', { input: refs })
+      ])
+      const out = await compileWidgetApi(projectDir, 'a-b')
+      expect(out.kind).toBe('error')
+      const errors = (out as { errors: string[] }).errors
+      expect(errors).toHaveLength(3)
+      for (const error of errors) expect(error.startsWith('api.ts: Operation "')).toBe(true)
+      expect(errors[0]).toContain('too long for agents')
+      expect(errors[1]).toContain('must be a z.object')
+      expect(errors[2]).toContain('schema references')
+    })
+
+    it('A-9 纯界面的操作不查：三样不合格都能过', async () => {
+      withManifest([
+        opOf('good'),
+        opOf(nameOfLength(65), { agent: false }),
+        opOf('notObject', { agent: false, input: { type: 'string' } }),
+        opOf('withRefs', { agent: false, input: refs })
+      ])
+      const out = await compileWidgetApi(projectDir, 'a-b')
+      expect(out.kind).toBe('ok')
+    })
+
+    it('A-9 不给 id：不查声明（只有 build 给 id，见 widgetServiceApi 的 S-2）', async () => {
+      withManifest([opOf('notObject', { input: { type: 'string' } })])
+      expect((await compileWidgetApi(projectDir)).kind).toBe('ok')
+    })
+  })
+})
+
+describe('A-10 expectedMode', () => {
+  it('A-10 模式还是那个：照常调；变了 → changed，说清楚现在是什么，不调宿主', async () => {
+    seedSnapshot([opOf('listBooks', { mode: 'write' })])
+    await expect(
+      callWidgetOp(ID, 'listBooks', {}, AGENT, { expectedMode: 'write' })
+    ).resolves.toMatchObject({ mode: 'write' })
+    expect(h.runtime.call).toHaveBeenCalledTimes(1)
+    h.runtime.call.mockClear()
+
+    const err = await apiError(callWidgetOp(ID, 'listBooks', {}, AGENT, { expectedMode: 'read' }))
+    expect(err.code).toBe('changed')
+    expect(err.message).toBe(
+      `Operation "listBooks" of widget "${ID}" is now a write operation (the widget was rebuilt). Check that it does what you want and call it again.`
+    )
+    expect(h.runtime.call).not.toHaveBeenCalled()
   })
 })
 

@@ -107,7 +107,8 @@ import {
   SHUVIX_BUILTIN_EXTENSION,
   agentExtension,
   agentExtensionName,
-  composeAgentTools
+  composeAgentTools,
+  withoutOmittedTools
 } from './lock'
 import { computeFrozenAgentPrompt, freezePersona } from './prompt/persona'
 import type { PromptExtensions } from './prompt/sections'
@@ -634,9 +635,10 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     },
     context: Context
   ): Promise<Prepared | { failure: SpawnOutcome }> {
-    const { profile, names, model, thinkingLevel, agentId, canSpawn, contract } = input
+    const { profile, model, thinkingLevel, agentId, canSpawn, contract } = input
     const host = this.host
     const { sessionId, logger } = host
+    let names = input.names
     let resolved: Awaited<ReturnType<ToolHost['resolveAgentTools']>>
     let frozen: Awaited<ReturnType<typeof computeFrozenAgentPrompt>>
     const extraTools = resultContractTools(contract)
@@ -660,6 +662,7 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
         },
         { signal: context.abortSignal ?? new AbortController().signal }
       )
+      names = withoutOmittedTools(names, resolved.omitBuiltin)
       frozen = await computeFrozenAgentPrompt(
         { promptVars: host.promptVars, logger },
         {

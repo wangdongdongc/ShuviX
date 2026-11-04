@@ -118,8 +118,26 @@ export interface BuildWidgetOptions {
 
 /** 组件被删掉之后要知道的人（本模块不反向依赖它们：启动时注册，见 main/index.ts） */
 const deletedListeners = new Set<(widgetId: string) => void>()
+/** 组件给 agent 的工具可能变了的时候要知道的人（同上）：构建改了 API、归档、恢复、删除 */
+const serverChangedListeners = new Set<(widgetId: string) => void>()
+
+function notifyServerChanged(widgetId: string): void {
+  for (const listener of serverChangedListeners) {
+    try {
+      listener(widgetId)
+    } catch (err) {
+      log.warn(`widget server listener failed widget=${widgetId}: ${(err as Error).message}`)
+    }
+  }
+}
 
 class WidgetService {
+  /** 组件给 agent 的工具可能变了之后调（它的 MCP 服务器要重新列）；交回取消注册 */
+  onServerChanged(listener: (widgetId: string) => void): () => void {
+    serverChangedListeners.add(listener)
+    return () => serverChangedListeners.delete(listener)
+  }
+
   /** 组件删掉之后（目录与账目都删了）调；交回取消注册 */
   onDeleted(listener: (widgetId: string) => void): () => void {
     deletedListeners.add(listener)
@@ -268,7 +286,7 @@ class WidgetService {
     await ensureRepo(dir, `chore(${id}): baseline of existing widget`)
 
     // API 先编译：它失败就整个构建失败，界面也不动（否则界面换成新代码、API 还是旧的）
-    const api: CompileApiResult = await compileWidgetApi(dir)
+    const api: CompileApiResult = await compileWidgetApi(dir, id)
     if (api.kind === 'error') {
       return {
         id,
@@ -313,6 +331,7 @@ class WidgetService {
           ]
         }
         await activateWidgetApi(id, compiled)
+        if (before?.hash !== compiled?.hash) notifyServerChanged(id)
       }
       if (compiled) {
         out.api = compiled.ops.map((o) => ({ op: o.name, mode: o.mode, agent: o.agent }))
@@ -384,6 +403,7 @@ class WidgetService {
     if (archived) {
       widgetServer.unregisterWidget(id)
     }
+    notifyServerChanged(id)
     broadcastWidgetChanged()
   }
 
@@ -418,6 +438,7 @@ class WidgetService {
     // 所以宁可留着条目，让状态和事实保持一致。
     if (dirGone) {
       widgetRegistry.deleteById(id)
+      notifyServerChanged(id)
       // 告诉关心的人（会话权限表删掉授权用它的行 —— 否则复用同一个 id 的新组件会继承旧授权；见 main/index.ts）
       for (const listener of deletedListeners) {
         try {

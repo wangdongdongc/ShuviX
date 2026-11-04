@@ -31,7 +31,7 @@ import './artifact'
 import './session'
 // knowledge：OKF 知识库的结构化读写面（一期基础设施；不在内置基座档案清单，按名解析使用）
 import './knowledge'
-// 用组件、造组件（docs/widget-tool-design.md §5）
+// 造组件（用组件经它的 MCP 服务器，见 services/builtinMcp/widgetMcpServer.ts）
 import './widget'
 // doc_read / doc_edit / doc_insert：协作编辑（基座 notebook）—— 改编辑器里的活文档，没有编辑器开着才改磁盘
 import './doc'

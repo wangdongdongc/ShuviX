@@ -62,6 +62,7 @@ import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { optedOutTools, TOOL_SEARCH_TOOL_NAME } from '@shuvix/chat-protocol/toolSelection'
 import { shuvixFileKindOfProject } from '@shuvix/chat-protocol/shuvixFileNotes'
+import { WIDGET_SKILL, WIDGET_TOOL_NAME } from '@shuvix/chat-protocol/widgetServers'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import { existsSync, realpathSync } from 'fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
@@ -322,7 +323,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       // 命令沙箱的钉子：有锁（重开）或刚解析出来（创建）就按它定；还没有 agent 时（undefined）
       // bash 按此刻的开关给一份占位（这份内置工具在创建 agent 时会按解析结果重装）。纯本地：
       // 不读锁、不连服务器（打开会话时就调它）
-      // 根 agent 的技能货架：`widget` 工具据此决定讲不讲造组件的动作
+      // 根 agent 的技能货架：`widget` 工具没有 durable 调用时按它判（单测直接调钩子）
       const ctx = sessionToolContext(deps, sessionId, sandboxed, skills)
       const wrap = sessionWrapper(deps, sessionId, ctx)
       // 只收当前平台上存在的工具：档案里另一个平台的版本（Windows 上的 bash、macOS 上的
@@ -371,6 +372,10 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
         ...(skillTool !== undefined && skills.length > 0 ? { skill: wrap(skillTool) } : {}),
         skills,
         mcp,
+        // `widget` 只管造组件，怎么造在技能里：货架上没有这个技能的 agent 用不了它
+        ...(req.names.includes(WIDGET_TOOL_NAME) && !skills.includes(WIDGET_SKILL)
+          ? { omitBuiltin: [WIDGET_TOOL_NAME] }
+          : {}),
         // 命令沙箱钉子（记进锁）：每次创建按此刻的开关重新决定（与旧运行时「销毁即解钉、下次创建
         // 重定」同一结果）；与名单里有没有 bash 无关。派生 agent 同样照此刻的开关答（宿主看不到根锁的
         // 钉子 —— 协调器记的是根锁那一个，不用这个值，PIN-02）

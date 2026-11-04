@@ -812,12 +812,13 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十五件（十四个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
+  it('REG-4 三语工具清单恰为十六件（十五个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
     // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
     // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
     // 三份清单相同的那条惯例在这里刻意不适用）。`write` 自 2026-10-12 起在：知识库条目由 agent
     // 用 write 直接写进库再 submit，没有它 bot 就记不了东西（正文限定它只用来记条目）。
+    // `tool_search` 自 2026-11-04 起在：组件是一台台 MCP 服务器，bot 得能找到并请用户开启（每次开启都问，不算给能力）。
     // 最后一件是技能工具：技能只往上下文里注入文本、不引入任何能力，窄清单的实质不变。货架不由档案
     // 点名（2026-10-28），是侧栏启用着的全部技能 —— 日报 bot 要的跟踪项技能、作图技能都在其中
     for (const language of LANGS) {
@@ -837,9 +838,10 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'knowledge',
         'artifact',
         'widget',
+        'tool_search',
         'skill'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(15)
+      expect(built.tools, `bot.${language}`).toHaveLength(16)
       for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
@@ -1271,21 +1273,20 @@ describe('{{shuvix:extensionDiscovery}} 的归属（RG）', () => {
   const PLACEHOLDER = '{{shuvix:extensionDiscovery}}'
   const count = (text: string): number => text.split(PLACEHOLDER).length - 1
 
-  it.each(LANGS.flatMap((language) => ['work', 'chat', 'coding'].map((name) => [name, language])))(
-    'RG-1 %s.%s：占位符恰好一次，手里有 tool_search，占位符前后都隔着空行',
-    (name, language) => {
-      const built = profile(name, language)
-      expect(count(built.systemPrompt)).toBe(1)
-      expect(built.tools).toContain('tool_search')
-      const lines = built.systemPrompt.split('\n')
-      const at = lines.indexOf(PLACEHOLDER)
-      expect(at).toBeGreaterThan(0)
-      expect(lines[at - 1]).toBe('')
-      expect(lines[at + 1]).toBe('')
-    }
-  )
+  it.each(
+    LANGS.flatMap((language) => ['work', 'chat', 'coding', 'bot'].map((name) => [name, language]))
+  )('RG-1 %s.%s：占位符恰好一次，手里有 tool_search，占位符前后都隔着空行', (name, language) => {
+    const built = profile(name, language)
+    expect(count(built.systemPrompt)).toBe(1)
+    expect(built.tools).toContain('tool_search')
+    const lines = built.systemPrompt.split('\n')
+    const at = lines.indexOf(PLACEHOLDER)
+    expect(at).toBeGreaterThan(0)
+    expect(lines[at - 1]).toBe('')
+    expect(lines[at + 1]).toBe('')
+  })
 
-  it.each(LANGS.flatMap((language) => ['bot', 'notebook', 'tab'].map((name) => [name, language])))(
+  it.each(LANGS.flatMap((language) => ['notebook', 'tab'].map((name) => [name, language])))(
     'RG-2 %s.%s：正文不提它，名单里也没有 tool_search',
     (name, language) => {
       const built = profile(name, language)
@@ -1294,13 +1295,13 @@ describe('{{shuvix:extensionDiscovery}} 的归属（RG）', () => {
     }
   )
 
-  it('RG-3 全部内置档案里只有 work / chat / coding 引用它、声明 tool_search', () => {
+  it('RG-3 全部内置档案里只有 work / chat / coding / bot 引用它、声明 tool_search', () => {
     for (const language of LANGS) {
       const profiles = buildBuiltinProfiles({ ...ALL_PARAMS, language })
       const holders = profiles.filter((p) => p.tools.includes('tool_search')).map((p) => p.name)
       const users = profiles.filter((p) => count(p.systemPrompt) > 0).map((p) => p.name)
-      expect([...holders].sort(), language).toEqual(['chat', 'coding', 'work'])
-      expect([...users].sort(), language).toEqual(['chat', 'coding', 'work'])
+      expect([...holders].sort(), language).toEqual(['bot', 'chat', 'coding', 'work'])
+      expect([...users].sort(), language).toEqual(['bot', 'chat', 'coding', 'work'])
     }
   })
 })

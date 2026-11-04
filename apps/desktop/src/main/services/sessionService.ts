@@ -755,6 +755,38 @@ export class SessionService {
     }
   }
 
+  /**
+   * 一台服务器永远没了（组件删除）：所有会话和项目的勾选里抹掉它。留着的话，同名的新服务器会继承这些勾选 —— 而组件的
+   * 勾选算读授权。开着的界面要刷新（否则下一次整份写回会把它写回来），接着它的 agent 当场摘掉：它的工具已经调不通了，
+   * 留在锁里的话，同 id 的新组件开启时会沿用旧声明。
+   */
+  async forgetServerSelection(server: string): Promise<void> {
+    const entry = `mcp:${server}`
+    const entries = [entry, toolOptOut(entry)]
+    const affected = sessionRecords.removeEnabledTools(entries)
+    for (const id of affected) broadcastSessionConfigChanged(id)
+    for (const project of projectDao.findAll()) {
+      const tools = project.settings?.enabledTools
+      if (!Array.isArray(tools) || !tools.some((name) => entries.includes(name))) continue
+      projectDao.update(project.id, {
+        settings: {
+          ...project.settings,
+          enabledTools: tools.filter((name) => !entries.includes(name))
+        }
+      })
+    }
+    await Promise.all(
+      affected.map(async (id) => {
+        try {
+          const result = await this.reconfigureAgent(id)
+          if (!result.ok) log.warn(`摘掉服务器被拒 session=${id}: ${result.error}`)
+        } catch (err) {
+          log.warn(`摘掉服务器失败 session=${id}: ${err instanceof Error ? err.message : err}`)
+        }
+      })
+    )
+  }
+
   /** 这台服务器现在有没有接到这条会话的 agent 上：有就回它的工具声明（连上过的才进锁，见 AgentLock.planReconfigure） */
   lockedServerTools(sessionId: string, server: string): readonly McpToolDeclaration[] | undefined {
     const mcp = this.host.get(sessionId)?.lock?.mcp

@@ -23,6 +23,7 @@
  *   AC-12 审批的选项行都不是勾选态：没有 aria-pressed
  *   AC-13 开启扩展（preview kind extension）· 内置：本地化的名字，与标识名不同时再带标识名，没有来源那一行
  *   AC-14 开启扩展 · 第三方：标识名就是名字；命令行 / 主机各一行来源
+ *   AC-14w 开启扩展 · 组件：显示名是名字、标识名并排；一句「可以读，要改还会再问」；没有来源那一行；别的来源没有这一句
  *   AC-15 缓存那一句：有规模 → 带规模；规模为 0 → 不带；没有 cacheLoss → 没有这一句。选项恰是允许 + 拒绝，有宿主也一样
  *         （没有「允许并记住」：开启之后选择本身就是记忆）
  *
@@ -594,6 +595,43 @@ describe('AskForm：开启扩展的卡片', () => {
 
     expect(source()?.textContent).toContain(tr('toolCall.extensionAskUrl'))
     expect(source()?.textContent).toContain('example.test:8443')
+  })
+
+  const widgetLine = (): Element | null => container.querySelector('[data-ask-extension-widget]')
+
+  it('AC-14w 组件：显示名是名字，标识名并排；一句「能读、要改还会再问」；没有来源那一行', () => {
+    render(
+      extensionAsk({
+        server: 'widget-reading-list',
+        source: { type: 'widget', name: 'My <Books>' }
+      })
+    )
+    expect(card().getAttribute('data-ask-extension')).toBe('widget-reading-list')
+    expect(card().textContent).toContain('My <Books>')
+    expect(card().textContent).toContain('widget-reading-list')
+    expect(widgetLine()?.textContent).toBe(tr('toolCall.extensionAskWidget'))
+    expect(source()).toBeNull()
+  })
+
+  it('AC-14w 组件带 cacheLoss：缓存那一句照样在，接在后面', () => {
+    render(
+      extensionAsk({
+        server: 'widget-reading-list',
+        source: { type: 'widget', name: 'Books' },
+        cacheLoss: { promptTokens: 1200 }
+      })
+    )
+    expect(widgetLine()).not.toBeNull()
+    expect(cache()).not.toBeNull()
+  })
+
+  it.each<[string, AskExtensionPreview['source']]>([
+    ['内置', { type: 'builtin' }],
+    ['命令行', { type: 'command', command: 'npx x' }],
+    ['主机', { type: 'url', host: 'example.test' }]
+  ])('AC-14w %s：没有组件那一句', (_l, from) => {
+    render(extensionAsk({ source: from }))
+    expect(widgetLine()).toBeNull()
   })
 
   it('AC-14 第三方的名字恰好与内置同名：不冒用内置的本地化名字', () => {

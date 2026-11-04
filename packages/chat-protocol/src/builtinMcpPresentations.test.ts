@@ -319,6 +319,41 @@ describe('database 摘要 —— 连接名在前，这条查询在做什么在�
   })
 })
 
+/**
+ * 组件的工具（2026-11-04）：操作是组件自己定的，没有固定清单，按保留的前缀认（名字规则钉在 widgetServers.test.ts）。
+ * 摘要只有「组件 · 操作」：参数是用户的记录，不进折叠行。
+ */
+describe('组件的工具 —— 按保留前缀认', () => {
+  it('BMP-W1 mcp__widget-<id>__<op> 拿到组件的标签与图标', () => {
+    expect(fallbackToolPresentation('mcp__widget-a-b__addNote', T)).toStrictEqual({
+      label: 'T(tool.widgetLabel)',
+      icon: 'Wrench',
+      iconColor: '#f59e0b'
+    })
+  })
+
+  it('BMP-W2 摘要是「组件 · 操作」，参数的值不出现', () => {
+    const summary = builtinMcpToolSummary('mcp__widget-a-b__addNote', { text: 'SECRET-RECORD' })
+    expect(summary).toBe('a-b · addNote')
+    expect(buildToolSummary('mcp__widget-a-b__addNote', { text: 'SECRET-RECORD' })).toBe(
+      'a-b · addNote'
+    )
+  })
+
+  it.each(['mcp__widget-foo__op', 'mcp__widget-a-b__add_note', 'mcp__widgets-a-b__op'])(
+    'BMP-W3 %s 不是组件的工具：没有呈现、没有摘要',
+    (name) => {
+      expect(fallbackToolPresentation(name, T)).toBeUndefined()
+      expect(builtinMcpToolSummary(name, { text: 'x' })).toBeUndefined()
+    }
+  )
+
+  it('BMP-W4 内置服务器不受影响；认名字仍只认三台固定的', () => {
+    expect(fallbackToolPresentation('mcp__browser__click', T)?.icon).toBe('Globe')
+    expect(parseBuiltinMcpToolName('mcp__widget-a-b__addNote')).toBeUndefined()
+  })
+})
+
 describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () => {
   it('BMP-7 browser 工具 / ssh 普通工具 / ssh exec（终端形态）/ 退役的 browser 工具', () => {
     expect(fallbackToolPresentation('mcp__browser__snapshot', T)).toEqual({

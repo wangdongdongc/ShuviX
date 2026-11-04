@@ -6,6 +6,8 @@
  *     内置行（browser / ssh）占着的名字同样算被占；
  *   - 不能含 `__` —— 否则一台自定义 server 的工具会以 `mcp__browser__` 开头、冒充内置浏览器；
  *   - 按去掉首尾空白的写法查、也按这个写法存（带空格存进去，下一次查重就对不上了）。
+ *   - `widget-` 开头（不分大小写）是留给组件的：每个有 API 的组件是一台 `widget-<id>`（2026-11-04），工具卡片只凭前缀认组件，
+ *     而组件的勾选算读授权 —— 用户的服务器不能占这个名字。
  * 被拒的请求什么都不写、也不断开任何连接。内置行本身不改名（它的名字字段被忽略，也就不校验）。
  *
  * electron 是替身（handle 收进 Map）；mcpDao / mcpService 只替到接口那一层。
@@ -161,6 +163,57 @@ describe('mcp:update 的名字校验', () => {
       await invoke('mcp:update', { id: 'builtin-mcp-browser', name: 'x__y', isEnabled: false })
     ).toEqual({ success: true })
     expect(vi.mocked(mcpDao.update).mock.calls).toEqual([['builtin-mcp-browser', { isEnabled: 0 }]])
+  })
+})
+
+describe('`widget-` 是留给组件的名字', () => {
+  const RESERVED = 'Names starting with "widget-" are kept for widgets'
+
+  it.each(['widget-x', 'widget-a-b', '  widget-x  ', 'Widget-a-b', 'WIDGET-X', 'widget-'])(
+    'MH-W1 mcp:add 名字 %j → 拒绝，什么都不写',
+    async (name) => {
+      expect(await invoke('mcp:add', { name, type: 'stdio', command: 'npx' })).toEqual({
+        success: false,
+        error: RESERVED
+      })
+      expect(mcpDao.insert).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['widget-x', ' widget-a-b ', 'Widget-a-b'])(
+    'MH-W2 mcp:update 用户的行改名为 %j → 拒绝：不写、不断开',
+    async (name) => {
+      expect(await invoke('mcp:update', { id: 'u1', name })).toEqual({
+        success: false,
+        error: RESERVED
+      })
+      expect(mcpDao.update).not.toHaveBeenCalled()
+      expect(mcpService.disconnect).not.toHaveBeenCalled()
+    }
+  )
+
+  it('MH-W3 内置行的 name 被忽略：不合法的名字不拦住其余字段', async () => {
+    state.rows.push(row('b1', 'b1', { isBuiltin: 1 }))
+    expect(await invoke('mcp:update', { id: 'b1', name: 'widget-x', isEnabled: false })).toEqual({
+      success: true
+    })
+    expect(mcpDao.update).toHaveBeenCalledWith('b1', { isEnabled: 0 })
+  })
+
+  it.each(['my-widget-x', 'widgets', 'widgetish', 'custom-widget-a-b'])(
+    'MH-W4 %s 没有保留前缀，照常能加',
+    async (name) => {
+      expect(await invoke('mcp:add', { name, type: 'stdio', command: 'npx' })).toMatchObject({
+        success: true
+      })
+      expect(mcpDao.insert).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('MH-W5 mcp:list 只读配置行：算出来的组件服务器不经这里（替身 mcpService 上连 findAll 都没有）', async () => {
+    const listed = (await invoke('mcp:list')) as Array<{ id: string }>
+    expect(listed.map((s) => s.id)).toEqual(state.rows.map((r) => r.id))
+    expect(mcpDao.findAll).toHaveBeenCalled()
   })
 })
 

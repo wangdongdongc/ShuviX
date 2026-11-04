@@ -10,6 +10,9 @@
  * 已有的键）。标成内置、本端却没有同名内置（没有这一行，或同名的是用户自己的 server）→ 跳过并报
  * 「not available on this install」，不拿残缺的内置条目去污染本端配置。
  *
+ * 名字以 `widget-` 开头（不分大小写、去掉首尾空白）的条目（CS-W）：这个前缀留给组件，导入不能绕过添加时的同一条检查。
+ * 预览按「跳过」说（skipBuiltin），结果里那一项失败、不写任何东西，同一批的别的条目照常导入。
+ *
  * DAO / mcpService / electron 都是替身；分享串用 chat-protocol 的真编解码（导出之后原样解回来看）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -223,4 +226,76 @@ describe('configShareService — 导入与本端内置同名的条目', () => {
       expect(mcpService.disconnect).not.toHaveBeenCalled()
     }
   )
+})
+
+describe('configShareService — 留给组件的名字', () => {
+  const exported = (name: string, over: Partial<ExportedMcpServer> = {}): ExportedMcpServer => ({
+    name,
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'x'],
+    env: { A: '1' },
+    url: null,
+    headers: null,
+    metadata: null,
+    sensitiveStripped: false,
+    isBuiltin: false,
+    ...over
+  })
+  const payloadOf = (...mcpServers: ExportedMcpServer[]): ConfigSharePayload => ({
+    version: 1,
+    exportedAt: '2026-11-04T00:00:00.000Z',
+    appVersion: '9.9.8',
+    mcpServers
+  })
+  const RESERVED_NAMES = ['widget-a-b', 'widget-x', ' widget-a-b ', 'Widget-a-b', 'WIDGET-X']
+
+  it.each(RESERVED_NAMES)('CS-W1 预览：%j 是 skipBuiltin，不是 create', (name) => {
+    const plan = configShareService.planImport(payloadOf(exported(name)))
+    expect(plan.mcpServers).toEqual([expect.objectContaining({ name, action: 'skipBuiltin' })])
+  })
+
+  it.each(RESERVED_NAMES)('CS-W2 导入：%j 失败、说明原因、什么都不写', async (name) => {
+    const result = await configShareService.applyImportPayload(payloadOf(exported(name)), {
+      providerNames: [],
+      modelKeys: [],
+      mcpNames: [name]
+    })
+    expect(result.mcpServers).toEqual([
+      {
+        name,
+        ok: false,
+        error: `"${name}": names starting with "widget-" are kept for widgets`
+      }
+    ])
+    expect(mcpDao.insert).not.toHaveBeenCalled()
+    expect(mcpDao.update).not.toHaveBeenCalled()
+    expect(mcpService.disconnect).not.toHaveBeenCalled()
+  })
+
+  it('CS-W3 同一批的别的条目照常导入', async () => {
+    const result = await configShareService.applyImportPayload(
+      payloadOf(exported('widget-a-b'), exported('fresh')),
+      { providerNames: [], modelKeys: [], mcpNames: ['widget-a-b', 'fresh'] }
+    )
+    expect(result.mcpServers.map((r) => [r.name, r.ok])).toEqual([
+      ['widget-a-b', false],
+      ['fresh', true]
+    ])
+    expect(mcpDao.insert).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(mcpDao.insert).mock.calls[0]![0]).toMatchObject({ name: 'fresh' })
+  })
+
+  it('CS-W4 标成内置的条目同样先按保留前缀拒，不走 not available 那一句', async () => {
+    const result = await configShareService.applyImportPayload(
+      payloadOf(exported('widget-a-b', { isBuiltin: true })),
+      { providerNames: [], modelKeys: [], mcpNames: ['widget-a-b'] }
+    )
+    expect(result.mcpServers[0]!.error).toContain('kept for widgets')
+  })
+
+  it('CS-W5 名字只是带着这个词：预览照常 create', () => {
+    const plan = configShareService.planImport(payloadOf(exported('my-widget-a')))
+    expect(plan.mcpServers[0]!.action).toBe('create')
+  })
 })

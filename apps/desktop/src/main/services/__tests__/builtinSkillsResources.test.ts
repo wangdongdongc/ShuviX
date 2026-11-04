@@ -629,6 +629,36 @@ describe('BS widget 技能只教主题颜色名', () => {
   })
 })
 
+/**
+ * 2026-11-04：`widget` 工具只管造，用组件是开启之后的 `mcp__widget-<id>__<op>`。技能是造组件的 agent 唯一读的说明：动作表和工具的
+ * schema 对不上，模型就照着调一个不存在的动作。
+ */
+describe('BS-W widget 技能教的动作与工具对得上', () => {
+  const widgetFile = (lang: string, rel: string): string =>
+    readFileSync(join(skillDir(lang, 'widget'), rel), 'utf8')
+  const ACTIONS = ['list', 'create', 'build', 'test', 'preview', 'sql', 'export', 'open']
+
+  it.each(LANGS)('BS-W1 %s：tool.md 的动作表恰是这 8 个，次序同工具', (lang) => {
+    const rows = tableWith(widgetFile(lang, 'references/tool.md'), '`create`', `${lang} tool`)
+    const actions = rows
+      .slice(1)
+      .map((row) => (row[0] ?? '').replace(/`/g, '').trim())
+      .filter(Boolean)
+    expect(actions).toEqual(ACTIONS)
+  })
+
+  it.each(LANGS)('BS-W2 %s：技能里没有旧动作，操作的工具名写对了', (lang) => {
+    const files = filesUnder(skillDir(lang, 'widget'))
+    for (const rel of files) {
+      const text = widgetFile(lang, rel)
+      expect(text.includes('dry_run'), `${lang}/widget/${rel} mentions dry_run`).toBe(false)
+      expect(/"action":\s*"call"/.test(text), `${lang}/widget/${rel} action call`).toBe(false)
+      expect(/`describe`/.test(text), `${lang}/widget/${rel} mentions describe`).toBe(false)
+    }
+    expect(widgetFile(lang, 'references/tool.md')).toContain('mcp__widget-<id>__<op>')
+  })
+})
+
 describe('BS 内置技能的两条接线', () => {
   it('BS-8 electron-builder 的 extraResources 带上了 resources/skills → skills', () => {
     // 少这一条，dev 下一切正常而打包后内置技能整组消失（getBuiltinSkillsRoot 指向

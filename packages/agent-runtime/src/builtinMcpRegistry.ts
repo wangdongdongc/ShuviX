@@ -67,6 +67,12 @@ export type BuiltinMcpFactory<TScope extends BuiltinMcpScope = BuiltinMcpScope> 
  */
 export class BuiltinMcpRegistry<TScope extends BuiltinMcpScope = BuiltinMcpScope> {
   private factories = new Map<string, BuiltinMcpFactory<TScope>>()
+  private resolver?: (name: string) => BuiltinMcpFactory<TScope> | undefined
+
+  /** 名字不固定的内置服务器（组件，一个组件一台）：不在固定表里的名字问它 */
+  setResolver(resolver: (name: string) => BuiltinMcpFactory<TScope> | undefined): void {
+    this.resolver = resolver
+  }
 
   /** 注册一台内置服务器（同名后注册的覆盖先注册的，便于测试替身） */
   register(name: string, factory: BuiltinMcpFactory<TScope>): void {
@@ -86,7 +92,7 @@ export class BuiltinMcpRegistry<TScope extends BuiltinMcpScope = BuiltinMcpScope
    * 名字没注册时抛错 —— 配置里有 `type: 'inproc'` 的行却没有对应实现，属于装配期就该暴露的问题。
    */
   async createClientTransport(name: string, scope: TScope): Promise<Transport> {
-    const factory = this.factories.get(name)
+    const factory = this.factories.get(name) ?? this.resolver?.(name)
     if (!factory) {
       throw new Error(`No builtin MCP server registered under "${name}"`)
     }

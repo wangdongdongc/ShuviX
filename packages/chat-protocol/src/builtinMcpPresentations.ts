@@ -17,6 +17,7 @@
  */
 import type { ToolPresentation } from './types/toolPresentation'
 import { asStr, fileNameOf } from './toolSummaryHelpers'
+import { parseWidgetToolName } from './widgetServers'
 
 interface BuiltinMcpServerPresentationDef {
   /** i18n label key（各端用自身 t 解析） */
@@ -35,6 +36,8 @@ interface BuiltinMcpServerPresentationDef {
 
 const BROWSER_ICON: Omit<ToolPresentation, 'label'> = { icon: 'Globe', iconColor: '#60a5fa' }
 const DATABASE_ICON: Omit<ToolPresentation, 'label'> = { icon: 'Database', iconColor: '#f59e0b' }
+/** 组件的操作：操作是组件自己定的，没有固定清单，按保留的前缀认（见 widgetServers.ts） */
+const WIDGET_ICON: Omit<ToolPresentation, 'label'> = { icon: 'Wrench', iconColor: '#f59e0b' }
 
 /** 多行代码的第一行有内容的那一行（开头的空行不算） */
 function firstLine(v: unknown): string | undefined {
@@ -214,6 +217,8 @@ export function builtinMcpToolSummary(
   toolName: string,
   args: Record<string, unknown>
 ): string | undefined {
+  const widget = parseWidgetToolName(toolName)
+  if (widget) return `${widget.widgetId} · ${widget.op}`
   const parsed = parseBuiltinMcpToolName(toolName)
   if (!parsed) return undefined
   return BUILTIN_MCP_PRESENTATIONS[parsed.server].summary(parsed.tool, args)
@@ -227,6 +232,7 @@ export function fallbackToolPresentation(
   toolName: string,
   t: (key: string) => string
 ): ToolPresentation | undefined {
+  if (parseWidgetToolName(toolName)) return { label: t('tool.widgetLabel'), ...WIDGET_ICON }
   const parsed = parseBuiltinMcpToolName(toolName)
   if (parsed) {
     const def = BUILTIN_MCP_PRESENTATIONS[parsed.server]

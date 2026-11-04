@@ -2,21 +2,27 @@
  * 查找这条会话没开启的 MCP 服务器 —— `tool_search` 工具和提示词里那段说明共用。
  *
  * 全程不连接任何服务器：搜索不该启动一个进程，用户还没批准。内置服务器的工具名与说明是随产品发布的
- * （chat-protocol builtinMcpPresentations + 语言文件），第三方服务器用上次连接时记下的 `cachedTools`。
+ * （chat-protocol builtinMcpPresentations + 语言文件），第三方服务器用上次连接时记下的 `cachedTools`，组件用它的
+ * 名字、说明和 API 清单（组件也是一台服务器，见 builtinMcp/widgetMcpServer.ts）。
  *
- * 第三方服务器自己写的描述**只参与匹配，不进任何给模型看的文字**：用户还没批准它，那段文字不该先到模型面前。
- * 名字（服务器名是用户起的，工具名是服务器报的）过滤后才输出。批准之后工具声明本来就会发给模型。
+ * 第三方服务器和组件自己写的描述**只参与匹配，不进任何给模型看的文字**：用户还没批准它，那段文字不该先到模型面前。
+ * 名字（服务器名是用户起的，工具名是服务器报的，组件名是 agent 起的）过滤后才输出。批准之后工具声明本来就会发给模型。
  */
 import { BUILTIN_MCP_PRESENTATIONS } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import { safeExtensionName } from '@shuvix/chat-protocol/toolSelection'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
+import { widgetIdOfServer } from '@shuvix/chat-protocol/widgetServers'
 import i18next from 'i18next'
 import { mcpService } from './mcpService'
+import { widgetRegistry } from './widget/widgetRegistry'
 
 /** 不拿去问的内置服务器：chrome 只属于 Chrome 标签页会话，plan 是进度显示，不是模型需要的能力 */
 const NOT_OFFERED = new Set(['chrome', 'plan'])
 
 const BUILTIN_COPY_LANGUAGES = ['en', 'zh', 'ja'] as const
+
+/** 提示词里最多列几个组件：组件可能很多，其余的搜得到 */
+const PROMPT_WIDGET_LIMIT = 20
 
 const STOP_WORDS = new Set(
   `an and are as at be by for from in is it of on or that the this to with
@@ -26,7 +32,11 @@ const STOP_WORDS = new Set(
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' })
 
 function normalizeExtensionText(text: string): string {
-  return text.normalize('NFKC').toLowerCase().replace(/[_-]+/g, ' ')
+  return text
+    .normalize('NFKC')
+    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2') // 小驼峰也拆开：组件的操作名是 `addBook`，要能被 `book` 搜到
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
 }
 
 /**
@@ -47,6 +57,8 @@ export function tokenizeExtensionText(text: string): string[] {
 export interface ExtensionDocument {
   name: string
   text: string
+  /** 名字得分按它算，缺省按 `name`。组件的服务器名都带 `widget-`，否则搜「expense widget」每个组件都拿名字分 */
+  matchName?: string
 }
 
 /**
@@ -61,7 +73,7 @@ export function rankExtensionDocuments(
   const scored = documents
     .map((document, index) => {
       const words = new Set(tokenizeExtensionText(document.text))
-      const nameWords = new Set(tokenizeExtensionText(document.name))
+      const nameWords = new Set(tokenizeExtensionText(document.matchName ?? document.name))
       const raw = normalizeExtensionText(document.text)
       let score = 0
       for (const word of wanted) {
@@ -113,7 +125,48 @@ function builtinPresentationOf(
   return server.type === 'inproc' ? BUILTIN_MCP_PRESENTATIONS[server.name] : undefined
 }
 
+/** 组件的显示名（agent 起的）：过滤、截断之后才能出现在给模型看的文字里。服务器不是组件 → undefined */
+function widgetLabelOf(server: McpServer): string | undefined {
+  const widgetId = widgetIdOfServer(server.name)
+  if (widgetId === undefined) return undefined
+  const name = widgetRegistry.findById(widgetId)?.name ?? ''
+  return name
+    .replace(/[^\p{L}\p{N} _.-]/gu, '')
+    .trim()
+    .slice(0, 40)
+}
+
+/** 查询就是某个组件的 id 或显示名（显示名只有唯一一个对得上才算） */
+function widgetNamed(query: string, servers: readonly McpServer[]): McpServer | undefined {
+  const wanted = normalizeExtensionText(query.trim())
+  const widgets = servers.flatMap((server) => {
+    const widgetId = widgetIdOfServer(server.name)
+    return widgetId === undefined ? [] : [{ server, widgetId }]
+  })
+  // id 唯一，先认它：别的组件恰好起了这个显示名，也不该让它变成「多个命中」
+  const byId = widgets.find(({ widgetId }) => normalizeExtensionText(widgetId) === wanted)
+  if (byId) return byId.server
+  const byName = widgets.filter(
+    ({ widgetId }) =>
+      normalizeExtensionText(widgetRegistry.findById(widgetId)?.name ?? '') === wanted
+  )
+  return byName.length === 1 ? byName[0].server : undefined
+}
+
 function documentOf(server: McpServer): ExtensionDocument {
+  const widgetId = widgetIdOfServer(server.name)
+  if (widgetId !== undefined) {
+    const widget = widgetRegistry.findById(widgetId)
+    const ops = cachedToolsOf(server).flatMap((tool) => [
+      typeof tool.name === 'string' ? tool.name : '',
+      typeof tool.description === 'string' ? tool.description : ''
+    ])
+    return {
+      name: server.name,
+      matchName: `${widgetId} ${widget?.name ?? ''}`,
+      text: ['widget', widget?.name ?? '', widget?.description ?? '', ...ops].join(' ')
+    }
+  }
   const def = builtinPresentationOf(server)
   if (def) {
     const copy = BUILTIN_COPY_LANGUAGES.flatMap((language) => {
@@ -139,6 +192,8 @@ export function findExtensions(query: string, servers: readonly McpServer[]): Mc
   const byName = new Map(servers.map((server) => [server.name, server]))
   const exact = exactExtensionName(query, [...byName.keys()])
   if (exact !== undefined) return [byName.get(exact)!]
+  const widget = widgetNamed(query, servers)
+  if (widget) return [widget]
   return rankExtensionDocuments(query, servers.map(documentOf)).map((name) => byName.get(name)!)
 }
 
@@ -150,7 +205,8 @@ export function extensionChoiceLine(server: McpServer): string {
     .map((tool) => (typeof tool.name === 'string' ? safeExtensionName(tool.name) : ''))
     .filter(Boolean)
     .slice(0, 8)
-  const name = safeExtensionName(server.name)
+  const label = widgetLabelOf(server)
+  const name = `${safeExtensionName(server.name)}${label ? ` "${label}"` : ''}`
   return tools.length > 0 ? `- ${name} (tools: ${tools.join(', ')})` : `- ${name}`
 }
 
@@ -169,20 +225,43 @@ export function isExtensionOff(server: McpServer, state: ExtensionSessionState):
 export function extensionPromptEntries(
   state: ExtensionSessionState
 ): Array<{ name: string; hint?: string }> {
-  return offeredServers()
-    .filter((server) => isExtensionOff(server, state))
+  const off = offeredServers().filter((server) => isExtensionOff(server, state))
+  const widgets = off.filter((server) => widgetIdOfServer(server.name) !== undefined)
+  const shownWidgets = new Set(widgets.slice(0, PROMPT_WIDGET_LIMIT))
+  const entries = off
+    .filter((server) => widgetIdOfServer(server.name) === undefined || shownWidgets.has(server))
     .map((server) => {
       const def = builtinPresentationOf(server)
-      return def
-        ? { name: server.name, hint: i18next.t(def.hintKey) }
-        : { name: safeExtensionName(server.name) }
+      if (def) return { name: server.name, hint: i18next.t(def.hintKey) }
+      const label = widgetLabelOf(server)
+      return label === undefined
+        ? { name: safeExtensionName(server.name) }
+        : {
+            name: safeExtensionName(server.name),
+            ...(label ? { hint: i18next.t('tool.extensionWidgetHint', { name: label }) } : {})
+          }
     })
+  const more = widgets.length - shownWidgets.size
+  return more > 0
+    ? [
+        ...entries,
+        { name: 'widget-…', hint: i18next.t('tool.extensionMoreWidgets', { count: more }) }
+      ]
+    : entries
 }
 
-/** 卡片上的来源：内置 / 要运行的命令行（不含环境变量）/ 要连接的主机（地址里可能带 token） */
+/** 卡片上的来源：组件 / 内置 / 要运行的命令行（不含环境变量）/ 要连接的主机（地址里可能带 token） */
 export function extensionSourceOf(
   server: McpServer
-): { type: 'builtin' } | { type: 'command'; command: string } | { type: 'url'; host: string } {
+):
+  | { type: 'builtin' }
+  | { type: 'widget'; name: string }
+  | { type: 'command'; command: string }
+  | { type: 'url'; host: string } {
+  const widgetId = widgetIdOfServer(server.name)
+  if (widgetId !== undefined) {
+    return { type: 'widget', name: widgetRegistry.findById(widgetId)?.name ?? widgetId }
+  }
   if (server.type === 'inproc') return { type: 'builtin' }
   if (server.type === 'http') {
     try {

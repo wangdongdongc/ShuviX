@@ -807,8 +807,10 @@ export interface WidgetObjectInput {
   widgetId: string
   /** 组件此刻的名字（卡片展示用；名字是 agent 起的，别拿来做判定） */
   name: string
-  /** 这次要做什么：`call` 时是组件的操作名，其余是 `widget` 工具的动作名（`build`、`sql`、`preview` …） */
+  /** 这次要做什么：调用或测试时是组件的操作名，其余是 `widget` 工具的动作名（`build`、`sql`、`preview` …） */
   operation: string
+  /** 这条会话的勾选里有这个组件（只有组件的 MCP 服务器会填）：勾选是用户的同意，出厂策略据此不再问读操作 */
+  selected?: boolean
 }
 
 /**

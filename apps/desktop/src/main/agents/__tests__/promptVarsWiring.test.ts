@@ -96,6 +96,12 @@ vi.mock('../../services/knowledge', () => ({
   builtinManualDir: () => mocks.manualDir
 }))
 vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
+vi.mock('../../services/widget/widgetRegistry', () => ({
+  widgetRegistry: {
+    findById: (id: string) =>
+      id === 'a-b' ? { id, name: 'Reading "list"', description: 'SECRET_WIDGET' } : undefined
+  }
+}))
 vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/toolUtils/shell')>()
   return {
@@ -827,6 +833,14 @@ describe('desktopPromptVars —— 可以申请开启的扩展（PVW-E）', () =
     const { extensionDiscovery } = await varsFor({ toolNames: ['bash', 'read'] })
     expect(extensionDiscovery).toBe('')
     expect(mocks.configuredServers).not.toHaveBeenCalled()
+  })
+
+  it('PVW-E6 组件也列，带一句说明；组件说明和操作说明不进', async () => {
+    mocks.configuredServers.mockReturnValue([mcpServer('widget-a-b', 'inproc')])
+    const { extensionDiscovery } = await varsFor({ toolNames: ['tool_search'] })
+    // 带显示名的那句话走语言文件（这里没初始化 i18next；句子本身见 extensionDiscovery.test 的 ED-W12）
+    expect(extensionDiscovery).toContain('`widget-a-b`: ')
+    expect(extensionDiscovery).not.toContain('SECRET')
   })
 
   it('PVW-E3 已在名单里的（勾着 / 档案声明的）不列；chrome 与 plan 不列', async () => {

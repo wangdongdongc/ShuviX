@@ -22,6 +22,7 @@
  */
 
 import { readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'fs'
+import { WIDGET_ID_REGEX } from '@shuvix/chat-protocol/widgetServers'
 import { join } from 'path'
 import { getWidgetsDir } from '../../utils/paths'
 import { writeFileAtomic } from '../../utils/atomicWrite'
@@ -30,7 +31,7 @@ import { createLogger } from '../../logger'
 const log = createLogger('WidgetRegistry')
 
 /** widget id 规范：kebab-case 且至少含一个短横（同时也是目录名的合法性判据） */
-export const WIDGET_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)+$/
+export { WIDGET_ID_REGEX }
 
 const CONFIG_FILE = '.config.json'
 const MANIFEST_FILE = 'widget.json'

@@ -149,6 +149,14 @@ export class AgentCreationError extends Error {
 
 // ─────────────────────────── 工具次序（K6，纯函数） ───────────────────────────
 
+/** 工具名单去掉宿主说这个 agent 用不上的内置工具（见 ResolvedAgentTools.omitBuiltin） */
+export function withoutOmittedTools(
+  names: readonly string[],
+  omitted: readonly string[] | undefined
+): string[] {
+  return omitted?.length ? names.filter((name) => !omitted.includes(name)) : [...names]
+}
+
 /** 按 agent 扩展里的工具：agent → skill → MCP（逐台）→ 宿主其它；同名只留第一个 */
 export function agentExtensionTools(set: AgentToolSet): ToolRegistration[] {
   const candidates: (ToolRegistration | undefined)[] = [
@@ -548,7 +556,7 @@ export class AgentLock {
     const conversation = await this.deps.currentConversation()
     const kind: AgentKind = 'root'
     const { profile } = config
-    const names = normalizeToolNames(kind, profile.tools, config.toolOverlay)
+    const requested = normalizeToolNames(kind, profile.tools, config.toolOverlay)
     const thinkingLevel = resolveThinkingLevel(kind, profile, config.thinkingLevel)
     const cwd = config.cwd ?? ''
 
@@ -560,7 +568,7 @@ export class AgentLock {
         rootSessionId: sessionId,
         selfSessionId: sessionId,
         profile,
-        names,
+        names: requested,
         model: resolution.model,
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
         cwd
@@ -568,6 +576,7 @@ export class AgentLock {
       { signal }
     )
     cancelled()
+    const names = withoutOmittedTools(requested, resolved.omitBuiltin)
     if ((resolved.extraTools?.length ?? 0) > 0) {
       throw new AgentCreationError(
         'extra_tools',

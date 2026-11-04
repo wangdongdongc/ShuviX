@@ -20,7 +20,8 @@ agent has. When it needs something else, it can look through the servers that
 are enabled in your settings but off in this session with `tool_search`, and
 ask to turn one on. Every such request asks you. If you allow it, the whole
 server is ticked for this session and the agent can call its tools from its
-next step.
+next step. Your widgets are servers here too: one server per widget, named
+`widget-<id>`.
 
 **Why it asks**: ticking a server is usually the only thing between the agent
 and what that server can do. The built-in browser, for one, opens web pages

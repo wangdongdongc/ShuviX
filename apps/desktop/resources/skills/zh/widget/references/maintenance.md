@@ -23,7 +23,7 @@
 - 有针对性的 `edit`，不要重写。保留挂载块和它的 "DO NOT DELETE" 注释。
 - 操作：新的随便加；已有的只在被要求时才改或删（`api.md`）。表的改动遵循 `data.md`。
 - 在 README 的更新日志里加一行，用 README 的语言。
-- 用 `build`，`message` 写改了什么；用 `call` 加 `dry_run: true` 调一遍你改过的东西；外观变了就 `preview`。不要替用户打开它（`SKILL.md` 规则 8）。
+- 用 `build`，`message` 写改了什么；用 `test` 试一遍你改过的东西；外观变了就 `preview`。不要替用户打开它（`SKILL.md` 规则 8）。
 
 ## API 出现之前写的小组件
 
@@ -35,7 +35,7 @@
 4. **`build`。** 带 `api.ts` 的小组件第一次构建成功时，会被移到它自己的 SQLite 数据库，这个数据库一开始是空的；结果里会说明这一点。构建失败的话，什么都没移：修好再构建。
 5. **建表**：用 `sql`，传入 `schema.sql` 的文本。
 6. **复制数据行**，一张表一张表地来：用 `sql`、`legacy: true` 和 `SELECT json_agg(t) FROM <table> t` 把它们读成 JSON，再用 `sql` 插入，例如 `INSERT INTO books (id, title, done) SELECT value->>'id', value->>'title', value->>'done' FROM json_each('<the JSON, with every ' doubled>')`。布尔值变成 `0` / `1`，时间戳变成 ISO 8601 文本，数组和对象变成 JSON 文本。大表分批处理。
-7. **检查**：行数一致（两边各跑一次 `SELECT count(*) …`），操作能用（`call`），界面能显示数据（`preview`）。
+7. **检查**：行数一致（两边各跑一次 `SELECT count(*) …`），操作能用（`test`），界面能显示数据（`preview`）。
 8. 汇报你转换了什么。旧数据会一直留在共享数据库里，直到这个小组件被删除，所以第 6 步出了错可以重做。
 
 从浏览器打开 ShuviX 时会坏掉的东西也要改到合规。在小组件的 `.ts` / `.tsx` 文件里搜索：

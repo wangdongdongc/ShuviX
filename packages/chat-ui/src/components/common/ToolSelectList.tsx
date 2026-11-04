@@ -16,6 +16,8 @@ export interface ToolItem {
   isEnabled?: boolean
   /** 是否为 ShuviX 自带的内置项（builtin MCP server / builtin skill 等） */
   isBuiltin?: boolean
+  /** 这一项是组件（一个组件一台 MCP 服务器）：label 是它的名字，hint 是它的说明 */
+  isWidget?: boolean
   /**
    * 会话的 agent 档案在 `shuvix-tools` 里声明了这一项（值为档案显示名）：恒生效，会话勾选只能在其上
    * 叠加 —— 扩展能力的选择器把它画成已勾、锁住。编辑档案本身的工具清单时不看它

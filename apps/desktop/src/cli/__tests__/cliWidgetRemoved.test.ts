@@ -23,7 +23,7 @@ import { build, stop as stopEsbuild } from 'esbuild-wasm'
 const TOKEN = 'tok'
 const CHAT_PROTOCOL_SRC = resolve(__dirname, '../../../../../packages/chat-protocol/src')
 const REMOVED =
-  'shuvix widget was removed: widgets are used and built with the `widget` tool (actions list, describe, call, create, build, preview, sql, export, open).\n'
+  'shuvix widget was removed: widgets are built with the `widget` tool (actions list, create, build, test, preview, sql, export, open). Once a widget is turned on in a session, its operations are tools named mcp__widget-<id>__<operation>.\n'
 
 let dir = ''
 /** 有令牌、有 cli.sock 的家目录 */

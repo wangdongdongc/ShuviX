@@ -22,7 +22,10 @@ export { EXPORTED_VERSIONS } from './exportedVersions'
 export type { ExportedPackageName } from './exportedVersions'
 export { runWidgetDbQuery, WidgetDbError } from './widgetDb'
 export { widgetRuntime } from './api/widgetRuntime'
+export { resolveAgentOp, runWidgetOpForAgent } from './agentCall'
+export type { OpManifest } from './api/sandboxRuntime'
 export {
+  agentOpProblem,
   callWidgetOp,
   hasLegacyWidgetData,
   readApiSnapshot,

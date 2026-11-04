@@ -1,3 +1,4 @@
+import { isReservedMcpServerName } from '@shuvix/chat-protocol/widgetServers'
 import { app } from 'electron'
 import { v7 as uuidv7 } from 'uuid'
 import { providerDao } from '../dao/providerDao'
@@ -167,6 +168,8 @@ class ConfigShareService {
         return p ? { isBuiltin: p.isBuiltin === 1 } : undefined
       },
       findMcp: (name) => {
+        // 留给组件的名字导入时会被拒（applyMcpServer）：预览按「跳过」说，和结果一致
+        if (isReservedMcpServerName(name.trim())) return { isBuiltin: true, inproc: true }
         const s = mcpDao.findByName(name)
         return s ? { isBuiltin: s.isBuiltin === 1, inproc: s.type === 'inproc' } : undefined
       }
@@ -266,6 +269,10 @@ class ConfigShareService {
   }
 
   private async applyMcpServer(exported: ExportedMcpServer): Promise<void> {
+    // 这个前缀留给组件（工具卡片只凭前缀认组件），导入不能绕过添加时的同一条检查
+    if (isReservedMcpServerName(exported.name.trim())) {
+      throw new Error(`"${exported.name}": names starting with "widget-" are kept for widgets`)
+    }
     const existing = mcpDao.findByName(exported.name)
 
     // 0. 本端同名项是进程内的内置能力服务器（ssh / browser）→ 没有可导入的配置；启停是本机的

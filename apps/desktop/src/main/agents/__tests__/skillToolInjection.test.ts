@@ -16,6 +16,9 @@
  * 恒为 `undefined`（falsy），于是工具**永不注入** —— 照抄过来这一组会全绿且什么都没测。
  * 这里的桩必须自带可控的 `hasSkills`（与 `skillNames`）。
  *
+ * `widget` 工具跟着技能走（STI-W，2026-11-04）：它只管造组件，怎么造写在 `builtin:widget` 里。名单有 `widget`、这一次的货架上
+ * 没有那本技能 → `omitBuiltin: ['widget']`（内置工具是会话级的一份，只能从 agent 的名单里摘）；货架上有 / 名单没写 → 没有这个键。
+ *
  * 派生 agent 的三条（STI-4 / 5 / 5b，P2-04-32…34）：同一条规则，名单是派生 agent 自己的；SkillTool 的
  * projectPath 取**根会话**的项目（按 agentId 查不到项目）。
  */
@@ -263,7 +266,12 @@ describe('STI 名单即全部：宿主不在名单之外另挂工具', () => {
   async function offered(names: readonly string[]): Promise<string[]> {
     const builtin = await host.buildBuiltinTools({ sessionId: SID, sandboxed: false })
     const resolved = await resolve(names, 'bot')
-    return composeAgentTools({ names, builtin, set: resolved }).toolNames
+    return composeAgentTools({
+      // 运行时的 withoutOmittedTools（lock.ts / spawn.ts 拼工具之前都先过它）
+      names: names.filter((name) => !resolved.omitBuiltin?.includes(name)),
+      builtin,
+      set: resolved
+    }).toolNames
   }
 
   /** 名单里「不带前缀」、注册表里有的那部分（agent / skill 由解析结果那条路注入） */
@@ -277,6 +285,8 @@ describe('STI 名单即全部：宿主不在名单之外另挂工具', () => {
       'bot 基座不再逐个点名技能'
     ).toEqual([])
 
+    // 货架上有 widget 技能：`widget` 工具留着，工具表就是名单的投影
+    mocks.shelfSkills = ['builtin:drawing', 'builtin:widget', 'pdf']
     const names = await offered(BOT_TOOLS)
     expect(names).toContain('skill')
     expect(mocks.skillToolCalls).toHaveLength(1)
@@ -285,12 +295,70 @@ describe('STI 名单即全部：宿主不在名单之外另挂工具', () => {
     expect([...names].sort()).toEqual([...unprefixed(BOT_TOOLS), 'skill'].sort())
   })
 
+  it('STI-6c bot 基座、货架上没有 widget 技能：除了 `widget` 工具，还是名单的投影', async () => {
+    const names = await offered(BOT_TOOLS)
+    expect(BOT_TOOLS).toContain('widget')
+    expect(names).not.toContain('widget')
+    expect([...names].sort()).toEqual(
+      [...unprefixed(BOT_TOOLS).filter((n) => n !== 'widget'), 'skill'].sort()
+    )
+  })
+
   it('STI-6b 同一份 bot 名单去掉 `skill` → 没有 skill，SkillTool 一次都没构造', async () => {
     // 以前 root 恒挂 SkillTool（不看档案）—— 那个例外已经删了：不写就没有
     const withoutSkill = BOT_TOOLS.filter((n) => n !== SKILL)
     const names = await offered(withoutSkill)
     expect(names).not.toContain('skill')
     expect(mocks.skillToolCalls).toEqual([])
-    expect([...names].sort()).toEqual([...unprefixed(withoutSkill)].sort())
+    // 没有技能工具就没有货架，`widget` 工具也跟着没了
+    expect([...names].sort()).toEqual(
+      [...unprefixed(withoutSkill).filter((n) => n !== 'widget')].sort()
+    )
+  })
+})
+
+describe('STI-W widget 工具跟着 builtin:widget 技能走', () => {
+  it.each<[string, () => void]>([
+    ['别的技能都在，就是没有它', () => (mocks.shelfSkills = ['builtin:drawing', 'pdf'])],
+    ['货架是空的（hasSkills=false）', () => (mocks.hasSkills = false)]
+  ])('STI-W1 名单有 `widget` 和 `skill`，%s → omitBuiltin 恰是 widget', async (_l, arrange) => {
+    arrange()
+    const resolved = await resolve(['read', 'widget', 'skill'])
+    expect(resolved.omitBuiltin).toEqual(['widget'])
+  })
+
+  it('STI-W1 名单有 `widget`、没有 `skill`（于是没有货架）→ omitBuiltin 恰是 widget', async () => {
+    const resolved = await resolve(['read', 'widget'])
+    expect(resolved.omitBuiltin).toEqual(['widget'])
+    expect(mocks.skillToolCalls).toEqual([])
+  })
+
+  it('STI-W2 货架上有 builtin:widget → 没有 omitBuiltin 这个键', async () => {
+    mocks.shelfSkills = ['builtin:widget']
+    const resolved = await resolve(['read', 'widget', 'skill'])
+    expect(resolved).not.toHaveProperty('omitBuiltin')
+    expect(resolved.skills).toEqual(['builtin:widget'])
+  })
+
+  it('STI-W3 名单没写 `widget` → 没有这个键（不管有没有技能）', async () => {
+    expect(await resolve(['read', 'skill'])).not.toHaveProperty('omitBuiltin')
+    expect(await resolve(['read'])).not.toHaveProperty('omitBuiltin')
+  })
+
+  it('STI-W4 派生 agent 同一条规则：看的是它自己这一次的货架', async () => {
+    const spawned = (names: string[]): Promise<ResolvedAgentTools> =>
+      host.resolveAgentTools(
+        requestD({
+          kind: 'spawned',
+          agentId: 'sub-1',
+          selfSessionId: 'sub-1',
+          names,
+          profile: inProcess(profileOf('coding'))
+        }),
+        { signal: new AbortController().signal }
+      )
+    expect((await spawned(['read', 'widget'])).omitBuiltin).toEqual(['widget'])
+    mocks.shelfSkills = ['builtin:widget']
+    expect(await spawned(['read', 'widget', 'skill'])).not.toHaveProperty('omitBuiltin')
   })
 })

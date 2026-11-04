@@ -23,9 +23,11 @@ import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { browserHistoryDao } from './dao/browserHistoryDao'
 import {
+  builtinMcpRegistry,
   mcpService,
   setBuiltinMcpAgentResolver,
-  setBuiltinMcpTaskListReader
+  setBuiltinMcpTaskListReader,
+  setComputedMcpServers
 } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
@@ -115,6 +117,16 @@ import { setBotAccessChecker } from './services/botAccessHint'
 import { desktopBotAccessChecker } from './services/botAccessWiring'
 import { projectService } from './services/projectService'
 import { sessionService } from './services/sessionService'
+import {
+  createWidgetMcpServerFactory,
+  invalidateWidgetServerRows,
+  widgetServerRows
+} from './services/builtinMcp/widgetMcpServer'
+import {
+  widgetIdOfServer,
+  widgetServerId,
+  widgetServerName
+} from '@shuvix/chat-protocol/widgetServers'
 import { settingsService } from './services/settingsService'
 import i18next from 'i18next'
 import { policyService } from './services/policyService'
@@ -1054,6 +1066,21 @@ app.whenReady().then(async () => {
   setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)
   // 组件删掉了：各会话权限表里授权用它的行一并删掉（复用同一个 id 的新组件不继承旧授权）
   widgetService.onDeleted((widgetId) => sessionAcl.deleteWidget(widgetId))
+  // 勾选也一样：组件的勾选算读授权
+  widgetService.onDeleted((widgetId) => {
+    void sessionService.forgetServerSelection(widgetServerName(widgetId))
+  })
+  // 每个有 API 的组件是一台 MCP 服务器：行和工厂都按组件现算
+  setComputedMcpServers(widgetServerRows)
+  builtinMcpRegistry.setResolver((name) => {
+    const widgetId = widgetIdOfServer(name)
+    return widgetId === undefined ? undefined : createWidgetMcpServerFactory(widgetId)
+  })
+  // 组件给 agent 的工具变了（构建改了 API、归档、恢复、删除）：它的 MCP 服务器下一次连接重新列，在途的调用跑完才关
+  widgetService.onServerChanged((widgetId) => {
+    invalidateWidgetServerRows()
+    mcpService.retireServer(widgetServerId(widgetId))
+  })
   // 组件预览页面的请求按发起预览的会话判：只判不问（预览窗口没人看着），同 judgeGate
   setWidgetPreviewJudge({
     widget: (sessionId, access, widgetId, operation) =>

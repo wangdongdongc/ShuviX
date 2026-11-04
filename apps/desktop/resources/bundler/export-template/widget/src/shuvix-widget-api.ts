@@ -60,7 +60,7 @@ export interface WidgetCtx {
   now(): string
   /** 随机 UUID（v4） */
   uuid(): string
-  /** 写一行日志（宿主收集；`widget` 工具的 `call` 会显示） */
+  /** 写一行日志（宿主收集；`widget` 工具的 `test` 会显示） */
   log(...args: unknown[]): void
 }
 

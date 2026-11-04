@@ -5419,6 +5419,35 @@ describe('createSecurityContext — enforceWidget（WT4-SE-15）', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
+  it('WT4-SE-15b selected 给了才进客体，true / false 都原样：真 → 读不问不审查；假 → 照问，客体上是 false', async () => {
+    const target = { widgetId: 'X', name: 'N', operation: 'listBooks' }
+    const freed = widgetContext()
+    await freed.ctx.enforceWidget('read', { ...target, selected: true }, CALL_OPTS)
+    expect(freed.requestUserInput).not.toHaveBeenCalled()
+    expect(freed.review).not.toHaveBeenCalled()
+
+    const asked = widgetContext()
+    await asked.ctx.enforceWidget('read', { ...target, selected: false }, CALL_OPTS)
+    expect(asked.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(asked.review.mock.calls[0]![0].request.object).toStrictEqual({
+      type: 'widget',
+      widgetId: 'X',
+      name: 'N',
+      operation: 'listBooks',
+      selected: false
+    })
+
+    // 入参上是 undefined：键不出现（`has(object.selected)` 判的就是有没有这个键）
+    const absent = widgetContext()
+    await absent.ctx.enforceWidget('read', { ...target, selected: undefined }, CALL_OPTS)
+    expect(absent.review.mock.calls[0]![0].request.object).toStrictEqual({
+      type: 'widget',
+      widgetId: 'X',
+      name: 'N',
+      operation: 'listBooks'
+    })
+  })
+
   it("WT4-SE-15 「其它」反馈：传了 onOther:'return' 也抛（从不当成放行），反馈记进 humanFeedbackOf", async () => {
     const { ctx, sid } = widgetContext({ response: { kind: 'other', text: 'not this widget' } })
     expect(

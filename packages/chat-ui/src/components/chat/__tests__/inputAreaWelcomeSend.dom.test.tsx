@@ -718,6 +718,43 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
     expect(prompt.sessionId).toBe(NEW)
   })
 
+  // 组件的勾选算读授权，得是用户自己同意的：命令文件（可能来自项目目录）不能替用户点这个头（2026-11-04）
+  const WIDGET_CMD = { ...CMD, requiredTools: ['mcp:req', 'mcp:widget-a-b'] }
+
+  it('WS-D-W1 命令依赖一个组件：别的依赖照常进草稿，组件那一项不进（键入 /cmd 加空格）', async () => {
+    seedWelcome({ draft: ['mcp:a'], slashCommands: [WIDGET_CMD] })
+    await mount()
+    await type('/cmd ')
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a', 'mcp:req'])
+  })
+
+  it('WS-D-W1 依赖只有组件：什么都不写', async () => {
+    seedWelcome({
+      draft: ['mcp:a'],
+      slashCommands: [{ ...CMD, requiredTools: ['mcp:widget-a-b'] }]
+    })
+    await mount()
+    await type('/cmd ')
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a'])
+  })
+
+  it('WS-D-W2 发送时才解析的那条路（/cmd do it）：写进新会话的勾选里同样没有组件', async () => {
+    seedWelcome({ draft: ['mcp:a'], slashCommands: [WIDGET_CMD] })
+    await mount()
+    await act(async () => {
+      store().setInputText('/cmd do it')
+    })
+    await flush()
+    await pressEnter()
+
+    const writes = callsOf('session.updateEnabledTools') as Array<
+      [{ id: string; enabledTools: string[] }]
+    >
+    expect(writes.length).toBeGreaterThan(0)
+    for (const [write] of writes) expect(write.enabledTools).not.toContain('mcp:widget-a-b')
+    expect(writes.at(-1)![0].enabledTools).toContain('mcp:req')
+  })
+
   it('WS-D-4b 欢迎页键入 /cmd 加空格（转成芯片）→ 依赖项立即进草稿、零 IPC；发送后经第一次 updateEnabledTools 落进新会话', async () => {
     seedWelcome({ draft: ['mcp:a'], slashCommands: [CMD] })
     await mount()

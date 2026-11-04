@@ -27,7 +27,7 @@
 
 ## 某个操作失败
 
-自己用 `call` 调它，看完整的错误和它的 `logs`：
+自己用 `test` 试它，看完整的错误和它的 `logs`：
 
 | 错误                           | 含义                                                                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
@@ -36,7 +36,7 @@
 | `Widget operation failed: …`   | 处理函数抛了异常。`no such table`：表从没建过（`data.md`）。`A read operation cannot change data`：一个会写入的 `op.read`。`Widget operations can only run …` / `cannot use …`：一条既不是查询、也不是行改动的语句（`api.md`） |
 | `timeout` / `out_of_memory`    | 处理函数超出了它的限制（`api.md`）：一个停不下来的循环、一个返回全部数据的查询                                           |
 | `no_api` / `unknown_op`        | 没有构建好的 API，或者没有这个操作：编辑 `api.ts` 之后要 `build`                                                         |
-| `changed`                      | 在你检查和你调用之间，小组件被重新构建了；再 `describe` 它一次                                                           |
+| `changed`                      | 在你检查和你调用之间，小组件被重新构建了：确认它还是你要的操作，再调一次                                                           |
 
 在界面里，`WidgetError` 带着同样的 `code` 和 `message`。
 

@@ -176,6 +176,22 @@ agent 写下一份 bot 文件时，工具结果里会说每条 `timer.fired` 绑
 最窄的那个条件。模板见上面的「替用户新建一个 bot」。替用户设置 bot 时：先想清楚它的运行要在工作文件夹之外读写什么、要不要
 读别的会话，告诉用户它需要什么、为什么需要，用户同意之后再写策略。
 
+定时运行要用小组件时还多一步。小组件是一种扩展，而一次运行开始时只有绑定的项目保存的扩展（在临时工作区里就没有），所以它得用 `tool_search` 开启小组件，那张卡片只有用户能回答。项目保存了这个小组件的话，它一开始就开着、读不再问，但写仍然会问。要在没人的时候也能跑，配套策略把两样都放行，范围要写上两种客体（`object.type: [extension, widget]`）：
+
+```yaml
+shuvix-policy-rules:
+  - effect: force-allow
+    action: [enable]
+    match: >-
+      has(subject.bot) && subject.bot == '<这个 bot>' && subject.agentKind == 'root' &&
+      object.type == 'extension' && object.server == 'widget-<id>'
+  - effect: force-allow
+    action: [read, write]
+    match: >-
+      has(subject.bot) && subject.bot == '<这个 bot>' && subject.agentKind == 'root' &&
+      object.type == 'widget' && object.widgetId == '<id>'
+```
+
 写下一份带绑定的 bot 文件时，工具结果里有一段**无人值守权限核对**：按这个 bot 的一次定时运行会遇到的样子（它的根
 agent，在绑定的项目里或临时文件夹里，权限表里没有任何授予）用真实的策略判一遍，对读别的会话、往别的会话发消息、点名这个
 bot 的策略里写到的每个路径，以及几个本该还要问的地方（家目录里工作文件夹之外、家目录之外、点名路径旁边的文件），说它是
@@ -220,8 +236,8 @@ bot 会话**只归属于它的 bot，不归属项目**：它只列在 bot 名下
 干活的地方干活）与后台自动续跑一应照常。
 
 它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, suggest, show_image, write, edit, session,
-agent, knowledge, artifact, widget, skill` —— 没有 `bash`，也不声明内置能力服务器
-`mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 自己动手干活（没有 shell，没能验证的它会直说，而不是写脚本去试）；人设只管它怎么跟你说话，它写的文件、笔记、代码用平实的写法。
+agent, knowledge, artifact, widget, tool_search, skill` —— 没有 `bash`，也不声明内置能力服务器
+`mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，或允许 bot 经 `tool_search` 的申请，那是用户自己的选择）。bot 自己动手干活（没有 shell，没能验证的它会直说，而不是写脚本去试）；人设只管它怎么跟你说话，它写的文件、笔记、代码用平实的写法。
 bot 自己那份文件是这条会话权限表里的一行（**Bot 文件**，缺省可读写；会话设置的「文件访问」里可以改成只读），所以它更新记忆不用问。
 `~/.shuvix/bots/` 下别的写入是一次会话权限表以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
 自动审查时可能由审查员回答（想让每次这样的写入 —— 包括 bot 自己那份文件 —— 都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`

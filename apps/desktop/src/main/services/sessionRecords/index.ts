@@ -251,6 +251,27 @@ export class SessionRecords {
     row.updatedAt = Date.now()
   }
 
+  /** 所有会话（持久的和内存的）的扩展能力勾选里去掉这几项；交回改了的会话 id */
+  removeEnabledTools(entries: readonly string[]): string[] {
+    const affected: string[] = []
+    // 持久会话读整行：findAll 容得下坏掉的设置（当空的），按键取值的 SQL 碰到一行坏 JSON 就整个抛错，后面的都清不到
+    const rows: Array<{ id: string; tools: unknown }> = [
+      ...sessionDao.findAll().map((s) => ({ id: s.id, tools: s.settings?.enabledTools })),
+      ...[...this.ephemeral.keys()].map((id) => ({
+        id,
+        tools: this.pickSettings(id, ['enabledTools'])?.enabledTools
+      }))
+    ]
+    for (const { id, tools } of rows) {
+      if (!Array.isArray(tools)) continue
+      const kept = tools.filter((entry) => !entries.includes(entry))
+      if (kept.length === tools.length) continue
+      this.updateSettings(id, { enabledTools: kept })
+      affected.push(id)
+    }
+    return affected
+  }
+
   /** 删除会话这一行。日历索引行由 sessionService.delete 显式清（FK CASCADE 未开） */
   deleteById(id: string): void {
     if (this.ephemeral.delete(id)) {

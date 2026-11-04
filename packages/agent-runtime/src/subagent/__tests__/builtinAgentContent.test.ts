@@ -77,7 +77,7 @@ describe('BA bot 基座档案', () => {
     }
   } as const
   const TOOLS =
-    'read, ls, grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, artifact, widget, skill'
+    'read, ls, grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
 
   it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
     'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',

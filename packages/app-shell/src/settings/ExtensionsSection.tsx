@@ -22,7 +22,7 @@
  *  - 两行的组名列按最宽的那个对齐（subgrid）：「MCP」「Knowledge bases」长短不一，标签列照样齐。
  */
 import { useTranslation } from 'react-i18next'
-import { Puzzle, Library, WifiOff, Lock, Package } from 'lucide-react'
+import { Puzzle, Library, WifiOff, Lock, Package, Wrench } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import {
   builtinKnowledgeCopy,
@@ -42,6 +42,8 @@ interface ExtItem {
   /** 悬停提示（内置 MCP 的本地化说明） */
   desc?: string
   builtin?: boolean
+  /** 这一项是组件 */
+  widget?: boolean
   offline?: boolean
   /** 会话的 agent 档案声明了它（值为档案显示名）：缺省勾上，取消写取消记号 */
   declaredBy?: string
@@ -98,6 +100,7 @@ function ExtChip({
   display,
   label,
   builtin,
+  widget,
   offline,
   attrs
 }: {
@@ -111,6 +114,7 @@ function ExtChip({
   /** 内置项的界面语言名字 */
   label?: string
   builtin?: boolean
+  widget?: boolean
   offline?: boolean
   attrs: Record<`data-${string}`, string | boolean | undefined>
 }): React.JSX.Element {
@@ -141,6 +145,17 @@ function ExtChip({
         className="rounded border-border-primary accent-accent w-3 h-3 shrink-0"
       />
       {/* 内置记号：琥珀色小包裹（随应用一起来的），悬停与读屏说「内置」—— 不用锁，锁在这张卡上是只读的意思 */}
+      {widget && (
+        <span
+          data-widget-mark
+          role="img"
+          aria-label={t('input.extensionWidgetBadge')}
+          title={t('input.extensionWidgetBadge')}
+          className="flex shrink-0 text-amber-500"
+        >
+          <Wrench size={11} aria-hidden />
+        </span>
+      )}
       {builtin && (
         <span
           data-builtin-badge
@@ -223,13 +238,18 @@ export function ExtensionsSection({
   // MCP 的 label 就是 server 名，和展示名重复，不当描述用；内置 server 有本地化的名字与一行说明
   const mcpItems: ExtItem[] = mcpTools
     .map((tool) => {
-      const copy = tool.isBuiltin ? builtinMcpCopy(tool.name, t) : undefined
+      const copy = tool.isWidget
+        ? { label: tool.label, hint: tool.hint }
+        : tool.isBuiltin
+          ? builtinMcpCopy(tool.name, t)
+          : undefined
       return {
         key: tool.name,
         display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
         label: copy?.label,
         desc: copy?.hint,
         builtin: tool.isBuiltin,
+        widget: tool.isWidget,
         // 惰性启动下「没连上」是常态（用到才连），只有连接失败才标成离线
         offline: tool.serverStatus === 'error',
         declaredBy: tool.declaredBy
@@ -261,6 +281,7 @@ export function ExtensionsSection({
           display={it.display}
           label={it.label}
           builtin={it.builtin}
+          widget={it.widget}
           offline={it.offline}
           attrs={{
             'data-ext-item': it.key,

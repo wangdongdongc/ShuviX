@@ -9,8 +9,9 @@
  * 第三份（会话访问，2026-10-20 用户裁定）：ask-on-session-access —— `session` 工具查看（read）/ 对话（write）
  * 一条别的会话，不是自己发起的那一轮、也不在会话权限表（`vars.aclSessionRead` / `vars.aclSessionWrite`）里时询问
  * （XS-10 形态；XS-11…15 行为，见「内置策略行为判定」末尾的那一组）。
- * 第四份（组件访问）：ask-on-widget-access —— `widget` 工具读（read）/ 改（write）一个组件，不在会话权限表
- * （`vars.aclWidgetRead` / `vars.aclWidgetWrite`）里时询问（WT4-SE-01 形态；WT4-SE-02…08 行为，紧跟会话那一组）。
+ * 第四份（组件访问）：ask-on-widget-access —— 读（read）/ 改（write）一个组件，不在会话权限表
+ * （`vars.aclWidgetRead` / `vars.aclWidgetWrite`）里时询问；读操作经组件的 MCP 服务器调、这条会话勾着它（`object.selected`）
+ * 时不问（WT4-SE-01 形态；WT4-SE-02…08、WT4-SE-20…21 行为，紧跟会话那一组）。
  * 第五份（开启扩展，2026-11-03 用户裁定）：ask-on-extension —— `tool_search` 要开启一台这条会话还没选的 MCP 服务器，
  * 每次都问（BP-E，紧跟组件那一组）。
  * 管远程访问的一份（2026-10-19 用户裁定）：network-admission —— network 主体、发送方不是本机的 HTTP 请求
@@ -319,7 +320,7 @@ describe('buildBuiltinPolicies', () => {
     expect(policy.displayName).toBe('Ask Before Using Another Session')
   })
 
-  it('WT4-SE-01 ask-on-widget-access：两条 ask × widget，desktop 限定 —— #0 读只看 vars.aclWidgetRead，#1 写只看 vars.aclWidgetWrite；没有 lets、不是 inDir 的目录参数', () => {
+  it('WT4-SE-01 ask-on-widget-access：两条 ask × widget，desktop 限定 —— #0 读看 vars.aclWidgetRead 与客体的 selected，#1 写只看 vars.aclWidgetWrite；没有 lets、不是 inDir 的目录参数', () => {
     const policy = byName('ask-on-widget-access')
     expect(policy.scope).toStrictEqual({
       'subject.kind': ['agent'],
@@ -331,7 +332,8 @@ describe('buildBuiltinPolicies', () => {
       {
         effect: 'ask',
         conditions: { action: ['read'] },
-        match: '!(object.widgetId in vars.aclWidgetRead)'
+        match:
+          '!(object.widgetId in vars.aclWidgetRead) && !(has(object.selected) && object.selected)'
       },
       {
         effect: 'ask',
@@ -2301,6 +2303,71 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       expect(sinks.logWarn).not.toHaveBeenCalled()
     })
 
+    // 勾选算读的同意（2026-11-04）：`selected` 只有组件的 MCP 服务器会填。读因它放行，写从不因它放行 ——
+    // 写规则对 selected 一个字都不看，「勾上就能改」是这张表要拦的那个错
+    it('WT4-SE-20 selected 只放行读：true 免读；false 与缺键照问；写不看它（表外的写、只读的行都照问）；读写的行照旧放行', () => {
+      const selected = (
+        widgetId: string,
+        value: boolean,
+        operation = 'listBooks'
+      ): SecurityObject => ({
+        ...widget(widgetId, 'Reading list', operation),
+        selected: value
+      })
+      const rows: Array<[string, 'read' | 'write', SecurityObject, WidgetExpect]> = [
+        ['表外、勾着：读放行', 'read', selected('X', true), 'allow'],
+        ['表外、没勾：读照问', 'read', selected('X', false), '#0'],
+        ['表外、缺键：读照问', 'read', widget('X'), '#0'],
+        ['表外、勾着：写照问', 'write', selected('X', true, 'addBook'), '#1'],
+        ['只读的行、勾着：写照问', 'write', selected('R', true, 'addBook'), '#1'],
+        ['只读的行、没勾：读放行', 'read', selected('R', false), 'allow'],
+        ['读写的行、没勾：写放行', 'write', selected('W', false, 'addBook'), 'allow'],
+        ['读写的行、勾着：读放行', 'read', selected('W', true), 'allow']
+      ]
+      const sinks = warnSinks()
+      const provider = widgetProvider(WIDGET_ROWS, { logger: sinks.logger })
+      for (const [label, action, object, expected] of rows) {
+        const decision = decide(action, object, {
+          provider,
+          warn: sinks.evalWarn,
+          tool: { name: 'mcp__widget-x__op', operation: 'call' }
+        })
+        if (expected === 'allow') {
+          expect([label, decision.effect, decision.winning]).toEqual([
+            label,
+            'allow',
+            'default:widget'
+          ])
+        } else {
+          expect([label, decision.effect, decision.winning]).toEqual([
+            label,
+            'ask',
+            `ask-on-widget-access${expected}`
+          ])
+        }
+      }
+      // 缺键不是求值错误：`has()` 护着，没有 fail-safe 告警，也不是靠报错才问的
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('WT4-SE-21 工具维度不放行：preview / export / test 走同一条读规则，客体没有 selected 就照问', () => {
+      const sinks = warnSinks()
+      const provider = widgetProvider(WIDGET_ROWS, { logger: sinks.logger })
+      for (const operation of ['preview', 'export', 'test']) {
+        const decision = decide('read', widget('X', 'Reading list', operation), {
+          provider,
+          warn: sinks.evalWarn,
+          tool: { name: 'widget', operation }
+        })
+        expect([operation, decision.effect, decision.winning]).toEqual([
+          operation,
+          'ask',
+          'ask-on-widget-access#0'
+        ])
+      }
+    })
+
     it('WT4-SE-03 卡片的 operation 取自客体而不是工具维度；客体缺 name / operation → 空串', () => {
       const provider = widgetProvider([])
       const viaTool = decide('write', widget('X', 'Reading list', 'addBook'), {
@@ -2662,6 +2729,22 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       }
       expect(sinks.evalWarn).not.toHaveBeenCalled()
       expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-E 组件的服务器（builtin: false）一样问，卡片命令里是它的服务器名', () => {
+      const sinks = warnSinks()
+      const decision = decide(
+        'enable',
+        { type: 'extension', server: 'widget-a-b', builtin: false },
+        { provider: makeProvider({ logger: sinks.logger }), warn: sinks.evalWarn }
+      )
+      expect(decision).toMatchObject({
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-extension#0'
+      })
+      expect(decision.ask).toStrictEqual({ command: 'Extension(widget-a-b)' })
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
     })
 
     it('BP-E 用户 force-allow 只放过点名的那一台，别的照问', () => {

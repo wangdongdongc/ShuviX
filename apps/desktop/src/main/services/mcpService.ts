@@ -53,6 +53,17 @@ for (const [name, factory] of Object.entries(BUILTIN_MCP_FACTORIES)) {
 }
 
 /**
+ * 算出来的服务器行（组件，一个组件一台，见 builtinMcp/widgetMcpServer.ts）：由 main 启动时注册，工厂也一样
+ * （builtinMcpRegistry.setResolver）。它们要读组件和会话，直接 import 会让每个用到 mcpService 的模块都连上这些。
+ * 没注册 = 没有。
+ */
+let computedServers: () => McpServer[] = () => []
+
+export function setComputedMcpServers(servers: () => McpServer[]): void {
+  computedServers = servers
+}
+
+/**
  * 内置服务器认调用方用的解析器：(会话, durable 对话) → 发起调用的 agent。由 main 启动时注册
  * （`(sid, c) => host.get(sid)?.agentIdentity(c)`，见 sessionHost 的 sessionAgentResolver）——
  * 直接 import 会话宿主会经 agentHost 绕回本文件。没注册 = 认不出（主体按 root）。
@@ -117,7 +128,14 @@ function createTransport(
 }
 
 export const mcpService = new McpManager({
-  store: mcpDao,
+  // 配置行 + 组件算出来的行。设置页和配置分享直接读 mcpDao，只看得到前者
+  store: {
+    findById: (id) => mcpDao.findById(id) ?? computedServers().find((row) => row.id === id),
+    findEnabled: () => [...mcpDao.findEnabled(), ...computedServers()],
+    findAll: () => [...mcpDao.findAll(), ...computedServers()],
+    // 算出来的行不在表里，这一句什么也不更新；它们的工具每次都现算
+    updateCachedTools: (id, toolsJson) => mcpDao.updateCachedTools(id, toolsJson)
+  },
   createTransport,
   logger: {
     info: (m) => log.info(m),

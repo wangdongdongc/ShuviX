@@ -1,16 +1,15 @@
 /**
- * widget 工具（桌面注册）—— agent 用组件、造组件的唯一入口（设计稿 docs/widget-tool-design.md §5、D12–D15）。钉：
+ * widget 工具（桌面注册）—— agent **造**组件的入口（2026-11-04：用组件走组件的 MCP 服务器，这里只管造）。钉：
  *
- *   WT4-TL-01   描述 / schema 只按根 agent 的货架（ctx.rootSkills）定：有 builtin:widget 是全量，没有只剩
- *               list / describe / call 与四个字段；描述里没有组件名单
- *   WT4-TL-02..06 造的那组动作（与 call 的 dry_run）在调用时按**发起调用的 agent 自己的**货架再核一次：
+ *   WT-40       描述 / schema 是固定的一份：8 个动作，与货架无关；没有组件名单；告诉模型组件的操作在哪
+ *   WT-41       旧锁里的调用（`call` / `describe`）→ Unknown action，什么都不碰
+ *   WT4-TL-02..06 每个动作（含 list）在调用时按**发起调用的 agent 自己的**货架核一次：
  *               它的 skill 工具没有 widget 技能 → 拒，什么都不碰；真 SkillTool 经包装器（原型链）照样读得到
  *               skillNames；没有 durable 调用（直接调钩子）按根货架；有调用但读不到工具表 → 按不能（宁可少给）
- *   WT4-TL-07..09 list：用组件的只看见有 API 的组件与它们给 agent 的操作；造组件的另见没有 API 的、老组件与
- *               源码目录；授权、转义、第一句、空表
- *   WT4-TL-10..11 describe 与 describe / call 的参数错误
- *   WT4-TL-12..16 call：先过门（读操作要读、写操作要读写）再进分发器；拒绝 / 取消；参数错误不弹卡片；
- *               纯界面操作只在 dry run 里够得着；失败的几种文案（invalid_args 附 schema、internal 说是组件的代码出错）
+ *   WT4-TL-08..09 list：每个组件带源码目录、存储、授权；纯界面操作标出来；转义、第一句、空表
+ *   WT-43..49   test：先过门（读操作要读、写操作要读写，客体上没有 selected —— 勾选放开的只是组件服务器上的读操作）
+ *               再进分发器，dryRun + allowUiOnly；够得着纯界面操作；参数错误不弹卡片；失败抛错（红行）带回滚的说明
+ *   WT-50       preview / export / build / sql 的客体同样没有 selected
  *   WT4-TL-17..18 create：不问，造它的会话得到读写（来源 widget）；失败不授予
  *   WT4-TL-19..25 build / preview / sql / export / open 各自的门、参数与结果
  *   WT4-TL-32   preview 的 `wait_for` 到 previewWidget 成 `waitFor`；没给或空串 → 没有 waitFor 键
@@ -22,24 +21,24 @@
  *               不问有没有旧数据
  *   WC-S44     造组件的 list：已换成 SQLite、还留着旧数据的组件标 old-data="legacy-postgres"（不是 storage）
  *   WT4-TL-26   派生 agent 调：门的主体与调用方的 actor 都是它，不是根 agent
- *   WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那份：根货架有、派生 agent 创建时 widget 技能已停用 → 照拒，
- *               用的那组照用；锁里记着、此刻停用了 → 按锁放行
- *   WT4-TL-29   注册元数据：设置页「LLM 工具」看到的是全量描述与 schema（与哪个会话无关）
+ *   WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那份：根货架有、派生 agent 创建时 widget 技能已停用 → 照拒；
+ *               锁里记着、此刻停用了 → 按锁放行
+ *   WT4-TL-29   注册元数据：设置页「LLM 工具」看到的是这份描述与 schema（与哪个会话无关）
  *
  * 记下「这条会话用过这个组件」（widgetService.noteSessionUse；会话行的项目经 sessionRecords.pick）：
- *   TL-L1  create / call / build / preview / sql / export / open 各恰记一次 (id, 's1', null)：在门之后（export 在路径的
+ *   TL-L1  create / test / build / preview / sql / export / open 各恰记一次 (id, 's1', null)：在门之后（export 在路径的
  *          写门之后），create 在授予之后、用去了空白的 id，open 在开窗口之后
  *   TL-L2  pick 按 ('s1', ['projectId', 'settings']) 读（bot 会话引用的工作项目在 settings 里）；会话在项目 p1 里 → 记 'p1'
  *   TL-L2b bot 会话（及其子会话）只归属 bot：记它引用的工作项目（settings.workProject）；成员关系优先；
  *          引用隐藏承载项目 / 空白引用 → null
  *   TL-L3  隐藏的承载项目（__knowledge__ / __agents__）、空串、读不到会话行 → 记 null
  *   TL-L4  门拒绝（五个带门的动作）、export 路径的写门拒绝、门挂着时取消 → 不记
- *   TL-L5  参数不对（组件缺 / 不是 id / 不在 / 归档了；call 缺 op、没有这个操作、没有 API、纯界面操作不带 dry_run；
+ *   TL-L5  参数不对（组件缺 / 不是 id / 不在 / 归档了；test 缺 op、没有这个操作、没有 API；
  *          preview 认不得的尺寸 / 主题；空 sql；legacy 而没有旧数据；export 缺 path；create 缺名字 / init 抛错；
  *          不造组件的调用方点名造的动作）→ 不记
- *   TL-L6  list / describe 只是看：不记（describe 有 API 的组件也不记）
- *   TL-L7  读会话行抛错、记账抛错 → 结果与平常一模一样（call 的值、create 的文件表）
- *   TL-L8  过了门之后失败的照样记：outcome.ok 为 false 的 call、分发器抛 WidgetApiError、构建失败、dry_run 的 call
+ *   TL-L6  list 只是看：不记
+ *   TL-L7  读会话行抛错、记账抛错 → 结果与平常一模一样（test 的值、create 的文件表）
+ *   TL-L8  过了门之后失败的照样记：outcome.ok 为 false 的 test、分发器抛 WidgetApiError、构建失败
  *   TL-L9  派生 agent 调：记在会话 's1' 名下
  *
  * 组件服务 / 授权表 / 门 / 窗口 / 预览全部替身（门在 toolContext.assertWidgetAccess，这里只看工具怎么调它）；
@@ -123,7 +122,19 @@ vi.mock('../../services/toolRegistry', () => ({
     state.registered.push(meta)
   }
 }))
-vi.mock('../../services/widget', () => ({
+// 共用的那段（找操作、结果的文字，agentCall.ts）用真的，它下面的分发器与快照是替身
+vi.mock('../../services/widget/api/widgetApi', () => ({
+  callWidgetOp: state.callWidgetOp,
+  readApiSnapshot: state.readApiSnapshot,
+  widgetStorageOf: state.widgetStorageOf,
+  WidgetApiError: errors.WidgetApiError
+}))
+// 记「用过」：noteUse.ts 用真的，它直接引 widgetService
+vi.mock('../../services/widget/widgetService', () => ({
+  widgetService: { noteSessionUse: state.noteSessionUse }
+}))
+vi.mock('../../services/widget', async () => ({
+  ...(await vi.importActual<object>('../../services/widget/agentCall')),
   widgetService: {
     getById: state.getById,
     listActive: state.listActive,
@@ -138,11 +149,9 @@ vi.mock('../../services/widget', () => ({
   // 组件在共用 PGlite 里有没有旧数据：缺省说有（beforeEach），WC-S40..S43 自己定
   hasLegacyWidgetData: state.hasLegacyWidgetData,
   readApiSnapshot: state.readApiSnapshot,
-  callWidgetOp: state.callWidgetOp,
   runWidgetDbQuery: state.runWidgetDbQuery,
   exportWidget: state.exportWidget,
   resolveExportZipPath: state.resolveExportZipPath,
-  WidgetApiError: errors.WidgetApiError,
   WidgetExportError: errors.WidgetExportError
 }))
 // 记「会话用过这个组件」时读会话所在的项目（真的会话行要数据库）
@@ -175,29 +184,13 @@ vi.mock('../../services/skillService', () => ({
 
 import { wrapDurableOutput } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
-import {
-  WIDGET_DESCRIPTION,
-  WIDGET_USE_DESCRIPTION,
-  WidgetParamsSchema,
-  WidgetTool
-} from '../widget'
+import { WIDGET_DESCRIPTION, WidgetParamsSchema, WidgetTool } from '../widget'
 import { SkillTool } from '../../services/skillTool'
 import type { ToolContext } from '../../services/toolContext'
 
 // ─── 夹具 ────────────────────────────────────────────────────────────────
 
-const ALL_ACTIONS = [
-  'list',
-  'describe',
-  'call',
-  'create',
-  'build',
-  'preview',
-  'sql',
-  'export',
-  'open'
-]
-const BUILD_ACTIONS = ['create', 'build', 'preview', 'sql', 'export', 'open'] as const
+const ALL_ACTIONS = ['list', 'create', 'build', 'test', 'preview', 'sql', 'export', 'open'] as const
 
 const LIST_BOOKS = {
   name: 'listBooks',
@@ -214,7 +207,7 @@ const ADD_BOOK = {
   agent: true,
   input: { type: 'object', required: ['title'], properties: { title: { type: 'string' } } }
 }
-/** 纯界面的操作（agent: false）：只有组件自己的界面、或造组件的 agent 在 dry run 里够得着 */
+/** 纯界面的操作（agent: false）：只有组件自己的界面、或造组件的 agent 的 test 够得着 */
 const SAVE_LAYOUT = {
   name: 'saveLayout',
   mode: 'write',
@@ -290,7 +283,7 @@ const agentWith = (tools: object[]): unknown => ({
 type Args = InvokeArgs<WidgetTool>
 
 interface RunOptions {
-  /** 发起调用的 agent：'use' = 没有 skill 工具；'build' = skill 工具上架了 builtin:widget；或自给工具表 */
+  /** 发起调用的 agent：'build'（缺省）= skill 工具上架了 builtin:widget；'use' = 没有 skill 工具；或自给工具表 */
   caller?: 'use' | 'build' | object[]
   /** `api.agent()` 抛错 */
   agentRejects?: boolean
@@ -306,7 +299,7 @@ function run(
   args: Record<string, unknown>,
   o: RunOptions = {}
 ): Promise<ToolInvocation> {
-  const caller = o.caller ?? 'use'
+  const caller = o.caller ?? 'build'
   const tools =
     caller === 'use'
       ? [tool]
@@ -418,55 +411,62 @@ function opReturns(
 
 // ─── 描述与 schema ─────────────────────────────────────────────────────────
 
-describe('WT4-TL-01 描述与 schema 按根 agent 的货架定', () => {
+describe('WT-40 描述与 schema', () => {
   const propsOf = (tool: WidgetTool): Record<string, unknown> =>
     (tool.parameters as unknown as { properties: Record<string, unknown> }).properties
   const enumOf = (tool: WidgetTool): unknown => (propsOf(tool).action as { enum: unknown }).enum
 
-  it('根货架有 builtin:widget：全量描述、9 个动作、造组件的字段都在', () => {
+  it('WT-40 8 个动作（没有 call / describe）；各动作的字段都在，没有 dry_run', () => {
     const tool = new WidgetTool(ctx)
     expect(tool.description).toBe(WIDGET_DESCRIPTION)
     expect(enumOf(tool)).toEqual(ALL_ACTIONS)
-    for (const key of [
-      'dry_run',
-      'name',
-      'description',
-      'message',
-      'sizes',
-      'theme',
-      'sql',
-      'legacy',
-      'path'
-    ]) {
-      expect(propsOf(tool)).toHaveProperty(key)
-    }
+    expect(Object.keys(propsOf(tool)).sort()).toEqual(
+      [
+        'action',
+        'widget',
+        'op',
+        'args',
+        'name',
+        'description',
+        'message',
+        'sizes',
+        'theme',
+        'wait_for',
+        'sql',
+        'legacy',
+        'path'
+      ].sort()
+    )
   })
 
   it.each([
     ['undefined', undefined],
     ['[]', []],
     ["['builtin:drawing']", ['builtin:drawing']]
-  ])('根货架 %s：只有用的那组（描述、动作、字段）', (_l, rootSkills) => {
+  ])('WT-40 根货架 %s：同一份描述与 schema（描述不再按货架分两份）', (_l, rootSkills) => {
     const tool = new WidgetTool({
       sessionId: 's1',
       ...(rootSkills === undefined ? {} : { rootSkills })
     })
-    expect(tool.description).toBe(WIDGET_USE_DESCRIPTION)
-    expect(enumOf(tool)).toEqual(['list', 'describe', 'call'])
-    expect(Object.keys(propsOf(tool))).toEqual(['action', 'widget', 'op', 'args'])
-    // 用的那一份从描述到 schema 都不提造的动作、dry_run 与技能
-    const forbidden = /\b(create|build|preview|sql|export|open|dry_run|skill)\b/i
-    expect(tool.description).not.toMatch(forbidden)
-    expect(JSON.stringify(tool.parameters)).not.toMatch(forbidden)
+    expect(tool.description).toBe(WIDGET_DESCRIPTION)
+    expect(tool.parameters).toBe(WidgetParamsSchema)
   })
 
-  it('WT4-TL-35 wait_for：全量是字符串、说明里写着最多 30s；用的那份没有', () => {
+  it('WT-40 描述说清楚：这里只管造；用组件是开启之后的 mcp__widget-<id>__<操作>；test 回滚', () => {
+    expect(WIDGET_DESCRIPTION).toContain('mcp__widget-<id>__<operation>')
+    expect(WIDGET_DESCRIPTION).toContain('tool_search')
+    expect(WIDGET_DESCRIPTION).toContain('rolled back')
+    for (const action of ALL_ACTIONS) expect(WIDGET_DESCRIPTION).toContain(`"${action}"`)
+    expect(WIDGET_DESCRIPTION).not.toContain('"call"')
+    expect(WIDGET_DESCRIPTION).not.toContain('"describe"')
+    expect(WIDGET_DESCRIPTION).not.toContain('dry_run')
+  })
+
+  it('WT4-TL-35 wait_for：是字符串、说明里写着最多 30s；描述里提到它', () => {
     const full = propsOf(new WidgetTool(ctx)).wait_for as { type: string; description: string }
     expect(full.type).toBe('string')
     expect(full.description).toContain('up to 30s')
-    expect(propsOf(new WidgetTool({ sessionId: 's1' }))).not.toHaveProperty('wait_for')
     expect(new WidgetTool(ctx).description).toContain('wait_for')
-    expect(new WidgetTool({ sessionId: 's1' }).description).not.toContain('wait_for')
   })
 
   it('描述里没有组件名单：注册了哪些组件都一样，构造时也不读组件表', () => {
@@ -475,10 +475,6 @@ describe('WT4-TL-01 描述与 schema 按根 agent 的货架定', () => {
     putWidget('other-widget', { name: 'Other', ops: [LIST_BOOKS] })
     const second = new WidgetTool(ctx)
     expect(second.description).toBe(first.description)
-    const useA = new WidgetTool({ sessionId: 's1' })
-    state.widgets.clear()
-    const useB = new WidgetTool({ sessionId: 's1' })
-    expect(useB.description).toBe(useA.description)
     expect(state.listActive).not.toHaveBeenCalled()
     expect(state.getById).not.toHaveBeenCalled()
     expect(first.description).not.toContain('reading-list')
@@ -487,21 +483,23 @@ describe('WT4-TL-01 描述与 schema 按根 agent 的货架定', () => {
 
 // ─── 造组件的动作按发起调用的 agent 核对 ─────────────────────────────────────────
 
-const refusal = (action: string, dryRun = false): string =>
-  `"${action}"${dryRun ? ' with dry_run' : ''} is for building widgets, which needs the builtin:widget skill. Use "list", "describe" and "call".`
+const refusal = (action: string): string =>
+  `"${action}" is for building widgets, which needs the builtin:widget skill.`
 
-/** 每个造的动作一份能过参数检查的参数（证明拒绝发生在参数检查之前也无妨：什么都没碰） */
-const BUILD_ARGS: Record<(typeof BUILD_ACTIONS)[number], Record<string, unknown>> = {
+/** 每个动作一份能过参数检查的参数（证明拒绝发生在参数检查之前也无妨：什么都没碰） */
+const BUILD_ARGS: Record<(typeof ALL_ACTIONS)[number], Record<string, unknown>> = {
+  list: { action: 'list' },
   create: { action: 'create', widget: 'new-widget', name: 'New' },
   build: { action: 'build', widget: 'reading-list' },
+  test: { action: 'test', widget: 'reading-list', op: 'listBooks' },
   preview: { action: 'preview', widget: 'reading-list' },
   sql: { action: 'sql', widget: 'reading-list', sql: 'select 1' },
   export: { action: 'export', widget: 'reading-list', path: 'out' },
   open: { action: 'open', widget: 'reading-list' }
 }
 
-describe('WT4-TL-02..06 造的动作按发起调用的 agent 自己的货架核对', () => {
-  it.each(BUILD_ACTIONS)(
+describe('WT4-TL-02..06 每个动作按发起调用的 agent 自己的货架核对', () => {
+  it.each(ALL_ACTIONS)(
     'WT4-TL-02 %s：调用方的 skill 工具只有别的技能 / 根本没有 skill 工具 → 拒，什么都不碰（根货架有也不算）',
     async (action) => {
       const tool = new WidgetTool(ctx)
@@ -513,19 +511,6 @@ describe('WT4-TL-02..06 造的动作按发起调用的 agent 自己的货架核�
       expect(state.getById).not.toHaveBeenCalled()
     }
   )
-
-  it('WT4-TL-03 不造组件的调用方用 call 的 dry_run → 拒，不过门、不调操作', async () => {
-    const tool = new WidgetTool(ctx)
-    const inv = await run(tool, {
-      action: 'call',
-      widget: 'reading-list',
-      op: 'addBook',
-      dry_run: true
-    })
-    expect(errorOf(inv)).toBe(refusal('call', true))
-    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-    expect(state.callWidgetOp).not.toHaveBeenCalled()
-  })
 
   it('WT4-TL-04 调用方的工具表里是包装过的真 SkillTool：skillNames（原型上的 getter）经原型链读得到 → 放行', async () => {
     state.findEnabled.mockReturnValue([
@@ -575,24 +560,16 @@ describe('WT4-TL-02..06 造的动作按发起调用的 agent 自己的货架核�
 
   it('WT4-TL-05 有调用但读不到它的工具表（api.agent 抛错）：按不能 —— 根货架有也不给', async () => {
     const tool = new WidgetTool(ctx)
-    const inv = await run(tool, BUILD_ARGS.open, { agentRejects: true })
-    expect(errorOf(inv)).toBe(refusal('open'))
-    const dry = await run(
-      tool,
-      { action: 'call', widget: 'reading-list', op: 'addBook', dry_run: true },
-      { agentRejects: true }
-    )
-    expect(errorOf(dry)).toBe(refusal('call', true))
+    for (const action of ALL_ACTIONS) {
+      const inv = await run(tool, BUILD_ARGS[action], { agentRejects: true })
+      expect(errorOf(inv)).toBe(refusal(action))
+    }
     expectNothingTouched()
-    // list 也按不造组件的口径：没有 API 的与源码目录都不给
-    const list = await run(tool, { action: 'list' }, { agentRejects: true })
-    expect(textOf(list)).not.toContain('dir=')
-    expect(textOf(list)).not.toContain('photo-wall')
+    expect(state.listActive).not.toHaveBeenCalled()
   })
 
   it('WT4-TL-06 调用方自己的货架有技能、根货架没有：执行这一层按调用方放行', async () => {
     const tool = new WidgetTool({ sessionId: 's1', rootSkills: ['builtin:drawing'] })
-    expect(tool.description).toBe(WIDGET_USE_DESCRIPTION)
     const inv = await run(tool, BUILD_ARGS.open, { caller: 'build' })
     expect(textOf(inv)).toBe('Opened "Reading list" in its own window.')
   })
@@ -600,30 +577,10 @@ describe('WT4-TL-02..06 造的动作按发起调用的 agent 自己的货架核�
 
 // ─── list ────────────────────────────────────────────────────────────────
 
-describe('WT4-TL-07..09 list', () => {
-  it('WT4-TL-07 用组件的调用方：只列有 API 的组件与给 agent 的操作；没有目录、没有存储、不过门', async () => {
+describe('WT4-TL-08..09 list', () => {
+  it('WT4-TL-08 每个活跃的组件都列（没有 API 的、老组件也在），都带源码目录，纯界面操作标出来；不过门；老组件不读快照', async () => {
     const tool = new WidgetTool(ctx)
     const inv = await run(tool, { action: 'list' })
-    expect(textOf(inv)).toBe(
-      [
-        '<widgets>',
-        '<widget id="reading-list" name="Reading list" access="none">',
-        'Books to read.',
-        '- listBooks (read): List books.',
-        '- addBook (write): Add a book.',
-        '</widget>',
-        '</widgets>'
-      ].join('\n')
-    )
-    expect(inv.result.details).toEqual({ action: 'list' })
-    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-    // 老组件不读快照（它没有 API）
-    expect(state.readApiSnapshot).not.toHaveBeenCalledWith('old-notes')
-  })
-
-  it('WT4-TL-08 造组件的调用方：另见没有 API 的与老组件、每个都带源码目录，纯界面操作标出来', async () => {
-    const tool = new WidgetTool(ctx)
-    const inv = await run(tool, { action: 'list' }, { caller: 'build' })
     const dir = (id: string): string => state.dir(id)
     expect(textOf(inv)).toBe(
       [
@@ -644,7 +601,9 @@ describe('WT4-TL-07..09 list', () => {
         '</widgets>'
       ].join('\n')
     )
+    expect(inv.result.details).toEqual({ action: 'list' })
     expect(state.assertWidgetAccess).not.toHaveBeenCalled()
+    expect(state.readApiSnapshot).not.toHaveBeenCalledWith('old-notes')
   })
 
   it('WT4-TL-09 access 按本会话的授权（none / read / read-write）', async () => {
@@ -656,9 +615,9 @@ describe('WT4-TL-07..09 list', () => {
       id === 'w-read' ? 'read' : id === 'w-write' ? 'write' : 'none'
     )
     const text = textOf(await run(new WidgetTool(ctx), { action: 'list' }))
-    expect(text).toContain('<widget id="w-none" name="w-none" access="none">')
-    expect(text).toContain('<widget id="w-read" name="w-read" access="read">')
-    expect(text).toContain('<widget id="w-write" name="w-write" access="read-write">')
+    expect(text).toContain('<widget id="w-none" name="w-none" access="none" dir=')
+    expect(text).toContain('<widget id="w-read" name="w-read" access="read" dir=')
+    expect(text).toContain('<widget id="w-write" name="w-write" access="read-write" dir=')
     expect(state.widgetAccess.mock.calls).toEqual([
       ['s1', 'w-none'],
       ['s1', 'w-read'],
@@ -666,11 +625,18 @@ describe('WT4-TL-07..09 list', () => {
     ])
   })
 
+  it('WT-51 access 只看权限表：勾选（在 ctx 里根本读不到）不让一个没有行的组件显示成可读', async () => {
+    state.widgetAccess.mockReturnValue('none')
+    const text = textOf(await run(new WidgetTool(ctx), { action: 'list' }))
+    expect(text).toContain('<widget id="reading-list" name="Reading list" access="none"')
+    expect(state.pickSession).not.toHaveBeenCalled()
+  })
+
   it('WT4-TL-09 name / dir 属性里的 " & < 转义', async () => {
     state.widgets.clear()
     putWidget('odd-name', { name: 'A "quoted" & <b>', ops: [LIST_BOOKS] })
     state.getWidgetDir.mockReturnValue('/home/u/R&D "x"/<odd-name>')
-    const text = textOf(await run(new WidgetTool(ctx), { action: 'list' }, { caller: 'build' }))
+    const text = textOf(await run(new WidgetTool(ctx), { action: 'list' }))
     expect(text).toContain(
       '<widget id="odd-name" name="A &quot;quoted&quot; &amp; &lt;b>" access="none" dir="/home/u/R&amp;D &quot;x&quot;/&lt;odd-name>">'
     )
@@ -704,129 +670,63 @@ describe('WT4-TL-07..09 list', () => {
     expect(text).toContain('- f (read): 列出书。\n')
   })
 
-  it('WT4-TL-09 空表：用组件的 → 没有可调的；造组件的 → 还没有组件', async () => {
-    // 只有没有 API 的组件：用组件的看来是空的
+  it('WT4-TL-09 空表：还没有组件；只有没有 API 的组件时它照样列出来', async () => {
     state.widgets.clear()
-    putWidget('photo-wall', { name: 'Photo wall' })
     expect(textOf(await run(new WidgetTool(ctx), { action: 'list' }))).toBe(
-      'No widget has operations you can call yet.'
-    )
-    state.widgets.clear()
-    expect(textOf(await run(new WidgetTool(ctx), { action: 'list' }, { caller: 'build' }))).toBe(
       'There are no widgets yet.'
     )
+    putWidget('photo-wall', { name: 'Photo wall' })
+    const text = textOf(await run(new WidgetTool(ctx), { action: 'list' }))
+    expect(text).toContain('<widget id="photo-wall"')
+    expect(text).toContain('(no API)')
   })
 })
 
-// ─── describe ────────────────────────────────────────────────────────────
+// ─── 旧锁里的动作 ──────────────────────────────────────────────────────────────
 
-describe('WT4-TL-10..11 describe', () => {
-  const opJson = (op: typeof LIST_BOOKS | typeof ADD_BOOK | typeof SAVE_LAYOUT): unknown => ({
-    name: op.name,
-    mode: op.mode,
-    ...(op.agent === false ? { screenOnly: true } : {}),
-    description: op.description,
-    input: op.input,
-    ...('output' in op && op.output !== undefined ? { output: op.output } : {})
-  })
-
-  it('WT4-TL-10 用组件的调用方：缩进两格的 JSON；output 只在声明了时有；纯界面操作不在；不过门', async () => {
-    state.widgetAccess.mockReturnValue('read')
-    const inv = await run(new WidgetTool(ctx), { action: 'describe', widget: 'reading-list' })
-    const expected = {
-      id: 'reading-list',
-      name: 'Reading list',
-      access: 'read',
-      operations: [opJson(LIST_BOOKS), opJson(ADD_BOOK)]
-    }
-    expect(textOf(inv)).toBe(JSON.stringify(expected, null, 2))
-    const parsed = JSON.parse(textOf(inv)) as { operations: Record<string, unknown>[] }
-    expect(parsed.operations[0]).toHaveProperty('output')
-    expect(parsed.operations[1]).not.toHaveProperty('output')
-    expect(inv.result.details).toEqual({ action: 'describe', widget: 'reading-list' })
-    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-  })
-
-  it('WT4-TL-10 造组件的调用方：纯界面操作也在，带 screenOnly: true', async () => {
-    const inv = await run(
-      new WidgetTool(ctx),
-      { action: 'describe', widget: 'reading-list' },
-      { caller: 'build' }
-    )
-    const parsed = JSON.parse(textOf(inv)) as { operations: unknown[] }
-    expect(parsed.operations).toEqual([opJson(LIST_BOOKS), opJson(ADD_BOOK), opJson(SAVE_LAYOUT)])
-    expect((parsed.operations[2] as Record<string, unknown>).screenOnly).toBe(true)
-    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-  })
-
-  it.each(['describe', 'call'])(
-    'WT4-TL-11 %s 的参数错误：缺 widget / 不是 id / 不存在 / 归档了 / 老组件 / 没有快照',
+describe('WT-41 不再有 call / describe', () => {
+  it.each(['call', 'describe'])(
+    'WT-41 旧锁里的 %s（带着旧参数）→ Unknown action；不过门、不调操作、不记',
     async (action) => {
-      const tool = new WidgetTool(ctx)
-      const extra = action === 'call' ? { op: 'listBooks' } : {}
-      const cases: Array<[Record<string, unknown>, string]> = [
-        [{}, '`widget` is required: the widget id (see "list").'],
-        [{ widget: '   ' }, '`widget` is required: the widget id (see "list").'],
-        [{ widget: 'nodash' }, '"nodash" is not a widget id (kebab-case with at least one dash).'],
-        [{ widget: 'Bad-Id' }, '"Bad-Id" is not a widget id (kebab-case with at least one dash).'],
-        [{ widget: 'no-such' }, 'There is no widget "no-such". Call "list" to see the widgets.'],
-        [
-          { widget: 'gone-widget' },
-          'There is no widget "gone-widget". Call "list" to see the widgets.'
-        ],
-        [
-          { widget: 'old-notes' },
-          'Widget "old-notes" has no API, so it has no operations to call.'
-        ],
-        [
-          { widget: 'photo-wall' },
-          'Widget "photo-wall" has no API, so it has no operations to call.'
-        ]
-      ]
-      for (const [args, message] of cases) {
-        const inv = await run(tool, { action, ...extra, ...args })
-        expect(errorOf(inv)).toBe(message)
-      }
-      expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-      expect(state.callWidgetOp).not.toHaveBeenCalled()
+      const inv = await run(new WidgetTool(ctx), {
+        action,
+        widget: 'reading-list',
+        op: 'listBooks',
+        dry_run: true
+      })
+      expect(errorOf(inv)).toBe(`Unknown action "${action}".`)
+      expectNothingTouched()
     }
   )
-
-  it('WT4-TL-11 id 先去掉首尾空白再用', async () => {
-    const tool = new WidgetTool(ctx)
-    const inv = await run(tool, { action: 'describe', widget: '  reading-list  ' })
-    expect(JSON.parse(textOf(inv)).id).toBe('reading-list')
-    expect(state.getById).toHaveBeenCalledWith('reading-list')
-    const called = await run(tool, { action: 'call', widget: ' reading-list ', op: ' listBooks ' })
-    textOf(called)
-    expect(state.callWidgetOp.mock.calls[0].slice(0, 2)).toEqual(['reading-list', 'listBooks'])
-  })
 })
 
-// ─── call ────────────────────────────────────────────────────────────────
+// ─── test ────────────────────────────────────────────────────────────────
 
-describe('WT4-TL-12..16 call', () => {
+describe('WT-43..49 test', () => {
+  const NOTE = '(dry run: everything it wrote was rolled back)'
+
   it.each([
     ['listBooks', 'read'],
     ['addBook', 'write']
   ])(
-    'WT4-TL-12 %s：先过门（按操作的读写），再进分发器；结果是缩进两格的 JSON',
+    'WT-43/44 %s：先过门（按操作的读写，客体上没有 selected），再进分发器（dryRun + allowUiOnly）；结果带回滚的说明',
     async (op, mode) => {
       opReturns({ ok: true, value: [{ title: 'Dune' }] })
       const inv = await run(new WidgetTool(ctx), {
-        action: 'call',
+        action: 'test',
         widget: 'reading-list',
         op,
         args: { title: 'Dune' }
       })
-      expect(textOf(inv)).toBe(JSON.stringify([{ title: 'Dune' }], null, 2))
-      expect(inv.result.details).toEqual({ action: 'call', widget: 'reading-list' })
+      expect(textOf(inv)).toBe(`${JSON.stringify([{ title: 'Dune' }], null, 2)}\n${NOTE}`)
+      expect(inv.result.details).toEqual({ action: 'test', widget: 'reading-list' })
 
       expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
       const [gateCtx, access, object, opts] = state.assertWidgetAccess.mock.calls[0]
       // 没有 agentOf：withCallAgent 原样交回会话的 ctx
       expect(gateCtx).toBe(ctx)
       expect(access).toBe(mode)
+      // 没有 selected：这个键出现就可能放开读（勾选放开的只是组件服务器上的读操作）
       expect(object).toStrictEqual({
         widgetId: 'reading-list',
         name: 'Reading list',
@@ -835,7 +735,7 @@ describe('WT4-TL-12..16 call', () => {
       expect(opts).toStrictEqual({
         toolCallId: 'c1',
         toolName: 'widget',
-        operation: 'call',
+        operation: 'test',
         owner: { taskId: 7, conversationId: 1 }
       })
 
@@ -850,7 +750,7 @@ describe('WT4-TL-12..16 call', () => {
           actor: 'shuvix-work/gpt-5',
           label: 'shuvix-work/gpt-5'
         },
-        { dryRun: false, allowUiOnly: false, expectedMode: mode }
+        { dryRun: true, allowUiOnly: true, expectedMode: mode }
       )
       expect(state.assertWidgetAccess.mock.invocationCallOrder[0]).toBeLessThan(
         state.callWidgetOp.mock.invocationCallOrder[0]
@@ -858,117 +758,17 @@ describe('WT4-TL-12..16 call', () => {
     }
   )
 
-  it('WT4-TL-12 没给 args → {}；value 是 undefined → null；有日志附在 <logs> 里；带着 signal 进门', async () => {
-    opReturns({ ok: true, value: undefined }, ['first', 'second'])
-    const controller = new AbortController()
-    const inv = await run(
-      new WidgetTool(ctx),
-      { action: 'call', widget: 'reading-list', op: 'listBooks' },
-      { signal: controller.signal }
-    )
-    expect(textOf(inv)).toBe('null\n<logs>\nfirst\nsecond\n</logs>')
-    expect(state.callWidgetOp.mock.calls[0][2]).toEqual({})
-    expect(state.assertWidgetAccess.mock.calls[0][3].signal).toBe(controller.signal)
-  })
-
-  it('WT4-TL-13 门拒绝：拒绝的话原样交给模型，不调操作', async () => {
-    state.assertWidgetAccess.mockRejectedValue(
-      new Error('User denied changing data in widget "Reading list" (reading-list)')
-    )
-    const inv = await run(new WidgetTool(ctx), {
-      action: 'call',
-      widget: 'reading-list',
-      op: 'addBook',
-      args: { title: 'x' }
-    })
-    expect(errorOf(inv)).toBe('User denied changing data in widget "Reading list" (reading-list)')
-    expect(state.callWidgetOp).not.toHaveBeenCalled()
-  })
-
-  it('WT4-TL-13 门挂着时取消：门放行之后也不调操作，以取消收场', async () => {
-    const controller = new AbortController()
-    state.assertWidgetAccess.mockImplementation(async () => {
-      controller.abort()
-    })
-    await expect(
-      run(
-        new WidgetTool(ctx),
-        { action: 'call', widget: 'reading-list', op: 'addBook' },
-        { signal: controller.signal }
-      )
-    ).rejects.toThrow('Aborted')
-    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
-    expect(state.callWidgetOp).not.toHaveBeenCalled()
-  })
-
-  it('WT4-TL-13 一开始就取消了：什么都不查', async () => {
-    const controller = new AbortController()
-    controller.abort()
-    await expect(
-      run(
-        new WidgetTool(ctx),
-        { action: 'call', widget: 'reading-list', op: 'addBook' },
-        { signal: controller.signal }
-      )
-    ).rejects.toThrow('Aborted')
-    expect(state.getById).not.toHaveBeenCalled()
-    expect(state.readApiSnapshot).not.toHaveBeenCalled()
-    expectNothingTouched()
-  })
-
-  it('WT4-TL-14 参数错误从不弹卡片：缺 op / 没有这个操作（只列给 agent 的）/ 没有组件 / 没有 API', async () => {
-    const tool = new WidgetTool(ctx)
-    const cases: Array<[Record<string, unknown>, string]> = [
-      [{ widget: 'reading-list' }, '`op` is required: the operation to call (see "describe").'],
-      [
-        { widget: 'reading-list', op: '  ' },
-        '`op` is required: the operation to call (see "describe").'
-      ],
-      [
-        { widget: 'reading-list', op: 'nope' },
-        'Widget "reading-list" has no operation "nope". Its operations: listBooks, addBook.'
-      ],
-      [
-        { widget: 'no-such', op: 'listBooks' },
-        'There is no widget "no-such". Call "list" to see the widgets.'
-      ],
-      [
-        { widget: 'photo-wall', op: 'listBooks' },
-        'Widget "photo-wall" has no API, so it has no operations to call.'
-      ]
-    ]
-    for (const [args, message] of cases) {
-      expect(errorOf(await run(tool, { action: 'call', ...args }))).toBe(message)
-    }
-    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-    expect(state.callWidgetOp).not.toHaveBeenCalled()
-  })
-
-  it('WT4-TL-15 纯界面操作：不带 dry_run 连造组件的调用方也够不着（不过门）', async () => {
-    const inv = await run(
-      new WidgetTool(ctx),
-      { action: 'call', widget: 'reading-list', op: 'saveLayout' },
-      { caller: 'build' }
-    )
-    expect(errorOf(inv)).toBe(
-      'Widget "reading-list" has no operation "saveLayout". Its operations: listBooks, addBook.'
-    )
-    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
-  })
-
-  it('WT4-TL-15 dry_run：纯界面操作够得着，按它自己的读写过门；dryRun + allowUiOnly；结果末尾说明回滚了', async () => {
+  it('WT-45 纯界面操作够得着，按它自己的读写过门', async () => {
     opReturns({ ok: true, value: { saved: true } })
-    const inv = await run(
-      new WidgetTool(ctx),
-      { action: 'call', widget: 'reading-list', op: 'saveLayout', args: { a: 1 }, dry_run: true },
-      { caller: 'build' }
-    )
-    const text = textOf(inv)
-    expect(text).toBe(
-      `${JSON.stringify({ saved: true }, null, 2)}\n(dry run: everything it wrote was rolled back)`
-    )
+    const inv = await run(new WidgetTool(ctx), {
+      action: 'test',
+      widget: 'reading-list',
+      op: 'saveLayout',
+      args: { a: 1 }
+    })
+    expect(textOf(inv)).toContain('"saved": true')
     expect(state.assertWidgetAccess.mock.calls[0][1]).toBe('write')
-    expect(state.assertWidgetAccess.mock.calls[0][2]).toEqual({
+    expect(state.assertWidgetAccess.mock.calls[0][2]).toStrictEqual({
       widgetId: 'reading-list',
       name: 'Reading list',
       operation: 'saveLayout'
@@ -980,88 +780,177 @@ describe('WT4-TL-12..16 call', () => {
     })
   })
 
-  it('WT4-TL-15 dry_run 下认不得的操作：列出的名字含纯界面的', async () => {
-    const inv = await run(
-      new WidgetTool(ctx),
-      { action: 'call', widget: 'reading-list', op: 'nope', dry_run: true },
-      { caller: 'build' }
-    )
-    expect(errorOf(inv)).toBe(
-      'Widget "reading-list" has no operation "nope". Its operations: listBooks, addBook, saveLayout.'
-    )
+  it('WT-46 参数错误从不弹卡片：缺 op / 没有这个操作（列出的含纯界面的）/ 组件的几种问题 / 没有 API', async () => {
+    const tool = new WidgetTool(ctx)
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ widget: 'reading-list' }, '`op` is required: the operation to test.'],
+      [{ widget: 'reading-list', op: '  ' }, '`op` is required: the operation to test.'],
+      [
+        { widget: 'reading-list', op: 'nope' },
+        'Widget "reading-list" has no operation "nope". Its operations: listBooks, addBook, saveLayout.'
+      ],
+      [{ op: 'listBooks' }, '`widget` is required: the widget id (see "list").'],
+      [{ widget: '   ', op: 'listBooks' }, '`widget` is required: the widget id (see "list").'],
+      [
+        { widget: 'nodash', op: 'listBooks' },
+        '"nodash" is not a widget id (kebab-case with at least one dash).'
+      ],
+      [
+        { widget: 'Bad-Id', op: 'listBooks' },
+        '"Bad-Id" is not a widget id (kebab-case with at least one dash).'
+      ],
+      [
+        { widget: 'no-such', op: 'listBooks' },
+        'There is no widget "no-such". Call "list" to see the widgets.'
+      ],
+      [
+        { widget: 'gone-widget', op: 'listBooks' },
+        'There is no widget "gone-widget". Call "list" to see the widgets.'
+      ],
+      [
+        { widget: 'old-notes', op: 'listBooks' },
+        'Widget "old-notes" has no API, so it has no operations to call.'
+      ],
+      [
+        { widget: 'photo-wall', op: 'listBooks' },
+        'Widget "photo-wall" has no API, so it has no operations to call.'
+      ]
+    ]
+    for (const [args, message] of cases) {
+      expect(errorOf(await run(tool, { action: 'test', ...args }))).toBe(message)
+    }
+    expect(state.assertWidgetAccess).not.toHaveBeenCalled()
+    expect(state.callWidgetOp).not.toHaveBeenCalled()
   })
 
-  it('WT4-TL-16 invalid_args：附上这个操作的 input schema', async () => {
-    opReturns({ ok: false, error: { code: 'invalid_args', message: 'title: Required' } })
+  it('WT-46 id 和 op 先去掉首尾空白再用', async () => {
+    textOf(
+      await run(new WidgetTool(ctx), {
+        action: 'test',
+        widget: ' reading-list ',
+        op: ' listBooks '
+      })
+    )
+    expect(state.getById).toHaveBeenCalledWith('reading-list')
+    expect(state.callWidgetOp.mock.calls[0].slice(0, 2)).toEqual(['reading-list', 'listBooks'])
+  })
+
+  it('WT-47 操作失败：抛错（红行）；invalid_args 附 schema，说明与日志都在', async () => {
+    opReturns({ ok: false, error: { code: 'invalid_args', message: 'title: Required' } }, ['l1'])
     const inv = await run(new WidgetTool(ctx), {
-      action: 'call',
+      action: 'test',
       widget: 'reading-list',
       op: 'addBook',
       args: {}
     })
     expect(errorOf(inv)).toBe(
-      `[invalid_args] title: Required\nInput schema: ${JSON.stringify(ADD_BOOK.input)}`
+      `[invalid_args] title: Required\nInput schema: ${JSON.stringify(ADD_BOOK.input)}\n${NOTE}\n<logs>\nl1\n</logs>`
     )
   })
 
-  it('WT4-TL-16 ctx.fail 的业务失败：[code] message，不附 schema', async () => {
-    opReturns({ ok: false, error: { code: 'not_found', message: 'No such book' } })
-    const inv = await run(new WidgetTool(ctx), {
-      action: 'call',
-      widget: 'reading-list',
-      op: 'addBook'
-    })
-    expect(errorOf(inv)).toBe('[not_found] No such book')
-  })
-
-  it('WT4-TL-16 handler 意外抛错（internal）：说清楚是组件的代码出了错', async () => {
-    opReturns({ ok: false, error: { code: 'internal', message: 'TypeError: x is undefined' } })
-    const inv = await run(new WidgetTool(ctx), {
-      action: 'call',
-      widget: 'reading-list',
-      op: 'listBooks'
-    })
-    expect(errorOf(inv)).toBe('Widget operation failed: TypeError: x is undefined')
-  })
-
-  it('WT4-TL-16 失败也附上 dry run 的说明与日志', async () => {
-    opReturns({ ok: false, error: { code: 'not_found', message: 'No such book' } }, ['l1', 'l2'])
-    const inv = await run(
-      new WidgetTool(ctx),
-      { action: 'call', widget: 'reading-list', op: 'addBook', dry_run: true },
-      { caller: 'build' }
-    )
-    expect(errorOf(inv)).toBe(
-      '[not_found] No such book\n(dry run: everything it wrote was rolled back)\n<logs>\nl1\nl2\n</logs>'
-    )
-  })
-
-  it('WT4-TL-16 分发器抛 WidgetApiError（含其间被重新构建的 changed）→ [code] message；别的错误原样', async () => {
+  it('WT-47 分发器抛 WidgetApiError → [code] message；别的错误原样', async () => {
     const tool = new WidgetTool(ctx)
     state.callWidgetOp.mockRejectedValueOnce(
       new errors.WidgetApiError('timeout', 'The operation took too long.')
     )
-    expect(
-      errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'listBooks' }))
-    ).toBe('[timeout] The operation took too long.')
-
-    state.callWidgetOp.mockRejectedValueOnce(
-      new errors.WidgetApiError(
-        'changed',
-        'Operation "listBooks" of widget "reading-list" is now a write operation (the widget was rebuilt). Look at it again before calling it.'
-      )
-    )
-    expect(
-      errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'listBooks' }))
-    ).toBe(
-      '[changed] Operation "listBooks" of widget "reading-list" is now a write operation (the widget was rebuilt). Look at it again before calling it.'
-    )
-
+    expect(errorOf(await run(tool, BUILD_ARGS.test))).toBe('[timeout] The operation took too long.')
     state.callWidgetOp.mockRejectedValueOnce(new Error('host process exited'))
-    expect(
-      errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'listBooks' }))
-    ).toBe('host process exited')
+    expect(errorOf(await run(tool, BUILD_ARGS.test))).toBe('host process exited')
   })
+
+  it('WT-48 没给 args → {}；value 是 undefined → null；有日志附在 <logs> 里；带着 signal 进门', async () => {
+    opReturns({ ok: true, value: undefined }, ['first', 'second'])
+    const controller = new AbortController()
+    const inv = await run(new WidgetTool(ctx), BUILD_ARGS.test, { signal: controller.signal })
+    expect(textOf(inv)).toBe(`null\n${NOTE}\n<logs>\nfirst\nsecond\n</logs>`)
+    expect(state.callWidgetOp.mock.calls[0][2]).toEqual({})
+    expect(state.assertWidgetAccess.mock.calls[0][3].signal).toBe(controller.signal)
+  })
+
+  it('WT-49 门拒绝：拒绝的话原样交给模型，不调操作', async () => {
+    state.assertWidgetAccess.mockRejectedValue(
+      new Error('User denied changing data in widget "Reading list" (reading-list)')
+    )
+    expect(errorOf(await run(new WidgetTool(ctx), BUILD_ARGS.test))).toBe(
+      'User denied changing data in widget "Reading list" (reading-list)'
+    )
+    expect(state.callWidgetOp).not.toHaveBeenCalled()
+  })
+
+  it('WT-49 门挂着时取消：门放行之后也不调操作，以取消收场', async () => {
+    const controller = new AbortController()
+    state.assertWidgetAccess.mockImplementation(async () => {
+      controller.abort()
+    })
+    await expect(
+      run(new WidgetTool(ctx), BUILD_ARGS.test, { signal: controller.signal })
+    ).rejects.toThrow('Aborted')
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.callWidgetOp).not.toHaveBeenCalled()
+  })
+
+  it('WT-49 一开始就取消了：什么都不查', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      run(new WidgetTool(ctx), BUILD_ARGS.test, { signal: controller.signal })
+    ).rejects.toThrow('Aborted')
+    expect(state.getById).not.toHaveBeenCalled()
+    expect(state.readApiSnapshot).not.toHaveBeenCalled()
+    expectNothingTouched()
+  })
+})
+
+// ─── 勾选放开的只是组件服务器上的读操作 ──────────────────────────────────────────
+
+describe('WT-50 工具的门上没有 selected', () => {
+  it.each<[string, Record<string, unknown>, () => void, string, string]>([
+    [
+      'preview',
+      BUILD_ARGS.preview,
+      () =>
+        state.previewWidget.mockResolvedValue({
+          id: 'reading-list',
+          theme: 'app',
+          images: [],
+          errors: []
+        }),
+      'read',
+      'preview'
+    ],
+    [
+      'export',
+      BUILD_ARGS.export,
+      () => {
+        state.resolveExportZipPath.mockImplementation((id: string, t: string) => `${t}/${id}.zip`)
+        state.exportWidget.mockImplementation(async ({ targetPath }: { targetPath: string }) => ({
+          zipPath: targetPath
+        }))
+      },
+      'read',
+      'export'
+    ],
+    [
+      'build',
+      BUILD_ARGS.build,
+      () => state.build.mockResolvedValue({ id: 'reading-list', url: '', buildSuccess: true }),
+      'write',
+      'build'
+    ],
+    ['sql', BUILD_ARGS.sql, () => state.dbQuery.mockResolvedValue({ output: '1' }), 'write', 'sql']
+  ])(
+    'WT-50 %s：客体恰是 {widgetId, name, operation}',
+    async (_l, args, arrange, access, operation) => {
+      arrange()
+      textOf(await run(new WidgetTool(ctx), args))
+      expect(state.assertWidgetAccess.mock.calls[0][1]).toBe(access)
+      expect(state.assertWidgetAccess.mock.calls[0][2]).toStrictEqual({
+        widgetId: 'reading-list',
+        name: 'Reading list',
+        operation
+      })
+    }
+  )
 })
 
 // ─── create ──────────────────────────────────────────────────────────────
@@ -1653,11 +1542,7 @@ describe('WT4-TL-26 派生 agent 调用', () => {
     const spawned = identity('explore', 'claude-haiku-4-5', 'spawned')
     const agentOf = vi.fn((c: number) => (c === 2 ? spawned : identity('work', 'gpt-5')))
     const sessionCtx: ToolContext = { sessionId: 's1', agentOf, rootSkills: [] }
-    await run(
-      new WidgetTool(sessionCtx),
-      { action: 'call', widget: 'reading-list', op: 'listBooks' },
-      { conversationId: 2 }
-    )
+    await run(new WidgetTool(sessionCtx), BUILD_ARGS.test, { conversationId: 2 })
     const gateCtx = state.assertWidgetAccess.mock.calls[0][0] as ToolContext
     expect(gateCtx.agent).toBe(spawned)
     expect(gateCtx.sessionId).toBe('s1')
@@ -1697,7 +1582,7 @@ describe('WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那�
     basePath: '/skills/drawing'
   }
 
-  it('WT4-TL-30 根货架有 builtin:widget（描述给全量），派生 agent 创建时 widget 技能已停用：build 照拒；list / describe / call 照用', async () => {
+  it('WT4-TL-30 根货架有 builtin:widget，派生 agent 创建时 widget 技能已停用：每个动作都照拒', async () => {
     // 派生 agent 创建时侧栏里只剩作图技能：它的真 SkillTool 货架上没有 widget 技能
     state.findEnabled.mockReturnValue([DRAWING_SKILL_ROW])
     const real = new SkillTool('enabled')
@@ -1711,42 +1596,12 @@ describe('WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那�
       rootSkills: ['builtin:drawing', 'builtin:widget']
     }
     const tool = new WidgetTool(sessionCtx)
-    // 会话级描述按根 agent 的货架：造的动作都在
-    expect(tool.description).toBe(WIDGET_DESCRIPTION)
 
-    const refused = await run(tool, BUILD_ARGS.build, { caller, conversationId: 2 })
-    expect(errorOf(refused)).toBe(refusal('build'))
+    for (const action of ALL_ACTIONS) {
+      const refused = await run(tool, BUILD_ARGS[action], { caller, conversationId: 2 })
+      expect(errorOf(refused)).toBe(refusal(action))
+    }
     expectNothingTouched()
-
-    // 用的那组照常：list 按不造组件的口径（没有目录、没有 API 的不列），describe 不列纯界面操作
-    const list = textOf(await run(tool, { action: 'list' }, { caller, conversationId: 2 }))
-    expect(list).toContain('<widget id="reading-list" name="Reading list" access="none">')
-    expect(list).not.toContain('dir=')
-    expect(list).not.toContain('photo-wall')
-
-    const described = JSON.parse(
-      textOf(
-        await run(
-          tool,
-          { action: 'describe', widget: 'reading-list' },
-          { caller, conversationId: 2 }
-        )
-      )
-    ) as { operations: { name: string }[] }
-    expect(described.operations.map((o) => o.name)).toEqual(['listBooks', 'addBook'])
-
-    opReturns({ ok: true, value: [{ title: 'Dune' }] })
-    const called = await run(
-      tool,
-      { action: 'call', widget: 'reading-list', op: 'listBooks' },
-      { caller, conversationId: 2 }
-    )
-    expect(textOf(called)).toBe(JSON.stringify([{ title: 'Dune' }], null, 2))
-    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
-    expect(state.callWidgetOp).toHaveBeenCalledTimes(1)
-    expect(state.callWidgetOp.mock.calls[0][3]).toMatchObject({
-      actor: 'shuvix-explore/claude-haiku-4-5'
-    })
   })
 
   it('WT4-TL-31 锁里记着 builtin:widget、它此刻在侧栏里停用了：按锁重建的货架（{ known }）照样有它 → build 放行（锁赢）', async () => {
@@ -1796,10 +1651,10 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
       after: () => state.grantWidget
     },
     {
-      action: 'call',
-      args: { action: 'call', widget: 'reading-list', op: 'listBooks' },
+      action: 'test',
+      args: { action: 'test', widget: 'reading-list', op: 'listBooks' },
       id: 'reading-list',
-      caller: 'use',
+      caller: 'build',
       setup: () => {},
       after: () => state.assertWidgetAccess
     },
@@ -1861,7 +1716,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     u.setup()
     return run(new WidgetTool(ctx), u.args, { caller: u.caller, ...o })
   }
-  const GATED = ['call', 'build', 'preview', 'sql', 'export'] as const
+  const GATED = ['test', 'build', 'preview', 'sql', 'export'] as const
 
   it.each(USES.map((u) => [u.action, u] as const))(
     'TL-L1 %s：恰记一次 (id, s1, null)，在它的门 / 授予 / 开窗口之后',
@@ -1884,7 +1739,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
 
   it('TL-L2 读会话行按 (s1, [projectId, settings])；会话在项目 p1 里 → 记 p1', async () => {
     state.pickSession.mockReturnValue({ projectId: 'p1' })
-    textOf(await runUse(useOf('call')))
+    textOf(await runUse(useOf('test')))
     expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId', 'settings']]])
     expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', 'p1']])
   })
@@ -1901,7 +1756,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     ['空白引用', { projectId: null, settings: { workProject: '  ' } }, null]
   ])('TL-L2b %s → 记 %s', async (_l, row, expected) => {
     state.pickSession.mockReturnValue(row)
-    textOf(await runUse(useOf('call')))
+    textOf(await runUse(useOf('test')))
     expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', expected]])
   })
 
@@ -1913,7 +1768,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     ['读不到会话行（undefined）', undefined]
   ])('TL-L3 %s → 记 null', async (_l, row) => {
     state.pickSession.mockReturnValue(row)
-    textOf(await runUse(useOf('call')))
+    textOf(await runUse(useOf('test')))
     expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', null]])
   })
 
@@ -1961,9 +1816,9 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
       { widget: 'gone-widget' }
     ]
     const cases: Array<[Record<string, unknown>, 'use' | 'build']> = []
-    for (const action of ['call', 'build', 'preview', 'sql', 'export', 'open']) {
+    for (const action of ['test', 'build', 'preview', 'sql', 'export', 'open']) {
       const extra =
-        action === 'call'
+        action === 'test'
           ? { op: 'listBooks' }
           : action === 'sql'
             ? { sql: 'select 1' }
@@ -1973,12 +1828,11 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
       for (const w of badWidgets) cases.push([{ action, ...extra, ...w }, 'build'])
     }
     cases.push(
-      [{ action: 'call', widget: 'reading-list' }, 'use'],
-      [{ action: 'call', widget: 'reading-list', op: '  ' }, 'use'],
-      [{ action: 'call', widget: 'reading-list', op: 'nope' }, 'use'],
-      [{ action: 'call', widget: 'photo-wall', op: 'listBooks' }, 'use'],
-      [{ action: 'call', widget: 'old-notes', op: 'listBooks' }, 'use'],
-      [{ action: 'call', widget: 'reading-list', op: 'saveLayout' }, 'build'],
+      [{ action: 'test', widget: 'reading-list' }, 'build'],
+      [{ action: 'test', widget: 'reading-list', op: '  ' }, 'build'],
+      [{ action: 'test', widget: 'reading-list', op: 'nope' }, 'build'],
+      [{ action: 'test', widget: 'photo-wall', op: 'listBooks' }, 'build'],
+      [{ action: 'test', widget: 'old-notes', op: 'listBooks' }, 'build'],
       [{ action: 'preview', widget: 'reading-list', sizes: ['huge'] }, 'build'],
       [{ action: 'preview', widget: 'reading-list', theme: 'blue' }, 'build'],
       [{ action: 'sql', widget: 'reading-list' }, 'build'],
@@ -2020,18 +1874,14 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     expect(state.noteSessionUse).not.toHaveBeenCalled()
   })
 
-  it.each(BUILD_ACTIONS)('TL-L5 不造组件的调用方点名 %s → 拒，不记', async (action) => {
+  it.each(ALL_ACTIONS)('TL-L5 不造组件的调用方点名 %s → 拒，不记', async (action) => {
     const inv = await run(new WidgetTool(ctx), BUILD_ARGS[action], { caller: 'use' })
     expect(errorOf(inv)).toBe(refusal(action))
     expect(state.noteSessionUse).not.toHaveBeenCalled()
   })
 
-  it('TL-L6 list / describe 只是看：不记', async () => {
-    const tool = new WidgetTool(ctx)
-    for (const caller of ['use', 'build'] as const) {
-      textOf(await run(tool, { action: 'list' }, { caller }))
-      textOf(await run(tool, { action: 'describe', widget: 'reading-list' }, { caller }))
-    }
+  it('TL-L6 list 只是看：不记', async () => {
+    textOf(await run(new WidgetTool(ctx), { action: 'list' }))
     expect(state.noteSessionUse).not.toHaveBeenCalled()
     expect(state.pickSession).not.toHaveBeenCalled()
   })
@@ -2053,32 +1903,30 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     ]
   ])('TL-L7 %s → 结果与平常一模一样', async (_l, breakIt) => {
     opReturns({ ok: true, value: [{ title: 'Dune' }] })
-    const normalCall = await runUse(useOf('call'))
+    const normalCall = await runUse(useOf('test'))
     const normalCreate = await runUse(useOf('create'))
     expect(textOf(normalCreate)).toContain('Files: index.html')
     state.noteSessionUse.mockClear()
 
     breakIt()
-    const call = await runUse(useOf('call'))
+    const call = await runUse(useOf('test'))
     const create = await runUse(useOf('create'))
     expect(call.result).toEqual(normalCall.result)
-    expect(textOf(call)).toBe(JSON.stringify([{ title: 'Dune' }], null, 2))
+    expect(textOf(call)).toContain(JSON.stringify([{ title: 'Dune' }], null, 2))
     expect(create.result).toEqual(normalCreate.result)
     expect(state.grantWidget).toHaveBeenCalledTimes(2)
   })
 
-  it('TL-L8 过了门之后的失败照样记：outcome 失败、WidgetApiError、构建失败、dry_run', async () => {
+  it('TL-L8 过了门之后的失败照样记：outcome 失败、WidgetApiError、构建失败', async () => {
     const tool = new WidgetTool(ctx)
     opReturns({ ok: false, error: { code: 'invalid_args', message: 'title: Required' } })
-    errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'addBook' }))
+    errorOf(await run(tool, { action: 'test', widget: 'reading-list', op: 'addBook' }))
     expect(state.noteSessionUse).toHaveBeenCalledTimes(1)
 
     state.callWidgetOp.mockRejectedValueOnce(
       new errors.WidgetApiError('timeout', 'The operation took too long.')
     )
-    expect(
-      errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'listBooks' }))
-    ).toBe('[timeout] The operation took too long.')
+    expect(errorOf(await run(tool, BUILD_ARGS.test))).toBe('[timeout] The operation took too long.')
     expect(state.noteSessionUse).toHaveBeenCalledTimes(2)
 
     state.build.mockResolvedValue({
@@ -2087,20 +1935,9 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
       buildSuccess: false,
       buildErrors: ['x']
     })
-    const built = await run(tool, { action: 'build', widget: 'reading-list' }, { caller: 'build' })
+    const built = await run(tool, { action: 'build', widget: 'reading-list' })
     expect(built.result.isError).toBe(true)
-    expect(state.noteSessionUse).toHaveBeenCalledTimes(3)
-
-    opReturns({ ok: true, value: { saved: true } })
-    textOf(
-      await run(
-        tool,
-        { action: 'call', widget: 'reading-list', op: 'saveLayout', dry_run: true },
-        { caller: 'build' }
-      )
-    )
     expect(state.noteSessionUse.mock.calls).toEqual([
-      ['reading-list', 's1', null],
       ['reading-list', 's1', null],
       ['reading-list', 's1', null],
       ['reading-list', 's1', null]
@@ -2112,13 +1949,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
     const agentOf = vi.fn((c: number) => (c === 2 ? spawned : identity('work', 'gpt-5')))
     const sessionCtx: ToolContext = { sessionId: 's1', agentOf, rootSkills: [] }
     state.pickSession.mockReturnValue({ projectId: 'p1' })
-    textOf(
-      await run(
-        new WidgetTool(sessionCtx),
-        { action: 'call', widget: 'reading-list', op: 'listBooks' },
-        { conversationId: 2 }
-      )
-    )
+    textOf(await run(new WidgetTool(sessionCtx), BUILD_ARGS.test, { conversationId: 2 }))
     expect(agentOf).toHaveBeenCalledWith(2)
     expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId', 'settings']]])
     expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', 'p1']])
@@ -2128,7 +1959,7 @@ describe('TL-L 记下「这条会话用过这个组件」', () => {
 // ─── 注册 ────────────────────────────────────────────────────────────────
 
 describe('WT4-TL-29 注册元数据', () => {
-  it('设置页看到全量描述与全量 schema（与会话无关）；工厂造的是 WidgetTool；标签 / 提示 / 呈现', () => {
+  it('设置页看到这份描述与 schema（与会话无关）；工厂造的是 WidgetTool；标签 / 提示 / 呈现', () => {
     const meta = state.registered.find((m) => m.name === 'widget')
     expect(meta).toBeDefined()
     const described = (meta!.describe as () => { description: string; parameters: unknown })()

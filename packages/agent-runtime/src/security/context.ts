@@ -443,7 +443,8 @@ export function createSecurityContext(
           type: 'widget',
           widgetId: object.widgetId,
           name: object.name,
-          operation: object.operation
+          operation: object.operation,
+          ...(object.selected === undefined ? {} : { selected: object.selected })
         },
         { ...opts, onOther: 'throw' }
       )

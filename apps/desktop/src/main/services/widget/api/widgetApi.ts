@@ -10,6 +10,7 @@
  * 才把包和清单写进数据目录（快照）。调用只认快照 —— 没有这个组件读写授权的 agent 改了 `api.ts` 也改变不了行为，
  * 打开组件（会重建界面）也不会顺带重建 API。
  */
+import { widgetToolName, widgetToolNameFits } from '@shuvix/chat-protocol/widgetServers'
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -132,14 +133,58 @@ export type CompileApiResult =
   | { kind: 'ok'; api: CompiledApi }
   | { kind: 'error'; errors: string[] }
 
-/** 宿主再核一遍清单（清单出自沙箱，不全信） */
-function checkManifest(manifest: ApiManifest): string[] {
+/** 这些键底下是数据，不是 schema（zod 把缺省值原样写进 `default`） */
+const SCHEMA_DATA_KEYS = new Set(['default', 'const', 'enum', 'examples'])
+
+/** schema 里有没有引用。`properties` 底下的键是属性名，不是关键字：叫 `$ref` 的属性不算 */
+function schemaUsesRefs(schema: unknown): boolean {
+  if (Array.isArray(schema)) return schema.some(schemaUsesRefs)
+  if (typeof schema !== 'object' || schema === null) return false
+  for (const [key, value] of Object.entries(schema)) {
+    if (SCHEMA_DATA_KEYS.has(key)) continue
+    if (key === '$ref' || key === '$defs' || key === 'definitions') return true
+    if (key === 'properties' && typeof value === 'object' && value !== null) {
+      if (Object.values(value).some(schemaUsesRefs)) return true
+      continue
+    }
+    if (schemaUsesRefs(value)) return true
+  }
+  return false
+}
+
+/**
+ * 这个操作不能作为工具声明给模型的理由；能就是 undefined。`build` 拿它报错，老组件的快照在声明时跳过这样的操作。
+ *
+ * 声明不合格的代价比一次调用失败大得多，它每次请求都在：工具名超长、引用悬空都可能让整个请求被 provider 拒绝
+ * （Anthropic 那一路只留 `properties` 和 `required`，`$defs` 丢了 `$ref` 还在）。根不是 object 的话，MCP SDK
+ * 校验 `tools/list` 时整台服务器都连不上。
+ */
+export function agentOpProblem(widgetId: string, op: OpManifest): string | undefined {
+  if (!widgetToolNameFits(widgetId, op.name)) {
+    return `Operation "${op.name}": the tool name ${widgetToolName(widgetId, op.name)} is too long for agents (64 characters at most). Use a shorter operation name.`
+  }
+  const input = op.input as { type?: unknown } | null | undefined
+  if (input?.type !== 'object') {
+    return `Operation "${op.name}": its input must be a z.object(...) so agents can call it.`
+  }
+  if (schemaUsesRefs(input)) {
+    return `Operation "${op.name}": its input uses schema references ($ref / $defs), which a tool declaration cannot carry. Avoid recursive schemas and .meta({ id }).`
+  }
+  return undefined
+}
+
+/** 宿主再核一遍清单（清单出自沙箱，不全信）。纯界面的操作不声明给模型，不查声明那几条 */
+function checkManifest(manifest: ApiManifest, widgetId: string | undefined): string[] {
   const errors = [...(Array.isArray(manifest?.errors) ? manifest.errors.map(String) : [])]
   const ops = Array.isArray(manifest?.ops) ? manifest.ops : []
   for (const op of ops) {
     if (!OP_NAME_RE.test(op.name)) errors.push(`Invalid operation name "${op.name}".`)
     if (op.mode !== 'read' && op.mode !== 'write') {
       errors.push(`Operation "${op.name}" has no read/write mode.`)
+    }
+    if (widgetId !== undefined && op.agent !== false) {
+      const problem = agentOpProblem(widgetId, op)
+      if (problem) errors.push(problem)
     }
   }
   if (ops.length === 0 && errors.length === 0) errors.push('api.ts defines no operations.')
@@ -150,7 +195,10 @@ function checkManifest(manifest: ApiManifest): string[] {
  * 编译组件的 `api.ts` 并在组件宿主的临时沙箱里取清单。没有 `api.ts` → `none`。老组件也照样编译：它第一次带着
  * API 构建成功时换成 SQLite（widgetService.build → switchWidgetToSqlite）
  */
-export async function compileWidgetApi(projectDir: string): Promise<CompileApiResult> {
+export async function compileWidgetApi(
+  projectDir: string,
+  widgetId?: string
+): Promise<CompileApiResult> {
   if (!existsSync(join(projectDir, API_SOURCE_FILE))) return { kind: 'none' }
   const bundle = await bundlerService.buildApi(projectDir, API_SOURCE_FILE)
   if (!bundle.success || !bundle.outputJS) {
@@ -162,7 +210,7 @@ export async function compileWidgetApi(projectDir: string): Promise<CompileApiRe
   } catch (e) {
     return { kind: 'error', errors: [`${API_SOURCE_FILE}: ${(e as Error).message}`] }
   }
-  const errors = checkManifest(manifest)
+  const errors = checkManifest(manifest, widgetId)
   if (errors.length > 0)
     return { kind: 'error', errors: errors.map((m) => `${API_SOURCE_FILE}: ${m}`) }
   const hash = createHash('sha256').update(bundle.outputJS, 'utf8').digest('hex').slice(0, 32)
@@ -294,7 +342,7 @@ export async function callWidgetOp(
   if (options.expectedMode !== undefined && entry.mode !== options.expectedMode) {
     throw new WidgetApiError(
       'changed',
-      `Operation "${op}" of widget "${widgetId}" is now a ${entry.mode} operation (the widget was rebuilt). Look at it again before calling it.`
+      `Operation "${op}" of widget "${widgetId}" is now a ${entry.mode} operation (the widget was rebuilt). Check that it does what you want and call it again.`
     )
   }
   try {

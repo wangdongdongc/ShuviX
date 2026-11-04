@@ -45,6 +45,9 @@
  *   L12 findChildren(内存父) 回的子会话带各自的 storageKind（不给的读成 v3）
  *   L13 [白盒] 库里一个本版本不认识的值（durable-sqlite-9）原样读回，不改写、不兜底
  *
+ *   FS-1 removeEnabledTools：持久的和内存的会话都抹，只回改了的 id；次序与别的键不动；只抹点名的那几项
+ *   FS-2 一行坏掉的设置不挡路：它自己不动，后面的照样抹（读整行，不用按键取值的 SQL —— 那条 SQL 碰到坏 JSON 就抛）
+ *
  *   XS-59 drivingSourceOf：driver 是 target 的父会话 → parent-session，否则 / 行不在 → session；title 非空才带（两边各跑一遍）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -704,5 +707,68 @@ describe.each([
     sessionRecords.insert(session('grandchild', { parentId: 'child' }), opt)
     expect(sessionRecords.drivingSourceOf('grandchild', 'child').kind).toBe('parent-session')
     expect(sessionRecords.drivingSourceOf('grandchild', 'P').kind).toBe('session')
+  })
+})
+
+// ─── removeEnabledTools（一台服务器永远没了） ──────────────────────────────
+
+describe('FS removeEnabledTools', () => {
+  const ENTRIES = ['mcp:widget-a-b', '-mcp:widget-a-b']
+  const toolsIn = (id: string): unknown =>
+    sessionRecords.pickSettings(id, ['enabledTools'])?.enabledTools
+
+  it('FS-1 持久的和内存的都抹；只回改了的；次序与别的键不动；前缀相同的不动', () => {
+    sessionRecords.insert(
+      session('p1', {
+        settings: {
+          enabledTools: ['mcp:x', 'mcp:widget-a-b', 'mcp:widget-a-b-c', '-mcp:widget-a-b'],
+          ...loose({ keep: 1 })
+        }
+      })
+    )
+    sessionRecords.insert(session('p2', { settings: { enabledTools: ['mcp:x'] } }))
+    sessionRecords.insert(session('p3'))
+    sessionRecords.insert(session('e1', { settings: { enabledTools: ['-mcp:widget-a-b'] } }), {
+      ephemeral: true
+    })
+    sessionRecords.insert(session('e2', { settings: { enabledTools: ['mcp:y'] } }), {
+      ephemeral: true
+    })
+
+    expect(sessionRecords.removeEnabledTools(ENTRIES).sort()).toEqual(['e1', 'p1'])
+
+    expect(toolsIn('p1')).toEqual(['mcp:x', 'mcp:widget-a-b-c'])
+    expect(sessionRecords.pickSettings('p1', looseKeys('keep'))).toEqual({ keep: 1 })
+    expect(toolsIn('p2')).toEqual(['mcp:x'])
+    expect(toolsIn('e1')).toEqual([])
+    expect(toolsIn('e2')).toEqual(['mcp:y'])
+    expect(sessionRecords.isEphemeral('e1')).toBe(true)
+  })
+
+  it('FS-1 没有会话有这一项 → 空表，什么都没写', () => {
+    sessionRecords.insert(session('p1', { settings: { enabledTools: ['mcp:x'] } }))
+    vi.setSystemTime(LATER)
+    expect(sessionRecords.removeEnabledTools(ENTRIES)).toEqual([])
+    expect(sessionRecords.findById('p1')!.updatedAt).toBe(T0)
+  })
+
+  it('FS-2 一行坏掉的设置排在最前：它自己不动，后面的照样抹', () => {
+    sessionRecords.insert(session('bad', { lastActiveAt: T0 + 10 }))
+    sessionRecords.insert(
+      session('good', { lastActiveAt: T0, settings: { enabledTools: ['mcp:widget-a-b'] } })
+    )
+    const db = holder.db as DatabaseSync
+    db.prepare('UPDATE sessions SET settings = ? WHERE id = ?').run(
+      '{"enabledTools":["mcp:widget-a-b"',
+      'bad'
+    )
+
+    expect(sessionRecords.removeEnabledTools(ENTRIES)).toEqual(['good'])
+
+    expect(toolsIn('good')).toEqual([])
+    expect(
+      (db.prepare('SELECT settings FROM sessions WHERE id = ?').get('bad') as { settings: string })
+        .settings
+    ).toBe('{"enabledTools":["mcp:widget-a-b"')
   })
 })

@@ -40,6 +40,8 @@ import { messageService } from '../../services/messageService'
 import { recordSessionThinkingLevel, storageRefusalOf } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
 import { dbManager } from '../../services/builtinMcp/dbConnections'
+import { widgetRegistry } from '../../services/widget/widgetRegistry'
+import { widgetIdOfServer } from '@shuvix/chat-protocol/widgetServers'
 import { sshDisconnectRuntime, sshRuntimeStatuses } from '../../services/builtinMcp/sshServer'
 import { mcpService } from '../../services/mcpService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -618,6 +620,7 @@ export class DefaultChatGateway implements ChatGateway {
     defaultEnabled?: boolean
     serverStatus?: string
     isBuiltin?: boolean
+    isWidget?: boolean
     declaredBy?: string
   }> {
     // 默认勾选 = 这条会话根 Agent 档案的白名单：档案由会话形态推导（项目 work / 无项目 chat /
@@ -656,14 +659,21 @@ export class DefaultChatGateway implements ChatGateway {
     const mcpTools = mcpService
       .getAllToolInfos()
       .filter((info) => info.name !== 'mcp:chrome' || declared.has(info.name))
-      .map((info) => ({
-        name: info.name,
-        label: info.label,
-        group: info.group,
-        serverStatus: info.serverStatus,
-        isBuiltin: info.isBuiltin,
-        declaredBy: declaredBy(info.name)
-      }))
+      .map((info) => {
+        // 组件也是一台服务器：显示它的名字和说明，不算内置（内置的记号和排序是给随产品发布的那几台的）
+        const widgetId = widgetIdOfServer(info.name.slice('mcp:'.length))
+        const widget = widgetId === undefined ? undefined : widgetRegistry.findById(widgetId)
+        return {
+          name: info.name,
+          label: widget?.name || info.label,
+          ...(widget?.description ? { hint: widget.description } : {}),
+          group: info.group,
+          serverStatus: info.serverStatus,
+          isBuiltin: widgetId === undefined ? info.isBuiltin : false,
+          ...(widgetId === undefined ? {} : { isWidget: true }),
+          declaredBy: declaredBy(info.name)
+        }
+      })
     // 技能不在这里：启用着的全部上带 `skill` 工具的 agent 的货架，没有按会话的勾选（2026-10-28）
     return [...merged, ...mcpTools]
   }

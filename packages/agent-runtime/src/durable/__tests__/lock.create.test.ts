@@ -9,7 +9,7 @@ import { AgentDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc, SessionStateDoc } from '../docs'
-import { AgentCreationError, lockRecordJson, parseLockRecord } from '../lock'
+import { AgentCreationError, lockRecordJson, parseLockRecord, withoutOmittedTools } from '../lock'
 import { E_W, scenarioConfig, scenarioToolHost, testProfile, W_CWD } from './support/agentConfig'
 import { recordPublications } from './support/commits'
 import { fauxProvider } from '@earendil-works/pi-ai'
@@ -592,5 +592,69 @@ describe('lock · create', () => {
     expect(session.lock).toMatchObject({ profileName: 'test', toolNames: [] })
     expect(t.kit.requests[0]!.systemPrompt).toBe('')
     expect(session.lock!.mcp).toEqual({})
+  })
+})
+
+/**
+ * 宿主可以说「档案写了、这个 agent 用不上」（ResolvedAgentTools.omitBuiltin，今天只有缺 widget 技能时的 `widget`）：
+ * 内置工具是会话级的一份，不能在 buildBuiltinTools 里滤，所以滤的是 agent 的名单。解析照样收到完整的名单（宿主要靠它判断）。
+ */
+describe('lock · omitBuiltin', () => {
+  const OMITTED = 'artifact'
+  const omit = (t: Awaited<ReturnType<typeof scenarioW>>['t']): void => {
+    t.toolHost.transformResolved = (resolved) => ({ ...resolved, omitBuiltin: [OMITTED] })
+  }
+
+  it('OM-1 withoutOmittedTools: nothing to omit → a copy; otherwise filtered; the input is not changed', () => {
+    const input = ['read', 'widget', 'mcp:ctx']
+    const untouched = withoutOmittedTools(input, undefined)
+    expect(untouched).toEqual(input)
+    expect(untouched).not.toBe(input)
+    expect(withoutOmittedTools(input, [])).toEqual(input)
+    expect(withoutOmittedTools(input, [])).not.toBe(input)
+    expect(withoutOmittedTools(input, ['widget', 'nope'])).toEqual(['read', 'mcp:ctx'])
+    expect(input).toEqual(['read', 'widget', 'mcp:ctx'])
+  })
+
+  it('OM-2 create: the host still sees the requested name; the lock, the offered tools and the persona variables do not have it; the session-level builtin extension still does', async () => {
+    const seen: string[][] = []
+    const { t } = await scenarioW({
+      promptVars: (ctx) => {
+        seen.push([...ctx.toolNames])
+        return { marker: 'M1' }
+      }
+    })
+    omit(t)
+    const session = await t.open()
+    t.kit.queue(answer('hello'))
+    expect(await session.submitUser('hi')).toEqual({})
+
+    expect(t.toolHost.resolveCalls[0]!.names).toContain(OMITTED)
+    expect(session.lock!.toolNames).toEqual(E_W.filter((name) => name !== OMITTED))
+    expect(names(requestTools(t.kit, 0))).toEqual(E_W.filter((name) => name !== OMITTED))
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).not.toContain(OMITTED)
+    expect(extensionTools(t, 'shuvix.builtin')).toContain(OMITTED)
+  })
+
+  it('OM-3 a reopen keeps it out: the lock is what decides, nothing is resolved again', async () => {
+    const { t } = await scenarioW()
+    omit(t)
+    const session = await t.open()
+    t.kit.queue(answer('one'))
+    expect(await session.submitUser('u1')).toEqual({})
+    const lock = session.lock!
+    const resolves = t.toolHost.resolveCalls.length
+
+    t.toolHost.transformResolved = undefined
+    await t.host.close('s1')
+    const reopened = await t.open()
+    t.kit.queue(answer('two'))
+    expect(await reopened.submitUser('u2')).toEqual({})
+
+    expect(reopened.lock!.toolNames).toEqual(lock.toolNames)
+    expect(reopened.lock!.toolNames).not.toContain(OMITTED)
+    expect(t.toolHost.resolveCalls).toHaveLength(resolves)
+    expect(names(requestTools(t.kit, 1))).not.toContain(OMITTED)
   })
 })

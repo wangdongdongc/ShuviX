@@ -14,6 +14,7 @@ import {
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { connectionFailureOf } from '@shuvix/chat-protocol/connectionErrors'
+import { isWidgetSelectionEntry } from '@shuvix/chat-protocol/widgetServers'
 import {
   useChatStore,
   selectIsStreaming,
@@ -218,8 +219,10 @@ export function InputArea({
    */
   const autoEnableRequiredTools = useCallback(
     (requiredTools: string[] | undefined, sid: string | null): void => {
-      if (!requiredTools?.length) return
-      void addSessionTools(sid, requiredTools)
+      // 组件的勾选算读授权，得是用户自己同意的：命令文件（可能来自项目目录）不能替用户点这个头
+      const tools = requiredTools?.filter((name) => !isWidgetSelectionEntry(name))
+      if (!tools?.length) return
+      void addSessionTools(sid, tools)
     },
     []
   )

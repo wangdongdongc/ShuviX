@@ -57,7 +57,7 @@ export default defineApi({
 - **`op.read`** never changes data: its statements run on a read-only connection, and one that would write is refused. **`op.write`** changes data; when it commits, every open copy of the widget refetches.
 - **Names** are camelCase verb + noun (`addBook`, `listBooks`), at most 48 characters.
 - **`description`** is written for the agent that will call it: what it does, when to use it, what happens if it is called twice. Agents see nothing else about the operation.
-- **`input`** is a `z.object(...)`; use the user's words (`title`, not `bookId`, when the user thinks in titles), defaults where they are obvious, and put constraints a schema cannot show into `.describe()`. `z.date()`, `z.bigint()` and `z.map()` cannot be described to agents and fail the build: pass dates as ISO strings.
+- **`input`** is a `z.object(...)`; use the user's words (`title`, not `bookId`, when the user thinks in titles), defaults where they are obvious, and put constraints a schema cannot show into `.describe()`. `z.date()`, `z.bigint()` and `z.map()` cannot be described to agents and fail the build: pass dates as ISO strings. Recursive schemas and `.meta({ id })` fail it too, because a tool declaration cannot carry schema references. Each operation becomes a tool named `mcp__widget-<id>__<op>`, at most 64 characters: keep `op` short when the id is long.
 - **`output`** (optional) is checked against what the handler returns and shown to agents; give it for anything an agent will read.
 - **`agent: false`** keeps an operation for the screen only (layout, display preferences). Everything the user does with their records stays visible to agents.
 - **Idempotent where it can be**: an add that updates instead of duplicating, a set instead of a toggle. Agents retry.
@@ -74,7 +74,7 @@ Handlers run in a sandbox on ShuviX's side, not in the browser. There is no netw
 | `ctx.db.tx(async (tx) => …)`               | Several writes that must happen together: committed when the callback returns, rolled back when it throws. Use `tx` (not `ctx.db`) inside it.       |
 | `ctx.fail(code, message)`                  | End the call with an error the screen and the agent both see: `code` is lowercase snake_case (`title_taken`), `message` says what to do instead.   |
 | `ctx.caller`                               | `{ kind: 'user' }` or `{ kind: 'agent', sessionId, actor }`, with a `label` to record who did it.                                                  |
-| `ctx.now()`, `ctx.uuid()`, `ctx.log(...)`  | The time (ISO 8601), a random UUID, a log line (`call` shows them).                                                                                |
+| `ctx.now()`, `ctx.uuid()`, `ctx.log(...)`  | The time (ISO 8601), a random UUID, a log line (`test` shows them).                                                                                |
 
 Statements are `SELECT`, `WITH`, `INSERT`, `UPDATE`, `DELETE`, `REPLACE` and `VALUES`, one per call. Tables change through `sql` (`data.md`), never from a handler. Each statement of an `op.write` commits on its own unless it is inside `ctx.db.tx`.
 
@@ -109,9 +109,9 @@ function Books() {
 
 ## Test it
 
-After a green `build`, `call` each operation you added or changed:
+After a green `build`, `test` each operation you added or changed:
 
-- `dry_run: true` for writes: the call runs for real and everything it wrote is rolled back. Screen-only operations can be called this way too.
+- The call runs for real and everything it wrote is rolled back. Screen-only operations can be tried this way too.
 - A wrong input comes back as `invalid_args` with the operation's input schema; a `ctx.fail` comes back as `[code] message`; an exception in the handler as `Widget operation failed: …`.
 
 Then check the screen with `preview`.

@@ -27,7 +27,7 @@ What the widget's page itself can show:
 
 ## An operation fails
 
-`call` it yourself to see the whole error, with its `logs`:
+`test` it yourself to see the whole error, with its `logs`:
 
 | Error                          | Meaning                                                                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
@@ -36,7 +36,7 @@ What the widget's page itself can show:
 | `Widget operation failed: …`   | the handler threw. `no such table`: the tables were never created (`data.md`). `A read operation cannot change data`: an `op.read` that writes. `Widget operations can only run …` / `cannot use …`: a statement other than a query or a row change (`api.md`) |
 | `timeout` / `out_of_memory`    | the handler ran over its limits (`api.md`): a loop that never ends, a query that returns everything                     |
 | `no_api` / `unknown_op`        | there is no built API, or no such operation: `build` after editing `api.ts`                                             |
-| `changed`                      | the widget was rebuilt between your check and your call; `describe` it again                                            |
+| `changed`                      | the widget was rebuilt between your check and your call: check it still does what you want, then call it again                                            |
 
 In the screen, `WidgetError` carries the same `code` and `message`.
 

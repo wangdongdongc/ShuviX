@@ -12,6 +12,9 @@
  *    没有 `skill:<name>` 条目、没有 `__skills__` 组，也不去问 skillService；技能工具 `skill` 本身是一条
  *    普通的内置工具条目（`general` 组，档案写了它就 `defaultEnabled`）。
  *
+ * 组件也是一台服务器（LT-W，2026-11-04）：条目显示组件的名字和说明，标 `isWidget`，不算内置（内置的记号和排序是给随产品发布的
+ * 那几台的），组还是 `mcp:*`（选择器按组筛）。
+ *
  * mock 骨架照抄 chatGatewayPrompt.test.ts（网关的 import 图带 SQLite / electron / 全部工具）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
@@ -39,10 +42,14 @@ const mocks = vi.hoisted(() => ({
   findEnabled: vi.fn(),
   findById: vi.fn(),
   projectPick: vi.fn(),
-  mcpInfos: [] as McpInfo[]
+  mcpInfos: [] as McpInfo[],
+  widgetFindById: vi.fn()
 }))
 
 vi.mock('../../../tools/allTools', () => ({}))
+vi.mock('../../../services/widget/widgetRegistry', () => ({
+  widgetRegistry: { findById: mocks.widgetFindById }
+}))
 vi.mock('../../../services/toolRegistry', () => {
   const entries = (names: string[]): object[] =>
     names.map((name) => ({
@@ -141,6 +148,7 @@ beforeEach(() => {
   mocks.findById.mockReturnValue({ id: SID, projectId: null })
   mocks.projectPick.mockReset()
   mocks.mcpInfos = [MCP_CTX, MCP_OTHER]
+  mocks.widgetFindById.mockReset()
 })
 
 describe('DefaultChatGateway.listTools —— 档案声明的 mcp: 项', () => {
@@ -447,4 +455,67 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
       expect(rowOf(chatGateway.listTools(), 'skill')).toMatchObject({ defaultEnabled: true })
     }
   )
+})
+
+describe('DefaultChatGateway.listTools —— 组件', () => {
+  /** getAllToolInfos 算出来的组件行：配置行 isBuiltin 是 1（调用归属靠它），所以这里也是 true */
+  const widgetInfo = (id: string): McpInfo => ({
+    name: `mcp:widget-${id}`,
+    label: `widget-${id}`,
+    group: `mcp:widget-${id}`,
+    serverStatus: 'connected',
+    isBuiltin: true
+  })
+
+  it('LT-W1 显示名、说明、isWidget、不算内置；组和状态照旧', () => {
+    mocks.mcpInfos = [widgetInfo('a-b')]
+    mocks.widgetFindById.mockReturnValue({ id: 'a-b', name: 'Reading list', description: 'Books.' })
+
+    const row = rowOf(chatGateway.listTools(SID), 'mcp:widget-a-b')
+
+    expect(mocks.widgetFindById).toHaveBeenCalledWith('a-b')
+    expect(row).toMatchObject({
+      name: 'mcp:widget-a-b',
+      label: 'Reading list',
+      hint: 'Books.',
+      group: 'mcp:widget-a-b',
+      serverStatus: 'connected',
+      isBuiltin: false,
+      isWidget: true
+    })
+  })
+
+  it('LT-W2 没有说明 → 没有 hint 键；组件表里没有它（行还在缓存里）→ 名字退回服务器名，仍是组件', () => {
+    mocks.mcpInfos = [widgetInfo('a-b'), widgetInfo('c-d')]
+    mocks.widgetFindById.mockImplementation((id: string) =>
+      id === 'a-b' ? { id, name: 'A', description: '' } : undefined
+    )
+    const rows = chatGateway.listTools(SID)
+    expect(rowOf(rows, 'mcp:widget-a-b')).not.toHaveProperty('hint')
+    expect(rowOf(rows, 'mcp:widget-c-d')).toMatchObject({
+      label: 'widget-c-d',
+      isWidget: true,
+      isBuiltin: false
+    })
+  })
+
+  it('LT-W3 别的条目：没有 isWidget，isBuiltin 照行；id 不合规的 `widget-foo` 不是组件；不去读组件表', () => {
+    mocks.mcpInfos = [
+      { name: 'mcp:browser', label: 'browser', group: 'mcp:browser', isBuiltin: true },
+      { name: 'mcp:widget-foo', label: 'widget-foo', group: 'mcp:widget-foo', isBuiltin: false },
+      MCP_CTX
+    ]
+    const rows = chatGateway.listTools(SID)
+    for (const row of rows) expect(row, row.name).not.toHaveProperty('isWidget')
+    expect(rowOf(rows, 'mcp:browser')!.isBuiltin).toBe(true)
+    expect(rowOf(rows, 'mcp:widget-foo')!.label).toBe('widget-foo')
+    expect(mocks.widgetFindById).not.toHaveBeenCalled()
+  })
+
+  it('LT-W4 档案声明了这个组件：declaredBy 照标（勾选算同意另说，见 widgetMcpServer.test WM-C4）', () => {
+    mocks.getProfile.mockReturnValue({ ...WORK, tools: ['mcp:widget-a-b'] })
+    mocks.mcpInfos = [widgetInfo('a-b')]
+    mocks.widgetFindById.mockReturnValue({ id: 'a-b', name: 'A', description: '' })
+    expect(rowOf(chatGateway.listTools(SID), 'mcp:widget-a-b')!.declaredBy).toBe('Work')
+  })
 })

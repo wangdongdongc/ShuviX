@@ -1065,6 +1065,55 @@ export const migrations: Migration[] = [
         mark.run(JSON.stringify(settings), r.id)
       }
     }
+  },
+  {
+    version: 39,
+    description:
+      '组件成为 MCP 服务器（`widget-<id>`）：用户自己叫 `widget-…` 的服务器改名让位，会话与项目勾选里的引用跟着改',
+    up: (db) => {
+      // 新名字在前面加 custom-：v27–v37 的 `<名字>-custom` 在这里还带着保留前缀。引用要跟着改，否则勾选里留下的
+      // `mcp:widget-x` 会落到同 id 的组件头上，而勾选算读授权。这个版本之前还没有组件服务器，所以指向别的 `widget-…`
+      // 的引用（那台服务器早删了）一并抹掉
+      const occupants = db
+        .prepare(`SELECT id, name FROM mcp_servers WHERE name LIKE 'widget-%'`)
+        .all() as Array<{ id: string; name: string }>
+      const now = Date.now()
+      const holderOf = db.prepare('SELECT id FROM mcp_servers WHERE name = ?')
+      const rename = db.prepare('UPDATE mcp_servers SET name = ?, updatedAt = ? WHERE id = ?')
+      const renamed = new Map<string, string>()
+      for (const occupant of occupants) {
+        let freeName = `custom-${occupant.name}`
+        for (let n = 2; holderOf.get(freeName); n++) freeName = `custom-${occupant.name}-${n}`
+        rename.run(freeName, now, occupant.id)
+        renamed.set(occupant.name, freeName)
+      }
+      const rewritten = (entry: unknown): unknown[] => {
+        if (typeof entry !== 'string') return [entry]
+        const optOut = entry.startsWith('-mcp:')
+        if (!optOut && !entry.startsWith('mcp:')) return [entry]
+        const name = entry.slice(optOut ? 5 : 4)
+        const next = renamed.get(name)
+        if (next !== undefined) return [`${optOut ? '-' : ''}mcp:${next}`]
+        return name.startsWith('widget-') ? [] : [entry]
+      }
+      for (const table of ['sessions', 'projects']) {
+        const rows = db
+          .prepare(`SELECT id, settings FROM ${table} WHERE settings LIKE '%mcp:widget-%'`)
+          .all() as Array<{ id: string; settings: string }>
+        const update = db.prepare(`UPDATE ${table} SET settings = ? WHERE id = ?`)
+        for (const row of rows) {
+          let settings: Record<string, unknown>
+          try {
+            settings = JSON.parse(row.settings)
+          } catch {
+            continue // 解析不过的设置不碰，改写只会把它原来那份冲掉
+          }
+          if (!settings || !Array.isArray(settings.enabledTools)) continue
+          settings.enabledTools = settings.enabledTools.flatMap(rewritten)
+          update.run(JSON.stringify(settings), row.id)
+        }
+      }
+    }
   }
 ]
 

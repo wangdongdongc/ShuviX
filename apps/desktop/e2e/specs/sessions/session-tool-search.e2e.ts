@@ -16,13 +16,20 @@
  *         搜索期间服务器没有新请求
  *   TS-9  Electron 自己的 ICU 下：`浏览器` / `データベース` 切得开、找得到，有卡片
  *   TS-10 派发的 coding（工具名单与根同款）：请求里没有 tool_search，system 里没有那一段；根的请求两样都有
+ *   TS-11 组件（夹具：widget.json + 数据目录 + api.json，真的实例算出它们的服务器）：`expense widget` 只命中那一个，有卡；提示词
+ *         只有名字，组件说明和操作说明不进任何一次请求（批准之前）
+ *   TS-12 两个组件同一个显示名：没有卡，列表里是服务器名、显示名和操作名；接着叫 id 才问
+ *   TS-13 老快照里声明不合格的操作：加载的时候跳过（工具名超长、根不是 object、带 $ref），别的操作照常可调用
+ *   TS-14 bot 会话（窄工具名单）：有 tool_search 和那一段提示词，开启之后工具就在
  *
  * 会话都不带项目（chat 基座）、标题不是缺省标题（不跑自动标题，不会多出 titler 的请求）。发送走 UI（卡片要摆在
  * 这条会话的输入框上）；请求按 `lastUserText` 认领。
  *
  * 这些服务器在整个实例里都启用着，所以后面用例的提示词里会列着它们：断言只钉自己这一条用到的东西。
  */
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http'
+import { join } from 'node:path'
 import { Server as McpSdkServer } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -43,6 +50,7 @@ import { launchApp, type E2EApp } from '../../harness/launch'
 import { removeUserPolicy, writeUserPolicy } from '../../harness/networkFixtures'
 import {
   chatPane,
+  extensionAskPane,
   sidebarPane,
   toolPickerPane,
   type ChatPane,
@@ -51,6 +59,7 @@ import {
   type ToolPickerPane
 } from '../../harness/pages'
 import {
+  createBotSession,
   eventRecorder,
   requestToolNames,
   seedFakeProvider,
@@ -640,5 +649,182 @@ describe('tool_search 找到几台', () => {
       expect(system).not.toContain(heading)
     }
     expect(await enabledTools(sid)).toEqual([])
+  })
+})
+
+// ─── 组件也是一台服务器 ─────────────────────────────────────────────
+
+describe('tool_search 找组件', () => {
+  interface OpFixture {
+    name: string
+    mode?: 'read' | 'write'
+    description?: string
+    input?: unknown
+    agent?: boolean
+  }
+
+  const OBJECT_INPUT = { type: 'object', properties: {}, additionalProperties: false }
+
+  /**
+   * 一个已经构建过的组件（不跑构建，只有算服务器行要的东西）：widget.json + 数据目录 + api.json。
+   * 组件表是扫目录的，算出来的行 5 秒 TTL，所以要等到它出现（用例按服务器名等）。
+   */
+  function seedWidget(id: string, name: string, description: string, ops: OpFixture[]): void {
+    const dir = join(app.home, '.shuvix', 'widgets', id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'widget.json'),
+      JSON.stringify({ id, name, description, entryFile: 'index.tsx', createdAt: 1 })
+    )
+    writeFileSync(join(dir, 'index.tsx'), 'export {}\n')
+    const data = join(app.home, '.shuvix', 'widgets-data', id)
+    mkdirSync(data, { recursive: true })
+    writeFileSync(
+      join(data, 'api.json'),
+      JSON.stringify({
+        hash: `hash-${id}`,
+        builtAt: 1,
+        ops: ops.map((op) => ({
+          mode: 'read',
+          agent: true,
+          description: `${op.name} SECRET_OP_DESCRIPTION`,
+          input: OBJECT_INPUT,
+          ...op
+        }))
+      })
+    )
+    writeFileSync(join(data, 'api.js'), '/* never called in this spec */')
+  }
+
+  /** 选择器的条目来自算出来的行：等它列出来（TTL 过了，新组件才算得到） */
+  const waitWidgetRow = async (id: string): Promise<void> => {
+    await until(
+      async () =>
+        (await app.main.eval<Array<{ name: string }>>(`window.api.tools.list()`)).some(
+          (item) => item.name === `mcp:widget-${id}`
+        ) || null,
+      `widget ${id} has a server row`,
+      15_000
+    )
+  }
+
+  const SECRET_WIDGET = 'SECRET_WIDGET_DESCRIPTION'
+
+  beforeAll(async () => {
+    seedWidget('expense-log', 'Money Tracker', `${SECRET_WIDGET} receipts`, [
+      { name: 'addExpense', mode: 'write' },
+      { name: 'listExpenses' }
+    ])
+    seedWidget('reading-list', 'Bookshelf', `${SECRET_WIDGET} novels`, [{ name: 'listBooks' }])
+    seedWidget('garden-diary', 'Plants', `${SECRET_WIDGET} watering`, [{ name: 'listPlants' }])
+    seedWidget('notes-one', 'Same Name', `${SECRET_WIDGET} one`, [{ name: 'firstOp' }])
+    seedWidget('notes-two', 'Same Name', `${SECRET_WIDGET} two`, [{ name: 'secondOp' }])
+    seedWidget('old-snapshot', 'Old Snapshot', `${SECRET_WIDGET} old`, [
+      { name: 'goodOp' },
+      { name: `long${'x'.repeat(60)}` },
+      { name: 'notObject', input: { type: 'string' } },
+      {
+        name: 'withRefs',
+        input: { type: 'object', properties: { x: { $ref: '#/$defs/X' } }, $defs: { X: {} } }
+      },
+      { name: 'screenOnly', agent: false }
+    ])
+    for (const id of ['expense-log', 'reading-list', 'old-snapshot']) await waitWidgetRow(id)
+  }, 60_000)
+
+  it('TS-11 `expense widget`：只命中那一个，有卡（名字 + 标识名 + 组件那一句）；组件说明和操作说明不进任何请求', async () => {
+    const TEXT = 'TS-11 log an expense'
+    const sid = await openChat('TS-11 widget search')
+    provider.reset()
+    provider.script(searchTurn(TEXT, 'expense widget'), answerTurn(TEXT))
+
+    const since = await send(TEXT)
+    const card = await waitCard()
+    expect(LOCALES.map((locale) => locale.toolCall.extensionAskEnable)).toContain(card.title)
+    const shot = await until(() => extensionAskPane(app.main).shot(), 'extension card')
+    expect(shot.server).toBe('widget-expense-log')
+    expect(shot.text).toContain('Money Tracker')
+    expect(LOCALES.map((locale) => locale.toolCall.extensionAskWidget)).toContain(shot.widgetLine)
+    expect(shot.sourceLine).toBeNull()
+
+    // 批准之前：提示词只有名字
+    const [first] = requestsFor(TEXT)
+    const system = systemTexts(first).join('\n')
+    expect(system).toContain('widget-expense-log')
+    expect(system).toContain('Money Tracker')
+    expect(first.raw).not.toContain(SECRET_WIDGET)
+    expect(first.raw).not.toContain('SECRET_OP_DESCRIPTION')
+
+    await chat.answerPendingAsk('deny')
+    await turnEnd(sid, since)
+    expect(await enabledTools(sid)).not.toContain('mcp:widget-expense-log')
+    for (const req of requestsFor(TEXT)) {
+      expect(req.raw).not.toContain(SECRET_WIDGET)
+      expect(req.raw).not.toContain('SECRET_OP_DESCRIPTION')
+    }
+  })
+
+  it('TS-12 同一个显示名：没有卡，列表里是服务器名、显示名和操作名；接着叫 id 才问', async () => {
+    const TEXT = 'TS-12 same name'
+    const sid = await openChat('TS-12 same display name')
+    provider.reset()
+    provider.script(searchTurn(TEXT, 'Same Name'), searchTurn(TEXT, 'notes-two'), answerTurn(TEXT))
+
+    const since = await send(TEXT)
+    const [, second] = await waitRequests(TEXT, 2)
+    const listing = toolTextsOf(second).at(-1)!
+    expect(listing).toContain('- widget-notes-one "Same Name" (tools: firstOp)')
+    expect(listing).toContain('- widget-notes-two "Same Name" (tools: secondOp)')
+    expect(listing).not.toContain('SECRET')
+
+    const shot = await until(() => extensionAskPane(app.main).shot(), 'extension card')
+    expect(shot.server).toBe('widget-notes-two')
+    await chat.answerPendingAsk('deny')
+    await turnEnd(sid, since)
+  })
+
+  it('TS-13 老快照：声明不合格的操作跳过，别的操作照常声明；连接不因它们失败', async () => {
+    const TEXT = 'TS-13 old snapshot'
+    const sid = await openChat('TS-13 old snapshot')
+    provider.reset()
+    provider.script(searchTurn(TEXT, 'old-snapshot'), answerTurn(TEXT))
+
+    const since = await send(TEXT)
+    await waitCard()
+    await chat.answerPendingAsk('allow')
+    await turnEnd(sid, since)
+
+    const [, second] = requestsFor(TEXT)
+    expect(toolTextsOf(second).at(-1)).toContain('Loaded 1 tool.')
+    expect(mcpTools(second, 'widget-old-snapshot')).toEqual(['mcp__widget-old-snapshot__goodOp'])
+    expect(await enabledTools(sid)).toContain('mcp:widget-old-snapshot')
+  })
+
+  it('TS-14 bot 会话：有 tool_search，提示词里有那一段；开启之后工具就在', async () => {
+    const BOT = 'ts14-bot'
+    writeFileSync(
+      join(app.home, '.shuvix', 'bots', `${BOT}.md`),
+      `---\nshuvix: bot v2\nname: ${BOT}\ndescription: e2e\n---\n\n# Persona\n\nHelpful.\n`
+    )
+    const sid = await createBotSession(app.main, { bot: BOT, title: 'TS-14 bot session' })
+    const TEXT = 'TS-14 find my books'
+    provider.reset()
+    provider.script(searchTurn(TEXT, 'reading-list'), answerTurn(TEXT))
+    await until(
+      async () => (await sidebar.openSession('TS-14 bot session')) || null,
+      'bot session open'
+    )
+    await chat.ready()
+
+    const since = await send(TEXT)
+    await waitCard()
+    const [first] = requestsFor(TEXT)
+    expect(requestToolNames(first)).toContain('tool_search')
+    expect(systemTexts(first).join('\n')).toContain('`widget-reading-list`')
+    await chat.answerPendingAsk('allow')
+    await turnEnd(sid, since)
+
+    const [, second] = requestsFor(TEXT)
+    expect(mcpTools(second, 'widget-reading-list')).toEqual(['mcp__widget-reading-list__listBooks'])
   })
 })

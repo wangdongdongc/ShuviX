@@ -1,5 +1,5 @@
 /**
- * tool_search 工具 —— 模型查找这条会话没开启的 MCP 服务器，经用户确认后整台开启。
+ * tool_search 工具 —— 模型查找这条会话没开启的 MCP 服务器（组件也是，一个组件一台），经用户确认后整台开启。
  *
  * 没勾选的服务器不占上下文，模型需要时自己找。探针（e2e/live/toolDiscovery.probe.ts）量到的差别是这个工具存在的理由：
  * 用户中途勾选时上下文末尾什么也看不到，模型照走老路；模型自己搜到的工具，下一步就会用。
@@ -29,6 +29,7 @@ import {
   withToolsSelected
 } from '@shuvix/chat-protocol/toolSelection'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
+import { widgetIdOfServer } from '@shuvix/chat-protocol/widgetServers'
 import {
   extensionChoiceLine,
   extensionSourceOf,
@@ -50,7 +51,8 @@ const CONNECT_TIMEOUT_MS = 30_000
 /** 描述固定不变：它变了就是一次工具重新声明，会打穿不支持中途改工具的模型的缓存 */
 export const TOOL_SEARCH_DESCRIPTION =
   'Find and turn on extensions (MCP servers) that are off in this session. ' +
-  'Some capabilities, such as a browser, SSH or databases, may not be available to you yet; search before working around a missing one.\n\n' +
+  'Some capabilities, such as a browser, SSH or databases, may not be available to you yet; search before working around a missing one. ' +
+  "The user's widgets are extensions too: small apps with their own records, such as a reading list or an expense log.\n\n" +
   '`query` is a few keywords for what you need, or the exact name of an extension. ' +
   'With one match the user is asked to approve it, and if they do its tools are available from your next call. ' +
   'With several you get their names: call again with the exact name of the one you need. ' +
@@ -140,7 +142,10 @@ export class ToolSearchTool extends BaseTool<typeof ToolSearchParamsSchema> {
     )
     await assertExtensionAccess(
       withCallAgent(this.ctx, call),
-      { server: server.name, builtin: server.type === 'inproc' },
+      {
+        server: server.name,
+        builtin: server.type === 'inproc' && widgetIdOfServer(server.name) === undefined
+      },
       {
         toolCallId,
         toolName: TOOL_SEARCH_TOOL_NAME,

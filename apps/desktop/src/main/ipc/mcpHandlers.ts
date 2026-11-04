@@ -1,3 +1,4 @@
+import { isReservedMcpServerName } from '@shuvix/chat-protocol/widgetServers'
 import { defineHandler } from './registry'
 import { v7 as uuidv7 } from 'uuid'
 import { mcpService } from '../services/mcpService'
@@ -38,6 +39,8 @@ export function registerMcpHandlers(): void {
     const trimmed = name.trim()
     if (!trimmed) return 'An MCP server needs a name'
     if (trimmed.includes('__')) return `An MCP server name cannot contain "__"`
+    if (isReservedMcpServerName(trimmed))
+      return `Names starting with "widget-" are kept for widgets`
     const taken = mcpDao.findAll().some((s) => s.name === trimmed && s.id !== selfId)
     return taken ? `An MCP server named "${trimmed}" already exists` : undefined
   }

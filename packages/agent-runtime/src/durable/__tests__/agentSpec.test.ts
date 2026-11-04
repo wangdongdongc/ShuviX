@@ -205,7 +205,7 @@ describe('normalizeToolNames —— 工具名单归一（TN）', () => {
     ).toEqual(['tool_search', 'skill', 'mcp:ctx'])
   })
 
-  it('TN-11 root 的 overlay 加不上 tool_search：档案没写就是没有（bot / notebook / tab 的名单是结构保证）', () => {
+  it('TN-11 root 的 overlay 加不上 tool_search：档案没写就是没有（notebook / tab 的名单是结构保证）', () => {
     expect(normalizeToolNames('root', ['read', 'ls'], ['tool_search', 'mcp:ctx'])).toEqual([
       'read',
       'ls',

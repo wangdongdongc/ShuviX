@@ -7,7 +7,7 @@ description: "How to build, change, export and debug ShuviX Widgets — small Re
 
 A widget is a small React app in its own directory under ShuviX's widgets folder. ShuviX bundles it and serves it under `/w/<id>/`. The user opens it from the Widget tab of the right panel, where it runs inside the panel or in its own window (a browser tab when they use ShuviX remotely).
 
-A widget that keeps records has an **API**: the operations defined in its `api.ts`, which run on ShuviX's side against the widget's own SQLite database. Its screen reads and writes only through them, and agents call the same operations with the `widget` tool's `call` — so an action has the same effect whoever takes it, and the open screen refreshes when an agent writes. Each widget also has its own git repository; ShuviX commits after every successful build, so you never run git yourself.
+A widget that keeps records has an **API**: the operations defined in its `api.ts`, which run on ShuviX's side against the widget's own SQLite database. Its screen reads and writes only through them, and once a widget is turned on in a session (with `tool_search` or in the extensions picker) agents call the same operations as ordinary tools named `mcp__widget-<id>__<op>` — so an action has the same effect whoever takes it, and the open screen refreshes when an agent writes. Each widget also has its own git repository; ShuviX commits after every successful build, so you never run git yourself.
 
 This file is the whole workflow. The references hold the details; each row of the index at the end says when to read one.
 
@@ -18,7 +18,7 @@ This file is the whole workflow. The references hold the details; each row of th
 
 ## Rules that always hold
 
-1. **Building goes through the `widget` tool** (`create`, `build`, `preview`, `sql`, `export`, `open`; `references/tool.md`). `build` is the only build: never install packages, never run npm, npx or a bundler, never run git in a widget.
+1. **Building goes through the `widget` tool** (`create`, `build`, `test`, `preview`, `sql`, `export`, `open`; `references/tool.md`). `build` is the only build: never install packages, never run npm, npx or a bundler, never run git in a widget.
 2. **A fixed set of libraries.** The screen: React 19 with TypeScript, Tailwind CSS v4 through `className` (colors only from the theme names in `references/design.md`, so the widget follows the app's theme), React Router (`createHashRouter` from `react-router`) only for a genuinely multi-page widget, `shuvix/widget` to call the API, and the libraries ShuviX ships in `references/libraries.md` (lucide icons, Chart.js, CSV, dates, Markdown, drag and drop, long lists, search, diffs, QR codes, YAML, code highlighting, three.js). `api.ts`: `shuvix/widget-api` and `zod`. Nothing else resolves and nothing is loaded from the internet; an unknown import fails the build.
 3. **`index.tsx` ends with the mount block**, inside the scaffold's "DO NOT DELETE" comment:
    ```tsx
@@ -38,7 +38,7 @@ This file is the whole workflow. The references hold the details; each row of th
 3. **Before writing code**, decide whether it keeps records. If it does, write `schema.sql` and create the tables with `sql` (`references/data.md`), then write `api.ts` (`references/api.md`). Decide whether it reads the user's files (`references/files.md`).
 4. Implement the screen, following `references/design.md`.
 5. Write a short `README.md` in the language of `name`: what it does, its main interactions, its operations and tables, the files it reads, its extension points.
-6. `build` with a one-line `message`. If it fails, fix what it reports and build again. Then try each operation with `call` and `dry_run: true` (`references/api.md`, "Test it").
+6. `build` with a one-line `message`. If it fails, fix what it reports and build again. Then try each operation with `test` (`references/api.md`, "Test it").
 7. `preview` and look at the screenshots; fix, build and preview again until it looks right at every size (`references/design.md`, "Check it").
 8. Report that it is ready in the Widget panel (rule 8).
 
@@ -57,7 +57,7 @@ Never rename, repurpose, archive or delete a widget the user did not ask about.
 Reply with the result only, in a few lines:
 
 ```
-reading-list ("读书清单") — books the user wants to read, is reading or finished, with notes. 4 operations agents can call (listBooks, addBook, setStatus, addNote). Ready in the Widget panel.
+reading-list ("读书清单") — books the user wants to read, is reading or finished, with notes. 4 operations agents can use once it is turned on (listBooks, addBook, setStatus, addNote). Ready in the Widget panel.
 ```
 
 Add a line only for a real deviation: something you could not build or implement, or a design rule you had to break. Never paste source code.

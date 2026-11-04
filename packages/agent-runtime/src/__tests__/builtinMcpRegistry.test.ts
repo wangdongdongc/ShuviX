@@ -110,7 +110,52 @@ describe('BuiltinMcpRegistry', () => {
       'createClientTransport',
       'has',
       'names',
-      'register'
+      'register',
+      'setResolver'
     ])
+  })
+
+  // 名字不固定的内置服务器（组件，一个组件一台）：固定表里没有的名字才问解析器
+  it('BMR-U-41: 解析器：固定表里没有的名字问它；它给的工厂拿到会话上下文与 server side', async () => {
+    const reg = new BuiltinMcpRegistry()
+    const { factory, calls } = recordingFactory()
+    const resolver = vi.fn((name: string) => (name === 'widget-a-b' ? factory : undefined))
+    reg.setResolver(resolver)
+
+    const client = await reg.createClientTransport('widget-a-b', { sessionId: 's1' })
+
+    expect(resolver).toHaveBeenCalledWith('widget-a-b')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].sessionId).toBe('s1')
+    const received: JSONRPCMessage[] = []
+    client.onmessage = (m): void => void received.push(m)
+    await calls[0].transport.send({ jsonrpc: '2.0', id: 1, method: 'ping' })
+    expect(received).toHaveLength(1)
+    // 解析器的结果不进固定表：组件删了、id 被别的组件用了，下一次都得重新问
+    expect(reg.has('widget-a-b')).toBe(false)
+    expect(reg.names()).toEqual([])
+  })
+
+  it('BMR-U-42: 固定表赢：注册过的名字不问解析器（组件不能顶替内置服务器）', async () => {
+    const reg = new BuiltinMcpRegistry()
+    const fixed = recordingFactory()
+    const fromResolver = recordingFactory()
+    const resolver = vi.fn(() => fromResolver.factory)
+    reg.register('ssh', fixed.factory)
+    reg.setResolver(resolver)
+
+    await reg.createClientTransport('ssh', { sessionId: 's1' })
+
+    expect(fixed.calls).toHaveLength(1)
+    expect(fromResolver.calls).toEqual([])
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  it('BMR-U-43: 解析器也答不上来：与没有解析器同一个错', async () => {
+    const reg = new BuiltinMcpRegistry()
+    reg.setResolver(() => undefined)
+    await expect(reg.createClientTransport('nope', { sessionId: 's1' })).rejects.toThrow(
+      'No builtin MCP server registered under "nope"'
+    )
   })
 })

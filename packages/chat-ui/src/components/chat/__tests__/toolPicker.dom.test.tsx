@@ -1336,3 +1336,75 @@ describe('与名字相同的说明不再写一遍', () => {
     }
   )
 })
+
+/**
+ * 组件也是一台服务器（2026-11-04）：`mcp:widget-<id>`，条目带 `isWidget`、显示名（label）、说明（hint），不算内置。勾上它算读的同意，
+ * 写的是普通的 `mcp:<server>` 加项。
+ */
+describe('组件的条目', () => {
+  const WIDGET: ToolItem = {
+    name: 'mcp:widget-a-b',
+    label: 'Reading list',
+    hint: 'Books to read.',
+    group: 'mcp:widget-a-b',
+    serverStatus: 'disconnected',
+    isBuiltin: false,
+    isWidget: true
+  }
+  const NO_HINT: ToolItem = {
+    ...WIDGET,
+    name: 'mcp:widget-c-d',
+    group: 'mcp:widget-c-d',
+    hint: undefined
+  }
+  const mark = (name: string): Element | null => row(name).querySelector('[data-widget-mark]')
+
+  it('TP-W1 显示名与说明、组件的记号，没有内置的记号；id 并排', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, WIDGET])
+    await openPanel()
+
+    expect(row('mcp:widget-a-b').textContent).toContain('Reading list')
+    expect(row('mcp:widget-a-b').textContent).toContain('widget-a-b')
+    expect(row('mcp:widget-a-b').textContent).toContain('Books to read.')
+    const badge = mark('mcp:widget-a-b')
+    expect(badge?.getAttribute('aria-label')).toBe(i18n.t('input.extensionWidgetBadge'))
+    expect(row('mcp:widget-a-b').querySelector('svg.lucide-package')).toBeNull()
+    // 别的条目没有这个记号
+    expect(mark('mcp:other')).toBeNull()
+  })
+
+  it('TP-W1 勾上：写普通的加项；算进计数；再取消就没了', async () => {
+    seedSession(['mcp:foo'])
+    await renderPicker([...ITEMS, WIDGET])
+    await openPanel()
+    const before = Number(mcpCount())
+
+    await click('mcp:widget-a-b')
+    expect(mocks.updateEnabledTools).toHaveBeenLastCalledWith({
+      id: SID,
+      enabledTools: ['mcp:foo', 'mcp:widget-a-b']
+    })
+    expect(Number(mcpCount())).toBe(before + 1)
+
+    await click('mcp:widget-a-b')
+    expect(storedTools()).toEqual(['mcp:foo'])
+  })
+
+  it('TP-W1 没有说明：名字照常，不冒出 undefined', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, NO_HINT])
+    await openPanel()
+    expect(row('mcp:widget-c-d').textContent).toContain('Reading list')
+    expect(row('mcp:widget-c-d').textContent).not.toContain('undefined')
+  })
+
+  it('TP-W2 触屏密度：同样的显示名、说明与记号', async () => {
+    seedSession([])
+    await renderPicker([...ITEMS, WIDGET], { density: 'touch' })
+    await openPanel()
+    expect(row('mcp:widget-a-b').textContent).toContain('Reading list')
+    expect(row('mcp:widget-a-b').textContent).toContain('Books to read.')
+    expect(mark('mcp:widget-a-b')).not.toBeNull()
+  })
+})
