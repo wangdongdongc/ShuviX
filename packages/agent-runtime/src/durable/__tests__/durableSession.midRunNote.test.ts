@@ -17,6 +17,13 @@
  *   MRN-D-9  两条忙时 steer：各自一份显示侧车，投影各自带说明 Token
  *   MRN-D-11 submitUser（重新生成的发送路径）从不加说明：空闲时如此，忙时排成 follow-up 也如此
  *
+ *   DS-2     别的会话发来的忙时 steer（带发送方侧车 + 来源）：模型全文逐字 `M\n\n[Sent by…]\n\n[Sent while…]`；投影
+ *            `M{{sender}}{{midrun}}`，两枚都在；排队行 text 是 M
+ *   DS-3     被中断照「先让它跑完」排着的同样两枚；空闲 steer 只有发送方、起一轮；不带 display 的行为不变
+ *   DS-4     任务列表的请求边界：空闲驱动发送算新请求，忙时驱动发送不算；server 侧读者与界面判断一致
+ *   DS-5     别的会话 steer 发来通知形状的文本：带着发送方就不是系统写的 —— 投影不标通知、胶囊在、排队行与计数算它、
+ *            接上插话说明。对照：不带 display 的通知形状 steer 仍按 PIN-16
+ *
  * MRN-D-10（队列里那条 steer 自己写了字面标记、uid 不认识时队列行回退到模型文本）按裁决不写（S7，接受）。
  */
 import { createHmac } from 'node:crypto'
@@ -33,6 +40,7 @@ import {
   MID_RUN_NOTE_UID,
   midRunNoteDisplay
 } from '@shuvix/chat-protocol/midRunNote'
+import { SESSION_SENDER_UID, withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import { startsTaskListRequest } from '@shuvix/chat-protocol/taskList'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
@@ -65,6 +73,20 @@ const SUFFIX = `${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`
 const MARKER = makeTokenMarker(MID_RUN_NOTE_UID)
 const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
 const IMAGE: ImageContent = { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }
+const SENDER_MARKER = makeTokenMarker(SESSION_SENDER_UID)
+/** PARENT 发来的 M：模型文本、显示侧车、来源，就是网关交给 steer 的那一组 */
+function driven(text: string): {
+  text: string
+  options: { display: JsonObject; source: typeof PARENT }
+} {
+  const sent = withSessionSender(text, undefined, PARENT)
+  return {
+    text: sent.text,
+    options: { display: sent.display as unknown as JsonObject, source: PARENT }
+  }
+}
+const SENDER_NOTE =
+  '[Sent by your parent session (id P1 — "重构 parser"). An agent there wrote this, not the user. Your reply is returned to that session when this turn ends; you do not need to send it there yourself.]'
 
 /** 一轮在工具上被扣住的会话：`release()` 之后这一轮跑完 */
 async function heldRound(options: TestHostOptions = {}): Promise<{
@@ -336,6 +358,31 @@ describe('mid-run note on steers', () => {
       },
       TIMEOUT
     )
+
+    it(
+      'DS-3 a driven steer queued behind an interrupted run (continue-then-queue) carries both tokens and both notes',
+      async () => {
+        const { t, session } = await interrupted('continue-then-queue')
+        t.kit.queue(answer('old'), answer('after'))
+        const { text, options } = driven('pivot')
+        const admitted = await session.steer(text, options)
+        const requestId = await requestIdOf(session, admitted)
+        expect(await displayItems(session)).toStrictEqual({
+          [requestId]: midRunNoteDisplay('pivot', options.display as never)
+        })
+        expect(await withTimeout(session.continue(), 5000, 'continue')).toEqual({})
+        await waitFor(async () => (await settled(session, admitted)) === 'done', 5000, 'steer')
+        expect(lastUserMessage(t).content).toBe(`pivot\n\n${SENDER_NOTE}${SUFFIX}`)
+        const steer = await userWith(session, `pivot${SENDER_MARKER}${MARKER}`)
+        expect(Object.keys(meta(steer).inlineTokens as object).sort()).toEqual(
+          [MID_RUN_NOTE_UID, SESSION_SENDER_UID].sort()
+        )
+        expect(meta(steer).origin).toStrictEqual(PARENT)
+        expect(await requestCount(session)).toBe(1)
+        expect(startsTaskListRequest(steer)).toBe(false)
+      },
+      TIMEOUT
+    )
   })
 
   describe('MRN-D-7 redaction runs before the note', () => {
@@ -491,4 +538,175 @@ describe('mid-run note on steers', () => {
     },
     TIMEOUT
   )
+
+  it(
+    'DS-2 a busy driven steer: the model text is byte for byte M + sender note + mid-run note; the projection is M + both markers with both tokens; the queue row reads M',
+    async () => {
+      const { t, session, sending, release } = await heldRound()
+      const requestId = 'session-steer:P1:1'
+      const { text, options } = driven('M')
+      const admitted = await session.steer(text, { ...options, requestId })
+      expect(await requestIdOf(session, admitted)).toBe(requestId)
+      expect(await displayItems(session)).toStrictEqual({
+        [requestId]: {
+          content: `M${SENDER_MARKER}${MARKER}`,
+          tokens: {
+            ...(options.display.tokens as object),
+            [MID_RUN_NOTE_UID]: midRunNoteDisplay('').tokens[MID_RUN_NOTE_UID]
+          }
+        }
+      })
+      expect((await freshMount(session)).queue).toStrictEqual([
+        { submissionId: admitted.submissionId, mode: 'steer', text: 'M', imageCount: 0 }
+      ])
+      release()
+      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+      expect(lastUserMessage(t).content).toBe(`M\n\n${SENDER_NOTE}\n\n${MID_RUN_NOTE_TEXT}`)
+      const user = await userWith(session, `M${SENDER_MARKER}${MARKER}`)
+      expect(meta(user).inlineTokens).toMatchObject({
+        [SESSION_SENDER_UID]: {
+          type: 'session-sender',
+          id: 'P1',
+          displayText: '',
+          name: '重构 parser'
+        },
+        [MID_RUN_NOTE_UID]: { type: 'note', id: 'mid-run' }
+      })
+      expect(meta(user).origin).toStrictEqual(PARENT)
+      expect(meta(user).isSystemNotice).not.toBe(true)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'DS-3 an idle driven steer starts its own run with only the sender: no mid-run note in the text or the sidecar',
+    async () => {
+      const t = await makeHost()
+      const session = await t.open()
+      await primeRoot(session)
+      t.kit.queue(answer('ok'))
+      const { text, options } = driven('M')
+      const admitted = await session.steer(text, options)
+      const requestId = await requestIdOf(session, admitted)
+      expect(await settled(session, admitted)).toBe('done')
+      expect(lastUserMessage(t).content).toBe(`M\n\n${SENDER_NOTE}`)
+      expect(await displayItems(session)).toStrictEqual({ [requestId]: options.display })
+      const user = await userWith(session, `M${SENDER_MARKER}`)
+      expect(Object.keys(meta(user).inlineTokens as object)).toEqual([SESSION_SENDER_UID])
+      expect(meta(user).origin).toStrictEqual(PARENT)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'DS-3 no display: a busy steer gets the plain note sidecar, an idle one writes none',
+    async () => {
+      const { session, sending, release } = await heldRound()
+      const busy = await session.steer('pivot')
+      expect(await displayItems(session)).toStrictEqual({
+        [await requestIdOf(session, busy)]: midRunNoteDisplay('pivot')
+      })
+      release()
+      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+
+      const t = await makeHost()
+      const idle = await t.open()
+      await primeRoot(idle)
+      t.kit.queue(answer('ok'))
+      const admitted = await idle.steer('go')
+      expect(await settled(idle, admitted)).toBe('done')
+      expect(lastUserMessage(t).content).toBe('go')
+      expect(await displayItems(idle)).toStrictEqual({})
+    },
+    TIMEOUT
+  )
+
+  describe('DS-4 the task-list request boundary', () => {
+    async function requests(session: DurableSession): Promise<number> {
+      const entries = await allEntries(await session.currentConversation())
+      return taskListEventsOfEntries(entries).filter((event) => event.type === 'request').length
+    }
+
+    it(
+      'an idle driven send (steer and submitUser) starts a request on both sides',
+      async () => {
+        const t = await makeHost()
+        const session = await t.open()
+        await primeRoot(session)
+        t.kit.queue(answer('a1'), answer('a2'))
+        const first = driven('one')
+        const admitted = await session.steer(first.text, first.options)
+        expect(await settled(session, admitted)).toBe('done')
+        expect(await requests(session)).toBe(1)
+        expect(startsTaskListRequest(await userWith(session, `one${SENDER_MARKER}`))).toBe(true)
+
+        const second = driven('two')
+        expect(await session.submitUser(second.text, second.options)).toEqual({})
+        expect(await requests(session)).toBe(2)
+        expect(startsTaskListRequest(await userWith(session, `two${SENDER_MARKER}`))).toBe(true)
+      },
+      TIMEOUT
+    )
+
+    it(
+      'a busy driven send starts none on either side',
+      async () => {
+        const { session, sending, release } = await heldRound()
+        const { text, options } = driven('pivot')
+        await session.steer(text, options)
+        release()
+        expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+        expect(await requests(session)).toBe(1)
+        const steer = await userWith(session, `pivot${SENDER_MARKER}${MARKER}`)
+        expect(startsTaskListRequest(steer)).toBe(false)
+      },
+      TIMEOUT
+    )
+  })
+
+  describe('DS-5 notice-shaped text from another session', () => {
+    const SHAPED = bg('t1', 'done')
+
+    it(
+      'with the sender it is not system-written: not flagged as a notice, chip there, queue row and count include it, the mid-run note follows',
+      async () => {
+        const { t, session, sending, release } = await heldRound()
+        const { text, options } = driven(SHAPED)
+        const admitted = await session.steer(text, options)
+        expect((await freshMount(session)).queue).toStrictEqual([
+          { submissionId: admitted.submissionId, mode: 'steer', text: SHAPED, imageCount: 0 }
+        ])
+        const [row] = await session.monitorSnapshot()
+        expect(row!.queue).toEqual({ steer: 1, followUp: 0 })
+        release()
+        expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+        expect(lastUserMessage(t).content).toBe(`${SHAPED}\n\n${SENDER_NOTE}${SUFFIX}`)
+        const user = await userWith(session, `${SHAPED}${SENDER_MARKER}${MARKER}`)
+        expect(meta(user).isSystemNotice).not.toBe(true)
+        expect(meta(user).inlineTokens).toMatchObject({
+          [SESSION_SENDER_UID]: { type: 'session-sender', id: 'P1' },
+          [MID_RUN_NOTE_UID]: { type: 'note', id: 'mid-run' }
+        })
+      },
+      TIMEOUT
+    )
+
+    it(
+      'control: the same text with no display stays a notice (PIN-16): no queue row, no count, no note, flagged',
+      async () => {
+        const { t, session, sending, release } = await heldRound()
+        await session.steer(SHAPED)
+        expect((await freshMount(session)).queue).toStrictEqual([])
+        const [row] = await session.monitorSnapshot()
+        expect(row!.queue).toEqual({ steer: 0, followUp: 0 })
+        release()
+        expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+        expect(lastUserMessage(t).content).toBe(SHAPED)
+        const user = await userWith(session, SHAPED)
+        expect(meta(user).isSystemNotice).toBe(true)
+        expect(meta(user)).not.toHaveProperty('inlineTokens')
+      },
+      TIMEOUT
+    )
+  })
 })

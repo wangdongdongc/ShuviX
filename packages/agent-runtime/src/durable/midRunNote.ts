@@ -9,6 +9,7 @@ import {
   midRunNoteDisplay
 } from '@shuvix/chat-protocol/midRunNote'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { userText } from './projection/entryText'
 
 /**
@@ -20,12 +21,17 @@ import { userText } from './projection/entryText'
  * 形状，也不该被当成用户在运行中插的话。空闲时同样的文字也照旧是通知，两边一致。
  */
 export function withMidRunNote(
-  content: UserInput
+  content: UserInput,
+  /** 这条消息已有的显示侧车（别的会话发来的引导带发送方 Token）：说明接在它后面 */
+  base?: JsonObject
 ): { content: UserInput; display: JsonObject } | undefined {
   const text = userText(content)
   if (isSystemNoticeText(text)) return undefined
   const note = `${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`
-  const display = midRunNoteDisplay(text) as unknown as JsonObject
+  const display = midRunNoteDisplay(
+    text,
+    base as unknown as { content: string; tokens: Record<string, InlineToken> } | undefined
+  ) as unknown as JsonObject
   if (typeof content === 'string') return { content: `${content}${note}`, display }
   return { content: [...content, { type: 'text', text: note }], display }
 }

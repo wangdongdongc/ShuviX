@@ -3,11 +3,15 @@
  *   - tokenKind：at 按 id 的 `knowledge:` 前缀细分 文件 / 知识库；
  *   - splitTokenTitle：displayText 按第一个 `:` 切分（prefix 含冒号；消歧后缀 ` (kb-b)` 归标题；
  *     prefix + title 逐字等于原串 —— 镜像层两段 span 拼接对齐的根基）；
- *   - tokenTitle / tokenSourcePath / payloadPreview。
+ *   - tokenTitle / tokenSourcePath / payloadPreview；
+ *   - TD-1 会话引用与发送方：会话引用同时看 id 前缀与 payload（文件路径也可能以 `session:` 开头）；标题去前缀、冒号保留；
+ *     来源是裸 id；发送方标题是 name，没有 name 是空串。
  */
 import { describe, expect, it } from 'vitest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
+import { sessionSenderToken } from '@shuvix/chat-protocol/sessionSender'
+import { buildAtToken } from '@shuvix/chat-protocol/utils/inlineTokens'
 import {
   payloadPreview,
   splitTokenTitle,
@@ -129,5 +133,47 @@ describe('payloadPreview', () => {
     const preview = payloadPreview(long)
     expect(preview.endsWith('…')).toBe(true)
     expect(preview.length).toBeLessThanOrEqual(241)
+  })
+})
+
+describe('TD-1 会话引用与发送方', () => {
+  const sessionToken = buildAtToken({ kind: 'session', sessionId: 'sid-1', title: '修: 复 bug' })
+
+  it('buildAtToken({kind: session}) 判 session', () => {
+    expect(tokenKind(sessionToken)).toBe('session')
+  })
+
+  it('tokenTitle 去前缀，标题里的 `:` 保留', () => {
+    expect(sessionToken.displayText).toBe('session:修: 复 bug')
+    expect(tokenTitle(sessionToken)).toBe('修: 复 bug')
+  })
+
+  it('tokenSourcePath 是裸 id', () => {
+    expect(tokenSourcePath(sessionToken)).toBe('sid-1')
+  })
+
+  it('id 以 session: 开头的文件引用（file / path 两种 payload）判 file，标题与路径原样', () => {
+    const file = buildAtToken({ kind: 'file', rel: 'session:notes.md', base: 'session:notes.md' })
+    expect(file.payload.startsWith('[workspace file:')).toBe(true)
+    expect(tokenKind(file)).toBe('file')
+    expect(tokenTitle(file)).toBe('session:notes.md')
+    expect(tokenSourcePath(file)).toBe('session:notes.md')
+
+    const path = buildAtToken({ kind: 'path', path: 'session:notes.md', base: 'session:notes.md' })
+    expect(path.payload.startsWith('[file:')).toBe(true)
+    expect(tokenKind(path)).toBe('file')
+    expect(tokenTitle(path)).toBe('session:notes.md')
+    expect(tokenSourcePath(path)).toBe('session:notes.md')
+  })
+
+  it('发送方判 sender，标题是 name，来源是 id；没有 name 标题是空串', () => {
+    const sender = sessionSenderToken({ kind: 'session', sessionId: 'sid-2', title: '修: 复' })
+    expect(tokenKind(sender)).toBe('sender')
+    expect(tokenTitle(sender)).toBe('修: 复')
+    expect(tokenSourcePath(sender)).toBe('sid-2')
+    const { name: _name, ...bare } = sender
+    expect(tokenKind(bare)).toBe('sender')
+    expect(tokenTitle(bare)).toBe('')
+    expect(tokenSourcePath(bare)).toBe('sid-2')
   })
 })

@@ -18,6 +18,7 @@
  *     同样立锚点。见 C4。
  *   - **触发事件**（2026-11-02，OLT-1..5）：触发消息的事件收在一枚 Token 里，大纲、展开、搜索都只见 message；
  *     同一条消息去掉 Token 后输出应相同（差分）。旧的长文本消息照旧。见 M。
+ *   - **发送方**（OL-1）：别的会话发来的消息的说明收在一枚 Token 里，同样不算这条消息的话；at 标记留着。见 N。
  *
  * 用例编号 WP4-xx 对应测试设计清单；期望以 §19.10 的裁决与当前源码为准（清单里标 ⚠ 的几条已按裁决改写）。
  */
@@ -53,6 +54,7 @@ import {
   TRIGGER_EVENT_UID,
   triggerEventMessage
 } from '@shuvix/chat-protocol/triggerEvent'
+import { SESSION_SENDER_UID, sessionSenderToken } from '@shuvix/chat-protocol/sessionSender'
 import type { InputSource } from '../../durable/inputSource'
 import {
   OUTLINE_LIMITS,
@@ -2374,5 +2376,68 @@ describe('M. 触发事件不算这条消息的话', () => {
     expect(line).toBe(`#1 [trigger] ${clipLine(long.replace(/\s+/g, ' ').trim(), 80)}`)
     expect(search(v, 'trigger_event', {}, R).hits).toBe(1)
     expect(item(v, '#1', R).lines).toEqual(['[trigger]', ...long.split('\n')])
+  })
+})
+
+// ───────────── N. 发送方（chat-protocol sessionSender.ts） ─────────────
+
+describe('N. 发送方说明不算这条消息的话', () => {
+  const SAID = 'do the thing'
+  const SENDER_MARKER = `{{shuvixInlineToken:${SESSION_SENDER_UID}}}`
+  const NOTE_MARKER = `{{shuvixInlineToken:${MID_RUN_NOTE_UID}}}`
+  const senderToken = sessionSenderToken({ kind: 'session', sessionId: 'X', title: 'T' })
+  const sent = (
+    id: string,
+    said: string,
+    extra: UserTextMeta['inlineTokens'] = {}
+  ): UserTextMessage =>
+    U(id, `${said}${SENDER_MARKER}`, {
+      inlineTokens: { ...extra, [SESSION_SENDER_UID]: senderToken }
+    })
+  const sentMidRun = (id: string, said: string): UserTextMessage =>
+    U(id, `${said}${SENDER_MARKER}${NOTE_MARKER}`, {
+      inlineTokens: { [SESSION_SENDER_UID]: senderToken, [MID_RUN_NOTE_UID]: midRunNoteToken() }
+    })
+  const readers: Array<[string, OutlineReader, string]> = [
+    ['parent-session', reader([['1', 'other', 'parent-session']]), '[parent]'],
+    ['session', reader([['1', 'other', 'session']]), '[other session]'],
+    ['the reader itself', reader([['1', 'P', 'parent-session']]), '[you]']
+  ]
+
+  for (const [name, r, label] of readers) {
+    for (const [shape, message] of [
+      ['sender', sent('1', SAID)],
+      ['sender + mid-run', sentMidRun('1', SAID)]
+    ] as const) {
+      it(`OL-1 ${name}, ${shape}: the line, the expansion and the search see only the words`, () => {
+        const v = view([message])
+        expect(outline(v, ALL, r).lines).toEqual([`#1 ${label} ${SAID}`])
+        expect(item(v, '#1', r).lines).toEqual([label, SAID])
+        expect(search(v, 'the thing', {}, r).hits).toBe(1)
+        for (const needle of ['Sent by', 'An agent there', 'shuvixInlineToken']) {
+          expect(search(v, needle, {}, r).hits, needle).toBe(0)
+        }
+        const everything = [...outline(v, ALL, r).lines, ...item(v, '#1', r).lines].join('\n')
+        expect(everything).not.toContain('Sent by')
+        expect(everything).not.toContain(MID_RUN_NOTE_TEXT)
+      })
+    }
+  }
+
+  it('OL-1 带 at 引用：at 标记留着，与不带发送方 Token 的差分相同', () => {
+    const at = {
+      type: 'at',
+      id: 'src/a.ts',
+      displayText: 'a.ts',
+      payload: '[workspace file: src/a.ts]'
+    }
+    const said = 'see {{shuvixInlineToken:a1}} ok'
+    const r = reader([['1', 'other', 'parent-session']])
+    const withSender = view([sent('1', said, { a1: at })])
+    const without = view([U('1', said, { inlineTokens: { a1: at } })])
+    expect(outline(withSender, ALL, r)).toEqual(outline(without, ALL, r))
+    expect(item(withSender, '#1', r)).toEqual(item(without, '#1', r))
+    expect(item(withSender, '#1', r).lines).toEqual(['[parent]', said])
+    expect(outline(withSender, ALL, r).lines.join('\n')).not.toContain(SENDER_MARKER)
   })
 })

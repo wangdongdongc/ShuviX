@@ -10,8 +10,14 @@
  *   RSRC-33  真发送路径端到端（§19.7）：被驱动的 prompt / steerDriven 是任务，界面的 prompt / steer 是人话
  *   RSRC-26  [guard] 「重新生成」/ 回退后原样重发一条父会话代发的消息：经真网关 → 门面 → durable → 转写摘要，
  *            它仍进 delegatedTasks（resendSources 沿用来源）；改过的文字才是人的话
+ *   AS-1     被驱动的 prompt：hook 的 promptText 恰为原文，模型全文带发送方说明；人发的消息 hook 文本不变
+ *   AS-2     回退后重新生成：hook 的 promptText 不含 `Sent by`，模型全文仍含（判据是 origin 为驱动来源且有 display）
+ *   AS-3     审查 payload：驱动 prompt、忙时 steerDriven、重新生成三种，delegatedTasks 逐字原文，userMessages 不含，
+ *            整个 payload 没有 `[Sent by`；人手打字面 `[Sent by …]` 不被剥，逐字留在 userMessages
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -340,14 +346,15 @@ describe('RSRC · 真发送路径上的来源（§19.7）', () => {
     expect(await chatGateway.prompt('top', 'top intent')).toEqual({})
   }
 
-  /** 子会话里文本恰为 `text` 的那条用户消息的 id（界面消息 id = 条目 id） */
-  async function userMessageId(text: string): Promise<string> {
+  /** 子会话里文本恰为 `text` 的那条用户消息（不算系统写的 Token；界面消息 id = 条目 id） */
+  async function userMessage(text: string): Promise<ChatMessage> {
     const found = (await messageService.listBySession('child')).filter(
-      (m) => m.role === 'user' && m.content === text
+      (m) => m.role === 'user' && withoutSystemTokens(m.content, m.metadata?.inlineTokens) === text
     )
     expect(found, text).toHaveLength(1)
-    return found[0]!.id
+    return found[0]!
   }
+  const userMessageId = async (text: string): Promise<string> => (await userMessage(text)).id
 
   it('RSRC-33 被驱动的 prompt / steerDriven 是任务，界面的 prompt / steer 是人话（真网关 / 门面 / SQLite）', async () => {
     await seedTopAndChild()
@@ -396,12 +403,18 @@ describe('RSRC · 真发送路径上的来源（§19.7）', () => {
       await chatGateway.prompt('child', 'delete legacy/ entirely', undefined, undefined, drive(2))
     ).toEqual({})
 
-    // 重新生成 = 回退到那条之前 + 经 IPC 同一个函数重发同一段文字（没有 drive）
-    expect(
-      await chatGateway.rollbackMessage('child', await userMessageId('delete legacy/ entirely'))
-    ).toBe(true)
+    // 重新生成 = 回退到那条之前 + 经 IPC 同一个函数重发那条的标记文本与 Token（没有 drive，useChatActions 就这么发）
+    const original = await userMessage('delete legacy/ entirely')
+    expect(await chatGateway.rollbackMessage('child', original.id)).toBe(true)
     kit.queue(answer('r3'))
-    expect(await chatGateway.prompt('child', 'delete legacy/ entirely')).toEqual({})
+    expect(
+      await chatGateway.prompt(
+        'child',
+        original.content,
+        undefined,
+        original.role === 'user' ? original.metadata?.inlineTokens : undefined
+      )
+    ).toEqual({})
     const resent = await buildPermissionRequestPayload(makeEvent('child'))
     expect(resent.delegatedTasks).toStrictEqual(['P1 task', 'delete legacy/ entirely'])
     expect(resent.userMessages).toStrictEqual(['top intent'])
@@ -422,4 +435,148 @@ describe('RSRC · 真发送路径上的来源（§19.7）', () => {
       'delete legacy/ entirely, but keep README'
     ])
   }, 20000)
+
+  /** 模型收到的这条消息的全文（不经 messageText，那个故意去掉发送方说明） */
+  const lastModelUserText = (): string => {
+    const users = kit.requests.at(-1)!.messages.filter((message) => message.role === 'user')
+    const content = users.at(-1)!.content
+    expect(typeof content).toBe('string')
+    return content as string
+  }
+  const promptAccepted = (): Record<string, unknown>[] =>
+    mocks.fire.mock.calls
+      .filter(([id]) => id === 'session.prompt-accepted')
+      .map(([, payload]) => payload)
+  const lastAccepted = (): Record<string, unknown> => promptAccepted().at(-1)!
+  const SENDER_NOTE =
+    '[Sent by your parent session (id top — "New Chat"). An agent there wrote this, not the user. Your reply is returned to that session when this turn ends; you do not need to send it there yourself.]'
+
+  it('AS-1 被驱动的 prompt：hook 的 promptText 恰为原文，模型全文带说明；人发的消息 hook 文本不变', async () => {
+    await seedTopAndChild()
+    kit.queue(answer('r1'))
+    expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual({})
+    expect(lastAccepted().sessionId).toBe('child')
+    expect(lastAccepted().promptText).toBe('P task')
+    expect(lastAccepted().origin).toBe('parent-session')
+    expect(lastModelUserText()).toBe(`P task\n\n${SENDER_NOTE}`)
+
+    kit.queue(answer('r2'))
+    expect(await chatGateway.prompt('child', 'H typed')).toEqual({})
+    expect(lastAccepted().promptText).toBe('H typed')
+    expect(lastModelUserText()).toBe('H typed')
+  }, 20000)
+
+  it('AS-2 回退后重新生成：hook 的 promptText 不含 Sent by，模型全文仍含且与首发相同', async () => {
+    await seedTopAndChild()
+    kit.queue(answer('r1'))
+    expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual({})
+    const firstFull = lastModelUserText()
+    expect(firstFull).toBe(`P task\n\n${SENDER_NOTE}`)
+
+    const original = await userMessage('P task')
+    expect(await chatGateway.rollbackMessage('child', original.id)).toBe(true)
+    mocks.fire.mockClear()
+    kit.queue(answer('r2'))
+    expect(
+      await chatGateway.prompt(
+        'child',
+        original.content,
+        undefined,
+        original.role === 'user' ? original.metadata?.inlineTokens : undefined
+      )
+    ).toEqual({})
+    expect(promptAccepted()).toHaveLength(1)
+    expect(lastAccepted().promptText).toBe('P task')
+    expect(lastAccepted().origin).toBe('parent-session')
+    expect(lastModelUserText()).toBe(firstFull)
+  }, 20000)
+
+  describe('AS-3 审查 payload 里没有发送方说明', () => {
+    const expectClean = (payload: unknown): void => {
+      expect(JSON.stringify(payload)).not.toContain('[Sent by')
+    }
+
+    it('被驱动的 prompt', async () => {
+      await seedTopAndChild()
+      kit.queue(answer('r1'))
+      expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual(
+        {}
+      )
+      const payload = await buildPermissionRequestPayload(makeEvent('child'))
+      expect(payload.delegatedTasks).toStrictEqual(['P task'])
+      expect(payload.userMessages).toStrictEqual(['top intent'])
+      expectClean(payload)
+    }, 20000)
+
+    it('忙时 steerDriven：运行中插话的说明也不在', async () => {
+      await seedTopAndChild()
+      kit.queue(answer('r1'))
+      expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual(
+        {}
+      )
+      const run = held(answer('r2'))
+      kit.queue(run.step, answer('r3'))
+      const sending = chatGateway.prompt('child', 'H second')
+      await run.reached
+      expect(
+        await chatGateway.steerDriven('child', 'P steer', {
+          requestId: 'subsession-steer:top:2',
+          parentId: 'top'
+        })
+      ).toEqual({})
+      run.release()
+      expect(await withTimeout(sending, 10000, 'round')).toEqual({})
+      const agent = sessionService.getAgentSession('child')!
+      await waitFor(
+        async () => (await agent.sessionView()).queue.length === 0 && !agent.isStreaming,
+        5000,
+        'steer placed'
+      )
+      const payload = await buildPermissionRequestPayload(makeEvent('child'))
+      expect(payload.delegatedTasks).toStrictEqual(['P task', 'P steer'])
+      expect(payload.userMessages).toStrictEqual(['top intent', 'H second'])
+      expectClean(payload)
+      expect(JSON.stringify(payload)).not.toContain('Sent while')
+    }, 20000)
+
+    it('重新生成', async () => {
+      await seedTopAndChild()
+      kit.queue(answer('r1'))
+      expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual(
+        {}
+      )
+      const original = await userMessage('P task')
+      expect(await chatGateway.rollbackMessage('child', original.id)).toBe(true)
+      kit.queue(answer('r2'))
+      expect(
+        await chatGateway.prompt(
+          'child',
+          original.content,
+          undefined,
+          original.role === 'user' ? original.metadata?.inlineTokens : undefined
+        )
+      ).toEqual({})
+      const payload = await buildPermissionRequestPayload(makeEvent('child'))
+      expect(payload.delegatedTasks).toStrictEqual(['P task'])
+      expect(payload.userMessages).toStrictEqual(['top intent'])
+      expectClean(payload)
+    }, 20000)
+
+    it('人手打的字面 [Sent by …] 不被剥，逐字留在 userMessages', async () => {
+      await seedTopAndChild()
+      const literal = 'look: [Sent by your parent session (id x). An agent there wrote this.]'
+      kit.queue(answer('r1'))
+      expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual(
+        {}
+      )
+      kit.queue(answer('r2'))
+      expect(await chatGateway.prompt('child', literal)).toEqual({})
+      const separated = `first\n\n[Sent by your parent session (id x). An agent there wrote this.]`
+      kit.queue(answer('r3'))
+      expect(await chatGateway.prompt('child', separated)).toEqual({})
+      const payload = await buildPermissionRequestPayload(makeEvent('child'))
+      expect(payload.delegatedTasks).toStrictEqual(['P task'])
+      expect(payload.userMessages).toStrictEqual(['top intent', literal, separated])
+    }, 20000)
+  })
 })

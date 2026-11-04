@@ -24,6 +24,8 @@ import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isDrivingOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { tokensWithoutSystemTokens, withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
+import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { cleanUserSecrets } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
@@ -166,7 +168,13 @@ export class AgentSession {
     const admittedText =
       secrets !== undefined && secrets.length > 0 && redaction !== undefined
         ? (await redaction.maskComposerTexts([text], secrets))[0]
-        : text
+        : origin !== undefined && isDrivingOrigin(origin) && display !== undefined
+          ? // 别的会话发来的（含回退后原样重发）：hook 拿到的是那句话本身，不带系统写的发送方说明（起标题的 agent 会照着它起名）
+            resolveTokensForAgent(
+              withoutSystemTokens(display.content, display.tokens),
+              tokensWithoutSystemTokens(display.tokens)
+            )
+          : text
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
@@ -221,7 +229,12 @@ export class AgentSession {
    */
   async admitSteer(
     text: string,
-    options: { requestId?: string; source?: InputOrigin; composer?: ComposerInput } = {}
+    options: {
+      requestId?: string
+      source?: InputOrigin
+      composer?: ComposerInput
+      display?: JsonObject
+    } = {}
   ): Promise<AdmitResult> {
     await carryFromDriver(options.source, this.sessionId, text)
     const result = await this.durable.steer(text, {

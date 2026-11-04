@@ -7,12 +7,14 @@
  *   TLR-7..9  `before`：只跳过转写里最后一个带这个 id 的列表调用，其余照折（同一条消息里排在前面的兄弟调用、
  *             重用 id 的更早调用都算）
  *   TLR-10/11 一条消息里两次调用按块序；同一 id 再登记以新的为准；多个请求只剩最后一个的列表
+ *   DS-4      别的会话发来的消息：只带发送方说明的开请求，发送方 + 插话说明的不开
  *
  * 会话上的真流程（条目在工具执行前已落定、插话、回退）在 taskListReader.session.test.ts；与界面折叠的对照在
  * taskListParity.test.ts。
  */
 import type { EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol/midRunNote'
+import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import {
   foldTaskList,
   TASK_LIST_TOOL_NAME,
@@ -86,6 +88,16 @@ describe('TLR · taskListEventsOfEntries', () => {
       taskListEventsOfEntries([U(1, [text('S'), IMAGE, text(SUFFIX)])]),
       'image between the text and the note'
     ).toStrictEqual([])
+  })
+
+  it('DS-4 a message from another session: the sender note alone opens a request; sender + mid-run note does not', () => {
+    const { text: sent } = withSessionSender('M', undefined, {
+      kind: 'session',
+      sessionId: 'S9',
+      title: 'T'
+    })
+    expect(taskListEventsOfEntries([U(1, sent)])).toStrictEqual([REQUEST])
+    expect(taskListEventsOfEntries([U(1, `${sent}${SUFFIX}`)])).toStrictEqual([])
   })
 
   it('TLR-4 still a request: the note in the middle, the note without the separator, the note after a single newline', () => {

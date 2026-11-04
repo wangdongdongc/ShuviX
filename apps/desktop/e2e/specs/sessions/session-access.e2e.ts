@@ -29,6 +29,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import type { AskInputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -82,7 +83,7 @@ interface ListedMessage {
   id: string
   role: string
   content: string
-  metadata?: { isSystemNotice?: boolean } | null
+  metadata?: { isSystemNotice?: boolean; inlineTokens?: Record<string, unknown> } | null
 }
 
 interface AclRow {
@@ -154,7 +155,9 @@ const systemNotices = (msgs: ListedMessage[]): ListedMessage[] =>
 
 /** 不是系统通知的用户消息正文 */
 const userMessages = (msgs: ListedMessage[]): string[] =>
-  msgs.filter((m) => m.role === 'user' && !m.metadata?.isSystemNotice).map((m) => m.content)
+  msgs
+    .filter((m) => m.role === 'user' && !m.metadata?.isSystemNotice)
+    .map((m) => withoutSystemTokens(m.content, m.metadata?.inlineTokens))
 
 /** 发一条用户消息、不等它（这一轮要停在卡片上） */
 const sendPrompt = (sid: string, text: string): Promise<unknown> =>

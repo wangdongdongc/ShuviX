@@ -19,6 +19,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
@@ -29,7 +30,7 @@ import {
   seedFakeProvider,
   waitRendererReady
 } from '../../harness/seed'
-import { sidebarPane, tasksPanelPane, type SidebarPane } from '../../harness/pages'
+import { chatPane, sidebarPane, tasksPanelPane, type SidebarPane } from '../../harness/pages'
 import { syncProbe, type SyncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
@@ -56,7 +57,11 @@ interface ListedMessage {
   id: string
   role: string
   content: string
-  metadata?: { isSystemNotice?: boolean } | null
+  metadata?: {
+    isSystemNotice?: boolean
+    inlineTokens?: Record<string, unknown>
+    origin?: unknown
+  } | null
   blocks?: Array<{
     type: string
     toolCallId?: string
@@ -273,10 +278,12 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     provider.release('child')
     await waitParentSettled('collected.')
 
-    // 子会话的转写：一条用户消息（父级代发）+ 一条助手答复，与人手敲的一模一样
+    // 子会话的转写：一条用户消息（父级代发，后面挂着发送方 Token）+ 一条助手答复
     const childMsgs = await listMessages(subSid)
     expect(childMsgs.map((m) => m.role)).toEqual(['user', 'assistant'])
-    expect(childMsgs[0].content).toBe('干活')
+    expect(withoutSystemTokens(childMsgs[0].content, childMsgs[0].metadata?.inlineTokens)).toBe(
+      '干活'
+    )
     expect(childMsgs[1].content).toContain('CHILD DONE.')
 
     // 3. 恰一条系统通知：说跑完了、指向 wait，本身不带答复
@@ -298,6 +305,59 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     expect(collected.result).toContain('<sessions status="settled">')
     expect(collected.result).toContain(`<session id="${subSid}"`)
     expect(collected.result).toContain('<reply>\nCHILD DONE.\n</reply>')
+  })
+
+  it('E2E-1 父会话派的活：模型全文带发送方说明，气泡上是一枚胶囊、点开看说明；重新生成全文不变、来源还是父会话', async () => {
+    const parentTitle = await app.main.eval<string>(
+      `window.api.session.getById(${JSON.stringify(parentSid)}).then((s) => s.title)`
+    )
+    const NOTE = `[Sent by your parent session (id ${parentSid} — "${parentTitle}"). An agent there wrote this, not the user. Your reply is returned to that session when this turn ends; you do not need to send it there yourself.]`
+
+    // 1. BG-E1 那次发给子会话的请求
+    const first = provider.requests().find(byUserText('干活'))
+    expect(first, '子会话那一轮的请求').toBeDefined()
+    expect(first!.lastUserFullText).toBe(`干活\n\n${NOTE}`)
+    expect(first!.lastUserText).toBe('干活')
+
+    // 2. 打开子会话：恰一枚发送方胶囊，气泡文字里没有说明，弹窗里有
+    expect(await sidebar.openSession(SUB_TITLE)).toBe(true)
+    const [userMsg, assistantMsg] = await listMessages(subSid)
+    const senderChip = `document.querySelectorAll('[data-msg-id=${JSON.stringify(userMsg.id)}] [data-token-kind="sender"]')`
+    await until(() => app.main.eval<boolean>(`${senderChip}.length === 1`), 'one sender chip')
+    expect(
+      await app.main.eval<string>(
+        `document.querySelector('[data-msg-id=${JSON.stringify(userMsg.id)}]').textContent`
+      )
+    ).not.toContain('Sent by')
+    await app.main.eval(`${senderChip}[0].click()`)
+    const dialogPre = `[...document.querySelectorAll('.dialog-panel')].find((el) => el.querySelector('pre'))`
+    const shown = await until(
+      () =>
+        app.main.eval<string | null>(`(${dialogPre})?.querySelector('pre').textContent ?? null`),
+      'sender dialog'
+    )
+    expect(shown).toBe(NOTE)
+    await app.main.eval(`(${dialogPre}).querySelector('button[aria-label="Close"]').click()`)
+    await until(() => app.main.eval<boolean>(`!(${dialogPre})`), 'sender dialog gone')
+
+    // 3. 重新生成：第二次请求的全文与第一次逐字相同，来源还是父会话
+    provider.reset()
+    provider.script({ text: 'CHILD AGAIN.', when: byUserText('干活') })
+    await chatPane(app.main).clickRegenerate(assistantMsg.id)
+    const again = await until(async () => {
+      const msgs = await listMessages(subSid)
+      return msgs.some((m) => m.role === 'assistant' && m.content.includes('CHILD AGAIN.'))
+        ? msgs
+        : null
+    }, 'regenerated reply')
+    expect(again.map((m) => m.role)).toEqual(['user', 'assistant'])
+    const resent = provider.requests().filter(byUserText('干活'))
+    expect(resent).toHaveLength(1)
+    expect(resent[0].lastUserFullText).toBe(first!.lastUserFullText)
+    expect(again[0].metadata?.origin).toEqual({ kind: 'parent-session', sessionId: parentSid })
+
+    // 回到父会话（后面的用例按父会话的侧栏状态断言）
+    expect(await sidebar.openSession(PARENT_TITLE)).toBe(true)
   })
 
   it('同一轮里 wait 收回：回执**不带答复正文**，一次 wait 交回答复、不另发完成通知', async () => {

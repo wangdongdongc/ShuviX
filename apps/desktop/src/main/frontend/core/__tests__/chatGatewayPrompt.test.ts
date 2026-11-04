@@ -8,6 +8,7 @@
  *         installId、Telegram → 三个 id；不在任何上下文里 → undefined；被驱动的发送不盖（来源由门面按 drive 记）
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import type { ClientContext } from '../../../ipc/registry'
 import {
   createChromeContext,
@@ -53,7 +54,7 @@ vi.mock('../../../services/builtinMcp/dbConnections', () => ({
 vi.mock('../../../services/mcpService', () => ({ mcpService: { getAllToolInfos: () => [] } }))
 vi.mock('../../../services/skillService', () => ({ skillService: { findEnabled: () => [] } }))
 vi.mock('../../../dao/sessionDao', () => ({
-  sessionDao: { findById: vi.fn(), touchActive: mocks.touchActive }
+  sessionDao: { findById: vi.fn(), touchActive: mocks.touchActive, pick: vi.fn() }
 }))
 vi.mock('../../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../../services/agentService', () => ({ agentService: { getProfile: vi.fn() } }))
@@ -160,10 +161,15 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
     await operationContext.run(createClientContext(netCtx, 's1'), () =>
       chatGateway.prompt('s1', 'task', undefined, undefined, DRIVE)
     )
+    // 模型文本与侧车都带发送方（sessionSender.ts），来源参数仍是空的
+    const sent = withSessionSender('task', undefined, {
+      kind: 'session',
+      sessionId: DRIVE.driven.parentId
+    })
     expect(prompt.mock.calls[0]).toStrictEqual([
-      'task',
+      sent.text,
       undefined,
-      undefined,
+      sent.display,
       DRIVE,
       undefined,
       undefined

@@ -8,6 +8,8 @@
  *   WP2-66 admitSteer 抛错 / 抛字符串 → `{error}`（没有 code），从不 reject
  *   XS-59  驱动方不是 target 的父会话（别的会话 / 顶层会话 / 行不在）→ 来源 `{kind:'session', sessionId: <driver>}`；
  *          父会话驱动照旧 parent-session（[guard]）
+ *   GW-1   发送方（sessionSender.ts）：驱动方的标题进说明和 token.name，不进来源；target 的 parentId 等于驱动方 →
+ *          "your parent session"，否则 "another session"；读不到标题 → 没有标题、不抛
  *   WP2-67 IPC 的 steer 照旧：`session.steer(text, 来源)`，不经 admitSteer（不在任何操作上下文里 → 来源 undefined）；
  *          被拒广播 error
  *   WP2-80 steer / followUp 的来源按这次操作的上下文盖章（2026-10-21）：网络客户端 → remote、Chrome → chrome、
@@ -25,6 +27,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import type { ClientContext } from '../../../ipc/registry'
 import {
   createChromeContext,
@@ -75,7 +78,16 @@ vi.mock('../../../dao/sessionDao', () => ({
     touchActive: vi.fn(),
     // t1 是顶层会话（XS-59）；别的 id 没有行
     pick: vi.fn((id: string) =>
-      id === 'c1' ? { parentId: 'P1' } : id === 't1' ? { parentId: null } : undefined
+      id === 'c1'
+        ? { parentId: 'P1' }
+        : id === 't1'
+          ? { parentId: null }
+          : // GW-1：TP 有标题，c9 是它的子会话
+            id === 'c9'
+            ? { parentId: 'TP' }
+            : id === 'TP'
+              ? { parentId: null, title: '重构 "parser"' }
+              : undefined
     )
   }
 }))
@@ -97,6 +109,16 @@ beforeEach(() => {
 })
 
 const DRIVE = { requestId: 'subsession-steer:P1:9', parentId: 'P1' }
+const PARENT_SOURCE = { kind: 'parent-session', sessionId: 'P1' } as const
+
+/** admitSteer 该收到的参数：模型文本与侧车都带发送方（sessionSender.ts），来源原样 */
+function steerCall(
+  requestId: string,
+  source: { kind: 'parent-session' | 'session'; sessionId: string }
+): [string, Record<string, unknown>] {
+  const sent = withSessionSender('m', undefined, source)
+  return [sent.text, { requestId, source, display: sent.display }]
+}
 
 /** 一条打开着的会话的替身：只有 steer / admitSteer / followUp 三样 */
 function openSession(admitSteer: () => Promise<unknown>): {
@@ -131,13 +153,7 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
     const session = openSession(async () => ({ submissionId: 3 }))
     expect(await chatGateway.steerDriven('c1', 'm', DRIVE)).toStrictEqual({})
     expect(session.admitSteer.mock.calls).toStrictEqual([
-      [
-        'm',
-        {
-          requestId: 'subsession-steer:P1:9',
-          source: { kind: 'parent-session', sessionId: 'P1' }
-        }
-      ]
+      steerCall('subsession-steer:P1:9', PARENT_SOURCE)
     ])
     expect(session.steer).not.toHaveBeenCalled()
   })
@@ -180,7 +196,7 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
       const drive = { requestId: `session-steer:${driver}:1`, parentId: driver }
       expect(await chatGateway.steerDriven(target, 'm', drive)).toStrictEqual({})
       expect(session.admitSteer.mock.calls).toStrictEqual([
-        ['m', { requestId: drive.requestId, source: { kind: 'session', sessionId: driver } }]
+        steerCall(drive.requestId, { kind: 'session', sessionId: driver })
       ])
       expect(mocks.getAgentSession).toHaveBeenCalledWith(target)
     }
@@ -189,10 +205,9 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
   it('XS-59 [guard] 同一条 c1 由它的父会话 P1 插话 → 仍是 parent-session（WP2-64 的对照面）', async () => {
     const session = openSession(async () => ({ submissionId: 5 }))
     expect(await chatGateway.steerDriven('c1', 'm', DRIVE)).toStrictEqual({})
-    expect(session.admitSteer.mock.calls[0]?.[1]).toStrictEqual({
-      requestId: DRIVE.requestId,
-      source: { kind: 'parent-session', sessionId: 'P1' }
-    })
+    expect(session.admitSteer.mock.calls[0]).toStrictEqual(
+      steerCall(DRIVE.requestId, PARENT_SOURCE)
+    )
   })
 
   it('WP2-67 IPC 的 steer 照旧走 session.steer(text, 来源)，不经 admitSteer；被拒广播 error', async () => {
@@ -208,6 +223,52 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
       sessionId: 'c1',
       error: 'The conversation is closed'
     })
+  })
+})
+
+describe('GW-1 steerDriven 的发送方', () => {
+  const steerTo = async (
+    target: string,
+    driver: string
+  ): Promise<{ text: string; options: Record<string, never> }> => {
+    const session = openSession(async () => ({ submissionId: 1 }))
+    const drive = { requestId: `session-steer:${driver}:1`, parentId: driver }
+    expect(await chatGateway.steerDriven(target, 'm', drive)).toStrictEqual({})
+    expect(session.admitSteer).toHaveBeenCalledTimes(1)
+    const [text, options] = session.admitSteer.mock.calls[0]!
+    return { text, options } as { text: string; options: Record<string, never> }
+  }
+  const tokenOf = (options: Record<string, never>): Record<string, unknown> =>
+    (options as unknown as { display: { tokens: { sender: Record<string, unknown> } } }).display
+      .tokens.sender
+
+  it('标题进说明与 token.name（说明里的双引号换成单引号），不进来源', async () => {
+    const { text, options } = await steerTo('c9', 'TP')
+    expect(text.startsWith(`m\n\n[Sent by your parent session (id TP — "重构 'parser'"). `)).toBe(
+      true
+    )
+    expect(tokenOf(options).name).toBe('重构 "parser"')
+    expect(tokenOf(options).id).toBe('TP')
+    expect(options.source).toStrictEqual({ kind: 'parent-session', sessionId: 'TP' })
+  })
+
+  it('target 的 parentId 不是驱动方 → another session', async () => {
+    const { text, options } = await steerTo('t1', 'TP')
+    expect(text.startsWith(`m\n\n[Sent by another session (id TP — "重构 'parser'"). `)).toBe(true)
+    expect(options.source).toStrictEqual({ kind: 'session', sessionId: 'TP' })
+  })
+
+  it('target 的 parentId 等于驱动方 → your parent session，驱动方没有标题也一样', async () => {
+    const { text } = await steerTo('c1', 'P1')
+    expect(text.startsWith('m\n\n[Sent by your parent session (id P1). ')).toBe(true)
+  })
+
+  it('读不到驱动方的行（pick 为 undefined）→ 没有标题、token.name 退回 id、不抛', async () => {
+    const { text, options } = await steerTo('t1', 'gone')
+    expect(text.startsWith('m\n\n[Sent by another session (id gone). ')).toBe(true)
+    expect(text).not.toContain(' — "')
+    expect(tokenOf(options).name).toBe('gone')
+    expect(options.source).toStrictEqual({ kind: 'session', sessionId: 'gone' })
   })
 })
 
@@ -252,9 +313,7 @@ describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
       chatGateway.steerDriven('c1', 'm', DRIVE)
     )
     expect(result).toStrictEqual({})
-    expect(session.admitSteer.mock.calls).toStrictEqual([
-      ['m', { requestId: DRIVE.requestId, source: { kind: 'parent-session', sessionId: 'P1' } }]
-    ])
+    expect(session.admitSteer.mock.calls).toStrictEqual([steerCall(DRIVE.requestId, PARENT_SOURCE)])
     expect(session.steer).not.toHaveBeenCalled()
   })
 })

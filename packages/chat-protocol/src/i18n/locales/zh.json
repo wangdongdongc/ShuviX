@@ -256,6 +256,8 @@
     "atSourcePaste": "粘贴",
     "atSourceMidRun": "运行中发送",
     "atSourceTimer": "定时器",
+    "atSourceSession": "会话",
+    "atSourceSender": "来自会话",
     "placeholderVision": "输入消息，可拖放或粘贴图片...",
     "placeholderFiles": "输入消息，可拖放或粘贴文件...",
     "placeholder": "输入消息... (Shift+Enter 换行)",

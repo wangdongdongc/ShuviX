@@ -22,6 +22,8 @@
  * AT-30（Files 面板的条目右键 → 「在对话中引用」，桌面主窗口）：右键是 CDP 的真鼠标（pierre 的行在 shadow DOM 里），
  * 菜单是原生的、经 bootstrap.cjs 的 `contextMenu:popup` 桩（filesPanelPane 的 armMenu / lastMenuItems），
  * 原样比对它收到的菜单项；用自己的一个项目（AtProjFiles），不动上面两组的候选。
+ *
+ * E2E-2（@ 一条会话）：弹层 → 镜像层 kind session 逐字压明文 → 气泡「Session · 标题」、悬停看到 id → 模型收到 id 与标题。
  */
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -772,6 +774,80 @@ describe('F · 退格与草稿回退', () => {
     expect(user.metadata?.inlineTokens ?? null).toBeNull()
     expect(user.content).toBe('@knowledge:Token 刷新XY')
     expect(provider.chatRequests()[0].lastUserText).toBe('@knowledge:Token 刷新XY')
+  })
+})
+
+describe('H · @ 一条会话', () => {
+  it('E2E-2 镜像层胶囊逐字压在明文上；发送后气泡是「Session · 标题」，悬停看到会话 id；模型收到 id 与标题', async () => {
+    provider.reset()
+    await events.clear()
+    provider.script({ text: 'ok' })
+
+    const TARGET = 'AT31: target'
+    const targetSid = await createSession(TARGET, [], projectId)
+    const callerSid = await createSession('AT-31', [], projectId)
+    await until(async () => {
+      const titles = await sidebar.titles()
+      return (titles.includes(TARGET) && titles.includes('AT-31')) || null
+    }, 'sidebar has the two sessions')
+
+    const KEY = `session:${targetSid}`
+    await openAndType('AT-31', '@session:AT31')
+    await waitRow(KEY)
+    expect(await popover.select(KEY)).toBe(true)
+    const typed = `@session:${TARGET}`
+    expect(await chat.inputValue()).toBe(`${typed} `)
+
+    // 镜像层：kind session，textContent 逐字等于 textarea 里的那段明文
+    const mirror = await until(
+      () =>
+        app.main.eval<{ kind: string; text: string }[] | null>(`(() => {
+          const ta = document.querySelector('textarea')
+          const root = ta?.parentElement?.querySelector('[aria-hidden="true"]')
+          const chips = [...(root?.querySelectorAll('[data-token-kind]') ?? [])]
+          return chips.length === 0
+            ? null
+            : chips.map((c) => ({ kind: c.getAttribute('data-token-kind'), text: c.textContent }))
+        })()`),
+      'mirror chip'
+    )
+    expect(mirror).toEqual([{ kind: 'session', text: typed }])
+
+    await sendAndSettle(callerSid)
+
+    // 模型收到的是 id 与标题，不是明文
+    const sent = provider.chatRequests()[0].lastUserFullText
+    expect(sent).toContain(`[session: id ${targetSid} — "${TARGET}"]`)
+    expect(sent).not.toContain(typed)
+
+    // 气泡胶囊：kind session，标签 Session，标题没有前缀
+    const user = await lastUserMessage(callerSid)
+    const chip = `document.querySelector('[data-msg-id=${JSON.stringify(user.id)}] [data-token-kind="session"]')`
+    const text = await until(
+      () => app.main.eval<string | null>(`${chip}?.textContent ?? null`),
+      'session chip in the bubble'
+    )
+    expect(text).toBe(`${en.input.atSourceSession}·${TARGET}`)
+
+    // 悬停：预览卡的来源行是会话 id
+    await app.main.eval(
+      `${chip}.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, relatedTarget: document.body }))`
+    )
+    const source = await until(
+      () =>
+        app.main.eval<string | null>(
+          `document.querySelector('div.fixed.z-40 div.font-mono')?.textContent ?? null`
+        ),
+      'hover card source line'
+    )
+    expect(source).toBe(targetSid)
+    await app.main.eval(
+      `${chip}.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, cancelable: true, relatedTarget: document.body }))`
+    )
+    await until(
+      () => app.main.eval<boolean>(`!document.querySelector('div.fixed.z-40 div.font-mono')`),
+      'hover card gone'
+    )
   })
 })
 

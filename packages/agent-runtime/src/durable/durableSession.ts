@@ -277,6 +277,8 @@ export interface AdmitOptions {
   requestId?: string
   /** 同 `UserSendOptions.source`（人在某个前端里打的引导 / 追加，或父会话发进子会话的引导，§19.6） */
   source?: InputOrigin
+  /** 显示侧车（别的会话发来的引导带发送方 Token）；不跟 `composer` 一起给：这里不替它换占位符 */
+  display?: JsonObject
   onAdmitted?: (info: AdmittedInfo) => void
   onPlaced?: (info: PlacedInfo) => void
   /** 同 `UserSendOptions.composer` */
@@ -1720,11 +1722,12 @@ export class DurableSessionImpl implements DurableSession {
           // 加在脱敏之后 —— 说明不是用户输入。被中断、照「先让它跑完」排在后面的也算（继续之后它落进那一轮）；
           // 空闲时的 steer 会直接起一轮，它就是一条普通请求；通知形状的不加（withMidRunNote 自己判）
           const midRun = whenBusy === 'steer' && (this.isBusy() || this.isInterrupted())
-          const noted = midRun ? withMidRunNote(content) : undefined
+          const noted = midRun ? withMidRunNote(content, options.display) : undefined
           if (noted !== undefined) content = noted.content
-          if (options.source !== undefined || noted !== undefined) {
+          const display = noted?.display ?? options.display
+          if (options.source !== undefined || display !== undefined) {
             requestId ??= randomId()
-            await this.recordSidecars(conversation, requestId, noted?.display, options.source)
+            await this.recordSidecars(conversation, requestId, display, options.source)
           }
           await this.flushDeferred(conversation, 'beforeSend')
           await this.announceDate(conversation)

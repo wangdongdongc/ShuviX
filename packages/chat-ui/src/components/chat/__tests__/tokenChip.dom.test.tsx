@@ -6,7 +6,10 @@
  *   - 镜像变体（零布局约束）：无图标，at 知识拆两段 span，拼接后与底层原始子串逐字一致；
  *   - 悬停预览卡：~300ms 浮出（标题 + 源标签 + 来源路径 + payload 预览），移出即关、卡上可驻留，
  *     点击仍弹完整 TokenPayloadDialog；
- *   - 触发事件 Token（TKT-1..6）：胶囊 = 定时器 · 时间，悬停卡与弹窗显示事件围栏 + 说明（不带开头的分隔）。
+ *   - 触发事件 Token（TKT-1..6）：胶囊 = 定时器 · 时间，悬停卡与弹窗显示事件围栏 + 说明（不带开头的分隔）；
+ *   - 会话引用（CH-1 / CH-2）：气泡 kind session、标签本地化、标题无前缀、悬停卡来源是会话 id；镜像层拆两段，拼接逐字一致；
+ *     文件路径碰巧以 `session:` 开头的不拆；
+ *   - 发送方（CH-3）：胶囊 = 来自会话 · 标题，锚点空串，悬停卡与弹窗显示说明（不带开头的分隔）。
  * i18n 走真 zh 资源，验证源标签本地化接线（en/ja 键存在性由 JSON 结构保证）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,7 +23,9 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { MID_RUN_NOTE_TEXT, midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
+import { sessionSenderNoteText, sessionSenderToken } from '@shuvix/chat-protocol/sessionSender'
 import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
+import { buildAtToken } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { payloadPreview, tokenTitle } from '../../../utils/tokenDisplay'
 import { TokenChip } from '../TokenChip'
 
@@ -387,5 +392,153 @@ describe('触发事件 Token —— 胶囊是「定时器 · 时间」，点开�
     expect(chip.textContent).toBe('定时器·')
     expect(openCard(chip).querySelector('pre')?.textContent).toBe(payloadPreview(SHOWN))
     expect(openDialog(chip).querySelector('pre')?.textContent).toBe(SHOWN)
+  })
+})
+
+describe('会话与发送方 Token', () => {
+  const openCard = (chip: Element): HTMLDivElement => {
+    enter(chip)
+    act(() => {
+      vi.advanceTimersByTime(350)
+    })
+    return hoverCard()!
+  }
+  const openDialog = (chip: Element): HTMLElement => {
+    act(() => {
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    return document.body.querySelector<HTMLElement>('.dialog-panel')!
+  }
+  const language = (lng: string): Promise<void> =>
+    act(async () => {
+      await i18n.changeLanguage(lng)
+    })
+
+  const SID_TITLE = '修: 复 bug'
+  const SESSION = buildAtToken({ kind: 'session', sessionId: 'sid-1', title: SID_TITLE })
+
+  describe('CH-1 气泡里的会话引用', () => {
+    for (const [lng, bundle] of Object.entries({ zh, en, ja })) {
+      const label = bundle.input.atSourceSession
+      it(`${lng}：kind session，标签「${label}」，有图标，标题没有 session: 前缀`, async () => {
+        await language(lng)
+        const chip = renderChip(SESSION)
+        expect(chip.dataset.tokenKind).toBe('session')
+        expect(chip.dataset.tokenDisplay).toBe(`session:${SID_TITLE}`)
+        expect(chip.querySelector('svg')).not.toBeNull()
+        expect(chip.textContent).toBe(`${label}·${SID_TITLE}`)
+        expect(chip.textContent).not.toContain('session:')
+        expect(chip.classList.contains('ml-1.5')).toBe(false)
+      })
+    }
+
+    it('悬停卡：标题是会话标题，右侧是标签，来源行是会话 id', () => {
+      const card = openCard(renderChip(SESSION))
+      expect(card.querySelector('span.font-semibold')?.textContent).toBe(SID_TITLE)
+      expect(card.querySelector('span.ml-auto')?.textContent).toBe(zh.input.atSourceSession)
+      expect(card.querySelector('div.font-mono')?.textContent).toBe('sid-1')
+    })
+  })
+
+  describe('CH-2 镜像层', () => {
+    it('`@session:标题` 拆两段 span，拼接逐字等于 displayText，无图标', () => {
+      const raw = '@session:标题'
+      const chip = renderChip({ ...SESSION, displayText: raw }, true)
+      expect(chip.dataset.tokenKind).toBe('session')
+      expect(chip.querySelector('svg')).toBeNull()
+      const spans = chip.querySelectorAll(':scope > span')
+      expect(spans.length).toBe(2)
+      expect(spans[0]!.textContent).toBe('@session:')
+      expect(spans[1]!.textContent).toBe('标题')
+      expect(chip.textContent).toBe(raw)
+    })
+
+    it('标题含 `:` 也只切第一个，拼接仍逐字一致', () => {
+      const raw = `@session:${SID_TITLE}`
+      const chip = renderChip({ ...SESSION, displayText: raw }, true)
+      const spans = chip.querySelectorAll(':scope > span')
+      expect(spans.length).toBe(2)
+      expect(spans[0]!.textContent).toBe('@session:')
+      expect(spans[1]!.textContent).toBe(SID_TITLE)
+      expect(chip.textContent).toBe(raw)
+    })
+
+    it('工作区文件 session:notes.md 不拆，kind file', () => {
+      const raw = '@session:notes.md'
+      const file = buildAtToken(
+        { kind: 'file', rel: 'session:notes.md', base: 'session:notes.md' },
+        raw
+      )
+      const chip = renderChip(file, true)
+      expect(chip.dataset.tokenKind).toBe('file')
+      expect(chip.querySelectorAll(':scope > span').length).toBe(0)
+      expect(chip.textContent).toBe(raw)
+    })
+  })
+
+  describe('CH-3 发送方胶囊', () => {
+    const REF = { kind: 'parent-session', sessionId: 'sid-9', title: '重构 parser' } as const
+    const TOKEN = sessionSenderToken(REF)
+    const NOTE = sessionSenderNoteText(REF)
+
+    for (const [lng, bundle] of Object.entries({ zh, en, ja })) {
+      const label = bundle.input.atSourceSender
+      it(`${lng}：kind sender，锚点空串，有 ml-1.5，文字「${label}·标题」`, async () => {
+        await language(lng)
+        const chip = renderChip(TOKEN)
+        expect(chip.dataset.tokenKind).toBe('sender')
+        expect(chip.getAttribute('data-token-display')).toBe('')
+        expect(chip.classList.contains('ml-1.5')).toBe(true)
+        expect(chip.querySelector('svg')).not.toBeNull()
+        expect(chip.textContent).toBe(`${label}·${REF.title}`)
+        expect(chip.textContent).not.toContain('Sent by')
+      })
+    }
+
+    it('悬停卡：标题是会话标题，来源行是会话 id，正文是说明的预览、开头没有空行', () => {
+      const card = openCard(renderChip(TOKEN))
+      expect(card.querySelector('span.font-semibold')?.textContent).toBe(REF.title)
+      expect(card.querySelector('span.ml-auto')?.textContent).toBe(zh.input.atSourceSender)
+      expect(card.querySelector('div.font-mono')?.textContent).toBe('sid-9')
+      const pre = card.querySelector('pre')!.textContent!
+      expect(pre).toBe(payloadPreview(NOTE))
+      expect(pre.startsWith('[Sent by')).toBe(true)
+    })
+
+    it('弹窗：标题「来自会话 · 标题」，正文逐字是说明，开头没有空行', () => {
+      const dialog = openDialog(renderChip(TOKEN))
+      expect(dialog.querySelector('h3')?.textContent).toBe(
+        `${zh.input.atSourceSender} · ${REF.title}`
+      )
+      expect(dialog.querySelector('h3 + div')).toBeNull()
+      const pre = dialog.querySelector('pre')!.textContent!
+      expect(pre).toBe(NOTE)
+      expect(pre.startsWith('\n')).toBe(false)
+    })
+
+    it('对照：粘贴的 payload 开头空行保留（trim 只对 trigger / sender）', () => {
+      const paste: InlineToken = { ...PASTE_TOKEN, payload: '\n\n第一行' }
+      expect(openDialog(renderChip(paste)).querySelector('pre')?.textContent).toBe('\n\n第一行')
+    })
+
+    it('没有 name：不崩，胶囊只有标签和点，弹窗正文照旧', () => {
+      const { name: _name, ...bare } = TOKEN
+      const chip = renderChip(bare)
+      expect(chip.textContent).toBe(`${zh.input.atSourceSender}·`)
+      expect(openCard(chip).querySelector('pre')?.textContent).toBe(payloadPreview(NOTE))
+      expect(openDialog(chip).querySelector('pre')?.textContent).toBe(NOTE)
+    })
+
+    it('超长标题：胶囊与弹窗标题是全文，说明里是截断的，不崩', () => {
+      const long = 'x'.repeat(300)
+      const token = sessionSenderToken({ ...REF, title: long })
+      const chip = renderChip(token)
+      expect(chip.textContent).toBe(`${zh.input.atSourceSender}·${long}`)
+      const dialog = openDialog(chip)
+      expect(dialog.querySelector('h3')?.textContent).toBe(`${zh.input.atSourceSender} · ${long}`)
+      const pre = dialog.querySelector('pre')!.textContent!
+      expect(pre).toContain(`"${'x'.repeat(120)}…"`)
+      expect(pre).not.toContain('x'.repeat(121))
+    })
   })
 })

@@ -29,11 +29,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
-import {
-  MID_RUN_NOTE_SEPARATOR,
-  MID_RUN_NOTE_TEXT,
-  withoutMidRunNote
-} from '@shuvix/chat-protocol/midRunNote'
+import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol/midRunNote'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
@@ -121,11 +118,11 @@ const listMessages = (sid: string): Promise<ListedMessage[]> =>
 const systemNotices = (msgs: ListedMessage[]): ListedMessage[] =>
   msgs.filter((m) => m.role === 'user' && m.metadata?.isSystemNotice === true)
 
-/** 不是系统通知的用户消息正文（人打的 / 父会话代发的）；运行中插话后面挂着的说明 Token 是系统写的，不算 */
+/** 不是系统通知的用户消息正文（人打的 / 父会话代发的）；后面挂着的插话说明、发送方 Token 是系统写的，不算 */
 const userMessages = (msgs: ListedMessage[]): string[] =>
   msgs
     .filter((m) => m.role === 'user' && !m.metadata?.isSystemNotice)
-    .map((m) => withoutMidRunNote(m.content, m.metadata?.inlineTokens))
+    .map((m) => withoutSystemTokens(m.content, m.metadata?.inlineTokens))
 
 /** 这条会话的转写里有没有含这段文字的助手消息 */
 const hasAssistantText = (msgs: ListedMessage[], text: string): boolean =>
@@ -1244,9 +1241,14 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
         .filter((m) => m.role === 'user')
         .map((m) => m.text)
       // 引导落进跑着的一轮：模型看到的是原话 + 运行中插话的说明（docs/task-list-design.md §2）
-      expect(usersAfter).toContain(`${PARENT_STEER}${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`)
+      // 模型收到的：原话、发送方说明、插话说明，顺序不能反（任务列表靠结尾认插话）
+      const steered = usersAfter.find((text) => text.startsWith(PARENT_STEER))
+      expect(steered).toMatch(/\n\n\[Sent by your parent session \(id /)
+      expect(steered?.endsWith(`${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`)).toBe(true)
       // 引导之前只有那一条任务（不是新开一轮的首条消息）
-      expect(userTextsOf(next!).slice(0, 1)).toEqual([C_MARK])
+      expect(userTextsOf(next!)[0]?.startsWith(`${C_MARK}\n\n[Sent by your parent session`)).toBe(
+        true
+      )
 
       // 3. 子会话的用户消息依次三条，引导没有起新的一轮
       const childMsgs = await listMessages(pair.child)

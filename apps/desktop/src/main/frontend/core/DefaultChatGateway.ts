@@ -21,6 +21,8 @@ import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import { detectSensitive, type InputSource } from '@shuvix/agent-runtime'
+import type { JsonObject } from '@earendil-works/pi-durable'
+import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import {
   currentInputOrigin,
   getOperationContext,
@@ -42,6 +44,10 @@ import { sshDisconnectRuntime, sshRuntimeStatuses } from '../../services/builtin
 import { mcpService } from '../../services/mcpService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
+import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
+import { withoutMidRunNote } from '@shuvix/chat-protocol/midRunNote'
+import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
+import { isDrivingOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { sessionRecords } from '../../services/sessionRecords'
 import {
   AgentCreationError,
@@ -80,7 +86,7 @@ export class DefaultChatGateway implements ChatGateway {
    */
   private readonly resendSources = new Map<
     string,
-    { text: string; source: InputSource; at: number }
+    { text: string; ownWords?: string; source: InputSource; at: number }
   >()
 
   /**
@@ -114,7 +120,9 @@ export class DefaultChatGateway implements ChatGateway {
         : undefined
     this.resendSources.delete(sessionId)
     const resent =
-      resend && resend.text === text && Date.now() - resend.at < RESEND_WINDOW_MS
+      resend &&
+      (resend.text === text || resend.ownWords === text) &&
+      Date.now() - resend.at < RESEND_WINDOW_MS
         ? resend.source
         : undefined
     // 这条输入从哪来：其余的按这次操作的连接盖章（本机窗口、远程连接……，从不取载荷里的）。被驱动的发送由门面记
@@ -135,8 +143,16 @@ export class DefaultChatGateway implements ChatGateway {
     // LLM 收展开后的全文（树里的 user 消息即真理源）；标记态原文 + tokens 作为
     // 显示侧车（纯 custom entry）落在 user 消息之前，投影层据此还原芯片气泡。
     const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
-    const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
-    const display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
+    let promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
+    let display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
+    // 别的会话发来的：模型要知道这不是用户说的、是哪条会话说的（sessionSender.ts）
+    if (drive !== undefined) {
+      ;({ text: promptText, display } = withSessionSender(
+        promptText,
+        display,
+        this.senderOf(sessionId, drive.driven.parentId)
+      ))
+    }
 
     // 会话配置（档案、扩展能力、模型）在第一次发送创建 agent 时才读，所以「发送第一条消息前
     // 调整配置」的语义保持不变。
@@ -168,14 +184,22 @@ export class DefaultChatGateway implements ChatGateway {
     const session = sessionService.getAgentSession(sessionId)
     if (!session) return { error: 'The session is not open', code: 'closed' }
     try {
-      const result = await session.admitSteer(text, {
+      const sent = withSessionSender(text, undefined, this.senderOf(sessionId, drive.parentId))
+      const result = await session.admitSteer(sent.text, {
         requestId: drive.requestId,
-        source: sessionRecords.drivingSourceOf(sessionId, drive.parentId)
+        source: sessionRecords.drivingSourceOf(sessionId, drive.parentId),
+        display: sent.display as unknown as JsonObject
       })
       return result.error ? { error: result.error, code: result.code } : {}
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  /** 发进 `sessionId` 的这条消息的发送方：`parentId` 那条会话，带它此刻的标题（只为显示） */
+  private senderOf(sessionId: string, parentId: string): DrivingSessionRef {
+    const title = sessionRecords.pick(parentId, ['title'])?.title
+    return sessionRecords.drivingSourceOf(sessionId, parentId, title)
   }
 
   followUp(sessionId: string, text: string, secrets?: UserSecret[]): void {
@@ -417,7 +441,7 @@ export class DefaultChatGateway implements ChatGateway {
   private async sourceOfMessage(
     sessionId: string,
     messageId: string
-  ): Promise<{ text: string; source: InputSource } | undefined> {
+  ): Promise<{ text: string; ownWords?: string; source: InputSource } | undefined> {
     try {
       const agent =
         sessionService.getAgentSession(sessionId) ??
@@ -427,7 +451,18 @@ export class DefaultChatGateway implements ChatGateway {
       const source = sources.get(messageId)
       if (!source) return undefined
       const message = (await agent.sessionView()).messages.find((m) => m.id === messageId)
-      return message?.role === 'user' ? { text: message.content, source } : undefined
+      if (message?.role !== 'user') return undefined
+      const tokens = message.metadata?.inlineTokens
+      return {
+        // 重新生成发回来的不带插话说明（useChatActions）：比对的原文也不带，否则运行中发来的那条对不上、丢了来源
+        text: withoutMidRunNote(message.content, tokens),
+        // 别的会话发来的那条，回填草稿再发时只剩原文（发送方 Token 不进草稿）：同样沿用，否则它经一次重发就成了人的话。
+        // 触发消息不算（RS-15：那段话写在 bot 文件里，回填再发是人发的）
+        ...(isDrivingOrigin(source)
+          ? { ownWords: withoutSystemTokens(message.content, tokens) }
+          : {}),
+        source
+      }
     } catch {
       return undefined
     }

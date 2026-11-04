@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { AssistantBlock, ChatMessage } from '../types/chatMessage'
 import { transcribeConversation } from './transcript'
-import { MID_RUN_NOTE_TEXT, midRunNoteDisplay } from '../midRunNote'
+import { MID_RUN_NOTE_TEXT, MID_RUN_NOTE_UID, midRunNoteDisplay } from '../midRunNote'
+import { SESSION_SENDER_UID, withSessionSender } from '../sessionSender'
 import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '../triggerEvent'
 import { buildAtToken, buildPasteToken, makeTokenMarker } from './inlineTokens'
 
@@ -384,6 +385,65 @@ describe('transcribeConversation — 触发事件不记在 User 名下', () => {
     for (const expandInlineTokens of [false, true]) {
       const md = transcribeConversation([userText(long)], { expandInlineTokens })
       expect(userBodies(md), String(expandInlineTokens)).toEqual([long])
+    }
+  })
+})
+
+describe('transcribeConversation — 发送方说明不记在 User 名下', () => {
+  const M = 'do the thing'
+  const SENDER = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+  const userBodies = (md: string): string[] =>
+    md
+      .split(/\n(?=### )/)
+      .filter((section) => section.startsWith('### User'))
+      .map((section) => section.slice(section.indexOf('\n\n') + 2).trim())
+  const expectClean = (md: string): void => {
+    expect(md).not.toContain('Sent by')
+    expect(md).not.toContain(MID_RUN_NOTE_TEXT)
+    expect(md).not.toContain('shuvixInlineToken')
+  }
+
+  it('EX-2 只有发送方：展开与不展开，User 正文都只有原文', () => {
+    const { display } = withSessionSender(M, undefined, SENDER)
+    const message = userText(display.content, { metadata: { inlineTokens: display.tokens } })
+    for (const expandInlineTokens of [false, true]) {
+      const md = transcribeConversation([message, assistantText('done')], { expandInlineTokens })
+      expect(userBodies(md), String(expandInlineTokens)).toEqual([M])
+      expectClean(md)
+      expect(md).toContain('done')
+    }
+  })
+
+  it('EX-2 发送方 + 插话说明：两枚都不出现', () => {
+    const { display } = withSessionSender(M, undefined, SENDER)
+    const noted = midRunNoteDisplay(M, display)
+    expect(noted.tokens).toHaveProperty(SESSION_SENDER_UID)
+    expect(noted.tokens).toHaveProperty(MID_RUN_NOTE_UID)
+    const message = userText(noted.content, { metadata: { inlineTokens: noted.tokens } })
+    for (const expandInlineTokens of [false, true]) {
+      const md = transcribeConversation([message], { expandInlineTokens })
+      expect(userBodies(md), String(expandInlineTokens)).toEqual([M])
+      expectClean(md)
+    }
+  })
+
+  it('EX-2 带 at 引用：展开时换 payload，不展开时换 displayText；有无插话说明都一样', () => {
+    const at = buildAtToken({ kind: 'file', rel: 'src/a.ts', base: 'a.ts' })
+    const marked = `read ${makeTokenMarker('a1')} now`
+    const sent = withSessionSender(
+      `read ${at.payload} now`,
+      { content: marked, tokens: { a1: at } },
+      SENDER
+    )
+    const noted = midRunNoteDisplay(marked, sent.display)
+    for (const display of [sent.display, noted]) {
+      const message = userText(display.content, { metadata: { inlineTokens: display.tokens } })
+      const expanded = transcribeConversation([message], { expandInlineTokens: true })
+      expect(userBodies(expanded)).toEqual([`read ${at.payload} now`])
+      expectClean(expanded)
+      const plain = transcribeConversation([message])
+      expect(userBodies(plain)).toEqual(['read a.ts now'])
+      expectClean(plain)
     }
   })
 })

@@ -20,18 +20,26 @@ export function midRunDisplayed(text: string): string {
   return `${text}${makeTokenMarker(MID_RUN_NOTE_UID)}`
 }
 
-/** 一条消息的文本：user / toolResult 的文本块，assistant 的文本（没有文本时是 `[tool:name]`） */
+/** 别的会话发来的消息末尾系统写的发送方说明（chat-protocol sessionSender.ts） */
+const SESSION_SENDER_NOTE_RE = /\n\n\[Sent by (?:your parent session|another session) \(id [^\n]*\]/
+
+/**
+ * 一条消息的文本：user / toolResult 的文本块，assistant 的文本（没有文本时是 `[tool:name]`）。user 文本不带发送方说明：
+ * 每条驱动发送都带这一段，按文字路由、比对的用例不关心它；要看全文的用例读 `message.content`
+ */
 export function messageText(message: Message | undefined): string {
   if (message === undefined) return ''
   switch (message.role) {
     case 'system':
       return ''
     case 'user':
-      return typeof message.content === 'string'
-        ? message.content
-        : message.content
-            .map((part) => (part.type === 'text' ? part.text : `[image:${part.mimeType}]`))
-            .join('')
+      return (
+        typeof message.content === 'string'
+          ? message.content
+          : message.content
+              .map((part) => (part.type === 'text' ? part.text : `[image:${part.mimeType}]`))
+              .join('')
+      ).replace(SESSION_SENDER_NOTE_RE, '')
     case 'assistant': {
       const text = message.content
         .filter((part) => part.type === 'text')

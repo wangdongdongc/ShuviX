@@ -6,6 +6,7 @@ import {
   ClipboardPaste,
   CornerDownRight,
   FileText,
+  MessagesSquare,
   Terminal,
   Timer,
   X,
@@ -37,6 +38,8 @@ const KIND_META: Record<
   cmd: { color: 'var(--viz-7)', Icon: Terminal, labelKey: 'input.atSourceCmd' },
   file: { color: 'var(--viz-1)', Icon: FileText, labelKey: 'input.atSourceFile' },
   knowledge: { color: 'var(--viz-4)', Icon: BookOpen, labelKey: 'input.atSourceKnowledge' },
+  // 会话引用与发送方：与来源标签「来自其他会话」同一个色槽
+  session: { color: 'var(--viz-5)', Icon: MessagesSquare, labelKey: 'input.atSourceSession' },
   paste: {
     color: 'var(--theme-text-tertiary)',
     Icon: ClipboardPaste,
@@ -49,12 +52,13 @@ const KIND_META: Record<
     labelKey: 'input.atSourceMidRun'
   },
   // 触发器发的消息里的事件：标签说是哪种触发，标题是触发时间；与来源标签「触发器」同一个色槽
-  trigger: { color: 'var(--viz-7)', Icon: Timer, labelKey: 'input.atSourceTimer' }
+  trigger: { color: 'var(--viz-7)', Icon: Timer, labelKey: 'input.atSourceTimer' },
+  sender: { color: 'var(--viz-5)', Icon: MessagesSquare, labelKey: 'input.atSourceSender' }
 }
 
-/** 给人看的 payload：触发事件的 payload 开头是与 message 之间的分隔（模型文本要逐字相同），显示时不要那两个空行 */
+/** 给人看的 payload：触发事件与发送方的 payload 开头是与原文之间的分隔（模型文本要逐字相同），显示时不要那两个空行 */
 function shownPayload(token: InlineToken, kind: TokenKind): string {
-  return kind === 'trigger' ? token.payload.trimStart() : token.payload
+  return kind === 'trigger' || kind === 'sender' ? token.payload.trimStart() : token.payload
 }
 
 /** 类型色淡底（color-mix 直接吃 CSS 变量；hover 加深一档） */
@@ -157,10 +161,13 @@ export function TokenChip({
 
   const isNote = kind === 'note'
   const title = isNote ? (label ?? '') : tokenTitle(token)
-  // 系统写的两种都跟在文字后面：和前面的文字隔开一点
-  const trailing = isNote || kind === 'trigger'
-  // 镜像层 at 知识：前缀段（`@knowledge:`，含冒号）弱化、标题段着色；两段拼接 = displayText 逐字一致
-  const knowledgeSplit = inline && kind === 'knowledge' ? splitTokenTitle(token.displayText) : null
+  // 系统写的几种都跟在文字后面：和前面的文字隔开一点
+  const trailing = isNote || kind === 'trigger' || kind === 'sender'
+  // 镜像层 at 知识 / 会话：前缀段（`@knowledge:` / `@session:`，含冒号）弱化、标题段着色；两段拼接 = displayText 逐字一致
+  const prefixSplit =
+    inline && (kind === 'knowledge' || kind === 'session')
+      ? splitTokenTitle(token.displayText)
+      : null
 
   return (
     <>
@@ -186,10 +193,10 @@ export function TokenChip({
         }}
       >
         {inline ? (
-          knowledgeSplit ? (
+          prefixSplit ? (
             <>
-              <span style={{ color: 'var(--theme-text-secondary)' }}>{knowledgeSplit.prefix}</span>
-              <span>{knowledgeSplit.title}</span>
+              <span style={{ color: 'var(--theme-text-secondary)' }}>{prefixSplit.prefix}</span>
+              <span>{prefixSplit.title}</span>
             </>
           ) : (
             token.displayText
@@ -229,7 +236,7 @@ export function TokenChip({
             title={
               isNote
                 ? title
-                : kind === 'trigger'
+                : kind === 'trigger' || kind === 'sender'
                   ? `${label} · ${title}`
                   : token.name && token.name !== token.id
                     ? token.name

@@ -9,6 +9,7 @@
  * 只由宿主在触发时构造（`botTriggerService`），前端从不构造它。本模块纯数据、不依赖 Node / Electron。
  */
 import { isMidRunNoteToken } from './midRunNote'
+import { isSessionSenderToken } from './sessionSender'
 import type { InlineToken } from './types/chatMessage'
 import { makeTokenMarker, TOKEN_RE } from './utils/inlineTokens'
 
@@ -72,14 +73,14 @@ export function isTriggerEventToken(token: unknown): boolean {
   return (token as { type?: unknown }).type === TRIGGER_EVENT_TOKEN_TYPE
 }
 
-/** 系统写的 Token：运行中插话的说明、触发事件 */
+/** 系统写的 Token：运行中插话的说明、触发事件、别的会话发来的消息的发送方 */
 function isSystemToken(token: unknown): boolean {
-  return isMidRunNoteToken(token) || isTriggerEventToken(token)
+  return isMidRunNoteToken(token) || isTriggerEventToken(token) || isSessionSenderToken(token)
 }
 
 /**
  * 把带标记的显示文本里系统写的标记去掉（读「这条消息说了什么」的地方用：大纲、转写摘要、导出）。重新生成不用它：
- * 重发一条触发消息时事件还是它的一部分（插话说明才不跟着重发，见 midRunNote.ts）。
+ * 重发一条触发消息时事件还是它的一部分，别的会话发来的那条同样（插话说明才不跟着重发，见 midRunNote.ts）。
  */
 export function withoutSystemTokens(
   content: string,

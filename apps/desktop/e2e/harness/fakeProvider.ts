@@ -97,8 +97,13 @@ export interface FakeRequest {
   body: FakeRequestBody
   /** `JSON.stringify(body)` —— 「发给模型的 payload 里有没有某段文本」的便捷断言入口 */
   raw: string
-  /** 最后一条 user 消息的纯文本 */
+  /**
+   * 最后一条 user 消息的纯文本，不带别的会话发来的消息末尾的发送方说明（chat-protocol sessionSender.ts）：
+   * 按文字认领请求的 spec 不关心它。要看模型收到的全文用 `lastUserFullText`
+   */
   lastUserText: string
+  /** 最后一条 user 消息的纯文本，模型收到的全文 */
+  lastUserFullText: string
   /**
    * 客户端在回复写完之前就断开了（中止一轮、关掉会话的窗口……）。请求刚记下时为 false，
    * 断开那一刻原地改成 true —— `requests()` 回的是同一批对象，轮询读得到。
@@ -139,6 +144,9 @@ const asChunks = (value: string | string[] | undefined): string[] => {
 }
 
 /** OpenAI 消息 content（字符串或内容块数组）→ 纯文本 */
+/** 别的会话发来的消息末尾的发送方说明 */
+const SESSION_SENDER_NOTE_RE = /\n\n\[Sent by (?:your parent session|another session) \(id [^\n]*\]/
+
 function textOfContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -328,7 +336,8 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       const record: FakeRequest = {
         body,
         raw: rawBody,
-        lastUserText: textOfContent(lastUser?.content),
+        lastUserText: textOfContent(lastUser?.content).replace(SESSION_SENDER_NOTE_RE, ''),
+        lastUserFullText: textOfContent(lastUser?.content),
         aborted: false
       }
       recorded.push(record)

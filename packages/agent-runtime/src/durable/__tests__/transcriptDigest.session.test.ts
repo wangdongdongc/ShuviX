@@ -17,11 +17,13 @@
  *   DG-1 / 2  运行中插话（docs/task-list-design.md §2.4）：带图、带脱敏值的忙时 steer，摘要里是脱敏后的原文 ——
  *             没有说明的标记、没有说明；运行中采纳的提议照样 `suggested`、文本恰是提议的话
  *   TDT-1 / 3 / 4  触发消息：摘要里只有 message；这之前的长文本保留全文；message 里的粘贴标记与不带触发 Token 的差分相同
+ *   DGS-1     别的会话发来的消息（设计清单 DG-1，本文件 DG-1 已被插话占用）：侧车解析到时 text 恰为原文，来源保留，at 标记留着
  */
 import { createHmac } from 'node:crypto'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import { MID_RUN_NOTE_TEXT, MID_RUN_NOTE_UID } from '@shuvix/chat-protocol/midRunNote'
+import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
@@ -824,6 +826,66 @@ describe('TDT · 触发事件不算这条消息的话', () => {
       expect(withTrigger).toEqual(without)
       expect(withTrigger).toEqual([said])
       expect(withTrigger.join('\n')).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
+    },
+    TIMEOUT
+  )
+})
+
+describe('DGS · 发送方说明不算这条消息的话', () => {
+  const SOURCE = { kind: 'parent-session', sessionId: 'P1', title: 'T' } as const
+
+  async function userItems(
+    send: (session: DurableSession) => Promise<unknown>
+  ): Promise<{ text: string; source?: unknown }[]> {
+    const t = await makeHost({ ephemeral: [SID] })
+    const session = await t.open(SID)
+    t.kit.queue(answer('ok'))
+    await send(session)
+    return (await digest(session)).filter((item) => item.kind === 'user') as unknown as {
+      text: string
+      source?: unknown
+    }[]
+  }
+
+  it(
+    'DGS-1 侧车解析到时 item.text 恰为原文，source 保留',
+    async () => {
+      const sent = withSessionSender('M', undefined, SOURCE)
+      const items = await userItems((session) =>
+        session.submitUser(sent.text, {
+          display: sent.display as unknown as JsonObject,
+          source: SOURCE
+        })
+      )
+      expect(items.map((item) => item.text)).toEqual(['M'])
+      expect(items[0]!.source).toStrictEqual(SOURCE)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'DGS-1 at 标记留着，发送方标记去掉',
+    async () => {
+      const at = {
+        type: 'at',
+        id: 'src/a.ts',
+        displayText: 'a.ts',
+        payload: '[workspace file: src/a.ts]'
+      }
+      const said = 'see {{shuvixInlineToken:a1}} ok'
+      const sent = withSessionSender(
+        'see [workspace file: src/a.ts] ok',
+        { content: said, tokens: { a1: at } },
+        SOURCE
+      )
+      const items = await userItems((session) =>
+        session.submitUser(sent.text, {
+          display: sent.display as unknown as JsonObject,
+          source: SOURCE
+        })
+      )
+      expect(items.map((item) => item.text)).toEqual([said])
+      expect(items[0]!.source).toStrictEqual(SOURCE)
     },
     TIMEOUT
   )

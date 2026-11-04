@@ -10,9 +10,19 @@
  *   TE-6 `isTriggerEventToken` 只看 type
  *   TE-7 `withoutSystemTokens`：只摘系统写的标记，别的留着；tokens 为 undefined 原样；连调两次相同（防 /g 状态）
  *   TE-8 `tokensWithoutSystemTokens`：全系统 → undefined；混合只留其他；没有系统 Token → 同一引用
+ *   TE-9 发送方 Token 也是系统写的：`withoutSystemTokens` 摘它，插话说明的那一组函数不摘它；不算插话，任务列表上是新请求
  */
 import { describe, expect, it } from 'vitest'
-import { MID_RUN_NOTE_UID, midRunNoteDisplay, midRunNoteToken } from './midRunNote'
+import {
+  MID_RUN_NOTE_UID,
+  hasMidRunNote,
+  midRunNoteDisplay,
+  midRunNoteToken,
+  tokensWithoutMidRunNote,
+  withoutMidRunNote
+} from './midRunNote'
+import { SESSION_SENDER_UID, sessionSenderToken } from './sessionSender'
+import { startsTaskListRequest } from './taskList'
 import {
   TRIGGER_EVENT_NOTE_TEXT,
   TRIGGER_EVENT_TOKEN_TYPE,
@@ -22,7 +32,7 @@ import {
   triggerEventMessage,
   withoutSystemTokens
 } from './triggerEvent'
-import type { InlineToken } from './types/chatMessage'
+import type { ChatMessage, InlineToken } from './types/chatMessage'
 import {
   buildAtToken,
   buildPasteToken,
@@ -263,5 +273,72 @@ describe('TE-8 tokensWithoutSystemTokens', () => {
     const empty = {}
     expect(tokensWithoutSystemTokens(empty)).toBe(empty)
     expect(tokensWithoutSystemTokens(undefined)).toBeUndefined()
+  })
+})
+
+describe('TE-9 the sender token is system-written, but it is not the mid-run note', () => {
+  const senderMarker = makeTokenMarker(SESSION_SENDER_UID)
+  const midRunMarker = makeTokenMarker(MID_RUN_NOTE_UID)
+  const atMarker = makeTokenMarker('a1')
+  const sender = sessionSenderToken({ kind: 'parent-session', sessionId: 'P1', title: 'T' })
+  const content = `${M} ${atMarker}${senderMarker}${midRunMarker}`
+  const tokens = {
+    a1: atToken,
+    [SESSION_SENDER_UID]: sender,
+    [MID_RUN_NOTE_UID]: midRunNoteToken()
+  }
+
+  it('withoutMidRunNote takes out only the mid-run marker', () => {
+    expect(withoutMidRunNote(content, tokens)).toBe(`${M} ${atMarker}${senderMarker}`)
+  })
+
+  it('tokensWithoutMidRunNote keeps the sender', () => {
+    expect(tokensWithoutMidRunNote(tokens)).toStrictEqual({
+      a1: atToken,
+      [SESSION_SENDER_UID]: sender
+    })
+    expect(tokensWithoutMidRunNote({ [SESSION_SENDER_UID]: sender })).toStrictEqual({
+      [SESSION_SENDER_UID]: sender
+    })
+  })
+
+  it('withoutSystemTokens takes out both and leaves the at marker; twice gives the same', () => {
+    expect(withoutSystemTokens(content, tokens)).toBe(`${M} ${atMarker}`)
+    expect(withoutSystemTokens(content, tokens)).toBe(`${M} ${atMarker}`)
+  })
+
+  it('tokensWithoutSystemTokens keeps the at token and gives undefined when nothing else is left', () => {
+    expect(tokensWithoutSystemTokens(tokens)).toStrictEqual({ a1: atToken })
+    expect(
+      tokensWithoutSystemTokens({
+        [SESSION_SENDER_UID]: sender,
+        [MID_RUN_NOTE_UID]: midRunNoteToken()
+      })
+    ).toBeUndefined()
+    expect(tokensWithoutSystemTokens({ [SESSION_SENDER_UID]: sender })).toBeUndefined()
+  })
+
+  const user = (inlineTokens: Record<string, InlineToken>): ChatMessage =>
+    ({
+      id: 'u1',
+      sessionId: 's1',
+      role: 'user',
+      type: 'text',
+      content: M,
+      model: 'test',
+      createdAt: 1,
+      metadata: { inlineTokens }
+    }) as unknown as ChatMessage
+
+  it('hasMidRunNote is false with only the sender, so the message starts a task-list request', () => {
+    const only = { [SESSION_SENDER_UID]: sender }
+    expect(hasMidRunNote(only)).toBe(false)
+    expect(startsTaskListRequest(user(only))).toBe(true)
+  })
+
+  it('with both, it is a mid-run message and starts none', () => {
+    const both = { [SESSION_SENDER_UID]: sender, [MID_RUN_NOTE_UID]: midRunNoteToken() }
+    expect(hasMidRunNote(both)).toBe(true)
+    expect(startsTaskListRequest(user(both))).toBe(false)
   })
 })

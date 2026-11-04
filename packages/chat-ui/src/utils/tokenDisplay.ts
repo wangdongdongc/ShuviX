@@ -5,22 +5,42 @@
 
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { isMidRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
+import { isSessionSenderToken } from '@shuvix/chat-protocol/sessionSender'
 import { isTriggerEventToken } from '@shuvix/chat-protocol/triggerEvent'
 
 /**
- * 展示层细分类型：at 按 id 前缀再分 文件 / 知识库（token 结构无类型字段，沿用 id 前缀判别）；`note` = 运行时
+ * 展示层细分类型：at 按 id 前缀再分 文件 / 知识库 / 会话（token 结构无类型字段，沿用 id 前缀判别）；`note` = 运行时
  * 加的插话说明（chat-protocol midRunNote.ts），只有标签、没有标题；`trigger` = 触发器发的消息里的事件
- * （triggerEvent.ts），标题是触发时间
+ * （triggerEvent.ts），标题是触发时间；`sender` = 别的会话发来的消息的发送方（sessionSender.ts），标题是那条会话的标题
  */
-export type TokenKind = 'cmd' | 'file' | 'knowledge' | 'paste' | 'note' | 'trigger' | 'other'
+export type TokenKind =
+  | 'cmd'
+  | 'file'
+  | 'knowledge'
+  | 'session'
+  | 'paste'
+  | 'note'
+  | 'trigger'
+  | 'sender'
+  | 'other'
 
-/** 判别展示类型；at token 以 id 的 `knowledge:` 前缀区分知识条目与工作区文件 */
+/**
+ * 判别展示类型；at token 以 id 的 `knowledge:` 前缀区分知识条目与工作区文件。会话引用同时看 payload（atTokenRef 同一个
+ * 口径）：工作区文件的相对路径也可能以 `session:` 开头
+ */
 export function tokenKind(token: InlineToken): TokenKind {
   if (isMidRunNoteToken(token)) return 'note'
   if (isTriggerEventToken(token)) return 'trigger'
+  if (isSessionSenderToken(token)) return 'sender'
   if (token.type === 'cmd') return 'cmd'
   if (token.type === 'paste') return 'paste'
-  if (token.type === 'at') return token.id.startsWith('knowledge:') ? 'knowledge' : 'file'
+  if (token.type === 'at') {
+    if (token.id.startsWith('knowledge:')) return 'knowledge'
+    if (token.id.startsWith('session:') && token.payload.startsWith('[session: id ')) {
+      return 'session'
+    }
+    return 'file'
+  }
   return 'other'
 }
 
@@ -35,19 +55,25 @@ export function splitTokenTitle(displayText: string): { prefix: string; title: s
   return { prefix: displayText.slice(0, idx + 1), title: displayText.slice(idx + 1) }
 }
 
-/** 气泡/预览卡标题：知识条目去掉 `knowledge:` 前缀（含消歧后缀），触发事件是触发时间，其余类型标题即 displayText */
+/**
+ * 气泡/预览卡标题：知识条目、会话引用去掉 `knowledge:` / `session:` 前缀（含消歧后缀），触发事件是触发时间，发送方是那条
+ * 会话的标题，其余类型标题即 displayText
+ */
 export function tokenTitle(token: InlineToken): string {
   const kind = tokenKind(token)
-  if (kind === 'knowledge') return splitTokenTitle(token.displayText).title
-  if (kind === 'trigger') return token.name ?? ''
+  if (kind === 'knowledge' || kind === 'session') return splitTokenTitle(token.displayText).title
+  if (kind === 'trigger' || kind === 'sender') return token.name ?? ''
   return token.displayText
 }
 
-/** 预览卡来源路径：at 文件=工作区相对路径，at 知识=条目 id（去 `knowledge:` 前缀），cmd=命令 id，paste/其他=无 */
+/** 预览卡来源路径：at 文件=工作区相对路径，at 知识=条目 id（去 `knowledge:` 前缀），会话引用=会话 id，发送方=会话 id，cmd=命令 id，paste/其他=无 */
 export function tokenSourcePath(token: InlineToken): string | undefined {
   switch (tokenKind(token)) {
     case 'knowledge':
       return token.id.slice('knowledge:'.length)
+    case 'session':
+      return token.id.slice('session:'.length)
+    case 'sender':
     case 'file':
     case 'cmd':
       return token.id

@@ -256,6 +256,8 @@
     "atSourcePaste": "Paste",
     "atSourceMidRun": "Sent mid-run",
     "atSourceTimer": "Timer",
+    "atSourceSession": "Session",
+    "atSourceSender": "From session",
     "placeholderVision": "Type a message, drag & drop or paste images...",
     "placeholderFiles": "Type a message, drag & drop or paste files...",
     "placeholder": "Type a message... (Shift+Enter for new line)",

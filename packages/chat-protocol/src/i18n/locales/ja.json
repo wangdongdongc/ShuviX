@@ -256,6 +256,8 @@
     "atSourcePaste": "貼り付け",
     "atSourceMidRun": "実行中に送信",
     "atSourceTimer": "タイマー",
+    "atSourceSession": "セッション",
+    "atSourceSender": "セッションから",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholderFiles": "メッセージを入力、ファイルをドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",

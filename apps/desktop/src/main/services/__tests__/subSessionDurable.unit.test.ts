@@ -1609,7 +1609,9 @@ describe('J. §19 parent intervention through the real facade', () => {
     const first = await call({ action: 'steer-session', message: 'm' }, { taskId: 9, memo })
     expect(first.isError).toBe(false)
     expect(first.text).toContain('Steer delivered')
-    expect(c1.callsOf('steer')).toEqual([['steer', 'm']])
+    expect(c1.callsOf('steer')).toEqual([
+      ['steer', expect.stringMatching(/^m\n\n\[Sent by your parent session \(id P\b/)]
+    ])
     expect(c1.steerOptions[0]).toMatchObject({
       requestId: 'subsession-steer:P:9',
       source: { kind: 'parent-session', sessionId: 'P' }

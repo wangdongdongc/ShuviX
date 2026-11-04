@@ -22,12 +22,24 @@
  *   RS-14 回退一条触发消息后原样重发（标记文本 + Token），在网络连接的上下文里：模型文本、侧车与首发相同，来源 trigger
  *   RS-15 回退后只发 message（回填草稿的样子）：来源是连接的章，没有侧车，模型文本只有 message
  *   RS-16 这之前的运行（长文本、没有侧车）重发：来源 trigger，全文不变，不再加说明
+ *   GW-2  别的会话发来的那条的重新生成（标记文本 + Token，没有 drive）：说明恰一次，来源沿用（压过连接的章），全文与首发
+ *         逐字相同；运行中发来的那条发回「去掉插话说明的标记文本」也比对成功，全文 = 首发减插话后缀；对照：人发的没有说明
+ *   GW-3  回退后只发原文（回填草稿的样子）：沿用驱动来源（`ownWords`），模型文本只有原文、没有说明；改过字不沿用；
+ *         对照：触发消息同样回填仍是连接的章（RS-15）
  *
  * mock 骨架照抄 chatGatewaySteerDriven.test.ts，另替身 sessionRecords（`{parentId}`）与 messageService 的回退。
  * operationContext 用真的（RS-13）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TRIGGER_EVENT_NOTE_TEXT, triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
+import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
+import {
+  MID_RUN_NOTE_SEPARATOR,
+  MID_RUN_NOTE_TEXT,
+  midRunNoteDisplay,
+  tokensWithoutMidRunNote,
+  withoutMidRunNote
+} from '@shuvix/chat-protocol/midRunNote'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { ClientContext } from '../../../ipc/registry'
 import { createClientContext, operationContext } from '../../../utils/operationContext'
@@ -63,7 +75,15 @@ vi.mock('../../../services/sessionService', () => ({
 vi.mock('../../../services/messageService', () => ({
   messageService: { rollbackToMessage: mocks.rollbackToMessage }
 }))
-vi.mock('../../../services/sessionRecords', () => ({ sessionRecords: { pick: mocks.pick } }))
+vi.mock('../../../services/sessionRecords', () => ({
+  sessionRecords: {
+    pick: mocks.pick,
+    drivingSourceOf: (_id: string, driverId: string, title?: string) =>
+      title
+        ? { kind: 'parent-session', sessionId: driverId, title }
+        : { kind: 'parent-session', sessionId: driverId }
+  }
+}))
 vi.mock('../../../services/sessionStorage', () => ({
   storageRefusalOf: () => undefined,
   recordSessionModel: vi.fn(),
@@ -105,6 +125,7 @@ interface FakeMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  metadata?: { inlineTokens?: Record<string, unknown> }
 }
 
 /** 回退要读的那一面：来源表 + 视图里的消息 */
@@ -227,10 +248,14 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
   it('RS-08 紧接着到来的是被驱动的发送 → 不沿用（来源由 drive 给，第 5 个参数为空），记录照样撤掉', async () => {
     await gateway.rollbackMessage('c1', 'u1')
     await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
+    const sent = withSessionSender(TASK, undefined, {
+      kind: 'parent-session',
+      sessionId: DRIVE.driven.parentId
+    })
     expect(prompt.mock.calls[0]).toStrictEqual([
-      TASK,
+      sent.text,
       undefined,
-      undefined,
+      sent.display,
       DRIVE,
       undefined,
       undefined
@@ -359,10 +384,14 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
       await gateway.prompt('c1', TASK)
     })
+    const sent = withSessionSender(TASK, undefined, {
+      kind: 'parent-session',
+      sessionId: DRIVE.driven.parentId
+    })
     expect(prompt.mock.calls[0]).toStrictEqual([
-      TASK,
+      sent.text,
       undefined,
-      undefined,
+      sent.display,
       DRIVE,
       undefined,
       undefined
@@ -430,5 +459,168 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       ])
       expect(prompt.mock.calls[0]![0]).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
     })
+  })
+})
+
+describe('别的会话发来的那条：回退之后再发（sessionSender.ts）', () => {
+  const netCtx: ClientContext = {
+    client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+    transport: 'network'
+  }
+  const REMOTE = {
+    kind: 'remote',
+    clientId: 'ws:4',
+    address: '192.168.1.20',
+    userAgent: 'UA'
+  } as const
+  const remotely = <T>(fn: () => Promise<T>): Promise<T> =>
+    operationContext.run(createClientContext(netCtx, 'c1'), fn)
+  const SOURCE = { kind: 'parent-session', sessionId: 'P1' } as const
+  const TITLE = '重构 parser'
+
+  beforeEach(() => {
+    // 驱动方 P1 有标题：说明里带上它，不进来源
+    mocks.pick.mockImplementation((id) =>
+      id === 'P1'
+        ? { title: TITLE, parentId: null }
+        : id in PARENTS
+          ? { parentId: PARENTS[id] ?? null }
+          : undefined
+    )
+  })
+
+  /** 第一次发：真走 drive，返回 session.prompt 收到的模型文本与侧车 */
+  async function firstSend(): Promise<{
+    text: string
+    display: { content: string; tokens: Record<string, never> }
+  }> {
+    await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
+    const [text, , display] = prompt.mock.calls[0]!
+    expect(text).toBe(withSessionSender(TASK, undefined, { ...SOURCE, title: TITLE }).text)
+    prompt.mockClear()
+    return { text, display }
+  }
+
+  /** 投影里这条的样子：标记态 content + inlineTokens；来源表里是 drive 给的来源 */
+  function viewOfSent(content: string, tokens: Record<string, unknown>): void {
+    const agent = agentWith(
+      [{ id: 'u1', role: 'user', content, metadata: { inlineTokens: tokens } }],
+      [['u1', SOURCE]]
+    )
+    mocks.getAgentSession.mockImplementation((id: string) => (id === 'c1' ? agent : undefined))
+  }
+  const occurrences = (text: string, needle: string): number => text.split(needle).length - 1
+
+  it('GW-2 重新生成（标记文本 + Token，没有 drive）：说明恰一次，来源沿用（压过连接的章），全文与首发逐字相同', async () => {
+    const first = await firstSend()
+    viewOfSent(first.display.content, first.display.tokens)
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
+      await gateway.prompt('c1', first.display.content, undefined, first.display.tokens)
+    })
+    const [text, images, display, drive, source] = prompt.mock.calls[0]!
+    expect(text).toBe(first.text)
+    expect(occurrences(text, '[Sent by')).toBe(1)
+    expect(images).toBeUndefined()
+    expect(display).toStrictEqual(first.display)
+    expect(drive).toBeUndefined()
+    expect(source).toStrictEqual(SOURCE)
+  })
+
+  it('GW-2 运行中发来的那条：回退后发「去掉插话说明的标记文本」比对成功、来源沿用，全文 = 首发减插话后缀', async () => {
+    const first = await firstSend()
+    const noted = midRunNoteDisplay(TASK, first.display)
+    const firstFull = `${first.text}${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`
+    viewOfSent(noted.content, noted.tokens)
+    // useChatActions 发回来的样子
+    const content = withoutMidRunNote(noted.content, noted.tokens)
+    const tokens = tokensWithoutMidRunNote(noted.tokens)
+    expect(content).toBe(first.display.content)
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
+      await gateway.prompt('c1', content, undefined, tokens)
+    })
+    const [text, , display, , source] = prompt.mock.calls[0]!
+    expect(source).toStrictEqual(SOURCE)
+    expect(`${text}${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`).toBe(firstFull)
+    expect(text).toBe(first.text)
+    expect(text).not.toContain(MID_RUN_NOTE_TEXT)
+    expect(display).toStrictEqual(first.display)
+  })
+
+  it('GW-2 对照：不是被驱动的 IPC prompt 没有侧车、没有说明', async () => {
+    await remotely(async () => {
+      await gateway.prompt('c1', 'typed by a human')
+    })
+    expect(prompt.mock.calls).toStrictEqual([
+      ['typed by a human', undefined, undefined, undefined, REMOTE, undefined]
+    ])
+  })
+
+  it('GW-3 回退后只发原文（回填草稿的样子）：沿用驱动来源，模型文本只有原文，没有说明，没有侧车', async () => {
+    const first = await firstSend()
+    viewOfSent(first.display.content, first.display.tokens)
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(prompt.mock.calls).toStrictEqual([
+      [TASK, undefined, undefined, undefined, SOURCE, undefined]
+    ])
+  })
+
+  it('GW-3 运行中发来的那条同样：两枚系统 Token 都不算原文', async () => {
+    const first = await firstSend()
+    const noted = midRunNoteDisplay(TASK, first.display)
+    viewOfSent(noted.content, noted.tokens)
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(prompt.mock.calls).toStrictEqual([
+      [TASK, undefined, undefined, undefined, SOURCE, undefined]
+    ])
+  })
+
+  it('GW-3 改过的文字是人的话：连接的章，只给一次的记录撤掉', async () => {
+    const first = await firstSend()
+    viewOfSent(first.display.content, first.display.tokens)
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
+      await gateway.prompt('c1', `${TASK}, but keep README`)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(sourceOf(0)).toStrictEqual(REMOTE)
+    expect(sourceOf(1)).toStrictEqual(REMOTE)
+  })
+
+  it('GW-3 对照：触发消息回填原文仍是连接的章（RS-15），ownWords 只给驱动来源', async () => {
+    const TRIGGER = { kind: 'trigger', trigger: 'timer.fired', bot: 'ticker' } as const
+    const built = triggerEventMessage({
+      message: TASK,
+      fence: '<trigger_event trigger="timer.fired">\nfiredAt: x\n</trigger_event>',
+      trigger: 'timer.fired',
+      firedLabel: '11-02 18:00'
+    })
+    mocks.getAgentSession.mockReturnValue(
+      agentWith(
+        [
+          {
+            id: 'u9',
+            role: 'user',
+            content: built.display.content,
+            metadata: { inlineTokens: built.display.tokens }
+          }
+        ],
+        [['u9', TRIGGER]]
+      )
+    )
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('t1', 'u9')).toBe(true)
+      await gateway.prompt('t1', TASK)
+    })
+    expect(prompt.mock.calls).toStrictEqual([
+      [TASK, undefined, undefined, undefined, REMOTE, undefined]
+    ])
   })
 })

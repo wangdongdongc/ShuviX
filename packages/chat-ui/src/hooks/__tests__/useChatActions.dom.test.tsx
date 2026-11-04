@@ -13,6 +13,7 @@
  *             带上新 user 条目 → 占位撤（Q-P3-07）；inputText 与草稿不动
  *   P3-10b-19 回退入口的门控（PIN-07）：乐观占位没有回退；视图 `capabilities.rollback` 为 false（旧格式 /
  *             none / 还没有视图）→ 没有回退 / 重新生成；durable 视图有（ThreadDrawer 与 Conversation 同一接线）
+ *   CH-4      重新生成别的会话发来的那条（发送方 + 插话说明）：prompt 的 content 与 tokens 留发送方、去插话说明，乐观占位同样
  *   UCT-1     重新生成一条触发消息：事件跟着重发 —— prompt 的 text 是带标记的 content、inlineTokens 是原 Token，
  *             乐观占位也带（与插话说明的 RG-1 / RG-2 相反）
  *
@@ -41,6 +42,7 @@ import {
   midRunNoteDisplay,
   midRunNoteToken
 } from '@shuvix/chat-protocol/midRunNote'
+import { SESSION_SENDER_UID, withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import { triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 
 interface Call {
@@ -634,5 +636,38 @@ describe('重新生成一条触发消息', () => {
     expect(prompts[0]![0].text).toBe(display.content)
     expect(prompts[0]![0].inlineTokens).toStrictEqual(display.tokens)
     expect(pendingAtPrompt).toEqual([{ content: display.content, tokens: display.tokens }])
+  })
+})
+
+describe('重新生成别的会话发来的那条', () => {
+  const SENDER = { kind: 'parent-session', sessionId: 'P1', title: 'T' } as const
+
+  it('CH-4 发送方 + 插话说明：prompt 收到的 content 与 tokens 留发送方、去插话说明；乐观占位同样', async () => {
+    const sent = withSessionSender('do it', undefined, SENDER).display
+    const noted = midRunNoteDisplay('do it', sent)
+    expect(Object.keys(noted.tokens).sort()).toEqual([MID_RUN_NOTE_UID, SESSION_SENDER_UID].sort())
+    seed([user('3', noted.content, noted.tokens), assistant('4')])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('4'))
+
+    expect(names()).toEqual(['message.rollback', 'agent.init', 'agent.prompt'])
+    expect(callsOf('message.rollback')).toEqual([[{ sessionId: SID, messageId: '3' }]])
+    expect(callsOf('agent.prompt')).toEqual([
+      [{ sessionId: SID, text: sent.content, inlineTokens: sent.tokens }]
+    ])
+    expect(sent.content).toBe(`do it${makeTokenMarker(SESSION_SENDER_UID)}`)
+    expect(pendingAtPrompt).toEqual([{ content: sent.content, tokens: sent.tokens }])
+  })
+
+  it('CH-4 只有发送方：原样重发', async () => {
+    const sent = withSessionSender('do it', undefined, SENDER).display
+    seed([user('3', sent.content, sent.tokens), assistant('4')])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('4'))
+
+    expect(callsOf('agent.prompt')).toEqual([
+      [{ sessionId: SID, text: sent.content, inlineTokens: sent.tokens }]
+    ])
+    expect(pendingAtPrompt).toEqual([{ content: sent.content, tokens: sent.tokens }])
   })
 })
