@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 
 /**
- * 消息多久没上屏才画骨架。实测切到一条会话到消息可见约 110–150ms（长短会话差别不大）：这时什么都不画，
- * 一画就是闪一下，还要因为下面的最短时长多等
+ * 消息多久没上屏才画骨架。实测点开会话到消息可见：短会话 115–150ms，内容多的（代码块、表格）200–260ms，
+ * 渲染进程 CPU 降到 1/2 时最长约 335ms，降到 1/3 时 360–450ms。门槛之内什么都不画：一画就是闪一下，
+ * 已经好了的消息还要被下面的最短时长多挡一段
  */
-const SKELETON_DELAY_MS = 200
+const SKELETON_DELAY_MS = 400
 /** 骨架一旦上屏至少留这么久：刚画出来就撤，同样是闪一下 */
 const SKELETON_MIN_SHOWN_MS = 250
 

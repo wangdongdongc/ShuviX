@@ -1,8 +1,8 @@
 /**
  * 骨架只属于加载历史：没有历史要等的时候，再慢也不画（chat-ui Conversation 的 awaitsHistory）。
- * 从前新会话的第一句话也算「打开」，渲染进程一忙，列表定位超过 200ms，骨架就盖住刚发出去的话。
+ * 从前新会话的第一句话也算「打开」，渲染进程一忙，列表定位超过门槛，骨架就盖住刚发出去的话。
  *
- *   SKEL-1 欢迎页发第一句话，渲染进程很忙（CPU 降到 1/6），模型也迟迟不回：骨架一次都不出现，这句话上屏
+ *   SKEL-1 欢迎页发第一句话，渲染进程很忙（CPU 降到 1/20，1/6 时列表定位比骨架的门槛快，抓不到），模型也迟迟不回：骨架一次都不出现，这句话上屏
  *   SKEL-2 从没发过消息的会话，主进程停住、视图迟到：骨架一次都不出现，等来的是空态
  *   SKEL-3 对照：有记录的会话同样停住主进程：骨架出现（上面两条不是因为这招不灵才过的）
  *
@@ -20,7 +20,7 @@ const USAGE = { prompt: 200, completion: 50 }
 const TITLES = { never: 'SKEL-never', used: 'SKEL-used' } as const
 const EMPTY = '[data-conversation-empty]'
 const SKELETON = '[data-conversation-skeleton]'
-/** 主进程停多久：远超骨架的 200ms */
+/** 主进程停多久：远超骨架的 400ms */
 const STALL_MS = 900
 const FIRST_MESSAGE = 'first message'
 
@@ -97,12 +97,12 @@ describe('没有历史要等，不画骨架', () => {
     })
     provider.script({ text: 'title', usage: USAGE })
     await arm()
-    await app.main.send('Emulation.setCPUThrottlingRate', { rate: 6 })
+    await app.main.send('Emulation.setCPUThrottlingRate', { rate: 20 })
     try {
       await chat.typeAndSend(FIRST_MESSAGE)
       await until(() => provider.holding(), 'the model is holding its reply')
       await until(async () => (await shot()).shownAt > 0, 'the message is visible')
-      // 骨架要来早该来了（200ms）：多等一段，模型还是没回
+      // 骨架要来早该来了（400ms）：多等一段，模型还是没回
       await sleep(600)
       expect(provider.holding()).toBe(true)
     } finally {

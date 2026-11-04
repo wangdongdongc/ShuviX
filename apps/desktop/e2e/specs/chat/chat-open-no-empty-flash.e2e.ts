@@ -1,9 +1,9 @@
 /**
  * 打开一条有记录的会话：空态（会话设置面板）一次都不出现，等视图到了直接是消息（chat-ui Conversation 的空态门）。
  * 从前只看「消息是空的」，而视图到达之前消息本来就是空的，于是每次切会话都先闪一下设置面板。
- * 消息上屏得慢时画骨架（ConversationSkeleton）：过 200ms 才出现，出现了至少留 250ms，消息可见了才撤。
+ * 消息上屏得慢时画骨架（ConversationSkeleton）：过 400ms 才出现，出现了至少留 250ms，消息可见了才撤。
  *
- *   OPEN-1 两条有记录的会话来回切：每次 DOM 提交都没有空态，目标会话的消息最终上屏；不到 200ms 就上屏的那几次没有骨架
+ *   OPEN-1 两条有记录的会话来回切：每次 DOM 提交都没有空态，目标会话的消息最终上屏；不到 400ms 就上屏的那几次没有骨架
  *   OPEN-2 从欢迎页（没有当前会话）打开：同上
  *   OPEN-3 停在有记录的会话上重载窗口：同上（整个页面从头来，看守脚本在页面脚本之前装好）
  *   OPEN-4 真正的空会话：空态照常出现并留在那里
@@ -29,7 +29,7 @@ const LONG_ANSWER = Array.from(
 ).join('\n\n')
 const EMPTY = '[data-conversation-empty]'
 const SKELETON = '[data-conversation-skeleton]'
-/** 主进程停多久：远超骨架的 200ms + 250ms，骨架非出现不可 */
+/** 主进程停多久：远超骨架的 400ms + 250ms，骨架非出现不可 */
 const STALL_MS = 900
 
 let app: E2EApp
@@ -129,8 +129,8 @@ async function openWithHistory(title: string, sid: string): Promise<number> {
   await until(async () => (await shot()).shownAt > 0, `${title}: messages on screen`)
   const seen = await shot()
   expect(seen.emptyCommits).toBe(0)
-  // 上屏得比骨架的 200ms 还早：骨架不能出现（这次慢不慢由机器定，只有快的那几次才能这么断言）
-  if (seen.shownAt - seen.t0 < 190) expect(seen.skeletonAt).toBe(0)
+  // 上屏得比骨架的 400ms 还早：骨架不能出现（这次慢不慢由机器定，只有快的那几次才能这么断言）
+  if (seen.shownAt - seen.t0 < 390) expect(seen.skeletonAt).toBe(0)
   return seen.shownAt - seen.t0
 }
 
@@ -268,8 +268,8 @@ describe('视图迟到', () => {
         `click → messages ${(seen.shownAt - seen.t0).toFixed(0)}ms`
     )
     expect(seen.emptyCommits).toBe(0)
-    // 200ms 之前没有骨架（看守从布防算起，点击又晚 30ms）
-    expect(seen.skeletonAt - seen.t0).toBeGreaterThanOrEqual(200)
+    // 400ms 之前没有骨架（看守从布防算起，点击又晚 30ms）
+    expect(seen.skeletonAt - seen.t0).toBeGreaterThanOrEqual(400)
     // 主进程停着的时候骨架已经在屏上了：不是恢复之后才画的
     expect(seen.skeletonAt - seen.t0).toBeLessThan(STALL_MS)
     expect(seen.skeletonGoneAt - seen.skeletonAt).toBeGreaterThanOrEqual(240)

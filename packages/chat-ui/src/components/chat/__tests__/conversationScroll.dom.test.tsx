@@ -4,7 +4,7 @@
  *
  *   - 挂载门：视图到了（或有乐观占位）才挂 Virtuoso、才画空态；视图未到时什么都不挂（不画空态、
  *     不出按钮）。挂上时的初始位置是 `{index:'LAST', align:'end'}`（真底，含 Footer）；
- *   - 骨架：消息 200ms 还没上屏才画，上屏后至少留 250ms；列表在骨架下面先挂、定位好才撤；订阅失败换成失败提示；
+ *   - 骨架：消息 400ms 还没上屏才画，上屏后至少留 250ms；列表在骨架下面先挂、定位好才撤；订阅失败换成失败提示；
  *   - 宽限期：挂上后先不认「不在底部」，直到第一次报「在底部」或过了 800ms；
  *   - 点击：离底超过三屏（严格大于）或拿不到滚动区 → `behavior:'auto'`，否则 `'smooth'`；
  *   - 换会话（key 变）整个重来；按钮的显示 / 隐藏属性、aria-label；运行中且显示时的运行指示；
@@ -322,9 +322,9 @@ describe('挂载门', () => {
 })
 
 describe('骨架', () => {
-  it('SKL-1 视图迟迟不到：200ms 之前什么都没有，到点才是骨架；不画空态、不挂列表、读屏跳过', () => {
+  it('SKL-1 视图迟迟不到：400ms 之前什么都没有，到点才是骨架；不画空态、不挂列表、读屏跳过', () => {
     render(S1)
-    advance(199)
+    advance(399)
     expect(skeletonPresent()).toBe(false)
     expect(emptyPresent()).toBe(false)
 
@@ -342,12 +342,12 @@ describe('骨架', () => {
     expect(button()).toBeNull()
   })
 
-  it('SKL-2 视图到了、列表也在 200ms 内定位好：骨架从头到尾不出现', () => {
+  it('SKL-2 视图到了、列表也在 400ms 内定位好：骨架从头到尾不出现', () => {
     render(S1)
     advance(100)
     loadView(S1, history(S1))
     expect(virt.mounts).toBe(1)
-    advance(99)
+    advance(299)
     land()
     advance(1000)
     expect(skeletonPresent()).toBe(false)
@@ -359,7 +359,7 @@ describe('骨架', () => {
     advance(50)
     loadView(S1, history(S1))
     expect(virt.mounts).toBe(1)
-    advance(149)
+    advance(349)
     expect(skeletonPresent()).toBe(false)
     advance(1)
     expect(skeletonPresent()).toBe(true)
@@ -376,7 +376,7 @@ describe('骨架', () => {
 
   it('SKL-4 骨架上屏后视图才到：列表当场在骨架下面挂上（不等骨架撤），落在真底，只挂一次', () => {
     render(S1)
-    advance(200)
+    advance(400)
     advance(10)
     loadView(S1, history(S1))
     expect(skeletonPresent()).toBe(true)
@@ -394,7 +394,7 @@ describe('骨架', () => {
 
   it('SKL-5 骨架已经留够：列表一定位好就撤，不再多等', () => {
     render(S1)
-    advance(200)
+    advance(400)
     advance(1000)
     loadView(S1, history(S1))
     land()
@@ -413,7 +413,7 @@ describe('骨架', () => {
 
   it('SKL-16 初始定位不在底部、骨架已经上屏：留满 250ms 就撤，不等宽限期', () => {
     render(S1)
-    advance(200)
+    advance(400)
     request(S1, `${S1}-u2`)
     loadView(S1, history(S1))
     expect(virt.mountProps[0].initialTopMostItemIndex).toEqual({ index: 2, align: 'start' })
@@ -434,7 +434,7 @@ describe('骨架', () => {
 
   it('SKL-7 等来的是一条空会话：骨架留满后是空态，不挂列表', () => {
     render(S1)
-    advance(200)
+    advance(400)
     loadView(S1, [])
     advance(249)
     expect(skeletonPresent()).toBe(true)
@@ -446,12 +446,12 @@ describe('骨架', () => {
 
   it('SKL-8 换会话：骨架不带过去，计时从头来；切回来也一样', () => {
     render(S1)
-    advance(200)
+    advance(400)
     expect(skeletonPresent()).toBe(true)
 
     render(S2)
     expect(skeletonPresent()).toBe(false)
-    advance(199)
+    advance(399)
     expect(skeletonPresent()).toBe(false)
     advance(1)
     expect(skeletonPresent()).toBe(true)
@@ -463,14 +463,14 @@ describe('骨架', () => {
   it('SKL-9 运行中的余项、视图迟迟不到：画骨架，不是孤零零的流式占位', () => {
     act(() => useChatStore.getState().markSessionRunning(S1, true))
     render(S1)
-    advance(200)
+    advance(400)
     expect(skeletonPresent()).toBe(true)
     expect(virt.mounts).toBe(0)
   })
 
   it('SKL-10 骨架显示中发出第一句话：列表带着这句话挂上，骨架留满就撤，不等定位', () => {
     render(S1)
-    advance(200)
+    advance(400)
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     expect(virt.mountProps[0].data.map((item) => item.msg.id)).toContain('pending-prompt')
     advance(249)
@@ -493,7 +493,7 @@ describe('骨架', () => {
     act(() => useChatStore.getState().setPendingPrompt(S1, pendingPromptMessage(S1, 'hello')))
     render(S1)
     expect(virt.mounts).toBe(1)
-    advance(400)
+    advance(600)
     expect(skeletonPresent()).toBe(false)
     loadView(S1, history(S1))
     advance(1000)
@@ -532,14 +532,14 @@ describe('骨架', () => {
   it('SKL-21 发过消息的会话、视图迟迟不到：照常画骨架', () => {
     setRow(S1, { createdAt: 1000, lastActiveAt: 1001 })
     render(S1)
-    advance(200)
+    advance(400)
     expect(skeletonPresent()).toBe(true)
   })
 
   it('SKL-22 会话行说没发过消息、视图却带着历史到了（fork）：不补画骨架，列表照常挂上', () => {
     setRow(S1, { createdAt: 1000, lastActiveAt: 1000 })
     render(S1)
-    advance(300)
+    advance(600)
     loadView(S1, history(S1))
     expect(virt.mounts).toBe(1)
     advance(1000)
@@ -548,7 +548,7 @@ describe('骨架', () => {
 
   it('SKL-12 订阅失败：骨架留满后换成失败提示，不画空态', () => {
     render(S1)
-    advance(200)
+    advance(400)
     act(() => markSessionViewFailed(S1, true))
     expect(skeletonPresent()).toBe(true)
     advance(250)
@@ -558,7 +558,7 @@ describe('骨架', () => {
     expect(virt.mounts).toBe(0)
   })
 
-  it('SKL-13 订阅在 200ms 内就失败：直接是失败提示，骨架不出现', () => {
+  it('SKL-13 订阅在 400ms 内就失败：直接是失败提示，骨架不出现', () => {
     render(S1)
     act(() => markSessionViewFailed(S1, true))
     expect(failedPresent()).toBe(true)
