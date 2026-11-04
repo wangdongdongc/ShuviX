@@ -2359,6 +2359,10 @@ export interface SuggestionsPane {
   clickImage(index: number, group?: number): Promise<boolean>
   /** 带「采纳的提议」标签的用户气泡：消息 id + 正文 */
   acceptedBubbles(): Promise<Array<{ id: string; text: string }>>
+  /** 最后一张助手卡的正文（一条回复一段，不含过程区的中间文本） */
+  answerParts(): Promise<string[]>
+  /** 点最后一张助手卡的「显示源码」（`titleOfShowSource` 是当前语言的按钮标题），交回源码文字；按钮不在 → null */
+  showAnswerSource(titleOfShowSource: string): Promise<string | null>
 }
 
 export function suggestionsPane(main: CdpClient): SuggestionsPane {
@@ -2442,7 +2446,26 @@ export function suggestionsPane(main: CdpClient): SuggestionsPane {
             id: el.getAttribute('data-msg-id') ?? '',
             text: (el.querySelector('.whitespace-pre-wrap')?.textContent ?? '').trim()
           }))`
-      )
+      ),
+    answerParts: () =>
+      main.eval<string[]>(`(() => {
+        const card = [...document.querySelectorAll('[data-msg-role="assistant"]')].pop()
+        return [...(card?.querySelectorAll('.min-w-0 > .markdown-body') ?? [])].map((el) =>
+          (el.textContent ?? '').trim()
+        )
+      })()`),
+    showAnswerSource: (titleOfShowSource) =>
+      main.eval<string | null>(`(() => {
+        const card = [...document.querySelectorAll('[data-msg-role="assistant"]')].pop()
+        const button = [...(card?.querySelectorAll('[data-message-actions] button') ?? [])].find(
+          (b) => b.getAttribute('title') === ${JSON.stringify(titleOfShowSource)}
+        )
+        if (!button) return null
+        button.click()
+        return new Promise((resolve) =>
+          requestAnimationFrame(() => resolve(card.querySelector('pre.code-surface')?.textContent ?? null))
+        )
+      })()`)
   }
 }
 

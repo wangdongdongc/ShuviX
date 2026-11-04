@@ -9,6 +9,8 @@
  *       user 正是那条的 message；会话里多出一条用户消息，正文就是它、`metadata.origin` 是 `{kind: local, suggestion:
  *       {messageId: 那张助手卡的 id, toolCallId, index: 1}}`；屏上那条用户气泡带 `[data-origin-suggestion]`、正文相同；
  *       卡片 1 `data-suggestion-accepted`、卡片 0 压淡、没有按钮了；再经 IPC 采纳同一组 → closed，不再发请求
+ *   S-2 整段回复和 suggest 在同一次调用里，下一次调用只补一句收尾（真实模型常这么写）：屏上两段都是正文，「显示源码」
+ *       是整段，不是只有收尾那句；调用本身也有一行工具行（已完成）
  *
  * 选择器全部走 `harness/pages.ts` 的 `suggestionsPane`。
  */
@@ -178,5 +180,39 @@ describe('采纳一条提议', () => {
     expect(again).toStrictEqual({ success: false, reason: 'closed' })
     await sleep(500)
     expect(provider.chatRequestCount()).toBe(3)
+  })
+
+  it('S-2 回复写在 suggest 那次调用里、之后只补一句：显示源码是整段', async () => {
+    const LONG = 'The whole answer goes here.'
+    const TAIL = 'Pick one below if you like.'
+    provider.reset()
+    provider.script(
+      {
+        text: LONG,
+        toolCalls: [
+          {
+            id: 'call_suggest_2',
+            name: 'suggest',
+            args: JSON.stringify({ suggestions: SUGGESTIONS })
+          }
+        ],
+        usage: { prompt: 90, completion: 10 }
+      },
+      { text: TAIL, usage: { prompt: 110, completion: 5 } }
+    )
+
+    const since = await events.mark()
+    await chat.typeAndSend('explain it')
+    await events.waitFor('agent_end', { sessionId: sid, since })
+    await chat.waitIdle()
+
+    await until(async () => {
+      const parts = await cards.answerParts()
+      return parts.length === 2 ? parts : null
+    }, 'answer rendered in two parts')
+    expect(await cards.answerParts()).toStrictEqual([LONG, TAIL])
+    const rows = (await chat.toolRows()).filter((row) => row.name === 'suggest')
+    expect(rows.at(-1)?.status).toBe('done')
+    expect(await cards.showAnswerSource('Show source')).toBe(`${LONG}\n\n${TAIL}`)
   })
 })

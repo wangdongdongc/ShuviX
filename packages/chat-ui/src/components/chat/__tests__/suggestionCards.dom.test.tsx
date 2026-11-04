@@ -14,8 +14,8 @@
  *   C-7 只读：宿主没有 suggestion API → 没有按钮（开着也一样）；没有 Provider → 没有按钮；
  *       Provider 里没有这一组的状态 → 当作关了
  *   C-8 参数里一条合法的都没有 → 什么都不画
- *   C-9 放在 AssistantBubble 里：落定的提议画在卡片最底下、终答之后，不进步骤组（两侧的 read 并成一组，计数不含它）；
- *       还在执行 / 出错的 suggest 调用照普通工具块画，没有卡片
+ *   C-9 放在 AssistantBubble 里：落定的提议画在卡片最底下、终答之后，调用本身照普通工具留在过程区（单独一行，或与相邻
+ *       的步骤并成一组，计数算它）；还在执行 / 出错的 suggest 调用只有工具块，没有卡片
  *
  * 带图的提议（docs/show-image-design.md §6）：快照在调用详情里（`details.images`，下标同参数），图经 mediaUrl seam 取
  * （这些用例包 `MediaUrlProvider`）：
@@ -363,7 +363,7 @@ describe('C-9 在助手卡片里的位置', () => {
     render(createElement(AssistantBubble, { msgs }), OPEN)
   }
 
-  it('C-9 落定的 suggest：画在终答之后；夹在两个 read 之间也不进步骤组（两个 read 并成一组，计数 2）', () => {
+  it('C-9 落定的 suggest：卡片在终答之后；调用夹在两个 read 之间时并进步骤组（计数 3），卡片不进去', () => {
     renderBubble([
       assistant(MSG, [read('r1'), suggestBlock(), read('r2')], SID),
       assistant('a2', [text('Final answer here')], SID)
@@ -371,11 +371,11 @@ describe('C-9 在助手卡片里的位置', () => {
     const suggestions = container.querySelector('[data-suggestions]')!
     expect(suggestions).not.toBeNull()
     expect(buttons()).toHaveLength(3)
-    // 一个合并行，计数 2（两次 read），里面没有 suggest
+    // 一个合并行，计数 3（两次 read + suggest）；卡片不在合并行里
     const groups = [...container.querySelectorAll('[data-step-group]')]
     expect(groups).toHaveLength(1)
-    expect(container.querySelector('[data-group-count]')!.textContent).toBe('2')
-    expect(container.querySelector('[data-tool-name="suggest"]')).toBeNull()
+    expect(container.querySelector('[data-group-count]')!.textContent).toBe('3')
+    expect(groups[0]!.contains(suggestions)).toBe(false)
     // DOM 顺序：终答正文在前，提议卡片在后
     const answer = [...container.querySelectorAll('.markdown-body')].find((el) =>
       (el.textContent ?? '').includes('Final answer here')

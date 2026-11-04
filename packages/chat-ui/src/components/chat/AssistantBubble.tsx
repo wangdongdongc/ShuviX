@@ -33,7 +33,7 @@ import { ToolCallBlock } from './ToolCallBlock'
 import { StepGroupView } from './StepGroupView'
 import { groupConsecutiveSteps } from './stepGrouping'
 import { SuggestionCards } from './SuggestionCards'
-import { isSettledSuggestBlock } from '@shuvix/chat-protocol/suggestions'
+import { SUGGEST_TOOL_NAME, isSettledSuggestBlock } from '@shuvix/chat-protocol/suggestions'
 import {
   useChatStore,
   selectStreamingContent,
@@ -51,10 +51,18 @@ import { useChatDensity } from '../../host/chatHostContext'
 const NO_TOOL_CALLS: ReturnType<typeof selectCompletedStreamingToolCalls> = []
 const NO_SERVERS: ReturnType<typeof selectMcpConnecting> = []
 
+/** 正文里两条回复的文字之间（显示源码、复制、朗读拿到的都是这一份） */
+const ANSWER_PART_SEPARATOR = '\n\n'
+
+/** 这条消息没有别的工具调用（只调了 suggest，或什么工具都没调）：它的文字还算在答复里 */
+function callsOnlySuggest(msg: AssistantMessage): boolean {
+  return msg.blocks.every((b) => b.type !== 'tool' || b.toolName === SUGGEST_TOOL_NAME)
+}
+
 interface AssistantBubbleProps {
   /**
    * 一张卡覆盖的连续 assistant 消息（= 连续的 assistant entry）。
-   * 末条若不含工具块即本轮终答，它的 text 块是「正文」，其余全部进过程区。
+   * 卡尾那几条（工具调用只有 suggest 或没有工具调用）的 text 块是「正文」，其余全部进过程区。
    */
   msgs: AssistantMessage[]
   isStreaming?: boolean
@@ -118,37 +126,50 @@ export const AssistantBubble = memo(function AssistantBubble({
   )
   const mcpConnecting = useChatStore((s) => (isStreaming ? selectMcpConnecting(s) : NO_SERVERS))
 
-  // 过程区的块 / 终答正文：末条不含工具块 = 本轮终答，它的 text 块下沉为正文；
-  // 其余（含中间轮自己的 text）按原序留在过程区
-  // 落定的提议（suggest 调用）不进过程区：它们画在卡片最底下、终答之后 —— 读完回复才轮到它们，也不能被并进
-  // 步骤组折起来（那等于没提）。还在执行 / 出错的调用照普通工具块留在过程区
-  const { processBlocks, answerText, suggestionBlocks } = useMemo(() => {
+  // 过程区的块 / 终答正文：卡尾连续几条「没有别的工具调用」的消息，它们的 text 块下沉为正文；
+  // 其余（含中间轮自己的 text）按原序留在过程区。
+  // suggest 不算一步工作：模型常把整段回复和 suggest 写在同一次调用里，工具立刻返回后再补一句收尾 —— 若只把
+  // 最后一条算作正文，显示源码、复制、朗读都只拿到那一句
+  // 落定的提议（suggest 调用）另外画成卡片，在卡片最底下、终答之后 —— 读完回复才轮到它们，也不能被并进步骤组
+  // 折起来（那等于没提）。调用本身和别的工具一样留在过程区：用户要看得到 AI 做过的每一步。
+  // 还在执行 / 出错的调用只有这一行，没有卡片
+  const { processBlocks, leadParts, answerText, suggestionBlocks } = useMemo(() => {
     const last = msgs[msgs.length - 1]
-    const isFinal = !last.blocks.some((b) => b.type === 'tool')
+    let answerStart = msgs.length
+    while (answerStart > 0 && callsOnlySuggest(msgs[answerStart - 1])) answerStart--
+    const textOf = (m: AssistantMessage): string =>
+      m.blocks
+        .filter((b): b is Extract<AssistantBlock, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
     const process: AssistantBlock[] = []
+    const lead: Array<{ messageId: string; text: string }> = []
     const suggestions: Array<{
       messageId: string
       block: Extract<AssistantBlock, { type: 'tool' }>
     }> = []
-    for (const m of msgs) {
+    msgs.forEach((m, index) => {
+      const inAnswer = index >= answerStart
+      if (inAnswer && m !== last) {
+        const part = textOf(m)
+        if (part.trim() !== '') lead.push({ messageId: m.id, text: part })
+      }
       for (const b of m.blocks) {
         if (b.type === 'tool' && isSettledSuggestBlock(b)) {
           suggestions.push({ messageId: m.id, block: b })
-          continue
         }
-        if (isFinal && m === last && b.type === 'text') continue
+        if (inAnswer && b.type === 'text') continue
         // 中间文本里的 ```artifact 引用要按它所在那条回复取钉住的版本（StepGroupView 按块查回 id）
         if (b.type === 'text') noteTextBlockMessage(b, m.id)
         process.push(b)
       }
+    })
+    return {
+      processBlocks: process,
+      leadParts: lead,
+      answerText: answerStart < msgs.length ? textOf(last) : '',
+      suggestionBlocks: suggestions
     }
-    const text = isFinal
-      ? last.blocks
-          .filter((b): b is Extract<AssistantBlock, { type: 'text' }> => b.type === 'text')
-          .map((b) => b.text)
-          .join('')
-      : ''
-    return { processBlocks: process, answerText: text, suggestionBlocks: suggestions }
   }, [msgs])
 
   // 相邻的步骤（思考 / 已完成的工具调用）合并为一行 + 次数；中间文本切段，其余块原样透传
@@ -177,6 +198,11 @@ export const AssistantBubble = memo(function AssistantBubble({
         storeStreamingContent || (held && held.msgs === msgs ? held.content : '')
       )
     : answerText
+  // 整段答复：显示源码、复制、朗读都对着它；画的时候仍一条回复一段（引用块要按各自那条回复取钉住的版本）
+  const fullAnswer = [
+    ...leadParts.map((p) => p.text),
+    ...(displayContent ? [displayContent] : [])
+  ].join(ANSWER_PART_SEPARATOR)
   const restore = useRestoreForCopy()
   // 落盘后的思考已经是过程区里的块（按原序），这里只补流式期间还在缓冲里的那段
   const liveThinking =
@@ -197,7 +223,7 @@ export const AssistantBubble = memo(function AssistantBubble({
 
   const handleCopy = (): void => {
     // 复制出去的是界面上看到的样子：脱敏的占位符换回真值
-    copyToClipboard(restore(displayContent))
+    copyToClipboard(restore(fullAnswer))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -220,7 +246,7 @@ export const AssistantBubble = memo(function AssistantBubble({
         {/* 过程区（步骤 + 思考）— 有正文跟随时只留一段间距收尾，不画分割线也不用左侧竖轴：
             步骤行已经比正文轻一级，再加一条线只是多一道视觉噪音 */}
         {(blockGroups.length > 0 || liveThinkingRow) && (
-          <div className={displayContent ? 'mb-2.5' : 'mb-0.5'}>
+          <div className={fullAnswer ? 'mb-2.5' : 'mb-0.5'}>
             {blockGroups.length > 0 && (
               <div className="space-y-0.5">
                 {blockGroups.map((group) => (
@@ -233,28 +259,39 @@ export const AssistantBubble = memo(function AssistantBubble({
         )}
 
         {/* 终答正文：Markdown / 原始文本双形态 */}
-        {displayContent &&
-          (showRaw ? (
-            <pre className="code-surface text-sm text-text-primary font-mono">
-              <RedactedText text={displayContent} />
-            </pre>
-          ) : (
-            <div className="markdown-body text-sm">
-              {/* 代码块自己看不出消息写没写完（mermaid 写完才出错误卡、才能导出），由这一层告诉它 */}
-              <MarkdownStreamingContext.Provider value={!!isStreaming}>
-                {/* 交互图要确切知道自己的围栏闭合没有，靠节点位置切回这段源文本 */}
-                <MarkdownSourceContext.Provider value={isStreaming ? displayContent : null}>
-                  {/* 引用块按这条回复取它写下时钉住的版本；流式中还没有条目 id，照当前内容显示 */}
-                  <MarkdownMessageIdContext.Provider value={isStreaming ? null : anchor.id}>
-                    <MarkdownText text={displayContent} />
-                  </MarkdownMessageIdContext.Provider>
-                </MarkdownSourceContext.Provider>
-              </MarkdownStreamingContext.Provider>
-              {isStreaming && displayContent && !streamingToolCall && (
-                <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
-              )}
+        {showRaw && fullAnswer && (
+          <pre className="code-surface text-sm text-text-primary font-mono">
+            <RedactedText text={fullAnswer} />
+          </pre>
+        )}
+        {!showRaw &&
+          leadParts.map((part, index) => (
+            <div
+              key={part.messageId}
+              className={`markdown-body text-sm${index < leadParts.length - 1 || displayContent ? ' mb-2.5' : ''}`}
+            >
+              <MarkdownMessageIdContext.Provider value={part.messageId}>
+                <MarkdownText text={part.text} />
+              </MarkdownMessageIdContext.Provider>
             </div>
           ))}
+        {!showRaw && displayContent && (
+          <div className="markdown-body text-sm">
+            {/* 代码块自己看不出消息写没写完（mermaid 写完才出错误卡、才能导出），由这一层告诉它 */}
+            <MarkdownStreamingContext.Provider value={!!isStreaming}>
+              {/* 交互图要确切知道自己的围栏闭合没有，靠节点位置切回这段源文本 */}
+              <MarkdownSourceContext.Provider value={isStreaming ? displayContent : null}>
+                {/* 引用块按这条回复取它写下时钉住的版本；流式中还没有条目 id，照当前内容显示 */}
+                <MarkdownMessageIdContext.Provider value={isStreaming ? null : anchor.id}>
+                  <MarkdownText text={displayContent} />
+                </MarkdownMessageIdContext.Provider>
+              </MarkdownSourceContext.Provider>
+            </MarkdownStreamingContext.Provider>
+            {isStreaming && displayContent && !streamingToolCall && (
+              <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
+            )}
+          </div>
+        )}
 
         {/* 已完成生成的工具调用（等待执行） */}
         {isStreaming &&
@@ -310,13 +347,13 @@ export const AssistantBubble = memo(function AssistantBubble({
         {/* 操作行 —— 收在正文左下角，与用户消息气泡下方那行同形。
             仅在这条消息真有可操作项时渲染：流式期间全部按钮都不满足条件，
             渲染出来只会在每张卡底部留一条空行。触屏常驻（-ml 让第一颗图标与正文左缘对齐） */}
-        {!isStreaming && (displayContent || onRegenerate || onFork) && (
+        {!isStreaming && (fullAnswer || onRegenerate || onFork) && (
           <div
             data-message-actions=""
             className={`flex items-center text-text-tertiary ${touch ? 'gap-1 mt-1 -ml-2' : 'gap-1 mt-1.5'}`}
           >
             {/* 复制 */}
-            {displayContent && (
+            {fullAnswer && (
               <button
                 onClick={handleCopy}
                 className={actionCls}
@@ -331,12 +368,12 @@ export const AssistantBubble = memo(function AssistantBubble({
               </button>
             )}
             {/* TTS 朗读 */}
-            {displayContent && (
+            {fullAnswer && (
               <button
                 onClick={() =>
                   isThisPlaying || isThisLoading
                     ? stop()
-                    : speak(speakableText(displayContent, t).slice(0, 4000), anchor.id)
+                    : speak(speakableText(fullAnswer, t).slice(0, 4000), anchor.id)
                 }
                 className={actionCls}
                 title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}
@@ -354,7 +391,7 @@ export const AssistantBubble = memo(function AssistantBubble({
               </button>
             )}
             {/* 原始/渲染 切换 */}
-            {displayContent && (
+            {fullAnswer && (
               <button
                 onClick={() => setShowRaw(!showRaw)}
                 className={actionCls}
