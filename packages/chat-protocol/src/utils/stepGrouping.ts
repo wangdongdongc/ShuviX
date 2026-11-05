@@ -4,6 +4,7 @@
  */
 import type { AssistantBlock, AssistantToolBlock } from '../types/chatMessage'
 import { isSettledShowImageBlock } from '../shownImages'
+import { toolAnswersOf } from '../types/toolAnswer'
 import { clipLine } from './clipLine'
 
 /** 能并进合并行的块：思考，或已成功完成的工具调用 */
@@ -27,6 +28,8 @@ function settledStep(block: AssistantBlock): StepBlock | null {
   if (block.type !== 'tool') return null
   if (block.result === undefined || block.isError) return null
   if (!block.toolName) return null
+  // 人答过的调用留在对话里：选择题的问答、审批的决定并进计数徽章就看不见了
+  if (block.toolName === 'ask' || toolAnswersOf(block.details).length > 0) return null
   // 摆给用户的图不是过程步骤：并进计数徽章就等于没给用户看（和中间文本一样切开一段）
   if (isSettledShowImageBlock(block)) return null
   return block

@@ -62,6 +62,8 @@ import { AnsweredByParentBadge, BackgroundBadge, BgTaskRowState } from './BgTask
 import { ReviewedMark, ReviewingIcon } from './ReviewTag'
 import { InvocationView } from './SandboxTag'
 import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
+import { toolAnswersOf } from '@shuvix/chat-protocol/types/toolAnswer'
+import { AskRecord, ToolAnswerLines } from './AnswerRecords'
 import { clipLine } from '../../utils/clipLine'
 import { RedactedText } from './RedactedText'
 import { useRestoreForCopy } from '../../hooks/useRedaction'
@@ -237,11 +239,15 @@ export function ToolCallBlock({
 
   // 当存在挂起的用户输入时,覆盖状态展示为"等待用户响应"(优先级高于 running)；
   // 审查员正在看这次调用时显示「审查中」（它答完才轮到询问卡片或执行）
+  // 人自己拒绝的调用：下面那行回答已经带着红叉，工具行不再报一次错（别的失败照旧）
+  const answers = toolAnswersOf(details)
+  const declinedByYou =
+    status === 'error' && answers.some((a) => a.outcome === 'denied' || a.outcome === 'feedback')
   const statusIcon = hasPendingInput ? (
     <ShieldAlert size={11} className="text-warning" />
   ) : reviewing ? (
     <ReviewingIcon />
-  ) : (
+  ) : declinedByYou ? null : (
     statusConfig[status]
   )
 
@@ -288,6 +294,19 @@ export function ToolCallBlock({
   // （折叠态只有图标 + i18n 标签，按图标/类名认会随主题与图标表腐化），e2e 据此断言
   const rowData = { 'data-tool-name': toolName, 'data-tool-status': status }
 
+  // 人在审批卡片上的决定：工具行下面一行，折叠与展开都留着
+  const answerLines = <ToolAnswerLines notes={answers} />
+
+  // 答完的选择题：问题与答案留在对话里，不再是一行工具调用
+  if (status === 'done' && details?.type === 'ask') {
+    return (
+      <div {...rowData}>
+        <AskRecord details={details} args={args} result={result} />
+        {answerLines}
+      </div>
+    )
+  }
+
   if (!expanded) {
     // 单行摘要 — hover 高亮，点击展开；不带外边距，块间距由消息流统一控制
     return (
@@ -297,6 +316,7 @@ export function ToolCallBlock({
           expandable={canExpand}
           onClick={() => canExpand && setExpanded(true)}
         />
+        {answerLines}
       </div>
     )
   }
@@ -305,6 +325,7 @@ export function ToolCallBlock({
     <div {...rowData}>
       {/* 展开态 — 摘要行原位不动，详情从下方长出（与思考 / 分组同一形态，避免展开时跳版） */}
       <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
+      {answerLines}
       <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
         {/* 外层不限高：diff / 代码 / 裸文本各自是自己那块的唯一滚动主（见 detailViewport.ts） */}
         <div className="py-1 space-y-1.5">

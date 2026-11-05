@@ -12,7 +12,7 @@
  *   AF-7  胶囊删掉再发：不带路径 —— 没发的文件不授权
  *   AF-8  同名不同目录：两枚胶囊（后一枚带目录消歧）、各指各的文件；同一文件加两次只有一枚
  *   AF-9  运行中（steer / followUp 的通道不带 token）：文字里展开路径、带 attachedPaths；之后手打同样的文字不再算添加
- *   AF-10 回答询问的「其它」：展开路径、带 attachedPaths
+ *   AF-10 回答询问在卡片那一行：输入框里添加的文件不进它的 payload
  *   AF-11 斜杠命令：引用展开进参数，attachedPaths 照带
  *   AF-12 回退草稿：胶囊回来，再发照样带路径
  *   AF-13 发送失败放回输入框：胶囊回来，重发照样带路径
@@ -59,8 +59,11 @@ vi.mock('../../../utils/imageProcessing', () => ({
 }))
 
 import { applySessionView, releaseSessionView, useChatStore } from '../../../stores/chatStore'
+import { useChatActions } from '../../../hooks/useChatActions'
 import { InputArea, type InputAreaProps } from '../InputArea'
+import { PendingInputsPanel } from '../PendingInputsPanel'
 import { V, resetStore, store } from '../../../__tests__/support/views'
+import { pressKey, typeInto } from '../../../__tests__/support/sendFailure'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -119,17 +122,18 @@ const flush = async (): Promise<void> => {
   })
 }
 
-async function mount(vision = true): Promise<void> {
+async function mount(vision = true, props: InputAreaProps = {}): Promise<void> {
   useChatStore.setState({ modelSupportsVision: vision })
   ;(window as unknown as { api: unknown }).api = buildApi()
   await act(async () => {
     const Area = InputArea as (props: InputAreaProps) => React.JSX.Element
-    root.render(createElement(Area, { inline: true }))
+    root.render(createElement(Area, { inline: true, ...props }))
   })
   await flush()
 }
 
-const textarea = (): HTMLTextAreaElement => container.querySelector('textarea')!
+const textarea = (): HTMLTextAreaElement =>
+  container.querySelector<HTMLTextAreaElement>('textarea:not([data-other-input])')!
 const attachInput = (): HTMLInputElement | null =>
   container.querySelector<HTMLInputElement>('input[data-attach-input]')
 const sendError = (): string | null =>
@@ -405,31 +409,33 @@ describe('发送', () => {
     expect(again.attachedPaths).toBeUndefined()
   })
 
-  it('AF-10 回答询问的「其它」：展开路径、带 attachedPaths', async () => {
-    await mount(true)
-    act(() =>
-      applySessionView(
-        's1',
-        V('s1', {
-          run: { state: 'busy' },
-          asks: [
-            {
-              id: 'r1',
-              kind: 'ask',
-              toolName: 'bash',
-              toolCallId: 'tc',
-              payload: { command: 'ls' }
-            }
-          ] as never
-        })
-      )
-    )
+  it('AF-10 输入框里添加的文件不进卡片那一行的 payload', async () => {
+    function Panel(): React.JSX.Element {
+      const { handleInputResponse } = useChatActions('s1')
+      return createElement(PendingInputsPanel, { onResponse: handleInputResponse })
+    }
+    await mount(true, { accessory: createElement(Panel) })
+    const ask = { id: 'r1', kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 } as const
+    act(() => applySessionView('s1', V('s1', { run: { state: 'busy' }, asks: [ask] })))
     await flush()
     await choose([pdf])
-    await pressEnter()
-    const sent = agent.respondToInput.mock.lastCall![0]
-    expect(sent.response).toMatchObject({ kind: 'other', text: `[file: ${PDF_PATH}]` })
-    expect(sent.attachedPaths).toEqual([PDF_PATH])
+    const drafted = textarea().value
+    expect(chips()).toHaveLength(1)
+
+    const row = container.querySelector<HTMLTextAreaElement>('[data-other-input]')!
+    await typeInto(row, 'do something else')
+    await pressKey(row, 'Enter')
+    expect(agent.respondToInput.mock.calls).toEqual([
+      [
+        {
+          sessionId: 's1',
+          requestId: 'r1',
+          response: { kind: 'other', text: 'do something else', secrets: [] }
+        }
+      ]
+    ])
+    expect(textarea().value).toBe(drafted)
+    expect(chips()).toHaveLength(1)
   })
 
   it('AF-11 斜杠命令：引用展开进参数，attachedPaths 照带', async () => {

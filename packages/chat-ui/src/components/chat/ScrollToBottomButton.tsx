@@ -10,6 +10,9 @@ const DOT_DELAYS = [0, 160, 320]
  * 本会话正在跑时它兼作运行指示：平时是三个依次起伏的强调色圆点 + 强调色描边（「下面还在写」），
  * 悬停或键盘聚焦才换回箭头（「点这里回去」）。没在跑就始终是箭头。
  *
+ * 有询问在等人而卡片在下面时（`waiting`）换成一枚带字的提示：卡片已经不像从前那样钉在输入框上，翻历史的时候
+ * 全靠它知道 Agent 在等你。
+ *
  * 不显示时仍在 DOM 里（淡出动画要它），但不接指针、不进 Tab 序、对读屏隐藏；圆点只在显示时才挂，
  * 免得看不见的无限动画一直占着合成。
  * 刻意**不设 z-index** 且在 DOM 里排在输入卡片之前：输入卡片向上展开的浮层（模型选择、斜杠命令、@ 提及）
@@ -18,15 +21,41 @@ const DOT_DELAYS = [0, 160, 320]
 export function ScrollToBottomButton({
   visible,
   running,
+  waiting = null,
   onClick
 }: {
   visible: boolean
   /** 本会话正在运行（一轮还没收尾） */
   running: boolean
+  /** 有询问在等人回答：ask = 审批，choice = 选择题；null = 没有 */
+  waiting?: 'ask' | 'choice' | null
   onClick: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
   const showDots = visible && running
+  if (waiting) {
+    const label = t(waiting === 'ask' ? 'pendingInputs.jumpAsk' : 'pendingInputs.jumpChoice')
+    return (
+      <button
+        type="button"
+        data-scroll-to-bottom=""
+        data-pending-jump={waiting}
+        aria-hidden={!visible}
+        tabIndex={visible ? 0 : -1}
+        onClick={onClick}
+        style={{
+          bottom: 'calc(var(--chat-input-h, 0px) + 4px)',
+          left: 'calc((100% - var(--chat-scrollbar-w, 0px)) / 2)'
+        }}
+        className={`absolute -translate-x-1/2 flex items-center gap-1.5 h-7 px-3 rounded-full border bg-bg-primary/90 backdrop-blur-md shadow-md text-xs font-medium whitespace-nowrap hover:bg-bg-hover transition-[opacity,translate] duration-150 ${
+          waiting === 'ask' ? 'border-warning/45 text-warning' : 'border-accent/45 text-accent'
+        } ${visible ? 'opacity-100' : 'opacity-0 translate-y-1 pointer-events-none'}`}
+      >
+        {label}
+        <ArrowDown size={13} />
+      </button>
+    )
+  }
   return (
     <button
       type="button"

@@ -21,6 +21,7 @@
  */
 
 import { PERMISSION_RISKS, type PermissionRisk } from '@shuvix/chat-protocol/types/permissionReview'
+import type { ToolAnswerNote } from '@shuvix/chat-protocol/types/toolAnswer'
 
 export const REVIEW_CONSECUTIVE_DENIAL_LIMIT = 3
 export const REVIEW_TOTAL_DENIAL_LIMIT = 20
@@ -148,6 +149,40 @@ export function takeReviewAllowed(
   return note
 }
 
+// ─── 人在审批卡片上的回答 ───────────────────────────────
+
+/** 每会话最多记多少次还没被取走的调用（工具抛错时也会被取走，这只是兜底 —— 旧的先丢） */
+const ANSWERS_LIMIT = 50
+
+const answers = new Map<string, Map<string, ToolAnswerNote[]>>()
+
+/** 人答了这次调用的一张审批卡（执行层调用）。一次调用过几道门就有几条，按回答的先后 */
+export function noteHumanAnswer(
+  sessionId: string,
+  call: string | ReviewCall,
+  note: ToolAnswerNote
+): void {
+  const key = keyOf(call)
+  if (!key) return
+  const notes = answers.get(sessionId) ?? new Map<string, ToolAnswerNote[]>()
+  const list = notes.get(key) ?? []
+  list.push(note)
+  notes.delete(key)
+  notes.set(key, list)
+  while (notes.size > ANSWERS_LIMIT) notes.delete(notes.keys().next().value as string)
+  answers.set(sessionId, notes)
+}
+
+/** 取走这次调用的回答记录（宿主在工具收尾时调用，写进工具结果）；没有返回空数组 */
+export function takeHumanAnswers(sessionId: string, call: string | ReviewCall): ToolAnswerNote[] {
+  const key = keyOf(call)
+  const notes = answers.get(sessionId)
+  const list = notes?.get(key)
+  if (!list) return []
+  notes!.delete(key)
+  return list
+}
+
 // ─── 进行中的审查 ─────────────────────────────────────
 
 const inflight = new Map<string, Set<AbortController>>()
@@ -189,6 +224,7 @@ export function clearReviewState(sessionId: string): void {
   states.delete(sessionId)
   feedback.delete(sessionId)
   allowed.delete(sessionId)
+  answers.delete(sessionId)
   closed.delete(sessionId)
   for (const controller of inflight.get(sessionId) ?? []) controller.abort()
   inflight.delete(sessionId)

@@ -9,10 +9,13 @@
  *   - 点击：离底超过三屏（严格大于）或拿不到滚动区 → `behavior:'auto'`，否则 `'smooth'`；
  *   - 换会话（key 变）整个重来；按钮的显示 / 隐藏属性、aria-label；运行中且显示时的运行指示；
  *   - 日历跳转：挂载时已有请求 → 直接当初始位置、清掉、不再滚；挂载后才到 → 等初始定位过了再
- *     `scrollToIndex`、清掉；目标不在列表里 → 清掉、不滚；别的会话的请求不碰。
+ *     `scrollToIndex`、清掉；目标不在列表里 → 清掉、不滚；别的会话的请求不碰；
+ *   - 询问卡片（CS 系列）：卡片在 Footer 里；人在底部才把新卡片露出来（400ms 的跟随，人一动就松开）；「等你批准」提示看的是
+ *     量出来的卡片位置（滚动、总高变化时重量），不是 Virtuoso 那 160px 的「在底部」；看不见的卡片数字键不算数。
  *
  * Virtuoso 换成一个记录 props / 挂载次数 / `scrollToIndex` 的桩（会把假滚动区交给 `scrollerRef`）；
- * 输入区、消息渲染、Footer 等重组件都顶成空壳 —— 被测的是 MessageList 的门与按钮，不是它们。
+ * 输入区、消息渲染、Footer 等重组件都顶成空壳 —— 被测的是 MessageList 的门与按钮，不是它们。桩把 `components.Footer`
+ * 画进一层 `[data-virtuoso-scroller]`（矩形跟着假滚动区），询问面板换成只挂真 `useOptionHotkeys` 的空壳：外框与把关是真的。
  * 数据走真的 chatStore（`applySessionView` / `markSessionRunning` / `setPendingPrompt`）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -22,6 +25,7 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { Session } from '@shuvix/chat-protocol/chatApi'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 
 interface VirtuosoStubProps {
   data: Array<{ key: string; msg: { id: string } }>
@@ -31,8 +35,15 @@ interface VirtuosoStubProps {
   scrollerRef?: (el: HTMLElement | Window | null) => void
   atBottomStateChange?: (atBottom: boolean) => void
   atBottomThreshold?: number
-  components: { List: (props: Record<string, unknown>) => ReactNode }
-  context: { landed: boolean }
+  totalListHeightChanged?: (height: number) => void
+  components: {
+    List: (props: Record<string, unknown>) => ReactNode
+    Footer: (props: { context: unknown }) => ReactNode
+  }
+  context: {
+    landed: boolean
+    onInputResponse: (requestId: string, response: unknown) => void
+  }
 }
 
 const virt = vi.hoisted(() => ({
@@ -44,7 +55,17 @@ const virt = vi.hoisted(() => ({
   props: null as VirtuosoStubProps | null,
   scrollToIndex: vi.fn(),
   /** 挂载时交给 scrollerRef 的元素（null = 拿不到滚动区） */
-  scroller: null as HTMLElement | null
+  scroller: null as HTMLElement | null,
+  /** 滚动区的矩形（量询问卡片时用） */
+  viewRect: { top: 0, bottom: 500 },
+  /** useChatActions 的 handleInputResponse */
+  handleInputResponse: vi.fn(),
+  /** 询问面板空壳收到的 onResponse（最近一次） */
+  panelOnResponse: null as ((requestId: string, response: unknown) => void) | null,
+  /** 数字键选中了哪一行 */
+  picked: vi.fn(),
+  /** 输入卡片空壳收到的 onHeightChange */
+  onHeightChange: null as ((height: number) => void) | null
 }))
 
 vi.mock('react-virtuoso', async () => {
@@ -68,6 +89,16 @@ vi.mock('react-virtuoso', async () => {
           { key: props.computeItemKey(i, item) },
           props.itemContent(i, item)
         )
+      ),
+      React.createElement(
+        'div',
+        {
+          'data-virtuoso-scroller': '',
+          ref: (el: HTMLElement | null) => {
+            if (el) el.getBoundingClientRect = () => virt.viewRect as DOMRect
+          }
+        },
+        React.createElement(props.components.Footer, { context: props.context })
       )
     )
   })
@@ -80,9 +111,27 @@ vi.mock('@shuvix/chat-ui', () => ({
 
 vi.mock('../InputArea', async () => {
   const React = await import('react')
-  return { InputArea: () => React.createElement('div', { 'data-stub-input': '' }) }
+  return {
+    InputArea: ({ onHeightChange }: { onHeightChange?: (height: number) => void }) => {
+      virt.onHeightChange = onHeightChange ?? null
+      return React.createElement('div', { 'data-stub-input': '' })
+    }
+  }
 })
-vi.mock('../PendingInputsPanel', () => ({ PendingInputsPanel: () => null }))
+vi.mock('../PendingInputsPanel', async () => {
+  const { useOptionHotkeys } = await import('../inputs/OptionRows')
+  return {
+    PendingInputsPanel: ({
+      onResponse
+    }: {
+      onResponse: (requestId: string, response: unknown) => void
+    }) => {
+      virt.panelOnResponse = onResponse
+      useOptionHotkeys(2, (index) => virt.picked(index))
+      return null
+    }
+  }
+})
 vi.mock('../StreamingFooter', () => ({ StreamingFooter: () => null }))
 vi.mock('../../common/ConfirmDialog', () => ({ ConfirmDialog: () => null }))
 vi.mock('../MessageRenderer', async () => {
@@ -101,7 +150,7 @@ vi.mock('../../../hooks/useChatActions', () => ({
     cancelRollback: () => {},
     handleRegenerate: () => {},
     canRollback: true,
-    handleInputResponse: () => {}
+    handleInputResponse: virt.handleInputResponse
   })
 }))
 
@@ -140,11 +189,22 @@ const metrics = { scrollHeight: 10_000, scrollTop: 0, clientHeight: 500 }
 
 function fakeScroller(): HTMLElement {
   const el = document.createElement('div')
-  for (const key of ['scrollHeight', 'scrollTop', 'clientHeight'] as const) {
+  for (const key of ['scrollHeight', 'clientHeight'] as const) {
     Object.defineProperty(el, key, { configurable: true, get: () => metrics[key] })
   }
+  // 贴底时会写它：与真滚动区一样夹在范围内
+  Object.defineProperty(el, 'scrollTop', {
+    configurable: true,
+    get: () => metrics.scrollTop,
+    set: (value: number) => {
+      metrics.scrollTop = Math.min(value, metrics.scrollHeight - metrics.clientHeight)
+    }
+  })
   el.getBoundingClientRect = () => ({ top: 0, bottom: metrics.clientHeight }) as DOMRect
   el.querySelectorAll = (() => renderedItems) as unknown as typeof el.querySelectorAll
+  // 假滚动区不在文档里，Footer 画在桩的那一层：量询问卡片时替它去容器里找
+  el.querySelector = ((selector: string) =>
+    container.querySelector(selector)) as typeof el.querySelector
   return el
 }
 
@@ -232,6 +292,10 @@ beforeEach(() => {
   virt.mountProps = []
   virt.props = null
   virt.scrollToIndex.mockReset()
+  virt.viewRect = { top: 0, bottom: 500 }
+  virt.handleInputResponse.mockReset()
+  virt.panelOnResponse = null
+  virt.picked.mockReset()
   metrics.scrollHeight = 10_000
   metrics.clientHeight = 500
   metrics.scrollTop = 0
@@ -900,5 +964,464 @@ describe('日历跳转', () => {
 
     request(S1, `${S1}-u1`)
     expect(virt.scrollToIndex).toHaveBeenCalledWith({ index: 0, align: 'start' })
+  })
+})
+
+describe('询问卡片', () => {
+  const ASK: InputRequest = { id: 'r1', kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 }
+  const ASK2: InputRequest = {
+    id: 'r2',
+    kind: 'ask',
+    toolName: 'bash',
+    command: 'pwd',
+    createdAt: 1
+  }
+  const CHOICE: InputRequest = {
+    id: 'r3',
+    kind: 'choice',
+    toolName: 'ask',
+    question: 'Which?',
+    options: [{ label: 'A', description: '' }],
+    createdAt: 2
+  }
+
+  const END = (): number => metrics.scrollHeight - metrics.clientHeight
+  /** 卡片的矩形（量位置时读），缺省整张露着；--chat-input-h 由 composerH 给 */
+  let cardRect = { top: 100, bottom: 300 }
+  let composerH = 0
+
+  beforeEach(() => {
+    cardRect = { top: 100, bottom: 300 }
+    composerH = 0
+    const real = window.getComputedStyle.bind(window)
+    // 列根上的 --chat-input-h 由真输入卡片量出来再写，这里输入卡片是空壳：直接给量到的值
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo)
+      const original = style.getPropertyValue.bind(style)
+      style.getPropertyValue = (name: string) =>
+        name === '--chat-input-h' ? `${composerH}px` : original(name)
+      return style
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** 给（此刻以及之后重挂的）卡片桩上矩形 */
+  const placeCard = (): void => {
+    const card = container.querySelector<HTMLElement>('[data-pending-card]')
+    if (card) card.getBoundingClientRect = () => cardRect as DOMRect
+  }
+  const setAsks = (asks: InputRequest[], busy = false): void => {
+    act(() =>
+      applySessionView(
+        S1,
+        V(S1, {
+          messages: history(S1),
+          run: { state: busy ? 'busy' : 'idle' },
+          asks
+        })
+      )
+    )
+    placeCard()
+  }
+  /** 过一帧：贴底与量位置都在下一帧 */
+  const frame = (): void => advance(16)
+  const pill = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-pending-jump]')
+  const pillShown = (): boolean => pill()?.getAttribute('aria-hidden') === 'false'
+  const scrollEvent = (): void => {
+    act(() => {
+      virt.scroller!.dispatchEvent(new Event('scroll'))
+    })
+  }
+  const heightChanged = (height: number): void => {
+    metrics.scrollHeight = height
+    act(() => virt.props!.totalListHeightChanged!(height))
+  }
+
+  /** 挂好、定位好，落地后的跟随也过了：之后的贴底都是询问那条路带来的 */
+  const settledAtBottom = (): void => {
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    advance(3_000)
+  }
+  /** 人往上翻：离底 dist，Virtuoso 报不在底部 */
+  const scrolledUp = (dist = 3_000): void => {
+    settledAtBottom()
+    distFromBottom(dist)
+    atBottom(false)
+  }
+  /** 卡片在下面、不在屏幕上 */
+  const cardBelow = (): void => {
+    cardRect = { top: 3_000, bottom: 3_200 }
+  }
+  const press = (key: string): boolean => {
+    let result = true
+    act(() => {
+      result = document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, composed: true })
+      )
+    })
+    return result
+  }
+
+  it('CS-1 人在底部、询问露面：下一帧贴到真底', () => {
+    settledAtBottom()
+    metrics.scrollHeight = 10_200 // 卡片把列表撑高了
+    setAsks([ASK])
+    expect(metrics.scrollTop).toBe(9_500)
+    frame()
+    expect(metrics.scrollTop).toBe(END())
+    expect(pillShown()).toBe(false)
+  })
+
+  it('CS-1b 离底 150px（Virtuoso 还算在底部）时询问露面：同样被带到底（160px 之内不算在翻历史）', () => {
+    settledAtBottom()
+    distFromBottom(150)
+    setAsks([ASK])
+    frame()
+    expect(metrics.scrollTop).toBe(END())
+  })
+
+  it('CS-2 跟随窗口：100ms 时总高变了照贴；400ms 之后不再贴', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    frame()
+
+    advance(84)
+    heightChanged(10_300)
+    frame()
+    expect(metrics.scrollTop).toBe(END())
+
+    advance(400)
+    const before = metrics.scrollTop
+    heightChanged(10_600)
+    frame()
+    expect(metrics.scrollTop).toBe(before)
+  })
+
+  it('CS-3 人在往上翻：询问露面不动滚动位置，总高变了也不动', () => {
+    scrolledUp()
+    const top = metrics.scrollTop
+    cardBelow()
+    setAsks([ASK])
+    placeCard()
+    frame()
+    advance(600)
+    expect(metrics.scrollTop).toBe(top)
+
+    heightChanged(10_400)
+    frame()
+    expect(metrics.scrollTop).toBe(top)
+    expect(virt.scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it('CS-4 卡片不在屏幕上：提示真的露着（aria-hidden=false、能 Tab 到、不透明），文字随种类', () => {
+    scrolledUp()
+    cardBelow()
+    setAsks([ASK])
+    frame()
+    expect(pill()!.getAttribute('data-pending-jump')).toBe('ask')
+    expect(pill()!.getAttribute('aria-hidden')).toBe('false')
+    expect(pill()!.tabIndex).toBe(0)
+    expect(pill()!.classList.contains('opacity-100')).toBe(true)
+    expect(pill()!.textContent).toBe(zh.pendingInputs.jumpAsk)
+
+    setAsks([CHOICE])
+    frame()
+    expect(pill()!.getAttribute('data-pending-jump')).toBe('choice')
+    expect(pill()!.textContent).toBe(zh.pendingInputs.jumpChoice)
+    expect(pillShown()).toBe(true)
+  })
+
+  it.each([
+    ['近', 2, 'smooth'],
+    ['远', 4, 'auto']
+  ] as const)('CS-5 点提示（离底%s）：滚到真底', (_label, screens, behavior) => {
+    scrolledUp()
+    cardBelow()
+    setAsks([ASK])
+    frame()
+    distFromBottom(metrics.clientHeight * screens)
+    act(() => pill()!.click())
+    expect(virt.scrollToIndex).toHaveBeenCalledWith({ index: 'LAST', align: 'end', behavior })
+  })
+
+  it('CS-6 询问没了：换回普通按钮（没有 data-pending-jump），在跑就是圆点', () => {
+    scrolledUp()
+    cardBelow()
+    setAsks([ASK], true)
+    frame()
+    expect(pillShown()).toBe(true)
+
+    setAsks([], true)
+    expect(pill()).toBeNull()
+    expect(button()).not.toBeNull()
+    expect(shown()).toBe(true)
+    expect(dots()).toBe(3)
+  })
+
+  it('CS-7 卡片露着：提示在 DOM 里但藏着（aria-hidden=true、不进 Tab 序、透明）', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    frame()
+    advance(400)
+    expect(pill()).not.toBeNull()
+    expect(pill()!.getAttribute('aria-hidden')).toBe('true')
+    expect(pill()!.tabIndex).toBe(-1)
+    expect(pill()!.classList.contains('opacity-0')).toBe(true)
+  })
+
+  it('CS-7b 卡片露着时人翻走了又回来：提示跟着滚动事件重量', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    frame()
+    advance(400)
+    expect(pillShown()).toBe(false)
+
+    distFromBottom(2_000)
+    cardRect = { top: 2_500, bottom: 2_700 }
+    atBottom(false)
+    scrollEvent()
+    expect(pillShown()).toBe(true)
+
+    distFromBottom(0)
+    cardRect = { top: 100, bottom: 300 }
+    atBottom(true)
+    scrollEvent()
+    expect(pillShown()).toBe(false)
+  })
+
+  it('CS-7c 总高变化也重量：上面的内容把卡片顶到屏幕外，提示出来', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    frame()
+    advance(400)
+    expect(pillShown()).toBe(false)
+
+    distFromBottom(1_000)
+    cardBelow()
+    heightChanged(metrics.scrollHeight)
+    expect(pillShown()).toBe(true)
+  })
+
+  it('CS-7d 离底 150px、卡片一半压在输入卡片底下（Virtuoso 还算在底部）：提示露着，数字键不算数', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    frame()
+    advance(400)
+
+    composerH = 120
+    distFromBottom(150)
+    // 可见区下沿 = 500 - 120 = 380；卡片底 450
+    cardRect = { top: 250, bottom: 450 }
+    atBottom(true) // 160px 之内，Virtuoso 仍报在底部
+    scrollEvent()
+
+    expect(pillShown()).toBe(true)
+    expect(pill()!.classList.contains('opacity-100')).toBe(true)
+    expect(press('1')).toBe(true)
+    expect(virt.picked).not.toHaveBeenCalled()
+
+    // 滚回露全了：提示收起，数字键认
+    distFromBottom(0)
+    cardRect = { top: 100, bottom: 300 }
+    scrollEvent()
+    expect(pillShown()).toBe(false)
+    expect(press('1')).toBe(false)
+    expect(virt.picked).toHaveBeenCalledWith(0)
+  })
+
+  it('CS-7e 已经到列表真底、卡片比可见区还高（窗口很矮）：不提示（点了也没处可去），数字键仍不算数', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    frame()
+    advance(400)
+
+    distFromBottom(0)
+    cardRect = { top: -100, bottom: 600 }
+    scrollEvent()
+    expect(pillShown()).toBe(false)
+    expect(press('1')).toBe(true)
+    expect(virt.picked).not.toHaveBeenCalled()
+
+    // 离真底 3px 就不算到底了
+    distFromBottom(3)
+    scrollEvent()
+    expect(pillShown()).toBe(true)
+  })
+
+  it('CS-8 又在跑又在等：提示优先，没有圆点', () => {
+    scrolledUp()
+    cardBelow()
+    setAsks([ASK], true)
+    frame()
+    expect(pillShown()).toBe(true)
+    expect(pill()!.querySelectorAll('span[aria-hidden] > span')).toHaveLength(0)
+  })
+
+  const stepTo = (id: string): void => {
+    act(() => useChatStore.getState().setActiveInputId(S1, id))
+    placeCard()
+  }
+
+  it('CS-9 步进到另一张（人在底部）：算露面，再贴一次', () => {
+    settledAtBottom()
+    setAsks([ASK, ASK2])
+    frame()
+    advance(400)
+
+    metrics.scrollTop = END() - 100
+    stepTo('r2')
+    frame()
+    expect(metrics.scrollTop).toBe(END())
+  })
+
+  it('CS-9b 在翻历史时步进到另一张：不动', () => {
+    scrolledUp()
+    cardBelow()
+    setAsks([ASK, ASK2])
+    frame()
+    const top = metrics.scrollTop
+    stepTo('r2')
+    frame()
+    advance(500)
+    expect(metrics.scrollTop).toBe(top)
+  })
+
+  it('CS-10 前一张答完换下一张（在底部）：再露面一次', () => {
+    settledAtBottom()
+    setAsks([ASK, ASK2])
+    frame()
+    advance(400)
+
+    metrics.scrollTop = END() - 100
+    setAsks([ASK2])
+    frame()
+    expect(metrics.scrollTop).toBe(END())
+  })
+
+  it('CS-11 日历跳到中间、同时有询问挂着：不被拉回底部', () => {
+    act(() =>
+      applySessionView(S1, V(S1, { messages: history(S1), run: { state: 'idle' }, asks: [ASK] }))
+    )
+    act(() => useChatStore.getState().requestScrollToMessage(S1, `${S1}-u2`))
+    distFromBottom(2_000)
+    const top = metrics.scrollTop
+    render(S1)
+    placeCard()
+    frame()
+    expect(virt.mountProps[0].initialTopMostItemIndex).toEqual({ index: 2, align: 'start' })
+    expect(metrics.scrollTop).toBe(top)
+  })
+
+  it('CS-12 跟随窗口里卸载：计时器清掉，之后什么都不发生', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    const before = vi.getTimerCount()
+    expect(before).toBeGreaterThan(0)
+    act(() => root.render(createElement('div')))
+    expect(() => advance(1_000)).not.toThrow()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('CS-13 一条消息都没有、只有询问（派生 agent 的询问）：不是空态，列表挂着，卡片在 Footer', () => {
+    act(() => applySessionView(S1, V(S1, { messages: [], run: { state: 'idle' }, asks: [ASK] })))
+    render(S1)
+    expect(emptyPresent()).toBe(false)
+    expect(stubPresent()).toBe(true)
+    expect(
+      container.querySelector('[data-virtuoso-scroller] [data-pending-card="ask"]')
+    ).not.toBeNull()
+  })
+
+  it.each(['wheel', 'touchstart', 'pointerdown', 'keydown'])(
+    'CS-14 跟随窗口里人动了（%s）：松开，总高再变也不拉回去',
+    (type) => {
+      settledAtBottom()
+      setAsks([ASK])
+      frame()
+
+      distFromBottom(100)
+      const top = metrics.scrollTop
+      act(() => {
+        virt.scroller!.dispatchEvent(new Event(type))
+      })
+      advance(84)
+      heightChanged(metrics.scrollHeight + 200)
+      frame()
+      expect(metrics.scrollTop).toBe(top)
+    }
+  )
+
+  describe('输入卡片变高时（CS-16）', () => {
+    const cardScroller = (): HTMLElement =>
+      container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!
+    /** 输入卡片量到的高度（量位置在写新值之前，所以 --chat-input-h 给的是上一次的） */
+    const composerIs = (height: number): void => {
+      act(() => virt.onHeightChange!(height))
+      composerH = height
+    }
+    const withCard = (): void => {
+      settledAtBottom()
+      setAsks([ASK])
+      frame()
+      composerIs(60)
+      cardScroller().scrollTop = 400
+    }
+
+    it('CS-16 卡片整张露着、输入卡片长高：卡片那层滚动区上移同样的量，变量也写了', () => {
+      withCard()
+      composerIs(100)
+      expect(cardScroller().scrollTop).toBe(440)
+      const root = container
+        .querySelector<HTMLElement>('[data-virtuoso-stub]')!
+        .closest<HTMLElement>('[style*="--chat-input-h"]')!
+      expect(root.style.getPropertyValue('--chat-input-h')).toBe('100px')
+    })
+
+    it('CS-16 量的是长高之前的位置：现在才被盖住也算露着', () => {
+      withCard()
+      cardRect = { top: 100, bottom: 430 } // 只在长高之前的 60px 下面放得下
+      composerIs(100)
+      expect(cardScroller().scrollTop).toBe(440)
+    })
+
+    it('CS-16 卡片没露全：不动', () => {
+      withCard()
+      cardRect = { top: 100, bottom: 470 }
+      composerIs(100)
+      expect(cardScroller().scrollTop).toBe(400)
+    })
+
+    it('CS-16 输入卡片变矮：不动', () => {
+      withCard()
+      composerIs(40)
+      expect(cardScroller().scrollTop).toBe(400)
+    })
+
+    it('CS-16 高度没变：不动', () => {
+      withCard()
+      composerIs(60)
+      expect(cardScroller().scrollTop).toBe(400)
+    })
+
+    it('CS-16 没有卡片：不动，也不抛', () => {
+      settledAtBottom()
+      composerIs(60)
+      cardScroller().scrollTop = 400
+      composerIs(100)
+      expect(cardScroller().scrollTop).toBe(400)
+    })
+  })
+
+  it('CS-15 卡片的回答经 Virtuoso 的 context 到 handleInputResponse，带着那条请求的 id', () => {
+    settledAtBottom()
+    setAsks([ASK])
+    expect(virt.props!.context.onInputResponse).toBe(virt.handleInputResponse)
+    virt.panelOnResponse!('r1', { kind: 'ask', allowed: true })
+    expect(virt.handleInputResponse).toHaveBeenCalledWith('r1', { kind: 'ask', allowed: true })
   })
 })

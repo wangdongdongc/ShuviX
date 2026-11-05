@@ -324,7 +324,7 @@ export class DefaultChatGateway implements ChatGateway {
     // （P3-08）—— 待答卡片来自视图的 `asks`，询问一落定视图就不再有它，每个前端的卡片自己消失。
     // broker 记一行「没人认领」的日志
     const answer =
-      response?.kind === 'other' && response.secrets !== undefined
+      (response?.kind === 'other' || response?.kind === 'choice') && response.secrets !== undefined
         ? { ...response, secrets: cleanUserSecrets(response.secrets) ?? [] }
         : response
     return respondToUserInput(requestId, answer, meta)

@@ -9,10 +9,9 @@
  *       空选择什么都不加
  *   T3  「+」只要这条会话能发就在（两种密度都一样）；图片 input 与菜单里的「添加图片」只在模型能看图时有，
  *       挂着时模型换成不能看图 → 消失
- *   T4  占位：触屏空闲 = input.placeholderTouch（能不能看图都一样）；运行中 = placeholderSteer；有待答的审批 =
- *       pendingInputs.otherPlaceholderAsk；桌面照旧（placeholderVision / placeholder）
- *   T4b （两种密度）待答的是审批 → otherPlaceholderAsk，是选项题 → otherPlaceholderChoice；两条都挂着时跟着选中项
- *       （setActiveInputId）换，换回来也跟着回来
+ *   T4  占位：触屏空闲 = input.placeholderTouch（能不能看图都一样）；运行中 = placeholderSteer，有待答的询问时也是；
+ *       桌面照旧（placeholderVision / placeholder）
+ *   T4b （两种密度）运行中有询问（审批 / 选项题 / 两条都挂着、换选中项）都是 placeholderSteer：输入框只发消息
  *   K1  （桌面）输入卡片顶上挂着审批卡（accessory = PendingInputsPanel）：焦点在输入框里按 1 → 不拦、不答、卡片
  *       还在；离开输入框（焦点回 body）再按 1 → 答「允许这一次」
  *   K2  同样挂着选项题：输入框里按 1 什么都不勾，确认键仍禁用
@@ -27,8 +26,7 @@
  *       不调 IPC；选一行 → 发那一档、菜单关
  *   T10 菜单不自己冒出来：一敲键就关、改回原字也不回来；清空 → 连「立即」一起收；运行起停 → 关；mousedown
  *       在「立即」上不关、在外面关；停止键上长按什么都不弹
- *   T11 触屏 + 待答询问：一颗「投其它」（title pendingInputs.submitOther），空时禁用；没有档位；长按不弹菜单；
- *       投出去是 respondToInput {kind:'other'}，不 steer
+ *   T11 触屏 + 待答询问：队列和平常一样（没字收起；一颗「立即」，长按两档）；投出去是 steer，从不 respondToInput
  *   C1  桌面运行中：右键「立即」不弹菜单、不拦；两个档位照旧带字
  *   R1  用量环（两种密度）：点一下出数字（block）、再点收起；开着时 mousedown 在外面收、在环上不收；
  *       没有上限也没有用量 → 不画环
@@ -225,7 +223,8 @@ async function mountInput(
 
 const TOUCH = { density: 'touch' as const }
 
-const textarea = (): HTMLTextAreaElement => container.querySelector('textarea')!
+const textarea = (): HTMLTextAreaElement =>
+  container.querySelector<HTMLTextAreaElement>('textarea:not([data-other-input])')!
 
 async function type(value: string): Promise<void> {
   const el = textarea()
@@ -465,14 +464,14 @@ describe('占位文案', () => {
     }
   )
 
-  it('TC-IA-T4 触屏运行中 → placeholderSteer；有待答的审批 → pendingInputs.otherPlaceholderAsk', async () => {
+  it('TC-IA-T4 触屏运行中 → placeholderSteer；有待答的审批也是', async () => {
     await mountInput(TOUCH)
     busy()
     await flush()
     expect(textarea().placeholder).toBe(en.input.placeholderSteer)
     busy({ asks: [ASK] })
     await flush()
-    expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+    expect(textarea().placeholder).toBe(en.input.placeholderSteer)
   })
 
   it.each<[boolean, string]>([
@@ -485,26 +484,17 @@ describe('占位文案', () => {
   })
 
   it.each<['compact' | 'touch']>([['compact'], ['touch']])(
-    'TC-IA-T4b %s：审批 → otherPlaceholderAsk，选项题 → otherPlaceholderChoice；两条都在时跟着选中项换',
+    'TC-IA-T4b %s：运行中有询问都是 placeholderSteer；两条都在时换选中项也不变',
     async (density) => {
       await mountInput(density === 'touch' ? TOUCH : {})
-      busy({ asks: [ASK] })
-      await flush()
-      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
-
-      busy({ asks: [CHOICE] })
-      await flush()
-      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderChoice)
-
-      busy({ asks: [ASK, CHOICE] })
-      await flush()
-      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+      for (const asks of [[ASK], [CHOICE], [ASK, CHOICE]]) {
+        busy({ asks })
+        await flush()
+        expect(textarea().placeholder).toBe(en.input.placeholderSteer)
+      }
       act(() => useChatStore.getState().setActiveInputId('s1', CHOICE.id))
       await flush()
-      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderChoice)
-      act(() => useChatStore.getState().setActiveInputId('s1', ASK.id))
-      await flush()
-      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+      expect(textarea().placeholder).toBe(en.input.placeholderSteer)
     }
   )
 })
@@ -774,30 +764,26 @@ describe('触屏运行中：一颗「立即」，长按出两档', () => {
     noIpc()
   })
 
-  it('TC-IA-T11 有待答的询问：一颗「投其它」，空时禁用；没有档位；长按不弹菜单；投出去是 respondToInput other', async () => {
+  it('TC-IA-T11 有待答的询问：队列和平常一样，投出去是 steer，从不 respondToInput', async () => {
     await mountInput(TOUCH)
     busy({ asks: [ASK] })
     await flush()
-    const buttons = byTitle(en.pendingInputs.submitOther)
-    expect(buttons).toHaveLength(1)
-    expect(buttons[0]!.disabled).toBe(true)
-    expect(tiers()).toEqual([])
+    expect(byAria(en.queue.steer)).toEqual([])
+    expect(byTitle(en.input.send)).toEqual([])
 
     await type('other text')
-    const submit = byTitle(en.pendingInputs.submitOther)[0]!
-    expect(submit.disabled).toBe(false)
-    expect(tiers()).toEqual([])
-    await contextMenu(submit)
+    const steer = byAria(en.queue.steer)
+    expect(steer).toHaveLength(1)
+    await contextMenu(steer[0]!)
+    expect(menu()).not.toBeNull()
+    expect(agent.respondToInput).not.toHaveBeenCalled()
+    await type('other text!')
     expect(menu()).toBeNull()
 
-    await click(submit)
-    expect(agent.respondToInput).toHaveBeenCalledTimes(1)
-    expect(agent.respondToInput.mock.calls[0]![0]).toMatchObject({
-      sessionId: 's1',
-      requestId: 'r1',
-      response: { kind: 'other', text: 'other text' }
-    })
-    expect(agent.steer).not.toHaveBeenCalled()
+    await click(byAria(en.queue.steer)[0]!)
+    expect(agent.steer).toHaveBeenCalledTimes(1)
+    expect(agent.steer.mock.calls[0]![0]).toMatchObject({ sessionId: 's1', text: 'other text!' })
+    expect(agent.respondToInput).not.toHaveBeenCalled()
     expect(agent.followUp).not.toHaveBeenCalled()
   })
 

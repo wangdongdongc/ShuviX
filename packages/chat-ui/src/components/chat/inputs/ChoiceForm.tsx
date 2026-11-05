@@ -3,8 +3,10 @@ import { useTranslation } from 'react-i18next'
 import type { ChoiceInputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { useChatDensity } from '../../../host/chatHostContext'
 import type { InputFormProps } from './types'
-import type { ChoiceDraft } from './drafts'
+import { buildChoiceResponse, type ChoiceDraft } from './drafts'
 import { OptionRow, useOptionHotkeys } from './OptionRows'
+import { OtherAnswerRow } from './OtherAnswerRow'
+import { useAnswerSubmit } from './useAnswerSubmit'
 
 /**
  * 选项题 —— 一律勾选 + 确认，选几项由用户定。
@@ -14,7 +16,8 @@ import { OptionRow, useOptionHotkeys } from './OptionRows'
  * 勾一项就是单选，勾几项就是多选。代价是单选也要多按一次确认 —— 换来的是
  * 表单永远和问题说的对得上。确认键始终在，未勾选时禁用；问题下面一行小字说明可以多选。
  *
- * 形状与审批卡相同：问题在上，选项是占满卡片宽度的行（OptionRows），确认键钉在最下面。
+ * 形状与审批卡相同：问题在上，选项是占满卡片宽度的行（OptionRows），下面一行写自己的话（OtherAnswerRow），
+ * 发送键钉在最下面。整张卡只有这一个发送：勾的和写的一起发（buildChoiceResponse），不会丢掉其中一样。
  * 选项多了只有中间那段滚动，问题与确认键始终看得见（面板自身封顶，见 PendingInputsPanel）。
  */
 export function ChoiceForm({
@@ -28,19 +31,17 @@ export function ChoiceForm({
   const touch = useChatDensity() === 'touch'
   const { question, detail, options } = request
   const selected = draft.selected ?? []
+  const submit = useAnswerSubmit(onSubmit)
+  const response = buildChoiceResponse(draft)
 
   /** 勾上 / 勾掉，等确认键 */
   const handlePick = (label: string): void => {
     onDraftChange({
+      ...draft,
       selected: selected.includes(label)
         ? selected.filter((s) => s !== label)
         : [...selected, label]
     })
-  }
-
-  const handleConfirm = (): void => {
-    if (selected.length === 0) return
-    onSubmit({ kind: 'choice', selections: selected })
   }
 
   useOptionHotkeys(options.length, (i) => {
@@ -100,6 +101,16 @@ export function ChoiceForm({
         </div>
       </div>
 
+      <div className="flex-shrink-0">
+        <OtherAnswerRow
+          placeholder={t('pendingInputs.otherPlaceholderChoice')}
+          value={draft.otherText ?? ''}
+          onChange={(otherText) => onDraftChange({ ...draft, otherText })}
+          response={response}
+          submit={submit}
+        />
+      </div>
+
       <div
         className={`flex-shrink-0 flex border-t border-border-secondary/40 ${
           touch ? 'px-4 py-2.5' : 'px-3.5 py-2 justify-end'
@@ -107,17 +118,17 @@ export function ChoiceForm({
       >
         <button
           type="button"
-          onClick={handleConfirm}
-          disabled={selected.length === 0}
+          onClick={() => response && submit.send(response)}
+          disabled={!response || submit.sending}
           data-choice-confirm=""
-          // 没勾任何一项时是一块安静的灰（半透明的强调色在深色主题里发闷，字也读不清）
+          // 还没有可发的内容时是一块安静的灰（半透明的强调色在深色主题里发闷，字也读不清）
           className={`rounded-lg font-medium transition-colors disabled:cursor-not-allowed ${
-            selected.length > 0
+            response
               ? 'bg-accent text-white hover:bg-accent-hover'
               : 'bg-bg-secondary text-text-tertiary'
           } ${touch ? 'flex-1 h-10 text-sm' : 'px-3 py-1 text-xs'}`}
         >
-          {t('toolCall.confirmSelection')}
+          {t('input.send')}
           {selected.length > 0 && <span className="tabular-nums"> ({selected.length})</span>}
         </button>
       </div>

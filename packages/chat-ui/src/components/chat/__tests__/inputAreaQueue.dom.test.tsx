@@ -5,7 +5,7 @@
  *   12 运行中：恰好两个档位按钮 [立即 Now, 追加 Append] + 停止；没有第三个、没有「下一轮」的图标；
  *      空闲 / 被中断：一个发送按钮
  *   13 运行中回车 = 立即：`agent.steer({sessionId, text})` 一次，粘贴芯片就地展开；输入清空、待发图片留着；
- *      有待答的询问时回车照旧投「其它」、从不 steer；只有空白什么都不发
+ *      有待答的询问时也是 steer 一次（回答询问在卡片那一行）；只有空白什么都不发
  *   14 追加按钮：`agent.followUp` 一次；没字时两个档位都禁用
  *   15 档位竞态：点下去时视图已是 idle / interrupted → 两档都改走 `agent.prompt`；关停中什么都不调
  *   16 队列面板：空队列、legacy / none 视图 → 不渲染；三条 → 细条 `Queue 3`、`Now 2`、`Append 1`；展开的
@@ -29,12 +29,6 @@
  *   QS-9  lost，视图带来这条消息：受理之前有占位，没有提示、不放回
  *   QS-10 lost，视图一直没带来：连回之后满 GRACE，放回并报 ERR
  *   QS-11 受理之后 handler_error：报原因，不放回
- * 「其它」（有待答的询问）：
- *   OT-1  回车，notSent：放回、ERR、询问面板还在、图片不动
- *   OT-2  运行中点发送、被拒：报错、没有未处理的 rejection；按下的那一刻清掉旧提示
- *   OT-3  粘贴芯片 + 要藏的值，notSent：胶囊回来，重发的 {kind:'other', text, secrets} 相等
- *   OT-6  handler_error：报原文、放回
- *   OT-7  拒绝之前打了字 → 不盖掉；拒绝之前切到 B → B 不动
  *
  * 后端是假的 `window.api`（同 inputAreaWelcomeSend.dom.test.tsx 的做法）；状态只经 `applySessionView` 写。
  */
@@ -82,12 +76,9 @@ import { PROMPT_OUTCOME_GRACE_MS as GRACE } from '../../../stores/promptOutcome'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { InputArea, type InputAreaProps } from '../InputArea'
 import { QueuePanel, QUEUE_NOTICE_MS } from '../QueuePanel'
-import { PendingInputsPanel } from '../PendingInputsPanel'
 import { V, resetStore, store, user } from '../../../__tests__/support/views'
 import {
-  addSecretChip,
   advance,
-  collectUnhandled,
   composerShot,
   fakeLink,
   handlerError,
@@ -376,7 +367,7 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(store().pendingImages).toEqual([image])
   })
 
-  it('P3-11-13 有待答的询问：回车投「其它」，从不 steer；只有空白：什么都不发', async () => {
+  it('P3-11-13 有待答的询问：回车还是 steer 一次，不答卡片；只有空白：什么都不发', async () => {
     await mountInput()
     const ask: InputRequest = {
       id: 'r1',
@@ -389,14 +380,16 @@ describe('P3-11-12..15 两档输入框', () => {
     await flush()
     await type('do it differently')
     await pressEnter()
-    expect(agent.respondToInput).toHaveBeenCalledTimes(1)
-    expect(agent.respondToInput.mock.calls[0]![0]).toEqual({
+    expect(agent.steer).toHaveBeenCalledTimes(1)
+    expect(agent.steer.mock.calls[0]![0]).toEqual({
       sessionId: 's1',
-      requestId: 'r1',
-      response: { kind: 'other', text: 'do it differently', secrets: [] }
+      text: 'do it differently',
+      secrets: []
     })
-    expect(agent.steer).not.toHaveBeenCalled()
+    expect(agent.respondToInput).not.toHaveBeenCalled()
+    expect(selectActivePendingInput(store())?.id).toBe('r1')
 
+    agent.steer.mockClear()
     busy()
     await flush()
     await type('   ')
@@ -827,132 +820,6 @@ describe('发送失败', () => {
       await flush()
       expect(sendError()).toBe(sentence('boom'))
       expect(textarea().value).toBe('')
-    })
-  })
-
-  describe('「其它」', () => {
-    const ASK: InputRequest = {
-      id: 'r1',
-      kind: 'ask',
-      toolName: 'bash',
-      command: 'ls',
-      createdAt: 0
-    }
-    const askPanel = (): Element | null => container.querySelector('[data-pending-inputs="ask"]')
-
-    async function mountAsked(): Promise<void> {
-      await mountInput({ accessory: createElement(PendingInputsPanel, { onResponse: vi.fn() }) })
-      busy({ asks: [ASK] })
-      await flush()
-      expect(askPanel()).not.toBeNull()
-    }
-
-    it('OT-1 回车，notSent：放回、ERR、询问面板还在、图片不动', async () => {
-      agent.respondToInput.mockRejectedValueOnce(notSent())
-      await mountAsked()
-      await act(async () => useChatStore.setState({ pendingImages: [IMAGE] }))
-      await flush()
-      await type('do it differently')
-      await pressEnter()
-      expect(agent.respondToInput).toHaveBeenCalledTimes(1)
-      expect(textarea().value).toBe('do it differently')
-      expect(sendError()).toBe(ERR)
-      expect(askPanel()).not.toBeNull()
-      expect(selectActivePendingInput(store())?.id).toBe('r1')
-      expect(store().pendingImages).toEqual([IMAGE])
-    })
-
-    it('OT-2 运行中点发送、被拒：报错、没有未处理的 rejection；按下的那一刻清掉旧提示', async () => {
-      agent.respondToInput.mockRejectedValueOnce(notSent())
-      await mountAsked()
-      await type('first try')
-      const sendButton = (): HTMLButtonElement =>
-        container.querySelector<HTMLButtonElement>(
-          `button[title="${en.pendingInputs.submitOther}"]`
-        )!
-      const unhandled = await collectUnhandled(async () => {
-        await click(sendButton())
-        await flush()
-      })
-      expect(unhandled).toEqual([])
-      expect(sendError()).toBe(ERR)
-
-      const reply = deferred<unknown>()
-      agent.respondToInput.mockReturnValueOnce(reply.promise)
-      await click(sendButton())
-      expect(agent.respondToInput).toHaveBeenCalledTimes(2)
-      expect(sendError()).toBeNull()
-      await act(async () => reply.reject(handlerError('still no')))
-      await flush()
-      expect(sendError()).toBe(sentence('still no'))
-    })
-
-    it('OT-3 粘贴芯片 + 要藏的值，notSent：胶囊回来，重发的 payload 相等', async () => {
-      const SECRET = 'Xk9#mP2q'
-      agent.respondToInput.mockRejectedValueOnce(notSent())
-      await mountAsked()
-      const long = longPaste('line')
-      await type('see ')
-      await pasteLong(long)
-      await type(`${textarea().value} and `)
-      await addSecretChip(container, SECRET)
-      const before = shot()
-      expect(before.chips).toHaveLength(1)
-      expect(before.secretChips).toHaveLength(1)
-
-      await pressEnter()
-      expect(textarea().value).toBe(before.text)
-      expect(shot()).toEqual(before)
-      expect(document.body.innerHTML).not.toContain(SECRET)
-
-      await pressEnter()
-      expect(agent.respondToInput).toHaveBeenCalledTimes(2)
-      expect(agent.respondToInput.mock.calls[1]![0]).toEqual(agent.respondToInput.mock.calls[0]![0])
-      expect(agent.respondToInput.mock.calls[1]![0]).toEqual({
-        sessionId: 's1',
-        requestId: 'r1',
-        response: {
-          kind: 'other',
-          text: `see ${long} and ${SECRET}`,
-          secrets: [{ value: SECRET, category: 'PASSWORD' }]
-        }
-      })
-    })
-
-    it('OT-6 handler_error：报原文、放回', async () => {
-      agent.respondToInput.mockRejectedValueOnce(handlerError('nope'))
-      await mountAsked()
-      await type('other answer')
-      await pressEnter()
-      expect(textarea().value).toBe('other answer')
-      expect(sendError()).toBe(sentence('nope'))
-    })
-
-    it('OT-7 拒绝之前打了字 → 不盖掉', async () => {
-      const reply = deferred<unknown>()
-      agent.respondToInput.mockReturnValueOnce(reply.promise)
-      await mountAsked()
-      await type('other answer')
-      await pressEnter()
-      await type('changed my mind')
-      await act(async () => reply.reject(notSent()))
-      await flush()
-      expect(textarea().value).toBe('changed my mind')
-      expect(sendError()).toBe(ERR)
-    })
-
-    it('OT-7 拒绝之前切到 B → B 不动', async () => {
-      const reply = deferred<unknown>()
-      agent.respondToInput.mockReturnValueOnce(reply.promise)
-      await mountAsked()
-      await type('other answer')
-      await pressEnter()
-      await switchTo('s2', { run: { state: 'idle' } })
-      await type('in b')
-      await act(async () => reply.reject(notSent()))
-      await flush()
-      expect(textarea().value).toBe('in b')
-      expect(sendError()).toBeNull()
     })
   })
 })

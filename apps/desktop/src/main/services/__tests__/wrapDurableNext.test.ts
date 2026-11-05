@@ -124,12 +124,16 @@ describe('next through the desktop wrapper and the L1 gate', () => {
     expect(requestUserInput).toHaveBeenCalledTimes(1)
     expect(requestUserInput.mock.calls[0][0].toolName).toBe('next')
     expect(denied.isError).toBe(true)
-    expect('details' in denied).toBe(false)
+    // 只有人的回答记录，没有 next 的捕获（`details.result`）
+    expect(denied.details).toStrictEqual({ shuvixAnswers: [{ outcome: 'denied' }] })
     expect('control' in denied).toBe(false)
 
     const { result: allowed } = await call(next, { title: 'x' }, 'n-24b')
     expect(requestUserInput).toHaveBeenCalledTimes(2)
-    expect(allowed.details).toStrictEqual({ result: { title: 'x' } })
+    expect(allowed.details).toStrictEqual({
+      result: { title: 'x' },
+      shuvixAnswers: [{ outcome: 'allowed' }]
+    })
     expect(allowed.control).toStrictEqual({ terminate: true })
   })
 
@@ -144,11 +148,17 @@ describe('next through the desktop wrapper and the L1 gate', () => {
       )
     ).toBe(true)
     expect(resultText(feedback)).toContain('use B')
-    expect('details' in feedback).toBe(false)
+    // 只有人的回答记录，没有 next 的捕获（`details.result`）
+    expect(feedback.details).toStrictEqual({
+      shuvixAnswers: [{ outcome: 'feedback', text: 'use B' }]
+    })
     expect('control' in feedback).toBe(false)
 
     const { result: later } = await call(next, { title: 'B' }, 'n-25b')
-    expect(later.details).toStrictEqual({ result: { title: 'B' } })
+    expect(later.details).toStrictEqual({
+      result: { title: 'B' },
+      shuvixAnswers: [{ outcome: 'allowed' }]
+    })
   })
 
   it('P2-04-26 审查放行：不弹卡；details 恰为 {result, shuvixReview}；terminate 在；nextResultOf 从条目里读回结果', async () => {

@@ -1,25 +1,25 @@
 // @vitest-environment jsdom
 /**
- * 选项题卡片（inputs/ChoiceForm）：问题在上，下面一列带序号的选项行，勾选 + 确认；桌面上数字键勾行。
+ * 选项题卡片（inputs/ChoiceForm）：问题在上，下面一列带序号的选项行，勾选 + 发送；桌面上数字键勾行。
  *
  *   CF-1  `[data-choice-question]` 是问题；问题之后、第一行之前有一行恰是 pendingInputs.choiceHint；行
  *         `[data-choice-option]` A / B / C，序号 1 / 2 / 3，都 aria-pressed="false"；A、C 各带说明，B（说明为空）
  *         没有；没有 detail 就没有 <pre>
- *   CF-2  确认键 `[data-choice-confirm]` 起初禁用、字恰是 Confirm；点它不交
- *   CF-3  点 B → 勾上（aria-pressed true、序号换对勾）、确认可点「Confirm (1)」；再点 C →「Confirm (2)」；再点 B →
- *         勾掉、2 回来、「Confirm (1)」；点行从不交答复
- *   CF-4  先勾 C 再勾 A，确认 → 恰一次 {kind:'choice', selections:['C','A']}（按点的先后）
- *   CF-5  紧凑档、焦点在 body：2 勾 B、再 2 勾掉；1 再 3 →「Confirm (2)」；4 什么都不做；从不交
- *   CF-6  触屏档：数字键什么都不做，点行照常勾；确认键 flex-1 h-10（只断 class）
+ *   CF-2  发送键 `[data-choice-confirm]` 起初禁用、字恰是 Send；点它不交
+ *   CF-3  点 B → 勾上（aria-pressed true、序号换对勾）、发送可点「Send (1)」；再点 C →「Send (2)」；再点 B →
+ *         勾掉、2 回来、「Send (1)」；点行从不交答复
+ *   CF-4  先勾 C 再勾 A，发送 → 恰一次 {kind:'choice', selections:['C','A']}（按点的先后）
+ *   CF-5  紧凑档、焦点在 body：2 勾 B、再 2 勾掉；1 再 3 →「Send (2)」；4 什么都不做；从不交
+ *   CF-6  触屏档：数字键什么都不做，点行照常勾；发送键 flex-1 h-10（只断 class）
  *   CF-7  焦点在卡片外的 textarea 里按 1 → 不勾
  *   CF-8  detail 'ctx' → 一个 <pre> 写着 ctx，在提示行之后、第一行之前
- *   CF-9  （只断结构）选项行所在的 `.overflow-y-auto` 里有 <pre> 与每一行，没有问题、提示、确认键
+ *   CF-9  （只断结构）选项行所在的 `.overflow-y-auto` 里有 <pre> 与每一行，没有问题、提示、发送键
  *   CF-10 选项行在一个 `[role=group]` 里，aria-label = 问题
  *   CF-11 titleAccessory 在问题那一行（`[data-choice-question]` 的父节点）里、在问题之后
  *   CF-12 十二个选项：序号 1…12；1 只勾第一行；0 什么都不做
- *   CF-13 草稿是 {}（没有 selected）→ 什么都没勾、确认禁用
- *   CF-14 没有选项：没有行、确认禁用、1 什么都不做、不抛
- *   CF-15 （只断 class）禁用的确认键 bg-bg-secondary text-text-tertiary、没有 bg-accent；可点时 bg-accent
+ *   CF-13 草稿是 {}（没有 selected）→ 什么都没勾、发送禁用
+ *   CF-14 没有选项：没有行、发送禁用、1 什么都不做、不抛
+ *   CF-15 （只断 class）禁用的发送键 bg-bg-secondary text-text-tertiary、没有 bg-accent；可点时 bg-accent
  *
  * 草稿由一层有状态的包装持有（useState，setDraft 当 onDraftChange），onSubmit 是 spy；i18n 走真 en 资源。按键在
  * 目标元素上派发（bubbles + cancelable + composed），每一下各自一个 act（勾选读的是上一次渲染的 selected）。
@@ -176,7 +176,7 @@ describe('ChoiceForm：问题、提示、选项行', () => {
     expect(question().textContent).toBe('Which?')
     const hint = hintLine()
     expect(hint, 'the choice hint line').toBeDefined()
-    expect(en.pendingInputs.choiceHint).toBe('Pick one or more, then confirm')
+    expect(en.pendingInputs.choiceHint).toBe('Pick one or more, then send')
     expect(rows().map((r) => r.dataset.choiceOption)).toEqual(['A', 'B', 'C'])
     expect(before(question(), hint!)).toBe(true)
     expect(before(hint!, rows()[0])).toBe(true)
@@ -191,37 +191,37 @@ describe('ChoiceForm：问题、提示、选项行', () => {
     expect(container.querySelector('pre')).toBeNull()
   })
 
-  it('CF-2 确认键起初禁用、字恰是 Confirm；点它不交', () => {
+  it('CF-2 发送键起初禁用、字恰是 Send；点它不交', () => {
     const onSubmit = render()
     expect(confirm().disabled).toBe(true)
-    expect(confirm().textContent).toBe('Confirm')
-    expect(en.toolCall.confirmSelection).toBe('Confirm')
+    expect(confirm().textContent).toBe('Send')
+    expect(en.input.send).toBe('Send')
     click(confirm())
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('CF-3 点 B 勾上（对勾、Confirm (1)）；点 C → (2)；再点 B 勾掉（2 回来、(1)）；点行从不交', () => {
+  it('CF-3 点 B 勾上（对勾、Send (1)）；点 C → (2)；再点 B 勾掉（2 回来、(1)）；点行从不交', () => {
     const onSubmit = render()
     click(row('B'))
     expect(row('B').getAttribute('aria-pressed')).toBe('true')
     expect(badgeOf(row('B')).querySelector('svg.lucide-check')).not.toBeNull()
     expect(badgeOf(row('B')).textContent).not.toContain('2')
     expect(confirm().disabled).toBe(false)
-    expect(confirm().textContent).toBe('Confirm (1)')
+    expect(confirm().textContent).toBe('Send (1)')
 
     click(row('C'))
     expect(pressed()).toEqual(['false', 'true', 'true'])
-    expect(confirm().textContent).toBe('Confirm (2)')
+    expect(confirm().textContent).toBe('Send (2)')
 
     click(row('B'))
     expect(row('B').getAttribute('aria-pressed')).toBe('false')
     expect(badgeOf(row('B')).textContent).toBe('2')
     expect(badgeOf(row('B')).querySelector('svg.lucide-check')).toBeNull()
-    expect(confirm().textContent).toBe('Confirm (1)')
+    expect(confirm().textContent).toBe('Send (1)')
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('CF-4 先勾 C 再勾 A，确认 → 恰一次，selections 按点的先后', () => {
+  it('CF-4 先勾 C 再勾 A，发送 → 恰一次，selections 按点的先后', () => {
     const onSubmit = render()
     click(row('C'))
     click(row('A'))
@@ -231,7 +231,7 @@ describe('ChoiceForm：问题、提示、选项行', () => {
 })
 
 describe('ChoiceForm：数字键', () => {
-  it('CF-5 紧凑档：2 勾 B、再 2 勾掉；1 再 3 → Confirm (2)；4 什么都不做；从不交', () => {
+  it('CF-5 紧凑档：2 勾 B、再 2 勾掉；1 再 3 → Send (2)；4 什么都不做；从不交', () => {
     const onSubmit = render()
     expect(document.activeElement).toBe(document.body)
     expect(press('2')).toBe(false)
@@ -241,13 +241,13 @@ describe('ChoiceForm：数字键', () => {
     press('1')
     press('3')
     expect(pressed()).toEqual(['true', 'false', 'true'])
-    expect(confirm().textContent).toBe('Confirm (2)')
+    expect(confirm().textContent).toBe('Send (2)')
     expect(press('4')).toBe(true)
     expect(pressed()).toEqual(['true', 'false', 'true'])
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('CF-6 触屏档：数字键什么都不做，点行照常勾；确认键 flex-1 h-10', () => {
+  it('CF-6 触屏档：数字键什么都不做，点行照常勾；发送键 flex-1 h-10', () => {
     const onSubmit = render(choice(), { touch: true })
     for (const key of ['1', '2', '3']) expect(press(key), key).toBe(true)
     expect(pressed()).toEqual(['false', 'false', 'false'])
@@ -295,7 +295,7 @@ describe('ChoiceForm：说明、滚动段、选项组', () => {
     expect(before(pres[0], rows()[0])).toBe(true)
   })
 
-  it('CF-9 选项行所在的滚动段里有 <pre> 与每一行，没有问题、提示、确认键', () => {
+  it('CF-9 选项行所在的滚动段里有 <pre> 与每一行，没有问题、提示、发送键', () => {
     render(choice({ detail: 'ctx' }))
     const scroller = rows()[0].closest('.overflow-y-auto')
     expect(scroller).not.toBeNull()
@@ -324,14 +324,14 @@ describe('ChoiceForm：说明、滚动段、选项组', () => {
 })
 
 describe('ChoiceForm：边角', () => {
-  it('CF-13 草稿是 {}：什么都没勾、确认禁用', () => {
+  it('CF-13 草稿是 {}：什么都没勾、发送禁用', () => {
     render(choice(), { initial: {} as ChoiceDraft })
     expect(pressed()).toEqual(['false', 'false', 'false'])
     expect(confirm().disabled).toBe(true)
-    expect(confirm().textContent).toBe('Confirm')
+    expect(confirm().textContent).toBe('Send')
   })
 
-  it('CF-14 没有选项：没有行、确认禁用、1 什么都不做', () => {
+  it('CF-14 没有选项：没有行、发送禁用、1 什么都不做', () => {
     const onSubmit = render(choice({ options: [] }))
     expect(rows()).toHaveLength(0)
     expect(confirm().disabled).toBe(true)
@@ -341,7 +341,7 @@ describe('ChoiceForm：边角', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('CF-15 禁用的确认键是安静的灰，可点时是强调色', () => {
+  it('CF-15 禁用的发送键是安静的灰，可点时是强调色', () => {
     render()
     let cls = classesOf(confirm())
     expect(cls).toEqual(expect.arrayContaining(['bg-bg-secondary', 'text-text-tertiary']))

@@ -3,7 +3,8 @@
  *   - 拒绝计数：连续 3 次或累计 20 次审查拒绝之后，本会话的询问跳过审查、直接问人；
  *     审查放行 / 人回答一次清连续计数，累计计数只有 clearReviewState 清；
  *   - 人在审批卡片上写的反馈：执行层收到「其它」回答时记下，审查员只认这一份；
- *   - 进行中的审查：会话被停止时一并中止，下一次 prompt 之前不再受理新的。
+ *   - 进行中的审查：会话被停止时一并中止，下一次 prompt 之前不再受理新的；
+ *   - 人在审批卡片上的回答（工具行上那行记录）：按调用分桶，取走即无（ANS-RS 系列）。
  *
  * 状态是进程级的 Map：每条用例用自己的会话 id，afterEach 统一 clearReviewState。
  */
@@ -14,11 +15,13 @@ import {
   abortSessionReviews,
   clearReviewState,
   humanFeedbackOf,
+  noteHumanAnswer,
   noteHumanFeedback,
   noteReviewCleared,
   noteReviewDenied,
   reopenSessionReviews,
   reviewSuspended,
+  takeHumanAnswers,
   trackReview
 } from '../reviewState'
 
@@ -273,5 +276,83 @@ describe('reviewState — 进行中的审查', () => {
     abortSessionReviews(sid)
     expect(fresh.signal.aborted).toBe(true)
     release!()
+  })
+})
+
+describe('reviewState — 人在审批卡片上的回答', () => {
+  const allowed = { outcome: 'allowed' } as const
+  const denied = { outcome: 'denied' } as const
+
+  it('ANS-RS-1 一次调用记两条：按回答的先后取出；再取一次是空的', () => {
+    const sid = newSid()
+    noteHumanAnswer(sid, 'c1', allowed)
+    noteHumanAnswer(sid, 'c1', denied)
+    expect(takeHumanAnswers(sid, 'c1')).toStrictEqual([allowed, denied])
+    expect(takeHumanAnswers(sid, 'c1')).toStrictEqual([])
+  })
+
+  it('ANS-RS-2 同一 toolCallId、不同 taskId 各占一桶：取走任务 1 不动任务 2', () => {
+    const sid = newSid()
+    noteHumanAnswer(sid, { toolCallId: 'c', taskId: 1 }, allowed)
+    noteHumanAnswer(sid, { toolCallId: 'c', taskId: 2 }, denied)
+    expect(takeHumanAnswers(sid, { toolCallId: 'c', taskId: 1 })).toStrictEqual([allowed])
+    expect(takeHumanAnswers(sid, { toolCallId: 'c', taskId: 2 })).toStrictEqual([denied])
+  })
+
+  it('ANS-RS-3 同一调用在两个会话里互不相干', () => {
+    const a = newSid('a')
+    const b = newSid('b')
+    noteHumanAnswer(a, 'c', allowed)
+    expect(takeHumanAnswers(b, 'c')).toStrictEqual([])
+    noteHumanAnswer(b, 'c', denied)
+    expect(takeHumanAnswers(a, 'c')).toStrictEqual([allowed])
+    expect(takeHumanAnswers(b, 'c')).toStrictEqual([denied])
+  })
+
+  it('ANS-RS-4 空 toolCallId 且没有 taskId 不记；字符串 id 记得住', () => {
+    const sid = newSid()
+    noteHumanAnswer(sid, { toolCallId: '' }, allowed)
+    expect(takeHumanAnswers(sid, { toolCallId: '' })).toStrictEqual([])
+    expect(takeHumanAnswers(sid, '')).toStrictEqual([])
+
+    noteHumanAnswer(sid, 'c1', allowed)
+    expect(takeHumanAnswers(sid, { toolCallId: 'c1' })).toStrictEqual([allowed])
+  })
+
+  it('ANS-RS-5 带 taskId 记的，只给 toolCallId 取不到（键是 task:<id>）', () => {
+    const sid = newSid()
+    noteHumanAnswer(sid, { toolCallId: 'c', taskId: 7 }, allowed)
+    expect(takeHumanAnswers(sid, { toolCallId: 'c' })).toStrictEqual([])
+    expect(takeHumanAnswers(sid, 'c')).toStrictEqual([])
+    expect(takeHumanAnswers(sid, { toolCallId: 'other', taskId: 7 })).toStrictEqual([allowed])
+  })
+
+  it('ANS-RS-6 上限 50 次调用：第 51 次挤掉最旧的；再记一条的旧键算新的', () => {
+    const sid = newSid()
+    for (let i = 0; i < 51; i++) noteHumanAnswer(sid, `c${i}`, allowed)
+    expect(takeHumanAnswers(sid, 'c0')).toStrictEqual([])
+    for (let i = 1; i < 51; i++) expect(takeHumanAnswers(sid, `c${i}`)).toHaveLength(1)
+
+    const fresh = newSid()
+    for (let i = 0; i < 50; i++) noteHumanAnswer(fresh, `c${i}`, allowed)
+    noteHumanAnswer(fresh, 'c0', denied) // c0 变成最新的，下一个被挤掉的是 c1
+    noteHumanAnswer(fresh, 'c50', allowed)
+    expect(takeHumanAnswers(fresh, 'c1')).toStrictEqual([])
+    expect(takeHumanAnswers(fresh, 'c0')).toStrictEqual([allowed, denied])
+  })
+
+  it('ANS-RS-7 clearReviewState 把没取走的回答一并清掉', () => {
+    const sid = newSid()
+    noteHumanAnswer(sid, 'c', allowed)
+    clearReviewState(sid)
+    expect(takeHumanAnswers(sid, 'c')).toStrictEqual([])
+  })
+
+  it('ANS-RS-8 停止与重开审查都不碰回答（丢弃是宿主在工具收尾时做的）', () => {
+    const sid = newSid()
+    noteHumanAnswer(sid, 'c', allowed)
+    abortSessionReviews(sid)
+    reopenSessionReviews(sid)
+    expect(takeHumanAnswers(sid, 'c')).toStrictEqual([allowed])
   })
 })

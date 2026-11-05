@@ -6,10 +6,11 @@
  * 就是多一行，所以不再有分体按钮与下拉。
  *
  * 桌面上数字键 1–9 直接选对应的行（`useOptionHotkeys`），但只在焦点不在任何可编辑元素里时：输入框里
- * 打的「1」是要发给 AI 的字，审批卡片绝不能被一次按键顺手放行。
+ * 打的「1」是要发给 AI 的字，审批卡片绝不能被一次按键顺手放行。卡片在对话流里时还要看得见才算：往上翻历史时
+ * 按下的「1」不能批准一张没看见的卡（`OptionHotkeyGuardContext`）。
  */
 import { Check } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { createContext, useContext, useEffect, useRef } from 'react'
 import { useChatDensity } from '../../../host/chatHostContext'
 
 export interface OptionRowProps {
@@ -113,14 +114,23 @@ function isEditableTarget(e: KeyboardEvent): boolean {
 }
 
 /**
+ * 数字键此刻算不算数，按键那一刻才问。缺省（null）= 算：卡片长在输入框里时总是看得见的。对话流里的卡片由外面
+ * 给一个量位置的函数
+ */
+export const OptionHotkeyGuardContext = createContext<(() => boolean) | null>(null)
+
+/**
  * 数字键选行（只在桌面紧凑档）：按 1–9 等于点第 n 行。焦点在可编辑元素里、带修饰键、输入法组字中、
  * 长按连发都不算。`onPick` 每次渲染都可能是新函数，用 ref 读最新的，监听只随行数与开关重装。
  */
 export function useOptionHotkeys(count: number, onPick: (index: number) => void): void {
   const touch = useChatDensity() === 'touch'
+  const guard = useContext(OptionHotkeyGuardContext)
   const pickRef = useRef(onPick)
+  const guardRef = useRef(guard)
   useEffect(() => {
     pickRef.current = onPick
+    guardRef.current = guard
   })
   useEffect(() => {
     if (touch || count === 0) return
@@ -131,6 +141,7 @@ export function useOptionHotkeys(count: number, onPick: (index: number) => void)
       if (!/^[1-9]$/.test(e.key)) return
       const index = Number(e.key) - 1
       if (index >= count) return
+      if (guardRef.current && !guardRef.current()) return
       e.preventDefault()
       pickRef.current(index)
     }

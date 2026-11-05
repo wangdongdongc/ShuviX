@@ -36,6 +36,7 @@ import { recordDecision } from './decisionLog'
 import { matchesPathEntry } from './allowEntries'
 import { commandRiskOf } from './commandRisk'
 import {
+  noteHumanAnswer,
   noteHumanFeedback,
   noteReviewAllowed,
   noteReviewCleared,
@@ -410,11 +411,13 @@ export async function executeDecision(args: {
   if (response.kind === 'other') {
     // 人写的反馈记在安全模块这里 —— 审查员只认这份，不认会话树里那段谁都能打印的工具结果文字
     noteHumanFeedback(sessionId, askCommand, response.text)
+    noteHumanAnswer(sessionId, reviewCallOf(opts), { outcome: 'feedback', text: response.text })
     record('feedback', true, review)
     if (opts.onOther === 'return') return { status: 'feedback', text: response.text }
     throw new Error(otherMessage(request, display, response.text))
   }
   if (response.kind !== 'ask' || !response.allowed) {
+    noteHumanAnswer(sessionId, reviewCallOf(opts), { outcome: 'denied' })
     record('denied', true, review)
     throw new Error((response.kind === 'ask' && response.reason) || deniedMessage(request, display))
   }
@@ -434,18 +437,29 @@ export async function executeDecision(args: {
     typeof object.widgetId === 'string'
   const remember =
     (rememberPath || rememberSession || rememberWidget) && !!decision.ask?.rememberEntry
+  let rememberedTarget: string | undefined
   if (remember && rememberPath) {
-    provider.persistGrant?.(
-      mode,
-      rememberTargetOf(provider, String(object.path), response.extra?.rememberPath)
-    )
+    rememberedTarget = rememberTargetOf(provider, String(object.path), response.extra?.rememberPath)
+    provider.persistGrant?.(mode, rememberedTarget)
   } else if (remember && rememberSession) {
+    rememberedTarget = decision.ask?.session?.title
     provider.persistSessionGrant?.(mode, String(object.sessionId))
   } else if (remember && rememberWidget) {
+    rememberedTarget = decision.ask?.widget?.name
     // 读操作的卡片可以一次记成可读写（`extra.rememberAccess: 'write'`）；只会放宽、不会收窄这次问的访问方式
     const access = response.extra?.rememberAccess === 'write' ? 'write' : mode
     provider.persistWidgetGrant?.(access, String(object.widgetId))
   }
+  noteHumanAnswer(
+    sessionId,
+    reviewCallOf(opts),
+    remember
+      ? {
+          outcome: 'remembered',
+          ...(rememberedTarget === undefined ? {} : { target: rememberedTarget })
+        }
+      : { outcome: 'allowed' }
+  )
   record(remember ? 'allowed_remember' : 'allowed', true, review)
   return { status: 'allowed' }
 }

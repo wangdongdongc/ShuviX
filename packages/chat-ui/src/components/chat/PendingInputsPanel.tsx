@@ -1,24 +1,22 @@
 /**
- * PendingInputsPanel — 输入框卡片的「上半格」：待处理输入
+ * PendingInputsPanel — 待处理输入（审批与选择题）
  *
  * 形态:
- * - 不是独立浮窗,而是渲染进输入框卡片内部的第一格(InputArea 的 accessory 插槽),
- *   自身无边框/底色/阴影/圆角,只用一条 border-b 与下方输入区分隔 —— 视觉上是同一张卡片。
- *   语义色交给卡片描边(InputArea 按 kind 换色)与图标;这一格不铺底色。
+ * - 普通会话里在对话流末尾，由 PendingInputsCard 套一张卡片；笔记本的主界面不是对话，仍是输入框卡片内部的第一格
+ *   (InputArea 的 accessory 插槽，经 PendingInputsDrawer)，这时只用一条 border-b 与下方输入区分隔。
+ *   两处都不铺底色，语义色交给外面的描边与图标。
  * - 审批与选项题同一个形状:问题在上,下面一列占满宽度的选项行(inputs/OptionRows),
  *   桌面上数字键直接选行;触屏档行高 44px。
  * - 多条 pending 时,标题行右端出现 `‹ n/m ›` 步进器 + [一键提交已填];单条时不占任何额外空间。
- *   选中项存在 chatStore(sessionActiveInputId),与输入框共用 —— 输入框据此知道
- *   「其它」反馈该投给哪条请求。
+ *   选中项存在 chatStore(sessionActiveInputId)。
  *
  * 设计取舍:
- * - 没有独立的「其它」输入框:主输入框在有 pending 时就是它(回车/发送投递 `kind: 'other'`),
- *   后端工具收到 other 时不执行副作用,把文本作为 tool result 返回 AI。
- *   代价是「其它」草稿按会话共用一份而非逐条隔离 —— 换掉一整个重复输入位,值。
+ * - 「其它」是每张卡片自己的最后一行(inputs/OtherAnswerRow,只写字投 `kind: 'other'`,选项题勾选之外写的话随勾选一起发,草稿逐条隔离),
+ *   后端工具收到 other 时不执行副作用,把文本作为 tool result 返回 AI。主输入框只管发消息,有 pending 时也一样。
  * - 不提供"取消"按钮(用户主动取消的语义被"其它"取代);
  *   真正想中止整个 turn 应使用 agent.abort,而非 input 面板。
  */
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useChatStore, selectPendingInputs, selectActivePendingInput } from '../../stores/chatStore'
@@ -31,6 +29,7 @@ import type {
 } from '@shuvix/chat-protocol/types/inputRequest'
 import { AskForm } from './inputs/AskForm'
 import { ChoiceForm } from './inputs/ChoiceForm'
+import { answerErrorText } from './inputs/useAnswerSubmit'
 import {
   buildAskResponse,
   buildChoiceResponse,
@@ -43,9 +42,11 @@ import {
 interface PendingInputsPanelProps {
   /**
    * 统一的"用户输入响应"回调。
-   * 子表单提交 / 一键批量提交都通过它（「其它」反馈由输入框直接投递）。
+   * 子表单提交 / 一键批量提交都通过它。返回 Promise 时，投「其它」的那一行会接住失败、把错误显示出来。
    */
-  onResponse: (requestId: string, response: InputResponse) => void
+  onResponse: (requestId: string, response: InputResponse) => void | Promise<void>
+  /** 在哪里：composer = 输入框卡片的顶格（缺省），conversation = 对话流里自成一张卡片 */
+  placement?: 'composer' | 'conversation'
 }
 
 /** 根据 request.kind 创建一个空白 draft */
@@ -63,7 +64,8 @@ function buildResponseFor(req: InputRequest, draft: unknown): InputResponse | nu
 }
 
 export function PendingInputsPanel({
-  onResponse
+  onResponse,
+  placement = 'composer'
 }: PendingInputsPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const touch = useChatDensity() === 'touch'
@@ -75,6 +77,7 @@ export function PendingInputsPanel({
   )
   const setInputDraft = useChatStore((s) => s.setInputDraft)
   const setActiveInputId = useChatStore((s) => s.setActiveInputId)
+  const [batchError, setBatchError] = useState<string | null>(null)
 
   // 为每条 pending 准备 draft(惰性初始化:首次使用时写入 store,避免每次渲染创建新对象)
   useEffect(() => {
@@ -108,9 +111,8 @@ export function PendingInputsPanel({
   }
 
   /** 子表单 onSubmit — 直接转发给父级 */
-  const handleSubmit = (response: InputResponse): void => {
+  const handleSubmit = (response: InputResponse): void | Promise<void> =>
     onResponse(activeRequest.id, response)
-  }
 
   /** 步进器：环形前后切换 */
   const step = (delta: number): void => {
@@ -120,10 +122,15 @@ export function PendingInputsPanel({
 
   /** 一键提交所有"已填"的请求 */
   const handleSubmitAllFilled = (): void => {
+    setBatchError(null)
     for (const req of pendingInputs) {
       const draft = sessionDrafts?.[req.id]
       const response = draft !== undefined ? buildResponseFor(req, draft) : null
-      if (response) onResponse(req.id, response)
+      if (!response) continue
+      // 没送到的那条还挂着、草稿也在：说一声，别让它变成没人接的 rejection
+      Promise.resolve()
+        .then(() => onResponse(req.id, response))
+        .catch((err: unknown) => setBatchError(answerErrorText(err, t)))
     }
   }
 
@@ -173,11 +180,11 @@ export function PendingInputsPanel({
     ) : null
 
   return (
-    // 长选项列表 / 长命令不能把输入区顶出屏幕：上半格自身封顶，表单里只有内容那段滚动 ——
-    // 选项行与确认键钉在底部，始终看得见。语义色只在卡片描边上（InputArea），这一格不再铺底色
+    // 长选项列表 / 长命令不能把选项顶出屏幕：这一格自身封顶，表单里只有内容那段滚动 ——
+    // 选项行与确认键钉在底部，始终看得见。语义色只在外面的描边上，这一格不铺底色
     <div
-      className={`rounded-t-2xl border-b border-border-secondary/40 flex flex-col min-h-0 ${
-        touch ? 'max-h-[60vh]' : 'max-h-[50vh]'
+      className={`flex flex-col min-h-0 ${touch ? 'max-h-[60vh]' : 'max-h-[50vh]'} ${
+        placement === 'composer' ? 'rounded-t-2xl border-b border-border-secondary/40' : ''
       }`}
       data-pending-inputs={activeRequest.kind}
     >
@@ -201,6 +208,16 @@ export function PendingInputsPanel({
           onSubmit={handleSubmit}
           titleAccessory={stepper}
         />
+      )}
+      {batchError && (
+        <div
+          data-pending-batch-error=""
+          className={`flex-shrink-0 text-error break-words ${
+            touch ? 'px-4 pb-2 text-xs' : 'px-3.5 pb-1.5 text-[11px]'
+          }`}
+        >
+          {t('input.sendFailed', { error: batchError })}
+        </div>
       )}
     </div>
   )

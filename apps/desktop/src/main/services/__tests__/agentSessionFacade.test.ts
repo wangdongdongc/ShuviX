@@ -627,6 +627,67 @@ describe('WP2 来源与答题方', () => {
     }
   )
 
+  describe('WP2-63 卡片上勾选之外写的话走输入框那条路', () => {
+    const SECRET = { value: 'hunter2', category: 'PASSWORD' } as never
+    const asked = { pendingInputs: () => [{ id: 'c1' }] }
+    const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+    it('带 secrets：只换 note，secrets 不往下传，meta 照转', async () => {
+      const maskComposerTexts = vi.fn(async () => ['use {{X}}'])
+      const { durable, session } = facade({
+        ...asked,
+        redaction: { maskComposerTexts }
+      } as never)
+      const meta = { clientId: 'ipc:7' }
+      expect(
+        session.respondToInput(
+          'c1',
+          { kind: 'choice', selections: ['A'], note: 'use hunter2', secrets: [SECRET] },
+          meta
+        )
+      ).toBe(true)
+      await settle()
+      expect(maskComposerTexts).toHaveBeenCalledWith(['use hunter2'], [SECRET])
+      expect(durable.callsOf('respondToInput')).toEqual([
+        ['respondToInput', 'c1', { kind: 'choice', selections: ['A'], note: 'use {{X}}' }]
+      ])
+      expect(durable.respondArgs[0]!.meta).toBe(meta)
+    })
+
+    it('没开脱敏却要藏值：不答，卡片留着', async () => {
+      const { durable, session } = facade(asked as never)
+      session.respondToInput('c1', {
+        kind: 'choice',
+        selections: ['A'],
+        note: 'use hunter2',
+        secrets: [SECRET]
+      })
+      await settle()
+      expect(durable.callsOf('respondToInput')).toEqual([])
+    })
+
+    it('没有 secrets 字段：原样转给 durable，不经过脱敏', () => {
+      const maskComposerTexts = vi.fn()
+      const { durable, session } = facade({ ...asked, redaction: { maskComposerTexts } } as never)
+      const response: InputResponse = { kind: 'choice', selections: ['A'], note: 'x' }
+      session.respondToInput('c1', response)
+      expect(maskComposerTexts).not.toHaveBeenCalled()
+      expect(durable.callsOf('respondToInput')).toEqual([['respondToInput', 'c1', response]])
+    })
+
+    it('答不了的询问：返回 false', () => {
+      const { session } = facade({ pendingInputs: () => [] } as never)
+      expect(
+        session.respondToInput('gone', {
+          kind: 'choice',
+          selections: ['A'],
+          note: 'x',
+          secrets: []
+        })
+      ).toBe(false)
+    })
+  })
+
   it('WP2-61 界面的 steer 形状不变：options 里没有 requestId / source；被拒仍带原文 reject', async () => {
     const { durable, session } = facade()
     await session.steer('s')

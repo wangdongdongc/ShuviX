@@ -1,13 +1,12 @@
 /**
  * PendingInputsDrawer — 笔记本会话的「询问抽屉」：给 PendingInputsPanel 套一条可折叠细条。
  *
- * 普通会话的询问面板常驻展开（Agent 在等答复，注意力优先，Conversation 直接挂 accessory）；
+ * 普通会话的询问在对话流末尾（PendingInputsCard），不经这里；
  * 笔记本以 live preview 为主界面，输入卡片里对话抽屉与询问面板两块限高区同时展开会吃满
  * 整屏 —— 所以询问区在笔记本获得独立的折叠开关（对话区的开关在 ThreadDrawer，两者互不牵连；
  * ThreadDrawer 在询问出现的沿上自动折叠让位）。
  *
- * 默认展开；新询问到来（当前请求切换/从无到有）自动重新展开。折叠后细条保留语义色与计数；
- * 回车的「其它反馈」路由不受影响 —— 那由 chatStore 的 pending 状态驱动，与可见性无关。
+ * 默认展开；新询问到来（当前请求切换/从无到有）自动重新展开。折叠后细条保留语义色与计数。
  * 无待处理询问时整体隐藏（细条也不占高度）。
  */
 import { useState } from 'react'
@@ -20,7 +19,7 @@ import { PendingInputsPanel } from './PendingInputsPanel'
 export function PendingInputsDrawer({
   onResponse
 }: {
-  onResponse: (requestId: string, response: InputResponse) => void
+  onResponse: (requestId: string, response: InputResponse) => void | Promise<void>
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const pendingCount = useChatStore((s) => selectPendingInputs(s).length)

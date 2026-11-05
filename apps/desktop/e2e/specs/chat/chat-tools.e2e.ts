@@ -289,7 +289,7 @@ describe('询问卡片', () => {
 
     const request = { request: await probe.nextAsk(sids.ask) }
     await until(async () => (await chat.pendingPanel()).open, 'pending panel open')
-    expect(await chat.pendingPanel()).toEqual({ open: true, firstInCard: true })
+    expect(await chat.pendingPanel()).toEqual({ open: true, inConversation: true })
 
     await app.main.eval(
       `window.api.agent.respondToInput(${JSON.stringify({

@@ -303,30 +303,13 @@ function blockRow(
 }
 
 /**
- * 界面的折叠分组，再把 ask 调用单独拎出来：父会话要看得见它问了什么、得到了什么回答，折进一串步骤里就藏起来了。
- * 交回的每一段是「一个块」或「两个以上可折叠的块」，与 groupConsecutiveSteps 的形状相同。
+ * 界面的折叠分组：ask 调用和人答过的调用不进合并行（groupConsecutiveSteps），父会话看得见问了什么、得到了什么回答。
+ * 交回的每一段是「一个块」或「两个以上可折叠的块」。
  */
 function outlineGroups(blocks: readonly AssistantBlock[]): AssistantBlock[][] {
-  const out: AssistantBlock[][] = []
-  for (const group of groupConsecutiveSteps(blocks)) {
-    if (group.kind === 'single') {
-      out.push([group.block])
-      continue
-    }
-    let run: AssistantBlock[] = []
-    const flush = (): void => {
-      if (run.length > 0) out.push(run)
-      run = []
-    }
-    for (const block of group.blocks) {
-      if (block.type === 'tool' && block.toolName === 'ask') {
-        flush()
-        out.push([block])
-      } else run.push(block)
-    }
-    flush()
-  }
-  return out
+  return groupConsecutiveSteps(blocks).map((group) =>
+    group.kind === 'single' ? [group.block] : group.blocks
+  )
 }
 
 function assistantRows(

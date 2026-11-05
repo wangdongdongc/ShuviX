@@ -396,7 +396,10 @@ export class AgentSession {
 
   /** 应答一条挂起的询问（先到者胜）；`meta.clientId` = 答题方，交给运行时供审计（P3-08 PIN-20） */
   respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean {
-    if (response.kind === 'other' && response.secrets !== undefined) {
+    if (
+      (response.kind === 'other' || response.kind === 'choice') &&
+      response.secrets !== undefined
+    ) {
       if (!this.durable.pendingInputs().some((request) => request.id === requestId)) return false
       void this.respondFromComposer(
         requestId,
@@ -412,18 +415,18 @@ export class AgentSession {
   }
 
   /**
-   * 输入框里用「其它」答的话（docs/auto-redaction-design.md §14）：先把用户交来的值换成占位符，再交给工具 —— secrets
+   * 卡片上写的话（「其它」或勾选之外的补充，docs/auto-redaction-design.md §14）：先把用户交来的值换成占位符，再交给工具 —— secrets
    * 从不往下传。没配脱敏却交来了要藏的值：不答（卡片留着），记 error；换的时候出错同样不答。
    */
   private async respondFromComposer(
     requestId: string,
-    response: InputResponse & { kind: 'other' },
+    response: Extract<InputResponse, { kind: 'other' | 'choice' }>,
     secrets: UserSecret[],
     meta?: InputResponseMeta
   ): Promise<void> {
     const { secrets: _secrets, ...rest } = response
     const redaction = this.durable.redaction
-    let text = rest.text
+    let text = rest.kind === 'other' ? rest.text : (rest.note ?? '')
     const notDelivered = (reason: string): void => {
       log.error(
         `session ${this.sessionId}: an answer with hidden values was not delivered: ${reason}`
@@ -445,7 +448,10 @@ export class AgentSession {
       notDelivered(error instanceof Error ? error.message : String(error))
       return
     }
-    const answer: InputResponse = { ...rest, text }
+    const answer: InputResponse =
+      rest.kind === 'other'
+        ? { ...rest, text }
+        : { ...rest, ...(rest.note === undefined ? {} : { note: text }) }
     if (meta === undefined) this.durable.respondToInput(requestId, answer)
     else this.durable.respondToInput(requestId, answer, meta)
   }

@@ -31,10 +31,12 @@ import type {
 import { builtinMcpCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import type { InputFormProps } from './types'
-import type { AskDraft } from './drafts'
+import { otherResponseOf, type AskDraft } from './drafts'
 import { DiffViewer } from '../DiffViewer'
 import { ASK_PREVIEW_MAX_H } from '../detailViewport'
 import { OptionRow, useOptionHotkeys } from './OptionRows'
+import { OtherAnswerRow } from './OtherAnswerRow'
+import { useAnswerSubmit } from './useAnswerSubmit'
 
 hljs.registerLanguage('bash', bash)
 hljs.registerLanguage('powershell', powershell)
@@ -291,14 +293,15 @@ interface AskOption {
 
 export function AskForm({
   request,
-  draft: _draft,
-  onDraftChange: _onDraftChange,
+  draft,
+  onDraftChange,
   onSubmit,
   titleAccessory
 }: InputFormProps<AskInputRequest, AskDraft>): React.JSX.Element {
   const { t } = useTranslation()
   const touch = useChatDensity() === 'touch'
   const [policyOpen, setPolicyOpen] = useState(false)
+  const submit = useAnswerSubmit(onSubmit)
   const {
     command,
     requestedPath,
@@ -566,20 +569,30 @@ export function AskForm({
         )}
       </div>
 
-      {/* 选项行：允许这一次 / 记住… / 拒绝 —— 也可以不选，直接在下面的输入框告诉 AI 换个做法 */}
-      <div className="flex-shrink-0" role="group" aria-label={title}>
-        {options.map((opt, i) => (
-          <OptionRow
-            key={opt.id}
-            index={i}
-            label={opt.label}
-            detail={opt.detail}
-            detailIsPath={opt.detailIsPath}
-            primary={opt.primary}
-            onPick={opt.onPick}
-            data={{ 'data-ask-option': opt.id, ...opt.data }}
-          />
-        ))}
+      {/* 选项行：允许这一次 / 记住… / 拒绝 —— 也可以不选，在最后一行告诉 AI 换个做法 */}
+      <div className="flex-shrink-0">
+        <div role="group" aria-label={title}>
+          {options.map((opt, i) => (
+            <OptionRow
+              key={opt.id}
+              index={i}
+              label={opt.label}
+              detail={opt.detail}
+              detailIsPath={opt.detailIsPath}
+              primary={opt.primary}
+              onPick={opt.onPick}
+              data={{ 'data-ask-option': opt.id, ...opt.data }}
+            />
+          ))}
+        </div>
+        <OtherAnswerRow
+          placeholder={t('pendingInputs.otherPlaceholderAsk')}
+          value={draft.otherText ?? ''}
+          onChange={(otherText) => onDraftChange({ ...draft, otherText })}
+          response={otherResponseOf(draft.otherText)}
+          submit={submit}
+          sendButton
+        />
       </div>
     </div>
   )

@@ -297,6 +297,11 @@ export interface AskToolDetails {
   question: string
   selections: string[]
   /**
+   * 答题方写的一段话：`selections` 为空时是「其它」，不为空时是勾选之外的补充。
+   * 旧会话的「其它」回答没有这一项，那段话只在工具结果的文字里
+   */
+  other?: string
+  /**
    * 不是用户本人答的（驱动它的会话代答 —— 父会话或被授权的别的会话，docs/sub-session-design.md §19.5）。
    * 卡片据此写「由父会话「X」代答」/「由会话「X」代答」，自动审查据此不把这次回答当成用户的意思。缺省 = 用户本人。
    */

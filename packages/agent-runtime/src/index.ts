@@ -266,6 +266,7 @@ export {
   abortSessionReviews,
   reopenSessionReviews,
   takeReviewAllowed,
+  takeHumanAnswers,
   reviewCallKey,
   type ReviewCall,
   type HumanFeedbackNote,

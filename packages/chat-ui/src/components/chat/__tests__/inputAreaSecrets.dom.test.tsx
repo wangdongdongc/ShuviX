@@ -19,7 +19,7 @@
  *   SC-10 粘贴芯片里确认的（没有胶囊、只有值）：放回之后粘贴芯片回来，重发的 secrets 还带着它
  *   SC-11 放回之后：藏起来的值不再提示；新加的胶囊编号 #2
  *   SC-12 放回之后：退格紧贴胶囊尾部、或改了占位里的字 → 胶囊没了，下一次发送不带它
- *   SC-13 steer / followUp /「其它」失败：同 SC-8
+ *   SC-13 steer / followUp 失败：同 SC-8
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -63,7 +63,6 @@ import {
   pasteInto,
   useFakeClock
 } from '../../../__tests__/support/sendFailure'
-import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -562,46 +561,36 @@ describe('话没发出去，放回输入框', () => {
     expect(prompt.mock.calls[1]![0]).toEqual({ sessionId: 's1', text: edited, secrets: [] })
   })
 
-  const ASK: InputRequest = { id: 'r1', kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 }
+  it.each<[string, 'steer' | 'followUp']>([
+    ['steer', 'steer'],
+    ['followUp', 'followUp']
+  ])('SC-13 %s 失败：胶囊回来，DOM 里没有真值，重发带真值与 secrets', async (_label, method) => {
+    const agent = (
+      window as unknown as { api: { agent: Record<string, ReturnType<typeof vi.fn>> } }
+    ).api.agent
+    failOnce(agent[method]!, notSent())
+    await mountInput()
+    act(() => applySessionView('s1', V('s1', { run: { state: 'busy' } })))
+    await flush()
+    await type('use ')
+    await addChip(PASSWORD)
 
-  it.each<[string, 'steer' | 'followUp' | 'respondToInput', boolean]>([
-    ['steer', 'steer', false],
-    ['followUp', 'followUp', false],
-    ['「其它」', 'respondToInput', true]
-  ])(
-    'SC-13 %s 失败：胶囊回来，DOM 里没有真值，重发带真值与 secrets',
-    async (_label, method, ask) => {
-      const agent = (
-        window as unknown as { api: { agent: Record<string, ReturnType<typeof vi.fn>> } }
-      ).api.agent
-      failOnce(agent[method]!, notSent())
-      await mountInput()
-      act(() => applySessionView('s1', V('s1', { run: { state: 'busy' }, asks: ask ? [ASK] : [] })))
-      await flush()
-      await type('use ')
-      await addChip(PASSWORD)
-
-      const fire = async (): Promise<void> => {
-        if (method === 'followUp')
-          await click(container.querySelector('[data-queue-tier="followUp"]')!)
-        else await key(textarea(), 'Enter')
-      }
-      await fire()
-      expect(agent[method]).toHaveBeenCalledTimes(1)
-      expectChipBack(`use ${chipOf(1)}`)
-      expect(container.querySelector('[data-send-error]')).not.toBeNull()
-
-      await fire()
-      expect(agent[method]).toHaveBeenCalledTimes(2)
-      expect(agent[method]!.mock.calls[1]![0]).toEqual(
-        ask
-          ? {
-              sessionId: 's1',
-              requestId: 'r1',
-              response: { kind: 'other', text: `use ${PASSWORD}`, secrets: hidden(PASSWORD) }
-            }
-          : { sessionId: 's1', text: `use ${PASSWORD}`, secrets: hidden(PASSWORD) }
-      )
+    const fire = async (): Promise<void> => {
+      if (method === 'followUp')
+        await click(container.querySelector('[data-queue-tier="followUp"]')!)
+      else await key(textarea(), 'Enter')
     }
-  )
+    await fire()
+    expect(agent[method]).toHaveBeenCalledTimes(1)
+    expectChipBack(`use ${chipOf(1)}`)
+    expect(container.querySelector('[data-send-error]')).not.toBeNull()
+
+    await fire()
+    expect(agent[method]).toHaveBeenCalledTimes(2)
+    expect(agent[method]!.mock.calls[1]![0]).toEqual({
+      sessionId: 's1',
+      text: `use ${PASSWORD}`,
+      secrets: hidden(PASSWORD)
+    })
+  })
 })

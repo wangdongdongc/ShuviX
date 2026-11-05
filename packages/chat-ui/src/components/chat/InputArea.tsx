@@ -78,9 +78,8 @@ export interface InputAreaProps {
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
  *
- * 有待处理输入请求（询问/选择/SSH）时，本输入框同时就是「其它」反馈入口：
- * 卡片顶部长出 PendingInputsPanel，描边转语义色，回车/发送投递 `kind: 'other'` 给选中的那条请求
- * （后端工具收到 other 时不执行副作用，把文本作为 tool result 返回 AI），而不是发普通消息或 steer。
+ * 这里只发用户消息：有待处理的询问时也一样（运行中按档位进队列，等询问答完才送达）。回答询问在卡片自己那一行
+ * （inputs/OtherAnswerRow）。询问面板经 accessory 长在这张卡片里时（笔记本）描边转语义色。
  */
 export function InputArea({
   inline,
@@ -106,7 +105,7 @@ export function InputArea({
    * 彻底停下才出生 —— 这期间任何发送都无处可去，直接拦在输入框。
    */
   const isAgentClosing = useChatStore(selectIsAgentClosing)
-  // 待处理输入请求（步进器选中的那条）——非空时输入框改投「其它」反馈，并按 kind 换描边色
+  // 描边只在询问面板长在这张卡片里时（accessory）才换：卡片在对话流里时语义色是那张卡片自己的
   const activePendingInput = useChatStore(selectActivePendingInput)
   const pendingTone: 'warning' | 'accent' | null = !activePendingInput
     ? null
@@ -363,7 +362,7 @@ export function InputArea({
     store.clearComposerRestore()
     showSendError(composerRestore.sessionId, composerRestore.error)
     const { snapshot } = composerRestore
-    // 「其它」反馈与队列通道发送时本来就不带走图片和命令芯片：还是原来那份，不算新内容
+    // 队列通道发送时本来就不带走图片和命令芯片：还是原来那份，不算新内容
     const newImages = store.pendingImages.length > 0 && store.pendingImages !== snapshot.images
     const newChip = slashChip !== null && slashChip !== snapshot.slashChip
     if (store.inputText.trim() || newImages || newChip) return
@@ -695,37 +694,6 @@ export function InputArea({
   }
 
   /**
-   * 有待处理请求时：正文作为「其它」反馈投给选中的那条。
-   * 图片不随 tool result 回传，故只清文本相关输入态，留着图片给下一条普通消息。
-   */
-  const handleSubmitOther = async (): Promise<void> => {
-    if (!activePendingInput || !activeSessionId) return
-    // 该通道不携带 inlineTokens → 添加的文件与粘贴芯片就地展开；要藏的值展开回真值、随 secrets 交出去
-    const raw = inputText.trim()
-    const attached = at.attachedPaths(raw)
-    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(at.resolveAttached(raw)))
-    if (!text) return
-    const snapshot = takeComposerSnapshot()
-    useChatStore.getState().setInputText('')
-    at.reset()
-    paste.reset()
-    secrets.reset()
-    try {
-      await getSessionChannelApi().agent.respondToInput({
-        sessionId: activeSessionId,
-        requestId: activePendingInput.id,
-        response: { kind: 'other', text, secrets: hidden },
-        attachedPaths: attached.length > 0 ? attached : undefined
-      })
-    } catch (err) {
-      useChatStore
-        .getState()
-        .requestComposerRestore({ sessionId: activeSessionId, snapshot, error: sendErrorText(err) })
-    }
-    // 询问落定后视图里就没有它了 → store 自动移除该 pending
-  }
-
-  /**
    * 发送消息（支持图片）。回车与发送按钮都走这里，两处都不 await —— 失败必须在这里接住：
    * 否则是一条没人处理的 rejection，用户眼里什么也没发生
    */
@@ -741,12 +709,6 @@ export function InputArea({
   }
 
   const sendMessage = async (): Promise<void> => {
-    // 待处理请求优先于一切发送路径（普通消息 / steer / 档案切换）：Agent 正等这条输入
-    if (activePendingInput) {
-      await handleSubmitOther()
-      return
-    }
-
     // 没选中模型不发。守卫必须落在这里而不是只挂在按钮的 disabled 上 ——
     // 回车走的是 handleKeyDown → handleSend，根本不经过按钮，
     // 否则会出现「按钮灰着、回车照发」（Agent 被建起来并落下一轮消息）。
@@ -936,8 +898,8 @@ export function InputArea({
     // 触屏：回车就是换行，交给 textarea（发送只走发送键）；接了实体键盘的用 ⌘ / Ctrl + 回车发
     if (e.key === 'Enter' && !e.shiftKey && (!touch || e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      // streaming 时发送 steer 消息（有待处理请求时除外 —— handleSend 会路由到「其它」反馈）
-      if (isStreaming && !activePendingInput) {
+      // streaming 时发送 steer 消息
+      if (isStreaming) {
         if (inputText.trim()) handleQueueSend('steer')
         return
       }
@@ -1124,25 +1086,7 @@ export function InputArea({
   )
   const sendStopButtons = isStreaming ? (
     <div className={`flex-shrink-0 flex items-center ${touch ? 'gap-2' : 'gap-1'}`}>
-      {activePendingInput ? (
-        // 待处理请求优先：这个按钮投「其它」反馈，不进队列
-        <button
-          onClick={handleSend}
-          disabled={queueDisabled}
-          className={`${touch ? roundCls : 'p-1.5 rounded-lg transition-colors'} ${
-            queueDisabled
-              ? touch
-                ? 'bg-bg-tertiary text-text-tertiary'
-                : 'text-text-tertiary cursor-not-allowed'
-              : pendingTone === 'accent'
-                ? 'bg-accent text-white hover:bg-accent-hover'
-                : 'bg-warning text-white hover:bg-warning/80'
-          }`}
-          title={t('pendingInputs.submitOther')}
-        >
-          <Send size={touch ? 17 : 14} />
-        </button>
-      ) : touch ? (
+      {touch ? (
         !queueDisabled && touchQueue
       ) : (
         // 两个发送出口 = pi 的两条队列。分段成一组：读作「一个发送控件的两个出口」，
@@ -1235,14 +1179,14 @@ export function InputArea({
         className={`relative max-w-3xl mx-auto p-2 ${inline ? '' : 'pointer-events-auto'}`}
       >
         {/* 卡片本体：磨砂模糊背景（悬浮时透出并虚化正文）+ 柔和阴影。
-            有待处理请求时整张卡片换语义描边 + 一圈极淡外环 —— 「你要打字的这个框在问你话」 */}
+            询问面板长在这张卡片里时（笔记本）整张换语义描边 + 一圈极淡外环 */}
         <div
           className={`border rounded-2xl bg-bg-primary/80 backdrop-blur-md shadow-md transition-colors ${
             isLegacy
               ? 'border-border-secondary/40'
-              : pendingTone === 'warning'
+              : accessory && pendingTone === 'warning'
                 ? 'border-warning/45 ring-[3px] ring-warning/10'
-                : pendingTone === 'accent'
+                : accessory && pendingTone === 'accent'
                   ? 'border-accent/45 ring-[3px] ring-accent/10'
                   : 'border-border-secondary/40'
           }`}
@@ -1412,23 +1356,18 @@ export function InputArea({
                       ? t('chat.legacySessionReadOnly')
                       : isAgentClosing
                         ? t('input.placeholderClosing')
-                        : activePendingInput
-                          ? // 不选上面的行，直接写：审批是「换个做法」，选项题是「自己的回答」
-                            activePendingInput.kind === 'ask'
-                            ? t('pendingInputs.otherPlaceholderAsk')
-                            : t('pendingInputs.otherPlaceholderChoice')
-                          : isStreaming
-                            ? t('input.placeholderSteer')
-                            : touch
-                              ? // 手机：没有拖放，也没有 Shift+回车（回车本身就是换行）
-                                t('input.placeholderTouch')
-                              : slashChip
-                                ? t('input.placeholder')
-                                : pathOfFile
-                                  ? t('input.placeholderFiles')
-                                  : modelSupportsVision
-                                    ? t('input.placeholderVision')
-                                    : t('input.placeholder')
+                        : isStreaming
+                          ? t('input.placeholderSteer')
+                          : touch
+                            ? // 手机：没有拖放，也没有 Shift+回车（回车本身就是换行）
+                              t('input.placeholderTouch')
+                            : slashChip
+                              ? t('input.placeholder')
+                              : pathOfFile
+                                ? t('input.placeholderFiles')
+                                : modelSupportsVision
+                                  ? t('input.placeholderVision')
+                                  : t('input.placeholder')
                   }
                   rows={1}
                   style={{

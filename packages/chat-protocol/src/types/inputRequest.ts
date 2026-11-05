@@ -221,6 +221,10 @@ export interface AskResponse extends InputResponseBase {
 export interface ChoiceResponse extends InputResponseBase {
   kind: 'choice'
   selections: string[]
+  /** 勾选之外写的一句话（卡片上一起发送）；只写字、没勾选时是 `OtherResponse` */
+  note?: string
+  /** `note` 里要藏的值（同 `OtherResponse.secrets`）：宿主处理之后才交给工具，这一项本身从不往下传 */
+  secrets?: UserSecret[]
 }
 
 /**

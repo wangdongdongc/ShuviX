@@ -441,8 +441,8 @@ export interface ChatPane {
   /** 切换第 i 个系统通知行的展开态，回其整体文本（**切换**语义） */
   toggleSystemNotice(index: number): Promise<string>
 
-  /** 待处理输入面板（PendingInputsPanel）是否在屏 + 是否顶格在输入卡片内 */
-  pendingPanel(): Promise<{ open: boolean; firstInCard: boolean }>
+  /** 待处理输入面板（PendingInputsPanel）是否在屏 + 是否在对话流末尾的卡片里（列表 Footer，不在输入卡片内） */
+  pendingPanel(): Promise<{ open: boolean; inConversation: boolean }>
 
   /** 上下文用量环在屏（输入卡工具行内的 circle[r="6"]，轨道圈即可认） */
   ctxRingPresent(): Promise<boolean>
@@ -502,7 +502,7 @@ const PENDING_PROMPT_ID = 'pending-prompt'
 
 /** 主窗对话区（会话已选中后调用） */
 export function chatPane(main: CdpClient): ChatPane {
-  const TEXTAREA = `document.querySelector('textarea')`
+  const TEXTAREA = `document.querySelector('textarea:not([data-other-input])')`
   const ITEMS = `[...document.querySelectorAll('[data-msg-id]')]`
   const TOOLS = `[...document.querySelectorAll('[data-tool-name]')]`
   const SCROLLER = `document.querySelector('.conversation-scroller')`
@@ -916,7 +916,7 @@ export function chatPane(main: CdpClient): ChatPane {
           })
         })()`
       ),
-    // 询问卡片 = 待处理面板（`[data-pending-inputs]`，输入卡片的顶格）里的 AskForm（`[data-ask-card]`）：
+    // 询问卡片 = 待处理面板（`[data-pending-inputs]`，普通会话在对话流末尾，笔记本在输入卡片顶格）里的 AskForm（`[data-ask-card]`）：
     // 顶行的动作名是 `[data-ask-title]`、它那一行的第一枚 svg 是图标；工具自己的说明 `[data-ask-description]`
     // （有审查意见时不摆）；预览块 `[data-ask-preview]`
     pendingAskShot: () =>
@@ -1125,9 +1125,11 @@ export function chatPane(main: CdpClient): ChatPane {
     pendingPanel: () =>
       main.eval(`(() => {
         const panel = document.querySelector('[data-pending-inputs]')
-        if (!panel) return { open: false, firstInCard: false }
-        // 顶格 = 输入卡片（border rounded-2xl 那层）的第一个子节点
-        return { open: true, firstInCard: panel.parentElement?.firstElementChild === panel }
+        if (!panel) return { open: false, inConversation: false }
+        return {
+          open: true,
+          inConversation: !!panel.closest('[data-virtuoso-scroller] [data-pending-card]')
+        }
       })()`),
 
     ctxRingPresent: () => main.eval<boolean>(`!!${TOOL_ROW}?.querySelector('svg circle[r="6"]')`),
@@ -1717,7 +1719,7 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
         }
         const bar = card.querySelector('[data-mermaid-unfold-bar]')
         const sr = scroller.getBoundingClientRect()
-        const input = document.querySelector('textarea')?.closest('.rounded-2xl')
+        const input = document.querySelector('textarea:not([data-other-input])')?.closest('.rounded-2xl')
         const cr = card.getBoundingClientRect()
         return {
           card: span(card),
@@ -2118,7 +2120,7 @@ export function interactivePane(main: CdpClient, marker: string): InteractivePan
         if (!frame || !scroller) return null
         const f = frame.getBoundingClientRect()
         const s = scroller.getBoundingClientRect()
-        const card = document.querySelector('textarea')?.closest('.rounded-2xl') ?? null
+        const card = document.querySelector('textarea:not([data-other-input])')?.closest('.rounded-2xl') ?? null
         const top = Math.max(f.top, s.top)
         const bottom = Math.min(f.bottom, s.bottom, card ? card.getBoundingClientRect().top : Infinity)
         const left = Math.max(f.left, s.left)
@@ -4306,7 +4308,7 @@ export interface ModelPickerPane {
 
 export function modelPickerPane(main: CdpClient): ModelPickerPane {
   // 选择器簇（`data-composer-pickers`）里的第一格是模型选择器；簇前面可能还有附图的「+」，所以不按位置认
-  const ROOT = `(document.querySelector('textarea')?.parentElement?.nextElementSibling?.querySelector('[data-composer-pickers]')?.firstElementChild ?? null)`
+  const ROOT = `(document.querySelector('textarea:not([data-other-input])')?.parentElement?.nextElementSibling?.querySelector('[data-composer-pickers]')?.firstElementChild ?? null)`
   const TRIGGER = `(${ROOT}?.querySelector(':scope > button') ?? null)`
   const PANEL = `document.querySelector('[data-model-panel]')`
   const ITEMS = `[...(${PANEL}?.querySelectorAll('[data-model-item]') ?? [])]`
@@ -4763,7 +4765,7 @@ function notebookReadOnlyProbes(client: CdpClient, scope = 'document'): Notebook
 
     hasInputCard: () =>
       client.eval<boolean>(
-        `[...(${scope}?.querySelectorAll('textarea') ?? [])].some((t) => !t.closest('.cm-editor'))`
+        `[...(${scope}?.querySelectorAll('textarea:not([data-other-input])') ?? [])].some((t) => !t.closest('.cm-editor'))`
       )
   }
 }
@@ -10304,7 +10306,7 @@ export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
   const EDITOR = `${ROOT}?.querySelector('.cm-content')`
   // CM6 视图：内部字段，只在这一处（见本段文件头的说明）
   const CM_VIEW = `((${EDITOR})?.cmTile?.root?.view ?? null)`
-  const INPUT = `[...(${ROOT}?.querySelectorAll('textarea') ?? [])].find((t) => !t.closest('.cm-editor'))`
+  const INPUT = `[...(${ROOT}?.querySelectorAll('textarea:not([data-other-input])') ?? [])].find((t) => !t.closest('.cm-editor'))`
   // 抽屉细条：带 MessagesSquare 图标的那颗按钮；它的父节点是抽屉根（展开时条目列表是它的兄弟）
   const DRAWER_BTN = `[...(${ROOT}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-messages-square'))`
   // 询问卡片 = AskForm 根（`[data-ask-card]`）；允许 / 拒绝 = `[data-ask-option="allow" | "deny"]` 那一行
@@ -11313,7 +11315,7 @@ export interface ConversationScrollPane {
 export function conversationScrollPane(main: CdpClient): ConversationScrollPane {
   const SCROLLER = `document.querySelector('.conversation-scroller')`
   const BUTTON = `document.querySelector('[data-scroll-to-bottom]')`
-  const CARD = `(document.querySelector('textarea')?.closest('.rounded-2xl') ?? null)`
+  const CARD = `(document.querySelector('textarea:not([data-other-input])')?.closest('.rounded-2xl') ?? null)`
   const DIVIDER = `(() => {
     const next = document.querySelector('[data-chat-container]')?.nextElementSibling
     return next && next.classList.contains('cursor-col-resize') ? next : null
@@ -13501,8 +13503,12 @@ export interface PendingCardShot {
   rows: Array<{ id: string; label: string; box: BoxShot; fontSize: string }>
   /** 「记住所在的文件夹」那一行第二行的路径（`[data-option-detail]`）；没有那一行 → null */
   folderDetail: BoxShot | null
-  /** 输入框（第一个 textarea）的占位文字 */
+  /** 输入框的占位文字（不是卡片那一行） */
   placeholder: string
+  /** 卡片最后一行的占位文字与计算字号；没有那一行 → null */
+  otherRow: { placeholder: string; fontSize: string } | null
+  /** 页面与手机壳（不在 → null）的纵向滚动位置 */
+  scroll: { doc: number; shell: number | null }
   viewport: { w: number; h: number }
   /** 横向溢出：document 与手机壳（`data-mobile-shell`，不在 → null）各自的 scrollWidth − clientWidth */
   overflow: { doc: number; shell: number | null }
@@ -13810,7 +13816,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     return text.replace(/\\s+/g, ' ').trim()
   })`
   /** 输入卡片（第一个 textarea 所在的那张圆角卡片，同 composerLayout） */
-  const COMPOSER_CARD = `document.querySelector('textarea')?.closest('.rounded-2xl')`
+  const COMPOSER_CARD = `document.querySelector('textarea:not([data-other-input])')?.closest('.rounded-2xl')`
   /** 输入卡片里的一个控件（见 WebMobileTouchTarget 的 `composer`） */
   const COMPOSER_PART = (
     part: 'attach' | 'model' | 'extensions' | 'send' | 'steer' | 'ring'
@@ -14204,7 +14210,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
 
     composerFontSize: () =>
       client.eval<string | null>(`(() => {
-        const ta = document.querySelector('textarea')
+        const ta = document.querySelector('textarea:not([data-other-input])')
         return ta ? getComputedStyle(ta).fontSize : null
       })()`),
     sessionRowHeight: (title, scope) =>
@@ -14238,7 +14244,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           const r = el.getBoundingClientRect()
           return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
         }
-        const ta = document.querySelector('textarea')
+        const ta = document.querySelector('textarea:not([data-other-input])')
         const card = ta?.closest('.rounded-2xl')
         if (!card) return null
         // 底部工具行 = textarea 容器的下一个兄弟（同 chatPane 的 TOOL_ROW）
@@ -14352,10 +14358,12 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       if (!clicked) throw new Error(`no composer ${part} to click`)
     },
     composerValue: () =>
-      client.eval<string | null>(`document.querySelector('textarea')?.value ?? null`),
+      client.eval<string | null>(
+        `document.querySelector('textarea:not([data-other-input])')?.value ?? null`
+      ),
     typeTrusted: async (text) => {
       const focused = await client.eval<boolean>(`(() => {
-        const ta = document.querySelector('textarea')
+        const ta = document.querySelector('textarea:not([data-other-input])')
         if (!ta) return false
         ta.focus()
         ta.selectionStart = ta.selectionEnd = ta.value.length
@@ -14566,7 +14574,14 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
             }
           }),
           folderDetail: folder ? box(folder) : null,
-          placeholder: document.querySelector('textarea')?.getAttribute('placeholder') ?? '',
+          placeholder: document.querySelector('textarea:not([data-other-input])')?.getAttribute('placeholder') ?? '',
+          otherRow: (() => {
+            const other = panel.querySelector('[data-other-input]')
+            return other
+              ? { placeholder: other.getAttribute('placeholder') ?? '', fontSize: getComputedStyle(other).fontSize }
+              : null
+          })(),
+          scroll: { doc: doc.scrollTop, shell: shell ? shell.scrollTop : null },
           viewport: { w: window.innerWidth, h: window.innerHeight },
           overflow: {
             doc: doc.scrollWidth - doc.clientWidth,
@@ -15302,5 +15317,395 @@ export function browserManagerPane(client: CdpClient): BrowserManagerPane {
         return !!row?.querySelector('[data-site-cookie-value-hidden]') &&
           !row.querySelector('[data-site-cookie-value]')
       })()`)
+  }
+}
+
+// ─── 对话流里的询问卡片与答完留下的记录 ──────────────────────────────
+//
+// 待处理的询问在列表 Footer 里（`[data-pending-card="ask|choice"]`，里面是面板 `[data-pending-inputs]`）。翻历史时的提示是
+// `[data-pending-jump]`：**它在 DOM 里不代表看得见**（淡出动画要它，卡片露着时也在），「露着」一律看 aria-hidden 与计算样式的
+// opacity。答完之后：审批卡的决定在工具行下面（`[data-tool-answer="allowed|remembered|denied|feedback"]`），选择题是
+// `[data-ask-record]`。数字键与滚轮、点提示走 CDP 可信输入：把关量的是真布局，合成事件测不出来。
+
+/** 询问卡片与它周围那几样东西的真实位置（视口 CSS px） */
+export interface AskCardLayoutShot {
+  card: ScrollRect
+  /** 滚动区 */
+  scroller: ScrollRect
+  /** 悬浮输入卡片（textarea 所在的 `.rounded-2xl`） */
+  composer: ScrollRect
+  /** 输入卡片的 class（语义色只该在询问卡片上） */
+  composerClass: string
+  /** 面板长在输入卡片里了（笔记本才该如此） */
+  panelInComposer: boolean
+}
+
+/** 「等你批准」提示的快照 */
+export interface PendingJumpShot {
+  present: boolean
+  kind: string | null
+  ariaHidden: string | null
+  tabIndex: number
+  /** 计算样式（淡入淡出 150ms，过渡期间是中间值 —— 调用方 until） */
+  opacity: number
+  text: string
+  rect: ScrollRect | null
+}
+
+/** 工具行下面的一行回答 */
+export interface ToolAnswerShot {
+  outcome: string
+  text: string
+  /** 所在工具行的 `data-tool-name` */
+  tool: string
+  /** 记住的目标（等宽字体那一段；没有为 null） */
+  target: string | null
+  /** 这一行里的占位符标记数 */
+  marks: number
+}
+
+/** 答完的选择题 */
+export interface AskRecordShot {
+  text: string
+  selections: string[]
+  other: string | null
+  none: string | null
+  answeredBy: string | null
+  toggle: string | null
+  toggleHeight: number
+  /** 展开了才有：每个选项的文字与有没有对勾 */
+  options: Array<{ text: string; checked: boolean }>
+}
+
+/** 询问卡片的最后一行（OtherAnswerRow）此刻的样子（视口坐标，CSS px） */
+export interface OtherRowShot {
+  value: string
+  placeholder: string
+  fontSize: string
+  /** `[data-other-row]` */
+  row: { left: number; top: number; right: number; bottom: number; width: number; height: number }
+  /** 打字的那个 textarea 的高度与内容高度 */
+  inputHeight: number
+  inputScrollHeight: number
+  /** 发送键在不在 */
+  submit: boolean
+  error: string | null
+  focused: boolean
+}
+
+export interface InlineAskPane {
+  /** 卡片的最后一行；没有卡片为 null */
+  otherRow(): Promise<OtherRowShot | null>
+  /** 把焦点放进那一行（`el.focus()`） */
+  focusOther(): Promise<void>
+  /** 把那一行整个改成这段字（原生 setter + input 事件，不动焦点） */
+  setOther(text: string): Promise<void>
+  /** 焦点放进那一行，可信地打进一段字（`Input.insertText`，可以有换行） */
+  typeOtherTrusted(text: string): Promise<void>
+  /** 焦点放进那一行，按一下真回车 */
+  pressOtherEnter(): Promise<void>
+  /** 焦点放进那一行，按一下真数字键 */
+  pressOtherDigit(digit: string): Promise<void>
+  /** 卡片的种类；没有卡片为 null */
+  cardKind(): Promise<string | null>
+  /** 卡片、滚动区、输入卡片的位置；没有卡片为 null */
+  layout(): Promise<AskCardLayoutShot | null>
+  /** 卡片的下沿没被输入卡片压着、上沿没越过滚动区（容差与把关相同：1px） */
+  cardOnScreen(): Promise<boolean>
+  jump(): Promise<PendingJumpShot>
+  /** 等提示真的露着（aria-hidden=false、opacity 1）或真的藏着（aria-hidden=true、opacity 0） */
+  waitJump(shown: boolean, timeoutMs?: number): Promise<PendingJumpShot>
+  /** 真点提示（挪过去、按下、松开）；点不着（藏着）→ 抛 */
+  clickJump(): Promise<void>
+  /** 对话区中央滚一下真滚轮 */
+  wheel(deltaY: number): Promise<void>
+  /** 先让焦点离开输入框，再按一下真数字键 */
+  pressDigit(digit: string): Promise<void>
+  /** 不动焦点，按一下真数字键（发给此刻的焦点） */
+  pressDigitInPlace(digit: string): Promise<void>
+  /** 卡片上的一行（`data-ask-option`），el.click() */
+  pickOption(id: string): Promise<void>
+  /** 选择题的一个选项（`data-choice-option`） */
+  pickChoice(label: string): Promise<void>
+  confirmChoice(): Promise<void>
+  answers(): Promise<ToolAnswerShot[]>
+  records(): Promise<AskRecordShot[]>
+  /** 点第 i 张记录的「显示 / 收起选项」 */
+  toggleRecord(index: number): Promise<void>
+  /** 把真滚动区滚到真底并等一拍（虚拟列表：离得远的条目不在 DOM 里） */
+  scrollToEnd(): Promise<void>
+  /** 让所有条目都在 DOM 里：读整段对话用（滚动区一路滚过去，取每一屏的并集，按首次出现的次序） */
+  allAnswers(): Promise<ToolAnswerShot[]>
+  allRecords(): Promise<AskRecordShot[]>
+}
+
+export function inlineAskPane(client: CdpClient): InlineAskPane {
+  const CARD = `document.querySelector('[data-pending-card]')`
+  const JUMP = `document.querySelector('[data-pending-jump]')`
+  const SCROLLER = `document.querySelector('.conversation-scroller')`
+  const RECT = `((el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height } })`
+
+  const layout = (): Promise<AskCardLayoutShot | null> =>
+    client.eval<AskCardLayoutShot | null>(`(() => {
+      const card = ${CARD}
+      const composer = document.querySelector('textarea:not([data-other-input])')?.closest('.rounded-2xl')
+      const scroller = ${SCROLLER}
+      if (!card || !composer || !scroller) return null
+      const rect = ${RECT}
+      return {
+        card: rect(card),
+        scroller: rect(scroller),
+        composer: rect(composer),
+        composerClass: composer.getAttribute('class') ?? '',
+        panelInComposer: !!composer.querySelector('[data-pending-inputs]')
+      }
+    })()`)
+
+  const jump = (): Promise<PendingJumpShot> =>
+    client.eval<PendingJumpShot>(`(() => {
+      const el = ${JUMP}
+      if (!el) return { present: false, kind: null, ariaHidden: null, tabIndex: 0, opacity: 0, text: '', rect: null }
+      return {
+        present: true,
+        kind: el.getAttribute('data-pending-jump'),
+        ariaHidden: el.getAttribute('aria-hidden'),
+        tabIndex: el.tabIndex,
+        opacity: Number(getComputedStyle(el).opacity),
+        text: (el.textContent ?? '').trim(),
+        rect: ${RECT}(el)
+      }
+    })()`)
+
+  const key = async (digit: string): Promise<void> => {
+    const base = { key: digit, code: `Digit${digit}`, windowsVirtualKeyCode: digit.charCodeAt(0) }
+    await client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      ...base,
+      text: digit,
+      unmodifiedText: digit
+    })
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+  }
+
+  const clickIn = async (selector: string, what: string): Promise<void> => {
+    const ok = await client.eval<boolean>(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      if (!el || el.disabled) return false
+      el.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`${what} is not clickable`)
+  }
+
+  const answers = (): Promise<ToolAnswerShot[]> =>
+    client.eval<ToolAnswerShot[]>(
+      `[...document.querySelectorAll('[data-tool-answer]')].map((el) => ({
+        outcome: el.getAttribute('data-tool-answer') ?? '',
+        text: (el.textContent ?? '').trim(),
+        tool: el.closest('[data-tool-name]')?.getAttribute('data-tool-name') ?? '',
+        target: el.querySelector('.font-mono')?.textContent ?? null,
+        marks: el.querySelectorAll('[data-redaction-placeholder]').length
+      }))`
+    )
+
+  const records = (): Promise<AskRecordShot[]> =>
+    client.eval<AskRecordShot[]>(
+      `[...document.querySelectorAll('[data-ask-record]')].map((el) => {
+        const toggle = el.querySelector('[data-ask-record-toggle]')
+        return {
+          text: (el.textContent ?? '').trim(),
+          selections: [...el.querySelectorAll('[data-ask-record-selection]')].map((s) => (s.textContent ?? '').trim()),
+          other: el.querySelector('[data-ask-record-other]')?.textContent ?? null,
+          none: el.querySelector('[data-ask-record-none]')?.textContent ?? null,
+          answeredBy: el.querySelector('[data-ask-record-by] [data-answered-by]')?.getAttribute('data-answered-by') ?? null,
+          toggle: toggle ? (toggle.textContent ?? '').trim() : null,
+          toggleHeight: toggle ? toggle.getBoundingClientRect().height : 0,
+          options: [...el.querySelectorAll('[data-ask-record-options] li')].map((li) => ({
+            text: (li.textContent ?? '').trim(),
+            checked: !!li.querySelector('svg.lucide-check')
+          }))
+        }
+      })`
+    )
+
+  /** 一路滚过整段对话，把每一屏读到的并起来（键 = 文字 + 所在的条目） */
+  const sweep = async <T>(read: () => Promise<T[]>, keyOf: (item: T) => string): Promise<T[]> => {
+    const seen = new Map<string, T>()
+    const collect = async (): Promise<void> => {
+      for (const item of await read()) {
+        const k = keyOf(item)
+        if (!seen.has(k)) seen.set(k, item)
+      }
+    }
+    await client.eval(`(() => { const s = ${SCROLLER}; if (s) s.scrollTop = 0; return true })()`)
+    await sleep(150)
+    for (;;) {
+      await collect()
+      const done = await client.eval<boolean>(`(() => {
+        const s = ${SCROLLER}
+        if (!s) return true
+        if (s.scrollTop + s.clientHeight >= s.scrollHeight - 2) return true
+        s.scrollTop += Math.max(200, s.clientHeight - 100)
+        return false
+      })()`)
+      await sleep(120)
+      if (done) break
+    }
+    await collect()
+    return [...seen.values()]
+  }
+
+  const OTHER = `document.querySelector('[data-pending-inputs] [data-other-input]')`
+  const focusOther = async (): Promise<void> => {
+    const ok = await client.eval<boolean>(`(() => {
+      const el = ${OTHER}
+      if (!el) return false
+      el.focus()
+      el.selectionStart = el.selectionEnd = el.value.length
+      return document.activeElement === el
+    })()`)
+    if (!ok) throw new Error('no other-answer row to focus')
+  }
+
+  return {
+    otherRow: () =>
+      client.eval<OtherRowShot | null>(`(() => {
+        const input = ${OTHER}
+        const row = input?.closest('[data-other-row]')
+        if (!input || !row) return null
+        const r = row.getBoundingClientRect()
+        return {
+          value: input.value,
+          placeholder: input.getAttribute('placeholder') ?? '',
+          fontSize: getComputedStyle(input).fontSize,
+          row: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height },
+          inputHeight: input.getBoundingClientRect().height,
+          inputScrollHeight: input.scrollHeight,
+          submit: !!row.querySelector('[data-other-submit]'),
+          error: row.querySelector('[data-other-error]')?.textContent ?? null,
+          focused: document.activeElement === input
+        }
+      })()`),
+    focusOther,
+    setOther: async (text) => {
+      const ok = await client.eval<boolean>(`(() => {
+        const el = ${OTHER}
+        if (!el) return false
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+        set.call(el, ${JSON.stringify(text)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('no other-answer row to write in')
+    },
+    typeOtherTrusted: async (text) => {
+      await focusOther()
+      await client.send('Input.insertText', { text })
+    },
+    pressOtherEnter: async () => {
+      await focusOther()
+      const base = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }
+      await client.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        ...base,
+        text: '\r',
+        unmodifiedText: '\r'
+      })
+      await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    },
+    pressOtherDigit: async (digit) => {
+      await focusOther()
+      await key(digit)
+    },
+    cardKind: () =>
+      client.eval<string | null>(`${CARD}?.getAttribute('data-pending-card') ?? null`),
+    layout,
+    cardOnScreen: async () => {
+      const at = await layout()
+      if (!at) return false
+      return at.card.bottom <= at.composer.top + 1 && at.card.top >= at.scroller.top - 1
+    },
+    jump,
+    waitJump: (shown, timeoutMs = 5_000) =>
+      until(
+        async () => {
+          const j = await jump()
+          if (!j.present) return null
+          const ok = shown
+            ? j.ariaHidden === 'false' && j.opacity >= 0.99
+            : j.ariaHidden === 'true' && j.opacity <= 0.01
+          return ok ? j : null
+        },
+        `pending-jump pill ${shown ? 'shown' : 'hidden'}`,
+        timeoutMs
+      ),
+    clickJump: async () => {
+      const j = await jump()
+      if (!j.rect || j.ariaHidden !== 'false') throw new Error('pending-jump pill is not shown')
+      const x = j.rect.left + j.rect.width / 2
+      const y = j.rect.top + j.rect.height / 2
+      await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: 'left',
+        buttons: 1,
+        clickCount: 1
+      })
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1
+      })
+    },
+    wheel: async (deltaY) => {
+      const point = await client.eval<{ x: number; y: number }>(`(() => {
+        const r = ${SCROLLER}.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height / 3 }
+      })()`)
+      await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        ...point,
+        deltaX: 0,
+        deltaY
+      })
+    },
+    pressDigit: async (digit) => {
+      await client.eval(`(document.activeElement?.blur?.(), true)`)
+      await key(digit)
+    },
+    pressDigitInPlace: key,
+    pickOption: (id) =>
+      clickIn(`[data-pending-card] [data-ask-option=${JSON.stringify(id)}]`, `ask option ${id}`),
+    pickChoice: (label) =>
+      clickIn(
+        `[data-pending-card] [data-choice-option=${JSON.stringify(label)}]`,
+        `choice option ${label}`
+      ),
+    confirmChoice: () => clickIn('[data-pending-card] [data-choice-confirm]', 'choice confirm'),
+    answers,
+    records,
+    toggleRecord: async (index) => {
+      const ok = await client.eval<boolean>(`(() => {
+        const toggle = document.querySelectorAll('[data-ask-record]')[${index}]?.querySelector('[data-ask-record-toggle]')
+        if (!toggle) return false
+        toggle.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`ask record ${index} has no toggle`)
+    },
+    scrollToEnd: async () => {
+      await client.eval(
+        `(() => { const s = ${SCROLLER}; if (s) s.scrollTop = s.scrollHeight; return true })()`
+      )
+      await sleep(250)
+    },
+    allAnswers: () => sweep(answers, (a) => `${a.tool}|${a.outcome}|${a.text}`),
+    allRecords: () => sweep(records, (r) => r.text)
   }
 }

@@ -469,7 +469,7 @@ describe('WP2 · 真 ask 工具上的答题方（§19.5）', () => {
       ).toStrictEqual([
         { type: 'ask', question: 'Q1', selections: ['A'], answeredBy: PARENT },
         { type: 'ask', question: 'Q2', selections: ['B'] },
-        { type: 'ask', question: 'Q3', selections: [], answeredBy: PARENT }
+        { type: 'ask', question: 'Q3', selections: [], other: 'x', answeredBy: PARENT }
       ])
       expect(JSON.stringify(results)).not.toContain('EVIL')
     },

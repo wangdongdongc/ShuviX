@@ -494,7 +494,7 @@ describe('日历跳转', () => {
  * 败两次（切回挂着询问的会话，流式卡底边 531 > 卡片顶 509.6）。
  */
 describe('落点之后内容 / 输入卡片还在变', () => {
-  it('SCR-10a 最后一轮停在询问卡片上（输入卡片因此高出一大截）：切回来末项仍在卡片之上', async () => {
+  it('SCR-10a 最后一轮停在询问卡片上（卡片在对话流末尾，撑高列表 Footer）：切回来末项与询问卡片都在输入卡片之上', async () => {
     await seedTurns(sids.ask, 'A', 3)
     provider.reset()
     provider.script({
@@ -521,14 +521,18 @@ describe('落点之后内容 / 输入卡片还在变', () => {
       expect(await sidebar.openSession(TITLES.ask)).toBe(true)
       await until(
         async () => (await chat.pendingPanel()).open,
-        'ask card pending in the input card'
+        'ask card pending at the end of the conversation'
       )
       for (let round = 0; round < 2; round++) {
         await openAndLand(TITLES.l1, await lastIdOf(sids.l1))
         const { shot } = await openAndLand(TITLES.ask, STREAMING_ID)
-        // 前提：询问卡片确实并进了输入卡片，卡片比平时高得多（平时一行输入约 86px）
-        expect(await chat.pendingPanel()).toEqual({ open: true, firstInCard: true })
-        expect(shot.inputCard!.height).toBeGreaterThan(150)
+        expect(await chat.pendingPanel()).toEqual({ open: true, inConversation: true })
+        // 询问卡片不被悬浮输入卡片压着，输入卡片也不再因它变高（平时一行输入约 86px）
+        const cardBottom = await app.main.eval<number>(
+          `document.querySelector('[data-pending-card]').getBoundingClientRect().bottom`
+        )
+        expect(cardBottom).toBeLessThanOrEqual(shot.inputCard!.top + 1)
+        expect(shot.inputCard!.height).toBeLessThan(150)
       }
     } finally {
       await app.main.eval(`window.api.agent.abort(${JSON.stringify(sids.ask)})`)

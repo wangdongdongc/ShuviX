@@ -6,19 +6,35 @@
  */
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 
+// ─── 「其它」 ───────────────────────────────────────────
+
+/**
+ * 卡片最后一行写的话投成「其它」；空白不算。`secrets: []` 让宿主走输入框那条路（见 OtherAnswerRow）。
+ */
+export function otherResponseOf(text: string | undefined): InputResponse | null {
+  const trimmed = text?.trim()
+  return trimmed ? { kind: 'other', text: trimmed, secrets: [] } : null
+}
+
 // ─── Choice ────────────────────────────────────────────
 
 export interface ChoiceDraft {
   selected: string[]
+  /** 卡片最后一行写的话 */
+  otherText?: string
 }
 
 export function emptyChoiceDraft(): ChoiceDraft {
   return { selected: [] }
 }
 
+/** 勾选和写的话一起发：只勾 = 选项，只写 = 「其它」，都有 = 选项带一句话，都没有 = 还不能发 */
 export function buildChoiceResponse(draft: ChoiceDraft): InputResponse | null {
-  if (!draft.selected || draft.selected.length === 0) return null
-  return { kind: 'choice', selections: draft.selected }
+  if (!draft.selected || draft.selected.length === 0) return otherResponseOf(draft.otherText)
+  const note = draft.otherText?.trim()
+  return note
+    ? { kind: 'choice', selections: draft.selected, note, secrets: [] }
+    : { kind: 'choice', selections: draft.selected }
 }
 
 // ─── Ask ──────────────────────────────────────────
@@ -26,14 +42,13 @@ export function buildChoiceResponse(draft: ChoiceDraft): InputResponse | null {
 /**
  * Ask 表单的草稿状态
  *
- * 与 Choice 不同,Ask 是"按一个按钮就提交"的语义。stagedResponse
- * 字段表达"用户已点选了某个动作但尚未真正提交"(用于多 tab 场景的批量提交)。
+ * 与 Choice 不同,Ask 的选项行点一下就提交,所以只有写的话才算"已填"。
  */
 export interface AskDraft {
-  /** 用户已点选的动作 — 一旦设置,该 tab 就被视为"已填" */
-  stagedResponse?: InputResponse
   /** "允许并记住"模式预览面板:null = 未进入,[] = 进入但被清空,string[] = 待保存的模式 */
   previewPatterns?: string[] | null
+  /** 卡片最后一行写的话 */
+  otherText?: string
 }
 
 export function emptyAskDraft(): AskDraft {
@@ -41,5 +56,5 @@ export function emptyAskDraft(): AskDraft {
 }
 
 export function buildAskResponse(draft: AskDraft): InputResponse | null {
-  return draft.stagedResponse ?? null
+  return otherResponseOf(draft.otherText)
 }

@@ -63,6 +63,8 @@ export {
   abortSessionReviews,
   reopenSessionReviews,
   takeReviewAllowed,
+  noteHumanAnswer,
+  takeHumanAnswers,
   reviewCallKey,
   type ReviewCall,
   type HumanFeedbackNote,

@@ -6,6 +6,7 @@
  *  - 落盘口：`desktopSpillSink(sessionId)` —— 写 `userData/tool_results/<sessionId>/`；
  *  - 安全模块 **L1 全工具门**：工具执行（含 preExecute）之前；
  *  - 自动审查放行的「已审查」标记：写进成功结果的 details；
+ *  - 人在审批卡片上的回答：不论工具结果成败都写进 details（拒绝与反馈正是不成功的那些）；
  *  - 调用前后的旁路钩子（`executionHooks`）：会话产物在这里钉引用的版本、记版本。
  *
  * 单一调用点 — 仅由 agentHost 的工具装配使用。工具本体不自己截断 / 落盘。
@@ -15,6 +16,7 @@
  */
 
 import {
+  takeHumanAnswers,
   takeReviewAllowed,
   toolErrorResult,
   wrapDurableOutput,
@@ -32,6 +34,7 @@ import type {
   ToolExecutionResult,
   ToolRegistration
 } from '@earendil-works/pi-durable'
+import { withToolAnswers } from '@shuvix/chat-protocol/types/toolAnswer'
 import { withToolReview } from '@shuvix/chat-protocol/types/toolReview'
 import { createLogger } from '../logger'
 import { desktopSpillSink } from '../utils/toolUtils/processToolOutput'
@@ -180,6 +183,25 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
 
   const gatedExecute: ToolRegistration['execute'] = async (rawArgs, api, context) => {
     const toolCallId = api.callId
+    // 这次调用的身份（「已审查」标记与回答记录都按它认：durable taskId，toolCallId 会话内可能重复）
+    const reviewCall = { toolCallId, taskId: api.taskId }
+    /**
+     * 把人在卡片上的回答写进这次的结果。参数里有占位符被换回了真值时，门看到的路径是真值，不能原样留在记录里 ——
+     * 会话树里只该有占位符 —— 所以那种调用不记「记住了什么」。
+     */
+    const withAnswers = (
+      result: ToolExecutionResult,
+      restoredCount: number
+    ): ToolExecutionResult => {
+      const answers = takeHumanAnswers(sessionId, reviewCall)
+      if (answers.length === 0) return result
+      const notes =
+        restoredCount === 0 ? answers : answers.map(({ target: _real, ...note }) => note)
+      return {
+        ...result,
+        details: withToolAnswers(result.details, notes) as ToolExecutionResult['details']
+      }
+    }
     const call = { toolName, callId: toolCallId, conversationId: api.conversationId }
     await runHook(executionHooks?.before, call)
     const signal = context.abortSignal
@@ -209,23 +231,27 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
           signal
         })
         if (outcome.status === 'feedback') {
-          return {
-            output: [
-              {
-                type: 'text',
-                text: `Tool was not executed. User responded with feedback instead:\n${outcome.text}`
-              }
-            ]
-          }
+          return withAnswers(
+            {
+              output: [
+                {
+                  type: 'text',
+                  text: `Tool was not executed. User responded with feedback instead:\n${outcome.text}`
+                }
+              ]
+            },
+            restored.length
+          )
         }
       } catch (err) {
-        if (signal?.aborted) throw err
-        return toolErrorResult(err)
+        if (signal?.aborted) {
+          takeHumanAnswers(sessionId, reviewCall)
+          throw err
+        }
+        return withAnswers(toolErrorResult(err), restored.length)
       }
     }
 
-    // 「已审查」标记按这次调用的 durable taskId 认（PIN-10）：toolCallId 会话内可能重复
-    const reviewCall = { toolCallId, taskId: api.taskId }
     let result: ToolExecutionResult
     // 工具本体里的执行点（路径门、命令门……）按 taskId 查到这次调用还原了哪些类别（tool.restored）
     setRestoredCategories(sessionId, api.taskId, restored)
@@ -234,6 +260,7 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
       result = await core.execute(args, api, context)
     } catch (err) {
       takeReviewAllowed(sessionId, reviewCall)
+      takeHumanAnswers(sessionId, reviewCall)
       throw err
     } finally {
       clearRestoredCategories(sessionId, api.taskId)
@@ -242,14 +269,18 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
     }
     if (result.isError) {
       takeReviewAllowed(sessionId, reviewCall)
-      return result
+      return withAnswers(result, restored.length)
     }
     const reviewed = takeReviewAllowed(sessionId, reviewCall)
-    if (!reviewed) return result
-    return {
-      ...result,
-      details: withToolReview(result.details, reviewed) as ToolExecutionResult['details']
-    }
+    return withAnswers(
+      reviewed
+        ? {
+            ...result,
+            details: withToolReview(result.details, reviewed) as ToolExecutionResult['details']
+          }
+        : result,
+      restored.length
+    )
   }
 
   // 门这一层也只覆盖 execute：outputLimits 与工具元数据都经原型链（内核那一层 → 原工具）透出

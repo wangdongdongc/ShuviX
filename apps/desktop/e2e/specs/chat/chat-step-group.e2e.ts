@@ -28,7 +28,13 @@ import {
   waitRendererReady,
   type EventRecorder
 } from '../../harness/seed'
-import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import {
+  chatPane,
+  inlineAskPane,
+  sidebarPane,
+  type ChatPane,
+  type SidebarPane
+} from '../../harness/pages'
 import { syncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
@@ -202,7 +208,7 @@ describe('思考与工具并成一行', () => {
 })
 
 describe('未落定的调用不进组', () => {
-  it('E-2 等审批的 write 把段切开：放行前两行独立可见，落定后才与 read 并成一行', async () => {
+  it('E-2 等审批的 write 把段切开：放行前两行独立可见；放行之后 write 带着回答记录，仍不并进合并行', async () => {
     provider.reset()
     await events.clear()
     const target = join(outsideDir, 'x.txt')
@@ -240,7 +246,7 @@ describe('未落定的调用不进组', () => {
     ])
     expect(await chat.stepGroups()).toEqual([])
 
-    // 放行 → write 落定 → 两个异名的落定步骤并成一行（推广点：同名不再是条件）
+    // 放行 → write 落定：人答过的调用留在对话里，不进合并行（回答那一行要看得见），实时与重开一样
     await app.main.eval(
       `window.api.agent.respondToInput(${JSON.stringify({
         sessionId: sids.ask,
@@ -253,18 +259,20 @@ describe('未落定的调用不进组', () => {
     await chat.waitIdle()
     expect(readFileSync(target, 'utf8')).toContain('X1')
 
-    expect(await chat.stepGroups()).toMatchObject([{ state: 'collapsed', size: 2 }])
-    expect(await chat.toolRows()).toHaveLength(0)
-    expect(await chat.groupBadges()).toEqual(['2'])
-    await chat.expandGroups()
-    expect(await chat.toolRows()).toEqual([
+    const settled = [
       { name: 'read', status: 'done' },
       { name: 'write', status: 'done' }
+    ]
+    expect(await chat.stepGroups()).toEqual([])
+    expect(await chat.toolRows()).toEqual(settled)
+    expect(await inlineAskPane(app.main).answers()).toMatchObject([
+      { outcome: 'allowed', tool: 'write' }
     ])
 
     await reopen('F-ask')
-    await until(async () => (await chat.stepGroups()).length === 1, 'step group reprojected')
-    expect((await chat.stepGroups())[0]).toMatchObject({ state: 'collapsed', size: 2 })
+    await until(async () => (await chat.toolRows()).length === 2, 'rows reprojected')
+    expect(await chat.toolRows()).toEqual(settled)
+    expect(await chat.stepGroups()).toEqual([])
   })
 })
 

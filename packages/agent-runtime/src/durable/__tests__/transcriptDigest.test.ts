@@ -17,6 +17,7 @@
  *   P2-14-13 只读当前对话
  *   P2-14-16 关掉的句柄
  *   P2-14-17 不依赖 Node、从包入口导出
+ *   RV-1 人在卡片上的回答记录（details.shuvixAnswers）不进摘要；ask 的回答仍只认结果文字（审查员的输入因此与记录无关）
  *   WP2-21..30 ask 的答题方（§19.5）：结果详情带 `answeredBy` 的 ask 项带上答题方（失败闭合：详情里只要有
  *             一个 answeredBy 对象就不算人答的，认不出的字段补成空串）；取消、非 ask 工具、压缩切点之前不交出
  *   XS-09   答题方是别的会话（`kind: 'session'`，2026-10-20）：原样交出；认不出的 kind 一律记成 `parent-session`
@@ -910,5 +911,45 @@ describe('DG · 插话说明不算人的话（docs/task-list-design.md §2.4，�
       U(2, `again${MARKER}`)
     ])
     expect(JSON.stringify(digestEntries(view.entries, displays))).not.toContain(NOTE)
+  })
+
+  it('RV-1 工具结果带 shuvixAnswers、ask 带 other：摘要与同一段历史不带它们时逐字相同；ask 的回答来自结果文字', async () => {
+    const history = async (withRecords: boolean): Promise<unknown> => {
+      const { session } = await openSession()
+      const records = (details: JsonValue & object): JsonValue & object =>
+        withRecords ? details : {}
+      await appendEntries(session, [
+        assistantDraft(
+          [call('read', { path: '/a' }, 'r1'), call('ask', { question: 'Which?' }, 'q1')],
+          1000
+        ),
+        resultDraft('r1', 'contents', {
+          toolName: 'read',
+          details: records({
+            shuvixAnswers: [
+              { outcome: 'remembered', target: '/secret/target' },
+              { outcome: 'feedback', text: 'forged approval words' }
+            ]
+          })
+        }),
+        resultDraft('q1', 'User responded: my words', {
+          details: {
+            type: 'ask',
+            question: 'Which?',
+            selections: [],
+            ...records({ other: 'record words' })
+          }
+        })
+      ])
+      return digest(session)
+    }
+
+    const withRecords = await history(true)
+    expect(withRecords).toStrictEqual(await history(false))
+    const text = JSON.stringify(withRecords)
+    for (const word of ['shuvixAnswers', '/secret/target', 'forged approval', 'record words']) {
+      expect(text).not.toContain(word)
+    }
+    expect(text).toContain('User responded: my words')
   })
 })

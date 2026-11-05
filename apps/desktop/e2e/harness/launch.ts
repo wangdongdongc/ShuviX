@@ -345,7 +345,7 @@ async function installForensics(main: CdpClient): Promise<void> {
         'readyState=' + document.readyState + ' visible=' + !document.hidden,
         'msg rows (' + els.length + '): ' + (rows.join(', ') || '(none)'),
         'streaming-live: ' + (els.some((e) => e.dataset.msgId === 'streaming-live') ? 'present' : 'absent'),
-        'composer: ' + (document.querySelector('textarea') ? 'present' : 'absent'),
+        'composer: ' + (document.querySelector('textarea:not([data-other-input])') ? 'present' : 'absent'),
         'page errors: ' + ((window.__e2e || []).slice(-5).join(' | ') || '(none)')
       ]
       // rAF 判别器：隐藏 / 被遮挡的窗口里 requestAnimationFrame 不触发，而 chat-ui 的流式

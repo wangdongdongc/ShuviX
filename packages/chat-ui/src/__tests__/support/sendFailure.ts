@@ -170,7 +170,7 @@ export interface ComposerShot {
 }
 
 export function composerShot(container: Element): ComposerShot {
-  const textarea = container.querySelector('textarea')!
+  const textarea = container.querySelector<HTMLTextAreaElement>('textarea:not([data-other-input])')!
   const area = textarea.parentElement!
   // 只认 div：命令芯片的图标（lucide 的 svg）也带 aria-hidden，还排在镜像层前面
   const mirror = area.querySelector('div[aria-hidden="true"]')

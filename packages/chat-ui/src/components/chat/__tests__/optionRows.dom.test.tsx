@@ -21,6 +21,9 @@
  *   OR-13 换一个新的 onPick（行数不变）重渲染 → 1 调新的，不调旧的
  *   OR-14 焦点在普通 <button> 上 → 1 照选
  *   OR-15 shadow root 里获得焦点的 <input>，按 1（composed）→ 不选
+ *   OR-16 没有 OptionHotkeyGuardContext（笔记本里卡片长在输入框上）→ 数字键照选，不看位置
+ *   OR-17 守卫回 false → 不选、不拦；回 true → 照选
+ *   OR-18 重渲染换了新守卫 → 下一次按键问新的，不问旧的
  *
  * 紧凑 = 不包宿主上下文（或给 density 'compact'）；触屏 = `ChatHostContext` 给 density 'touch'。按键在目标元素上
  * 派发（bubbles + cancelable + composed），每一下各自一个 act；dispatchEvent 回 true = 没处理，false = 被拦下。
@@ -29,7 +32,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { OptionRow, useOptionHotkeys, type OptionRowProps } from '../inputs/OptionRows'
+import {
+  OptionHotkeyGuardContext,
+  OptionRow,
+  useOptionHotkeys,
+  type OptionRowProps
+} from '../inputs/OptionRows'
 import {
   ChatHostContext,
   type ChatDensity,
@@ -366,5 +374,62 @@ describe('useOptionHotkeys', () => {
     expect(shadow.activeElement).toBe(input)
     expect(press('1', {}, input)).toBe(true)
     expect(onPick).not.toHaveBeenCalled()
+  })
+
+  describe('OptionHotkeyGuardContext', () => {
+    function Hotkeys({ onPick }: { onPick: (index: number) => void }): null {
+      useOptionHotkeys(3, onPick)
+      return null
+    }
+    const guarded = (
+      guard: (() => boolean) | null,
+      onPick: (index: number) => void
+    ): ReturnType<typeof createElement> =>
+      createElement(
+        OptionHotkeyGuardContext.Provider,
+        { value: guard },
+        createElement(Hotkeys, { onPick })
+      )
+
+    it('OR-16 没有 Provider（缺省 null）：1 照选，什么都不问', () => {
+      const onPick = mountHotkeys()
+      expect(press('1')).toBe(false)
+      expect(onPick).toHaveBeenCalledWith(0)
+    })
+
+    it('OR-17 守卫回 false：不选、不拦；回 true：照选', () => {
+      const onPick = vi.fn()
+      const guard = vi.fn(() => false)
+      render(guarded(guard, onPick))
+
+      expect(press('1')).toBe(true)
+      expect(guard).toHaveBeenCalledTimes(1)
+      expect(onPick).not.toHaveBeenCalled()
+
+      guard.mockReturnValue(true)
+      expect(press('2')).toBe(false)
+      expect(onPick.mock.calls).toEqual([[1]])
+    })
+
+    it('OR-17b 不是有效行的键：连守卫都不问（别的键不该触发一次量位置）', () => {
+      const guard = vi.fn(() => true)
+      render(guarded(guard, vi.fn()))
+      press('9')
+      press('a')
+      expect(guard).not.toHaveBeenCalled()
+    })
+
+    it('OR-18 重渲染换了新守卫：按键问新的，不问旧的', () => {
+      const onPick = vi.fn()
+      const first = vi.fn(() => false)
+      const second = vi.fn(() => true)
+      render(guarded(first, onPick))
+      render(guarded(second, onPick))
+
+      expect(press('1')).toBe(false)
+      expect(first).not.toHaveBeenCalled()
+      expect(second).toHaveBeenCalledTimes(1)
+      expect(onPick).toHaveBeenCalledWith(0)
+    })
   })
 })

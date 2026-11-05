@@ -96,6 +96,12 @@ describe('ASK 询问与应答', () => {
     ],
     ['一项没选', { kind: 'choice', selections: [] }, 'User made no selection', []],
     [
+      '勾了又写：两样都交给模型',
+      { kind: 'choice', selections: ['Terse', 'Verbose'], note: 'only for docs' },
+      'User selected: Terse, Verbose\nUser also wrote:\nonly for docs',
+      ['Terse', 'Verbose']
+    ],
+    [
       '写了反馈',
       { kind: 'other', text: 'neither, be funny' },
       'User did not select any option and responded with feedback instead:\nneither, be funny',
@@ -113,7 +119,13 @@ describe('ASK 询问与应答', () => {
 
     expect(result).toStrictEqual({
       content: [{ type: 'text', text }],
-      details: { type: 'ask', question: 'Which style?', selections }
+      details: {
+        type: 'ask',
+        question: 'Which style?',
+        selections,
+        ...('text' in response ? { other: response.text } : {}),
+        ...('note' in response ? { other: response.note } : {})
+      }
     })
     // WP2-13 用户本人答的：结果一字不变，details 里根本没有答题方
     expect(result.details).not.toHaveProperty('answeredBy')
@@ -234,6 +246,7 @@ describe('ASK 答题方（WP2，§19.5）', () => {
       type: 'ask',
       question: 'Which style?',
       selections: [],
+      other: 'neither, be funny',
       answeredBy: PARENT
     })
   })
@@ -322,5 +335,71 @@ describe('ASK 答题方（WP2，§19.5）', () => {
     const specifiers = [...source.matchAll(/(?:from|import)\s+'([^']+)'/g)].map((m) => m[1]!)
     expect(specifiers.length).toBeGreaterThan(0)
     for (const specifier of specifiers) expect(specifier).not.toMatch(/i18n/)
+  })
+})
+
+describe('ASK details.other（答完之后留在对话里的记录读它）', () => {
+  const run = (response: InputResponse): ReturnType<typeof invokeTool> => {
+    const { requestUserInput } = channel(() => response)
+    return invokeTool(createAskTool({ requestUserInput }), ARGS, { callId: 'c-other' })
+  }
+  const parent: DrivingSessionRef = { sessionId: 'p', title: 'Parent', kind: 'parent-session' }
+
+  it('ASK-O1 用户写了别的：details.other 是原文，selections 为空，没有 answeredBy', async () => {
+    const { result } = await run({ kind: 'other', text: 'neither, be funny' })
+    expect(result.details).toStrictEqual({
+      type: 'ask',
+      question: 'Which style?',
+      selections: [],
+      other: 'neither, be funny'
+    })
+  })
+
+  it('ASK-O2 别的会话写的：other 与 answeredBy 都在', async () => {
+    const { result } = await run({
+      kind: 'other',
+      text: 'use staging',
+      answeredBy: parent
+    } as InputResponse)
+    expect(result.details).toMatchObject({
+      selections: [],
+      other: 'use staging',
+      answeredBy: { sessionId: 'p', title: 'Parent' }
+    })
+  })
+
+  it('ASK-O2b 代答带了补充：写明是它写的，不记成用户说的', async () => {
+    const { result } = await run({
+      kind: 'choice',
+      selections: ['Terse'],
+      note: 'keep it short',
+      answeredBy: parent
+    } as InputResponse)
+    expect(resultText(result)).toBe(
+      `${PARENT_ANSWERED} Selected: Terse\nIt also wrote:\nkeep it short`
+    )
+    expect(result.details).toMatchObject({ selections: ['Terse'], other: 'keep it short' })
+  })
+
+  it('ASK-O2c 载荷里的 secrets 不进结果', async () => {
+    const { result } = await run({
+      kind: 'choice',
+      selections: ['Terse'],
+      note: 'x',
+      secrets: [{ value: 'hunter2', category: 'PASSWORD' }]
+    } as InputResponse)
+    expect(JSON.stringify(result)).not.toContain('hunter2')
+  })
+
+  it('ASK-O3 选了选项：没有 other 这个键（不是 undefined 占位）', async () => {
+    const { result } = await run({ kind: 'choice', selections: ['Terse'] })
+    expect(result.details).not.toHaveProperty('other')
+    expect(result.details).toMatchObject({ selections: ['Terse'] })
+  })
+
+  it('ASK-O4 卡片被取消：isError 结果，没有 details', async () => {
+    const { result } = await run({ kind: 'cancel', reason: 'closed' } as InputResponse)
+    expect(result.isError).toBe(true)
+    expect(result.details).toBeUndefined()
   })
 })

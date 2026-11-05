@@ -14,7 +14,7 @@
  *         [审批, 审批]（行数相同）：步进到第二条后 1 答 r4、不答 r1
  *   PP-6  [审批, 审批]：1 答 r1；视图换成只剩第二条 → 它上屏、没有步进器；1 → ('r2', 允许这一次)；一共恰两次
  *   PP-7  [审批, 选项题]、选项题在前台：1 勾上 store 草稿里的 A、不交；退回审批：1 答 r1
- *   PP-8  [选项题, 选项题]：勾 A、下一条、再回来 → A 还勾着、Confirm (1)
+ *   PP-8  [选项题, 选项题]：勾 A、下一条、再回来 → A 还勾着、Send (1)
  *   PP-9  [选项题, 审批]：什么都没勾 → 没有「一键提交已填」；勾 A → 它出现在步进器里；点它 → onResponse 恰一次
  *         ('r3', {kind:'choice', selections:['A']})
  *   PP-10 只有一条选项题、勾过了 → 没有「一键提交已填」
@@ -22,6 +22,9 @@
  *   PP-12 （只断 class）紧凑档根 max-h-[50vh]、触屏档 max-h-[60vh]；两档都 flex flex-col min-h-0
  *   PP-13 触屏档：审批在前台时按 1 不交；点一行照交
  *   PP-14 两条都带策略提示的审批：第一张点开角标，步进到第二张 → 它的角标是收着的
+ *   PP-15 「一键提交已填」算上卡片最后一行写的话：只写了字 → 算、投 other；又勾又写 → 一次答复带上两样；只有空白 + 勾选 → 投勾选；
+ *         只有空白、没勾 → 不算
+ *   PP-16 「一键提交已填」被拒：没有未处理的 rejection，[data-pending-batch-error] 报原文；断线是固定的那句；再点清掉旧错
  *
  * 状态只经 `applySessionView('s1', V('s1', { run: busy, asks }))` 写；面板在 effect 里给每条请求建草稿，挂上之后
  * 先等一拍。包入口 `@shuvix/chat-ui` 顶掉（AskForm 从那里取 getHostApi，给 {} = 有宿主，记住的行都在）；i18n 走真
@@ -45,6 +48,12 @@ vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => host.api }))
 
 import { applySessionView, useChatStore } from '../../../stores/chatStore'
 import { V, resetStore, store } from '../../../__tests__/support/views'
+import {
+  collectUnhandled,
+  deferred,
+  handlerError,
+  lost
+} from '../../../__tests__/support/sendFailure'
 import { PendingInputsPanel } from '../PendingInputsPanel'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 
@@ -99,7 +108,7 @@ const CHOICE2: ChoiceInputRequest = {
 
 let container: HTMLDivElement
 let root: Root
-let onResponse: Mock<(requestId: string, response: InputResponse) => void>
+let onResponse: Mock<(requestId: string, response: InputResponse) => void | Promise<void>>
 
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
@@ -113,7 +122,8 @@ beforeAll(async () => {
 beforeEach(() => {
   host.api = {}
   resetStore('s1')
-  onResponse = vi.fn<(requestId: string, response: InputResponse) => void>()
+  onResponse = vi.fn<(requestId: string, response: InputResponse) => void | Promise<void>>()
+  Element.prototype.scrollIntoView = vi.fn()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -322,7 +332,7 @@ describe('PendingInputsPanel：多条与步进器', () => {
     expect(onResponse.mock.calls).toEqual([['r1', { kind: 'ask', allowed: true }]])
   })
 
-  it('PP-8 [选项题, 选项题]：勾 A、下一条、回来 → A 还勾着、Confirm (1)', async () => {
+  it('PP-8 [选项题, 选项题]：勾 A、下一条、回来 → A 还勾着、Send (1)', async () => {
     await mount([CHOICE, CHOICE2])
     await click(choiceRow('A'))
     await step('next')
@@ -330,7 +340,7 @@ describe('PendingInputsPanel：多条与步进器', () => {
     expect(choiceRow('X').getAttribute('aria-pressed')).toBe('false')
     await step('prev')
     expect(choiceRow('A').getAttribute('aria-pressed')).toBe('true')
-    expect(confirm().textContent).toBe('Confirm (1)')
+    expect(confirm().textContent).toBe('Send (1)')
   })
 
   it('PP-9 [选项题, 审批]：没勾 → 没有「一键提交已填」；勾 A → 它在步进器里；点它 → 恰一次 (r3, [A])', async () => {
@@ -401,7 +411,110 @@ describe('PendingInputsPanel：密度与表单的身份', () => {
     expect(container.querySelector('[data-ask-policy]')!.textContent).toBe('p2')
     expect(expanded(T2)).toBe(0)
     expect(container.textContent).not.toContain(T2)
-    // 步进写的是 store 里的选中项（输入框据此知道「其它」投给哪条）
+    // 步进写的是 store 里的选中项（卡片那一行据此知道投给哪条）
     expect(useChatStore.getState().sessionActiveInputId.s1).toBe('r4')
+  })
+})
+
+describe('PendingInputsPanel：一键提交已填与卡片最后一行', () => {
+  const other = (text: string): InputResponse => ({ kind: 'other', text, secrets: [] })
+  const batchError = (): string | null =>
+    container.querySelector('[data-pending-batch-error]')?.textContent ?? null
+  const failure = (error: string): string => en.input.sendFailed.replace('{{error}}', error)
+  async function write(value: string): Promise<void> {
+    const el = container.querySelector<HTMLTextAreaElement>('[data-other-input]')!
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(el, value)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+  }
+
+  it('PP-15 只写了字（审批）：算已填，投 other', async () => {
+    await mount([ASK1, ASK3])
+    expect(submitAll()).toBeNull()
+    await write(' instead\n')
+    await click(submitAll()!)
+    expect(onResponse.mock.calls).toEqual([['r1', other('instead')]])
+  })
+
+  it('PP-15 只写了字（选项题）：算已填，投 other', async () => {
+    await mount([CHOICE, ASK1])
+    await write('my own')
+    await click(submitAll()!)
+    expect(onResponse.mock.calls).toEqual([['r3', other('my own')]])
+  })
+
+  it('PP-15 又勾又写：一次答复带上两样', async () => {
+    await mount([CHOICE, ASK1])
+    await click(choiceRow('A'))
+    await write('my own')
+    await click(submitAll()!)
+    expect(onResponse.mock.calls).toEqual([
+      ['r3', { kind: 'choice', selections: ['A'], note: 'my own', secrets: [] }]
+    ])
+  })
+
+  it('PP-15 只有空白 + 勾选：投勾选', async () => {
+    await mount([CHOICE, ASK1])
+    await click(choiceRow('B'))
+    await write('   ')
+    await click(submitAll()!)
+    expect(onResponse.mock.calls).toEqual([['r3', { kind: 'choice', selections: ['B'] }]])
+  })
+
+  it.each<[string, InputRequest[]]>([
+    ['选项题', [CHOICE, ASK1]],
+    ['审批', [ASK1, ASK3]]
+  ])('PP-15 %s只有空白、没勾：不算已填', async (_label, asks) => {
+    await mount(asks)
+    await write('   ')
+    expect(submitAll()).toBeNull()
+  })
+
+  it('PP-15 两条都填了：各投各的，写的话留在各自的草稿里', async () => {
+    await mount([ASK1, ASK3])
+    await write('for one')
+    await step('next')
+    await write('for two')
+    await click(submitAll()!)
+    expect(onResponse.mock.calls).toEqual([
+      ['r1', other('for one')],
+      ['r4', other('for two')]
+    ])
+  })
+
+  it('PP-16 被拒：没有未处理的 rejection，报原文，字还在；另一条照投', async () => {
+    onResponse.mockRejectedValueOnce(handlerError('nope'))
+    await mount([ASK1, ASK3])
+    await write('for one')
+    await step('next')
+    await write('for two')
+    const unhandled = await collectUnhandled(async () => {
+      await click(submitAll()!)
+      await flush()
+    })
+    expect(unhandled).toEqual([])
+    expect(onResponse).toHaveBeenCalledTimes(2)
+    expect(batchError()).toBe(failure('nope'))
+    expect(draftOf('r1')).toEqual({ otherText: 'for one' })
+  })
+
+  it('PP-16 断线：一句固定的话；再点那一刻清掉旧错', async () => {
+    onResponse.mockRejectedValueOnce(lost())
+    await mount([ASK1, ASK3])
+    await write('for one')
+    await click(submitAll()!)
+    await flush()
+    expect(batchError()).toBe(failure(en.input.connectionLost))
+
+    const reply = deferred<void>()
+    onResponse.mockReturnValueOnce(reply.promise)
+    await click(submitAll()!)
+    expect(batchError()).toBeNull()
+    await act(async () => reply.resolve())
+    await flush()
+    expect(batchError()).toBeNull()
   })
 })

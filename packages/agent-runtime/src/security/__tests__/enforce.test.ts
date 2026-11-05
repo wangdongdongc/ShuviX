@@ -4,9 +4,10 @@
  * EN-RM：「允许并记住」可以点名所在的文件夹（rememberTargetOf：只认真包含它的上级，不许 `/`、不许覆盖家目录）。
  * 末尾一组是询问点的自动审查（onPermissionRequest 接缝，EN-RV 系列）。
  * 再往后是会话客体（`session` 工具与一条别的会话交互，2026-10-20）：XS-16…18。
- * 最后是组件客体（`widget` 工具用一个组件）：WT4-SE-09…14。
+ * 再往后是组件客体（`widget` 工具用一个组件）：WT4-SE-09…14。
+ * 最后是人在审批卡片上的回答（工具行上那行记录，noteHumanAnswer）：ANS-EN 系列。
  */
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { executeDecision, rememberTargetOf } from '../enforce'
 import { clearSessionDecisions, getSessionDecisions } from '../decisionLog'
 import {
@@ -14,7 +15,9 @@ import {
   clearReviewState,
   humanFeedbackOf,
   reopenSessionReviews,
-  reviewSuspended
+  reviewSuspended,
+  takeHumanAnswers,
+  takeReviewAllowed
 } from '../reviewState'
 import type {
   AskInputRequest,
@@ -3032,5 +3035,359 @@ describe('executeDecision — widget object（WT4-SE-09…14）', () => {
       userResponse: 'allowed'
     })
     expect(JSON.stringify(logs)).not.toContain('Secret expenses')
+  })
+})
+
+describe('executeDecision — 人在审批卡片上的回答（ANS-EN）', () => {
+  const CALL = { toolCallId: 'tc-1' }
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  // 前面几组用同一个 SID 且不取走记录：从干净的状态开始
+  beforeEach(() => clearReviewState(SID))
+  afterEach(() => clearReviewState(SID))
+
+  const taken = (): unknown => takeHumanAnswers(SID, CALL)
+  const verdict = (decision: PermissionDecision): PermissionReviewAnswer => ({
+    verdict: { decision, risk: 'low', summary: 's', reason: 'r' },
+    source: 'auto-review'
+  })
+  const reviewer = (decision: PermissionDecision): ReturnType<typeof vi.fn<Reviewer>> =>
+    vi.fn<Reviewer>(async () => verdict(decision))
+  const REVIEWED_ASK: SecurityDecision = { ...PATH_ASK, tier: 'ask' }
+
+  const run = (
+    provider: SecurityHostProvider,
+    over: {
+      request?: SecurityRequest
+      decision?: SecurityDecision
+      opts?: EnforceOpts
+    } = {}
+  ): Promise<EnforceOutcome> =>
+    executeDecision({
+      provider,
+      request: over.request ?? makeRequest(),
+      decision: over.decision ?? PATH_ASK,
+      opts: over.opts ?? makeOpts(),
+      evaluateMs: 0
+    })
+
+  it('ANS-EN-1 允许一次 → [allowed]，放行', async () => {
+    const { provider } = askProvider({ kind: 'ask', allowed: true })
+    await expect(run(provider)).resolves.toEqual({ status: 'allowed' })
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+  })
+
+  it('ANS-EN-2 拒绝 → [denied]，抛错', async () => {
+    const { provider } = askProvider({ kind: 'ask', allowed: false })
+    await expect(run(provider)).rejects.toThrow()
+    expect(taken()).toStrictEqual([{ outcome: 'denied' }])
+  })
+
+  it("ANS-EN-3 写了反馈、onOther:'return' → [feedback]，交回 feedback", async () => {
+    const { provider } = askProvider({ kind: 'other', text: 'use staging' })
+    await expect(run(provider, { opts: makeOpts({ onOther: 'return' }) })).resolves.toEqual({
+      status: 'feedback',
+      text: 'use staging'
+    })
+    expect(taken()).toStrictEqual([{ outcome: 'feedback', text: 'use staging' }])
+  })
+
+  it('ANS-EN-4 写了反馈、onOther 缺省 → 同一条记录，抛错', async () => {
+    const { provider } = askProvider({ kind: 'other', text: 'use staging' })
+    await expect(run(provider)).rejects.toThrow('use staging')
+    expect(taken()).toStrictEqual([{ outcome: 'feedback', text: 'use staging' }])
+  })
+
+  it('ANS-EN-5 2001 字的反馈：记录、审查员认的那份和交回的文字都是全文', async () => {
+    const long = 'x'.repeat(2001)
+    const { provider } = askProvider({ kind: 'other', text: long })
+    const outcome = await run(provider, { opts: makeOpts({ onOther: 'return' }) })
+    expect(outcome).toEqual({ status: 'feedback', text: long })
+    expect(taken()).toStrictEqual([{ outcome: 'feedback', text: long }])
+    expect(humanFeedbackOf(SID).map((note) => note.text)).toEqual([long])
+  })
+
+  it.each(['aborted', 'closed', 'superseded'])(
+    'ANS-EN-6 卡片被取消（%s）：没有记录，抛 abortError',
+    async (reason) => {
+      const { provider } = askProvider({ kind: 'cancel', reason } as InputResponse)
+      await expect(run(provider, { opts: makeOpts({ abortError: 'Stopped' }) })).rejects.toThrow(
+        'Stopped'
+      )
+      expect(taken()).toStrictEqual([])
+    }
+  )
+
+  it('ANS-EN-7 审查被中止（信号已取消）：没有记录，不弹卡', async () => {
+    const onPermissionRequest = reviewer('allow')
+    const { provider, requestUserInput } = askProvider(
+      { kind: 'ask', allowed: true },
+      { onPermissionRequest }
+    )
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      run(provider, {
+        decision: REVIEWED_ASK,
+        opts: makeOpts({ signal: controller.signal })
+      })
+    ).rejects.toThrow()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(taken()).toStrictEqual([])
+  })
+
+  it('ANS-EN-8 审查放行：没有人的记录，留的是「已审查」标记；不弹卡', async () => {
+    const { provider, requestUserInput } = askProvider(
+      { kind: 'ask', allowed: true },
+      { onPermissionRequest: reviewer('allow') }
+    )
+    await expect(run(provider, { decision: REVIEWED_ASK })).resolves.toEqual({ status: 'allowed' })
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(taken()).toStrictEqual([])
+    expect(takeReviewAllowed(SID, CALL)).toMatchObject({ risk: 'low', summary: 's' })
+  })
+
+  it('ANS-EN-9 审查拒绝：没有记录（拒绝的不是人）', async () => {
+    const { provider } = askProvider(
+      { kind: 'ask', allowed: true },
+      { onPermissionRequest: reviewer('deny') }
+    )
+    await expect(run(provider, { decision: REVIEWED_ASK })).rejects.toThrow()
+    expect(taken()).toStrictEqual([])
+  })
+
+  it('ANS-EN-10 策略直接 allow / deny：没有卡片，没有记录', async () => {
+    const { provider, requestUserInput } = askProvider({ kind: 'ask', allowed: true })
+    await run(provider, { decision: ALLOW })
+    await expect(run(provider, { decision: denyDecision('no') })).rejects.toThrow('no')
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(taken()).toStrictEqual([])
+  })
+
+  it.each(['allow', 'deny'] as const)(
+    'ANS-EN-11 没有询问通道、missingChannel:%s：没有记录',
+    async (missingChannel) => {
+      const provider = makeProvider()
+      await run(provider, { opts: makeOpts({ missingChannel }) }).catch(() => {})
+      expect(taken()).toStrictEqual([])
+    }
+  )
+
+  it('ANS-EN-12 审查答 ask、人批准：[allowed]，没有「已审查」标记', async () => {
+    const { provider, requestUserInput } = askProvider(
+      { kind: 'ask', allowed: true },
+      { onPermissionRequest: reviewer('ask') }
+    )
+    await run(provider, { decision: REVIEWED_ASK })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+    expect(takeReviewAllowed(SID, CALL)).toBeUndefined()
+  })
+
+  it('ANS-EN-13 路径、rememberPath:true → [remembered, 路径]，与写进授权的是同一个字符串', async () => {
+    const { provider, persistGrant } = askProvider({
+      kind: 'ask',
+      allowed: true,
+      extra: { rememberPath: true }
+    })
+    await run(provider)
+    expect(persistGrant).toHaveBeenCalledWith('read', '/ws/file.txt')
+    expect(taken()).toStrictEqual([{ outcome: 'remembered', target: '/ws/file.txt' }])
+  })
+
+  const inHome = { getVars: () => ({ home: '/Users/u' }) }
+  const homeRequest = makeRequest({ object: { type: 'path', path: '/Users/u/proj/docs/a.md' } })
+
+  it('ANS-EN-13b 宿主没有 persistGrant（D12，现状）：记录仍说 remembered，虽然什么都没写下', async () => {
+    const provider = makeProvider({
+      requestUserInput: vi.fn(
+        async (): Promise<InputResponse> => ({
+          kind: 'ask',
+          allowed: true,
+          extra: { rememberPath: true }
+        })
+      )
+    })
+    await run(provider)
+    expect(taken()).toStrictEqual([{ outcome: 'remembered', target: '/ws/file.txt' }])
+  })
+
+  it('ANS-EN-14 rememberPath 点名所在文件夹：记录的是那个文件夹，与写进授权的一致', async () => {
+    const { provider, persistGrant } = askProvider(
+      { kind: 'ask', allowed: true, extra: { rememberPath: '/Users/u/proj/docs' } },
+      inHome
+    )
+    await run(provider, { request: homeRequest })
+    expect(persistGrant).toHaveBeenCalledWith('read', '/Users/u/proj/docs')
+    expect(taken()).toStrictEqual([{ outcome: 'remembered', target: '/Users/u/proj/docs' }])
+  })
+
+  it.each(['/', '/Users/u/other'])(
+    'ANS-EN-15 rememberPath=%s（根 / 不包含它的文件夹）：退回路径本身，与写进授权的一致',
+    async (requested) => {
+      const { provider, persistGrant } = askProvider(
+        { kind: 'ask', allowed: true, extra: { rememberPath: requested } },
+        inHome
+      )
+      await run(provider, { request: homeRequest })
+      expect(persistGrant).toHaveBeenCalledWith('read', '/Users/u/proj/docs/a.md')
+      expect(taken()).toStrictEqual([{ outcome: 'remembered', target: '/Users/u/proj/docs/a.md' }])
+    }
+  )
+
+  const SESSION_ASK: SecurityDecision = {
+    ...askDecision({
+      command: 'Session(read, X)',
+      rememberEntry: 'Session(read, X)',
+      session: { sessionId: 'X', title: 'Deploy notes', access: 'read', operation: 'read-session' }
+    })
+  }
+  const SESSION_REQUEST = makeRequest({
+    object: { type: 'session', sessionId: 'X', title: 'Deploy notes', ownTurn: false },
+    tool: { name: 'session', operation: 'read-session' }
+  })
+
+  it('ANS-EN-16 会话、remember:true：记录写标题给人看，写进授权的是会话 id', async () => {
+    const persistSessionGrant = vi.fn()
+    const { provider } = askProvider(
+      { kind: 'ask', allowed: true, extra: { remember: true } },
+      { persistSessionGrant }
+    )
+    await run(provider, { request: SESSION_REQUEST, decision: SESSION_ASK })
+    expect(persistSessionGrant).toHaveBeenCalledWith('read', 'X')
+    expect(taken()).toStrictEqual([{ outcome: 'remembered', target: 'Deploy notes' }])
+  })
+
+  it.each([
+    ['不带 rememberAccess', {}, 'read'],
+    ["rememberAccess:'write'", { rememberAccess: 'write' }, 'write']
+  ])('ANS-EN-17 组件 %s：记录写组件名，授权的访问方式随之', async (_label, extra, access) => {
+    const persistWidgetGrant = vi.fn()
+    const { provider } = askProvider(
+      { kind: 'ask', allowed: true, extra: { remember: true, ...extra } },
+      { persistWidgetGrant }
+    )
+    await run(provider, {
+      request: makeRequest({
+        object: { type: 'widget', widgetId: 'W', name: 'Reading list', operation: 'listBooks' },
+        tool: { name: 'widget', operation: 'call' }
+      }),
+      decision: askDecision({
+        command: 'Widget(read, W)',
+        rememberEntry: 'Widget(read, W)',
+        widget: { widgetId: 'W', name: 'Reading list', access: 'read', operation: 'listBooks' }
+      })
+    })
+    expect(persistWidgetGrant).toHaveBeenCalledWith(access, 'W')
+    expect(taken()).toStrictEqual([{ outcome: 'remembered', target: 'Reading list' }])
+  })
+
+  it('ANS-EN-18 rememberPath:true 但决策没给 rememberEntry：[allowed]，不写授权', async () => {
+    const { provider, persistGrant } = askProvider({
+      kind: 'ask',
+      allowed: true,
+      extra: { rememberPath: true }
+    })
+    await run(provider, { decision: askDecision({ command: 'Read(/ws/file.txt)' }) })
+    expect(persistGrant).not.toHaveBeenCalled()
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+  })
+
+  it('ANS-EN-19 额外字段与客体类型对不上：[allowed]', async () => {
+    const invocation = askProvider({ kind: 'ask', allowed: true, extra: { remember: true } })
+    await run(invocation.provider, {
+      request: makeRequest({ object: { type: 'invocation' } as SecurityObject }),
+      decision: askDecision({ command: 'Tool()', rememberEntry: 'Tool()' })
+    })
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+
+    const persistSessionGrant = vi.fn()
+    const session = askProvider(
+      { kind: 'ask', allowed: true, extra: { rememberPath: true } },
+      { persistSessionGrant }
+    )
+    await run(session.provider, { request: SESSION_REQUEST, decision: SESSION_ASK })
+    expect(persistSessionGrant).not.toHaveBeenCalled()
+    expect(session.persistGrant).not.toHaveBeenCalled()
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+  })
+
+  it('ANS-EN-20 一次调用过两道门：允许一次，然后记住 → 两条，按回答的先后', async () => {
+    const answers: InputResponse[] = [
+      { kind: 'ask', allowed: true },
+      { kind: 'ask', allowed: true, extra: { rememberPath: true } }
+    ]
+    const provider = makeProvider({
+      requestUserInput: vi.fn(async () => answers.shift()!),
+      persistGrant: vi.fn()
+    })
+    await run(provider)
+    await run(provider)
+    expect(taken()).toStrictEqual([
+      { outcome: 'allowed' },
+      { outcome: 'remembered', target: '/ws/file.txt' }
+    ])
+  })
+
+  it('ANS-EN-21 先人答、后审查放行：一条人的记录，「已审查」标记也留着', async () => {
+    const onPermissionRequest = vi
+      .fn<Reviewer>()
+      .mockResolvedValueOnce(verdict('ask'))
+      .mockResolvedValueOnce(verdict('allow'))
+    const { provider } = askProvider({ kind: 'ask', allowed: true }, { onPermissionRequest })
+    await run(provider, { decision: REVIEWED_ASK })
+    await run(provider, { decision: REVIEWED_ASK })
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+    expect(takeReviewAllowed(SID, CALL)).toBeDefined()
+  })
+
+  it('ANS-EN-22 先审查放行、后人答：「已审查」标记作废（有人看过了），一条人的记录', async () => {
+    const onPermissionRequest = vi
+      .fn<Reviewer>()
+      .mockResolvedValueOnce(verdict('allow'))
+      .mockResolvedValueOnce(verdict('ask'))
+    const { provider } = askProvider({ kind: 'ask', allowed: true }, { onPermissionRequest })
+    await run(provider, { decision: REVIEWED_ASK })
+    await run(provider, { decision: REVIEWED_ASK })
+    expect(takeReviewAllowed(SID, CALL)).toBeUndefined()
+    expect(taken()).toStrictEqual([{ outcome: 'allowed' }])
+  })
+
+  it('ANS-EN-23 审批卡片收到选择题的应答（对不上）：按拒绝记，抛错', async () => {
+    const { provider } = askProvider({ kind: 'choice', selections: [] })
+    await expect(run(provider)).rejects.toThrow()
+    expect(taken()).toStrictEqual([{ outcome: 'denied' }])
+  })
+
+  it('ANS-EN-24 带 taskId：记录按任务分桶，只给 toolCallId 取不到', async () => {
+    const { provider } = askProvider({ kind: 'ask', allowed: true })
+    await run(provider, { opts: makeOpts({ taskId: 9 }) })
+    expect(taken()).toStrictEqual([])
+    expect(takeHumanAnswers(SID, { toolCallId: 'tc-1', taskId: 9 })).toStrictEqual([
+      { outcome: 'allowed' }
+    ])
+  })
+
+  it('ANS-EN-25 审查员认的反馈还是全文；没取走的回答记录不进审查事件', async () => {
+    const long = 'x'.repeat(2001)
+    const onPermissionRequest = vi.fn<Reviewer>(async () => verdict('ask'))
+    const responses: InputResponse[] = [
+      { kind: 'other', text: long },
+      { kind: 'ask', allowed: true }
+    ]
+    const requestUserInput = vi.fn(async () => responses.shift()!)
+    const provider = makeProvider({ requestUserInput, onPermissionRequest })
+
+    await run(provider, {
+      decision: REVIEWED_ASK,
+      opts: makeOpts({ onOther: 'return', toolCallId: 'tc-a' })
+    })
+    expect(humanFeedbackOf(SID).map((note) => note.text)).toEqual([long])
+
+    // 上一次调用的记录还没取走：这一次审查收到的事件里看不到它（记录只给人看）
+    await run(provider, { decision: REVIEWED_ASK, opts: makeOpts({ toolCallId: 'tc-b' }) })
+    const event = JSON.stringify(onPermissionRequest.mock.calls[1][0])
+    expect(event).not.toContain('shuvixAnswers')
+    expect(event).not.toContain('"outcome"')
   })
 })

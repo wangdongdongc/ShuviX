@@ -10,6 +10,7 @@ import {
 } from 'react-virtuoso'
 import {
   useChatStore,
+  selectActivePendingInput,
   selectIsStreaming,
   selectPendingInputs,
   selectPendingPrompt
@@ -22,16 +23,29 @@ import { buildVisibleItems, isAssistantMessage } from './conversationItems'
 import { SuggestionContext } from './SuggestionCards'
 import { suggestionStatesOf } from '@shuvix/chat-protocol/suggestions'
 import { StreamingFooter } from './StreamingFooter'
-import { PendingInputsPanel } from './PendingInputsPanel'
+import { PendingInputsCard, pendingCardOnScreen } from './PendingInputsCard'
 import { InputArea } from './InputArea'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ViewLoadGate } from './ConversationLoadBar'
+import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 
-/** Virtuoso Footer：流式指示器 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
-function ConversationFooter(): React.JSX.Element {
+/** 列表经 Virtuoso 交给 List / Footer 的上下文 */
+interface ListContext {
+  /** 量到真的贴底了（见 ConversationList） */
+  landed: boolean
+  onInputResponse: (requestId: string, response: InputResponse) => void | Promise<void>
+}
+
+/**
+ * Virtuoso Footer：流式指示器 + 等人回答的询问卡片 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递）。
+ * 询问排在对话的最末尾，而不是发起它的工具行旁边：工具行常被折进步骤组，派生 agent 的询问在这条对话里也没有工具行，
+ * 几个工具并行时还会同时有几张
+ */
+function ConversationFooter({ context }: ContextProp<ListContext>): React.JSX.Element {
   return (
     <>
       <StreamingFooter />
+      <PendingInputsCard onResponse={context.onInputResponse} />
       <div aria-hidden style={{ height: 'var(--chat-input-h, 0px)' }} />
     </>
   )
@@ -45,7 +59,7 @@ function ConversationFooter(): React.JSX.Element {
  */
 const ConversationList = forwardRef<
   HTMLDivElement,
-  Omit<ListProps, 'ref'> & ContextProp<{ landed: boolean }>
+  Omit<ListProps, 'ref'> & ContextProp<ListContext>
 >(function ConversationList({ context, style, ...rest }, ref) {
   return (
     <div ref={ref} {...rest} style={context.landed ? { ...style, visibility: 'visible' } : style} />
@@ -100,6 +114,8 @@ const BOTTOM_STATE_GRACE_MS = 800
  * 一动（滚轮、触摸、按下鼠标或按键、往上滚）立即松开
  */
 const PIN_TO_BOTTOM_MS = 3000
+/** 新询问露面之后多久内继续贴底：卡片的表单隔一拍才画出来（draft 在 effect 里初始化），Footer 随后才长高 */
+const REVEAL_ASK_MS = 400
 /** 离底部超过几屏就直接跳，不做平滑滚动：虚拟列表平滑滚过很长一段要沿途量一遍高度，又慢又抖 */
 const SMOOTH_SCROLL_MAX_SCREENS = 3
 
@@ -132,6 +148,8 @@ interface MessageListProps {
   onScrollbarWidthChange: (px: number) => void
   /** 消息已经可见（量到贴底，或过了宽限期）：外面的进度条可以撤了 */
   onLanded: () => void
+  /** 询问卡片（在列表 Footer 里）的回答 */
+  onInputResponse: (requestId: string, response: InputResponse) => void | Promise<void>
 }
 
 function MessageList({
@@ -140,7 +158,8 @@ function MessageList({
   running,
   scrollRequest,
   onScrollbarWidthChange,
-  onLanded
+  onLanded,
+  onInputResponse
 }: MessageListProps): React.JSX.Element {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const scrollerRef = useRef<HTMLElement | null>(null)
@@ -181,7 +200,7 @@ function MessageList({
   useEffect(() => {
     if (landed || !startsAtBottom) onLanded()
   }, [landed, startsAtBottom, onLanded])
-  const listContext = useMemo(() => ({ landed }), [landed])
+  const listContext = useMemo(() => ({ landed, onInputResponse }), [landed, onInputResponse])
 
   const handleAtBottomChange = useCallback(
     (value: boolean) => {
@@ -220,10 +239,71 @@ function MessageList({
     })
   }, [checkLanded])
   useEffect(() => () => cancelAnimationFrame(stickFrame.current), [])
-  // 列表总高（含 Footer，所以输入卡片长高也算）变了：还在跟随就再贴一次底
+  // 列表总高（含 Footer，所以询问卡片长高也算）变了：还在跟随就再贴一次底
+  const revealAskRef = useRef(false)
+  const measureAskCardRef = useRef<() => void>(() => {})
   const handleTotalHeightChange = useCallback(() => {
-    if (pinnedRef.current) stickToBottom()
+    if (pinnedRef.current || revealAskRef.current) stickToBottom()
+    measureAskCardRef.current()
   }, [stickToBottom])
+
+  // 新询问露面：人本来就在底部就把卡片露出来（列表没有 followOutput，末尾长高不会自己跟）；人在往上翻历史就不打扰，
+  // 由下面那枚提示告诉他。步进到另一张、前一张答完换下一张同样算露面
+  const activeAsk = useChatStore(selectActivePendingInput)
+  const activeAskId = activeAsk?.id
+  const atBottomRef = useRef(atBottom)
+  useEffect(() => {
+    // 日历跳到中间时 atBottom 还是初值 true：在初始定位过去之前不能算「人在底部」，否则会把跳转拉回底部
+    atBottomRef.current = atBottom && (startsAtBottom || settled)
+  }, [atBottom, startsAtBottom, settled])
+  // 卡片是否露着（「等你批准」提示看它，不看 atBottom：离底 160px 之内也算在底部，那时卡片已经大半压在输入卡片底下）
+  const [askCardVisible, setAskCardVisible] = useState(true)
+  const measureAskCard = useCallback(() => {
+    const scroller = scrollerRef.current
+    const card = scroller?.querySelector<HTMLElement>('[data-pending-card]')
+    if (!scroller || !card || revealAskRef.current) {
+      setAskCardVisible(true)
+      return
+    }
+    // 卡片比可见区还高（窗口很矮）时到底了也露不全：已经到底就别再提示，点了也没处可去
+    const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2
+    setAskCardVisible(atEnd || pendingCardOnScreen(card))
+  }, [])
+  useEffect(() => {
+    measureAskCardRef.current = measureAskCard
+  }, [measureAskCard])
+  useEffect(() => {
+    if (activeAskId === undefined) return
+    const scroller = scrollerRef.current
+    const listeners = new AbortController()
+    const release = (): void => {
+      revealAskRef.current = false
+    }
+    let done: ReturnType<typeof setTimeout> | undefined
+    if (atBottomRef.current) {
+      revealAskRef.current = true
+      stickToBottom()
+      done = setTimeout(() => {
+        release()
+        measureAskCard()
+      }, REVEAL_ASK_MS)
+      // 人一动就松开，别把正往上翻的人拉回去（同落地后的跟随）
+      for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+        scroller?.addEventListener(type, release, { passive: true, signal: listeners.signal })
+      }
+    }
+    scroller?.addEventListener('scroll', measureAskCard, {
+      passive: true,
+      signal: listeners.signal
+    })
+    const frame = requestAnimationFrame(measureAskCard)
+    return () => {
+      cancelAnimationFrame(frame)
+      clearTimeout(done)
+      listeners.abort()
+      release()
+    }
+  }, [activeAskId, stickToBottom, measureAskCard])
 
   // 日历跳转。请求经一次 IPC 才到，可能早于也可能晚于列表挂载：早于 → 上面已当作初始定位用掉，这里只清；
   // 晚于 → 等初始定位过了再滚 —— Virtuoso 的初始定位要隔几帧才落地，赶在它之前滚，会被它拉回底部。
@@ -336,8 +416,9 @@ function MessageList({
       />
       {/* 排在输入卡片之前：卡片向上展开的浮层要盖住它（见 ScrollToBottomButton） */}
       <ScrollToBottomButton
-        visible={settled && !atBottom}
+        visible={settled && (activeAsk ? !askCardVisible : !atBottom)}
         running={running}
+        waiting={activeAsk?.kind ?? null}
         onClick={scrollToBottom}
       />
     </>
@@ -373,7 +454,18 @@ export function Conversation({
   // 直接写 DOM 变量而非 state：高度随输入增长高频变化，不触发列表重渲染
   const rootRef = useRef<HTMLDivElement>(null)
   const handleInputHeightChange = useCallback((h: number) => {
-    rootRef.current?.style.setProperty('--chat-input-h', `${h}px`)
+    const root = rootRef.current
+    if (!root) return
+    // 询问卡片本来整张露着，输入卡片长高（打字、发出一条进了队列的消息）：列表跟着上移，别盖住它。卡片没露全时不动，
+    // 不替翻历史的人挪位置。要在写新值之前量：用的是长高之前盖住的那一截
+    const card = root.querySelector<HTMLElement>('[data-pending-card]')
+    const grew = h - (parseFloat(root.style.getPropertyValue('--chat-input-h')) || 0)
+    const keepCard = !!card && grew > 0 && pendingCardOnScreen(card)
+    root.style.setProperty('--chat-input-h', `${h}px`)
+    if (keepCard) {
+      const scroller = card.closest<HTMLElement>('[data-virtuoso-scroller]')
+      if (scroller) scroller.scrollTop += grew
+    }
   }, [])
   // 列表滚动条宽度 → --chat-scrollbar-w：输入卡片与「回到底部」按钮在右侧让出这一条（见 MessageList）
   const handleScrollbarWidthChange = useCallback((w: number) => {
@@ -438,7 +530,7 @@ export function Conversation({
   // 空态只在**真的什么都没有**时才顶上：乐观占位也算内容 —— 漏掉它，「新会话第一条消息」
   // 与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
   // messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病
-  const isEmpty = messages.length === 0 && !isStreaming && !pendingPrompt
+  const isEmpty = messages.length === 0 && !isStreaming && !pendingPrompt && !hasPendingInputs
   // 有没有历史要等，进度条只为它出现。视图到了看消息；视图没到只能看别的：正发着第一句话（乐观占位）是刚建的会话，
   // 会话行的 lastActiveAt 还停在建行那一刻则是没发过消息，等来的也是空态。fork、内存会话、Chrome 标签页会话
   // 有历史也可能停在那一刻：这几种视图迟到时是一段没有进度条的空白
@@ -516,21 +608,18 @@ export function Conversation({
                   scrollRequest={scrollRequest}
                   onScrollbarWidthChange={handleScrollbarWidthChange}
                   onLanded={onPainted}
+                  onInputResponse={handleInputResponse}
                 />
               </SuggestionContext.Provider>
             )
           }
         </ViewLoadGate>
 
-        {/* 输入区（悬浮卡片）：待处理用户输入经 accessory 并入卡片顶格，与输入区同一张卡片 */}
+        {/* 输入区（悬浮卡片）。待处理用户输入在列表末尾（ConversationFooter），这里只发消息 */}
         <div
           className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
         >
-          <InputArea
-            thread={inputTop}
-            accessory={<PendingInputsPanel onResponse={handleInputResponse} />}
-            onHeightChange={handleInputHeightChange}
-          />
+          <InputArea thread={inputTop} onHeightChange={handleInputHeightChange} />
         </div>
       </div>
 

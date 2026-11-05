@@ -19,6 +19,7 @@
  *   - **触发事件**（2026-11-02，OLT-1..5）：触发消息的事件收在一枚 Token 里，大纲、展开、搜索都只见 message；
  *     同一条消息去掉 Token 后输出应相同（差分）。旧的长文本消息照旧。见 M。
  *   - **发送方**（OL-1）：别的会话发来的消息的说明收在一枚 Token 里，同样不算这条消息的话；at 标记留着。见 N。
+ *   - **人答过的调用**（2026-11-04，OLA-1/2）：与界面同一条规则 —— 人答过的调用切开一串合并行；记录的文字不进大纲。见 O。
  *
  * 用例编号 WP4-xx 对应测试设计清单；期望以 §19.10 的裁决与当前源码为准（清单里标 ⚠ 的几条已按裁决改写）。
  */
@@ -2439,5 +2440,60 @@ describe('N. 发送方说明不算这条消息的话', () => {
     expect(item(withSender, '#1', r)).toEqual(item(without, '#1', r))
     expect(item(withSender, '#1', r).lines).toEqual(['[parent]', said])
     expect(outline(withSender, ALL, r).lines.join('\n')).not.toContain(SENDER_MARKER)
+  })
+})
+
+// ─────────────────────────── O. 人答过的调用 ───────────────────────────
+
+describe('O. 人答过的调用（details.shuvixAnswers）', () => {
+  const SECRET_TARGET = '/ws/remembered-target'
+  const SECRET_TEXT = 'feedback words nobody should see'
+  /** 人答过的 read：记录里什么都有（记住的路径、写的反馈） */
+  const answered = (callId: string, path: string): AssistantToolBlock => ({
+    ...READ(callId, path),
+    details: {
+      shuvixAnswers: [
+        { outcome: 'allowed' },
+        { outcome: 'remembered', target: SECRET_TARGET },
+        { outcome: 'feedback', text: SECRET_TEXT }
+      ]
+    } as unknown as AssistantToolBlock['details']
+  })
+  const FORBIDDEN = ['shuvixAnswers', SECRET_TARGET, SECRET_TEXT, 'remembered', 'allowed']
+
+  it('OLA-1 大纲、展开、搜索都看不到记录的内容', () => {
+    const v = view([U('1', 'task'), A('2', [answered('c1', 'a.ts'), TX('done')])])
+    const texts = [
+      outline(v, ALL).lines.join('\n'),
+      item(v, '#2.0').lines.join('\n'),
+      item(v, '#2').lines.join('\n')
+    ]
+    for (const text of texts) {
+      for (const word of FORBIDDEN) expect(text).not.toContain(word)
+    }
+    expect(search(v, SECRET_TEXT).lines).toEqual([])
+    expect(search(v, SECRET_TARGET).lines).toEqual([])
+  })
+
+  it('OLA-2 [read, 人答过的 read, read]：与界面同一条规则 —— 切成三行，不合并成 read ×3；没有记录的三个照旧合并', () => {
+    const split = view([
+      U('1', 'task'),
+      A('2', [READ('c1', 'a.ts'), answered('c2', 'b.ts'), READ('c3', 'c.ts')])
+    ])
+    expect(outline(split, ALL).lines.slice(1)).toEqual([
+      '#2.0 read a.ts',
+      '#2.1 read b.ts',
+      '#2.2 read c.ts'
+    ])
+
+    const merged = view([
+      U('1', 'task'),
+      A('2', [READ('c1', 'a.ts'), READ('c2', 'b.ts'), READ('c3', 'c.ts')])
+    ])
+    expect(outline(merged, ALL).lines.slice(1)).toEqual(['#2.0-2 read ×3  a.ts · b.ts · c.ts'])
+    // 切分的依据与界面相同
+    expect(
+      groupConsecutiveSteps(A('2', [READ('c1', 'a.ts'), answered('c2', 'b.ts')]).blocks!)
+    ).toHaveLength(2)
   })
 })

@@ -34,8 +34,8 @@ export const AskParamsSchema = Type.Object({
 
 export const ASK_DESCRIPTION =
   'Present a question with clickable options to the user. When the user needs to choose between approaches, styles, configurations, or any decision point, use this tool so the options are clickable rather than written out as plain text. ' +
-  'The user may tick one option or several, or answer in their own words instead — how many to pick is their call, so do not tell them in the question, and write each option so it stands on its own. ' +
-  'Be ready for a result that names more than one option.'
+  'The user may tick one option or several, add words of their own to what they ticked, or answer only in their own words — how many to pick is their call, so do not tell them in the question, and write each option so it stands on its own. ' +
+  'Be ready for a result that names more than one option, or that carries a note beside them.'
 
 /**
  * 父会话代答时结果的开头。子会话的模型要知道这不是用户本人选的（它可以据此判断要不要再向用户确认）；
@@ -111,16 +111,24 @@ export function createAskTool({
             : selections.length === 0
               ? 'User made no selection'
               : `User selected: ${selections.join(', ')}`
+          if (response.note) text += `\n${byParent ? 'It' : 'User'} also wrote:\n${response.note}`
         } else {
           text = 'User input error: unexpected response kind'
         }
 
+        const written =
+          response.kind === 'other'
+            ? response.text
+            : response.kind === 'choice'
+              ? response.note
+              : undefined
         const result: ToolResult<AskToolDetails> = {
           content: [{ type: 'text', text }],
           details: {
             type: 'ask',
             question: params.question,
             selections,
+            ...(written === undefined ? {} : { other: written }),
             ...(byParent ? { answeredBy: { ...answeredBy } } : {})
           }
         }

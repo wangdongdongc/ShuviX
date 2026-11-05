@@ -7,7 +7,8 @@
  *  - **归纳**（`summarizeSteps`）：按标签聚合计数，首次出现顺序排列；
  *  - **一行文本**（`formatStepSequence`）：`×` 与 ` · ` 两个字符钉死，超长按字符截断；
  *  - **摆给用户看的图**（`show_image`，docs/show-image-design.md §5）：落定的调用不是过程步骤，像中间文本一样切开一段、
- *    永不进步骤组，计数徽章不数它（SG-SI-1…SG-SI-4）。
+ *    永不进步骤组，计数徽章不数它（SG-SI-1…SG-SI-4）；
+ *  - **人答过的调用**（`ask` 与 details 带 `shuvixAnswers` 的调用）：记录要留在对话里，并进合并行就看不见了（SG-A 系列）。
  *
  * 标签由调用方给（工具显示名 / i18n 文案），这里用静态字符串，不牵扯 store 与 i18n。
  */
@@ -376,5 +377,72 @@ describe('摆给用户看的图（show_image）不进步骤组', () => {
       expect(formatStepSequence(summary)).not.toContain('show_image')
     }
     expect(summaries.map((s) => formatStepSequence(s))).toEqual(['thinking · read', 'read · grep'])
+  })
+})
+
+describe('groupConsecutiveSteps —— 人答过的调用留在对话里', () => {
+  const read = (id: string, details?: unknown): AssistantToolBlock => ({
+    ...tool(id, 'read', { result: 'ok' }),
+    ...(details === undefined ? {} : { details: details as AssistantToolBlock['details'] })
+  })
+  const askDone = (id: string, over: Partial<AssistantToolBlock> = {}): AssistantToolBlock => ({
+    ...tool(id, 'ask', { result: 'User selected: A' }),
+    details: { type: 'ask', question: 'q', selections: ['A'] },
+    ...over
+  })
+  const answered = (id: string): AssistantToolBlock =>
+    read(id, { shuvixAnswers: [{ outcome: 'allowed' }] })
+  const shape = (blocks: AssistantBlock[]): string[] =>
+    groupConsecutiveSteps(blocks).map((g) =>
+      g.kind === 'single' ? 'single' : `group:${g.blocks.length}`
+    )
+
+  it('SG-A1 [read, 答完的 ask, read]：三段单行', () => {
+    expect(shape([read('1'), askDone('2'), read('3')])).toEqual(['single', 'single', 'single'])
+  })
+
+  it('SG-A2 [read, 人批过的 read, read]：三段单行，没有合并行', () => {
+    expect(shape([read('1'), answered('2'), read('3')])).toEqual(['single', 'single', 'single'])
+  })
+
+  it('SG-A3 [read, read, 人批过的, read, read]：组、单行、组', () => {
+    expect(shape([read('1'), read('2'), answered('3'), read('4'), read('5')])).toEqual([
+      'group:2',
+      'single',
+      'group:2'
+    ])
+  })
+
+  it.each([
+    ['结局名不认识', { shuvixAnswers: [{ outcome: 'x' }] }],
+    ['键是字符串', { shuvixAnswers: 'y' }],
+    ['空数组', { shuvixAnswers: [] }]
+  ])('SG-A4 %s 不算人答过：照样能合并', (_label, details) => {
+    expect(shape([read('1', details), read('2')])).toEqual(['group:2'])
+  })
+
+  it('SG-A5 只有「已审查」标记、没有回答：照样能合并（审查放行不是人答的）', () => {
+    const reviewed = read('1', { shuvixReview: { risk: 'low', summary: 's' } })
+    expect(shape([reviewed, read('2')])).toEqual(['group:2'])
+  })
+
+  it('SG-A6 [思考, ask, 思考]：没有哪一组跨过 ask', () => {
+    expect(shape([thinking('a'), askDone('2'), thinking('b')])).toEqual([
+      'single',
+      'single',
+      'single'
+    ])
+  })
+
+  it('SG-A7 ask 没选 / 结果为空串：还是单行', () => {
+    const none = askDone('2', { details: { type: 'ask', question: 'q', selections: [] } })
+    const emptyResult = askDone('3', { result: '' })
+    expect(shape([read('1'), none, read('4')])).toEqual(['single', 'single', 'single'])
+    expect(shape([read('1'), emptyResult, read('4')])).toEqual(['single', 'single', 'single'])
+  })
+
+  it('SG-A8 ask 还在等（result undefined）：单行，与从前一样', () => {
+    const waiting = tool('2', 'ask')
+    expect(shape([read('1'), waiting, read('3')])).toEqual(['single', 'single', 'single'])
   })
 })

@@ -83,8 +83,9 @@
  *   M-31 审批卡片（MOB-ask，390 宽，真触摸）：项目会话读家目录里、工作区外的文件（ask-on-external-path #0 问人），
  *        手机打开它。卡片恰四行 allow / remember-path / remember-folder / deny（en 文案）：每行 ≥ 44px 高（−0.5）、
  *        左右缘 = 面板的（±1）且在 0…390 之内、自上而下不重叠，第一行顶与最后一行底都在视口里；正文 16px；文件夹
- *        那一行的路径不伸出行的右缘；页面与壳没有横向溢出；输入框占位是 otherPlaceholderAsk。焦点在 body 上按可信的
- *        1 → 500ms 后卡片还在、假提供商没收到新请求（触屏没有数字键）。真点「允许这一次」→ 卡片收起、回复
+ *        那一行的路径不伸出行的右缘；页面与壳没有横向溢出；卡片最后一行占位是 otherPlaceholderAsk、字号 16px，输入框占位是
+ *        placeholderSteer。焦点在 body 上按可信的 1 → 500ms 后卡片还在、假提供商没收到新请求（触屏没有数字键）。焦点放进那一行：
+ *        页面与壳都没滚；可信的回车是换行、不发。真点「允许这一次」→ 卡片收起、回复
  *        MOB-ASK-DONE 落定、read 那一块的结果里有 MOB-ASK-FILE 且不是错误
  *   M-32 文件抽屉是触屏那一档（MOB-chat，抽屉滑入落定之后量）：hello.txt 那一行 40px（±1）、名字的字号 = 壳上的
  *        --app-font-size（缺省 16px）；顶栏的搜索 / 刷新钮 36×36（±1）；真点搜索 → 搜索框 ≥ 16px。设备字号改成 20
@@ -120,6 +121,7 @@ import {
   type WebClientHandle
 } from '../../harness/networkFixtures'
 import {
+  inlineAskPane,
   agentsSidebarPane,
   chatOriginBadges,
   chatPane,
@@ -2332,7 +2334,11 @@ describe('phone layout: the shell', () => {
       expect(card.overflow.doc, what).toBeLessThanOrEqual(0)
       expect(card.overflow.shell, what).not.toBeNull()
       expect(card.overflow.shell!, what).toBeLessThanOrEqual(0)
-      expect(card.placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+      expect(card.placeholder).toBe(en.input.placeholderSteer)
+      expect(card.otherRow, what).toEqual({
+        placeholder: en.pendingInputs.otherPlaceholderAsk,
+        fontSize: '16px'
+      })
 
       // 触屏没有数字键：焦点在 body 上按可信的 1，什么都不答
       const requests = provider.chatRequestCount()
@@ -2340,6 +2346,24 @@ describe('phone layout: the shell', () => {
       await sleep(500)
       expect((await mobile().pendingCard())?.kind, 'the card is still there').toBe('ask')
       expect(provider.chatRequestCount(), 'nothing answered by the key').toBe(requests)
+
+      // 卡片那一行：聚焦不把页面与壳滚走；回车是换行（发送走按钮）
+      const ask = inlineAskPane(page())
+      const scrolled = (await mobile().pendingCard())!.scroll
+      await ask.typeOtherTrusted('first')
+      await sleep(300)
+      const focused = (await mobile().pendingCard())!.scroll
+      expect(focused.doc, 'document scroll after focus').toBe(scrolled.doc)
+      expect(focused.shell, 'shell scroll after focus').toBe(scrolled.shell)
+      expect(focused.doc).toBe(0)
+      await ask.pressOtherEnter()
+      await sleep(300)
+      const other = (await ask.otherRow())!
+      expect(other.value).toBe('first\n')
+      expect(other.focused).toBe(true)
+      expect(provider.chatRequestCount(), 'enter does not answer').toBe(requests)
+      expect((await mobile().pendingCard())?.kind, 'the card is still there').toBe('ask')
+      await ask.setOther('')
 
       // 真点「允许这一次」
       await mobile().tap({ pendingOption: 'allow' })
