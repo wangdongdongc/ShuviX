@@ -12,7 +12,9 @@ import {
   useChatStore,
   selectAllPendingCounts,
   selectInterruptedSessions,
+  selectBgBusySessions,
   selectStreamingSessions,
+  useBgTaskStore,
   type Session
 } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -171,6 +173,7 @@ export function ProjectSessionGroups({
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const streamingSessions = useChatStore(selectStreamingSessions)
+  const bgBusySessions = useBgTaskStore(selectBgBusySessions)
   const pendingCounts = useChatStore(selectAllPendingCounts)
   const interruptedSessions = useChatStore(selectInterruptedSessions)
   const { dim } = useFocusDim()
@@ -296,7 +299,7 @@ export function ProjectSessionGroups({
     if (onCopyLink) items.push({ id: 'copy-link', label: t('sidebar.copySessionLink') })
     if (onConfigureSession) items.push({ id: 'session-config', label: t('sessionConfig.title') })
     if (!isNotebook) items.push({ id: 'export-session', label: t('sidebar.exportSession') })
-    // 拷贝要等它停下：在跑 / 被中断时置灰（后台还有派生 agent 在跑这一种这里看不出来，由宿主拒绝）
+    // 拷贝要等这一轮停下：这一轮在跑 / 被中断时置灰。只看轮次，不看后台任务（行上亮着也可能能拷，宿主说了算）
     if (onForkSession && session && isForkableSessionShape(session)) {
       const idle = !streamingSessions[id] && !interruptedSessions[id]
       items.push({ id: 'fork-session', label: t('sidebar.forkSession'), enabled: idle })
@@ -497,7 +500,7 @@ export function ProjectSessionGroups({
               key={item.id}
               session={item}
               active={activeSessionId === item.id}
-              isStreaming={streamingSessions[item.id]}
+              isStreaming={streamingSessions[item.id] || bgBusySessions[item.id]}
               interrupted={interruptedSessions[item.id]}
               pendingCount={pendingCounts[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}

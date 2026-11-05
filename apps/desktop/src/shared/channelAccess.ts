@@ -272,6 +272,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 
   // ─── bgTask：后台任务 ───
   'bgTask:list': 'read',
+  'bgTask:listAll': 'read',
   'bgTask:readLog': 'read',
   'bgTask:stop': 'write',
   'bgTask:dismiss': 'write',

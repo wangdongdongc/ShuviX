@@ -1052,6 +1052,11 @@ export interface HostApi {
    * 见 bgTaskService 文件头第 5 点。
    */
   bgTask: {
+    /**
+     * 所有会话的任务（含已结束）。`bg_task` 是事件，窗口重建、客户端连上来之前发的都错过了，
+     * 新来的前端靠这份知道别的会话还有没有任务在跑（侧栏的运行态）。
+     */
+    listAll: () => Promise<TaskInfo[]>
     /** 停止：先 SIGINT，3 秒未退升级 SIGKILL；force 直接 SIGKILL */
     stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
     /** 移除一条已结束的任务（连同日志文件）；运行中的不移除 */

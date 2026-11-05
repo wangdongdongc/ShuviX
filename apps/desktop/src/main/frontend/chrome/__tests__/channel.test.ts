@@ -260,6 +260,7 @@ describe('CH-1 白名单之外的路径一律拒绝', () => {
     'agent.nextTurn',
     'files.scan',
     'bgTask.readLog',
+    'bgTask.listAll',
     'command.list',
     'settings.getAll',
     '__proto__',

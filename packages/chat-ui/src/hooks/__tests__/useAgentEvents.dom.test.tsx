@@ -8,6 +8,7 @@
  *   P3-08-39 留下来的处理：register / end、created、closing、mcp_connecting、runtime_event、bg_task；
  *            browser_event 不在这里处理
  *   P3-08-40 没人订阅视图的会话：agent_start / agent_end 翻侧栏转圈；订阅着的会话余项不抢先
+ *   BG-T1 后台任务的事件只进任务表，不改这一轮：空闲会话跑着后台命令，轮次的两张表都不亮（发送 / 打断 / 分支都看轮次）
  *   P3-08-41 tool_review 先于工具进度：工具一出现就是审查中；messages 引用不变；别的会话不受影响
  *   P3-08-42 本地错误行（PIN-02）：熬过三次视图更新（含一次落盘）、挂在到达时的最后一条之后；切走即清；
  *            非当前会话的 error 什么都不加
@@ -20,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 
 const mocks = vi.hoisted(() => ({
   listeners: new Set<(event: ChatEvent) => void>(),
@@ -69,10 +71,11 @@ import {
   selectIsStreaming,
   selectPendingPrompt,
   selectStreamingContent,
+  selectStreamingSessions,
   useChatStore
 } from '../../stores/chatStore'
 import { useSubSessionStore } from '../../stores/subSessionStore'
-import { useBgTaskStore } from '../../stores/bgTaskStore'
+import { selectBgBusySessions, useBgTaskStore } from '../../stores/bgTaskStore'
 import { buildVisibleItems } from '../../components/chat/conversationItems'
 import {
   V,
@@ -220,6 +223,42 @@ describe('P3-08-39 留下来的处理', () => {
     expect(store().sessionAskCounts.X).toBe(2)
     emit({ type: 'ask_count', sessionId: 'X', count: 0 })
     expect(store().sessionAskCounts.X).toBeUndefined()
+  })
+})
+
+describe('BG-T1 后台任务不改这一轮', () => {
+  it('BG-T1 空闲会话的 bash bg_task：进任务表；轮次的两张表都不亮', () => {
+    useBgTaskStore.setState({ tasks: {} })
+    const task: TaskInfo = {
+      taskId: 'bg-t1',
+      kind: 'bash',
+      sessionId: 's1',
+      title: 'watch',
+      status: 'running',
+      detached: true,
+      startedAt: 1,
+      endedAt: null,
+      subject: {
+        kind: 'bash',
+        command: 'sleep 9',
+        cwd: '/tmp',
+        pid: 1,
+        logPath: '/tmp/x.log',
+        exitCode: null,
+        signal: null,
+        logCapped: false
+      }
+    }
+    apply('s1', V('s1', { messages: [user('u1', 'hi')], run: { state: 'idle' } }))
+
+    emit({ type: 'bg_task', sessionId: 's1', task })
+
+    expect(useBgTaskStore.getState().tasks['bg-t1']).toEqual(task)
+    expect(selectBgBusySessions(useBgTaskStore.getState())).toEqual({ s1: true })
+    expect(selectStreamingSessions(store()).s1).toBeFalsy()
+    expect(store().sessionStreams.s1?.isStreaming).toBeFalsy()
+    expect(selectIsStreaming(store())).toBe(false)
+    useBgTaskStore.setState({ tasks: {} })
   })
 })
 

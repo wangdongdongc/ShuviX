@@ -30,6 +30,7 @@
  *
  * 询问计数（2026-11-02）：
  *   PAC-3 agent:askCounts 是请求通道：sessions 的 read（网络客户端能看，与读会话列表同档）
+ *         bgTask:listAll（2026-11-04，侧栏的运行态）同档
  *
  * 内置浏览器的标签页（2026-11-01，远程访问的本地文件读取修复）：
  *   AC-1 browser-view:list-tabs / get-url / capture 是 admin 的请求通道（地址里可能带登录令牌，截图给的比地址还多）；
@@ -305,6 +306,7 @@ describe('CS-4 抽查', () => {
     ['session:mentionEntries', 'sessions'],
     ['calendar:openReport', 'sessions'],
     ['bgTask:stop', 'sessions'],
+    ['bgTask:listAll', 'sessions'],
     ['sync:frame', 'sessions'],
     ['project:list', 'projects'],
     ['files:read', 'files'],
@@ -439,12 +441,22 @@ describe('CS-7 触发源与跟踪项（实验）', () => {
   })
 })
 
-describe('PAC-3 询问计数', () => {
+describe('PAC-3 询问计数与后台任务快照', () => {
   it('PAC-3 agent:askCounts 是 API_TABLE 里的请求通道，sessions 的 read', () => {
     expect(API_TABLE.agent.askCounts.channel).toBe('agent:askCounts')
     expect(CHANNEL_ACCESS['agent:askCounts']).toBe('read')
     expect(channelScopeOf('agent:askCounts')).toBe('sessions')
     expect(channelCallFactsOf('agent:askCounts', [])).toEqual({
+      scope: 'sessions',
+      access: 'read'
+    })
+  })
+
+  it('PAC-3 bgTask:listAll 是 API_TABLE 里的请求通道，sessions 的 read', () => {
+    expect(API_TABLE.bgTask.listAll.channel).toBe('bgTask:listAll')
+    expect(CHANNEL_ACCESS['bgTask:listAll']).toBe('read')
+    expect(channelScopeOf('bgTask:listAll')).toBe('sessions')
+    expect(channelCallFactsOf('bgTask:listAll', [])).toEqual({
       scope: 'sessions',
       access: 'read'
     })

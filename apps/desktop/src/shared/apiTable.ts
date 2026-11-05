@@ -339,6 +339,7 @@ export const API_TABLE = {
   /** 后台任务 */
   bgTask: {
     list: invoke('bgTask:list', 1),
+    listAll: invoke('bgTask:listAll', 0),
     readLog: invoke('bgTask:readLog', 1),
     stop: invoke('bgTask:stop', 1),
     dismiss: invoke('bgTask:dismiss', 1),

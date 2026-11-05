@@ -18,6 +18,7 @@
  */
 import {
   Bot,
+  createLucideIcon,
   MessageSquare,
   MessagesSquare,
   FileText,
@@ -28,9 +29,32 @@ import { useTranslation } from 'react-i18next'
 import { RowMenuButton } from './RowMenuButton'
 import { RedactedText, RedactionSessionProvider } from '@shuvix/chat-ui'
 
+/**
+ * MessagesSquare 的实心版（有子会话的会话，选中 / 在跑时用，与普通会话的实心 MessageSquare 同一层意思）。
+ * 不能直接给 MessagesSquare 加 fill：后面那片是条开放路径，填出来是一道斜切口。这里把它沿前片的外轮廓闭合，
+ * 两片之间留着和线框版一样的缝。
+ */
+const MessagesSquareSolid = createLucideIcon('messages-square-solid', [
+  [
+    'path',
+    {
+      d: 'M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
+      key: 'front'
+    }
+  ],
+  [
+    'path',
+    {
+      d: 'M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1h8a4 4 0 0 0 4-4z',
+      key: 'back'
+    }
+  ]
+])
+
 export interface SessionItemProps {
   session: { id: string; title: string }
   active: boolean
+  /** 在跑（侧栏口径）：这一轮在跑，或者还有没结束的后台任务 —— 由容器合起来传入 */
   isStreaming?: boolean
   /**
    * 上个进程退出时这条会话正在跑（P3-12，Q-P3-10 的侧栏圆点）：标题后一枚小圆点 + 悬浮提示。
@@ -97,7 +121,11 @@ export function SessionItem({
   ) : isPinned ? (
     <PictureInPicture2 className={`sb-icon ${pulse}text-accent`} />
   ) : subCount > 0 ? (
-    <MessagesSquare className={`sb-icon ${pulse}${lit}`} />
+    active || isStreaming ? (
+      <MessagesSquareSolid fill="currentColor" className={`sb-icon ${pulse}${lit}`} />
+    ) : (
+      <MessagesSquare className={`sb-icon ${pulse}${lit}`} />
+    )
   ) : (
     <MessageSquare
       fill={active || isStreaming ? 'currentColor' : 'none'}
@@ -112,6 +140,7 @@ export function SessionItem({
       // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
       // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
       data-session-row=""
+      data-running={isStreaming ? '' : undefined}
       data-trigger-run={isTriggerRun ? '' : undefined}
       data-sub={isSub ? '' : undefined}
       data-sub-count={subCount > 0 ? subCount : undefined}

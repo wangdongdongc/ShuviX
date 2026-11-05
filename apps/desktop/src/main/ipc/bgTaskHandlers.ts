@@ -24,6 +24,8 @@ export function registerBgTaskHandlers(): void {
     taskRegistry.list(params.sessionId)
   )
 
+  defineHandler('bgTask:listAll', () => taskRegistry.listAll())
+
   defineHandler(
     'bgTask:readLog',
     (_ctx, params: { toolCallId: string; fromByte?: number; maxBytes?: number }) =>

@@ -877,6 +877,7 @@ declare global {
     }
     bgTask: {
       list: (params: { sessionId: string }) => Promise<TaskInfo[]>
+      listAll: () => Promise<TaskInfo[]>
       readLog: (params: {
         toolCallId: string
         fromByte?: number

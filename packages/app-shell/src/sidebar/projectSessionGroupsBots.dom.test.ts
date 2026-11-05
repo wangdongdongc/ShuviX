@@ -73,6 +73,8 @@ vi.mock('@shuvix/chat-ui', async () => {
       getState: () => store
     }),
     selectStreamingSessions: (s: typeof store) => s.streaming,
+    useBgTaskStore: () => ({}),
+    selectBgBusySessions: () => ({}),
     selectInterruptedSessions: (s: typeof store) => s.interrupted,
     selectAllPendingCounts: (s: typeof store) => s.pending,
     useChatHost: () => ({ appearance: { focusMode: false } }),

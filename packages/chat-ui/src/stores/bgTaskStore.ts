@@ -20,6 +20,16 @@ export function isTaskFinished(task: TaskInfo): boolean {
   return task.endedAt !== null
 }
 
+/**
+ * 这条任务算不算「会话在跑」（侧栏）：没结束的都算 —— 后台命令、派发的 agent、驱动的子会话轮次 ——
+ * 除了 hook 起的 agent（没有 `parentToolCallId`）：起标题、审查都是它，每轮结束后都来一下，算上的话
+ * 跑完的会话还要再闪几秒。
+ */
+export function countsAsSessionBusy(task: TaskInfo): boolean {
+  if (isTaskFinished(task)) return false
+  return !(task.subject.kind === 'agent' && task.subject.parentToolCallId === undefined)
+}
+
 interface BgTaskStore {
   /** taskId → 任务快照（全会话共存，取用侧按 sessionId 过滤） */
   tasks: Record<string, TaskInfo>
@@ -28,6 +38,8 @@ interface BgTaskStore {
   upsert: (task: TaskInfo) => void
   /** 用会话快照整体替换该会话的条目（挂载 / 切会话时调用） */
   replaceSession: (sessionId: string, tasks: TaskInfo[]) => void
+  /** 整张表换成主进程的快照（`bgTask.listAll`）：补上错过的事件，断线期间已结束的也随之落定 */
+  replaceAll: (tasks: TaskInfo[]) => void
   /** 移除单条（用户 dismiss 后调用） */
   remove: (taskId: string) => void
   /** 移除会话内所有已结束的条目（用户「清空」后调用） */
@@ -49,6 +61,8 @@ export const useBgTaskStore = create<BgTaskStore>((set) => ({
       return { tasks: next }
     }),
 
+  replaceAll: (list) => set({ tasks: Object.fromEntries(list.map((t) => [t.taskId, t])) }),
+
   remove: (taskId) =>
     set((s) => {
       if (!s.tasks[taskId]) return s
@@ -66,6 +80,23 @@ export const useBgTaskStore = create<BgTaskStore>((set) => ({
       return { tasks: next }
     })
 }))
+
+/** 各会话是否有算数的任务在跑（侧栏）。值不变时引用稳定 —— 任务来来去去，不该让整个侧栏跟着重渲染 */
+let _lastBusyInput: BgTaskStore['tasks'] | null = null
+let _lastBusyFlags: Record<string, boolean> = {}
+export const selectBgBusySessions = (s: BgTaskStore): Record<string, boolean> => {
+  if (s.tasks === _lastBusyInput) return _lastBusyFlags
+  _lastBusyInput = s.tasks
+  const next: Record<string, boolean> = {}
+  for (const task of Object.values(s.tasks)) {
+    if (countsAsSessionBusy(task)) next[task.sessionId] = true
+  }
+  const prev = _lastBusyFlags
+  const same =
+    Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((k) => prev[k])
+  if (!same) _lastBusyFlags = next
+  return _lastBusyFlags
+}
 
 /**
  * 某会话的任务列表（启动时间正序）。

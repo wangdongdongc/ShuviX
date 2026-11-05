@@ -298,6 +298,11 @@ export interface ChatPane {
   sendDisabled(): Promise<boolean>
   /** 流式态：`streaming-live` 合成占位项存在 ⟺ isStreaming */
   isBusy(): Promise<boolean>
+  /**
+   * 输入卡片上有没有停止键（aria-label = `input.stopGen`，三种语言都认）。它只跟这一轮：后台任务还在跑、这一轮已经
+   * 结束时没有它
+   */
+  stopButtonShown(): Promise<boolean>
   /** 等到流式结束（上界内不落定即抛）；判据是连续两次都不在流式态，见实现处说明 */
   waitIdle(timeoutMs?: number): Promise<void>
   /** 等到条目数达到 n */
@@ -486,6 +491,8 @@ export function hexToRgb(hex: string): string {
 
 /** 空闲确认间隔：取实测起流延迟（6~33ms）的十倍量级，满载也留得住余量 */
 const IDLE_CONFIRM_MS = 300
+/** `input.stopGen` 的三种语言（en / zh / ja） */
+const STOP_GEN_LABELS = ['Stop generation', '停止生成', '生成を停止']
 
 /**
  * 乐观占位气泡的固定 id（chat-ui 的 `PENDING_PROMPT_ID`）。
@@ -721,6 +728,10 @@ export function chatPane(main: CdpClient): ChatPane {
     inputValue: () => main.eval<string>(`${TEXTAREA}?.value ?? ''`),
     sendDisabled: () => main.eval<boolean>(`${SEND_BTN}?.disabled ?? true`),
     isBusy,
+    stopButtonShown: () =>
+      main.eval<boolean>(
+        `${JSON.stringify(STOP_GEN_LABELS)}.some((label) => document.querySelector('button[aria-label="' + label + '"]') !== null)`
+      ),
     /**
      * 「不在流式态」的单次快照会在**刚发出去、还没起流**的空窗期里假空闲：实测从
      * 回车到 `streaming-live` 上屏是 6~33ms（满载更长），而 CDP 一个来回也就几毫秒
@@ -2767,7 +2778,7 @@ export interface SidebarPane {
    * 行首那枚身份图标说的「这是哪种会话」，不论它外面有没有包一层子会话折叠钮：
    *   'bot'      bot 会话（md 删了也是 —— 形态由 settings.bot 定）
    *   'notebook' 笔记本会话        'pinned' 悬浮会话
-   *   'multi'    有子会话的普通会话（MessagesSquare）
+   *   'multi'    有子会话的普通会话（MessagesSquare；选中 / 在跑时是它的实心版）
    *   'chat'     普通会话（MessageSquare）
    *   'other'    认不出的图标；行不存在返回空串
    * 只在行内找：`.lucide-bot` 在别处也有（组头菜单、设置窗口……），裸查 document 必然误命中。
@@ -2791,6 +2802,8 @@ export interface SidebarPane {
   clickSessionAfter(title: string, delayMs: number): Promise<boolean>
   /** 这一行上的询问徽标（`[data-pending-asks]`）的数；没有徽标或没有这一行 → null（行不在折起来的组里才查得到） */
   pendingAsks(title: string): Promise<number | null>
+  /** 这一行在跑吗（`[data-running]`：这一轮在跑，或者还有没结束的后台任务）；没有这一行 → false */
+  rowRunning(title: string): Promise<boolean>
   /**
    * 走分组头菜单的「新建对话」并等列表落定（第一个非知识库组头的 ⋮ → new-chat）。
    *
@@ -3055,7 +3068,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     if (has('lucide-bot')) return 'bot'
     if (has('lucide-file-text')) return 'notebook'
     if (has('lucide-picture-in-picture-2')) return 'pinned'
-    if (has('lucide-messages-square')) return 'multi'
+    if (has('lucide-messages-square') || has('lucide-messages-square-solid')) return 'multi'
     if (has('lucide-message-square')) return 'chat'
     return 'other'
   })`
@@ -3118,6 +3131,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         const badge = (${ROW(title)})?.querySelector('[data-pending-asks]')
         return badge ? Number(badge.getAttribute('data-pending-asks')) : null
       })()`),
+    rowRunning: (title) => main.eval<boolean>(`!!${ROW(title)}?.hasAttribute('data-running')`),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {

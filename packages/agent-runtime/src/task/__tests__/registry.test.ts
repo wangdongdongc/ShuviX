@@ -1130,3 +1130,136 @@ describe('taskRegistry — 进入等输入', () => {
     })
   })
 })
+
+describe('listAll', () => {
+  /** 带可控时钟的版本：startedAt 排序不能赌毫秒 */
+  function clockSetup(): {
+    registry: TaskRegistry
+    clock: { t: number }
+    create: (over?: Partial<Parameters<TaskRegistry['create']>[0]>) => string
+  } {
+    const clock = { t: 1000 }
+    const registry = createTaskRegistry({
+      broadcast: () => {},
+      deliver: () => {},
+      coalesceMs: 5,
+      now: () => clock.t
+    })
+    const create = (over = {}): string =>
+      registry.create({
+        kind: 'bash',
+        sessionId: 's1',
+        title: 'build',
+        subject: subject(),
+        stop: () => {},
+        ...over
+      })
+    return { registry, clock, create }
+  }
+  const ids = (tasks: TaskInfo[]): string[] => tasks.map((t) => t.taskId)
+
+  it('LA-1 an unannounced task is absent; announceAfter makes it appear when its timer fires', async () => {
+    const { registry, create } = setup()
+    const delayed = create({ announceAfter: 50 })
+    expect(registry.get(delayed)).toBeDefined()
+    expect(ids(registry.listAll())).toEqual([])
+    await vi.waitFor(() => expect(ids(registry.listAll())).toEqual([delayed]), {
+      timeout: 2000,
+      interval: 5
+    })
+  })
+
+  it('LA-1 an announceAfter=Infinity task appears only once its waiter detaches', async () => {
+    const { registry, create } = setup()
+    const slow = create({ announceAfter: Number.POSITIVE_INFINITY })
+    await sleep(20)
+    expect(ids(registry.listAll())).toEqual([])
+
+    const outcome = await registry.join(slow, { maxWait: 5, onTimeout: 'detach' })
+    expect(outcome).toMatchObject({ kind: 'detached', reason: 'timeout' })
+    expect(ids(registry.listAll())).toEqual([slow])
+  })
+
+  it('LA-1 a quiet task that finished before announcing never appears', () => {
+    const { registry, create } = setup()
+    const quiet = create({ announceAfter: Number.POSITIVE_INFINITY })
+    registry.settle(quiet, { status: 'done' })
+    expect(registry.get(quiet)?.endedAt).not.toBeNull()
+    expect(ids(registry.listAll())).toEqual([])
+  })
+
+  it('LA-2 covers every session, sorted by startedAt whatever the session', () => {
+    const { registry, clock, create } = clockSetup()
+    clock.t = 3000
+    const third = create({ sessionId: 's1', taskId: 'third' })
+    clock.t = 1000
+    const first = create({ sessionId: 's2', taskId: 'first' })
+    clock.t = 2000
+    const second = create({ sessionId: 's1', taskId: 'second' })
+
+    expect(ids(registry.listAll())).toEqual([first, second, third])
+    expect(registry.listAll().map((t) => t.sessionId)).toEqual(['s2', 's1', 's1'])
+  })
+
+  it('LA-2 a finished task stays listed, with its ending on the snapshot', () => {
+    const { registry, create } = setup()
+    const id = create()
+    registry.settle(id, { status: 'error' })
+    const [only] = registry.listAll()
+    expect(only).toMatchObject({ taskId: id, status: 'error' })
+    expect(only.endedAt).not.toBeNull()
+  })
+
+  it('LA-2 equals list(A) ∪ list(B)', () => {
+    const { registry, clock, create } = clockSetup()
+    create({ sessionId: 'A', taskId: 'a1' })
+    clock.t += 1
+    create({ sessionId: 'B', taskId: 'b1' })
+    clock.t += 1
+    create({ sessionId: 'A', taskId: 'a2' })
+    create({ sessionId: 'B', taskId: 'b-quiet', announceAfter: Number.POSITIVE_INFINITY })
+    registry.settle('a1', { status: 'done' })
+
+    const union = [...registry.list('A'), ...registry.list('B')].sort(
+      (x, y) => x.startedAt - y.startedAt
+    )
+    expect(union.map((t) => t.taskId).sort()).toEqual(['a1', 'a2', 'b1'])
+    expect(registry.listAll()).toEqual(union)
+  })
+
+  it('LA-3 dismiss, clearFinished and killBySession take entries out', () => {
+    const { registry, create } = setup()
+    const dismissed = create({ sessionId: 'A', taskId: 'dismissed' })
+    const cleared = create({ sessionId: 'B', taskId: 'cleared' })
+    const running = create({ sessionId: 'B', taskId: 'running' })
+    const killed = create({ sessionId: 'C', taskId: 'killed' })
+    expect(ids(registry.listAll()).sort()).toEqual([cleared, dismissed, killed, running].sort())
+
+    registry.settle(dismissed, { status: 'done' })
+    expect(registry.dismiss(dismissed)).toBe(true)
+    expect(ids(registry.listAll())).not.toContain(dismissed)
+
+    registry.settle(cleared, { status: 'done' })
+    expect(registry.clearFinished('B')).toBe(1)
+    expect(ids(registry.listAll()).sort()).toEqual([killed, running].sort())
+
+    registry.killBySession('C')
+    expect(ids(registry.listAll())).toEqual([running])
+  })
+
+  it('LA-4 mutating a returned snapshot does not reach the registry', () => {
+    const { registry, create } = setup()
+    const id = create()
+    const [snapshot] = registry.listAll()
+    expect(snapshot.subject.kind).toBe('bash')
+    ;(snapshot.subject as BashTaskSubject).command = 'tampered'
+    snapshot.title = 'tampered'
+    snapshot.status = 'killed'
+
+    const [again] = registry.listAll()
+    expect((again.subject as BashTaskSubject).command).toBe('sleep 1')
+    expect(again.title).toBe('build')
+    expect(again.status).toBe('running')
+    expect(registry.get(id)?.status).toBe('running')
+  })
+})

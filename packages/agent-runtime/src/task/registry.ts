@@ -148,6 +148,8 @@ export interface TaskRegistry {
   stop: (taskId: string, opts?: { by?: 'agent' | 'user'; force?: boolean }) => boolean
   get: (taskId: string) => TaskInfo | undefined
   list: (sessionId: string) => TaskInfo[]
+  /** 所有会话的任务（口径同 `list`，没宣告过的不算）：新来的前端补侧栏的运行态 */
+  listAll: () => TaskInfo[]
   runningCount: (sessionId: string, kind?: TaskKind) => number
   /** 移除一条已结束的任务（运行中的不移除） */
   dismiss: (taskId: string) => boolean
@@ -451,6 +453,13 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
     list(sessionId) {
       return [...tasks.values()]
         .filter((e) => e.info.sessionId === sessionId && e.announced)
+        .sort((a, b) => a.info.startedAt - b.info.startedAt)
+        .map(snapshot)
+    },
+
+    listAll() {
+      return [...tasks.values()]
+        .filter((e) => e.announced)
         .sort((a, b) => a.info.startedAt - b.info.startedAt)
         .map(snapshot)
     },

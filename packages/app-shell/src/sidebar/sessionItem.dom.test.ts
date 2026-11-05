@@ -8,8 +8,14 @@
  *   - 顶层行、子会话行（`isSub`）、bot 行都一样。
  *
  * 另：SR-1 每一行（顶层行、子会话行）的根节点都带 `data-session-row` —— 手机布局的 CSS 认它把行加高（40px）。
+ *
+ * 有子会话的行（选中 / 在跑时用实心图标，「在跑」含后台任务，由容器合起来传入 isStreaming）：
+ *   SI-1 图标矩阵：空闲线框；选中实心不闪；在跑实心 + 闪；两者都有实心 + 闪。实心版每条路径都闭合（否则 fill 出一道切口）
+ *   SI-2 bot / 触发运行 / 悬浮 / 笔记本 + 子会话：身份图标不变，从不实心，折叠钮还在
+ *   SI-3 折叠钮：点钮只折叠（一次、不选中），点行只选中；空闲 → 在跑重渲染之后也一样；没有子会话就没有钮
+ *   SI-4 data-running 只跟 isStreaming：子会话行也一样；只选中没有
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
@@ -103,5 +109,153 @@ describe('SR-1 row anchor', () => {
     expect(container.querySelectorAll('[data-session-row]')).toHaveLength(1)
     expect(row.textContent).toContain('Session one')
     if (props.isSub) expect(row.hasAttribute('data-sub')).toBe(true)
+  })
+})
+
+describe('rows with sub-sessions', () => {
+  const STATES: Array<[string, Partial<SessionItemProps>]> = [
+    ['idle', { active: false, isStreaming: false }],
+    ['active', { active: true, isStreaming: false }],
+    ['streaming', { active: false, isStreaming: true }],
+    ['active and streaming', { active: true, isStreaming: true }]
+  ]
+  const toggle = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('button[data-subs-toggle]')
+  const icon = (): SVGElement => {
+    const svg = toggle()?.querySelector('svg')
+    if (!svg) throw new Error('no icon inside the toggle')
+    return svg
+  }
+  const row = (): HTMLElement => container.querySelector<HTMLElement>('[data-session-row]')!
+
+  it('SI-1 idle: the outline icon, unfilled, no pulse, tertiary colour', () => {
+    render({ subCount: 2 })
+    const svg = icon()
+    expect(svg.classList.contains('lucide-messages-square')).toBe(true)
+    expect(svg.classList.contains('lucide-messages-square-solid')).toBe(false)
+    expect(svg.getAttribute('fill')).not.toBe('currentColor')
+    expect(svg.classList.contains('animate-pulse')).toBe(false)
+    expect(svg.classList.contains('text-text-tertiary')).toBe(true)
+    expect(svg.classList.contains('text-accent')).toBe(false)
+  })
+
+  it.each<[string, Partial<SessionItemProps>, boolean]>([
+    ['active only', { active: true }, false],
+    ['streaming only', { isStreaming: true }, true],
+    ['active and streaming', { active: true, isStreaming: true }, true]
+  ])('SI-1 %s: the solid icon in the accent colour', (_label, props, pulses) => {
+    render({ subCount: 2, ...props })
+    const svg = icon()
+    expect(svg.classList.contains('lucide-messages-square-solid')).toBe(true)
+    expect(svg.classList.contains('lucide-messages-square')).toBe(false)
+    expect(svg.getAttribute('fill')).toBe('currentColor')
+    expect(svg.classList.contains('text-accent')).toBe(true)
+    expect(svg.classList.contains('text-text-tertiary')).toBe(false)
+    expect(svg.classList.contains('animate-pulse')).toBe(pulses)
+  })
+
+  it('SI-1 every path of the solid icon is closed, so filling it leaves no slanted cut', () => {
+    render({ subCount: 2, active: true })
+    const paths = [...icon().querySelectorAll('path')]
+    expect(paths.length).toBeGreaterThan(0)
+    for (const path of paths) {
+      expect(
+        path.getAttribute('d')!.trim().toLowerCase().endsWith('z'),
+        path.getAttribute('d')!
+      ).toBe(true)
+    }
+  })
+
+  it.each(STATES)('SI-1 control: subCount 0 %s keeps the single-bubble icon', (_label, props) => {
+    render({ subCount: 0, ...props })
+    const svg = row().querySelector('svg')!
+    expect(svg.classList.contains('lucide-message-square')).toBe(true)
+    expect(svg.classList.contains('lucide-messages-square')).toBe(false)
+    expect(svg.classList.contains('lucide-messages-square-solid')).toBe(false)
+  })
+
+  const IDENTITIES: Array<[string, Partial<SessionItemProps>, string]> = [
+    ['bot', { isBot: true }, 'lucide-bot'],
+    ['trigger run', { isTriggerRun: true }, 'lucide-timer'],
+    ['pinned', { isPinned: true }, 'lucide-picture-in-picture-2'],
+    ['notebook', { isNotebook: true }, 'lucide-file-text']
+  ]
+  describe.each(IDENTITIES)('SI-2 %s row with sub-sessions', (_label, identity, iconClass) => {
+    it.each(STATES)('%s: keeps its identity icon, never solid, toggle present', (_s, state) => {
+      render({ subCount: 2, ...identity, ...state })
+      expect(toggle()).not.toBeNull()
+      const svg = icon()
+      expect(svg.classList.contains(iconClass)).toBe(true)
+      expect(svg.classList.contains('lucide-messages-square-solid')).toBe(false)
+      expect(svg.classList.contains('lucide-messages-square')).toBe(false)
+      expect(svg.getAttribute('fill')).not.toBe('currentColor')
+    })
+  })
+
+  it.each(STATES)('SI-3 %s: the toggle folds once and does not select', (_label, state) => {
+    const onSelect = vi.fn()
+    const onToggleSubs = vi.fn()
+    render({ subCount: 2, onSelect, onToggleSubs, ...state })
+    act(() => toggle()!.click())
+    expect(onToggleSubs.mock.calls).toEqual([['s1']])
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it.each(STATES)('SI-3 %s: a row click selects and does not fold', (_label, state) => {
+    const onSelect = vi.fn()
+    const onToggleSubs = vi.fn()
+    render({ subCount: 2, onSelect, onToggleSubs, ...state })
+    act(() => row().click())
+    expect(onSelect.mock.calls).toEqual([['s1']])
+    expect(onToggleSubs).not.toHaveBeenCalled()
+  })
+
+  it('SI-3 still works after rerendering idle to streaming in the same root (the icon element swaps)', () => {
+    const onSelect = vi.fn()
+    const onToggleSubs = vi.fn()
+    const props = { subCount: 2, onSelect, onToggleSubs }
+    render(props)
+    const button = toggle()
+    expect(icon().classList.contains('lucide-messages-square')).toBe(true)
+
+    render({ ...props, isStreaming: true })
+    expect(icon().classList.contains('lucide-messages-square-solid')).toBe(true)
+    // 换的是图标，钮还是那个钮
+    expect(toggle()).toBe(button)
+
+    act(() => icon().dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onToggleSubs.mock.calls).toEqual([['s1']])
+    expect(onSelect).not.toHaveBeenCalled()
+
+    act(() => row().click())
+    expect(onSelect.mock.calls).toEqual([['s1']])
+    expect(onToggleSubs).toHaveBeenCalledTimes(1)
+  })
+
+  it('SI-3 no sub-sessions: no toggle', () => {
+    render({ subCount: 0, onToggleSubs: vi.fn(), isStreaming: true })
+    expect(toggle()).toBeNull()
+  })
+
+  it.each<[string, Partial<SessionItemProps>, boolean]>([
+    ['idle', {}, false],
+    ['active only', { active: true }, false],
+    ['streaming', { isStreaming: true }, true],
+    ['active and streaming', { active: true, isStreaming: true }, true],
+    ['sub-session idle', { isSub: true }, false],
+    ['sub-session active only', { isSub: true, active: true }, false],
+    ['sub-session streaming', { isSub: true, isStreaming: true }, true],
+    ['with sub-sessions, active only', { subCount: 2, active: true }, false],
+    ['with sub-sessions, streaming', { subCount: 2, isStreaming: true }, true]
+  ])('SI-4 data-running: %s', (_label, props, running) => {
+    render(props)
+    expect(row().hasAttribute('data-running')).toBe(running)
+  })
+
+  it('SI-4 data-running goes away when the row stops running', () => {
+    render({ isStreaming: true })
+    expect(row().hasAttribute('data-running')).toBe(true)
+    render({ isStreaming: false })
+    expect(row().hasAttribute('data-running')).toBe(false)
   })
 })
