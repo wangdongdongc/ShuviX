@@ -27,9 +27,17 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.language': { labelKey: 'settings.language', desc: 'zh | en | ja' },
   'general.fontSize': { labelKey: 'settings.fontSize', desc: 'number as string, 12-20' },
   'general.uiZoom': { labelKey: 'settings.uiZoom', desc: 'number as string, 50-200 (percent)' },
-  'notification.enabled': {
-    labelKey: 'settings.notificationEnabled',
-    desc: 'true | false — system notifications when the agent asks for approval, finishes a run, or fails (only while the session is not in the foreground); default true'
+  'notification.ask': {
+    labelKey: 'settings.notificationAsk',
+    desc: 'true | false — system notification when the agent is waiting for an answer (only while the session is not in the foreground); default true'
+  },
+  'notification.done': {
+    labelKey: 'settings.notificationDone',
+    desc: 'true | false — system notification when a run finishes (only while the session is not in the foreground); default true'
+  },
+  'notification.failed': {
+    labelKey: 'settings.notificationFailed',
+    desc: 'true | false — system notification when a run fails (only while the session is not in the foreground); default true'
   },
   'appearance.focusMode': {
     labelKey: 'settings.focusMode',

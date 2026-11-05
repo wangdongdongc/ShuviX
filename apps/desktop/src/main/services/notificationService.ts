@@ -8,7 +8,7 @@
  *     而判定又不能放渲染层：macOS 关窗不退出应用，agent 照跑，那时压根没有渲染进程，
  *     恰恰是最该通知的时候。
  *  3. **会话叫什么** —— sessionRecords。
- *  4. **开关** —— `notification.enabled`，实时读，缺省开。
+ *  4. **开关** —— 每类一个（`notificationSettingKey`），实时读，缺省开。
  *
  * 点击行为本期只有一个：把对应会话拉到眼前（悬浮窗优先，其次主窗；主窗已销毁就重建，
  * 会话 id 先存着等渲染就绪来取）。通知内的允许/拒绝按钮留待后续，见
@@ -17,7 +17,11 @@
 import { app, BrowserWindow, Notification } from 'electron'
 import { join } from 'path'
 import { createNotificationCenter, type NotificationCenter } from '@shuvix/agent-runtime'
-import type { AgentNotification } from '@shuvix/chat-protocol/notification'
+import {
+  notificationSettingKey,
+  type AgentNotification,
+  type AgentNotificationKind
+} from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
@@ -83,9 +87,9 @@ function isForeground(sessionId: string): boolean {
   return foreground
 }
 
-function notificationsEnabled(): boolean {
+function notificationEnabled(kind: AgentNotificationKind): boolean {
   // 缺省开：设置里没这一项时视为开启（与其它布尔设置一致，'false' 才是关）
-  return settingsDao.findByKey('notification.enabled') !== 'false'
+  return settingsDao.findByKey(notificationSettingKey(kind)) !== 'false'
 }
 
 /**
@@ -163,7 +167,7 @@ export function initNotificationService(injected: NotificationServiceDeps): void
     notifier: { show, dismiss },
     isForeground,
     sessionTitle: (sessionId) => sessionRecords.findById(sessionId)?.title,
-    enabled: notificationsEnabled,
+    enabled: notificationEnabled,
     runErrorText: (sessionId) => runErrorTextSource?.(sessionId),
     t: (key, vars) => t(key, vars),
     logger: { warn: (message) => log.warn(message) }

@@ -10,6 +10,7 @@
  * - KS-2 已下线的自动审查开关 `security.autoReview` 不复活
  * - KS-3 默认思考等级 `general.defaultThinkingLevel` 在册（标签三语、说明列出可选档并写明缺省）
  * - KS-4 内置 timer 触发源开关 `triggers.timer.enabled` 在册（标签三语、说明写明 true | false 与缺省开）
+ * - NK-R2 通知的三个开关在册（标签与问号说明三语、说明写明缺省开）；`notification.enabled` 不复活
  */
 import { describe, it, expect, vi } from 'vitest'
 
@@ -101,5 +102,44 @@ describe('KNOWN_SETTINGS —— 内置 timer 触发源开关', () => {
     expect(entry.desc).toContain('default true')
     expect(entry.desc).toContain('timer.fired')
     expect(getSettingKeyDescriptions()).toContain('triggers.timer.enabled')
+  })
+})
+
+/**
+ * 通知的三个开关 —— 设置 → 通用 → 通知，也是 settings 工具能改的键。设置页用 `settings.notification*` 这几条文案，
+ * 少一种语言就是界面上露出一个键名。总开关 `notification.enabled` 已经没人读，留在描述文本里就是教模型写一个无效设置。
+ */
+describe('KNOWN_SETTINGS —— 通知开关', () => {
+  const leaf = (bundle: unknown, path: string): unknown =>
+    path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)?.[key], bundle)
+
+  const LABELS: Record<string, string> = {
+    'notification.ask': 'settings.notificationAsk',
+    'notification.done': 'settings.notificationDone',
+    'notification.failed': 'settings.notificationFailed'
+  }
+
+  it('NK-R2 三个键的 labelKey 与说明；设置页要用的文案三语都有；描述文本列出它们、不含 notification.enabled', () => {
+    for (const [key, labelKey] of Object.entries(LABELS)) {
+      expect(KNOWN_SETTINGS[key].labelKey).toBe(labelKey)
+      expect(KNOWN_SETTINGS[key].desc).toContain('default true')
+    }
+
+    const uiKeys = [
+      ...Object.values(LABELS).flatMap((labelKey) => [labelKey, `${labelKey}Hint`]),
+      'settings.notificationSection',
+      'settings.notificationSectionHint'
+    ]
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const uiKey of uiKeys) {
+        const text = leaf(bundle, uiKey)
+        expect(typeof text === 'string' && text.trim() !== '', `${lang} ${uiKey}`).toBe(true)
+      }
+    }
+
+    const text = getSettingKeyDescriptions()
+    for (const key of Object.keys(LABELS)) expect(text).toContain(key)
+    expect(text).not.toContain('notification.enabled')
+    expect(KNOWN_SETTINGS).not.toHaveProperty(['notification.enabled'])
   })
 })

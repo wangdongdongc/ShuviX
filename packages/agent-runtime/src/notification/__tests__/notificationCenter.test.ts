@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { createNotificationCenter, type NotificationCenter } from '../notificationCenter'
-import type { AgentNotification } from '@shuvix/chat-protocol/notification'
+import type { AgentNotification, AgentNotificationKind } from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '../../types'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 
@@ -20,6 +20,8 @@ interface Harness {
   dismissed: string[]
   foreground: Set<string>
   enabled: { value: boolean }
+  /** 这几类的开关关着（其余看 enabled.value） */
+  disabled: Set<AgentNotificationKind>
   titles: Map<string, string>
   /** 宿主的失败文本 seam（PIN-08）：会话 → 最后一条错误行 */
   errorTexts: Map<string, string>
@@ -30,6 +32,7 @@ function makeCenter(): Harness {
   const dismissed: string[] = []
   const foreground = new Set<string>()
   const enabled = { value: true }
+  const disabled = new Set<AgentNotificationKind>()
   const titles = new Map<string, string>()
   const errorTexts = new Map<string, string>()
   const center = createNotificationCenter({
@@ -39,12 +42,12 @@ function makeCenter(): Harness {
     },
     isForeground: (sessionId) => foreground.has(sessionId),
     sessionTitle: (sessionId) => titles.get(sessionId),
-    enabled: () => enabled.value,
+    enabled: (kind) => enabled.value && !disabled.has(kind),
     runErrorText: (sessionId) => errorTexts.get(sessionId),
     // 文案断言只关心 key 与插值，不关心具体译文
     t: (key, vars) => (vars ? `${key}|${Object.values(vars).join(',')}` : key)
   })
-  return { center, shown, dismissed, foreground, enabled, titles, errorTexts }
+  return { center, shown, dismissed, foreground, enabled, disabled, titles, errorTexts }
 }
 
 function askRequest(id = 'req-1', command = 'rm -rf build'): InputRequest {
@@ -161,7 +164,7 @@ describe('通知决策器 — 不打扰的条件', () => {
     expect(h.shown).toHaveLength(0)
   })
 
-  it('总开关关掉就不弹', () => {
+  it('开关判定回关就不弹', () => {
     const h = makeCenter()
     h.enabled.value = false
     h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
@@ -273,5 +276,148 @@ describe('通知决策器 — 派生 agent', () => {
     // 根会话那轮照常弹
     h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
     expect(h.shown.map((n) => n.kind)).toEqual(['done'])
+  })
+})
+
+/**
+ * 一类一个开关（设置 → 通用 → 通知）。决策器只认 `enabled(kind)`：开关管的是**弹不弹这一类**，不改这件事
+ * 算哪一类（失败不会因为失败通知关着就降级成完成），也不碰已经弹出去的那些（撤回照常）。
+ *
+ *   NK-C1 只关一类：另外两类照弹
+ *   NK-C2 失败 / 完成互不牵连：失败的一轮不降级成完成，运行外的 error 同样按失败算
+ *   NK-C3 每次判定时现读：同一个决策器上改开关立即生效，不必重建
+ *   NK-C4 弹出之后全关：撤回不受开关影响，也不补弹
+ *   NK-C5 关着时没弹的询问不留 key：打开会话不撤回它，落定不抛错；再开之后新的一条照常登记与撤回
+ *   NK-C6 关着时吞掉的失败不留到下一轮：开回来后那轮正常结束就是完成
+ *   NK-C7 失败关着时，同会话上一条完成不被这次失败覆盖；它的 key 还在，打开会话照样撤回
+ *   NK-C8 宿主没给 enabled：三类都弹
+ */
+describe('通知决策器 — 一类一个开关', () => {
+  const S1 = 'sess-1'
+  const S2 = 'sess-2'
+  const KINDS: AgentNotificationKind[] = ['ask', 'done', 'failed']
+
+  it.each(KINDS)('NK-C1 只关 %s：另外两类照弹', (off) => {
+    const h = makeCenter()
+    h.disabled.add(off)
+    h.errorTexts.set(S2, '429')
+
+    h.center.askRaised(ROOT, askRequest('a'))
+    h.center.handleEvent({ type: 'agent_end', sessionId: S1, reason: 'ok' })
+    h.center.handleEvent({ type: 'agent_end', sessionId: S2, reason: 'error' })
+
+    expect(h.shown.map((n) => n.kind)).toEqual(KINDS.filter((kind) => kind !== off))
+  })
+
+  /** 两条路：运行中攒下 error、这轮却以 ok 收尾（仍算失败）；然后一条运行外的 error */
+  function failThroughBothPaths(h: Harness): void {
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'error', sessionId: ROOT, error: 'boom' })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    h.center.handleEvent({ type: 'error', sessionId: ROOT, error: 'no model' })
+  }
+
+  it('NK-C2a 失败关、完成开：什么都不弹，不降级成完成', () => {
+    const h = makeCenter()
+    h.disabled.add('failed')
+    failThroughBothPaths(h)
+    expect(h.shown).toEqual([])
+  })
+
+  it('NK-C2b 完成关、失败开：每条路各一条失败', () => {
+    const h = makeCenter()
+    h.disabled.add('done')
+    failThroughBothPaths(h)
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed', 'failed'])
+    expect(h.shown.map((n) => n.body)).toEqual([
+      'notification.failedBody|boom',
+      'notification.failedBody|no model'
+    ])
+  })
+
+  it('NK-C3 同一个决策器上改开关立即生效：关 → 开 → 关，只弹开着时那条', () => {
+    const h = makeCenter()
+    h.disabled.add('ask')
+    h.center.askRaised(ROOT, askRequest('a'))
+    h.disabled.delete('ask')
+    // 打开本身不补弹
+    expect(h.shown).toEqual([])
+    h.center.askRaised(ROOT, askRequest('b'))
+    h.disabled.add('ask')
+    h.center.askRaised(ROOT, askRequest('c'))
+    expect(h.shown.map((n) => n.key)).toEqual(['ask:b'])
+  })
+
+  it('NK-C4 弹出之后三类全关：落定与打开会话照样撤回，不多弹', () => {
+    const h = makeCenter()
+    h.center.askRaised(ROOT, askRequest('a'))
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    expect(h.shown).toHaveLength(2)
+
+    for (const kind of KINDS) h.disabled.add(kind)
+    h.center.askResolved(ROOT, 'a')
+    h.center.sessionOpened(ROOT)
+
+    expect(h.dismissed).toEqual(['ask:a', `run:${ROOT}`])
+    expect(h.shown).toHaveLength(2)
+  })
+
+  it('NK-C5 关着时没弹的询问不留 key；再开之后新的一条照常撤回', () => {
+    const h = makeCenter()
+    h.disabled.add('ask')
+    h.center.askRaised(ROOT, askRequest('a'))
+
+    h.center.sessionOpened(ROOT)
+    expect(h.dismissed).toEqual([])
+    // 撤回一条没弹过的：宿主的 dismiss 对不存在的 key 本来就静默，这里只要求不抛
+    expect(() => h.center.askResolved(ROOT, 'a')).not.toThrow()
+
+    h.disabled.delete('ask')
+    h.center.askRaised(ROOT, askRequest('b'))
+    h.center.sessionOpened(ROOT)
+    expect(h.dismissed).toContain('ask:b')
+    expect(h.shown.map((n) => n.key)).toEqual(['ask:b'])
+  })
+
+  it('NK-C6 关着时吞掉的失败不留到下一次收尾：开回来之后正常结束就是完成', () => {
+    const h = makeCenter()
+    h.disabled.add('failed')
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'error', sessionId: ROOT, error: 'boom' })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'error' })
+    expect(h.shown).toEqual([])
+
+    h.disabled.delete('failed')
+    h.center.runEnded(ROOT, 'ok')
+    expect(h.shown).toHaveLength(1)
+    expect(h.shown[0]).toMatchObject({ kind: 'done', body: 'notification.doneBody' })
+  })
+
+  it('NK-C7 失败关着时同会话的一轮失败不弹；上一条完成的 key 还在，打开会话撤回一次', () => {
+    const h = makeCenter()
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    expect(h.shown.map((n) => n.key)).toEqual([`run:${ROOT}`])
+
+    h.disabled.add('failed')
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'error', sessionId: ROOT, error: 'boom' })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'error' })
+    h.center.sessionOpened(ROOT)
+
+    expect(h.shown).toHaveLength(1)
+    expect(h.dismissed).toEqual([`run:${ROOT}`])
+  })
+
+  it('NK-C8 宿主没给 enabled：三类都弹', () => {
+    const shown: AgentNotification[] = []
+    const center = createNotificationCenter({
+      notifier: { show: (n) => shown.push(n), dismiss: () => {} },
+      isForeground: () => false,
+      t: (key) => key
+    })
+    center.askRaised(ROOT, askRequest('a'))
+    center.handleEvent({ type: 'agent_end', sessionId: S1, reason: 'ok' })
+    center.handleEvent({ type: 'agent_end', sessionId: S2, reason: 'error' })
+    expect(shown.map((n) => n.kind)).toEqual(KINDS)
   })
 })

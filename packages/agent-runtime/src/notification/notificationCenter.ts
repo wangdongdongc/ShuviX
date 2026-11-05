@@ -33,7 +33,7 @@
  *    「有没有 toolCallId」反推。
  */
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
-import type { AgentNotification } from '@shuvix/chat-protocol/notification'
+import type { AgentNotification, AgentNotificationKind } from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '../types'
 import type { RunEndReason } from '../durable/projection/sessionProjector'
 
@@ -59,8 +59,8 @@ export interface NotificationCenterDeps {
   t: NotificationTranslate
   /** 会话标题（通知标题）。取不到返回 undefined，走兜底文案 */
   sessionTitle?(sessionId: string): string | undefined
-  /** 总开关，每次判定时实时读（用户改设置立即生效，不必重建） */
-  enabled?(): boolean
+  /** 这一类通知开着吗，每次判定时实时读（用户改设置立即生效，不必重建） */
+  enabled?(kind: AgentNotificationKind): boolean
   /**
    * 一轮以失败收尾时，这条会话最后那条错误行的文本（PIN-08：宿主从投影里读最后一条 `error_event`）。
    * 只在 `reason === 'error'`、调用方没给文本、本轮也没攒下 `error` 事件时才问。取不到 → undefined。
@@ -144,7 +144,7 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
   }
 
   function show(notification: AgentNotification): void {
-    if (deps.enabled && !deps.enabled()) return
+    if (deps.enabled && !deps.enabled(notification.kind)) return
     if (deps.isForeground(notification.sessionId)) return
     let keys = keysBySession.get(notification.sessionId)
     if (!keys) {

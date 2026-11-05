@@ -16,6 +16,8 @@ import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinki
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import { useCompactLayout } from '../../mobile/useCompactLayout'
 import { setPhoneFontSize, usePhoneFontSize } from '../../mobile/phoneFontSize'
+import { isWebHost } from '../../host/hostMedia'
+import { NotificationSettings } from './NotificationSettings'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -149,6 +151,8 @@ export function GeneralSettings(): React.JSX.Element {
           window.api.settings.set({ key: 'general.language', value: lng })
         }}
       />
+
+      {!isWebHost && <NotificationSettings />}
 
       <ModelDefaultsSettings
         availableModels={availableModels}

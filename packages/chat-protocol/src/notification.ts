@@ -20,6 +20,14 @@ export type AgentNotificationKind =
   /** 一轮运行异常结束（API 报错等） */
   | 'failed'
 
+/** 全部通知类别 —— 设置页按这个顺序一类一个开关 */
+export const AGENT_NOTIFICATION_KINDS: readonly AgentNotificationKind[] = ['ask', 'done', 'failed']
+
+/** 这一类通知的开关存在哪个设置键。缺省开：只有字面 `'false'` 才算关 */
+export function notificationSettingKey(kind: AgentNotificationKind): string {
+  return `notification.${kind}`
+}
+
 export interface AgentNotification {
   /**
    * 去重 / 撤回键。
