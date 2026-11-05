@@ -14,7 +14,12 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
-import type { PendingAskInfo } from '../../services/subSessionText'
+import {
+  blockedOnApproval,
+  renderPendingAsks,
+  type BackgroundTaskInfo,
+  type PendingAskInfo
+} from '../../services/subSessionText'
 import type { AuthorizeSessionAccess } from '../../services/subSessionRunner'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
 import { sessionMentionPayload } from '@shuvix/chat-protocol/utils/inlineTokens'
@@ -248,7 +253,11 @@ const info = (
   title: string,
   status: 'idle' | 'running' | 'waiting-input' | 'interrupted',
   // T2：§19 的完整询问（选择题 / 权限卡）
-  extra: { pendingAsks?: PendingAskInfo[]; blockedOn?: string[] } = {}
+  extra: {
+    pendingAsks?: PendingAskInfo[]
+    blockedOn?: string[]
+    backgroundTasks?: BackgroundTaskInfo[]
+  } = {}
 ): {
   id: string
   title: string
@@ -258,6 +267,7 @@ const info = (
   updatedAt: number
   pendingAsks?: PendingAskInfo[]
   blockedOn?: string[]
+  backgroundTasks?: BackgroundTaskInfo[]
 } => ({
   id,
   title,
@@ -1846,5 +1856,256 @@ describe('SessionTool — list-sessions 按日历列出（LS-1..LS-7）', () => 
         await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
       )
     ).toBe(`${HEAD}</sessions>`)
+  })
+})
+
+// ─── BT：那条会话还在跑的后台任务（排版）─────────────────────────────────────────
+//
+// 谁看得到、任务从哪来是 runner 的用例（subSessionRunner.test.ts 的 BT 组）；这里 runner 是假件，subSessionText 是真的，
+// 钉的是那一块落在结果的哪里：每一种状态下都在 `</session>` 之前、别的块之后；list 只报个数；inspect 与回执不带。
+describe('SessionTool — 还在跑的后台任务（BT）', () => {
+  const TASKS: BackgroundTaskInfo[] = [{ kind: 'command', description: 'dev server', pid: 4242 }]
+  const OPEN = (status: string): string => `<session id="c1" title="C" status="${status}">`
+  const BLOCK_HEAD = '<running-background-tasks>\nStill running in that session:'
+  const BLOCK_TAIL =
+    'They belong to that session and keep running after its turn ends. Mention them to the user if they matter to them. To stop one, ask that session with "prompt-session"; "stop-session" only stops a turn.\n</running-background-tasks>'
+  const BLOCK = `${BLOCK_HEAD}\n- command (pid 4242): dev server\n${BLOCK_TAIL}`
+  const REPLY = '<reply>\nall done\n</reply>'
+  const RUNNING_NOTE = '<note>Still running. It was NOT cancelled.</note>'
+  const NO_REPLY_NOTE = '<note>No reply yet.</note>'
+  const INTERRUPTED =
+    '<note>Interrupted when the app stopped — it is not running and will not finish on its own. A new message starts over (discarding that unfinished turn), or the user can continue it in that session.</note>'
+  const nineTasks: BackgroundTaskInfo[] = Array.from({ length: 9 }, (_, i) => ({
+    kind: 'command',
+    description: `task ${i}`,
+    pid: i + 1
+  }))
+  const ASK: PendingAskInfo = {
+    id: 'q1',
+    kind: 'question',
+    question: 'Keep it?',
+    options: [{ label: 'A', description: '' }],
+    answerable: true
+  }
+
+  /** read-session 的结果文本 */
+  const readText = async (
+    status: 'idle' | 'running' | 'waiting-input' | 'interrupted',
+    extra: Parameters<typeof info>[3],
+    answer: { answer?: string; isError?: boolean } = {}
+  ): Promise<string> => {
+    mocks.runnerRead.mockResolvedValueOnce({ info: info('c1', 'C', status, extra), ...answer })
+    return textOf(await executeTool(tool, 'tc-1', { action: 'read-session', session_id: 'c1' }))
+  }
+
+  it('BT-60 空闲、有答复：开标签、<reply>、那一块、闭标签，逐字', async () => {
+    expect(await readText('idle', { backgroundTasks: TASKS }, { answer: 'all done' })).toBe(
+      [OPEN('idle'), REPLY, BLOCK, '</session>'].join('\n')
+    )
+  })
+
+  it('BT-61 在跑：「还在跑」那句，然后是那一块', async () => {
+    expect(await readText('running', { backgroundTasks: TASKS })).toBe(
+      [OPEN('running'), RUNNING_NOTE, BLOCK, '</session>'].join('\n')
+    )
+  })
+
+  it('BT-62 停下来问（pendingAsks）：询问、上一轮的答复、那一块', async () => {
+    expect(
+      await readText(
+        'waiting-input',
+        { pendingAsks: [ASK], backgroundTasks: TASKS },
+        { answer: 'earlier' }
+      )
+    ).toBe(
+      [
+        OPEN('waiting-input'),
+        ...renderPendingAsks([ASK]),
+        '<earlier-reply>\nearlier\n</earlier-reply>',
+        BLOCK,
+        '</session>'
+      ].join('\n')
+    )
+  })
+
+  it('BT-62 卡在批准（blockedOn）：批准那一块、上一轮的答复、那一块', async () => {
+    expect(
+      await readText(
+        'waiting-input',
+        { blockedOn: ['bash: rm -rf build'], backgroundTasks: TASKS },
+        { answer: 'earlier' }
+      )
+    ).toBe(
+      [
+        OPEN('waiting-input'),
+        blockedOnApproval(['bash: rm -rf build']),
+        '<earlier-reply>\nearlier\n</earlier-reply>',
+        BLOCK,
+        '</session>'
+      ].join('\n')
+    )
+  })
+
+  it('BT-63 被中断：中断那句，然后是那一块', async () => {
+    expect(await readText('interrupted', { backgroundTasks: TASKS })).toBe(
+      [OPEN('interrupted'), INTERRUPTED, BLOCK, '</session>'].join('\n')
+    )
+  })
+
+  it('BT-64 空闲、没有答复：<note> 之后是那一块', async () => {
+    expect(await readText('idle', { backgroundTasks: TASKS })).toBe(
+      [OPEN('idle'), NO_REPLY_NOTE, BLOCK, '</session>'].join('\n')
+    )
+  })
+
+  it('BT-64 这一轮是错误：<error> 之后是那一块', async () => {
+    expect(
+      await readText('idle', { backgroundTasks: TASKS }, { answer: 'boom', isError: true })
+    ).toBe([OPEN('idle'), '<error>\nboom\n</error>', BLOCK, '</session>'].join('\n'))
+  })
+
+  describe.each<[string, { backgroundTasks?: BackgroundTaskInfo[] }]>([
+    ['backgroundTasks: []', { backgroundTasks: [] }],
+    ['backgroundTasks 缺省', {}]
+  ])('BT-65 %s：四种状态都与改动之前逐字相同', (_label, extra) => {
+    it.each<
+      [
+        'idle' | 'running' | 'waiting-input' | 'interrupted',
+        Parameters<typeof info>[3],
+        { answer?: string },
+        string[]
+      ]
+    >([
+      ['idle', {}, { answer: 'all done' }, [REPLY]],
+      ['running', {}, {}, [RUNNING_NOTE]],
+      ['waiting-input', { pendingAsks: [ASK] }, {}, renderPendingAsks([ASK])],
+      ['interrupted', {}, {}, [INTERRUPTED]]
+    ])('BT-65 %s', async (status, statusExtra, answer, body) => {
+      expect(await readText(status, { ...statusExtra, ...extra }, answer)).toBe(
+        [OPEN(status), ...body, '</session>'].join('\n')
+      )
+    })
+  })
+
+  it.each<[string, string]>([
+    ['settled', ''],
+    [
+      'timeout',
+      'Timed out waiting. Nothing was cancelled — wait again, or carry on and collect later.'
+    ],
+    [
+      'asking',
+      'Not finished: a session stopped to ask a question in the turn you started. Waiting again will not help — answer it with "answer-session", or relay it to the user.'
+    ],
+    [
+      'blocked',
+      'Nothing finished: a session is waiting for something only the user can answer. Waiting again will not help — relay it to the user.'
+    ]
+  ])(
+    'BT-66 wait（%s）：那一块只在有任务的那条 <session> 里，收尾那句不变',
+    async (kind, trailer) => {
+      mocks.runnerWait.mockResolvedValueOnce({
+        kind,
+        results: [
+          { ...info('c1', 'C1', 'idle'), answer: 'first' },
+          { ...info('c2', 'C2', 'idle', { backgroundTasks: TASKS }), answer: 'second' }
+        ]
+      })
+      const body = [
+        `<sessions status="${kind}">`,
+        '<session id="c1" title="C1" status="idle">',
+        '<reply>\nfirst\n</reply>',
+        '</session>',
+        '<session id="c2" title="C2" status="idle">',
+        '<reply>\nsecond\n</reply>',
+        BLOCK,
+        '</session>',
+        '</sessions>'
+      ].join('\n')
+      expect(textOf(await executeTool(tool, 'tc-1', { action: 'wait-for-sessions' }))).toBe(
+        trailer ? `${body}\n\n${trailer}` : body
+      )
+    }
+  )
+
+  it('BT-67 read 9 条：列 8 条，第 9 条只报个数', async () => {
+    const listed = await readText('idle', { backgroundTasks: nineTasks }, { answer: 'all done' })
+    expect(listed).toContain('- command (pid 8): task 7\n- and 1 more\n')
+    expect(listed).not.toContain('task 8')
+  })
+
+  it('BT-68 list：只报个数，在 access 之后、/> 之前；不带描述、不带那一块', async () => {
+    mocks.runnerList.mockReturnValueOnce({
+      subSessions: [
+        {
+          ...info('c1', 'C', 'idle', { backgroundTasks: nineTasks }),
+          relation: 'other',
+          access: 'read'
+        }
+      ]
+    })
+    const listed = textOf(await executeTool(tool, 'tc-1', { action: 'list-sessions' }))
+    expect(listed).toBe(
+      '<sessions>\n<session id="c1" title="C" status="idle" relation="other" access="read" background_tasks="9"/>\n</sessions>'
+    )
+    expect(listed).not.toContain('task 0')
+    expect(listed).not.toContain('<running-background-tasks>')
+  })
+
+  it.each<[string, { backgroundTasks?: BackgroundTaskInfo[] }]>([
+    ['[]', { backgroundTasks: [] }],
+    ['缺省', {}]
+  ])('BT-68 list：backgroundTasks %s ⇒ 没有这个属性', async (_label, extra) => {
+    mocks.runnerList.mockReturnValueOnce({ subSessions: [info('c1', 'C', 'idle', extra)] })
+    expect(textOf(await executeTool(tool, 'tc-1', { action: 'list-sessions' }))).toBe(
+      '<sessions>\n<session id="c1" title="C" status="idle" relation="sub-session"/>\n</sessions>'
+    )
+  })
+
+  it('BT-69 inspect 不带那一块（要看现场，不是要状态）', async () => {
+    mocks.runnerInspect.mockResolvedValueOnce({
+      info: info('c1', 'C', 'idle', { backgroundTasks: TASKS }),
+      result: {
+        kind: 'outline',
+        lines: [],
+        turnFrom: 0,
+        turnTo: 0,
+        turnCount: 0,
+        shown: 0,
+        total: 0,
+        earlierTurns: false
+      }
+    })
+    const inspected = textOf(
+      await executeTool(tool, 'tc-1', { action: 'inspect-session', session_id: 'c1' })
+    )
+    expect(inspected).toContain('<transcript turns="0"/>')
+    expect(inspected).not.toContain('<running-background-tasks>')
+  })
+
+  it('BT-69 prompt 的回执：started 不带；停下来问（带快照）带，在收尾那句之前', async () => {
+    const prompt = (): Promise<InvokedToolResult> =>
+      executeTool(tool, 'tc-1', { action: 'prompt-session', session_id: 'c1', message: 'm' })
+
+    mocks.runnerPrompt.mockResolvedValueOnce({ kind: 'started', id: 'c1' })
+    const started = textOf(await prompt())
+    expect(started).toContain('Started in the background.')
+    expect(started).not.toContain('<running-background-tasks>')
+
+    mocks.runnerPrompt.mockResolvedValueOnce({
+      kind: 'input',
+      id: 'c1',
+      info: info('c1', 'C', 'waiting-input', { pendingAsks: [ASK], backgroundTasks: TASKS })
+    })
+    expect(textOf(await prompt())).toBe(
+      `${[OPEN('waiting-input'), ...renderPendingAsks([ASK]), BLOCK, '</session>'].join('\n')}\n\nThe turn is still open: once it is answered it carries on, and you are brought back when it ends.`
+    )
+  })
+
+  it('BT-69 stop 只有那一句', async () => {
+    mocks.runnerStop.mockResolvedValueOnce({ stopped: true, id: 'c1' })
+    expect(
+      textOf(await executeTool(tool, 'tc-1', { action: 'stop-session', session_id: 'c1' }))
+    ).toBe('Stopped session c1.')
   })
 })

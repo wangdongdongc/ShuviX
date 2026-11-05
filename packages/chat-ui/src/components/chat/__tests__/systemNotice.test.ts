@@ -348,3 +348,51 @@ describe('summarizeSystemNotice —— <session> 通知（XS-07）', () => {
     expect(isSystemNoticeText('<sessions id="x">\nDone.\n</sessions>')).toBe(false)
   })
 })
+
+describe('summarizeSystemNotice —— 夹着 <running-background-tasks> 的 <session> 通知（BT-72）', () => {
+  const noticeWithTasks = (attrs: string): string =>
+    [
+      `<session ${attrs}>`,
+      'The turn you started in the background has finished.',
+      '<running-background-tasks>',
+      'Still running in that session:',
+      '- command (pid 4242): dev server',
+      'They belong to that session and keep running after its turn ends.',
+      '</running-background-tasks>',
+      'Collect it with the session tool: action "wait-for-sessions".',
+      '</session>'
+    ].join('\n')
+
+  it('BT-72 一行：标题 · 状态；任务的描述不进摘要', () => {
+    const rows = summarizeSystemNotice(noticeWithTasks('id="c1" title="Title" status="idle"'))
+    expect(rows).toEqual([{ kind: 'sub-session', text: 'Title · idle' }])
+    expect(JSON.stringify(rows)).not.toContain('dev server')
+  })
+
+  it('BT-72 没有标题 ⇒ 退到 id；状态照样跟在后面', () => {
+    expect(summarizeSystemNotice(noticeWithTasks('id="c1" status="idle"'))).toEqual([
+      { kind: 'sub-session', text: 'c1 · idle' }
+    ])
+    expect(summarizeSystemNotice(noticeWithTasks('id="c1"'))).toEqual([
+      { kind: 'sub-session', text: 'c1' }
+    ])
+  })
+
+  it('BT-72 waiting-input ⇒ 标题 · waiting-input', () => {
+    expect(
+      summarizeSystemNotice(noticeWithTasks('id="c1" title="Title" status="waiting-input"'))
+    ).toEqual([{ kind: 'sub-session', text: 'Title · waiting-input' }])
+  })
+
+  it('BT-72 与后台任务通知拼在一条：两行，按原顺序', () => {
+    const joined = `${noticeWithTasks('id="c1" title="Title" status="idle"')}\n\n${bgNotice({
+      command: 'npm test',
+      status: 'exited with code 0',
+      duration: '3s'
+    })}`
+    expect(summarizeSystemNotice(joined)).toEqual([
+      { kind: 'sub-session', text: 'Title · idle' },
+      { kind: 'background-task', text: 'npm test · exited with code 0 · 3s' }
+    ])
+  })
+})

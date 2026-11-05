@@ -46,7 +46,11 @@ import {
 } from '../services/toolContext'
 import { sessionRecords } from '../services/sessionRecords'
 import { sessionService } from '../services/sessionService'
-import { blockedOnApproval, renderPendingAsks } from '../services/subSessionText'
+import {
+  blockedOnApproval,
+  renderBackgroundTasks,
+  renderPendingAsks
+} from '../services/subSessionText'
 import {
   subSessionRunner,
   DEFAULT_WAIT_TIMEOUT_SEC,
@@ -305,6 +309,8 @@ const INTERRUPTED_NOTE =
   '<note>Interrupted when the app stopped — it is not running and will not finish on its own. A new message starts over (discarding that unfinished turn), or the user can continue it in that session.</note>'
 
 function renderChild(info: SubSessionInfo & AnswerFields): string {
+  // 状态只说这一轮：还开着的后台任务在每一种状态下都要交代（只有一轮结束时它们才最容易被忘）
+  const backgroundTasks = renderBackgroundTasks(info.backgroundTasks)
   // waiting-input 优先于「有没有答复」：它此刻停着这件事，比它上一轮说过什么更要紧。
   // 询问的那几块（选择题 / 批准卡）与通知同一份渲染（runner 的 renderPendingAsks，§19.4）
   if (info.status === 'waiting-input') {
@@ -314,11 +320,14 @@ function renderChild(info: SubSessionInfo & AnswerFields): string {
         ? renderPendingAsks(info.pendingAsks)
         : [blockedOnApproval(info.blockedOn)]),
       ...(info.answer ? [`<earlier-reply>\n${info.answer}\n</earlier-reply>`] : []),
+      ...backgroundTasks,
       '</session>'
     ].join('\n')
   }
   // 被中断同理：它停在半路这件事最要紧（这一轮还没有回答 —— lastAnswer 停在这一轮的提问上）
-  if (info.status === 'interrupted') return `${openTag(info)}\n${INTERRUPTED_NOTE}\n</session>`
+  if (info.status === 'interrupted') {
+    return [openTag(info), INTERRUPTED_NOTE, ...backgroundTasks, '</session>'].join('\n')
+  }
   const body = info.answer
     ? info.isError
       ? `<error>\n${info.answer}\n</error>`
@@ -326,7 +335,7 @@ function renderChild(info: SubSessionInfo & AnswerFields): string {
     : info.status === 'running'
       ? '<note>Still running. It was NOT cancelled.</note>'
       : '<note>No reply yet.</note>'
-  return `${openTag(info)}\n${body}\n</session>`
+  return [openTag(info), body, ...backgroundTasks, '</session>'].join('\n')
 }
 
 /**
@@ -733,11 +742,15 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       )
     }
     // 关系与权限表那一行写在属性里：子会话随便用；别的会话 access="read" 只能查看、"write" 能对话，没有 access
-    // 的是只被允许过一次、此刻正跑着你发起的那一轮
+    // 的是只被允许过一次、此刻正跑着你发起的那一轮。后台任务只报个数：要看是什么用 read-session
     const rows = res.subSessions
-      .map((s) =>
-        openTag(s, ` relation="${s.relation}"${s.access ? ` access="${s.access}"` : ''}/`)
-      )
+      .map((s) => {
+        const access = s.access ? ` access="${s.access}"` : ''
+        const tasks = s.backgroundTasks?.length
+          ? ` background_tasks="${s.backgroundTasks.length}"`
+          : ''
+        return openTag(s, ` relation="${s.relation}"${access}${tasks}/`)
+      })
       .join('\n')
     return text(`<sessions>\n${rows}\n</sessions>`)
   }

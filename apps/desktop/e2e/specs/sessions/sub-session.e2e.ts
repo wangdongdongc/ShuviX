@@ -491,6 +491,118 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     expect(text).toContain('is this session itself')
     expect(text).toContain(subSid)
   })
+
+  it('BT-E1 子会话这一轮结束、后台命令还在跑：父会话的通知（系统通知）说得出它的描述与 pid、不带命令；read 也说得出；停掉之后 read 不再提它', async () => {
+    const CHILD_TEXT = '起一条后台命令'
+    const PARENT_TEXT = '让它起一条后台命令'
+    const BLOCK_TAG = '<running-background-tasks>'
+    const DESCRIPTION = 'BT dev server'
+    /** 命令行不该出现在通知里：靠这个哨兵认 */
+    const COMMAND_SENTINEL = 'bt-cmd-sentinel'
+    const readCall = (id: string): { id: string; name: string; args: string } => ({
+      id,
+      name: 'session',
+      args: JSON.stringify({ action: 'read-session', session_id: subSid })
+    })
+    const wokenByThisTurn = (r: { lastUserText: string }): boolean =>
+      wokenByCompletion(r) && r.lastUserText.includes(BLOCK_TAG)
+
+    provider.reset()
+    provider.script(
+      {
+        toolCalls: [
+          {
+            id: 'call_bt_prompt',
+            name: 'session',
+            args: JSON.stringify({
+              action: 'prompt-session',
+              session_id: subSid,
+              message: CHILD_TEXT
+            })
+          }
+        ],
+        when: byUserText(PARENT_TEXT)
+      },
+      {
+        toolCalls: [
+          {
+            id: 'call_bt_bash',
+            name: 'bash',
+            args: JSON.stringify({
+              command: `echo ${COMMAND_SENTINEL} > /dev/null; exec sleep 120`,
+              description: DESCRIPTION,
+              run_in_background: true
+            })
+          }
+        ],
+        when: byUserText(CHILD_TEXT)
+      },
+      // 子会话的收尾挂住，父会话那一轮先落定：通知才是叫醒它的那一条
+      { text: 'BT STARTED.', when: byUserText(CHILD_TEXT), holdMs: HOLD_MS, holdKey: 'child' },
+      { text: 'dispatched.', when: byUserText(PARENT_TEXT) },
+      { text: 'bt noted.', when: wokenByThisTurn },
+      { toolCalls: [readCall('call_bt_read_running')], when: byUserText('读它（命令还在）') },
+      { text: 'bt read running.', when: byUserText('读它（命令还在）') },
+      { toolCalls: [readCall('call_bt_read_stopped')], when: byUserText('读它（命令停了）') },
+      { text: 'bt read stopped.', when: byUserText('读它（命令停了）') }
+    )
+    await promptParent(PARENT_TEXT)
+    await childHeld(CHILD_TEXT)
+
+    interface ListedTask {
+      taskId: string
+      endedAt: number | null
+      subject: { pid?: number; command?: string }
+    }
+    const bashTask = async (): Promise<ListedTask | undefined> =>
+      (
+        await app.main.eval<ListedTask[]>(
+          `window.api.bgTask.list(${JSON.stringify({ sessionId: subSid })})`
+        )
+      ).find((t) => t.taskId === 'call_bt_bash')
+    const task = await until(bashTask, 'the background command is listed')
+    expect(task.endedAt).toBeNull()
+    expect(task.subject.command).toContain(COMMAND_SENTINEL)
+    const pid = task.subject.pid!
+    expect(pid).toBeGreaterThan(0)
+
+    provider.release('child')
+    await waitParentSettled('bt noted.')
+
+    // 1. 通知：还是系统通知（投影按正文形状 / 侧车认它），那一块说得出描述与 pid，不带命令行
+    const notice = systemNotices(await listMessages(parentSid)).find((m) =>
+      m.content.includes(BLOCK_TAG)
+    )
+    expect(notice, '带后台任务那一块的系统通知').toBeDefined()
+    expect(notice!.content).toContain(`<session id="${subSid}"`)
+    expect(notice!.content).toContain('has finished')
+    expect(notice!.content).toContain(`- command (pid ${pid}): ${DESCRIPTION}`)
+    expect(notice!.content).not.toContain(COMMAND_SENTINEL)
+    // 模型收到的就是它
+    expect(provider.requests().filter(wokenByThisTurn)[0].lastUserText.trim()).toBe(
+      notice!.content.trim()
+    )
+
+    // 2. 对照：命令还在跑时 read 同样说得出（下面「停掉之后没有」才站得住）
+    await promptParent('读它（命令还在）')
+    const whileRunning = (await sessionBlock(parentSid, 'call_bt_read_running')).result ?? ''
+    expect(whileRunning).toContain(`- command (pid ${pid}): ${DESCRIPTION}`)
+    expect(whileRunning).not.toContain(COMMAND_SENTINEL)
+
+    // 3. 停掉：read 不再提它
+    await app.main.eval(
+      `window.api.bgTask.stop(${JSON.stringify({ toolCallId: 'call_bt_bash', force: true })})`
+    )
+    await until(
+      async () => (await bashTask())?.endedAt != null || null,
+      'the background command ended'
+    )
+    await promptParent('读它（命令停了）')
+    const afterStop = (await sessionBlock(parentSid, 'call_bt_read_stopped')).result ?? ''
+    expect(afterStop).toContain(`<session id="${subSid}"`)
+    expect(afterStop).not.toContain(BLOCK_TAG)
+    expect(afterStop).not.toContain(DESCRIPTION)
+  }, 120_000)
 })
 
 describe('侧栏：唯一的产品差异', () => {

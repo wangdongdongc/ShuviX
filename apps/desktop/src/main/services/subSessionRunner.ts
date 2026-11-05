@@ -76,11 +76,14 @@ import { createLogger } from '../logger'
 import {
   approvalSummary,
   attrValue,
+  backgroundTasksOf,
+  renderBackgroundTasks,
   renderPendingAsks,
+  type BackgroundTaskInfo,
   type PendingAskInfo
 } from './subSessionText'
 
-export type { PendingAskInfo } from './subSessionText'
+export type { BackgroundTaskInfo, PendingAskInfo } from './subSessionText'
 
 const log = createLogger('SubSession')
 
@@ -171,6 +174,11 @@ export interface SubSessionInfo {
    * 只看开着的会话；没有挂着的 → undefined。
    */
   pendingAsks?: PendingAskInfo[]
+  /**
+   * 那条会话还在跑的后台任务（dev 服务器、派发出去的 agent…）：状态只说这一轮，`idle` 不等于那边什么都停了。
+   * 别的会话只有调用方权限表里有它那一行才给（见 `visibleBackgroundTasks`）；没有 → undefined。
+   */
+  backgroundTasks?: BackgroundTaskInfo[]
   /**
    * 父会话最近一次发进去的消息之后，用户自己在子会话里说过话（§19.7）—— 答复解释不了过程的最常见原因，
    * 也是 `inspect-session` 值得一看的信号。只在 read / wait / 前台答复这几条路上算（要读一次视图）。
@@ -446,6 +454,7 @@ class SubSessionRunner {
     relation: SessionRelation = 'sub-session'
   ): SubSessionInfo {
     const pendingAsks = this.pendingAsksOf(row.id, parentId)
+    const backgroundTasks = this.visibleBackgroundTasks(parentId, row.id, relation)
     return {
       id: row.id,
       title: row.title,
@@ -454,8 +463,27 @@ class SubSessionRunner {
       driven: this.runs.has(row.id),
       updatedAt: row.updatedAt,
       blockedOn: this.blockedOn(row.id),
-      ...(pendingAsks ? { pendingAsks } : {})
+      ...(pendingAsks ? { pendingAsks } : {}),
+      ...(backgroundTasks.length > 0 ? { backgroundTasks } : {})
     }
+  }
+
+  /**
+   * 调用方能看到的那条会话的后台任务。子会话随便看；别的会话要调用方权限表里有它那一行：只被允许过一次的调用方
+   * 被放行的是自己发起的那一轮，用户在那条会话里开着什么不归它知道。
+   */
+  private visibleBackgroundTasks(
+    parentId: string,
+    sessionId: string,
+    relation: SessionRelation
+  ): BackgroundTaskInfo[] {
+    if (
+      relation === 'other' &&
+      !sessionAcl.sessionGrants(parentId).some((g) => g.target === sessionId)
+    ) {
+      return []
+    }
+    return backgroundTasksOf(taskRegistry.list(sessionId))
   }
 
   /**
@@ -1740,6 +1768,7 @@ class SubSessionRunner {
     const status = this.statusOf(childId)
     const asked = this.blockedOn(childId)
     const stopped = event.record.reason === 'aborted'
+    const isChild = sessionRecords.pick(childId, ['parentId'])?.parentId === event.parentId
     return [
       // 标题是 LLM 起的：与别的通知一样转义（引号会撕破属性、换行会把一行变两行）
       `<session id="${attrValue(childId)}" title="${attrValue(title)}" status="${status}"${intervened ? ' user-intervened="true"' : ''}>`,
@@ -1751,9 +1780,12 @@ class SubSessionRunner {
             ? `The turn you started ended with an error: ${event.result.error}`
             : 'The turn you started in the background has finished.',
       asked?.length ? `It is asking: ${asked.join(' | ')}` : '',
+      ...renderBackgroundTasks(
+        this.visibleBackgroundTasks(event.parentId, childId, isChild ? 'sub-session' : 'other')
+      ),
       status === 'waiting-input'
         ? 'Tell the user what it is waiting for — you cannot answer it yourself.'
-        : sessionRecords.pick(childId, ['parentId'])?.parentId === event.parentId
+        : isChild
           ? 'Collect it with the session tool: action "wait-for-sessions".'
           : // 别的会话：那一轮落定之后，省略 id 的 wait 只看子会话 —— 点名它
             `Collect it with the session tool: action "wait-for-sessions" with session_id "${childId}".`,

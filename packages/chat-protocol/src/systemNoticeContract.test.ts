@@ -111,3 +111,30 @@ describe('empty-reply notice (emptyReply.ts 的空回复追问)', () => {
     expect(isEmptyReplyNoticeText(`${emptyReply}\n\n${bgTask}`)).toBe(false)
   })
 })
+
+describe('<session> 通知里夹着 <running-background-tasks>（BT-70）', () => {
+  const block = [
+    '<running-background-tasks>',
+    'Still running in that session:',
+    '- command (pid 4242): dev server',
+    'They belong to that session and keep running after its turn ends.',
+    '</running-background-tasks>'
+  ].join('\n')
+  const notice = [
+    '<session id="c1" title="Title" status="idle">',
+    'The turn you started in the background has finished.',
+    block,
+    'Collect it with the session tool: action "wait-for-sessions".',
+    '</session>'
+  ].join('\n')
+
+  it('BT-70 整条还是一块系统通知（标签 session），不是空回复追问', () => {
+    expect(isSystemNoticeText(notice)).toBe(true)
+    expect(isEmptyReplyNoticeText(notice)).toBe(false)
+    expect([...notice.matchAll(systemNoticeBlockRe())].map((m) => m[1])).toEqual(['session'])
+  })
+
+  it('BT-70 那一块单独拿出来不是通知（它不在标签表里）', () => {
+    expect(isSystemNoticeText(block)).toBe(false)
+  })
+})

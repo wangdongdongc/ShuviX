@@ -5,6 +5,7 @@
  * 文案是模型面向的英文（进上下文的字符串不随界面语言变）。问题与选项是子会话的模型写的，原样放进块里（围栏之内）。
  */
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 
 /** 一条挂着的询问在父会话眼里的样子（§19.4） */
 export type PendingAskInfo =
@@ -90,4 +91,99 @@ export function blockedOnApproval(asked?: readonly string[]): string {
     'Tell the user what is waiting for them, or stop that turn with "stop-session".',
     '</blocked-on-user-approval>'
   ].join('\n')
+}
+
+/**
+ * 那条会话一轮结束之后还在跑的后台任务在调用方眼里的样子。
+ *
+ * 只有描述，**不带命令**：调用方要知道的是「那边还开着什么」，命令行又长、又是最常写着真实凭据的地方。描述同样
+ * 是占位符还原之后的参数（已知的边角：模型把占位符写进描述才会碰上），之后还要过调用方这一侧的脱敏。
+ * pid 留给调用方转告（停它的是那条会话自己，`shuvix task stop` 只认本会话的任务）。
+ */
+export interface BackgroundTaskInfo {
+  kind: 'command' | 'agent' | 'session'
+  /** 面板行标题（LLM 写的，单行、截断） */
+  description: string
+  /** 本机命令的 pid */
+  pid?: number
+  /** 远端命令没有本机 pid，停它走任务 id */
+  taskId?: string
+  /** 远端命令跑在哪台机器上（ssh host 别名） */
+  host?: string
+}
+
+/** 描述的上限（码点）：一行够认出是哪件事，多了只是每一步重发的上下文 */
+const BACKGROUND_TASK_DESCRIPTION_MAX = 120
+
+/**
+ * 描述写进通知要守住的形状：一行，且不含尖括号。描述是模型写的，而通知在 steer 路径上只靠正文形状被认出来
+ * （`isSystemNoticeText`）：一个 `</session>` 就会让整条通知被画成用户说的话，`</running-background-tasks>`
+ * 则会把后半截描述放到围栏之外。
+ */
+function taskDescription(title: string): string {
+  const line = attrValue(title.replace(/[\s\u0085]+/g, ' '))
+    .replace(/</g, '‹')
+    .replace(/>/g, '›')
+  return [...line].slice(0, BACKGROUND_TASK_DESCRIPTION_MAX).join('').trimEnd()
+}
+
+/** 列出的条数上限：其余的只报个数 */
+const BACKGROUND_TASKS_SHOWN = 8
+
+/**
+ * 从任务枢纽的快照里挑出「那条会话的后台任务」：还没结束，且发起它的调用已不在等（`detached`）。前台命令属于
+ * 正在跑的这一轮，不是后台任务；hook 起的 agent（没有 `parentToolCallId`：自动起标题、自动审查）不是会话的工作。
+ */
+export function backgroundTasksOf(tasks: readonly TaskInfo[]): BackgroundTaskInfo[] {
+  const out: BackgroundTaskInfo[] = []
+  for (const task of tasks) {
+    if (task.endedAt !== null || !task.detached) continue
+    const { subject } = task
+    if (subject.kind === 'agent' && subject.parentToolCallId === undefined) continue
+    const description = taskDescription(task.title)
+    if (subject.kind === 'bash') {
+      out.push({
+        kind: 'command',
+        description,
+        ...(subject.pid > 0 ? { pid: subject.pid } : { taskId: task.taskId }),
+        ...(subject.host ? { host: subject.host } : {})
+      })
+    } else {
+      out.push({ kind: subject.kind === 'agent' ? 'agent' : 'session', description })
+    }
+  }
+  return out
+}
+
+function backgroundTaskLine(task: BackgroundTaskInfo): string {
+  const label = task.kind === 'session' ? 'turn in another session' : task.kind
+  const where = task.host ? ` on host ${attrValue(task.host)}` : ''
+  const id =
+    task.pid !== undefined
+      ? ` (pid ${task.pid})`
+      : task.taskId !== undefined
+        ? ` (task id ${attrValue(task.taskId)})`
+        : ''
+  return `- ${label}${where}${id}: ${task.description}`
+}
+
+/**
+ * 那一块（完成通知与 `session` 工具的结果共用）。一条都没有 → 什么都不写。
+ *
+ * 要说清三件事：一轮结束不等于那边什么都停了；这些任务归那条会话，调用方自己停不了（`stop-session` 只停一轮）；
+ * 该怎么办。否则子会话留着 dev 服务器给用户看，父会话只读到「跑完了」，既不会告诉用户，也不知道那边还占着端口。
+ */
+export function renderBackgroundTasks(tasks: readonly BackgroundTaskInfo[] | undefined): string[] {
+  if (!tasks?.length) return []
+  const hidden = tasks.length - BACKGROUND_TASKS_SHOWN
+  return [
+    [
+      '<running-background-tasks>',
+      'Still running in that session:',
+      ...tasks.slice(0, BACKGROUND_TASKS_SHOWN).map(backgroundTaskLine),
+      ...(hidden > 0 ? [`- and ${hidden} more`] : []),
+      'They belong to that session and keep running after its turn ends. Mention them to the user if they matter to them. To stop one, ask that session with "prompt-session"; "stop-session" only stops a turn.',
+      '</running-background-tasks>'
+    ].join('\n')
+  ]
 }
