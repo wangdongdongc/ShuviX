@@ -15709,3 +15709,84 @@ export function inlineAskPane(client: CdpClient): InlineAskPane {
     allRecords: () => sweep(records, (r) => r.text)
   }
 }
+
+// ───────────────────────────────────────────────────────────
+// 对话里的会话链接（chat-ui SessionLinkChip，`[data-session-link="<会话 id>"]`）：能切会话且会话还在 = 一颗按钮，
+// 否则是一段带图标的文字。点击经真实鼠标事件（CDP Input），不是 el.click()。
+
+/** 一枚会话链接 */
+export interface SessionLinkShot {
+  /** 目标会话 id */
+  session: string
+  /** 显示的文字 */
+  text: string
+  /** 悬停说明 */
+  title: string
+  /** 是不是一颗按钮 */
+  button: boolean
+  /** 文字前面有没有图标 */
+  icon: boolean
+  /** 所在消息的 `data-msg-id` */
+  msgId: string
+}
+
+export interface SessionLinksPane {
+  /** 这条消息里的全部会话链接（DOM 序） */
+  inMessage(msgId: string): Promise<SessionLinkShot[]>
+  /** 把第 index 枚（这条消息内，DOM 序）滚进视野并用真实鼠标点它 */
+  click(msgId: string, index: number): Promise<void>
+  /** 这条消息的矩形（截图用） */
+  messageRect(msgId: string): Promise<{ x: number; y: number; width: number; height: number }>
+  /** 这条消息是否有一部分在对话滚动区的可视范围内 */
+  messageOnScreen(msgId: string): Promise<boolean>
+}
+
+export function sessionLinksPane(main: CdpClient): SessionLinksPane {
+  const MSG = (id: string): string =>
+    `document.querySelector('[data-msg-id=' + ${JSON.stringify(JSON.stringify(id))} + ']')`
+  const CHIPS = (id: string): string =>
+    `[...(${MSG(id)}?.querySelectorAll('[data-session-link]') ?? [])]`
+  return {
+    inMessage: (msgId) =>
+      main.eval<SessionLinkShot[]>(
+        `${CHIPS(msgId)}.map((el) => ({
+          session: el.getAttribute('data-session-link') ?? '',
+          text: (el.textContent ?? '').trim(),
+          title: el.getAttribute('title') ?? '',
+          button: el.tagName === 'BUTTON',
+          icon: el.firstElementChild?.tagName.toLowerCase() === 'svg',
+          msgId: ${JSON.stringify(msgId)}
+        }))`
+      ),
+    click: async (msgId, index) => {
+      const point = await main.eval<{ x: number; y: number }>(`(() => {
+        const el = ${CHIPS(msgId)}[${index}]
+        el.scrollIntoView({ block: 'center' })
+        const r = el.getClientRects()[0]
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      })()`)
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+        await main.send('Input.dispatchMouseEvent', {
+          type,
+          x: point.x,
+          y: point.y,
+          ...(type === 'mouseMoved' ? {} : { button: 'left', clickCount: 1 })
+        })
+      }
+    },
+    messageRect: (msgId) =>
+      main.eval(`(() => {
+        const r = ${MSG(msgId)}.getBoundingClientRect()
+        return { x: r.left, y: r.top, width: r.width, height: r.height }
+      })()`),
+    messageOnScreen: (msgId) =>
+      main.eval<boolean>(`(() => {
+        const el = ${MSG(msgId)}
+        const box = document.querySelector('.conversation-scroller')
+        if (!el || !box) return false
+        const r = el.getBoundingClientRect()
+        const b = box.getBoundingClientRect()
+        return r.bottom > b.top && r.top < b.bottom
+      })()`)
+  }
+}

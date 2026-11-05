@@ -382,6 +382,7 @@
     "originTrigger": "Trigger",
     "originTriggerHint": "Sent automatically by a trigger binding of bot \"{{bot}}\" ({{trigger}}), not typed by anyone just now",
     "originOpenHint": "Click to open it",
+    "sessionLinkGone": "This session no longer exists",
     "cacheRead": "cache read",
     "cacheWrite": "cache write",
     "artifactMissing": "Artifact \"{{name}}\" not found in this session",

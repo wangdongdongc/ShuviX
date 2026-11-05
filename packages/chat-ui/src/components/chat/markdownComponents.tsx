@@ -1,4 +1,4 @@
-import { Children, isValidElement, memo, useState } from 'react'
+import { Children, isValidElement, memo, useContext, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useTranslation } from 'react-i18next'
 import {
@@ -16,6 +16,7 @@ import {
   MessageCircleQuestion,
   Globe,
   Mail,
+  MessageSquare,
   Folder,
   File,
   FileCode,
@@ -34,8 +35,10 @@ import {
 import 'katex/dist/katex.min.css'
 import { CodeBlock } from './CodeBlock'
 import { useChatStore } from '../../stores/chatStore'
+import { ChatHostContext } from '../../host/chatHostContext'
 import { copyToClipboard } from '../../utils/clipboard'
 import { hasPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import { parseSessionLink, sessionLink } from '@shuvix/chat-protocol/dailyNotes'
 import { RedactedMark } from './RedactedText'
 import { HeldImage } from './HeldImage'
 
@@ -165,6 +168,65 @@ function LinkChip({
       </a>
       {overflow}
     </>
+  )
+}
+
+// ─── 会话链接 ──────────────────────────────────────────
+
+/**
+ * 指向一条会话的链接（rehypeSessionLinks 产出，文字已压成纯文本）—— 与普通链接同形：
+ * 前置会话图标 + accent 文字，点了切到那条会话，带消息 id 就再跳到那条消息。
+ * 模型写了标题就显示它写的（当前标题留在悬停里）；只写了地址就显示会话当前的标题。
+ *
+ * 这个宿主不能切会话（悬浮窗、md 窗口、Chrome 侧边栏，见 ChatHostValue.openSession）或会话已不在：
+ * 只是一段带图标的文字，没有点了没反应的按钮。
+ */
+function SessionLinkChip({
+  session,
+  entry,
+  children
+}: {
+  session: string
+  entry?: string
+  children?: React.ReactNode
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const openSession = useContext(ChatHostContext)?.openSession
+  const target = useChatStore((s) => s.sessions.find((x) => x.id === session))
+
+  const written = typeof children === 'string' ? children.trim() : ''
+  const label =
+    !written || parseSessionLink(written)
+      ? target?.title || written || sessionLink(session, entry)
+      : written
+  const icon = <MessageSquare size={12} className={CHIP_ICON} />
+
+  if (!openSession || !target) {
+    return (
+      <span
+        data-session-link={session}
+        title={openSession ? t('message.sessionLinkGone') : target?.title}
+        className="text-text-secondary"
+      >
+        {icon}
+        {label}
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-session-link={session}
+      title={`${target.title}\n${t('message.originOpenHint')}`}
+      onClick={() => {
+        openSession(session)
+        if (entry) useChatStore.getState().requestScrollToMessage(session, entry)
+      }}
+      className="inline max-w-full break-words text-left text-accent hover:underline underline-offset-[3px] decoration-accent/45 decoration-1"
+    >
+      {icon}
+      {label}
+    </button>
   )
 }
 
@@ -339,6 +401,7 @@ export const markdownComponents = {
   a: LinkChip as never,
   code: InlineCode as never,
   'redaction-mark': RedactionMarkTag as never,
+  'session-link': SessionLinkChip as never,
   'held-image': HeldImage as never
 }
 

@@ -112,6 +112,30 @@ describe('会话链接', () => {
     }
   })
 
+  /** 这条正则现在是对话 markdown 闸的输入（keepAnchorHref）：形状放宽一点，闸就跟着放宽一点 */
+  it('DN-15 parseSessionLink 的形状是严格的：大小写、路径穿越、查询串、多余的段都不认', () => {
+    for (const url of [
+      'shuvix://SESSION/a',
+      'SHUVIX://session/a',
+      'shuvix://session/../x',
+      'shuvix://session/a?x=1',
+      'shuvix://session/a#',
+      'shuvix://session/a#b#c',
+      'shuvix://session/a\tb',
+      'shuvix://session/a%2Fb',
+      'javascript:alert(1)//shuvix://session/abc',
+      'xshuvix://session/abc'
+    ]) {
+      expect(parseSessionLink(url), url).toBeNull()
+    }
+    expect(parseSessionLink('shuvix://session/a/')).toEqual({ sessionId: 'a' })
+    expect(parseSessionLink('shuvix://session/a#a:b.c-d_1')).toEqual({
+      sessionId: 'a',
+      entryId: 'a:b.c-d_1'
+    })
+    expect(parseSessionLink('  shuvix://session/a\n')).toEqual({ sessionId: 'a' })
+  })
+
   it('DN-16 linkText 转义方括号、压掉换行', () => {
     expect(linkText(' 修 [bug]\n 第二行 ')).toBe('修 \\[bug\\] 第二行')
   })

@@ -21,6 +21,7 @@ import rehypeKatex from 'rehype-katex'
 import { remarkMathDollarGuard } from './remarkMathDollarGuard'
 import { rehypeSanitizeRawHtml } from './rehypeSanitizeRawHtml'
 import { rehypeRedactionMarks } from './rehypeRedactionMarks'
+import { rehypeSessionLinks } from './rehypeSessionLinks'
 import { rehypeHoldImages } from './rehypeHoldImages'
 
 /**
@@ -53,7 +54,9 @@ export const markdownRemarkPlugins = [remarkGfm, remarkMath, remarkMathDollarGua
  *
  *   5. 自动脱敏的标记 —— 占位符换成 `<redaction-mark>`，同样是可信标记，也必须在闸之后；还要在高亮之后
  *                      （高亮整个换掉代码块的子节点），理由见 rehypeRedactionMarks 的文件头。
- *   6. 扣下图片     —— 每个 `img` 换成不去取图的 `<held-image>`（远端的点一下才加载）：模型写的图片地址
+ *   6. 会话链接     —— `shuvix://session/…` 换成 `<session-link>`，点了切到那条会话。在闸之后：闸才不会把
+ *                      它当裸标签拆掉，手写的同名标签也进不到这里。理由见 rehypeSessionLinks 的文件头。
+ *   7. 扣下图片     —— 每个 `img` 换成不去取图的 `<held-image>`（远端的点一下才加载）：模型写的图片地址
  *                      在显示时就会被请求，是一条出网通道。排在最后，前面任何插件产出的 img 都逃不过；
  *                      在闸之后，闸才不会把 `held-image` 当裸标签拆掉。理由见 rehypeHoldImages 的文件头。
  */
@@ -63,5 +66,6 @@ export const markdownRehypePlugins = [
   rehypeHighlightShared,
   rehypeKatex,
   rehypeRedactionMarks,
+  rehypeSessionLinks,
   rehypeHoldImages
 ]

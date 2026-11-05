@@ -382,6 +382,7 @@
     "originTrigger": "触发器",
     "originTriggerHint": "由 bot「{{bot}}」的触发绑定（{{trigger}}）自动发出，不是有人此刻输入的",
     "originOpenHint": "点击打开",
+    "sessionLinkGone": "这条会话已不存在",
     "cacheRead": "缓存读取",
     "cacheWrite": "缓存写入",
     "artifactMissing": "本会话里找不到产物「{{name}}」",

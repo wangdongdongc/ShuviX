@@ -33,6 +33,7 @@ import {
 } from './markdownPlugins'
 import { rehypeSanitizeRawHtml, isSafeMarkdownUrl, sanitizeHastTree } from './rehypeSanitizeRawHtml'
 import { rehypeRedactionMarks } from './rehypeRedactionMarks'
+import { rehypeSessionLinks } from './rehypeSessionLinks'
 import { rehypeHoldImages } from './rehypeHoldImages'
 
 interface HastNode {
@@ -158,20 +159,21 @@ describe('0 · 管线本身', () => {
    */
   it('闸紧跟在 rehype-raw 之后，且排在 highlight / katex 之前', () => {
     expect(markdownRehypePlugins.indexOf(rehypeSanitizeRawHtml)).toBe(1)
-    expect(markdownRehypePlugins).toHaveLength(6)
+    expect(markdownRehypePlugins).toHaveLength(7)
   })
 
   /**
    * 整张表逐项按引用：高亮那一格是全进程共用一个变换的 rehypeHighlightShared（见 markdownPlugins.ts），
    * 不是 rehype-highlight 的默认导出 —— 换回去不会让哪条形状断言变红，只会让每次渲染重新注册三十多种语法
    */
-  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex, 脱敏标记, 扣下图片]', () => {
+  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex, 脱敏标记, 会话链接, 扣下图片]', () => {
     expect(markdownRehypePlugins).toEqual([
       rehypeRaw,
       rehypeSanitizeRawHtml,
       rehypeHighlightShared,
       rehypeKatex,
       rehypeRedactionMarks,
+      rehypeSessionLinks,
       rehypeHoldImages
     ])
   })
@@ -747,5 +749,55 @@ describe('H · isSafeMarkdownUrl / sanitizeHastTree 直接调用', () => {
     sanitizeHastTree(tree)
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0]?.properties).toEqual({})
+  })
+})
+
+// ══════════════════════════════════════════════════════
+// SG-S · 闸只为形状严格的会话链接多留一个 href
+// ══════════════════════════════════════════════════════
+
+describe('SG-S · 会话链接：a 的 href 多认一种形状，别的一概不变', () => {
+  /** 生产链减去会话链接那一格：看闸自己留下了什么，不让插件替它把关 */
+  const gateOnly = pipeline(markdownRehypePlugins.filter((p) => p !== rehypeSessionLinks))
+  const hrefOf = (html: string): unknown => find(html, 'a', gateOnly)?.properties?.href
+
+  it('SG-S1 形状严格匹配的会话链接留下 href（闸自己）', () => {
+    for (const url of ['shuvix://session/abc', 'shuvix://session/abc/', 'shuvix://session/a#e-1']) {
+      expect(hrefOf(`<a href="${url}">t</a>`), url).toBe(url)
+    }
+  })
+
+  it.each([
+    'shuvix://settings',
+    'shuvix://knowledge/x',
+    'shuvix://project/abc',
+    'shuvix://session/',
+    'shuvix://session/a?x=1',
+    'shuvix://session/a/b',
+    'SHUVIX://session/a',
+    'shuvix://session/a&#9;b',
+    'javascript:alert(1)//shuvix://session/abc',
+    'shuvix-lib://session/abc'
+  ])('SG-S1 %s 的 href 仍被丢掉', (url) => {
+    const a = find(`<a href="${url}">t</a>`, 'a', gateOnly)
+    expect(a).toBeDefined()
+    expect(a?.properties?.href).toBeUndefined()
+  })
+
+  it('SG-S2 放宽只在 a 上：协议表没变，img 的 src 不算会话链接', () => {
+    expect(isSafeMarkdownUrl('shuvix://session/a')).toBe(false)
+    const img = find('<img src="shuvix://session/abc" alt="a">', 'img', gateOnly)
+    expect(img?.properties?.src).toBeUndefined()
+    const held = find('<img src="shuvix://session/abc" alt="a">', 'held-image')
+    expect(held).toBeDefined()
+    expect(held?.properties?.url).toBeUndefined()
+  })
+
+  it('SG-S3 过了生产链的会话链接上只剩会话 id：手写的事件 / class / id / target / title 都不带过去', () => {
+    const el = find(
+      '<a href="shuvix://session/abc" onclick="x" class="fixed" id="y" target="_blank" title="h">t</a>',
+      'session-link'
+    )
+    expect(el?.properties).toEqual({ session: 'abc' })
   })
 })

@@ -382,6 +382,7 @@
     "originTrigger": "トリガー",
     "originTriggerHint": "ボット「{{bot}}」のトリガー（{{trigger}}）が自動で送信したもので、誰かがいま入力したものではありません",
     "originOpenHint": "クリックで開く",
+    "sessionLinkGone": "このセッションはもう存在しません",
     "cacheRead": "キャッシュ読取",
     "cacheWrite": "キャッシュ書込",
     "artifactMissing": "このセッションに成果物「{{name}}」がありません",

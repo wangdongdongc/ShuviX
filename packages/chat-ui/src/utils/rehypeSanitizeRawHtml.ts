@@ -32,6 +32,7 @@
  * rehype-katex 的 MathML 与内联 style）排在闸**之后**。顺序反了，这道闸就会去剥 KaTeX 和
  * hljs 自己的输出 —— 别为此放宽下面的表，把插件排回去。
  */
+import { parseSessionLink } from '@shuvix/chat-protocol/dailyNotes'
 
 interface HastNode {
   type: string
@@ -223,6 +224,15 @@ export function isSafeMarkdownUrl(value: string): boolean {
 const keepUrl: AttrCheck = (value) =>
   typeof value === 'string' && isSafeMarkdownUrl(value) ? value : undefined
 
+/**
+ * `a` 的 href 多认一种：形状严格匹配的会话链接。它过了闸就被 rehypeSessionLinks 换成不带地址的
+ * `<session-link>`，不会留在 DOM 里；别的 `shuvix://` 与其余标签的 URL 属性仍只认上面的协议表。
+ */
+const keepAnchorHref: AttrCheck = (value) =>
+  typeof value === 'string' && (isSafeMarkdownUrl(value) || parseSessionLink(value))
+    ? value
+    : undefined
+
 /** class：逐个取值过表，一个都不剩时连属性一起丢 */
 const keepClasses: AttrCheck = (value) => {
   const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\s+/) : []
@@ -253,7 +263,7 @@ const GLOBAL_ATTRS: Record<string, AttrCheck> = {
 
 /** 按标签追加的属性（`dataFootnote*` 是 remark-gfm 的钩子，CSS 与读屏都认它） */
 const TAG_ATTRS: Record<string, Record<string, AttrCheck>> = {
-  a: { href: keepUrl, dataFootnoteRef: keepString, dataFootnoteBackref: keepString },
+  a: { href: keepAnchorHref, dataFootnoteRef: keepString, dataFootnoteBackref: keepString },
   img: { src: keepUrl, alt: keepString },
   ol: { start: keepNumber },
   li: { value: keepNumber },

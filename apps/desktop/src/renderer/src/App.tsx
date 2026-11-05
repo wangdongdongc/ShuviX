@@ -46,9 +46,12 @@ const nativeContextMenu: ContextMenuRenderer = async (items) =>
 const contextMenuRenderer: ContextMenuRenderer | undefined =
   window.api.app.platform === 'web' ? undefined : nativeContextMenu
 
-/** 主窗口里切到一条会话（与侧栏点选同一个入口；刚建出的会话不会是悬浮着的） */
+/** 主窗口里切到一条会话（与侧栏点选同一个入口：悬浮着的会话这里只是占位，把它的窗口带到前面） */
 function openInMainView(sessionId: string): void {
   useChatStore.getState().setActiveSessionId(sessionId)
+  if (usePinChatStore.getState().pinnedSessionIds.has(sessionId)) {
+    void window.api.pinChat.focus(sessionId)
+  }
 }
 
 /**
