@@ -505,6 +505,8 @@ export function chatPane(main: CdpClient): ChatPane {
   const TEXTAREA = `document.querySelector('textarea:not([data-other-input])')`
   const ITEMS = `[...document.querySelectorAll('[data-msg-id]')]`
   const TOOLS = `[...document.querySelectorAll('[data-tool-name]')]`
+  const toolRowExpandedExpr = (index: number): string =>
+    `[...(${TOOLS}[${index}]?.children ?? [])].filter((c) => !c.querySelector(':scope > [data-tool-answer]')).length > 1`
   const SCROLLER = `document.querySelector('.conversation-scroller')`
   // 合并行的计数徽章：StepGroup 给它打了 data-group-count。不按 tabular-nums 样式类认 ——
   // 折叠头的步数、合并通知的条数也是同款徽章，按类认会把它们一并数进来
@@ -1022,11 +1024,11 @@ export function chatPane(main: CdpClient): ChatPane {
       await new Promise((r) => setTimeout(r, 250))
       return main.eval<string>(`(${TOOLS}[${index}]?.textContent ?? '').trim()`)
     },
-    // 展开态 = 摘要行原位不动 + 下方长出详情容器（见 ToolCallBlock 的两个返回分支）
-    toolRowExpanded: (index) =>
-      main.eval<boolean>(`(${TOOLS}[${index}]?.childElementCount ?? 0) > 1`),
+    // 展开态 = 摘要行原位不动 + 下方长出详情容器（见 ToolCallBlock 的两个返回分支）；
+    // 审批留下的那行（data-tool-answer）折叠时也在，不算详情
+    toolRowExpanded: (index) => main.eval<boolean>(toolRowExpandedExpr(index)),
     setToolRowExpanded: async (index, expanded) => {
-      const now = await main.eval<boolean>(`(${TOOLS}[${index}]?.childElementCount ?? 0) > 1`)
+      const now = await main.eval<boolean>(toolRowExpandedExpr(index))
       if (now === expanded) return
       await main.eval(`${TOOLS}[${index}]?.querySelector('button')?.click()`)
       await new Promise((r) => setTimeout(r, 250))
