@@ -9,6 +9,7 @@
   ],
   "overrides": {
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "@napi-rs/canvas": "0.1.100",
     "eslint-plugin-react-hooks": "7.0.1",
     "prettier": "3.8.1",
     "rollup": "4.62.2"

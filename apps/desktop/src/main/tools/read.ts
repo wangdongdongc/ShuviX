@@ -10,7 +10,7 @@
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { extname, join } from 'path'
 import { nativeImage } from 'electron'
-import { MarkItDown } from 'markitdown-ts'
+import type { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
 import { createFileToolSuite, parseImagePixelSize, type ReadDecoders } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
@@ -131,10 +131,27 @@ function planDownscale(width: number, height: number): { width: number; height: 
   return { width: targetWidth, height: targetHeight }
 }
 
-/** 单例 MarkItDown 实例 */
-let markitdownInstance: MarkItDown | null = null
-function getMarkItDown(): MarkItDown {
-  if (!markitdownInstance) markitdownInstance = new MarkItDown()
+/**
+ * 单例 MarkItDown 实例，第一次转换时才加载模块。
+ * 不能静态 import：markitdown-ts 一加载就 require pdf-parse，而 pdf-parse 内联的 pdf.js 在模块顶层
+ * `new DOMMatrix()`，DOMMatrix 只能靠可选原生依赖 @napi-rs/canvas 补上 —— 它在某个平台装不上时
+ * （v0.2.53 起的 Windows arm64 包就是这样）整个主进程启动即崩。延迟加载后最坏只是这一次 read 报错。
+ * 加载失败不缓存，下次再试。
+ */
+let markitdownInstance: Promise<MarkItDown> | null = null
+function getMarkItDown(): Promise<MarkItDown> {
+  if (!markitdownInstance) {
+    const loading = import('markitdown-ts').then(
+      ({ MarkItDown }) => new MarkItDown(),
+      (err: unknown) => {
+        markitdownInstance = null
+        const reason = err instanceof Error ? err.message : String(err)
+        log.error(`Failed to load markitdown-ts: ${reason}`)
+        throw new Error(`The document converter could not be loaded: ${reason}`)
+      }
+    )
+    markitdownInstance = loading
+  }
   return markitdownInstance
 }
 
@@ -157,7 +174,7 @@ async function readRichFile(
 ): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-  const md = getMarkItDown()
+  const md = await getMarkItDown()
   const result = await md.convert(absolutePath)
   if (!result || !result.markdown) {
     throw new Error(`Failed to convert: ${displayPath}`)
@@ -369,7 +386,7 @@ async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
   log.info(`Fetching URL: ${url}`)
   return readUrlContent(url, {
     fetch: (input, init) => readUrlSession().fetch(input, init),
-    convert: (response) => getMarkItDown().convert(response),
+    convert: async (response) => (await getMarkItDown()).convert(response),
     render: renderPage,
     userAgent: readUserAgent(),
     acceptLanguage: readAcceptLanguage(),

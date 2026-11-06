@@ -8,7 +8,8 @@
 // win-unpacked / win-arm64-unpacked），从路径认架构（含 arm64 → arm64，否则 x64），列出 asar 里
 // node_modules 顶层的平台包（名字里带 -<os>-<cpu>），按去掉平台后缀的「家族」分组：包里出现过的每个家族，
 // 只要 lockfile 里有它 <os>-<本架构> 的成员（上游发布了这个架构的二进制），包里就必须带着；上游没发布的
-// （@napi-rs/canvas 没有 win32-arm64）只记一行。
+// （@napi-rs/canvas 0.1.88 之前没有 win32-arm64 —— 那时的 Windows arm64 包一启动就崩在 pdf.js 顶层的
+// `new DOMMatrix()` 上，所以根 package.json 把它 override 到带 arm64 的版本）只记一行。
 //
 // 第二道：app.asar.unpacked 里每个原生二进制（.node、ripgrep、node-pty 的 spawn-helper …）读文件头
 // （ELF / Mach-O / PE）认出它是哪个系统、哪个 CPU 的 —— 本系统的二进制必须是本架构的。从源码编译的模块
