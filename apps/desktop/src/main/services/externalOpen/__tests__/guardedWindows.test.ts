@@ -30,8 +30,11 @@ const GUARD_CALL = /guardAppWindow\(/g
  * - widgetPreviewService：`shuvix widget preview` 的截图窗口从不显示、没人在看 —— guardAppWindow 会把外链交给
  *   系统打开，在这里就成了替 agent 开外站；它自己的守卫更严（弹窗、出 `/w/<id>/` 的导航、下载、权限一律拒，
  *   什么都不交给系统）。
+ * - readPageRenderer：read 工具的隐藏页面，同样从不显示、没人在看：弹窗、跳到非 http(s)、下载、权限一律拒，
+ *   什么都不交给系统。
  */
 const UNGUARDED_ALLOWLIST: Record<string, number> = {
+  'services/readPageRenderer.ts': 1,
   'services/widgetPreviewService.ts': 1
 }
 
@@ -43,6 +46,7 @@ const EXPECTED_WINDOW_FILES: Record<string, number> = {
   'services/markdownWindowService.ts': 1,
   'services/previewWindowService.ts': 1,
   'services/pinnedChatService.ts': 1,
+  'services/readPageRenderer.ts': 1,
   'services/widgetPreviewService.ts': 1,
   'services/widgetWindowService.ts': 1
 }

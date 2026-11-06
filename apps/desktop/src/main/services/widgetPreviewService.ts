@@ -41,6 +41,7 @@ import { widgetServer, widgetService } from './widget'
 import { installWidgetTokens, issueWidgetToken } from './widget/widgetToken'
 import { WIDGET_SCHEME_PARAM } from './widget/widgetTheme'
 import { rendersOffscreen } from '../utils/headless'
+import { SILENCE_DIALOGS } from '../utils/silenceDialogs'
 
 const log = createLogger('WidgetPreview')
 
@@ -80,15 +81,6 @@ const POLL_MS = 100
 const MAX_PAGE_ERRORS = 12
 /** 单个 CDP 命令 / executeJavaScript / capturePage 最多等多久 */
 const STEP_TIMEOUT_MS = 5_000
-
-/** 每个文档开头跑一遍：没人在看的窗口里，弹框与打印都不能真的出现 */
-const SILENCE_DIALOGS = `(() => {
-  const noop = () => undefined
-  window.alert = noop
-  window.confirm = () => false
-  window.prompt = () => null
-  window.print = noop
-})()`
 
 export interface PreviewImage {
   size: PreviewSize

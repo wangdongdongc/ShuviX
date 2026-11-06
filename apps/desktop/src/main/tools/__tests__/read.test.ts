@@ -36,6 +36,37 @@ const RICH_FILE_EXTENSIONS = ['pdf', 'docx', 'xlsx', 'xls', 'pptx', 'ipynb', 'zi
 const enforcePath = vi.hoisted(() =>
   vi.fn(async (_mode: string, _path: string, _opts: unknown): Promise<void> => {})
 )
+/** 门面 enforceUrl 的 spy（恒放行）—— read 读 URL 走的是它，不是 enforcePath */
+const enforceUrl = vi.hoisted(() =>
+  vi.fn(async (_url: unknown, _opts: unknown): Promise<void> => {})
+)
+
+/**
+ * read 的网络面：专用 session 的 fetch 回一个 HTML 页面（转换器是下面的 mock，不看正文），其余两条路（defaultSession /
+ * 全局 fetch）一调就算错。渲染是 readPageRenderer 的 renderPage，窗口那一面在它自己的单测里，这里换成 spy。
+ */
+const net = vi.hoisted(() => {
+  const respondHtml = async (): Promise<Response> =>
+    new Response(new TextEncoder().encode('<html><body>x</body></html>'), {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    })
+  const readSession = {
+    fetch: vi.fn(async (_url: string, _init: RequestInit): Promise<Response> => respondHtml()),
+    setUserAgent: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    on: vi.fn()
+  }
+  return {
+    respondHtml,
+    readSession,
+    fromPartition: vi.fn((_partition: string) => readSession),
+    defaultSessionFetch: vi.fn(),
+    renderPage: vi.fn(
+      async (_url: string, _signal?: AbortSignal): Promise<{ html: string } | null> => null
+    )
+  }
+})
 
 // mock toolContext（避免加载 projectDao/sessionService → electron app.getPath）
 vi.mock('../../services/toolContext', () => ({
@@ -56,6 +87,7 @@ vi.mock('../../services/toolContext', () => ({
     evaluate: () => ({ effect: 'allow', matched: [], winning: 'test' }),
     evaluateReadOnly: () => true,
     enforcePath,
+    enforceUrl,
     enforceCommand: async () => ({ status: 'allowed' }),
     enforceGitOp: async () => {}
   }),
@@ -93,7 +125,7 @@ function defaultImageStub(): {
 }
 const nativeImageStub = defaultImageStub()
 
-// mock electron — read.ts 需要 nativeImage（图片压缩）与 app.getPath（派生图落盘目录）
+// mock electron — read.ts 需要 nativeImage（图片压缩）、app.getPath（派生图落盘目录）与读 URL 的 session
 vi.mock('electron', () => {
   /** 按尺寸造一个 nativeImage 桩；resize 返回等比缩放后的新桩（getSize 随之变） */
   const makeImage = (width: number, height: number): Record<string, unknown> => ({
@@ -106,7 +138,11 @@ vi.mock('electron', () => {
     toDataURL: () => 'data:image/png;base64,'
   })
   return {
-    app: { getPath: () => USER_DATA_DIR, isPackaged: false },
+    app: { getPath: () => USER_DATA_DIR, isPackaged: false, getLocale: () => 'zh-CN' },
+    session: {
+      fromPartition: net.fromPartition,
+      defaultSession: { fetch: net.defaultSessionFetch }
+    },
     nativeImage: {
       createFromBuffer: () => {
         nativeImageStub.decodes++
@@ -156,19 +192,23 @@ vi.mock('../../logger', () => ({
 
 // mock markitdown-ts 和 word-extractor（避免不必要的加载）
 const markItDownConvert = vi.hoisted(() =>
-  vi.fn(async (source: string): Promise<{ title: string | null; markdown: string } | null> => {
-    // URL mock：模拟网页抓取
-    if (/^https?:\/\//i.test(source)) {
-      if (source.includes('empty-page')) {
-        return { title: null, markdown: '' }
+  vi.fn(
+    async (
+      source: string | Response
+    ): Promise<{ title: string | null; markdown: string } | null> => {
+      // URL：urlFetch 交来的是一份响应，地址在 response.url
+      if (source instanceof Response) {
+        if (source.url.includes('empty-page')) {
+          return { title: null, markdown: '' }
+        }
+        if (source.url.includes('fail-convert')) {
+          throw new Error('Network error')
+        }
+        return { title: 'Mock Page', markdown: '# Mock Page\n\nMock content from URL.' }
       }
-      if (source.includes('fail-convert')) {
-        throw new Error('Network error')
-      }
-      return { title: 'Mock Page', markdown: '# Mock Page\n\nMock content from URL.' }
+      return { title: null, markdown: '# Converted local rich' }
     }
-    return { title: null, markdown: '# Converted local rich' }
-  })
+  )
 )
 vi.mock('markitdown-ts', () => ({
   MarkItDown: class {
@@ -181,6 +221,12 @@ vi.mock('word-extractor', () => ({
       return { getBody: () => '' }
     }
   }
+}))
+
+// 只换 renderPage；readUrlSession / UA / 语言是真的（RD-URL 要看它们接没接对）
+vi.mock('../../services/readPageRenderer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/readPageRenderer')>()),
+  renderPage: net.renderPage
 }))
 
 import { makeReadTool } from '../read'
@@ -916,7 +962,7 @@ describe('read 工具 - 本地 HTML 原文', () => {
   it('RD-HTML-05 description 区分 URL、本地 HTML 与富文档转换', () => {
     const description = makeReadTool(ctx).description
 
-    expect(description).toMatch(/URLs \(http\/https\).*converts to Markdown/i)
+    expect(description).toMatch(/URLs \(http\/https\).*converts it to Markdown/i)
     expect(description).toMatch(/text files[^;]*line numbers[^;]*offset\/limit/i)
 
     const localHtmlClause = description.match(/local HTML[\s\S]*?(?=For directories|$)/i)?.[0]
@@ -937,7 +983,46 @@ describe('read 工具 - 本地 HTML 原文', () => {
   })
 })
 
+/** Node 下没有 process.versions.chrome（Electron 才有）；readUrlSession / readUserAgent 要读它。下面图片那组也读 URL */
+const originalChrome = Object.getOwnPropertyDescriptor(process.versions, 'chrome')
+beforeAll(() => {
+  Object.defineProperty(process.versions, 'chrome', {
+    value: '142.0.7444.59',
+    configurable: true
+  })
+})
+afterAll(() => {
+  if (originalChrome) Object.defineProperty(process.versions, 'chrome', originalChrome)
+  else Reflect.deleteProperty(process.versions, 'chrome')
+})
+
 describe('read 工具 - URL 抓取', () => {
+  const globalFetch = vi.fn()
+
+  beforeAll(() => {
+    vi.stubGlobal('fetch', globalFetch)
+  })
+
+  afterAll(() => {
+    vi.unstubAllGlobals()
+  })
+
+  beforeEach(() => {
+    net.readSession.fetch.mockReset()
+    net.readSession.fetch.mockImplementation(net.respondHtml)
+    net.renderPage.mockReset()
+    net.renderPage.mockResolvedValue(null)
+    net.defaultSessionFetch.mockReset()
+    globalFetch.mockReset()
+    enforceUrl.mockReset()
+    enforceUrl.mockResolvedValue(undefined)
+    enforcePath.mockClear()
+    markItDownConvert.mockClear()
+  })
+
+  const sessionUserAgent = (): string =>
+    (net.readSession.fetch.mock.calls[0][1].headers as Record<string, string>)['User-Agent']
+
   it('RD-HTML-03 .html HTTPS URL 仍完整交给 convert 并返回 Markdown', async () => {
     const url = 'https://example.com/page.html'
     const tool = makeReadTool(ctx)
@@ -946,7 +1031,9 @@ describe('read 工具 - URL 抓取', () => {
     const details = result.details as { format: string; converted: boolean; url: string }
 
     expect(markItDownConvert).toHaveBeenCalledTimes(1)
-    expect(markItDownConvert.mock.calls[0][0]).toBe(url)
+    const source = markItDownConvert.mock.calls[0][0]
+    expect(source).toBeInstanceOf(Response)
+    expect((source as Response).url).toBe(url)
     expect(text).toContain(`URL: ${url}`)
     expect(text).toContain('— Mock Page —')
     expect(text).toContain('# Mock Page')
@@ -966,21 +1053,25 @@ describe('read 工具 - URL 抓取', () => {
     expect(text).toContain('— Mock Page —')
   })
 
-  it('URL 抓取失败返回合适的错误', async () => {
+  it('转换器抛错的 HTML 算没有正文：说页面读不出来，不带转换器的话', async () => {
+    const url = 'https://fail-convert.example.com'
     const tool = makeReadTool(ctx)
-    const msg = await failureText(
-      executeTool(tool, 'tc-url3', { path: 'https://fail-convert.example.com' })
+    const msg = await failureText(executeTool(tool, 'tc-url3', { path: url }))
+    expect(msg.startsWith(`Failed to fetch URL: the page at ${url} has no readable text.`)).toBe(
+      true
     )
-    expect(msg).toContain('Failed to fetch URL')
-    expect(msg).toContain('Network error')
+    expect(msg).not.toContain('Network error')
+    expect(net.renderPage).toHaveBeenCalledTimes(1)
   })
 
-  it('URL 返回空内容时报错', async () => {
+  it('URL 返回空内容时先渲染，还是没有就报错', async () => {
+    const url = 'https://empty-page.example.com'
     const tool = makeReadTool(ctx)
-    const msg = await failureText(
-      executeTool(tool, 'tc-url4', { path: 'https://empty-page.example.com' })
+    const msg = await failureText(executeTool(tool, 'tc-url4', { path: url }))
+    expect(msg.startsWith(`Failed to fetch URL: the page at ${url} has no readable text.`)).toBe(
+      true
     )
-    expect(msg).toContain('Failed to fetch URL')
+    expect(net.renderPage).toHaveBeenCalledTimes(1)
   })
 
   it('http URL 也能正确识别', async () => {
@@ -991,6 +1082,185 @@ describe('read 工具 - URL 抓取', () => {
     const text = getText(result)
     expect(text).toContain('URL: http://example.com/page')
     expect(text).toContain('Mock content from URL.')
+  })
+
+  it('RD-URL-01 走 shuvix-read-url 分区的 fetch，不走 defaultSession 也不走全局 fetch', async () => {
+    const url = 'https://example.com/page'
+    await executeTool(makeReadTool(ctx), 'tc-url6', { path: url })
+    expect(net.fromPartition).toHaveBeenCalledWith('shuvix-read-url')
+    expect(net.readSession.fetch).toHaveBeenCalledTimes(1)
+    expect(net.readSession.fetch.mock.calls[0][0]).toBe(url)
+    expect(net.defaultSessionFetch).not.toHaveBeenCalled()
+    expect(globalFetch).not.toHaveBeenCalled()
+  })
+
+  it('RD-URL-02 UA 是内置 Chromium 主版本的 Chrome，没有 Electron / ShuviX；语言来自 app.getLocale', async () => {
+    await executeTool(makeReadTool(ctx), 'tc-url7', { path: 'https://example.com/page' })
+    const ua = sessionUserAgent()
+    expect(ua).toContain('Chrome/142.0.0.0')
+    expect(ua).not.toMatch(/Electron|ShuviX/)
+    const headers = net.readSession.fetch.mock.calls[0][1].headers as Record<string, string>
+    expect(headers['Accept-Language']).toBe('zh-CN,en;q=0.8')
+  })
+
+  it('RD-URL-03 session 只配置一次：UA、语言，权限一律拒，下载一律拦', async () => {
+    const tool = makeReadTool(ctx)
+    await executeTool(tool, 'tc-url8', { path: 'https://example.com/a' })
+    await executeTool(tool, 'tc-url9', { path: 'https://example.com/b' })
+    // 模块级只配一次；本文件之前的用例可能已经配过，所以按「总共一次」看
+    expect(net.readSession.setUserAgent).toHaveBeenCalledTimes(1)
+    const [ua, languages] = net.readSession.setUserAgent.mock.calls[0]
+    expect(ua).toContain('Chrome/142.0.0.0')
+    expect(languages).toBe('zh-CN,en;q=0.8')
+    expect(net.readSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1)
+    const decide = vi.fn()
+    const handler = net.readSession.setPermissionRequestHandler.mock.calls[0][0] as (
+      wc: unknown,
+      permission: string,
+      callback: (allowed: boolean) => void
+    ) => void
+    handler(null, 'geolocation', decide)
+    expect(decide).toHaveBeenCalledWith(false)
+    const check = net.readSession.setPermissionCheckHandler.mock.calls[0][0] as () => boolean
+    expect(check()).toBe(false)
+    const [eventName, onDownload] = net.readSession.on.mock.calls[0] as [
+      string,
+      (event: { preventDefault: () => void }) => void
+    ]
+    expect(eventName).toBe('will-download')
+    const preventDefault = vi.fn()
+    onDownload({ preventDefault })
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('RD-URL-04 非中止的错误只带一次 Failed to fetch URL: 前缀', async () => {
+    const url = 'https://example.com/missing'
+    net.readSession.fetch.mockResolvedValue(new Response(null, { status: 404 }))
+    const msg = await failureText(executeTool(makeReadTool(ctx), 'tc-url10', { path: url }))
+    expect(msg).toBe(`Failed to fetch URL: HTTP 404 from ${url}.`)
+  })
+
+  it('RD-URL-05 网络错误也只带一次前缀，错误链展开', async () => {
+    net.readSession.fetch.mockRejectedValue(
+      new TypeError('fetch failed', { cause: new Error('net::ERR_CONNECTION_REFUSED') })
+    )
+    const msg = await failureText(
+      executeTool(makeReadTool(ctx), 'tc-url11', { path: 'https://example.com/a' })
+    )
+    expect(msg).toBe('Failed to fetch URL: fetch failed <- net::ERR_CONNECTION_REFUSED')
+  })
+
+  it('RD-URL-06 中止：拒绝的错误恰好是 Aborted，没有前缀（工具层靠这句认出中止）', async () => {
+    const controller = new AbortController()
+    net.readSession.fetch.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+          controller.abort()
+        })
+    )
+    const error = await executeTool(
+      makeReadTool(ctx),
+      'tc-url12',
+      { path: 'https://example.com/a' },
+      controller.signal
+    ).then(
+      () => null,
+      (e: Error) => e
+    )
+    expect(error?.message).toBe('Aborted')
+  })
+
+  it('RD-URL-07 渲染时中止：恰好是 Aborted，渲染拿到的是这次调用的 signal', async () => {
+    const controller = new AbortController()
+    net.readSession.fetch.mockResolvedValue(new Response(null, { status: 403 }))
+    net.renderPage.mockImplementation(async () => {
+      controller.abort()
+      return null
+    })
+    const error = await executeTool(
+      makeReadTool(ctx),
+      'tc-url13',
+      { path: 'https://example.com/a' },
+      controller.signal
+    ).then(
+      () => null,
+      (e: Error) => e
+    )
+    expect(error?.message).toBe('Aborted')
+    expect(net.renderPage).toHaveBeenCalledTimes(1)
+    expect(net.renderPage.mock.calls[0][0]).toBe('https://example.com/a')
+    expect(net.renderPage.mock.calls[0][1]).toBeInstanceOf(AbortSignal)
+  })
+
+  it('RD-URL-08 被拒绝时接上真的 renderPage 这条路：够一页的渲染结果进结果', async () => {
+    // mock 的转换器回一页很短的 Markdown（不够 300 字），所以这里换一个够长的
+    markItDownConvert.mockImplementationOnce(async () => ({
+      title: 'Rendered',
+      markdown: 'r'.repeat(400)
+    }))
+    net.readSession.fetch.mockResolvedValue(new Response(null, { status: 503 }))
+    net.renderPage.mockResolvedValue({ html: '<html><body>rendered</body></html>' })
+    const result = await executeTool(makeReadTool(ctx), 'tc-url14', {
+      path: 'https://example.com/a'
+    })
+    expect(getText(result)).toBe(
+      `URL: https://example.com/a — Rendered — converted to Markdown\n\n${'r'.repeat(400)}`
+    )
+  })
+
+  it('RD-URL-09 先过 enforceUrl（规整后的客体），不走 enforcePath', async () => {
+    const url = 'https://user:pw@Example.COM./page?q=1'
+    await executeTool(makeReadTool(ctx), 'tc-url15', { path: url })
+    expect(enforceUrl).toHaveBeenCalledTimes(1)
+    const [object, opts] = enforceUrl.mock.calls[0] as [
+      Record<string, unknown>,
+      Record<string, unknown>
+    ]
+    expect(object).toMatchObject({ scheme: 'https', host: 'example.com', browser: 'app' })
+    expect(String(object.url)).not.toContain('pw')
+    expect(opts).toMatchObject({ toolCallId: 'tc-url15', toolName: 'read', abortError: 'Aborted' })
+    expect(enforcePath).not.toHaveBeenCalled()
+    expect(enforceUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      net.readSession.fetch.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('RD-URL-10 enforceUrl 拒绝：不发任何请求、不渲染，错误是门的那一句', async () => {
+    enforceUrl.mockRejectedValue(new Error('Blocked by policy'))
+    const msg = await failureText(
+      executeTool(makeReadTool(ctx), 'tc-url16', { path: 'https://example.com/a' })
+    )
+    expect(msg).toContain('Blocked by policy')
+    expect(msg).not.toContain('Failed to fetch URL')
+    expect(net.readSession.fetch).not.toHaveBeenCalled()
+    expect(net.renderPage).not.toHaveBeenCalled()
+    expect(markItDownConvert).not.toHaveBeenCalled()
+  })
+
+  it('RD-URL-11 本地文件不问 enforceUrl', async () => {
+    await executeTool(makeReadTool(ctx), 'tc-url17', { path: join(TEST_DIR, 'hello.txt') })
+    expect(enforceUrl).not.toHaveBeenCalled()
+    expect(enforcePath).toHaveBeenCalled()
+  })
+
+  it('RD-URL-12 JSON 不进转换器：原样返回，converted=false', async () => {
+    const url = 'https://example.com/data.json'
+    net.readSession.fetch.mockResolvedValue(
+      new Response(new TextEncoder().encode('{"a":\n\n1}'), {
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    const result = await executeTool(makeReadTool(ctx), 'tc-url18', { path: url })
+    expect(getText(result)).toBe(`URL: ${url} (application/json)\n\n{"a":\n\n1}`)
+    expect(detailsOf(result).converted).toBe(false)
+    expect(markItDownConvert).not.toHaveBeenCalled()
+  })
+
+  it('RD-URL-13 description 说明文本原样返回、隐藏页面没有登录', () => {
+    const description = makeReadTool(ctx).description
+    expect(description).toMatch(/JSON, XML and other text come back as they are/)
+    expect(description).toMatch(/hidden browser page, without any login/)
   })
 })
 

@@ -4,7 +4,7 @@
  * 支持通过 markitdown-ts 将 PDF/Office/IPYNB/ZIP 等格式转换为 Markdown
  * 本地 HTML/HTM 按普通文本源码读取
  * 支持通过 word-extractor 提取旧版 .doc 文件文字
- * 支持通过 markitdown-ts 抓取 URL 并转换为 Markdown
+ * 支持抓取 URL：HTML 等转换为 Markdown，其余文本原样返回（见 utils/toolUtils/urlFetch）
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
@@ -17,6 +17,13 @@ import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPre
 import { formatSize } from '../../shared/node/truncate'
 import { suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
 import { getToolResultsDir } from '../utils/paths'
+import { readUrlContent } from '../utils/toolUtils/urlFetch'
+import {
+  readAcceptLanguage,
+  readUrlSession,
+  readUserAgent,
+  renderPage
+} from '../services/readPageRenderer'
 import {
   KNOWN_BINARY_EXTENSIONS,
   IMAGE_MIME_BY_EXT,
@@ -37,15 +44,6 @@ type ReadResult = ToolResult<ReadToolDetails>
 function isUrl(path: string): boolean {
   return /^https?:\/\//i.test(path)
 }
-
-/** URL 抓取超时时间（毫秒） */
-const FETCH_TIMEOUT_MS = 30_000
-
-/** URL 响应体最大字节数（5MB） */
-const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
-
-/** URL 抓取 User-Agent */
-const FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; ShuviX/1.0)'
 
 /** markitdown-ts 本地文件转换扩展名；HTML/HTM 走普通文本源码路径 */
 const RICH_FILE_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.ipynb', '.zip'])
@@ -366,59 +364,18 @@ async function readLegacyDoc(
   }
 }
 
-/**
- * URL 抓取：通过 markitdown-ts 抓取网页并转换为 Markdown
- * 自定义 fetch 实现超时、User-Agent、响应体大小限制
- */
+/** URL 抓取：编码、大小限制和错误说明在 urlFetch，这里只接上 Electron 的网络栈、隐藏页面渲染和 markitdown */
 async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
-  if (signal?.aborted) throw new Error(TOOL_ABORTED)
-
   log.info(`Fetching URL: ${url}`)
-
-  const customFetch: typeof globalThis.fetch = async (input, init) => {
-    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
-    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
-
-    const response = await globalThis.fetch(input, {
-      ...init,
-      signal: combinedSignal,
-      headers: {
-        'User-Agent': FETCH_USER_AGENT,
-        ...((init?.headers as Record<string, string>) || {})
-      }
-    })
-
-    // 检查 Content-Length（如果存在）
-    const contentLength = response.headers.get('content-length')
-    if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BYTES) {
-      throw new Error(
-        `Response too large (${formatSize(parseInt(contentLength, 10))}). ` +
-          `Maximum allowed: ${formatSize(MAX_RESPONSE_BYTES)}.`
-      )
-    }
-
-    return response
-  }
-
-  const md = getMarkItDown()
-  const result = await md.convert(url, { fetch: customFetch })
-  if (!result || !result.markdown) {
-    throw new Error(`Failed to fetch or convert URL: ${url}`)
-  }
-
-  const title = result.title ? ` — ${result.title}` : ''
-  const header = `URL: ${url}${title} — converted to Markdown\n\n`
-
-  return {
-    content: [{ type: 'text' as const, text: header + result.markdown }],
-    details: {
-      type: 'read',
-      format: 'URL',
-      converted: true,
-      truncated: false,
-      url
-    }
-  }
+  return readUrlContent(url, {
+    fetch: (input, init) => readUrlSession().fetch(input, init),
+    convert: (response) => getMarkItDown().convert(response),
+    render: renderPage,
+    userAgent: readUserAgent(),
+    acceptLanguage: readAcceptLanguage(),
+    signal,
+    abortError: TOOL_ABORTED
+  })
 }
 
 /**

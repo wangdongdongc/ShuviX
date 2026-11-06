@@ -23,6 +23,7 @@ import { applyWrite } from '../fileTools/write'
 import { applyEdit } from '../fileTools/edit'
 import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 import type { AccessMode, SecurityContext } from '../security/types'
+import { urlObjectOf } from '../security/urlObject'
 
 type ReadResult = ToolResult<ReadToolDetails>
 
@@ -361,8 +362,17 @@ abstract class FileToolBase<
     call?: ToolCallScope
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.abortError)
-    // read 的 URL 分支不走文件系统询问
-    if (this.mode === 'read' && this.isUrl(params.path)) return
+    // read 的 URL 分支不走文件系统询问，走地址判定：它可能在隐藏页面里运行这个页面的脚本。缺省没有策略，直接放行
+    if (this.mode === 'read' && this.isUrl(params.path)) {
+      await this.deps.security.enforceUrl(urlObjectOf(params.path), {
+        toolCallId,
+        ...callOwnerOf(call),
+        toolName: this.name,
+        abortError: this.abortError,
+        signal
+      })
+      return
+    }
     const portPath = this.deps.resolvePath(params.path, this.mode)
     await this.refuseSymlink(params.path, portPath)
     if (this.mode === 'write') {

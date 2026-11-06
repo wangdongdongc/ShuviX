@@ -34,6 +34,7 @@ const CONSTRUCTORS = new Set(['BrowserWindow', 'WebContentsView'])
 const OFFSCREEN_SITES = [
   'services/browser/browserViewService.ts',
   'services/browser/stagingWindow.ts',
+  'services/readPageRenderer.ts',
   'services/widgetPreviewService.ts'
 ]
 
