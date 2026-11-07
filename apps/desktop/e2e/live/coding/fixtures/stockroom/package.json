@@ -1,0 +1,17 @@
+{
+  "name": "stockroom",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Inventory service for a small warehouse: HTTP API and CLI over a JSON file store.",
+  "bin": {
+    "stockroom": "bin/stockroom.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "seed": "node scripts/seed.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

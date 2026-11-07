@@ -46,7 +46,9 @@ export default defineConfig(
       '**/dist',
       '**/out',
       'resources/**',
-      'scripts/backfill-session-day-prompts.mjs'
+      'scripts/backfill-session-day-prompts.mjs',
+      // the coding probe's sample repo and graders: plain JS an agent works on, not ShuviX code
+      'e2e/live/coding/fixtures/**'
     ]
   },
   tseslint.configs.recommended,

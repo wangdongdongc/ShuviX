@@ -1,0 +1,15 @@
+date,description,amount,category
+2026-02-03,Grocery Outlet,62.25,food
+2026-02-05,Rent February,1500.00,rent
+2026-02-11,Metro card,33.00,transport
+2026-02-14,Cinema,24.50,fun
+2026-02-27,Farmers market,40.00,food
+2026-03-01,Rent March,1500.00,rent
+2026-03-04,Coffee beans,19.99,food
+2026-03-09,Bike repair,85.00,transport
+2026-03-15,Coffee,4.50,food
+2026-03-18,Refund cinema,-24.50,fun
+2026-03-22,Concert,58.75,fun
+2026-03-29,Groceries,71.30,food
+2026-04-01,Rent April,1500.00,rent
+2026-04-02,Taxi,27.40,transport

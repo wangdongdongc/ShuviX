@@ -1,0 +1,16 @@
+{
+  "name": "ledger",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Small personal finance CLI: import bank CSV exports and print reports.",
+  "bin": {
+    "ledger": "bin/ledger.js"
+  },
+  "scripts": {
+    "test": "TZ=America/New_York node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
