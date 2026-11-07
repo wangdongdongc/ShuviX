@@ -50,8 +50,8 @@ export interface SandboxPathEntry {
 export interface SandboxSessionInput {
   sessionId: string
   /**
-   * 临时目录按谁的 id 起名（缺省 = 本会话）。会话 fork 共用源会话的临时目录（`settings.tempDirOwner`）：人设里
-   * 冻结着那条路径，fork 沿用人设才命中缓存，命令就得真的用同一个目录
+   * 临时目录按谁的 id 起名（缺省 = 本会话）。会话 fork 共用源会话的临时目录、子会话共用父会话的
+   * （`settings.tempDirOwner`）：人设里冻结着那条路径，命令就得真的用同一个目录
    */
   tempOwnerId?: string
   workingDirectory: string

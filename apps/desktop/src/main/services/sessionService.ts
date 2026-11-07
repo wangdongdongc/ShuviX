@@ -171,7 +171,7 @@ function removeTempWorkspaceIfUnused(dir: string, owner: string): void {
 }
 
 /**
- * 删掉按 `owner` 起名的会话临时目录 —— 只在没人用它的时候：主人那一行还在，或还有 fork 的 `settings.tempDirOwner`
+ * 删掉按 `owner` 起名的会话临时目录 —— 只在没人用它的时候：主人那一行还在，或还有 fork / 子会话的 `settings.tempDirOwner`
  * 指着它，就留着（与临时工作区同一条规则）
  */
 function removeTempDirIfUnused(owner: string): void {
@@ -402,6 +402,7 @@ export class SessionService {
    * 有项目时忽略。同样只有主进程能给。子会话不看 options，随父会话此刻解析出的工作目录：父会话自带的目录，
    * 或父会话的临时工作区 —— 与 fork 同一条（`insertForkRow`），子会话和父会话读写的是同一批文件（用户
    * 2026-10-22：子会话几乎必然要读写父会话的工作区）；借来的临时工作区直到用它的最后一条会话被删才删（见 `delete`）。
+   * 会话临时目录同样随父会话（`settings.tempDirOwner`，有没有项目都一样），也是最后一条用它的会话被删才删。
    *
    * `options.id` 由调用方定 id（P2-10 PIN-05，子会话 create 动作的重跑幂等）：同一父会话下已有这一行 →
    * 原样交回、什么都不写；这个 id 落在别的父会话（或根上）→ 抛错。同样只有主进程能给。
@@ -448,6 +449,10 @@ export class SessionService {
       : chromeTab
         ? undefined
         : options?.workingDirectory
+    // 临时目录也随父会话（它借的那个、否则父会话自己的），项目会话的子会话一样：派给子会话的是同一件事，父会话
+    // 交代任务时写的是自己那个临时目录里的路径（基线、造好的数据），各用各的就是子会话往那里写要询问、受限命令
+    // 被沙箱拒（coding probe 2026-11-06，两个模型都撞上）。父会话行不在 → 用自己的
+    const tempDirOwner = parent && parentId ? (parent.settings.tempDirOwner ?? parentId) : undefined
 
     // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
     const bot = chromeTab ? undefined : params?.bot?.trim() || undefined
@@ -480,6 +485,7 @@ export class SessionService {
         // 自带工作目录只给无项目会话：有项目时工作目录恒为项目根。子会话随父会话（与 projectId
         // 同一条理由 —— 工作目录是会话的地基；父会话用临时工作区就共用那一个），调用方给的不算
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
+        ...(tempDirOwner ? { tempDirOwner } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
         ...(workProject ? { workProject } : {}),
@@ -1028,7 +1034,8 @@ export class SessionService {
     deleteSessionArtifacts(id)
     // 摆给用户看的图的快照（show_image / 带图提议）：只有这场对话的历史指着它们
     removeShownImages(id)
-    // 每会话的临时目录（/private/tmp/shuvix-<uid>/<8hex>）：它自己的那一个，以及它借用的那一个（fork 共用源会话的）
+    // 每会话的临时目录（/private/tmp/shuvix-<uid>/<8hex>）：它自己的那一个，以及它借用的那一个（fork 共用源会话的、
+    // 子会话共用父会话的）
     // —— 都只在已经没有会话用它的时候删
     removeTempDirIfUnused(id)
     if (tempDirOwner && tempDirOwner !== id) removeTempDirIfUnused(tempDirOwner)

@@ -1161,7 +1161,7 @@ app.whenReady().then(async () => {
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
   // 系统提示词里「临时文件」那一行的目录（每个平台都有，与沙箱开不开无关）
   setSessionTempDirResolver(ensureSessionTempDir)
-  // 临时目录借的是谁的：会话 fork 共用源会话的（settings.tempDirOwner）
+  // 临时目录借的是谁的：会话 fork 共用源会话的、子会话共用父会话的（settings.tempDirOwner）
   setSessionTempOwnerResolver(
     (sessionId) => sessionRecords.pickSettings(sessionId, ['tempDirOwner'])?.tempDirOwner
   )

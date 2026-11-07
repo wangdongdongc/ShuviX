@@ -56,6 +56,16 @@
  *   FT-11 (C11) settings 是坏 JSON 的一行：照样删完，自己的临时目录也删
  *   FT-12 (C12) 临时会话 + fork：临时工作区与临时目录各自「最后一个用它的删掉时才删」，两种次序都对
  *
+ * 子会话也借父会话的临时目录（create 写 `settings.tempDirOwner`，有没有项目都一样；2026-11-06 coding probe：父会话
+ * 交代任务时写的是自己临时目录里的路径）：
+ *   ST-1 项目父会话 P、临时父会话 T 的子会话 → tempDirOwner = P / T
+ *   ST-2 孙会话、fork 的子会话、子会话的 fork → 都指向最初的主人
+ *   ST-3 父指针指向不存在的行 → 不写这个键（用自己的）
+ *   ST-4 单删子会话 C → 不删 P 的；再删 P → 删一次
+ *   ST-5 删 P 级联 C → P 的删一次
+ *   ST-6 内存父会话：子会话也是内存会话、借着 P 的；existsWithTempDirOwner 看得见内存行；删 P → 删
+ *   ST-7 这个键出现前建的子会话（行里没有它）：删它删自己的，不动 P 的
+ *
  * 摆给用户看的图的快照（`<userData>/shown/<id>/`，show_image；真的 utils/paths）随会话删除：
  *   DEL-1 delete(S) 删 shown/S；shown/T 与 shown/ 本身都在
  *   DEL-2 删 fork F 不动 shown/S
@@ -1085,4 +1095,93 @@ describe('FT-7..12 the session temp folder a fork borrows (tempDirOwner)', () =>
       expect(existsSync(tempOf('F'))).toBe(false)
     }
   )
+})
+
+// ─── ST-1..7：子会话借父会话的临时目录 ─────────────────
+
+describe('ST-1..7 a sub-session borrows its parent’s session temp folder (tempDirOwner)', () => {
+  const cleaned = (): string[] => vi.mocked(cleanupSandboxSession).mock.calls.map(([id]) => id)
+  const ownerOf = (id: string): string | undefined =>
+    sessionRecords.findById(id)!.settings.tempDirOwner
+
+  beforeEach(() => {
+    vi.mocked(cleanupSandboxSession).mockClear()
+  })
+
+  it('ST-1 the child of a project session and the child of a temp session both point at their parent', () => {
+    const P = insertRaw('P', { projectId: 'p1' })
+    createTemp('C', { parentId: P })
+    expect(ownerOf('C')).toBe(P)
+
+    const T = createTemp('T')
+    createTemp('D', { parentId: T })
+    expect(ownerOf('D')).toBe(T)
+    // 根会话自己不借
+    expect(ownerOf(T)).toBeUndefined()
+  })
+
+  it('ST-2 a grandchild, the child of a fork and the fork of a child all point at the first owner', () => {
+    const P = insertRaw('P', { projectId: 'p1' })
+    createTemp('C', { parentId: P })
+    createTemp('G', { parentId: 'C' })
+    expect(ownerOf('G')).toBe(P)
+
+    forkOf('C', 'CF')
+    expect(ownerOf('CF')).toBe(P)
+
+    const S = insertRaw('S', { projectId: 'p1' })
+    forkOf(S, 'F')
+    createTemp('FC', { parentId: 'F' })
+    expect(ownerOf('FC')).toBe(S)
+  })
+
+  it('ST-3 a parent pointer to a missing row writes no key, so the child uses its own folder', () => {
+    createTemp('C', { parentId: 'gone' })
+    expect(sessionRecords.findById('C')!.settings).not.toHaveProperty('tempDirOwner')
+  })
+
+  it('ST-4 deleting the child alone keeps the parent’s folder; deleting the parent then removes it once', async () => {
+    const P = insertRaw('P', { projectId: 'p1' })
+    createTemp('C', { parentId: P })
+
+    await sessionService.delete('C')
+    expect(cleaned()).not.toContain(P)
+
+    await sessionService.delete(P)
+    expect(cleaned().filter((id) => id === P)).toHaveLength(1)
+  })
+
+  it('ST-5 deleting the parent (cascading the child and grandchild) removes the parent’s folder once', async () => {
+    const P = insertRaw('P', { projectId: 'p1' })
+    createTemp('C', { parentId: P })
+    createTemp('G', { parentId: 'C' })
+
+    await sessionService.delete(P)
+    expect(sessionRecords.findById('C')).toBeUndefined()
+    expect(sessionRecords.findById('G')).toBeUndefined()
+    expect(cleaned().filter((id) => id === P)).toHaveLength(1)
+  })
+
+  it('ST-6 an in-memory parent: the in-memory child borrows its folder, the lookup sees it, and deleting the parent removes it', async () => {
+    const P = insertRaw('P', {}, true)
+    createTemp('C', { parentId: P })
+    expect(sessionRecords.isEphemeral('C')).toBe(true)
+    expect(ownerOf('C')).toBe(P)
+    expect(sessionRecords.existsWithTempDirOwner(P)).toBe(true)
+    expect(sessionRecords.existsWithTempDirOwner('C')).toBe(false)
+
+    await sessionService.delete(P)
+    expect(sessionRecords.findById('C')).toBeUndefined()
+    expect(sessionRecords.existsWithTempDirOwner(P)).toBe(false)
+    expect(cleaned()).toContain(P)
+  })
+
+  it('ST-7 a child created before the key existed keeps its own folder: deleting it removes its own, not the parent’s', async () => {
+    const P = insertRaw('P', { projectId: 'p1' })
+    insertRaw('OLD', { projectId: 'p1', parentId: P })
+
+    await sessionService.delete('OLD')
+    expect(cleaned()).toContain('OLD')
+    expect(cleaned()).not.toContain(P)
+  })
 })

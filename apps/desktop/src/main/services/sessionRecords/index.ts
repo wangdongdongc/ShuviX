@@ -143,8 +143,14 @@ export class SessionRecords {
     return sessionDao.existsWithWorkingDirectory(dir)
   }
 
-  /** 有没有会话的 `settings.tempDirOwner` 正是 `owner`（fork 借着那条会话的临时目录）。内存会话从不被 fork，只查表 */
+  /**
+   * 有没有会话（持久的或活着的内存会话）的 `settings.tempDirOwner` 正是 `owner` —— fork 借源会话的临时目录、子会话
+   * 借父会话的；内存会话从不被 fork，但它的子会话也是内存会话，同样借着
+   */
   existsWithTempDirOwner(owner: string): boolean {
+    for (const row of this.ephemeral.values()) {
+      if (parseRow(row).settings.tempDirOwner === owner) return true
+    }
     return sessionDao.existsWithTempDirOwner(owner)
   }
 

@@ -232,7 +232,7 @@ export function whyUnconfined(): UnpinnedReason {
 
 /**
  * 会话的临时目录按谁的 id 起名 —— 主进程启动时注入（sessionService 读 `settings.tempDirOwner`：会话 fork 共用
- * 源会话的那一个）。没注入（单测）/ 读不出 → 本会话自己的。
+ * 源会话的那一个、子会话共用父会话的）。没注入（单测）/ 读不出 → 本会话自己的。
  */
 let tempOwnerOf: (sessionId: string) => string | undefined = () => undefined
 

@@ -162,15 +162,30 @@ describe('create —— 子会话的 parentId 与项目继承', () => {
   })
 
   it('传 parentId ⇒ projectId 恒随父会话（调用方传的被忽略）', () => {
-    mocks.daoPick.mockReturnValue({ projectId: 'parent-project' })
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project', settings: {} })
     sessionService.create({ parentId: 'P', projectId: 'somewhere-else' })
     expect(inserted()).toMatchObject({ parentId: 'P', projectId: 'parent-project' })
   })
 
   it('父会话是临时会话（无项目）⇒ 子会话也无项目', () => {
-    mocks.daoPick.mockReturnValue({ projectId: null })
+    mocks.daoPick.mockReturnValue({ projectId: null, settings: {} })
     sessionService.create({ parentId: 'P', projectId: 'p9' })
     expect(inserted()).toMatchObject({ parentId: 'P', projectId: null })
+  })
+
+  it('子会话借父会话的临时目录：父会话自己借着的那个（fork）优先，否则父会话本身；顶层会话不写这个键', () => {
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project', settings: {} })
+    sessionService.create({ parentId: 'P' })
+    expect((inserted().settings as Record<string, unknown>).tempDirOwner).toBe('P')
+
+    vi.clearAllMocks()
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project', settings: { tempDirOwner: 'S' } })
+    sessionService.create({ parentId: 'P' })
+    expect((inserted().settings as Record<string, unknown>).tempDirOwner).toBe('S')
+
+    vi.clearAllMocks()
+    sessionService.create({ projectId: 'p1' })
+    expect(inserted().settings).not.toHaveProperty('tempDirOwner')
   })
 
   it('父会话行已不存在 ⇒ 退回调用方给的 projectId（不因为一个坏指针拒绝建会话）', () => {
@@ -187,7 +202,7 @@ describe('create —— 子会话的 parentId 与项目继承', () => {
     )
 
     vi.clearAllMocks()
-    mocks.daoPick.mockReturnValue({ projectId: 'parent-project' })
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project', settings: {} })
     const child = sessionService.create({ parentId: 'P' })
     expect(mocks.aclInitialize.mock.calls).toEqual([[child.id, { sessionId: 'P', fork: false }]])
     expect(mocks.daoInsert.mock.invocationCallOrder[0]).toBeLessThan(
