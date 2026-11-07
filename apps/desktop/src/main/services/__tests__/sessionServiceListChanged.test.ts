@@ -36,7 +36,8 @@ vi.mock('../../dao/sessionDao', () => ({
     pick: () => undefined,
     // 删除先读它借用的工作目录（会话 fork 共用的临时工作区），再判断临时工作区还有没有人用
     pickSettings: () => undefined,
-    existsWithWorkingDirectory: () => false
+    existsWithWorkingDirectory: () => false,
+    existsWithTempDirOwner: () => false
   }
 }))
 vi.mock('../../dao/sessionDayPromptDao', () => ({

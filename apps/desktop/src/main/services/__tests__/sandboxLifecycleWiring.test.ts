@@ -122,6 +122,7 @@ vi.mock('../../dao/sessionDao', () => ({
     insert: vi.fn(),
     findById: vi.fn(),
     deleteById: mocks.daoDeleteById,
+    existsWithTempDirOwner: () => false,
     findChildren: mocks.daoFindChildren,
     updateProjectId: vi.fn(),
     updateTitle: vi.fn()
@@ -291,6 +292,8 @@ beforeEach(() => {
     const source = row as unknown as Record<string, unknown>
     return Object.fromEntries(cols.map((c) => [c, structuredClone(source[c])]))
   })
+  // 删行就是真删：临时目录只在主人那一行没了、也没有 fork 借着它时才清（2026-11-06）
+  mocks.daoDeleteById.mockImplementation((id) => void sessions.delete(id))
   mocks.daoUpdateSettings.mockImplementation((id, patch) => {
     const row = sessions.get(id)
     if (row) row.settings = { ...row.settings, ...structuredClone(patch) }

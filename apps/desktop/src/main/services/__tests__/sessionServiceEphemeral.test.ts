@@ -141,7 +141,8 @@ vi.mock('../../dao/sessionDao', () => ({
     touch: mocks.daoTouch,
     touchActive: mocks.daoTouchActive,
     // 删除时判断临时工作区还有没有会话指着（会话 fork 共用）—— 这组用例里没有 fork
-    existsWithWorkingDirectory: vi.fn(() => false)
+    existsWithWorkingDirectory: vi.fn(() => false),
+    existsWithTempDirOwner: vi.fn(() => false)
   }
 }))
 vi.mock('../../dao/sessionAclDao', () => ({

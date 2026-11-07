@@ -1938,5 +1938,21 @@
     "costTokens": "The whole conversation (about {{tokens}} tokens) will be processed again at the uncached price once.",
     "cost": "The whole conversation will be processed again at the uncached price once.",
     "confirm": "Change anyway"
+  },
+  "systemPrompt": {
+    "staleTitle": "The system prompt's sources have changed",
+    "staleDetail": "Changed: {{sources}}. This conversation keeps using its original system prompt; nothing else is affected.",
+    "staleHint": "After a rebuild, the next message is sent with the new content; the prompt cache is lost once.",
+    "rebuild": "Rebuild system prompt",
+    "rebuildBusy": "The session is running. Rebuild once it stops.",
+    "listSeparator": ", ",
+    "source": {
+      "persona": "agent profile",
+      "placeholders": "ShuviX built-in notes",
+      "project_instructions": "instruction file",
+      "project_prompt": "project prompt",
+      "knowledge_bases": "knowledge bases",
+      "bot_profile": "bot persona and memory"
+    }
   }
 }

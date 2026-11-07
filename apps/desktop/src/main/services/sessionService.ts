@@ -1,3 +1,7 @@
+import type {
+  RebuildSystemPromptResult,
+  SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
 import { v7 as uuidv7 } from 'uuid'
 import {
   isSessionScopedToolName,
@@ -164,6 +168,15 @@ function removeTempWorkspaceIfUnused(dir: string, owner: string): void {
   } catch {
     /* 删不掉只是留下一个临时目录，不值得让删会话失败 */
   }
+}
+
+/**
+ * 删掉按 `owner` 起名的会话临时目录 —— 只在没人用它的时候：主人那一行还在，或还有 fork 的 `settings.tempDirOwner`
+ * 指着它，就留着（与临时工作区同一条规则）
+ */
+function removeTempDirIfUnused(owner: string): void {
+  if (sessionRecords.pick(owner, ['id']) || sessionRecords.existsWithTempDirOwner(owner)) return
+  cleanupSandboxSession(owner)
 }
 
 /**
@@ -520,6 +533,8 @@ export class SessionService {
     if (from.agentProfile) settings.agentProfile = from.agentProfile
     if (from.model) settings.model = { ...from.model }
     if (from.thinkingLevel) settings.thinkingLevel = from.thinkingLevel
+    // 临时目录共用源会话的（它借的那个、否则它自己的）：人设里冻结着那条路径，fork 沿用人设才命中缓存
+    settings.tempDirOwner = from.tempDirOwner ?? source.id
     if (!source.projectId) {
       settings.workingDirectory = workingDirectoryOf(
         source.id,
@@ -877,6 +892,45 @@ export class SessionService {
     }
   }
 
+  /**
+   * 冻结的系统提示词与此刻的来源比一比（`agent.systemPromptStatus`，2026-11-06）：会话存储在才打开（peek，从不创建），
+   * 不连服务器、什么也不写。没有存储 / 旧格式 / 读的途中关了 → `frozen: false`。
+   */
+  async systemPromptStatus(sessionId: string): Promise<SystemPromptStatus> {
+    const none: SystemPromptStatus = { frozen: false, stale: [] }
+    const durable = await this.peekDurableSession(sessionId).catch((err: unknown) => {
+      log.warn(`打开会话失败 session=${sessionId}: ${err}`)
+      return undefined
+    })
+    if (!durable) return none
+    try {
+      return await durable.systemPromptStatus()
+    } catch (error) {
+      if (error instanceof SessionClosedError) return none
+      throw error
+    }
+  }
+
+  /**
+   * 用户点了「重建系统提示词」：删掉冻结的那份（有 agent 一并销毁，与芯片上的 X 一样清掉桌面侧随 agent 的状态），
+   * 下一条消息按此刻的来源重新渲染。会话在跑 / 被中断 → `busy`。没有存储 = 本来就没冻结，什么都不用做。
+   */
+  async rebuildSystemPrompt(sessionId: string): Promise<RebuildSystemPromptResult> {
+    const durable = await this.peekDurableSession(sessionId)
+    if (!durable) return { success: true }
+    let result: RebuildSystemPromptResult
+    try {
+      result = await durable.rebuildSystemPrompt()
+    } catch (error) {
+      // 会话正在关（LRU / 退出）：当忙处理，界面稍后再问
+      if (error instanceof SessionClosedError) return { success: false, reason: 'busy' }
+      throw error
+    }
+    if (result.success) clearAgentScopedState(sessionId)
+    log.info(`rebuildSystemPrompt session=${sessionId}: ${result.success ? 'ok' : result.reason}`)
+    return result
+  }
+
   /** 改模型 / 勾选要作用到的那条会话：开着就是它；没开着但锁镜像说锁着 → peek 打开；否则没有 */
   private async agentSessionFor(sessionId: string): Promise<DurableSession | undefined> {
     const open = this.host.get(sessionId)
@@ -943,8 +997,11 @@ export class SessionService {
     // 临时会话的子会话用的是父会话的（见 create）。
     // 设置是坏 JSON 的一行读不出来（`->` 抛错）—— 那就当它没借用什么，删除照样做完
     let sharedWorkspace: string | undefined
+    let tempDirOwner: string | undefined
     try {
-      sharedWorkspace = sessionRecords.pickSettings(id, ['workingDirectory'])?.workingDirectory
+      const own = sessionRecords.pickSettings(id, ['workingDirectory', 'tempDirOwner'])
+      sharedWorkspace = own?.workingDirectory
+      tempDirOwner = own?.tempDirOwner
     } catch (err) {
       log.warn(`删除会话时读不出设置 session=${id}: ${err}`)
     }
@@ -971,8 +1028,10 @@ export class SessionService {
     deleteSessionArtifacts(id)
     // 摆给用户看的图的快照（show_image / 带图提议）：只有这场对话的历史指着它们
     removeShownImages(id)
-    // 沙箱的每会话临时目录（/private/tmp/shuvix-<uid>/<8hex>）
-    cleanupSandboxSession(id)
+    // 每会话的临时目录（/private/tmp/shuvix-<uid>/<8hex>）：它自己的那一个，以及它借用的那一个（fork 共用源会话的）
+    // —— 都只在已经没有会话用它的时候删
+    removeTempDirIfUnused(id)
+    if (tempDirOwner && tempDirOwner !== id) removeTempDirIfUnused(tempDirOwner)
   }
 
   // ─── 会话运行时（SessionHost + AgentSession 门面） ──────────────────
@@ -1240,6 +1299,7 @@ export class SessionService {
 
   /**
    * 销毁这条会话的 agent（agent 芯片上的 X、钉档案、清空之前；下一次发送按那时的配置重建）。
+   * 冻结的系统提示词不碰（历史状态不变）：换它走 `rebuildSystemPrompt`。
    * 会话没开着也作用到它（peek：存储在才打开，从不创建；旧格式不碰）。**返回的 Promise 落定时 agent
    * 已经停下并解锁**（忙 / 被中断的先中止）—— 调用方 await 之后再动会话。桌面侧随 agent 的状态
    * （fileTime、沙箱钉子）不论有没有 agent 都清。

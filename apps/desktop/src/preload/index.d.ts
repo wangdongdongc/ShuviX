@@ -1,3 +1,7 @@
+import type {
+  RebuildSystemPromptResult,
+  SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
 import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
 import type { TriggerLogEntry, TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
 import type { TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
@@ -409,6 +413,10 @@ declare global {
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（只读） */
       previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
+      /** 冻结的系统提示词与此刻的来源比一比（只读）：哪几段的来源改了 */
+      systemPromptStatus: (sessionId: string) => Promise<SystemPromptStatus>
+      /** 重建系统提示词：删掉冻结的那份，下一条消息重新渲染（会话在跑 → busy） */
+      rebuildSystemPrompt: (sessionId: string) => Promise<RebuildSystemPromptResult>
       /** 各会话此刻挂着几条询问（只列 > 0 的；窗口重建 / 客户端重连后补侧栏徽标） */
       askCounts: () => Promise<Record<string, number>>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */

@@ -2,8 +2,9 @@
  * DurableSession · agentInfo（P3-06 A / B 段：01–17）—— 一个对话上 agent 的运行时快照。
  *
  *  A  01 黄金 fixture：请求前后的快照 = fixture 输出 = 第一次请求的系统提示词 · 02 真 createAgent 路径（快照不重算
- *     人设、不重读配置）· 03 活段落变了：快照只读、给的是下一次请求那份（PIN-07）· 04 段落抛错：保留已显示的、
- *     记一条警告、从不拒绝 · 05 工具（K6 次序、描述逐字节、参数名、label）· 06 模型（注册表现查、input 是副本）·
+ *     人设、不重读配置）· 03 段落的来源变了：快照只读、仍是冻结的那份、也是下一次请求那份（PIN-07；2026-11-06
+ *     系统提示词冻结）· 04 段落在第一次冻结时抛错：这一段不冻结、照旧现解析 —— 保留已显示的、每读一次记一条警告、
+ *     从不拒绝 · 05 工具（K6 次序、描述逐字节、参数名、label）· 06 模型（注册表现查、input 是副本）·
  *     07 模型从注册表里没了（PIN-05）· 08 思考档位是活的 · 09 messageCount（PIN-04）· 10 isStreaming ·
  *     11 被中断的会话 · 12 JSON 形状 · 13 什么都不跑 · 14 没 agent / 不认识 / 已关（PIN-02）
  *  B  15 派生 agent 的快照 · 16 两个对话同时在跑 · 17 宿主派发的 hook agent
@@ -21,6 +22,7 @@ import {
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
+import { AgentStateDoc } from '../docs'
 import { SessionClosedError, type DurableSession } from '../durableSession'
 import { normalizeToolNames } from '../agentSpec'
 import { fenceProjectPrompt } from '../prompt/fences'
@@ -67,8 +69,12 @@ function stable(info: AgentRuntimeInfo | undefined): Partial<AgentRuntimeInfo> {
 }
 
 /** agentInfo 自己记的那条段落警告 */
+/** 读快照时某段现解析失败（durable 的段落回调，「keeping its shown text」）—— 不含上锁冻结时那一条 */
 const sectionWarnings = (warnings: readonly string[]): string[] =>
-  warnings.filter((warning) => warning.includes('rendering system prompt section'))
+  warnings.filter((warning) => warning.includes('keeping its shown text'))
+/** 上锁冻结时某段渲染失败（这一段这次不冻结） */
+const freezeWarnings = (warnings: readonly string[]): string[] =>
+  warnings.filter((warning) => warning.includes('it is not frozen this time'))
 
 async function rootOf(session: DurableSession): Promise<Conversation> {
   return (await session.harness.conversation(ROOT, BG))!
@@ -142,7 +148,7 @@ describe('P3-06 A · agentInfo content', () => {
     expect(vars.state.calls).toBe(1)
   })
 
-  it('P3-06-03 a live section change: reading is read-only, and the snapshot is what the next request carries', async () => {
+  it('P3-06-03 a section source change: reading is read-only, the snapshot keeps the frozen text, and it is what the next request carries', async () => {
     const seam = { text: 'A' }
     const t = await makeHost({
       agentConfig: {
@@ -171,16 +177,18 @@ describe('P3-06 A · agentInfo content', () => {
     // G-02 的不变式：第二次请求没有新的 pi.system
     expect(systemMessages(t.kit.requests[1]!.messages)).toHaveLength(1)
 
+    // 来源变了：冻结的那份不变（重建才换，2026-11-06）
     seam.text = 'B'
     const entriesMid = (await allEntries(conversation)).length
     const switched = await session.agentInfo(ROOT)
     expect((await allEntries(conversation)).length).toBe(entriesMid)
-    expect(switched!.systemPrompt).toContain(fenceProjectPrompt('B'))
+    expect(switched!.systemPrompt).toBe(`Persona\n\n${fenceProjectPrompt('A')}`)
     expect(await session.submitUser('third')).toEqual({})
     expect(switched!.systemPrompt).toBe(t.kit.requests[2]!.systemPrompt)
+    expect(systemMessages(t.kit.requests[2]!.messages)).toHaveLength(1)
   })
 
-  it('P3-06-04 a throwing section: never rejects; omitted before any request, kept after one; one warning per read', async () => {
+  it('P3-06-04 a section that throws at the first freeze is not frozen and stays live: never rejects; omitted before any request, kept after one; one warning per read', async () => {
     const seam: { text: string; fail: boolean } = { text: 'A', fail: true }
     const t = await makeHost({
       agentConfig: {
@@ -196,6 +204,10 @@ describe('P3-06 A · agentInfo content', () => {
     })
     const session = await t.open()
     await session.createAgent()
+    // 冻结时抛错（D1）：上锁照样成功，这一段不进冻结的段落，记一条警告
+    expect(freezeWarnings(t.warnings)).toHaveLength(1)
+    expect(freezeWarnings(t.warnings)[0]).toContain('project_prompt')
+    expect((await session.harness.snapshot(AgentStateDoc, ROOT, BG))?.sections).toEqual({})
     const fresh = await session.agentInfo(ROOT)
     expect(fresh!.systemPrompt).toBe('Persona')
     expect(sectionWarnings(t.warnings)).toHaveLength(1)

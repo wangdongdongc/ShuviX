@@ -610,12 +610,17 @@ export {
 // 系统提示词分段（P1-08）：人设创建时冻结、其余四段现解析；日期通知走追加条目（两通道规则）
 export {
   computeFrozenAgentPrompt,
+  forgetFrozenPrompt,
   freezePersona,
+  freezeSections,
   frozenPersonaOf,
+  personaKeyOf,
   renderPersona,
+  reusableFrozenPrompt,
   type FrozenAgentPrompt,
   type PersonaHost,
-  type PersonaInput
+  type PersonaInput,
+  type PersonaKeyInput
 } from './durable/prompt/persona'
 export {
   botSectionText,
@@ -732,6 +737,7 @@ export {
   type AgentCreationErrorCode,
   type ComposedAgentTools,
   type CreateAgentOptions,
+  type DestroyAgentOptions,
   type LockRecord,
   type ReconfigureOutcome,
   type ReconfigurePreview

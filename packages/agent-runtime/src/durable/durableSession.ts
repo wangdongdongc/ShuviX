@@ -95,6 +95,10 @@ import {
 } from '@earendil-works/pi-durable'
 import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import type {
+  RebuildSystemPromptResult,
+  SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
@@ -498,9 +502,18 @@ export interface DurableSession {
   createAgent(options?: CreateAgentOptions): Promise<LockRecord>
   /**
    * 销毁 agent（解锁）：任何非辅助的 run 在跑 / 被中断（含面板追问的子 agent）先中止；卸掉所有
-   * `shuvix.agent.*`（派生 agent 的记录留着，按需重建）。没锁 = 无操作
+   * `shuvix.agent.*`（派生 agent 的记录留着，按需重建）。没锁 = 无操作。冻结的系统提示词不碰（历史状态不变）
    */
   destroyAgent(): Promise<void>
+  /**
+   * 冻结的系统提示词与此刻的来源比一比（只读，2026-11-06）：哪几段的来源改了。界面据此提醒用户
+   */
+  systemPromptStatus(): Promise<SystemPromptStatus>
+  /**
+   * 用户点了「重建系统提示词」：删掉这段对话冻结的系统提示词（有 agent 就一并销毁它），下一次发送按此刻的来源
+   * 重新渲染。会话在跑 / 被中断 → `busy`，什么都不动（不中止别人的工作）。
+   */
+  rebuildSystemPrompt(): Promise<RebuildSystemPromptResult>
   /**
    * 重配（2026-10-26）：会话设置里的模型 / 扩展勾选改了，就把它们作用到锁住的 agent —— 一个提交，从下一次请求
    * 起生效（运行中也是）。没锁 = `{ applied: false }`（下一次发送按设置创建）。模型被拒 / 被取消 / 宿主不支持 →
@@ -2448,6 +2461,24 @@ export class DurableSessionImpl implements DurableSession {
     } catch (error) {
       if (!(error instanceof SessionClosedError)) throw error
     }
+  }
+
+  async systemPromptStatus(): Promise<SystemPromptStatus> {
+    return this.op(() => this.agentLock.promptStatus())
+  }
+
+  async rebuildSystemPrompt(): Promise<RebuildSystemPromptResult> {
+    return this.op(() =>
+      // 与回退同一把区段：受理中的输入先进完，之后谁也建不了锁；那时还在跑 / 被中断就不动
+      this.section.exclusive(async (drain): Promise<RebuildSystemPromptResult> => {
+        this.assertOpen()
+        await drain()
+        // 主工作在跑 / 被中断才算忙（标题生成这类辅助工作不算：销毁不碰它们）
+        if (this.computeState() !== 'idle') return { success: false, reason: 'busy' }
+        await this.agentLock.destroy(undefined, { forgetPrompt: true })
+        return { success: true }
+      })
+    )
   }
 
   /**

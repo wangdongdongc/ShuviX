@@ -86,6 +86,8 @@ export const API_TABLE = {
     continue: invoke('agent:continue', 1),
     setModel: invoke('agent:setModel', 1),
     previewChange: invoke('agent:previewChange', 1),
+    systemPromptStatus: invoke('agent:systemPromptStatus', 1),
+    rebuildSystemPrompt: invoke('agent:rebuildSystemPrompt', 1),
     askCounts: invoke('agent:askCounts', 0),
     destroy: invoke('agent:destroy', 1),
     setThinkingLevel: invoke('agent:setThinkingLevel', 1),

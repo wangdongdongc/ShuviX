@@ -222,6 +222,16 @@ export class SessionDao extends BaseDao {
     return row !== undefined
   }
 
+  /** 有没有会话的 `settings.tempDirOwner` 正是 `owner`（fork 借着它的临时目录：删除时判断还有没有人用）。坏 JSON 的行跳过 */
+  existsWithTempDirOwner(owner: string): boolean {
+    const row = this.stmt(
+      `SELECT 1 FROM sessions
+        WHERE (CASE WHEN json_valid(settings) THEN json_extract(settings, '$.tempDirOwner') END) = ?
+        LIMIT 1`
+    ).get(owner)
+    return row !== undefined
+  }
+
   /** 删除会话。日历索引行由 sessionService.delete 显式清（FK CASCADE 未开）。 */
   deleteById(id: string): void {
     this.stmt('DELETE FROM sessions WHERE id = ?').run(id)

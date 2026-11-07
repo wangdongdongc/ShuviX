@@ -8,7 +8,9 @@
  *  1. 只读校验：源会话在、形态给（项目会话或临时会话，不是笔记本 / 标签页 / 内存会话）、存储是新格式；
  *  2. 在源会话的 `whileIdle` 里拷存储（有工作在跑 / 被中断 → `busy`，什么都不建）；源会话还没有存储
  *     （从没发过消息）→ 不拷，fork 就是一条抄了设置的空会话；
- *  3. 拷贝收尾（`resetForkedSessionState`：锁、driven-run 标记、待送达通知属于源会话那一场），再插行、
+ *  3. 拷贝收尾（`resetForkedSessionState`：driven-run 标记、待送达通知属于源会话那一场；**锁留着**，fork 沿用
+ *     源会话的 agent —— `adoptForkedAgent`，第一次打开按锁重建同一组工具、人设原样，提示词缓存不丢，
+ *     2026-11-06），再插行（临时目录共用源会话的：`tempDirOwner`）、
  *     拷 artifacts 与摆给用户看的图的快照；
  *  4. 给了 `messageId`：打开 fork、`branchAt` 那条回复（不合格 → 删掉 fork，`invalid_target`）；
  *  5. 广播一次列表变化。
@@ -124,8 +126,19 @@ export async function forkSession(params: SessionForkParams): Promise<SessionFor
 
   // 收尾 + 插行：行还没进库时出错，删掉拷出来的文件就是全部的收场
   try {
-    if (copied === 'copied') await resetForkedSessionState(await openDurableStorageFile(forkId))
+    let adopt = false
+    if (copied === 'copied') {
+      // 锁留着：fork 沿用源会话的 agent（同一份人设、同一组工具、同一个次序），第一次请求就命中源会话的
+      // 提示词缓存。临时目录随之共用（insertForkRow 的 tempDirOwner）—— 人设里冻结着那条路径
+      const { lockKept } = await resetForkedSessionState(await openDurableStorageFile(forkId), {
+        keepLock: true,
+        sessionId: forkId
+      })
+      adopt = lockKept
+    }
     sessionService.insertForkRow(source, forkId)
+    // 行进库之后才认领（插行失败就没有这条会话，不该留下进程内记录）；fork 此刻还没被打开过
+    if (adopt) getSessionHost().adoptForkedAgent(forkId)
   } catch (err) {
     log.warn(`会话 fork 收尾失败 ${source.id} → ${forkId}: ${errorText(err)}`)
     await deleteSessionStorage(forkId)

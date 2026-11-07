@@ -20,6 +20,9 @@
  *  - SPEC-SH 摆给用户看的图的快照目录（`<userData>/shown/<id>/`，show_image）**不在**会话自己的目录里：
  *    sessionOwnDirs 交出的哪一项都不等于、也不包含 `<userData>/shown` 或 `<userData>/shown/<sid>`（快照进了权限表，
  *    「摆一张表外的图、再 read 快照」就绕过了外部路径询问）；工作目录指到快照目录也不适合（workdir 为 null）；
+ *  - SP-3t 临时目录的主人（`tempOwnerId`，2026-11-06：会话 fork 共用源会话的临时目录）：给了 T → tmp =
+ *    tmpRoot/sessionTmpName(T)，规格的 tmpDir 与可写根用它；artifacts 与工具结果仍按本会话 id；不给 → 本会话
+ *    id；T 不安全 → sessionOwnDirs 为 null（规格不套沙箱）；
  *  - SP-3x 会话设置带来的目录（acceptableSettingDir，权限表 knowledge / skill 行的写法）：realpath；
  *    空串、`/`、覆盖家目录的 → null；
  *  - SP-3e 规格怎么用权限表的行：可读根 = 全部行 + 本会话临时目录 + ShuviX 自己的程序，可写根 = 可写的行
@@ -607,6 +610,77 @@ describe('SP-3 会话自己的目录（sessionOwnDirs）', () => {
       ])
     }
   })
+})
+
+describe('SP-3t 临时目录的主人（tempOwnerId）', () => {
+  const OWNER = 'source-session'
+  const OWNER_TMP = `${TMP_ROOT}/${sessionTmpName(OWNER)}`
+
+  it('SP-3t 给了主人 T：tmp = tmpRoot/sessionTmpName(T)；artifacts 与工具结果仍是本会话自己的', () => {
+    const own = sessionOwnDirs(
+      PATHS,
+      { sessionId: SID, workingDirectory: WS, tempOwnerId: OWNER },
+      identity
+    )
+    expect(own).toEqual({
+      workdir: WS,
+      workspaceUnsuitable: null,
+      tmp: OWNER_TMP,
+      artifacts: ARTIFACTS,
+      toolResults: TOOL_RESULTS_SID
+    })
+    expect(OWNER_TMP).not.toBe(TMP_DIR)
+  })
+
+  it('SP-3t 规格的 tmpDir、可写根、可读根与 socket 目录都用主人的临时目录，本会话自己的不出现', () => {
+    const own = sessionOwnDirs(
+      PATHS,
+      { sessionId: SID, workingDirectory: WS, tempOwnerId: OWNER },
+      identity
+    )
+    const result = buildSandboxSpec(
+      PATHS,
+      { sessionId: SID, tempOwnerId: OWNER, workingDirectory: WS, entries: ownRows(own) },
+      identity
+    )
+    if (!result.ok) throw new Error(result.reason)
+    const { spec } = result
+    expect(spec.tmpDir).toBe(OWNER_TMP)
+    expect(spec.writableRoots).toEqual([WS, OWNER_TMP, ARTIFACTS, TOOL_RESULTS_SID])
+    expect(spec.readableRoots).toContain(OWNER_TMP)
+    expect(spec.unixSocketDirs).toContain(OWNER_TMP)
+    for (const list of [spec.writableRoots, spec.readableRoots, spec.unixSocketDirs]) {
+      expect(list).not.toContain(TMP_DIR)
+    }
+  })
+
+  it('SP-3t 不给主人 → 本会话 id（与给了本会话 id 一样）', () => {
+    expect(ownOf()!.tmp).toBe(TMP_DIR)
+    expect(
+      sessionOwnDirs(PATHS, { sessionId: SID, workingDirectory: WS, tempOwnerId: SID }, identity)
+    ).toEqual(ownOf())
+    expect(specOf().tmpDir).toBe(TMP_DIR)
+  })
+
+  it.each(['', '..', 'a/b', 'a\\b'])(
+    'SP-3t 主人 %j 不安全：sessionOwnDirs 为 null，规格不套沙箱',
+    (owner) => {
+      expect(
+        sessionOwnDirs(
+          PATHS,
+          { sessionId: SID, workingDirectory: WS, tempOwnerId: owner },
+          identity
+        )
+      ).toBeNull()
+      expect(
+        buildSandboxSpec(
+          PATHS,
+          { sessionId: SID, tempOwnerId: owner, workingDirectory: WS, entries: [] },
+          identity
+        ).ok
+      ).toBe(false)
+    }
+  )
 })
 
 describe('SPEC-SH 快照目录不在会话自己的目录里', () => {

@@ -1938,5 +1938,21 @@
     "costTokens": "整段对话（约 {{tokens}} tokens）要按未缓存的价格重新计算一次。",
     "cost": "整段对话要按未缓存的价格重新计算一次。",
     "confirm": "仍然更改"
+  },
+  "systemPrompt": {
+    "staleTitle": "系统提示词的来源已更改",
+    "staleDetail": "{{sources}}已更改。这段对话仍沿用原来的系统提示词，不受影响。",
+    "staleHint": "重建后，下一条消息按新内容发送；提示词缓存会失效一次。",
+    "rebuild": "重建系统提示词",
+    "rebuildBusy": "会话正在运行，等它停下再重建。",
+    "listSeparator": "、",
+    "source": {
+      "persona": "智能体档案",
+      "placeholders": "ShuviX 内置说明",
+      "project_instructions": "指令文件",
+      "project_prompt": "项目提示词",
+      "knowledge_bases": "知识库",
+      "bot_profile": "Bot 人设与记忆"
+    }
   }
 }

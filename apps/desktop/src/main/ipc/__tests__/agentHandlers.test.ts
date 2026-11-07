@@ -23,6 +23,10 @@
  *   P3-11-07 `agent:withdrawQueued` 在 `createClientContext(ctx, sessionId)` 的上下文里把 `(sessionId, submissionId)`
  *           交给网关，回 `{ result }`；「下一轮」的通道不再注册。
  *   PAC-2   `agent:askCounts` 把网关的那份原样交回（不包、不改）。
+ *   IPC-SP-1 `agent:systemPromptStatus`（2026-11-06）把 sessionId 交给网关，状态原样交回（不包成 `{ success }`）；
+ *           只读，不进请求上下文；网关 reject → handler reject。
+ *   IPC-SP-2 `agent:rebuildSystemPrompt` 在 `createClientContext(ctx, sessionId)` 的请求上下文里把 sessionId 交给网关，
+ *           结果（success / busy）原样交回；网关 reject → handler reject。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -36,6 +40,8 @@ const state = vi.hoisted(() => ({
   gateway: {
     setModel: vi.fn<(sessionId: string, ...rest: unknown[]) => Promise<boolean>>(),
     previewAgentChange: vi.fn<(sessionId: string, change: unknown) => Promise<unknown>>(),
+    systemPromptStatus: vi.fn<(sessionId: string) => Promise<unknown>>(),
+    rebuildSystemPrompt: vi.fn<(sessionId: string) => Promise<unknown>>(),
     pendingAskCounts: vi.fn<() => Record<string, number>>(),
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
@@ -184,6 +190,47 @@ describe('RD-8 agent:previewChange', () => {
     await expect(invoke('agent:previewChange', { sessionId: SID })).rejects.toThrow(
       'preview failed'
     )
+  })
+})
+
+describe('IPC-SP-1 / IPC-SP-2 冻结的系统提示词（2026-11-06）', () => {
+  it('IPC-SP-1 agent:systemPromptStatus：sessionId 交给网关，状态原样交回；不进请求上下文', async () => {
+    const status = { frozen: true, stale: [{ key: 'project_prompt' }] }
+    const depths: number[] = []
+    state.gateway.systemPromptStatus.mockReset().mockImplementation(async () => {
+      depths.push(state.runDepth)
+      return status
+    })
+    await expect(invoke('agent:systemPromptStatus', SID)).resolves.toBe(status)
+    expect(state.gateway.systemPromptStatus.mock.calls).toEqual([[SID]])
+    expect(depths).toEqual([0])
+    expect(state.contexts).toEqual([])
+    expect(state.gateway.rebuildSystemPrompt).not.toHaveBeenCalled()
+
+    state.gateway.systemPromptStatus.mockRejectedValue(new Error('status failed'))
+    await expect(invoke('agent:systemPromptStatus', SID)).rejects.toThrow('status failed')
+  })
+
+  it.each([[{ success: true }], [{ success: false, reason: 'busy' }]])(
+    'IPC-SP-2 agent:rebuildSystemPrompt：在 createClientContext(ctx, sessionId) 的上下文里交给网关，%j 原样交回',
+    async (result) => {
+      const depths: number[] = []
+      state.gateway.rebuildSystemPrompt.mockReset().mockImplementation(async () => {
+        depths.push(state.runDepth)
+        return result
+      })
+      await expect(invoke('agent:rebuildSystemPrompt', SID)).resolves.toBe(result)
+      expect(state.gateway.rebuildSystemPrompt.mock.calls).toEqual([[SID]])
+      expect(depths).toEqual([1])
+      expect(state.contexts).toEqual([SID])
+      expect(state.transports).toEqual(['ipc'])
+      expect(state.gateway.destroyAgent).not.toHaveBeenCalled()
+    }
+  )
+
+  it('IPC-SP-2 网关 reject → handler reject', async () => {
+    state.gateway.rebuildSystemPrompt.mockReset().mockRejectedValue(new Error('rebuild failed'))
+    await expect(invoke('agent:rebuildSystemPrompt', SID)).rejects.toThrow('rebuild failed')
   })
 })
 

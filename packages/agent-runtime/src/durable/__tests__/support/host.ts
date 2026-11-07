@@ -152,6 +152,8 @@ export interface TestHost {
   readonly failNextOpen: Set<string>
   readonly memory: Map<string, MemoryStorage>
   readonly warnings: string[]
+  /** logger.info 的消息（按顺序；本进程） */
+  readonly infos: string[]
   /** 这个进程里某会话最近一次打开时造的注册表（K1） */
   registryOf(sessionId: string): Registry<ToolRegistration> | undefined
   /** 某会话打开过几次注册表（每次打开一个新的） */
@@ -206,6 +208,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
   const failNextOpen = new Set<string>()
   const memory = new Map<string, MemoryStorage>()
   const warnings: string[] = []
+  const infos: string[] = []
   const registries = new Map<string, Registry<ToolRegistration>[]>()
   const ephemeral = new Set(options.ephemeral ?? [])
   const file = (sessionId: string): string => join(dir, `${sessionId}.sqlite`)
@@ -231,6 +234,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     failNextOpen,
     memory,
     warnings,
+    infos,
     registryOf: (sessionId) => registries.get(sessionId)?.at(-1),
     registriesOf: (sessionId) => [...(registries.get(sessionId) ?? [])],
     open: (sessionId = 's1') => testHost.host.open(sessionId),
@@ -357,7 +361,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     ...(options.redaction === undefined ? {} : { redaction: options.redaction }),
     ...(options.redactionPolicy === undefined ? {} : { redactionPolicy: options.redactionPolicy }),
     logger: {
-      info: () => {},
+      info: (message) => infos.push(message),
       warn: (message) => warnings.push(message),
       error: (message) => warnings.push(message)
     }

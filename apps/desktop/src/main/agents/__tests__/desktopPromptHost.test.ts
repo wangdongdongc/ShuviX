@@ -1,6 +1,14 @@
 /**
- * P1-11 —— 桌面 PromptHost（`desktopPromptHost`）：系统提示词四个活段落的数据源（H11-55…60）。
- * 都按根会话解析、交回**原文**（围栏由运行时的段落统一加），每次请求准备时现调 —— 不缓存。
+ * P1-11 —— 桌面 PromptHost（`desktopPromptHost`）：系统提示词四个段落的数据源（H11-55…60）。
+ * 都按根会话解析、交回**原文**（围栏由运行时的段落统一加），每次调用都现读 —— 不缓存。系统提示词冻结之后
+ * （2026-11-06）运行时只在第一次上锁时渲染一次、之后比对来源时（`compare`）再调；还没冻结的旧对话照旧每次请求现调。
+ *
+ * bot 段落的「已读」（2026-11-06）：正文真进了系统提示词才记 bot 文件已读 ——
+ *   DPH-1 `resolveBotContext(sid, {compare:true})`（只拿来比对）→ 不记已读，文本与不带选项时逐字相同
+ *   DPH-2 不带选项（真进提示词）→ 恰记一次 `recordRead(sid, basePath)`
+ *   DPH-3 `noteSectionsCurrent`：keys 含 `bot_profile` → 记一次已读；不含 → 不记、也不问 botService；
+ *         绑定的 bot 不在了 → 不抛、不记
+ *   （真 fileTime 的读后被改检测见 desktopPromptHostBotRead.test.ts，DPH-4）
  *
  * 指令文件走**真的** resolveInstructionContent（临时目录）；项目 / 会话 / 知识库 / bot 是替身。
  *
@@ -181,7 +189,7 @@ describe('resolveBotContext', () => {
     basePath: '/b/pal.md'
   })
 
-  it('H11-60 绑定的 bot → 恰为 renderBotContext({name, displayName, file: basePath, body})，每次都记一次已读；文件没了 / 不是 bot 会话 → null、不记；改了正文下一次就是新的（PIN-16）', async () => {
+  it('H11-60 绑定的 bot → 恰为 renderBotContext({name, displayName, file: basePath, body})，每次（不带选项）都记一次已读；文件没了 / 不是 bot 会话 → null、不记；改了正文下一次就是新的（PIN-16）', async () => {
     mocks.forSession.mockReturnValue(bot(' hi '))
     expect(await host.resolveBotContext!('s1')).toBe(
       renderBotContext({ name: 'pal', displayName: 'Pal', file: '/b/pal.md', body: ' hi ' })
@@ -198,6 +206,71 @@ describe('resolveBotContext', () => {
     mocks.recordRead.mockClear()
     mocks.forSession.mockReturnValue(null)
     expect(await host.resolveBotContext!('s1')).toBeNull()
+    expect(mocks.recordRead).not.toHaveBeenCalled()
+  })
+
+  it('DPH-1 compare 只拿来比对：不记已读，文本与不带选项时逐字相同；bot 不在了照样 null', async () => {
+    mocks.forSession.mockReturnValue(bot('likes tea'))
+    const compared = await host.resolveBotContext!('s1', { compare: true })
+    expect(compared).toBe(
+      renderBotContext({ name: 'pal', displayName: 'Pal', file: '/b/pal.md', body: 'likes tea' })
+    )
+    expect(mocks.forSession).toHaveBeenCalledWith('s1')
+    expect(mocks.recordRead).not.toHaveBeenCalled()
+
+    expect(await host.resolveBotContext!('s1')).toBe(compared)
+    expect(mocks.recordRead.mock.calls).toEqual([['s1', '/b/pal.md']])
+
+    mocks.recordRead.mockClear()
+    mocks.forSession.mockReturnValue(null)
+    expect(await host.resolveBotContext!('s1', { compare: true })).toBeNull()
+    expect(mocks.recordRead).not.toHaveBeenCalled()
+  })
+
+  it('DPH-2 不带选项 / compare:false（要进提示词）→ 恰记一次已读，按调用的会话 id 记', async () => {
+    mocks.forSession.mockReturnValue(bot('hi'))
+    await host.resolveBotContext!('s7')
+    expect(mocks.recordRead.mock.calls).toEqual([['s7', '/b/pal.md']])
+    await host.resolveBotContext!('s7', { compare: false })
+    expect(mocks.recordRead.mock.calls).toEqual([
+      ['s7', '/b/pal.md'],
+      ['s7', '/b/pal.md']
+    ])
+    await host.resolveBotContext!('s7', {})
+    expect(mocks.recordRead).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('noteSectionsCurrent', () => {
+  const bot = { file: { name: 'pal', displayName: 'Pal', body: 'b' }, basePath: '/b/pal.md' }
+
+  it('DPH-3 keys 含 bot_profile → 记一次已读（按会话 id、bot 文件）；与别的 key 一起也一样', () => {
+    mocks.forSession.mockReturnValue(bot)
+    host.noteSectionsCurrent!('s1', ['bot_profile'])
+    expect(mocks.forSession).toHaveBeenCalledWith('s1')
+    expect(mocks.recordRead.mock.calls).toEqual([['s1', '/b/pal.md']])
+
+    host.noteSectionsCurrent!('s2', ['project_prompt', 'knowledge_bases', 'bot_profile'])
+    expect(mocks.recordRead.mock.calls).toEqual([
+      ['s1', '/b/pal.md'],
+      ['s2', '/b/pal.md']
+    ])
+  })
+
+  it('DPH-3 keys 不含 bot_profile → 不记已读，也不问 botService', () => {
+    mocks.forSession.mockReturnValue(bot)
+    host.noteSectionsCurrent!('s1', ['project_instructions', 'project_prompt', 'knowledge_bases'])
+    host.noteSectionsCurrent!('s1', [])
+    expect(mocks.forSession).not.toHaveBeenCalled()
+    expect(mocks.recordRead).not.toHaveBeenCalled()
+  })
+
+  it('DPH-3 绑定的 bot 不在了（forSession → null / undefined）→ 不抛、不记', () => {
+    mocks.forSession.mockReturnValue(null)
+    expect(() => host.noteSectionsCurrent!('s1', ['bot_profile'])).not.toThrow()
+    mocks.forSession.mockReturnValue(undefined)
+    expect(() => host.noteSectionsCurrent!('s1', ['bot_profile'])).not.toThrow()
+    expect(mocks.forSession).toHaveBeenCalledTimes(2)
     expect(mocks.recordRead).not.toHaveBeenCalled()
   })
 })

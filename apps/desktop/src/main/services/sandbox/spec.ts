@@ -115,11 +115,12 @@ export interface SessionOwnDirs {
  */
 export function sessionOwnDirs(
   paths: SandboxHostPaths,
-  input: Pick<SandboxSessionInput, 'sessionId' | 'workingDirectory'>,
+  input: Pick<SandboxSessionInput, 'sessionId' | 'workingDirectory' | 'tempOwnerId'>,
   real: (p: string) => string
 ): SessionOwnDirs | null {
   const { sessionId } = input
-  if (!isSafeSessionId(sessionId)) return null
+  const tempOwner = input.tempOwnerId ?? sessionId
+  if (!isSafeSessionId(sessionId) || !isSafeSessionId(tempOwner)) return null
   const resolved = {
     home: real(paths.home),
     shuvixHome: real(paths.shuvixHome),
@@ -130,7 +131,7 @@ export function sessionOwnDirs(
   return {
     workdir: workspaceUnsuitable ? null : ws,
     workspaceUnsuitable,
-    tmp: join(paths.tmpRoot, sessionTmpName(sessionId)),
+    tmp: join(paths.tmpRoot, sessionTmpName(tempOwner)),
     // 与 utils/paths 的 getSessionArtifactsDir 同一个位置（那边用 homedir()，这里用注入的 shuvixHome，
     // 好让单测不碰真家目录）—— 改一边要同步另一边
     artifacts: join(resolved.shuvixHome, 'artifacts', sessionId),

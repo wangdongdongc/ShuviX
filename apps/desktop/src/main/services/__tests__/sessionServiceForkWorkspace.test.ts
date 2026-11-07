@@ -47,6 +47,15 @@
  *   BW-3  子会话、fork 抄引用与快照；项目删了之后的 fork / 子会话用快照；临时 bot 会话的子会话共用父会话的临时工作区
  *   BW-4  项目根里的哨兵文件经得起删 bot 会话、它的子会话与 fork（项目在或不在都一样）
  *
+ * 会话的临时目录（沙箱模块的 `cleanupSession(<id>)` 删的那个，按 id 起名）—— fork 借源会话的（`settings.tempDirOwner`，
+ * 2026-11-06：人设里冻结着那条路径），用它的最后一条会话被删时才删（这里看 `cleanupSession` 被叫到的 id）：
+ *   FT-7  (C7)  S 有 fork F 时删 S → 不删 S 的临时目录
+ *   FT-8  (C8)  再删 F → 删 S 的
+ *   FT-9  (C9)  S + F1 + F2（F2 是 F1 的 fork，主人仍是 S）：删 F1、F2 之后才在删 S 时删
+ *   FT-10 (C10) 没有 fork 的会话：删它就删它自己的
+ *   FT-11 (C11) settings 是坏 JSON 的一行：照样删完，自己的临时目录也删
+ *   FT-12 (C12) 临时会话 + fork：临时工作区与临时目录各自「最后一个用它的删掉时才删」，两种次序都对
+ *
  * 摆给用户看的图的快照（`<userData>/shown/<id>/`，show_image；真的 utils/paths）随会话删除：
  *   DEL-1 delete(S) 删 shown/S；shown/T 与 shown/ 本身都在
  *   DEL-2 删 fork F 不动 shown/S
@@ -992,4 +1001,88 @@ describe('DEL-1..5 shown-image snapshots are removed with their session', () => 
     expect(readFileSync(join(dir, SHOWN), 'utf-8')).toBe(S)
     expect(vi.mocked(cleanupSandboxSession)).toHaveBeenCalledWith(S)
   })
+})
+
+// ─── FT-7..12：fork 借用的会话临时目录 ─────────────────
+
+describe('FT-7..12 the session temp folder a fork borrows (tempDirOwner)', () => {
+  const cleaned = (): string[] => vi.mocked(cleanupSandboxSession).mock.calls.map(([id]) => id)
+
+  beforeEach(() => {
+    vi.mocked(cleanupSandboxSession).mockClear()
+  })
+
+  it('FT-7 (C7) deleting S while its fork F exists keeps S’s temp folder; FT-8 (C8) then deleting F removes it', async () => {
+    const S = insertRaw('S', { projectId: 'p1' })
+    forkOf(S, 'F')
+    expect(sessionRecords.findById('F')!.settings.tempDirOwner).toBe(S)
+
+    await sessionService.delete(S)
+    expect(cleaned()).not.toContain(S)
+
+    await sessionService.delete('F')
+    expect(cleaned()).toContain(S)
+    expect(cleaned().filter((id) => id === S)).toHaveLength(1)
+  })
+
+  it('FT-9 (C9) S + F1 + F2 (F2 a fork of F1, owner still S): deleting F1 and F2 keeps S’s folder; deleting S last removes it', async () => {
+    const S = insertRaw('S', { projectId: 'p1' })
+    forkOf(S, 'F1')
+    forkOf('F1', 'F2')
+    expect(sessionRecords.findById('F2')!.settings.tempDirOwner).toBe(S)
+
+    await sessionService.delete('F1')
+    expect(cleaned()).not.toContain(S)
+    await sessionService.delete('F2')
+    expect(cleaned()).not.toContain(S)
+    await sessionService.delete(S)
+    expect(cleaned()).toEqual(expect.arrayContaining([S]))
+    expect(cleaned().filter((id) => id === S)).toHaveLength(1)
+  })
+
+  it('FT-9 (C9) the other order: S first, then F1 — still kept while F2 uses it; F2 last removes it', async () => {
+    const S = insertRaw('S', { projectId: 'p1' })
+    forkOf(S, 'F1')
+    forkOf('F1', 'F2')
+    await sessionService.delete(S)
+    await sessionService.delete('F1')
+    expect(cleaned()).not.toContain(S)
+    await sessionService.delete('F2')
+    expect(cleaned()).toContain(S)
+  })
+
+  it('FT-10 (C10) a session without forks removes its own temp folder', async () => {
+    const S = insertRaw('S', { projectId: 'p1' })
+    await sessionService.delete(S)
+    expect(cleaned()).toEqual([S])
+  })
+
+  it('FT-11 (C11) a row whose settings JSON is corrupt: the delete completes and its own temp folder is removed', async () => {
+    insertRaw('R', { settings: {} as SessionSettings })
+    ;(holder.db as DatabaseSync)
+      .prepare('UPDATE sessions SET settings = ? WHERE id = ?')
+      .run('{bad', 'R')
+    await sessionService.delete('R')
+    expect(sessionRecords.findById('R')).toBeUndefined()
+    expect(cleaned()).toContain('R')
+  })
+
+  it.each(['source first', 'fork first'] as const)(
+    'FT-12 (C12) a temp session and its fork, %s: the temp workspace and the temp folder each go only with their last user',
+    async (order) => {
+      const S = createTemp('S')
+      const sDir = seedSentinel(S)
+      forkOf(S, 'F')
+      const [first, second] = order === 'source first' ? [S, 'F'] : ['F', S]
+
+      await sessionService.delete(first)
+      expectKept(sDir, S)
+      expect(cleaned()).not.toContain(S)
+
+      await sessionService.delete(second)
+      expect(existsSync(sDir)).toBe(false)
+      expect(cleaned()).toContain(S)
+      expect(existsSync(tempOf('F'))).toBe(false)
+    }
+  )
 })

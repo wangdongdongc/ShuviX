@@ -26,6 +26,10 @@
  * 模块级的 `fakeHost` 给 `vi.mock('../sessionHost')` 用（`sessionHostModuleMock()`）；`resetFakeHost()`
  * 每个用例前换一个新的。
  */
+import type {
+  RebuildSystemPromptResult,
+  SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
 import { vi } from 'vitest'
 import type {
   AdmitOptions,
@@ -469,6 +473,23 @@ export class FakeDurableSession implements DurableSession {
     this.lock = undefined
   }
 
+  /** 冻结的系统提示词状态的脚本；缺省 = 没冻结 */
+  promptStatus: SystemPromptStatus = { frozen: false, stale: [] }
+
+  async systemPromptStatus(): Promise<SystemPromptStatus> {
+    this.calls.push(['systemPromptStatus'])
+    return this.promptStatus
+  }
+
+  /** 重建系统提示词的结果脚本；缺省 = 成功（并像真的那样销毁 agent） */
+  rebuildResult: RebuildSystemPromptResult = { success: true }
+
+  async rebuildSystemPrompt(): Promise<RebuildSystemPromptResult> {
+    this.calls.push(['rebuildSystemPrompt'])
+    if (this.rebuildResult.success) this.lock = undefined
+    return this.rebuildResult
+  }
+
   /** 回退 fork（P3-10a）的结果脚本；缺省 = 一个新对话 2 */
   rollbackResult: RollbackResult = { ok: true, conversationId: 2 }
 
@@ -621,6 +642,13 @@ export class FakeSessionHost implements SessionHost {
 
   openSessionIds(): string[] {
     return [...this.sessions.keys()]
+  }
+
+  /** fork 沿用源会话 agent 的会话 id（按顺序） */
+  readonly adoptedForks: string[] = []
+
+  adoptForkedAgent(sessionId: string): void {
+    this.adoptedForks.push(sessionId)
   }
 
   /** 某类调用的会话 id（按顺序） */

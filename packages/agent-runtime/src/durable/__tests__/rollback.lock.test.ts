@@ -80,7 +80,7 @@ describe('P3-10a · the agent lock', () => {
   })
 
   it(
-    'P3-10a-11 the lock is recreated on F with the current settings: faux-2, +mcp:x, thinking high, persona frozen on F',
+    'P3-10a-11 the lock is recreated on F with the current settings: faux-2, +mcp:x, thinking high; the system prompt frozen on F stays (the changed body is only reported)',
     async () => {
       const config: AgentConfig = {
         profile: testProfile({ name: 'work', displayName: 'Work', systemPrompt: 'You are A' }),
@@ -119,11 +119,17 @@ describe('P3-10a · the agent lock', () => {
       })
       const first = t.kit.requests[requests]!
       expect(first.modelId).toBe('faux-2')
-      // K6 次序：MCP 在宿主其它工具之前
-      expect(first.tools.map((tool) => tool.name)).toEqual(['mcp__x__probe', 'read'])
+      // 重新上锁按 F 上模型见过的次序排（2026-11-06）：read 原样在前，新接的 MCP 追加在后（不再是 K6 的
+      // 「MCP 在宿主其它工具之前」—— 那是新对话的次序）
+      expect(first.tools.map((tool) => tool.name)).toEqual(['read', 'mcp__x__probe'])
       expect(t.broadcastsOf('agent_created').length).toBe(created + 1)
-      expect((await session.harness.snapshot(AgentStateDoc, F, BG))?.persona).toBe('You are B')
-      expect(first.systemPrompt).toContain('You are B')
+      // F 带着回退点之前冻结的系统提示词（2026-11-06，历史状态不变）：档案正文改了只提醒，不重新渲染
+      expect((await session.harness.snapshot(AgentStateDoc, F, BG))?.persona).toBe('You are A')
+      expect(first.systemPrompt).toBe('You are A')
+      expect(await session.systemPromptStatus()).toEqual({
+        frozen: true,
+        stale: [{ key: 'persona' }]
+      })
     },
     TIMEOUT
   )

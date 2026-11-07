@@ -38,6 +38,11 @@
  *   SF-26 源会话没有 shown/S → 不建 shown/F
  *   SF-27 拷快照抛错（包一层：拷完再抛）→ failed；fork 的行没了、shown/F 不留，shown/S 原样
  *   SF-28 branchAt 拒绝（SF-10 那条路，拷完之后）→ shown/F 不留（完整删除管到它）；源原样
+ * fork 沿用源会话的 agent、共用临时目录（2026-11-06）：
+ *   SF-29 (C1) 源会话没借谁的临时目录 → fork 的 tempDirOwner = 源会话 id（项目会话、临时会话都一样）
+ *   SF-30 (C2) fork 的 fork → tempDirOwner 仍是最初那条会话
+ *   SF-31 (D6) 锁留下了 → fakeHost.adoptedForks 有 fork 的 id，认领在 fork 的任何 open 之前；
+ *         锁没留下 → 不认领；源会话没有存储（什么都没拷）→ 不收尾、不认领；插行失败 → 半成品删掉
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -61,7 +66,8 @@ const mocks = vi.hoisted(() => ({
   copy: vi.fn<(from: string, to: string) => Promise<void>>(),
   openFile: vi.fn<(sessionId: string) => Promise<unknown>>(),
   deleteStorage: vi.fn<(sessionId: string) => Promise<void>>(),
-  reset: vi.fn<(storage: unknown) => Promise<void>>(),
+  reset:
+    vi.fn<(storage: unknown, options?: { keepLock?: boolean }) => Promise<{ lockKept: boolean }>>(),
   listChanged: vi.fn<() => void>(),
   artifactCalls: [] as Array<[string, string]>,
   artifactsFail: false,
@@ -243,7 +249,7 @@ beforeEach(() => {
   mocks.shownFail = false
   mocks.copy.mockResolvedValue(undefined)
   mocks.openFile.mockResolvedValue(STORAGE)
-  mocks.reset.mockResolvedValue(undefined)
+  mocks.reset.mockResolvedValue({ lockKept: false })
   mocks.deleteStorage.mockResolvedValue(undefined)
   mocks.listChanged.mockReset()
   changeLanguage('en')
@@ -524,6 +530,7 @@ describe('SF-6/8/9 successful forks', () => {
     mocks.reset.mockImplementation(async () => {
       const forks = rowIds().filter((id) => id !== SRC)
       order.push(`reset:${forks.length === 0 ? 'no-row' : 'row'}`)
+      return { lockKept: true }
     })
     mocks.listChanged.mockImplementation(() => void order.push('broadcast'))
 
@@ -532,7 +539,9 @@ describe('SF-6/8/9 successful forks', () => {
     expect(forkId).not.toBe(SRC)
     expect(mocks.copy.mock.calls).toEqual([[SRC, forkId]])
     expect(mocks.openFile.mock.calls).toEqual([[forkId]])
-    expect(mocks.reset.mock.calls).toEqual([[STORAGE]])
+    // 锁留着、fork 沿用源会话的 agent（2026-11-06）：重置时要求保留锁，留下了就交给宿主认领
+    expect(mocks.reset.mock.calls).toEqual([[STORAGE, { keepLock: true, sessionId: forkId }]])
+    expect(fakeHost.adoptedForks).toEqual([forkId])
     expect(order).toEqual(['copy', 'openFile:no-row', 'reset:no-row', 'broadcast'])
     expect(source.callsOf('whileIdle')).toHaveLength(1)
     expect(source.callsOf('branchAt')).toEqual([])
@@ -631,7 +640,9 @@ describe('SF-11..13 the fork row', () => {
       bot: 'alice',
       agentProfile: 'coding',
       model: { provider: 'faux', modelId: 'faux-1' },
-      thinkingLevel: 'low'
+      thinkingLevel: 'low',
+      // 临时目录共用源会话的（人设里冻结着那条路径，2026-11-06）
+      tempDirOwner: SRC
     })
   })
 
@@ -736,7 +747,8 @@ describe('SF-11..13 the fork row', () => {
     expect(fork.settings).toEqual({
       enabledTools: ['mcp:a'],
       knowledgeBases: ['kb'],
-      model: { provider: 'p', modelId: 'm' }
+      model: { provider: 'p', modelId: 'm' },
+      tempDirOwner: 'shape'
     })
     fork.settings.enabledTools!.push('mcp:b')
     fork.settings.knowledgeBases!.push('kb2')
@@ -1328,5 +1340,96 @@ describe('SF-24..28 shown-image snapshots', () => {
     expect(rowIds()).toEqual([SRC])
     expect(existsSync(shownDir(forkId))).toBe(false)
     expect(readdirSync(shownDir(SRC)).sort()).toEqual([SHOWN_A, SHOWN_B].sort())
+  })
+})
+
+// ─── SF-29..31：临时目录的主人、fork 认领源会话的 agent ─────────────────
+
+describe('SF-29..31 the temp folder owner and the adopted agent', () => {
+  it.each<[string, string | null]>([
+    ['a project source', PROJECT],
+    ['a temp source', null]
+  ])(
+    'SF-29 (C1) %s without tempDirOwner → the fork borrows the source temp folder (tempDirOwner = source id); the source row stays without it',
+    async (_label, projectId) => {
+      seedRow({ projectId })
+      openSource()
+      const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+      expect(sessionRecords.findById(forkId)!.settings.tempDirOwner).toBe(SRC)
+      expect(sessionRecords.findById(SRC)!.settings).not.toHaveProperty('tempDirOwner')
+    }
+  )
+
+  it('SF-30 (C2) a fork of a fork borrows the original source temp folder, not the first fork', async () => {
+    seedRow()
+    openSource()
+    const first = forkIdOf(await forkSession({ sessionId: SRC }))
+    fakeHost.put(first, { view: twoTurnView(first) })
+    const second = forkIdOf(await forkSession({ sessionId: first }))
+    expect(sessionRecords.findById(first)!.settings.tempDirOwner).toBe(SRC)
+    expect(sessionRecords.findById(second)!.settings.tempDirOwner).toBe(SRC)
+    // 空的 fork（没有存储）做源也一样
+    const third = forkIdOf(await forkSession({ sessionId: second }))
+    expect(sessionRecords.findById(third)!.settings.tempDirOwner).toBe(SRC)
+  })
+
+  it.each<[string, { messageId?: string }]>([
+    ['a whole fork', {}],
+    ['a reply fork', { messageId: '2' }]
+  ])(
+    'SF-31 (D6) %s with the lock kept: the fork id is adopted, before any open of the fork',
+    async (_label, extra) => {
+      seedRow()
+      openSource()
+      mocks.reset.mockResolvedValue({ lockKept: true })
+      const adopt = vi.spyOn(fakeHost, 'adoptForkedAgent')
+      const open = vi.spyOn(fakeHost, 'open')
+      const forkId = forkIdOf(await forkSession({ sessionId: SRC, ...extra }))
+      expect(mocks.reset.mock.calls).toEqual([[STORAGE, { keepLock: true, sessionId: forkId }]])
+      expect(fakeHost.adoptedForks).toEqual([forkId])
+      const forkOpens = open.mock.calls
+        .map((call, index) => [call[0], open.mock.invocationCallOrder[index]!] as const)
+        .filter(([id]) => id === forkId)
+      if (extra.messageId !== undefined) expect(forkOpens).toHaveLength(1)
+      for (const [, order] of forkOpens) {
+        expect(adopt.mock.invocationCallOrder[0]!).toBeLessThan(order)
+      }
+    }
+  )
+
+  it.each<[string, { messageId?: string }]>([
+    ['a whole fork', {}],
+    ['a reply fork', { messageId: '2' }]
+  ])('SF-31 (D6) %s whose lock was not kept: nothing is adopted', async (_label, extra) => {
+    seedRow()
+    openSource()
+    mocks.reset.mockResolvedValue({ lockKept: false })
+    forkIdOf(await forkSession({ sessionId: SRC, ...extra }))
+    expect(mocks.reset).toHaveBeenCalledTimes(1)
+    expect(fakeHost.adoptedForks).toEqual([])
+  })
+
+  it('SF-31 (D6) a source without storage (nothing copied): no reset, no adopt', async () => {
+    seedRow()
+    mocks.reset.mockResolvedValue({ lockKept: true })
+    forkIdOf(await forkSession({ sessionId: SRC }))
+    expect(mocks.copy).not.toHaveBeenCalled()
+    expect(mocks.reset).not.toHaveBeenCalled()
+    expect(fakeHost.adoptedForks).toEqual([])
+  })
+
+  it('SF-31 (D6) inserting the row fails after the lock was kept → failed; the half-made fork storage is deleted, no row, no broadcast', async () => {
+    seedRow()
+    openSource()
+    mocks.reset.mockResolvedValue({ lockKept: true })
+    vi.spyOn(sessionRecords, 'insert').mockImplementationOnce(() => {
+      throw new Error('constraint')
+    })
+    expect(await forkSession({ sessionId: SRC })).toEqual({ success: false, reason: 'failed' })
+    const forkId = mocks.copy.mock.calls[0]![1]
+    expect(mocks.deleteStorage.mock.calls).toEqual([[forkId]])
+    expect(rowIds()).toEqual([SRC])
+    expect(mocks.listChanged).not.toHaveBeenCalled()
+    expect(fakeHost.callsOf('open')).toEqual([])
   })
 })

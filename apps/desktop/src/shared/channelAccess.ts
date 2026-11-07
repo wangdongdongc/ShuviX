@@ -54,6 +54,8 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:setModel': 'write',
   'agent:previewChange': 'read', // 只预判：不连服务器、什么也不写（与 agent:init 一样可能把锁着的会话打开来读）
   'agent:askCounts': 'read',
+  'agent:systemPromptStatus': 'read', // 冻结的系统提示词与此刻的来源比一比：只读（可能把会话打开来读）
+  'agent:rebuildSystemPrompt': 'write', // 删掉冻结的系统提示词，下一条消息重新渲染
   'agent:destroy': 'write',
   'agent:setThinkingLevel': 'write',
   'agent:getInfo': 'write', // 带 ensure 时会打开会话、创建 agent（锁配置、连 MCP）

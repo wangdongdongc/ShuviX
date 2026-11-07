@@ -666,20 +666,26 @@ export const desktopPromptHost: PromptHost = {
    * bot 会话根 agent 的 `<bot_profile>`：绑定的那份 bot md 的正文（只选给 bot 基座上的根 agent ——
    * 子会话、派生 agent 按自己的档案说话）。绑定的 md 不在了 → null，会话照常跑在基座 `bot` 上。
    *
-   * 正文就在系统提示词里 = 视同「已读」：bot 用 `edit` 改自己这份文件时不必先 `read`（读后被改的
-   * 检测仍然有效 —— 段落每次请求现解析，别处改过之后下一次请求看到的就是新正文，也重新记一次已读）。
-   * fileTime 归根会话，所以按 sessionId 记。
+   * 正文进了系统提示词 = 视同「已读」：bot 用 `edit` 改自己这份文件时不必先 `read`。系统提示词冻结之后
+   * （2026-11-06）只在正文真进提示词时记：冻结那一刻（以及没冻结的旧对话每次请求现解析时），和比对出冻结的那份
+   * 与文件一致时（`noteSectionsCurrent`）。只是拿来比对（`compare`）的不记 —— 用户在别处改过之后，模型手里还是
+   * 冻结的旧正文，得先 `read` 到新内容才能改，读后被改的检测才不会被骗过。fileTime 归根会话，所以按 sessionId 记。
    */
-  resolveBotContext: (sessionId) => {
+  resolveBotContext: (sessionId, options) => {
     const bot = botService.forSession(sessionId)
     if (!bot) return null
-    recordRead(sessionId, bot.basePath)
+    if (options?.compare !== true) recordRead(sessionId, bot.basePath)
     return renderBotContext({
       name: bot.file.name,
       displayName: bot.file.displayName,
       file: bot.basePath,
       body: bot.file.body
     })
+  },
+  noteSectionsCurrent: (sessionId, keys) => {
+    if (!keys.includes('bot_profile')) return
+    const bot = botService.forSession(sessionId)
+    if (bot) recordRead(sessionId, bot.basePath)
   }
 }
 

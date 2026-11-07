@@ -1,6 +1,10 @@
 /**
  * SpawnCoordinator · 人设冻结（P2-03，D 段 24–27）：派生人设在创建提交里冻结（变量表按 agentId、cwd 为空，
  * Q-P2-13）；活段落按子对话自己的 AgentStateDoc（根会话 id）解析；根一概不受影响。
+ *
+ *   PK-A13（2026-11-06 人设沿用）：派生 agent 不写 personaKey、每次派生都调变量表；根的摘要不受影响
+ *   FRZ-16（2026-11-06 系统提示词冻结）：派生 agent 的文档没有 sections / personaKey，它的段落照旧现解析（来源改了，
+ *          下一次请求就是新的）；根的文档不受影响
  */
 import type { PromptVarsCtx } from '../../agentProfile/promptVars'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -122,8 +126,75 @@ describe('SpawnCoordinator · persona', () => {
       profileName: 'work',
       rootSessionId: 's1',
       persona: '',
-      instructionFiles: []
+      instructionFiles: [],
+      personaKey: expect.stringMatching(/^v1:/),
+      // 其余段落冻结在这里（2026-11-06）：宿主 D 的 work 档案只选人设 → 没有别的段落
+      sections: {}
     })
     expect(parseSpawnedAgentRecord(after)).toBeUndefined()
+  })
+
+  it('PK-A13 spawned agents write no personaKey and ask promptVars on every spawn; the root key is untouched', async () => {
+    const d = await hostD()
+    d.t.kit.queue(answer('warm'))
+    expect(await d.session.submitUser('hello')).toEqual({})
+    const rootBefore = await d.session.harness.snapshot(AgentStateDoc, ROOT_CONVERSATION_ID, BG)
+    expect(rootBefore?.personaKey).toMatch(/^v1:/)
+    const callsBefore = d.vars.state.calls
+
+    d.t.kit.queue(
+      callAgent('explore', 'find X'),
+      answer('found X'),
+      callAgent('explore', 'find Y', { id: 'call-agent-2' }),
+      answer('found Y'),
+      answer('done')
+    )
+    expect(await d.session.submitUser('go')).toEqual({})
+    expect(d.outcomes).toHaveLength(2)
+    expect(d.vars.state.calls).toBe(callsBefore + 2)
+    for (const outcome of d.outcomes) {
+      const child = await d.session.harness.snapshot(AgentStateDoc, outcome.conversationId!, BG)
+      expect(child?.kind).toBe('spawned')
+      expect(child?.persona).toBe('You are M1 explorer')
+      expect(child).not.toHaveProperty('personaKey')
+      expect(child).not.toHaveProperty('sections')
+    }
+    expect(await d.session.harness.snapshot(AgentStateDoc, ROOT_CONVERSATION_ID, BG)).toEqual(
+      rootBefore
+    )
+  })
+
+  it('FRZ-16 a spawned agent freezes no sections: its document has neither sections nor personaKey, its sections stay live, the root document is untouched', async () => {
+    const values = { project: 'PROJECT V1' }
+    const calls: string[] = []
+    const promptHost: PromptHost = {
+      resolveInstruction: () => ({ filename: 'AGENTS.md', content: 'INSTRUCTION BODY' }),
+      resolveProjectPrompt: (sessionId) => {
+        calls.push(sessionId)
+        return values.project
+      },
+      resolveKnowledgeBases: () => 'KNOWLEDGE BODY'
+    }
+    const d = await hostD({ host: { promptHost } })
+    const rootBefore = await d.session.harness.snapshot(AgentStateDoc, ROOT_CONVERSATION_ID, BG)
+    d.t.kit.queue(callAgent('aware', 'find X'), answer('found'), answer('done'))
+    expect(await d.session.submitUser('go')).toEqual({})
+    const C = d.outcomes[0]!.conversationId!
+    const child = await d.session.harness.snapshot(AgentStateDoc, C, BG)
+    expect(child?.kind).toBe('spawned')
+    expect(child).not.toHaveProperty('sections')
+    expect(child).not.toHaveProperty('personaKey')
+    expect(d.t.kit.requests[1]!.systemPrompt).toContain('PROJECT V1')
+
+    values.project = 'PROJECT V2'
+    const before = calls.length
+    d.t.kit.queue(answer('again ok'))
+    expect(await d.session.agents.continue(C, 'again')).toMatchObject({ result: 'again ok' })
+    expect(calls.length).toBeGreaterThan(before)
+    expect(calls.every((sessionId) => sessionId === 's1')).toBe(true)
+    expect(d.t.kit.requests.at(-1)!.systemPrompt).toContain('PROJECT V2')
+    expect(await d.session.harness.snapshot(AgentStateDoc, ROOT_CONVERSATION_ID, BG)).toEqual(
+      rootBefore
+    )
   })
 })

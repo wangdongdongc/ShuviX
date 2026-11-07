@@ -1,7 +1,7 @@
 /**
  * 锁 · 销毁（P1-09；裁决 K8、K10、K13）：空闲销毁不中止（残留输入留着、下一次发送带走）；忙 / 被中断
- * 先中止再解锁；挂起的询问被取消；没锁 = 无操作；重建按那一刻的配置；与发送、与在途的创建、与另一次
- * 销毁之间的先后。
+ * 先中止再解锁；挂起的询问被取消；没锁 = 无操作；重建按那一刻的配置（冻结的系统提示词除外，2026-11-06）；
+ * 与发送、与在途的创建、与另一次销毁之间的先后。
  */
 import type { FauxResponseStep } from '@earendil-works/pi-ai'
 import { InboxDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -180,7 +180,7 @@ describe('lock · destroy', () => {
     expect(closingEvents(t.broadcasts)).toEqual([])
   })
 
-  it('LD-06 recreating picks up the state of that moment: overlay, model, server tool list, skill shelf, persona; a failed server heals', async () => {
+  it('LD-06 recreating picks up the state of that moment: overlay, model, server tool list, skill shelf; the frozen persona stays; a failed server heals', async () => {
     const config = scenarioConfig()
     config.toolOverlay = ['mcp:ctx', 'mcp:broken']
     const { t, vars, clock } = await scenarioW({ config })
@@ -209,14 +209,16 @@ describe('lock · destroy', () => {
     expect(lock.model).toEqual({ provider: 'faux', modelId: 'faux-2' })
     expect(lock.mcp.ctx).toEqual([DECL_RESOLVE])
     expect(Object.keys(lock.mcp)).toEqual(['ctx', 'broken', 'ssh'])
-    expect(lock.toolNames.slice(-3)).toEqual([
-      'mcp__ctx__resolve',
-      'mcp__broken__noop',
-      'mcp__ssh__exec'
-    ])
+    // 次序跟着模型见过的走（2026-11-06）：没变的工具留在原处，变了的（技能货架换了 → skill 的说明变了）与新的
+    // 依次排在后面 —— 次序一变 durable 就整份重声明工具
+    expect(lock.toolNames).toContain('mcp__ctx__resolve')
+    expect(lock.toolNames.slice(-3)).toEqual(['skill', 'mcp__broken__noop', 'mcp__ssh__exec'])
     expect(lock.skills).toEqual(['pdf', 'builtin:widget'])
     expect(t.kit.requests[1]!.modelId).toBe('faux-2')
-    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M2')
+    // 系统提示词冻结着（2026-11-06）：销毁再建不重新渲染人设，变量表里的 marker 变了也照旧
+    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[1]!.systemPrompt).toBe(t.kit.requests[0]!.systemPrompt)
+    expect(vars.state.calls).toBe(1)
     expect(await toolDeltaCount(await session.currentConversation())).toBe(2)
   })
 

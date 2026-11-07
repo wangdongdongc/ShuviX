@@ -68,6 +68,15 @@ export const PROMPT_SECTION_KEY: Record<PromptExtensionId, string> = {
   placeholders: 'placeholders'
 }
 
+/** 段落扩展名 → 它那一段的 key（冻结的 `AgentStateDoc.sections` 按 key 存） */
+export function sectionKeyOf(name: PromptExtensionName): string {
+  const id = (Object.keys(PROMPT_EXTENSION) as PromptExtensionId[]).find(
+    (candidate) => PROMPT_EXTENSION[candidate] === name
+  )
+  if (id === undefined) throw new Error(`Not a prompt extension: ${name}`)
+  return PROMPT_SECTION_KEY[id]
+}
+
 /** 段落的固定次序（= 旧 createAgent 的拼接次序） */
 export const PROMPT_EXTENSION_ORDER: readonly PromptExtensionName[] = [
   PROMPT_EXTENSION.persona,
@@ -158,20 +167,49 @@ async function agentStateOf(
   return read.snapshot(AgentStateDoc, conversationId, context)
 }
 
-/** 活段落：取冻结的根会话 id（没冻结 → undefined，段落缺席）再调宿主 */
-function liveSection(
-  render: (
-    rootSessionId: string,
-    input: PromptInput,
-    state: Readonly<AgentStateRecord>
-  ) => string | undefined | Promise<string | undefined>
-) {
+/** 一个活段落现解析时要的那几项（段落回调与冻结时的渲染共用） */
+export interface LiveSectionInput {
+  rootSessionId: string
+  /** agent 的工作目录（`pi.agent.cwd`；根 agent = 会话工作目录） */
+  cwd: string
+  /** 冻结在 AgentStateDoc 里的指令文件清单 */
+  instructionFiles: readonly string[]
+  /** 只是拿来比对（不进提示词），见 `PromptRenderOptions.compare` */
+  compare?: boolean
+}
+
+type LiveRender = (input: LiveSectionInput) => string | undefined | Promise<string | undefined>
+
+/**
+ * 段落回调：对话冻结了这一段（`AgentStateDoc.sections` 里有这个 key）→ 只读存着的文本，不再现解析（2026-11-06，
+ * 「历史状态不变」：改了来源，这个对话的系统提示词照旧，用户点重建才换）；没冻结（旧对话、派生 agent）→ 照旧现解析
+ * （取冻结的根会话 id，没有 → 段落缺席）。
+ */
+function frozenOrLive(key: string, render: LiveRender) {
   return async (input: PromptInput, context: Context): Promise<string | undefined> => {
     const state = await agentStateOf(input.read, input.conversationId, context)
+    const frozen = state?.sections
+    if (frozen !== undefined && Object.prototype.hasOwnProperty.call(frozen, key)) {
+      return frozen[key] ?? undefined
+    }
     const rootSessionId = state?.rootSessionId
     if (state === undefined || !rootSessionId) return undefined
-    return render(rootSessionId, input, state)
+    return render({
+      rootSessionId,
+      cwd: input.agent.cwd ?? '',
+      instructionFiles: state.instructionFiles ?? []
+    })
   }
+}
+
+/** 冻结（或比对）时渲染的那几段：选中的段落扩展名 + 现解析的输入 */
+export interface RenderSectionsSpec extends LiveSectionInput {
+  names: readonly PromptExtensionName[]
+  /**
+   * 某一段的宿主 seam 抛错：这一段不进结果（冻结时 = 这次不冻结它，下一次上锁再试；比对时 = 不算变也不算没变），
+   * 其余照常。缺省 = 静默跳过
+   */
+  onError?: (key: string, error: unknown) => void
 }
 
 export interface PromptExtensions {
@@ -181,6 +219,13 @@ export interface PromptExtensions {
   get(name: PromptExtensionName): Extension
   /** 一个对话该选中的那几个（`promptExtensionsFor` 的扩展对象版，固定次序） */
   select(spec: PromptSelectionSpec): Extension[]
+  /**
+   * 按此刻的来源渲染选中的段落（人设除外 —— 它由 `persona.ts` 冻结）：段落 key → 文本（`null` = 缺席）。上锁时
+   * 冻结用它，提醒用户「来源改了」时比对也用它 —— 与段落回调现解析是同一套函数，所以两边逐字节一致。
+   */
+  renderSections(spec: RenderSectionsSpec): Promise<Record<string, string | null>>
+  /** 这几段冻结的文本与此刻的来源一致：转告宿主（`PromptHost.noteSectionsCurrent`），没实现 = 无操作 */
+  noteSectionsCurrent(rootSessionId: string, keys: readonly string[]): void
 }
 
 /**
@@ -203,6 +248,52 @@ export function createPromptExtensions(
   host: PromptHost,
   opts: { placeholders?: boolean } = {}
 ): PromptExtensions {
+  // 人设之外的每一段：现解析的渲染函数（段落回调与 renderSections 共用）
+  const renders = new Map<PromptExtensionName, LiveRender>([
+    [
+      PROMPT_EXTENSION.placeholders,
+      () =>
+        opts.placeholders === true
+          ? `<placeholders>\n${PLACEHOLDER_NOTE}\n</placeholders>`
+          : undefined
+    ],
+    [
+      PROMPT_EXTENSION.instructions,
+      async ({ rootSessionId, cwd, instructionFiles }) => {
+        if (!host.resolveInstruction || instructionFiles.length === 0) return undefined
+        return instructionSectionText(
+          await host.resolveInstruction(rootSessionId, cwd, [...instructionFiles])
+        )
+      }
+    ],
+    [
+      PROMPT_EXTENSION.projectPrompt,
+      async ({ rootSessionId }) =>
+        host.resolveProjectPrompt
+          ? fencedSectionText(await host.resolveProjectPrompt(rootSessionId), fenceProjectPrompt)
+          : undefined
+    ],
+    [
+      PROMPT_EXTENSION.knowledge,
+      async ({ rootSessionId }) =>
+        host.resolveKnowledgeBases
+          ? fencedSectionText(await host.resolveKnowledgeBases(rootSessionId), fenceKnowledgeBases)
+          : undefined
+    ],
+    [
+      PROMPT_EXTENSION.bot,
+      async ({ rootSessionId, compare }) =>
+        host.resolveBotContext
+          ? botSectionText(
+              await host.resolveBotContext(
+                rootSessionId,
+                compare === true ? { compare } : undefined
+              )
+            )
+          : undefined
+    ]
+  ])
+
   const persona = defineExtension({
     name: PROMPT_EXTENSION.persona,
     sections: [
@@ -218,99 +309,46 @@ export function createPromptExtensions(
     ]
   })
 
-  const instructions = defineExtension({
-    name: PROMPT_EXTENSION.instructions,
-    sections: [
-      section(
-        PROMPT_SECTION_KEY.instructions,
-        liveSection(async (rootSessionId, input, state) => {
-          const files = state.instructionFiles ?? []
-          if (!host.resolveInstruction || files.length === 0) return undefined
-          return instructionSectionText(
-            await host.resolveInstruction(rootSessionId, input.agent.cwd ?? '', files)
-          )
-        }),
-        { tag: false }
-      )
-    ]
-  })
-
-  const projectPrompt = defineExtension({
-    name: PROMPT_EXTENSION.projectPrompt,
-    sections: [
-      section(
-        PROMPT_SECTION_KEY.projectPrompt,
-        liveSection(async (rootSessionId) =>
-          host.resolveProjectPrompt
-            ? fencedSectionText(await host.resolveProjectPrompt(rootSessionId), fenceProjectPrompt)
-            : undefined
-        ),
-        { tag: false }
-      )
-    ]
-  })
-
-  const knowledge = defineExtension({
-    name: PROMPT_EXTENSION.knowledge,
-    sections: [
-      section(
-        PROMPT_SECTION_KEY.knowledge,
-        liveSection(async (rootSessionId) =>
-          host.resolveKnowledgeBases
-            ? fencedSectionText(
-                await host.resolveKnowledgeBases(rootSessionId),
-                fenceKnowledgeBases
-              )
-            : undefined
-        ),
-        { tag: false }
-      )
-    ]
-  })
-
-  const bot = defineExtension({
-    name: PROMPT_EXTENSION.bot,
-    sections: [
-      section(
-        PROMPT_SECTION_KEY.bot,
-        liveSection(async (rootSessionId) =>
-          host.resolveBotContext
-            ? botSectionText(await host.resolveBotContext(rootSessionId))
-            : undefined
-        ),
-        { tag: false }
-      )
-    ]
-  })
-
-  const placeholders = defineExtension({
-    name: PROMPT_EXTENSION.placeholders,
-    sections: [
-      section(
-        PROMPT_SECTION_KEY.placeholders,
-        () =>
-          opts.placeholders === true
-            ? `<placeholders>\n${PLACEHOLDER_NOTE}\n</placeholders>`
-            : undefined,
-        { tag: false }
-      )
-    ]
-  })
+  const liveExtension = (id: Exclude<PromptExtensionId, 'persona'>): Extension => {
+    const name = PROMPT_EXTENSION[id]
+    const key = PROMPT_SECTION_KEY[id]
+    return defineExtension({
+      name,
+      sections: [section(key, frozenOrLive(key, renders.get(name)!), { tag: false })]
+    })
+  }
 
   const byName = new Map<PromptExtensionName, Extension>([
     [PROMPT_EXTENSION.persona, persona],
-    [PROMPT_EXTENSION.placeholders, placeholders],
-    [PROMPT_EXTENSION.instructions, instructions],
-    [PROMPT_EXTENSION.projectPrompt, projectPrompt],
-    [PROMPT_EXTENSION.knowledge, knowledge],
-    [PROMPT_EXTENSION.bot, bot]
+    [PROMPT_EXTENSION.placeholders, liveExtension('placeholders')],
+    [PROMPT_EXTENSION.instructions, liveExtension('instructions')],
+    [PROMPT_EXTENSION.projectPrompt, liveExtension('projectPrompt')],
+    [PROMPT_EXTENSION.knowledge, liveExtension('knowledge')],
+    [PROMPT_EXTENSION.bot, liveExtension('bot')]
   ])
   const get = (name: PromptExtensionName): Extension => byName.get(name)!
   return {
     all: PROMPT_EXTENSION_ORDER.map(get),
     get,
     select: (spec) =>
-      promptExtensionsFor({ ...spec, placeholders: opts.placeholders === true }).map(get)
+      promptExtensionsFor({ ...spec, placeholders: opts.placeholders === true }).map(get),
+    renderSections: async (spec) => {
+      const out: Record<string, string | null> = {}
+      for (const name of spec.names) {
+        const render = renders.get(name)
+        if (render === undefined) continue
+        const key = sectionKeyOf(name)
+        try {
+          out[key] = (await render(spec)) ?? null
+        } catch (error) {
+          spec.onError?.(key, error)
+        }
+      }
+      return out
+    },
+    noteSectionsCurrent: (rootSessionId, keys) => {
+      if (keys.length > 0) host.noteSectionsCurrent?.(rootSessionId, keys)
+    }
   }
 }
 

@@ -230,12 +230,39 @@ export function whyUnconfined(): UnpinnedReason {
 
 // ─── 会话规格 ──────────────────────────────────────────
 
+/**
+ * 会话的临时目录按谁的 id 起名 —— 主进程启动时注入（sessionService 读 `settings.tempDirOwner`：会话 fork 共用
+ * 源会话的那一个）。没注入（单测）/ 读不出 → 本会话自己的。
+ */
+let tempOwnerOf: (sessionId: string) => string | undefined = () => undefined
+
+export function setSessionTempOwnerResolver(
+  resolver: (sessionId: string) => string | undefined
+): void {
+  tempOwnerOf = resolver
+}
+
+/** 本会话的临时目录借的是谁的（坏 id、读不出、没借 → 自己） */
+function tempOwner(sessionId: string): string {
+  try {
+    const owner = tempOwnerOf(sessionId)
+    return owner && isSafeSessionId(owner) ? owner : sessionId
+  } catch (err) {
+    log.warn(`temp dir owner unavailable for session ${sessionId}: ${(err as Error).message}`)
+    return sessionId
+  }
+}
+
 function specFor(
   sessionId: string,
   workingDirectory: string,
   entries: readonly SandboxPathEntry[]
 ): SpecResult {
-  return buildSandboxSpec(hostPaths(), { sessionId, workingDirectory, entries }, real)
+  return buildSandboxSpec(
+    hostPaths(),
+    { sessionId, tempOwnerId: tempOwner(sessionId), workingDirectory, entries },
+    real
+  )
 }
 
 /**
@@ -248,7 +275,11 @@ export function sessionOwnDirsView(
   workingDirectory: string
 ): SessionOwnDirs | null {
   try {
-    return sessionOwnDirs(hostPaths(), { sessionId, workingDirectory }, real)
+    return sessionOwnDirs(
+      hostPaths(),
+      { sessionId, tempOwnerId: tempOwner(sessionId), workingDirectory },
+      real
+    )
   } catch (err) {
     log.warn(`session dirs unavailable: ${(err as Error).message}`)
     return null
@@ -307,7 +338,7 @@ function tempEnvOf(dir: string): Record<string, string> {
 export function ensureSessionTempDir(sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null
   const root = tmpRootPath()
-  const dir = join(root, sessionTmpName(sessionId))
+  const dir = join(root, sessionTmpName(tempOwner(sessionId)))
   return ensureTmpDir(root, dir, currentUid()) ? dir : null
 }
 
@@ -365,7 +396,10 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
   }
 }
 
-/** 会话删除时清掉它的临时目录（每个平台都有这个目录，见 {@link ensureSessionTempDir}） */
+/**
+ * 删掉按 `sessionId` 起名的那个临时目录（每个平台都有这个目录，见 {@link ensureSessionTempDir}）。调用方
+ * （sessionService.delete）判断它还有没有人用：会话 fork 借着源会话的，用它的最后一条会话被删时才删。
+ */
 export function cleanupSession(sessionId: string): void {
   if (!isSafeSessionId(sessionId)) return
   try {

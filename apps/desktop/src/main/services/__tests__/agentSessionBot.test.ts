@@ -2,12 +2,16 @@
  * bot 会话的人设注入与**不泄漏**（pi-durable 切换之后的形态）。
  *
  * 契约：一条 bot 会话的根 Agent 跑在基座 `bot` 上，而**它是谁**由绑定的那份 bot md 的正文经
- * `renderBotContext` 围栏后成为系统提示词的一个活段落（`shuvix.prompt.bot`，只选给 bot 档案上的根
- * agent —— agent-runtime 的 `promptExtensionsFor`）。段落内容由桌面的 `PromptHost.resolveBotContext`
- * 每次请求现解析；它也是「正文视同已读」（fileTime `recordRead`）的**唯一**授予点 —— P1-11 的 agentHost
- * 实现它。注入面（旧编号 AG-1/2/3/5）由别处钉：段落内容、已读授予与 md 被删时缺席在
- * `agents/__tests__/desktopPromptHost.test.ts`（H11-60）；只选给 bot 档案上的根 agent（非 bot 会话、
- * 子会话 / 派生 agent 都没有这一段）在 agent-runtime 的 `promptSections.test.ts`（PS-05）。
+ * `renderBotContext` 围栏后成为系统提示词的一段（`shuvix.prompt.bot`，只选给 bot 档案上的根
+ * agent —— agent-runtime 的 `promptExtensionsFor`）。系统提示词冻结之后（2026-11-06），这一段在对话第一次
+ * 上锁时由桌面的 `PromptHost.resolveBotContext` 渲染一次、存进会话，此后照冻结的那份发（bot 改了自己的记忆，
+ * 这段对话的提示词照旧，用户点重建才换）；还没冻结的旧对话照旧每次请求现解析。「正文视同已读」（fileTime
+ * `recordRead`）只由 P1-11 的 agentHost 授予，且只在正文真进了提示词时：真渲染（不带 `compare`）一次，或比对出
+ * 冻结的那份与文件一致（`PromptHost.noteSectionsCurrent` 带 `bot_profile`）；只拿来比对的渲染（`compare`）不记。
+ * 注入面（旧编号 AG-1/2/3/5）由别处钉：段落内容、已读授予与 md 被删时缺席在
+ * `agents/__tests__/desktopPromptHost.test.ts`（H11-60、DPH-1..3）与 `desktopPromptHostBotRead.test.ts`（DPH-4，
+ * 真 fileTime）；只选给 bot 档案上的根 agent（非 bot 会话、子会话 / 派生 agent 都没有这一段）在 agent-runtime 的
+ * `promptSections.test.ts`（PS-05）。
  *
  * 这一份留下的两条：
  *  - AG-4（D10-33 的否定面）：会话门面（AgentSession）**从不**调 `recordRead`；

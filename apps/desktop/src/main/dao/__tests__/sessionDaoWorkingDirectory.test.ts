@@ -16,6 +16,10 @@
  *   DW-4  坏 JSON（`{bad`）、`{}`、空串的行跳过、不抛；另有一行真匹配时照样 true
  *   DW-5  没有 LIKE 语义（`_` / `%` 不是通配）；空格、引号、反斜杠、中文与重音字符原样往返
  *   DW-6  唯一指着它的那一行删掉之后 → false
+ *
+ * 同一个库上的 `existsWithTempDirOwner(owner)`（2026-11-06：fork 共用源会话的临时目录，`settings.tempDirOwner`）：
+ *   DT-1  有一行的 tempDirOwner 正是 owner → true；别的主人 / 没有这个键 → false
+ *   DT-2  坏 JSON 的行跳过、不抛；另有一行真匹配时照样 true
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -192,4 +196,29 @@ describe('DW-6 after the delete', () => {
     sessionDao.deleteById('b')
     expect(sessionDao.existsWithWorkingDirectory(DIR)).toBe(false)
   })
+})
+
+describe('DT existsWithTempDirOwner', () => {
+  it('DT-1 a row whose settings.tempDirOwner is owner → true; another owner or no key → false', () => {
+    expect(sessionDao.existsWithTempDirOwner('src')).toBe(false)
+    insert('plain', { enabledTools: [] })
+    insert('other', { tempDirOwner: 'other-src' })
+    insert('dir', { workingDirectory: 'src' })
+    expect(sessionDao.existsWithTempDirOwner('src')).toBe(false)
+    insert('fork', { tempDirOwner: 'src' })
+    expect(sessionDao.existsWithTempDirOwner('src')).toBe(true)
+    expect(sessionDao.existsWithTempDirOwner('sr')).toBe(false)
+    expect(sessionDao.existsWithTempDirOwner('other-src')).toBe(true)
+  })
+
+  it.each(['{bad', '{}', '', '[1,2', 'null'])(
+    'DT-2 a row with settings %j is skipped without throwing; a real match beside it → true',
+    (raw) => {
+      writeRawSettings('broken', raw)
+      expect(() => sessionDao.existsWithTempDirOwner('src')).not.toThrow()
+      expect(sessionDao.existsWithTempDirOwner('src')).toBe(false)
+      insert('fork', { tempDirOwner: 'src' })
+      expect(sessionDao.existsWithTempDirOwner('src')).toBe(true)
+    }
+  )
 })

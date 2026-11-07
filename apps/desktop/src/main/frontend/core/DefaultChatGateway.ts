@@ -1,3 +1,7 @@
+import type {
+  RebuildSystemPromptResult,
+  SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
 import type { AgentPreviewChange, ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import { redactionDecision } from '../../services/redactionPolicySeam'
@@ -356,9 +360,18 @@ export class DefaultChatGateway implements ChatGateway {
     return sessionService.previewAgentChange(sessionId, change)
   }
 
+  async systemPromptStatus(sessionId: string): Promise<SystemPromptStatus> {
+    return sessionService.systemPromptStatus(sessionId)
+  }
+
+  async rebuildSystemPrompt(sessionId: string): Promise<RebuildSystemPromptResult> {
+    return sessionService.rebuildSystemPrompt(sessionId)
+  }
+
   async destroyAgent(sessionId: string): Promise<void> {
     // invalidate 而非 destroy：会话还在，下一条消息照常重建。会话级资源（内置能力服务器、
-    // 决策日志、审查计数、hook 派发）随会话而不随运行时，这里一样都不碰
+    // 决策日志、审查计数、hook 派发）随会话而不随运行时，这里一样都不碰。冻结的系统提示词也不碰：
+    // 历史状态不变，换它是「重建系统提示词」的事（2026-11-06）
     await sessionService.invalidateAgent(sessionId)
   }
 

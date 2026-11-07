@@ -3,7 +3,17 @@
  * 内置工具在 `shuvix.builtin`、按 agent 的在 `shuvix.agent.<对话>`；MCP 在创建那一刻惰性连接，连不上的
  * 不记；沙箱钉子来自解析结果，创建时据此重装 `shuvix.builtin`；技能货架随内置工具的构造请求一起交给宿主
  * （货架空了也交 `[]`，LT-13 / WT4-DL-01）。
+ *
+ * 重新上锁的工具次序（2026-11-06）：对话里已经有模型见过的工具时，按它们的次序排（与重配同一条规则，
+ * `orderForMinimalDiff`），没见过的照 K6 的次序跟在后面 ——
+ *   LT-B1 见过 [c, a, b]、此刻拼出 [a, b, c, d] → 锁与请求都是 [c, a, b, d]
+ *   LT-B2 新对话（新会话、回退到第一条消息）→ K6 的次序
+ *   LT-B3 见过、但声明变了的工具排到没变的后面
+ *   LT-B4 重配把次序弄成非 K6 的之后，重启 / 回退到后面的消息再发：下一次请求的工具与上一次逐个同名同序
+ *   LT-B5 见过、但不再选中的工具不在；其余见过的保持相对次序
  */
+import { Type } from '@earendil-works/pi-ai'
+import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { AgentCreationError, composeAgentTools } from '../lock'
 import {
@@ -14,10 +24,12 @@ import {
   scenarioToolHost
 } from './support/agentConfig'
 import { answer, requestTools } from './support/faux'
-import { registerHostCleanup } from './support/host'
+import { makeHost, registerHostCleanup, type TestHost } from './support/host'
+import { forkedId } from './support/rollback'
 import { extensionTools, piAgent, scenarioW } from './support/scenario'
 import { holdTool } from './support/tools'
-import { toolDeltaCount } from './support/transcript'
+import { allEntries, systemDeltas, toolDeltaCount } from './support/transcript'
+import type { DurableSession } from '../durableSession'
 
 registerHostCleanup()
 
@@ -267,4 +279,134 @@ describe('lock · tools', () => {
     })
     expect(session.lock!.skills).toEqual([])
   })
+})
+
+/** 按 agent 的测试工具（描述可换：同名、声明不同） */
+function plainTool(name: string, description = `${name} tool`): ToolRegistration {
+  return defineTool({
+    name,
+    description,
+    parameters: Type.Object({}),
+    execute: async () => ({ output: [{ type: 'text', text: `${name} ok` }] })
+  })
+}
+
+async function sendOne(t: TestHost, session: DurableSession, text: string): Promise<void> {
+  t.kit.queue(answer(`re:${text}`))
+  expect(await session.submitUser(text)).toEqual({})
+}
+
+const lastOffered = (t: TestHost): string[] => names(t.kit.requests.at(-1)!.tools)
+
+describe('lock · tool order on re-lock (2026-11-06)', () => {
+  it('LT-B1 the model saw [c, a, b]; the canonical order is now [a, b, c, d] → the lock, pi.agent and the request are [c, a, b, d]; only d is added', async () => {
+    const tools = [plainTool('c'), plainTool('a'), plainTool('b')]
+    const t = await makeHost({ tools })
+    const session = await t.open()
+    await sendOne(t, session, 'u1')
+    expect(lastOffered(t)).toEqual(['c', 'a', 'b'])
+
+    tools.splice(0, tools.length, tools[1]!, tools[2]!, tools[0]!, plainTool('d'))
+    await session.destroyAgent()
+    await sendOne(t, session, 'u2')
+    expect(session.lock!.toolNames).toEqual(['c', 'a', 'b', 'd'])
+    expect(await piAgent(session)).toMatchObject({ tools: ['c', 'a', 'b', 'd'] })
+    expect(lastOffered(t)).toEqual(session.lock!.toolNames)
+    const deltas = await systemDeltas(await session.currentConversation())
+    expect(deltas.at(-1)).toMatchObject({ toolsAdded: ['d'], toolsRemoved: [] })
+  })
+
+  it('LT-B2 a fresh conversation keeps the K6 order: a new session, and a rollback to the first message', async () => {
+    const tools = [plainTool('a'), plainTool('b'), plainTool('c'), plainTool('d')]
+    const t = await makeHost({ tools })
+    const fresh = await t.open('s2')
+    await sendOne(t, fresh, 'hi')
+    expect(fresh.lock!.toolNames).toEqual(['a', 'b', 'c', 'd'])
+    expect(lastOffered(t)).toEqual(['a', 'b', 'c', 'd'])
+
+    tools.splice(0, tools.length, tools[2]!, tools[0]!, tools[1]!)
+    const session = await t.open('s1')
+    await sendOne(t, session, 'u1')
+    expect(lastOffered(t)).toEqual(['c', 'a', 'b'])
+    tools.splice(0, tools.length, tools[1]!, tools[2]!, tools[0]!, plainTool('d'))
+    const firstUser = (await allEntries(await session.currentConversation())).find(
+      (entry) => entry.kind === 'pi.user'
+    )!
+    forkedId(await session.rollbackTo(firstUser.id as number))
+    await sendOne(t, session, 'again')
+    expect(session.lock!.toolNames).toEqual(['a', 'b', 'c', 'd'])
+    expect(lastOffered(t)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('LT-B3 a seen tool whose declaration changed moves after the unchanged seen tools (same rule as orderForMinimalDiff)', async () => {
+    const tools = [plainTool('a'), plainTool('b'), plainTool('c')]
+    const t = await makeHost({ tools })
+    const session = await t.open()
+    await sendOne(t, session, 'u1')
+    tools.splice(1, 1, plainTool('b', 'b tool, reworded'))
+    await session.destroyAgent()
+    await sendOne(t, session, 'u2')
+    expect(session.lock!.toolNames).toEqual(['a', 'c', 'b'])
+    expect(lastOffered(t)).toEqual(['a', 'c', 'b'])
+    expect(t.kit.requests.at(-1)!.tools.find((tool) => tool.name === 'b')!.description).toBe(
+      'b tool, reworded'
+    )
+  })
+
+  it('LT-B5 a seen tool no longer selected is absent; the remaining seen tools keep their relative order', async () => {
+    const tools = [plainTool('c'), plainTool('a'), plainTool('b'), plainTool('e')]
+    const t = await makeHost({ tools })
+    const session = await t.open()
+    await sendOne(t, session, 'u1')
+    tools.splice(0, tools.length, tools[2]!, tools[3]!, tools[1]!)
+    await session.destroyAgent()
+    await sendOne(t, session, 'u2')
+    expect(session.lock!.toolNames).toEqual(['a', 'b', 'e'])
+    expect(lastOffered(t)).toEqual(['a', 'b', 'e'])
+  })
+
+  it.each(['restart', 'rollback'] as const)(
+    'LT-B4 a live reconfigure appended a server out of K6 order; after a %s the next request offers exactly the previous request’s tools, by name and order',
+    async (how) => {
+      const config = scenarioConfig()
+      const { t } = await scenarioW({ config })
+      const session = await t.open()
+      await sendOne(t, session, 'u1')
+      // 中途勾上 new，勾选里排在 ctx 前面：K6 会把它排在 ctx 前，重配把它追加在最后
+      config.toolOverlay = ['mcp:new', 'mcp:ctx']
+      expect((await session.reconfigureAgent()).applied).toBe(true)
+      await sendOne(t, session, 'u2')
+      await sendOne(t, session, 'u3')
+      const previous = t.kit.requests.at(-1)!.tools.map((tool) => tool.name)
+      expect(previous).toEqual([...E_W, 'mcp__new__fresh'])
+      const previousTools = t.kit.requests.at(-1)!.tools
+
+      // 对照：同一份设置的新会话是 K6 的次序（new 在 ctx 前）
+      const canonical = await t.open('fresh')
+      await canonical.createAgent()
+      expect(canonical.lock!.toolNames).not.toEqual(previous)
+      expect(canonical.lock!.toolNames.indexOf('mcp__new__fresh')).toBeLessThan(
+        canonical.lock!.toolNames.indexOf('mcp__ctx__resolve')
+      )
+
+      let next: TestHost = t
+      let target: DurableSession = session
+      if (how === 'restart') {
+        next = await t.restart()
+        target = await next.open()
+        expect(target.lock).toBeUndefined()
+      } else {
+        const users = (await allEntries(await session.currentConversation())).filter(
+          (entry) => entry.kind === 'pi.user'
+        )
+        forkedId(await session.rollbackTo(users[2]!.id as number))
+      }
+      await sendOne(next, target, 'after')
+      const request = next.kit.requests.at(-1)!
+      expect(request.tools.map((tool) => tool.name)).toEqual(previous)
+      expect(request.tools).toEqual(previousTools)
+      expect(target.lock!.toolNames).toEqual(previous)
+    },
+    20000
+  )
 })

@@ -143,6 +143,11 @@ export class SessionRecords {
     return sessionDao.existsWithWorkingDirectory(dir)
   }
 
+  /** 有没有会话的 `settings.tempDirOwner` 正是 `owner`（fork 借着那条会话的临时目录）。内存会话从不被 fork，只查表 */
+  existsWithTempDirOwner(owner: string): boolean {
+    return sessionDao.existsWithTempDirOwner(owner)
+  }
+
   // ─── 点查 ──────────────────────────────────
 
   findById(id: string): Session | undefined {

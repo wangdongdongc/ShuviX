@@ -7,8 +7,15 @@
  * 跨天这类时间线事件走另一条通道（日期通知条目，见 `dateNotice.ts`），不碰系统提示词。
  *
  * 用法（P1-09 的锁）：先在提交外算好（`computeFrozenAgentPrompt` —— 变量表可能做 I/O，提交体里
- * 不该等它），再在上锁的同一个提交里 `freezePersona(tx, conversationId, frozen)`。销毁 agent 之后
- * 重新创建 = 重新冻结，persona 段落在下一次请求里作为增量重发。
+ * 不该等它），再在上锁的同一个提交里 `freezePersona(tx, conversationId, frozen)`。
+ *
+ * **根 agent 的系统提示词冻结一次、之后不再自己变**（2026-11-06，用户裁决「历史状态不变」）：锁在重启后空闲时、
+ * 回退、fork、芯片上的 X 之后都会重建，重建时对话已经有冻结的人设（以及 `sections.ts` 冻结的其余段落）就原样
+ * 沿用（{@link reusableFrozenPrompt}），日期、版本、档案正文、CLAUDE.md 改了都不换 —— 否则在不支持中途 system
+ * 消息的模型上，升级一次、跨天重启一次，每条会话都要整段重算历史。冻结时记下 `personaKey`（{@link personaKeyOf}：
+ * 档案、正文、工具名单、工作目录、指令文件清单 —— 有意的改动）只为**提醒**：此刻算出的摘要不同，界面
+ * 告诉用户「档案改过了」，用户点重建（{@link forgetFrozenPrompt} 删掉冻结的那份），下一次上锁才重新渲染，在下一次
+ * 请求里作为增量重发。派生 agent 每次都是新对话，不走这一条。
  *
  * 文本口径与旧 `renderProfileSystemPrompt` 逐字节一致：替换 → 整段 `\n{3,}` 收敛成 `\n\n` → trim
  * （P1-00 黄金 fixture 的 `persona` 段即由此对照）。
@@ -23,7 +30,7 @@ import {
 } from '../../agentProfile/promptVars'
 import type { InProcessAgentType } from '../../subagent/types'
 import type { RuntimeLogger } from '../../types'
-import { AgentStateDoc } from '../docs'
+import { AgentStateDoc, type AgentStateRecord } from '../docs'
 
 /** 渲染人设：档案正文 + 变量表（`renderProfileSystemPrompt` 同一口径） */
 export function renderPersona(
@@ -61,6 +68,70 @@ export interface FrozenAgentPrompt {
   rootSessionId: string
   persona: string
   instructionFiles: readonly string[]
+  /** 根 agent 才有：冻结时的输入摘要（{@link personaKeyOf}）；派生 agent 不写 */
+  personaKey?: string
+}
+
+/** 53 位的字符串摘要（cyrb53）：只用来判断「输入变没变」，不是安全用途；运行时不依赖 Node 的 crypto */
+function digest(text: string): string {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 2654435761)
+    h2 = Math.imul(h2 ^ ch, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
+}
+
+/** 摘要要看的那几项（上锁时与比对时各自凑齐；`toolNames` 是档案 + 会话勾选归一后的名单） */
+export type PersonaKeyInput = Pick<PersonaInput, 'kind' | 'cwd' | 'toolNames'> & {
+  profile: Pick<InProcessAgentType, 'name' | 'systemPrompt' | 'instructionFiles'>
+}
+
+/**
+ * 人设的输入摘要 —— 只收**有意的**改动：档案名、种类、正文（用户改了 md、换了界面语言、升级换了内置 md）、
+ * 归一后的工具名单（不含 `mcp:`，按集合）、工作目录、指令文件清单。日期、版本、系统、shell、项目名这些变量表里的
+ * 值故意不在里面：它们天天变，提醒就成了噪音（跨天由日期通知告诉模型）。技能货架也不在：人设只看作图技能在不在，
+ * 算整个货架的话，启用随便哪个技能都会让每条会话报「档案改过了」。只用来提醒用户，从不据此自动重新渲染。
+ */
+export function personaKeyOf(input: PersonaKeyInput): string {
+  return `v1:${digest(
+    JSON.stringify([
+      input.kind,
+      input.profile.name,
+      input.profile.systemPrompt,
+      // `mcp:` 条目不算：人设不按它们变（变量表只看内置工具与技能），会话里中途勾一台 MCP 是活的重配
+      [...new Set(input.toolNames.filter((name) => !name.startsWith('mcp:')))].sort(),
+      input.cwd,
+      [...(input.profile.instructionFiles ?? [])]
+    ])
+  )}`
+}
+
+/**
+ * 存着的冻结记录能不能原样沿用：有人设、种类对得上 → 交回人设正文与指令文件清单（可以直接再冻结一遍，文本不变）；
+ * 否则 undefined（调用方渲染）。**不看摘要，也不看档案名**：摘要变了、档案换了（临时会话挪进项目，chat → work）
+ * 都只提醒，不重新渲染。身份（种类、档案名、根会话 id）按这次的输入写：fork 拷来的记录写着源会话的根会话 id，
+ * 活段落要按 fork 自己的会话解析。存着的摘要原样留着（旧记录没有摘要 → 记下 `currentKey`，此后按它比对）。
+ */
+export function reusableFrozenPrompt(
+  stored: AgentStateRecord | undefined,
+  input: PersonaInput,
+  currentKey: string
+): FrozenAgentPrompt | undefined {
+  if (stored === undefined || stored.persona === undefined) return undefined
+  if (stored.kind !== input.kind) return undefined
+  return {
+    kind: input.kind,
+    profileName: input.profile.name,
+    rootSessionId: input.rootSessionId,
+    persona: stored.persona,
+    instructionFiles: [...(stored.instructionFiles ?? [])],
+    personaKey: stored.personaKey ?? currentKey
+  }
 }
 
 /** 现算变量表、渲染人设，打包成待冻结的记录（在提交之外调用） */
@@ -99,6 +170,33 @@ export async function freezePersona(
   state.rootSessionId = frozen.rootSessionId
   state.persona = frozen.persona
   state.instructionFiles = [...frozen.instructionFiles]
+  if (frozen.personaKey === undefined) delete state.personaKey
+  else state.personaKey = frozen.personaKey
+}
+
+/** 在调用方的提交里冻结其余段落（`sections.ts` 的 `renderSections` 渲染的那份，段落 key → 文本 / `null`） */
+export async function freezeSections(
+  tx: Tx,
+  conversationId: ConversationId,
+  sections: Readonly<Record<string, string | null>>,
+  unfrozen: readonly string[] = []
+): Promise<void> {
+  const state = await tx.doc(AgentStateDoc, conversationId)
+  state.sections = { ...sections }
+  if (unfrozen.length > 0) state.unfrozenSections = [...unfrozen]
+  else delete state.unfrozenSections
+}
+
+/**
+ * 用户点了「重建系统提示词」：删掉这个对话冻结的人设、摘要与其余段落，下一次上锁按此刻的来源重新渲染。身份字段
+ * （种类、档案名、根会话 id、指令文件清单）与日期记录留着。调用方保证此刻没有锁（没有锁就没有请求读人设）。
+ */
+export async function forgetFrozenPrompt(tx: Tx, conversationId: ConversationId): Promise<void> {
+  const state = await tx.doc(AgentStateDoc, conversationId)
+  delete state.persona
+  delete state.personaKey
+  delete state.sections
+  delete state.unfrozenSections
 }
 
 /** 读一个对话已冻结的人设（没冻结 → undefined） */

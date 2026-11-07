@@ -456,7 +456,11 @@ describe('agent records · AgentStateDoc fields', () => {
       profileName: 'work',
       rootSessionId: 's1',
       persona: 'You are Aria',
-      instructionFiles: ['AGENTS.md']
+      instructionFiles: ['AGENTS.md'],
+      // 冻结时的输入摘要：只用来提醒「档案改过了」（2026-11-06）
+      personaKey: expect.stringMatching(/^v1:/),
+      // 其余段落冻结在这里（2026-11-06：系统提示词首次渲染后不再自己变）：场景 W 选中的三段，宿主没有 seam → 缺席
+      sections: { project_instructions: null, project_prompt: null, knowledge_bases: null }
     })
     expect(parseSpawnedAgentRecord(rootState)).toBeUndefined()
     const fresh = await session.harness.createConversation({ ownership: { kind: 'ownerless' } }, BG)

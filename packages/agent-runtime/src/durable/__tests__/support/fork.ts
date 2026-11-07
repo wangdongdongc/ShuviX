@@ -3,8 +3,10 @@
  *
  *  - `copyStorageFile(from, to)`：与宿主 `sessionStorage.copyDurableStorage` 同一做法 —— 在源文件上另开一条
  *    node:sqlite 连接，`VACUUM INTO` 目标路径。
- *  - `forkStorage(t, source, toId)`：宿主 fork 的步骤 2–3 —— 在源会话的 `whileIdle` 里把它的文件拷成 `toId`
- *    的，拷成了就按路径开那份拷贝、`resetForkedSessionState`。交回 whileIdle 的结果（busy 时什么都没拷）。
+ *  - `forkStorage(t, source, toId, options)`：宿主 fork 的步骤 2–3 —— 在源会话的 `whileIdle` 里把它的文件拷成
+ *    `toId` 的，拷成了就按路径开那份拷贝、`resetForkedSessionState`。交回 whileIdle 的结果（busy 时什么都没拷）。
+ *    `keepLock`（2026-11-06，与宿主今天的做法一样）：收尾时留下锁、根会话 id 改成 `toId`，留下了就
+ *    `adoptForkedAgent(toId)`（`adopt: false` 跳过这一步，模拟认领标记丢了）。
  *  - `readStorage(file)`：按路径开一份原始存储（不经宿主），读会话状态文档、全部对话、每个对话自己的条目、
  *    全部任务、每个对话的 AgentStateDoc，读完关掉。
  */
@@ -43,12 +45,20 @@ export function copyStorageFile(from: string, to: string): void {
 export async function forkStorage(
   t: TestHost,
   source: DurableSession,
-  toId: string
+  toId: string,
+  options: { keepLock?: boolean; adopt?: boolean } = {}
 ): Promise<IdleWorkResult<void>> {
   const result = await source.whileIdle(async () =>
     copyStorageFile(t.file(source.sessionId), t.file(toId))
   )
-  if (result.ok) await resetForkedSessionState(await openNodeSqliteStorage(t.file(toId)))
+  if (!result.ok) return result
+  const storage = await openNodeSqliteStorage(t.file(toId))
+  if (options.keepLock === true) {
+    const { lockKept } = await resetForkedSessionState(storage, { keepLock: true, sessionId: toId })
+    if (lockKept && options.adopt !== false) t.host.adoptForkedAgent(toId)
+  } else {
+    await resetForkedSessionState(storage)
+  }
   return result
 }
 

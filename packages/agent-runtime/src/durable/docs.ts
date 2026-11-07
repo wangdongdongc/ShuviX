@@ -93,6 +93,23 @@ export type AgentStateRecord = {
    * promptVars 替换后的那份。`undefined` = 还没冻结（agent 没创建）；`''` = 冻结了但正文为空。
    */
   persona?: string
+  /**
+   * 冻结那一刻人设是照什么渲染的（根 agent 才写，`prompt/persona.ts` 的 `personaKeyOf`）：档案、正文、工具名单、
+   * 工作目录、指令文件清单。**只用来提醒**：系统提示词冻结之后从不自己重新渲染（2026-11-06，用户裁决
+   * 「历史状态不变」），此刻的输入算出的摘要与它不同，就告诉用户「档案改过了」，由用户点重建。
+   */
+  personaKey?: string
+  /**
+   * 冻结的其余段落（根 agent 才写，`prompt/sections.ts`）：段落 key → 第一次上锁时渲染出的文本（`null` = 当时缺席）。
+   * 有这一项的对话，段落只读它、不再现解析 —— 改了 CLAUDE.md、项目提示词、知识库勾选、bot 记忆，这个对话的系统
+   * 提示词照旧，用户点重建才换（`DurableSession.rebuildSystemPrompt`）。没有这一项（旧对话、派生 agent）→ 照旧现解析。
+   */
+  sections?: { [key: string]: string | null }
+  /**
+   * 冻结时选中了、却没渲染成的段落（宿主 seam 抛错）：它们照旧选中、现解析，下一次上锁再试着冻结（2026-11-06）。
+   * 不记的话，下一次上锁只选冻结了的那几段，这一段就从提示词里没了。
+   */
+  unfrozenSections?: string[]
   /** 档案的指令文件清单（顺序即优先级），与人设一起冻结；指令文件段落按它解析 */
   instructionFiles?: string[]
   /**

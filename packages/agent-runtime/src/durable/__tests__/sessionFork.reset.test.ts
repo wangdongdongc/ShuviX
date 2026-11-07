@@ -6,6 +6,12 @@
  *        对话、条目、任务、AgentStateDoc 原样
  *   RS-2 收尾关掉交给它的存储（之后同一个文件能再开）
  *   RS-3 幂等：已经干净的存储再收尾一次什么都不变；全新的空存储收尾不抛
+ *
+ * 留下锁（2026-11-06，fork 沿用源会话的 agent）：
+ *   RS-D1 `{ keepLock: true, sessionId: 'fork' }`：锁原样留着、driven 标记与待送达通知照样清、当前对话指针不变，
+ *         交回 `{ lockKept: true }`；锁住那个对话的 AgentStateDoc.rootSessionId 改成 'fork'，人设不动
+ *   RS-D2 `keepLock` 但存储里没有锁 → `{ lockKept: false }`
+ *   RS-D3 不给选项 → 锁删掉、`{ lockKept: false }`，rootSessionId 不动
  */
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { describe, expect, it, vi } from 'vitest'
@@ -17,6 +23,7 @@ import { answer } from './support/faux'
 import { readStorage } from './support/fork'
 import { registerHostCleanup, type TestHost } from './support/host'
 import { forkedId, rollbackBase } from './support/rollback'
+import { parseLockRecord } from '../lock'
 import { waitFor, withTimeout } from './support/wait'
 
 registerHostCleanup()
@@ -114,6 +121,76 @@ describe('session fork · resetForkedSessionState', () => {
       expect(fresh.state?.deferredNotices ?? []).toEqual([])
       expect(fresh.state?.lock).toBeUndefined()
       expect(fresh.state?.driven).toBeUndefined()
+    },
+    TIMEOUT
+  )
+
+  it(
+    "RS-D1 keepLock + sessionId: the lock stays, the driven marker and notices go, the pointer stays on F, { lockKept: true }; the locked conversation's rootSessionId becomes 'fork', the persona is untouched",
+    async () => {
+      const { F, file } = await dirtyStorage()
+      const before = await readStorage(file)
+      const lockedOn = parseLockRecord(before.state?.lock)?.conversationId
+      expect(lockedOn).toBe(F)
+      expect(before.agentStates[F]?.rootSessionId).toBe('s1')
+
+      const result = await resetForkedSessionState(await openNodeSqliteStorage(file), {
+        keepLock: true,
+        sessionId: 'fork'
+      })
+      expect(result).toEqual({ lockKept: true })
+
+      const after = await readStorage(file)
+      expect(after.state).toEqual({
+        currentConversation: F,
+        deferredNotices: [],
+        lock: before.state?.lock
+      })
+      expect(after.state).not.toHaveProperty('driven')
+      expect(after.agentStates[F]).toEqual({ ...before.agentStates[F], rootSessionId: 'fork' })
+      expect(after.agentStates[F]?.persona).toBe(before.agentStates[F]?.persona)
+      // 别的对话（根）的 AgentStateDoc 不动
+      for (const [id, state] of Object.entries(before.agentStates)) {
+        if (Number(id) !== F) expect(after.agentStates[Number(id)]).toEqual(state)
+      }
+      expect(after.conversations).toEqual(before.conversations)
+      expect(after.entries).toEqual(before.entries)
+      expect(after.tasks).toEqual(before.tasks)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'RS-D2 keepLock on a storage without a lock answers { lockKept: false }',
+    async () => {
+      const { t, file } = await dirtyStorage()
+      await resetForkedSessionState(await openNodeSqliteStorage(file))
+      expect(
+        await resetForkedSessionState(await openNodeSqliteStorage(file), {
+          keepLock: true,
+          sessionId: 'fork'
+        })
+      ).toEqual({ lockKept: false })
+      const empty = t.file('never-used')
+      expect(
+        await resetForkedSessionState(await openNodeSqliteStorage(empty), { keepLock: true })
+      ).toEqual({ lockKept: false })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'RS-D3 no options: the lock is deleted, { lockKept: false }, rootSessionId untouched',
+    async () => {
+      const { F, file } = await dirtyStorage()
+      const before = await readStorage(file)
+      expect(await resetForkedSessionState(await openNodeSqliteStorage(file))).toEqual({
+        lockKept: false
+      })
+      const after = await readStorage(file)
+      expect(after.state).not.toHaveProperty('lock')
+      expect(after.agentStates[F]?.rootSessionId).toBe('s1')
+      expect(after.agentStates).toEqual(before.agentStates)
     },
     TIMEOUT
   )

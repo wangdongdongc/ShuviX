@@ -15792,3 +15792,162 @@ export function sessionLinksPane(main: CdpClient): SessionLinksPane {
       })()`)
   }
 }
+
+// ───────────────────────────────────────────────────────────
+// 「系统提示词的来源改了」的小图标（chat-ui SystemPromptIndicator，`[data-system-prompt-indicator]`）：输入卡片底部
+// 工具行里、用量环左边。`data-stale` = 来源变了的段落 key（空格分隔，固定次序）。点开是一个气泡
+// （`[data-system-prompt-popover]`，role=dialog）：哪几样改了、提示、[重建]。点击一律经真实鼠标事件（CDP Input），
+// 不是 el.click() —— 气泡靠 document 上的 pointerdown 收起，合成的 click 不经过它。
+
+/** 小图标此刻的样子 */
+export interface SystemPromptIndicatorShot {
+  /** 来源变了的段落 key（`data-stale`，按序） */
+  stale: string[]
+  /** 图标按钮的 aria-label */
+  label: string
+  /** 气泡开着（aria-expanded） */
+  expanded: boolean
+  /** 紧挨着的下一个兄弟是不是用量环（`data-context-ring`） */
+  beforeContextRing: boolean
+}
+
+/** 气泡此刻的样子 */
+export interface SystemPromptPopoverShot {
+  /** 说明那一行（列出来源） */
+  text: string
+  /** 提示行（会话在跑时换成「等它停下」） */
+  hint: string
+  /** [重建] 是否禁用（重建中 / 会话在跑） */
+  rebuildDisabled: boolean
+}
+
+export interface SystemPromptIndicatorPane {
+  /** 小图标不在屏 → null */
+  indicator(): Promise<SystemPromptIndicatorShot | null>
+  /** 真实鼠标点小图标，等气泡出现（已经开着就不点） */
+  openPopover(): Promise<SystemPromptPopoverShot>
+  /** 气泡不在 → null */
+  popover(): Promise<SystemPromptPopoverShot | null>
+  /** 真实鼠标点气泡里的 [重建]；按钮不在 / 被盖住即抛 */
+  clickRebuild(): Promise<void>
+  /** 真按一下 Esc（CDP Input，落在此刻有焦点的元素上、冒泡到 document） */
+  pressEscape(): Promise<void>
+  /** 真实鼠标点一下小图标之外（输入框中心） */
+  clickOutside(): Promise<void>
+  /** 把输入卡片（连同开着的气泡）截成 PNG 写到 `filePath`（外扩 `pad` 像素）—— 给人看的证据，不是断言 */
+  screenshotComposer(filePath: string, pad?: number): Promise<void>
+}
+
+export function systemPromptIndicatorPane(main: CdpClient): SystemPromptIndicatorPane {
+  const ROOT = `document.querySelector('[data-system-prompt-indicator]')`
+  const BUTTON = `${ROOT}?.querySelector('[data-system-prompt-indicator-button]')`
+  const POPOVER = `${ROOT}?.querySelector('[data-system-prompt-popover]')`
+  const REBUILD = `${POPOVER}?.querySelector('[data-system-prompt-rebuild]')`
+  const CARD = `document.querySelector('textarea:not([data-other-input])')?.closest('.rounded-2xl')`
+
+  /** 元素中心点（且那一点命中的就是它）；不在 / 被盖住 → null */
+  const centerOf = (expr: string): Promise<{ x: number; y: number } | null> =>
+    main.eval<{ x: number; y: number } | null>(`(() => {
+      const el = ${expr}
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      const x = r.left + r.width / 2
+      const y = r.top + r.height / 2
+      const hit = document.elementFromPoint(x, y)
+      return hit && (hit === el || el.contains(hit)) ? { x, y } : null
+    })()`)
+
+  const click = async (point: { x: number; y: number }): Promise<void> => {
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await main.send('Input.dispatchMouseEvent', {
+        type,
+        x: point.x,
+        y: point.y,
+        ...(type === 'mouseMoved' ? {} : { button: 'left', clickCount: 1 })
+      })
+    }
+  }
+
+  const popover = (): Promise<SystemPromptPopoverShot | null> =>
+    main.eval<SystemPromptPopoverShot | null>(`(() => {
+      const el = ${POPOVER}
+      if (!el) return null
+      const btn = el.querySelector('[data-system-prompt-rebuild]')
+      return {
+        text: (el.firstElementChild?.textContent ?? '').trim(),
+        hint: (el.querySelector('[data-system-prompt-hint]')?.textContent ?? '').trim(),
+        rebuildDisabled: !!btn?.disabled
+      }
+    })()`)
+
+  return {
+    indicator: () =>
+      main.eval<SystemPromptIndicatorShot | null>(`(() => {
+        const el = ${ROOT}
+        if (!el) return null
+        const btn = el.querySelector('[data-system-prompt-indicator-button]')
+        return {
+          stale: (el.getAttribute('data-stale') ?? '').split(' ').filter((key) => key !== ''),
+          label: btn?.getAttribute('aria-label') ?? '',
+          expanded: btn?.getAttribute('aria-expanded') === 'true',
+          beforeContextRing: el.nextElementSibling?.hasAttribute('data-context-ring') ?? false
+        }
+      })()`),
+    openPopover: async () => {
+      const already = await popover()
+      if (already) return already
+      const point = await centerOf(BUTTON)
+      if (!point) throw new Error('system prompt indicator is not on screen')
+      await click(point)
+      return until(popover, 'system prompt popover open')
+    },
+    popover,
+    clickRebuild: async () => {
+      const point = await centerOf(REBUILD)
+      if (!point) throw new Error('system prompt rebuild button is not on screen')
+      await click(point)
+    },
+    pressEscape: async () => {
+      const key = {
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27
+      }
+      await main.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key })
+      await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+    },
+    clickOutside: async () => {
+      const point = await centerOf(`document.querySelector('textarea:not([data-other-input])')`)
+      if (!point) throw new Error('no composer textarea to click')
+      await click(point)
+    },
+    screenshotComposer: async (filePath, pad = 12) => {
+      const rect = await main.eval<ViewportRect | null>(`(() => {
+        const card = ${CARD}
+        if (!card) return null
+        const boxes = [card, ${POPOVER}].filter(Boolean).map((el) => el.getBoundingClientRect())
+        const left = Math.min(...boxes.map((b) => b.left))
+        const top = Math.min(...boxes.map((b) => b.top))
+        const right = Math.max(...boxes.map((b) => b.right))
+        const bottom = Math.max(...boxes.map((b) => b.bottom))
+        return { x: left, y: top, width: right - left, height: bottom - top }
+      })()`)
+      if (!rect) throw new Error('no composer card on screen to screenshot')
+      const x = Math.max(0, rect.x - pad)
+      const y = Math.max(0, rect.y - pad)
+      const shot = await main.send<{ data: string }>('Page.captureScreenshot', {
+        format: 'png',
+        clip: {
+          x,
+          y,
+          width: rect.width + (rect.x - x) + pad,
+          height: rect.height + (rect.y - y) + pad,
+          scale: 1
+        }
+      })
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
+    }
+  }
+}

@@ -3,8 +3,9 @@
  * sessionService / 网关 / messageService / sessionStorage 的拷贝（`VACUUM INTO`）/ artifacts 拷贝 / 日历索引
  * （真 DAO）+ 临时目录里的真 SQLite 会话存储）。mock 面照 rollbackIntegration.test.ts。
  *
- *   SI-1 锁着的源会话 U1 A1 U2 A2 → 整段 fork：消息列表与 id 一样；源会话的行不变；fork 没上锁（init 的
- *        created:false、hasAgentRuntime false）、改扩展能力被接受；源会话照旧锁着，改它的扩展能力同样被接受、
+ *   SI-1 锁着的源会话 U1 A1 U2 A2 → 整段 fork：消息列表与 id 一样；源会话的行不变；fork 沿用源会话的 agent
+ *        （锁随拷贝留下：同一个模型、同一组工具、同一个次序，2026-11-06），改扩展能力被接受并重配到 fork 自己的锁上；
+ *        源会话照旧锁着，改它的扩展能力同样被接受、
  *        当场重配到它的 agent 上（锁记下新的勾选，2026-10-26）
  *   SI-2 从一张「工具调用 + 结果 + 最终回答」的卡分支：fork 的视图 = U1 + 那张卡；在 fork 上发送带的是那段前缀 +
  *        新消息；之后两边各走各的。从卡中间那条工具调用分支：紧跟着的工具结果一起带上
@@ -17,6 +18,10 @@
  *   SI-8 新建的会话与 fork 当天就在日历上（真 SQL）：谁也还没在它们上面发过消息，没有可跳的第一条
  *   SI-9 输入来源（metadata.origin，2026-10-21）跟着 fork 走（fork 是同一段对话的副本）：整段 fork 的列表来源一样；
  *        从 A1 分支保留 U1 的 remote；在 fork 上于 Chrome 的上下文里发的记 chrome，源会话不变
+ *   SI-10 (D5) 源会话跑过几轮、轮与轮之间日期变了、中途换过一次工具（销毁后重新上锁，工具按模型见过的次序排，
+ *        不是此刻拼出来的次序）→ 整段 fork：fork 的第一次请求与源会话的下一次请求系统提示词逐字节相同、工具同名
+ *        同序同声明、模型相同；变量表只在第一次上锁时调过一次（重配打乱次序的那条路在运行时的
+ *        sessionFork.roundtrip.test.ts RT-D5）
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -24,6 +29,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DurableSession } from '@shuvix/agent-runtime'
+import { Type } from '@earendil-works/pi-ai'
+import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const holder = vi.hoisted(() => ({
@@ -307,7 +314,7 @@ async function seedTwoTurns(sessionId: string): Promise<string[]> {
 
 describe('SI session fork against a real host', () => {
   it(
-    'SI-1 whole fork of a locked U1 A1 U2 A2: same list and ids; source row unchanged; fork unlocked (init created:false) and its extensions writable; source still locked, and its extensions write reconfigures its agent',
+    'SI-1 whole fork of a locked U1 A1 U2 A2: same list and ids; source row unchanged; the fork keeps the source agent (same model, tools, order) and its extensions write reconfigures its own lock; source still locked, and its extensions write reconfigures its agent',
     async () => {
       const ids = await seedTwoTurns('s')
       const sourceBefore = sessionRecords.findById('s')
@@ -320,14 +327,18 @@ describe('SI session fork against a real host', () => {
       expect(sessionRecords.findById('s')).toEqual(sourceBefore)
       expect(mocks.listChanged).toHaveBeenCalledTimes(1)
 
-      // fork：没有 agent（锁属于源会话那一场），扩展能力勾选可改
-      expect(openSession(forkId).lock).toBeUndefined()
-      expect(mirrorLocked(forkId)).not.toBe(true)
-      expect(sessionService.hasAgentRuntime(forkId)).toBe(false)
-      expect((await chatGateway.startChat(forkId)).created).toBe(false)
+      // fork 沿用源会话的 agent（2026-11-06）：锁随拷贝留下、第一次打开就按锁重建 —— 同一个模型、同一组工具、
+      // 同一个次序；扩展能力勾选照样可改，改了就重配到 fork 自己的锁上，源会话不受影响
+      expect((await chatGateway.startChat(forkId)).created).toBe(true)
+      const forkLock = openSession(forkId).lock
+      expect(forkLock).toBeDefined()
+      expect(forkLock!.model).toEqual(openSession('s').lock!.model)
+      expect(forkLock!.toolNames).toEqual(openSession('s').lock!.toolNames)
+      expect(mirrorLocked(forkId)).toBe(true)
+      expect(sessionService.hasAgentRuntime(forkId)).toBe(true)
       expect(await sessionService.updateEnabledTools(forkId, ['mcp:browser'])).toBe(true)
       expect(sessionRecords.findById(forkId)!.settings.enabledTools).toEqual(['mcp:browser'])
-      expect(openSession(forkId).lock).toBeUndefined()
+      expect(openSession(forkId).lock!.selection).toEqual(['mcp:browser'])
 
       // 源会话照旧锁着；改它的勾选同样被接受，并当场重配到它锁住的 agent 上（锁记下新的勾选；这台 ToolHost
       // 连不上新服务器，工具不变）
@@ -680,6 +691,77 @@ describe('SI session fork against a real host', () => {
       ])
       expect(await messageService.listBySession('s')).toStrictEqual(source)
       expect(await messageService.listBySession(whole)).toStrictEqual(wholeListed)
+    },
+    TIMEOUT
+  )
+})
+
+describe('SI-10 the fork keeps the source agent (cache-preserving)', () => {
+  it(
+    "SI-10 (D5) several turns, a changing date and a re-lock that kept the seen tool order: the whole fork's first request equals the source's next request (system prompt bytes, tools, model)",
+    async () => {
+      const plain = (name: string): ToolRegistration =>
+        defineTool({
+          name,
+          description: `${name} tool`,
+          parameters: Type.Object({}),
+          execute: async () => ({ output: [{ type: 'text', text: `${name} ok` }] })
+        })
+      const read = readTool()
+      const b = plain('b')
+      let tools: readonly ToolRegistration[] = [read, b]
+      const vars = { date: '2026-11-05', calls: 0 }
+      resetSessionHostForTests(
+        testDepsOverrides(kit, {
+          toolHost: toolsToolHost(() => tools),
+          promptVars: () => {
+            vars.calls++
+            return { date: vars.date }
+          }
+        })
+      )
+      mocks.getProfile.mockImplementation((name) => ({
+        ...profile(name),
+        systemPrompt: 'You work on {{shuvix:date}}'
+      }))
+
+      insert('s')
+      kit.queue(answer('A1'))
+      expect(await chatGateway.prompt('s', 'U1')).toEqual({})
+      expect(kit.requests.at(-1)!.tools.map((tool) => tool.name)).toEqual(['read', 'b'])
+      const persona = kit.requests.at(-1)!.systemPrompt
+      expect(persona).toContain('2026-11-05')
+
+      // 换一天、宿主此刻拼出的工具次序变了（c 在最前）；销毁之后重新上锁：人设沿用、工具按见过的次序
+      vars.date = '2026-11-06'
+      tools = [plain('c'), read, b]
+      await sessionService.invalidateAgent('s')
+      kit.queue(answer('A2'))
+      expect(await chatGateway.prompt('s', 'U2')).toEqual({})
+      expect(kit.requests.at(-1)!.tools.map((tool) => tool.name)).toEqual(['read', 'b', 'c'])
+      expect(kit.requests.at(-1)!.systemPrompt).toBe(persona)
+
+      vars.date = '2026-11-07'
+      kit.queue(answer('A3'))
+      expect(await chatGateway.prompt('s', 'U3')).toEqual({})
+      expect(vars.calls).toBe(1)
+
+      const forkId = await fork('s')
+      vars.date = '2026-11-08'
+      kit.queue(answer('B4'))
+      expect(await chatGateway.prompt(forkId, 'U4')).toEqual({})
+      const fromFork = kit.requests.at(-1)!
+      kit.queue(answer('C4'))
+      expect(await chatGateway.prompt('s', 'V4')).toEqual({})
+      const fromSource = kit.requests.at(-1)!
+
+      expect(fromFork.systemPrompt).toBe(fromSource.systemPrompt)
+      expect(fromFork.systemPrompt).toBe(persona)
+      expect(fromFork.tools).toEqual(fromSource.tools)
+      expect(fromFork.tools.map((tool) => tool.name)).toEqual(['read', 'b', 'c'])
+      expect(fromFork.modelId).toBe(fromSource.modelId)
+      expect(vars.calls).toBe(1)
+      expect(openSession(forkId).lock!.toolNames).toEqual(openSession('s').lock!.toolNames)
     },
     TIMEOUT
   )

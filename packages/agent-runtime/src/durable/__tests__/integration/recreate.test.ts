@@ -44,7 +44,7 @@ async function destroyWhileAsking(world: World): Promise<DurableSession> {
   return session
 }
 
-/** 改选择：模型 tiny、勾选 [mcp:notes]、人设变量 v2 */
+/** 改选择：模型 tiny、勾选 [mcp:notes]、人设变量 v2（变量表的值不在人设摘要里：人设沿用） */
 function changeSelection(world: World): void {
   world.config.model = { provider: 'faux', modelId: 'tiny' }
   world.config.toolOverlay = ['mcp:notes']
@@ -97,13 +97,14 @@ describe('P1-12 · destroy and recreate', () => {
         expect.arrayContaining(['mcp__docs__lookup', 'mcp__docs__slow'])
       )
 
+      // 人设沿用（2026-11-06）：变的只有 MCP 勾选与变量表里的值，不在人设的输入摘要里 —— 系统提示不变，缓存不丢
       const persona = (await session.harness.snapshot(AgentStateDoc, conversation.id, BG))?.persona
-      expect(persona).toContain('v2')
+      expect(persona).toContain('M1')
+      expect(persona).not.toContain('v2')
       const request = world.model.chats.at(-1)!
       expect(request.modelId).toBe('tiny')
       const personaAfter = getCurrentSystemPrompt(request.messages)
-      expect(personaAfter).toContain('You are v2')
-      expect(personaAfter).not.toBe(personaBefore)
+      expect(personaAfter).toBe(personaBefore)
       expect(session.effectiveSettings.compaction?.reserveTokens).toBe(750)
       expect(lines(request)).toEqual(
         expect.arrayContaining(['assistant:[tool:write]', `toolResult:${ABORTED}`])

@@ -1,6 +1,21 @@
 /**
- * 系统提示词的五个段落扩展：选择矩阵、文本规则（修剪 / 跳过 / 围栏），以及经真实 durable 请求看到的
- * 行为 —— 人设冻结、活段落变了才发 `pi.system` 增量、未选中的段落不调 seam、seam 抛错保留上次的文本。
+ * 系统提示词的段落扩展：选择矩阵、文本规则（修剪 / 跳过 / 围栏），以及经真实 durable 请求看到的行为。
+ *
+ * PS-11..26 走的是**没有冻结段落**的那条路（`AgentStateDoc.sections` 不存在：2026-11-06 之前的旧对话、派生
+ * agent）—— `lockPrompt` 只冻结人设：活段落每次请求现解析、变了才发 `pi.system` 增量、未选中的段落不调 seam、
+ * seam 抛错保留上次的文本。
+ *
+ * 冻结的段落（2026-11-06，「历史状态不变」，见末尾的 describe）：
+ *   SEC-1  sectionKeyOf：六个扩展名 → 段落 key，别的名字抛错
+ *   SEC-2  renderSections：只渲染要的那几段、跳过人设、缺席 → null、脱敏说明只在宿主做脱敏时有；段落次序与
+ *          chat-protocol 的 SYSTEM_PROMPT_SECTION_ORDER 一致
+ *   SEC-2b 某段的 seam 抛错 → 那一段不进结果、onError(key, error)，其余照常；没给 onError 静默跳过
+ *   SEC-4  bot seam 只在 compare 时收到 { compare: true }
+ *   SEC-5  文档里冻结了段落 → 请求 = 人设 + 存着的文本，请求时不调 seam；来源变了也没有 pi.system 增量
+ *   SEC-6  存着的 null 照样缺席，seam 不调
+ *   SEC-7  [WB] 有 sections 却缺某个选中的 key → 那一段照旧现解析
+ *   SEC-8  noteSectionsCurrent：[] 不转告；宿主没实现不抛；否则原样转告一次
+ * （SEC-3 —— 每份黄金 fixture 的 renderSections 与 fixture 的段落逐字相同 —— 在 promptSections.golden.test.ts）
  */
 import { getCurrentSystemPrompt, Type } from '@earendil-works/pi-ai'
 import {
@@ -9,12 +24,13 @@ import {
   type Conversation,
   type EntryRecord
 } from '@earendil-works/pi-durable'
+import { SYSTEM_PROMPT_SECTION_ORDER } from '@shuvix/chat-protocol/systemPromptStatus'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
 import { fenceInstructionFile, fenceKnowledgeBases, fenceProjectPrompt } from '../prompt/fences'
-import { computeFrozenAgentPrompt, freezePersona } from '../prompt/persona'
+import { computeFrozenAgentPrompt, freezePersona, freezeSections } from '../prompt/persona'
 import {
   botSectionText,
   createPromptExtensions,
@@ -24,6 +40,7 @@ import {
   PROMPT_EXTENSION_ORDER,
   PROMPT_SECTION_KEY,
   promptExtensionsFor,
+  sectionKeyOf,
   type PromptSelectionSpec
 } from '../prompt/sections'
 import type { PromptHost } from '../seams'
@@ -403,7 +420,7 @@ describe('sections through a real durable request', () => {
     })
   })
 
-  it('PS-17 re-freezing the persona (agent destroyed and created again) sends it as a delta on the next request', async () => {
+  it('PS-17 a persona written again into the frozen document (only a rebuild does this now) is sent as a delta on the next request', async () => {
     const { t, session, conversation } = await setup()
     await turn(t, session, 'u1')
     await conversation.commit(
@@ -606,5 +623,208 @@ describe('sections through a real durable request', () => {
     const system = systemMessages(t.kit.requests[0]!.messages)
     expect(system).toHaveLength(1)
     expect(system[0]!.content).toBe('')
+  })
+})
+
+// ─────────────────────────── 冻结的段落（2026-11-06） ───────────────────────────
+
+/** 冻结进当前对话的段落（不经锁：段落用例自己写文档） */
+async function freezeInto(
+  conversation: Conversation,
+  sections: Record<string, string | null>
+): Promise<void> {
+  await conversation.commit((tx) => freezeSections(tx, conversation.id, sections), BG)
+}
+
+describe('frozen sections (AgentStateDoc.sections)', () => {
+  it('SEC-1 sectionKeyOf maps the six extension names to their section keys and throws for anything else', () => {
+    expect(PROMPT_EXTENSION_ORDER.map(sectionKeyOf)).toEqual([
+      'persona',
+      'placeholders',
+      'project_instructions',
+      'project_prompt',
+      'knowledge_bases',
+      'bot_profile'
+    ])
+    for (const id of Object.keys(P) as (keyof typeof P)[]) {
+      expect(sectionKeyOf(P[id])).toBe(K[id])
+    }
+    expect(() => sectionKeyOf('shuvix.builtin' as never)).toThrow(/Not a prompt extension/)
+    expect(() => sectionKeyOf('persona' as never)).toThrow(/Not a prompt extension/)
+  })
+
+  it('SEC-2 renderSections renders only the requested names, skips the persona, gives null for an absent section, and the placeholders note only with the host option; the order matches SYSTEM_PROMPT_SECTION_ORDER', async () => {
+    expect(PROMPT_EXTENSION_ORDER.map(sectionKeyOf)).toEqual([...SYSTEM_PROMPT_SECTION_ORDER])
+    const live = liveHost()
+    const prompt = createPromptExtensions(live.host)
+    const input = { rootSessionId: 's9', cwd: '/w', instructionFiles: ['AGENTS.md'] }
+
+    expect(await prompt.renderSections({ ...input, names: [P.persona, P.projectPrompt] })).toEqual({
+      [K.projectPrompt]: fenceProjectPrompt('Acme billing.')
+    })
+    expect(live.calls).toEqual(['projectPrompt:s9'])
+
+    live.calls.length = 0
+    live.values.knowledge = '   '
+    const all = await prompt.renderSections({ ...input, names: PROMPT_EXTENSION_ORDER })
+    expect(all).toEqual({
+      [K.placeholders]: null,
+      [K.instructions]: fenceInstructionFile('AGENTS.md', 'Use pnpm.'),
+      [K.projectPrompt]: fenceProjectPrompt('Acme billing.'),
+      [K.knowledge]: null,
+      [K.bot]: live.values.bot
+    })
+    expect(Object.keys(all)).not.toContain(K.persona)
+    expect(live.calls).toEqual([
+      'instruction:s9:/w:AGENTS.md',
+      'projectPrompt:s9',
+      'knowledge:s9',
+      'bot:s9'
+    ])
+
+    // 没有指令文件清单 → 缺席，不调 seam
+    live.calls.length = 0
+    expect(
+      await prompt.renderSections({ ...input, instructionFiles: [], names: [P.instructions] })
+    ).toEqual({ [K.instructions]: null })
+    expect(live.calls).toEqual([])
+
+    // 宿主做自动脱敏：说明文本固定
+    const withPlaceholders = createPromptExtensions(live.host, { placeholders: true })
+    const placeholders = await withPlaceholders.renderSections({
+      ...input,
+      names: [P.placeholders]
+    })
+    expect(placeholders[K.placeholders]).toMatch(/^<placeholders>\n[\s\S]+\n<\/placeholders>$/)
+  })
+
+  it('SEC-2b a throwing seam leaves its key out and is reported through onError(key, error); the other sections still render; without onError it is skipped silently', async () => {
+    const live = liveHost()
+    live.fail.add('knowledge')
+    const prompt = createPromptExtensions(live.host)
+    const errors: [string, unknown][] = []
+    const out = await prompt.renderSections({
+      names: [P.projectPrompt, P.knowledge, P.bot],
+      rootSessionId: 's1',
+      cwd: '',
+      instructionFiles: [],
+      onError: (key, error) => errors.push([key, error])
+    })
+    expect(out).toEqual({
+      [K.projectPrompt]: fenceProjectPrompt('Acme billing.'),
+      [K.bot]: live.values.bot
+    })
+    expect(Object.prototype.hasOwnProperty.call(out, K.knowledge)).toBe(false)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]![0]).toBe(K.knowledge)
+    expect((errors[0]![1] as Error).message).toBe('knowledge exploded')
+
+    const silent = await prompt.renderSections({
+      names: [P.knowledge, P.projectPrompt],
+      rootSessionId: 's1',
+      cwd: '',
+      instructionFiles: []
+    })
+    expect(silent).toEqual({ [K.projectPrompt]: fenceProjectPrompt('Acme billing.') })
+  })
+
+  it('SEC-4 the bot seam gets { compare: true } only when the render is a comparison', async () => {
+    const seen: unknown[][] = []
+    const prompt = createPromptExtensions({
+      resolveBotContext: (...args: unknown[]) => {
+        seen.push(args)
+        return 'You are Aria.'
+      }
+    })
+    const base = { names: [P.bot], rootSessionId: 's1', cwd: '', instructionFiles: [] }
+    await prompt.renderSections(base)
+    await prompt.renderSections({ ...base, compare: false })
+    await prompt.renderSections({ ...base, compare: true })
+    expect(seen).toEqual([
+      ['s1', undefined],
+      ['s1', undefined],
+      ['s1', { compare: true }]
+    ])
+  })
+
+  it('SEC-5 a frozen document: the request is the persona plus the stored texts, no seam is called while requesting, and a source change sends no pi.system delta', async () => {
+    const { t, live, session, conversation } = await setup()
+    await freezeInto(conversation, {
+      [K.instructions]: fenceInstructionFile('AGENTS.md', 'Frozen rule.'),
+      [K.projectPrompt]: fenceProjectPrompt('Frozen project.'),
+      [K.knowledge]: fenceKnowledgeBases('Frozen bases.'),
+      [K.bot]: 'Frozen bot.'
+    })
+    await turn(t, session, 'u1')
+    const first = getCurrentSystemPrompt(t.kit.requests[0]!.messages)
+    expect(first).toBe(
+      [
+        '## Persona\n\nDate: 2026-10-04',
+        fenceInstructionFile('AGENTS.md', 'Frozen rule.'),
+        fenceProjectPrompt('Frozen project.'),
+        fenceKnowledgeBases('Frozen bases.'),
+        'Frozen bot.'
+      ].join('\n\n')
+    )
+    expect(live.calls).toEqual([])
+
+    live.values.projectPrompt = 'Changed project.'
+    live.values.instruction = { filename: 'CLAUDE.md', content: 'Changed rule.' }
+    live.values.bot = 'Changed bot.'
+    await turn(t, session, 'u2')
+    expect(getCurrentSystemPrompt(t.kit.requests[1]!.messages)).toBe(first)
+    expect(live.calls).toEqual([])
+    expect(await systemEntries(conversation)).toHaveLength(1)
+  })
+
+  it('SEC-6 a stored null stays absent and its seam is never called', async () => {
+    const { t, live, session, conversation } = await setup(
+      spec({ projectAwareness: true, toolNames: ['knowledge'] })
+    )
+    await freezeInto(conversation, {
+      [K.projectPrompt]: null,
+      [K.knowledge]: fenceKnowledgeBases('KB.')
+    })
+    await turn(t, session, 'u1')
+    expect(getCurrentSystemPrompt(t.kit.requests[0]!.messages)).toBe(
+      ['## Persona\n\nDate: 2026-10-04', fenceKnowledgeBases('KB.')].join('\n\n')
+    )
+    expect(live.calls).toEqual([])
+  })
+
+  it('SEC-7 [WB] sections present but without a selected key: that section resolves live (the other ones stay frozen)', async () => {
+    const { t, live, session, conversation } = await setup(
+      spec({ projectAwareness: true, toolNames: ['knowledge'] })
+    )
+    await freezeInto(conversation, { [K.knowledge]: fenceKnowledgeBases('Frozen KB.') })
+    await turn(t, session, 'u1')
+    expect(getCurrentSystemPrompt(t.kit.requests[0]!.messages)).toBe(
+      [
+        '## Persona\n\nDate: 2026-10-04',
+        fenceProjectPrompt('Acme billing.'),
+        fenceKnowledgeBases('Frozen KB.')
+      ].join('\n\n')
+    )
+    expect(live.calls).toEqual(['projectPrompt:s1'])
+    live.values.projectPrompt = 'Acme billing, v2.'
+    await turn(t, session, 'u2')
+    const entries = await systemEntries(conversation)
+    expect(sectionsOf(entries[1]!)).toEqual({
+      [K.projectPrompt]: fenceProjectPrompt('Acme billing, v2.')
+    })
+  })
+
+  it('SEC-8 noteSectionsCurrent: an empty list is not forwarded; a host without the method does not throw; otherwise forwarded once, verbatim', () => {
+    const notes: [string, readonly string[]][] = []
+    const prompt = createPromptExtensions({
+      noteSectionsCurrent: (sessionId, keys) => notes.push([sessionId, keys])
+    })
+    prompt.noteSectionsCurrent('s1', [])
+    expect(notes).toEqual([])
+    const keys = [K.projectPrompt, K.bot]
+    prompt.noteSectionsCurrent('s1', keys)
+    expect(notes).toEqual([['s1', keys]])
+    expect(notes[0]![1]).toBe(keys)
+    expect(() => createPromptExtensions({}).noteSectionsCurrent('s1', [K.bot])).not.toThrow()
   })
 })

@@ -134,6 +134,18 @@ export function registerAgentHandlers(): void {
     chatGateway.previewAgentChange(sessionId, change)
   )
 
+  /** 冻结的系统提示词与此刻的来源比一比（只读）：界面据此提醒用户「来源改了」 */
+  defineHandler('agent:systemPromptStatus', (_ctx, sessionId: string) =>
+    chatGateway.systemPromptStatus(sessionId)
+  )
+
+  /** 用户点了「重建系统提示词」：会话在跑 → busy；否则删掉冻结的那份，下一条消息按此刻的来源重新渲染 */
+  defineHandler('agent:rebuildSystemPrompt', (ctx, sessionId: string) =>
+    operationContext.run(createClientContext(ctx, sessionId), () =>
+      chatGateway.rebuildSystemPrompt(sessionId)
+    )
+  )
+
   /** 各会话挂着几条询问（只读）：窗口重建 / 客户端重连后补侧栏徽标 */
   defineHandler('agent:askCounts', () => chatGateway.pendingAskCounts())
 

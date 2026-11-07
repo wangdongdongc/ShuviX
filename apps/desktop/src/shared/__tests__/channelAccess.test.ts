@@ -32,6 +32,10 @@
  *   PAC-3 agent:askCounts 是请求通道：sessions 的 read（网络客户端能看，与读会话列表同档）
  *         bgTask:listAll（2026-11-04，侧栏的运行态）同档
  *
+ * 冻结的系统提示词（2026-11-06）：
+ *   SP-CH-1 agent:systemPromptStatus 是 sessions 的 read（只比对，不写）；agent:rebuildSystemPrompt 是 sessions 的
+ *           write（删掉冻结的那份）；两条都是 API_TABLE.agent 里的 invoke，各一个参数（sessionId）
+ *
  * 内置浏览器的标签页（2026-11-01，远程访问的本地文件读取修复）：
  *   AC-1 browser-view:list-tabs / get-url / capture 是 admin 的请求通道（地址里可能带登录令牌，截图给的比地址还多）；
  *        browser-view 里的 read 恰好是 host-info 与 is-window-open；create-tab / navigate / go-back / go-forward /
@@ -460,6 +464,19 @@ describe('PAC-3 询问计数与后台任务快照', () => {
       scope: 'sessions',
       access: 'read'
     })
+  })
+})
+
+describe('SP-CH-1 冻结的系统提示词的两条通道', () => {
+  it.each<[string, 'systemPromptStatus' | 'rebuildSystemPrompt', ChannelAccess]>([
+    ['agent:systemPromptStatus', 'systemPromptStatus', 'read'],
+    ['agent:rebuildSystemPrompt', 'rebuildSystemPrompt', 'write']
+  ])('SP-CH-1 %s：API_TABLE.agent.%s 是一参的 invoke，%s / sessions', (channel, member, access) => {
+    expect(API_TABLE.agent[member]).toEqual({ kind: 'invoke', channel, args: 1 })
+    expect(CHANNEL_ACCESS[channel]).toBe(access)
+    expect(channelAccessOf(channel)).toBe(access)
+    expect(channelScopeOf(channel)).toBe('sessions')
+    expect(channelCallFactsOf(channel, ['s1'])).toEqual({ scope: 'sessions', access })
   })
 })
 

@@ -1,4 +1,8 @@
 import type {
+  RebuildSystemPromptResult,
+  SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
+import type {
   AgentChangePreview,
   AgentInitResult,
   AgentPreviewChangeParams,
@@ -119,6 +123,10 @@ export interface ChatGateway {
 
   /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（不连服务器、什么也不写） */
   previewAgentChange(sessionId: string, change: AgentPreviewChange): Promise<AgentChangePreview>
+  /** 冻结的系统提示词与此刻的来源比一比（只读；会话没有存储 / 没冻结 → `frozen: false`） */
+  systemPromptStatus(sessionId: string): Promise<SystemPromptStatus>
+  /** 重建系统提示词（会话在跑 → busy） */
+  rebuildSystemPrompt(sessionId: string): Promise<RebuildSystemPromptResult>
 
   /** 每条打开着的会话此刻挂着几条询问（只列 > 0 的；新来的前端补侧栏徽标用） */
   pendingAskCounts(): Record<string, number>

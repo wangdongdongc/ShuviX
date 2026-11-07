@@ -5,6 +5,7 @@ import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import { TaskListPanel } from './TaskListPanel'
+import { SystemPromptIndicator } from './SystemPromptIndicator'
 import {
   expandCommandTemplate,
   buildCommandToken,
@@ -1389,6 +1390,10 @@ export function InputArea({
 
                 {/* 弹性空白 → 把右侧按钮簇推到最右 */}
                 <span className="flex-1" />
+
+                {/* 系统提示词的来源改了（2026-11-06）：用量环左边一个暗色小图标，放着不管什么都不受影响；
+                  点开说哪几样改了，用户点了才重建 */}
+                <SystemPromptIndicator sessionId={activeSessionId} />
 
                 {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
                   纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。 */}

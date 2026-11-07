@@ -84,6 +84,7 @@ vi.mock('../../dao/sessionDao', () => ({
     updateTitle: vi.fn(),
     updateProjectId: vi.fn(),
     deleteById: mocks.daoDeleteById,
+    existsWithTempDirOwner: vi.fn(() => false),
     touch: vi.fn(),
     touchActive: vi.fn()
   }

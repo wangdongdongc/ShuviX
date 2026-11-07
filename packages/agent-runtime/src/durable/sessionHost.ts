@@ -88,6 +88,11 @@ export interface SessionHost {
   delete(sessionId: string): Promise<void>
   /** 此刻打开着的会话 id */
   openSessionIds(): string[]
+  /**
+   * 会话 fork 沿用源会话的 agent：在 fork 的存储第一次被打开之前调，打开时按拷来的锁重建同一组工具（而不是
+   * 清锁重新创建），提示词缓存不丢。见实现处的说明
+   */
+  adoptForkedAgent(sessionId: string): void
   /** 是否已封存 */
   readonly sealed: boolean
 }
@@ -471,6 +476,17 @@ class SessionHostImpl implements SessionHost {
       pinned = true
     }
     return !pinned && session.evictable
+  }
+
+  /**
+   * 会话 fork 沿用源会话的 agent（2026-11-06）：拷来的存储留着源会话的锁，fork 第一次打开时就按锁重建同一组
+   * 工具（与 LRU 关了再开同一条路，不读配置、不连服务器、不写 `pi.agent`），而不是清锁、按设置重新创建 ——
+   * 系统提示与工具表逐字节不变，fork 的第一次请求读得到源会话的提示词缓存。只在 fork 的存储第一次被打开之前
+   * 调；源会话的锁一定是本进程初始化过的（拷贝发生在源会话打开着、空闲的时候）。进程内的记录：fork 还没打开
+   * 就重启了，打开时照常清锁（人设照样沿用，见 `persona.ts`）。
+   */
+  adoptForkedAgent(sessionId: string): void {
+    this.processRecordOf(sessionId).agentInitialized = true
   }
 
   /** 一条会话在本进程里的记录（第一次用到时建） */

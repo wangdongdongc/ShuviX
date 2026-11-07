@@ -62,10 +62,31 @@ import type { RuntimeEventSink, RuntimeLogger } from '../types'
 import { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
 import { normalizeToolNames, resolveThinkingLevel } from './agentSpec'
 import { backgroundContext as BG, errorText } from './context'
-import { SessionStateDoc } from './docs'
+import { AgentStateDoc, SessionStateDoc, type AgentStateRecord } from './docs'
 import { emptyReplyHook } from './emptyReply'
-import { computeFrozenAgentPrompt, freezePersona } from './prompt/persona'
-import type { PromptExtensions } from './prompt/sections'
+import {
+  computeFrozenAgentPrompt,
+  forgetFrozenPrompt,
+  freezePersona,
+  freezeSections,
+  personaKeyOf,
+  reusableFrozenPrompt,
+  type PersonaInput
+} from './prompt/persona'
+import {
+  instructionFileOf,
+  SYSTEM_PROMPT_SECTION_ORDER,
+  type StaleSystemPromptSection,
+  type SystemPromptSectionKey,
+  type SystemPromptStatus
+} from '@shuvix/chat-protocol/systemPromptStatus'
+import {
+  PROMPT_EXTENSION,
+  PROMPT_EXTENSION_ORDER,
+  sectionKeyOf,
+  type PromptExtensionName,
+  type PromptExtensions
+} from './prompt/sections'
 import type { SessionProcessRecord } from './processRecord'
 import {
   composeReconfiguredTools,
@@ -107,6 +128,16 @@ export { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
 function parseSessionLock(raw: unknown): LockRecord | undefined {
   const lock = parseLockRecord(raw)
   return lock?.kind === 'root' ? lock : undefined
+}
+
+/** 销毁的选项 */
+export interface DestroyAgentOptions {
+  /**
+   * 同时删掉这个对话冻结的系统提示词，下一次上锁按此刻的来源重新渲染（用户点了「重建系统提示词」，
+   * `DurableSession.rebuildSystemPrompt`）。没锁也照做。缺省（芯片上的 X、回退、清空、钉档案）不碰它：
+   * 历史状态不变（2026-11-06）。
+   */
+  forgetPrompt?: boolean
 }
 
 /** `createAgent()` 的选项 */
@@ -444,11 +475,13 @@ export class AgentLock {
     return this.installingBuiltin
   }
 
-  private async clearStoredLock(): Promise<void> {
+  /** 删锁；给了对话 → 同一个提交里删掉它冻结的系统提示词（用户点了重建） */
+  private async clearStoredLock(forgetPromptOf?: ConversationId): Promise<void> {
     this.deps.processRecord.agentInitialized = false
     await this.deps.harness.commit(async (tx) => {
       const state = await tx.doc(SessionStateDoc)
       delete state.lock
+      if (forgetPromptOf !== undefined) await forgetFrozenPrompt(tx, forgetPromptOf)
     }, BG)
   }
 
@@ -583,11 +616,81 @@ export class AgentLock {
         'A session root agent cannot carry extra tools (they could not be rebuilt on reopen)'
       )
     }
-    // 人设在提交之外算（变量表可能做 I/O），在上锁的提交里冻结（K21）
-    const frozen = await computeFrozenAgentPrompt(
-      { promptVars: this.deps.promptVars, logger },
-      { kind, sessionId, rootSessionId: sessionId, cwd, toolNames: names, profile }
-    )
+    // 系统提示词冻结（2026-11-06，用户裁决「历史状态不变」）：这个对话已经冻结过 → 人设与其余段落原样沿用，
+    // 不重新渲染 —— 日期、版本、CLAUDE.md、项目提示词变了都不改它；来源变了只提醒用户（`promptStatus`），用户点
+    // 重建（`rebuildSystemPrompt` 删掉冻结的那份）之后，下一次上锁才按此刻的来源重新渲染。人设在提交之外算
+    // （变量表可能做 I/O），在上锁的提交里冻结（K21）
+    const personaInput: PersonaInput = {
+      kind,
+      sessionId,
+      rootSessionId: sessionId,
+      cwd,
+      toolNames: names,
+      profile
+    }
+    const personaKey = personaKeyOf({ kind, cwd, profile, toolNames: requested })
+    const stored = await this.deps.harness.snapshot(AgentStateDoc, conversation.id, BG)
+    cancelled()
+    const reused = reusableFrozenPrompt(stored, personaInput, personaKey)
+    const frozen = reused ?? {
+      ...(await computeFrozenAgentPrompt(
+        { promptVars: this.deps.promptVars, logger },
+        personaInput
+      )),
+      personaKey
+    }
+    if (reused !== undefined) {
+      logger.info(`session ${sessionId}: reusing the frozen system prompt`)
+    }
+    cancelled()
+    // 其余段落。**有哪几段也冻结**：对话已经冻结过 → 段落就是冻结的那几个（档案后来多选 / 少选了哪一段都不变，
+    // 提醒里报「来源改了」）；第一次（或旧对话、用户点了重建）→ 按此刻的档案选，各段按此刻的来源渲染一次。某段的
+    // 宿主 seam 抛错 → 这一段这次不冻结：照旧选中、记进 `unfrozenSections`、现解析，下一次上锁再试着冻结它
+    // （不记的话下一次上锁只选冻结了的那几段，它就从提示词里没了），不挡上锁
+    const frozenSections = stored?.sections
+    const pendingKeys = new Set(stored?.unfrozenSections ?? [])
+    const promptExtensions =
+      frozenSections === undefined
+        ? this.deps.promptExtensions.select({ kind, profile, toolNames: names })
+        : PROMPT_EXTENSION_ORDER.filter((name) => {
+            if (name === PROMPT_EXTENSION.persona) return true
+            const key = sectionKeyOf(name)
+            return Object.prototype.hasOwnProperty.call(frozenSections, key) || pendingKeys.has(key)
+          }).map((name) => this.deps.promptExtensions.get(name))
+    const sections: Record<string, string | null> = { ...(frozenSections ?? {}) }
+    const unfrozen = new Set<string>()
+    if (stored !== undefined && frozenSections !== undefined) {
+      // 已冻结的几段：与此刻的来源一致的转告宿主（模型手里的就是此刻的内容，桌面据此把 bot 文件记成已读）。
+      // 尽力而为：比对失败不挡上锁，只是这次不转告
+      await this.compareFrozenSections(stored, cwd).catch((error: unknown) => {
+        logger.warn(
+          `session ${sessionId}: comparing the frozen system prompt failed: ${errorText(error)}`
+        )
+      })
+      cancelled()
+    }
+    // 要渲染的：第一次冻结 → 选中的全部；已冻结过 → 只有上次没冻结成的那几段
+    const toRender = promptExtensions
+      .map((extension) => extension.name as PromptExtensionName)
+      .filter((name) => name !== PROMPT_EXTENSION.persona)
+      .filter((name) => frozenSections === undefined || pendingKeys.has(sectionKeyOf(name)))
+    if (toRender.length > 0) {
+      Object.assign(
+        sections,
+        await this.deps.promptExtensions.renderSections({
+          names: toRender,
+          rootSessionId: sessionId,
+          cwd,
+          instructionFiles: frozen.instructionFiles,
+          onError: (key, error) => {
+            unfrozen.add(key)
+            logger.warn(
+              `session ${sessionId}: rendering system prompt section ${key} failed; it is not frozen this time: ${errorText(error)}`
+            )
+          }
+        })
+      )
+    }
     cancelled()
     const builtin = await toolHost.buildBuiltinTools({
       sessionId,
@@ -597,13 +700,18 @@ export class AgentLock {
     cancelled()
 
     const composed = composeAgentTools({ names, builtin, set: resolved })
+    // 对话里已经有模型见过的工具（重启后空闲清了锁、回退 / 分支之后重新上锁）：按它们的次序排，与重配同一条
+    // 规则 —— durable 见到次序变了就整份重声明工具，不支持中途改工具的模型上缓存整段打穿（2026-11-06）。
+    // 新对话里没有见过的工具，次序就是上面拼出来的那份（K6）
+    const seen = await this.deps.harness.conversation(conversation.id, BG)
+    cancelled()
+    const seenMessages: readonly Message[] =
+      seen === undefined ? [] : (await seen.context(BG)).messages
+    cancelled()
+    const tools = orderForMinimalDiff(getCurrentTools(seenMessages), composed.tools)
     const builtinExt = builtinExtension(builtin, this.hooks)
     const agentExt = agentExtension(conversation.id, composed.agentTools)
-    const extensions: Extension[] = [
-      builtinExt,
-      ...this.deps.promptExtensions.select({ kind, profile, toolNames: names }),
-      agentExt
-    ]
+    const extensions: Extension[] = [builtinExt, ...promptExtensions, agentExt]
     const mcp: LockRecord['mcp'] = {}
     for (const entry of resolved.mcp ?? []) mcp[entry.server] = [...entry.declarations]
     const record: LockRecord = {
@@ -612,7 +720,7 @@ export class AgentLock {
       kind,
       model: { ...resolution.model },
       ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-      toolNames: composed.toolNames,
+      toolNames: tools.map((tool) => tool.name),
       extensions: extensions.map((extension) => extension.name),
       sandboxed: resolved.sandboxed,
       mcp,
@@ -639,11 +747,12 @@ export class AgentLock {
           model: record.model,
           thinkingLevel: thinkingLevel ?? null,
           extensions,
-          tools: composed.tools,
+          tools,
           instructions: null,
           cwd: cwd.length > 0 ? cwd : null
         })
         await freezePersona(tx, conversation.id, frozen)
+        await freezeSections(tx, conversation.id, sections, [...unfrozen])
         const state = await tx.doc(SessionStateDoc)
         state.lock = json
       }, BG)
@@ -893,6 +1002,121 @@ export class AgentLock {
     return { tools, record, resolved, messages }
   }
 
+  // ─── 冻结的系统提示词：提醒（2026-11-06） ───────────────
+
+  /**
+   * 这段对话冻结的系统提示词与此刻的来源比一比（只读：不连服务器、不写）。没冻结（没建过 agent、旧对话还没重新
+   * 上锁、用户刚点了重建）→ `frozen: false`。人设按摘要比（{@link personaKeyOf}，环境值不算）；其余段落按此刻的
+   * 来源现渲染一遍、与冻结的文本逐字比 —— 与上锁冻结时同一套渲染函数。
+   */
+  async promptStatus(): Promise<SystemPromptStatus> {
+    const { sessionId } = this.deps
+    const conversation = await this.deps.currentConversation()
+    const stored = await this.deps.harness.snapshot(AgentStateDoc, conversation.id, BG)
+    if (stored?.persona === undefined || stored.sections === undefined) {
+      return { frozen: false, stale: [] }
+    }
+    const config = await this.deps.resolveAgentConfig(sessionId)
+    const cwd = config.cwd ?? ''
+    const stale = new Map<SystemPromptSectionKey, StaleSystemPromptSection>()
+    if (stored.personaKey !== undefined) {
+      const requested = normalizeToolNames('root', config.profile.tools, config.toolOverlay)
+      const key = personaKeyOf({ kind: 'root', cwd, profile: config.profile, toolNames: requested })
+      if (key !== stored.personaKey) stale.set('persona', { key: 'persona' })
+    }
+    for (const entry of await this.compareFrozenSections(stored, cwd)) stale.set(entry.key, entry)
+    // 档案此刻会选、却没冻结进来的段落（档案后来多选了一段、宿主后来开了自动脱敏……）：此刻有内容就算变了 ——
+    // 冻结的段落集合不会自己加段，重建才加
+    const requestedNow = normalizeToolNames('root', config.profile.tools, config.toolOverlay)
+    const pending = new Set(stored.unfrozenSections ?? [])
+    const selectedNow = this.deps.promptExtensions
+      .select({ kind: 'root', profile: config.profile, toolNames: requestedNow })
+      .map((extension) => extension.name as PromptExtensionName)
+      .filter((name) => name !== PROMPT_EXTENSION.persona)
+    const selectedKeys = new Set(selectedNow.map(sectionKeyOf))
+    // 冻结里有、档案此刻却不会再选的段落（关了项目感知、去掉了指令文件……）：重建之后它就没了 —— 也算变了
+    for (const key of Object.keys(stored.sections)) {
+      if (!selectedKeys.has(key))
+        stale.set(key as SystemPromptSectionKey, { key } as StaleSystemPromptSection)
+    }
+    // 上次没冻结成的那几段（seam 出错，见上锁）：此刻照旧现解析、下一次上锁再冻结，没什么可比的
+    const added = selectedNow.filter((name) => {
+      const key = sectionKeyOf(name)
+      return !Object.prototype.hasOwnProperty.call(stored.sections, key) && !pending.has(key)
+    })
+    if (added.length > 0) {
+      const live = await this.deps.promptExtensions.renderSections({
+        names: added,
+        rootSessionId: sessionId,
+        cwd,
+        instructionFiles: config.profile.instructionFiles ?? [],
+        compare: true
+      })
+      for (const [key, text] of Object.entries(live)) {
+        if (text === null) continue
+        const file = key === 'project_instructions' ? instructionFileOf(text) : undefined
+        const entry = file === undefined ? { key } : { key, file }
+        stale.set(key as SystemPromptSectionKey, entry as StaleSystemPromptSection)
+      }
+    }
+    return {
+      frozen: true,
+      stale: SYSTEM_PROMPT_SECTION_ORDER.flatMap((key) => {
+        const entry = stale.get(key)
+        return entry === undefined ? [] : [entry]
+      })
+    }
+  }
+
+  /**
+   * 冻结的段落与此刻的来源逐段比：按此刻的来源现渲染（`compare`：不进提示词）、与冻结的文本逐字比，交回不一致的
+   * 那几段；一致的转告宿主（`noteSectionsCurrent`，桌面据此把 bot 文件记成已读）。
+   */
+  private async compareFrozenSections(
+    stored: Readonly<AgentStateRecord>,
+    cwd: string
+  ): Promise<StaleSystemPromptSection[]> {
+    const frozen = stored.sections ?? {}
+    const names = PROMPT_EXTENSION_ORDER.filter(
+      (name) =>
+        name !== PROMPT_EXTENSION.persona &&
+        Object.prototype.hasOwnProperty.call(frozen, sectionKeyOf(name))
+    )
+    if (names.length === 0) return []
+    const { sessionId } = this.deps
+    const live = await this.deps.promptExtensions.renderSections({
+      names,
+      rootSessionId: sessionId,
+      cwd,
+      instructionFiles: stored.instructionFiles ?? [],
+      compare: true,
+      // 读不出来的那一段：不算变也不算没变（不提醒、不转告）
+      onError: (key, error) =>
+        this.deps.logger.warn(
+          `session ${sessionId}: reading the source of system prompt section ${key} failed: ${errorText(error)}`
+        )
+    })
+    const stale: StaleSystemPromptSection[] = []
+    const current: string[] = []
+    for (const name of names) {
+      const key = sectionKeyOf(name) as SystemPromptSectionKey
+      if (!Object.prototype.hasOwnProperty.call(live, key)) continue
+      const now = live[key] ?? null
+      const was = frozen[key] ?? null
+      if (now === was) {
+        current.push(key)
+        continue
+      }
+      const file =
+        key === 'project_instructions'
+          ? (instructionFileOf(now) ?? instructionFileOf(was))
+          : undefined
+      stale.push(file === undefined ? { key } : { key, file })
+    }
+    this.deps.promptExtensions.noteSectionsCurrent(sessionId, current)
+    return stale
+  }
+
   // ─── 销毁 ───────────────────────────────────────
 
   /**
@@ -900,24 +1124,38 @@ export class AgentLock {
    * `stop` 换掉缺省的「销毁之前让会话停下」（回退用不送达的那一版，P3-10a PIN-23）；共享到在途的那一次时
    * 不起作用。
    */
-  destroy(stop?: () => Promise<void>): Promise<void> {
-    if (this.destroying !== undefined) return this.destroying
-    const tracked: Promise<void> = this.runDestroy(stop ?? this.deps.stopForDestroy).finally(() => {
+  destroy(stop?: () => Promise<void>, options: DestroyAgentOptions = {}): Promise<void> {
+    if (this.destroying !== undefined) {
+      if (options.forgetPrompt !== true) return this.destroying
+      // 重建合流到在途的普通销毁上不能被吞掉：等它落定，再来一次带重建的（那时多半已经没锁，只删冻结的提示词）
+      return this.destroying.catch(() => undefined).then(() => this.destroy(stop, options))
+    }
+    const tracked: Promise<void> = this.runDestroy(
+      stop ?? this.deps.stopForDestroy,
+      options
+    ).finally(() => {
       if (this.destroying === tracked) this.destroying = undefined
     })
     this.destroying = tracked
     return tracked
   }
 
-  private async runDestroy(stop: () => Promise<void>): Promise<void> {
+  private async runDestroy(stop: () => Promise<void>, options: DestroyAgentOptions): Promise<void> {
     await this.cancelPending()
     const lock = this.record
-    if (lock === undefined) return
+    if (lock === undefined) {
+      // 没有 agent 也要重建：删掉当前对话冻结的那份（与上锁串行 —— 上锁等销毁落定，所以不会读到半截）
+      if (options.forgetPrompt === true) {
+        const conversation = await this.deps.currentConversation()
+        await this.deps.harness.commit((tx) => forgetFrozenPrompt(tx, conversation.id), BG)
+      }
+      return
+    }
     const { sessionId } = this.deps
     this.broadcast({ type: 'agent_closing', sessionId, closing: true })
     try {
       await stop()
-      await this.clearStoredLock()
+      await this.clearStoredLock(options.forgetPrompt === true ? lock.conversationId : undefined)
       this.record = undefined
       this.deps.registry.uninstall({ name: agentExtensionName(lock.conversationId) })
       this.mirror(false)

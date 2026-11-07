@@ -19,7 +19,14 @@
  *               （hasAgentRuntime）也不写设置（recordSessionModel）；
  *   RD-7        previewAgentChange：(sessionId, change) 原样交给 sessionService.previewAgentChange，结果原样交回；
  *   ML-U-5      setThinkingLevel：会话设置恒写；会话开着再现场交给它（锁着但没开着 → peek 再给，D10-50）；
- *   ML-U-6      destroyAgent：invalidateAgent 恰一次、等它落定才 resolve；不清消息、不断 db、不广播。
+ *   ML-U-6      destroyAgent：invalidateAgent(sessionId) 恰一次、不带任何选项 —— 芯片上的 X 只重建运行时，
+ *               冻结的系统提示词不碰（历史状态不变，2026-11-06；换它是「重建系统提示词」的事）；等它落定才
+ *               resolve；不清消息、不断 db、不广播。
+ *
+ * 外加冻结的系统提示词的两个入口（2026-11-06）：
+ *   GW-SP-1     systemPromptStatus：sessionId 原样交给 sessionService.systemPromptStatus，结果原样交回，reject 原样上抛；
+ *   GW-SP-2     rebuildSystemPrompt：sessionId 原样交给 sessionService.rebuildSystemPrompt（success / busy 都原样交回），
+ *               不经 invalidateAgent、不广播。
  *
  * mock 骨架照抄 chatGatewayListTools.test.ts（网关的 import 图带 SQLite / electron / 全部工具）。
  */
@@ -37,6 +44,8 @@ const mocks = vi.hoisted(() => ({
   setModel: vi.fn<(sessionId: string, provider: string, model: string) => Promise<boolean>>(),
   previewAgentChange: vi.fn<(sessionId: string, change: unknown) => Promise<unknown>>(),
   invalidateAgent: vi.fn<(sessionId: string) => Promise<void>>(),
+  systemPromptStatus: vi.fn<(sessionId: string) => Promise<unknown>>(),
+  rebuildSystemPrompt: vi.fn<(sessionId: string) => Promise<unknown>>(),
   getAgentSession: vi.fn(),
   peekAgentSession: vi.fn(),
   resolveRunConfig: vi.fn(),
@@ -76,7 +85,9 @@ vi.mock('../../../services/sessionService', () => ({
     hasAgentRuntime: mocks.hasAgentRuntime,
     setModel: mocks.setModel,
     previewAgentChange: mocks.previewAgentChange,
-    invalidateAgent: mocks.invalidateAgent
+    invalidateAgent: mocks.invalidateAgent,
+    systemPromptStatus: mocks.systemPromptStatus,
+    rebuildSystemPrompt: mocks.rebuildSystemPrompt
   }
 }))
 vi.mock('../../../services/messageService', () => ({
@@ -150,6 +161,8 @@ beforeEach(() => {
     mocks.setModel,
     mocks.previewAgentChange,
     mocks.invalidateAgent,
+    mocks.systemPromptStatus,
+    mocks.rebuildSystemPrompt,
     mocks.getAgentSession,
     mocks.recordSessionModel,
     mocks.recordSessionThinkingLevel,
@@ -432,6 +445,7 @@ describe('DefaultChatGateway.destroyAgent —— 销毁运行时，会话与会�
     await Promise.resolve()
     await Promise.resolve()
     expect(mocks.invalidateAgent).toHaveBeenCalledTimes(1)
+    // 冻结的系统提示词不碰（历史状态不变，2026-11-06）：不带任何选项
     expect(mocks.invalidateAgent).toHaveBeenCalledWith(SID)
     // 关停还没落定：调用方（胶囊上的 X）此刻重拉监控只会看到旧运行时
     expect(settled).toBe(false)
@@ -444,6 +458,40 @@ describe('DefaultChatGateway.destroyAgent —— 销毁运行时，会话与会�
     expect(mocks.disconnect).not.toHaveBeenCalled()
     expect(mocks.broadcast).not.toHaveBeenCalled()
   })
+})
+
+describe('DefaultChatGateway 冻结的系统提示词 —— 原样交给 sessionService（2026-11-06）', () => {
+  it('GW-SP-1 systemPromptStatus：sessionId 原样交出、结果原样交回；只这一次调用，不碰运行时、不广播', async () => {
+    const status = {
+      frozen: true,
+      stale: [{ key: 'project_instructions', file: 'CLAUDE.md' }, { key: 'knowledge_bases' }]
+    }
+    mocks.systemPromptStatus.mockResolvedValue(status)
+
+    await expect(chatGateway.systemPromptStatus(SID)).resolves.toBe(status)
+    expect(mocks.systemPromptStatus.mock.calls).toEqual([[SID]])
+    expect(mocks.rebuildSystemPrompt).not.toHaveBeenCalled()
+    expect(mocks.invalidateAgent).not.toHaveBeenCalled()
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+
+    mocks.systemPromptStatus.mockRejectedValue(new Error('status exploded'))
+    await expect(chatGateway.systemPromptStatus('s2')).rejects.toThrow('status exploded')
+    expect(mocks.systemPromptStatus).toHaveBeenLastCalledWith('s2')
+  })
+
+  it.each([[{ success: true }], [{ success: false, reason: 'busy' }]])(
+    'GW-SP-2 rebuildSystemPrompt：sessionId 原样交出、结果 %j 原样交回；不经 invalidateAgent、不广播',
+    async (result) => {
+      mocks.rebuildSystemPrompt.mockResolvedValue(result)
+
+      await expect(chatGateway.rebuildSystemPrompt(SID)).resolves.toBe(result)
+      expect(mocks.rebuildSystemPrompt.mock.calls).toEqual([[SID]])
+      expect(mocks.invalidateAgent).not.toHaveBeenCalled()
+      expect(mocks.systemPromptStatus).not.toHaveBeenCalled()
+      expect(mocks.messageClear).not.toHaveBeenCalled()
+      expect(mocks.broadcast).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe('P3-08-45 DefaultChatGateway.respondToInput —— 没人认领什么都不广播', () => {

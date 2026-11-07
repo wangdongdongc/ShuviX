@@ -1938,5 +1938,21 @@
     "costTokens": "会話全体（約 {{tokens}} トークン）を一度、キャッシュなしの料金で処理し直します。",
     "cost": "会話全体を一度、キャッシュなしの料金で処理し直します。",
     "confirm": "変更する"
+  },
+  "systemPrompt": {
+    "staleTitle": "システムプロンプトの元の内容が変更されました",
+    "staleDetail": "変更：{{sources}}。この会話は元のシステムプロンプトを使い続けます。ほかに影響はありません。",
+    "staleHint": "再構築すると、次のメッセージから新しい内容で送信されます。プロンプトキャッシュは一度無効になります。",
+    "rebuild": "システムプロンプトを再構築",
+    "rebuildBusy": "セッションが実行中です。停止してから再構築してください。",
+    "listSeparator": "、",
+    "source": {
+      "persona": "エージェントプロファイル",
+      "placeholders": "ShuviX 組み込みの説明",
+      "project_instructions": "指示ファイル",
+      "project_prompt": "プロジェクトプロンプト",
+      "knowledge_bases": "ナレッジベース",
+      "bot_profile": "Bot のペルソナと記憶"
+    }
   }
 }

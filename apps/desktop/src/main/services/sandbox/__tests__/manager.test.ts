@@ -16,6 +16,12 @@
  *    （一行都不派生 —— 多问，绝不因此放行）；
  *  - MG-10 ensureSessionTempDir / sessionTempEnv：会话临时目录在每个平台都有（提示词那一行、不受限命令的
  *    TMPDIR / TMP / TEMP），与开关 / 探测无关；它就是权限表 system/tmp 那一行、执行计划里的那个目录。
+ *  - MG-11 临时目录的主人（setSessionTempOwnerResolver，2026-11-06：会话 fork 共用源会话的临时目录）：读出
+ *    undefined / 不安全的 id / 抛错（记一行警告）→ 本会话自己的；安全的主人 → 主人的；ensureSessionTempDir、
+ *    sessionTempEnv、sessionOwnDirsView 三处一致；fork → 源会话时，执行计划的 tmpDir / TMPDIR 与权限表派生的
+ *    tmp 行都是源会话的那个目录。MG-11d (D10)：照 main/index.ts 接线（提示词那一行 = ensureSessionTempDir(根会话)，
+ *    主人读会话设置的 tempDirOwner —— insertForkRow 写的形状）：源会话冻结进人设的路径，就是 fork 的
+ *    TMPDIR、执行计划的 tmpDir 与可写根。
  *
  * 请求里的行照 acl/derive.ts 的写法拼（{@link ownRowsOf} / {@link rowsFrom}）；真权限表要数据库，这里不起。
  */
@@ -1122,5 +1128,88 @@ describe('MG-9 sessionOwnDirsView / settingDirForAcl：权限表派生行的来�
     expect(view.workdir).toBe(wsTarget)
     expect(m.settingDirForAcl(kbLink)).toBe(kbTarget)
     expect(JSON.stringify(view)).not.toContain(wsLink)
+  })
+})
+
+describe('MG-11 临时目录的主人（setSessionTempOwnerResolver）', () => {
+  const FORK = 'fork-1'
+  const SOURCE = 'source-1'
+
+  it.each<[string, () => string | undefined]>([
+    ['读出 undefined', () => undefined],
+    ['不安全的 id', () => '../x'],
+    [
+      '抛错',
+      () => {
+        throw new Error('db closed')
+      }
+    ]
+  ])('MG-11a %s → 三处都回落到本会话自己的临时目录', async (label, resolver) => {
+    const m = await load()
+    m.setSessionTempOwnerResolver(resolver)
+    const own = tmpDirOf(FORK)
+    expect(m.ensureSessionTempDir(FORK)).toBe(own)
+    expect(m.sessionTempEnv(FORK)).toEqual({ TMPDIR: `${own}/`, TMP: own, TEMP: own })
+    expect(m.sessionOwnDirsView(FORK, WS)!.tmp).toBe(own)
+    if (label === '抛错') {
+      expect(mocks.log.warn).toHaveBeenCalledWith(expect.stringContaining('db closed'))
+    } else {
+      expect(mocks.log.warn).not.toHaveBeenCalled()
+    }
+  })
+
+  it('MG-11b 安全的主人 → 三处都是主人的临时目录；artifacts 与工具结果仍是本会话的；建的也是主人的目录', async () => {
+    const m = await load()
+    m.setSessionTempOwnerResolver((id) => (id === FORK ? SOURCE : undefined))
+    const shared = tmpDirOf(SOURCE)
+    expect(m.ensureSessionTempDir(FORK)).toBe(shared)
+    expect(mocks.mkdirSync.mock.calls.map((call) => call[0])).toContain(shared)
+    expect(mocks.mkdirSync.mock.calls.map((call) => call[0])).not.toContain(tmpDirOf(FORK))
+    expect(m.sessionTempEnv(FORK)).toEqual({ TMPDIR: `${shared}/`, TMP: shared, TEMP: shared })
+    const own = m.sessionOwnDirsView(FORK, WS)!
+    expect(own.tmp).toBe(shared)
+    expect(own.artifacts).toBe(`${SHUVIX}/artifacts/${FORK}`)
+    expect(own.toolResults).toBe(`${USER_DATA}/tool_results/${FORK}`)
+    // 源会话自己（没借谁的）照旧
+    expect(m.ensureSessionTempDir(SOURCE)).toBe(shared)
+  })
+
+  it('MG-11c fork → 源会话：执行计划的 tmpDir 与 TMPDIR、权限表派生的 tmp 行都是源会话的目录', async () => {
+    const m = await load(() => 'true')
+    m.setSessionTempOwnerResolver((id) => (id === FORK ? SOURCE : undefined))
+    const shared = tmpDirOf(SOURCE)
+    const rows = rowsFrom(m.sessionOwnDirsView(FORK, WS))
+    expect(rows.map((r) => r.path)).toContain(shared)
+    expect(rows.map((r) => r.path)).not.toContain(tmpDirOf(FORK))
+    const plan = m.planFor(request({ sessionId: FORK, entries: rows }))!
+    expect(plan).not.toBeNull()
+    expect(plan.spec.tmpDir).toBe(shared)
+    expect(plan.env.TMPDIR).toBe(`${shared}/`)
+    expect(plan.spec.writableRoots).toContain(shared)
+    expect(plan.spec.writableRoots).not.toContain(tmpDirOf(FORK))
+    expect(m.sessionTempEnv(FORK)).toEqual(plan.env)
+  })
+
+  it('MG-11d (D10) wired as main/index.ts: the path the source froze into its persona is the fork TMPDIR, the plan tmpDir and a writable root', async () => {
+    const m = await load(() => 'true')
+    // 会话设置（sessionRecords.pickSettings(id, ['tempDirOwner'])）：fork 的那一行是 insertForkRow 写的
+    const settings: Record<string, { tempDirOwner?: string }> = {
+      [SOURCE]: {},
+      [FORK]: { tempDirOwner: SOURCE }
+    }
+    m.setSessionTempOwnerResolver((id) => settings[id]?.tempDirOwner)
+    // 提示词「临时文件」那一行的目录（setSessionTempDirResolver(ensureSessionTempDir)），在源会话上锁时冻结
+    const frozenInPersona = m.ensureSessionTempDir(SOURCE)!
+    expect(frozenInPersona).toBe(tmpDirOf(SOURCE))
+
+    expect(m.sessionTempEnv(FORK)!.TMPDIR).toBe(`${frozenInPersona}/`)
+    expect(m.sessionTempEnv(FORK)!.TMP).toBe(frozenInPersona)
+    // fork 自己再问一次提示词那一行的目录，也是同一个（下次重新渲染也不变）
+    expect(m.ensureSessionTempDir(FORK)).toBe(frozenInPersona)
+    const plan = m.planFor(
+      request({ sessionId: FORK, entries: rowsFrom(m.sessionOwnDirsView(FORK, WS)) })
+    )!
+    expect(plan.spec.tmpDir).toBe(frozenInPersona)
+    expect(plan.spec.writableRoots).toContain(frozenInPersona)
   })
 })

@@ -157,3 +157,80 @@ export function frozenPrompt(overrides: Partial<FrozenAgentPrompt> = {}): Frozen
 export function systemMessages(messages: readonly Message[]): SystemMessage[] {
   return messages.filter((message): message is SystemMessage => message.role === 'system')
 }
+
+// ─────────────────────────── 可变来源（冻结 / 提醒的用例，2026-11-06） ───────────────────────────
+
+/** 可变来源的那几个 seam 名（`SourceHost.fail` / `calls` 用） */
+export type SourceSeam = 'instructions' | 'project' | 'knowledge' | 'bot'
+
+/**
+ * 一个来源随时可改的 PromptHost：值现读、每次调用记一行、可按名抛错、记下 `noteSectionsCurrent`。
+ *
+ * `calls` 的形状：`instructions:<sid>:<cwd>:<候选,…>` / `project:<sid>` / `knowledge:<sid>` /
+ * `bot:<sid>`（比对时 `bot:<sid>:compare`）。指令文件按候选的次序取第一个 `files` 里有内容的（AGENTS.md 删了
+ * CLAUDE.md 就胜出），一个都没有 → null。
+ */
+export interface SourceHost {
+  readonly host: PromptHost
+  readonly values: {
+    files: Record<string, string>
+    projectPrompt: string | null
+    knowledge: string | null
+    bot: string | null
+  }
+  readonly calls: string[]
+  readonly notes: [string, string[]][]
+  readonly fail: Set<SourceSeam>
+  /** 每次 seam 调用时先跑一次（取消 / 合流用例在这里插一脚）；可以是异步的 */
+  onCall?: (seam: SourceSeam, compare: boolean) => void | Promise<void>
+}
+
+export function sourceHost(
+  initial: Partial<SourceHost['values']> = {},
+  options: { notes?: boolean } = {}
+): SourceHost {
+  const values: SourceHost['values'] = {
+    files: { 'AGENTS.md': 'Use pnpm.' },
+    projectPrompt: 'Acme billing.',
+    knowledge: 'Bases: notes.',
+    bot: null,
+    ...initial
+  }
+  const calls: string[] = []
+  const notes: [string, string[]][] = []
+  const fail = new Set<SourceSeam>()
+  const source: SourceHost = { host: {}, values, calls, notes, fail }
+  const enter = async (seam: SourceSeam, line: string, compare = false): Promise<void> => {
+    calls.push(line)
+    await source.onCall?.(seam, compare)
+    if (fail.has(seam)) throw new Error(`${seam} exploded`)
+  }
+  const host: PromptHost = {
+    resolveInstruction: async (sessionId, cwd, candidates) => {
+      await enter('instructions', `instructions:${sessionId}:${cwd}:${candidates.join(',')}`)
+      for (const filename of candidates) {
+        const content = values.files[filename]
+        if (content !== undefined && content.trim() !== '') return { filename, content }
+      }
+      return null
+    },
+    resolveProjectPrompt: async (sessionId) => {
+      await enter('project', `project:${sessionId}`)
+      return values.projectPrompt
+    },
+    resolveKnowledgeBases: async (sessionId) => {
+      await enter('knowledge', `knowledge:${sessionId}`)
+      return values.knowledge
+    },
+    resolveBotContext: async (sessionId, renderOptions) => {
+      const compare = renderOptions?.compare === true
+      await enter('bot', `bot:${sessionId}${compare ? ':compare' : ''}`, compare)
+      return values.bot
+    }
+  }
+  if (options.notes !== false) {
+    host.noteSectionsCurrent = (sessionId, keys) => notes.push([sessionId, [...keys]])
+  }
+  ;(source as { host: PromptHost }).host = host
+  return source
+}

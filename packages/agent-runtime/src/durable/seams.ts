@@ -203,7 +203,25 @@ export interface PromptHost {
    * bot 会话根 agent 的 `<bot_profile>` 块（`renderBotContext` 的输出；绑定的 md 不在了 → null）。
    * 可以给多块：每块修剪、空白块跳过、块间空一行（旧 `systemContext` 的口径）。
    */
-  resolveBotContext?: (rootSessionId: string) => BotContextBlocks | Promise<BotContextBlocks>
+  resolveBotContext?: (
+    rootSessionId: string,
+    options?: PromptRenderOptions
+  ) => BotContextBlocks | Promise<BotContextBlocks>
+  /**
+   * 这几段冻结的文本与它们此刻的来源逐字一致（2026-11-06：系统提示词冻结之后，模型手里的就是冻结的那份）。上锁
+   * 时与提醒比对时调。宿主据此做「内容在模型手里」才该做的事 —— 桌面：`bot_profile` 一致就把 bot 文件记成已读，
+   * bot 改自己的记忆不必先 `read`；不一致（用户在别处改过）就不记，bot 得先读到新内容才能改。
+   */
+  noteSectionsCurrent?: (rootSessionId: string, keys: readonly string[]) => void
+}
+
+/** 现解析一段时的用途 */
+export interface PromptRenderOptions {
+  /**
+   * 只是拿来与冻结的文本比一比（提醒用户「来源改了」），**不会**进系统提示词：宿主别把它当成模型读到了
+   * （桌面：不记 bot 文件已读）。缺省 = 要进提示词
+   */
+  compare?: boolean
 }
 
 // ─────────────────────────── 锁（P1-09）的 seam ───────────────────────────

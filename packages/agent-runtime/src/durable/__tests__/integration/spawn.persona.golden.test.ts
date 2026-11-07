@@ -1,7 +1,8 @@
 /**
  * P2-11 · J8：每个对话自己的人设黄金（PIN-08）。同一条会话里根 agent 按根 fixture、派出的 coding 子 agent 按
  * `coding-spawned-all-injections` 逐字节出系统提示词：人设在创建那一刻冻结（变量表按 `ctx.kind` 取各自的
- * fixture 值），活段落按根会话 id 现调宿主 seam（子 agent 的 cwd 为空）；bot 段落只给 bot 档案的根。
+ * fixture 值），子 agent 的活段落按根会话 id 现调宿主 seam（子 agent 的 cwd 为空）；bot 段落只给 bot 档案的根。
+ * 根 agent 的段落在第一次上锁时冻结（2026-11-06）：之后的请求不再调 seam，只有重新上锁时为比对调一次。
  */
 import type { PromptVars, PromptVarsCtx } from '../../../agentProfile/promptVars'
 import { describe, expect, it } from 'vitest'
@@ -182,9 +183,11 @@ describe('P2-11 · J8 per-conversation persona golden', () => {
       const sections = systemMessages(child!.messages)[0]!.sections ?? {}
       expect(Object.keys(sections)).not.toContain(PROMPT_SECTION_KEY.bot)
       expect(child!.systemPrompt).not.toContain('<bot_profile')
-      expect(seamCalls.filter(([name]) => name === 'resolveBotContext')).toHaveLength(
-        rootRequests.length
-      )
+      // bot 段落冻结在根上：上锁时渲染一次，之后的请求不再调（没有重新上锁，也就没有比对）
+      expect(rootRequests.length).toBeGreaterThan(1)
+      expect(seamCalls.filter(([name]) => name === 'resolveBotContext')).toEqual([
+        ['resolveBotContext', [SID, undefined]]
+      ])
       expect((await resultOf(session, 1, 'r-agent')).text).toBe('built')
     },
     TIMEOUT
@@ -216,9 +219,18 @@ describe('P2-11 · J8 per-conversation persona golden', () => {
       const [child] = world.model.laneRequests('golden-child')
       expect(child!.systemPrompt).toBe(SPAWNED.output)
       expect(contexts.length).toBe(contextsBefore)
+      // 根的段落冻结着、锁也留着（被中断的工作保住了锁，没有重新上锁）：重开之后根一次都不调 seam；子 agent 的
+      // 活段落照旧按根会话 id 解析（cwd 为空）
       const after = seamCalls.slice(seamsBefore)
-      expect(after.length).toBeGreaterThan(0)
-      for (const [, args] of after) expect(args[0]).toBe(SID)
+      for (const [name, args] of after) {
+        expect(args[0]).toBe(SID)
+        expect(name).not.toBe('resolveBotContext')
+        if (name === 'resolveInstruction') expect(args[1]).toBe('')
+      }
+      const rootOutput = fixtures.get('coding-root-all-injections')!.output
+      const rootRequests = world.model.laneRequests('golden-root')
+      expect(rootRequests.length).toBeGreaterThan(0)
+      for (const request of rootRequests) expect(request.systemPrompt).toBe(rootOutput)
       expect((await resultOf(reopened, 1, 'r-agent')).text).toBe('built')
     },
     RECOVERY_TIMEOUT

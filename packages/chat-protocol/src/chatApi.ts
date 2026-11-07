@@ -9,6 +9,7 @@
  * DB 行类型平行；Electron 侧通过编译期断言（renderer/src/host/chatApiContract.ts）保证
  * window.api 结构满足本契约，从而零漂移。
  */
+import type { RebuildSystemPromptResult, SystemPromptStatus } from './systemPromptStatus'
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
 import type { ShuvixMdValidation } from './shuvixMdContract'
@@ -843,14 +844,25 @@ export interface HostApi {
      */
     previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
     /**
+     * 这段对话冻结的系统提示词与此刻的来源比一比（只读，2026-11-06）：系统提示词第一次建 agent 时冻结，之后不再
+     * 自己变；来源（agent 档案、CLAUDE.md、项目提示词、知识库、bot 记忆）改了，界面据此提醒用户。可选：没有的宿主
+     * 不显示提醒
+     */
+    systemPromptStatus?: (sessionId: string) => Promise<SystemPromptStatus>
+    /**
+     * 用户点了「重建系统提示词」：删掉冻结的那份（有 agent 一并销毁），下一条消息按此刻的来源重新渲染。会话在跑
+     * → `{ success: false, reason: 'busy' }`，什么都不动
+     */
+    rebuildSystemPrompt?: (sessionId: string) => Promise<RebuildSystemPromptResult>
+    /**
      * 各会话此刻挂着几条询问（只列 > 0 的）。`ask_count` 是事件，窗口重建、客户端连上来之前发的都错过了，
      * 新来的前端靠这份补侧栏徽标。
      */
     askCounts: () => Promise<Record<string, number>>
     /**
      * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的设置重建（正在跑的 run
-     * 会被中止）。换模型 / 扩展能力用不着它（那些当场重配）；它是「整个重建」的出口：档案 md 改了、MCP 工具
-     * 列表变了、沙箱开关变了。等关停落定才返回，前后经 `agent_closing` 广播。没有运行时则无操作（同样回
+     * 会被中止）。换模型 / 扩展能力用不着它（那些当场重配）；它是重建运行时的出口：MCP 工具列表变了、沙箱开关
+     * 变了。冻结的系统提示词不碰（档案 md 改了要用 `rebuildSystemPrompt`）。等关停落定才返回，前后经 `agent_closing` 广播。没有运行时则无操作（同样回
      * `success: true`）。
      */
     destroy: (sessionId: string) => Promise<{ success: boolean }>
