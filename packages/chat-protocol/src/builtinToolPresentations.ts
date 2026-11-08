@@ -1,5 +1,5 @@
 /**
- * 跨端内置工具的渲染定义（单一真源）—— read/write/edit/ask 在桌面与扩展显示一致。
+ * 跨端内置工具的渲染定义（单一真源）—— read/write/edit/move/delete/ask 在桌面与扩展显示一致。
  *
  * label 不在此固化（各端用自己的 i18n t 解析 labelKey）；icon/formItems 等渲染配置共享，
  * 折叠态摘要经 buildSummary 函数生成（由 toolSummaries.ts 注册表收集）。
@@ -7,7 +7,7 @@
  */
 import type { ToolPresentation } from './types/toolPresentation'
 import type { ToolSummaryBuilder } from './toolSummaries'
-import { asStr, field, fileField } from './toolSummaryHelpers'
+import { asStr, field, fileField, fileNameOf } from './toolSummaryHelpers'
 
 export interface BuiltinToolPresentationDef {
   /** i18n label key（各端用自身 t 解析为本地化显示名） */
@@ -59,6 +59,24 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
         { field: 'newText', renderer: { type: 'code' } }
       ]
     },
+    buildSummary: fileField('path')
+  },
+  // 挪动 / 改名：折叠行摆「源 → 目标」（各取文件名，同 fileField）；只有一头时就那一头
+  move: {
+    labelKey: 'tool.moveLabel',
+    presentation: {
+      icon: 'FolderInput',
+      formItems: [{ field: 'from' }, { field: 'to' }]
+    },
+    buildSummary: (args) => {
+      const from = fileNameOf(args.from)
+      const to = fileNameOf(args.to)
+      return from && to ? `${from} → ${to}` : (from ?? to)
+    }
+  },
+  delete: {
+    labelKey: 'tool.deleteLabel',
+    presentation: { icon: 'Trash2' },
     buildSummary: fileField('path')
   },
   // 协作编辑（笔记本基座）：改的是编辑器里那份活文档，不是磁盘文件 —— 折叠行摘要取
@@ -174,9 +192,17 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
   knowledge: {
     labelKey: 'tool.knowledgeLabel',
     presentation: { icon: 'BookOpen', iconColor: '#10b981' },
-    // action + 该 action 最有信息量的参数（submit → 路径；search → 查询词；历史转写里的 create → 标题）
+    // action + 该 action 最有信息量的参数（read / submit → 条目名；search → 查询词；没点名条目的 submit / list → 库名；
+    // 历史转写里的 create → 标题、旧 submit → 路径）
     buildSummary: (args) =>
-      [asStr(args.action), asStr(args.title) ?? asStr(args.path) ?? asStr(args.query)]
+      [
+        asStr(args.action),
+        asStr(args.title) ??
+          asStr(args.entry) ??
+          asStr(args.path) ??
+          asStr(args.query) ??
+          asStr(args.base)
+      ]
         .filter(Boolean)
         .join(' · ') || undefined
   },

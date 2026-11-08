@@ -20,6 +20,7 @@ export type LucideIconName =
   | 'FileOutput'
   | 'FileSearch2'
   | 'FileText'
+  | 'FolderInput'
   | 'FolderTree'
   | 'GitBranch'
   | 'Globe'
@@ -34,6 +35,7 @@ export type LucideIconName =
   | 'SlidersHorizontal'
   | 'SquareTerminal'
   | 'Terminal'
+  | 'Trash2'
   | 'Wrench'
 
 // ─── 颜色类型（Tailwind CSS 调色板子集） ─────────────────

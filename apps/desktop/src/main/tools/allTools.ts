@@ -11,6 +11,10 @@ import './powershell'
 import './read'
 import './write'
 import './edit'
+// move / delete：挪动改名、删文件或空目录 —— 与 write 同一道路径门、同一条变更回调（知识库管线看得见）；
+// 不在任何内置基座档案清单里，档案按名列出才有
+import './move'
+import './delete'
 import './ask'
 // suggest：给用户留几条一键采纳的提议，不等回答（采纳 = 那条的话作为用户回复发进会话）
 import './suggest'

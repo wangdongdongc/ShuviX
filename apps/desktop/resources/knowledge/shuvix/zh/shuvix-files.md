@@ -30,7 +30,7 @@ ShuviX 靠 **`~/.shuvix/` 下的 markdown 文件**定制。没有要建的数据
 | **Skill** —— 可复用的指令包（Agent Skills 格式）           | `~/.shuvix/skills/<name>/SKILL.md`、`<project>/.claude/skills/<name>/SKILL.md` | 无（要求 `name:`）       | `skills`          |
 
 `~/.shuvix/` 下的其他东西是 ShuviX 自己的，不该手改：`knowledge-shuvix/`（ShuviX 维护的知识 bundle，
-一个项目一个 —— 经 `knowledge` 工具写入）、`skills/.config.json`（哪些 skill 被禁用、注册了哪些额外
+一个项目一个 —— 由知识库管理员 `knowledge-writer` 写入）、`skills/.config.json`（哪些 skill 被禁用、注册了哪些额外
 skill 目录）、`widgets/`、`tts/`、`cli-token`。旧的 `memory/`、`wikis/`、`workflows/` 是已退役的格式，
 不再读取。
 

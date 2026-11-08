@@ -37,6 +37,8 @@ import {
   ListChecks,
   Image,
   Bot,
+  FolderInput,
+  Trash2,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -102,7 +104,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   SlidersHorizontal,
   ListChecks,
   Image,
-  Bot
+  Bot,
+  FolderInput,
+  Trash2
 }
 
 /** 根据图标名查找 lucide 组件，找不到时返回 Wrench */

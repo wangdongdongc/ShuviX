@@ -538,10 +538,10 @@ describe('SB-11..18 回落链与围栏清单', () => {
     mockPick({ projectId: 'p1', settings: { knowledgeBases: [nfc, 'project'] } })
 
     // 围栏列的名字是**磁盘上的拼写**：归一只在 enabledTargets 里做一次，两侧不各过滤一遍；项目库打头。
-    // 每行带库目录（条目由 agent 直接 write 进去再 submit）
+    // 不带库目录（2026-11-08：库目录只有知识库管理员知道）
     expect(enabledBaseChoices('s1')).toEqual([
-      { name: 'project', label: 'Acme Corp', dir: bundleAt(root, 'projects/p1') },
-      { name: nfd, label: '', dir: join(userRoot, nfd) }
+      { name: 'project', label: 'Acme Corp' },
+      { name: nfd, label: '' }
     ])
     // 同一份结果：围栏列得出来的，工具就解析得到
     expect(await resolveBase('s1', nfc)).toEqual({
@@ -567,7 +567,7 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
   /** builtinTarget 的回包（`bundleDir` 现算到语言那一层） */
   const BUILTIN_LABEL = 'ShuviX reference (read-only)'
   /** listBases 只给它这一行加的只读提示 */
-  const BUILTIN_NOTE = 'read-only: search and read it, never write or submit here'
+  const BUILTIN_NOTE = 'read-only: search and read it; nothing can be submitted here'
   /** 配置卡的人读名：走 i18n 单例（替身把 key 原样包成标记串） */
   const BUILTIN_DISPLAY_NAME = 'i18n(knowledge.builtinBaseName)'
 
@@ -742,11 +742,10 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     // 围栏是提示词：要说清里面是什么、以及只读（免得模型把笔记往这里记）
     const choices = enabledBaseChoices('s1')
     expect(choices).toEqual([
-      { name: 'notes', label: '', dir: expect.any(String) },
+      { name: 'notes', label: '' },
       {
         name: 'shuvix',
         label: expect.stringContaining('read-only'),
-        dir: expect.any(String),
         readonly: true,
         note: expect.any(String)
       }
@@ -798,9 +797,7 @@ describe('SB-P1..P10 隐式的项目库', () => {
     expect(await listBases('s1')).toStrictEqual([
       { base: 'project', label: 'project "Acme Corp"', dir: bundleAt(root, 'projects/p1') }
     ])
-    expect(enabledBaseChoices('s1')).toEqual([
-      { name: 'project', label: 'Acme Corp', dir: bundleAt(root, 'projects/p1') }
-    ])
+    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Corp' }])
     // `<knowledge_bases>` 围栏的正文就是拿这份清单渲染的：项目会话开箱就有那一行
     expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toContain('- project — Acme Corp')
     expect(knowledgeBaseOptions('s1')).toEqual({
@@ -989,9 +986,7 @@ describe('KB-B1 bot 会话引用的工作项目也有项目库', () => {
     })
     expect(projectDao.findById).toHaveBeenCalledWith('p1')
     expect(await baseNames()).toEqual(['project'])
-    expect(enabledBaseChoices('s1')).toEqual([
-      { name: 'project', label: 'Acme Corp', dir: bundleAt(root, 'projects/p1') }
-    ])
+    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Corp' }])
     expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
 
@@ -1047,7 +1042,7 @@ describe('KB-B1 bot 会话引用的工作项目也有项目库', () => {
  */
 describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
   const BUILTIN_LABEL = 'ShuviX reference (read-only)'
-  const BUILTIN_NOTE = 'read-only: search and read it, never write or submit here'
+  const BUILTIN_NOTE = 'read-only: search and read it; nothing can be submitted here'
   const BUILTIN_DISPLAY_NAME = 'i18n(knowledge.builtinBaseName)'
   /** 几种 ShuviX 文件的载体（注册表、内置注册表、技能外部目录、知识库用户库） */
   const CARRIERS = [
@@ -1096,7 +1091,7 @@ describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
         { base: 'shuvix', label: BUILTIN_LABEL, dir: builtinDir(), note: BUILTIN_NOTE }
       ])
       expect(enabledBaseChoices('s1')).toEqual([
-        { name: 'shuvix', dir: builtinDir(), label, readonly: true, note: expect.any(String) }
+        { name: 'shuvix', label, readonly: true, note: expect.any(String) }
       ])
       expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
       const guide = renderKnowledgeGuide(enabledBaseChoices('s1'))
@@ -1202,8 +1197,8 @@ describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
       expect(bases.map((b) => b.base)).toEqual(['shuvix'])
       expect(bases[0].dir).toBe(builtinDir('zh'))
       expect(builtinManualDir()).toBe(builtinDir('zh'))
-      // 同一个函数：提示词里指路用的目录 = 知识库里那个库的目录
-      expect(builtinManualDir()).toBe(enabledBaseChoices('s1')[0].dir)
+      // 围栏只列库名（2026-11-08 起不带目录）：隐式那份照样在
+      expect(enabledBaseChoices('s1').map((b) => b.name)).toEqual(['shuvix'])
 
       rmSync(builtinRootOf(root), { recursive: true, force: true })
       expect(builtinManualDir()).toBeNull()
@@ -1361,7 +1356,8 @@ describe('SB-D 缺省启用内置说明书', () => {
     mockPick({ projectId: null })
 
     const note = shuvixRow()?.note ?? ''
-    const named = [...note.matchAll(/`([^`]+\.md)`/g)].map((m) => m[1])
+    // 按条目名点（`/agent-md.md`，经 knowledge 的 read），不给目录
+    const named = [...note.matchAll(/`\/([^`]+\.md)`/g)].map((m) => m[1])
     expect([...named].sort()).toEqual(
       [
         'agent-md.md',

@@ -1,6 +1,8 @@
 /**
  * 变更管线 —— 宿主观察到的每一次知识库写入都经这里：失效缓存 →（还不是 git 仓库的库先 init + 基线）→
- * 排队该 bundle 的 git 提交 → 广播 knowledge.changed。
+ * 排队该 bundle 的 git 提交 → 广播 knowledge.changed。删除与挪动（文件工具的 delete / move）也走这条：
+ * 删除记 Deletion，挪动记成源的 Deletion 加目标的 Creation；挪走 / 删掉的是一整个目录时整个 bundle 的
+ * 扫描缓存一起失效，提交暂存那个目录（底下的增删都进去）。
  *
  * index.md / log.md 不再维护：谁在什么时候改了哪条，git 提交里都有（`kb(<op>): /path` 与
  * `Knowledge-Actor` trailer）。也没有「建库」这一步 —— 目录随第一次写入出现，仓库在第一次提交前按需建出。
@@ -32,6 +34,8 @@ export interface KnowledgeChange {
   path: string
   op: KnowledgeChangeOp
   actor?: string
+  /** path 是一整个目录（move / delete 一个目录）：失效整个 bundle 的扫描缓存 */
+  isDirectory?: boolean
 }
 
 let pending: KnowledgeChange[] = []
@@ -41,7 +45,9 @@ let chain: Promise<void> = Promise.resolve()
 async function process(batch: KnowledgeChange[]): Promise<void> {
   const touched = new Map<string, Set<string>>()
   for (const change of batch) {
-    invalidateKnowledgeScan(change.bundle, change.path)
+    // 目录底下每一条都可能变了：按条失效要先知道有哪些条，整个 bundle 一起失效更直接
+    if (change.isDirectory) invalidateKnowledgeScan(change.bundle)
+    else invalidateKnowledgeScan(change.bundle, change.path)
     const set = touched.get(change.bundle) ?? new Set<string>()
     set.add(change.path)
     touched.set(change.bundle, set)
@@ -94,25 +100,34 @@ export async function flushKnowledgeChanges(): Promise<void> {
 }
 
 /**
- * 文件工具写入回调：落在某个 bundle 里的 md 才是知识库变更（读宽：普通笔记与条目一视同仁）。
- * 按「扫描是否见过」区分新建 / 更新。
+ * 文件工具改动回调：落在某个 bundle 里的 md 才是知识库变更（读宽：普通笔记与条目一视同仁）；
+ * 一整个目录（move / delete 一个目录）不看扩展名 —— 里面有什么都跟着走了。
+ * delete 记 Deletion；write / edit 按「扫描是否见过」区分新建 / 更新。move 由文件工具报成一对
+ * （源 delete、目标 write），两头各自按自己落在哪个 bundle 判 —— 挪出库、挪进库都只记库里那一头。
  */
 export function notifyKnowledgeFileChanged(
   absPath: string,
-  meta: { kind: 'write' | 'edit'; actor?: string }
+  meta: { kind: 'write' | 'edit' | 'delete'; actor?: string; isDirectory?: boolean }
 ): void {
   const located = locateBundle(absPath)
-  if (!located || !/\.md$/i.test(located.rel)) return
+  if (!located) return
+  if (!meta.isDirectory && !/\.md$/i.test(located.rel)) return
   const { bundle, rel } = located
   // 内置库在应用包里：不 git init、不提交、不广播。写入本身不设拒写策略（随包资源的统一裁决，
   // 见 builtinPolicies/index.ts）—— 真写进去了，下个版本会还原
   if (isBuiltinBundle(bundle)) return
-  const existed = knownKnowledgePaths().has(`${bundle}/${rel}`)
+  const op: KnowledgeChangeOp =
+    meta.kind === 'delete'
+      ? 'Deletion'
+      : meta.kind === 'edit' || knownKnowledgePaths().has(`${bundle}/${rel}`)
+        ? 'Update'
+        : 'Creation'
   recordKnowledgeChange({
     bundle,
     path: rel,
-    op: meta.kind === 'edit' || existed ? 'Update' : 'Creation',
-    actor: meta.actor
+    op,
+    actor: meta.actor,
+    ...(meta.isDirectory ? { isDirectory: true } : {})
   })
 }
 

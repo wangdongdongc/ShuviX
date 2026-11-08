@@ -1,16 +1,19 @@
 /**
- * 知识库条目的**提交检查**（review.ts）—— `knowledge` 工具 `submit` 宿主无关的那一半。
+ * 知识库的**提交**（review.ts）—— `knowledge` 工具 `submit` 宿主无关的那一半（2026-11-08 改版）。
  *
- * 写手（内置 `knowledge-writer`）只判、不盖章：它经结果契约交回 `{passed, report}`，通过之后由**宿主**
- * 在 `verified` 里记一笔机器确认、把 `generated` 改回提交者。本文件钉四件事：
+ * 别的 agent 不再自己往库里写：它交上来的是内容，宿主同步派知识库管理员（内置 `knowledge-writer`），
+ * 由它拿着库目录和文件工具决定新建、改写、合并、改名、删除还是不收，经结果契约交回
+ * `{accepted, entries, report}`。**管理员只记账、不盖章**：它报上来、仍合规的条目由宿主在 `verified` 里记
+ * 一笔机器确认、把 `generated` 改回提交者。本文件钉四件事：
  *
- *   KR-1..KR-3   常量与结果契约：写手是宿主专用档案；契约 schema 合法，且写手不能借它夹带别的字段
- *   KR-4..KR-6   派给写手的任务文本：只给这一次的事实，规范住在写手的 md 里
- *   KR-7         交回结果的读法：形状不对一律读成「没有结论」，绝不能读成通过
- *   KR-10..KR-27 盖章（stampKnowledgeReview）：行级改写只动 frontmatter 的那两个顶层键；旧机器章让位、
- *                人工章原样保留；结果经真 YAML 回读、信任档按为当前内容背书的那几条判
+ *   KR-1..KR-3   常量与结果契约：管理员是宿主专用档案；契约 schema 合法，且它不能借契约夹带别的字段
+ *   KR-4..KR-6   派给管理员的任务文本：只给这一次的事实（库、目录、提交者、点名的条目、工作目录、会话出处），
+ *                最后是提交的内容；规范住在管理员的 md 里
+ *   KR-7..KR-8   交回结果的读法：形状不对一律读成「没有结论」，绝不能读成收了；条目名归一、坏项丢掉
+ *   KR-10..KR-27 盖章（stampKnowledgeReview，行为未变）：行级改写只动 frontmatter 的那两个顶层键；旧机器章
+ *                让位、人工章原样保留；结果经真 YAML 回读、信任档按为当前内容背书的那几条判
  *
- * 记号：`S` = submittedBy（提交者），`R` = reviewer（写手），`T` = 这次盖章的时刻；T0 < T。
+ * 记号：`S` = submittedBy（提交者），`R` = reviewer（管理员的 actor），`T` = 这次盖章的时刻；T0 < T。
  */
 import { describe, it, expect } from 'vitest'
 import { invokeTool } from '../../tools/testing/invokeTool'
@@ -18,12 +21,14 @@ import { NextTool, resultContractTools, validateContractSchema } from '../../sub
 import { BASE_PROFILE_NAMES, HOST_ONLY_PROFILE_NAMES } from '../../subagent/builtinAgents'
 import { upsertFrontmatterMappings } from '../../shuvixMdWrite'
 import {
-  KNOWLEDGE_REVIEW_CONTRACT,
+  KNOWLEDGE_ADMIN_CONTRACT,
+  KNOWLEDGE_ENTRY_CHANGES,
   KNOWLEDGE_WRITER_PROFILE_NAME,
-  buildKnowledgeReviewPrompt,
-  readKnowledgeReviewResult,
+  buildKnowledgeAdminPrompt,
+  readKnowledgeAdminResult,
   stampKnowledgeReview,
-  type KnowledgeReviewRequest
+  type KnowledgeEntryChangeRecord,
+  type KnowledgeSubmission
 } from '../review'
 import { parseOkfText } from '../okfCodec'
 import {
@@ -69,39 +74,84 @@ const fieldsOf = (text: string): Record<string, unknown> => {
 }
 
 describe('KR-1..KR-3 常量与结果契约', () => {
-  it('KR-1 写手档案名是 knowledge-writer：宿主专用（派发工具按名解析不到），不是会话基座', () => {
+  it('KR-1 管理员档案名沿用 knowledge-writer：宿主专用（派发工具按名解析不到），不是会话基座', () => {
     expect(KNOWLEDGE_WRITER_PROFILE_NAME).toBe('knowledge-writer')
     expect(HOST_ONLY_PROFILE_NAMES.has(KNOWLEDGE_WRITER_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(KNOWLEDGE_WRITER_PROFILE_NAME)).toBe(false)
   })
 
-  it('KR-2 结果契约的 schema 合法：恰两个必填字段、不收别的键；来源标签点名 knowledge submit', () => {
+  it('KR-2 结果契约的 schema 合法：恰三个必填字段、不收别的键；entries 的每一项恰为 {entry, change}，change 只有三种；来源标签点名 knowledge submit', () => {
     // runTask 遇到非法契约会直接拒绝 —— 那整条 submit 就废了
-    expect(validateContractSchema(KNOWLEDGE_REVIEW_CONTRACT.schema)).toBeNull()
-    const schema = KNOWLEDGE_REVIEW_CONTRACT.schema as {
+    expect(validateContractSchema(KNOWLEDGE_ADMIN_CONTRACT.schema)).toBeNull()
+    const schema = KNOWLEDGE_ADMIN_CONTRACT.schema as {
       type: string
       required: string[]
       additionalProperties: boolean
-      properties: Record<string, { type: string }>
+      properties: Record<
+        string,
+        {
+          type: string
+          description?: string
+          items?: {
+            type: string
+            required: string[]
+            additionalProperties: boolean
+            properties: Record<string, { type: string; enum?: string[] }>
+          }
+        }
+      >
     }
     expect(schema.type).toBe('object')
-    expect(schema.required).toEqual(['passed', 'report'])
+    expect(schema.required).toEqual(['accepted', 'entries', 'report'])
     expect(schema.additionalProperties).toBe(false)
-    expect(Object.keys(schema.properties).sort()).toEqual(['passed', 'report'])
-    expect(schema.properties.passed.type).toBe('boolean')
+    expect(Object.keys(schema.properties).sort()).toEqual(['accepted', 'entries', 'report'])
+    expect(schema.properties.accepted.type).toBe('boolean')
     expect(schema.properties.report.type).toBe('string')
-    expect(KNOWLEDGE_REVIEW_CONTRACT.sourceLabel).toBe('knowledge submit')
+    expect(schema.properties.entries.type).toBe('array')
+
+    const item = schema.properties.entries.items!
+    expect(item.type).toBe('object')
+    expect(item.required).toEqual(['entry', 'change'])
+    expect(item.additionalProperties).toBe(false)
+    expect(Object.keys(item.properties).sort()).toEqual(['change', 'entry'])
+    expect(item.properties.entry.type).toBe('string')
+    expect(item.properties.change.enum).toEqual(['created', 'updated', 'deleted'])
+    expect([...KNOWLEDGE_ENTRY_CHANGES]).toEqual(['created', 'updated', 'deleted'])
+
+    // 给管理员的说明：条目按库内路径点名、改名怎么报、报告里不写目录（提交者看不到目录）
+    expect(schema.properties.entries.description).toContain('path inside the base')
+    expect(schema.properties.entries.description).toContain('A rename is the old name deleted')
+    expect(schema.properties.report.description).toContain('never by the directory')
+    expect(KNOWLEDGE_ADMIN_CONTRACT.sourceLabel).toBe('knowledge submit')
   })
 
   it.each([
-    ['passed 不是布尔', { passed: 'yes', report: 'x' }],
-    ['缺 report', { passed: true }],
-    ['夹带 verified', { passed: true, report: 'x', verified: 'shuvix-knowledge-writer/haiku' }]
+    ['accepted 不是布尔', { accepted: 'yes', entries: [], report: 'x' }],
+    ['缺 entries', { accepted: true, report: 'x' }],
+    ['缺 report', { accepted: true, entries: [] }],
+    ['entries 不是数组', { accepted: true, entries: { entry: '/a.md' }, report: 'x' }],
+    [
+      '夹带 verified',
+      { accepted: true, entries: [], report: 'x', verified: 'shuvix-knowledge-writer/haiku' }
+    ],
+    [
+      'change 不在三种之内',
+      { accepted: true, entries: [{ entry: '/a.md', change: 'renamed' }], report: 'x' }
+    ],
+    ['条目缺 change', { accepted: true, entries: [{ entry: '/a.md' }], report: 'x' }],
+    [
+      '条目夹带别的键',
+      {
+        accepted: true,
+        entries: [{ entry: '/a.md', change: 'created', verified: true }],
+        report: 'x'
+      }
+    ]
   ])(
     'KR-3 经 next 工具交回：%s → isError、不捕获；随后一次合规的调用才被捕获',
     async (_label, bad) => {
-      // 写手只能交回 pass / fail —— 不能借契约夹带别的字段（如自己声明 verified）
-      const [tool] = resultContractTools(KNOWLEDGE_REVIEW_CONTRACT) as [NextTool]
+      // 管理员只能交回收没收、动了哪几条 —— 不能借契约夹带别的字段（如自己声明 verified）
+      const [tool] = resultContractTools(KNOWLEDGE_ADMIN_CONTRACT) as [NextTool]
       expect(tool).toBeInstanceOf(NextTool)
 
       const rejected = (await invokeTool(tool, bad as Record<string, unknown>)).result
@@ -109,64 +159,110 @@ describe('KR-1..KR-3 常量与结果契约', () => {
       expect(rejected.details).toBeUndefined()
 
       // 前一次没被捕获：同一个实例上紧接着合规的那一次才是「记下了」，带着结果与收尾信号
-      const ok = (await invokeTool(tool, { passed: true, report: 'ok' })).result
+      const good = {
+        accepted: true,
+        entries: [
+          { entry: '/auth/old.md', change: 'deleted' },
+          { entry: '/auth/new.md', change: 'created' }
+        ],
+        report: 'Renamed it.'
+      }
+      const ok = (await invokeTool(tool, good)).result
       expect(ok.isError).toBeFalsy()
-      expect(ok.details).toEqual({ result: { passed: true, report: 'ok' } })
+      expect(ok.details).toEqual({ result: good })
       expect(ok.control).toEqual({ terminate: true })
     }
   )
 })
 
-describe('KR-4..KR-6 派给写手的任务文本', () => {
-  const REQ: KnowledgeReviewRequest = {
+describe('KR-4..KR-6 派给管理员的任务文本', () => {
+  const REQ: KnowledgeSubmission = {
     base: 'notes',
     label: 'knowledge base "notes"',
     bundleDir: '/u/notes',
-    path: '/u/notes/sub/x.md',
-    rel: 'sub/x.md',
+    content: 'Token refresh must happen before expiry (src/auth/refresh.ts).',
     submittedBy: S
   }
+  const ENTRY_LINE = '- It corrects or extends: /sub/x.md'
+  const WORKDIR_LINE =
+    '- Working directory of the submitting session (only for turning a relative path the submission names into an absolute one in sources; do not open anything there): /Users/me/acme'
+  const SESSION_LINE =
+    '- Source for what was established in the submitting conversation: shuvix://session/s1'
 
-  it('KR-4 逐行：一句任务 + 空行 + 条目 / 库 / 提交者三行事实', () => {
-    expect(buildKnowledgeReviewPrompt(REQ).split('\n')).toEqual([
-      'Check this knowledge-base entry and complete its metadata.',
+  it('KR-4 逐行：一句任务 + 空行 + 库（带目录）/ 提交者两行事实 + 空行 + `Submission:` + 空行 + 内容', () => {
+    expect(buildKnowledgeAdminPrompt(REQ).split('\n')).toEqual([
+      'Record this submission in the knowledge base.',
       '',
-      '- Entry: /u/notes/sub/x.md',
-      '- Base: "notes" (knowledge base "notes") — /u/notes',
-      `- Submitted by: ${S}`
+      '- Base: "notes" (knowledge base "notes") — directory /u/notes',
+      `- Submitted by: ${S}`,
+      '',
+      'Submission:',
+      '',
+      'Token refresh must happen before expiry (src/auth/refresh.ts).'
     ])
   })
 
-  it('KR-5 带 sessionId → 末尾多一行本会话的 shuvix:// 出处；不带 → 没有这一行、全文不提 shuvix://', () => {
-    const withSession = buildKnowledgeReviewPrompt({ ...REQ, sessionId: 's1' }).split('\n')
-    expect(withSession).toHaveLength(6)
-    expect(withSession[5]).toBe(
-      '- Source for what was established in the submitting conversation: shuvix://session/s1'
-    )
-    expect(withSession.slice(0, 5)).toEqual(buildKnowledgeReviewPrompt(REQ).split('\n'))
-
-    expect(buildKnowledgeReviewPrompt(REQ)).not.toContain('shuvix://')
-    expect(buildKnowledgeReviewPrompt({ ...REQ, sessionId: '' })).not.toContain('shuvix://')
-  })
-
-  it('KR-5b 带 workingDirectory → 多一行工作目录（只用来把相对路径拼成绝对路径，明说不去打开），排在会话出处之前；不带 → 没有这一行', () => {
-    const lines = buildKnowledgeReviewPrompt({
+  it('KR-5 可选的三行按序排在提交者之后：点名的条目（`/rel`）→ 工作目录（明说只用来拼 sources 的绝对路径、不去打开）→ 会话出处', () => {
+    const lines = buildKnowledgeAdminPrompt({
       ...REQ,
-      sessionId: 's1',
-      workingDirectory: '/Users/me/acme'
+      entry: 'sub/x.md',
+      workingDirectory: '/Users/me/acme',
+      sessionId: 's1'
     }).split('\n')
-    expect(lines).toHaveLength(7)
-    expect(lines[5]).toBe(
-      '- Working directory of the submitting session (only for turning a relative path the entry names into an absolute one in sources; do not open anything there): /Users/me/acme'
-    )
-    expect(lines[6]).toContain('shuvix://session/s1')
-    expect(buildKnowledgeReviewPrompt({ ...REQ, sessionId: 's1' })).not.toContain(
-      'Working directory'
-    )
+    expect(lines).toEqual([
+      'Record this submission in the knowledge base.',
+      '',
+      '- Base: "notes" (knowledge base "notes") — directory /u/notes',
+      `- Submitted by: ${S}`,
+      ENTRY_LINE,
+      WORKDIR_LINE,
+      SESSION_LINE,
+      '',
+      'Submission:',
+      '',
+      REQ.content
+    ])
   })
 
-  it('KR-6 只给事实不给规范：没有自述行、没有类型词汇、没有 status —— 规范住在写手的 md 里（用户可覆盖）', () => {
-    const text = buildKnowledgeReviewPrompt({ ...REQ, sessionId: 's1' })
+  const OPTIONAL: [
+    string,
+    { entry?: string; workingDirectory?: string; sessionId?: string },
+    string[]
+  ][] = [
+    ['只有 entry', { entry: 'sub/x.md' }, [ENTRY_LINE]],
+    ['只有 workingDirectory', { workingDirectory: '/Users/me/acme' }, [WORKDIR_LINE]],
+    ['只有 sessionId', { sessionId: 's1' }, [SESSION_LINE]],
+    ['空串一概当没有', { entry: '', workingDirectory: '', sessionId: '' }, []]
+  ]
+
+  it.each(OPTIONAL)('KR-5b %s：事实行恰为这几行，其余不出现', (_label, extra, expected) => {
+    const lines = buildKnowledgeAdminPrompt({ ...REQ, ...extra }).split('\n')
+    expect(lines.slice(4, lines.indexOf('Submission:') - 1)).toEqual(expected)
+    const text = lines.join('\n')
+    if (!expected.includes(SESSION_LINE)) expect(text).not.toContain('shuvix://')
+    if (!expected.includes(WORKDIR_LINE)) expect(text).not.toContain('Working directory')
+    if (!expected.includes(ENTRY_LINE)) expect(text).not.toContain('corrects or extends')
+  })
+
+  it('KR-5c 内容排在最后：首尾空白去掉，内部的空行、缩进、markdown 原样', () => {
+    const content = '\n\n## Token refresh\n\n- refresh early\n    indented code\n\nend.  \n\n'
+    const text = buildKnowledgeAdminPrompt({ ...REQ, content, sessionId: 's1' })
+    expect(
+      text.endsWith(
+        '\n\nSubmission:\n\n## Token refresh\n\n- refresh early\n    indented code\n\nend.'
+      )
+    ).toBe(true)
+    expect(text.indexOf('Submission:')).toBeGreaterThan(text.indexOf('shuvix://session/s1'))
+  })
+
+  it('KR-6 只给事实不给规范：没有自述行、没有类型词汇、没有 status / verified —— 规范住在管理员的 md 里（用户可覆盖）', () => {
+    const text = buildKnowledgeAdminPrompt({
+      ...REQ,
+      content: 'x',
+      entry: 'a.md',
+      workingDirectory: '/w',
+      sessionId: 's1'
+    })
     expect(text).not.toContain('shuvix: okf')
     for (const word of ['Decision', 'Runbook', 'Memory', 'Guide']) expect(text).not.toContain(word)
     expect(text).not.toContain('status')
@@ -174,34 +270,122 @@ describe('KR-4..KR-6 派给写手的任务文本', () => {
   })
 })
 
-describe('KR-7 readKnowledgeReviewResult', () => {
-  const TABLE: [string, unknown, { passed: boolean; report: string } | null][] = [
+describe('KR-7..KR-8 readKnowledgeAdminResult', () => {
+  type Read = { accepted: boolean; entries: KnowledgeEntryChangeRecord[]; report: string }
+  const TABLE: [string, unknown, Read | null][] = [
     ['undefined', undefined, null],
     ['null', null, null],
-    ['JSON 字符串', '{"passed":true}', null],
+    ['JSON 字符串', '{"accepted":true}', null],
     ['数字', 42, null],
     ['数组', [], null],
     ['空对象', {}, null],
-    ['passed 是字符串', { passed: 'true' }, null],
-    ['passed 是 1', { passed: 1 }, null],
-    ['只有 passed', { passed: true }, { passed: true, report: '' }],
+    ['accepted 是字符串', { accepted: 'true', entries: [], report: '' }, null],
+    ['accepted 是 1', { accepted: 1 }, null],
+    // 旧契约的形状（passed）不是这一份的结论
+    ['旧的 passed', { passed: true, report: 'ok' }, null],
+    ['只有 accepted', { accepted: true }, { accepted: true, entries: [], report: '' }],
     [
       'report 去首尾空白',
-      { passed: false, report: '  fix x \n' },
-      { passed: false, report: 'fix x' }
+      { accepted: false, entries: [], report: '  dup of /a.md \n' },
+      { accepted: false, entries: [], report: 'dup of /a.md' }
     ],
-    ['report 不是字符串', { passed: true, report: 5 }, { passed: true, report: '' }],
-    ['多余键不外泄', { passed: true, report: 'r', extra: 1 }, { passed: true, report: 'r' }]
+    [
+      'report 不是字符串',
+      { accepted: true, report: 5 },
+      { accepted: true, entries: [], report: '' }
+    ],
+    [
+      'entries 不是数组',
+      { accepted: true, entries: { entry: '/a.md', change: 'created' }, report: 'r' },
+      { accepted: true, entries: [], report: 'r' }
+    ],
+    [
+      '多余键不外泄',
+      { accepted: true, entries: [], report: 'r', extra: 1, verified: 'x' },
+      { accepted: true, entries: [], report: 'r' }
+    ]
   ]
 
   it.each(TABLE)('KR-7 %s → %j', (_label, input, expected) => {
-    // 形状不对必须读成「没有结论」（宿主据此报 error），绝不能读成通过
-    const out = readKnowledgeReviewResult(input)
+    // 形状不对必须读成「没有结论」（宿主据此报 error），绝不能读成收了
+    const out = readKnowledgeAdminResult(input)
     if (expected === null) {
       expect(out).toBeNull()
       return
     }
     expect(out).toStrictEqual(expected)
+  })
+
+  it('KR-8 条目名归一成库内相对路径：去首尾空白、反斜杠转正、去前导 /（几个都去）；其余原样（不折叠 .. 、不补 .md）', () => {
+    const out = readKnowledgeAdminResult({
+      accepted: true,
+      entries: [
+        { entry: '/auth/x.md', change: 'created' },
+        { entry: '  /auth/y.md  ', change: 'updated' },
+        { entry: '//z.md', change: 'deleted' },
+        { entry: 'sub\\w.md', change: 'updated' },
+        { entry: '\\sub\\v.md', change: 'updated' },
+        { entry: 'plain', change: 'created' },
+        { entry: '../out.md', change: 'created' }
+      ],
+      report: 'r'
+    })
+    expect(out!.entries).toStrictEqual([
+      { entry: 'auth/x.md', change: 'created' },
+      { entry: 'auth/y.md', change: 'updated' },
+      { entry: 'z.md', change: 'deleted' },
+      { entry: 'sub/w.md', change: 'updated' },
+      { entry: 'sub/v.md', change: 'updated' },
+      { entry: 'plain', change: 'created' },
+      { entry: '../out.md', change: 'created' }
+    ])
+  })
+
+  it('KR-8b 坏项逐个丢掉、好项保序保重：不是对象、entry 不是字符串 / 归一后为空、change 不认得（大小写也算）；项上多余的键不外泄', () => {
+    const out = readKnowledgeAdminResult({
+      accepted: true,
+      entries: [
+        null,
+        'a.md',
+        42,
+        ['a.md', 'created'],
+        { entry: 5, change: 'created' },
+        { entry: '', change: 'created' },
+        { entry: '   ', change: 'created' },
+        { entry: '/', change: 'created' },
+        { entry: '/a.md' },
+        { entry: '/a.md', change: 'renamed' },
+        { entry: '/a.md', change: 'CREATED' },
+        { change: 'created' },
+        { entry: '/keep.md', change: 'created', title: 'K', verified: true },
+        { entry: '/keep.md', change: 'updated' },
+        { entry: '/gone.md', change: 'deleted' }
+      ],
+      report: 'r'
+    })
+    expect(out).toStrictEqual({
+      accepted: true,
+      entries: [
+        { entry: 'keep.md', change: 'created' },
+        { entry: 'keep.md', change: 'updated' },
+        { entry: 'gone.md', change: 'deleted' }
+      ],
+      report: 'r'
+    })
+  })
+
+  it('KR-8c 不收（accepted: false）时报上来的条目照样读出来 —— 收不收由工具判，读法不替它丢', () => {
+    expect(
+      readKnowledgeAdminResult({
+        accepted: false,
+        entries: [{ entry: '/a.md', change: 'updated' }],
+        report: 'no'
+      })
+    ).toStrictEqual({
+      accepted: false,
+      entries: [{ entry: 'a.md', change: 'updated' }],
+      report: 'no'
+    })
   })
 })
 
@@ -390,7 +574,7 @@ describe('KR-10..KR-27 stampKnowledgeReview', () => {
     }
   })
 
-  it('KR-21 回读一致：generated 是提交者、verified 是人工章 + 写手；核实仍当前，且信任档是机器确认（即便留着人工章）', () => {
+  it('KR-21 回读一致：generated 是提交者、verified 是人工章 + 管理员；核实仍当前，且信任档是机器确认（即便留着人工章）', () => {
     const before = doc([
       'shuvix: okf v0.2',
       'type: Memory',
@@ -480,9 +664,10 @@ describe('KR-10..KR-27 stampKnowledgeReview', () => {
     expect(fieldsOf(junk).verified).toEqual({ by: R, at: T })
   })
 
-  // KR-25（已知残留，CLAUDE.md 明列为 Not enforced）：被检查的 agent 可以自己 `edit` 进一条 `human:` 章 ——
-  // 盖章原样保留它（宿主分不清哪条人工章是 UI 写的），at 晚于 T 时视图读成「人工审阅」。要堵它得把审阅挪进
-  // applyWrite / applyEdit 的锁里比对前后版本，留待知识库页面一起做
+  // KR-25（已知残留，CLAUDE.md 明列为 Not enforced）：管理员（或绕开约定、直接拿文件工具碰库目录的 agent ——
+  // 2026-11-08 裁决：只是约定、不是卡点）可以自己 `edit` 进一条 `human:` 章 —— 盖章原样保留它（宿主分不清哪条
+  // 人工章是 UI 写的），at 晚于 T 时视图读成「人工审阅」。要堵它得把审阅挪进 applyWrite / applyEdit 的锁里比对
+  // 前后版本，留待知识库页面一起做
   it.todo('KR-25 agent 用 edit 伪造的 `human:` 章不被保留为人工审阅（已知缺口，暂不修）')
 
   it('KR-26 upsertFrontmatterMappings 直测：没有 frontmatter → null；值都已是目标值 → 原串；多个键按给定顺序处理', () => {

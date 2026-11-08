@@ -138,9 +138,6 @@ function render(
   return guide.replace(/\n{3,}/g, '\n\n').trim()
 }
 
-/** 说明书条目路径里的目录占位（片段手写 `<<manual>>policy-md.md`，渲染时换成说明书目录 + 分隔符） */
-const MANUAL_DIR_TOKEN = '<<manual>>'
-
 const ALL_KINDS: readonly ShuvixFileKind[] = [
   'agent',
   'bot',
@@ -154,12 +151,15 @@ export interface DocumentKindOptions {
   /** 这条笔记本会话的文档是哪种 ShuviX 文件（chat-protocol `shuvixFileKindOfProject`）；不是 → 整段不出 */
   kind: ShuvixFileKind | null
   /**
-   * 内置说明书（知识库 `shuvix`）当前语言那一版的目录（绝对路径）。缺省 = 这台机器上没有它（开发期没拷资源），
-   * 指向规范的那句话整句不出 —— 不指一份读不到的文件
+   * 这台机器上有内置说明书（知识库 `shuvix`）。缺省 = 没有（开发期没拷资源），指向规范的那句话整句不出 ——
+   * 不指一份读不到的条目
    */
-  manualDir?: string
-  /** 这个 agent 手里有 `read`（规范是靠它去读的那份文件）；缺省即「没有」，同样不出那句话 */
-  read?: boolean
+  manual?: boolean
+  /**
+   * 这个 agent 手里有 `knowledge`（说明书条目靠它按条目名去读 —— 2026-11-08 起不给库目录）；缺省即「没有」，
+   * 同样不出那句话
+   */
+  knowledge?: boolean
 }
 
 /**
@@ -168,7 +168,7 @@ export interface DocumentKindOptions {
  * 哪一条。从前它只知道自己在改「markdown 文档 `x.md`」，得靠翻同目录的别的文件反推格式。
  *
  * 只写模型不可能自己知道的 ShuviX 事实：格式细节一律留在说明书里（策略那条 56 KB，每轮都付不值），
- * 这里只给指路的绝对路径。种类在会话建起就定了（承载项目不变），所以创建期取值、随人设冻结没有问题。
+ * 这里只给指路的条目名（经 `knowledge` 的 `read` 读，库 `shuvix`）。种类在会话建起就定了（承载项目不变），所以创建期取值、随人设冻结没有问题。
  * 自含块：值自带小标题；不是 ShuviX 文件时为空串，占位符处整块消失。
  */
 export function renderDocumentKind(
@@ -180,16 +180,9 @@ export function renderDocumentKind(
   let guide = pickLocalizedSource(DOCUMENT_KIND_SOURCES, language)
   // 先留下这一种的段落（其余种类连同它们里面的 manual 段一起走），剩下的 manual 界桩就只有这一对
   for (const k of ALL_KINDS) guide = applySection(guide, k, k === kind)
-  const rawDir = options.manualDir
-  const pointManual = options.read === true && !!rawDir
-  guide = applySection(guide, 'manual', pointManual)
+  guide = applySection(guide, 'manual', options.manual === true && options.knowledge === true)
   // `checked` 段说的是 doc_read / doc_edit 的判定 —— 只有宿主真解析的那几种有
   guide = applySection(guide, 'checked', isParsedShuvixFileKind(kind))
-  if (rawDir && pointManual) {
-    // 分隔符按传进来的原样认（`C:\` 去掉尾斜杠后就看不出是 Windows 路径了）
-    const sep = rawDir.includes('\\') && !rawDir.includes('/') ? '\\' : '/'
-    guide = guide.split(MANUAL_DIR_TOKEN).join(rawDir.replace(/[\\/]+$/, '') + sep)
-  }
   return guide.replace(/\n{3,}/g, '\n\n').trim()
 }
 

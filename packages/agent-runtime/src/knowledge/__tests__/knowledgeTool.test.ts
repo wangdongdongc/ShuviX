@@ -1,18 +1,21 @@
 /**
- * knowledge 工具 —— 检索 / 盘点 + 条目的**提交检查**（`submit`，2026-10-12 改版）。
+ * knowledge 工具 —— 检索 / 盘点 / 读条目 + 把要记的内容**交给知识库管理员**（`submit`，2026-11-08 改版）。
  *
- * 条目正文一律走文件工具（主 agent 把一篇普通 md `write` 进库目录、用 `edit` 改），工具本身不落正文；
- * 早先担保元数据形状的 `create`、以及 `read` / `validate` 都已删除。`submit` 同步派内置写手补元数据、
- * 判内容，**通过了才由宿主盖章**（`generated` 记提交者、`verified` 记写手的机器确认，见 review.ts）。
- * 本文件钉：
+ * 库目录只有管理员（内置 `knowledge-writer`）知道：别的 agent 眼里只有库名与条目名（库内路径带前导 `/`，
+ * 如 `/auth/x.md`）。正文经 `read` 看（宿主的扫描缓存，不经文件门）；`submit` 交的是内容（`content`，可点名
+ * 它更正 / 补充的 `entry`），宿主同步派管理员，由它决定怎么记；它报上来的、仍合规的 OKF 条目由宿主盖章
+ * （`generated` 记提交者、`verified` 记管理员的机器确认，见 review.ts）。本文件钉：
  *
- *   KT-1′..KT-12′   agent 面的枚举与参数表、给模型的文案（「写进目录再 submit」「别写 verified」）
- *   KT-3..KT-33     读侧（search / list / bases）：照旧，只是列表与命中一律印**绝对路径**
+ *   KT-1′..KT-12′   agent 面的枚举与参数表、给模型的文案（讲 read / submit，不讲 write / grep / 目录）
+ *   KT-3..KT-33     读侧（search / list / bases）：列表与命中一律印**条目名**（`/rel`），表头只点名库与标签
  *   KT-40..KT-42    list / 兜底检索的信任档记号（status → 信任档 → generated 日期）
- *   KS-1..KS-9      submit 的准入：参数、只读库、写手自己提交、宿主不支持、路径解析（越界 / 保留名 /
- *                   隐藏路径 / 符号链接 / 盘符 / POSIX 绝对路径的歧义）—— 拒绝时门、写手、落盘一概没发生
- *   KS-10..KS-14    与文件工具同一道写门（先门后派）、交给写手的请求
- *   KS-20..KS-37    写手结论的各个分支：没跑成、不通过、判过却仍不合规、通过后盖章与回调、中止
+ *   KA-1..KA-4      管理员看得到库目录、别人看不到：非管理员的每一种输出里都没有目录；isAdmin 按调用判
+ *   KE-1..KE-9      read：名字的几种写法、分页（offset / limit / 字节上限 / 收尾句）、不在册的名字、越界 / 隐藏
+ *   KS-1..KS-9      submit 的准入与先后：管理员自己、缺 content / base、库解析失败、只读库、宿主不支持、entry 校验
+ *   KS-10..KS-14    交给管理员的请求：字段恰好、entry 归一、提交者按调用现取、取消信号
+ *   KS-20..KS-27    管理员结论的分支：没跑成、抛错、不收、空报告、报告里的目录换成条目名、中止
+ *   KS-30..KS-46    收了之后的盖章：created / updated 盖、deleted 跳过、普通笔记不动、不在 / 符号链接 / 不是条目名
+ *                   记在那一行、人工章保留、afterWrite、没改不写、正文字节不动
  *
  * 失败一律是 isError 结果（BaseTool 裁定 Q12），只有已中止的 signal 会 reject。每次调用点名一个 base，
  * 由宿主的 `resolveBase` 解析成一个 bundle；工具本身不认识任何一种库。
@@ -24,7 +27,6 @@ import {
   type InvokeToolOptions
 } from '../../tools/testing/invokeTool'
 import type { FileSystemPort } from '../../fileTools/port'
-import type { SecurityContext } from '../../security/types'
 import type { ToolCallScope } from '../../tools/toolCall'
 import {
   currentTrustTierOf,
@@ -39,21 +41,26 @@ import {
   KNOWLEDGE_DESCRIPTION,
   KNOWLEDGE_TOOL_NAME,
   KnowledgeParamsSchema,
+  type KnowledgeAdminRun,
   type KnowledgeBaseInfo,
   type KnowledgeBundleTarget,
   type KnowledgeSearchHit,
   type KnowledgeToolDeps,
   type KnowledgeToolParams
 } from '../knowledgeTool'
-import type { KnowledgeReviewOutcome, KnowledgeReviewRequest } from '../review'
+import type {
+  KnowledgeAdminOutcome,
+  KnowledgeEntryChangeRecord,
+  KnowledgeSubmission
+} from '../review'
 import { isProjectionFile, isReservedFile, type BundleFile } from '../validate'
 
 /** 本会话的那一个 bundle（项目 bundle 的绝对目录） */
 const ROOT = '/kb/projects/acme'
-const NOW = new Date('2026-10-12T08:00:00.000Z')
+const NOW = new Date('2026-11-08T08:00:00.000Z')
 const NOW_ISO = NOW.toISOString()
 const ACTOR = 'shuvix-work/gpt-5'
-const REVIEWER = 'shuvix-knowledge-writer/haiku'
+const ADMIN = 'shuvix-knowledge-writer/haiku'
 /** 一份概念文本：frontmatter 行 + 正文（尾随换行，同 conceptFile.test 的 doc 惯例） */
 const doc = (frontmatter: string[], body = 'body'): string =>
   ['---', ...frontmatter, '---', '', body, ''].join('\n')
@@ -69,21 +76,56 @@ const ENTRY = doc([
 const PLAIN = '# Plain\n\nbody\n'
 
 const BUNDLE: KnowledgeBundleTarget = { dir: ROOT, label: 'project "Acme"' }
-/** 错误话术里点名库的那一截（whereLine） */
-const WHERE = `project "Acme" — ${ROOT}`
-/** 通过后的两个章 */
+/** 非管理员表头里点名库的那一截 */
+const IN_PROJECT = 'base "project" (project "Acme")'
+/** 管理员表头里的那一截（标签后带目录） */
+const IN_PROJECT_ADMIN = `base "project" (project "Acme" — ${ROOT})`
+/** 收录后的两个章 */
 const GENERATED_LINE = `generated: { by: "${ACTOR}", at: "${NOW_ISO}" }`
-const VERIFIED_LINE = `verified: { by: "${REVIEWER}", at: "${NOW_ISO}" }`
+const VERIFIED_LINE = `verified: { by: "${ADMIN}", at: "${NOW_ISO}" }`
 
-type ReviewCtx = Parameters<NonNullable<KnowledgeToolDeps['review']>>[1]
-/** 写手替身：可以改 `files`（模拟写手 edit 了元数据）再交回结论 */
-type ReviewImpl = (
-  req: KnowledgeReviewRequest,
-  ctx: ReviewCtx,
+type AdminCtx = Parameters<KnowledgeAdminRun>[1]
+/** 管理员替身：可以改 `files`（模拟它用文件工具动了库）再交回结论 */
+type AdminImpl = (
+  req: KnowledgeSubmission,
+  ctx: AdminCtx,
   files: Map<string, string>
-) => Promise<KnowledgeReviewOutcome>
+) => Promise<KnowledgeAdminOutcome>
 
-const PASS: ReviewImpl = async () => ({ passed: true, report: 'ok', reviewer: REVIEWER })
+/**
+ * 照 `changes` 改库的管理员（库内相对路径 → 新内容；`null` = 删掉），按改前在不在报 created / updated /
+ * deleted；`report` 可以是函数（拿得到请求，好把库目录写进报告里）
+ */
+const librarian =
+  (
+    changes: Record<string, string | null>,
+    report: string | ((req: KnowledgeSubmission) => string) = 'ok'
+  ): AdminImpl =>
+  async (req, _ctx, files) => {
+    const entries: KnowledgeEntryChangeRecord[] = []
+    for (const [rel, text] of Object.entries(changes)) {
+      const abs = `${req.bundleDir}/${rel}`
+      const existed = files.has(abs)
+      if (text === null) {
+        files.delete(abs)
+        entries.push({ entry: rel, change: 'deleted' })
+      } else {
+        files.set(abs, text)
+        entries.push({ entry: rel, change: existed ? 'updated' : 'created' })
+      }
+    }
+    return {
+      accepted: true,
+      entries,
+      report: typeof report === 'function' ? report(req) : report,
+      admin: ADMIN
+    }
+  }
+
+/** 只报结论、一个字不写的管理员 */
+const reports =
+  (entries: KnowledgeEntryChangeRecord[], report = 'ok'): AdminImpl =>
+  async () => ({ accepted: true, entries, report, admin: ADMIN })
 
 interface ToolOptions {
   /** 内存 port 的初始文件（绝对路径 → 内容） */
@@ -93,12 +135,10 @@ interface ToolOptions {
   /** `bases` 列举的库（缺省空表） */
   bases?: readonly KnowledgeBaseInfo[]
   search?: KnowledgeToolDeps['search']
-  /** 不传 = 只记录调用的 enforcePath 桩 */
-  security?: SecurityContext
   abortError?: string
-  /** 写手替身（缺省 PASS）；`null` = 宿主不注入 review（扩展端） */
-  review?: ReviewImpl | null
-  isReviewer?: (call: ToolCallScope | undefined) => boolean
+  /** 管理员替身（缺省：收了、一条没动）；`null` = 宿主不注入 admin（扩展端） */
+  admin?: AdminImpl | null
+  isAdmin?: (call: ToolCallScope | undefined) => boolean
   actor?: (call: ToolCallScope | undefined) => string
   /** port 路径 → 它是符号链接时 readLink 的答复 */
   links?: Record<string, { target: string; resolved: string }>
@@ -109,17 +149,17 @@ type Result = InvokedToolResult
 interface Harness {
   tool: ReturnType<typeof createKnowledgeTool>
   files: Map<string, string>
-  enforcePath: Mock
   resolveBase: Mock
   listBases: Mock
   scan: Mock
   afterWrite: Mock
-  review: Mock
-  isReviewer?: Mock
+  admin: Mock
+  isAdmin?: Mock
   actor: Mock
   now: Mock
   stat: MockInstance<FileSystemPort['stat']>
-  /** 调用顺序流水：`enforce:<mode>:<abs>` / `review:<abs>` / `write:<abs>` / `after:<bundleDir>|<rel>` */
+  readFile: MockInstance<FileSystemPort['readFile']>
+  /** 调用顺序流水：`admin:<base>` / `write:<abs>` / `after:<bundleDir>|<rel>` */
   calls: string[]
   run: (id: string, params: KnowledgeToolParams, signal?: AbortSignal) => Promise<Result>
   invoke: (params: KnowledgeToolParams, options: InvokeToolOptions) => Promise<Result>
@@ -168,7 +208,10 @@ function memoryPort(
   }
 }
 
-/** 宿主扫描的替身：`bundleDir` 下的全部 md 原文 + 解析得出的笔记 / 概念 */
+/**
+ * 宿主扫描的替身：`bundleDir` 下的全部 md 原文 + 解析得出的笔记 / 概念。与宿主一样不看隐藏路径
+ * （rg `hidden: false`：`.obsidian/`、`.draft.md` 不是库的内容）。
+ */
 function scanOf(
   files: Map<string, string>,
   bundleDir: string
@@ -179,6 +222,7 @@ function scanOf(
   for (const [abs, text] of files) {
     if (!abs.startsWith(`${bundleDir}/`)) continue
     const rel = abs.slice(bundleDir.length + 1)
+    if (!rel.endsWith('.md') || rel.split('/').some((seg) => seg.startsWith('.'))) continue
     all.push({ path: rel, text })
     // 宿主投影的 index / log 不是笔记；其余每个 md 都是（读宽），合规的另带 OKF 条目
     if (isProjectionFile(rel, text)) continue
@@ -189,13 +233,12 @@ function scanOf(
   return { files: all, concepts, notes }
 }
 
+/** 缺省的管理员：收了，一条没动 */
+const NOTHING: AdminImpl = reports([])
+
 function makeTool(opts: ToolOptions = {}): Harness {
   const files = new Map(Object.entries(opts.files ?? {}))
   const calls: string[] = []
-  const enforcePath = vi.fn(async (mode: string, abs: string) => {
-    calls.push(`enforce:${mode}:${abs}`)
-  })
-  const security = opts.security ?? ({ enforcePath } as unknown as SecurityContext)
   const resolveBase = vi.fn(async (_base: string) => opts.bundle ?? BUNDLE)
   const listBases = vi.fn(async () => opts.bases ?? [])
   // 扫描跟着宿主解析出的目录走：resolveBase 给的是别的库时，清单也得是那个库的
@@ -203,27 +246,27 @@ function makeTool(opts: ToolOptions = {}): Harness {
   const afterWrite = vi.fn((e: { bundleDir: string; path: string }) => {
     calls.push(`after:${e.bundleDir}|${e.path}`)
   })
-  const impl = opts.review === undefined ? PASS : opts.review
-  const review = vi.fn(async (req: KnowledgeReviewRequest, ctx: ReviewCtx) => {
-    calls.push(`review:${req.path}`)
+  const impl = opts.admin === undefined ? NOTHING : opts.admin
+  const admin = vi.fn(async (req: KnowledgeSubmission, ctx: AdminCtx) => {
+    calls.push(`admin:${req.base}`)
     return impl!(req, ctx, files)
   })
-  const isReviewer = opts.isReviewer ? vi.fn(opts.isReviewer) : undefined
+  const isAdmin = opts.isAdmin ? vi.fn(opts.isAdmin) : undefined
   const actor = vi.fn(opts.actor ?? ((_call: ToolCallScope | undefined) => ACTOR))
   const now = vi.fn(() => NOW)
   const port = memoryPort(files, calls, opts.links ?? {})
   const stat = vi.spyOn(port, 'stat')
+  const readFile = vi.spyOn(port, 'readFile')
   const tool = createKnowledgeTool({
     port,
-    security,
     scan,
     resolveBase,
     listBases,
     search: opts.search,
     actor,
     now,
-    review: impl === null ? undefined : review,
-    isReviewer,
+    admin: impl === null ? undefined : admin,
+    isAdmin,
     afterWrite,
     abortError: opts.abortError,
     label: 'Knowledge'
@@ -231,16 +274,16 @@ function makeTool(opts: ToolOptions = {}): Harness {
   return {
     tool,
     files,
-    enforcePath,
     resolveBase,
     listBases,
     scan,
     afterWrite,
-    review,
-    isReviewer,
+    admin,
+    isAdmin,
     actor,
     now,
     stat,
+    readFile,
     calls,
     run: async (id, params, signal) =>
       (await invokeTool(tool, params, { callId: id, signal })).result,
@@ -248,12 +291,13 @@ function makeTool(opts: ToolOptions = {}): Harness {
   }
 }
 
-/** 拒绝之后该是什么都没发生：门、写手、落盘、回调一样都没有 */
+/** 拒绝之后该是什么都没发生：管理员不派、不落盘、不回调、连文件都没碰 */
 function expectNothingHappened(h: Harness): void {
-  expect(h.enforcePath).not.toHaveBeenCalled()
-  expect(h.review).not.toHaveBeenCalled()
-  expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
+  expect(h.admin).not.toHaveBeenCalled()
+  expect(h.calls).toEqual([])
   expect(h.afterWrite).not.toHaveBeenCalled()
+  expect(h.stat).not.toHaveBeenCalled()
+  expect(h.readFile).not.toHaveBeenCalled()
 }
 
 // ─── 1.1 Schema 与文案 ─────────────────────────────────────────────────────────
@@ -264,15 +308,25 @@ describe('KT-1′ schema 与运行时守卫', () => {
     { enum?: string[]; description?: string }
   >
 
-  it('KT-1′ action 枚举恰为 bases / search / list / submit；参数恰为 action / base / query / path / limit；replay 取最保守的 unsafe', () => {
+  it('KT-1′ action 枚举恰为 bases / search / list / read / submit；参数恰为 action / base / query / entry / content / offset / limit（没有 path）；replay 取最保守的 unsafe', () => {
     expect(KNOWLEDGE_TOOL_NAME).toBe('knowledge')
     const { tool } = makeTool()
     expect(tool.name).toBe('knowledge')
     expect(tool.label).toBe('Knowledge')
-    expect(props.action.enum).toEqual(['bases', 'search', 'list', 'submit'])
-    // 动作 / 参数一旦漂回旧形状，模型就会以为还能 create
-    expect(Object.keys(props).sort()).toEqual(['action', 'base', 'limit', 'path', 'query'])
+    expect(props.action.enum).toEqual(['bases', 'search', 'list', 'read', 'submit'])
+    // 动作 / 参数一旦漂回旧形状，模型就会以为还能交一个路径
+    expect(Object.keys(props).sort()).toEqual([
+      'action',
+      'base',
+      'content',
+      'entry',
+      'limit',
+      'offset',
+      'query'
+    ])
     for (const gone of [
+      'path',
+      'dir',
       'type',
       'title',
       'description',
@@ -280,27 +334,42 @@ describe('KT-1′ schema 与运行时守卫', () => {
       'tags',
       'sources',
       'status',
-      'stale_after',
       'scope'
     ]) {
       expect(props[gone], gone).toBeUndefined()
     }
-    // submit 会派写手、回写章：durable 的重跑策略只能取最保守的那个
+    // submit 会派管理员、回写章：durable 的重跑策略只能取最保守的那个
     expect(tool.replay).toBe('unsafe')
   })
 
-  it('KT-1b preExecute / securityCheck 不碰 PEP；bases / search / list 一个字节都不写、不派写手', async () => {
+  it('KT-1b 读侧（bases / search / list / read）一个字节都不写、不派管理员，也不经 port 读文件 —— 读的是宿主的扫描缓存', async () => {
     const h = makeTool({
       files: { [`${ROOT}/a.md`]: ENTRY },
       bases: [{ base: 'project', label: 'project "Acme"', dir: ROOT }]
     })
     await h.tool.preExecute()
     const before = h.files.get(`${ROOT}/a.md`)
-    await h.run('c1', { action: 'bases' })
-    await h.run('c2', { action: 'search', base: 'project', query: 'A' })
-    await h.run('c3', { action: 'search', query: 'A' })
-    await h.run('c4', { action: 'list', base: 'project' })
+    for (const params of [
+      { action: 'bases' },
+      { action: 'search', base: 'project', query: 'A' },
+      { action: 'search', query: 'A' },
+      { action: 'list', base: 'project' },
+      { action: 'read', base: 'project', entry: '/a.md' }
+    ] as KnowledgeToolParams[]) {
+      expect((await h.run('c1', params)).isError, params.action).toBeFalsy()
+    }
     expect(h.files.get(`${ROOT}/a.md`)).toBe(before)
+    expectNothingHappened(h)
+  })
+
+  it('KT-1c 未知动作（如旧的 write / create）：失败并列出合法的五个', async () => {
+    const h = makeTool()
+    for (const action of ['write', 'create', 'validate']) {
+      expect(
+        await rejectionOf(h.run('c1', { action } as unknown as KnowledgeToolParams)),
+        action
+      ).toBe(`Unknown action "${action}". Valid: bases, search, list, read, submit`)
+    }
     expectNothingHappened(h)
   })
 })
@@ -311,7 +380,7 @@ describe('KT-12′ 给 agent 的文案', () => {
     { description?: string }
   >
 
-  it('KT-12′ 两处文案都指向 "bases"、不点名 "project"；base 的说明点名 list / submit 必填、search 可省', () => {
+  it('KT-12′ 两处文案都指向 "bases"、不点名 "project"；base 的说明点名 list / read / submit 必填、search 可省', () => {
     for (const [where, copy] of [
       ['base.description', props.base.description],
       ['KNOWLEDGE_DESCRIPTION', KNOWLEDGE_DESCRIPTION]
@@ -319,34 +388,61 @@ describe('KT-12′ 给 agent 的文案', () => {
       expect(copy, where).toContain('"bases"')
       expect(copy, where).not.toContain('"project"')
     }
-    expect(props.base.description).toContain('Required for "list" and "submit"')
+    expect(props.base.description).toContain('Required for "list", "read" and "submit"')
     expect(props.base.description).toContain('"search" without it')
+    // entry 的说明：名字就是 search / list 给出来的那一种
+    expect(props.entry.description).toContain('as "search" and "list" give it')
+    expect(props.content.description).toContain('"submit"')
+    expect(props.offset.description).toContain('"read"')
   })
 
-  it('KT-12′ 描述教「写进库目录再 submit」「用 edit 改」「别写 verified」；动作条目恰为四个，没有 read / validate / create', () => {
+  it('KT-12′ 描述讲 read 与 submit（交给 librarian、它决定怎么记）；动作条目恰为五个', () => {
     for (const phrase of [
       'user picks which bases',
       'leave `base` out',
-      '`write`',
-      '`edit`',
-      'submit',
-      'Never write `verified`',
-      'shuvix://'
+      'not the prose',
+      'then "read" the entry',
+      '`offset`',
+      '`limit`',
+      "hand the base's librarian",
+      '`content`',
+      'name that `entry`',
+      'The librarian decides',
+      '"/auth/token-refresh.md"'
     ]) {
       expect(KNOWLEDGE_DESCRIPTION, phrase).toContain(phrase)
     }
-    // 按动作行判：描述里另有 `read` the file（那是 read 工具）
     const actionLines = KNOWLEDGE_DESCRIPTION.split('\n')
       .filter((line) => line.startsWith('- "'))
       .map((line) => /^- "([a-z]+)"/.exec(line)?.[1])
-    expect(actionLines).toEqual(['bases', 'search', 'list', 'submit'])
+    expect(actionLines).toEqual(['bases', 'search', 'list', 'read', 'submit'])
+  })
+
+  it('KT-12′ 描述与参数说明里没有文件工具、目录、元数据的话：不教 write / edit / grep，不说 directory / permanent / verified', () => {
+    const copies = [
+      KNOWLEDGE_DESCRIPTION,
+      ...Object.values(props).map((p) => p.description ?? '')
+    ].join('\n')
+    for (const phrase of [
+      '`write`',
+      '`edit`',
+      '`grep`',
+      'directory',
+      'absolute',
+      'permanent',
+      'verified',
+      'shuvix://',
+      '`path`'
+    ]) {
+      expect(copies, phrase).not.toContain(phrase)
+    }
   })
 })
 
-// ─── 1.2 读侧（保留，路径改成绝对） ─────────────────────────────────────────────
+// ─── 1.2 读侧 ────────────────────────────────────────────────────────────────
 
 describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => {
-  it('KT-3 命中：query 与 {limit, bundleDir} 原样转发；每条恰一行 `- <绝对路径> (status) — description|title`', async () => {
+  it('KT-3 命中：query 与 {limit, bundleDir} 原样转发；每条恰一行 `- /<条目名> (status) — description|title`', async () => {
     // 一条命中一行，没有正文片段那一行 —— 检索给的是候选清单，正文由 `read` 取（2026-09-17 裁决）
     const search = vi.fn(async () => [
       { path: '/a.md', title: 'A', description: 'd', status: 'draft' },
@@ -357,10 +453,9 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
     expect(h.resolveBase).toHaveBeenCalledWith('project')
     expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: ROOT })
     expect(textOf(res)).toBe(
-      `2 result(s) for "q" in ${WHERE}:\n- ${ROOT}/a.md (draft) — d\n- ${ROOT}/b.md — B`
+      `2 result(s) for "q" in ${IN_PROJECT}:\n- /a.md (draft) — d\n- /b.md — B`
     )
     expect(res.details).toEqual({ action: 'search' })
-    expect(h.enforcePath).not.toHaveBeenCalled()
   })
 
   it('KT-3b 零命中回一句话；缺 query 是失败；bundle 解析失败按 list 同口径回文字（不失败）', async () => {
@@ -416,11 +511,11 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
     const all = await h.run('c1', { action: 'search', base: 'project', query: 'token' })
     expect(textOf(all)).toBe(
       [
-        `4 result(s) for "token" in ${WHERE}:`,
-        `- ${ROOT}/a.md (draft, 2026-09-09) — da`,
-        `- ${ROOT}/b.md — db`,
-        `- ${ROOT}/c.md — dc`,
-        `- ${ROOT}/sub/e.md — de`
+        `4 result(s) for "token" in ${IN_PROJECT}:`,
+        '- /a.md (draft, 2026-09-09) — da',
+        '- /b.md — db',
+        '- /c.md — dc',
+        '- /sub/e.md — de'
       ].join('\n')
     )
     const capped = await h.run('c2', {
@@ -430,7 +525,7 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
       limit: 1
     })
     expect(textOf(capped)).toBe(
-      `4 result(s) for "Token" in ${WHERE}:\n- ${ROOT}/a.md (draft, 2026-09-09) — da`
+      `4 result(s) for "Token" in ${IN_PROJECT}:\n- /a.md (draft, 2026-09-09) — da`
     )
     expect(textOf(await h.run('c3', { action: 'search', base: 'project', query: 'zzz' }))).toBe(
       'No entries match "zzz".'
@@ -445,27 +540,26 @@ describe('KT-5 list', () => {
     [`${ROOT}/d.md`]: doc(['type: Memory', 'title: D', 'description: dd', 'status: deprecated'])
   }
 
-  it('KT-5 列出全部条目（含 deprecated，带标注）、表头点名标签与目录；limit 之外折成一行计数', async () => {
+  it('KT-5 列出全部条目（含 deprecated，带标注）、表头点名库与标签；limit 之外折成一行计数', async () => {
     const h = makeTool({ files: FILES })
-    expect(textOf(await h.run('c1', { action: 'list', base: 'project' }))).toBe(
+    const res = await h.run('c1', { action: 'list', base: 'project' })
+    expect(textOf(res)).toBe(
       [
-        `3 entries in ${WHERE}:`,
-        `- ${ROOT}/a.md (draft) — da`,
-        `- ${ROOT}/b.md — db`,
-        `- ${ROOT}/d.md (deprecated) — dd`
+        `3 entries in ${IN_PROJECT}:`,
+        '- /a.md (draft) — da',
+        '- /b.md — db',
+        '- /d.md (deprecated) — dd'
       ].join('\n')
     )
+    expect(res.details).toEqual({ action: 'list' })
     expect(textOf(await h.run('c2', { action: 'list', base: 'project', limit: 2 }))).toBe(
-      [
-        `3 entries in ${WHERE}:`,
-        `- ${ROOT}/a.md (draft) — da`,
-        `- ${ROOT}/b.md — db`,
-        '- … 1 more'
-      ].join('\n')
+      [`3 entries in ${IN_PROJECT}:`, '- /a.md (draft) — da', '- /b.md — db', '- … 1 more'].join(
+        '\n'
+      )
     )
   })
 
-  it('KT-5b bundle 解析失败回文字（不失败）；bundle 在但还没有条目也有一句话', async () => {
+  it('KT-5b bundle 解析失败回文字（不失败）；bundle 在但还没有条目也有一句话（不点名目录）', async () => {
     const noProject = makeTool({ files: FILES, bundle: { error: 'no project here' } })
     const failed = await noProject.run('c1', { action: 'list', base: 'project' })
     expect(textOf(failed)).toBe('no project here')
@@ -474,7 +568,7 @@ describe('KT-5 list', () => {
     expect(noProject.resolveBase).toHaveBeenCalledWith('project')
 
     expect(textOf(await makeTool().run('c2', { action: 'list', base: 'project' }))).toBe(
-      `No entries in ${WHERE} yet.`
+      `No entries in ${IN_PROJECT} yet.`
     )
   })
 })
@@ -484,7 +578,7 @@ describe('KT-5 list', () => {
  * 所以缺 base 必须失败。工具也不区分库的种类：名字去空白后交给宿主，标签与目录全用宿主给的。
  */
 describe('KT-8 bases —— 只列库', () => {
-  it('KT-8 表头 + 逐行 `- <base> — <label> — <dir>`；不解析 base、不过 PEP、不写盘；多带的 base / path 一概不看', async () => {
+  it('KT-8 表头 + 逐行 `- <base> — <label>`（不带目录）；不解析 base、不写盘；多带的 base / entry 一概不看', async () => {
     const h = makeTool({
       bases: [
         { base: 'project', label: 'project "Acme"', dir: '/kb/projects/acme' },
@@ -493,8 +587,8 @@ describe('KT-8 bases —— 只列库', () => {
     })
     const expected = [
       'Knowledge bases in this session (pass the name as `base`):',
-      '- project — project "Acme" — /kb/projects/acme',
-      '- notes — knowledge base "notes" — /u/notes'
+      '- project — project "Acme"',
+      '- notes — knowledge base "notes"'
     ].join('\n')
 
     const res = await h.run('c1', { action: 'bases' })
@@ -502,13 +596,12 @@ describe('KT-8 bases —— 只列库', () => {
     expect(res.details).toEqual({ action: 'bases' })
     expect(h.listBases).toHaveBeenCalledTimes(1)
 
-    const again = await h.run('c2', { action: 'bases', base: 'notes', path: '/x.md' })
+    const again = await h.run('c2', { action: 'bases', base: 'notes', entry: '/x.md' })
     expect(textOf(again)).toBe(expected)
     expect(again.details).toEqual({ action: 'bases' })
     expect(h.listBases).toHaveBeenCalledTimes(2)
 
     expect(h.resolveBase).not.toHaveBeenCalled()
-    expect(h.calls).toEqual([])
     expectNothingHappened(h)
   })
 
@@ -533,8 +626,12 @@ describe('KT-8 bases —— 只列库', () => {
 describe('KT-9′ 缺 base 是硬错误', () => {
   /** 不传 / 空串 / 全空白 */
   const MISSING: (string | undefined)[] = [undefined, '', '   ']
-  /** list 与 submit（带 path）—— search 不在其中：省略 base 是它的正常用法 */
-  const CALLS: KnowledgeToolParams[] = [{ action: 'list' }, { action: 'submit', path: 'a.md' }]
+  /** list / read / submit —— search 不在其中：省略 base 是它的正常用法 */
+  const CALLS: KnowledgeToolParams[] = [
+    { action: 'list' },
+    { action: 'read', entry: 'a.md' },
+    { action: 'submit', content: 'x' }
+  ]
   const table = CALLS.flatMap((params) =>
     MISSING.map((base): [string, string, KnowledgeToolParams] => [
       params.action,
@@ -544,10 +641,10 @@ describe('KT-9′ 缺 base 是硬错误', () => {
   )
 
   it.each(table)(
-    'KT-9′ %s，base %s → 失败点名 `base`（并指向 "bases"）；不解析、不检索、不过 PEP、不写盘',
+    'KT-9′ %s，base %s → 失败点名 `base`（并指向 "bases"）；不解析、不扫描、不检索、不派管理员',
     async (_label, _base, params) => {
       const search = vi.fn(async () => [])
-      // 条目真实存在：少了这道守卫，submit 会成功，而不是碰巧因为别的原因失败
+      // 条目真实存在：少了这道守卫，read / submit 会成功，而不是碰巧因为别的原因失败
       const h = makeTool({ search, files: { [`${ROOT}/a.md`]: ENTRY } })
       const message = await rejectionOf(h.run('c1', params))
       expect(message).toBe(
@@ -557,7 +654,6 @@ describe('KT-9′ 缺 base 是硬错误', () => {
       expect(h.resolveBase).not.toHaveBeenCalled()
       expect(h.scan).not.toHaveBeenCalled()
       expect(search).not.toHaveBeenCalled()
-      expect(h.calls).toEqual([])
       expectNothingHappened(h)
     }
   )
@@ -568,12 +664,14 @@ describe('KT-10′ 工具不关心 base 是哪种库', () => {
   const USER_BASE: KnowledgeBundleTarget = { dir: DIR, label: 'knowledge base "读书笔记"' }
   /** 带首尾空白的库名：工具只去空白，其余原样交给宿主 */
   const RAW = '  读书笔记 '
+  const IN_USER = 'base "读书笔记" (knowledge base "读书笔记")'
 
-  it('KT-10′ list / search / submit 都按去空白的名字解析；表头、命中、PEP、写手请求、afterWrite 全用宿主给的目录与标签', async () => {
+  it('KT-10′ list / search / read / submit 都按去空白的名字解析；表头用宿主给的标签，扫描、检索、管理员请求、afterWrite 用宿主给的目录', async () => {
     const search = vi.fn(async () => [{ path: 'a.md', title: 'A', description: 'da' }])
     const h = makeTool({
       bundle: USER_BASE,
       search,
+      admin: librarian({ 'a.md': ENTRY }),
       files: {
         [`${DIR}/a.md`]: ENTRY,
         [`${DIR}/b.md`]: doc(['type: Memory', 'title: B', 'description: db']),
@@ -583,65 +681,75 @@ describe('KT-10′ 工具不关心 base 是哪种库', () => {
     })
 
     expect(textOf(await h.run('c1', { action: 'list', base: RAW }))).toBe(
-      [
-        `2 entries in knowledge base "读书笔记" — ${DIR}:`,
-        `- ${DIR}/a.md — da`,
-        `- ${DIR}/b.md — db`
-      ].join('\n')
+      [`2 entries in ${IN_USER}:`, '- /a.md — da', '- /b.md — db'].join('\n')
     )
     expect(textOf(await h.run('c2', { action: 'search', base: RAW, query: 'q' }))).toBe(
-      `1 result(s) for "q" in knowledge base "读书笔记" — ${DIR}:\n- ${DIR}/a.md — da`
+      `1 result(s) for "q" in ${IN_USER}:\n- /a.md — da`
     )
     expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: DIR })
+    expect(
+      textOf(await h.run('c3', { action: 'read', base: RAW, entry: 'a.md' })).split('\n')[0]
+    ).toBe(`Entry /a.md in base "读书笔记" (knowledge base "读书笔记") — 9 lines`)
 
-    const submitted = await h.run('c3', { action: 'submit', base: RAW, path: 'a.md' })
-    expect(textOf(submitted).startsWith(`Confirmed: ${DIR}/a.md`)).toBe(true)
-    expect(h.review.mock.calls[0][0]).toMatchObject({
+    const submitted = await h.run('c4', {
+      action: 'submit',
+      base: RAW,
+      content: 'x',
+      entry: '/a.md'
+    })
+    expect(textOf(submitted).split('\n').slice(0, 2)).toEqual([
+      'Recorded in base "读书笔记":',
+      '- /a.md (updated)'
+    ])
+    expect(h.admin.mock.calls[0][0]).toMatchObject({
       base: '读书笔记',
       label: 'knowledge base "读书笔记"',
       bundleDir: DIR,
-      path: `${DIR}/a.md`,
-      rel: 'a.md'
+      entry: 'a.md'
     })
 
-    expect(h.resolveBase.mock.calls).toEqual([['读书笔记'], ['读书笔记'], ['读书笔记']])
-    expect(h.calls).toEqual([
-      `enforce:write:${DIR}/a.md`,
-      `review:${DIR}/a.md`,
-      `write:${DIR}/a.md`,
-      `after:${DIR}|a.md`
+    expect(h.resolveBase.mock.calls).toEqual([
+      ['读书笔记'],
+      ['读书笔记'],
+      ['读书笔记'],
+      ['读书笔记']
     ])
+    expect(h.scan.mock.calls.every(([dir]) => dir === DIR)).toBe(true)
+    expect(h.calls).toEqual(['admin:读书笔记', `write:${DIR}/a.md`, `after:${DIR}|a.md`])
   })
 })
 
 describe('KT-11′ base 解析失败', () => {
   const ERR = 'No knowledge base named "nope". Available: "project", "notes".'
 
-  it('KT-11′ submit 以宿主原文失败（硬错）；list / search 回这句原文、不失败（软条件）；两边都不过 PEP', async () => {
+  it('KT-11′ read / submit 以宿主原文失败（硬错）；list / search 回这句原文、不失败（软条件）；都不扫描、不派管理员', async () => {
     const search = vi.fn(async () => [])
     const h = makeTool({ bundle: { error: ERR }, search, files: { [`${ROOT}/a.md`]: ENTRY } })
 
-    expect(await rejectionOf(h.run('c1', { action: 'submit', base: 'nope', path: 'a.md' }))).toBe(
+    expect(await rejectionOf(h.run('c1', { action: 'submit', base: 'nope', content: 'x' }))).toBe(
+      ERR
+    )
+    expect(await rejectionOf(h.run('c2', { action: 'read', base: 'nope', entry: 'a.md' }))).toBe(
       ERR
     )
 
-    const listed = await h.run('c2', { action: 'list', base: 'nope' })
+    const listed = await h.run('c3', { action: 'list', base: 'nope' })
     expect(listed.isError).toBeFalsy()
     expect(textOf(listed)).toBe(ERR)
     expect(listed.details).toEqual({ action: 'list' })
-    const searched = await h.run('c3', { action: 'search', base: 'nope', query: 'q' })
+    const searched = await h.run('c4', { action: 'search', base: 'nope', query: 'q' })
     expect(searched.isError).toBeFalsy()
     expect(textOf(searched)).toBe(ERR)
     expect(searched.details).toEqual({ action: 'search' })
 
     expect(search).not.toHaveBeenCalled()
-    expect(h.stat).not.toHaveBeenCalled()
+    expect(h.scan).not.toHaveBeenCalled()
     expectNothingHappened(h)
   })
 })
 
 /**
- * 读宽（设计附录 L）：库里每个 md 都是一条笔记 —— list / search 都算它。ShuviX 早先生成的 index.md /
+ * 读宽（设计附录 L）：库里每个 md 都是一条笔记 —— list / search / read 都算它。ShuviX 早先生成的 index.md /
  * log.md 不再维护、按形状藏起来；用户手写的同名文件是普通笔记。
  */
 const NOTE_FILES = {
@@ -659,11 +767,11 @@ describe('KT-13 / KT-15 读宽', () => {
     const h = makeTool({ files: NOTE_FILES })
     expect(textOf(await h.run('c1', { action: 'list', base: 'project' }))).toBe(
       [
-        `4 entries in ${WHERE}:`,
-        `- ${ROOT}/a.md (draft) — da`,
-        `- ${ROOT}/log.md — My log`,
-        `- ${ROOT}/notes/plain.md — Plain heading`,
-        `- ${ROOT}/u.md (draft) — du`
+        `4 entries in ${IN_PROJECT}:`,
+        '- /a.md (draft) — da',
+        '- /log.md — My log',
+        '- /notes/plain.md — Plain heading',
+        '- /u.md (draft) — du'
       ].join('\n')
     )
   })
@@ -672,7 +780,7 @@ describe('KT-13 / KT-15 读宽', () => {
     const h = makeTool({ files: NOTE_FILES })
     expect(
       textOf(await h.run('c1', { action: 'search', base: 'project', query: 'plain heading' }))
-    ).toBe(`1 result(s) for "plain heading" in ${WHERE}:\n- ${ROOT}/notes/plain.md — Plain heading`)
+    ).toBe(`1 result(s) for "plain heading" in ${IN_PROJECT}:\n- /notes/plain.md — Plain heading`)
     expect(textOf(await h.run('c2', { action: 'search', base: 'project', query: 'Entries' }))).toBe(
       'No entries match "Entries".'
     )
@@ -698,21 +806,22 @@ describe('KT-16..20 跨库检索（省略 base）', () => {
     [`${ROOT}/a.md`]: doc(['type: Memory', 'title: Token in acme', 'description: da'])
   }
 
-  it('KT-16 省略 base：按库分组、逐库成块，表头报总命中数与参与的库数；只问 listBases，不解析 base', async () => {
+  it('KT-16 省略 base：按库分组、逐库成块（块头是库名 + 标签），表头报总命中数与参与的库数；只问 listBases，不解析 base', async () => {
     const h = makeTool({ files: HIT_FILES, bases: [NOTES_BASE, PROJECT_BASE] })
     const res = await h.run('c1', { action: 'search', query: 'token' })
     expect(textOf(res)).toBe(
       [
         '2 result(s) for "token" across 2 base(s):',
-        `base "notes" — ${NOTES}:`,
-        `- ${NOTES}/n1.md — dn1`,
-        `base "project" — ${ROOT}:`,
-        `- ${ROOT}/a.md — da`
+        'base "notes" (knowledge base "notes"):',
+        '- /n1.md — dn1',
+        'base "project" (project "Acme"):',
+        '- /a.md — da'
       ].join('\n')
     )
     expect(res.details).toEqual({ action: 'search' })
     expect(h.resolveBase).not.toHaveBeenCalled()
     expect(h.listBases).toHaveBeenCalledTimes(1)
+    expect(h.scan.mock.calls).toEqual([[NOTES], [ROOT]])
     expectNothingHappened(h)
   })
 
@@ -728,8 +837,8 @@ describe('KT-16..20 跨库检索（省略 base）', () => {
     expect(one).toBe(
       [
         '1 result(s) for "token" across 2 base(s):',
-        `base "notes" — ${NOTES}:`,
-        `- ${NOTES}/n1.md — dn1`
+        'base "notes" (knowledge base "notes"):',
+        '- /n1.md — dn1'
       ].join('\n')
     )
     const none = await h.run('c2', { action: 'search', query: 'zzz' })
@@ -777,7 +886,7 @@ describe('KT-16..20 跨库检索（省略 base）', () => {
     })
     const res = await h.run('c1', { action: 'search', base: 'notes', query: 'token' })
     expect(textOf(res)).toBe(
-      `1 result(s) for "token" in knowledge base "notes" — ${NOTES}:\n- ${NOTES}/n1.md — dn1`
+      `1 result(s) for "token" in base "notes" (knowledge base "notes"):\n- /n1.md — dn1`
     )
     expect(
       textOf(res)
@@ -792,7 +901,7 @@ describe('KT-16..20 跨库检索（省略 base）', () => {
 
 /**
  * 只读库 —— 宿主随应用发布的那一个内置库：`resolveBase` 回的 target 带 `readonly: true`。它存在的意义
- * 就是被读：list / search 照常，`submit` 在动手之前被拒（KS-6）。
+ * 就是被读：list / search / read 照常，`submit` 在派管理员之前被拒（KS-5）。
  */
 describe('KT-22′ / KT-23 只读库（随应用发布的内置库）', () => {
   const DIR = '/kb/builtin/shuvix/en'
@@ -801,7 +910,7 @@ describe('KT-22′ / KT-23 只读库（随应用发布的内置库）', () => {
     label: 'ShuviX reference (read-only)',
     readonly: true
   }
-  const READONLY_NOTE = 'read-only: search and read it, never write or submit here'
+  const READONLY_NOTE = 'read-only: search and read it, never submit here'
   const GUIDE = `${DIR}/agent-md.md`
   const FILES = {
     [GUIDE]: doc(
@@ -809,22 +918,22 @@ describe('KT-22′ / KT-23 只读库（随应用发布的内置库）', () => {
       'frontmatter keys, then the body'
     )
   }
+  const IN_BUILTIN = 'base "shuvix" (ShuviX reference (read-only))'
 
-  it('KT-22′ 只读库照常被 list / search；读侧不过 PEP，且一个字都不写', async () => {
+  it('KT-22′ 只读库照常被 list / search / read；一个字都不写', async () => {
     const h = makeTool({ bundle: BUILTIN, files: FILES })
     expect(textOf(await h.run('c1', { action: 'list', base: 'shuvix' }))).toBe(
-      [
-        `1 entry in ShuviX reference (read-only) — ${DIR}:`,
-        `- ${GUIDE} — how an agent md file is written`
-      ].join('\n')
+      [`1 entry in ${IN_BUILTIN}:`, '- /agent-md.md — how an agent md file is written'].join('\n')
     )
     expect(textOf(await h.run('c2', { action: 'search', base: 'shuvix', query: 'agent md' }))).toBe(
       [
-        `1 result(s) for "agent md" in ShuviX reference (read-only) — ${DIR}:`,
-        `- ${GUIDE} — how an agent md file is written`
+        `1 result(s) for "agent md" in ${IN_BUILTIN}:`,
+        '- /agent-md.md — how an agent md file is written'
       ].join('\n')
     )
-    expect(h.calls).toEqual([])
+    const read = textOf(await h.run('c3', { action: 'read', base: 'shuvix', entry: 'agent-md' }))
+    expect(read.split('\n')[0]).toBe(`Entry /agent-md.md in ${IN_BUILTIN} — 7 lines`)
+    expect(read).toContain('frontmatter keys, then the body')
     expectNothingHappened(h)
     expect(h.files.get(GUIDE)).toBe(FILES[GUIDE])
     expect(h.scan).toHaveBeenCalledWith(DIR)
@@ -841,9 +950,9 @@ describe('KT-22′ / KT-23 只读库（随应用发布的内置库）', () => {
     const lines = textOf(await h.run('c1', { action: 'bases' })).split('\n')
     expect(lines).toEqual([
       'Knowledge bases in this session (pass the name as `base`):',
-      '- notes — knowledge base "notes" — /u/notes',
-      '- alpha — knowledge base "alpha" — /u/alpha',
-      `- shuvix — ShuviX reference (read-only) — ${DIR} (${READONLY_NOTE})`
+      '- notes — knowledge base "notes"',
+      '- alpha — knowledge base "alpha"',
+      `- shuvix — ShuviX reference (read-only) (${READONLY_NOTE})`
     ])
     for (const line of [lines[1], lines[2]]) expect(line).not.toContain('(')
   })
@@ -873,32 +982,34 @@ describe('KT-25..KT-27 一条命中恰一行', () => {
     const h = makeTool({ search })
     const out = textOf(await h.run('c1', { action: 'search', base: 'project', query: 'q' }))
     expect(out.split('\n')).toEqual([
-      `2 result(s) for "q" in ${WHERE}:`,
-      `- ${ROOT}/a.md — da`,
-      `- ${ROOT}/b.md — db`
+      `2 result(s) for "q" in ${IN_PROJECT}:`,
+      '- /a.md — da',
+      '- /b.md — db'
     ])
     expect(out).not.toMatch(/paragraph|prose|12\.5/)
   })
 
-  it('KT-26 逐字渲染：description 优先于 title、status 非 stable 才括注、路径一律归一后拼到库目录下', async () => {
+  it('KT-26 逐字渲染：description 优先于 title、status 非 stable 才括注、条目名一律归一成 `/rel`', async () => {
     const search = vi.fn(
       async (): Promise<KnowledgeSearchHit[]> => [
         { path: '/a.md', title: 'A', description: 'da', status: 'stable' },
         { path: 'b.md', title: 'B', description: '', status: 'draft' },
         { path: 'sub/c.md', title: 'C', status: 'deprecated' },
         { path: '/sub/d.md', title: 'D', description: 'dd' },
-        { path: './e.md', title: 'E', description: 'de', status: 'stable' }
+        { path: './e.md', title: 'E', description: 'de', status: 'stable' },
+        { path: 'sub\\f.md', title: 'F', description: 'df' }
       ]
     )
     const h = makeTool({ search })
     expect(textOf(await h.run('c1', { action: 'search', base: 'project', query: 'q' }))).toBe(
       [
-        `5 result(s) for "q" in ${WHERE}:`,
-        `- ${ROOT}/a.md — da`,
-        `- ${ROOT}/b.md (draft) — B`,
-        `- ${ROOT}/sub/c.md (deprecated) — C`,
-        `- ${ROOT}/sub/d.md — dd`,
-        `- ${ROOT}/e.md — de`
+        `6 result(s) for "q" in ${IN_PROJECT}:`,
+        '- /a.md — da',
+        '- /b.md (draft) — B',
+        '- /sub/c.md (deprecated) — C',
+        '- /sub/d.md — dd',
+        '- /e.md — de',
+        '- /sub/f.md — df'
       ].join('\n')
     )
   })
@@ -925,11 +1036,11 @@ describe('KT-25..KT-27 一条命中恰一行', () => {
     expect(textOf(res)).toBe(
       [
         '3 result(s) for "q" across 2 base(s):',
-        `base "notes" — ${NOTES}:`,
-        `- ${NOTES}/n1.md — dn1`,
-        `base "project" — ${ROOT}:`,
-        `- ${ROOT}/a1.md — da1`,
-        `- ${ROOT}/a2.md (draft) — A2`
+        'base "notes" (knowledge base "notes"):',
+        '- /n1.md — dn1',
+        'base "project" (project "Acme"):',
+        '- /a1.md — da1',
+        '- /a2.md (draft) — A2'
       ].join('\n')
     )
     expect(textOf(res).split('\n')).toHaveLength(6)
@@ -953,11 +1064,11 @@ describe('KT-28..KT-31 子串兜底的召回口径', () => {
   }
   /** `[query, 渲染出来的命中行]`；空数组 = 一条都不该命中 */
   const TABLE: [string, string[]][] = [
-    ['Zebracorn', [`- ${ROOT}/title.md — dt`]],
-    ['quokka', [`- ${ROOT}/desc.md — about the quokka`]],
-    ['Runbook', [`- ${ROOT}/type.md — d3`]],
-    ['platypus', [`- ${ROOT}/tags.md — d4`]],
-    ['Marmoset', [`- ${ROOT}/head.md — d5`]],
+    ['Zebracorn', ['- /title.md — dt']],
+    ['quokka', ['- /desc.md — about the quokka']],
+    ['Runbook', ['- /type.md — d3']],
+    ['platypus', ['- /tags.md — d4']],
+    ['Marmoset', ['- /head.md — d5']],
     ['dingo', []],
     ['kakapo', []]
   ]
@@ -980,12 +1091,12 @@ describe('KT-28..KT-31 子串兜底的召回口径', () => {
     )
     const h = makeTool({ files: FILES, search })
     expect(textOf(await h.run('c1', { action: 'search', base: 'project', query: 'dingo' }))).toBe(
-      `1 result(s) for "dingo" in ${WHERE}:\n- ${ROOT}/dingo-only.md — the host said so`
+      `1 result(s) for "dingo" in ${IN_PROJECT}:\n- /dingo-only.md — the host said so`
     )
     expect(h.scan).not.toHaveBeenCalled()
   })
 
-  /** 命中行的路径（`- <path> …` 的第一段） */
+  /** 命中行的条目名（`- <entry> …` 的第一段） */
   const found =
     (h: Harness) =>
     async (query: string): Promise<string[]> =>
@@ -1006,9 +1117,9 @@ describe('KT-28..KT-31 子串兜底的召回口径', () => {
       }
     })
     const hits = found(h)
-    expect(await hits('okapi')).toEqual([`${ROOT}/a.md`])
+    expect(await hits('okapi')).toEqual(['/a.md'])
     expect(await hits('numbat')).toEqual([])
-    expect(await hits('saiga')).toEqual([`${ROOT}/open.md`])
+    expect(await hits('saiga')).toEqual(['/open.md'])
     expect(await hits('Oryx')).toEqual([])
     expect(await hits('tapir')).toEqual([])
   })
@@ -1042,21 +1153,17 @@ describe('KT-28..KT-31 子串兜底的召回口径', () => {
     })
     const hits = found(h)
     for (const q of ['token refresh', 'TOKEN REFRESH', 'ToKeN']) {
-      expect(await hits(q), q).toEqual([`${ROOT}/a.md`])
+      expect(await hits(q), q).toEqual(['/a.md'])
     }
-    expect(await hits('令牌刷新')).toEqual([`${ROOT}/z.md`])
-    expect(await hits('与令牌')).toEqual([`${ROOT}/z.md`])
+    expect(await hits('令牌刷新')).toEqual(['/z.md'])
+    expect(await hits('与令牌')).toEqual(['/z.md'])
     expect(await hits('令牌 刷新')).toEqual([])
     expect(await hits('鉴权刷新')).toEqual([])
   })
 })
 
-describe('KT-32..KT-33 文案与 limit', () => {
-  it('KT-32 文案与类型：描述同时教 `read` 与 `grep`；KnowledgeSearchHit 上没有 snippet', () => {
-    expect(KNOWLEDGE_DESCRIPTION).toContain('`grep`')
-    expect(KNOWLEDGE_DESCRIPTION).toContain('`read`')
-    expect(KNOWLEDGE_DESCRIPTION).toContain('not the prose')
-    expect(KNOWLEDGE_DESCRIPTION).toContain('then `read`')
+describe('KT-32..KT-33 类型与 limit', () => {
+  it('KT-32 KnowledgeSearchHit 上没有 snippet', () => {
     const keys: Record<keyof KnowledgeSearchHit, true> = {
       path: true,
       title: true,
@@ -1076,7 +1183,7 @@ describe('KT-32..KT-33 文案与 limit', () => {
       const out = textOf(
         await h.run('c1', { action: 'search', base: 'project', query: 'kudu', limit })
       )
-      expect(out.split('\n')[0], String(limit)).toBe(`3 result(s) for "kudu" in ${WHERE}:`)
+      expect(out.split('\n')[0], String(limit)).toBe(`3 result(s) for "kudu" in ${IN_PROJECT}:`)
       return out.split('\n').length - 1
     }
     expect(await lineCount(1)).toBe(1)
@@ -1102,7 +1209,7 @@ describe('KT-32..KT-33 文案与 limit', () => {
     for (const limit of [0, -1, 0.5]) {
       expect(await listed(limit), String(limit)).toHaveLength(3)
     }
-    const two = [`- ${ROOT}/a.md — da`, `- ${ROOT}/b.md — db`, '- … 1 more']
+    const two = ['- /a.md — da', '- /b.md — db', '- … 1 more']
     expect(await listed(2)).toEqual(two)
     expect(await listed(2.7)).toEqual(two)
   })
@@ -1137,15 +1244,15 @@ describe('KT-40..KT-42 列表与兜底检索里的信任档记号', () => {
   it('KT-40 list：机器章 / 人工章 / 旧人工 + 新机器 / 核实后又改 / draft + 机器 / 未核实 / 普通笔记 —— 逐行全文', async () => {
     const h = makeTool({ files: FILES })
     expect(textOf(await h.run('c1', { action: 'list', base: 'project' })).split('\n')).toEqual([
-      `7 entries in ${WHERE}:`,
-      `- ${ROOT}/a.md (machine-confirmed, 2026-09-05) — da`,
-      `- ${ROOT}/b.md (human-reviewed, 2026-09-05) — db`,
+      `7 entries in ${IN_PROJECT}:`,
+      '- /a.md (machine-confirmed, 2026-09-05) — da',
+      '- /b.md (human-reviewed, 2026-09-05) — db',
       // 人看过的是旧内容：不是 human-reviewed
-      `- ${ROOT}/c.md (machine-confirmed, 2026-09-05) — dc`,
-      `- ${ROOT}/d.md (edited since checked, 2026-09-05) — dd`,
-      `- ${ROOT}/e.md (draft, machine-confirmed, 2026-09-05) — de`,
-      `- ${ROOT}/f.md (2026-09-05) — df`,
-      `- ${ROOT}/g.md — g plain`
+      '- /c.md (machine-confirmed, 2026-09-05) — dc',
+      '- /d.md (edited since checked, 2026-09-05) — dd',
+      '- /e.md (draft, machine-confirmed, 2026-09-05) — de',
+      '- /f.md (2026-09-05) — df',
+      '- /g.md — g plain'
     ])
   })
 
@@ -1157,392 +1264,714 @@ describe('KT-40..KT-42 列表与兜底检索里的信任档记号', () => {
     const h = makeTool({ files: FILES, search })
     expect(
       textOf(await h.run('c1', { action: 'search', base: 'project', query: 'x' })).split('\n')
-    ).toEqual([
-      `2 result(s) for "x" in ${WHERE}:`,
-      `- ${ROOT}/c.md — c`,
-      `- ${ROOT}/e.md (draft) — de`
-    ])
+    ).toEqual([`2 result(s) for "x" in ${IN_PROJECT}:`, '- /c.md — c', '- /e.md (draft) — de'])
   })
 
   it('KT-42 兜底检索的命中行与 list 同一种写法：旧人工 + 新机器那一份同样印 machine-confirmed', async () => {
     const h = makeTool({ files: FILES })
     expect(textOf(await h.run('c1', { action: 'search', base: 'project', query: 'dc' }))).toBe(
-      `1 result(s) for "dc" in ${WHERE}:\n- ${ROOT}/c.md (machine-confirmed, 2026-09-05) — dc`
+      `1 result(s) for "dc" in ${IN_PROJECT}:\n- /c.md (machine-confirmed, 2026-09-05) — dc`
     )
   })
 })
 
-// ─── 1.4 submit —— 准入与路径解析 ──────────────────────────────────────────────
+// ─── 1.4 库目录：管理员看得到，别人看不到 ──────────────────────────────────────────
 
-describe('KS-1..KS-9 submit 的准入', () => {
-  /** 一个库（ROOT）+ 库外的几个干扰项 */
+describe('KA-1..KA-4 库目录只给管理员', () => {
+  const NOTES = '/kb/user/notes'
+  const BASES: KnowledgeBaseInfo[] = [
+    { base: 'project', label: 'project "Acme"', dir: ROOT },
+    { base: 'notes', label: 'knowledge base "notes"', dir: NOTES, note: 'the user’s notes' }
+  ]
   const FILES = {
     [`${ROOT}/a.md`]: ENTRY,
-    [`${ROOT}/sub/b.md`]: ENTRY,
-    [`${ROOT}/NOTE.MD`]: ENTRY,
-    [`${ROOT}/index.md`]: ENTRY,
-    [`${ROOT}/sub/log.md`]: ENTRY,
-    '/elsewhere/draft.md': ENTRY,
-    // 前缀与库目录相同的兄弟目录
-    '/kb/projects/acme-old/a.md': ENTRY
+    [`${ROOT}/sub/b.md`]: doc(['type: Memory', 'title: B', 'description: db']),
+    [`${NOTES}/n1.md`]: doc(['type: Memory', 'title: A note', 'description: dn1'])
   }
-  const notInside = (raw: string): string => `"${raw}" is not inside ${WHERE}`
-  const outsideFile = (raw: string): string =>
-    `${notInside(raw)} — write the entry into the base's directory`
-  const noFile = (abs: string): string =>
-    `No file at ${abs} — write the entry there first, then submit it`
-
-  type Expect = { rel: string } | { error: string }
-  const KS1: [string, string, Expect][] = [
-    ['#1 库内绝对路径', `${ROOT}/a.md`, { rel: 'a.md' }],
-    ['#2 库内绝对路径（子目录）', `${ROOT}/sub/b.md`, { rel: 'sub/b.md' }],
-    ['#3 库相对', 'a.md', { rel: 'a.md' }],
-    ['#4 前导 / 是库根', '/a.md', { rel: 'a.md' }],
-    ['#5 ./ 前缀', './sub/b.md', { rel: 'sub/b.md' }],
-    ['#6 首尾空白', `  ${ROOT}/a.md  `, { rel: 'a.md' }],
-    ['#7a 库目录本身', ROOT, { error: notInside(ROOT) }],
-    ['#7b 库目录带尾斜杠', `${ROOT}/`, { error: notInside(`${ROOT}/`) }],
-    ['#8 ../ 越界', '../x.md', { error: notInside('../x.md') }],
-    // 任何 `..` 段都拒（保守口径：哪怕折算回来仍在库里）
-    ['#9 中间带 ..', 'sub/../a.md', { error: notInside('sub/../a.md') }],
-    ['#10 不是 .md', 'a.txt', { error: '"a.txt" is not a markdown entry (.md)' }],
-    ['#11 扩展名大小写不敏感', 'NOTE.MD', { rel: 'NOTE.MD' }],
-    ['#12a 保留名', 'index.md', { error: '/index.md is a reserved name, not an entry' }],
-    [
-      '#12b 任何深度的保留名',
-      'sub/log.md',
-      { error: '/sub/log.md is a reserved name, not an entry' }
-    ],
-    ['#13 库外真文件', '/elsewhere/draft.md', { error: outsideFile('/elsewhere/draft.md') }],
-    ['#14 哪都没有', '/elsewhere/missing.md', { error: noFile(`${ROOT}/elsewhere/missing.md`) }],
-    [
-      '#15 前缀相同的兄弟目录',
-      '/kb/projects/acme-old/a.md',
-      { error: outsideFile('/kb/projects/acme-old/a.md') }
-    ],
-    ['#16 库里没有', 'missing.md', { error: noFile(`${ROOT}/missing.md`) }]
-  ]
-
-  it.each(KS1)('KS-1 %s：%s', async (_label, path, expected) => {
-    const h = makeTool({ files: FILES })
-    const res = await h.run('c1', { action: 'submit', base: 'project', path })
-    if ('rel' in expected) {
-      expect(res.isError, textOf(res)).toBeFalsy()
-      expect(textOf(res).startsWith(`Confirmed: ${ROOT}/${expected.rel}`)).toBe(true)
-      expect(h.review).toHaveBeenCalledTimes(1)
-      expect(h.review.mock.calls[0][0]).toMatchObject({
-        rel: expected.rel,
-        path: `${ROOT}/${expected.rel}`
-      })
-      return
+  /** 管理员把库目录写进了报告；content 为 "decline" 时不收 */
+  const LEAKY: AdminImpl = async (req, ctx, files) => {
+    if (req.content === 'decline') {
+      return {
+        accepted: false,
+        entries: [],
+        report: `Already covered by ${req.bundleDir}/a.md (see ${req.bundleDir}).`,
+        admin: ADMIN
+      }
     }
-    expect(res.isError).toBe(true)
-    expect(textOf(res)).toBe(expected.error)
+    return librarian(
+      { 'auth/x.md': ENTRY, 'a.md': ENTRY },
+      (r) => `Created ${r.bundleDir}/auth/x.md and linked it from ${r.bundleDir}/a.md.`
+    )(req, ctx, files)
+  }
+
+  /** 每一种动作、成功与失败的路子都走一遍，收齐交回给模型的文字 */
+  const sweep = async (h: Harness): Promise<string[]> => {
+    const out: string[] = []
+    const take = async (params: KnowledgeToolParams): Promise<void> => {
+      out.push(textOf(await h.run('s', params)))
+    }
+    await take({ action: 'bases' })
+    await take({ action: 'search', base: 'project', query: 'd' })
+    await take({ action: 'search', query: 'A' })
+    await take({ action: 'search', query: 'zzz' })
+    await take({ action: 'list', base: 'project' })
+    await take({ action: 'read', base: 'project', entry: '/a.md' })
+    // 旧对话里留下的绝对路径也认得，回出来的仍是条目名
+    await take({ action: 'read', base: 'project', entry: `${ROOT}/sub/b.md` })
+    await take({ action: 'read', base: 'project', entry: '/missing.md' })
+    await take({ action: 'read', base: 'project', entry: '../x.md' })
+    await take({ action: 'submit', base: 'project', content: 'x', entry: `${ROOT}/a.md` })
+    await take({ action: 'submit', base: 'project', content: 'decline' })
+    await take({ action: 'submit', base: 'project', content: 'x', entry: 'missing' })
+    return out
+  }
+
+  it('KA-1 非管理员（不注入 isAdmin / isAdmin 回 false）：bases / search / list / read / submit 的每一种输出里都没有库目录', async () => {
+    for (const isAdmin of [undefined, () => false]) {
+      const h = makeTool({ files: FILES, bases: BASES, admin: LEAKY, isAdmin })
+      const texts = await sweep(h)
+      expect(texts).toHaveLength(12)
+      for (const text of texts) {
+        expect(text).not.toContain(ROOT)
+        expect(text).not.toContain(NOTES)
+        expect(text).not.toContain('/kb/')
+      }
+      // 不是因为什么都没印才通过：条目名确实印出来了
+      const all = texts.join('\n')
+      for (const name of ['/a.md', '/sub/b.md', '/n1.md', '/auth/x.md']) {
+        expect(all, name).toContain(name)
+      }
+    }
+  })
+
+  it('KA-2 管理员：bases 行、search（单库与跨库的块头）、list 表头带目录；条目行仍是 `/rel`；read 的表头不带目录', async () => {
+    const h = makeTool({ files: FILES, bases: BASES, isAdmin: () => true })
+    expect(textOf(await h.run('c1', { action: 'bases' })).split('\n')).toEqual([
+      'Knowledge bases in this session (pass the name as `base`):',
+      `- project — project "Acme" — ${ROOT}`,
+      `- notes — knowledge base "notes" — ${NOTES} (the user’s notes)`
+    ])
+    expect(textOf(await h.run('c2', { action: 'search', base: 'project', query: 'db' }))).toBe(
+      `1 result(s) for "db" in ${IN_PROJECT_ADMIN}:\n- /sub/b.md — db`
+    )
+    expect(textOf(await h.run('c3', { action: 'search', query: 'A' }))).toBe(
+      [
+        '2 result(s) for "A" across 2 base(s):',
+        `base "project" (project "Acme" — ${ROOT}):`,
+        '- /a.md — da',
+        `base "notes" (knowledge base "notes" — ${NOTES}):`,
+        '- /n1.md — dn1'
+      ].join('\n')
+    )
+    expect(textOf(await h.run('c4', { action: 'list', base: 'project' }))).toBe(
+      [`2 entries in ${IN_PROJECT_ADMIN}:`, '- /a.md — da', '- /sub/b.md — db'].join('\n')
+    )
+    expect(textOf(await h.run('c5', { action: 'list', base: 'project', limit: 1 }))).toBe(
+      [`2 entries in ${IN_PROJECT_ADMIN}:`, '- /a.md — da', '- … 1 more'].join('\n')
+    )
+    const read = textOf(await h.run('c6', { action: 'read', base: 'project', entry: 'a' }))
+    expect(read.split('\n')[0]).toBe(`Entry /a.md in ${IN_PROJECT} — 9 lines`)
+    expect(read).not.toContain(ROOT)
+  })
+
+  it('KA-2b 管理员看到的目录去掉尾随分隔符；空库的那句话也带目录；宿主没给目录的库（此刻不在）不印目录', async () => {
+    const h = makeTool({
+      bundle: { dir: `${ROOT}/`, label: 'project "Acme"' },
+      bases: [
+        { base: 'project', label: 'project "Acme"', dir: `${ROOT}/` },
+        { base: 'gone', label: 'knowledge base "gone"', note: 'not on disk right now' }
+      ],
+      isAdmin: () => true
+    })
+    expect(
+      textOf(await h.run('c1', { action: 'bases' }))
+        .split('\n')
+        .slice(1)
+    ).toEqual([
+      `- project — project "Acme" — ${ROOT}`,
+      '- gone — knowledge base "gone" (not on disk right now)'
+    ])
+    expect(textOf(await h.run('c2', { action: 'list', base: 'project' }))).toBe(
+      `No entries in ${IN_PROJECT_ADMIN} yet.`
+    )
+  })
+
+  it('KA-3 isAdmin 按这次调用判（收的是调用的 scope）：同一个工具实例，管理员那条对话看得到目录，别的对话看不到', async () => {
+    const isAdmin = vi.fn((call: ToolCallScope | undefined) => call?.conversationId === 7)
+    const h = makeTool({ files: FILES, bases: BASES, isAdmin })
+    const asAdmin = await h.invoke({ action: 'list', base: 'project' }, { conversationId: 7 })
+    const asOther = await h.invoke({ action: 'list', base: 'project' }, { conversationId: 1 })
+    expect(textOf(asAdmin).split('\n')[0]).toBe(`2 entries in ${IN_PROJECT_ADMIN}:`)
+    expect(textOf(asOther).split('\n')[0]).toBe(`2 entries in ${IN_PROJECT}:`)
+    expect(isAdmin.mock.calls.map(([call]) => call?.conversationId)).toEqual([7, 1])
+  })
+
+  it('KA-4 管理员读侧照常（它要靠它们查重、找该改的那一条）；它的 submit 被拒（见 KS-1）', async () => {
+    const h = makeTool({ files: FILES, bases: BASES, isAdmin: () => true })
+    for (const params of [
+      { action: 'bases' },
+      { action: 'search', query: 'A' },
+      { action: 'list', base: 'project' },
+      { action: 'read', base: 'project', entry: 'sub/b.md' }
+    ] as KnowledgeToolParams[]) {
+      expect((await h.run('c1', params)).isError, params.action).toBeFalsy()
+    }
+    expect(
+      await rejectionOf(h.run('c2', { action: 'submit', base: 'project', content: 'x' }))
+    ).toContain('You are the librarian')
+    expectNothingHappened(h)
+  })
+})
+
+// ─── 1.5 read ───────────────────────────────────────────────────────────────
+
+describe('KE-1..KE-9 read', () => {
+  const TOKEN = doc(
+    ['type: Memory', 'title: Token refresh', 'description: dt'],
+    '## Steps\n\nrefresh before expiry'
+  )
+  const FIVE = 'l1\nl2\nl3\nl4\nl5\n'
+  const FILES = {
+    [`${ROOT}/auth/token.md`]: TOKEN,
+    [`${ROOT}/five.md`]: FIVE
+  }
+  const read = (h: Harness, params: Partial<KnowledgeToolParams>): Promise<Result> =>
+    h.run('c1', { action: 'read', base: 'project', ...params } as KnowledgeToolParams)
+  const lines = async (h: Harness, params: Partial<KnowledgeToolParams>): Promise<string[]> =>
+    textOf(await read(h, params)).split('\n')
+
+  it('KE-1 全文：表头点名条目与库（行数）、空行、原文逐行（frontmatter 一并给、没有行号）、空行、`(End of entry.)`', async () => {
+    const h = makeTool({ files: FILES })
+    const res = await read(h, { entry: '/auth/token.md' })
+    expect(textOf(res).split('\n')).toEqual([
+      `Entry /auth/token.md in ${IN_PROJECT} — 9 lines`,
+      '',
+      '---',
+      'type: Memory',
+      'title: Token refresh',
+      'description: dt',
+      '---',
+      '',
+      '## Steps',
+      '',
+      'refresh before expiry',
+      '',
+      '(End of entry.)'
+    ])
+    expect(res.isError).toBeFalsy()
+    expect(res.details).toEqual({ action: 'read', path: 'auth/token.md' })
+    expect(h.resolveBase).toHaveBeenCalledWith('project')
+    expect(h.scan).toHaveBeenCalledWith(ROOT)
+    // 读的是宿主的扫描缓存：不经 port、不派管理员、不写
     expectNothingHappened(h)
   })
 
-  it('KS-1 #13 的判定顺序：先按库相对问 stat，库里没有才拿原路径再问一次', async () => {
+  it('KE-1b 读到的是扫描缓存里的那一份（宿主给什么就是什么），即使 port 上的文件已经变了', async () => {
     const h = makeTool({ files: FILES })
-    await h.run('c1', { action: 'submit', base: 'project', path: '/elsewhere/draft.md' })
-    expect(h.stat.mock.calls.map((c) => c[0])).toEqual([
-      `${ROOT}/elsewhere/draft.md`,
-      '/elsewhere/draft.md'
+    const CACHED = 'cached one\ncached two\n'
+    h.scan.mockImplementationOnce(async () => ({
+      files: [{ path: 'five.md', text: CACHED }],
+      concepts: [],
+      notes: [readKnowledgeNote(CACHED, 'five.md')]
+    }))
+    expect(await lines(h, { entry: 'five.md' })).toEqual([
+      `Entry /five.md in ${IN_PROJECT} — 2 lines`,
+      '',
+      'cached one',
+      'cached two',
+      '',
+      '(End of entry.)'
+    ])
+    expect(h.readFile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['前导 /', '/auth/token.md'],
+    ['库相对', 'auth/token.md'],
+    ['省掉 .md', 'auth/token'],
+    ['前导 / 且省掉 .md', '/auth/token'],
+    ['./ 前缀', './auth/token.md'],
+    ['首尾空白', '  /auth/token.md  '],
+    ['重复分隔符', '//auth//token.md'],
+    ['反斜杠', 'auth\\token.md'],
+    ['库内绝对路径（旧对话里留下的）', `${ROOT}/auth/token.md`],
+    ['库内绝对路径、反斜杠', '\\kb\\projects\\acme\\auth\\token.md'],
+    ['库内绝对路径、省掉 .md', `${ROOT}/auth/token`]
+  ])('KE-2 名字的写法：%s（%s）→ 同一条 /auth/token.md', async (_label, entry) => {
+    const h = makeTool({ files: FILES })
+    const res = await read(h, { entry })
+    expect(res.isError, textOf(res)).toBeFalsy()
+    expect(textOf(res).split('\n')[0]).toBe(`Entry /auth/token.md in ${IN_PROJECT} — 9 lines`)
+    expect(res.details).toEqual({ action: 'read', path: 'auth/token.md' })
+  })
+
+  it('KE-2b Windows 库目录：库内的绝对路径（正反斜杠都认）落回条目名', async () => {
+    const DIR = 'C:\\kb\\notes'
+    const h = makeTool({
+      bundle: { dir: DIR, label: 'knowledge base "notes"' },
+      files: { [`${DIR}/a.md`]: ENTRY }
+    })
+    // 盘符不分大小写（`c:/` 与 `C:\` 是同一处）
+    for (const entry of [
+      'C:\\kb\\notes\\a.md',
+      'C:/kb/notes/a.md',
+      'c:/kb/notes/a.md',
+      'c:\\kb\\notes\\a.md',
+      'a.md',
+      '/a'
+    ]) {
+      const res = await read(h, { base: 'notes', entry })
+      expect(res.isError, `${entry}: ${textOf(res)}`).toBeFalsy()
+      expect(textOf(res).split('\n')[0], entry).toBe(
+        'Entry /a.md in base "notes" (knowledge base "notes") — 9 lines'
+      )
+    }
+  })
+
+  it('KE-3 分页：offset / limit 按行；没读完说下一页从哪开始，读到底说 end of entry；越过末尾只说一共几行', async () => {
+    const h = makeTool({ files: FILES })
+    const head = `Entry /five.md in ${IN_PROJECT} — 5 lines`
+    expect(await lines(h, { entry: 'five.md', offset: 2, limit: 2 })).toEqual([
+      head,
+      '',
+      'l2',
+      'l3',
+      '',
+      '(Showing lines 2-3 of 5. Use offset=4 to continue.)'
+    ])
+    expect(await lines(h, { entry: 'five.md', limit: 2 })).toEqual([
+      head,
+      '',
+      'l1',
+      'l2',
+      '',
+      '(Showing lines 1-2 of 5. Use offset=3 to continue.)'
+    ])
+    expect(await lines(h, { entry: 'five.md', offset: 4 })).toEqual([
+      head,
+      '',
+      'l4',
+      'l5',
+      '',
+      '(Lines 4-5, end of entry.)'
+    ])
+    expect(await lines(h, { entry: 'five.md', offset: 5, limit: 1 })).toEqual([
+      head,
+      '',
+      'l5',
+      '',
+      '(Lines 5-5, end of entry.)'
+    ])
+    expect(await lines(h, { entry: 'five.md', offset: 6 })).toEqual([
+      head,
+      '',
+      '',
+      '(The entry has 5 lines.)'
     ])
   })
 
-  it('KS-2 [白盒] POSIX 歧义：`/sub/b.md` 在库里与磁盘根下都存在 → 按库相对处理（库内优先，原路径一次都不问）', async () => {
-    const h = makeTool({ files: { ...FILES, '/sub/b.md': PLAIN } })
-    const res = await h.run('c1', { action: 'submit', base: 'project', path: '/sub/b.md' })
-    expect(res.isError).toBeFalsy()
-    expect(h.review.mock.calls[0][0]).toMatchObject({ rel: 'sub/b.md', path: `${ROOT}/sub/b.md` })
-    expect(h.stat.mock.calls.map((c) => c[0])).not.toContain('/sub/b.md')
-    expect(h.files.get('/sub/b.md')).toBe(PLAIN)
-  })
-
-  it('KS-3 [白盒] 盘符路径：库内的（盘符大小写不敏感）通过；别的盘上的直接拒，stat 一次都不问', async () => {
-    const DIR = 'C:\\kb\\notes'
-    const target: KnowledgeBundleTarget = { dir: DIR, label: 'knowledge base "notes"' }
-    // joinRoot 的输出形状：去尾分隔符后拼 `/`
-    const ABS = 'C:\\kb\\notes/a.md'
-    // 盘符不分大小写（`c:/` 与 `C:\` 是同一处）；其余照字面比
-    for (const path of ['C:\\kb\\notes\\a.md', 'c:/kb/notes/a.md', 'c:\\kb\\notes\\a.md']) {
-      const h = makeTool({ bundle: target, files: { [ABS]: ENTRY } })
-      const res = await h.run('c1', { action: 'submit', base: 'notes', path })
-      expect(res.isError, `${path}: ${textOf(res)}`).toBeFalsy()
-      expect(h.review.mock.calls[0][0], path).toMatchObject({ rel: 'a.md', path: ABS })
-    }
-
-    const h = makeTool({ bundle: target, files: { [ABS]: ENTRY, 'D:\\other\\a.md': ENTRY } })
-    expect(
-      await rejectionOf(h.run('c2', { action: 'submit', base: 'notes', path: 'D:\\other\\a.md' }))
-    ).toBe(`"D:\\other\\a.md" is not inside knowledge base "notes" — ${DIR}`)
-    expect(h.stat).not.toHaveBeenCalled()
-    expectNothingHappened(h)
-  })
-
-  it('KS-4 缺参顺序：path 先于 base（两样都缺报 path）；path 全空白也算缺；都不解析', async () => {
+  it('KE-3b offset 非正数 / NaN 从第 1 行起、小数截断；limit 非正数 / NaN / Infinity 回落缺省（2000 行）、小数截断', async () => {
     const h = makeTool({ files: FILES })
-    const NEEDS_PATH = '"submit" needs `path` — the entry\'s file'
-    const NEEDS_BASE = '"submit" needs `base` — one of the names "bases" lists for this session'
-
-    expect(await rejectionOf(h.run('c1', { action: 'submit' }))).toBe(NEEDS_PATH)
-    for (const base of [undefined, '', '   ']) {
-      const params: KnowledgeToolParams =
-        base === undefined
-          ? { action: 'submit', path: 'a.md' }
-          : { action: 'submit', path: 'a.md', base }
-      const message = await rejectionOf(h.run('c2', params))
-      expect(message, JSON.stringify(base)).toBe(NEEDS_BASE)
-      expect(message).not.toContain('"project"')
+    const whole = await lines(h, { entry: 'five.md' })
+    expect(whole.at(-1)).toBe('(End of entry.)')
+    expect(whole.slice(2, 7)).toEqual(['l1', 'l2', 'l3', 'l4', 'l5'])
+    for (const offset of [0, -3, Number.NaN, 0.5]) {
+      expect(await lines(h, { entry: 'five.md', offset }), String(offset)).toEqual(whole)
     }
-    expect(await rejectionOf(h.run('c3', { action: 'submit', base: 'project', path: '   ' }))).toBe(
-      NEEDS_PATH
+    for (const limit of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.5]) {
+      expect(await lines(h, { entry: 'five.md', limit }), String(limit)).toEqual(whole)
+    }
+    expect((await lines(h, { entry: 'five.md', offset: 2.9 })).slice(2)).toEqual([
+      'l2',
+      'l3',
+      'l4',
+      'l5',
+      '',
+      '(Lines 2-5, end of entry.)'
+    ])
+    expect((await lines(h, { entry: 'five.md', limit: 2.7 })).at(-1)).toBe(
+      '(Showing lines 1-2 of 5. Use offset=3 to continue.)'
     )
+  })
+
+  it('KE-4 字节上限 50KB（与文件 read 同一套口径）：先到的那一个截断；超长单行截到 2000 字符', async () => {
+    const wide = 'x'.repeat(2000)
+    const BIG = `${Array.from({ length: 30 }, () => wide).join('\n')}\n`
+    const LONG = `short\n${'y'.repeat(2500)}\n`
+    const h = makeTool({ files: { [`${ROOT}/big.md`]: BIG, [`${ROOT}/long.md`]: LONG } })
+
+    // 每行 2001 字节（含换行）：25 行 = 50025 ≤ 51200，第 26 行就超了
+    const capped = await lines(h, { entry: 'big.md' })
+    expect(capped[0]).toBe(`Entry /big.md in ${IN_PROJECT} — 30 lines`)
+    expect(capped.slice(2, -2)).toHaveLength(25)
+    expect(capped.at(-1)).toBe(
+      '(Output capped at 50.0KB. Showing lines 1-25. Use offset=26 to continue.)'
+    )
+    const rest = await lines(h, { entry: 'big.md', offset: 26 })
+    expect(rest.slice(2, -2)).toHaveLength(5)
+    expect(rest.at(-1)).toBe('(Lines 26-30, end of entry.)')
+    // 行数上限先到：照常说「还有」
+    expect((await lines(h, { entry: 'big.md', limit: 3 })).at(-1)).toBe(
+      '(Showing lines 1-3 of 30. Use offset=4 to continue.)'
+    )
+
+    expect(await lines(h, { entry: 'long.md' })).toEqual([
+      `Entry /long.md in ${IN_PROJECT} — 2 lines`,
+      '',
+      'short',
+      `${'y'.repeat(2000)}... (line truncated to 2000 chars)`,
+      '',
+      '(End of entry.)'
+    ])
+  })
+
+  it('KE-5 行的切法：CRLF 不留 `\\r`；末尾换行不多算一行，没有末尾换行也一样；多出来的空行照算', async () => {
+    const h = makeTool({
+      files: {
+        [`${ROOT}/crlf.md`]: '---\r\ntype: Memory\r\ntitle: C\r\n---\r\n\r\nbody\r\n',
+        [`${ROOT}/bare.md`]: 'a\nb',
+        [`${ROOT}/tail.md`]: 'a\nb\n\n'
+      }
+    })
+    const crlf = await lines(h, { entry: 'crlf.md' })
+    expect(crlf).toEqual([
+      `Entry /crlf.md in ${IN_PROJECT} — 6 lines`,
+      '',
+      '---',
+      'type: Memory',
+      'title: C',
+      '---',
+      '',
+      'body',
+      '',
+      '(End of entry.)'
+    ])
+    expect(crlf.join('\n')).not.toContain('\r')
+    expect((await lines(h, { entry: 'bare.md' }))[0]).toBe(
+      `Entry /bare.md in ${IN_PROJECT} — 2 lines`
+    )
+    expect(await lines(h, { entry: 'tail.md' })).toEqual([
+      `Entry /tail.md in ${IN_PROJECT} — 3 lines`,
+      '',
+      'a',
+      'b',
+      '',
+      '',
+      '(End of entry.)'
+    ])
+  })
+
+  it('KE-6 缺参：先 base 后 entry；entry 不传 / 空串 / 全空白都算缺；都不解析、不扫描', async () => {
+    const h = makeTool({ files: FILES })
+    const NEEDS_ENTRY = '"read" needs `entry` — an entry\'s path inside the base'
+    expect(await rejectionOf(h.run('c1', { action: 'read' }))).toBe(
+      '"read" needs `base` — one of the names "bases" lists for this session'
+    )
+    for (const entry of [undefined, '', '   ']) {
+      expect(await rejectionOf(read(h, { entry })), JSON.stringify(entry)).toBe(NEEDS_ENTRY)
+    }
     expect(h.resolveBase).not.toHaveBeenCalled()
-    expect(h.stat).not.toHaveBeenCalled()
+    expect(h.scan).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['不在册', 'missing.md', '/missing.md'],
+    ['不在册、没有 .md', 'missing', '/missing'],
+    ['扩展名大小写对不上（只认扫描清单）', 'FIVE.MD', '/FIVE.MD'],
+    ['不是 md', 'notes.txt', '/notes.txt'],
+    // 宿主扫描不看隐藏路径：磁盘上有这个文件也一样
+    ['隐藏目录', '.obsidian/x.md', '/.obsidian/x.md'],
+    ['隐藏文件', 'auth/.draft.md', '/auth/.draft.md'],
+    // 生成形状的 index 不是笔记
+    ['生成的 index', 'index.md', '/index.md'],
+    // 前缀相同的兄弟目录：不是这个库里的绝对路径，当库相对的名字处理
+    ['前缀相同的兄弟目录', '/kb/projects/acme-old/a.md', '/kb/projects/acme-old/a.md']
+  ])('KE-7 %s（%s）→ 「No entry … in base」，指回 search / list', async (_label, entry, name) => {
+    const h = makeTool({
+      files: {
+        ...FILES,
+        [`${ROOT}/notes.txt`]: 'not md',
+        [`${ROOT}/.obsidian/x.md`]: ENTRY,
+        [`${ROOT}/auth/.draft.md`]: ENTRY,
+        [`${ROOT}/index.md`]: '## Entries\n\n* [A](a.md)\n',
+        '/kb/projects/acme-old/a.md': ENTRY
+      }
+    })
+    expect(await rejectionOf(read(h, { entry }))).toBe(
+      `No entry ${name} in base "project" — "search" or "list" it for the right name`
+    )
     expectNothingHappened(h)
   })
 
-  it('KS-5 base 解析失败是硬错误：失败文字恰为宿主那句原文', async () => {
-    const ERR = 'No knowledge base named "nope". Available: "project", "notes".'
-    const h = makeTool({ bundle: { error: ERR }, files: FILES })
-    expect(await rejectionOf(h.run('c1', { action: 'submit', base: 'nope', path: 'a.md' }))).toBe(
-      ERR
-    )
-    expect(h.stat).not.toHaveBeenCalled()
-    expectNothingHappened(h)
-  })
-
-  it('KS-6 只读库：在动手之前拒（点名库、指回 "bases"）；只读判定先于路径解析，缺参又先于只读', async () => {
-    const DIR = '/kb/builtin/shuvix/en'
-    const builtin: KnowledgeBundleTarget = {
-      dir: DIR,
-      label: 'ShuviX reference (read-only)',
-      readonly: true
-    }
-    const h = makeTool({ bundle: builtin, files: { [`${DIR}/agent-md.md`]: ENTRY } })
-
-    // 去空白后的名字既用来解析，也是话里点名的那一个
-    const message = await rejectionOf(
-      h.run('c1', { action: 'submit', base: '  shuvix ', path: 'agent-md.md' })
-    )
-    expect(message).toContain('"shuvix" is read-only')
-    expect(message).toContain("user's knowledge bases")
-    expect(message).toContain('"bases"')
-    expect(h.resolveBase.mock.calls).toEqual([['shuvix']])
-
-    // 越界的路径也报只读：路径根本还没看
-    expect(
-      await rejectionOf(h.run('c2', { action: 'submit', base: 'shuvix', path: '../x.md' }))
-    ).toContain('"shuvix" is read-only')
-
-    // 缺 path：报的是缺参，连 base 都还没解析
-    const before = h.resolveBase.mock.calls.length
-    const missing = await rejectionOf(h.run('c3', { action: 'submit', base: 'shuvix' }))
-    expect(missing).toBe('"submit" needs `path` — the entry\'s file')
-    expect(h.resolveBase.mock.calls.length).toBe(before)
-
-    expect(h.stat).not.toHaveBeenCalled()
+  it.each([
+    ['../ 越界', '../x.md'],
+    ['中间带 ..', 'auth/../five.md'],
+    ['库外再绕回来', `${ROOT}/../acme/five.md`],
+    ['只有 /', '/'],
+    ['库目录本身', ROOT],
+    ['库目录带尾斜杠', `${ROOT}/`]
+  ])('KE-8 %s（%s）不是条目名：拒绝，连扫描都不做', async (_label, entry) => {
+    const h = makeTool({ files: FILES })
+    expect(await rejectionOf(read(h, { entry }))).toBe(`"${entry}" is not an entry name`)
     expect(h.scan).not.toHaveBeenCalled()
     expectNothingHappened(h)
-    expect(h.files.get(`${DIR}/agent-md.md`)).toBe(ENTRY)
   })
 
-  it('KS-7 写手自己 submit：拒在一切之前（参数全缺也报这句），判据收的是这次调用的 scope', async () => {
-    const isReviewer = vi.fn((_call: ToolCallScope | undefined) => true)
-    const h = makeTool({ files: FILES, isReviewer })
+  it('KE-9 符号链接、真实磁盘上的东西一概够不着：read 只认扫描清单，从不问 port（stat / readFile / readLink）', async () => {
+    const h = makeTool({
+      files: FILES,
+      links: { [`${ROOT}/five.md`]: { target: '../../secret.md', resolved: '/kb/secret.md' } }
+    })
+    const res = await read(h, { entry: 'five.md' })
+    expect(res.isError).toBeFalsy()
+    expect(h.stat).not.toHaveBeenCalled()
+    expect(h.readFile).not.toHaveBeenCalled()
+  })
+})
+
+// ─── 1.6 submit —— 准入 ──────────────────────────────────────────────────────
+
+describe('KS-1..KS-9 submit 的准入', () => {
+  const FILES = { [`${ROOT}/a.md`]: ENTRY, [`${ROOT}/sub/b.md`]: ENTRY }
+  const NEEDS_CONTENT = '"submit" needs `content` — what to record, in markdown'
+  const NEEDS_BASE = '"submit" needs `base` — one of the names "bases" lists for this session'
+
+  it('KS-1 管理员自己 submit：拒在一切之前（参数全缺也报这句），判据收的是这次调用的 scope', async () => {
+    const isAdmin = vi.fn((_call: ToolCallScope | undefined) => true)
+    const h = makeTool({ files: FILES, isAdmin })
     const MSG =
-      'The knowledge librarian does not submit entries — edit the entry you were given and answer with `next`.'
+      'You are the librarian: record the submission yourself with the file tools, and answer with `next`.'
 
     expect(
       await rejectionOf(
         h.invoke(
-          { action: 'submit', base: 'project', path: 'a.md' },
+          { action: 'submit', base: 'project', content: 'x', entry: 'a.md' },
           { callId: 'w1', conversationId: 7 }
         )
       )
     ).toBe(MSG)
     expect(await rejectionOf(h.run('w2', { action: 'submit' }))).toBe(MSG)
 
-    expect(h.isReviewer).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 7 }))
+    expect(h.isAdmin).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 7 }))
     expect(h.resolveBase).not.toHaveBeenCalled()
-    expect(h.stat).not.toHaveBeenCalled()
+    expect(h.scan).not.toHaveBeenCalled()
+    expect(h.actor).not.toHaveBeenCalled()
     expectNothingHappened(h)
   })
 
-  it('KS-8 isReviewer 不碍读侧（写手要靠它们查重）；不注入 isReviewer 时 submit 照常（缺省 = 不是写手）', async () => {
-    const reviewer = makeTool({
-      files: FILES,
-      isReviewer: () => true,
-      bases: [{ base: 'project', label: 'project "Acme"', dir: ROOT }]
-    })
-    expect((await reviewer.run('r1', { action: 'list', base: 'project' })).isError).toBeFalsy()
-    expect(
-      textOf(await reviewer.run('r2', { action: 'search', base: 'project', query: 'da' }))
-    ).toContain(`${ROOT}/a.md`)
-    expect(textOf(await reviewer.run('r3', { action: 'bases' }))).toContain('- project')
-    expect(reviewer.isReviewer).not.toHaveBeenCalled()
-
-    const plain = makeTool({ files: FILES })
-    const res = await plain.run('p1', { action: 'submit', base: 'project', path: 'a.md' })
-    expect(res.isError).toBeFalsy()
-    expect(plain.review).toHaveBeenCalledTimes(1)
+  it('KS-2 缺 content（不传 / 空串 / 全空白）：先于 base 报（两样都缺报 content）；不解析', async () => {
+    const h = makeTool({ files: FILES })
+    expect(await rejectionOf(h.run('c1', { action: 'submit' }))).toBe(NEEDS_CONTENT)
+    for (const content of [undefined, '', '  \n\t ']) {
+      expect(
+        await rejectionOf(h.run('c2', { action: 'submit', base: 'project', content })),
+        JSON.stringify(content)
+      ).toBe(NEEDS_CONTENT)
+    }
+    expect(await rejectionOf(h.run('c3', { action: 'submit', content: 'x', base: ' ' }))).toBe(
+      NEEDS_BASE
+    )
+    expect(h.resolveBase).not.toHaveBeenCalled()
+    expectNothingHappened(h)
   })
 
-  it('KS-9 宿主不注入 review（扩展端）：报「不支持」，且在路径解析与存在检查之前 —— 文件在不在、路径越不越界都一样', async () => {
-    const h = makeTool({ files: FILES, review: null })
-    const MSG = 'Submitting entries is not available on this host'
-    for (const path of ['a.md', 'missing.md', '../x.md']) {
+  it('KS-3 base 解析失败是硬错误：失败文字恰为宿主那句原文；不扫描、不派', async () => {
+    const ERR = 'No knowledge base named "nope". Available: "project", "notes".'
+    const h = makeTool({ bundle: { error: ERR }, files: FILES })
+    expect(
+      await rejectionOf(
+        h.run('c1', { action: 'submit', base: 'nope', content: 'x', entry: 'a.md' })
+      )
+    ).toBe(ERR)
+    expect(h.scan).not.toHaveBeenCalled()
+    expectNothingHappened(h)
+  })
+
+  it('KS-4 只读库：在派管理员之前拒（点名库、指回 "bases"）；先于 entry 校验与「宿主不支持」', async () => {
+    const DIR = '/kb/builtin/shuvix/en'
+    const builtin: KnowledgeBundleTarget = {
+      dir: DIR,
+      label: 'ShuviX reference (read-only)',
+      readonly: true
+    }
+    const READONLY = `"shuvix" is read-only — it is ShuviX's own reference, shipped with the app. Submit to one of the user's knowledge bases instead ("bases" lists them).`
+    const h = makeTool({ bundle: builtin, files: { [`${DIR}/agent-md.md`]: ENTRY } })
+
+    // 去空白后的名字既用来解析，也是话里点名的那一个
+    expect(
+      await rejectionOf(h.run('c1', { action: 'submit', base: '  shuvix ', content: 'x' }))
+    ).toBe(READONLY)
+    expect(h.resolveBase.mock.calls).toEqual([['shuvix']])
+    // 越界 / 不在册的 entry 也报只读：entry 根本还没看
+    for (const entry of ['../x.md', 'missing.md']) {
       expect(
-        await rejectionOf(h.run('c1', { action: 'submit', base: 'project', path })),
-        path
+        await rejectionOf(h.run('c2', { action: 'submit', base: 'shuvix', content: 'x', entry })),
+        entry
+      ).toBe(READONLY)
+    }
+    // 宿主不注入 admin 也一样先报只读
+    const noAdmin = makeTool({ bundle: builtin, admin: null })
+    expect(
+      await rejectionOf(noAdmin.run('c3', { action: 'submit', base: 'shuvix', content: 'x' }))
+    ).toBe(READONLY)
+
+    expect(h.scan).not.toHaveBeenCalled()
+    expectNothingHappened(h)
+  })
+
+  it('KS-5 宿主不注入 admin（扩展端）：报「不支持」，在 entry 校验之前 —— entry 在不在册、越不越界都一样', async () => {
+    const h = makeTool({ files: FILES, admin: null })
+    const MSG = 'Submitting to a knowledge base is not available on this host'
+    for (const entry of [undefined, 'a.md', 'missing.md', '../x.md']) {
+      expect(
+        await rejectionOf(h.run('c1', { action: 'submit', base: 'project', content: 'x', entry })),
+        String(entry)
       ).toBe(MSG)
     }
-    expect(h.stat).not.toHaveBeenCalled()
-    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.scan).not.toHaveBeenCalled()
     expect(h.calls).toEqual([])
     expect(h.afterWrite).not.toHaveBeenCalled()
   })
 
-  it('KS-38 隐藏路径（任何一段以 `.` 开头）不是库内容：拒绝，绝对路径与库相对都一样', async () => {
-    const h = makeTool({
-      files: { ...FILES, [`${ROOT}/.obsidian/x.md`]: ENTRY, [`${ROOT}/sub/.draft.md`]: ENTRY }
-    })
-    for (const path of ['.obsidian/x.md', `${ROOT}/.obsidian/x.md`, 'sub/.draft.md']) {
-      expect(
-        await rejectionOf(h.run('c1', { action: 'submit', base: 'project', path })),
-        path
-      ).toBe(`"${path}" is a hidden path — it is not part of the knowledge base`)
+  it('KS-6 entry 校验与 read 同一套：不在册 → 「No entry …」，越界 → 「不是条目名」；都不派管理员、不取提交者', async () => {
+    const h = makeTool({ files: FILES })
+    const submit = (entry: string): Promise<Result> =>
+      h.run('c1', { action: 'submit', base: 'project', content: 'x', entry })
+    expect(await rejectionOf(submit('missing.md'))).toBe(
+      'No entry /missing.md in base "project" — "search" or "list" it for the right name'
+    )
+    expect(await rejectionOf(submit('../x.md'))).toBe('"../x.md" is not an entry name')
+    expect(await rejectionOf(submit(ROOT))).toBe(`"${ROOT}" is not an entry name`)
+    expect(h.actor).not.toHaveBeenCalled()
+    expectNothingHappened(h)
+  })
+
+  it('KS-7 entry 全空白 = 没点名：照常派，请求里没有 entry 键，也不为它扫描', async () => {
+    const h = makeTool({ files: FILES })
+    const res = await h.run('c1', { action: 'submit', base: 'project', content: 'x', entry: '  ' })
+    expect(res.isError, textOf(res)).toBeFalsy()
+    expect(h.admin).toHaveBeenCalledTimes(1)
+    expect(h.admin.mock.calls[0][0]).not.toHaveProperty('entry')
+    expect(h.scan).not.toHaveBeenCalled()
+  })
+
+  it('KS-8 不注入 isAdmin 时 submit 照常（缺省 = 不是管理员）', async () => {
+    const h = makeTool({ files: FILES })
+    const res = await h.run('p1', { action: 'submit', base: 'project', content: 'x' })
+    expect(res.isError).toBeFalsy()
+    expect(h.admin).toHaveBeenCalledTimes(1)
+  })
+
+  it('KS-9 准入顺序一览：管理员 → content → base → 解析 → 只读 → 宿主支持 → entry', async () => {
+    // 每一步都让它后面那一步也是坏的：报出来的必须是前面那一个
+    const builtin: KnowledgeBundleTarget = { dir: '/kb/b', label: 'ref', readonly: true }
+    const order: [string, ToolOptions, KnowledgeToolParams, string][] = [
+      [
+        '管理员先于缺 content',
+        { isAdmin: () => true },
+        { action: 'submit' },
+        'You are the librarian'
+      ],
+      ['content 先于 base', {}, { action: 'submit' }, 'needs `content`'],
+      [
+        'base 先于解析',
+        { bundle: { error: 'E' } },
+        { action: 'submit', content: 'x' },
+        'needs `base`'
+      ],
+      [
+        '解析先于只读',
+        { bundle: { error: 'resolve failed' } },
+        { action: 'submit', content: 'x', base: 'b' },
+        'resolve failed'
+      ],
+      [
+        '只读先于宿主支持',
+        { bundle: builtin, admin: null },
+        { action: 'submit', content: 'x', base: 'b', entry: '../x' },
+        'is read-only'
+      ],
+      [
+        '宿主支持先于 entry',
+        { admin: null },
+        { action: 'submit', content: 'x', base: 'b', entry: '../x' },
+        'not available on this host'
+      ]
+    ]
+    for (const [label, opts, params, expected] of order) {
+      const h = makeTool(opts)
+      expect(await rejectionOf(h.run('c1', params)), label).toContain(expected)
+      expect(h.admin, label).not.toHaveBeenCalled()
     }
-    expect(h.stat).not.toHaveBeenCalled()
-    expectNothingHappened(h)
-  })
-
-  it('KS-39 符号链接不跟（与文件工具同一条规矩）：拒绝并说出它通向哪里；不过门、不派写手', async () => {
-    const h = makeTool({
-      files: FILES,
-      links: { [`${ROOT}/a.md`]: { target: '../../secret.md', resolved: '/kb/secret.md' } }
-    })
-    expect(
-      await rejectionOf(h.run('c1', { action: 'submit', base: 'project', path: 'a.md' }))
-    ).toBe(
-      `${ROOT}/a.md is a symbolic link to /kb/secret.md — entries must be real files inside the base`
-    )
-    expectNothingHappened(h)
-    expect(h.files.get(`${ROOT}/a.md`)).toBe(ENTRY)
   })
 })
 
-// ─── 1.5 submit —— PEP ───────────────────────────────────────────────────────
+// ─── 1.7 submit —— 交给管理员的请求 ───────────────────────────────────────────
 
-describe('KS-10..KS-12 与文件工具同一道写门', () => {
-  it('KS-10 / KT-6b′ PEP 形状：write + 条目绝对路径 + 调用归属；先门、后派写手、再落盘、最后回调', async () => {
-    const h = makeTool({ files: { [`${ROOT}/sub/b.md`]: ENTRY }, abortError: 'TOOL_ABORTED' })
-    await h.invoke(
-      { action: 'submit', base: 'project', path: 'sub/b.md' },
-      { callId: 'c7', taskId: 21, conversationId: 9 }
-    )
-    const abs = `${ROOT}/sub/b.md`
-    expect(h.enforcePath).toHaveBeenCalledTimes(1)
-    expect(h.enforcePath).toHaveBeenCalledWith(
-      'write',
-      abs,
-      expect.objectContaining({
-        toolCallId: 'c7',
-        taskId: 21,
-        conversationId: 9,
-        toolName: 'knowledge',
-        displayPath: abs,
-        operation: 'submit',
-        abortError: 'TOOL_ABORTED'
-      })
-    )
-    expect(h.calls).toEqual([
-      `enforce:write:${abs}`,
-      `review:${abs}`,
-      `write:${abs}`,
-      `after:${ROOT}|sub/b.md`
-    ])
-  })
-
-  it('KS-11 PEP 拒绝：失败文字即那句话；写手不派、文件一字不动、不回调', async () => {
-    const DENIED = `User denied access to ${ROOT}/a.md`
-    const enforcePath = vi.fn(async () => {
-      throw new Error(DENIED)
-    })
-    const h = makeTool({
-      files: { [`${ROOT}/a.md`]: ENTRY },
-      security: { enforcePath } as unknown as SecurityContext
-    })
-    expect(
-      await rejectionOf(h.run('c1', { action: 'submit', base: 'project', path: 'a.md' }))
-    ).toBe(DENIED)
-    expect(enforcePath).toHaveBeenCalledTimes(1)
-    expect(h.review).not.toHaveBeenCalled()
-    expect(h.files.get(`${ROOT}/a.md`)).toBe(ENTRY)
-    expect(h.afterWrite).not.toHaveBeenCalled()
-  })
-
-  it('KS-12 PEP 收到这次调用的取消信号（按中止态联动判，不比对象同一性）', async () => {
-    let seen: AbortSignal | undefined
-    const enforcePath = vi.fn(async (_m: string, _p: string, opts: { signal?: AbortSignal }) => {
-      seen = opts.signal
-    })
-    const h = makeTool({
-      files: { [`${ROOT}/a.md`]: ENTRY },
-      security: { enforcePath } as unknown as SecurityContext
-    })
-    const controller = new AbortController()
-    await h.run('c1', { action: 'submit', base: 'project', path: 'a.md' }, controller.signal)
-    expect(seen).toBeDefined()
-    expect(seen!.aborted).toBe(false)
-    controller.abort()
-    expect(seen!.aborted).toBe(true)
-  })
-})
-
-// ─── 1.6 submit —— 交给写手的请求 ─────────────────────────────────────────────
-
-describe('KS-13..KS-14 交给写手的请求', () => {
-  it('KS-13 请求体恰为 {base, label, bundleDir, path, rel, submittedBy}；第二参带这次调用的 scope 与 toolCallId', async () => {
+describe('KS-10..KS-14 交给管理员的请求', () => {
+  it('KS-10 请求体恰为 {base, label, bundleDir, content, submittedBy}（没点名 entry 就没有这个键）；content 去首尾空白；第二参带这次调用的 scope 与 toolCallId', async () => {
     const DIR = '/u/读书笔记'
-    const h = makeTool({
-      bundle: { dir: DIR, label: 'knowledge base "读书笔记"' },
-      files: { [`${DIR}/sub/x.md`]: ENTRY }
-    })
+    const h = makeTool({ bundle: { dir: DIR, label: 'knowledge base "读书笔记"' } })
     await h.invoke(
-      { action: 'submit', base: '  读书笔记 ', path: `${DIR}/sub/x.md` },
-      { callId: 'k13', taskId: 5, conversationId: 3 }
+      {
+        action: 'submit',
+        base: '  读书笔记 ',
+        content: '\n  ## Token refresh\n\nrefresh early.  \n'
+      },
+      { callId: 'k10', taskId: 5, conversationId: 3 }
     )
     expect(h.resolveBase).toHaveBeenCalledWith('读书笔记')
-    expect(h.review).toHaveBeenCalledTimes(1)
-    const [req, ctx] = h.review.mock.calls[0]
+    expect(h.admin).toHaveBeenCalledTimes(1)
+    const [req, ctx] = h.admin.mock.calls[0]
     expect(req).toStrictEqual({
       base: '读书笔记',
       label: 'knowledge base "读书笔记"',
       bundleDir: DIR,
-      path: `${DIR}/sub/x.md`,
-      rel: 'sub/x.md',
+      content: '## Token refresh\n\nrefresh early.',
       submittedBy: ACTOR
     })
     expect(ctx).toEqual({
-      call: expect.objectContaining({ callId: 'k13', taskId: 5, conversationId: 3 }),
-      toolCallId: 'k13',
+      call: expect.objectContaining({ callId: 'k10', taskId: 5, conversationId: 3 }),
+      toolCallId: 'k10',
       signal: undefined
     })
   })
 
-  it('KS-14 提交者按调用现取：同一工具两次 submit、两个对话 → 请求与落盘的 generated.by 各是各的', async () => {
+  it.each([
+    ['/sub/b.md'],
+    ['sub/b.md'],
+    ['sub/b'],
+    ['  /sub/b  '],
+    ['sub\\b.md'],
+    [`${ROOT}/sub/b.md`]
+  ])(
+    'KS-11 点名的 entry（%s）归一成库内相对路径、不带前导 / ：entry = "sub/b.md"',
+    async (entry) => {
+      const h = makeTool({ files: { [`${ROOT}/sub/b.md`]: ENTRY } })
+      await h.run('c1', { action: 'submit', base: 'project', content: 'fix', entry })
+      expect(h.admin.mock.calls[0][0]).toStrictEqual({
+        base: 'project',
+        label: 'project "Acme"',
+        bundleDir: ROOT,
+        content: 'fix',
+        entry: 'sub/b.md',
+        submittedBy: ACTOR
+      })
+      expect(h.scan).toHaveBeenCalledWith(ROOT)
+    }
+  )
+
+  it('KS-12 提交者按调用现取：同一工具两次 submit、两个对话 → 请求与章里的 generated.by 各是各的', async () => {
     const actor = (call: ToolCallScope | undefined): string =>
       call?.conversationId === 1 ? 'shuvix-work/a' : 'shuvix-explore/b'
     const h = makeTool({
-      files: { [`${ROOT}/a.md`]: ENTRY, [`${ROOT}/b.md`]: ENTRY },
-      actor
+      actor,
+      admin: async (req, ctx, files) => librarian({ [req.content]: ENTRY })(req, ctx, files)
     })
-    await h.invoke({ action: 'submit', base: 'project', path: 'a.md' }, { conversationId: 1 })
-    await h.invoke({ action: 'submit', base: 'project', path: 'b.md' }, { conversationId: 2 })
+    await h.invoke({ action: 'submit', base: 'project', content: 'a.md' }, { conversationId: 1 })
+    await h.invoke({ action: 'submit', base: 'project', content: 'b.md' }, { conversationId: 2 })
 
-    expect(h.review.mock.calls.map(([req]) => req.submittedBy)).toEqual([
+    expect(h.admin.mock.calls.map(([req]) => req.submittedBy)).toEqual([
       'shuvix-work/a',
       'shuvix-explore/b'
     ])
@@ -1550,300 +1979,566 @@ describe('KS-13..KS-14 交给写手的请求', () => {
     expect(h.files.get(`${ROOT}/b.md`)).toContain(`generated: { by: "shuvix-explore/b", at:`)
     expect(h.actor.mock.calls.map(([call]) => call?.conversationId)).toEqual([1, 2])
   })
+
+  it('KS-13 管理员收到这次调用的取消信号（按中止态联动判，不比对象同一性）', async () => {
+    const h = makeTool()
+    const controller = new AbortController()
+    await h.run('c1', { action: 'submit', base: 'project', content: 'x' }, controller.signal)
+    const seen = h.admin.mock.calls[0][1].signal
+    expect(seen).toBeDefined()
+    expect(seen!.aborted).toBe(false)
+    controller.abort()
+    expect(seen!.aborted).toBe(true)
+  })
+
+  it('KS-14 管理员同步跑完才回：一次 submit 恰派一次；请求里的库目录只经这里交给管理员', async () => {
+    const h = makeTool({ admin: librarian({ 'x.md': ENTRY }) })
+    const res = await h.run('c1', { action: 'submit', base: 'project', content: 'x' })
+    expect(h.admin).toHaveBeenCalledTimes(1)
+    expect(h.admin.mock.calls[0][0].bundleDir).toBe(ROOT)
+    // 回包时管理员已经写完、宿主已经盖完
+    expect(textOf(res).split('\n')[1]).toBe('- /x.md (created)')
+    expect(h.files.get(`${ROOT}/x.md`)).toContain(VERIFIED_LINE)
+  })
 })
 
-// ─── 1.7 submit —— 写手结论的分支 ─────────────────────────────────────────────
+// ─── 1.8 submit —— 管理员结论的分支 ───────────────────────────────────────────
 
-describe('KS-20..KS-37 写手结论的分支', () => {
-  const ABS = `${ROOT}/a.md`
-  /** 写手 edit 过的版本：补了 frontmatter，写钩子把 generated 盖成了写手自己 */
-  const WRITER_AT = '2026-10-12T07:59:00.000Z'
-  const WRITER_VERSION = doc(
-    [
-      'shuvix: okf v0.2',
-      'type: Memory',
-      'title: Plain',
-      'description: dp',
-      'status: stable',
-      `generated: { by: "${REVIEWER}", at: "${WRITER_AT}" }`
-    ],
-    '# Plain\n\nbody'
-  )
-  const submit = (h: Harness, path = 'a.md'): Promise<Result> =>
-    h.run('c1', { action: 'submit', base: 'project', path })
+describe('KS-20..KS-27 管理员结论的分支', () => {
+  const submit = (h: Harness, params: Partial<KnowledgeToolParams> = {}): Promise<Result> =>
+    h.run('c1', { action: 'submit', base: 'project', content: 'x', ...params })
 
-  it('KS-20 写手没跑成（error）→ 失败点名条目与原因；文件不动、不回调、没取时间', async () => {
+  it('KS-20 管理员没跑成（error）→ 失败带原因；不盖章、不回调、没取时间', async () => {
     const h = makeTool({
-      files: { [ABS]: ENTRY },
-      review: async () => ({ error: 'aborted by user' })
+      files: { [`${ROOT}/a.md`]: ENTRY },
+      admin: async () => ({ error: 'it finished without an answer' })
     })
     expect(await rejectionOf(submit(h))).toBe(
-      `The knowledge librarian could not check ${ABS}: aborted by user`
+      'The knowledge librarian could not take the submission: it finished without an answer'
     )
-    expect(h.files.get(ABS)).toBe(ENTRY)
+    expect(h.files.get(`${ROOT}/a.md`)).toBe(ENTRY)
+    expect(h.calls).toEqual(['admin:project'])
     expect(h.afterWrite).not.toHaveBeenCalled()
     expect(h.now).not.toHaveBeenCalled()
   })
 
-  it('KS-21 review 自己失败（宿主抛错）→ 失败带那句消息；不盖章', async () => {
+  it('KS-20b 没跑成的原因里带着库目录 → 同报告一样换成条目名的写法，提交者看不到目录', async () => {
+    const h = makeTool({ admin: async () => ({ error: `could not write ${ROOT}/a.md` }) })
+    const failure = await rejectionOf(submit(h))
+    expect(failure).toBe(
+      'The knowledge librarian could not take the submission: could not write /a.md'
+    )
+    expect(failure).not.toContain(ROOT)
+  })
+
+  it('KS-21 admin 自己抛错（宿主那一侧失败）→ 失败带那句消息；不盖章', async () => {
     const h = makeTool({
-      files: { [ABS]: ENTRY },
-      review: async () => {
+      files: { [`${ROOT}/a.md`]: ENTRY },
+      admin: async () => {
         throw new Error('invalid result contract: result schema must declare top-level `type`')
       }
     })
     expect(await rejectionOf(submit(h))).toContain('invalid result contract')
-    expect(h.files.get(ABS)).toBe(ENTRY)
+    expect(h.files.get(`${ROOT}/a.md`)).toBe(ENTRY)
     expect(h.afterWrite).not.toHaveBeenCalled()
+    expect(h.now).not.toHaveBeenCalled()
   })
 
-  it('KS-22 不通过是正常结论（不是失败）：逐行「Not confirmed / 报告原文 / 先重读再修」；不写、不回调', async () => {
-    const report = 'Two subjects — split it.\nNo source for claim 2.'
+  it('KS-20b 没跑成的原因里带着库目录 → 同报告一样换成条目名的写法，提交者看不到目录', async () => {
+    const h = makeTool({ admin: async () => ({ error: `could not write ${ROOT}/a.md` }) })
+    const failure = await rejectionOf(submit(h))
+    expect(failure).toBe(
+      'The knowledge librarian could not take the submission: could not write /a.md'
+    )
+    expect(failure).not.toContain(ROOT)
+  })
+
+  it('KS-22 不收是正常结论（不是失败）：「Not recorded in base …」+ 空行 + 报告原文；不盖章、不回调 —— 哪怕它报了动过的条目', async () => {
+    const report = 'Already recorded in /auth/token.md.\nNothing new.'
     const h = makeTool({
-      files: { [ABS]: ENTRY },
-      review: async () => ({ passed: false, report, reviewer: REVIEWER })
+      files: { [`${ROOT}/a.md`]: ENTRY },
+      admin: async () => ({
+        accepted: false,
+        entries: [{ entry: 'a.md', change: 'updated' }],
+        report,
+        admin: ADMIN
+      })
     })
     const res = await submit(h)
     expect(res.isError).toBeFalsy()
     expect(textOf(res).split('\n')).toEqual([
-      `Not confirmed: ${ABS}`,
+      'Not recorded in base "project".',
       '',
-      'Two subjects — split it.',
-      'No source for claim 2.',
-      '',
-      'Fix the entry and submit it again. Re-read it first — the librarian may have edited its metadata.'
+      'Already recorded in /auth/token.md.',
+      'Nothing new.'
     ])
-    expect(res.details).toEqual({ action: 'submit', path: 'a.md' })
-    expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
+    expect(res.details).toEqual({ action: 'submit' })
+    expect(h.files.get(`${ROOT}/a.md`)).toBe(ENTRY)
+    expect(h.calls).toEqual(['admin:project'])
     expect(h.afterWrite).not.toHaveBeenCalled()
+    expect(h.now).not.toHaveBeenCalled()
   })
 
-  it('KS-23 不通过但写手改过文件：保持写手改后的样子（宿主不回滚），没有 verified，generated 仍是写手版本里的', async () => {
-    const h = makeTool({
-      files: { [ABS]: PLAIN },
-      review: async (req, _ctx, files) => {
-        files.set(req.path, WRITER_VERSION)
-        return { passed: false, report: 'No source.', reviewer: REVIEWER }
-      }
-    })
-    await submit(h)
-    expect(h.files.get(ABS)).toBe(WRITER_VERSION)
-    expect(h.files.get(ABS)).not.toContain('verified')
-    expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
+  it('KS-20b 没跑成的原因里带着库目录 → 同报告一样换成条目名的写法，提交者看不到目录', async () => {
+    const h = makeTool({ admin: async () => ({ error: `could not write ${ROOT}/a.md` }) })
+    const failure = await rejectionOf(submit(h))
+    expect(failure).toBe(
+      'The knowledge librarian could not take the submission: could not write /a.md'
+    )
+    expect(failure).not.toContain(ROOT)
   })
 
-  it('KS-24 report 为空 → 正文那一行是 `(no report)`（通过与不通过都一样）', async () => {
-    const failed = makeTool({
-      files: { [ABS]: ENTRY },
-      review: async () => ({ passed: false, report: '', reviewer: REVIEWER })
+  it('KS-23 报告为空 → 正文那一行是 `(no report)`（收与不收都一样）', async () => {
+    const declined = makeTool({
+      admin: async () => ({ accepted: false, entries: [], report: '', admin: ADMIN })
     })
-    expect(textOf(await submit(failed)).split('\n')[2]).toBe('(no report)')
+    expect(textOf(await submit(declined)).split('\n')).toEqual([
+      'Not recorded in base "project".',
+      '',
+      '(no report)'
+    ])
 
-    const passed = makeTool({
-      files: { [ABS]: ENTRY },
-      review: async () => ({ passed: true, report: '', reviewer: REVIEWER })
-    })
-    expect(textOf(await submit(passed)).split('\n')).toEqual([
-      `Confirmed: ${ABS} (machine-confirmed by ${REVIEWER}). Re-read it before editing it again.`,
+    const taken = makeTool({ admin: librarian({ 'x.md': ENTRY }, '') })
+    expect(textOf(await submit(taken)).split('\n')).toEqual([
+      'Recorded in base "project":',
+      '- /x.md (created)',
       '',
       '(no report)'
     ])
   })
 
-  /** 写手判过、文件却仍过不了格式：不盖章，说清哪里不行 */
-  const brokenAfterPass = (lines: string[]): string[] => [
-    `Not confirmed: ${ABS} — the librarian passed it, but the file still breaks the format:`,
-    ...lines,
-    '',
-    'ok',
-    '',
-    'Submit it again.'
-  ]
-
-  it.each([
-    ['KS-25 普通笔记（没有 frontmatter）', PLAIN, ['- it has no OKF frontmatter with a `type`']],
-    [
-      'KS-26 带自述行但缺 type',
-      doc(['shuvix: okf v0.2', 'title: A', 'description: da']),
-      ["- 'type' is required and must be a non-empty string"]
-    ],
-    [
-      'KS-27 带自述行、YAML 写坏',
-      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: [x\n---\n\nbody\n',
-      ['- frontmatter is not parseable YAML, or is not a key/value mapping']
-    ],
-    [
-      // 外来标记不是概念：章不能盖到别家契约的文件上
-      'KS-28 外来标记（agent md）',
-      doc(['shuvix: agent v1', 'type: Memory', 'name: x']),
-      ['- it has no OKF frontmatter with a `type`']
-    ]
-  ])('%s：写手判过也不盖章，不写盘、不回调', async (_label, text, why) => {
-    const h = makeTool({ files: { [ABS]: text } })
-    const res = await submit(h)
-    expect(res.isError).toBeFalsy()
-    expect(textOf(res).split('\n')).toEqual(brokenAfterPass(why))
-    expect(res.details).toEqual({ action: 'submit', path: 'a.md' })
-    expect(h.files.get(ABS)).toBe(text)
-    expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
-    expect(h.afterWrite).not.toHaveBeenCalled()
-  })
-
-  it('KS-29 只有 warning（缺 description）不挡章：照常盖章、Confirmed', async () => {
-    const text = doc(['shuvix: okf v0.2', 'type: Memory', 'title: A'])
-    const h = makeTool({ files: { [ABS]: text } })
-    const res = await submit(h)
-    expect(textOf(res).startsWith(`Confirmed: ${ABS}`)).toBe(true)
-    expect(h.files.get(ABS)).toContain(VERIFIED_LINE)
-  })
-
-  it('KS-30 通过 → 盖章：generated 记提交者、verified 记写手，同一时刻（now 只取一次）；回读是机器确认且仍当前', async () => {
-    const h = makeTool({ files: { [ABS]: ENTRY } })
+  it('KS-24 收了却一条没动：「Recorded in base ….」（句号，没有条目行）+ 报告；details 不带 path', async () => {
+    const h = makeTool({
+      admin: reports([], 'Merged into the existing wording; no change needed.')
+    })
     const res = await submit(h)
     expect(textOf(res).split('\n')).toEqual([
-      `Confirmed: ${ABS} (machine-confirmed by ${REVIEWER}). Re-read it before editing it again.`,
+      'Recorded in base "project".',
+      '',
+      'Merged into the existing wording; no change needed.'
+    ])
+    expect(res.details).toEqual({ action: 'submit' })
+    expect(h.calls).toEqual(['admin:project'])
+  })
+
+  it('KS-25 报告里的库目录换成条目名的写法（`<dir>/x.md` → `/x.md`，光目录 → `/`）；不收的报告也一样', async () => {
+    const h = makeTool({
+      admin: librarian(
+        { 'auth/x.md': ENTRY },
+        (req) => `Wrote ${req.bundleDir}/auth/x.md.\nThe base lives at ${req.bundleDir}.`
+      )
+    })
+    expect(
+      textOf(await submit(h))
+        .split('\n')
+        .slice(-2)
+    ).toEqual(['Wrote /auth/x.md.', 'The base lives at /.'])
+
+    const declined = makeTool({
+      admin: async (req) => ({
+        accepted: false,
+        entries: [],
+        report: `See ${req.bundleDir}/a.md`,
+        admin: ADMIN
+      })
+    })
+    expect(textOf(await submit(declined)).split('\n')[2]).toBe('See /a.md')
+  })
+
+  it('KS-25b Windows 库目录：反斜杠与正斜杠两种写法、尾随分隔符都换掉', async () => {
+    const DIR = 'C:\\kb\\notes\\'
+    const h = makeTool({
+      bundle: { dir: DIR, label: 'knowledge base "notes"' },
+      admin: async () => ({
+        accepted: false,
+        entries: [],
+        report: 'Saw C:\\kb\\notes\\a.md and C:/kb/notes/sub/b.md under C:\\kb\\notes',
+        admin: ADMIN
+      })
+    })
+    const text = textOf(await submit(h, { base: 'notes' }))
+    expect(text.split('\n')[2]).toBe('Saw /a.md and /sub/b.md under /')
+    expect(text).not.toContain('kb')
+  })
+
+  it('KS-26 中止：已中止的 signal → reject 注入的 abortError、管理员不派；管理员跑的时候中止 → 迟到的「收了」不算数，不盖章', async () => {
+    const aborted = new AbortController()
+    aborted.abort()
+    const h1 = makeTool({ abortError: 'TOOL_ABORTED' })
+    await expect(
+      h1.run('c1', { action: 'submit', base: 'project', content: 'x' }, aborted.signal)
+    ).rejects.toThrow('TOOL_ABORTED')
+    expect(h1.admin).not.toHaveBeenCalled()
+
+    const during = new AbortController()
+    const h2 = makeTool({
+      abortError: 'TOOL_ABORTED',
+      admin: async (req, ctx, files) => {
+        const out = await librarian({ 'x.md': ENTRY })(req, ctx, files)
+        during.abort()
+        return out
+      }
+    })
+    await expect(
+      h2.run('c2', { action: 'submit', base: 'project', content: 'x' }, during.signal)
+    ).rejects.toThrow('TOOL_ABORTED')
+    // 管理员已经写下的东西留着（宿主不回滚），只是不盖章
+    expect(h2.files.get(`${ROOT}/x.md`)).toBe(ENTRY)
+    expect(h2.calls).toEqual(['admin:project'])
+    expect(h2.afterWrite).not.toHaveBeenCalled()
+    expect(h2.now).not.toHaveBeenCalled()
+  })
+
+  it('KS-27 没有注入 abortError 时中止 reject 的是缺省的 "Aborted"', async () => {
+    const aborted = new AbortController()
+    aborted.abort()
+    const h = makeTool()
+    await expect(
+      h.run('c1', { action: 'submit', base: 'project', content: 'x' }, aborted.signal)
+    ).rejects.toThrow('Aborted')
+  })
+})
+
+// ─── 1.9 submit —— 收了之后的盖章 ────────────────────────────────────────────
+
+describe('KS-30..KS-46 收录之后宿主盖章', () => {
+  /** 管理员写的版本：写钩子把 generated 盖成了管理员自己 */
+  const ADMIN_AT = '2026-11-08T07:59:00.000Z'
+  const X = doc([
+    'shuvix: okf v0.2',
+    'type: Memory',
+    'title: X',
+    'description: dx',
+    'status: stable',
+    `generated: { by: "${ADMIN}", at: "${ADMIN_AT}" }`
+  ])
+  const X_STAMPED = doc([
+    'shuvix: okf v0.2',
+    'type: Memory',
+    'title: X',
+    'description: dx',
+    'status: stable',
+    GENERATED_LINE,
+    VERIFIED_LINE
+  ])
+  const submit = (h: Harness): Promise<Result> =>
+    h.run('c1', { action: 'submit', base: 'project', content: 'x' })
+
+  it('KS-30 created → 盖章：generated 改回提交者、verified 记管理员，同一时刻（now 只取一次）；回读是机器确认且仍当前', async () => {
+    const h = makeTool({ admin: librarian({ 'auth/x.md': X }) })
+    const res = await submit(h)
+    expect(textOf(res).split('\n')).toEqual([
+      'Recorded in base "project":',
+      '- /auth/x.md (created)',
       '',
       'ok'
     ])
-    expect(res.details).toEqual({ action: 'submit', path: 'a.md' })
-    expect(h.files.get(ABS)).toBe(
-      doc([
-        'shuvix: okf v0.2',
-        'type: Memory',
-        'title: A',
-        'description: da',
-        'status: stable',
-        GENERATED_LINE,
-        VERIFIED_LINE
-      ])
-    )
+    expect(res.details).toEqual({ action: 'submit', path: 'auth/x.md' })
+    expect(h.files.get(`${ROOT}/auth/x.md`)).toBe(X_STAMPED)
     expect(h.now).toHaveBeenCalledTimes(1)
-    const concept = parseConceptText(h.files.get(ABS)!, 'a.md')!
+    const concept = parseConceptText(h.files.get(`${ROOT}/auth/x.md`)!, 'auth/x.md')!
+    expect(concept.generated).toEqual({ by: ACTOR, at: NOW_ISO })
     expect(isVerificationCurrent(concept)).toBe(true)
     expect(currentTrustTierOf(concept)).toBe('machine-confirmed')
   })
 
-  it('KS-31 主流程：普通笔记 → 写手补元数据 → 宿主盖章；读的是派写手之后的内容，generated 改回提交者', async () => {
-    const h = makeTool({
-      files: { [ABS]: PLAIN },
-      review: async (req, _ctx, files) => {
-        files.set(req.path, WRITER_VERSION)
-        return { passed: true, report: 'Added type and description.', reviewer: REVIEWER }
-      }
+  it('KS-31 updated → 同样盖章；点名的那一条被改写', async () => {
+    const h = makeTool({ files: { [`${ROOT}/a.md`]: ENTRY }, admin: librarian({ 'a.md': X }) })
+    const res = await h.run('c1', {
+      action: 'submit',
+      base: 'project',
+      content: 'correction',
+      entry: '/a.md'
     })
-    const res = await submit(h)
-    expect(textOf(res).startsWith(`Confirmed: ${ABS}`)).toBe(true)
-    expect(h.files.get(ABS)).toBe(
-      doc(
-        [
-          'shuvix: okf v0.2',
-          'type: Memory',
-          'title: Plain',
-          'description: dp',
-          'status: stable',
-          GENERATED_LINE,
-          VERIFIED_LINE
-        ],
-        '# Plain\n\nbody'
-      )
-    )
+    expect(textOf(res).split('\n')[1]).toBe('- /a.md (updated)')
+    expect(h.files.get(`${ROOT}/a.md`)).toBe(X_STAMPED)
   })
 
-  it('KS-32 旧章处置：人工章保留在前、旧机器章被替换，只剩一条机器章；回读是机器确认', async () => {
+  it('KS-32 deleted 不盖、不查、不标；改名 = 旧的 deleted + 新的 created，只有新的那一条盖章', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/old.md`]: ENTRY },
+      admin: librarian({ 'old.md': null, 'new.md': X })
+    })
+    const res = await submit(h)
+    expect(textOf(res).split('\n')).toEqual([
+      'Recorded in base "project":',
+      '- /old.md (deleted)',
+      '- /new.md (created)',
+      '',
+      'ok'
+    ])
+    expect(res.details).toEqual({ action: 'submit', path: 'old.md' })
+    expect(h.files.has(`${ROOT}/old.md`)).toBe(false)
+    expect(h.files.get(`${ROOT}/new.md`)).toBe(X_STAMPED)
+    expect(h.stat.mock.calls.map(([p]) => p)).toEqual([`${ROOT}/new.md`])
+    expect(h.calls).toEqual(['admin:project', `write:${ROOT}/new.md`, `after:${ROOT}|new.md`])
+  })
+
+  it('KS-33 普通笔记（没有 frontmatter）照用户的写法留着：不盖章、不标、不回调', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/plain.md`]: PLAIN },
+      admin: librarian({ 'plain.md': `${PLAIN}\nmore\n` })
+    })
+    const res = await submit(h)
+    expect(textOf(res).split('\n')[1]).toBe('- /plain.md (updated)')
+    expect(h.files.get(`${ROOT}/plain.md`)).toBe(`${PLAIN}\nmore\n`)
+    expect(h.calls).toEqual(['admin:project'])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+  })
+
+  it('KS-34 不是 OKF 的 frontmatter（别家的标记、没有 type 的普通元数据）同样不动、不标', async () => {
+    const AGENT_MD = doc(['shuvix: agent v1', 'type: Memory', 'name: x'])
+    const META = doc(['title: just a title', 'tags: [a]'])
+    const h = makeTool({ admin: librarian({ 'agent.md': AGENT_MD, 'meta.md': META }) })
+    expect(
+      textOf(await submit(h))
+        .split('\n')
+        .slice(1, 3)
+    ).toEqual(['- /agent.md (created)', '- /meta.md (created)'])
+    expect(h.files.get(`${ROOT}/agent.md`)).toBe(AGENT_MD)
+    expect(h.files.get(`${ROOT}/meta.md`)).toBe(META)
+    expect(h.calls).toEqual(['admin:project'])
+  })
+
+  /** 带 ShuviX 自述行、却过不了格式的条目：管理员写坏了 */
+  const BROKEN: [string, string, string][] = [
+    [
+      '缺 type',
+      doc(['shuvix: okf v0.2', 'title: A', 'description: da']),
+      "'type' is required and must be a non-empty string"
+    ],
+    [
+      'YAML 写坏',
+      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: [x\n---\n\nbody\n',
+      'frontmatter is not parseable YAML, or is not a key/value mapping'
+    ]
+  ]
+
+  it('KS-35a 带自述行却过不了格式的条目：不盖章、不回调（管理员的一句「收了」不能替校验作证）', async () => {
+    for (const [label, text] of BROKEN) {
+      const h = makeTool({ admin: librarian({ 'broken.md': text }) })
+      const res = await submit(h)
+      expect(res.isError, label).toBeFalsy()
+      expect(h.files.get(`${ROOT}/broken.md`), label).toBe(text)
+      expect(h.calls, label).toEqual(['admin:project'])
+      expect(h.afterWrite, label).not.toHaveBeenCalled()
+    }
+  })
+
+  // 回归：stampChanged 曾先按 isOkfConceptText 筛、筛下来的一律当普通笔记跳过 —— 可 validateKnowledgeText 的
+  // error 只有「没有 frontmatter / YAML 写坏 / 缺 type」三种，都让 isOkfConceptText 为假，「not confirmed — …」
+  // 那一支因此永远走不到。现在先校验、再判是不是 OKF 条目
+  it('KS-35b 带自述行却过不了格式的条目在那一行标出来：`(created; not confirmed — <校验原文>)`', async () => {
+    for (const [label, text, why] of BROKEN) {
+      const h = makeTool({ admin: librarian({ 'broken.md': text }) })
+      expect(textOf(await submit(h)).split('\n')[1], label).toBe(
+        `- /broken.md (created; not confirmed — ${why})`
+      )
+    }
+  })
+
+  it('KS-36b 报上来的是保留名（index.md / log.md，带 OKF frontmatter 也一样）→ 标 `a reserved name, not an entry`；不盖章', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/index.md`]: ENTRY, [`${ROOT}/sub/log.md`]: ENTRY },
+      admin: reports([
+        { entry: 'index.md', change: 'updated' },
+        { entry: 'sub/log.md', change: 'created' }
+      ])
+    })
+    const lines = textOf(await submit(h)).split('\n')
+    expect(lines.slice(1, 3)).toEqual([
+      '- /index.md (updated; a reserved name, not an entry)',
+      '- /sub/log.md (created; a reserved name, not an entry)'
+    ])
+    expect(h.files.get(`${ROOT}/index.md`)).toBe(ENTRY)
+    expect(h.files.get(`${ROOT}/sub/log.md`)).toBe(ENTRY)
+    expect(h.afterWrite).not.toHaveBeenCalled()
+  })
+
+  it('KS-36 报了却不在（管理员说建了、文件没有）→ 那一行标 `not found`；不写', async () => {
+    const h = makeTool({ admin: reports([{ entry: 'ghost.md', change: 'created' }]) })
+    const res = await submit(h)
+    expect(res.isError).toBeFalsy()
+    expect(textOf(res).split('\n')[1]).toBe('- /ghost.md (created; not found)')
+    expect(h.calls).toEqual(['admin:project'])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+  })
+
+  it('KS-37 符号链接不跟（章会写进它通向的那头）→ 那一行标 `a symbolic link, not confirmed`；链接与它通向的文件都不动', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/link.md`]: ENTRY, '/kb/secret.md': ENTRY },
+      links: { [`${ROOT}/link.md`]: { target: '../../secret.md', resolved: '/kb/secret.md' } },
+      admin: reports([{ entry: 'link.md', change: 'updated' }])
+    })
+    expect(textOf(await submit(h)).split('\n')[1]).toBe(
+      '- /link.md (updated; a symbolic link, not confirmed)'
+    )
+    expect(h.files.get(`${ROOT}/link.md`)).toBe(ENTRY)
+    expect(h.files.get('/kb/secret.md')).toBe(ENTRY)
+    expect(h.readFile).not.toHaveBeenCalled()
+    expect(h.calls).toEqual(['admin:project'])
+  })
+
+  it('KS-38 报上来的不是条目名（越界、不是 .md、空）→ 那一行标 `not an entry name`；不问 port', async () => {
+    const h = makeTool({
+      files: { '/kb/projects/x.md': ENTRY },
+      admin: reports([
+        { entry: '../x.md', change: 'updated' },
+        { entry: 'notes.txt', change: 'created' },
+        { entry: '', change: 'created' }
+      ])
+    })
+    expect(
+      textOf(await submit(h))
+        .split('\n')
+        .slice(1, 4)
+    ).toEqual([
+      '- /../x.md (updated; not an entry name)',
+      '- /notes.txt (created; not an entry name)',
+      '- / (created; not an entry name)'
+    ])
+    expect(h.stat).not.toHaveBeenCalled()
+    expect(h.files.get('/kb/projects/x.md')).toBe(ENTRY)
+    expect(h.calls).toEqual(['admin:project'])
+  })
+
+  it('KS-39 旧章处置：人工章原样保留在前、旧机器章被替换，只剩一条机器章；回读是机器确认', async () => {
     const T0 = '2026-09-01T00:00:00.000Z'
     const text = doc([
       'shuvix: okf v0.2',
       'type: Memory',
       'title: A',
       'description: da',
-      `verified: [{ by: "human:alice", at: "${T0}" }, { by: "shuvix-knowledge-writer/old", at: "${T0}" }]`
+      `verified: [{ by: "human:alice", at: "${T0}", note: "checked" }, { by: "shuvix-knowledge-writer/old", at: "${T0}" }]`
     ])
-    const h = makeTool({ files: { [ABS]: text } })
+    const h = makeTool({ files: { [`${ROOT}/a.md`]: text }, admin: librarian({ 'a.md': text }) })
     await submit(h)
-    const concept = parseConceptText(h.files.get(ABS)!, 'a.md')!
+    const concept = parseConceptText(h.files.get(`${ROOT}/a.md`)!, 'a.md')!
     expect(concept.verified).toEqual([
       { by: 'human:alice', at: T0 },
-      { by: REVIEWER, at: NOW_ISO }
+      { by: ADMIN, at: NOW_ISO }
     ])
+    // 人工章连同多出来的键原样写回（宿主不替人改写他的记录）
+    expect(h.files.get(`${ROOT}/a.md`)).toContain(
+      `verified: [{"by":"human:alice","at":"${T0}","note":"checked"}, { by: "${ADMIN}", at: "${NOW_ISO}" }]`
+    )
     expect(currentTrustTierOf(concept)).toBe('machine-confirmed')
   })
 
-  it('KS-33 afterWrite：通过且文件真被改写 → 恰一次，参数只有 {bundleDir, path}（没有 title）与这次调用的 scope，排在落盘之后', async () => {
-    const h = makeTool({ files: { [ABS]: ENTRY } })
+  it('KS-40 只有 warning（缺 description）不挡章：照常盖、不标', async () => {
+    const text = doc(['shuvix: okf v0.2', 'type: Memory', 'title: A'])
+    const h = makeTool({ admin: librarian({ 'a.md': text }) })
+    expect(textOf(await submit(h)).split('\n')[1]).toBe('- /a.md (created)')
+    expect(h.files.get(`${ROOT}/a.md`)).toContain(VERIFIED_LINE)
+  })
+
+  it('KS-41 afterWrite：每盖一条恰一次，参数只有 {bundleDir, path}（库内相对）与这次调用的 scope，排在那一笔落盘之后', async () => {
+    const h = makeTool({ admin: librarian({ 'a.md': X, 'sub/b.md': X }) })
     await h.invoke(
-      { action: 'submit', base: 'project', path: 'a.md' },
-      { callId: 'k33', taskId: 4, conversationId: 2 }
+      { action: 'submit', base: 'project', content: 'x' },
+      { callId: 'k41', taskId: 4, conversationId: 2 }
     )
-    expect(h.afterWrite).toHaveBeenCalledTimes(1)
-    expect(h.afterWrite).toHaveBeenCalledWith(
+    expect(h.afterWrite).toHaveBeenCalledTimes(2)
+    expect(h.afterWrite).toHaveBeenNthCalledWith(
+      1,
       { bundleDir: ROOT, path: 'a.md' },
       expect.objectContaining({ conversationId: 2, taskId: 4 })
     )
+    expect(h.afterWrite).toHaveBeenNthCalledWith(
+      2,
+      { bundleDir: ROOT, path: 'sub/b.md' },
+      expect.objectContaining({ conversationId: 2, taskId: 4 })
+    )
     expect(Object.keys(h.afterWrite.mock.calls[0][0]).sort()).toEqual(['bundleDir', 'path'])
-    expect(h.calls.indexOf(`after:${ROOT}|a.md`)).toBeGreaterThan(h.calls.indexOf(`write:${ABS}`))
+    expect(h.calls).toEqual([
+      'admin:project',
+      `write:${ROOT}/a.md`,
+      `after:${ROOT}|a.md`,
+      `write:${ROOT}/sub/b.md`,
+      `after:${ROOT}|sub/b.md`
+    ])
   })
 
-  it('KS-34 没改就不写、不回调：同一时刻连交两次，第二次章已在位 —— 只写一次、回调一次，仍回 Confirmed', async () => {
-    const h = makeTool({ files: { [ABS]: ENTRY } })
+  it('KS-42 没改就不写、不回调：同一时刻连交两次、第二次章已在位 —— 只写一次、回调一次，两次都回 Recorded', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/a.md`]: ENTRY },
+      admin: reports([{ entry: 'a.md', change: 'updated' }])
+    })
     await submit(h)
     const second = await submit(h)
-    expect(textOf(second).startsWith(`Confirmed: ${ABS}`)).toBe(true)
-    expect(h.calls.filter((c) => c === `write:${ABS}`)).toHaveLength(1)
+    expect(textOf(second).split('\n').slice(0, 2)).toEqual([
+      'Recorded in base "project":',
+      '- /a.md (updated)'
+    ])
+    expect(h.calls.filter((c) => c === `write:${ROOT}/a.md`)).toHaveLength(1)
     expect(h.afterWrite).toHaveBeenCalledTimes(1)
-    expect(h.review).toHaveBeenCalledTimes(2)
+    expect(h.admin).toHaveBeenCalledTimes(2)
   })
 
-  it('KS-35 中止：已中止的 signal → reject 注入的 abortError、写手不派；写手期间中止 → 迟到的「通过」不算数', async () => {
-    const aborted = new AbortController()
-    aborted.abort()
-    const h1 = makeTool({ files: { [ABS]: ENTRY }, abortError: 'TOOL_ABORTED' })
-    await expect(
-      h1.run('c1', { action: 'submit', base: 'project', path: 'a.md' }, aborted.signal)
-    ).rejects.toThrow('TOOL_ABORTED')
-    expect(h1.review).not.toHaveBeenCalled()
-
-    const during = new AbortController()
-    const h2 = makeTool({
-      files: { [ABS]: ENTRY },
-      abortError: 'TOOL_ABORTED',
-      review: async () => {
-        during.abort()
-        return { passed: true, report: 'ok', reviewer: REVIEWER }
-      }
-    })
-    await expect(
-      h2.run('c2', { action: 'submit', base: 'project', path: 'a.md' }, during.signal)
-    ).rejects.toThrow('TOOL_ABORTED')
-    expect(h2.files.get(ABS)).toBe(ENTRY)
-    expect(h2.calls.filter((c) => c.startsWith('write:'))).toEqual([])
-    expect(h2.afterWrite).not.toHaveBeenCalled()
-  })
-
-  it('KS-36 [白盒] 写手判过但文件没了 → 失败（读文件的错误原文）；不写', async () => {
-    const h = makeTool({
-      files: { [ABS]: ENTRY },
-      review: async (req, _ctx, files) => {
-        files.delete(req.path)
-        return { passed: true, report: 'ok', reviewer: REVIEWER }
-      }
-    })
-    expect(await rejectionOf(submit(h))).toContain(`ENOENT: ${ABS}`)
-    expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
-    expect(h.afterWrite).not.toHaveBeenCalled()
-  })
-
-  it('KS-37 正文字节不动：正文里的 `---` 分隔线、`verified: fake` 原样；CRLF 文件里新插入的行也带 `\\r`', async () => {
+  it('KS-43 正文字节不动：正文里的 `---` 分隔线、`verified: fake` 原样；CRLF 文件里新插入的行也带 `\\r`', async () => {
     const head = ['---', 'shuvix: okf v0.2', 'type: Memory', 'title: A', 'description: da', '---']
     const body = ['', 'intro', '', '---', '', 'verified: fake', 'generated: nope', ''].join('\r\n')
     const text = `${head.join('\r\n')}\r\n${body}`
-    const h = makeTool({ files: { [ABS]: text } })
-    const res = await submit(h)
-    expect(textOf(res).startsWith(`Confirmed: ${ABS}`)).toBe(true)
-    const after = h.files.get(ABS)!
+    const h = makeTool({
+      files: { [`${ROOT}/a.md`]: text },
+      admin: reports([{ entry: 'a.md', change: 'updated' }])
+    })
+    await submit(h)
+    const after = h.files.get(`${ROOT}/a.md`)!
     // 第一处 `\r\n---\r\n` 就是闭合定界线（开栏那一行前面没有 `\r\n`）
     const tail = (s: string): string => s.slice(s.indexOf('\r\n---\r\n'))
     expect(tail(after)).toBe(tail(text))
     expect(after).toContain(`\r\n${GENERATED_LINE}\r\n${VERIFIED_LINE}\r\n---\r\n`)
+  })
+
+  it('KS-44 一次报多条、结果各异：行序同管理员报的顺序，各自的记号只落在自己那一行；只有合规的那条盖章', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/old.md`]: ENTRY, [`${ROOT}/plain.md`]: PLAIN },
+      admin: async (req, ctx, files) => {
+        const out = await librarian({ 'auth/x.md': X, 'old.md': null, 'plain.md': `${PLAIN}+\n` })(
+          req,
+          ctx,
+          files
+        )
+        if ('error' in out) return out
+        return { ...out, entries: [...out.entries, { entry: 'ghost.md', change: 'created' }] }
+      }
+    })
+    const res = await submit(h)
+    expect(textOf(res).split('\n')).toEqual([
+      'Recorded in base "project":',
+      '- /auth/x.md (created)',
+      '- /old.md (deleted)',
+      '- /plain.md (updated)',
+      '- /ghost.md (created; not found)',
+      '',
+      'ok'
+    ])
+    expect(res.details).toEqual({ action: 'submit', path: 'auth/x.md' })
+    expect(h.calls).toEqual(['admin:project', `write:${ROOT}/auth/x.md`, `after:${ROOT}|auth/x.md`])
+  })
+
+  it('KS-45 报上来的条目名带前导 /（宿主没归一时）也照样找得到、盖得上', async () => {
+    const h = makeTool({
+      files: { [`${ROOT}/a.md`]: ENTRY },
+      admin: reports([{ entry: '/a.md', change: 'updated' }])
+    })
+    expect(textOf(await submit(h)).split('\n')[1]).toBe('- /a.md (updated)')
+    expect(h.files.get(`${ROOT}/a.md`)).toContain(VERIFIED_LINE)
+    expect(h.afterWrite).toHaveBeenCalledWith({ bundleDir: ROOT, path: 'a.md' }, expect.anything())
+  })
+
+  it('KS-46 盖章用的是管理员交回的 actor（不是写死的档案名）', async () => {
+    const h = makeTool({
+      admin: async (req, ctx, files) => {
+        const out = await librarian({ 'a.md': ENTRY })(req, ctx, files)
+        return 'error' in out ? out : { ...out, admin: 'shuvix-my-librarian/opus' }
+      }
+    })
+    await submit(h)
+    expect(h.files.get(`${ROOT}/a.md`)).toContain(
+      `verified: { by: "shuvix-my-librarian/opus", at: "${NOW_ISO}" }`
+    )
   })
 })
 
@@ -1860,10 +2555,13 @@ describe('KT-2′ 中止', () => {
       { action: 'bases' },
       { action: 'list', base: 'project' },
       { action: 'search', base: 'project', query: 'q' },
-      { action: 'submit', base: 'project', path: 'a.md' }
+      { action: 'read', base: 'project', entry: 'a.md' },
+      { action: 'submit', base: 'project', content: 'x' }
     ] as KnowledgeToolParams[]) {
       await expect(h.run('c1', params, ac.signal), params.action).rejects.toThrow('TOOL_ABORTED')
     }
+    expect(h.listBases).not.toHaveBeenCalled()
+    expect(h.resolveBase).not.toHaveBeenCalled()
     expectNothingHappened(h)
   })
 })

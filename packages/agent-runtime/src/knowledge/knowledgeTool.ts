@@ -1,29 +1,32 @@
 /**
- * `knowledge` 工具 —— 知识库的检索、盘点，以及条目的**提交检查**。
+ * `knowledge` 工具 —— 知识库的检索、盘点、读条目，以及把要记的内容**交给知识库管理员**。
  *
- * **条目的正文一律走文件工具**：主 agent 用 `write` 把一篇普通 md 写进库目录（不必带元数据），用
- * `edit` 改；写钩子回执诊断、给 OKF 条目刷新 `generated`，变更管线按 bundle 提交。工具本身不落正文 ——
- * 早先的 `create` 收 type / title / description / body / tags / sources / … 十来个参数，只为在主 agent
- * 这一侧担保元数据形状；那份担保现在挪到了 `submit`：宿主同步派内置 `knowledge-writer` 补齐元数据、
- * 判内容站不站得住，通过了由**宿主**在 `verified` 里记一笔机器确认（review.ts）。元数据的写法因此只
- * 住在写手的提示词里，只在真有条目要过门时才付。
+ * **2026-11-08 改版：库目录只有管理员知道。** 别的 agent 眼里，知识库只有库名与条目名（库内路径，
+ * `/auth/session.md` —— 条目之间的链接本来就这么写）：`bases` 不给目录，`search` / `list` 给条目名，
+ * 正文经 `read` 看（读的是宿主的扫描缓存，与检索、盘点同一份，不经文件门）。它们也不再自己往库里写：
+ * `submit` 交上来的是内容（`content`，可点名它更正 / 补充的那一条），宿主同步派管理员（内置
+ * `knowledge-writer`），由它决定新建、改写、合并、改名、删除还是不收（review.ts）。为以后更复杂的组织
+ * 方式做准备：库换一种存放方式、每个库配自己的管理员，非管理员这一侧都不用动。
  *
- * 安全：`submit` 以条目绝对路径走 `enforcePath('write')`（通过后宿主要回写章）—— 与文件工具同一道门。
- * 检索 / 盘点只读宿主的扫描缓存，不经门（与改版前一致）。
+ * 管理员自己调这个工具时（宿主按调用方档案判）`bases` / `search` / `list` 印上目录 —— 它拿文件工具干活；
+ * 它的 `submit` 一律拒（否则能把自己派下去，一层套一层）。
  *
- * **`submit` / `list` 必须点名一个 base**（`search` 省略即搜全部启用的库）：`project` 是本会话所属项目
- * 的库，其余名字是用户自己的知识库。目标由宿主解析（`resolveBase`）；列表与命中一律给**绝对路径**，
- * agent 直接拿去 `read` / `edit`。跨 bundle 的引用不走路径而走 `shuvix://` URI。
+ * 只是约定，不是卡点（2026-11-08 裁决）：非管理员经文件工具或命令直接碰库目录，不归这里管。
  *
- * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索 / 写手派发全部注入。
+ * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索 / 管理员派发全部注入。
  */
 import { Type } from 'typebox'
 import type { ToolResult } from '../tools/toolResult'
 import type { FileSystemPort } from '../fileTools/port'
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateLine
+} from '../fileTools/truncate'
 import { splitFrontmatter } from '../markdownFrontmatter'
-import type { SecurityContext } from '../security/types'
 import { BaseTool } from '../tools/baseTool'
-import { callOwnerOf, type CallOwner, type ToolCallScope } from '../tools/toolCall'
+import type { ToolCallScope } from '../tools/toolCall'
 import {
   currentTrustTierOf,
   headingsOf,
@@ -36,16 +39,14 @@ import { escapesBundle, normalizeBundlePath } from './bundlePaths'
 import { isReservedFile, validateKnowledgeText, type BundleFile } from './validate'
 import {
   stampKnowledgeReview,
-  type KnowledgeReviewOutcome,
-  type KnowledgeReviewRequest
+  type KnowledgeAdminOutcome,
+  type KnowledgeEntryChangeRecord,
+  type KnowledgeSubmission
 } from './review'
-
-/** 交给 PEP 的调用身份：provider 的 toolCallId + durable 的调用归属（taskId / conversationId） */
-type PepCall = CallOwner & { toolCallId: string }
 
 export const KNOWLEDGE_TOOL_NAME = 'knowledge'
 
-const ACTIONS = ['bases', 'search', 'list', 'submit'] as const
+const ACTIONS = ['bases', 'search', 'list', 'read', 'submit'] as const
 export type KnowledgeAction = (typeof ACTIONS)[number]
 
 export const KnowledgeParamsSchema = Type.Object({
@@ -57,17 +58,27 @@ export const KnowledgeParamsSchema = Type.Object({
   base: Type.Optional(
     Type.String({
       description:
-        'A name from "bases". Required for "list" and "submit"; "search" without it covers every base.'
+        'A name from "bases". Required for "list", "read" and "submit"; "search" without it covers every base.'
     })
   ),
   query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
-  path: Type.Optional(
+  entry: Type.Optional(
     Type.String({
-      description: 'For "submit": the entry\'s file — absolute, or relative to the base.'
+      description:
+        'An entry\'s path inside its base, as "search" and "list" give it. For "read": the entry to read. For "submit": the entry the submission corrects or extends, if any.'
     })
   ),
+  content: Type.Optional(
+    Type.String({ description: 'For "submit": what to record, in markdown.' })
+  ),
+  offset: Type.Optional(
+    Type.Number({ description: 'For "read": the line to start at (1-based).' })
+  ),
   limit: Type.Optional(
-    Type.Number({ description: 'For "search" / "list": max results (default 20 / 100).' })
+    Type.Number({
+      description:
+        'For "search" / "list": max results (default 20 / 100). For "read": max lines (default 2000).'
+    })
   )
 })
 
@@ -75,24 +86,25 @@ export interface KnowledgeToolParams {
   action: KnowledgeAction
   base?: string
   query?: string
-  path?: string
+  entry?: string
+  content?: string
+  offset?: number
   limit?: number
 }
 
 /**
  * 工具描述只讲「怎么用」；「什么时候搜、什么值得记」住在 `<knowledge_bases>` 围栏（knowledgeGuide.ts）——
  * 围栏只在会话真有库时才注入，这份描述则只要档案带 `knowledge` 就恒付，所以压到最短。
- * 元数据的写法不在这里：它住在写手的提示词里（submit 时才付）。
+ * 条目怎么组织、元数据怎么写都不在这里：那是管理员的事，住在它的提示词里（submit 时才付）。
  */
-export const KNOWLEDGE_DESCRIPTION = `Search this session's knowledge bases and submit entries for checking. An entry is one markdown file in a base's directory; the user picks which bases a session works with.
+export const KNOWLEDGE_DESCRIPTION = `Look things up in this session's knowledge bases, and hand what is worth keeping to their librarian. A base holds entries, each named by its path inside the base ("/auth/token-refresh.md"); the user picks which bases a session works with.
 
 Actions:
-- "bases": list this session's bases and their directories.
-- "search": find entries by free text (\`query\`); leave \`base\` out to search every base. Only titles, descriptions, tags, types and headings are indexed, not the prose — pick by title and description, then \`read\` the file. For a literal string inside bodies, \`grep\` the base's directory.
+- "bases": list this session's bases.
+- "search": find entries by free text (\`query\`); leave \`base\` out to search every base. Only titles, descriptions, tags, types and headings are indexed, not the prose — pick by title and description, then "read" the entry.
 - "list": list every entry in one base.
-- "submit": have the knowledge librarian check one entry (\`path\`) and complete its metadata. A passing entry is marked machine-confirmed; otherwise fix what the report says and submit again.
-
-To record something, \`write\` it as plain markdown into the base's directory — one subject per file, named after that subject (the name is permanent), no frontmatter needed, saying in the body where each claim comes from (a path, URL or commit) — then submit it. Change an entry with \`edit\` and submit it again. Extend the entry that already covers a subject rather than adding a near-duplicate. A base may hold the user's own notes without metadata — leave them as they are. Never write \`verified\`. Point into another base with a \`shuvix://\` URI.`
+- "read": read one entry (\`base\`, \`entry\`); a long one pages with \`offset\` and \`limit\` (lines). A link inside an entry that starts with "/" names another entry of the same base.
+- "submit": hand the base's librarian something worth looking up again (\`content\`, markdown): the subject, what holds, and where each claim comes from (a path, URL or commit). When it corrects or extends an entry that "search", "list" or "read" showed you, name that \`entry\`. The librarian decides how the base records it — a new entry, a change to existing ones, or nothing — and says what it did.`
 
 /** 一个库都没启用时对 agent 说的话 —— 别让它以为是自己参数写错了 */
 const NO_BASES =
@@ -100,7 +112,7 @@ const NO_BASES =
 
 /** 宿主解析出的目标 bundle */
 export interface KnowledgeBundleTarget {
-  /** bundle 根的绝对路径（桌面）/ 句柄路径（扩展） */
+  /** bundle 根的绝对路径（桌面）/ 句柄路径（扩展）—— 只印给管理员 */
   dir: string
   /** 人读标签，如 `project "Acme Corp"` */
   label: string
@@ -113,7 +125,7 @@ export interface KnowledgeBundleTarget {
  * 每条命中都拖一段正文，是全文入索引时最占上下文的那一半（工具描述据此教「先按门面挑、再 `read`」）。
  */
 export interface KnowledgeSearchHit {
-  /** bundle 相对路径（工具回包时拼成绝对路径） */
+  /** bundle 相对路径（工具回包时拼成条目名 `/x.md`） */
   path: string
   title: string
   description?: string
@@ -134,15 +146,20 @@ export interface KnowledgeBaseInfo {
   base: string
   /** 人读标签，如 `project "Acme"` / `knowledge base "读书笔记"` */
   label: string
-  /** bundle 根的绝对路径；库暂不可用（会话不属于项目 / 项目库还没建）时缺省 */
+  /** bundle 根的绝对路径（只印给管理员）；库暂不可用时缺省 */
   dir?: string
   /** 给 agent 的一句补充说明 */
   note?: string
 }
 
+/** 交给管理员的那一半（工具补上库目录 / 标签再交宿主） */
+export type KnowledgeAdminRun = (
+  req: KnowledgeSubmission,
+  ctx: { call: ToolCallScope | undefined; toolCallId: string; signal?: AbortSignal }
+) => Promise<KnowledgeAdminOutcome>
+
 export interface KnowledgeToolDeps {
   port: FileSystemPort
-  security: SecurityContext
   /**
    * 解析一个 base。库目录可能还不存在（项目库在第一次写入时才出现），读起来就是空的；宿主从不「建库」。
    * 解析不出（会话不属于项目 / 没有这个库）返回一句可读的 error。
@@ -158,28 +175,24 @@ export interface KnowledgeToolDeps {
     opts: { limit: number; bundleDir: string }
   ) => Promise<KnowledgeSearchHit[]>
   /**
-   * 调用方 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— `submit` 通过后 `generated.by` 记它。
+   * 调用方 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— 收录后 `generated.by` 记它。
    * 收这次调用的 scope（`call.conversationId` 认得出发起调用的 agent；单测直接调时为 undefined）：
    * 会话级装配的工具被同一会话的每个 agent 共用，章要盖成**发起这次提交的** agent。
    */
   actor: (call: ToolCallScope | undefined) => string
   now: () => Date
   /**
-   * 派写手检查一条（同步，宿主经派发路由跑完再回来）。宿主不注入（扩展端）则 `submit` 不可用。
-   * `call` 是这次工具调用的 scope：写手那条对话归它所有，像 `agent` 工具派出的一样挂在这张卡片下。
+   * 派管理员收这一次提交（同步，宿主经派发路由跑完再回来）。宿主不注入（扩展端）则 `submit` 不可用。
+   * `ctx.call` 是这次工具调用的 scope：管理员那条对话归它所有，像 `agent` 工具派出的一样挂在这张卡片下。
    */
-  review?: (
-    req: KnowledgeReviewRequest,
-    ctx: { call: ToolCallScope | undefined; toolCallId: string; signal?: AbortSignal }
-  ) => Promise<KnowledgeReviewOutcome>
+  admin?: KnowledgeAdminRun
   /**
-   * 这次调用来自写手自己（宿主按调用方档案判）：它拿着 `knowledge` 只为检索，`submit` 一律拒 ——
-   * 否则写手能把自己派下去，一层套一层。缺省 = 按「不是」处理。
+   * 这次调用来自管理员自己（宿主按调用方档案判）：它看得到库目录，它的 `submit` 一律拒。缺省 = 按「不是」处理。
    */
-  isReviewer?: (call: ToolCallScope | undefined) => boolean
+  isAdmin?: (call: ToolCallScope | undefined) => boolean
   /**
    * 宿主回写了章之后（提交 / 事件由宿主完成）；`path` 是 `bundleDir` 内的相对路径。
-   * 只有盖章这一笔要它 —— 条目正文走文件工具，那边自有 onFileChange 接同一条管线。
+   * 只有盖章这一笔要它 —— 管理员的改动走文件工具，那边自有 onFileChange 接同一条管线。
    */
   afterWrite?: (
     e: { bundleDir: string; path: string },
@@ -210,13 +223,15 @@ function text(lines: string[], details?: { action: KnowledgeAction; path?: strin
   }
 }
 
-function joinRoot(root: string, rel: string): string {
-  const base = root.replace(/[/\\]+$/, '')
-  return `${base}/${rel}`
+/** 条目名：库内路径带前导 `/`（与条目之间的链接同一种写法） */
+function entryLabel(rel: string): string {
+  return `/${normalizeBundlePath(rel)}`
 }
 
-/** 列表 / 命中的一行：**绝对路径**（agent 直接拿去 read / edit）+ 状态记号 + 门面 */
-function summaryLine(n: KnowledgeNote, dir: string): string {
+const stripDir = (dir: string): string => dir.replace(/[/\\]+$/, '')
+
+/** 列表 / 命中的一行：条目名 + 状态记号 + 门面 */
+function summaryLine(n: KnowledgeNote): string {
   const marks: string[] = []
   if (n.status !== 'stable') marks.push(n.status)
   const c = n.concept
@@ -226,7 +241,7 @@ function summaryLine(n: KnowledgeNote, dir: string): string {
   const date = c?.generated?.at?.slice(0, 10)
   if (date) marks.push(date)
   const mark = marks.length ? ` (${marks.join(', ')})` : ''
-  return `- ${joinRoot(dir, n.path)}${mark} — ${n.description || n.title}`
+  return `- ${entryLabel(n.path)}${mark} — ${n.description || n.title}`
 }
 
 /** 正文（去掉 frontmatter；没有 frontmatter 就是全文） */
@@ -234,18 +249,13 @@ function bodyOf(text: string): string {
   return splitFrontmatter(text)?.body ?? text
 }
 
-/** 表头恒点名 bundle 的绝对目录 */
-function whereLine(target: KnowledgeBundleTarget): string {
-  return `${target.label} — ${target.dir}`
-}
-
 export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   readonly name = KNOWLEDGE_TOOL_NAME
   readonly label: string
   readonly description = KNOWLEDGE_DESCRIPTION
   readonly parameters = KnowledgeParamsSchema
-  // 不能重跑（裁定 Q1）：一个工具兼管只读的 search / list 与会派写手、回写章的 submit，而 durable 的重跑
-  // 策略是按工具、在调用意图落库时定死的 —— 只能取最保守的那个
+  // 不能重跑（裁定 Q1）：一个工具兼管只读的 search / list / read 与会派管理员、回写章的 submit，而 durable
+  // 的重跑策略是按工具、在调用意图落库时定死的 —— 只能取最保守的那个
   readonly replay = 'unsafe' as const
 
   constructor(private readonly deps: KnowledgeToolDeps) {
@@ -258,7 +268,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   }
 
   protected async securityCheck(): Promise<void> {
-    /* submit 在 executeInternal 里按已解析的路径过 PEP */
+    /* 读侧只读宿主的扫描缓存；submit 的写入由管理员的文件工具各自过门 */
   }
 
   protected async executeInternal(
@@ -268,15 +278,18 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     call?: ToolCallScope
   ): Promise<Result> {
     if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
+    const admin = this.deps.isAdmin?.(call) === true
     switch (params.action) {
       case 'bases':
-        return this.bases()
+        return this.bases(admin)
       case 'search':
-        return this.search(params)
+        return this.search(params, admin)
       case 'list':
-        return this.list(params)
+        return this.list(params, admin)
+      case 'read':
+        return this.read(params)
       case 'submit':
-        return this.submit(toolCallId, params, signal, call)
+        return this.submit(toolCallId, params, signal, call, admin)
       default:
         throw new Error(`Unknown action "${String(params.action)}". Valid: ${ACTIONS.join(', ')}`)
     }
@@ -284,7 +297,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
 
   // ─── 准入 ─────────────────────────────────────────────
 
-  /** 参数里的 base：`list` / `submit` 必须带 */
+  /** 参数里的 base：`list` / `read` / `submit` 必须带 */
   private requireBase(params: KnowledgeToolParams): string {
     const base = params.base?.trim()
     if (!base) {
@@ -295,36 +308,42 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     return base
   }
 
+  /** 表头里点名的库：标签；管理员另带目录 */
+  private where(target: KnowledgeBundleTarget, admin: boolean): string {
+    return admin ? `${target.label} — ${stripDir(target.dir)}` : target.label
+  }
+
   /**
-   * `submit` 的 path → 库内相对路径。收绝对路径（落在库目录里）或库相对路径（`/x.md` / `x.md`，前导 `/`
-   * 是库根 —— 与列表里的写法无关，是改版前的口径）。越界、非 .md、保留名（index.md / log.md 不是条目）
-   * 一律拒绝；隐藏路径（任何一段以 `.` 开头，如 `.obsidian/x.md`）不是库内容（扫描与 locateBundle 都不认），
-   * 同样拒绝。带盘符的绝对路径不在库里就直接拒（盘符大小写不敏感）；POSIX 的 `/…` 有歧义，留给 submit 按
-   * 「库里没有、库外有」再判。
+   * `entry` → 库内相对路径（不带前导 `/`），且必须是这个库里一条**在册**的笔记（扫描见过的 md）。
+   * 收 `/x.md`、`x.md`、省掉 `.md` 的写法；旧对话里留下的绝对路径（落在库目录里）也认。
+   * 越界、隐藏路径、保留名、不在册一律拒 —— 只认扫描清单，所以库里的符号链接、隐藏目录从来够不着。
    */
-  private entryPath(raw: string, target: KnowledgeBundleTarget): string {
-    const dir = target.dir.replace(/[/\\]+$/, '').replace(/\\/g, '/')
-    const slashed = raw.trim().replace(/\\/g, '/')
-    const drive = /^[a-z]:\//i
+  private async locateEntry(
+    raw: string,
+    target: KnowledgeBundleTarget,
+    base: string
+  ): Promise<{ rel: string; scan: KnowledgeBundleScan }> {
     // Windows 的盘符不分大小写（`c:/` 与 `C:\` 是同一处）；其余照字面比
-    const fold = (p: string): string => (drive.test(p) ? p[0].toLowerCase() + p.slice(1) : p)
-    const insideDir = fold(slashed) === fold(dir) || fold(slashed).startsWith(`${fold(dir)}/`)
-    if (!insideDir && drive.test(slashed)) {
-      throw new Error(`"${raw}" is not inside ${whereLine(target)}`)
+    const fold = (p: string): string => (/^[a-z]:\//i.test(p) ? p[0].toLowerCase() + p.slice(1) : p)
+    const dir = fold(stripDir(target.dir).replace(/\\/g, '/'))
+    let slashed = raw.trim().replace(/\\/g, '/')
+    if (dir && (fold(slashed) === dir || fold(slashed).startsWith(`${dir}/`))) {
+      slashed = slashed.slice(dir.length)
     }
-    const rel = normalizeBundlePath(insideDir ? slashed.slice(dir.length) : slashed)
-    if (!rel || escapesBundle(rel)) throw new Error(`"${raw}" is not inside ${whereLine(target)}`)
-    if (rel.split('/').some((seg) => seg.startsWith('.'))) {
-      throw new Error(`"${raw}" is a hidden path — it is not part of the knowledge base`)
-    }
-    if (!/\.md$/i.test(rel)) throw new Error(`"${raw}" is not a markdown entry (.md)`)
-    if (isReservedFile(rel)) throw new Error(`/${rel} is a reserved name, not an entry`)
-    return rel
+    const rel = normalizeBundlePath(slashed)
+    if (!rel || escapesBundle(rel)) throw new Error(`"${raw}" is not an entry name`)
+    const scan = await this.deps.scan(target.dir)
+    const known = new Set(scan.notes.map((n) => n.path))
+    if (known.has(rel)) return { rel, scan }
+    if (!/\.md$/i.test(rel) && known.has(`${rel}.md`)) return { rel: `${rel}.md`, scan }
+    throw new Error(
+      `No entry ${entryLabel(rel)} in base "${base}" — "search" or "list" it for the right name`
+    )
   }
 
   // ─── actions ───────────────────────────────────────────────
 
-  private async bases(): Promise<Result> {
+  private async bases(admin: boolean): Promise<Result> {
     const bases = await this.deps.listBases()
     if (bases.length === 0) {
       return text([NO_BASES], { action: 'bases' })
@@ -334,7 +353,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         'Knowledge bases in this session (pass the name as `base`):',
         ...bases.map(
           (b) =>
-            `- ${b.base} — ${b.label}${b.dir ? ` — ${b.dir}` : ''}${b.note ? ` (${b.note})` : ''}`
+            `- ${b.base} — ${b.label}${admin && b.dir ? ` — ${stripDir(b.dir)}` : ''}${b.note ? ` (${b.note})` : ''}`
         )
       ],
       { action: 'bases' }
@@ -356,7 +375,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         total: hits.length,
         lines: hits.map(
           (h) =>
-            `- ${joinRoot(target.dir, normalizeBundlePath(h.path))}${h.status && h.status !== 'stable' ? ` (${h.status})` : ''} — ${h.description || h.title}`
+            `- ${entryLabel(h.path)}${h.status && h.status !== 'stable' ? ` (${h.status})` : ''} — ${h.description || h.title}`
         )
       }
     }
@@ -376,7 +395,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     })
     return {
       total: matches.length,
-      lines: matches.slice(0, limit).map((n) => summaryLine(n, target.dir))
+      lines: matches.slice(0, limit).map((n) => summaryLine(n))
     }
   }
 
@@ -385,7 +404,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    * 范围是用户自己圈定的，圈定之后一起搜才有意义。不做跨库分数归一：每个库一套 BM25 索引，
    * 分数不可比，硬排会骗人。
    */
-  private async search(params: KnowledgeToolParams): Promise<Result> {
+  private async search(params: KnowledgeToolParams, admin: boolean): Promise<Result> {
     const query = params.query?.trim()
     if (!query) throw new Error('"search" needs `query`')
     const limit = positiveLimit(params.limit, DEFAULT_LIMIT)
@@ -397,9 +416,13 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       if ('error' in resolved) return text([resolved.error], { action: 'search' })
       const { total, lines } = await this.searchOne(resolved, query, limit)
       if (total === 0) return text([`No entries match "${query}".`], { action: 'search' })
-      return text([`${total} result(s) for "${query}" in ${whereLine(resolved)}:`, ...lines], {
-        action: 'search'
-      })
+      return text(
+        [
+          `${total} result(s) for "${query}" in base "${named}" (${this.where(resolved, admin)}):`,
+          ...lines
+        ],
+        { action: 'search' }
+      )
     }
 
     const bases = await this.deps.listBases()
@@ -408,10 +431,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     const blocks: string[] = []
     let total = 0
     for (const b of usable) {
-      const hit = await this.searchOne({ dir: b.dir!, label: b.label }, query, limit)
+      const target = { dir: b.dir!, label: b.label }
+      const hit = await this.searchOne(target, query, limit)
       if (hit.total === 0) continue
       total += hit.total
-      blocks.push(`base "${b.base}" — ${b.dir}:`, ...hit.lines)
+      blocks.push(`base "${b.base}" (${this.where(target, admin)}):`, ...hit.lines)
     }
     if (total === 0) {
       return text([`No entries match "${query}" in any of this session's knowledge bases.`], {
@@ -423,143 +447,204 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     })
   }
 
-  private async list(params: KnowledgeToolParams): Promise<Result> {
+  private async list(params: KnowledgeToolParams, admin: boolean): Promise<Result> {
     const limit = positiveLimit(params.limit, DEFAULT_LIMIT * 5)
-    const resolved = await this.deps.resolveBase(this.requireBase(params))
+    const base = this.requireBase(params)
+    const resolved = await this.deps.resolveBase(base)
     if ('error' in resolved) return text([resolved.error], { action: 'list' })
+    const where = `base "${base}" (${this.where(resolved, admin)})`
     const { notes } = await this.deps.scan(resolved.dir)
     if (notes.length === 0) {
-      return text([`No entries in ${whereLine(resolved)} yet.`], { action: 'list' })
+      return text([`No entries in ${where} yet.`], { action: 'list' })
     }
-    const lines = notes.slice(0, limit).map((n) => summaryLine(n, resolved.dir))
+    const lines = notes.slice(0, limit).map((n) => summaryLine(n))
     if (notes.length > limit) lines.push(`- … ${notes.length - limit} more`)
     return text(
-      [
-        `${notes.length} entr${notes.length === 1 ? 'y' : 'ies'} in ${whereLine(resolved)}:`,
-        ...lines
-      ],
+      [`${notes.length} entr${notes.length === 1 ? 'y' : 'ies'} in ${where}:`, ...lines],
       { action: 'list' }
     )
   }
 
   /**
-   * 提交检查 —— 同步派写手补元数据、判内容；**通过才由宿主盖章**（`generated` 记提交者、`verified` 记写手
-   * 的机器确认，见 review.ts）。写手判了通过、可文件仍过不了严格校验（或压根不是 OKF 条目）时不盖：
-   * 章是给「合规且站得住」的条目的，写手的一句话不能替校验作证。
+   * 读一条：扫描缓存里的原文（frontmatter 一并给 —— `sources`、`status` 对读的人有用），按行分页、
+   * 单行截断、字节上限与文件 `read` 同一套口径，只是不印行号（没有人拿它去 edit）。
+   */
+  private async read(params: KnowledgeToolParams): Promise<Result> {
+    const base = this.requireBase(params)
+    const raw = params.entry?.trim()
+    if (!raw) throw new Error('"read" needs `entry` — an entry\'s path inside the base')
+    const target = await this.deps.resolveBase(base)
+    if ('error' in target) throw new Error(target.error)
+    const { rel, scan } = await this.locateEntry(raw, target, base)
+    const content = scan.files.find((f) => f.path === rel)?.text ?? ''
+    const all = content.replace(/\r\n/g, '\n').split('\n')
+    if (all.length > 1 && all[all.length - 1] === '') all.pop()
+    const total = all.length
+    const start = Math.max(1, Math.trunc(params.offset ?? 1) || 1)
+    const limit = positiveLimit(params.limit, DEFAULT_MAX_LINES)
+    const out: string[] = []
+    let bytes = 0
+    let cappedByBytes = false
+    for (let i = start - 1; i < total && out.length < limit; i++) {
+      const line = truncateLine(all[i])
+      const size = new TextEncoder().encode(line).length + 1
+      if (bytes + size > DEFAULT_MAX_BYTES && out.length > 0) {
+        cappedByBytes = true
+        break
+      }
+      out.push(line)
+      bytes += size
+    }
+    const last = start + out.length - 1
+    const header = `Entry ${entryLabel(rel)} in base "${base}" (${target.label}) — ${total} lines`
+    let tail: string
+    if (start > total) tail = `(The entry has ${total} lines.)`
+    else if (cappedByBytes)
+      tail = `(Output capped at ${formatSize(DEFAULT_MAX_BYTES)}. Showing lines ${start}-${last}. Use offset=${last + 1} to continue.)`
+    else if (last < total)
+      tail = `(Showing lines ${start}-${last} of ${total}. Use offset=${last + 1} to continue.)`
+    else tail = start > 1 ? `(Lines ${start}-${last}, end of entry.)` : '(End of entry.)'
+    return text([header, '', ...out, '', tail], { action: 'read', path: rel })
+  }
+
+  /**
+   * 提交：同步派管理员。它收了，宿主给它动过、且仍合规的条目盖章（`generated` 记提交者、`verified` 记
+   * 管理员的机器确认，见 review.ts）；不合规的不盖 —— 管理员的一句「收了」不能替校验作证。回给提交者的
+   * 话只说条目名，管理员报告里漏出来的库目录换成条目名的写法。
    */
   private async submit(
     toolCallId: string,
     params: KnowledgeToolParams,
     signal: AbortSignal | undefined,
-    call: ToolCallScope | undefined
+    call: ToolCallScope | undefined,
+    admin: boolean
   ): Promise<Result> {
-    if (this.deps.isReviewer?.(call)) {
+    if (admin) {
       throw new Error(
-        'The knowledge librarian does not submit entries — edit the entry you were given and answer with `next`.'
+        'You are the librarian: record the submission yourself with the file tools, and answer with `next`.'
       )
     }
-    if (!params.path?.trim()) throw new Error('"submit" needs `path` — the entry\'s file')
+    const content = params.content?.trim()
+    if (!content) throw new Error('"submit" needs `content` — what to record, in markdown')
     const base = this.requireBase(params)
     const target = await this.deps.resolveBase(base)
     if ('error' in target) throw new Error(target.error)
-    // 只读的库（宿主随应用发布的说明书）：在这里拒，而不是留给安全策略 —— 策略拒的是路径，
-    // 回给模型的话说不清「该记到哪里去」
+    // 只读的库（宿主随应用发布的说明书）：在这里拒，回给模型的话说得清「该记到哪里去」
     if (target.readonly) {
       throw new Error(
-        `"${base}" is read-only — it is ShuviX's own reference, shipped with the app. Record the entry in one of the user's knowledge bases instead ("bases" lists them).`
+        `"${base}" is read-only — it is ShuviX's own reference, shipped with the app. Submit to one of the user's knowledge bases instead ("bases" lists them).`
       )
     }
-    if (!this.deps.review) throw new Error('Submitting entries is not available on this host')
-    const rel = this.entryPath(params.path, target)
-    const abs = joinRoot(target.dir, rel)
-    if ((await this.deps.port.stat(abs)) === null) {
-      // 一个库外的绝对路径（`/Users/…/draft.md`）按库相对读成了库里一个不存在的文件：说清是「不在库里」
-      const raw = params.path.trim()
-      if (raw.startsWith('/') && (await this.deps.port.stat(raw)) !== null) {
-        throw new Error(
-          `"${raw}" is not inside ${whereLine(target)} — write the entry into the base's directory`
-        )
-      }
-      throw new Error(`No file at ${abs} — write the entry there first, then submit it`)
-    }
-    // 符号链接不跟（与文件工具同一条规矩）：门看的是链接这条路径，章却会写进它通向的那头
-    const link = await this.deps.port.readLink?.(abs)
-    if (link) {
-      throw new Error(
-        `${abs} is a symbolic link to ${link.resolved} — entries must be real files inside the base`
-      )
-    }
-
-    // 通过之后宿主要回写章：按写入过门（与文件工具同一道门）
-    const pep: PepCall = { toolCallId, ...callOwnerOf(call) }
-    await this.deps.security.enforcePath('write', abs, {
-      ...pep,
-      toolName: this.name,
-      displayPath: abs,
-      abortError: this.deps.abortError ?? 'Aborted',
-      operation: params.action,
-      signal
-    })
+    if (!this.deps.admin)
+      throw new Error('Submitting to a knowledge base is not available on this host')
+    const entry = params.entry?.trim()
+      ? (await this.locateEntry(params.entry, target, base)).rel
+      : undefined
 
     const submittedBy = this.deps.actor(call)
-    const outcome = await this.deps.review(
-      { base, label: target.label, bundleDir: target.dir, path: abs, rel, submittedBy },
+    const outcome = await this.deps.admin(
+      {
+        base,
+        label: target.label,
+        bundleDir: target.dir,
+        content,
+        ...(entry ? { entry } : {}),
+        submittedBy
+      },
       { call, toolCallId, signal }
     )
     if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
     if ('error' in outcome) {
-      throw new Error(`The knowledge librarian could not check ${abs}: ${outcome.error}`)
-    }
-    const report = outcome.report || '(no report)'
-    if (!outcome.passed) {
-      return text(
-        [
-          `Not confirmed: ${abs}`,
-          '',
-          report,
-          '',
-          'Fix the entry and submit it again. Re-read it first — the librarian may have edited its metadata.'
-        ],
-        { action: 'submit', path: rel }
+      throw new Error(
+        `The knowledge librarian could not take the submission: ${this.scrubDir(outcome.error, target)}`
       )
+    }
+    const report = this.scrubDir(outcome.report, target) || '(no report)'
+    if (!outcome.accepted) {
+      return text([`Not recorded in base "${base}".`, '', report], { action: 'submit' })
     }
 
-    // 写手说通过：落章之前自己再验一遍 —— 它的话不能替校验作证
-    const current = await this.deps.port.readFile(abs)
-    const errors = validateKnowledgeText(current, rel).filter((d) => d.level === 'error')
-    if (!isOkfConceptText(current) || errors.length > 0) {
-      const why = errors.length
-        ? errors.map((d) => `- ${d.message}`)
-        : ['- it has no OKF frontmatter with a `type`']
-      return text(
-        [
-          `Not confirmed: ${abs} — the librarian passed it, but the file still breaks the format:`,
-          ...why,
-          '',
-          report,
-          '',
-          'Submit it again.'
-        ],
-        { action: 'submit', path: rel }
-      )
-    }
-    const stamped = stampKnowledgeReview(current, {
+    const stamped = await this.stampChanged(
+      outcome.entries,
+      target,
       submittedBy,
-      reviewer: outcome.reviewer,
-      at: this.deps.now().toISOString()
-    })
-    if (stamped !== null && stamped !== current) {
-      await this.deps.port.writeFile(abs, stamped)
-      await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel }, call)
-    }
-    return text(
-      [
-        `Confirmed: ${abs} (machine-confirmed by ${outcome.reviewer}). Re-read it before editing it again.`,
-        '',
-        report
-      ],
-      { action: 'submit', path: rel }
+      outcome.admin,
+      call
     )
+    const lines = outcome.entries.map((e) => {
+      const flag = stamped.problems.get(e.entry)
+      return `- ${entryLabel(e.entry)} (${e.change}${flag ? `; ${flag}` : ''})`
+    })
+    return text([`Recorded in base "${base}"${lines.length ? ':' : '.'}`, ...lines, '', report], {
+      action: 'submit',
+      ...(outcome.entries[0] ? { path: outcome.entries[0].entry } : {})
+    })
+  }
+
+  /** 管理员的报告给提交者看：库目录（它拿文件工具干活时写顺手了）换成条目名的写法 */
+  private scrubDir(report: string, target: KnowledgeBundleTarget): string {
+    const dir = stripDir(target.dir)
+    if (!dir) return report
+    const variants = new Set([dir, dir.replace(/\\/g, '/')])
+    let out = report
+    for (const v of variants)
+      out = out.split(`${v}/`).join('/').split(`${v}\\`).join('/').split(v).join('/')
+    return out
+  }
+
+  /**
+   * 给管理员报了 created / updated、此刻仍在、且是合规 OKF 条目的那几条盖章。没盖上的记一句原因
+   * （列在回包那一行里）：普通笔记（没有元数据）照用户的写法留着，不算问题，不记。
+   */
+  private async stampChanged(
+    entries: readonly KnowledgeEntryChangeRecord[],
+    target: KnowledgeBundleTarget,
+    submittedBy: string,
+    adminActor: string,
+    call: ToolCallScope | undefined
+  ): Promise<{ problems: Map<string, string> }> {
+    const problems = new Map<string, string>()
+    const at = this.deps.now().toISOString()
+    const dir = stripDir(target.dir)
+    for (const e of entries) {
+      if (e.change === 'deleted') continue
+      const rel = normalizeBundlePath(e.entry)
+      if (!rel || escapesBundle(rel) || !/\.md$/i.test(rel)) {
+        problems.set(e.entry, 'not an entry name')
+        continue
+      }
+      // 保留名（index.md / log.md）不是条目：不盖章
+      if (isReservedFile(rel)) {
+        problems.set(e.entry, 'a reserved name, not an entry')
+        continue
+      }
+      const abs = `${dir}/${rel}`
+      // 符号链接不跟：章会写进它通向的那头
+      if (await this.deps.port.readLink?.(abs)) {
+        problems.set(e.entry, 'a symbolic link, not confirmed')
+        continue
+      }
+      if ((await this.deps.port.stat(abs)) === null) {
+        problems.set(e.entry, 'not found')
+        continue
+      }
+      const current = await this.deps.port.readFile(abs)
+      // 先校验、再判是不是 OKF 条目：带了自述行却写坏了 frontmatter（缺 `type`、YAML 解析不了）的文件
+      // isOkfConceptText 认不出，不先校验就会被当成普通笔记悄悄放过
+      const errors = validateKnowledgeText(current, rel).filter((d) => d.level === 'error')
+      if (errors.length > 0) {
+        problems.set(e.entry, `not confirmed — ${errors.map((d) => d.message).join('; ')}`)
+        continue
+      }
+      // 用户自己的普通笔记（没有元数据）：照用户的写法留着，不盖章、不算问题
+      if (!isOkfConceptText(current)) continue
+      const next = stampKnowledgeReview(current, { submittedBy, reviewer: adminActor, at })
+      if (next !== null && next !== current) {
+        await this.deps.port.writeFile(abs, next)
+        await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel }, call)
+      }
+    }
+    return { problems }
   }
 }
 

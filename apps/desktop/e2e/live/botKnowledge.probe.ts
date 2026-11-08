@@ -116,6 +116,8 @@ type Tag =
 
 function tagOf(tool: string, text: string, home: string): Tag {
   const t = text.split(home).join('~')
+  // 2026-11-08 起说明书按条目名经 knowledge 工具读（库目录不给 agent）；按路径读的旧形状照旧认
+  if (tool === 'knowledge') return 'manual'
   if (/Resources\/knowledge\//.test(t)) return 'manual'
   if (/ShuviX\.app|app\.asar|Contents\/Resources|node_modules|\basar\b|\bstrings\b/.test(t))
     return 'pkg-dig'

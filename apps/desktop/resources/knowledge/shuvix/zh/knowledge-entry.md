@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '知识库条目（shuvix: okf v0.2）'
-description: 'ShuviX 知识库里一条笔记的完整规范 —— 什么是库、「读宽写严」、OKF profile 的每个 frontmatter 键、链接与 `shuvix://` 引用、文件命名、`knowledge` 工具的动作、校验分档、`submit` 检查，以及保留名。'
+description: 'ShuviX 知识库里一条笔记的完整规范 —— 什么是库、「读宽写严」、OKF profile 的每个 frontmatter 键、链接与 `shuvix://` 引用、文件命名、`knowledge` 工具的动作、知识库管理员怎样收录一次提交、校验分档，以及保留名。'
 tags: [shuvix, knowledge, okf, format, spec]
 status: stable
 sources:
@@ -11,7 +11,7 @@ sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/validate.ts
     title: validate.ts —— 校验分档
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/review.ts
-    title: review.ts —— `submit` 交给知识库管理员的东西，以及通过之后盖的章
+    title: review.ts —— `submit` 交给知识库管理员的东西，以及它报上来的条目所盖的章
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/knowledge/knowledgeTool.ts
     title: knowledgeTool.ts —— `knowledge` 工具
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/chat-protocol/src/knowledge.ts
@@ -29,7 +29,7 @@ Format（OKF）v0.2，外加一个小小的自有 profile：frontmatter 是元�
 | 库                  | 目录                                                                                      | 在 `knowledge` 工具里叫 |
 | ------------------- | ----------------------------------------------------------------------------------------- | ----------------------- |
 | 用户自己的          | `~/.shuvix/knowledge/<name>/` —— **每个非隐藏子目录都是一个库**；不需要标记文件            | 目录名                  |
-| 本项目的            | `~/.shuvix/knowledge-shuvix/projects/<projectId>/`（经工具写入，不手改）                    | `project`（保留名）     |
+| 本项目的            | `~/.shuvix/knowledge-shuvix/projects/<projectId>/`（由知识库管理员写入，不手改）            | `project`（保留名）     |
 | ShuviX 的说明书     | 在应用内（只读，按界面语言）                                                              | `shuvix`（保留名）      |
 
 一个库除了目录什么都不需要：把一个笔记文件夹拷进去，它就是一个库。隐藏的文件与目录（`.obsidian/`、
@@ -42,18 +42,22 @@ Format（OKF）v0.2，外加一个小小的自有 profile：frontmatter 是元�
 项目配置设置其新会话的缺省）。没设过时先跟父会话，再跟项目的缺省；谁都没选过，就**只启用 `shuvix`**，你自己的库一个都不
 默认启用；取消勾选它，这条会话就不再有它。另一个例外是打开 ShuviX 自己的文件（安全策略、hook、智能体档案、bot、技能或知识库条目）的笔记本：它恒带 `shuvix`，这样它的智能体查得到这份文件的规范。选择是硬边界：`bases` 只列启用的，点名其他任何名字都被拒绝。系统提示词里的 `<knowledge_bases>` 围栏列的也是同一批名字。
 
-选择同时决定智能体碰什么不用问。启用的库是本会话权限表里**可读写**的一行（见 `policy-md` 条目里的
-`vars.aclWrite`）：在里面读文件、新建、编辑都不问 —— 文件工具和沙箱里的命令都一样 —— 因为库的每次
-改动都提交进它自己的 git，可以回退。`shuvix` 启用时是**只读**的一行（只在 `vars.aclRead` 里）：读不问，
-写要问。没启用的库和家目录里任何别的文件夹一样：读它要问。
+**除知识库管理员以外的 agent 永远看不到库的目录。** 对它们来说，库就是它的名字，条目就是它在库里的
+路径（`/auth/session.md`）：它们经 `knowledge` 工具 `search`、`list`、`read` 条目，把值得留下的东西
+用 `submit` 交给管理员（见下）。这是工具与提示词的约定，不是锁：agent 若从别处找到了目录，没有什么拦得住它。
+
+选择同时决定本会话碰什么不用问。启用的库是本会话权限表里**可读写**的一行（见 `policy-md` 条目里的
+`vars.aclWrite`）—— 管理员就在发起提交的那条会话里运行、用文件工具写，所以在库里读、新建、挪动、删除
+文件都不问；库的每次改动都提交进它自己的 git，可以回退。`shuvix` 启用时是**只读**的一行（只在
+`vars.aclRead` 里）。没启用的库和家目录里任何别的文件夹一样：读它要问。
 
 ## 读宽写严
 
 - 库里**每一份**非隐藏的 `.md` 都是一条**笔记**：出现在侧栏、可检索、可读 —— 标题依次取 frontmatter
   `title` → 第一个 `# 标题` → 文件名。不要求任何元数据，ShuviX 也从不为了补元数据改写用户的笔记。
 - 一条笔记同时是一份 **OKF 条目（概念）**，当它的 frontmatter 能解析成映射、有非空字符串 `type`，
-  且不带*别家的* `shuvix:` 标记（库里一份 `shuvix: agent v1` 文件是笔记，不是概念）。只有通过了 `knowledge`
-  工具 `submit` 的条目**检查过**是合规的。
+  且不带*别家的* `shuvix:` 标记（库里一份 `shuvix: agent v1` 文件是笔记，不是概念）。只有知识库管理员
+  在一次 `submit` 之后报上来、随后又过了严格检查的条目，才带 ShuviX 的机器确认。
 - `index.md` 与 `log.md` 是 OKF 的保留名。ShuviX 不再生成它们；早先生成的按形状隐藏，而用户手写的
   同名文件是普通笔记（永远不是概念）。
 
@@ -72,8 +76,8 @@ Format（OKF）v0.2，外加一个小小的自有 profile：frontmatter 是元�
 | `status`        | `draft` \| `stable` \| `deprecated`                        | 否                  | **生命周期**，缺省 `stable`：`draft` = 尚不完整，`stable` = 可以依赖，`deprecated` = 只为链接与历史留着（检索里剔除）。提交时会显式写出。它**不是**审阅标志。                                                                    |
 | `stale_after`   | `YYYY-MM-DD`                                               | 否                  | 过了这个日期条目需要重新核实（侧栏打徽标）。                                                                                                                                                                                     |
 | `sources`       | `{ id?, resource, title?, author?, last_modified? }` 的列表（也可以是裸定位符字符串） | 否 | 结论来自哪里。`resource` 是自含的定位符：绝对路径（可带 `#symbol`）、完整 URL、`<remote-url>@<commit>:<path>`，或 `shuvix://session/<id>`。`id` 用于脚注引用 `[^id]`。                                                            |
-| `generated`     | `{ by, at }`                                               | 否                  | **宿主章** —— 内容是谁写的（`shuvix-<agent>/<model>`）、何时（ISO 8601）。agent 每次编辑条目时由写钩子刷新；条目通过 `submit` 时改记为提交它的 agent。永远不要手写；侧栏的「新建条目」刻意不写它。 |
-| `verified`      | `{ by, at }` 或它们的列表                                  | 否                  | **审阅轴**：谁检查过这条。人的核实（`by: human:…`）只由界面动作写；`submit` 通过时追加知识库管理员的机器确认（`by: shuvix-knowledge-writer/<model>`，取代早先那一条）。**agent 永远不写它。** 信任档 —— 机器确认或人工审阅，只算不早于 `generated.at` 的那几条 —— 与「核实后又被修改」徽标（每一条都早于 `generated.at`）都由它推出。 |
+| `generated`     | `{ by, at }`                                               | 否                  | **宿主章** —— 内容是谁写的（`shuvix-<agent>/<model>`）、何时（ISO 8601）。agent 每次编辑条目时由写钩子刷新；管理员在一次 `submit` 之后报上来的条目，改记为提交它的 agent。永远不要手写；侧栏的「新建条目」刻意不写它。 |
+| `verified`      | `{ by, at }` 或它们的列表                                  | 否                  | **审阅轴**：谁检查过这条。人的核实（`by: human:…`）只由界面动作写；管理员在一次 `submit` 之后报上来的每一条，都得到它的机器确认（`by: shuvix-knowledge-writer/<model>`，取代早先那一条）。**agent 永远不写它。** 信任档 —— 机器确认或人工审阅，只算不早于 `generated.at` 的那几条 —— 与「核实后又被修改」徽标（每一条都早于 `generated.at`）都由它推出。 |
 
 未知键原样保留。形状不对的值报警告并取缺省；只有缺 frontmatter 或 `type` 缺失 / 为空才让一份文件
 「不是概念」。
@@ -87,37 +91,37 @@ Markdown。链接**同一个库**里的其他条目用 bundle 绝对的 markdown
 
 ## 文件名
 
-条目的文件名由写它的人起，这个名字就是条目永久的 id —— 按主题命名。在库里，`write` 拒绝覆盖 agent
+管理员按主题给条目的文件起名，之后也可以给它改名或挪动，并改好指向旧名字的链接。在库里，`write` 拒绝覆盖 agent
 没读过的既有文件，所以挑中一个已被占用的名字不会悄悄换掉别人的条目。侧栏的**新建条目**从标题派生文件名：
 任何文字的字母与数字保留，其余连续字符变成 `-`，ASCII 转小写，截到 60 个字符；名字已被占用则加 `-2`、
 `-3`……（保留名也算占用）。
 
 ## 条目怎么写、怎么改
 
-- **用 `write` 写进库目录**，写成普通 markdown —— 一个主题一个文件，不需要 frontmatter，正文里写明
-  每个说法的出处 —— 然后**提交**它（`knowledge`，`action: submit`，带 `base` 和 `path`）。ShuviX
-  当场让内置的知识库管理员（`knowledge-writer` agent）过一遍：它补齐 frontmatter（自述行、`type`、`title`、
-  `description`、`tags`、`status`、`sources`），并判断条目是否只讲一件事、能否冷读、每个说法是否有出处。
-  通过时 ShuviX 盖 `generated`（提交者）与 `verified`（管理员的机器确认）；不通过时报告会说要改什么，
-  条目保持未确认。管理员只能这样调起 —— `agent` 工具派不出它 —— 它的模型按通用规则来（它的 md 里的
-  `shuvix-model`，否则跟随调用方）。
-- **用 `edit` 改动**，路径用 `search` / `list` 给的绝对路径 —— 一段精准 diff 胜过重发整篇正文。编辑
-  之后写钩子会校验文件（诊断随工具结果回来）、刷新 `generated`、提交，侧栏跟着更新；改过的内容不再被
-  机器确认覆盖，直到再提交一次。
+- **提交它**（`knowledge`，`action: submit`，带 `base` 和 `content`）：写成普通 markdown，说清什么成立、
+  每个说法出自哪里（路径、URL 或 commit）；是在更正或扩充某一条时，再加上 `entry` 指明那一条。ShuviX
+  当场在发起提交的那场对话里让内置的知识库管理员（`knowledge-writer` agent）处理它。管理员是唯一写库的
+  agent：它先看库里已经有什么，再决定怎么收录这次提交 —— 新建一条、改动已有的（扩充、更正、拆分、合并、
+  改名、挪动、标成 `deprecated` 或删除），或者不收 —— 然后回报它动过的条目和一份简短的报告。它在库目录里
+  用文件工具写（`read`、`write`、`edit`、`move`、`delete`、`grep`），给它写的每一条都配上上面那套
+  frontmatter，用户自己的笔记（没有 frontmatter 的文件）保持原样，也绝不为核实提交的事实去打开库以外的
+  任何东西。之后 ShuviX 给它报上来、又过了严格检查的每一条盖章：`generated`（提交者）与 `verified`
+  （管理员的机器确认）。管理员只能这样调起 —— `agent` 工具派不出它 —— 它的模型按通用规则来（它的 md 里的
+  `shuvix-model`，否则跟随调用方）。想改它组织库的方式，就覆盖 `~/.shuvix/agents/knowledge-writer.md`。
 - **手写**（Obsidian、ShuviX 笔记本、任何编辑器）：不需要元数据；库下的人工编辑在下一次扫描时被读到，
   随下一次观察到的写入一起提交。侧栏的**新建条目**自己写好全套元数据（`type: Memory`、
   `status: draft`），只是不带 `generated`，署名 `human`。
 
 **找一条条目分两步。** `search` 的索引里只有条目的**门面** —— 标题、描述、标签、type，外加正文里的
 **标题行**，散文一概不进。所以结果只说「哪几条可能相关」，不说它们讲了什么：看标题与描述挑出真正对路
-的那几条，再用 `read` 读那几个文件。（早先把整篇正文入了索引：一个常见词就能拉回半个库，每条命中还拖一段
-正文，真正要的那条反而被埋掉。）要在正文里找一个字面串 —— 报错信息、某个符号、一条 URL —— 用 `grep`
-搜库的目录，每条清单都印着它的绝对路径。
+的那几条，再用 `read` 读那几条。（早先把整篇正文入了索引：一个常见词就能拉回半个库，每条命中还拖一段
+正文，真正要的那条反而被埋掉。）
 
-`knowledge` 工具的动作：`bases`（本会话能点名哪些，带各库的目录）、`search`（自由文本；不给 `base`
+`knowledge` 工具的动作：`bases`（本会话能点名哪些）、`search`（自由文本；不给 `base`
 就搜启用的全部库，按库分组 —— 各库索引独立、分数不跨库可比；中日文文本入索引前先分词）、`list`（一个
-库的全部笔记）、`submit`（见上）。清单给的都是绝对路径。说明书库 `shuvix` 只读：在那里 `submit` 被拒绝；往里写文件不会被拦下，但要询问（ask-on-external-path —— 它是
-会话权限表里只读的一行），反正应用更新时会还原随包发布的文件。
+库的全部笔记）、`read`（按库内路径读一条，长的用 `offset` / `limit`）、`submit`（见上）。结果里的条目
+一律写库内路径；只有管理员的调用才同时显示库的目录。说明书库 `shuvix` 只读：在那里 `submit` 被拒绝；
+反正应用更新时会还原随包发布的文件。
 
 ## 校验分档
 
@@ -127,11 +131,11 @@ Markdown。链接**同一个库**里的其他条目用 bundle 绝对的 markdown
 - 其他笔记：只在 YAML frontmatter 写坏时提醒；
 - 生成的 `index.md` / `log.md`：从不检查。
 
-写钩子的校验是回执不是准入：写坏的条目照样写进去、照样列出。`submit` 才是那道门 —— 过不了严格检查的
-条目它从不盖章。
+写钩子的校验是回执不是准入：写坏的条目照样写进去、照样列出。`submit` 之后的盖章才是那道门 —— 过不了
+严格检查的条目 ShuviX 从不盖章。
 
 ## 该记什么
 
 会被再查的东西：一个决定及其理由、一个花过时间的坑、代码里没写明的约定、一件费力才确认的事实 ——
-记进这个主题所属的库，并提交它。先搜，扩充已经覆盖这个主题的那条，而不是加一条近似的重复；不要记仓库本身
-已经写明的，也不要记只对当前这场对话有意义的。
+用 `submit` 交给这个主题所属的库。先搜；这次提交若是在扩充已经覆盖这个主题的那条，就点名那一条；不要提交
+仓库本身已经写明的，也不要提交只对当前这场对话有意义的。

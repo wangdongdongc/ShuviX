@@ -22,6 +22,8 @@ import {
   GitBranch,
   Globe,
   Wrench,
+  FolderInput,
+  Trash2,
   type LucideIcon
 } from 'lucide-react'
 import type { BuiltinToolDefinition, ToolPlatform } from '@shuvix/chat-protocol/chatApi'
@@ -63,7 +65,9 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   Database,
   Bot,
   GitBranch,
-  Globe
+  Globe,
+  FolderInput,
+  Trash2
 }
 
 function ToolTabIcon({ name }: { name?: string }): React.JSX.Element {

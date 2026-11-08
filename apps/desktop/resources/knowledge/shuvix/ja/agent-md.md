@@ -72,7 +72,7 @@ style, each with file and line. Never modify files.
 カンマ区切りの文字列。各項目は次のいずれか：
 
 - **組み込みツール名** —— 大文字小文字を区別せず、小文字に正規化：`bash`、`powershell`、`read`、`write`、
-  `edit`、`ls`、`glob`、`grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
+  `edit`、`move`、`delete`、`ls`、`glob`、`grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— `agent` ツールで**サブエージェントを派遣**することへのオプトイン（入れ子の上限に従う：
   派遣されたエージェントは深さの上限 —— 既定 2 —— が許す間だけ、さらに派遣できる）；
 - `mcp:<server>` —— その MCP サーバーのすべてのツール（設定で構成した名前；接頭辞の後は大文字小文字を
@@ -157,7 +157,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 これだけ）—— に加えて、タスク型の
 `coding`、`explore`、`titler`、そして ShuviX だけが派遣する二つのエージェント：`permission-reviewer`
 —— 自動レビューのために承認リクエストに答えます（`policy-md` エントリを参照）—— と、`knowledge-writer` ——
-`knowledge` ツールで提出されたエントリを確認し、メタデータを補います（`knowledge-entry` エントリを参照）。
+ナレッジ司書で、ナレッジベースに書き込む唯一のエージェント。他のエージェントが `knowledge` ツールで提出した内容を
+記録します（`knowledge-entry` エントリを参照）。
 
 - **セッションのルート人格はセッションの形から導かれ、決して選ばれません**：ノートブックまたは md ウィンドウ → `notebook`、
   bot チャット → `bot`、Chrome サイドパネル → `tab`、プロジェクト内 → `work`、それ以外 → `chat`。設定もピッカーもありません。

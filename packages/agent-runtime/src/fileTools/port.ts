@@ -41,6 +41,17 @@ export interface FileSystemPort {
    * 文件工具据此不跟链接（见 fileToolSuite）；没有符号链接可言的宿主（扩展：OPFS / FSA）省略。
    */
   readLink?(path: string): Promise<{ target: string; resolved: string } | null>
+  /**
+   * 把文件或目录从 `from` 挪到 `to`（自动创建 `to` 的父目录）。**绝不替换**已有的 `to`：它已存在就抛错 ——
+   * 只有一种例外，`to` 与 `from` 是同一个文件（大小写不敏感的盘上只改大小写），照常改名。
+   * move 工具用它；不支持的宿主省略（工具据此报「不支持」）。
+   */
+  rename?(from: string, to: string): Promise<void>
+  /**
+   * 删除一个文件，或一个**空**目录；非空目录抛错（不递归删除）。
+   * delete 工具用它；不支持的宿主省略。
+   */
+  remove?(path: string): Promise<void>
 }
 
 /**

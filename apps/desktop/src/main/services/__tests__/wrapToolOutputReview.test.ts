@@ -933,7 +933,8 @@ describe('wrapToolOutput — 人在卡片上的回答写进工具结果（W-A）
 
   it.each([
     ['packages/agent-runtime/src/tools/fileToolSuite.ts', /\.\.\.callOwnerOf\(call\)/],
-    ['packages/agent-runtime/src/knowledge/knowledgeTool.ts', /callOwnerOf\(call\)/],
+    // knowledge 工具不在这张表里了（2026-11-08）：它的 submit 不再过路径门 —— 写库的是知识库管理员，
+    // 经它自己的文件工具（fileToolSuite，上一行）各自过门
     ['apps/desktop/src/main/tools/shellCommand.ts', /\.\.\.callOwnerOf\(call\)/],
     ['apps/desktop/src/main/tools/git.ts', /taskId: info\.taskId/],
     ['apps/desktop/src/main/tools/session.ts', /owner: callOwnerOf\(call\)/],

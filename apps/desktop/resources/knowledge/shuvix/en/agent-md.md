@@ -72,7 +72,7 @@ applications' meaning of tool names would be misread — use `shuvix-tools`), an
 A comma-separated string. Each entry is one of:
 
 - a **builtin tool name** — case-insensitive, normalised to lower case: `bash`, `powershell`, `read`,
-  `write`, `edit`, `ls`, `glob`, `grep`, `ask`, `git`, `session`, `knowledge`, `artifact`;
+  `write`, `edit`, `move`, `delete`, `ls`, `glob`, `grep`, `ask`, `git`, `session`, `knowledge`, `artifact`;
 - `agent` — opt-in to **dispatching sub-agents** with the `agent` tool (only up to the nesting
   cap: a dispatched agent may itself dispatch only while the depth limit, 2 by default, allows);
 - `mcp:<server>` — every tool of that MCP server (the server's name as configured in Settings;
@@ -161,8 +161,9 @@ opened in its own window — changing the document only through `doc_read` / `do
 only one holding `mcp:chrome` — the user's own Chrome) — plus
 the task agents `coding`, `explore` and `titler`, and two agents only ShuviX
 dispatches: `permission-reviewer`, which answers approval requests for the automatic review (see
-the `policy-md` entry), and `knowledge-writer`, which checks an entry submitted through the
-`knowledge` tool and completes its metadata (see the `knowledge-entry` entry).
+the `policy-md` entry), and `knowledge-writer`, the knowledge librarian — the only agent that
+writes knowledge bases, recording what other agents submit through the `knowledge` tool (see the
+`knowledge-entry` entry).
 
 - **A session's root persona is derived from the session's form, never chosen**: notebook or
   markdown window → `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →

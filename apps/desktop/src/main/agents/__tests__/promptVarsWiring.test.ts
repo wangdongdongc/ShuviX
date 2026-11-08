@@ -672,8 +672,9 @@ describe('desktopPromptVars —— 锁的名单形态（H11-62）', () => {
 
 /**
  * `{{shuvix:documentKind}}`（PVW-DK1…DK6）—— 笔记本会话的文档是 ShuviX 文件时说这是什么文件、规范在说明书哪一条。
- * 判定按会话的承载项目（sessionDao.pick 的 projectId），说明书目录取 knowledge 的 builtinManualDir()（替身
- * 给 `/fixture/knowledge/shuvix/en`），名单里有 `read` 才指路。
+ * 判定按会话的承载项目（sessionDao.pick 的 projectId），说明书在不在取 knowledge 的 builtinManualDir()（替身
+ * 给 `/fixture/knowledge/shuvix/en`），名单里有 `knowledge` 才指路 —— 2026-11-08 起按条目名经 `knowledge` 读，
+ * 目录从不进提示词。
  */
 describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', () => {
   const MANUAL = '/fixture/knowledge/shuvix/en'
@@ -693,17 +694,18 @@ describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', (
     ['__knowledge_user__', 'knowledge', ['knowledge-entry.md']],
     ['__knowledge_builtin__', 'knowledge', ['knowledge-entry.md']]
   ]
-  const WITH_READ = ['doc_read', 'read', 'skill']
+  const WITH_READ = ['doc_read', 'read', 'knowledge', 'skill']
 
   it.each(CARRIERS)(
-    'PVW-DK1 根会话、名单有 read，承载项目 %s → %s：自含块、点到说明书条目、与片段直接渲染逐字相同；按本会话查 projectId',
+    'PVW-DK1 根会话、名单有 knowledge，承载项目 %s → %s：自含块、按条目名点到说明书、不带目录、与片段直接渲染逐字相同；按本会话查 projectId',
     async (projectId, kind, files) => {
       mocks.pick.mockReturnValue({ projectId })
       const vars = await varsFor({ kind: 'root', toolNames: WITH_READ })
       expect(vars.documentKind.startsWith('## ')).toBe(true)
-      for (const file of files) expect(vars.documentKind).toContain(`${MANUAL}/${file}`)
+      for (const file of files) expect(vars.documentKind).toContain(`\`/${file}\``)
+      expect(vars.documentKind).not.toContain(MANUAL)
       expect(vars.documentKind).toBe(
-        renderDocumentKind('en', { kind, manualDir: MANUAL, read: true })
+        renderDocumentKind('en', { kind, manual: true, knowledge: true })
       )
       expect(mocks.pick).toHaveBeenCalledWith(SID, expect.arrayContaining(['projectId']))
     }
@@ -724,17 +726,17 @@ describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', (
     }
   )
 
-  it('PVW-DK3 名单没有 read，或这台机器上没有说明书 → 仍说这是什么文件，但不指路', async () => {
+  it('PVW-DK3 名单没有 knowledge，或这台机器上没有说明书 → 仍说这是什么文件，但不指路', async () => {
     mocks.pick.mockReturnValue({ projectId: '__policies__' })
-    const withoutRead = await varsFor({ kind: 'root', toolNames: ['doc_read', 'doc_edit'] })
+    const withoutRead = await varsFor({ kind: 'root', toolNames: ['doc_read', 'doc_edit', 'read'] })
     expect(withoutRead.documentKind.startsWith('## ')).toBe(true)
-    expect(withoutRead.documentKind).not.toContain('/fixture/')
+    expect(withoutRead.documentKind).not.toContain('/policy-md.md')
     expect(withoutRead.documentKind).not.toContain('<<manual>>')
 
     mocks.manualDir = null
     const noManual = await varsFor({ kind: 'root', toolNames: WITH_READ })
     expect(noManual.documentKind.startsWith('## ')).toBe(true)
-    expect(noManual.documentKind).not.toContain('/fixture/')
+    expect(noManual.documentKind).not.toContain('/policy-md.md')
     expect(noManual.documentKind).not.toContain('<<manual>>')
     // 两种缺席是同一个结果：「不指一份读不到的文件」
     expect(noManual.documentKind).toBe(withoutRead.documentKind)
@@ -752,11 +754,12 @@ describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', (
     expect('documentKind' in vars).toBe(false)
   })
 
-  it('PVW-DK5 界面语言 zh：取中文那一版的片段，说明书路径照旧用宿主给的目录', async () => {
+  it('PVW-DK5 界面语言 zh：取中文那一版的片段，说明书照旧按条目名点', async () => {
     mocks.pick.mockReturnValue({ projectId: '__hooks__' })
     const vars = await inLanguage('zh', () => varsFor({ kind: 'root', toolNames: WITH_READ }))
     expect(vars.documentKind.startsWith('## 这份文档是什么')).toBe(true)
-    expect(vars.documentKind).toContain(`${MANUAL}/hook-md.md`)
+    expect(vars.documentKind).toContain('`/hook-md.md`')
+    expect(vars.documentKind).not.toContain(MANUAL)
   })
 
   it('PVW-DK6 notebook 档案 × 三语言组装：ShuviX 文件 → 那一块落在身份那段与下一个小标题之间；不是 → 身份那段之后隔一个空行就是下一个小标题', async () => {

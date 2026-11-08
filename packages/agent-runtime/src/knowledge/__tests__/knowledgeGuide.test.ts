@@ -1,18 +1,21 @@
 /**
  * `<knowledge_bases>` 围栏的正文（围栏本身由 createAgent 加）。
  *
- * 它回答的只有两件事：**这条会话手头有哪几个库、怎么进去**。早先这段是静态的、以「这个项目有
+ * 它回答的只有两件事：**这条会话手头有哪几个库、什么时候用**。早先这段是静态的、以「这个项目有
  * 一个知识库」开篇，每个项目会话都得付一整段项目库说教；现在主角是用户自己的库，项目库只是
- * 其中一个名字 —— 所以本文件钉的就是「压到列表 + 三句话」这个形状：
+ * 其中一个名字 —— 所以本文件钉的就是「压到列表 + 几句话」这个形状：
  *   - 一个库都没有 → **返回 null**（整段不注入，零成本），不是空串也不是只剩表头的一段；
  *   - 列表逐库一行，顺序原样（选择的顺序就是宿主给的顺序），不排序不去重；
- *   - 正文**不含条目、不含计数** —— 条目怎么进系统提示词是尚未决定的设计；路径只有宿主给的
- *     库目录（条目由 agent 直接 `write` 进库再 `submit`，印目录正是为了让它写得进去）；
+ *   - 正文**不含条目、不含计数、不含任何路径** —— 条目怎么进系统提示词是尚未决定的设计；库目录只有
+ *     知识库管理员知道（2026-11-08）：别的 agent 按库名经 `knowledge` 检索、读，要记的内容 `submit`
+ *     给管理员，所以围栏不再印目录；
  *   - label 原样印出，渲染器**不认识任何一种库** —— 「只读的内置库」是宿主那一侧的概念，
  *     到这里只剩一个名字加一句 label，所以这里没有、也不该有按名字特判的分支。
  */
 import { describe, it, expect } from 'vitest'
-import { renderKnowledgeGuide } from '../knowledgeGuide'
+import { renderKnowledgeGuide, type KnowledgeGuideBase } from '../knowledgeGuide'
+
+const listLines = (text: string): string[] => text.split('\n').filter((l) => l.startsWith('- '))
 
 describe('KG-1..4 知识库围栏正文', () => {
   it('KG-1 一个库都没有 → null（不是空串、不是只有表头的一段）', () => {
@@ -26,8 +29,7 @@ describe('KG-1..4 知识库围栏正文', () => {
       { name: 'project', label: 'Acme Corp' },
       { name: 'notes', label: 'notes' }
     ])!
-    const lines = text.split('\n').filter((line) => line.startsWith('- '))
-    expect(lines).toEqual(['- 读书笔记', '- project — Acme Corp', '- notes — notes'])
+    expect(listLines(text)).toEqual(['- 读书笔记', '- project — Acme Corp', '- notes — notes'])
 
     // 空串 label 与缺省同义：不印一个吊在后面的破折号
     expect(renderKnowledgeGuide([{ name: 'notes', label: '' }])).toContain('- notes\n')
@@ -35,20 +37,22 @@ describe('KG-1..4 知识库围栏正文', () => {
 
     // 顺序即宿主给的顺序（= 用户选择的顺序）；重名也不合并 —— 归一是解析那一侧的事
     const raw = renderKnowledgeGuide([{ name: 'b' }, { name: 'a' }, { name: 'b' }])!
-    expect(raw.split('\n').filter((line) => line.startsWith('- '))).toEqual(['- b', '- a', '- b'])
+    expect(listLines(raw)).toEqual(['- b', '- a', '- b'])
   })
 
   it('KG-3 正文只有清单 + 几句话：给入口不给内容', () => {
     const text = renderKnowledgeGuide([{ name: 'notes' }, { name: 'project', label: 'Acme' }])!
 
-    // 入口：用哪个工具、什么时候搜、什么值得记、记完提交
+    // 入口：用哪个工具、什么时候搜、什么值得交、交了说一句
     expect(text).toContain('`search`')
-    expect(text).toContain('submit')
+    expect(text).toContain('`knowledge` tool')
+    expect(text).toContain('Submit what will be looked up again')
+    expect(text).toContain('Say in one line what you submitted.')
     expect(text).not.toContain('`create`')
     // 「留空 base 搜全部」是怎么用，归工具描述（KT-12 钉在那边），围栏不再重复付一遍
     expect(text).not.toContain('`base` out')
 
-    // 不给内容：没有条目文件名、没有条目计数；宿主没给目录时也没有任何路径
+    // 不给内容：没有条目文件名、没有条目计数、没有任何路径
     expect(text).not.toContain('.md')
     expect(text).not.toContain('/')
     expect(/\d/.test(text), `no counts in: ${text}`).toBe(false)
@@ -62,9 +66,7 @@ describe('KG-1..4 知识库围栏正文', () => {
     // 一句完全普通的 label：它恰好在说「这个库是只读的说明书」，但对渲染器而言就是一串字
     const LABEL = 'read-only reference: how ShuviX files are written and where they live'
     const lines = (bases: Parameters<typeof renderKnowledgeGuide>[0]): string[] =>
-      renderKnowledgeGuide(bases)!
-        .split('\n')
-        .filter((line) => line.startsWith('- '))
+      listLines(renderKnowledgeGuide(bases)!)
 
     // 带 label 的排在最前、没有 label 的夹在中间：字母序、「有 label 的靠后」之类的重排都会露馅
     expect(
@@ -84,91 +86,82 @@ describe('KG-1..4 知识库围栏正文', () => {
 })
 
 /**
- * 带目录（2026-10-12）：条目由 agent 直接 `write` 进库再 `submit`，所以围栏把宿主给的库目录印在列表行上，
- * 省一次 `bases`。目录只出现在 `- ` 列表行里 —— 正文仍是「给入口不给内容」，KG-3 那组「无路径、无计数」
- * 的断言收窄到正文照样成立（项目库目录里有 uuid 的数字与斜杠）。
+ * 不印库目录（2026-11-08）：库目录只有知识库管理员知道。`KnowledgeGuideBase` 上没有 `dir` 了；宿主那一侧
+ * 若还带着旧字段塞进来，渲染器也不看它 —— 列表行恰为 `- <name>` / `- <name> — <label>`。
  */
-describe('KG-5..8 列表行带库目录', () => {
-  const listLines = (text: string): string[] => text.split('\n').filter((l) => l.startsWith('- '))
-
-  it('KG-5 `- <name> — <label> — <dir>`；空 label 不留吊着的破折号', () => {
-    const text = renderKnowledgeGuide([
-      { name: 'project', label: 'Acme', dir: '/kb/projects/p1' },
-      { name: 'notes', dir: '/u/notes' },
-      { name: 'x', label: '', dir: '/u/x' }
-    ])!
-    expect(listLines(text)).toEqual([
-      '- project — Acme — /kb/projects/p1',
-      '- notes — /u/notes',
-      '- x — /u/x'
-    ])
+describe('KG-5..7 不印库目录', () => {
+  it('KG-5 KnowledgeGuideBase 恰为 name / label / readonly / note —— 没有 dir', () => {
+    const keys: Record<keyof KnowledgeGuideBase, true> = {
+      name: true,
+      label: true,
+      readonly: true,
+      note: true
+    }
+    expect(Object.keys(keys).sort()).toEqual(['label', 'name', 'note', 'readonly'])
   })
 
-  it('KG-6 dir 为空串或缺省：不印目录，也不多出一个 ` — `', () => {
-    const text = renderKnowledgeGuide([
-      { name: 'a', dir: '' },
-      { name: 'b', label: 'B', dir: '' },
-      { name: 'c', label: 'C' }
-    ])!
-    expect(listLines(text)).toEqual(['- a', '- b — B', '- c — C'])
+  it('KG-6 宿主仍塞进一个 dir（旧调用方）：不印，行里不多出一个 ` — `；整段没有任何路径', () => {
+    const stale = [
+      { name: 'project', label: 'Acme', dir: '/kb/projects/0199a2b3-7c4d-7e5f-8a9b-0c1d2e3f4a5b' },
+      { name: 'notes', dir: '/Users/me/.shuvix/knowledge/notes' },
+      { name: '读书笔记', label: '', dir: 'C:\\Users\\张 三\\.shuvix\\knowledge\\读书笔记' }
+    ] as unknown as KnowledgeGuideBase[]
+    const text = renderKnowledgeGuide(stale)!
+    expect(listLines(text)).toEqual(['- project — Acme', '- notes', '- 读书笔记'])
+    for (const piece of ['/kb/', '.shuvix', 'C:\\', '0199a2b3', '\\']) {
+      expect(text, piece).not.toContain(piece)
+    }
+    expect(text).not.toContain('/')
   })
 
-  it('KG-7 带目录时正文（非列表行）仍无路径、无数字、无 .md；讲 submit，不讲 `create`', () => {
-    const text = renderKnowledgeGuide([
-      {
-        name: 'project',
-        label: 'Acme',
-        dir: '/kb/projects/0199a2b3-7c4d-7e5f-8a9b-0c1d2e3f4a5b'
-      },
-      { name: 'notes', dir: '/Users/me/.shuvix/knowledge/notes' }
-    ])!
+  it('KG-7 正文讲 submit（交给库、不讲写进目录）：没有 write / directory / record 的旧说法', () => {
+    const text = renderKnowledgeGuide([{ name: 'notes' }])!
     const body = text
       .split('\n')
       .filter((l) => !l.startsWith('- '))
       .join('\n')
-    expect(body).not.toContain('/')
-    expect(/\d/.test(body), `no digits in: ${body}`).toBe(false)
-    expect(body).not.toContain('.md')
+    expect(body).toContain('to the base the subject belongs to')
     expect(body).toContain('submit')
-    expect(body).not.toContain('`create`')
-    // 目录确实印出来了：守卫收窄之后不是因为目录根本没出现才通过
-    expect(text).toContain('/kb/projects/0199a2b3-7c4d-7e5f-8a9b-0c1d2e3f4a5b')
-  })
-
-  it('KG-8 目录原样印出：Windows 反斜杠、空格、中文一字不改', () => {
-    const dir = 'C:\\Users\\张 三\\.shuvix\\knowledge\\读书笔记'
-    expect(listLines(renderKnowledgeGuide([{ name: '读书笔记', dir }])!)).toEqual([
-      `- 读书笔记 — ${dir}`
-    ])
+    for (const phrase of [
+      '`write`',
+      'write',
+      'directory',
+      'Record what',
+      'and submit it',
+      'what you\nrecorded',
+      'recorded'
+    ]) {
+      expect(body, phrase).not.toContain(phrase)
+    }
   })
 })
 
 /**
- * 只读的库（2026-11-02）：说明书默认启用之后，「搜了再干、记下来」那段不再是每条会话都该付的 —— 手头全是只读的库时
- * 记不了，而说明书也不是每件事都该先搜的。库自己的说明（`note`，宿主给）印在通用说明之后，什么时候来这个库由它说。
+ * 只读的库（2026-11-02）：说明书默认启用之后，「搜了再干、交上去」那段不再是每条会话都该付的 —— 手头全是只读的库时
+ * 交不了，而说明书也不是每件事都该先搜的。库自己的说明（`note`，宿主给）印在通用说明之后，什么时候来这个库由它说。
  */
 describe('KG-R 只读的库与库自己的说明', () => {
   const NOTE = 'When a task touches this manual, read it first.'
   const paragraphsOf = (text: string): string[] => text.split('\n\n')
   /** 通用说明那一段（靠它教的两个动作认：搜索、提交） */
-  const isRecordParagraph = (p: string): boolean => p.includes('`search`') && p.includes('submit')
+  const isRecordParagraph = (p: string): boolean => p.includes('`search`') && /submit/i.test(p)
 
-  it('KG-R1 全是只读的库：没有搜索 / 记录那段，清单与说明照印', () => {
+  it('KG-R1 全是只读的库：没有搜索 / 提交那段，清单与说明照印', () => {
     const text = renderKnowledgeGuide([
-      { name: 'shuvix', label: 'manual', dir: '/app/kb/en', readonly: true, note: NOTE }
+      { name: 'shuvix', label: 'manual', readonly: true, note: NOTE }
     ])!
 
     expect(paragraphsOf(text).filter(isRecordParagraph)).toEqual([])
     expect(text).not.toContain('`search`')
-    expect(text).not.toContain('submit')
-    expect(text).toContain('- shuvix — manual — /app/kb/en')
+    expect(text).not.toMatch(/submit/i)
+    expect(listLines(text)).toEqual(['- shuvix — manual'])
     expect(paragraphsOf(text).at(-1)).toBe(NOTE)
   })
 
   it('KG-R2 一个可写加一个只读：那段只出现一次，说明排在它之后；只有可写的库时没有说明这一段', () => {
     const text = renderKnowledgeGuide([
       { name: 'shuvix', label: 'manual', readonly: true, note: NOTE },
-      { name: 'notes', dir: '/u/notes' }
+      { name: 'notes' }
     ])!
     const paragraphs = paragraphsOf(text)
 

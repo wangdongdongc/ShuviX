@@ -51,8 +51,8 @@ shuvix-hook-on:
     when: event.profileName == 'work' && event.textMessageCount >= 2
 ---
 
-Read `recentText` in the event below. If it holds a decision about this project, write it into
-the `project` knowledge base and submit it. Otherwise finish without writing.
+Read `recentText` in the event below. If it holds a decision about this project, submit it to
+the `project` knowledge base. Otherwise finish without submitting.
 ```
 
 ## Frontmatter keys

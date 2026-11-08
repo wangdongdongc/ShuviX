@@ -127,12 +127,13 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 知识库条目的提交检查（OKF）—— `knowledge` 工具 `submit` 的执行侧，**只由宿主派发**：主 agent 用文件
- * 工具把条目写进库，提交时宿主同步派它补齐元数据、判内容站不站得住，经 `next` 交回 `{passed, report}`；
- * 通过的章由宿主盖（knowledge/review.ts）。元数据的写法（键表、类型词汇表、出处规则）只写在这份提示词里 ——
- * 主 agent 因此不必为它付每会话的提示词。
+ * 知识库管理员（OKF）—— `knowledge` 工具 `submit` 的执行侧，**只由宿主派发**，也是唯一写知识库的 agent
+ * （2026-11-08）：别的 agent 只交内容，宿主同步派它，由它用文件工具（read / write / edit / move / delete / grep）
+ * 决定新建、改写、合并、改名、删除还是不收，经 `next` 交回 `{accepted, entries, report}`；它报上来的合规条目由
+ * 宿主盖章（knowledge/review.ts）。组织规则与元数据的写法只写在这份提示词里 —— 别的 agent 因此不必为它付
+ * 每会话的提示词。边界（只动库目录、不碰用户自己的笔记、不去库外核实事实）也只靠这份提示词，不设硬卡点。
  *
- * 不依赖任何宿主参数：要检查的文件、所在的库、提交者都由任务文本给出。
+ * 不依赖任何宿主参数：库、库目录、提交者与提交的内容都由任务文本给出。
  */
 export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
   name: KNOWLEDGE_WRITER_PROFILE_NAME

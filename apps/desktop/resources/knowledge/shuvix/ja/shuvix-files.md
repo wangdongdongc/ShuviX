@@ -31,7 +31,7 @@ ShuviX は **`~/.shuvix/` 配下の markdown ファイル**でカスタマイズ
 | **Skill** —— 再利用できる指示パック（Agent Skills 形式）       | `~/.shuvix/skills/<name>/SKILL.md`、`<project>/.claude/skills/<name>/SKILL.md` | なし（`name:` が必須）   | `skills`          |
 
 `~/.shuvix/` 配下のそれ以外は ShuviX 自身のもので、手で編集する場所ではありません：`knowledge-shuvix/`
-（ShuviX が維持するナレッジバンドル、プロジェクトごとに一つ —— `knowledge` ツール経由で書かれる）、
+（ShuviX が維持するナレッジバンドル、プロジェクトごとに一つ —— ナレッジ司書 `knowledge-writer` が書く）、
 `skills/.config.json`（無効化した skill と登録した追加 skill ディレクトリ）、`widgets/`、`tts/`、
 `cli-token`。古い `memory/`、`wikis/`、`workflows/` は廃止された形式で、もう読まれません。
 

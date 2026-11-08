@@ -380,11 +380,15 @@ export async function addOp(
       } else if (exists) {
         toAdd.add(p)
       } else {
-        // 工作区没有：tracked 则暂存删除，否则报错
+        // 工作区没有：tracked 则暂存删除，否则报错。删掉 / 挪走的是整个目录时（同 `git add <已删的目录>`），
+        // 底下每一个 tracked 的文件都暂存删除
         const rows = (await git.statusMatrix({ fs, dir, cache, filepaths: [p] })) as MatrixRow[]
-        const row = rows.find(([fp]) => fp === p)
-        if (row && row[3] !== 0) toRemove.add(p)
-        else return bizError(`pathspec "${p}" did not match any files`)
+        const under = `${p.replace(/\/+$/, '')}/`
+        const tracked = rows.filter(
+          ([fp, , , stage]) => (fp === p || fp.startsWith(under)) && stage !== 0
+        )
+        if (tracked.length === 0) return bizError(`pathspec "${p}" did not match any files`)
+        for (const [fp] of tracked) toRemove.add(fp)
       }
     }
 

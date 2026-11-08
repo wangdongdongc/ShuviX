@@ -31,8 +31,8 @@ the full key-by-key specification.
 | **Skill** — a reusable instruction pack (Agent Skills format)                | `~/.shuvix/skills/<name>/SKILL.md`, `<project>/.claude/skills/<name>/SKILL.md` | none (`name:` required) | `skills`          |
 
 Other things under `~/.shuvix/` are ShuviX's own and are not meant to be edited by hand:
-`knowledge-shuvix/` (ShuviX-maintained knowledge bundles, one per project — written through the
-`knowledge` tool), `skills/.config.json` (which skills are disabled and which extra skill
+`knowledge-shuvix/` (ShuviX-maintained knowledge bundles, one per project — written by the
+knowledge librarian, `knowledge-writer`), `skills/.config.json` (which skills are disabled and which extra skill
 directories are registered), `widgets/`, `tts/`, `cli-token`. The old `memory/`, `wikis/` and
 `workflows/` directories are retired formats that are no longer read.
 

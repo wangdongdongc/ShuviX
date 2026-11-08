@@ -1,11 +1,17 @@
 /**
  * 桌面文件工具 deps —— 给共享 createFileToolSuite 注入桌面端适配（Node fs / fileTime / 绝对路径 /
- * 桌面 SecurityContext）。read/write/edit 三个工具共用同一份装配；read 额外注入内容解码器。
+ * 桌面 SecurityContext）。read/write/edit/move/delete 共用同一份装配；read 额外注入内容解码器。
  *
  * 配置（workingDirectory / 会话权限表）按工具执行时机动态解析（resolveProjectConfig、安全上下文的 getVars），
  * 故 resolvePath / security 内部都走惰性 thunk，保证拿到最新值（对齐原 ReadTool/WriteTool 行为）。
  */
-import type { FileToolDeps, ReadDecoders, FileGuards } from '@shuvix/agent-runtime'
+import {
+  DELETE_DESCRIPTION,
+  MOVE_DESCRIPTION,
+  type FileToolDeps,
+  type ReadDecoders,
+  type FileGuards
+} from '@shuvix/agent-runtime'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { resolveReadPath, resolveToCwd } from '../utils/toolUtils/pathUtils'
 import {
@@ -45,6 +51,19 @@ function desktopGuards(sessionId: string): FileGuards {
     recordRead: (p) => recordRead(sessionId, p),
     withFileLock: (p, fn) => withFileLock(p, fn)
   }
+}
+
+/**
+ * 知识库变更管线模块（按需加载：它带着扫描 / git / 检索 / dao 依赖，普通写入不该为它付加载成本，文件工具的
+ * 单测也不该因此被拖进数据库初始化）。所有回调共用一次加载 —— move 一次就回调两条；加载失败下次重来
+ */
+let knowledgeModule: Promise<typeof import('../services/knowledge')> | null = null
+function loadKnowledgeModule(): Promise<typeof import('../services/knowledge')> {
+  knowledgeModule ??= import('../services/knowledge').catch((err: unknown) => {
+    knowledgeModule = null
+    throw err
+  })
+  return knowledgeModule
 }
 
 /** 笔记本会话自己那份文档只经 doc_* 改：write / edit 碰它时给模型的话 */
@@ -93,20 +112,39 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     writtenNote: (path, text) => policyWrittenNote(path, text) ?? botScheduleHint(path, text),
     decoders,
     abortError: TOOL_ABORTED,
-    labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
-    descriptions: { read: READ_DESCRIPTION, write: WRITE_DESCRIPTION, edit: EDIT_DESCRIPTION },
-    // write/edit 成功 → 发布 files.changed（带绝对路径，桌面 UI 路径空间即绝对路径）。
+    labels: {
+      read: t('tool.readLabel'),
+      write: t('tool.writeLabel'),
+      edit: t('tool.editLabel'),
+      move: t('tool.moveLabel'),
+      delete: t('tool.deleteLabel')
+    },
+    descriptions: {
+      read: READ_DESCRIPTION,
+      write: WRITE_DESCRIPTION,
+      edit: EDIT_DESCRIPTION,
+      move: MOVE_DESCRIPTION,
+      delete: DELETE_DESCRIPTION
+    },
+    // write/edit/move/delete 成功 → 发布 files.changed（带绝对路径，桌面 UI 路径空间即绝对路径）。
     // chokidar 不监听 'change' 事件 → 已存在文件的内容编辑全靠这里触发预览刷新。
-    onFileChange: ({ portPath, kind }, call) => {
+    // move 到这里是两次（源 delete、目标 write）。挪走 / 删掉一整个目录时不给 paths：文件树里目录条目
+    // 带结尾斜杠、其下已加载的条目也得跟着变，按「未知」保守整体刷新
+    onFileChange: ({ portPath, kind, isDirectory }, call) => {
       const root = resolveProjectConfig(sid).workingDirectory
-      if (root) appEventBus.publish({ type: 'files.changed', root, paths: [portPath], kind })
-      // 落在某个 bundle 里的写入进变更管线（git 提交 + knowledge.changed）。
-      // 模块按需加载：它带着扫描 / git / 检索 / dao 依赖，普通写入不该为它付加载成本，
-      // 文件工具的单测也不该因此被拖进数据库初始化
+      if (root) {
+        appEventBus.publish(
+          isDirectory
+            ? { type: 'files.changed', root }
+            : { type: 'files.changed', root, paths: [portPath], kind }
+        )
+      }
+      // 落在某个 bundle 里的改动进变更管线（git 提交 + knowledge.changed），模块按需加载（loadKnowledgeModule）
       if (bundleRelOf(portPath) !== null) {
         const actor = agentActorOf(withCallAgent(ctx, call))
-        void import('../services/knowledge')
-          .then((m) => m.notifyKnowledgeFileChanged(portPath, { kind, actor }))
+        const dir = isDirectory ? { isDirectory: true } : {}
+        void loadKnowledgeModule()
+          .then((m) => m.notifyKnowledgeFileChanged(portPath, { kind, actor, ...dir }))
           .catch(() => {
             /* 变更管线是增益能力：加载失败不影响已完成的写入 */
           })

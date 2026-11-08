@@ -68,7 +68,7 @@ style, each with file and line. Never modify files.
 
 一个逗号分隔的字符串。每一项是下面之一：
 
-- **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`powershell`、`read`、`write`、`edit`、`ls`、`glob`、
+- **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`powershell`、`read`、`write`、`edit`、`move`、`delete`、`ls`、`glob`、
   `grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— 选择加入用 `agent` 工具**派发子代理**（受嵌套上限约束：被派发的 agent 只在深度上限
   —— 缺省 2 —— 允许时才能继续派发）；
@@ -142,8 +142,8 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 文件 —— 只经 `doc_read` / `doc_edit` / `doc_insert` 改那份文档）、`bot`（bot 会话的根）、`tab`（Chrome
 侧边栏对话的根，唯一带 `mcp:chrome` —— 用户自己的 Chrome —— 的一个）—— 加上任务型
 agent `coding`、`explore`、`titler`，以及两个只由 ShuviX 派发的 agent：`permission-reviewer`
-—— 它替自动审查回答审批请求（见 `policy-md` 条目），和 `knowledge-writer` —— 它检查经 `knowledge` 工具
-提交的条目并补齐元数据（见 `knowledge-entry` 条目）。
+—— 它替自动审查回答审批请求（见 `policy-md` 条目），和 `knowledge-writer` —— 知识库管理员，唯一写
+知识库的 agent，收录别的 agent 经 `knowledge` 工具提交的内容（见 `knowledge-entry` 条目）。
 
 - **会话的根人格由会话形态推导，从不选择**：笔记本或 md 窗口 → `notebook`，bot 会话 → `bot`，Chrome 侧边栏 →
   `tab`，在项目里 → `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：

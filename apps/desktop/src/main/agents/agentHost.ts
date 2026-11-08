@@ -639,8 +639,8 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
             kind: shuvixFileKindOfProject(
               sessionRecords.pick(ctx.sessionId, ['projectId'])?.projectId
             ),
-            manualDir: builtinManualDir() ?? undefined,
-            read: ctx.toolNames.includes('read')
+            manual: builtinManualDir() !== null,
+            knowledge: ctx.toolNames.includes('knowledge')
           })
         }
       : {})

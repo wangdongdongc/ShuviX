@@ -1,11 +1,15 @@
 /**
- * 共享文件工具套件 —— read / write / edit 的整条执行流程（宿主无关）。
+ * 共享文件工具套件 —— read / write / edit / move / delete 的整条执行流程（宿主无关）。
  *
  * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 符号链接不跟(路径本身是链接
  * 就只说出它指向哪里) → 路径询问(securityCheck) → 内核(readTextContent/readDirContent/applyWrite/
  * applyEdit) + read 的分派(url/图片/富文档/.doc/二进制/目录/纯文本)。平台差异全部经注入:
  * FileSystemPort / FileGuards / resolvePath / SecurityContext(安全模块 PEP 门面) /
  * ReadDecoders(内容解码器,可选能力函数)。
+ *
+ * move / delete 是不写内容的那两种改动：同一道路径门（'write'，move 的源与目标各问一次）、同一个变更回调
+ * （onFileChange），所以宿主的变更管线（知识库的 git 提交、扫描缓存、files.changed）看得见改名与删除 ——
+ * 不必绕去 shell。两者都要 port 的可选能力（rename / remove），没有的宿主上工具直接报不支持。
  */
 import { Type } from 'typebox'
 import type { ToolResult } from './toolResult'
@@ -16,7 +20,7 @@ import type {
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { BaseTool } from './baseTool'
 import { callOwnerOf, type ToolCallScope } from './toolCall'
-import type { FileSystemPort, FileGuards, WriteAskHook } from '../fileTools/port'
+import type { FileSystemPort, FileGuards, FileStat, WriteAskHook } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { DEFAULT_MAX_LINES } from '../fileTools/truncate'
 import { applyWrite } from '../fileTools/write'
@@ -50,6 +54,35 @@ export const EditParamsSchema = Type.Object({
   }),
   newText: Type.String({ description: 'New text to replace with' })
 })
+export const MoveParamsSchema = Type.Object({
+  from: Type.String({ description: 'The file or directory to move (relative or absolute)' }),
+  to: Type.String({
+    description: 'Its new path, name included (relative or absolute); must not exist yet'
+  })
+})
+export const DeleteParamsSchema = Type.Object({
+  path: Type.String({ description: 'The file or empty directory to delete' })
+})
+
+/** move 的缺省描述（宿主可经 deps.descriptions.move 换掉） */
+export const MOVE_DESCRIPTION =
+  'Move or rename a file or directory. The destination must not exist yet — move never replaces anything. Missing parent directories of the destination are created.'
+/** delete 的缺省描述（宿主可经 deps.descriptions.delete 换掉） */
+export const DELETE_DESCRIPTION =
+  'Delete a file, or an empty directory. A directory that still has entries is refused — delete or move its contents first.'
+
+/**
+ * 文件工具改动磁盘之后的回调事件（onFileChange）。kind 与 AppEvent 'files.changed' 是同一套：write / edit
+ * 写了内容，delete 删掉了一条路径。move 报成一对 —— 源路径一条 delete、紧接着目标路径一条 write ——
+ * 消费方因此不必认第四种 kind：跨出 / 跨进某个范围（知识库 bundle）的挪动，两头各自按自己的位置判。
+ */
+export interface FileChangeEvent {
+  /** 该端 port 路径 */
+  portPath: string
+  kind: 'write' | 'edit' | 'delete'
+  /** 改动的是一整个目录（move / delete 一个目录）；缺省 = 文件 */
+  isDirectory?: boolean
+}
 
 /** 取小写扩展名（含点）；无扩展名返回 '' */
 function extOf(path: string): string {
@@ -140,18 +173,18 @@ export interface FileToolDeps {
   decoders?: ReadDecoders
   /** 取消错误文案（缺省 'Aborted'） */
   abortError?: string
-  labels: { read: string; write: string; edit: string }
-  descriptions: { read: string; write: string; edit: string }
+  /** move / delete 缺省 'Move' / 'Delete'（只有登记了这两个工具的宿主才需要给） */
+  labels: { read: string; write: string; edit: string; move?: string; delete?: string }
+  /** move / delete 缺省 MOVE_DESCRIPTION / DELETE_DESCRIPTION */
+  descriptions: { read: string; write: string; edit: string; move?: string; delete?: string }
   /**
-   * write/edit 成功后回调 —— 端用于发布文件变更事件（AppEvent 'files.changed'）。
+   * write / edit / move / delete 成功后回调 —— 端用于发布文件变更事件（AppEvent 'files.changed'）。
    * portPath 为该端 port 路径；端闭包负责归一到 UI 路径空间并 publish。见 docs/internal-events.md。
+   * move 回调两次（源 delete、目标 write），见 FileChangeEvent。
    * `call` 是这次调用的 scope（单测直接调钩子时为 undefined）—— 会话级装配的工具被同一会话的每个
    * agent 共用，宿主要认出「谁写的」（知识库提交的 actor）只能靠它。
    */
-  onFileChange?(
-    e: { portPath: string; kind: 'write' | 'edit' },
-    call: ToolCallScope | undefined
-  ): void
+  onFileChange?(e: FileChangeEvent, call: ToolCallScope | undefined): void
   /**
    * 写入方（根）会话 id —— 只用于契约 md 的溯源字段（`shuvix-memory-session`）。
    * 不注入则该字段不写，写后校验与其余盖章照常。
@@ -173,9 +206,9 @@ export interface FileToolDeps {
     actor: (call: ToolCallScope | undefined) => string
   }
   /**
-   * write / edit 不许碰的路径（宿主答）：返回拒绝的原因（模型面英文），可写返回 null。今天是笔记本会话
-   * 自己那份文档 —— 它只经 doc_* 改，才有虚影、等用户停手与三方合并。在询问之前判：不为一次不会发生的
-   * 写入弹卡。
+   * write / edit / move / delete 不许碰的路径（宿主答）：返回拒绝的原因（模型面英文），可写返回 null。今天是
+   * 笔记本会话自己那份文档 —— 它只经 doc_* 改，才有虚影、等用户停手与三方合并。在询问之前判：不为一次
+   * 不会发生的写入弹卡。move 的源与目标各问一次。
    */
   refuseWrite?: (portPath: string) => string | null
   /**
@@ -302,8 +335,60 @@ export async function writeFileContent(
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
 
+/** 各工具在符号链接说明里的开头与动词（read 没有开头） */
+const SYMLINK_WORDS: Record<string, { lead: string; verb: string }> = {
+  write: { lead: 'Not written: ', verb: 'write to' },
+  edit: { lead: 'Not edited: ', verb: 'edit' },
+  move: { lead: 'Not moved: ', verb: 'move' },
+  delete: { lead: 'Not deleted: ', verb: 'delete' }
+}
+
+/**
+ * 路径本身是符号链接：不跟过去，抛一句说明 —— 它指向哪里、真要操作就直接用那一条，工具就此结束。
+ * 那条链接是谁放的、为什么指向那里都说不准，替 agent 跟过去不如让它看见了自己决定；它真去读写
+ * 那头时，那一次照常过路径门。只看最后一段：中间段是链接的（链接目录、macOS 的 /var）照常走，
+ * 路径门按真实位置判。放在询问之前 —— 不为一次不会发生的访问弹卡。
+ */
+async function refuseSymlink(
+  deps: FileToolDeps,
+  toolName: string,
+  displayPath: string,
+  portPath: string
+): Promise<void> {
+  const link = await deps.port.readLink?.(portPath)
+  if (!link) return
+  // 相对的链接原文说不出落在哪，但说得出它是怎么写的（`../../.ssh/id_rsa`）；绝对的原文与
+  // resolved 往往只差系统级链接（macOS 的 /var → /private/var），再抄一遍只是噪音
+  const relative = !/^([\\/]|[A-Za-z]:[\\/])/.test(link.target)
+  const said = relative ? ` (the link says "${link.target}")` : ''
+  const { lead, verb } = SYMLINK_WORDS[toolName] ?? { lead: '', verb: 'read' }
+  throw new Error(
+    `${lead}${displayPath} is a symbolic link to ${link.resolved}${said}. ` +
+      `Symbolic links are not followed — ${verb} ${link.resolved} directly if that is the file you mean.`
+  )
+}
+
+/** 路径比较用：分隔符归一、去掉结尾分隔符 */
+const normSep = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+
+/** child 是否落在 parent 之下（不含相等） */
+const isInside = (child: string, parent: string): boolean =>
+  normSep(child).startsWith(`${normSep(parent)}/`)
+
+/** errno 风格的错误码（port 抛的 Node 错误带它；别的宿主没有就是 undefined） */
+const codeOf = (err: unknown): string | undefined =>
+  typeof err === 'object' && err !== null && 'code' in err
+    ? String((err as { code: unknown }).code)
+    : undefined
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
 abstract class FileToolBase<
-  S extends typeof ReadParamsSchema | typeof WriteParamsSchema | typeof EditParamsSchema
+  S extends
+    | typeof ReadParamsSchema
+    | typeof WriteParamsSchema
+    | typeof EditParamsSchema
+    | typeof DeleteParamsSchema
 > extends BaseTool<S> {
   constructor(
     protected deps: FileToolDeps,
@@ -334,25 +419,11 @@ abstract class FileToolBase<
   }
 
   /**
-   * 路径本身是符号链接：不跟过去，抛一句说明 —— 它指向哪里、真要操作就直接用那一条，工具就此结束。
-   * 那条链接是谁放的、为什么指向那里都说不准，替 agent 跟过去不如让它看见了自己决定；它真去读写
-   * 那头时，那一次照常过路径门。只看最后一段：中间段是链接的（链接目录、macOS 的 /var）照常走，
-   * 路径门按真实位置判。放在询问之前 —— 不为一次不会发生的访问弹卡。
+   * 询问之前、拒写判定之后的最后一道（缺省没有）：delete 在这里判「不存在 / 目录非空」——
+   * 不为一次不会发生的删除弹卡。
    */
-  private async refuseSymlink(displayPath: string, portPath: string): Promise<void> {
-    const link = await this.deps.port.readLink?.(portPath)
-    if (!link) return
-    // 相对的链接原文说不出落在哪，但说得出它是怎么写的（`../../.ssh/id_rsa`）；绝对的原文与
-    // resolved 往往只差系统级链接（macOS 的 /var → /private/var），再抄一遍只是噪音
-    const relative = !/^([\\/]|[A-Za-z]:[\\/])/.test(link.target)
-    const said = relative ? ` (the link says "${link.target}")` : ''
-    const lead =
-      this.name === 'write' ? 'Not written: ' : this.name === 'edit' ? 'Not edited: ' : ''
-    const verb = this.name === 'write' ? 'write to' : this.name === 'edit' ? 'edit' : 'read'
-    throw new Error(
-      `${lead}${displayPath} is a symbolic link to ${link.resolved}${said}. ` +
-        `Symbolic links are not followed — ${verb} ${link.resolved} directly if that is the file you mean.`
-    )
+  protected async beforeAsk(_displayPath: string, _portPath: string): Promise<void> {
+    /* no-op */
   }
 
   protected async securityCheck(
@@ -374,11 +445,12 @@ abstract class FileToolBase<
       return
     }
     const portPath = this.deps.resolvePath(params.path, this.mode)
-    await this.refuseSymlink(params.path, portPath)
+    await refuseSymlink(this.deps, this.name, params.path, portPath)
     if (this.mode === 'write') {
       const refused = this.deps.refuseWrite?.(portPath)
       if (refused) throw new Error(refused)
     }
+    await this.beforeAsk(params.path, portPath)
     if (this.deferAskToApply) return
     await this.deps.security.enforcePath(this.mode, portPath, {
       toolCallId,
@@ -577,17 +649,253 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
   }
 }
 
+/** 读取时间还作数吗：读过之后没被改过（守卫不抛） */
+async function stillAsRead(guards: FileGuards, portPath: string): Promise<boolean> {
+  try {
+    await guards.assertNotModifiedSinceRead(portPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 两把文件锁按固定次序拿（A→B 与 B→A 两次并发的 move 不互等） */
+function withTwoLocks<T>(
+  guards: FileGuards,
+  a: string,
+  b: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const [first, second] = a < b ? [a, b] : [b, a]
+  return guards.withFileLock(first, () => guards.withFileLock(second, fn))
+}
+
+/**
+ * move 能不能做（询问之前判一次，拿到锁之后再判一次 —— 询问期间盘上可能变了）。交回源的 stat。
+ * 目标「已存在」有一种例外：只差大小写（大小写不敏感的盘上目标查得到，正是源自己）—— 交给 port 判，
+ * 它认得出是不是同一个文件，不是就抛 EEXIST。
+ */
+async function checkMove(
+  port: FileSystemPort,
+  params: { from: string; to: string },
+  from: string,
+  to: string
+): Promise<FileStat> {
+  if (normSep(from) === normSep(to)) {
+    throw new Error(`Not moved: ${params.from} and ${params.to} are the same path.`)
+  }
+  const source = await port.stat(from)
+  if (!source) throw new Error(`Not moved: ${params.from} does not exist.`)
+  const caseOnly = normSep(from).toLowerCase() === normSep(to).toLowerCase()
+  if (!caseOnly && (await port.stat(to))) {
+    throw new Error(
+      `Not moved: ${params.to} already exists. move never replaces anything — pick another destination, or delete ${params.to} first.`
+    )
+  }
+  if (source.isDirectory && isInside(to, from)) {
+    throw new Error(
+      `Not moved: ${params.to} is inside ${params.from} — a directory cannot be moved into itself.`
+    )
+  }
+  return source
+}
+
+class MoveFileTool extends BaseTool<typeof MoveParamsSchema> {
+  readonly name = 'move'
+  readonly label: string
+  readonly description: string
+  readonly parameters = MoveParamsSchema
+
+  constructor(private deps: FileToolDeps) {
+    super()
+    this.label = deps.labels.move ?? 'Move'
+    this.description = deps.descriptions.move ?? MOVE_DESCRIPTION
+  }
+
+  private get abortError(): string {
+    return this.deps.abortError ?? 'Aborted'
+  }
+
+  async preExecute(): Promise<void> {
+    if (!this.deps.port.rename) {
+      throw new Error('move is not available here: this host cannot move or rename files.')
+    }
+  }
+
+  /**
+   * 两头都是写：源（它从那里消失）与目标（它在这里出现）各过一次路径门，都在动盘之前。
+   * 次序同 write：符号链接 → 宿主拒写 → 做不做得成（不为一次不会发生的挪动弹卡）→ 询问。
+   */
+  protected async securityCheck(
+    toolCallId: string,
+    params: { from: string; to: string },
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): Promise<void> {
+    if (signal?.aborted) throw new Error(this.abortError)
+    const from = this.deps.resolvePath(params.from, 'write')
+    const to = this.deps.resolvePath(params.to, 'write')
+    const ends: Array<[string, string]> = [
+      [params.from, from],
+      [params.to, to]
+    ]
+    for (const [displayPath, portPath] of ends) {
+      await refuseSymlink(this.deps, this.name, displayPath, portPath)
+      const refused = this.deps.refuseWrite?.(portPath)
+      if (refused) throw new Error(refused)
+    }
+    await checkMove(this.deps.port, params, from, to)
+    for (const [displayPath, portPath] of ends) {
+      await this.deps.security.enforcePath('write', portPath, {
+        toolCallId,
+        ...callOwnerOf(call),
+        toolName: this.name,
+        displayPath,
+        abortError: this.abortError,
+        signal
+      })
+    }
+  }
+
+  protected async executeInternal(
+    _toolCallId: string,
+    params: { from: string; to: string },
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): Promise<ToolResult> {
+    if (signal?.aborted) throw new Error(this.abortError)
+    const { port, guards } = this.deps
+    const from = this.deps.resolvePath(params.from, 'write')
+    const to = this.deps.resolvePath(params.to, 'write')
+    const isDirectory = await withTwoLocks(guards, from, to, async () => {
+      const source = await checkMove(port, params, from, to)
+      // 读过、且读后没被改过的文件，挪过去仍算读过 —— 紧接着在新位置 edit 不该撞「先读一遍」
+      const carryRead =
+        !source.isDirectory && guards.hasReadTime(from) && (await stillAsRead(guards, from))
+      try {
+        await port.rename!(from, to)
+      } catch (err) {
+        if (codeOf(err) === 'EEXIST') {
+          throw new Error(
+            `Not moved: ${params.to} already exists. move never replaces anything — pick another destination, or delete ${params.to} first.`
+          )
+        }
+        throw new Error(`Not moved: ${messageOf(err)}`)
+      }
+      if (carryRead) guards.recordRead(to)
+      return source.isDirectory
+    })
+    const dir = isDirectory ? { isDirectory: true } : {}
+    this.deps.onFileChange?.({ portPath: from, kind: 'delete', ...dir }, call)
+    this.deps.onFileChange?.({ portPath: to, kind: 'write', ...dir }, call)
+    return {
+      content: [{ type: 'text', text: `Moved ${params.from} → ${params.to}` }],
+      details: undefined
+    }
+  }
+}
+
+/**
+ * delete 能不能做（询问之前判一次，拿到锁之后再判一次）。交回它的 stat。
+ * 读过的文件读后被改过 → 守卫抛「先重读」：删掉的会是 agent 没见过的内容。
+ */
+async function checkDelete(
+  deps: FileToolDeps,
+  displayPath: string,
+  portPath: string
+): Promise<FileStat> {
+  const st = await deps.port.stat(portPath)
+  if (!st) throw new Error(`Not deleted: ${displayPath} does not exist.`)
+  if (st.isDirectory) {
+    const count = (await deps.port.readdir(portPath)).length
+    if (count > 0) {
+      throw new Error(
+        `Not deleted: ${displayPath} is a directory with ${count} ${count === 1 ? 'entry' : 'entries'} in it. delete removes only files and empty directories — delete or move what is inside first.`
+      )
+    }
+  } else if (deps.guards.hasReadTime(portPath)) {
+    await deps.guards.assertNotModifiedSinceRead(portPath)
+  }
+  return st
+}
+
+class DeleteFileTool extends FileToolBase<typeof DeleteParamsSchema> {
+  readonly name = 'delete'
+  readonly label: string
+  readonly description: string
+  readonly parameters = DeleteParamsSchema
+
+  constructor(deps: FileToolDeps) {
+    super(deps, 'write')
+    this.label = deps.labels.delete ?? 'Delete'
+    this.description = deps.descriptions.delete ?? DELETE_DESCRIPTION
+  }
+
+  async preExecute(): Promise<void> {
+    if (!this.deps.port.remove) {
+      throw new Error('delete is not available here: this host cannot delete files.')
+    }
+  }
+
+  protected async beforeAsk(displayPath: string, portPath: string): Promise<void> {
+    await checkDelete(this.deps, displayPath, portPath)
+  }
+
+  protected async executeInternal(
+    _toolCallId: string,
+    params: { path: string },
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): Promise<ToolResult> {
+    if (signal?.aborted) throw new Error(this.abortError)
+    const portPath = this.deps.resolvePath(params.path, 'write')
+    const isDirectory = await this.deps.guards.withFileLock(portPath, async () => {
+      const st = await checkDelete(this.deps, params.path, portPath)
+      try {
+        await this.deps.port.remove!(portPath)
+      } catch (err) {
+        if (codeOf(err) === 'ENOTEMPTY' || codeOf(err) === 'EEXIST') {
+          throw new Error(
+            `Not deleted: ${params.path} is a directory that is not empty. delete removes only files and empty directories — delete or move what is inside first.`
+          )
+        }
+        throw new Error(`Not deleted: ${messageOf(err)}`)
+      }
+      return st.isDirectory
+    })
+    this.deps.onFileChange?.(
+      { portPath, kind: 'delete', ...(isDirectory ? { isDirectory: true } : {}) },
+      call
+    )
+    return {
+      content: [
+        {
+          type: 'text',
+          text: isDirectory
+            ? `Deleted the empty directory ${params.path}`
+            : `Deleted ${params.path}`
+        }
+      ],
+      details: undefined
+    }
+  }
+}
+
 export interface FileToolSuite {
   read: ReadFileTool
   write: WriteFileTool
   edit: EditFileTool
+  move: MoveFileTool
+  delete: DeleteFileTool
 }
 
-/** 构建一套 read/write/edit 工具（BaseTool 子类，即 durable 的 ToolRegistration） */
+/** 构建一套 read/write/edit/move/delete 工具（BaseTool 子类，即 durable 的 ToolRegistration） */
 export function createFileToolSuite(deps: FileToolDeps): FileToolSuite {
   return {
     read: new ReadFileTool(deps),
     write: new WriteFileTool(deps),
-    edit: new EditFileTool(deps)
+    edit: new EditFileTool(deps),
+    move: new MoveFileTool(deps),
+    delete: new DeleteFileTool(deps)
   }
 }

@@ -5,9 +5,9 @@
  *   - 用 `readFileSync` + `import.meta.url` 从磁盘读，**不走 `?raw`** —— 用例不该依赖打包插件；
  *   - 只读，一个字节都不写盘。
  *
- * knowledge-writer（2026-10-12 起是 `knowledge` 工具 `submit` 的检查方）：三种语言的段落结构一致（翻译时
- * 漏掉一段，模型在那门语言里就少一条规矩），示例 frontmatter 里每个它该补的键都在 —— 键表只住在这份
- * 提示词里，示例少一个键，写手就少补一个。
+ * knowledge-writer（2026-11-08 起是知识库管理员，唯一写库的 agent）：三种语言的段落结构一致（翻译时
+ * 漏掉一段，模型在那门语言里就少一条规矩），示例 frontmatter 里每个它该写的键都在 —— 键表只住在这份
+ * 提示词里，示例少一个键，它写的条目就少一个。
  *
  * bot（bot 会话的基座档案，2026-10-24 起「自己动手干活」）：三种语言的工具面一字不差、没有 bash / MCP；description
  * 与正文里不再残留「真正的活都交给子会话、write/edit 不许用来干活」那套旧说法 —— 日报 bot 被定时叫起来时要自己写
@@ -35,13 +35,13 @@ describe.each(localized('knowledge-writer'))('BA knowledge-writer · %s', (file)
   /** 正文里那段 ```yaml 示例 */
   const example = /```yaml\n([\s\S]*?)```/.exec(text)?.[1] ?? ''
 
-  it('BA-1 三段结构一致：恰三个 `## ` 段（元数据 / 判定 / 交回），没有编号步骤', () => {
+  it('BA-1 三段结构一致：恰三个 `## ` 段（收录 / 元数据 / 交回），没有编号步骤', () => {
     expect(sections).toHaveLength(3)
     // 改版前的「search → create → edit → validate」四步流程不该残留
     expect(text.split('\n').some((line) => /^\d+\. /.test(line))).toBe(false)
   })
 
-  it('BA-2 示例 frontmatter 带齐写手要补的键，且以自述行开头', () => {
+  it('BA-2 示例 frontmatter 带齐管理员要写的键，且以自述行开头', () => {
     const keys = example
       .split('\n')
       .map((line) => /^([a-z_]+):/.exec(line)?.[1])

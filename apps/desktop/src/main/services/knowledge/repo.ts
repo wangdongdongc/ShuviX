@@ -28,8 +28,11 @@ import {
 import { createLogger } from '../../logger'
 import { bundleDir } from './knowledgePaths'
 
-/** 提交信息里的变更类型（`kb(<op>)`） */
-export type KnowledgeChangeOp = 'Creation' | 'Update'
+/**
+ * 提交信息里的变更类型（`kb(<op>)`）。Deletion：路径从库里没了（delete，或 move 的源头 —— 挪动记成
+ * 源的 deletion 加目标的 creation，git 自己按内容认得出是改名）。
+ */
+export type KnowledgeChangeOp = 'Creation' | 'Update' | 'Deletion'
 
 const log = createLogger('KnowledgeRepo')
 
@@ -45,6 +48,29 @@ function failureOf(out: GitOpOutput): string | undefined {
   return typeof err === 'string' ? err : undefined
 }
 
+/**
+ * 暂存一批路径。盘上已经没有的路径单独 add：跟踪过的（文件，或删掉 / 挪走的整个目录底下的文件）暂存删除；
+ * 从没进过仓库的（同一批里刚写下又挪走 / 删掉）没有可记的，跳过 —— 不让它一条拖垮整批提交。
+ * 返回失败原因；成功回 undefined。
+ */
+async function stagePaths(
+  env: GitEnv,
+  cache: GitCache,
+  paths: readonly string[]
+): Promise<string | undefined> {
+  const present = paths.filter((p) => p === '.' || existsSync(join(env.dir, p)))
+  const gone = paths.filter((p) => !present.includes(p))
+  if (present.length > 0) {
+    const error = failureOf(await addOp(env, cache, { paths: present }))
+    if (error) return error
+  }
+  for (const p of gone) {
+    const error = failureOf(await addOp(env, cache, { paths: [p] }))
+    if (error && !/did not match/i.test(error)) return error
+  }
+  return undefined
+}
+
 async function stageAndCommit(
   env: GitEnv,
   cache: GitCache,
@@ -52,8 +78,7 @@ async function stageAndCommit(
   paths: string[],
   exclude: readonly string[] = []
 ): Promise<boolean> {
-  const added = await addOp(env, cache, { paths })
-  const addError = failureOf(added)
+  const addError = await stagePaths(env, cache, paths)
   if (addError) {
     log.warn(`git add failed in ${env.dir}: ${addError}`)
     return false

@@ -249,8 +249,9 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
 
   /**
    * BK-9..BK-11 —— 2026-09-17 起检索是**两步走**（设计附录 Q）：`search` 只回答「哪几条可能相关」，
-   * 正文由 `read` 取，找字面串用 `grep`。说明书是 agent 读完之后照着做的那一份，所以这三件事必须
-   * 都写在里面，而且写在**同一段**里 —— 拆开写就等于让模型自己拼。
+   * 正文由 `read` 取。说明书是 agent 读完之后照着做的那一份，所以两步必须写在**同一段**里 —— 拆开写就
+   * 等于让模型自己拼。2026-11-08 起 `read` 是 knowledge 工具的动作（按条目名），库目录只有知识库管理员知道：
+   * 「用 `grep` 在库目录里找字面串」那句退役，`grep` 只出现在管理员的文件工具清单里。
    */
   const ENTRY_GUIDE = 'knowledge-entry.md'
   /**
@@ -269,28 +270,29 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
       .map((p) => p.trim())
       .filter(Boolean)
 
-  it(`BK-9 ${ENTRY_GUIDE} 教两步走：search / read / grep 三个动作词都出现`, () => {
+  it(`BK-9 ${ENTRY_GUIDE} 教两步走：search / read 两个动作词都出现`, () => {
     const body = conceptOf(ENTRY_GUIDE).body
-    for (const verb of ['search', 'read', 'grep']) {
+    for (const verb of ['search', 'read']) {
       expect(body, verb).toContain(`\`${verb}\``)
     }
   })
 
-  it(`BK-10 ${ENTRY_GUIDE} 点名索引面：四个键名与「标题行」都在讲检索的同一段里`, () => {
-    // 讲检索的那一段 = 提到 `grep` 的那一段（BK-11 钉住它只有一段）
-    const [retrieval] = paragraphs(conceptOf(ENTRY_GUIDE).body).filter((p) => p.includes('`grep`'))
-    expect(retrieval).toBeDefined()
-    expect(retrieval).toContain('`search`')
-    for (const term of FACE_TERMS[lang]) {
-      expect(retrieval, term).toContain(term)
-    }
+  it(`BK-10 ${ENTRY_GUIDE} 点名索引面：四个键名与「标题行」和 search / read 两步都在讲检索的同一段里`, () => {
+    // 讲检索的那一段 = 同时点名 `search` 与五个索引面词的那一段
+    const retrieval = paragraphs(conceptOf(ENTRY_GUIDE).body).filter(
+      (p) => p.includes('`search`') && FACE_TERMS[lang].every((term) => p.includes(term))
+    )
+    expect(retrieval).toHaveLength(1)
+    // 两步走的两半必须挨在一起：read 是第二步本身
+    expect(retrieval[0]).toContain('`read`')
   })
 
-  it(`BK-11 ${ENTRY_GUIDE} 里 grep 只出现在讲检索的那一段：含它的段落必同时含 read`, () => {
+  it(`BK-11 ${ENTRY_GUIDE} 不再教 agent 去 grep 库目录：grep 只出现在管理员的文件工具清单里`, () => {
     const withGrep = paragraphs(conceptOf(ENTRY_GUIDE).body).filter((p) => p.includes('`grep`'))
     expect(withGrep).toHaveLength(1)
-    // 两步走的两半必须挨在一起：grep 是「索引里没有散文」的出口，read 是第二步本身
-    expect(withGrep[0]).toContain('`read`')
+    // 那一段是管理员的工具清单：同段列着 move / delete
+    expect(withGrep[0]).toContain('`move`')
+    expect(withGrep[0]).toContain('`delete`')
   })
 
   /**
@@ -355,6 +357,8 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     'read',
     'write',
     'edit',
+    'move',
+    'delete',
     'ls',
     'glob',
     'grep',
@@ -641,21 +645,22 @@ describe('BK-26 笔记本提示词指向的说明书条目真的在', () => {
     knowledge: true
   } satisfies Record<ShuvixFileKind, true>) as ShuvixFileKind[]
 
-  it('BK-26 三语 × 六种文件：渲染里每个绝对路径都在磁盘上；合起来至少点到 8 篇', () => {
+  it('BK-26 三语 × 六种文件：渲染里点名的每个说明书条目（`/name.md`）都在那门语言的说明书里；合起来至少点到 8 篇', () => {
     // 正控制组：三种语言都在（否则下面那圈只查了一部分）
     expect(LANGS).toEqual(EXPECTED_LANGS)
     const referenced = new Set<string>()
     for (const lang of LANGS) {
       const manualDir = join(BASE_DIR, lang)
       for (const kind of KINDS) {
-        const out = renderDocumentKind(lang, { kind, manualDir, read: true })
-        const paths = [...out.matchAll(/`([^`]+)`/g)]
-          .map((m) => m[1])
-          .filter((token) => token.startsWith(manualDir))
-        expect(paths.length, `${lang}/${kind} 一篇都没指到`).toBeGreaterThan(0)
-        for (const path of paths) {
-          expect(existsSync(path), `${lang}/${kind} 指向不存在的 ${path}`).toBe(true)
-          referenced.add(path.slice(manualDir.length + 1))
+        const out = renderDocumentKind(lang, { kind, manual: true, knowledge: true })
+        // 2026-11-08 起按条目名点（经 knowledge 的 read，库 `shuvix`），目录不进提示词
+        const entries = [...out.matchAll(/`\/([\w.-]+\.md)`/g)].map((m) => m[1])
+        expect(entries.length, `${lang}/${kind} 一篇都没指到`).toBeGreaterThan(0)
+        for (const entry of entries) {
+          expect(existsSync(join(manualDir, entry)), `${lang}/${kind} 指向不存在的 /${entry}`).toBe(
+            true
+          )
+          referenced.add(entry)
         }
       }
     }

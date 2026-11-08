@@ -62,6 +62,14 @@ describe('buildToolSummary — knowledge', () => {
     )
     expect(buildToolSummary('knowledge', { action: 'search', query: 'auth' })).toBe('search · auth')
     expect(buildToolSummary('knowledge', { action: 'list' })).toBe('list')
+    // 2026-11-08 起：read / submit 按条目名，没点名条目的 submit 与 list 摆库名
+    expect(
+      buildToolSummary('knowledge', { action: 'read', base: 'project', entry: '/auth/x.md' })
+    ).toBe('read · /auth/x.md')
+    expect(
+      buildToolSummary('knowledge', { action: 'submit', base: 'notes', content: 'long text' })
+    ).toBe('submit · notes')
+    expect(buildToolSummary('knowledge', { action: 'list', base: 'notes' })).toBe('list · notes')
     expect(buildToolSummary('knowledge', {})).toBeUndefined()
     expect(BUILTIN_TOOL_PRESENTATIONS.knowledge.presentation?.icon).toBe('BookOpen')
     expect(BUILTIN_TOOL_PRESENTATIONS.knowledge.labelKey).toBe('tool.knowledgeLabel')

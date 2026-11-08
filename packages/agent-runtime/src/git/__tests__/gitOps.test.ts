@@ -223,6 +223,27 @@ describe('addOp', () => {
     const out = await addOp(envFor(d), newCache(), { paths: ['ghost.txt'] })
     expectBizError(out)
   })
+
+  it('已删掉的整个目录（同 git add <已删的目录>）：底下每个 tracked 文件暂存删除，旁边的不动；从没跟踪过的目录照样报错', async () => {
+    const d = makeRepo()
+    nodeFs.mkdirSync(join(d, 'topics', 'deep'), { recursive: true })
+    write(d, 'topics/a.md', 'a\n')
+    write(d, 'topics/deep/b.md', 'b\n')
+    write(d, 'topics-other.md', 'o\n')
+    git(d, 'add .')
+    git(d, 'commit -m base')
+    nodeFs.rmSync(join(d, 'topics'), { recursive: true })
+    write(d, 'topics-other.md', 'o2\n') // 前缀相同的兄弟：不该被卷进来
+
+    const out = await addOp(envFor(d), newCache(), { paths: ['topics/'] })
+    expect(out.details?.paths).toEqual(['topics/a.md', 'topics/deep/b.md'])
+    const porcelain = git(d, 'status --porcelain')
+    expect(porcelain).toMatch(/^D {2}topics\/a\.md$/m)
+    expect(porcelain).toMatch(/^D {2}topics\/deep\/b\.md$/m)
+    expect(porcelain).toMatch(/^ M topics-other\.md$/m)
+
+    expectBizError(await addOp(envFor(d), newCache(), { paths: ['never'] }))
+  })
 })
 
 // ---------------------------------------------------------------------------

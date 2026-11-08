@@ -1,5 +1,5 @@
 /**
- * 桌面 FileSystemPort 实现 —— Node fs（操作绝对路径）。供共享文件内核（read/write）注入。
+ * 桌面 FileSystemPort 实现 —— Node fs（操作绝对路径）。供共享文件内核（read/write）与 move / delete 注入。
  */
 import {
   stat as fsStat,
@@ -9,8 +9,14 @@ import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
   writeFile as fsWriteFile,
-  open as fsOpen
+  open as fsOpen,
+  rename as fsRename,
+  cp as fsCp,
+  rm as fsRm,
+  rmdir as fsRmdir,
+  unlink as fsUnlink
 } from 'fs/promises'
+import type { Stats } from 'fs'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { dirname } from 'path'
@@ -20,6 +26,20 @@ import { resolveRealPath } from './realPath'
 
 /** 路径末尾不改变指向的那部分：一串分隔符与 `.` 段（Windows 两种斜杠都认） */
 const TRAILING_NOOP = process.platform === 'win32' ? /(?:[\\/]+\.?)+$/ : /(?:\/+\.?)+$/
+
+/** lstat，不存在回 null（别的错误照抛） */
+async function lstatOrNull(p: string): Promise<Stats | null> {
+  try {
+    return await fsLstat(p)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+}
+
+function errorWithCode(message: string, code: string): Error {
+  return Object.assign(new Error(message), { code })
+}
 
 /** 保留换行、回车、制表与 ANSI ESC；其余 C0/C1 控制字符不直接送进模型输出 */
 export const isDisallowedControlCodePoint = (cp: number): boolean =>
@@ -175,5 +195,47 @@ export const nodeFileSystemPort: FileSystemPort = {
     } catch {
       return null
     }
+  },
+
+  async rename(from, to) {
+    // 绝不替换已有的 to（POSIX rename 会静默覆盖文件，Windows 也会）。例外只有一种：大小写不敏感的盘上
+    // 只改大小写 —— to 查得到，却正是 from 自己（同一个 inode）
+    const existing = await lstatOrNull(to)
+    if (existing) {
+      const source = await fsLstat(from)
+      const sameFile = source.ino === existing.ino && source.dev === existing.dev
+      if (!sameFile || from.toLowerCase() !== to.toLowerCase()) {
+        throw errorWithCode(
+          `EEXIST: destination already exists, rename '${from}' -> '${to}'`,
+          'EEXIST'
+        )
+      }
+    }
+    await fsMkdir(dirname(to), { recursive: true })
+    try {
+      await fsRename(from, to)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err
+      // 跨卷改名做不到：先整份拷过去再删源；拷到一半失败就收掉那半份（to 此前不存在）
+      try {
+        await fsCp(from, to, {
+          recursive: true,
+          errorOnExist: true,
+          force: false,
+          preserveTimestamps: true
+        })
+      } catch (copyErr) {
+        await fsRm(to, { recursive: true, force: true }).catch(() => {})
+        throw copyErr
+      }
+      await fsRm(from, { recursive: true })
+    }
+  },
+
+  async remove(p) {
+    // 文件（含符号链接本身）unlink；目录只删空的 —— rmdir 碰上非空目录报 ENOTEMPTY，不递归
+    const st = await fsLstat(p)
+    if (st.isDirectory()) await fsRmdir(p)
+    else await fsUnlink(p)
   }
 }

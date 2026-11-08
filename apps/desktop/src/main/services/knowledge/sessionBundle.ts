@@ -49,7 +49,7 @@ export interface SessionBundleTarget {
   dir: string
   /** 人读标签 */
   label: string
-  /** 只读（内置库）：工具的 `create` 拒绝、侧栏没有新建、写钩子与变更管线绕开 */
+  /** 只读（内置库）：工具的 `submit` 拒绝、侧栏没有新建、写钩子与变更管线绕开 */
   readonly?: boolean
 }
 
@@ -71,14 +71,15 @@ const RESERVED_BASE_NAMES: readonly string[] = [KNOWLEDGE_PROJECT_BASE, KNOWLEDG
 const BUILTIN_GUIDE_LABEL = "ShuviX's own manual (read-only)"
 
 /**
- * 内置库在围栏里的说明：什么时候来这里、读哪一篇、别去哪里。
+ * 内置库在围栏里的说明：什么时候来这里、读哪一篇（经 `knowledge` 的 `read`，按条目名 —— 2026-11-08 起不给库目录）、
+ * 别去哪里。
  *
  * 实测（2026-11-02，`e2e/live/botKnowledge.probe.ts`）：不知道说明书的 agent 替用户新建 bot 时会列主目录和
  * `~/.shuvix`，再顺着技能的路径进应用包反推格式和枚举值，每一步都惊动一次权限审查。只指路，不贴内容（`policy-md`
  * 一篇就 50 KB）。
  */
 const BUILTIN_GUIDE_NOTE =
-  "When a task touches ShuviX itself — creating, changing or explaining a bot, agent, security policy, hook or skill — `read` the spec in `shuvix`'s directory first: `bot-md.md`, `agent-md.md`, `policy-md.md`, `hook-md.md`, `skills.md` (overview: `shuvix-files.md`). Reading it never asks. Those files live under `~/.shuvix/`, where every read or write goes through a permission check, so don't list that folder or the home folder to learn the layout, and don't look inside the app package: the manual has the paths, formats and values."
+  "When a task touches ShuviX itself — creating, changing or explaining a bot, agent, security policy, hook or skill — first `read` the spec in `shuvix` with the `knowledge` tool: `/bot-md.md`, `/agent-md.md`, `/policy-md.md`, `/hook-md.md`, `/skills.md` (overview: `/shuvix-files.md`). ShuviX's own files live under `~/.shuvix/`, where every read or write goes through a permission check, so don't list that folder or the home folder to learn the layout, and don't look inside the app package: the manual has the paths, formats and values."
 
 /**
  * 会话所属的项目（bot 会话：它引用的工作项目 —— 它不是项目的成员，项目知识库照样跟着项目来）。隐藏载体项目
@@ -227,14 +228,13 @@ export async function resolveBase(
 
 /**
  * 围栏要列的库：启用且此刻真在的那些。名字用磁盘上的拼写（NFC 归一在 enabledTargets 里做掉了
- * —— 与工具解析同一份结果，不再各过滤一遍），项目库带上项目当前的名字，内置库带一句它是什么；
- * 每个都带目录（agent 直接 `write` 进去再 `submit`）。
+ * —— 与工具解析同一份结果，不再各过滤一遍），项目库带上项目当前的名字，内置库带一句它是什么。
+ * **不带目录**（2026-11-08）：库目录只有知识库管理员知道，别的 agent 按库名 + 条目名经 `knowledge` 读、交。
  */
 export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] {
   const projectName = rootProject(rootSessionId)?.name ?? ''
   return enabledTargets(rootSessionId).map(({ name, target }) => ({
     name,
-    dir: target.dir,
     readonly: target.readonly,
     note: name === KNOWLEDGE_BUILTIN_BASE ? BUILTIN_GUIDE_NOTE : undefined,
     label:
@@ -246,14 +246,14 @@ export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] 
   }))
 }
 
-/** 本会话启用且此刻真的在的库（工具 `bases` 的回包） */
+/** 本会话启用且此刻真的在的库（工具 `bases` 的回包；`dir` 只印给知识库管理员） */
 export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInfo[]> {
   return enabledTargets(rootSessionId).map(({ name, target }) => ({
     base: name,
     label: target.label,
     dir: target.dir,
     ...(target.readonly
-      ? { note: 'read-only: search and read it, never write or submit here' }
+      ? { note: 'read-only: search and read it; nothing can be submitted here' }
       : {})
   }))
 }

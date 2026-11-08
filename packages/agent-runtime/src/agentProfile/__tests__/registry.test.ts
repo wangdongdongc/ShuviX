@@ -161,16 +161,16 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 })
 
 /**
- * knowledge-writer 档案钉板 —— 知识库条目提交检查（`knowledge` 工具 `submit`）的执行侧，宿主专用：
- * 主 agent 用文件工具把条目写进库，submit 时宿主同步派它补元数据、判内容，经 `next` 交回
- * `{passed, report}`；章由宿主盖（knowledge/review.ts）。
+ * knowledge-writer 档案钉板 —— 知识库管理员（`knowledge` 工具 `submit` 的执行侧），宿主专用，也是唯一写
+ * 知识库的 agent（2026-11-08）：别的 agent 只交内容，submit 时宿主同步派它，由它用文件工具决定怎么组织，
+ * 经 `next` 交回 `{accepted, entries, report}`；它报上来的合规条目由宿主盖章（knowledge/review.ts）。
  *
  * 元数据的写法（键表、类型词汇表、出处规则）**只住在这份提示词里**：主 agent 不再为它付每会话的
  * 提示词，库里也不放用户可编辑的 SCHEMA.md（一落盘就再也更新不了）。RG-2 / RG-3 因此逐条钉住
  * 提示词里必须在场的那几段。
  */
-describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', () => {
-  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/edit（库管员：没有 write，也没有能在库外翻找的 grep/glob/ls），不注入项目文档、不开项目感知、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
+describe('knowledge-writer 档案钉板（知识库管理员）', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/write/edit/move/delete/grep（增删改查用文件工具，不给 bash、ls、glob），不注入项目文档、不开项目感知、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
     // 要检查的文件、所在的库、提交者都由任务文本给出 —— 零参数也建得出来
     expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { readMd })).not.toBeNull()
@@ -179,23 +179,36 @@ describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', ()
     for (const language of LANGS) {
       const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })
       expect(built, language).not.toBeNull()
-      // 只就地 edit 被提交的那一份；不新建文件（write）、没有 git —— 簿记归宿主。浏览库靠 knowledge 的
-      // search / list 加 read：grep / glob / ls 曾让它跑去会话工作区翻源码核实技术细节（用户反馈）
-      expect(built!.tools, language).toEqual(['knowledge', 'read', 'edit'])
+      // 管理员一步到位（2026-11-08 裁决）：用现有文件工具增删改查库里的文件，move / delete 是为它加的专用文件工具
+      // （bash 在没有沙箱的平台上每条都要问）。grep 只为改名后找链接；glob / ls 不给 —— 浏览库靠 knowledge 的
+      // search / list 加 read，它们曾让它跑去会话工作区翻源码核实技术细节（用户反馈），边界靠提示词
+      expect(built!.tools, language).toEqual([
+        'knowledge',
+        'read',
+        'write',
+        'edit',
+        'move',
+        'delete',
+        'grep'
+      ])
       expect(built!.projectAwareness, language).toBe(false)
       expect(built!.instructionFiles, language).toEqual([])
       expect(built!.model, language).toBeUndefined()
     }
   })
 
-  it('RG-2 三语正文接线：点名 read → edit → next 的动作、自述行、两个宿主章（不许碰）、会话资源 URI 与 search；不再教退役的动作', () => {
+  it('RG-2 三语正文接线：点名文件工具与 next 的三个字段、自述行、两个宿主章（不许碰）、会话资源 URI 与 search；不再教退役的动作', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
       for (const anchor of [
         '`read`',
         '`edit`',
+        '`write`',
+        '`delete`',
+        '`grep`',
         '`next`',
-        '`passed`',
+        '`accepted`',
+        '`entries`',
         '`report`',
         '`search`',
         'shuvix: okf v0.2',
@@ -209,7 +222,7 @@ describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', ()
         expect(body, `${language} 需讲状态 ${word}`).toContain(word)
       }
       // 退役的动作：教它们就是教不存在的东西
-      for (const gone of ['`create`', '`validate`', '`locate`', 'set-status']) {
+      for (const gone of ['`create`', '`validate`', '`locate`', 'set-status', '`passed`']) {
         expect(body, `${language} 不得再点名退役的 ${gone}`).not.toContain(gone)
       }
       expect(body, `${language} 不得再点名 SCHEMA.md`).not.toContain('SCHEMA.md')
@@ -234,7 +247,7 @@ describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', ()
     }
   })
 
-  /** 它被交给的是**一份**具体的文件：不该教它去挑库（`bases`）或点名项目库 */
+  /** 库由任务给定：不该教它去挑库（`bases`）或点名项目库 */
   it('RG-4 三语正文不点名 "project"，也不教它挑库', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
