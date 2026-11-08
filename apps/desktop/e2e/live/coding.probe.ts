@@ -4,8 +4,12 @@
  * `work` to a `coding` sub-session help or hurt?" and "does this coding.md draft beat today's?" with numbers
  * instead of feel.
  *
- * Tasks: `coding/tasks.ts` — two sets, each one Node repo with five tasks (graders and reference solutions in
- * `coding/fixtures`). `PROBE_SET=hard` (default) or `easy`; the easy set is at ceiling for deepseek and kimi.
+ * Tasks: `coding/tasks.ts` — three sets of five tasks on two Node repos (graders and reference solutions in
+ * `coding/fixtures`). `PROBE_SET=hard` (default), `easy` or `ambig`; easy and hard are at ceiling for deepseek
+ * and kimi. The ambig set's requests leave out what only the user knows: a simulated user (`coding/simUser.ts`,
+ * on deepseek whatever model is under test) holds those facts and answers the root's questions, plain-text
+ * or ask cards, and the report adds what it cost the user (turns, questions, how many touched a fact, text to
+ * read), which facts were given before the agent called it done, and which facts were given but not met.
  *
  * Arms (`PROBE_ARMS`, comma-separated, default `direct,work`):
  *   direct  the user talks to the coding agent itself: the project session's base profile is replaced by the
@@ -57,6 +61,7 @@ import { collectProbeEnv } from './protocolProbeEnv'
 import { ENV_FILE, installPolicy, makeDebug, REAL_HOME, sendPrompt } from './redactionProbeShared'
 import { SETS, TASKS, type CodingTask, type SetId } from './coding/tasks'
 import { applyReference, gradeRepo, prepareRepo, type Grade } from './coding/workspace'
+import { createSimUser, type SimCard, type SimTurn, type SimVerdict } from './coding/simUser'
 
 const BUILTIN_MD = fileURLToPath(
   new URL('../../../../packages/agent-runtime/src/subagent/builtinAgents/md', import.meta.url)
@@ -84,9 +89,11 @@ const TASK_IDS = list(
 )
 const TURN_TIMEOUT_MS = 25 * 60 * 1000
 
-/** what the simulated user says when asked */
+/** what the stock user says when asked (tasks without a simulated user) */
 const AGREE = '可以，按你说的来。'
 const DECIDE = '你自己判断，按最合理的来。'
+/** at most this many simulated-user answers per run (replies and cards); past it the run is "capped" */
+const MAX_SIM_CALLS = 8
 
 type Arm = 'direct' | 'work'
 
@@ -308,8 +315,9 @@ interface SettleStats {
 
 /**
  * Wait until the whole session tree is quiet, answering on the user's behalf meanwhile: permission asks anywhere
- * in the tree (refused when they name the real home), and the root's own questions. A sub-session's question is
- * the parent agent's to answer (sub-session intervention), so it is left alone.
+ * in the tree (refused when they name the real home), and the root's own questions (by the simulated user when
+ * the task has one). A sub-session's question is the parent agent's to answer (sub-session intervention), so it
+ * is left alone.
  */
 async function settleTree(
   app: E2EApp,
@@ -317,7 +325,8 @@ async function settleTree(
   rootId: string,
   stats: SettleStats,
   debug: (l: string) => void,
-  quietMs = 20_000
+  quietMs = 20_000,
+  answerRootChoice?: (card: SimCard) => Promise<Record<string, unknown>>
 ): Promise<void> {
   const sync = syncProbe(app.main)
   await sync.install()
@@ -339,7 +348,12 @@ async function settleTree(
           continue
         }
         if (view.run?.state === 'busy') busy = true
-        for (const req of (view.asks ?? []) as Array<{ id: string; kind: string }>) {
+        for (const req of (view.asks ?? []) as Array<{
+          id: string
+          kind: string
+          question?: string
+          options?: SimCard['options']
+        }>) {
           if (answered.has(req.id)) continue
           let response: Record<string, unknown>
           if (req.kind === 'choice') {
@@ -348,7 +362,9 @@ async function settleTree(
               continue
             }
             stats.questions++
-            response = { kind: 'other', text: DECIDE }
+            response = answerRootChoice
+              ? await answerRootChoice({ question: req.question ?? '', options: req.options ?? [] })
+              : { kind: 'other', text: DECIDE }
           } else {
             const text = JSON.stringify(req)
             const outside =
@@ -401,6 +417,44 @@ interface Dispatch {
   mentionsDecoy: string[]
 }
 
+interface UserRound {
+  via: 'reply' | 'card'
+  /** text the root showed the user since the last answer */
+  agentChars: number
+  /** root edits and hand-offs before this round */
+  workBefore: number
+  verdict: SimVerdict
+}
+
+/** What the run cost the simulated user, and what came of the facts it held */
+interface UserReport {
+  facts: string[]
+  /** facts whose grader checks all passed */
+  met: string[]
+  /** facts the user gave, at any point */
+  given: string[]
+  /** facts given before the agent first reported it was done */
+  givenBeforeDone: string[]
+  /** given, yet not met: lost between the user and the code */
+  givenNotMet: string[]
+  rounds: UserRound[]
+  /** messages and card answers the user sent after the request */
+  turns: number
+  questions: number
+  /** questions that touched a fact */
+  relevant: number
+  noise: number
+  /** the root asked its first question before any edit or hand-off */
+  askedBeforeWork: boolean
+  corrections: number
+  /** characters of root text the user was shown */
+  readChars: number
+  /** sub-session ask cards the parent answered itself instead of asking the user */
+  parentAnswered: number
+  capped: boolean
+  simErrors: string[]
+}
+
 interface RunRecord {
   model: string
   modelId: string
@@ -423,6 +477,7 @@ interface RunRecord {
   followUps: number
   finalReply: string
   agents: string[]
+  user?: UserReport
   error?: string
 }
 
@@ -461,6 +516,15 @@ function dispatchesOf(task: CodingTask, msgs: Msg[]): Dispatch[] {
 
 const READS = new Set(['read', 'grep', 'glob', 'ls', 'bash', 'powershell'])
 
+/** A root tool call that commits to the work: an edit, or handing the job to another agent */
+const isWork = (b: Block): boolean =>
+  b.type === 'tool' &&
+  (b.toolName === 'edit' ||
+    b.toolName === 'write' ||
+    (b.toolName === 'session' &&
+      /create-sub-session|prompt-(sub-)?session/.test(String(b.args?.action))) ||
+    (b.toolName === 'agent' && String(b.args?.name ?? '') !== 'explore'))
+
 function transcriptMd(
   label: string,
   sessions: SessionRow[],
@@ -497,6 +561,55 @@ function transcriptMd(
   return `# ${label}\n${out.join('\n')}\n`
 }
 
+/** The answer the parent gives in a sub-session's place starts with this (askTool.ts PARENT_ANSWERED) */
+const PARENT_ANSWERED = 'the session that assigned you this task answered on their behalf'
+
+function userReport(
+  facts: string[],
+  grade: Grade,
+  rounds: UserRound[],
+  subMessages: Msg[],
+  capped: boolean,
+  simErrors: string[]
+): UserReport {
+  const met = facts.filter((id) => {
+    const checks = grade.checks.filter((c) => c.fact === id)
+    return checks.length > 0 && checks.every((c) => c.pass)
+  })
+  const given = [...new Set(rounds.flatMap((r) => r.verdict.disclosed))].sort()
+  const beforeDone = new Set<string>()
+  let doneSeen = false
+  for (const r of rounds) {
+    if (r.verdict.kind === 'completion' || r.verdict.kind === 'mixed') doneSeen = true
+    if (!doneSeen) for (const f of r.verdict.disclosed) beforeDone.add(f)
+  }
+  const questions = rounds.flatMap((r) => r.verdict.questions)
+  const firstAsk = rounds.find((r) => r.verdict.questions.length > 0)
+  return {
+    facts,
+    met,
+    given,
+    givenBeforeDone: [...beforeDone].sort(),
+    givenNotMet: given.filter((f) => !met.includes(f)),
+    rounds,
+    turns: rounds.filter((r) => r.via === 'card' || (!r.verdict.done && r.verdict.reply)).length,
+    questions: questions.length,
+    relevant: questions.filter((q) => q.facts.length > 0).length,
+    noise: questions.filter((q) => q.facts.length === 0).length,
+    askedBeforeWork: firstAsk !== undefined && firstAsk.workBefore === 0,
+    corrections: rounds.filter((r) => r.verdict.correction).length,
+    readChars: rounds.reduce((t, r) => t + r.agentChars, 0),
+    parentAnswered: subMessages
+      .flatMap((m) => m.blocks)
+      .filter(
+        (b) =>
+          b.type === 'tool' && b.toolName === 'ask' && (b.result ?? '').includes(PARENT_ANSWERED)
+      ).length,
+    capped,
+    simErrors
+  }
+}
+
 // ─────────────────────────── report ───────────────────────────
 
 const records: RunRecord[] = []
@@ -530,6 +643,7 @@ function renderSummary(): string {
         `${mean((r) => r.requests)} | ${mean((r) => r.seconds)} |`
     )
   }
+  lines.push(...userSummary())
   lines.push('', '## Runs', '')
   lines.push(
     '| model | arm | task | # | pass | core | extra | visible | tampered | tests added | changed (+/−) | in / out tokens | req | s | calls | hand-offs | skim | verbatim | decoy mentioned | root cause mentioned | asks |'
@@ -593,9 +707,72 @@ function renderSummary(): string {
         '```'
       )
     }
+    if (r.user) {
+      lines.push('', 'With the simulated user:', '')
+      for (const [i, u] of r.user.rounds.entries()) {
+        const v = u.verdict
+        const qs = v.questions.map((q) => `${q.text} [${q.facts.join(',') || '—'}]`).join('; ')
+        lines.push(
+          `${i + 1}. ${u.via}, ${v.kind}, ${u.agentChars} chars shown, ${u.workBefore} edits/hand-offs before` +
+            `${qs ? ` — asked: ${qs}` : ''}` +
+            `${v.disclosed.length ? ` — gave ${v.disclosed.join(',')}` : ''}${v.correction ? ' (correction)' : ''}` +
+            `${v.selections.length ? ` — ticked ${v.selections.join(' / ')}` : ''}` +
+            `${v.reply ? ` — "${v.reply.replace(/\n/g, ' ')}"` : ''}${v.error ? ` — ERROR ${v.error}` : ''}`
+        )
+      }
+      if (r.user.capped) lines.push(`(stopped after ${MAX_SIM_CALLS} answers)`)
+    }
     lines.push('', 'Final reply:', '', '```text', r.finalReply.slice(0, 3000), '```')
   }
   return lines.join('\n')
+}
+
+/** The ambig set's tables: what each run cost the user and what came of the facts it held */
+function userSummary(): string[] {
+  const rs = records.filter((r) => r.user)
+  if (!rs.length) return []
+  const out = [
+    '',
+    '## With the simulated user',
+    '',
+    'facts met = hidden facts whose checks all pass; given before done = facts the user gave before the agent first said it was done; ' +
+      'given, not met = the user said it and the code does not do it; asked first = the first question came before any edit or hand-off; ' +
+      'work answered = sub-session ask cards the parent answered itself.',
+    '',
+    '| model | arm | runs | pass | facts met | given before done | given, not met | user turns (mean) | questions (fact / none) | asked first | corrections | work answered | text shown (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  ]
+  const groups = new Map<string, RunRecord[]>()
+  for (const r of rs)
+    groups.set(`${r.model}|${r.arm}`, [...(groups.get(`${r.model}|${r.arm}`) ?? []), r])
+  for (const [key, g] of groups) {
+    const [model, arm] = key.split('|')
+    const u = g.map((r) => r.user as UserReport)
+    const sum = (f: (x: UserReport) => number): number => u.reduce((t, x) => t + f(x), 0)
+    const facts = sum((x) => x.facts.length)
+    out.push(
+      `| ${model} | ${arm} | ${g.length} | ${g.filter((r) => r.grade.pass).length}/${g.length} | ${sum((x) => x.met.length)}/${facts} | ` +
+        `${sum((x) => x.givenBeforeDone.length)}/${facts} | ${sum((x) => x.givenNotMet.length)} | ${(sum((x) => x.turns) / g.length).toFixed(1)} | ` +
+        `${sum((x) => x.relevant)} / ${sum((x) => x.noise)} | ${u.filter((x) => x.askedBeforeWork).length}/${g.length} | ${sum((x) => x.corrections)} | ` +
+        `${sum((x) => x.parentAnswered)} | ${k(Math.round(sum((x) => x.readChars) / g.length))} |`
+    )
+  }
+  out.push(
+    '',
+    '| model | arm | task | # | pass | facts met | given before done | given, not met | turns | questions (fact / none) | asked first | corrections | work answered | shown |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  )
+  for (const r of rs) {
+    const x = r.user as UserReport
+    const list = (ids: string[]): string => (ids.length ? ids.join(',') : '—')
+    out.push(
+      `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${r.grade.pass ? '✅' : '❌'}${r.error || x.simErrors.length ? ' ⚠️' : ''} | ` +
+        `${x.facts.length ? `${x.met.length}/${x.facts.length} ${list(x.met)}` : '—'} | ${list(x.givenBeforeDone)} | ${list(x.givenNotMet)} | ` +
+        `${x.turns}${x.capped ? ' (capped)' : ''} | ${x.relevant} / ${x.noise} | ${x.askedBeforeWork ? 'yes' : 'no'} | ${x.corrections} | ` +
+        `${x.parentAnswered} | ${k(x.readChars)} |`
+    )
+  }
+  return out
 }
 
 function writeReport(): void {
@@ -614,6 +791,22 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   let followUps = 0
   let error: string | undefined
   let agents: string[] = []
+
+  // the simulated user (tasks with hidden facts): one per run, on deepseek whatever model is under test
+  const simKey = task.user ? modelOf('deepseek') : undefined
+  const sim =
+    task.user && simKey
+      ? createSimUser({
+          key: simKey.key,
+          model: simKey.modelId,
+          request: task.prompt,
+          facts: task.user.facts
+        })
+      : undefined
+  const conv: SimTurn[] = [{ from: 'user', text: task.prompt }]
+  const rounds: UserRound[] = []
+  const simErrors: string[] = []
+  let capped = false
 
   const app = await launchApp({
     autoReview: AUTO_REVIEW,
@@ -651,16 +844,91 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     const identity = systemPrompt.match(/^## (?:Identity|身份|アイデンティティ)\s*\n+(.+)$/m)?.[1]
     agents.push(`root identity: ${identity ?? '(not found)'}`)
 
-    await sendPrompt(app, rootId, task.prompt)
-    await settleTree(app, events, rootId, stats, (l) => debug(`${label}: ${l}`))
-    for (let i = 0; i < 2; i++) {
+    // what the root showed the user since the last look, and how much work it had committed to by then
+    let shown = 0
+    const freshText = async (): Promise<{ text: string; work: number }> => {
       const msgs = await readMessages(app, rootId)
-      const reply =
-        [...msgs].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? ''
-      if (!looksLikeQuestion(reply)) break
-      followUps++
-      await sendPrompt(app, rootId, AGREE)
-      await settleTree(app, events, rootId, stats, (l) => debug(`${label}: ${l}`))
+      const fresh = msgs.slice(shown)
+      shown = msgs.length
+      return {
+        text: fresh
+          .filter((m) => m.role === 'assistant')
+          .map((m) => m.content.trim())
+          .filter(Boolean)
+          .join('\n\n'),
+        work: msgs.flatMap((m) => m.blocks).filter(isWork).length
+      }
+    }
+    const consult = async (
+      via: UserRound['via'],
+      text: string,
+      work: number,
+      card?: SimCard
+    ): Promise<SimVerdict> => {
+      const verdict = await (sim as NonNullable<typeof sim>).respond(conv, { text, card })
+      if (verdict.error) simErrors.push(verdict.error)
+      rounds.push({ via, agentChars: text.length, workBefore: work, verdict })
+      conv.push({
+        from: 'agent',
+        text: card
+          ? `${text}\n[选择卡片] ${card.question}（${card.options.map((o) => o.label).join(' / ')}）`.trim()
+          : text
+      })
+      const said = [
+        verdict.selections.length ? `勾选：${verdict.selections.join('、')}` : '',
+        verdict.reply
+      ]
+        .filter(Boolean)
+        .join('；')
+      if (said) conv.push({ from: 'user', text: said })
+      debug(`${label}: user (${via}) ${JSON.stringify(verdict).slice(0, 300)}`)
+      return verdict
+    }
+    const answerCard = sim
+      ? async (card: SimCard): Promise<Record<string, unknown>> => {
+          if (rounds.length >= MAX_SIM_CALLS) {
+            capped = true
+            return { kind: 'other', text: DECIDE }
+          }
+          const { text, work } = await freshText()
+          const v = await consult('card', text, work, card)
+          // the model sometimes quotes "label：description"; match on the label
+          const picked = card.options
+            .map((o) => o.label)
+            .filter((l) => v.selections.some((sel) => sel === l || sel.startsWith(l)))
+          return picked.length
+            ? { kind: 'choice', selections: picked, ...(v.reply ? { note: v.reply } : {}) }
+            : { kind: 'other', text: v.reply || DECIDE }
+        }
+      : undefined
+    const settle = (): Promise<void> =>
+      settleTree(app, events, rootId, stats, (l) => debug(`${label}: ${l}`), 20_000, answerCard)
+
+    await sendPrompt(app, rootId, task.prompt)
+    await settle()
+    if (sim) {
+      for (;;) {
+        const { text, work } = await freshText()
+        if (!text) break
+        if (rounds.length >= MAX_SIM_CALLS) {
+          capped = true
+          break
+        }
+        const v = await consult('reply', text, work)
+        if (v.done || !v.reply) break
+        await sendPrompt(app, rootId, v.reply)
+        await settle()
+      }
+    } else {
+      for (let i = 0; i < 2; i++) {
+        const msgs = await readMessages(app, rootId)
+        const reply =
+          [...msgs].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? ''
+        if (!looksLikeQuestion(reply)) break
+        followUps++
+        await sendPrompt(app, rootId, AGREE)
+        await settle()
+      }
     }
   } catch (e) {
     error = String((e as Error)?.message ?? e)
@@ -688,8 +956,15 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   }
   // the repo lives in the fake HOME: keep it until it is graded
   await app.stop({ keepHome: true })
-  const redact = (t: string): string => t.split(key).join('<redacted>')
+  const redact = (t: string): string =>
+    [key, simKey?.key ?? ''].filter(Boolean).reduce((acc, k) => acc.split(k).join('<redacted>'), t)
   writeFileSync(join(OUT, `${label}.md`), redact(transcriptMd(label, sessions, bySession)))
+  if (sim) {
+    writeFileSync(
+      join(OUT, `${label}.user.json`),
+      redact(JSON.stringify({ conversation: conv, rounds, calls: sim.log }, null, 2))
+    )
+  }
 
   const all = [...bySession.values()].flat()
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
@@ -721,6 +996,16 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   } finally {
     rmSync(app.home, { recursive: true, force: true })
   }
+  const user = task.user
+    ? userReport(
+        task.user.facts.map((f) => f.id),
+        grade,
+        rounds,
+        sessions.filter((s) => s.id !== rootId).flatMap((s) => bySession.get(s.id) ?? []),
+        capped,
+        simErrors
+      )
+    : undefined
   const record: RunRecord = {
     model: modelName,
     modelId,
@@ -754,6 +1039,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       [...rootMsgs].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ??
       '',
     agents,
+    ...(user ? { user } : {}),
     error
   }
   records.push(record)

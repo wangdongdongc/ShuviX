@@ -60,6 +60,8 @@ export function applyReference(task: CodingTask, repo: string): void {
 export interface Check {
   name: string
   core: boolean
+  /** the hidden fact this check tests (tasks with a simulated user) */
+  fact?: string
   pass: boolean
   error?: string
 }

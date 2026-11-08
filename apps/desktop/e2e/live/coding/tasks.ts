@@ -1,10 +1,16 @@
 /**
- * The coding probe's tasks, in two sets, each on its own repo:
+ * The coding probe's tasks, in three sets:
  *
  *   easy  `fixtures/ledger`, a personal-finance CLI (12 files). Both deepseek and kimi solved all five in the
  *         first pass (2026-11-06), so it is a smoke test now, not a measurement.
  *   hard  `fixtures/stockroom`, an inventory service: HTTP API, CLI, JSON file store, a query language, reports
  *         and paged lists (about 25 files, AGENTS.md included).
+ *   ambig the same stockroom repo, with requests that leave out what only the user knows. A simulated user
+ *         (`simUser.ts`) holds those facts and gives one only when the agent asks about it or proposes
+ *         something that contradicts it; the grader tags each check with the fact it tests. It measures
+ *         whether the agent brings the open decisions to the user before doing the work, at what cost in
+ *         questions, and whether a fact the user gave survives a hand-off. `catval` is fully specified: the
+ *         control for questions asked for nothing.
  *
  * Each task starts from its set's base repo plus the task's `fixtures/<set>/<id>/start/` overlay (committed as a
  * second commit, so `git log` shows where a bug came in), gets one user message written the way a user would
@@ -24,13 +30,19 @@
  *                    AGENTS.md states, and caching results goes stale
  *   hard/query       OR / NOT / parentheses with precedence, keywords, quoting and error cases
  *   hard/archive     a feature across every layer (rules, errors, lists, export, reports, routes, CLI, old data)
+ *   ambig/count      a stocktake endpoint: what qty means, the reserved floor, a required reason, valuation
+ *   ambig/exportvalue  a value column for finance: its name and that it is dollars, not the repo's cents
+ *   ambig/quiet      "the report is too noisy": what counts as urgent, which outputs scripts read, a way back
+ *   ambig/partial    partial reservations: opt-in, the response shape, the empty case; plus "leave the CLI
+ *                    alone", said in passing in the request
+ *   ambig/catval     control: everything specified
  */
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
-export type SetId = 'easy' | 'hard'
+export type SetId = 'easy' | 'hard' | 'ambig'
 
 export interface TaskSet {
   id: SetId
@@ -72,7 +84,29 @@ export const SETS: Record<SetId, TaskSet> = {
     ],
     testSupport: ['test/helpers.js'],
     testEnv: {}
+  },
+  ambig: {
+    id: 'ambig',
+    repo: join(FIXTURES, 'stockroom'),
+    visibleTests: [
+      'test/store.test.js',
+      'test/stock.test.js',
+      'test/query.test.js',
+      'test/list.test.js',
+      'test/api.test.js',
+      'test/report.test.js',
+      'test/export.test.js',
+      'test/cli.test.js'
+    ],
+    testSupport: ['test/helpers.js'],
+    testEnv: {}
   }
+}
+
+/** Something the user knows and did not write down; the simulated user gives it when asked */
+export interface Fact {
+  id: string
+  text: string
 }
 
 export interface CodingTask {
@@ -86,6 +120,11 @@ export interface CodingTask {
   rootCause: string[]
   /** Plausible-looking places that are not the cause */
   decoys: string[]
+  /**
+   * The task runs with a simulated user who knows these facts (empty: the request says everything). Without
+   * it the probe answers every question with a stock "go ahead".
+   */
+  user?: { facts: Fact[] }
 }
 
 export const TASKS: CodingTask[] = [
@@ -215,6 +254,129 @@ export const TASKS: CodingTask[] = [
     ].join('\n'),
     rootCause: ['src/domain/stock.js', 'src/services/listItems.js', 'src/api/http.js'],
     decoys: []
+  },
+  {
+    set: 'ambig',
+    id: 'count',
+    prompt: [
+      '仓库每个月盘点一次，经常发现实际数量和系统里对不上。加一个盘点调整的功能吧：HTTP 是 `POST /items/:sku/count`，body 里带 `qty`；CLI 是 `stockroom count <sku> <qty>`。',
+      '调整也要像别的操作一样留一条出入库记录。'
+    ].join('\n'),
+    rootCause: [
+      'src/domain/stock.js',
+      'src/report/valuation.js',
+      'src/api/server.js',
+      'src/cli/main.js'
+    ],
+    decoys: [],
+    user: {
+      facts: [
+        {
+          id: 'F1',
+          text: '`qty` 是盘点出来的实际数量，调整以后库存（onHand）就等于它；不是增减量。'
+        },
+        {
+          id: 'F2',
+          text: '盘点数比已经预留的数量还少时要拒绝：返回 409，错误码 `CONFLICT`，什么都不改。等于预留数是可以的。'
+        },
+        {
+          id: 'F3',
+          text: '每次盘点调整都必须写原因（审计要看）：HTTP body 里叫 `reason`，CLI 用 `--reason`；没写或者是空白就当参数错误（HTTP 400，CLI 退出码 2）。原因要记在那条出入库记录里。'
+        },
+        {
+          id: 'F4',
+          text: '估值（valuation 报表）：盘盈多出来的按最近一次入库的单价算，从来没入过库就按 0；盘亏少掉的像出货一样，先扣最早的那批。'
+        }
+      ]
+    }
+  },
+  {
+    set: 'ambig',
+    id: 'exportvalue',
+    prompt:
+      '财务那边想在导出的 CSV 里直接看到每个商品的库存价值（就是 valuation 报表里那个数），给 export 加个 `--with-value` 选项吧。',
+    rootCause: ['src/export/exportItems.js', 'src/cli/main.js'],
+    decoys: [],
+    user: {
+      facts: [
+        {
+          id: 'F1',
+          text: '财务的表格模板认列名：这一列叫 `stockValue`，放在最后一列。'
+        },
+        {
+          id: 'F2',
+          text: '金额用美元，保留两位小数，不带货币符号、不带千分位，比如 `1234.50`、`0.05`；不要用分（财务的表格是按美元导入的）。'
+        }
+      ]
+    }
+  },
+  {
+    set: 'ambig',
+    id: 'quiet',
+    prompt:
+      'lowstock 报表太吵了，里面一大半是常年不怎么动的冷门货，看着就烦。帮我改改，让它只显示真正需要马上补货的。',
+    rootCause: ['src/cli/main.js', 'src/report/lowstock.js'],
+    decoys: ['src/api/server.js'],
+    user: {
+      facts: [
+        {
+          id: 'F1',
+          text: '最近 30 天一件都没出过货的，不算需要马上补货，不显示。'
+        },
+        {
+          id: 'F2',
+          text: '按现在的出货速度，库存还够用超过 14 天的也不显示；正好 14 天的要显示。'
+        },
+        {
+          id: 'F3',
+          text: '只改命令行里给人看的那个表格。`--json` 的输出和 HTTP 接口（`GET /reports/lowstock`）一点都不能变，有脚本和别的系统在用。'
+        },
+        {
+          id: 'F4',
+          text: '偶尔还是要看全部：命令行加一个 `--all`，加了以后跟现在的表格一模一样。'
+        }
+      ]
+    }
+  },
+  {
+    set: 'ambig',
+    id: 'partial',
+    prompt:
+      '销售那边反馈，预留的时候库存不够就直接报错（409），很麻烦，他们希望能有多少先留多少。帮我改一下预留接口（`POST /items/:sku/reserve`）。命令行那边先别动，仓库有脚本靠现在的行为。',
+    rootCause: ['src/domain/stock.js', 'src/api/server.js'],
+    decoys: ['src/cli/main.js'],
+    user: {
+      facts: [
+        {
+          id: 'F1',
+          text: '只有请求体里带 `"partial": true` 的时候才部分预留；不带的话跟现在完全一样（不够就 409）。还有别的客户端靠原来的行为。'
+        },
+        {
+          id: 'F2',
+          text: '返回值还是更新后的商品（跟现在一样），另外多一个字段 `granted`，是这次实际预留了多少。'
+        },
+        {
+          id: 'F3',
+          text: '一件都留不了（可用为 0）的时候，照样返回 409、错误码 `INSUFFICIENT_STOCK`，不要返回 granted 为 0 的成功。'
+        }
+      ]
+    }
+  },
+  {
+    set: 'ambig',
+    id: 'catval',
+    prompt: [
+      'valuation 报表加一个按类别过滤：',
+      '',
+      '- 命令行：`stockroom report valuation --category <类别>`；HTTP：`GET /reports/valuation?category=<类别>`。',
+      '- 类别比较不区分大小写（数据里的类别本来就存成小写）。',
+      '- 只列这个类别的商品，TOTAL 也只算这些（`--json` 和文本输出都是）。',
+      '- 没有这个类别的商品就输出空列表、TOTAL 为 0，不报错。',
+      '- 不带这个参数的时候跟现在完全一样。lowstock 不用动。'
+    ].join('\n'),
+    rootCause: ['src/report/valuation.js', 'src/api/server.js', 'src/cli/main.js'],
+    decoys: ['src/report/lowstock.js'],
+    user: { facts: [] }
   }
 ]
 
