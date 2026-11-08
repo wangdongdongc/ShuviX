@@ -11,6 +11,11 @@
  *         whether the agent brings the open decisions to the user before doing the work, at what cost in
  *         questions, and whether a fact the user gave survives a hand-off. `catval` is fully specified: the
  *         control for questions asked for nothing.
+ *   handoff the ambig set's features and graders again, but the user does state every fact — where a hand-off
+ *         can drop it: in an earlier message, in a discussion before "go ahead", while the sub-session is
+ *         already working (a steer), or scattered through one long message. It measures what is lost between
+ *         the user and the code when `work` hands the job on, against the user talking to the coding agent
+ *         directly.
  *
  * Each task starts from its set's base repo plus the task's `fixtures/<set>/<id>/start/` overlay (committed as a
  * second commit, so `git log` shows where a bug came in), gets one user message written the way a user would
@@ -36,13 +41,17 @@
  *   ambig/partial    partial reservations: opt-in, the response shape, the empty case; plus "leave the CLI
  *                    alone", said in passing in the request
  *   ambig/catval     control: everything specified
+ *   handoff/prelude-export   the column name and format in a "background" message before the request
+ *   handoff/prelude-quiet    the criteria and "leave --json and HTTP alone" in a discussion turn, then "go ahead"
+ *   handoff/midtask-partial  the request is vague; the user adds all three facts while the work is under way
+ *   handoff/long-count       every fact of the stocktake, in one long rambling message
  */
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
-export type SetId = 'easy' | 'hard' | 'ambig'
+export type SetId = 'easy' | 'hard' | 'ambig' | 'handoff'
 
 export interface TaskSet {
   id: SetId
@@ -54,6 +63,17 @@ export interface TaskSet {
   /** Environment the repo's own test script sets (package.json `test`) */
   testEnv: Record<string, string>
 }
+
+const STOCKROOM_TESTS = [
+  'test/store.test.js',
+  'test/stock.test.js',
+  'test/query.test.js',
+  'test/list.test.js',
+  'test/api.test.js',
+  'test/report.test.js',
+  'test/export.test.js',
+  'test/cli.test.js'
+]
 
 export const SETS: Record<SetId, TaskSet> = {
   easy: {
@@ -88,16 +108,14 @@ export const SETS: Record<SetId, TaskSet> = {
   ambig: {
     id: 'ambig',
     repo: join(FIXTURES, 'stockroom'),
-    visibleTests: [
-      'test/store.test.js',
-      'test/stock.test.js',
-      'test/query.test.js',
-      'test/list.test.js',
-      'test/api.test.js',
-      'test/report.test.js',
-      'test/export.test.js',
-      'test/cli.test.js'
-    ],
+    visibleTests: STOCKROOM_TESTS,
+    testSupport: ['test/helpers.js'],
+    testEnv: {}
+  },
+  handoff: {
+    id: 'handoff',
+    repo: join(FIXTURES, 'stockroom'),
+    visibleTests: STOCKROOM_TESTS,
     testSupport: ['test/helpers.js'],
     testEnv: {}
   }
@@ -120,12 +138,91 @@ export interface CodingTask {
   rootCause: string[]
   /** Plausible-looking places that are not the cause */
   decoys: string[]
+  /** Grader and reference of another task (`<set>/<id>` under fixtures/), when this one reuses them */
+  fixture?: string
   /**
    * The task runs with a simulated user who knows these facts (empty: the request says everything). Without
    * it the probe answers every question with a stock "go ahead".
+   *
+   * A scripted user also says things on its own: `prelude` messages go first (each answered and settled before
+   * the next), `midTask` goes in once the root has started the work — its first edit, or its first message to
+   * a sub-session — as a steer if the root is busy, a message if not. `scripted` lists the facts those messages
+   * and the request state, so the report counts them as given. `silent`: the simulated user does not know the
+   * facts (it answers "your call") — they reach the agent only through the script, as when the user remembers
+   * something later; the grader still checks them.
    */
-  user?: { facts: Fact[] }
+  user?: {
+    facts: Fact[]
+    prelude?: string[]
+    midTask?: string
+    scripted?: string[]
+    silent?: true
+  }
 }
+
+const COUNT_FACTS: Fact[] = [
+  {
+    id: 'F1',
+    text: '`qty` 是盘点出来的实际数量，调整以后库存（onHand）就等于它；不是增减量。'
+  },
+  {
+    id: 'F2',
+    text: '盘点数比已经预留的数量还少时要拒绝：返回 409，错误码 `CONFLICT`，什么都不改。等于预留数是可以的。'
+  },
+  {
+    id: 'F3',
+    text: '每次盘点调整都必须写原因（审计要看）：HTTP body 里叫 `reason`，CLI 用 `--reason`；没写或者是空白就当参数错误（HTTP 400，CLI 退出码 2）。原因要记在那条出入库记录里。'
+  },
+  {
+    id: 'F4',
+    text: '估值（valuation 报表）：盘盈多出来的按最近一次入库的单价算，从来没入过库就按 0；盘亏少掉的像出货一样，先扣最早的那批。'
+  }
+]
+
+const EXPORT_FACTS: Fact[] = [
+  {
+    id: 'F1',
+    text: '财务的表格模板认列名：这一列叫 `stockValue`，放在最后一列。'
+  },
+  {
+    id: 'F2',
+    text: '金额用美元，保留两位小数，不带货币符号、不带千分位，比如 `1234.50`、`0.05`；不要用分（财务的表格是按美元导入的）。'
+  }
+]
+
+const QUIET_FACTS: Fact[] = [
+  {
+    id: 'F1',
+    text: '最近 30 天一件都没出过货的，不算需要马上补货，不显示。'
+  },
+  {
+    id: 'F2',
+    text: '按现在的出货速度，库存还够用超过 14 天的也不显示；正好 14 天的要显示。'
+  },
+  {
+    id: 'F3',
+    text: '只改命令行里给人看的那个表格。`--json` 的输出和 HTTP 接口（`GET /reports/lowstock`）一点都不能变，有脚本和别的系统在用。'
+  },
+  {
+    id: 'F4',
+    text: '偶尔还是要看全部：命令行加一个 `--all`，加了以后跟现在的表格一模一样。'
+  }
+]
+
+const PARTIAL_FACTS: Fact[] = [
+  {
+    id: 'F1',
+    text: '只有请求体里带 `"partial": true` 的时候才部分预留；不带的话跟现在完全一样（不够就 409）。还有别的客户端靠原来的行为。'
+  },
+  {
+    id: 'F2',
+    text: '返回值还是更新后的商品（跟现在一样），另外多一个字段 `granted`，是这次实际预留了多少。'
+  },
+  {
+    id: 'F3',
+    text: '一件都留不了（可用为 0）的时候，照样返回 409、错误码 `INSUFFICIENT_STOCK`，不要返回 granted 为 0 的成功。'
+  }
+]
 
 export const TASKS: CodingTask[] = [
   {
@@ -269,26 +366,7 @@ export const TASKS: CodingTask[] = [
       'src/cli/main.js'
     ],
     decoys: [],
-    user: {
-      facts: [
-        {
-          id: 'F1',
-          text: '`qty` 是盘点出来的实际数量，调整以后库存（onHand）就等于它；不是增减量。'
-        },
-        {
-          id: 'F2',
-          text: '盘点数比已经预留的数量还少时要拒绝：返回 409，错误码 `CONFLICT`，什么都不改。等于预留数是可以的。'
-        },
-        {
-          id: 'F3',
-          text: '每次盘点调整都必须写原因（审计要看）：HTTP body 里叫 `reason`，CLI 用 `--reason`；没写或者是空白就当参数错误（HTTP 400，CLI 退出码 2）。原因要记在那条出入库记录里。'
-        },
-        {
-          id: 'F4',
-          text: '估值（valuation 报表）：盘盈多出来的按最近一次入库的单价算，从来没入过库就按 0；盘亏少掉的像出货一样，先扣最早的那批。'
-        }
-      ]
-    }
+    user: { facts: COUNT_FACTS }
   },
   {
     set: 'ambig',
@@ -297,18 +375,7 @@ export const TASKS: CodingTask[] = [
       '财务那边想在导出的 CSV 里直接看到每个商品的库存价值（就是 valuation 报表里那个数），给 export 加个 `--with-value` 选项吧。',
     rootCause: ['src/export/exportItems.js', 'src/cli/main.js'],
     decoys: [],
-    user: {
-      facts: [
-        {
-          id: 'F1',
-          text: '财务的表格模板认列名：这一列叫 `stockValue`，放在最后一列。'
-        },
-        {
-          id: 'F2',
-          text: '金额用美元，保留两位小数，不带货币符号、不带千分位，比如 `1234.50`、`0.05`；不要用分（财务的表格是按美元导入的）。'
-        }
-      ]
-    }
+    user: { facts: EXPORT_FACTS }
   },
   {
     set: 'ambig',
@@ -317,26 +384,7 @@ export const TASKS: CodingTask[] = [
       'lowstock 报表太吵了，里面一大半是常年不怎么动的冷门货，看着就烦。帮我改改，让它只显示真正需要马上补货的。',
     rootCause: ['src/cli/main.js', 'src/report/lowstock.js'],
     decoys: ['src/api/server.js'],
-    user: {
-      facts: [
-        {
-          id: 'F1',
-          text: '最近 30 天一件都没出过货的，不算需要马上补货，不显示。'
-        },
-        {
-          id: 'F2',
-          text: '按现在的出货速度，库存还够用超过 14 天的也不显示；正好 14 天的要显示。'
-        },
-        {
-          id: 'F3',
-          text: '只改命令行里给人看的那个表格。`--json` 的输出和 HTTP 接口（`GET /reports/lowstock`）一点都不能变，有脚本和别的系统在用。'
-        },
-        {
-          id: 'F4',
-          text: '偶尔还是要看全部：命令行加一个 `--all`，加了以后跟现在的表格一模一样。'
-        }
-      ]
-    }
+    user: { facts: QUIET_FACTS }
   },
   {
     set: 'ambig',
@@ -345,22 +393,7 @@ export const TASKS: CodingTask[] = [
       '销售那边反馈，预留的时候库存不够就直接报错（409），很麻烦，他们希望能有多少先留多少。帮我改一下预留接口（`POST /items/:sku/reserve`）。命令行那边先别动，仓库有脚本靠现在的行为。',
     rootCause: ['src/domain/stock.js', 'src/api/server.js'],
     decoys: ['src/cli/main.js'],
-    user: {
-      facts: [
-        {
-          id: 'F1',
-          text: '只有请求体里带 `"partial": true` 的时候才部分预留；不带的话跟现在完全一样（不够就 409）。还有别的客户端靠原来的行为。'
-        },
-        {
-          id: 'F2',
-          text: '返回值还是更新后的商品（跟现在一样），另外多一个字段 `granted`，是这次实际预留了多少。'
-        },
-        {
-          id: 'F3',
-          text: '一件都留不了（可用为 0）的时候，照样返回 409、错误码 `INSUFFICIENT_STOCK`，不要返回 granted 为 0 的成功。'
-        }
-      ]
-    }
+    user: { facts: PARTIAL_FACTS }
   },
   {
     set: 'ambig',
@@ -377,7 +410,71 @@ export const TASKS: CodingTask[] = [
     rootCause: ['src/report/valuation.js', 'src/api/server.js', 'src/cli/main.js'],
     decoys: ['src/report/lowstock.js'],
     user: { facts: [] }
+  },
+  {
+    set: 'handoff',
+    id: 'prelude-export',
+    fixture: 'ambig/exportvalue',
+    prompt:
+      '好，现在说要做的：给 export 加个 `--with-value` 选项，把每个商品的库存价值（就是 valuation 报表里那个数）一起导出来，给财务用。',
+    rootCause: ['src/export/exportItems.js', 'src/cli/main.js'],
+    decoys: [],
+    user: {
+      facts: EXPORT_FACTS,
+      prelude: [
+        '先跟你说个背景，后面要用：财务下个月开始拿我们导出的 CSV 对账。他们的表格模板是按列名导入的，库存价值那一列必须叫 `stockValue`，放在最后一列；金额一律用美元、保留两位小数，不带货币符号和千分位，比如 `1234.50`、`0.05`，不要用分。先记着，要做什么我待会儿说。'
+      ],
+      scripted: ['F1', 'F2']
+    }
+  },
+  {
+    set: 'handoff',
+    id: 'prelude-quiet',
+    fixture: 'ambig/quiet',
+    prompt:
+      '行，就按这个标准改吧。命令行再加一个 `--all`，加了以后跟现在的表格一模一样，偶尔还要看全的。',
+    rootCause: ['src/cli/main.js', 'src/report/lowstock.js'],
+    decoys: ['src/api/server.js'],
+    user: {
+      facts: QUIET_FACTS,
+      prelude: [
+        'lowstock 报表现在太吵了，一大半是常年不动的冷门货。我想了一下，「真正需要马上补货」应该是：最近 30 天出过货，而且按现在的出货速度库存撑不过 14 天（正好 14 天也算要补）。另外 `--json` 的输出和 HTTP 接口（`GET /reports/lowstock`）有脚本和别的系统在用，一点都不能变，要改只改命令行里给人看的那个表格。你先看看现在报表是怎么算的，用 `node scripts/seed.js` 造点数据跑一下，跟我说说按这个标准大概会滤掉多少行，先别改代码。'
+      ],
+      scripted: ['F1', 'F2', 'F3', 'F4']
+    }
+  },
+  {
+    set: 'handoff',
+    id: 'midtask-partial',
+    fixture: 'ambig/partial',
+    prompt:
+      '销售那边反馈，预留的时候库存不够就直接报错（409），很麻烦，他们希望能有多少先留多少。帮我改一下预留接口（`POST /items/:sku/reserve`）。命令行那边先别动，仓库有脚本靠现在的行为。',
+    rootCause: ['src/domain/stock.js', 'src/api/server.js'],
+    decoys: ['src/cli/main.js'],
+    user: {
+      facts: PARTIAL_FACTS,
+      silent: true,
+      midTask:
+        '补充一下刚才漏说的：只有请求体里带 `"partial": true` 的时候才部分预留，不带的话跟现在一样，不够就 409，别的客户端还靠这个；返回值还是更新后的商品，另外加一个 `granted` 字段，是这次实际留了多少；一件都留不了的时候照样 409、错误码 `INSUFFICIENT_STOCK`。',
+      scripted: ['F1', 'F2', 'F3']
+    }
+  },
+  {
+    set: 'handoff',
+    id: 'long-count',
+    fixture: 'ambig/count',
+    prompt:
+      '说个事。我们仓库每个月月底盘点一次，最近几次发现系统里的数和货架上实际的数老是对不上，有的多有的少，财务对账的时候很头疼，审计那边也提了意见，说每次改库存都得有据可查。所以想加个盘点调整的功能，大概是这样：盘点的人数完一个货位，就把实际数出来的数量报给系统，系统把库存改成这个数——注意报的是盘点出来的实际数量，不是差了多少，调整以后 onHand 就等于报上来的数。接口就叫 `POST /items/:sku/count`，body 里带 `qty`，命令行是 `stockroom count <sku> <qty>`。审计那边的要求是每次调整都得写原因，HTTP 的 body 里叫 `reason`，命令行用 `--reason`，没写或者写的是空白就当参数错误，HTTP 回 400，命令行退出码 2；原因要跟着那条出入库记录存下来，他们要查——调整本身也要像收货出货一样留一条出入库记录。还有个坑：有些货已经被订单预留了，要是盘点出来的数比已经预留的还少，说明出了大问题，这种得直接拒绝，回 409、错误码 `CONFLICT`，什么都别改，等人去查；正好等于预留数是可以的。最后是估值，valuation 报表要跟着对：盘盈多出来的那部分按这个商品最近一次入库的单价算，要是从来没入过库就按 0；盘亏少掉的就像出货一样，先从最早那批里扣。差不多就这些，辛苦。',
+    rootCause: [
+      'src/domain/stock.js',
+      'src/report/valuation.js',
+      'src/api/server.js',
+      'src/cli/main.js'
+    ],
+    decoys: [],
+    user: { facts: COUNT_FACTS, scripted: ['F1', 'F2', 'F3', 'F4'] }
   }
 ]
 
-export const taskDir = (task: CodingTask): string => join(FIXTURES, task.set, task.id)
+export const taskDir = (task: CodingTask): string =>
+  task.fixture ? join(FIXTURES, task.fixture) : join(FIXTURES, task.set, task.id)

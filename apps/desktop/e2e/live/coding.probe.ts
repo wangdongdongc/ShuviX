@@ -280,6 +280,8 @@ interface Msg {
   content: string
   usage?: Usage
   isNotice?: boolean
+  /** user：宿主随这条消息附上的用户原话条数（`user-words` Token 的 name，chat-protocol userWords.ts）；没附 = 0 */
+  quoted: number
   blocks: Block[]
 }
 
@@ -290,6 +292,9 @@ const readMessages = (app: E2EApp, sid: string): Promise<Msg[]> =>
       content: String(m.content ?? ''),
       usage: m.metadata ? m.metadata.usage : undefined,
       isNotice: Boolean(m.metadata && m.metadata.isSystemNotice),
+      quoted: Object.values((m.metadata && m.metadata.inlineTokens) || {})
+        .filter((t) => t && t.type === 'user-words')
+        .reduce((n, t) => n + (Number(t.name) || 0), 0),
       blocks: (m.blocks ?? []).map((b) => b.type === 'tool'
         ? { type: 'tool', toolName: b.toolName, args: b.args, result: String(b.result ?? '').slice(0, 4000), isError: b.isError === true }
         : { type: b.type, text: b.text })
@@ -477,6 +482,8 @@ interface RunRecord {
   followUps: number
   finalReply: string
   agents: string[]
+  /** messages into sub-sessions that carried the user's own words, and how many words they quoted in all */
+  userWordsAttached: { sends: number; words: number }
   user?: UserReport
   error?: string
 }
@@ -566,6 +573,7 @@ const PARENT_ANSWERED = 'the session that assigned you this task answered on the
 
 function userReport(
   facts: string[],
+  scripted: string[],
   grade: Grade,
   rounds: UserRound[],
   subMessages: Msg[],
@@ -576,8 +584,9 @@ function userReport(
     const checks = grade.checks.filter((c) => c.fact === id)
     return checks.length > 0 && checks.every((c) => c.pass)
   })
-  const given = [...new Set(rounds.flatMap((r) => r.verdict.disclosed))].sort()
-  const beforeDone = new Set<string>()
+  // facts the scripted user stated on its own (prelude, request, mid-task) are given, before any "done"
+  const given = [...new Set([...scripted, ...rounds.flatMap((r) => r.verdict.disclosed)])].sort()
+  const beforeDone = new Set<string>(scripted)
   let doneSeen = false
   for (const r of rounds) {
     if (r.verdict.kind === 'completion' || r.verdict.kind === 'mixed') doneSeen = true
@@ -695,7 +704,8 @@ function renderSummary(): string {
       )
         .map(([n, c]) => `${n}×${c}`)
         .join(' ')}; explore: ${r.exploreCalls}; follow-ups: ${r.followUps}`,
-      `Agents: ${r.agents.join('; ') || 'builtin'}`
+      `Agents: ${r.agents.join('; ') || 'builtin'}`,
+      `User words attached to sub-session messages: ${r.userWordsAttached.words} in ${r.userWordsAttached.sends} message(s)`
     )
     for (const [i, d] of r.dispatches.entries()) {
       lines.push(
@@ -799,11 +809,15 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       ? createSimUser({
           key: simKey.key,
           model: simKey.modelId,
-          request: task.prompt,
-          facts: task.user.facts
+          // what the user wrote on their own: the prelude, then the request (mid-task words reach it as history)
+          request: [...(task.user.prelude ?? []), task.prompt].join('\n\n'),
+          facts: task.user.silent ? [] : task.user.facts
         })
       : undefined
-  const conv: SimTurn[] = [{ from: 'user', text: task.prompt }]
+  const conv: SimTurn[] = []
+  let midTaskVia = task.user?.midTask ? 'not sent' : ''
+  /** the mid-task watcher runs while this is true (cleared on every way out of the run) */
+  let watching = false
   const rounds: UserRound[] = []
   const simErrors: string[] = []
   let capped = false
@@ -904,10 +918,64 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     const settle = (): Promise<void> =>
       settleTree(app, events, rootId, stats, (l) => debug(`${label}: ${l}`), 20_000, answerCard)
 
+    // the scripted user: prelude messages first, each answered before the next; the agent's replies to them
+    // are history for the simulated user, not something it answers
+    for (const text of task.user?.prelude ?? []) {
+      conv.push({ from: 'user', text })
+      await sendPrompt(app, rootId, text)
+      await settle()
+      const reply = (await freshText()).text
+      if (reply) conv.push({ from: 'agent', text: reply })
+    }
+    // the mid-task message goes in once the root has started the work (an edit, or a message to a sub-session):
+    // as a steer while the root is busy (the watcher); if the root is idle by then, the loop below sends it
+    const midTask = task.user?.midTask
+    const startedWork = (msgs: Msg[]): boolean =>
+      msgs
+        .flatMap((m) => m.blocks)
+        .some(
+          (b) =>
+            b.type === 'tool' &&
+            (b.toolName === 'edit' ||
+              b.toolName === 'write' ||
+              (b.toolName === 'session' && /prompt-(sub-)?session/.test(String(b.args?.action))))
+        )
+    watching = midTask !== undefined
+    const watcher = midTask
+      ? (async () => {
+          const sync = syncProbe(app.main)
+          await sync.install()
+          while (watching && midTaskVia === 'not sent') {
+            await new Promise((r) => setTimeout(r, 1500))
+            if (!startedWork(await readMessages(app, rootId).catch(() => []))) continue
+            const view = await withTimeout(sync.viewOf(rootId), 8000).catch(() => undefined)
+            if (view?.run?.state !== 'busy' || !watching || midTaskVia !== 'not sent') continue
+            midTaskVia = 'steer'
+            conv.push({ from: 'user', text: midTask })
+            await app.main.eval(
+              `window.api.agent.steer(${JSON.stringify({ sessionId: rootId, text: midTask })})`
+            )
+            debug(`${label}: mid-task message sent as a steer`)
+          }
+        })()
+      : undefined
+    const sendMidTaskIfIdle = async (): Promise<boolean> => {
+      if (!midTask || midTaskVia !== 'not sent') return false
+      if (!startedWork(await readMessages(app, rootId))) return false
+      midTaskVia = 'prompt'
+      conv.push({ from: 'user', text: midTask })
+      await sendPrompt(app, rootId, midTask)
+      debug(`${label}: mid-task message sent as a message (root idle)`)
+      await settle()
+      return true
+    }
+
+    conv.push({ from: 'user', text: task.prompt })
     await sendPrompt(app, rootId, task.prompt)
     await settle()
     if (sim) {
       for (;;) {
+        if (await sendMidTaskIfIdle()) continue
         const { text, work } = await freshText()
         if (!text) break
         if (rounds.length >= MAX_SIM_CALLS) {
@@ -930,7 +998,11 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
         await settle()
       }
     }
+    watching = false
+    await watcher
+    if (midTaskVia) agents.push(`mid-task message: ${midTaskVia}`)
   } catch (e) {
+    watching = false
     error = String((e as Error)?.message ?? e)
     debug(`${label}: ${error}`)
   }
@@ -999,6 +1071,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   const user = task.user
     ? userReport(
         task.user.facts.map((f) => f.id),
+        task.user.scripted ?? [],
         grade,
         rounds,
         sessions.filter((s) => s.id !== rootId).flatMap((s) => bySession.get(s.id) ?? []),
@@ -1039,6 +1112,13 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       [...rootMsgs].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ??
       '',
     agents,
+    userWordsAttached: (() => {
+      const quoted = sessions
+        .filter((s) => s.id !== rootId)
+        .flatMap((s) => bySession.get(s.id) ?? [])
+        .filter((m) => m.role === 'user' && m.quoted > 0)
+      return { sends: quoted.length, words: quoted.reduce((n, m) => n + m.quoted, 0) }
+    })(),
     ...(user ? { user } : {}),
     error
   }
