@@ -341,7 +341,12 @@ describe('「这一行自己的内容」留在明面上', () => {
       async () => (await hints.subtitleOf(CHECK_UPDATE)) || null,
       'update status subtitle'
     )
-    expect((await hints.visibleText()).includes(status)).toBe(true)
+    // 长错误折成三行 + 展开钮（c3aa13db）：subtitle 的 textContent 把钮上的字直接粘在说明后面，页面文字里两者
+    // 分在两行 —— 比的是说明本身那一段
+    const errorText = await settings.eval<string>(
+      `document.querySelector('[data-update-error-text]')?.textContent?.trim() ?? ''`
+    )
+    expect((await hints.visibleText()).includes(errorText || status)).toBe(true)
     expect(await hints.count(CHECK_UPDATE)).toBe(0)
     expect(await hints.openTips()).toBe(0)
   })

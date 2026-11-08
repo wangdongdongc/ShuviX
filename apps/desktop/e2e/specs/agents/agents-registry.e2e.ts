@@ -38,12 +38,14 @@ describe('内置档案', () => {
     // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
     // 旧 Bots 的意图门控 bot-intent 随管线一并拆除。tab 是 Chrome 标签页会话（侧边栏）的基座；
     // 从系统打开的 markdown 窗口也是笔记本会话（协作编辑的 coedit 已并进 notebook）；permission-reviewer 是询问点
-    // 自动审查（内置 hook auto-review）派出的审查员 —— 只由宿主派发，派发工具与子会话都点不到它
+    // 自动审查（内置 hook auto-review）派出的审查员 —— 只由宿主派发，派发工具与子会话都点不到它；goal-judge 同形：
+    // 会话目标（`/goal`）每轮跑完由内置 hook goal-check 派出的判定员
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'bot',
       'chat',
       'coding',
       'explore',
+      'goal-judge',
       'knowledge-writer',
       'notebook',
       'permission-reviewer',
@@ -54,8 +56,9 @@ describe('内置档案', () => {
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，
     // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声。审查员（permission-reviewer）
     // 更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入。知识库写手是库管员：
-    // 只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
-    const narrow = ['titler', 'permission-reviewer', 'knowledge-writer']
+    // 只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带。判定员（goal-judge）与审查员同理：
+    // 它只该按事件里宿主记下的证据判，项目里的文字可能是冲它来的
+    const narrow = ['titler', 'permission-reviewer', 'knowledge-writer', 'goal-judge']
     for (const a of builtins) {
       // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
       // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正

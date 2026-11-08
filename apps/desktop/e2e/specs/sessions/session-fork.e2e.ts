@@ -4,7 +4,8 @@
  *
  *   E-1 侧栏：两轮脚本对话的项目会话（空闲）→ 行菜单里 fork-session 可点 → 选它：同一个项目里多出
  *       「<标题> · fork」并成为活动会话；`message.list` 的 id 与文本和源会话一模一样，源会话不变；
- *       `agent.init(fork).created` 为 false；在 fork 里发一条，假提供商收到的是抄来的历史 + 新消息，
+ *       `agent.init(fork).created` 为 true（fork 沿用源会话的锁，提示词缓存不丢，2026-11-06）；在 fork 里发一条，
+ *       假提供商收到的是抄来的历史 + 新消息，
  *       源会话照旧只有它自己的两轮
  *   E-2 回复：第一轮一次 `ls`（项目目录）+ 终答、第二轮纯文本；点第一张卡的 [data-fork-reply] → 活动会话
  *       切到 fork，只有那一张卡（工具块带结果）；fork 的下一次请求带着工具结果、没有第二轮；源会话两张卡
@@ -286,10 +287,10 @@ describe('session fork', () => {
       expect.objectContaining({ title: forkTitle, active: true })
     )
 
-    // 整拷：id 与文本一模一样；源会话不动；fork 还没有运行时
+    // 整拷：id 与文本一模一样；源会话不动；fork 沿用源会话的锁 —— 一开就有运行时（同一组工具、同一份系统提示词）
     expect(shapeOf(await listMessages(forkId))).toEqual(shapeOf(srcMsgs))
     expect(await listMessages(sid.e1)).toEqual(srcMsgs)
-    expect(await init(forkId)).toMatchObject({ success: true, created: false })
+    expect(await init(forkId)).toMatchObject({ success: true, created: true })
 
     // 画出来的就是抄来的那两轮
     await chat.ready()

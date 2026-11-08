@@ -382,10 +382,12 @@ describe('知识库围栏', () => {
     )
   })
 
-  it('KBF-E-4 改选择即刻改围栏：同一个运行时里清空 → 用户库那几行消失（项目会话只剩项目库那一行，无项目会话整段消失），选回来 → 逐字节回来（知识库是活段落，人设才冻结）', async () => {
+  it('KBF-E-4 改选择不动已冻结的围栏，提醒里是知识库那一段；用户点重建才换：清空 → 用户库那几行消失（项目会话只剩项目库那一行，无项目会话整段消失），选回来再重建 → 逐字节回来', async () => {
+    // 2026-11-06 用户裁决「历史状态不变」：整份系统提示词（知识库围栏在内）在这段对话第一次建 agent 时冻结，
+    // 来源改了只提醒，用户点「重建」才按此刻的来源重渲染（chat-system-prompt-frozen.e2e.ts 走的是界面那条路）
     mkdirSync(userBaseDir(), { recursive: true })
 
-    /** 建一条勾了 USER_BASE 的会话，回它的 id、创建时的系统提示词与两个助手 */
+    /** 建一条勾了 USER_BASE 的会话，回它的 id、创建时的系统提示词与几个助手 */
     const start = async (opts: {
       projectId?: string
       title: string
@@ -394,6 +396,8 @@ describe('知识库围栏', () => {
       sp0: string
       setBases: (knowledgeBases: string[]) => Promise<void>
       runtimeCreated: () => Promise<boolean>
+      staleKeys: () => Promise<string[]>
+      rebuild: () => Promise<void>
     }> => {
       const created = await createAgentSession(app.main, { ...opts, knowledgeBases: [USER_BASE] })
       const sid = created.sid
@@ -411,21 +415,39 @@ describe('知识库围栏', () => {
             .eval<{
               created: boolean
             }>(`window.api.agent.init({ sessionId: ${JSON.stringify(sid)} })`)
-            .then((r) => r.created)
+            .then((r) => r.created),
+        staleKeys: () =>
+          app.main
+            .eval<{
+              stale: Array<{ key: string }>
+            }>(`window.api.agent.systemPromptStatus(${JSON.stringify(sid)})`)
+            .then((r) => r.stale.map((section) => section.key)),
+        rebuild: async () => {
+          const res = await app.main.eval<{ success: boolean }>(
+            `window.api.agent.rebuildSystemPrompt(${JSON.stringify(sid)})`
+          )
+          expect(res).toEqual({ success: true })
+        }
       }
     }
 
-    // (a) 项目会话：清空用户的选择，围栏还在 —— 项目库不归选择管，只剩它那一行
+    // (a) 项目会话：清空用户的选择 → 系统提示词逐字节不变，提醒里只有知识库那一段
     const proj = await start({ projectId, title: 'e2e-kbf-4-project' })
     expect(fenceBodyOf(proj.sp0)).toContain('- project — InjProj')
     expect(fenceBodyOf(proj.sp0)).toContain(`- ${USER_BASE}`)
 
     await proj.setBases([])
     expect(await proj.runtimeCreated()).toBe(true)
+    expect(await systemPromptOf(proj.sid)).toBe(proj.sp0)
+    expect(await proj.staleKeys()).toEqual(['knowledge_bases'])
+
+    // 重建：围栏还在 —— 项目库不归选择管，只剩它那一行
+    await proj.rebuild()
     const projCleared = await systemPromptOf(proj.sid)
     const projFence = fenceBodyOf(projCleared)
     expect(projFence).toContain('- project — InjProj')
     expect(projFence).not.toContain(`- ${USER_BASE}`)
+    expect(await proj.staleKeys()).toEqual([])
     // 围栏之外逐字不动
     expect(projCleared.slice(0, projCleared.indexOf(OPEN))).toBe(
       proj.sp0.slice(0, proj.sp0.indexOf(OPEN))
@@ -434,16 +456,22 @@ describe('知识库围栏', () => {
       proj.sp0.slice(proj.sp0.indexOf(CLOSE))
     )
 
+    // 选回来：重建之前还是清空后的那一份，重建之后逐字节回到最初
     await proj.setBases([USER_BASE])
-    expect(await proj.runtimeCreated()).toBe(true)
+    expect(await systemPromptOf(proj.sid)).toBe(projCleared)
+    expect(await proj.staleKeys()).toEqual(['knowledge_bases'])
+    await proj.rebuild()
     expect(await systemPromptOf(proj.sid)).toBe(proj.sp0)
 
-    // (b) 不属于项目的会话：清空 → 整段消失（连同它前面那个段落分隔符），选回来 → 回来
+    // (b) 不属于项目的会话：清空 → 重建之前不变；重建 → 整段消失（连同它前面那个段落分隔符），选回来再重建 → 回来
     const free = await start({ title: 'e2e-kbf-4-free' })
     expect(free.sp0).toContain(OPEN)
 
     await free.setBases([])
     expect(await free.runtimeCreated()).toBe(true)
+    expect(await systemPromptOf(free.sid)).toBe(free.sp0)
+    expect(await free.staleKeys()).toEqual(['knowledge_bases'])
+    await free.rebuild()
     const cleared = await systemPromptOf(free.sid)
     expect(cleared).not.toContain(OPEN)
     expect(cleared).not.toContain(CLOSE)
@@ -452,7 +480,7 @@ describe('知识库围栏', () => {
     expect(cleared).toBe(sp0.slice(0, sp0.indexOf(OPEN)).replace(/\n\n$/, '') + sp0.slice(fenceEnd))
 
     await free.setBases([USER_BASE])
-    expect(await free.runtimeCreated()).toBe(true)
+    await free.rebuild()
     const restored = await systemPromptOf(free.sid)
     expect(fenceBodyOf(restored)).toBe(fenceBodyOf(sp0))
     expect(restored).toBe(sp0)
