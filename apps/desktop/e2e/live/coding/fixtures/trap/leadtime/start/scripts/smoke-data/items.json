@@ -1,0 +1,57 @@
+[
+  {
+    "sku": "EL-00001",
+    "name": "Fuse 10A",
+    "category": "electrical",
+    "location": "Aisle 1",
+    "onHand": 4,
+    "reserved": 0,
+    "reorderPoint": 40,
+    "createdAt": "2026-02-27T08:00:00.000Z",
+    "updatedAt": "2026-04-25T15:20:00.000Z"
+  },
+  {
+    "sku": "FA-00001",
+    "name": "Bolt 10mm",
+    "category": "fasteners",
+    "location": "Aisle 3",
+    "onHand": 15,
+    "reserved": 0,
+    "reorderPoint": 50,
+    "createdAt": "2026-02-27T08:00:00.000Z",
+    "updatedAt": "2026-04-15T10:05:00.000Z"
+  },
+  {
+    "sku": "GA-00001",
+    "name": "Garden hose 25m",
+    "category": "garden",
+    "location": "Aisle 9",
+    "onHand": 8,
+    "reserved": 0,
+    "reorderPoint": 10,
+    "createdAt": "2026-02-27T08:00:00.000Z",
+    "updatedAt": "2026-04-20T09:40:00.000Z"
+  },
+  {
+    "sku": "PA-00001",
+    "name": "Primer",
+    "category": "paint",
+    "location": "Aisle 4",
+    "onHand": 3,
+    "reserved": 0,
+    "reorderPoint": 5,
+    "createdAt": "2026-02-27T08:00:00.000Z",
+    "updatedAt": "2026-03-01T08:30:00.000Z"
+  },
+  {
+    "sku": "TO-00001",
+    "name": "Hammer",
+    "category": "tools",
+    "location": "Aisle 12",
+    "onHand": 10,
+    "reserved": 0,
+    "reorderPoint": 2,
+    "createdAt": "2026-02-27T08:00:00.000Z",
+    "updatedAt": "2026-03-01T08:45:00.000Z"
+  }
+]

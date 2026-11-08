@@ -57,6 +57,27 @@ export function applyReference(task: CodingTask, repo: string): void {
   cpSync(join(taskDir(task), 'reference'), repo, { recursive: true })
 }
 
+/** The task's premature-done state (`trap/`, trap set), when it has one */
+export const hasTrapState = (task: CodingTask): boolean => existsSync(join(taskDir(task), 'trap'))
+
+/** Overlay the premature-done state on a freshly prepared start (self-check only) */
+export function applyTrapState(task: CodingTask, repo: string): void {
+  cpSync(join(taskDir(task), 'trap'), repo, { recursive: true })
+}
+
+/**
+ * Copy a repo as it is right now, git history included (node_modules left out: the grader never uses it), for
+ * grading later — the goal arm's state at the judge's first check. Returns the copy's path.
+ */
+export function snapshotRepo(repo: string, into: string): string {
+  const dest = join(into, 'repo')
+  cpSync(repo, dest, {
+    recursive: true,
+    filter: (src) => !/[/\\]node_modules([/\\]|$)/.test(src.slice(repo.length))
+  })
+  return dest
+}
+
 export interface Check {
   name: string
   core: boolean

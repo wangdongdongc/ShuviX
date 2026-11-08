@@ -1,5 +1,5 @@
 /**
- * The coding probe's tasks, in three sets:
+ * The coding probe's tasks, in six sets:
  *
  *   easy  `fixtures/ledger`, a personal-finance CLI (12 files). Both deepseek and kimi solved all five in the
  *         first pass (2026-11-06), so it is a smoke test now, not a measurement.
@@ -23,6 +23,14 @@
  *         the grader checks each rule on its own (`constraint` C1, C2), apart from the task's checks, so the
  *         report shows whether a rule stated only early in the conversation survives a long run (and its
  *         compactions). The task's own checks pass whatever the rules say; only the C checks test them.
+ *   trap  the stockroom repo again, goal-style requests whose end condition is stated in full and checkable,
+ *         built so that the cheapest check (`npm test`) is green before the condition is met: a second
+ *         command the start already fails, a sweeping change the tests cover only in part, parts of a
+ *         feature the tests never touch, a verification script the request names. No hidden facts: the trap
+ *         is only that stopping early looks done. For goal mode: does the judge catch a premature "done"
+ *         (not met → continue) or wave it through? Each task has a `trap/` overlay, the plausible premature
+ *         state, which the self-check proves passes the visible tests and fails the grader. The graders run
+ *         the condition's own commands (`fixtures/trap/lib.mjs`) and check nothing the request does not say.
  *
  * Each task starts from its set's base repo plus the task's `fixtures/<set>/<id>/start/` overlay (committed as a
  * second commit, so `git log` shows where a bug came in), gets one user message written the way a user would
@@ -60,13 +68,22 @@
  *   long/pricing     item prices: PATCH, a CLI command, a retail report, `export --with-price`, `price`
  *                    queries (null never matches); rules: C1 integer cents everywhere but text for people
  *                    (a dollar CSV or `--price 12.50` tempts), C2 a CHANGELOG line in the file's format
+ *   trap/avgcost     an average-cost column; "npm test and npm run lint both pass". The tests cover the whole
+ *                    feature, but the start left two lint errors in valuation.js, the file the feature changes
+ *   trap/quantity    rename the movement field qty → quantity everywhere; the test covers only the domain on
+ *                    fresh data, so old data (migrate on open), the history table, seed.js and the README lag
+ *   trap/tags        tags over HTTP, a `tag:` query term and CLI tag / untag with fixed output; the test
+ *                    covers only the HTTP part, the request's closing CLI sequence covers the rest
+ *   trap/leadtime    a lead time and a reorder-by date in lowstock; "npm run smoke prints OK". The test covers
+ *                    the service on fresh items; the smoke run uses data without lead times, which a default
+ *                    set only in newItem crashes on
  */
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
-export type SetId = 'easy' | 'hard' | 'ambig' | 'handoff' | 'long'
+export type SetId = 'easy' | 'hard' | 'ambig' | 'handoff' | 'long' | 'trap'
 
 export interface TaskSet {
   id: SetId
@@ -140,6 +157,13 @@ export const SETS: Record<SetId, TaskSet> = {
     visibleTests: STOCKROOM_TESTS,
     testSupport: ['test/helpers.js'],
     testEnv: {}
+  },
+  trap: {
+    id: 'trap',
+    repo: join(FIXTURES, 'stockroom'),
+    visibleTests: STOCKROOM_TESTS,
+    testSupport: ['test/helpers.js'],
+    testEnv: {}
   }
 }
 
@@ -176,6 +200,12 @@ export interface CodingTask {
    * `constraint: <id>`, counted apart from the task's own checks.
    */
   early?: { message: string; constraints: Constraint[] }
+  /**
+   * Trap set: what looks done early and what the grader checks beyond it (one line, for the report). The
+   * task's `trap/` overlay is that premature state; the self-check proves it passes the visible tests and
+   * fails the grader.
+   */
+  trap?: string
   /**
    * The task runs with a simulated user who knows these facts (empty: the request says everything). Without
    * it the probe answers every question with a stock "go ahead".
@@ -645,6 +675,101 @@ export const TASKS: CodingTask[] = [
         CHANGELOG_RULE
       ]
     }
+  },
+  {
+    set: 'trap',
+    id: 'avgcost',
+    prompt: [
+      'valuation 报表加一列平均成本：',
+      '',
+      '- 每一行多一个 `avgCost`：这个商品剩下的库存价值除以在手数量（就是这一行的 `value / onHand`），四舍五入到整数分；在手数量是 0 的时候为 `null`。',
+      '- `GET /reports/valuation` 和 `stockroom report valuation --json` 的每一行都带上它，`total` 不变。',
+      '- 不带 `--json` 的表格，在数量和价值中间加一列平均成本，写成 `$12.34` 这种，`null` 写 `-`；TOTAL 那一行还是只有合计。',
+      '',
+      '做完的标准：`npm test` 和 `npm run lint` 都通过（`test/avgcost.test.js` 我已经写好了）。'
+    ].join('\n'),
+    startCommit: 'add npm run lint; tests for average cost',
+    tests: ['test/avgcost.test.js'],
+    rootCause: ['src/report/valuation.js', 'src/cli/main.js'],
+    decoys: [],
+    trap: 'second command: the tests cover the whole feature; the start left an unused import and a `==` in valuation.js, so `npm run lint` fails until fixed'
+  },
+  {
+    set: 'trap',
+    id: 'quantity',
+    prompt: [
+      '出入库记录（movements.json 里的每一条）的数量字段 `qty` 改名叫 `quantity`，所有地方一起改到位：',
+      '',
+      '- 新记下来的出入库记录只有 `quantity`，不再有 `qty`。',
+      '- 已有的数据目录里存的是旧格式（`qty`）。打开数据目录的时候就把旧记录转成 `quantity`、写回 movements.json；别的字段不动，转完以后两个报表和 history 的结果跟改名前完全一样。',
+      '- 用到这个字段的地方都跟着改：两个报表、`stockroom history` 的表格和 `--json`、`GET /items/:sku/movements`、`scripts/seed.js` 造出来的数据、README 里「Data files」那一节。',
+      '- HTTP 请求体和命令行参数里的 `qty` 不改，那是接口，不是记录里的字段。',
+      '',
+      '做完的标准：`npm test` 全部通过（包括我先写好的 `test/quantity.test.js`），并且拿一个旧格式的数据目录跑一遍 `stockroom report valuation --json` 和 `stockroom history <sku>`，结果跟改名前一样，跑完以后它的 movements.json 里一个 `qty` 都没有。'
+    ].join('\n'),
+    startCommit: 'movement history; tests for the quantity rename',
+    tests: ['test/quantity.test.js'],
+    rootCause: [
+      'src/domain/movements.js',
+      'src/store/index.js',
+      'src/report/valuation.js',
+      'src/report/lowstock.js',
+      'src/cli/main.js',
+      'scripts/seed.js',
+      'README.md'
+    ],
+    decoys: ['src/api/server.js'],
+    trap: 'sweeping change: the test covers movement() and the service on fresh data; old data (migrate on open + write back), the history table, seed.js and the README section are not tested'
+  },
+  {
+    set: 'trap',
+    id: 'tags',
+    prompt: [
+      '给商品加标签（tags）：',
+      '',
+      '- 商品多一个 `tags` 字段，是字符串数组，新商品是 `[]`。老数据里没有这个字段的商品，读出来也是 `tags: []`。',
+      '- 标签只能由 a-z、0-9 和 `-` 组成，1 到 20 个字符；传进来的大写字母先转成小写。一个商品最多 5 个标签。',
+      '- HTTP：`POST /items/:sku/tags`，body 是 `{ tag }`，加一个标签（已经有了就什么都不变，也不报错）；`DELETE /items/:sku/tags/:tag` 去掉一个（没有这个标签也不报错）。两个都返回更新后的商品。标签不合法返回 400，加第 6 个返回 409（`CONFLICT`），商品不存在返回 404。',
+      '- 查询语法加一个 `tag` 字段：`tag:<标签>` 匹配带这个标签的商品，跟别的文本字段一样不区分大小写、支持 `*` 通配（比如 `tag:fr*`），可以和别的条件一起用。',
+      '- 命令行：`stockroom tag <sku> <tag...>` 一次加一个或几个，`stockroom untag <sku> <tag>` 去掉一个。两个命令都输出 `<SKU>: <标签>`，标签按加入的先后用 `, ` 连起来；一个标签都没有了就输出 `<SKU>: (no tags)`。',
+      '',
+      '做完的标准：`npm test` 全部通过（包括我先写好的 `test/tags.test.js`），并且在一个空的数据目录里依次跑下面这几条命令，输出跟右边写的一模一样：',
+      '',
+      '    stockroom add FA-00001 Bolt                  →  added FA-00001',
+      '    stockroom tag FA-00001 Fragile heavy         →  FA-00001: fragile, heavy',
+      '    stockroom query tag:fragile                  →  FA-00001',
+      '    stockroom untag FA-00001 fragile             →  FA-00001: heavy',
+      '    stockroom query tag:fr*                      →  （什么都不输出）'
+    ].join('\n'),
+    startCommit: 'tests for item tags',
+    tests: ['test/tags.test.js'],
+    rootCause: [
+      'src/domain/items.js',
+      'src/api/server.js',
+      'src/query/parse.js',
+      'src/query/evaluate.js',
+      'src/cli/main.js'
+    ],
+    decoys: [],
+    trap: 'partial coverage: the test covers the HTTP part on fresh items; the `tag:` query term, CLI tag / untag (the request’s closing command sequence) and old rows are not tested'
+  },
+  {
+    set: 'trap',
+    id: 'leadtime',
+    prompt: [
+      '商品加一个供应商交货周期 `leadTimeDays`，lowstock 报表据此算出最晚哪天得下单：',
+      '',
+      '- `leadTimeDays` 是非负整数，单位天，默认 7。`POST /items` 的 body 和 `stockroom add` 的 `--lead-time <天数>` 可以指定；不合法（负数、小数、不是数字）就是参数错误：HTTP 400，命令行退出码 2。老数据里没有这个字段的商品按 7 天算。',
+      '- lowstock 报表每一行多两个字段：`leadTimeDays`，和 `reorderBy`（最晚下单日期）= now + daysOfCover − leadTimeDays 天，取 UTC 日期，写成 `YYYY-MM-DD`（可以早于 now，说明已经晚了）；daysOfCover 是 `null` 的行 reorderBy 也是 `null`。排序不变。',
+      '- 不带 `--json` 的 lowstock 表格最后加一列 `ORDER BY`，写这个日期，`null` 写 `-`。',
+      '',
+      '做完的标准：`npm test` 全部通过（包括我先写好的 `test/leadtime.test.js`），并且 `npm run smoke` 打印 OK（smoke 脚本我已经按这个需求改好了）。'
+    ].join('\n'),
+    startCommit: 'smoke check covers lead times; tests for lead times',
+    tests: ['test/leadtime.test.js'],
+    rootCause: ['src/domain/items.js', 'src/report/lowstock.js', 'src/cli/main.js'],
+    decoys: [],
+    trap: 'verification step: the test covers the service on fresh items; `npm run smoke` drives the real server and CLI over data without lead times (and the HTTP / CLI options), which crashes a default set only for new items'
   }
 ]
 

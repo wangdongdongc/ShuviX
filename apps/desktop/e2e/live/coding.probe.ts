@@ -4,9 +4,9 @@
  * `work` to a `coding` sub-session help or hurt?" and "does this coding.md draft beat today's?" with numbers
  * instead of feel.
  *
- * Tasks: `coding/tasks.ts` — five sets on two Node repos (graders and reference solutions in
- * `coding/fixtures`). `PROBE_SET=hard` (default), `easy`, `ambig`, `handoff` or `long`; easy and hard are at
- * ceiling for deepseek and kimi. The ambig set's requests leave out what only the user knows: a simulated user
+ * Tasks: `coding/tasks.ts` — six sets on two Node repos (graders and reference solutions in
+ * `coding/fixtures`). `PROBE_SET=hard` (default), `easy`, `ambig`, `handoff`, `long` or `trap`; easy and hard
+ * are at ceiling for deepseek and kimi. The ambig set's requests leave out what only the user knows: a simulated user
  * (`coding/simUser.ts`, on deepseek whatever model is under test) holds those facts and answers the root's
  * questions, plain-text or ask cards, and the report adds what it cost the user (turns, questions, how many
  * touched a fact, text to read), which facts were given before the agent called it done, and which facts were
@@ -14,9 +14,14 @@
  * multi-layer features, each ending in "npm test passes, including test/<task>.test.js") is for goal mode: the
  * user first sends a message of two standing rules, settled before the request and never repeated, and the
  * grader checks each rule apart from the task (`constraint` C1, C2) — does a rule said only early in the
- * conversation survive a long run and its compactions?
+ * conversation survive a long run and its compactions? The trap set (four goal-style requests with a stated,
+ * checkable end condition) is built so that the cheapest check looks green before the condition is met: a
+ * second command the start already fails (`avgcost`: lint), a sweeping rename the tests cover in part
+ * (`quantity`), parts of a feature the tests never touch (`tags`), a verification script the request names
+ * (`leadtime`: `npm run smoke`). It measures how often an agent declares done too early, and in the goal arm
+ * whether the judge catches it.
  *
- * Arms (`PROBE_ARMS`, comma-separated; default `direct,goal` for the long set, `direct,work` otherwise):
+ * Arms (`PROBE_ARMS`, comma-separated; default `direct,goal` for the long and trap sets, `direct,work` otherwise):
  *   direct  the user talks to the coding agent itself: the project session's base profile is replaced by the
  *           coding md (a user-level `work.md` built from it)
  *   work    today's product: the project session runs `work`, which hands the job to a `coding` sub-session
@@ -24,6 +29,13 @@
  *           sends it as the user's message) and the run lasts until the goal ends: met, impossible or paused,
  *           with no verdict pending. No "go ahead" follow-ups: the user set a goal and walked away; ask cards
  *           are answered as in the other arms. Not for tasks with a simulated user (ambig, handoff).
+ *           Graded twice: at the end, and as the judge first saw it. The probe records the root's `goal`
+ *           events in the renderer; the moment the first check begins (`judging: true`, with a fallback poll
+ *           of `agent.goal`) it copies the repo, .git included. That is the state the judge judges: the run
+ *           has ended, the session is idle (the host does not judge while background work runs), the judge
+ *           only reads, and the host starts a continuation only after the verdict is stored. The copy counts
+ *           as sound unless a not_met verdict had already landed when it finished (then a continuation could
+ *           have begun editing; it is reported, not dropped). The copy is graded after the run.
  * `PROBE_MD_DIR` points at a folder of md drafts (`coding.md`, `work.md`, …) installed as user-level agents in
  * every arm; `direct` and `goal` then build their `work.md` from that `coding.md`. Compare drafts by running
  * twice with different `PROBE_MD_DIR` / `PROBE_OUT`.
@@ -40,7 +52,9 @@
  * deepseek-v4-pro and kimi-for-coding are 1M). The report shows the window each run really had and how many
  * compactions happened, so a run where it did not apply is visible.
  * `PROBE_SELFCHECK=1` runs no model: it checks that every task's start state fails its grader and its reference
- * solution passes, the early message's rules included (printed apart).
+ * solution passes, the early message's rules included (printed apart); for a task with a `trap/` overlay (the
+ * trap set's plausible premature-done state) also that it passes the visible tests and the suite yet fails
+ * the grader, so each trap is real.
  *
  * Report (`summary.md`, `summary.json`): per model × arm and per run, pass / core / visible tests / tampering /
  * tokens / requests / seconds / hand-offs. When a run has rules or a goal, "Goals, rules and compaction" adds:
@@ -49,7 +63,12 @@
  * which read transcripts, it includes hook agents such as the goal judge), and for the goal arm the final
  * status, pause reason, continuations (`turns`), the goal's own cost (`costUsd`), wall time from setting the
  * goal to its end, and the judge's last verdict with its reason (each not-met reason on the way is in the
- * run's details).
+ * run's details). "Trap: declared done vs the end condition" (whenever a goal run has a first check, and for
+ * the trap set): per model × arm, direct runs that stopped short (the state the agent declared done fails the
+ * grader), and for goal runs the grade at the first check against the first verdict — clean (passes, met),
+ * caught (fails, not_met, the final state passes), caught-not-fixed (fails, not_met, final fails), false-met
+ * (fails, met), over-strict (passes, not_met) — with continuations, cost and seconds; per run the first
+ * verdict's reason and the core checks the first state failed.
  *
  * Safety (see memory "probe-auto-approve-scope"): each run is a fresh isolated instance on a packaged-shaped
  * stage; a policy denies file tools and commands that touch the real home folder; permission asks are approved
@@ -60,7 +79,9 @@
  *   PROBE_MODELS=deepseek npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
  *   PROBE_SET=long PROBE_ARMS=direct,goal PROBE_MODELS=deepseek PROBE_RUNS=3 \
  *     npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
- *   PROBE_SELFCHECK=1 PROBE_SET=long npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
+ *   PROBE_SET=trap PROBE_MODELS=deepseek,kimi PROBE_RUNS=3 PROBE_GOAL_TIMEOUT_MIN=60 \
+ *     npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
+ *   PROBE_SELFCHECK=1 PROBE_SET=trap npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
  */
 import {
   existsSync,
@@ -72,12 +93,14 @@ import {
   writeFileSync
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
   GoalActResult,
   GoalLimits,
   GoalStatus,
+  GoalVerdictKind,
+  GoalVerdictRecord,
   GoalView
 } from '@shuvix/chat-protocol/types/goal'
 import { afterAll, beforeAll, expect, it } from 'vitest'
@@ -95,7 +118,15 @@ import { seedRealModel } from './probe'
 import { collectProbeEnv } from './protocolProbeEnv'
 import { ENV_FILE, installPolicy, makeDebug, REAL_HOME, sendPrompt } from './redactionProbeShared'
 import { SETS, TASKS, type CodingTask, type SetId } from './coding/tasks'
-import { applyReference, gradeRepo, prepareRepo, type Grade } from './coding/workspace'
+import {
+  applyReference,
+  applyTrapState,
+  gradeRepo,
+  hasTrapState,
+  prepareRepo,
+  snapshotRepo,
+  type Grade
+} from './coding/workspace'
 import { createSimUser, type SimCard, type SimTurn, type SimVerdict } from './coding/simUser'
 
 const BUILTIN_MD = fileURLToPath(
@@ -116,7 +147,10 @@ const MODEL_IDS = list(process.env.PROBE_MODELS, 'deepseek')
 const SET = (process.env.PROBE_SET ?? 'hard') as SetId
 if (!SETS[SET])
   throw new Error(`PROBE_SET must be one of ${Object.keys(SETS).join(', ')}, got ${SET}`)
-const ARMS = list(process.env.PROBE_ARMS, SET === 'long' ? 'direct,goal' : 'direct,work') as Arm[]
+const ARMS = list(
+  process.env.PROBE_ARMS,
+  SET === 'long' || SET === 'trap' ? 'direct,goal' : 'direct,work'
+) as Arm[]
 for (const arm of ARMS) {
   if (!['direct', 'work', 'goal'].includes(arm))
     throw new Error(`PROBE_ARMS takes direct, work, goal; got ${arm}`)
@@ -394,6 +428,99 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ])
 }
 
+// ─────────────────────────── goal arm: the judge's first check ───────────────────────────
+
+/** What the renderer saw of one session's `goal` events: when the first check began, the first verdict */
+interface GoalSeen {
+  /** renderer clock when a view with `judging: true` first came (0 = not yet) */
+  judgingAt: number
+  verdict: GoalVerdictRecord | null
+}
+
+/** Record the root's `goal` events in the renderer from now on (before the goal is set) */
+const installGoalRecorder = (app: E2EApp, sid: string): Promise<unknown> =>
+  app.main.eval(`(() => {
+    const sid = ${JSON.stringify(sid)}
+    const seen = (window.__probeGoalSeen = { judgingAt: 0, verdict: null })
+    window.api.agent.onEvent((e) => {
+      if (e.type !== 'goal' || e.sessionId !== sid || !e.goal) return
+      if (e.goal.judging && !seen.judgingAt) seen.judgingAt = Date.now()
+      if (e.goal.lastVerdict && !seen.verdict) seen.verdict = e.goal.lastVerdict
+    })
+    return true
+  })()`)
+
+const goalSeen = (app: E2EApp): Promise<GoalSeen> =>
+  app.main.eval<GoalSeen>(`window.__probeGoalSeen ?? { judgingAt: 0, verdict: null }`)
+
+/** The repo as the judge's first check saw it (copied, graded after the run) */
+interface FirstSnapshot {
+  /** the copy (a `repo` folder inside a temp folder of its own) */
+  path: string
+  /** seconds from setting the goal to the copy */
+  atSeconds: number
+  /** no not_met verdict had landed when the copy finished, so no continuation could have edited it yet */
+  sound: boolean
+  /** how the moment was caught, and why it may be off */
+  note: string
+}
+
+/**
+ * Copy the repo the moment the judge's first check begins: the run has ended, the session is idle and the
+ * judge only reads, and the host starts a continuation only after it has stored the verdict — so what is
+ * copied is what is judged. Watches the recorded `goal` events every 200 ms, and the goal view itself every
+ * 2 s in case an event went missing.
+ */
+function watchFirstCheck(
+  app: E2EApp,
+  rootId: string,
+  repo: string,
+  setAt: number,
+  debug: (l: string) => void
+): { stop: () => Promise<FirstSnapshot | undefined> } {
+  let active = true
+  let snap: FirstSnapshot | undefined
+  const take = async (note: string): Promise<void> => {
+    const dir = mkdtempSync(join(tmpdir(), 'shuvix-first-check-'))
+    const path = snapshotRepo(repo, dir)
+    const after = await goalSeen(app).catch(() => undefined)
+    const late = after?.verdict?.verdict === 'not_met'
+    snap = {
+      path,
+      atSeconds: Math.round((Date.now() - setAt) / 1000),
+      sound: !late,
+      note: late ? `${note}; a not_met verdict had landed before the copy finished` : note
+    }
+    debug(`first check: repo copied (${snap.note})`)
+  }
+  const loop = (async () => {
+    for (let polls = 1; active && !snap; polls++) {
+      await new Promise((r) => setTimeout(r, 200))
+      const seen = await goalSeen(app).catch(() => undefined)
+      if (seen?.judgingAt) {
+        await take('at judging: true')
+        break
+      }
+      if (seen?.verdict) {
+        await take('the check was missed: copied after the verdict')
+        break
+      }
+      if (polls % 10 !== 0) continue
+      const view = await withTimeout(goalViewOf(app, rootId), 8000).catch(() => undefined)
+      if (view?.judging) await take('at judging: true (goal view poll)')
+      else if (view?.lastVerdict)
+        await take('the check was missed: copied after the verdict (goal view poll)')
+    }
+  })().catch((e) => debug(`first-check watcher failed: ${String(e)}`))
+  return {
+    stop: async () => {
+      active = false
+      await loop
+      return snap
+    }
+  }
+}
+
 interface SettleStats {
   questions: number
   permissions: number
@@ -602,6 +729,53 @@ interface GoalRun {
   timedOut: boolean
   /** the judge's not-met reasons on the way, from the `<goal-continue>` notices in the root's transcript */
   notMet: string[]
+  /** the judge's first check: its verdict, and the repo as it saw it, graded */
+  first?: FirstCheck
+}
+
+/** The judge's first check of a goal run */
+interface FirstCheck {
+  /** the first verdict (recorded `goal` events; else rebuilt from the end state); absent = none came */
+  verdict?: GoalVerdictKind
+  reason?: string
+  nextStep?: string
+  /** where the verdict came from */
+  verdictFrom: 'events' | 'end state' | 'none'
+  /** the repo copied when that check began; absent = no copy (see note) */
+  snapshot?: {
+    atSeconds: number
+    sound: boolean
+    note: string
+    pass: boolean
+    core: { passed: number; total: number }
+    visible: { pass: number; fail: number }
+    /** core checks the copied state failed */
+    failing: string[]
+    graderError?: string
+  }
+  note?: string
+}
+
+/** What came of the judge's first check, against the grade of what it judged */
+type TrapClass =
+  | 'clean'
+  | 'caught'
+  | 'caught-not-fixed'
+  | 'false-met'
+  | 'over-strict'
+  | 'impossible'
+  | 'no-verdict'
+  | 'no-snapshot'
+
+function trapClassOf(r: RunRecord): TrapClass | undefined {
+  const f = r.goal?.first
+  if (!r.goal) return undefined
+  if (!f?.verdict) return 'no-verdict'
+  if (f.verdict === 'impossible') return 'impossible'
+  if (!f.snapshot) return 'no-snapshot'
+  if (f.snapshot.pass) return f.verdict === 'met' ? 'clean' : 'over-strict'
+  if (f.verdict === 'met') return 'false-met'
+  return r.grade.pass ? 'caught' : 'caught-not-fixed'
 }
 
 /** the goal is over: met, impossible or paused, with no verdict pending (null = no goal any more) */
@@ -792,6 +966,7 @@ function renderSummary(): string {
   }
   lines.push(...userSummary())
   lines.push(...goalSummary())
+  lines.push(...trapSummary())
   lines.push('', '## Runs', '')
   lines.push(
     '| model | arm | task | # | pass | core | extra | visible | tampered | tests added | changed (+/−) | in / out tokens | req | s | calls | hand-offs | skim | verbatim | decoy mentioned | root cause mentioned | asks |'
@@ -859,6 +1034,19 @@ function renderSummary(): string {
               `${g.verdict ? `; last verdict ${g.verdict}: ${g.reason}` : ''}`
       )
       for (const [i, reason] of g.notMet.entries()) lines.push(`  ${i + 1}. not met: ${reason}`)
+      const f = g.first
+      if (f) {
+        const s = f.snapshot
+        lines.push(
+          `First check (${trapClassOf(r)}): verdict ${f.verdict ?? 'none'} (from ${f.verdictFrom})` +
+            `${f.reason ? `: ${f.reason}` : ''}${f.nextStep ? ` — next: ${f.nextStep}` : ''}`,
+          s
+            ? `  state it judged (copied ${s.atSeconds} s after the goal was set, ${s.sound ? 'sound' : 'NOT sound'}: ${s.note}): ` +
+                `${s.pass ? 'passes' : 'fails'}, core ${s.core.passed}/${s.core.total}, visible ${s.visible.pass}/${s.visible.pass + s.visible.fail}` +
+                `${s.failing.length ? `; failing: ${s.failing.join('; ')}` : ''}${s.graderError ? `; grader failed: ${s.graderError}` : ''}`
+            : `  ${f.note ?? 'no copy'}`
+        )
+      }
     }
     for (const [i, d] of r.dispatches.entries()) {
       lines.push(
@@ -999,6 +1187,86 @@ function goalSummary(): string[] {
   return out
 }
 
+/**
+ * Did the agent declare done too early, and did the goal's judge catch it? Direct runs: the final state is
+ * what the agent declared done. Goal runs: the state the judge's first check saw, graded, against its verdict.
+ */
+function trapSummary(): string[] {
+  const rs = records.filter((r) => r.arm !== 'work')
+  if (!rs.length || (SET !== 'trap' && !rs.some((r) => r.goal?.first))) return []
+  const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
+  const money = (n: number): string => `$${n.toFixed(2)}`
+  const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
+  const CLASSES: TrapClass[] = ['clean', 'caught', 'caught-not-fixed', 'false-met', 'over-strict']
+  /** the agent's first "done" failed the grader: direct = its final state; goal = the state the first check saw */
+  const stoppedShort = (r: RunRecord): boolean | undefined =>
+    r.arm === 'goal'
+      ? r.goal?.first?.snapshot
+        ? !r.goal.first.snapshot.pass
+        : undefined
+      : !r.grade.pass
+  const traps = TASKS.filter((t) => t.set === SET && t.trap && rs.some((r) => r.task === t.id))
+  const out = [
+    '',
+    '## Trap: declared done vs the end condition',
+    '',
+    'stopped short = the state the agent first called done fails the grader (direct: its final state; goal: the state the judge’s first check saw, copied when the check began). ' +
+      'Goal runs by the first verdict against that state: clean = passes and met; caught = fails, not_met, and the final state passes; caught-not-fixed = fails, not_met, final fails; ' +
+      'false-met = fails yet met; over-strict = passes yet not_met; other = impossible, no verdict, or no copy. Cost = the whole session tree (judge included); seconds = the whole run.',
+    ...(traps.length ? ['', ...traps.map((t) => `- ${t.id}: ${t.trap}`)] : []),
+    '',
+    '| model | arm | runs | pass | stopped short | clean | caught | caught-not-fixed | false-met | over-strict | other | continuations (mean) | cost (mean) | seconds (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  ]
+  const groups = new Map<string, RunRecord[]>()
+  for (const r of rs)
+    groups.set(`${r.model}|${r.arm}`, [...(groups.get(`${r.model}|${r.arm}`) ?? []), r])
+  for (const [key, g] of groups) {
+    const [model, arm] = key.split('|')
+    const short = g.map(stoppedShort).filter((x): x is boolean => x !== undefined)
+    const classes = g.map(trapClassOf)
+    const n = (c: TrapClass): string =>
+      arm === 'goal' ? String(classes.filter((x) => x === c).length) : '—'
+    const other = classes.filter((c) => c !== undefined && !CLASSES.includes(c)).length
+    out.push(
+      `| ${model} | ${arm} | ${g.length} | ${g.filter((r) => r.grade.pass).length}/${g.length} | ` +
+        `${short.length ? `${short.filter(Boolean).length}/${short.length}` : '—'} | ` +
+        `${CLASSES.map(n).join(' | ')} | ${arm === 'goal' ? other : '—'} | ` +
+        `${arm === 'goal' ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ` +
+        `${money(mean(g.map((r) => r.costUsd)))} | ${Math.round(mean(g.map((r) => r.seconds)))} |`
+    )
+  }
+  out.push(
+    '',
+    '| model | arm | task | # | final | first “done” state | its failed checks | first verdict | class | continuations | cost | s | first verdict reason |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  )
+  for (const r of rs) {
+    const f = r.goal?.first
+    const s = f?.snapshot
+    const final = `${r.grade.pass ? '✅' : '❌'} ${r.grade.core.passed}/${r.grade.core.total}${r.error ? ' ⚠️' : ''}`
+    const first =
+      r.arm === 'goal'
+        ? s
+          ? `${s.pass ? '✅' : '❌'} ${s.core.passed}/${s.core.total} (${s.atSeconds} s${s.sound ? '' : ', not sound'})`
+          : (f?.note ?? 'no copy')
+        : `${r.grade.pass ? '✅' : '❌'} (declared done)`
+    const failed =
+      r.arm === 'goal'
+        ? (s?.failing ?? []).join('; ')
+        : r.grade.checks
+            .filter((c) => c.core && !c.constraint && !c.pass)
+            .map((c) => c.name)
+            .join('; ')
+    out.push(
+      `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${final} | ${cell(first)} | ${cell(failed) || '—'} | ` +
+        `${r.arm === 'goal' ? (f?.verdict ?? 'none') : '—'} | ${r.arm === 'goal' ? trapClassOf(r) : r.grade.pass ? 'done' : 'stopped short'} | ` +
+        `${r.goal ? r.goal.turns : '—'} | ${money(r.costUsd)} | ${r.seconds} | ${f?.reason ? cell(f.reason).slice(0, 240) : '—'} |`
+    )
+  }
+  return out
+}
+
 function writeReport(): void {
   writeFileSync(join(OUT, 'summary.md'), renderSummary())
   writeFileSync(join(OUT, 'summary.json'), JSON.stringify(records, null, 2))
@@ -1040,6 +1308,8 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   let goalSetAt: number | undefined
   let goalEndedAt: number | undefined
   let goalSetError: string | undefined
+  /** goal arm: watches for the judge's first check and copies the repo then */
+  let firstWatch: ReturnType<typeof watchFirstCheck> | undefined
 
   const app = await launchApp({
     autoReview: AUTO_REVIEW,
@@ -1218,7 +1488,9 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     conv.push({ from: 'user', text: task.prompt })
     if (arm === 'goal') {
       // the request becomes the goal; the host sends it as the user's message and keeps the session going
+      await installGoalRecorder(app, rootId)
       goalSetAt = Date.now()
+      firstWatch = watchFirstCheck(app, rootId, repo, goalSetAt, (l) => debug(`${label}: ${l}`))
       const action = {
         type: 'set',
         objective: task.prompt,
@@ -1289,6 +1561,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     error = String((e as Error)?.message ?? e)
     debug(`${label}: ${error}`)
   }
+  const firstSnap = await firstWatch?.stop()
 
   const sessions = rootId ? await treeOf(app, rootId).catch(() => [] as SessionRow[]) : []
   const bySession = new Map<string, Msg[]>()
@@ -1322,6 +1595,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
         ? await withTimeout(goalViewOf(app, rootId), 8000).catch(() => undefined)
         : undefined
     const end = goalEndedAt ?? Date.now()
+    const notMet = notMetReasons(bySession.get(rootId) ?? [])
     goal = {
       ...(goalSetError !== undefined ? { setError: goalSetError } : {}),
       status: view ? view.status : 'none',
@@ -1333,7 +1607,28 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       costUsd: view?.costUsd ?? 0,
       wallSeconds: goalSetAt === undefined ? 0 : Math.round((end - goalSetAt) / 1000),
       timedOut: goalSetAt !== undefined && goalSetError === undefined && goalEndedAt === undefined,
-      notMet: notMetReasons(bySession.get(rootId) ?? [])
+      notMet
+    }
+    if (goalSetAt !== undefined && goalSetError === undefined) {
+      // the first verdict: as the renderer recorded it; else what the end state still shows of it
+      const seen = await goalSeen(app).catch(() => undefined)
+      const fromEnd =
+        view?.lastVerdict && (view.turns ?? 0) === 0
+          ? view.lastVerdict
+          : notMet.length > 0
+            ? { verdict: 'not_met' as const, reason: notMet[0], nextStep: undefined }
+            : undefined
+      const v = seen?.verdict ?? fromEnd
+      goal.first = {
+        ...(v
+          ? {
+              verdict: v.verdict,
+              reason: v.reason,
+              ...(v.nextStep ? { nextStep: v.nextStep } : {})
+            }
+          : {}),
+        verdictFrom: seen?.verdict ? 'events' : fromEnd ? 'end state' : 'none'
+      }
     }
   }
   // the repo lives in the fake HOME: keep it until it is graded
@@ -1377,6 +1672,30 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     grade = gradeRepo(task, repo, startSha)
   } finally {
     rmSync(app.home, { recursive: true, force: true })
+  }
+  // goal arm: grade the repo as the judge's first check saw it
+  if (firstSnap) {
+    try {
+      if (goal?.first) {
+        const at = gradeRepo(task, firstSnap.path, startSha)
+        goal.first.snapshot = {
+          atSeconds: firstSnap.atSeconds,
+          sound: firstSnap.sound,
+          note: firstSnap.note,
+          pass: at.pass,
+          core: at.core,
+          visible: { pass: at.visible.pass, fail: at.visible.fail },
+          failing: at.checks.filter((c) => c.core && !c.constraint && !c.pass).map((c) => c.name),
+          ...(at.graderError ? { graderError: at.graderError } : {})
+        }
+      }
+    } catch (e) {
+      if (goal?.first) goal.first.note = `grading the copy failed: ${String(e)}`
+    } finally {
+      rmSync(dirname(firstSnap.path), { recursive: true, force: true })
+    }
+  } else if (goal?.first) {
+    goal.first.note = 'no copy: the first check was never seen'
   }
   const user = task.user
     ? userReport(
@@ -1442,7 +1761,8 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   console.log(
     `[${label}] ${grade.pass ? 'PASS' : 'FAIL'} core ${grade.core.passed}/${grade.core.total}` +
       `${grade.constraints.total ? `, rules ${grade.constraints.kept}/${grade.constraints.total}` : ''}` +
-      `${goal ? `, goal ${goal.status}${goal.pauseReason ? ` (${goal.pauseReason})` : ''} after ${goal.turns} continuations` : ''} → ${OUT}`
+      `${goal ? `, goal ${goal.status}${goal.pauseReason ? ` (${goal.pauseReason})` : ''} after ${goal.turns} continuations` : ''}` +
+      `${goal?.first ? `, first check ${goal.first.verdict ?? 'no verdict'} on a ${goal.first.snapshot ? (goal.first.snapshot.pass ? 'passing' : 'failing') : 'missing'} state (${trapClassOf(record)})` : ''} → ${OUT}`
   )
 }
 
@@ -1451,7 +1771,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
 const selected = TASKS.filter((t) => t.set === SET && TASK_IDS.includes(t.id))
 if (ARMS.includes('goal') && selected.some((t) => t.user)) {
   throw new Error(
-    'the goal arm runs tasks without a simulated user (easy, hard, long), not ambig or handoff'
+    'the goal arm runs tasks without a simulated user (easy, hard, long, trap), not ambig or handoff'
   )
 }
 
@@ -1493,6 +1813,30 @@ if (SELFCHECK) {
       ).toEqual((task.early?.constraints ?? []).map((c) => c.id).sort())
       expect(fixed.constraints.kept).toBe(fixed.constraints.total)
     })
+    // the trap set: every task has a premature-done state, and it really is a trap — what an agent sees
+    // when it checks the cheap way (the visible tests, the suite) is green, and the grader still fails it
+    if (task.set === 'trap' || hasTrapState(task)) {
+      it(`self-check ${task.id}: the trap state passes the visible tests and fails the grader`, () => {
+        expect(hasTrapState(task), `fixtures for ${task.id} have no trap/ overlay`).toBe(true)
+        const trapRepo = mkdtempSync(join(tmpdir(), `ledger-${task.id}-trap-`))
+        const sha = prepareRepo(task, `${trapRepo}/repo`)
+        applyTrapState(task, `${trapRepo}/repo`)
+        const early = gradeRepo(task, `${trapRepo}/repo`, sha)
+        rmSync(trapRepo, { recursive: true, force: true })
+        const failingCore = early.checks.filter((c) => c.core && !c.constraint && !c.pass)
+        console.log(
+          `[${task.id}] trap state: visible ${early.visible.pass}/${early.visible.pass + early.visible.fail}, suite ${early.suite.pass}/${early.suite.pass + early.suite.fail}; ` +
+            `grader core ${early.core.passed}/${early.core.total}, failing: ${failingCore.map((c) => c.name).join('; ')}`
+        )
+        expect(early.graderError, early.graderError).toBeUndefined()
+        expect(early.visible.pass).toBeGreaterThan(0)
+        expect(early.visible.fail, early.visible.output).toBe(0)
+        expect(early.suite.fail).toBe(0)
+        expect(early.tampered).toEqual({ tests: [], testScript: false })
+        expect(early.pass).toBe(false)
+        expect(task.trap, 'a trap task says what its trap is').toBeTruthy()
+      })
+    }
   }
 } else {
   beforeAll(() => {

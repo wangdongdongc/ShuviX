@@ -1,0 +1,74 @@
+[
+  {
+    "id": "smoke-001",
+    "type": "receive",
+    "sku": "PA-00001",
+    "qty": 3,
+    "at": "2026-03-01T08:30:00.000Z",
+    "unitCost": 450
+  },
+  {
+    "id": "smoke-002",
+    "type": "receive",
+    "sku": "TO-00001",
+    "qty": 10,
+    "at": "2026-03-01T08:45:00.000Z",
+    "unitCost": 1500
+  },
+  {
+    "id": "smoke-003",
+    "type": "receive",
+    "sku": "EL-00001",
+    "qty": 40,
+    "at": "2026-03-01T09:00:00.000Z",
+    "unitCost": 120
+  },
+  {
+    "id": "smoke-004",
+    "type": "receive",
+    "sku": "FA-00001",
+    "qty": 60,
+    "at": "2026-03-01T09:10:00.000Z",
+    "unitCost": 20
+  },
+  {
+    "id": "smoke-005",
+    "type": "receive",
+    "sku": "GA-00001",
+    "qty": 20,
+    "at": "2026-03-20T11:00:00.000Z",
+    "unitCost": 800
+  },
+  {
+    "id": "smoke-006",
+    "type": "ship",
+    "sku": "GA-00001",
+    "qty": 6,
+    "at": "2026-04-10T14:00:00.000Z",
+    "fromReservation": false
+  },
+  {
+    "id": "smoke-007",
+    "type": "ship",
+    "sku": "FA-00001",
+    "qty": 45,
+    "at": "2026-04-15T10:05:00.000Z",
+    "fromReservation": false
+  },
+  {
+    "id": "smoke-008",
+    "type": "ship",
+    "sku": "GA-00001",
+    "qty": 6,
+    "at": "2026-04-20T09:40:00.000Z",
+    "fromReservation": false
+  },
+  {
+    "id": "smoke-009",
+    "type": "ship",
+    "sku": "EL-00001",
+    "qty": 36,
+    "at": "2026-04-25T15:20:00.000Z",
+    "fromReservation": false
+  }
+]
