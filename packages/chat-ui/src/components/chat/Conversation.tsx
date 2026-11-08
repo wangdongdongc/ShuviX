@@ -23,6 +23,7 @@ import { buildVisibleItems, isAssistantMessage } from './conversationItems'
 import { SuggestionContext } from './SuggestionCards'
 import { suggestionStatesOf } from '@shuvix/chat-protocol/suggestions'
 import { StreamingFooter } from './StreamingFooter'
+import { TaskListPanel } from './TaskListPanel'
 import { PendingInputsCard, pendingCardOnScreen } from './PendingInputsCard'
 import { InputArea } from './InputArea'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -37,14 +38,15 @@ interface ListContext {
 }
 
 /**
- * Virtuoso Footer：流式指示器 + 等人回答的询问卡片 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递）。
+ * Virtuoso Footer：流式指示器 + 任务列表 + 等人回答的询问卡片 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递）。
  * 询问排在对话的最末尾，而不是发起它的工具行旁边：工具行常被折进步骤组，派生 agent 的询问在这条对话里也没有工具行，
- * 几个工具并行时还会同时有几张
+ * 几个工具并行时还会同时有几张。任务列表同理钉在最新内容之下，排在询问卡片之上（询问更急，要紧挨着输入框）
  */
 function ConversationFooter({ context }: ContextProp<ListContext>): React.JSX.Element {
   return (
     <>
       <StreamingFooter />
+      <TaskListPanel />
       <PendingInputsCard onResponse={context.onInputResponse} />
       <div aria-hidden style={{ height: 'var(--chat-input-h, 0px)' }} />
     </>

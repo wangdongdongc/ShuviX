@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react'
 import {
   InputArea,
   PendingInputsDrawer,
+  TaskListPanel,
   ThreadDrawer,
   useChatActions,
   useChatStore,
@@ -88,7 +89,13 @@ export function NotebookSession({
           }`}
         >
           <InputArea
-            thread={<ThreadDrawer sessionId={sessionId} />}
+            thread={
+              <>
+                <ThreadDrawer sessionId={sessionId} />
+                {/* 任务列表跟着对话待在卡片里：在对话抽屉之下、询问之上 */}
+                <TaskListPanel placement="composer" />
+              </>
+            }
             accessory={<PendingInputsDrawer onResponse={handleInputResponse} />}
             onHeightChange={handleInputHeightChange}
           />

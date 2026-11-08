@@ -1254,7 +1254,7 @@
     "chromeLabel": "Chrome",
     "chromeHint": "经 ShuviX 扩展操作你自己的 Chrome —— 供 Chrome 标签页会话使用",
     "taskListLabel": "任务列表",
-    "taskListHint": "在输入框上方显示 agent 这次的步骤和进度",
+    "taskListHint": "在最新一条消息下方显示 agent 这次的步骤和进度",
     "sshLabel": "SSH",
     "sshHint": "在 ~/.ssh/config 里的主机上执行命令、复制和同步文件",
     "gitLabel": "版本控制",

@@ -162,7 +162,8 @@ import {
   type ChatMessage
 } from '../../../stores/chatStore'
 import { Conversation } from '../Conversation'
-import { V, assistant, resetStore, text, user } from '../../../__tests__/support/views'
+import { V, assistant, resetStore, text, toolBlock, user } from '../../../__tests__/support/views'
+import { TASK_LIST_TOOL_NAME } from '@shuvix/chat-protocol/taskList'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -1423,5 +1424,34 @@ describe('询问卡片', () => {
     expect(virt.props!.context.onInputResponse).toBe(virt.handleInputResponse)
     virt.panelOnResponse!('r1', { kind: 'ask', allowed: true })
     expect(virt.handleInputResponse).toHaveBeenCalledWith('r1', { kind: 'ask', allowed: true })
+  })
+  it('CS-17 任务列表在 Footer 里：排在询问卡片之前；输入框里不再有它', () => {
+    settledAtBottom()
+    const withList: ChatMessage[] = [
+      ...history(S1),
+      user('u-plan', 'go', S1),
+      assistant(
+        'a-plan',
+        [
+          toolBlock(
+            'p1',
+            TASK_LIST_TOOL_NAME,
+            { items: [{ content: 'Read the code', status: 'in_progress' }] },
+            { result: 'Plan shown (1 step).' }
+          )
+        ],
+        S1
+      )
+    ]
+    act(() =>
+      applySessionView(S1, V(S1, { messages: withList, run: { state: 'busy' }, asks: [ASK] }))
+    )
+    const list = container.querySelector('[data-task-list]')
+    const card = container.querySelector('[data-pending-card]')
+    expect(list).not.toBeNull()
+    expect(card).not.toBeNull()
+    expect(list!.getAttribute('data-task-list-placement')).toBe('conversation')
+    expect(list!.closest('[data-virtuoso-scroller]')).not.toBeNull()
+    expect(list!.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

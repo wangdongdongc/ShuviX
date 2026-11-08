@@ -3,14 +3,14 @@
  * taskListReader / taskListParity 的 server 侧读者、planServer.test.ts 的工具、migrationV37.test.ts 的种子行、
  * taskListPanel / assistantBubbleTaskList 的界面），这里只走一遍它们都替身掉的那条链：v37 在真库上种下内置行 →
  * 会话默认不勾 → 勾上后模型真调 `mcp__plan__update` → main 启动时注册的读者（`setBuiltinMcpTaskListReader`）
- * 从已提交的条目折叠出上一次的列表 → 结果行回给模型 → 渲染端把列表钉在输入框上方，每次调用在卡片里照普通
+ * 从已提交的条目折叠出上一次的列表 → 结果行回给模型 → 渲染端把列表钉在对话流末尾，每次调用在卡片里照普通
  * 工具行显示。
  *
  *   TLE-1 `mcp.list()` 有内置的 `plan` 行（inproc、启用）；设置 → MCP 那一行带内置徽章与「实验」标签
  *   TLE-2 没勾的会话：`tools.list` 列出 `mcp:plan`（内置、没有档案声明、不在勾选里），选择器那一行带「实验」标签、
  *         没勾；发一条消息，请求里没有 `mcp__plan__update`
  *   TLE-3 勾上的会话，三轮脚本（列表与第一次真调用同一条消息 → 推进 → 终答）：
- *         a 第二轮挂着时列表在跑、0/3、摘要是第一步、展开、各步状态；
+ *         a 第二轮挂着时列表在跑、0/3、摘要是第一步、展开、各步状态；列表在对话的滚动区里，不在输入框卡片里；
  *         b 同一时刻卡片里：第一轮的列表调用和 ls 并成一个合并行（摘要里有第一步），第二轮正在流式生成的
  *           那次是一条 generating 的列表行；
  *         c 两次调用的结果是 `Plan shown (3 steps).` / `Plan updated: step 2 of 3 is in progress.` —— 后一句
@@ -236,7 +236,7 @@ describe('默认不勾', () => {
 })
 
 describe('勾上之后', () => {
-  it('TLE-3 列表随第一次真调用发出、推进一步、终答收尾：输入框上方的列表，卡片里照常有它的行，结果行出自真读者', async () => {
+  it('TLE-3 列表随第一次真调用发出、推进一步、终答收尾：对话末尾的列表，卡片里照常有它的行，结果行出自真读者', async () => {
     provider.reset()
     await events.clear()
     provider.script(
@@ -267,6 +267,8 @@ describe('勾上之后', () => {
     expect(await list.count()).toBe('0/3')
     expect(await list.summary()).toBe(STEPS[0])
     expect(await list.expanded()).toBe(true)
+    // 列表在对话流末尾（滚动区里），不在输入框卡片里
+    expect(await list.where()).toBe('conversation')
     expect((await list.steps()).map((s) => [s.n, s.status, s.text])).toEqual([
       [1, 'in_progress', STEPS[0]],
       [2, 'pending', STEPS[1]],

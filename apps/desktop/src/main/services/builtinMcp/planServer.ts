@@ -1,7 +1,7 @@
 /**
  * 内置能力服务器 `plan` —— 任务列表（docs/task-list-design.md §3，实验）。进程内 MCP server，按会话实例化。
  *
- * agent 用唯一的工具 `update` 维护「这次请求的步骤 + 状态」，界面把它钉在输入框上方，让用户不读每条消息也能
+ * agent 用唯一的工具 `update` 维护「这次请求的步骤 + 状态」，界面把它钉在对话流末尾，让用户不读每条消息也能
  * 跟上进度。它是**进度显示**，不是流程：没有审批关口、不产出文档，只规定形状（步骤 + 状态），怎么拆、怎么做
  * 都是模型自己的事。规则全部写在工具描述里（与系统提示一样常驻），并挂在模型本来就要做的动作上（第一个工具调用
  * 带上整张列表、开始下一步的那个调用顺带推进）；**收尾归宿主**（会话空闲时界面按请求怎么结束的来收），模型
@@ -12,12 +12,12 @@
  * 读不到（宿主没接、会话没开着）就按「这个请求里还没有列表」处理 —— 只影响这一行状态和推进类调用的校验，
  * 界面那边读的是投影，不受影响。
  *
- * **只给会话的根 agent**：列表只画在这条会话的输入框上方，读的也是根 agent 那条对话。一份实例由根与它派出的
+ * **只给会话的根 agent**：列表只画在这条会话的对话流末尾，读的也是根 agent 那条对话。一份实例由根与它派出的
  * agent 共用 —— 用户自己的 agent md 也能声明 `mcp:plan` 并被派出去，那样的调用按 `_meta` 里的对话认出来
  * （`agentOf`）直接回错误，免得它推进根 agent 的列表、也免得它以为有人看得到。认不出（宿主没接）按根处理。
  *
  * 为什么是内置能力服务器：实验功能要按会话默认不勾、用户自己勾上，`settings.enabledTools` 只收 `mcp:` 名；
- * 用到的特权是「专属渲染」（输入框上方的列表，chat-protocol `taskList.ts`；每次调用本身照普通工具行显示）。
+ * 用到的特权是「专属渲染」（对话流末尾的列表，chat-protocol `taskList.ts`；每次调用本身照普通工具行显示）。
  *
  * 用**低层 `Server`**（纯 JSON Schema），理由同 ssh / database。
  */
@@ -45,7 +45,7 @@ const log = createLogger('mcp:plan')
 export { TASK_LIST_MCP_SERVER_NAME as PLAN_MCP_SERVER_NAME }
 
 const DESCRIPTION = [
-  "Keep a short task list that ShuviX pins above the user's input box while you work, so they can follow your progress without reading every message. It shows progress; it is not an approval step — keep working after you send it.",
+  'Keep a short task list that ShuviX pins under your latest message while you work, so they can follow your progress without reading every message. It shows progress; it is not an approval step — keep working after you send it.',
   '',
   'Use it for a request that will take several tool calls (edits files, runs more than one command, reads across many files). Skip it for a direct answer or a single command.',
   '',

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 输入框上方的任务列表（TaskListPanel，内置能力服务器 `plan`，docs/task-list-design.md §3.4；jsdom）：
+ * 任务列表（TaskListPanel，内置能力服务器 `plan`，docs/task-list-design.md §3.4；jsdom）：
  *
  *   TLU-1      没有列表调用 / 只有失败的或还在跑的 → 不渲染
  *   TLU-2      进行中：样子、计数、摘要 = 进行中那一步、默认展开、逐行状态与图标
@@ -12,7 +12,8 @@
  *   TLU-8 / 9  新请求清掉列表；插话（带说明 Token）、系统通知不算新请求
  *   TLU-10     还在跑的推进、失败的推进都不折进去
  *   TLU-11     展开 / 折叠按「会话 + 请求 + 样子」记（Z O2）
- *   TLU-12     触屏密度：进行中也默认折叠、点按区与行距放大
+ *   TLU-12     触屏密度：点按区与行距放大；只在输入框里（笔记本）进行中也默认折叠，对话里照常展开
+ *   TLU-18     两个位置：对话里自带圆角描边、外面套一层居中的列宽；输入框里只有 border-b
  *   TLU-13     进行中但没有进行中的步骤：只有计数，摘要位是空白
  *   TLU-14     标题文案三种语言
  *   TLU-15     长列表自身封顶滚动
@@ -102,16 +103,13 @@ function show(messages: ChatMessage[], state: RunViewState = 'busy', sid = 's1')
 
 // ─── 挂载 ──────────────────────────────────────────────────
 
-function mount(density?: ChatHostValue['density']): void {
+function mount(density?: ChatHostValue['density'], placement?: 'conversation' | 'composer'): void {
+  const panel = createElement(TaskListPanel, placement ? { placement } : {})
   act(() =>
     root.render(
       density
-        ? createElement(
-            ChatHostContext.Provider,
-            { value: { density } as ChatHostValue },
-            createElement(TaskListPanel)
-          )
-        : createElement(TaskListPanel)
+        ? createElement(ChatHostContext.Provider, { value: { density } as ChatHostValue }, panel)
+        : panel
     )
   )
 }
@@ -421,9 +419,9 @@ describe('展开 / 折叠（TLU-11，按会话 + 请求 + 样子记）', () => {
 })
 
 describe('触屏、空摘要、文案、长列表（TLU-12…TLU-15）', () => {
-  it('TLU-12 触屏密度：进行中也默认折叠；开关 min-h-[36px]；展开后行 py-1.5、文字 text-[14px]', () => {
+  it('TLU-12 触屏密度、输入框里（笔记本）：进行中也默认折叠；开关 min-h-[36px]；展开后行 py-1.5、文字 text-[14px]', () => {
     show(request('u1', items('completed', 'in_progress', 'pending')))
-    mount('touch')
+    mount('touch', 'composer')
     expect(phase()).toBe('running')
     expect(expanded()).toBe(false)
     expect(toggleButton().className).toContain('min-h-[36px]')
@@ -434,6 +432,21 @@ describe('触屏、空摘要、文案、长列表（TLU-12…TLU-15）', () => {
       expect(row.className).toContain('py-1.5')
       expect(row.querySelector('span.text-\\[14px\\]')).not.toBeNull()
     }
+  })
+
+  it('TLU-12 触屏密度、对话里：不占输入框的高度，进行中照常默认展开；收尾后照常折叠', () => {
+    show(request('u1', items('completed', 'in_progress', 'pending')))
+    mount('touch')
+    expect(phase()).toBe('running')
+    expect(expanded()).toBe(true)
+    expect(toggleButton().className).toContain('min-h-[36px]')
+
+    show(
+      [...request('u1', items('completed', 'in_progress', 'pending')), finalAnswer('a2')],
+      'idle'
+    )
+    expect(phase()).toBe('done')
+    expect(expanded()).toBe(false)
   })
 
   it('TLU-12 对照：桌面密度没有 36px 的开关，行是 py-0.5 / text-[12px]', () => {
@@ -480,5 +493,27 @@ describe('触屏、空摘要、文案、长列表（TLU-12…TLU-15）', () => {
     const list = container.querySelector('[data-task-list] ol')!
     expect(list.className).toContain('max-h-[30vh]')
     expect(list.className).toContain('overflow-y-auto')
+  })
+})
+
+describe('两个位置（TLU-18）', () => {
+  it('TLU-18 缺省（对话里）：自带圆角描边，外面套一层居中的列宽', () => {
+    show(request('u1', items('in_progress', 'pending')))
+    mount()
+    const el = panel()!
+    expect(el.getAttribute('data-task-list-placement')).toBe('conversation')
+    expect(el.className).toContain('rounded-xl')
+    expect(el.className).toContain('border ')
+    expect(el.parentElement!.className).toContain('max-w-[784px]')
+  })
+
+  it('TLU-18 输入框里（笔记本）：只有 border-b，没有外层', () => {
+    show(request('u1', items('in_progress', 'pending')))
+    mount(undefined, 'composer')
+    const el = panel()!
+    expect(el.getAttribute('data-task-list-placement')).toBe('composer')
+    expect(el.className).toContain('border-b')
+    expect(el.className).not.toContain('rounded-xl')
+    expect(el.parentElement).toBe(container)
   })
 })

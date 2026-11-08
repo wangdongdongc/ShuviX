@@ -64,6 +64,7 @@ export { StreamingFooter } from './components/chat/StreamingFooter'
 export { PendingInputsPanel } from './components/chat/PendingInputsPanel'
 export { PendingInputsDrawer } from './components/chat/PendingInputsDrawer'
 export { ThreadDrawer } from './components/chat/ThreadDrawer'
+export { TaskListPanel } from './components/chat/TaskListPanel'
 export { SlashCommandPopover } from './components/chat/SlashCommandPopover'
 
 // ── 图导出（对话图卡与笔记本 widget 共用一个面板） ──

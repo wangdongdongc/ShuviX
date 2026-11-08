@@ -1,5 +1,5 @@
 /**
- * TaskListPanel — 输入框卡片里的任务列表（内置能力服务器 `plan`，docs/task-list-design.md §3.4，实验）
+ * TaskListPanel — 任务列表（内置能力服务器 `plan`，docs/task-list-design.md §3.4，实验）
  *
  * 读的是投影出来的消息（`taskListOfMessages`）：当前请求里成功的 `mcp__plan__update` 调用按顺序折叠出来的
  * 列表，不存任何状态。三种样子：
@@ -8,8 +8,12 @@
  *  - **已停止**（会话空闲，但请求没有最终回复：中止、出错、中途退出）：未完成的步骤保持原样。
  * 后两种默认折叠成一行。下一条「用户发起一轮」的消息出现（含乐观占位）时整块消失；插话不算新请求。
  *
- * 形态与 QueuePanel 同源：渲染进输入框卡片内部，自身无边框 / 圆角 / 阴影，只用一条 border-b 与下方分隔。
- * 排在待处理输入（审批 / 提问）之上 —— 那些更急，要紧挨着输入框。
+ * 两个位置（`placement`，同 PendingInputsPanel）：
+ *  - `conversation`（普通会话）：对话流末尾、最新一条消息之下（Conversation 的 Footer），自带一圈圆角描边，
+ *    排在等人回答的询问卡片之上 —— 那张更急，要紧挨着输入框。随正文滚动，不再占输入框的高度，所以手机上
+ *    进行中也默认展开；
+ *  - `composer`（笔记本）：对话本身就在输入框卡片里（ThreadDrawer），列表跟着待在卡片里，形态与 QueuePanel
+ *    同源：自身无边框 / 圆角 / 阴影，只用一条 border-b 与下方分隔；手机上默认折叠。
  */
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -43,7 +47,11 @@ function StepIcon({ item, phase }: { item: TaskListItem; phase: Phase }): React.
   return <Circle size={13} className="flex-shrink-0 text-text-tertiary" />
 }
 
-export function TaskListPanel(): React.JSX.Element | null {
+export function TaskListPanel({
+  placement = 'conversation'
+}: {
+  placement?: 'conversation' | 'composer'
+}): React.JSX.Element | null {
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const sessionId = useChatStore((s) => s.activeSessionId)
@@ -69,7 +77,8 @@ export function TaskListPanel(): React.JSX.Element | null {
   const current = items.find((item) => item.status === 'in_progress')
 
   const key = `${sessionId ?? ''}:${snapshot.requestId}:${phase}`
-  const expanded = toggled[key] ?? (phase === 'running' && !touch)
+  const inComposer = placement === 'composer'
+  const expanded = toggled[key] ?? (phase === 'running' && !(touch && inComposer))
   const summary =
     phase === 'done'
       ? t('taskList.done')
@@ -77,10 +86,15 @@ export function TaskListPanel(): React.JSX.Element | null {
         ? t('taskList.stopped')
         : (current?.content ?? '')
 
-  return (
+  const panel = (
     <div
-      className="border-b border-border-secondary/40 px-3.5 py-1.5"
+      className={
+        inComposer
+          ? 'border-b border-border-secondary/40 px-3.5 py-1.5'
+          : 'rounded-xl border border-border-secondary/40 bg-bg-primary px-3.5 py-1.5'
+      }
       data-task-list=""
+      data-task-list-placement={placement}
       data-task-list-phase={phase}
     >
       <button
@@ -105,7 +119,7 @@ export function TaskListPanel(): React.JSX.Element | null {
         {expanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
       </button>
 
-      {/* 展开：逐行铺开（自身封顶滚动，不把输入区顶出屏幕） */}
+      {/* 展开：逐行铺开（自身封顶滚动：输入框里不把输入区顶出屏幕，对话里不让一张长列表占满一屏） */}
       {expanded && (
         <ol className="mt-1 space-y-0.5 max-h-[30vh] overflow-y-auto thin-scrollbar">
           {items.map((item, i) => (
@@ -133,4 +147,7 @@ export function TaskListPanel(): React.JSX.Element | null {
       )}
     </div>
   )
+
+  if (inComposer) return panel
+  return <div className="relative max-w-[784px] mx-auto px-4 pt-1.5 pb-1.5">{panel}</div>
 }

@@ -1254,7 +1254,7 @@
     "chromeLabel": "Chrome",
     "chromeHint": "Work in your own Chrome through the ShuviX extension — used by Chrome tab sessions",
     "taskListLabel": "Task list",
-    "taskListHint": "Shows the agent's steps and progress above the input box",
+    "taskListHint": "Shows the agent's steps and progress under the latest message",
     "sshLabel": "SSH",
     "sshHint": "Run commands and copy or sync files on the hosts in your ~/.ssh/config",
     "gitLabel": "Version Control",

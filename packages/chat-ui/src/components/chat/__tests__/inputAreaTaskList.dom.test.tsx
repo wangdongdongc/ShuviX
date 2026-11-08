@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 /**
- * 任务列表在输入框卡片里的位置（jsdom，docs/task-list-design.md §3.4）：
+ * 输入框卡片里没有任务列表（jsdom，docs/task-list-design.md §3.4）：2026-11-07 起列表在对话流末尾
+ * （Conversation 的 Footer，见 conversationScroll.dom.test.tsx 的 CS-17）；笔记本经 thread 插槽自己放进卡片。
  *
- *   TLU-16  卡片里 `[data-task-list]` 排在待处理输入（accessory）与 `[data-queue-panel]` 之前
- *   TLU-17  旧格式会话（legacy 视图）的卡片里没有任务列表，哪怕消息里有成功的列表调用
+ *   TLU-16  会话在跑、消息里有成功的列表调用：卡片里有 accessory 与 `[data-queue-panel]`，没有 `[data-task-list]`
+ *   TLU-17  经 thread 插槽放进来的列表（笔记本的做法）排在 accessory 之前
  *
  * 后端是假的 `window.api`（同 inputAreaQueue.dom.test.tsx 的做法）；状态只经 `applySessionView` 写。
  */
@@ -36,6 +37,7 @@ vi.mock('@shuvix/chat-ui', () => {
 import { applySessionView, useChatStore } from '../../../stores/chatStore'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { InputArea, type InputAreaProps } from '../InputArea'
+import { TaskListPanel } from '../TaskListPanel'
 import { V, assistant, resetStore, text, toolBlock, user } from '../../../__tests__/support/views'
 
 declare global {
@@ -181,8 +183,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('任务列表在输入框卡片里的位置', () => {
-  it('TLU-16 [data-task-list] 排在待处理输入（accessory）与 [data-queue-panel] 之前', async () => {
+describe('输入框卡片与任务列表', () => {
+  it('TLU-16 会话在跑、消息里有成功的列表调用：卡片里有待处理输入与队列，没有任务列表', async () => {
     act(() =>
       applySessionView(
         's1',
@@ -195,39 +197,29 @@ describe('任务列表在输入框卡片里的位置', () => {
     )
     await mountInput(createElement('div', { 'data-test-accessory': '' }, 'ask'))
 
-    const list = taskList()
-    const accessory = container.querySelector('[data-test-accessory]')
-    const queue = container.querySelector('[data-queue-panel]')
-    expect(list).not.toBeNull()
-    expect(accessory).not.toBeNull()
-    expect(queue).not.toBeNull()
-    expect(list!.getAttribute('data-task-list-phase')).toBe('running')
-    expect(precedes(list!, accessory!)).toBe(true)
-    expect(precedes(accessory!, queue!)).toBe(true)
-    // 三者同在卡片本体里、是兄弟（不是谁套在谁里面）
-    expect(list!.parentElement).toBe(accessory!.parentElement)
-    expect(list!.parentElement).toBe(queue!.parentElement)
+    expect(container.querySelector('[data-test-accessory]')).not.toBeNull()
+    expect(container.querySelector('[data-queue-panel]')).not.toBeNull()
+    expect(taskList()).toBeNull()
   })
 
-  it('TLU-17 legacy 视图：卡片里只有只读横幅，没有任务列表（消息里有成功的列表调用也一样）', async () => {
-    act(() =>
-      applySessionView(
-        's1',
-        V('s1', {
-          source: 'legacy',
-          capabilities: { send: false, rollback: false, continue: false },
-          messages: WITH_LIST,
-          run: { state: 'busy' }
+  it('TLU-17 笔记本的做法：经 thread 插槽放进来的列表排在待处理输入之前', async () => {
+    act(() => applySessionView('s1', V('s1', { messages: WITH_LIST, run: { state: 'busy' } })))
+    await act(async () => {
+      const Area = InputArea as (props: InputAreaProps) => React.JSX.Element
+      root.render(
+        createElement(Area, {
+          inline: true,
+          thread: createElement(TaskListPanel, { placement: 'composer' }),
+          accessory: createElement('div', { 'data-test-accessory': '' }, 'ask')
         })
       )
-    )
-    await mountInput()
-    expect(container.querySelector('[data-legacy-banner]')).not.toBeNull()
-    expect(taskList()).toBeNull()
-
-    // 对照：同样的消息换成 durable 视图 → 列表出现
-    act(() => applySessionView('s1', V('s1', { messages: WITH_LIST, run: { state: 'busy' } })))
+    })
     await flush()
-    expect(taskList()).not.toBeNull()
+
+    const list = taskList()
+    const accessory = container.querySelector('[data-test-accessory]')
+    expect(list).not.toBeNull()
+    expect(list!.getAttribute('data-task-list-placement')).toBe('composer')
+    expect(precedes(list!, accessory!)).toBe(true)
   })
 })

@@ -2616,7 +2616,7 @@ export function shownImagesPane(main: CdpClient): ShownImagesPane {
 }
 
 // ─── 任务列表（内置能力服务器 `plan`，chat-ui TaskListPanel，2026-10-31，实验） ───
-// 输入框卡片里、待处理输入之上的那一块。认的全是 data 属性：`[data-task-list]`（根，`data-task-list-phase` =
+// 对话流末尾、询问卡片之上的那一块（笔记本在输入框卡片里，`data-task-list-placement` 分两处）。认的全是 data 属性：`[data-task-list]`（根，`data-task-list-phase` =
 // running / done / stopped）、`[data-task-list-toggle]`（开合钮，`aria-expanded`）、`[data-task-list-count]`
 // （「完成数/总数」）、`[data-task-step]`（一行步骤，值是 1 起的步骤号，`data-status` = pending / in_progress /
 // completed）。摘要没有 data 属性：它是开合钮里紧跟计数的那个 span（没有摘要时那里是一个空的占位 span）。
@@ -2636,6 +2636,11 @@ export interface TaskListPane {
   present(): Promise<boolean>
   /** `data-task-list-phase`；不在屏 → null */
   phase(): Promise<string | null>
+  /**
+   * 列表在哪：在对话的滚动区里 → `conversation`，在输入框卡片（`textarea:not([data-other-input])` 所在的卡片）
+   * 里 → `composer`；都不是（或不在屏）→ null。量的是 DOM 位置，不是 `data-task-list-placement`
+   */
+  where(): Promise<'conversation' | 'composer' | null>
   /** 计数文字（`1/3`）；不在屏 → null */
   count(): Promise<string | null>
   /** 摘要文字（进行中那一步 / 「完成」/「已停止」，随界面语言变）；没有摘要 → 空串；不在屏 → null */
@@ -2654,6 +2659,15 @@ export function taskListPane(main: CdpClient): TaskListPane {
   return {
     present: () => main.eval<boolean>(`!!${ROOT}`),
     phase: () => main.eval<string | null>(`${ROOT}?.getAttribute('data-task-list-phase') ?? null`),
+    where: () =>
+      main.eval<'conversation' | 'composer' | null>(`(() => {
+        const root = ${ROOT}
+        if (!root) return null
+        if (root.closest('[data-virtuoso-scroller]')) return 'conversation'
+        const input = document.querySelector('textarea:not([data-other-input])')
+        const card = input?.closest('.rounded-2xl')
+        return card && card.contains(root) ? 'composer' : null
+      })()`),
     count: () =>
       main.eval<string | null>(`(() => {
         const el = ${ROOT}?.querySelector('[data-task-list-count]')
