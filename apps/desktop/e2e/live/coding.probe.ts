@@ -5,8 +5,8 @@
  * instead of feel.
  *
  * Tasks: `coding/tasks.ts` — six sets on two Node repos (graders and reference solutions in
- * `coding/fixtures`). `PROBE_SET=hard` (default), `easy`, `ambig`, `handoff`, `long` or `trap`; easy and hard
- * are at ceiling for deepseek and kimi. The ambig set's requests leave out what only the user knows: a simulated user
+ * `coding/fixtures`). `PROBE_SET=hard` (default), `easy`, `ambig`, `handoff`, `long` or `trap` (or `s1`, below);
+ * easy and hard are at ceiling for deepseek and kimi. The ambig set's requests leave out what only the user knows: a simulated user
  * (`coding/simUser.ts`, on deepseek whatever model is under test) holds those facts and answers the root's
  * questions, plain-text or ask cards, and the report adds what it cost the user (turns, questions, how many
  * touched a fact, text to read), which facts were given before the agent called it done, and which facts were
@@ -21,14 +21,17 @@
  * (`leadtime`: `npm run smoke`). It measures how often an agent declares done too early, and in the goal arm
  * whether the judge catches it.
  *
- * Arms (`PROBE_ARMS`, comma-separated; default `direct,goal` for the long and trap sets, `direct,work` otherwise):
+ * Arms (`PROBE_ARMS`, comma-separated; default `direct,goal` for the long and trap sets, `goal,goal-oracle,
+ * goal-shaped` for s1, `direct,work` otherwise):
  *   direct  the user talks to the coding agent itself: the project session's base profile is replaced by the
  *           coding md (a user-level `work.md` built from it)
  *   work    today's product: the project session runs `work`, which hands the job to a `coding` sub-session
  *   goal    as direct, but the request is set as a goal (`agent.goalAct` set, objective = the request; the host
  *           sends it as the user's message) and the run lasts until the goal ends: met, impossible or paused,
- *           with no verdict pending. No "go ahead" follow-ups: the user set a goal and walked away; ask cards
- *           are answered as in the other arms. Not for tasks with a simulated user (ambig, handoff).
+ *           with no verdict pending. No "go ahead" follow-ups: the user set a goal and walked away. Ask cards
+ *           are answered as in the other arms (on ambig by the simulated user, with its facts), but nobody
+ *           reads the completion report or corrects anything. Not for the handoff set (its user speaks on its
+ *           own: prelude, mid-task).
  *           Graded twice: at the end, and as the judge first saw it. The probe records the root's `goal`
  *           events in the renderer; the moment the first check begins (`judging: true`, with a fallback poll
  *           of `agent.goal`) it copies the repo, .git included. That is the state the judge judges: the run
@@ -36,9 +39,39 @@
  *           only reads, and the host starts a continuation only after the verdict is stored. The copy counts
  *           as sound unless a not_met verdict had already landed when it finished (then a continuation could
  *           have begun editing; it is reported, not dropped). The copy is graded after the run.
+ *   goal-oracle  as goal, set and leave, but the goal text is the request plus every hidden fact as an
+ *           explicit "done when" list, then the request's own end condition (`goalDraft.ts` goalTextOracle,
+ *           `endCondition` in tasks.ts): the upper bound of what a goal can hold. Tasks with a simulated
+ *           user only (ambig).
+ *   goal-shaped  the S1 prototype of the goal spec-shaping proposal (reports/Goal 验收规格展开调研.md), probe
+ *           side only. Before the goal, the goal planner (`coding/md/goal-planner.md`: read, ls, grep, glob,
+ *           no ask, thinking declared in the md) runs as the root of a throwaway session on the same
+ *           project: while it is created and runs, the user-level `work.md` is the planner (plus
+ *           `goal-planner.md` itself); both are swapped back to the coding md before the working session
+ *           exists, so the working agent never sees the planner (S3: host-dispatched). The planner's
+ *           thinking level is set on its session from the md (`shuvix-thinking`; a root session does not
+ *           read it from the profile). Its permission asks are refused (fail closed, S4). Its input is the
+ *           request alone; for a task with an early message (long), that message comes first inside
+ *           `<earlier-user-words>` (S11: the user's words in the session). Its last message must end with a
+ *           JSON block (S5: verdict ready | shape, criteria ≤ 8 with proofs, decisions ≤ 3, assumptions ≤ 5,
+ *           nonGoals ≤ 5); a missing or invalid block is `planner-error` and the goal is the request alone.
+ *           ready → the goal is the request alone. shape → the simulated user reviews the draft once
+ *           (`simUser.ts` review mode: answers each decision, a fact where one settles it; rewrites what
+ *           contradicts a fact; adds a fact only where an item touches its point), or, for a task without
+ *           hidden facts, the draft is accepted as it is with each decision's recommended option; the goal
+ *           is the request + the accepted draft (`goalTextShaped`, S6 order: decisions, assumptions, done
+ *           when, do not touch), cut to 4000 characters (cuts reported). Then set and leave, as goal.
+ *   planner the planner step of goal-shaped alone (planner, then the review): no working session, no goal,
+ *           not graded. For the controls of s1 and for iterating on the planner md cheaply.
+ * `PROBE_SET=s1` (measurement S1): the ambig set's four tasks with hidden facts in `PROBE_ARMS` (default
+ * goal, goal-oracle, goal-shaped; add direct for the present-user baseline), and the controls — catval, the
+ * three long and the four trap tasks — in the planner arm (`PROBE_S1_CONTROLS=full`: goal-shaped, a full goal
+ * run each). `PROBE_PLANNER_MD` points at another planner draft (else `goal-planner.md` from `PROBE_MD_DIR`,
+ * else `coding/md/goal-planner.md`); `PROBE_PLANNER_TIMEOUT_MIN` (default 10) bounds the planner's run.
  * `PROBE_MD_DIR` points at a folder of md drafts (`coding.md`, `work.md`, …) installed as user-level agents in
- * every arm; `direct` and `goal` then build their `work.md` from that `coding.md`. Compare drafts by running
- * twice with different `PROBE_MD_DIR` / `PROBE_OUT`.
+ * every arm (a `goal-planner.md` there is only the planner's source); `direct` and the goal arms then build
+ * their `work.md` from that `coding.md`. Compare drafts by running twice with different `PROBE_MD_DIR` /
+ * `PROBE_OUT`.
  *
  * Other knobs: `PROBE_MODELS` (deepseek, kimi, anthropic, openai — keys from ~/.shuvix-probe.env), `PROBE_TASKS`,
  * `PROBE_RUNS` (repeats of each model × arm × task), `PROBE_LANG` (default zh), `PROBE_AUTO_REVIEW=1` (let the
@@ -54,7 +87,10 @@
  * `PROBE_SELFCHECK=1` runs no model: it checks that every task's start state fails its grader and its reference
  * solution passes, the early message's rules included (printed apart); for a task with a `trap/` overlay (the
  * trap set's plausible premature-done state) also that it passes the visible tests and the suite yet fails
- * the grader, so each trap is real.
+ * the grader, so each trap is real. For every set it also checks the goal-shaped machinery without a model:
+ * the planner md parses as an agent with the tools above, the planner-answer parser (fences, limits, bad
+ * answers), the review parser, applying a review, the renderers and the 4000-character cut, and every
+ * goal-oracle text.
  *
  * Report (`summary.md`, `summary.json`): per model × arm and per run, pass / core / visible tests / tampering /
  * tokens / requests / seconds / hand-offs. When a run has rules or a goal, "Goals, rules and compaction" adds:
@@ -69,6 +105,15 @@
  * caught (fails, not_met, the final state passes), caught-not-fixed (fails, not_met, final fails), false-met
  * (fails, met), over-strict (passes, not_met) — with continuations, cost and seconds; per run the first
  * verdict's reason and the core checks the first state failed.
+ * "S1: does shaping recover what a vague goal loses?" (whenever a run is in goal-oracle, goal-shaped or
+ * planner): per model × arm on the tasks with hidden facts — facts met (all and per task), pass, first-check
+ * classes, continuations, cost, seconds; for goal-shaped and planner the planner's verdicts, decisions that
+ * touched a fact vs noise, facts in the accepted text before work (and how they got there), planner seconds
+ * (median) and cost; the controls' ready rate and decisions; then the four S1 thresholds evaluated:
+ * (i) goal meets fewer facts than goal-oracle; (ii) goal-shaped recovers at least half of that gap; (iii) the
+ * planner says ready on at least 6/7 of control runs (the proposal counts 7 controls; there are 8: catval,
+ * 3 long, 4 trap, so it is applied as a rate) with at most 1 decision per control run on average;
+ * (iv) the median planner time is at most 90 s. Rates, not sums, so arms with failed runs still compare.
  *
  * Safety (see memory "probe-auto-approve-scope"): each run is a fresh isolated instance on a packaged-shaped
  * stage; a policy denies file tools and commands that touch the real home folder; permission asks are approved
@@ -82,6 +127,10 @@
  *   PROBE_SET=trap PROBE_MODELS=deepseek,kimi PROBE_RUNS=3 PROBE_GOAL_TIMEOUT_MIN=60 \
  *     npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
  *   PROBE_SELFCHECK=1 PROBE_SET=trap npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
+ *   PROBE_SET=s1 PROBE_MODELS=deepseek,kimi PROBE_RUNS=2 PROBE_GOAL_TIMEOUT_MIN=60 \
+ *     npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
+ *   PROBE_SET=ambig PROBE_TASKS=quiet PROBE_ARMS=planner PROBE_PLANNER_MD=/tmp/goal-planner.md \
+ *     npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
  */
 import {
   existsSync,
@@ -103,6 +152,7 @@ import type {
   GoalVerdictRecord,
   GoalView
 } from '@shuvix/chat-protocol/types/goal'
+import { parseAgentDefinitionFile } from '@shuvix/agent-runtime'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { until } from '../harness/cdp'
 import { launchApp, type E2EApp } from '../harness/launch'
@@ -119,6 +169,20 @@ import { collectProbeEnv } from './protocolProbeEnv'
 import { ENV_FILE, installPolicy, makeDebug, REAL_HOME, sendPrompt } from './redactionProbeShared'
 import { SETS, TASKS, type CodingTask, type SetId } from './coding/tasks'
 import {
+  applyReview,
+  DRAFT_LIMITS,
+  extractJson,
+  fitObjective,
+  goalTextOracle,
+  goalTextShaped,
+  parsePlannerAnswer,
+  reviewText,
+  type AppliedReview,
+  type DraftReview,
+  type FactEntry,
+  type PlannerDraft
+} from './coding/goalDraft'
+import {
   applyReference,
   applyTrapState,
   gradeRepo,
@@ -127,7 +191,14 @@ import {
   snapshotRepo,
   type Grade
 } from './coding/workspace'
-import { createSimUser, type SimCard, type SimTurn, type SimVerdict } from './coding/simUser'
+import {
+  createSimUser,
+  parseReview,
+  type SimCard,
+  type SimTurn,
+  type SimUser,
+  type SimVerdict
+} from './coding/simUser'
 
 const BUILTIN_MD = fileURLToPath(
   new URL('../../../../packages/agent-runtime/src/subagent/builtinAgents/md', import.meta.url)
@@ -144,20 +215,32 @@ const list = (v: string | undefined, d: string): string[] =>
     .map((s) => s.trim())
     .filter(Boolean)
 const MODEL_IDS = list(process.env.PROBE_MODELS, 'deepseek')
-const SET = (process.env.PROBE_SET ?? 'hard') as SetId
-if (!SETS[SET])
-  throw new Error(`PROBE_SET must be one of ${Object.keys(SETS).join(', ')}, got ${SET}`)
+/** `s1`: measurement S1 — the ambig set's tasks with hidden facts, plus the shaping controls (see the header) */
+const SET = (process.env.PROBE_SET ?? 'hard') as SetId | 's1'
+if (SET !== 's1' && !SETS[SET])
+  throw new Error(`PROBE_SET must be one of ${Object.keys(SETS).join(', ')}, s1; got ${SET}`)
+const S1_SETS: SetId[] = ['ambig', 'long', 'trap']
+const inSet = (t: CodingTask): boolean => (SET === 's1' ? S1_SETS.includes(t.set) : t.set === SET)
 const ARMS = list(
   process.env.PROBE_ARMS,
-  SET === 'long' || SET === 'trap' ? 'direct,goal' : 'direct,work'
+  SET === 'long' || SET === 'trap'
+    ? 'direct,goal'
+    : SET === 's1'
+      ? 'goal,goal-oracle,goal-shaped'
+      : 'direct,work'
 ) as Arm[]
+const ALL_ARMS: Arm[] = ['direct', 'work', 'goal', 'goal-oracle', 'goal-shaped', 'planner']
 for (const arm of ARMS) {
-  if (!['direct', 'work', 'goal'].includes(arm))
-    throw new Error(`PROBE_ARMS takes direct, work, goal; got ${arm}`)
+  if (!ALL_ARMS.includes(arm))
+    throw new Error(`PROBE_ARMS takes ${ALL_ARMS.join(', ')}; got ${arm}`)
 }
+/** s1: the controls run the planner alone (`planner`), or a full goal-shaped run each (`full`) */
+const S1_CONTROLS = process.env.PROBE_S1_CONTROLS ?? 'planner'
+if (S1_CONTROLS !== 'planner' && S1_CONTROLS !== 'full')
+  throw new Error(`PROBE_S1_CONTROLS takes planner or full; got ${S1_CONTROLS}`)
 const TASK_IDS = list(
   process.env.PROBE_TASKS,
-  TASKS.filter((t) => t.set === SET)
+  TASKS.filter(inSet)
     .map((t) => t.id)
     .join(',')
 )
@@ -183,6 +266,14 @@ const GOAL_LIMITS: Partial<GoalLimits> = (() => {
     ...(maxTurns !== undefined ? { maxTurns: Math.round(maxTurns) } : {})
   }
 })()
+/** goal-shaped / planner arms: the planner's run is given up after this long (the goal is then the request) */
+const PLANNER_TIMEOUT_MS = (positiveEnv('PROBE_PLANNER_TIMEOUT_MIN') ?? 10) * 60 * 1000
+/** the planner draft: PROBE_PLANNER_MD, else goal-planner.md in PROBE_MD_DIR, else the probe's own */
+const PLANNER_MD_PATH =
+  process.env.PROBE_PLANNER_MD ??
+  (MD_DIR && existsSync(join(MD_DIR, 'goal-planner.md'))
+    ? join(MD_DIR, 'goal-planner.md')
+    : fileURLToPath(new URL('./coding/md/goal-planner.md', import.meta.url)))
 /** a smaller context window for the model under test (only models outside pi's catalog take it) */
 const CONTEXT_WINDOW = (() => {
   const n = positiveEnv('PROBE_CONTEXT_WINDOW')
@@ -195,7 +286,15 @@ const DECIDE = '你自己判断，按最合理的来。'
 /** at most this many simulated-user answers per run (replies and cards); past it the run is "capped" */
 const MAX_SIM_CALLS = 8
 
-type Arm = 'direct' | 'work' | 'goal'
+type Arm = 'direct' | 'work' | 'goal' | 'goal-oracle' | 'goal-shaped' | 'planner'
+
+/** the arms that set a goal and leave */
+const isGoalArm = (arm: Arm): boolean =>
+  arm === 'goal' || arm === 'goal-oracle' || arm === 'goal-shaped'
+/** the arms that run the goal planner first */
+const runsPlanner = (arm: Arm): boolean => arm === 'goal-shaped' || arm === 'planner'
+/** a task whose user holds facts the request leaves out */
+const hasFacts = (t: CodingTask): boolean => (t.user?.facts.length ?? 0) > 0
 
 // ─────────────────────────── models ───────────────────────────
 
@@ -325,19 +424,28 @@ function asUserAgent(md: string, name: string): string {
     .replace(/^name: .*$/m, `name: ${name}`)
 }
 
+/** The user-level `work.md` the direct and goal arms run: the coding md (a draft's, else the builtin) */
+function codingAsWork(): string {
+  const draft = MD_DIR ? join(MD_DIR, 'coding.md') : undefined
+  return asUserAgent(
+    draft && existsSync(draft) ? readFileSync(draft, 'utf8') : builtinMd('coding'),
+    'work'
+  )
+}
+
 function installAgents(app: E2EApp, arm: Arm): string[] {
   mkdirSync(app.agentsDir, { recursive: true })
   const written: string[] = []
-  const drafts = MD_DIR ? readdirSync(MD_DIR).filter((n) => n.endsWith('.md')) : []
+  // a goal-planner.md among the drafts is only the planner's source: the working agent must not see it
+  const drafts = MD_DIR
+    ? readdirSync(MD_DIR).filter((n) => n.endsWith('.md') && n !== 'goal-planner.md')
+    : []
   for (const n of drafts) {
     writeFileSync(join(app.agentsDir, n), readFileSync(join(MD_DIR as string, n), 'utf8'))
     written.push(n)
   }
-  if (arm === 'direct' || arm === 'goal') {
-    const coding = drafts.includes('coding.md')
-      ? readFileSync(join(MD_DIR as string, 'coding.md'), 'utf8')
-      : builtinMd('coding')
-    writeFileSync(join(app.agentsDir, 'work.md'), asUserAgent(coding, 'work'))
+  if (arm === 'direct' || isGoalArm(arm)) {
+    writeFileSync(join(app.agentsDir, 'work.md'), codingAsWork())
     written.push('work.md (from coding)')
   }
   return written
@@ -534,7 +642,8 @@ interface SettleStats {
  * in the tree (refused when they name the real home), and the root's own questions (by the simulated user when
  * the task has one). A sub-session's question is the parent agent's to answer (sub-session intervention), so it
  * is left alone. `opts.done`: quiet is not enough, this must hold too (the goal arm: the goal has ended — a
- * verdict can be pending while the tree is quiet).
+ * verdict can be pending while the tree is quiet). `opts.refuseAsks`: refuse every permission ask (the goal
+ * planner: its asks fail closed).
  */
 async function settleTree(
   app: E2EApp,
@@ -544,7 +653,7 @@ async function settleTree(
   debug: (l: string) => void,
   quietMs = 20_000,
   answerRootChoice?: (card: SimCard) => Promise<Record<string, unknown>>,
-  opts: { done?: () => Promise<boolean>; timeoutMs?: number } = {}
+  opts: { done?: () => Promise<boolean>; timeoutMs?: number; refuseAsks?: string } = {}
 ): Promise<void> {
   const sync = syncProbe(app.main)
   await sync.install()
@@ -588,14 +697,16 @@ async function settleTree(
             const outside =
               text.includes(`${REAL_HOME}/`) && !`${app.home}/`.startsWith(`${REAL_HOME}/`)
             stats.permissions++
-            if (outside) stats.refused++
-            response = outside
-              ? {
-                  kind: 'ask',
-                  allowed: false,
-                  reason: `Refused. In this environment the home folder is ${app.home}.`
-                }
-              : { kind: 'ask', allowed: true }
+            if (outside || opts.refuseAsks) stats.refused++
+            response = opts.refuseAsks
+              ? { kind: 'ask', allowed: false, reason: opts.refuseAsks }
+              : outside
+                ? {
+                    kind: 'ask',
+                    allowed: false,
+                    reason: `Refused. In this environment the home folder is ${app.home}.`
+                  }
+                : { kind: 'ask', allowed: true }
           }
           debug(`answer ${s.id} ${req.kind} ${req.id} → ${JSON.stringify(response).slice(0, 120)}`)
           await app.main.eval(
@@ -623,6 +734,301 @@ async function settleTree(
 const looksLikeQuestion = (reply: string): boolean =>
   /[?？]\s*$/.test(reply.trim()) ||
   /(要不要|是否需要|需要我|你同意|同意的话|确认一下|你看可以|可以吗)/.test(reply.slice(-300))
+
+/** the line under the system prompt's Identity heading: which profile a session really runs */
+const identityOf = (systemPrompt: string): string =>
+  systemPrompt.match(/^## (?:Identity|身份|アイデンティティ)\s*\n+(.+)$/m)?.[1] ?? '(not found)'
+
+// ─────────────────────────── goal-shaped arm: the planner and the user's review ───────────────────────────
+
+/** The goal planner's run (goal-shaped and planner arms) */
+interface PlannerRun {
+  /** the draft it ran from */
+  md: string
+  sessionId: string
+  /** what it was sent: the request (after the early message, if any, in <earlier-user-words>) */
+  input: string
+  verdict: 'ready' | 'shape' | 'planner-error'
+  error?: string
+  /** contract breaches the parser mended (clipped lists, a recommended option not among the options, …) */
+  violations: string[]
+  draft?: PlannerDraft
+  /** from sending the request to its last message */
+  seconds: number
+  /** the planner agent's own spend (agent monitor `cost`); `sessionCostUsd` adds the session's hooks (title) */
+  costUsd: number
+  sessionCostUsd: number
+  /** as the session really ran: thinking level, tools, the identity line of its system prompt */
+  thinkingLevel: string
+  tools: string[]
+  identity: string
+  toolCalls: Record<string, number>
+  /** permission asks it raised (every one refused) */
+  asks: number
+  finalText: string
+}
+
+/** What the user made of the planner's draft, and the goal text that came of it */
+interface ShapeRecord {
+  planner: PlannerRun
+  /**
+   * sim = the simulated user reviewed the draft; accept = accepted as it is with the recommended options (no
+   * hidden facts, or the review failed); none = nothing to review (ready, planner-error, an empty draft)
+   */
+  reviewBy: 'sim' | 'accept' | 'none'
+  reviewError?: string
+  reviewSeconds: number
+  review?: DraftReview
+  applied?: AppliedReview
+  /** the draft as the user read it */
+  shown: string
+  /** the goal text: goal-shaped set it; the planner arm only reports it */
+  objective: string
+  truncatedChars: number
+}
+
+/** the one follow-up when the planner's run ends without a draft */
+const PLANNER_NUDGE =
+  'Your run ended without the draft. Reply now with your final answer: exactly one fenced json block as specified, and nothing after it.'
+const PLANNER_REFUSAL = 'Refused: the goal planner only reads the project.'
+
+/**
+ * The goal planner as the root of a throwaway session on the project. While that session is created and runs,
+ * the user-level `work.md` is the planner (and the planner is installed as `goal-planner.md` too); afterwards
+ * both are put back as they were, before the working session exists, and the session is deleted — the working
+ * agent never sees the planner (S3). A root session takes its thinking level from the session, not from the
+ * profile, so the md's `shuvix-thinking` is set on the session. Permission asks are refused (S4: fail closed).
+ */
+async function runPlanner(
+  app: E2EApp,
+  events: EventRecorder,
+  projectId: string,
+  input: string,
+  debug: (l: string) => void
+): Promise<{ run: PlannerRun; messages: Msg[] }> {
+  const md = readFileSync(PLANNER_MD_PATH, 'utf8')
+  const declared = parseAgentDefinitionFile(md, 'goal-planner')
+  const run: PlannerRun = {
+    md: PLANNER_MD_PATH,
+    sessionId: '',
+    input,
+    verdict: 'planner-error',
+    violations: [],
+    seconds: 0,
+    costUsd: 0,
+    sessionCostUsd: 0,
+    thinkingLevel: '',
+    tools: [],
+    identity: '',
+    toolCalls: {},
+    asks: 0,
+    finalText: ''
+  }
+  if (!declared) {
+    run.error = `${PLANNER_MD_PATH} does not parse as an agent md`
+    return { run, messages: [] }
+  }
+  const workPath = join(app.agentsDir, 'work.md')
+  const ownPath = join(app.agentsDir, 'goal-planner.md')
+  const workBefore = existsSync(workPath) ? readFileSync(workPath, 'utf8') : undefined
+  const stats: SettleStats = { questions: 0, permissions: 0, refused: 0, unansweredSubQuestions: 0 }
+  let sentAt = 0
+  let settledAt = 0
+  let messages: Msg[] = []
+  writeFileSync(ownPath, md)
+  writeFileSync(workPath, asUserAgent(md, 'work'))
+  try {
+    const sid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title: 'goal planner', projectId })}).then((s) => s.id)`
+    )
+    run.sessionId = sid
+    if (declared.thinkingLevel) {
+      await app.main.eval(
+        `window.api.agent.setThinkingLevel(${JSON.stringify({ sessionId: sid, level: declared.thinkingLevel })})`
+      )
+    }
+    const info = await app.main.eval<{
+      systemPrompt: string
+      thinkingLevel: string
+      tools: string[]
+    }>(
+      `window.api.agent.getInfo(${JSON.stringify(sid)}, { ensure: true }).then((i) => ({ systemPrompt: i.systemPrompt, thinkingLevel: i.thinkingLevel, tools: i.tools.map((t) => t.name) }))`
+    )
+    run.identity = identityOf(info.systemPrompt)
+    run.thinkingLevel = info.thinkingLevel
+    run.tools = info.tools
+    sentAt = Date.now()
+    await sendPrompt(app, sid, input)
+    let idleSince = 0
+    const settlePlanner = async (): Promise<void> => {
+      idleSince = 0
+      // Quiet alone is not enough: this throwaway session's view carries no run state the probe can read, and the
+      // event stream is silent during a turn, so a thinking pause looked like the end (first real runs, 2026-11-08:
+      // settled after 28 s mid-exploration; then waited out the timeout after an answer). Done = the tree is quiet
+      // AND the planner's root agent is idle in the agent monitor (its run is over, answered or not)
+      await settleTree(app, events, sid, stats, debug, 20_000, undefined, {
+        timeoutMs: PLANNER_TIMEOUT_MS,
+        refuseAsks: PLANNER_REFUSAL,
+        done: async () => {
+          const phases = await app.main
+            .eval<
+              string[]
+            >(`window.api.agent.monitorList().then((es) => es.filter((e) => e.rootSessionId === ${JSON.stringify(sid)} && e.kind === 'root').map((e) => e.phase))`)
+            .catch(() => [] as string[])
+          if (!(phases.length > 0 && phases.every((phase) => phase === 'idle'))) {
+            idleSince = 0
+            return false
+          }
+          idleSince ||= Date.now()
+          // idle with the turn's last block being text = answered; idle for 30 s with no answer = the run ended
+          // without one (a monitor `idle` seen mid-run once let the probe delete a planner that was still reading)
+          const msgs = await readMessages(app, sid).catch(() => [] as Msg[])
+          const last = [...msgs].reverse().find((m) => m.role === 'assistant')
+          const tail = last?.blocks.filter((b) => b.type !== 'thinking').at(-1)
+          const answered =
+            tail !== undefined && tail.type === 'text' && (tail.text ?? '').trim() !== ''
+          return answered || Date.now() - idleSince >= 30_000
+        }
+      })
+    }
+    await settlePlanner()
+    // A run can end with no answer at all (deepseek, 2026-11-08: 24 reads in ~15 s, then an empty turn). A product
+    // host would ask once more for the draft; so does the probe, and the summary counts it
+    const answerNow = async (): Promise<string> => {
+      const msgs = await readMessages(app, sid).catch(() => [] as Msg[])
+      const last = [...msgs].reverse().find((m) => m.role === 'assistant')
+      const texts = (last?.blocks ?? []).filter(
+        (b) => b.type === 'text' && (b.text ?? '').trim() !== ''
+      )
+      return texts.length > 0 ? (texts.at(-1)?.text ?? '') : (last?.content ?? '')
+    }
+    if (!parsePlannerAnswer(await answerNow()).ok) {
+      run.violations.push('no draft at the end of its run: asked once more for the JSON block')
+      await sendPrompt(app, sid, PLANNER_NUDGE)
+      await settlePlanner()
+    }
+    settledAt = Date.now()
+  } catch (e) {
+    run.error = String((e as Error)?.message ?? e)
+    debug(`planner: ${run.error}`)
+    if (run.sessionId)
+      await app.main
+        .eval(`window.api.agent.abort(${JSON.stringify(run.sessionId)})`)
+        .catch(() => undefined)
+  } finally {
+    rmSync(ownPath, { force: true })
+    if (workBefore === undefined) rmSync(workPath, { force: true })
+    else writeFileSync(workPath, workBefore)
+  }
+  run.asks = stats.permissions
+  if (run.sessionId) {
+    // The answer is the text after the turn's last tool call: one assistant message holds the whole turn, so take
+    // its last text block (the message's `content` need not be it). The view can trail the monitor's `idle` by a
+    // moment (first S1 run, 2026-11-08: a complete JSON answer read as "no JSON block"), so re-read for up to 20 s
+    // until that text carries the draft
+    const finalTextOf = (msgs: Msg[]): string => {
+      const last = [...msgs].reverse().find((m) => m.role === 'assistant')
+      if (last === undefined) return ''
+      const texts = last.blocks.filter((b) => b.type === 'text' && (b.text ?? '').trim() !== '')
+      return texts.length > 0 ? (texts.at(-1)?.text ?? '') : last.content
+    }
+    for (let attempt = 0; attempt < 10; attempt++) {
+      messages = await readMessages(app, run.sessionId).catch(() => [])
+      run.finalText = finalTextOf(messages)
+      if (parsePlannerAnswer(run.finalText).ok) break
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+    }
+    for (const b of messages.flatMap((m) => m.blocks))
+      if (b.type === 'tool')
+        run.toolCalls[b.toolName ?? '?'] = (run.toolCalls[b.toolName ?? '?'] ?? 0) + 1
+    const rows = await app.main
+      .eval<
+        Array<{ kind: string; cost: number; sessionCost: number; lastActivityAt: number }>
+      >(`window.api.agent.monitorList().then((es) => es.filter((e) => e.rootSessionId === ${JSON.stringify(run.sessionId)}).map((e) => ({ kind: e.kind, cost: (e.cost && e.cost.total) || 0, sessionCost: e.sessionCost || 0, lastActivityAt: e.lastActivityAt || 0 })))`)
+      .catch(() => [])
+    const root = rows.find((r) => r.kind === 'root')
+    run.costUsd = root?.cost ?? 0
+    run.sessionCostUsd = rows.reduce((m, r) => Math.max(m, r.sessionCost), 0)
+    // the agent's last message, else when the tree went quiet (5 s late)
+    const end = root && root.lastActivityAt > sentAt ? root.lastActivityAt : settledAt
+    if (sentAt && end) run.seconds = Math.round((end - sentAt) / 1000)
+    // throwaway: the working agent's session tool must not find it
+    await app.main
+      .eval(`window.api.session.delete(${JSON.stringify(run.sessionId)})`)
+      .catch((e) => debug(`planner: deleting its session failed: ${String(e)}`))
+  }
+  if (!run.error) {
+    const parsed = parsePlannerAnswer(run.finalText)
+    if (parsed.ok) {
+      run.verdict = parsed.draft.verdict
+      run.draft = parsed.draft
+      run.violations = parsed.violations
+    } else run.error = parsed.error
+  }
+  debug(
+    `planner: ${run.verdict}${run.error ? ` (${run.error})` : ''} in ${run.seconds} s, $${run.costUsd.toFixed(3)}`
+  )
+  return { run, messages }
+}
+
+/** What the planner is sent: the request; an early message (long set) first, as the user's earlier words */
+const plannerInput = (task: CodingTask): string =>
+  task.early
+    ? `<earlier-user-words>\n${task.early.message}\n</earlier-user-words>\n\n${task.prompt}`
+    : task.prompt
+
+/**
+ * The goal-shaped step before the goal: the planner drafts, the user reviews once (the simulated user, with
+ * its facts; a task without hidden facts accepts the draft as it is), and the accepted draft becomes the
+ * goal text after the request.
+ */
+async function shapeGoal(
+  app: E2EApp,
+  events: EventRecorder,
+  projectId: string,
+  task: CodingTask,
+  sim: SimUser | undefined,
+  debug: (l: string) => void
+): Promise<{ shape: ShapeRecord; messages: Msg[] }> {
+  const { run, messages } = await runPlanner(app, events, projectId, plannerInput(task), debug)
+  const plain = fitObjective(task.prompt)
+  const shape: ShapeRecord = {
+    planner: run,
+    reviewBy: 'none',
+    reviewSeconds: 0,
+    shown: '',
+    objective: plain.text,
+    truncatedChars: plain.truncatedChars
+  }
+  const draft = run.draft
+  if (!draft || draft.verdict === 'ready') return { shape, messages }
+  shape.shown = reviewText(draft)
+  if (!shape.shown) return { shape, messages }
+  const factIds = task.user?.facts.map((f) => f.id) ?? []
+  let review: DraftReview | undefined
+  if (sim && factIds.length) {
+    const t0 = Date.now()
+    const r = await sim.review(shape.shown)
+    shape.reviewSeconds = Math.round((Date.now() - t0) / 1000)
+    if (r.review) {
+      review = r.review
+      shape.review = r.review
+    } else shape.reviewError = r.error
+  }
+  shape.reviewBy = review ? 'sim' : 'accept'
+  shape.applied = applyReview(draft, review, factIds)
+  const fit = fitObjective(goalTextShaped(task.prompt, shape.applied.accepted))
+  shape.objective = fit.text
+  shape.truncatedChars = fit.truncatedChars
+  debug(
+    `shaped: review by ${shape.reviewBy}, facts in ${JSON.stringify(shape.applied.facts)}, ${shape.objective.length} chars${fit.truncatedChars ? ` (${fit.truncatedChars} cut)` : ''}`
+  )
+  return { shape, messages }
+}
+
+/** one line for the run's agent notes */
+const plannerNote = (p: PlannerRun): string =>
+  `planner ${p.md}: identity "${p.identity}", thinking ${p.thinkingLevel || '?'}, tools ${p.tools.join(', ') || '?'}`
 
 // ─────────────────────────── run analysis ───────────────────────────
 
@@ -706,11 +1112,17 @@ interface RunRecord {
   /** the root's context window as it really ran (0 = unknown) */
   contextWindow: number
   goal?: GoalRun
+  /** goal-shaped and planner arms: the planner's draft, what the user made of it, the goal text it gave */
+  shape?: ShapeRecord
   error?: string
 }
 
-/** What came of a goal (goal arm) */
+/** What came of a goal (goal arms) */
 interface GoalRun {
+  /** the text set as the goal (goal: the request; goal-oracle and goal-shaped: longer, see the header) */
+  objective: string
+  /** characters cut to fit the goal's 4000-character limit */
+  truncatedChars: number
   /** `goalAct` set refused: the goal never started */
   setError?: string
   /** the goal's status when the probe stopped watching; `none` = no goal (cleared, or never set) */
@@ -751,6 +1163,8 @@ interface FirstCheck {
     visible: { pass: number; fail: number }
     /** core checks the copied state failed */
     failing: string[]
+    /** tasks with hidden facts: the facts whose checks all passed in the copied state */
+    facts?: { met: string[]; total: number }
     graderError?: string
   }
   note?: string
@@ -881,6 +1295,13 @@ function transcriptMd(
 /** The answer the parent gives in a sub-session's place starts with this (askTool.ts PARENT_ANSWERED) */
 const PARENT_ANSWERED = 'the session that assigned you this task answered on their behalf'
 
+/** the hidden facts whose grader checks all passed */
+const factsMet = (facts: string[], grade: Grade): string[] =>
+  facts.filter((id) => {
+    const checks = grade.checks.filter((c) => c.fact === id)
+    return checks.length > 0 && checks.every((c) => c.pass)
+  })
+
 function userReport(
   facts: string[],
   scripted: string[],
@@ -890,10 +1311,7 @@ function userReport(
   capped: boolean,
   simErrors: string[]
 ): UserReport {
-  const met = facts.filter((id) => {
-    const checks = grade.checks.filter((c) => c.fact === id)
-    return checks.length > 0 && checks.every((c) => c.pass)
-  })
+  const met = factsMet(facts, grade)
   // facts the scripted user stated on its own (prelude, request, mid-task) are given, before any "done"
   const given = [...new Set([...scripted, ...rounds.flatMap((r) => r.verdict.disclosed)])].sort()
   const beforeDone = new Set<string>(scripted)
@@ -937,11 +1355,31 @@ let realBefore: string[] = []
 
 const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 
+/** the planner arm does no work: its record carries this instead of a grade */
+const NOT_GRADED: Grade = {
+  pass: false,
+  core: { passed: 0, total: 0 },
+  extra: { passed: 0, total: 0 },
+  constraints: { kept: 0, total: 0 },
+  checks: [],
+  visible: { pass: 0, fail: 0 },
+  suite: { pass: 0, fail: 0, command: '' },
+  tampered: { tests: [], testScript: false },
+  testsExtended: [],
+  diff: { files: [], untracked: [] },
+  graderError: 'not graded: the planner arm does no work'
+}
+
+/** runs that did the work (every arm but planner): the tables about the code read only these */
+const worked = (): RunRecord[] => records.filter((r) => r.arm !== 'planner')
+
 function renderSummary(): string {
+  const goalArms = ARMS.some(isGoalArm) || (SET === 's1' && S1_CONTROLS === 'full')
   const lines = [
     `# Coding probe: ${SET} set (${LANG}${MD_DIR ? `, drafts from ${MD_DIR}` : ''}${AUTO_REVIEW ? ', auto-review on' : ''}` +
       `${CONTEXT_WINDOW !== undefined ? `, context window ${CONTEXT_WINDOW} asked` : ''}` +
-      `${ARMS.includes('goal') ? `, goal limits ${JSON.stringify(GOAL_LIMITS)} (unset = product defaults), goal timeout ${GOAL_TIMEOUT_MS / 60_000} min` : ''})`,
+      `${goalArms ? `, goal limits ${JSON.stringify(GOAL_LIMITS)} (unset = product defaults), goal timeout ${GOAL_TIMEOUT_MS / 60_000} min` : ''}` +
+      `${records.some((r) => r.shape) ? `, planner ${PLANNER_MD_PATH}` : ''})`,
     ''
   ]
   // aggregate per model × arm
@@ -950,7 +1388,7 @@ function renderSummary(): string {
   )
   lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
   const groups = new Map<string, RunRecord[]>()
-  for (const r of records)
+  for (const r of worked())
     groups.set(`${r.model}|${r.arm}`, [...(groups.get(`${r.model}|${r.arm}`) ?? []), r])
   for (const [key, rs] of groups) {
     const [model, arm] = key.split('|')
@@ -967,6 +1405,7 @@ function renderSummary(): string {
   lines.push(...userSummary())
   lines.push(...goalSummary())
   lines.push(...trapSummary())
+  lines.push(...s1Summary())
   lines.push('', '## Runs', '')
   lines.push(
     '| model | arm | task | # | pass | core | extra | visible | tampered | tests added | changed (+/−) | in / out tokens | req | s | calls | hand-offs | skim | verbatim | decoy mentioned | root cause mentioned | asks |'
@@ -974,7 +1413,7 @@ function renderSummary(): string {
   lines.push(
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
   )
-  for (const r of records) {
+  for (const r of worked()) {
     const g = r.grade
     const add = g.diff.files.reduce((t, f) => t + f.added, 0)
     const rm = g.diff.files.reduce((t, f) => t + f.removed, 0)
@@ -1002,6 +1441,8 @@ function renderSummary(): string {
   for (const r of records) {
     lines.push('', `### ${r.model} / ${r.arm} / ${r.task} / #${r.run}`, '')
     if (r.error) lines.push(`Error: ${r.error}`, '')
+    lines.push(...shapeDetails(r))
+    if (r.arm === 'planner') continue
     for (const c of r.grade.checks) {
       const tag = c.constraint ? ` (rule ${c.constraint})` : c.core ? '' : ' (extra)'
       lines.push(
@@ -1025,6 +1466,15 @@ function renderSummary(): string {
     )
     if (r.goal) {
       const g = r.goal
+      if (r.arm !== 'goal')
+        lines.push(
+          '',
+          `Goal text (${g.objective.length} chars${g.truncatedChars ? `, ${g.truncatedChars} cut` : ''}):`,
+          '',
+          '```text',
+          g.objective,
+          '```'
+        )
       lines.push(
         '',
         g.setError
@@ -1043,6 +1493,7 @@ function renderSummary(): string {
           s
             ? `  state it judged (copied ${s.atSeconds} s after the goal was set, ${s.sound ? 'sound' : 'NOT sound'}: ${s.note}): ` +
                 `${s.pass ? 'passes' : 'fails'}, core ${s.core.passed}/${s.core.total}, visible ${s.visible.pass}/${s.visible.pass + s.visible.fail}` +
+                `${s.facts ? `, facts ${s.facts.met.length}/${s.facts.total} ${s.facts.met.join(',') || '—'}` : ''}` +
                 `${s.failing.length ? `; failing: ${s.failing.join('; ')}` : ''}${s.graderError ? `; grader failed: ${s.graderError}` : ''}`
             : `  ${f.note ?? 'no copy'}`
         )
@@ -1080,7 +1531,7 @@ function renderSummary(): string {
 
 /** The ambig set's tables: what each run cost the user and what came of the facts it held */
 function userSummary(): string[] {
-  const rs = records.filter((r) => r.user)
+  const rs = worked().filter((r) => r.user)
   if (!rs.length) return []
   const out = [
     '',
@@ -1128,7 +1579,7 @@ function userSummary(): string[] {
 
 /** The long set and the goal arm: rules kept, compactions, cost, and what came of each goal */
 function goalSummary(): string[] {
-  const rs = records.filter((r) => r.goal || r.grade.constraints.total > 0)
+  const rs = worked().filter((r) => r.goal || r.grade.constraints.total > 0)
   if (!rs.length) return []
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
   const money = (n: number): string => `$${n.toFixed(2)}`
@@ -1192,20 +1643,21 @@ function goalSummary(): string[] {
  * what the agent declared done. Goal runs: the state the judge's first check saw, graded, against its verdict.
  */
 function trapSummary(): string[] {
-  const rs = records.filter((r) => r.arm !== 'work')
+  const rs = worked().filter((r) => r.arm !== 'work')
   if (!rs.length || (SET !== 'trap' && !rs.some((r) => r.goal?.first))) return []
+  const goalArm = (arm: string): boolean => isGoalArm(arm as Arm)
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
   const money = (n: number): string => `$${n.toFixed(2)}`
   const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
   const CLASSES: TrapClass[] = ['clean', 'caught', 'caught-not-fixed', 'false-met', 'over-strict']
   /** the agent's first "done" failed the grader: direct = its final state; goal = the state the first check saw */
   const stoppedShort = (r: RunRecord): boolean | undefined =>
-    r.arm === 'goal'
+    goalArm(r.arm)
       ? r.goal?.first?.snapshot
         ? !r.goal.first.snapshot.pass
         : undefined
       : !r.grade.pass
-  const traps = TASKS.filter((t) => t.set === SET && t.trap && rs.some((r) => r.task === t.id))
+  const traps = TASKS.filter((t) => t.trap && rs.some((r) => r.task === t.id))
   const out = [
     '',
     '## Trap: declared done vs the end condition',
@@ -1226,13 +1678,13 @@ function trapSummary(): string[] {
     const short = g.map(stoppedShort).filter((x): x is boolean => x !== undefined)
     const classes = g.map(trapClassOf)
     const n = (c: TrapClass): string =>
-      arm === 'goal' ? String(classes.filter((x) => x === c).length) : '—'
+      goalArm(arm) ? String(classes.filter((x) => x === c).length) : '—'
     const other = classes.filter((c) => c !== undefined && !CLASSES.includes(c)).length
     out.push(
       `| ${model} | ${arm} | ${g.length} | ${g.filter((r) => r.grade.pass).length}/${g.length} | ` +
         `${short.length ? `${short.filter(Boolean).length}/${short.length}` : '—'} | ` +
-        `${CLASSES.map(n).join(' | ')} | ${arm === 'goal' ? other : '—'} | ` +
-        `${arm === 'goal' ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ` +
+        `${CLASSES.map(n).join(' | ')} | ${goalArm(arm) ? other : '—'} | ` +
+        `${goalArm(arm) ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ` +
         `${money(mean(g.map((r) => r.costUsd)))} | ${Math.round(mean(g.map((r) => r.seconds)))} |`
     )
   }
@@ -1245,24 +1697,320 @@ function trapSummary(): string[] {
     const f = r.goal?.first
     const s = f?.snapshot
     const final = `${r.grade.pass ? '✅' : '❌'} ${r.grade.core.passed}/${r.grade.core.total}${r.error ? ' ⚠️' : ''}`
-    const first =
-      r.arm === 'goal'
-        ? s
-          ? `${s.pass ? '✅' : '❌'} ${s.core.passed}/${s.core.total} (${s.atSeconds} s${s.sound ? '' : ', not sound'})`
-          : (f?.note ?? 'no copy')
-        : `${r.grade.pass ? '✅' : '❌'} (declared done)`
-    const failed =
-      r.arm === 'goal'
-        ? (s?.failing ?? []).join('; ')
-        : r.grade.checks
-            .filter((c) => c.core && !c.constraint && !c.pass)
-            .map((c) => c.name)
-            .join('; ')
+    const first = goalArm(r.arm)
+      ? s
+        ? `${s.pass ? '✅' : '❌'} ${s.core.passed}/${s.core.total} (${s.atSeconds} s${s.sound ? '' : ', not sound'})`
+        : (f?.note ?? 'no copy')
+      : `${r.grade.pass ? '✅' : '❌'} (declared done)`
+    const failed = goalArm(r.arm)
+      ? (s?.failing ?? []).join('; ')
+      : r.grade.checks
+          .filter((c) => c.core && !c.constraint && !c.pass)
+          .map((c) => c.name)
+          .join('; ')
     out.push(
       `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${final} | ${cell(first)} | ${cell(failed) || '—'} | ` +
-        `${r.arm === 'goal' ? (f?.verdict ?? 'none') : '—'} | ${r.arm === 'goal' ? trapClassOf(r) : r.grade.pass ? 'done' : 'stopped short'} | ` +
+        `${goalArm(r.arm) ? (f?.verdict ?? 'none') : '—'} | ${goalArm(r.arm) ? trapClassOf(r) : r.grade.pass ? 'done' : 'stopped short'} | ` +
         `${r.goal ? r.goal.turns : '—'} | ${money(r.costUsd)} | ${r.seconds} | ${f?.reason ? cell(f.reason).slice(0, 240) : '—'} |`
     )
+  }
+  return out
+}
+
+/** A run's planner step in full: its verdict, the draft as the user read it, the review, the goal text */
+function shapeDetails(r: RunRecord): string[] {
+  const sh = r.shape
+  if (!sh) return []
+  const p = sh.planner
+  const calls = Object.entries(p.toolCalls)
+    .map(([n, c]) => `${n}×${c}`)
+    .join(' ')
+  const out = [
+    `Planner: ${p.verdict}${p.error ? ` — ${p.error}` : ''}; ${p.seconds} s, $${p.costUsd.toFixed(3)} (session $${p.sessionCostUsd.toFixed(3)}); ` +
+      `thinking ${p.thinkingLevel || '?'}; tools ${p.tools.join(', ') || '?'}; calls ${calls || 'none'}` +
+      `${p.asks ? `; ${p.asks} permission ask(s) refused` : ''}`
+  ]
+  for (const v of p.violations) out.push(`  - contract: ${v}`)
+  if (sh.shown) out.push('', 'Draft as the user read it:', '', '```text', sh.shown, '```')
+  const a = sh.applied
+  if (a) {
+    const facts = Object.entries(a.facts).map(([f, how]) => `${f} (${how})`)
+    out.push(
+      '',
+      `Review by ${sh.reviewBy}${sh.reviewError ? ` (the review failed: ${sh.reviewError})` : ''}, ${sh.reviewSeconds} s: ` +
+        `decisions with a fact ${a.decisionsWithFact}, noise ${a.noiseDecisions}; facts in the accepted text: ${facts.join(', ') || 'none'}`
+    )
+    const rv = sh.review
+    if (rv) {
+      for (const d of rv.decisions)
+        out.push(`  - ${d.id} → ${d.answer} [${d.facts.join(',') || '—'}]`)
+      for (const e of rv.edits)
+        out.push(
+          `  - ${e.id} ${e.action}${e.text ? `: ${e.text}` : ''} [${e.facts.join(',') || '—'}]`
+        )
+      for (const x of rv.additions)
+        out.push(
+          `  - added to ${x.section} (about ${x.about}): ${x.text} [${x.facts.join(',') || '—'}]`
+        )
+      if (rv.alreadyRight.length) out.push(`  - already right: ${rv.alreadyRight.join(', ')}`)
+    }
+    for (const x of a.ignored) out.push(`  - not applied: ${x}`)
+  }
+  if (r.arm === 'planner')
+    out.push(
+      '',
+      `Goal text it would set (${sh.objective.length} chars${sh.truncatedChars ? `, ${sh.truncatedChars} cut` : ''}):`,
+      '',
+      '```text',
+      sh.objective,
+      '```',
+      '',
+      'Planner’s last message:',
+      '',
+      '```text',
+      p.finalText.slice(0, 6000),
+      '```'
+    )
+  out.push('')
+  return out
+}
+
+const S1_ARMS: Arm[] = ['direct', 'goal', 'goal-oracle', 'goal-shaped']
+
+const median = (xs: number[]): number => {
+  if (!xs.length) return 0
+  const sorted = [...xs].sort((a, b) => a - b)
+  const m = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2
+}
+
+/**
+ * Measurement S1 of the goal spec-shaping proposal: on the tasks with hidden facts, how many facts each arm
+ * meets (direct = the user stays and corrects; goal = set and leave on the request; goal-oracle = the facts
+ * written into the goal; goal-shaped = the planner's draft as the user reviewed it); what the planner did; the
+ * controls; the four thresholds.
+ */
+function s1Summary(): string[] {
+  if (!records.some((r) => r.arm === 'goal-oracle' || r.shape)) return []
+  const taskById = new Map(TASKS.map((t) => [t.id, t]))
+  const factTask = (r: RunRecord): boolean => {
+    const t = taskById.get(r.task)
+    return t !== undefined && hasFacts(t)
+  }
+  const factRuns = records.filter((r) => S1_ARMS.includes(r.arm) && factTask(r) && r.user)
+  const planned = records.filter((r) => r.shape)
+  const models = [...new Set(records.map((r) => r.model))]
+  const sum = <T>(xs: T[], f: (x: T) => number): number => xs.reduce((t, x) => t + f(x), 0)
+  const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
+  const money = (n: number): string => `$${n.toFixed(2)}`
+  const pct = (a: number, b: number): string =>
+    b ? `${a}/${b} (${Math.round((100 * a) / b)}%)` : '—'
+  const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
+  const factTaskIds = TASKS.filter((t) => hasFacts(t) && factRuns.some((r) => r.task === t.id)).map(
+    (t) => t.id
+  )
+  const CLASSES: TrapClass[] = ['clean', 'caught', 'caught-not-fixed', 'false-met', 'over-strict']
+  const out = [
+    '',
+    '## S1: does shaping recover what a vague goal loses?',
+    '',
+    'Tasks with hidden facts only (catval, long and trap are the controls, below). facts met = facts whose grader checks all pass at the end. ' +
+      'direct = the user stays: answers questions and corrects the completion report; goal = set and leave on the request (ask cards answered, nothing corrected); ' +
+      'goal-oracle = the request plus every fact as "done when"; goal-shaped = the request plus the planner’s draft as the simulated user reviewed it. ' +
+      'First check: the judge’s first verdict against the graded state it saw (false-met = it said met while a check, a fact’s included, failed). ' +
+      'cost = the working session tree; planner cost = the planner agent’s own (separate session).',
+    '',
+    '| model | arm | runs | pass | facts met | per task | first check: clean / caught / caught-not-fixed / false-met / over-strict / other | continuations (mean) | cost (mean) | planner cost (mean) | seconds (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  ]
+  for (const model of models) {
+    for (const arm of S1_ARMS) {
+      const g = factRuns.filter((r) => r.model === model && r.arm === arm)
+      if (!g.length) continue
+      const u = g.map((r) => r.user as UserReport)
+      const perTask = factTaskIds
+        .map((id) => {
+          const x = g.filter((r) => r.task === id).map((r) => r.user as UserReport)
+          return x.length
+            ? `${id} ${sum(x, (y) => y.met.length)}/${sum(x, (y) => y.facts.length)}`
+            : ''
+        })
+        .filter(Boolean)
+        .join(', ')
+      const classes = g.map(trapClassOf)
+      const other = classes.filter((c) => c !== undefined && !CLASSES.includes(c)).length
+      out.push(
+        `| ${model} | ${arm} | ${g.length} | ${g.filter((r) => r.grade.pass).length}/${g.length} | ` +
+          `${pct(
+            sum(u, (x) => x.met.length),
+            sum(u, (x) => x.facts.length)
+          )} | ${perTask} | ` +
+          `${isGoalArm(arm) ? `${CLASSES.map((c) => classes.filter((x) => x === c).length).join(' / ')} / ${other}` : '—'} | ` +
+          `${isGoalArm(arm) ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ${money(mean(g.map((r) => r.costUsd)))} | ` +
+          `${arm === 'goal-shaped' ? money(mean(g.map((r) => r.shape?.planner.costUsd ?? 0))) : '—'} | ${Math.round(mean(g.map((r) => r.seconds)))} |`
+      )
+    }
+  }
+
+  // the planner on the tasks with hidden facts
+  const withFacts = planned.filter(factTask)
+  if (withFacts.length) {
+    out.push(
+      '',
+      'The planner on the tasks with hidden facts. facts in = facts the accepted draft states before any work, and how they got there (the simulated user’s account): ' +
+        'answering a decision / correcting an item that contradicted one / added where an item touched its point / already right in the draft. ' +
+        'noise = decisions that touched no fact. review: sim = reviewed, accept = taken as it is (the review failed). cut = runs whose goal text was cut to 4000 characters.',
+      '',
+      '| model | arm | runs | ready / shape / error | decisions: with a fact / noise | criteria · assumptions · non-goals (mean) | facts in before work | decision / corrected / added / already | review: sim / accept | entries not applied | cut | planner s (median) | planner cost (mean) | review s (median) |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    )
+    for (const model of models) {
+      for (const arm of ['goal-shaped', 'planner'] as Arm[]) {
+        const g = withFacts.filter((r) => r.model === model && r.arm === arm)
+        if (!g.length) continue
+        const sh = g.map((r) => r.shape as ShapeRecord)
+        const verdicts = (v: PlannerRun['verdict']): number =>
+          sh.filter((x) => x.planner.verdict === v).length
+        const entries = sh.flatMap((x) => Object.values(x.applied?.facts ?? {}))
+        const how = (h: FactEntry): number => entries.filter((x) => x === h).length
+        const drafts = sh.flatMap((x) => (x.planner.draft ? [x.planner.draft] : []))
+        out.push(
+          `| ${model} | ${arm} | ${g.length} | ${verdicts('ready')} / ${verdicts('shape')} / ${verdicts('planner-error')} | ` +
+            `${sum(sh, (x) => x.applied?.decisionsWithFact ?? 0)} / ${sum(sh, (x) => x.applied?.noiseDecisions ?? 0)} | ` +
+            `${mean(drafts.map((d) => d.criteria.length)).toFixed(1)} · ${mean(drafts.map((d) => d.assumptions.length)).toFixed(1)} · ${mean(drafts.map((d) => d.nonGoals.length)).toFixed(1)} | ` +
+            `${pct(
+              entries.length,
+              sum(g, (r) => taskById.get(r.task)?.user?.facts.length ?? 0)
+            )} | ` +
+            `${how('decision')} / ${how('corrected')} / ${how('added')} / ${how('already')} | ` +
+            `${sh.filter((x) => x.reviewBy === 'sim').length} / ${sh.filter((x) => x.reviewBy === 'accept').length} | ` +
+            `${sum(sh, (x) => x.applied?.ignored.length ?? 0)} | ${sh.filter((x) => x.truncatedChars > 0).length} | ` +
+            `${median(sh.map((x) => x.planner.seconds))} | ${money(mean(sh.map((x) => x.planner.costUsd)))} | ` +
+            `${median(sh.filter((x) => x.reviewBy !== 'none').map((x) => x.reviewSeconds))} |`
+        )
+      }
+    }
+  }
+
+  // the controls: everything said, or an end condition stated — the planner should say ready
+  const controls = planned.filter((r) => !factTask(r))
+  const decisionsAsked = (r: RunRecord): number =>
+    r.shape?.planner.verdict === 'shape' ? (r.shape.planner.draft?.decisions.length ?? 0) : 0
+  if (controls.length) {
+    out.push(
+      '',
+      'Controls (catval, long, trap: fully specified or with a stated end condition). decisions = what a shape verdict would ask the user (a ready verdict asks nothing).',
+      '',
+      '| model | runs | ready | shape | error | decisions (mean) | planner s (median) | planner cost (mean) |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |'
+    )
+    for (const model of models) {
+      const g = controls.filter((r) => r.model === model)
+      if (!g.length) continue
+      const n = (v: PlannerRun['verdict']): number =>
+        g.filter((r) => r.shape?.planner.verdict === v).length
+      out.push(
+        `| ${model} | ${g.length} | ${pct(n('ready'), g.length)} | ${n('shape')} | ${n('planner-error')} | ` +
+          `${mean(g.map(decisionsAsked)).toFixed(2)} | ${median(g.map((r) => r.shape?.planner.seconds ?? 0))} | ` +
+          `${money(mean(g.map((r) => r.shape?.planner.costUsd ?? 0)))} |`
+      )
+    }
+  }
+
+  if (planned.length) {
+    out.push(
+      '',
+      '| model | arm | task | # | verdict | decisions (fact / noise) | criteria | assumptions | non-goals | facts in | s | cost | notes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    )
+    for (const r of planned) {
+      const sh = r.shape as ShapeRecord
+      const p = sh.planner
+      const d = p.draft
+      const notes = [
+        p.error ?? '',
+        p.violations.length ? `${p.violations.length} contract breach(es)` : '',
+        sh.reviewError ? `review failed: ${sh.reviewError}` : '',
+        sh.truncatedChars ? `${sh.truncatedChars} chars cut` : ''
+      ]
+        .filter(Boolean)
+        .join('; ')
+      out.push(
+        `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${p.verdict} | ` +
+          `${d ? `${d.decisions.length} (${sh.applied?.decisionsWithFact ?? 0} / ${sh.applied?.noiseDecisions ?? d.decisions.length})` : '—'} | ` +
+          `${d?.criteria.length ?? '—'} | ${d?.assumptions.length ?? '—'} | ${d?.nonGoals.length ?? '—'} | ` +
+          `${
+            Object.entries(sh.applied?.facts ?? {})
+              .map(([f, how]) => `${f} ${how}`)
+              .join(', ') || '—'
+          } | ${p.seconds} | ${money(p.costUsd)} | ${cell(notes).slice(0, 200) || '—'} |`
+      )
+    }
+  }
+
+  // the thresholds, per model and over all of them
+  out.push('', '### S1 thresholds', '')
+  for (const model of models.length > 1 ? [...models, 'all models'] : models) {
+    const mine = (rs: RunRecord[]): RunRecord[] =>
+      model === 'all models' ? rs : rs.filter((r) => r.model === model)
+    const rate = (arm: Arm): { met: number; total: number; r: number } | undefined => {
+      const u = mine(factRuns)
+        .filter((r) => r.arm === arm)
+        .map((r) => r.user as UserReport)
+      const total = sum(u, (x) => x.facts.length)
+      if (!total) return undefined
+      const met = sum(u, (x) => x.met.length)
+      return { met, total, r: met / total }
+    }
+    const show = (x: { met: number; total: number }): string => pct(x.met, x.total)
+    const goal = rate('goal')
+    const oracle = rate('goal-oracle')
+    const shaped = rate('goal-shaped')
+    const lines: string[] = []
+    // (i)
+    if (goal && oracle)
+      lines.push(
+        `- (i) the goal arm loses facts against goal-oracle: ${goal.r < oracle.r ? 'PASS' : 'FAIL'} — goal ${show(goal)} vs goal-oracle ${show(oracle)}`
+      )
+    else
+      lines.push(
+        '- (i) the goal arm loses facts against goal-oracle: n/a — needs goal and goal-oracle runs'
+      )
+    // (ii)
+    if (goal && oracle && shaped) {
+      const gap = oracle.r - goal.r
+      const need = goal.r + gap / 2
+      lines.push(
+        gap > 0
+          ? `- (ii) goal-shaped recovers at least half of the gap: ${shaped.r >= need - 1e-9 ? 'PASS' : 'FAIL'} — goal-shaped ${show(shaped)}; ` +
+              `needs ≥ ${Math.round(need * 100)}% (goal ${Math.round(goal.r * 100)}% + half of the ${Math.round(gap * 100)}-point gap); recovered ${Math.round(((shaped.r - goal.r) / gap) * 100)}% of the gap`
+          : `- (ii) goal-shaped recovers at least half of the gap: n/a — no gap (goal ${show(goal)}, goal-oracle ${show(oracle)}); goal-shaped ${show(shaped)}`
+      )
+    } else
+      lines.push(
+        '- (ii) goal-shaped recovers at least half of the gap: n/a — needs goal, goal-oracle and goal-shaped runs'
+      )
+    // (iii)
+    const ctl = mine(controls)
+    if (ctl.length) {
+      const ready = ctl.filter((r) => r.shape?.planner.verdict === 'ready').length
+      const asked = mean(ctl.map(decisionsAsked))
+      const ok = ready / ctl.length >= 6 / 7 - 1e-9 && asked <= 1
+      lines.push(
+        `- (iii) controls: the planner says ready on ≥ 6/7 and asks ≤ 1 decision per run on average: ${ok ? 'PASS' : 'FAIL'} — ` +
+          `ready ${pct(ready, ctl.length)} (needs ≥ 86%), ${asked.toFixed(2)} decision(s) per run`
+      )
+    } else lines.push('- (iii) controls: n/a — no planner runs on catval, long or trap')
+    // (iv)
+    const times = mine(planned)
+      .map((r) => r.shape?.planner.seconds ?? 0)
+      .filter((x) => x > 0)
+    lines.push(
+      times.length
+        ? `- (iv) median shaping (planner) time ≤ 90 s: ${median(times) <= 90 ? 'PASS' : 'FAIL'} — median ${median(times)} s over ${times.length} planner run(s) (max ${Math.max(...times)} s)`
+        : '- (iv) median shaping (planner) time ≤ 90 s: n/a — no timed planner run'
+    )
+    out.push(`**${model}**`, '', ...lines, '')
   }
   return out
 }
@@ -1274,7 +2022,175 @@ function writeReport(): void {
 
 // ─────────────────────────── one run ───────────────────────────
 
+/** A fresh instance's setup: the model under test, the language, the home guard, the arm's agents, the project */
+async function prepareInstance(
+  app: E2EApp,
+  arm: Arm,
+  model: { spec: ModelSpec; key: string; modelId: string },
+  repo: string
+): Promise<{ agents: string[]; events: EventRecorder; projectId: string }> {
+  const { spec, key, modelId } = model
+  await waitRendererReady(app.main)
+  await seedRealModel(app.main, {
+    providerId: spec.providerId,
+    providerName: spec.providerName,
+    apiKey: key,
+    apiProtocol: spec.apiProtocol,
+    modelId
+  })
+  if (CONTEXT_WINDOW !== undefined) {
+    // the model row seedRealModel enabled: a smaller window brings compaction sooner (overlay models only)
+    await app.main.eval(`(async () => {
+      const providerId = await window.api.settings.get('general.defaultProvider')
+      const row = (await window.api.provider.listModels(providerId)).find((m) => m.modelId === ${JSON.stringify(modelId)})
+      if (!row) throw new Error('no model row for ${modelId}')
+      await window.api.provider.updateModelCapabilities({
+        id: row.id,
+        capabilities: { maxInputTokens: ${CONTEXT_WINDOW}, maxOutputTokens: 8192, vision: true }
+      })
+      return true
+    })()`)
+  }
+  await app.main.eval(
+    `window.api.settings.set({ key: 'general.language', value: ${JSON.stringify(LANG)} })`
+  )
+  await installHomeGuard(app)
+  const agents = installAgents(app, arm)
+  const events = eventRecorder(app.main)
+  await events.install()
+  const project = await createProject(app.main, { name: basename(repo), path: repo })
+  return { agents, events, projectId: project.id }
+}
+
+/** The simulated user of a task with hidden facts: one per run, on deepseek whatever model is under test */
+function simUserFor(task: CodingTask): { sim?: SimUser; simKey?: string } {
+  if (!task.user) return {}
+  const simKey = modelOf('deepseek')
+  return {
+    simKey: simKey.key,
+    sim: createSimUser({
+      key: simKey.key,
+      model: simKey.modelId,
+      // what the user wrote on their own: the prelude, then the request (mid-task words reach it as history)
+      request: [...(task.user.prelude ?? []), task.prompt].join('\n\n'),
+      facts: task.user.silent ? [] : task.user.facts
+    })
+  }
+}
+
+/** The planner arm: the planner and the user's review alone — no working session, no goal, not graded */
+async function runPlannerArm(modelName: string, task: CodingTask, run: number): Promise<void> {
+  const arm: Arm = 'planner'
+  const label = `${modelName}-${arm}-${task.id}-r${run}`
+  const debug = makeDebug(OUT)
+  const model = modelOf(modelName)
+  const started = Date.now()
+  // only a user with hidden facts reviews the draft (catval's has none: its draft is accepted as it is)
+  const { sim, simKey } = hasFacts(task) ? simUserFor(task) : {}
+  let error: string | undefined
+  let agents: string[] = []
+  let shape: ShapeRecord | undefined
+  let messages: Msg[] = []
+  const app = await launchApp({
+    autoReview: AUTO_REVIEW,
+    env: { ...OFFLINE_ENV, SHUVIX_E2E_STAGED_RESOURCES: (stage as PackagedStage).resources }
+  })
+  const repo = join(app.home, 'code', basename(SETS[task.set].repo))
+  mkdirSync(join(app.home, 'code'), { recursive: true })
+  prepareRepo(task, repo)
+  try {
+    const prep = await prepareInstance(app, arm, model, repo)
+    agents = prep.agents
+    const shaped = await shapeGoal(app, prep.events, prep.projectId, task, sim, (l) =>
+      debug(`${label}: ${l}`)
+    )
+    shape = shaped.shape
+    messages = shaped.messages
+    agents.push(plannerNote(shape.planner))
+  } catch (e) {
+    error = String((e as Error)?.message ?? e)
+    debug(`${label}: ${error}`)
+  }
+  await app.stop({ keepHome: true })
+  rmSync(app.home, { recursive: true, force: true })
+  const redact = (t: string): string =>
+    [model.key, simKey ?? ''].filter(Boolean).reduce((acc, k) => acc.split(k).join('<redacted>'), t)
+  if (shape) {
+    writeFileSync(
+      join(OUT, `${label}.planner.md`),
+      redact(plannerTranscript(label, shape.planner, messages))
+    )
+  }
+  if (sim)
+    writeFileSync(
+      join(OUT, `${label}.user.json`),
+      redact(JSON.stringify({ review: shape?.review, calls: sim.log }, null, 2))
+    )
+  const record: RunRecord = {
+    model: modelName,
+    modelId: model.modelId,
+    arm,
+    task: task.id,
+    run,
+    seconds: Math.round((Date.now() - started) / 1000),
+    grade: NOT_GRADED,
+    sessions: [],
+    requests: 0,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    toolCalls: shape?.planner.toolCalls ?? {},
+    rootToolCalls: 0,
+    skimBeforeDispatch: 0,
+    rootEdits: 0,
+    dispatches: [],
+    exploreCalls: 0,
+    settle: {
+      questions: 0,
+      permissions: shape?.planner.asks ?? 0,
+      refused: shape?.planner.asks ?? 0,
+      unansweredSubQuestions: 0
+    },
+    followUps: 0,
+    finalReply: shape?.planner.finalText ?? '',
+    agents,
+    userWordsAttached: { sends: 0, words: 0 },
+    costUsd: 0,
+    compactions: 0,
+    contextWindow: 0,
+    ...(shape ? { shape } : {}),
+    error: error ?? shape?.planner.error
+  }
+  records.push(record)
+  writeFileSync(join(OUT, 'summary.md'), redact(renderSummary()))
+  writeFileSync(join(OUT, 'summary.json'), redact(JSON.stringify(records, null, 2)))
+  console.log(`[${label}] ${shapeLine(record)} → ${OUT}`)
+}
+
+/** the planner's transcript, apart from the run's */
+function plannerTranscript(label: string, p: PlannerRun, messages: Msg[]): string {
+  return transcriptMd(
+    `${label} — goal planner (${p.md})`,
+    [{ id: p.sessionId, title: 'goal planner', agentProfile: 'goal-planner' }],
+    new Map([[p.sessionId, messages]])
+  )
+}
+
+/** the planner's verdict and what came of the review, in one line (console) */
+function shapeLine(r: RunRecord): string {
+  const sh = r.shape
+  if (!sh) return 'planner did not run'
+  const p = sh.planner
+  const d = p.draft
+  const facts = sh.applied ? Object.keys(sh.applied.facts) : []
+  return (
+    `planner ${p.verdict}${p.error ? ` (${p.error})` : ''} in ${p.seconds} s` +
+    `${d ? `, ${d.decisions.length} decision(s) ${d.criteria.length} criteria` : ''}` +
+    `${sh.applied ? `, review by ${sh.reviewBy}: ${sh.applied.decisionsWithFact} decision(s) with a fact, facts in ${facts.join(',') || 'none'}` : ''}` +
+    `${sh.truncatedChars ? `, ${sh.truncatedChars} chars cut` : ''}`
+  )
+}
+
 async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number): Promise<void> {
+  if (arm === 'planner') return runPlannerArm(modelName, task, run)
   const label = `${modelName}-${arm}-${task.id}-r${run}`
   const debug = makeDebug(OUT)
   const { spec, key, modelId } = modelOf(modelName)
@@ -1285,17 +2201,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   let agents: string[] = []
 
   // the simulated user (tasks with hidden facts): one per run, on deepseek whatever model is under test
-  const simKey = task.user ? modelOf('deepseek') : undefined
-  const sim =
-    task.user && simKey
-      ? createSimUser({
-          key: simKey.key,
-          model: simKey.modelId,
-          // what the user wrote on their own: the prelude, then the request (mid-task words reach it as history)
-          request: [...(task.user.prelude ?? []), task.prompt].join('\n\n'),
-          facts: task.user.silent ? [] : task.user.facts
-        })
-      : undefined
+  const { sim, simKey } = simUserFor(task)
   const conv: SimTurn[] = []
   let midTaskVia = task.user?.midTask ? 'not sent' : ''
   /** the mid-task watcher runs while this is true (cleared on every way out of the run) */
@@ -1310,57 +2216,47 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   let goalSetError: string | undefined
   /** goal arm: watches for the judge's first check and copies the repo then */
   let firstWatch: ReturnType<typeof watchFirstCheck> | undefined
+  /** goal arms: the text set as the goal */
+  let objective = { text: task.prompt, truncatedChars: 0 }
+  /** goal-shaped: the planner's draft and the review, and the planner's transcript */
+  let shape: ShapeRecord | undefined
+  let plannerMessages: Msg[] = []
 
   const app = await launchApp({
     autoReview: AUTO_REVIEW,
     env: { ...OFFLINE_ENV, SHUVIX_E2E_STAGED_RESOURCES: (stage as PackagedStage).resources }
   })
-  const repoName = basename(SETS[task.set].repo)
-  const repo = join(app.home, 'code', repoName)
+  const repo = join(app.home, 'code', basename(SETS[task.set].repo))
   mkdirSync(join(app.home, 'code'), { recursive: true })
   const startSha = prepareRepo(task, repo)
   let rootId = ''
   try {
-    await waitRendererReady(app.main)
-    await seedRealModel(app.main, {
-      providerId: spec.providerId,
-      providerName: spec.providerName,
-      apiKey: key,
-      apiProtocol: spec.apiProtocol,
-      modelId
-    })
-    if (CONTEXT_WINDOW !== undefined) {
-      // the model row seedRealModel enabled: a smaller window brings compaction sooner (overlay models only)
-      await app.main.eval(`(async () => {
-        const providerId = await window.api.settings.get('general.defaultProvider')
-        const row = (await window.api.provider.listModels(providerId)).find((m) => m.modelId === ${JSON.stringify(modelId)})
-        if (!row) throw new Error('no model row for ${modelId}')
-        await window.api.provider.updateModelCapabilities({
-          id: row.id,
-          capabilities: { maxInputTokens: ${CONTEXT_WINDOW}, maxOutputTokens: 8192, vision: true }
-        })
-        return true
-      })()`)
+    const prep = await prepareInstance(app, arm, { spec, key, modelId }, repo)
+    agents = prep.agents
+    const events = prep.events
+    // goal-shaped: the planner drafts and the user reviews it, before the working session exists
+    if (arm === 'goal-shaped') {
+      const shaped = await shapeGoal(app, events, prep.projectId, task, sim, (l) =>
+        debug(`${label}: ${l}`)
+      )
+      shape = shaped.shape
+      plannerMessages = shaped.messages
+      agents.push(plannerNote(shape.planner))
     }
-    await app.main.eval(
-      `window.api.settings.set({ key: 'general.language', value: ${JSON.stringify(LANG)} })`
-    )
-    await installHomeGuard(app)
-    agents = installAgents(app, arm)
-    const events = eventRecorder(app.main)
-    await events.install()
-    const project = await createProject(app.main, { name: repoName, path: repo })
+    objective =
+      arm === 'goal-oracle'
+        ? fitObjective(goalTextOracle(task))
+        : arm === 'goal-shaped' && shape
+          ? { text: shape.objective, truncatedChars: shape.truncatedChars }
+          : { text: task.prompt, truncatedChars: 0 }
     rootId = await app.main.eval<string>(
-      `window.api.session.create(${JSON.stringify({ title: '新对话', projectId: project.id })}).then((s) => s.id)`
+      `window.api.session.create(${JSON.stringify({ title: '新对话', projectId: prep.projectId })}).then((s) => s.id)`
     )
     // which profile the root really runs (the line under its Identity heading), and its context window
     const info = await app.main.eval<{ systemPrompt: string; contextWindow: number }>(
       `window.api.agent.getInfo(${JSON.stringify(rootId)}, { ensure: true }).then((i) => ({ systemPrompt: i.systemPrompt, contextWindow: i.model?.contextWindow ?? 0 }))`
     )
-    const identity = info.systemPrompt.match(
-      /^## (?:Identity|身份|アイデンティティ)\s*\n+(.+)$/m
-    )?.[1]
-    agents.push(`root identity: ${identity ?? '(not found)'}`)
+    agents.push(`root identity: ${identityOf(info.systemPrompt)}`)
     contextWindow = info.contextWindow
     if (CONTEXT_WINDOW !== undefined && contextWindow !== CONTEXT_WINDOW) {
       agents.push(
@@ -1485,15 +2381,16 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       return true
     }
 
-    conv.push({ from: 'user', text: task.prompt })
-    if (arm === 'goal') {
-      // the request becomes the goal; the host sends it as the user's message and keeps the session going
+    conv.push({ from: 'user', text: isGoalArm(arm) ? objective.text : task.prompt })
+    if (isGoalArm(arm)) {
+      // the goal text (the request, or longer) becomes the goal; the host sends it as the user's message and
+      // keeps the session going
       await installGoalRecorder(app, rootId)
       goalSetAt = Date.now()
       firstWatch = watchFirstCheck(app, rootId, repo, goalSetAt, (l) => debug(`${label}: ${l}`))
       const action = {
         type: 'set',
-        objective: task.prompt,
+        objective: objective.text,
         ...(Object.keys(GOAL_LIMITS).length > 0 ? { limits: GOAL_LIMITS } : {})
       }
       const set = await app.main.eval<GoalActResult>(
@@ -1526,7 +2423,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       await sendPrompt(app, rootId, task.prompt)
       await settle()
     }
-    if (arm === 'goal') {
+    if (isGoalArm(arm)) {
       // no follow-ups: the user set a goal and walked away
     } else if (sim) {
       for (;;) {
@@ -1587,9 +2484,9 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     return new Map<string, number>()
   })
   const costUsd = sessions.reduce((t, s) => t + (costs.get(s.id) ?? 0), 0)
-  // goal arm: the goal as it stands now (also after a timeout or an error)
+  // goal arms: the goal as it stands now (also after a timeout or an error)
   let goal: GoalRun | undefined
-  if (arm === 'goal') {
+  if (isGoalArm(arm)) {
     const view =
       rootId && goalSetError === undefined
         ? await withTimeout(goalViewOf(app, rootId), 8000).catch(() => undefined)
@@ -1597,6 +2494,8 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     const end = goalEndedAt ?? Date.now()
     const notMet = notMetReasons(bySession.get(rootId) ?? [])
     goal = {
+      objective: objective.text,
+      truncatedChars: objective.truncatedChars,
       ...(goalSetError !== undefined ? { setError: goalSetError } : {}),
       status: view ? view.status : 'none',
       ...(view?.pauseReason ? { pauseReason: view.pauseReason } : {}),
@@ -1634,12 +2533,24 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   // the repo lives in the fake HOME: keep it until it is graded
   await app.stop({ keepHome: true })
   const redact = (t: string): string =>
-    [key, simKey?.key ?? ''].filter(Boolean).reduce((acc, k) => acc.split(k).join('<redacted>'), t)
+    [key, simKey ?? ''].filter(Boolean).reduce((acc, k) => acc.split(k).join('<redacted>'), t)
   writeFileSync(join(OUT, `${label}.md`), redact(transcriptMd(label, sessions, bySession)))
+  if (shape) {
+    writeFileSync(
+      join(OUT, `${label}.planner.md`),
+      redact(plannerTranscript(label, shape.planner, plannerMessages))
+    )
+  }
   if (sim) {
     writeFileSync(
       join(OUT, `${label}.user.json`),
-      redact(JSON.stringify({ conversation: conv, rounds, calls: sim.log }, null, 2))
+      redact(
+        JSON.stringify(
+          { conversation: conv, rounds, review: shape?.review, calls: sim.log },
+          null,
+          2
+        )
+      )
     )
   }
 
@@ -1678,6 +2589,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     try {
       if (goal?.first) {
         const at = gradeRepo(task, firstSnap.path, startSha)
+        const factIds = task.user?.facts.map((f) => f.id) ?? []
         goal.first.snapshot = {
           atSeconds: firstSnap.atSeconds,
           sound: firstSnap.sound,
@@ -1686,6 +2598,9 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
           core: at.core,
           visible: { pass: at.visible.pass, fail: at.visible.fail },
           failing: at.checks.filter((c) => c.core && !c.constraint && !c.pass).map((c) => c.name),
+          ...(factIds.length
+            ? { facts: { met: factsMet(factIds, at), total: factIds.length } }
+            : {}),
           ...(at.graderError ? { graderError: at.graderError } : {})
         }
       }
@@ -1697,10 +2612,18 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   } else if (goal?.first) {
     goal.first.note = 'no copy: the first check was never seen'
   }
+  // facts the user stated before any work: in its own script, or (goal-oracle, goal-shaped) in the goal text
+  const factIds = task.user?.facts.map((f) => f.id) ?? []
+  const stated =
+    arm === 'goal-oracle'
+      ? factIds
+      : arm === 'goal-shaped'
+        ? Object.keys(shape?.applied?.facts ?? {})
+        : (task.user?.scripted ?? [])
   const user = task.user
     ? userReport(
-        task.user.facts.map((f) => f.id),
-        task.user.scripted ?? [],
+        factIds,
+        stated,
         grade,
         rounds,
         sessions.filter((s) => s.id !== rootId).flatMap((s) => bySession.get(s.id) ?? []),
@@ -1753,6 +2676,7 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     compactions: all.filter((m) => m.compaction).length,
     contextWindow,
     ...(goal ? { goal } : {}),
+    ...(shape ? { shape } : {}),
     error
   }
   records.push(record)
@@ -1762,20 +2686,382 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     `[${label}] ${grade.pass ? 'PASS' : 'FAIL'} core ${grade.core.passed}/${grade.core.total}` +
       `${grade.constraints.total ? `, rules ${grade.constraints.kept}/${grade.constraints.total}` : ''}` +
       `${goal ? `, goal ${goal.status}${goal.pauseReason ? ` (${goal.pauseReason})` : ''} after ${goal.turns} continuations` : ''}` +
-      `${goal?.first ? `, first check ${goal.first.verdict ?? 'no verdict'} on a ${goal.first.snapshot ? (goal.first.snapshot.pass ? 'passing' : 'failing') : 'missing'} state (${trapClassOf(record)})` : ''} → ${OUT}`
+      `${goal?.first ? `, first check ${goal.first.verdict ?? 'no verdict'} on a ${goal.first.snapshot ? (goal.first.snapshot.pass ? 'passing' : 'failing') : 'missing'} state (${trapClassOf(record)})` : ''}` +
+      `${user && factIds.length ? `, facts ${user.met.length}/${factIds.length}` : ''}${shape ? `; ${shapeLine(record)}` : ''} → ${OUT}`
   )
 }
 
 // ─────────────────────────── entry ───────────────────────────
 
-const selected = TASKS.filter((t) => t.set === SET && TASK_IDS.includes(t.id))
-if (ARMS.includes('goal') && selected.some((t) => t.user)) {
-  throw new Error(
-    'the goal arm runs tasks without a simulated user (easy, hard, long, trap), not ambig or handoff'
+const selected = TASKS.filter((t) => inSet(t) && TASK_IDS.includes(t.id))
+
+/**
+ * The arms a task runs. s1: the tasks with hidden facts take PROBE_ARMS; the controls (catval, long, trap) take
+ * the planner arm, or goal-shaped with PROBE_S1_CONTROLS=full.
+ */
+const armsFor = (task: CodingTask): Arm[] =>
+  SET === 's1' && !hasFacts(task) ? [S1_CONTROLS === 'full' ? 'goal-shaped' : 'planner'] : ARMS
+
+for (const task of selected) {
+  for (const arm of armsFor(task)) {
+    // a user who speaks on its own (prelude, mid-task) is not one who set a goal and left
+    if ((isGoalArm(arm) || arm === 'planner') && (task.user?.prelude || task.user?.midTask))
+      throw new Error(
+        `the ${arm} arm sets a goal and leaves; ${task.id} has a scripted user (the handoff set), which it cannot run`
+      )
+    if (arm === 'goal-oracle' && !task.user)
+      throw new Error(
+        `goal-oracle writes the hidden facts into the goal; ${task.id} has none (use the ambig set or s1)`
+      )
+  }
+}
+
+/** The goal-shaped machinery without a model: planner md, parsers, review, renderers, oracle texts */
+function selfCheckShaping(): void {
+  // the planner md: an agent md with the read-only tools, no ask, thinking declared
+  const md = parseAgentDefinitionFile(readFileSync(PLANNER_MD_PATH, 'utf8'), 'goal-planner')
+  expect(md, `${PLANNER_MD_PATH} parses as an agent md`).toBeTruthy()
+  expect(md?.name).toBe('goal-planner')
+  expect([...(md?.tools ?? [])].sort()).toEqual(['glob', 'grep', 'ls', 'read'])
+  expect(md?.thinkingLevel, 'shuvix-thinking declared').toBeTruthy()
+  expect(asUserAgent(readFileSync(PLANNER_MD_PATH, 'utf8'), 'work')).toMatch(/^name: work$/m)
+
+  // the planner's answer: the last json fence wins; prose and other fences around it are fine
+  const example: PlannerDraft = {
+    verdict: 'shape',
+    criteria: [
+      {
+        text: '默认表格不再列出 60 天没出过货的商品',
+        proof: '用 seed 数据跑 `stockroom report lowstock`'
+      },
+      { text: '`npm test` 全部通过，且有新用例覆盖新规则', proof: '`npm test` 的输出' }
+    ],
+    decisions: [
+      {
+        question: '怎样算「常年不动」？',
+        options: ['最近 60 天没出过货', '最近 30 天没出过货', '最近 90 天没出过货'],
+        recommended: '最近 60 天没出过货',
+        why: '决定哪些商品会被藏起来'
+      },
+      {
+        question: '库存还够用多久就不必显示？',
+        options: ['超过 14 天', '超过 7 天', '不按天数'],
+        recommended: '超过 14 天',
+        why: '决定「马上补货」的边界'
+      }
+    ],
+    assumptions: ['加一个 `--all`，显示和现在完全一样的表格'],
+    nonGoals: ['`--json` 的输出和 `GET /reports/lowstock` 的返回']
+  }
+  const answer = [
+    '我看了 `src/report/lowstock.js`。',
+    '```js\nconst x = { a: 1 }\n```',
+    '```json',
+    JSON.stringify({
+      ...example,
+      verdict: 'ready',
+      criteria: [],
+      decisions: [],
+      assumptions: [],
+      nonGoals: []
+    }),
+    '```',
+    '改一下，最终版本：',
+    '```json',
+    JSON.stringify(example, null, 2),
+    '```'
+  ].join('\n')
+  const parsed = parsePlannerAnswer(answer)
+  expect(parsed).toEqual({ ok: true, draft: example, violations: [] })
+  // no fence: the last {...} that parses
+  expect(extractJson(`结论如下 {"verdict":"ready"} 完`)).toBe('{"verdict":"ready"}')
+  expect(parsePlannerAnswer('{"verdict": "ready", "criteria": []}')).toMatchObject({
+    ok: true,
+    draft: { verdict: 'ready' },
+    violations: []
+  })
+  // what is an error, and what is mended
+  expect(parsePlannerAnswer('没有 JSON')).toMatchObject({ ok: false })
+  expect(parsePlannerAnswer('```json\n{"verdict": "maybe"}\n```')).toMatchObject({ ok: false })
+  expect(parsePlannerAnswer('```json\n{"verdict": "shape", \n```')).toMatchObject({ ok: false })
+  const over = parsePlannerAnswer(
+    JSON.stringify({
+      verdict: 'SHAPE',
+      criteria: [...Array(10).keys()].map((i) =>
+        i === 0 ? `c${i}` : { text: `c${i}`, proof: 'p' }
+      ),
+      decisions: [
+        ...[...Array(4).keys()].map((i) => ({
+          question: `q${i}`,
+          options: ['a', 'b', 'c', 'd', 'e'],
+          recommended: i === 0 ? 'z' : 'b',
+          why: 'w'
+        })),
+        { question: 'no options', options: [] }
+      ],
+      assumptions: [...Array(7).keys()].map((i) => `s${i}`),
+      nonGoals: 'not a list'
+    })
   )
+  expect(over.ok).toBe(true)
+  if (over.ok) {
+    expect(over.draft.verdict).toBe('shape')
+    expect(over.draft.criteria).toHaveLength(DRAFT_LIMITS.criteria)
+    expect(over.draft.criteria[0]).toEqual({ text: 'c0', proof: '' })
+    expect(over.draft.decisions).toHaveLength(DRAFT_LIMITS.decisions)
+    expect(over.draft.decisions[0].options).toEqual(['a', 'b', 'c', 'd'])
+    expect(over.draft.decisions[0].recommended).toBe('a')
+    expect(over.draft.assumptions).toHaveLength(DRAFT_LIMITS.assumptions)
+    expect(over.draft.nonGoals).toEqual([])
+    console.log(`[shaping] contract breaches mended: ${over.violations.join('; ')}`)
+    expect(over.violations.length).toBeGreaterThanOrEqual(6)
+  }
+  expect(
+    parsePlannerAnswer(JSON.stringify({ verdict: 'shape' })),
+    'shape with an empty draft is kept, and flagged'
+  ).toMatchObject({
+    ok: true,
+    violations: ['shape with an empty draft (the goal is the request alone)']
+  })
+
+  // the review form, a review, and the goal text (quiet: F1 30 days, F2 14 days, F3 --json / HTTP, F4 --all)
+  const quiet = TASKS.find((t) => t.id === 'quiet') as CodingTask
+  const shown = reviewText(example)
+  expect(shown.split('\n').map((l) => l.slice(0, 3))).toEqual([
+    '需要你',
+    'D1.',
+    'D2.',
+    '替你定',
+    'S1.',
+    '做到这',
+    'A1.',
+    'A2.',
+    '不要动',
+    'N1.'
+  ])
+  const raw = JSON.stringify({
+    decisions: [
+      { id: 'd1', answer: '最近 30 天一件都没出过货的不显示', facts: ['F1', 'F9'] },
+      { id: 'D2', answer: '超过 14 天', facts: ['F2'] },
+      { id: 'D7', answer: '?', facts: [] }
+    ],
+    edits: [
+      { id: 'A1', action: 'change', text: '默认表格不再列出 30 天没出过货的商品', facts: ['F1'] },
+      { id: 'X1', action: 'change', text: '?', facts: [] },
+      { id: 'S9', action: 'drop', facts: [] }
+    ],
+    additions: [
+      { section: 'nonGoals', text: '只改给人看的表格', about: 'N1', facts: ['F3'] },
+      { section: 'criteria', text: '顺手加个导出', about: '', facts: [] },
+      { section: 'nowhere', text: '?', about: 'A1', facts: [] }
+    ],
+    alreadyRight: ['F4', 'F3']
+  })
+  const review = parseReview(`好的：\n${raw}`, quiet.user?.facts ?? []) as DraftReview
+  expect(review).toBeTruthy()
+  expect(review.decisions[0]).toEqual({
+    id: 'D1',
+    answer: '最近 30 天一件都没出过货的不显示',
+    facts: ['F1']
+  })
+  expect(review.additions).toHaveLength(2)
+  const applied = applyReview(example, review, ['F1', 'F2', 'F3', 'F4'])
+  expect(applied.facts).toEqual({ F1: 'decision', F2: 'decision', F3: 'added', F4: 'already' })
+  expect(applied.decisionsWithFact).toBe(2)
+  expect(applied.noiseDecisions).toBe(0)
+  expect(applied.accepted.criteria[0].text).toBe('默认表格不再列出 30 天没出过货的商品')
+  expect(applied.accepted.criteria[0].proof).toBe(example.criteria[0].proof)
+  expect(applied.accepted.nonGoals).toEqual([...example.nonGoals, '只改给人看的表格'])
+  expect(applied.ignored).toHaveLength(4)
+  const text = goalTextShaped(quiet.prompt, applied.accepted)
+  expect(
+    text.startsWith(`${quiet.prompt}\n\n已定的决定：\n1. 怎样算「常年不动」？ → 最近 30 天`)
+  ).toBe(true)
+  const order = ['已定的决定：', '替你定的：', '做到这些算完：', '不要动：'].map((h) =>
+    text.indexOf(h)
+  )
+  expect(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1]))).toBe(true)
+  console.log(`[shaping] quiet, the proposal's example draft as the user reads it:\n${shown}`)
+  console.log(`[shaping] quiet, after the review (goal text, ${text.length} chars):\n${text}`)
+  // no review (no hidden facts, or the review failed): accepted as it is, recommended options, all noise
+  const plain = applyReview(example, undefined, [])
+  expect(plain.accepted.decisions.map((d) => d.answer)).toEqual([
+    '最近 60 天没出过货',
+    '超过 14 天'
+  ])
+  expect(plain.noiseDecisions).toBe(2)
+  expect(plain.facts).toEqual({})
+  expect(
+    goalTextShaped('只是请求', { decisions: [], assumptions: [], criteria: [], nonGoals: [] })
+  ).toBe('只是请求')
+
+  // the 4000-character limit (trimmed length)
+  expect(fitObjective(`  ${'x'.repeat(4000)}  `)).toEqual({
+    text: 'x'.repeat(4000),
+    truncatedChars: 0
+  })
+  const cut = fitObjective('y'.repeat(4100))
+  expect(cut.text.length).toBe(4000)
+  expect(cut.text.endsWith('…')).toBe(true)
+  expect(cut.truncatedChars).toBe(101)
+  const longest = goalTextShaped('z'.repeat(500), {
+    decisions: [...Array(3).keys()].map(() => ({
+      question: 'q'.repeat(300),
+      answer: 'a'.repeat(300)
+    })),
+    assumptions: [...Array(5).keys()].map(() => 's'.repeat(300)),
+    criteria: [...Array(8).keys()].map(() => ({ text: 'c'.repeat(200), proof: 'p'.repeat(100) })),
+    nonGoals: [...Array(5).keys()].map(() => 'n'.repeat(300))
+  })
+  expect(fitObjective(longest).text.length).toBeLessThanOrEqual(4000)
+
+  // goal-oracle: every fact and the end condition, in order, within the limit, for every task with facts
+  for (const t of TASKS.filter((x) => x.set === 'ambig')) {
+    const o = goalTextOracle(t)
+    const items = [...(t.user?.facts ?? []).map((f) => f.text), t.endCondition ?? '']
+    expect(t.endCondition, `${t.id} has an end condition`).toBeTruthy()
+    expect(o.startsWith(t.prompt)).toBe(true)
+    const at = items.map((x) => o.indexOf(x))
+    expect(
+      at.every((x, i) => x > t.prompt.length && (i === 0 || x > at[i - 1])),
+      t.id
+    ).toBe(true)
+    expect(o.length).toBeLessThanOrEqual(4000)
+    console.log(`[shaping] goal-oracle ${t.id}: ${o.length} chars, ${items.length} item(s)`)
+  }
+
+  // the report on made-up records: every table renders, and the thresholds come out as the numbers say
+  const facts = ['F1', 'F2', 'F3', 'F4']
+  const fake = (
+    arm: Arm,
+    task: string,
+    met: string[],
+    more: Partial<RunRecord> = {}
+  ): RunRecord => {
+    const grade: Grade = {
+      ...NOT_GRADED,
+      graderError: undefined,
+      pass: met.length === facts.length,
+      core: { passed: met.length, total: facts.length },
+      checks: facts.map((f) => ({ name: f, core: true, fact: f, pass: met.includes(f) }))
+    }
+    const goal: GoalRun = {
+      objective: quiet.prompt,
+      truncatedChars: 0,
+      status: 'met',
+      turns: 0,
+      costUsd: 0.1,
+      wallSeconds: 90,
+      timedOut: false,
+      notMet: [],
+      first: {
+        verdict: 'met',
+        verdictFrom: 'events',
+        snapshot: {
+          atSeconds: 80,
+          sound: true,
+          note: 'made up',
+          pass: grade.pass,
+          core: grade.core,
+          visible: { pass: 22, fail: 0 },
+          failing: [],
+          facts: { met, total: facts.length }
+        }
+      }
+    }
+    return {
+      model: 'm',
+      modelId: 'm',
+      arm,
+      task,
+      run: 1,
+      seconds: 100,
+      grade: arm === 'planner' ? NOT_GRADED : grade,
+      sessions: [],
+      requests: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      toolCalls: {},
+      rootToolCalls: 0,
+      skimBeforeDispatch: 0,
+      rootEdits: 0,
+      dispatches: [],
+      exploreCalls: 0,
+      settle: { questions: 0, permissions: 0, refused: 0, unansweredSubQuestions: 0 },
+      followUps: 0,
+      finalReply: '',
+      agents: [],
+      userWordsAttached: { sends: 0, words: 0 },
+      ...(arm === 'planner' || task !== 'quiet'
+        ? {}
+        : { user: userReport(facts, [], grade, [], [], false, []) }),
+      costUsd: 0.1,
+      compactions: 0,
+      contextWindow: 0,
+      ...(isGoalArm(arm) ? { goal } : {}),
+      ...more
+    }
+  }
+  const planner = (verdict: 'ready' | 'shape', seconds: number): PlannerRun => ({
+    md: PLANNER_MD_PATH,
+    sessionId: 's',
+    input: quiet.prompt,
+    verdict,
+    violations: [],
+    draft: verdict === 'ready' ? { ...example, verdict, decisions: [] } : example,
+    seconds,
+    costUsd: 0.01,
+    sessionCostUsd: 0.02,
+    thinkingLevel: 'medium',
+    tools: ['read', 'ls', 'grep', 'glob'],
+    identity: 'made up',
+    toolCalls: { read: 2 },
+    asks: 0,
+    finalText: ''
+  })
+  const shapeOf = (p: PlannerRun, a?: AppliedReview): ShapeRecord => ({
+    planner: p,
+    reviewBy: a ? 'sim' : 'none',
+    reviewSeconds: a ? 10 : 0,
+    ...(a ? { review, applied: a } : {}),
+    shown: a ? shown : '',
+    objective: a ? text : quiet.prompt,
+    truncatedChars: 0
+  })
+  records.push(
+    fake('goal', 'quiet', ['F4']),
+    fake('goal-oracle', 'quiet', facts),
+    fake('goal-shaped', 'quiet', ['F1', 'F2', 'F4'], {
+      shape: shapeOf(planner('shape', 50), applied)
+    }),
+    fake('planner', 'orders', [], { shape: shapeOf(planner('ready', 40)) }),
+    fake('planner', 'avgcost', [], { shape: shapeOf(planner('shape', 120)) })
+  )
+  try {
+    const report = renderSummary()
+    const s1 = report.slice(report.indexOf('## S1'))
+    for (const want of [
+      '| m | goal | 1 | 0/1 | 1/4 (25%) | quiet 1/4 |',
+      '| m | goal-oracle | 1 | 1/1 | 4/4 (100%) | quiet 4/4 |',
+      '| m | goal-shaped | 1 | 0/1 | 3/4 (75%) | quiet 3/4 |',
+      '- (i) the goal arm loses facts against goal-oracle: PASS',
+      '- (ii) goal-shaped recovers at least half of the gap: PASS',
+      'recovered 67% of the gap',
+      '- (iii) controls: the planner says ready on ≥ 6/7 and asks ≤ 1 decision per run on average: FAIL',
+      'ready 1/2 (50%)',
+      '- (iv) median shaping (planner) time ≤ 90 s: PASS — median 50 s over 3 planner run(s)'
+    ])
+      expect(s1, want).toContain(want)
+    // the planner arm stays out of the tables about the code
+    expect(report.slice(0, report.indexOf('## S1'))).not.toContain('| m | planner |')
+    console.log(`[shaping] S1 section on made-up records:\n${s1.slice(0, s1.indexOf('\n## Runs'))}`)
+  } finally {
+    records.length = 0
+  }
 }
 
 if (SELFCHECK) {
+  it('self-check goal-shaped: planner md, planner-answer parser, review, renderers, oracle texts', () =>
+    selfCheckShaping())
   for (const task of selected) {
     it(`self-check ${task.id}: start fails, reference passes`, () => {
       const startRepo = mkdtempSync(join(tmpdir(), `ledger-${task.id}-start-`))
@@ -1861,13 +3147,19 @@ if (SELFCHECK) {
   for (let run = 1; run <= RUNS; run++) {
     for (const modelName of MODEL_IDS) {
       for (const task of selected) {
-        for (const arm of ARMS) {
-          // the early message is one more settle; a goal runs until it ends (or PROBE_GOAL_TIMEOUT_MIN)
+        for (const arm of armsFor(task)) {
+          // the early message is one more settle; a goal runs until it ends (or PROBE_GOAL_TIMEOUT_MIN); the
+          // planner (goal-shaped, planner) runs first, until it ends (or PROBE_PLANNER_TIMEOUT_MIN)
           const extra = task.early ? TURN_TIMEOUT_MS : 0
+          const planner = runsPlanner(arm) ? PLANNER_TIMEOUT_MS + 5 * 60 * 1000 : 0
           it(
             `${modelName} / ${arm} / ${task.id} / #${run}`,
             () => runOne(modelName, arm, task, run),
-            (arm === 'goal' ? GOAL_TIMEOUT_MS + TURN_TIMEOUT_MS * 2 : TURN_TIMEOUT_MS * 3) + extra
+            arm === 'planner'
+              ? planner
+              : (isGoalArm(arm) ? GOAL_TIMEOUT_MS + TURN_TIMEOUT_MS * 2 : TURN_TIMEOUT_MS * 3) +
+                  extra +
+                  planner
           )
         }
       }

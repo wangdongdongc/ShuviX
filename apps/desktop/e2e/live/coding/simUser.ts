@@ -8,7 +8,14 @@
  * It runs on deepseek with the key the deepseek arm uses (`SHUVIX_PROBE_COMPLETIONS_KEY` / `_MODEL`) and
  * calls api.deepseek.com from the test process, never through the app under test. The same simulated user
  * answers every arm and every model, so the arms are compared against one user.
+ *
+ * Review mode (`review`, the goal-shaped arm): before the user sets the goal and leaves, it reads the goal
+ * planner's draft once (goalDraft.ts `reviewText`) and returns what it accepts — each decision answered (a
+ * fact if one settles it, else the recommended option), items that contradict a fact rewritten, a fact added
+ * only where an item or decision already touches its point (it is not asked to brainstorm), everything else
+ * accepted as is — and says which facts the draft already had right. The probe applies it (`applyReview`).
  */
+import type { DraftReview } from './goalDraft'
 import type { Fact } from './tasks'
 
 export interface SimTurn {
@@ -41,6 +48,8 @@ export interface SimVerdict {
 
 export interface SimUser {
   respond(history: SimTurn[], latest: { text: string; card?: SimCard }): Promise<SimVerdict>
+  /** review mode: the goal planner's draft as the user reads it → what the user accepts (error: no review) */
+  review(draft: string): Promise<{ review?: DraftReview; error?: string }>
   /** raw calls, for the report */
   readonly log: Array<{ input: string; output: string }>
 }
@@ -145,6 +154,89 @@ function parseVerdict(text: string, facts: Fact[]): SimVerdict | undefined {
   }
 }
 
+function reviewPrompt(request: string, facts: Fact[]): string {
+  const known = facts.length
+    ? [
+        '关于这件事，你心里还清楚下面这些事实，只是没写进那句话里。除此之外你没有任何别的要求或想法：',
+        '',
+        '<facts>',
+        ...facts.map((f) => `${f.id}：${f.text}`),
+        '</facts>'
+      ]
+    : ['你那句话就是你全部的要求，此外你没有任何别的要求或想法。']
+  return [
+    '你在扮演一个真实的用户。你维护着一个叫 stockroom 的库存服务。你刚用下面这句话给 AI 编程助手设了一个目标，设完就要走开，让它自己一直干到做完：',
+    '',
+    '<request>',
+    request,
+    '</request>',
+    '',
+    ...known,
+    '',
+    '开工之前，ShuviX 照你这句话起草了一份验收草稿（在用户消息里）。你审一遍，你认可的文字会写进目标，干活的助手和检查结果的人都只照它来。怎么审：',
+    '1. 「需要你定」的每一条都要回答：有事实能定它，就按事实回答（照抄一个选项，或者用自己的话说出那条事实）；没有事实涉及，就照推荐项。',
+    '2. 「替你定的」「做到这些算完」「不要动」里，跟某条事实冲突的条目，改成符合事实的说法（change）；只有又多余又错的才删（drop）。不冲突的条目不要动，哪怕你觉得写得不好。',
+    '3. 某个条目或决定说到了某条事实管的那件事，却没写出事实里的要求（比如说了要藏掉冷门货，却没说怎样算冷门），就把那条事实补上（additions），并写明是哪个条目或决定让你补的。草稿完全没说到的事不要补：没人让你去想还缺什么。',
+    '4. 不要编造新要求，不要给技术建议。',
+    '5. 用中文，像你自己说的话，一句一条。',
+    '',
+    '只输出一个 JSON 对象，不要别的文字：',
+    '{"decisions": [{"id": "D1", "answer": "…", "facts": ["F1"]}], "edits": [{"id": "A2", "action": "change", "text": "…", "proof": "…", "facts": ["F2"]}], "additions": [{"section": "criteria", "text": "…", "proof": "…", "about": "S1", "facts": ["F3"]}], "alreadyRight": ["F4"]}',
+    '',
+    '- decisions：每个「需要你定」一条，id 用草稿里的编号（D1、D2…）；answer 是你的回答；facts 是你回答时用到的事实编号，没用到就是 []。',
+    '- edits：你改了或删了的条目，id 用草稿里的编号（S1、A2、N1…）；action 是 change 或 drop；change 时 text 是改好的整句，改的是「做到这些算完」的条目还要给 proof（用什么证明）；facts 是这次改动依据的事实编号。没改就是 []。',
+    '- additions：你补的条目；section 是 assumptions（替你定的）、criteria（做到这些算完）或 nonGoals（不要动）；about 是让你补它的那个条目或决定的编号；facts 是它说出的事实编号。没补就是 []。',
+    '- alreadyRight：草稿本身（不算你的改动）已经写对了的事实编号。'
+  ].join('\n')
+}
+
+const SECTIONS = new Set(['assumptions', 'criteria', 'nonGoals'])
+
+export function parseReview(text: string, facts: Fact[]): DraftReview | undefined {
+  const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(json) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const ids = new Set(facts.map((f) => f.id))
+  const factList = (v: unknown): string[] =>
+    Array.isArray(v) ? [...new Set(v.map(String).filter((id) => ids.has(id)))] : []
+  const objs = (v: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(v)
+      ? v.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null)
+      : []
+  const s = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  return {
+    decisions: objs(raw.decisions).map((o) => ({
+      id: s(o.id).toUpperCase(),
+      answer: s(o.answer),
+      facts: factList(o.facts)
+    })),
+    edits: objs(raw.edits)
+      .filter((o) => o.action === 'change' || o.action === 'drop')
+      .map((o) => ({
+        id: s(o.id).toUpperCase(),
+        action: o.action as 'change' | 'drop',
+        ...(s(o.text) ? { text: s(o.text) } : {}),
+        ...(s(o.proof) ? { proof: s(o.proof) } : {}),
+        facts: factList(o.facts)
+      })),
+    additions: objs(raw.additions)
+      .filter((o) => SECTIONS.has(String(o.section)))
+      .map((o) => ({
+        section: o.section as DraftReview['additions'][number]['section'],
+        text: s(o.text),
+        ...(s(o.proof) ? { proof: s(o.proof) } : {}),
+        about: s(o.about).toUpperCase(),
+        facts: factList(o.facts)
+      })),
+    alreadyRight: factList(raw.alreadyRight)
+  }
+}
+
 export function createSimUser(opts: {
   key: string
   model: string
@@ -157,7 +249,12 @@ export function createSimUser(opts: {
   const log: Array<{ input: string; output: string }> = []
   let jsonMode = true
 
-  async function call(content: string): Promise<string> {
+  async function call(
+    content: string,
+    systemText = system,
+    opts2: { maxTokens?: number; json?: boolean } = {}
+  ): Promise<string> {
+    const json = jsonMode && opts2.json !== false
     const res = await fetch(`${base}/chat/completions`, {
       method: 'POST',
       signal: AbortSignal.timeout(180_000),
@@ -165,18 +262,18 @@ export function createSimUser(opts: {
       body: JSON.stringify({
         model: opts.model,
         temperature: 0,
-        max_tokens: 2000,
-        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        max_tokens: opts2.maxTokens ?? 2000,
+        ...(json ? { response_format: { type: 'json_object' } } : {}),
         messages: [
-          { role: 'system', content: system },
+          { role: 'system', content: systemText },
           { role: 'user', content }
         ]
       })
     })
     const body = await res.text()
-    if (res.status === 400 && jsonMode && /response_format|json/i.test(body)) {
+    if (res.status === 400 && json && /response_format|json/i.test(body)) {
       jsonMode = false
-      return call(content)
+      return call(content, systemText, opts2)
     }
     if (!res.ok) throw new Error(`simulated user: HTTP ${res.status} ${body.slice(0, 300)}`)
     const parsed = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> }
@@ -210,6 +307,32 @@ export function createSimUser(opts: {
         selections: [],
         error: lastError
       }
+    },
+    async review(draft) {
+      const content = ['ShuviX 起草的验收草稿：', '<draft>', draft, '</draft>'].join('\n')
+      const systemText = reviewPrompt(opts.request, opts.facts)
+      let lastError = ''
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          // The review answer is far larger than a turn verdict, and the sim's model counts its reasoning against
+          // max_tokens: at 2000 / 8000 the reasoning used the budget and the answer came back empty or cut after 88
+          // characters (first real runs, 2026-11-08). After an empty reply, ask again without JSON mode and parse
+          // the JSON out of the text
+          const output = await call(
+            attempt === 0 ? content : `${content}\n\nAnswer with the JSON object only.`,
+            systemText,
+            { maxTokens: 32000, json: attempt === 0 }
+          )
+          log.push({ input: `[review]\n${content}`, output })
+          const review = parseReview(output, opts.facts)
+          if (review) return { review }
+          lastError = `not JSON: ${output.slice(0, 200)}`
+        } catch (e) {
+          lastError = String((e as Error)?.message ?? e)
+          log.push({ input: `[review]\n${content}`, output: `ERROR ${lastError}` })
+        }
+      }
+      return { error: lastError }
     }
   }
 }

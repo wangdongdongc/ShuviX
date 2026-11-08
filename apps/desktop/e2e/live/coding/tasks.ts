@@ -10,7 +10,8 @@
  *         something that contradicts it; the grader tags each check with the fact it tests. It measures
  *         whether the agent brings the open decisions to the user before doing the work, at what cost in
  *         questions, and whether a fact the user gave survives a hand-off. `catval` is fully specified: the
- *         control for questions asked for nothing.
+ *         control for questions asked for nothing. Each task also has a one-line end condition
+ *         (`endCondition`), the last "done when" item of the goal-oracle arm (coding/goalDraft.ts).
  *   handoff the ambig set's features and graders again, but the user does state every fact — where a hand-off
  *         can drop it: in an earlier message, in a discussion before "go ahead", while the sub-session is
  *         already working (a steer), or scattered through one long message. It measures what is lost between
@@ -224,6 +225,11 @@ export interface CodingTask {
     scripted?: string[]
     silent?: true
   }
+  /**
+   * The request's own end condition as one line, for a request that states none (the ambig set). The
+   * goal-oracle arm's goal is the request plus "done when": each hidden fact, then this line.
+   */
+  endCondition?: string
 }
 
 const COUNT_FACTS: Fact[] = [
@@ -451,7 +457,9 @@ export const TASKS: CodingTask[] = [
       'src/cli/main.js'
     ],
     decoys: [],
-    user: { facts: COUNT_FACTS }
+    user: { facts: COUNT_FACTS },
+    endCondition:
+      '`POST /items/:sku/count` 和 `stockroom count <sku> <qty>` 都能用，每次调整都留一条出入库记录；`npm test` 全部通过。'
   },
   {
     set: 'ambig',
@@ -460,7 +468,9 @@ export const TASKS: CodingTask[] = [
       '财务那边想在导出的 CSV 里直接看到每个商品的库存价值（就是 valuation 报表里那个数），给 export 加个 `--with-value` 选项吧。',
     rootCause: ['src/export/exportItems.js', 'src/cli/main.js'],
     decoys: [],
-    user: { facts: EXPORT_FACTS }
+    user: { facts: EXPORT_FACTS },
+    endCondition:
+      '`stockroom export --with-value` 导出的 CSV 里每个商品都带上它的库存价值（valuation 报表里那个数）；`npm test` 全部通过。'
   },
   {
     set: 'ambig',
@@ -469,7 +479,8 @@ export const TASKS: CodingTask[] = [
       'lowstock 报表太吵了，里面一大半是常年不怎么动的冷门货，看着就烦。帮我改改，让它只显示真正需要马上补货的。',
     rootCause: ['src/cli/main.js', 'src/report/lowstock.js'],
     decoys: ['src/api/server.js'],
-    user: { facts: QUIET_FACTS }
+    user: { facts: QUIET_FACTS },
+    endCondition: '`stockroom report lowstock` 只显示真正需要马上补货的商品；`npm test` 全部通过。'
   },
   {
     set: 'ambig',
@@ -478,7 +489,9 @@ export const TASKS: CodingTask[] = [
       '销售那边反馈，预留的时候库存不够就直接报错（409），很麻烦，他们希望能有多少先留多少。帮我改一下预留接口（`POST /items/:sku/reserve`）。命令行那边先别动，仓库有脚本靠现在的行为。',
     rootCause: ['src/domain/stock.js', 'src/api/server.js'],
     decoys: ['src/cli/main.js'],
-    user: { facts: PARTIAL_FACTS }
+    user: { facts: PARTIAL_FACTS },
+    endCondition:
+      '`POST /items/:sku/reserve` 在库存不够的时候能有多少先留多少，命令行的预留行为不变；`npm test` 全部通过。'
   },
   {
     set: 'ambig',
@@ -494,7 +507,9 @@ export const TASKS: CodingTask[] = [
     ].join('\n'),
     rootCause: ['src/report/valuation.js', 'src/api/server.js', 'src/cli/main.js'],
     decoys: ['src/report/lowstock.js'],
-    user: { facts: [] }
+    user: { facts: [] },
+    endCondition:
+      'valuation 报表能按类别过滤（命令行和 HTTP），上面每一条都做到；`npm test` 全部通过。'
   },
   {
     set: 'handoff',
