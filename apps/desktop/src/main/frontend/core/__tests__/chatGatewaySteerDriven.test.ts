@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
+import { withUserWords } from '@shuvix/chat-protocol/userWords'
 import type { ClientContext } from '../../../ipc/registry'
 import {
   createChromeContext,
@@ -223,6 +224,31 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
       sessionId: 'c1',
       error: 'The conversation is closed'
     })
+  })
+})
+
+describe('UW-G2 steerDriven 带用户原话', () => {
+  it('原文 + 引用块 + 发送方说明；侧车两枚 Token；来源照旧', async () => {
+    const session = openSession(async () => ({ submissionId: 1 }))
+    const quote = {
+      sessionId: 'P1',
+      scope: 'since-last' as const,
+      words: [{ kind: 'message' as const, ts: 5, text: '补充：列名叫 stockValue' }],
+      omitted: 0
+    }
+    expect(await chatGateway.steerDriven('c1', 'm', { ...DRIVE, userWords: quote })).toStrictEqual(
+      {}
+    )
+    const quoted = withUserWords('m', undefined, quote)
+    const sent = withSessionSender(quoted.text, quoted.display, PARENT_SOURCE, { userWords: true })
+    expect(session.admitSteer.mock.calls[0]).toStrictEqual([
+      sent.text,
+      { requestId: DRIVE.requestId, source: PARENT_SOURCE, display: sent.display }
+    ])
+    expect(Object.keys((sent.display as { tokens: object }).tokens).sort()).toEqual([
+      'sender',
+      'userwords'
+    ])
   })
 })
 

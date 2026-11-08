@@ -602,6 +602,14 @@ export class SessionService {
    * `default`），改制刻意不做迁移 —— 项目会话就是 work、无项目会话就是 chat，没有设置项、
    * 没有切换命令、没有选择器，键留在 settings 里只是遗留数据。
    */
+  /**
+   * 这条会话的档案要不要收父会话里用户的原话（`shuvix-user-words`，services/userWords.ts）。只看档案；是不是父会话自己的
+   * 子会话由调用方（subSessionRunner）判
+   */
+  receivesUserWords(sessionId: string): boolean {
+    return agentService.getProfile(this.resolveAgentProfileName(sessionId))?.userWords === true
+  }
+
   resolveAgentProfileName(sessionId: string): string {
     const session = sessionRecords.pick(sessionId, ['projectId', 'parentId', 'settings'])
     const settings = session?.settings

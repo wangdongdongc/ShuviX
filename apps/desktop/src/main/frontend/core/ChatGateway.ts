@@ -2,6 +2,7 @@ import type {
   RebuildSystemPromptResult,
   SystemPromptStatus
 } from '@shuvix/chat-protocol/systemPromptStatus'
+import type { UserWordsQuote } from '@shuvix/chat-protocol/userWords'
 import type {
   AgentChangePreview,
   AgentInitResult,
@@ -54,8 +55,11 @@ export interface ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>,
-    /** 子会话的驱动方（主进程内）专用：幂等键 + driven-run 标记（P2-10）；IPC 从不带它 */
-    drive?: DriveOptions,
+    /**
+     * 子会话的驱动方（主进程内）专用：幂等键 + driven-run 标记（P2-10）；IPC 从不带它。`userWords`：宿主从父会话里读出的
+     * 用户原话，附在原文之后、发送方说明之前（chat-protocol userWords.ts）
+     */
+    drive?: DriveOptions & { userWords?: UserWordsQuote },
     /**
      * 输入框里要藏的值（docs/auto-redaction-design.md §14）：只把它们换成占位符，其余照原样发。不给 = 自动脱敏
      * （没有输入框的来源：驱动它的会话、触发器……）
@@ -72,7 +76,7 @@ export interface ChatGateway {
   steerDriven(
     sessionId: string,
     text: string,
-    drive: { requestId: string; parentId: string }
+    drive: { requestId: string; parentId: string; userWords?: UserWordsQuote }
   ): Promise<{ error?: string; code?: SubmitErrorCode }>
   /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
   followUp(sessionId: string, text: string, secrets?: UserSecret[]): void

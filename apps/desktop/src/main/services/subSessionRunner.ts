@@ -55,6 +55,7 @@ import { sessionRecords } from './sessionRecords'
 import { localDayKey, sessionsActiveBetween } from './sessionDayPromptService'
 import { isDayKey } from '@shuvix/chat-protocol/dailyNotes'
 import { botService } from './botService'
+import { markUserWordsSent, readUserWordsFor, type UserWordsSelection } from './userWords'
 import type { AgentSession } from './agentSession'
 import { authorsOf, buildSessionOutline } from '@shuvix/agent-runtime'
 import type {
@@ -216,6 +217,8 @@ export interface PromptOutcome {
   id: string
   /** kind==='input' 时子会话的快照（带着询问） */
   info?: SubSessionInfo
+  /** 这次随消息附上的用户原话条数（services/userWords.ts）；没附 = 省略 */
+  userWords?: number
 }
 
 /** 本进程正在驱动的一次子会话发送 */
@@ -948,6 +951,7 @@ class SubSessionRunner {
     this.records.set(requestId, record)
 
     let run: DrivenRun
+    let quote: UserWordsSelection | undefined
     try {
       const known =
         params.requestId === undefined ? 'none' : await this.requestStateOf(childId, requestId)
@@ -966,6 +970,9 @@ class SubSessionRunner {
         }
         await this.noteSupersede(parentId, childId, requestId)
         this.turnErrors.delete(childId)
+        // 崩溃之后重挂的那一条早就发过了，只有新发的这次才附用户原话。不收的档案一步都不等（同步判）：这里多一次
+        // await 就会把发送往后推，而并发进来的第二条要靠「第一条已经发出去」的那一刻判忙
+        if (this.wantsUserWords(child)) quote = await this.userWordsFor(parentId, child)
       }
 
       taskRegistry.create({
@@ -992,7 +999,8 @@ class SubSessionRunner {
         done: chatGateway
           .prompt(childId, message, undefined, undefined, {
             requestId,
-            driven: { parentId, background: true }
+            driven: { parentId, background: true },
+            ...(quote ? { userWords: quote } : {})
           })
           .catch((err: unknown): SubmitResult => {
             log.warn(`会话 ${childId} 发送失败: ${err}`)
@@ -1008,7 +1016,38 @@ class SubSessionRunner {
     if (this.statusOf(childId) === 'waiting-input') {
       taskRegistry.update(requestId, { status: 'waiting-input' })
     }
-    return this.confirmSent({ parentId, child, run, record })
+    const outcome = await this.confirmSent({ parentId, child, run, record })
+    // 落进去了才前移游标：没发出去的那些话下一次照样附上
+    if (!quote || 'error' in outcome) return outcome
+    markUserWordsSent(childId, quote.through)
+    return { ...outcome, userWords: quote.words.length }
+  }
+
+  /**
+   * 发给 `child` 的消息要不要附用户原话（services/userWords.ts）：只给父会话自己的子会话、接收方档案声明了
+   * `shuvix-user-words` 的。同步：不收的那些一步都不等。判不出来（档案读不到）→ 不附
+   */
+  private wantsUserWords(child: SessionTarget): boolean {
+    if (child.relation !== 'sub-session') return false
+    try {
+      return sessionService.receivesUserWords(child.id)
+    } catch (err) {
+      log.warn(`判不出会话 ${child.id} 收不收用户原话，这次不附: ${err}`)
+      return false
+    }
+  }
+
+  /** 这次该附的用户原话；没有可附的 → undefined。读转写失败不挡发送，只记一笔 */
+  private async userWordsFor(
+    parentId: string,
+    child: SessionTarget
+  ): Promise<UserWordsSelection | undefined> {
+    try {
+      return await readUserWordsFor(parentId, child.id)
+    } catch (err) {
+      log.warn(`读会话 ${parentId} 的用户原话失败，这次不附: ${err}`)
+      return undefined
+    }
   }
 
   /**
@@ -1644,7 +1683,9 @@ class SubSessionRunner {
     message: string
     requestId: string
     authorize?: AuthorizeSessionAccess
-  }): Promise<{ error: string } | { id: string; title: string; earlier?: boolean }> {
+  }): Promise<
+    { error: string } | { id: string; title: string; earlier?: boolean; userWords?: number }
+  > {
     const { parentId, requestId } = params
     const resolved = this.resolveTarget(parentId, params.childId)
     if ('error' in resolved) return { error: resolved.error }
@@ -1695,14 +1736,21 @@ class SubSessionRunner {
     // 自己发起的那一轮：出厂策略不问，用户自己的策略照样能管
     await this.authorizeAccess(parentId, child, 'write', params.authorize, true)
 
-    const sent = await chatGateway.steerDriven(childId, message, { requestId, parentId })
+    const quote = this.wantsUserWords(child) ? await this.userWordsFor(parentId, child) : undefined
+    const sent = await chatGateway.steerDriven(childId, message, {
+      requestId,
+      parentId,
+      ...(quote ? { userWords: quote } : {})
+    })
     if (sent.error) {
       return {
         error: `The steer was NOT delivered to session "${child.title}": ${sent.error}. Nothing was queued.`
       }
     }
     log.info(`会话 ${parentId} 向会话 ${childId} 插话 request=${requestId}`)
-    return { id: childId, title: child.title }
+    if (!quote) return { id: childId, title: child.title }
+    markUserWordsSent(childId, quote.through)
+    return { id: childId, title: child.title, userWords: quote.words.length }
   }
 
   // ─── 完成通知（P2-10 PIN-01） ──────────────────

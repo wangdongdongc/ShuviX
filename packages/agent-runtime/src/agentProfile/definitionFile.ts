@@ -27,6 +27,10 @@
  *     它按 cwd 扫盘、顺序即优先级，是清单不是布尔，与「在不在项目里」无关；
  *     指令文件的「选哪个」曾是会话设置里的单选下拉，现已整体收进本文件 ——
  *     一个 agent 该吃哪份项目文档，是它的人格设定，不是每个会话各自的临时选择；
+ *   - 布尔开关 `shuvix-user-words`（**用户原话**：这个 agent 作为子会话收父会话的消息时，宿主把用户在父会话里自己
+ *     写的话原样附上 —— 打的消息与对 ask 卡片的回答，父 agent 改不了；桌面 services/userWords.ts）。它写在**接收方**
+ *     档案里，因为要不要知道用户的原话是这个 agent 怎么干活的一部分（2026-11-07 裁定，与 `shuvix-thinking` 同理：
+ *     运行方式写在档案里，打开就看得见，而不是宿主替它悄悄决定）；省略 = false；
  *   - `shuvix-builtin: true` 是随包发布的内置档案的**自述标记**：本解析器不读它
  *     （builtin/user 的判定在加载方——buildBuiltinProfile 恒标 builtin，目录扫描恒标 user），
  *     它只在 md 里声明「这份文案出自 ShuviX 内置集」。GUI 写出的用户档案不会带上它
@@ -56,7 +60,7 @@
  * 合并掉的 `shuvix-project-prompt` / `shuvix-project-memory` 与通用 `tools` key
  * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` /
  * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、`shuvix-thinking` 仅接受那几档之一、
- * 布尔 key `shuvix-project-awareness` 仅接受布尔，
+ * 布尔 key `shuvix-project-awareness` / `shuvix-user-words` 仅接受布尔，
  * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级 —— 包括
  * `shuvix-instruction-files: true` 这种改制前的写法：布尔已不再是合法取值，
  * 拒绝理由里直说「改列文件名」，比默默按老语义猜一份清单可诊断。
@@ -107,6 +111,10 @@ export interface ParsedAgentFile {
    * （按根会话的项目解析）；缺省 false。
    */
   projectAwareness: boolean
+  /**
+   * `shuvix-user-words`：作为子会话时收不收父会话里用户的原话（宿主原样附上）；只在为真时出现，省略 = false
+   */
+  userWords?: boolean
 }
 
 /**
@@ -172,6 +180,8 @@ export interface AgentSharedFields {
   thinkingLevel?: SelectableThinkingLevel
   instructionFiles: string[]
   projectAwareness: boolean
+  /** `shuvix-user-words`；只在为真时出现 */
+  userWords?: boolean
   knowledge?: boolean
 }
 
@@ -202,6 +212,10 @@ export function parseAgentSharedFields(
   const projectAwarenessRaw = fields['shuvix-project-awareness'] ?? null
   if (projectAwarenessRaw !== null && typeof projectAwarenessRaw !== 'boolean') {
     return { error: "'shuvix-project-awareness' must be a boolean (true / false)" }
+  }
+  const userWordsRaw = fields['shuvix-user-words'] ?? null
+  if (userWordsRaw !== null && typeof userWordsRaw !== 'boolean') {
+    return { error: "'shuvix-user-words' must be a boolean (true / false)" }
   }
   const instructionRaw = fields['shuvix-instruction-files'] ?? null
   if (instructionRaw !== null && typeof instructionRaw !== 'string') {
@@ -238,7 +252,8 @@ export function parseAgentSharedFields(
       model: stringField(fields, 'shuvix-model'),
       ...(isSelectableThinkingLevel(thinking) ? { thinkingLevel: thinking } : {}),
       instructionFiles,
-      projectAwareness: projectAwarenessRaw ?? false
+      projectAwareness: projectAwarenessRaw ?? false,
+      ...(userWordsRaw === true ? { userWords: true } : {})
       // 只在为真时写出：类型上可选、省略等同 false（既有的档案字面量与往返断言零改动）
     }
   }
@@ -359,6 +374,7 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
     fields['shuvix-instruction-files'] = data.instructionFiles.join(', ')
   }
   if (data.projectAwareness) fields['shuvix-project-awareness'] = true
+  if (data.userWords) fields['shuvix-user-words'] = true
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()
   const body = data.systemPrompt.trim()

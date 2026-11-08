@@ -487,6 +487,40 @@ describe('SessionTool — 子会话 action', () => {
     }
   })
 
+  it('UW-T 附了用户原话：回执多一句事实（几条、原样、在你的文字之后），不带内容；插话同样', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1', userWords: 3 })
+    const started = textOf(
+      await executeTool(tool, 'tc-1', {
+        action: 'prompt-session',
+        session_id: 'sub-1',
+        message: 'go'
+      })
+    )
+    expect(started.split('\n\n')[2]).toBe(
+      "ShuviX attached 3 of the user's own messages from this session to it, verbatim, after your text — you need not restate what the user said."
+    )
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1', userWords: 1 })
+    expect(
+      textOf(
+        await executeTool(tool, 'tc-2', {
+          action: 'prompt-session',
+          session_id: 'sub-1',
+          message: 'go'
+        })
+      )
+    ).toContain("ShuviX attached 1 of the user's own message from this session")
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
+    expect(
+      textOf(
+        await executeTool(tool, 'tc-3', {
+          action: 'prompt-session',
+          session_id: 'sub-1',
+          message: 'go'
+        })
+      )
+    ).not.toContain('ShuviX attached')
+  })
+
   it('BG-39 回执**不带任何内容**（内容会永久留在上下文并被每步重发）；收尾指引说清两种叫回来的时机与 wait', async () => {
     mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
     const started = textOf(

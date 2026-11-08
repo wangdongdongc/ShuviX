@@ -56,6 +56,7 @@ style, each with file and line. Never modify files.
 | `shuvix-thinking`           | 字符串           | 否   | 这个 agent 的思考深度：`off` / `low` / `medium` / `high` / `xhigh` / `max`（大小写不限）。派发出去的 agent 按它跑；被子会话的 `agent_profile` 点名时，它是那条子会话的初始档位（之后可在会话里改）；做会话的根（基座）时忽略，以会话里选的为准。省略 = 跟随派发它的一方（子会话跟随父会话）。别的值让文件非法。 |
 | `shuvix-instruction-files`  | 逗号分隔的字符串 | 否   | 这个 agent 读哪些项目指令文件：**相对工作目录**的路径，按优先级排列 —— 第一个存在且非空的被注入，至多一个。绝对路径、`..` 段或布尔值都让文件非法。省略 = 不注入。                                                                            |
 | `shuvix-project-awareness`  | 布尔             | 否   | `true` = 让 agent 知道自己在哪个项目里：项目提示词追加到它的系统提示词（按根会话的项目解析；会话不属于项目时什么也不注入）。必须是真正的 YAML 布尔值。缺省 `false`。                                                       |
+| `shuvix-user-words`         | 布尔             | 否   | `true` = 这个 agent 作为子会话时，父会话发给它的每条消息都附上用户在父会话里自己写的话（打的消息、对父会话提问的回答），由 ShuviX 原样引用、放在父会话写的那段之后，让它分得清哪些是用户的原话、哪些是父会话的转述。第一条附到目前为止的（首条与最近 10 条，每条至多 4000 字），之后只附新说的。只对父会话自己的子会话生效。必须是真正的 YAML 布尔值。缺省 `false`；内置的 `coding` 开着。 |
 | `shuvix-builtin`            | 布尔             | 否   | ShuviX 自带文件的自述标记。解析器不读；不要加进用户文件。                                                                                                                                                                                  |
 | `shuvix-id`                 | 字符串            | 否   | 对象 id —— 文件移到哪里，ShuviX 都凭它认出这份文件。ShuviX 新建的文件里是 UUID，自带文件里是 `<类型>:builtin:<名字>`；副本与原件共用同一个 id。由 ShuviX 写入，不要动。写错只发一条提示，不会让整份文件非法。                                                                                 |
 
@@ -128,6 +129,7 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 - `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` 不是字符串（写成 YAML 列表是最常见的错）；
 - `shuvix-thinking` 不是 `off` / `low` / `medium` / `high` / `xhigh` / `max` 之一（写成 `false` 也不行 —— 写 `off`）；
 - `shuvix-project-awareness` 不是布尔；
+- `shuvix-user-words` 不是布尔；
 - `shuvix-instruction-files` 的某一项是绝对路径或用 `..` 越出工作目录，或这个键写成了 2026 年之前的
   布尔形式（`shuvix-instruction-files: true` —— 改列文件名）。
 

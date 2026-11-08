@@ -104,6 +104,30 @@ describe('P2-14 · transcript digest over real flows', () => {
     expect(requestTexts(t.kit, 0).join('\n')).toContain('PAYLOAD-K1')
   })
 
+  it('UWD-1 tokens: copy —— 标记换成复制会得到的字：命令是标签、粘贴是全文；缺省照旧留标记', async () => {
+    const t = await makeHost({ ephemeral: [SID] })
+    const session = await t.open(SID)
+    const paste = { type: 'paste', id: 'paste-1', displayText: '[p]', payload: 'PASTE-BODY' }
+    t.kit.queue(answer('A1'))
+    expect(
+      await session.submitUser('run PAYLOAD-K1 with PASTE-BODY', {
+        display: {
+          content: 'run {{shuvixInlineToken:k1}} with {{shuvixInlineToken:p1}}',
+          tokens: { ...K1, p1: paste }
+        }
+      })
+    ).toEqual({})
+    const copy = (await readTranscriptDigest(session, { tokens: 'copy' })).items
+    expect(copy.filter((i) => i.kind === 'user').map((i) => i.text)).toEqual([
+      'run /deploy with PASTE-BODY'
+    ])
+    expect(JSON.stringify(copy)).not.toContain('PAYLOAD-K1')
+    const markers = (await readTranscriptDigest(session)).items
+    expect(markers.filter((i) => i.kind === 'user').map((i) => i.text)).toEqual([
+      'run {{shuvixInlineToken:k1}} with {{shuvixInlineToken:p1}}'
+    ])
+  })
+
   it(
     'P2-14-06b a model error that exhausts retries: only the human words, the stored error attempts are invisible',
     async () => {

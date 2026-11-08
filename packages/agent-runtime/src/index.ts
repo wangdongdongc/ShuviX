@@ -874,6 +874,7 @@ export {
   type TranscriptAssistantItem,
   type TranscriptDigest,
   type TranscriptDigestItem,
+  type TranscriptDigestOptions,
   type TranscriptDigestSession,
   type TranscriptUserItem
 } from './durable/transcriptDigest'

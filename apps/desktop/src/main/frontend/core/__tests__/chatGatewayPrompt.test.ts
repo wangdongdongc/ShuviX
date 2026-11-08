@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
+import { withUserWords } from '@shuvix/chat-protocol/userWords'
 import type { ClientContext } from '../../../ipc/registry'
 import {
   createChromeContext,
@@ -174,5 +175,31 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
       undefined,
       undefined
     ])
+  })
+  it('UW-G1 被驱动的发送带了用户原话 → 原文 + 引用块 + 发送方说明（认领上面那段）；drive 里不留 userWords', async () => {
+    const quote = {
+      sessionId: 'P1',
+      scope: 'start' as const,
+      words: [{ kind: 'message' as const, ts: 1, text: '金额用美元' }],
+      omitted: 0
+    }
+    await chatGateway.prompt('s1', 'task', undefined, undefined, { ...DRIVE, userWords: quote })
+    const quoted = withUserWords('task', undefined, quote)
+    const sent = withSessionSender(
+      quoted.text,
+      quoted.display,
+      { kind: 'session', sessionId: DRIVE.driven.parentId },
+      { userWords: true }
+    )
+    expect(prompt.mock.calls[0]).toStrictEqual([
+      sent.text,
+      undefined,
+      sent.display,
+      DRIVE,
+      undefined,
+      undefined
+    ])
+    expect(sent.text).toContain('\n\n<user-words from="parent-session" scope="start">')
+    expect(sent.text).toContain('except the <user-words> block')
   })
 })

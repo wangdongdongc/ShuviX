@@ -98,8 +98,8 @@ export interface FakeRequest {
   /** `JSON.stringify(body)` —— 「发给模型的 payload 里有没有某段文本」的便捷断言入口 */
   raw: string
   /**
-   * 最后一条 user 消息的纯文本，不带别的会话发来的消息末尾的发送方说明（chat-protocol sessionSender.ts）：
-   * 按文字认领请求的 spec 不关心它。要看模型收到的全文用 `lastUserFullText`
+   * 最后一条 user 消息的纯文本，不带别的会话发来的消息末尾的发送方说明（chat-protocol sessionSender.ts）与父会话附上的
+   * 用户原话（userWords.ts）：按文字认领请求的 spec 不关心它们。要看模型收到的全文用 `lastUserFullText`
    */
   lastUserText: string
   /** 最后一条 user 消息的纯文本，模型收到的全文 */
@@ -146,6 +146,8 @@ const asChunks = (value: string | string[] | undefined): string[] => {
 /** OpenAI 消息 content（字符串或内容块数组）→ 纯文本 */
 /** 别的会话发来的消息末尾的发送方说明 */
 const SESSION_SENDER_NOTE_RE = /\n\n\[Sent by (?:your parent session|another session) \(id [^\n]*\]/
+/** 父会话附上的用户原话（chat-protocol userWords.ts）：与发送方说明一样是宿主加的，按文字认领时不算 */
+const USER_WORDS_BLOCK_RE = /\n\n<user-words from="parent-session"[\s\S]*?\n<\/user-words>/
 
 function textOfContent(content: unknown): string {
   if (typeof content === 'string') return content
@@ -336,7 +338,9 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       const record: FakeRequest = {
         body,
         raw: rawBody,
-        lastUserText: textOfContent(lastUser?.content).replace(SESSION_SENDER_NOTE_RE, ''),
+        lastUserText: textOfContent(lastUser?.content)
+          .replace(USER_WORDS_BLOCK_RE, '')
+          .replace(SESSION_SENDER_NOTE_RE, ''),
         lastUserFullText: textOfContent(lastUser?.content),
         aborted: false
       }

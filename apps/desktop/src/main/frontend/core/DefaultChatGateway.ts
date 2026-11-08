@@ -51,6 +51,7 @@ import { mcpService } from '../../services/mcpService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
+import { withUserWords, type UserWordsQuote } from '@shuvix/chat-protocol/userWords'
 import { withoutMidRunNote } from '@shuvix/chat-protocol/midRunNote'
 import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import { isDrivingOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
@@ -114,9 +115,12 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>,
-    drive?: DriveOptions,
+    driveWithWords?: DriveOptions & { userWords?: UserWordsQuote },
     secrets?: UserSecret[]
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
+    // 用户原话只属于这次发送的文字，不进运行时的驱动参数（那一份会随条目存下）
+    const { userWords, ...driveOnly } = driveWithWords ?? {}
+    const drive: DriveOptions | undefined = driveWithWords ? (driveOnly as DriveOptions) : undefined
     // 「重新生成」/ 回退后原样重发一条父会话代发的消息：沿用它的来源（§19.7）。只认紧接着的那一次、原文一字不差、
     // 两分钟之内 —— 改过的文字是人的话；不管用没用上、这次发送成不成都撤掉（在打开会话之前就取走），免得留给以后的某次发送
     // 采纳提议发的话不沿用：它的来源就是这次点击（连接 + 提议引用），哪怕碰巧与那条重发的原文相同
@@ -151,12 +155,17 @@ export class DefaultChatGateway implements ChatGateway {
     const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
     let promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
     let display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
-    // 别的会话发来的：模型要知道这不是用户说的、是哪条会话说的（sessionSender.ts）
+    // 别的会话发来的：模型要知道这不是用户说的、是哪条会话说的（sessionSender.ts）；父会话附了用户原话就先接上它
+    // （userWords.ts），发送方说明随之只认领它上面那段
     if (drive !== undefined) {
+      if (userWords) {
+        ;({ text: promptText, display } = withUserWords(promptText, display, userWords))
+      }
       ;({ text: promptText, display } = withSessionSender(
         promptText,
         display,
-        this.senderOf(sessionId, drive.driven.parentId)
+        this.senderOf(sessionId, drive.driven.parentId),
+        { userWords: userWords !== undefined }
       ))
     }
 
@@ -185,12 +194,18 @@ export class DefaultChatGateway implements ChatGateway {
   async steerDriven(
     sessionId: string,
     text: string,
-    drive: { requestId: string; parentId: string }
+    drive: { requestId: string; parentId: string; userWords?: UserWordsQuote }
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
     const session = sessionService.getAgentSession(sessionId)
     if (!session) return { error: 'The session is not open', code: 'closed' }
     try {
-      const sent = withSessionSender(text, undefined, this.senderOf(sessionId, drive.parentId))
+      const quoted = drive.userWords ? withUserWords(text, undefined, drive.userWords) : undefined
+      const sent = withSessionSender(
+        quoted?.text ?? text,
+        quoted?.display,
+        this.senderOf(sessionId, drive.parentId),
+        { userWords: quoted !== undefined }
+      )
       const result = await session.admitSteer(sent.text, {
         requestId: drive.requestId,
         source: sessionRecords.drivingSourceOf(sessionId, drive.parentId),

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 import { sessionSenderToken } from '@shuvix/chat-protocol/sessionSender'
+import { userWordsToken } from '@shuvix/chat-protocol/userWords'
 import { buildAtToken } from '@shuvix/chat-protocol/utils/inlineTokens'
 import {
   payloadPreview,
@@ -164,6 +165,21 @@ describe('TD-1 会话引用与发送方', () => {
     expect(tokenKind(path)).toBe('file')
     expect(tokenTitle(path)).toBe('session:notes.md')
     expect(tokenSourcePath(path)).toBe('session:notes.md')
+  })
+
+  it('UW-C 用户原话判 userWords，标题是条数，没有来源路径', () => {
+    const quote = userWordsToken({
+      sessionId: 'P1',
+      scope: 'start',
+      words: [
+        { kind: 'message', ts: 1, text: 'a' },
+        { kind: 'message', ts: 2, text: 'b' }
+      ],
+      omitted: 0
+    })
+    expect(tokenKind(quote)).toBe('userWords')
+    expect(tokenTitle(quote)).toBe('2')
+    expect(tokenSourcePath(quote)).toBeUndefined()
   })
 
   it('发送方判 sender，标题是 name，来源是 id；没有 name 标题是空串', () => {

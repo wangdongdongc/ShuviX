@@ -10,6 +10,7 @@
  */
 import { isMidRunNoteToken } from './midRunNote'
 import { isSessionSenderToken } from './sessionSender'
+import { isUserWordsToken } from './userWords'
 import type { InlineToken } from './types/chatMessage'
 import { makeTokenMarker, TOKEN_RE } from './utils/inlineTokens'
 
@@ -73,9 +74,14 @@ export function isTriggerEventToken(token: unknown): boolean {
   return (token as { type?: unknown }).type === TRIGGER_EVENT_TOKEN_TYPE
 }
 
-/** 系统写的 Token：运行中插话的说明、触发事件、别的会话发来的消息的发送方 */
+/** 系统写的 Token：运行中插话的说明、触发事件、别的会话发来的消息的发送方、宿主附上的用户原话 */
 function isSystemToken(token: unknown): boolean {
-  return isMidRunNoteToken(token) || isTriggerEventToken(token) || isSessionSenderToken(token)
+  return (
+    isMidRunNoteToken(token) ||
+    isTriggerEventToken(token) ||
+    isSessionSenderToken(token) ||
+    isUserWordsToken(token)
+  )
 }
 
 /**

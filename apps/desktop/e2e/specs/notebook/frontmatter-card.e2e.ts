@@ -262,13 +262,16 @@ describe('frontmatter 属性卡', () => {
       )
     ).toBe('AGENTS.md, CLAUDE.md')
 
-    // 布尔行只有项目感知（缺省 unset —— instruction-files 是清单不是开关，项目提示词与项目记忆
-    // 已合成项目感知一个开关，会话感知已退役）；夹具里写着 true 的内置自述标记 shuvix-builtin
+    // 布尔行是项目感知与用户原话（缺省都 unset —— instruction-files 是清单不是开关，项目提示词与项目记忆
+    // 已合成项目感知一个开关，会话感知已退役；用户原话是 2026-11-07 加的 shuvix-user-words）；夹具里写着 true 的内置自述标记 shuvix-builtin
     // 不是开关，是标题行上一枚只读标签（文案是本地化的「内置」）
     const toggles = await app.main.eval<string[][]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((n) => [n.closest('.cm-shuvix-fmcard-row')?.dataset.key ?? '', n.dataset.state])`
     )
-    expect(toggles).toEqual([['shuvix-project-awareness', 'unset']])
+    expect(toggles).toEqual([
+      ['shuvix-project-awareness', 'unset'],
+      ['shuvix-user-words', 'unset']
+    ])
     expect(
       await app.main.eval<string | null>(
         `document.querySelector('.cm-shuvix-fmcard-head .cm-shuvix-fmcard-tag[data-key="shuvix-builtin"]')?.textContent ?? null`

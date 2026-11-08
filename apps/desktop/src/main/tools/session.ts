@@ -242,6 +242,14 @@ interface SessionToolParams {
 const COLLECT_HINT =
   'You do not have to wait here: when the turn ends, or stops to ask you something, you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you need the answer inside this same turn, collect it with action "wait-for-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
+/**
+ * 这次随消息附上了用户原话（services/userWords.ts）：父 agent 要知道这件事，才不必在消息里再转述用户说过的话。只说事实
+ */
+function userWordsLine(n: number | undefined): string {
+  if (!n) return ''
+  return `ShuviX attached ${n} of the user's own ${n === 1 ? 'message' : 'messages'} from this session to it, verbatim, after your text — you need not restate what the user said.`
+}
+
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
 /** 像占位符的一段（含模型写坏的形式）—— 没有就不必去别的会话找表项 */
 const PLACEHOLDER_LIKE = /[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}/
@@ -349,10 +357,12 @@ function renderTurn(
   res: PromptOutcome,
   startedLine: string
 ): ToolResult<SessionToolDetails | undefined> {
+  const attached = userWordsLine(res.userWords)
   if (res.kind === 'started') {
     return backgroundText(
       `<session id="${attr(res.id)}" status="running"/>`,
       startedLine,
+      attached,
       COLLECT_HINT
     )
   }
@@ -367,11 +377,13 @@ function renderTurn(
   if (!res.info) {
     return backgroundText(
       `<session id="${attr(res.id)}" status="waiting-input"/>`,
+      attached,
       'It stopped to ask something in the turn you started. See the question with "read-session".'
     )
   }
   return backgroundText(
     renderChild(res.info),
+    attached,
     'The turn is still open: once it is answered it carries on, and you are brought back when it ends.'
   )
 }
@@ -679,6 +691,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       res.earlier
         ? 'This steer was already delivered earlier — nothing was sent again.'
         : 'Steer delivered — it reads it at its next step.',
+      userWordsLine(res.userWords),
       'Its reply comes back the way every turn does: as a notice when the turn ends, or to "wait-for-sessions" if you are waiting.'
     )
   }

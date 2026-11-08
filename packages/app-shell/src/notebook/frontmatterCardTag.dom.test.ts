@@ -7,7 +7,7 @@
  *   FT-2 没写、写成别的（字符串 "true"、yes / on / 1、null、列表、映射、块标量）→ 什么都不画，也不落通用行；
  *        True / TRUE 是 YAML 的布尔 true，照样画
  *   FT-3 YAML 写坏：视图照建，报错横幅在，没有标签、没有字段区
- *   FT-4 只读与可编辑长得一样：标签的有无相同，开关行都只有 shuvix-project-awareness，只读时才 disabled
+ *   FT-4 只读与可编辑长得一样：标签的有无相同，开关行都是 shuvix-project-awareness 与 shuvix-user-words，只读时才 disabled
  *   FT-5 标签是死的（mousedown 不改文档、不动选区、卡片不塌）；旁边的开关照常改那一行、不碰 shuvix-builtin；
  *        标签跟着缓冲区走
  *
@@ -178,7 +178,7 @@ describe('属性卡 —— 内置标签', () => {
     ['true', 1],
     ['false', 0]
   ])(
-    'FT-4 shuvix-builtin: %s：只读与可编辑一个样，开关只有 awareness，只读时才禁用',
+    'FT-4 shuvix-builtin: %s：只读与可编辑一个样，开关是 awareness 与 user-words，只读时才禁用',
     (value, tags) => {
       const doc = docOf('agent v1', [`shuvix-builtin: ${value}`])
       for (const readOnly of [false, true]) {
@@ -187,9 +187,12 @@ describe('属性卡 —— 内置标签', () => {
 
         const toggles = togglesOf(view)
         expect(toggles.map(keyOfToggle), `readOnly=${readOnly}`).toEqual([
-          'shuvix-project-awareness'
+          'shuvix-project-awareness',
+          'shuvix-user-words'
         ])
-        expect(toggles[0].disabled, `readOnly=${readOnly}`).toBe(readOnly)
+        for (const toggle of toggles) {
+          expect(toggle.disabled, `readOnly=${readOnly}`).toBe(readOnly)
+        }
       }
     }
   )

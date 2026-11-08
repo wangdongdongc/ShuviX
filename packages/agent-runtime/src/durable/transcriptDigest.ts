@@ -59,6 +59,7 @@ import {
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol/midRunNote'
 import { withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
+import { resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveInputSources, resolveSuggestedEntries, type InputSource } from './inputSource'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
@@ -313,8 +314,17 @@ function answeredByOf(details: unknown): DrivingSessionRef | undefined {
  * 读一条打开着的 durable 会话的转写摘要（当前对话的活上下文）。只读：不开启调度器、不建 agent、不写。
  * 句柄已关停 → `SessionClosedError`（从不悄悄重开）；其余失败原样抛出。
  */
+/**
+ * 读法选项。`tokens`：内联 Token 在用户文本里的样子 —— `markers`（缺省，自动审查要的）原样留着标记；`copy` 换成用户
+ * 复制那条消息会得到的字（粘贴还原成粘贴的全文，文件 / 命令 / 知识条目是人读标签，不展开文件内容），引用用户原话用它。
+ */
+export interface TranscriptDigestOptions {
+  tokens?: 'markers' | 'copy'
+}
+
 export async function readTranscriptDigest(
-  session: TranscriptDigestSession
+  session: TranscriptDigestSession,
+  options: TranscriptDigestOptions = {}
 ): Promise<TranscriptDigest> {
   try {
     const conversation = await session.currentConversation()
@@ -327,7 +337,11 @@ export async function readTranscriptDigest(
     const displayTexts = new Map<EntryId, string>()
     // 插话说明与触发事件是系统写的，不进「用户说了什么」（docs/task-list-design.md §2.4）
     for (const [entryId, display] of displays) {
-      displayTexts.set(entryId, withoutSystemTokens(display.content, display.tokens))
+      const content = withoutSystemTokens(display.content, display.tokens)
+      displayTexts.set(
+        entryId,
+        options.tokens === 'copy' ? resolveTokensForCopy(content, display.tokens) : content
+      )
     }
     return { items: digestEntries(view.entries, displayTexts, sources, suggested) }
   } catch (error) {

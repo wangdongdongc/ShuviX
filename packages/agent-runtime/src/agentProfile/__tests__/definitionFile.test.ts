@@ -93,6 +93,20 @@ describe('parseAgentDefinitionFile', () => {
     expect(parseAgentDefinitionFile(md, 'x')!.model).toBe('openai/gpt-4o')
   })
 
+  it('UWK-1 shuvix-user-words：true → userWords；省略 / false → 不出现；非布尔 → 文件非法；序列化只在为真时写', () => {
+    const on = parseAgentDefinitionFile('---\nshuvix-user-words: true\n---\nbody', 'x')!
+    expect(on.userWords).toBe(true)
+    expect(serializeAgentDefinitionFile(on)).toContain('shuvix-user-words: true')
+    const off = parseAgentDefinitionFile('---\nshuvix-user-words: false\n---\nbody', 'x')!
+    expect('userWords' in off).toBe(false)
+    expect(serializeAgentDefinitionFile(off)).not.toContain('shuvix-user-words')
+    expect('userWords' in parseAgentDefinitionFile('---\nname: x\n---\nbody', 'x')!).toBe(false)
+    expect(
+      parseAgentDefinitionFile('---\nshuvix-user-words: yes please\n---\nbody', 'x')
+    ).toBeNull()
+    expect(parseAgentDefinitionFile('---\nshuvix-user-words: [a]\n---\nbody', 'x')).toBeNull()
+  })
+
   it('注入开关(project-awareness)非布尔 → 文件非法', () => {
     expect(
       parseAgentDefinitionFile('---\nshuvix-project-awareness: [a]\n---\nbody', 'x')
@@ -976,6 +990,7 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-tools',
       'shuvix-instruction-files',
       'shuvix-project-awareness',
+      'shuvix-user-words',
       'shuvix-builtin',
       'shuvix-id'
     ])
@@ -989,12 +1004,12 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
     })
     expect(parseAgentDefinitionFile('---\nshuvix-builtin: nope\n---\nbody', 'x')).not.toBeNull()
 
-    // boolean kind 的键 = 解析器强制布尔的唯一一个（非布尔即整份非法）
+    // boolean kind 的键 = 解析器强制布尔的那两个（非布尔即整份非法）
     const booleanKeys = agentDescriptor.fields
       .filter((f) => f.kind === 'boolean')
       .map((f) => f.key)
       .sort()
-    expect(booleanKeys).toEqual(['shuvix-project-awareness'])
+    expect(booleanKeys).toEqual(['shuvix-project-awareness', 'shuvix-user-words'])
     for (const key of booleanKeys) {
       expect(parseAgentDefinitionFile(`---\n${key}: nope\n---\nbody`, 'x'), key).toBeNull()
       expect(parseAgentDefinitionFile(`---\n${key}: true\n---\nbody`, 'x'), key).not.toBeNull()

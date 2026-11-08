@@ -53,6 +53,10 @@ const mocks = vi.hoisted(() => ({
   ensureAgentSession: vi.fn(),
   deliver: vi.fn(),
   gatewayPrompt: vi.fn(),
+  // 用户原话（services/userWords.ts）：档案收不收、读出来的那几条、游标前移 —— 缺省不收（UW-R 组按用例开）
+  receivesUserWords: vi.fn<(id: string) => boolean>(),
+  readUserWordsFor: vi.fn(),
+  markUserWordsSent: vi.fn(),
   // §19：往子会话这一轮里插话走网关的 steerDriven（S1）
   gatewaySteerDriven: vi.fn(),
   // §19：sessionService / 全局 broker 的应答入口 —— 代答**不该**经过它们（S8，反向断言用）
@@ -100,11 +104,16 @@ vi.mock('../../services/sessionService', () => ({
     peekAgentSession: mocks.peekAgentSession,
     ensureAgentSession: mocks.ensureAgentSession,
     deliverSubSessionNotice: mocks.deliver,
-    respondToInput: mocks.respondToInput
+    respondToInput: mocks.respondToInput,
+    receivesUserWords: mocks.receivesUserWords
   }
 }))
 // 会话权限表：list 列出权限表里的别的会话；缺省空表（defaultWorld），XS 组按用例喂会话行
 vi.mock('../acl', () => ({ sessionAcl: { sessionGrants: mocks.sessionGrants } }))
+vi.mock('../userWords', () => ({
+  readUserWordsFor: mocks.readUserWordsFor,
+  markUserWordsSent: mocks.markUserWordsSent
+}))
 // 按日历列出会话（listActive）读日历索引与 bot 身份：缺省桩掉（空日历、不是 bot 会话）；LA 组把读侧接回真
 // sessionDayPromptService（经下面的 database 替身落到 node:sqlite），bot 身份按用例喂
 vi.mock('../sessionDayPromptService', () => ({
@@ -340,6 +349,8 @@ function defaultWorld(): void {
   mocks.gatewayPrompt.mockResolvedValue({})
   // 插话送到 = {}（§19.6：网关回报受理结果）
   mocks.gatewaySteerDriven.mockResolvedValue({})
+  mocks.receivesUserWords.mockReturnValue(false)
+  mocks.readUserWordsFor.mockResolvedValue(undefined)
   mocks.findLastBySession.mockResolvedValue(undefined)
   mocks.resolveRunConfig.mockResolvedValue({ model: null, thinkingLevel: 'medium' })
   // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:）
@@ -2575,6 +2586,121 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       })
       expect(await steer()).toEqual({ id: CHILD, title: 'Child' })
       expect(registry.taskRegistry.list(PARENT).map((t) => t.status)).toEqual(['done'])
+    })
+  })
+
+  // ── UW. 用户原话（services/userWords.ts） ────────────────────────
+
+  describe('UW-R 用户原话随发送附上', () => {
+    const SEL = {
+      sessionId: PARENT,
+      scope: 'start' as const,
+      words: [
+        { kind: 'message' as const, ts: 10, text: 'a' },
+        { kind: 'message' as const, ts: 20, text: 'b' }
+      ],
+      omitted: 0,
+      through: 20
+    }
+
+    async function startQuoted(n: number): Promise<{ res: unknown; release: Release }> {
+      const release = hold()
+      const rid = R(n)
+      const pending = runner.prompt({
+        parentId: PARENT,
+        childId: CHILD,
+        message: 'go',
+        requestId: rid
+      })
+      await untilTask(rid)
+      child.isStreaming = true
+      await advance(60)
+      return { res: await pending, release }
+    }
+
+    it('UW-R1 收的档案：读父会话、随发送带上、落进去才前移游标、回执带条数', async () => {
+      mocks.receivesUserWords.mockReturnValue(true)
+      mocks.readUserWordsFor.mockResolvedValue(SEL)
+      const { res, release } = await startQuoted(31)
+      expect(res).toEqual({ kind: 'started', id: CHILD, userWords: 2 })
+      expect(mocks.receivesUserWords).toHaveBeenCalledWith(CHILD)
+      expect(mocks.readUserWordsFor).toHaveBeenCalledWith(PARENT, CHILD)
+      expect(mocks.gatewayPrompt.mock.calls[0][4]).toEqual({
+        requestId: R(31),
+        driven: { parentId: PARENT, background: true },
+        userWords: SEL
+      })
+      expect(mocks.markUserWordsSent).toHaveBeenCalledWith(CHILD, 20)
+      release()
+    })
+
+    it('UW-R2 不收的档案：不读、不带、不前移', async () => {
+      const { res, release } = await startQuoted(32)
+      expect(res).toEqual({ kind: 'started', id: CHILD })
+      expect(mocks.readUserWordsFor).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt.mock.calls[0][4]).not.toHaveProperty('userWords')
+      expect(mocks.markUserWordsSent).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('UW-R3 没发出去：报错，游标不动（那几条下次照样附上）', async () => {
+      mocks.receivesUserWords.mockReturnValue(true)
+      mocks.readUserWordsFor.mockResolvedValue(SEL)
+      mocks.gatewayPrompt.mockResolvedValueOnce({ error: 'busy', code: 'busy' })
+      const pending = runner.prompt({
+        parentId: PARENT,
+        childId: CHILD,
+        message: 'go',
+        requestId: R(33)
+      })
+      await advance(60)
+      expect(err(await pending)).toBeTruthy()
+      expect(mocks.gatewayPrompt.mock.calls[0][4]).toHaveProperty('userWords', SEL)
+      expect(mocks.markUserWordsSent).not.toHaveBeenCalled()
+    })
+
+    it('UW-R4 读不出来：照发、不带', async () => {
+      mocks.receivesUserWords.mockReturnValue(true)
+      mocks.readUserWordsFor.mockRejectedValue(new Error('closed'))
+      const { res, release } = await startQuoted(34)
+      expect(res).toEqual({ kind: 'started', id: CHILD })
+      expect(mocks.gatewayPrompt.mock.calls[0][4]).not.toHaveProperty('userWords')
+      expect(mocks.markUserWordsSent).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('UW-R4b 判不出档案收不收：照发、不带、不读', async () => {
+      mocks.receivesUserWords.mockImplementation(() => {
+        throw new Error('no profile')
+      })
+      const { res, release } = await startQuoted(35)
+      expect(res).toEqual({ kind: 'started', id: CHILD })
+      expect(mocks.readUserWordsFor).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt.mock.calls[0][4]).not.toHaveProperty('userWords')
+      release()
+    })
+
+    it('UW-R5 插话也带新说的、送到才前移、回执带条数', async () => {
+      await startBackground()
+      const since = { ...SEL, scope: 'since-last' as const, words: [SEL.words[1]], through: 30 }
+      mocks.receivesUserWords.mockReturnValue(true)
+      mocks.readUserWordsFor.mockResolvedValue(since)
+      expect(await steer()).toEqual({ id: CHILD, title: 'Child', userWords: 1 })
+      expect(mocks.gatewaySteerDriven).toHaveBeenCalledWith(CHILD, 'also X', {
+        requestId: STEER_RID,
+        parentId: PARENT,
+        userWords: since
+      })
+      expect(mocks.markUserWordsSent).toHaveBeenCalledWith(CHILD, 30)
+    })
+
+    it('UW-R6 插话没送到：游标不动', async () => {
+      await startBackground()
+      mocks.receivesUserWords.mockReturnValue(true)
+      mocks.readUserWordsFor.mockResolvedValue(SEL)
+      mocks.gatewaySteerDriven.mockResolvedValueOnce({ error: 'not running', code: 'idle' })
+      expect(err(await steer())).toContain('NOT delivered')
+      expect(mocks.markUserWordsSent).not.toHaveBeenCalled()
     })
   })
 

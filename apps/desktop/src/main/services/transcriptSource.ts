@@ -15,6 +15,7 @@
  */
 import {
   readTranscriptDigest,
+  type TranscriptDigestOptions,
   type TranscriptAskItem,
   type TranscriptAssistantItem,
   type TranscriptUserItem
@@ -74,8 +75,14 @@ export function transcriptItemsOf(messages: readonly ChatMessage[]): TranscriptI
   return items
 }
 
-/** 一条会话的转写（当前上下文，旧 → 新）；路由见文件头 */
-export async function readSessionTranscript(sessionId: string): Promise<TranscriptItem[]> {
+/**
+ * 一条会话的转写（当前上下文，旧 → 新）；路由见文件头。`options` 只作用于 durable 会话（旧格式会话没有显示侧车，
+ * 文本就是消息正文）
+ */
+export async function readSessionTranscript(
+  sessionId: string,
+  options: TranscriptDigestOptions = {}
+): Promise<TranscriptItem[]> {
   if (isLegacySession(sessionId)) {
     return transcriptItemsOf(await messageService.listBySession(sessionId))
   }
@@ -84,5 +91,5 @@ export async function readSessionTranscript(sessionId: string): Promise<Transcri
   }
   const session = await getSessionHost().peek(sessionId)
   if (session === undefined) return [] // 从未发过消息（存储不存在）/ 宿主已封存
-  return (await readTranscriptDigest(session)).items
+  return (await readTranscriptDigest(session, options)).items
 }

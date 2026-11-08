@@ -8,6 +8,7 @@ shuvix-tools: bash, powershell, read, write, edit, ask, suggest, show_image, ls,
 shuvix-displayName: Coding
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
+shuvix-user-words: true
 ---
 
 ## Identity

@@ -48,6 +48,11 @@ export interface AgentProfile {
    * 注入项目提示词（项目设置的纯文本；派生按根会话的项目解析）。
    */
   projectAwareness: boolean
+  /**
+   * `shuvix-user-words`：作为子会话收父会话的消息时，宿主把用户在父会话里自己写的话原样附上（桌面 services/userWords.ts）。
+   * 只在为真时出现，省略 = false。
+   */
+  userWords?: boolean
   /** 来源（决定 UI 能否编辑/删除） */
   source: 'builtin' | 'user'
   /** 配置所在路径（桌面=agent md 文件路径；扩展可为空） */

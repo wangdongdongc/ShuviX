@@ -32,19 +32,29 @@ function quotedTitle(title: string): string {
  * 不说的话模型容易拿这个 id 再发一条回去 —— 那条会话多半正忙，或要用户批准。用户在这条会话里回退后原样重发时，
  * 那一轮不再被驱动，这句就不成立了：那时 Token 照旧跟着（重发的还是那条会话的话），接受这点不准。
  */
-export function sessionSenderNoteText(sender: DrivingSessionRef): string {
+export function sessionSenderNoteText(
+  sender: DrivingSessionRef,
+  opts: { userWords?: boolean } = {}
+): string {
   const who = sender.kind === 'parent-session' ? 'your parent session' : 'another session'
   const name = sender.title ? ` — ${quotedTitle(sender.title)}` : ''
-  return `[Sent by ${who} (id ${sender.sessionId}${name}). An agent there wrote this, not the user. Your reply is returned to that session when this turn ends; you do not need to send it there yourself.]`
+  // 带了用户原话（userWords.ts）：那一块是用户写的，说明只认领它上面父 agent 写的那段
+  const author = opts.userWords
+    ? 'An agent there wrote this message, not the user — except the <user-words> block, which ShuviX quoted from the user.'
+    : 'An agent there wrote this, not the user.'
+  return `[Sent by ${who} (id ${sender.sessionId}${name}). ${author} Your reply is returned to that session when this turn ends; you do not need to send it there yourself.]`
 }
 
 /** 说明 Token 本身。payload 带开头的分隔：重新生成经 `resolveTokensForAgent` 把标记换回 payload，要与第一次发的全文逐字相同 */
-export function sessionSenderToken(sender: DrivingSessionRef): InlineToken {
+export function sessionSenderToken(
+  sender: DrivingSessionRef,
+  opts: { userWords?: boolean } = {}
+): InlineToken {
   return {
     type: SESSION_SENDER_TOKEN_TYPE,
     id: sender.sessionId,
     displayText: '',
-    payload: `${SEPARATOR}${sessionSenderNoteText(sender)}`,
+    payload: `${SEPARATOR}${sessionSenderNoteText(sender, opts)}`,
     name: sender.title || sender.sessionId
   }
 }
@@ -68,9 +78,10 @@ interface Display {
 export function withSessionSender(
   text: string,
   display: Display | undefined,
-  sender: DrivingSessionRef
+  sender: DrivingSessionRef,
+  opts: { userWords?: boolean } = {}
 ): { text: string; display: Display } {
-  const token = sessionSenderToken(sender)
+  const token = sessionSenderToken(sender, opts)
   return {
     text: `${text}${token.payload}`,
     display: {

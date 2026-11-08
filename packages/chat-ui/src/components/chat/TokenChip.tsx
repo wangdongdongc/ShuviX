@@ -7,6 +7,7 @@ import {
   CornerDownRight,
   FileText,
   MessagesSquare,
+  Quote,
   Terminal,
   Timer,
   X,
@@ -53,12 +54,16 @@ const KIND_META: Record<
   },
   // 触发器发的消息里的事件：标签说是哪种触发，标题是触发时间；与来源标签「触发器」同一个色槽
   trigger: { color: 'var(--viz-7)', Icon: Timer, labelKey: 'input.atSourceTimer' },
-  sender: { color: 'var(--viz-5)', Icon: MessagesSquare, labelKey: 'input.atSourceSender' }
+  sender: { color: 'var(--viz-5)', Icon: MessagesSquare, labelKey: 'input.atSourceSender' },
+  // 宿主附上的用户原话：与发送方同一个色槽（都说「这条消息从哪来」），图标是引号
+  userWords: { color: 'var(--viz-5)', Icon: Quote, labelKey: 'input.atSourceUserWords' }
 }
 
 /** 给人看的 payload：触发事件与发送方的 payload 开头是与原文之间的分隔（模型文本要逐字相同），显示时不要那两个空行 */
 function shownPayload(token: InlineToken, kind: TokenKind): string {
-  return kind === 'trigger' || kind === 'sender' ? token.payload.trimStart() : token.payload
+  return kind === 'trigger' || kind === 'sender' || kind === 'userWords'
+    ? token.payload.trimStart()
+    : token.payload
 }
 
 /** 类型色淡底（color-mix 直接吃 CSS 变量；hover 加深一档） */
@@ -162,7 +167,7 @@ export function TokenChip({
   const isNote = kind === 'note'
   const title = isNote ? (label ?? '') : tokenTitle(token)
   // 系统写的几种都跟在文字后面：和前面的文字隔开一点
-  const trailing = isNote || kind === 'trigger' || kind === 'sender'
+  const trailing = isNote || kind === 'trigger' || kind === 'sender' || kind === 'userWords'
   // 镜像层 at 知识 / 会话：前缀段（`@knowledge:` / `@session:`，含冒号）弱化、标题段着色；两段拼接 = displayText 逐字一致
   const prefixSplit =
     inline && (kind === 'knowledge' || kind === 'session')
@@ -236,7 +241,7 @@ export function TokenChip({
             title={
               isNote
                 ? title
-                : kind === 'trigger' || kind === 'sender'
+                : kind === 'trigger' || kind === 'sender' || kind === 'userWords'
                   ? `${label} · ${title}`
                   : token.name && token.name !== token.id
                     ? token.name
