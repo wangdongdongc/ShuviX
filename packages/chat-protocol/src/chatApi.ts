@@ -9,6 +9,7 @@
  * DB 行类型平行；Electron 侧通过编译期断言（renderer/src/host/chatApiContract.ts）保证
  * window.api 结构满足本契约，从而零漂移。
  */
+import type { GoalAction, GoalActResult, GoalStatus, GoalView } from '@shuvix/chat-protocol/types/goal'
 import type { RebuildSystemPromptResult, SystemPromptStatus } from './systemPromptStatus'
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
@@ -859,6 +860,12 @@ export interface HostApi {
      * 新来的前端靠这份补侧栏徽标。
      */
     askCounts: () => Promise<Record<string, number>>
+    /** 一条会话的目标（docs/goal-mode-design.md）；没有目标 → null。新来的前端补种用，之后跟 `goal` 事件 */
+    goal: (sessionId: string) => Promise<GoalView | null>
+    /** 对目标的操作：设定（发出那条人的消息）、暂停、继续、编辑、清除 */
+    goalAct: (params: { sessionId: string; action: GoalAction }) => Promise<GoalActResult>
+    /** 有进行中 / 暂停中目标的会话（侧栏徽标） */
+    goalStatuses: () => Promise<Record<string, GoalStatus>>
     /**
      * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的设置重建（正在跑的 run
      * 会被中止）。换模型 / 扩展能力用不着它（那些当场重配）；它是重建运行时的出口：MCP 工具列表变了、沙箱开关

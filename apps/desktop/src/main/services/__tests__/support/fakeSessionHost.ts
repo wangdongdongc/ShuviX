@@ -346,6 +346,10 @@ export class FakeDurableSession implements DurableSession {
     this.interrupted = false
   }
 
+  allowAutoResume(): void {
+    this.calls.push(['allowAutoResume'])
+  }
+
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {
     this.calls.push(['setThinkingLevel', level])
   }

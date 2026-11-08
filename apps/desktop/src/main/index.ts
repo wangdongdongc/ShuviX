@@ -43,11 +43,18 @@ import {
   focusSession,
   initNotificationService,
   notifyAskRaised,
+  setGoalActiveReader,
   notifyAskResolved,
   setRunErrorTextSource
 } from './services/notificationService'
 import { sessionRecords } from './services/sessionRecords'
-import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
+import {
+  sessionRunErrorText,
+  setSessionAskObserver,
+  setSessionRunObserver
+} from './services/sessionSignals'
+import { goalService } from './services/goalService'
+import { setSessionForkObserver } from './services/sessionFork'
 import { subSessionRunner } from './services/subSessionRunner'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { initPreviewWindowService } from './services/previewWindowService'
@@ -642,6 +649,15 @@ function initSharedWindowServices(): void {
       )
   })
   setRunErrorTextSource(sessionRunErrorText)
+  // 目标模式（docs/goal-mode-design.md）：根运行结束 → 判定 / 续跑 / 暂停；运行中查预算。有进行中目标的会话，
+  // 一轮正常收尾不弹「完成」（目标的结局另弹）
+  setSessionRunObserver({
+    rootRunStarted: (sessionId) => goalService.onRootRunStarted(sessionId),
+    rootRunEnded: (sessionId, reason) => goalService.onRootRunEnded(sessionId, reason)
+  })
+  setGoalActiveReader((sessionId) => goalService.isActive(sessionId))
+  sessionService.onDeleting((sessionId) => goalService.forget(sessionId))
+  setSessionForkObserver((sourceId, forkId) => goalService.noteForked(sourceId, forkId))
 
   // 初始化 widget 独立窗口服务（owns widget app 窗口）
   step('windowServices › widget', () => initWidgetWindowService({ getThemeBgColor }))
@@ -1059,6 +1075,11 @@ app.whenReady().then(async () => {
   step('botService.seedBuiltinBots', () => botService.seedBuiltinBots(i18next.language || 'en'))
   // 定时器开始之前：上个进程没收尾的运行先记清楚
   step('triggerLogService.sweepInterrupted', () => triggerLogService.sweepInterrupted())
+  // 上个进程留下的进行中目标：会话空闲的暂停（restart），被中断的等用户点继续（打开会话从不 resume）
+  step('goalService.sweepOnStartup', () => {
+    void goalService.sweepOnStartup().catch((error: unknown) => log.warn(`目标启动扫描失败: ${String(error)}`))
+  })
+  app.on('before-quit', () => goalService.dispose())
   step('builtinTimer.start', () =>
     builtinTimer.start((payload) => botTriggers.fire('timer.fired', payload))
   )

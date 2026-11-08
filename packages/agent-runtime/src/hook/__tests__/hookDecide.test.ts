@@ -11,6 +11,8 @@
  *   HD-31       监控面；
  *   HD-32…35    兜底与类型：绝不 reject、观测回调抛错、编译期收窄、payload 在入口快照；
  *   HD-36       全局埋点（timer.fired）不走 hook 的 fire：类型上拦住，绕过类型也只记一笔不派发。
+ *   HK-2 / HK-3 goal.check（目标模式）：两个 hook 的结论按 not_met > impossible > met 合并、没有意见的不算；
+ *               when 为假 / 没有绑定 → null；一个 hook 已交卷、另一个挂着时外部中止 → null（不是那份结论）。
  *
  * 夹具见 ./harness.ts（permissionPayload / verdict / scriptedRunTask；观测面 = onRun 事件 + logger 行）。
  */
@@ -29,7 +31,8 @@ import {
 } from '../hookRunner'
 import type { ParsedHookFile } from '../hookFile'
 import { renderHookPrompt } from '../hookPrompt'
-import type { TimerFiredPayload } from '../triggerPoints'
+import { DECIDE_SPECS, type GoalCheckPayload, type TimerFiredPayload } from '../triggerPoints'
+import type { GoalVerdict } from '@shuvix/chat-protocol/types/goal'
 import type { SubAgentModelConfig } from '../../subagent/types'
 import {
   MODEL,
@@ -1263,5 +1266,96 @@ describe('兜底与类型', () => {
     for (const later of ['evil.example', 'channel: ssh', 'wipe my home', 'replaced']) {
       expect(prompt).not.toContain(later)
     }
+  })
+})
+
+describe('HK-2 / HK-3 goal.check 的合并与早退', () => {
+  const GOAL_TRIGGER = 'goal.check'
+  const goalHook = (name: string, over: Partial<ParsedHookFile> = {}): HookRegistryEntry =>
+    entryOf(
+      fileOf({ name, displayName: `Goal ${name}`, bindings: [{ trigger: GOAL_TRIGGER }], ...over })
+    )
+  const goalPayload = (over: Partial<GoalCheckPayload> = {}): GoalCheckPayload => ({
+    sessionId: 's1',
+    profileName: 'work',
+    title: 'T',
+    isDefaultTitle: false,
+    goal: {
+      id: 'g_1',
+      objective: 'Make e2e green',
+      turns: 1,
+      costUsd: 0.5,
+      limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
+      activeMinutes: 3
+    },
+    userMessages: [],
+    lastRun: { assistantText: 'done', toolCalls: [], filesWritten: [] },
+    ...over
+  })
+  const gv = (verdictKind: GoalVerdict['verdict'], who: string): GoalVerdict => ({
+    verdict: verdictKind,
+    reason: `from ${who}`
+  })
+
+  it.each<[string, GoalVerdict['verdict'] | null, GoalVerdict['verdict'] | null, 'A' | 'B' | null]>(
+    [
+      ['met / not_met', 'met', 'not_met', 'B'],
+      ['met / impossible', 'met', 'impossible', 'B'],
+      ['impossible / not_met', 'impossible', 'not_met', 'B'],
+      ['not_met / met', 'not_met', 'met', 'A'],
+      ['(no answer) / met', null, 'met', 'B'],
+      ['(no answer) / (no answer)', null, null, null]
+    ]
+  )('HK-2 A、B 依次（%s）→ 最严的那份胜出', async (_label, a, b, winner) => {
+    const noAnswer = { result: 'I think it is fine.' }
+    const script = scriptedRunTask({
+      decide: {
+        A: a === null ? noAnswer : verdictResult(gv(a, 'A')),
+        B: b === null ? noAnswer : verdictResult(gv(b, 'B'))
+      }
+    })
+    const h = makeRunner({ entries: [goalHook('A'), goalHook('B')], runTask: script.runTask })
+    const decision = await h.runner.decide(GOAL_TRIGGER, goalPayload())
+    if (winner === null) expect(decision).toBeNull()
+    else expect(decision).toEqual({ result: gv(winner === 'A' ? a! : b!, winner), hook: winner })
+    // 每次派发都带 goal.check 的结果契约
+    expect(script.paramsOf('A').resultContract?.schema).toBe(DECIDE_SPECS['goal.check'].schema)
+  })
+
+  it('HK-3 没有 hook 绑定 goal.check / 唯一 hook 的 when 为假 → null，不派发', async () => {
+    const none = makeRunner({
+      entries: [hookNamed('reviewer')],
+      runTask: async () => verdictResult(gv('met', 'x'))
+    })
+    expect(await none.runner.decide(GOAL_TRIGGER, goalPayload())).toBeNull()
+    expect(none.runTask).not.toHaveBeenCalled()
+
+    const gated = makeRunner({
+      entries: [
+        goalHook('A', { bindings: [{ trigger: GOAL_TRIGGER, when: 'event.goal.turns > 5' }] })
+      ],
+      runTask: async () => verdictResult(gv('met', 'A'))
+    })
+    expect(await gated.runner.decide(GOAL_TRIGGER, goalPayload())).toBeNull()
+    expect(gated.runTask).not.toHaveBeenCalled()
+    // 同一份 when 读得到嵌套的 goal 字段：turns 够了就命中
+    expect(
+      await gated.runner.decide(
+        GOAL_TRIGGER,
+        goalPayload({ goal: { ...goalPayload().goal, turns: 6 } })
+      )
+    ).toEqual({ result: gv('met', 'A'), hook: 'A' })
+  })
+
+  it('HK-3 A 已交卷 met、B 还挂着时外部 signal 落下 → null（不是 A 的 met）', async () => {
+    const script = scriptedRunTask({ decide: { A: verdictResult(gv('met', 'A')), B: 'gate' } })
+    const h = makeRunner({ entries: [goalHook('A'), goalHook('B')], runTask: script.runTask })
+    const controller = new AbortController()
+    const pending = h.runner.decide(GOAL_TRIGGER, goalPayload(), { signal: controller.signal })
+    await vi.waitFor(() => {
+      expect(h.ends().map((e) => e.run.hook)).toEqual(['A'])
+    })
+    controller.abort()
+    expect(await pending).toBeNull()
   })
 })

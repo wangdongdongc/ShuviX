@@ -8,6 +8,8 @@
  *   34-36 实时卡与 toolRuns      37-38 run.retry / run.compacting    39 队列
  *   41 询问                      42-43 上下文占用                    46-50 纯度、确定性、严格 JSON、外壳
  *   51 AgentView                 52 不依赖 Node、包入口导出          54 搬家后的导出身份
+ *   PJ-1 目标通知的 noticeKind（steer / 空闲续跑的 pi.user 按形状、写下的 shuvix.notice 按 data.kind）
+ *   PJ-2 合并的通知丢了目标种类（照样是通知）；设定目标那条是带 goal Token 的用户气泡，不是通知
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -25,6 +27,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as runtime from '../../../index'
 import { truncationDiagnostic, type ProcessToolOutputResult } from '../../../toolOutput/spill'
 import { EMPTY_REPLY_NOTICE_TEXT } from '../../emptyReply'
+import { goalSetMessage } from '@shuvix/chat-protocol/goalSet'
+import type { GoalRecord } from '@shuvix/chat-protocol/types/goal'
+import {
+  renderGoalBudget,
+  renderGoalCheckin,
+  renderGoalContinue,
+  renderGoalStatus,
+  renderGoalUpdated
+} from '../../../goal/goalNotices'
 import { imagePlaceholder } from '../../../toolResultText'
 import * as displayModule from '../display'
 import * as entryTextModule from '../entryText'
@@ -1244,5 +1255,57 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
       runState: 'busy'
     })
     expect(JSON.parse(JSON.stringify(view))).toStrictEqual(view)
+  })
+})
+
+describe('PJ · goal notices in the projection', () => {
+  const GOAL: GoalRecord = {
+    id: 'g_1',
+    objective: 'Make e2e green',
+    status: 'active',
+    setAt: 0,
+    limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
+    baselineCostUsd: 0,
+    turns: 2,
+    stalls: 0,
+    activeMs: 0,
+    activeSince: 0
+  }
+  const NOTICES: [string, string][] = [
+    ['goal-continue', renderGoalContinue(GOAL, 1, { reason: 'tests fail' })],
+    ['goal-checkin', renderGoalCheckin(GOAL, 31)],
+    ['goal-budget', renderGoalBudget(GOAL, 6)],
+    ['goal-updated', renderGoalUpdated(GOAL)],
+    ['goal-status', renderGoalStatus(GOAL, { event: 'met', reason: 'green' })]
+  ]
+
+  it('PJ-1 each goal tag: a pi.user (steer / idle continuation) and a written shuvix.notice both carry noticeKind = the tag', () => {
+    NOTICES.forEach(([kind, textValue], n) => {
+      const view = P([U(10 + n, textValue, 100), N(20 + n, textValue, kind, 200)])
+      expect(view.messages.map((m) => m.metadata)).toStrictEqual([
+        { isSystemNotice: true, noticeKind: kind },
+        { isSystemNotice: true, noticeKind: kind }
+      ])
+    })
+    // 空回复追问仍是它自己的种类
+    expect(P([U(1, EMPTY_REPLY_NOTICE_TEXT)]).messages[0]!.metadata).toStrictEqual({
+      isSystemNotice: true,
+      noticeKind: 'empty-reply'
+    })
+  })
+
+  it('PJ-2 a background notice joined with goal-continue: still a notice, noticeKind lost (pinned; B-9 known); the set message is a user bubble with the goal token', () => {
+    const joined = `${bg('t1', 'done')}\n\n${NOTICES[0]![1]}`
+    expect(P([U(1, joined)]).messages[0]!.metadata).toStrictEqual({ isSystemNotice: true })
+
+    const message = goalSetMessage({ objective: 'Make e2e green', goalId: 'g_1' })
+    const view = P([U(2, message.text, 100)], {
+      display: new Map([[2, display(message.display.content, message.display.tokens)]])
+    })
+    const [bubble] = view.messages
+    expect(bubble!.content).toBe(message.display.content)
+    expect(bubble!.metadata).toStrictEqual({ inlineTokens: message.display.tokens })
+    // 侧车没解析到：照样不是通知（以原文开头）
+    expect(P([U(3, message.text)]).messages[0]!.metadata).toStrictEqual({})
   })
 })

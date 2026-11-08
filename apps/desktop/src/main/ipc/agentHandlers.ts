@@ -1,3 +1,5 @@
+import type { GoalAction } from '@shuvix/chat-protocol/types/goal'
+import { goalService } from '../services/goalService'
 import { defineHandler } from './registry'
 import { chatGateway, operationContext, createClientContext } from '../frontend'
 import { inputOriginOfClient } from '../utils/operationContext'
@@ -148,6 +150,19 @@ export function registerAgentHandlers(): void {
 
   /** 各会话挂着几条询问（只读）：窗口重建 / 客户端重连后补侧栏徽标 */
   defineHandler('agent:askCounts', () => chatGateway.pendingAskCounts())
+
+  /** 目标模式（docs/goal-mode-design.md）：一条会话的目标视图（只读，补种用） */
+  defineHandler('agent:goal', (_ctx, sessionId: string) => goalService.get(sessionId))
+
+  /** 对目标的操作：来源按这次操作的连接盖章（设定目标那条消息是人发的） */
+  defineHandler('agent:goalAct', (ctx, params: { sessionId: string; action: GoalAction }) =>
+    operationContext.run(createClientContext(ctx, params.sessionId), () =>
+      goalService.act(params.sessionId, params.action, inputOriginOfClient(ctx))
+    )
+  )
+
+  /** 有进行中 / 暂停中目标的会话（只读）：侧栏徽标 */
+  defineHandler('agent:goalStatuses', () => goalService.statuses())
 
   /**
    * 销毁会话的根 Agent 运行时（会话横幅 agent 胶囊上的 X）：会话与历史都在，下一条消息按

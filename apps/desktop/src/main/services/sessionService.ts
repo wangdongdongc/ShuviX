@@ -201,6 +201,14 @@ interface SessionConfigOverrides {
  * agent_created / agent_closing 事件归运行时的锁（第一次发送时创建，K3）。
  */
 export class SessionService {
+  /** 删除会话时要先收尾的（目标模式的计时器与状态表 —— 由 main 入口登记，免得这里 import 回去成环） */
+  private readonly deleteListeners: Array<(sessionId: string) => void> = []
+
+  /** 登记删除会话时的收尾（在关停运行时之前调；抛错只记日志） */
+  onDeleting(listener: (sessionId: string) => void): void {
+    this.deleteListeners.push(listener)
+  }
+
   constructor() {
     // 后台任务 / 子会话跑完 → 告知该会话（见 deliverNotice）
     setBgTaskNotifier((sessionId, text) => void this.deliverNotice(sessionId, text))
@@ -979,6 +987,13 @@ export class SessionService {
     // ssh 的远端任务先走（经脱离的 ssh 停掉并删远端目录），之后枢纽的级联对它们什么也不做
     killRemoteTasksBySession(id)
     killBySession(id)
+    for (const listener of this.deleteListeners) {
+      try {
+        listener(id)
+      } catch (err) {
+        log.warn(`删除会话的收尾失败 session=${id}: ${err}`)
+      }
+    }
     // 父会话驱动着、此刻正在跑的那一轮：先照常中止（落定为用户停掉的 aborted），再删 —— 关停中的会话不报
     // driven 落定，直接删的话父会话永远等不到这一轮的结果（P2-12 PIN-06：删除 = 中止，通知照常走一条）。
     // 前台驱动的那次调用自己会收到落定，通知照旧被抑制

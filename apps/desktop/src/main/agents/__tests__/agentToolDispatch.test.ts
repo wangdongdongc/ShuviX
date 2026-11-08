@@ -76,7 +76,9 @@ function profileOf(name: string, source: 'builtin' | 'user' = 'builtin'): AgentP
 function defaultProfiles(): AgentProfile[] {
   return [
     ...[...BASE_PROFILE_NAMES].map((name) => profileOf(name)),
-    ...['coding', 'explore', 'titler', 'knowledge-writer'].map((name) => profileOf(name)),
+    ...['coding', 'explore', 'titler', 'knowledge-writer', 'goal-judge'].map((name) =>
+      profileOf(name)
+    ),
     profileOf(PERMISSION_REVIEWER_PROFILE_NAME),
     profileOf('my-helper', 'user')
   ]
@@ -124,6 +126,8 @@ function expectDispatchableOnly(names: string[]): void {
   expect(names).not.toContain(PERMISSION_REVIEWER_PROFILE_NAME)
   // 知识库写手同为宿主专用：只经 knowledge 工具的 submit 调起
   expect(names).not.toContain('knowledge-writer')
+  // 目标判定同为宿主专用：只经内置 goal-check hook 派发（干活的 agent 不能自己找判定员）
+  expect(names).not.toContain('goal-judge')
   for (const base of BASE_PROFILE_NAMES) expect(names, base).not.toContain(base)
   expect(names).toEqual(expect.arrayContaining(['coding', 'explore', 'titler']))
   expect(names).toContain('my-helper')
@@ -215,4 +219,29 @@ describe('派发工具：只由宿主派发的档案对 agent 不存在', () => 
     expect(await dispatch({ name: './my-reviewer.md' })).toBe('done')
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
   })
+})
+
+/**
+ * HO-1（目标模式，docs/goal-mode-design.md §4.2）：目标判定员 goal-judge 同为只由宿主派发 —— 干活的 agent 按名派它、
+ * 按路径派随包那份 md 或它的副本，都与查无此名 / 宿主专用同一口径，从不派发。
+ */
+describe('HO-1 goal-judge 对 agent 不存在', () => {
+  it('按名：与查无此名同一句 Unknown agent、不问注册表、不派发；可用名单里没有它', async () => {
+    const text = await dispatch({ name: 'goal-judge' })
+    const ghost = await dispatch({ name: 'ghost-agent' })
+    expect(text).toBe(ghost.replace('"ghost-agent"', '"goal-judge"'))
+    expect(availableOf(text)).not.toContain('goal-judge')
+    expect(mocks.getProfile.mock.calls).toEqual([['ghost-agent']])
+    expect(mocks.runTask).not.toHaveBeenCalled()
+  })
+
+  it.each(['./goal-judge.md', '/repo/.shuvix/agents/judge-copy.md'])(
+    '按路径（%s）解析出 name 恰是 goal-judge → 拒绝「run only by ShuviX」、不派发',
+    async (ref) => {
+      mocks.loadAgentFromRef.mockReturnValue(profileOf('goal-judge', 'user'))
+      const text = await dispatch({ name: ref })
+      expect(text).toContain('"goal-judge" is run only by ShuviX and cannot be dispatched')
+      expect(mocks.runTask).not.toHaveBeenCalled()
+    }
+  )
 })

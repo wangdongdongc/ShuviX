@@ -7,10 +7,13 @@
  *
  * 不依赖 Node / Electron。
  */
-import { createSession, type Storage } from '@earendil-works/pi-durable'
+import { copyJson } from '@earendil-works/chord'
+import { createSession, type JsonObject, type Storage } from '@earendil-works/pi-durable'
 import { backgroundContext as BG } from './context'
 import { parseLockRecord } from './agentRecord'
-import { AgentStateDoc, SessionStateDoc } from './docs'
+import { AgentStateDoc, GoalDoc, SessionStateDoc } from './docs'
+import { pauseGoal } from '../goal/goalState'
+import { goalRecordOf } from '../goal/goalStore'
 
 /**
  * 拷贝收尾（新会话的存储第一次被打开**之前**）：会话级状态里属于源会话那一场的东西清掉 ——
@@ -20,7 +23,9 @@ import { AgentStateDoc, SessionStateDoc } from './docs'
  *    那个对话的根会话 id 改成它（人设正文不动）；
  *  - driven-run 标记：父会话驱动的是源会话的那一轮。留着它，打开时的扫描会替新会话向父会话报一次
  *    「那一轮落定了」；
- *  - 待送达的通知：写给源会话的，不该在新会话的下一次发送之前冒出来。
+ *  - 待送达的通知：写给源会话的，不该在新会话的下一次发送之前冒出来；
+ *  - 进行中的目标：随存储拷过来了，但两条会话不该同时朝同一个目标改同一份东西 —— 新会话里置为暂停
+ *    （`forked`，docs/goal-mode-design.md §8），用户点继续再说。源会话不动。
  * 当前对话指针原样（fork 缺省就是源会话此刻的当前对话），对话、条目、任务都不碰。用完关掉存储。
  * 返回锁有没有留下（`keepLock` 且源会话此刻有 agent）—— 只有留下了，宿主才该 `adoptForkedAgent`。
  */
@@ -44,6 +49,12 @@ export async function resetForkedSessionState(
       }
       delete state.driven
       state.deferredNotices.splice(0)
+      const goals = await tx.doc(GoalDoc)
+      const goal = goalRecordOf(goals.goal)
+      if (goal?.status === 'active') {
+        const paused = pauseGoal(goal, 'forked', Date.now())
+        goals.goal = copyJson(paused as unknown as JsonObject, { omitUndefinedProperties: true }) as JsonObject
+      }
     }, BG)
   } finally {
     await session.close(BG)

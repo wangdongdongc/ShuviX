@@ -1,3 +1,4 @@
+import type { GoalAction, GoalActResult, GoalStatus, GoalView } from '@shuvix/chat-protocol/types/goal'
 import type {
   RebuildSystemPromptResult,
   SystemPromptStatus
@@ -419,6 +420,9 @@ declare global {
       rebuildSystemPrompt: (sessionId: string) => Promise<RebuildSystemPromptResult>
       /** 各会话此刻挂着几条询问（只列 > 0 的；窗口重建 / 客户端重连后补侧栏徽标） */
       askCounts: () => Promise<Record<string, number>>
+      goal: (sessionId: string) => Promise<GoalView | null>
+      goalAct: (params: { sessionId: string; action: GoalAction }) => Promise<GoalActResult>
+      goalStatuses: () => Promise<Record<string, GoalStatus>>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */
       destroy: (sessionId: string) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>

@@ -51,6 +51,23 @@ const MessagesSquareSolid = createLucideIcon('messages-square-solid', [
   ]
 ])
 
+/**
+ * 目标记号（同 chat-ui 的 GoalMark：外圈 + 圆点；暂停中圆点是空心的）。app-shell 的 DOM 用例整份 mock 掉
+ * `@shuvix/chat-ui`，所以这里画自己的一份，改样子两处一起改
+ */
+function GoalGlyph({ active }: { active: boolean }): React.JSX.Element {
+  return (
+    <svg width="10" height="10" viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.75" />
+      {active ? (
+        <circle cx="8" cy="8" r="2.75" fill="currentColor" />
+      ) : (
+        <circle cx="8" cy="8" r="2.75" fill="none" stroke="currentColor" strokeWidth="1.75" />
+      )}
+    </svg>
+  )
+}
+
 export interface SessionItemProps {
   session: { id: string; title: string }
   active: boolean
@@ -62,6 +79,11 @@ export interface SessionItemProps {
    */
   interrupted?: boolean
   pendingCount?: number
+  /**
+   * 这条会话的目标（目标模式，docs/goal-mode-design.md §9.3）：进行中 ◎、暂停中空心 ◎；达成 / 做不到 / 没有目标不标。
+   * 询问徽标照旧排在最右，它更急
+   */
+  goalStatus?: 'active' | 'paused'
   /** 专注模式下淡化（由宿主计算后传入） */
   dim?: boolean
   /** 笔记本会话（绑定 md 文件）—— 显示笔记本图标，选中后中间区为 live-preview */
@@ -95,6 +117,7 @@ export function SessionItem({
   isStreaming = false,
   interrupted = false,
   pendingCount = 0,
+  goalStatus,
   dim = false,
   isNotebook = false,
   isBot = false,
@@ -202,10 +225,24 @@ export function SessionItem({
             className="shrink-0 ml-auto h-1.5 w-1.5 rounded-full bg-warning"
           />
         )}
+        {goalStatus && (
+          <span
+            data-goal-mark={goalStatus}
+            title={t(goalStatus === 'active' ? 'goal.sidebarActive' : 'goal.sidebarPaused')}
+            aria-label={t(goalStatus === 'active' ? 'goal.sidebarActive' : 'goal.sidebarPaused')}
+            className={`shrink-0 flex items-center ${interrupted && !isStreaming ? '' : 'ml-auto'} ${
+              goalStatus === 'active' ? 'text-accent' : 'text-text-tertiary'
+            }`}
+          >
+            <GoalGlyph active={goalStatus === 'active'} />
+          </span>
+        )}
         {pendingCount > 0 && (
           <span
             data-pending-asks={pendingCount}
-            className={`flex items-center gap-1 shrink-0 ${interrupted && !isStreaming ? '' : 'ml-auto'}`}
+            className={`flex items-center gap-1 shrink-0 ${
+              (interrupted && !isStreaming) || goalStatus ? '' : 'ml-auto'
+            }`}
           >
             <span className="relative flex h-1.5 w-1.5">
               <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />

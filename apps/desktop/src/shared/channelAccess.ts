@@ -54,6 +54,10 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:setModel': 'write',
   'agent:previewChange': 'read', // 只预判：不连服务器、什么也不写（与 agent:init 一样可能把锁着的会话打开来读）
   'agent:askCounts': 'read',
+  'agent:goal': 'read',
+  // 设目标 = 以人的来源发一条消息（与 agent:prompt 同级）；暂停 / 继续 / 编辑 / 清除同理
+  'agent:goalAct': 'write',
+  'agent:goalStatuses': 'read',
   'agent:systemPromptStatus': 'read', // 冻结的系统提示词与此刻的来源比一比：只读（可能把会话打开来读）
   'agent:rebuildSystemPrompt': 'write', // 删掉冻结的系统提示词，下一条消息重新渲染
   'agent:destroy': 'write',
@@ -635,6 +639,7 @@ export const SETTING_KEY_FACTS: Readonly<Record<string, CallFacts>> = {
   'session.': { scope: 'sessions', access: 'admin' }, // 重启后续跑中断的会话
   'triggers.': { scope: 'agents', access: 'admin' }, // 触发源开关：关掉内置 timer 就没有 bot 会被定时叫起来
   'bots.': { scope: 'agents', access: 'admin' }, // 随应用提供的 bot 的内置 id 认定（daily-bot-access 据此放宽权限）
+  'goal.': { scope: 'agents', access: 'admin' }, // 目标的缺省花费 / 轮数上限：花谁的钱、让 agent 自己跑多久
   'sandbox.': { scope: 'security', access: 'admin' },
   'general.classifierProvider': { scope: 'security', access: 'admin' }, // 命令风险分类器：read_only 的命令跳过审查
   'general.classifierModel': { scope: 'security', access: 'admin' },

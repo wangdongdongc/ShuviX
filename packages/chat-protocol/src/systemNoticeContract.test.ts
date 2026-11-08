@@ -8,6 +8,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   EMPTY_REPLY_NOTICE_KIND,
+  GOAL_NOTICE_TAGS,
+  goalNoticeKindOf,
   isEmptyReplyNoticeText,
   isSystemNoticeText,
   systemNoticeBlockRe,
@@ -136,5 +138,59 @@ describe('<session> 通知里夹着 <running-background-tasks>（BT-70）', () =
 
   it('BT-70 那一块单独拿出来不是通知（它不在标签表里）', () => {
     expect(isSystemNoticeText(block)).toBe(false)
+  })
+})
+
+/**
+ * 目标模式的通知（docs/goal-mode-design.md §5）：续跑消息 steer 进当前轮时只能按正文形状认 —— 标签漏登记，
+ * 续跑消息（连同判定理由）就会被转写摘要当成人写的。
+ *
+ *   NC-1 五个 goal-* 标签都在标签表里；`goal-set` / `goal` 不是通知标签（设定目标那条是人的消息）
+ *   NC-2 `goalNoticeKindOf`：只由同一种 goal-* 块组成 → 那个标签；混了别的、夹了人话、半截 → undefined。
+ *        混拼的一条照样是系统通知（安全性质不随种类丢失）
+ */
+describe('goal notices (目标模式)', () => {
+  const goalBlock = (tag: string): string => `<${tag} id="g_1">\nbody\n</${tag}>`
+
+  it('NC-1 每个 goal-* 标签都登记在 SYSTEM_NOTICE_TAGS；一整块各自都认；goal-set / goal 不是通知标签', () => {
+    expect(GOAL_NOTICE_TAGS).toEqual([
+      'goal-continue',
+      'goal-checkin',
+      'goal-budget',
+      'goal-updated',
+      'goal-status'
+    ])
+    for (const tag of GOAL_NOTICE_TAGS) {
+      expect(SYSTEM_NOTICE_TAGS).toContain(tag)
+      expect(isSystemNoticeText(goalBlock(tag))).toBe(true)
+    }
+    expect(SYSTEM_NOTICE_TAGS).not.toContain('goal-set')
+    expect(SYSTEM_NOTICE_TAGS).not.toContain('goal')
+    expect(isSystemNoticeText(goalBlock('goal-set'))).toBe(false)
+    expect(isSystemNoticeText(goalBlock('goal'))).toBe(false)
+  })
+
+  it('NC-2 goalNoticeKindOf：单块 → 标签；同标签两块 → 标签', () => {
+    for (const tag of GOAL_NOTICE_TAGS) {
+      expect(goalNoticeKindOf(goalBlock(tag))).toBe(tag)
+      expect(goalNoticeKindOf(`${goalBlock(tag)}\n\n${goalBlock(tag)}`)).toBe(tag)
+    }
+  })
+
+  it.each([
+    ['goal-continue + goal-status', `${goalBlock('goal-continue')}\n\n${goalBlock('goal-status')}`],
+    ['goal-continue + background-task', `${goalBlock('goal-continue')}\n\n${bgTask}`],
+    ['empty-reply', '<empty-reply>\nx\n</empty-reply>'],
+    ['text + block', `ok then ${goalBlock('goal-continue')}`],
+    ['unclosed', '<goal-continue id="g_1">\nbody'],
+    ['plain text', 'keep going']
+  ])('NC-2 goalNoticeKindOf: %s → undefined', (_label, text) => {
+    expect(goalNoticeKindOf(text)).toBeUndefined()
+  })
+
+  it('NC-2 目标通知与后台任务通知拼成一条：种类丢了，但照样是系统通知（不会被当成人话）', () => {
+    const joined = `${bgTask}\n\n${goalBlock('goal-continue')}`
+    expect(goalNoticeKindOf(joined)).toBeUndefined()
+    expect(isSystemNoticeText(joined)).toBe(true)
   })
 })

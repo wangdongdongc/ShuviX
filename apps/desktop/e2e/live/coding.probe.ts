@@ -4,26 +4,52 @@
  * `work` to a `coding` sub-session help or hurt?" and "does this coding.md draft beat today's?" with numbers
  * instead of feel.
  *
- * Tasks: `coding/tasks.ts` — three sets of five tasks on two Node repos (graders and reference solutions in
- * `coding/fixtures`). `PROBE_SET=hard` (default), `easy` or `ambig`; easy and hard are at ceiling for deepseek
- * and kimi. The ambig set's requests leave out what only the user knows: a simulated user (`coding/simUser.ts`,
- * on deepseek whatever model is under test) holds those facts and answers the root's questions, plain-text
- * or ask cards, and the report adds what it cost the user (turns, questions, how many touched a fact, text to
- * read), which facts were given before the agent called it done, and which facts were given but not met.
+ * Tasks: `coding/tasks.ts` — five sets on two Node repos (graders and reference solutions in
+ * `coding/fixtures`). `PROBE_SET=hard` (default), `easy`, `ambig`, `handoff` or `long`; easy and hard are at
+ * ceiling for deepseek and kimi. The ambig set's requests leave out what only the user knows: a simulated user
+ * (`coding/simUser.ts`, on deepseek whatever model is under test) holds those facts and answers the root's
+ * questions, plain-text or ask cards, and the report adds what it cost the user (turns, questions, how many
+ * touched a fact, text to read), which facts were given before the agent called it done, and which facts were
+ * given but not met. The handoff set states every fact where a hand-off can drop it. The long set (three
+ * multi-layer features, each ending in "npm test passes, including test/<task>.test.js") is for goal mode: the
+ * user first sends a message of two standing rules, settled before the request and never repeated, and the
+ * grader checks each rule apart from the task (`constraint` C1, C2) — does a rule said only early in the
+ * conversation survive a long run and its compactions?
  *
- * Arms (`PROBE_ARMS`, comma-separated, default `direct,work`):
+ * Arms (`PROBE_ARMS`, comma-separated; default `direct,goal` for the long set, `direct,work` otherwise):
  *   direct  the user talks to the coding agent itself: the project session's base profile is replaced by the
  *           coding md (a user-level `work.md` built from it)
  *   work    today's product: the project session runs `work`, which hands the job to a `coding` sub-session
+ *   goal    as direct, but the request is set as a goal (`agent.goalAct` set, objective = the request; the host
+ *           sends it as the user's message) and the run lasts until the goal ends: met, impossible or paused,
+ *           with no verdict pending. No "go ahead" follow-ups: the user set a goal and walked away; ask cards
+ *           are answered as in the other arms. Not for tasks with a simulated user (ambig, handoff).
  * `PROBE_MD_DIR` points at a folder of md drafts (`coding.md`, `work.md`, …) installed as user-level agents in
- * every arm; `direct` then builds its `work.md` from that `coding.md`. Compare drafts by running twice with
- * different `PROBE_MD_DIR` / `PROBE_OUT`.
+ * every arm; `direct` and `goal` then build their `work.md` from that `coding.md`. Compare drafts by running
+ * twice with different `PROBE_MD_DIR` / `PROBE_OUT`.
  *
  * Other knobs: `PROBE_MODELS` (deepseek, kimi, anthropic, openai — keys from ~/.shuvix-probe.env), `PROBE_TASKS`,
  * `PROBE_RUNS` (repeats of each model × arm × task), `PROBE_LANG` (default zh), `PROBE_AUTO_REVIEW=1` (let the
- * product's reviewer answer permission asks instead of the probe), `PROBE_OUT` (report folder).
+ * product's reviewer answer permission asks instead of the probe, in every arm), `PROBE_OUT` (report folder).
+ * Goal arm: `PROBE_GOAL_TIMEOUT_MIN` (default 120: the probe gives up on a goal that has not ended by then),
+ * `PROBE_GOAL_BUDGET` (dollars) and `PROBE_GOAL_TURNS` (continuations) set the goal's limits; unset, the
+ * product's defaults apply ($5, 50; the budget does nothing for a model without a price).
+ * `PROBE_CONTEXT_WINDOW=<tokens>` writes that window into the model row's capabilities so compaction comes
+ * sooner. It only takes effect for a model id outside pi's catalog (an overlay row, which also has no price,
+ * so cost reads 0 and the goal budget is off): catalog models keep the catalog's window (deepseek-flash,
+ * deepseek-v4-pro and kimi-for-coding are 1M). The report shows the window each run really had and how many
+ * compactions happened, so a run where it did not apply is visible.
  * `PROBE_SELFCHECK=1` runs no model: it checks that every task's start state fails its grader and its reference
- * solution passes.
+ * solution passes, the early message's rules included (printed apart).
+ *
+ * Report (`summary.md`, `summary.json`): per model × arm and per run, pass / core / visible tests / tampering /
+ * tokens / requests / seconds / hand-offs. When a run has rules or a goal, "Goals, rules and compaction" adds:
+ * rules kept (C1, C2 per run), compactions, the root's context window, the session tree's cost in dollars
+ * (agent monitor `sessionCost` of every session of the tree still open at the end; unlike the token columns,
+ * which read transcripts, it includes hook agents such as the goal judge), and for the goal arm the final
+ * status, pause reason, continuations (`turns`), the goal's own cost (`costUsd`), wall time from setting the
+ * goal to its end, and the judge's last verdict with its reason (each not-met reason on the way is in the
+ * run's details).
  *
  * Safety (see memory "probe-auto-approve-scope"): each run is a fresh isolated instance on a packaged-shaped
  * stage; a policy denies file tools and commands that touch the real home folder; permission asks are approved
@@ -32,6 +58,9 @@
  *
  *   npx electron-vite build
  *   PROBE_MODELS=deepseek npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
+ *   PROBE_SET=long PROBE_ARMS=direct,goal PROBE_MODELS=deepseek PROBE_RUNS=3 \
+ *     npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
+ *   PROBE_SELFCHECK=1 PROBE_SET=long npx vitest run --config vitest.config.probe.ts e2e/live/coding.probe.ts
  */
 import {
   existsSync,
@@ -45,6 +74,12 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type {
+  GoalActResult,
+  GoalLimits,
+  GoalStatus,
+  GoalView
+} from '@shuvix/chat-protocol/types/goal'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { until } from '../harness/cdp'
 import { launchApp, type E2EApp } from '../harness/launch'
@@ -78,9 +113,14 @@ const list = (v: string | undefined, d: string): string[] =>
     .map((s) => s.trim())
     .filter(Boolean)
 const MODEL_IDS = list(process.env.PROBE_MODELS, 'deepseek')
-const ARMS = list(process.env.PROBE_ARMS, 'direct,work') as Arm[]
 const SET = (process.env.PROBE_SET ?? 'hard') as SetId
-if (!SETS[SET]) throw new Error(`PROBE_SET must be easy or hard, got ${SET}`)
+if (!SETS[SET])
+  throw new Error(`PROBE_SET must be one of ${Object.keys(SETS).join(', ')}, got ${SET}`)
+const ARMS = list(process.env.PROBE_ARMS, SET === 'long' ? 'direct,goal' : 'direct,work') as Arm[]
+for (const arm of ARMS) {
+  if (!['direct', 'work', 'goal'].includes(arm))
+    throw new Error(`PROBE_ARMS takes direct, work, goal; got ${arm}`)
+}
 const TASK_IDS = list(
   process.env.PROBE_TASKS,
   TASKS.filter((t) => t.set === SET)
@@ -89,13 +129,39 @@ const TASK_IDS = list(
 )
 const TURN_TIMEOUT_MS = 25 * 60 * 1000
 
+/** a positive number from the environment, or undefined when unset */
+function positiveEnv(name: string): number | undefined {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return undefined
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0)
+    throw new Error(`${name} must be a positive number, got ${raw}`)
+  return n
+}
+/** goal arm: the probe gives up on a goal that has not ended by then */
+const GOAL_TIMEOUT_MS = (positiveEnv('PROBE_GOAL_TIMEOUT_MIN') ?? 120) * 60 * 1000
+/** goal arm: limits set with the goal; what is unset takes the product's defaults */
+const GOAL_LIMITS: Partial<GoalLimits> = (() => {
+  const costUsd = positiveEnv('PROBE_GOAL_BUDGET')
+  const maxTurns = positiveEnv('PROBE_GOAL_TURNS')
+  return {
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(maxTurns !== undefined ? { maxTurns: Math.round(maxTurns) } : {})
+  }
+})()
+/** a smaller context window for the model under test (only models outside pi's catalog take it) */
+const CONTEXT_WINDOW = (() => {
+  const n = positiveEnv('PROBE_CONTEXT_WINDOW')
+  return n === undefined ? undefined : Math.round(n)
+})()
+
 /** what the stock user says when asked (tasks without a simulated user) */
 const AGREE = '可以，按你说的来。'
 const DECIDE = '你自己判断，按最合理的来。'
 /** at most this many simulated-user answers per run (replies and cards); past it the run is "capped" */
 const MAX_SIM_CALLS = 8
 
-type Arm = 'direct' | 'work'
+type Arm = 'direct' | 'work' | 'goal'
 
 // ─────────────────────────── models ───────────────────────────
 
@@ -233,7 +299,7 @@ function installAgents(app: E2EApp, arm: Arm): string[] {
     writeFileSync(join(app.agentsDir, n), readFileSync(join(MD_DIR as string, n), 'utf8'))
     written.push(n)
   }
-  if (arm === 'direct') {
+  if (arm === 'direct' || arm === 'goal') {
     const coding = drafts.includes('coding.md')
       ? readFileSync(join(MD_DIR as string, 'coding.md'), 'utf8')
       : builtinMd('coding')
@@ -280,6 +346,8 @@ interface Msg {
   content: string
   usage?: Usage
   isNotice?: boolean
+  /** a compaction summary (the transcript before it was summarised) */
+  compaction: boolean
   /** user：宿主随这条消息附上的用户原话条数（`user-words` Token 的 name，chat-protocol userWords.ts）；没附 = 0 */
   quoted: number
   blocks: Block[]
@@ -292,6 +360,7 @@ const readMessages = (app: E2EApp, sid: string): Promise<Msg[]> =>
       content: String(m.content ?? ''),
       usage: m.metadata ? m.metadata.usage : undefined,
       isNotice: Boolean(m.metadata && m.metadata.isSystemNotice),
+      compaction: Boolean(m.metadata && m.metadata.isCompactionSummary),
       quoted: Object.values((m.metadata && m.metadata.inlineTokens) || {})
         .filter((t) => t && t.type === 'user-words')
         .reduce((n, t) => n + (Number(t.name) || 0), 0),
@@ -300,6 +369,21 @@ const readMessages = (app: E2EApp, sid: string): Promise<Msg[]> =>
         : { type: b.type, text: b.text })
     })))
   `)
+
+/** The session's goal as the goal bar shows it (null = no goal) */
+const goalViewOf = (app: E2EApp, sid: string): Promise<GoalView | null> =>
+  app.main.eval<GoalView | null>(`window.api.agent.goal(${JSON.stringify(sid)})`)
+
+/** Dollars each open session has spent (agent monitor rows; a session's root row carries `sessionCost`) */
+async function sessionCosts(app: E2EApp): Promise<Map<string, number>> {
+  const rows = await app.main.eval<Array<{ rootSessionId: string; sessionCost: number }>>(
+    `window.api.agent.monitorList().then((es) => es.map((e) => ({ rootSessionId: e.rootSessionId, sessionCost: e.sessionCost })))`
+  )
+  const out = new Map<string, number>()
+  for (const r of rows)
+    out.set(r.rootSessionId, Math.max(out.get(r.rootSessionId) ?? 0, r.sessionCost || 0))
+  return out
+}
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -322,7 +406,8 @@ interface SettleStats {
  * Wait until the whole session tree is quiet, answering on the user's behalf meanwhile: permission asks anywhere
  * in the tree (refused when they name the real home), and the root's own questions (by the simulated user when
  * the task has one). A sub-session's question is the parent agent's to answer (sub-session intervention), so it
- * is left alone.
+ * is left alone. `opts.done`: quiet is not enough, this must hold too (the goal arm: the goal has ended — a
+ * verdict can be pending while the tree is quiet).
  */
 async function settleTree(
   app: E2EApp,
@@ -331,7 +416,8 @@ async function settleTree(
   stats: SettleStats,
   debug: (l: string) => void,
   quietMs = 20_000,
-  answerRootChoice?: (card: SimCard) => Promise<Record<string, unknown>>
+  answerRootChoice?: (card: SimCard) => Promise<Record<string, unknown>>,
+  opts: { done?: () => Promise<boolean>; timeoutMs?: number } = {}
 ): Promise<void> {
   const sync = syncProbe(app.main)
   await sync.install()
@@ -398,10 +484,11 @@ async function settleTree(
         quietSince = Date.now()
         return false
       }
-      return Date.now() - quietSince > quietMs
+      if (Date.now() - quietSince <= quietMs) return false
+      return opts.done ? opts.done() : true
     },
-    'session tree went quiet',
-    TURN_TIMEOUT_MS
+    opts.done ? 'session tree went quiet and the goal ended' : 'session tree went quiet',
+    opts.timeoutMs ?? TURN_TIMEOUT_MS
   )
   stats.unansweredSubQuestions = pendingSub
 }
@@ -485,7 +572,56 @@ interface RunRecord {
   /** messages into sub-sessions that carried the user's own words, and how many words they quoted in all */
   userWordsAttached: { sends: number; words: number }
   user?: UserReport
+  /** dollars the session tree spent: agent monitor `sessionCost` of each session (0 = a model without a price) */
+  costUsd: number
+  /** compaction summaries in the tree's transcripts */
+  compactions: number
+  /** the root's context window as it really ran (0 = unknown) */
+  contextWindow: number
+  goal?: GoalRun
   error?: string
+}
+
+/** What came of a goal (goal arm) */
+interface GoalRun {
+  /** `goalAct` set refused: the goal never started */
+  setError?: string
+  /** the goal's status when the probe stopped watching; `none` = no goal (cleared, or never set) */
+  status: GoalStatus | 'none'
+  pauseReason?: string
+  /** the judge's last verdict and why */
+  verdict?: string
+  reason?: string
+  /** continuations the host started for the goal */
+  turns: number
+  /** what the goal cost: the session's spend since it was set, sub-sessions included (GoalView.costUsd) */
+  costUsd: number
+  /** from setting the goal until it ended, or until the probe gave up */
+  wallSeconds: number
+  /** the goal had not ended (or a verdict was still pending) when PROBE_GOAL_TIMEOUT_MIN ran out */
+  timedOut: boolean
+  /** the judge's not-met reasons on the way, from the `<goal-continue>` notices in the root's transcript */
+  notMet: string[]
+}
+
+/** the goal is over: met, impossible or paused, with no verdict pending (null = no goal any more) */
+const goalOver = (v: GoalView | null): boolean =>
+  v === null ||
+  (!v.judging && (v.status === 'met' || v.status === 'impossible' || v.status === 'paused'))
+
+/** "Not met yet. Checker: <reason>" of each continuation notice, unescaped */
+function notMetReasons(msgs: Msg[]): string[] {
+  const unescape = (t: string): string =>
+    t
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+  return msgs
+    .filter((m) => (m.role === 'user' || m.isNotice) && m.content.includes('<goal-continue'))
+    .map((m) => m.content.match(/Not met yet\. Checker: (.*)/)?.[1])
+    .filter((r): r is string => r !== undefined)
+    .map(unescape)
 }
 
 const squash = (s: string): string => s.replace(/\s+/g, '')
@@ -629,7 +765,9 @@ const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : Strin
 
 function renderSummary(): string {
   const lines = [
-    `# Coding probe: ${SET} set (${LANG}${MD_DIR ? `, drafts from ${MD_DIR}` : ''}${AUTO_REVIEW ? ', auto-review on' : ''})`,
+    `# Coding probe: ${SET} set (${LANG}${MD_DIR ? `, drafts from ${MD_DIR}` : ''}${AUTO_REVIEW ? ', auto-review on' : ''}` +
+      `${CONTEXT_WINDOW !== undefined ? `, context window ${CONTEXT_WINDOW} asked` : ''}` +
+      `${ARMS.includes('goal') ? `, goal limits ${JSON.stringify(GOAL_LIMITS)} (unset = product defaults), goal timeout ${GOAL_TIMEOUT_MS / 60_000} min` : ''})`,
     ''
   ]
   // aggregate per model × arm
@@ -653,6 +791,7 @@ function renderSummary(): string {
     )
   }
   lines.push(...userSummary())
+  lines.push(...goalSummary())
   lines.push('', '## Runs', '')
   lines.push(
     '| model | arm | task | # | pass | core | extra | visible | tampered | tests added | changed (+/−) | in / out tokens | req | s | calls | hand-offs | skim | verbatim | decoy mentioned | root cause mentioned | asks |'
@@ -689,8 +828,9 @@ function renderSummary(): string {
     lines.push('', `### ${r.model} / ${r.arm} / ${r.task} / #${r.run}`, '')
     if (r.error) lines.push(`Error: ${r.error}`, '')
     for (const c of r.grade.checks) {
+      const tag = c.constraint ? ` (rule ${c.constraint})` : c.core ? '' : ' (extra)'
       lines.push(
-        `- ${c.pass ? '✅' : '❌'}${c.core ? '' : ' (extra)'} ${c.name}${c.error ? ` — ${c.error.replace(/\n/g, ' ')}` : ''}`
+        `- ${c.pass ? '✅' : '❌'}${tag} ${c.name}${c.error ? ` — ${c.error.replace(/\n/g, ' ')}` : ''}`
       )
     }
     if (r.grade.graderError) lines.push(`- grader failed: ${r.grade.graderError}`)
@@ -705,8 +845,21 @@ function renderSummary(): string {
         .map(([n, c]) => `${n}×${c}`)
         .join(' ')}; explore: ${r.exploreCalls}; follow-ups: ${r.followUps}`,
       `Agents: ${r.agents.join('; ') || 'builtin'}`,
-      `User words attached to sub-session messages: ${r.userWordsAttached.words} in ${r.userWordsAttached.sends} message(s)`
+      `User words attached to sub-session messages: ${r.userWordsAttached.words} in ${r.userWordsAttached.sends} message(s)`,
+      `Cost: $${r.costUsd.toFixed(2)}; compactions: ${r.compactions}; context window: ${r.contextWindow || 'unknown'}`
     )
+    if (r.goal) {
+      const g = r.goal
+      lines.push(
+        '',
+        g.setError
+          ? `Goal: not set — ${g.setError}`
+          : `Goal: ${g.status}${g.pauseReason ? ` (${g.pauseReason})` : ''}${g.timedOut ? ', still running when the probe gave up' : ''}; ` +
+              `${g.turns} continuation(s), $${g.costUsd.toFixed(2)}, ${g.wallSeconds} s` +
+              `${g.verdict ? `; last verdict ${g.verdict}: ${g.reason}` : ''}`
+      )
+      for (const [i, reason] of g.notMet.entries()) lines.push(`  ${i + 1}. not met: ${reason}`)
+    }
     for (const [i, d] of r.dispatches.entries()) {
       lines.push(
         '',
@@ -785,6 +938,67 @@ function userSummary(): string[] {
   return out
 }
 
+/** The long set and the goal arm: rules kept, compactions, cost, and what came of each goal */
+function goalSummary(): string[] {
+  const rs = records.filter((r) => r.goal || r.grade.constraints.total > 0)
+  if (!rs.length) return []
+  const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
+  const money = (n: number): string => `$${n.toFixed(2)}`
+  const out = [
+    '',
+    '## Goals, rules and compaction',
+    '',
+    'rules kept = checks of the rules the user stated only in the early message (C1, C2 per task), apart from pass; ' +
+      'all kept = runs that kept every rule; cost = sessionCost of every session in the tree (0 = no price for the model); ' +
+      'goal columns (goal arm only): status when it ended, continuations the host started, the goal’s own cost, seconds from setting it to its end.',
+    '',
+    '| model | arm | runs | pass | rules kept | all kept | compactions (mean) | window | cost (mean) | goal: met / impossible / paused / other | continuations (mean) | goal cost (mean) | goal s (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  ]
+  const groups = new Map<string, RunRecord[]>()
+  for (const r of rs)
+    groups.set(`${r.model}|${r.arm}`, [...(groups.get(`${r.model}|${r.arm}`) ?? []), r])
+  for (const [key, g] of groups) {
+    const [model, arm] = key.split('|')
+    const kept = g.reduce((t, r) => t + r.grade.constraints.kept, 0)
+    const total = g.reduce((t, r) => t + r.grade.constraints.total, 0)
+    const goals = g.flatMap((r) => (r.goal ? [r.goal] : []))
+    const count = (s: string): number => goals.filter((x) => x.status === s).length
+    const other = goals.length - count('met') - count('impossible') - count('paused')
+    const windows = [...new Set(g.map((r) => r.contextWindow || 0))].map((w) => (w ? k(w) : '?'))
+    out.push(
+      `| ${model} | ${arm} | ${g.length} | ${g.filter((r) => r.grade.pass).length}/${g.length} | ${total ? `${kept}/${total}` : '—'} | ` +
+        `${total ? `${g.filter((r) => r.grade.constraints.kept === r.grade.constraints.total).length}/${g.length}` : '—'} | ` +
+        `${mean(g.map((r) => r.compactions)).toFixed(1)} | ${windows.join(', ')} | ${money(mean(g.map((r) => r.costUsd)))} | ` +
+        `${goals.length ? `${count('met')} / ${count('impossible')} / ${count('paused')} / ${other}` : '—'} | ` +
+        `${goals.length ? mean(goals.map((x) => x.turns)).toFixed(1) : '—'} | ${goals.length ? money(mean(goals.map((x) => x.costUsd))) : '—'} | ` +
+        `${goals.length ? Math.round(mean(goals.map((x) => x.wallSeconds))) : '—'} |`
+    )
+  }
+  out.push(
+    '',
+    '| model | arm | task | # | pass | rules | compactions | window | cost | goal | pause reason | continuations | goal cost | goal s | last verdict |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  )
+  const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
+  for (const r of rs) {
+    const rules = r.grade.checks
+      .filter((c) => c.constraint)
+      .map((c) => `${c.constraint} ${c.pass ? '✅' : '❌'}`)
+      .join(' ')
+    const g = r.goal
+    out.push(
+      `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${r.grade.pass ? '✅' : '❌'}${r.error ? ' ⚠️' : ''} | ${rules || '—'} | ${r.compactions} | ` +
+        `${r.contextWindow ? k(r.contextWindow) : '?'} | ${money(r.costUsd)} | ` +
+        (g
+          ? `${g.setError ? 'not set' : g.status}${g.timedOut ? ' (timed out)' : ''} | ${g.pauseReason ?? '—'} | ${g.turns} | ${money(g.costUsd)} | ${g.wallSeconds} | ` +
+            `${g.verdict ? cell(`${g.verdict}: ${g.reason ?? ''}`).slice(0, 200) : '—'} |`
+          : '— | — | — | — | — | — |')
+    )
+  }
+  return out
+}
+
 function writeReport(): void {
   writeFileSync(join(OUT, 'summary.md'), renderSummary())
   writeFileSync(join(OUT, 'summary.json'), JSON.stringify(records, null, 2))
@@ -821,6 +1035,11 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   const rounds: UserRound[] = []
   const simErrors: string[] = []
   let capped = false
+  let contextWindow = 0
+  /** goal arm: when the goal was set and when it was seen over; what refused setting it */
+  let goalSetAt: number | undefined
+  let goalEndedAt: number | undefined
+  let goalSetError: string | undefined
 
   const app = await launchApp({
     autoReview: AUTO_REVIEW,
@@ -840,6 +1059,19 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       apiProtocol: spec.apiProtocol,
       modelId
     })
+    if (CONTEXT_WINDOW !== undefined) {
+      // the model row seedRealModel enabled: a smaller window brings compaction sooner (overlay models only)
+      await app.main.eval(`(async () => {
+        const providerId = await window.api.settings.get('general.defaultProvider')
+        const row = (await window.api.provider.listModels(providerId)).find((m) => m.modelId === ${JSON.stringify(modelId)})
+        if (!row) throw new Error('no model row for ${modelId}')
+        await window.api.provider.updateModelCapabilities({
+          id: row.id,
+          capabilities: { maxInputTokens: ${CONTEXT_WINDOW}, maxOutputTokens: 8192, vision: true }
+        })
+        return true
+      })()`)
+    }
     await app.main.eval(
       `window.api.settings.set({ key: 'general.language', value: ${JSON.stringify(LANG)} })`
     )
@@ -851,12 +1083,20 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     rootId = await app.main.eval<string>(
       `window.api.session.create(${JSON.stringify({ title: '新对话', projectId: project.id })}).then((s) => s.id)`
     )
-    // which profile the root really runs: the line under its Identity heading
-    const systemPrompt = await app.main.eval<string>(
-      `window.api.agent.getInfo(${JSON.stringify(rootId)}, { ensure: true }).then((i) => i.systemPrompt)`
+    // which profile the root really runs (the line under its Identity heading), and its context window
+    const info = await app.main.eval<{ systemPrompt: string; contextWindow: number }>(
+      `window.api.agent.getInfo(${JSON.stringify(rootId)}, { ensure: true }).then((i) => ({ systemPrompt: i.systemPrompt, contextWindow: i.model?.contextWindow ?? 0 }))`
     )
-    const identity = systemPrompt.match(/^## (?:Identity|身份|アイデンティティ)\s*\n+(.+)$/m)?.[1]
+    const identity = info.systemPrompt.match(
+      /^## (?:Identity|身份|アイデンティティ)\s*\n+(.+)$/m
+    )?.[1]
     agents.push(`root identity: ${identity ?? '(not found)'}`)
+    contextWindow = info.contextWindow
+    if (CONTEXT_WINDOW !== undefined && contextWindow !== CONTEXT_WINDOW) {
+      agents.push(
+        `PROBE_CONTEXT_WINDOW=${CONTEXT_WINDOW} did not apply: ${modelId} runs with ${contextWindow} (a pi catalog model keeps the catalog's window)`
+      )
+    }
 
     // what the root showed the user since the last look, and how much work it had committed to by then
     let shown = 0
@@ -918,6 +1158,11 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     const settle = (): Promise<void> =>
       settleTree(app, events, rootId, stats, (l) => debug(`${label}: ${l}`), 20_000, answerCard)
 
+    // the long set's standing rules: their own message, settled before anything else, never repeated
+    if (task.early) {
+      await sendPrompt(app, rootId, task.early.message)
+      await settle()
+    }
     // the scripted user: prelude messages first, each answered before the next; the agent's replies to them
     // are history for the simulated user, not something it answers
     for (const text of task.user?.prelude ?? []) {
@@ -971,9 +1216,47 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     }
 
     conv.push({ from: 'user', text: task.prompt })
-    await sendPrompt(app, rootId, task.prompt)
-    await settle()
-    if (sim) {
+    if (arm === 'goal') {
+      // the request becomes the goal; the host sends it as the user's message and keeps the session going
+      goalSetAt = Date.now()
+      const action = {
+        type: 'set',
+        objective: task.prompt,
+        ...(Object.keys(GOAL_LIMITS).length > 0 ? { limits: GOAL_LIMITS } : {})
+      }
+      const set = await app.main.eval<GoalActResult>(
+        `window.api.agent.goalAct(${JSON.stringify({ sessionId: rootId, action })})`
+      )
+      if (!set.ok) {
+        goalSetError = set.error
+        throw new Error(`goal not set: ${set.error}`)
+      }
+      debug(`${label}: goal set`)
+      await settleTree(
+        app,
+        events,
+        rootId,
+        stats,
+        (l) => debug(`${label}: ${l}`),
+        20_000,
+        answerCard,
+        {
+          timeoutMs: GOAL_TIMEOUT_MS,
+          done: async () => {
+            const view = await withTimeout(goalViewOf(app, rootId), 8000)
+            if (!goalOver(view)) return false
+            goalEndedAt = Date.now()
+            return true
+          }
+        }
+      )
+    } else {
+      await sendPrompt(app, rootId, task.prompt)
+      await settle()
+    }
+    if (arm === 'goal') {
+      // no follow-ups: the user set a goal and walked away
+    } else if (sim) {
       for (;;) {
         if (await sendMidTaskIfIdle()) continue
         const { text, work } = await freshText()
@@ -1025,6 +1308,33 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
   if (sessions.length > 1) {
     const same = tempDirs.every((d) => d === tempDirs[0])
     agents.push(`temp folders: ${same ? 'shared' : 'DIFFERENT'} (${tempDirs.join(', ')})`)
+  }
+  const costs = await sessionCosts(app).catch((e) => {
+    debug(`${label}: monitorList failed: ${String(e)}`)
+    return new Map<string, number>()
+  })
+  const costUsd = sessions.reduce((t, s) => t + (costs.get(s.id) ?? 0), 0)
+  // goal arm: the goal as it stands now (also after a timeout or an error)
+  let goal: GoalRun | undefined
+  if (arm === 'goal') {
+    const view =
+      rootId && goalSetError === undefined
+        ? await withTimeout(goalViewOf(app, rootId), 8000).catch(() => undefined)
+        : undefined
+    const end = goalEndedAt ?? Date.now()
+    goal = {
+      ...(goalSetError !== undefined ? { setError: goalSetError } : {}),
+      status: view ? view.status : 'none',
+      ...(view?.pauseReason ? { pauseReason: view.pauseReason } : {}),
+      ...(view?.lastVerdict
+        ? { verdict: view.lastVerdict.verdict, reason: view.lastVerdict.reason }
+        : {}),
+      turns: view?.turns ?? 0,
+      costUsd: view?.costUsd ?? 0,
+      wallSeconds: goalSetAt === undefined ? 0 : Math.round((end - goalSetAt) / 1000),
+      timedOut: goalSetAt !== undefined && goalSetError === undefined && goalEndedAt === undefined,
+      notMet: notMetReasons(bySession.get(rootId) ?? [])
+    }
   }
   // the repo lives in the fake HOME: keep it until it is graded
   await app.stop({ keepHome: true })
@@ -1120,19 +1430,30 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       return { sends: quoted.length, words: quoted.reduce((n, m) => n + m.quoted, 0) }
     })(),
     ...(user ? { user } : {}),
+    costUsd,
+    compactions: all.filter((m) => m.compaction).length,
+    contextWindow,
+    ...(goal ? { goal } : {}),
     error
   }
   records.push(record)
   writeFileSync(join(OUT, 'summary.md'), redact(renderSummary()))
   writeFileSync(join(OUT, 'summary.json'), redact(JSON.stringify(records, null, 2)))
   console.log(
-    `[${label}] ${grade.pass ? 'PASS' : 'FAIL'} core ${grade.core.passed}/${grade.core.total} → ${OUT}`
+    `[${label}] ${grade.pass ? 'PASS' : 'FAIL'} core ${grade.core.passed}/${grade.core.total}` +
+      `${grade.constraints.total ? `, rules ${grade.constraints.kept}/${grade.constraints.total}` : ''}` +
+      `${goal ? `, goal ${goal.status}${goal.pauseReason ? ` (${goal.pauseReason})` : ''} after ${goal.turns} continuations` : ''} → ${OUT}`
   )
 }
 
 // ─────────────────────────── entry ───────────────────────────
 
 const selected = TASKS.filter((t) => t.set === SET && TASK_IDS.includes(t.id))
+if (ARMS.includes('goal') && selected.some((t) => t.user)) {
+  throw new Error(
+    'the goal arm runs tasks without a simulated user (easy, hard, long), not ambig or handoff'
+  )
+}
 
 if (SELFCHECK) {
   for (const task of selected) {
@@ -1146,9 +1467,17 @@ if (SELFCHECK) {
       const fixed = gradeRepo(task, `${refRepo}/repo`, sha2)
       const failing = (g: Grade): string[] =>
         g.checks.filter((c) => !c.pass).map((c) => `${c.name}: ${c.error}`)
+      /** the early message's rules, one by one (long set) */
+      const rules = (g: Grade): string =>
+        g.checks
+          .filter((c) => c.constraint)
+          .map((c) => `${c.constraint} ${c.pass ? 'kept' : 'broken'}`)
+          .join(', ')
       console.log(
-        `[${task.id}] start: core ${atStart.core.passed}/${atStart.core.total}, visible ${atStart.visible.pass}/${atStart.visible.pass + atStart.visible.fail}; ` +
-          `reference: core ${fixed.core.passed}/${fixed.core.total}, extra ${fixed.extra.passed}/${fixed.extra.total}, visible ${fixed.visible.pass}/${fixed.visible.pass + fixed.visible.fail}, suite ${fixed.suite.pass}/${fixed.suite.pass + fixed.suite.fail}`
+        `[${task.id}] start: core ${atStart.core.passed}/${atStart.core.total}, visible ${atStart.visible.pass}/${atStart.visible.pass + atStart.visible.fail}` +
+          `${atStart.constraints.total ? `, rules ${rules(atStart)}` : ''}; ` +
+          `reference: core ${fixed.core.passed}/${fixed.core.total}, extra ${fixed.extra.passed}/${fixed.extra.total}, visible ${fixed.visible.pass}/${fixed.visible.pass + fixed.visible.fail}, suite ${fixed.suite.pass}/${fixed.suite.pass + fixed.suite.fail}` +
+          `${fixed.constraints.total ? `, rules ${rules(fixed)}` : ''}`
       )
       expect(atStart.graderError).toBeUndefined()
       expect(atStart.pass).toBe(false)
@@ -1157,6 +1486,12 @@ if (SELFCHECK) {
       expect(fixed.visible.fail).toBe(0)
       expect(fixed.suite.fail).toBe(0)
       expect(fixed.tampered).toEqual({ tests: [], testScript: false })
+      // every rule of the early message has its own check, and the reference keeps them all
+      expect(
+        [...new Set(fixed.checks.map((c) => c.constraint).filter(Boolean))].sort(),
+        'rules the grader checks'
+      ).toEqual((task.early?.constraints ?? []).map((c) => c.id).sort())
+      expect(fixed.constraints.kept).toBe(fixed.constraints.total)
     })
   }
 } else {
@@ -1183,10 +1518,12 @@ if (SELFCHECK) {
     for (const modelName of MODEL_IDS) {
       for (const task of selected) {
         for (const arm of ARMS) {
+          // the early message is one more settle; a goal runs until it ends (or PROBE_GOAL_TIMEOUT_MIN)
+          const extra = task.early ? TURN_TIMEOUT_MS : 0
           it(
             `${modelName} / ${arm} / ${task.id} / #${run}`,
             () => runOne(modelName, arm, task, run),
-            TURN_TIMEOUT_MS * 3
+            (arm === 'goal' ? GOAL_TIMEOUT_MS + TURN_TIMEOUT_MS * 2 : TURN_TIMEOUT_MS * 3) + extra
           )
         }
       }

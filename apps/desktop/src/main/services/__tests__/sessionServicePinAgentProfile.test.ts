@@ -204,6 +204,13 @@ describe('准入 —— 三种拒绝，都零副作用', () => {
     }
   )
 
+  it('HO-2 目标判定员当作不存在：Unknown agent "goal-judge"，零副作用', async () => {
+    mocks.getProfile.mockReturnValue({ ...profile('goal-judge'), source: 'builtin' })
+    const res = await pin('goal-judge')
+    expect(res).toStrictEqual({ success: false, error: 'Unknown agent "goal-judge"' })
+    expectNoSideEffects()
+  })
+
   it.each(['wiki-writer', 'titler', 'my-plain-agent'])(
     'PIN-4 曾经只可派发的档案 %s 现在照常钉得上 —— 会话感知这道门已退役',
     async (name) => {

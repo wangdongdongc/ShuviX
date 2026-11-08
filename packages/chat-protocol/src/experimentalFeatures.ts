@@ -14,6 +14,8 @@ export const EXPERIMENTAL_FEATURES = {
   triggers: 'experimental.hint',
   tracking: 'experimental.hint',
   taskList: 'experimental.hint',
+  /** 目标模式（`/goal` 与输入框上方的目标栏，docs/goal-mode-design.md）；设置页的上限不带标签 */
+  goal: 'experimental.hint',
   telegramBots: 'experimental.hintTelegramBots'
 } as const
 

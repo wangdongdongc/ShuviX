@@ -83,6 +83,7 @@ import {
 import {
   DATE_NOTICE_KIND,
   EMPTY_REPLY_NOTICE_KIND,
+  goalNoticeKindOf,
   isEmptyReplyNoticeText,
   isSystemNoticeText
 } from '@shuvix/chat-protocol/systemNoticeContract'
@@ -763,6 +764,8 @@ function buildMessage(sessionId: string, slot: Slot): ChatMessage {
         resolved !== undefined ? jsonCopy<Record<string, never>>(resolved.tokens) : undefined
       const notice = resolved === undefined && isSystemNoticeText(content)
       const emptyReply = notice && isEmptyReplyNoticeText(content)
+      // 目标通知（续跑 / 检查 / 预算 / 改目标 / 结局）：steer 与自动续跑写下的 user 消息只能按形状认（§5）
+      const goalKind = notice && !emptyReply ? goalNoticeKindOf(content) : undefined
       return {
         id,
         sessionId,
@@ -776,6 +779,7 @@ function buildMessage(sessionId: string, slot: Slot): ChatMessage {
           ...(tokens === undefined ? {} : { inlineTokens: tokens }),
           ...(notice ? { isSystemNotice: true } : {}),
           ...(emptyReply ? { noticeKind: EMPTY_REPLY_NOTICE_KIND } : {}),
+          ...(goalKind !== undefined ? { noticeKind: goalKind } : {}),
           ...(slot.origin === undefined ? {} : { origin: jsonCopy<InputOrigin>(slot.origin) })
         }
       }

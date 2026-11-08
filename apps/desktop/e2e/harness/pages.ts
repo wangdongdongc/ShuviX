@@ -2823,6 +2823,11 @@ export interface SidebarPane {
   /** 这一行在跑吗（`[data-running]`：这一轮在跑，或者还有没结束的后台任务）；没有这一行 → false */
   rowRunning(title: string): Promise<boolean>
   /**
+   * 这一行的目标记号（目标模式，`[data-goal-mark]`：`active` / `paused` —— 达成、做不到、没有目标的都不记）；
+   * 没有记号或没有这一行 → null。只在行内找：目标栏里的 GoalMark 也带这个锚点
+   */
+  goalMarkOf(title: string): Promise<string | null>
+  /**
    * 走分组头菜单的「新建对话」并等列表落定（第一个非知识库组头的 ⋮ → new-chat）。
    *
    * 会让渲染端重新拉全量会话列表（`setSessions(await session.list())`）。经 IPC 建的会话
@@ -3150,6 +3155,10 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         return badge ? Number(badge.getAttribute('data-pending-asks')) : null
       })()`),
     rowRunning: (title) => main.eval<boolean>(`!!${ROW(title)}?.hasAttribute('data-running')`),
+    goalMarkOf: (title) =>
+      main.eval<string | null>(
+        `(${ROW(title)})?.querySelector('[data-goal-mark]')?.getAttribute('data-goal-mark') ?? null`
+      ),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {
@@ -15963,5 +15972,101 @@ export function systemPromptIndicatorPane(main: CdpClient): SystemPromptIndicato
       mkdirSync(dirname(filePath), { recursive: true })
       writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
     }
+  }
+}
+
+// ─── 目标模式（`/goal`，docs/goal-mode-design.md §9）—— 输入卡片顶上的目标栏与对话里的目标通知行 ───
+
+export interface GoalBarShot {
+  /** `data-goal-status`：active / paused / met / impossible；只开着「设新目标」编辑器（还没有目标）时是 `new` */
+  status: string
+  /** 状态那一行的文字（`data-goal-state`）；只开着编辑器时为空串 */
+  state: string
+  /** 行尾按钮（`data-goal-action`，DOM 序）：pause / resume / raise / edit / clear / set-again / dismiss */
+  actions: string[]
+  /** 「目标检查已停用」那一行在不在（`data-goal-checker-missing`） */
+  checkerMissing: boolean
+  /** 折叠时最近一次判定那一行的结论（`data-goal-verdict`）；没有判定过或展开着 = null */
+  verdict: string | null
+  /** 编辑器开着时它的模式（`data-goal-editor`：new / edit / raise）；没开 = null */
+  editor: string | null
+  /** 操作被拒时就地那句话（`data-goal-error`）；没有 = null */
+  error: string | null
+}
+
+export interface GoalNoticeShot {
+  /** `data-goal-notice`：goal-continue / goal-status / goal-checkin / goal-budget / goal-updated */
+  kind: string
+  /** `data-goal-event`（goal-status 的 met / impossible / paused / cleared / replaced）；别的种类为空串 */
+  event: string
+  /** 整行文本（折叠态是给人读的摘要） */
+  text: string
+}
+
+export interface GoalPane {
+  /** 目标栏（`[data-goal-bar]`）；会话没有目标、也没开编辑器时为 null */
+  bar(): Promise<GoalBarShot | null>
+  /** 点目标栏上的某个按钮（`data-goal-action`）；按钮不在或禁用 → false */
+  clickAction(action: string): Promise<boolean>
+  /** 点编辑器的「取消」（`data-goal-editor-cancel`）；编辑器没开 → false */
+  cancelEditor(): Promise<boolean>
+  /** 对话滚动区里的目标通知行（GoalNoticeRow 的 `data-goal-notice`），DOM 序 */
+  notices(): Promise<GoalNoticeShot[]>
+  /** 带「目标」Token 胶囊（`data-token-kind="goal"`）的用户气泡的 `data-msg-id`，DOM 序 */
+  goalChipMessages(): Promise<string[]>
+}
+
+/**
+ * 目标栏与目标通知行。目标栏只有一个（输入卡片顶上，按会话挂载）；**编辑器开着时它的 textarea 在输入框之前**，
+ * `chatPane` 的 `textarea:not([data-other-input])` 会认到它 —— 先 `cancelEditor()` 再用 chatPane。
+ */
+export function goalPane(main: CdpClient): GoalPane {
+  const BAR = `document.querySelector('[data-goal-bar]')`
+  const SCROLLER = `document.querySelector('.conversation-scroller')`
+  return {
+    bar: () =>
+      main.eval<GoalBarShot | null>(`(() => {
+        const bar = ${BAR}
+        if (!bar) return null
+        return {
+          status: bar.getAttribute('data-goal-status') ?? '',
+          state: (bar.querySelector('[data-goal-state]')?.textContent ?? '').trim(),
+          actions: [...bar.querySelectorAll('[data-goal-action]')].map(
+            (b) => b.getAttribute('data-goal-action') ?? ''
+          ),
+          checkerMissing: !!bar.querySelector('[data-goal-checker-missing]'),
+          verdict: bar.querySelector('[data-goal-verdict]')?.getAttribute('data-goal-verdict') ?? null,
+          editor: bar.querySelector('[data-goal-editor]')?.getAttribute('data-goal-editor') ?? null,
+          error: bar.querySelector('[data-goal-error]')?.textContent?.trim() ?? null
+        }
+      })()`),
+    clickAction: (action) =>
+      main.eval<boolean>(`(() => {
+        const button = ${BAR}?.querySelector('[data-goal-action=${JSON.stringify(action)}]')
+        if (!button || button.disabled) return false
+        button.click()
+        return true
+      })()`),
+    cancelEditor: () =>
+      main.eval<boolean>(`(() => {
+        const button = ${BAR}?.querySelector('[data-goal-editor-cancel]')
+        if (!button) return false
+        button.click()
+        return true
+      })()`),
+    notices: () =>
+      main.eval<GoalNoticeShot[]>(
+        `[...(${SCROLLER}?.querySelectorAll('[data-goal-notice]') ?? [])].map((el) => ({
+          kind: el.getAttribute('data-goal-notice') ?? '',
+          event: el.getAttribute('data-goal-event') ?? '',
+          text: (el.textContent ?? '').trim()
+        }))`
+      ),
+    goalChipMessages: () =>
+      main.eval<string[]>(
+        `[...document.querySelectorAll('[data-msg-role="user"]')]
+          .filter((el) => el.querySelector('[data-token-kind="goal"]'))
+          .map((el) => el.getAttribute('data-msg-id') ?? '')`
+      )
   }
 }

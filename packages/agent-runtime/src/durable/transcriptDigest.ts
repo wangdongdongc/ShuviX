@@ -42,6 +42,7 @@
  * 找 submission）—— 不开启调度器、不建 agent、不送达推迟的通知、不写任何东西（只读提交不产生发布），
  * 被中断的会话照样停着。不依赖 Node / Electron。
  */
+import { withoutGoalSetNote } from '@shuvix/chat-protocol/goalSet'
 import type {
   AssistantMessage,
   ImageContent,
@@ -182,10 +183,13 @@ export function digestEntries(
         }
         const raw = userText(message.content)
         if (isSystemNoticeText(raw)) break
-        // 侧车没解析到（压缩切点、别的分支）的插话：模型文本末尾的说明是系统写的，同样不交出
-        const text = raw.endsWith(MID_RUN_NOTE_SUFFIX)
-          ? raw.slice(0, raw.length - MID_RUN_NOTE_SUFFIX.length)
-          : raw
+        // 侧车没解析到（压缩切点、别的分支）的插话：模型文本末尾的说明是系统写的，同样不交出；设定目标那条消息
+        // 末尾的说明同理（goalSet.ts）—— 原文是人写的，说明不是
+        const text = withoutGoalSetNote(
+          raw.endsWith(MID_RUN_NOTE_SUFFIX)
+            ? raw.slice(0, raw.length - MID_RUN_NOTE_SUFFIX.length)
+            : raw
+        )
         out.push({ kind: 'user', ts: tsOf(message), text, ...sourced })
         break
       }

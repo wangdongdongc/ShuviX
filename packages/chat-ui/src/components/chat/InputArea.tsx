@@ -1,5 +1,5 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
-import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
 import { TokenChip } from './TokenChip'
@@ -15,6 +15,7 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { connectionFailureOf } from '@shuvix/chat-protocol/connectionErrors'
 import { isWidgetSelectionEntry } from '@shuvix/chat-protocol/widgetServers'
+import type { ExperimentalFeature } from '@shuvix/chat-protocol/experimentalFeatures'
 import {
   useChatStore,
   selectIsStreaming,
@@ -46,6 +47,17 @@ import type { UserSecret } from '@shuvix/chat-protocol/utils/redactionPlaceholde
 import { isImeComposing } from '../../utils/ime'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useChatDensity } from '../../host/chatHostContext'
+import {
+  GOAL_COMMAND_ID,
+  goalCommandArgs,
+  goalEligibleSession,
+  withGoalCommand
+} from '../../utils/goalCommand'
+
+/** 输入框里的一条斜杠命令：后端给的（项目命令 / 技能）或输入框自己加的内置命令（带实验标签） */
+type ComposerCommand = ReturnType<typeof useChatStore.getState>['slashCommands'][number] & {
+  experimental?: ExperimentalFeature
+}
 
 /**
  * 运行中的两个发送出口（P3-11 两档），顺序即急迫度从高到低：
@@ -100,6 +112,32 @@ export function InputArea({
     slashCommands
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
+  /**
+   * 内置命令 `/goal`（目标模式，实验，docs/goal-mode-design.md §3）：宿主能设目标（有 `agent.goalAct`）、这条会话的形态
+   * 也能设（人发起的根会话；欢迎页发出时新建的就是）才出现。它排在命令表第一，同名的项目命令 / 技能让位
+   */
+  const goalSupported = !!getHostApi()?.agent?.goalAct
+  const activeRow = useChatStore((s) =>
+    s.activeSessionId ? s.sessions.find((row) => row.id === s.activeSessionId) : undefined
+  )
+  const goalAvailable = goalSupported && goalEligibleSession(activeRow)
+  const commands = useMemo(
+    () =>
+      withGoalCommand<ComposerCommand>(
+        slashCommands,
+        goalAvailable
+          ? {
+              commandId: GOAL_COMMAND_ID,
+              name: GOAL_COMMAND_ID,
+              description: t('goal.commandDescription'),
+              template: '',
+              kind: 'builtin',
+              experimental: 'goal'
+            }
+          : null
+      ),
+    [slashCommands, goalAvailable, t]
+  )
   /**
    * 运行时正在关停（回退/切档案/清空触发）。一个会话只允许一个 Agent，新的要等旧的
    * 彻底停下才出生 —— 这期间任何发送都无处可去，直接拦在输入框。
@@ -169,7 +207,7 @@ export function InputArea({
   useClickOutside(ctxRef, closeCtx, ctxOpen)
 
   // 斜杠命令自动补全
-  const slash = useSlashCommands(slashCommands, inputText)
+  const slash = useSlashCommands(commands, inputText)
 
   // @ 引用自动补全（可在任意位置触发，可多个）：工作区文件
   const at = useAtMentions(activeSessionId)
@@ -304,7 +342,7 @@ export function InputArea({
       if (!slashChip && value.startsWith('/') && value.includes(' ')) {
         const spaceIdx = value.indexOf(' ')
         const cmdId = value.slice(1, spaceIdx)
-        const cmd = slashCommands.find((c) => c.commandId === cmdId)
+        const cmd = commands.find((c) => c.commandId === cmdId)
         if (cmd) {
           setSlashChip({
             commandId: cmd.commandId,
@@ -326,16 +364,7 @@ export function InputArea({
       secrets.prune(value)
       at.refresh(value, caret)
     },
-    [
-      slashChip,
-      slashCommands,
-      setInputText,
-      at,
-      paste,
-      secrets,
-      autoEnableRequiredTools,
-      clearSendError
-    ]
+    [slashChip, commands, setInputText, at, paste, secrets, autoEnableRequiredTools, clearSendError]
   )
 
   // 消息回退：把历史消息重建为可编辑草稿——paste/at 重新登记恢复胶囊，cmd 转 /id 明文（发送时重新解析）。
@@ -694,10 +723,86 @@ export function InputArea({
   }
 
   /**
+   * 内置命令 `/goal`（目标模式）：不当消息发，交给宿主 —— `agent.goalAct` 的 `set` 由宿主替用户发出那条带「目标」Token
+   * 的消息（会话在跑时并进当前轮）。成功才清空输入框；被拒（宿主给一句说明）或出错，话留在输入框里、原因写在卡片上。
+   * 只写了 `/goal`：不发任何东西，展开目标栏的编辑器（有目标 → 改，没有 → 设新目标）；欢迎页还没有会话，提示用法。
+   * 欢迎页带条件发出：先照常建会话，再设目标。
+   *
+   * 条件里的 @ 引用、粘贴芯片就地展开成文字（目标只有文字）；要藏的值不展开 —— 宿主这条路没有收真值的口子，
+   * 输入框里那颗胶囊的文字原样进条件，真值不出本机。
+   */
+  const goalSendingRef = useRef(false)
+  const runGoalCommand = async (args: string): Promise<void> => {
+    const from = activeSessionId
+    if (goalSendingRef.current) return
+    clearSendError()
+    if (!args) {
+      if (!from) {
+        setSendError({ sessionId: null, text: t('goal.usageHint'), running: false, notice: true })
+        return
+      }
+      const store = useChatStore.getState()
+      const goal = store.sessionGoals[from]
+      store.openGoalEditor(
+        from,
+        goal && (goal.status === 'active' || goal.status === 'paused') ? 'edit' : 'new'
+      )
+      resetComposer()
+      return
+    }
+    const objective = paste.resolveInline(at.resolveInline(args))
+    const snapshot = takeComposerSnapshot()
+    goalSendingRef.current = true
+    let sid = from
+    try {
+      if (!sid) {
+        sid = await createSessionForSend()
+        if (!sid) return
+      }
+      const goalAct = getHostApi()?.agent?.goalAct
+      if (!goalAct) return
+      const result = await goalAct({ sessionId: sid, action: { type: 'set', objective } })
+      if (result.ok) {
+        useChatStore.getState().touchSessionActive(sid)
+        // 等的时候换到了别的会话：那边的输入框不是这一份，不动它
+        if (useChatStore.getState().activeSessionId === sid) resetComposer()
+        return
+      }
+      failGoalCommand(sid, from, result.error, snapshot)
+    } catch (err) {
+      failGoalCommand(sid, from, sendErrorText(err), snapshot)
+    } finally {
+      goalSendingRef.current = false
+    }
+  }
+  /** 设目标没成：话还在输入框里就只报原因；欢迎页那条路上建会话时换过输入框，放回去 */
+  const failGoalCommand = (
+    sid: string | null,
+    from: string | null,
+    error: string,
+    snapshot: ComposerSnapshot
+  ): void => {
+    if (sid && sid !== from) {
+      useChatStore.getState().requestComposerRestore({ sessionId: sid, snapshot, error })
+      return
+    }
+    setSendError({ sessionId: sid, text: error, running: isSessionRunning(sid), notice: true })
+  }
+  /** 输入框里是 `/goal`（且内置命令可用）→ 交给 runGoalCommand，回 true；否则 false，照常发 */
+  const tryGoalCommand = (): boolean => {
+    if (!goalAvailable || isAgentClosing || sendBlocked) return false
+    const args = goalCommandArgs({ chip: slashChip, text: inputText })
+    if (args === null) return false
+    void runGoalCommand(args)
+    return true
+  }
+
+  /**
    * 发送消息（支持图片）。回车与发送按钮都走这里，两处都不 await —— 失败必须在这里接住：
    * 否则是一条没人处理的 rejection，用户眼里什么也没发生
    */
   const handleSend = async (): Promise<void> => {
+    if (tryGoalCommand()) return
     const from = activeSessionId
     clearSendError()
     try {
@@ -770,6 +875,8 @@ export function InputArea({
    * 显示侧车没法紧邻它落盘）→ 添加的文件与粘贴芯片就地展开。
    */
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
+    // 运行中也一样：`/goal 条件` 交给宿主（会话在跑时宿主把那条消息并进当前轮）
+    if (tryGoalCommand()) return
     const raw = inputText.trim()
     const attached = at.attachedPaths(raw)
     const { text, secrets: hidden } = secrets.expand(paste.resolveInline(at.resolveAttached(raw)))
@@ -817,7 +924,7 @@ export function InputArea({
   /** 斜杠命令选中回调：设置芯片，输入框只保留参数；自动启用依赖工具 */
   const handleSlashSelect = useCallback(
     (commandId: string) => {
-      const cmd = slashCommands.find((c) => c.commandId === commandId)
+      const cmd = commands.find((c) => c.commandId === commandId)
       setSlashChip({
         commandId,
         name: cmd?.name || commandId,
@@ -829,7 +936,7 @@ export function InputArea({
       setTimeout(() => textareaRef.current?.focus(), 0)
       autoEnableRequiredTools(cmd?.requiredTools, useChatStore.getState().activeSessionId)
     },
-    [slashCommands, setInputText, autoEnableRequiredTools]
+    [commands, setInputText, autoEnableRequiredTools]
   )
 
   /** 键盘事件处理 */
@@ -855,7 +962,7 @@ export function InputArea({
     if (slash.showPopover) {
       // Enter/Tab 时选中当前项
       if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
-        const filtered = slashCommands.filter((cmd) =>
+        const filtered = commands.filter((cmd) =>
           cmd.commandId.toLowerCase().startsWith(slash.filter.toLowerCase())
         )
         const selected = filtered[slash.selectedIndex]
@@ -898,6 +1005,8 @@ export function InputArea({
     // 触屏：回车就是换行，交给 textarea（发送只走发送键）；接了实体键盘的用 ⌘ / Ctrl + 回车发
     if (e.key === 'Enter' && !e.shiftKey && (!touch || e.metaKey || e.ctrlKey)) {
       e.preventDefault()
+      // `/goal`：交给宿主（运行中也是 —— 只写了 `/goal` 时输入框是空的，下面的 steer 分支不会走）
+      if (tryGoalCommand()) return
       // streaming 时发送 steer 消息
       if (isStreaming) {
         if (inputText.trim()) handleQueueSend('steer')
@@ -1288,7 +1397,7 @@ export function InputArea({
                 {slash.showPopover && (
                   <SlashCommandPopover
                     filter={slash.filter}
-                    commands={slashCommands}
+                    commands={commands}
                     onSelect={handleSlashSelect}
                     selectedIndex={slash.selectedIndex}
                   />
@@ -1359,7 +1468,10 @@ export function InputArea({
                             ? // 手机：没有拖放，也没有 Shift+回车（回车本身就是换行）
                               t('input.placeholderTouch')
                             : slashChip
-                              ? t('input.placeholder')
+                              ? slashChip.kind === 'builtin' &&
+                                slashChip.commandId === GOAL_COMMAND_ID
+                                ? t('goal.placeholder')
+                                : t('input.placeholder')
                               : pathOfFile
                                 ? t('input.placeholderFiles')
                                 : modelSupportsVision

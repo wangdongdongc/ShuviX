@@ -35,7 +35,11 @@ export function renderEventPrompt(
   trigger: string,
   payload: Record<string, unknown>
 ): string {
-  const yaml = stringifyYaml(payload, { lineWidth: 0 }).trimEnd()
+  // payload 里有 agent 写的字（命令、工具输出、助手正文）：里面的闭合标签会提前关掉围栏、冒充宿主跟派发出去的 agent
+  // 说话 —— 转成 `<\/tag` 再放进去（YAML 里照样读得懂，围栏只在末尾闭合一次）
+  const yaml = stringifyYaml(payload, { lineWidth: 0 })
+    .trimEnd()
+    .replace(new RegExp(`</(${tag})`, 'gi'), '<\\/$1')
   const fence = `<${tag} trigger="${trigger}">\n${yaml}\n</${tag}>`
   const text = body.trim()
   return text ? `${text}\n\n${fence}` : fence

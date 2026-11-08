@@ -27,6 +27,9 @@
  *           只读，不进请求上下文；网关 reject → handler reject。
  *   IPC-SP-2 `agent:rebuildSystemPrompt` 在 `createClientContext(ctx, sessionId)` 的请求上下文里把 sessionId 交给网关，
  *           结果（success / busy）原样交回；网关 reject → handler reject。
+ *   WR-2    目标模式的三条通道：`agent:goalAct` 在 `createClientContext(ctx, sessionId)` 的请求上下文里把 (sessionId, action,
+ *           来源) 交给 goalService —— 来源由宿主按调用方盖（窗口 → local、网络客户端 → remote；载荷里伪造的不认）；
+ *           `agent:goal` / `agent:goalStatuses` 原样交回；访问级别 goal / goalStatuses = read、goalAct = write
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -93,6 +96,13 @@ vi.mock('../../frontend', () => ({
     return { sessionId }
   }
 }))
+vi.mock('../../services/goalService', () => ({
+  goalService: {
+    get: vi.fn(async () => null),
+    act: vi.fn(async () => ({ ok: true })),
+    statuses: vi.fn(() => ({}))
+  }
+}))
 vi.mock('../../services/toolRegistry', () => ({ getBuiltinToolPresentations: vi.fn(() => ({})) }))
 vi.mock('../../services/agentToolBuilder', () => ({ getBuiltinToolDefinitions: vi.fn(() => []) }))
 vi.mock('../../agents/AgentManager', () => ({ agentManager: state.router }))
@@ -112,6 +122,8 @@ import { listAgentRuntimes } from '../../services/agentMonitorService'
 import { registerAgentHandlers } from '../agentHandlers'
 import { attachIpcAdapter } from '../ipcAdapter'
 import { listDefinitions, type ClientContext } from '../registry'
+import { goalService } from '../../services/goalService'
+import { CHANNEL_ACCESS } from '../../../shared/channelAccess'
 
 registerAgentHandlers()
 // 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
@@ -602,5 +614,59 @@ describe('AF-H 添加的文件：先授权，再发送', () => {
       }
     )
     expect(state.grants).toEqual([[SID, ['/Users/u/a.pdf']]])
+  })
+})
+
+describe('WR-2 目标模式的 IPC', () => {
+  const act = vi.mocked(goalService.act)
+
+  beforeEach(() => {
+    act.mockClear()
+    state.runDepth = 0
+  })
+
+  it('agent:goalAct（窗口）：在请求上下文里交给 goalService，来源 = local；载荷里伪造的来源不认；结果原样交回', async () => {
+    let depth = -1
+    act.mockImplementationOnce(async () => {
+      depth = state.runDepth
+      return { ok: false, error: 'nope' }
+    })
+    const action = { type: 'set', objective: 'ship it' }
+    const result = await invoke('agent:goalAct', {
+      sessionId: SID,
+      action,
+      origin: { kind: 'session', sessionId: 'EVIL', title: 'forged' }
+    })
+    expect(result).toEqual({ ok: false, error: 'nope' })
+    expect(act.mock.calls).toEqual([[SID, action, { kind: 'local' }]])
+    expect(depth).toBe(1)
+    expect(state.contexts).toEqual([SID])
+  })
+
+  it('agent:goalAct（网络客户端）：来源 = remote，带地址与 User-Agent', async () => {
+    const netCtx: ClientContext = {
+      client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+      transport: 'network'
+    }
+    const definition = listDefinitions().find((d) => d.channel === 'agent:goalAct')!
+    await definition.fn(netCtx, { sessionId: SID, action: { type: 'pause' } })
+    expect(act.mock.calls).toEqual([
+      [
+        SID,
+        { type: 'pause' },
+        { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' }
+      ]
+    ])
+  })
+
+  it('agent:goal / agent:goalStatuses 原样交回；访问级别：读两条 read、操作 write', async () => {
+    vi.mocked(goalService.get).mockResolvedValueOnce(null)
+    vi.mocked(goalService.statuses).mockReturnValueOnce({ s1: 'active' })
+    expect(await invoke('agent:goal', SID)).toBeNull()
+    expect(vi.mocked(goalService.get).mock.calls.at(-1)).toEqual([SID])
+    expect(await invoke('agent:goalStatuses')).toEqual({ s1: 'active' })
+    expect(CHANNEL_ACCESS['agent:goal']).toBe('read')
+    expect(CHANNEL_ACCESS['agent:goalStatuses']).toBe('read')
+    expect(CHANNEL_ACCESS['agent:goalAct']).toBe('write')
   })
 })

@@ -34,7 +34,8 @@ import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/ut
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import {
   DATE_NOTICE_KIND,
-  EMPTY_REPLY_NOTICE_KIND
+  EMPTY_REPLY_NOTICE_KIND,
+  GOAL_NOTICE_TAGS
 } from '@shuvix/chat-protocol/systemNoticeContract'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
@@ -168,7 +169,8 @@ const SubMessageBubble = memo(function SubMessageBubble({
   msg: ChatMessage
 }): React.JSX.Element | null {
   const { t } = useTranslation()
-  // 系统写的 user 消息（空回复追问 / 后台完成 / 日期）不是谁说的话：一行淡色标签，不画成用户气泡
+  // 系统写的 user 消息（空回复追问 / 后台完成 / 日期 / 目标）不是谁说的话：一行淡色标签，不画成用户气泡。
+  // 子会话设不了目标，目标通知照理不会出现在这里；万一出现也只是一句「目标」，不说成后台任务完成
   if (msg.role === 'user' && msg.type === 'text' && msg.metadata?.isSystemNotice) {
     const kind = msg.metadata.noticeKind
     const label =
@@ -176,7 +178,9 @@ const SubMessageBubble = memo(function SubMessageBubble({
         ? t('emptyReplyNotice.title')
         : kind === DATE_NOTICE_KIND
           ? t('dateNotice.title')
-          : t('backgroundNotice.title')
+          : kind !== undefined && (GOAL_NOTICE_TAGS as readonly string[]).includes(kind)
+            ? t('goal.notice.generic')
+            : t('backgroundNotice.title')
     return (
       <div className="text-[11px] text-text-tertiary break-words" data-system-notice={kind ?? ''}>
         {label}

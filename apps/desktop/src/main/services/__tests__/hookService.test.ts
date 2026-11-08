@@ -165,6 +165,10 @@ const BUILTIN_TRIGGERS = ['session.prompt-accepted', 'session.turn-completed']
 const REVIEW_TITLE = 'Automatic Review of Approval Requests'
 const REVIEW_DESCRIPTION =
   'Before an approval card is shown, the permission reviewer answers it on your behalf — it lets ordinary work through, refuses what is clearly harmful and leaves the rest to you.'
+/** 第三份内置 hook：目标检查（判定型，按名字排在 auto-title 之后） */
+const GOAL_TITLE = 'Goal Check'
+const GOAL_DESCRIPTION =
+  'After each run of a session with a goal, the goal checker decides whether the goal is met; if not, the session keeps working toward it.'
 
 /** 内置 md 原文：直接读包里的文件，不经被测代码 */
 const builtinMd = (file: string): string =>
@@ -460,7 +464,7 @@ describe('hookService — 内置 hook 与运行时装配', () => {
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
   })
 
-  it('HS-2 目录不存在：设置页恰内置两行（按名字排，无 overridden 键；带内置 id 与 disableable，没注入读口就没有 disabled），非法列表为空', () => {
+  it('HS-2 目录不存在：设置页恰内置三行（按名字排，无 overridden 键；带内置 id 与 disableable，没注入读口就没有 disabled），非法列表为空', () => {
     expect(existsSync(state.dir)).toBe(false)
     expect(hookService.listForSettings()).toStrictEqual([
       {
@@ -484,6 +488,17 @@ describe('hookService — 内置 hook 与运行时装配', () => {
         // 内置的 basePath 是随包那份当前语言版（这里 = 仓库里的 en 文件），不再为空串
         basePath: join(state.builtinDir, 'auto-title.md'),
         objectId: 'hook:builtin:auto-title',
+        disableable: true
+      },
+      {
+        name: 'goal-check',
+        displayName: GOAL_TITLE,
+        description: GOAL_DESCRIPTION,
+        agent: 'goal-judge',
+        triggers: ['goal.check'],
+        source: 'builtin',
+        basePath: join(state.builtinDir, 'goal-check.md'),
+        objectId: 'hook:builtin:goal-check',
         disableable: true
       }
     ])
@@ -565,7 +580,8 @@ describe('hookService — 内置 hook 与运行时装配', () => {
     ])
     expect(hookService.listForSettings().map((item) => item.name)).toEqual([
       'auto-review',
-      'auto-title'
+      'auto-title',
+      'goal-check'
     ])
     firePrompt()
     await settle()
@@ -608,6 +624,7 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     expect(hookService.listForSettings().map((item) => item.name)).toEqual([
       'auto-review',
       'auto-title',
+      'goal-check',
       'x'
     ])
     expect(hookService.listInvalid()).toEqual([])
@@ -645,7 +662,8 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     expect(invalid[0].error).toContain('the whole file is rejected')
     expect(hookService.listForSettings().map((item) => item.name)).toEqual([
       'auto-review',
-      'auto-title'
+      'auto-title',
+      'goal-check'
     ])
     firePrompt()
     await settle()
@@ -671,7 +689,8 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     ])
     expect(hookService.listForSettings().map((item) => item.name)).toEqual([
       'auto-review',
-      'auto-title'
+      'auto-title',
+      'goal-check'
     ])
   })
 
@@ -727,7 +746,8 @@ describe('hookService — 全局埋点（timer.fired）不归 hook', () => {
       expect(invalid[0].error).toContain('the whole file is rejected')
       expect(hookService.listForSettings().map((item) => item.name)).toEqual([
         'auto-review',
-        'auto-title'
+        'auto-title',
+        'goal-check'
       ])
 
       // 会话里的埋点照常来：这份文件不跑
@@ -817,6 +837,17 @@ describe('hookService — 同名覆盖与同名的几份', () => {
         disableable: true,
         overridden: true,
         overriddenBy: 'auto-title.md'
+      },
+      {
+        name: 'goal-check',
+        displayName: GOAL_TITLE,
+        description: GOAL_DESCRIPTION,
+        agent: 'goal-judge',
+        triggers: ['goal.check'],
+        source: 'builtin',
+        basePath: join(state.builtinDir, 'goal-check.md'),
+        objectId: 'hook:builtin:goal-check',
+        disableable: true
       }
     ])
 
@@ -1234,7 +1265,8 @@ describe('hookService — 设置页列表与目录入口', () => {
       ['auto-title', 'user'],
       ['auto-title', 'builtin'],
       ['b', 'user'],
-      ['c', 'user']
+      ['c', 'user'],
+      ['goal-check', 'builtin']
     ])
     const baseKeys = [
       'agent',
@@ -1550,6 +1582,7 @@ describe('hookService — 对象 id（shuvix-id）', () => {
 describe('hookService — 停用开关（内置 hook，按对象 id 认）', () => {
   const TITLE_ID = 'hook:builtin:auto-title'
   const REVIEW_ID = 'hook:builtin:auto-review'
+  const GOAL_ID = 'hook:builtin:goal-check'
   const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
   /** 停用这几个 id 的读口 */
   const disabling = (...ids: string[]): ((objectId: string) => boolean) => {
@@ -1610,7 +1643,7 @@ describe('hookService — 停用开关（内置 hook，按对象 id 认）', () 
     expect([...hookService.agentsBoundTo('permission.request')]).toEqual([])
   })
 
-  it('HS-D4 读口只问带 id 的文件：() => true 停掉两份内置，没写 shuvix-id 的用户 hook 照跑、没有 disabled；读口拿到的是归一后的 id', async () => {
+  it('HS-D4 读口只问带 id 的文件：() => true 停掉三份内置，没写 shuvix-id 的用户 hook 照跑、没有 disabled；读口拿到的是归一后的 id', async () => {
     const seen: string[] = []
     hookService.setDisabledReader((objectId) => {
       seen.push(objectId)
@@ -1635,7 +1668,7 @@ describe('hookService — 停用开关（内置 hook，按对象 id 认）', () 
     expect(row('upper', 'user')).not.toHaveProperty('disableable')
     expect(seen).toContain(U)
     expect(seen).not.toContain(U.toUpperCase())
-    expect(new Set(seen)).toEqual(new Set([TITLE_ID, REVIEW_ID, U]))
+    expect(new Set(seen)).toEqual(new Set([TITLE_ID, REVIEW_ID, GOAL_ID, U]))
   })
 
   it('HS-D5 读口每次现读：两次 fire 之间切换（文件不动、扫描缓存是热的）', async () => {
@@ -1736,5 +1769,32 @@ describe('hookService — 停用开关（内置 hook，按对象 id 认）', () 
     firePrompt({ isDefaultTitle: true })
     await waitRuns(1)
     expect(titlerRuns()).toBe(1)
+  })
+
+  it('HK-3 读口停用 goal-check → decide(goal.check) 直接 null、不派发；agentsBoundTo(goal.check) 只在停用时为空（目标栏据此说「没有检查员」）', async () => {
+    expect([...hookService.agentsBoundTo('goal.check')]).toEqual(['goal-judge'])
+    hookService.setDisabledReader(disabling(GOAL_ID))
+    expect(row('goal-check', 'builtin')).toMatchObject({ objectId: GOAL_ID, disabled: true })
+    expect([...hookService.agentsBoundTo('goal.check')]).toEqual([])
+    // 别的判定型埋点不受影响
+    expect([...hookService.agentsBoundTo('permission.request')]).toEqual(['permission-reviewer'])
+    const decision = await hookTriggers.decide('goal.check', {
+      sessionId: 's1',
+      profileName: 'work',
+      title: 'T',
+      isDefaultTitle: false,
+      goal: {
+        id: 'g_1',
+        objective: 'Make e2e green',
+        turns: 0,
+        costUsd: 0,
+        limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
+        activeMinutes: 0
+      },
+      userMessages: [],
+      lastRun: { assistantText: '', toolCalls: [], filesWritten: [] }
+    })
+    expect(decision).toBeNull()
+    expect(mocks.runTask).not.toHaveBeenCalled()
   })
 })

@@ -26,6 +26,7 @@ import { StreamingFooter } from './StreamingFooter'
 import { TaskListPanel } from './TaskListPanel'
 import { PendingInputsCard, pendingCardOnScreen } from './PendingInputsCard'
 import { InputArea } from './InputArea'
+import { GoalBar } from './GoalBar'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ViewLoadGate } from './ConversationLoadBar'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -617,11 +618,20 @@ export function Conversation({
           }
         </ViewLoadGate>
 
-        {/* 输入区（悬浮卡片）。待处理用户输入在列表末尾（ConversationFooter），这里只发消息 */}
+        {/* 输入区（悬浮卡片）。待处理用户输入在列表末尾（ConversationFooter），这里只发消息。
+            卡片最顶格是目标栏（会话有目标时；裁决 D8：常驻在输入框上方，不随对话滚动），宿主的插槽排在它下面 */}
         <div
           className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
         >
-          <InputArea thread={inputTop} onHeightChange={handleInputHeightChange} />
+          <InputArea
+            thread={
+              <>
+                <GoalBar key={sessionId} sessionId={sessionId} />
+                {inputTop}
+              </>
+            }
+            onHeightChange={handleInputHeightChange}
+          />
         </div>
       </div>
 

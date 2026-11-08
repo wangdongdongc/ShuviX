@@ -13,6 +13,8 @@ import {
   buildBuiltinProfile,
   buildBuiltinProfiles,
   CHAT_PROFILE_NAME,
+  GOAL_JUDGE_PROFILE_NAME,
+  GOAL_JUDGE_SPEC,
   HOST_ONLY_PROFILE_NAMES,
   KNOWLEDGE_WRITER_SPEC,
   NOTEBOOK_PROFILE_NAME,
@@ -95,7 +97,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('十个内置，五个基座档案居首', () => {
+  it('十一个内置，五个基座档案居首', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它；
     // widget 在 2026-10-16 改成了内置技能 builtin:widget，也不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
@@ -108,7 +110,8 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'explore',
       'titler',
       'knowledge-writer',
-      'permission-reviewer'
+      'permission-reviewer',
+      'goal-judge'
     ])
   })
 
@@ -324,7 +327,8 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
     // 权限审查员同理：它的全部输入就是那次操作的事件，项目文档只会稀释审查规则。
     // 知识库写手（库管员）也是：它只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
-    const NO_INJECTION = ['titler', 'permission-reviewer', 'knowledge-writer']
+    // 目标检查员同理：它的输入是那一轮的事件，要核对的文件自己用 read 去读
+    const NO_INJECTION = ['titler', 'permission-reviewer', 'knowledge-writer', 'goal-judge']
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
       // 两项注入的开关面不同：
@@ -654,10 +658,11 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
     }
   })
 
-  it('PRV-2 HOST_ONLY_PROFILE_NAMES 恰为 {permission-reviewer, knowledge-writer}：与基座名单不相交，且在内置 spec 名单里', () => {
+  it('PRV-2 HOST_ONLY_PROFILE_NAMES 恰为 {permission-reviewer, knowledge-writer, goal-judge}：与基座名单不相交，且在内置 spec 名单里', () => {
     expect([...HOST_ONLY_PROFILE_NAMES]).toEqual([
       PERMISSION_REVIEWER_PROFILE_NAME,
-      KNOWLEDGE_WRITER_SPEC.name
+      KNOWLEDGE_WRITER_SPEC.name,
+      'goal-judge'
     ])
     const specNames = BUILTIN_PROFILE_SPECS.map((spec) => spec.name)
     for (const name of HOST_ONLY_PROFILE_NAMES) {
@@ -1302,6 +1307,39 @@ describe('{{shuvix:extensionDiscovery}} 的归属（RG）', () => {
       const users = profiles.filter((p) => count(p.systemPrompt) > 0).map((p) => p.name)
       expect([...holders].sort(), language).toEqual(['bot', 'chat', 'coding', 'work'])
       expect([...users].sort(), language).toEqual(['bot', 'chat', 'coding', 'work'])
+    }
+  })
+})
+
+/**
+ * HK-5 goal-judge 档案钉板（目标模式的判定方，docs/goal-mode-design.md §4.2）：只由宿主派发（内置 goal-check hook），
+ * 工具只有 `read`（结论经结果契约附带的 `next` 交回），thinking low，不吃指令文件、项目感知关；三语结构一致。
+ */
+describe('HK-5 goal-judge 档案钉板', () => {
+  it("三语：工具恰为 ['read']、thinking low、不吃指令文件、项目感知关、不声明模型；只由宿主派发", () => {
+    expect(GOAL_JUDGE_PROFILE_NAME).toBe('goal-judge')
+    expect(GOAL_JUDGE_SPEC.name).toBe(GOAL_JUDGE_PROFILE_NAME)
+    expect(HOST_ONLY_PROFILE_NAMES.has(GOAL_JUDGE_PROFILE_NAME)).toBe(true)
+    expect(BASE_PROFILE_NAMES.has(GOAL_JUDGE_PROFILE_NAME)).toBe(false)
+    for (const language of LANGS) {
+      const built = buildBuiltinProfile(GOAL_JUDGE_SPEC, { language, readMd })
+      expect(built, `goal-judge.${language}`).not.toBeNull()
+      expect(built!.tools, language).toEqual(['read'])
+      expect(built!.thinkingLevel, language).toBe('low')
+      expect(built!.instructionFiles, language).toEqual([])
+      expect(built!.projectAwareness, language).toBe(false)
+      expect(built!.model, language).toBeUndefined()
+      // 正文点名 next 与 payload 的几个键（这些键真在 GoalCheckPayload 上）
+      expect(built!.systemPrompt, language).toContain('`next`')
+      for (const key of [
+        'goal.objective',
+        'lastRun.toolCalls',
+        'lastRun.assistantText',
+        'userMessages',
+        'previousVerdict'
+      ]) {
+        expect(built!.systemPrompt, `${language} ${key}`).toContain(key)
+      }
     }
   })
 })

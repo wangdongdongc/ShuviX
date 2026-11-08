@@ -8,6 +8,7 @@
  *
  * 只由宿主在触发时构造（`botTriggerService`），前端从不构造它。本模块纯数据、不依赖 Node / Electron。
  */
+import { isGoalSetToken } from './goalSet'
 import { isMidRunNoteToken } from './midRunNote'
 import { isSessionSenderToken } from './sessionSender'
 import { isUserWordsToken } from './userWords'
@@ -74,13 +75,14 @@ export function isTriggerEventToken(token: unknown): boolean {
   return (token as { type?: unknown }).type === TRIGGER_EVENT_TOKEN_TYPE
 }
 
-/** 系统写的 Token：运行中插话的说明、触发事件、别的会话发来的消息的发送方、宿主附上的用户原话 */
+/** 系统写的 Token：运行中插话的说明、触发事件、别的会话发来的消息的发送方、宿主附上的用户原话、设定目标的说明 */
 function isSystemToken(token: unknown): boolean {
   return (
     isMidRunNoteToken(token) ||
     isTriggerEventToken(token) ||
     isSessionSenderToken(token) ||
-    isUserWordsToken(token)
+    isUserWordsToken(token) ||
+    isGoalSetToken(token)
   )
 }
 

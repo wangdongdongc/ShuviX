@@ -10,9 +10,15 @@
  *   NK-S3 旧的总开关 `notification.enabled` 没人读：写着 'false' 也不关；写着 'true' 也救不回关掉的一类
  *   NK-S4 真决策器：关掉 done → 完成不构造原生通知，询问与失败各构造一个并弹出
  *   NK-S5 真决策器：弹出之后把开关关掉 → 落定与打开会话照样关掉对应的原生通知（关的是那一个，各一次）
+ *   NT-3  目标（goal-mode-design §9.3）：类别表里有 goal；`notification.goal` 缺省开、字面 'false' 关；
+ *         `setGoalActiveReader` 的读口接到决策器的 goalActive（没登记 = false）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentNotificationKind } from '@shuvix/chat-protocol/notification'
+import {
+  AGENT_NOTIFICATION_KINDS,
+  notificationSettingKey,
+  type AgentNotificationKind
+} from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { createNotificationCenter as realCreateNotificationCenter } from '../../../../../../packages/agent-runtime/src/notification/notificationCenter'
@@ -134,6 +140,38 @@ describe('开关怎么读（决策器是替身）', () => {
     mocks.settings.set('notification.ask', 'false')
     expect(allKinds()).toEqual([false, true, true])
     expect(mocks.findByKey).not.toHaveBeenCalledWith('notification.enabled')
+  })
+})
+
+describe('NT-3 目标通知的开关与读口', () => {
+  let deps: { enabled: Enabled; goalActive: (sessionId: string) => boolean }
+  let service: Service
+
+  beforeEach(async () => {
+    mocks.createNotificationCenter.mockImplementation((given: typeof deps) => {
+      deps = given
+      return {}
+    })
+    service = await loadService()
+  })
+
+  it("类别表有 goal（设置页一类一个开关）；notification.goal 缺省开，字面 'false' 关", () => {
+    expect(AGENT_NOTIFICATION_KINDS).toContain('goal')
+    expect(notificationSettingKey('goal')).toBe('notification.goal')
+    expect(deps.enabled('goal')).toBe(true)
+    expect(mocks.findByKey.mock.calls).toEqual([['notification.goal']])
+    mocks.settings.set('notification.goal', 'false')
+    expect(deps.enabled('goal')).toBe(false)
+    expect(deps.enabled('done')).toBe(true)
+  })
+
+  it('goalActive：没登记读口 → false；登记之后按读口；收回 → false', () => {
+    expect(deps.goalActive('s1')).toBe(false)
+    service.setGoalActiveReader((sessionId) => sessionId === 's1')
+    expect(deps.goalActive('s1')).toBe(true)
+    expect(deps.goalActive('s2')).toBe(false)
+    service.setGoalActiveReader(null)
+    expect(deps.goalActive('s1')).toBe(false)
   })
 })
 

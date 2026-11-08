@@ -152,6 +152,17 @@ export const PERMISSION_REVIEWER_SPEC: BuiltinProfileSpec = {
   name: PERMISSION_REVIEWER_PROFILE_NAME
 }
 
+/**
+ * 目标检查员 —— 目标模式的判定侧（设计稿 docs/goal-mode-design.md §4.4）：内置判定型 hook `goal-check` 在一条有进行中
+ * 目标的会话跑完一次根运行后派发它，它经 `next` 交回 met / not_met / impossible。只有 `read`（打开截断掉的输出、改过的
+ * 文件，裁决 D2），`shuvix-thinking: low` 与审查员同理。只由宿主派发：干活的 agent 要是能直接派发它，就能反复试探
+ * 「哪种说法能让它判达成」。
+ */
+export const GOAL_JUDGE_PROFILE_NAME = 'goal-judge'
+export const GOAL_JUDGE_SPEC: BuiltinProfileSpec = {
+  name: GOAL_JUDGE_PROFILE_NAME
+}
+
 /** 内置 spec 全集（五个基座档案 work / chat / notebook / bot / tab 居首，其后为可派发的具名 agent） */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WORK_SPEC,
@@ -163,7 +174,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   EXPLORE_SPEC,
   TITLER_SPEC,
   KNOWLEDGE_WRITER_SPEC,
-  PERMISSION_REVIEWER_SPEC
+  PERMISSION_REVIEWER_SPEC,
+  GOAL_JUDGE_SPEC
 ]
 
 /**
@@ -191,7 +203,8 @@ export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
  */
 export const HOST_ONLY_PROFILE_NAMES: ReadonlySet<string> = new Set([
   PERMISSION_REVIEWER_PROFILE_NAME,
-  KNOWLEDGE_WRITER_PROFILE_NAME
+  KNOWLEDGE_WRITER_PROFILE_NAME,
+  GOAL_JUDGE_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */

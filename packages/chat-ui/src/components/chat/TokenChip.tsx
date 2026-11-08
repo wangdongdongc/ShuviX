@@ -8,6 +8,7 @@ import {
   FileText,
   MessagesSquare,
   Quote,
+  Target,
   Terminal,
   Timer,
   X,
@@ -56,12 +57,14 @@ const KIND_META: Record<
   trigger: { color: 'var(--viz-7)', Icon: Timer, labelKey: 'input.atSourceTimer' },
   sender: { color: 'var(--viz-5)', Icon: MessagesSquare, labelKey: 'input.atSourceSender' },
   // 宿主附上的用户原话：与发送方同一个色槽（都说「这条消息从哪来」），图标是引号
-  userWords: { color: 'var(--viz-5)', Icon: Quote, labelKey: 'input.atSourceUserWords' }
+  userWords: { color: 'var(--viz-5)', Icon: Quote, labelKey: 'input.atSourceUserWords' },
+  // 设定目标那条消息上系统写的说明（目标模式）：只有标签「目标」，没有标题；强调色同目标栏的 ◎
+  goal: { color: 'var(--theme-accent)', Icon: Target, labelKey: 'input.atSourceGoal' }
 }
 
-/** 给人看的 payload：触发事件与发送方的 payload 开头是与原文之间的分隔（模型文本要逐字相同），显示时不要那两个空行 */
+/** 给人看的 payload：触发事件、发送方、用户原话、目标说明的 payload 开头是与原文之间的分隔（模型文本要逐字相同），显示时不要那两个空行 */
 function shownPayload(token: InlineToken, kind: TokenKind): string {
-  return kind === 'trigger' || kind === 'sender' || kind === 'userWords'
+  return kind === 'trigger' || kind === 'sender' || kind === 'userWords' || kind === 'goal'
     ? token.payload.trimStart()
     : token.payload
 }
@@ -164,7 +167,8 @@ export function TokenChip({
     setOpen(true)
   }
 
-  const isNote = kind === 'note'
+  // 只有标签、没有标题的几种：插话说明、目标说明
+  const isNote = kind === 'note' || kind === 'goal'
   const title = isNote ? (label ?? '') : tokenTitle(token)
   // 系统写的几种都跟在文字后面：和前面的文字隔开一点
   const trailing = isNote || kind === 'trigger' || kind === 'sender' || kind === 'userWords'
@@ -274,7 +278,7 @@ function TokenHoverCard({
   onMouseLeave: () => void
 }): React.JSX.Element {
   const meta = kind === 'other' ? null : KIND_META[kind]
-  const isNote = kind === 'note'
+  const isNote = kind === 'note' || kind === 'goal'
   const title = isNote
     ? (label ?? '')
     : token.name && token.name !== token.id

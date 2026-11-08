@@ -440,7 +440,8 @@ export {
   type TriggerPayloadMap,
   type TriggerResultMap,
   type TriggerPointDef,
-  type PermissionRequestPayload
+  type PermissionRequestPayload,
+  type GoalCheckPayload
 } from './hook/triggerPoints'
 export { renderHookPrompt, renderEventPrompt, HOOK_EVENT_TAG } from './hook/hookPrompt'
 export {
@@ -527,6 +528,8 @@ export {
   HOST_ONLY_PROFILE_NAMES,
   PERMISSION_REVIEWER_PROFILE_NAME,
   PERMISSION_REVIEWER_SPEC,
+  GOAL_JUDGE_PROFILE_NAME,
+  GOAL_JUDGE_SPEC,
   WORK_PROFILE_NAME,
   WORK_SPEC,
   CHAT_PROFILE_NAME,
@@ -808,6 +811,7 @@ export {
   ArtifactPinsDoc,
   DisplayDoc,
   NoticeEntry,
+  GoalDoc,
   RedactionTableDoc,
   SessionStateDoc,
   SourceDoc,
@@ -817,6 +821,7 @@ export {
   type DeferredNotice,
   type ArtifactPinsState,
   type DisplayState,
+  type GoalDocState,
   type SourceState,
   type DrivenRun,
   type NoticeData,
@@ -835,6 +840,8 @@ export {
 } from './durable/artifactPins'
 // 自动脱敏（docs/auto-redaction-design.md）：检测、占位符、已知值，与会话的占位符对照表（读写 RedactionTableDoc）
 export * from './redaction'
+// 目标模式（docs/goal-mode-design.md）：状态机、目标通知、会话目标的读写（GoalDoc）
+export * from './goal'
 export {
   RedactionTable,
   entriesReferencedBy,

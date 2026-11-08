@@ -16,6 +16,13 @@
  *         already working (a steer), or scattered through one long message. It measures what is lost between
  *         the user and the code when `work` hands the job on, against the user talking to the coding agent
  *         directly.
+ *   long  the stockroom repo with a CHANGELOG.md and the task's tests already written (`start/`): features
+ *         that need many steps across every layer, with a checkable end ("npm test passes, including
+ *         test/<task>.test.js"), for comparing goal mode with saying it once. Before the request the user
+ *         sends one message of standing rules (`early`), never repeated afterwards and not part of a goal;
+ *         the grader checks each rule on its own (`constraint` C1, C2), apart from the task's checks, so the
+ *         report shows whether a rule stated only early in the conversation survives a long run (and its
+ *         compactions). The task's own checks pass whatever the rules say; only the C checks test them.
  *
  * Each task starts from its set's base repo plus the task's `fixtures/<set>/<id>/start/` overlay (committed as a
  * second commit, so `git log` shows where a bug came in), gets one user message written the way a user would
@@ -45,13 +52,21 @@
  *   handoff/prelude-quiet    the criteria and "leave --json and HTTP alone" in a discussion turn, then "go ahead"
  *   handoff/midtask-partial  the request is vague; the user adds all three facts while the work is under way
  *   handoff/long-count       every fact of the stocktake, in one long rambling message
+ *   long/orders      purchase orders: store, receipts as movements, five routes, four CLI commands, lowstock;
+ *                    rules: C1 no new error codes (409s tempt one), C2 a CHANGELOG line in the file's format
+ *   long/expiry      lot expiry dates: validation, earliest-expiry-first shipments, an `expiring` report;
+ *                    rules: C1 keep the parameters of stock.js / inventory.js (inserting `expiresAt` before
+ *                    `at` tempts), C2 new commands, options and routes in README and the usage text
+ *   long/pricing     item prices: PATCH, a CLI command, a retail report, `export --with-price`, `price`
+ *                    queries (null never matches); rules: C1 integer cents everywhere but text for people
+ *                    (a dollar CSV or `--price 12.50` tempts), C2 a CHANGELOG line in the file's format
  */
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
-export type SetId = 'easy' | 'hard' | 'ambig' | 'handoff'
+export type SetId = 'easy' | 'hard' | 'ambig' | 'handoff' | 'long'
 
 export interface TaskSet {
   id: SetId
@@ -118,6 +133,13 @@ export const SETS: Record<SetId, TaskSet> = {
     visibleTests: STOCKROOM_TESTS,
     testSupport: ['test/helpers.js'],
     testEnv: {}
+  },
+  long: {
+    id: 'long',
+    repo: join(FIXTURES, 'stockroom'),
+    visibleTests: STOCKROOM_TESTS,
+    testSupport: ['test/helpers.js'],
+    testEnv: {}
   }
 }
 
@@ -127,10 +149,16 @@ export interface Fact {
   text: string
 }
 
+/** A standing rule the user states once, early, apart from the request (long set) */
+export interface Constraint {
+  id: string
+  text: string
+}
+
 export interface CodingTask {
   set: SetId
   id: string
-  /** What the user types, as is */
+  /** What the user types, as is (in the goal arm: the goal's text) */
   prompt: string
   /** Commit message for the `start/` overlay; absent = the task starts from the base commit */
   startCommit?: string
@@ -140,6 +168,14 @@ export interface CodingTask {
   decoys: string[]
   /** Grader and reference of another task (`<set>/<id>` under fixtures/), when this one reuses them */
   fixture?: string
+  /** Test files the task's `start/` overlay adds: run with the set's visible tests; changing them is tampering */
+  tests?: string[]
+  /**
+   * A message of standing rules the user sends before the request, settled before the request goes in and
+   * never repeated (not in the request, not in a goal). The grader tests each rule with checks tagged
+   * `constraint: <id>`, counted apart from the task's own checks.
+   */
+  early?: { message: string; constraints: Constraint[] }
   /**
    * The task runs with a simulated user who knows these facts (empty: the request says everything). Without
    * it the probe answers every question with a stock "go ahead".
@@ -223,6 +259,25 @@ const PARTIAL_FACTS: Fact[] = [
     text: '一件都留不了（可用为 0）的时候，照样返回 409、错误码 `INSUFFICIENT_STOCK`，不要返回 granted 为 0 的成功。'
   }
 ]
+
+const CHANGELOG_RULE: Constraint = {
+  id: 'C2',
+  text: '改动都记在 CHANGELOG.md 的 `## Unreleased` 下：`- <area>: <说明>` 一条一行，area 是 src 下的目录名，不加小标题，已发布的版本不动。'
+}
+
+const CHANGELOG_WORDS =
+  '改了什么都要在 CHANGELOG.md 的 `## Unreleased` 下面记上，一条一行，格式跟下面已经发布的版本一样：`- <area>: <说明>`，area 用 src 下面的目录名（api、cli、domain、report……）。不要加 `### Added` 这种小标题，已经发布的版本一个字都别动。'
+
+/** The long set's early message: two numbered rules, then "the task comes next" */
+const rules = (first: string, second: string): string =>
+  [
+    '先说两条这个仓库的规矩，后面做什么都要守：',
+    '',
+    `1. ${first}`,
+    `2. ${second}`,
+    '',
+    '具体做什么我下一条说，这条先记着。'
+  ].join('\n')
 
 export const TASKS: CodingTask[] = [
   {
@@ -473,6 +528,123 @@ export const TASKS: CodingTask[] = [
     ],
     decoys: [],
     user: { facts: COUNT_FACTS, scripted: ['F1', 'F2', 'F3', 'F4'] }
+  },
+  {
+    set: 'long',
+    id: 'orders',
+    prompt: [
+      '给 stockroom 加采购单（purchase order）：',
+      '',
+      "- `POST /orders`，body `{ sku, qty, unitCost }`（unitCost 是分），返回 201 和新订单：`{ id, sku, qty, unitCost, received: 0, status: 'open', createdAt }`。商品不存在返回 404；qty 不是正整数、unitCost 不是非负整数返回 400。",
+      '- `GET /orders` 返回 `{ orders: [...] }`，按创建的先后排；`?status=open|closed|cancelled` 只列这个状态的。`GET /orders/:id` 取一张，不存在返回 404。',
+      '- `POST /orders/:id/receive`，body `{ qty }`：按订单的单价入库（跟 receive 一样记一条出入库记录，记录上带 `orderId`），订单的 `received` 加上这次的数，收齐了状态变成 `closed`，返回更新后的订单。收的数超过还没到的数、订单已经关闭或者取消了，都返回 409，什么都不改。',
+      '- `POST /orders/:id/cancel`：只有 open 的能取消，变成 `cancelled`，已经收到的货不动；不是 open 的返回 409。',
+      '- 命令行：`stockroom order <sku> <qty> --cost <cents>`（输出 `order <id>`）、`stockroom orders [--status s]`（一行一张：id、sku、已收/数量（比如 `4/6`）、状态）、`stockroom order-receive <id> <qty>`、`stockroom order-cancel <id>`。',
+      '- lowstock 报表每行多一个 `onOrder`：这个商品所有 open 订单还没到的数量之和。可用库存加上 onOrder 已经不低于再订货点的商品不再列出来。',
+      '- 订单存在数据目录的 `orders.json` 里。',
+      '',
+      '做完的标准：`npm test` 全部通过，包括我先写好的 `test/orders.test.js`。'
+    ].join('\n'),
+    startCommit: 'tests for purchase orders; start a changelog',
+    tests: ['test/orders.test.js'],
+    rootCause: [
+      'src/store/index.js',
+      'src/services/inventory.js',
+      'src/api/server.js',
+      'src/cli/main.js',
+      'src/report/lowstock.js'
+    ],
+    decoys: [],
+    early: {
+      message: rules(
+        '错误码只能用 `src/errors.js` 里现有的那四个（INVALID、NOT_FOUND、CONFLICT、INSUFFICIENT_STOCK），不要加新的。前端和对接的系统是按错误码分支的，不认识的码一律当成 500 处理。',
+        CHANGELOG_WORDS
+      ),
+      constraints: [
+        {
+          id: 'C1',
+          text: '错误码只用 src/errors.js 里现有的四个，不加新的。'
+        },
+        CHANGELOG_RULE
+      ]
+    }
+  },
+  {
+    set: 'long',
+    id: 'expiry',
+    prompt: [
+      '有些货（胶水、油漆）有保质期，要按批次管起来：',
+      '',
+      '- 入库可以带保质期：`POST /items/:sku/receive` 的 body 里加一个可选的 `expiresAt`（日期，`YYYY-MM-DD`），命令行 `receive` 加 `--expires YYYY-MM-DD`。日期不合法就是参数错误（HTTP 400，命令行退出码 2）。不带就是没有保质期，跟现在一样。',
+      '- 出货先出最早过期的批次：没有保质期的批次排最后，保质期相同的先出先入库的。valuation 报表也按这个顺序扣批次，算剩下的价值。',
+      '- 加一个报表 `expiring`：列出还有剩余、并且在 `now` 之后 `days` 天之内（含那一天，默认 30 天）过期的批次，已经过期的也列上。每行 `{ sku, expiresAt, qty, value }`（qty 是这批还剩多少，value 是剩下的价值，单位分），按 expiresAt 再按 sku 排。HTTP 是 `GET /reports/expiring?days=30&now=2026-05-01`，返回这些行组成的数组；命令行是 `stockroom report expiring [--days 30] [--now 2026-05-01] [--json]`，不带 `--json` 打一张表。',
+      '',
+      '做完的标准：`npm test` 全部通过，包括我先写好的 `test/expiry.test.js`。'
+    ].join('\n'),
+    startCommit: 'tests for lot expiry; start a changelog',
+    tests: ['test/expiry.test.js'],
+    rootCause: [
+      'src/domain/stock.js',
+      'src/report/valuation.js',
+      'src/api/server.js',
+      'src/cli/main.js'
+    ],
+    decoys: [],
+    early: {
+      message: rules(
+        '`src/domain/stock.js` 和 `src/services/inventory.js` 里现有的导出函数，已有参数的个数、顺序和意思都不能改。仓库外面有几个盘点脚本直接 import 它们，用的就是现在的调用方式。要多传东西，就在最后加可选参数，或者加新函数。',
+        '新加的命令行命令、选项和 HTTP 接口，都要写进 README（CLI 那一节和 HTTP API 那张表）和 `stockroom` 不带参数时打印的用法说明里。'
+      ),
+      constraints: [
+        {
+          id: 'C1',
+          text: 'domain/stock.js 和 services/inventory.js 现有导出函数的参数不改（只能在最后加可选参数或加新函数）。'
+        },
+        {
+          id: 'C2',
+          text: '新的命令、选项和 HTTP 接口写进 README 和 `stockroom` 的用法说明。'
+        }
+      ]
+    }
+  },
+  {
+    set: 'long',
+    id: 'pricing',
+    prompt: [
+      '商品要有售价：',
+      '',
+      '- 商品多一个 `price` 字段。`POST /items` 和 `stockroom add` 可以带（`price` / `--price`），不带就是 `null`（还没定价）；价格不能是负数。',
+      '- `PATCH /items/:sku` 用来改价格，返回更新后的商品；body 里只能有 `price`，带了别的字段返回 400；商品不存在返回 404。命令行加 `stockroom price <sku> <price>`。',
+      '- 加一个零售价值报表 `retail`：每个商品一行 `{ sku, onHand, price, retailValue }`（retailValue = 在手数量 × 售价，没定价的算 0），按 sku 排，外加合计 `total`。HTTP 是 `GET /reports/retail`，返回 `{ rows, total }`；命令行是 `stockroom report retail [--json]`，不带 `--json` 打一张表，最后一行是合计。',
+      '- `stockroom export` 加一个 `--with-price` 选项：最后多一列 `price`，没定价的留空；不带这个选项，导出来跟现在一模一样。',
+      '- 查询语法支持 `price` 的数字比较，比如 `price>=1000`、`price<500`；没定价的商品不匹配任何价格比较。',
+      '',
+      '做完的标准：`npm test` 全部通过，包括我先写好的 `test/pricing.test.js`。'
+    ].join('\n'),
+    startCommit: 'tests for item prices; start a changelog',
+    tests: ['test/pricing.test.js'],
+    rootCause: [
+      'src/domain/items.js',
+      'src/services/inventory.js',
+      'src/api/server.js',
+      'src/cli/main.js',
+      'src/export/exportItems.js',
+      'src/query/evaluate.js'
+    ],
+    decoys: [],
+    early: {
+      message: rules(
+        '钱一律用整数的分：代码里、HTTP 的请求和返回、命令行参数、`--json`、CSV 都是，跟现在的 `unitCost`、`--cost` 一样。只有给人看的文字（报表打出来的表格）才写成 `$12.34` 这种美元。下游好几个系统都按分读。',
+        CHANGELOG_WORDS
+      ),
+      constraints: [
+        {
+          id: 'C1',
+          text: '钱一律是整数的分（HTTP、命令行参数、--json、CSV），只有给人看的表格写美元。'
+        },
+        CHANGELOG_RULE
+      ]
+    }
   }
 ]
 

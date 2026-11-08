@@ -31,14 +31,47 @@ export const DATE_NOTICE_KIND = 'date'
  */
 export const EMPTY_REPLY_NOTICE_KIND = 'empty-reply'
 
+/**
+ * 目标模式（docs/goal-mode-design.md §5）宿主写给模型的通知：续跑、长时间等待时的检查、预算收尾、目标改了、
+ * 目标的结局（达成 / 做不到 / 暂停 / 清除 / 被替换 / 恢复）。标签名同时是它的通知种类（`UserTextMeta.noticeKind`）。
+ *
+ * 必须登记在下面的表里：steer 进当前轮的通知是 pi 自己构造的 user 消息，只能靠正文形状认出来 —— 漏了，续跑消息
+ * 就会被转写摘要当成人写的，自动审查会拿它当用户的许可。
+ */
+export const GOAL_NOTICE_TAGS = [
+  'goal-continue',
+  'goal-checkin',
+  'goal-budget',
+  'goal-updated',
+  'goal-status'
+] as const
+export type GoalNoticeKind = (typeof GOAL_NOTICE_TAGS)[number]
+
 /** 通知信封的标签名（不含尖括号） */
 export const SYSTEM_NOTICE_TAGS = [
   'background-task',
   // 驱动别的会话那一轮的通知（完成 / 停下来问 / 没发出去）；`sub-session` 是 2026-10-20 之前的写法，旧会话里还有
   'session',
   'sub-session',
-  EMPTY_REPLY_NOTICE_KIND
+  EMPTY_REPLY_NOTICE_KIND,
+  ...GOAL_NOTICE_TAGS
 ] as const
+
+/**
+ * 正文是否是目标通知：完全由通知块组成，且每一块都是同一种 `goal-*` 标签 → 回那个标签（即通知种类）；否则 undefined。
+ * 目标通知从不和别的通知拼成一条（宿主每次只写一块）。
+ */
+export function goalNoticeKindOf(text: string): GoalNoticeKind | undefined {
+  if (!isSystemNoticeText(text)) return undefined
+  let kind: GoalNoticeKind | undefined
+  for (const match of text.matchAll(systemNoticeBlockRe())) {
+    const tag = match[1] as GoalNoticeKind
+    if (!(GOAL_NOTICE_TAGS as readonly string[]).includes(tag)) return undefined
+    if (kind !== undefined && kind !== tag) return undefined
+    kind = tag
+  }
+  return kind
+}
 
 /** 匹配一个完整的通知块 `<tag …>…</tag>`（带 g 标志，每次调用给一个新实例，免得 lastIndex 串场） */
 export function systemNoticeBlockRe(): RegExp {

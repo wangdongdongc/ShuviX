@@ -1,7 +1,8 @@
 // Shared helpers for the coding probe's hidden graders. A grader runs after the agent is done, on a copy
 // of the repo the agent never saw it in, and prints one JSON line: { checks: [{ name, core, pass, error? }] }.
 // "core" checks decide pass/fail for the task; the others are reported only. `fact` names the hidden fact a
-// check tests (tasks with a simulated user: the requirement only the user knew).
+// check tests (tasks with a simulated user: the requirement only the user knew). `constraint` names the rule
+// from the user's early message a check tests (long set); those are counted apart from the task's checks.
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,14 +16,15 @@ export function grader(repo, { bin = 'bin/ledger.js' } = {}) {
   const servers = []
 
   async function check(name, fn, opts = {}) {
-    const core = opts.core !== false
+    const core = opts.core !== false && !opts.constraint
     const fact = opts.fact ? { fact: opts.fact } : {}
+    const constraint = opts.constraint ? { constraint: opts.constraint } : {}
     try {
       await fn()
-      checks.push({ name, core, ...fact, pass: true })
+      checks.push({ name, core, ...fact, ...constraint, pass: true })
     } catch (err) {
       const error = String((err && err.message) || err).slice(0, 400)
-      checks.push({ name, core, ...fact, pass: false, error })
+      checks.push({ name, core, ...fact, ...constraint, pass: false, error })
     }
   }
 

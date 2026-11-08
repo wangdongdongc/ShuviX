@@ -19,9 +19,16 @@ export type AgentNotificationKind =
   | 'done'
   /** 一轮运行异常结束（API 报错等） */
   | 'failed'
+  /** 目标有了结局：达成、做不到，或被宿主暂停（预算、轮数、停滞、判定不可用、出错） */
+  | 'goal'
 
 /** 全部通知类别 —— 设置页按这个顺序一类一个开关 */
-export const AGENT_NOTIFICATION_KINDS: readonly AgentNotificationKind[] = ['ask', 'done', 'failed']
+export const AGENT_NOTIFICATION_KINDS: readonly AgentNotificationKind[] = [
+  'ask',
+  'done',
+  'failed',
+  'goal'
+]
 
 /** 这一类通知的开关存在哪个设置键。缺省开：只有字面 `'false'` 才算关 */
 export function notificationSettingKey(kind: AgentNotificationKind): string {

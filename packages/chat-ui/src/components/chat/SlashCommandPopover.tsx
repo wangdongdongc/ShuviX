@@ -1,11 +1,16 @@
 import { useRef, useEffect, useMemo } from 'react'
-import { Terminal, BookOpen } from 'lucide-react'
+import { Terminal, BookOpen, Target } from 'lucide-react'
+import type { ExperimentalFeature } from '@shuvix/chat-protocol/experimentalFeatures'
+import type { SlashCommandKind } from '../../stores/chatStore'
+import { ExperimentalTag } from '../common/ExperimentalTag'
 
 interface SlashCommandItem {
   commandId: string
   name: string
   description: string
-  kind?: 'project' | 'skill'
+  kind?: SlashCommandKind
+  /** 实验功能的命令（内置 `/goal`）：行尾一枚「实验」小标签 */
+  experimental?: ExperimentalFeature
 }
 
 interface SlashCommandPopoverProps {
@@ -67,6 +72,8 @@ export function SlashCommandPopover({
         >
           {cmd.kind === 'skill' ? (
             <BookOpen size={12} className="flex-shrink-0 text-emerald-500" />
+          ) : cmd.kind === 'builtin' ? (
+            <Target size={12} className="flex-shrink-0 text-accent" />
           ) : (
             <Terminal size={12} className="flex-shrink-0 text-text-tertiary" />
           )}
@@ -74,6 +81,7 @@ export function SlashCommandPopover({
           {cmd.description && (
             <span className="text-text-tertiary text-[11px] truncate">{cmd.description}</span>
           )}
+          {cmd.experimental && <ExperimentalTag feature={cmd.experimental} />}
         </button>
       ))}
     </div>

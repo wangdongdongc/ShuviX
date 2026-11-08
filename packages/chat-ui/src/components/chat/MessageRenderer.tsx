@@ -7,6 +7,8 @@ import { AssistantBubble } from './AssistantBubble'
 import { BackgroundNoticeRow } from './BackgroundNoticeRow'
 import { DateNoticeRow } from './DateNoticeRow'
 import { EmptyReplyNoticeRow } from './EmptyReplyNoticeRow'
+import { GoalNoticeRow } from './GoalNoticeRow'
+import { isGoalNoticeKind } from './goalNotice'
 import { InstructionNoticeRow } from './InstructionNoticeRow'
 import { CompactionNoticeRow } from './CompactionNoticeRow'
 import { useChatDensity } from '../../host/chatHostContext'
@@ -135,12 +137,13 @@ function MessageBody({
       return <InstructionNoticeRow msg={msg} />
     }
     // 自动续跑那一轮的「用户消息」其实是系统写的通知 —— 用户没说过这句话，不能画成用户气泡。
-    // 日期通知、空回复追问各有一行：它们不是「后台任务已完成」（种类由投影带来）
+    // 日期通知、空回复追问、目标通知（续跑 / 检查 / 预算 / 改了 / 结局）各有一行：它们不是「后台任务已完成」（种类由投影带来）
     if (msg.metadata?.isSystemNotice) {
       if (msg.metadata.noticeKind === DATE_NOTICE_KIND) return <DateNoticeRow msg={msg} />
       if (msg.metadata.noticeKind === EMPTY_REPLY_NOTICE_KIND) {
         return <EmptyReplyNoticeRow msg={msg} />
       }
+      if (isGoalNoticeKind(msg.metadata.noticeKind)) return <GoalNoticeRow msg={msg} />
       return <BackgroundNoticeRow msg={msg} />
     }
     // 乐观占位（还没落库）：按用户气泡画但压淡，不给回退 —— 树上还没有它

@@ -9,11 +9,12 @@
  * 只做「够看」的解析，不做校验：文案格式属于桌面主进程（bgTaskService / subSessionRunner），
  * 这里改动滞后时最坏也只是摘要退回首行 —— 原文原样还在展开态里。
  */
-import { systemNoticeBlockRe } from '@shuvix/chat-protocol/systemNoticeContract'
+import { GOAL_NOTICE_TAGS, systemNoticeBlockRe } from '@shuvix/chat-protocol/systemNoticeContract'
 import { clipLine } from '../../utils/clipLine'
+import { parseGoalNotice, unescapeGoalText } from './goalNotice'
 
 export interface SystemNoticeSummary {
-  kind: 'background-task' | 'sub-session' | 'unknown'
+  kind: 'background-task' | 'sub-session' | 'goal' | 'unknown'
   text: string
 }
 
@@ -57,6 +58,14 @@ export function summarizeSystemNotice(content: string): SystemNoticeSummary[] {
       const head = clipLine(attrs.title || attrs.id || firstLine(inner), HEAD_LEN)
       const parts = [head, attrs.status].filter(Boolean)
       out.push({ kind: 'sub-session', text: clipLine(parts.join(' · '), MAX_LEN) })
+    } else if ((GOAL_NOTICE_TAGS as readonly string[]).includes(tag)) {
+      // 目标通知各有自己的一行（GoalNoticeRow）；万一和别的通知拼在一起到了这里，也给人读的一句而不是标签：
+      // 判定理由 / 结局 / 新原文，都没有就退到正文首行
+      const info = parseGoalNotice(m[0])
+      const head = info?.event ?? ''
+      const body = info?.reason ?? info?.objective ?? unescapeGoalText(firstLine(inner))
+      const parts = [head, body].filter(Boolean)
+      out.push({ kind: 'goal', text: clipLine(parts.join(' · ') || tag, MAX_LEN) })
     }
   }
   if (out.length === 0) {

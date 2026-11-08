@@ -40,16 +40,18 @@ afterEach(() => {
 })
 
 describe('埋点目录', () => {
-  it('HR-1 三条会话域埋点（两条观察型 + 一条判定型）+ 一条全局埋点（timer.fired），id 与键一致；未知 id 查不到', () => {
+  it('HR-1 四条会话域埋点（两条观察型 + 两条判定型）+ 一条全局埋点（timer.fired），id 与键一致；未知 id 查不到', () => {
     expect(Object.keys(TRIGGER_POINTS)).toEqual([
       'session.prompt-accepted',
       'session.turn-completed',
       'permission.request',
+      'goal.check',
       'timer.fired'
     ])
     expect(Object.values(TRIGGER_POINTS).map((def) => def.kind)).toEqual([
       'observe',
       'observe',
+      'decide',
       'decide',
       'observe'
     ])

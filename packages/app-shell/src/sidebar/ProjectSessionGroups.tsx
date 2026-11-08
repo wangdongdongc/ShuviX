@@ -175,6 +175,10 @@ export function ProjectSessionGroups({
   const streamingSessions = useChatStore(selectStreamingSessions)
   const bgBusySessions = useBgTaskStore(selectBgBusySessions)
   const pendingCounts = useChatStore(selectAllPendingCounts)
+  // 目标的 ◎（进行中 / 暂停中）：直接读 store 的那张表（值不变时引用稳定）；只装了一部分 store 的宿主 / 替身里可能没有它
+  const goalStatuses = useChatStore((s) => s.sessionGoalStatuses) as
+    | Record<string, 'active' | 'paused'>
+    | undefined
   const interruptedSessions = useChatStore(selectInterruptedSessions)
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
@@ -503,6 +507,7 @@ export function ProjectSessionGroups({
               isStreaming={streamingSessions[item.id] || bgBusySessions[item.id]}
               interrupted={interruptedSessions[item.id]}
               pendingCount={pendingCounts[item.id]}
+              goalStatus={goalStatuses?.[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
               isBot={isBotSessionSettings(item.settings)}

@@ -421,3 +421,97 @@ describe('通知决策器 — 一类一个开关', () => {
     expect(shown.map((n) => n.kind)).toEqual(KINDS)
   })
 })
+
+/**
+ * 目标模式（docs/goal-mode-design.md §9.3）：
+ *   NT-1 有进行中目标的会话，一轮正常收尾不弹「完成」（目标还要接着做）；失败照弹；读口抛错 = 没有目标；派生 agent 不变
+ *   NT-2 goalEnded：kind goal、key `goal:<会话>`、正文压成一行 ≤ 140；同会话再来一条用同一个 key（只留最新）；
+ *        开关关着 / 会话在前台不弹；打开会话撤回它
+ */
+describe('通知决策器 — 目标', () => {
+  function goalCenter(
+    goalActive: (sessionId: string) => boolean
+  ): Harness & { center: NotificationCenter } {
+    const shown: AgentNotification[] = []
+    const dismissed: string[] = []
+    const foreground = new Set<string>()
+    const enabled = { value: true }
+    const disabled = new Set<AgentNotificationKind>()
+    const titles = new Map<string, string>()
+    const errorTexts = new Map<string, string>()
+    const center = createNotificationCenter({
+      notifier: { show: (n) => shown.push(n), dismiss: (key) => dismissed.push(key) },
+      isForeground: (sessionId) => foreground.has(sessionId),
+      sessionTitle: (sessionId) => titles.get(sessionId),
+      enabled: (kind) => enabled.value && !disabled.has(kind),
+      goalActive,
+      t: (key, vars) => (vars ? `${key}|${Object.values(vars).join(',')}` : key)
+    })
+    return { center, shown, dismissed, foreground, enabled, disabled, titles, errorTexts }
+  }
+
+  it('NT-1 目标进行中：正常收尾不弹完成；出错照弹失败', () => {
+    const h = goalCenter((sessionId) => sessionId === ROOT)
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    expect(h.shown).toEqual([])
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'error' })
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed'])
+    // 运行中攒下的 error、收尾却是 ok：照样当失败弹（goalActive 不吞失败）
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'error', sessionId: ROOT, error: '500' })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed', 'failed'])
+    // 没有目标的会话照常弹完成
+    h.center.handleEvent({ type: 'agent_end', sessionId: 'other', reason: 'ok' })
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed', 'failed', 'done'])
+  })
+
+  it('NT-1 读口抛错 = 没有目标 → 弹完成；派生 agent 跑完仍不弹', () => {
+    const h = goalCenter(() => {
+      throw new Error('settings unavailable')
+    })
+    h.center.handleEvent(register(SUB, ROOT, 'tool-call-1'))
+    h.center.handleEvent({ type: 'agent_end', sessionId: SUB, reason: 'ok' })
+    expect(h.shown).toEqual([])
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    expect(h.shown.map((n) => n.kind)).toEqual(['done'])
+  })
+
+  it('NT-2 goalEnded：kind goal、key goal:<会话>、正文一行 ≤ 140；再来一条同一个 key', () => {
+    const h = goalCenter(() => false)
+    h.titles.set(ROOT, '目标会话')
+    const long = `The checker judged the goal met:\n${'all green '.repeat(30)}`
+    h.center.goalEnded(ROOT, long)
+    expect(h.shown).toHaveLength(1)
+    expect(h.shown[0]).toMatchObject({
+      key: `goal:${ROOT}`,
+      kind: 'goal',
+      sessionId: ROOT,
+      title: '目标会话'
+    })
+    expect(h.shown[0]!.body).not.toContain('\n')
+    expect(h.shown[0]!.body.length).toBeLessThanOrEqual(140)
+    expect(h.shown[0]!.body.endsWith('…')).toBe(true)
+    h.center.goalEnded(ROOT, 'paused: budget')
+    expect(h.shown.map((n) => n.key)).toEqual([`goal:${ROOT}`, `goal:${ROOT}`])
+    expect(h.shown[1]!.body).toBe('paused: budget')
+  })
+
+  it('NT-2 goal 开关关着 / 会话在前台不弹；打开会话撤回它', () => {
+    const h = goalCenter(() => false)
+    h.disabled.add('goal')
+    h.center.goalEnded(ROOT, 'met')
+    expect(h.shown).toEqual([])
+    h.disabled.clear()
+    h.foreground.add(ROOT)
+    h.center.goalEnded(ROOT, 'met')
+    expect(h.shown).toEqual([])
+    h.foreground.clear()
+    h.center.goalEnded(ROOT, 'met')
+    expect(h.shown).toHaveLength(1)
+    h.center.sessionOpened(ROOT)
+    expect(h.dismissed).toEqual([`goal:${ROOT}`])
+  })
+})

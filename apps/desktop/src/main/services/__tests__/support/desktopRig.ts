@@ -177,7 +177,11 @@ vi.mock('../../../frontend/core/ChatFrontendRegistry', () => ({
   ChatFrontendRegistry: class {}
 }))
 vi.mock('../../settingsService', () => ({
-  settingsService: { get: (key: string) => rig.settings.get(key) }
+  // set：目标模式的状态表（goal.sessions）由 goalService 写回设置
+  settingsService: {
+    get: (key: string) => rig.settings.get(key),
+    set: (key: string, value: string) => void rig.settings.set(key, value)
+  }
 }))
 vi.mock('../../sessionDayPromptService', () => ({
   recordUserEntry: () => undefined,

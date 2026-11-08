@@ -54,6 +54,13 @@ import {
   openDurableStorageFile
 } from './sessionStorage'
 
+/** fork 成功插行之后的观察者（目标模式记状态表）：main 入口登记 —— 这里不 import goalService，免得依赖成环 */
+let forkObserver: ((sourceId: string, forkId: string) => void) | null = null
+
+export function setSessionForkObserver(observer: ((sourceId: string, forkId: string) => void) | null): void {
+  forkObserver = observer
+}
+
 const log = createLogger('SessionFork')
 
 function refused(reason: SessionForkRefusal): SessionForkResult {
@@ -137,6 +144,12 @@ export async function forkSession(params: SessionForkParams): Promise<SessionFor
       adopt = lockKept
     }
     sessionService.insertForkRow(source, forkId)
+    // 目标随存储拷过来、已在收尾里暂停（docs/goal-mode-design.md §8）：记进目标状态表（侧栏徽标）
+    try {
+      forkObserver?.(source.id, forkId)
+    } catch (err) {
+      log.warn(`fork 观察者失败 ${source.id} → ${forkId}: ${errorText(err)}`)
+    }
     // 行进库之后才认领（插行失败就没有这条会话，不该留下进程内记录）；fork 此刻还没被打开过
     if (adopt) getSessionHost().adoptForkedAgent(forkId)
   } catch (err) {
