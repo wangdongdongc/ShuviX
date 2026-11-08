@@ -16,6 +16,8 @@ import './ask'
 import './suggest'
 // tool_search：查找并申请开启这条会话没选的 MCP 服务器
 import './toolSearch'
+// shuvix：agent 经设置 API 改 ShuviX 自己的设置（能调哪些通道见 services/agentChannels.ts 的注解）
+import './shuvix'
 // show_image：把本机的图片摆进对话给用户看（快照进会话目录；模型收不到图）
 import './showImage'
 // browser / database 不在这里：它们是按会话勾选的内置 MCP 能力服务器

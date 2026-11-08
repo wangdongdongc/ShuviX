@@ -43,6 +43,7 @@ import {
   type SecuritySubject,
   type SessionObjectInput,
   type ExtensionObjectInput,
+  type ChannelObjectInput,
   type WidgetObjectInput,
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
@@ -54,6 +55,7 @@ import i18next from 'i18next'
 import { createLogger } from '../logger'
 
 import type {
+  AskField,
   AskPreview,
   InputRequest,
   InputResponse
@@ -288,6 +290,36 @@ export async function assertWidgetAccess(
     ...opts.owner,
     toolName: opts.toolName,
     operation: opts.operation,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    abortError: TOOL_ABORTED
+  })
+}
+
+/**
+ * 设置通道的 PEP（`shuvix` 工具）：出厂的 ask-on-settings 在 access 不是 read 时询问，admin 只由人回答。
+ * 卡片的内容（逐行的改动、要填的值）由工具算好经 `preview` / `fields` 带上。拒绝 / 取消 / 反馈时抛错，文案给模型。
+ */
+export async function assertChannelAccess(
+  ctx: ToolContext,
+  object: ChannelObjectInput,
+  opts: {
+    toolCallId: string
+    toolName: string
+    description: string
+    preview: AskPreview
+    fields?: AskField[]
+    owner?: CallOwner
+    signal?: AbortSignal
+  }
+): Promise<void> {
+  await getDesktopSecurityContext(ctx).enforceChannel(object, {
+    toolCallId: opts.toolCallId,
+    ...opts.owner,
+    toolName: opts.toolName,
+    operation: 'call',
+    description: opts.description,
+    preview: opts.preview,
+    ...(opts.fields && opts.fields.length > 0 ? { fields: opts.fields } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
     abortError: TOOL_ABORTED
   })
@@ -567,6 +599,7 @@ export function getDesktopSecurityContext(
     enforceWidget: (mode, object, opts) =>
       forCall(opts).enforceWidget(mode, object, withRestored(opts)),
     enforceExtension: (object, opts) => forCall(opts).enforceExtension(object, withRestored(opts)),
+    enforceChannel: (object, opts) => forCall(opts).enforceChannel(object, withRestored(opts)),
     enforceInvocation: (opts) => forCall(opts).enforceInvocation(withRestored(opts))
   }
 }

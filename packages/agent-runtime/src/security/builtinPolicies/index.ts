@@ -18,6 +18,9 @@
  *     **只由人回答**（auto-review 的 `when` 也把组件客体排除在外）。
  *   - ask-on-extension（2026-11-03 用户裁定）：`tool_search` 要开启一台这条会话还没选的 MCP 服务器，每次都问，
  *     **只由人回答**（auto-review 的 `when` 也把它排除在外）。开启之后这台就在会话的选择里，不再问。
+ *   - ask-on-settings（2026-11-08 用户裁定）：agent 经 `shuvix` 工具调一条开放给它的设置 API 通道（`{type:'channel'}`，
+ *     与网络客户端同一套 scope / access 事实），access 不是 read 时询问。admin **只由人回答**（auto-review 的 `when`
+ *     排除 access 为 admin 的通道），write 可由审查代答。以后开放给 agent 的通道都落在这一份下，不再逐样加门。
  * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门；想要更多防护（系统目录拒写、
  * 灾难命令拒绝、git / 数据库 / 子会话 / 新站点询问……）写成自己的策略即可 —— 各个执行点都还在，
  * 只是出厂不再挂门。被删掉的出厂策略原文留作测试夹具（`__tests__/fixtures/`）。
@@ -77,6 +80,7 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-session-access' },
   { name: 'ask-on-widget-access' },
   { name: 'ask-on-extension' },
+  { name: 'ask-on-settings' },
   { name: 'network-admission' },
   { name: 'daily-bot-access' },
   { name: 'redact-sensitive' }

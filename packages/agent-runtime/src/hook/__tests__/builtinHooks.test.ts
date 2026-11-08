@@ -303,13 +303,13 @@ describe('auto-review（判定型）结构钉板', () => {
     return parsed!
   }
 
-  it('HB-10 / WT4-SE-16 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话、组件与扩展客体 —— 这三类只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
+  it('HB-10 / WT4-SE-16 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话、组件、扩展与 admin 级设置通道 —— 这些只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
     const review = reviewOf('en')
     expect(review.agent).toBe('permission-reviewer')
     expect(review.bindings).toStrictEqual([
       {
         trigger: 'permission.request',
-        when: "event.operation.objectType != 'session' && event.operation.objectType != 'widget' && event.operation.objectType != 'extension'"
+        when: "event.operation.objectType != 'session' && event.operation.objectType != 'widget' && event.operation.objectType != 'extension' && (event.operation.objectType != 'channel' || event.operation.facts.access != 'admin')"
       }
     ])
     const when = review.bindings[0].when!
@@ -326,6 +326,13 @@ describe('auto-review（判定型）结构钉板', () => {
     for (const objectType of ['path', 'command', 'gitTool', 'database', 'url', 'invocation']) {
       expect(evaluateWhen(when, { event: eventOf(objectType), env }), objectType).toBe(true)
     }
+    // agent 改设置（2026-11-08）：admin 级的只由人回答，write 级的可以审
+    const channelEvent = (access: string): Record<string, unknown> => ({
+      trigger: 'permission.request',
+      operation: { objectType: 'channel', facts: { channel: 'x:y', scope: 'extensions', access } }
+    })
+    expect(evaluateWhen(when, { event: channelEvent('admin'), env })).toBe(false)
+    expect(evaluateWhen(when, { event: channelEvent('write'), env })).toBe(true)
     expect(review.displayName).toBe('Automatic Review of Approval Requests')
     expect(review.description).toBe(
       'Before an approval card is shown, the permission reviewer answers it on your behalf — it lets ordinary work through, refuses what is clearly harmful and leaves the rest to you.'

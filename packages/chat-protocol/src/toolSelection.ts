@@ -42,6 +42,9 @@ export function toolOptOut(name: string): string {
 /** 查找并申请开启这条会话没选的 MCP 服务器的那个内置工具 */
 export const TOOL_SEARCH_TOOL_NAME = 'tool_search'
 
+/** agent 改 ShuviX 自己的设置的那个内置工具（经设置 API，见 desktop 的 services/agentApi） */
+export const SHUVIX_TOOL_NAME = 'shuvix'
+
 /** 输出给模型的服务器 / 工具名：只留字母数字和少数标点，并截断（服务器名是用户起的，工具名是服务器报的） */
 export function safeExtensionName(name: string): string {
   return name.replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 64)

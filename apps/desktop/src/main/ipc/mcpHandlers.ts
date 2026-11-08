@@ -1,9 +1,22 @@
+import { isAbsolute } from 'node:path'
 import { isReservedMcpServerName } from '@shuvix/chat-protocol/widgetServers'
 import { defineHandler } from './registry'
 import { v7 as uuidv7 } from 'uuid'
 import { mcpService } from '../services/mcpService'
-import { mcpDao } from '../dao/mcpDao'
+import { mcpDao, type McpMetadataPatch } from '../dao/mcpDao'
 import type { McpServerAddParams, McpServerUpdateParams, McpServerInfo } from '../types'
+
+/**
+ * 设置页填的工作目录 → 存进 metadata 的值（`''` = 不设）。相对路径直接拒：没有一个基准目录可以拿来解析它
+ * （ShuviX 自己的工作目录随启动方式变，打包后是 `/`），存下来只会在某一次启动时指向一个意想不到的地方。
+ */
+function cwdOf(raw: string): { cwd: string } | { error: string } {
+  const cwd = raw.trim()
+  if (cwd && !isAbsolute(cwd)) {
+    return { error: `The working directory must be an absolute path, got "${cwd}"` }
+  }
+  return { cwd }
+}
 
 /**
  * MCP Server 管理 IPC 处理器
@@ -46,9 +59,11 @@ export function registerMcpHandlers(): void {
   }
 
   /** 添加 MCP Server（不连接 —— 惰性启动，等哪条会话用到它再连） */
-  defineHandler('mcp:add', (_ctx, params: McpServerAddParams) => {
+  defineHandler('mcp:add', (ctx, params: McpServerAddParams) => {
     const problem = nameProblem(params.name)
     if (problem) return { success: false, error: problem }
+    const dir = cwdOf(params.cwd ?? '')
+    if ('error' in dir) return { success: false, error: dir.error }
     const now = Date.now()
     const server = {
       id: uuidv7(),
@@ -60,7 +75,13 @@ export function registerMcpHandlers(): void {
       env: JSON.stringify(params.env ?? {}),
       url: params.url ?? '',
       headers: JSON.stringify(params.headers ?? {}),
-      metadata: '{}',
+      metadata: JSON.stringify({
+        ...(dir.cwd ? { cwd: dir.cwd } : {}),
+        // agent 经 `shuvix` 工具加的：记下是哪条会话、什么时候（只是信息，设置页据此说明这一台的来历）
+        ...(ctx.client.kind === 'agent'
+          ? { addedBy: { sessionId: ctx.client.sessionId, at: now } }
+          : {})
+      }),
       isEnabled: 1,
       isBuiltin: 0,
       cachedTools: '[]',
@@ -74,25 +95,38 @@ export function registerMcpHandlers(): void {
 
   /** 更新 MCP Server 配置 */
   defineHandler('mcp:update', async (_ctx, params: McpServerUpdateParams) => {
-    const existing = mcpDao.pick(params.id, ['isBuiltin'])
+    const existing = mcpDao.pick(params.id, ['isBuiltin', 'type', 'url'])
     const isBuiltin = existing?.isBuiltin === 1
 
     const fields: Record<string, unknown> = {}
-    // 内置 server: 仅允许修改 env / isEnabled / headers；其余字段忽略
+    /** metadata 只并要改的键（DAO 合并）：别人写的键（记住的 transport、addedBy……）不能被设置页抹掉 */
+    const metadata: McpMetadataPatch = {}
+    // 内置 server: 仅允许修改 env / isEnabled / headers；其余字段（含工作目录）忽略
     if (!isBuiltin) {
       if (params.name !== undefined) {
         const problem = nameProblem(params.name, params.id)
         if (problem) return { success: false, error: problem }
         fields.name = params.name.trim()
       }
+      if (params.cwd !== undefined) {
+        const dir = cwdOf(params.cwd)
+        if ('error' in dir) return { success: false, error: dir.error }
+        metadata.cwd = dir.cwd || undefined
+      }
       if (params.type !== undefined) fields.type = params.type
       if (params.command !== undefined) fields.command = params.command
       if (params.args !== undefined) fields.args = JSON.stringify(params.args)
       if (params.url !== undefined) fields.url = params.url
+      // 换了地址或类型，记住的「这台走旧版 SSE」就不再是这台的了：清掉，下次重新先试 Streamable HTTP
+      const moved =
+        (params.url !== undefined && params.url !== existing?.url) ||
+        (params.type !== undefined && params.type !== existing?.type)
+      if (moved) metadata.transport = undefined
     }
     if (params.env !== undefined) fields.env = JSON.stringify(params.env)
     if (params.headers !== undefined) fields.headers = JSON.stringify(params.headers)
     if (params.isEnabled !== undefined) fields.isEnabled = params.isEnabled ? 1 : 0
+    if (Object.keys(metadata).length > 0) fields.metadata = metadata
 
     mcpDao.update(params.id, fields)
 

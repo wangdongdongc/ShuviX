@@ -15,11 +15,12 @@ import {
   Server,
   Pencil
 } from 'lucide-react'
-import type {
-  McpServerInfo,
-  McpToolInfo,
-  McpServerAddParams,
-  McpServerUpdateParams
+import {
+  parseMcpServerMetadata,
+  type McpServerInfo,
+  type McpToolInfo,
+  type McpServerAddParams,
+  type McpServerUpdateParams
 } from '@shuvix/chat-protocol/types/mcp'
 import { builtinMcpCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { experimentalFeatureOfMcp } from '@shuvix/chat-protocol/experimentalFeatures'
@@ -122,6 +123,12 @@ function arrayToLines(json: string): string {
   }
 }
 
+/** 工作目录在 metadata 里（坏的 metadata 当没有） */
+function cwdOf(metadata: string): string {
+  const cwd = parseMcpServerMetadata(metadata).cwd
+  return typeof cwd === 'string' ? cwd : ''
+}
+
 function headersToLines(json: string): string {
   try {
     const obj = JSON.parse(json)
@@ -183,6 +190,7 @@ export function McpClientPanel({
       type: s.type,
       command: s.command,
       argsText: arrayToLines(s.args),
+      cwd: cwdOf(s.metadata),
       envPairs: jsonEnvToPairs(s.env),
       url: s.url,
       headersText: headersToLines(s.headers),
@@ -205,6 +213,8 @@ export function McpClientPanel({
         type: data.type,
         command: data.command,
         args: data.argsLines,
+        // 空串 = 清掉：编辑时把目录删空、或换成了 http，存下来的那个就该没了
+        cwd: data.cwd,
         env: data.envObject,
         url: data.url,
         headers: data.headersObject
@@ -218,6 +228,7 @@ export function McpClientPanel({
           type: data.type,
           command: data.command,
           args: data.argsLines,
+          ...(data.cwd ? { cwd: data.cwd } : {}),
           env: data.envObject,
           url: data.url,
           headers: data.headersObject

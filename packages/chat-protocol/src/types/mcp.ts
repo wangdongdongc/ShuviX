@@ -8,7 +8,10 @@
 /**
  * 传输类型：
  * - `stdio` 本地子进程（仅桌面）
- * - `http` 远程（Streamable HTTP，桌面+浏览器；不支持旧版 SSE transport）
+ * - `http` 远程（Streamable HTTP，桌面+浏览器）。只说旧版 HTTP+SSE 的 server 不另设类型：先试
+ *   Streamable HTTP，被回 404/405 才换旧版 SSE（规范的向后兼容做法，见 McpManager），走通了记进
+ *   `metadata.transport`
+
  * - `inproc` **内置能力服务器**：随产品发布、跑在进程内、**按会话实例化**，不起进程也不走网络
  *   （见 agent-runtime 的 builtinMcpRegistry）。默认不启用，由用户在会话里逐条勾选。
  */
@@ -30,7 +33,7 @@ export interface McpServer {
   url: string
   /** http: 请求头 JSON 对象 */
   headers: string
-  /** 扩展元数据 JSON */
+  /** 扩展元数据 JSON（形状见 McpServerMetadata；明文，不放 secret） */
   metadata: string
   /** 是否启用 */
   isEnabled: number
@@ -40,6 +43,34 @@ export interface McpServer {
   cachedTools: string
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * `McpServer.metadata` 里 ShuviX 认的键。这一列由几方各写各的键（设置页写 cwd、McpManager 写 transport……），
+ * 所以写入一律**并进**已有的对象，不整列替换；不认识的键原样留着。
+ */
+export interface McpServerMetadata {
+  /** stdio：子进程的工作目录（绝对路径）。缺省 = 继承 ShuviX 自己的 */
+  cwd?: string
+  /**
+   * http：上次实际走通的是旧版 HTTP+SSE transport —— 下次直接用它，不必每次先挨一个 404/405。
+   * 由 McpManager 记、也由它清（记着 SSE 却被回 404/405、改走 Streamable HTTP 走通了）。
+   */
+  transport?: 'sse'
+  [key: string]: unknown
+}
+
+/** 读 metadata 列：坏 JSON、不是对象（数组、null、字符串）一律当空对象 —— 这一列谁都可能写坏，读它的不该因此失败 */
+export function parseMcpServerMetadata(json: string | null | undefined): McpServerMetadata {
+  if (!json) return {}
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as McpServerMetadata)
+      : {}
+  } catch {
+    return {}
+  }
 }
 
 /** MCP Server 连接状态 */
@@ -54,6 +85,8 @@ export interface McpServerAddParams {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /** stdio 的工作目录（绝对路径，存进 `metadata.cwd`）；空 / 不给 = 不设 */
+  cwd?: string
 }
 
 /** 更新 MCP Server 参数 */
@@ -66,6 +99,8 @@ export interface McpServerUpdateParams {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /** stdio 的工作目录（绝对路径）；`''` = 清掉，不给 = 不动 */
+  cwd?: string
   isEnabled?: boolean
 }
 

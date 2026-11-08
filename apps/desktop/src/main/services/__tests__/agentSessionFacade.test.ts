@@ -83,6 +83,7 @@ vi.mock('../../logger', () => ({
 import type { AdmitResult } from '@shuvix/agent-runtime'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { AgentSession } from '../agentSession'
+import { resetCardValuesForTests, takeCardValues } from '../cardValues'
 import {
   FakeDurableSession,
   fakeHost,
@@ -684,6 +685,66 @@ describe('WP2 来源与答题方', () => {
           note: 'x',
           secrets: []
         })
+      ).toBe(false)
+    })
+  })
+
+  describe('WP2-64 卡上填的值（AskResponse.values）先取下来交给工具，从不往下传', () => {
+    const fieldsAsk = {
+      pendingInputs: () => [
+        {
+          id: 'a1',
+          kind: 'ask',
+          fields: [{ key: 'env.K', label: 'K', secret: true, required: true }]
+        }
+      ]
+    }
+
+    beforeEach(() => resetCardValuesForTests())
+
+    it('批准：只留要的键存给工具，durable 收到的应答没有 values', () => {
+      const { durable, session } = facade(fieldsAsk as never)
+      durable.respondResult = true
+      expect(
+        session.respondToInput('a1', {
+          kind: 'ask',
+          allowed: true,
+          values: { 'env.K': 'secret-v', extra: 'smuggled' }
+        })
+      ).toBe(true)
+      expect(durable.callsOf('respondToInput')).toEqual([
+        ['respondToInput', 'a1', { kind: 'ask', allowed: true }]
+      ])
+      expect(takeCardValues(session.sessionId, 'a1')).toStrictEqual({ 'env.K': 'secret-v' })
+      expect(takeCardValues(session.sessionId, 'a1')).toBeUndefined()
+    })
+
+    it('没被认领（别处先答了）→ 什么也不留', () => {
+      const { session } = facade(fieldsAsk as never)
+      expect(
+        session.respondToInput('a1', { kind: 'ask', allowed: true, values: { 'env.K': 'v' } })
+      ).toBe(false)
+      expect(takeCardValues(session.sessionId, 'a1')).toBeUndefined()
+    })
+
+    it('拒绝带来的值丢掉；没要值的询问带来的值也丢掉；答不了的询问 → false', () => {
+      const { durable, session } = facade({
+        pendingInputs: () => [
+          { id: 'a1', kind: 'ask', fields: [{ key: 'k' }] },
+          { id: 'b1', kind: 'ask' }
+        ]
+      } as never)
+      durable.respondResult = true
+      session.respondToInput('a1', { kind: 'ask', allowed: false, values: { k: 'v' } })
+      session.respondToInput('b1', { kind: 'ask', allowed: true, values: { k: 'v' } })
+      expect(durable.callsOf('respondToInput')).toEqual([
+        ['respondToInput', 'a1', { kind: 'ask', allowed: false }],
+        ['respondToInput', 'b1', { kind: 'ask', allowed: true }]
+      ])
+      expect(takeCardValues(session.sessionId, 'a1')).toBeUndefined()
+      expect(takeCardValues(session.sessionId, 'b1')).toBeUndefined()
+      expect(
+        session.respondToInput('gone', { kind: 'ask', allowed: true, values: { k: 'v' } })
       ).toBe(false)
     })
   })

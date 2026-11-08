@@ -648,7 +648,13 @@
     "extensionAskUrl": "确认后会连接：",
     "extensionAskWidget": "开启后可以读取这个小组件的记录，要改动时还会再问你。",
     "extensionAskCache": "当前模型不能在对话中途加工具而保留缓存，开启后下一次请求会少命中一部分缓存。",
-    "extensionAskCacheTokens": "当前模型不能在对话中途加工具而保留缓存，开启后下一次请求会少命中一部分缓存（上一次请求约 {{tokens}} tokens）。"
+    "extensionAskCacheTokens": "当前模型不能在对话中途加工具而保留缓存，开启后下一次请求会少命中一部分缓存（上一次请求约 {{tokens}} tokens）。",
+    "settingsAskChange": "修改 ShuviX 设置",
+    "settingsAskChannel": "通道",
+    "askFieldsNote": "这几项要你自己填，AI 看不到你填的内容。",
+    "askFieldOptional": "选填",
+    "askFieldsMissing_one": "先把上面这一项填上",
+    "askFieldsMissing_other": "先把上面的必填项填上"
   },
   "sessionConfig": {
     "title": "会话配置",
@@ -1067,6 +1073,8 @@
     "mcpCommandPlaceholder": "如 npx、uvx、docker",
     "mcpArgs": "命令参数",
     "mcpArgsPlaceholder": "每行一个参数",
+    "mcpCwd": "工作目录",
+    "mcpCwdPlaceholder": "/path/to/folder（可选）",
     "mcpEnv": "环境变量",
     "mcpEnvKeyPlaceholder": "KEY",
     "mcpEnvValuePlaceholder": "value",
@@ -1451,7 +1459,9 @@
     "suggestLabel": "提议",
     "suggestHint": "AI 给你留几条可以一键采纳的下一步，不打断它手上的工作",
     "showImageLabel": "显示图片",
-    "showImageHint": "把这台电脑上的图片直接摆进对话给你看：它画的图表、存下的截图"
+    "showImageHint": "把这台电脑上的图片直接摆进对话给你看：它画的图表、存下的截图",
+    "shuvixLabel": "ShuviX 设置",
+    "shuvixHint": "替你查看和修改 ShuviX 自己的设置，比如添加 MCP 服务器；每次修改都先问你"
   },
   "widgets": {
     "panelEmptyHint": "还没有小组件。在对话里告诉 AI，比如\"做一个 JSON 格式化小组件\"",
@@ -2083,5 +2093,28 @@
       "knowledge_bases": "知识库",
       "bot_profile": "Bot 人设与记忆"
     }
+  },
+  "agentApi": {
+    "cardName": "名称",
+    "cardCommand": "命令",
+    "cardUrl": "地址",
+    "cardCwd": "工作目录",
+    "cardEnv": "环境变量",
+    "cardHeaders": "请求头",
+    "cardRename": "新名称",
+    "cardType": "类型",
+    "cardEnabled": "启用",
+    "cardOn": "开",
+    "cardOff": "关",
+    "cardKeySet": "{{key}}（已填）",
+    "cardKeyToFill": "{{key}}（由你填写）",
+    "cardRemoved": "{{key}}（删除）",
+    "cardHeaderField": "请求头 {{key}}",
+    "mcpListTitle": "列出你的 MCP 服务器",
+    "mcpGetToolsTitle": "查看 MCP 服务器「{{name}}」的工具",
+    "mcpAddTitle": "在设置里添加 MCP 服务器「{{name}}」",
+    "mcpUpdateTitle": "修改 MCP 服务器「{{name}}」",
+    "mcpDeleteTitle": "删除 MCP 服务器「{{name}}」及其保存的密钥",
+    "fillOnlyDescription": "请填写下面的值。它们直接存进你的设置，agent 看不到。"
   }
 }

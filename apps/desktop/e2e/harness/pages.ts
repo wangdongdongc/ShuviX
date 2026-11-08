@@ -3851,6 +3851,91 @@ export function extensionAskPane(main: CdpClient): ExtensionAskPane {
   }
 }
 
+/** `shuvix` 工具那张「改设置」卡（chat-ui SettingsPreview + 卡上要填的值）的快照 */
+export interface SettingsAskShot {
+  /** 通道名（`data-ask-settings` 的值，如 `mcp:add`） */
+  channel: string
+  /** 宿主写的那一句（「Add MCP server “x” to your settings」） */
+  title: string
+  /** 逐行的标签与值 */
+  rows: Array<{ label: string; value: string }>
+  /** 要填的项：键（`data-ask-field`）、标签、输入框的 type（打码时是 password）、是不是可选 */
+  fields: Array<{ key: string; label: string; type: string; optional: boolean }>
+  /** 「允许这一次」那一行是不是灰着（按钮的 disabled） */
+  allowDisabled: boolean
+  /** 那一行下面的小字（灰着时说为什么）；没有是空串 */
+  allowDetail: string
+  /** 策略角标 */
+  policy: string
+}
+
+export interface SettingsAskPane {
+  /** 挂着的「改设置」卡；没有时为 null */
+  shot(): Promise<SettingsAskShot | null>
+  /**
+   * 像人那样往卡上的一项里打字：先聚焦那个输入框，再经 CDP `Input.insertText` 打进去（可信输入，走 React 的
+   * onChange —— 输入框是不受控的，直接改 value 不触发它）。没有这一项时抛
+   */
+  typeField(key: string, text: string): Promise<void>
+  /** 整个页面里有没有这段文字：DOM 序列化（含属性）+ 每个输入框此刻的 value（不受控输入框的值不在序列化里） */
+  pageContains(needle: string): Promise<boolean>
+}
+
+export function settingsAskPane(main: CdpClient): SettingsAskPane {
+  const BOX = `document.querySelector('[data-pending-inputs] [data-ask-settings]')`
+  return {
+    // 卡 = 待处理面板里的 AskForm（`[data-ask-card]`）；预览块 `[data-ask-settings]` 里一句标题 + dl 的 dt / dd；
+    // 要填的项在 `[data-ask-fields]` 里，每项 `[data-ask-field=<键>]`；允许那一行是 `[data-ask-option="allow"]`
+    shot: () =>
+      main.eval<SettingsAskShot | null>(`(() => {
+        const box = ${BOX}
+        if (!box) return null
+        const card = box.closest('[data-ask-card]')
+        const labels = [...box.querySelectorAll('[data-ask-settings-label]')]
+        const values = [...box.querySelectorAll('[data-ask-settings-value]')]
+        const allow = card?.querySelector('[data-ask-option="allow"]')
+        return {
+          channel: box.getAttribute('data-ask-settings') ?? '',
+          title: (box.querySelector('[data-ask-settings-title]')?.textContent ?? '').trim(),
+          rows: labels.map((label, i) => ({
+            label: (label.textContent ?? '').trim(),
+            value: (values[i]?.textContent ?? '').trim()
+          })),
+          fields: [...(card?.querySelectorAll('[data-ask-field]') ?? [])].map((row) => {
+            const input = row.querySelector('[data-ask-field-input]')
+            return {
+              key: row.getAttribute('data-ask-field') ?? '',
+              label: (row.querySelector('label > span')?.textContent ?? '').trim(),
+              type: input?.getAttribute('type') ?? '',
+              optional: !!row.querySelector('[data-ask-field-optional]')
+            }
+          }),
+          allowDisabled: !!allow && allow.disabled === true,
+          allowDetail: (allow?.querySelector('[data-option-detail]')?.textContent ?? '').trim(),
+          policy: (card?.querySelector('[data-ask-policy]')?.textContent ?? '').trim()
+        }
+      })()`),
+    typeField: async (key, text) => {
+      const focused = await main.eval<boolean>(`(() => {
+        const input = document.querySelector(
+          '[data-pending-inputs] [data-ask-field=' + ${JSON.stringify(JSON.stringify(key))} + '] [data-ask-field-input]'
+        )
+        if (!input) return false
+        input.focus()
+        return document.activeElement === input
+      })()`)
+      if (!focused) throw new Error(`settings card: no field ${key}`)
+      await main.send('Input.insertText', { text })
+    },
+    pageContains: (needle) =>
+      main.eval<boolean>(`(() => {
+        const needle = ${JSON.stringify(needle)}
+        if (document.documentElement.outerHTML.includes(needle)) return true
+        return [...document.querySelectorAll('input, textarea')].some((el) => (el.value ?? '').includes(needle))
+      })()`)
+  }
+}
+
 /** 「组件访问」卡里的一行 */
 export interface WidgetAccessRowShot {
   /** 行 id（`data-acl-entry`） */

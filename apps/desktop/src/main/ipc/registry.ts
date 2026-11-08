@@ -45,15 +45,28 @@ export type NetworkClientRef = {
   readonly device?: string
 }
 
-/** 调用方：桌面窗口，或网络客户端 */
-export type ClientRef = WindowClientRef | NetworkClientRef
+/**
+ * agent（经 `shuvix` 工具）：一条会话里的 agent 调一条开放给它的通道（docs/mcp-config-compat-design.md）。
+ * 它不经任何传输进来 —— 工具在进程内直接调定义（`invokeAsAgent`），所以没有窗口、推不回东西；
+ * 能调的只有 `services/agentChannels.ts` 里注解过的那些通道，它们都不要窗口。
+ */
+export type AgentClientRef = {
+  readonly kind: 'agent'
+  /** `agent:<sessionId>` */
+  readonly id: string
+  /** 发起调用的会话（根会话）；处理函数据此记下「谁加的」 */
+  readonly sessionId: string
+}
+
+/** 调用方：桌面窗口、网络客户端，或 agent */
+export type ClientRef = WindowClientRef | NetworkClientRef | AgentClientRef
 
 /** 一次调用的上下文 */
 export interface ClientContext {
   /** 谁调的 */
   readonly client: ClientRef
-  /** 经哪条传输来的：`ipc`（桌面窗口）/ `network`（WebSocket） */
-  readonly transport: 'ipc' | 'network'
+  /** 经哪条传输来的：`ipc`（桌面窗口）/ `network`（WebSocket）/ `agent`（进程内，`shuvix` 工具） */
+  readonly transport: 'ipc' | 'network' | 'agent'
   /**
    * 网络客户端这条连接的事实（对端地址、升级时的请求头 …）—— 处理函数要按安全策略判一个路径时用
    * （`networkPathVerdict`，见 frontend/network）。桌面窗口 → 没有
@@ -115,6 +128,26 @@ export function defineHandler(channel: string, fn: ChannelHandler): void {
 /** 定义一条单向通道（取代 `ipcMain.on`）；同名重复定义抛错 */
 export function defineListener(channel: string, fn: ChannelListener): void {
   define({ kind: 'listen', channel, fn })
+}
+
+/**
+ * agent 在进程内调一条一问一答的通道（`shuvix` 工具）。只认 `handle` 定义；能不能调、调之前问不问由工具决定
+ * （它只放行 services/agentChannels.ts 注解过的通道），这里不再判。没有这条定义 → 抛错。
+ */
+export async function invokeAsAgent(
+  channel: string,
+  sessionId: string,
+  args: readonly unknown[]
+): Promise<unknown> {
+  const definition = definitions.get(channel)
+  if (!definition || definition.kind !== 'handle') {
+    throw new Error(`No request channel named "${channel}"`)
+  }
+  const ctx: ClientContext = {
+    client: { kind: 'agent', id: `agent:${sessionId}`, sessionId },
+    transport: 'agent'
+  }
+  return definition.fn(ctx, ...args)
 }
 
 /** 此刻的全部定义（按定义顺序） */

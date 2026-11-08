@@ -3,9 +3,11 @@
  *
  * 钉三件事：
  *  - stdio 走桌面自己的 McpStdioTransport（stderr 留尾、进程组整组收掉），环境经 buildSpawnEnv 补齐，
- *    而且**造它不起进程** —— 进程在 McpManager 握手时的 start() 里才起，超时 / 断开才收得到它；
- *  - http 只有 Streamable HTTP：曾经的「构造失败回退 SSE」从来走不到（构造函数不会因网络失败而抛），
- *    已删掉，不该悄悄回来；
+ *    工作目录取 `metadata.cwd`（坏 metadata = 不设），而且**造它不起进程** —— 进程在 McpManager 握手时的
+ *    start() 里才起，超时 / 断开才收得到它；
+ *  - http 默认 Streamable HTTP；只有 McpManager 明说要（`{ sse: true }`，它在握手被回 404/405 时才这么要）
+ *    才造旧版 SSE —— 回退在 McpManager 的握手里，不在这里：构造函数不做网络 I/O，曾经那条「构造失败
+ *    回退 SSE」从来走不到；桌面声明了 legacySse，记住的 transport 经 mcpDao.mergeMetadata 只并那一个键；
  *  - 不认识的类型、没有会话的内置服务器直接抛，而不是造出一个半成品；
  *  - 内置服务器的 scope 带 `agentOf`（P2-07-50）：每次调用现问启动时注册的解析器
  *    （会话, 对话）→ 调用方 agent，不在建连时快照；没注册 = 认不出、不抛。
@@ -21,7 +23,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { BuiltinMcpScope } from '@shuvix/agent-runtime'
-import { McpStdioTransport } from '../../utils/mcpStdioTransport'
+import { McpStdioTransport, type McpStdioTransportOptions } from '../../utils/mcpStdioTransport'
 import {
   builtinMcpRegistry,
   mcpService,
@@ -31,10 +33,11 @@ import {
 import type { DesktopBuiltinMcpScope } from '../builtinMcp/types'
 
 const mocks = vi.hoisted(() => ({
-  buildSpawnEnv: vi.fn((extra?: Record<string, string>) => ({ PATH: '/usr/bin', ...extra }))
+  buildSpawnEnv: vi.fn((extra?: Record<string, string>) => ({ PATH: '/usr/bin', ...extra })),
+  mergeMetadata: vi.fn()
 }))
 
-vi.mock('../../dao/mcpDao', () => ({ mcpDao: {} }))
+vi.mock('../../dao/mcpDao', () => ({ mcpDao: { mergeMetadata: mocks.mergeMetadata } }))
 vi.mock('../builtinMcp', () => ({ BUILTIN_MCP_FACTORIES: {} }))
 vi.mock('../userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
@@ -47,10 +50,15 @@ vi.mock('../../utils/paths', () => ({ buildSpawnEnv: mocks.buildSpawnEnv }))
 
 type CreateTransport = (
   server: McpServer,
-  scope?: BuiltinMcpScope
+  scope?: BuiltinMcpScope,
+  opts?: { sse?: boolean }
 ) => Transport | Promise<Transport>
 const createTransport = (mcpService as unknown as { createTransport: CreateTransport })
   .createTransport
+
+/** 造出来的 stdio transport 收到的选项（白盒：spawn 用的就是这一份） */
+const stdioOptions = (t: Transport | Promise<Transport>): McpStdioTransportOptions =>
+  (t as unknown as { options: McpStdioTransportOptions }).options
 
 function row(patch: Partial<McpServer>): McpServer {
   return {
@@ -96,6 +104,61 @@ describe('mcpService.createTransport', () => {
     // McpManager 靠这个方法把进程临死前的 stderr 拼进报错
     expect(typeof stdio.stderrTail).toBe('function')
     expect(mocks.buildSpawnEnv).toHaveBeenCalledWith({ FOO: '1' })
+  })
+
+  it('MCPS-U-11b: http 行 + { sse: true } → 旧版 SSE transport，请求头照带', async () => {
+    const t = createTransport(
+      row({ type: 'http', url: 'https://mcp.example.test/sse', headers: '{"X-Api-Key":"k"}' }),
+      undefined,
+      { sse: true }
+    )
+    expect(t).toBeInstanceOf(SSEClientTransport)
+    expect(t).not.toBeInstanceOf(StreamableHTTPClientTransport)
+    // GET 流与之后的 POST 都从 requestInit 取请求头（SDK 的 _commonHeaders）
+    const headers = await (
+      t as unknown as { _commonHeaders: () => Promise<Headers> }
+    )._commonHeaders()
+    expect(headers.get('x-api-key')).toBe('k')
+  })
+
+  it('MCPS-U-11c: { sse: false } 与不给一样，是 Streamable HTTP', () => {
+    const t = createTransport(
+      row({ type: 'http', url: 'https://mcp.example.test/mcp' }),
+      undefined,
+      {
+        sse: false
+      }
+    )
+    expect(t).toBeInstanceOf(StreamableHTTPClientTransport)
+  })
+
+  it.each<[string, string, string | undefined]>([
+    ['metadata.cwd → 工作目录', '{"cwd":"/srv/tools","transport":"sse"}', '/srv/tools'],
+    ['没有 cwd → 不设（继承）', '{}', undefined],
+    ['空串 → 不设', '{"cwd":""}', undefined],
+    ['不是字符串 → 不设', '{"cwd":42}', undefined],
+    ['坏 JSON → 不设，不抛', '{not json', undefined],
+    ['不是对象 → 不设，不抛', '["/srv/tools"]', undefined]
+  ])('MCPS-U-11d: stdio 行 %s', (_label, metadata, cwd) => {
+    const t = createTransport(
+      row({ type: 'stdio', command: process.execPath, args: '[]', metadata })
+    )
+    expect(t).toBeInstanceOf(McpStdioTransport)
+    expect(stdioOptions(t).cwd).toBe(cwd)
+  })
+
+  it('MCPS-U-11e: 桌面声明了旧版 SSE；记住的 transport 只经 mergeMetadata 并那一个键', () => {
+    const internals = mcpService as unknown as {
+      legacySse: boolean
+      store: { rememberTransport?: (id: string, t: 'sse' | undefined) => void }
+    }
+    expect(internals.legacySse).toBe(true)
+    internals.store.rememberTransport!('srv', 'sse')
+    internals.store.rememberTransport!('srv', undefined)
+    expect(mocks.mergeMetadata.mock.calls).toEqual([
+      ['srv', { transport: 'sse' }],
+      ['srv', { transport: undefined }]
+    ])
   })
 
   it('MCPS-U-11: 不认识的类型直接抛', () => {

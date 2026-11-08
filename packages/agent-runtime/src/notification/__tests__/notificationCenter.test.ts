@@ -187,6 +187,25 @@ describe('通知决策器 — 不打扰的条件', () => {
     expect(h.shown[0].title).toBe('notification.untitledSession')
   })
 
+  it('改设置的询问：正文是宿主写的那句「这次做什么」，不是通道调用的原文', () => {
+    const h = makeCenter()
+    h.center.askRaised(ROOT, {
+      id: 's',
+      kind: 'ask',
+      toolName: 'shuvix',
+      createdAt: 0,
+      command: 'shuvix mcp:add github',
+      preview: {
+        kind: 'settings',
+        channel: 'mcp:add',
+        title: 'Add MCP server github',
+        rows: [{ label: 'Token', value: 'filled' }]
+      },
+      fields: [{ key: 'env.GITHUB_TOKEN', label: 'GITHUB_TOKEN', secret: true, required: true }]
+    })
+    expect(h.shown[0].body).toBe('notification.askBody|Add MCP server github')
+  })
+
   it('正文压成单行并截断 —— 命令可能是多行 heredoc', () => {
     const h = makeCenter()
     h.center.askRaised(ROOT, askRequest('r', `cat <<'EOF'\n${'x'.repeat(300)}\nEOF`))

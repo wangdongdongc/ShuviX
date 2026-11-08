@@ -31,6 +31,7 @@ export type LucideIconName =
   | 'Palette'
   | 'Puzzle'
   | 'Search'
+  | 'SlidersHorizontal'
   | 'SquareTerminal'
   | 'Terminal'
   | 'Wrench'

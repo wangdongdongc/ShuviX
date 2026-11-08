@@ -21,6 +21,8 @@ export interface McpServerDialogInitial {
   command: string
   /** 启动参数：每行一个 */
   argsText: string
+  /** stdio 的工作目录（metadata.cwd）；空 = 不设 */
+  cwd: string
   /** key/value 数组（已解析） */
   envPairs: Array<{ key: string; value: string }>
   url: string
@@ -35,6 +37,8 @@ export interface McpServerDialogData {
   type: 'stdio' | 'http'
   command: string
   argsLines: string[]
+  /** stdio 的工作目录；不是 stdio 时恒为 `''`（看不见的值不该被存下来） */
+  cwd: string
   envObject: Record<string, string>
   url: string
   headersObject: Record<string, string>
@@ -100,6 +104,7 @@ export function McpServerDialog({
   )
   const [command, setCommand] = useState(initial?.command ?? '')
   const [argsText, setArgsText] = useState(initial?.argsText ?? '')
+  const [cwd, setCwd] = useState(initial?.cwd ?? '')
   const [envPairs, setEnvPairs] = useState<Array<{ key: string; value: string }>>(
     initial?.envPairs ?? []
   )
@@ -143,6 +148,7 @@ export function McpServerDialog({
         type,
         command: command.trim(),
         argsLines: linesToArray(argsText),
+        cwd: type === 'stdio' ? cwd.trim() : '',
         envObject,
         url: url.trim(),
         headersObject: linesToHeaders(headersText),
@@ -245,6 +251,18 @@ export function McpServerDialog({
                   placeholder={t('settings.mcpArgsPlaceholder')}
                 />
               </SettingsBlock>
+              <SettingsRow
+                title={t('settings.mcpCwd')}
+                control={
+                  <InlineInput
+                    value={cwd}
+                    onChange={setCwd}
+                    placeholder={t('settings.mcpCwdPlaceholder')}
+                    width={260}
+                    monospace
+                  />
+                }
+              />
             </SettingsSection>
           )}
 

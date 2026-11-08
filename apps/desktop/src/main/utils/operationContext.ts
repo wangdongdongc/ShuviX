@@ -11,6 +11,8 @@ export type OperationSource =
   | { type: 'chrome'; installId: string }
   /** 局域网里的浏览器（server mode phase B，经 WebSocket）：哪条连接、从哪来、哪个浏览器（User-Agent，没有就缺省） */
   | { type: 'network'; clientId: string; remoteAddress: string; userAgent?: string }
+  /** 一条会话里的 agent（`shuvix` 工具在进程内调开放给它的设置通道）：哪条会话 */
+  | { type: 'agent'; sessionId: string }
 
 /** 操作上下文 — 每次用户操作一个实例 */
 export interface OperationContext {
@@ -56,6 +58,13 @@ export function createClientContext(ctx: ClientContext, sessionId?: string): Ope
           remoteAddress: client.remoteAddress,
           ...(client.userAgent ? { userAgent: client.userAgent } : {})
         },
+        sessionId,
+        timestamp: Date.now()
+      }
+    case 'agent':
+      return {
+        requestId: uuid(),
+        source: { type: 'agent', sessionId: client.sessionId },
         sessionId,
         timestamp: Date.now()
       }
@@ -111,6 +120,10 @@ export function humanOriginOf(source: OperationSource): HumanOrigin {
         userId: source.userId,
         chatId: source.chatId
       }
+    case 'agent':
+      // agent 不是人：开放给它的通道（services/agentChannels.ts）没有一条会往会话里送输入。真有一天开放了，宁可在这里
+      // 报错，也不能把 agent 写的话记成某个人亲手打的
+      throw new Error('An agent call cannot send input to a session as the user')
   }
 }
 

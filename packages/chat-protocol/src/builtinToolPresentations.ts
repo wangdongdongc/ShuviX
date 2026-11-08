@@ -185,6 +185,15 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     presentation: { icon: 'Puzzle', iconColor: '#8b5cf6' },
     buildSummary: (args) => asStr(args.query)
   },
+  shuvix: {
+    labelKey: 'tool.shuvixLabel',
+    presentation: { icon: 'SlidersHorizontal', iconColor: '#3b82f6' },
+    // describe 时是看哪一块，call 时是哪条通道 —— 卡上与折叠行都要一眼看出在动哪一样设置
+    buildSummary: (args) =>
+      asStr(args.channel) ??
+      asStr(args.scope) ??
+      (asStr(args.action) === 'describe' ? 'describe' : undefined)
+  },
   widget: {
     labelKey: 'tool.widgetLabel',
     presentation: { icon: 'Wrench', iconColor: '#f59e0b' },

@@ -648,7 +648,13 @@
     "extensionAskUrl": "許可すると接続します：",
     "extensionAskWidget": "このウィジェットの記録を読めるようになります。変更するときは改めて確認します。",
     "extensionAskCache": "現在のモデルは会話の途中でツールを追加するとキャッシュを保てないため、次のリクエストでプロンプトキャッシュの一部が外れます。",
-    "extensionAskCacheTokens": "現在のモデルは会話の途中でツールを追加するとキャッシュを保てないため、次のリクエストでプロンプトキャッシュの一部が外れます（前回のリクエストは約 {{tokens}} tokens）。"
+    "extensionAskCacheTokens": "現在のモデルは会話の途中でツールを追加するとキャッシュを保てないため、次のリクエストでプロンプトキャッシュの一部が外れます（前回のリクエストは約 {{tokens}} tokens）。",
+    "settingsAskChange": "ShuviX の設定を変更",
+    "settingsAskChannel": "チャネル",
+    "askFieldsNote": "ここはあなたが入力する欄です。入力した内容は AI には見えません。",
+    "askFieldOptional": "任意",
+    "askFieldsMissing_one": "先に上の欄を入力してください",
+    "askFieldsMissing_other": "先に上の必須欄を入力してください"
   },
   "sessionConfig": {
     "title": "セッション設定",
@@ -1067,6 +1073,8 @@
     "mcpCommandPlaceholder": "例: npx、uvx、docker",
     "mcpArgs": "引数",
     "mcpArgsPlaceholder": "1行に1つの引数",
+    "mcpCwd": "作業ディレクトリ",
+    "mcpCwdPlaceholder": "/path/to/folder（任意）",
     "mcpEnv": "環境変数",
     "mcpEnvKeyPlaceholder": "KEY",
     "mcpEnvValuePlaceholder": "value",
@@ -1451,7 +1459,9 @@
     "suggestLabel": "提案",
     "suggestHint": "ワンクリックで採用できる次の一手をいくつか残します。作業は止まりません",
     "showImageLabel": "画像を表示",
-    "showImageHint": "このコンピュータ上の画像を会話の中に直接表示します。描いたグラフや保存したスクリーンショットなど"
+    "showImageHint": "このコンピュータ上の画像を会話の中に直接表示します。描いたグラフや保存したスクリーンショットなど",
+    "shuvixLabel": "ShuviX の設定",
+    "shuvixHint": "MCP サーバーの追加など、ShuviX 自体の設定を代わりに確認・変更します。変更のたびに先に確認します"
   },
   "widgets": {
     "panelEmptyHint": "ウィジェットはまだありません。チャットで AI に作ってもらってください（例：「JSON フォーマッターのウィジェットを作って」）",
@@ -2083,5 +2093,28 @@
       "knowledge_bases": "ナレッジベース",
       "bot_profile": "Bot のペルソナと記憶"
     }
+  },
+  "agentApi": {
+    "cardName": "名前",
+    "cardCommand": "コマンド",
+    "cardUrl": "アドレス",
+    "cardCwd": "作業フォルダー",
+    "cardEnv": "環境変数",
+    "cardHeaders": "ヘッダー",
+    "cardRename": "新しい名前",
+    "cardType": "種類",
+    "cardEnabled": "有効",
+    "cardOn": "オン",
+    "cardOff": "オフ",
+    "cardKeySet": "{{key}}（入力済み）",
+    "cardKeyToFill": "{{key}}（あなたが入力）",
+    "cardRemoved": "{{key}}（削除）",
+    "cardHeaderField": "ヘッダー {{key}}",
+    "mcpListTitle": "MCP サーバーの一覧",
+    "mcpGetToolsTitle": "MCP サーバー「{{name}}」のツールを表示",
+    "mcpAddTitle": "MCP サーバー「{{name}}」を設定に追加",
+    "mcpUpdateTitle": "MCP サーバー「{{name}}」を変更",
+    "mcpDeleteTitle": "MCP サーバー「{{name}}」と保存済みのキーを削除",
+    "fillOnlyDescription": "下の値を入力してください。値はそのまま設定に保存され、エージェントには見えません。"
   }
 }

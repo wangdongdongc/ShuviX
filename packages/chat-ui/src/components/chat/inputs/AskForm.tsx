@@ -1,17 +1,19 @@
 import { getHostApi } from '@shuvix/chat-ui'
 import {
   Eye,
+  EyeOff,
   FileOutput,
   FilePen,
   FileText,
   FolderOpen,
   MessagesSquare,
+  Settings,
   Shield,
   ShieldAlert,
   Puzzle,
   Wrench
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Fragment, useId, useMemo, useRef, useState } from 'react'
 import { BackgroundBadge, FullAccessBadge } from '../BgTaskTag'
 import { ReviewOpinion, ReviewRiskBadge } from '../ReviewTag'
 import { renderToolIcon } from '../ToolCallBlock'
@@ -23,9 +25,11 @@ import bash from 'highlight.js/lib/languages/bash'
 import powershell from 'highlight.js/lib/languages/powershell'
 import type {
   AskExtensionPreview,
+  AskField,
   AskInputRequest,
   AskPolicyPrompt,
   AskSessionTarget,
+  AskSettingsPreview,
   AskWidgetTarget
 } from '@shuvix/chat-protocol/types/inputRequest'
 import { builtinMcpCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
@@ -233,6 +237,138 @@ function ExtensionPreview({ extension }: { extension: AskExtensionPreview }): Re
 }
 
 /**
+ * 改设置询问预览（`shuvix` 工具调一条设置通道）：宿主写的一句话 + 逐行的标签与值，下面小字注上通道名 ——
+ * 用户写策略认的是通道名。卡片不认识具体通道，行怎么写全由宿主定（界面语言、秘密值换成「已填」），这里原样摆。
+ * 单个值可能很长（整条命令行、一串参数）：每个值限高自己滚，别的行照样看得见。
+ */
+function SettingsPreview({ settings }: { settings: AskSettingsPreview }): React.JSX.Element {
+  const { t } = useTranslation()
+  const { channel, title, rows } = settings
+  return (
+    <div className="space-y-1" data-ask-settings={channel}>
+      <div className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 min-w-0">
+        <div className="break-words text-text-primary" data-ask-settings-title="">
+          {title}
+        </div>
+        {rows.length > 0 && (
+          // 标签列按内容收窄、最多占四成：值（路径、命令）才是该看全的那一列
+          <dl className="mt-1 grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-2.5 gap-y-0.5">
+            {rows.map((row, i) => (
+              <Fragment key={i}>
+                <dt className="break-words text-text-tertiary" data-ask-settings-label="">
+                  {row.label}
+                </dt>
+                <dd
+                  className="max-h-24 overflow-y-auto overscroll-contain thin-scrollbar whitespace-pre-wrap break-all font-mono text-[11.5px] text-text-secondary"
+                  data-ask-settings-value=""
+                >
+                  {row.value}
+                </dd>
+              </Fragment>
+            ))}
+          </dl>
+        )}
+      </div>
+      <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-settings-channel="">
+        {t('toolCall.settingsAskChannel')}{' '}
+        <span className="font-mono break-all text-text-secondary">{channel}</span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 卡上要用户自己填的一项（agent 留空的 API key、token …）。
+ *
+ * 输入框刻意不受控：受控的 input 会被 React 同步进 `value` 属性，值就跟着 DOM 的序列化（innerHTML、页面快照、
+ * 复制出去的 HTML）走了；不受控时值只在元素的 value 里。手机上关掉自动大写与纠错 —— 首字母被改成大写的 token
+ * 就是另一个 token。
+ */
+function AskFieldRow({
+  field,
+  touch,
+  last,
+  onChange,
+  onEnter,
+  inputRef
+}: {
+  field: AskField
+  touch: boolean
+  /** 最后一个输入框：手机键盘上回车键写「完成」，其余写「下一项」 */
+  last: boolean
+  onChange: (value: string) => void
+  onEnter: () => void
+  inputRef: (el: HTMLInputElement | null) => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const id = useId()
+  const [shown, setShown] = useState(false)
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    // 229：Safari 上确认输入法候选的那个回车 isComposing 已是 false。长按连发不算第二次
+    if (e.key !== 'Enter' || e.repeat) return
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    e.preventDefault()
+    onEnter()
+  }
+  return (
+    <div data-ask-field={field.key}>
+      <label
+        htmlFor={id}
+        className={`flex flex-wrap items-baseline gap-x-1.5 leading-snug ${
+          touch ? 'text-[12px]' : 'text-[11px]'
+        }`}
+      >
+        {/* 环境变量名、请求头名：要认全，宁可折行也不截断 */}
+        <span className="min-w-0 break-all font-mono text-text-secondary">{field.label}</span>
+        {!field.required && (
+          <span className="text-text-tertiary" data-ask-field-optional="">
+            {t('toolCall.askFieldOptional')}
+          </span>
+        )}
+      </label>
+      <div
+        className={`mt-1 flex items-center rounded-md border border-border-secondary bg-bg-primary focus-within:border-accent transition-colors ${
+          touch ? 'h-11' : 'h-7'
+        }`}
+      >
+        <input
+          id={id}
+          ref={inputRef}
+          type={field.secret && !shown ? 'password' : 'text'}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          aria-required={field.required}
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint={last ? 'done' : 'next'}
+          data-ask-field-input=""
+          // 手机上小于 16px 时 iOS 一聚焦就放大页面
+          className={`min-w-0 flex-1 bg-transparent px-2 font-mono text-text-primary outline-none ${
+            touch ? 'text-base' : 'text-[12.5px]'
+          }`}
+        />
+        {field.secret && (
+          <button
+            type="button"
+            onClick={() => setShown((s) => !s)}
+            aria-label={shown ? t('input.secretHide') : t('input.secretShow')}
+            title={shown ? t('input.secretHide') : t('input.secretShow')}
+            data-ask-field-reveal=""
+            className={`flex-shrink-0 flex items-center justify-center text-text-tertiary hover:text-text-secondary ${
+              touch ? 'h-11 w-11' : 'h-7 w-7'
+            }`}
+          >
+            {shown ? <EyeOff size={touch ? 18 : 13} /> : <Eye size={touch ? 18 : 13} />}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
  * 命中策略的提示语 —— 收成操作栏左端的一枚角标：平时只留策略名，点开才铺出整句。
  *
  * 内置策略那几句每次询问都一字不差地重复（「放行后命令以你的完整系统权限运行…」），
@@ -287,6 +423,8 @@ interface AskOption {
   detail?: string
   detailIsPath?: boolean
   primary?: boolean
+  /** 卡上要填的值还没填完：允许那一行点不了，数字键也不算 */
+  disabled?: boolean
   onPick: () => void
   data?: Record<string, string>
 }
@@ -316,6 +454,14 @@ export function AskForm({
     session,
     widget
   } = request
+  const fields = request.fields ?? []
+  const hasFields = fields.length > 0
+  // 卡上填的值只放在这张卡的组件状态里，不进草稿：草稿在共享的 store 里、比卡片活得久。代价是步进到别的询问、
+  // 切走会话再回来，填过的要重填 —— 宁可重填，也不让秘密值多留一处
+  const [values, setValues] = useState<Record<string, string>>({})
+  const fieldInputs = useRef(new Map<string, HTMLInputElement>())
+  const missingFields = fields.filter((f) => f.required && !(values[f.key] ?? '').trim())
+  const missingField = missingFields[0]
   const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
   // 内置 MCP 能力服务器发起的询问（browser 打开一个地址、读一个本地文件；ssh 执行一条命令）
   // 也要有工具名与图标 —— 宿主下发的表里没有它们
@@ -323,6 +469,7 @@ export function AskForm({
   const diffPreview = preview?.kind === 'diff' ? preview : null
   const messagePreview = preview?.kind === 'message' ? preview.text : undefined
   const extensionPreview = preview?.kind === 'extension' ? preview : null
+  const settingsPreview = preview?.kind === 'settings' ? preview : null
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"这条路径(或它所在的
   // 文件夹),记进会话权限表。会话类(request.session)可"允许并记住"那条会话。命令类(bash/ssh)与简单类(浏览器
@@ -333,23 +480,57 @@ export function AskForm({
     return { mode: m[1] === 'Read' ? 'read' : 'write', path: m[2] }
   }, [command])
 
-  // 「允许并记住」写进会话权限表（宿主能力）：路径类与会话类,且需宿主提供 HostApi
-  const canRemember = pathAsk !== null && getHostApi() !== null
-  const canRememberSession = !!session && getHostApi() !== null
-  const canRememberWidget = !!widget && getHostApi() !== null
+  // 「允许并记住」写进会话权限表（宿主能力）：路径类与会话类,且需宿主提供 HostApi。
+  // 卡上要填值的询问不给记住：记下的只是这一次的放行，下回的值还得有人填
+  const canRemember = pathAsk !== null && getHostApi() !== null && !hasFields
+  const canRememberSession = !!session && getHostApi() !== null && !hasFields
+  const canRememberWidget = !!widget && getHostApi() !== null && !hasFields
   // 文件还可以记下它所在的文件夹（太浅的不给，见 rememberFolderOf）
   const rememberFolder =
     canRemember && pathAsk && !pathIsDirectory ? rememberFolderOf(pathAsk.path) : null
 
+  // 批准：卡上要填的值随答复一起交（键恰是 fields 的键，没填的可选项是空串）。前后空白去掉 —— 粘贴来的 token
+  // 常带一个换行。必填的没填完时什么都不交（行是灰的，数字键、回车也走到这里）
+  const allow = (): void => {
+    if (missingField) return
+    if (!hasFields) {
+      onSubmit({ kind: 'ask', allowed: true })
+      return
+    }
+    const filled = Object.fromEntries(fields.map((f) => [f.key, (values[f.key] ?? '').trim()]))
+    onSubmit({ kind: 'ask', allowed: true, values: filled })
+  }
+
+  // 输入框里的回车：还有必填的空着就跳过去；都填了，桌面上等于批准，触屏上去下一个输入框或收起键盘 ——
+  // 与写一句话那一行同一条规矩，手机上的回车不发东西，批准走选项行
+  const handleFieldEnter = (index: number): void => {
+    if (missingField) {
+      fieldInputs.current.get(missingField.key)?.focus()
+      return
+    }
+    if (!touch) {
+      allow()
+      return
+    }
+    const next = fields[index + 1]
+    if (next) fieldInputs.current.get(next.key)?.focus()
+    else fieldInputs.current.get(fields[index].key)?.blur()
+  }
+
   // 选项自上而下：允许这一次 → 各种「允许并记住」→ 拒绝。目录路径没有单次放行（目录授权天然持久）；
   // 记住所在文件夹那一行把文件夹整条摆出来 —— 授予的范围比这个文件大，得看得见
   const options: AskOption[] = []
-  if (!(pathAsk && pathIsDirectory)) {
+  if (!(pathAsk && pathIsDirectory) || hasFields) {
     options.push({
       id: 'allow',
       label: t('toolCall.askAllowOnce'),
+      // 灰着的时候说一句为什么
+      detail: missingField
+        ? t('toolCall.askFieldsMissing', { count: missingFields.length })
+        : undefined,
       primary: true,
-      onPick: () => onSubmit({ kind: 'ask', allowed: true })
+      disabled: !!missingField,
+      onPick: allow
     })
   }
   if (canRememberSession) {
@@ -411,16 +592,28 @@ export function AskForm({
     label: t('toolCall.deny'),
     onPick: () => onSubmit({ kind: 'ask', allowed: false })
   })
-  useOptionHotkeys(options.length, (i) => options[i]?.onPick())
+  useOptionHotkeys(options.length, (i) => {
+    const opt = options[i]
+    if (opt && !opt.disabled) opt.onPick()
+  })
 
   // 顶行的动作名：非路径类直接取工具自己的显示名，与上方步骤行共用一套词表
   const iconSize = touch ? 14 : 12
   const iconClass = 'flex-shrink-0'
-  const { icon, title } = extensionPreview
+  // 改设置与开启扩展：顶行是卡片自己的动作名，不看发起它的工具
+  const previewHead = settingsPreview
     ? {
-        icon: <Puzzle size={iconSize} className={iconClass} />,
-        title: t('toolCall.extensionAskEnable')
+        icon: <Settings size={iconSize} className={iconClass} />,
+        title: t('toolCall.settingsAskChange')
       }
+    : extensionPreview
+      ? {
+          icon: <Puzzle size={iconSize} className={iconClass} />,
+          title: t('toolCall.extensionAskEnable')
+        }
+      : null
+  const { icon, title } = previewHead
+    ? previewHead
     : widget
       ? {
           icon: <Wrench size={iconSize} className={iconClass} />,
@@ -529,7 +722,9 @@ export function AskForm({
         ) : null}
 
         <div data-ask-preview="">
-          {extensionPreview ? (
+          {settingsPreview ? (
+            <SettingsPreview settings={settingsPreview} />
+          ) : extensionPreview ? (
             <ExtensionPreview extension={extensionPreview} />
           ) : widget ? (
             <WidgetPreview widget={widget} />
@@ -571,6 +766,35 @@ export function AskForm({
 
       {/* 选项行：允许这一次 / 记住… / 拒绝 —— 也可以不选，在最后一行告诉 AI 换个做法 */}
       <div className="flex-shrink-0">
+        {/* 要填的值紧贴在允许那一行上面、不随上半滚走：允许灰着时，原因就在眼前 */}
+        {hasFields && (
+          <div
+            className={`border-t border-border-secondary/40 ${
+              touch ? 'px-4 py-2.5 space-y-2.5' : 'px-3.5 py-2 space-y-2'
+            }`}
+            data-ask-fields=""
+          >
+            <p
+              className={`leading-snug text-text-tertiary ${touch ? 'text-[12px]' : 'text-[11px]'}`}
+            >
+              {t('toolCall.askFieldsNote')}
+            </p>
+            {fields.map((field, i) => (
+              <AskFieldRow
+                key={field.key}
+                field={field}
+                touch={touch}
+                last={i === fields.length - 1}
+                onChange={(value) => setValues((prev) => ({ ...prev, [field.key]: value }))}
+                onEnter={() => handleFieldEnter(i)}
+                inputRef={(el) => {
+                  if (el) fieldInputs.current.set(field.key, el)
+                  else fieldInputs.current.delete(field.key)
+                }}
+              />
+            ))}
+          </div>
+        )}
         <div role="group" aria-label={title}>
           {options.map((opt, i) => (
             <OptionRow
@@ -580,6 +804,7 @@ export function AskForm({
               detail={opt.detail}
               detailIsPath={opt.detailIsPath}
               primary={opt.primary}
+              disabled={opt.disabled}
               onPick={opt.onPick}
               data={{ 'data-ask-option': opt.id, ...opt.data }}
             />

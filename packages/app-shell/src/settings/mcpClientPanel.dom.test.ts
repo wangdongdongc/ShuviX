@@ -456,3 +456,90 @@ describe('实验性质的内置 server（任务列表 plan）', () => {
     expect(expandedArea('plan').textContent).toBe(i18n.t('settings.mcpStatusDisconnected'))
   })
 })
+
+describe('stdio 的工作目录（metadata.cwd）', () => {
+  /** 用户自己的一台 stdio server，带着工作目录 */
+  const LOCAL = row({
+    id: 'mcp-local',
+    name: 'local',
+    type: 'stdio',
+    command: 'npx',
+    args: '["-y","pkg"]',
+    metadata: '{"cwd":"/srv/tools","transport":"sse"}'
+  })
+  const cwdInput = (): HTMLInputElement => inputByPlaceholder(i18n.t('settings.mcpCwdPlaceholder'))
+  const cwdShown = (): boolean =>
+    !!container.querySelector(`input[placeholder="${i18n.t('settings.mcpCwdPlaceholder')}"]`)
+
+  async function openEditLocal(server: McpServerInfo = LOCAL): Promise<void> {
+    servers = [server]
+    toolsById = { [server.id]: [] }
+    await renderPanel()
+    const pencil = serverRow(server.name).querySelector('svg.lucide-pencil')?.closest('button')
+    await click(pencil as HTMLButtonElement)
+    expect(dialogTitle()).toBe(i18n.t('settings.mcpEditTitle'))
+  }
+
+  it('MP-C1 添加 stdio：填了目录 → add 带 cwd；没填 → 连这个键都没有', async () => {
+    await renderPanel()
+    await click(buttonByText(i18n.t('settings.mcpAdd')))
+    await typeInto(inputByPlaceholder(i18n.t('settings.mcpNamePlaceholder')), 'local')
+    await typeInto(inputByPlaceholder(i18n.t('settings.mcpCommandPlaceholder')), 'npx')
+    await typeInto(cwdInput(), '  /srv/tools  ')
+    await click(buttonByText(i18n.t('common.add')))
+    expect(api.add.mock.calls[0][0]).toMatchObject({
+      name: 'local',
+      type: 'stdio',
+      command: 'npx',
+      cwd: '/srv/tools'
+    })
+
+    await click(buttonByText(i18n.t('settings.mcpAdd')))
+    await typeInto(inputByPlaceholder(i18n.t('settings.mcpNamePlaceholder')), 'plain')
+    await typeInto(inputByPlaceholder(i18n.t('settings.mcpCommandPlaceholder')), 'uvx')
+    await click(buttonByText(i18n.t('common.add')))
+    expect(api.add.mock.calls[1][0]).not.toHaveProperty('cwd')
+  })
+
+  it('MP-C2 编辑：目录从 metadata 读出来；不改就保存，原样发回', async () => {
+    await openEditLocal()
+    expect(cwdInput().value).toBe('/srv/tools')
+    await click(buttonByText(i18n.t('common.save')))
+    expect(api.update.mock.calls[0][0]).toMatchObject({ id: 'mcp-local', cwd: '/srv/tools' })
+  })
+
+  it('MP-C3 编辑：把目录删空 → 发 `cwd: ""`（清掉）', async () => {
+    await openEditLocal()
+    await typeInto(cwdInput(), '')
+    await click(buttonByText(i18n.t('common.save')))
+    expect(api.update.mock.calls[0][0]).toMatchObject({ id: 'mcp-local', cwd: '' })
+  })
+
+  it('MP-C4 编辑：换成 http → 目录那一行不见了，存的时候也清掉（看不见的值不留）', async () => {
+    await openEditLocal()
+    await click(buttonByText(i18n.t('settings.mcpTypeHttp')))
+    expect(cwdShown()).toBe(false)
+    await typeInto(
+      inputByPlaceholder(i18n.t('settings.mcpUrlPlaceholder')),
+      'https://x.example/mcp'
+    )
+    await click(buttonByText(i18n.t('common.save')))
+    expect(api.update.mock.calls[0][0]).toMatchObject({ type: 'http', cwd: '' })
+  })
+
+  it('MP-C5 坏的 metadata 打开是空的、不抛', async () => {
+    await openEditLocal(row({ ...LOCAL, metadata: '{not json' }))
+    expect(cwdInput().value).toBe('')
+  })
+
+  it('MP-C5b http 行没有目录这一行', async () => {
+    await openEditLocal(row({ id: 'mcp-remote', name: 'remote', url: 'https://r.example/mcp' }))
+    expect(cwdShown()).toBe(false)
+  })
+
+  it('MP-C6 扩展形态（只有 http）的添加对话框没有目录这一行', async () => {
+    await renderPanel({ caps: { allowStdio: false } })
+    await click(buttonByText(i18n.t('settings.mcpAdd')))
+    expect(cwdShown()).toBe(false)
+  })
+})

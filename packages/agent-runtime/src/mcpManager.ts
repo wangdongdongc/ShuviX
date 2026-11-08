@@ -3,8 +3,11 @@
  *
  * 承载：连接/断开、工具发现、callTool、MCP 工具 → pi-durable 注册项（`ToolRegistration`）转换、
  * 状态跟踪、内置 server 的 {{ENV}} 模板替换。「存储」和「transport 创建」经构造参数注入：
- *  - store：server 配置读取 + cachedTools 持久化（桌面 mcpDao）
- *  - createTransport：按 server.type 造 transport（桌面 stdio + http + inproc）
+ *  - store：server 配置读取 + cachedTools 持久化 + 记住 http server 走的 transport（桌面 mcpDao）
+ *  - createTransport：按 server.type 造 transport（桌面 stdio + http + 旧版 SSE + inproc）
+ *
+ * **旧版 HTTP+SSE 不是一种配置类型，是握手时的回退**（见 connectClient）：`type: 'http'` 先走
+ * Streamable HTTP，被回 404/405 才换旧版 SSE 再试一次，走通了记进 metadata，下次直接用。
  *
  * **惰性启动**：没有「开机连全部」这回事 —— 连接只发生在装配工具那一刻（宿主创建 Agent 时按名
  * `ensureServerByName`），以及用户在设置页手动点连接。失败也不进后台重试队列：
@@ -24,13 +27,19 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { SseError } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Type, type TSchema } from 'typebox'
 import type { ConversationId, ToolRegistration } from '@earendil-works/pi-durable'
 import { catchToolErrors, toExecutionResult, toolErrorResult } from './tools/toolResult'
 import type { ToolContent, ToolResult } from './tools/toolResult'
 import { backstopOutputLimits } from './tools/outputLimits'
-import type { McpServer, McpServerStatus, McpToolInfo } from '@shuvix/chat-protocol/types/mcp'
+import {
+  parseMcpServerMetadata,
+  type McpServer,
+  type McpServerStatus,
+  type McpToolInfo
+} from '@shuvix/chat-protocol/types/mcp'
 import type { McpToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { BuiltinMcpScope } from './builtinMcpRegistry'
 import type { McpInvocationFacts } from './security/types'
@@ -60,18 +69,45 @@ export interface McpStore {
   findEnabled(): McpServer[]
   findAll(): McpServer[]
   updateCachedTools(id: string, toolsJson: string): void
+  /**
+   * 记下 http server 实际走通的 transport（`metadata.transport`）：`'sse'` = 旧版 HTTP+SSE，
+   * `undefined` = 清掉（回到 Streamable HTTP）。只并这一个键，metadata 里别人的键不动。
+   * 可选：不实现就不记，每次连接都先试 Streamable HTTP、挨一个 404/405 再换 SSE。
+   */
+  rememberTransport?(id: string, transport: 'sse' | undefined): void
+}
+
+/** 造 transport 时 McpManager 额外提的要求 */
+export interface McpTransportOptions {
+  /**
+   * 仅 `type: 'http'`：造**旧版 HTTP+SSE** transport（2024-11-05 规范）而不是 Streamable HTTP。
+   * 只有声明了 `legacySse` 的宿主才会收到它。
+   */
+  sse?: boolean
 }
 
 export interface McpManagerOptions {
   store: McpStore
   /**
-   * 按 server 造 transport（桌面 stdio + http + inproc）。
+   * 按 server 造 transport（桌面 stdio + http + 旧版 SSE + inproc）。
    *
    * `scope` 只在 `type: 'inproc'` 的内置能力服务器上有值 —— 它们按会话实例化，工厂据此把
    * server side 接到这条会话自己的实例上（见 builtinMcpRegistry）。返回值允许是 Promise：
    * 内置服务器要 await `server.connect(transport)` 才算接好。
+   *
+   * `opts` 只在要旧版 SSE 时才给（`{ sse: true }`），其余调用只有前两个参数。
    */
-  createTransport: (server: McpServer, scope?: BuiltinMcpScope) => Transport | Promise<Transport>
+  createTransport: (
+    server: McpServer,
+    scope?: BuiltinMcpScope,
+    opts?: McpTransportOptions
+  ) => Transport | Promise<Transport>
+  /**
+   * 宿主造得出旧版 HTTP+SSE transport（createTransport 认 `{ sse: true }`）。给了，`type: 'http'`
+   * 的 server 握手被回 404/405 时换旧版 SSE 再试一次（见 connectClient）；不给 = 只有 Streamable
+   * HTTP，404/405 照原样报，metadata 里记着的 SSE 也不理。
+   */
+  legacySse?: boolean
   logger?: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }
 }
 
@@ -260,6 +296,30 @@ function isSessionExpired(conn: McpConnection, err: unknown): boolean {
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** SDK 的 HTTP 层错误带着状态码（`code`）；别的错误（网络失败、JSON-RPC 错误）没有 */
+function httpStatusOf(err: unknown): number | undefined {
+  if (!(err instanceof StreamableHTTPError) && !(err instanceof SseError)) return undefined
+  return typeof err.code === 'number' ? err.code : undefined
+}
+
+/**
+ * 握手失败说明的是不是「这个地址不说这一种 transport」—— 是才换另一种再试。
+ *
+ * 先 Streamable HTTP 时只认规范向后兼容一节点名的 404/405（Claude Code、VS Code 同）。**401/403
+ * 不算**：那是「要认证」，换一种 transport 再试只会让它变成一句不相干的 SSE 报错；网络错误没有
+ * 状态码，也不算。记着 SSE 时再加 400：Streamable HTTP server 对不带会话 id 的 GET 常回 400（SDK
+ * 自带的示例 server 就是），而旧版 SSE server 的 GET 不会这么答 —— 不认它，一台从 SSE 升级上来的
+ * server 就会一直卡在记忆里，直到用户去改地址。
+ */
+function isWrongTransport(err: unknown, triedSse: boolean): boolean {
+  const status = httpStatusOf(err)
+  return status === 404 || status === 405 || (triedSse && status === 400)
+}
+
+const transportLabel = (sse: boolean): string => (sse ? 'legacy SSE' : 'Streamable HTTP')
+
+const newClient = (): Client => new Client({ name: 'shuvix', version: '1.0.0' })
+
 const noopLog = { info: () => {}, warn: () => {}, error: () => {} }
 
 /**
@@ -421,15 +481,14 @@ export class McpManager {
    */
   private closedSessions = new Set<string>()
   private store: McpStore
-  private createTransport: (
-    server: McpServer,
-    scope?: BuiltinMcpScope
-  ) => Transport | Promise<Transport>
+  private createTransport: McpManagerOptions['createTransport']
+  private legacySse: boolean
   private log: NonNullable<McpManagerOptions['logger']>
 
   constructor(opts: McpManagerOptions) {
     this.store = opts.store
     this.createTransport = opts.createTransport
+    this.legacySse = opts.legacySse === true
     this.log = opts.logger ?? noopLog
   }
 
@@ -543,7 +602,7 @@ export class McpManager {
     if (this.connections.has(key)) await this.disconnect(serverId, sessionId)
 
     const conn: McpConnection = {
-      client: new Client({ name: 'shuvix', version: '1.0.0' }),
+      client: newClient(),
       transport: null as unknown as Transport,
       tools: [],
       status: 'connecting',
@@ -556,6 +615,9 @@ export class McpManager {
       trusted: server.type === 'inproc' && server.isBuiltin === 1
     }
     this.connections.set(key, conn)
+    /** 这次尝试已经放弃了（超时、或连接期间被断开）：换 transport 再试的那一步不该再造出新的来 */
+    let gaveUp = false
+    const abandoned = (): boolean => gaveUp || this.connections.get(key) !== conn
 
     const fail = (message: string): McpConnectResult => {
       conn.status = 'error'
@@ -570,30 +632,20 @@ export class McpManager {
       return fail(`Missing required env variable: ${missingKey}`)
     }
 
-    try {
-      conn.transport = await this.createTransport(
-        resolved,
-        server.type === 'inproc' && sessionId ? { sessionId } : undefined
-      )
-      const transport = conn.transport
-      transport.onclose = () => {
-        // 下一次调用会原地重连（见 callTool）；在那之前留下死因 —— stdio 进程退出前的 stderr
-        conn.status = 'disconnected'
-        conn.tools = []
-        conn.error = withStderrTail('Connection closed', transport)
-        this.log.info(`transport closed: ${server.name} ${conn.error}`)
-      }
-      // transport 报错**不等于**连接断了：stdio 进程往 stdout 打了一行不是 JSON 的日志、HTTP 的 SSE
-      // 监听流没开起来，连接都还能用。真断了 stdio / inproc 会走 onclose；HTTP 没有「断了」这种
-      // 信号，由失败的调用来判（见 callFailed）。握手期间的错误由握手本身的成败决定。
-      // 改制前这里会把状态改成 error —— 于是一行杂音就让这台的工具在 Agent 余生里全部报「没连上」。
-      transport.onerror = (err: Error) => {
-        this.log.warn(`transport error: ${server.name} ${err.message}`)
-      }
+    const scope: BuiltinMcpScope | undefined =
+      server.type === 'inproc' && sessionId ? { sessionId } : undefined
+    // 记着走旧版 SSE 的直接用它（宿主造不出 SSE 时记忆不算数）
+    const sse =
+      this.legacySse &&
+      server.type === 'http' &&
+      parseMcpServerMetadata(server.metadata).transport === 'sse'
 
-      // 握手 + 工具发现合起来才算「连上」，超时按整段算
+    try {
+      this.watchTransport(conn, await this.makeTransport(resolved, scope, sse), server.name)
+
+      // 握手 + 工具发现合起来才算「连上」，超时按整段算（换 transport 再试的那一次也在里面）
       const handshake = (async () => {
-        await conn.client.connect(conn.transport)
+        await this.connectClient(conn, resolved, scope, sse, abandoned)
         const result = await conn.client.listTools()
         conn.tools = result.tools as McpDiscoveredTool[]
       })()
@@ -624,10 +676,99 @@ export class McpManager {
     } catch (err: unknown) {
       // 超时时握手可能还在跑：必须收掉 transport，否则 stdio 会留下一个没人管的子进程。
       // stderr 在收尾之后再读 —— 进程临死前最后那几行往往就是死因
+      gaveUp = true
       await this.closeConnection(conn, server.name)
       const message = withStderrTail(errorText(err), conn.transport ?? undefined)
       this.log.error(`connect failed: ${server.name} ${message}`)
       return fail(message)
+    }
+  }
+
+  /** 造 transport：只在要旧版 SSE 时才给第三个参数（见 McpManagerOptions.createTransport） */
+  private makeTransport(
+    server: McpServer,
+    scope: BuiltinMcpScope | undefined,
+    sse: boolean
+  ): Transport | Promise<Transport> {
+    return sse
+      ? this.createTransport(server, scope, { sse: true })
+      : this.createTransport(server, scope)
+  }
+
+  /** 把 transport 挂到连接上，接好 onclose / onerror */
+  private watchTransport(conn: McpConnection, transport: Transport, label: string): void {
+    conn.transport = transport
+    transport.onclose = () => {
+      // 下一次调用会原地重连（见 callTool）；在那之前留下死因 —— stdio 进程退出前的 stderr
+      conn.status = 'disconnected'
+      conn.tools = []
+      conn.error = withStderrTail('Connection closed', transport)
+      this.log.info(`transport closed: ${label} ${conn.error}`)
+    }
+    // transport 报错**不等于**连接断了：stdio 进程往 stdout 打了一行不是 JSON 的日志、HTTP 的 SSE
+    // 监听流没开起来，连接都还能用。真断了 stdio / inproc 会走 onclose；HTTP 没有「断了」这种
+    // 信号，由失败的调用来判（见 callFailed）。握手期间的错误由握手本身的成败决定。
+    // 改制前这里会把状态改成 error —— 于是一行杂音就让这台的工具在 Agent 余生里全部报「没连上」。
+    transport.onerror = (err: Error) => {
+      this.log.warn(`transport error: ${label} ${err.message}`)
+    }
+  }
+
+  /**
+   * 握手（initialize）。`type: 'http'` 的 server 答「这个地址不说这一种 transport」（见
+   * isWrongTransport）时换另一种再试**一次**：先 Streamable HTTP 的换旧版 SSE，记着 SSE 的换回
+   * Streamable HTTP。换过去走通了就记下来（`store.rememberTransport`），下次直接用那一种。两种都
+   * 不通，报头一种的错误、后面跟着第二种的。
+   *
+   * 回退必须在这里、而不是在宿主造 transport 时：构造 transport 不做任何网络 I/O，「不说这种
+   * transport」只会在握手时才知道 —— 宿主里曾经那条 try/catch 回退就是因此从来没走到过。
+   */
+  private async connectClient(
+    conn: McpConnection,
+    server: McpServer,
+    scope: BuiltinMcpScope | undefined,
+    sse: boolean,
+    abandoned: () => boolean
+  ): Promise<void> {
+    let first: unknown
+    try {
+      await conn.client.connect(conn.transport)
+      return
+    } catch (err: unknown) {
+      if (!this.legacySse || server.type !== 'http' || !isWrongTransport(err, sse) || abandoned()) {
+        throw err
+      }
+      first = err
+    }
+    const next = !sse
+    this.log.info(
+      `${server.name}: ${transportLabel(sse)} answered HTTP ${httpStatusOf(first)}, trying ${transportLabel(next)}`
+    )
+    // 头一次失败时 SDK 已经关了那个 transport，它的 onclose 把状态改成了 disconnected —— 还在连
+    conn.status = 'connecting'
+    conn.error = undefined
+    // 一个 SDK Client 只接一个 transport：两样都换新的
+    await this.closeConnection(conn, server.name)
+    if (abandoned()) throw first
+    const transport = await this.makeTransport(server, scope, next)
+    if (abandoned()) {
+      // 等它的时候这次尝试被放弃了（超时 / 被断开）：收尾的那一下关不到它，这里自己关
+      await transport.close().catch(() => {})
+      throw first
+    }
+    conn.client = newClient()
+    this.watchTransport(conn, transport, server.name)
+    try {
+      await conn.client.connect(transport)
+    } catch (err: unknown) {
+      const retry = next ? 'legacy SSE fallback' : 'Streamable HTTP retry'
+      throw new Error(`${errorText(first)} (${retry} also failed: ${errorText(err)})`)
+    }
+    try {
+      this.store.rememberTransport?.(server.id, next ? 'sse' : undefined)
+    } catch (err: unknown) {
+      // 记不下只是下次多挨一个 404/405，不该让已经连上的这次失败
+      this.log.warn(`remember transport failed: ${server.name} ${errorText(err)}`)
     }
   }
 

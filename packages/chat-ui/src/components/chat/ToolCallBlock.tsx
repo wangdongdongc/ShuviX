@@ -33,6 +33,7 @@ import {
   Archive,
   Lightbulb,
   Puzzle,
+  SlidersHorizontal,
   ListChecks,
   Image,
   Bot,
@@ -98,6 +99,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Archive,
   Lightbulb,
   Puzzle,
+  SlidersHorizontal,
   ListChecks,
   Image,
   Bot

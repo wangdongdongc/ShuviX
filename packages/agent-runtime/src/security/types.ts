@@ -24,6 +24,7 @@
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */
 import type {
+  AskField,
   AskPreview,
   AskSessionTarget,
   AskWidgetTarget,
@@ -180,6 +181,11 @@ export type AttrValue =
  *                                                           file:// 不走这里，按读那个路径处理）
  *   { type:'extension', server, builtin }                   开启这条会话还没选的一台 MCP 服务器（action 'enable'；
  *                                                           builtin = 随产品发布的内置服务器）
+ *   { type:'channel', channel, group, scope, kind, access }  调一条设置 API 通道（action 'invoke'）。网络客户端的每条
+ *                                                           RPC 是这个客体（主体 network）；agent 经 `shuvix` 工具调
+ *                                                           开放给它的通道也是（主体 agent）。scope / access 与
+ *                                                           channelAccess.ts 同一套词；agent 的客体不带 args（参数里
+ *                                                           可能有还原出来的秘密值）
  *   { type:'modelRequest', provider, model }                发给模型的一次请求（action 'send'；provider =
  *                                                           设置里显示的服务商名字，model = 模型 id）。
  *                                                           处置 `detect` 落在这里
@@ -555,6 +561,11 @@ export interface EnforceOpts {
   operation?: string
   /** 预览载荷（write/edit 的 diff）—— 只有 apply 层算得出，见 fileToolSuite */
   preview?: AskPreview
+  /**
+   * 要人在询问卡上填的值（见 AskInputRequest.fields）。只有交到人面前的询问才带上；审查员答的、策略直接放行的
+   * 都没有卡，调用方要自己再问（`shuvix` 工具就是这么做的）
+   */
+  fields?: AskField[]
   /** 命令将作为后台任务运行 —— 询问卡片据此标注（见 AskInputRequest.background） */
   background?: boolean
   /** 命令申请了不受限运行 —— 询问卡片据此标「完全访问」（见 AskInputRequest.unsandboxed） */
@@ -823,6 +834,21 @@ export interface ExtensionObjectInput {
   builtin: boolean
 }
 
+/**
+ * enforceChannel 的入参（对应 {type:'channel'} 客体的属性）—— agent 经 `shuvix` 工具要调的那条设置 API 通道。
+ * scope / access 由宿主按 channelAccess 的表算好（与网络客户端同一口径）。
+ */
+export interface ChannelObjectInput {
+  /** 通道名（`mcp:add`） */
+  channel: string
+  /** 通道表的命名空间（`mcp`） */
+  group: string
+  /** 它管的是 ShuviX 的哪一块（`extensions` …） */
+  scope: string
+  /** read / write / admin */
+  access: string
+}
+
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */
 export interface SecurityContext {
   /** 评估（不执行、不弹窗、不记日志）。includeForceAllow 缺省 true。 */
@@ -891,6 +917,12 @@ export interface SecurityContext {
    * 没有「允许并记住」—— 开启之后这台就在会话的选择里，记忆就是选择本身。
    */
   enforceExtension(object: ExtensionObjectInput, opts: EnforceOpts): Promise<void>
+  /**
+   * 设置通道守卫（agent 经 `shuvix` 工具调一条开放给它的设置 API 通道）：客体 = `{type:'channel'}`，action = 'invoke'。
+   * 出厂的 ask-on-settings 在 access 不是 read 时询问；admin 只由人回答（auto-review 的 `when` 把它排除在外）。
+   * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
+   */
+  enforceChannel(object: ChannelObjectInput, opts: EnforceOpts): Promise<void>
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。

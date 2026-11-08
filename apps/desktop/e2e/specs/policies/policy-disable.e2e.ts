@@ -195,6 +195,7 @@ describe('内置安全策略的停用开关', () => {
       'ask-on-extension',
       PATH_GATE,
       'ask-on-session-access',
+      'ask-on-settings',
       'ask-on-widget-access',
       'daily-bot-access',
       'network-admission',

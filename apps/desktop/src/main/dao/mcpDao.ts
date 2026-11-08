@@ -1,6 +1,23 @@
+import { parseMcpServerMetadata } from '@shuvix/chat-protocol/types/mcp'
 import { BaseDao } from './database'
 import { decryptOrEmpty, encrypt, isEncrypted } from '../utils/crypto'
 import type { McpServer } from './types'
+
+/**
+ * 对 metadata 的一次改动：给了值的键覆盖，值为 undefined 的键删掉，没提到的键原样留着 ——
+ * 这一列几方各写各的键（cwd、记住的 transport、addedBy……），整列替换会抹掉别人的。
+ */
+export type McpMetadataPatch = Record<string, unknown>
+
+/** 把 patch 并进一份 metadata JSON（读不懂的旧值当空对象） */
+function mergedMetadata(stored: string | undefined, patch: McpMetadataPatch): string {
+  const next: Record<string, unknown> = { ...parseMcpServerMetadata(stored) }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete next[key]
+    else next[key] = value
+  }
+  return JSON.stringify(next)
+}
 
 /** 没有配置的 env / headers：明文存着就行，不必为它生成密钥（钥匙环可能因此弹框） */
 const EMPTY_JSON = '{}'
@@ -67,11 +84,11 @@ export class McpDao extends BaseDao {
     return row && openRow(row)
   }
 
-  /** 插入 MCP Server */
+  /** 插入 MCP Server（metadata 明文：不放 secret） */
   insert(server: McpServer): void {
     this.stmt(
-      `INSERT INTO mcp_servers (id, name, type, command, args, env, url, headers, isEnabled, cachedTools, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO mcp_servers (id, name, type, command, args, env, url, headers, metadata, isEnabled, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       server.id,
       server.name,
@@ -81,6 +98,7 @@ export class McpDao extends BaseDao {
       seal(server.env),
       server.url,
       seal(server.headers),
+      server.metadata || '{}',
       server.isEnabled,
       server.cachedTools || '[]',
       server.createdAt,
@@ -88,7 +106,9 @@ export class McpDao extends BaseDao {
     )
   }
 
-  /** 更新 MCP Server */
+  /**
+   * 更新 MCP Server。`metadata` 是一次改动（McpMetadataPatch），并进已有的对象而不是替换它。
+   */
   update(
     id: string,
     fields: Partial<
@@ -96,7 +116,7 @@ export class McpDao extends BaseDao {
         McpServer,
         'name' | 'type' | 'command' | 'args' | 'env' | 'url' | 'headers' | 'isEnabled'
       >
-    >
+    > & { metadata?: McpMetadataPatch }
   ): void {
     const sets: string[] = []
     const values: unknown[] = []
@@ -132,6 +152,10 @@ export class McpDao extends BaseDao {
       sets.push('isEnabled = ?')
       values.push(fields.isEnabled)
     }
+    if (fields.metadata !== undefined && Object.keys(fields.metadata).length > 0) {
+      sets.push('metadata = ?')
+      values.push(mergedMetadata(this.storedMetadata(id), fields.metadata))
+    }
     if (sets.length === 0) return
     sets.push('updatedAt = ?')
     values.push(Date.now())
@@ -149,6 +173,27 @@ export class McpDao extends BaseDao {
       | { value: string }
       | undefined
     return !!row && isEncrypted(row.value) && decryptOrEmpty(row.value) === ''
+  }
+
+  /**
+   * 只并 metadata，不动 updatedAt —— 给运行时学到的东西（McpManager 记住的 transport），
+   * 与 updateCachedTools 一样不算用户改了配置。行不存在就什么也不做。
+   */
+  mergeMetadata(id: string, patch: McpMetadataPatch): void {
+    const stored = this.storedMetadata(id)
+    if (stored === undefined) return
+    this.stmt('UPDATE mcp_servers SET metadata = ? WHERE id = ?').run(
+      mergedMetadata(stored, patch),
+      id
+    )
+  }
+
+  /** 这一行现在的 metadata 原文（行不存在 = undefined） */
+  private storedMetadata(id: string): string | undefined {
+    const row = this.stmt('SELECT metadata FROM mcp_servers WHERE id = ?').get(id) as
+      | { metadata: string | null }
+      | undefined
+    return row ? (row.metadata ?? '{}') : undefined
   }
 
   /** 更新缓存的工具列表（JSON 字符串） */

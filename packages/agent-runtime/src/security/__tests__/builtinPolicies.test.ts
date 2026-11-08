@@ -96,10 +96,10 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 8 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 9 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(8)
+    expect(policies).toHaveLength(9)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
@@ -107,11 +107,12 @@ describe('buildBuiltinPolicies', () => {
       'ask-on-session-access',
       'ask-on-widget-access',
       'ask-on-extension',
+      'ask-on-settings',
       'network-admission',
       'daily-bot-access',
       'redact-sensitive'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(8)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(9)
   })
 
   it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
@@ -226,6 +227,7 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-widget-access#0', 'ask'],
       ['ask-on-widget-access#1', 'ask'],
       ['ask-on-extension#0', 'ask'],
+      ['ask-on-settings#0', 'ask'],
       ['network-admission#0', 'deny'],
       ['daily-bot-access#0', 'force-allow'],
       ['daily-bot-access#1', 'force-allow'],
@@ -2635,6 +2637,87 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         'allow'
       )
       expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── ask-on-settings：agent 经 `shuvix` 工具调一条设置通道 ──────────────────────────────────────
+  describe('ask-on-settings（agent 改设置，BP-S）', () => {
+    const channel = (name: string, access: string, scope = 'extensions'): SecurityObject => ({
+      type: 'channel',
+      channel: name,
+      group: name.split(':')[0],
+      scope,
+      kind: 'invoke',
+      access
+    })
+
+    it('BP-S 形态：一条 ask × channel × invoke，desktop 限定；match 只放过 read', () => {
+      const policy = byName('ask-on-settings')
+      expect(policy.scope).toStrictEqual({
+        'subject.kind': ['agent'],
+        'object.type': ['channel'],
+        'env.host': ['desktop']
+      })
+      expect(policy.lets).toBeUndefined()
+      expect(policy.rules.map(withoutPrompt)).toStrictEqual([
+        { effect: 'ask', conditions: { action: ['invoke'] }, match: "object.access != 'read'" }
+      ])
+      expect(policy.rules[0].prompt).toBeTruthy()
+      expect(policy.displayName).toBe('Ask Before the Agent Changes Settings')
+    })
+
+    it('BP-S 三门语言：都解析得出，判定字段与 en 一致，提示语与显示名各自翻译', () => {
+      const sources = sourcesOf('ask-on-settings')
+      expect(Object.keys(sources).sort()).toEqual(['en', 'ja', 'zh'])
+      const en = parsePolicyDefinitionFile(sources.en, 'ask-on-settings')!
+      for (const language of ['zh', 'ja']) {
+        const localized = parsePolicyDefinitionFile(sources[language]!, 'ask-on-settings')!
+        expect(localized.rules.map(withoutPrompt), language).toEqual(en.rules.map(withoutPrompt))
+        expect(localized.rules[0].prompt, language).not.toBe(en.rules[0].prompt)
+        expect(localized.displayName, language).not.toBe(en.displayName)
+      }
+    })
+
+    it('BP-S write / admin 问，卡片命令 Channel(x)、没有 rememberEntry；read 放行；零告警', () => {
+      const sinks = warnSinks()
+      const provider = makeProvider({ logger: sinks.logger })
+      for (const access of ['write', 'admin']) {
+        const decision = decide('invoke', channel('mcp:add', access), {
+          provider,
+          warn: sinks.evalWarn
+        })
+        expect(decision, access).toMatchObject({
+          effect: 'ask',
+          tier: 'ask',
+          winning: 'ask-on-settings#0',
+          matched: ['ask-on-settings#0']
+        })
+        expect(decision.ask).toStrictEqual({ command: 'Channel(mcp:add)' })
+      }
+      expect(decide('invoke', channel('mcp:list', 'read'), { provider }).effect).toBe('allow')
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-S 用户的 force-allow 按 scope 放开一块，别的照问', () => {
+      const userPolicy: ParsedPolicyFile = {
+        name: 'agent-extensions',
+        displayName: 'agent-extensions',
+        description: '',
+        rules: [
+          {
+            effect: 'force-allow',
+            conditions: { 'object.type': ['channel'], action: ['invoke'] },
+            match: "object.scope == 'extensions'"
+          }
+        ],
+        body: ''
+      }
+      const provider = makeProvider({ getUserPolicies: () => [userPolicy] })
+      expect(decide('invoke', channel('mcp:add', 'admin'), { provider }).effect).toBe('allow')
+      expect(
+        decide('invoke', channel('provider:update', 'admin', 'models'), { provider }).effect
+      ).toBe('ask')
     })
   })
 

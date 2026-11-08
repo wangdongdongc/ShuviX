@@ -76,7 +76,41 @@ export interface AskExtensionPreview {
   cacheLoss?: { promptTokens: number }
 }
 
-export type AskPreview = AskDiffPreview | AskMessagePreview | AskExtensionPreview
+/**
+ * 「预览询问」的设置载荷 —— agent 经 `shuvix` 工具调一条设置通道（`mcp:add` …），用户批准的就是这次改动。
+ * 宿主按界面语言把要改的东西摆成一行一行（标签 + 值）；秘密值从不出现在这里，只写「已填」之类的字样。
+ * 卡片不认识具体通道：要换一种设置开放给 agent，只在宿主那边写行，不改卡片。
+ */
+export interface AskSettingsPreview {
+  kind: 'settings'
+  /** 通道名（`mcp:add`）：卡片小字显示，用户写策略时用得上 */
+  channel: string
+  /** 一句话：这次做什么（「添加 MCP 服务器 github」） */
+  title: string
+  /** 逐行摆出的内容 */
+  rows: Array<{ label: string; value: string }>
+}
+
+export type AskPreview =
+  | AskDiffPreview
+  | AskMessagePreview
+  | AskExtensionPreview
+  | AskSettingsPreview
+
+/**
+ * 卡上要用户自己填的一项 —— agent 留空的值（多半是 API key、token）。用户在卡上填，值直接交给宿主
+ * （`AskResponse.values`），**不进对话、不进模型、不落进会话记录**。
+ */
+export interface AskField {
+  /** 回答里的键（`AskResponse.values` 的键）；宿主自己认，卡片原样带回 */
+  key: string
+  /** 给人看的名字（环境变量名、请求头名） */
+  label: string
+  /** 打码输入 */
+  secret: boolean
+  /** 不填不能批准 */
+  required: boolean
+}
 
 /**
  * 会话询问（`session` 工具要与一条不是自己子会话的会话交互）：卡片据此摆出目标会话与访问方式，
@@ -141,6 +175,11 @@ export interface AskInputRequest extends InputRequestBase {
   pathIsDirectory?: boolean
   /** 预览询问载荷:有则前端渲染预览(如 write/edit 的 diff、要发进别的会话的消息)而非光秃秃的路径 */
   preview?: AskPreview
+  /**
+   * 要用户在卡上填的值（见 AskField）。有它时卡片在批准按钮上方摆输入框，`required` 的没填完不能批准；
+   * 批准时把填的值放进 `AskResponse.values`。没有「允许并记住」。
+   */
+  fields?: AskField[]
   /** 会话询问：要交互的那条会话与访问方式（有则卡片按会话渲染，可「允许并记住」） */
   session?: AskSessionTarget
   /** 组件询问：要用的那个组件、操作与访问方式（有则卡片按组件渲染，可「允许并记住」） */
@@ -216,6 +255,11 @@ export interface AskResponse extends InputResponseBase {
   kind: 'ask'
   allowed: boolean
   reason?: string
+  /**
+   * 卡上填的值（`AskInputRequest.fields` 的键 → 值），只在批准时带。宿主收到后先取走、交给发起询问的工具，
+   * **从不往下传**（不进会话记录、不进模型），同 `OtherResponse.secrets`。
+   */
+  values?: Record<string, string>
 }
 
 export interface ChoiceResponse extends InputResponseBase {

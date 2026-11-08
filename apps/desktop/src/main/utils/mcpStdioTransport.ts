@@ -14,6 +14,8 @@
  */
 import spawn from 'cross-spawn'
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
+import { statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
@@ -82,11 +84,27 @@ function signalTree(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+/**
+ * 工作目录有问题时说清楚是什么问题。不先查的话，目录不在时 spawn 报的是 `spawn npx ENOENT` ——
+ * 读起来像命令没装，用户会去查 PATH，而真正的原因是配置里那个目录没了（换了机器、导入的配置）。
+ * 相对路径同样拒：它会相对于 ShuviX 自己的工作目录解析，打包后那是 `/`。
+ */
+function cwdProblem(cwd: string): string | undefined {
+  if (!isAbsolute(cwd)) return `Working directory must be an absolute path: ${cwd}`
+  try {
+    if (!statSync(cwd).isDirectory()) return `Working directory is not a folder: ${cwd}`
+  } catch {
+    return `Working directory does not exist: ${cwd}`
+  }
+  return undefined
+}
+
 export interface McpStdioTransportOptions {
   command: string
   args?: string[]
   /** 子进程的完整环境（桌面传 buildSpawnEnv 的结果）；不给就继承本进程的 */
   env?: Record<string, string>
+  /** 子进程的工作目录（绝对路径）；不给就继承本进程的 */
   cwd?: string
   /** stderr 留多少字节（取尾部），默认 16KB */
   maxStderrBytes?: number
@@ -121,9 +139,12 @@ export class McpStdioTransport implements Transport, McpStderrSource {
     if (this.started) throw new Error('McpStdioTransport already started')
     if (this.closed) throw new Error('McpStdioTransport is closed')
     this.started = true
+    const cwd = this.options.cwd
+    const problem = cwd === undefined ? undefined : cwdProblem(cwd)
+    if (problem) throw new Error(problem)
     const child = spawn(this.options.command, this.options.args ?? [], {
       env: this.options.env ?? (process.env as Record<string, string>),
-      cwd: this.options.cwd,
+      cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,

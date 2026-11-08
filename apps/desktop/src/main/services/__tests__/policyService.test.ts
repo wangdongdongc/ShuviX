@@ -420,6 +420,7 @@ describe('policyService —— ask-on-read 不再是内置', () => {
       'ask-on-extension',
       'ask-on-external-path',
       'ask-on-session-access',
+      'ask-on-settings',
       'ask-on-widget-access',
       'daily-bot-access',
       'network-admission',

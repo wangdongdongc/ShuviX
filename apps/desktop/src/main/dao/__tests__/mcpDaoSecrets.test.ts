@@ -392,7 +392,7 @@ describe('加密失败', () => {
     expect(rowCount()).toBe(0)
   })
 
-  it.each<[string, Partial<McpServer>]>([
+  it.each<[string, Partial<Pick<McpServer, 'env' | 'headers'>>]>([
     ['env', { env: '{"A":"b"}' }],
     ['headers', { headers: '{"A":"b"}' }]
   ])('MS-8 update（%s）抛错：名字、两列、updatedAt 都不动，绝不退回明文', (_label, fields) => {

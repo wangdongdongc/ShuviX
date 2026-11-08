@@ -231,3 +231,95 @@ describe('空的 env / headers 交给 DAO 的写法', () => {
     expect(inserted.headers).toBe('{}')
   })
 })
+
+describe('工作目录（metadata.cwd）', () => {
+  it('MH-C1 mcp:add 带绝对路径 → 存进 metadata（去掉首尾空白）；不给 / 空串 → metadata 是 `{}`', async () => {
+    await invoke('mcp:add', { name: 'a', type: 'stdio', command: 'npx', cwd: '  /srv/tools ' })
+    await invoke('mcp:add', { name: 'b', type: 'stdio', command: 'npx' })
+    await invoke('mcp:add', { name: 'c', type: 'stdio', command: 'npx', cwd: '   ' })
+    const metadata = vi
+      .mocked(mcpDao.insert)
+      .mock.calls.map(([server]) => (server as unknown as Row).metadata)
+    expect(metadata).toEqual([JSON.stringify({ cwd: '/srv/tools' }), '{}', '{}'])
+  })
+
+  it.each(['relative/dir', './here', '~/tools'])(
+    'MH-C2 mcp:add 相对路径 %j → 拒绝，什么都不写',
+    async (cwd) => {
+      expect(await invoke('mcp:add', { name: 'a', type: 'stdio', command: 'npx', cwd })).toEqual({
+        success: false,
+        error: `The working directory must be an absolute path, got "${cwd}"`
+      })
+      expect(mcpDao.insert).not.toHaveBeenCalled()
+    }
+  )
+
+  it('MH-C3 mcp:update 给目录 → metadata 只带 cwd 这一个键（DAO 去合并，别的键不动）；`` → 删掉这个键', async () => {
+    await invoke('mcp:update', { id: 'u1', cwd: ' /srv/tools ' })
+    await invoke('mcp:update', { id: 'u1', cwd: '' })
+    // toStrictEqual：`{ cwd: undefined }`（删掉这个键）与 `{}`（不动）是两回事
+    expect(vi.mocked(mcpDao.update).mock.calls[0]).toStrictEqual([
+      'u1',
+      { metadata: { cwd: '/srv/tools' } }
+    ])
+    expect(vi.mocked(mcpDao.update).mock.calls[1]).toStrictEqual([
+      'u1',
+      { metadata: { cwd: undefined } }
+    ])
+  })
+
+  it('MH-C4 mcp:update 不给 cwd → 不碰 metadata', async () => {
+    await invoke('mcp:update', { id: 'u1', command: 'uvx' })
+    expect(vi.mocked(mcpDao.update).mock.calls[0]).toStrictEqual(['u1', { command: 'uvx' }])
+  })
+
+  it('MH-C5 mcp:update 相对路径 → 拒绝：不写、不断开', async () => {
+    expect(await invoke('mcp:update', { id: 'u1', cwd: 'tools', command: 'uvx' })).toEqual({
+      success: false,
+      error: 'The working directory must be an absolute path, got "tools"'
+    })
+    expect(mcpDao.update).not.toHaveBeenCalled()
+    expect(mcpService.disconnect).not.toHaveBeenCalled()
+  })
+
+  it('MH-C6 内置行的 cwd 被忽略（哪怕不合法），其余允许的字段照常写', async () => {
+    expect(
+      await invoke('mcp:update', { id: 'builtin-mcp-ssh', cwd: 'relative', isEnabled: false })
+    ).toEqual({ success: true })
+    expect(vi.mocked(mcpDao.update).mock.calls).toStrictEqual([
+      ['builtin-mcp-ssh', { isEnabled: 0 }]
+    ])
+  })
+})
+
+describe('记住的 transport（metadata.transport）随地址走', () => {
+  it('MH-T1 改了地址 → 清掉记住的 transport，下次重新先试 Streamable HTTP', async () => {
+    await invoke('mcp:update', { id: 'u2', url: 'https://y.example/sse' })
+    expect(vi.mocked(mcpDao.update).mock.calls[0]).toStrictEqual([
+      'u2',
+      { url: 'https://y.example/sse', metadata: { transport: undefined } }
+    ])
+  })
+
+  it('MH-T2 改了类型 → 同样清掉', async () => {
+    await invoke('mcp:update', { id: 'u2', type: 'stdio' })
+    expect(vi.mocked(mcpDao.update).mock.calls[0]).toStrictEqual([
+      'u2',
+      { type: 'stdio', metadata: { transport: undefined } }
+    ])
+  })
+
+  it('MH-T3 设置对话框原样存回（地址、类型都没变）→ 不清', async () => {
+    await invoke('mcp:update', {
+      id: 'u2',
+      name: 'other',
+      type: 'http',
+      url: 'https://x.example/mcp',
+      cwd: ''
+    })
+    expect(vi.mocked(mcpDao.update).mock.calls[0]).toStrictEqual([
+      'u2',
+      { name: 'other', type: 'http', url: 'https://x.example/mcp', metadata: { cwd: undefined } }
+    ])
+  })
+})

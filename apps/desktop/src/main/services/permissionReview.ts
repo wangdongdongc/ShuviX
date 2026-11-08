@@ -333,6 +333,23 @@ function factsOf(event: PermissionRequestEvent): PermissionRequestPayload['opera
       put('server', object.server)
       put('builtin', object.builtin)
       break
+    case 'channel':
+      // agent 经 `shuvix` 工具改设置：出厂的 auto-review 只审 write 级的（admin 级的 `when` 排除在外，只由人答）。
+      // 卡上那几行就是要改什么 —— 宿主写的，里面没有秘密值
+      put('channel', object.channel)
+      put('scope', object.scope)
+      put('access', object.access)
+      if (event.preview?.kind === 'settings') {
+        put('title', event.preview.title)
+        put(
+          'changes',
+          clip(
+            event.preview.rows.map((row) => `${row.label}: ${row.value}`).join('\n'),
+            DIFF_MAX_CHARS
+          )
+        )
+      }
+      break
     case 'invocation':
       put('mcpServer', object.mcpServer)
       put('mcpTool', object.mcpTool)

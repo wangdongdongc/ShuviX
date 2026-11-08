@@ -268,6 +268,7 @@ const SHARED_BASE_TOOLS = [
   'artifact',
   'widget',
   'tool_search',
+  'shuvix',
   'skill'
 ]
 
@@ -299,6 +300,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'artifact',
       'widget',
       'tool_search',
+      'shuvix',
       'skill'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
@@ -385,6 +387,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'artifact',
       'widget',
       'tool_search',
+      'shuvix',
       'skill'
     ])
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual(SHARED_BASE_TOOLS)
@@ -500,6 +503,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'artifact',
       'widget',
       'tool_search',
+      'shuvix',
       'skill'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)

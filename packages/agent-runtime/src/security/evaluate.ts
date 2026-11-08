@@ -202,6 +202,11 @@ function buildAskMaterials(
   if (object.type === 'extension' && typeof object.server === 'string') {
     return { command: `Extension(${object.server})` }
   }
+  // 设置通道（agent 经 `shuvix` 工具改设置）：卡片按 preview（逐行的改动、要填的值）渲染，这条文本给决策日志和旧客户端。
+  // 没有记忆条目：每次改的东西不一样，记住「允许 mcp:add」等于替用户同意以后任何一台服务器
+  if (object.type === 'channel' && typeof object.channel === 'string') {
+    return { command: `Channel(${object.channel})` }
+  }
   // 远端命令把目标机器写进卡片：用户批准一条 `rm -rf` 时，必须看得见它要跑在哪台机器上
   if (typeof object.command === 'string') {
     return {

@@ -75,6 +75,9 @@ function summarizeObject(request: SecurityRequest): string {
   if (object.type === 'extension' && typeof object.server === 'string') {
     return `extension ${object.server}`
   }
+  if (object.type === 'channel' && typeof object.channel === 'string') {
+    return `channel ${object.channel}`
+  }
   return object.type
 }
 
@@ -139,6 +142,8 @@ function deniedMessage(request: SecurityRequest, display: string): string {
         : `User denied reading ${display}`
     case 'extension':
       return `User denied enabling ${display}`
+    case 'channel':
+      return `User denied this change (${display})`
     default:
       return `User denied ${display}`
   }
@@ -384,6 +389,7 @@ export async function executeDecision(args: {
       : undefined,
     pathIsDirectory,
     preview: opts.preview,
+    ...(opts.fields && opts.fields.length > 0 ? { fields: opts.fields } : {}),
     background: opts.background,
     unsandboxed: opts.unsandboxed,
     // 审查员看过、决定交给人时附上它的意见 —— summary 是卡片上最该先读的一句

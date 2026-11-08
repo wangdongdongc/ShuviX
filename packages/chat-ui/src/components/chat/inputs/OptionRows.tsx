@@ -25,6 +25,8 @@ export interface OptionRowProps {
   primary?: boolean
   /** 勾选题：true / false 显示勾选态；undefined = 不可勾选（点了就提交） */
   checked?: boolean
+  /** 暂时选不了（审批卡上要填的值还没填完）：行照摆、变灰，点了不交。数字键那一路由卡片自己挡 */
+  disabled?: boolean
   onPick: () => void
   /** 挂在按钮上的 data-* 属性（测试与页面对象的锚点） */
   data?: Record<string, string>
@@ -37,6 +39,7 @@ export function OptionRow({
   detailIsPath,
   primary,
   checked,
+  disabled,
   onPick,
   data
 }: OptionRowProps): React.JSX.Element {
@@ -46,10 +49,17 @@ export function OptionRow({
     <button
       type="button"
       onClick={onPick}
+      disabled={disabled}
       aria-pressed={checked === undefined ? undefined : selected}
       className={`w-full flex items-center text-left border-t border-border-secondary/40 transition-colors ${
         touch ? 'min-h-11 gap-3 px-4 py-2 text-sm' : 'min-h-8 gap-2.5 px-3.5 py-1.5 text-[13px]'
-      } ${selected ? 'bg-accent/10' : 'hover:bg-bg-hover/60 active:bg-bg-hover'}`}
+      } ${
+        selected
+          ? 'bg-accent/10'
+          : disabled
+            ? 'opacity-50 cursor-not-allowed'
+            : 'hover:bg-bg-hover/60 active:bg-bg-hover'
+      }`}
       {...data}
     >
       <span

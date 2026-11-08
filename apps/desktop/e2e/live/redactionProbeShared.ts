@@ -67,6 +67,14 @@ export interface SettleOptions {
   /** 安静多久算一轮结束（缺省 10 秒） */
   quietMs?: number
   timeoutMs?: number
+  /**
+   * 换掉对一张权限卡的回答：拿到询问原样和缺省的回答，回要交的那个（比如卡上要填的值、只放行认得的命令）。
+   * 不给 = 照缺省。碰了真实主目录的拒答改不松：那时这里回什么都照拒（2026-10-19 的事故）
+   */
+  respond?: (
+    request: Record<string, unknown>,
+    fallback: Record<string, unknown>
+  ) => Record<string, unknown>
 }
 
 /**
@@ -105,10 +113,17 @@ export async function settle(opts: SettleOptions): Promise<number> {
                 reason: `Refused. In this environment the home folder is ${app.home} — use ~ or paths under it.`
               }
             : { kind: 'ask', allowed: true }
+          if (opts.respond) {
+            const custom = opts.respond(req as unknown as Record<string, unknown>, response)
+            if (!outside) response = custom
+          }
         }
-        debug(
-          `${label}: answering ${req.kind} ${req.id} → ${JSON.stringify(response).slice(0, 120)}`
-        )
+        // 卡上填的值（values）是秘密：日志里只记键
+        const shown =
+          response.values && typeof response.values === 'object'
+            ? { ...response, values: Object.keys(response.values) }
+            : response
+        debug(`${label}: answering ${req.kind} ${req.id} → ${JSON.stringify(shown).slice(0, 120)}`)
         await app.main.eval(
           `window.api.agent.respondToInput(${JSON.stringify({ sessionId: sid, requestId: req.id, response })})`
         )

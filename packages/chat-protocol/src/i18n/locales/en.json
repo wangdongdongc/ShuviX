@@ -648,7 +648,13 @@
     "extensionAskUrl": "Allowing this connects to:",
     "extensionAskWidget": "This lets the agent read this widget’s records. It will ask again before changing them.",
     "extensionAskCache": "The current model cannot take new tools mid-conversation and keep its cache, so the next request will miss part of the prompt cache.",
-    "extensionAskCacheTokens": "The current model cannot take new tools mid-conversation and keep its cache, so the next request will miss part of the prompt cache (the last request was about {{tokens}} tokens)."
+    "extensionAskCacheTokens": "The current model cannot take new tools mid-conversation and keep its cache, so the next request will miss part of the prompt cache (the last request was about {{tokens}} tokens).",
+    "settingsAskChange": "Change ShuviX settings",
+    "settingsAskChannel": "Channel",
+    "askFieldsNote": "These are left for you to fill in. The AI never sees what you type here.",
+    "askFieldOptional": "optional",
+    "askFieldsMissing_one": "Fill in the field above first",
+    "askFieldsMissing_other": "Fill in the fields above first"
   },
   "sessionConfig": {
     "title": "Session Config",
@@ -1067,6 +1073,8 @@
     "mcpCommandPlaceholder": "e.g. npx, uvx, docker",
     "mcpArgs": "Arguments",
     "mcpArgsPlaceholder": "One argument per line",
+    "mcpCwd": "Working directory",
+    "mcpCwdPlaceholder": "/path/to/folder (optional)",
     "mcpEnv": "Environment Variables",
     "mcpEnvKeyPlaceholder": "KEY",
     "mcpEnvValuePlaceholder": "value",
@@ -1451,7 +1459,9 @@
     "suggestLabel": "Suggest",
     "suggestHint": "Leaves you a few next steps to accept with one click, without pausing its work",
     "showImageLabel": "Show image",
-    "showImageHint": "Shows you images from this computer right in the conversation: a chart it plotted, a screenshot it saved"
+    "showImageHint": "Shows you images from this computer right in the conversation: a chart it plotted, a screenshot it saved",
+    "shuvixLabel": "ShuviX settings",
+    "shuvixHint": "Reads and changes ShuviX's own settings for you, such as adding an MCP server; every change asks you first"
   },
   "widgets": {
     "panelEmptyHint": "No widgets yet. Ask the AI in chat to build one — e.g. \"make a JSON formatter widget\"",
@@ -2083,5 +2093,28 @@
       "knowledge_bases": "knowledge bases",
       "bot_profile": "bot persona and memory"
     }
+  },
+  "agentApi": {
+    "cardName": "Name",
+    "cardCommand": "Command",
+    "cardUrl": "Address",
+    "cardCwd": "Working folder",
+    "cardEnv": "Environment",
+    "cardHeaders": "Headers",
+    "cardRename": "New name",
+    "cardType": "Type",
+    "cardEnabled": "Enabled",
+    "cardOn": "On",
+    "cardOff": "Off",
+    "cardKeySet": "{{key}} (set)",
+    "cardKeyToFill": "{{key}} (you fill in)",
+    "cardRemoved": "{{key}} (removed)",
+    "cardHeaderField": "{{key}} header",
+    "mcpListTitle": "List your MCP servers",
+    "mcpGetToolsTitle": "Show the tools of MCP server “{{name}}”",
+    "mcpAddTitle": "Add MCP server “{{name}}” to your settings",
+    "mcpUpdateTitle": "Change MCP server “{{name}}”",
+    "mcpDeleteTitle": "Remove MCP server “{{name}}” and its saved keys",
+    "fillOnlyDescription": "Fill in the values below. They go straight into your settings; the agent does not see them."
   }
 }

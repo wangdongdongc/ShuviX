@@ -29,8 +29,9 @@ const ON_WINDOWS = process.platform === 'win32'
 // ─── 夹具 ────────────────────────────────────────────────────────────────
 
 /**
- * 行分隔 JSON-RPC 应答器（MCPS-U-1~9、12）。方法：
+ * 行分隔 JSON-RPC 应答器（MCPS-U-1~9、12、13）。方法：
  *  - `echo` → `{params, env: FIXTURE_VAR}`
+ *  - `cwd` → `{cwd: process.cwd()}`
  *  - `burst {parts, delayMs}` → 把 parts 原样逐段写到 stdout（段间隔 delayMs），再作答
  *  - `stderr {text}` → 写到 stderr，写完再作答
  *  - `exit {code}` → 不作答直接退出
@@ -62,6 +63,8 @@ function handle(msg) {
   switch (msg.method) {
     case 'echo':
       return reply(msg, { params: msg.params, env: process.env.FIXTURE_VAR })
+    case 'cwd':
+      return reply(msg, { cwd: process.cwd() })
     case 'burst': {
       let i = 0
       const next = () => {
@@ -470,6 +473,49 @@ describe('McpStdioTransport 的生命周期', () => {
 
       process.kill(p.t.pid!, 'SIGKILL')
       expect(await sent).toBe('Not connected')
+    }
+  )
+})
+
+describe('McpStdioTransport 的工作目录', () => {
+  /** 子进程眼里的 process.cwd() */
+  async function childCwd(p: Probe): Promise<string> {
+    const res = await p.request('cwd')
+    if (!('result' in res)) throw new Error(`cwd 没有成功：${JSON.stringify(res)}`)
+    return (res.result as { cwd: string }).cwd
+  }
+
+  it('MCPS-U-13a: 给了 cwd —— 子进程就在那个目录里起', async () => {
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    const p = open({ cwd: work })
+    await p.t.start()
+    // macOS 的临时目录经 /var → /private/var 的链接，子进程报的是解开之后的写法
+    expect(fs.realpathSync(await childCwd(p))).toBe(fs.realpathSync(work))
+  })
+
+  it('MCPS-U-13b: 没给 cwd —— 继承本进程的', async () => {
+    const p = open()
+    await p.t.start()
+    expect(fs.realpathSync(await childCwd(p))).toBe(fs.realpathSync(process.cwd()))
+  })
+
+  it.each<[string, () => string, RegExp]>([
+    ['不存在', () => path.join(dir, 'gone', 'away'), /^Working directory does not exist: .*gone/],
+    ['是个文件', () => ECHO, /^Working directory is not a folder: .*echo\.cjs$/],
+    [
+      '相对路径',
+      () => 'relative/dir',
+      /^Working directory must be an absolute path: relative\/dir$/
+    ]
+  ])(
+    'MCPS-U-13c: cwd %s —— start() 说清楚是目录的问题（而不是 spawn 的 ENOENT），不起进程',
+    async (_label, cwdOf, message) => {
+      const p = open({ cwd: cwdOf() })
+      await expect(p.t.start()).rejects.toThrow(message)
+      expect(p.t.pid).toBeUndefined()
+      await expect(p.t.send(fireAndForget('echo'))).rejects.toThrow(/^Not connected$/)
+      await p.t.close()
+      expect(p.closes).toBe(1)
     }
   )
 })

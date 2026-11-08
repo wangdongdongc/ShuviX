@@ -37,6 +37,7 @@ import { hookService, hookTriggers } from './hookService'
 import { recordUserEntry } from './sessionDayPromptService'
 import { getSessionHost } from './sessionHost'
 import { carryRedactions } from './redactionCarry'
+import { acceptedCardValues, stashCardValues } from './cardValues'
 import { sessionRecords } from './sessionRecords'
 import { sessionSignalsReady } from './sessionSignalSeams'
 // 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
@@ -396,6 +397,22 @@ export class AgentSession {
 
   /** 应答一条挂起的询问（先到者胜）；`meta.clientId` = 答题方，交给运行时供审计（P3-08 PIN-20） */
   respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean {
+    // 卡上填的值（AskResponse.values）取下来交给发起询问的工具，剩下的应答才往下交 —— 这些值从不进会话记录（见 cardValues.ts）
+    if (response.kind === 'ask' && 'values' in response) {
+      const { values, ...rest } = response
+      const request = this.durable.pendingInputs().find((pending) => pending.id === requestId)
+      if (!request) return false
+      const accepted = rest.allowed
+        ? acceptedCardValues(request.kind === 'ask' ? request : undefined, values)
+        : undefined
+      const claimed =
+        meta === undefined
+          ? this.durable.respondToInput(requestId, rest)
+          : this.durable.respondToInput(requestId, rest, meta)
+      // 应答落定之后才收下：没被认领（别处先答了）就什么也不留。工具在下一个微任务才醒，这里同步收下来得及
+      if (claimed && accepted) stashCardValues(this.sessionId, requestId, accepted)
+      return claimed
+    }
     if (
       (response.kind === 'other' || response.kind === 'choice') &&
       response.secrets !== undefined
