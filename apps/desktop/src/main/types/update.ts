@@ -26,7 +26,7 @@ export type UpdateEvent =
       message: string
       /**
        * `restart-required`：这次运行拿不到安装要的管理员权限（Linux deb，进程带着 NoNewPrivs），退出重开就好；
-       * 界面显示本地化的说明，而不是 `message`
+       * 界面显示本地化的说明，而不是 `message`；`timeout`：检查在限定时间内没有结果（网络卡住），界面显示本地化的说明
        */
-      code?: 'restart-required'
+      code?: 'restart-required' | 'timeout'
     }

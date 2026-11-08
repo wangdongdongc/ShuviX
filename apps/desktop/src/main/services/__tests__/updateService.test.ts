@@ -35,6 +35,17 @@
  *   US-D6 deb、root、带 NoNewPrivs：root 不提权，照旧安装
  *   US-D7 AppImage、带 NoNewPrivs：不经 pkexec，照旧安装
  *   US-D8 deb 安装失败（electron-updater 发 error，不发 before-quit-for-update）：只转发错误，没有 code，不重启
+ *   US-T1 卡住的检查恰在 UPDATE_CHECK_TIMEOUT_MS 超时：之前不广播、不结束；到点广播 {type:'error', message:'Timed out',
+ *         code:'timeout'}（也是 lastEvent），处理函数回 {success:true}，electron-updater 的 checkForUpdatesPromise 清成 null，
+ *         更新会话（fromPartition('electron-updater', {cache:false})）的连接断一次
+ *   US-T2 超时之后再检查：真的再发一次请求，发之前先断连接；之后成功的检查不再断
+ *   US-T3 检查还在跑时再点：拿回同一个 promise，不另发请求，只重发 {type:'checking'}；它结束后再点才发新请求
+ *   US-T4 成功的检查清掉自己的计时器：之后再过两倍超时也不广播、不断连接
+ *   US-T5 检查被拒：广播精简后的 message（没有 code 键），此时还不断连接；下一次检查发请求前先断一次
+ *   US-T6 卡住的请求在超时之后才拒（或才成功）：只有那条超时事件，没有未处理的拒绝；下一次检查照常发请求
+ *   US-T7 session.fromPartition 抛错：超时事件照旧，处理函数照旧回 {success:true}；下一次检查照常发请求、不抛
+ *   US-T8 updater 的 error 事件、downloadUpdate 的拒绝都精简：去掉 Headers 那一截；超长的截成 300 字（末字 …）
+ *   US-S1 summarizeUpdateError 表：空行 / Headers: 截断、合并空白、全被截掉时回退整句、300 字封顶
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChannelDefinition, ClientContext } from '../../ipc/registry'
@@ -57,6 +68,8 @@ interface FakeUpdater {
   on: ReturnType<typeof vi.fn>
   emit(event: string, ...args: unknown[]): void
   checkForUpdates: ReturnType<typeof vi.fn>
+  /** electron-updater 的私有字段：卡住的检查超时后服务把它清成 null */
+  checkForUpdatesPromise: unknown
   downloadUpdate: ReturnType<typeof vi.fn>
   quitAndInstall: ReturnType<typeof vi.fn>
 }
@@ -70,7 +83,9 @@ const state = vi.hoisted(() => {
     nativeListeners,
     relaunch: vi.fn<() => void>(),
     appRelaunch: vi.fn<() => void>(),
-    hasNoNewPrivs: vi.fn<() => boolean>()
+    hasNoNewPrivs: vi.fn<() => boolean>(),
+    closeAllConnections: vi.fn(async () => {}),
+    fromPartition: vi.fn<(...args: unknown[]) => unknown>()
   }
 })
 
@@ -80,7 +95,8 @@ vi.mock('electron', () => ({
     on: (event: string, listener: () => void) => {
       state.nativeListeners.set(event, [...(state.nativeListeners.get(event) ?? []), listener])
     }
-  }
+  },
+  session: { fromPartition: (...args: unknown[]) => state.fromPartition(...args) }
 }))
 vi.mock('electron-updater', () => ({
   get autoUpdater() {
@@ -112,6 +128,7 @@ function makeUpdater(kind: 'deb' | 'other' = 'other'): FakeUpdater {
       for (const listener of listeners.get(event) ?? []) listener(...args)
     },
     checkForUpdates: vi.fn(async () => null),
+    checkForUpdatesPromise: SENTINEL,
     downloadUpdate: vi.fn(async () => []),
     quitAndInstall: vi.fn()
   }
@@ -139,7 +156,9 @@ const AVAILABLE_INFO = {
 
 let updater: FakeUpdater
 let broadcast: ReturnType<typeof vi.fn<(channel: string, ...payload: unknown[]) => void>>
-let updateService: { getLastEvent(): UpdateEvent | null }
+let updateService: { getLastEvent(): UpdateEvent | null; checkForUpdates(): Promise<void> }
+let UPDATE_CHECK_TIMEOUT_MS: number
+let summarizeUpdateError: (message: string) => string
 let listDefinitions: () => readonly ChannelDefinition[]
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
@@ -165,6 +184,8 @@ async function boot(mode: 'desktop' | 'headless'): Promise<void> {
   const service = await import('../updateService')
   service.updateService.init()
   updateService = service.updateService
+  UPDATE_CHECK_TIMEOUT_MS = service.UPDATE_CHECK_TIMEOUT_MS
+  summarizeUpdateError = service.summarizeUpdateError
   // eslint-disable-next-line boundaries/dependencies -- 服务与它的 IPC 处理器在一个用例里接起来（产品里是 ipc 引服务，不是反过来）
   const handlers = await import('../../ipc/updateHandlers')
   handlers.registerUpdateHandlers()
@@ -191,9 +212,14 @@ beforeEach(() => {
   state.appRelaunch.mockReset()
   state.hasNoNewPrivs.mockReset().mockReturnValue(false)
   broadcast = vi.fn<(channel: string, ...payload: unknown[]) => void>()
+  state.closeAllConnections.mockReset().mockResolvedValue(undefined)
+  state.fromPartition
+    .mockReset()
+    .mockImplementation(() => ({ closeAllConnections: state.closeAllConnections }))
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   Object.defineProperty(process, 'platform', platformDescriptor)
   vi.restoreAllMocks()
 })
@@ -483,5 +509,223 @@ describe('US-D deb 更新：自己重启，带 NoNewPrivs 时不试', () => {
       { type: 'error', message: 'Command pkexec exited with code 126' }
     ])
     expect(state.relaunch).not.toHaveBeenCalled()
+  })
+})
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve(value: T): void
+  reject(err: unknown): void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  let reject!: (err: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+/** 记下 promise 是否已结束（不吞它的结果） */
+function track<T>(promise: Promise<T>): { settled: () => boolean } {
+  let done = false
+  promise.then(
+    () => {
+      done = true
+    },
+    () => {
+      done = true
+    }
+  )
+  return { settled: () => done }
+}
+
+/** 把微任务和一轮真的宏任务都跑完（只假了 setTimeout / clearTimeout） */
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+const TIMEOUT_EVENT = { type: 'error', message: 'Timed out', code: 'timeout' }
+
+/** 桌面启动后再假计时器（boot 里的动态导入不受影响） */
+async function bootWithFakeTimers(): Promise<void> {
+  await boot('desktop')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+}
+
+const stuck = (): void => {
+  updater.checkForUpdates.mockImplementationOnce(() => new Promise(() => {}))
+}
+
+describe('US-T 检查的超时与恢复', () => {
+  it('US-T1 卡住的检查恰在 UPDATE_CHECK_TIMEOUT_MS 超时', async () => {
+    await bootWithFakeTimers()
+    stuck()
+    const p = handlerOf('update:check')(winCtx()) as Promise<unknown>
+    const tracked = track(p)
+
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS - 1)
+    expect(updateEvents()).toStrictEqual([])
+    expect(tracked.settled()).toBe(false)
+    expect(state.closeAllConnections).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(updateEvents()).toStrictEqual([TIMEOUT_EVENT])
+    expect(updateService.getLastEvent()).toStrictEqual(TIMEOUT_EVENT)
+    await expect(p).resolves.toStrictEqual({ success: true })
+    expect(updater.checkForUpdatesPromise).toBeNull()
+    expect(state.fromPartition).toHaveBeenCalledExactlyOnceWith('electron-updater', {
+      cache: false
+    })
+    expect(state.closeAllConnections).toHaveBeenCalledTimes(1)
+  })
+
+  it('US-T2 超时之后再检查：先断连接再发新请求；之后成功的检查不再断', async () => {
+    await bootWithFakeTimers()
+    stuck()
+    const p1 = handlerOf('update:check')(winCtx())
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS)
+    await p1
+    expect(updateEvents()).toStrictEqual([TIMEOUT_EVENT])
+    expect(state.closeAllConnections).toHaveBeenCalledTimes(1)
+
+    await expect(handlerOf('update:check')(winCtx())).resolves.toStrictEqual({ success: true })
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(state.closeAllConnections).toHaveBeenCalledTimes(2)
+    expect(state.closeAllConnections.mock.invocationCallOrder[1]).toBeLessThan(
+      updater.checkForUpdates.mock.invocationCallOrder[1]
+    )
+    expect(updateEvents()).toStrictEqual([TIMEOUT_EVENT])
+
+    await handlerOf('update:check')(winCtx())
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(3)
+    expect(state.closeAllConnections).toHaveBeenCalledTimes(2)
+  })
+
+  it('US-T3 检查还在跑时再点：同一个 promise，只重发 checking；结束后再点才发新请求', async () => {
+    await bootWithFakeTimers()
+    const d = deferred<null>()
+    updater.checkForUpdates.mockImplementationOnce(() => d.promise)
+    const p1 = updateService.checkForUpdates()
+    const p2 = updateService.checkForUpdates()
+    expect(p1).toBe(p2)
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(updateEvents()).toStrictEqual([{ type: 'checking' }])
+
+    d.resolve(null)
+    await p1
+    const p3 = updateService.checkForUpdates()
+    expect(p3).not.toBe(p1)
+    await p3
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(2)
+  })
+
+  it('US-T4 成功的检查清掉自己的计时器', async () => {
+    await bootWithFakeTimers()
+    await expect(handlerOf('update:check')(winCtx())).resolves.toStrictEqual({ success: true })
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS * 2)
+    expect(updateEvents()).toStrictEqual([])
+    expect(state.fromPartition).not.toHaveBeenCalled()
+    expect(state.closeAllConnections).not.toHaveBeenCalled()
+  })
+
+  it('US-T5 检查被拒：广播精简后的 message；下一次检查发请求前先断连接', async () => {
+    await boot('desktop')
+    updater.checkForUpdates.mockRejectedValueOnce(
+      new Error('Cannot find latest.yml\n\nHeaders: {"x":"1"}\n<html>…')
+    )
+    await expect(handlerOf('update:check')(winCtx())).resolves.toStrictEqual({ success: true })
+    expect(updateEvents()).toStrictEqual([{ type: 'error', message: 'Cannot find latest.yml' }])
+    expect(state.closeAllConnections).not.toHaveBeenCalled()
+
+    await handlerOf('update:check')(winCtx())
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(state.closeAllConnections).toHaveBeenCalledTimes(1)
+    expect(state.closeAllConnections.mock.invocationCallOrder[0]).toBeLessThan(
+      updater.checkForUpdates.mock.invocationCallOrder[1]
+    )
+  })
+
+  it.each([
+    ['拒绝', (d: Deferred<null>) => d.reject(new Error('socket hang up'))],
+    ['成功', (d: Deferred<null>) => d.resolve(null)]
+  ] as const)(
+    'US-T6 卡住的请求超时之后才%s：只有超时事件，下一次照常发请求',
+    async (_l, settle) => {
+      const unhandled = vi.fn()
+      process.on('unhandledRejection', unhandled)
+      try {
+        await bootWithFakeTimers()
+        const d = deferred<null>()
+        updater.checkForUpdates.mockImplementationOnce(() => d.promise)
+        const p = handlerOf('update:check')(winCtx())
+        await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS)
+        await expect(p).resolves.toStrictEqual({ success: true })
+
+        settle(d)
+        await flush()
+        await flush()
+        expect(updateEvents()).toStrictEqual([TIMEOUT_EVENT])
+        expect(unhandled).not.toHaveBeenCalled()
+
+        await expect(handlerOf('update:check')(winCtx())).resolves.toStrictEqual({ success: true })
+        expect(updater.checkForUpdates).toHaveBeenCalledTimes(2)
+        expect(updateEvents()).toStrictEqual([TIMEOUT_EVENT])
+      } finally {
+        process.off('unhandledRejection', unhandled)
+      }
+    }
+  )
+
+  it('US-T7 session.fromPartition 抛错：超时事件照旧；下一次检查照常发请求、不抛', async () => {
+    await bootWithFakeTimers()
+    state.fromPartition.mockImplementation(() => {
+      throw new Error('no session')
+    })
+    stuck()
+    const p = handlerOf('update:check')(winCtx())
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS)
+    await expect(p).resolves.toStrictEqual({ success: true })
+    expect(updateEvents()).toStrictEqual([TIMEOUT_EVENT])
+    expect(updater.checkForUpdatesPromise).toBeNull()
+
+    await expect(handlerOf('update:check')(winCtx())).resolves.toStrictEqual({ success: true })
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(state.fromPartition).toHaveBeenCalledTimes(2)
+  })
+
+  it('US-T8 error 事件与 downloadUpdate 的拒绝都精简', async () => {
+    await boot('desktop')
+    updater.emit('error', new Error('HttpError: 404\nHeaders: {...}'))
+    expect(updateEvents()).toStrictEqual([{ type: 'error', message: 'HttpError: 404' }])
+
+    updater.downloadUpdate.mockRejectedValueOnce(new Error('a'.repeat(1000)))
+    await expect(handlerOf('update:download')(winCtx())).resolves.toStrictEqual({ success: true })
+    const last = updateEvents().at(-1) as Extract<UpdateEvent, { type: 'error' }>
+    expect(last.type).toBe('error')
+    expect(last.message.length).toBe(300)
+    expect(last.message.endsWith('…')).toBe(true)
+    expect(last.message).toBe(`${'a'.repeat(299)}…`)
+  })
+})
+
+describe('US-S summarizeUpdateError', () => {
+  beforeEach(async () => {
+    summarizeUpdateError = (await import('../updateService')).summarizeUpdateError
+  })
+
+  it.each([
+    ['a\n\nb', 'a'],
+    ['a \n \t\n b', 'a'],
+    ['Status 404 Headers: {...}', 'Status 404'],
+    ['  x\n  y\tz  ', 'x y z'],
+    ['Headers: only', 'Headers: only'],
+    ['b'.repeat(300), 'b'.repeat(300)],
+    ['c'.repeat(301), `${'c'.repeat(299)}…`],
+    ['', '']
+  ])('US-S1 %j → %j', (input, expected) => {
+    const out = summarizeUpdateError(input)
+    expect(out).toBe(expected)
+    expect(out.length).toBeLessThanOrEqual(300)
   })
 })

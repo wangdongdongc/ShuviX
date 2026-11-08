@@ -1,4 +1,4 @@
-import { app, autoUpdater as electronAutoUpdater } from 'electron'
+import { app, autoUpdater as electronAutoUpdater, session } from 'electron'
 import { autoUpdater, DebUpdater } from 'electron-updater'
 import { createLogger } from '../logger'
 import { broadcastToClients } from '../ipc/registry'
@@ -21,6 +21,37 @@ function cannotInstallDeb(): boolean {
 }
 
 /**
+ * 一次检查最多等这么久。electron-updater 的请求走 Electron 的 `net`，它的 ClientRequest 不发 `socket` 事件，
+ * builder-util-runtime 挂在那上面的 60 秒超时因此从不生效：连接卡住（换网、VPN 断开后池里留下的死连接）时
+ * 检查永远不结束，而 electron-updater 还把这个没结束的 promise 记在 `checkForUpdatesPromise` 上，之后每次检查都
+ * 只是「already in progress」地拿回它 —— 用户再怎么点也恢复不了，只能重启 ShuviX
+ */
+export const UPDATE_CHECK_TIMEOUT_MS = 30_000
+
+/** 界面上的错误说明最长这么多字；完整的进日志 */
+const ERROR_MESSAGE_MAX = 300
+
+/**
+ * electron-updater 的 HttpError 把整段响应头（以及有时整个 HTML 响应体）拼进 message，在界面上能铺满整页。
+ * 只留第一段：遇到空行或 `Headers:` 截断，合并空白，再按长度截。
+ */
+export function summarizeUpdateError(message: string): string {
+  let text = message.split(/\n\s*\n|\bHeaders:/)[0] ?? ''
+  text = text.replace(/\s+/g, ' ').trim()
+  if (!text) text = message.replace(/\s+/g, ' ').trim()
+  return text.length > ERROR_MESSAGE_MAX ? `${text.slice(0, ERROR_MESSAGE_MAX - 1)}…` : text
+}
+
+/** electron-updater 发请求用的会话（electronHttpExecutor.getNetSession 的同一个分区） */
+function dropUpdaterConnections(): void {
+  try {
+    void session.fromPartition('electron-updater', { cache: false }).closeAllConnections()
+  } catch (err) {
+    log.warn(`Cannot reset updater connections: ${err}`)
+  }
+}
+
+/**
  * 自动更新服务 — 封装 electron-updater。
  * autoDownload 禁用，用户需主动点击下载和安装。
  *
@@ -37,6 +68,10 @@ class UpdateService {
   private initialized = false
   /** 最后收到的更新事件（供新打开的窗口拉取当前状态） */
   private lastEvent: UpdateEvent | null = null
+  /** 正在进行的检查（含超时）；再点一次就并进它，不另发请求 */
+  private checking: Promise<void> | null = null
+  /** 上一次检查失败或超时：下次检查前先断掉更新会话里的连接，别再复用可能已死的那条 */
+  private lastCheckFailed = false
 
   init(): void {
     if (this.initialized) return
@@ -101,16 +136,53 @@ class UpdateService {
 
     autoUpdater.on('error', (err) => {
       log.error(`Updater error: ${err.message}`)
-      this.broadcast({ type: 'error', message: err.message })
+      this.broadcast({ type: 'error', message: summarizeUpdateError(err.message) })
     })
   }
 
-  async checkForUpdates(): Promise<void> {
+  /**
+   * 检查更新。已有一次在跑就并进它（重发 `checking`，界面点了之后不会一片空白）；
+   * 超过 {@link UPDATE_CHECK_TIMEOUT_MS} 没结果就报超时，并清掉 electron-updater 记着的那个卡住的 promise，
+   * 下一次检查才会真的重新发请求。
+   */
+  checkForUpdates(): Promise<void> {
+    if (this.checking) {
+      this.broadcast({ type: 'checking' })
+      return this.checking
+    }
+    const run = this.runCheck().finally(() => {
+      if (this.checking === run) this.checking = null
+    })
+    this.checking = run
+    return run
+  }
+
+  private async runCheck(): Promise<void> {
+    if (this.lastCheckFailed) dropUpdaterConnections()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), UPDATE_CHECK_TIMEOUT_MS)
+    })
     try {
-      await autoUpdater.checkForUpdates()
+      const outcome = await Promise.race([autoUpdater.checkForUpdates(), timedOut])
+      if (outcome === 'timeout') {
+        log.warn(`checkForUpdates timed out after ${UPDATE_CHECK_TIMEOUT_MS}ms`)
+        // 私有字段：不清掉它，之后的 checkForUpdates() 都只会拿回这个永远不结束的 promise
+        ;(autoUpdater as unknown as { checkForUpdatesPromise: unknown }).checkForUpdatesPromise =
+          null
+        this.lastCheckFailed = true
+        // 卡住的那个请求跟着断掉，它晚到的 error 落在这次超时之后，而不是落在用户下一次检查的中间
+        dropUpdaterConnections()
+        this.broadcast({ type: 'error', message: 'Timed out', code: 'timeout' })
+        return
+      }
+      this.lastCheckFailed = false
     } catch (err) {
       log.error(`checkForUpdates threw: ${err}`)
-      this.broadcast({ type: 'error', message: (err as Error).message })
+      this.lastCheckFailed = true
+      this.broadcast({ type: 'error', message: summarizeUpdateError((err as Error).message) })
+    } finally {
+      clearTimeout(timer)
     }
   }
 
@@ -120,7 +192,7 @@ class UpdateService {
       await autoUpdater.downloadUpdate()
     } catch (err) {
       log.error(`downloadUpdate threw: ${err}`)
-      this.broadcast({ type: 'error', message: (err as Error).message })
+      this.broadcast({ type: 'error', message: summarizeUpdateError((err as Error).message) })
     }
   }
 

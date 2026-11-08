@@ -14,6 +14,13 @@
  *        「在文件夹中显示」，点它调 onReveal
  *   AB-8 不给 appLog（扩展）→ 没有日志区块
  *   AB-9 error：带 code restart-required → 显示 about.updateRestartRequired，不显示 message；不带 code → about.updateError + message
+ *   AB-10 「重新检查」图标钮只在下载钮旁：available（无 manual）→ 有 [data-update-recheck]（aria-label / title =
+ *         about.recheckUpdate）和下载钮，点它只调 onCheck，没有 [data-update-check]；manual 或 up-to-date → 没有它，有检查钮
+ *   AB-11 timeout：显示 about.updateTimeout，不显示 'Timed out' 也不带 updateError 前缀；不折叠、没有展开钮
+ *   AB-12 长的一般错误（显示文本 > 160 字）：三行折叠 + 「展开」；点开 → 不折叠、「收起」；再点 → 回到折叠；
+ *         恰 160 字不折叠、没有展开钮
+ *   AB-13 带 code 的错误从不折叠：restart-required（本地化文本 > 160 字）、timeout（message 500 字）都没有展开钮
+ *   AB-14 展开记在事件对象上：同一个对象重渲染仍展开；新对象（内容相同）回到折叠
  *
  * `@shuvix/chat-ui` 的包入口很重（mermaid 等），这里只给它一个 copyToClipboard 替身。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
@@ -264,5 +271,118 @@ describe('AboutTab 的日志区块', () => {
     await renderLog(undefined)
     expect(container.querySelector('[data-about-log-path]')).toBeNull()
     expect(container.textContent).not.toContain(i18n.t('about.logGroup'))
+  })
+})
+
+describe('AboutTab 的重新检查与错误说明', () => {
+  const recheck = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-update-recheck]')
+  const check = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-update-check]')
+  const errorText = (): HTMLElement => {
+    const el = container.querySelector<HTMLElement>('[data-update-error-text]')
+    if (!el) throw new Error('[data-update-error-text] not rendered')
+    return el
+  }
+  const toggle = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-update-error-toggle]')
+  const clamped = (): boolean => errorText().classList.contains('line-clamp-3')
+  /** en 的 "Update error: " 前缀是 14 字 */
+  const generic = (length: number): UpdateEvent => ({
+    type: 'error',
+    message: 'x'.repeat(length - 14)
+  })
+
+  it('AB-10 重新检查只在下载钮旁', async () => {
+    await render({ ...AVAILABLE })
+    const button = recheck()
+    expect(button).not.toBeNull()
+    expect(button!.getAttribute('aria-label')).toBe(i18n.t('about.recheckUpdate'))
+    expect(button!.getAttribute('title')).toBe(i18n.t('about.recheckUpdate'))
+    expect(buttonWithText(i18n.t('about.updateDownload'))).toBeDefined()
+    expect(check()).toBeNull()
+    await act(async () => {
+      button!.click()
+    })
+    expect(update.onCheck).toHaveBeenCalledTimes(1)
+    expect(update.onDownload).not.toHaveBeenCalled()
+
+    await render({ ...AVAILABLE, manual: { command: CMD } })
+    expect(recheck()).toBeNull()
+    expect(check()).not.toBeNull()
+
+    await render({ type: 'up-to-date', version: '0.2.13' })
+    expect(recheck()).toBeNull()
+    expect(check()).not.toBeNull()
+  })
+
+  it('AB-11 timeout：本地化说明，不带原文与前缀，不折叠', async () => {
+    await render({ type: 'error', message: 'Timed out', code: 'timeout' })
+    const text = errorText().textContent ?? ''
+    expect(text).toContain(i18n.t('about.updateTimeout'))
+    expect(text).not.toContain('Timed out')
+    expect(text).not.toContain(i18n.t('about.updateError', { message: '' }).trim())
+    expect(toggle()).toBeNull()
+    expect(clamped()).toBe(false)
+  })
+
+  it('AB-12 长的一般错误折叠成三行，可展开 / 收起；恰 160 字不折叠', async () => {
+    await render(generic(161))
+    expect(errorText().textContent).toBe(i18n.t('about.updateError', { message: 'x'.repeat(147) }))
+    expect(errorText().textContent!.length).toBe(161)
+    expect(clamped()).toBe(true)
+    expect(toggle()?.textContent).toBe(i18n.t('about.updateErrorMore'))
+
+    await act(async () => {
+      toggle()!.click()
+    })
+    expect(clamped()).toBe(false)
+    expect(toggle()?.textContent).toBe(i18n.t('about.updateErrorLess'))
+
+    await act(async () => {
+      toggle()!.click()
+    })
+    expect(clamped()).toBe(true)
+    expect(toggle()?.textContent).toBe(i18n.t('about.updateErrorMore'))
+
+    await render(generic(160))
+    expect(errorText().textContent!.length).toBe(160)
+    expect(toggle()).toBeNull()
+    expect(clamped()).toBe(false)
+  })
+
+  it('AB-13 带 code 的错误从不折叠', async () => {
+    expect(i18n.t('about.updateRestartRequired').length).toBeGreaterThan(160)
+    await render({ type: 'error', message: 'raw', code: 'restart-required' })
+    expect(errorText().textContent).toBe(i18n.t('about.updateRestartRequired'))
+    expect(toggle()).toBeNull()
+    expect(clamped()).toBe(false)
+
+    await render({ type: 'error', message: 'y'.repeat(500), code: 'timeout' })
+    expect(toggle()).toBeNull()
+    expect(clamped()).toBe(false)
+  })
+
+  it('AB-14 新事件回到折叠；同一个对象重渲染仍展开', async () => {
+    const e1 = generic(300)
+    await render(e1)
+    await act(async () => {
+      toggle()!.click()
+    })
+    expect(clamped()).toBe(false)
+
+    await render(e1)
+    expect(clamped()).toBe(false)
+    expect(toggle()?.textContent).toBe(i18n.t('about.updateErrorLess'))
+
+    const e2 = { ...e1 }
+    await render(e2)
+    expect(clamped()).toBe(true)
+    expect(toggle()?.textContent).toBe(i18n.t('about.updateErrorMore'))
+
+    await render({ type: 'checking' })
+    expect(container.querySelector('[data-update-error]')).toBeNull()
+    await render(e2)
+    expect(clamped()).toBe(true)
   })
 })

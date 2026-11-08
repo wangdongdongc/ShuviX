@@ -5,6 +5,8 @@
  * 注入：桌面传入完整更新 API，扩展不传 → 自动屏蔽更新区块（其余完全一致）。日志区块同理（可选 `appLog`）：
  * 用户被问「日志在哪」时的去处 —— 路径、复制路径、在文件夹中显示（宿主给了才有）、去监视器里查看。
  * 主进程装不了更新时（无头运行），`available` 事件带 `manual`：不给下载按钮，改为说明 + 要在那台电脑上执行的命令。
+ * 发现新版本后下载钮旁仍留一个「重新检查」图标钮（检查之后又发了版本时能刷新到它）。
+ * 错误说明最多三行、可展开，长串（URL、响应头）也会折行 —— 不然在窄屏（web 客户端）上能把整页撑满。
  * about.* 文案来自共享 chat-protocol locales，两端一致。
  */
 import { useEffect, useState } from 'react'
@@ -26,6 +28,9 @@ import logoImg from '../assets/ngnl_xiubi_color_mini.jpg'
 import { SettingsSection, SettingsRow, Toggle } from './SettingsPrimitives'
 
 const REPO_URL = 'https://github.com/wangdongdongc/ShuviX'
+
+/** 错误说明超过这么多字才折叠成三行 + 展开钮 */
+const ERROR_CLAMP_CHARS = 160
 
 /** 次要按钮（与「检查更新」同一套描边样式） */
 const SECONDARY_BUTTON =
@@ -79,6 +84,9 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
     const timer = setTimeout(() => setCopied(false), 1500)
     return () => clearTimeout(timer)
   }, [copied])
+  // 展开记在那条事件对象上：来了新事件（再次检查、又一次出错）自然回到折叠
+  const [expandedEvent, setExpandedEvent] = useState<UpdateEvent | null>(null)
+  const errorExpanded = e !== null && expandedEvent === e
   const [logPathCopied, setLogPathCopied] = useState(false)
   useEffect(() => {
     if (!logPathCopied) return
@@ -101,18 +109,30 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
     }
     if (isAvailable && !manual) {
       return (
-        <button
-          onClick={update.onDownload}
-          className="flex items-center gap-1 px-3 py-1 rounded-md text-[11px] font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
-        >
-          <Download size={11} />
-          {t('about.updateDownload')}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={update.onCheck}
+            title={t('about.recheckUpdate')}
+            aria-label={t('about.recheckUpdate')}
+            className="flex items-center p-1.5 rounded-md text-text-secondary border border-border-secondary/50 hover:text-text-primary hover:border-border-secondary transition-colors"
+            data-update-recheck
+          >
+            <RefreshCw size={11} />
+          </button>
+          <button
+            onClick={update.onDownload}
+            className="flex items-center gap-1 px-3 py-1 rounded-md text-[11px] font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
+          >
+            <Download size={11} />
+            {t('about.updateDownload')}
+          </button>
+        </div>
       )
     }
     return (
       <button
         onClick={update.onCheck}
+        data-update-check
         disabled={isChecking || isDownloading}
         className="flex items-center gap-1 px-3 py-1 rounded-md text-[11px] text-text-secondary border border-border-secondary/50 hover:text-text-primary hover:border-border-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
@@ -147,15 +167,37 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
         return (
           <span className="text-emerald-500">{t('about.updateReady', { version: e.version })}</span>
         )
-      case 'error':
+      case 'error': {
+        const text =
+          e.code === 'restart-required'
+            ? t('about.updateRestartRequired')
+            : e.code === 'timeout'
+              ? t('about.updateTimeout')
+              : t('about.updateError', { message: e.message })
+        const long = e.code === undefined && text.length > ERROR_CLAMP_CHARS
         return (
-          <span className="inline-flex items-start gap-1 text-error">
+          <span className="flex items-start gap-1 text-error min-w-0" data-update-error>
             <AlertCircle size={10} className="mt-[3px] flex-shrink-0" />
-            {e.code === 'restart-required'
-              ? t('about.updateRestartRequired')
-              : t('about.updateError', { message: e.message })}
+            <span className="min-w-0">
+              <span
+                className={`block [overflow-wrap:anywhere] ${long && !errorExpanded ? 'line-clamp-3' : ''}`}
+                data-update-error-text
+              >
+                {text}
+              </span>
+              {long && (
+                <button
+                  onClick={() => setExpandedEvent(errorExpanded ? null : e)}
+                  className="text-text-tertiary hover:text-text-primary underline underline-offset-2"
+                  data-update-error-toggle
+                >
+                  {errorExpanded ? t('about.updateErrorLess') : t('about.updateErrorMore')}
+                </button>
+              )}
+            </span>
           </span>
         )
+      }
       default:
         return null
     }

@@ -19,6 +19,12 @@ export function AboutSettings({
   const { updateEvent, setUpdateEvent } = useUpdateStore()
   const { autoCheckUpdate } = useSettingsStore()
 
+  // 调用本身被拒（web 客户端断线、这台设备没有这个权限、无头模式拒绝下载）不会有 update:event 跟来；
+  // 不接住的话界面停在空白 / 旧状态，看上去就是「点了没反应」
+  const reportRejection = (err: unknown): void => {
+    setUpdateEvent({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+  }
+
   useEffect(() => {
     void window.api.app.getVersion().then((v) => setAppVersion(v))
     void window.api.appLog.info().then((info) => setLogPath(info.path))
@@ -56,10 +62,14 @@ export function AboutSettings({
         },
         onCheck: () => {
           setUpdateEvent(null)
-          void window.api.update.check()
+          window.api.update.check().catch(reportRejection)
         },
-        onDownload: () => void window.api.update.download(),
-        onInstall: () => void window.api.update.install()
+        onDownload: () => {
+          window.api.update.download().catch(reportRejection)
+        },
+        onInstall: () => {
+          window.api.update.install().catch(reportRejection)
+        }
       }}
     />
   )
