@@ -122,7 +122,7 @@ export const SessionParamsSchema = Type.Object({
   message: Type.Optional(
     Type.String({
       description:
-        'For "prompt-session": the message, self-contained and written as the user would write it. For "steer-session": what to tell the running turn. For "answer-session": your answer in your own words, instead of `selections`.'
+        'For "prompt-session": the message, self-contained, in your own words. If the receiving agent takes the user\'s words, ShuviX attaches them verbatim after your text (the receipt says so) — don\'t copy them in. For "steer-session": what to tell the running turn. For "answer-session": your answer in your own words, instead of `selections`.'
     })
   ),
   ask_id: Type.Optional(
