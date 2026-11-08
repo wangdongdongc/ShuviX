@@ -148,6 +148,8 @@ export interface GoalCheckPayload extends SessionTriggerBase {
     limits: GoalLimits
     /** 处于进行中的累计时长（分钟） */
     activeMinutes: number
+    /** 目标规划员开工前写下的验收规格文件（判定 agent 用 read 读它此刻的内容）；没有就缺省 */
+    specPath?: string
   }
   /** 目标设定之后人写的消息（转写摘要的口径：通知、别的会话发来的不算），最近的在后 */
   userMessages: Array<{ text: string; at: number }>

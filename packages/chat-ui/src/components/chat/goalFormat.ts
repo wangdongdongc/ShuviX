@@ -29,12 +29,13 @@ export function formatGoalDuration(ms: number, t: GoalTranslate): string {
 
 /** 状态那半句：进行中（判定中 / 等你回答）、暂停（原因）、达成、做不到 */
 export function goalStatusText(
-  goal: Pick<GoalView, 'status' | 'pauseReason' | 'judging'>,
+  goal: Pick<GoalView, 'status' | 'pauseReason' | 'judging'> & { planning?: boolean },
   opts: { waitingAnswer: boolean },
   t: GoalTranslate
 ): string {
   switch (goal.status) {
     case 'active':
+      if (goal.planning) return t('goal.state.planning')
       if (goal.judging) return t('goal.state.checking')
       return opts.waitingAnswer ? t('goal.state.waiting') : t('goal.state.active')
     case 'paused':

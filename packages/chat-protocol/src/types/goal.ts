@@ -137,6 +137,11 @@ export interface GoalRecord {
   activeSince?: number
   /** 到达终态的时刻 */
   endedAt?: number
+  /**
+   * 目标规划员（goal-planner）开工前写下的验收规格文件（工作目录里，位置与名字由它定；绝对路径）。没有 = 目标本来就够清楚，
+   * 或者规划没成。内容与格式不做约定：干活的 agent 与检查员每次都读它此刻的内容（2026-11-08 用户裁决：不做硬卡点，靠提示词约束）
+   */
+  specPath?: string
 }
 
 /** 推给前端的目标视图：记录 + 宿主现算的事实 */
@@ -146,12 +151,52 @@ export interface GoalView extends GoalRecord {
   costUsd: number
   /** 判定正在进行 */
   judging: boolean
+  /** 目标规划员正在整理验收规格（目标还没开始干） */
+  planning: boolean
   /** 没有任何 hook 订阅 `goal.check`（内置的 goal-check 被停用了）—— 目标栏要明说 */
   checkerMissing: boolean
 }
 
+/** 目标规划员的结论契约（派发时即 `next` 的参数）：够清楚，或写好了规格文件 —— 规格本身的格式不约定 */
+export interface GoalPlan {
+  verdict: 'ready' | 'spec'
+  /** verdict 为 spec 时：规格文件的路径（工作目录里，绝对或相对工作目录） */
+  specPath?: string
+}
+
+export const GOAL_PLAN_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  required: ['verdict'],
+  properties: {
+    verdict: {
+      type: 'string',
+      enum: ['ready', 'spec'],
+      description:
+        'ready = the goal already states its end state and how to check it, nothing written; spec = you wrote the acceptance spec file.'
+    },
+    specPath: {
+      type: 'string',
+      description:
+        'For spec: the path of the file you wrote (absolute, or relative to the working directory).'
+    }
+  },
+  additionalProperties: false
+}
+
+export function isGoalPlan(value: unknown): value is GoalPlan {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    (v.verdict === 'ready' || v.verdict === 'spec') &&
+    (v.specPath === undefined || typeof v.specPath === 'string')
+  )
+}
+
 /** 处于进行中的累计时长（毫秒） */
-export function goalActiveMs(goal: Pick<GoalRecord, 'activeMs' | 'activeSince'>, now: number): number {
+export function goalActiveMs(
+  goal: Pick<GoalRecord, 'activeMs' | 'activeSince'>,
+  now: number
+): number {
   return goal.activeMs + (goal.activeSince !== undefined ? Math.max(0, now - goal.activeSince) : 0)
 }
 
@@ -190,7 +235,9 @@ export function isGoalAction(value: unknown): value is GoalAction {
     case 'set':
       return typeof v.objective === 'string' && limitsPatchOk(v.limits)
     case 'edit':
-      return (v.objective === undefined || typeof v.objective === 'string') && limitsPatchOk(v.limits)
+      return (
+        (v.objective === undefined || typeof v.objective === 'string') && limitsPatchOk(v.limits)
+      )
     case 'pause':
     case 'resume':
     case 'clear':

@@ -506,6 +506,7 @@
     "durationHours": "{{h}}時間{{m}}分",
     "state": {
       "active": "ゴール進行中",
+      "planning": "受け入れ仕様をまとめています…",
       "checking": "ゴールをチェック中…",
       "waiting": "ゴールはあなたの回答待ち",
       "paused": "一時停止中：{{reason}}",
@@ -538,6 +539,7 @@
     },
     "notifyMet": "ゴール達成：{{reason}}",
     "notifyImpossible": "ゴールは達成不可能と判定されました：{{reason}}",
+    "planningTask": "目標の計画",
     "errorInvalidAction": "そのゴールの操作は無効です。",
     "errorNoGoal": "この会話にはゴールがありません。",
     "errorObjectiveLength": "ゴールは 1〜{{max}} 文字で書いてください。",

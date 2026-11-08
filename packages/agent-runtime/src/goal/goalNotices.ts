@@ -43,6 +43,13 @@ function objectiveBlock(objective: string): string {
   return `<objective>\n${escapeGoalText(objective)}\n</objective>`
 }
 
+/** 有验收规格文件时的一行：它和目标一起是验收依据 */
+function specLine(goal: GoalRecord): string {
+  return goal.specPath
+    ? `Acceptance spec (written before the work began, with the user's answers): ${escapeGoalText(goal.specPath)} — the checker holds the work to it as well; read it again if unsure.`
+    : ''
+}
+
 /** 续跑（判定 not_met）：每轮重述目标原文 —— 压缩多少次，最近一条续跑消息都带着完整目标（§5） */
 export function renderGoalContinue(
   goal: GoalRecord,
@@ -52,6 +59,7 @@ export function renderGoalContinue(
   const lines = [
     "Goal (the user's words, unchanged):",
     objectiveBlock(goal.objective),
+    ...(goal.specPath ? [specLine(goal)] : []),
     `Not met yet. Checker: ${escapeGoalText(verdict.reason)}`
   ]
   if (verdict.nextStep) lines.push(`Suggested next step: ${escapeGoalText(verdict.nextStep)}`)
@@ -68,6 +76,7 @@ export function renderGoalResumed(goal: GoalRecord, costUsd: number): string {
     [
       'The user resumed this goal. Goal (unchanged):',
       objectiveBlock(goal.objective),
+      specLine(goal),
       goal.lastVerdict ? `Last check: ${escapeGoalText(goal.lastVerdict.reason)}` : '',
       goalUsageLine(goal, costUsd),
       'Continue working toward it.'
@@ -107,9 +116,10 @@ export function renderGoalUpdated(goal: GoalRecord): string {
   return block(
     'goal-updated',
     { id: goal.id },
-    ['The user changed the goal. From now on, work toward this instead:', objectiveBlock(goal.objective)].join(
-      '\n'
-    )
+    [
+      'The user changed the goal. From now on, work toward this instead:',
+      objectiveBlock(goal.objective)
+    ].join('\n')
   )
 }
 

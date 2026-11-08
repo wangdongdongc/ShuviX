@@ -506,6 +506,7 @@
     "durationHours": "{{h}}h {{m}}m",
     "state": {
       "active": "Goal in progress",
+      "planning": "Preparing the acceptance spec…",
       "checking": "Checking the goal…",
       "waiting": "Goal waiting for your answer",
       "paused": "Paused — {{reason}}",
@@ -538,6 +539,7 @@
     },
     "notifyMet": "Goal met: {{reason}}",
     "notifyImpossible": "Goal judged impossible: {{reason}}",
+    "planningTask": "Goal planning",
     "errorInvalidAction": "That goal request isn't valid.",
     "errorNoGoal": "This conversation has no goal.",
     "errorObjectiveLength": "A goal must be 1 to {{max}} characters long.",

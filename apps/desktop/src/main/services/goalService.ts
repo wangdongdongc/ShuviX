@@ -38,6 +38,8 @@ import {
   resumeGoal,
   sessionCostUsd,
   updateGoal,
+  GOAL_PLANNER_PROFILE_NAME,
+  toInProcessAgentType,
   type DurableSession,
   type GoalStatusEvent
 } from '@shuvix/agent-runtime'
@@ -47,6 +49,8 @@ import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
 import {
   DEFAULT_GOAL_LIMITS,
   GOAL_OBJECTIVE_MAX_CHARS,
+  GOAL_PLAN_SCHEMA,
+  isGoalPlan,
   goalActiveMs,
   isGoalAction,
   type GoalAction,
@@ -62,6 +66,12 @@ import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { GoalCheckPayload } from '@shuvix/agent-runtime'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { randomUUID } from 'crypto'
+import { existsSync } from 'fs'
+import { isAbsolute, resolve as resolvePath } from 'path'
+import { agentManager } from '../agents/AgentManager'
+import type { AgentSession } from './agentSession'
+import { agentService } from './agentService'
+import { resolveProjectConfig } from './toolContext'
 import { chatFrontendRegistry } from '../frontend/core'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -227,6 +237,8 @@ export class GoalService {
   private readonly serial = new Map<string, Promise<unknown>>()
   /** 在途的判定（用户操作先中止它） */
   private readonly judging = new Map<string, AbortController>()
+  /** 在途的目标规划（开工之前；用户暂停 / 清除 / 换目标先中止它） */
+  private readonly planning = new Map<string, AbortController>()
   /** 等后台工作时的检查计时器 */
   private readonly checkins = new Map<
     string,
@@ -298,6 +310,11 @@ export class GoalService {
     return next
   }
 
+  private abortPlanning(sessionId: string): void {
+    this.planning.get(sessionId)?.abort()
+    this.planning.delete(sessionId)
+  }
+
   /** 中止在途的判定；回有没有中止到 */
   private abortJudging(sessionId: string): boolean {
     const controller = this.judging.get(sessionId)
@@ -315,7 +332,10 @@ export class GoalService {
   /** 设置里的缺省上限 */
   defaultLimits(): GoalLimits {
     const costRaw = settingsService.get(GOAL_DEFAULT_COST_SETTING)
-    const cost = costRaw?.trim() === 'off' ? undefined : (finitePositive(costRaw) ?? DEFAULT_GOAL_LIMITS.costUsd)
+    const cost =
+      costRaw?.trim() === 'off'
+        ? undefined
+        : (finitePositive(costRaw) ?? DEFAULT_GOAL_LIMITS.costUsd)
     return {
       ...(cost !== undefined ? { costUsd: cost } : {}),
       maxTurns: Math.max(
@@ -358,13 +378,17 @@ export class GoalService {
     }
   }
 
-  private async viewOf(session: DurableSession, goal: GoalRecord | undefined): Promise<GoalView | null> {
+  private async viewOf(
+    session: DurableSession,
+    goal: GoalRecord | undefined
+  ): Promise<GoalView | null> {
     if (goal === undefined) return null
     return {
       ...goal,
       sessionId: session.sessionId,
       costUsd: await this.goalCost(session, goal),
       judging: this.judging.has(session.sessionId),
+      planning: this.planning.has(session.sessionId),
       checkerMissing: this.checkerMissing()
     }
   }
@@ -386,7 +410,11 @@ export class GoalService {
    * 写一条目标结局通知（不起轮）。会话正忙（用户在一轮中途暂停 / 清除 / 换目标）：不 steer 进当前轮 —— 那会让 agent 为了
    * 回应它多跑一次模型（e2e 截图里看到的多出来的一轮）—— 先攒着，这一轮结束时再写（`flushPendingStatus`）。
    */
-  private async writeStatus(session: DurableSession, goal: GoalRecord, event: GoalStatusEvent): Promise<void> {
+  private async writeStatus(
+    session: DurableSession,
+    goal: GoalRecord,
+    event: GoalStatusEvent
+  ): Promise<void> {
     const text = renderGoalStatus(goal, event)
     const requestId = `goal:${goal.id}:status:${event.event}:${this.deps.now()}`
     if (session.isBusy()) {
@@ -450,10 +478,14 @@ export class GoalService {
   /** 前端的操作；`origin` = 网关按这次操作的连接盖的章（设定目标那条消息的来源） */
   act(sessionId: string, action: GoalAction, origin?: InputOrigin): Promise<GoalActResult> {
     // 参数来自前端（含网络客户端）：形状不对就拒，什么也不写、也不中止在途的判定
-    if (!isGoalAction(action)) return Promise.resolve({ ok: false, error: t('goal.errorInvalidAction') })
+    if (!isGoalAction(action))
+      return Promise.resolve({ ok: false, error: t('goal.errorInvalidAction') })
     // 会换掉「谁在推这个目标」的操作才中止在途的判定（否则它要在队列里等判定最多 60 秒）：暂停、清除、换目标、改原文。
     // 只改上限、恢复不中止 —— 判定照常回来。被中止的判定回来就丢掉结论；中止了却没起新的一轮，由 actNow 补判一次
-    const abortedJudge = this.abortsJudge(sessionId, action) && this.abortJudging(sessionId)
+    const aborts = this.abortsJudge(sessionId, action)
+    // 规划只被暂停、清除、换目标中止：改写原文时让它跑完（否则 set 的说明永远发不出去、规格也没了）
+    if (aborts && action.type !== 'edit') this.abortPlanning(sessionId)
+    const abortedJudge = aborts && this.abortJudging(sessionId)
     return this.queue(sessionId, async () => {
       try {
         return await this.actNow(sessionId, action, origin, abortedJudge)
@@ -486,7 +518,8 @@ export class GoalService {
   private async rejudgeIfStranded(sessionId: string, abortedJudge: boolean): Promise<void> {
     if (!abortedJudge) return
     const session = getSessionHost().get(sessionId)
-    if (session === undefined || session.closed || session.isBusy() || session.isInterrupted()) return
+    if (session === undefined || session.closed || session.isBusy() || session.isInterrupted())
+      return
     await this.afterRunNow(sessionId, 'ok')
   }
 
@@ -507,7 +540,8 @@ export class GoalService {
     switch (action.type) {
       case 'pause': {
         const goal = await updateGoal(session.harness, (g) => (g ? pauseGoal(g, 'user', now) : g))
-        if (goal?.status === 'paused' && before.status === 'active') await this.paused(session, goal, 'user')
+        if (goal?.status === 'paused' && before.status === 'active')
+          await this.paused(session, goal, 'user')
         return { ok: true }
       }
       case 'clear': {
@@ -524,12 +558,20 @@ export class GoalService {
         }
         const objective = action.objective?.trim()
         if (objective !== undefined && !validObjective(objective)) {
-          return { ok: false, error: t('goal.errorObjectiveLength', { max: GOAL_OBJECTIVE_MAX_CHARS }) }
+          return {
+            ok: false,
+            error: t('goal.errorObjectiveLength', { max: GOAL_OBJECTIVE_MAX_CHARS })
+          }
         }
         const masked =
           objective === undefined ? undefined : await this.maskObjective(sessionId, objective)
         const goal = await updateGoal(session.harness, (g) =>
-          g ? editGoal(g, { ...(masked !== undefined ? { objective: masked } : {}), ...(action.limits ? { limits: action.limits } : {}) }) : g
+          g
+            ? editGoal(g, {
+                ...(masked !== undefined ? { objective: masked } : {}),
+                ...(action.limits ? { limits: action.limits } : {})
+              })
+            : g
         )
         if (goal === undefined) return { ok: false, error: t('goal.errorNoGoal') }
         const changed = masked !== undefined && masked !== before.objective
@@ -552,7 +594,9 @@ export class GoalService {
         // 恢复之后仍撞着的上限（预算、轮数、时长）：不恢复，请用户先调高 —— 否则白跑一整轮再暂停
         const blocked = resumeBlockedBy(before, { costUsd: cost, now })
         if (blocked !== undefined) return { ok: false, error: t(`goal.resumeBlocked.${blocked}`) }
-        const goal = await updateGoal(session.harness, (g) => (g?.id === before.id ? resumeGoal(g, now) : g))
+        const goal = await updateGoal(session.harness, (g) =>
+          g?.id === before.id ? resumeGoal(g, now) : g
+        )
         if (goal?.status !== 'active') return { ok: true }
         // 用户亲手点的继续：撤掉之前「显式喊停」的收敛，续跑才起得了轮
         session.allowAutoResume()
@@ -605,7 +649,45 @@ export class GoalService {
     })
     await updateGoal(session.harness, () => goal)
     await this.broadcast(session, goal)
-    const message = goalSetMessage({ objective: masked, goalId: goal.id })
+    // 规划与开工在后台接着做（同一条串行队列）：规划员可能停在询问卡片上等人，设定这次操作不能跟着挂住 ——
+    // 否则输入框的发送一直不落定，等着答卡片的一方（探针、远程客户端）也在等这次调用返回，互相卡死（2026-11-08 实测）
+    void this.queue(sessionId, () =>
+      this.startGoal(session, agent, goal, masked, previous, origin, abortedJudge)
+    ).catch((error: unknown) => log.warn(`目标开工失败 session=${sessionId}: ${String(error)}`))
+    return { ok: true }
+  }
+
+  /** 规划（goal-planner）→ 发出设定目标的那条消息。在 `setGoal` 之后的队列里跑 */
+  private async startGoal(
+    session: DurableSession,
+    agent: AgentSession,
+    goal: GoalRecord,
+    masked: string,
+    previous: GoalRecord | undefined,
+    origin: InputOrigin | undefined,
+    abortedJudge: boolean
+  ): Promise<void> {
+    const sessionId = session.sessionId
+    // 开工之前先整理验收规格（goal-planner）：目标够清楚就直接开始；用户在这期间暂停 / 清除 / 换了目标 → 到此为止
+    const planned = await this.planGoal(session, agent, goal, masked)
+    if (planned === 'aborted') return
+    let specPath: string | undefined
+    if (planned === undefined) {
+      // 规划结束（够清楚 / 没成）：再推一次视图，免得界面停在「正在整理验收规格」
+      await this.broadcast(session, await readGoal(session.harness))
+    } else {
+      const withSpec = await updateGoal(session.harness, (g) =>
+        g?.id === goal.id ? { ...g, specPath: planned } : g
+      )
+      if (withSpec?.id !== goal.id) return
+      specPath = planned
+      await this.broadcast(session, withSpec)
+    }
+    const message = goalSetMessage({
+      objective: masked,
+      goalId: goal.id,
+      ...(specPath !== undefined ? { specPath } : {})
+    })
     // 会话信号先就绪：投影句柄挂上之前开跑的一轮没有 ended，目标就收不到运行结束
     await sessionSignalsReady(sessionId)
     // 用户亲手设的目标 = 同意接着干：撤掉之前「显式喊停」的收敛（插话本身不撤它）
@@ -620,12 +702,96 @@ export class GoalService {
       const restored = await updateGoal(session.harness, (g) => (g?.id === goal.id ? previous : g))
       await this.broadcast(session, restored)
       if (restored?.status === 'active') await this.rejudgeIfStranded(sessionId, abortedJudge)
-      return { ok: false, error: result.error }
+      log.warn(`设定目标的消息没发出去 session=${sessionId}: ${result.error}`)
+      return
     }
     if (previous !== undefined && (previous.status === 'active' || previous.status === 'paused')) {
       await this.writeStatus(session, previous, { event: 'replaced' })
     }
-    return { ok: true }
+  }
+
+  /** 这条会话排着的目标操作都做完（测试与探针用：设定目标之后的规划、开工在后台） */
+  whenIdle(sessionId: string): Promise<void> {
+    return (this.serial.get(sessionId) ?? Promise.resolve()).then(() => undefined)
+  }
+
+  /**
+   * 目标规划（开工之前）：派内置 goal-planner。够清楚 → undefined（照原样开始）；写了规格 → 文件的绝对路径；被用户中止
+   * → 'aborted'。规划员的询问是普通的询问卡片（一律等人）；它没给结论、出错、文件不在 → undefined，照原样开始 ——
+   * 规划失败不挡目标（2026-11-08 用户裁决：不做硬卡点）。
+   */
+  private async planGoal(
+    session: DurableSession,
+    agent: AgentSession,
+    goal: GoalRecord,
+    objective: string
+  ): Promise<string | undefined | 'aborted'> {
+    const sessionId = session.sessionId
+    const profile = agentService.getProfile(GOAL_PLANNER_PROFILE_NAME)
+    if (!profile) return undefined
+    const controller = new AbortController()
+    this.planning.set(sessionId, controller)
+    await this.broadcast(session, goal)
+    try {
+      // 派发要会话的锁（模型、档位）：新会话还没有，先建
+      await agent.createAgent()
+      const earlier = await this.earlierUserWords(sessionId)
+      const prompt = [
+        ...(earlier !== '' ? [`<earlier-user-words>\n${earlier}\n</earlier-user-words>`, ''] : []),
+        'The goal the user just set:',
+        '<goal>',
+        objective,
+        '</goal>'
+      ].join('\n')
+      const outcome = await agentManager.runTask({
+        sessionId,
+        owner: { anchor: true },
+        agentType: toInProcessAgentType(profile),
+        prompt,
+        description: t('goal.planningTask'),
+        resultContract: { schema: GOAL_PLAN_SCHEMA },
+        signal: controller.signal
+      })
+      if (controller.signal.aborted) return 'aborted'
+      const plan = isGoalPlan(outcome.structured) ? outcome.structured : undefined
+      if (plan?.verdict !== 'spec' || !plan.specPath) {
+        if (plan === undefined)
+          log.warn(`目标规划没给结论 session=${sessionId}: ${outcome.error ?? ''}`)
+        return undefined
+      }
+      const workingDirectory = resolveProjectConfig(sessionId).workingDirectory ?? ''
+      const absolute = isAbsolute(plan.specPath)
+        ? plan.specPath
+        : resolvePath(workingDirectory, plan.specPath)
+      if (!existsSync(absolute)) {
+        log.warn(`目标规划给的规格文件不在 session=${sessionId}: ${absolute}`)
+        return undefined
+      }
+      return absolute
+    } catch (error) {
+      if (controller.signal.aborted) return 'aborted'
+      log.warn(`目标规划失败 session=${sessionId}: ${String(error)}`)
+      return undefined
+    } finally {
+      if (this.planning.get(sessionId) === controller) this.planning.delete(sessionId)
+    }
+  }
+
+  /** 设目标之前这条会话里人写的话（规划员把它们带进规格：设定之后检查员只看得到规格与原话） */
+  private async earlierUserWords(sessionId: string): Promise<string> {
+    try {
+      return (await readSessionTranscript(sessionId))
+        .filter(
+          (item): item is Extract<typeof item, { kind: 'user' }> =>
+            item.kind === 'user' && !item.source && item.text.trim() !== ''
+        )
+        .slice(-MAX_USER_MESSAGES)
+        .map((item) => clip(item.text, MAX_USER_TEXT))
+        .join('\n---\n')
+    } catch (error) {
+      log.warn(`读设目标之前的用户消息失败 session=${sessionId}: ${String(error)}`)
+      return ''
+    }
   }
 
   // ─── 运行结束 → 判定 → 续跑 ────────────────────────────
@@ -657,7 +823,9 @@ export class GoalService {
     const facts = runFactsOf((await session.viewSnapshot()).messages, since)
     const costUsd = await this.goalCost(session, goal)
     const backgroundWork =
-      taskRegistry.runningCount(sessionId, 'bash') + taskRegistry.runningCount(sessionId, 'sub-session') > 0
+      taskRegistry.runningCount(sessionId, 'bash') +
+        taskRegistry.runningCount(sessionId, 'sub-session') >
+      0
     const decision = afterRun(goal, {
       outcome: reason,
       backgroundWork,
@@ -673,7 +841,9 @@ export class GoalService {
         this.scheduleCheckin(sessionId)
         return
       case 'pause': {
-        const written = await updateGoal(session.harness, (g) => (g?.id === goal.id ? decision.goal : g))
+        const written = await updateGoal(session.harness, (g) =>
+          g?.id === goal.id ? decision.goal : g
+        )
         if (written?.status === 'paused') await this.paused(session, written, decision.reason)
         return
       }
@@ -701,7 +871,9 @@ export class GoalService {
     let verdict: GoalVerdict | null = null
     try {
       const payload = await this.payloadOf(session, goal, facts, costUsd)
-      const decision = await hookTriggers.decide('goal.check', payload, { signal: controller.signal })
+      const decision = await hookTriggers.decide('goal.check', payload, {
+        signal: controller.signal
+      })
       verdict = decision?.result ?? null
       // 设计稿的长度上限（§4.2）：理由 500 字、下一步 300 字 —— 它们会进续跑消息与目标栏
       if (verdict !== null) {
@@ -738,7 +910,9 @@ export class GoalService {
         await this.broadcast(session, current)
         return
       case 'continue': {
-        const written = await updateGoal(session.harness, (g) => (g?.id === goal.id ? outcome.goal : g))
+        const written = await updateGoal(session.harness, (g) =>
+          g?.id === goal.id ? outcome.goal : g
+        )
         if (written?.status !== 'active') return
         await this.broadcast(session, written)
         await session.notify(
@@ -746,12 +920,18 @@ export class GoalService {
             reason: written.lastVerdict?.reason ?? '',
             ...(written.lastVerdict?.nextStep ? { nextStep: written.lastVerdict.nextStep } : {})
           }),
-          { kind: 'goal-continue', resume: 'goal', requestId: `goal:${written.id}:continue:${written.turns}` }
+          {
+            kind: 'goal-continue',
+            resume: 'goal',
+            requestId: `goal:${written.id}:continue:${written.turns}`
+          }
         )
         return
       }
       case 'finish': {
-        const written = await updateGoal(session.harness, (g) => (g?.id === goal.id ? outcome.goal : g))
+        const written = await updateGoal(session.harness, (g) =>
+          g?.id === goal.id ? outcome.goal : g
+        )
         if (written === undefined) return
         const event: GoalStatusEvent = {
           event: written.status === 'met' ? 'met' : 'impossible',
@@ -763,7 +943,9 @@ export class GoalService {
         return
       }
       case 'pause': {
-        const written = await updateGoal(session.harness, (g) => (g?.id === goal.id ? outcome.goal : g))
+        const written = await updateGoal(session.harness, (g) =>
+          g?.id === goal.id ? outcome.goal : g
+        )
         if (written?.status === 'paused') await this.paused(session, written, outcome.reason)
         return
       }
@@ -802,7 +984,8 @@ export class GoalService {
         turns: goal.turns,
         costUsd: Math.round(costUsd * 100) / 100,
         limits: goal.limits,
-        activeMinutes: Math.round(goalActiveMs(goal, this.deps.now()) / 60_000)
+        activeMinutes: Math.round(goalActiveMs(goal, this.deps.now()) / 60_000),
+        ...(goal.specPath ? { specPath: goal.specPath } : {})
       },
       userMessages,
       ...(goal.lastVerdict !== undefined
@@ -828,8 +1011,8 @@ export class GoalService {
 
   private armCheckin(sessionId: string, delayMs: number, since: number): void {
     const timer = setTimeout(() => {
-      void this.queue(sessionId, () => this.checkinNow(sessionId, delayMs, since)).catch((error: unknown) =>
-        log.warn(`目标检查失败 session=${sessionId}: ${String(error)}`)
+      void this.queue(sessionId, () => this.checkinNow(sessionId, delayMs, since)).catch(
+        (error: unknown) => log.warn(`目标检查失败 session=${sessionId}: ${String(error)}`)
       )
     }, delayMs)
     timer.unref?.()
@@ -845,7 +1028,9 @@ export class GoalService {
     const first = this.deps.checkinFirstMs ?? CHECKIN_FIRST_MS
     const nextDelay = Math.min(delayMs * 2, first * CHECKIN_MAX_FACTOR)
     const background =
-      taskRegistry.runningCount(sessionId, 'bash') + taskRegistry.runningCount(sessionId, 'sub-session') > 0
+      taskRegistry.runningCount(sessionId, 'bash') +
+        taskRegistry.runningCount(sessionId, 'sub-session') >
+      0
     if (session.isInterrupted()) return
     // 后台工作已经没了、会话却空闲：完成通知没起轮（用户关了自动续跑）—— 就地当作一轮结束来判，免得目标一直「进行中」
     if (!background) {
@@ -975,6 +1160,7 @@ export class GoalService {
   /** 删除会话：停掉它名下的一切 */
   forget(sessionId: string): void {
     this.abortJudging(sessionId)
+    this.abortPlanning(sessionId)
     this.clearCheckin(sessionId)
     this.stopBudgetTimer(sessionId)
     this.pendingStatus.delete(sessionId)
@@ -985,6 +1171,7 @@ export class GoalService {
   dispose(): void {
     for (const id of [...this.checkins.keys()]) this.clearCheckin(id)
     for (const id of [...this.judging.keys()]) this.abortJudging(id)
+    for (const id of [...this.planning.keys()]) this.abortPlanning(id)
     for (const id of [...this.budgetTimers.keys()]) this.stopBudgetTimer(id)
   }
 }

@@ -82,7 +82,10 @@ export function goalRecordOf(value: unknown): GoalRecord | undefined {
     ...(pauseReason !== undefined ? { pauseReason } : {}),
     ...(lastVerdict !== undefined ? { lastVerdict } : {}),
     ...(finite(value.activeSince) ? { activeSince: value.activeSince } : {}),
-    ...(finite(value.endedAt) ? { endedAt: value.endedAt } : {})
+    ...(finite(value.endedAt) ? { endedAt: value.endedAt } : {}),
+    ...(typeof value.specPath === 'string' && value.specPath !== ''
+      ? { specPath: value.specPath }
+      : {})
   }
 }
 
@@ -104,7 +107,10 @@ export async function updateGoal(
     const doc = await tx.doc(GoalDoc)
     const next = mutate(goalRecordOf(doc.goal))
     if (next === undefined) delete doc.goal
-    else doc.goal = copyJson(next as unknown as JsonObject, { omitUndefinedProperties: true }) as JsonObject
+    else
+      doc.goal = copyJson(next as unknown as JsonObject, {
+        omitUndefinedProperties: true
+      }) as JsonObject
     return next
   }, BG)
 }

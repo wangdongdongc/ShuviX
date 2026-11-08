@@ -43,8 +43,16 @@ function escapeAttr(text: string): string {
  * `objective` 要是已经过脱敏的那份（调用方先换再拼）：显示侧车与模型文本同一份占位符。
  * payload 带开头的分隔：重新生成经 `resolveTokensForAgent` 把标记换回 payload，要与第一次发的全文逐字相同。
  */
-export function goalSetMessage(input: { objective: string; goalId: string }): GoalSetMessage {
-  const payload = `${SEPARATOR}<goal-set id="${escapeAttr(input.goalId)}">${GOAL_SET_NOTE_TEXT}</goal-set>`
+export function goalSetMessage(input: {
+  objective: string
+  goalId: string
+  /** 目标规划员写下的验收规格文件（绝对路径）；有就在说明里点名 */
+  specPath?: string
+}): GoalSetMessage {
+  const spec = input.specPath
+    ? ` ShuviX's goal planner has written the acceptance spec for this goal, with the user's answers, to ${escapeAttr(input.specPath)}. Read it before you start: the checker holds the work to that file as well as to the goal.`
+    : ''
+  const payload = `${SEPARATOR}<goal-set id="${escapeAttr(input.goalId)}">${GOAL_SET_NOTE_TEXT}${spec}</goal-set>`
   return {
     text: `${input.objective}${payload}`,
     display: {

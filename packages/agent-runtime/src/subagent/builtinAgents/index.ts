@@ -164,6 +164,16 @@ export const GOAL_JUDGE_SPEC: BuiltinProfileSpec = {
   name: GOAL_JUDGE_PROFILE_NAME
 }
 
+/**
+ * 目标规划员 —— 目标开工之前由宿主派发（goalService）：目标够清楚就回 ready；否则读项目、只问用户自己才能定的事
+ * （`ask`，至多三个、推荐项排第一），在工作目录里写一份验收规格 md（位置、名字、版式都由它定），回文件路径。S1 实测
+ * （deepseek，2026-11-08）：只给一句话 3/13 条隐藏事实，经它整理 13/13。只由宿主派发：干活的 agent 不该能自己给自己写验收。
+ */
+export const GOAL_PLANNER_PROFILE_NAME = 'goal-planner'
+export const GOAL_PLANNER_SPEC: BuiltinProfileSpec = {
+  name: GOAL_PLANNER_PROFILE_NAME
+}
+
 /** 内置 spec 全集（五个基座档案 work / chat / notebook / bot / tab 居首，其后为可派发的具名 agent） */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WORK_SPEC,
@@ -176,7 +186,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   TITLER_SPEC,
   KNOWLEDGE_WRITER_SPEC,
   PERMISSION_REVIEWER_SPEC,
-  GOAL_JUDGE_SPEC
+  GOAL_JUDGE_SPEC,
+  GOAL_PLANNER_SPEC
 ]
 
 /**
@@ -205,7 +216,8 @@ export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
 export const HOST_ONLY_PROFILE_NAMES: ReadonlySet<string> = new Set([
   PERMISSION_REVIEWER_PROFILE_NAME,
   KNOWLEDGE_WRITER_PROFILE_NAME,
-  GOAL_JUDGE_PROFILE_NAME
+  GOAL_JUDGE_PROFILE_NAME,
+  GOAL_PLANNER_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */
