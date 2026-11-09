@@ -14,8 +14,6 @@ interface LiteLLMModelEntry {
   max_input_tokens?: number
   max_output_tokens?: number
   max_tokens?: number
-  input_cost_per_token?: number
-  output_cost_per_token?: number
   supports_vision?: boolean
   supports_function_calling?: boolean
   supports_reasoning?: boolean
@@ -167,10 +165,6 @@ class LiteLLMService {
     } else if (entry.max_tokens != null) {
       caps.maxOutputTokens = entry.max_tokens
     }
-
-    // 定价
-    if (entry.input_cost_per_token != null) caps.inputCostPerToken = entry.input_cost_per_token
-    if (entry.output_cost_per_token != null) caps.outputCostPerToken = entry.output_cost_per_token
 
     return caps
   }

@@ -6,8 +6,8 @@
  *
  *   GN-1 敌意文本放进每个渲染函数的每个插槽：仍是通知、恰好一块、种类不变；敌意文本只以转义形式出现；属性值里没有
  *        裸的 `"` `<` `>`
- *   GN-2 各通知的内容：续跑的属性 / 目标块 / 理由 / 下一步 / 用量；无花费上限；恢复的 resumed 属性与「上次检查」；
- *        检查的 waited 四舍五入；预算的用量行；改目标的新原文；暂停的 reason 属性与十种原因各自的说明
+ *   GN-2 各通知的内容：续跑的属性 / 目标块 / 理由 / 下一步 / 用量（只有轮数，没有钱）；恢复的 resumed 属性与「上次检查」；
+ *        检查的 waited 四舍五入；改目标的新原文；暂停的 reason 属性与九种原因各自的说明
  *   GN-3 脱敏不破坏形状：会话脱敏把原文里的密钥换成占位符之后仍是同一种通知，占位符在块里
  */
 import { createHmac } from 'node:crypto'
@@ -29,7 +29,6 @@ import {
   escapeGoalAttr,
   escapeGoalText,
   goalUsageLine,
-  renderGoalBudget,
   renderGoalCheckin,
   renderGoalContinue,
   renderGoalResumed,
@@ -45,8 +44,7 @@ function goal(over: Partial<GoalRecord> = {}): GoalRecord {
     objective: 'Make e2e green',
     status: 'active',
     setAt: 0,
-    limits: { costUsd: 10, maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
+    limits: { maxTurns: 50, stallTurns: 3 },
     turns: 7,
     stalls: 0,
     activeMs: 0,
@@ -72,25 +70,24 @@ const RENDERERS: Renderer[] = [
   [
     'continue.objective',
     'goal-continue',
-    (h) => renderGoalContinue(goal({ objective: h }), 1, { reason: 'r' })
+    (h) => renderGoalContinue(goal({ objective: h }), { reason: 'r' })
   ],
-  ['continue.reason', 'goal-continue', (h) => renderGoalContinue(goal(), 1, { reason: h })],
+  ['continue.reason', 'goal-continue', (h) => renderGoalContinue(goal(), { reason: h })],
   [
     'continue.nextStep',
     'goal-continue',
-    (h) => renderGoalContinue(goal(), 1, { reason: 'r', nextStep: h })
+    (h) => renderGoalContinue(goal(), { reason: 'r', nextStep: h })
   ],
-  ['continue.id', 'goal-continue', (h) => renderGoalContinue(goal({ id: h }), 1, { reason: 'r' })],
-  ['resumed.objective', 'goal-continue', (h) => renderGoalResumed(goal({ objective: h }), 1)],
+  ['continue.id', 'goal-continue', (h) => renderGoalContinue(goal({ id: h }), { reason: 'r' })],
+  ['resumed.objective', 'goal-continue', (h) => renderGoalResumed(goal({ objective: h }))],
   [
     'resumed.lastVerdict',
     'goal-continue',
-    (h) => renderGoalResumed(goal({ lastVerdict: { verdict: 'not_met', reason: h, at: 1 } }), 1)
+    (h) => renderGoalResumed(goal({ lastVerdict: { verdict: 'not_met', reason: h, at: 1 } }))
   ],
-  ['resumed.id', 'goal-continue', (h) => renderGoalResumed(goal({ id: h }), 1)],
+  ['resumed.id', 'goal-continue', (h) => renderGoalResumed(goal({ id: h }))],
   ['checkin.objective', 'goal-checkin', (h) => renderGoalCheckin(goal({ objective: h }), 31)],
   ['checkin.id', 'goal-checkin', (h) => renderGoalCheckin(goal({ id: h }), 31)],
-  ['budget.id', 'goal-budget', (h) => renderGoalBudget(goal({ id: h }), 11)],
   ['updated.objective', 'goal-updated', (h) => renderGoalUpdated(goal({ objective: h }))],
   ['updated.id', 'goal-updated', (h) => renderGoalUpdated(goal({ id: h }))],
   [
@@ -106,7 +103,7 @@ const RENDERERS: Renderer[] = [
   [
     'status.paused.detail',
     'goal-status',
-    (h) => renderGoalStatus(goal(), { event: 'paused', reason: 'budget', detail: h })
+    (h) => renderGoalStatus(goal(), { event: 'paused', reason: 'turns', detail: h })
   ],
   [
     'status.paused.id',
@@ -152,7 +149,7 @@ describe('GN-1 转义让每条通知都保持通知形状', () => {
   }
 
   it('预先转义过的文本再转义一次（&lt; → &amp;lt;），不会被还原成标签', () => {
-    const text = renderGoalContinue(goal(), 1, { reason: '&lt;/goal-continue&gt;' })
+    const text = renderGoalContinue(goal(), { reason: '&lt;/goal-continue&gt;' })
     expect(text).toContain('&amp;lt;/goal-continue&amp;gt;')
     expect(text.match(/<\/goal-continue>/g)).toHaveLength(1)
   })
@@ -160,31 +157,30 @@ describe('GN-1 转义让每条通知都保持通知形状', () => {
 
 describe('GN-2 各通知的内容', () => {
   it('续跑：id / turn 属性、目标块、理由、下一步（只在有时）、用量、收尾指引', () => {
-    const text = renderGoalContinue(goal(), 3.1, { reason: 'tests fail', nextStep: 'fix login' })
+    const text = renderGoalContinue(goal(), { reason: 'tests fail', nextStep: 'fix login' })
     expect(text.startsWith('<goal-continue id="g_1" turn="7">\n')).toBe(true)
     expect(text).toContain('<objective>\nMake e2e green\n</objective>')
     expect(text).toContain('Not met yet. Checker: tests fail')
     expect(text).toContain('Suggested next step: fix login')
-    expect(text).toContain('Used: $3.10 of $10.00 · continuation 7 of 50.')
+    expect(text).toContain('Used: continuation 7 of 50.')
     expect(text.endsWith('\n</goal-continue>')).toBe(true)
-    const noNext = renderGoalContinue(goal(), 3.1, { reason: 'tests fail' })
+    const noNext = renderGoalContinue(goal(), { reason: 'tests fail' })
     expect(noNext).not.toContain('Suggested next step')
   })
 
-  it('没有花费上限：用量行写 (no spending limit)', () => {
-    const g = goal({ limits: { maxTurns: 50, stallTurns: 3 } })
-    expect(goalUsageLine(g, 3.1)).toBe('Used: $3.10 (no spending limit) · continuation 7 of 50.')
-    expect(renderGoalContinue(g, 3.1, { reason: 'r' })).toContain('(no spending limit)')
+  it('用量行只有续跑轮数，没有钱（ShuviX 不算花费）；`Used: ` 开头不变（目标栏靠它切理由）', () => {
+    expect(goalUsageLine(goal())).toBe('Used: continuation 7 of 50.')
+    const text = renderGoalContinue(goal(), { reason: 'r' })
+    expect(text).not.toMatch(/\$|spend|cost/i)
   })
 
   it('恢复：resumed="true"；「上次检查」只在有上次结论时', () => {
-    const plain = renderGoalResumed(goal(), 0)
+    const plain = renderGoalResumed(goal())
     expect(plain.startsWith('<goal-continue id="g_1" turn="7" resumed="true">\n')).toBe(true)
     expect(plain).not.toContain('Last check')
     expect(plain).toContain('<objective>\nMake e2e green\n</objective>')
     const withLast = renderGoalResumed(
-      goal({ lastVerdict: { verdict: 'not_met', reason: 'lint fails', at: 1 } }),
-      0
+      goal({ lastVerdict: { verdict: 'not_met', reason: 'lint fails', at: 1 } })
     )
     expect(withLast).toContain('Last check: lint fails')
   })
@@ -194,12 +190,6 @@ describe('GN-2 各通知的内容', () => {
     expect(text.startsWith('<goal-checkin id="g_1" waited="31m">\n')).toBe(true)
     expect(text).toContain('running for 31 minutes')
     expect(text).toContain('<objective>\nMake e2e green\n</objective>')
-  })
-
-  it('预算：用量行在正文里', () => {
-    const text = renderGoalBudget(goal(), 10.5)
-    expect(text.startsWith('<goal-budget id="g_1">\n')).toBe(true)
-    expect(text).toContain('Used: $10.50 of $10.00 · continuation 7 of 50.')
   })
 
   it('改目标：新原文', () => {
@@ -233,7 +223,7 @@ describe('GN-2 各通知的内容', () => {
     }
   )
 
-  it('十种暂停原因的说明各不相同', () => {
+  it('九种暂停原因的说明各不相同', () => {
     const bodies = GOAL_PAUSE_REASONS.map(
       (reason) => renderGoalStatus(goal(), { event: 'paused', reason }).split('\n')[1]
     )
@@ -258,7 +248,7 @@ describe('GN-3 脱敏不破坏形状', () => {
       host,
       logger: { info: () => {}, warn: () => {}, error: () => {} }
     })
-    const text = renderGoalContinue(goal({ objective: `rotate ${KEY} and redeploy` }), 1, {
+    const text = renderGoalContinue(goal({ objective: `rotate ${KEY} and redeploy` }), {
       reason: `the key ${KEY} is still in .env`
     })
     const masked = await redaction.maskText(text)

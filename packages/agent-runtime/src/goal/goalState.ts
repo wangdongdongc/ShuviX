@@ -21,8 +21,6 @@ export interface CreateGoalInput {
   id: string
   objective: string
   limits: GoalLimits
-  /** 设定时会话已花掉的（美元） */
-  baselineCostUsd: number
   now: number
 }
 
@@ -33,7 +31,6 @@ export function createGoal(input: CreateGoalInput): GoalRecord {
     status: 'active',
     setAt: input.now,
     limits: { ...input.limits },
-    baselineCostUsd: input.baselineCostUsd,
     turns: 0,
     stalls: 0,
     activeMs: 0,
@@ -75,7 +72,7 @@ export function editGoal(
 }
 
 /**
- * 合并上限：按键覆盖。`null`（或显式的 undefined）= 「不限」—— 只对花费、时长两项有意义（经 JSON 来的补丁只能用 null
+ * 合并上限：按键覆盖。`null`（或显式的 undefined）= 「不限」—— 只对时长有意义（经 JSON 来的补丁只能用 null
  * 表达删除）；轮数、停滞两项不接受「不限」，给 null 就保持原值。非正数、非有限数忽略。
  */
 export function mergeLimits(base: GoalLimits, patch: GoalLimitsPatch | undefined): GoalLimits {
@@ -84,7 +81,7 @@ export function mergeLimits(base: GoalLimits, patch: GoalLimitsPatch | undefined
   for (const key of Object.keys(patch) as Array<keyof GoalLimits>) {
     const value = patch[key]
     if (value === undefined || value === null) {
-      if (key === 'costUsd' || key === 'wallClockMin') delete merged[key]
+      if (key === 'wallClockMin') delete merged[key]
       continue
     }
     if (!Number.isFinite(value) || value <= 0) continue
@@ -104,8 +101,6 @@ export interface RunEndFacts {
   toolCalls: number
   /** 本轮成功的工具调用数（不含失败、被拒、被中断的） */
   toolSucceeded: number
-  /** 目标期间的花费（美元） */
-  costUsd: number
   now: number
 }
 
@@ -118,12 +113,8 @@ export type RunEndDecision =
   | { action: 'judge'; goal: GoalRecord; noProgress: boolean }
 
 /** 护栏（§6）：撞上哪一条；都没撞上回 undefined */
-export function guardHit(
-  goal: GoalRecord,
-  facts: { costUsd: number; now: number }
-): GoalPauseReason | undefined {
+export function guardHit(goal: GoalRecord, facts: { now: number }): GoalPauseReason | undefined {
   const { limits } = goal
-  if (limits.costUsd !== undefined && facts.costUsd >= limits.costUsd) return 'budget'
   if (goal.turns >= limits.maxTurns) return 'turns'
   if (goal.stalls >= limits.stallTurns) return 'stalled'
   if (limits.wallClockMin !== undefined && goalActiveMs(goal, facts.now) >= limits.wallClockMin * 60_000) {
@@ -168,7 +159,7 @@ export type VerdictDecision =
 export function applyVerdict(
   goal: GoalRecord | undefined,
   verdict: GoalVerdict | null,
-  facts: { costUsd: number; now: number; noProgress: boolean; at?: number }
+  facts: { now: number; noProgress: boolean; at?: number }
 ): VerdictDecision {
   if (goal === undefined || goal.status !== 'active') return { action: 'none' }
   if (verdict === null) {
@@ -207,22 +198,13 @@ export function applyVerdict(
 }
 
 /**
- * 用户恢复之前：恢复后（无进展清零）仍撞上的护栏 —— 撞上就不恢复，界面请用户先调高上限（否则恢复就是白跑一整轮再暂停）。
+ * 用户恢复之前：恢复后（无进展清零）仍撞上的护栏（轮数、时长）—— 撞上就不恢复，界面请用户先调高上限（否则恢复就是
+ * 白跑一整轮再暂停）。
  */
 export function resumeBlockedBy(
   goal: GoalRecord,
-  facts: { costUsd: number; now: number }
+  facts: { now: number }
 ): GoalPauseReason | undefined {
   const hit = guardHit({ ...goal, stalls: 0 }, facts)
   return hit === 'stalled' ? undefined : hit
-}
-
-/** 运行中花费越过上限（§6.1）：越线就暂停（这一轮由宿主 steer 一条收尾通知，自然结束） */
-export function budgetCrossed(goal: GoalRecord | undefined, costUsd: number): boolean {
-  return (
-    goal !== undefined &&
-    goal.status === 'active' &&
-    goal.limits.costUsd !== undefined &&
-    costUsd >= goal.limits.costUsd
-  )
 }

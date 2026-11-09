@@ -16,7 +16,7 @@
  * 目标（docs/goal-mode-design.md §8：fork 出来的会话不该和源会话同时朝同一个目标改同一份东西）：
  *   FK-1 源会话进行中的目标：拷贝里置为暂停 `forked`，累计这一段时长、去掉 activeSince，别的（id、原文、轮数、基线、
  *        上次结论）原样；源会话的存储不动
- *   FK-2 不在进行中的（暂停 budget、已达成）原样；源会话没有目标 → 拷贝里读出来也没有目标
+ *   FK-2 不在进行中的（暂停 turns、已达成）原样；源会话没有目标 → 拷贝里读出来也没有目标
  */
 import { createSession } from '@earendil-works/pi-durable'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
@@ -211,8 +211,7 @@ const GOAL: GoalRecord = {
   objective: 'Make e2e green',
   status: 'active',
   setAt: 1000,
-  limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-  baselineCostUsd: 0.25,
+  limits: { maxTurns: 50, stallTurns: 3 },
   turns: 4,
   stalls: 1,
   activeMs: 500,
@@ -272,7 +271,7 @@ describe('session fork · goals', () => {
       const paused: GoalRecord = {
         ...GOAL,
         status: 'paused',
-        pauseReason: 'budget',
+        pauseReason: 'turns',
         activeSince: undefined
       }
       delete paused.activeSince

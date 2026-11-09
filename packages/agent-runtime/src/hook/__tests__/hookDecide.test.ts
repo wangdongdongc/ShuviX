@@ -1284,8 +1284,7 @@ describe('HK-2 / HK-3 goal.check 的合并与早退', () => {
       id: 'g_1',
       objective: 'Make e2e green',
       turns: 1,
-      costUsd: 0.5,
-      limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
+      limits: { maxTurns: 50, stallTurns: 3 },
       activeMinutes: 3
     },
     userMessages: [],

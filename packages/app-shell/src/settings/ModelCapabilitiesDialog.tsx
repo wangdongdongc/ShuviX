@@ -34,7 +34,7 @@ const BOOL_CAPS = [
   { key: 'pdfInput', labelKey: 'settings.capPdfInput', descKey: 'settings.capPdfInputDesc' }
 ] as const
 
-/** 模型能力编辑对话框 — 布尔能力 + Token 限制 + 定价（卡片式布局） */
+/** 模型能力编辑对话框 — 布尔能力 + Token 限制（卡片式布局） */
 export function ModelCapabilitiesDialog({
   modelId,
   capabilities,
@@ -63,25 +63,6 @@ export function ModelCapabilitiesDialog({
   const setNumber = (key: string, value: string): void => {
     const num = value === '' ? undefined : Number(value)
     setCaps((prev) => ({ ...prev, [key]: num }))
-  }
-
-  /** 定价：UI 显示 $/M tokens，存储 per-token */
-  const getCostDisplay = (key: string): string => {
-    const v = caps[key]
-    if (v === undefined || v === null || v === '') return ''
-    const perToken = Number(v)
-    if (isNaN(perToken) || perToken === 0) return ''
-    return String(perToken * 1e6)
-  }
-
-  const setCostFromDisplay = (key: string, display: string): void => {
-    if (display === '') {
-      setCaps((prev) => ({ ...prev, [key]: undefined }))
-      return
-    }
-    const perMillion = Number(display)
-    if (isNaN(perMillion)) return
-    setCaps((prev) => ({ ...prev, [key]: perMillion / 1e6 }))
   }
 
   const handleSubmit = async (): Promise<void> => {
@@ -163,28 +144,6 @@ export function ModelCapabilitiesDialog({
                 caps.maxOutputTokens as number | undefined,
                 (v) => setNumber('maxOutputTokens', v),
                 'tokens'
-              )}
-            />
-          </SettingsSection>
-
-          {/* 定价 */}
-          <SettingsSection title={t('settings.capSectionPricing')}>
-            <SettingsRow
-              title={t('settings.capInputCost')}
-              description={t('settings.capInputCostDesc')}
-              control={numberWithUnit(
-                getCostDisplay('inputCostPerToken'),
-                (v) => setCostFromDisplay('inputCostPerToken', v),
-                '$/M'
-              )}
-            />
-            <SettingsRow
-              title={t('settings.capOutputCost')}
-              description={t('settings.capOutputCostDesc')}
-              control={numberWithUnit(
-                getCostDisplay('outputCostPerToken'),
-                (v) => setCostFromDisplay('outputCostPerToken', v),
-                '$/M'
               )}
             />
           </SettingsSection>

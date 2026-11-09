@@ -6,20 +6,15 @@
  *  → 窗口 0）· 03 相位与在跑的工具（turn / 工具槽 / 询问 / compaction / 回到 idle；从不 branch_summary）·
  *  04 被中断（PIN-05）· 05 列哪些派生（PIN-02：装着扩展或有活任务；销毁的、跑完的 hook agent 不列，干着活的
  *  hook agent 列着；重开之后闲着的不列，ensureInstalled 之后回来；崩在半路的子 agent 重开后列为 interrupted）·
- *  06 缓存、上下文、自己的花费 ·
- *  07 重试 / 压缩 / 中止都算花费（Q-P3-08）· 08 会话花费含起标题与审查 · 09 回退 fork 之后 · 10 队列计数 ·
+ *  06 缓存与上下文；行里没有花费（2026-11-09：ShuviX 不算钱）·
+ *  07 重试 / 压缩 / 中止的输入都算进累计（Q-P3-08）· 08（会话花费，随花费一起删了）· 09 回退 fork 之后 · 10 队列计数 ·
  *  11 只读且廉价（不提交、不挂投影、不调重建 seam、不开启调度器、不改 evictable、不刷新 LRU）· 12 已关的句柄 ·
  *  17 lastActivityAt（PIN-07：在跑 = 此刻；否则最新一条条目的消息时间，没有就是 startedAt）
  *
- * 精确的用量与花费靠 `support/usage.ts` 给 faux 盖章（faux 自己的估算花费恒为 0）。
+ * 精确的用量靠 `support/usage.ts` 给 faux 盖章。
  */
 import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai'
-import {
-  ROOT_CONVERSATION_ID,
-  UsageDoc,
-  type ConversationId,
-  type UsageState
-} from '@earendil-works/pi-durable'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { SessionClosedError, type DurableSession } from '../durableSession'
@@ -27,7 +22,7 @@ import type { AgentMonitorRow } from '../monitorSnapshot'
 import { recordPublications } from './support/commits'
 import { crashWith } from './support/crash'
 import { answer, callTool, held, modelError, stalled } from './support/faux'
-import { hookRig, promptPayload, queueRoles, roleOf, type Role } from './support/hookRig'
+import { hookRig, promptPayload, queueRoles } from './support/hookRig'
 import { makeHost, registerHostCleanup, TEST_SETTINGS_OVERRIDES } from './support/host'
 import { threeTurns } from './support/rollback'
 import { W_NOW } from './support/scenario'
@@ -49,22 +44,6 @@ function rootRow(rows: readonly AgentMonitorRow[]): AgentMonitorRow {
 
 async function rootOf(session: DurableSession): Promise<AgentMonitorRow> {
   return rootRow(await session.monitorSnapshot())
-}
-
-/** 一个对话的 `pi.usage` 两种桶的花费合计 */
-function costOf(state: Readonly<UsageState> | undefined): number {
-  let total = 0
-  for (const usage of Object.values(state?.models ?? {})) total += usage.cost.total
-  for (const usage of Object.values(state?.tools ?? {})) total += usage.cost.total
-  return total
-}
-
-/** 全部对话的 id */
-async function conversationIds(session: DurableSession): Promise<ConversationId[]> {
-  return session.harness.commit(
-    async (tx) => (await tx.scanConversations({}, 256)).items.map((record) => record.id),
-    BG
-  )
 }
 
 describe('P3-13 runtime · root row', () => {
@@ -329,8 +308,8 @@ describe('P3-13 runtime · spawned rows (PIN-02)', () => {
   })
 })
 
-describe('P3-13 runtime · usage, cost and context', () => {
-  it('P3-13-06 cache totals from pi.usage, last from the newest assistant entry, contextTokens (PIN-04), own cost', async () => {
+describe('P3-13 runtime · usage and context', () => {
+  it('P3-13-06 cache totals from pi.usage, last from the newest assistant entry, contextTokens (PIN-04); no cost on the row', async () => {
     const t = await makeHost()
     const stamp = stampUsage(t.kit)
     const session = await t.open()
@@ -339,7 +318,6 @@ describe('P3-13 runtime · usage, cost and context', () => {
     expect(fresh.cache).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, reported: false })
     expect('last' in fresh.cache).toBe(false)
     expect(fresh.contextTokens).toBe(0)
-    expect(fresh.cost).toEqual({ total: 0 })
 
     stamp.queue(
       { input: 400, output: 5, cost: 0.001 },
@@ -357,14 +335,12 @@ describe('P3-13 runtime · usage, cost and context', () => {
       last: { input: 500, cacheRead: 0, cacheWrite: 0 }
     })
     expect(row.contextTokens).toBe(505)
-    const usage = await session.harness.snapshot(UsageDoc, ROOT, BG)
-    expect(row.cost.total).toBeCloseTo(costOf(usage), 12)
-    expect(row.cost.total).toBeCloseTo(0.007, 12)
     expect('calls' in row.cache).toBe(false)
+    expect(Object.keys(row)).not.toContain('cost')
+    expect(Object.keys(row)).not.toContain('sessionCost')
   })
 
-  it('P3-13-07 failed retries, the compaction summary and an aborted partial all count as spend (Q-P3-08); no calls field', async () => {
-    const PRICE = 0.001
+  it('P3-13-07 failed retries, the compaction summary and an aborted partial all count in the totals (Q-P3-08); no calls field', async () => {
     const t = await makeHost({
       settingsOverrides: {
         ...TEST_SETTINGS_OVERRIDES,
@@ -376,7 +352,7 @@ describe('P3-13 runtime · usage, cost and context', () => {
     const session = await t.open()
     await session.createAgent()
     const tokens = [10, 10, 20, 5, 7, 3]
-    stamp.queue(...tokens.map((input) => ({ input, cost: input * PRICE })))
+    stamp.queue(...tokens.map((input) => ({ input })))
     // 两次可重试的失败，然后成功
     t.kit.queue(modelError('overloaded'), modelError('overloaded'), answer('ok'))
     expect(await session.submitUser('u1')).toEqual({})
@@ -395,58 +371,22 @@ describe('P3-13 runtime · usage, cost and context', () => {
 
     const row = await rootOf(session)
     const spent = tokens.reduce((sum, n) => sum + n, 0)
-    expect(row.cost.total).toBeCloseTo(spent * PRICE, 12)
     expect(row.cache.input).toBe(spent)
-    expect(row.sessionCost).toBeCloseTo(spent * PRICE, 12)
     expect('calls' in row.cache).toBe(false)
     expect(Object.keys(row)).not.toContain('calls')
     expect(Object.keys(row)).not.toContain('counters')
   })
 
-  it('P3-13-08 sessionCost = harness.usage(): the root turn, a titler run and a task-owned reviewer run, on every row', async () => {
-    const rig = await hookRig()
-    const prices: Record<Role, number> = { root: 0.01, titler: 0.02, reviewer: 0.04 }
-    const stamp = stampUsage(rig.kit)
-    stamp.price((context) => ({ input: 10, cost: prices[roleOf(context.messages)] }))
-    queueRoles(rig.kit, {
-      root: [callTool('askOp'), answer('root done')],
-      reviewer: [
-        callTool('next', { decision: 'allow', risk: 'low', summary: 's', reason: 'r' }, 'call-next')
-      ],
-      titler: [answer('A Title')]
-    })
-    expect(await rig.session.submitUser('clean the build directory')).toEqual({})
-    rig.runner.fire('session.prompt-accepted', promptPayload())
-    await waitFor(() => rig.ends().length >= 1 && stamp.stamped.length === 4, 5000, 'titler ran')
-
-    const expected = 2 * prices.root + prices.titler + prices.reviewer
-    const rows = await rig.session.monitorSnapshot()
-    expect(rows.length).toBeGreaterThan(0)
-    for (const row of rows) expect(row.sessionCost).toBeCloseTo(expected, 12)
-    let summed = 0
-    for (const id of await conversationIds(rig.session)) {
-      summed += costOf(await rig.session.harness.snapshot(UsageDoc, id, BG))
-    }
-    expect(rootRow(rows).sessionCost).toBeCloseTo(summed, 12)
-    expect(rootRow(rows).cost.total).toBeCloseTo(2 * prices.root, 12)
-    // titler 与审查员都已卸掉、不再列着 —— 它们的花费照样算在会话里
-    expect(rows.map((row) => row.kind)).toEqual(['root'])
-  })
-
-  it('P3-13-09 after a rollback: the root row is the fork with its own cost 0; sessionCost keeps the abandoned branch; context follows the fork', async () => {
+  it('P3-13-09 after a rollback: the root row is the fork with its own usage from 0; context follows the fork', async () => {
     const t = await makeHost()
     const stamp = stampUsage(t.kit)
     const session = await t.open()
     await session.createAgent()
-    stamp.queue(
-      { input: 100, output: 1, cost: 0.01 },
-      { input: 200, output: 1, cost: 0.02 },
-      { input: 300, output: 1, cost: 0.03 }
-    )
+    stamp.queue({ input: 100, output: 1 }, { input: 200, output: 1 }, { input: 300, output: 1 })
     const ids = await threeTurns(session, t)
     const before = await rootOf(session)
     expect(before.conversationId).toBe(ROOT)
-    expect(before.cost.total).toBeCloseTo(0.06, 12)
+    expect(before.cache.input).toBe(600)
     expect(before.contextTokens).toBe(301)
 
     const result = await session.rollbackTo(ids.u1)
@@ -456,17 +396,15 @@ describe('P3-13 runtime · usage, cost and context', () => {
     expect(fork).not.toBe(ROOT)
     const after = await rootOf(session)
     expect(after.conversationId).toBe(fork)
-    expect(after.cost).toEqual({ total: 0 })
-    expect(after.sessionCost).toBeCloseTo(0.06, 12)
+    expect(after.cache.input).toBe(0)
     expect(after.contextTokens).toBe(0)
 
-    stamp.queue({ input: 40, output: 2, cost: 0.005 })
+    stamp.queue({ input: 40, output: 2 })
     t.kit.queue(answer('F1'))
     expect(await session.submitUser('on the fork')).toEqual({})
     const later = await rootOf(session)
     expect(later.contextTokens).toBe(42)
-    expect(later.cost.total).toBeCloseTo(0.005, 12)
-    expect(later.sessionCost).toBeCloseTo(0.065, 12)
+    expect(later.cache.input).toBe(40)
   })
 
   it('P3-13-10 queue counts: one steer and two follow-ups; a notice write and a notice-shaped steer do not count', async () => {

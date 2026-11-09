@@ -26,7 +26,6 @@ export interface ClassifierLogSummary {
   error: string
   ms: number
   inputTokens: number
-  cost: number
 }
 
 /** IPC: 查询分类器日志的参数 */

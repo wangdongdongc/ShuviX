@@ -5,12 +5,12 @@
  * 控制按钮；任务列表搬去对话末尾是因为它是一次运行的进度，目标栏不是）。形态与 QueuePanel 同源：自身无边框 / 圆角 /
  * 底色，只用一条 border-b 与下方分隔。
  *
- *  - 一行：状态记号 + 状态 · 第几轮 / 上限 · 花费 / 上限 · 时长，行尾是按钮：
- *      进行中 → 暂停 / 编辑 / 清除；暂停中 → 继续（预算、轮数撞线的另给「调高上限并继续」）/ 编辑 / 清除；
+ *  - 一行：状态记号 + 状态 · 第几轮 / 上限 · 时长（没有钱：ShuviX 不算花费），行尾是按钮：
+ *      进行中 → 暂停 / 编辑 / 清除；暂停中 → 继续（轮数、时长撞线的另给「调高上限并继续」）/ 编辑 / 清除；
  *      达成 / 做不到 → 沿用原文再设一次 / 移除。
  *  - 第二行：最近一次判定（结论 + 理由），点开看完整原文、建议的下一步、各项上限。
  *  - 目标检查被停用（没有 hook 订阅 `goal.check`）时明说：目标会在第一次判定时暂停（§4.2）。
- *  - 编辑是一张小表单（GoalEditor）：原文 ≤ 4000 字、花费上限（美元，空 = 不限）、续跑轮数上限。输入框里只发
+ *  - 编辑是一张小表单（GoalEditor）：原文 ≤ 4000 字、续跑轮数上限（目标本来有时长上限时还有它）。输入框里只发
  *    `/goal` 也打开它（没有目标时是「设新目标」）。
  *
  * 所有操作走 `agent.goalAct`，被拒时就地显示宿主给的那句话。渠道端（Chrome 侧边栏）没有宿主 API：只读，不出按钮。
@@ -32,19 +32,12 @@ import { useChatDensity } from '../../host/chatHostContext'
 import { ExperimentalTag } from '../common/ExperimentalTag'
 import { GoalMark } from './GoalMark'
 import { RedactedText } from './RedactedText'
-import {
-  formatGoalCost,
-  formatGoalDuration,
-  formatGoalLimit,
-  goalSummaryLine,
-  parseGoalLimitFields
-} from './goalFormat'
+import { formatGoalDuration, goalSummaryLine, parseGoalLimitFields } from './goalFormat'
 
 /** 进行中时多久刷新一次时长（分钟粒度，半分钟一拍就够） */
 const CLOCK_MS = 30_000
 
 /** 设置里的缺省上限键（主进程 goalService 同名） */
-const DEFAULT_COST_KEY = 'goal.defaultCostUsd'
 const DEFAULT_TURNS_KEY = 'goal.defaultMaxTurns'
 
 /** 发给宿主的一次目标操作；被拒 → 宿主那句话，抛错 → 错误原文 */
@@ -133,10 +126,7 @@ export function GoalBar({ sessionId }: { sessionId: string }): React.JSX.Element
       ]
     } else if (goal.status === 'paused') {
       // 撞在上限上暂停的：宿主不让直接继续（上限还在越线），先调高再继续；直接点「继续」被拒时就地给那句话
-      const atLimit =
-        goal.pauseReason === 'budget' ||
-        goal.pauseReason === 'turns' ||
-        goal.pauseReason === 'wall-clock'
+      const atLimit = goal.pauseReason === 'turns' || goal.pauseReason === 'wall-clock'
       actions = [
         ...(atLimit
           ? [button('raise', t('goal.action.raiseAndResume'), () => openEditor('raise'), true)]
@@ -259,9 +249,6 @@ function GoalDetails({ goal, touch }: { goal: GoalView; touch: boolean }): React
   const { t } = useTranslation()
   const label = 'text-[11px] text-text-tertiary'
   const limits = [
-    goal.limits.costUsd !== undefined
-      ? t('goal.limitCost', { cost: formatGoalLimit(goal.limits.costUsd) })
-      : t('goal.limitCostNone'),
     t('goal.limitTurns', { n: goal.limits.maxTurns }),
     t('goal.limitStall', { n: goal.limits.stallTurns }),
     ...(goal.limits.wallClockMin !== undefined
@@ -298,19 +285,18 @@ function GoalDetails({ goal, touch }: { goal: GoalView; touch: boolean }): React
         </div>
       )}
       <div className={label} data-goal-limits="">
-        {t('goal.spent', { cost: formatGoalCost(goal.costUsd) })} · {limits.join(' · ')}
+        {limits.join(' · ')}
       </div>
     </div>
   )
 }
 
 /**
- * 表单的输入：原文、花费上限（美元，空 = 不限）、续跑轮数上限，以及时长上限（分钟，空 = 不限）——
+ * 表单的输入：原文、续跑轮数上限，以及时长上限（分钟，空 = 不限）——
  * 时长只在目标本来就有这一项时出现（`time: null` = 不出这一格、不改它）
  */
 interface EditorFields {
   objective: string
-  cost: string
   turns: string
   time: string | null
 }
@@ -318,7 +304,6 @@ interface EditorFields {
 function fieldsOf(limits: GoalLimits, objective: string): EditorFields {
   return {
     objective,
-    cost: limits.costUsd !== undefined ? String(limits.costUsd) : '',
     turns: String(limits.maxTurns),
     time: limits.wallClockMin !== undefined ? String(limits.wallClockMin) : null
   }
@@ -359,16 +344,11 @@ function GoalEditor({
     const get = getHostApi()?.settings?.get
     if (!get) return
     let alive = true
-    void Promise.all([get(DEFAULT_COST_KEY), get(DEFAULT_TURNS_KEY)])
-      .then(([cost, turns]) => {
+    void get(DEFAULT_TURNS_KEY)
+      .then((turns) => {
         if (!alive) return
         setFields((prev) => ({
           ...prev,
-          ...(cost?.trim() === 'off'
-            ? { cost: '' }
-            : cost && Number(cost) > 0
-              ? { cost: String(Number(cost)) }
-              : {}),
           ...(turns && Number.isInteger(Number(turns)) && Number(turns) > 0
             ? { turns: String(Number(turns)) }
             : {})
@@ -420,7 +400,7 @@ function GoalEditor({
     touch ? 'px-3 py-2 text-[14px]' : 'px-2.5 py-1 text-[12px]'
   }`
   const fieldLabel = `flex flex-col gap-1 text-text-tertiary ${touch ? 'text-[12px]' : 'text-[11px]'}`
-  const setLimit = (key: 'cost' | 'turns' | 'time', value: string): void => {
+  const setLimit = (key: 'turns' | 'time', value: string): void => {
     setLimitsTouched(true)
     setFields((prev) => ({ ...prev, [key]: value }))
   }
@@ -478,21 +458,6 @@ function GoalEditor({
       )}
       <div className={`flex gap-3 ${touch ? 'flex-col' : 'items-end flex-wrap'}`}>
         <label className={fieldLabel}>
-          <span>{t('goal.costLimitLabel')}</span>
-          <input
-            data-goal-cost-input=""
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="any"
-            value={fields.cost}
-            placeholder={t('goal.costLimitNone')}
-            autoFocus={mode === 'raise'}
-            onChange={(e) => setLimit('cost', e.target.value)}
-            className={`${input} ${touch ? 'w-full' : 'w-28'}`}
-          />
-        </label>
-        <label className={fieldLabel}>
           <span>{t('goal.turnsLimitLabel')}</span>
           <input
             data-goal-turns-input=""
@@ -501,6 +466,7 @@ function GoalEditor({
             min={1}
             step={1}
             value={fields.turns}
+            autoFocus={mode === 'raise'}
             onChange={(e) => setLimit('turns', e.target.value)}
             className={`${input} ${touch ? 'w-full' : 'w-24'}`}
           />
@@ -515,7 +481,7 @@ function GoalEditor({
               min={1}
               step="any"
               value={fields.time}
-              placeholder={t('goal.costLimitNone')}
+              placeholder={t('goal.limitNone')}
               onChange={(e) => setLimit('time', e.target.value)}
               className={`${input} ${touch ? 'w-full' : 'w-24'}`}
             />

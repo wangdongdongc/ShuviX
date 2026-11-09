@@ -111,7 +111,6 @@ function input(over: Partial<ClassifierLogInput> = {}): ClassifierLogInput {
     status: 'ok',
     ms: 120,
     inputTokens: 42,
-    cost: 0.0001,
     ...over
   }
 }
@@ -166,8 +165,7 @@ describe('ClassifierLogService.record', () => {
       status: 'ok',
       error: '',
       ms: 120,
-      inputTokens: 42,
-      cost: 0.0001
+      inputTokens: 42
     })
     expect(JSON.parse(String(row.request))).toEqual(CONTEXT)
 
@@ -188,7 +186,6 @@ describe('ClassifierLogService.record', () => {
       response: '',
       error: '',
       inputTokens: 0,
-      cost: 0,
       status: 'misconfigured'
     })
     expect(bare.id).not.toBe(row.id)
@@ -405,8 +402,7 @@ describe('classifyAndLog', () => {
       answers: ANSWERS,
       status: 'ok',
       ms: outcome.ms,
-      inputTokens: 57,
-      cost: 0.00002
+      inputTokens: 57
     })
     expect(logged.context).toBe(CONTEXT)
   })
@@ -451,8 +447,7 @@ describe('classifyAndLog', () => {
       status: 'incomplete',
       error: 'answers are incomplete or out of range',
       ms: outcome.ms,
-      inputTokens: 57,
-      cost: 0.00002
+      inputTokens: 57
     })
   })
 
@@ -487,8 +482,7 @@ describe('classifyAndLog', () => {
         status: 'failed',
         error: expected,
         ms: outcome.ms,
-        inputTokens: 57,
-        cost: 0.00002
+        inputTokens: 57
       })
       expect(logged).not.toHaveProperty('answers')
     }
@@ -681,7 +675,7 @@ describe('classifyAndLog', () => {
     expect(record2.mock.calls[0][0].toolCallId).toBeUndefined()
   })
 
-  it('CAL-10 没有 usage → inputTokens 0 / cost 0；stopReason 不是 stop 时不调 accept', async () => {
+  it('CAL-10 没有 usage → inputTokens 0；stopReason 不是 stop 时不调 accept', async () => {
     controllableTimeout()
     const record = vi.fn<(input: ClassifierLogInput) => void>()
     await classifyAndLog({
@@ -689,7 +683,7 @@ describe('classifyAndLog', () => {
       models: { classify: async () => result({ usage: undefined }) },
       record
     })
-    expect(record.mock.calls[0][0]).toMatchObject({ status: 'ok', inputTokens: 0, cost: 0 })
+    expect(record.mock.calls[0][0]).toMatchObject({ status: 'ok', inputTokens: 0 })
 
     const accept = vi.fn(() => true)
     const record2 = vi.fn<(input: ClassifierLogInput) => void>()
@@ -700,7 +694,7 @@ describe('classifyAndLog', () => {
       record: record2
     })
     expect(accept).not.toHaveBeenCalled()
-    expect(record2.mock.calls[0][0]).toMatchObject({ status: 'failed', inputTokens: 0, cost: 0 })
+    expect(record2.mock.calls[0][0]).toMatchObject({ status: 'failed', inputTokens: 0 })
   })
 
   it("CAL-11 pi 回 aborted 但两个 signal 都没落下 → failed（error 'aborted'）", async () => {

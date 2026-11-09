@@ -4,7 +4,7 @@
  * 在**真的 SQLite** 上跑（node:sqlite 的内存库，同 mdAttrDao.test）：按顺序跑全部迁移建表，
  * BaseDao 换成直接在这个库上 prepare。
  *
- *   CLD-1  insert → getById 读回整行（十五列逐字）；没有这一行 → undefined
+ *   CLD-1  insert → getById 读回整行（十四列逐字；表里的 cost 列不读不写）；没有这一行 → undefined
  *   CLD-2  list 不带 request、带会话标题（LEFT JOIN sessions：会话不在 / sessionId 为空 → ''）
  *   CLD-3  list 按 createdAt 倒序；同一毫秒按 id 倒序
  *   CLD-4  list 筛选：scene / sessionId / status 各自与组合；空串筛选当没给
@@ -66,7 +66,6 @@ function log(over: Partial<ClassifierLog> = {}): ClassifierLog {
     error: '',
     ms: 120,
     inputTokens: 42,
-    cost: 0.00012,
     ...over
   }
 }

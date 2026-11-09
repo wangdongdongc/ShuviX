@@ -50,7 +50,6 @@ export interface ClassifierLogInput {
   error?: string
   ms: number
   inputTokens?: number
-  cost?: number
 }
 
 function stringify(value: unknown): string {
@@ -87,8 +86,7 @@ export class ClassifierLogService {
       status: input.status,
       error: input.error ?? '',
       ms: input.ms,
-      inputTokens: input.inputTokens ?? 0,
-      cost: input.cost ?? 0
+      inputTokens: input.inputTokens ?? 0
     }
     try {
       classifierLogDao.insert(row)
@@ -180,10 +178,7 @@ export async function classifyAndLog(params: {
   try {
     const result = await params.models.classify(params.model, params.context, { signal })
     const ms = Date.now() - started
-    const usage = {
-      inputTokens: result.usage?.input ?? 0,
-      cost: result.usage?.cost.total ?? 0
-    }
+    const usage = { inputTokens: result.usage?.input ?? 0 }
     if (result.stopReason !== 'stop') {
       const status = abortStatus() ?? 'failed'
       const error = result.errorMessage

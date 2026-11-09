@@ -133,8 +133,7 @@ export function goalPayload(
       id: 'g_1',
       objective: 'Make e2e green',
       turns: 0,
-      costUsd: 0,
-      limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
+      limits: { maxTurns: 50, stallTurns: 3 },
       activeMinutes: 1
     },
     userMessages: [],

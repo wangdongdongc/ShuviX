@@ -750,8 +750,7 @@ describe('classify（假 models）', () => {
         status: 'incomplete',
         answers,
         error: 'answers are incomplete or out of range',
-        inputTokens: 57,
-        cost: 0.00002
+        inputTokens: 57
       })
       expect(warnings()).toHaveLength(1)
       expect(warnings()[0]).toContain('incomplete')
@@ -775,8 +774,7 @@ describe('classify（假 models）', () => {
       model: JEV,
       status: 'ok',
       answers: ANSWERS,
-      inputTokens: 57,
-      cost: 0.00002
+      inputTokens: 57
     })
     expect(logged.error).toBeUndefined()
     expect(typeof logged.ms).toBe('number')
@@ -1155,7 +1153,7 @@ describe('真模型注册表（假 fetch，不发真请求）', () => {
       inputTokens: 9,
       answers: WIRE_ANSWERS
     })
-    expect(records()[0].cost).toBeGreaterThanOrEqual(0)
+    expect('cost' in records()[0]).toBe(false)
     expect(cc.warn).not.toHaveBeenCalled()
   })
 

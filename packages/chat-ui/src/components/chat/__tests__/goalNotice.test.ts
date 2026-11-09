@@ -78,14 +78,14 @@ function statusNotice(
   } else if (event === 'impossible') {
     text = `The checker judged the goal impossible: ${escapeText(extra.reason ?? '')} Stop working on it.`
   } else if (event === 'paused') {
-    text = "The goal's spending limit is reached, so the goal is paused."
+    text = 'The goal reached its limit on continuations, so it is paused.'
   } else if (event === 'cleared') {
     text = 'The user cleared the goal. Do not continue working toward it unless asked.'
   } else {
     text = 'The user replaced this goal with a new one.'
   }
   const attrs: Record<string, string> = { id: 'g_1', event }
-  if (event === 'paused') attrs.reason = extra.pauseReason ?? 'budget'
+  if (event === 'paused') attrs.reason = extra.pauseReason ?? 'turns'
   return block('goal-status', attrs, text)
 }
 

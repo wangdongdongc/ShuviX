@@ -2,16 +2,16 @@
  * 智能体监视端到端（隔离实例）—— 主窗 RightPanel 的 agents tab（AgentMonitorPanel）
  * 与设置窗口「监视器」页的回落，外加对话区顶部状态横幅（StatusBanner）的 profile 标记
  * （AgentProfileChip）与监视面板的联动（AM-10 ~ AM-17），提示词缓存命中率（AM-18 ~ AM-22）、
- * 花费（AM-23）与「只列打开着的会话」（AM-24，跨重启）。P3-13：数据源是打开着的 durable 会话的
- * `monitorSnapshot()` —— 没有事件计数器、没有孤儿（会话删了它的行一起没），缓存与花费取自 `pi.usage`。
+ * 没有花费（AM-23，2026-11-09：ShuviX 不算钱）与「只列打开着的会话」（AM-24，跨重启）。P3-13：数据源是打开着的
+ * durable 会话的 `monitorSnapshot()` —— 没有事件计数器、没有孤儿（会话删了它的行一起没），缓存取自 `pi.usage`。
  *
  * 实例复用（减少启动开销，故几组用例收在同一文件）：
  *   - 组一（AM-1/2/10/8/9/9b）：无 provider 的全新实例 —— 空态、tab 存在性、未发消息的
  *     新会话横幅缺席、设置页形态（三个子页）与旧 hash 回落、应用日志子页读到本实例的 main.log；
  *   - 组二（AM-3~7、AM-11~23）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、
  *     删会话连同派生行一起消失、详情手风琴，横幅标记的出现/相位/点击三联动/筛选 chip，缓存命中率的
- *     三态（尚无用量 / 未上报 / 百分数）、按 token 加权的累计、中止不计入而零内容空回复计入（它也是花费，
- *     PIN-03）、未定价模型的花费格、窄面板不横向溢出；
+ *     三态（尚无用量 / 未上报 / 百分数）、按 token 加权的累计、中止不计入而零内容空回复计入（它也占了输入，
+ *     PIN-03）、行与 IPC 里都没有花费、窄面板不横向溢出；
  *   - 组三（AM-24）：`stop({keepHome})` + 重开 —— 重开之后没看过的会话不列；打开那条空闲的会话也不列
  *     （option A：锁 = 「agent 在本进程里初始化过」，上个进程留下的锁在打开时清掉），发一条之后根行才出现；
  *     它从前的 echo 子 agent 不列（PIN-02）。
@@ -23,7 +23,7 @@
  *     看完 `provider.release()` 并等它离开列表。
  *
  * 观测面：列表 / 详情数据一律走 IPC（`agent.monitorList` / `agent.monitorDetail`），DOM 只断
- * 呈现（相位灯配色与脉冲、血缘箭头、花费格、空态在屏、手风琴展开态、横幅标记）；空态文案是 i18n
+ * 呈现（相位灯配色与脉冲、血缘箭头、空态在屏、手风琴展开态、横幅标记）；空态文案是 i18n
  * 产物，只认结构与非空（AM-17 的「筛选空态 ≠ 通用空态」是同实例内的文案比对，不钉具体句子）。
  * 轮次收尾靠 `agent.prompt` 自己落定（durable 的 submitUser 等这一轮落定才答），扣住的轮次靠监视
  * 列表的相位回到 idle。用例有顺序依赖：AM-4 续 AM-3 的会话，AM-6 删 AM-5 的会话，
@@ -31,7 +31,7 @@
  * 所有「恰 N 条」断言都按 sid 过滤做相对比较，不做全量计数。
  *
  * 缓存命中率（AM-18 ~ AM-21）共用一条会话 `sids.cache`，累计数值逐条往后接（AM-19 断的是
- * AM-18 那一轮收尾后的累计，AM-20 在它之上加两轮，AM-21 再来一次中止与一次零内容）；AM-23 读它的花费，
+ * AM-18 那一轮收尾后的累计，AM-20 在它之上加两轮，AM-21 再来一次中止与一次零内容）；AM-23 断它没有花费，
  * AM-22 用 AM-21 收尾时的全量列表量宽度。这一段刻意放在 **AM-17 之后**：那时 echo hook 已经摘掉，
  * 新会话的轮次不会再派生 echo-agent —— 否则列表里多出 spawned 行、而且它会争用脚本。
  * 行定位靠横幅 chip 按 `sids.cache` 筛选（AM-13 那套），让列表只剩这一行；数值一律走 IPC，
@@ -40,9 +40,6 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import en from '../../../../../packages/chat-protocol/src/i18n/locales/en.json'
-import ja from '../../../../../packages/chat-protocol/src/i18n/locales/ja.json'
-import zh from '../../../../../packages/chat-protocol/src/i18n/locales/zh.json'
 import { listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -95,12 +92,7 @@ interface MonitorEntry {
   model: { id: string }
   contextTokens: number
   cache: CacheTriple & { reported: boolean; last?: CacheTriple }
-  cost: { total: number }
-  sessionCost: number
 }
-
-/** 花费格「未定价」悬停说明的三语原文（AM-23：实例的界面语言不钉，三者之一即可） */
-const UNPRICED_TITLES = [en, zh, ja].map((bundle) => bundle.panel.agentCostUnpricedTitle)
 
 interface MonitorDetail {
   systemPrompt: string
@@ -976,21 +968,22 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     await pane.clearFilter()
   })
 
-  it('AM-23 花费：自定义 provider 的模型没有价格 —— IPC cost 与 sessionCost 都是 0；行里花费格是「—」，悬停是「未定价」说明', async () => {
+  it('AM-23 没有花费：IPC 条目里没有 cost / sessionCost；行里没有花费格、没有金额', async () => {
     const entry = await cacheEntry()
-    expect(entry.cost).toEqual({ total: 0 })
-    expect(entry.sessionCost).toBe(0)
+    expect(Object.keys(entry)).not.toContain('cost')
+    expect(Object.keys(entry)).not.toContain('sessionCost')
     const total = (await monitorList(app.main)).length
     const rows = await until(async () => {
       const rs = await pane.rows()
       return rs.length === total ? rs : null
     }, 'rows restored to the full list')
     const row = rows.find((r) => r.text.includes('AM-18 cache lane'))
-    expect(row?.cost?.text).toBe('—')
-    expect(UNPRICED_TITLES).toContain(row?.cost?.title)
+    expect(row).toBeDefined()
+    expect(row!.costCell).toBe(false)
+    expect(row!.text).not.toContain('$')
   })
 
-  it('AM-22 窄面板（320px）：全量列表收起与展开时都不横向溢出（行里多了命中率格与花费格）', async () => {
+  it('AM-22 窄面板（320px）：全量列表收起与展开时都不横向溢出（行里多了命中率格）', async () => {
     await pane.setPanelWidth(320)
     // 全量列表：AM-3 的根、各条会话的根、带命中率格的缓存会话行（echo 派生行跑完即卸，不在其中）
     const total = (await monitorList(app.main)).length

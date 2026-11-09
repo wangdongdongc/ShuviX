@@ -101,10 +101,6 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.notificationGoal',
     desc: 'true | false — notify when a session goal is met, judged impossible, or paused by ShuviX (default true)'
   },
-  'goal.defaultCostUsd': {
-    labelKey: 'settings.goalDefaultCost',
-    desc: 'number as string (USD) | off — spending limit for new session goals (default 5); off = no limit'
-  },
   'goal.defaultMaxTurns': {
     labelKey: 'settings.goalDefaultTurns',
     desc: 'number as string — how many times ShuviX continues a goal before pausing it (default 50)'

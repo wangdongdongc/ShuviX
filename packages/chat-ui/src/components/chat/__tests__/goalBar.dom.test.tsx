@@ -3,13 +3,13 @@
  * 目标栏（GoalBar，目标模式 docs/goal-mode-design.md §9.1；jsdom）。后端是假的 `window.api.agent.goalAct`。
  *
  *   GB-1 没有目标、没开编辑器 → 什么都不画
- *   GB-2 进行中：一行状态（第几轮 / 上限、花费 / 上限）+ 实验标签；按钮 暂停 / 编辑 / 清除；暂停 → goalAct(pause)
+ *   GB-2 进行中：一行状态（第几轮 / 上限，没有钱）+ 实验标签；按钮 暂停 / 编辑 / 清除；暂停 → goalAct(pause)
  *   GB-3 判定中 → 「Checking the goal…」；目标检查被停用 → 警告行；最近判定一行，展开后看原文与下一步
- *   GB-4 暂停在预算上：调高上限并继续 / 继续 / 编辑 / 清除；调高 → 空花费 = `costUsd: null`，先 edit 再 resume；
- *        resume 被拒 → 表单留着、宿主那句话就地显示
+ *   GB-4 暂停在轮数上限上：调高上限并继续 / 继续 / 编辑 / 清除；调高 → 先 edit 再 resume；
+ *        resume 被拒 → 表单留着、宿主那句话就地显示；旧版本留下的认不出的原因（budget）→ 只说「已暂停」、不给调高
  *   GB-5 达成 / 做不到：沿用原文再设 / 移除，没有「编辑」；再设 → set(原文)
  *   GB-6 操作被拒 → 栏上就地显示那句话
- *   GB-7 设新目标（输入框只发了 `/goal`）：上限初值取设置（`off` → 空）；没动过上限就不交 limits；动过就交
+ *   GB-7 设新目标（输入框只发了 `/goal`）：上限初值取设置；没有花费上限这一格；没动过上限就不交 limits；动过就交
  *   GB-8 编辑：原文没改就不交 objective；轮数不合法 → 本地报错，不调 goalAct
  *   GB-9 触屏密度：按钮至少 40px 高
  */
@@ -43,12 +43,10 @@ function goal(over: Partial<GoalView> = {}): GoalView {
     objective: 'All tests in src/ pass',
     status: 'active',
     setAt: 0,
-    limits: { costUsd: 10, maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
+    limits: { maxTurns: 50, stallTurns: 3 },
     turns: 7,
     stalls: 0,
     activeMs: 0,
-    costUsd: 3.1,
     judging: false,
     checkerMissing: false,
     ...over
@@ -143,7 +141,7 @@ describe('GoalBar', () => {
     const state = container.querySelector('[data-goal-state]')!.textContent
     expect(state).toContain('Goal in progress')
     expect(state).toContain('turn 7/50')
-    expect(state).toContain('$3.10 / $10')
+    expect(state).not.toContain('$')
     expect(container.querySelector('[data-experimental="goal"]')).not.toBeNull()
     expect(actionNames()).toEqual(['pause', 'edit', 'clear'])
 
@@ -181,16 +179,18 @@ describe('GoalBar', () => {
       'All tests in src/ pass'
     )
     expect(details.textContent).toContain('Fix the redirect')
-    expect(details.querySelector('[data-goal-limits]')!.textContent).toContain('spending limit $10')
+    const limits = details.querySelector('[data-goal-limits]')!.textContent
+    expect(limits).toContain('up to 50 continuations')
+    expect(limits).not.toContain('$')
     // 展开后折叠行让位
     expect(container.querySelector('[data-goal-verdict]')).toBeNull()
   })
 
-  it('GB-4 暂停在预算上：调高上限并继续 = 先 edit（空花费 → null）再 resume；resume 被拒就地显示', async () => {
-    setGoal(goal({ status: 'paused', pauseReason: 'budget', costUsd: 10 }))
+  it('GB-4 暂停在轮数上限上：调高上限并继续 = 先 edit 再 resume；resume 被拒就地显示', async () => {
+    setGoal(goal({ status: 'paused', pauseReason: 'turns', turns: 50 }))
     await mount()
     expect(container.querySelector('[data-goal-state]')!.textContent).toContain(
-      'Paused — spending limit reached'
+      'Paused — continuation limit reached'
     )
     expect(actionNames()).toEqual(['raise', 'resume', 'edit', 'clear'])
 
@@ -201,10 +201,11 @@ describe('GoalBar', () => {
     expect(actionNames()).toEqual([])
 
     results.push({ ok: true }, { ok: false, error: en.goal.resumeBlocked.turns })
-    await setInput(container.querySelector<HTMLInputElement>('[data-goal-cost-input]')!, '')
+    expect(container.querySelector('[data-goal-cost-input]')).toBeNull()
+    await setInput(container.querySelector<HTMLInputElement>('[data-goal-turns-input]')!, '60')
     await submit()
     expect(calls()).toEqual([
-      { sessionId: SID, action: { type: 'edit', limits: { costUsd: null, maxTurns: 50 } } },
+      { sessionId: SID, action: { type: 'edit', limits: { maxTurns: 60 } } },
       { sessionId: SID, action: { type: 'resume' } }
     ])
     expect(container.querySelector('[data-goal-editor-error]')!.textContent).toBe(
@@ -215,6 +216,15 @@ describe('GoalBar', () => {
     // 再来一次，这回都成了：编辑器关上
     await submit()
     expect(useChatStore.getState().goalEditor).toBeNull()
+  })
+
+  it('GB-4 旧版本留下的暂停（原因 budget 读不出 → 没有原因）：只说「已暂停」，不给调高', async () => {
+    setGoal(goal({ status: 'paused' }))
+    await mount()
+    const state = container.querySelector('[data-goal-state]')!.textContent
+    expect(state).toContain(en.goal.notice.paused)
+    expect(state).not.toContain(en.goal.reason.user)
+    expect(actionNames()).toEqual(['resume', 'edit', 'clear'])
   })
 
   it.each(['met', 'impossible'] as const)(
@@ -243,14 +253,14 @@ describe('GoalBar', () => {
   })
 
   it('GB-7 设新目标：上限初值取设置；没动过不交 limits，动过就交', async () => {
-    settings['goal.defaultCostUsd'] = 'off'
+    settings['goal.defaultCostUsd'] = '7'
     settings['goal.defaultMaxTurns'] = '20'
     useChatStore.getState().openGoalEditor(SID, 'new')
     await mount()
     expect(bar()!.getAttribute('data-goal-status')).toBe('new')
-    const cost = container.querySelector<HTMLInputElement>('[data-goal-cost-input]')!
+    expect(container.querySelector('[data-goal-cost-input]')).toBeNull()
     const turns = container.querySelector<HTMLInputElement>('[data-goal-turns-input]')!
-    expect([cost.value, turns.value]).toEqual(['', '20'])
+    expect(turns.value).toBe('20')
 
     // 原文空着不能保存
     expect(container.querySelector<HTMLButtonElement>('[data-goal-editor-save]')!.disabled).toBe(
@@ -272,11 +282,11 @@ describe('GoalBar', () => {
       container.querySelector<HTMLTextAreaElement>('[data-goal-objective-input]')!,
       'Ship it'
     )
-    await setInput(container.querySelector<HTMLInputElement>('[data-goal-cost-input]')!, '2.5')
+    await setInput(container.querySelector<HTMLInputElement>('[data-goal-turns-input]')!, '30')
     await submit()
     expect(calls()[1]).toEqual({
       sessionId: SID,
-      action: { type: 'set', objective: 'Ship it', limits: { costUsd: 2.5, maxTurns: 20 } }
+      action: { type: 'set', objective: 'Ship it', limits: { maxTurns: 30 } }
     })
   })
 
@@ -295,7 +305,7 @@ describe('GoalBar', () => {
     await setInput(turns, '80')
     await submit()
     expect(calls()).toEqual([
-      { sessionId: SID, action: { type: 'edit', limits: { costUsd: 10, maxTurns: 80 } } }
+      { sessionId: SID, action: { type: 'edit', limits: { maxTurns: 80 } } }
     ])
 
     await click(action('edit'))
@@ -309,7 +319,7 @@ describe('GoalBar', () => {
       action: {
         type: 'edit',
         objective: 'All tests pass, and lint is clean',
-        limits: { costUsd: 10, maxTurns: 50 }
+        limits: { maxTurns: 50 }
       }
     })
   })

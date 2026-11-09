@@ -78,8 +78,6 @@ export const GOAL_PAUSE_REASONS = [
   'restart',
   /** 会话是 fork 出来的：两条会话不该同时朝同一个目标改同一份东西 */
   'forked',
-  /** 花费到了上限 */
-  'budget',
   /** 宿主续跑的轮数到了上限 */
   'turns',
   /** 连续几轮没有进展 */
@@ -95,8 +93,6 @@ export type GoalPauseReason = (typeof GOAL_PAUSE_REASONS)[number]
 
 /** 宿主执行的上限。设定时取设置里的默认值，之后可以在目标栏单独改 */
 export interface GoalLimits {
-  /** 花费上限（美元）；不设 = 不限。模型价格未知时花费恒为 0，这一条不生效 */
-  costUsd?: number
   /** 宿主为目标续跑的轮数上限（用户自己发的轮不计） */
   maxTurns: number
   /** 连续无进展多少轮就暂停 */
@@ -105,7 +101,7 @@ export interface GoalLimits {
   wallClockMin?: number
 }
 
-export const DEFAULT_GOAL_LIMITS: GoalLimits = { costUsd: 5, maxTurns: 50, stallTurns: 3 }
+export const DEFAULT_GOAL_LIMITS: GoalLimits = { maxTurns: 50, stallTurns: 3 }
 
 export interface GoalVerdictRecord {
   verdict: GoalVerdictKind
@@ -124,8 +120,6 @@ export interface GoalRecord {
   pauseReason?: GoalPauseReason
   setAt: number
   limits: GoalLimits
-  /** 设定时会话已经花掉的（美元）—— 目标的花费 = 此后的增量 */
-  baselineCostUsd: number
   /** 宿主为目标续跑的轮数 */
   turns: number
   /** 连续无进展的轮数 */
@@ -148,8 +142,6 @@ export interface GoalRecord {
 /** 推给前端的目标视图：记录 + 宿主现算的事实 */
 export interface GoalView extends GoalRecord {
   sessionId: string
-  /** 目标期间的花费（美元，含目标期间新建的子会话） */
-  costUsd: number
   /** 判定正在进行 */
   judging: boolean
   /** 没有任何 hook 订阅 `goal.check`（内置的 goal-check 被停用了）—— 目标栏要明说 */
@@ -164,7 +156,7 @@ export function goalActiveMs(
   return goal.activeMs + (goal.activeSince !== undefined ? Math.max(0, now - goal.activeSince) : 0)
 }
 
-/** 上限补丁：按键覆盖；`null` = 不限（只对花费、时长有效 —— 经 JSON 传不了 undefined） */
+/** 上限补丁：按键覆盖；`null` = 不限（只对时长有效 —— 经 JSON 传不了 undefined） */
 export type GoalLimitsPatch = { [K in keyof GoalLimits]?: GoalLimits[K] | null }
 
 /** 前端对目标的操作（经 ChatApi） */
@@ -182,7 +174,7 @@ function limitsPatchOk(value: unknown): boolean {
   if (value === undefined) return true
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (!['costUsd', 'maxTurns', 'stallTurns', 'wallClockMin'].includes(key)) return false
+    if (!['maxTurns', 'stallTurns', 'wallClockMin'].includes(key)) return false
     if (item !== null && item !== undefined && typeof item !== 'number') return false
   }
   return true

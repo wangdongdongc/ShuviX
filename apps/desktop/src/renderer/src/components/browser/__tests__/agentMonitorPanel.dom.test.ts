@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * 智能体监控面板（AgentMonitorPanel，P3-13-20…23）—— 新的条目形状：没有孤儿徽章、没有累计计数器，多了花费
- * 格（PIN-09）、会话总花费、interrupted 相位（PIN-05），缓存格按 `pi.usage` 的派生（PIN-03）。
+ * 智能体监控面板（AgentMonitorPanel，P3-13-20…23）—— 新的条目形状：没有孤儿徽章、没有累计计数器、没有花费
+ * （2026-11-09：ShuviX 不算钱，原先的花费格与会话总花费都删了），多了 interrupted 相位（PIN-05），缓存格按
+ * `pi.usage` 的派生（PIN-03）。
  *
- *  20 行：没有孤儿徽章；派生行有血缘箭头、根行没有；花费格 0 → 「—」（悬停：未定价）、< 0.01 → `<$0.01`、
- *     其余 `$x.xx`；花费格不收缩、单行排版（@xl）定宽 —— 320 px 的窄面板里不会把行撑出横向滚动
- *  21 详情：没有累计计数器；队列是两个数 `steer / followUp`；花费字段是这一行自己的；只有根的详情有会话总
- *     花费；手风琴与刷新（nonce）照旧
+ *  20 行：没有孤儿徽章；派生行有血缘箭头、根行没有；没有花费格；320 px 的窄面板里标题与模型可收缩，不会把行撑出
+ *     横向滚动
+ *  21 详情：没有累计计数器；队列是两个数 `steer / followUp`；没有花费字段；手风琴与刷新（nonce）照旧
  *  22 缓存格：三项全 0 → 空占位、详情两格「尚无用量」；有用量但没上报 → 「—」+ 未上报说明；上报了 → `NN%`，
  *     详情的最近一次取 `last`，累计不再插调用次数
  *  23 相位灯：turn 绿色脉冲、compaction 琥珀色脉冲、interrupted 不脉冲且与 idle 配色不同；摘要里的「未在运行」
@@ -56,14 +56,12 @@ function entry(over: Partial<AgentMonitorEntry> = {}): AgentMonitorEntry {
     toolCount: 2,
     contextTokens: 0,
     cache: { input: 0, cacheRead: 0, cacheWrite: 0, reported: false },
-    cost: { total: 0 },
-    sessionCost: 0,
     rootSessionTitle: 'Session',
     ...over
   }
 }
 
-const ROOT = entry({ cost: { total: 1.234 }, sessionCost: 2.5, queue: { steer: 1, followUp: 2 } })
+const ROOT = entry({ queue: { steer: 1, followUp: 2 } })
 const SPAWNED = entry({
   agentId: 'sub-a',
   kind: 'spawned',
@@ -71,8 +69,7 @@ const SPAWNED = entry({
   depth: 1,
   profileName: 'explore',
   displayName: 'Explorer',
-  dispatch: 'tool',
-  cost: { total: 0.004 }
+  dispatch: 'tool'
 })
 const HOOK = entry({
   agentId: 'sub-h',
@@ -81,8 +78,7 @@ const HOOK = entry({
   depth: 1,
   profileName: 'titler',
   displayName: 'Titler',
-  dispatch: 'hook',
-  cost: { total: 0 }
+  dispatch: 'hook'
 })
 
 const INFO: AgentRuntimeInfo = {
@@ -128,8 +124,6 @@ const rows = (): HTMLButtonElement[] => [
 const rowBox = (i: number): HTMLElement => rows()[i]!.parentElement!
 const detailOf = (i: number): HTMLElement | null =>
   (rowBox(i).children[1] as HTMLElement | undefined) ?? null
-const costCell = (i: number): HTMLElement =>
-  rows()[i]!.querySelector<HTMLElement>('[data-agent-cost]')!
 const phaseDot = (i: number): HTMLElement =>
   rows()[i]!.querySelector<HTMLElement>('[data-agent-phase]')!
 
@@ -181,33 +175,24 @@ describe('P3-13-20 rows', () => {
     expect(rows()[2]!.querySelector('.lucide-corner-down-right')).not.toBeNull()
   })
 
-  it('P3-13-20 the cost cell (PIN-09): 1.234 → $1.23, 0.004 → <$0.01, 0 → — with the unpriced title', async () => {
+  it('P3-13-20 no cost cell: no dollar amount anywhere in the rows', async () => {
     await mount([ROOT, SPAWNED, HOOK])
-    expect(costCell(0).textContent).toBe('$1.23')
-    expect(costCell(0).title).toBe(tr('panel.agentCostTitle'))
-    expect(costCell(1).textContent).toBe('<$0.01')
-    expect(costCell(1).title).toBe(tr('panel.agentCostTitle'))
-    expect(costCell(2).textContent).toBe('—')
-    expect(costCell(2).title).toBe(tr('panel.agentCostUnpricedTitle'))
-    expect(costCell(2).title).not.toBe(costCell(0).title)
+    expect(container.querySelector('[data-agent-cost]')).toBeNull()
+    for (const row of rows()) expect(row.textContent).not.toContain('$')
+    expect(i18n.exists('panel.agentCostTitle')).toBe(false)
   })
 
-  it('P3-13-20 at a narrow (320 px) container the cost cell never grows the row: shrink-0, fixed width only at @xl', async () => {
+  it('P3-13-20 at a narrow (320 px) container the title and model shrink instead of growing the row', async () => {
     container.style.width = '320px'
     await mount([ROOT])
-    const cell = costCell(0)
-    const classes = cell.className.split(/\s+/)
-    expect(classes).toContain('shrink-0')
-    expect(classes).toContain('@xl:w-14')
-    expect(classes.some((c) => /^w-/.test(c))).toBe(false)
-    // 标题与模型可收缩（min-w-0 + truncate），是窄面板不溢出的另一半
+    // 标题与模型可收缩（min-w-0 + truncate），窄面板不溢出
     const shrinkable = rows()[0]!.querySelectorAll('.min-w-0.truncate')
     expect(shrinkable.length).toBeGreaterThanOrEqual(2)
   })
 })
 
 describe('P3-13-21 detail', () => {
-  it('P3-13-21 no totals field; queue is two numbers; the own cost; the session total on the root only', async () => {
+  it('P3-13-21 no totals field; queue is two numbers; no cost fields', async () => {
     await mount([ROOT, SPAWNED])
     await click(rows()[0]!)
     const rootDetail = detailOf(0)!
@@ -215,32 +200,25 @@ describe('P3-13-21 detail', () => {
     expect(i18n.exists('settings.agentMonitorFieldCounters')).toBe(false)
     expect(rootDetail.textContent).not.toContain('累计')
     expect(rootDetail.querySelector('[data-agent-field="queue"]')!.textContent).toBe('1 / 2')
-    expect(rootDetail.querySelector('[data-agent-field="cost"]')!.textContent).toContain('$1.23')
-    expect(rootDetail.textContent).toContain(tr('settings.agentMonitorFieldCost'))
-    expect(rootDetail.querySelector('[data-agent-field="session-cost"]')!.textContent).toBe('$2.50')
-    expect(rootDetail.textContent).toContain(tr('settings.agentMonitorFieldSessionCost'))
+    expect(rootDetail.querySelector('[data-agent-field="cost"]')).toBeNull()
+    expect(rootDetail.querySelector('[data-agent-field="session-cost"]')).toBeNull()
+    expect(rootDetail.textContent).not.toContain('$')
     expect(rootDetail.textContent).toContain(tr('settings.agentMonitorFieldTools'))
 
     // 手风琴：展开另一条，前一条收起
     await click(rows()[1]!)
     expect(detailOf(0)).toBeNull()
     const spawnedDetail = detailOf(1)!
-    expect(spawnedDetail.querySelector('[data-agent-field="session-cost"]')).toBeNull()
-    expect(spawnedDetail.querySelector('[data-agent-field="cost"]')!.textContent).toContain(
-      '<$0.01'
-    )
+    expect(spawnedDetail.querySelector('[data-agent-field="cost"]')).toBeNull()
     expect(spawnedDetail.querySelector('[data-agent-field="queue"]')!.textContent).toBe('0 / 0')
     // 点同一条 = 收起
     await click(rows()[1]!)
     expect(detailOf(1)).toBeNull()
   })
 
-  it('P3-13-21 an unpriced row: the cost field reads — with the unpriced note; refresh (nonce) re-reads the detail', async () => {
+  it('P3-13-21 refresh (nonce) re-reads the detail', async () => {
     await mount([HOOK])
     await click(rows()[0]!)
-    const field = detailOf(0)!.querySelector('[data-agent-field="cost"]')!
-    expect(field.textContent).toContain('—')
-    expect(field.textContent).toContain(tr('settings.agentMonitorCostUnpriced'))
     expect(api.monitorDetail).toHaveBeenCalledTimes(1)
     const refresh = container.querySelector<HTMLButtonElement>(
       `button[title="${tr('common.refresh')}"]`

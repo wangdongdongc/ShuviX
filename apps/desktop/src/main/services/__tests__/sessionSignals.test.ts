@@ -363,17 +363,16 @@ describe('P3-08-54 询问走 subscribeInputs', () => {
   })
 })
 
-describe('WR-1 根运行起止的观察者（目标模式）', () => {
+describe('WR-1 根运行结束的观察者（目标模式）', () => {
   afterEach(() => {
     setSessionRunObserver(null)
   })
 
   it(
-    '根的每一对 → rootRunStarted / rootRunEnded(根会话 id, 结局)；中止 → aborted、失败 → error',
+    '根的每一次结束 → rootRunEnded(根会话 id, 结局)；中止 → aborted、失败 → error',
     async () => {
       const calls: string[] = []
       setSessionRunObserver({
-        rootRunStarted: (sid) => void calls.push(`start:${sid}`),
         rootRunEnded: (sid, reason) => void calls.push(`end:${sid}:${reason}`)
       })
       const { t, signals } = await rigWith()
@@ -390,14 +389,7 @@ describe('WR-1 根运行起止的观察者（目标模式）', () => {
       t.kit.queue(modelError('503 boom'))
       await session.submitUser('again')
       await flush()
-      expect(calls).toEqual([
-        'start:s1',
-        'end:s1:ok',
-        'start:s1',
-        'end:s1:aborted',
-        'start:s1',
-        'end:s1:error'
-      ])
+      expect(calls).toEqual(['end:s1:ok', 'end:s1:aborted', 'end:s1:error'])
     },
     T
   )
@@ -407,7 +399,6 @@ describe('WR-1 根运行起止的观察者（目标模式）', () => {
     async () => {
       const calls: string[] = []
       setSessionRunObserver({
-        rootRunStarted: (sid) => void calls.push(`start:${sid}`),
         rootRunEnded: (sid, reason) => void calls.push(`end:${sid}:${reason}`)
       })
       const d = await hostD()
@@ -440,9 +431,6 @@ describe('WR-1 根运行起止的观察者（目标模式）', () => {
     async () => {
       const ended: string[] = []
       setSessionRunObserver({
-        rootRunStarted: () => {
-          throw new Error('observer down')
-        },
         rootRunEnded: (sid, reason) => {
           ended.push(`${sid}:${reason}`)
           throw new Error('observer down')

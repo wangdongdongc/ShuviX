@@ -19,17 +19,12 @@ export function escapeGoalAttr(text: string): string {
   return escapeGoalText(text).replace(/"/g, '&quot;')
 }
 
-function money(value: number): string {
-  return `$${value.toFixed(2)}`
-}
-
-/** 「用了多少、还剩多少」一行 */
-export function goalUsageLine(goal: GoalRecord, costUsd: number): string {
-  const cost =
-    goal.limits.costUsd !== undefined
-      ? `${money(costUsd)} of ${money(goal.limits.costUsd)}`
-      : `${money(costUsd)} (no spending limit)`
-  return `Used: ${cost} · continuation ${goal.turns} of ${goal.limits.maxTurns}.`
+/**
+ * 「续跑了几轮、上限几轮」一行。`Used: ` 开头不能改：目标栏的通知行靠它切出判定理由（chat-ui goalNotice），
+ * 旧会话里的续跑消息也是这个开头。
+ */
+export function goalUsageLine(goal: GoalRecord): string {
+  return `Used: continuation ${goal.turns} of ${goal.limits.maxTurns}.`
 }
 
 function block(kind: GoalNoticeKind, attrs: Record<string, string>, body: string): string {
@@ -53,7 +48,6 @@ function specLine(goal: GoalRecord): string {
 /** 续跑（判定 not_met）：每轮重述目标原文 —— 压缩多少次，最近一条续跑消息都带着完整目标（§5） */
 export function renderGoalContinue(
   goal: GoalRecord,
-  costUsd: number,
   verdict: { reason: string; nextStep?: string }
 ): string {
   const lines = [
@@ -63,13 +57,13 @@ export function renderGoalContinue(
     `Not met yet. Checker: ${escapeGoalText(verdict.reason)}`
   ]
   if (verdict.nextStep) lines.push(`Suggested next step: ${escapeGoalText(verdict.nextStep)}`)
-  lines.push(goalUsageLine(goal, costUsd))
+  lines.push(goalUsageLine(goal))
   lines.push('Keep working toward the goal. Show the checks you run and their results.')
   return block('goal-continue', { id: goal.id, turn: String(goal.turns) }, lines.join('\n'))
 }
 
 /** 恢复（用户点继续）且会话空闲：先让它接着干，跑完照常判定 */
-export function renderGoalResumed(goal: GoalRecord, costUsd: number): string {
+export function renderGoalResumed(goal: GoalRecord): string {
   return block(
     'goal-continue',
     { id: goal.id, turn: String(goal.turns), resumed: 'true' },
@@ -78,7 +72,7 @@ export function renderGoalResumed(goal: GoalRecord, costUsd: number): string {
       objectiveBlock(goal.objective),
       specLine(goal),
       goal.lastVerdict ? `Last check: ${escapeGoalText(goal.lastVerdict.reason)}` : '',
-      goalUsageLine(goal, costUsd),
+      goalUsageLine(goal),
       'Continue working toward it.'
     ]
       .filter((line) => line !== '')
@@ -95,18 +89,6 @@ export function renderGoalCheckin(goal: GoalRecord, waitedMin: number): string {
       `Background work for the goal has been running for ${Math.round(waitedMin)} minutes.`,
       'List what is still running and read its output. If it is making progress, keep waiting (do not poll in a loop). If it is stuck, fix or stop it and carry on with the goal:',
       objectiveBlock(goal.objective)
-    ].join('\n')
-  )
-}
-
-/** 运行中花费越线（§6.1）：这一轮收尾，说明做到哪了 */
-export function renderGoalBudget(goal: GoalRecord, costUsd: number): string {
-  return block(
-    'goal-budget',
-    { id: goal.id },
-    [
-      `The goal's spending limit is reached (${goalUsageLine(goal, costUsd)})`,
-      'Finish this turn soon: stop starting new work, and say what is done, what is verified, and what remains. The goal is paused until the user raises the limit.'
     ].join('\n')
   )
 }
@@ -133,7 +115,6 @@ const PAUSE_TEXT: Record<GoalPauseReason, string> = {
   stopped: 'The user stopped the turn, so the goal is paused.',
   restart: 'ShuviX restarted while the goal was in progress, so the goal is paused.',
   forked: 'This session was forked from another one, so the goal is paused here.',
-  budget: "The goal's spending limit is reached, so the goal is paused.",
   turns: 'The goal reached its limit on continuations, so it is paused.',
   stalled: 'Several turns in a row made no progress, so the goal is paused.',
   'wall-clock': 'The goal reached its time limit, so it is paused.',

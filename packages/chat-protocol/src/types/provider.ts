@@ -65,6 +65,4 @@ export interface ModelCapabilities {
   pdfInput?: boolean
   maxInputTokens?: number
   maxOutputTokens?: number
-  inputCostPerToken?: number
-  outputCostPerToken?: number
 }

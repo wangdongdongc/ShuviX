@@ -5,7 +5,7 @@
  * 三件事：
  *  - `phase` + `lastActivityAt` → 区分「在跑」「跑完了闲着」「上个进程留下、停在原地」（interrupted）；
  *  - `contextTokens` / `model.contextWindow` → 它占着多大的上下文（离自动压缩还有多远）；
- *  - `cache` / `cost` → 那段上下文里多少是命中缓存复用的、它花了多少钱（durable 的 `pi.usage` 账本）。
+ *  - `cache` → 那段上下文里多少是命中缓存复用的（durable 的 `pi.usage` 账本）。
  *
  * 数值一律取自 durable 会话（`DurableSession.monitorSnapshot()`），宿主只补充 pi 不可能知道的会话标题与
  * 根档案的显示名。没有事件计数器、没有「孤儿」：运行时住在会话里，会话没了它也就没了。
@@ -76,13 +76,6 @@ export interface AgentMonitorEntry {
   contextTokens: number
   /** 提示词缓存用量（命中率的原料，见 AgentMonitorCacheUsage） */
   cache: AgentMonitorCacheUsage
-  /**
-   * 这个 agent 自己的花费（它的对话的 `pi.usage`：按模型与按工具的桶，含重试、压缩）。自定义 provider 的
-   * 模型没有价格 → 恒为 0（面板显示「—」与「未定价」说明）。根 agent 回退 fork 之后从 0 起算。
-   */
-  cost: { total: number }
-  /** 整条会话的花费（`harness.usage()`：全部对话，含起标题、权限审查与回退丢下的分支） */
-  sessionCost: number
 
   /** 宿主补充：所属会话标题（认不出 uuid 时的人类可读名） */
   rootSessionTitle?: string

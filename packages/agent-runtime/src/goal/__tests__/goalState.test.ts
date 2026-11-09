@@ -4,8 +4,8 @@
  *   GS-1  createGoal：进行中、计数归零、activeSince = setAt = now；上限是拷贝
  *   GS-2  pause / resume：只有进行中能暂停（累计时长、去掉 activeSince）、只有暂停的能恢复（停滞清零、轮数保留）；入参不变
  *   GS-3  editGoal：换原文 → 停滞清零；同一原文 → 停滞保留；只改上限 → 合并；终态原样
- *   GS-4  mergeLimits：null / undefined 对花费、时长 = 不限，对轮数、停滞保持原值；非法值忽略；轮数、停滞取整且 ≥ 1
- *   GS-5  guardHit：budget > turns > stalled > wall-clock；等于即撞；没有花费上限不撞预算；时长算上当前时段
+ *   GS-4  mergeLimits：null / undefined 对时长 = 不限，对轮数、停滞保持原值；非法值忽略；轮数、停滞取整且 ≥ 1
+ *   GS-5  guardHit：turns > stalled > wall-clock；等于即撞；时长算上当前时段
  *   GS-6  afterRun（§4.1，2026-11-08 起不查护栏、不碰停滞）：中止 → stopped；出错 → run-error（都先于后台工作）；
  *         有后台工作 → wait（先于护栏）；否则 judge，noProgress = 没有工具调用或全部失败
  *   GS-7  applyVerdict：null → judge-unavailable；met / impossible → 结束（理由去空白、记 endedAt、累计时长、轮数不变）；
@@ -14,15 +14,14 @@
  *   GS-9  护栏在判定之后：最后一次续跑的成果照样判 —— 达成优先于上限；没达成才因上限暂停（A-1 的裁决）
  *   GS-10 停滞按 §6.3 计（B-3 修复）：每轮都有成功的工具调用但理由逐字重复 → 第 4 次判定时停（1,2,3）；
  *         没有工具调用 + 同一理由的两轮 → 停滞 2，不提前暂停
- *   GS-11 budgetCrossed：只对进行中、有花费上限、到了上限的为真
- *   GS-12 resumeBlockedBy：恢复后（停滞清零）仍撞着预算 / 轮数 / 时长 → 拒绝恢复；停滞不挡
+ *   GS-12 resumeBlockedBy：恢复后（停滞清零）仍撞着轮数 / 时长 → 拒绝恢复；停滞不挡
+ *   GS-13 目标没有花费上限（2026-11-09：ShuviX 不算花费）：默认上限、新目标、补丁都不带花费
  */
 import { describe, expect, it } from 'vitest'
 import type { GoalLimits, GoalLimitsPatch, GoalRecord } from '@shuvix/chat-protocol/types/goal'
 import {
   afterRun,
   applyVerdict,
-  budgetCrossed,
   createGoal,
   editGoal,
   guardHit,
@@ -33,7 +32,7 @@ import {
   type RunEndFacts
 } from '../goalState'
 
-const LIMITS: GoalLimits = { costUsd: 5, maxTurns: 50, stallTurns: 3 }
+const LIMITS: GoalLimits = { maxTurns: 50, stallTurns: 3 }
 
 function active(over: Partial<GoalRecord> = {}): GoalRecord {
   return {
@@ -42,7 +41,6 @@ function active(over: Partial<GoalRecord> = {}): GoalRecord {
     status: 'active',
     setAt: 1000,
     limits: { ...LIMITS },
-    baselineCostUsd: 0,
     turns: 0,
     stalls: 0,
     activeMs: 0,
@@ -57,7 +55,6 @@ function runFacts(over: Partial<RunEndFacts> = {}): RunEndFacts {
     backgroundWork: false,
     toolCalls: 1,
     toolSucceeded: 1,
-    costUsd: 0,
     now: 2000,
     ...over
   }
@@ -69,15 +66,14 @@ function frozen<T>(value: T): T {
 
 describe('GS-1 createGoal', () => {
   it('进行中、计数归零、setAt = activeSince = now；上限是拷贝；没有可选字段', () => {
-    const limits: GoalLimits = { costUsd: 7, maxTurns: 5, stallTurns: 2 }
-    const goal = createGoal({ id: 'g_1', objective: 'x', limits, baselineCostUsd: 2, now: 500 })
+    const limits: GoalLimits = { maxTurns: 5, stallTurns: 2 }
+    const goal = createGoal({ id: 'g_1', objective: 'x', limits, now: 500 })
     expect(goal).toStrictEqual({
       id: 'g_1',
       objective: 'x',
       status: 'active',
       setAt: 500,
-      limits: { costUsd: 7, maxTurns: 5, stallTurns: 2 },
-      baselineCostUsd: 2,
+      limits: { maxTurns: 5, stallTurns: 2 },
       turns: 0,
       stalls: 0,
       activeMs: 0,
@@ -100,7 +96,7 @@ describe('GS-2 pause / resume', () => {
 
   it('不在进行中的（暂停中 / 已达成）原样交回同一个对象', () => {
     const paused = pauseGoal(active(), 'user', 1500)
-    expect(pauseGoal(paused, 'budget', 2000)).toBe(paused)
+    expect(pauseGoal(paused, 'turns', 2000)).toBe(paused)
     const met = { ...active(), status: 'met' as const }
     expect(pauseGoal(met, 'user', 2000)).toBe(met)
   })
@@ -137,23 +133,23 @@ describe('GS-3 editGoal', () => {
 
   it('只改上限 → 合并，原文与停滞不动；暂停中的也能改', () => {
     const goal = active({ stalls: 1 })
-    const edited = editGoal(goal, { limits: { costUsd: 20 } })
-    expect(edited.limits).toStrictEqual({ costUsd: 20, maxTurns: 50, stallTurns: 3 })
+    const edited = editGoal(goal, { limits: { maxTurns: 80 } })
+    expect(edited.limits).toStrictEqual({ maxTurns: 80, stallTurns: 3 })
     expect(edited.stalls).toBe(1)
-    const paused = pauseGoal(goal, 'budget', 2000)
-    expect(editGoal(paused, { limits: { costUsd: 20 } }).limits.costUsd).toBe(20)
+    const paused = pauseGoal(goal, 'turns', 2000)
+    expect(editGoal(paused, { limits: { maxTurns: 80 } }).limits.maxTurns).toBe(80)
   })
 
   it('终态（met / impossible）原样交回', () => {
     for (const status of ['met', 'impossible'] as const) {
       const goal = { ...active(), status }
-      expect(editGoal(goal, { objective: 'Ship it', limits: { costUsd: 20 } })).toBe(goal)
+      expect(editGoal(goal, { objective: 'Ship it', limits: { maxTurns: 80 } })).toBe(goal)
     }
   })
 })
 
 describe('GS-4 mergeLimits', () => {
-  const base: GoalLimits = { costUsd: 5, maxTurns: 50, stallTurns: 3, wallClockMin: 60 }
+  const base: GoalLimits = { maxTurns: 50, stallTurns: 3, wallClockMin: 60 }
 
   it('没有补丁 → 拷贝（不是同一个对象）', () => {
     const merged = mergeLimits(base, undefined)
@@ -161,24 +157,12 @@ describe('GS-4 mergeLimits', () => {
     expect(merged).not.toBe(base)
   })
 
-  it('花费、时长给 undefined 或 null → 不限（删掉）；轮数、停滞给 undefined / null → 保持', () => {
-    expect(mergeLimits(base, { costUsd: undefined })).toStrictEqual({
-      maxTurns: 50,
-      stallTurns: 3,
-      wallClockMin: 60
-    })
-    expect(mergeLimits(base, { costUsd: null })).toStrictEqual({
-      maxTurns: 50,
-      stallTurns: 3,
-      wallClockMin: 60
-    })
+  it('时长给 undefined 或 null → 不限（删掉）；轮数、停滞给 undefined / null → 保持', () => {
     expect(mergeLimits(base, { wallClockMin: undefined })).toStrictEqual({
-      costUsd: 5,
       maxTurns: 50,
       stallTurns: 3
     })
     expect(mergeLimits(base, { wallClockMin: null })).toStrictEqual({
-      costUsd: 5,
       maxTurns: 50,
       stallTurns: 3
     })
@@ -190,7 +174,6 @@ describe('GS-4 mergeLimits', () => {
 
   it.each([-1, 0, Number.NaN, Number.POSITIVE_INFINITY, '10'])('非法值 %s 忽略', (value) => {
     const patch = {
-      costUsd: value,
       maxTurns: value,
       stallTurns: value,
       wallClockMin: value
@@ -198,13 +181,10 @@ describe('GS-4 mergeLimits', () => {
     expect(mergeLimits(base, patch)).toStrictEqual(base)
   })
 
-  it('轮数、停滞取整且至少 1；花费、时长原样', () => {
+  it('轮数、停滞取整且至少 1；时长原样', () => {
     expect(mergeLimits(base, { maxTurns: 0.4 }).maxTurns).toBe(1)
     expect(mergeLimits(base, { stallTurns: 2.6 }).stallTurns).toBe(3)
-    expect(mergeLimits(base, { costUsd: 0.5, wallClockMin: 1.5 })).toMatchObject({
-      costUsd: 0.5,
-      wallClockMin: 1.5
-    })
+    expect(mergeLimits(base, { wallClockMin: 1.5 })).toMatchObject({ wallClockMin: 1.5 })
   })
 })
 
@@ -213,28 +193,21 @@ describe('GS-5 guardHit', () => {
   const all = active({
     turns: 50,
     stalls: 3,
-    limits: { costUsd: 5, maxTurns: 50, stallTurns: 3, wallClockMin: 30 }
+    limits: { maxTurns: 50, stallTurns: 3, wallClockMin: 30 }
   })
 
-  it('次序：budget > turns > stalled > wall-clock', () => {
-    expect(guardHit(all, { costUsd: 5, now })).toBe('budget')
-    expect(guardHit(all, { costUsd: 0, now })).toBe('turns')
-    expect(guardHit({ ...all, turns: 0 }, { costUsd: 0, now })).toBe('stalled')
-    expect(guardHit({ ...all, turns: 0, stalls: 0 }, { costUsd: 0, now })).toBe('wall-clock')
-    expect(guardHit({ ...all, turns: 0, stalls: 0 }, { costUsd: 0, now: now - 1 })).toBeUndefined()
+  it('次序：turns > stalled > wall-clock', () => {
+    expect(guardHit(all, { now })).toBe('turns')
+    expect(guardHit({ ...all, turns: 0 }, { now })).toBe('stalled')
+    expect(guardHit({ ...all, turns: 0, stalls: 0 }, { now })).toBe('wall-clock')
+    expect(guardHit({ ...all, turns: 0, stalls: 0 }, { now: now - 1 })).toBeUndefined()
   })
 
   it('等于即撞；少一点不撞', () => {
-    const goal = active()
-    expect(guardHit(goal, { costUsd: 4.99, now: 2000 })).toBeUndefined()
-    expect(guardHit(goal, { costUsd: 5, now: 2000 })).toBe('budget')
-    expect(guardHit(active({ turns: 49 }), { costUsd: 0, now: 2000 })).toBeUndefined()
-    expect(guardHit(active({ stalls: 2 }), { costUsd: 0, now: 2000 })).toBeUndefined()
-  })
-
-  it('没有花费上限：花多少都不撞预算', () => {
-    const goal = active({ limits: { maxTurns: 50, stallTurns: 3 } })
-    expect(guardHit(goal, { costUsd: 1e9, now: 2000 })).toBeUndefined()
+    expect(guardHit(active({ turns: 50 }), { now: 2000 })).toBe('turns')
+    expect(guardHit(active({ stalls: 3 }), { now: 2000 })).toBe('stalled')
+    expect(guardHit(active({ turns: 49 }), { now: 2000 })).toBeUndefined()
+    expect(guardHit(active({ stalls: 2 }), { now: 2000 })).toBeUndefined()
   })
 
   it('时长算上累计 + 当前时段', () => {
@@ -243,10 +216,10 @@ describe('GS-5 guardHit', () => {
       activeSince: 0,
       limits: { maxTurns: 50, stallTurns: 3, wallClockMin: 30 }
     })
-    expect(guardHit(goal, { costUsd: 0, now: 10 * 60_000 - 1 })).toBeUndefined()
-    expect(guardHit(goal, { costUsd: 0, now: 10 * 60_000 })).toBe('wall-clock')
+    expect(guardHit(goal, { now: 10 * 60_000 - 1 })).toBeUndefined()
+    expect(guardHit(goal, { now: 10 * 60_000 })).toBe('wall-clock')
     const notRunning = { ...goal, activeSince: undefined }
-    expect(guardHit(notRunning, { costUsd: 0, now: 1e12 })).toBeUndefined()
+    expect(guardHit(notRunning, { now: 1e12 })).toBeUndefined()
   })
 })
 
@@ -257,11 +230,8 @@ describe('GS-6 afterRun 的次序（§4.1）', () => {
     expect(afterRun({ ...active(), status: 'met' }, runFacts())).toEqual({ action: 'none' })
   })
 
-  it('(b) 中止：先于后台工作与超支 → 暂停 stopped', () => {
-    const decision = afterRun(
-      active(),
-      runFacts({ outcome: 'aborted', backgroundWork: true, costUsd: 99 })
-    )
+  it('(b) 中止：先于后台工作 → 暂停 stopped', () => {
+    const decision = afterRun(active(), runFacts({ outcome: 'aborted', backgroundWork: true }))
     expect(decision).toMatchObject({
       action: 'pause',
       reason: 'stopped',
@@ -274,9 +244,9 @@ describe('GS-6 afterRun 的次序（§4.1）', () => {
     expect(decision).toMatchObject({ action: 'pause', reason: 'run-error' })
   })
 
-  it('(d) 正常结束、有后台工作、超支 → wait（后台工作先于护栏；停滞不动）', () => {
+  it('(d) 正常结束、有后台工作、轮数满 → wait（后台工作先于护栏；停滞不动）', () => {
     expect(
-      afterRun(active({ stalls: 2 }), runFacts({ backgroundWork: true, costUsd: 99, toolCalls: 0 }))
+      afterRun(active({ stalls: 2, turns: 50 }), runFacts({ backgroundWork: true, toolCalls: 0 }))
     ).toEqual({
       action: 'wait'
     })
@@ -299,9 +269,9 @@ describe('GS-6 afterRun 的次序（§4.1）', () => {
     })
   })
 
-  it('(h) 护栏已撞（轮数满、超支、停滞满）：afterRun 不查护栏，照样 judge —— 最后一轮的活也要判', () => {
+  it('(h) 护栏已撞（轮数满、停滞满）：afterRun 不查护栏，照样 judge —— 最后一轮的活也要判', () => {
     const goal = active({ turns: 50, stalls: 3 })
-    const decision = afterRun(goal, runFacts({ costUsd: 99 }))
+    const decision = afterRun(goal, runFacts())
     expect(decision).toEqual({ action: 'judge', goal, noProgress: false })
   })
 
@@ -314,7 +284,7 @@ describe('GS-6 afterRun 的次序（§4.1）', () => {
 })
 
 describe('GS-7 applyVerdict', () => {
-  const facts = { costUsd: 1, now: 5000, noProgress: false }
+  const facts = { now: 5000, noProgress: false }
 
   it('没有结论 → 暂停 judge-unavailable', () => {
     expect(applyVerdict(active(), null, facts)).toMatchObject({
@@ -375,7 +345,7 @@ describe('GS-7 applyVerdict', () => {
 })
 
 describe('GS-8 理由逐字重复', () => {
-  const facts = { costUsd: 0, now: 5000, noProgress: false }
+  const facts = { now: 5000, noProgress: false }
   const last = (verdict: 'met' | 'not_met', reason: string): GoalRecord['lastVerdict'] => ({
     verdict,
     reason,
@@ -425,7 +395,7 @@ describe('GS-9 护栏在判定之后（最后一次续跑的成果也要判）',
     const first = applyVerdict(
       goal,
       { verdict: 'not_met', reason: 'a' },
-      { costUsd: 0, now: 2000, noProgress: false }
+      { now: 2000, noProgress: false }
     )
     expect(first.action).toBe('continue')
     const continued = (first as { goal: GoalRecord }).goal
@@ -435,7 +405,7 @@ describe('GS-9 护栏在判定之后（最后一次续跑的成果也要判）',
     const last = applyVerdict(
       continued,
       { verdict: 'not_met', reason: 'b' },
-      { costUsd: 0, now: 3000, noProgress: false }
+      { now: 3000, noProgress: false }
     )
     expect(last).toMatchObject({
       action: 'pause',
@@ -454,18 +424,18 @@ describe('GS-9 护栏在判定之后（最后一次续跑的成果也要判）',
     const decision = applyVerdict(
       goal,
       { verdict: 'met', reason: 'done' },
-      { costUsd: 99, now: 3000, noProgress: true }
+      { now: 3000, noProgress: true }
     )
     expect(decision).toMatchObject({ action: 'finish', goal: { status: 'met' } })
   })
 
-  it('超支时判 not_met → 暂停 budget（不是 turns）', () => {
+  it('轮数满又停滞满时判 not_met → 暂停 turns（轮数先于停滞）', () => {
     const decision = applyVerdict(
-      active({ turns: 50 }),
+      active({ turns: 50, stalls: 2 }),
       { verdict: 'not_met', reason: 'x' },
-      { costUsd: 5, now: 3000, noProgress: false }
+      { now: 3000, noProgress: true }
     )
-    expect(decision).toMatchObject({ action: 'pause', reason: 'budget' })
+    expect(decision).toMatchObject({ action: 'pause', reason: 'turns' })
   })
 })
 
@@ -481,7 +451,7 @@ describe('GS-10 停滞按 §6.3 计', () => {
     return applyVerdict(
       decision.goal,
       { verdict: 'not_met', reason },
-      { costUsd: 0, now: 3000, noProgress: decision.noProgress }
+      { now: 3000, noProgress: decision.noProgress }
     )
   }
 
@@ -511,23 +481,11 @@ describe('GS-10 停滞按 §6.3 计', () => {
   })
 })
 
-describe('GS-11 budgetCrossed', () => {
-  it('进行中 + 有上限 + 到了 → true；暂停中 / 没上限 / 没目标 → false', () => {
-    expect(budgetCrossed(active(), 5)).toBe(true)
-    expect(budgetCrossed(active(), 4.99)).toBe(false)
-    expect(budgetCrossed(pauseGoal(active(), 'user', 1500), 99)).toBe(false)
-    expect(budgetCrossed(active({ limits: { maxTurns: 50, stallTurns: 3 } }), 99)).toBe(false)
-    expect(budgetCrossed(undefined, 99)).toBe(false)
-  })
-})
-
 describe('GS-12 resumeBlockedBy', () => {
-  it('预算 / 轮数 / 时长仍撞着 → 拒绝恢复（交回原因）；停滞不挡；都没撞 → undefined', () => {
-    const paused = (over: Partial<GoalRecord>): GoalRecord =>
-      pauseGoal(active(over), 'budget', 1500)
-    expect(resumeBlockedBy(paused({}), { costUsd: 5, now: 2000 })).toBe('budget')
-    expect(resumeBlockedBy(paused({ turns: 50 }), { costUsd: 0, now: 2000 })).toBe('turns')
-    expect(resumeBlockedBy(paused({ stalls: 3 }), { costUsd: 0, now: 2000 })).toBeUndefined()
+  it('轮数 / 时长仍撞着 → 拒绝恢复（交回原因）；停滞不挡；都没撞 → undefined', () => {
+    const paused = (over: Partial<GoalRecord>): GoalRecord => pauseGoal(active(over), 'turns', 1500)
+    expect(resumeBlockedBy(paused({ turns: 50 }), { now: 2000 })).toBe('turns')
+    expect(resumeBlockedBy(paused({ stalls: 3 }), { now: 2000 })).toBeUndefined()
     const timed = pauseGoal(
       active({
         activeMs: 0,
@@ -537,7 +495,17 @@ describe('GS-12 resumeBlockedBy', () => {
       'wall-clock',
       60_000
     )
-    expect(resumeBlockedBy(timed, { costUsd: 0, now: 1e9 })).toBe('wall-clock')
-    expect(resumeBlockedBy(paused({}), { costUsd: 1, now: 2000 })).toBeUndefined()
+    expect(resumeBlockedBy(timed, { now: 1e9 })).toBe('wall-clock')
+    expect(resumeBlockedBy(paused({}), { now: 2000 })).toBeUndefined()
+  })
+})
+
+describe('GS-13 目标没有花费上限', () => {
+  it('默认上限只有轮数与停滞；新目标、合并后的上限都不带花费', async () => {
+    const { DEFAULT_GOAL_LIMITS } = await import('@shuvix/chat-protocol/types/goal')
+    expect(DEFAULT_GOAL_LIMITS).toStrictEqual({ maxTurns: 50, stallTurns: 3 })
+    const goal = createGoal({ id: 'g_1', objective: 'x', limits: DEFAULT_GOAL_LIMITS, now: 1 })
+    expect(Object.keys(goal.limits).sort()).toEqual(['maxTurns', 'stallTurns'])
+    expect('baselineCostUsd' in goal).toBe(false)
   })
 })

@@ -130,7 +130,6 @@ interface Row {
   error: string
   ms: number
   inputTokens: number
-  cost: number
 }
 
 function row(over: Partial<Row> = {}): Row {
@@ -149,7 +148,6 @@ function row(over: Partial<Row> = {}): Row {
     error: '',
     ms: 412,
     inputTokens: 57,
-    cost: 0.00002,
     ...over
   }
 }

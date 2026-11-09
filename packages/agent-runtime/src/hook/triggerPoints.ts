@@ -143,8 +143,6 @@ export interface GoalCheckPayload extends SessionTriggerBase {
     objective: string
     /** 宿主为目标续跑过的轮数 */
     turns: number
-    /** 目标期间的花费（美元） */
-    costUsd: number
     limits: GoalLimits
     /** 处于进行中的累计时长（分钟） */
     activeMinutes: number

@@ -33,7 +33,6 @@ interface LogSummary {
   error: string
   ms: number
   inputTokens: number
-  cost: number
 }
 
 interface LogDetail extends Omit<LogSummary, 'sessionTitle'> {

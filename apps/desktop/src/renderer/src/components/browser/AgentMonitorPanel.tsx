@@ -3,9 +3,8 @@
  *
  * 一行一个 agent：根 agent（会话锁着时）与加载在会话 Harness 里的派生 / hook agent，按血缘分组。相位灯区分
  * 「在跑」（turn / compaction，脉冲）、「上个进程留下、停在原地」（interrupted，不脉冲、单独配色）与闲着；
- * 上下文占用条回答「它占着多大一块、离压缩多远」，缓存命中率回答「那一块里多少是复用的」，花费格是这个
- * agent 自己的花费（durable `pi.usage`，含重试与压缩）—— 自定义 provider 的模型没有价格，显示「—」并悬停
- * 说明「未定价」。展开根 agent 的详情另有整条会话的总花费（含起标题、权限审查与回退丢下的分支）。
+ * 上下文占用条回答「它占着多大一块、离压缩多远」，缓存命中率回答「那一块里多少是复用的」。ShuviX 不算
+ * 花费：用量怎么计价是 provider 自己账单上的事。
  *
  * 列表数据来自 `agentMonitorStore`（全局引用计数轮询：横幅上的 profile 标记也消费同一份快照，同一时刻只有
  * 一个 1s 轮询器）。本面板仅在 `active === true` 时订阅 —— RightPanel 常驻挂载所有 tab，不可见时不占轮询
@@ -44,16 +43,6 @@ const PHASE_DOT: Record<AgentMonitorPhase, string> = {
 /** 在跑 = 脉冲、算「活跃」；interrupted 与 idle 一样不在跑（PIN-05） */
 function isRunning(phase: AgentMonitorPhase): boolean {
   return phase === 'turn' || phase === 'compaction'
-}
-
-/**
- * 花费的文本（PIN-09）：0 → 「—」（模型没有价格：自定义 provider 恒为 0，不说成 $0.00）；
- * 不到一分钱 → `<$0.01`；其余两位小数。
- */
-function formatCost(total: number): string {
-  if (!(total > 0)) return '—'
-  if (total < 0.01) return '<$0.01'
-  return `$${total.toFixed(2)}`
 }
 
 function formatCount(n: number): string {
@@ -200,7 +189,6 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
                     </span>
                     <ContextGauge tokens={a.contextTokens} window={a.model.contextWindow} />
                     <CacheHitCell cache={a.cache} />
-                    <CostCell total={a.cost.total} />
                   </span>
                 </button>
 
@@ -274,24 +262,6 @@ function CacheHitCell({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX.E
     >
       <DatabaseZap size={10} className="text-text-tertiary shrink-0" />
       {rate === null ? '—' : `${formatRate(rate, 0)}%`}
-    </span>
-  )
-}
-
-/**
- * 行里的花费格（这个 agent 自己的，PIN-09）。0 画「—」并悬停说明「未定价」—— 自定义 provider 的模型没有
- * 价格，`pi.usage` 里的花费恒为 0，说成 $0.00 会误导。定宽只在单行排版（@xl）里要，窄时按内容宽。
- */
-function CostCell({ total }: { total: number }): React.JSX.Element {
-  const { t } = useTranslation()
-  const priced = total > 0
-  return (
-    <span
-      data-agent-cost
-      title={priced ? t('panel.agentCostTitle') : t('panel.agentCostUnpricedTitle')}
-      className="shrink-0 text-right text-text-secondary text-[10px] tabular-nums @xl:w-14"
-    >
-      {formatCost(total)}
     </span>
   )
 }
@@ -411,22 +381,6 @@ function AgentDetail({
           {a.queue.steer} / {a.queue.followUp}
         </span>
       </Field>
-      <Field label={t('settings.agentMonitorFieldCost')}>
-        <span data-agent-field="cost">
-          {formatCost(a.cost.total)}
-          {!(a.cost.total > 0) && (
-            <span className="text-text-tertiary ml-1">
-              （{t('settings.agentMonitorCostUnpriced')}）
-            </span>
-          )}
-        </span>
-      </Field>
-      {/* 会话总花费只在根的详情里：派生 agent 的那份与根相同，重复列出只是噪音 */}
-      {a.kind === 'root' && (
-        <Field label={t('settings.agentMonitorFieldSessionCost')}>
-          <span data-agent-field="session-cost">{formatCost(a.sessionCost)}</span>
-        </Field>
-      )}
       <Field label={t('settings.agentMonitorFieldStarted')}>
         {new Date(a.startedAt).toLocaleString()}
       </Field>

@@ -5,21 +5,20 @@
  * 根运行结束由用例手动交给 `onRootRunEnded`（会话信号的接线另在 sessionSignals 的用例里钉）；`drain()` 等
  * 目标操作的串行队列走空。判定 = `hookTriggers.decide` 的替身（按脚本给结论 / 挂起 / 抛错）。
  *
- * 14a 设定：GV-1 能设目标的会话（D9）· GV-2 原文长度 · GV-3 空闲时设定（缺省上限、脱敏、基线、来源、起一轮）·
+ * 14a 设定：GV-1 能设目标的会话（D9）· GV-2 原文长度 · GV-3 空闲时设定（缺省上限、脱敏、来源、起一轮）·
  *     GV-4 忙时设定（插话 + 说明，那一轮的结束照常判定）· GV-5 替换（只对进行中 / 暂停中的写 replaced，旧判定中止）·
- *     GV-6 没发出去：旧目标原样放回、不写 replaced · GV-7 设置里的缺省上限（off / 非法 / ≤0 / 取整至少 1）
+ *     GV-6 没发出去：旧目标原样放回、不写 replaced · GV-7 设置里的缺省上限（非法 / ≤0 / 取整至少 1；旧的花费设置不理）
  * 14b 用户操作：GV-8 暂停（忙时结局通知攒到那一轮结束再写，51e50b75）· GV-9 清除 · GV-10 改原文 · GV-11 只改上限 / 校验 · GV-12 已结束的不能改 · GV-13 恢复 ·
  *     GV-14 喊停之后恢复 / 设新目标照样起轮（B-1 修复）· GV-15 护栏还撞着不让恢复 · GV-16 坏操作
  * 14c 判定：GV-17 运行结束的闸门 · GV-18 中止 / 出错 · GV-19 后台工作 · GV-20 runFactsOf · GV-21 判定的 payload ·
  *     GV-22 not_met → 续跑 · GV-23 met / impossible · GV-24 没有结论 · GV-25 判定途中用户操作 ·
  *     GV-26 不中止判定的操作 + 中止了却没起轮的补判（B-2 修复）· GV-27 判定途中用户发消息 ·
  *     GV-28 下一次判定从上一次事实截止处往后看（B-13 修复）· GV-30 合并窗口里的续跑（已知未修，钉现状）
- * 14d 检查与预算：GV-31 检查的退避 · GV-32 忙 / 中断时的检查 · GV-33 后台工作没了、会话空闲 → 就地判定 ·
- *     GV-34 检查时撞护栏 · GV-35 预算计时器的生命周期 · GV-36 运行中越线 · GV-37 第二次越线照样通知（B-6 修复）·
- *     GV-38 目标的花费（基线、子会话、读失败、价格未知）
+ * 14d 检查：GV-31 检查的退避 · GV-32 忙 / 中断时的检查 · GV-33 后台工作没了、会话空闲 → 就地判定 ·
+ *     GV-34 检查时撞护栏 · GV-35 目标里没有钱（2026-11-09：ShuviX 不算花费，没有花费上限、基线与运行中的预算检查）
  * 14e 启动、fork、删除、状态表：GV-39 启动扫描（另钉 A-7 现状：停机时间算进 activeMs）· GV-40 表与存储不一致按存储
  *     （B-12 修复）· GV-41 判定途中退出 · GV-42 fork 记状态表（观察者本身在 sessionFork.test.ts）· GV-44 删除 ·
- *     GV-46 状态表；GV-43 / GV-45 是 todo
+ *     GV-46 状态表；GV-45 是 todo
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
@@ -53,7 +52,6 @@ import {
   stalled
 } from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/faux'
 import { transcript } from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/transcript'
-import { stampUsage } from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/usage'
 import {
   deferred,
   sleep,
@@ -206,7 +204,7 @@ interface Held {
 
 /** 每个用例一个新宿主；`hold` 给一个扣住的工具 */
 async function setup(
-  options: { host?: TestHostOptions; checkinFirstMs?: number; budgetCheckMs?: number } = {}
+  options: { host?: TestHostOptions; checkinFirstMs?: number } = {}
 ): Promise<{ session: DurableSession; hold: () => Held }> {
   const holds: Array<{ gate: Deferred; running: Deferred }> = []
   let current: { gate: Deferred; running: Deferred } | undefined
@@ -234,8 +232,7 @@ async function setup(
   mocks.host.current = t.host
   service = new GoalService({
     now,
-    checkinFirstMs: options.checkinFirstMs ?? 60_000,
-    budgetCheckMs: options.budgetCheckMs ?? 60_000
+    checkinFirstMs: options.checkinFirstMs ?? 60_000
   })
   const session = await t.open(SID)
   await primeRoot(session)
@@ -374,8 +371,7 @@ async function seedGoal(
     objective: 'Seeded goal',
     status: 'active',
     setAt: now(),
-    limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
+    limits: { maxTurns: 50, stallTurns: 3 },
     turns: 0,
     stalls: 0,
     activeMs: 0,
@@ -475,13 +471,10 @@ describe('14a · set / eligibility / defaults', () => {
     expect(goal.objective).toHaveLength(4000)
   })
 
-  it('GV-3 空闲时设定：缺省上限 + 补丁、脱敏的原文、基线、表、广播、一条带目标 Token 的人的消息（来源原样）、起一轮', async () => {
+  it('GV-3 空闲时设定：缺省上限 + 补丁、脱敏的原文、表、广播、一条带目标 Token 的人的消息（来源原样）、起一轮', async () => {
     const { session } = await setup()
-    const stamp = stampUsage(t.kit)
-    stamp.queue({ input: 10, cost: 2 })
     t.kit.queue(answer('before'))
     expect(await session.submitUser('earlier work')).toEqual({})
-    mocks.settings.set('goal.defaultCostUsd', '7')
     mocks.settings.set('goal.defaultMaxTurns', '20')
     const remote: InputOrigin = { kind: 'remote', clientId: 'ws:1', address: '10.0.0.2' }
     t.kit.queue(answer('on it'))
@@ -495,17 +488,15 @@ describe('14a · set / eligibility / defaults', () => {
     expect(goal).toMatchObject({
       objective: `rotate ${MASKED} and redeploy`,
       status: 'active',
-      limits: { costUsd: 7, maxTurns: 5, stallTurns: 3 },
+      limits: { maxTurns: 5, stallTurns: 3 },
       turns: 0,
       stalls: 0
     })
-    expect(goal.baselineCostUsd).toBeCloseTo(2, 9)
     expect(goal.id).toMatch(/^g_[0-9a-f]{8}$/)
     expect(statusTable()).toEqual({ [SID]: 'active' })
     expect(lastView()).toMatchObject({
       id: goal.id,
       sessionId: SID,
-      costUsd: 0,
       judging: false,
       checkerMissing: false
     })
@@ -596,7 +587,7 @@ describe('14a · set / eligibility / defaults', () => {
     const previous = await seedGoal(session, {
       id: 'g_prev',
       status: 'paused',
-      pauseReason: 'budget',
+      pauseReason: 'stalled',
       turns: 4
     })
     admitError = 'No model is configured'
@@ -617,23 +608,22 @@ describe('14a · set / eligibility / defaults', () => {
     expect(lastView()).toBeNull()
   })
 
-  it('GV-7 设置里的缺省上限：off = 不限花费；非法 / ≤0 → 5；轮数 / 停滞取整且至少 1', async () => {
+  it('GV-7 设置里的缺省上限：非法 / ≤0 → 内置缺省；轮数 / 停滞取整且至少 1；v0.2.58 留下的花费设置不理', async () => {
     await setup()
     const cases: Array<[Record<string, string>, object]> = [
-      [{}, { costUsd: 5, maxTurns: 50, stallTurns: 3 }],
-      [{ 'goal.defaultCostUsd': 'off' }, { maxTurns: 50, stallTurns: 3 }],
-      [{ 'goal.defaultCostUsd': ' off ' }, { maxTurns: 50, stallTurns: 3 }],
-      [{ 'goal.defaultCostUsd': 'abc' }, { costUsd: 5, maxTurns: 50, stallTurns: 3 }],
-      [{ 'goal.defaultCostUsd': '0' }, { costUsd: 5, maxTurns: 50, stallTurns: 3 }],
-      [{ 'goal.defaultCostUsd': '-3' }, { costUsd: 5, maxTurns: 50, stallTurns: 3 }],
-      [{ 'goal.defaultCostUsd': '2.5' }, { costUsd: 2.5, maxTurns: 50, stallTurns: 3 }],
+      [{}, { maxTurns: 50, stallTurns: 3 }],
+      [{ 'goal.defaultCostUsd': '2.5' }, { maxTurns: 50, stallTurns: 3 }],
+      [
+        { 'goal.defaultMaxTurns': 'abc', 'goal.stallTurns': '0' },
+        { maxTurns: 50, stallTurns: 3 }
+      ],
       [
         { 'goal.defaultMaxTurns': '0.3', 'goal.stallTurns': '0.2' },
-        { costUsd: 5, maxTurns: 1, stallTurns: 1 }
+        { maxTurns: 1, stallTurns: 1 }
       ],
       [
         { 'goal.defaultMaxTurns': '7.6', 'goal.stallTurns': '-1' },
-        { costUsd: 5, maxTurns: 8, stallTurns: 3 }
+        { maxTurns: 8, stallTurns: 3 }
       ]
     ]
     for (const [settings, expected] of cases) {
@@ -790,23 +780,18 @@ describe('14b · user actions', () => {
     const { session } = await setup()
     const goal = await setAndRun(session)
     const before = await lines(session)
-    expect(await act({ type: 'edit', limits: { costUsd: 20, wallClockMin: 90 } })).toEqual({
+    expect(await act({ type: 'edit', limits: { maxTurns: 80, wallClockMin: 90 } })).toEqual({
       ok: true
     })
     expect((await goalOf(session))!.limits).toStrictEqual({
       ...goal.limits,
-      costUsd: 20,
+      maxTurns: 80,
       wallClockMin: 90
     })
-    expect(lastView()?.limits.costUsd).toBe(20)
-    // null = 不限（只对花费 / 时长）
-    expect(await act({ type: 'edit', limits: { costUsd: null, wallClockMin: null } })).toEqual({
-      ok: true
-    })
-    expect((await goalOf(session))!.limits).toStrictEqual({
-      maxTurns: goal.limits.maxTurns,
-      stallTurns: 3
-    })
+    expect(lastView()?.limits.wallClockMin).toBe(90)
+    // null = 不限（只对时长）
+    expect(await act({ type: 'edit', limits: { wallClockMin: null } })).toEqual({ ok: true })
+    expect((await goalOf(session))!.limits).toStrictEqual({ maxTurns: 80, stallTurns: 3 })
     expect(await lines(session)).toEqual(before)
 
     for (const objective of ['', 'x'.repeat(4001)]) {
@@ -825,7 +810,7 @@ describe('14b · user actions', () => {
         ok: false,
         error: 'goal.errorEnded'
       })
-      expect(await act({ type: 'edit', limits: { costUsd: 9 } })).toEqual({
+      expect(await act({ type: 'edit', limits: { maxTurns: 9 } })).toEqual({
         ok: false,
         error: 'goal.errorEnded'
       })
@@ -921,7 +906,7 @@ describe('14b · user actions', () => {
     await waitFor(() => t.kit.callCount === calls + 2, 5000, 'continuation')
   })
 
-  it('GV-15 护栏还撞着不让恢复：轮数满 / 超支 → {ok:false, resumeBlocked}，状态不变；调高上限之后能恢复；停滞不挡', async () => {
+  it('GV-15 护栏还撞着不让恢复：轮数满 / 时长满 → {ok:false, resumeBlocked}，状态不变；调高上限之后能恢复；停滞不挡', async () => {
     const { session } = await setup()
     await seedGoal(session, {
       status: 'paused',
@@ -937,17 +922,18 @@ describe('14b · user actions', () => {
     expect((await goalOf(session))!.status).toBe('active')
     await waitFor(() => !session.isBusy() && t.kit.callCount === 1)
 
-    const stamp = stampUsage(t.kit)
-    stamp.queue({ input: 1, cost: 6 })
-    t.kit.queue(answer('spent'))
-    await session.submitUser('expensive')
     await seedGoal(session, {
-      id: 'g_budget',
+      id: 'g_time',
       status: 'paused',
-      pauseReason: 'budget',
-      activeSince: undefined
+      pauseReason: 'wall-clock',
+      activeMs: 60_000,
+      activeSince: undefined,
+      limits: { maxTurns: 50, stallTurns: 3, wallClockMin: 1 }
     })
-    expect(await act({ type: 'resume' })).toEqual({ ok: false, error: 'goal.resumeBlocked.budget' })
+    expect(await act({ type: 'resume' })).toEqual({
+      ok: false,
+      error: 'goal.resumeBlocked.wall-clock'
+    })
     await seedGoal(session, {
       id: 'g_stall',
       status: 'paused',
@@ -967,7 +953,7 @@ describe('14b · user actions', () => {
       error: 'goal.errorNoGoal'
     })
     expect(await act({ type: 'resume' })).toEqual({ ok: false, error: 'goal.errorNoGoal' })
-    expect(await act({ type: 'edit', limits: { costUsd: 1 } })).toEqual({
+    expect(await act({ type: 'edit', limits: { maxTurns: 1 } })).toEqual({
       ok: false,
       error: 'goal.errorNoGoal'
     })
@@ -999,8 +985,7 @@ describe('14c · run end → judge → continue / finish / pause', () => {
       objective: 'x',
       status: 'active',
       setAt: now(),
-      limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-      baselineCostUsd: 0,
+      limits: { maxTurns: 50, stallTurns: 3 },
       turns: 0,
       stalls: 0,
       activeMs: 0,
@@ -1240,7 +1225,7 @@ describe('14c · run end → judge → continue / finish / pause', () => {
     service.onRootRunEnded(SID, 'ok')
     await waitFor(() => signal !== undefined, 3000, 'judging')
     const edits = [
-      act({ type: 'edit', limits: { costUsd: 9 } }),
+      act({ type: 'edit', limits: { maxTurns: 9 } }),
       act({ type: 'resume' }),
       act({ type: 'set', objective: '   ' })
     ]
@@ -1253,7 +1238,7 @@ describe('14c · run end → judge → continue / finish / pause', () => {
     expect(results[2]).toMatchObject({ ok: false })
     await drain()
     const goal = (await goalOf(session))!
-    expect(goal).toMatchObject({ status: 'active', turns: 1, limits: { costUsd: 9 } })
+    expect(goal).toMatchObject({ status: 'active', turns: 1, limits: { maxTurns: 9 } })
     await waitFor(() => t.kit.callCount === 2, 5000, 'continuation')
     expect(lastView()?.judging).toBe(false)
   })
@@ -1485,7 +1470,6 @@ describe('GV-21 判定的 payload', () => {
         id: goal.id,
         objective: `ship ${MASKED}`,
         turns: 2,
-        costUsd: 0,
         limits: goal.limits,
         activeMinutes: 3
       },
@@ -1517,9 +1501,9 @@ describe('GV-21 判定的 payload', () => {
   })
 })
 
-// ─────────────────────────── 14d 检查与预算 ───────────────────────────
+// ─────────────────────────── 14d 检查 ───────────────────────────
 
-describe('14d · check-ins and budget', () => {
+describe('14d · check-ins', () => {
   type CheckinEntry = { delayMs: number; since: number }
   const checkinsOf = (): Map<string, CheckinEntry> =>
     (service as unknown as { checkins: Map<string, CheckinEntry> }).checkins
@@ -1592,7 +1576,7 @@ describe('14d · check-ins and budget', () => {
     expect((await goalOf(session))!.status).toBe('met')
   })
 
-  it('GV-34 检查时撞护栏：轮数满 → paused turns；超支 → paused budget；都弹系统通知、不写检查通知', async () => {
+  it('GV-34 检查时撞护栏：轮数满 → paused turns；弹系统通知、不写检查通知', async () => {
     const { session } = await setup({ checkinFirstMs: 30 })
     await seedGoal(session, { turns: 50 })
     mocks.running.set(SID, { bash: 1 })
@@ -1601,129 +1585,26 @@ describe('14d · check-ins and budget', () => {
     await drain()
     expect(await goalOf(session)).toMatchObject({ pauseReason: 'turns' })
     expect(mocks.notifyGoalEnded).toHaveBeenLastCalledWith(SID, 'goal.pause.turns')
-
-    const stamp = stampUsage(t.kit)
-    stamp.queue({ input: 1, cost: 6 })
-    t.kit.queue(answer('spent'))
-    await session.submitUser('spend')
-    await seedGoal(session, { id: 'g_b' })
-    await endRun(session)
-    await waitFor(async () => (await goalOf(session))?.status === 'paused', 3000, 'budget pause')
-    await drain()
-    expect(await goalOf(session)).toMatchObject({ pauseReason: 'budget' })
-    expect(mocks.notifyGoalEnded).toHaveBeenLastCalledWith(SID, 'goal.pause.budget')
     expect(await notices(session, 'goal-checkin')).toEqual([])
   })
 
-  it('GV-35 预算计时器：进行中的目标在根运行开始时起一个（再开始不重起）、结束时停；不是进行中的不起', async () => {
+  it('GV-35 目标里没有钱：记录不带基线、上限不带花费（旧的花费设置也不理）、视图与判定 payload 不带花费；根运行开始没有接缝', async () => {
     const { session } = await setup()
-    const timers = (service as unknown as { budgetTimers: Map<string, unknown> }).budgetTimers
-    service.onRootRunStarted(SID)
-    expect(timers.has(SID)).toBe(false)
-    await seedGoal(session)
-    service.onRootRunStarted(SID)
-    const first = timers.get(SID)
-    expect(first).toBeDefined()
-    service.onRootRunStarted(SID)
-    expect(timers.get(SID)).toBe(first)
-    service.onRootRunEnded(SID, 'aborted')
-    expect(timers.has(SID)).toBe(false)
-    await drain()
-    service.onRootRunStarted(SID)
-    expect(timers.has(SID)).toBe(false)
-  })
-
-  it('GV-36 运行中越线：暂停 budget、<goal-budget> steer 进那一轮（不起新轮）、弹系统通知、不中止那一轮；结束时不再做什么', async () => {
-    const { session, hold } = await setup({ budgetCheckMs: 15 })
-    await seedGoal(session, { limits: { costUsd: 1, maxTurns: 50, stallTurns: 3 } })
-    const stamp = stampUsage(t.kit)
-    stamp.queue({ input: 1, cost: 2 })
-    const held = hold()
-    t.kit.queue(callTool('hold'), answer('wrapping up'), answer('spare'))
-    const sending = session.submitUser('expensive work')
-    await held.running
-    service.onRootRunStarted(SID)
-    await waitFor(async () => (await goalOf(session))?.status === 'paused', 3000, 'budget pause')
-    await drain()
-    expect(await goalOf(session)).toMatchObject({ pauseReason: 'budget' })
-    expect(mocks.notifyGoalEnded).toHaveBeenCalledWith(SID, 'goal.pause.budget')
-    expect(session.isBusy()).toBe(true)
-    held.release()
-    expect(await withTimeout(sending, 5000, 'round')).toEqual({})
-    expect((await lineOf(session, 'goal-budget')).startsWith('pi.user:')).toBe(true)
-    expect(await notices(session, 'goal-budget')).toHaveLength(1)
-    await endRun(session)
-    expect(mocks.decide).not.toHaveBeenCalled()
-  })
-
-  it('GV-37 同一个目标第二次越线（调高上限、恢复、又越线）：第二条 <goal-budget> 照样送到（B-6 修复）', async () => {
-    const { session, hold } = await setup({ budgetCheckMs: 15 })
-    await seedGoal(session, { limits: { costUsd: 1, maxTurns: 50, stallTurns: 3 } })
-    const stamp = stampUsage(t.kit)
-    for (const round of [1, 2]) {
-      stamp.queue({ input: 1, cost: 2 })
-      const held = hold()
-      t.kit.queue(callTool('hold'), answer(`round ${round}`), answer('spare'))
-      const sending = session.submitUser(`work ${round}`)
-      await held.running
-      service.onRootRunStarted(SID)
-      await waitFor(
-        async () => (await goalOf(session))?.status === 'paused',
-        3000,
-        `budget pause ${round}`
-      )
-      await drain()
-      held.release()
-      await withTimeout(sending, 5000, 'round')
-      await waitFor(
-        async () => (await notices(session, 'goal-budget')).length === round,
-        5000,
-        `budget notice ${round}`
-      )
-      await endRun(session)
-      if (round === 1) {
-        offset += 1000
-        expect(await act({ type: 'edit', limits: { costUsd: 3 } })).toEqual({ ok: true })
-        expect(await act({ type: 'resume' })).toEqual({ ok: true })
-        await waitFor(() => !session.isBusy(), 5000)
-      }
-    }
-    expect(await notices(session, 'goal-budget')).toHaveLength(2)
-  })
-
-  it('GV-38 目标的花费 = 会话增量（减基线）+ 目标期间新建的子会话；早于设定的子会话不算；读失败记一笔跳过；价格未知 = 0', async () => {
-    const { session } = await setup()
-    const stamp = stampUsage(t.kit)
-    stamp.queue({ input: 1, cost: 10 })
-    t.kit.queue(answer('spent'))
-    await session.submitUser('spend')
-    const goal = await seedGoal(session, { baselineCostUsd: 4 })
-    // 子会话：一个早于设定、一个之后、一个读不出
-    const early = await t.open('goal-c')
-    const late = await t.open('goal-d')
-    for (const [child, cost] of [
-      [early, 1],
-      [late, 0.5]
-    ] as const) {
-      await primeRoot(child)
-      stamp.queue({ input: 1, cost })
-      t.kit.queue(answer('child'))
-      await child.submitUser('child work')
-    }
-    mocks.children.set(SID, [
-      { id: 'goal-c', createdAt: goal.setAt - 1 },
-      { id: 'goal-d', createdAt: goal.setAt },
-      { id: 'goal-e', createdAt: goal.setAt + 1 }
-    ])
-    mocks.peekError.add('goal-e')
+    mocks.settings.set('goal.defaultCostUsd', '7')
+    const goal = await setAndRun(session)
+    expect('baselineCostUsd' in goal).toBe(false)
+    expect(goal.limits).toStrictEqual({ maxTurns: 50, stallTurns: 3 })
     const view = (await service.get(SID))!
-    expect(view.costUsd).toBeCloseTo(6 + 0.5, 9)
-    expect(mocks.warn.mock.calls.some(([message]) => message.includes('goal-e'))).toBe(true)
-
-    // 价格未知（faux 估算的花费恒为 0）：会话花费不涨，预算不会越线
-    t.kit.queue(answer('free'))
-    await session.submitUser('free work')
-    expect((await service.get(SID))!.costUsd).toBeCloseTo(6.5, 9)
+    expect('costUsd' in view).toBe(false)
+    let payload: GoalCheckPayload | undefined
+    mocks.decide.mockImplementationOnce(async (_id: string, value: GoalCheckPayload) => {
+      payload = value
+      return { result: { verdict: 'met', reason: 'done' }, hook: 'goal-check' }
+    })
+    await endRun(session)
+    await waitFor(() => payload !== undefined, 3000, 'judge payload')
+    expect('costUsd' in payload!.goal).toBe(false)
+    expect('onRootRunStarted' in service).toBe(false)
   })
 })
 
@@ -1853,18 +1734,15 @@ describe('14e · restart, fork, delete, status table', () => {
     })
   })
 
-  // GV-43 fork 之后在 fork 里恢复，花费按拷过来的用量与基线算（3 + 1，不归零、不为负）：要真 fork 存储 + 计价 faux，未写
-  it.todo('GV-43 fork 里恢复之后的目标花费 = 拷过来的用量 − 基线 + fork 自己的花费')
   // GV-45 回退 / 销毁运行时对目标的影响等裁决（A-4）：回退在跑时 → aborted → paused stopped；空闲时回退会设「喊停」；
   // agent:destroy 途中可能没有 agent_end → 目标留在进行中。裁决之前不钉
   it.todo('GV-45 回退 / 销毁运行时与进行中的目标（等 A-4 裁决）')
 
-  it('GV-44 删除：表里删掉、在途判定中止、检查与预算计时器停掉（之后再没有回调）', async () => {
-    const { session } = await setup({ checkinFirstMs: 30, budgetCheckMs: 15 })
+  it('GV-44 删除：表里删掉、在途判定中止、检查计时器停掉（之后再没有回调）', async () => {
+    const { session } = await setup({ checkinFirstMs: 30 })
     await seedGoal(session)
     mocks.running.set(SID, { bash: 1 })
     await endRun(session)
-    service.onRootRunStarted(SID)
     let signal: AbortSignal | undefined
     mocks.decide.mockImplementationOnce(
       async (_id: string, _payload: unknown, opts: { signal: AbortSignal }) => {
@@ -1877,13 +1755,11 @@ describe('14e · restart, fork, delete, status table', () => {
     await waitFor(() => signal !== undefined, 3000, 'judging from the check-in')
     const internals = service as unknown as {
       checkins: Map<string, unknown>
-      budgetTimers: Map<string, unknown>
       judging: Map<string, unknown>
     }
     service.forget(SID)
     expect(signal!.aborted).toBe(true)
     expect(internals.checkins.has(SID)).toBe(false)
-    expect(internals.budgetTimers.has(SID)).toBe(false)
     expect(internals.judging.has(SID)).toBe(false)
     expect(service.statuses()).toEqual({})
     const notify = vi.spyOn(session, 'notify')
@@ -1907,7 +1783,7 @@ describe('14e · restart, fork, delete, status table', () => {
     expect(service.isActive(SID)).toBe(true)
     const writes = (): string[] => mocks.settingsSet.mock.calls.map(([, value]) => value)
     expect(writes()).toEqual([JSON.stringify({ [SID]: 'active' })])
-    await act({ type: 'edit', limits: { costUsd: 9 } })
+    await act({ type: 'edit', limits: { maxTurns: 9 } })
     expect(writes()).toHaveLength(1)
     await act({ type: 'pause' })
     expect(writes().at(-1)).toBe(JSON.stringify({ [SID]: 'paused' }))
@@ -1925,8 +1801,7 @@ async function seedGoalOn(session: DurableSession, over: Partial<GoalRecord> = {
     objective: 'Seeded goal',
     status: 'active',
     setAt: now(),
-    limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
+    limits: { maxTurns: 50, stallTurns: 3 },
     turns: 0,
     stalls: 0,
     activeMs: 0,

@@ -40,7 +40,6 @@ import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { describe, expect, it } from 'vitest'
 import { PARENT_ANSWERED } from '../../askTool'
 import {
-  renderGoalBudget,
   renderGoalCheckin,
   renderGoalContinue,
   renderGoalStatus,
@@ -60,6 +59,14 @@ import { allEntries, midRunDisplayed, requestTexts } from './support/transcript'
 import { holdTool } from './support/tools'
 import { deferred, sleep, waitFor, withTimeout } from './support/wait'
 import { choose, makeWorld, nextInput, registerWorldCleanup } from './integration/support/world'
+
+/**
+ * v0.2.58–v0.2.59 写的花费越线收尾通知（`renderGoalBudget`，2026-11-09 删掉）：旧会话里还有，必须照旧认成通知
+ */
+const LEGACY_GOAL_BUDGET =
+  '<goal-budget id="g_1">\nThe goal\'s spending limit is reached (Used: $6.00 of $5.00 · continuation 2 of 50.)\n' +
+  'Finish this turn soon: stop starting new work, and say what is done, what is verified, and what remains. ' +
+  'The goal is paused until the user raises the limit.\n</goal-budget>'
 
 registerHostCleanup()
 registerWorldCleanup()
@@ -940,14 +947,13 @@ describe('GDG · 目标通知永远不是人话（goal-mode-design §5）', () =
     objective: HOSTILE_OBJECTIVE,
     status: 'active',
     setAt: 0,
-    limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
+    limits: { maxTurns: 50, stallTurns: 3 },
     turns: 1,
     stalls: 0,
     activeMs: 0,
     activeSince: 0
   }
-  const CONTINUE = renderGoalContinue(GOAL, 1, { reason: HOSTILE_REASON, nextStep: HOSTILE_REASON })
+  const CONTINUE = renderGoalContinue(GOAL, { reason: HOSTILE_REASON, nextStep: HOSTILE_REASON })
 
   async function userTexts(session: DurableSession): Promise<string[]> {
     return (await digest(session))
@@ -1079,11 +1085,11 @@ describe('GDG · 目标通知永远不是人话（goal-mode-design §5）', () =
       const { session, sending, release } = await heldRound()
       const notices: [string, string][] = [
         ['goal-checkin', renderGoalCheckin(GOAL, 31)],
-        ['goal-budget', renderGoalBudget(GOAL, 6)],
+        ['goal-budget', LEGACY_GOAL_BUDGET],
         ['goal-updated', renderGoalUpdated(GOAL)],
         [
           'goal-status',
-          renderGoalStatus(GOAL, { event: 'paused', reason: 'budget', detail: HOSTILE_REASON })
+          renderGoalStatus(GOAL, { event: 'paused', reason: 'turns', detail: HOSTILE_REASON })
         ]
       ]
       for (const [kind, text] of notices) {

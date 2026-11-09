@@ -1,6 +1,9 @@
 /**
  * 会话目标的读写（`GoalDoc`，docs/goal-mode-design.md §2.1）。读出来经 `goalRecordOf` 校验：认不出的形状当作没有目标
  * （失败闭合：宁可不续跑，也不按一份坏记录续跑）。写在一个提交里：先读后改，并发的两次改动不会互相覆盖。
+ *
+ * v0.2.58–v0.2.59 写的记录还带着花费的字段（`baselineCostUsd`、`limits.costUsd`、暂停原因 `budget`）：ShuviX 不再算花费
+ * （2026-11-09），读的时候丢掉，下次写回时就没了。
  */
 import { copyJson } from '@earendil-works/chord'
 import type { Harness, JsonObject } from '@earendil-works/pi-durable'
@@ -14,7 +17,6 @@ import {
 } from '@shuvix/chat-protocol/types/goal'
 import { backgroundContext as BG } from '../durable/context'
 import { GoalDoc } from '../durable/docs'
-import { totalCost } from '../durable/monitorSnapshot'
 
 const STATUSES: readonly GoalStatus[] = ['active', 'paused', 'met', 'impossible']
 
@@ -31,7 +33,6 @@ function limitsOf(value: unknown): GoalLimits | undefined {
   return {
     maxTurns: value.maxTurns,
     stallTurns: value.stallTurns,
-    ...(finite(value.costUsd) ? { costUsd: value.costUsd } : {}),
     ...(finite(value.wallClockMin) ? { wallClockMin: value.wallClockMin } : {})
   }
 }
@@ -57,7 +58,6 @@ export function goalRecordOf(value: unknown): GoalRecord | undefined {
     typeof value.objective !== 'string' ||
     !(STATUSES as readonly unknown[]).includes(value.status) ||
     !finite(value.setAt) ||
-    !finite(value.baselineCostUsd) ||
     !finite(value.turns) ||
     !finite(value.stalls) ||
     !finite(value.activeMs) ||
@@ -75,7 +75,6 @@ export function goalRecordOf(value: unknown): GoalRecord | undefined {
     status: value.status as GoalStatus,
     setAt: value.setAt,
     limits,
-    baselineCostUsd: value.baselineCostUsd,
     turns: value.turns,
     stalls: value.stalls,
     activeMs: value.activeMs,
@@ -113,9 +112,4 @@ export async function updateGoal(
       }) as JsonObject
     return next
   }, BG)
-}
-
-/** 整条会话此刻的累计花费（美元）：`harness.usage()` 合计，含同一存储里的派生 agent 与 hook agent */
-export async function sessionCostUsd(harness: Harness): Promise<number> {
-  return totalCost(await harness.usage(BG))
 }

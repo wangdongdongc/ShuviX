@@ -74,8 +74,6 @@ export interface MonitorSnapshotHost {
   readonly schedulerRunning: boolean
   /** 模型的上下文窗口（注册表现查；查不到 → 0） */
   contextWindowOf(ref: { provider: string; modelId: string } | undefined): number
-  /** 会话花费（缓存过的 `harness.usage()` 合计） */
-  sessionCost(): Promise<number>
 }
 
 const GENERATION = 'pi.generation'
@@ -91,7 +89,6 @@ export async function collectMonitorRows(host: MonitorSnapshotHost): Promise<Age
     (record) => host.installed(record.conversationId) || live.has(record.conversationId)
   )
   if (host.lock === undefined && listed.length === 0) return []
-  const sessionCost = await host.sessionCost()
   const rows: AgentMonitorRow[] = []
   const lock = host.lock
   if (lock !== undefined) {
@@ -104,8 +101,7 @@ export async function collectMonitorRows(host: MonitorSnapshotHost): Promise<Age
       profileName: lock.profileName,
       conversationId: lock.conversationId,
       startedAt: lock.createdAt,
-      ...shared,
-      sessionCost
+      ...shared
     })
   }
   for (const record of listed) {
@@ -121,8 +117,7 @@ export async function collectMonitorRows(host: MonitorSnapshotHost): Promise<Age
       dispatch: record.dispatch,
       conversationId: record.conversationId,
       startedAt: record.createdAt,
-      ...shared,
-      sessionCost
+      ...shared
     })
   }
   return rows
@@ -140,7 +135,6 @@ type ConversationFigures = Pick<
   | 'toolCount'
   | 'contextTokens'
   | 'cache'
-  | 'cost'
 >
 
 async function conversationFigures(
@@ -179,8 +173,7 @@ async function conversationFigures(
     cache: {
       ...totals.cache,
       ...(scan.last === undefined ? {} : { last: scan.last })
-    },
-    cost: { total: totals.cost }
+    }
   }
 }
 
@@ -217,39 +210,26 @@ function queueCounts(items: readonly unknown[] | undefined): AgentMonitorEntry['
 
 interface UsageTotals {
   cache: Omit<AgentMonitorCacheUsage, 'last'>
-  cost: number
   /** 账本里有没有任何 token 用量（按模型的桶） */
   any: boolean
 }
 
-/** 一个对话的 `pi.usage`：缓存三项只取按模型的桶，花费取两种桶的合计 */
+/** 一个对话的 `pi.usage`：缓存三项只取按模型的桶 */
 function usageTotals(state: Readonly<UsageState> | undefined): UsageTotals {
   let input = 0
   let cacheRead = 0
   let cacheWrite = 0
-  let cost = 0
   let any = false
   for (const usage of Object.values(state?.models ?? {})) {
     if (contextTokensOf(usage) > 0) any = true
     input += finite(usage.input)
     cacheRead += finite(usage.cacheRead)
     cacheWrite += finite(usage.cacheWrite)
-    cost += finite(usage.cost?.total)
   }
-  for (const usage of Object.values(state?.tools ?? {})) cost += finite(usage.cost?.total)
   return {
     cache: { input, cacheRead, cacheWrite, reported: cacheRead > 0 || cacheWrite > 0 },
-    cost,
     any
   }
-}
-
-/** 整条会话的花费：`harness.usage()` 两种桶的 `cost.total` 合计 */
-export function totalCost(state: Readonly<UsageState>): number {
-  let cost = 0
-  for (const usage of Object.values(state.models)) cost += finite(usage.cost?.total)
-  for (const usage of Object.values(state.tools)) cost += finite(usage.cost?.total)
-  return cost
 }
 
 function finite(value: unknown): number {

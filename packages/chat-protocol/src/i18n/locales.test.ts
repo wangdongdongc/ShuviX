@@ -266,23 +266,22 @@ describe('i18n 语言包', () => {
   })
 
   /**
-   * P3-13-26：监控页换成 durable 的数之后 —— 花费、会话总花费、interrupted 相位、已暂停的请求日志横幅是新的；
-   * 孤儿徽章、累计计数器、分支摘要相位的文案三语都下线；队列只剩两个数，命中率不再插调用次数。
+   * P3-13-26：监控页换成 durable 的数之后 —— interrupted 相位、已暂停的请求日志横幅是新的；孤儿徽章、累计计数器、
+   * 分支摘要相位的文案三语都下线；队列只剩两个数，命中率不再插调用次数。花费、会话总花费的文案 2026-11-09 随花费一起下线。
    */
   it('P3-13-26 monitor copy: the new keys in all three languages, the removed ones in none', () => {
-    const ADDED = [
-      'settings.httpLogPausedHint',
-      'settings.agentMonitorFieldCost',
-      'settings.agentMonitorFieldSessionCost',
-      'settings.agentMonitorPhase_interrupted',
-      'panel.agentCostTitle'
-    ]
+    const ADDED = ['settings.httpLogPausedHint', 'settings.agentMonitorPhase_interrupted']
     const REMOVED = [
       'settings.agentMonitorOrphan',
       'settings.agentMonitorOrphanHint',
       'settings.agentMonitorCounters',
       'settings.agentMonitorFieldCounters',
-      'settings.agentMonitorPhase_branch_summary'
+      'settings.agentMonitorPhase_branch_summary',
+      'settings.agentMonitorFieldCost',
+      'settings.agentMonitorFieldSessionCost',
+      'settings.agentMonitorCostUnpriced',
+      'panel.agentCostTitle',
+      'panel.agentCostUnpricedTitle'
     ]
     for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
       const present = new Set(flatten(bundle))

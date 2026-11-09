@@ -9,8 +9,8 @@ export class ClassifierLogDao extends BaseDao {
   insert(log: ClassifierLog): void {
     this.stmt(
       `INSERT INTO classifier_logs (id, createdAt, scene, sessionId, toolCallId, subject, provider, model,
-         request, response, status, error, ms, inputTokens, cost)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         request, response, status, error, ms, inputTokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       log.id,
       log.createdAt,
@@ -25,8 +25,7 @@ export class ClassifierLogDao extends BaseDao {
       log.status,
       log.error,
       log.ms,
-      log.inputTokens,
-      log.cost
+      log.inputTokens
     )
   }
 
@@ -52,7 +51,7 @@ export class ClassifierLogDao extends BaseDao {
       .prepare(
         `SELECT c.id, c.createdAt, c.scene, c.sessionId, COALESCE(s.title, '') AS sessionTitle,
                 c.toolCallId, c.subject, c.provider, c.model, c.response, c.status, c.error, c.ms,
-                c.inputTokens, c.cost
+                c.inputTokens
          FROM classifier_logs c
          LEFT JOIN sessions s ON c.sessionId = s.id
          ${where}
@@ -61,10 +60,13 @@ export class ClassifierLogDao extends BaseDao {
       .all(...values) as ClassifierLogSummary[]
   }
 
+  /** 列名写全：表里还有一列 `cost`（v32 建的），ShuviX 不再算花费（2026-11-09），它不读也不写，留默认 0 */
   getById(id: string): ClassifierLog | undefined {
-    return this.stmt('SELECT * FROM classifier_logs WHERE id = ?').get(id) as
-      | ClassifierLog
-      | undefined
+    return this.stmt(
+      `SELECT id, createdAt, scene, sessionId, toolCallId, subject, provider, model,
+              request, response, status, error, ms, inputTokens
+       FROM classifier_logs WHERE id = ?`
+    ).get(id) as ClassifierLog | undefined
   }
 
   /** 出现过的场景（筛选下拉用） */

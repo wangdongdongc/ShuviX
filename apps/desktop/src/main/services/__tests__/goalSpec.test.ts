@@ -139,8 +139,7 @@ async function setup(): Promise<{ session: DurableSession }> {
   mocks.host.current = t.host
   service = new GoalService({
     now: () => Date.now(),
-    checkinFirstMs: 60_000,
-    budgetCheckMs: 60_000
+    checkinFirstMs: 60_000
   })
   const session = await t.open(SID)
   await primeRoot(session)

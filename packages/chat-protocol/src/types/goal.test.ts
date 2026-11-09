@@ -50,8 +50,8 @@ describe('CP-1 判定结论的守卫与严格程度', () => {
 })
 
 describe('CP-2 缺省上限与进行中时长', () => {
-  it('缺省上限 = 5 美元 / 50 轮 / 3 次停滞，没有时长上限（D3）', () => {
-    expect(DEFAULT_GOAL_LIMITS).toStrictEqual({ costUsd: 5, maxTurns: 50, stallTurns: 3 })
+  it('缺省上限 = 50 轮 / 3 次停滞，没有时长上限（D3）；没有花费上限（2026-11-09：ShuviX 不算钱）', () => {
+    expect(DEFAULT_GOAL_LIMITS).toStrictEqual({ maxTurns: 50, stallTurns: 3 })
     expect('wallClockMin' in DEFAULT_GOAL_LIMITS).toBe(false)
   })
 

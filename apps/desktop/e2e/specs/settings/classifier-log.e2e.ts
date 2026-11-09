@@ -429,8 +429,7 @@ describe('分类器日志：IPC → 页面 → 清空 → 重启', () => {
       response,
       status: 'ok',
       ms: 210,
-      inputTokens: 57,
-      cost: 0.00002
+      inputTokens: 57
     })
     insert({
       id: '01990000-0000-7000-8000-00000000c1e8',

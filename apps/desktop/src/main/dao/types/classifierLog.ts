@@ -25,6 +25,4 @@ export interface ClassifierLog {
   error: string
   ms: number
   inputTokens: number
-  /** 按目录价算的费用（美元），服务没报用量时为 0 */
-  cost: number
 }

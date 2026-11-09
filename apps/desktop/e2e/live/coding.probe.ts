@@ -77,13 +77,11 @@
  * `PROBE_RUNS` (repeats of each model × arm × task), `PROBE_LANG` (default zh), `PROBE_AUTO_REVIEW=1` (let the
  * product's reviewer answer permission asks instead of the probe, in every arm), `PROBE_OUT` (report folder).
  * Goal arm: `PROBE_GOAL_TIMEOUT_MIN` (default 120: the probe gives up on a goal that has not ended by then),
- * `PROBE_GOAL_BUDGET` (dollars) and `PROBE_GOAL_TURNS` (continuations) set the goal's limits; unset, the
- * product's defaults apply ($5, 50; the budget does nothing for a model without a price).
+ * `PROBE_GOAL_TURNS` (continuations) sets the goal's turn limit; unset, the product's default applies (50).
  * `PROBE_CONTEXT_WINDOW=<tokens>` writes that window into the model row's capabilities so compaction comes
- * sooner. It only takes effect for a model id outside pi's catalog (an overlay row, which also has no price,
- * so cost reads 0 and the goal budget is off): catalog models keep the catalog's window (deepseek-flash,
- * deepseek-v4-pro and kimi-for-coding are 1M). The report shows the window each run really had and how many
- * compactions happened, so a run where it did not apply is visible.
+ * sooner. It only takes effect for a model id outside pi's catalog (an overlay row): catalog models keep the
+ * catalog's window (deepseek-flash, deepseek-v4-pro and kimi-for-coding are 1M). The report shows the window
+ * each run really had and how many compactions happened, so a run where it did not apply is visible.
  * `PROBE_SELFCHECK=1` runs no model: it checks that every task's start state fails its grader and its reference
  * solution passes, the early message's rules included (printed apart); for a task with a `trap/` overlay (the
  * trap set's plausible premature-done state) also that it passes the visible tests and the suite yet fails
@@ -94,22 +92,20 @@
  *
  * Report (`summary.md`, `summary.json`): per model × arm and per run, pass / core / visible tests / tampering /
  * tokens / requests / seconds / hand-offs. When a run has rules or a goal, "Goals, rules and compaction" adds:
- * rules kept (C1, C2 per run), compactions, the root's context window, the session tree's cost in dollars
- * (agent monitor `sessionCost` of every session of the tree still open at the end; unlike the token columns,
- * which read transcripts, it includes hook agents such as the goal judge), and for the goal arm the final
- * status, pause reason, continuations (`turns`), the goal's own cost (`costUsd`), wall time from setting the
- * goal to its end, and the judge's last verdict with its reason (each not-met reason on the way is in the
- * run's details). "Trap: declared done vs the end condition" (whenever a goal run has a first check, and for
+ * rules kept (C1, C2 per run), compactions, the root's context window, and for the goal arm the final
+ * status, pause reason, continuations (`turns`), wall time from setting the goal to its end, and the judge's
+ * last verdict with its reason (each not-met reason on the way is in the run's details).
+ * "Trap: declared done vs the end condition" (whenever a goal run has a first check, and for
  * the trap set): per model × arm, direct runs that stopped short (the state the agent declared done fails the
  * grader), and for goal runs the grade at the first check against the first verdict — clean (passes, met),
  * caught (fails, not_met, the final state passes), caught-not-fixed (fails, not_met, final fails), false-met
- * (fails, met), over-strict (passes, not_met) — with continuations, cost and seconds; per run the first
+ * (fails, met), over-strict (passes, not_met) — with continuations and seconds; per run the first
  * verdict's reason and the core checks the first state failed.
  * "S1: does shaping recover what a vague goal loses?" (whenever a run is in goal-oracle, goal-shaped or
  * planner): per model × arm on the tasks with hidden facts — facts met (all and per task), pass, first-check
- * classes, continuations, cost, seconds; for goal-shaped and planner the planner's verdicts, decisions that
+ * classes, continuations, seconds; for goal-shaped and planner the planner's verdicts, decisions that
  * touched a fact vs noise, facts in the accepted text before work (and how they got there), planner seconds
- * (median) and cost; the controls' ready rate and decisions; then the four S1 thresholds evaluated:
+ * (median); the controls' ready rate and decisions; then the four S1 thresholds evaluated:
  * (i) goal meets fewer facts than goal-oracle; (ii) goal-shaped recovers at least half of that gap; (iii) the
  * planner says ready on at least 6/7 of control runs (the proposal counts 7 controls; there are 8: catval,
  * 3 long, 4 trap, so it is applied as a rate) with at most 1 decision per control run on average;
@@ -259,12 +255,8 @@ function positiveEnv(name: string): number | undefined {
 const GOAL_TIMEOUT_MS = (positiveEnv('PROBE_GOAL_TIMEOUT_MIN') ?? 120) * 60 * 1000
 /** goal arm: limits set with the goal; what is unset takes the product's defaults */
 const GOAL_LIMITS: Partial<GoalLimits> = (() => {
-  const costUsd = positiveEnv('PROBE_GOAL_BUDGET')
   const maxTurns = positiveEnv('PROBE_GOAL_TURNS')
-  return {
-    ...(costUsd !== undefined ? { costUsd } : {}),
-    ...(maxTurns !== undefined ? { maxTurns: Math.round(maxTurns) } : {})
-  }
+  return maxTurns !== undefined ? { maxTurns: Math.round(maxTurns) } : {}
 })()
 /** goal-shaped / planner arms: the planner's run is given up after this long (the goal is then the request) */
 const PLANNER_TIMEOUT_MS = (positiveEnv('PROBE_PLANNER_TIMEOUT_MIN') ?? 10) * 60 * 1000
@@ -516,17 +508,6 @@ const readMessages = (app: E2EApp, sid: string): Promise<Msg[]> =>
 const goalViewOf = (app: E2EApp, sid: string): Promise<GoalView | null> =>
   app.main.eval<GoalView | null>(`window.api.agent.goal(${JSON.stringify(sid)})`)
 
-/** Dollars each open session has spent (agent monitor rows; a session's root row carries `sessionCost`) */
-async function sessionCosts(app: E2EApp): Promise<Map<string, number>> {
-  const rows = await app.main.eval<Array<{ rootSessionId: string; sessionCost: number }>>(
-    `window.api.agent.monitorList().then((es) => es.map((e) => ({ rootSessionId: e.rootSessionId, sessionCost: e.sessionCost })))`
-  )
-  const out = new Map<string, number>()
-  for (const r of rows)
-    out.set(r.rootSessionId, Math.max(out.get(r.rootSessionId) ?? 0, r.sessionCost || 0))
-  return out
-}
-
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     p,
@@ -755,9 +736,6 @@ interface PlannerRun {
   draft?: PlannerDraft
   /** from sending the request to its last message */
   seconds: number
-  /** the planner agent's own spend (agent monitor `cost`); `sessionCostUsd` adds the session's hooks (title) */
-  costUsd: number
-  sessionCostUsd: number
   /** as the session really ran: thinking level, tools, the identity line of its system prompt */
   thinkingLevel: string
   tools: string[]
@@ -815,8 +793,6 @@ async function runPlanner(
     verdict: 'planner-error',
     violations: [],
     seconds: 0,
-    costUsd: 0,
-    sessionCostUsd: 0,
     thinkingLevel: '',
     tools: [],
     identity: '',
@@ -943,12 +919,10 @@ async function runPlanner(
         run.toolCalls[b.toolName ?? '?'] = (run.toolCalls[b.toolName ?? '?'] ?? 0) + 1
     const rows = await app.main
       .eval<
-        Array<{ kind: string; cost: number; sessionCost: number; lastActivityAt: number }>
-      >(`window.api.agent.monitorList().then((es) => es.filter((e) => e.rootSessionId === ${JSON.stringify(run.sessionId)}).map((e) => ({ kind: e.kind, cost: (e.cost && e.cost.total) || 0, sessionCost: e.sessionCost || 0, lastActivityAt: e.lastActivityAt || 0 })))`)
+        Array<{ kind: string; lastActivityAt: number }>
+      >(`window.api.agent.monitorList().then((es) => es.filter((e) => e.rootSessionId === ${JSON.stringify(run.sessionId)}).map((e) => ({ kind: e.kind, lastActivityAt: e.lastActivityAt || 0 })))`)
       .catch(() => [])
     const root = rows.find((r) => r.kind === 'root')
-    run.costUsd = root?.cost ?? 0
-    run.sessionCostUsd = rows.reduce((m, r) => Math.max(m, r.sessionCost), 0)
     // the agent's last message, else when the tree went quiet (5 s late)
     const end = root && root.lastActivityAt > sentAt ? root.lastActivityAt : settledAt
     if (sentAt && end) run.seconds = Math.round((end - sentAt) / 1000)
@@ -965,9 +939,7 @@ async function runPlanner(
       run.violations = parsed.violations
     } else run.error = parsed.error
   }
-  debug(
-    `planner: ${run.verdict}${run.error ? ` (${run.error})` : ''} in ${run.seconds} s, $${run.costUsd.toFixed(3)}`
-  )
+  debug(`planner: ${run.verdict}${run.error ? ` (${run.error})` : ''} in ${run.seconds} s`)
   return { run, messages }
 }
 
@@ -1105,8 +1077,6 @@ interface RunRecord {
   /** messages into sub-sessions that carried the user's own words, and how many words they quoted in all */
   userWordsAttached: { sends: number; words: number }
   user?: UserReport
-  /** dollars the session tree spent: agent monitor `sessionCost` of each session (0 = a model without a price) */
-  costUsd: number
   /** compaction summaries in the tree's transcripts */
   compactions: number
   /** the root's context window as it really ran (0 = unknown) */
@@ -1133,8 +1103,6 @@ interface GoalRun {
   reason?: string
   /** continuations the host started for the goal */
   turns: number
-  /** what the goal cost: the session's spend since it was set, sub-sessions included (GoalView.costUsd) */
-  costUsd: number
   /** from setting the goal until it ended, or until the probe gave up */
   wallSeconds: number
   /** the goal had not ended (or a verdict was still pending) when PROBE_GOAL_TIMEOUT_MIN ran out */
@@ -1462,7 +1430,7 @@ function renderSummary(): string {
         .join(' ')}; explore: ${r.exploreCalls}; follow-ups: ${r.followUps}`,
       `Agents: ${r.agents.join('; ') || 'builtin'}`,
       `User words attached to sub-session messages: ${r.userWordsAttached.words} in ${r.userWordsAttached.sends} message(s)`,
-      `Cost: $${r.costUsd.toFixed(2)}; compactions: ${r.compactions}; context window: ${r.contextWindow || 'unknown'}`
+      `Compactions: ${r.compactions}; context window: ${r.contextWindow || 'unknown'}`
     )
     if (r.goal) {
       const g = r.goal
@@ -1480,7 +1448,7 @@ function renderSummary(): string {
         g.setError
           ? `Goal: not set — ${g.setError}`
           : `Goal: ${g.status}${g.pauseReason ? ` (${g.pauseReason})` : ''}${g.timedOut ? ', still running when the probe gave up' : ''}; ` +
-              `${g.turns} continuation(s), $${g.costUsd.toFixed(2)}, ${g.wallSeconds} s` +
+              `${g.turns} continuation(s), ${g.wallSeconds} s` +
               `${g.verdict ? `; last verdict ${g.verdict}: ${g.reason}` : ''}`
       )
       for (const [i, reason] of g.notMet.entries()) lines.push(`  ${i + 1}. not met: ${reason}`)
@@ -1577,22 +1545,21 @@ function userSummary(): string[] {
   return out
 }
 
-/** The long set and the goal arm: rules kept, compactions, cost, and what came of each goal */
+/** The long set and the goal arm: rules kept, compactions, and what came of each goal */
 function goalSummary(): string[] {
   const rs = worked().filter((r) => r.goal || r.grade.constraints.total > 0)
   if (!rs.length) return []
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
-  const money = (n: number): string => `$${n.toFixed(2)}`
   const out = [
     '',
     '## Goals, rules and compaction',
     '',
     'rules kept = checks of the rules the user stated only in the early message (C1, C2 per task), apart from pass; ' +
-      'all kept = runs that kept every rule; cost = sessionCost of every session in the tree (0 = no price for the model); ' +
-      'goal columns (goal arm only): status when it ended, continuations the host started, the goal’s own cost, seconds from setting it to its end.',
+      'all kept = runs that kept every rule; ' +
+      'goal columns (goal arm only): status when it ended, continuations the host started, seconds from setting it to its end.',
     '',
-    '| model | arm | runs | pass | rules kept | all kept | compactions (mean) | window | cost (mean) | goal: met / impossible / paused / other | continuations (mean) | goal cost (mean) | goal s (mean) |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| model | arm | runs | pass | rules kept | all kept | compactions (mean) | window | goal: met / impossible / paused / other | continuations (mean) | goal s (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
   ]
   const groups = new Map<string, RunRecord[]>()
   for (const r of rs)
@@ -1608,16 +1575,16 @@ function goalSummary(): string[] {
     out.push(
       `| ${model} | ${arm} | ${g.length} | ${g.filter((r) => r.grade.pass).length}/${g.length} | ${total ? `${kept}/${total}` : '—'} | ` +
         `${total ? `${g.filter((r) => r.grade.constraints.kept === r.grade.constraints.total).length}/${g.length}` : '—'} | ` +
-        `${mean(g.map((r) => r.compactions)).toFixed(1)} | ${windows.join(', ')} | ${money(mean(g.map((r) => r.costUsd)))} | ` +
+        `${mean(g.map((r) => r.compactions)).toFixed(1)} | ${windows.join(', ')} | ` +
         `${goals.length ? `${count('met')} / ${count('impossible')} / ${count('paused')} / ${other}` : '—'} | ` +
-        `${goals.length ? mean(goals.map((x) => x.turns)).toFixed(1) : '—'} | ${goals.length ? money(mean(goals.map((x) => x.costUsd))) : '—'} | ` +
+        `${goals.length ? mean(goals.map((x) => x.turns)).toFixed(1) : '—'} | ` +
         `${goals.length ? Math.round(mean(goals.map((x) => x.wallSeconds))) : '—'} |`
     )
   }
   out.push(
     '',
-    '| model | arm | task | # | pass | rules | compactions | window | cost | goal | pause reason | continuations | goal cost | goal s | last verdict |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| model | arm | task | # | pass | rules | compactions | window | goal | pause reason | continuations | goal s | last verdict |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
   )
   const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
   for (const r of rs) {
@@ -1628,11 +1595,11 @@ function goalSummary(): string[] {
     const g = r.goal
     out.push(
       `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${r.grade.pass ? '✅' : '❌'}${r.error ? ' ⚠️' : ''} | ${rules || '—'} | ${r.compactions} | ` +
-        `${r.contextWindow ? k(r.contextWindow) : '?'} | ${money(r.costUsd)} | ` +
+        `${r.contextWindow ? k(r.contextWindow) : '?'} | ` +
         (g
-          ? `${g.setError ? 'not set' : g.status}${g.timedOut ? ' (timed out)' : ''} | ${g.pauseReason ?? '—'} | ${g.turns} | ${money(g.costUsd)} | ${g.wallSeconds} | ` +
+          ? `${g.setError ? 'not set' : g.status}${g.timedOut ? ' (timed out)' : ''} | ${g.pauseReason ?? '—'} | ${g.turns} | ${g.wallSeconds} | ` +
             `${g.verdict ? cell(`${g.verdict}: ${g.reason ?? ''}`).slice(0, 200) : '—'} |`
-          : '— | — | — | — | — | — |')
+          : '— | — | — | — | — |')
     )
   }
   return out
@@ -1647,7 +1614,6 @@ function trapSummary(): string[] {
   if (!rs.length || (SET !== 'trap' && !rs.some((r) => r.goal?.first))) return []
   const goalArm = (arm: string): boolean => isGoalArm(arm as Arm)
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
-  const money = (n: number): string => `$${n.toFixed(2)}`
   const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
   const CLASSES: TrapClass[] = ['clean', 'caught', 'caught-not-fixed', 'false-met', 'over-strict']
   /** the agent's first "done" failed the grader: direct = its final state; goal = the state the first check saw */
@@ -1664,11 +1630,11 @@ function trapSummary(): string[] {
     '',
     'stopped short = the state the agent first called done fails the grader (direct: its final state; goal: the state the judge’s first check saw, copied when the check began). ' +
       'Goal runs by the first verdict against that state: clean = passes and met; caught = fails, not_met, and the final state passes; caught-not-fixed = fails, not_met, final fails; ' +
-      'false-met = fails yet met; over-strict = passes yet not_met; other = impossible, no verdict, or no copy. Cost = the whole session tree (judge included); seconds = the whole run.',
+      'false-met = fails yet met; over-strict = passes yet not_met; other = impossible, no verdict, or no copy. Seconds = the whole run.',
     ...(traps.length ? ['', ...traps.map((t) => `- ${t.id}: ${t.trap}`)] : []),
     '',
-    '| model | arm | runs | pass | stopped short | clean | caught | caught-not-fixed | false-met | over-strict | other | continuations (mean) | cost (mean) | seconds (mean) |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| model | arm | runs | pass | stopped short | clean | caught | caught-not-fixed | false-met | over-strict | other | continuations (mean) | seconds (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
   ]
   const groups = new Map<string, RunRecord[]>()
   for (const r of rs)
@@ -1685,13 +1651,13 @@ function trapSummary(): string[] {
         `${short.length ? `${short.filter(Boolean).length}/${short.length}` : '—'} | ` +
         `${CLASSES.map(n).join(' | ')} | ${goalArm(arm) ? other : '—'} | ` +
         `${goalArm(arm) ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ` +
-        `${money(mean(g.map((r) => r.costUsd)))} | ${Math.round(mean(g.map((r) => r.seconds)))} |`
+        `${Math.round(mean(g.map((r) => r.seconds)))} |`
     )
   }
   out.push(
     '',
-    '| model | arm | task | # | final | first “done” state | its failed checks | first verdict | class | continuations | cost | s | first verdict reason |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| model | arm | task | # | final | first “done” state | its failed checks | first verdict | class | continuations | s | first verdict reason |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
   )
   for (const r of rs) {
     const f = r.goal?.first
@@ -1711,7 +1677,7 @@ function trapSummary(): string[] {
     out.push(
       `| ${r.model} | ${r.arm} | ${r.task} | ${r.run} | ${final} | ${cell(first)} | ${cell(failed) || '—'} | ` +
         `${goalArm(r.arm) ? (f?.verdict ?? 'none') : '—'} | ${goalArm(r.arm) ? trapClassOf(r) : r.grade.pass ? 'done' : 'stopped short'} | ` +
-        `${r.goal ? r.goal.turns : '—'} | ${money(r.costUsd)} | ${r.seconds} | ${f?.reason ? cell(f.reason).slice(0, 240) : '—'} |`
+        `${r.goal ? r.goal.turns : '—'} | ${r.seconds} | ${f?.reason ? cell(f.reason).slice(0, 240) : '—'} |`
     )
   }
   return out
@@ -1726,7 +1692,7 @@ function shapeDetails(r: RunRecord): string[] {
     .map(([n, c]) => `${n}×${c}`)
     .join(' ')
   const out = [
-    `Planner: ${p.verdict}${p.error ? ` — ${p.error}` : ''}; ${p.seconds} s, $${p.costUsd.toFixed(3)} (session $${p.sessionCostUsd.toFixed(3)}); ` +
+    `Planner: ${p.verdict}${p.error ? ` — ${p.error}` : ''}; ${p.seconds} s; ` +
       `thinking ${p.thinkingLevel || '?'}; tools ${p.tools.join(', ') || '?'}; calls ${calls || 'none'}` +
       `${p.asks ? `; ${p.asks} permission ask(s) refused` : ''}`
   ]
@@ -1802,7 +1768,6 @@ function s1Summary(): string[] {
   const models = [...new Set(records.map((r) => r.model))]
   const sum = <T>(xs: T[], f: (x: T) => number): number => xs.reduce((t, x) => t + f(x), 0)
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0)
-  const money = (n: number): string => `$${n.toFixed(2)}`
   const pct = (a: number, b: number): string =>
     b ? `${a}/${b} (${Math.round((100 * a) / b)}%)` : '—'
   const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ')
@@ -1817,11 +1782,10 @@ function s1Summary(): string[] {
     'Tasks with hidden facts only (catval, long and trap are the controls, below). facts met = facts whose grader checks all pass at the end. ' +
       'direct = the user stays: answers questions and corrects the completion report; goal = set and leave on the request (ask cards answered, nothing corrected); ' +
       'goal-oracle = the request plus every fact as "done when"; goal-shaped = the request plus the planner’s draft as the simulated user reviewed it. ' +
-      'First check: the judge’s first verdict against the graded state it saw (false-met = it said met while a check, a fact’s included, failed). ' +
-      'cost = the working session tree; planner cost = the planner agent’s own (separate session).',
+      'First check: the judge’s first verdict against the graded state it saw (false-met = it said met while a check, a fact’s included, failed).',
     '',
-    '| model | arm | runs | pass | facts met | per task | first check: clean / caught / caught-not-fixed / false-met / over-strict / other | continuations (mean) | cost (mean) | planner cost (mean) | seconds (mean) |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+    '| model | arm | runs | pass | facts met | per task | first check: clean / caught / caught-not-fixed / false-met / over-strict / other | continuations (mean) | seconds (mean) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
   ]
   for (const model of models) {
     for (const arm of S1_ARMS) {
@@ -1846,8 +1810,8 @@ function s1Summary(): string[] {
             sum(u, (x) => x.facts.length)
           )} | ${perTask} | ` +
           `${isGoalArm(arm) ? `${CLASSES.map((c) => classes.filter((x) => x === c).length).join(' / ')} / ${other}` : '—'} | ` +
-          `${isGoalArm(arm) ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ${money(mean(g.map((r) => r.costUsd)))} | ` +
-          `${arm === 'goal-shaped' ? money(mean(g.map((r) => r.shape?.planner.costUsd ?? 0))) : '—'} | ${Math.round(mean(g.map((r) => r.seconds)))} |`
+          `${isGoalArm(arm) ? mean(g.map((r) => r.goal?.turns ?? 0)).toFixed(1) : '—'} | ` +
+          `${Math.round(mean(g.map((r) => r.seconds)))} |`
       )
     }
   }
@@ -1861,8 +1825,8 @@ function s1Summary(): string[] {
         'answering a decision / correcting an item that contradicted one / added where an item touched its point / already right in the draft. ' +
         'noise = decisions that touched no fact. review: sim = reviewed, accept = taken as it is (the review failed). cut = runs whose goal text was cut to 4000 characters.',
       '',
-      '| model | arm | runs | ready / shape / error | decisions: with a fact / noise | criteria · assumptions · non-goals (mean) | facts in before work | decision / corrected / added / already | review: sim / accept | entries not applied | cut | planner s (median) | planner cost (mean) | review s (median) |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+      '| model | arm | runs | ready / shape / error | decisions: with a fact / noise | criteria · assumptions · non-goals (mean) | facts in before work | decision / corrected / added / already | review: sim / accept | entries not applied | cut | planner s (median) | review s (median) |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
     )
     for (const model of models) {
       for (const arm of ['goal-shaped', 'planner'] as Arm[]) {
@@ -1885,7 +1849,7 @@ function s1Summary(): string[] {
             `${how('decision')} / ${how('corrected')} / ${how('added')} / ${how('already')} | ` +
             `${sh.filter((x) => x.reviewBy === 'sim').length} / ${sh.filter((x) => x.reviewBy === 'accept').length} | ` +
             `${sum(sh, (x) => x.applied?.ignored.length ?? 0)} | ${sh.filter((x) => x.truncatedChars > 0).length} | ` +
-            `${median(sh.map((x) => x.planner.seconds))} | ${money(mean(sh.map((x) => x.planner.costUsd)))} | ` +
+            `${median(sh.map((x) => x.planner.seconds))} | ` +
             `${median(sh.filter((x) => x.reviewBy !== 'none').map((x) => x.reviewSeconds))} |`
         )
       }
@@ -1901,8 +1865,8 @@ function s1Summary(): string[] {
       '',
       'Controls (catval, long, trap: fully specified or with a stated end condition). decisions = what a shape verdict would ask the user (a ready verdict asks nothing).',
       '',
-      '| model | runs | ready | shape | error | decisions (mean) | planner s (median) | planner cost (mean) |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- |'
+      '| model | runs | ready | shape | error | decisions (mean) | planner s (median) |',
+      '| --- | --- | --- | --- | --- | --- | --- |'
     )
     for (const model of models) {
       const g = controls.filter((r) => r.model === model)
@@ -1911,8 +1875,7 @@ function s1Summary(): string[] {
         g.filter((r) => r.shape?.planner.verdict === v).length
       out.push(
         `| ${model} | ${g.length} | ${pct(n('ready'), g.length)} | ${n('shape')} | ${n('planner-error')} | ` +
-          `${mean(g.map(decisionsAsked)).toFixed(2)} | ${median(g.map((r) => r.shape?.planner.seconds ?? 0))} | ` +
-          `${money(mean(g.map((r) => r.shape?.planner.costUsd ?? 0)))} |`
+          `${mean(g.map(decisionsAsked)).toFixed(2)} | ${median(g.map((r) => r.shape?.planner.seconds ?? 0))} |`
       )
     }
   }
@@ -1920,8 +1883,8 @@ function s1Summary(): string[] {
   if (planned.length) {
     out.push(
       '',
-      '| model | arm | task | # | verdict | decisions (fact / noise) | criteria | assumptions | non-goals | facts in | s | cost | notes |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+      '| model | arm | task | # | verdict | decisions (fact / noise) | criteria | assumptions | non-goals | facts in | s | notes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
     )
     for (const r of planned) {
       const sh = r.shape as ShapeRecord
@@ -1943,7 +1906,7 @@ function s1Summary(): string[] {
             Object.entries(sh.applied?.facts ?? {})
               .map(([f, how]) => `${f} ${how}`)
               .join(', ') || '—'
-          } | ${p.seconds} | ${money(p.costUsd)} | ${cell(notes).slice(0, 200) || '—'} |`
+          } | ${p.seconds} | ${cell(notes).slice(0, 200) || '—'} |`
       )
     }
   }
@@ -2153,7 +2116,6 @@ async function runPlannerArm(modelName: string, task: CodingTask, run: number): 
     finalReply: shape?.planner.finalText ?? '',
     agents,
     userWordsAttached: { sends: 0, words: 0 },
-    costUsd: 0,
     compactions: 0,
     contextWindow: 0,
     ...(shape ? { shape } : {}),
@@ -2479,11 +2441,6 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
     const same = tempDirs.every((d) => d === tempDirs[0])
     agents.push(`temp folders: ${same ? 'shared' : 'DIFFERENT'} (${tempDirs.join(', ')})`)
   }
-  const costs = await sessionCosts(app).catch((e) => {
-    debug(`${label}: monitorList failed: ${String(e)}`)
-    return new Map<string, number>()
-  })
-  const costUsd = sessions.reduce((t, s) => t + (costs.get(s.id) ?? 0), 0)
   // goal arms: the goal as it stands now (also after a timeout or an error)
   let goal: GoalRun | undefined
   if (isGoalArm(arm)) {
@@ -2503,7 +2460,6 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
         ? { verdict: view.lastVerdict.verdict, reason: view.lastVerdict.reason }
         : {}),
       turns: view?.turns ?? 0,
-      costUsd: view?.costUsd ?? 0,
       wallSeconds: goalSetAt === undefined ? 0 : Math.round((end - goalSetAt) / 1000),
       timedOut: goalSetAt !== undefined && goalSetError === undefined && goalEndedAt === undefined,
       notMet
@@ -2672,7 +2628,6 @@ async function runOne(modelName: string, arm: Arm, task: CodingTask, run: number
       return { sends: quoted.length, words: quoted.reduce((n, m) => n + m.quoted, 0) }
     })(),
     ...(user ? { user } : {}),
-    costUsd,
     compactions: all.filter((m) => m.compaction).length,
     contextWindow,
     ...(goal ? { goal } : {}),
@@ -2950,7 +2905,6 @@ function selfCheckShaping(): void {
       truncatedChars: 0,
       status: 'met',
       turns: 0,
-      costUsd: 0.1,
       wallSeconds: 90,
       timedOut: false,
       notMet: [],
@@ -2994,7 +2948,6 @@ function selfCheckShaping(): void {
       ...(arm === 'planner' || task !== 'quiet'
         ? {}
         : { user: userReport(facts, [], grade, [], [], false, []) }),
-      costUsd: 0.1,
       compactions: 0,
       contextWindow: 0,
       ...(isGoalArm(arm) ? { goal } : {}),
@@ -3009,8 +2962,6 @@ function selfCheckShaping(): void {
     violations: [],
     draft: verdict === 'ready' ? { ...example, verdict, decisions: [] } : example,
     seconds,
-    costUsd: 0.01,
-    sessionCostUsd: 0.02,
     thinkingLevel: 'medium',
     tools: ['read', 'ls', 'grep', 'glob'],
     identity: 'made up',

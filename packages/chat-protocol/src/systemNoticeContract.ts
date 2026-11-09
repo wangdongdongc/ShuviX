@@ -32,8 +32,9 @@ export const DATE_NOTICE_KIND = 'date'
 export const EMPTY_REPLY_NOTICE_KIND = 'empty-reply'
 
 /**
- * 目标模式（docs/goal-mode-design.md §5）宿主写给模型的通知：续跑、长时间等待时的检查、预算收尾、目标改了、
- * 目标的结局（达成 / 做不到 / 暂停 / 清除 / 被替换 / 恢复）。标签名同时是它的通知种类（`UserTextMeta.noticeKind`）。
+ * 目标模式（docs/goal-mode-design.md §5）宿主写给模型的通知：续跑、长时间等待时的检查、目标改了、目标的结局
+ * （达成 / 做不到 / 暂停 / 清除 / 被替换 / 恢复）。标签名同时是它的通知种类（`UserTextMeta.noticeKind`）。
+ * `goal-budget`（花费越线收尾）不再写了 —— ShuviX 不算花费（2026-11-09）—— 但 v0.2.58–v0.2.59 的会话里还有，照旧登记。
  *
  * 必须登记在下面的表里：steer 进当前轮的通知是 pi 自己构造的 user 消息，只能靠正文形状认出来 —— 漏了，续跑消息
  * 就会被转写摘要当成人写的，自动审查会拿它当用户的许可。

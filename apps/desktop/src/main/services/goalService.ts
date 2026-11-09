@@ -16,7 +16,7 @@
  *  - 同一会话的目标操作串行（`serial`）；用户的暂停 / 清除 / 编辑先中止在途的判定，判定回来发现被中止就丢掉结论；
  *  - 后台工作（后台 bash、在跑的子会话）没跑完不判定：它们的完成通知会起一轮；等太久（30 分钟起，翻倍到 2 小时）
  *    写一条检查通知让 agent 看看；
- *  - 预算在运行中也查（会话事件节流到每 10 秒一次）：越线就暂停并 steer 一条收尾通知；
+ *  - 护栏只有续跑轮数、连续无进展与累计时长：ShuviX 不算花费（2026-11-09 用户裁决），目标没有花费上限；
  *  - 启动时（`sweepOnStartup`）进行中的目标：会话空闲 → 暂停（restart）；会话被中断 → 不动，等用户点继续；
  *  - 进行中 / 暂停中的会话记在设置 `goal.sessions`（会话 id → 状态）：侧栏徽标、启动扫描、通知的「目标进行中」都读它，
  *    不用打开每条会话的存储。
@@ -24,14 +24,12 @@
 import {
   afterRun,
   applyVerdict,
-  budgetCrossed,
   createGoal,
   editGoal,
   goalRecordOf,
   mergeLimits,
   pauseGoal,
   readGoal,
-  renderGoalBudget,
   renderGoalCheckin,
   renderGoalContinue,
   renderGoalResumed,
@@ -39,7 +37,6 @@ import {
   renderGoalUpdated,
   resumeBlockedBy,
   resumeGoal,
-  sessionCostUsd,
   updateGoal,
   type DurableSession,
   type GoalStatusEvent
@@ -86,16 +83,13 @@ const log = createLogger('Goal')
 
 /** 进行中 / 暂停中的会话（会话 id → 状态）—— 终态与没有目标的不记 */
 export const GOAL_SESSIONS_SETTING = 'goal.sessions'
-/** 新目标的缺省上限（设置页可改；`off` = 不限花费） */
-export const GOAL_DEFAULT_COST_SETTING = 'goal.defaultCostUsd'
+/** 新目标的缺省上限（设置页可改） */
 export const GOAL_DEFAULT_TURNS_SETTING = 'goal.defaultMaxTurns'
 export const GOAL_STALL_TURNS_SETTING = 'goal.stallTurns'
 
 /** 后台工作等了多久写第一条检查通知；之后每次翻倍，最多到 4 倍（Claude Code 的退避） */
 const CHECKIN_FIRST_MS = 30 * 60_000
 const CHECKIN_MAX_FACTOR = 4
-/** 运行中查预算的间隔 */
-const BUDGET_CHECK_INTERVAL_MS = 15_000
 
 /** payload 的截断 */
 const MAX_TOOL_CALLS = 40
@@ -111,8 +105,6 @@ export interface GoalServiceDeps {
   now(): number
   /** 检查通知的首个间隔（测试缩短） */
   checkinFirstMs?: number
-  /** 运行中查预算的间隔（测试缩短） */
-  budgetCheckMs?: number
 }
 
 export type GoalActResult = { ok: true } | { ok: false; error: string }
@@ -270,8 +262,6 @@ export class GoalService {
   >()
   /** 会话正忙时攒下的结局通知（这一轮结束时写） */
   private readonly pendingStatus = new Map<string, Array<{ text: string; requestId: string }>>()
-  /** 运行中查预算的计时器（根运行开始时起，结束时停） */
-  private readonly budgetTimers = new Map<string, ReturnType<typeof setInterval>>()
   private statusCache: Record<string, GoalStatus> | undefined
 
   constructor(deps: GoalServiceDeps) {
@@ -350,13 +340,7 @@ export class GoalService {
 
   /** 设置里的缺省上限 */
   defaultLimits(): GoalLimits {
-    const costRaw = settingsService.get(GOAL_DEFAULT_COST_SETTING)
-    const cost =
-      costRaw?.trim() === 'off'
-        ? undefined
-        : (finitePositive(costRaw) ?? DEFAULT_GOAL_LIMITS.costUsd)
     return {
-      ...(cost !== undefined ? { costUsd: cost } : {}),
       maxTurns: Math.max(
         1,
         Math.round(
@@ -372,21 +356,6 @@ export class GoalService {
         )
       )
     }
-  }
-
-  /** 目标期间的花费：会话自己的增量 + 目标期间新建的子会话的全部 */
-  private async goalCost(session: DurableSession, goal: GoalRecord): Promise<number> {
-    let cost = Math.max(0, (await sessionCostUsd(session.harness)) - goal.baselineCostUsd)
-    for (const child of sessionRecords.findChildren(session.sessionId)) {
-      if (child.createdAt < goal.setAt) continue
-      try {
-        const opened = await getSessionHost().peek(child.id)
-        if (opened !== undefined) cost += await sessionCostUsd(opened.harness)
-      } catch (error) {
-        log.warn(`读子会话花费失败 session=${child.id}: ${String(error)}`)
-      }
-    }
-    return cost
   }
 
   private checkerMissing(): boolean {
@@ -405,7 +374,6 @@ export class GoalService {
     return {
       ...goal,
       sessionId: session.sessionId,
-      costUsd: await this.goalCost(session, goal),
       judging: this.judging.has(session.sessionId),
       checkerMissing: this.checkerMissing()
     }
@@ -605,9 +573,8 @@ export class GoalService {
       }
       case 'resume': {
         if (before.status !== 'paused') return { ok: true }
-        const cost = await this.goalCost(session, before)
-        // 恢复之后仍撞着的上限（预算、轮数、时长）：不恢复，请用户先调高 —— 否则白跑一整轮再暂停
-        const blocked = resumeBlockedBy(before, { costUsd: cost, now })
+        // 恢复之后仍撞着的上限（轮数、时长）：不恢复，请用户先调高 —— 否则白跑一整轮再暂停
+        const blocked = resumeBlockedBy(before, { now })
         if (blocked !== undefined) return { ok: false, error: t(`goal.resumeBlocked.${blocked}`) }
         const goal = await updateGoal(session.harness, (g) =>
           g?.id === before.id ? resumeGoal(g, now) : g
@@ -618,7 +585,7 @@ export class GoalService {
         await this.broadcast(session, goal)
         // 空闲：起一轮接着干，跑完照常判定；忙 / 中断：等那一轮（中断的等用户点继续）
         if (!session.isBusy() && !session.isInterrupted()) {
-          await session.notify(renderGoalResumed(goal, cost), {
+          await session.notify(renderGoalResumed(goal), {
             kind: 'goal-continue',
             resume: 'goal',
             requestId: `goal:${goal.id}:resumed:${now}`
@@ -659,7 +626,6 @@ export class GoalService {
       id: `g_${randomUUID().slice(0, 8)}`,
       objective: masked,
       limits: mergeLimits(this.defaultLimits(), limitsPatch),
-      baselineCostUsd: await sessionCostUsd(session.harness),
       now
     })
     await updateGoal(session.harness, () => goal)
@@ -692,7 +658,6 @@ export class GoalService {
 
   /** 根运行结束（会话信号的 `ended`，派生 agent 的不进来） */
   onRootRunEnded(sessionId: string, reason: 'ok' | 'aborted' | 'error'): void {
-    this.stopBudgetTimer(sessionId)
     if (this.pendingStatus.has(sessionId)) {
       void this.queue(sessionId, () => this.flushPendingStatus(sessionId)).catch((error: unknown) =>
         log.warn(`写目标结局通知失败 session=${sessionId}: ${String(error)}`)
@@ -717,7 +682,6 @@ export class GoalService {
     // 上一次判定所依据的事实截止到哪，这一次就从哪往后看（判定途中开跑的一轮不会漏）
     const since = Math.max(goal.setAt, goal.lastVerdict?.at ?? 0)
     const facts = runFactsOf(messages, since)
-    const costUsd = await this.goalCost(session, goal)
     const backgroundWork =
       taskRegistry.runningCount(sessionId, 'bash') +
         taskRegistry.runningCount(sessionId, 'sub-session') >
@@ -727,7 +691,6 @@ export class GoalService {
       backgroundWork,
       toolCalls: facts.toolCalls,
       toolSucceeded: facts.toolSucceeded,
-      costUsd,
       now
     })
     switch (decision.action) {
@@ -745,7 +708,7 @@ export class GoalService {
       }
       case 'judge':
         this.clearCheckin(sessionId)
-        await this.judge(session, decision.goal, facts, costUsd, {
+        await this.judge(session, decision.goal, facts, {
           noProgress: decision.noProgress,
           factsAt: now
         })
@@ -787,7 +750,6 @@ export class GoalService {
     session: DurableSession,
     goal: GoalRecord,
     facts: RunFacts,
-    costUsd: number,
     run: { noProgress: boolean; factsAt: number }
   ): Promise<void> {
     const sessionId = session.sessionId
@@ -796,7 +758,7 @@ export class GoalService {
     await this.broadcast(session, goal)
     let verdict: GoalVerdict | null = null
     try {
-      const payload = await this.payloadOf(session, goal, facts, costUsd)
+      const payload = await this.payloadOf(session, goal, facts)
       const decision = await hookTriggers.decide('goal.check', payload, {
         signal: controller.signal
       })
@@ -826,7 +788,6 @@ export class GoalService {
     }
     const now = this.deps.now()
     const outcome = applyVerdict(current, verdict, {
-      costUsd,
       now,
       noProgress: run.noProgress,
       at: run.factsAt
@@ -842,7 +803,7 @@ export class GoalService {
         if (written?.status !== 'active') return
         await this.broadcast(session, written)
         await session.notify(
-          renderGoalContinue(written, costUsd, {
+          renderGoalContinue(written, {
             reason: written.lastVerdict?.reason ?? '',
             ...(written.lastVerdict?.nextStep ? { nextStep: written.lastVerdict.nextStep } : {})
           }),
@@ -881,8 +842,7 @@ export class GoalService {
   private async payloadOf(
     session: DurableSession,
     goal: GoalRecord,
-    facts: RunFacts,
-    costUsd: number
+    facts: RunFacts
   ): Promise<GoalCheckPayload> {
     const sessionId = session.sessionId
     const title = sessionRecords.pick(sessionId, ['title'])?.title ?? ''
@@ -908,7 +868,6 @@ export class GoalService {
         id: goal.id,
         objective: goal.objective,
         turns: goal.turns,
-        costUsd: Math.round(costUsd * 100) / 100,
         limits: goal.limits,
         activeMinutes: Math.round(goalActiveMs(goal, this.deps.now()) / 60_000),
         ...(goal.specPath ? { specPath: goal.specPath } : {})
@@ -969,13 +928,11 @@ export class GoalService {
       return
     }
     const now = this.deps.now()
-    const costUsd = await this.goalCost(session, goal)
-    if (goal.turns >= goal.limits.maxTurns || budgetCrossed(goal, costUsd)) {
-      const reason: GoalPauseReason = budgetCrossed(goal, costUsd) ? 'budget' : 'turns'
+    if (goal.turns >= goal.limits.maxTurns) {
       const written = await updateGoal(session.harness, (g) =>
-        g?.id === goal.id ? pauseGoal(g, reason, now) : g
+        g?.id === goal.id ? pauseGoal(g, 'turns', now) : g
       )
-      if (written?.status === 'paused') await this.paused(session, written, reason)
+      if (written?.status === 'paused') await this.paused(session, written, 'turns')
       return
     }
     const written = await updateGoal(session.harness, (g) =>
@@ -989,52 +946,6 @@ export class GoalService {
       requestId: `goal:${written.id}:checkin:${written.turns}`
     })
     this.armCheckin(sessionId, nextDelay, since)
-  }
-
-  // ─── 运行中查预算（§6.1） ──────────────────────────────
-
-  /** 根运行开始：进行中的目标在这一轮里每隔一会儿查一次花费（运行结束时停） */
-  onRootRunStarted(sessionId: string): void {
-    if (this.statuses()[sessionId] !== 'active' || this.budgetTimers.has(sessionId)) return
-    const timer = setInterval(() => {
-      void this.queue(sessionId, () => this.budgetCheckNow(sessionId)).catch((error: unknown) =>
-        log.warn(`目标预算检查失败 session=${sessionId}: ${String(error)}`)
-      )
-    }, this.deps.budgetCheckMs ?? BUDGET_CHECK_INTERVAL_MS)
-    timer.unref?.()
-    this.budgetTimers.set(sessionId, timer)
-  }
-
-  private stopBudgetTimer(sessionId: string): void {
-    const timer = this.budgetTimers.get(sessionId)
-    if (timer !== undefined) clearInterval(timer)
-    this.budgetTimers.delete(sessionId)
-  }
-
-  private async budgetCheckNow(sessionId: string): Promise<void> {
-    const session = getSessionHost().get(sessionId)
-    if (session === undefined || session.closed) {
-      this.stopBudgetTimer(sessionId)
-      return
-    }
-    if (!session.isBusy()) return
-    const goal = await readGoal(session.harness)
-    if (goal === undefined || goal.status !== 'active' || goal.limits.costUsd === undefined) return
-    const costUsd = await this.goalCost(session, goal)
-    if (!budgetCrossed(goal, costUsd)) return
-    const now = this.deps.now()
-    const written = await updateGoal(session.harness, (g) =>
-      g?.id === goal.id ? pauseGoal(g, 'budget', now) : g
-    )
-    if (written?.status !== 'paused') return
-    await session.notify(renderGoalBudget(written, costUsd), {
-      kind: 'goal-budget',
-      resume: 'never',
-      requestId: `goal:${written.id}:budget:${now}`
-    })
-    this.clearCheckin(sessionId)
-    await this.broadcast(session, written)
-    notifyGoalEnded(sessionId, outcomeText(written, { event: 'paused', reason: 'budget' }))
   }
 
   // ─── 启动、fork、删除 ─────────────────────────────────
@@ -1087,7 +998,6 @@ export class GoalService {
   forget(sessionId: string): void {
     this.abortJudging(sessionId)
     this.clearCheckin(sessionId)
-    this.stopBudgetTimer(sessionId)
     this.pendingStatus.delete(sessionId)
     this.recordStatus(sessionId, undefined)
   }
@@ -1096,7 +1006,6 @@ export class GoalService {
   dispose(): void {
     for (const id of [...this.checkins.keys()]) this.clearCheckin(id)
     for (const id of [...this.judging.keys()]) this.abortJudging(id)
-    for (const id of [...this.budgetTimers.keys()]) this.stopBudgetTimer(id)
   }
 }
 

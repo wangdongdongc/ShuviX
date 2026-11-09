@@ -1787,8 +1787,7 @@ describe('hookService — 停用开关（内置 hook，按对象 id 认）', () 
         id: 'g_1',
         objective: 'Make e2e green',
         turns: 0,
-        costUsd: 0,
-        limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
+        limits: { maxTurns: 50, stallTurns: 3 },
         activeMinutes: 0
       },
       userMessages: [],

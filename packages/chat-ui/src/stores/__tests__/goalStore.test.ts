@@ -20,11 +20,9 @@ function goal(sessionId: string, status: GoalView['status']): GoalView {
     status,
     setAt: 0,
     limits: { maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
     turns: 0,
     stalls: 0,
     activeMs: 0,
-    costUsd: 0,
     judging: false,
     checkerMissing: false
   }

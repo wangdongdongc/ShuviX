@@ -58,7 +58,6 @@ async function boot(): Promise<{ p: Proc; service: GoalModule['goalService'] }> 
   const { goalService } = (await import('../goalService')) as GoalModule
   const signals = await import('../sessionSignals')
   signals.setSessionRunObserver({
-    rootRunStarted: (sessionId) => goalService.onRootRunStarted(sessionId),
     rootRunEnded: (sessionId, reason) => goalService.onRootRunEnded(sessionId, reason)
   })
   rig.profiles['goal-judge'] = profile('goal-judge', ['read'], {

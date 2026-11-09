@@ -81,8 +81,6 @@ function entry(over: Partial<AgentMonitorEntry> = {}): AgentMonitorEntry {
     toolCount: 0,
     contextTokens: 0,
     cache: { input: 0, cacheRead: 0, cacheWrite: 0, reported: false },
-    cost: { total: 0 },
-    sessionCost: 0,
     ...over
   }
 }

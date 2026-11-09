@@ -150,6 +150,7 @@ export function goalNoticeText(
         label: t('goal.notice.checkin'),
         detail: info.waited ? t('goal.notice.waited', { waited: info.waited }) : undefined
       }
+    // 花费越线的收尾通知：如今不再写，v0.2.58–v0.2.59 的会话里还有
     case 'goal-budget':
       return { label: t('goal.notice.budget') }
     case 'goal-updated':

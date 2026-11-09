@@ -520,8 +520,6 @@ describe('P3-13-19 agentMonitor:list', () => {
         reported: true,
         last: { input: 1, cacheRead: 0, cacheWrite: 0 }
       },
-      cost: { total: 0.25 },
-      sessionCost: 0.5,
       rootSessionTitle: 'T'
     }
     const spawned: AgentMonitorEntry = {

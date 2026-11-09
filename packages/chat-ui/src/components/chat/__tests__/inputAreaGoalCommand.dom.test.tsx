@@ -153,12 +153,10 @@ const GOAL: GoalView = {
   objective: 'ship it',
   status: 'active',
   setAt: 0,
-  limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-  baselineCostUsd: 0,
+  limits: { maxTurns: 50, stallTurns: 3 },
   turns: 2,
   stalls: 0,
   activeMs: 0,
-  costUsd: 0.5,
   judging: false,
   checkerMissing: false
 }

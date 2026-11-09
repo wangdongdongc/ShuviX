@@ -78,7 +78,6 @@ import {
   InboxDoc,
   LiveDoc,
   ROOT_CONVERSATION_ID,
-  UsageDoc,
   UserEntry,
   type CommitPublication,
   type Conversation,
@@ -139,7 +138,7 @@ import {
   type ReconfigureOutcome,
   type ReconfigurePreview
 } from './lock'
-import { collectMonitorRows, totalCost, type AgentMonitorRow } from './monitorSnapshot'
+import { collectMonitorRows, type AgentMonitorRow } from './monitorSnapshot'
 import { newSessionProcessRecord, type SessionProcessRecord } from './processRecord'
 import { withMidRunNote } from './midRunNote'
 import { maybeAnnounceDate } from './prompt/dateNotice'
@@ -940,9 +939,6 @@ export class DurableSessionImpl implements DurableSession {
   private readonly placementWaiters = new Map<SubmissionId, (entryId: EntryId) => void>()
   /** 回退区段（P3-10a PIN-22）：回退独占；建锁 / 受理输入的入口在受理阶段持共享 */
   private readonly section = new RollbackSection()
-  /** `pi.usage` 的修订号（提交发布里每摸到一次加一）与按它缓存的会话花费（P3-13，监控每秒轮询） */
-  private usageRevision = 0
-  private sessionCostCache: { readonly revision: number; readonly cost: number } | undefined
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
@@ -1339,8 +1335,6 @@ export class DurableSessionImpl implements DurableSession {
         ) {
           this.scheduleDriven(marker, record)
         }
-      } else if (change.type === 'document' && change.record.kind === UsageDoc.definition.kind) {
-        this.usageRevision++
       } else if (
         change.type === 'document' &&
         change.record.kind === AgentStateDoc.definition.kind &&
@@ -1985,8 +1979,7 @@ export class DurableSessionImpl implements DurableSession {
           this.deps.registry.snapshot().extension(agentExtensionName(conversationId)) !== undefined,
         liveTasks: [...this.live.values()],
         schedulerRunning: this.schedulerRunning,
-        contextWindowOf: (ref) => this.modelInfo(ref).contextWindow,
-        sessionCost: () => this.sessionCost()
+        contextWindowOf: (ref) => this.modelInfo(ref).contextWindow
       })
     } catch (error) {
       if (this.closedFlag || isClosedError(error)) throw new SessionClosedError(this.sessionId)
@@ -1996,15 +1989,6 @@ export class DurableSessionImpl implements DurableSession {
 
   spawnedRecords(): SpawnedAgentRecord[] {
     return this.closedFlag ? [] : this.directory.spawnedRecords()
-  }
-
-  /** 会话花费（`harness.usage()`）：`pi.usage` 没变就用上次的 */
-  private async sessionCost(): Promise<number> {
-    const revision = this.usageRevision
-    if (this.sessionCostCache?.revision === revision) return this.sessionCostCache.cost
-    const cost = totalCost(await this.raw.usage(BG))
-    this.sessionCostCache = { revision, cost }
-    return cost
   }
 
   // ─── 日期通知 ───────────────────────────────────

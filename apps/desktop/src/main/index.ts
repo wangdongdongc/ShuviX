@@ -649,10 +649,9 @@ function initSharedWindowServices(): void {
       )
   })
   setRunErrorTextSource(sessionRunErrorText)
-  // 目标模式（docs/goal-mode-design.md）：根运行结束 → 判定 / 续跑 / 暂停；运行中查预算。有进行中目标的会话，
+  // 目标模式（docs/goal-mode-design.md）：根运行结束 → 判定 / 续跑 / 暂停。有进行中目标的会话，
   // 一轮正常收尾不弹「完成」（目标的结局另弹）
   setSessionRunObserver({
-    rootRunStarted: (sessionId) => goalService.onRootRunStarted(sessionId),
     rootRunEnded: (sessionId, reason) => goalService.onRootRunEnded(sessionId, reason)
   })
   setGoalActiveReader((sessionId) => goalService.isActive(sessionId))

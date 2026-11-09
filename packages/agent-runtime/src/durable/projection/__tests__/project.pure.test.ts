@@ -30,7 +30,6 @@ import { EMPTY_REPLY_NOTICE_TEXT } from '../../emptyReply'
 import { goalSetMessage } from '@shuvix/chat-protocol/goalSet'
 import type { GoalRecord } from '@shuvix/chat-protocol/types/goal'
 import {
-  renderGoalBudget,
   renderGoalCheckin,
   renderGoalContinue,
   renderGoalStatus,
@@ -66,6 +65,14 @@ import {
   thinking,
   wrap
 } from './support'
+
+/**
+ * v0.2.58–v0.2.59 写的花费越线收尾通知（`renderGoalBudget`，2026-11-09 删掉）：旧会话里还有，必须照旧认成通知
+ */
+const LEGACY_GOAL_BUDGET =
+  '<goal-budget id="g_1">\nThe goal\'s spending limit is reached (Used: $6.00 of $5.00 · continuation 2 of 50.)\n' +
+  'Finish this turn soon: stop starting new work, and say what is done, what is verified, and what remains. ' +
+  'The goal is paused until the user raises the limit.\n</goal-budget>'
 
 const assistant = (view: { messages: ChatMessage[] }, id: string): AssistantMessage => {
   const message = view.messages.find((m) => m.id === id)
@@ -1264,17 +1271,16 @@ describe('PJ · goal notices in the projection', () => {
     objective: 'Make e2e green',
     status: 'active',
     setAt: 0,
-    limits: { costUsd: 5, maxTurns: 50, stallTurns: 3 },
-    baselineCostUsd: 0,
+    limits: { maxTurns: 50, stallTurns: 3 },
     turns: 2,
     stalls: 0,
     activeMs: 0,
     activeSince: 0
   }
   const NOTICES: [string, string][] = [
-    ['goal-continue', renderGoalContinue(GOAL, 1, { reason: 'tests fail' })],
+    ['goal-continue', renderGoalContinue(GOAL, { reason: 'tests fail' })],
     ['goal-checkin', renderGoalCheckin(GOAL, 31)],
-    ['goal-budget', renderGoalBudget(GOAL, 6)],
+    ['goal-budget', LEGACY_GOAL_BUDGET],
     ['goal-updated', renderGoalUpdated(GOAL)],
     ['goal-status', renderGoalStatus(GOAL, { event: 'met', reason: 'green' })]
   ]
