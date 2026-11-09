@@ -152,9 +152,11 @@ describe('一行只剩一个入口，且 ⋮ 与右键同源', () => {
   })
 
   // RM-03
-  it('普通会话行：配置 / 导出 / 分支 /（分隔）/ 删除，顺序固定', async () => {
+  // 已读那一项（docs/inbox-read-state-design.md）：这些行都没有新回复，所以是「标为未读」
+  it('普通会话行：配置 / 标为未读 / 导出 / 分支 /（分隔）/ 删除，顺序固定', async () => {
     expect(idsOf(await sidebar.rowMenuShots(LEAF))).toEqual([
       'session-config',
+      'mark-unread',
       'export-session',
       'fork-session',
       'sep',
@@ -165,7 +167,7 @@ describe('一行只剩一个入口，且 ⋮ 与右键同源', () => {
   // RM-04
   it('笔记本会话行没有导出（正文是那份 md，导出它没有意义）', async () => {
     const ids = idsOf(await sidebar.rowMenuShots(NOTEBOOK))
-    expect(ids).toEqual(['session-config', 'sep', 'delete-session'])
+    expect(ids).toEqual(['session-config', 'mark-unread', 'sep', 'delete-session'])
     expect(ids).not.toContain('export-session')
   })
 })
@@ -208,6 +210,7 @@ describe('菜单绑定的是「打开它的那一行」', () => {
     expect(sub!.buttons).toEqual(['menu'])
     expect(idsOf(await sidebar.rowMenuShots(SUB_B))).toEqual([
       'session-config',
+      'mark-unread',
       'export-session',
       'fork-session',
       'sep',
