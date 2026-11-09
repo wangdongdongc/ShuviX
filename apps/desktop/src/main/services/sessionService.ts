@@ -81,6 +81,7 @@ import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
 import { botService } from './botService'
+import { unreadService } from './unreadService'
 import { getSessionHost, peekSessionHost } from './sessionHost'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { peekSyncHub } from '../frontend/sync/syncWiring'
@@ -1022,6 +1023,7 @@ export class SessionService {
     // 未开 PRAGMA foreign_keys，session_day_prompts 的 ON DELETE CASCADE 不会触发
     sessionDayPromptDao.deleteBySessionId(id)
     sessionAcl.deleteSession(id)
+    unreadService.forgetSession(id)
     const ephemeral = sessionRecords.isEphemeral(id)
     // 删行之前记下它用的工作目录：fork 出来的临时会话用的是源会话的临时工作区（见 insertForkRow），
     // 临时会话的子会话用的是父会话的（见 create）。

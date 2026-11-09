@@ -83,6 +83,7 @@ export { mermaidTitleOf } from './components/figure/figureExportPure'
 export * from './stores/chatStore'
 export * from './stores/subSessionStore'
 export * from './stores/bgTaskStore'
+export * from './stores/unreadStore'
 
 // ── 视图同步（P3-08） ──
 export { createSyncClient, syncClientFor } from './sync/syncClient'

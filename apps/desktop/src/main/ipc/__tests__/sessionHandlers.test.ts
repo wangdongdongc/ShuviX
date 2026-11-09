@@ -35,6 +35,16 @@ const state = vi.hoisted(() => ({
   aclRemove: vi.fn((_id: string, _entryId: string): boolean => false)
 }))
 
+// 收件箱的已读：处理函数只转一手，这里不碰真的表（它连着会话行与数据库）
+vi.mock('../../services/unreadService', () => ({
+  unreadService: {
+    list: () => ({}),
+    markRead: () => undefined,
+    markAllRead: () => undefined,
+    markUnread: () => undefined
+  }
+}))
+
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, handler: Handler) => {

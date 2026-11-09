@@ -21,6 +21,9 @@
     "info": "More info"
   },
   "sidebar": {
+    "unread": "New reply",
+    "markRead": "Mark as read",
+    "markUnread": "Mark as unread",
     "projects": "Projects",
     "tempChats": "Chats",
     "archivedProjects": "Archived Projects",
@@ -218,6 +221,7 @@
     "builtinBaseName": "ShuviX System Guide"
   },
   "chat": {
+    "newContent": "New",
     "mcpConnecting": "Connecting to MCP: {{names}}",
     "mcpConnectFailed": "[MCP] {{name}} failed to connect: {{error}}",
     "agentNoModel": "Couldn't create the agent: {{reason}}",
@@ -2101,11 +2105,18 @@
     "fillOnlyDescription": "Fill in the values below. They go straight into your settings; the agent does not see them."
   },
   "inbox": {
+    "summaryWaitingPart_one": "{{count}} waiting for you",
+    "summaryWaitingPart_other": "{{count}} waiting for you",
+    "summaryUnreadPart_one": "{{count}} new reply",
+    "summaryUnreadPart_other": "{{count}} new replies",
+    "summaryRunningPart_one": "{{count}} running",
+    "summaryRunningPart_other": "{{count}} running",
+    "unreadSection": "New replies",
+    "markRead": "Mark as read",
+    "markAllRead": "Mark all as read",
+    "failed": "Failed",
+    "markedUnread": "marked unread",
     "title": "Inbox",
-    "summary_one": "{{count}} session running",
-    "summary_other": "{{count}} sessions running",
-    "summaryWaiting_one": ", {{count}} waiting for you",
-    "summaryWaiting_other": ", {{count}} waiting for you",
     "summaryWaitingTitle_one": "{{count}} session is waiting for your answer",
     "summaryWaitingTitle_other": "{{count}} sessions are waiting for your answer",
     "waitingSection": "Waiting for you",

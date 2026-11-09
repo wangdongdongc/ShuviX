@@ -503,6 +503,13 @@ declare global {
     }
     session: {
       list: () => Promise<Session[]>
+      /** 收件箱的已读：全部未读（会话 id → 未读），补种用 */
+      unread: () => Promise<
+        Record<string, import('@shuvix/chat-protocol/sessionUnread').SessionUnread>
+      >
+      markRead: (sessionId: string) => Promise<{ success: boolean }>
+      markAllRead: () => Promise<{ success: boolean }>
+      markUnread: (sessionId: string) => Promise<{ success: boolean }>
       create: (params?: SessionCreateParams) => Promise<Session>
       updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
       updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
@@ -1371,7 +1378,11 @@ declare global {
 
     notification: {
       /** 上报本窗口当前展示的会话（null = 无）；主进程据此判断是否该弹通知 */
-      reportActiveSession: (sessionId: string | null) => Promise<{ success: boolean }>
+      /** `visible`：网络客户端（浏览器 / 手机）报页面在不在眼前，只用于已读；桌面窗口看焦点，不读它 */
+      reportActiveSession: (
+        sessionId: string | null,
+        visible?: boolean
+      ) => Promise<{ success: boolean }>
       /** 取走「通知点击时主窗尚未就绪」暂存的跳转目标（取后即清） */
       consumePendingOpenSession: () => Promise<string | null>
       /** 监听通知点击要求打开的会话；返回取消订阅函数 */

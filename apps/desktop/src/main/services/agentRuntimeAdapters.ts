@@ -11,6 +11,7 @@
 import type { RuntimeEventSink } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from '../frontend/core'
 import { notifyOnChatEvent } from './notificationService'
+import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { observeChromeTabRun } from './chromeBridge'
 import { createLogger } from '../logger'
 
@@ -45,11 +46,21 @@ function pinFinalReplyAfterRun(sessionId: string): void {
  * 通知**不走 ChatFrontend**：它不是一个显示会话内容的前端，在这里明着分一路旁听。
  * 询问本身不经这里（P3-08）：通知从会话的询问钩子拿（`services/sessionSignals`）。
  */
+/**
+ * 收件箱的已读（docs/inbox-read-state-design.md）看运行的开跑与收尾：宿主启动时注入 `unreadService.observe`。
+ * 不直接 import —— 已读服务连着会话行与数据库，事件汇的测试不该因此去碰它们
+ */
+let runEventObserver: ((event: ChatEvent) => void) | null = null
+export function setRunEventObserver(observer: ((event: ChatEvent) => void) | null): void {
+  runEventObserver = observer
+}
+
 export const electronEventSink: RuntimeEventSink = {
   // 三路各自隔离（P3-08-47）：一路抛错只记日志，不拦后面的 —— 通知出了问题，租约照样要在一轮结束时还
   broadcast: (event) => {
     tap('registry', () => chatFrontendRegistry.broadcast(event))
     tap('notification', () => notifyOnChatEvent(event))
+    tap('unread', () => runEventObserver?.(event))
     tap('chrome-lease', () => observeChromeTabRun(event))
     if (event.type === 'agent_end')
       tap('artifact-pins', () => pinFinalReplyAfterRun(event.sessionId))

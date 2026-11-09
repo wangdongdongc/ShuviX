@@ -149,7 +149,11 @@ export const API_TABLE = {
     removeAclEntry: invoke('session:removeAclEntry', 1),
     fork: invoke('session:fork', 1),
     delete: invoke('session:delete', 1),
-    getById: invoke('session:getById', 1)
+    getById: invoke('session:getById', 1),
+    unread: invoke('session:unread', 0),
+    markRead: invoke('session:markRead', 1),
+    markAllRead: invoke('session:markAllRead', 0),
+    markUnread: invoke('session:markUnread', 1)
   },
   /** 桌面日历 */
   calendar: {
@@ -498,7 +502,7 @@ export const API_TABLE = {
   },
   /** 通知 */
   notification: {
-    reportActiveSession: invoke('notification:reportActiveSession', 1),
+    reportActiveSession: invoke('notification:reportActiveSession', 2),
     consumePendingOpenSession: invoke('notification:consumePendingOpenSession', 0),
     onOpenSession: event('notification:open-session', 1)
   },

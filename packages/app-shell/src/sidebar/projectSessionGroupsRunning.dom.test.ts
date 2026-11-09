@@ -50,6 +50,8 @@ vi.mock('@shuvix/chat-ui', () => ({
     getState: () => store
   }),
   useBgTaskStore: (selector: (s: typeof store) => unknown) => selector(store),
+  useUnreadStore: (selector: (s: { unread: Record<string, unknown> }) => unknown) =>
+    selector({ unread: {} }),
   selectBgBusySessions: (s: typeof store) => s.bgBusy,
   selectStreamingSessions: (s: typeof store) => s.streaming,
   selectInterruptedSessions: (s: typeof store) => s.interrupted,

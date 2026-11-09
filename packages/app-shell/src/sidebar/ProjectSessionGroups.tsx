@@ -15,11 +15,14 @@ import {
   selectBgBusySessions,
   selectStreamingSessions,
   useBgTaskStore,
+  useUnreadStore,
+  getChatApi,
   type Session
 } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { isForkableSessionShape } from '@shuvix/chat-protocol/sessionFork'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
+import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
@@ -175,6 +178,7 @@ export function ProjectSessionGroups({
   const streamingSessions = useChatStore(selectStreamingSessions)
   const bgBusySessions = useBgTaskStore(selectBgBusySessions)
   const pendingCounts = useChatStore(selectAllPendingCounts)
+  const unreadSessions = useUnreadStore((s) => s.unread)
   // 目标的 ◎（进行中 / 暂停中）：直接读 store 的那张表（值不变时引用稳定）；只装了一部分 store 的宿主 / 替身里可能没有它
   const goalStatuses = useChatStore((s) => s.sessionGoalStatuses) as
     | Record<string, 'active' | 'paused'>
@@ -302,6 +306,14 @@ export function ProjectSessionGroups({
     const items: ContextMenuItem[] = []
     if (onCopyLink) items.push({ id: 'copy-link', label: t('sidebar.copySessionLink') })
     if (onConfigureSession) items.push({ id: 'session-config', label: t('sessionConfig.title') })
+    // 已读 / 未读（docs/inbox-read-state-design.md）：同一个位置按状态换字；宿主没有这个能力（Chrome 侧栏）就不出现
+    // 替身 / 只有会话频道的宿主可能没有 session 这一组：没有就不出现这两项
+    const sessionApi = getChatApi().session as ChatApi['session'] | undefined
+    const isUnread = id in unreadSessions
+    if (isUnread && sessionApi?.markRead)
+      items.push({ id: 'mark-read', label: t('sidebar.markRead') })
+    if (!isUnread && sessionApi?.markUnread)
+      items.push({ id: 'mark-unread', label: t('sidebar.markUnread') })
     if (!isNotebook) items.push({ id: 'export-session', label: t('sidebar.exportSession') })
     // 拷贝要等这一轮停下：这一轮在跑 / 被中断时置灰。只看轮次，不看后台任务（行上亮着也可能能拷，宿主说了算）
     if (onForkSession && session && isForkableSessionShape(session)) {
@@ -316,6 +328,8 @@ export function ProjectSessionGroups({
     void showContextMenu(e, items, (action) => {
       if (action === 'copy-link') onCopyLink?.(id)
       if (action === 'session-config') onConfigureSession?.(id)
+      if (action === 'mark-read') void sessionApi?.markRead?.(id)
+      if (action === 'mark-unread') void sessionApi?.markUnread?.(id)
       if (action === 'export-session') void exportSession(id)
       if (action === 'fork-session') onForkSession?.(id)
       if (action === 'delete-session') onDelete?.(id)
@@ -507,6 +521,7 @@ export function ProjectSessionGroups({
               isStreaming={streamingSessions[item.id] || bgBusySessions[item.id]}
               interrupted={interruptedSessions[item.id]}
               pendingCount={pendingCounts[item.id]}
+              unread={item.id in unreadSessions}
               goalStatus={goalStatuses?.[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}

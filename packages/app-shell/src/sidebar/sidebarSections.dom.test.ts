@@ -93,6 +93,8 @@ vi.mock('@shuvix/chat-ui', async () => {
     ),
     selectStreamingSessions: () => ({}),
     useBgTaskStore: () => ({}),
+    useUnreadStore: (selector: (s: { unread: Record<string, unknown> }) => unknown) =>
+      selector({ unread: {} }),
     selectBgBusySessions: () => ({}),
     selectInterruptedSessions: () => ({}),
     selectAllPendingCounts: () => ({}),

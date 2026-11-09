@@ -80,6 +80,11 @@ export interface SessionItemProps {
   interrupted?: boolean
   pendingCount?: number
   /**
+   * 有你还没看的新回复（docs/inbox-read-state-design.md）：行尾一个蓝点、标题加粗一档。在跑 / 有询问时不画点
+   * （优先级：询问 > 在跑 > 未读），标题照样加粗
+   */
+  unread?: boolean
+  /**
    * 这条会话的目标（目标模式，docs/goal-mode-design.md §9.3）：进行中 ◎、暂停中空心 ◎；达成 / 做不到 / 没有目标不标。
    * 询问徽标照旧排在最右，它更急
    */
@@ -117,6 +122,7 @@ export function SessionItem({
   isStreaming = false,
   interrupted = false,
   pendingCount = 0,
+  unread = false,
   goalStatus,
   dim = false,
   isNotebook = false,
@@ -193,7 +199,7 @@ export function SessionItem({
         icon
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-6">
-        <span className="truncate">
+        <span className={`truncate ${unread ? 'font-semibold' : ''}`}>
           {/* 标题可能带自动脱敏的占位符（起标题的 agent 看到的是占位符）：按这一行的会话显示成标记 */}
           <RedactionSessionProvider sessionId={session.id}>
             <RedactedText text={session.title} />
@@ -236,6 +242,16 @@ export function SessionItem({
           >
             <GoalGlyph active={goalStatus === 'active'} />
           </span>
+        )}
+        {unread && !isStreaming && pendingCount === 0 && (
+          <span
+            data-unread=""
+            title={t('sidebar.unread')}
+            aria-label={t('sidebar.unread')}
+            className={`shrink-0 h-[7px] w-[7px] rounded-full bg-accent ${
+              location || (interrupted && !isStreaming) || goalStatus ? '' : 'ml-auto'
+            }`}
+          />
         )}
         {pendingCount > 0 && (
           <span

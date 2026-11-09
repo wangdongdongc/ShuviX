@@ -37,12 +37,15 @@ import {
   triageKeyOf,
   waitedMinutes,
   type InboxItem,
-  type TriageItem
+  type TriageItem,
+  type UnreadInboxItem
 } from './inboxItems'
 import { SessionKindIcon } from './InboxItemIcon'
 
 export interface InboxTriageProps {
   waiting: InboxItem[]
+  /** 有新回复没看的会话（R1 的行，排在询问卡之后） */
+  unread: UnreadInboxItem[]
   running: InboxItem[]
   /** 各会话挂着的询问（usePendingInputs） */
   pending: Record<string, InputRequest[]>
@@ -50,6 +53,8 @@ export interface InboxTriageProps {
   locationOf: (session: Session) => string | null
   /** 运行中那一节的行（与列表同一种） */
   renderRunningRow: (item: InboxItem) => React.JSX.Element
+  /** 「新回复」那一节的行（与列表同一种） */
+  renderUnreadRow: (item: UnreadInboxItem) => React.JSX.Element
   /** 一张卡答出去了（收件箱页据此弹一句「已发送」） */
   onSent: (sessionTitle: string) => void
 }
@@ -70,10 +75,12 @@ const kbd = 'rounded border border-border-primary px-1 text-[11px] text-text-sec
 
 export function InboxTriage({
   waiting,
+  unread,
   running,
   pending,
   locationOf,
   renderRunningRow,
+  renderUnreadRow,
   onSent
 }: InboxTriageProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -294,6 +301,15 @@ export function InboxTriage({
             </>
           )}
         </>
+      )}
+
+      {unread.length > 0 && (
+        <section data-inbox-section="unread" aria-label={t('inbox.unreadSection')}>
+          <div className="mb-1 mt-6 px-0.5 text-[12px] font-semibold text-text-secondary">
+            {t('inbox.unreadSection')}
+          </div>
+          <div className="flex flex-col">{unread.map(renderUnreadRow)}</div>
+        </section>
       )}
 
       {running.length > 0 && (

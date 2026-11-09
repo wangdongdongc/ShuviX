@@ -1,8 +1,9 @@
 /**
  * 侧栏最上面的「收件箱」一行（2026-11-09，第一版）：点开主区的收件箱页（InboxPage）。
  *
- * 行尾是此刻在运行的会话数；其中有会话在等你回答时，数字前多一个琥珀色的跳动点 —— 与会话行上的询问点
- * 同一个记号，折叠着的分组里那条会话在等你，这里也看得见。没有在运行的会话时行尾什么也不画。
+ * 行尾的数字是要你处理或看一眼的：在等你回答的会话 + 有新回复没看的会话（docs/inbox-read-state-design.md D4；
+ * 只是在跑的不算）。有会话在等你回答时数字前多一个琥珀色的跳动点 —— 与会话行上的询问点同一个记号，折叠着的
+ * 分组里那条会话在等你，这里也看得见。都没有时行尾什么也不画。
  */
 
 import { useTranslation } from 'react-i18next'
@@ -15,8 +16,8 @@ export function InboxRow(): React.JSX.Element {
   const { dim } = useFocusDim()
   const open = useInboxStore((s) => s.open)
   const openInbox = useInboxStore((s) => s.openInbox)
-  const { waiting, running } = useInboxSections()
-  const total = waiting.length + running.length
+  const { waiting, unread } = useInboxSections()
+  const total = waiting.length + unread.length
 
   return (
     <button

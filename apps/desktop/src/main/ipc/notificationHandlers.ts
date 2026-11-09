@@ -14,10 +14,21 @@ import { consumePendingOpenSession, reportActiveSession } from '../services/noti
 export function registerNotificationHandlers(): void {
   // 网络客户端（浏览器）没有窗口、也就没有焦点：照记「它看到了这个会话」（撤掉该会话名下的通知），
   // 但从不算「用户正看着」—— 桌面的通知照常弹
-  defineHandler('notification:reportActiveSession', (ctx, sessionId: string | null) => {
-    reportActiveSession(ctx.client.kind === 'window' ? ctx.client.webContentsId : null, sessionId)
-    return { success: true }
-  })
+  // 浏览器 / 手机多报一个「页面在不在眼前」（visible）：只用于已读 —— 手机上看着的回复生来已读、切回前台算读过
+  // （docs/inbox-read-state-design.md §3）；通知照旧不看它
+  defineHandler(
+    'notification:reportActiveSession',
+    (ctx, sessionId: string | null, visible?: boolean) => {
+      if (ctx.client.kind === 'window') {
+        reportActiveSession(ctx.client.webContentsId, sessionId)
+      } else if (ctx.client.kind === 'network') {
+        reportActiveSession(null, sessionId, { clientId: ctx.client.id, visible: visible === true })
+      } else {
+        reportActiveSession(null, sessionId)
+      }
+      return { success: true }
+    }
+  )
 
   // 暂存的跳转目标是给「被通知点击重建的主窗口」的：浏览器来取会把它偷走，回 null
   defineHandler('notification:consumePendingOpenSession', (ctx) =>

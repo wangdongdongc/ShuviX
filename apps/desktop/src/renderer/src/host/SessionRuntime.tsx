@@ -6,6 +6,7 @@ import {
   useModelCatalogSync
 } from '@shuvix/chat-ui'
 import { useAskCountSeed } from './useAskCountSeed'
+import { useUnreadSeed } from './useUnreadSeed'
 import { useBgTaskSeed } from './useBgTaskSeed'
 import { useFilePreviewBridge } from './useFilePreviewBridge'
 import { useNotificationBridge } from './useNotificationBridge'
@@ -24,6 +25,7 @@ export function SessionRuntime({ sessionId }: { sessionId: string | null }): nul
   useSessionInit(sessionId)
   useAgentEvents()
   useAskCountSeed()
+  useUnreadSeed()
   useBgTaskSeed()
   useGoalSeed(sessionId)
   useModelCatalogSync()

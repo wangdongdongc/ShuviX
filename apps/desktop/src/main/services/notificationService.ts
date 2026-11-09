@@ -31,6 +31,7 @@ import { focusFloating, isPinned } from './pinnedChatService'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 import { isHeadless } from '../utils/headless'
+import { noteNetworkShown, noteShown, setWindowInFrontChecker } from './sessionPresence'
 
 const log = createLogger('Notification')
 
@@ -162,6 +163,8 @@ function dismiss(key: string): void {
  */
 export function initNotificationService(injected: NotificationServiceDeps): void {
   deps = injected
+  // 已读的「桌面窗口那一半」：窗口展示着它且有焦点（与通知的判定同一条）
+  setWindowInFrontChecker(isForeground)
   if (center) return
   center = createNotificationCenter({
     notifier: { show, dismiss },
@@ -241,10 +244,18 @@ export function notifyAskResolved(sessionId: string, requestId: string): void {
  * 渲染进程上报：该窗口当前展示的会话（null = 无会话，如设置窗口）。`webContentsId` 为 null = 没有窗口的客户端
  * （局域网里的浏览器）：不进「窗口 → 会话」表（没有焦点可言，从不算前台），只撤掉该会话名下的通知
  */
-export function reportActiveSession(webContentsId: number | null, sessionId: string | null): void {
+export function reportActiveSession(
+  webContentsId: number | null,
+  sessionId: string | null,
+  network?: { clientId: string; visible: boolean }
+): void {
   if (webContentsId !== null) activeSessionByWindow.set(webContentsId, sessionId)
+  if (network) noteNetworkShown(network.clientId, sessionId, network.visible)
   // 用户已经看到它了，该会话名下挂着的通知就没意义了
   if (sessionId) center?.sessionOpened(sessionId)
+  // 已读（docs/inbox-read-state-design.md §3）：这一刻它真在用户眼前才算读过 —— 桌面窗口看焦点，
+  // 浏览器 / 手机看它自己报的可见（sessionPresence）
+  noteShown(sessionId)
 }
 
 /** 渲染进程初始化时取走待跳转会话（主窗刚被通知点击重建的情形），取后即清 */

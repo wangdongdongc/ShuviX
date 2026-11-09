@@ -21,6 +21,9 @@
     "info": "说明"
   },
   "sidebar": {
+    "unread": "有新回复",
+    "markRead": "标为已读",
+    "markUnread": "标为未读",
     "projects": "项目",
     "tempChats": "聊天",
     "archivedProjects": "已归档项目",
@@ -218,6 +221,7 @@
     "builtinBaseName": "ShuviX 系统说明"
   },
   "chat": {
+    "newContent": "新内容",
     "mcpConnecting": "正在连接 MCP：{{names}}",
     "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",
     "agentNoModel": "无法创建智能体：{{reason}}",
@@ -2101,11 +2105,18 @@
     "fillOnlyDescription": "请填写下面的值。它们直接存进你的设置，agent 看不到。"
   },
   "inbox": {
+    "summaryWaitingPart_one": "{{count}} 个在等你回答",
+    "summaryWaitingPart_other": "{{count}} 个在等你回答",
+    "summaryUnreadPart_one": "{{count}} 条新回复",
+    "summaryUnreadPart_other": "{{count}} 条新回复",
+    "summaryRunningPart_one": "{{count}} 个在运行",
+    "summaryRunningPart_other": "{{count}} 个在运行",
+    "unreadSection": "新回复",
+    "markRead": "标为已读",
+    "markAllRead": "全部标为已读",
+    "failed": "出错",
+    "markedUnread": "你标的未读",
     "title": "收件箱",
-    "summary_one": "{{count}} 个会话在运行",
-    "summary_other": "{{count}} 个会话在运行",
-    "summaryWaiting_one": "，其中 {{count}} 个在等你回答",
-    "summaryWaiting_other": "，其中 {{count}} 个在等你回答",
     "summaryWaitingTitle_one": "{{count}} 个会话在等你回答",
     "summaryWaitingTitle_other": "{{count}} 个会话在等你回答",
     "waitingSection": "等你回答",

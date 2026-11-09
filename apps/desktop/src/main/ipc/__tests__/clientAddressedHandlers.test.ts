@@ -18,7 +18,8 @@
  * 网络客户端（server mode phase B）调这些处理器：经注册表的定义直接以网络上下文调用（`listDefinitions()`），网络传输挂在
  * 注册表上、连接是假的（`frontend/network/__tests__/support/fakeNetworkConnection`）。
  *
- *   NH-1 `notification:reportActiveSession` 从网络来 → `reportActiveSession(null, sid)`，回 `{ success: true }`；null → (null, null)
+ *   NH-1 `notification:reportActiveSession` 从网络来 → `reportActiveSession(null, sid, {clientId, visible})`，回
+ *        `{ success: true }`；`visible` 只认 true（已读用，docs/inbox-read-state-design.md）；null → (null, null, …)
  *   NH-2 `notification:consumePendingOpenSession` 从网络来 → null、不调服务；从窗口来 → 原样交回服务的结果
  *   NH-3 `liveDoc:respond` 从网络来 → `{ success: false }`，不调 resolveLiveDocumentResponse
  *   NH-4 `contextMenu:popup` / `dialog:openDirectory` 从网络来 → `{ actionId: null }` / null，不建菜单、不弹对话框，
@@ -45,6 +46,16 @@ const state = vi.hoisted(() => ({
   attachLiveDocument: vi.fn(),
   detachLiveDocument: vi.fn(),
   reportActiveSession: vi.fn()
+}))
+
+// 收件箱的已读：处理函数只转一手，这里不碰真的表（它连着会话行与数据库）
+vi.mock('../../services/unreadService', () => ({
+  unreadService: {
+    list: () => ({}),
+    markRead: () => undefined,
+    markAllRead: () => undefined,
+    markUnread: () => undefined
+  }
 }))
 
 vi.mock('electron', () => ({
@@ -288,12 +299,15 @@ describe('CH-3 按调用方报会话；没有窗口时不弹东西', () => {
 })
 
 describe('NH-1 / NH-2 通知的两条通道从网络来', () => {
-  it('NH-1 reportActiveSession(sid) → reportActiveSession(null, sid)；null → (null, null)', () => {
+  it('NH-1 reportActiveSession(sid, visible) → reportActiveSession(null, sid, {clientId, visible})', () => {
     expect(invokeFromNet('notification:reportActiveSession', 's1')).toEqual({ success: true })
+    expect(invokeFromNet('notification:reportActiveSession', 's1', true)).toEqual({ success: true })
     expect(invokeFromNet('notification:reportActiveSession', null)).toEqual({ success: true })
+    const clientId = netCtx(1).client.id
     expect(state.reportActiveSession.mock.calls).toEqual([
-      [null, 's1'],
-      [null, null]
+      [null, 's1', { clientId, visible: false }],
+      [null, 's1', { clientId, visible: true }],
+      [null, null, { clientId, visible: false }]
     ])
   })
 

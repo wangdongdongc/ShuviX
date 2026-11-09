@@ -22,7 +22,8 @@ import {
 } from '@shuvix/chat-ui'
 import { useProjects } from '../sidebar/useProjects'
 import { useInboxSections } from './inboxStore'
-import type { InboxItem } from './inboxItems'
+import type { InboxItem, UnreadInboxItem } from './inboxItems'
+import { InboxUnreadRow, useReplyExcerpts } from './InboxUnreadRow'
 import { InboxTriage } from './InboxTriage'
 import { SessionKindIcon } from './InboxItemIcon'
 import { usePendingInputs } from './usePendingInputs'
@@ -49,7 +50,7 @@ function writeMode(mode: Mode): void {
 
 export function InboxPage(): React.JSX.Element {
   const { t } = useTranslation()
-  const { waiting, running } = useInboxSections()
+  const { waiting, unread, running } = useInboxSections()
   const sessions = useChatStore((s) => s.sessions)
   const select = useChatStore((s) => s.setActiveSessionId)
   const { projects, archivedProjects } = useProjects()
@@ -59,6 +60,13 @@ export function InboxPage(): React.JSX.Element {
   const triage = canTriage && mode === 'triage'
   const pending = usePendingInputs(triage)
   const [toast, setToast] = useState<{ n: number; title: string } | null>(null)
+  const excerpts = useReplyExcerpts(unread)
+  // 「新回复」的时间标签分今天 / 更早：打开收件箱那一刻的「今天」就够用
+  const [now] = useState(() => Date.now())
+  const sessionApi = getChatApi().session
+  const markRead = sessionApi.markRead
+    ? (sessionId: string): void => void sessionApi.markRead?.(sessionId)
+    : undefined
 
   // 「已发送」那一句停 2.6 秒
   useEffect(() => {
@@ -114,7 +122,36 @@ export function InboxPage(): React.JSX.Element {
     return parts.join(' · ')
   }
 
-  const total = waiting.length + running.length
+  const total = waiting.length + unread.length + running.length
+  const summary = [
+    waiting.length > 0 ? t('inbox.summaryWaitingPart', { count: waiting.length }) : null,
+    unread.length > 0 ? t('inbox.summaryUnreadPart', { count: unread.length }) : null,
+    running.length > 0 ? t('inbox.summaryRunningPart', { count: running.length }) : null
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const renderUnreadRow = (item: UnreadInboxItem): React.JSX.Element => (
+    <InboxUnreadRow
+      key={item.session.id}
+      item={item}
+      location={locationOf(item.session)}
+      excerpts={excerpts}
+      now={now}
+      onOpen={select}
+      onMarkRead={markRead}
+    />
+  )
+
+  const unreadSection =
+    unread.length === 0 ? null : (
+      <section data-inbox-section="unread" aria-label={t('inbox.unreadSection')}>
+        <h2 className="mb-1 mt-7 border-b border-border-secondary pb-1.5 text-[13px] font-semibold text-text-primary">
+          {t('inbox.unreadSection')}
+        </h2>
+        <div className="flex flex-col">{unread.map(renderUnreadRow)}</div>
+      </section>
+    )
 
   const renderRow = (item: InboxItem, kind: Kind): React.JSX.Element => {
     const { session } = item
@@ -190,6 +227,16 @@ export function InboxPage(): React.JSX.Element {
               {t('inbox.title')}
             </h1>
             <span className="flex-1" />
+            {unread.length > 0 && sessionApi.markAllRead && (
+              <button
+                type="button"
+                data-inbox-mark-all-read=""
+                onClick={() => void sessionApi.markAllRead?.()}
+                className="rounded-md px-2 py-1 text-[12px] text-text-secondary transition-colors hover:bg-bg-hover/60 hover:text-text-primary"
+              >
+                {t('inbox.markAllRead')}
+              </button>
+            )}
             {canTriage && total > 0 && (
               <span className="inline-flex rounded-[7px] bg-bg-tertiary p-0.5 text-[12px]">
                 {modeButton('triage', t('inbox.modeTriage'))}
@@ -213,23 +260,25 @@ export function InboxPage(): React.JSX.Element {
           ) : (
             <>
               <p className="mt-1.5 pl-[34px] text-[13px] text-text-secondary" data-inbox-summary="">
-                {t('inbox.summary', { count: total })}
-                {waiting.length > 0 && t('inbox.summaryWaiting', { count: waiting.length })}
+                {summary}
               </p>
               {triage ? (
                 pending && (
                   <InboxTriage
                     waiting={waiting}
+                    unread={unread}
                     running={running}
                     pending={pending}
                     locationOf={locationOf}
                     renderRunningRow={(item) => renderRow(item, 'running')}
+                    renderUnreadRow={renderUnreadRow}
                     onSent={(title) => setToast((prev) => ({ n: (prev?.n ?? 0) + 1, title }))}
                   />
                 )
               ) : (
                 <>
                   {section('waiting', waiting)}
+                  {unreadSection}
                   {section('running', running)}
                 </>
               )}

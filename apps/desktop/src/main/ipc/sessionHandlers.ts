@@ -8,6 +8,7 @@ import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatServic
 import { forkSession } from '../services/sessionFork'
 import { sessionAcl } from '../services/acl'
 import { listSessionMentions } from '../services/sessionMentions'
+import { unreadService } from '../services/unreadService'
 import { isPathAccess } from '@shuvix/chat-protocol/sessionAcl'
 import type { SessionForkParams } from '@shuvix/chat-protocol/sessionFork'
 import type {
@@ -27,6 +28,22 @@ import type {
  */
 export function registerSessionHandlers(): void {
   /** 获取所有会话 */
+  // 收件箱的已读（docs/inbox-read-state-design.md）：补种 + 手动标已读 / 未读。「来到眼前即读过」不经这里，
+  // 走 notification:reportActiveSession
+  defineHandler('session:unread', () => unreadService.list())
+  defineHandler('session:markRead', (_ctx, sessionId: string) => {
+    unreadService.markRead(sessionId)
+    return { success: true }
+  })
+  defineHandler('session:markAllRead', () => {
+    unreadService.markAllRead()
+    return { success: true }
+  })
+  defineHandler('session:markUnread', (_ctx, sessionId: string) => {
+    unreadService.markUnread(sessionId)
+    return { success: true }
+  })
+
   defineHandler('session:list', () => {
     return sessionService.list()
   })

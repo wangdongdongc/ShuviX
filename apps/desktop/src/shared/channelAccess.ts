@@ -114,6 +114,11 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'session:fork': 'write',
   'session:delete': 'write',
   'session:getById': 'read',
+  // 收件箱的已读（docs/inbox-read-state-design.md）：读 = 补种；标已读 / 未读改的是这台主机上的状态
+  'session:unread': 'read',
+  'session:markRead': 'write',
+  'session:markAllRead': 'write',
+  'session:markUnread': 'write',
 
   // ─── calendar：桌面日历（查开口日；日报是用户自己的数据：读是 read，建 / 删是 write） ───
   'calendar:daysInMonth': 'read',

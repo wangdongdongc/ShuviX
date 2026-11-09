@@ -12,6 +12,7 @@
 import type { Session } from '@shuvix/chat-ui'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
+import type { SessionUnread } from '@shuvix/chat-protocol/sessionUnread'
 
 export interface InboxItem {
   session: Session
@@ -23,9 +24,17 @@ export interface InboxItem {
   backgroundTasks: number
 }
 
+/** 一条有新回复、你还没看的会话（停着的：在跑 / 在等你回答的归那两节） */
+export interface UnreadInboxItem {
+  session: Session
+  unread: SessionUnread
+}
+
 export interface InboxSections {
   /** 挂着询问的会话 */
   waiting: InboxItem[]
+  /** 停着、有你还没看的新回复的会话（docs/inbox-read-state-design.md），最新的在前 */
+  unread: UnreadInboxItem[]
   /** 其余在运行的会话 */
   running: InboxItem[]
 }
@@ -39,6 +48,8 @@ export interface InboxInput {
   askCounts: Record<string, number>
   /** 会话 id → 没结束、算数的后台任务数 */
   backgroundTaskCounts: Record<string, number>
+  /** 会话 id → 未读（主进程的已读状态镜像）；缺省 = 没有已读功能 */
+  unread?: Record<string, SessionUnread>
 }
 
 /** 最近动过的在前；同一时刻按建立时间，再按 id，保证顺序稳定（条目不该在两次渲染之间换位） */
@@ -52,19 +63,26 @@ function byRecent(a: InboxItem, b: InboxItem): number {
 
 export function inboxSectionsOf(input: InboxInput): InboxSections {
   const waiting: InboxItem[] = []
+  const unread: UnreadInboxItem[] = []
   const running: InboxItem[] = []
   for (const session of input.sessions) {
     const asks = input.askCounts[session.id] ?? 0
     const replying = !!input.streaming[session.id]
     const backgroundTasks = input.backgroundTaskCounts[session.id] ?? 0
-    if (asks <= 0 && !replying && backgroundTasks <= 0) continue
+    if (asks <= 0 && !replying && backgroundTasks <= 0) {
+      // 停着的会话：有没看的新回复才进收件箱（优先级：等你回答 > 运行中 > 新回复）
+      const u = input.unread?.[session.id]
+      if (u) unread.push({ session, unread: u })
+      continue
+    }
     const item: InboxItem = { session, asks: Math.max(asks, 0), replying, backgroundTasks }
     if (item.asks > 0) waiting.push(item)
     else running.push(item)
   }
   waiting.sort(byRecent)
   running.sort(byRecent)
-  return { waiting, running }
+  unread.sort((a, b) => b.unread.since - a.unread.since || (a.session.id < b.session.id ? -1 : 1))
+  return { waiting, unread, running }
 }
 
 // ─── 逐张处理（B3，2026-11-09）：把「等你回答」那几条会话里挂着的询问摊成一张一张 ──────────
@@ -126,4 +144,27 @@ export function requestSummaryOf(request: InputRequest): string {
 /** 等了几分钟（向下取整，不小于 0） */
 export function waitedMinutes(createdAt: number, now: number): number {
   return Math.max(0, Math.floor((now - createdAt) / 60_000))
+}
+
+/** 一条会话最后那张有字的助手卡片的正文（收件箱「新回复」那一行的摘录）；没有 → null */
+export function lastReplyText(messages: ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'assistant' && m.content.trim()) return m.content.trim()
+  }
+  return null
+}
+
+/** 「新回复」那一行的时间：今天的写时分（21:05），更早的写月-日（11-08） */
+export function unreadTimeLabel(at: number, now: number): string {
+  const d = new Date(at)
+  const today = new Date(now)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate()
+  return sameDay
+    ? `${pad(d.getHours())}:${pad(d.getMinutes())}`
+    : `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }

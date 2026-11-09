@@ -19,7 +19,9 @@ import { useChatActions } from '../../hooks/useChatActions'
 import { forkRefusalKey, selectSessionForkable, useSessionFork } from '../../hooks/useSessionFork'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
-import { buildVisibleItems, isAssistantMessage } from './conversationItems'
+import { buildVisibleItems, isAssistantMessage, newContentIndex } from './conversationItems'
+import { NewContentDivider } from './NewContentDivider'
+import { useUnreadStore } from '../../stores/unreadStore'
 import { SuggestionContext } from './SuggestionCards'
 import { suggestionStatesOf } from '@shuvix/chat-protocol/suggestions'
 import { StreamingFooter } from './StreamingFooter'
@@ -515,6 +517,13 @@ export function Conversation({
     () => buildVisibleItems(messages, isStreaming, pendingPrompt),
     [messages, isStreaming, pendingPrompt]
   )
+  // 「新内容」分隔线（docs/inbox-read-state-design.md §7）：这次打开时它是未读的，就在那一轮开跑之后的第一项前画一条；
+  // 锚点是切进来那一刻记下的（打开即已读，未读随即没了），离开这条会话就不再画
+  const newContentAt = useUnreadStore((s) => (s.mark?.sessionId === sessionId ? s.mark.at : null))
+  const dividerIndex = useMemo(
+    () => newContentIndex(visibleItems, newContentAt),
+    [visibleItems, newContentAt]
+  )
   // 每组提议开着还是关了、采纳的是哪一条：按整条消息列表算（之后用户说了别的话就关），卡片从 context 里取
   const suggestionContext = useMemo(
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
@@ -557,16 +566,25 @@ export function Conversation({
 
   /** 渲染单条可见消息 */
   const renderItem = useCallback(
-    (_index: number, item: VisibleItem) => (
-      <MessageRenderer
-        item={item}
-        lastAssistantId={lastAssistantId}
-        onRollback={onRollback}
-        onRegenerate={onRegenerate}
-        onFork={onFork}
-      />
-    ),
-    [lastAssistantId, onRollback, onRegenerate, onFork]
+    (index: number, item: VisibleItem) => {
+      const message = (
+        <MessageRenderer
+          item={item}
+          lastAssistantId={lastAssistantId}
+          onRollback={onRollback}
+          onRegenerate={onRegenerate}
+          onFork={onFork}
+        />
+      )
+      if (index !== dividerIndex || newContentAt === null) return message
+      return (
+        <>
+          <NewContentDivider at={newContentAt} />
+          {message}
+        </>
+      )
+    },
+    [lastAssistantId, onRollback, onRegenerate, onFork, dividerIndex, newContentAt]
   )
 
   return (

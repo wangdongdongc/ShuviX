@@ -46,6 +46,7 @@ import { settingsDao } from '../../dao/settingsDao'
 import { attachTransport } from '../../ipc/registry'
 import { createLogger } from '../../logger'
 import { settingsService } from '../../services/settingsService'
+import { forgetNetworkClient } from '../../services/sessionPresence'
 import { appEventBus } from '../../utils/appEventBus'
 import { chatFrontendRegistry } from '../core'
 import { getSyncHub, registerViewAuthorizer } from '../sync/syncWiring'
@@ -220,6 +221,8 @@ export class NetworkService {
       },
       onDisconnection: (connection) => {
         chatFrontendRegistry.unregister(networkFrontendId(connection.client.id))
+        // 掉线的手机不再算「正看着」某条会话（已读，docs/inbox-read-state-design.md）
+        forgetNetworkClient(connection.client.id)
         this.changed()
       }
     })

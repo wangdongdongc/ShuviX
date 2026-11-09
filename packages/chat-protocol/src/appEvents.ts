@@ -7,6 +7,8 @@
  * 约束：载荷必须可序列化、不含密钥（要跨进程/网络发到渲染层）。详见 docs/internal-events.md。
  */
 
+import type { SessionUnread } from './sessionUnread'
+
 export type AppEvent =
   | {
       type: 'files.changed'
@@ -27,6 +29,15 @@ export type AppEvent =
   | { type: 'session.configChanged'; sessionId: string }
   /** 会话标题变更（AI 自动生成）—— 载荷带 title，消费者直接更新、无需回查；用户手动改名由发起端自更 */
   | { type: 'session.titleChanged'; sessionId: string; title: string }
+  /**
+   * 一条会话的已读状态变了（docs/inbox-read-state-design.md）：`unread` 为 null = 读过了。载荷就是新状态，
+   * 消费者直接改、不用回查；错过的（窗口重建、手机重连）靠 `session.unread` 补种
+   */
+  | {
+      type: 'session.unreadChanged'
+      sessionId: string
+      unread: SessionUnread | null
+    }
   /**
    * 会话列表成员变化（创建 / 删除 / 移动项目）—— 信号事件，消费者重拉 session.list。
    * 不带载荷：列表查询是廉价本地读，快照载荷跨窗口重复且可能乱序；覆盖所有非 UI 发起的

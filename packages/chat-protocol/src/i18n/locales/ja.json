@@ -21,6 +21,9 @@
     "info": "説明"
   },
   "sidebar": {
+    "unread": "新しい返信あり",
+    "markRead": "既読にする",
+    "markUnread": "未読にする",
     "projects": "プロジェクト",
     "tempChats": "チャット",
     "archivedProjects": "アーカイブ済みプロジェクト",
@@ -218,6 +221,7 @@
     "builtinBaseName": "ShuviX システムガイド"
   },
   "chat": {
+    "newContent": "新着",
     "mcpConnecting": "MCP に接続中: {{names}}",
     "mcpConnectFailed": "[MCP] {{name}} への接続に失敗しました: {{error}}",
     "agentNoModel": "エージェントを作成できません: {{reason}}",
@@ -2101,11 +2105,18 @@
     "fillOnlyDescription": "下の値を入力してください。値はそのまま設定に保存され、エージェントには見えません。"
   },
   "inbox": {
+    "summaryWaitingPart_one": "{{count}} 件が回答待ち",
+    "summaryWaitingPart_other": "{{count}} 件が回答待ち",
+    "summaryUnreadPart_one": "新しい返信 {{count}} 件",
+    "summaryUnreadPart_other": "新しい返信 {{count}} 件",
+    "summaryRunningPart_one": "{{count}} 件が実行中",
+    "summaryRunningPart_other": "{{count}} 件が実行中",
+    "unreadSection": "新しい返信",
+    "markRead": "既読にする",
+    "markAllRead": "すべて既読にする",
+    "failed": "エラー",
+    "markedUnread": "未読にしました",
     "title": "受信トレイ",
-    "summary_one": "{{count}} 件のセッションが実行中",
-    "summary_other": "{{count}} 件のセッションが実行中",
-    "summaryWaiting_one": "、うち {{count}} 件があなたの回答待ち",
-    "summaryWaiting_other": "、うち {{count}} 件があなたの回答待ち",
     "summaryWaitingTitle_one": "{{count}} 件のセッションがあなたの回答を待っています",
     "summaryWaitingTitle_other": "{{count}} 件のセッションがあなたの回答を待っています",
     "waitingSection": "回答待ち",

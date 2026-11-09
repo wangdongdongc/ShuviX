@@ -14,7 +14,8 @@ import {
   selectAllPendingCounts,
   selectStreamingSessions,
   useBgTaskStore,
-  useChatStore
+  useChatStore,
+  useUnreadStore
 } from '@shuvix/chat-ui'
 import { inboxSectionsOf, type InboxSections } from './inboxItems'
 
@@ -55,6 +56,7 @@ export function useInboxSections(): InboxSections {
   const streaming = useChatStore(selectStreamingSessions)
   const askCounts = useChatStore(selectAllPendingCounts)
   const tasks = useBgTaskStore((s) => s.tasks)
+  const unread = useUnreadStore((s) => s.unread)
   const backgroundTaskCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const task of Object.values(tasks)) {
@@ -63,7 +65,7 @@ export function useInboxSections(): InboxSections {
     return counts
   }, [tasks])
   return useMemo(
-    () => inboxSectionsOf({ sessions, streaming, askCounts, backgroundTaskCounts }),
-    [sessions, streaming, askCounts, backgroundTaskCounts]
+    () => inboxSectionsOf({ sessions, streaming, askCounts, backgroundTaskCounts, unread }),
+    [sessions, streaming, askCounts, backgroundTaskCounts, unread]
   )
 }

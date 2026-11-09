@@ -125,6 +125,9 @@ import { setBotAccessChecker } from './services/botAccessHint'
 import { desktopBotAccessChecker } from './services/botAccessWiring'
 import { projectService } from './services/projectService'
 import { sessionService } from './services/sessionService'
+import { setRunOriginReader, setUnreadTable, unreadService } from './services/unreadService'
+import { sessionUnreadDao } from './dao/sessionUnreadDao'
+import { setRunEventObserver } from './services/agentRuntimeAdapters'
 import {
   createWidgetMcpServerFactory,
   invalidateWidgetServerRows,
@@ -1074,9 +1077,19 @@ app.whenReady().then(async () => {
   step('botService.seedBuiltinBots', () => botService.seedBuiltinBots(i18next.language || 'en'))
   // 定时器开始之前：上个进程没收尾的运行先记清楚
   step('triggerLogService.sweepInterrupted', () => triggerLogService.sweepInterrupted())
+  // 收件箱的已读（docs/inbox-read-state-design.md）：无头运行也要（手机 / 浏览器看过就算读过），所以不放在窗口那一套里。
+  // 别的会话驱动的一轮不算新回复 —— 发起者从活着的运行时读
+  step('unreadService.init', () => {
+    setUnreadTable(sessionUnreadDao)
+    setRunEventObserver((event) => unreadService.observe(event))
+    setRunOriginReader((sessionId) => sessionService.getAgentSession(sessionId)?.lastRunOrigin)
+    unreadService.init()
+  })
   // 上个进程留下的进行中目标：会话空闲的暂停（restart），被中断的等用户点继续（打开会话从不 resume）
   step('goalService.sweepOnStartup', () => {
-    void goalService.sweepOnStartup().catch((error: unknown) => log.warn(`目标启动扫描失败: ${String(error)}`))
+    void goalService
+      .sweepOnStartup()
+      .catch((error: unknown) => log.warn(`目标启动扫描失败: ${String(error)}`))
   })
   app.on('before-quit', () => goalService.dispose())
   step('builtinTimer.start', () =>

@@ -115,6 +115,15 @@ const facades = new WeakMap<DurableSession, AgentSession>()
 export class AgentSession {
   readonly sessionId: string
 
+  /**
+   * 最近开跑的那一轮是谁发起的（`prompt` 受理时记下，自动续跑清掉）—— 已读用：别的会话驱动的一轮跑完不算
+   * 「新回复」（docs/inbox-read-state-design.md D3）。排在后面的 followUp 起的那一轮沿用上一轮的（近似）
+   */
+  private runOrigin: InputOrigin | undefined
+  get lastRunOrigin(): InputOrigin | undefined {
+    return this.runOrigin
+  }
+
   private constructor(readonly durable: DurableSession) {
     this.sessionId = durable.sessionId
   }
@@ -187,6 +196,7 @@ export class AgentSession {
         : { requestId: drive.requestId, driven: drive.driven, source: origin }),
       onAdmitted: (info) => {
         admitted = true
+        this.runOrigin = origin
         dayPrompt.onAdmitted(info)
         this.onPromptAdmitted(admittedText, origin)
       },
@@ -282,6 +292,8 @@ export class AgentSession {
    * 合并窗口内攒起来起一轮、显式喊停之后 / 开关关掉 → 写成通知条目、被中断 → 推迟到继续 / 下一次发送。
    */
   async notify(text: string, options?: NotifyOptions): Promise<void> {
+    // 空闲时它可能自己起一轮（自动续跑）：那一轮不是谁发来的；在跑时它只是插话，不改这一轮的发起者
+    if (!this.isStreaming) this.runOrigin = undefined
     // 不带选项时原样只传正文（bash 的后台通知走这条，契约不变）
     if (options === undefined) await this.durable.notify(text)
     else await this.durable.notify(text, options)

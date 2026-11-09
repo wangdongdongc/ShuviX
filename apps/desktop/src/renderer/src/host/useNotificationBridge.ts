@@ -43,12 +43,22 @@ export function useNotificationBridge(): void {
   const activeSessionId = useChatStore((s) => s.activeSessionId)
 
   useEffect(() => {
+    // `visible` 只有网络客户端（浏览器 / 手机）用得上：主进程据此判断这条会话在不在用户眼前（已读，
+    // docs/inbox-read-state-design.md §3）；桌面窗口主进程自己看焦点。切到后台 / 失焦也要报，否则一台
+    // 放进口袋的手机会一直被当成在看
     const report = (): void => {
-      void window.api.notification.reportActiveSession(activeSessionId ?? null)
+      const visible = document.visibilityState === 'visible' && document.hasFocus()
+      void window.api.notification.reportActiveSession(activeSessionId ?? null, visible)
     }
     report()
     window.addEventListener('focus', report)
-    return () => window.removeEventListener('focus', report)
+    window.addEventListener('blur', report)
+    document.addEventListener('visibilitychange', report)
+    return () => {
+      window.removeEventListener('focus', report)
+      window.removeEventListener('blur', report)
+      document.removeEventListener('visibilitychange', report)
+    }
   }, [activeSessionId])
 
   useEffect(() => {

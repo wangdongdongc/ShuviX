@@ -1114,6 +1114,22 @@ export const migrations: Migration[] = [
         }
       }
     }
+  },
+  {
+    version: 40,
+    description:
+      '收件箱的未读（docs/inbox-read-state-design.md）：一条未读会话一行，读过就删行 —— 表的大小就是未读数',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_unread (
+          sessionId TEXT PRIMARY KEY,
+          since INTEGER NOT NULL,
+          anchorAt INTEGER,
+          failed INTEGER NOT NULL DEFAULT 0,
+          manual INTEGER NOT NULL DEFAULT 0
+        )
+      `)
+    }
   }
 ]
 

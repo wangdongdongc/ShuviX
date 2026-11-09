@@ -164,3 +164,17 @@ export function buildVisibleItems(
 
   return items
 }
+
+/**
+ * 「新内容」分隔线画在哪一项之前（docs/inbox-read-state-design.md §7）：第一项不早于 `at`（那一轮开跑的时刻）的。
+ * 没有锚点、没有这样一项、或者它就是第一项（整条会话都是新的，画了也没有「之前」）→ -1
+ */
+export function newContentIndex(
+  items: Array<{ msg: { createdAt: number }; msgs?: Array<{ createdAt: number }> }>,
+  at: number | null
+): number {
+  if (at === null) return -1
+  // 助手卡的代表消息是末条（终答），一张卡从哪一刻开始要看它的第一条
+  const index = items.findIndex((item) => (item.msgs?.[0] ?? item.msg).createdAt >= at)
+  return index > 0 ? index : -1
+}

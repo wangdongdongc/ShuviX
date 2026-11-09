@@ -39,6 +39,7 @@ import type {
   McpToolInfo
 } from './types/mcp'
 import type { InputRequest, InputResponse } from './types/inputRequest'
+import type { SessionUnread } from './sessionUnread'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
 import type { ArtifactRefContent, SessionArtifact } from './artifacts'
@@ -1002,6 +1003,17 @@ export interface HostApi {
   }
   session: {
     list: () => Promise<Session[]>
+    /**
+     * 收件箱的已读（docs/inbox-read-state-design.md）：全部未读，补种用（之后跟 `session.unreadChanged` 事件）。
+     * 可选：没有它的宿主（Chrome 侧栏）不显示已读状态
+     */
+    unread?: () => Promise<Record<string, SessionUnread>>
+    /** 手动标为已读（收件箱的 ✓、会话行菜单） */
+    markRead?: (sessionId: string) => Promise<{ success: boolean }>
+    /** 收件箱「全部标为已读」 */
+    markAllRead?: () => Promise<{ success: boolean }>
+    /** 手动标为未读（会话行菜单） */
+    markUnread?: (sessionId: string) => Promise<{ success: boolean }>
     create: (params?: SessionCreateParams) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
