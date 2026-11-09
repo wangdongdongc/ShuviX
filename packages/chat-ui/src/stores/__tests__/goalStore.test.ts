@@ -26,7 +26,6 @@ function goal(sessionId: string, status: GoalView['status']): GoalView {
     activeMs: 0,
     costUsd: 0,
     judging: false,
-    planning: false,
     checkerMissing: false
   }
 }

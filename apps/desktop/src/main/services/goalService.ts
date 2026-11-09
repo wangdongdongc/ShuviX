@@ -4,7 +4,10 @@
  *
  * 一条会话的生命线：
  *  1. 用户 `/goal <条件>` → `act(set)`：建目标记录（`GoalDoc`），以人的来源发出那条消息（原文 + 「目标」Token）；
- *  2. 每次根运行结束（会话信号的 `ended`，`onRootRunEnded`）→ `afterRun` 决定暂停 / 等后台工作 / 判定；
+ *     消息末尾的说明让干活的 agent 第一轮先把目标整理成验收规格（只问用户自己才能定的事，写一份 md，回复里一行
+ *     `Acceptance spec: <路径>`），再开工 —— 只靠提示词，宿主不派别的 agent、不设卡点（§15）；
+ *  2. 每次根运行结束（会话信号的 `ended`，`onRootRunEnded`）→ 目标还没有规格文件就从这期间的回复里认一次
+ *     （`pickUpSpec`）→ `afterRun` 决定暂停 / 等后台工作 / 判定；
  *  3. 判定（`hookTriggers.decide('goal.check')`，内置 goal-check → goal-judge）→ `applyVerdict` 决定续跑 / 结束 / 暂停；
  *  4. 续跑 = `notify(<goal-continue>, { resume: 'goal' })`：走自动续跑那条路，起下一轮；结局 = 写一条 `<goal-status>`
  *     通知（不起轮）+ 系统通知。
@@ -38,19 +41,15 @@ import {
   resumeGoal,
   sessionCostUsd,
   updateGoal,
-  GOAL_PLANNER_PROFILE_NAME,
-  toInProcessAgentType,
   type DurableSession,
   type GoalStatusEvent
 } from '@shuvix/agent-runtime'
-import { goalSetMessage } from '@shuvix/chat-protocol/goalSet'
+import { goalSetMessage, lastAcceptanceSpecPath } from '@shuvix/chat-protocol/goalSet'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
 import {
   DEFAULT_GOAL_LIMITS,
   GOAL_OBJECTIVE_MAX_CHARS,
-  GOAL_PLAN_SCHEMA,
-  isGoalPlan,
   goalActiveMs,
   isGoalAction,
   type GoalAction,
@@ -66,12 +65,10 @@ import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { GoalCheckPayload } from '@shuvix/agent-runtime'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { randomUUID } from 'crypto'
-import { existsSync } from 'fs'
-import { isAbsolute, resolve as resolvePath } from 'path'
-import { agentManager } from '../agents/AgentManager'
-import type { AgentSession } from './agentSession'
-import { agentService } from './agentService'
+import { statSync } from 'fs'
+import { normalize as normalizePath } from 'path'
 import { resolveProjectConfig } from './toolContext'
+import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { chatFrontendRegistry } from '../frontend/core'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -206,6 +203,35 @@ export function runFactsOf(messages: readonly ChatMessage[], since: number): Run
   }
 }
 
+/**
+ * 设定之后（`since` 起）助手回复里最后一行 `Acceptance spec: <路径>` 点名的路径（原样，未解析）。逐个正文块看 ——
+ * `content` 是各块直接拼起来的，块与块之间未必有换行。
+ */
+export function specPathNamedIn(
+  messages: readonly ChatMessage[],
+  since: number
+): string | undefined {
+  let named: string | undefined
+  for (const message of messages) {
+    if (message.role !== 'assistant' || message.createdAt < since) continue
+    const texts = (message.blocks ?? [])
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map((block) => block.text)
+    for (const text of texts.length > 0 ? texts : [message.content]) {
+      named = lastAcceptanceSpecPath(text) ?? named
+    }
+  }
+  return named
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
 /** 判定 / 结局的一句人话（系统通知正文） */
 function outcomeText(goal: GoalRecord, event: GoalStatusEvent): string {
   switch (event.event) {
@@ -237,8 +263,6 @@ export class GoalService {
   private readonly serial = new Map<string, Promise<unknown>>()
   /** 在途的判定（用户操作先中止它） */
   private readonly judging = new Map<string, AbortController>()
-  /** 在途的目标规划（开工之前；用户暂停 / 清除 / 换目标先中止它） */
-  private readonly planning = new Map<string, AbortController>()
   /** 等后台工作时的检查计时器 */
   private readonly checkins = new Map<
     string,
@@ -308,11 +332,6 @@ export class GoalService {
       if (this.serial.get(sessionId) === settled) this.serial.delete(sessionId)
     })
     return next
-  }
-
-  private abortPlanning(sessionId: string): void {
-    this.planning.get(sessionId)?.abort()
-    this.planning.delete(sessionId)
   }
 
   /** 中止在途的判定；回有没有中止到 */
@@ -388,7 +407,6 @@ export class GoalService {
       sessionId: session.sessionId,
       costUsd: await this.goalCost(session, goal),
       judging: this.judging.has(session.sessionId),
-      planning: this.planning.has(session.sessionId),
       checkerMissing: this.checkerMissing()
     }
   }
@@ -482,10 +500,7 @@ export class GoalService {
       return Promise.resolve({ ok: false, error: t('goal.errorInvalidAction') })
     // 会换掉「谁在推这个目标」的操作才中止在途的判定（否则它要在队列里等判定最多 60 秒）：暂停、清除、换目标、改原文。
     // 只改上限、恢复不中止 —— 判定照常回来。被中止的判定回来就丢掉结论；中止了却没起新的一轮，由 actNow 补判一次
-    const aborts = this.abortsJudge(sessionId, action)
-    // 规划只被暂停、清除、换目标中止：改写原文时让它跑完（否则 set 的说明永远发不出去、规格也没了）
-    if (aborts && action.type !== 'edit') this.abortPlanning(sessionId)
-    const abortedJudge = aborts && this.abortJudging(sessionId)
+    const abortedJudge = this.abortsJudge(sessionId, action) && this.abortJudging(sessionId)
     return this.queue(sessionId, async () => {
       try {
         return await this.actNow(sessionId, action, origin, abortedJudge)
@@ -649,45 +664,8 @@ export class GoalService {
     })
     await updateGoal(session.harness, () => goal)
     await this.broadcast(session, goal)
-    // 规划与开工在后台接着做（同一条串行队列）：规划员可能停在询问卡片上等人，设定这次操作不能跟着挂住 ——
-    // 否则输入框的发送一直不落定，等着答卡片的一方（探针、远程客户端）也在等这次调用返回，互相卡死（2026-11-08 实测）
-    void this.queue(sessionId, () =>
-      this.startGoal(session, agent, goal, masked, previous, origin, abortedJudge)
-    ).catch((error: unknown) => log.warn(`目标开工失败 session=${sessionId}: ${String(error)}`))
-    return { ok: true }
-  }
-
-  /** 规划（goal-planner）→ 发出设定目标的那条消息。在 `setGoal` 之后的队列里跑 */
-  private async startGoal(
-    session: DurableSession,
-    agent: AgentSession,
-    goal: GoalRecord,
-    masked: string,
-    previous: GoalRecord | undefined,
-    origin: InputOrigin | undefined,
-    abortedJudge: boolean
-  ): Promise<void> {
-    const sessionId = session.sessionId
-    // 开工之前先整理验收规格（goal-planner）：目标够清楚就直接开始；用户在这期间暂停 / 清除 / 换了目标 → 到此为止
-    const planned = await this.planGoal(session, agent, goal, masked)
-    if (planned === 'aborted') return
-    let specPath: string | undefined
-    if (planned === undefined) {
-      // 规划结束（够清楚 / 没成）：再推一次视图，免得界面停在「正在整理验收规格」
-      await this.broadcast(session, await readGoal(session.harness))
-    } else {
-      const withSpec = await updateGoal(session.harness, (g) =>
-        g?.id === goal.id ? { ...g, specPath: planned } : g
-      )
-      if (withSpec?.id !== goal.id) return
-      specPath = planned
-      await this.broadcast(session, withSpec)
-    }
-    const message = goalSetMessage({
-      objective: masked,
-      goalId: goal.id,
-      ...(specPath !== undefined ? { specPath } : {})
-    })
+    // 说明里让 agent 第一轮先整理验收规格（§15）：发出去就返回 —— 它的询问卡片在那一轮里等人，不挂住这次操作
+    const message = goalSetMessage({ objective: masked, goalId: goal.id })
     // 会话信号先就绪：投影句柄挂上之前开跑的一轮没有 ended，目标就收不到运行结束
     await sessionSignalsReady(sessionId)
     // 用户亲手设的目标 = 同意接着干：撤掉之前「显式喊停」的收敛（插话本身不撤它）
@@ -702,96 +680,12 @@ export class GoalService {
       const restored = await updateGoal(session.harness, (g) => (g?.id === goal.id ? previous : g))
       await this.broadcast(session, restored)
       if (restored?.status === 'active') await this.rejudgeIfStranded(sessionId, abortedJudge)
-      log.warn(`设定目标的消息没发出去 session=${sessionId}: ${result.error}`)
-      return
+      return { ok: false, error: result.error }
     }
     if (previous !== undefined && (previous.status === 'active' || previous.status === 'paused')) {
       await this.writeStatus(session, previous, { event: 'replaced' })
     }
-  }
-
-  /** 这条会话排着的目标操作都做完（测试与探针用：设定目标之后的规划、开工在后台） */
-  whenIdle(sessionId: string): Promise<void> {
-    return (this.serial.get(sessionId) ?? Promise.resolve()).then(() => undefined)
-  }
-
-  /**
-   * 目标规划（开工之前）：派内置 goal-planner。够清楚 → undefined（照原样开始）；写了规格 → 文件的绝对路径；被用户中止
-   * → 'aborted'。规划员的询问是普通的询问卡片（一律等人）；它没给结论、出错、文件不在 → undefined，照原样开始 ——
-   * 规划失败不挡目标（2026-11-08 用户裁决：不做硬卡点）。
-   */
-  private async planGoal(
-    session: DurableSession,
-    agent: AgentSession,
-    goal: GoalRecord,
-    objective: string
-  ): Promise<string | undefined | 'aborted'> {
-    const sessionId = session.sessionId
-    const profile = agentService.getProfile(GOAL_PLANNER_PROFILE_NAME)
-    if (!profile) return undefined
-    const controller = new AbortController()
-    this.planning.set(sessionId, controller)
-    await this.broadcast(session, goal)
-    try {
-      // 派发要会话的锁（模型、档位）：新会话还没有，先建
-      await agent.createAgent()
-      const earlier = await this.earlierUserWords(sessionId)
-      const prompt = [
-        ...(earlier !== '' ? [`<earlier-user-words>\n${earlier}\n</earlier-user-words>`, ''] : []),
-        'The goal the user just set:',
-        '<goal>',
-        objective,
-        '</goal>'
-      ].join('\n')
-      const outcome = await agentManager.runTask({
-        sessionId,
-        owner: { anchor: true },
-        agentType: toInProcessAgentType(profile),
-        prompt,
-        description: t('goal.planningTask'),
-        resultContract: { schema: GOAL_PLAN_SCHEMA },
-        signal: controller.signal
-      })
-      if (controller.signal.aborted) return 'aborted'
-      const plan = isGoalPlan(outcome.structured) ? outcome.structured : undefined
-      if (plan?.verdict !== 'spec' || !plan.specPath) {
-        if (plan === undefined)
-          log.warn(`目标规划没给结论 session=${sessionId}: ${outcome.error ?? ''}`)
-        return undefined
-      }
-      const workingDirectory = resolveProjectConfig(sessionId).workingDirectory ?? ''
-      const absolute = isAbsolute(plan.specPath)
-        ? plan.specPath
-        : resolvePath(workingDirectory, plan.specPath)
-      if (!existsSync(absolute)) {
-        log.warn(`目标规划给的规格文件不在 session=${sessionId}: ${absolute}`)
-        return undefined
-      }
-      return absolute
-    } catch (error) {
-      if (controller.signal.aborted) return 'aborted'
-      log.warn(`目标规划失败 session=${sessionId}: ${String(error)}`)
-      return undefined
-    } finally {
-      if (this.planning.get(sessionId) === controller) this.planning.delete(sessionId)
-    }
-  }
-
-  /** 设目标之前这条会话里人写的话（规划员把它们带进规格：设定之后检查员只看得到规格与原话） */
-  private async earlierUserWords(sessionId: string): Promise<string> {
-    try {
-      return (await readSessionTranscript(sessionId))
-        .filter(
-          (item): item is Extract<typeof item, { kind: 'user' }> =>
-            item.kind === 'user' && !item.source && item.text.trim() !== ''
-        )
-        .slice(-MAX_USER_MESSAGES)
-        .map((item) => clip(item.text, MAX_USER_TEXT))
-        .join('\n---\n')
-    } catch (error) {
-      log.warn(`读设目标之前的用户消息失败 session=${sessionId}: ${String(error)}`)
-      return ''
-    }
+    return { ok: true }
   }
 
   // ─── 运行结束 → 判定 → 续跑 ────────────────────────────
@@ -813,14 +707,16 @@ export class GoalService {
   private async afterRunNow(sessionId: string, reason: 'ok' | 'aborted' | 'error'): Promise<void> {
     const session = getSessionHost().get(sessionId)
     if (session === undefined || session.closed) return
-    const goal = await readGoal(session.harness)
-    if (goal === undefined || goal.status !== 'active') return
+    const read = await readGoal(session.harness)
+    if (read === undefined || read.status !== 'active') return
     // 又起了一轮（排队的消息、刚到的通知）或者被中断了：等那一轮
     if (session.isBusy() || session.isInterrupted()) return
     const now = this.deps.now()
+    const { messages } = await session.viewSnapshot()
+    const goal = await this.pickUpSpec(session, read, messages)
     // 上一次判定所依据的事实截止到哪，这一次就从哪往后看（判定途中开跑的一轮不会漏）
     const since = Math.max(goal.setAt, goal.lastVerdict?.at ?? 0)
-    const facts = runFactsOf((await session.viewSnapshot()).messages, since)
+    const facts = runFactsOf(messages, since)
     const costUsd = await this.goalCost(session, goal)
     const backgroundWork =
       taskRegistry.runningCount(sessionId, 'bash') +
@@ -855,6 +751,36 @@ export class GoalService {
         })
         return
     }
+  }
+
+  /**
+   * 验收规格文件（§15）：目标还没有 `specPath` 时，从设定之后的助手回复里找**最后**一行 `Acceptance spec: <路径>`
+   * （相对路径按会话的工作目录解析，`~` 展开），文件在就记下（绝对路径）并广播。找不到 / 文件不在 → 没有规格，什么也不挡。
+   * 记下之后不再自动改（干活的 agent 改的是文件内容，判定每次读它此刻的样子）。
+   */
+  private async pickUpSpec(
+    session: DurableSession,
+    goal: GoalRecord,
+    messages: readonly ChatMessage[]
+  ): Promise<GoalRecord> {
+    if (goal.specPath) return goal
+    const named = specPathNamedIn(messages, goal.setAt)
+    if (named === undefined) return goal
+    const sessionId = session.sessionId
+    // 与文件工具同一套解析（`~`、相对工作目录）：它用 write 写下的路径怎么写，这里就怎么认
+    const absolute = normalizePath(
+      resolveToCwd(named, resolveProjectConfig(sessionId).workingDirectory)
+    )
+    if (!isFile(absolute)) {
+      log.warn(`回复里点名的验收规格文件不在 session=${sessionId}: ${absolute}`)
+      return goal
+    }
+    const written = await updateGoal(session.harness, (g) =>
+      g?.id === goal.id && !g.specPath ? { ...g, specPath: absolute } : g
+    )
+    if (written?.id !== goal.id || written.specPath !== absolute) return goal
+    await this.broadcast(session, written)
+    return written
   }
 
   private async judge(
@@ -1160,7 +1086,6 @@ export class GoalService {
   /** 删除会话：停掉它名下的一切 */
   forget(sessionId: string): void {
     this.abortJudging(sessionId)
-    this.abortPlanning(sessionId)
     this.clearCheckin(sessionId)
     this.stopBudgetTimer(sessionId)
     this.pendingStatus.delete(sessionId)
@@ -1171,7 +1096,6 @@ export class GoalService {
   dispose(): void {
     for (const id of [...this.checkins.keys()]) this.clearCheckin(id)
     for (const id of [...this.judging.keys()]) this.abortJudging(id)
-    for (const id of [...this.planning.keys()]) this.abortPlanning(id)
     for (const id of [...this.budgetTimers.keys()]) this.stopBudgetTimer(id)
   }
 }

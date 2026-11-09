@@ -43,10 +43,10 @@ function objectiveBlock(objective: string): string {
   return `<objective>\n${escapeGoalText(objective)}\n</objective>`
 }
 
-/** 有验收规格文件时的一行：它和目标一起是验收依据 */
+/** 有验收规格文件时的一行：干活的 agent 自己在第一轮写下的（带着用户的回答），它和目标一起是验收依据 */
 function specLine(goal: GoalRecord): string {
   return goal.specPath
-    ? `Acceptance spec (written before the work began, with the user's answers): ${escapeGoalText(goal.specPath)} — the checker holds the work to it as well; read it again if unsure.`
+    ? `Acceptance spec (you wrote it at the start, with the user's answers): ${escapeGoalText(goal.specPath)} — the checker holds the work to it as well; read it again if unsure.`
     : ''
 }
 

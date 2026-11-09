@@ -8,14 +8,18 @@
  *         （文件胶囊）留着；插话说明一并摘掉；`isGoalSetToken` 只认 type 'goal'
  *   GSM-3 重新生成的往返：`resolveTokensForAgent(侧车)` 与模型文本逐字相同
  *   GSM-4 `withoutGoalSetNote`（侧车没解析到时的兜底，B-10 修复）：只摘末尾的那一段说明，别的原样
+ *   GSM-5 说明让干活的 agent 第一轮先整理验收规格（§15），回复里一行 `Acceptance spec: <路径>`；
+ *         `lastAcceptanceSpecPath` 认这一行的常见写法（反引号、强调、列表、链接、句末标点），取最后一行
  */
 import { describe, expect, it } from 'vitest'
 import {
   GOAL_SET_NOTE_TEXT,
   GOAL_SET_TOKEN_TYPE,
   GOAL_SET_UID,
+  GOAL_SPEC_LINE_LABEL,
   goalSetMessage,
   isGoalSetToken,
+  lastAcceptanceSpecPath,
   withoutGoalSetNote
 } from './goalSet'
 import { MID_RUN_NOTE_UID, midRunNoteDisplay } from './midRunNote'
@@ -113,5 +117,60 @@ describe('GSM-4 withoutGoalSetNote（侧车没解析到时的兜底）', () => {
     expect(withoutGoalSetNote(notAtEnd)).toBe(notAtEnd)
     const multi = goalSetMessage({ objective: 'a\n\nb', goalId: 'g_2' })
     expect(withoutGoalSetNote(multi.text)).toBe('a\n\nb')
+  })
+})
+
+describe('GSM-5 验收规格：说明里的约定与认出那一行', () => {
+  it('说明要第一轮先整理、写 md、回复里一行 Acceptance spec；目标写清楚了就不写；说明本身不会被认成那一行', () => {
+    expect(GOAL_SET_NOTE_TEXT).toContain('In this first turn, before you do the work')
+    expect(GOAL_SET_NOTE_TEXT).toContain(`exactly: ${GOAL_SPEC_LINE_LABEL}: <path>`)
+    expect(GOAL_SET_NOTE_TEXT).toContain('write no spec')
+    expect(GOAL_SET_NOTE_TEXT).toContain('at most three questions')
+    expect(GOAL_SET_NOTE_TEXT).toContain('your own statement that it is met is not evidence')
+    // 说明以示范的形式写着这一行，但不在行首：整条设定消息里认不出路径
+    expect(lastAcceptanceSpecPath(goalSetMessage({ objective: OBJ, goalId: 'g_1' }).text)).toBe(
+      undefined
+    )
+    // 说明在 <goal-set> 里：摘掉之后只剩原文
+    const multi = goalSetMessage({ objective: OBJ, goalId: 'g_1' })
+    expect(withoutGoalSetNote(multi.text)).toBe(OBJ)
+  })
+
+  it.each([
+    ['plain relative', 'Acceptance spec: docs/goal-spec.md', 'docs/goal-spec.md'],
+    ['absolute', 'Acceptance spec: /work/proj/SPEC.md', '/work/proj/SPEC.md'],
+    ['backticks', 'Acceptance spec: `docs/goal-spec.md`', 'docs/goal-spec.md'],
+    ['whole line in backticks', '`Acceptance spec: docs/goal-spec.md`', 'docs/goal-spec.md'],
+    ['bold label, colon inside', '**Acceptance spec:** `docs/a b.md`', 'docs/a b.md'],
+    ['whole line bold', '**Acceptance spec: docs/a.md**', 'docs/a.md'],
+    ['whole line bold, path in backticks', '**Acceptance spec: `docs/a.md`**', 'docs/a.md'],
+    ['bold label, colon outside', '**Acceptance spec**: docs/a.md', 'docs/a.md'],
+    ['italic path', 'Acceptance spec: _docs/a.md_', 'docs/a.md'],
+    ['bold path', 'Acceptance spec: **docs/a.md**', 'docs/a.md'],
+    ['list item', '- Acceptance spec: docs/a.md', 'docs/a.md'],
+    ['numbered + quote', '> 1. Acceptance spec: docs/a.md', 'docs/a.md'],
+    ['trailing period', 'Acceptance spec: `docs/a.md`.', 'docs/a.md'],
+    ['angle brackets', 'Acceptance spec: <docs/a.md>', 'docs/a.md'],
+    ['markdown link', 'Acceptance spec: [docs/a.md](docs/a.md)', 'docs/a.md'],
+    ['file url link', 'Acceptance spec: [spec](file:///work/my%20spec.md)', '/work/my spec.md'],
+    ['lower case label', 'acceptance spec: docs/a.md', 'docs/a.md'],
+    ['leading underscore kept', 'Acceptance spec: _private/spec.md', '_private/spec.md'],
+    ['CJK path', 'Acceptance spec: 文档/验收.md', '文档/验收.md']
+  ])('%s', (_label, line, expected) => {
+    expect(lastAcceptanceSpecPath(`Some words.\n\n${line}\n\nMore words.`)).toBe(expected)
+  })
+
+  it('最后一行为准；不在行首、空路径、别的标签都不算', () => {
+    expect(lastAcceptanceSpecPath('Acceptance spec: a.md\nthen\nAcceptance spec: b.md\nend')).toBe(
+      'b.md'
+    )
+    expect(lastAcceptanceSpecPath('The Acceptance spec: a.md is written.')).toBeUndefined()
+    expect(lastAcceptanceSpecPath('Acceptance spec:')).toBeUndefined()
+    expect(lastAcceptanceSpecPath('Acceptance spec: ``')).toBeUndefined()
+    expect(lastAcceptanceSpecPath('Acceptance criteria: a.md')).toBeUndefined()
+    expect(lastAcceptanceSpecPath('no such line')).toBeUndefined()
+    expect(lastAcceptanceSpecPath('Acceptance spec: a.md\r\nAcceptance spec: c.md\r\n')).toBe(
+      'c.md'
+    )
   })
 })

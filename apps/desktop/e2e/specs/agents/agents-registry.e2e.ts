@@ -33,7 +33,7 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十二个内置齐全，上下文注入默认全开（notebook/bot/tab 只开项目感知、派发专用与宿主专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十一个内置齐全，上下文注入默认全开（notebook/bot/tab 只开项目感知、派发专用与宿主专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
     // 旧 Bots 的意图门控 bot-intent 随管线一并拆除。tab 是 Chrome 标签页会话（侧边栏）的基座；
@@ -46,7 +46,6 @@ describe('内置档案', () => {
       'coding',
       'explore',
       'goal-judge',
-      'goal-planner',
       'knowledge-writer',
       'notebook',
       'permission-reviewer',
@@ -58,15 +57,8 @@ describe('内置档案', () => {
     // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声。审查员（permission-reviewer）
     // 更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入。知识库写手是库管员：
     // 只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带。判定员（goal-judge）与审查员同理：
-    // 它只该按事件里宿主记下的证据判，项目里的文字可能是冲它来的。目标规划员（goal-planner）也不注入：要看的项目文件
-    // 它自己用 read 去读
-    const narrow = [
-      'titler',
-      'permission-reviewer',
-      'knowledge-writer',
-      'goal-judge',
-      'goal-planner'
-    ]
+    // 它只该按事件里宿主记下的证据判，项目里的文字可能是冲它来的
+    const narrow = ['titler', 'permission-reviewer', 'knowledge-writer', 'goal-judge']
     for (const a of builtins) {
       // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
       // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正

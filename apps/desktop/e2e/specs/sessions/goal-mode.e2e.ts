@@ -5,7 +5,7 @@
  * 真 `next`）→ not_met 时续跑通知起下一轮 → met 时写结局通知；以及目标栏的按钮、侧栏的 ◎ 记号、停用目标检查之后的暂停。
  *
  *   G-1 真输入框 `/goal <条件>` + 回车：用户气泡带「目标」胶囊；目标栏出现、进行中；`agent.goal()` 是 active；
- *       侧栏那一行有 ◎（active）；干活的第一个请求是原文 + `<goal-set>` 说明
+ *       侧栏那一行有 ◎（active）；第一个请求就是干活的（不派别的 agent），原文 + `<goal-set>` 说明（第一轮先整理验收规格）
  *   G-2 脚本化的一圈：第一轮（一次 ls + 一段话）→ 判定 not_met（带理由与下一步）→ 对话里一行 goal-continue、
  *       第二轮起跑，请求里是 `<goal-continue>` 信封、带判定理由 → 判定 met → 一行 goal-status met，目标栏是达成，
  *       `agent.goal()` 是 met、turns = 1；判定请求是 goal-judge（工具恰为 read + next），事件里有目标原文与上一轮的 ls
@@ -14,15 +14,14 @@
  *       目标没了、栏与侧栏记号都消失，跑完也不判定
  *   G-4 停用内置 `goal-check`（`mdMeta.setEnabled`）：目标栏明说检查已停用；第一轮跑完目标暂停，原因
  *       `judge-unavailable`，没有任何判定请求
- *   G-5 目标规划写了规格：规划员（内置 goal-planner，开工之前由宿主派发）挂着时 IPC 与目标栏都是「规划中」、还没有干活的
- *       请求；它用 `write` 在项目里写 `docs/goal-spec.md`、`next {verdict:'spec', specPath:<相对路径>}` → 文件在，
- *       `agent.goal().specPath` 是绝对路径，干活的第一个请求的 `<goal-set>` 说明里点名它，判定事件里有 `specPath`
- *   G-6 规划员的 `ask`：普通的询问卡片（选择题），在界面里答了 → 规划员收到选择、回 ready → 目标开始，记录没有 specPath
+ *   G-5 干活的 agent 第一轮写了规格（§15）：它用 `write` 在项目里写 `docs/goal-spec.md`，回复里一行
+ *       `Acceptance spec: \`docs/goal-spec.md\`` → 运行结束时宿主认出它：`agent.goal().specPath` 是绝对路径，判定事件里有
+ *       `specPath`；not_met 之后的续跑信封点名它，第二次判定照样带着
+ *   G-6 干活的 agent 第一轮先 `ask`：询问卡片在对话里等人 —— 输入框已经放开、目标进行中、这一轮没结束所以不判定；
+ *       在界面里答了 → 同一轮接着跑（工具结果里是用户的选择）→ 判定 met；没有那一行就没有 specPath
  *
- * 每次设定目标，第一个请求是规划员的（系统提示词是 goal-planner 的 md，工具含 `next` / `ask` / `write`）：按系统提示词认领；
- * G-1..G-4 给它排一个 `next {verdict:'ready'}`，让它们照旧只看干活与判定。判定请求与审查请求同形（工具恰为 `read` +
- * `next`；审查在 harness 里本就关着），这里按内容认领：任务文本里有 `<hook_event trigger="goal.check">`。干活的请求按
- * 「既不是规划也不是判定」认领。会话标题都不是缺省标题：自动标题不跑。
+ * 判定请求与审查请求同形（工具恰为 `read` + `next`；审查在 harness 里本就关着），这里按内容认领：任务文本里有
+ * `<hook_event trigger="goal.check">`。干活的请求按「不是判定」认领。会话标题都不是缺省标题：自动标题不跑。
  * DOM 只经 `harness/pages.ts`（`goalPane` / `chatPane` / `sidebarPane`）。设了 `GOAL_E2E_SHOTS=<目录>` 时在
  * (a) 刚设定、(b) 达成、(c) 暂停、(d) 编辑器开着 四处存整窗截图给人看；不设就不截。
  */
@@ -75,13 +74,13 @@ const OBJECTIVES = {
   spec: 'G5 objective: make the importer robust',
   asks: 'G6 objective: speed up the build'
 }
-/** goal-planner.md 的第一句（规划请求的系统提示词里有它） */
-const PLANNER_PROMPT = "You are ShuviX's goal planner."
+/** 设定消息的说明里第一轮先整理规格的那句（`GOAL_SET_NOTE_TEXT`） */
+const SHAPE_FIRST = 'In this first turn, before you do the work, shape the goal'
 const SPEC_REL = 'docs/goal-spec.md'
 const SPEC_BODY =
   '# Importer robust: done when\n\n- [ ] `npm test` passes\n- [ ] malformed rows are skipped, not fatal\n'
-const PLAN_QUESTION = 'Which build should get faster?'
-const PLAN_OPTIONS = [
+const ASK_QUESTION = 'Which build should get faster?'
+const ASK_OPTIONS = [
   { label: 'Release build (recommended)', description: 'What ships' },
   { label: 'Dev build', description: 'What you run every day' }
 ]
@@ -100,26 +99,10 @@ const sids: Record<keyof typeof TITLES, string> = { loop: '', bar: '', off: '', 
 
 // ─── 请求认领 ───
 
-/** 规划请求：系统提示词是 goal-planner 的 md（它的每一个请求都是，含工具结果之后的那些） */
-const isPlanner = (req: FakeRequest): boolean => requestSystemText(req).includes(PLANNER_PROMPT)
 /** 判定请求：任务文本里有 goal.check 的事件围栏 */
-const isJudge = (req: FakeRequest): boolean =>
-  !isPlanner(req) && req.lastUserText.includes(GOAL_FENCE)
-/** 干活的请求：规划与判定之外的一切（审查关着、标题都不是缺省的，不会有别的派发） */
-const isWorker = (req: FakeRequest): boolean => !isPlanner(req) && !isJudge(req)
-
-let plannerSeq = 0
-function plannerTurn(turn: Omit<FakeTurn, 'when'>): FakeTurn {
-  return { usage: { prompt: 70, completion: 6 }, ...turn, when: isPlanner }
-}
-/** 规划员的结论：调一次 `next`，参数就是结论 */
-function plannerNext(plan: { verdict: 'ready' | 'spec'; specPath?: string }): FakeTurn {
-  return plannerTurn({
-    toolCalls: [{ id: `call_plan_${++plannerSeq}`, name: 'next', args: JSON.stringify(plan) }]
-  })
-}
-/** G-1..G-4：目标本来就够清楚 */
-const plannerReady = (): FakeTurn => plannerNext({ verdict: 'ready' })
+const isJudge = (req: FakeRequest): boolean => req.lastUserText.includes(GOAL_FENCE)
+/** 干活的请求：除判定之外的一切（审查关着、标题都不是缺省的，不会有别的派发） */
+const isWorker = (req: FakeRequest): boolean => !isJudge(req)
 
 let judgeSeq = 0
 /** 判定的一轮：调一次 `next`，参数就是结论 */
@@ -249,7 +232,6 @@ describe('设定与一圈判定', () => {
     provider.reset()
     // 第一轮：一次 ls，然后一段话 —— 挂在收尾之前，好看清「刚设定」的样子（G-2 放行）
     provider.script(
-      plannerReady(),
       workerTurn({
         toolCalls: [{ id: 'call_ls_1', name: 'ls', args: JSON.stringify({ path: projDir }) }]
       }),
@@ -273,20 +255,17 @@ describe('设定与一圈判定', () => {
     })
     expect(goal?.lastVerdict).toBeUndefined()
     expect(goal?.specPath).toBeUndefined()
-    expect(goal?.planning).toBe(false)
+    expect(goal).not.toHaveProperty('planning')
     expect((await goalStatuses())[sids.loop]).toBe('active')
 
-    // 开工之前先派了规划员（一个请求，回 ready），之后才是干活的请求
-    const planners = provider.requests().filter(isPlanner)
-    expect(planners).toHaveLength(1)
-    expect(provider.requests().indexOf(planners[0]!)).toBe(0)
-    expect(planners[0]!.lastUserText).toContain(`<goal>\n${OBJECTIVES.loop}\n</goal>`)
-
-    // 发给模型的是人的消息：原文在前，系统写的 `<goal-set>` 说明在后
-    const first = provider.requests().filter(isWorker)[0]!
+    // 发给模型的是人的消息：原文在前，系统写的 `<goal-set>` 说明在后；第一个请求就是干活的（不派别的 agent）
+    const first = provider.requests()[0]!
+    expect(isWorker(first)).toBe(true)
     expect(first.lastUserText.startsWith(OBJECTIVES.loop)).toBe(true)
     expect(first.lastUserText).toContain(`<goal-set id="${goal!.id}">`)
-    expect(first.lastUserText).not.toContain('acceptance spec')
+    // 说明让它第一轮先整理验收规格，回复里一行 `Acceptance spec: <path>`
+    expect(first.lastUserText).toContain(SHAPE_FIRST)
+    expect(first.lastUserText).toContain('Acceptance spec: <path>')
 
     // 输入框清空；用户气泡带「目标」胶囊，正文是原文
     expect(await chat.inputValue()).toBe('')
@@ -389,7 +368,7 @@ describe('设定与一圈判定', () => {
 describe('目标栏的按钮', () => {
   it('G-3 暂停 / 编辑器 / 继续 / 清除：栏、IPC、侧栏一起变；暂停或清除之后跑完的那一轮不判定', async () => {
     provider.reset()
-    provider.script(plannerReady(), workerTurn({ text: 'G3 first pass.', holdMs: 60_000 }))
+    provider.script(workerTurn({ text: 'G3 first pass.', holdMs: 60_000 }))
     await openSession('bar')
     await setGoalInComposer(OBJECTIVES.bar)
     await until(() => provider.holding(), 'G3 first worker turn held', 30_000)
@@ -472,7 +451,7 @@ describe('目标检查停用', () => {
     provider.reset()
     expect((await setGoalCheckEnabled(false)).success).toBe(true)
     try {
-      provider.script(plannerReady(), workerTurn({ text: 'G4 pass.', holdMs: 60_000 }))
+      provider.script(workerTurn({ text: 'G4 pass.', holdMs: 60_000 }))
       await openSession('off')
       await setGoalInComposer(OBJECTIVES.off)
       await until(() => provider.holding(), 'G4 worker turn held', 30_000)
@@ -505,116 +484,112 @@ describe('目标检查停用', () => {
   }, 90_000)
 })
 
-describe('目标规划', () => {
-  it('G-5 规划员写了规格：规划中 → 文件在项目里，specPath 是绝对路径，<goal-set> 与判定事件都点名它', async () => {
+describe('验收规格（主 agent 第一轮整理）', () => {
+  it('G-5 第一轮 write 规格 + 回复里一行 Acceptance spec → specPath 是绝对路径，判定事件与续跑信封都点名它', async () => {
     provider.reset()
     const specAbs = join(projDir, SPEC_REL)
     expect(existsSync(specAbs)).toBe(false)
     provider.script(
-      // 规划员的第一步挂住：看清「规划中」
-      plannerTurn({
+      // 第一轮：先写规格，再回一段话（带那一行），然后才去干活 —— 这里一轮就收尾，交给判定
+      workerTurn({
         toolCalls: [
           {
-            id: 'call_plan_write',
+            id: 'call_spec_write',
             name: 'write',
             args: JSON.stringify({ path: specAbs, content: SPEC_BODY })
           }
-        ],
-        holdMs: 60_000
+        ]
       }),
-      plannerNext({ verdict: 'spec', specPath: SPEC_REL }),
-      workerTurn({ text: 'Read the spec; the importer now skips malformed rows.' }),
+      workerTurn({
+        text: `Wrote the acceptance spec.\n\nAcceptance spec: \`${SPEC_REL}\`\n\nStarting on the importer next.`
+      }),
+      judgeTurn({
+        verdict: 'not_met',
+        reason: 'Only the spec exists; malformed rows are still fatal.',
+        next_step: 'Make the importer skip malformed rows, then run npm test.'
+      }),
+      workerTurn({ text: 'The importer now skips malformed rows; npm test passes.' }),
       judgeTurn({ verdict: 'met', reason: 'Every item in the spec holds.' })
     )
     await openSession('spec')
     await setGoalInComposer(OBJECTIVES.spec)
-    await until(() => provider.holding(), 'planner turn held', 30_000)
 
-    // 挂着的是规划员：goal-planner 的系统提示词，工具含 next / ask / write；任务里有目标原文
-    const held = provider.heldRequest()!
-    expect(isPlanner(held)).toBe(true)
-    expect(requestToolNames(held)).toEqual(expect.arrayContaining(['next', 'ask', 'write']))
-    expect(held.lastUserText).toContain(`<goal>\n${OBJECTIVES.spec}\n</goal>`)
-    // 规划中：目标已进行中、视图 planning，栏上是规划中；还没有任何干活的请求
-    expect(await goalOf(sids.spec)).toMatchObject({
-      objective: OBJECTIVES.spec,
-      status: 'active',
-      planning: true
-    })
-    await until(
-      async () => (await goals.bar())?.state.startsWith('Preparing the acceptance spec…') === true,
-      'goal bar shows planning'
-    )
-    expect(provider.requests().filter(isWorker)).toHaveLength(0)
-
-    provider.release()
     const met = await waitGoal(sids.spec, 'met', 90_000)
     expect(met.specPath).toBe(specAbs)
-    expect(met.planning).toBe(false)
+    expect(met.turns).toBe(1)
     expect(readFileSync(specAbs, 'utf8')).toBe(SPEC_BODY)
     await waitSettled('spec')
 
-    // 请求序：规划（write）→ 规划（next）→ 干活 → 判定
+    // 请求序：干活（write）→ 干活（话）→ 判定 → 续跑 → 判定；没有别的 agent
     const reqs = provider.requests()
-    expect(reqs.filter(isPlanner)).toHaveLength(2)
     const workers = reqs.filter(isWorker)
     const judges = reqs.filter(isJudge)
-    expect(workers).toHaveLength(1)
-    expect(judges).toHaveLength(1)
-    expect(reqs.indexOf(reqs.filter(isPlanner)[1]!)).toBeLessThan(reqs.indexOf(workers[0]!))
+    expect(workers).toHaveLength(3)
+    expect(judges).toHaveLength(2)
+    expect(reqs.indexOf(workers[1]!)).toBeLessThan(reqs.indexOf(judges[0]!))
 
-    // 干活的第一个请求：原文 + `<goal-set>` 说明，说明里点名规格文件的绝对路径
+    // 第一个请求就是干活的：原文 + `<goal-set>` 说明（第一轮先整理规格）
     const first = workers[0]!.lastUserText
     expect(first.startsWith(OBJECTIVES.spec)).toBe(true)
-    const note = first.slice(
-      first.indexOf(`<goal-set id="${met.id}">`),
-      first.indexOf('</goal-set>')
-    )
-    expect(note).toContain(specAbs)
-    // 判定事件带着它（判定 agent 自己去 read）
+    expect(first).toContain(SHAPE_FIRST)
+
+    // 第一次运行结束时宿主就认出了它：两次判定事件都带着绝对路径（判定 agent 自己去 read）
     expect(goalEventOf(judges[0]!).goal).toMatchObject({ id: met.id, specPath: specAbs })
+    expect(goalEventOf(judges[0]!).lastRun.assistantText).toContain(
+      `Acceptance spec: \`${SPEC_REL}\``
+    )
+    expect(goalEventOf(judges[1]!).goal).toMatchObject({ id: met.id, specPath: specAbs })
+
+    // 续跑信封点名它
+    const continued = workers[2]!.lastUserText
+    expect(continued).toContain(`<goal-continue id="${met.id}" turn="1">`)
+    expect(continued).toContain(
+      `Acceptance spec (you wrote it at the start, with the user's answers): ${specAbs}`
+    )
   }, 120_000)
 
-  it('G-6 规划员的 ask：询问卡片在对话里等人，答了之后规划员收到选择、回 ready，目标开始', async () => {
+  it('G-6 第一轮先 ask：卡片等人时输入框已放开、目标进行中、不判定；答了之后同一轮接着跑，判定 met', async () => {
     provider.reset()
     provider.script(
-      plannerTurn({
+      workerTurn({
         toolCalls: [
           {
-            id: 'call_plan_ask',
+            id: 'call_goal_ask',
             name: 'ask',
-            args: JSON.stringify({ question: PLAN_QUESTION, options: PLAN_OPTIONS })
+            args: JSON.stringify({ question: ASK_QUESTION, options: ASK_OPTIONS })
           }
         ]
       }),
-      plannerReady(),
-      workerTurn({ text: 'G6 pass.' }),
+      workerTurn({ text: 'Release build it is. The goal says how to check it, so no spec file.' }),
       judgeTurn({ verdict: 'met', reason: 'The release build is faster.' })
     )
     await openSession('asks')
     await setGoalInComposer(OBJECTIVES.asks)
 
-    // 卡片等着人：规划还没完，没有干活的请求
-    await until(async () => (await asks.cardKind()) === 'choice', 'planner ask card', 30_000)
-    expect(await goalOf(sids.asks)).toMatchObject({ status: 'active', planning: true })
+    // 卡片等着人：设定那次操作已经返回（输入框清空），目标进行中；这一轮没结束，所以没有判定
+    await until(async () => (await asks.cardKind()) === 'choice', 'goal ask card', 30_000)
+    expect(await chat.inputValue()).toBe('')
+    expect(await goalOf(sids.asks)).toMatchObject({ status: 'active', turns: 0 })
+    await waitBar('active')
     await sleep(500)
-    expect(provider.requests().filter(isWorker)).toHaveLength(0)
-    expect(provider.requests().filter(isPlanner)).toHaveLength(1)
+    expect(provider.requests().filter(isJudge)).toHaveLength(0)
+    expect(provider.requests().filter(isWorker)).toHaveLength(1)
 
-    await asks.pickChoice(PLAN_OPTIONS[0]!.label)
+    await asks.pickChoice(ASK_OPTIONS[0]!.label)
     await sleep(100)
     await asks.confirmChoice()
     await until(async () => (await asks.cardKind()) === null, 'ask card answered', 20_000)
 
     const met = await waitGoal(sids.asks, 'met', 90_000)
+    expect(met.turns).toBe(0)
     expect(met.specPath).toBeUndefined()
     await waitSettled('asks')
-    const planners = provider.requests().filter(isPlanner)
-    expect(planners).toHaveLength(2)
-    expect(planners[1]!.raw).toContain(`User selected: ${PLAN_OPTIONS[0]!.label}`)
     const workers = provider.requests().filter(isWorker)
-    expect(workers).toHaveLength(1)
+    expect(workers).toHaveLength(2)
     expect(workers[0]!.lastUserText.startsWith(OBJECTIVES.asks)).toBe(true)
-    expect(workers[0]!.lastUserText).not.toContain('acceptance spec')
+    expect(workers[1]!.raw).toContain(`User selected: ${ASK_OPTIONS[0]!.label}`)
+    const judges = provider.requests().filter(isJudge)
+    expect(judges).toHaveLength(1)
+    expect(goalEventOf(judges[0]!).goal).not.toHaveProperty('specPath')
   }, 120_000)
 })

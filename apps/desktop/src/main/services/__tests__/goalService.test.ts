@@ -141,9 +141,7 @@ vi.mock('../sessionService', () => ({
   }
 }))
 vi.mock('../sessionSignalSeams', () => ({ sessionSignalsReady: async () => {} }))
-// 目标规划员（goal-planner）：缺省没有这份档案 → 规划跳过、照原样开始（规划的用例在 goalPlanner.test.ts）
-vi.mock('../agentService', () => ({ agentService: { getProfile: () => undefined } }))
-vi.mock('../../agents/AgentManager', () => ({ agentManager: { runTask: vi.fn() } }))
+// 验收规格文件按会话的工作目录解析（规格的用例在 goalSpec.test.ts）
 vi.mock('../toolContext', () => ({ resolveProjectConfig: () => ({ workingDirectory: '/tmp' }) }))
 vi.mock('../taskRegistry', () => ({
   taskRegistry: {
@@ -327,11 +325,8 @@ async function lines(session: DurableSession): Promise<string[]> {
   return transcript(await session.currentConversation())
 }
 
-/** 设定目标时规划与开工在后台（同一条队列）：等它们做完再交回，用例照旧按「做完了」断言 */
-async function act(action: GoalAction, sessionId = SID): Promise<unknown> {
-  const result = await service.act(sessionId, action, LOCAL)
-  if (action.type === 'set') await service.whenIdle(sessionId)
-  return result
+function act(action: GoalAction, sessionId = SID): Promise<unknown> {
+  return service.act(sessionId, action, LOCAL)
 }
 
 /** 设定并等那一轮跑完（排好那一轮的应答） */
@@ -496,7 +491,6 @@ describe('14a · set / eligibility / defaults', () => {
       remote
     )
     expect(result).toEqual({ ok: true })
-    await service.whenIdle(SID)
     const goal = (await goalOf(session))!
     expect(goal).toMatchObject({
       objective: `rotate ${MASKED} and redeploy`,
@@ -597,7 +591,7 @@ describe('14a · set / eligibility / defaults', () => {
     expect(goal.status).toBe('active')
   })
 
-  it('GV-6 没发出去（admitSteer 报错）：设定本身回 ok（开工在后台）；旧目标原样放回，不写 replaced', async () => {
+  it('GV-6 没发出去（admitSteer 报错）：{ok:false, error}；旧目标原样放回，不写 replaced', async () => {
     const { session } = await setup()
     const previous = await seedGoal(session, {
       id: 'g_prev',
@@ -607,7 +601,7 @@ describe('14a · set / eligibility / defaults', () => {
     })
     admitError = 'No model is configured'
     const result = await act({ type: 'set', objective: 'a new goal' })
-    expect(result).toEqual({ ok: true })
+    expect(result).toEqual({ ok: false, error: 'No model is configured' })
     expect(await goalOf(session)).toStrictEqual(previous)
     expect(await notices(session, 'goal-status')).toEqual([])
     expect(statusTable()).toEqual({ [SID]: 'paused' })
@@ -617,7 +611,7 @@ describe('14a · set / eligibility / defaults', () => {
   it('GV-6 没有旧目标时没发出去 → 目标删掉、表里没有它', async () => {
     const { session } = await setup()
     admitError = 'No model is configured'
-    expect(await act({ type: 'set', objective: 'a new goal' })).toMatchObject({ ok: true })
+    expect(await act({ type: 'set', objective: 'a new goal' })).toMatchObject({ ok: false })
     expect(await goalOf(session)).toBeUndefined()
     expect(statusTable()).toEqual({})
     expect(lastView()).toBeNull()
@@ -987,15 +981,12 @@ describe('14b · user actions', () => {
     expect(await act({ type: 'bogus' } as unknown as GoalAction)).toMatchObject({ ok: false })
   })
 
-  it(
-    'GV-16 objective 不是字符串 → {ok:false} 且什么都不写',
-    async () => {
-      const { session } = await setup()
-      const result = await act({ type: 'set', objective: 42 } as unknown as GoalAction)
-      expect(result).toMatchObject({ ok: false })
-      expect(await goalOf(session)).toBeUndefined()
-    }
-  )
+  it('GV-16 objective 不是字符串 → {ok:false} 且什么都不写', async () => {
+    const { session } = await setup()
+    const result = await act({ type: 'set', objective: 42 } as unknown as GoalAction)
+    expect(result).toMatchObject({ ok: false })
+    expect(await goalOf(session)).toBeUndefined()
+  })
 })
 
 // ─────────────────────────── 14c 判定 ───────────────────────────
@@ -1290,8 +1281,10 @@ describe('14c · run end → judge → continue / finish / pause', () => {
     await waitFor(() => judge.signal() !== undefined, 3000, 'judging')
     admitError = 'No model'
     verdictOnce({ verdict: 'impossible', reason: 'rejudged after a failed set' })
-    // 设定本身回 ok（开工在后台）；没发出去的结局是旧目标放回、就地补判
-    expect(await act({ type: 'set', objective: 'other goal' })).toEqual({ ok: true })
+    expect(await act({ type: 'set', objective: 'other goal' })).toEqual({
+      ok: false,
+      error: 'No model'
+    })
     expect(judge.signal()!.aborted).toBe(true)
     await drain()
     expect(mocks.decide).toHaveBeenCalledTimes(2)

@@ -506,7 +506,6 @@
     "durationHours": "{{h}} 小时 {{m}} 分",
     "state": {
       "active": "目标进行中",
-      "planning": "正在整理验收规格…",
       "checking": "正在检查目标…",
       "waiting": "目标在等你回答",
       "paused": "已暂停：{{reason}}",
@@ -539,7 +538,6 @@
     },
     "notifyMet": "目标已达成：{{reason}}",
     "notifyImpossible": "目标判定为做不到：{{reason}}",
-    "planningTask": "目标规划",
     "errorInvalidAction": "这个目标操作无效。",
     "errorNoGoal": "这段对话没有目标。",
     "errorObjectiveLength": "目标要写 1 到 {{max}} 个字。",

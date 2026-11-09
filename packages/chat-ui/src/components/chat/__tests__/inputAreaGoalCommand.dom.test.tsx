@@ -160,7 +160,6 @@ const GOAL: GoalView = {
   activeMs: 0,
   costUsd: 0.5,
   judging: false,
-    planning: false,
   checkerMissing: false
 }
 

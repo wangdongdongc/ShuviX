@@ -50,7 +50,6 @@ function goal(over: Partial<GoalView> = {}): GoalView {
     activeMs: 0,
     costUsd: 3.1,
     judging: false,
-    planning: false,
     checkerMissing: false,
     ...over
   }
