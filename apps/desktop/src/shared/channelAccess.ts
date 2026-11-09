@@ -54,6 +54,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:setModel': 'write',
   'agent:previewChange': 'read', // 只预判：不连服务器、什么也不写（与 agent:init 一样可能把锁着的会话打开来读）
   'agent:askCounts': 'read',
+  'agent:pendingInputs': 'read', // 询问本身（命令、路径、改动）：与会话视图里的同一份，读会话就读得到
   'agent:goal': 'read',
   // 设目标 = 以人的来源发一条消息（与 agent:prompt 同级）；暂停 / 继续 / 编辑 / 清除同理
   'agent:goalAct': 'write',

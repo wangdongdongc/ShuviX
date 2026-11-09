@@ -9,7 +9,12 @@
  * DB 行类型平行；Electron 侧通过编译期断言（renderer/src/host/chatApiContract.ts）保证
  * window.api 结构满足本契约，从而零漂移。
  */
-import type { GoalAction, GoalActResult, GoalStatus, GoalView } from '@shuvix/chat-protocol/types/goal'
+import type {
+  GoalAction,
+  GoalActResult,
+  GoalStatus,
+  GoalView
+} from '@shuvix/chat-protocol/types/goal'
 import type { RebuildSystemPromptResult, SystemPromptStatus } from './systemPromptStatus'
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
@@ -33,7 +38,7 @@ import type {
   McpServerUpdateParams,
   McpToolInfo
 } from './types/mcp'
-import type { InputResponse } from './types/inputRequest'
+import type { InputRequest, InputResponse } from './types/inputRequest'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
 import type { ArtifactRefContent, SessionArtifact } from './artifacts'
@@ -860,6 +865,11 @@ export interface HostApi {
      * 新来的前端靠这份补侧栏徽标。
      */
     askCounts: () => Promise<Record<string, number>>
+    /**
+     * 各会话此刻挂着的询问本身（只列有的）：收件箱不打开会话就地回答 / 批准，应答仍走 `respondToInput`。
+     * 可选：没有它的宿主（Chrome 侧栏）收件箱只列会话、不摆卡片
+     */
+    pendingInputs?: () => Promise<Record<string, InputRequest[]>>
     /** 一条会话的目标（docs/goal-mode-design.md）；没有目标 → null。新来的前端补种用，之后跟 `goal` 事件 */
     goal: (sessionId: string) => Promise<GoalView | null>
     /** 对目标的操作：设定（发出那条人的消息）、暂停、继续、编辑、清除 */

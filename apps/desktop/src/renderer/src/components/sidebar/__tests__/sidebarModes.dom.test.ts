@@ -70,6 +70,7 @@ vi.mock('@shuvix/app-shell', async () => {
         h(Fragment, null, props.overlays as never)
       )
     },
+    InboxRow: () => h('div', { 'data-stub-inbox-row': '' }),
     TrackingGroup: group('Tracking'),
     AgentGroup: group('Agent'),
     PolicyGroup: group('Policy'),

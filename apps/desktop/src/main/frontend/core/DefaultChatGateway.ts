@@ -21,7 +21,7 @@ import type {
   ThinkingLevel,
   WithdrawQueuedResult
 } from '../../types'
-import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import { detectSensitive, type InputSource } from '@shuvix/agent-runtime'
@@ -351,6 +351,10 @@ export class DefaultChatGateway implements ChatGateway {
 
   pendingAskCounts(): Record<string, number> {
     return sessionService.pendingAskCounts()
+  }
+
+  pendingInputs(): Record<string, InputRequest[]> {
+    return sessionService.pendingInputs()
   }
 
   // ─── 运行时调整 ────────────────────────────────

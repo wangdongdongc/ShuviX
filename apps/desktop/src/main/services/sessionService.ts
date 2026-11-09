@@ -74,6 +74,7 @@ import {
   workProjectOf
 } from '@shuvix/chat-protocol/botSession'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { chromeTabOf, isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStorageKind'
 import { agentService } from './agentService'
@@ -1370,6 +1371,20 @@ export class SessionService {
       if (session.pendingInputCount > 0) counts[session.sessionId] = session.pendingInputCount
     }
     return counts
+  }
+
+  /**
+   * 每条打开着的会话此刻挂着的询问本身（只列有的）—— 收件箱在不打开会话的情况下就地回答 / 批准用。与
+   * `pendingAskCounts` 同一份来源（durable 的询问表），只读，不存任何东西
+   */
+  pendingInputs(): Record<string, InputRequest[]> {
+    const result: Record<string, InputRequest[]> = {}
+    if (!peekSessionHost()) return result
+    for (const session of this.liveAgentSessions()) {
+      const requests = session.pendingInputs()
+      if (requests.length > 0) result[session.sessionId] = requests
+    }
+    return result
   }
 
   liveAgentSessions(): AgentSession[] {

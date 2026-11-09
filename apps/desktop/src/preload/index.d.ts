@@ -1,4 +1,9 @@
-import type { GoalAction, GoalActResult, GoalStatus, GoalView } from '@shuvix/chat-protocol/types/goal'
+import type {
+  GoalAction,
+  GoalActResult,
+  GoalStatus,
+  GoalView
+} from '@shuvix/chat-protocol/types/goal'
 import type {
   RebuildSystemPromptResult,
   SystemPromptStatus
@@ -420,6 +425,10 @@ declare global {
       rebuildSystemPrompt: (sessionId: string) => Promise<RebuildSystemPromptResult>
       /** 各会话此刻挂着几条询问（只列 > 0 的；窗口重建 / 客户端重连后补侧栏徽标） */
       askCounts: () => Promise<Record<string, number>>
+      /** 各会话此刻挂着的询问本身（只列有的；收件箱就地回答 / 批准） */
+      pendingInputs: () => Promise<
+        Record<string, import('@shuvix/chat-protocol/types/inputRequest').InputRequest[]>
+      >
       goal: (sessionId: string) => Promise<GoalView | null>
       goalAct: (params: { sessionId: string; action: GoalAction }) => Promise<GoalActResult>
       goalStatuses: () => Promise<Record<string, GoalStatus>>

@@ -11,6 +11,8 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import '../../stores/sessionPanelStore'
 import {
   WelcomeView,
+  InboxPage,
+  useInboxStore,
   ChatBody,
   FilesPanel,
   MediaUrlProvider,
@@ -45,6 +47,7 @@ interface ChatViewProps {
 export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSessionId } = useChatStore()
+  const inboxOpen = useInboxStore((s) => s.open)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   const toggleBrowser = useBrowserStore((s) => s.toggle)
@@ -248,7 +251,8 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         ) : undefined
       }
       contentOverride={placeholder}
-      welcome={<WelcomeView />}
+      // 收件箱开着：「没有活动会话」那一格画收件箱页（打开收件箱时活动会话已被清空，见 app-shell inboxStore）
+      welcome={inboxOpen ? <InboxPage /> : <WelcomeView />}
       renderNotebook={(path, sid) => <NotebookSessionView key={sid} path={path} sessionId={sid} />}
       conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
       overlays={

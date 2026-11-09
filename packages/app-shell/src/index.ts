@@ -66,6 +66,11 @@ export type {
 } from './sidebar/knowledgeTree'
 export { TrackingGroup } from './sidebar/TrackingGroup'
 export type { TrackingGroupProps, TrackingGroupAdapter } from './sidebar/TrackingGroup'
+export { InboxRow } from './sidebar/InboxRow'
+export { InboxPage } from './inbox/InboxPage'
+export { useInboxStore, useInboxSections } from './inbox/inboxStore'
+export { inboxSectionsOf } from './inbox/inboxItems'
+export type { InboxItem, InboxSections, InboxInput } from './inbox/inboxItems'
 export { useBotRegistry } from './sidebar/useBotRegistry'
 export type {
   BotGroupAdapter,

@@ -10,6 +10,7 @@ import {
   type AgentGroupAdapter,
   HookGroup,
   type HookGroupAdapter,
+  InboxRow,
   TrackingGroup,
   type TrackingGroupAdapter,
   PolicyGroup,
@@ -873,6 +874,8 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
       groupsPrepend={
         full ? (
           <>
+            {/* 收件箱（此刻在运行的会话）：最上面一行，不归哪一节 */}
+            <InboxRow />
             {/* 资料库那几组也是一节（与「项目」「临时对话」同一副分节标题）：Finder 侧栏一节一节往下排 */}
             <div className="sb-section" data-sidebar-section="library">
               {t('sidebar.library')}

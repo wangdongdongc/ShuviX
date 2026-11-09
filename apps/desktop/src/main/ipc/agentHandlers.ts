@@ -151,6 +151,9 @@ export function registerAgentHandlers(): void {
   /** 各会话挂着几条询问（只读）：窗口重建 / 客户端重连后补侧栏徽标 */
   defineHandler('agent:askCounts', () => chatGateway.pendingAskCounts())
 
+  /** 各会话此刻挂着的询问本身（只读）：收件箱不打开会话就地回答 / 批准，应答仍走 agent:respondToInput */
+  defineHandler('agent:pendingInputs', () => chatGateway.pendingInputs())
+
   /** 目标模式（docs/goal-mode-design.md）：一条会话的目标视图（只读，补种用） */
   defineHandler('agent:goal', (_ctx, sessionId: string) => goalService.get(sessionId))
 

@@ -11,7 +11,7 @@ import type {
   ThinkingLevel,
   WithdrawQueuedResult
 } from '../../types'
-import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type {
   RedactionHint,
@@ -134,6 +134,9 @@ export interface ChatGateway {
 
   /** 每条打开着的会话此刻挂着几条询问（只列 > 0 的；新来的前端补侧栏徽标用） */
   pendingAskCounts(): Record<string, number>
+
+  /** 每条打开着的会话此刻挂着的询问本身（只列有的；收件箱就地回答 / 批准用，只读） */
+  pendingInputs(): Record<string, InputRequest[]>
 
   /** 设置思考深度（写会话设置 `settings.thinkingLevel`，recordSessionThinkingLevel） */
   setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
