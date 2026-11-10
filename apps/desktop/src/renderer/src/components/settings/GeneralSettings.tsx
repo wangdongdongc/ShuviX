@@ -45,11 +45,11 @@ export function GeneralSettings(): React.JSX.Element {
     setUiZoom,
     setFocusMode,
     availableModels,
-    activeProvider,
-    activeModel,
+    defaultProvider,
+    defaultModel,
     defaultThinkingLevel,
-    setActiveProvider,
-    setActiveModel,
+    setDefaultProvider,
+    setDefaultModel,
     setDefaultThinkingLevel
   } = useSettingsStore()
   // 手机布局（web 客户端窄屏）：字号是这台设备自己的（不碰桌面的 general.fontSize）；UI 缩放是桌面窗口的
@@ -86,11 +86,11 @@ export function GeneralSettings(): React.JSX.Element {
 
   /** 仅持久化（store + DB）的单值 setter —— 编排逻辑在共享 ModelDefaultsSettings 内 */
   const persistDefaultProvider = (id: string): void => {
-    setActiveProvider(id)
+    setDefaultProvider(id)
     window.api.settings.set({ key: 'general.defaultProvider', value: id })
   }
   const persistDefaultModel = (id: string): void => {
-    setActiveModel(id)
+    setDefaultModel(id)
     window.api.settings.set({ key: 'general.defaultModel', value: id })
   }
   const persistDefaultThinkingLevel = (level: SelectableThinkingLevel): void => {
@@ -160,8 +160,8 @@ export function GeneralSettings(): React.JSX.Element {
 
       <ModelDefaultsSettings
         availableModels={availableModels}
-        defaultProvider={activeProvider}
-        defaultModel={activeModel}
+        defaultProvider={defaultProvider}
+        defaultModel={defaultModel}
         setDefaultProvider={persistDefaultProvider}
         setDefaultModel={persistDefaultModel}
         defaultThinkingLevel={defaultThinkingLevel}

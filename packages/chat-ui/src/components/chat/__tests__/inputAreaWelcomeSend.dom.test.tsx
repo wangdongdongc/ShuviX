@@ -9,7 +9,7 @@
  *   session.create → agent.setModel → [agent.setThinkingLevel] → session.updateEnabledTools
  *   → [session.updateKnowledgeBases] → agent.init → session.list → agent.prompt
  *
- * 档位那一步只在显示的档位**不是宿主启动时种的默认档**时才有（`thinkingLevelIsDefault`）：
+ * 档位那一步只在显示的档位**不是种下的默认档**时才有（`thinkingLevelIsDefault`）：
  *
  *   - WS-D-1…7 没有宿主种子（store 初始态，同扩展侧栏）→ 照旧写显示的那一档；
  *   - WS-D-8 种了默认档、没人动过 → 不写，交给后端按模型能力回落；模型与草稿照写；
@@ -682,6 +682,122 @@ describe('欢迎页的档位：宿主种的默认档不写，有人定过才写'
     await pressEnter()
 
     expect(callsOf('agent.setThinkingLevel')).toEqual([[{ sessionId: NEW, level: 'high' }]])
+  })
+})
+
+describe('欢迎页种新会话会用的模型与档位（宿主有 agent.newSessionDefaults）', () => {
+  /** 新会话会用的：基座 md 声明的（或设置里的默认）—— 与显示着的 P/M、档位 low 都不同 */
+  const DEFAULTS = {
+    provider: 'prov-2',
+    model: 'model-b',
+    capabilities: { reasoning: true, vision: true, maxInputTokens: 1234 },
+    modelMetadata: { thinkingLevel: 'medium' }
+  }
+  /** 回包的那一下（可换成等着的） */
+  let defaultsGate: () => Promise<void>
+
+  beforeEach(() => {
+    defaultsGate = async () => {}
+    // 宿主的选择器镜像：写进去，下一次渲染读到的就是它（发送读的也是它）
+    mocks.setActiveProvider.mockImplementation((id: string) => {
+      mocks.models.activeProvider = id
+    })
+    mocks.setActiveModel.mockImplementation((id: string) => {
+      mocks.models.activeModel = id
+    })
+    const api = (window as unknown as { api: { agent: Record<string, unknown> } }).api
+    api.agent.newSessionDefaults = record('agent.newSessionDefaults', async () => {
+      await defaultsGate()
+      return structuredClone(DEFAULTS)
+    })
+  })
+
+  afterEach(() => {
+    mocks.setActiveProvider.mockReset()
+    mocks.setActiveModel.mockReset()
+  })
+
+  it('WS-D-17 欢迎页一挂上：问 newSessionDefaults({ projectId: null })，选择器换成它、档位种成默认档 → 发送写它的模型、不写档位', async () => {
+    seedWelcome({ draft: [] })
+    await mount({ withSessionInit: true })
+
+    expect(callsOf('agent.newSessionDefaults')).toEqual([[{ projectId: null }]])
+    expect(mocks.models).toEqual({ activeProvider: 'prov-2', activeModel: 'model-b' })
+    expect(store().thinkingLevel).toBe('medium')
+    expect(store().thinkingLevelIsDefault).toBe(true)
+    expect(store().modelSupportsReasoning).toBe(true)
+    expect(store().modelSupportsVision).toBe(true)
+    expect(store().maxContextTokens).toBe(1234)
+
+    await type('hello')
+    await pressEnter()
+    expect(callsOf('agent.setModel')).toEqual([
+      [{ sessionId: NEW, provider: 'prov-2', model: 'model-b' }]
+    ])
+    expect(callsOf('agent.setThinkingLevel')).toEqual([])
+  })
+
+  it('WS-D-18 打开一条会话（同步成 high）再回欢迎页 → 再问一次、重新种默认档 → 发送不写档位（对照 WS-D-10：没有这个调用的宿主照写 high）', async () => {
+    seedWelcome({ draft: [] })
+    rows.set('existing', row('existing'))
+    useChatStore.setState({ sessions: [row('existing')] })
+    initMeta.set('existing', {
+      capabilities: { reasoning: true },
+      modelMetadata: { thinkingLevel: 'high' }
+    })
+    await mount({ withSessionInit: true })
+
+    await act(async () => {
+      store().setActiveSessionId('existing')
+    })
+    await flush()
+    await flush()
+    expect(store().thinkingLevel).toBe('high')
+    expect(mocks.models).toEqual({ activeProvider: P, activeModel: M })
+
+    await act(async () => {
+      store().setActiveSessionId(null)
+    })
+    await flush()
+    expect(callsOf('agent.newSessionDefaults')).toHaveLength(2)
+    expect(mocks.models).toEqual({ activeProvider: 'prov-2', activeModel: 'model-b' })
+    expect(store().thinkingLevel).toBe('medium')
+    expect(store().thinkingLevelIsDefault).toBe(true)
+
+    await type('hello')
+    await pressEnter()
+    expect(callsOf('agent.setModel')).toEqual([
+      [{ sessionId: NEW, provider: 'prov-2', model: 'model-b' }]
+    ])
+    expect(callsOf('agent.setThinkingLevel')).toEqual([])
+  })
+
+  it('WS-D-19 回包之前就打开了一条会话 → 回包不覆盖那条会话同步来的模型与档位', async () => {
+    let release!: () => void
+    defaultsGate = () => new Promise<void>((resolve) => (release = resolve))
+    seedWelcome({ draft: [] })
+    rows.set('existing', row('existing'))
+    useChatStore.setState({ sessions: [row('existing')] })
+    initMeta.set('existing', {
+      capabilities: { reasoning: true },
+      modelMetadata: { thinkingLevel: 'high' }
+    })
+    await mount({ withSessionInit: true })
+    expect(callsOf('agent.newSessionDefaults')).toHaveLength(1)
+
+    await act(async () => {
+      store().setActiveSessionId('existing')
+    })
+    await flush()
+    await flush()
+    await act(async () => {
+      release()
+    })
+    await flush()
+
+    expect(mocks.models).toEqual({ activeProvider: P, activeModel: M })
+    expect(store().thinkingLevel).toBe('high')
+    expect(store().thinkingLevelIsDefault).toBe(false)
   })
 })
 

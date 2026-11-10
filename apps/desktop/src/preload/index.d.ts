@@ -42,6 +42,8 @@ import type {
   AgentSetModelParams,
   AgentPreviewChangeParams,
   AgentChangePreview,
+  AgentNewSessionDefaultsParams,
+  AgentNewSessionDefaults,
   AgentSetThinkingLevelParams,
   HttpLog,
   HttpLogListParams,
@@ -419,6 +421,10 @@ declare global {
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（只读） */
       previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
+      /** 一条还没建的会话会跑在什么模型 / 思考档位上（只读；欢迎页的选择器用） */
+      newSessionDefaults: (
+        params: AgentNewSessionDefaultsParams
+      ) => Promise<AgentNewSessionDefaults>
       /** 冻结的系统提示词与此刻的来源比一比（只读）：哪几段的来源改了 */
       systemPromptStatus: (sessionId: string) => Promise<SystemPromptStatus>
       /** 重建系统提示词：删掉冻结的那份，下一条消息重新渲染（会话在跑 → busy） */

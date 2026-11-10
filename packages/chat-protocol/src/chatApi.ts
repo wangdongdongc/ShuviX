@@ -284,6 +284,21 @@ export interface AgentInitResult {
   enabledTools: string[]
 }
 
+/** `agent.newSessionDefaults` 的参数：新会话将建在哪（null / 省略 = 不属于任何项目，同欢迎页直接发送建的那种） */
+export interface AgentNewSessionDefaultsParams {
+  projectId?: string | null
+}
+
+/**
+ * 一条**还没建的**会话会跑在什么上：与 `agent.init` 对一条刚建、什么都没选过的会话的回答同一口径 —— 形态基座
+ * （项目 → `work`，否则 `chat`）md 声明的 `shuvix-model` / `shuvix-thinking`，没声明（或模型不可用）→ 设置里的默认。
+ * 都没有 → provider / model 为空串
+ */
+export type AgentNewSessionDefaults = Pick<
+  AgentInitResult,
+  'provider' | 'model' | 'capabilities' | 'modelMetadata'
+>
+
 /** Agent 运行时装载的单个工具（直接读自 agent.state.tools，与实际下发给 LLM 的一致） */
 export interface AgentRuntimeToolInfo {
   name: string
@@ -850,6 +865,11 @@ export interface HostApi {
      * 会不会打穿提示词缓存先问 `previewChange`。
      */
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
+    /**
+     * 一条还没建的会话会跑在什么模型 / 思考档位上（只读）：欢迎页的选择器据此显示「新会话会用的」—— 基座 md
+     * 声明的优先于设置里的默认（2026-11-10）。可选：没有的宿主欢迎页照旧显示它手里的那个
+     */
+    newSessionDefaults?: (params: AgentNewSessionDefaultsParams) => Promise<AgentNewSessionDefaults>
     /**
      * 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（不连服务器、什么也不写）—— 界面据此决定改之前要不要
      * 先问用户。

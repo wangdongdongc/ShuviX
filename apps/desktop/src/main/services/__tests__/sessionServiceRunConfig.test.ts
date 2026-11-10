@@ -16,7 +16,13 @@
  *     RC-3c..f 默认档来自设置 `general.defaultThinkingLevel`：推理模型用它（与 initAgent 同值）、
  *     非推理模型照旧 off、配置值不是可选档 → DEFAULT_THINKING_LEVEL、连模型都回落到默认模型时同样适用；
  *   - RC-4 没有可用模型 → model 为 null（hook 据此跳过 `no-model`），哪怕树上写着档位；
- *   - RC-5 会话不存在 → null，且不去读会话树。
+ *   - RC-5 会话不存在 → null，且不去读会话树；
+ *   - RC-6 会话的档案（形态基座 chat / work …）声明的 `shuvix-model` / `shuvix-thinking` 是会话没选过时的缺省，
+ *     夹在会话自己的选择与全局默认之间（2026-11-10 用户报告：新建会话不认 agent md 里配的模型）：
+ *     没选过 → 档案的模型（initAgent 给选择器的也是它）；选过 → 会话的，档案的模型连解析都不解析；
+ *     档案的模型此刻不可用 → 全局默认；档位同理；档案按形态取（有项目 → work）。
+ *   - RC-7 `newSessionDefaults`（欢迎页的选择器读的）：一条还没建的会话用同一条规则解析 —— 无项目读 chat、
+ *     有项目读 work 的声明，没声明 → 全局默认；与一条刚建、什么都没选过的会话 initAgent 报的相同。
  *
  * mock 面沿用 sessionServiceProfileResolution.test.ts（import 图全换假件）。会话树只经
  * `readSessionRunConfig` 读；设置项与提供商目录是回落默认模型（与默认思考等级）的来源。
@@ -36,7 +42,9 @@ const mocks = vi.hoisted(() => ({
   findEnabled: vi.fn<() => unknown[]>(),
   findEnabledModels: vi.fn<(providerId: string) => unknown[]>(),
   findByKey: vi.fn<(key: string) => string | undefined>(),
-  projectPick: vi.fn()
+  projectPick: vi.fn(),
+  getProfile: vi.fn<(name: string) => unknown>(),
+  resolveProfileModelSpec: vi.fn<(spec: string) => unknown>()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -82,7 +90,7 @@ vi.mock('../toolAggregator', () => ({
 }))
 // 会话权限表（services/acl）不在这组用例里：建会话时的生成、删会话时的清理换成空操作
 vi.mock('../acl', () => ({ sessionAcl: { initialize: vi.fn(), deleteSession: vi.fn() } }))
-vi.mock('../agentService', () => ({ agentService: { getProfile: vi.fn() } }))
+vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 // 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
 vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
@@ -91,7 +99,9 @@ vi.mock('../agentSession', async () =>
   (await import('./support/fakeSessionHost')).agentSessionModuleMock()
 )
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
-vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
+vi.mock('../../agents/agentHost', () => ({
+  resolveProfileModelSpec: mocks.resolveProfileModelSpec
+}))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionConfigChanged: vi.fn(),
   broadcastSessionListChanged: vi.fn(),
@@ -126,6 +136,8 @@ beforeEach(() => {
   mocks.findEnabledModels.mockReturnValue([])
   mocks.findByKey.mockReturnValue(undefined)
   mocks.projectPick.mockReturnValue(undefined)
+  mocks.getProfile.mockReturnValue(undefined)
+  mocks.resolveProfileModelSpec.mockReturnValue(null)
 })
 
 /** 会话树上显式写过的模型类配置（readSessionRunConfig 的真实形状：没写过的键是 null） */
@@ -278,5 +290,200 @@ describe('resolveRunConfig —— 会话的模型连同思考档位（子会话�
 
     expect(await sessionService.resolveRunConfig('ghost')).toBeNull()
     expect(mocks.readSessionRunConfig).not.toHaveBeenCalled()
+  })
+})
+
+describe('RC-6 档案声明的模型 / 档位：会话没选过时的缺省，先于全局默认', () => {
+  /** 设置里配好的全局默认模型 p-default/m-default（启用着） */
+  function globalDefault(extra: Record<string, string> = {}): void {
+    settingsTable({
+      'general.defaultProvider': 'p-default',
+      'general.defaultModel': 'm-default',
+      ...extra
+    })
+    mocks.findEnabled.mockReturnValue([{ id: 'p-default' }])
+    mocks.findEnabledModels.mockImplementation((p) =>
+      p === 'p-default' ? [{ modelId: 'm-default' }] : []
+    )
+  }
+
+  /** 档案表：按名给出声明了 model / thinkingLevel 的档案 */
+  function profiles(table: Record<string, { model?: string; thinkingLevel?: string }>): void {
+    mocks.getProfile.mockImplementation((name) =>
+      table[name] ? { name, ...table[name] } : undefined
+    )
+  }
+
+  /** 档案的 shuvix-model 解析得到的模型（resolveProfileModelSpec 的真实形状） */
+  function resolvable(spec: string, provider: string, model: string): void {
+    mocks.resolveProfileModelSpec.mockImplementation((s) =>
+      s === spec ? { provider, model, capabilities: {} } : null
+    )
+  }
+
+  it('RC-6a 会话没选过模型：用无项目会话基座 chat 声明的模型，不是全局默认；选择器拿到的也是它', async () => {
+    globalDefault()
+    profiles({ chat: { model: 'p-prof/m-prof' } })
+    resolvable('p-prof/m-prof', 'p-prof', 'm-prof')
+    catalog('p-prof', 'm-prof', { reasoning: true })
+
+    expect((await sessionService.resolveRunConfig(SID))?.model).toEqual({
+      provider: 'p-prof',
+      model: 'm-prof',
+      capabilities: { reasoning: true }
+    })
+    const init = await sessionService.initAgent(SID)
+    expect([init.provider, init.model]).toEqual(['p-prof', 'm-prof'])
+    expect(mocks.getProfile).toHaveBeenCalledWith('chat')
+  })
+
+  it('RC-6b 会话选过模型：会话的赢，档案的模型连解析都不解析', async () => {
+    globalDefault()
+    tree({ provider: 'p1', model: 'm1', thinkingLevel: 'low' })
+    profiles({ chat: { model: 'p-prof/m-prof', thinkingLevel: 'high' } })
+    resolvable('p-prof/m-prof', 'p-prof', 'm-prof')
+
+    expect(await sessionService.resolveRunConfig(SID)).toEqual({
+      model: { provider: 'p1', model: 'm1', capabilities: {} },
+      thinkingLevel: 'low'
+    })
+    expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
+  })
+
+  it('RC-6c 档案的模型此刻不可用（停用 / 写错）→ 回落全局默认', async () => {
+    globalDefault()
+    profiles({ chat: { model: 'gone/model' } })
+
+    expect((await sessionService.resolveRunConfig(SID))?.model).toEqual({
+      provider: 'p-default',
+      model: 'm-default',
+      capabilities: {}
+    })
+  })
+
+  it('RC-6d 档位：会话没设过 → 档案声明的（压过设置里的默认档）；会话设过 → 会话的', async () => {
+    globalDefault({ 'general.defaultThinkingLevel': 'low' })
+    catalog('p-default', 'm-default', { reasoning: true })
+    profiles({ chat: { thinkingLevel: 'off' } })
+
+    expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe('off')
+    expect((await sessionService.initAgent(SID)).modelMetadata.thinkingLevel).toBe('off')
+
+    tree({ thinkingLevel: 'xhigh' })
+    expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe('xhigh')
+  })
+
+  it('RC-6e 会话选过模型、没设过档位：模型是会话的，档位仍取档案声明的', async () => {
+    tree({ provider: 'p1', model: 'm1' })
+    profiles({ chat: { model: 'p-prof/m-prof', thinkingLevel: 'medium' } })
+
+    expect(await sessionService.resolveRunConfig(SID)).toEqual({
+      model: { provider: 'p1', model: 'm1', capabilities: {} },
+      thinkingLevel: 'medium'
+    })
+    expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
+  })
+
+  it('RC-6f 档案按形态取：项目会话读 work 的声明，不读 chat 的', async () => {
+    globalDefault()
+    mocks.daoPick.mockReturnValue({
+      projectId: 'proj-1',
+      parentId: null,
+      settings: { enabledTools: [] }
+    })
+    profiles({
+      chat: { model: 'p-chat/m-chat' },
+      work: { model: 'p-work/m-work' }
+    })
+    mocks.resolveProfileModelSpec.mockImplementation((s) => {
+      const [provider, model] = String(s).split('/')
+      return { provider, model, capabilities: {} }
+    })
+
+    const cfg = await sessionService.resolveRunConfig(SID)
+    expect([cfg?.model?.provider, cfg?.model?.model]).toEqual(['p-work', 'm-work'])
+  })
+})
+
+describe('RC-7 newSessionDefaults：还没建的会话会用什么（欢迎页的选择器）', () => {
+  function globalDefault(): void {
+    settingsTable({
+      'general.defaultProvider': 'p-default',
+      'general.defaultModel': 'm-default',
+      'general.defaultThinkingLevel': 'high'
+    })
+    mocks.findEnabled.mockReturnValue([{ id: 'p-default' }])
+    mocks.findEnabledModels.mockImplementation((p) =>
+      p === 'p-default' ? [{ modelId: 'm-default' }] : []
+    )
+  }
+
+  it('RC-7a 无项目：chat 声明的模型与档位；与刚建、什么都没选过的无项目会话 initAgent 报的一样', async () => {
+    globalDefault()
+    mocks.getProfile.mockImplementation((name) =>
+      name === 'chat' ? { name, model: 'p-prof/m-prof', thinkingLevel: 'low' } : undefined
+    )
+    mocks.resolveProfileModelSpec.mockImplementation((s) =>
+      s === 'p-prof/m-prof' ? { provider: 'p-prof', model: 'm-prof', capabilities: {} } : null
+    )
+    catalog('p-prof', 'm-prof', { reasoning: true })
+
+    const defaults = sessionService.newSessionDefaults({ projectId: null })
+    expect(defaults).toEqual({
+      provider: 'p-prof',
+      model: 'm-prof',
+      capabilities: { reasoning: true },
+      modelMetadata: { thinkingLevel: 'low' }
+    })
+    const init = await sessionService.initAgent(SID)
+    expect({
+      provider: init.provider,
+      model: init.model,
+      capabilities: init.capabilities,
+      modelMetadata: init.modelMetadata
+    }).toEqual(defaults)
+    // 还没建的会话没有会话行可读：不碰会话树
+    mocks.readSessionRunConfig.mockClear()
+    sessionService.newSessionDefaults({})
+    expect(mocks.readSessionRunConfig).not.toHaveBeenCalled()
+  })
+
+  it('RC-7b 有项目：读 work 的声明，不读 chat 的', () => {
+    globalDefault()
+    mocks.getProfile.mockImplementation((name) =>
+      name === 'chat' ? { name, model: 'p-chat/m-chat' } : { name }
+    )
+    mocks.resolveProfileModelSpec.mockImplementation((s) => {
+      const [provider, model] = String(s).split('/')
+      return { provider, model, capabilities: {} }
+    })
+
+    const defaults = sessionService.newSessionDefaults({ projectId: 'proj-1' })
+    expect([defaults.provider, defaults.model]).toEqual(['p-default', 'm-default'])
+    expect(mocks.getProfile).toHaveBeenCalledWith('work')
+    expect(mocks.getProfile).not.toHaveBeenCalledWith('chat')
+  })
+
+  it('RC-7c 基座没声明：全局默认模型；档位按模型能力回落（推理 → 默认档 high，否则 off）', () => {
+    globalDefault()
+    catalog('p-default', 'm-default', { reasoning: true })
+    expect(sessionService.newSessionDefaults({ projectId: null })).toEqual({
+      provider: 'p-default',
+      model: 'm-default',
+      capabilities: { reasoning: true },
+      modelMetadata: { thinkingLevel: 'high' }
+    })
+
+    catalog('p-default', 'm-default', {})
+    expect(sessionService.newSessionDefaults({ projectId: null }).modelMetadata).toEqual({
+      thinkingLevel: 'off'
+    })
+  })
+
+  it('RC-7d 什么都没配：provider / model 为空串（欢迎页据此不让发）', () => {
+    expect(sessionService.newSessionDefaults({ projectId: null })).toMatchObject({
+      provider: '',
+      model: ''
+    })
   })
 })

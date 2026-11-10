@@ -370,9 +370,10 @@ interface ChatState {
   /** 当前思考深度 */
   thinkingLevel: string
   /**
-   * 选择器上的思考深度是宿主启动时种的默认档（`seedDefaultThinkingLevel`），还不是谁的选择。
-   * 欢迎页发送据此决定写不写档位：没动过就不写，交给后端按同一条规则回落（模型声明了推理 → 设置里的
-   * 默认档，否则 off）。任何 `setThinkingLevel`（用户选、切会话同步）都把它清掉。
+   * 选择器上的思考深度是种下的默认档（`seedDefaultThinkingLevel`：回到欢迎页时 useSessionInit 按宿主的
+   * `agent.newSessionDefaults` 种），还不是谁的选择。欢迎页发送据此决定写不写档位：没动过就不写，交给后端
+   * 按同一条规则回落（基座 md 声明的；没有就看模型：声明了推理 → 设置里的默认档，否则 off）。任何
+   * `setThinkingLevel`（用户选、切会话同步）都把它清掉。
    */
   thinkingLevelIsDefault: boolean
   /** 当前模型是否支持图片输入 */

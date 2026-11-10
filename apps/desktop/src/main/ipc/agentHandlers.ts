@@ -17,7 +17,8 @@ import type {
   AgentWithdrawQueuedParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
-  AgentPreviewChangeParams
+  AgentPreviewChangeParams,
+  AgentNewSessionDefaultsParams
 } from '../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createLogger } from '../logger'
@@ -134,6 +135,11 @@ export function registerAgentHandlers(): void {
   /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（只读：不连服务器、什么也不写） */
   defineHandler('agent:previewChange', (_ctx, { sessionId, ...change }: AgentPreviewChangeParams) =>
     chatGateway.previewAgentChange(sessionId, change)
+  )
+
+  /** 一条还没建的会话会跑在什么模型 / 思考档位上（只读）：欢迎页的选择器据此显示新会话会用的 */
+  defineHandler('agent:newSessionDefaults', (_ctx, params?: AgentNewSessionDefaultsParams) =>
+    chatGateway.newSessionDefaults({ projectId: params?.projectId ?? null })
   )
 
   /** 冻结的系统提示词与此刻的来源比一比（只读）：界面据此提醒用户「来源改了」 */

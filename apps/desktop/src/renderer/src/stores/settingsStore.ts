@@ -26,10 +26,16 @@ interface SettingsState {
   providers: ProviderInfo[]
   /** 所有可用模型（已启用提供商 + 已启用模型） */
   availableModels: AvailableModel[]
-  /** 当前选择的 provider ID */
+  /** 输入框模型选择器此刻显示的 provider ID（当前会话的；欢迎页上是新会话会用的） */
   activeProvider: string
-  /** 当前选择的模型 ID */
+  /** 输入框模型选择器此刻显示的模型 ID */
   activeModel: string
+  /**
+   * 设置里的默认模型（`general.defaultProvider` / `general.defaultModel`）—— 设置页「默认模型」那一格。与
+   * 选择器上的那个是两回事：新会话先用它的基座 md 声明的模型，没声明才用它
+   */
+  defaultProvider: string
+  defaultModel: string
   /** 新会话的默认思考等级（`general.defaultThinkingLevel`） */
   defaultThinkingLevel: SelectableThinkingLevel
   /** 主题模式 */
@@ -92,6 +98,8 @@ interface SettingsState {
   setAvailableModels: (models: AvailableModel[]) => void
   setActiveProvider: (provider: string) => void
   setActiveModel: (model: string) => void
+  setDefaultProvider: (provider: string) => void
+  setDefaultModel: (model: string) => void
   setDefaultThinkingLevel: (level: SelectableThinkingLevel) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
   setDarkTheme: (theme: DarkThemeId) => void
@@ -135,6 +143,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   availableModels: [],
   activeProvider: '',
   activeModel: '',
+  defaultProvider: '',
+  defaultModel: '',
   defaultThinkingLevel: defaultThinkingLevelOf(undefined),
   ...lastKnownTheme(),
   notebookTheme: 'default',
@@ -160,6 +170,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setAvailableModels: (models) => set({ availableModels: models }),
   setActiveProvider: (provider) => set({ activeProvider: provider }),
   setActiveModel: (model) => set({ activeModel: model }),
+  setDefaultProvider: (provider) => set({ defaultProvider: provider }),
+  setDefaultModel: (model) => set({ defaultModel: model }),
   setDefaultThinkingLevel: (level) => set({ defaultThinkingLevel: level }),
   setTheme: (theme) => set({ theme }),
   setDarkTheme: (darkTheme) => set({ darkTheme }),
@@ -187,6 +199,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
       focusMode: settings['appearance.focusMode'] !== 'false',
+      defaultProvider: settings['general.defaultProvider'] || '',
+      defaultModel: settings['general.defaultModel'] || '',
       defaultThinkingLevel: defaultThinkingLevelOf(settings['general.defaultThinkingLevel']),
       voiceTtsEnabled: settings['voice.tts.enabled'] === 'true',
       voiceTtsVoice: settings['voice.tts.openai.voice'] || 'alloy',

@@ -29,12 +29,13 @@ export interface AgentProfile {
   /**
    * `shuvix-model`：该档案指定的模型，`<modelId>` 或 `<provider>/<modelId>`
    * （解析规则见 agentProfile/definitionFile 的 resolveModelRef）。
+   * 写在会话的档案（基座）上 = 这条会话没选过模型时的缺省，先于设置里的默认模型（会话里选的优先）。
    * 省略 = 不声明，跟随会话 / 继承派发方。
    */
   model?: string
   /**
    * `shuvix-thinking`：该档案声明的思考档位。与 `model` 同一口径：派生时压过派发方、
-   * 钉档案的子会话作为种子写进树、会话根忽略。省略 = 不声明，跟随派发方 / 父会话。
+   * 钉档案的子会话作为种子写进树、会话的档案（基座）上是没选过档位时的缺省。省略 = 不声明，跟随派发方 / 父会话。
    */
   thinkingLevel?: SelectableThinkingLevel
   /**

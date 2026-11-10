@@ -6,6 +6,8 @@ import type { UserWordsQuote } from '@shuvix/chat-protocol/userWords'
 import type {
   AgentChangePreview,
   AgentInitResult,
+  AgentNewSessionDefaults,
+  AgentNewSessionDefaultsParams,
   AgentPreviewChangeParams,
   AgentRuntimeInfo,
   ThinkingLevel,
@@ -137,6 +139,8 @@ export interface ChatGateway {
 
   /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（不连服务器、什么也不写） */
   previewAgentChange(sessionId: string, change: AgentPreviewChange): Promise<AgentChangePreview>
+  /** 一条还没建的会话会跑在什么模型 / 思考档位上（只读；欢迎页的选择器用） */
+  newSessionDefaults(params: AgentNewSessionDefaultsParams): AgentNewSessionDefaults
   /** 冻结的系统提示词与此刻的来源比一比（只读；会话没有存储 / 没冻结 → `frozen: false`） */
   systemPromptStatus(sessionId: string): Promise<SystemPromptStatus>
   /** 重建系统提示词（会话在跑 → busy） */

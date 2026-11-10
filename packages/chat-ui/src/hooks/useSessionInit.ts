@@ -1,4 +1,4 @@
-import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
+import { getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { useEffect } from 'react'
 import { useBgTaskStore } from '../stores/bgTaskStore'
@@ -13,6 +13,11 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
  * 会话级初始化 Hook
  * 切换会话时：初始化 Agent → 同步所有会话元信息到 store
  * agent.init 返回的结果是唯一数据来源，确保指令状态等信息不存在时序竞争。
+ *
+ * 没有当前会话（欢迎页）时：选择器显示**新会话会用的**模型与思考档位（宿主的 `agent.newSessionDefaults`：
+ * 基座 md 声明的，没声明才是设置里的默认）—— 与侧栏「新建会话」建出的那条 agent.init 报的同一份。每回到欢迎页
+ * 种一次（离开一条会话时选择器上还是那条会话的）。档位种成默认档（`seedDefaultThinkingLevel`）：没人动过时，
+ * 欢迎页发送不写它，交给后端按同一条规则回落。宿主没有这个调用（扩展侧栏）→ 不动，欢迎页照旧显示手里的那个。
  *
  * 消息与上下文占用**不在这里取**（P3-08）：它们是会话视图的一部分，由 `useSessionView` 订阅、经
  * `applySessionView` 写进 store。
@@ -66,6 +71,35 @@ export function useSessionInit(activeSessionId: string | null): void {
       }
     }
     loadSession()
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, loaded, setActiveProvider, setActiveModel])
+
+  // 欢迎页：新会话会用的模型与档位（见上面的说明）
+  useEffect(() => {
+    if (isSettingsWindow || activeSessionId || !loaded) return
+    const newSessionDefaults = getHostApi()?.agent.newSessionDefaults
+    if (!newSessionDefaults) return
+    let cancelled = false
+    newSessionDefaults({ projectId: null })
+      .then((result) => {
+        // 等回包的时候打开了一条会话：那条会话的同步说了算
+        if (cancelled || useChatStore.getState().activeSessionId) return
+        setActiveProvider(result.provider)
+        setActiveModel(result.model)
+        const caps = result.capabilities || {}
+        const store = useChatStore.getState()
+        store.setModelSupportsReasoning(!!caps.reasoning)
+        store.setModelSupportsVision(!!caps.vision)
+        store.setMaxContextTokens(caps.maxInputTokens || 0)
+        store.seedDefaultThinkingLevel(
+          result.modelMetadata.thinkingLevel || (caps.reasoning ? DEFAULT_THINKING_LEVEL : 'off')
+        )
+      })
+      .catch(() => {
+        // 读不到就保持选择器手里的那个：欢迎页发送照旧写它
+      })
     return () => {
       cancelled = true
     }

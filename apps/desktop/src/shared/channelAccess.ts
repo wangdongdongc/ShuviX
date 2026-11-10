@@ -53,6 +53,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:continue': 'write',
   'agent:setModel': 'write',
   'agent:previewChange': 'read', // 只预判：不连服务器、什么也不写（与 agent:init 一样可能把锁着的会话打开来读）
+  'agent:newSessionDefaults': 'read', // 新会话会用的模型 / 档位：与 agent:init 对一条刚建的会话报的同一份
   'agent:askCounts': 'read',
   'agent:pendingInputs': 'read', // 询问本身（命令、路径、改动）：与会话视图里的同一份，读会话就读得到
   'agent:goal': 'read',

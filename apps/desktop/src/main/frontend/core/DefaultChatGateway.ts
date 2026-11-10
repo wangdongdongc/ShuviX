@@ -17,6 +17,8 @@ import {
 import type {
   AgentChangePreview,
   AgentInitResult,
+  AgentNewSessionDefaults,
+  AgentNewSessionDefaultsParams,
   AgentRuntimeInfo,
   ThinkingLevel,
   WithdrawQueuedResult
@@ -406,6 +408,10 @@ export class DefaultChatGateway implements ChatGateway {
     change: AgentPreviewChange
   ): Promise<AgentChangePreview> {
     return sessionService.previewAgentChange(sessionId, change)
+  }
+
+  newSessionDefaults(params: AgentNewSessionDefaultsParams): AgentNewSessionDefaults {
+    return sessionService.newSessionDefaults(params)
   }
 
   async systemPromptStatus(sessionId: string): Promise<SystemPromptStatus> {

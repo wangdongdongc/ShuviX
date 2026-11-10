@@ -37,6 +37,7 @@ import type {
   SessionModelMetadata,
   AgentInitResult,
   AgentChangePreview,
+  AgentNewSessionDefaults,
   ModelCapabilities
 } from '../types'
 import type { Project, SessionSettings } from '../dao/types'
@@ -131,6 +132,9 @@ const THINKING_LEVELS: readonly string[] = [
  * 之前的 resolveInitialThinkingLevel、以及界面 useSessionInit 的口径一致；显式存下的值含 'off' 一律照用）。
  * 没声明 reasoning 的模型不吃默认档：自定义提供商的模型 pi 一律当作能思考，档位会原样发给上游。
  */
+/** 一条会话的档案（resolveAgentProfileName 那个名字对应的；对不上 → undefined） */
+type SessionProfile = ReturnType<typeof agentService.getProfile>
+
 function sessionThinkingLevel(
   raw: unknown,
   reasoning: boolean | undefined,
@@ -384,7 +388,7 @@ export class SessionService {
    *
    * **不预写模型类运行配置** —— provider / model / thinkingLevel 存会话设置（`settings.model` /
    * `settings.thinkingLevel`），新会话还没有设过。首次 resolveSessionAgentContext 时按「设置里没有 →
-   * 回落默认」解析；用户第一次显式切换（或子会话继承父会话）才写下（sessionStorage 的
+   * 这条会话档案声明的 → 全局默认」解析；用户第一次显式切换（或子会话继承父会话）才写下（sessionStorage 的
    * recordSessionModel / recordSessionThinkingLevel）。
    *
    * 扩展能力勾选（`settings.enabledTools`）则在这里定下来，**恒写键**（空数组也写 —— 缺键
@@ -1098,19 +1102,20 @@ export class SessionService {
   /**
    * 创建 agent 那一刻读的会话配置（SessionHost 的 resolveAgentConfig seam）：形态推导的基座档案
    * （resolveAgentProfileName）、扩展能力勾选（滤掉此刻不可用的；旧会话补键）、模型选择（没选过 →
-   * 默认 provider / 模型，与界面同一口径；都没有 → 不给，运行时拒绝创建）、思考档位（没设过 / 写坏 →
-   * 缺省，PIN-03）、工作目录。会话不存在 → 抛错。
+   * 档案声明的，再没有 → 默认 provider / 模型，与界面同一口径；都没有 → 不给，运行时拒绝创建）、思考档位
+   * （没设过 → 档案声明的；再没有 / 写坏 → 缺省，PIN-03）、工作目录。会话不存在 → 抛错。
    */
   async resolveAgentConfig(
     sessionId: string,
     overrides?: SessionConfigOverrides
   ): Promise<AgentConfig> {
-    const ctx = await this.resolveSessionAgentContext(sessionId, overrides)
+    // 档案只取一次：上下文要它声明的模型 / 档位（会话没选过时），这里要它本身
+    let named: { profile: SessionProfile } | undefined
+    const lookup = (): SessionProfile =>
+      (named ??= { profile: this.sessionProfile(sessionId) }).profile
+    const ctx = await this.resolveSessionAgentContext(sessionId, overrides, lookup)
     if (!ctx) throw new Error(`Session ${sessionId} does not exist`)
-    const profileName = this.resolveAgentProfileName(sessionId)
-    const profile = toInProcessAgentType(
-      agentService.getProfile(profileName) ?? agentService.getProfile(WORK_PROFILE_NAME)!
-    )
+    const profile = toInProcessAgentType(lookup() ?? agentService.getProfile(WORK_PROFILE_NAME)!)
     return {
       profile,
       toolOverlay: ctx.enabledTools,
@@ -1126,11 +1131,97 @@ export class SessionService {
     }
   }
 
+  /**
+   * 这条会话的档案（resolveAgentProfileName：形态基座 work / chat / notebook / bot / tab，或子会话钉的档案）
+   * 声明的 `shuvix-model` / `shuvix-thinking` —— 会话自己没选过时的缺省，先于设置里的全局默认。
+   * 用户覆盖 `~/.shuvix/agents/chat.md`、或在内置 `chat` 的卡片上补的值，就是这样让新建的无项目会话
+   * 用上它的（2026-11-10 用户报告：之前根会话一律忽略这两个键，新会话总是落到全局默认）。
+   *
+   * 只是缺省：会话里用户选过的照旧赢，档案改了，没选过、也还没锁住的会话下次创建 agent 时跟着变 ——
+   * 与改全局默认同一种行为。模型此刻不可用（提供商 / 模型被停用、写错）→ 不给，回落全局默认。
+   * `wantModel` 为假（会话自己选过模型）时不解析模型：省一次目录查询，也不为用不上的值记警告。
+   */
+  private profileRunDefaults(
+    profile: SessionProfile,
+    wantModel: boolean
+  ): {
+    model?: { provider: string; model: string }
+    thinkingLevel?: string
+  } {
+    if (!profile) return {}
+    const resolved = wantModel && profile.model ? resolveProfileModelSpec(profile.model) : null
+    if (wantModel && profile.model && !resolved) {
+      log.warn(`档案 "${profile.name}" 声明的模型 "${profile.model}" 当前不可用，回落默认模型`)
+    }
+    return {
+      ...(resolved ? { model: { provider: resolved.provider, model: resolved.model } } : {}),
+      ...(profile.thinkingLevel ? { thinkingLevel: profile.thinkingLevel } : {})
+    }
+  }
+
+  /** 这条会话的档案（形态推导 / 子会话钉的，见 resolveAgentProfileName）；名字对不上任何档案 → undefined */
+  private sessionProfile(sessionId: string): SessionProfile {
+    return agentService.getProfile(this.resolveAgentProfileName(sessionId))
+  }
+
+  /**
+   * 模型类运行配置的解析，唯一一处：会话自己选过的（`own`）→ 档案声明的（profileRunDefaults）→ 设置里的全局默认。
+   * 档位最后按模型能力收口（sessionThinkingLevel：没有可用的档 → 推理模型取默认档，否则 off）。
+   * 会话上下文（resolveSessionAgentContext）与还没建的会话（newSessionDefaults）共用 —— 欢迎页显示的
+   * 与那条会话建好后 agent.init 报的不会两样。`lookupProfile` 只在 `own` 缺模型或档位时才调。
+   */
+  private resolveRunSelection(
+    own: { provider?: string | null; model?: string | null; thinkingLevel?: string | null },
+    lookupProfile: () => SessionProfile
+  ): {
+    provider: string
+    model: string
+    capabilities: ModelCapabilities
+    thinkingLevel: ThinkingLevel
+  } {
+    const ownsModel = !!(own.provider || own.model)
+    const declared =
+      ownsModel && own.thinkingLevel
+        ? undefined
+        : this.profileRunDefaults(lookupProfile(), !ownsModel)
+    const provider = own.provider ?? declared?.model?.provider ?? this.getDefaultProvider()
+    const model = own.model ?? declared?.model?.model ?? this.getDefaultModel()
+    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
+    const capabilities: ModelCapabilities = modelRow?.capabilities
+      ? JSON.parse(modelRow.capabilities)
+      : {}
+    const thinkingLevel = sessionThinkingLevel(
+      own.thinkingLevel ?? declared?.thinkingLevel,
+      capabilities.reasoning,
+      this.getDefaultThinkingLevel()
+    )
+    return { provider, model, capabilities, thinkingLevel }
+  }
+
+  /**
+   * 一条**还没建的**会话会跑在什么上（`agent.newSessionDefaults`，欢迎页的选择器用）：它还什么都没选过，
+   * 档案就是它将来的形态基座 —— 与 resolveAgentProfileName 对一条刚建的普通会话的推导相同（有项目 → `work`，
+   * 否则 `chat`）。所以欢迎页显示的，就是那条会话建好后 agent.init 会报的。
+   */
+  newSessionDefaults(params: { projectId?: string | null }): AgentNewSessionDefaults {
+    const base = params.projectId ? WORK_PROFILE_NAME : CHAT_PROFILE_NAME
+    const run = this.resolveRunSelection({}, () => agentService.getProfile(base))
+    return {
+      provider: run.provider,
+      model: run.model,
+      capabilities: run.capabilities,
+      modelMetadata: { thinkingLevel: run.thinkingLevel }
+    }
+  }
+
   /** 解析会话的 Agent 上下文元信息（provider/model/能力/工作目录/启用工具/项目），不创建 AgentSession。
-   *  供 initAgent（前端同步）与 ensureAgentSession（懒创建）共用。session 不存在返回 null。 */
+   *  供 initAgent（前端同步）与 ensureAgentSession（懒创建）共用。session 不存在返回 null。
+   *  `lookupProfile`：取这条会话的档案（只在会话没选过模型 / 档位时才调）—— resolveAgentConfig 传进一个
+   *  记住结果的，好与它自己要的档案共用一次查找。 */
   private async resolveSessionAgentContext(
     sessionId: string,
-    overrides?: SessionConfigOverrides
+    overrides?: SessionConfigOverrides,
+    lookupProfile: () => SessionProfile = () => this.sessionProfile(sessionId)
   ): Promise<{
     provider: string
     model: string
@@ -1150,19 +1241,16 @@ export class SessionService {
       ? sessionScopedTools(overrides.enabledTools)
       : this.sessionEnabledTools(sessionId)
 
-    // 模型类运行配置的唯一事实源是会话设置：settings.model / settings.thinkingLevel
+    // 模型类运行配置：会话自己选过的（settings.model / settings.thinkingLevel；预判时套上想换成的模型）
     const tree = await readSessionRunConfig(sessionId)
     const pickedModel = overrides?.provider && overrides.model ? overrides : undefined
-    const provider = pickedModel?.provider ?? tree.provider ?? this.getDefaultProvider()
-    const model = pickedModel?.model ?? tree.model ?? this.getDefaultModel()
-    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
-    const capabilities: ModelCapabilities = modelRow?.capabilities
-      ? JSON.parse(modelRow.capabilities)
-      : {}
-    const thinkingLevel = sessionThinkingLevel(
-      tree.thinkingLevel,
-      capabilities.reasoning,
-      this.getDefaultThinkingLevel()
+    const { provider, model, capabilities, thinkingLevel } = this.resolveRunSelection(
+      {
+        provider: pickedModel?.provider ?? tree.provider,
+        model: pickedModel?.model ?? tree.model,
+        thinkingLevel: tree.thinkingLevel
+      },
+      lookupProfile
     )
     // 所属项目，或 bot 会话引用的工作项目（它的环境变量、工作目录照项目来）
     const contextProjectId = projectContextIdOf(session)
@@ -1305,7 +1393,7 @@ export class SessionService {
 
   /**
    * 会话**此刻实际在用**的模型类运行配置 —— 与运行时创建同一口径
-   * （resolveSessionAgentContext：树上没有 → 回落默认），会话不存在返回 null。
+   * （resolveSessionAgentContext：树上没有 → 档案声明的 → 全局默认），会话不存在返回 null。
    *
    * 给的是**解析后**的值而不是「树上显式写过的那些」：子会话种子（subSessionRunner.create）
    * 要复制的是父会话跑起来是什么样，而父会话大多数键根本没显式改过 —— 只抄显式值，

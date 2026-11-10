@@ -86,6 +86,7 @@ export const API_TABLE = {
     continue: invoke('agent:continue', 1),
     setModel: invoke('agent:setModel', 1),
     previewChange: invoke('agent:previewChange', 1),
+    newSessionDefaults: invoke('agent:newSessionDefaults', 1),
     systemPromptStatus: invoke('agent:systemPromptStatus', 1),
     rebuildSystemPrompt: invoke('agent:rebuildSystemPrompt', 1),
     askCounts: invoke('agent:askCounts', 0),

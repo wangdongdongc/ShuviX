@@ -15,8 +15,9 @@
  * 夹具：假提供商的模型 R 种成默认，并把能力改成 reasoning（默认档只给声明了推理能力的模型）；同一
  * 提供商下另有模型 N（reasoning: false），只在 DT-E-4 选它。四个用例共用一个 HOME、按顺序接力；
  * DT-E-3 / DT-E-4 各真重启一次（`restart()`：`stop({ keepHome: true })` + `launchApp({ home })`）——
- * 主窗口 `location.reload()` 在 harness 里不可用，而欢迎页的档位只在应用启动时从设置种一次，发一次
- * 就被新会话的同步顶掉，所以每个「没动过就发送」的用例都得有自己的一次启动。
+ * 主窗口 `location.reload()` 在 harness 里不可用；欢迎页的档位在回到欢迎页时按 `agent.newSessionDefaults`
+ * 种，而这里的「回到欢迎页」就是一次干净的启动（发一次就被新会话的同步顶掉），所以每个「没动过就发送」
+ * 的用例都有自己的一次启动。
  * DOM 只经 pages.ts 的 defaultThinkingPane / modelPickerPane / chatPane。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
