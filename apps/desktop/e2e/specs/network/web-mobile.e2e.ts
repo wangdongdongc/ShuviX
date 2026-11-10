@@ -153,6 +153,8 @@ const USAGE = { prompt: 90, completion: 10 }
 const WIDGET_ID = 'mob-widget'
 const BOT = 'mobbot'
 const REGISTRY_GROUPS = ['tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
+/** 桌面布局的资料库：没有跟踪项（2026-11-10 起它在收件箱页里；手机还没有收件箱，资料库页留着它） */
+const DESKTOP_REGISTRY_GROUPS = REGISTRY_GROUPS.filter((g) => g !== 'tracking')
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
 const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }
 /** M-21：最窄的常见手机 */
@@ -485,7 +487,9 @@ describe('phone layout: which windows get it', () => {
   it('W-1 at 1280×800 without touch the web client is the desktop layout', async () => {
     expect(await mobile().shellPresent()).toBe(false)
     expect(await mobile().sidebarSettingsRow()).toBe(true)
-    expect(await mobile().documentGroups()).toEqual(expect.arrayContaining(REGISTRY_GROUPS))
+    const groups = await mobile().documentGroups()
+    expect(groups).toEqual(expect.arrayContaining(DESKTOP_REGISTRY_GROUPS))
+    expect(groups).not.toContain('tracking')
     // 后面 M-5 断「手机的对话横幅里没有 agent 胶囊」：同一条会话在桌面布局里是有的
     expect(await sidebarPane(page()).openSession('MOB-chat')).toBe(true)
     await until(() => mobile().agentChipAnywhere(), 'the agent chip in the desktop banner')
