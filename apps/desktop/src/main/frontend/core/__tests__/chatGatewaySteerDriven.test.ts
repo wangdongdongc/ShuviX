@@ -14,10 +14,12 @@
  *          被拒广播 error
  *   WP2-80 steer / followUp 的来源按这次操作的上下文盖章（2026-10-21）：网络客户端 → remote、Chrome → chrome、
  *          不在上下文里 → undefined；steerDriven 在网络客户端的上下文里照样记驱动它的会话（不被连接的章顶替）
+ *   GW-T1  steer / followUp 带内联 Token：模型拿展开后的全文（cmd token = 命令模板，里面的标记也展开），会话收到
+ *          显示侧车 `{content: 标记态原文, tokens}`；空的 secret 丢掉；`inlineTokens: {}` → 没有侧车
  *   WP2-78 前端拿不到写来源 / 答题方的口子（读源码）：IPC 与 Chrome 通道从不传 drive（第 5 个参数没有、或是字面量
  *          `undefined`；第 6 个只能是载荷的 secrets，§14）、从不调 steerDriven / admitSteer，respondToInput 的附带信息
  *          只由 `{clientId: …}` 字面量构成
- *   WP2-78b 同上，输入来源那一面：`chatGateway.steer` / `followUp` 是 (sessionId, text) 加载荷的 secrets；每个 `continueTask({…})` 的
+ *   WP2-78b 同上，输入来源那一面：`chatGateway.steer` / `followUp` 是 (sessionId, text) 加载荷的 secrets、inlineTokens；每个 `continueTask({…})` 的
  *          来源是 `origin: inputOriginOfClient(ctx)`（不展开渲染端参数）；源码里没有 params / p 的 origin / source
  *
  * mock 骨架照抄 chatGatewayPrompt.test.ts；operationContext 用真的（WP2-80）。
@@ -217,7 +219,7 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
     chatGateway.steer('c1', 'm')
     await flush()
     // 不在任何操作上下文里 → 没有来源
-    expect(session.steer.mock.calls).toStrictEqual([['m', undefined, undefined]])
+    expect(session.steer.mock.calls).toStrictEqual([['m', undefined, undefined, undefined]])
     expect(session.admitSteer).not.toHaveBeenCalled()
     expect(mocks.frontendBroadcast).toHaveBeenCalledWith({
       type: 'error',
@@ -314,7 +316,7 @@ describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
     const session = openSession(async () => ({}))
     operationContext.run(createClientContext(netCtx, 'c1'), () => chatGateway.steer('c1', 'm'))
     await flush()
-    expect(session.steer.mock.calls).toStrictEqual([['m', REMOTE, undefined]])
+    expect(session.steer.mock.calls).toStrictEqual([['m', REMOTE, undefined, undefined]])
     expect(session.admitSteer).not.toHaveBeenCalled()
     expect(session.followUp).not.toHaveBeenCalled()
   })
@@ -324,12 +326,12 @@ describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
     operationContext.run(createChromeContext('inst-1', 'c1'), () => chatGateway.followUp('c1', 'f'))
     await flush()
     expect(session.followUp.mock.calls).toStrictEqual([
-      ['f', { kind: 'chrome', installId: 'inst-1' }, undefined]
+      ['f', { kind: 'chrome', installId: 'inst-1' }, undefined, undefined]
     ])
     session.followUp.mockClear()
     chatGateway.followUp('c1', 'f')
     await flush()
-    expect(session.followUp.mock.calls).toStrictEqual([['f', undefined, undefined]])
+    expect(session.followUp.mock.calls).toStrictEqual([['f', undefined, undefined, undefined]])
     expect(session.steer).not.toHaveBeenCalled()
   })
 
@@ -342,6 +344,66 @@ describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
     expect(session.admitSteer.mock.calls).toStrictEqual([steerCall(DRIVE.requestId, PARENT_SOURCE)])
     expect(session.steer).not.toHaveBeenCalled()
   })
+})
+
+describe('GW-T1 steer / followUp 带内联 Token', () => {
+  const LONG = 'line one\nline two '.repeat(20)
+  const PASTE = { type: 'paste', id: 'paste-1', displayText: '[Pasted]', payload: LONG }
+  const METHODS = ['steer', 'followUp'] as const
+  const other = (m: (typeof METHODS)[number]): (typeof METHODS)[number] =>
+    m === 'steer' ? 'followUp' : 'steer'
+
+  it.each(METHODS)(
+    'GW-T1 %s：模型拿展开后的全文，侧车是标记态原文 + tokens；空的 secret 丢掉',
+    async (m) => {
+      const session = openSession(async () => ({}))
+      chatGateway[m](
+        'c1',
+        'see {{shuvixInlineToken:p0}}',
+        [{ value: 'pw', category: 'PASSWORD' }, { value: '' } as never],
+        { p0: PASTE }
+      )
+      await flush()
+      expect(session[m].mock.calls).toStrictEqual([
+        [
+          'see ' + LONG,
+          undefined,
+          [{ value: 'pw', category: 'PASSWORD' }],
+          { content: 'see {{shuvixInlineToken:p0}}', tokens: { p0: PASTE } }
+        ]
+      ])
+      expect(session[other(m)]).not.toHaveBeenCalled()
+      expect(session.admitSteer).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(METHODS)('GW-T1 %s：inlineTokens 是 {} → 没有侧车，文字原样', async (m) => {
+    const session = openSession(async () => ({}))
+    chatGateway[m]('c1', 'see x', undefined, {})
+    await flush()
+    expect(session[m].mock.calls).toStrictEqual([['see x', undefined, undefined, undefined]])
+  })
+
+  it.each(METHODS)(
+    'GW-T1 %s：cmd token → 模型文本是命令模板（里面的粘贴标记也展开），侧车原文还是标记态',
+    async (m) => {
+      const session = openSession(async () => ({}))
+      const tokens = {
+        c0: {
+          type: 'cmd',
+          id: 'review',
+          displayText: '/review',
+          payload: 'Review: {{shuvixInlineToken:p0}}'
+        },
+        p0: PASTE
+      }
+      chatGateway[m]('c1', '{{shuvixInlineToken:c0}}', undefined, tokens)
+      await flush()
+      expect(session[m].mock.calls).toStrictEqual([
+        ['Review: ' + LONG, undefined, undefined, { content: '{{shuvixInlineToken:c0}}', tokens }]
+      ])
+    }
+  )
 })
 
 describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', () => {
@@ -424,7 +486,7 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
   )
 
   it.each(FILES)(
-    'WP2-78b %s：chatGateway.steer / followUp 是 (sessionId, text, 载荷的 secrets)（来源不经参数递进去）',
+    'WP2-78b %s：chatGateway.steer / followUp 是 (sessionId, text, 载荷的 secrets, 载荷的 inlineTokens)（来源不经参数递进去）',
     (file) => {
       const sourceFile = parse(file)
       const queued = callsIn(sourceFile).filter(
@@ -434,8 +496,9 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
       )
       expect(queued.map((call) => calleeName(call)).sort()).toEqual(['followUp', 'steer'])
       for (const call of queued) {
-        expect(call.arguments.length, call.getText(sourceFile)).toBe(3)
+        expect(call.arguments.length, call.getText(sourceFile)).toBe(4)
         expect(call.arguments[2]!.getText(sourceFile)).toMatch(/^(params|p)\.secrets$/)
+        expect(call.arguments[3]!.getText(sourceFile)).toMatch(/^(params|p)\.inlineTokens$/)
       }
     }
   )

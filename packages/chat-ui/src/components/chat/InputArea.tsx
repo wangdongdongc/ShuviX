@@ -871,22 +871,33 @@ export function InputArea({
   /**
    * 把当前输入投进 pi 的某条用户消息队列（立即 / 追加）。
    *
-   * 队列通道不携带 inlineTokens（harness 在 drain 那一刻才写 user 消息，
-   * 显示侧车没法紧邻它落盘）→ 添加的文件与粘贴芯片就地展开。
+   * 文字与内联 Token 的构造和空闲时发送同一条路（buildSlashOutgoing）：@ 引用、粘贴芯片、斜杠命令在聊天记录里
+   * 照样是芯片，模型照样拿到展开后的全文（显示侧车由运行时按幂等键记下，排队之后落下的那条也认得它）。
+   * 图片不随这两档走，留在输入框里。
    */
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
     // 运行中也一样：`/goal 条件` 交给宿主（会话在跑时宿主把那条消息并进当前轮）
     if (tryGoalCommand()) return
     const raw = inputText.trim()
-    const attached = at.attachedPaths(raw)
-    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(at.resolveAttached(raw)))
-    if (!text || !activeSessionId) return
+    if ((!raw && !slashChip) || !activeSessionId) return
     // 关停中哪儿也不发（话留在输入框里）
     if (useChatStore.getState().sessionClosing[activeSessionId]) return
+    const attached = at.attachedPaths(raw)
+    const expanded = secrets.expand(raw)
+    const hidden = expanded.secrets
+    // 要在清空引用 / 粘贴登记之前算
+    const outgoing = buildSlashOutgoing(expanded.text, activeSessionId)
+    if (!outgoing.contentText && !outgoing.inlineTokens) return
     const snapshot = takeComposerSnapshot()
-    const shown = { contentText: secrets.maskForDisplay(text) }
+    // 乐观占位与队列里都不出现要藏的真值（换回胶囊文字）
+    const shown = {
+      contentText: secrets.maskForDisplay(outgoing.contentText),
+      inlineTokens:
+        outgoing.inlineTokens && maskTokenPayloads(outgoing.inlineTokens, secrets.maskForDisplay)
+    }
     const store = useChatStore.getState()
     store.setInputText('')
+    setSlashChip(null)
     // 引用登记也清：留着的话，之后手打同样的文字会再算一次添加的文件
     at.reset()
     paste.reset()
@@ -895,21 +906,14 @@ export function InputArea({
     // 竞态保护：点下去的那一刻 run 可能刚好结束（视图已是 idle / interrupted）—— 两档都退回普通 prompt
     // （中断态的发送由运行时先中止再发）
     if (!store.sessionStreams[activeSessionId]?.isStreaming) {
-      await promptWithPlaceholder(
-        activeSessionId,
-        { contentText: text },
-        shown,
-        [],
-        hidden,
-        attached,
-        snapshot
-      )
+      await promptWithPlaceholder(activeSessionId, outgoing, shown, [], hidden, attached, snapshot)
       return
     }
     try {
       await getSessionChannelApi().agent[tier]({
         sessionId: activeSessionId,
-        text,
+        text: outgoing.contentText,
+        inlineTokens: outgoing.inlineTokens,
         secrets: hidden,
         attachedPaths: attached.length > 0 ? attached : undefined
       })

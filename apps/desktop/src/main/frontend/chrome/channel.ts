@@ -110,12 +110,17 @@ export async function callPanelChannel(
     }
     case 'agent.steer': {
       const p = params<AgentSteerParams>()
-      inContext(p.sessionId, () => chatGateway.steer(p.sessionId, p.text, p.secrets))
+      // Token 只为显示与展开；站点同意只在 agent.prompt 记（steer / followUp 不记）
+      inContext(p.sessionId, () =>
+        chatGateway.steer(p.sessionId, p.text, p.secrets, p.inlineTokens)
+      )
       return { success: true }
     }
     case 'agent.followUp': {
       const p = params<AgentFollowUpParams>()
-      inContext(p.sessionId, () => chatGateway.followUp(p.sessionId, p.text, p.secrets))
+      inContext(p.sessionId, () =>
+        chatGateway.followUp(p.sessionId, p.text, p.secrets, p.inlineTokens)
+      )
       return { success: true }
     }
     case 'agent.abort': {

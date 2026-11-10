@@ -77,6 +77,24 @@ function unavailableSessionError(sessionId: string): string {
 }
 
 /**
+ * 输入框发来的内联 Token（@ 引用、粘贴芯片、斜杠命令……）：LLM 收展开后的全文（树里的 user 消息即真理源）；
+ * 标记态原文 + tokens 作为显示侧车按幂等键记下，投影层据此还原芯片气泡。prompt / steer / followUp 同一口径 ——
+ * 运行中发的那条也是芯片，不退化成纯文本
+ */
+function composerTokens(
+  text: string,
+  inlineTokens: Record<string, InlineToken> | undefined
+): { text: string; display: { content: string; tokens: Record<string, InlineToken> } | undefined } {
+  if (inlineTokens === undefined || Object.keys(inlineTokens).length === 0) {
+    return { text, display: undefined }
+  }
+  return {
+    text: resolveTokensForAgent(text, inlineTokens),
+    display: { content: text, tokens: inlineTokens }
+  }
+}
+
+/**
  * ChatGateway 默认实现 — 聚合 Service 层，提供统一的会话级操作入口
  */
 /** 回退之后原样重发、沿用来源的窗口（§19.7） */
@@ -149,12 +167,7 @@ export class DefaultChatGateway implements ChatGateway {
       return { error }
     }
 
-    // ─── 内联 Token 处理 ───
-    // LLM 收展开后的全文（树里的 user 消息即真理源）；标记态原文 + tokens 作为
-    // 显示侧车（纯 custom entry）落在 user 消息之前，投影层据此还原芯片气泡。
-    const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
-    let promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
-    let display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
+    let { text: promptText, display } = composerTokens(text, inlineTokens)
     // 别的会话发来的：模型要知道这不是用户说的、是哪条会话说的（sessionSender.ts）；父会话附了用户原话就先接上它
     // （userWords.ts），发送方说明随之只认领它上面那段
     if (drive !== undefined) {
@@ -186,9 +199,17 @@ export class DefaultChatGateway implements ChatGateway {
     )
   }
 
-  steer(sessionId: string, text: string, secrets?: UserSecret[]): void {
+  steer(
+    sessionId: string,
+    text: string,
+    secrets?: UserSecret[],
+    inlineTokens?: Record<string, InlineToken>
+  ): void {
     const origin = currentInputOrigin()
-    this.enqueue(sessionId, (session) => session.steer(text, origin, cleanUserSecrets(secrets)))
+    const sent = composerTokens(text, inlineTokens)
+    this.enqueue(sessionId, (session) =>
+      session.steer(sent.text, origin, cleanUserSecrets(secrets), sent.display)
+    )
   }
 
   async steerDriven(
@@ -223,9 +244,17 @@ export class DefaultChatGateway implements ChatGateway {
     return sessionRecords.drivingSourceOf(sessionId, parentId, title)
   }
 
-  followUp(sessionId: string, text: string, secrets?: UserSecret[]): void {
+  followUp(
+    sessionId: string,
+    text: string,
+    secrets?: UserSecret[],
+    inlineTokens?: Record<string, InlineToken>
+  ): void {
     const origin = currentInputOrigin()
-    this.enqueue(sessionId, (session) => session.followUp(text, origin, cleanUserSecrets(secrets)))
+    const sent = composerTokens(text, inlineTokens)
+    this.enqueue(sessionId, (session) =>
+      session.followUp(sent.text, origin, cleanUserSecrets(secrets), sent.display)
+    )
   }
 
   async acceptSuggestion(sessionId: string, ref: SuggestionRef): Promise<AcceptSuggestionResult> {

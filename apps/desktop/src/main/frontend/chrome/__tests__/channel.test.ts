@@ -9,7 +9,7 @@
  *     而且在一个 chrome 来源的操作上下文里跑；
  *   - `agent.prompt` 在开跑**之前**把消息里带上的标签页（tab token）此刻所在的站点记为这条会话
  *     已同意的站点：地址向 Chrome 现问（`tabs.get`，5 秒超时），问不到就跳过，发送照常；
- *     steer / followUp 不记任何站点；
+ *     steer / followUp 不记任何站点（CH-G8），但消息里的 token 原样转给网关、只为显示与展开（CH-G8b）；
  *   - `agent.respondToInput` 只送进这条会话自己的运行时（答题方记成 `chrome:<connId>`，审计用）；没人认领
  *     什么也不发（卡片跟着视图走，P3-08）—— 别的会话的 requestId 永远送不到那条会话；
  *   - `agent.continue` / `agent.withdrawQueued`（P3-09-15）：过了归属核对才调网关，回包与 IPC 同形；
@@ -474,11 +474,11 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
     ['agent.steer', 'steer'],
     ['agent.followUp', 'followUp']
   ])(
-    'CH-5 %s 转 (sessionId, text, secrets)，回 {success:true}，在上下文里',
+    'CH-5 %s 转 (sessionId, text, secrets, inlineTokens)，回 {success:true}，在上下文里',
     async (path, method) => {
       const result = await call(path, [{ sessionId: OWNED, text: 'more', extra: 1 }])
       expect(result).toStrictEqual({ success: true })
-      expect(mocks.gateway[method].mock.calls).toEqual([[OWNED, 'more', undefined]])
+      expect(mocks.gateway[method].mock.calls).toEqual([[OWNED, 'more', undefined, undefined]])
       expect(mocks.calls[0].ctx).toEqual(CHROME_CTX(OWNED))
     }
   )
@@ -818,11 +818,17 @@ describe('CH-G agent.prompt 先把带上的标签页所在的站点记为已同�
     expect(mocks.grantSite.mock.calls).toEqual([[OWNED, 'a.example']])
   })
 
-  it.each(['agent.steer', 'agent.followUp'])(
-    'CH-G8 %s 不记任何站点（只有 agent.prompt 授权），哪怕参数里夹着 tab token',
-    async (path) => {
+  it.each([
+    ['agent.steer', 'steer'],
+    ['agent.followUp', 'followUp']
+  ])(
+    'CH-G8 %s 不记任何站点（只有 agent.prompt 授权），哪怕参数里夹着 tab token；token 原样转给网关（CH-G8b）',
+    async (path, method) => {
       conn = makeConn({ 5: { id: 5, url: 'https://a.example/' } })
       await call(path, [{ sessionId: OWNED, text: 'x', inlineTokens: { a: tabToken(5) } }])
+      expect(mocks.gateway[method]!.mock.calls).toStrictEqual([
+        [OWNED, 'x', undefined, { a: tabToken(5) }]
+      ])
       expect(conn.request).not.toHaveBeenCalled()
       expect(mocks.grantSite).not.toHaveBeenCalled()
     }

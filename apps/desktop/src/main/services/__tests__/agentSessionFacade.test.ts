@@ -7,6 +7,8 @@
  *   D10-27 session.turn-completed：受理过的发送落定之后发；被拒不发；facts 为空不发、抛错不影响结果
  *   P3-12-05 continue 的埋点只在调用前被中断时发（PIN-15）；空闲无操作 / no_model 不发，no_model 报给界面
  *   D10-28 steer / followUp 委托；被拒 → 带原文的 reject；门面上没有 nextTurn（P3-11-06）
+ *   FA-T1 steer / followUp 的 secrets 与显示侧车（输入框的内联 Token）：durable 的选项里 `composer: {secrets}`、
+ *         `display` 就是传进来的那个对象，来源与受理回调照旧；只给文字 → 没有 display / composer 键
  *   P3-11-05 withdrawQueued 委托，结果（含 closed）原样上交
  *   D10-29 notify 只委托一次（门面没有自己的合并定时器）
  *   D10-30 其余委托：abort / setThinkingLevel / continue / 询问；isStreaming / 挂起询问现读
@@ -412,6 +414,51 @@ describe('D10-28 steer / followUp', () => {
     durable.followUpResult = { error: 'Provider "Faux" model nope', code: 'no_model' }
     await expect(session.followUp('f')).rejects.toThrow(
       'chat.agentNoModel:Provider "Faux" model nope'
+    )
+  })
+
+  describe('FA-T1 输入框的 secrets 与显示侧车原样进 durable 的选项', () => {
+    const LOCAL = { kind: 'local' } as const
+    const S = { value: 'pw', category: 'PASSWORD' }
+    const DISPLAY = {
+      content: 'see {{shuvixInlineToken:p0}}',
+      tokens: { p0: { type: 'paste', id: 'paste-1', displayText: '[Pasted]', payload: 'LONG' } }
+    }
+
+    it.each([
+      ['steer', 'steerOptions'],
+      ['followUp', 'followUpOptions']
+    ] as const)(
+      'FA-T1 %s(expanded, LOCAL, [S], DISPLAY) → display 同一个对象、composer = {secrets:[S]}、source、受理回调都在',
+      async (method, optionsKey) => {
+        const { durable, session } = facade()
+        await session[method]('expanded', LOCAL, [S], DISPLAY as never)
+        expect(durable.callsOf(method)).toEqual([[method, 'expanded']])
+        const options = durable[optionsKey][0]!
+        expect(options.display).toBe(DISPLAY)
+        expect(options.composer).toStrictEqual({ secrets: [S] })
+        expect(options.source).toBe(LOCAL)
+        expect(typeof options.onAdmitted).toBe('function')
+        expect(typeof options.onPlaced).toBe('function')
+        expect(Object.keys(options).sort()).toEqual(
+          ['composer', 'display', 'onAdmitted', 'onPlaced', 'source'].sort()
+        )
+        expect(durable.callsOf('submitUser')).toEqual([])
+      }
+    )
+
+    it.each([
+      ['steer', 'steerOptions'],
+      ['followUp', 'followUpOptions']
+    ] as const)(
+      'FA-T1 %s(text) 只有文字 → 没有 display / composer 键',
+      async (method, optionsKey) => {
+        const { durable, session } = facade()
+        await session[method]('s')
+        const options = durable[optionsKey][0]!
+        expect(options).not.toHaveProperty('display')
+        expect(options).not.toHaveProperty('composer')
+      }
     )
   })
 

@@ -75,7 +75,7 @@ export function registerAgentHandlers(): void {
   defineHandler('agent:steer', (ctx, params: AgentSteerParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
       sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
-      chatGateway.steer(params.sessionId, params.text, params.secrets)
+      chatGateway.steer(params.sessionId, params.text, params.secrets, params.inlineTokens)
       return { success: true }
     })
   )
@@ -84,7 +84,7 @@ export function registerAgentHandlers(): void {
   defineHandler('agent:followUp', (ctx, params: AgentFollowUpParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
       sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
-      chatGateway.followUp(params.sessionId, params.text, params.secrets)
+      chatGateway.followUp(params.sessionId, params.text, params.secrets, params.inlineTokens)
       return { success: true }
     })
   )

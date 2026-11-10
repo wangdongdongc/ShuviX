@@ -4,10 +4,13 @@
  *
  *   12 运行中：恰好两个档位按钮 [立即 Now, 追加 Append] + 停止；没有第三个、没有「下一轮」的图标；
  *      空闲 / 被中断：一个发送按钮
- *   13 运行中回车 = 立即：`agent.steer({sessionId, text})` 一次，粘贴芯片就地展开；输入清空、待发图片留着；
+ *   13 运行中回车 = 立即：`agent.steer({sessionId, text, inlineTokens})` 一次，粘贴芯片与空闲发送一样是 token（不就地
+ *      展开成纯文本）；输入清空、待发图片留着；
  *      有待答的询问时也是 steer 一次（回答询问在卡片那一行）；只有空白什么都不发
  *   14 追加按钮：`agent.followUp` 一次；没字时两个档位都禁用
+ *   14b 追加按钮带粘贴芯片：followUp 的载荷是标记态原文 + paste token（同 13）
  *   15 档位竞态：点下去时视图已是 idle / interrupted → 两档都改走 `agent.prompt`；关停中什么都不调
+ *   15b 同上带粘贴芯片：`agent.prompt` 收标记态原文 + paste token；乐观占位也是标记态（带 p0，没有长文）
  *   16 队列面板：空队列、legacy / none 视图 → 不渲染；三条 → 细条 `Queue 3`、`Now 2`、`Append 1`；展开的
  *      次序是立即在前、档内按收件箱次序（PIN-11）；只有图片的那条显示 `(images only)` 与 `2 image(s)`
  *   17 key 稳定（按 submissionId）：一条离开队列，其余行的 DOM 节点还是原来那个
@@ -18,7 +21,9 @@
  *
  * 发送失败（`ERR` = input.sendFailed 包着 input.connectionLost）。两档当场就回，断线窗口很窄，所以 `lost` 也当场算失败：
  *   QS-1  回车 steer，notSent：放回（文字 + 粘贴芯片）、ERR、图片不翻倍、运行状态不变
- *   QS-1b 输入框里有命令芯片（这条通道本来就不带走它）：不算新内容，字照样放回
+ *   QS-1b 输入框里有命令芯片：随这一条带走（cmd token）；没发出去时字与芯片都放回
+ *   QS-1c 同上但发出去了：输入框与命令芯片都清空；再打一句回车 → 第二条 steer 是纯文字、不带 token。
+ *         变体：输入框里是没成芯片的 `/cmd x`（回填的草稿）→ 回车照样带一枚 cmd token
  *   QS-2  followUp 按钮，同上
  *   QS-3  handler_error：报原文、放回
  *   QS-4  steer，lost：当场放回并报 ERR，不等
@@ -344,7 +349,7 @@ describe('P3-11-12..15 两档输入框', () => {
     }
   })
 
-  it('P3-11-13 运行中回车 = steer 一次（粘贴芯片就地展开）；输入清空，待发图片留着', async () => {
+  it('P3-11-13 运行中回车 = steer 一次（粘贴芯片是 token）；输入清空，待发图片留着', async () => {
     await mountInput()
     busy()
     const image = { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
@@ -358,7 +363,8 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(agent.steer).toHaveBeenCalledTimes(1)
     expect(agent.steer.mock.calls[0]![0]).toEqual({
       sessionId: 's1',
-      text: `see ${long}`,
+      text: 'see {{shuvixInlineToken:p0}}',
+      inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: long }) },
       secrets: []
     })
     expect(agent.followUp).not.toHaveBeenCalled()
@@ -417,6 +423,26 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(store().inputText).toBe('')
   })
 
+  it('P3-11-14b 追加按钮带粘贴芯片 → followUp 的载荷是标记态原文 + paste token', async () => {
+    await mountInput()
+    busy()
+    await flush()
+    const long = longPaste('line')
+    await type('see ')
+    await pasteLong(long)
+    await click(tier('followUp'))
+    expect(agent.followUp).toHaveBeenCalledTimes(1)
+    expect(agent.followUp.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: 'see {{shuvixInlineToken:p0}}',
+      inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: long }) },
+      secrets: []
+    })
+    expect(agent.steer).not.toHaveBeenCalled()
+    expect(agent.prompt).not.toHaveBeenCalled()
+    expect(store().inputText).toBe('')
+  })
+
   it.each(['steer', 'followUp'] as const)(
     'P3-11-15 %s：点下去时视图已是 idle / interrupted → agent.prompt；关停中 → 什么都不调',
     async (name) => {
@@ -451,6 +477,47 @@ describe('P3-11-12..15 两档输入框', () => {
       expect(agent.prompt).toHaveBeenCalledTimes(2)
       expect(agent.steer).not.toHaveBeenCalled()
       expect(agent.followUp).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['steer', 'followUp'] as const)(
+    'P3-11-15b %s 带粘贴芯片、点下去时已是 idle → agent.prompt 收标记态原文 + paste token；乐观占位也是标记态',
+    async (name) => {
+      const reply = deferred<unknown>()
+      agent.prompt.mockReturnValueOnce(reply.promise)
+      await mountInput()
+      busy()
+      await flush()
+      const long = longPaste('line')
+      await type('see ')
+      await pasteLong(long)
+      const button = tier(name)
+      await act(async () => {
+        applySessionView('s1', V('s1', { run: { state: 'idle' } }))
+        button.click()
+      })
+      await flush()
+      expect(agent.prompt).toHaveBeenCalledTimes(1)
+      const sent = agent.prompt.mock.calls[0]![0] as Record<string, unknown>
+      expect(sent).toEqual({
+        sessionId: 's1',
+        text: 'see {{shuvixInlineToken:p0}}',
+        inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: long }) },
+        secrets: []
+      })
+      expect(sent.images).toBeUndefined()
+      expect(sent.attachedPaths).toBeUndefined()
+      expect(agent.steer).not.toHaveBeenCalled()
+      expect(agent.followUp).not.toHaveBeenCalled()
+
+      const pending = selectPendingPrompt(store())
+      expect(pending?.content).toBe('see {{shuvixInlineToken:p0}}')
+      expect(pending?.content).not.toContain(long)
+      expect(pending?.metadata?.inlineTokens).toEqual({
+        p0: expect.objectContaining({ type: 'paste', payload: long })
+      })
+      await act(async () => reply.resolve({ success: true }))
+      await flush()
     }
   )
 })
@@ -635,14 +702,15 @@ describe('发送失败', () => {
       await pressEnter()
       expect(agent.steer.mock.calls[0]![0]).toEqual({
         sessionId: 's1',
-        text: `see ${long}`,
+        text: 'see {{shuvixInlineToken:p0}}',
+        inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: long }) },
         secrets: []
       })
       expectRestoredWhileBusy(before)
       expect(sendError()).toBe(ERR)
     })
 
-    it('QS-1b 输入框里有命令芯片（这条通道本来就不带走它）：不算新内容，字照样放回，芯片还在', async () => {
+    it('QS-1b 输入框里有命令芯片：随这一条带走（cmd token）；没发出去时字照样放回，芯片还在', async () => {
       agent.steer.mockRejectedValueOnce(notSent())
       useChatStore.setState({
         slashCommands: [
@@ -656,9 +724,79 @@ describe('发送失败', () => {
       expect(shot().slash).toBe('/cmd')
       await pressEnter()
       expect(agent.steer).toHaveBeenCalledTimes(1)
+      const sent = agent.steer.mock.calls[0]![0] as {
+        text: string
+        inlineTokens?: Record<string, { type: string; id: string }>
+      }
+      expect(Object.values(sent.inlineTokens ?? {})).toEqual([
+        expect.objectContaining({ type: 'cmd', id: 'cmd' })
+      ])
+      expect(sent.text).toMatch(/\{\{shuvixInlineToken:[a-z0-9]+\}\}/)
       expect(textarea().value).toBe('later')
       expect(shot().slash).toBe('/cmd')
       expect(sendError()).toBe(ERR)
+    })
+
+    it('QS-1c 命令芯片随 steer 发出去：输入框与芯片都清空；下一句回车是纯文字的 steer、不带 token', async () => {
+      useChatStore.setState({
+        slashCommands: [
+          { commandId: 'cmd', name: 'Cmd', description: 'a command', template: 'Run: $ARGUMENTS' }
+        ]
+      })
+      await mountInput()
+      busy()
+      await flush()
+      await type('/cmd later')
+      expect(shot().slash).toBe('/cmd')
+      await pressEnter()
+      expect(agent.steer).toHaveBeenCalledTimes(1)
+      const first = agent.steer.mock.calls[0]![0] as {
+        text: string
+        inlineTokens?: Record<string, { type: string; id: string }>
+      }
+      expect(Object.values(first.inlineTokens ?? {})).toEqual([
+        expect.objectContaining({ type: 'cmd', id: 'cmd' })
+      ])
+      expect(textarea().value).toBe('')
+      expect(shot().slash).toBeFalsy()
+      expect(sendError()).toBeNull()
+
+      await type('next')
+      await pressEnter()
+      expect(agent.steer).toHaveBeenCalledTimes(2)
+      expect(agent.steer.mock.calls[1]![0]).toStrictEqual({
+        sessionId: 's1',
+        text: 'next',
+        inlineTokens: undefined,
+        secrets: [],
+        attachedPaths: undefined
+      })
+    })
+
+    it('QS-1c 变体：输入框里是没成芯片的 `/cmd x`（回填的草稿，发送时才解析）→ 运行中回车照样带一枚 cmd token', async () => {
+      useChatStore.setState({
+        slashCommands: [
+          { commandId: 'cmd', name: 'Cmd', description: 'a command', template: 'Run: $ARGUMENTS' }
+        ]
+      })
+      await mountInput()
+      busy()
+      await flush()
+      act(() => store().setInputText('/cmd x'))
+      await flush()
+      expect(textarea().value).toBe('/cmd x')
+      expect(shot().slash).toBeFalsy()
+      await pressEnter()
+      expect(agent.steer).toHaveBeenCalledTimes(1)
+      const sent = agent.steer.mock.calls[0]![0] as {
+        text: string
+        inlineTokens?: Record<string, { type: string; id: string; payload: string }>
+      }
+      expect(Object.values(sent.inlineTokens ?? {})).toEqual([
+        expect.objectContaining({ type: 'cmd', id: 'cmd', payload: 'Run: x' })
+      ])
+      expect(sent.text).toMatch(/^\{\{shuvixInlineToken:[a-z0-9]+\}\}/)
+      expect(textarea().value).toBe('')
     })
 
     it('QS-2 followUp 按钮，notSent：同上', async () => {

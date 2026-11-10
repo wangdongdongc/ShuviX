@@ -17,6 +17,16 @@
  *   MRN-D-9  两条忙时 steer：各自一份显示侧车，投影各自带说明 Token
  *   MRN-D-11 submitUser（重新生成的发送路径）从不加说明：空闲时如此，忙时排成 follow-up 也如此
  *
+ *   输入框的内联 Token（@ 引用、粘贴芯片、斜杠命令）随 steer / followUp 走（显示侧车 + composer）：
+ *   MRN-D-12  忙时 steer：侧车 = 输入框的侧车 + 说明 Token（接在后面）；排队行用 displayText（没有粘贴全文）；
+ *             模型文本 = 展开后的全文 + 说明；投影 = 标记态原文 + 说明标记，两枚 Token 都在。带脱敏的宿主一样
+ *   MRN-D-12b 同样的输入，空闲 steer：模型文本就是展开后的全文；侧车原样；投影只有输入框的 Token
+ *   MRN-D-13  忙时 followUp：侧车原样、不带说明；排队行 mode followUp、用 displayText；模型文本 = 展开后的全文
+ *   MRN-D-7b  脱敏也换侧车（steer / followUp）：存下的侧车、模型文本、排队行、重新挂载的消息里都没有明文；模型文本里的
+ *             占位符与侧车原文、粘贴芯片 payload 里的是同一个；Token 的 type / id / displayText 不变；steer 的说明
+ *             Token 照旧接在后面（脱敏看不到它）；对照表只多一项 user
+ *   MRN-D-14  宿主没开脱敏、输入框带了要藏的值（侧车里也有）：steer / followUp 都被拒，什么都不写、不排队
+ *
  *   DS-2     别的会话发来的忙时 steer（带发送方侧车 + 来源）：模型全文逐字 `M\n\n[Sent by…]\n\n[Sent while…]`；投影
  *            `M{{sender}}{{midrun}}`，两枚都在；排队行 text 是 M
  *   DS-3     被中断照「先让它跑完」排着的同样两枚；空闲 steer 只有发送方、起一轮；不带 display 的行为不变
@@ -38,11 +48,12 @@ import {
   MID_RUN_NOTE_SEPARATOR,
   MID_RUN_NOTE_TEXT,
   MID_RUN_NOTE_UID,
-  midRunNoteDisplay
+  midRunNoteDisplay,
+  midRunNoteToken
 } from '@shuvix/chat-protocol/midRunNote'
 import { SESSION_SENDER_UID, withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import { startsTaskListRequest } from '@shuvix/chat-protocol/taskList'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundContext as BG } from '../context'
@@ -709,4 +720,212 @@ describe('mid-run note on steers', () => {
       TIMEOUT
     )
   })
+})
+
+describe('composer inline tokens on steer / followUp', () => {
+  const LONG = 'pasted line one\npasted line two\n'.repeat(20)
+  const PASTE: InlineToken = {
+    type: 'paste',
+    id: 'paste-1',
+    displayText: '[Pasted]',
+    payload: LONG
+  }
+  const P0M = makeTokenMarker('p0')
+  const EXPANDED = `see ${LONG}`
+  const D = { content: `see ${P0M}`, tokens: { p0: PASTE } }
+  const options = (): { composer: { secrets: [] }; display: JsonObject } => ({
+    composer: { secrets: [] },
+    display: D as unknown as JsonObject
+  })
+
+  /** 一轮在 LLM 调用上被扣住的会话（MRN-D-3 的形状）：`release()` 之后 a1 落下、再答一次 a2 */
+  async function heldCall(options: TestHostOptions = {}): Promise<{
+    t: TestHost
+    session: DurableSession
+    first: Promise<unknown>
+    release: () => void
+  }> {
+    const t = await makeHost(options)
+    const session = await t.open()
+    await primeRoot(session)
+    const run = held(answer('a1'))
+    t.kit.queue(run.step, answer('a2'))
+    const first = session.submitUser('u1')
+    await run.reached
+    return { t, session, first, release: run.release }
+  }
+
+  it.each([
+    ['without redaction', {}],
+    ['with redaction', { redaction: redactionHost }]
+  ] as const)(
+    'MRN-D-12 a busy steer (%s): the sidecar is the composer sidecar + the note token, the queue row uses displayText, the model gets the expanded text + the note, the projection has both tokens',
+    async (_label, hostOptions) => {
+      const { t, session, sending, release } = await heldRound(hostOptions)
+      const admitted = await session.steer(EXPANDED, options())
+      const requestId = await requestIdOf(session, admitted)
+      expect(await displayItems(session)).toStrictEqual({
+        [requestId]: {
+          content: `see ${P0M}${MARKER}`,
+          tokens: { p0: PASTE, [MID_RUN_NOTE_UID]: midRunNoteToken() }
+        }
+      })
+      const queue = (await freshMount(session)).queue
+      expect(queue).toStrictEqual([
+        { submissionId: admitted.submissionId, mode: 'steer', text: 'see [Pasted]', imageCount: 0 }
+      ])
+      expect(JSON.stringify(queue)).not.toContain('pasted line')
+      release()
+      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+      expect(lastUserMessage(t).content).toBe(`${EXPANDED}${SUFFIX}`)
+      const user = await userWith(session, `see ${P0M}${MARKER}`)
+      expect(meta(user).inlineTokens).toStrictEqual({
+        p0: PASTE,
+        [MID_RUN_NOTE_UID]: midRunNoteToken()
+      })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'MRN-D-12b the same input on an idle session starts its own run: the model gets exactly the expanded text, the sidecar is the composer one, the projection has only the composer token',
+    async () => {
+      const t = await makeHost()
+      const session = await t.open()
+      await primeRoot(session)
+      t.kit.queue(answer('ok'))
+      const admitted = await session.steer(EXPANDED, options())
+      const requestId = await requestIdOf(session, admitted)
+      expect(await settled(session, admitted)).toBe('done')
+      expect(lastUserMessage(t).content).toBe(EXPANDED)
+      expect(await displayItems(session)).toStrictEqual({ [requestId]: D })
+      const user = await userWith(session, `see ${P0M}`)
+      expect(meta(user).inlineTokens).toStrictEqual({ p0: PASTE })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'MRN-D-13 a busy follow-up keeps the composer sidecar as is (no note); its queue row uses displayText; the model gets exactly the expanded text',
+    async () => {
+      const { t, session, first, release } = await heldCall()
+      const admitted = await session.followUp(EXPANDED, options())
+      const requestId = await requestIdOf(session, admitted)
+      expect(await displayItems(session)).toStrictEqual({ [requestId]: D })
+      expect((await freshMount(session)).queue).toStrictEqual([
+        {
+          submissionId: admitted.submissionId,
+          mode: 'followUp',
+          text: 'see [Pasted]',
+          imageCount: 0
+        }
+      ])
+      release()
+      expect(await first).toEqual({})
+      expect(await settled(session, admitted)).toBe('done')
+      expect(lastUserMessage(t).content).toBe(EXPANDED)
+      expect((await typedUsers(session)).map((message) => message.content)).toEqual([
+        'u1',
+        `see ${P0M}`
+      ])
+      const user = await userWith(session, `see ${P0M}`)
+      expect(meta(user).inlineTokens).toStrictEqual({ p0: PASTE })
+    },
+    TIMEOUT
+  )
+
+  it.each(['steer', 'followUp'] as const)(
+    'MRN-D-7b a busy %s with a composer secret also masks the sidecar: no plaintext stored, sent, queued or re-mounted; one placeholder everywhere; token shape unchanged',
+    async (mode) => {
+      const { t, session, first, release } = await heldCall({ redaction: redactionHost })
+      const maskComposerInput = vi.spyOn(session.redaction!, 'maskComposerInput')
+      const LONGPW = `pasted config:\nDB_PASSWORD=${PASSWORD}\nmore lines\n`.repeat(3)
+      const display = {
+        content: `use ${PASSWORD} and see ${P0M}`,
+        tokens: { p0: { ...PASTE, payload: LONGPW } }
+      }
+      const admitted = await session[mode](`use ${PASSWORD} and see ${LONGPW}`, {
+        composer: { secrets: [{ value: PASSWORD, category: 'PASSWORD' }] },
+        display: display as unknown as JsonObject
+      })
+      const requestId = await requestIdOf(session, admitted)
+
+      expect(maskComposerInput).toHaveBeenCalledTimes(1)
+      expect(maskComposerInput.mock.calls[0]![2]).toBe(display)
+      expect(JSON.stringify(maskComposerInput.mock.calls)).not.toContain(MID_RUN_NOTE_TEXT)
+
+      const items = await displayItems(session)
+      expect(JSON.stringify(items)).not.toContain(PASSWORD)
+      const queue = (await freshMount(session)).queue
+      expect(queue).toHaveLength(1)
+      expect(queue[0]!.mode).toBe(mode)
+      expect(JSON.stringify(queue)).not.toContain(PASSWORD)
+
+      release()
+      expect(await first).toEqual({})
+      expect(await settled(session, admitted)).toBe('done')
+
+      const sent = lastUserMessage(t).content as string
+      expect(typeof sent).toBe('string')
+      expect(sent).not.toContain(PASSWORD)
+      const placeholder = PLACEHOLDER.exec(sent)?.[0]
+      expect(placeholder).toBeDefined()
+      const maskedLong = LONGPW.replaceAll(PASSWORD, placeholder!)
+      const note = mode === 'steer' ? SUFFIX : ''
+      expect(sent).toBe(`use ${placeholder} and see ${maskedLong}${note}`)
+
+      const stored = items[requestId] as unknown as {
+        content: string
+        tokens: Record<string, InlineToken>
+      }
+      expect(stored.content).toBe(
+        `use ${placeholder} and see ${P0M}${mode === 'steer' ? MARKER : ''}`
+      )
+      expect(stored.tokens.p0).toStrictEqual({ ...PASTE, payload: maskedLong })
+      if (mode === 'steer') {
+        expect(stored.tokens[MID_RUN_NOTE_UID]!.payload).toBe(MID_RUN_NOTE_TEXT)
+        expect(stored.content.endsWith(MARKER)).toBe(true)
+      } else {
+        expect(stored.tokens).not.toHaveProperty(MID_RUN_NOTE_UID)
+      }
+      expect(queue[0]!.text).toBe(`use ${placeholder} and see [Pasted]`)
+
+      const messages = (await freshMount(session)).messages
+      expect(JSON.stringify(messages)).not.toContain(PASSWORD)
+      const user = await userWith(session, stored.content)
+      expect((meta(user).inlineTokens as Record<string, InlineToken>).p0).toStrictEqual({
+        ...PASTE,
+        payload: maskedLong
+      })
+
+      const userEntries = [...(await session.redaction!.table()).entries()].filter(
+        ([, item]) => item.rule === 'user'
+      )
+      expect(userEntries).toHaveLength(1)
+      expect(userEntries[0]![0]).toBe(placeholder)
+    },
+    TIMEOUT
+  )
+
+  it.each(['steer', 'followUp'] as const)(
+    'MRN-D-14 a host without redaction refuses a busy %s that carries composer secrets (also in its sidecar): nothing is written or queued',
+    async (mode) => {
+      const { session, first, release } = await heldCall()
+      expect(session.redaction).toBeUndefined()
+      const admitted = await session[mode](`use ${PASSWORD}`, {
+        composer: { secrets: [{ value: PASSWORD, category: 'PASSWORD' }] },
+        display: {
+          content: `use ${P0M}`,
+          tokens: { p0: { ...PASTE, payload: PASSWORD } }
+        } as unknown as JsonObject
+      })
+      expect(admitted.error).toMatch(/not available/)
+      expect(admitted.submissionId).toBeUndefined()
+      expect(await displayItems(session)).toStrictEqual({})
+      expect((await freshMount(session)).queue).toStrictEqual([])
+      release()
+      expect(await first).toEqual({})
+    },
+    TIMEOUT
+  )
 })

@@ -22,7 +22,7 @@ import { userText } from './projection/entryText'
  */
 export function withMidRunNote(
   content: UserInput,
-  /** 这条消息已有的显示侧车（别的会话发来的引导带发送方 Token）：说明接在它后面 */
+  /** 这条消息已有的显示侧车（输入框的内联 Token；别的会话发来的引导带发送方 Token）：说明接在它后面 */
   base?: JsonObject
 ): { content: UserInput; display: JsonObject } | undefined {
   const text = userText(content)

@@ -48,9 +48,9 @@ export function isMidRunNoteToken(token: unknown): boolean {
 }
 
 /**
- * 一条用户消息的显示侧车：原文（已脱敏的那份）+ 说明标记。原文里本来就有的标记字样不会被当成 Token ——
- * 侧车的 tokens 里只有说明这一枚，别的 uid 在显示时按无效标记处理，与今天输入框发来的纯文本一致。
- * 这条消息已有侧车（别的会话发来的引导带发送方 Token）→ 接在它后面。
+ * 一条用户消息的显示侧车：原文（已脱敏的那份）+ 说明标记。没有侧车时原文里本来就有的标记字样不会被当成
+ * Token —— 侧车的 tokens 里只有说明这一枚，别的 uid 在显示时按无效标记处理。
+ * 这条消息已有侧车（输入框的内联 Token；别的会话发来的引导带发送方 Token）→ 接在它后面。
  */
 export function midRunNoteDisplay(
   text: string,

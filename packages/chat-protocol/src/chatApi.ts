@@ -353,6 +353,11 @@ export interface AgentSubAgentPromptParams {
 export interface AgentSteerParams {
   sessionId: string
   text: string
+  /**
+   * 同 `AgentPromptParams.inlineTokens`：@ 引用、粘贴芯片、斜杠命令在运行中发也保持芯片（显示侧车按幂等键记下，
+   * 排队之后落下的那条消息照样认得它）
+   */
+  inlineTokens?: Record<string, InlineToken>
   /** 同 `AgentPromptParams.secrets` */
   secrets?: UserSecret[]
   /** 同 `AgentPromptParams.attachedPaths` */
@@ -360,7 +365,7 @@ export interface AgentSteerParams {
 }
 
 /**
- * 追加入队参数 —— 与 steer 同形（一条纯文本用户消息）。
+ * 追加入队参数 —— 与 steer 同形。
  * 两者的差别只在 pi 把它插进 agent loop 的时机，消息本身完全一致。
  */
 export type AgentFollowUpParams = AgentSteerParams

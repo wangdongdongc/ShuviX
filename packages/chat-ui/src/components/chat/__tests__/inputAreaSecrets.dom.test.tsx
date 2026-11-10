@@ -20,6 +20,10 @@
  *   SC-11 放回之后：藏起来的值不再提示；新加的胶囊编号 #2
  *   SC-12 放回之后：退格紧贴胶囊尾部、或改了占位里的字 → 胶囊没了，下一次发送不带它
  *   SC-13 steer / followUp 失败：同 SC-8
+ *
+ * 运行中发（steer 与空闲竞态退回的 prompt，粘贴芯片随 token 走）：
+ *   SC-14 粘贴芯片里确认的值：运行中回车 → steer 的 text 是标记态（没有真值）、paste token 的 payload 带真值、secrets 带它，
+ *         发完 DOM 里没有真值；点下去时已是 idle → agent.prompt 收同样的载荷，乐观占位里没有真值、paste token 还在
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -591,6 +595,74 @@ describe('话没发出去，放回输入框', () => {
       sessionId: 's1',
       text: `use ${PASSWORD}`,
       secrets: hidden(PASSWORD)
+    })
+  })
+
+  describe('SC-14 运行中发：粘贴芯片里确认的值随 token 走', () => {
+    /** 运行中：一段含真值的长文折叠成粘贴芯片，提示里确认隐藏（只记下值） */
+    async function hideInsidePasteWhileBusy(): Promise<void> {
+      hintsFor = hintEverywhere
+      await mountInput()
+      act(() => applySessionView('s1', V('s1', { run: { state: 'busy' } })))
+      await flush()
+      await pasteInto(textarea(), longPaste('line', `pw ${PASSWORD}`))
+      await flush(HINT_DEBOUNCE_MS + 50)
+      await click(q('[data-redaction-hide-all]')!)
+      expect(q('[data-redaction-hints]')).toBeNull()
+      expect(textarea().value).not.toContain(PASSWORD)
+    }
+
+    type Sent = {
+      text: string
+      inlineTokens?: Record<string, { type: string; payload: string }>
+      secrets: unknown
+    }
+
+    const expectTokenPayload = (sent: Sent): void => {
+      expect(sent.text).toMatch(/^\{\{shuvixInlineToken:[a-z0-9]+\}\}$/)
+      expect(sent.text).not.toContain(PASSWORD)
+      const tokens = Object.values(sent.inlineTokens ?? {})
+      expect(tokens).toHaveLength(1)
+      expect(tokens[0]!.type).toBe('paste')
+      expect(tokens[0]!.payload).toContain(PASSWORD)
+      expect(sent.secrets).toEqual(hidden(PASSWORD))
+    }
+
+    it('SC-14 运行中回车 → steer：text 是标记态、payload 带真值、secrets 带它；发完 DOM 里没有真值', async () => {
+      await hideInsidePasteWhileBusy()
+      const agent = (
+        window as unknown as { api: { agent: Record<string, ReturnType<typeof vi.fn>> } }
+      ).api.agent
+      await key(textarea(), 'Enter')
+      expect(agent.steer).toHaveBeenCalledTimes(1)
+      expect(prompt).not.toHaveBeenCalled()
+      expectTokenPayload(agent.steer!.mock.calls[0]![0] as Sent)
+      expect(textarea().value).toBe('')
+      expect(document.body.innerHTML).not.toContain(PASSWORD)
+    })
+
+    it('SC-14 点下去时已是 idle → agent.prompt 收同样的载荷；乐观占位里没有真值、paste token 还在', async () => {
+      let resolve: (value: unknown) => void = () => {}
+      prompt.mockImplementationOnce(() => new Promise((res) => (resolve = res)))
+      await hideInsidePasteWhileBusy()
+      const agent = (
+        window as unknown as { api: { agent: Record<string, ReturnType<typeof vi.fn>> } }
+      ).api.agent
+      const button = container.querySelector<HTMLButtonElement>('[data-queue-tier="steer"]')!
+      await act(async () => {
+        applySessionView('s1', V('s1', { run: { state: 'idle' } }))
+        button.click()
+      })
+      await flush()
+      expect(prompt).toHaveBeenCalledTimes(1)
+      expect(agent.steer).not.toHaveBeenCalled()
+      expectTokenPayload(prompt.mock.calls[0]![0] as Sent)
+      const pending = JSON.stringify(useChatStore.getState().sessionPendingPrompt)
+      expect(pending).not.toContain(PASSWORD)
+      expect(pending).toContain('"type":"paste"')
+      expect(document.body.innerHTML).not.toContain(PASSWORD)
+      await act(async () => resolve({ success: true }))
+      await flush()
     })
   })
 })

@@ -280,7 +280,10 @@ export interface AdmitOptions {
   requestId?: string
   /** 同 `UserSendOptions.source`（人在某个前端里打的引导 / 追加，或父会话发进子会话的引导，§19.6） */
   source?: InputOrigin
-  /** 显示侧车（别的会话发来的引导带发送方 Token）；不跟 `composer` 一起给：这里不替它换占位符 */
+  /**
+   * 显示侧车（输入框的内联 Token；别的会话发来的引导带发送方 Token）。与 `composer` 一起给时，侧车里的 secrets 一并
+   * 换成占位符（同 `UserSendOptions.composer`）
+   */
   display?: JsonObject
   onAdmitted?: (info: AdmittedInfo) => void
   onPlaced?: (info: PlacedInfo) => void
@@ -1726,8 +1729,13 @@ export class DurableSessionImpl implements DurableSession {
     try {
       if (options.composer !== undefined) {
         if (this.redaction !== undefined) {
-          content = (await this.redaction.maskComposerInput(content, options.composer.secrets))
-            .content
+          const masked = await this.redaction.maskComposerInput(
+            content,
+            options.composer.secrets,
+            options.display
+          )
+          content = masked.content
+          options = { ...options, display: masked.display }
         } else if (options.composer.secrets.length > 0) {
           return { error: NO_REDACTION_FOR_SECRETS }
         }

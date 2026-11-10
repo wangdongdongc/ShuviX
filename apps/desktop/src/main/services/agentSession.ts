@@ -226,10 +226,17 @@ export class AgentSession {
 
   /** 运行中插话（空闲时起一轮）；`source` = 这条输入从哪来（网关盖的章）。被拒 → reject（调用方把文案报给界面） */
   /** `secrets`：输入框发来的（docs/auto-redaction-design.md §14）—— 只把这些换成占位符，其余照原样 */
-  async steer(text: string, source?: InputOrigin, secrets?: UserSecret[]): Promise<void> {
+  /** `display`：输入框的内联 Token（标记态原文 + tokens），同 `prompt` */
+  async steer(
+    text: string,
+    source?: InputOrigin,
+    secrets?: UserSecret[],
+    display?: InlineTokensSidecar
+  ): Promise<void> {
     const result = await this.admitSteer(text, {
       ...(source === undefined ? {} : { source }),
-      ...(secrets === undefined ? {} : { composer: { secrets } })
+      ...(secrets === undefined ? {} : { composer: { secrets } }),
+      ...(display === undefined ? {} : { display: display as unknown as JsonObject })
     })
     if (result.error) throw new Error(admissionErrorText(result))
   }
@@ -255,13 +262,19 @@ export class AgentSession {
     return result.error ? { ...result, error: admissionErrorText(result) } : result
   }
 
-  /** 本轮结束后接着说（空闲时起一轮）；`source` 同 `steer`。被拒 → reject */
-  async followUp(text: string, source?: InputOrigin, secrets?: UserSecret[]): Promise<void> {
+  /** 本轮结束后接着说（空闲时起一轮）；`source` / `secrets` / `display` 同 `steer`。被拒 → reject */
+  async followUp(
+    text: string,
+    source?: InputOrigin,
+    secrets?: UserSecret[],
+    display?: InlineTokensSidecar
+  ): Promise<void> {
     await carryFromDriver(source, this.sessionId, text)
     const result = await this.durable.followUp(text, {
       ...this.dayPromptCallbacks(source),
       ...(source === undefined ? {} : { source }),
-      ...(secrets === undefined ? {} : { composer: { secrets } })
+      ...(secrets === undefined ? {} : { composer: { secrets } }),
+      ...(display === undefined ? {} : { display: display as unknown as JsonObject })
     })
     if (result.error) throw new Error(admissionErrorText(result))
   }

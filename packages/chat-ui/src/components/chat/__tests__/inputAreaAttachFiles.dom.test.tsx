@@ -11,7 +11,7 @@
  *   AF-6  发送：token 的 payload 带绝对路径、attachedPaths 带路径；普通消息不带
  *   AF-7  胶囊删掉再发：不带路径 —— 没发的文件不授权
  *   AF-8  同名不同目录：两枚胶囊（后一枚带目录消歧）、各指各的文件；同一文件加两次只有一枚
- *   AF-9  运行中（steer / followUp 的通道不带 token）：文字里展开路径、带 attachedPaths；之后手打同样的文字不再算添加
+ *   AF-9  运行中（steer / followUp 与空闲发送同一套 token）：胶囊是 token、带 attachedPaths；之后手打同样的文字不再算添加
  *   AF-10 回答询问在卡片那一行：输入框里添加的文件不进它的 payload
  *   AF-11 斜杠命令：引用展开进参数，attachedPaths 照带
  *   AF-12 回退草稿：胶囊回来，再发照样带路径
@@ -391,14 +391,15 @@ describe('发送', () => {
     expect(chips()).toEqual(['@a.txt', '@a.txt (/y)'])
   })
 
-  it('AF-9 运行中：文字里展开路径、带 attachedPaths；之后手打同样的文字不算添加', async () => {
+  it('AF-9 运行中：胶囊是 token（payload 带路径）、带 attachedPaths；之后手打同样的文字不算添加', async () => {
     await mount(true)
     act(() => applySessionView('s1', V('s1', { run: { state: 'busy' } })))
     await flush()
     await choose([pdf])
     await pressEnter()
     const sent = agent.steer.mock.lastCall![0]
-    expect(sent.text).toBe(`[file: ${PDF_PATH}]`)
+    expect(sent.text).toBe('{{shuvixInlineToken:a0}}')
+    expect(tokensOf(sent).map((t) => t.payload)).toEqual([`[file: ${PDF_PATH}]`])
     expect(sent.attachedPaths).toEqual([PDF_PATH])
     expect(textarea().value).toBe('')
 
