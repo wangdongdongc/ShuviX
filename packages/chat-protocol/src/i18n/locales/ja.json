@@ -458,11 +458,7 @@
     "touchSendHint": "今すぐ送る — 長押しでほかの送り方を選べます"
   },
   "taskList": {
-    "title": "タスクリスト",
-    "done": "完了",
-    "stopped": "停止しました",
-    "expand": "タスクリストを展開",
-    "collapse": "タスクリストを折りたたむ"
+    "title": "タスクリスト"
   },
   "goal": {
     "commandDescription": "ゴールを設定：チェッカーが達成と判定するまで、ShuviX がこの会話の作業を続けます",

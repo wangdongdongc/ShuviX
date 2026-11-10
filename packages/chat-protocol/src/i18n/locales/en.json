@@ -458,11 +458,7 @@
     "touchSendHint": "Send now — hold for more ways to send"
   },
   "taskList": {
-    "title": "Task list",
-    "done": "Done",
-    "stopped": "Stopped",
-    "expand": "Expand the task list",
-    "collapse": "Collapse the task list"
+    "title": "Task list"
   },
   "goal": {
     "commandDescription": "Set a goal: ShuviX keeps this conversation working until a checker judges it met",

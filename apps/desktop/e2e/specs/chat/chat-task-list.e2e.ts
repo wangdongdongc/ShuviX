@@ -10,17 +10,17 @@
  *   TLE-2 没勾的会话：`tools.list` 列出 `mcp:plan`（内置、没有档案声明、不在勾选里），选择器那一行带「实验」标签、
  *         没勾；发一条消息，请求里没有 `mcp__plan__update`
  *   TLE-3 勾上的会话，三轮脚本（列表与第一次真调用同一条消息 → 推进 → 终答）：
- *         a 第二轮挂着时列表在跑、0/3、摘要是第一步、展开、各步状态；列表在对话的滚动区里，不在输入框卡片里；
+ *         a 第二轮挂着时列表在跑、各步状态（列表只有步骤行，没有标题行、不折叠）；列表在对话的滚动区里，不在输入框卡片里；
  *         b 同一时刻卡片里：第一轮的列表调用和 ls 并成一个合并行（摘要里有第一步），第二轮正在流式生成的
  *           那次是一条 generating 的列表行；
  *         c 两次调用的结果是 `Plan shown (3 steps).` / `Plan updated: step 2 of 3 is in progress.` —— 后一句
  *           证明读者接上了（没接上就是「这个请求里还没有列表」）；第三轮的请求里带着这两句；
- *         d 跑完：完成、3/3、默认折叠，展开后每一步都是完成；
+ *         d 跑完：完成，每一步都是完成；
  *         e 卡片里三步（列表、ls、推进）并成一个合并行，展开后两条列表行一条 ls 行
  *   TLE-4 同一会话发新请求、第一轮只推进：新请求的消息一出现旧列表就让位；推进失败成一条红行，结果是
  *         「这个请求里还没有列表」，列表一直不出现
- *   TLE-5 中止（S1）：发过列表、终答流到一半被中止 → 最后一张卡带 `stopped`，列表是「已停止」、计数照实，
- *         展开后进行中那一步是暂停图标
+ *   TLE-5 中止（S1）：发过列表、终答流到一半被中止 → 最后一张卡带 `stopped`，列表是「已停止」、状态照实，
+ *         进行中那一步是暂停图标
  *
  * 选择器全部走 `harness/pages.ts`（`taskListPane` / `toolPickerPane` / `mcpSettingsPane` / `chatPane`）。
  */
@@ -264,9 +264,6 @@ describe('勾上之后', () => {
 
     // TLE-3a 第二轮挂着：第一轮的列表在跑
     await until(async () => (await list.phase()) === 'running', 'task list running')
-    expect(await list.count()).toBe('0/3')
-    expect(await list.summary()).toBe(STEPS[0])
-    expect(await list.expanded()).toBe(true)
     // 列表在对话流末尾（滚动区里），不在输入框卡片里
     expect(await list.where()).toBe('conversation')
     expect((await list.steps()).map((s) => [s.n, s.status, s.text])).toEqual([
@@ -305,13 +302,8 @@ describe('勾上之后', () => {
     expect(third).toContain('Plan shown (3 steps).')
     expect(third).toContain('Plan updated: step 2 of 3 is in progress.')
 
-    // TLE-3d 跑完：以终答收尾 → 完成、全部算完成、默认折叠
+    // TLE-3d 跑完：以终答收尾 → 完成、全部算完成
     await until(async () => (await list.phase()) === 'done', 'task list done')
-    expect(await list.count()).toBe('3/3')
-    expect(await list.expanded()).toBe(false)
-    expect(await list.steps()).toEqual([])
-    await list.toggle()
-    expect(await list.expanded()).toBe(true)
     expect((await list.steps()).map((s) => [s.n, s.status, s.text])).toEqual([
       [1, 'completed', STEPS[0]],
       [2, 'completed', STEPS[1]],
@@ -366,7 +358,7 @@ describe('勾上之后', () => {
     expect(await list.present()).toBe(false)
   }, 120_000)
 
-  it('TLE-5 终答流到一半被中止：最后一张卡带 stopped，列表是「已停止」、计数照实、进行中那一步是暂停', async () => {
+  it('TLE-5 终答流到一半被中止：最后一张卡带 stopped，列表是「已停止」、状态照实、进行中那一步是暂停', async () => {
     provider.reset()
     await events.clear()
     const items = ITEMS.slice(0, 2)
@@ -400,9 +392,6 @@ describe('勾上之后', () => {
     expect(last.metadata?.stopped).toBe(true)
 
     await until(async () => (await list.phase()) === 'stopped', 'task list stopped')
-    expect(await list.count()).toBe('0/2')
-    expect(await list.expanded()).toBe(false)
-    await list.toggle()
     const steps = await list.steps()
     expect(steps.map((s) => [s.n, s.status, s.text])).toEqual([
       [1, 'in_progress', STEPS[0]],

@@ -458,11 +458,7 @@
     "touchSendHint": "立即插入 —— 长按可选别的发法"
   },
   "taskList": {
-    "title": "任务列表",
-    "done": "已完成",
-    "stopped": "已停止",
-    "expand": "展开任务列表",
-    "collapse": "折叠任务列表"
+    "title": "任务列表"
   },
   "goal": {
     "commandDescription": "设定目标：ShuviX 让这段对话一直做下去，直到检查员判定达成",
