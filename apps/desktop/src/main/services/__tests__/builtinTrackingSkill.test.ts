@@ -6,8 +6,9 @@
  * 模型就照着一份过期的说明去调一个不存在的参数 —— 没有别的测试会响（builtinSkillsResources 只管资源在不在场、
  * 不看措辞；builtinBots BB-5 只认几个字面量在不在）。所以这里把技能里那几处**可机读**的东西逐一对上代码：
  *
- *   SK-1 format.md 的范例：frontmatter 就是 `shuvix: track v1`，侧栏取到的标题（trackingTitle）就是范例里的 `#` 标题；
- *        范例文件名是一个合法的跟踪项文件名
+ *   SK-1 format.md 的范例：frontmatter 就是 `shuvix: track v1` + `status: active`（trackingStatusOf 读得到 active），
+ *        收件箱取到的标题（trackingTitle）就是范例里的 `#` 标题；范例文件名是一个合法的跟踪项文件名；
+ *        技能与 format.md 点名的状态值就是 TRACKING_STATUSES（2026-11-10 加了 status）
  *   SK-2 技能点名的工具（session / suggest / write / ls）都在 bot 基座三种语言的工具表里；技能工具 `skill` 也在
  *        （2026-10-28 起档案不再逐个点名技能：带着 `skill`，启用着的 builtin:tracking 就在货架上）
  *   SK-3 技能点名的 suggest 字段（title / detail / message）= suggest 工具 schema 里一条提议的键
@@ -27,7 +28,9 @@ import { SuggestParamsSchema } from '@shuvix/agent-runtime'
 import {
   TRACKING_MARKER_TYPE,
   TRACKING_MARKER_VERSION,
+  TRACKING_STATUSES,
   isTrackingFileName,
+  trackingStatusOf,
   trackingTitle
 } from '@shuvix/chat-protocol/trackingNotes'
 import { dailyFileName, dayOfDailyFile, isDayKey } from '@shuvix/chat-protocol/dailyNotes'
@@ -73,7 +76,7 @@ const TOOLS_NAMED = ['session', 'suggest', 'write', 'ls'] as const
 
 describe('SK —— builtin:tracking 技能与真实契约对齐', () => {
   it.each(LANGS)(
-    'SK-1 %s：format.md 的范例 frontmatter 只有 `shuvix: track v1`，trackingTitle 取到的就是范例的 # 标题；范例文件名合法',
+    'SK-1 %s：format.md 的范例 frontmatter 是 `shuvix: track v1` + `status: active`，trackingTitle 取到的就是范例的 # 标题；范例文件名合法；点名的状态值 = TRACKING_STATUSES',
     (lang) => {
       const text = formatMd(lang)
       const m = /```markdown\n([\s\S]*?)\n```/.exec(text)
@@ -81,7 +84,18 @@ describe('SK —— builtin:tracking 技能与真实契约对齐', () => {
       const example = `${m![1]}\n`
       const marker = `shuvix: ${TRACKING_MARKER_TYPE} v${TRACKING_MARKER_VERSION}`
       expect(marker).toBe('shuvix: track v1')
-      expect(example.split('\n').slice(0, 3)).toEqual(['---', marker, '---'])
+      expect(example.split('\n').slice(0, 4)).toEqual(['---', marker, 'status: active', '---'])
+      expect(trackingStatusOf(example)).toBe('active')
+      for (const doc of [text, skillMd(lang)]) {
+        const named = new Set(
+          [...doc.matchAll(/`(\w+)`/g)]
+            .map((x) => x[1])
+            .filter((w) =>
+              ['active', 'waiting', 'archived', 'done', 'closed', 'paused'].includes(w)
+            )
+        )
+        expect([...named].sort(), lang).toEqual([...TRACKING_STATUSES].sort())
+      }
 
       const heading = /^# (.+)$/m.exec(example)
       expect(heading, `${lang}: 范例里没有 # 标题`).not.toBeNull()

@@ -980,6 +980,7 @@ export { validateShuvixMdText } from './shuvixMdValidate'
 // 契约 md 的写后处理（文件工具末尾：校验回执 + 缺省字段盖章）
 export {
   reviewShuvixMdWrite,
+  upsertFrontmatterMappings,
   type ShuvixMdWriteContext,
   type ShuvixMdWriteOutcome
 } from './shuvixMdWrite'

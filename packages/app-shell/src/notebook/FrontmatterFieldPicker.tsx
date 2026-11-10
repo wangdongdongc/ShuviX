@@ -23,7 +23,12 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 import { ModelSelect, useModelCatalogStore, getChatApi } from '@shuvix/chat-ui'
 import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
-import { AGENT_MODEL_KEY, AGENT_THINKING_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import {
+  AGENT_MODEL_KEY,
+  AGENT_THINKING_KEY,
+  TRACK_STATUS_KEY
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import { TRACKING_MARKER_TYPE, TRACKING_STATUSES } from '@shuvix/chat-protocol/trackingNotes'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import {
   KNOWLEDGE_MARKER_TYPE,
@@ -307,6 +312,13 @@ const OKF_STATUS_DOT: Record<string, string> = {
   deprecated: 'bg-text-tertiary/50'
 }
 
+/** 跟踪项状态的圆点：在跟 = 强调色，等待中 = 琥珀（同收件箱行上的标签），已归档 = 灰 */
+const TRACK_STATUS_DOT: Record<string, string> = {
+  active: 'bg-accent',
+  waiting: 'bg-amber-400',
+  archived: 'bg-text-tertiary/50'
+}
+
 /**
  * 契约封闭枚举的下拉（原生 select + 自绘箭头，样式对齐卡片输入框）。
  * 空值 = 删除该键（同其它控件的 onChange(null) 约定，读者对缺失自有缺省）；
@@ -396,6 +408,17 @@ export function FrontmatterFieldPicker({
           onChange={onChange}
           readOnly={readOnly}
           sourced={sourced}
+        />
+      )
+    }
+    if (markerType === TRACKING_MARKER_TYPE && fieldKey === TRACK_STATUS_KEY) {
+      return (
+        <EnumField
+          options={TRACKING_STATUSES}
+          dotByValue={TRACK_STATUS_DOT}
+          value={value}
+          onChange={onChange}
+          readOnly={readOnly}
         />
       )
     }

@@ -127,6 +127,7 @@
       "okfDescription": "いつ読むか",
       "okfTags": "タグ",
       "okfStatus": "ステータス",
+      "trackStatus": "ステータス",
       "okfStaleAfter": "この日付以降は要再確認",
       "okfResource": "紐づけ先",
       "okfSources": "ソース",
@@ -2143,6 +2144,22 @@
     "noWaiting": "回答待ちの質問はありません",
     "keyPick": "行を選ぶ",
     "keyNav": "次 / 前",
-    "sent": "送信しました · {{title}} が再開しました"
+    "sent": "送信しました · {{title}} が再開しました",
+    "trackingSection": "追跡中",
+    "trackingHint": "自分のリスト。受信トレイの件数には含まれません",
+    "trackingArchive": "アーカイブ",
+    "trackingRestore": "戻す",
+    "trackingMarkWaiting": "待機中にする",
+    "trackingMarkActive": "待機を解除",
+    "trackingWaiting": "待機中",
+    "trackingConclusion": "結論：{{text}}",
+    "trackingArchivedCount_one": "アーカイブ済み {{count}}",
+    "trackingArchivedCount_other": "アーカイブ済み {{count}}",
+    "trackingShowMore_one": "さらに {{count}} 件表示",
+    "trackingShowMore_other": "さらに {{count}} 件表示",
+    "trackingArchived": "「{{title}}」をアーカイブしました",
+    "undo": "元に戻す",
+    "summaryTrackingPart_one": "追跡中 {{count}} 件",
+    "summaryTrackingPart_other": "追跡中 {{count}} 件"
   }
 }

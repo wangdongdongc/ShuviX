@@ -5,15 +5,22 @@
  *   DT-E2 设置 → 触发源：不再列订阅者（触发源与 bot 解绑，2026-10-24）—— 日报 bot 的文件还在、bot.list 认它，
  *         但页里既没有订阅者列表，也没有它的显示名与 when；全新实例上它没命中过，触发日志是空态
  *   DT-E3 删掉 daily.md、停机、同一个 HOME 再起：不补写，记录不变
- *   DT-E4 侧栏 Library 的「跟踪项」分组：带实验标签、缺省折叠；目录还没有时展开是空态，展开也不建目录
- *   DT-E5 目录里放几样东西 → 组头菜单「刷新」：只列可见的 .md 文件（新的在前），行字是一级标题 / 文件名
- *   DT-E6 点一行 → 那份文件的笔记本会话（隐藏项目 `__tracking__`）：不进项目列表、侧栏会话列表、日历；再点复用同一条；
- *         属性卡是「Tracked item」，对象 id 是卡上不渲染的已知键
- *   DT-E7 在笔记本里改一级标题 → 自动保存 → 行字跟着变（`tracking.changed`，不用手动刷新）
+ *   DT-E4 跟踪项在收件箱页（2026-11-10 起桌面侧栏没有「跟踪项」分组了）：目录还没有时收件箱里没有「跟踪中」一节，
+ *         打开收件箱也不建目录
+ *   DT-E5 目录里放几样东西 → 节头菜单「刷新」：只列可见的 .md 文件（新的在前，已归档的折在「已归档 N」里），行字是一级标题 /
+ *         文件名，`status: waiting` 带「等待中」标签，下面一行是最后一条进展（链接只留文字）；概况里有「N 项在跟踪」，
+ *         侧栏收件箱一行的数字不算跟踪项
+ *   DT-E6 点一行 → 那份文件的笔记本会话（隐藏项目 `__tracking__`），收件箱随之关上：不进项目列表、侧栏会话列表、日历；
+ *         再点复用同一条；属性卡是「Tracked item」，状态是卡上的一行，对象 id 是卡上不渲染的已知键
+ *   DT-E7 在笔记本里改一级标题 → 自动保存 → 广播 `tracking.changed`，收件箱里的行字跟着变
  *   DT-E8 `tracking.openNote` 只认目录里真实存在的可见 .md：越界 / 非 md / 隐藏 / 不存在 / 子目录都拒，不建会话
- *   DT-E9 行菜单删掉一份正开着、改过且从没提交过的跟踪项：菜单 = [reveal, copy-path, delete]，确认框写着它的标题；
- *         确认后文件没了、跨过自动保存窗口也不被写回，它的笔记本会话删掉、主区离开它，行消失；
+ *   DT-E9 右键菜单删掉一份改过且从没提交过的跟踪项：菜单 = [archive, waiting, reveal, copy-path, delete]，确认框写着它的标题；
+ *         确认后文件没了、跨过自动保存窗口也不被写回，它的笔记本会话删掉，行消失；
  *         目录成了 git 仓库，历史 = [Deleted …, Before deleting …]，父提交里是删前最后那一版
+ *   DT-E10 状态：点圆圈归档 → 文件里 `status: archived`、行进「已归档 N」、底部「已归档「…」· 撤销」；撤销 → 回到原来的
+ *         状态；右键「不再等待」/「标为等待中」改 `status`（没有这一行就补进 frontmatter，别的行不动）；「恢复」把已归档的
+ *         改回 active；每一次都是一个宿主提交 `track: <status> <文件>`；收件箱数字始终不算跟踪项；`tracking.setStatus`
+ *         只认目录里的跟踪项文件与三个状态值
  *
  * 一个 HOME、两次启动（DT-E3 起换成第二个实例）。`launchApp({ builtinBots: true })`：不放「已经写过」的记录，让产品自己写。
  * 「打开文件夹」不点（它开的是 OS 文件管理器）。
@@ -39,8 +46,8 @@ import {
   fmCardRowKeys,
   notebookEditorPane,
   registryNotePane,
+  inboxTrackingPane,
   sidebarPane,
-  trackingPane,
   triggerSettingsPane
 } from '../../harness/pages'
 
@@ -57,9 +64,8 @@ const ALPHA_ID = '0192f0a0-7c1e-7a10-8b2c-3d4e5f6a7b8c'
 const CONTROL_TITLE = 'dt6-visible-session'
 
 const LOCALES = [en, zh, ja]
-const GROUP_LABELS = LOCALES.map((l) => l.sidebar.trackingGroup)
+const LOCALE = { en, zh, ja }
 const LOG_EMPTY = LOCALES.map((l) => l.settings.triggerLogEmpty)
-const EMPTY_HINTS = LOCALES.map((l) => l.sidebar.trackingEmpty)
 
 let app: E2EApp
 let home = ''
@@ -153,21 +159,21 @@ describe('随应用提供的日报 bot', () => {
   }, 120_000)
 })
 
-describe('侧栏「跟踪项」分组', () => {
-  it('DT-E4 带实验标签、缺省折叠；目录还没有时展开是空态，展开也不建目录', async () => {
-    const tracking = trackingPane(app.main)
-    await until(async () => (await tracking.label()) !== '', 'tracking group header')
-    expect(GROUP_LABELS).toContain(await tracking.label())
-    expect(await tracking.experimental()).toBe(true)
-    expect(await tracking.expanded()).toBe(false)
-
-    await tracking.expand()
-    expect(EMPTY_HINTS).toContain(await tracking.emptyHint())
-    expect(await tracking.rows()).toEqual([])
+describe('收件箱的「跟踪中」一节', () => {
+  it('DT-E4 桌面侧栏没有「跟踪项」分组；目录还没有时收件箱里没有这一节，打开收件箱也不建目录', async () => {
+    const tracking = inboxTrackingPane(app.main)
+    await until(
+      () => app.main.eval<boolean>(`!!document.querySelector('[data-inbox-row]')`),
+      'sidebar inbox row'
+    )
+    expect(await tracking.sidebarGroupPresent()).toBe(false)
+    await tracking.open()
+    expect(await tracking.present()).toBe(false)
+    expect(await tracking.inboxCount()).toBe(0)
     expect(existsSync(trackingDir())).toBe(false)
   })
 
-  it('DT-E5 目录里放几样东西 → 组头菜单「刷新」：只列可见的 .md 文件（新的在前），行字是一级标题 / 文件名', async () => {
+  it('DT-E5 目录里放几样东西 → 刷新：只列可见的 .md（新的在前，已归档的折着），等待中带标签，下面一行是最后一条进展；收件箱数字不算它们', async () => {
     const dir = trackingDir()
     mkdirSync(dir, { recursive: true })
     // 一级标题是最后一行、文件不以换行结尾：DT-E7 在行尾打字改的就是它
@@ -176,29 +182,69 @@ describe('侧栏「跟踪项」分组', () => {
       `---\nshuvix: track v1\nshuvix-id: ${ALPHA_ID}\n---\n\n# Alpha bug`
     )
     writeFileSync(join(dir, 'b.md'), 'Just a note without a heading.\n')
+    writeFileSync(
+      join(dir, 'w.md'),
+      '---\nshuvix: track v1\nstatus: waiting\n---\n\n# Waiting on Li\n\n## Progress\n\n' +
+        '- 11-07: asked Li in [review](shuvix://session/x)\n' +
+        '- 11-08: Li will answer by **Wednesday**\n'
+    )
+    writeFileSync(
+      join(dir, 'z.md'),
+      '---\nshuvix: track v1\nstatus: archived\n---\n\n# Release notes\n\nNotes went into the tag.\n'
+    )
     writeFileSync(join(dir, '.h.md'), '# Hidden\n')
     writeFileSync(join(dir, 'n.txt'), '# Not markdown\n')
     mkdirSync(join(dir, 'x.md'))
-    // 修改时间拉开：b 比 a 新（列表按它倒序）
+    // 修改时间拉开：w 最新，然后 b、a；z（已归档）不在主列表里
     const now = Date.now() / 1000
     utimesSync(join(dir, 'a.md'), now - 120, now - 120)
     utimesSync(join(dir, 'b.md'), now - 10, now - 10)
+    utimesSync(join(dir, 'w.md'), now - 5, now - 5)
+    utimesSync(join(dir, 'z.md'), now - 300, now - 300)
 
-    const tracking = trackingPane(app.main)
-    await tracking.expand()
-    await tracking.refresh()
+    const tracking = inboxTrackingPane(app.main)
+    await tracking.open()
+    // 收件箱开着时它没扫到这些（磁盘外写入不广播）：这一节还不在，节头菜单够不着 —— 走窗口聚焦那条重扫
+    await tracking.rescan()
     const rows = await until(async () => {
       const r = await tracking.rows()
-      return r.length > 0 ? r : null
-    }, 'tracking rows after refresh')
+      return r.length >= 3 ? r : null
+    }, 'tracking rows')
     expect(rows).toEqual([
-      { fileName: 'b.md', title: 'b' },
-      { fileName: 'a.md', title: 'Alpha bug' }
+      {
+        fileName: 'w.md',
+        title: 'Waiting on Li',
+        status: 'waiting',
+        latest: '11-08: Li will answer by Wednesday',
+        waitingTag: true
+      },
+      { fileName: 'b.md', title: 'b', status: 'active', latest: '', waitingTag: false },
+      { fileName: 'a.md', title: 'Alpha bug', status: 'active', latest: '', waitingTag: false }
     ])
-    expect(await tracking.emptyHint()).toBeNull()
+    const strings = LOCALE[language].inbox
+    expect(await tracking.archivedToggle()).toBe(
+      strings.trackingArchivedCount_one.replace('{{count}}', '1')
+    )
+    await tracking.expandArchived()
+    const archived = (await tracking.rows()).filter((r) => r.status === 'archived')
+    expect(archived).toEqual([
+      {
+        fileName: 'z.md',
+        title: 'Release notes',
+        status: 'archived',
+        latest: '· ' + strings.trackingConclusion.replace('{{text}}', 'Notes went into the tag.'),
+        waitingTag: false
+      }
+    ])
+    // 概况数在跟的（不含已归档），侧栏收件箱一行的数字不算跟踪项
+    expect(await tracking.summary()).toContain(
+      strings.summaryTrackingPart_other.replace('{{count}}', '3')
+    )
+    expect(await tracking.inboxCount()).toBe(0)
+    expect(await tracking.menuIds()).toEqual(['open-folder', 'refresh'])
   })
 
-  it('DT-E6 点一行 → __tracking__ 下那份文件的笔记本会话：不进项目列表 / 侧栏会话列表 / 日历；再点复用同一条；卡片是 Tracked item', async () => {
+  it('DT-E6 点一行 → __tracking__ 下那份文件的笔记本会话（收件箱关上）：不进项目列表 / 侧栏会话列表 / 日历；再点复用同一条；卡片是 Tracked item，状态是一行', async () => {
     // 对照组：一条普通会话 —— 侧栏与日历都该有它，免得「列表里没有」的否定断言空转
     const controlId = await app.main.eval<string>(
       `window.api.session.create({ title: ${JSON.stringify(CONTROL_TITLE)} }).then((s) => s.id)`
@@ -209,10 +255,11 @@ describe('侧栏「跟踪项」分组', () => {
       'control session listed in the sidebar'
     )
 
-    const tracking = trackingPane(app.main)
-    await tracking.expand()
-    await tracking.selectRow('a.md')
-    expect(await tracking.activeRow()).toBe('a.md')
+    const tracking = inboxTrackingPane(app.main)
+    await tracking.open()
+    await tracking.openRow('a.md')
+    const note = registryNotePane(app.main)
+    await note.waitBody('Alpha bug')
 
     const notes = await registryNoteSessions(app.main, TRACKING_PROJECT)
     expect(notes).toHaveLength(1)
@@ -238,18 +285,18 @@ describe('侧栏「跟踪项」分组', () => {
     expect(onDay).toContain(controlId)
     expect(onDay).not.toContain(alphaSessionId)
 
-    // 属性卡：track 描述符的徽标（带标记里的版本，同 bot 卡的 'ShuviX bot · v2'）；对象 id 是已知键 ——
-    // 卡上不渲染，也不落通用行
-    const note = registryNotePane(app.main)
-    await note.waitBody('Alpha bug')
+    // 属性卡：track 描述符的徽标（带标记里的版本，同 bot 卡的 'ShuviX bot · v2'）；状态是描述符里的一行（文件没写也画），
+    // 对象 id 是已知键 —— 卡上不渲染，也不落通用行
     await note.waitCard()
     expect(await note.cardBadge()).toBe('Tracked item · v1')
-    expect((await fmCardRowKeys(app.main)).map((r) => r.key)).not.toContain('shuvix-id')
+    expect(await fmCardRowKeys(app.main)).toEqual([{ key: 'status', generic: false }])
 
-    // 再点：别的行、再回来、点已是活动行的那一行 —— 都是同一条会话
-    await tracking.selectRow('b.md')
-    await tracking.selectRow('a.md')
-    await tracking.selectRow('a.md')
+    // 再点：别的行、再回来、再点一次同一行 —— 都是同一条会话
+    for (const fileName of ['b.md', 'a.md', 'a.md']) {
+      await tracking.open()
+      await tracking.openRow(fileName)
+    }
+    await note.waitBody('Alpha bug')
     const again = await registryNoteSessions(app.main, TRACKING_PROJECT)
     expect(again.filter((n) => n.notebookPath === 'a.md').map((n) => n.id)).toEqual([
       alphaSessionId
@@ -257,9 +304,10 @@ describe('侧栏「跟踪项」分组', () => {
     expect(again).toHaveLength(2)
   })
 
-  it('DT-E7 在笔记本里改一级标题 → 自动保存 → 行字跟着变（tracking.changed，不用手动刷新）', async () => {
-    const tracking = trackingPane(app.main)
-    await tracking.selectRow('a.md')
+  it('DT-E7 在笔记本里改一级标题 → 自动保存 → tracking.changed，收件箱里的行字跟着变', async () => {
+    const tracking = inboxTrackingPane(app.main)
+    await tracking.open()
+    await tracking.openRow('a.md')
     const note = registryNotePane(app.main)
     await note.waitBody('Alpha bug')
 
@@ -272,7 +320,9 @@ describe('侧栏「跟踪项」分组', () => {
     await notebookEditorPane(app.main).typeAtEnd(' renamed')
     const written = await waitFileWritten(file, before)
     expect(written).toMatch(/^# Alpha bug renamed$/m)
+    await until(async () => (await events.count('tracking.changed')) > 0, 'tracking.changed')
 
+    await tracking.open()
     await until(
       async () =>
         (await tracking.rows()).some(
@@ -280,7 +330,6 @@ describe('侧栏「跟踪项」分组', () => {
         ),
       'tracking row title follows the heading'
     )
-    expect(await events.count('tracking.changed')).toBeGreaterThan(0)
   })
 
   it('DT-E8 tracking.openNote 只认目录里真实存在的可见 .md：越界 / 非 md / 隐藏 / 不存在 / 子目录都拒，不建会话', async () => {
@@ -304,21 +353,21 @@ describe('侧栏「跟踪项」分组', () => {
     expect((await listSessionIds(app.main)).length).toBe(before)
   })
 
-  it('DT-E9 行菜单删掉一份开着、改过没提交过的跟踪项：文件没了且不被写回，会话删掉、主区离开它，行消失；删掉的那一版在 git 历史里', async () => {
+  it('DT-E9 右键菜单删掉一份改过没提交过的跟踪项：文件没了且不被写回，会话删掉，行消失；删掉的那一版在 git 历史里', async () => {
     const dir = trackingDir()
     const file = join(dir, 'c.md')
     writeFileSync(file, '---\nshuvix: track v1\n---\n\n# Gamma to delete')
-    // bot 从没跑过：目录还不是仓库，下面的改动因此从没被提交过
+    // 从没提交过：目录还不是仓库，下面的改动因此从没被提交过
     expect(existsSync(join(dir, '.git'))).toBe(false)
 
-    const tracking = trackingPane(app.main)
-    await tracking.expand()
+    const tracking = inboxTrackingPane(app.main)
+    await tracking.open()
     await tracking.refresh()
     await until(
       async () => (await tracking.rows()).some((r) => r.fileName === 'c.md'),
       'c.md row listed'
     )
-    await tracking.selectRow('c.md')
+    await tracking.openRow('c.md')
     const note = registryNotePane(app.main)
     await note.waitBody('Gamma to delete')
     const session = (await registryNoteSessions(app.main, TRACKING_PROJECT)).find(
@@ -331,7 +380,14 @@ describe('侧栏「跟踪项」分组', () => {
     await notebookEditorPane(app.main).typeAtEnd(' edited')
     expect(await waitFileWritten(file, before)).toMatch(/^# Gamma to delete edited$/m)
 
-    expect(await tracking.rowMenuIds('c.md')).toEqual(['reveal', 'copy-path', 'delete'])
+    await tracking.open()
+    expect(await tracking.rowMenuIds('c.md')).toEqual([
+      'archive',
+      'waiting',
+      'reveal',
+      'copy-path',
+      'delete'
+    ])
     await tracking.pickRowMenu('c.md', 'delete')
     const confirm = confirmPane(app.main)
     await confirm.waitOpen()
@@ -347,8 +403,6 @@ describe('侧栏「跟踪项」分组', () => {
       async () => !(await tracking.rows()).some((r) => r.fileName === 'c.md'),
       'c.md row gone'
     )
-    await until(async () => (await tracking.activeRow()) === null, 'no active tracking row')
-    expect(await note.bodyText()).not.toContain('Gamma to delete')
     const remaining = await registryNoteSessions(app.main, TRACKING_PROJECT)
     expect(remaining.map((n) => n.id)).not.toContain(session!.id)
     expect(remaining.map((n) => n.notebookPath)).not.toContain('c.md')
@@ -357,7 +411,7 @@ describe('侧栏「跟踪项」分组', () => {
     expect(existsSync(file)).toBe(false)
     // 别的跟踪项还在
     expect((await tracking.rows()).map((r) => r.fileName)).toEqual(
-      expect.arrayContaining(['a.md', 'b.md'])
+      expect.arrayContaining(['a.md', 'b.md', 'w.md'])
     )
 
     const gitOut = (...args: string[]): string =>
@@ -370,5 +424,112 @@ describe('侧栏「跟踪项」分组', () => {
     const headFiles = gitOut('ls-tree', '--name-only', 'HEAD').trim().split('\n')
     expect(headFiles).not.toContain('c.md')
     expect(headFiles).toEqual(expect.arrayContaining(['a.md', 'b.md']))
+  })
+
+  it('DT-E10 归档 / 撤销 / 等待中 / 恢复都写进文件的 status 一行，每次一个宿主提交；收件箱数字不算跟踪项', async () => {
+    const dir = trackingDir()
+    const read = (name: string): string => readFileSync(join(dir, name), 'utf8')
+    const statusLine = (name: string): string | null =>
+      /^status:[ \t]*(.*)$/m.exec(read(name))?.[1]?.trim() ?? null
+    const strings = LOCALE[language].inbox
+    const tracking = inboxTrackingPane(app.main)
+    await tracking.open()
+    await until(async () => (await tracking.rows()).some((r) => r.fileName === 'w.md'), 'w.md row')
+
+    // 圆圈 = 归档：文件里改成 archived，行进「已归档」，底部一句带撤销
+    await tracking.archive('w.md')
+    expect(await until(() => tracking.archivedToast(), 'archived toast')).toBe(
+      strings.trackingArchived.replace('{{title}}', 'Waiting on Li')
+    )
+    await until(() => statusLine('w.md') === 'archived', 'w.md archived on disk')
+    // 主列表里没有它了；已归档的行要展开「已归档 N」才画（重开收件箱后它是折着的）
+    await until(
+      async () => !(await tracking.rows()).some((r) => r.fileName === 'w.md'),
+      'w.md left the main list'
+    )
+    expect(await tracking.archivedToggle()).toBe(
+      strings.trackingArchivedCount_other.replace('{{count}}', '2')
+    )
+    await tracking.expandArchived()
+    await until(
+      async () =>
+        (await tracking.rows()).some((r) => r.fileName === 'w.md' && r.status === 'archived'),
+      'w.md row archived'
+    )
+
+    // 撤销：回到原来的状态（waiting，不是 active）
+    await tracking.undo()
+    await until(() => statusLine('w.md') === 'waiting', 'w.md back to waiting on disk')
+    await until(
+      async () =>
+        (await tracking.rows()).some(
+          (r) => r.fileName === 'w.md' && r.status === 'waiting' && r.waitingTag
+        ),
+      'w.md row waiting again'
+    )
+
+    // 右键「不再等待」：active
+    await tracking.pickRowMenu('w.md', 'active')
+    await until(() => statusLine('w.md') === 'active', 'w.md active on disk')
+
+    // 右键「标为等待中」：a.md 原来没有 status 行 —— 补进 frontmatter，对象 id 与正文不动
+    const aBefore = read('a.md')
+    await tracking.pickRowMenu('a.md', 'waiting')
+    await until(() => statusLine('a.md') === 'waiting', 'a.md waiting on disk')
+    const aAfter = read('a.md')
+    expect(aAfter).toContain(`shuvix-id: ${ALPHA_ID}`)
+    expect(aAfter.split('---').slice(2).join('---')).toBe(aBefore.split('---').slice(2).join('---'))
+    await until(
+      async () => (await tracking.rows()).some((r) => r.fileName === 'a.md' && r.waitingTag),
+      'a.md row carries the waiting tag'
+    )
+
+    // 「恢复」：已归档的 z.md 回到 active，回到主列表
+    await tracking.restore('z.md')
+    await until(() => statusLine('z.md') === 'active', 'z.md restored on disk')
+    await until(
+      async () =>
+        (await tracking.rows()).some((r) => r.fileName === 'z.md' && r.status === 'active'),
+      'z.md row back in the list'
+    )
+
+    expect(await tracking.inboxCount()).toBe(0)
+
+    // 提交在写盘之后（宿主排队一次一个）：等最后一次也进了历史
+    const subjects = (): string[] =>
+      execFileSync('git', ['-C', dir, 'log', '--format=%s'], { encoding: 'utf8' })
+        .trim()
+        .split('\n')
+    await until(() => subjects()[0] === 'track: active z.md', 'last status commit')
+    expect(subjects().slice(0, 5)).toEqual([
+      'track: active z.md',
+      'track: waiting a.md',
+      'track: active w.md',
+      'track: waiting w.md',
+      'track: archived w.md'
+    ])
+
+    // 写入口只认目录里的跟踪项文件与三个状态值
+    const outcomes = await app.main.eval<Record<string, string>>(
+      `(async () => {
+        const out = {}
+        const tries = [
+          ['../bots/x.md', 'archived'],
+          ['missing.md', 'archived'],
+          ['b.md', 'done']
+        ]
+        for (const [fileName, status] of tries) {
+          out[fileName + ' ' + status] = await window.api.tracking.setStatus({ fileName, status }).then(
+            () => 'resolved',
+            (e) => 'rejected: ' + String(e && e.message ? e.message : e)
+          )
+        }
+        return out
+      })()`
+    )
+    expect(outcomes['../bots/x.md archived']).toMatch(/^rejected: .*Not a tracking file/)
+    expect(outcomes['missing.md archived']).toMatch(/^rejected: .*Tracking file not found/)
+    expect(outcomes['b.md done']).toMatch(/^rejected: .*Not a tracking status/)
+    expect(read('b.md')).toBe('Just a note without a heading.\n')
   })
 })

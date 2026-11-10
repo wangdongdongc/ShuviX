@@ -107,11 +107,14 @@ describe('bot 描述符 ↔ shuvix-bot-on（触发绑定，实验）', () => {
 })
 
 describe('track 描述符（跟踪项，实验）', () => {
-  it('SMD-5 徽章 Tracked item；字段只有对象 id 一行（hidden）—— 标题与进展都在正文里', () => {
+  it('SMD-5 徽章 Tracked item；字段是状态下拉（status）+ 对象 id（hidden）—— 标题与进展都在正文里', () => {
     const d = descriptorForType('track')
     expect(d).toBeTruthy()
     expect(d!.badge).toBe('Tracked item')
-    expect(d!.fields.map((f) => [f.key, f.kind])).toEqual([[SHUVIX_ID_KEY, 'hidden']])
+    expect(d!.fields.map((f) => [f.key, f.kind])).toEqual([
+      ['status', 'select'],
+      [SHUVIX_ID_KEY, 'hidden']
+    ])
   })
 })
 

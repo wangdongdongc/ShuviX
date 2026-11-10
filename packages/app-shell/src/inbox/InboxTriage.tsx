@@ -55,6 +55,8 @@ export interface InboxTriageProps {
   renderRunningRow: (item: InboxItem) => React.JSX.Element
   /** 「新回复」那一节的行（与列表同一种） */
   renderUnreadRow: (item: UnreadInboxItem) => React.JSX.Element
+  /** 「跟踪中」那一节（宿主给了跟踪项时），摆在新回复之后、运行中之前 */
+  trackingSection?: React.ReactNode
   /** 一张卡答出去了（收件箱页据此弹一句「已发送」） */
   onSent: (sessionTitle: string) => void
 }
@@ -81,6 +83,7 @@ export function InboxTriage({
   locationOf,
   renderRunningRow,
   renderUnreadRow,
+  trackingSection,
   onSent
 }: InboxTriageProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -311,6 +314,8 @@ export function InboxTriage({
           <div className="flex flex-col">{unread.map(renderUnreadRow)}</div>
         </section>
       )}
+
+      {trackingSection}
 
       {running.length > 0 && (
         <>

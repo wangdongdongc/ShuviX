@@ -10,7 +10,7 @@ import type {
 } from '@shuvix/chat-protocol/systemPromptStatus'
 import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
 import type { TriggerLogEntry, TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
-import type { TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
+import type { TrackingItem, TrackingStatus } from '@shuvix/chat-protocol/trackingNotes'
 import type { ArtifactRefContent, SessionArtifact } from '@shuvix/chat-protocol/artifacts'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
@@ -665,7 +665,7 @@ declare global {
       openBuiltinNote: (params: { name: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
     }
-    /** 跟踪项（实验）：侧栏 Library 的「跟踪项」分组 */
+    /** 跟踪项（实验）：收件箱的「跟踪中」一节；手机资料库的「跟踪项」分组 */
     tracking: {
       list: () => Promise<TrackingItem[]>
       openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
@@ -674,6 +674,11 @@ declare global {
       deleteItem: (params: {
         fileName: string
       }) => Promise<{ deleted: boolean; sessionId: string | null }>
+      /** 改状态（只改 frontmatter 的 `status` 一行，宿主提交）；本来就是这个状态时 `changed: false` */
+      setStatus: (params: {
+        fileName: string
+        status: TrackingStatus
+      }) => Promise<{ changed: boolean }>
     }
     /** 触发源（实验）：设置 → 触发源页 */
     trigger: {

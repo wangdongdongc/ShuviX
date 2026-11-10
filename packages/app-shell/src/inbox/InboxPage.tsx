@@ -7,9 +7,12 @@
  *
  * 两种看法（右上角切换，按浏览器记住，缺省逐张处理）：「逐张处理」（InboxTriage，B3）把在等你回答的询问一次摆一张、
  * 就地答完；「列表」就是上面这一页。宿主给不出询问本身（没有 `agent.pendingInputs`，Chrome 侧栏）时只有列表。
+ *
+ * 宿主给了跟踪项（`tracking`，桌面）时多一节「跟踪中」（InboxTracking.tsx，T1）：在新回复之后、运行中之前，不计入
+ * 侧栏那一行的数字。
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronRight, Inbox, MessageCircleQuestion } from 'lucide-react'
 import { boundBotOf, workProjectOf } from '@shuvix/chat-protocol/botSession'
@@ -27,6 +30,8 @@ import { InboxUnreadRow, useReplyExcerpts } from './InboxUnreadRow'
 import { InboxTriage } from './InboxTriage'
 import { SessionKindIcon } from './InboxItemIcon'
 import { usePendingInputs } from './usePendingInputs'
+import { InboxTrackingSection, useTrackingItems, type InboxTrackingAdapter } from './InboxTracking'
+import type { TrackingStatus } from '@shuvix/chat-protocol/trackingNotes'
 
 type Kind = 'waiting' | 'running'
 type Mode = 'triage' | 'list'
@@ -48,9 +53,24 @@ function writeMode(mode: Mode): void {
   }
 }
 
-export function InboxPage(): React.JSX.Element {
+export interface InboxPageProps {
+  /** 跟踪项（桌面）；不给就没有「跟踪中」一节 */
+  tracking?: InboxTrackingAdapter
+}
+
+/** 底部那一句：答出去了（「已发送」），或者归档了一项（带「撤销」） */
+type Toast =
+  | { n: number; kind: 'sent'; title: string }
+  | { n: number; kind: 'archived'; title: string; undo: () => void }
+
+export function InboxPage({ tracking }: InboxPageProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { waiting, unread, running } = useInboxSections()
+  const {
+    items: trackingItems,
+    patch: patchTracking,
+    rescan: rescanTracking
+  } = useTrackingItems(tracking)
   const sessions = useChatStore((s) => s.sessions)
   const select = useChatStore((s) => s.setActiveSessionId)
   const { projects, archivedProjects } = useProjects()
@@ -59,7 +79,8 @@ export function InboxPage(): React.JSX.Element {
   const [mode, setMode] = useState<Mode>(readMode)
   const triage = canTriage && mode === 'triage'
   const pending = usePendingInputs(triage)
-  const [toast, setToast] = useState<{ n: number; title: string } | null>(null)
+  const [toast, setToast] = useState<Toast | null>(null)
+  const toastSeq = useRef(0)
   const excerpts = useReplyExcerpts(unread)
   // 「新回复」的时间标签分今天 / 更早：打开收件箱那一刻的「今天」就够用
   const [now] = useState(() => Date.now())
@@ -68,12 +89,29 @@ export function InboxPage(): React.JSX.Element {
     ? (sessionId: string): void => void sessionApi.markRead?.(sessionId)
     : undefined
 
-  // 「已发送」那一句停 2.6 秒
+  // 「已发送」那一句停 2.6 秒；「已归档 · 撤销」多停一会儿，给人找到撤销的时间
   useEffect(() => {
     if (!toast) return
-    const timer = setTimeout(() => setToast(null), 2600)
+    const timer = setTimeout(() => setToast(null), toast.kind === 'archived' ? 6000 : 2600)
     return () => clearTimeout(timer)
   }, [toast])
+
+  const onTrackingArchived = (
+    item: { fileName: string; title: string },
+    previous: TrackingStatus
+  ): void => {
+    if (!tracking) return
+    setToast({
+      n: ++toastSeq.current,
+      kind: 'archived',
+      title: item.title,
+      undo: () => {
+        setToast(null)
+        patchTracking(item.fileName, previous)
+        void tracking.setStatus(item.fileName, previous).catch(rescanTracking)
+      }
+    })
+  }
 
   const chooseMode = (next: Mode): void => {
     setMode(next)
@@ -123,9 +161,13 @@ export function InboxPage(): React.JSX.Element {
   }
 
   const total = waiting.length + unread.length + running.length
+  const trackedCount = trackingItems?.filter((x) => x.status !== 'archived').length ?? 0
+  // 页面有没有东西可摆：收件箱的三节，或者跟踪项（连已归档的也算 —— 「已归档 N」是能点开的）
+  const hasContent = total > 0 || (!!tracking && (trackingItems?.length ?? 0) > 0)
   const summary = [
     waiting.length > 0 ? t('inbox.summaryWaitingPart', { count: waiting.length }) : null,
     unread.length > 0 ? t('inbox.summaryUnreadPart', { count: unread.length }) : null,
+    trackedCount > 0 ? t('inbox.summaryTrackingPart', { count: trackedCount }) : null,
     running.length > 0 ? t('inbox.summaryRunningPart', { count: running.length }) : null
   ]
     .filter(Boolean)
@@ -152,6 +194,19 @@ export function InboxPage(): React.JSX.Element {
         <div className="flex flex-col">{unread.map(renderUnreadRow)}</div>
       </section>
     )
+
+  const trackingSection = (variant: 'list' | 'triage'): React.JSX.Element | null =>
+    tracking && trackingItems ? (
+      <InboxTrackingSection
+        adapter={tracking}
+        items={trackingItems}
+        now={now}
+        variant={variant}
+        patch={patchTracking}
+        rescan={rescanTracking}
+        onArchived={onTrackingArchived}
+      />
+    ) : null
 
   const renderRow = (item: InboxItem, kind: Kind): React.JSX.Element => {
     const { session } = item
@@ -244,7 +299,7 @@ export function InboxPage(): React.JSX.Element {
               </span>
             )}
           </div>
-          {total === 0 ? (
+          {!hasContent ? (
             <div data-inbox-empty="" className="mt-28 flex flex-col items-center gap-2 text-center">
               <Inbox
                 size={36}
@@ -262,7 +317,7 @@ export function InboxPage(): React.JSX.Element {
               <p className="mt-1.5 pl-[34px] text-[13px] text-text-secondary" data-inbox-summary="">
                 {summary}
               </p>
-              {triage ? (
+              {triage && total > 0 ? (
                 pending && (
                   <InboxTriage
                     waiting={waiting}
@@ -272,13 +327,15 @@ export function InboxPage(): React.JSX.Element {
                     locationOf={locationOf}
                     renderRunningRow={(item) => renderRow(item, 'running')}
                     renderUnreadRow={renderUnreadRow}
-                    onSent={(title) => setToast((prev) => ({ n: (prev?.n ?? 0) + 1, title }))}
+                    trackingSection={trackingSection('triage')}
+                    onSent={(title) => setToast({ n: ++toastSeq.current, kind: 'sent', title })}
                   />
                 )
               ) : (
                 <>
                   {section('waiting', waiting)}
                   {unreadSection}
+                  {trackingSection('list')}
                   {section('running', running)}
                 </>
               )}
@@ -286,7 +343,7 @@ export function InboxPage(): React.JSX.Element {
           )}
         </div>
       </div>
-      {toast && (
+      {toast?.kind === 'sent' && (
         <div
           key={toast.n}
           role="status"
@@ -295,6 +352,24 @@ export function InboxPage(): React.JSX.Element {
         >
           <Check size={14} aria-hidden="true" className="shrink-0 text-success" />
           <span className="truncate">{t('inbox.sent', { title: toast.title })}</span>
+        </div>
+      )}
+      {toast?.kind === 'archived' && (
+        <div
+          key={toast.n}
+          role="status"
+          data-inbox-archived=""
+          className="absolute bottom-6 left-1/2 flex max-w-[80%] -translate-x-1/2 items-center gap-3 rounded-[10px] bg-text-primary py-2 pl-3.5 pr-2.5 text-[13px] text-bg-primary shadow-lg"
+        >
+          <span className="truncate">{t('inbox.trackingArchived', { title: toast.title })}</span>
+          <button
+            type="button"
+            data-inbox-undo=""
+            onClick={toast.undo}
+            className="shrink-0 rounded-md bg-bg-primary/20 px-2 py-0.5 text-[12px] font-semibold transition-colors hover:bg-bg-primary/30"
+          >
+            {t('inbox.undo')}
+          </button>
         </div>
       )}
     </div>

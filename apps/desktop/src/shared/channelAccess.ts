@@ -138,6 +138,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'tracking:openNote': 'write',
   'tracking:openFolder': 'write',
   'tracking:deleteItem': 'write', // 删跟踪项文件 + 它的笔记本会话
+  'tracking:setStatus': 'write', // 改 frontmatter 的 status（归档 / 恢复 / 等待中）
 
   // ─── message：消息 ───
   'message:list': 'read',

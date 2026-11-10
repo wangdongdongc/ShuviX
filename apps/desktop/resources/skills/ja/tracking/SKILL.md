@@ -5,7 +5,7 @@ description: "How to keep tracked items (one md per matter in `~/.shuvix/trackin
 
 # Tracked items
 
-A tracked item records something **the user considers unfinished** and wants to look at again in a few days: a bug not fixed yet, waiting on someone's reply, a decision not made yet. One md per matter, in `~/.shuvix/tracking/`; the user sees them under "Tracked items" in the sidebar's Library.
+A tracked item records something **the user considers unfinished** and wants to look at again in a few days: a bug not fixed yet, waiting on someone's reply, a decision not made yet. One md per matter, in `~/.shuvix/tracking/`; the user sees them in the "Tracking" section of the Inbox.
 
 It is the user's list, not a summary of sessions. Most sessions are work that is done and need no tracked item; most passes create nothing new at all. Better to miss one than to keep more than the user wanted: the user will say what they want followed.
 
@@ -27,9 +27,17 @@ Only these three places. Do not look around elsewhere in `~/.shuvix`.
   - `message`: what the user says to you when they accept it, e.g. "Create a tracked item: waiting on Li's reply about the database migration". You receive that sentence when they accept; create the item then.
 - **Leave it alone**: work that is done, a to-do that can be finished the same day, a topic that was only discussed, an idea the agent raised and the user did not take up.
 
+## Status
+
+Each item's frontmatter has a `status` line: `active` (being tracked; also what a missing line means), `waiting` (waiting on someone or something: a reply, a release, an approval), `archived` (no longer tracked).
+
+- You may switch between `active` and `waiting` yourself: when the progress shows the item is waiting on someone or something, set `waiting`; when that arrives, set it back to `active`.
+- **Archiving is only suggested, never done by you**: when a matter has a conclusion or looks abandoned, first write the conclusion as the first paragraph under the title, then use `suggest` to propose archiving it — `title` like "Archive: migration plan decided", `message` like "Archive the tracked item `waiting-li-migration.md`". Set `status` to `archived` only after the user accepts. Whether to keep tracking something, and until when, is the user's call.
+- Archived items are not updated any more. If the same matter makes new progress, suggest restoring it (set back to `active` once accepted) instead of creating another file.
+
 ## File format
 
-Read `references/format.md` before writing or changing a tracked item: the frontmatter, the title, how to write the conclusion and the progress, and how to name the file.
+Read `references/format.md` before writing or changing a tracked item: the frontmatter (including `status`), the title, how to write the conclusion and the progress, and how to name the file.
 
 - When the matter already has a file, update that one instead of creating another.
 - Do not delete files unless the user asks.

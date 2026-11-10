@@ -2,18 +2,19 @@
 /**
  * 桌面侧栏的三种画法（components/sidebar/Sidebar.tsx 的 `mode` / `onOpenSession`，jsdom）。
  *
- * 契约：`full`（缺省，桌面）= 共享侧栏 + 窗口拖拽 / 悬浮徽标 + 底部设置栏 + 六个资料库分组（跟踪项 → 智能体 →
- * 安全策略 → Hooks → 技能 → 知识库）；`sessions`（手机「会话」页）= 共享侧栏，不带任何 caps、不画底部设置栏、
- * 不画那六组；`library`（手机「资料库」页）= 不画共享侧栏，只有那六组，装在 `[data-mobile-list]` 里。
+ * 契约：`full`（缺省，桌面）= 共享侧栏 + 窗口拖拽 / 悬浮徽标 + 底部设置栏 + 五个资料库分组（智能体 →
+ * 安全策略 → Hooks → 技能 → 知识库；跟踪项 2026-11-10 起在收件箱页里，桌面侧栏没有这一组了）；`sessions`（手机
+ * 「会话」页）= 共享侧栏，不带任何 caps、不画底部设置栏、不画那几组；`library`（手机「资料库」页）= 不画共享侧栏，
+ * 跟踪项（手机还没有收件箱，先留在这里）+ 那五组，装在 `[data-mobile-list]` 里。
  * Bots 不在资料库里了（2026-10-31）：它是共享侧栏的一节（`bots` 能力，bot 会话收在各自 bot 名下），full 与
  * sessions 两种画法都带着它。
  * 侧栏里每一次「打开会话」（点行，同一个再点一次也算；笔记本会话）都先写 store、再告诉 `onOpenSession`；
  * 选中 null（离开会话）不告诉它。换一个 onOpenSession 回调 → 之后用新的；分组的 adapter 引用不变（分组以
  * adapter 为扫描依赖，换引用会重扫）。
  *
- *   DS-1 full：caps {windowDrag, pin}、hideFooter false、groupsPrepend = Tracking, Agent, Policy, Hook, Skill, Knowledge
+ *   DS-1 full：caps {windowDrag, pin}、hideFooter false、groupsPrepend = Agent, Policy, Hook, Skill, Knowledge（没有 Tracking）
  *   DS-2 sessions：caps {}、hideFooter true、没有分组
- *   DS-3 library：没有共享侧栏；六组都在 [data-mobile-list] 里
+ *   DS-3 library：没有共享侧栏；Tracking + 五组都在 [data-mobile-list] 里
  *   DS-4 拿到的 onSelectSession('s1') 叫两次 → store 写两次、onOpenSession 两次；null 不到 onOpenSession
  *   DS-5 Bots 分节 adapter 的 open('a.md') → onOpenSession(新会话 id)
  *   DS-6 换了回调重渲染 → 用新的；adapter 对象引用不变
@@ -128,7 +129,10 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const GROUP_ORDER = ['Tracking', 'Agent', 'Policy', 'Hook', 'Skill', 'Knowledge']
+/** 桌面侧栏资料库里的那几组（跟踪项不在：它在收件箱页） */
+const GROUP_ORDER = ['Agent', 'Policy', 'Hook', 'Skill', 'Knowledge']
+/** 手机资料库页：跟踪项打头，然后同那几组 */
+const MOBILE_LIBRARY_ORDER = ['Tracking', ...GROUP_ORDER]
 
 const api = {
   bot: {
@@ -221,7 +225,7 @@ afterEach(() => {
 })
 
 describe('desktop Sidebar modes', () => {
-  it('DS-1 full: windowDrag + pin caps, the footer, the six library groups in order, and the bots section', () => {
+  it('DS-1 full: windowDrag + pin caps, the footer, the five library groups in order (no Tracking), and the bots section', () => {
     render()
     expect(lastShared().caps).toEqual({ windowDrag: true, pin: true })
     expect(botsAdapter()).toBeDefined()
@@ -239,14 +243,14 @@ describe('desktop Sidebar modes', () => {
     expect(rec.groups.size).toBe(0)
   })
 
-  it('DS-3 library: no shared sidebar; the six groups inside [data-mobile-list]', () => {
+  it('DS-3 library: no shared sidebar; Tracking + the five groups inside [data-mobile-list]', () => {
     render({ mode: 'library' })
     expect(rec.shared).toHaveLength(0)
     expect(container.querySelector('[data-stub-shared]')).toBeNull()
     const list = container.querySelector('[data-mobile-list]')
     expect(list).not.toBeNull()
-    expect(stubGroups(list!)).toEqual(GROUP_ORDER)
-    expect(stubGroups()).toEqual(GROUP_ORDER)
+    expect(stubGroups(list!)).toEqual(MOBILE_LIBRARY_ORDER)
+    expect(stubGroups()).toEqual(MOBILE_LIBRARY_ORDER)
   })
 
   it('DS-4 every open — the same session twice too — writes the store and tells onOpenSession; null never reaches it', async () => {

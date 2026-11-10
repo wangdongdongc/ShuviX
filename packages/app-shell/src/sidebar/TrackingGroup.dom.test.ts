@@ -98,6 +98,7 @@ const item = (fileName: string, title: string, updatedAt = 1): TrackingItem => (
   fileName,
   title,
   updatedAt,
+  status: 'active',
   path: `/home/u/.shuvix/tracking/${fileName}`
 })
 

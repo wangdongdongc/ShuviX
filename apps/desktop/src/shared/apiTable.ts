@@ -276,7 +276,8 @@ export const API_TABLE = {
     list: invoke('tracking:list', 0),
     openNote: invoke('tracking:openNote', 1),
     openFolder: invoke('tracking:openFolder', 0),
-    deleteItem: invoke('tracking:deleteItem', 1)
+    deleteItem: invoke('tracking:deleteItem', 1),
+    setStatus: invoke('tracking:setStatus', 1)
   },
   /** 触发源（实验）：设置 → 触发源页的状态 */
   trigger: {

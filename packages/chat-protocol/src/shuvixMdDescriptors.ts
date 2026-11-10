@@ -244,13 +244,17 @@ const DAILY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
 }
 
 /**
- * 跟踪项（trackingNotes.ts，实验）：自述行 + 对象 id，暂时没有管理字段 —— 标题是正文第一个一级标题，进展与结论
- * 都在正文里，由 bot 维护
+ * 跟踪项（trackingNotes.ts，实验）：自述行 + 对象 id + 唯一的管理字段 `status`（active / waiting / archived，
+ * 缺省 active）—— 标题是正文第一个一级标题，进展与结论都在正文里
  */
+export const TRACK_STATUS_KEY = 'status'
 const TRACK_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'track',
   badge: 'Tracked item',
-  fields: [OBJECT_ID_FIELD]
+  fields: [
+    { key: TRACK_STATUS_KEY, labelKey: 'notebook.frontmatter.trackStatus', kind: 'select' },
+    OBJECT_ID_FIELD
+  ]
 }
 
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [

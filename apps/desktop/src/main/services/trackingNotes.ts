@@ -3,7 +3,7 @@
  * chat-protocol `trackingNotes.ts`）。这里管四件事：
  *  - 隐藏载体项目 `__tracking__`（path = 目录本身）与每份文件的笔记本会话（打开 / 复用），同日报；
  *  - 侧栏「跟踪项」分组的清单（标题取正文第一个一级标题，按修改时间倒序）；
- *  - 打开目录；删掉一项（侧栏行菜单）；
+ *  - 打开目录；删掉一项（行菜单）；改一项的状态（收件箱：归档 / 恢复 / 等待中，只改 frontmatter 的 `status` 一行）；
  *  - **宿主提交**：目录是一个 git 仓库，bot 的每次触发运行结束后宿主把整棵树提交一次（同 widget 的「构建成功
  *    即提交」）—— bot 全权改这些文件，回退只能靠历史。版本控制是增益能力，失败只记日志。
  */
@@ -18,14 +18,23 @@ import {
   type GitCache,
   type GitEnv,
   type GitFsClient,
-  type GitOpOutput
+  type GitOpOutput,
+  upsertFrontmatterMappings
 } from '@shuvix/agent-runtime'
 import {
   TRACKING_PROJECT_ID,
+  TRACKING_MARKER_TYPE,
+  TRACKING_MARKER_VERSION,
   isTrackingFileName,
+  isTrackingStatus,
+  trackingConclusion,
+  trackingLatest,
+  trackingStatusOf,
   trackingTitle,
-  type TrackingItem
+  type TrackingItem,
+  type TrackingStatus
 } from '@shuvix/chat-protocol/trackingNotes'
+import { writeFileAtomic } from '../utils/atomicWrite'
 import { projectDao } from '../dao/projectDao'
 import { appEventBus } from '../utils/appEventBus'
 import { getDefaultTrackingDir } from '../utils/paths'
@@ -87,11 +96,15 @@ export function listTrackingItems(): TrackingItem[] {
     try {
       const stat = statSync(path)
       if (!stat.isFile()) continue
+      const source = readFileSync(path, 'utf8')
       items.push({
         fileName,
-        title: trackingTitle(readFileSync(path, 'utf8'), fileName),
+        title: trackingTitle(source, fileName),
         updatedAt: stat.mtimeMs,
-        path
+        path,
+        status: trackingStatusOf(source),
+        latest: trackingLatest(source),
+        conclusion: trackingConclusion(source)
       })
     } catch {
       // 读不到的跳过（刚被删、权限问题）
@@ -136,12 +149,42 @@ export async function deleteTrackingItem(
     return { deleted: false, sessionId: session?.id ?? null }
   }
   // 记不进历史就不删：确认框说过「删除前的那一版仍留在 git 历史里」，这句话得是真的
-  if (!(await commitTrackingChanges(`Before deleting ${fileName}`))) {
-    throw new Error(`Could not record ${fileName} in the tracked items history; it was not deleted`)
-  }
-  unlinkSync(path)
-  await commitTrackingChanges(`Deleted ${fileName} (by the user)`)
+  await exclusive(async () => {
+    if (!(await commitNow(`Before deleting ${fileName}`))) {
+      throw new Error(
+        `Could not record ${fileName} in the tracked items history; it was not deleted`
+      )
+    }
+    unlinkSync(path)
+    await commitNow(`Deleted ${fileName} (by the user)`)
+  })
   return { deleted: true, sessionId: session?.id ?? null }
+}
+
+/**
+ * 改一项的状态（收件箱的归档圆圈 / 行菜单 / 撤销）：只改 frontmatter 里 `status` 那一行（逐行改写，注释、键序、别的键原样），
+ * 没有就补在 frontmatter 末尾；文件连 frontmatter 都没有就补一个（`shuvix: track v1` + `status`）。原子写回，
+ * 宿主提交一次（`track: <status> <文件名>`），广播 `tracking.changed`（提交那一步发）。开着的笔记本照常把外部改动合进编辑器。
+ * 入参按不可信处理：只认目录里真实存在的跟踪项文件名与三个状态值。`changed: false` = 本来就是这个状态
+ */
+export async function setTrackingStatus(
+  fileName: string,
+  status: TrackingStatus
+): Promise<{ changed: boolean }> {
+  if (!isTrackingFileName(fileName)) throw new Error(`Not a tracking file: ${fileName}`)
+  if (!isTrackingStatus(status)) throw new Error(`Not a tracking status: ${String(status)}`)
+  const path = join(getDefaultTrackingDir(), fileName)
+  return exclusive(async () => {
+    if (!isRegularFile(path)) throw new Error(`Tracking file not found: ${fileName}`)
+    const source = readFileSync(path, 'utf8')
+    const next =
+      upsertFrontmatterMappings(source, [['status', status]]) ??
+      `---\nshuvix: ${TRACKING_MARKER_TYPE} v${TRACKING_MARKER_VERSION}\nstatus: ${status}\n---\n\n${source.replace(/^\uFEFF/, '')}`
+    if (next === source) return { changed: false }
+    writeFileAtomic(path, next)
+    await commitNow(`track: ${status} ${fileName}`)
+    return { changed: true }
+  })
 }
 
 /**
@@ -175,7 +218,26 @@ function failureOf(out: GitOpOutput): string | undefined {
  * 交回这一次有没有记进历史（提交了 / 本来就没有可提交的 = true，init / add / commit 出错 = false）—— 删一项之前靠它
  * 确认删掉的那一版已经在历史里。
  */
-export async function commitTrackingChanges(message: string): Promise<boolean> {
+export function commitTrackingChanges(message: string): Promise<boolean> {
+  return exclusive(() => commitNow(message))
+}
+
+/**
+ * 跟踪项目录的改动排成一队：一次「写 + 提交」（改状态）或「提交 + 删 + 提交」（删一项）做完，下一次才开始。
+ * 收件箱里连点几下（归档、撤销、改等待中）各自是一个提交 —— 并发的 add / commit 会互相踩掉，提交还没跑时落盘的
+ * 下一次改动也会被并进上一次的提交里（2026-11-10 e2e 看到的）
+ */
+let chain: Promise<void> = Promise.resolve()
+function exclusive<T>(task: () => Promise<T>): Promise<T> {
+  const run = chain.then(task)
+  chain = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
+
+async function commitNow(message: string): Promise<boolean> {
   const dir = getDefaultTrackingDir()
   if (!existsSync(dir)) return true
   const env: GitEnv = { fs: nodeFs as unknown as GitFsClient, dir }

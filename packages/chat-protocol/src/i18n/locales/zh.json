@@ -127,6 +127,7 @@
       "okfDescription": "何时该读",
       "okfTags": "标签",
       "okfStatus": "状态",
+      "trackStatus": "状态",
       "okfStaleAfter": "此日期后需复核",
       "okfResource": "绑定对象",
       "okfSources": "来源",
@@ -2143,6 +2144,22 @@
     "noWaiting": "没有在等你回答的问题",
     "keyPick": "选一行",
     "keyNav": "下一条 / 上一条",
-    "sent": "已发送 · {{title}} 接着跑了"
+    "sent": "已发送 · {{title}} 接着跑了",
+    "trackingSection": "跟踪中",
+    "trackingHint": "你自己的清单，不计入收件箱的数字",
+    "trackingArchive": "归档",
+    "trackingRestore": "恢复",
+    "trackingMarkWaiting": "标为等待中",
+    "trackingMarkActive": "不再等待",
+    "trackingWaiting": "等待中",
+    "trackingConclusion": "结论：{{text}}",
+    "trackingArchivedCount_one": "已归档 {{count}}",
+    "trackingArchivedCount_other": "已归档 {{count}}",
+    "trackingShowMore_one": "再显示 {{count}} 项",
+    "trackingShowMore_other": "再显示 {{count}} 项",
+    "trackingArchived": "已归档「{{title}}」",
+    "undo": "撤销",
+    "summaryTrackingPart_one": "{{count}} 项在跟踪",
+    "summaryTrackingPart_other": "{{count}} 项在跟踪"
   }
 }

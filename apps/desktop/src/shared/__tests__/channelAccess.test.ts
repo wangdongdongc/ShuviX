@@ -424,7 +424,8 @@ describe('CS-7 触发源与跟踪项（实验）', () => {
     ['tracking:list', 'read', 'sessions'],
     ['tracking:openNote', 'write', 'sessions'],
     ['tracking:openFolder', 'write', 'sessions'],
-    ['tracking:deleteItem', 'write', 'sessions']
+    ['tracking:deleteItem', 'write', 'sessions'],
+    ['tracking:setStatus', 'write', 'sessions']
   ])('CS-7 %s → %s / %s', (channel, access, scope) => {
     expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
     expect(channelAccessOf(channel)).toBe(access)

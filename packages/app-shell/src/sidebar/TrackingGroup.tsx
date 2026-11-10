@@ -1,5 +1,6 @@
 /**
- * TrackingGroup —— 侧栏 Library 的「跟踪项」分组（实验，`~/.shuvix/tracking/`）。跟踪项是需要持续跟进、跨好几天才
+ * TrackingGroup —— 手机资料库页的「跟踪项」分组（实验，`~/.shuvix/tracking/`；桌面的跟踪项 2026-11-10 起在收件箱页的
+ * 「跟踪中」一节，见 inbox/InboxTracking.tsx —— 手机有收件箱之前这一组先留在这里）。已归档的项排在最后、调淡。跟踪项是需要持续跟进、跨好几天才
  * 有结论的事，一项一个 md，由用户让它建、改的会话照 `builtin:tracking` 技能维护；这里只列出来、点开看。
  *
  * 点一行 = 打开或复用那份 md 的**笔记本会话**（隐藏项目 `__tracking__`），与 Bots、Hooks、知识库条目同一条路：
@@ -13,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileText } from 'lucide-react'
+import { Archive, FileText } from 'lucide-react'
 import { copyToClipboard, useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import { TRACKING_PROJECT_ID, type TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -141,25 +142,39 @@ export function TrackingGroup({ adapter }: TrackingGroupProps): React.JSX.Elemen
         (items.length === 0 ? (
           <div className="sb-hint">{t('sidebar.trackingEmpty')}</div>
         ) : (
-          items.map((item) => (
-            <div
-              key={item.fileName}
-              data-tracking-row={item.fileName}
-              onClick={() => void adapter.open(item.fileName, item.title)}
-              onContextMenu={(e) => openRowMenu(item, e)}
-              title={item.fileName}
-              className={rowClass(activeFileName === item.fileName)}
-            >
-              <span className="sb-icon">
-                <FileText size={12} className="text-text-tertiary" />
-              </span>
-              <span className="flex-1 min-w-0 truncate group-hover:pr-5">{item.title}</span>
-              <RowMenuButton
-                className="absolute right-1.5 opacity-0 group-hover:opacity-100"
-                onOpen={(e) => openRowMenu(item, e)}
-              />
-            </div>
-          ))
+          // 已归档的排最后（稳定排序：各自仍按修改时间倒序）
+          [...items]
+            .sort((a, b) => Number(a.status === 'archived') - Number(b.status === 'archived'))
+            .map((item) => (
+              <div
+                key={item.fileName}
+                data-tracking-row={item.fileName}
+                data-tracking-status={item.status}
+                onClick={() => void adapter.open(item.fileName, item.title)}
+                onContextMenu={(e) => openRowMenu(item, e)}
+                title={item.fileName}
+                className={rowClass(activeFileName === item.fileName)}
+              >
+                <span className="sb-icon">
+                  {item.status === 'archived' ? (
+                    <Archive size={12} className="text-text-tertiary" />
+                  ) : (
+                    <FileText size={12} className="text-text-tertiary" />
+                  )}
+                </span>
+                <span
+                  className={`flex-1 min-w-0 truncate group-hover:pr-5 ${
+                    item.status === 'archived' ? 'text-text-tertiary' : ''
+                  }`}
+                >
+                  {item.title}
+                </span>
+                <RowMenuButton
+                  className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+                  onOpen={(e) => openRowMenu(item, e)}
+                />
+              </div>
+            ))
         ))}
       {confirmingDelete && adapter.remove && (
         <ConfirmDialog

@@ -12,7 +12,6 @@ import {
   type HookGroupAdapter,
   InboxRow,
   TrackingGroup,
-  type TrackingGroupAdapter,
   PolicyGroup,
   type PolicyGroupAdapter,
   type BotGroupAdapter,
@@ -28,6 +27,7 @@ import {
 } from '@shuvix/app-shell'
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
+import { useTrackingAdapter } from '../../host/useTrackingAdapter'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
 import { newHookTemplate } from './hookTemplate'
@@ -195,36 +195,8 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     }
   }, [setActiveSessionId])
 
-  /**
-   * 跟踪项分组（实验）能力注入 —— 清单是 `~/.shuvix/tracking` 里的 md（bot 维护），点一行打开那份文件的**笔记本
-   * 会话**（main 侧去重，隐藏项目 `__tracking__`）。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
-   */
-  const trackingGroupAdapter = useMemo<TrackingGroupAdapter>(
-    () => ({
-      list: () => window.api.tracking.list(),
-      open: async (fileName, title) => {
-        let session: { id: string }
-        try {
-          session = await window.api.tracking.openNote({ fileName, title })
-        } catch {
-          return // 文件已不在（清单过期）—— tracking.changed / 聚焦重扫会把这一行拿掉
-        }
-        useChatStore.getState().setSessions(await getChatApi().session.list())
-        setActiveSessionId(session.id)
-      },
-      openFolder: () => window.api.tracking.openFolder(),
-      revealFile: (path) => void window.api.app.revealPath(path),
-      remove: async (fileName) => {
-        try {
-          const { sessionId } = await window.api.tracking.deleteItem({ fileName })
-          if (sessionId) useChatStore.getState().removeSession(sessionId)
-        } catch {
-          // 删不掉（权限之类）—— 行还在，用户看得见没删成
-        }
-      }
-    }),
-    [setActiveSessionId]
-  )
+  /** 跟踪项分组（实验，只在手机的资料库页里：桌面的跟踪项在收件箱的「跟踪中」一节） */
+  const trackingGroupAdapter = useTrackingAdapter(setActiveSessionId)
 
   /**
    * 确认删除：删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，自动保存会把
@@ -691,9 +663,9 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     [botGroupAdapter, pickFolderAsProject, archivedProjects]
   )
 
+  // 桌面侧栏的资料库没有「跟踪项」一组了（跟踪项搬进了收件箱页，2026-11-10）；手机还没有收件箱，资料库页里先留着它
   const groups = (
     <>
-      <TrackingGroup adapter={trackingGroupAdapter} />
       <AgentGroup adapter={agentGroupAdapter} />
       <PolicyGroup adapter={policyGroupAdapter} />
       <HookGroup adapter={hookGroupAdapter} />
@@ -826,6 +798,7 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
         data-mobile-list=""
         data-sidebar-density="touch"
       >
+        <TrackingGroup adapter={trackingGroupAdapter} />
         {groups}
         {overlays}
       </div>

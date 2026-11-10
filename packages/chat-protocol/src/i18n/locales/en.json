@@ -127,6 +127,7 @@
       "okfDescription": "When to read it",
       "okfTags": "Tags",
       "okfStatus": "Status",
+      "trackStatus": "Status",
       "okfStaleAfter": "Needs review after",
       "okfResource": "Bound to",
       "okfSources": "Sources",
@@ -2143,6 +2144,22 @@
     "noWaiting": "Nothing is waiting for your answer",
     "keyPick": "pick a row",
     "keyNav": "next / previous",
-    "sent": "Sent · {{title}} is running again"
+    "sent": "Sent · {{title}} is running again",
+    "trackingSection": "Tracking",
+    "trackingHint": "Your own list; not counted in the Inbox number",
+    "trackingArchive": "Archive",
+    "trackingRestore": "Restore",
+    "trackingMarkWaiting": "Mark as waiting",
+    "trackingMarkActive": "No longer waiting",
+    "trackingWaiting": "Waiting",
+    "trackingConclusion": "Conclusion: {{text}}",
+    "trackingArchivedCount_one": "Archived {{count}}",
+    "trackingArchivedCount_other": "Archived {{count}}",
+    "trackingShowMore_one": "Show {{count}} more",
+    "trackingShowMore_other": "Show {{count}} more",
+    "trackingArchived": "Archived “{{title}}”",
+    "undo": "Undo",
+    "summaryTrackingPart_one": "{{count}} tracked",
+    "summaryTrackingPart_other": "{{count}} tracked"
   }
 }

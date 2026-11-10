@@ -15071,112 +15071,187 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 主窗侧栏「跟踪项」分组（TrackingGroup，实验；`~/.shuvix/tracking/`）
+// 收件箱页的「跟踪中」一节（InboxTracking，实验；`~/.shuvix/tracking/`）—— 2026-11-10 起跟踪项不在桌面侧栏了。
 //
-// 锚点：分组头 `div[class*="group/header"][data-group="tracking"]`（组头按钮里跟着一枚
-// `[data-experimental="tracking"]`），行 `[data-tracking-row=<fileName>]`（行字 = 正文第一个一级标题，没有就是
-// 去掉 .md 的文件名；按修改时间倒序）；空态是正文里那一行 `.sb-hint`。点一行打开 / 复用那份文件的**笔记本会话**
-// （隐藏项目 `__tracking__`），活动行 = 活动会话正是这份文件的笔记本（`bg-bg-active`）。分组**懒扫**：首次展开
-// 才扫，之后展开 / 窗口聚焦 / 组头菜单「刷新」/ `tracking.changed`（笔记本写入、bot 一次触发运行结束）重扫 ——
-// 磁盘外写入不广播，种完文件要 refresh。
+// 锚点：侧栏最上面的收件箱一行 `[data-inbox-row]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱页
+// `[data-inbox-page]`，这一节 `[data-inbox-section="tracking"]`；行 `[data-tracking-item=<fileName>]`（`data-tracking-status`），
+// 行里 `[data-tracking-archive]` 圆圈、`[data-tracking-open]` 标题区（点它 = 打开那份文件的**笔记本会话**，收件箱随之关上）、
+// `[data-tracking-title]` / `[data-tracking-latest]`（已归档的行是「结论：…」）、`[data-tracking-waiting]` 标签、
+// `[data-tracking-restore]`；「已归档 N」是 `[data-tracking-archived-toggle]`；归档后底部 `[data-inbox-archived]` 带
+// `[data-inbox-undo]`。这一节在收件箱打开时扫一次，之后窗口聚焦 / 节头菜单「刷新」/ `tracking.changed` 重扫 ——
+// 磁盘外写入不广播，种完文件要 refresh（或重开收件箱）。行菜单只有右键一个入口（没有 ⋮）。
 //
-// ⚠️ 组头菜单的 `open-folder` **只许做存在性断言，绝不点**：它开的是 OS 文件管理器，e2e 关不掉。
+// ⚠️ 节头菜单的 `open-folder`、行菜单的 `reveal` **只许做存在性断言，绝不点**：它们开的是 OS 文件管理器，e2e 关不掉；
+// `copy-path` 会改写真剪贴板。
 
-export interface TrackingPane {
-  /** 组头显示的分组标签 */
-  label(): Promise<string>
-  /** 组头上有没有「实验」小标签 */
-  experimental(): Promise<boolean>
-  /** 分组此刻展开着 */
-  expanded(): Promise<boolean>
-  /** 展开分组并等首次扫描落定（空态文案也算落定） */
-  expand(): Promise<void>
-  /** 行（DOM 序）：文件名 + 行字 */
-  rows(): Promise<Array<{ fileName: string; title: string }>>
-  /** 空态文案（有行 / 没扫过时为 null） */
-  emptyHint(): Promise<string | null>
-  /** 点一行并等它成为活动行（= 这份文件的笔记本成了活动会话） */
-  selectRow(fileName: string): Promise<void>
-  /** 当前活动行的文件名；活动会话不是任何跟踪项的笔记本时为 null */
-  activeRow(): Promise<string | null>
-  /** 组头菜单里的动作 id（开一次 ⋮、不选任何项，分隔符滤掉） */
-  menuIds(): Promise<string[] | null>
-  /** 组头菜单「刷新」—— 磁盘外改动不广播 tracking.changed，需手动重扫 */
-  refresh(): Promise<void>
-  /** 一行的菜单动作 id（开一次那一行的 ⋮、不选任何项，分隔符滤掉）；行或 ⋮ 不在返回 null */
-  rowMenuIds(fileName: string): Promise<string[] | null>
-  /**
-   * 开一行的 ⋮ 并选中一项（随后核对该项真的在菜单里）。只收 delete：reveal 会在跑 e2e 的真实桌面上弹出
-   * 文件管理器，copy-path 会改写真剪贴板。delete 只弹确认框，确认 / 取消走 confirmPane
-   */
-  pickRowMenu(fileName: string, actionId: 'delete'): Promise<void>
+/** 「跟踪中」一节的一行 */
+export interface InboxTrackingRow {
+  fileName: string
+  title: string
+  /** active / waiting / archived */
+  status: string
+  /** 那一句：最新一条进展（已归档的行是「结论：…」）；没有为 '' */
+  latest: string
+  /** 带「等待中」标签 */
+  waitingTag: boolean
 }
 
-export function trackingPane(main: CdpClient): TrackingPane {
-  const HEADER_SEL = `div[class*="group/header"][data-group="tracking"]`
-  const HEADER = `document.querySelector('${HEADER_SEL}')`
-  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
-  const COLLAPSE = `${HEADER}?.nextElementSibling`
-  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
-  const ROWS = `[...document.querySelectorAll('[data-tracking-row]')]`
+export interface InboxTrackingPane {
+  /** 点侧栏的收件箱一行，等收件箱页出来、这一节扫完（没有任何跟踪项时这一节不在，等页面落定即可） */
+  open(): Promise<void>
+  /** 收件箱页此刻开着 */
+  isOpen(): Promise<boolean>
+  /** 侧栏收件箱一行的数字（`data-inbox-count`） */
+  inboxCount(): Promise<number>
+  /** 侧栏里还有没有旧的「跟踪项」分组（桌面上不该有：只有手机资料库页留着它） */
+  sidebarGroupPresent(): Promise<boolean>
+  /** 这一节在不在 */
+  present(): Promise<boolean>
+  /** 页头那一句概况 */
+  summary(): Promise<string>
+  /** 这一节里的行（DOM 序；已归档的只在展开后才有） */
+  rows(): Promise<InboxTrackingRow[]>
+  /** 「已归档 N」的文字；没有已归档的为 null */
+  archivedToggle(): Promise<string | null>
+  /** 展开「已归档 N」 */
+  expandArchived(): Promise<void>
+  /** 点一行的标题区（打开它的笔记本），等收件箱关上 */
+  openRow(fileName: string): Promise<void>
+  /** 点一行的圆圈（归档） */
+  archive(fileName: string): Promise<void>
+  /** 点已归档那一行的「恢复」（先展开「已归档 N」） */
+  restore(fileName: string): Promise<void>
+  /** 底部「已归档 · 撤销」那一句的文字；不在为 null */
+  archivedToast(): Promise<string | null>
+  /** 点那一句里的「撤销」 */
+  undo(): Promise<void>
+  /** 节头菜单「刷新」 */
+  refresh(): Promise<void>
+  /** 让这一节重扫（派发一次窗口 focus，与真窗口聚焦同一条路）—— 这一节还不在（目录空）时 refresh 够不着 */
+  rescan(): Promise<void>
+  /** 节头菜单的动作 id（开一次 ⋮、不选任何项） */
+  menuIds(): Promise<string[] | null>
+  /** 一行的右键菜单动作 id（不选任何项，分隔符滤掉）；行不在为 null */
+  rowMenuIds(fileName: string): Promise<string[] | null>
+  /** 右键一行并选中一项（随后核对该项真的在菜单里）。不收 reveal / copy-path（见上） */
+  pickRowMenu(
+    fileName: string,
+    actionId: 'delete' | 'archive' | 'restore' | 'waiting' | 'active'
+  ): Promise<void>
+}
+
+export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
+  const PAGE = `document.querySelector('[data-inbox-page]')`
+  const SECTION = `document.querySelector('[data-inbox-section="tracking"]')`
+  const HEAD = `(${SECTION}?.firstElementChild ?? null)`
   const ROW = (fileName: string): string =>
-    `document.querySelector('[data-tracking-row=${JSON.stringify(fileName)}]')`
+    `document.querySelector('[data-tracking-item=${JSON.stringify(fileName)}]')`
+  const waitRow = (fileName: string): Promise<unknown> =>
+    until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PAGE} !== null`)
+  const expandArchived = async (): Promise<void> => {
+    const toggle = `${SECTION}?.querySelector('[data-tracking-archived-toggle]')`
+    await until(() => main.eval<boolean>(`!!(${toggle})`), 'archived toggle')
+    if ((await main.eval<string | null>(`(${toggle})?.getAttribute('aria-expanded')`)) !== 'true') {
+      await main.eval(`(${toggle}).click()`)
+    }
+  }
   return {
-    label: () =>
-      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
-    experimental: () =>
-      main.eval<boolean>(`!!${HEADER}?.querySelector('[data-experimental="tracking"]')`),
-    expanded: () => main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`),
-    expand: async () => {
-      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'tracking group header')
-      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
-      if (!open) await main.eval(`(${TOGGLE})?.click()`)
-      await until(
-        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
-        'tracking group scanned'
-      )
+    open: async () => {
+      if (!(await isOpen())) {
+        await until(
+          () => main.eval<boolean>(`!!document.querySelector('[data-inbox-row]')`),
+          'sidebar inbox row'
+        )
+        await main.eval(`document.querySelector('[data-inbox-row]').click()`)
+      }
+      await until(isOpen, 'inbox page open')
+      // 扫描回来之前这一节不画：给它一拍，空目录时它本来就不在
+      await sleep(300)
     },
+    isOpen,
+    inboxCount: () =>
+      main.eval<number>(
+        `Number(document.querySelector('[data-inbox-row]')?.getAttribute('data-inbox-count') ?? -1)`
+      ),
+    sidebarGroupPresent: () =>
+      main.eval<boolean>(
+        `document.querySelector('div[class*="group/header"][data-group="tracking"]') !== null`
+      ),
+    present: () => main.eval<boolean>(`${SECTION} !== null`),
+    summary: () =>
+      main.eval<string>(
+        `(document.querySelector('[data-inbox-summary]')?.textContent ?? '').trim()`
+      ),
     rows: () =>
-      main.eval<Array<{ fileName: string; title: string }>>(
-        `${ROWS}.map((r) => ({
-          fileName: r.getAttribute('data-tracking-row') ?? '',
-          title: (r.querySelector('span.truncate')?.textContent ?? '').trim()
+      main.eval<InboxTrackingRow[]>(
+        `[...(${SECTION}?.querySelectorAll('[data-tracking-item]') ?? [])].map((r) => ({
+          fileName: r.getAttribute('data-tracking-item') ?? '',
+          title: (r.querySelector('[data-tracking-title]')?.textContent ?? '').trim(),
+          status: r.getAttribute('data-tracking-status') ?? '',
+          latest: (r.querySelector('[data-tracking-latest]')?.textContent ?? '').trim(),
+          waitingTag: !!r.querySelector('[data-tracking-waiting]')
         }))`
       ),
-    emptyHint: () =>
-      main.eval<string | null>(`(() => {
-        const hint = ${BODY}?.querySelector(':scope > .sb-hint')
-        return hint ? (hint.textContent ?? '').trim() : null
-      })()`),
-    selectRow: async (fileName) => {
-      await until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
-      await main.eval(`${ROW(fileName)}.click()`)
-      await until(
-        () => main.eval<boolean>(`(${ROW(fileName)}?.className ?? '').includes('bg-bg-active')`),
-        `tracking row ${fileName} active`
-      )
-    },
-    activeRow: () =>
+    archivedToggle: () =>
       main.eval<string | null>(
-        `${ROWS}.find((r) => r.className.includes('bg-bg-active'))?.getAttribute('data-tracking-row') ?? null`
+        `(() => { const b = ${SECTION}?.querySelector('[data-tracking-archived-toggle]'); return b ? (b.textContent ?? '').trim() : null })()`
       ),
-    menuIds: async () => {
-      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'tracking group header')
-      const items = await openMenu(main, HEADER, 'menu-button')
-      return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+    expandArchived,
+    openRow: async (fileName) => {
+      await waitRow(fileName)
+      await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-open]').click()`)
+      await until(async () => !(await isOpen()), `inbox closed after opening ${fileName}`)
+    },
+    archive: async (fileName) => {
+      await waitRow(fileName)
+      await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-archive]').click()`)
+    },
+    restore: async (fileName) => {
+      await expandArchived()
+      await waitRow(fileName)
+      await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-restore]').click()`)
+    },
+    archivedToast: () =>
+      main.eval<string | null>(
+        `(() => { const t = document.querySelector('[data-inbox-archived]'); return t ? (t.querySelector('span')?.textContent ?? '').trim() : null })()`
+      ),
+    undo: async () => {
+      await until(
+        () => main.eval<boolean>(`!!document.querySelector('[data-inbox-undo]')`),
+        'undo button'
+      )
+      await main.eval(`document.querySelector('[data-inbox-undo]').click()`)
     },
     refresh: async () => {
-      await pickFromMenu(main, HEADER, 'refresh', 'tracking group header')
+      await pickFromMenu(main, HEAD, 'refresh', 'tracking section header')
       await sleep(200)
     },
+    rescan: async () => {
+      await main.eval(`(() => { window.dispatchEvent(new Event('focus')); return true })()`)
+      await sleep(300)
+    },
+    menuIds: async () => {
+      const items = await openMenu(main, HEAD, 'menu-button')
+      return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+    },
     rowMenuIds: async (fileName) => {
-      await until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
-      const items = await openMenu(main, ROW(fileName), 'menu-button')
+      await waitRow(fileName)
+      const items = await openMenu(main, ROW(fileName), 'contextmenu')
       return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
     },
     pickRowMenu: async (fileName, actionId) => {
-      await until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
-      await pickFromMenu(main, ROW(fileName), actionId, `tracking row ${fileName}`)
+      await waitRow(fileName)
+      await armMenu(main, actionId)
+      await main.eval(
+        `${ROW(fileName)}.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))`
+      )
+      const ids = await lastMenuIds(main)
+      if (!ids.includes(actionId)) {
+        throw new Error(
+          `menu item "${actionId}" not offered by tracking row ${fileName} (got: ${ids.join(', ') || '-'})`
+        )
+      }
     }
   }
 }

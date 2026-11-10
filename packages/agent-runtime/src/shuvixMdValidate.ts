@@ -13,6 +13,11 @@ import { parseAgentDefinitionFile } from './agentProfile/definitionFile'
 import { parseBotDefinitionFile } from './bot/botFile'
 import { parsePolicyDefinitionFile } from './security/policyFile'
 import { parseHookDefinitionFile } from './hook/hookFile'
+import {
+  TRACKING_STATUSES,
+  isTrackingStatus,
+  trackingStatusRaw
+} from '@shuvix/chat-protocol/trackingNotes'
 
 export function validateShuvixMdText(
   type: string,
@@ -44,6 +49,19 @@ export function validateShuvixMdText(
     const messages: string[] = []
     const parsed = parseHookDefinitionFile(text, name, (msg) => messages.push(msg))
     return { status: parsed ? 'valid' : 'invalid', messages }
+  }
+  if (type === 'track') {
+    // 跟踪项只有一个管理字段 `status`：不认识的值不拒绝（按 active 读），只是软提示，卡片亮琥珀
+    const raw = trackingStatusRaw(text)
+    if (raw !== null && !isTrackingStatus(raw.toLowerCase())) {
+      return {
+        status: 'valid',
+        messages: [
+          `Unknown status "${raw}"; it is read as active. Use one of: ${TRACKING_STATUSES.join(', ')}.`
+        ]
+      }
+    }
+    return { status: 'valid', messages: [] }
   }
   return { status: 'unknown', messages: [] }
 }
