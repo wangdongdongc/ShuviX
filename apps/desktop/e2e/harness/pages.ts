@@ -10141,10 +10141,21 @@ export interface NotebookEditorPane {
    * 链接不在屏则抛错。
    */
   clickWikiLink(target: string): Promise<void>
+  /** 把光标放到文首（光标所在行显示源码 —— 要看渲染后的行，先把光标挪开） */
+  caretToStart(): Promise<void>
+  /** 编辑器里的图片（live preview 的图片挂件），与 markdownWindowPane.images 同形 */
+  images(): Promise<EditorImageShot[]>
+  /**
+   * 真鼠标点渲染后的 `[label](url)`（CDP `Input.dispatchMouseEvent`，可信输入）。
+   * 链接不在屏或被盖住则抛错。
+   */
+  clickLink(label: string): Promise<void>
 }
 
 export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
   const EDITOR = `document.querySelector('.cm-editor')`
+  // CM6 视图：内部字段（与 markdownWindowPane 的 CM_VIEW 同一条，升级 CM6 时一起改）
+  const CM_VIEW = `(${EDITOR}?.querySelector('.cm-content')?.cmTile?.root?.view ?? null)`
   return {
     text: () =>
       main.eval<string | null>(`(() => {
@@ -10217,6 +10228,59 @@ export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
         return true
       })()`)
       if (!ok) throw new Error(`notebook: no [[${target}]] link on screen`)
+    },
+    caretToStart: async () => {
+      const ok = await main.eval<boolean>(`(() => {
+        const view = ${CM_VIEW}
+        if (!view) return false
+        view.dispatch({ selection: { anchor: 0 } })
+        return true
+      })()`)
+      if (!ok) throw new Error('notebook: no editor view to place the caret in')
+    },
+    images: () =>
+      main.eval<EditorImageShot[]>(`[...(${EDITOR}?.querySelectorAll('img') ?? [])]
+        .filter((i) => !i.classList.contains('cm-widgetBuffer'))
+        .map((i) => {
+          const src = i.getAttribute('src') || ''
+          const m = /[?&]path=([^&]*)/.exec(src)
+          return {
+            src: src.slice(0, 200),
+            path: src.startsWith('shuvix-preview://') && m ? decodeURIComponent(m[1]) : '',
+            naturalWidth: i.naturalWidth,
+            complete: i.complete
+          }
+        })`),
+    clickLink: async (label) => {
+      const point = await main.eval<{ x: number; y: number } | null>(`(() => {
+        const links = [...(${EDITOR}?.querySelectorAll('.cm-content .cm-atomic-link') ?? [])]
+        const link = links.find((el) => (el.textContent ?? '').includes(${JSON.stringify(label)}))
+        if (!link) return null
+        const rect = [...link.getClientRects()].find((r) => r.width > 0 && r.height > 0)
+        if (!rect) return null
+        const x = rect.left + rect.width / 2
+        const y = rect.top + rect.height / 2
+        return document.elementFromPoint(x, y)?.closest('.cm-atomic-link') === link ? { x, y } : null
+      })()`)
+      if (!point) throw new Error(`notebook: link "${label}" is not clickable on screen`)
+      const { x, y } = point
+      await main.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+      await main.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: 'left',
+        buttons: 1,
+        clickCount: 1
+      })
+      await main.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1
+      })
     }
   }
 }

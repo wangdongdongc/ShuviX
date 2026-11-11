@@ -13,6 +13,8 @@
  *   E-6 openedBy=agent → hash 带 openedBy=agent，预览顶上有来源横幅（文案 + 完整路径）
  *   E-7 主窗口没有 `[data-session-tool="preview"]`，右侧面板的标签栏没有 Preview（eye）tab
  *   E-8 真实 UI：笔记本里点 `[[a.txt]]` → 预览窗口；点 `[[doc]]` → md 窗口
+ *   E-9 子目录里的笔记（主窗口，notebookPath 是相对路径）：`![](assets/pic.png)` 按笔记所在目录解码出来，
+ *       真鼠标点 `[open it](assets/rel.txt)` → 那份文件的绝对路径开预览窗口
  *
  * 不碰 LLM；界面语言钉成 en（横幅文案按 en.json 比）。每条用例自己关掉它开的窗口。
  */
@@ -91,6 +93,14 @@ beforeAll(async () => {
   writeFileSync(join(projectDir, 'noext'), Buffer.from([0x41, 0x00, 0x42]))
   writeFileSync(join(projectDir, 'big.txt'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x61))
   writeFileSync(join(projectDir, 'nb.md'), '# nb\n\nSee [[a.txt]] and [[doc]].\n')
+  mkdirSync(join(projectDir, 'docs', 'assets'), { recursive: true })
+  // 宽度与项目根下的 pic.png（40）不同：解到错的目录也不会碰巧通过
+  writePng(join(projectDir, 'docs', 'assets', 'pic.png'), { width: 64, height: 30 })
+  writeFileSync(join(projectDir, 'docs', 'assets', 'rel.txt'), 'relative link target\n')
+  writeFileSync(
+    join(projectDir, 'docs', 'rel.md'),
+    '# rel\n\n![](assets/pic.png)\n\nSee [open it](assets/rel.txt) here.\n'
+  )
 
   projectId = (await createProject(app.main, { name: 'e2e-open', path: projectDir })).id
   sid = (
@@ -275,6 +285,42 @@ describe('files.open → 独立窗口', () => {
       expect((await app.filePreviewWindows()).some((w) => w.path.endsWith('/doc.md'))).toBe(false)
     } finally {
       await closeMarkdown(md, 'doc.md')
+    }
+  })
+
+  it('E-9 子目录里的笔记：相对图片按笔记所在目录加载，点相对链接 → 预览窗口开绝对路径', async () => {
+    await app.main.eval(
+      `window.api.session.create(${JSON.stringify({ title: 'e2e-open-rel', projectId, notebookPath: 'docs/rel.md' })})`
+    )
+    const sidebar = sidebarPane(app.main)
+    await until(() => sidebar.openSession('e2e-open-rel'), 'notebook session opened')
+    const editor = notebookEditorPane(app.main)
+    await until(
+      async () => (await editor.text())?.includes('open it') ?? false,
+      'docs/rel.md shown in the editor'
+    )
+    // 光标所在行显示源码：放到标题行，图片和链接才是渲染后的样子
+    await editor.caretToStart()
+
+    const image = await until(
+      async () => (await editor.images()).find((i) => i.complete && i.naturalWidth > 0) ?? null,
+      'assets/pic.png decoded in the note'
+    )
+    expect(image.naturalWidth).toBe(64)
+
+    await editor.clickLink('open it')
+    const target = real('docs/assets/rel.txt')
+    const preview = await until(
+      () => app.connectFilePreviewWindow(target),
+      'rel.txt preview window from the relative link'
+    )
+    try {
+      await until(
+        async () => (await filePreviewWindowShot(preview)).text.includes('relative link target'),
+        'rel.txt content rendered'
+      )
+    } finally {
+      await closePreview(preview, 'rel.txt')
     }
   })
 })

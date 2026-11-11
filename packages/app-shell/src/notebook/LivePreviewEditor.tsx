@@ -29,6 +29,13 @@ import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protoco
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import { MD_DISABLEABLE_KINDS, MD_FM_FILL_KEYS, mdObjectKindOf } from '@shuvix/chat-protocol/mdMeta'
 import { useResolveMediaUrl, type MediaSource, type ResolveMediaUrl } from '@shuvix/chat-ui'
+import {
+  hasUrlScheme,
+  isAbsHostPath,
+  isRelativeFileLink,
+  resolveAgainstDocDir,
+  resolveRelativeFileLink
+} from './documentPaths'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import {
   frontmatterCard,
@@ -135,36 +142,6 @@ function resolveMediaCached(
   // 同步来源（桌面）：直接缓存并返回
   store(src)
   return src.url
-}
-
-/** 宿主绝对路径判定：posix `/`、win 盘符 `C:\` / `C:/`、UNC `\\server\share` */
-const isAbsHostPath = (p: string): boolean =>
-  p.startsWith('/') || p.startsWith('\\\\') || /^[a-zA-Z]:[\\/]/.test(p)
-
-/** 带 scheme 的 URL（http(s):/data:/blob:/shuvix-preview:/file: 等）→ 原样透传 */
-const HAS_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/
-
-/**
- * 把相对图片路径按 md 文件（documentId）所在目录解析为绝对路径。渲染进程无 node:path，
- * 故用分隔符感知的段处理：`.` 略过、`..` 弹栈但不出根；posix 根（首段 ''）与 win 盘符段天然保留。
- */
-function resolveAgainstDocDir(docAbsPath: string, rel: string): string | null {
-  const clean = rel.split('#')[0].split('?')[0].trim()
-  if (!clean) return null
-  const win = docAbsPath.includes('\\') && !docAbsPath.includes('/')
-  const sep = win ? '\\' : '/'
-  const parts = docAbsPath.split(/[/\\]/)
-  parts.pop() // 去掉文件名 → 所在目录
-  for (const seg of clean.split(/[/\\]/)) {
-    if (!seg || seg === '.') continue
-    if (seg === '..') {
-      // posix 根 [''] 与 win 盘符 ['C:'] 长度均为 1：不许 .. 越过根
-      if (parts.length <= 1) return null
-      parts.pop()
-    } else parts.push(seg)
-  }
-  const joined = parts.join(sep)
-  return isAbsHostPath(joined) ? joined : null
 }
 
 export type SaveStatus = 'saved' | 'saving'
@@ -670,21 +647,37 @@ export function LivePreviewEditor({
 
   // 标准 markdown 图片 ![](src) 的 src 解析（atomic imageBlocks 的 resolveSrc）：
   // - 带 scheme 的 URL（http(s):/data:/blob:/shuvix-preview: 等）与宿主绝对路径 → 原样透传；
-  // - 相对路径（./、../、裸相对名）→ 相对 documentId（md 文件绝对路径）所在目录解析为绝对路径，
+  // - 相对路径（./、../、裸相对名）→ 按 documentId 所在目录解析（documentId 是相对工作目录的
+  //   notebookPath 时结果也相对工作目录，主进程按会话解），
   //   走与 ![[image]] 相同的 mediaUrl seam + 模块级缓存（resolveMediaCached）；
   //   异步来源（扩展 blob:）首次返回 null（atomic 保持 raw src），就绪后经 EMBED_REFRESH 重建。
-  // 无 sessionId / 无 mediaUrl seam / documentId 非绝对路径 → 返回 null，优雅降级为现状。
+  // 无 sessionId / 无 mediaUrl seam → 返回 null，优雅降级为现状。
   const resolveMarkdownImageSrc = useCallback(
     (src: string): string | null => {
       const s = src.trim()
       if (!s || !sessionId || !resolveMedia) return null
-      if (HAS_SCHEME_RE.test(s) || isAbsHostPath(s)) return s
-      if (!isAbsHostPath(documentId)) return null
-      const abs = resolveAgainstDocDir(documentId, s)
-      if (!abs) return null
-      return resolveMediaCached(sessionId, abs, resolveMedia)
+      if (hasUrlScheme(s) || isAbsHostPath(s)) return s
+      const target = resolveAgainstDocDir(documentId, s)
+      if (!target) return null
+      return resolveMediaCached(sessionId, target, resolveMedia)
     },
     [sessionId, resolveMedia, documentId]
+  )
+
+  // 点击 [文字](相对路径) → 和 [[file]] 一样发预览信号（宿主开独立窗口，不支持的不响应）；
+  // 网址等其余链接照旧交给宿主的 openExternal。
+  const onLinkClick = useCallback(
+    (url: string): void => {
+      if (!sessionId || !isRelativeFileLink(url)) {
+        caps?.openExternal?.(url)
+        return
+      }
+      void ensureFileMap().then((map) => {
+        const abs = resolveRelativeFileLink(url, documentId, map?.root ?? null)
+        if (abs) useChatStore.getState().requestFilePreview(abs)
+      })
+    },
+    [sessionId, caps, ensureFileMap, documentId]
   )
 
   // 属性卡的字段槽位：把仓库既有的成熟选择器（ToolSelectList / ModelSelect）挂进去。
@@ -822,7 +815,7 @@ export function LivePreviewEditor({
           codeLanguages={ATOMIC_CODE_LANGUAGES}
           extensions={editorExtensions}
           imageSrcResolver={resolveMarkdownImageSrc}
-          onLinkClick={(url) => caps?.openExternal?.(url)}
+          onLinkClick={onLinkClick}
           readOnly={readOnly}
           figureExport={figureExport}
         />
