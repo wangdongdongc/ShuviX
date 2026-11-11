@@ -1303,6 +1303,14 @@ declare global {
         content: string
       }) => Promise<{ ok: true } | { ok: false; error: string }>
     }
+    library: {
+      /** 一个文件进库（同样的内容不新建）；网络客户端只能交字节 */
+      add: (
+        params: import('@shuvix/chat-protocol/fileLibrary').LibraryAddParams
+      ) => Promise<import('@shuvix/chat-protocol/fileLibrary').LibraryAddResult>
+      /** 本机的选择文件对话框（可多选）；取消 → null */
+      pickFiles: () => Promise<string[] | null>
+    }
     knowledge: {
       /** 全部条目（视图形状，不含正文）+ 两个根的绝对路径（root = knowledge-shuvix，userRoot = 用户根）；只读 */
       list: () => Promise<{

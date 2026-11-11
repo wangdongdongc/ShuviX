@@ -99,6 +99,7 @@ import { registerUserInputParticipant } from './userInputBroker'
 import { createLogger } from '../logger'
 import { deleteSessionArtifacts } from './artifacts/store'
 import { removeShownImages } from './shownImages'
+import { removeSessionLibraryLinks } from './fileLibrary'
 import { cleanupSession as cleanupSandboxSession } from './sandbox'
 
 const log = createLogger('SessionService')
@@ -1064,6 +1065,8 @@ export class SessionService {
     deleteSessionArtifacts(id)
     // 摆给用户看的图的快照（show_image / 带图提议）：只有这场对话的历史指着它们
     removeShownImages(id)
+    // 文件库里这场对话的关联（发送过的图片等）：文件留在库里，只删关联（docs/file-library-design.md §10）
+    removeSessionLibraryLinks(id)
     // 每会话的临时目录（/private/tmp/shuvix-<uid>/<8hex>）：它自己的那一个，以及它借用的那一个（fork 共用源会话的、
     // 子会话共用父会话的）
     // —— 都只在已经没有会话用它的时候删

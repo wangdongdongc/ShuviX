@@ -34,6 +34,7 @@ import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
+import { registerLibraryHandlers } from './libraryHandlers'
 import { registerKnowledgeHandlers } from './knowledgeHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
 import { registerNotificationHandlers } from './notificationHandlers'
@@ -85,6 +86,7 @@ export function registerIpcHandlers(): void {
   registerWidgetHandlers()
   registerConfigShareHandlers()
   registerFilesHandlers()
+  registerLibraryHandlers()
   registerKnowledgeHandlers()
   registerPinChatHandlers()
   registerNotificationHandlers()

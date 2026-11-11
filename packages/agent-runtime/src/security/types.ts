@@ -825,6 +825,19 @@ export interface WidgetObjectInput {
 }
 
 /**
+ * enforceLibrary 的入参（对应 {type:'library'} 客体的属性）—— agent 读文件库里的一件（`read shuvix://file/<id>`，
+ * docs/file-library-design.md §9）。action 只有 `read`。
+ */
+export interface LibraryObjectInput {
+  /** 库里那件的 id */
+  itemId: string
+  /** 显示名（卡片展示用；名字可能是任何人起的，别拿来做判定） */
+  name: string
+  /** 与这条会话有关联（本会话发送过、本会话自己的笔记引用了）：出厂的 ask-on-library-access 据此不问 */
+  linked: boolean
+}
+
+/**
  * enforceExtension 的入参（对应 {type:'extension'} 客体的属性）—— `tool_search` 要开启的那台 MCP 服务器。
  */
 export interface ExtensionObjectInput {
@@ -911,6 +924,12 @@ export interface SecurityContext {
    * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
    */
   enforceWidget(mode: AccessMode, object: WidgetObjectInput, opts: EnforceOpts): Promise<void>
+  /**
+   * 文件库守卫（`read` 打开 `shuvix://file/<id>`）：客体 = `{type:'library'}`，action = read。
+   * 出厂的 ask-on-library-access 在这件与会话没有关联时询问（自动审核可以回答）。
+   * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
+   */
+  enforceLibrary(object: LibraryObjectInput, opts: EnforceOpts): Promise<void>
   /**
    * 开启扩展守卫（`tool_search` 要开启一台这条会话还没选的 MCP 服务器）：客体 = `{type:'extension'}`，
    * action = 'enable'。出厂的 ask-on-extension 每次都问，只由用户回答（auto-review 的 `when` 把它排除在外）；

@@ -13,7 +13,10 @@ import {
   KNOWLEDGE_MARKER_TYPE,
   isKnowledgeProjectId
 } from '@shuvix/chat-protocol/knowledge'
-import { isReadOnlyRegistryNoteProjectId } from '@shuvix/chat-protocol/registryNotes'
+import {
+  isReadOnlyRegistryNoteProjectId,
+  isRegistryNoteProjectId
+} from '@shuvix/chat-protocol/registryNotes'
 import { isReadOnlySkillProjectId, isSkillProjectId } from '@shuvix/chat-protocol/skillNotes'
 import { NotebookView, type NotebookViewProps } from './NotebookView'
 import { useFocusDim } from '../sidebar/useFocusDim'
@@ -52,6 +55,14 @@ export function NotebookSession({
     projectId === KNOWLEDGE_BUILTIN_PROJECT_ID ||
     isReadOnlyRegistryNoteProjectId(projectId) ||
     isReadOnlySkillProjectId(projectId)
+  // 能不能往笔记里粘贴、拖入文件（进文件库，docs/file-library-design.md §5）：bot、agent、策略、hook 的 md 是
+  // 注册表文件，技能的 SKILL.md 会被其他 agent 工具读（库链接对它们无效），都不放
+  // （SKILL.md 也按文件名认：项目里、Markdown 窗口里打开的技能文件不在技能载体下）
+  const attachable =
+    !readOnly &&
+    !isRegistryNoteProjectId(projectId) &&
+    !isSkillProjectId(projectId) &&
+    !/(^|[\\/])SKILL\.md$/i.test(path)
   const { handleInputResponse } = useChatActions(sessionId)
   // 悬浮输入卡片实高 → 根容器 CSS 变量：编辑器滚动区据此给文末让位（.cm-scroller 的
   // padding-bottom，见 atomic-panel.css）。直接写 DOM 变量而非 state —— 高度随抽屉
@@ -78,6 +89,7 @@ export function NotebookSession({
               : undefined
         }
         readOnly={readOnly}
+        attachable={attachable}
       />
       {/* 悬浮输入框：绝对贴底、背景透明不挡正文；对话抽屉与审批卡并入同一张卡片。
           relative z-20：输入卡片要盖住编辑器的浮动件（NotebookMinimap 是 z-10；

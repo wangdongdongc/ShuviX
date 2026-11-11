@@ -450,6 +450,14 @@ export function createSecurityContext(
       )
     },
 
+    async enforceLibrary(object, opts): Promise<void> {
+      await enforce(
+        'read',
+        { type: 'library', itemId: object.itemId, name: object.name, linked: object.linked },
+        { ...opts, onOther: 'throw' }
+      )
+    },
+
     async enforceExtension(object, opts): Promise<void> {
       await enforce(
         'enable',

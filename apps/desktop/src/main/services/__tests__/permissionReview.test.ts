@@ -21,6 +21,9 @@
  *   - XS-21     会话客体（session 工具与别的会话交互）的 operation / facts：消息预览按 3000 截断，read 没有 message。
  *   - WT4-SE-18 组件客体（widget 工具用一个组件）的 operation / policy / facts。
  *   - PR-E      扩展客体（tool_search 开启一台服务器）：facts 带 server 与 builtin（false 也带）。
+ *   - PR-LIB-1  文件库客体（read 一件与本会话没有关联的库文件，ask-on-library-access）：事件取自真的安全模块；objectType
+ *               library、target 是卡上的 `Read library file "N" (X)`、facts 带 itemId / name / linked（布尔）、
+ *               policy 是那份内置策略的显示名与提示语；name 为空时 facts 里没有 name。
  *   - PR-T      触发器替 bot 发的消息（来源 trigger）：进 delegatedTasks 并注明是哪个 bot 的触发，不算人写的。
  *               这几条按会话 id 换上 durable 摘要形状的转写项（digests），其余会话照旧走旧格式读者。
  *   - PR-SG     采纳的提议（`suggest` 工具，转写项 `suggested`，2026-10-25）：仍算人的话、进 userMessages，但逐字前缀
@@ -38,9 +41,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import {
   clearReviewState,
   clearSessionDecisions,
+  createSecurityContext,
   noteHumanFeedback,
   recordDecision,
   type PermissionRequestEvent,
@@ -1174,6 +1179,81 @@ describe('PR —— 扩展客体的 payload（PR-E）', () => {
       objectType: 'extension',
       target: 'Extension(notes)'
     })
+  })
+})
+
+// ─── 文件库客体（read 一件库文件） ─────────────
+
+describe('PR —— 文件库客体的 payload（PR-LIB-1）', () => {
+  /** 经真的安全模块（内置策略、桌面）跑一次 enforceLibrary，截下交给审查接缝的那个事件 */
+  async function libraryEvent(
+    sid: string,
+    object: { itemId: string; name: string; linked: boolean }
+  ): Promise<PermissionRequestEvent> {
+    const seen: PermissionRequestEvent[] = []
+    const sec = createSecurityContext(
+      { kind: 'agent', sessionId: sid, profileName: 'work', agentKind: 'root' },
+      { host: 'desktop', platform: 'darwin', workspaceDir: WS },
+      {
+        host: 'desktop',
+        pathSep: '/',
+        getVars: () => ({
+          workspace: WS,
+          toolResultsBase: '/nonexistent/tool-results',
+          skillsDirs: [],
+          knowledgeRoot: '/kb',
+          knowledgeSessionDirs: [],
+          home: '/nonexistent/home',
+          systemDirs: [],
+          aclRead: [],
+          aclWrite: []
+        }),
+        readBuiltinPolicyMd: createInlinePolicyMdReader(),
+        isDirectory: () => false,
+        persistGrant: () => {},
+        onPermissionRequest: async (event) => {
+          seen.push(event)
+          return null
+        },
+        requestUserInput: async () => ({ kind: 'ask', allowed: false })
+      }
+    )
+    await expect(
+      sec.enforceLibrary(object, { toolCallId: 'tc-lib', toolName: 'read' })
+    ).rejects.toThrow()
+    expect(seen).toHaveLength(1)
+    return seen[0]
+  }
+
+  it('PR-LIB-1 objectType library、target 是卡上的 command；facts 带 itemId / name / linked（布尔）；policy 是那份内置策略', async () => {
+    const sid = newSession()
+    const event = await libraryEvent(sid, { itemId: 'X', name: 'N', linked: false })
+    expect(event.command).toBe('Read library file "N" (X)')
+
+    const payload = await buildPermissionRequestPayload(event)
+    expect(payload.operation).toMatchObject({
+      tool: 'read',
+      action: 'read',
+      objectType: 'library',
+      target: 'Read library file "N" (X)'
+    })
+    expect(payload.operation.facts).toMatchObject({ itemId: 'X', name: 'N', linked: false })
+    expect(typeof payload.operation.facts.linked).toBe('boolean')
+    expect(payload.policy).toStrictEqual({
+      names: ['Ask Before Reading Other Library Files'],
+      prompt:
+        'This lets the agent read a file from your file library that this conversation has not used.'
+    })
+  })
+
+  it("PR-LIB-1 name '' → facts 里没有 name，itemId 与 linked 照带", async () => {
+    const sid = newSession()
+    const payload = await buildPermissionRequestPayload(
+      await libraryEvent(sid, { itemId: 'X', name: '', linked: false })
+    )
+    expect(payload.operation.target).toBe('Read library file (X)')
+    expect(payload.operation.facts).not.toHaveProperty('name')
+    expect(payload.operation.facts).toMatchObject({ itemId: 'X', linked: false })
   })
 })
 

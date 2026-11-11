@@ -7,7 +7,7 @@
  *   WA-2 app:open-external：http / https / mailto 用归一后的 href 在新标签页（noopener,noreferrer）开、回 {success:true}；
  *        javascript / file / data / ftp / 自定义协议 / 不是 URL / 空 / undefined → {success:false}，open 不调
  *   WA-3 webDesktopOnlyChannels：桌面专属表减去本地实现（剩 3 条：悬浮窗两条、保存框）；
- *        {} → 23；只认自有属性
+ *        {} → 24；只认自有属性
  *   WA-4 本地实现的每个键都是桌面专属键、也是通道表里的 invoke 通道（服务端反正会拒它们）
  *   WA-5 createWebApi：platform 'web'、sync 的成员就是连接 sync 的那几个函数；命名空间 = 表 + events / liveDoc / knowledge / sync；
  *        liveDoc.respond / knowledge.baseOptions 的打包；两次 events.subscribe 只挂一个 app:event 监听
@@ -39,6 +39,12 @@
  *
  *   WA-8b browser-view:open-window → 新标签页开 `<origin><pathname>#browser-manager`（恰一次，'_blank'），回 undefined；
  *         browser-view:open-settings → `…#browser-manager?section=settings`
+ * 文件库（L1，docs/file-library-l1-tests.md §7.5）：
+ *
+ *   WA-LIB-1 files:open 的 `library:` 引用：新标签页直接开 `/files/library?id=ID`（恰一次，不经预览页、不带 openedBy）；
+ *            缺 sessionId → false，不开；`library:bad` 照常开预览页
+ *   WA-LIB-2 本地的 library:pickFiles 回 null，从不经过连接（笔记编辑器据此改用页面自己的文件选择框）
+ *
  *   WA-9b 经装好的 web api（createWsConnection + createWebApi，与 web/main.tsx 同样接）：browserView.openWindow() resolve，
  *         不经 socket、不给「只在桌面应用里」的提示
  */
@@ -46,7 +52,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../../shared/apiTable'
 import type { ApiTransport } from '../../../../shared/buildApi'
 import { filePreviewPageUrl, widgetPageUrl } from '../../host/hostUrls'
-import { networkShownImageUrl } from '../../../../shared/networkRoutes'
+import { networkLibraryFileUrl, networkShownImageUrl } from '../../../../shared/networkRoutes'
 import {
   WEB_FOLDER_CHANNELS,
   createWebApi,
@@ -148,11 +154,11 @@ describe('WA-3 webDesktopOnlyChannels', () => {
     expect(set.has('app:open-external')).toBe(false)
   })
 
-  it('WA-3 {} → 23；只认自有属性', () => {
-    expect(webDesktopOnlyChannels({}).size).toBe(23)
+  it('WA-3 {} → 24；只认自有属性', () => {
+    expect(webDesktopOnlyChannels({}).size).toBe(24)
     const inherited = webDesktopOnlyChannels(Object.create({ 'app:open-folder': () => {} }))
     expect(inherited.has('app:open-folder')).toBe(true)
-    expect(inherited.size).toBe(23)
+    expect(inherited.size).toBe(24)
   })
 })
 
@@ -180,6 +186,7 @@ describe('WA-4 本地实现的通道', () => {
         'hook:openFolder',
         'knowledge:openFolder',
         'knowledge:revealFile',
+        'library:pickFiles',
         'policy:openFolder',
         'skill:pickExternalDir',
         'subAgent:openFolder',
@@ -369,6 +376,84 @@ describe('WA-6-SH files:open 的 shown: 引用', () => {
       expect(open(params), JSON.stringify(params)).toBe(false)
     }
     expect(fakeWin.open).not.toHaveBeenCalled()
+  })
+})
+
+describe('WA-LIB-1 files:open 的 library: 引用', () => {
+  const ID = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+
+  it('WA-LIB-1 合法引用 → true，新标签页直接开 /files/library?id=ID（恰一次，不经预览页、不带 openedBy）', () => {
+    const open = webLocalHandlers(fakeWin)['files:open']
+    expect(open({ sessionId: 'S', path: `library:${ID}`, openedBy: 'agent' })).toBe(true)
+    expect(fakeWin.open).toHaveBeenCalledTimes(1)
+    expect(fakeWin.open).toHaveBeenCalledWith(`/files/library?id=${ID}`, '_blank')
+    expect(fakeWin.open).toHaveBeenCalledWith(networkLibraryFileUrl(ID), '_blank')
+    const url = String(fakeWin.open.mock.calls[0][0])
+    expect(url).not.toContain('#file-preview')
+    expect(url).not.toContain('openedBy')
+  })
+
+  it('WA-LIB-1 缺 sessionId → false，不开', () => {
+    const open = webLocalHandlers(fakeWin)['files:open']
+    for (const params of [{ path: `library:${ID}` }, { sessionId: '', path: `library:${ID}` }]) {
+      expect(open(params), JSON.stringify(params)).toBe(false)
+    }
+    expect(fakeWin.open).not.toHaveBeenCalled()
+  })
+
+  it('WA-LIB-1 library:bad → 照常开预览页，path 是原串', () => {
+    const open = webLocalHandlers(fakeWin)['files:open']
+    expect(open({ sessionId: 'S', path: 'library:bad' })).toBe(true)
+    expect(fakeWin.open).toHaveBeenCalledTimes(1)
+    expect(fakeWin.open).toHaveBeenCalledWith(
+      filePreviewPageUrl(fakeWin.location, {
+        sessionId: 'S',
+        path: 'library:bad',
+        openedBy: 'user'
+      }),
+      '_blank'
+    )
+  })
+})
+
+describe('WA-LIB-2 library:pickFiles', () => {
+  it('WA-LIB-2 本地实现回 null；经装好的 web api 调也回 null，不经 socket、不给桌面专属的提示', async () => {
+    const localInvoke = webLocalHandlers(fakeWin)
+    expect(localInvoke['library:pickFiles']()).toBeNull()
+
+    const sockets: Array<{ send: ReturnType<typeof vi.fn> }> = []
+    const createSocket = vi.fn((_url: string): WebSocketLike => {
+      const socket = {
+        readyState: 0,
+        send: vi.fn(),
+        close: vi.fn(),
+        onopen: null,
+        onclose: null,
+        onerror: null,
+        onmessage: null
+      }
+      sockets.push(socket)
+      return socket
+    })
+    const onDesktopOnly = vi.fn()
+    const conn = createWsConnection({
+      url: 'ws://h/ws',
+      createSocket,
+      localInvoke,
+      desktopOnly: webDesktopOnlyChannels(localInvoke),
+      onDesktopOnly,
+      timers: { setTimeout: () => 0, clearTimeout: () => {} }
+    })
+    const api = createWebApi(conn)
+
+    await expect(api.library.pickFiles()).resolves.toBeNull()
+    expect(onDesktopOnly).not.toHaveBeenCalled()
+    for (const socket of sockets) expect(socket.send).not.toHaveBeenCalled()
+    expect(fakeWin.open).not.toHaveBeenCalled()
+    // 桌面专属表里有它，但本地实现了：web 端不当它是「只在桌面」
+    expect(Object.keys(DESKTOP_ONLY_CHANNELS)).toContain('library:pickFiles')
+    expect(Object.keys(webDesktopOnlyChannels(localInvoke))).not.toContain('library:pickFiles')
+    conn.dispose()
   })
 })
 

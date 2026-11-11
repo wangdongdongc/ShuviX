@@ -75,6 +75,9 @@ function summarizeObject(request: SecurityRequest): string {
   if (object.type === 'extension' && typeof object.server === 'string') {
     return `extension ${object.server}`
   }
+  if (object.type === 'library' && typeof object.itemId === 'string') {
+    return `library ${object.itemId}`
+  }
   if (object.type === 'channel' && typeof object.channel === 'string') {
     return `channel ${object.channel}`
   }
@@ -116,6 +119,9 @@ function displayName(request: SecurityRequest, opts: EnforceOpts): string {
   if (object.type === 'widget' && typeof object.name === 'string' && object.name) {
     return `widget "${object.name}" (${String(object.widgetId)})`
   }
+  if (object.type === 'library' && typeof object.name === 'string' && object.name) {
+    return `library file "${object.name}" (${String(object.itemId)})`
+  }
   // 这段文字会落进给模型的拒绝结果：名字过滤一下，日志（summarizeObject）留原样
   if (object.type === 'extension' && typeof object.server === 'string') {
     return `extension ${safeExtensionName(object.server)}`
@@ -142,6 +148,8 @@ function deniedMessage(request: SecurityRequest, display: string): string {
         : `User denied reading ${display}`
     case 'extension':
       return `User denied enabling ${display}`
+    case 'library':
+      return `User denied reading ${display}`
     case 'channel':
       return `User denied this change (${display})`
     default:

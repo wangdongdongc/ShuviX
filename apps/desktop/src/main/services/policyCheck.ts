@@ -53,6 +53,7 @@ import { NETWORK_ADMISSION_POLICY, type NetworkStatus } from '../../shared/netwo
 import { NETWORK_WS_PATH } from '../../shared/networkEnvelope'
 import {
   NETWORK_DOWNLOAD_PATH,
+  NETWORK_LIBRARY_FILE_PATH,
   NETWORK_LIB_PREFIX,
   NETWORK_MEDIA_PATH,
   NETWORK_PREVIEW_PATH,
@@ -555,6 +556,7 @@ function scopeProbes(): Probe[] {
     [NETWORK_MEDIA_PATH, 'GET'],
     [NETWORK_PREVIEW_PATH, 'GET'],
     [NETWORK_DOWNLOAD_PATH, 'GET'],
+    [NETWORK_LIBRARY_FILE_PATH, 'GET'],
     [`${NETWORK_WIDGET_PREFIX}example/`, 'GET'],
     [`${NETWORK_WIDGET_PREFIX}example/api`, 'POST']
   ]

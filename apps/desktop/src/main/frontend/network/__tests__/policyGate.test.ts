@@ -13,6 +13,8 @@
  *   PG-6 拒绝记录：放行不记；同一（地址、设备、规则、摘要）一分钟内合并、过了窗口另起一条；新 ID 记进 device；
  *        最多 200 条；onChange 只在新条目时调
  *   PG-7 判定抛错 → 拒绝（fail closed）且记一条 rule 'error'；没接上 → 一律放行
+ *   PG-LIB-1 文件库（`/files/library`，L1）：去处是 library；requestFactsOf('library', GET / HEAD / OPTIONS) → files + read，
+ *        POST → write；一条按 scope 拒掉 files 的规则在 request 这一步拒掉 GET /files/library（拒绝记录 stage request、scope files）
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { networkInterfaces } from 'node:os'
@@ -31,6 +33,7 @@ import {
   newDeviceId,
   parseCookies,
   peerFactsOf,
+  requestFactsOf,
   requestRouteOf,
   requestTarget,
   type RequestRoute
@@ -351,6 +354,56 @@ describe('PG-5+ 摆给用户看的图的请求', () => {
     expect(denials.recent()).toMatchObject([
       { stage: 'request', summary: 'GET /sessions/shown-image', scope: 'sessions' }
     ])
+  })
+})
+
+describe('PG-LIB-1 文件库的请求', () => {
+  it('PG-LIB-1 requestRouteOf：/files/library → library', () => {
+    expect(requestRouteOf('/files/library', false)).toBe('library')
+    expect(requestRouteOf('/files/library/', false)).toBe('asset')
+  })
+
+  it('PG-LIB-1 requestFactsOf：GET / HEAD / OPTIONS → files + read；POST → files + write', () => {
+    for (const method of ['GET', 'HEAD', 'OPTIONS']) {
+      expect(requestFactsOf('library', method), method).toEqual({ scope: 'files', access: 'read' })
+    }
+    expect(requestFactsOf('library', 'POST')).toEqual({ scope: 'files', access: 'write' })
+  })
+
+  it('PG-LIB-1 按 scope 拒掉 files 的规则：在 request 这一步拒掉 GET /files/library；拒 sessions 的规则挡不住它', () => {
+    const query = { id: '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10' }
+    const judge = (gate: NetworkPolicyGate): GateVerdict =>
+      gate.judgeRequest(PEER, HTTP, {
+        method: 'GET',
+        path: '/files/library',
+        query,
+        route: 'library'
+      })
+
+    const denials = new NetworkDenialLog()
+    const filesDenied = recordingGate(
+      (object) => (object.scope === 'files' ? DENY : ALLOW),
+      denials
+    )
+    const verdict = judge(filesDenied.gate)
+    expect(verdict.allowed).toBe(false)
+    expect(filesDenied.calls).toHaveLength(1)
+    expect(filesDenied.calls[0].action).toBe('request')
+    expect(filesDenied.calls[0].object).toEqual({
+      type: 'request',
+      method: 'GET',
+      path: '/files/library',
+      query,
+      route: 'library',
+      scope: 'files',
+      access: 'read'
+    })
+    expect(denials.recent()).toMatchObject([
+      { stage: 'request', summary: 'GET /files/library', scope: 'files' }
+    ])
+
+    const sessionsDenied = recordingGate((object) => (object.scope === 'sessions' ? DENY : ALLOW))
+    expect(judge(sessionsDenied.gate).allowed).toBe(true)
   })
 })
 

@@ -580,6 +580,74 @@ describe('WT4-SE-17 auto-review × 组件客体（经真 runner 的 decide）', 
 })
 
 /**
+ * XS-LIB-1 XS-20 的文件库版（docs/file-library-l1-tests.md §9.4）：agent 读一个没有关联的库文件
+ * （`objectType: 'library'`）**可以**由自动审查回答（§9，同读工作目录外的文件）—— 三门语言的 when 都为真，
+ * 派 permission-reviewer 恰一次、交回它的结论；同一个 runner 里会话客体照旧不派、回 null。零 when 告警。
+ */
+describe('XS-LIB-1 auto-review × 文件库客体（经真 runner 的 decide）', () => {
+  const reviewer: InProcessAgentType = {
+    ...PROFILE,
+    name: 'permission-reviewer',
+    displayName: 'Permission Reviewer',
+    tools: ['read']
+  }
+
+  const LIBRARY_OPERATION = {
+    tool: 'read',
+    action: 'read',
+    objectType: 'library',
+    target: 'Read library file "N" (X)',
+    facts: { itemId: 'X', name: 'N', linked: false }
+  }
+  const SESSION_OPERATION = {
+    tool: 'session: prompt-session',
+    action: 'write',
+    objectType: 'session',
+    target: 'Session(write, X)',
+    facts: { sessionId: 'X', title: 'T', ownTurn: false, message: 'please rebase' }
+  }
+
+  it.each(LANGS)(
+    'XS-LIB-1 %s：objectType library → 派 permission-reviewer 恰一次、交回它的结论；对照 objectType session → 不派、null；零 when 告警',
+    async (lang) => {
+      const review = build(lang).find((hook) => hook.name === 'auto-review')!
+      const h = makeRunner({
+        entries: [entryOf(review, 'builtin')],
+        resolveAgentProfile: (name) => (name === 'permission-reviewer' ? reviewer : null),
+        runTask: async () => verdictResult(verdict('allow'))
+      })
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({
+            operation: LIBRARY_OPERATION,
+            policy: { names: ['Ask Before Reading Other Library Files'], prompt: 'p' }
+          })
+        )
+      ).toEqual({ result: verdict('allow'), hook: 'auto-review' })
+      expect(h.runTask).toHaveBeenCalledTimes(1)
+      expect(h.call(0).agentType.name).toBe('permission-reviewer')
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({
+            operation: SESSION_OPERATION,
+            policy: { names: ['Ask Before Using Another Session'], prompt: 'p' }
+          })
+        )
+      ).toBeNull()
+      await settle()
+      expect(h.runTask).toHaveBeenCalledTimes(1)
+
+      expect(h.warns().filter((msg) => msg.includes('when evaluation failed'))).toEqual([])
+      expect(h.warns()).toEqual([])
+    }
+  )
+})
+
+/**
  * 内置 hook 的对象 id（`shuvix-id`，md 扩展元数据只认它）：每份内置 × 每门语言的 md 都写着
  * `hook:builtin:<name>`，构建出来的 hook 在任何语言下都带着同一个 id（覆盖副本逐字复制原文，id 跟着走）。
  */

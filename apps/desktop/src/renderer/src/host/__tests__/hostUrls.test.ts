@@ -15,9 +15,15 @@
  *   HU-8 browserManagerPageUrl（web 客户端的浏览器管理页，2026-11-01）：保留 origin 与 pathname；缺省 / 'tabs' →
  *        `#browser-manager`，'settings' → `#browser-manager?section=settings`
  *   HU-9 browserManagerSectionOf：只认 `section=settings`（在查询串里任何位置）；没有 / 空 / 认不出 / 空 hash → tabs
+ *   HU-LIB-1 webPreviewUrl 的 `library:` 引用（文件库 L1）→ `/files/library?id=<id>`，地址里没有会话；大写 id 统一成小写；
+ *        形状不对的 `library:bad` 照普通路径走 `/files/preview`
  */
 import { describe, expect, it } from 'vitest'
-import { networkPreviewUrl, networkShownImageUrl } from '../../../../shared/networkRoutes'
+import {
+  networkLibraryFileUrl,
+  networkPreviewUrl,
+  networkShownImageUrl
+} from '../../../../shared/networkRoutes'
 import {
   browserManagerPageUrl,
   browserManagerSectionOf,
@@ -157,6 +163,22 @@ describe('HU-7 webPreviewUrl 的 shown: 引用', () => {
       expect(webPreviewUrl('s 1', raw), raw).toBe(networkPreviewUrl('s 1', raw))
     }
     expect(webPreviewUrl('s 1', 'sub/b.png')).toBe(networkPreviewUrl('s 1', 'sub/b.png'))
+  })
+})
+
+describe('HU-LIB-1 webPreviewUrl 的 library: 引用', () => {
+  const ID = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+
+  it('HU-LIB-1 合法引用 → /files/library?id=ID，地址里没有会话；大写 id 统一成小写；library:bad → /files/preview', () => {
+    const url = webPreviewUrl('S', `library:${ID}`)
+    expect(url).toBe(`/files/library?id=${ID}`)
+    expect(url).toBe(networkLibraryFileUrl(ID))
+    expect(url).not.toContain('session')
+    expect(webPreviewUrl('another session', `library:${ID}`)).toBe(url)
+
+    expect(webPreviewUrl('S', `library:${ID.toUpperCase()}`)).toBe(`/files/library?id=${ID}`)
+
+    expect(webPreviewUrl('S', 'library:bad')).toBe(networkPreviewUrl('S', 'library:bad'))
   })
 })
 

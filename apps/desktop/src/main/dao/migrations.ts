@@ -1130,6 +1130,99 @@ export const migrations: Migration[] = [
         )
       `)
     }
+  },
+  {
+    version: 41,
+    description:
+      '文件库（docs/file-library-design.md §3）：文件、版本、分类、标签与标签组、字段、关联。文件本身在 ~/.shuvix/library/files/ 下，这里只存元数据',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS library_items (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          storage TEXT NOT NULL DEFAULT 'managed',
+          externalPath TEXT,
+          currentVersion INTEGER NOT NULL DEFAULT 1,
+          kind TEXT NOT NULL DEFAULT 'other',
+          source TEXT NOT NULL DEFAULT 'import',
+          description TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          deletedAt INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_library_items_deleted ON library_items (deletedAt);
+        CREATE TABLE IF NOT EXISTS library_versions (
+          itemId TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,
+          size INTEGER NOT NULL,
+          mime TEXT NOT NULL,
+          fileName TEXT NOT NULL,
+          width INTEGER,
+          height INTEGER,
+          durationMs INTEGER,
+          createdAt INTEGER NOT NULL,
+          PRIMARY KEY (itemId, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_library_versions_sha ON library_versions (sha256);
+        CREATE TABLE IF NOT EXISTS library_categories (
+          id TEXT PRIMARY KEY,
+          parentId TEXT,
+          name TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS library_item_categories (
+          itemId TEXT NOT NULL,
+          categoryId TEXT NOT NULL,
+          PRIMARY KEY (itemId, categoryId)
+        );
+        CREATE TABLE IF NOT EXISTS library_tag_groups (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          color TEXT,
+          exclusive INTEGER NOT NULL DEFAULT 0,
+          sort INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS library_tags (
+          id TEXT PRIMARY KEY,
+          groupId TEXT,
+          name TEXT NOT NULL,
+          color TEXT,
+          sort INTEGER NOT NULL DEFAULT 0,
+          UNIQUE (groupId, name)
+        );
+        CREATE TABLE IF NOT EXISTS library_item_tags (
+          itemId TEXT NOT NULL,
+          tagId TEXT NOT NULL,
+          PRIMARY KEY (itemId, tagId)
+        );
+        CREATE TABLE IF NOT EXISTS library_fields (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL,
+          options TEXT,
+          sort INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS library_item_fields (
+          itemId TEXT NOT NULL,
+          fieldId TEXT NOT NULL,
+          value TEXT,
+          PRIMARY KEY (itemId, fieldId)
+        );
+        CREATE TABLE IF NOT EXISTS library_links (
+          itemId TEXT NOT NULL,
+          targetType TEXT NOT NULL,
+          targetId TEXT NOT NULL,
+          relation TEXT NOT NULL,
+          origin TEXT NOT NULL DEFAULT 'derived',
+          context TEXT,
+          createdAt INTEGER NOT NULL,
+          PRIMARY KEY (itemId, targetType, targetId, relation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_library_links_target ON library_links (targetType, targetId);
+      `)
+    }
   }
 ]
 

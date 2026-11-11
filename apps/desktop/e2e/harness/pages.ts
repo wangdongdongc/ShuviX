@@ -10150,6 +10150,33 @@ export interface NotebookEditorPane {
    * 链接不在屏或被盖住则抛错。
    */
   clickLink(label: string): Promise<void>
+  /** 编辑器里的真实文本（CM6 的 doc，含 live preview 藏起来的语法标记与没存盘的输入）；没有编辑器为空串 */
+  docText(): Promise<string>
+  /**
+   * 把光标放到文末（经 CM6 视图放选区 + 焦点仿真）—— 之后的粘贴、`insertAtCaret` 都落在这里。
+   * 光标所在行显示源码：要看渲染后的图片 / 链接，之后再 `caretToStart`
+   */
+  caretToEnd(): Promise<void>
+  /** 在光标处经 CDP `Input.insertText` 打进一段文字（可信输入；先 `caretToEnd` 之类把光标放好） */
+  insertAtCaret(text: string): Promise<void>
+  /**
+   * 往编辑器里粘贴文件：页面里建一个 `DataTransfer`，每项 `items.add(new File(...))`，`text` 非空时再放一份
+   * `text/plain`，对 `.cm-content` 派发 `ClipboardEvent('paste')`（与系统粘贴同一个事件，编辑器的处理器按
+   * 剪贴板内容判定是附件还是文本）。回编辑器有没有拦下它（`defaultPrevented`）；没有编辑器则抛错。
+   * 合成的 File 没有本机路径（`webUtils.getPathForFile` 回空串），走的是截图 / web 客户端那条「交字节」的路
+   */
+  pasteFiles(files: PasteFileSeed[], text?: string): Promise<boolean>
+  /** 进库中的占位与失败提示（`.cm-attach-pending` 的文字，按文档顺序；只是装饰，不在 doc 里） */
+  attachPlaceholders(): Promise<string[]>
+}
+
+/** `notebookEditorPane.pasteFiles` 的一项：页面里按它建一个 File */
+export interface PasteFileSeed {
+  name: string
+  /** MIME（`image/png`、`application/pdf` …） */
+  type: string
+  /** 文件字节的 base64 */
+  base64: string
 }
 
 export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
@@ -10281,7 +10308,56 @@ export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
         buttons: 0,
         clickCount: 1
       })
-    }
+    },
+    docText: () => main.eval<string>(`${CM_VIEW}?.state.doc.toString() ?? ''`),
+    caretToEnd: async () => {
+      // 焦点仿真：主窗口不一定是系统里有焦点的那个，没有焦点时 CM6 不理选区（同 typeAtEnd）
+      await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      const ok = await main.eval<boolean>(`(() => {
+        const view = ${CM_VIEW}
+        if (!view) return false
+        view.focus()
+        view.dispatch({ selection: { anchor: view.state.doc.length } })
+        return true
+      })()`)
+      if (!ok) throw new Error('notebook: no editor view to place the caret in')
+      // 让 CM6 把选区同步进 DOM，可信输入才落在这里
+      await sleep(60)
+    },
+    insertAtCaret: async (text) => {
+      await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      await main.send('Input.insertText', { text })
+    },
+    pasteFiles: async (files, text = '') => {
+      const handled = await main.eval<boolean | null>(`(() => {
+        const content = ${EDITOR}?.querySelector('.cm-content')
+        if (!content) return null
+        const data = new DataTransfer()
+        for (const f of ${JSON.stringify(files)}) {
+          const bin = atob(f.base64)
+          const bytes = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          data.items.add(new File([bytes], f.name, { type: f.type }))
+        }
+        const text = ${JSON.stringify(text)}
+        if (text) data.setData('text/plain', text)
+        const event = new ClipboardEvent('paste', {
+          clipboardData: data,
+          bubbles: true,
+          cancelable: true
+        })
+        content.dispatchEvent(event)
+        return event.defaultPrevented
+      })()`)
+      if (handled === null) throw new Error('notebook: no editor to paste into')
+      return handled
+    },
+    attachPlaceholders: () =>
+      main.eval<string[]>(
+        `[...(${EDITOR}?.querySelectorAll('.cm-content .cm-attach-pending') ?? [])].map(
+          (el) => el.textContent ?? ''
+        )`
+      )
   }
 }
 

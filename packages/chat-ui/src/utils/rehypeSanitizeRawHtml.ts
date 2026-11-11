@@ -33,6 +33,7 @@
  * hljs 自己的输出 —— 别为此放宽下面的表，把插件排回去。
  */
 import { parseSessionLink } from '@shuvix/chat-protocol/dailyNotes'
+import { parseLibraryLink } from '@shuvix/chat-protocol/fileLibrary'
 
 interface HastNode {
   type: string
@@ -225,13 +226,21 @@ const keepUrl: AttrCheck = (value) =>
   typeof value === 'string' && isSafeMarkdownUrl(value) ? value : undefined
 
 /**
- * `a` 的 href 多认一种：形状严格匹配的会话链接。它过了闸就被 rehypeSessionLinks 换成不带地址的
+ * `a` 的 href 多认两种：形状严格匹配的会话链接与文件库链接。它过了闸就被 rehypeSessionLinks 换成不带地址的
  * `<session-link>`，不会留在 DOM 里；别的 `shuvix://` 与其余标签的 URL 属性仍只认上面的协议表。
  */
 const keepAnchorHref: AttrCheck = (value) =>
-  typeof value === 'string' && (isSafeMarkdownUrl(value) || parseSessionLink(value))
+  typeof value === 'string' &&
+  (isSafeMarkdownUrl(value) || parseSessionLink(value) || parseLibraryLink(value))
     ? value
     : undefined
+
+/**
+ * `img` 的 src 多认一种：形状严格匹配的文件库链接（`shuvix://file/<id>/…`）。它过了闸就被 rehypeLibraryLinks 换成
+ * 只带 id 的 `<library-image>`，不会带着地址留在 DOM 里
+ */
+const keepImageSrc: AttrCheck = (value) =>
+  keepUrl(value) ?? (typeof value === 'string' && parseLibraryLink(value) ? value : undefined)
 
 /** class：逐个取值过表，一个都不剩时连属性一起丢 */
 const keepClasses: AttrCheck = (value) => {
@@ -264,7 +273,7 @@ const GLOBAL_ATTRS: Record<string, AttrCheck> = {
 /** 按标签追加的属性（`dataFootnote*` 是 remark-gfm 的钩子，CSS 与读屏都认它） */
 const TAG_ATTRS: Record<string, Record<string, AttrCheck>> = {
   a: { href: keepAnchorHref, dataFootnoteRef: keepString, dataFootnoteBackref: keepString },
-  img: { src: keepUrl, alt: keepString },
+  img: { src: keepImageSrc, alt: keepString },
   ol: { start: keepNumber },
   li: { value: keepNumber },
   td: { colSpan: keepNumber, rowSpan: keepNumber },

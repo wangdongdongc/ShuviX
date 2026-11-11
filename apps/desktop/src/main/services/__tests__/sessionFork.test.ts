@@ -44,6 +44,11 @@
  *   SF-30 (C2) fork 的 fork → tempDirOwner 仍是最初那条会话
  *   SF-31 (D6) 锁留下了 → fakeHost.adoptedForks 有 fork 的 id，认领在 fork 的任何 open 之前；
  *         锁没留下 → 不认领；源会话没有存储（什么都没拷）→ 不收尾、不认领；插行失败 → 半成品删掉
+ * 文件库的关联（文件库 L1，docs/file-library-l1-tests.md §8.4；`../fileLibrary` 用 importOriginal + 间谍）：
+ *   SF-LIB-1 整段 fork、从回复分支都成功 → copySessionLibraryLinks(源, fork) 恰一次；被拒的路（no_session、not_forkable、
+ *            busy、invalid_target）一次都不调
+ *   SF-LIB-2 行进库之后失败（branchAt 拒绝、open 抛错）→ 半成品走完整删除，对 forkId 调 removeSessionLibraryLinks；
+ *            源会话的关联不动
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -74,7 +79,10 @@ const mocks = vi.hoisted(() => ({
   artifactsFail: false,
   shownFail: false,
   /** projectDao.pick：缺省没有项目行（工作目录回落到会话自带的 / 临时工作区）；SF-11 的权限表用例给项目根 */
-  projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined)
+  projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined),
+  /** 文件库：复制 / 删除会话关联（SF-LIB） */
+  copyLibraryLinks: vi.fn<(fromId: string, toId: string) => void>(),
+  removeLibraryLinks: vi.fn<(sessionId: string) => void>()
 }))
 
 vi.mock('../../dao/database', () => {
@@ -150,6 +158,12 @@ vi.mock('../shownImages', async (importOriginal) => {
     }
   }
 })
+// 文件库的两个关联函数换成间谍（其余导出留真的）：fork 复制源会话的关联，半成品的完整删除删掉 fork 的关联
+vi.mock('../fileLibrary', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../fileLibrary')>()),
+  copySessionLibraryLinks: mocks.copyLibraryLinks,
+  removeSessionLibraryLinks: mocks.removeLibraryLinks
+}))
 vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
 )
@@ -1454,4 +1468,82 @@ describe('SF-29..31 the temp folder owner and the adopted agent', () => {
     expect(mocks.listChanged).not.toHaveBeenCalled()
     expect(fakeHost.callsOf('open')).toEqual([])
   })
+})
+
+// ─── SF-LIB：文件库的关联 ─────────────────
+
+describe('SF-LIB file library links', () => {
+  it.each<[string, string | undefined]>([
+    ['whole fork', undefined],
+    ['reply fork', '2']
+  ])(
+    'SF-LIB-1 %s succeeds → copySessionLibraryLinks(source, fork) exactly once',
+    async (_label, messageId) => {
+      seedRow()
+      openSource()
+      const forkId = forkIdOf(
+        await forkSession(
+          messageId === undefined ? { sessionId: SRC } : { sessionId: SRC, messageId }
+        )
+      )
+      expect(mocks.copyLibraryLinks.mock.calls).toEqual([[SRC, forkId]])
+      expect(mocks.removeLibraryLinks).not.toHaveBeenCalled()
+    }
+  )
+
+  it('SF-LIB-1 refused paths (no_session, not_forkable, busy, invalid_target) never copy links', async () => {
+    expect(await forkSession({ sessionId: 'missing' })).toMatchObject({ reason: 'no_session' })
+
+    seedRow({ settings: { notebookPath: 'notes/a.md' } })
+    openSource()
+    expect(await forkSession({ sessionId: SRC })).toMatchObject({ reason: 'not_forkable' })
+    sessionRecords.deleteById(SRC)
+    resetFakeHost()
+
+    seedRow()
+    openSource({ busy: true })
+    expect(await forkSession({ sessionId: SRC })).toMatchObject({ reason: 'busy' })
+    resetFakeHost()
+
+    openSource()
+    expect(await forkSession({ sessionId: SRC, messageId: '3' })).toMatchObject({
+      reason: 'invalid_target'
+    })
+    expect(await forkSession({ sessionId: SRC, messageId: 'abc' })).toMatchObject({
+      reason: 'invalid_target'
+    })
+
+    expect(mocks.copyLibraryLinks).not.toHaveBeenCalled()
+    expect(mocks.removeLibraryLinks).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, () => void]>([
+    [
+      'branchAt refuses',
+      () => {
+        fakeHost.configure = (session) => {
+          if (session.sessionId !== SRC) session.branchResult = { ok: false, reason: 'not_found' }
+        }
+      }
+    ],
+    [
+      'host.open(fork) throws',
+      () => vi.spyOn(fakeHost, 'open').mockRejectedValueOnce(new Error('cannot open'))
+    ]
+  ])(
+    'SF-LIB-2 after the row exists: %s → full delete removes the fork links; the source links are untouched',
+    async (_label, inject) => {
+      seedRow()
+      openSource()
+      inject()
+
+      const result = await forkSession({ sessionId: SRC, messageId: '2' })
+      expect(result.success).toBe(false)
+      const forkId = mocks.copy.mock.calls[0]![1]
+      expect(rowIds()).toEqual([SRC])
+      expect(mocks.copyLibraryLinks.mock.calls).toEqual([[SRC, forkId]])
+      expect(mocks.removeLibraryLinks.mock.calls).toEqual([[forkId]])
+      expect(mocks.removeLibraryLinks).not.toHaveBeenCalledWith(SRC)
+    }
+  )
 })

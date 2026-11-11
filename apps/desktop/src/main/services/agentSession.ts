@@ -39,6 +39,8 @@ import { getSessionHost } from './sessionHost'
 import { carryRedactions } from './redactionCarry'
 import { acceptedCardValues, stashCardValues } from './cardValues'
 import { sessionRecords } from './sessionRecords'
+import { keepSentImages } from './fileLibrary'
+import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { sessionSignalsReady } from './sessionSignalSeams'
 // 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
 import { sessionService } from './sessionService'
@@ -170,6 +172,8 @@ export class AgentSession {
         ? source
         : sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
     const dayPrompt = this.dayPromptCallbacks(origin)
+    // 发送的图片进文件库（docs/file-library-design.md §5），挂在落下的那条用户消息上
+    const keepImages = images && images.length > 0 ? this.libraryImageCallback(images) : undefined
     // 别的会话发进来的话里有它的占位符：先把对照表项带过来（自动脱敏 §5.3）
     await carryFromDriver(origin, this.sessionId, text)
     // 受理回调交给 hook 的提示词（起标题的 agent 要发给模型）也得是换过的：输入框交来的值先在这里换一遍，运行时里
@@ -198,9 +202,13 @@ export class AgentSession {
         admitted = true
         this.runOrigin = origin
         dayPrompt.onAdmitted(info)
+        keepImages?.(info.entryId)
         this.onPromptAdmitted(admittedText, origin)
       },
-      onPlaced: dayPrompt.onPlaced
+      onPlaced: (info) => {
+        dayPrompt.onPlaced(info)
+        keepImages?.(info.entryId)
+      }
     })
     // 轮结束埋点只给受理过的发送（不 await；payload 组装失败只记日志，绝不影响会话主流程）
     if (admitted) {
@@ -544,6 +552,27 @@ export class AgentSession {
     return {
       onAdmitted: (info) => record(info.entryId),
       onPlaced: (info) => record(info.entryId)
+    }
+  }
+
+  /**
+   * 发送的图片进文件库（docs/file-library-design.md §5）：用户条目落下时（`onAdmitted{entryId}` 或排队后
+   * `onPlaced`）按条目 id 存一次，关联 `sent`。内存会话与 Chrome 标签页会话不进库（§10，同 ChatGPT 的临时对话）。
+   * 不 await：存库失败只记日志，绝不影响发送。
+   */
+  private libraryImageCallback(
+    images: Array<{ type: 'image'; data: string; mimeType: string }>
+  ): ((entryId: number | undefined) => void) | undefined {
+    const id = this.sessionId
+    if (sessionRecords.isEphemeral(id) || sessionRecords.wasEphemeral(id)) return undefined
+    if (isChromeTabSessionSettings(sessionRecords.pickSettings(id, ['chromeTab']))) return undefined
+    let kept = false
+    return (entryId) => {
+      if (entryId === undefined || kept) return
+      kept = true
+      void keepSentImages(id, entryId, images).catch((err) =>
+        log.warn(`发送的图片进库失败 session=${id}: ${err}`)
+      )
     }
   }
 

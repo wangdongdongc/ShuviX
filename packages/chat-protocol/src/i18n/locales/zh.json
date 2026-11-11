@@ -167,6 +167,7 @@
       "heading": "{{level}} 级标题",
       "body": "正文",
       "quote": "引用",
+      "imageOrFile": "图片或文件…",
       "table": "表格",
       "divider": "分隔线",
       "codeBlock": "代码块",
@@ -183,6 +184,15 @@
         "insertColumnRight": "在右侧插入列",
         "deleteColumn": "删除列"
       }
+    },
+    "attach": {
+      "adding": "正在添加 {{name}}…",
+      "failed": "没能添加 {{name}}：{{message}}",
+      "notAttachable": "这类笔记不能添加文件",
+      "unavailable": "这里不能添加文件",
+      "tooLarge": "文件太大（上限 {{limit}}）",
+      "notAFile": "不是文件",
+      "fileDeleted": "文件已删除"
     },
     "coEdit": {
       "rewriting": "ShuviX 正在改写这里",
@@ -355,6 +365,8 @@
     "imageAltFallback": "图片",
     "imageClickToLoad": "没有自动加载 · 点击从 {{host}} 加载",
     "imageNotShown": "未显示：回复里的图片只能从 https 地址点击加载",
+    "libraryFileDeleted": "文件已删除",
+    "libraryFileOpenHint": "点击打开",
     "showRendered": "显示渲染",
     "showSource": "显示源码",
     "rollback": "回退到此处",

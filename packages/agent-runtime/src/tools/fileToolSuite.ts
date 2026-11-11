@@ -163,6 +163,20 @@ export interface ReadDecoders {
   suggestSimilar?(portPath: string): string[]
 }
 
+/**
+ * 文件库（docs/file-library-design.md §9）：`read` 认 `shuvix://file/<id>` —— 宿主把链接解成库里那件当前版本的
+ * 文件，权限走 `library` 客体（enforceLibrary），不走路径询问：库目录不在任何权限表里，路径询问每次都会问。
+ * 不注入（扩展端）则这种链接与普通路径无异（找不到文件）。
+ */
+export interface LibraryReadDeps {
+  /** 是库链接 → 那件的 id；不是 → null */
+  match(path: string): string | null
+  /** 那件的显示名与是否与本会话有关联（`linked`）；库里没有 → null */
+  describe(itemId: string): { name: string; linked: boolean } | null
+  /** 那件当前版本的 port 路径；删了、在回收站、文件不在 → null */
+  resolve(itemId: string): string | null
+}
+
 export interface FileToolDeps {
   port: FileSystemPort
   guards: FileGuards
@@ -171,6 +185,8 @@ export interface FileToolDeps {
   /** 安全模块 PEP 门面（统一评估 + 询问挂起；宿主经 SecurityHostProvider 注入平台细节） */
   security: SecurityContext
   decoders?: ReadDecoders
+  /** 文件库链接（只 read 用；见 LibraryReadDeps） */
+  library?: LibraryReadDeps
   /** 取消错误文案（缺省 'Aborted'） */
   abortError?: string
   /** move / delete 缺省 'Move' / 'Delete'（只有登记了这两个工具的宿主才需要给） */
@@ -433,6 +449,25 @@ abstract class FileToolBase<
     call?: ToolCallScope
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.abortError)
+    // read 的文件库链接：权限走 `library` 客体（与本会话有关联直接读，其余询问），不走路径询问
+    const libraryId = this.mode === 'read' ? (this.deps.library?.match(params.path) ?? null) : null
+    if (libraryId !== null && this.deps.library) {
+      // 库里没有这件：不为一次读不到的访问弹卡（执行时报找不到）
+      const info = this.deps.library.describe(libraryId)
+      if (info === null) return
+      await this.deps.security.enforceLibrary(
+        { itemId: libraryId, name: info.name, linked: info.linked },
+        {
+          toolCallId,
+          ...callOwnerOf(call),
+          toolName: this.name,
+          displayPath: params.path,
+          abortError: this.abortError,
+          signal
+        }
+      )
+      return
+    }
     // read 的 URL 分支不走文件系统询问，走地址判定：它可能在隐藏页面里运行这个页面的脚本。缺省没有策略，直接放行
     if (this.mode === 'read' && this.isUrl(params.path)) {
       await this.deps.security.enforceUrl(urlObjectOf(params.path), {
@@ -505,7 +540,18 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
       }
     }
 
-    const portPath = this.deps.resolvePath(params.path, 'read')
+    // 文件库链接：解成库里那件当前版本的文件，之后与普通文件同一条读法（图片、富文本、文本）
+    const libraryId = this.deps.library?.match(params.path) ?? null
+    let portPath: string
+    if (libraryId !== null && this.deps.library) {
+      const resolved = this.deps.library.resolve(libraryId)
+      if (resolved === null) {
+        throw new Error(`Library file not found (deleted or missing): ${params.path}`)
+      }
+      portPath = resolved
+    } else {
+      portPath = this.deps.resolvePath(params.path, 'read')
+    }
 
     // 不存在 → 报错 + 相似路径建议
     const st = await port.stat(portPath)
@@ -524,7 +570,8 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
       if (!st.isFile) throw new Error(`Not a file: ${params.path}`)
       if (signal?.aborted) throw new Error(this.abortError)
 
-      const ext = extOf(params.path)
+      // 文件库链接按解出的那个文件认类型：链接里的文件名段可以没有、也可以不是真名
+      const ext = extOf(libraryId !== null ? portPath : params.path)
       // 富文本 → Markdown
       if (dec?.richExtensions?.has(ext) && dec.readRich) {
         return await dec.readRich(portPath, params.path, st.size, signal)

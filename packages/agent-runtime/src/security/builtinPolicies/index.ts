@@ -79,6 +79,7 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-command' },
   { name: 'ask-on-session-access' },
   { name: 'ask-on-widget-access' },
+  { name: 'ask-on-library-access' },
   { name: 'ask-on-extension' },
   { name: 'ask-on-settings' },
   { name: 'network-admission' },

@@ -186,6 +186,7 @@ export type RequestRoute =
   | 'download'
   | 'lib'
   | 'shown'
+  | 'library'
   | 'widget'
   | 'socket'
 
@@ -217,12 +218,12 @@ export function requestTarget(rawUrl: string | undefined): {
 
 /**
  * 一个 HTTP 请求的 scope 与访问级别（`object.scope` / `object.access`，与 channel 点位同一套词）：页面、脚本样式、
- * 图表库与 /ws 升级是界面本身（app），文件路由是 files，`/w/…` 是 widgets，会话里摆给用户看的图是 sessions（与对话
+ * 图表库与 /ws 升级是界面本身（app），文件路由（含文件库）是 files，`/w/…` 是 widgets，会话里摆给用户看的图是 sessions（与对话
  * 内容同一档：能读这个会话就能看它的图）；GET / HEAD / OPTIONS 是读，别的方法是写
  */
 export function requestFactsOf(route: RequestRoute, method: string): CallFacts {
   const scope: ChannelScope =
-    route === 'media' || route === 'preview' || route === 'download'
+    route === 'media' || route === 'preview' || route === 'download' || route === 'library'
       ? 'files'
       : route === 'widget'
         ? 'widgets'

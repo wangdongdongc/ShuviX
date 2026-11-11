@@ -25,6 +25,9 @@ import {
   useAppEvent,
   FigureExportPanel
 } from '@shuvix/chat-ui'
+import { libraryRef, parseLibraryLink } from '@shuvix/chat-protocol/fileLibrary'
+import { attachmentsExtension, pickAndAttach } from './attachments'
+import { buildAttachConfig, libraryImageMissing, noteLibraryImageUrl } from './libraryEditor'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import { MD_DISABLEABLE_KINDS, MD_FM_FILL_KEYS, mdObjectKindOf } from '@shuvix/chat-protocol/mdMeta'
@@ -193,6 +196,11 @@ export interface LivePreviewEditorProps {
   /** 无 `shuvix:` 自述行的文件按哪个契约渲染属性卡（见 FrontmatterCardConfig.fallbackMarkerType） */
   frontmatterFallbackType?: string
   /**
+   * 能往笔记里粘贴、拖入、插入文件（进文件库，docs/file-library-design.md §5）。缺省不能：只有笔记本会话按
+   * 载体判断后打开（注册表 md、技能、只读内容不能）。不能时拖入文件只显示一条提示，粘贴照旧。
+   */
+  attachable?: boolean
+  /**
    * 宿主追加的 CM6 扩展（排在内置扩展之后）。与内置扩展一样只在挂载时捕获一次 —— 传一个稳定的数组。
    * 协作编辑窗口用它挂 agent 的虚影预览与修改高亮。
    */
@@ -223,6 +231,7 @@ export function LivePreviewEditor({
   fileContext,
   caps,
   readOnly = false,
+  attachable = false,
   layout = 'notebook',
   extraExtensions,
   ownsSessionFile = false
@@ -421,6 +430,9 @@ export function LivePreviewEditor({
             id: 'insert',
             label: m('insert'),
             submenu: [
+              ...(attachable && sessionId
+                ? [{ id: 'insert.file', label: m('imageOrFile') }, { type: 'separator' as const }]
+                : []),
               { id: 'insert.table', label: m('table') },
               { id: 'insert.hr', label: m('divider') },
               { id: 'insert.code', label: m('codeBlock') }
@@ -438,9 +450,17 @@ export function LivePreviewEditor({
       if (!result.actionId) return
       const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
       const view = dom ? EditorView.findFromDOM(dom) : null
-      if (view) runMarkdownCommand(view, result.actionId)
+      if (!view) return
+      if (result.actionId === 'insert.file') {
+        void pickAndAttach(
+          view,
+          buildAttachConfig(attachable, (key, opts) => t(key, opts ?? {}), sessionId)
+        )
+        return
+      }
+      runMarkdownCommand(view, result.actionId)
     },
-    [t, caps]
+    [t, caps, attachable, sessionId]
   )
 
   // 表格单元格右键菜单：交给 @shuvix/atomic-editor 的 renderMenu 钩子，用注入的原生菜单
@@ -656,6 +676,13 @@ export function LivePreviewEditor({
     (src: string): string | null => {
       const s = src.trim()
       if (!s || !sessionId || !resolveMedia) return null
+      // 文件库里的一件（shuvix://file/<id>/<文件名>）：按 id 交给 mediaUrl seam 的 `library:` 引用
+      const library = parseLibraryLink(s)
+      if (library) {
+        const url = resolveMediaCached(sessionId, libraryRef(library.itemId), resolveMedia)
+        if (url) noteLibraryImageUrl(url)
+        return url
+      }
       if (hasUrlScheme(s) || isAbsHostPath(s)) return s
       const target = resolveAgainstDocDir(documentId, s)
       if (!target) return null
@@ -668,6 +695,12 @@ export function LivePreviewEditor({
   // 网址等其余链接照旧交给宿主的 openExternal。
   const onLinkClick = useCallback(
     (url: string): void => {
+      // 文件库里的一件：发预览信号（宿主按 id 找到文件，开预览窗口；web 开新标签页）
+      const library = parseLibraryLink(url)
+      if (library) {
+        useChatStore.getState().requestFilePreview(libraryRef(library.itemId))
+        return
+      }
       if (!sessionId || !isRelativeFileLink(url)) {
         caps?.openExternal?.(url)
         return
@@ -776,6 +809,15 @@ export function LivePreviewEditor({
         displayTarget: stripMdExt
       }),
       wikiImageEmbeds({ resolveSrc: resolveEmbedSrc }),
+      libraryImageMissing(i18n.t('notebook.attach.fileDeleted')),
+      // 粘贴、拖入文件进文件库（docs/file-library-design.md §5）：与其余扩展一样挂载时捕获一次，文案按调用时的语言取
+      ...(readOnly
+        ? []
+        : [
+            attachmentsExtension(() =>
+              buildAttachConfig(attachable, (key, opts) => i18n.t(key, opts ?? {}), sessionId)
+            )
+          ]),
       ...extra
     ]
   }, [
@@ -791,7 +833,9 @@ export function LivePreviewEditor({
     documentId,
     mountField,
     mountMetaStrip,
-    extraExtensions
+    extraExtensions,
+    readOnly,
+    attachable
   ])
 
   return (

@@ -38,6 +38,14 @@
  *           → 403，judgePath 以 preview 被调
  *   FR-SH-5 .svg 快照带 `Content-Security-Policy: sandbox` + nosniff（web 的 files:open 把标签页直接开到这个地址）
  *   FR-SH-6 POST → 405 + allow: GET, HEAD，解析器不调；没给 fileRoutes → 静态 404，解析器不调
+ *
+ * `/files/library?id=<库 id>`（文件库 L1，归 files scope、不过 path 点位；docs/file-library-l1-tests.md §7.1）：
+ *   FR-LIB-1 fileRouteOf('/files/library') → library；`/files/library/`、`/files/Library`、`/files/libraryx`、`/library/file`
+ *            都不是；networkLibraryFileUrl(ID) = `/files/library?id=ID`，取回原 id
+ *   FR-LIB-2 GET → 200 image/png、字节一致、accept-ranges + nosniff；解析器恰调一次（解码后的 id）；HEAD 只回头；Range → 206
+ *   FR-LIB-3 缺 id / 空 id → 400 且解析器不调；解析器回 undefined、deps 里没有它、解析出不在的文件 → 404
+ *   FR-LIB-4 不过 path 点位：judgePath 一律拒绝也 200、不调；`/files/preview?path=library:ID` 照常以 preview 调 judgePath → 403
+ *   FR-LIB-5 库里的 .svg 带 `Content-Security-Policy: sandbox` + nosniff；POST → 405 + allow: GET, HEAD，解析器不调
  */
 import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -48,6 +56,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   networkDownloadUrl,
+  networkLibraryFileUrl,
   networkMediaUrl,
   networkPreviewUrl,
   networkShownImageUrl
@@ -879,5 +888,151 @@ describe('FR-SH-1…6 /sessions/shown-image', () => {
     expect(res.status).toBe(404)
     expect(res.body.equals(PAYLOAD)).toBe(false)
     expect(resolveShownImage).not.toHaveBeenCalled()
+  })
+})
+
+// ─── /files/library（FR-LIB-1…5） ─────────────────────────────────────────
+
+const LIB_ID = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+const LIB_SVG_ID = '0199d3a2-0000-7000-8000-000000000000'
+
+/** 库文件解析器的间谍：两个已知 id → 临时目录里的库文件；别的 → undefined */
+function libraryResolver(): ReturnType<typeof vi.fn<(itemId: string) => string | undefined>> {
+  return vi.fn((itemId: string) =>
+    itemId === LIB_ID
+      ? at('library', '01', LIB_ID, 'a.png')
+      : itemId === LIB_SVG_ID
+        ? at('library', '01', LIB_SVG_ID, 'd.svg')
+        : undefined
+  )
+}
+
+describe('FR-LIB-1 /files/library 的路由', () => {
+  it('FR-LIB-1 fileRouteOf：/files/library → library；长得像的不是', () => {
+    expect(fileRouteOf('/files/library')).toBe('library')
+    for (const path of ['/files/library/', '/files/Library', '/files/libraryx', '/library/file']) {
+      expect(fileRouteOf(path), path).toBeUndefined()
+    }
+  })
+
+  it('FR-LIB-1 networkLibraryFileUrl(ID) = /files/library?id=ID，取回原 id', () => {
+    expect(networkLibraryFileUrl(LIB_ID)).toBe(`/files/library?id=${LIB_ID}`)
+    const u = new URL(networkLibraryFileUrl(LIB_ID), 'http://h')
+    expect(fileRouteOf(u.pathname)).toBe('library')
+    expect(u.searchParams.get('id')).toBe(LIB_ID)
+    // 怪字符也原样取回（解析器自己判形状）
+    const odd = 'a&b=c#d?e'
+    expect(new URL(networkLibraryFileUrl(odd), 'http://h').searchParams.get('id')).toBe(odd)
+  })
+})
+
+describe('FR-LIB-2…5 /files/library', () => {
+  let resolveLibraryFile: ReturnType<typeof libraryResolver>
+
+  beforeEach(() => {
+    mkdirSync(at('library', '01', LIB_ID), { recursive: true })
+    writeFileSync(at('library', '01', LIB_ID, 'a.png'), PAYLOAD)
+    mkdirSync(at('library', '01', LIB_SVG_ID), { recursive: true })
+    writeFileSync(
+      at('library', '01', LIB_SVG_ID, 'd.svg'),
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>'
+    )
+    resolveLibraryFile = libraryResolver()
+    deps = { ...deps, resolveLibraryFile }
+  })
+
+  it('FR-LIB-2 GET → 200 image/png、字节一致、那几条头；解析器恰调一次（解码后的 id）', async () => {
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toBe('image/png')
+    expect(res.headers['accept-ranges']).toBe('bytes')
+    expect(res.headers['x-content-type-options']).toBe('nosniff')
+    expect(res.headers['content-length']).toBe(String(N))
+    expect(res.body.equals(PAYLOAD)).toBe(true)
+    expect(resolveLibraryFile).toHaveBeenCalledTimes(1)
+    expect(resolveLibraryFile).toHaveBeenCalledWith(LIB_ID)
+    expectNoDepCalled()
+
+    resolveLibraryFile.mockClear()
+    const encoded = await http(`/files/library?id=${encodeURIComponent(`x y/${LIB_ID}`)}`)
+    expect(encoded.status).toBe(404)
+    expect(resolveLibraryFile).toHaveBeenCalledWith(`x y/${LIB_ID}`)
+  })
+
+  it('FR-LIB-2 HEAD 只回头；Range → 206 切片', async () => {
+    await boot()
+    const head = await http(networkLibraryFileUrl(LIB_ID), { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.headers['content-type']).toBe('image/png')
+    expect(head.headers['content-length']).toBe(String(N))
+    expect(head.body.length).toBe(0)
+
+    const ranged = await http(networkLibraryFileUrl(LIB_ID), { headers: { Range: 'bytes=2-5' } })
+    expect(ranged.status).toBe(206)
+    expect(ranged.headers['content-range']).toBe(`bytes 2-5/${N}`)
+    expect(ranged.body.equals(PAYLOAD.subarray(2, 6))).toBe(true)
+  })
+
+  it('FR-LIB-3 缺 id / 空 id → 400 Bad request.，解析器不调', async () => {
+    await boot()
+    for (const query of ['', '?id=', '?other=1']) {
+      expectPlain(await http(`/files/library${query}`), 400, 'Bad request.')
+    }
+    expect(resolveLibraryFile).not.toHaveBeenCalled()
+  })
+
+  it('FR-LIB-3 解析器回 undefined / deps 里没有解析器 / 解析出不在的文件 → 404', async () => {
+    await boot()
+    expectPlain(
+      await http(networkLibraryFileUrl('0199d3a2-0000-7000-8000-0000000000ff')),
+      404,
+      'Not found.'
+    )
+    expect(resolveLibraryFile).toHaveBeenCalledTimes(1)
+
+    rmSync(at('library', '01', LIB_ID, 'a.png'))
+    expectPlain(await http(networkLibraryFileUrl(LIB_ID)), 404, 'Not found.')
+
+    deps = { ...deps, resolveLibraryFile: undefined }
+    expectPlain(await http(networkLibraryFileUrl(LIB_SVG_ID)), 404, 'Not found.')
+  })
+
+  it('FR-LIB-4 不过 path 点位：judgePath 一律拒绝也 200、不调；/files/preview 的 library: 引用照常判 → 403', async () => {
+    const judgePath = denyAllJudgePath()
+    deps = { ...deps, judgePath }
+    spies.resolvePreviewPath.mockImplementation((_sessionId: string, path: string) =>
+      path === `library:${LIB_ID}` ? at('library', '01', LIB_ID, 'a.png') : resolve(tmp, path)
+    )
+    await boot()
+
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+    expect(res.status).toBe(200)
+    expect(res.body.equals(PAYLOAD)).toBe(true)
+    expect(judgePath).not.toHaveBeenCalled()
+
+    const viaPreview = await http(preview('S', `library:${LIB_ID}`))
+    expect(viaPreview.status).toBe(403)
+    expect(viaPreview.body.equals(PAYLOAD)).toBe(false)
+    expect(spies.resolvePreviewPath).toHaveBeenCalledWith('S', `library:${LIB_ID}`)
+    expect(judgePath).toHaveBeenCalledTimes(1)
+    expect(judgePath.mock.calls[0]).toEqual([at('library', '01', LIB_ID, 'a.png'), 'preview'])
+  })
+
+  it('FR-LIB-5 库里的 .svg → Content-Security-Policy: sandbox + nosniff', async () => {
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_SVG_ID))
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toBe('image/svg+xml')
+    expect(res.headers['content-security-policy']).toBe('sandbox')
+    expect(res.headers['x-content-type-options']).toBe('nosniff')
+  })
+
+  it('FR-LIB-5 POST → 405 + allow: GET, HEAD，解析器不调', async () => {
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_ID), { method: 'POST' })
+    expect(res.status).toBe(405)
+    expect(res.headers.allow).toBe('GET, HEAD')
+    expect(resolveLibraryFile).not.toHaveBeenCalled()
   })
 })

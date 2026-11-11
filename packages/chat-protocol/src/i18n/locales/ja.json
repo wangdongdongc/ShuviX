@@ -167,6 +167,7 @@
       "heading": "見出し {{level}}",
       "body": "本文",
       "quote": "引用",
+      "imageOrFile": "画像またはファイル…",
       "table": "表",
       "divider": "区切り線",
       "codeBlock": "コードブロック",
@@ -183,6 +184,15 @@
         "insertColumnRight": "右に列を挿入",
         "deleteColumn": "列を削除"
       }
+    },
+    "attach": {
+      "adding": "{{name}} を追加中…",
+      "failed": "{{name}} を追加できませんでした：{{message}}",
+      "notAttachable": "この種類のノートにはファイルを追加できません",
+      "unavailable": "ここにはファイルを追加できません",
+      "tooLarge": "ファイルが大きすぎます（上限 {{limit}}）",
+      "notAFile": "ファイルではありません",
+      "fileDeleted": "ファイルは削除されました"
     },
     "coEdit": {
       "rewriting": "ShuviX がここを書き換えています",
@@ -355,6 +365,8 @@
     "imageAltFallback": "画像",
     "imageClickToLoad": "自動では読み込みません · クリックで {{host}} から読み込む",
     "imageNotShown": "表示されません：返信内の画像は https アドレスからクリックで読み込むものだけです",
+    "libraryFileDeleted": "ファイルは削除されました",
+    "libraryFileOpenHint": "クリックして開く",
     "showRendered": "レンダリングを表示",
     "showSource": "ソースを表示",
     "rollback": "ここまでロールバック",

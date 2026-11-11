@@ -6,10 +6,12 @@
  * 纯函数（平台、页面地址都由调用方交进来），桌面那一支一律原样 / undefined —— 桌面行为不因此改变。
  */
 import { shownImageFileOfRef } from '@shuvix/chat-protocol/shownImages'
+import { libraryItemIdOfRef } from '@shuvix/chat-protocol/fileLibrary'
 import {
   networkLibBase,
   networkPreviewUrl,
   networkShownImageUrl,
+  networkLibraryFileUrl,
   networkWidgetUrl
 } from '../../../shared/networkRoutes'
 
@@ -29,6 +31,9 @@ export function isWebPlatform(platform: string | undefined): boolean {
  * 摆给用户看的图（`shown:` 引用）走会话自己的那条路由：它是会话内容，能读这个会话就能看（不归 `files`）
  */
 export function webPreviewUrl(sessionId: string, path: string): string {
+  // 文件库里的一件（`library:` 引用）：按 id 走库的路由，与会话无关
+  const libraryId = libraryItemIdOfRef(path)
+  if (libraryId) return networkLibraryFileUrl(libraryId)
   const shown = shownImageFileOfRef(path)
   return shown ? networkShownImageUrl(sessionId, shown) : networkPreviewUrl(sessionId, path)
 }

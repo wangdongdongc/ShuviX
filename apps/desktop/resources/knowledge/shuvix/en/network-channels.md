@@ -66,10 +66,10 @@ exception. The list is generated from the channel table of this version.
 
 ### `files`
 
-- group: `artifact`, `download`, `files`, `fs`, `liveDoc`
-- route: `media`, `preview`, `download`
+- group: `artifact`, `download`, `files`, `fs`, `library`, `liveDoc`
+- route: `media`, `preview`, `download`, `library`
 - read: `artifact:list`, `artifact:read`, `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`, `fs:listDirectories`, `fs:locateFolder`
-- write: `download:cancel`, `files:open`, `files:write`, `liveDoc:attach`, `liveDoc:detach`, `liveDoc:respond`
+- write: `download:cancel`, `files:open`, `files:write`, `library:add`, `library:pickFiles`, `liveDoc:attach`, `liveDoc:detach`, `liveDoc:respond`
 
 ### `terminal`
 

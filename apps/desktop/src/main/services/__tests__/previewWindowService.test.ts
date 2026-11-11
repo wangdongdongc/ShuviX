@@ -36,6 +36,13 @@
  *   W-12 会话已删（没有工作目录）+ 合法引用 → 照样开（不受「相对路径要工作目录」的限制）
  *   W-13 形状不对的 shown: 引用当相对路径：活会话 → 按工作目录解、没这个文件 → false；会话已删 → false + warn
  *   W-14 合法引用但快照不在 → false、不开窗；.svg 快照 → 开预览窗口
+ *
+ * `library:<id>`（文件库 L1，docs/file-library-l1-tests.md §7.4）：`os.homedir` 指到临时目录（库根是
+ * `<tmpHome>/.shuvix/library/files`，绝不碰真实主目录），元数据表经 `setLibraryTable` 注入假表（每条用例重新导入后注入）：
+ *   W-LIB-1 库里的图片 → 开预览窗口，path 是库文件的真实路径、hash 带借用的会话 id，不交给 openMarkdownFile；
+ *           会话已删照样开；在回收站或不存在的 id → false、不开窗
+ *   W-LIB-2 库里的 .md 开只读预览窗口，不进协作编辑的 md 窗口；对照：普通 notes.md 仍交给 openMarkdownFile；
+ *           未初始化时库里的 md → false，也不交给 openMarkdownFile
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -125,7 +132,9 @@ const fx = vi.hoisted(() => {
     openMarkdownFile: vi.fn<(path: string) => boolean>(() => true),
     userData: '',
     guardAppWindow: vi.fn(),
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    /** 假主目录（文件库的根在它下面） */
+    home: ''
   }
 })
 
@@ -139,6 +148,12 @@ vi.mock('../sessionService', () => ({ sessionService: { getById: fx.getById } })
 vi.mock('../markdownWindowService', () => ({ openMarkdownFile: fx.openMarkdownFile }))
 vi.mock('../externalOpen', () => ({ guardAppWindow: fx.guardAppWindow }))
 vi.mock('../../logger', () => ({ createLogger: () => fx.log }))
+// 文件库的根 `~/.shuvix/library/files`：主目录指到临时目录
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>()
+  const homedir = (): string => fx.home
+  return { ...actual, default: { ...actual, homedir }, homedir }
+})
 
 type FakeWindow = InstanceType<typeof fx.FakeWindow>
 type Service = typeof import('../previewWindowService')
@@ -538,5 +553,108 @@ describe('W-11…14 show_image 的快照引用', () => {
 
     expect(await open(`shown:${SHOWN_SVG}`)).toBe(true)
     expect(hashOf(onlyWindow()).path).toBe(realpathSync.native(shownPath(LIVE, SHOWN_SVG)))
+  })
+})
+
+// ─── 文件库的 `library:` 引用（W-LIB-1 / 2） ──────────────────────────────────
+
+const LIB_PNG = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+const LIB_MD = '0199d3a2-0000-7000-8000-000000000000'
+const LIB_TRASHED = '0199d3a2-0000-7000-8000-00000000000c'
+const LIB_MISSING = '0199d3a2-0000-7000-8000-0000000000ff'
+// 收集期要用：模块加载时建好假主目录
+const libHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'shuvix-prevwin-home-')))
+fx.home = libHome
+const libFile = (id: string, fileName: string): string =>
+  join(libHome, '.shuvix', 'library', 'files', id.slice(0, 2), id, fileName)
+const LIB_FILES: Record<string, { fileName: string; deletedAt: number | null }> = {
+  [LIB_PNG]: { fileName: 'shot.png', deletedAt: null },
+  [LIB_MD]: { fileName: 'note.md', deletedAt: null },
+  [LIB_TRASHED]: { fileName: 'old.png', deletedAt: 5 }
+}
+
+describe('W-LIB 文件库的引用', () => {
+  beforeAll(() => {
+    for (const [id, { fileName }] of Object.entries(LIB_FILES)) {
+      mkdirSync(join(libFile(id, fileName), '..'), { recursive: true })
+      writeFileSync(
+        libFile(id, fileName),
+        fileName.endsWith('.md') ? '# lib note\n' : pngHeader(40, 24)
+      )
+    }
+  })
+
+  afterAll(() => {
+    rmSync(libHome, { recursive: true, force: true })
+  })
+
+  beforeEach(async () => {
+    // beforeEach 顶上那条 resetModules 之后导入的服务，与这里拿到的 fileLibrary 是同一份模块实例
+    const lib = await import('../fileLibrary')
+    lib.setLibraryTable({
+      findItem: (id: string) => {
+        const entry = LIB_FILES[id]
+        return entry
+          ? {
+              id,
+              name: entry.fileName,
+              storage: 'managed',
+              externalPath: null,
+              fileName: entry.fileName,
+              deletedAt: entry.deletedAt
+            }
+          : null
+      }
+    } as unknown as Parameters<typeof lib.setLibraryTable>[0])
+  })
+
+  afterEach(async () => {
+    ;(await import('../fileLibrary')).setLibraryTable(null)
+  })
+
+  it('W-LIB-1 库里的图片 → 开预览窗口；path 是库文件的真实路径，hash 带借用的会话 id；不交给 openMarkdownFile', async () => {
+    init()
+    expect(await open(`library:${LIB_PNG}`)).toBe(true)
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    const { route, sessionId, path } = hashOf(onlyWindow())
+    expect(route).toBe('file-preview')
+    expect(sessionId).toBe(LIVE)
+    expect(path).toBe(realpathSync.native(libFile(LIB_PNG, 'shot.png')))
+    expect(path!.startsWith(realRoot + '/')).toBe(false)
+  })
+
+  it('W-LIB-1 会话已删（getById 回 undefined）照样开：库引用与会话无关', async () => {
+    init()
+    expect(await open(`library:${LIB_PNG}`, { sessionId: GONE })).toBe(true)
+    expect(hashOf(onlyWindow())).toMatchObject({
+      sessionId: GONE,
+      path: realpathSync.native(libFile(LIB_PNG, 'shot.png'))
+    })
+  })
+
+  it('W-LIB-1 在回收站 / 库里没有的 id → false、不开窗', async () => {
+    init()
+    expect(await open(`library:${LIB_TRASHED}`)).toBe(false)
+    expect(await open(`library:${LIB_MISSING}`)).toBe(false)
+    expect(await open(`library:${LIB_MISSING}`, { sessionId: GONE })).toBe(false)
+    expect(windows()).toHaveLength(0)
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+  })
+
+  it('W-LIB-2 库里的 .md 开只读预览窗口，不进协作编辑的 md 窗口；对照：普通 notes.md 仍交给 openMarkdownFile', async () => {
+    init()
+    expect(await open(`library:${LIB_MD}`)).toBe(true)
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(hashOf(onlyWindow()).path).toBe(realpathSync.native(libFile(LIB_MD, 'note.md')))
+
+    expect(await open(p('dir', 'doc.md'))).toBe(true)
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[p('dir', 'doc.md')]])
+    expect(windows()).toHaveLength(1)
+  })
+
+  it('W-LIB-2 未初始化：库里的 md → false，也不交给 openMarkdownFile', async () => {
+    expect(await open(`library:${LIB_MD}`)).toBe(false)
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
   })
 })

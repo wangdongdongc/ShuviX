@@ -24,6 +24,7 @@ import { basename, isAbsolute } from 'node:path'
 import {
   NETWORK_DOWNLOAD_PATH,
   NETWORK_LIB_PREFIX,
+  NETWORK_LIBRARY_FILE_PATH,
   NETWORK_MEDIA_PATH,
   NETWORK_PREVIEW_PATH,
   NETWORK_SHOWN_IMAGE_PATH
@@ -31,8 +32,11 @@ import {
 import { plainResponse as plain, sendFileResponse as sendFile } from '../../utils/httpFile'
 import type { GateVerdict } from '@shuvix/agent-runtime'
 
-/** 一条文件路由（`shown`：会话里摆给用户看的图，归 `sessions` scope，见 policyGate 的 requestFactsOf） */
-export type FileRoute = 'media' | 'preview' | 'download' | 'lib' | 'shown'
+/**
+ * 一条文件路由（`shown`：会话里摆给用户看的图，归 `sessions` scope，见 policyGate 的 requestFactsOf；
+ * `library`：文件库里的一件，归 `files`）
+ */
+export type FileRoute = 'media' | 'preview' | 'download' | 'lib' | 'shown' | 'library'
 
 export interface FileRouteDeps {
   /** 预览资源的路径解析（相对路径按会话的工作目录）；解析不了可以抛 */
@@ -44,6 +48,11 @@ export interface FileRouteDeps {
    * 不过 path 点位：快照是会话内容，能读这个会话的设备就能看图（用户裁决，docs/show-image-design.md §4.4）
    */
   readonly resolveShownImage?: (sessionId: string, file: string) => string | undefined
+  /**
+   * 文件库里一件的当前版本 → 绝对路径；不存在、在回收站里 → undefined（404）。不给 → 这条路由 404。
+   * 不过 path 点位：库目录不在任何权限表里，按 id 找（同 `resolveShownImage`）
+   */
+  readonly resolveLibraryFile?: (itemId: string) => string | undefined
   /** path 点位（服务端按这个请求的事实绑好的；不给 → 不判）。`path` 是要读的绝对路径 */
   readonly judgePath?: (path: string, route: FileRoute) => GateVerdict
   /** 拒绝时的 403 正文（缺省：规则的话） */
@@ -74,6 +83,7 @@ export function fileRouteOf(pathname: string): FileRoute | undefined {
   if (pathname === NETWORK_PREVIEW_PATH) return 'preview'
   if (pathname === NETWORK_DOWNLOAD_PATH) return 'download'
   if (pathname === NETWORK_SHOWN_IMAGE_PATH) return 'shown'
+  if (pathname === NETWORK_LIBRARY_FILE_PATH) return 'library'
   if (pathname.startsWith(NETWORK_LIB_PREFIX)) return 'lib'
   return undefined
 }
@@ -150,6 +160,13 @@ export async function serveFileRoute(
         const file = url.searchParams.get('file')
         if (!sessionId || !file) return plain(res, 400, 'Bad request.')
         const path = deps.resolveShownImage?.(sessionId, file)
+        if (path === undefined) return plain(res, 404, 'Not found.')
+        return await sendFile(req, res, path)
+      }
+      case 'library': {
+        const id = url.searchParams.get('id')
+        if (!id) return plain(res, 400, 'Bad request.')
+        const path = deps.resolveLibraryFile?.(id)
         if (path === undefined) return plain(res, 404, 'Not found.')
         return await sendFile(req, res, path)
       }

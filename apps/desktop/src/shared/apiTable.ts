@@ -530,6 +530,11 @@ export const API_TABLE = {
     open: invoke('files:open', 1),
     write: invoke('files:write', 1)
   },
+  /** 文件库 */
+  library: {
+    add: invoke('library:add', 1),
+    pickFiles: invoke('library:pickFiles', 0)
+  },
   /** 知识库 */
   knowledge: {
     list: invoke('knowledge:list', 0),
@@ -574,6 +579,7 @@ export const DESKTOP_ONLY_CHANNELS: Readonly<Record<string, string>> = {
   'app:open-folder': 'opens the system file manager on this computer',
   'app:reveal-path': 'opens the system file manager on this computer',
   'dialog:openDirectory': 'native folder picker on this computer',
+  'library:pickFiles': 'native file picker on this computer',
   'skill:pickExternalDir': 'native folder picker on this computer',
   'widget:pickExportTarget': 'native save dialog on this computer',
   'widget:revealExport': 'opens the system file manager on this computer',

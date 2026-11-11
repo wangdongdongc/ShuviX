@@ -256,7 +256,7 @@ describe('OI-9 三族内置 md 的对象 id 总览', () => {
     // 今天的盘点：十一份 agent（coedit 已并进 notebook，widget 改成了内置技能）+ 三份 hook + 六份策略
     // （2026-10-19 加了 network-admission，2026-10-20 加了 ask-on-session-access，2026-10-24 加了 daily-bot-access，
     // 2026-10-25 加了 redact-sensitive，2026-10-27 加了 ask-on-widget-access；goal-judge 与 goal-check 是目标模式新加的；
-    // 2026-11-08 加了 ask-on-settings）—— 名单变了就该有人看一眼这里
-    expect([files, ids.size]).toEqual([69, 23])
+    // 2026-11-08 加了 ask-on-settings，2026-11-11 加了 ask-on-library-access）—— 名单变了就该有人看一眼这里
+    expect([files, ids.size]).toEqual([72, 24])
   })
 })

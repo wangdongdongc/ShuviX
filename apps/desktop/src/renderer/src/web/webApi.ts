@@ -24,6 +24,7 @@ import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../shared/apiTable'
 import { buildApi, createCommonOverrides, type WebApi } from '../../../shared/buildApi'
 import type { ServerFolderKind } from '../../../shared/serverFs'
 import { shownImageFileOfRef } from '@shuvix/chat-protocol/shownImages'
+import { libraryItemIdOfRef } from '@shuvix/chat-protocol/fileLibrary'
 import {
   browserManagerPageUrl,
   filePreviewPageUrl,
@@ -132,8 +133,8 @@ export function webLocalHandlers(
     'files:open': (params) => {
       const p = params as { sessionId?: unknown; path?: unknown; openedBy?: unknown } | undefined
       if (!isNonEmptyString(p?.sessionId) || !isNonEmptyString(p?.path)) return false
-      // 摆给用户看的图：新标签页直接开图本身（会话那条路由），不经文件预览页 —— 预览页读文件归 `files`
-      if (shownImageFileOfRef(p.path)) {
+      // 摆给用户看的图、文件库里的一件：新标签页直接开文件本身（各自的路由），不经文件预览页
+      if (shownImageFileOfRef(p.path) || libraryItemIdOfRef(p.path)) {
         win.open(webPreviewUrl(p.sessionId, p.path), '_blank')
         return true
       }
@@ -163,6 +164,8 @@ export function webLocalHandlers(
     'widgetWindow:status': () => ({ open: [], preferWindow: [] }),
     'widgetWindow:setPreferWindow': () => ({ success: true }),
     'dialog:openDirectory': () => pickDirectory(),
+    // 浏览器里没有本机的选择文件对话框：回 null，笔记编辑器自己开页面的文件选择框（交字节）
+    'library:pickFiles': () => null,
     'skill:pickExternalDir': async () => {
       const path = await pickDirectory()
       return path ? { success: true, path } : { success: false, reason: 'canceled' }

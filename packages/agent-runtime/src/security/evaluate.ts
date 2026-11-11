@@ -197,6 +197,11 @@ function buildAskMaterials(
       ? { command: entry, widget }
       : { command: entry, rememberEntry: entry, widget }
   }
+  // 文件库：卡片显示要读的那件（名字 + id）。没有记忆条目：会话权限表里没有库这一种行，关联就是记忆
+  if (object.type === 'library' && typeof object.itemId === 'string') {
+    const name = typeof object.name === 'string' && object.name ? `"${object.name}" ` : ''
+    return { command: `Read library file ${name}(${object.itemId})` }
+  }
   // 扩展：卡片按 preview（名称、来源、缓存）渲染，这条文本给决策日志和旧客户端。没有记忆条目：开启之后这台就在
   // 会话的选择里，选择本身就是记忆
   if (object.type === 'extension' && typeof object.server === 'string') {

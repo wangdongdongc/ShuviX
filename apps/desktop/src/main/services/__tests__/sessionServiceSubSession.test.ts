@@ -14,6 +14,8 @@
  *  4. **会话权限表（services/acl）**：create 在行进库之后生成表 —— 子会话带上父会话 id（复制父会话授予的
  *     路径，见 acl/__tests__/sessionAcl.test.ts 的 ACL-8），顶层会话不继承；delete 子先于父、各自清表。
  *     服务本身换成记录型替身，这里只钉接线。
+ *  5. **文件库的关联**（文件库 L1，docs/file-library-l1-tests.md §8.4 SV-LIB-1）：delete 对每场会话（级联删掉的子会话
+ *     各一次）调 removeSessionLibraryLinks；文件留在库里（§10），文件库服务没有别的调用。`../fileLibrary` 整个换成记录型替身。
  *
  * mock 面沿用 sessionServiceListChanged.test.ts（import 图全换假件）。
  */
@@ -37,7 +39,31 @@ const mocks = vi.hoisted(() => ({
   aclInitialize: vi.fn<(id: string, inheritFrom?: { sessionId: string; fork: boolean }) => void>(),
   aclDeleteSession: vi.fn<(id: string) => void>(),
   /** 会话 Artifacts 根（临时目录）—— 桩在 utils/paths 上，每场会话一个子目录 */
-  artifactsRoot: ''
+  artifactsRoot: '',
+  /** 文件库服务的每一次调用：[导出名, ...参数] */
+  libraryCalls: vi.fn<(name: string, ...args: unknown[]) => void>(),
+  /** services/fileLibrary 的全部导出（替身逐个记账） */
+  libraryExports: [
+    'setLibraryTable',
+    'libraryItemDir',
+    'toLibraryItemInfo',
+    'libraryFileOf',
+    'libraryPathOfRef',
+    'addToLibrary',
+    'trashLibraryItem',
+    'restoreLibraryItem',
+    'emptyLibraryTrash',
+    'noteTargetId',
+    'recordNoteLinks',
+    'forgetNoteLinks',
+    'recordSessionSent',
+    'keepSentImages',
+    'removeSessionLibraryLinks',
+    'copySessionLibraryLinks',
+    'recordSessionAttached',
+    'describeLibraryItem',
+    'isLibraryItemLinkedToSession'
+  ]
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -92,6 +118,15 @@ vi.mock('../acl', () => ({
   sessionAcl: { initialize: mocks.aclInitialize, deleteSession: mocks.aclDeleteSession }
 }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
+// 文件库服务：每个导出都记账（回 undefined —— 没注入表时真实现也是这样早早返回）
+vi.mock('../fileLibrary', () =>
+  Object.fromEntries(
+    mocks.libraryExports.map((name) => [
+      name,
+      (...args: unknown[]) => mocks.libraryCalls(name, ...args)
+    ])
+  )
+)
 // 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
 vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
@@ -262,6 +297,27 @@ describe('delete —— 递归删子会话', () => {
     mocks.daoFindChildren.mockReturnValue([])
     await sessionService.delete('c1')
     expect(mocks.daoDeleteById.mock.calls.map((c) => c[0])).toEqual(['c1'])
+  })
+})
+
+describe('delete —— 文件库的关联（SV-LIB-1）', () => {
+  it('SV-LIB-1 delete(S) 对 S 调一次 removeSessionLibraryLinks；文件库服务没有别的调用', async () => {
+    await sessionService.delete('S')
+    expect(mocks.libraryCalls.mock.calls).toEqual([['removeSessionLibraryLinks', 'S']])
+  })
+
+  it('SV-LIB-1 删父会话：级联删掉的每个子会话也各调一次（子先于父）；没有别的调用', async () => {
+    mocks.daoFindChildren.mockImplementation((id: string) =>
+      id === 'P' ? [{ id: 'c1' }, { id: 'c2' }] : id === 'c1' ? [{ id: 'g1' }] : []
+    )
+    await sessionService.delete('P')
+    expect(mocks.libraryCalls.mock.calls).toEqual([
+      ['removeSessionLibraryLinks', 'g1'],
+      ['removeSessionLibraryLinks', 'c1'],
+      ['removeSessionLibraryLinks', 'c2'],
+      ['removeSessionLibraryLinks', 'P']
+    ])
+    expect(mocks.daoDeleteById.mock.calls.map((c) => c[0])).toEqual(['g1', 'c1', 'c2', 'P'])
   })
 })
 

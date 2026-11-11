@@ -93,6 +93,8 @@ import {
 import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { shownImageFilePath } from './services/shownImages'
+import { libraryFileOf, setLibraryTable } from './services/fileLibrary'
+import { libraryDao } from './dao/libraryDao'
 import { cliServer } from './services/cliServer'
 import {
   ensureSessionTempDir,
@@ -1077,6 +1079,8 @@ app.whenReady().then(async () => {
   step('botService.seedBuiltinBots', () => botService.seedBuiltinBots(i18next.language || 'en'))
   // 定时器开始之前：上个进程没收尾的运行先记清楚
   step('triggerLogService.sweepInterrupted', () => triggerLogService.sweepInterrupted())
+  // 文件库的元数据表（docs/file-library-design.md）：注入之前库是空的
+  step('fileLibrary.init', () => setLibraryTable(libraryDao))
   // 收件箱的已读（docs/inbox-read-state-design.md）：无头运行也要（手机 / 浏览器看过就算读过），所以不放在窗口那一套里。
   // 别的会话驱动的一轮不算新回复 —— 发起者从活着的运行时读
   step('unreadService.init', () => {
@@ -1266,6 +1270,7 @@ app.whenReady().then(async () => {
       fileRoutes: {
         resolvePreviewPath: resolvePreviewFilePath,
         resolveShownImage: shownImageFilePath,
+        resolveLibraryFile: (id) => libraryFileOf(id)?.path,
         readSandboxLib,
         logger: { warn: (message) => log.warn(message) }
       },

@@ -37,6 +37,7 @@ const ROUTES: RequestRoute[] = [
   'media',
   'preview',
   'download',
+  'library',
   'shown',
   'widget'
 ]

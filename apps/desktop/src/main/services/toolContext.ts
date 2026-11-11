@@ -598,6 +598,7 @@ export function getDesktopSecurityContext(
       forCall(opts).enforceSession(mode, object, withRestored(opts)),
     enforceWidget: (mode, object, opts) =>
       forCall(opts).enforceWidget(mode, object, withRestored(opts)),
+    enforceLibrary: (object, opts) => forCall(opts).enforceLibrary(object, withRestored(opts)),
     enforceExtension: (object, opts) => forCall(opts).enforceExtension(object, withRestored(opts)),
     enforceChannel: (object, opts) => forCall(opts).enforceChannel(object, withRestored(opts)),
     enforceInvocation: (opts) => forCall(opts).enforceInvocation(withRestored(opts))

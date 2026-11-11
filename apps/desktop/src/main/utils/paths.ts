@@ -305,6 +305,15 @@ export function getShownImagesDir(sessionId: string): string {
   return join(getShownImagesBase(), sessionId)
 }
 
+/**
+ * 文件库的文件根目录（docs/file-library-design.md §3）：`~/.shuvix/library/files/<id 前两位>/<id>/<文件名>`。
+ * 同快照目录，**不在会话权限表里**：agent 读库只走 `library` 客体与 `ask-on-library-access`，不会因为库目录落在某个
+ * 读权限行里绕过询问。不自动创建：首次进库时才建。
+ */
+export function getLibraryFilesDir(): string {
+  return join(homedir(), '.shuvix', 'library', 'files')
+}
+
 /** 工具大结果持久化根目录（不自动创建） */
 export function getToolResultsBase(): string {
   return join(app.getPath('userData'), 'tool_results')

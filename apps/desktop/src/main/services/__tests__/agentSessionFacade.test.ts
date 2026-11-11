@@ -62,12 +62,17 @@ vi.mock('../sessionDayPromptService', () => ({ recordUserEntry: mocks.recordUser
 vi.mock('../sessionRecords', () => ({
   sessionRecords: {
     pick: () => ({ title: 'New chat' }),
+    isEphemeral: () => false,
+    wasEphemeral: () => false,
+    pickSettings: () => undefined,
     drivingSourceOf: (_id: string, driverId: string) => ({
       kind: 'parent-session',
       sessionId: driverId
     })
   }
 }))
+// 发送的图片进文件库（docs/file-library-design.md §5）：这里不测存库，只别让它去碰磁盘
+vi.mock('../fileLibrary', () => ({ keepSentImages: vi.fn(async () => []) }))
 vi.mock('../sessionService', () => ({
   sessionService: { resolveAgentProfileName: mocks.resolveAgentProfileName }
 }))

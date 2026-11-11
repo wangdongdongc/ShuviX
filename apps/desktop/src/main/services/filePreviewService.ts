@@ -20,6 +20,7 @@ import { isPathWriteAllowed, resolveProjectConfig } from './toolContext'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
+import { recordNoteLinks } from './fileLibrary'
 
 /**
  * 一条会话里的文件路径 → 绝对路径（相对路径按会话的工作目录解析）—— 与预览 / 回写自己的解析同一个口径，
@@ -87,7 +88,7 @@ export async function writeSessionFile(
   // 注册表 md（bot / agent 文件）写入前后告知它的注册表：改名迁移会话绑定 + bot/agent.changed；
   // 技能的 SKILL.md 落在技能根的子目录里，回执归技能自己（skillService.noteFileWritten）
   try {
-    return await observeRegistryWrite(
+    const result = await observeRegistryWrite(
       absolutePath,
       async (): Promise<{ ok: true } | { ok: false; error: string }> => {
         try {
@@ -106,6 +107,9 @@ export async function writeSessionFile(
         }
       }
     )
+    // 笔记里引用了哪些库文件（`embedded` 关联，docs/file-library-design.md §6）：按刚写下的正文重算
+    if (result.ok) void recordNoteLinks(absolutePath, content).catch(() => undefined)
+    return result
   } finally {
     // 与 bot / agent 的回执同口径：失败的一笔也回执（半途失败但其实已落盘的那一笔不该漏掉）
     skillService.noteFileWritten(absolutePath)

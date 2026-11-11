@@ -43,6 +43,7 @@ import { createLogger } from '../logger'
 import { broadcastSessionListChanged } from '../utils/sessionConfigBroadcast'
 import { copySessionArtifacts } from './artifacts/store'
 import { copyShownImages } from './shownImages'
+import { copySessionLibraryLinks } from './fileLibrary'
 import { parseEntryId } from './messageService'
 import { getSessionHost } from './sessionHost'
 import { sessionRecords } from './sessionRecords'
@@ -57,7 +58,9 @@ import {
 /** fork 成功插行之后的观察者（目标模式记状态表）：main 入口登记 —— 这里不 import goalService，免得依赖成环 */
 let forkObserver: ((sourceId: string, forkId: string) => void) | null = null
 
-export function setSessionForkObserver(observer: ((sourceId: string, forkId: string) => void) | null): void {
+export function setSessionForkObserver(
+  observer: ((sourceId: string, forkId: string) => void) | null
+): void {
   forkObserver = observer
 }
 
@@ -163,6 +166,8 @@ export async function forkSession(params: SessionForkParams): Promise<SessionFor
     copySessionArtifacts(source.id, forkId)
     // 摆给用户看的图：历史记的是会话内的文件名，目录拷过去，fork 里的图照常显示
     copyShownImages(source.id, forkId)
+    // 文件库：复制源会话的关联，不复制文件（docs/file-library-design.md §6）
+    copySessionLibraryLinks(source.id, forkId)
     if (copied === 'copied' && entryId !== undefined) {
       const fork = await getSessionHost().open(forkId)
       const branched = await fork.branchAt(entryId)

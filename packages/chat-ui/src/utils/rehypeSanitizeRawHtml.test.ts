@@ -34,6 +34,7 @@ import {
 import { rehypeSanitizeRawHtml, isSafeMarkdownUrl, sanitizeHastTree } from './rehypeSanitizeRawHtml'
 import { rehypeRedactionMarks } from './rehypeRedactionMarks'
 import { rehypeSessionLinks } from './rehypeSessionLinks'
+import { rehypeLibraryLinks } from './rehypeLibraryLinks'
 import { rehypeHoldImages } from './rehypeHoldImages'
 
 interface HastNode {
@@ -159,14 +160,14 @@ describe('0 · 管线本身', () => {
    */
   it('闸紧跟在 rehype-raw 之后，且排在 highlight / katex 之前', () => {
     expect(markdownRehypePlugins.indexOf(rehypeSanitizeRawHtml)).toBe(1)
-    expect(markdownRehypePlugins).toHaveLength(7)
+    expect(markdownRehypePlugins).toHaveLength(8)
   })
 
   /**
    * 整张表逐项按引用：高亮那一格是全进程共用一个变换的 rehypeHighlightShared（见 markdownPlugins.ts），
    * 不是 rehype-highlight 的默认导出 —— 换回去不会让哪条形状断言变红，只会让每次渲染重新注册三十多种语法
    */
-  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex, 脱敏标记, 会话链接, 扣下图片]', () => {
+  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex, 脱敏标记, 会话链接, 文件库链接, 扣下图片]', () => {
     expect(markdownRehypePlugins).toEqual([
       rehypeRaw,
       rehypeSanitizeRawHtml,
@@ -174,6 +175,7 @@ describe('0 · 管线本身', () => {
       rehypeKatex,
       rehypeRedactionMarks,
       rehypeSessionLinks,
+      rehypeLibraryLinks,
       rehypeHoldImages
     ])
   })
@@ -799,5 +801,87 @@ describe('SG-S · 会话链接：a 的 href 多认一种形状，别的一概不
       'session-link'
     )
     expect(el?.properties).toEqual({ session: 'abc' })
+  })
+})
+
+// ══════════════════════════════════════════════════════
+// SG-L · 闸只为形状严格的文件库链接多留 a 的 href 与 img 的 src
+// ══════════════════════════════════════════════════════
+
+describe('SG-L · 文件库链接：a[href] 与 img[src] 多认一种形状，别的一概不变', () => {
+  const LIB_ID = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /**
+   * 生产链减去文件库链接那一格，再减去扣图那一格：看闸自己留下了什么。不减扣图的话 img 先被换成
+   * 不带地址的 held-image，「src 被丢掉」的断言就成了假绿
+   */
+  const gateOnly = pipeline(
+    markdownRehypePlugins.filter((p) => p !== rehypeLibraryLinks && p !== rehypeHoldImages)
+  )
+  const hrefOf = (html: string): unknown => {
+    const a = find(html, 'a', gateOnly)
+    expect(a).toBeDefined()
+    return a?.properties?.href
+  }
+  const srcOf = (html: string): unknown => {
+    const img = find(html, 'img', gateOnly)
+    expect(img).toBeDefined()
+    return img?.properties?.src
+  }
+
+  it('SG-L1 形状严格匹配的库链接：a 留下 href，img 留下 src；协议表没变', () => {
+    for (const url of [
+      `shuvix://file/${LIB_ID}/a.pdf`,
+      `shuvix://file/${LIB_ID}`,
+      `shuvix://file/${LIB_ID}/`
+    ]) {
+      expect(hrefOf(`<a href="${url}">t</a>`), url).toBe(url)
+    }
+    const img = `shuvix://file/${LIB_ID}/a.png`
+    expect(srcOf(`<img src="${img}" alt="a">`)).toBe(img)
+    expect(isSafeMarkdownUrl(`shuvix://file/${LIB_ID}`)).toBe(false)
+    expect(isSafeMarkdownUrl(img)).toBe(false)
+  })
+
+  it.each([
+    'shuvix://file/',
+    `shuvix://file/${LIB_ID}/a/b`,
+    `shuvix://file/${LIB_ID}?x`,
+    `javascript:alert(1)//shuvix://file/${LIB_ID}`,
+    `shuvix://file/${LIB_ID}&#9;x`,
+    `shuvix-lib://file/${LIB_ID}`
+  ])('SG-L2 %s：a 的 href 与 img 的 src 都被丢掉', (url) => {
+    expect(hrefOf(`<a href="${url}">t</a>`)).toBeUndefined()
+    expect(srcOf(`<img src="${url}" alt="a">`)).toBeUndefined()
+  })
+
+  it('SG-L3 放宽只在 a[href] 与 img[src]：video / audio / source / srcset 里的库链接照样丢掉', () => {
+    const url = `shuvix://file/${LIB_ID}/v.mp4`
+    for (const html of [
+      `<video src="${url}"></video>`,
+      `<audio src="${url}"></audio>`,
+      `<video><source src="${url}"></video>`,
+      `<picture><source srcset="${url}"></picture>`
+    ]) {
+      // 非空证：不装闸时地址确实留在属性里
+      expect(propsJson(html, ungated), html).toContain('shuvix://file')
+      expect(propsJson(html, gateOnly), html).not.toContain('shuvix://file')
+      for (const tag of ['video', 'audio', 'source']) {
+        expect(tags(html, gateOnly), html).not.toContain(tag)
+      }
+    }
+
+    const img = find(
+      `<img src="https://h.example/a.png" srcset="shuvix://file/${LIB_ID}/a.png 2x" alt="a">`,
+      'img',
+      gateOnly
+    )
+    expect(img).toBeDefined()
+    expect(img?.properties?.src).toBe('https://h.example/a.png')
+    expect(img?.properties?.srcSet).toBeUndefined()
+    expect(JSON.stringify(img?.properties)).not.toContain('shuvix://file')
+  })
+
+  it('SG-L3 img 的 src 仍不认会话链接（SG-S2 不变，这里不经扣图再看一次）', () => {
+    expect(srcOf('<img src="shuvix://session/abc" alt="a">')).toBeUndefined()
   })
 })

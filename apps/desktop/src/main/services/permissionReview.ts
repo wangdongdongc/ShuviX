@@ -328,6 +328,13 @@ function factsOf(event: PermissionRequestEvent): PermissionRequestPayload['opera
       put('name', object.name)
       put('operation', object.operation)
       break
+    case 'library':
+      // agent 读文件库里一件与本会话没有关联的文件（ask-on-library-access）：出厂的 auto-review 审它，和读工作目录
+      // 以外的文件同一性质。名字是谁都能起的，只作参考
+      put('itemId', object.itemId)
+      put('name', object.name)
+      put('linked', object.linked)
+      break
     case 'extension':
       // 出厂的 auto-review 同样不审开启扩展；用户自己的 hook 审它时看得到是哪台
       put('server', object.server)

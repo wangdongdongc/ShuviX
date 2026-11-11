@@ -35,6 +35,13 @@ import { t } from '../i18n'
 import { policyCheckHint } from '../services/policyCheckHint'
 import { botScheduleHint } from '../services/botScheduleHint'
 import { policyBotAccessHint } from '../services/botAccessHint'
+import {
+  describeLibraryItem,
+  forgetNoteLinks,
+  libraryFileOf,
+  recordNoteLinks
+} from '../services/fileLibrary'
+import { parseLibraryLink } from '@shuvix/chat-protocol/fileLibrary'
 
 export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts it to Markdown; JSON, XML and other text come back as they are. A page that comes back refused or nearly empty is loaded again in a hidden browser page, without any login, so one that needs a login or a security check may still come back refused or nearly empty. For text files, returns content with line numbers (supports pagination via offset/limit); local HTML (.html/.htm) files are read as text source, not auto-converted. For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
@@ -111,6 +118,13 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     // 触发，以及同样的权限核对（botScheduleHint.ts）
     writtenNote: (path, text) => policyWrittenNote(path, text) ?? botScheduleHint(path, text),
     decoders,
+    // 文件库链接（`read shuvix://file/<id>`，docs/file-library-design.md §9）：解成库里那件的文件，权限走 `library`
+    // 客体 —— 用户在本会话发送过、或在本会话的笔记里放进来的直接读，其余询问（ask-on-library-access）
+    library: {
+      match: (p) => parseLibraryLink(p)?.itemId ?? null,
+      describe: (id) => describeLibraryItem(id, sid),
+      resolve: (id) => libraryFileOf(id)?.path ?? null
+    },
     abortError: TOOL_ABORTED,
     labels: {
       read: t('tool.readLabel'),
@@ -138,6 +152,12 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
             ? { type: 'files.changed', root }
             : { type: 'files.changed', root, paths: [portPath], kind }
         )
+      }
+      // 笔记里引用了哪些库文件（`embedded` 关联，docs/file-library-design.md §6）：写了就按新正文重算，删了就清掉。
+      // 整个目录的挪动、删除不在这里跟：失效的笔记关联由管理页打开时校验（L2）
+      if (!isDirectory) {
+        if (kind === 'delete') forgetNoteLinks(portPath)
+        else void recordNoteLinks(portPath).catch(() => undefined)
       }
       // 落在某个 bundle 里的改动进变更管线（git 提交 + knowledge.changed），模块按需加载（loadKnowledgeModule）
       if (bundleRelOf(portPath) !== null) {

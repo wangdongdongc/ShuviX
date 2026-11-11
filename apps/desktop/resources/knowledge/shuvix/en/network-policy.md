@@ -99,8 +99,8 @@ and no session permission table (`aclRead` / `aclWrite`).
 | a file the network reads or writes | `path` | `read` / `write` | `path` (where it really leads), `requestedPath`, `displayPath`, `scope` (always `files`), `access` (same as `action`); `tool.name` / `tool.operation` below | 403, or the file is not shown / not saved |
 
 `route` is `page` (`/`), `asset` (the page's scripts and styles), `media`, `preview`,
-`download` (file routes), `shown` (an image an agent showed in a conversation; scope `sessions`, no `path`
-check), `lib` (chart libraries), `widget` (`/w/…`) or `socket` (the `/ws`
+`download` (file routes), `library` (a file-library file, by id; scope `files`, no `path` check), `shown` (an
+image an agent showed in a conversation; scope `sessions`, no `path` check), `lib` (chart libraries), `widget` (`/w/…`) or `socket` (the `/ws`
 upgrade every page makes). The `path` check runs for the file routes (`tool.name` `files`,
 `tool.operation` `media` / `preview` / `download`) and for the channels that read or write a
 file anywhere on disk: `files:read` / `files:write` (`files`, `read` / `write`) and

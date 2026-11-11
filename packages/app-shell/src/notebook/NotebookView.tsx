@@ -28,6 +28,8 @@ export interface NotebookViewProps {
   frontmatterFallbackType?: string
   /** 只读：只渲染不编辑、不自动保存（随应用发布的内置知识库 —— 文件在应用包里，改了会随更新消失） */
   readOnly?: boolean
+  /** 能往笔记里粘贴、拖入、插入文件（进文件库）；缺省不能（设置页里编辑的注册表 md） */
+  attachable?: boolean
   /** 宿主追加的 CM6 扩展（见 LivePreviewEditor.extraExtensions；挂载时捕获一次，传稳定数组） */
   extraExtensions?: readonly Extension[]
   /**
@@ -63,6 +65,7 @@ export function NotebookView({
   layout,
   frontmatterFallbackType,
   readOnly = false,
+  attachable = false,
   extraExtensions,
   onExternalChange
 }: NotebookViewProps): React.JSX.Element {
@@ -263,6 +266,7 @@ export function NotebookView({
         initialContent={content}
         onSave={readOnly ? undefined : onSave}
         readOnly={readOnly}
+        attachable={attachable}
         onSaveStatusChange={setSaveStatus}
         handleRef={editorRef}
         fileContext={fileContext}

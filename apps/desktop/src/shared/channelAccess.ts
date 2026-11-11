@@ -433,6 +433,10 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'files:open': 'write',
   'files:write': 'write', // 也能写到注册表目录里的 md：网络客户端写的位置另过 path 点位（files / write）
 
+  // ─── library：文件库 ───
+  'library:add': 'write', // 网络客户端只能交字节（kind:'path' 在处理器里一律拒），不碰本机路径
+  'library:pickFiles': 'write', // 本机的选择文件对话框（只桌面）
+
   // ─── knowledge / mentions：知识库 ───
   'knowledge:list': 'read',
   'knowledge:openNote': 'write',
@@ -474,7 +478,7 @@ export function channelAccessOf(channel: string): ChannelAccess {
  *  - `app`：页面每次加载都要的读取与应用外壳（窗口、右键菜单、通知、悬浮聊天）—— 拒掉它的 read，页面就打不开；
  *  - `sessions`：会话、和 agent 对话、消息、子会话、后台任务、运行时资源、斜杠命令、日历与日报；
  *  - `projects`：项目，含项目环境变量；
- *  - `files`：工作目录文件的列 / 读 / 写 / 预览 / 下载、笔记本协作编辑、Artifacts、服务端目录浏览；
+ *  - `files`：工作目录文件的列 / 读 / 写 / 预览 / 下载、笔记本协作编辑、Artifacts、文件库、服务端目录浏览；
  *  - `terminal`：终端；
  *  - `browser`：内置浏览器（标签页、浏览、DevTools、站点数据、证书例外）与它的设置项；
  *  - `widgets`：Widgets 与它们的独立窗口；
@@ -536,6 +540,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   liveDoc: 'files',
   download: 'files',
   artifact: 'files',
+  library: 'files', // 文件库：也是「文件」，不另开 scope（用户裁决 2026-10-23：15 个）
   terminal: 'terminal',
   browserView: 'browser',
   browserData: 'browser',

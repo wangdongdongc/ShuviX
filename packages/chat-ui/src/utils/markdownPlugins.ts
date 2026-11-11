@@ -22,6 +22,7 @@ import { remarkMathDollarGuard } from './remarkMathDollarGuard'
 import { rehypeSanitizeRawHtml } from './rehypeSanitizeRawHtml'
 import { rehypeRedactionMarks } from './rehypeRedactionMarks'
 import { rehypeSessionLinks } from './rehypeSessionLinks'
+import { rehypeLibraryLinks } from './rehypeLibraryLinks'
 import { rehypeHoldImages } from './rehypeHoldImages'
 
 /**
@@ -56,7 +57,10 @@ export const markdownRemarkPlugins = [remarkGfm, remarkMath, remarkMathDollarGua
  *                      （高亮整个换掉代码块的子节点），理由见 rehypeRedactionMarks 的文件头。
  *   6. 会话链接     —— `shuvix://session/…` 换成 `<session-link>`，点了切到那条会话。在闸之后：闸才不会把
  *                      它当裸标签拆掉，手写的同名标签也进不到这里。理由见 rehypeSessionLinks 的文件头。
- *   7. 扣下图片     —— 每个 `img` 换成不去取图的 `<held-image>`（远端的点一下才加载）：模型写的图片地址
+ *   7. 文件库链接   —— `shuvix://file/…` 的图片换成直接显示的 `<library-image>`（本机文件，不出网），链接换成
+ *                      文件 chip。在闸之后（闸只为形状严格匹配的库链接放过 href / src），在扣下图片之前（否则
+ *                      图片先被扣成占位）。理由见 rehypeLibraryLinks 的文件头。
+ *   8. 扣下图片     —— 每个 `img` 换成不去取图的 `<held-image>`（远端的点一下才加载）：模型写的图片地址
  *                      在显示时就会被请求，是一条出网通道。排在最后，前面任何插件产出的 img 都逃不过；
  *                      在闸之后，闸才不会把 `held-image` 当裸标签拆掉。理由见 rehypeHoldImages 的文件头。
  */
@@ -67,5 +71,6 @@ export const markdownRehypePlugins = [
   rehypeKatex,
   rehypeRedactionMarks,
   rehypeSessionLinks,
+  rehypeLibraryLinks,
   rehypeHoldImages
 ]

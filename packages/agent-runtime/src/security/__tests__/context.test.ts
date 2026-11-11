@@ -6,7 +6,8 @@
  * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）、
  * enforceSession（`session` 工具与一条别的会话交互，XS-19）、
  * enforceWidget（`widget` 工具用一个组件，WT4-SE-15）、
- * enforceExtension（`tool_search` 开启一台 MCP 服务器，SEC-1 / SEC-2）。
+ * enforceExtension（`tool_search` 开启一台 MCP 服务器，SEC-1 / SEC-2）、
+ * enforceLibrary（`read` 一个文件库链接，文件库那一组的 SEC-1…3）。
  */
 import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { createSecurityContext } from '../context'
@@ -5790,5 +5791,209 @@ describe('createSecurityContext — enforceExtension（SEC）', () => {
     )
 
     expect(message).toBe('User declined extension xIGNORE and provided feedback instead: no')
+  })
+})
+
+// ─── enforceLibrary（文件库守卫）────────────────────────────────────────
+//
+// docs/file-library-l1-tests.md §9.2（SEC-1…3，与上面 enforceExtension 的 SEC-1 / SEC-2 同名、不是同一组）：
+// `read shuvix://file/<id>` 的门面。交给策略的客体恰是 {type:'library', itemId, name, linked}，action 恒为 read；
+// 出厂 ask-on-library-access 只在没有关联时问，审查接缝先于卡片；「其它」反馈即使传了 onOther:'return' 也抛；
+// 允许之后什么都不记（权限表里没有库这一种行，关联就是记忆）。
+
+describe('createSecurityContext — enforceLibrary（文件库，SEC-1…3）', () => {
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  const usedSids = new Set<string>()
+  let seq = 0
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+  })
+
+  const OPTS = { toolCallId: 'tc-lib', toolName: 'read', displayPath: 'shuvix://file/X' }
+
+  /** 本条用例自己的会话；审查接缝回 null（照旧问人），询问通道固定应答，三种「记住」都是 spy */
+  function libraryContext(opts: { response?: InputResponse } = {}): {
+    ctx: SecurityContext
+    sid: string
+    review: Mock<Reviewer>
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    persistGrant: Mock<NonNullable<SecurityHostProvider['persistGrant']>>
+    persistSessionGrant: Mock<NonNullable<SecurityHostProvider['persistSessionGrant']>>
+    persistWidgetGrant: Mock<NonNullable<SecurityHostProvider['persistWidgetGrant']>>
+    warn: Mock<(msg: string) => void>
+  } {
+    const sid = `context-library-${++seq}`
+    usedSids.add(sid)
+    const review = vi.fn<Reviewer>(async () => null)
+    const response = opts.response ?? { kind: 'ask', allowed: true }
+    const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
+    const persistGrant = vi.fn<NonNullable<SecurityHostProvider['persistGrant']>>()
+    const persistSessionGrant = vi.fn<NonNullable<SecurityHostProvider['persistSessionGrant']>>()
+    const persistWidgetGrant = vi.fn<NonNullable<SecurityHostProvider['persistWidgetGrant']>>()
+    const warn = vi.fn<(msg: string) => void>()
+    const ctx = createSecurityContext(
+      { kind: 'agent', sessionId: sid, agentKind: 'root' },
+      ENVIRONMENT,
+      makeProvider(noGrants(), {
+        requestUserInput,
+        onPermissionRequest: review,
+        persistGrant,
+        persistSessionGrant,
+        persistWidgetGrant,
+        logger: { info: vi.fn(), warn, error: vi.fn() }
+      })
+    )
+    return {
+      ctx,
+      sid,
+      review,
+      requestUserInput,
+      persistGrant,
+      persistSessionGrant,
+      persistWidgetGrant,
+      warn
+    }
+  }
+
+  /** 带了一堆不相干（连 type / path / mode 在内）键的入参 */
+  const NOISY = {
+    itemId: 'X',
+    name: 'N',
+    linked: false,
+    type: 'path',
+    path: '/etc/passwd',
+    mode: 'write',
+    sessionId: 'S',
+    widgetId: 'W'
+  } as never
+
+  it('SEC-1 交给策略的客体恰是 {type, itemId, name, linked}：多出来的键不进客体、type 盖不掉；action read；tool 取自 opts；卡片命令 Read library file "N" (X)', async () => {
+    const { ctx, review, requestUserInput, warn } = libraryContext()
+
+    await expect(ctx.enforceLibrary(NOISY, OPTS)).resolves.toBeUndefined()
+
+    expect(review).toHaveBeenCalledTimes(1)
+    const event = review.mock.calls[0]![0]
+    expect(event.request.object).toStrictEqual({
+      type: 'library',
+      itemId: 'X',
+      name: 'N',
+      linked: false
+    })
+    expect(event.request.action).toBe('read')
+    expect(event.request.tool).toEqual({ name: 'read' })
+    expect(event.command).toBe('Read library file "N" (X)')
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({
+      kind: 'ask',
+      id: 'tc-lib',
+      toolName: 'read',
+      command: 'Read library file "N" (X)'
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('SEC-2 linked:true → 放行：不审查、不弹卡，日志一条 allow（摘要 library X）', async () => {
+    const { ctx, sid, review, requestUserInput } = libraryContext()
+
+    await expect(
+      ctx.enforceLibrary({ itemId: 'X', name: 'N', linked: true }, OPTS)
+    ).resolves.toBeUndefined()
+
+    expect(review).not.toHaveBeenCalled()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    const records = getSessionDecisions(sid)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      action: 'read',
+      objectKind: 'library',
+      objectSummary: 'library X',
+      effect: 'allow'
+    })
+  })
+
+  it('SEC-2 linked:false → effect ask、winning ask-on-library-access#0；审查恰一次、在弹卡之前', async () => {
+    const { ctx, sid, review, requestUserInput } = libraryContext()
+
+    await ctx.enforceLibrary({ itemId: 'X', name: 'N', linked: false }, OPTS)
+
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(review.mock.calls[0]![0].decision).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-library-access#0'
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(review.mock.invocationCallOrder[0]).toBeLessThan(
+      requestUserInput.mock.invocationCallOrder[0]!
+    )
+    expect(getSessionDecisions(sid)[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-library-access#0',
+      userResponse: 'allowed'
+    })
+  })
+
+  it('SEC-3 拒绝 → reject，报 User denied reading library file "N" (X)', async () => {
+    const { ctx } = libraryContext({ response: { kind: 'ask', allowed: false } })
+
+    expect(
+      await rejectionOf(ctx.enforceLibrary({ itemId: 'X', name: 'N', linked: false }, OPTS))
+    ).toBe('User denied reading library file "N" (X)')
+  })
+
+  it('SEC-3 name 为空：卡片是 Read library file (X)；拒绝的报错里没有 ""，仍然点名 X', async () => {
+    const { ctx, requestUserInput } = libraryContext({ response: { kind: 'ask', allowed: false } })
+
+    const message = await rejectionOf(
+      ctx.enforceLibrary({ itemId: 'X', name: '', linked: false }, OPTS)
+    )
+
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({ command: 'Read library file (X)' })
+    expect(message).not.toContain('""')
+    expect(message).toContain('X')
+    expect(message.startsWith('User denied reading')).toBe(true)
+  })
+
+  it("SEC-3 「其它」反馈：传了 onOther:'return' 也 reject（从不当成放行）", async () => {
+    const { ctx, sid } = libraryContext({ response: { kind: 'other', text: 'not that file' } })
+
+    expect(
+      await rejectionOf(
+        ctx.enforceLibrary(
+          { itemId: 'X', name: 'N', linked: false },
+          { ...OPTS, onOther: 'return' }
+        )
+      )
+    ).toBe('User declined library file "N" (X) and provided feedback instead: not that file')
+    expect(getSessionDecisions(sid)[0]).toMatchObject({
+      objectKind: 'library',
+      userResponse: 'feedback'
+    })
+  })
+
+  it('SEC-3 允许之后不写任何授权（回了 rememberPath / remember 也一样）：三种「记住」都没被调，同一个读再来一次照样问', async () => {
+    const h = libraryContext({
+      response: {
+        kind: 'ask',
+        allowed: true,
+        extra: { rememberPath: true, remember: true, rememberAccess: 'write' }
+      }
+    })
+    const target = { itemId: 'X', name: 'N', linked: false }
+
+    await h.ctx.enforceLibrary(target, OPTS)
+    await h.ctx.enforceLibrary(target, OPTS)
+
+    expect(h.persistGrant).not.toHaveBeenCalled()
+    expect(h.persistSessionGrant).not.toHaveBeenCalled()
+    expect(h.persistWidgetGrant).not.toHaveBeenCalled()
+    expect(h.requestUserInput).toHaveBeenCalledTimes(2)
+    expect(getSessionDecisions(h.sid).map((r) => r.userResponse)).toEqual(['allowed', 'allowed'])
   })
 })

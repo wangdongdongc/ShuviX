@@ -96,23 +96,24 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 9 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 10 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(9)
+    expect(policies).toHaveLength(10)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-command',
       'ask-on-session-access',
       'ask-on-widget-access',
+      'ask-on-library-access',
       'ask-on-extension',
       'ask-on-settings',
       'network-admission',
       'daily-bot-access',
       'redact-sensitive'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(9)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(10)
   })
 
   it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
@@ -226,6 +227,7 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-session-access#1', 'ask'],
       ['ask-on-widget-access#0', 'ask'],
       ['ask-on-widget-access#1', 'ask'],
+      ['ask-on-library-access#0', 'ask'],
       ['ask-on-extension#0', 'ask'],
       ['ask-on-settings#0', 'ask'],
       ['network-admission#0', 'deny'],
@@ -2853,6 +2855,133 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     it('BP-E 不约束 user 主体与别的宿主', () => {
       expect(decide('enable', extension('x'), { subjectKind: 'user' }).effect).toBe('allow')
       expect(decide('enable', extension('x'), { host: 'extension' }).effect).toBe('allow')
+    })
+  })
+
+  // ── ask-on-library-access：agent `read` 一个文件库链接（shuvix://file/<id>）─────────────────────────
+  //
+  // docs/file-library-l1-tests.md §9.3。BP-LIB-1 形态：一条 ask × read，只管 agent × library × desktop；
+  // 三门语言判定字段一致（规则恒取 en），提示语与显示名各自翻译，shuvix-id 是 policy:builtin:ask-on-library-access。
+  // BP-LIB-2 行为（真 CEL）：linked 为真不命中（默认放行）；linked 为假或不带 linked 都问；network 主体、
+  // path 客体不在 scope 内。
+  describe('ask-on-library-access（读文件库，BP-LIB）', () => {
+    const NAME = 'ask-on-library-access'
+    const library = (extra: Record<string, unknown> = {}): SecurityObject => ({
+      type: 'library',
+      itemId: 'X',
+      name: 'N',
+      ...extra
+    })
+
+    it.each(['en', 'zh', 'ja'])(
+      'BP-LIB-1 %s：恰一条 ask × [read]；scope 是 agent × library × desktop；规则与 en 相同、prompt 非空且本地化；shuvix-id 是 policy:builtin:ask-on-library-access',
+      (language) => {
+        const en = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }).find((p) => p.name === NAME)!
+        const policy = buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD }).find(
+          (p) => p.name === NAME
+        )
+        expect(policy, `${NAME} missing in ${language}`).toBeDefined()
+        expect(policy!.scope).toStrictEqual({
+          'subject.kind': ['agent'],
+          'object.type': ['library'],
+          'env.host': ['desktop']
+        })
+        expect(policy!.lets).toBeUndefined()
+        expect(policy!.rules).toHaveLength(1)
+        expect(policy!.rules.map(withoutPrompt)).toStrictEqual([
+          {
+            effect: 'ask',
+            conditions: { action: ['read'] },
+            match: '!(has(object.linked) && object.linked)'
+          }
+        ])
+        // 规则只取英文文件
+        expect(policy!.rules.map(withoutPrompt)).toStrictEqual(en.rules.map(withoutPrompt))
+        expect(policy!.rules[0].prompt).toBeTruthy()
+        expect(policy!.objectId).toBe('policy:builtin:ask-on-library-access')
+        expect(policy!.objectId).toBe(builtinObjectId('policy', NAME))
+
+        // 语言文件原文：判定字段与 en 一致，prompt 与显示名是那门语言自己的
+        const raw = parsePolicyDefinitionFile(sourcesOf(NAME)[language]!, NAME)!
+        expect(raw.rules.map(withoutPrompt)).toStrictEqual(en.rules.map(withoutPrompt))
+        expect(policy!.rules[0].prompt).toBe(raw.rules[0].prompt)
+        expect(policy!.displayName).toBe(raw.displayName)
+        if (language === 'en') {
+          expect(policy!.displayName).toBe('Ask Before Reading Other Library Files')
+        } else {
+          expect(policy!.displayName).not.toBe(en.displayName)
+          expect(policy!.rules[0].prompt).not.toBe(en.rules[0].prompt)
+        }
+      }
+    )
+
+    it('BP-LIB-1 三门语言文件都在内联表里，各自解析得出', () => {
+      const sources = sourcesOf(NAME)
+      expect(Object.keys(sources).sort()).toEqual(['en', 'ja', 'zh'])
+      for (const [language, text] of Object.entries(sources)) {
+        expect(parsePolicyDefinitionFile(text, NAME), language).not.toBeNull()
+      }
+    })
+
+    it('BP-LIB-2 真 CEL：linked 为真不命中（默认放行）；linked 为假、不带 linked 都命中、问 —— 卡片命令点名名字与 id，没有记忆条目；零告警', () => {
+      const sinks = warnSinks()
+      const provider = makeProvider({ logger: sinks.logger })
+      const run = (object: SecurityObject): SecurityDecision =>
+        decide('read', object, { provider, warn: sinks.evalWarn, tool: { name: 'read' } })
+
+      const linked = run(library({ linked: true }))
+      expect(linked.effect).toBe('allow')
+      expect(linked.matched.filter((id) => id.startsWith(NAME))).toEqual([])
+
+      for (const object of [library({ linked: false }), library()]) {
+        const decision = run(object)
+        expect(decision, JSON.stringify(object)).toMatchObject({
+          effect: 'ask',
+          tier: 'ask',
+          winning: `${NAME}#0`,
+          matched: [`${NAME}#0`]
+        })
+        expect(decision.ask).toStrictEqual({ command: 'Read library file "N" (X)' })
+        expect(decision.ask).not.toHaveProperty('rememberEntry')
+        expect(decision.prompt?.policies).toEqual(['Ask Before Reading Other Library Files'])
+      }
+
+      // 只问 read：别的 action 不在规则里
+      expect(decide('write', library({ linked: false }), { provider }).effect).toBe('allow')
+
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-LIB-2 不在 scope 内：network 主体、path 客体（带着 linked:false 也不算）、user 主体、extension 宿主都不归它', () => {
+      const provider = makeProvider()
+      const vars = buildPolicyVars(provider)
+      const network = evaluate(
+        assembleRules(provider, vars),
+        {
+          subject: { kind: 'network', sessionId: 's1' },
+          action: 'read',
+          object: library({ linked: false }),
+          environment: { host: 'desktop', platform: 'darwin' }
+        },
+        { vars }
+      )
+      expect(network.matched.filter((id) => id.startsWith(NAME))).toEqual([])
+      expect(network.effect).toBe('allow')
+
+      const path = decide('read', {
+        type: 'path',
+        path: '/opt/data/a.png',
+        itemId: 'X',
+        linked: false
+      } as SecurityObject)
+      expect(path.matched.filter((id) => id.startsWith(NAME))).toEqual([])
+      expect(path.effect).toBe('allow')
+
+      expect(decide('read', library({ linked: false }), { subjectKind: 'user' }).effect).toBe(
+        'allow'
+      )
+      expect(decide('read', library({ linked: false }), { host: 'extension' }).effect).toBe('allow')
     })
   })
 

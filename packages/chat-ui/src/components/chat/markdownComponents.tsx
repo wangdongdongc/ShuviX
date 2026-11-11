@@ -41,6 +41,7 @@ import { hasPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholder
 import { parseSessionLink, sessionLink } from '@shuvix/chat-protocol/dailyNotes'
 import { RedactedMark } from './RedactedText'
 import { HeldImage } from './HeldImage'
+import { LibraryImage, LibraryLinkChip } from './LibraryFile'
 
 // ─── 超链接 ────────────────────────────────────────────
 
@@ -402,6 +403,8 @@ export const markdownComponents = {
   code: InlineCode as never,
   'redaction-mark': RedactionMarkTag as never,
   'session-link': SessionLinkChip as never,
+  'library-image': LibraryImage as never,
+  'library-link': LibraryLinkChip as never,
   'held-image': HeldImage as never
 }
 

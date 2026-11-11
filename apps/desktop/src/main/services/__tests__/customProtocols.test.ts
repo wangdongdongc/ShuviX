@@ -39,6 +39,14 @@
  *  - CP-14 合法引用 → 200、快照目录里那份字节、image/png；resolveProjectConfig / resolveReadPath 都不调
  *  - CP-15 形状不对的 `shown:`（`../x.png`、大写十六进制）照普通相对路径解析（resolveReadPath 拿到原串）
  *  - CP-16 合法引用 + 不安全的会话 id → 不从快照目录取（resolveReadPath 被调）；引用合法但快照不在 → 500（同 CP-12）
+ *
+ * `library:<id>`（文件库 L1，docs/file-library-l1-tests.md §7.3）：按 id 到库里取当前版本，与会话无关。paths 的 mock 里
+ * `getLibraryFilesDir` 指向临时目录；元数据表经 `setLibraryTable` 注入一个假表（每条用例重新导入后注入）：
+ *
+ *  - CP-LIB-1 `?session=<任意，含不存在的 'library'>&path=library:ID` → 200、库文件的字节、image/png；
+ *             resolveProjectConfig / resolveReadPath 都不调
+ *  - CP-LIB-2 `library:ID` 在回收站或库里没有 → 不是 200（同文件不在时的 500），resolveReadPath 不调（不退回工作目录）；
+ *             `library:not-an-id` → resolveReadPath 拿到原串（与形状不对的 `shown:` 同样处理，有意如此）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -53,6 +61,7 @@ const REPO_ROOT = resolve(HERE, '../../../../../..')
 const state = vi.hoisted(() => ({
   libsDir: '',
   shownBase: '',
+  libraryRoot: '',
   registerSchemesAsPrivileged: vi.fn(),
   handle: vi.fn(),
   warn: vi.fn(),
@@ -81,6 +90,8 @@ vi.mock('../../utils/paths', async (importOriginal) => {
     getSandboxLibsDir: () => state.libsDir,
     // show_image 的快照目录：基址指到临时目录；会话 id 的安全判断用真实现
     getShownImagesDir: (sessionId: string) => joinPath(state.shownBase, sessionId),
+    // 文件库的根：临时目录
+    getLibraryFilesDir: () => state.libraryRoot,
     isSafeSessionId: actual.isSafeSessionId
   }
 })
@@ -472,5 +483,109 @@ describe('shuvix-preview：`shown:` 引用到会话自己的快照目录里取�
     expect(await missing.text()).toBe('Internal error')
     expect(state.warn).toHaveBeenCalledTimes(1)
     expect(state.resolveReadPath).not.toHaveBeenCalled()
+  })
+})
+
+// ─── shuvix-preview 的 `library:` 引用（CP-LIB-1 / 2） ───────────────────────
+
+const LIB_ID = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+const LIB_ID2 = '0199d3a2-0000-7000-8000-000000000000'
+
+describe('shuvix-preview：`library:` 引用到文件库里取（CP-LIB-1 / 2）', () => {
+  /** 假表里 LIB_ID 的那一行（deletedAt 可改） */
+  let deletedAt: number | null
+
+  /** 装好处理器，并给这次重新导入的 fileLibrary 注入假表 */
+  async function libraryHandler(): Promise<ProtocolHandler> {
+    const handle = await handlerFor('shuvix-preview')
+    const lib = await import('../fileLibrary')
+    lib.setLibraryTable({
+      findItem: (id: string) =>
+        id === LIB_ID
+          ? ({
+              id: LIB_ID,
+              name: 'a.png',
+              storage: 'managed',
+              externalPath: null,
+              currentVersion: 1,
+              kind: 'image',
+              source: 'note-paste',
+              description: null,
+              createdAt: 1,
+              updatedAt: 1,
+              deletedAt,
+              sha256: 'x',
+              size: N,
+              mime: 'image/png',
+              fileName: 'a.png',
+              width: null,
+              height: null,
+              durationMs: null
+            } as const)
+          : null
+    } as unknown as Parameters<typeof lib.setLibraryTable>[0])
+    return handle
+  }
+
+  beforeEach(() => {
+    previewTmp = mkdtempSync(join(tmpdir(), 'shuvix-preview-library-'))
+    state.libraryRoot = join(previewTmp, 'library')
+    mkdirSync(join(state.libraryRoot, LIB_ID.slice(0, 2), LIB_ID), { recursive: true })
+    writeFileSync(join(state.libraryRoot, LIB_ID.slice(0, 2), LIB_ID, 'a.png'), PAYLOAD)
+    deletedAt = null
+    state.resolveProjectConfig.mockImplementation(() => ({ workingDirectory: previewTmp }))
+    state.resolveReadPath.mockImplementation((p: string, cwd: string) => resolve(cwd, p))
+  })
+
+  afterEach(async () => {
+    const lib = await import('../fileLibrary')
+    lib.setLibraryTable(null)
+    rmSync(previewTmp, { recursive: true, force: true })
+  })
+
+  it('CP-LIB-1 library:ID → 200、库文件的字节、image/png；会话是什么都行；两个解析依赖都不调', async () => {
+    const handle = await libraryHandler()
+    for (const session of ['S', 'library', 'no-such-session']) {
+      const res = await handle(previewReq({ session, path: `library:${LIB_ID}` }))
+      expect(res.status, session).toBe(200)
+      expect(res.headers.get('Content-Type'), session).toBe('image/png')
+      expect((await body(res)).equals(PAYLOAD), session).toBe(true)
+    }
+    // 大写 id 统一成小写
+    const upper = await handle(
+      previewReq({ session: 'S', path: `library:${LIB_ID.toUpperCase()}` })
+    )
+    expect(upper.status).toBe(200)
+    await upper.arrayBuffer()
+    expect(state.resolveProjectConfig).not.toHaveBeenCalled()
+    expect(state.resolveReadPath).not.toHaveBeenCalled()
+  })
+
+  it('CP-LIB-2 在回收站 / 库里没有 → 不是 200，也不退回工作目录解析', async () => {
+    const handle = await libraryHandler()
+    // 工作目录里放一个同名的「相对路径」文件：真退回去解析就会读到它
+    writeFileSync(join(previewTmp, `library:${LIB_ID2}`), Buffer.from('decoy'))
+
+    deletedAt = 5
+    const trashed = await handle(previewReq({ session: 'S', path: `library:${LIB_ID}` }))
+    expect(trashed.status).not.toBe(200)
+    expect(trashed.status).toBe(500)
+    await trashed.arrayBuffer()
+
+    const missing = await handle(previewReq({ session: 'S', path: `library:${LIB_ID2}` }))
+    expect(missing.status).not.toBe(200)
+    expect((await body(missing)).toString()).not.toBe('decoy')
+
+    expect(state.resolveReadPath).not.toHaveBeenCalled()
+    expect(state.resolveProjectConfig).not.toHaveBeenCalled()
+  })
+
+  it('CP-LIB-2 library:not-an-id → 照普通相对路径解析：resolveReadPath 拿到原串', async () => {
+    const handle = await libraryHandler()
+    const res = await handle(previewReq({ session: 'S', path: 'library:not-an-id' }))
+    expect(res.status).toBe(500)
+    await res.arrayBuffer()
+    expect(state.resolveReadPath).toHaveBeenCalledTimes(1)
+    expect(state.resolveReadPath).toHaveBeenCalledWith('library:not-an-id', previewTmp)
   })
 })

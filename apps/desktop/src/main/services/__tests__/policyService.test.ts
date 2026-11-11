@@ -409,7 +409,8 @@ describe('policyService —— ask-on-read 不再是内置', () => {
     expect(named[0].overriddenBy).toBeUndefined()
     expect(basename(named[0].basePath)).toBe('ask-on-read.md')
     // 2026-10-01 起管 agent 的出厂只剩这两份；2026-10-19 加了管远程访问的 network-admission
-    // 2026-10-25 加了自动脱敏的 redact-sensitive，2026-10-27 加了组件访问的 ask-on-widget-access
+    // 2026-10-25 加了自动脱敏的 redact-sensitive，2026-10-27 加了组件访问的 ask-on-widget-access，
+    // 2026-11-11 加了文件库的 ask-on-library-access
     expect(
       rows
         .filter((row) => row.source === 'builtin')
@@ -419,6 +420,7 @@ describe('policyService —— ask-on-read 不再是内置', () => {
       'ask-on-command',
       'ask-on-extension',
       'ask-on-external-path',
+      'ask-on-library-access',
       'ask-on-session-access',
       'ask-on-settings',
       'ask-on-widget-access',

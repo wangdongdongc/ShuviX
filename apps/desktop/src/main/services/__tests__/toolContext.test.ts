@@ -53,6 +53,11 @@
  *   TC-BRT3 用户策略取 trial.userPolicies（policyService.getUserPolicies 的那份不算）；求值告警进 trial.logger
  *   TC-BRT4 读别的会话 → 问（判定），注入的审查者一次都不调，provider 上没有询问通道
  *   TC-BRT5 停用开关照 policyService.isDisabled：停用 daily-bot-access → 日记 bot 读会话要问；没停用 → 放行
+ * 文件库客体（文件库 L1，docs/file-library-l1-tests.md §9.5）：
+ *   TC-LIB-1 桌面上的真实评估 evaluate('read', {type:'library', …})：linked false → ask（ask-on-library-access#0）；
+ *            linked true → allow；内置策略的停用开关打开（policyService.isDisabled 回 true）→ allow
+ *   TC-LIB-2 门面转发：enforceLibrary(obj, opts) → forCall(opts).enforceLibrary，obj 原样，opts 经 withRestored
+ *            （这次调用还原过的类别补进 restored）
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
  * reviewState / 决策日志是进程级表：这些用例各用独立 sessionId，afterEach 清掉。
  */
@@ -1208,6 +1213,111 @@ describe('WT4-AC-15…17 组件种类的行 —— getVars / persistWidgetGrant 
  * 名字，不是 bot 会话为空串），只把 `get` 换成替身 —— 不扫磁盘。identityOf 按 bot 名缓存 2 秒，所以每条用例用
  * 自己的 bot 名，互不串。会话行由 tc.sessionRows 喂（sessionDao.pick 的替身）。
  */
+describe('TC-LIB 文件库客体', () => {
+  const runtime = vi.mocked(createSecurityContext)
+  const LIB = { type: 'library', itemId: '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10', name: 'a.png' }
+
+  beforeEach(() => {
+    tc.userPolicies = []
+    tc.disabledPolicies = []
+    runtime.mockClear()
+  })
+
+  afterEach(() => {
+    tc.disabledPolicies = []
+    // 回到透传（vi.fn(impl) 的 mockReset 复原成 impl）
+    runtime.mockReset()
+  })
+
+  it('TC-LIB-1 linked false → ask（ask-on-library-access#0）；linked true → allow', () => {
+    const ctx = getDesktopSecurityContext({ sessionId: 'sess-lib-eval' }, () => ({
+      workingDirectory: '/ws'
+    }))
+    const unlinked = ctx.evaluate('read', { ...LIB, linked: false })
+    expect(unlinked.effect).toBe('ask')
+    expect(unlinked.winning).toBe('ask-on-library-access#0')
+    expect(unlinked.ask?.command).toBe(`Read library file "a.png" (${LIB.itemId})`)
+    expect(ctx.evaluate('read', { ...LIB, linked: true }).effect).toBe('allow')
+  })
+
+  it('TC-LIB-1 内置策略停用（isDisabled 回 true）→ linked false 也 allow', () => {
+    tc.disabledPolicies = ['ask-on-library-access']
+    const ctx = getDesktopSecurityContext({ sessionId: 'sess-lib-off' }, () => ({
+      workingDirectory: '/ws'
+    }))
+    expect(ctx.evaluate('read', { ...LIB, linked: false }).effect).toBe('allow')
+  })
+
+  /** createSecurityContext 交回只认 enforceLibrary 的替身：记下每次的主体与收到的参数 */
+  function captureEnforceLibrary(): Array<{ subject: SecuritySubject; args: unknown[] }> {
+    const calls: Array<{ subject: SecuritySubject; args: unknown[] }> = []
+    runtime.mockImplementation(
+      (subject) =>
+        ({
+          enforceLibrary: async (...args: unknown[]) => {
+            calls.push({ subject, args })
+          }
+        }) as unknown as SecurityContext
+    )
+    return calls
+  }
+
+  const OBJECT = { itemId: LIB.itemId, name: 'a.png', linked: false }
+
+  it('TC-LIB-2 转给 forCall(opts).enforceLibrary：obj 原样，没还原过类别时 opts 原样', async () => {
+    const calls = captureEnforceLibrary()
+    const ctx = getDesktopSecurityContext({ sessionId: 'sess-lib-fwd' }, () => ({
+      workingDirectory: '/ws'
+    }))
+    const opts = { toolCallId: 'c1', toolName: 'read', taskId: 3 }
+    await ctx.enforceLibrary(OBJECT, opts)
+    expect(calls).toHaveLength(1)
+    const [object, passed] = calls[0].args
+    expect(object).toBe(OBJECT)
+    expect(passed).toBe(opts)
+    expect(calls[0].args).toHaveLength(2)
+  })
+
+  it('TC-LIB-2 这次调用还原过类别 → opts 补上 restored（withRestored）；派生 agent 的调用按它的主体判', async () => {
+    const { setRestoredCategories, clearRestoredCategories } =
+      await import('../redaction/restoredCalls')
+    const calls = captureEnforceLibrary()
+    const spawned: ToolAgentIdentity = { profileName: 'coding', kind: 'spawned' }
+    const agentOf = vi.fn((cid: number) => (cid === 2 ? spawned : undefined))
+    const ctx = getDesktopSecurityContext({ sessionId: 'sess-lib-rst', agentOf }, () => ({
+      workingDirectory: '/ws'
+    }))
+    setRestoredCategories('sess-lib-rst', 9, ['email'])
+    try {
+      await ctx.enforceLibrary(OBJECT, {
+        toolCallId: 'c2',
+        toolName: 'read',
+        taskId: 9,
+        conversationId: 2
+      })
+    } finally {
+      clearRestoredCategories('sess-lib-rst', 9)
+    }
+    // 第一次是会话的根（base），第二次是这次调用的派生 agent
+    const call = calls.at(-1)!
+    expect(call.args[0]).toBe(OBJECT)
+    expect(call.args[1]).toStrictEqual({
+      toolCallId: 'c2',
+      toolName: 'read',
+      taskId: 9,
+      conversationId: 2,
+      restored: ['email']
+    })
+    expect(agentOf).toHaveBeenCalledWith(2)
+    expect(coreSubject(call.subject)).toStrictEqual({
+      kind: 'agent',
+      sessionId: 'sess-lib-rst',
+      agentKind: 'spawned',
+      profileName: 'coding'
+    })
+  })
+})
+
 describe('TC-BOT / XS-37 / XS-38 / TC-VAR1 —— subject.bot、会话客体的宿主事实、vars.now 与目录变量', () => {
   const runtime = vi.mocked(createSecurityContext)
   const DAILY_ID = 'bot:builtin:daily'

@@ -35,6 +35,12 @@ export const NETWORK_DOWNLOAD_PATH = '/files/download'
  */
 export const NETWORK_SHOWN_IMAGE_PATH = '/sessions/shown-image'
 
+/**
+ * 文件库里的一件（docs/file-library-design.md §4）：`GET /files/library?id=<库 id>`。归 `files` scope，不过 path 点位 ——
+ * 库目录不在任何权限表里，按 id 找当前版本；回收站里的、不存在的回 404（界面画“文件已删除”）
+ */
+export const NETWORK_LIBRARY_FILE_PATH = '/files/library'
+
 /** 交互图沙箱的库（`/lib/<名字>`） */
 export const NETWORK_LIB_PREFIX = '/lib/'
 
@@ -54,6 +60,11 @@ export function networkPreviewUrl(sessionId: string, path: string): string {
 /** 会话里一张图的快照 → 地址 */
 export function networkShownImageUrl(sessionId: string, file: string): string {
   return `${NETWORK_SHOWN_IMAGE_PATH}?session=${encodeURIComponent(sessionId)}&file=${encodeURIComponent(file)}`
+}
+
+/** 文件库里的一件 → 地址 */
+export function networkLibraryFileUrl(itemId: string): string {
+  return `${NETWORK_LIBRARY_FILE_PATH}?id=${encodeURIComponent(itemId)}`
 }
 
 /** 服务端的文件 → 附件下载地址 */

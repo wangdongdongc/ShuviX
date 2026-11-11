@@ -40,6 +40,7 @@ import type {
 } from './types/mcp'
 import type { InputRequest, InputResponse } from './types/inputRequest'
 import type { SessionUnread } from './sessionUnread'
+import type { LibraryAddParams, LibraryAddResult } from './fileLibrary'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
 import type { ArtifactRefContent, SessionArtifact } from './artifacts'
@@ -1152,6 +1153,15 @@ export interface HostApi {
       path: string
       content: string
     }) => Promise<{ ok: true } | { ok: false; error: string }>
+  }
+  /**
+   * 文件库（docs/file-library-design.md）：一个文件进库，交回库里的那件与要写进笔记的 Markdown。
+   * 同样的内容已在库里就不新建（`reused`）。网络客户端只能交字节（`kind: 'path'` 一律拒）。
+   */
+  library?: {
+    add: (params: LibraryAddParams) => Promise<LibraryAddResult>
+    /** 本机的选择文件对话框（可多选，桌面）；取消、web 客户端 → null（页面自己开文件选择框） */
+    pickFiles: () => Promise<string[] | null>
   }
   /** MCP 客户端：服务器 CRUD + 连接控制 + 工具查询 */
   mcp: {
