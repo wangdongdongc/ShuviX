@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 /**
- * 侧栏的「在跑」：这一轮在跑（selectStreamingSessions）或还有没结束的后台任务（selectBgBusySessions），
+ * 侧栏的「在跑」：这一轮在跑（selectStreamingSessions）或还有没结束的后台任务（selectBgRunKinds），
  * ProjectSessionGroups 把两者合起来传给行（jsdom）。
  *
  *   RUN-1 只有后台任务 / 只有这一轮 / 两者 / 都没有：前三者行上 `data-running`；不相干的行不亮
  *   RUN-2 分支的启用只看这一轮：只有后台任务 → 行亮着、分支可点；这一轮在跑 → 置灰；被中断 + 后台任务 → 置灰；临时行同样
  *   RUN-3 带展开子会话的父行：只有子会话有任务 → 只亮子行；只有父有 → 只亮父行，折叠钮在；后台任务不挡待答徽标
+ *   RUN-4 行上的 `data-run`：只剩后台命令 → resident（绿）；agent 类后台任务 / 这一轮在跑 → agent（呼吸）；两者 → agent
+ *   RUN-5 父行与子行各是各的种类
+ *   RUN-6 未读接线：只剩后台命令的行照画未读点（出错红点），这一轮在跑的不画、标题照样加粗
  *
- * 两张表都用同一个可变 `store`（按 selector 读）：选择器本身的口径在 chat-ui 的 bgTaskStore.test.ts。
+ * 几张表都用同一个可变 `store`（按 selector 读）：选择器本身的口径在 chat-ui 的 bgTaskStore.test.ts。
+ * 替身的 selectBgRunKinds 把 `bgBusy` 里的会话当作只剩后台命令，再叠上 `bgKinds` 指定的种类。
  * 文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +21,7 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
+import type { SessionUnread } from '@shuvix/chat-protocol/sessionUnread'
 
 interface StoreSession {
   id: string
@@ -35,8 +40,12 @@ const store = vi.hoisted(() => ({
   setActiveSessionId: (_id: string | null) => {},
   /** selectStreamingSessions 的结果 */
   streaming: {} as Record<string, boolean>,
-  /** selectBgBusySessions 的结果 */
+  /** 哪些会话有没结束的后台任务（替身的 selectBgRunKinds 把它们都当作只剩后台命令） */
   bgBusy: {} as Record<string, boolean>,
+  /** 直接指定后台任务让会话处于哪种在跑（叠在 bgBusy 之上） */
+  bgKinds: {} as Record<string, 'agent' | 'resident'>,
+  /** useUnreadStore 的 `unread` */
+  unread: {} as Record<string, SessionUnread>,
   /** selectInterruptedSessions 的结果 */
   interrupted: {} as Record<string, boolean>,
   /** selectAllPendingCounts 的结果 */
@@ -51,8 +60,15 @@ vi.mock('@shuvix/chat-ui', () => ({
   }),
   useBgTaskStore: (selector: (s: typeof store) => unknown) => selector(store),
   useUnreadStore: (selector: (s: { unread: Record<string, unknown> }) => unknown) =>
-    selector({ unread: {} }),
-  selectBgBusySessions: (s: typeof store) => s.bgBusy,
+    selector({ unread: store.unread }),
+  selectBgRunKinds: (s: typeof store) => ({
+    ...Object.fromEntries(
+      Object.keys(s.bgBusy)
+        .filter((id) => s.bgBusy[id])
+        .map((id) => [id, 'resident'])
+    ),
+    ...s.bgKinds
+  }),
   selectStreamingSessions: (s: typeof store) => s.streaming,
   selectInterruptedSessions: (s: typeof store) => s.interrupted,
   selectAllPendingCounts: (s: typeof store) => s.pending,
@@ -165,6 +181,8 @@ beforeEach(() => {
   store.activeSessionId = null
   store.streaming = {}
   store.bgBusy = {}
+  store.bgKinds = {}
+  store.unread = {}
   store.interrupted = {}
   store.pending = {}
   container = document.createElement('div')
@@ -274,5 +292,91 @@ describe('RUN-3 parent, child, and the pending-ask badge', () => {
       rowEl('s1').querySelector('[data-pending-asks]')?.getAttribute('data-pending-asks')
     ).toBe('3')
     expect(rowEl('s2').querySelector('[data-pending-asks]')).toBeNull()
+  })
+})
+
+describe('RUN-2 an agent-kind background task alone still leaves fork enabled', () => {
+  it('RUN-2 bgKinds { s1: agent } only → data-run="agent", fork enabled', async () => {
+    store.sessions = [row('s1')]
+    store.bgKinds = { s1: 'agent' }
+    mount()
+    expect(rowEl('s1').getAttribute('data-run')).toBe('agent')
+    expect(await forkEnabled('s1')).toBe(true)
+  })
+})
+
+const iconOf = (id: string): SVGElement => {
+  const svg = rowEl(id).querySelector<SVGElement>('[data-session-icon]')
+  if (!svg) throw new Error(`no session icon in row ${id}`)
+  return svg
+}
+
+describe('RUN-4 the row carries the run kind', () => {
+  it.each<[string, Record<string, boolean>, Record<string, 'agent' | 'resident'>, string | null]>([
+    ['resident background task', {}, { s1: 'resident' }, 'resident'],
+    ['agent background task', {}, { s1: 'agent' }, 'agent'],
+    ['turn running and resident background task', { s1: true }, { s1: 'resident' }, 'agent'],
+    ['turn running only', { s1: true }, {}, 'agent'],
+    ['neither', {}, {}, null]
+  ])('RUN-4 %s', (_label, streaming, bgKinds, expected) => {
+    store.sessions = [row('s1'), row('s2')]
+    store.streaming = streaming
+    store.bgKinds = bgKinds
+    mount()
+    expect(rowEl('s1').getAttribute('data-run')).toBe(expected)
+    const svg = iconOf('s1')
+    expect(svg.classList.contains('text-success')).toBe(expected === 'resident')
+    expect(svg.classList.contains('animate-pulse')).toBe(expected === 'agent')
+    expect(rowEl('s2').hasAttribute('data-run')).toBe(false)
+  })
+})
+
+describe('RUN-5 parent and child keep their own kinds', () => {
+  const family = (): StoreSession[] => [
+    row('parent'),
+    row('child', { parentId: 'parent', createdAt: 2 })
+  ]
+
+  it('RUN-5 parent turn running, child resident', () => {
+    store.sessions = family()
+    store.streaming = { parent: true }
+    store.bgKinds = { child: 'resident' }
+    mount()
+    expect(rowEl('parent').getAttribute('data-run')).toBe('agent')
+    expect(rowEl('child').getAttribute('data-run')).toBe('resident')
+  })
+
+  it('RUN-5 parent resident, child turn running', () => {
+    store.sessions = family()
+    store.streaming = { child: true }
+    store.bgKinds = { parent: 'resident' }
+    mount()
+    expect(rowEl('parent').getAttribute('data-run')).toBe('resident')
+    expect(rowEl('child').getAttribute('data-run')).toBe('agent')
+  })
+})
+
+describe('RUN-6 unread wiring', () => {
+  const unread = (failed: boolean): SessionUnread => ({ since: 1, failed, manual: false })
+  const titleSpan = (id: string): HTMLElement => {
+    const span = [...rowEl(id).querySelectorAll<HTMLElement>('span.truncate')].find(
+      (el) => el.textContent === `Title ${id}`
+    )
+    if (!span) throw new Error(`no title span in row ${id}`)
+    return span
+  }
+
+  it('RUN-6 resident rows show the dot (red when failed); a running turn does not; no entry, no dot', () => {
+    store.sessions = [row('s1'), row('s2'), row('s3'), row('s4')]
+    store.streaming = { s3: true }
+    store.bgKinds = { s1: 'resident', s2: 'resident' }
+    store.unread = { s1: unread(true), s2: unread(false), s3: unread(false) }
+    mount()
+    expect(rowEl('s1').querySelector('[data-unread]')?.getAttribute('data-unread')).toBe('failed')
+    expect(rowEl('s2').querySelector('[data-unread]')?.getAttribute('data-unread')).toBe('')
+    expect(rowEl('s3').querySelector('[data-unread]')).toBeNull()
+    expect(titleSpan('s3').classList.contains('font-semibold')).toBe(true)
+    expect(rowEl('s4').querySelector('[data-unread]')).toBeNull()
+    expect(titleSpan('s4').classList.contains('font-semibold')).toBe(false)
   })
 })

@@ -75,7 +75,7 @@ import {
   useChatStore
 } from '../../stores/chatStore'
 import { useSubSessionStore } from '../../stores/subSessionStore'
-import { selectBgBusySessions, useBgTaskStore } from '../../stores/bgTaskStore'
+import { selectBgRunKinds, useBgTaskStore } from '../../stores/bgTaskStore'
 import { buildVisibleItems } from '../../components/chat/conversationItems'
 import {
   V,
@@ -254,7 +254,7 @@ describe('BG-T1 后台任务不改这一轮', () => {
     emit({ type: 'bg_task', sessionId: 's1', task })
 
     expect(useBgTaskStore.getState().tasks['bg-t1']).toEqual(task)
-    expect(selectBgBusySessions(useBgTaskStore.getState())).toEqual({ s1: true })
+    expect(selectBgRunKinds(useBgTaskStore.getState())).toEqual({ s1: 'resident' })
     expect(selectStreamingSessions(store()).s1).toBeFalsy()
     expect(store().sessionStreams.s1?.isStreaming).toBeFalsy()
     expect(selectIsStreaming(store())).toBe(false)

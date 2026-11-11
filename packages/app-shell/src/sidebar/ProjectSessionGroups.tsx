@@ -12,7 +12,7 @@ import {
   useChatStore,
   selectAllPendingCounts,
   selectInterruptedSessions,
-  selectBgBusySessions,
+  selectBgRunKinds,
   selectStreamingSessions,
   useBgTaskStore,
   useUnreadStore,
@@ -176,7 +176,7 @@ export function ProjectSessionGroups({
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const streamingSessions = useChatStore(selectStreamingSessions)
-  const bgBusySessions = useBgTaskStore(selectBgBusySessions)
+  const bgRunKinds = useBgTaskStore(selectBgRunKinds)
   const pendingCounts = useChatStore(selectAllPendingCounts)
   const unreadSessions = useUnreadStore((s) => s.unread)
   // 目标的 ◎（进行中 / 暂停中）：直接读 store 的那张表（值不变时引用稳定）；只装了一部分 store 的宿主 / 替身里可能没有它
@@ -518,10 +518,11 @@ export function ProjectSessionGroups({
               key={item.id}
               session={item}
               active={activeSessionId === item.id}
-              isStreaming={streamingSessions[item.id] || bgBusySessions[item.id]}
+              run={streamingSessions[item.id] ? 'agent' : (bgRunKinds[item.id] ?? null)}
               interrupted={interruptedSessions[item.id]}
               pendingCount={pendingCounts[item.id]}
               unread={item.id in unreadSessions}
+              unreadFailed={!!unreadSessions[item.id]?.failed}
               goalStatus={goalStatuses?.[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}

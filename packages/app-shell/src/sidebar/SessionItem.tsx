@@ -1,7 +1,7 @@
 /**
  * SessionItem —— 共享会话列表单行（prop 驱动），从桌面 Sidebar.renderSessionItem 抽出。
  *
- * 通用部分（图标/标题/流式脉冲/待输入计数/选中态）两宿主共用；桌面专属能力（悬浮 pin）
+ * 通用部分（图标/标题/在跑状态/待输入计数/选中态）两宿主共用；行首图标与收件箱共用 SessionIcon；桌面专属能力（悬浮 pin）
  * 通过可选 prop 注入，缺省即隐藏。
  *
  * 行内**没有任何动作按钮**：配置/导出/删除这些动作统一收在行尾那颗 ⋮ 里（`onMenu`，与右键
@@ -16,40 +16,10 @@
  * 会话保留自己的身份图标 —— 身份图标若顶掉折叠钮，它们的子会话在侧栏里就够不着了（bot 恰恰
  * 把活全交给子会话）。
  */
-import {
-  Bot,
-  createLucideIcon,
-  MessageSquare,
-  MessagesSquare,
-  FileText,
-  PictureInPicture2,
-  Timer
-} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { RedactedText, RedactionSessionProvider, type SessionRunKind } from '@shuvix/chat-ui'
 import { RowMenuButton } from './RowMenuButton'
-import { RedactedText, RedactionSessionProvider } from '@shuvix/chat-ui'
-
-/**
- * MessagesSquare 的实心版（有子会话的会话，选中 / 在跑时用，与普通会话的实心 MessageSquare 同一层意思）。
- * 不能直接给 MessagesSquare 加 fill：后面那片是条开放路径，填出来是一道斜切口。这里把它沿前片的外轮廓闭合，
- * 两片之间留着和线框版一样的缝。
- */
-const MessagesSquareSolid = createLucideIcon('messages-square-solid', [
-  [
-    'path',
-    {
-      d: 'M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
-      key: 'front'
-    }
-  ],
-  [
-    'path',
-    {
-      d: 'M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1h8a4 4 0 0 0 4-4z',
-      key: 'back'
-    }
-  ]
-])
+import { SessionIcon, sessionIconShape } from './SessionIcon'
 
 /**
  * 目标记号（同 chat-ui 的 GoalMark：外圈 + 圆点；暂停中圆点是空心的）。app-shell 的 DOM 用例整份 mock 掉
@@ -71,19 +41,25 @@ function GoalGlyph({ active }: { active: boolean }): React.JSX.Element {
 export interface SessionItemProps {
   session: { id: string; title: string }
   active: boolean
-  /** 在跑（侧栏口径）：这一轮在跑，或者还有没结束的后台任务 —— 由容器合起来传入 */
-  isStreaming?: boolean
+  /**
+   * 在跑的是哪一种（与收件箱同一套，见 SessionIcon）：`agent` = 这一轮在跑或有派发的 agent / 子会话轮次，
+   * `resident` = 只剩后台命令开着；停着 = null。由容器把这一轮与后台任务合起来传入
+   */
+  run?: SessionRunKind | null
   /**
    * 上个进程退出时这条会话正在跑（P3-12，Q-P3-10 的侧栏圆点）：标题后一枚小圆点 + 悬浮提示。
-   * 在跑的会话不显示（转圈已经说明了一切）
+   * 在跑的会话不显示（图标已经说明了一切）
    */
   interrupted?: boolean
   pendingCount?: number
   /**
-   * 有你还没看的新回复（docs/inbox-read-state-design.md）：行尾一个蓝点、标题加粗一档。在跑 / 有询问时不画点
-   * （优先级：询问 > 在跑 > 未读），标题照样加粗
+   * 有你还没看的新回复（docs/inbox-read-state-design.md）：行尾一个蓝点（这一轮出错时红点，同收件箱）、标题加粗一档。
+   * agent 在干活 / 有询问时不画点（优先级：询问 > agent 在干活 > 未读）—— 只剩后台命令开着时照画，agent 已经停了，
+   * 它的回复你还没看；标题照样加粗
    */
   unread?: boolean
+  /** 那条新回复是出错收场的（未读的点画成红色） */
+  unreadFailed?: boolean
   /**
    * 这条会话的目标（目标模式，docs/goal-mode-design.md §9.3）：进行中 ◎、暂停中空心 ◎；达成 / 做不到 / 没有目标不标。
    * 询问徽标照旧排在最右，它更急
@@ -119,10 +95,11 @@ export interface SessionItemProps {
 export function SessionItem({
   session,
   active,
-  isStreaming = false,
+  run = null,
   interrupted = false,
   pendingCount = 0,
   unread = false,
+  unreadFailed = false,
   goalStatus,
   dim = false,
   isNotebook = false,
@@ -138,29 +115,20 @@ export function SessionItem({
   isPinned = false
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
-  const pulse = isStreaming ? 'animate-pulse ' : ''
-  const lit = isStreaming || active ? 'text-accent' : 'text-text-tertiary'
-  // 行首图标说的是「这是哪种会话」；有子会话时它外面再包一层折叠钮（见下）
-  const icon = isTriggerRun ? (
-    <Timer className={`sb-icon ${pulse}${lit}`} />
-  ) : isBot ? (
-    <Bot className={`sb-icon ${pulse}${lit}`} />
-  ) : isNotebook ? (
-    <FileText className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'}`} />
-  ) : isPinned ? (
-    <PictureInPicture2 className={`sb-icon ${pulse}text-accent`} />
-  ) : subCount > 0 ? (
-    active || isStreaming ? (
-      <MessagesSquareSolid fill="currentColor" className={`sb-icon ${pulse}${lit}`} />
-    ) : (
-      <MessagesSquare className={`sb-icon ${pulse}${lit}`} />
-    )
-  ) : (
-    <MessageSquare
-      fill={active || isStreaming ? 'currentColor' : 'none'}
-      className={`sb-icon ${pulse}${lit}`}
+  const runLabel =
+    run === 'agent' ? t('sidebar.runAgent') : run === 'resident' ? t('sidebar.runResident') : ''
+  // 行首图标说的是「这是哪种会话」与「它在不在跑、跑的是什么」；有子会话时它外面再包一层折叠钮（见下），
+  // 那时在跑的说明并进折叠钮的提示里（图标自己的提示会盖住折叠钮的）
+  const icon = (
+    <SessionIcon
+      shape={sessionIconShape({ isTriggerRun, isBot, isNotebook, isPinned, subCount })}
+      run={run}
+      active={active}
+      className="sb-icon"
+      label={subCount > 0 ? undefined : runLabel || undefined}
     />
   )
+  const busy = run !== null
   return (
     <div
       onClick={() => onSelect(session.id)}
@@ -169,7 +137,8 @@ export function SessionItem({
       // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
       // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
       data-session-row=""
-      data-running={isStreaming ? '' : undefined}
+      data-running={busy ? '' : undefined}
+      data-run={run ?? undefined}
       data-trigger-run={isTriggerRun ? '' : undefined}
       data-sub={isSub ? '' : undefined}
       data-sub-count={subCount > 0 ? subCount : undefined}
@@ -190,7 +159,9 @@ export function SessionItem({
             e.stopPropagation()
             onToggleSubs?.(session.id)
           }}
-          title={t('sidebar.subSessions', { count: subCount })}
+          title={[t('sidebar.subSessions', { count: subCount }), runLabel]
+            .filter(Boolean)
+            .join(' · ')}
           className="flex-shrink-0 -m-1 p-1 rounded hover:bg-bg-active"
         >
           {icon}
@@ -223,7 +194,7 @@ export function SessionItem({
             {location}
           </span>
         )}
-        {interrupted && !isStreaming && (
+        {interrupted && !busy && (
           <span
             data-interrupted=""
             title={t('sidebar.interrupted')}
@@ -236,20 +207,20 @@ export function SessionItem({
             data-goal-mark={goalStatus}
             title={t(goalStatus === 'active' ? 'goal.sidebarActive' : 'goal.sidebarPaused')}
             aria-label={t(goalStatus === 'active' ? 'goal.sidebarActive' : 'goal.sidebarPaused')}
-            className={`shrink-0 flex items-center ${interrupted && !isStreaming ? '' : 'ml-auto'} ${
+            className={`shrink-0 flex items-center ${interrupted && !busy ? '' : 'ml-auto'} ${
               goalStatus === 'active' ? 'text-accent' : 'text-text-tertiary'
             }`}
           >
             <GoalGlyph active={goalStatus === 'active'} />
           </span>
         )}
-        {unread && !isStreaming && pendingCount === 0 && (
+        {unread && run !== 'agent' && pendingCount === 0 && (
           <span
-            data-unread=""
-            title={t('sidebar.unread')}
-            aria-label={t('sidebar.unread')}
-            className={`shrink-0 h-[7px] w-[7px] rounded-full bg-accent ${
-              location || (interrupted && !isStreaming) || goalStatus ? '' : 'ml-auto'
+            data-unread={unreadFailed ? 'failed' : ''}
+            title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+            aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+            className={`shrink-0 h-[7px] w-[7px] rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'} ${
+              location || (interrupted && !busy) || goalStatus ? '' : 'ml-auto'
             }`}
           />
         )}
@@ -257,7 +228,7 @@ export function SessionItem({
           <span
             data-pending-asks={pendingCount}
             className={`flex items-center gap-1 shrink-0 ${
-              (interrupted && !isStreaming) || goalStatus ? '' : 'ml-auto'
+              (interrupted && !busy) || goalStatus ? '' : 'ml-auto'
             }`}
           >
             <span className="relative flex h-1.5 w-1.5">

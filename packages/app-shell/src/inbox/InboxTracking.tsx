@@ -1,11 +1,11 @@
 /**
  * 收件箱的「跟踪中」一节（T1，2026-11-10 用户选定；`docs/inbox-tracking-status-design.md`）—— 跟踪项从侧栏资料库搬进
- * 收件箱页，与「等你回答 / 新回复 / 运行中」同一页，但**不计入侧栏收件箱那一行的数字**：那个数字是「要你处理的」，
- * 跟踪项是你自己的清单。
+ * 收件箱页，摆在最上面（M1），但**不计入侧栏收件箱那一行的数字**：那个数字是「要你处理的」，跟踪项是你自己的清单。
  *
- * - 一行：圆圈（点一下归档，底部出「已归档 · 撤销」）、标题、`waiting` 的琥珀「等待中」标签、日期（文件最后修改）、
- *   下面一行灰字是最新一条进展（没有就是结论的第一句）。点行 = 打开那份 md 的笔记本（与侧栏原来那一组同一条路）。
- * - `active` 与 `waiting` 混排，按修改时间倒序；「已归档 N」在这一节末尾折着，展开后每行带结论与「恢复」。
+ * - 一行（M1：单行，状态靠图形）：圆圈（点一下归档，底部出「已归档 · 撤销」；在等别人的项是琥珀虚线圈）、标题、
+ *   最新一条进展（没有就是结论的第一句）；日期（文件最后修改）只在悬停时出现。点行 = 打开那份 md 的笔记本。
+ * - `active` 与 `waiting` 混排，按修改时间倒序；已归档的折在这一节末尾的归档图标 + 数字后面，展开后每行是结论，
+ *   悬停出「恢复」。
  * - 行菜单（右键）：归档 / 恢复、标为等待中 / 不再等待、在文件夹中显示、复制路径、删除（先确认）。
  * - 状态写在文件里（frontmatter 的 `status`），这里只调宿主的 `setStatus`；乐观地先挪行，`tracking.changed` 重扫对齐。
  *
@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Archive, Check, ChevronRight } from 'lucide-react'
+import { Archive, Check } from 'lucide-react'
 import { copyToClipboard, useAppEvent } from '@shuvix/chat-ui'
 import type { TrackingItem, TrackingStatus } from '@shuvix/chat-protocol/trackingNotes'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -23,6 +23,7 @@ import { RowMenuButton } from '../sidebar/RowMenuButton'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { unreadTimeLabel } from './inboxItems'
+import { GlyphCell, InboxLine } from './InboxLine'
 
 /** 宿主注入的跟踪项能力：侧栏那一组的全部，加上改状态 */
 export interface InboxTrackingAdapter extends TrackingGroupAdapter {
@@ -77,8 +78,6 @@ export interface InboxTrackingSectionProps {
   items: TrackingItem[]
   /** 打开收件箱那一刻（日期标签分今天 / 更早） */
   now: number
-  /** 列表页的大节标题，还是逐张处理里的小标题 */
-  variant: 'list' | 'triage'
   /** 先挪行（useTrackingItems 的 patch） */
   patch: (fileName: string, status: TrackingStatus) => void
   rescan: () => void
@@ -90,7 +89,6 @@ export function InboxTrackingSection({
   adapter,
   items,
   now,
-  variant,
   patch,
   rescan,
   onArchived
@@ -152,121 +150,94 @@ export function InboxTrackingSection({
     })
   }
 
-  const heading =
-    variant === 'list' ? (
-      <h2 className="group/head mb-1 mt-7 flex items-baseline gap-2 border-b border-border-secondary pb-1.5 text-[13px] font-semibold text-text-primary">
-        {t('inbox.trackingSection')}
-        <span className="min-w-0 flex-1 truncate text-[12px] font-normal text-text-secondary">
-          {t('inbox.trackingHint')}
-        </span>
-        <RowMenuButton
-          className="self-center opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100"
-          onOpen={openHeaderMenu}
-        />
-      </h2>
-    ) : (
-      <div className="group/head mb-1 mt-6 flex items-center gap-2 px-0.5 text-[12px] font-semibold text-text-secondary">
-        <span className="min-w-0 flex-1 truncate">{t('inbox.trackingSection')}</span>
-        <RowMenuButton
-          className="opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100"
-          onOpen={openHeaderMenu}
-        />
-      </div>
-    )
+  const heading = (
+    <h2 className="group/head mb-0.5 mt-5 flex h-6 items-center gap-2 pl-2 text-[12px] font-medium text-text-tertiary">
+      <span className="min-w-0 flex-1 truncate">{t('inbox.trackingSection')}</span>
+      <RowMenuButton
+        className="opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100"
+        onOpen={openHeaderMenu}
+      />
+    </h2>
+  )
+
+  const date = (item: TrackingItem): string => unreadTimeLabel(item.updatedAt, now)
 
   const liveRow = (item: TrackingItem): React.JSX.Element => (
-    <div
+    <InboxLine
       key={item.fileName}
-      data-tracking-item={item.fileName}
-      data-tracking-status={item.status}
+      attrs={{ 'data-tracking-item': item.fileName, 'data-tracking-status': item.status }}
       onContextMenu={(e) => openRowMenu(item, e)}
-      className="group flex items-start gap-3 rounded-lg px-2 py-2.5 transition-colors hover:bg-bg-hover/60"
-    >
-      <button
-        type="button"
-        data-tracking-archive=""
-        aria-label={t('inbox.trackingArchive')}
-        title={t('inbox.trackingArchive')}
-        onClick={() => setStatus(item, 'archived')}
-        className="group/circle mt-px flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border-[1.5px] border-text-tertiary text-accent transition-colors hover:border-accent focus-visible:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      >
-        <Check
-          size={10}
-          strokeWidth={3}
-          aria-hidden="true"
-          className="opacity-0 transition-opacity group-hover/circle:opacity-100 group-focus-visible/circle:opacity-100"
-        />
-      </button>
-      <button
-        type="button"
-        data-tracking-open=""
-        onClick={() => void adapter.open(item.fileName, item.title)}
-        title={item.fileName}
-        className="flex min-w-0 flex-1 flex-col gap-[3px] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      >
-        <span className="flex w-full items-center gap-2">
-          <span data-tracking-title="" className="min-w-0 truncate text-[14px] text-text-primary">
-            {item.title}
-          </span>
-          {item.status === 'waiting' && (
-            <span
-              data-tracking-waiting=""
-              className="shrink-0 rounded px-1.5 text-[11px] font-medium leading-[18px] bg-amber-500/15 text-amber-700 dark:text-amber-400"
-            >
-              {t('inbox.trackingWaiting')}
-            </span>
-          )}
-          <span className="flex-1" />
-          <span className="shrink-0 text-[12px] text-text-secondary">
-            {unreadTimeLabel(item.updatedAt, now)}
-          </span>
-        </span>
-        {item.latest && (
+      leading={
+        // 圆圈就是归档按钮：悬停时圈里出一个勾；在等别人的项是一圈琥珀虚线
+        <button
+          type="button"
+          data-tracking-archive=""
+          data-tracking-waiting={item.status === 'waiting' ? '' : undefined}
+          aria-label={
+            item.status === 'waiting'
+              ? `${t('inbox.trackingWaiting')} · ${t('inbox.trackingArchive')}`
+              : t('inbox.trackingArchive')
+          }
+          title={
+            item.status === 'waiting'
+              ? `${t('inbox.trackingWaiting')} · ${t('inbox.trackingArchive')}`
+              : t('inbox.trackingArchive')
+          }
+          onClick={() => setStatus(item, 'archived')}
+          className="group/circle flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+        >
           <span
-            data-tracking-latest=""
-            className="w-full truncate text-[12.5px] text-text-secondary"
+            className={`flex h-3.5 w-3.5 items-center justify-center rounded-full border-[1.5px] text-accent transition-colors group-hover/circle:border-solid group-hover/circle:border-accent ${
+              item.status === 'waiting' ? 'border-dashed border-amber-400' : 'border-text-tertiary'
+            }`}
           >
-            {item.latest}
+            <Check
+              size={9}
+              strokeWidth={3}
+              aria-hidden="true"
+              className="opacity-0 transition-opacity group-hover/circle:opacity-100 group-focus-visible/circle:opacity-100"
+            />
           </span>
-        )}
-      </button>
-    </div>
+        </button>
+      }
+      title={<span data-tracking-title="">{item.title}</span>}
+      preview={item.latest ? <span data-tracking-latest="">{item.latest}</span> : null}
+      hoverMeta={
+        <span className="pr-0.5 text-[12px] tabular-nums text-text-tertiary">{date(item)}</span>
+      }
+      openTitle={item.fileName}
+      openAttrs={{ 'data-tracking-open': '' }}
+      onOpen={() => void adapter.open(item.fileName, item.title)}
+    />
   )
 
   const archivedRow = (item: TrackingItem): React.JSX.Element => (
-    <div
+    <InboxLine
       key={item.fileName}
-      data-tracking-item={item.fileName}
-      data-tracking-status="archived"
+      attrs={{ 'data-tracking-item': item.fileName, 'data-tracking-status': 'archived' }}
       onContextMenu={(e) => openRowMenu(item, e)}
-      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] text-text-secondary transition-colors hover:bg-bg-hover/60"
-    >
-      <Archive size={15} aria-hidden="true" className="shrink-0 text-text-tertiary" />
-      <button
-        type="button"
-        data-tracking-open=""
-        onClick={() => void adapter.open(item.fileName, item.title)}
-        title={item.fileName}
-        className="min-w-0 flex-1 truncate text-left text-[13.5px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      >
-        <span data-tracking-title="">{item.title}</span>
-        {item.conclusion && (
-          <span data-tracking-latest="" className="text-[12px]">
-            {' · '}
-            {t('inbox.trackingConclusion', { text: item.conclusion })}
-          </span>
-        )}
-      </button>
-      <span className="shrink-0 text-[12px]">{unreadTimeLabel(item.updatedAt, now)}</span>
-      <button
-        type="button"
-        data-tracking-restore=""
-        onClick={() => setStatus(item, 'active')}
-        className="shrink-0 rounded-md border border-border-primary px-2 py-0.5 text-[12px] text-text-primary transition-colors hover:border-accent/60 hover:text-accent"
-      >
-        {t('inbox.trackingRestore')}
-      </button>
-    </div>
+      leading={
+        <GlyphCell>
+          <Archive size={14} aria-hidden="true" className="text-text-tertiary" />
+        </GlyphCell>
+      }
+      title={<span data-tracking-title="">{item.title}</span>}
+      titleClassName="text-text-secondary"
+      preview={item.conclusion ? <span data-tracking-latest="">{item.conclusion}</span> : null}
+      hoverMeta={
+        <button
+          type="button"
+          data-tracking-restore=""
+          onClick={() => setStatus(item, 'active')}
+          className="rounded-md border border-border-primary bg-bg-primary px-2 py-0.5 text-[12px] text-text-primary transition-colors hover:border-accent/60 hover:text-accent"
+        >
+          {t('inbox.trackingRestore')}
+        </button>
+      }
+      openTitle={item.fileName}
+      openAttrs={{ 'data-tracking-open': '' }}
+      onOpen={() => void adapter.open(item.fileName, item.title)}
+    />
   )
 
   return (
@@ -274,20 +245,22 @@ export function InboxTrackingSection({
       {heading}
       <div className="flex flex-col">{live.map(liveRow)}</div>
       {archived.length > 0 && (
-        <>
+        <div className="flex flex-col">
           <button
             type="button"
             data-tracking-archived-toggle=""
             aria-expanded={showArchived}
+            aria-label={t('inbox.trackingArchivedCount', { count: archived.length })}
+            title={t('inbox.trackingArchivedCount', { count: archived.length })}
             onClick={() => setShowArchived((v) => !v)}
-            className="mt-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-text-secondary transition-colors hover:bg-bg-hover/60 hover:text-text-primary"
+            className={`flex items-center gap-2.5 self-start rounded-md py-1 pl-2 pr-2.5 text-[12px] tabular-nums transition-colors hover:bg-bg-hover/60 hover:text-text-primary ${
+              showArchived ? 'text-text-primary' : 'text-text-tertiary'
+            }`}
           >
-            <ChevronRight
-              size={12}
-              aria-hidden="true"
-              className={`transition-transform ${showArchived ? 'rotate-90' : ''}`}
-            />
-            {t('inbox.trackingArchivedCount', { count: archived.length })}
+            <GlyphCell>
+              <Archive size={13} aria-hidden="true" />
+            </GlyphCell>
+            {archived.length}
           </button>
           {showArchived && (
             <div className="flex flex-col">
@@ -296,7 +269,7 @@ export function InboxTrackingSection({
                 <button
                   type="button"
                   onClick={() => setArchivedShown((n) => n + ARCHIVED_PAGE)}
-                  className="self-start rounded-md py-1.5 pl-[35px] pr-2 text-[12px] text-text-secondary transition-colors hover:text-text-primary"
+                  className="self-start rounded-md py-1.5 pl-9 pr-2 text-[12px] text-text-tertiary transition-colors hover:text-text-primary"
                 >
                   {t('inbox.trackingShowMore', {
                     count: Math.min(ARCHIVED_PAGE, archived.length - archivedShown)
@@ -305,7 +278,7 @@ export function InboxTrackingSection({
               )}
             </div>
           )}
-        </>
+        </div>
       )}
       {confirmingDelete && adapter.remove && (
         <ConfirmDialog

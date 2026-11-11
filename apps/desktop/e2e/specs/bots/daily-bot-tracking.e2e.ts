@@ -7,9 +7,9 @@
  *   DT-E3 删掉 daily.md、停机、同一个 HOME 再起：不补写，记录不变
  *   DT-E4 跟踪项在收件箱页（2026-11-10 起桌面侧栏没有「跟踪项」分组了）：目录还没有时收件箱里没有「跟踪中」一节，
  *         打开收件箱也不建目录
- *   DT-E5 目录里放几样东西 → 节头菜单「刷新」：只列可见的 .md 文件（新的在前，已归档的折在「已归档 N」里），行字是一级标题 /
- *         文件名，`status: waiting` 带「等待中」标签，下面一行是最后一条进展（链接只留文字）；概况里有「N 项在跟踪」，
- *         侧栏收件箱一行的数字不算跟踪项
+ *   DT-E5 目录里放几样东西 → 节头菜单「刷新」：只列可见的 .md 文件（新的在前，已归档的折在归档图标 + 数字后面），行字是
+ *         一级标题 / 文件名，`status: waiting` 的圆圈是等待中的样子，预览是最后一条进展（链接只留文字）；侧栏收件箱一行的
+ *         数字不算跟踪项
  *   DT-E6 点一行 → 那份文件的笔记本会话（隐藏项目 `__tracking__`），收件箱随之关上：不进项目列表、侧栏会话列表、日历；
  *         再点复用同一条；属性卡是「Tracked item」，状态是卡上的一行，对象 id 是卡上不渲染的已知键
  *   DT-E7 在笔记本里改一级标题 → 自动保存 → 广播 `tracking.changed`，收件箱里的行字跟着变
@@ -221,10 +221,7 @@ describe('收件箱的「跟踪中」一节', () => {
       { fileName: 'b.md', title: 'b', status: 'active', latest: '', waitingTag: false },
       { fileName: 'a.md', title: 'Alpha bug', status: 'active', latest: '', waitingTag: false }
     ])
-    const strings = LOCALE[language].inbox
-    expect(await tracking.archivedToggle()).toBe(
-      strings.trackingArchivedCount_one.replace('{{count}}', '1')
-    )
+    expect(await tracking.archivedToggle()).toBe('1')
     await tracking.expandArchived()
     const archived = (await tracking.rows()).filter((r) => r.status === 'archived')
     expect(archived).toEqual([
@@ -232,14 +229,11 @@ describe('收件箱的「跟踪中」一节', () => {
         fileName: 'z.md',
         title: 'Release notes',
         status: 'archived',
-        latest: '· ' + strings.trackingConclusion.replace('{{text}}', 'Notes went into the tag.'),
+        latest: 'Notes went into the tag.',
         waitingTag: false
       }
     ])
-    // 概况数在跟的（不含已归档），侧栏收件箱一行的数字不算跟踪项
-    expect(await tracking.summary()).toContain(
-      strings.summaryTrackingPart_other.replace('{{count}}', '3')
-    )
+    // 侧栏收件箱一行的数字不算跟踪项
     expect(await tracking.inboxCount()).toBe(0)
     expect(await tracking.menuIds()).toEqual(['open-folder', 'refresh'])
   })
@@ -447,9 +441,7 @@ describe('收件箱的「跟踪中」一节', () => {
       async () => !(await tracking.rows()).some((r) => r.fileName === 'w.md'),
       'w.md left the main list'
     )
-    expect(await tracking.archivedToggle()).toBe(
-      strings.trackingArchivedCount_other.replace('{{count}}', '2')
-    )
+    expect(await tracking.archivedToggle()).toBe('2')
     await tracking.expandArchived()
     await until(
       async () =>

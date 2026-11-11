@@ -15076,8 +15076,8 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
 // 锚点：侧栏最上面的收件箱一行 `[data-inbox-row]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱页
 // `[data-inbox-page]`，这一节 `[data-inbox-section="tracking"]`；行 `[data-tracking-item=<fileName>]`（`data-tracking-status`），
 // 行里 `[data-tracking-archive]` 圆圈、`[data-tracking-open]` 标题区（点它 = 打开那份文件的**笔记本会话**，收件箱随之关上）、
-// `[data-tracking-title]` / `[data-tracking-latest]`（已归档的行是「结论：…」）、`[data-tracking-waiting]` 标签、
-// `[data-tracking-restore]`；「已归档 N」是 `[data-tracking-archived-toggle]`；归档后底部 `[data-inbox-archived]` 带
+// `[data-tracking-title]` / `[data-tracking-latest]`（已归档的行是结论）、`[data-tracking-waiting]`（在等别人：圆圈上的标记）、
+// `[data-tracking-restore]`（悬停才看得见，点它不用悬停）；已归档那一格（归档图标 + 数字）是 `[data-tracking-archived-toggle]`；归档后底部 `[data-inbox-archived]` 带
 // `[data-inbox-undo]`。这一节在收件箱打开时扫一次，之后窗口聚焦 / 节头菜单「刷新」/ `tracking.changed` 重扫 ——
 // 磁盘外写入不广播，种完文件要 refresh（或重开收件箱）。行菜单只有右键一个入口（没有 ⋮）。
 //
@@ -15090,9 +15090,9 @@ export interface InboxTrackingRow {
   title: string
   /** active / waiting / archived */
   status: string
-  /** 那一句：最新一条进展（已归档的行是「结论：…」）；没有为 '' */
+  /** 那一句：最新一条进展（已归档的行是结论）；没有为 '' */
   latest: string
-  /** 带「等待中」标签 */
+  /** 圆圈是「等待中」的样子（琥珀虚线） */
   waitingTag: boolean
 }
 
@@ -15107,11 +15107,9 @@ export interface InboxTrackingPane {
   sidebarGroupPresent(): Promise<boolean>
   /** 这一节在不在 */
   present(): Promise<boolean>
-  /** 页头那一句概况 */
-  summary(): Promise<string>
   /** 这一节里的行（DOM 序；已归档的只在展开后才有） */
   rows(): Promise<InboxTrackingRow[]>
-  /** 「已归档 N」的文字；没有已归档的为 null */
+  /** 已归档那一格的文字（只有数字）；没有已归档的为 null */
   archivedToggle(): Promise<string | null>
   /** 展开「已归档 N」 */
   expandArchived(): Promise<void>
@@ -15179,10 +15177,6 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
         `document.querySelector('div[class*="group/header"][data-group="tracking"]') !== null`
       ),
     present: () => main.eval<boolean>(`${SECTION} !== null`),
-    summary: () =>
-      main.eval<string>(
-        `(document.querySelector('[data-inbox-summary]')?.textContent ?? '').trim()`
-      ),
     rows: () =>
       main.eval<InboxTrackingRow[]>(
         `[...(${SECTION}?.querySelectorAll('[data-tracking-item]') ?? [])].map((r) => ({

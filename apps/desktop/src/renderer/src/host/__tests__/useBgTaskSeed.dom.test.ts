@@ -3,7 +3,7 @@
  * useBgTaskSeed —— 补侧栏的「后台任务还在跑」（`bg_task` 是事件：窗口重建、web 客户端连上来之前发的都错过了，切会话的快照
  * 又只补当前那一条）。契约：挂载时取一份 `bgTask.listAll()`、`session.listChanged` 时再取一份，整张表换掉；取失败保持现状。
  *
- *   BGS-1 挂载取一次：不是当前会话的任务也进 store，selectBgBusySessions 亮
+ *   BGS-1 挂载取一次：不是当前会话的任务也进 store，selectBgRunKinds 亮
  *   BGS-2 session.listChanged 重取：结束了 / 没了的任务键随之消失；别的事件不取
  *   BGS-3 拒绝（not_connected / disconnected / 处理函数报错）：同一个 tasks 引用、没有未处理的拒绝；下一个信号补好
  *   BGS-4 卸载之后不再取
@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { selectBgBusySessions, setChatApi, useBgTaskStore } from '@shuvix/chat-ui'
+import { selectBgRunKinds, setChatApi, useBgTaskStore } from '@shuvix/chat-ui'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
@@ -61,7 +61,7 @@ const flush = async (): Promise<void> => {
     for (let i = 0; i < 4; i++) await Promise.resolve()
   })
 }
-const busy = (): Record<string, boolean> => selectBgBusySessions(useBgTaskStore.getState())
+const busy = (): Record<string, string> => selectBgRunKinds(useBgTaskStore.getState())
 
 function running(taskId: string, sessionId: string): TaskInfo {
   return {
@@ -128,7 +128,7 @@ describe('useBgTaskSeed · 假后端', () => {
     expect(listAll).toHaveBeenCalledTimes(1)
     expect(listAll.mock.calls[0]).toEqual([])
     expect(useBgTaskStore.getState().tasks).toEqual({ t1: task })
-    expect(busy()).toEqual({ 'not-the-active-one': true })
+    expect(busy()).toEqual({ 'not-the-active-one': 'resident' })
   })
 
   it.each<[string, TaskInfo[]]>([
@@ -138,7 +138,7 @@ describe('useBgTaskSeed · 假后端', () => {
     listAll.mockResolvedValueOnce([running('t1', 'a')])
     mount()
     await flush()
-    expect(busy()).toEqual({ a: true })
+    expect(busy()).toEqual({ a: 'resident' })
 
     listAll.mockResolvedValueOnce(snapshot)
     emit(listChanged)
@@ -182,13 +182,13 @@ describe('useBgTaskSeed · 假后端', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(listAll).toHaveBeenCalledTimes(2)
       expect(useBgTaskStore.getState().tasks).toBe(before)
-      expect(busy()).toEqual({ a: true })
+      expect(busy()).toEqual({ a: 'resident' })
       expect(unhandled).toEqual([])
 
       listAll.mockResolvedValueOnce([running('t2', 'b')])
       emit(listChanged)
       await flush()
-      expect(busy()).toEqual({ b: true })
+      expect(busy()).toEqual({ b: 'resident' })
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
@@ -302,7 +302,7 @@ describe('BGS-5 真 createWsConnection + 假 socket', () => {
     await act(async () => first.answer([running('t1', 'a')]))
     await flush()
     expect(first.listAllFrames()).toHaveLength(1)
-    expect(busy()).toEqual({ a: true })
+    expect(busy()).toEqual({ a: 'resident' })
   })
 
   it('BGS-5 重连再取一次：断线期间结束的灭，新的亮', async () => {
@@ -312,18 +312,18 @@ describe('BGS-5 真 createWsConnection + 假 socket', () => {
     const ended = running('ended', 'a')
     await act(async () => first.answer([ended]))
     await flush()
-    expect(busy()).toEqual({ a: true })
+    expect(busy()).toEqual({ a: 'resident' })
 
     act(() => first.drop())
     await flush()
-    expect(busy()).toEqual({ a: true })
+    expect(busy()).toEqual({ a: 'resident' })
 
     const second = reconnectNow()
     act(() => second.open())
     expect(second.listAllFrames()).toHaveLength(1)
     await act(async () => second.answer([finished(ended), running('fresh', 'b')]))
     await flush()
-    expect(busy()).toEqual({ b: true })
+    expect(busy()).toEqual({ b: 'resident' })
   })
 
   it('BGS-5 断着时挂载：这次调用当场被拒（没发帧）、表不动、没有未处理的拒绝；重连补好', async () => {
@@ -349,7 +349,7 @@ describe('BGS-5 真 createWsConnection + 假 socket', () => {
       expect(second.listAllFrames()).toHaveLength(1)
       await act(async () => second.answer([running('t2', 'b')]))
       await flush()
-      expect(busy()).toEqual({ b: true })
+      expect(busy()).toEqual({ b: 'resident' })
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
@@ -361,7 +361,7 @@ describe('BGS-5 真 createWsConnection + 假 socket', () => {
     act(() => first.open())
     await act(async () => first.answer([running('t1', 'a')]))
     await flush()
-    expect(busy()).toEqual({ a: true })
+    expect(busy()).toEqual({ a: 'resident' })
 
     act(() => first.drop())
     const second = reconnectNow()

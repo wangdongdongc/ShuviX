@@ -10,9 +10,10 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
 import {
-  countsAsSessionBusy,
   selectAllPendingCounts,
+  selectBgRunKinds,
   selectStreamingSessions,
+  taskRunKind,
   useBgTaskStore,
   useChatStore,
   useUnreadStore
@@ -55,17 +56,30 @@ export function useInboxSections(): InboxSections {
   const sessions = useChatStore((s) => s.sessions)
   const streaming = useChatStore(selectStreamingSessions)
   const askCounts = useChatStore(selectAllPendingCounts)
+  // 在跑的是哪一种：侧栏用的同一个选择器，两处的记号才不会对不上
+  const backgroundRunKinds = useBgTaskStore(selectBgRunKinds)
   const tasks = useBgTaskStore((s) => s.tasks)
   const unread = useUnreadStore((s) => s.unread)
-  const backgroundTaskCounts = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const task of Object.values(tasks)) {
-      if (countsAsSessionBusy(task)) counts[task.sessionId] = (counts[task.sessionId] ?? 0) + 1
+  const backgroundCommands = useMemo(() => {
+    const commands: Record<string, string[]> = {}
+    const open = Object.values(tasks)
+      .filter((task) => taskRunKind(task) === 'resident')
+      .sort((a, b) => a.startedAt - b.startedAt)
+    for (const task of open) {
+      if (task.subject.kind === 'bash') (commands[task.sessionId] ??= []).push(task.subject.command)
     }
-    return counts
+    return commands
   }, [tasks])
   return useMemo(
-    () => inboxSectionsOf({ sessions, streaming, askCounts, backgroundTaskCounts, unread }),
-    [sessions, streaming, askCounts, backgroundTaskCounts, unread]
+    () =>
+      inboxSectionsOf({
+        sessions,
+        streaming,
+        askCounts,
+        backgroundRunKinds,
+        backgroundCommands,
+        unread
+      }),
+    [sessions, streaming, askCounts, backgroundRunKinds, backgroundCommands, unread]
   )
 }

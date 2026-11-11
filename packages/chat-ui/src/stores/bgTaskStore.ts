@@ -21,7 +21,7 @@ export function isTaskFinished(task: TaskInfo): boolean {
 }
 
 /**
- * 这条任务算不算「会话在跑」（侧栏）：没结束的都算 —— 后台命令、派发的 agent、驱动的子会话轮次 ——
+ * 这条任务算不算「会话在跑」（侧栏、收件箱）：没结束的都算 —— 后台命令、派发的 agent、驱动的子会话轮次 ——
  * 除了 hook 起的 agent（没有 `parentToolCallId`）：起标题、审查都是它，每轮结束后都来一下，算上的话
  * 跑完的会话还要再闪几秒。
  */
@@ -81,21 +81,41 @@ export const useBgTaskStore = create<BgTaskStore>((set) => ({
     })
 }))
 
-/** 各会话是否有算数的任务在跑（侧栏）。值不变时引用稳定 —— 任务来来去去，不该让整个侧栏跟着重渲染 */
-let _lastBusyInput: BgTaskStore['tasks'] | null = null
-let _lastBusyFlags: Record<string, boolean> = {}
-export const selectBgBusySessions = (s: BgTaskStore): Record<string, boolean> => {
-  if (s.tasks === _lastBusyInput) return _lastBusyFlags
-  _lastBusyInput = s.tasks
-  const next: Record<string, boolean> = {}
+/**
+ * 会话在跑的是哪一种 —— 侧栏与收件箱共用这一套记号（2026-11-11 用户选定 S1）：
+ * `agent` = 有 agent 在干活（自己这一轮、派发的 agent、驱动的子会话轮次），会话图标蓝色、实心、呼吸；
+ * `resident` = agent 停了，只剩后台命令开着（命令工具起的后台任务，远端的也算），图标绿色、实心、不动。
+ * 两样都有算 `agent`。
+ */
+export type SessionRunKind = 'agent' | 'resident'
+
+/** 一条任务让它的会话处于哪种在跑；不算数的（已结束、hook 起的 agent）→ null */
+export function taskRunKind(task: TaskInfo): SessionRunKind | null {
+  if (!countsAsSessionBusy(task)) return null
+  return task.subject.kind === 'bash' ? 'resident' : 'agent'
+}
+
+/**
+ * 各会话的后台任务让它处于哪种在跑（同一会话里有 agent 类的任务就是 `agent`）。自己这一轮在跑另算：
+ * 那一份在 chatStore（`selectStreamingSessions`），由用的一方合上 —— 这一轮在跑就是 `agent`。
+ * 值不变时引用稳定：任务来来去去，不该让整个侧栏跟着重渲染
+ */
+let _lastKindsInput: BgTaskStore['tasks'] | null = null
+let _lastKinds: Record<string, SessionRunKind> = {}
+export const selectBgRunKinds = (s: BgTaskStore): Record<string, SessionRunKind> => {
+  if (s.tasks === _lastKindsInput) return _lastKinds
+  _lastKindsInput = s.tasks
+  const next: Record<string, SessionRunKind> = {}
   for (const task of Object.values(s.tasks)) {
-    if (countsAsSessionBusy(task)) next[task.sessionId] = true
+    const kind = taskRunKind(task)
+    if (kind && next[task.sessionId] !== 'agent') next[task.sessionId] = kind
   }
-  const prev = _lastBusyFlags
+  const prev = _lastKinds
   const same =
-    Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((k) => prev[k])
-  if (!same) _lastBusyFlags = next
-  return _lastBusyFlags
+    Object.keys(next).length === Object.keys(prev).length &&
+    Object.keys(next).every((k) => prev[k] === next[k])
+  if (!same) _lastKinds = next
+  return _lastKinds
 }
 
 /**

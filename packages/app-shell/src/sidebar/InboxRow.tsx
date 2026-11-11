@@ -1,5 +1,5 @@
 /**
- * 侧栏最上面的「收件箱」一行（2026-11-09，第一版）：点开主区的收件箱页（InboxPage）。
+ * 侧栏「资料库」一节的第一行「收件箱」（2026-11-10 起在这里，智能体上面）：点开主区的收件箱页（InboxPage）。
  *
  * 行尾的数字是要你处理或看一眼的：在等你回答的会话 + 有新回复没看的会话（docs/inbox-read-state-design.md D4；
  * 只是在跑的不算）。有会话在等你回答时数字前多一个琥珀色的跳动点 —— 与会话行上的询问点同一个记号，折叠着的
@@ -27,7 +27,7 @@ export function InboxRow(): React.JSX.Element {
       data-inbox-waiting={waiting.length > 0 ? waiting.length : undefined}
       aria-current={open ? 'page' : undefined}
       onClick={openInbox}
-      className={`sb-row w-full cursor-pointer text-left transition-opacity duration-200 ${
+      className={`sb-row mb-px w-full cursor-pointer text-left transition-opacity duration-200 ${
         open
           ? 'bg-bg-active/80 text-text-primary'
           : `text-text-primary hover:bg-bg-hover/60 ${dim ? 'opacity-30 hover:opacity-100' : ''}`
