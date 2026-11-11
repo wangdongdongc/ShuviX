@@ -13,6 +13,8 @@
  *   - ask-on-session-access（2026-10-20 用户裁定）：`session` 工具查看 / 对话一条别的会话（不是自己的子会话 —— 子会话
  *     不过这道门），不是自己发起的那一轮、也不在会话权限表（`vars.aclSessionRead` / `vars.aclSessionWrite`）里时询问。这类询问**只由人回答**
  *     —— 不是靠 force-ask（那样「允许并记住」就不生效了），而是内置 hook auto-review 的 `when` 把会话客体排除在外。
+ *     第三条规则（2026-11-11，docs/project-split-design.md §4）管 action `move`：`move-session` 把一条别的项目的会话搬进
+ *     调用方所在的项目，每次都问 —— 没有 match，权限表的行免不了它；卡片也不给「允许并记住」（evaluate 的询问材料）。
  *   - ask-on-widget-access（2026-10-27 用户裁定）：`widget` 工具用一个组件（调它的操作、构建、预览、跑 SQL、导出），
  *     会话权限表（`vars.aclWidgetRead` / `vars.aclWidgetWrite`）里没有覆盖这次访问的组件行时询问。同会话访问，
  *     **只由人回答**（auto-review 的 `when` 也把组件客体排除在外）。

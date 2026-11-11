@@ -38,6 +38,11 @@ vi.mock('word-extractor', () => ({ default: class {} }))
 vi.mock('../../services/liveDocumentBridge', () => ({ requestLiveDocument: vi.fn() }))
 vi.mock('../../services/sessionRecords', () => ({ sessionRecords: { pick: vi.fn() } }))
 vi.mock('../../services/sessionService', () => ({ sessionService: { updateTitle: vi.fn() } }))
+// session 工具的 move-session 那一半（它引真的 projectDao）：这里只看各工具的 replay 声明
+vi.mock('../../services/sessionMove', () => ({
+  planSessionMove: vi.fn(),
+  applySessionMove: vi.fn()
+}))
 vi.mock('../../services/subSessionRunner', () => ({
   subSessionRunner: {},
   DEFAULT_WAIT_TIMEOUT_SEC: 300

@@ -5,6 +5,7 @@ import {
   FileOutput,
   FilePen,
   FileText,
+  FolderInput,
   FolderOpen,
   MessagesSquare,
   Settings,
@@ -28,6 +29,7 @@ import type {
   AskField,
   AskInputRequest,
   AskPolicyPrompt,
+  AskSessionMovePreview,
   AskSessionTarget,
   AskSettingsPreview,
   AskWidgetTarget
@@ -123,6 +125,44 @@ function DiffPreview({
         {requestedPath && <RequestedAs path={requestedPath} />}
       </div>
       <DiffViewer diff={diff} maxHeight={ASK_PREVIEW_MAX_H} />
+    </div>
+  )
+}
+
+/**
+ * 搬会话的询问预览（`session` 工具的 `move-session`）：搬进哪个项目、这次要搬的每一条会话（标题、原来的项目、
+ * 跟着走的子会话数）。有会话来自别的目录时多一行：它们之后在新目录里工作 —— 用户批准的是这一整批。
+ */
+function SessionMovePreview({ move }: { move: AskSessionMovePreview }): React.JSX.Element {
+  const { t } = useTranslation()
+  const relocates = move.sessions.some((s) => s.fromPath !== move.project.path)
+  return (
+    <div className="space-y-1" data-ask-session-move={move.sessions.length}>
+      <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-session-move-project="">
+        {t('toolCall.sessionAskMoveInto', { project: move.project.name })}
+      </div>
+      <ul
+        className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 min-w-0 space-y-1 overflow-y-auto overscroll-contain thin-scrollbar !m-0 list-none"
+        style={{ maxHeight: ASK_PREVIEW_MAX_H }}
+      >
+        {move.sessions.map((s) => (
+          <li key={s.id} className="min-w-0" data-ask-session-move-row={s.id}>
+            <div className="truncate text-text-primary">
+              {s.title || t('toolCall.sessionAskUntitled')}
+            </div>
+            <div className="truncate text-[11px] text-text-tertiary">
+              {t('toolCall.sessionAskMoveFrom', { project: s.fromProject })}
+              {s.subSessions > 0 &&
+                ` · ${t('toolCall.sessionAskMoveSubs', { count: s.subSessions })}`}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {relocates && (
+        <div className="px-0.5 text-[11px] text-text-tertiary" data-ask-session-move-folder="">
+          {t('toolCall.sessionAskMoveFolder', { path: move.project.path })}
+        </div>
+      )}
     </div>
   )
 }
@@ -470,6 +510,7 @@ export function AskForm({
   const messagePreview = preview?.kind === 'message' ? preview.text : undefined
   const extensionPreview = preview?.kind === 'extension' ? preview : null
   const settingsPreview = preview?.kind === 'settings' ? preview : null
+  const movePreview = preview?.kind === 'session-move' ? preview : null
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"这条路径(或它所在的
   // 文件夹),记进会话权限表。会话类(request.session)可"允许并记住"那条会话。命令类(bash/ssh)与简单类(浏览器
@@ -483,7 +524,9 @@ export function AskForm({
   // 「允许并记住」写进会话权限表（宿主能力）：路径类与会话类,且需宿主提供 HostApi。
   // 卡上要填值的询问不给记住：记下的只是这一次的放行，下回的值还得有人填
   const canRemember = pathAsk !== null && getHostApi() !== null && !hasFields
-  const canRememberSession = !!session && getHostApi() !== null && !hasFields
+  // 搬会话（access `move`）没有记住：权限表里的会话行说的是查看 / 对话，搬走一条会话每次都由人点头
+  const canRememberSession =
+    !!session && session.access !== 'move' && getHostApi() !== null && !hasFields
   const canRememberWidget = !!widget && getHostApi() !== null && !hasFields
   // 文件还可以记下它所在的文件夹（太浅的不给，见 rememberFolderOf）
   const rememberFolder =
@@ -611,7 +654,12 @@ export function AskForm({
           icon: <Puzzle size={iconSize} className={iconClass} />,
           title: t('toolCall.extensionAskEnable')
         }
-      : null
+      : movePreview
+        ? {
+            icon: <FolderInput size={iconSize} className={iconClass} />,
+            title: t('toolCall.sessionAskMove')
+          }
+        : null
   const { icon, title } = previewHead
     ? previewHead
     : widget
@@ -728,6 +776,8 @@ export function AskForm({
             <ExtensionPreview extension={extensionPreview} />
           ) : widget ? (
             <WidgetPreview widget={widget} />
+          ) : movePreview ? (
+            <SessionMovePreview move={movePreview} />
           ) : session ? (
             <SessionPreview session={session} message={messagePreview} />
           ) : diffPreview ? (

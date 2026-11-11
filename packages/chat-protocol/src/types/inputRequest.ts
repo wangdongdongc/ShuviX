@@ -91,11 +91,32 @@ export interface AskSettingsPreview {
   rows: Array<{ label: string; value: string }>
 }
 
+/**
+ * 「预览询问」的搬动载荷 —— `session` 工具的 `move-session` 要把别的项目的会话搬进发起调用的会话所在的项目
+ * （docs/project-split-design.md §4）。一次调用一张卡：要搬的会话全部列在这里，用户批准的是这一整批。
+ */
+export interface AskSessionMovePreview {
+  kind: 'session-move'
+  /** 搬进去的项目（发起调用的会话所在的项目） */
+  project: { name: string; path: string }
+  /** 要搬的会话（都是根会话；子会话跟着走，这里只给数目） */
+  sessions: Array<{
+    id: string
+    title: string
+    /** 它现在所在的项目 */
+    fromProject: string
+    /** 那个项目的目录 —— 与 `project.path` 不同时，卡片写明工作目录会变 */
+    fromPath: string
+    subSessions: number
+  }>
+}
+
 export type AskPreview =
   | AskDiffPreview
   | AskMessagePreview
   | AskExtensionPreview
   | AskSettingsPreview
+  | AskSessionMovePreview
 
 /**
  * 卡上要用户自己填的一项 —— agent 留空的值（多半是 API key、token）。用户在卡上填，值直接交给宿主
@@ -120,8 +141,11 @@ export interface AskSessionTarget {
   sessionId: string
   /** 目标会话此刻的标题（只为显示） */
   title: string
-  /** read = 查看，write = 对话 */
-  access: 'read' | 'write'
+  /**
+   * read = 查看，write = 对话，move = 搬进发起调用的会话所在的项目（卡片按 `preview.kind === 'session-move'` 渲染，
+   * 没有「允许并记住」）
+   */
+  access: 'read' | 'write' | 'move'
   /** 这次要做什么（`session` 工具的动作名，如 `prompt-session`） */
   operation: string
 }

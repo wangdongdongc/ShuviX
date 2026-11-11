@@ -225,6 +225,7 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-command#0', 'ask'],
       ['ask-on-session-access#0', 'ask'],
       ['ask-on-session-access#1', 'ask'],
+      ['ask-on-session-access#2', 'ask'],
       ['ask-on-widget-access#0', 'ask'],
       ['ask-on-widget-access#1', 'ask'],
       ['ask-on-library-access#0', 'ask'],
@@ -288,7 +289,7 @@ describe('buildBuiltinPolicies', () => {
     expect(policy.rules[0].prompt).toBeTruthy()
   })
 
-  it('XS-10 ask-on-session-access：两条 ask × session，desktop 限定 —— #0 查看（read）只看 vars.aclSessionRead，#1 对话（write）只看 vars.aclSessionWrite；两条都先看 !object.ownTurn', () => {
+  it('XS-10 ask-on-session-access：三条 ask × session，desktop 限定 —— #0 查看（read）只看 vars.aclSessionRead，#1 对话（write）只看 vars.aclSessionWrite，两条都先看 !object.ownTurn；#2 搬动（move）没有 match：每次都问', () => {
     const policy = byName('ask-on-session-access')
     expect(policy.scope).toEqual({
       'subject.kind': ['agent'],
@@ -306,18 +307,22 @@ describe('buildBuiltinPolicies', () => {
         effect: 'ask',
         conditions: { action: ['write'] },
         match: '!object.ownTurn && !(object.sessionId in vars.aclSessionWrite)'
-      }
+      },
+      { effect: 'ask', conditions: { action: ['move'] } }
     ])
     // 每条恰读一张表：查看那条不看可对话表，对话那条不看可查看表（「对话隐含查看」靠宿主把可对话的行也放进可查看表）
     const varsOf = (match: string): string[] =>
       [...match.matchAll(/vars\.(\w+)/g)].map((m) => m[1]!).sort()
-    const [read, write] = policy.rules
+    const [read, write, move] = policy.rules
     expect(varsOf(read.match!)).toEqual(['aclSessionRead'])
     expect(varsOf(write.match!)).toEqual(['aclSessionWrite'])
-    for (const rule of policy.rules) {
+    for (const rule of [read, write]) {
       expect(rule.match!.startsWith('!object.ownTurn && ')).toBe(true)
       expect(rule.prompt).toBeTruthy()
     }
+    // 搬动不读任何一张表：权限表里的会话行说的是查看 / 对话，免不了它
+    expect(move.match).toBeUndefined()
+    expect(move.prompt).toBeTruthy()
     // 会话表不是 inDir 的目录参数：宿主漏交时装配不会替它绑 null（走 CEL 的缺键报错，见 XS-14）
     expect(inDirOnlyVarNames(read.match!)).toEqual([])
     expect(inDirOnlyVarNames(write.match!)).toEqual([])
@@ -1817,6 +1822,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   //
   // XS-11 行为表：表外的查看 → #0、表外的对话 → #1（只查看的行不免对话），问的都给「允许并记住」与卡片的
   //       session 材料；表里的、自己发起的那一轮（ownTurn）放行；零告警
+  // MV-P1 搬动（move）每次都问：权限表的行、ownTurn 都免不了；卡片 access = move、没有「允许并记住」
   // XS-12 user 主体 / extension 宿主不受它约束；两种客体的表互不串（路径不进会话表、会话 id 不进路径表）
   // XS-13 「允许并记住」往返：卡片的 rememberEntry → 一行 `kind: 'session'` → sessionAclView → 放行
   // XS-14 宿主没交会话表（缺键）：表外的那一侧求值失败 → fail-safe 照问 + 恰一条告警；ownTurn 吸收掉错误
@@ -1947,6 +1953,58 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
           operation
         )
       }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('MV-P1 搬动（move）每次都问 —— 表外的、只查看的行、能对话的行、ownTurn 都一样落在 #2；卡片带 session 材料（access = move），不给「允许并记住」；user 主体与 extension 宿主不受约束', () => {
+      const sinks = warnSinks()
+      const provider = sessionProvider(SESSION_ROWS, { logger: sinks.logger })
+      const policy = byName('ask-on-session-access')
+      const id = 'ask-on-session-access#2'
+      for (const [label, object] of [
+        ['表外的', sess('X')],
+        ['只查看的行', sess('R')],
+        ['能对话的行', sess('W')],
+        ['ownTurn 也不免', sess('X', true)]
+      ] as const) {
+        const decision = decide('move', object, {
+          provider,
+          warn: sinks.evalWarn,
+          tool: SESSION_TOOL('move-session')
+        })
+        expect(
+          {
+            label,
+            effect: decision.effect,
+            tier: decision.tier,
+            winning: decision.winning,
+            matched: decision.matched
+          },
+          label
+        ).toEqual({ label, effect: 'ask', tier: 'ask', winning: id, matched: [id] })
+        // 没有 rememberEntry：这张卡不能「允许并记住」
+        expect(decision.ask, label).toEqual({
+          command: `Session(move, ${String(object.sessionId)})`,
+          session: {
+            sessionId: object.sessionId,
+            title: object.title,
+            access: 'move',
+            operation: 'move-session'
+          }
+        })
+        expect(decision.prompt, label).toEqual({
+          text: policy.rules[2].prompt,
+          rules: [id],
+          policies: ['Ask Before Using Another Session']
+        })
+      }
+      expect(
+        decide('move', sess('X'), { provider, subjectKind: 'user', warn: sinks.evalWarn }).effect
+      ).toBe('allow')
+      expect(
+        decide('move', sess('X'), { provider, host: 'extension', warn: sinks.evalWarn }).effect
+      ).toBe('allow')
       expect(sinks.evalWarn).not.toHaveBeenCalled()
       expect(sinks.logWarn).not.toHaveBeenCalled()
     })

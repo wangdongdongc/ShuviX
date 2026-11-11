@@ -9,6 +9,7 @@
  *   AR-3  父目录太浅（家目录里的文件）→ 没有文件夹那一行；目录询问 → 没有「允许这一次」，只有「记住这个文件夹」与拒绝
  *   AR-4  没有宿主（getHostApi 为 null）或不是路径询问（命令）→ 没有任何记住的行
  *   XS-64/65 会话询问、WT4-UI-01..05 组件询问：见文件后面各自的 describe
+ *   MV-UI-1..3 搬会话的询问（`move-session`）：见文件末尾的 describe
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（AskForm 从那里取 getHostApi）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX。
  */
@@ -481,5 +482,107 @@ describe('AskForm 的组件询问', () => {
     expect(widgetBox()!.textContent).not.toContain(en.toolCall.widgetAskOperation)
     expect(widgetBox()!.textContent).toContain('Reading list')
     expect(widgetBox()!.textContent).toContain(WIDGET_ID)
+  })
+})
+
+/**
+ * 搬会话的询问（`session` 工具的 `move-session`：request.session.access = 'move'，preview.kind = 'session-move'）：
+ *
+ *   MV-UI-1 标题「Move sessions into this project」；[data-ask-session-move] 摆搬进哪个项目、每条会话一行（标题、
+ *           原项目、跟着走的子会话数）；不是单条会话的那种卡（没有 [data-ask-session]）；选项恰为 Allow once / Deny ——
+ *           **没有「允许并记住」**（搬走一条会话每次都由人点头）
+ *   MV-UI-2 有会话来自别的目录 → 多一行写明之后在哪个目录里工作；都同目录 → 没有这一行；空标题 →「Untitled session」
+ *   MV-UI-3 允许 → 不带 extra；拒绝 → allowed: false
+ */
+describe('AskForm 的搬会话询问（MV-UI）', () => {
+  type MovePreview = Extract<NonNullable<AskInputRequest['preview']>, { kind: 'session-move' }>
+
+  const moveAsk = (sessions: MovePreview['sessions']): AskInputRequest =>
+    ask({
+      toolName: 'session',
+      command: `Session(move, ${sessions[0].id})`,
+      session: {
+        sessionId: sessions[0].id,
+        title: sessions[0].title,
+        access: 'move',
+        operation: 'move-session'
+      },
+      preview: { kind: 'session-move', project: { name: 'Auth', path: '/work/auth' }, sessions }
+    })
+
+  const SAME_FOLDER: MovePreview['sessions'] = [
+    {
+      id: 's-a',
+      title: 'Login refactor',
+      fromProject: 'Big',
+      fromPath: '/work/auth',
+      subSessions: 2
+    },
+    {
+      id: 's-b',
+      title: 'Token refresh',
+      fromProject: 'Big',
+      fromPath: '/work/auth',
+      subSessions: 1
+    },
+    { id: 's-c', title: '', fromProject: 'Big', fromPath: '/work/auth', subSessions: 0 }
+  ]
+
+  const moveBox = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-ask-session-move]')
+  const moveRows = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-ask-session-move-row]')
+  ]
+
+  it('MV-UI-1 标题、目标项目、每条会话一行；只有允许与拒绝，没有「允许并记住」', () => {
+    render(moveAsk(SAME_FOLDER))
+
+    expect(container.querySelector('p')?.textContent).toBe(en.toolCall.sessionAskMove)
+    expect(container.querySelector('p')?.textContent).toBe('Move sessions into this project')
+
+    const box = moveBox()!
+    expect(box).not.toBeNull()
+    expect(box.dataset.askSessionMove).toBe('3')
+    expect(box.querySelector('[data-ask-session-move-project]')?.textContent).toBe(
+      'Into project “Auth”'
+    )
+    expect(moveRows().map((r) => r.dataset.askSessionMoveRow)).toEqual(['s-a', 's-b', 's-c'])
+    expect(moveRows().map((r) => [...r.children].map((c) => c.textContent))).toEqual([
+      ['Login refactor', 'from “Big” · +2 sub-sessions'],
+      ['Token refresh', 'from “Big” · +1 sub-session'],
+      ['Untitled session', 'from “Big”']
+    ])
+
+    // 不是单条会话的那种卡，也没有命令 / 消息预览
+    expect(container.querySelector('[data-ask-session]')).toBeNull()
+    expect(container.querySelectorAll('pre')).toHaveLength(0)
+
+    expect(rows().map(labelOf)).toEqual(['Allow once', 'Deny'])
+    expect(container.querySelector('[data-remember-session]')).toBeNull()
+    expect(row('remember-session')).toBeNull()
+  })
+
+  it('MV-UI-2 来自别的目录的会话：写明之后在哪个目录里工作；都同目录则没有这一行', () => {
+    render(moveAsk(SAME_FOLDER))
+    expect(container.querySelector('[data-ask-session-move-folder]')).toBeNull()
+
+    render(
+      moveAsk([
+        SAME_FOLDER[0],
+        { id: 's-x', title: 'Billing', fromProject: 'Shop', fromPath: '/work/shop', subSessions: 0 }
+      ])
+    )
+    expect(container.querySelector('[data-ask-session-move-folder]')?.textContent).toBe(
+      'Sessions that come from another folder will work in /work/auth from now on, and their system prompts are rebuilt.'
+    )
+  })
+
+  it('MV-UI-3 允许 → 不带 extra；拒绝 → allowed: false', () => {
+    const onSubmit = render(moveAsk(SAME_FOLDER))
+    act(() => row('allow')!.click())
+    expect(onSubmit.mock.calls[0]).toEqual([{ kind: 'ask', allowed: true }])
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('extra')
+    act(() => row('deny')!.click())
+    expect(onSubmit.mock.calls[1]).toEqual([{ kind: 'ask', allowed: false }])
   })
 })

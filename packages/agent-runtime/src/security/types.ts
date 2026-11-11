@@ -88,6 +88,12 @@ export const DISPOSITION_OBJECT_TYPES: Readonly<Record<Disposition, readonly str
 export type AccessMode = 'read' | 'write'
 
 /**
+ * 会话客体上的动作：查看、对话，以及 `move` —— 把那条会话搬进调用方所在的项目（`session` 工具的 `move-session`）。
+ * `move` 不认会话权限表里的行（记住过「可以对话」不等于同意搬走），也不能被记住。
+ */
+export type SessionAccessAction = AccessMode | 'move'
+
+/**
  * 结算层级 —— 不是简单的 deny→ask→allow：
  * 用户明示同意（force-allow）必须压过静态 ask 规则（否则「允许并记住」对询问门失效），
  * force-ask 又必须压过它（「这道门不接受同意」），而任何 deny 压过全部。
@@ -787,7 +793,8 @@ export interface UrlObjectInput {
 /**
  * enforceSession 的入参（对应 {type:'session'} 客体的属性）—— `session` 工具要交互的那条**别的**会话（不是调用方
  * 自己的子会话 —— 子会话不过这道门，要管它们写在 L1 的 invocation 门上）。
- * action：`read` = 查看（读它的答复、看它的现场、等它）；`write` = 对话（发消息、插话、代答、停下）。
+ * action：`read` = 查看（读它的答复、看它的现场、等它）；`write` = 对话（发消息、插话、代答、停下）；
+ * `move` = 搬进调用方所在的项目（恒不是 ownTurn）。
  */
 export interface SessionObjectInput {
   /** 目标会话 id */
@@ -913,11 +920,15 @@ export interface SecurityContext {
    */
   enforceUrl(object: UrlObjectInput, opts: EnforceOpts): Promise<void>
   /**
-   * 会话交互守卫（`session` 工具每个指向一条别的会话的动作）：客体 = `{type:'session'}`，action = read / write。
-   * 出厂的 ask-on-session-access 在不是自己发起的那一轮、又不在会话权限表里时询问。
-   * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
+   * 会话交互守卫（`session` 工具每个指向一条别的会话的动作）：客体 = `{type:'session'}`，action = read / write / move。
+   * 出厂的 ask-on-session-access 在不是自己发起的那一轮、又不在会话权限表里时询问；`move`（搬进调用方所在的项目）
+   * 每次都问。拒绝 / 取消 / 反馈时抛错，同 enforcePath。
    */
-  enforceSession(mode: AccessMode, object: SessionObjectInput, opts: EnforceOpts): Promise<void>
+  enforceSession(
+    mode: SessionAccessAction,
+    object: SessionObjectInput,
+    opts: EnforceOpts
+  ): Promise<void>
   /**
    * 组件使用守卫（`widget` 工具每个要授权的动作）：客体 = `{type:'widget'}`，action = read / write。
    * 出厂的 ask-on-widget-access 在会话权限表里没有覆盖这次访问的组件行时询问。

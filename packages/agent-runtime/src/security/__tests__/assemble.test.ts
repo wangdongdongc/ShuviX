@@ -1048,7 +1048,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂八份共十四条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂八份共十五条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
     const rules = assembleRules(makeProvider({ getVars: () => withGrants({ write: ['/data'] }) }))
     expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
       ['ask-on-external-path#0', 'builtin'],
@@ -1056,6 +1056,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
       ['ask-on-command#0', 'builtin'],
       ['ask-on-session-access#0', 'builtin'],
       ['ask-on-session-access#1', 'builtin'],
+      ['ask-on-session-access#2', 'builtin'],
       ['ask-on-widget-access#0', 'builtin'],
       ['ask-on-widget-access#1', 'builtin'],
       ['ask-on-library-access#0', 'builtin'],
@@ -1796,6 +1797,7 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-external-path#1',
       'ask-on-session-access#0',
       'ask-on-session-access#1',
+      'ask-on-session-access#2',
       'ask-on-widget-access#0',
       'ask-on-widget-access#1',
       'ask-on-library-access#0',
@@ -1882,6 +1884,7 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-external-path#1',
       'ask-on-session-access#0',
       'ask-on-session-access#1',
+      'ask-on-session-access#2',
       'ask-on-widget-access#0',
       'ask-on-widget-access#1',
       'ask-on-library-access#0',
@@ -1916,13 +1919,14 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(control.filter((r) => r.source.policy === 'p').map((r) => r.effect)).toEqual(['deny'])
   })
 
-  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂八份十四条全在', () => {
+  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂八份十五条全在', () => {
     expect(assembleRules(makeProvider()).map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
       'ask-on-command#0',
       'ask-on-session-access#0',
       'ask-on-session-access#1',
+      'ask-on-session-access#2',
       'ask-on-widget-access#0',
       'ask-on-widget-access#1',
       'ask-on-library-access#0',

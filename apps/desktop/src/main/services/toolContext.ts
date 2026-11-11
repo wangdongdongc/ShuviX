@@ -57,6 +57,7 @@ import { createLogger } from '../logger'
 import type {
   AskField,
   AskPreview,
+  AskSessionMovePreview,
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
@@ -265,6 +266,58 @@ export async function assertSessionAccess(
       abortError: TOOL_ABORTED
     }
   )
+}
+
+/**
+ * 搬会话的 PEP（`session` 工具的 `move-session`）：客体还是 `{type:'session'}`，action = `move`。出厂的
+ * ask-on-session-access 每次都问、只由用户回答，没有「允许并记住」—— 记住过「可以对话」不等于同意搬走。
+ *
+ * 一次调用一张卡（裁决 D1）：每条会话各过一次门（各被策略判一遍、各记一笔决策），卡片只出一张 —— 第一条要问
+ * 的那张列出这次要搬的全部会话（`preview`），用户点了允许，其余几条按同一个回答过门，不再出卡。策略对某一条说
+ * 不（用户自己写的 deny）照样抛错，所以调用方要等全部过完再动手搬。
+ */
+export async function assertSessionMove(
+  ctx: ToolContext,
+  move: Omit<AskSessionMovePreview, 'kind'>,
+  opts: {
+    toolCallId: string
+    toolName: string
+    operation: string
+    owner?: CallOwner
+    signal?: AbortSignal
+  }
+): Promise<void> {
+  const preview: AskSessionMovePreview = { kind: 'session-move', ...move }
+  const ask = ctx.requestUserInput
+  let approved = false
+  for (const session of move.sessions) {
+    const requestUserInput: ToolContext['requestUserInput'] = approved
+      ? async () => ({ kind: 'ask', allowed: true })
+      : ask &&
+        (async (request) => {
+          const response = await ask(request)
+          if (response.kind === 'ask' && response.allowed) approved = true
+          return response
+        })
+    await getDesktopSecurityContext({ ...ctx, requestUserInput }).enforceSession(
+      'move',
+      {
+        sessionId: session.id,
+        title: session.title,
+        ownTurn: false,
+        ...sessionObjectFacts(session.id)
+      },
+      {
+        toolCallId: opts.toolCallId,
+        ...opts.owner,
+        toolName: opts.toolName,
+        operation: opts.operation,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        preview,
+        abortError: TOOL_ABORTED
+      }
+    )
+  }
 }
 
 /**

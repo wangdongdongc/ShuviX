@@ -271,6 +271,21 @@ function spokenMessages<T extends { id: string; role: string; metadata?: unknown
   })
 }
 
+/**
+ * 一条会话此刻这一轮的状态（运行器的 `statusOf`，services/sessionMove.ts 也读它 —— 正在一轮当中的会话不搬）。
+ * 取自运行时而不是本地记账；没开着的会话读 DB 里的运行状态镜像，从不为一次查询打开会话（细则见 `statusOf`）。
+ */
+export function sessionRunStatus(sessionId: string): SubSessionStatus {
+  const agent = sessionService.getAgentSession(sessionId)
+  if (agent) {
+    if (agent.pendingInputCount > 0) return 'waiting-input'
+    if (agent.isStreaming) return 'running'
+    return agent.isInterrupted ? 'interrupted' : 'idle'
+  }
+  const mirrored = sessionRecords.pick(sessionId, ['settings'])?.settings?.runState
+  return mirrored === 'interrupted' || mirrored === 'busy' ? 'interrupted' : 'idle'
+}
+
 class SubSessionRunner {
   private runs = new Map<string, DrivenRun>()
   /** 正在准入的子会话（同步占位：异步判定之前就占住，见 prompt） */
@@ -433,14 +448,7 @@ class SubSessionRunner {
    * 下次打开就是 interrupted，PIN-09）—— 报 interrupted，其余 idle。
    */
   private statusOf(sessionId: string): SubSessionStatus {
-    const agent = sessionService.getAgentSession(sessionId)
-    if (agent) {
-      if (agent.pendingInputCount > 0) return 'waiting-input'
-      if (agent.isStreaming) return 'running'
-      return agent.isInterrupted ? 'interrupted' : 'idle'
-    }
-    const mirrored = sessionRecords.pick(sessionId, ['settings'])?.settings?.runState
-    return mirrored === 'interrupted' || mirrored === 'busy' ? 'interrupted' : 'idle'
+    return sessionRunStatus(sessionId)
   }
 
   /** 开着的门面；没开就 peek（存储在才打开，从不创建） */

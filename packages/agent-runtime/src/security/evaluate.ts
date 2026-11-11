@@ -169,8 +169,10 @@ function buildAskMaterials(
   }
   // 会话：条目 `Session(read|write, <id>)` 是卡片的主文本、决策日志与审查员看到的目标，也是「允许并记住」的依据 ——
   // 记下的是会话权限表里 `kind: 'session'` 的一行。卡片按 `session` 渲染（标题、查看 / 对话）。force-ask 不给记住，同路径
+  // 搬动（action `move`）没有记忆条目：权限表里的会话行说的是查看 / 对话，搬走一条会话每次都要人点头
   if (object.type === 'session' && typeof object.sessionId === 'string') {
-    const access = request.action === 'write' ? 'write' : 'read'
+    const access =
+      request.action === 'move' ? 'move' : request.action === 'write' ? 'write' : 'read'
     const entry = `Session(${access}, ${object.sessionId})`
     const session = {
       sessionId: object.sessionId,
@@ -178,7 +180,7 @@ function buildAskMaterials(
       access,
       operation: request.tool?.operation ?? ''
     } as const
-    return tier === 'force-ask'
+    return tier === 'force-ask' || access === 'move'
       ? { command: entry, session }
       : { command: entry, rememberEntry: entry, session }
   }

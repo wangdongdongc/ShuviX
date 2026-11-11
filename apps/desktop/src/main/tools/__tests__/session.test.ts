@@ -56,7 +56,13 @@ const mocks = vi.hoisted(() => ({
   getDesktopSecurityContext: vi.fn(),
   sessionObjectFacts: vi.fn<(sessionId: string) => { lastActiveAt: string; bot: string }>(),
   evaluate: vi.fn<(action: string, object: Record<string, unknown>) => { effect: string }>(),
-  enforceSession: vi.fn()
+  enforceSession: vi.fn(),
+  // move-session（MV 组）：规则与搬动在 services/sessionMove，确认卡在 toolContext.assertSessionMove —— 这里只看转调与排版
+  planSessionMove: vi.fn(),
+  applySessionMove: vi.fn(),
+  assertSessionMove: vi.fn<
+    (ctx: unknown, move: unknown, opts: Record<string, unknown>) => Promise<void>
+  >(async () => {})
 }))
 
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pick: mocks.pick } }))
@@ -83,8 +89,13 @@ vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 // 跨会话授权的 PEP：这里只看转调与排版（授权的判定是安全模块与 runner 的用例）
 vi.mock('../../services/toolContext', () => ({
   assertSessionAccess: mocks.assertSessionAccess,
+  assertSessionMove: mocks.assertSessionMove,
   getDesktopSecurityContext: mocks.getDesktopSecurityContext,
   sessionObjectFacts: mocks.sessionObjectFacts
+}))
+vi.mock('../../services/sessionMove', () => ({
+  planSessionMove: mocks.planSessionMove,
+  applySessionMove: mocks.applySessionMove
 }))
 
 type SessionModule = typeof import('../session')
@@ -113,10 +124,13 @@ beforeEach(() => {
     mocks.getDesktopSecurityContext,
     mocks.sessionObjectFacts,
     mocks.evaluate,
-    mocks.enforceSession
+    mocks.enforceSession,
+    mocks.planSessionMove,
+    mocks.applySessionMove
   ]) {
     fn.mockReset()
   }
+  mocks.assertSessionMove.mockReset().mockResolvedValue(undefined)
   // 只清调用记录、保留「放行」的实现
   mocks.assertSessionAccess.mockClear()
   // 缺省：普通聊天会话存在
@@ -144,6 +158,7 @@ describe('SessionTool — 参数面与目标会话边界', () => {
       'title',
       'agent_profile',
       'session_id',
+      'session_ids',
       'message',
       'ask_id',
       'selections',
@@ -798,13 +813,13 @@ const approvalAsk = (id: string, summary: string): PendingAskInfo => ({
 })
 
 describe('SessionTool — §19 参数面', () => {
-  it('WP3-83 / BG-37 action 恰 10 项、含三个新动作；未知 action 的错误列出这 10 个；新参数各自注明 For "…"；timeout_seconds 只属于 wait', async () => {
+  it('WP3-83 / BG-37 action 恰 11 项（2026-11-11 加了 move-session）、含 §19 的三个动作；未知 action 的错误列出这 11 个；新参数各自注明 For "…"；timeout_seconds 只属于 wait', async () => {
     const props = mod.SessionParamsSchema.properties as unknown as Record<
       string,
       { description?: string; enum?: string[] }
     >
     const actions = props.action.enum!
-    expect(actions).toHaveLength(10)
+    expect(actions).toHaveLength(11)
     expect(actions).toEqual(
       expect.arrayContaining(['answer-session', 'steer-session', 'inspect-session'])
     )
@@ -1222,7 +1237,7 @@ function stubRunners(): void {
   })
 }
 
-/** 现在的 10 个动作名（ACTIONS 的顺序） */
+/** 现在的 11 个动作名（ACTIONS 的顺序） */
 const CURRENT_ACTIONS = [
   'set-title',
   'create-sub-session',
@@ -1233,7 +1248,8 @@ const CURRENT_ACTIONS = [
   'stop-session',
   'answer-session',
   'steer-session',
-  'inspect-session'
+  'inspect-session',
+  'move-session'
 ]
 
 /** 2026-10-20 之前的 8 个动作名 → 现在的名字（不进 schema，只为崩溃前发出、重跑带回来的旧调用照收） */
@@ -2141,5 +2157,210 @@ describe('SessionTool — 还在跑的后台任务（BT）', () => {
     expect(
       textOf(await executeTool(tool, 'tc-1', { action: 'stop-session', session_id: 'c1' }))
     ).toBe('Stopped session c1.')
+  })
+})
+
+// ── move-session：把别的项目的会话搬进本会话所在的项目（docs/project-split-design.md §4） ─────────────
+//
+// 工具层照旧是翻译层：plan（services/sessionMove，判定）→ 一张确认卡（toolContext.assertSessionMove）→ apply → 排版。
+//   MV-T1 参数面：`session_ids` 进 schema；模型把 id 写进 `session_id` 也认，两处合起来交给 plan
+//   MV-T2 plan 说整次调用不成立 → 抛它的文案，不出卡、不搬
+//   MV-T3 有能搬的 → assertSessionMove(本会话的 ctx, {project, sessions}, {toolCallId, toolName, operation, owner, signal})
+//         恰一次，卡片材料取自 plan；之后 apply(本会话, 同一份 plan)
+//   MV-T4 一条能搬的都没有 → 不出卡，照样 apply（它把「已经在了」与原因带回来）
+//   MV-T5 用户拒绝（assertSessionMove 抛错）→ 不搬，错误原样
+//   MV-T6 排版：搬过来的逐条一行；目录变了多一句（重建成 / 没成）；已经在的、没搬的各一段
+//   MV-T7 一条都没搬成、也没有已经在的 → 工具结果是错误，原因逐条给
+describe('SessionTool — move-session（MV-T）', () => {
+  const ctx = { sessionId: 's1' } as ToolContext
+  let own: InstanceType<SessionModule['SessionTool']>
+  beforeAll(() => {
+    own = new mod.SessionTool(ctx)
+  })
+
+  const project = { id: 'pB', name: 'Auth', path: '/work/auth' }
+  const candidate = (id: string, children: string[] = []): Record<string, unknown> => ({
+    id,
+    title: `T-${id}`,
+    fromProject: { id: 'pA', name: 'Big', path: '/work/big' },
+    children
+  })
+  const moved = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id,
+    title: `T-${id}`,
+    fromProject: 'Big',
+    subSessions: 0,
+    directoryChanged: false,
+    promptNotRebuilt: 0,
+    ...over
+  })
+  const planOf = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    project,
+    candidates: [],
+    already: [],
+    refused: [],
+    ...over
+  })
+  const outcomeOf = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    project,
+    moved: [],
+    already: [],
+    refused: [],
+    ...over
+  })
+
+  it('MV-T1 session_ids 进 schema；session_ids 与 session_id 合起来交给 plan（原样，不在工具层去重）', async () => {
+    expect(
+      Check(mod.SessionParamsSchema, { action: 'move-session', session_ids: ['a', 'b'] })
+    ).toBe(true)
+    mocks.planSessionMove.mockReturnValue(planOf({ already: [{ id: 'a', title: 'T-a' }] }))
+    mocks.applySessionMove.mockResolvedValue(outcomeOf({ already: [{ id: 'a', title: 'T-a' }] }))
+    await executeTool(own, 'tc-1', {
+      action: 'move-session',
+      session_ids: ['a', 'b'],
+      session_id: 'c'
+    })
+    expect(mocks.planSessionMove).toHaveBeenCalledWith('s1', ['a', 'b', 'c'])
+    // 只给了 session_id
+    await executeTool(own, 'tc-2', { action: 'move-session', session_id: 'z' })
+    expect(mocks.planSessionMove).toHaveBeenLastCalledWith('s1', ['z'])
+    // 运行器那一路的授权不沾边
+    expect(mocks.assertSessionAccess).not.toHaveBeenCalled()
+  })
+
+  it('MV-T2 plan 说整次调用不成立 → 抛它的文案；不出卡、不搬', async () => {
+    mocks.planSessionMove.mockReturnValue({ error: 'This session does not belong to a project.' })
+    expect(
+      await failureText(executeTool(own, 'tc-1', { action: 'move-session', session_ids: ['a'] }))
+    ).toContain('This session does not belong to a project.')
+    expect(mocks.assertSessionMove).not.toHaveBeenCalled()
+    expect(mocks.applySessionMove).not.toHaveBeenCalled()
+  })
+
+  it('MV-T3 有能搬的：一张卡，材料取自 plan；之后 apply 同一份 plan', async () => {
+    const plan = planOf({ candidates: [candidate('a', ['a1', 'a2']), candidate('b')] })
+    mocks.planSessionMove.mockReturnValue(plan)
+    mocks.applySessionMove.mockResolvedValue(
+      outcomeOf({ moved: [moved('a', { subSessions: 2 }), moved('b')] })
+    )
+    const controller = new AbortController()
+    const invocation = await invokeTool(
+      own,
+      { action: 'move-session', session_ids: ['a', 'b'] },
+      { callId: 'call-9', taskId: 9, conversationId: 4, signal: controller.signal }
+    )
+    const signal = invocation.context.abortSignal
+
+    expect(mocks.assertSessionMove).toHaveBeenCalledTimes(1)
+    const [gotCtx, move, opts] = mocks.assertSessionMove.mock.calls[0]
+    expect(gotCtx).toBe(ctx)
+    expect(move).toEqual({
+      project: { name: 'Auth', path: '/work/auth' },
+      sessions: [
+        { id: 'a', title: 'T-a', fromProject: 'Big', fromPath: '/work/big', subSessions: 2 },
+        { id: 'b', title: 'T-b', fromProject: 'Big', fromPath: '/work/big', subSessions: 0 }
+      ]
+    })
+    expect(opts).toEqual({
+      toolCallId: 'call-9',
+      toolName: 'session',
+      operation: 'move-session',
+      owner: { taskId: 9, conversationId: 4, signal },
+      signal
+    })
+    expect(mocks.applySessionMove).toHaveBeenCalledTimes(1)
+    expect(mocks.applySessionMove).toHaveBeenCalledWith('s1', plan)
+    // 先卡片、后搬动
+    expect(mocks.assertSessionMove.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applySessionMove.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('MV-T4 一条能搬的都没有：不出卡，照样 apply', async () => {
+    const plan = planOf({ already: [{ id: 'a', title: 'T-a' }] })
+    mocks.planSessionMove.mockReturnValue(plan)
+    mocks.applySessionMove.mockResolvedValue(outcomeOf({ already: [{ id: 'a', title: 'T-a' }] }))
+    const r = await executeTool(own, 'tc-1', { action: 'move-session', session_ids: ['a'] })
+    expect(mocks.assertSessionMove).not.toHaveBeenCalled()
+    expect(mocks.applySessionMove).toHaveBeenCalledWith('s1', plan)
+    expect(textOf(r)).toBe('Already in this project: "T-a" (a).')
+  })
+
+  it('MV-T5 用户拒绝：不搬，错误原样', async () => {
+    mocks.planSessionMove.mockReturnValue(planOf({ candidates: [candidate('a')] }))
+    mocks.assertSessionMove.mockRejectedValue(new Error('User denied moving session "T-a" (a)'))
+    expect(
+      await failureText(executeTool(own, 'tc-1', { action: 'move-session', session_ids: ['a'] }))
+    ).toContain('User denied moving session "T-a" (a)')
+    expect(mocks.applySessionMove).not.toHaveBeenCalled()
+  })
+
+  it('MV-T6 排版：搬过来的逐条一行（标题转义）；目录变了多一句；已经在的、没搬的各一段', async () => {
+    mocks.planSessionMove.mockReturnValue(planOf({ candidates: [candidate('a')] }))
+    mocks.applySessionMove.mockResolvedValue(
+      outcomeOf({
+        moved: [
+          { ...moved('a', { subSessions: 2 }), title: 'Fix "login"\nflow' },
+          moved('c', { fromProject: 'Elsewhere', directoryChanged: true })
+        ],
+        already: [{ id: 'h', title: 'Here' }],
+        refused: [
+          { id: 'r', title: 'Busy', reason: 'It is in the middle of a turn (status: running).' },
+          { id: 'nope', reason: 'No session has this id.' }
+        ]
+      })
+    )
+    const r = await executeTool(own, 'tc-1', { action: 'move-session', session_ids: ['a'] })
+    expect(textOf(r)).toBe(
+      [
+        [
+          'Moved into project "Auth":',
+          `<session id="a" title="Fix 'login' flow" from-project="Big" sub-sessions="2"/>`,
+          '<session id="c" title="T-c" from-project="Elsewhere" sub-sessions="0"/>'
+        ].join('\n'),
+        '1 of them came from a project in another folder: for those the working folder is now /work/auth. System prompts were rebuilt for this project.',
+        'Already in this project: "Here" (h).',
+        [
+          'Not moved:',
+          '- "Busy" (r): It is in the middle of a turn (status: running).',
+          '- (nope): No session has this id.'
+        ].join('\n')
+      ].join('\n\n')
+    )
+
+    // 全都换了目录、有重建不成的
+    mocks.applySessionMove.mockResolvedValue(
+      outcomeOf({
+        moved: [moved('c', { directoryChanged: true, promptNotRebuilt: 2, subSessions: 1 })]
+      })
+    )
+    const r2 = await executeTool(own, 'tc-2', { action: 'move-session', session_ids: ['a'] })
+    expect(textOf(r2)).toContain(
+      'Moved from a project in another folder: the working folder is now /work/auth. The system prompt of 2 sessions could not be rebuilt just now;'
+    )
+  })
+
+  it('MV-T7 一条都没搬成、也没有已经在的：工具结果是错误，原因逐条给', async () => {
+    mocks.planSessionMove.mockReturnValue(planOf({ refused: [{ id: 'x', reason: 'why' }] }))
+    mocks.applySessionMove.mockResolvedValue(
+      outcomeOf({
+        refused: [
+          { id: 'x', reason: 'No session has this id.' },
+          { id: 'k', title: 'Kid', reason: 'It is a sub-session of "P" (p).' }
+        ]
+      })
+    )
+    const failure = await failureText(
+      executeTool(own, 'tc-1', { action: 'move-session', session_ids: ['x', 'k'] })
+    )
+    expect(failure).toContain('Nothing was moved.')
+    expect(failure).toContain('- (x): No session has this id.')
+    expect(failure).toContain('- "Kid" (k): It is a sub-session of "P" (p).')
+  })
+
+  it('MV-T8 工具卡折叠摘要：只有动作名', () => {
+    expect(buildToolSummary('session', { action: 'move-session', session_ids: ['a', 'b'] })).toBe(
+      'move-session'
+    )
   })
 })

@@ -59,6 +59,11 @@ vi.mock('../../services/subSessionRunner', () => ({
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 // 跨会话授权的 PEP：这里只看转调与排版（授权的判定是安全模块与 runner 的用例）
 vi.mock('../../services/toolContext', () => ({ assertSessionAccess: vi.fn(async () => {}) }))
+// session.ts 也引 move-session 的那一半（services/sessionMove）—— 这里用不到，顶掉免得把真的 DAO 带进来
+vi.mock('../../services/sessionMove', () => ({
+  planSessionMove: vi.fn(),
+  applySessionMove: vi.fn()
+}))
 
 type SessionModule = typeof import('../session')
 let mod: SessionModule
@@ -156,12 +161,12 @@ function fenceParts(text: string): { inside: string[]; after: string } {
 // ─────────────────────────── 参数面 ───────────────────────────
 
 describe('inspect-session —— 参数面', () => {
-  it('WP4-126 动作枚举 10 项含 inspect-session；turns 是数字，item / match / before 是字符串，各自注明 For "inspect-session"', async () => {
+  it('WP4-126 动作枚举 11 项含 inspect-session；turns 是数字，item / match / before 是字符串，各自注明 For "inspect-session"', async () => {
     const props = mod.SessionParamsSchema.properties as unknown as Record<
       string,
       { type?: string; enum?: string[]; description?: string }
     >
-    expect(props.action.enum).toHaveLength(10)
+    expect(props.action.enum).toHaveLength(11)
     expect(props.action.enum).toContain('inspect-session')
     expect(props.turns.type).toBe('number')
     for (const key of ['item', 'match', 'before']) expect(props[key].type).toBe('string')

@@ -4,7 +4,7 @@ shuvix-id: policy:builtin:ask-on-session-access
 shuvix-builtin: true
 name: ask-on-session-access
 shuvix-displayName: 使用别的会话前询问
-description: 智能体可以自由使用自己的子会话和本会话权限表里的会话；查看别的会话、或与它对话，先问你。
+description: 智能体可以自由使用自己的子会话和本会话权限表里的会话；查看别的会话、与它对话，或把它搬进本项目，先问你。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [session]
@@ -22,6 +22,9 @@ shuvix-policy-rules:
       !object.ownTurn
       && !(object.sessionId in vars.aclSessionWrite)
     prompt: 这会往另一条会话里发一条消息，它会用自己的文件夹和自己的权限表去做。允许之前请看清这条消息。
+  - effect: ask
+    action: [move]
+    prompt: 这会把另一条会话连同它的子会话搬进本会话所在的项目。之后它在本项目的文件夹里工作，用本项目的设置和知识库。
 ---
 
 **它做什么**：智能体可以经 `session` 工具和别的会话打交道 —— 你在输入框里 @ 一条会话，智能体就能用它的 id
@@ -36,6 +39,9 @@ shuvix-policy-rules:
 
 其余的**都要问**：查看别的会话，以及每一条发进去的消息。只允许一次的会话下次还会问；记住它就不再问了。
 这些行在会话设置里，可以在查看与对话之间切换，也可以删掉。
+
+**把会话搬进本项目**（`move-session`）每次都问，卡片上也没有「允许并记住」：允许智能体和一条会话对话的那一行，
+不等于同意把它搬走。一次调用把你点名的那几条一起搬，卡片上全部列出来。
 
 **为什么要问**：另一条会话有自己的工作目录和自己的权限表 —— 往往是另一个项目。让智能体和它对话，等于让它
 够得着那条会话够得着的一切；查看它，会把它的对话搬进本会话。

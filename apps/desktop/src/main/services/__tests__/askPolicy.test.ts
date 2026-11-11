@@ -160,10 +160,12 @@ vi.mock('../../logger', () => ({
 }))
 
 import {
+  assertSessionMove,
   getDesktopSecurityContext,
   makeDesktopSecurityProvider,
   setPermissionReviewer,
-  type ProjectConfig
+  type ProjectConfig,
+  type ToolContext
 } from '../toolContext'
 import {
   clearReviewState,
@@ -1582,5 +1584,121 @@ describe('桌面安全 provider — 组件使用（ask-on-widget-access，「允
 
     expect(asks).toEqual([])
     expect(widgetRows('s1')).toHaveLength(1)
+  })
+})
+
+/**
+ * 搬会话（MV-A）—— `session` 工具的 `move-session` 经 toolContext.assertSessionMove 过同一个会话客体，action `move`
+ * （docs/project-split-design.md §4.3）。真的策略、真的权限表；会话都是内存会话。
+ *
+ *   MV-A1 一次调用三条 → 恰一张卡：command 是第一条的 `Session(move, <id>)`，session 目标 access = move，
+ *         preview 列出全部三条；卡片答「允许并记住」也不写任何行（这张卡不能记住）
+ *   MV-A2 权限表里已有「可以对话」的行 → 搬它照问（每次都问，裁决 D2）
+ *   MV-A3 用户拒绝 → 抛 User denied moving session …；只出过一张卡
+ *   MV-A4 没有询问通道 → 抛 no way to ask；一条都没放行
+ *   MV-A5 停用 ask-on-session-access → 不问、放行
+ */
+describe('桌面安全 provider — 搬会话（assertSessionMove，一次调用一张卡）', () => {
+  const sessions: string[] = []
+  afterEach(() => {
+    for (const id of sessions.splice(0)) {
+      clearSessionDecisions(id)
+      clearReviewState(id)
+    }
+  })
+
+  const TARGETS = [
+    {
+      id: 'mv-a',
+      title: 'Login refactor',
+      fromProject: 'Big',
+      fromPath: '/work/big',
+      subSessions: 2
+    },
+    {
+      id: 'mv-b',
+      title: 'Token refresh',
+      fromProject: 'Big',
+      fromPath: '/work/big',
+      subSessions: 0
+    },
+    { id: 'mv-c', title: 'Billing', fromProject: 'Shop', fromPath: '/work/shop', subSessions: 0 }
+  ]
+  const MOVE = { project: { name: 'Auth', path: '/work/big' }, sessions: TARGETS }
+  const OPTS = { toolCallId: 'mv-call', toolName: 'session', operation: 'move-session' }
+
+  function caller(reply?: () => InputResponse): { ctx: ToolContext; asks: AskInputRequest[] } {
+    ensureSession('s1')
+    sessions.push('s1')
+    for (const t of TARGETS) {
+      ensureSession(t.id)
+      sessionRecords.updateTitle(t.id, t.title)
+    }
+    const asks: AskInputRequest[] = []
+    const ctx: ToolContext = {
+      sessionId: 's1',
+      ...(reply
+        ? {
+            requestUserInput: async (req: InputRequest) => {
+              asks.push(req as AskInputRequest)
+              return reply()
+            }
+          }
+        : {})
+    }
+    return { ctx, asks }
+  }
+  const sessionRowsOf = (sessionId: string): unknown[] =>
+    sessionAcl.entries(sessionId).filter((e) => e.kind === 'session')
+
+  it('MV-A1 三条会话恰一张卡，preview 列出全部；答「允许并记住」也不写行', async () => {
+    const { ctx, asks } = caller(() => ({ kind: 'ask', allowed: true, extra: { remember: true } }))
+    await assertSessionMove(ctx, MOVE, OPTS)
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      kind: 'ask',
+      id: 'mv-call',
+      toolName: 'session',
+      command: 'Session(move, mv-a)',
+      session: {
+        sessionId: 'mv-a',
+        title: 'Login refactor',
+        access: 'move',
+        operation: 'move-session'
+      },
+      preview: { kind: 'session-move', project: MOVE.project, sessions: TARGETS }
+    })
+    expect(asks[0].policyPrompt?.text).toContain('moves another session')
+    expect(sessionRowsOf('s1')).toEqual([])
+  })
+
+  it('MV-A2 记住过「可以对话」的会话：搬它照问', async () => {
+    const { ctx, asks } = caller(() => ({ kind: 'ask', allowed: true }))
+    expect(sessionAcl.grantSession('s1', 'mv-a', 'write')).not.toBeNull()
+    await assertSessionMove(ctx, { ...MOVE, sessions: [TARGETS[0]] }, OPTS)
+    expect(asks).toHaveLength(1)
+    expect(asks[0].command).toBe('Session(move, mv-a)')
+  })
+
+  it('MV-A3 用户拒绝：抛 User denied moving …，只出过一张卡', async () => {
+    const { ctx, asks } = caller(() => ({ kind: 'ask', allowed: false }))
+    await expect(assertSessionMove(ctx, MOVE, OPTS)).rejects.toMatchObject({
+      message: 'User denied moving session "Login refactor" (mv-a)'
+    })
+    expect(asks).toHaveLength(1)
+  })
+
+  it('MV-A4 没有询问通道：抛 no way to ask', async () => {
+    const { ctx } = caller()
+    await expect(assertSessionMove(ctx, MOVE, OPTS)).rejects.toMatchObject({
+      message: expect.stringContaining('no way to ask')
+    })
+  })
+
+  it('MV-A5 停用 ask-on-session-access：不问、放行', async () => {
+    state.disabled.add('policy:builtin:ask-on-session-access')
+    const { ctx, asks } = caller(() => ({ kind: 'ask', allowed: false }))
+    await expect(assertSessionMove(ctx, MOVE, OPTS)).resolves.toBeUndefined()
+    expect(asks).toEqual([])
   })
 })

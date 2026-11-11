@@ -4,7 +4,7 @@ shuvix-id: policy:builtin:ask-on-session-access
 shuvix-builtin: true
 name: ask-on-session-access
 shuvix-displayName: Ask Before Using Another Session
-description: The agent works freely with its own sub-sessions and with the sessions in this session's permission table; reading or talking to any other session asks you first.
+description: The agent works freely with its own sub-sessions and with the sessions in this session's permission table; reading or talking to any other session asks you first, and so does moving one into this project.
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [session]
@@ -22,6 +22,9 @@ shuvix-policy-rules:
       !object.ownTurn
       && !(object.sessionId in vars.aclSessionWrite)
     prompt: This sends a message into another session, which then works with its own folder and its own permission table. Check the message before allowing.
+  - effect: ask
+    action: [move]
+    prompt: This moves another session, with its sub-sessions, into this session's project. From then on it works in this project's folder, with this project's settings and knowledge base.
 ---
 
 **What it does**: the agent can work with other sessions through the `session`
@@ -42,6 +45,11 @@ Anything else **asks**: reading another session, and every message sent into
 one. A session you allowed once asks again next time; remember it to stop
 asking. The rows are in the session's settings, where you can switch a row
 between read and talk or remove it.
+
+**Moving a session** into this session's project (`move-session`) asks every
+time, and its card has no "allow and remember": a row that lets the agent talk
+to a session does not let it move that session. One call moves the sessions
+you pointed at together, and the card lists all of them.
 
 **Why it asks**: another session has its own working folder and its own
 permission table — often another project. Letting an agent talk to it lets

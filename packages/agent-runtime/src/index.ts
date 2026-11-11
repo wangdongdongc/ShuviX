@@ -283,6 +283,7 @@ export {
   type AllowToolType,
   type SecurityEffect,
   type AccessMode,
+  type SessionAccessAction,
   type RuleTier,
   type SecuritySubject,
   type SecurityEnvironment,

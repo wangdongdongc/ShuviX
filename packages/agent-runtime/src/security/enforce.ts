@@ -139,9 +139,11 @@ function deniedMessage(request: SecurityRequest, display: string): string {
     case 'url':
       return `User denied opening ${display}`
     case 'session':
-      return request.action === 'write'
-        ? `User denied talking to ${display}`
-        : `User denied reading ${display}`
+      return request.action === 'move'
+        ? `User denied moving ${display}`
+        : request.action === 'write'
+          ? `User denied talking to ${display}`
+          : `User denied reading ${display}`
     case 'widget':
       return request.action === 'write'
         ? `User denied changing data in ${display}`

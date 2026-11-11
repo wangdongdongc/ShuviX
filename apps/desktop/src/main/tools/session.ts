@@ -17,6 +17,9 @@
  *     services/subSessionRunner.ts，本文件只做参数面与文案 —— 工具层是翻译层，业务规则不该有第二份。
  *     设计见 docs/sub-session-design.md。2026-10-20 起动作名去掉了 `-sub-`（`prompt-session`…），旧名作为别名照收
  *     （崩溃之前发出的调用重跑时还是旧名），不再写进 schema。
+ *   - `move-session`（2026-11-11，docs/project-split-design.md §4）：把用户 @ 的、别的项目的会话搬进调用方所在的项目。
+ *     只能往自己这里拉。规则与搬动在 services/sessionMove.ts；过的是同一个安全客体，action `move`（每次都问、
+ *     一次调用一张卡、不能记住，见 toolContext `assertSessionMove`）。重跑幂等：已经搬过来的回「已经在了」。
  *
  * 安全客体 `{type:'session'}`：每个指向一条别的会话（不是自己的子会话）的动作都经 `assertSessionAccess` 过安全模块
  * （read = 查看、write = 对话），出厂的 ask-on-session-access 在不是自己发起的那一轮、又不在会话权限表里时问人。
@@ -40,10 +43,12 @@ import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage
 import { registerBuiltinTool } from '../services/toolRegistry'
 import {
   assertSessionAccess,
+  assertSessionMove,
   getDesktopSecurityContext,
   sessionObjectFacts,
   type ToolContext
 } from '../services/toolContext'
+import { applySessionMove, planSessionMove, type SessionMoveOutcome } from '../services/sessionMove'
 import { sessionRecords } from '../services/sessionRecords'
 import { sessionService } from '../services/sessionService'
 import {
@@ -77,7 +82,8 @@ const ACTIONS = [
   'stop-session',
   'answer-session',
   'steer-session',
-  'inspect-session'
+  'inspect-session',
+  'move-session'
 ] as const
 
 type SessionAction = (typeof ACTIONS)[number]
@@ -117,6 +123,12 @@ export const SessionParamsSchema = Type.Object({
     Type.String({
       description:
         'The session to address: one of your sub-sessions, or another session by the exact id the user gave you. May be omitted when you have exactly one sub-session. "wait-for-sessions" without it waits for every running one you started.'
+    })
+  ),
+  session_ids: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        'For "move-session": the ids of the sessions to move, each exactly as the user gave it.'
     })
   ),
   message: Type.Optional(
@@ -198,6 +210,7 @@ Actions:
 - "answer-session": answer a question it asked in a turn you started (\`ask_id\`, then \`selections\` with exact option labels or \`message\` in your own words); like "prompt-session" it returns at once and the turn carries on in the background.
 - "steer-session": tell a turn you started something while it is running (\`message\`); it reads it at its next step.
 - "inspect-session": look at what happened inside \`session_id\` — an outline of its latest turn, one line per step with a ref (\`turns\` for more, \`before\` to page back), \`item\` to expand one ref, \`match\` to search the whole conversation. Collect answers with "read-session" / "wait-for-sessions"; inspect only when the answer does not explain what happened (a failure, a stall, something unexpected, \`user-intervened="true"\` — the user spoke in it since your last message), and expand only the line you need.
+- "move-session": move the sessions in \`session_ids\` — sessions of other projects that the user pointed at — into this session's project, together with their sub-sessions. From then on they belong to this project and work in its folder. It only moves sessions INTO the project of the session that calls it: to get sessions into another project, the user opens a session in that project, @-mentions them there and asks. One approval card per call covers all of them, and nothing in those sessions is read.
 
 Everything you send runs in the background: when a turn ends, or stops to ask you something, you are brought back with a notice — get on with other work meanwhile, or end your turn. When you cannot continue without the answer, call "wait-for-sessions": it costs nothing while it waits, comes back early when one stops to ask, and on timeout leaves everything running. Stopping this session does not stop the turns it started. **Never sleep and then poll** with "list-sessions" / "read-session".
 
@@ -205,11 +218,58 @@ A session runs one turn at a time: a second message while it is working is rejec
 
 Its replies come back inside a \`<session>\` fence, in \`<reply>\` or \`<error>\`; text outside the fence is this tool talking. Write each message as the user of that session would: it does not see this conversation.`
 
+/**
+ * `move-session` 的结果：搬过来的、本来就在的、没搬的（逐条带原因）。一条都没搬成、也没有本来就在的 → 抛错
+ * （工具结果是一条错误，原因照样逐条给）。
+ */
+function renderMove(outcome: SessionMoveOutcome): ToolResult<SessionToolDetails | undefined> {
+  const notMoved = outcome.refused.map(
+    (r) => `- ${r.title === undefined ? '' : `"${attr(r.title)}" `}(${attr(r.id)}): ${r.reason}`
+  )
+  if (outcome.moved.length === 0 && outcome.already.length === 0) {
+    throw new Error(['Nothing was moved.', ...notMoved].join('\n'))
+  }
+  const lines: string[] = []
+  if (outcome.moved.length > 0) {
+    lines.push(
+      [
+        `Moved into project "${attr(outcome.project.name)}":`,
+        ...outcome.moved.map(
+          (m) =>
+            `<session id="${attr(m.id)}" title="${attr(m.title)}" from-project="${attr(m.fromProject)}" sub-sessions="${m.subSessions}"/>`
+        )
+      ].join('\n')
+    )
+    const relocated = outcome.moved.filter((m) => m.directoryChanged)
+    if (relocated.length > 0) {
+      const stale = relocated.reduce((n, m) => n + m.promptNotRebuilt, 0)
+      lines.push(
+        (relocated.length === outcome.moved.length
+          ? `Moved from a project in another folder: the working folder is now ${outcome.project.path}.`
+          : `${relocated.length} of them came from a project in another folder: for those the working folder is now ${outcome.project.path}.`) +
+          ' ' +
+          (stale === 0
+            ? 'System prompts were rebuilt for this project.'
+            : `The system prompt of ${stale} session${stale === 1 ? '' : 's'} could not be rebuilt just now; the user can rebuild it from that session's system-prompt notice.`)
+      )
+    }
+  }
+  if (outcome.already.length > 0) {
+    lines.push(
+      `Already in this project: ${outcome.already.map((a) => `"${attr(a.title)}" (${attr(a.id)})`).join(', ')}.`
+    )
+  }
+  if (notMoved.length > 0) lines.push(['Not moved:', ...notMoved].join('\n'))
+  return text(...lines)
+}
+
 interface SessionToolParams {
   action: SessionAction
   title?: string
   agent_profile?: string
   session_id?: string
+  /** `move-session`：要搬的会话 */
+  session_ids?: string[]
   /** 2026-10-20 之前的参数名（重跑时带回来的旧调用）；不进 schema */
   sub_session_id?: string
   message?: string
@@ -441,6 +501,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       action,
       session_id: rawParams.session_id ?? rawParams.sub_session_id
     }
+    // 搬会话不经运行器（它不发话、不读对话），也有自己的一道门：一次调用一张卡
+    if (action === 'move-session') return this.moveSessions(params, toolCallId, call, signal)
     const authorize = this.authorizeFor(action, params, toolCallId, call, signal)
     // 自动脱敏（§5.3）：发进别的会话的回答里有本会话的占位符 —— 先把表项带过去（指令与引导经 AgentSession
     // 的驱动来源带，这里只剩回答）
@@ -536,6 +598,49 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
           ...(SPOKEN_ACTIONS.has(action) ? spokenOf(params) : {})
         }
       )
+  }
+
+  // ─── 搬会话 ──────────────────────────────────
+
+  /**
+   * `move-session`：先判定（不满足的原因回给模型，不出卡）→ 一张确认卡 → 用户点头之后再判一遍并搬。
+   * 模型把 id 写进了 `session_id` 也认：点名的是哪几条才是它要说的事。
+   */
+  private async moveSessions(
+    params: SessionToolParams,
+    toolCallId: string,
+    call: ToolCallScope,
+    signal: AbortSignal | undefined
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
+    const ids = [
+      ...(Array.isArray(params.session_ids) ? params.session_ids : []),
+      ...(params.session_id ? [params.session_id] : [])
+    ].filter((id): id is string => typeof id === 'string')
+    const plan = planSessionMove(this.ctx.sessionId, ids)
+    if ('error' in plan) throw new Error(plan.error)
+    if (plan.candidates.length > 0) {
+      await assertSessionMove(
+        this.ctx,
+        {
+          project: { name: plan.project.name, path: plan.project.path },
+          sessions: plan.candidates.map((c) => ({
+            id: c.id,
+            title: c.title,
+            fromProject: c.fromProject.name,
+            fromPath: c.fromProject.path,
+            subSessions: c.children.length
+          }))
+        },
+        {
+          toolCallId,
+          toolName: SESSION_TOOL_NAME,
+          operation: 'move-session',
+          owner: callOwnerOf(call),
+          signal
+        }
+      )
+    }
+    return renderMove(await applySessionMove(this.ctx.sessionId, plan))
   }
 
   // ─── 子会话 ──────────────────────────────────
