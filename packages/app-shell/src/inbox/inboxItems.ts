@@ -29,6 +29,11 @@ export interface InboxItem {
 export interface UnreadInboxItem {
   session: Session
   unread: SessionUnread
+  /**
+   * 已经读了、只是还留着：你正开着这条会话，它是作为新回复被打开的（`InboxInput.held`）。
+   * 位置照旧，行画成读过的样子，切到别的会话后才离开列表
+   */
+  held?: boolean
 }
 
 export interface InboxSections {
@@ -53,6 +58,11 @@ export interface InboxInput {
   backgroundCommands?: Record<string, string[]>
   /** 会话 id → 未读（主进程的已读状态镜像）；缺省 = 没有已读功能 */
   unread?: Record<string, SessionUnread>
+  /**
+   * 正开着的那条会话，打开它时它是一条新回复（那一刻的未读）：打开即读过，但收件箱就在会话旁边，
+   * 行在你眼前消失太突兀 —— 它留在「新回复」原来的位置（`held`），切走才离开（2026-11-12 用户选定 E1）
+   */
+  held?: { sessionId: string; unread: SessionUnread }
 }
 
 /** 最近动过的在前；同一时刻按建立时间，再按 id，保证顺序稳定（条目不该在两次渲染之间换位） */
@@ -79,10 +89,12 @@ export function inboxSectionsOf(input: InboxInput): InboxSections {
     const run: SessionRunKind | null = input.streaming[session.id]
       ? 'agent'
       : (input.backgroundRunKinds[session.id] ?? null)
-    const u = input.unread?.[session.id]
+    const live = input.unread?.[session.id]
+    const held = !live && input.held?.sessionId === session.id ? input.held.unread : undefined
+    const u = live ?? held
     // 优先级：等你回答 > agent 在干活 > 新回复 > 只剩后台命令
     if (asks <= 0 && run !== 'agent' && u) {
-      unread.push({ session, unread: u })
+      unread.push(held ? { session, unread: u, held: true } : { session, unread: u })
       continue
     }
     if (asks <= 0 && run === null) continue

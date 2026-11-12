@@ -15,6 +15,8 @@ export interface PanelTabItem {
   Icon: LucideIcon
   /** 可选数字徽标（如子代理数 / 小组件数），>0 才显示 */
   badge?: number
+  /** 数字前一个琥珀点：有事在等你（收件箱里有会话在等你回答），与侧栏同一个记号 */
+  alert?: boolean
 }
 
 export interface PanelTabBarProps {
@@ -61,9 +63,12 @@ export function PanelTabBar({
         ref={tabBarRef}
         className={`${drag} flex-shrink-0 flex items-center h-8 border-b border-border-secondary/30 overflow-hidden ${className}`}
       >
-        {tabs.map(({ key, label, Icon, badge }) => (
+        {tabs.map(({ key, label, Icon, badge, alert }) => (
           <button
             key={key}
+            data-panel-tab={key}
+            data-panel-tab-badge={badge !== undefined && badge > 0 ? badge : undefined}
+            data-panel-tab-alert={alert ? '' : undefined}
             onClick={() => onSelect(key)}
             title={compact ? label : undefined}
             className={`${noDrag} flex items-center gap-1 px-3 h-8 text-[11px] font-medium transition-all duration-200 relative whitespace-nowrap flex-shrink-0 ${
@@ -74,6 +79,12 @@ export function PanelTabBar({
           >
             <Icon size={12} />
             {!compact && <span>{label}</span>}
+            {alert && (
+              <span
+                className="ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+                aria-hidden="true"
+              />
+            )}
             {badge !== undefined && badge > 0 && (
               <span className="ml-0.5 text-[10px] text-text-tertiary/60 tabular-nums">{badge}</span>
             )}
@@ -90,13 +101,14 @@ export function PanelTabBar({
         aria-hidden
         className="absolute -top-[9999px] left-0 flex items-center pointer-events-none"
       >
-        {tabs.map(({ key, label, Icon, badge }) => (
+        {tabs.map(({ key, label, Icon, badge, alert }) => (
           <span
             key={key}
             className="flex items-center gap-1 px-3 h-8 text-[11px] font-medium whitespace-nowrap"
           >
             <Icon size={12} />
             <span>{label}</span>
+            {alert && <span className="ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full" />}
             {badge !== undefined && badge > 0 && (
               <span className="ml-0.5 text-[10px] tabular-nums">{badge}</span>
             )}

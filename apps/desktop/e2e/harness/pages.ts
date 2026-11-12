@@ -8569,7 +8569,7 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
 //     这一处）；标签栏 = 它的父 div（PanelTabBar 的按钮是直接子节点；屏外测量节点是 span，
 //     不会混进来）；
 //   - agents 面板 = RightPanel 根（标签栏的父级）里内容区（`:scope > div.relative`）的
-//     **最后一个**子节点（RightPanel 按 preview/widget/calendar/agents 固定序铺开，
+//     **最后一个**子节点（RightPanel 按 inbox/widget/calendar/agents 固定序铺开，
 //     全部常驻挂载、visibility 切换）—— 行 / 空态 / 详情都 scope 在它之内；
 //   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
 //     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；血缘箭头 = `.lucide-corner-down-right`；
@@ -8675,8 +8675,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
   const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
-  // widget tab 里的卡片（WidgetPanel 的 `data-widget-card` = widget id，DOM 序 = 列表顺序）
-  const WIDGET_CARDS = `[...(${PANEL}?.querySelector(':scope > div.relative')?.firstElementChild?.querySelectorAll('[data-widget-card]') ?? [])]`
+  // widget tab 里的卡片（WidgetPanel 的 `data-widget-card` = widget id，DOM 序 = 列表顺序）；第一个标签是收件箱
+  const WIDGET_CARDS = `[...(${PANEL}?.querySelector('[data-widget-panel]')?.querySelectorAll('[data-widget-card]') ?? [])]`
   // 日历面板 = 内容区固定序的倒数第二个（见 activateCalendarTab）
   const CALENDAR = `(() => { const c = ${PANEL}?.querySelector(':scope > div.relative')?.children; return c ? c[c.length - 2] : null })()`
 
@@ -15211,11 +15211,13 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 收件箱页的「跟踪中」一节（InboxTracking，实验；`~/.shuvix/tracking/`）—— 2026-11-10 起跟踪项不在桌面侧栏了。
+// 收件箱的「跟踪中」一节（InboxTracking，实验；`~/.shuvix/tracking/`）—— 2026-11-10 起跟踪项不在桌面侧栏了。
+// 收件箱在右侧面板的第一个标签里（2026-11-12，E1）：点侧栏那一行 = 打开面板并切到它；面板里的各标签常驻挂着、
+// 用 visibility 切换，所以「开着」= 面板 `[data-inbox-panel]` 在且看得见。
 //
-// 锚点：侧栏最上面的收件箱一行 `[data-inbox-row]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱页
-// `[data-inbox-page]`，这一节 `[data-inbox-section="tracking"]`；行 `[data-tracking-item=<fileName>]`（`data-tracking-status`），
-// 行里 `[data-tracking-archive]` 圆圈、`[data-tracking-open]` 标题区（点它 = 打开那份文件的**笔记本会话**，收件箱随之关上）、
+// 锚点：侧栏「资料库」里的收件箱一行 `[data-inbox-row]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱面板
+// `[data-inbox-panel]`，这一节 `[data-inbox-section="tracking"]`；行 `[data-tracking-item=<fileName>]`（`data-tracking-status`），
+// 行里 `[data-tracking-archive]` 圆圈、`[data-tracking-open]` 标题区（点它 = 中间打开那份文件的**笔记本会话**，收件箱不动）、
 // `[data-tracking-title]` / `[data-tracking-latest]`（已归档的行是结论）、`[data-tracking-waiting]`（在等别人：圆圈上的标记）、
 // `[data-tracking-restore]`（悬停才看得见，点它不用悬停）；已归档那一格（归档图标 + 数字）是 `[data-tracking-archived-toggle]`；归档后底部 `[data-inbox-archived]` 带
 // `[data-inbox-undo]`。这一节在收件箱打开时扫一次，之后窗口聚焦 / 节头菜单「刷新」/ `tracking.changed` 重扫 ——
@@ -15237,9 +15239,9 @@ export interface InboxTrackingRow {
 }
 
 export interface InboxTrackingPane {
-  /** 点侧栏的收件箱一行，等收件箱页出来、这一节扫完（没有任何跟踪项时这一节不在，等页面落定即可） */
+  /** 点侧栏的收件箱一行，等右侧面板切到收件箱、这一节扫完（没有任何跟踪项时这一节不在，等面板落定即可） */
   open(): Promise<void>
-  /** 收件箱页此刻开着 */
+  /** 收件箱面板此刻看得见 */
   isOpen(): Promise<boolean>
   /** 侧栏收件箱一行的数字（`data-inbox-count`） */
   inboxCount(): Promise<number>
@@ -15253,7 +15255,7 @@ export interface InboxTrackingPane {
   archivedToggle(): Promise<string | null>
   /** 展开「已归档 N」 */
   expandArchived(): Promise<void>
-  /** 点一行的标题区（打开它的笔记本），等收件箱关上 */
+  /** 点一行的标题区（打开它的笔记本），等中间的笔记本里出现这一行的标题 */
   openRow(fileName: string): Promise<void>
   /** 点一行的圆圈（归档） */
   archive(fileName: string): Promise<void>
@@ -15279,14 +15281,17 @@ export interface InboxTrackingPane {
 }
 
 export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
-  const PAGE = `document.querySelector('[data-inbox-page]')`
+  const PANEL = `document.querySelector('[data-inbox-panel]')`
   const SECTION = `document.querySelector('[data-inbox-section="tracking"]')`
   const HEAD = `(${SECTION}?.firstElementChild ?? null)`
   const ROW = (fileName: string): string =>
     `document.querySelector('[data-tracking-item=${JSON.stringify(fileName)}]')`
   const waitRow = (fileName: string): Promise<unknown> =>
     until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
-  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PAGE} !== null`)
+  const isOpen = (): Promise<boolean> =>
+    main.eval<boolean>(
+      `(() => { const el = ${PANEL}; return !!el && getComputedStyle(el).visibility !== 'hidden' })()`
+    )
   const expandArchived = async (): Promise<void> => {
     const toggle = `${SECTION}?.querySelector('[data-tracking-archived-toggle]')`
     await until(() => main.eval<boolean>(`!!(${toggle})`), 'archived toggle')
@@ -15303,7 +15308,7 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
         )
         await main.eval(`document.querySelector('[data-inbox-row]').click()`)
       }
-      await until(isOpen, 'inbox page open')
+      await until(isOpen, 'inbox panel shown')
       // 扫描回来之前这一节不画：给它一拍，空目录时它本来就不在
       await sleep(300)
     },
@@ -15334,8 +15339,18 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
     expandArchived,
     openRow: async (fileName) => {
       await waitRow(fileName)
+      const title = await main.eval<string>(
+        `(${ROW(fileName)}.querySelector('[data-tracking-title]')?.textContent ?? '').trim()`
+      )
       await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-open]').click()`)
-      await until(async () => !(await isOpen()), `inbox closed after opening ${fileName}`)
+      // 收件箱常驻在右侧面板里，打开不会关上它：等中间的笔记本里出现这一项的标题（一级标题就是它）
+      await until(
+        () =>
+          main.eval<boolean>(
+            `[...document.querySelectorAll('.cm-content')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(title)}))`
+          ),
+        `notebook of ${fileName} open`
+      )
     },
     archive: async (fileName) => {
       await waitRow(fileName)

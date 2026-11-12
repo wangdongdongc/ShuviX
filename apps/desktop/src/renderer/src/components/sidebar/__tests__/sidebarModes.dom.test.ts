@@ -20,6 +20,7 @@
  *   DS-6 换了回调重渲染 → 用新的；adapter 对象引用不变
  *   DS-7 桌面 bots 能力：newSession 的 session.create 形状、archive 先离开那份文件的笔记本、pickFolderAsProject、
  *        deleteSessions 的确认流程（详见文件末尾那一组）
+ *   INT-7 「收件箱」那一行（只在 full）：onOpen = 右侧面板切到 inbox 并打开，不碰选中的会话；sessions / library 不画它
  *
  * 整个 `@shuvix/app-shell` 换成记 props 的替身（共享 Sidebar 与六个分组、useProjects、useSessionDelete、
  * SessionConfigDialog）；`@shuvix/chat-ui` 只给按 selector 读的 store（setActiveSessionId 是 spy）与 getChatApi；
@@ -50,7 +51,12 @@ const rec = vi.hoisted(() => ({
     activeSessionId: null as string | null
   },
   /** getChatApi() 交回的那份（DS-7 换成可数的；缺省与之前一样） */
-  chatApi: null as unknown as Record<string, Record<string, (...args: never[]) => unknown>>
+  chatApi: null as unknown as Record<string, Record<string, (...args: never[]) => unknown>>,
+  /** 「收件箱」那一行的替身收到的 props */
+  inboxRow: [] as Array<Record<string, unknown>>,
+  /** 右侧面板 store 的两个动作（侧栏只用它们打开收件箱） */
+  panelOpen: null as unknown as Mock<() => void>,
+  panelSetActiveTab: null as unknown as Mock<(tab: string) => void>
 }))
 
 vi.mock('@shuvix/app-shell', async () => {
@@ -71,7 +77,10 @@ vi.mock('@shuvix/app-shell', async () => {
         h(Fragment, null, props.overlays as never)
       )
     },
-    InboxRow: () => h('div', { 'data-stub-inbox-row': '' }),
+    InboxRow: (props: Record<string, unknown>) => {
+      rec.inboxRow.push(props)
+      return h('div', { 'data-stub-inbox-row': '' })
+    },
     TrackingGroup: group('Tracking'),
     AgentGroup: group('Agent'),
     PolicyGroup: group('Policy'),
@@ -113,6 +122,17 @@ vi.mock('@shuvix/chat-ui', async () => {
   }
 })
 
+// 右侧面板的 store 牵着 app-shell 的 usePanelStore（这里整份换成了替身）：侧栏只用它打开收件箱那一格
+vi.mock('../../../stores/browserStore', async () => {
+  const { vi: v } = await import('vitest')
+  rec.panelOpen = v.fn()
+  rec.panelSetActiveTab = v.fn()
+  return {
+    useBrowserStore: {
+      getState: () => ({ open: rec.panelOpen, setActiveTab: rec.panelSetActiveTab })
+    }
+  }
+})
 vi.mock('../ProjectEditDialog', () => ({ ProjectEditDialog: () => null }))
 vi.mock('../SkillDirDialog', () => ({ SkillDirDialog: () => null }))
 vi.mock('../../common/ConfirmDialog', () => ({
@@ -206,6 +226,9 @@ beforeEach(() => {
   rec.state.sessions = []
   rec.state.activeSessionId = null
   rec.storeSet.mockClear()
+  rec.inboxRow.length = 0
+  rec.panelOpen?.mockClear()
+  rec.panelSetActiveTab?.mockClear()
   api.bot.openNote.mockReset()
   api.bot.deleteByFile.mockReset()
   api.bot.archive.mockReset().mockResolvedValue({ success: true })
@@ -326,6 +349,28 @@ describe('desktop Sidebar modes', () => {
     expect(second.mock.calls).toEqual([['s2'], ['note-2']])
     expect(first).not.toHaveBeenCalled()
   })
+})
+
+describe('INT-7 the inbox row', () => {
+  it('INT-7 full: the row opens the right panel on the inbox tab and leaves the selected session alone', () => {
+    render()
+    expect(container.querySelector('[data-stub-inbox-row]')).not.toBeNull()
+    const onOpen = rec.inboxRow.at(-1)!.onOpen as () => void
+    expect(typeof onOpen).toBe('function')
+    act(() => onOpen())
+    expect(rec.panelSetActiveTab.mock.calls).toEqual([['inbox']])
+    expect(rec.panelOpen).toHaveBeenCalledTimes(1)
+    expect(rec.storeSet).not.toHaveBeenCalled()
+  })
+
+  it.each<['sessions' | 'library']>([['sessions'], ['library']])(
+    'INT-7 %s: no inbox row',
+    (mode) => {
+      render({ mode })
+      expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
+      expect(rec.inboxRow).toHaveLength(0)
+    }
+  )
 })
 
 /**

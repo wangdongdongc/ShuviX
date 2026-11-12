@@ -178,8 +178,9 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
   })
 
   it('AM-2 agents tab 存在且是最后一个可见 tab；preview 默认隐藏（认图标 + DOM 序，不认文案）', async () => {
-    // 面板已在 AM-1 打开；可见集合 = widget / calendar / agents（浏览器是独立窗口，不在面板里）
+    // 面板已在 AM-1 打开；可见集合 = 收件箱 / widget / calendar / agents（浏览器是独立窗口，不在面板里）
     expect(await pane.tabIcons()).toEqual([
+      'lucide-inbox',
       'lucide-wrench',
       'lucide-calendar-days',
       'lucide-activity'

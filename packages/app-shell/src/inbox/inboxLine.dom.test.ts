@@ -5,6 +5,13 @@
  *   INL-1 次序：等你回答 → 新回复 → 运行中（agent 在干活的写 running、只剩后台命令的写 resident）；
  *         各自的样子：琥珀实心、蓝色实心、蓝色空心呼吸、绿色空心不动
  *   INL-2 给了 onToggle 是一个按钮（aria-expanded 跟 open，点一下调一次）；不给是一枚带读屏文字的图形
+ *   INH-20 留着的那条子会话（`held`）的圆点是 read（灰色实心）；真的新回复仍是 unread（蓝色）
+ *
+ * 一行（InboxLine，2026-11-12 起在右侧面板里，两层）：
+ *
+ *   INH-17 点开的按钮：有预览两层（第二层是预览），没有预览（null / undefined / false / ''）只有一层；第一层是标题 + 时间
+ *   INH-18 selected → 外层 aria-current="true" + data-selected=""，否则两样都没有；attrs 写在外层；
+ *          点按钮 onOpen 一次，点行尾自带的按钮不触发 onOpen
  *
  * InboxLine 只从 inboxItems 引类型，不用替身。文件是 `.ts`，一律 createElement。
  */
@@ -13,7 +20,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { Session, SessionRunKind } from '@shuvix/chat-ui'
 import type { InboxFamily, InboxItem } from './inboxItems'
-import { FamilyPips } from './InboxLine'
+import { FamilyPips, InboxLine, type InboxLineProps } from './InboxLine'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -116,5 +123,101 @@ describe('INL-2 toggle or picture', () => {
     const img = container.querySelector<HTMLElement>('span[role="img"]')
     expect(img).not.toBeNull()
     expect(img!.getAttribute('aria-label')).toBe('4 sub-sessions')
+  })
+})
+
+describe('INH-20 a held child pip', () => {
+  it('INH-20 held child → read (grey); a live unread child → unread (accent)', () => {
+    const fam: InboxFamily = {
+      root: session('R', null),
+      rootItem: null,
+      rootUnread: null,
+      waiting: [],
+      unread: [
+        { session: session('K'), unread: { since: 2, failed: false, manual: false }, held: true },
+        { session: session('L'), unread: { since: 1, failed: false, manual: false } }
+      ],
+      running: []
+    }
+    act(() =>
+      root.render(createElement(FamilyPips, { family: fam, open: false, label: '2 sub-sessions' }))
+    )
+    const pips = [...container.querySelectorAll<HTMLElement>('[data-pip]')]
+    expect(pips.map((p) => p.getAttribute('data-pip'))).toEqual(['read', 'unread'])
+    expect(pips[0].classList.contains('bg-text-tertiary/50')).toBe(true)
+    expect(pips[0].classList.contains('bg-accent')).toBe(false)
+    expect(pips[1].classList.contains('bg-accent')).toBe(true)
+    expect(pips[1].classList.contains('bg-text-tertiary/50')).toBe(false)
+  })
+})
+
+describe('InboxLine', () => {
+  function line(props: Partial<InboxLineProps> = {}): void {
+    act(() =>
+      root.render(
+        createElement(InboxLine, {
+          leading: createElement('span', { 'data-lead': '' }),
+          title: 'T',
+          meta: '12:00',
+          onOpen: () => {},
+          ...props
+        })
+      )
+    )
+  }
+  const outer = (): HTMLElement => container.firstElementChild as HTMLElement
+  const openButton = (): HTMLButtonElement => {
+    const el = container.querySelector<HTMLButtonElement>('button')
+    if (!el) throw new Error('no open button')
+    return el
+  }
+
+  it.each<[string, React.ReactNode, string | null]>([
+    ['a string', 'P', 'P'],
+    ['an element', createElement('em', null, 'E'), 'E'],
+    ['null', null, null],
+    ['undefined', undefined, null],
+    ['false', false, null],
+    ["''", '', null]
+  ])('INH-17 preview %s', (_label, preview, text) => {
+    line({ preview })
+    const children = [...openButton().children]
+    expect(children).toHaveLength(text === null ? 1 : 2)
+    expect(children[0].textContent).toContain('T')
+    expect(children[0].textContent).toContain('12:00')
+    if (text !== null) expect(children[1].textContent).toBe(text)
+  })
+
+  it.each<[string, boolean | undefined]>([
+    ['false', false],
+    ['omitted', undefined]
+  ])('INH-18 selected %s → neither aria-current nor data-selected', (_label, selected) => {
+    line(selected === undefined ? {} : { selected })
+    expect(outer().hasAttribute('aria-current')).toBe(false)
+    expect(outer().hasAttribute('data-selected')).toBe(false)
+  })
+
+  it('INH-18 selected → aria-current="true" and data-selected=""; attrs on the outer div; open vs trailing clicks', () => {
+    const onOpen = vi.fn()
+    const onTrailing = vi.fn()
+    line({
+      selected: true,
+      attrs: { 'data-x': 'y', 'data-gone': undefined },
+      onOpen,
+      trailing: createElement('button', { type: 'button', 'data-trail': '', onClick: onTrailing })
+    })
+    const el = outer()
+    expect(el.tagName).toBe('DIV')
+    expect(el.getAttribute('aria-current')).toBe('true')
+    expect(el.getAttribute('data-selected')).toBe('')
+    expect(el.getAttribute('data-x')).toBe('y')
+    expect(el.hasAttribute('data-gone')).toBe(false)
+
+    act(() => openButton().click())
+    expect(onOpen).toHaveBeenCalledTimes(1)
+
+    act(() => container.querySelector<HTMLButtonElement>('[data-trail]')!.click())
+    expect(onTrailing).toHaveBeenCalledTimes(1)
+    expect(onOpen).toHaveBeenCalledTimes(1)
   })
 })

@@ -27,6 +27,7 @@ import {
 } from '@shuvix/app-shell'
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
+import { useBrowserStore } from '../../stores/browserStore'
 import { useTrackingAdapter } from '../../host/useTrackingAdapter'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
@@ -64,6 +65,13 @@ export interface SidebarProps {
   mode?: 'full' | 'sessions' | 'library'
   /** 用户从这里打开了一个会话（含笔记本会话；同一个会话再点一次也算）—— 手机布局据此推入对话页 */
   onOpenSession?: (sessionId: string) => void
+}
+
+/** 侧栏「收件箱」一行：打开右侧面板并切到收件箱（它不是主区的一页） */
+function openInboxPanel(): void {
+  const panel = useBrowserStore.getState()
+  panel.setActiveTab('inbox')
+  panel.open()
 }
 
 export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): React.JSX.Element {
@@ -851,8 +859,8 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
             <div className="sb-section" data-sidebar-section="library">
               {t('sidebar.library')}
             </div>
-            {/* 收件箱：资料库的第一行，智能体上面 */}
-            <InboxRow />
+            {/* 收件箱：资料库的第一行，智能体上面；收件箱本身在右侧面板的第一个标签里 */}
+            <InboxRow onOpen={openInboxPanel} />
             {groups}
           </>
         ) : undefined

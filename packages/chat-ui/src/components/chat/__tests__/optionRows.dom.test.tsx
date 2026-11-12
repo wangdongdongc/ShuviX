@@ -24,6 +24,9 @@
  *   OR-16 没有 OptionHotkeyGuardContext（笔记本里卡片长在输入框上）→ 数字键照选，不看位置
  *   OR-17 守卫回 false → 不选、不拦；回 true → 照选
  *   OR-18 重渲染换了新守卫 → 下一次按键问新的，不问旧的
+ *   INK-4 OPTION_HOTKEY_SCOPE_ATTR 的名字；focusInOptionHotkeyScope：焦点在 body / 区域里的按钮 / 区域本身 / 区域外
+ *   INK-7 不在区域上下文里、也没有守卫的卡（笔记本抽屉）：焦点在区域里时让开，在 body 上照选；
+ *         同一张卡放进区域上下文（true）、仍没有守卫：焦点在区域里也照选
  *
  * 紧凑 = 不包宿主上下文（或给 density 'compact'）；触屏 = `ChatHostContext` 给 density 'touch'。按键在目标元素上
  * 派发（bubbles + cancelable + composed），每一下各自一个 act；dispatchEvent 回 true = 没处理，false = 被拦下。
@@ -33,7 +36,10 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import {
+  focusInOptionHotkeyScope,
+  OPTION_HOTKEY_SCOPE_ATTR,
   OptionHotkeyGuardContext,
+  OptionHotkeyScopeContext,
   OptionRow,
   useOptionHotkeys,
   type OptionRowProps
@@ -431,5 +437,86 @@ describe('useOptionHotkeys', () => {
       expect(second).toHaveBeenCalledTimes(1)
       expect(onPick).toHaveBeenCalledWith(0)
     })
+  })
+})
+
+// ─── 自带卡片的区域（收件箱面板）────────────────────────────
+
+/** body 里放一个区域：<div data-option-hotkey-scope tabindex=-1><div><button/></div></div> */
+function scopeRegion(): { region: HTMLElement; inner: HTMLButtonElement } {
+  const region = document.createElement('div')
+  region.setAttribute(OPTION_HOTKEY_SCOPE_ATTR, '')
+  region.tabIndex = -1
+  const middle = document.createElement('div')
+  const inner = document.createElement('button')
+  inner.textContent = 'in scope'
+  middle.appendChild(inner)
+  region.appendChild(middle)
+  document.body.appendChild(region)
+  return { region, inner }
+}
+
+describe('INK-4 the hotkey scope marker', () => {
+  beforeEach(() => {
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+  })
+
+  it('INK-4 the attribute name', () => {
+    expect(OPTION_HOTKEY_SCOPE_ATTR).toBe('data-option-hotkey-scope')
+  })
+
+  it('INK-4 focusInOptionHotkeyScope: body / nested button / the region itself / a button outside', () => {
+    const { region, inner } = scopeRegion()
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+
+    expect(document.activeElement).toBe(document.body)
+    expect(focusInOptionHotkeyScope()).toBe(false)
+
+    inner.focus()
+    expect(document.activeElement).toBe(inner)
+    expect(focusInOptionHotkeyScope()).toBe(true)
+
+    region.focus()
+    expect(document.activeElement).toBe(region)
+    expect(focusInOptionHotkeyScope()).toBe(true)
+
+    outside.focus()
+    expect(document.activeElement).toBe(outside)
+    expect(focusInOptionHotkeyScope()).toBe(false)
+  })
+})
+
+describe('INK-7 a card with no guard and no scope context', () => {
+  beforeEach(() => {
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+  })
+
+  it('INK-7 outside any scope context: yields while focus is in a scope region, picks from the body', () => {
+    const onPick = mountHotkeys()
+    const { inner } = scopeRegion()
+    inner.focus()
+    expect(press('1')).toBe(true)
+    expect(onPick).not.toHaveBeenCalled()
+
+    inner.blur()
+    expect(document.activeElement).toBe(document.body)
+    expect(press('1')).toBe(false)
+    expect(onPick.mock.calls).toEqual([[0]])
+  })
+
+  it('INK-7 inside a scope context (true), still no guard: picks with focus in a scope region', () => {
+    const onPick = vi.fn<(index: number) => void>()
+    render(
+      createElement(
+        OptionHotkeyScopeContext.Provider,
+        { value: true },
+        createElement(H, { count: 3, onPick })
+      )
+    )
+    const { inner } = scopeRegion()
+    inner.focus()
+    expect(press('1')).toBe(false)
+    expect(onPick.mock.calls).toEqual([[0]])
   })
 })

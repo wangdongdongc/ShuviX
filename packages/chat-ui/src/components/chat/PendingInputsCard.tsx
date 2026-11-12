@@ -2,7 +2,8 @@
  * PendingInputsCard — 对话流末尾那张等人回答的卡片（审批 / 选择题），外框与语义色在这里，内容是 PendingInputsPanel。
  *
  * 它不再钉在输入框上，所以可能在屏幕外：翻历史时的提示见 ScrollToBottomButton 的 `waiting`，数字键由这里把关 ——
- * 卡片要整张露在滚动区里（且没被悬浮输入卡片压着）才算数，否则一次按键就批准了一张没看见的卡。
+ * 卡片要整张露在滚动区里（且没被悬浮输入卡片压着）才算数，否则一次按键就批准了一张没看见的卡。焦点在右侧收件箱
+ * 面板里时它也让开（那边开着的卡归它，`useOptionHotkeys` 里统一判断）。
  */
 import { useCallback, useRef } from 'react'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -45,6 +46,7 @@ export function PendingInputsCard({
 }): React.JSX.Element | null {
   const kind = useChatStore((s) => selectActivePendingInput(s)?.kind)
   const cardRef = useRef<HTMLDivElement>(null)
+  // 焦点在收件箱面板里时数字键归那边的卡（见 OptionRows 的 OPTION_HOTKEY_SCOPE_ATTR）
   const hotkeyGuard = useCallback(
     () => !!cardRef.current && pendingCardOnScreen(cardRef.current),
     []

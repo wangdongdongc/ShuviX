@@ -25,9 +25,10 @@ export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 
 /**
  * 右侧面板激活的标签页（终端在底部栏，见 bottomPanelStore；Files/Sub-agent 在聊天区内的会话面板，
- * 见 sessionPanelStore；浏览器是独立窗口，见 browserTabsStore / browserWindowService）
+ * 见 sessionPanelStore；浏览器是独立窗口，见 browserTabsStore / browserWindowService）。
+ * 收件箱是第一个（2026-11-12 起，E1）
  */
-export type PanelTab = 'widget' | 'calendar' | 'agents'
+export type PanelTab = 'inbox' | 'widget' | 'calendar' | 'agents'
 
 const BROWSER_MIN = 320
 const BROWSER_MAX = 960

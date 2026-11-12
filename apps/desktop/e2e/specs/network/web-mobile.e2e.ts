@@ -153,7 +153,7 @@ const USAGE = { prompt: 90, completion: 10 }
 const WIDGET_ID = 'mob-widget'
 const BOT = 'mobbot'
 const REGISTRY_GROUPS = ['tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
-/** 桌面布局的资料库：没有跟踪项（2026-11-10 起它在收件箱页里；手机还没有收件箱，资料库页留着它） */
+/** 桌面布局的资料库：没有跟踪项（2026-11-10 起它在收件箱里；手机还没有收件箱，资料库页留着它） */
 const DESKTOP_REGISTRY_GROUPS = REGISTRY_GROUPS.filter((g) => g !== 'tracking')
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
 const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }

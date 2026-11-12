@@ -11,8 +11,6 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import '../../stores/sessionPanelStore'
 import {
   WelcomeView,
-  InboxPage,
-  useInboxStore,
   ChatBody,
   FilesPanel,
   MediaUrlProvider,
@@ -30,7 +28,6 @@ import { BrowserWindowButton } from './BrowserWindowButton'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 import { subscribeAgentMonitor, useAgentMonitorStore } from '../../stores/agentMonitorStore'
 import { hostMediaResolver } from '../../host/hostMedia'
-import { useTrackingAdapter } from '../../host/useTrackingAdapter'
 
 /**
  * 聊天主视图（桌面外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
@@ -48,9 +45,6 @@ interface ChatViewProps {
 export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSessionId } = useChatStore()
-  const inboxOpen = useInboxStore((s) => s.open)
-  const selectSession = useChatStore((s) => s.setActiveSessionId)
-  const trackingAdapter = useTrackingAdapter(selectSession)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   const toggleBrowser = useBrowserStore((s) => s.toggle)
@@ -254,8 +248,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         ) : undefined
       }
       contentOverride={placeholder}
-      // 收件箱开着：「没有活动会话」那一格画收件箱页（打开收件箱时活动会话已被清空，见 app-shell inboxStore）
-      welcome={inboxOpen ? <InboxPage tracking={trackingAdapter} /> : <WelcomeView />}
+      welcome={<WelcomeView />}
       renderNotebook={(path, sid) => <NotebookSessionView key={sid} path={path} sessionId={sid} />}
       conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
       overlays={

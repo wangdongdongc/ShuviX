@@ -151,7 +151,7 @@ export function InboxTrackingSection({
   }
 
   const heading = (
-    <h2 className="group/head mb-0.5 mt-5 flex h-6 items-center gap-2 pl-2 text-[12px] font-medium text-text-tertiary">
+    <h2 className="group/head mb-0.5 mt-3 flex h-6 items-center gap-2 pl-2 text-[12px] font-medium text-text-tertiary">
       <span className="min-w-0 flex-1 truncate">{t('inbox.trackingSection')}</span>
       <RowMenuButton
         className="opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100"

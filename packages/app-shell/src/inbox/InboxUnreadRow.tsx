@@ -1,7 +1,10 @@
 /**
- * 收件箱「新回复」那一节的一行（R1，docs/inbox-read-state-design.md §7；M1 起单行）：行首蓝点（这一轮出错是红点）、
+ * 收件箱「新回复」那一节的一行（R1，docs/inbox-read-state-design.md §7）：行首蓝点（这一轮出错是红点）、
  * 标题加粗、最后那张回复的一句、行尾时间；悬停时时间换成「标为已读」✓。点行 = 打开会话（来到眼前即读过）；摘录只是
  * 索引，列表里看到它不算读过。
+ *
+ * 正开着、作为新回复打开的那条（`item.held`）已经读过，只是留在原处：行首换成宿主给的那枚会话图标（`heldIcon`，
+ * 选中的样子），标题不加粗，没有 ✓。
  *
  * 摘录要读那条会话的消息：只读收件箱里列出来的前 20 条，按「会话 + 变成未读的时刻」记一次，不重复读。
  */
@@ -11,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
 import { getChatApi, RedactedText, RedactionSessionProvider } from '@shuvix/chat-ui'
 import { lastReplyText, unreadTimeLabel, type UnreadInboxItem } from './inboxItems'
-import { InboxLine, UnreadGlyph } from './InboxLine'
+import { GlyphCell, InboxLine, UnreadGlyph } from './InboxLine'
 
 /** 摘录读多少条会话：收件箱里的新回复一般没几条，读太多会把打开收件箱拖慢 */
 const EXCERPT_LIMIT = 20
@@ -44,6 +47,10 @@ export interface InboxUnreadRowProps {
   indent?: boolean
   /** 行尾的其它控件（父会话行上的子会话圆点） */
   trailing?: React.ReactNode
+  /** 这条会话正开在中间 */
+  selected?: boolean
+  /** 留着的那一条（`item.held`）行首画什么 */
+  heldIcon?: React.ReactNode
   onOpen: (sessionId: string) => void
   /** 宿主给不出「标为已读」（没有 `session.markRead`）时不传，✓ 不出现 */
   onMarkRead?: (sessionId: string) => void
@@ -55,31 +62,39 @@ export function InboxUnreadRow({
   now,
   indent = false,
   trailing,
+  selected = false,
+  heldIcon,
   onOpen,
   onMarkRead
 }: InboxUnreadRowProps): React.JSX.Element {
   const { t } = useTranslation()
   const { session, unread } = item
+  const held = !!item.held
   const excerpt = excerpts[excerptKey(item)]
   return (
     <RedactionSessionProvider sessionId={session.id}>
       <InboxLine
         attrs={{
           'data-inbox-unread': session.id,
-          'data-inbox-failed': unread.failed ? '' : undefined
+          'data-inbox-failed': unread.failed ? '' : undefined,
+          'data-inbox-held': held ? '' : undefined
         }}
         leading={
-          <UnreadGlyph
-            failed={!!unread.failed}
-            label={unread.failed ? t('inbox.failed') : t('inbox.unreadSection')}
-          />
+          held && heldIcon ? (
+            <GlyphCell>{heldIcon}</GlyphCell>
+          ) : (
+            <UnreadGlyph
+              failed={!!unread.failed}
+              label={unread.failed ? t('inbox.failed') : t('inbox.unreadSection')}
+            />
+          )
         }
         title={<RedactedText text={session.title} />}
-        titleClassName="font-semibold text-text-primary"
+        titleClassName={held ? 'text-text-primary' : 'font-semibold text-text-primary'}
         preview={excerpt ? <RedactedText text={excerpt} /> : null}
         meta={unreadTimeLabel(unread.since, now)}
         hoverMeta={
-          onMarkRead ? (
+          onMarkRead && !held ? (
             <button
               type="button"
               data-inbox-mark-read={session.id}
@@ -94,6 +109,7 @@ export function InboxUnreadRow({
         }
         trailing={trailing}
         indent={indent}
+        selected={selected}
         onOpen={() => onOpen(session.id)}
       />
     </RedactionSessionProvider>

@@ -70,7 +70,11 @@ export interface InboxAnswering {
 export function useInboxAnswering(
   families: InboxFamily[],
   pending: Record<string, InputRequest[]> | null,
-  onSent?: (sessionTitle: string) => void
+  onSent?: (sessionTitle: string) => void,
+  /**
+   * J / K / ⏎ 只在焦点落在这个元素里时生效：收件箱在会话旁边的面板里，按键不该从会话那边被它截走
+   */
+  scope?: React.RefObject<HTMLElement | null>
 ): InboxAnswering {
   const { t } = useTranslation()
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set())
@@ -136,6 +140,8 @@ export function useInboxAnswering(
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.defaultPrevented || e.repeat || e.isComposing) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
+      const root = scope?.current
+      if (root && !(e.target instanceof Node && root.contains(e.target))) return
       if (isEditableTarget(e)) return
       const key = e.key.toLowerCase()
       if (key === 'enter') {
@@ -150,7 +156,7 @@ export function useInboxAnswering(
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [items.length, openKey, step])
+  }, [items.length, openKey, step, scope])
 
   const respond = async (ask: InboxAsk, response: InputResponse): Promise<void> => {
     const result = await getSessionChannelApi().agent.respondToInput({
@@ -219,6 +225,8 @@ export interface InboxAskRowProps {
   waited: string
   /** 挂在父会话下面 */
   indent?: boolean
+  /** 这条会话正开在中间 */
+  selected?: boolean
   onOpen: () => void
 }
 
@@ -226,6 +234,7 @@ export function InboxAskRow({
   ask,
   waited,
   indent = false,
+  selected = false,
   onOpen
 }: InboxAskRowProps): React.JSX.Element {
   const { session, request } = ask
@@ -238,6 +247,7 @@ export function InboxAskRow({
         preview={<AskSummary request={request} />}
         meta={waited}
         indent={indent}
+        selected={selected}
         onOpen={onOpen}
       />
     </RedactionSessionProvider>

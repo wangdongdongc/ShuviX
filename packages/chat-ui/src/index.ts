@@ -63,6 +63,12 @@ export { BotAvatar } from './components/common/BotAvatar'
 export { StreamingFooter } from './components/chat/StreamingFooter'
 export { PendingInputsPanel } from './components/chat/PendingInputsPanel'
 export { InputRequestForm } from './components/chat/InputRequestForm'
+export {
+  OptionHotkeyGuardContext,
+  OptionHotkeyScopeContext,
+  OPTION_HOTKEY_SCOPE_ATTR,
+  focusInOptionHotkeyScope
+} from './components/chat/inputs/OptionRows'
 export type { InputRequestFormProps } from './components/chat/InputRequestForm'
 export { PendingInputsDrawer } from './components/chat/PendingInputsDrawer'
 export { ThreadDrawer } from './components/chat/ThreadDrawer'

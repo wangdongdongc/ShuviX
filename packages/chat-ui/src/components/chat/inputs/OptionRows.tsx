@@ -8,6 +8,10 @@
  * 桌面上数字键 1–9 直接选对应的行（`useOptionHotkeys`），但只在焦点不在任何可编辑元素里时：输入框里
  * 打的「1」是要发给 AI 的字，审批卡片绝不能被一次按键顺手放行。卡片在对话流里时还要看得见才算：往上翻历史时
  * 按下的「1」不能批准一张没看见的卡（`OptionHotkeyGuardContext`）。
+ *
+ * 同一屏上可能有两张卡（对话里或笔记本抽屉里一张，右侧收件箱面板里一张）：自带卡片的区域（收件箱面板）带
+ * `OPTION_HOTKEY_SCOPE_ATTR` 并给里面的卡 `OptionHotkeyScopeContext = true`。焦点在这种区域里时，数字键只归区域里的卡，
+ * 区域外的卡一律让开（`useOptionHotkeys` 统一判断，不靠各处的 guard 记得）。
  */
 import { Check } from 'lucide-react'
 import { createContext, useContext, useEffect, useRef } from 'react'
@@ -129,6 +133,18 @@ function isEditableTarget(e: KeyboardEvent): boolean {
  */
 export const OptionHotkeyGuardContext = createContext<(() => boolean) | null>(null)
 
+/** 自带询问卡片的区域（收件箱面板）的标记：焦点在这种区域里时，数字键只归区域里的卡 */
+export const OPTION_HOTKEY_SCOPE_ATTR = 'data-option-hotkey-scope'
+
+/** 这张卡长在一个自带卡片的区域里（区域给 true）：焦点进了别的区域时区域外的卡才让开，区域里的卡由区域自己的 guard 管 */
+export const OptionHotkeyScopeContext = createContext(false)
+
+/** 焦点此刻在不在某个自带卡片的区域里（对话流里的卡片据此让开） */
+export function focusInOptionHotkeyScope(): boolean {
+  const active = typeof document === 'undefined' ? null : document.activeElement
+  return !!active && active.closest(`[${OPTION_HOTKEY_SCOPE_ATTR}]`) !== null
+}
+
 /**
  * 数字键选行（只在桌面紧凑档）：按 1–9 等于点第 n 行。焦点在可编辑元素里、带修饰键、输入法组字中、
  * 长按连发都不算。`onPick` 每次渲染都可能是新函数，用 ref 读最新的，监听只随行数与开关重装。
@@ -136,11 +152,14 @@ export const OptionHotkeyGuardContext = createContext<(() => boolean) | null>(nu
 export function useOptionHotkeys(count: number, onPick: (index: number) => void): void {
   const touch = useChatDensity() === 'touch'
   const guard = useContext(OptionHotkeyGuardContext)
+  const inScope = useContext(OptionHotkeyScopeContext)
   const pickRef = useRef(onPick)
   const guardRef = useRef(guard)
+  const inScopeRef = useRef(inScope)
   useEffect(() => {
     pickRef.current = onPick
     guardRef.current = guard
+    inScopeRef.current = inScope
   })
   useEffect(() => {
     if (touch || count === 0) return
@@ -151,6 +170,8 @@ export function useOptionHotkeys(count: number, onPick: (index: number) => void)
       if (!/^[1-9]$/.test(e.key)) return
       const index = Number(e.key) - 1
       if (index >= count) return
+      // 焦点在收件箱面板这类区域里：数字键归区域里的卡，区域外的（对话里的、笔记本抽屉里的）让开
+      if (!inScopeRef.current && focusInOptionHotkeyScope()) return
       if (guardRef.current && !guardRef.current()) return
       e.preventDefault()
       pickRef.current(index)

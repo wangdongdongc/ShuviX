@@ -7,6 +7,8 @@
  *   PC-2/3 没有询问 → 不画；ask / choice 的外框；
  *   PC-4..11 数字键的把关（位置是桩出来的矩形，每次按键那一刻才量）；
  *   PC-12 面板的两种摆法。
+ *   INK-5 焦点在自带卡片的区域（收件箱面板，`data-option-hotkey-scope`）里：这张卡让开；回到 body 才答
+ *   INK-6 旁边真有一个区域（区域上下文 + 「焦点在区域里」的守卫）：焦点在区域里时数字键归区域里的卡，在 body 上归这张
  *
  * jsdom 没有布局：矩形桩在 getBoundingClientRect 上；`--chat-input-h` 真写在祖先上，但 jsdom 的 getComputedStyle
  * 不继承自定义属性，这里替它走一遍祖先链。状态经 applySessionView 写，面板在 effect 里建草稿，挂上之后等一拍。
@@ -32,6 +34,12 @@ import { V, resetStore, store } from '../../../__tests__/support/views'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 import { PendingInputsCard, isCardOnScreen } from '../PendingInputsCard'
 import { PendingInputsPanel } from '../PendingInputsPanel'
+import {
+  OPTION_HOTKEY_SCOPE_ATTR,
+  OptionHotkeyGuardContext,
+  OptionHotkeyScopeContext,
+  useOptionHotkeys
+} from '../inputs/OptionRows'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -299,5 +307,75 @@ describe('卡片随视图走', () => {
     await mount([ASK])
     act(() => applySessionView('s1', V('s1', { run: { state: 'idle' }, asks: [] })))
     expect(container.querySelector('[data-pending-card]')).toBeNull()
+  })
+})
+
+describe('焦点在收件箱面板这类区域里', () => {
+  it('INK-5 focus on a button inside a scope region, or on the region itself: the card yields; on the body it answers', async () => {
+    await mount([ASK])
+    const region = document.createElement('div')
+    region.setAttribute(OPTION_HOTKEY_SCOPE_ATTR, '')
+    region.tabIndex = -1
+    const inner = document.createElement('button')
+    region.appendChild(inner)
+    document.body.appendChild(region)
+
+    inner.focus()
+    expect(document.activeElement).toBe(inner)
+    expect(press('1', inner)).toBe(true)
+    expect(onResponse).not.toHaveBeenCalled()
+
+    region.focus()
+    expect(document.activeElement).toBe(region)
+    expect(press('1', region)).toBe(true)
+    expect(onResponse).not.toHaveBeenCalled()
+
+    region.blur()
+    expect(document.activeElement).toBe(document.body)
+    expect(press('1')).toBe(false)
+    expect(onResponse).toHaveBeenCalledTimes(1)
+  })
+
+  it('INK-6 a real region beside the card: digits go to the region while focus is in it, to the card from the body', async () => {
+    await mount([ASK])
+    const regionPick = vi.fn<(index: number) => void>()
+    function RegionCard(): null {
+      useOptionHotkeys(2, regionPick)
+      return null
+    }
+    const region = document.createElement('div')
+    region.setAttribute(OPTION_HOTKEY_SCOPE_ATTR, '')
+    document.body.appendChild(region)
+    const regionRoot = createRoot(region)
+    try {
+      act(() => {
+        regionRoot.render(
+          createElement(
+            OptionHotkeyScopeContext.Provider,
+            { value: true },
+            createElement(
+              OptionHotkeyGuardContext.Provider,
+              { value: () => region.contains(document.activeElement) },
+              createElement(RegionCard),
+              createElement('button', { type: 'button', 'data-region-button': '' }, 'b')
+            )
+          )
+        )
+      })
+      const button = region.querySelector<HTMLButtonElement>('[data-region-button]')!
+      button.focus()
+      expect(document.activeElement).toBe(button)
+      expect(press('1', button)).toBe(false)
+      expect(regionPick.mock.calls).toEqual([[0]])
+      expect(onResponse).not.toHaveBeenCalled()
+
+      button.blur()
+      expect(document.activeElement).toBe(document.body)
+      expect(press('1')).toBe(false)
+      expect(onResponse).toHaveBeenCalledTimes(1)
+      expect(regionPick).toHaveBeenCalledTimes(1)
+    } finally {
+      act(() => regionRoot.unmount())
+    }
   })
 })

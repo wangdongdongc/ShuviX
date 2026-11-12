@@ -1,14 +1,13 @@
 /**
- * 收件箱开着没有，以及它的数据来源（第一版：此刻在运行的会话，见 inboxItems.ts）。
+ * 收件箱的数据来源（此刻在运行 / 在等你 / 有新回复的会话，见 inboxItems.ts），以及「正开着、作为新回复打开的那条」。
  *
- * 打开收件箱 = 把活动会话清空、再标记打开：主区在「没有活动会话」时本来就画欢迎页那一格，桌面把那一格换成
- * 收件箱页（顶栏、侧栏开关都照旧）；侧栏里也就只有收件箱这一行是选中的。之后**任何**途径选中一条会话
- * （点侧栏、点收件箱里的条目、通知、会话链接、新建会话）都会把活动会话设成非空 —— 这里订阅着它，收件箱随之关上，
- * 不必每个入口各自记得关。
+ * 收件箱在右侧面板的第一个标签里（2026-11-12 用户选定 E1），与会话并排常驻：点一行 = 中间打开那条会话，收件箱不动。
+ * 打开即读过，作为新回复打开的那一行要是立刻消失，列表会在眼前跳一下 —— 它留在原处（`useHeldUnread`），切走才离开。
  */
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
+import type { SessionUnread } from '@shuvix/chat-protocol/sessionUnread'
 import {
   selectAllPendingCounts,
   selectBgRunKinds,
@@ -18,41 +17,65 @@ import {
   useChatStore,
   useUnreadStore
 } from '@shuvix/chat-ui'
-import { inboxSectionsOf, type InboxSections } from './inboxItems'
+import { inboxSectionsOf, type InboxInput, type InboxSections } from './inboxItems'
 
-interface InboxState {
-  open: boolean
-  /** 打开收件箱（活动会话随之清空） */
-  openInbox: () => void
-  closeInbox: () => void
+type Held = NonNullable<InboxInput['held']>
+
+interface InboxHoldState {
+  held: Held | null
+  /** 留住这一条（打开它的那一刻它是新回复） */
+  hold: (sessionId: string, unread: SessionUnread) => void
+  release: () => void
 }
 
 /**
- * 选中了某条会话 → 收件箱关上（见文件头）。第一次打开收件箱时才订阅：模块加载时不碰 chat-ui 的 store
- * （app-shell 的 DOM 测试整个替换掉 `@shuvix/chat-ui`，替身上没有 subscribe）
+ * 选中换到别的会话 → 放掉留着的那一条。挂在 store 上而不是面板的 effect 里：右侧面板只在开着时挂载，
+ * 面板收着时换了会话、再换回来，留着的那条不该复活。第一次 `hold` 时才订阅：模块加载时不碰 chat-ui 的 store
+ * （app-shell 的 DOM 测试整个替换掉 `@shuvix/chat-ui`，替身上的 subscribe 可能是空的）
  */
 let watchingSelection = false
 function watchSelection(): void {
-  if (watchingSelection) return
+  if (watchingSelection || typeof useChatStore.subscribe !== 'function') return
   watchingSelection = true
   useChatStore.subscribe((state, prev) => {
-    if (!state.activeSessionId || state.activeSessionId === prev.activeSessionId) return
-    if (useInboxStore.getState().open) useInboxStore.getState().closeInbox()
+    if (state.activeSessionId === prev.activeSessionId) return
+    const held = useInboxHoldStore.getState().held
+    if (held && held.sessionId !== state.activeSessionId) useInboxHoldStore.getState().release()
   })
 }
 
-export const useInboxStore = create<InboxState>((set) => ({
-  open: false,
-  openInbox: () => {
+/** 留住的那一条：模块级，面板收起再展开、换窗口布局都还在 */
+export const useInboxHoldStore = create<InboxHoldState>((set) => ({
+  held: null,
+  hold: (sessionId, unread) => {
     watchSelection()
-    useChatStore.getState().setActiveSessionId(null)
-    set({ open: true })
+    set({ held: { sessionId, unread } })
   },
-  closeInbox: () => set({ open: false })
+  release: () => set({ held: null })
 }))
 
-/** 收件箱的两节（侧栏那一行的计数与收件箱页共用这一份） */
-export function useInboxSections(): InboxSections {
+/**
+ * 正开着、作为新回复打开的那条会话（给 `inboxSectionsOf` 的 `held`）。选中换到一条有未读的会话就留住它；
+ * 换到别的、或者没有选中 → 放掉。打开它之后未读被主进程清掉不影响 —— 留住的是打开那一刻的未读。
+ * 收件箱的行在点开时自己也会先 `hold`（未读清得比这里的 effect 还快时，靠那一步）
+ */
+export function useHeldUnread(): Held | undefined {
+  const activeId = useChatStore((s) => s.activeSessionId)
+  const live = useUnreadStore((s) => (activeId ? s.unread[activeId] : undefined))
+  const held = useInboxHoldStore((s) => s.held)
+  useEffect(() => {
+    const store = useInboxHoldStore.getState()
+    if (activeId && live) store.hold(activeId, live)
+    else if (store.held && store.held.sessionId !== activeId) store.release()
+  }, [activeId, live])
+  // 面板没挂着的时候换了会话、effect 还没来得及放：只认此刻开着的那一条
+  return held && held.sessionId === activeId ? held : undefined
+}
+
+/**
+ * 收件箱的三节（侧栏那一行的计数与收件箱面板共用这一份）。`held` 只有面板给：侧栏的数字只数真的没看的
+ */
+export function useInboxSections(held?: Held): InboxSections {
   const sessions = useChatStore((s) => s.sessions)
   const streaming = useChatStore(selectStreamingSessions)
   const askCounts = useChatStore(selectAllPendingCounts)
@@ -78,8 +101,9 @@ export function useInboxSections(): InboxSections {
         askCounts,
         backgroundRunKinds,
         backgroundCommands,
-        unread
+        unread,
+        held
       }),
-    [sessions, streaming, askCounts, backgroundRunKinds, backgroundCommands, unread]
+    [sessions, streaming, askCounts, backgroundRunKinds, backgroundCommands, unread, held]
   )
 }

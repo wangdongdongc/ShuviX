@@ -90,6 +90,10 @@ vi.mock('@shuvix/chat-ui', async () => {
   }
 })
 
+// 右侧面板的 store 牵着 app-shell 的 usePanelStore（这里整份换成了替身）：侧栏只用它打开收件箱那一格
+vi.mock('../../../stores/browserStore', () => ({
+  useBrowserStore: { getState: () => ({ open: () => {}, setActiveTab: () => {} }) }
+}))
 vi.mock('../ProjectEditDialog', () => ({ ProjectEditDialog: () => null }))
 vi.mock('../SkillDirDialog', () => ({ SkillDirDialog: () => null }))
 
