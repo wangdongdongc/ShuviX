@@ -144,6 +144,14 @@ describe('GoalBar', () => {
     expect(state).not.toContain('$')
     expect(container.querySelector('[data-experimental="goal"]')).not.toBeNull()
     expect(actionNames()).toEqual(['pause', 'edit', 'clear'])
+    // 图标按钮：没有可见文字，名字在 aria-label / title 里
+    for (const name of actionNames()) {
+      expect(action(name).textContent).toBe('')
+      expect(action(name).querySelector('svg')).not.toBeNull()
+    }
+    expect(action('pause').getAttribute('aria-label')).toBe('Pause')
+    expect(action('pause').getAttribute('title')).toBe('Pause')
+    expect(action('clear').getAttribute('aria-label')).toBe('Clear')
 
     await click(action('pause'))
     expect(calls()).toEqual([{ sessionId: SID, action: { type: 'pause' } }])
@@ -324,12 +332,12 @@ describe('GoalBar', () => {
     })
   })
 
-  it('GB-9 触屏：按钮至少 40px 高', async () => {
+  it('GB-9 触屏：图标按钮 40px 见方', async () => {
     setGoal(goal({ status: 'paused', pauseReason: 'user' }))
     await mount('touch')
     expect(actionNames()).toEqual(['resume', 'edit', 'clear'])
     for (const name of actionNames()) {
-      expect(action(name).className).toContain('min-h-[40px]')
+      expect(action(name).className).toContain('w-10 h-10')
     }
   })
 })

@@ -5,7 +5,7 @@
  * 控制按钮；任务列表搬去对话末尾是因为它是一次运行的进度，目标栏不是）。形态与 QueuePanel 同源：自身无边框 / 圆角 /
  * 底色，只用一条 border-b 与下方分隔。
  *
- *  - 一行：状态记号 + 状态 · 第几轮 / 上限 · 时长（没有钱：ShuviX 不算花费），行尾是按钮：
+ *  - 一行：状态记号 + 状态 · 第几轮 / 上限 · 时长（没有钱：ShuviX 不算花费），行尾是图标按钮（名字在悬停提示里）：
  *      进行中 → 暂停 / 编辑 / 清除；暂停中 → 继续（轮数、时长撞线的另给「调高上限并继续」）/ 编辑 / 清除；
  *      达成 / 做不到 → 沿用原文再设一次 / 移除。
  *  - 第二行：最近一次判定（结论 + 理由），点开看完整原文、建议的下一步、各项上限。
@@ -14,11 +14,24 @@
  *    `/goal` 也打开它（没有目标时是「设新目标」）。
  *
  * 所有操作走 `agent.goalAct`，被拒时就地显示宿主给的那句话。渠道端（Chrome 侧边栏）没有宿主 API：只读，不出按钮。
- * 桌面、手机、远程网页是同一个组件；触屏密度下按钮 40px 高、单独一行。
+ * 桌面、手机、远程网页是同一个组件；触屏密度下图标按钮 40px 见方、单独一行靠右。
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronsUp,
+  ChevronUp,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  RotateCcw,
+  Trash2,
+  X,
+  type LucideIcon
+} from 'lucide-react'
 import {
   DEFAULT_GOAL_LIMITS,
   GOAL_OBJECTIVE_MAX_CHARS,
@@ -90,17 +103,12 @@ export function GoalBar({ sessionId }: { sessionId: string }): React.JSX.Element
     useChatStore.getState().openGoalEditor(sessionId, mode)
   }
 
-  const btn = (primary: boolean): string =>
-    `flex-shrink-0 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-      touch ? 'min-h-[40px] px-3.5 text-[13px]' : 'px-2.5 py-1 text-[11px]'
-    } ${
-      primary
-        ? 'bg-accent text-white hover:bg-accent-hover'
-        : 'border border-border-secondary/60 text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-    }`
+  // 图标按钮：不抢状态行的眼（用户 2026-11-12：文字按钮太显眼）；名字放在 title / aria-label 里。
+  // 「主」操作（暂停后的继续、调高并继续、再设一次）只用强调色的图标区分，不铺底色
   const button = (
     action: string,
     label: string,
+    Icon: LucideIcon,
     onClick: () => void,
     primary = false
   ): React.JSX.Element => (
@@ -110,9 +118,17 @@ export function GoalBar({ sessionId }: { sessionId: string }): React.JSX.Element
       data-goal-action={action}
       disabled={busy}
       onClick={onClick}
-      className={btn(primary)}
+      aria-label={label}
+      title={label}
+      className={`flex-shrink-0 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+        touch ? 'w-10 h-10' : 'w-6 h-6'
+      } ${
+        primary
+          ? 'text-accent hover:bg-accent/10'
+          : 'text-text-tertiary hover:bg-bg-hover hover:text-text-primary'
+      }`}
     >
-      {label}
+      <Icon size={touch ? 18 : 14} />
     </button>
   )
 
@@ -120,30 +136,45 @@ export function GoalBar({ sessionId }: { sessionId: string }): React.JSX.Element
   if (goal && canAct && !editor) {
     if (goal.status === 'active') {
       actions = [
-        button('pause', t('goal.action.pause'), () => void run({ type: 'pause' })),
-        button('edit', t('goal.action.edit'), () => openEditor('edit')),
-        button('clear', t('goal.action.clear'), () => void run({ type: 'clear' }))
+        button('pause', t('goal.action.pause'), Pause, () => void run({ type: 'pause' })),
+        button('edit', t('goal.action.edit'), Pencil, () => openEditor('edit')),
+        button('clear', t('goal.action.clear'), Trash2, () => void run({ type: 'clear' }))
       ]
     } else if (goal.status === 'paused') {
       // 撞在上限上暂停的：宿主不让直接继续（上限还在越线），先调高再继续；直接点「继续」被拒时就地给那句话
       const atLimit = goal.pauseReason === 'turns' || goal.pauseReason === 'wall-clock'
       actions = [
         ...(atLimit
-          ? [button('raise', t('goal.action.raiseAndResume'), () => openEditor('raise'), true)]
+          ? [
+              button(
+                'raise',
+                t('goal.action.raiseAndResume'),
+                ChevronsUp,
+                () => openEditor('raise'),
+                true
+              )
+            ]
           : []),
-        button('resume', t('goal.action.resume'), () => void run({ type: 'resume' }), !atLimit),
-        button('edit', t('goal.action.edit'), () => openEditor('edit')),
-        button('clear', t('goal.action.clear'), () => void run({ type: 'clear' }))
+        button(
+          'resume',
+          t('goal.action.resume'),
+          Play,
+          () => void run({ type: 'resume' }),
+          !atLimit
+        ),
+        button('edit', t('goal.action.edit'), Pencil, () => openEditor('edit')),
+        button('clear', t('goal.action.clear'), Trash2, () => void run({ type: 'clear' }))
       ]
     } else {
       actions = [
         button(
           'set-again',
           t('goal.action.setAgain'),
+          RotateCcw,
           () => void run({ type: 'set', objective: goal.objective }),
           true
         ),
-        button('dismiss', t('goal.action.dismiss'), () => void run({ type: 'clear' }))
+        button('dismiss', t('goal.action.dismiss'), X, () => void run({ type: 'clear' }))
       ]
     }
   }
@@ -185,7 +216,7 @@ export function GoalBar({ sessionId }: { sessionId: string }): React.JSX.Element
             </button>
             {actions.length > 0 && (
               <div
-                className={`flex items-center ${touch ? 'gap-2 flex-wrap pb-1' : 'gap-1.5'}`}
+                className={`flex items-center ${touch ? 'justify-end gap-1 pb-1' : 'gap-0.5'}`}
                 data-goal-actions=""
               >
                 {actions}
