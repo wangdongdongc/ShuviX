@@ -34,6 +34,11 @@ Keep this list current — it's what makes future merges predictable.
   configured, `openCellMenu` delegates presentation to it (we render a native OS menu with
   localized labels in the app); otherwise the built-in DOM menu is unchanged. Exported types:
   `TableMenuItem`, `TableMenuItemId`, `TableMenuRenderer`. Good upstream PR candidate.
+- `src/table-widget.ts` — **cell keydown skips keys pressed during an IME composition**
+  (2026-11-12, upstreamable): the handler returns first on `event.isComposing ||
+  event.keyCode === 229`. Enter / Tab move to the next cell, and the Enter that confirms pinyin
+  was taken as that move: focus left mid-composition, the pinyin was committed in the edited
+  cell and typed again into the next one. Covered by `table-widget-dom.test.tsx`.
 
 - `src/mermaid-blocks.ts` — **ShuviX-added file** (not upstream): mermaid live preview widget +
   the `renderMermaid` façade (lazy module load, theme-keyed SVG cache, serialized `initialize`),

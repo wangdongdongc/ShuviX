@@ -161,3 +161,85 @@ describe('table widget DOM reconcile', () => {
     expect(view.state.doc.toString()).toBe(TABLE); // text actually reverted
   });
 });
+
+// Enter / Tab move between cells, but not while an input method is
+// composing: there Enter confirms the typed pinyin and must stay with the
+// IME. Moving focus mid-composition committed the pinyin in the cell being
+// edited and typed it a second time into the next one.
+describe('table cell keys during IME composition', () => {
+  function sources(host: HTMLElement): HTMLElement[] {
+    return Array.from(host.querySelectorAll<HTMLElement>('.cm-atomic-table-cell-source'));
+  }
+
+  function press(target: HTMLElement, init: KeyboardEventInit): KeyboardEvent {
+    const ev = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+    act(() => {
+      target.dispatchEvent(ev);
+    });
+    return ev;
+  }
+
+  it('Enter outside a composition moves to the next cell', () => {
+    const { host } = mount(TABLE);
+    const cells = sources(host);
+    act(() => cells[2].focus());
+    const ev = press(cells[2], { key: 'Enter' });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(cells[3]);
+  });
+
+  it('Enter that confirms a composition stays in the cell (Chromium: isComposing)', () => {
+    const { host, view } = mount(TABLE);
+    const cells = sources(host);
+    act(() => {
+      cells[2].focus();
+      cells[2].dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      cells[2].textContent = '1nihao';
+      cells[2].dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    });
+    // Nothing reaches the document while composing.
+    expect(view.state.doc.toString()).toBe(TABLE);
+
+    const ev = press(cells[2], { key: 'Enter', isComposing: true, keyCode: 229 });
+    expect(ev.defaultPrevented).toBe(false); // left to the input method
+    expect(document.activeElement).toBe(cells[2]);
+
+    act(() => {
+      cells[2].dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'nihao' }));
+    });
+    expect(document.activeElement).toBe(cells[2]);
+    expect(view.state.doc.toString()).toContain('| 1nihao | 2 |');
+    // The confirmed text landed once, in the edited cell only.
+    expect(cellTexts(host)).toEqual(['A', 'B', '1nihao', '2', '3', '4']);
+
+    // The next, ordinary Enter moves on as before.
+    press(cells[2], { key: 'Enter' });
+    expect(document.activeElement).toBe(sources(host)[3]);
+  });
+
+  it('Enter right after compositionend stays in the cell (Safari: keyCode 229 only)', () => {
+    const { host } = mount(TABLE);
+    const cells = sources(host);
+    act(() => {
+      cells[2].focus();
+      cells[2].dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      cells[2].textContent = '1nihao';
+      cells[2].dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'nihao' }));
+    });
+    const ev = press(cells[2], { key: 'Enter', isComposing: false, keyCode: 229 });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(cells[2]);
+  });
+
+  it('Tab during a composition is left to the input method', () => {
+    const { host } = mount(TABLE);
+    const cells = sources(host);
+    act(() => {
+      cells[2].focus();
+      cells[2].dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    });
+    const ev = press(cells[2], { key: 'Tab', isComposing: true, keyCode: 229 });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(cells[2]);
+  });
+});

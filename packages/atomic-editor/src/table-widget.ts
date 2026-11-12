@@ -1059,6 +1059,15 @@ function makeCell(
   source.addEventListener('blur', () => clearActiveMarksInSource(source));
 
   source.addEventListener('keydown', (event) => {
+    // Keys pressed during an IME composition belong to the input method:
+    // Enter confirms the typed letters (pinyin as Latin text), Tab and the
+    // arrows pick candidates. Treating that Enter as "next cell" moved
+    // focus mid-composition, which committed the pinyin in this cell AND
+    // typed it again into the cell that took focus. `isComposing` covers
+    // Chromium / Firefox; Safari ends the composition before this keydown,
+    // so there only the legacy `keyCode === 229` marks it.
+    if (event.isComposing || event.keyCode === 229) return;
+
     // Enter mirrors Tab — advance to the next cell (appending a row past
     // the last one) instead of inserting a line break a single-line cell
     // can't represent. Shift reverses direction for both.
