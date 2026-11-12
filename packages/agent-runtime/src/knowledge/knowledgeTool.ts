@@ -13,6 +13,11 @@
  *
  * 只是约定，不是卡点（2026-11-08 裁决）：非管理员经文件工具或命令直接碰库目录，不归这里管。
  *
+ * **迁移（2026-11-11，docs/project-split-design.md §5）**：拆分项目时把另一个项目的项目库里的条目迁进本会话的库。
+ * 两样新东西：`project` 参数 —— `list` / `search` / `read` 带上它，看的就是那个项目的库（只读，宿主过一次门）；
+ * `migrate` —— 宿主读出点名条目的原文交给**目标库**的管理员（模型不重抄正文），它逐条决定收不收；收下的，宿主从
+ * 源库删掉。管理员照旧只动自己那个库。宿主不注入 `resolveProjectBase`（扩展端）则两样都不可用。
+ *
  * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索 / 管理员派发全部注入。
  */
 import { Type } from 'typebox'
@@ -36,7 +41,13 @@ import {
   type KnowledgeNote
 } from './conceptFile'
 import { escapesBundle, normalizeBundlePath } from './bundlePaths'
-import { isReservedFile, validateKnowledgeText, type BundleFile } from './validate'
+import { extractConceptLinks } from './okfCodec'
+import {
+  isReservedFile,
+  resolveLinkTarget,
+  validateKnowledgeText,
+  type BundleFile
+} from './validate'
 import {
   stampKnowledgeReview,
   type KnowledgeAdminOutcome,
@@ -46,8 +57,16 @@ import {
 
 export const KNOWLEDGE_TOOL_NAME = 'knowledge'
 
-const ACTIONS = ['bases', 'search', 'list', 'read', 'submit'] as const
+const ACTIONS = ['bases', 'search', 'list', 'read', 'submit', 'migrate'] as const
 export type KnowledgeAction = (typeof ACTIONS)[number]
+
+/** 一次 `migrate` 最多点名多少条：每条的原文都进管理员那一轮的提示词，它还要逐条安放 */
+export const KNOWLEDGE_MIGRATE_MAX_ENTRIES = 10
+/** `migrate` 的目标库不对时补的一句：条目只能迁进发起迁移的那条会话自己的库 */
+const MIGRATE_TARGET_HINT =
+  '"migrate" brings entries into one of this session\'s own bases ("bases" lists them). To bring them into another project\'s base, the user asks from a session of that project.'
+/** 一次 `migrate` 交给管理员的原文总量上限（字节） */
+const MIGRATE_MAX_BYTES = 200 * 1024
 
 export const KnowledgeParamsSchema = Type.Object({
   action: Type.Unsafe<KnowledgeAction>({
@@ -58,7 +77,7 @@ export const KnowledgeParamsSchema = Type.Object({
   base: Type.Optional(
     Type.String({
       description:
-        'A name from "bases". Required for "list", "read" and "submit"; "search" without it covers every base.'
+        'A name from "bases". Required for "list", "read", "submit" and "migrate" (where the entries go); "search" without it covers every base.'
     })
   ),
   query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
@@ -66,6 +85,17 @@ export const KnowledgeParamsSchema = Type.Object({
     Type.String({
       description:
         'An entry\'s path inside its base, as "search" and "list" give it. For "read": the entry to read. For "submit": the entry the submission corrects or extends, if any.'
+    })
+  ),
+  project: Type.Optional(
+    Type.String({
+      description:
+        'Another project, by its name: its own knowledge base. With "list", "search" or "read" it takes the place of `base`. With "migrate" it is the project the entries come from.'
+    })
+  ),
+  entries: Type.Optional(
+    Type.Array(Type.String(), {
+      description: `For "migrate": the entries to bring over (at most ${KNOWLEDGE_MIGRATE_MAX_ENTRIES}), each by its path inside that project's base; a folder path takes every entry under it, and "/" is the whole base.`
     })
   ),
   content: Type.Optional(
@@ -87,6 +117,8 @@ export interface KnowledgeToolParams {
   base?: string
   query?: string
   entry?: string
+  project?: string
+  entries?: string[]
   content?: string
   offset?: number
   limit?: number
@@ -104,7 +136,10 @@ Actions:
 - "search": find entries by free text (\`query\`); leave \`base\` out to search every base. Only titles, descriptions, tags, types and headings are indexed, not the prose — pick by title and description, then "read" the entry.
 - "list": list every entry in one base.
 - "read": read one entry (\`base\`, \`entry\`); a long one pages with \`offset\` and \`limit\` (lines). A link inside an entry that starts with "/" names another entry of the same base.
-- "submit": hand the base's librarian something worth looking up again (\`content\`, markdown): the subject, what holds, and where each claim comes from (a path, URL or commit). When it corrects or extends an entry that "search", "list" or "read" showed you, name that \`entry\`. The librarian decides how the base records it — a new entry, a change to existing ones, or nothing — and says what it did.`
+- "submit": hand the base's librarian something worth looking up again (\`content\`, markdown): the subject, what holds, and where each claim comes from (a path, URL or commit). When it corrects or extends an entry that "search", "list" or "read" showed you, name that \`entry\`. The librarian decides how the base records it — a new entry, a change to existing ones, or nothing — and says what it did.
+- "migrate": bring entries of another project's own base into one of this session's bases — \`project\` is the project they come from, \`entries\` their paths there, \`base\` where they go (a name from "bases"). ShuviX hands the librarian the entries as they are; do not copy their text. The librarian takes each one in, merges it or turns it down, and the ones it took are removed from the other project's base.
+
+To see what another project's base holds — to choose what to migrate — pass \`project\` with "list", "search" or "read" in place of \`base\`. The user is asked before another project's base is read or changed.`
 
 /** 一个库都没启用时对 agent 说的话 —— 别让它以为是自己参数写错了 */
 const NO_BASES =
@@ -199,8 +234,40 @@ export interface KnowledgeToolDeps {
     /** 这次调用的 scope（同 `actor` 的入参） */
     call: ToolCallScope | undefined
   ) => void | Promise<void>
+  /**
+   * 另一个项目的项目库（`project` 参数）：按项目名解析。宿主不注入（扩展端）则 `project` 与 `migrate` 不可用。
+   * 解析不出（没有这个项目、重名、就是本会话自己的项目）返回一句可读的 error。
+   */
+  resolveProjectBase?: (project: string) => Promise<KnowledgeBundleTarget | { error: string }>
+  /**
+   * 读（`read`）或改（`write` —— 迁移收尾要从里面删条目）另一个项目的库之前过宿主的门；那个库不在本会话的
+   * 权限表里。被拒时抛错，文案给模型（不带库目录）。不注入 = 不设门（单测）。
+   */
+  authorizeProjectBase?: (
+    target: KnowledgeBundleTarget,
+    access: 'read' | 'write',
+    ctx: KnowledgeProjectBaseAccess
+  ) => Promise<void>
+  /**
+   * 迁移收尾：把管理员收下的条目从源库删掉（宿主记一笔变更、提交）。回没删成的那几条与原因。
+   * 不注入则 `migrate` 不可用 —— 只收不删就成了两边各一份。
+   */
+  removeEntries?: (
+    source: KnowledgeBundleTarget,
+    entries: readonly string[],
+    ctx: { call: ToolCallScope | undefined; movedTo: string }
+  ) => Promise<Array<{ entry: string; reason: string }>>
   abortError?: string
   label: string
+}
+
+/** 过门时交给宿主的：这次调用是谁的，以及（迁移时）给人看的一句话 */
+export interface KnowledgeProjectBaseAccess {
+  call: ToolCallScope | undefined
+  toolCallId: string
+  signal?: AbortSignal
+  /** 迁移：卡片上的一句说明（几条、从哪个库到哪个库） */
+  purpose?: string
 }
 
 type Result = ToolResult<{ action: KnowledgeAction; path?: string } | undefined>
@@ -283,13 +350,15 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       case 'bases':
         return this.bases(admin)
       case 'search':
-        return this.search(params, admin)
+        return this.search(params, admin, { call, toolCallId, signal })
       case 'list':
-        return this.list(params, admin)
+        return this.list(params, admin, { call, toolCallId, signal })
       case 'read':
-        return this.read(params)
+        return this.read(params, admin, { call, toolCallId, signal })
       case 'submit':
         return this.submit(toolCallId, params, signal, call, admin)
+      case 'migrate':
+        return this.migrate(toolCallId, params, signal, call, admin)
       default:
         throw new Error(`Unknown action "${String(params.action)}". Valid: ${ACTIONS.join(', ')}`)
     }
@@ -314,6 +383,30 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   }
 
   /**
+   * `project` 给了：这次看的是那个项目的项目库（为挑要迁移的条目）。解析 → 过宿主的读门 → 交回目标；没给 → null。
+   * 管理员自己不许用（它只动任务点名的那个库）。`base` 这时不看：`project` 顶替它，一起写了也照 `project` 的来
+   * （实测模型常顺手把项目名也填进 `base`，为这个报错只是白费一次调用）。
+   */
+  private async projectBase(
+    params: KnowledgeToolParams,
+    admin: boolean,
+    access: KnowledgeProjectBaseAccess
+  ): Promise<KnowledgeBundleTarget | { error: string } | null> {
+    const project = params.project?.trim()
+    if (!project) return null
+    if (admin) {
+      throw new Error('You are the librarian: work only inside the base the task names.')
+    }
+    if (!this.deps.resolveProjectBase) {
+      return { error: "Another project's knowledge base cannot be read on this host." }
+    }
+    const target = await this.deps.resolveProjectBase(project)
+    if ('error' in target) return target
+    await this.deps.authorizeProjectBase?.(target, 'read', access)
+    return target
+  }
+
+  /**
    * `entry` → 库内相对路径（不带前导 `/`），且必须是这个库里一条**在册**的笔记（扫描见过的 md）。
    * 收 `/x.md`、`x.md`、省掉 `.md` 的写法；旧对话里留下的绝对路径（落在库目录里）也认。
    * 越界、隐藏路径、保留名、不在册一律拒 —— 只认扫描清单，所以库里的符号链接、隐藏目录从来够不着。
@@ -321,7 +414,9 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   private async locateEntry(
     raw: string,
     target: KnowledgeBundleTarget,
-    base: string
+    base: string,
+    /** 报错里点名这个库的写法；缺省 `base "<base>"`（另一个项目的库写成 `the base of project "x"`） */
+    where = `base "${base}"`
   ): Promise<{ rel: string; scan: KnowledgeBundleScan }> {
     // Windows 的盘符不分大小写（`c:/` 与 `C:\` 是同一处）；其余照字面比
     const fold = (p: string): string => (/^[a-z]:\//i.test(p) ? p[0].toLowerCase() + p.slice(1) : p)
@@ -337,7 +432,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     if (known.has(rel)) return { rel, scan }
     if (!/\.md$/i.test(rel) && known.has(`${rel}.md`)) return { rel: `${rel}.md`, scan }
     throw new Error(
-      `No entry ${entryLabel(rel)} in base "${base}" — "search" or "list" it for the right name`
+      `No entry ${entryLabel(rel)} in ${where} — "search" or "list" it for the right name`
     )
   }
 
@@ -404,10 +499,28 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    * 范围是用户自己圈定的，圈定之后一起搜才有意义。不做跨库分数归一：每个库一套 BM25 索引，
    * 分数不可比，硬排会骗人。
    */
-  private async search(params: KnowledgeToolParams, admin: boolean): Promise<Result> {
+  private async search(
+    params: KnowledgeToolParams,
+    admin: boolean,
+    access: KnowledgeProjectBaseAccess
+  ): Promise<Result> {
     const query = params.query?.trim()
     if (!query) throw new Error('"search" needs `query`')
     const limit = positiveLimit(params.limit, DEFAULT_LIMIT)
+    const foreign = await this.projectBase(params, admin, access)
+    if (foreign) {
+      if ('error' in foreign) return text([foreign.error], { action: 'search' })
+      const { total, lines } = await this.searchOne(foreign, query, limit)
+      if (total === 0) {
+        return text([`No entries match "${query}" in the base of ${foreign.label}.`], {
+          action: 'search'
+        })
+      }
+      return text(
+        [`${total} result(s) for "${query}" in the base of ${foreign.label}:`, ...lines],
+        { action: 'search' }
+      )
+    }
     const named = params.base?.trim()
 
     if (named) {
@@ -447,12 +560,20 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     })
   }
 
-  private async list(params: KnowledgeToolParams, admin: boolean): Promise<Result> {
+  private async list(
+    params: KnowledgeToolParams,
+    admin: boolean,
+    access: KnowledgeProjectBaseAccess
+  ): Promise<Result> {
     const limit = positiveLimit(params.limit, DEFAULT_LIMIT * 5)
-    const base = this.requireBase(params)
-    const resolved = await this.deps.resolveBase(base)
+    const foreign = await this.projectBase(params, admin, access)
+    if (foreign && 'error' in foreign) return text([foreign.error], { action: 'list' })
+    const base = foreign ? 'project' : this.requireBase(params)
+    const resolved = foreign ?? (await this.deps.resolveBase(base))
     if ('error' in resolved) return text([resolved.error], { action: 'list' })
-    const where = `base "${base}" (${this.where(resolved, admin)})`
+    const where = foreign
+      ? `the base of ${foreign.label}`
+      : `base "${base}" (${this.where(resolved, admin)})`
     const { notes } = await this.deps.scan(resolved.dir)
     if (notes.length === 0) {
       return text([`No entries in ${where} yet.`], { action: 'list' })
@@ -469,13 +590,22 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    * 读一条：扫描缓存里的原文（frontmatter 一并给 —— `sources`、`status` 对读的人有用），按行分页、
    * 单行截断、字节上限与文件 `read` 同一套口径，只是不印行号（没有人拿它去 edit）。
    */
-  private async read(params: KnowledgeToolParams): Promise<Result> {
-    const base = this.requireBase(params)
+  private async read(
+    params: KnowledgeToolParams,
+    admin: boolean,
+    access: KnowledgeProjectBaseAccess
+  ): Promise<Result> {
+    // 缺参先报 base、再报 entry（点了 `project` 就不需要 base）；都齐了才去解析、过门
+    if (!params.project?.trim()) this.requireBase(params)
     const raw = params.entry?.trim()
     if (!raw) throw new Error('"read" needs `entry` — an entry\'s path inside the base')
-    const target = await this.deps.resolveBase(base)
+    const foreign = await this.projectBase(params, admin, access)
+    if (foreign && 'error' in foreign) throw new Error(foreign.error)
+    const base = foreign ? 'project' : this.requireBase(params)
+    const target = foreign ?? (await this.deps.resolveBase(base))
     if ('error' in target) throw new Error(target.error)
-    const { rel, scan } = await this.locateEntry(raw, target, base)
+    const where = foreign ? `the base of ${foreign.label}` : undefined
+    const { rel, scan } = await this.locateEntry(raw, target, base, where)
     const content = scan.files.find((f) => f.path === rel)?.text ?? ''
     const all = content.replace(/\r\n/g, '\n').split('\n')
     if (all.length > 1 && all[all.length - 1] === '') all.pop()
@@ -496,7 +626,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       bytes += size
     }
     const last = start + out.length - 1
-    const header = `Entry ${entryLabel(rel)} in base "${base}" (${target.label}) — ${total} lines`
+    const header = `Entry ${entryLabel(rel)} in ${where ?? `base "${base}" (${target.label})`} — ${total} lines`
     let tail: string
     if (start > total) tail = `(The entry has ${total} lines.)`
     else if (cappedByBytes)
@@ -577,6 +707,211 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     })
     return text([`Recorded in base "${base}"${lines.length ? ':' : '.'}`, ...lines, '', report], {
       action: 'submit',
+      ...(outcome.entries[0] ? { path: outcome.entries[0].entry } : {})
+    })
+  }
+
+  /**
+   * 迁移：把另一个项目的项目库里点名的条目交给**目标库**的管理员。先后：
+   *   准入（管理员自己、缺参数、目标库解析 / 只读、宿主不支持、源库解析、两头是同一个库）
+   *   → 落定条目（扫描在册的；文件夹展开；不在册的记下）→ 过源库的写门（收下的要从那里删）
+   *   → 派管理员（原文由这里读，不经发起者重抄）→ 给它动过的条目盖章 → 它点名收下的从源库删掉 → 断链只报告。
+   * 管理员没跑成、或说一条都不收：源库一个字不动。它没点名的条目留在源库 —— 宁可两边各一份，不丢。
+   */
+  private async migrate(
+    toolCallId: string,
+    params: KnowledgeToolParams,
+    signal: AbortSignal | undefined,
+    call: ToolCallScope | undefined,
+    admin: boolean
+  ): Promise<Result> {
+    if (admin) {
+      throw new Error(
+        'You are the librarian: record the entries the task gives you with the file tools, and answer with `next`.'
+      )
+    }
+    const project = params.project?.trim()
+    if (!project) {
+      throw new Error('"migrate" needs `project` — the project whose base the entries come from')
+    }
+    const wanted = [
+      ...new Set(
+        (Array.isArray(params.entries) ? params.entries : [])
+          .filter((e): e is string => typeof e === 'string')
+          .map((e) => e.trim())
+          .filter(Boolean)
+      )
+    ]
+    if (wanted.length === 0) {
+      throw new Error(
+        '"migrate" needs `entries` — the paths of the entries to bring over, as "list" or "search" with `project` shows them'
+      )
+    }
+    const base = this.requireBase(params)
+    const target = await this.deps.resolveBase(base)
+    if ('error' in target) throw new Error(`${target.error} ${MIGRATE_TARGET_HINT}`)
+    if (target.readonly) {
+      throw new Error(
+        `"${base}" is read-only — it is ShuviX's own reference, shipped with the app. ${MIGRATE_TARGET_HINT}`
+      )
+    }
+    const { admin: runAdmin, resolveProjectBase, removeEntries } = this.deps
+    if (!runAdmin || !resolveProjectBase || !removeEntries) {
+      throw new Error('Migrating knowledge entries is not available on this host')
+    }
+    const source = await resolveProjectBase(project)
+    if ('error' in source) throw new Error(source.error)
+    if (stripDir(source.dir) === stripDir(target.dir)) {
+      throw new Error(
+        `The base of ${source.label} is base "${base}" itself — there is nothing to migrate.`
+      )
+    }
+    const from = `the base of ${source.label}`
+
+    // 落定条目：扫描在册的笔记；点名一个文件夹就是它底下的每一条
+    const scan = await this.deps.scan(source.dir)
+    const known = scan.notes.map((n) => n.path)
+    const knownSet = new Set(known)
+    const picked: string[] = []
+    const missing: string[] = []
+    for (const raw of wanted) {
+      const rel = normalizeBundlePath(raw.replace(/\\/g, '/'))
+      // `/` = 整个库（实测模型要迁整个库时就这么写）
+      if (/^[./\\]+$/.test(raw) && !raw.includes('..')) picked.push(...known)
+      else if (!rel || escapesBundle(rel)) missing.push(raw)
+      else if (knownSet.has(rel)) picked.push(rel)
+      else if (!/\.md$/i.test(rel) && knownSet.has(`${rel}.md`)) picked.push(`${rel}.md`)
+      else {
+        const under = known.filter((path) => path.startsWith(`${rel}/`))
+        if (under.length > 0) picked.push(...under)
+        else missing.push(entryLabel(rel))
+      }
+    }
+    const entries = [...new Set(picked)]
+    if (entries.length === 0) {
+      throw new Error(
+        `None of these is an entry in ${from}: ${missing.join(', ')} — "list" it with \`project\` for the right names`
+      )
+    }
+    if (entries.length > KNOWLEDGE_MIGRATE_MAX_ENTRIES) {
+      throw new Error(
+        `That is ${entries.length} entries; one "migrate" takes at most ${KNOWLEDGE_MIGRATE_MAX_ENTRIES}. Bring them over in several calls.`
+      )
+    }
+    const textOf = new Map(scan.files.map((f) => [f.path, f.text]))
+    const migrated = entries.map((entry) => ({ entry, text: textOf.get(entry) ?? '' }))
+    const bytes = migrated.reduce((n, e) => n + new TextEncoder().encode(e.text).length, 0)
+    if (bytes > MIGRATE_MAX_BYTES) {
+      throw new Error(
+        `These entries are ${formatSize(bytes)} together; one "migrate" takes at most ${formatSize(MIGRATE_MAX_BYTES)}. Bring fewer over per call.`
+      )
+    }
+
+    // 收下的条目之后要从源库删掉：先过它的写门（用户点头的是这一整件事）。被拒时把话说全 —— 宿主那句只说「拒了
+    // 访问某个库」，实测模型会当成读被拒、或再来一次
+    try {
+      await this.deps.authorizeProjectBase?.(source, 'write', {
+        call,
+        toolCallId,
+        signal,
+        purpose: `Migrate ${entries.length} knowledge entr${entries.length === 1 ? 'y' : 'ies'} from ${source.label} into base "${base}" (${target.label}). The ones the librarian takes in are removed from ${source.label}.`
+      })
+    } catch (err) {
+      if (signal?.aborted) throw err
+      const why = err instanceof Error ? err.message : String(err)
+      throw new Error(
+        `${why}\nThat was the permission to change ${from}: migrated entries are removed from it. Nothing was migrated; do not try again unless the user asks.`
+      )
+    }
+    if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
+
+    const submittedBy = this.deps.actor(call)
+    const outcome = await runAdmin(
+      {
+        base,
+        label: target.label,
+        bundleDir: target.dir,
+        content: '',
+        submittedBy,
+        migration: { from: source.label, entries: migrated }
+      },
+      { call, toolCallId, signal }
+    )
+    if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
+    if ('error' in outcome) {
+      throw new Error(
+        `The knowledge librarian could not take the entries: ${this.scrubDir(outcome.error, target)}. Nothing was removed from ${from}.`
+      )
+    }
+    const report = this.scrubDir(outcome.report, target) || '(no report)'
+    if (!outcome.accepted) {
+      return text(
+        [`Nothing was migrated into base "${base}"; the entries stay in ${from}.`, '', report],
+        { action: 'migrate' }
+      )
+    }
+
+    // 只认它点名收下、且确是这次交过去的那几条（名字省了 `.md` 也认）
+    const named = new Set(
+      (outcome.taken ?? []).map((t) => (entries.includes(t) || /\.md$/i.test(t) ? t : `${t}.md`))
+    )
+    const taken = entries.filter((e) => named.has(e))
+    const left = entries.filter((e) => !named.has(e))
+
+    const stamped = await this.stampChanged(
+      outcome.entries,
+      target,
+      submittedBy,
+      outcome.admin,
+      call
+    )
+    const failed =
+      taken.length > 0 ? await removeEntries(source, taken, { call, movedTo: target.label }) : []
+    const failedReason = new Map(failed.map((f) => [normalizeBundlePath(f.entry), f.reason]))
+    const removed = taken.filter((e) => !failedReason.has(e))
+
+    // 源库里留下的条目指向被删掉的：只报告，不改写正文
+    const gone = new Set(removed)
+    const broken: string[] = []
+    for (const file of scan.files) {
+      if (gone.has(file.path)) continue
+      for (const link of extractConceptLinks(bodyOf(file.text))) {
+        const to = resolveLinkTarget(file.path, link.path)
+        if (to && gone.has(to)) broken.push(`- ${entryLabel(file.path)} → ${entryLabel(to)}`)
+      }
+    }
+
+    const changes = outcome.entries.map((e) => {
+      const flag = stamped.problems.get(e.entry)
+      return `- ${entryLabel(e.entry)} (${e.change}${flag ? `; ${flag}` : ''})`
+    })
+    const lines = [
+      `Migrated into base "${base}" from ${from}${changes.length ? ':' : '.'}`,
+      ...changes
+    ]
+    lines.push(
+      '',
+      removed.length > 0
+        ? `Removed from ${from}: ${removed.map(entryLabel).join(', ')}.`
+        : `Nothing was removed from ${from}.`
+    )
+    if (left.length > 0) {
+      lines.push(
+        `Left in ${from} (the librarian did not take them): ${left.map(entryLabel).join(', ')}.`
+      )
+    }
+    if (missing.length > 0) lines.push(`Not found in ${from}: ${missing.join(', ')}.`)
+    if (failedReason.size > 0) {
+      lines.push(
+        `Taken in but still in ${from}: ${[...failedReason].map(([e, why]) => `${entryLabel(e)} (${why})`).join(', ')}.`
+      )
+    }
+    if (broken.length > 0) {
+      lines.push(`Links in ${from} that now point at removed entries:`, ...[...new Set(broken)])
+    }
+    lines.push('', report)
+    return text(lines, {
+      action: 'migrate',
       ...(outcome.entries[0] ? { path: outcome.entries[0].entry } : {})
     })
   }

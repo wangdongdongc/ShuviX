@@ -43,6 +43,7 @@ export {
 export {
   sessionBundle,
   resolveBase,
+  projectBaseNamed,
   listBases,
   selectedBaseNames,
   enabledBaseChoices,

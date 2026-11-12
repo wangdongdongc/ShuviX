@@ -36,6 +36,8 @@ export interface KnowledgeChange {
   actor?: string
   /** path 是一整个目录（move / delete 一个目录）：失效整个 bundle 的扫描缓存 */
   isDirectory?: boolean
+  /** 这条删除是迁移的收尾（`knowledge` 工具的 `migrate`）：条目去了哪个库（人读标签），记进提交信息 */
+  movedTo?: string
 }
 
 let pending: KnowledgeChange[] = []
@@ -61,7 +63,8 @@ async function process(batch: KnowledgeChange[]): Promise<void> {
       queueKnowledgeCommit(change.bundle, [...(touched.get(change.bundle) ?? [])], {
         op: change.op,
         path: change.path,
-        actor: change.actor
+        actor: change.actor,
+        ...(change.movedTo ? { movedTo: change.movedTo } : {})
       })
     }
   } catch (err) {

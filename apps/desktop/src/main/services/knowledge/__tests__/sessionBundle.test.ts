@@ -53,7 +53,9 @@ vi.mock('i18next', () => ({
     t: (key: string) => `i18n(${key})`
   }
 }))
-vi.mock('../../../dao/projectDao', () => ({ projectDao: { findById: vi.fn(), pick: vi.fn() } }))
+vi.mock('../../../dao/projectDao', () => ({
+  projectDao: { findById: vi.fn(), pick: vi.fn(), findAllActive: vi.fn(() => []) }
+}))
 // updateSettings 只为「活的、不落快照」那条留着断言面 —— 生产代码在这里一次都不该写库
 vi.mock('../../../dao/sessionDao', () => ({
   sessionDao: { pick: vi.fn(), updateSettings: vi.fn() }
@@ -67,6 +69,7 @@ import {
   enabledBaseChoices,
   knowledgeBaseOptions,
   listBases,
+  projectBaseNamed,
   resolveBase,
   selectedBaseNames,
   sessionBundle
@@ -1386,5 +1389,98 @@ describe('SB-D 缺省启用内置说明书', () => {
 
     seedBuiltinBase()
     expect(knowledgeBaseOptions()).toMatchObject({ selected: ['shuvix'], explicit: false })
+  })
+})
+
+/**
+ * 另一个项目的项目库（`knowledge` 工具的 `project` 参数；docs/project-split-design.md §5.1）—— 只解析，不设门。
+ *
+ *   SB-M1 按名字找：去两头空白、不分大小写；给回 bundle / 目录 / 标签（标签是项目当前的名字）
+ *   SB-M2 重名时按 id 找；名字恰好等于某个 id 时 id 优先
+ *   SB-M3 没有这个项目（含隐藏载体项目、归档的 —— findAllActive 本来就不给归档的）→ error
+ *   SB-M4 重名 → error 列出每个的 id 与目录，让它改传 id
+ *   SB-M5 就是本会话自己的项目 → error（它的库是 `project`）
+ *   SB-M6 那个项目还没有库目录 → error；不建目录
+ */
+describe('projectBaseNamed —— 另一个项目的库（SB-M）', () => {
+  const project = (id: string, name: string, path = `/repos/${id}`): Project => ({
+    ...PROJECT,
+    id,
+    name,
+    path
+  })
+  const BIG = project('pBig', 'Big Thing')
+  const active = (...list: Project[]): void => {
+    vi.mocked(projectDao.findAllActive).mockReturnValue(list)
+  }
+  const seedBaseOf = (id: string): string => {
+    seedConcept(root, `${PROJECTS}/${id}/a.md`, ['type: Memory', 'title: A'])
+    return bundleAt(root, `${PROJECTS}/${id}`)
+  }
+
+  it('SB-M1 按名字找（去空白、不分大小写）：给回那个项目的 bundle、目录与标签', () => {
+    inProject()
+    active(PROJECT, BIG)
+    const dir = seedBaseOf('pBig')
+    for (const name of ['Big Thing', '  big thing ', 'BIG THING']) {
+      expect(projectBaseNamed('s1', name), name).toEqual({
+        bundle: `${PROJECTS}/pBig`,
+        dir,
+        label: 'project "Big Thing"'
+      })
+    }
+  })
+
+  it('SB-M2 按 id 找；重名的两个项目各自按 id 解析', () => {
+    inProject()
+    const twin = project('pTwin', 'Big Thing')
+    active(PROJECT, BIG, twin)
+    seedBaseOf('pBig')
+    const twinDir = seedBaseOf('pTwin')
+    expect(projectBaseNamed('s1', 'pTwin')).toEqual({
+      bundle: `${PROJECTS}/pTwin`,
+      dir: twinDir,
+      label: 'project "Big Thing"'
+    })
+  })
+
+  it('SB-M3 没有这个项目：error 让它去问用户；隐藏载体项目不算项目', () => {
+    inProject()
+    active(PROJECT, project('__agents__', 'Agents'))
+    expect(projectBaseNamed('s1', 'Nope')).toEqual({
+      error:
+        'No project is named "Nope" (archived projects are not looked at). Ask the user for the project\'s exact name.'
+    })
+    expect(projectBaseNamed('s1', 'Agents')).toEqual({
+      error: expect.stringContaining('No project is named "Agents"')
+    })
+  })
+
+  it('SB-M4 重名：error 列出每个的 id 与目录，让它改传 id', () => {
+    inProject()
+    active(PROJECT, BIG, project('pTwin', 'big thing', '/repos/twin'))
+    expect(projectBaseNamed('s1', 'Big Thing')).toEqual({
+      error:
+        '"Big Thing" names 2 projects: pBig (folder /repos/pBig); pTwin (folder /repos/twin). Pass the id of the one you mean as `project`.'
+    })
+  })
+
+  it('SB-M5 就是本会话自己的项目：error 指回 base "project"', () => {
+    inProject()
+    active(PROJECT, BIG)
+    seedBaseOf('p1')
+    expect(projectBaseNamed('s1', 'acme corp')).toEqual({
+      error:
+        '"Acme Corp" is this session\'s own project: its base is "project" — leave `project` out.'
+    })
+  })
+
+  it('SB-M6 那个项目还没有库：error；不建目录', () => {
+    inProject()
+    active(PROJECT, BIG)
+    expect(projectBaseNamed('s1', 'Big Thing')).toEqual({
+      error: 'Project "Big Thing" has no knowledge base yet — nothing was ever recorded in it.'
+    })
+    expect(existsSync(bundleAt(root, `${PROJECTS}/pBig`))).toBe(false)
   })
 })

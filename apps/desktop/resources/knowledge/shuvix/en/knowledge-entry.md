@@ -133,6 +133,16 @@ ASCII is lower-cased, the result is cut to 60 characters, and a taken name gets 
   librarian's machine confirmation). The librarian runs only this way — the `agent` tool cannot
   dispatch it — and its model follows the usual rule (its md's `shuvix-model`, else the caller's).
   Override `~/.shuvix/agents/knowledge-writer.md` to change how it organizes bases.
+- **Migrate it from another project** (`knowledge`, `action: migrate` with `project`, `entries`
+  and `base`): when a project is split, an agent of a session in the new project brings entries
+  over from the other project's own base. ShuviX reads the named entries and hands them to the
+  librarian of the receiving base as they are — the agent does not copy their text. The librarian
+  takes each one in as it is, merges it into the entry that already covers its subject, or turns
+  it down, and reports which ones it took; ShuviX stamps what it wrote the same way as after a
+  submission and removes exactly the entries it took from the other project's base. To choose,
+  the agent first looks into that base with `list`, `search` or `read` plus `project` (the other
+  project's name). That base is outside the session's permission table, so reading it and
+  changing it each ask first. See the `moving-sessions` entry for splitting a project.
 - **By hand** (Obsidian, the ShuviX notebook, any editor): no metadata needed; a human edit
   under the base is picked up on the next scan and committed with the next observed write. The
   sidebar's **new entry** writes the full metadata itself (with `type: Memory`,

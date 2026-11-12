@@ -165,6 +165,50 @@ export function sessionBundle(rootSessionId: string): SessionBundleTarget | { er
 }
 
 /**
+ * 另一个项目的项目库 —— `knowledge` 工具的 `project` 参数（拆分项目时把条目迁过来，docs/project-split-design.md §5）。
+ * 按项目名找：去两头空白、不分大小写，与 bot 的工作项目同一条规则（projectService.projectsNamed）；重名时也认项目 id。
+ * 只在没归档的项目里找。没有这个项目、重名、就是本会话自己的项目、那个项目还没有库 → 一句给模型的 error。
+ *
+ * 只解析，不设门：那个库不在本会话的权限表里，读它、改它之前工具各过一次宿主的路径询问（tools/knowledge.ts）。
+ */
+export function projectBaseNamed(
+  rootSessionId: string,
+  project: string
+): SessionBundleTarget | { error: string } {
+  const wanted = project.trim()
+  const all = projectDao.findAllActive().filter((p) => !isHiddenProjectId(p.id))
+  const byId = all.find((p) => p.id === wanted)
+  const hits = byId
+    ? [byId]
+    : all.filter((p) => p.name.trim().toLowerCase() === wanted.toLowerCase())
+  if (hits.length === 0) {
+    return {
+      error: `No project is named "${wanted}" (archived projects are not looked at). Ask the user for the project's exact name.`
+    }
+  }
+  if (hits.length > 1) {
+    const listed = hits.map((p) => `${p.id} (folder ${p.path})`).join('; ')
+    return {
+      error: `"${wanted}" names ${hits.length} projects: ${listed}. Pass the id of the one you mean as \`project\`.`
+    }
+  }
+  const [hit] = hits
+  if (rootProject(rootSessionId)?.id === hit.id) {
+    return {
+      error: `"${hit.name}" is this session's own project: its base is "project" — leave \`project\` out.`
+    }
+  }
+  const bundle = projectBundleId(hit.id)
+  const dir = bundleDir(bundle)
+  if (!existsSync(dir)) {
+    return {
+      error: `Project "${hit.name}" has no knowledge base yet — nothing was ever recorded in it.`
+    }
+  }
+  return { bundle, dir, label: `project "${hit.name}"` }
+}
+
+/**
  * 这条会话能点名的库：有项目时项目库打头，ShuviX 文件的笔记本带上内置说明书（两者都隐式，见文件头），
  * 再接用户圈定且这台机器上真有的那些
  */

@@ -308,20 +308,22 @@ describe('KT-1′ schema 与运行时守卫', () => {
     { enum?: string[]; description?: string }
   >
 
-  it('KT-1′ action 枚举恰为 bases / search / list / read / submit；参数恰为 action / base / query / entry / content / offset / limit（没有 path）；replay 取最保守的 unsafe', () => {
+  it('KT-1′ action 枚举恰为 bases / search / list / read / submit / migrate；参数恰为 action / base / query / entry / project / entries / content / offset / limit（没有 path）；replay 取最保守的 unsafe', () => {
     expect(KNOWLEDGE_TOOL_NAME).toBe('knowledge')
     const { tool } = makeTool()
     expect(tool.name).toBe('knowledge')
     expect(tool.label).toBe('Knowledge')
-    expect(props.action.enum).toEqual(['bases', 'search', 'list', 'read', 'submit'])
+    expect(props.action.enum).toEqual(['bases', 'search', 'list', 'read', 'submit', 'migrate'])
     // 动作 / 参数一旦漂回旧形状，模型就会以为还能交一个路径
     expect(Object.keys(props).sort()).toEqual([
       'action',
       'base',
       'content',
+      'entries',
       'entry',
       'limit',
       'offset',
+      'project',
       'query'
     ])
     for (const gone of [
@@ -362,13 +364,13 @@ describe('KT-1′ schema 与运行时守卫', () => {
     expectNothingHappened(h)
   })
 
-  it('KT-1c 未知动作（如旧的 write / create）：失败并列出合法的五个', async () => {
+  it('KT-1c 未知动作（如旧的 write / create）：失败并列出合法的六个', async () => {
     const h = makeTool()
     for (const action of ['write', 'create', 'validate']) {
       expect(
         await rejectionOf(h.run('c1', { action } as unknown as KnowledgeToolParams)),
         action
-      ).toBe(`Unknown action "${action}". Valid: bases, search, list, read, submit`)
+      ).toBe(`Unknown action "${action}". Valid: bases, search, list, read, submit, migrate`)
     }
     expectNothingHappened(h)
   })
@@ -380,7 +382,7 @@ describe('KT-12′ 给 agent 的文案', () => {
     { description?: string }
   >
 
-  it('KT-12′ 两处文案都指向 "bases"、不点名 "project"；base 的说明点名 list / read / submit 必填、search 可省', () => {
+  it('KT-12′ 两处文案都指向 "bases"、不点名 "project"；base 的说明点名 list / read / submit / migrate 必填、search 可省', () => {
     for (const [where, copy] of [
       ['base.description', props.base.description],
       ['KNOWLEDGE_DESCRIPTION', KNOWLEDGE_DESCRIPTION]
@@ -388,7 +390,9 @@ describe('KT-12′ 给 agent 的文案', () => {
       expect(copy, where).toContain('"bases"')
       expect(copy, where).not.toContain('"project"')
     }
-    expect(props.base.description).toContain('Required for "list", "read" and "submit"')
+    expect(props.base.description).toContain(
+      'Required for "list", "read", "submit" and "migrate" (where the entries go)'
+    )
     expect(props.base.description).toContain('"search" without it')
     // entry 的说明：名字就是 search / list 给出来的那一种
     expect(props.entry.description).toContain('as "search" and "list" give it')
@@ -396,7 +400,7 @@ describe('KT-12′ 给 agent 的文案', () => {
     expect(props.offset.description).toContain('"read"')
   })
 
-  it('KT-12′ 描述讲 read 与 submit（交给 librarian、它决定怎么记）；动作条目恰为五个', () => {
+  it('KT-12′ 描述讲 read 与 submit（交给 librarian、它决定怎么记）；动作条目恰为六个（末尾是 migrate）', () => {
     for (const phrase of [
       'user picks which bases',
       'leave `base` out',
@@ -415,7 +419,7 @@ describe('KT-12′ 给 agent 的文案', () => {
     const actionLines = KNOWLEDGE_DESCRIPTION.split('\n')
       .filter((line) => line.startsWith('- "'))
       .map((line) => /^- "([a-z]+)"/.exec(line)?.[1])
-    expect(actionLines).toEqual(['bases', 'search', 'list', 'read', 'submit'])
+    expect(actionLines).toEqual(['bases', 'search', 'list', 'read', 'submit', 'migrate'])
   })
 
   it('KT-12′ 描述与参数说明里没有文件工具、目录、元数据的话：不教 write / edit / grep，不说 directory / permanent / verified', () => {

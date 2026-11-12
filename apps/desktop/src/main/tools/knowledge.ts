@@ -8,11 +8,18 @@
  * 桌面只注入端适配：Node fs port、base 的解析与列举（`project` = 根会话所属项目的库，其余名字 =
  * `~/.shuvix/knowledge/` 下的用户库）、bundle 的扫描与检索（services/knowledge）、调用方 actor、管理员的
  * 同步派发（与 `agent` 工具同一条派发路由，管理员那条对话挂在这次工具调用下）、盖章后的变更管线（提交 + 事件）。
+ *
+ * 迁移（2026-11-11，docs/project-split-design.md §5）多注入三样：按项目名解析另一个项目的库（`projectBaseNamed`）；
+ * 读它 / 改它之前过路径门 —— 那个库不在本会话的权限表里，出厂的 ask-on-external-path 会问（卡片与拒绝文案里摆的是
+ * 「某项目的知识库」，目录只给用户看、不进给模型的话）；管理员收下之后把源库里的原条目删掉并记一笔变更。
  */
+import { rm } from 'node:fs/promises'
 import {
   buildKnowledgeAdminPrompt,
+  callOwnerOf,
   createKnowledgeTool,
   KNOWLEDGE_ADMIN_CONTRACT,
+  KNOWLEDGE_MIGRATION_CONTRACT,
   KNOWLEDGE_DESCRIPTION,
   KNOWLEDGE_TOOL_NAME,
   KNOWLEDGE_WRITER_PROFILE_NAME,
@@ -24,12 +31,19 @@ import {
   type ToolCallScope
 } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
-import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
+import {
+  getDesktopSecurityContext,
+  resolveProjectConfig,
+  TOOL_ABORTED,
+  type ToolContext
+} from '../services/toolContext'
 import { agentActorOf, withCallAgent, type ToolAgentIdentity } from '../services/toolAgent'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import {
+  bundleFilePath,
   listBases,
   locateBundle,
+  projectBaseNamed,
   recordKnowledgeChange,
   resolveBase,
   scanBundle,
@@ -94,8 +108,9 @@ async function runAdmin(
       sessionId: ctx.sessionId,
       workingDirectory: resolveProjectConfig(ctx.sessionId).workingDirectory
     }),
-    description: `Record in ${req.base}`,
-    resultContract: KNOWLEDGE_ADMIN_CONTRACT,
+    description: req.migration ? `Migrate into ${req.base}` : `Record in ${req.base}`,
+    // 迁移多交一项「收下了哪几条」（按原路径）：宿主只把这几条从源库删掉
+    resultContract: req.migration ? KNOWLEDGE_MIGRATION_CONTRACT : KNOWLEDGE_ADMIN_CONTRACT,
     // 每次 submit 派一个新的知识库管理员：落定即卸，不在监控面板里闲挂
     oneShot: true
   })
@@ -137,6 +152,41 @@ export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKno
         op: 'Update',
         actor: agentActorOf(withCallAgent(ctx, call))
       })
+    },
+    resolveProjectBase: async (project) => projectBaseNamed(ctx.sessionId, project),
+    // 另一个项目的库不在本会话的权限表里：读、改各过一次路径门。给模型的话里只说「某项目的知识库」
+    authorizeProjectBase: async (target, access, run) => {
+      const config = resolveProjectConfig(ctx.sessionId)
+      await getDesktopSecurityContext(ctx, () => config).enforcePath(access, target.dir, {
+        toolCallId: run.toolCallId,
+        ...(run.call ? callOwnerOf(run.call) : {}),
+        toolName: KNOWLEDGE_TOOL_NAME,
+        displayPath: `the knowledge base of ${target.label}`,
+        ...(run.purpose ? { description: run.purpose } : {}),
+        ...(run.signal ? { signal: run.signal } : {}),
+        abortError: TOOL_ABORTED
+      })
+    },
+    // 迁移收尾：管理员收下的条目从源库删掉。文件不经文件工具，所以变更管线自己记一笔（失效缓存 + 提交 + 事件）
+    removeEntries: async (source, entries, { call, movedTo }) => {
+      const bundle = bundleIdOf(source.dir)
+      if (!bundle) return entries.map((entry) => ({ entry, reason: 'its base was not found' }))
+      const actor = agentActorOf(withCallAgent(ctx, call))
+      const failed: Array<{ entry: string; reason: string }> = []
+      for (const entry of entries) {
+        try {
+          await rm(bundleFilePath(bundle, entry))
+          recordKnowledgeChange({ bundle, path: entry, op: 'Deletion', actor, movedTo })
+        } catch (err) {
+          // 只给错误码：message 里带着库目录，那不该进给模型的话
+          const code = (err as NodeJS.ErrnoException).code
+          failed.push({
+            entry,
+            reason: code ? `could not be deleted (${code})` : 'could not be deleted'
+          })
+        }
+      }
+      return failed
     },
     abortError: TOOL_ABORTED,
     label: t(BUILTIN_TOOL_PRESENTATIONS[KNOWLEDGE_TOOL_NAME].labelKey)

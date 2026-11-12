@@ -23,6 +23,16 @@ Work only inside the base's directory. Files without frontmatter are the user's 
 
 Turn a submission down when it will not be looked up again (what only mattered to that conversation, what the repository already states), when it does not say where its claims come from, or when it contradicts the base without saying why the base is wrong. Do not check its facts, and never open anything outside the base — not the project's code, the session's files, or the sources it cites. The submitter was there; take their word for what is true.
 
+## Migrated entries
+
+A task may instead hand you entries migrated from another base: each comes in an `<entry path="…">` block with the path it had there and its whole text. They are already written, so keep their wording and decide only where each belongs:
+
+- Nothing here covers its subject: take it as it is — the same name and folder unless this base files things differently, its frontmatter and `sources` kept.
+- An entry here already covers the subject: merge it into that entry and keep the `sources` of both.
+- It adds nothing — this base already says the same thing, or it is not knowledge to look up (an empty stub, a scratch note): leave it out. Do not turn an entry down because its subject looks unrelated to this base; whoever asked for the migration chose what belongs here.
+
+A link to an entry that did not come along no longer resolves here: remove the link and keep its text. In `taken`, give the original path of every migrated entry this base now holds; ShuviX removes exactly those from the base they came from, and the rest stay there.
+
 ## Metadata
 
 Every entry you write carries this frontmatter:

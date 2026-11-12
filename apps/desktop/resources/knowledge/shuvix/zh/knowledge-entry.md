@@ -108,6 +108,12 @@ Markdown。链接**同一个库**里的其他条目用 bundle 绝对的 markdown
   任何东西。之后 ShuviX 给它报上来、又过了严格检查的每一条盖章：`generated`（提交者）与 `verified`
   （管理员的机器确认）。管理员只能这样调起 —— `agent` 工具派不出它 —— 它的模型按通用规则来（它的 md 里的
   `shuvix-model`，否则跟随调用方）。想改它组织库的方式，就覆盖 `~/.shuvix/agents/knowledge-writer.md`。
+- **从另一个项目迁过来**（`knowledge`，`action: migrate`，带 `project`、`entries` 和 `base`）：拆分项目时，
+  由新项目里一条会话的 agent 把条目从另一个项目自己的库里迁过来。ShuviX 读出点名的条目，原样交给接收库的
+  管理员 —— agent 不重抄正文。管理员逐条原样收下、并进已经讲这件事的那一条，或者不收，并报告收了哪几条；
+  ShuviX 给它写下的条目盖章（与提交之后相同），再只把它收下的那几条从另一个项目的库里删掉。挑条目时，
+  agent 先用 `list`、`search` 或 `read` 加上 `project`（另一个项目的名字）看那个库。那个库不在本会话的
+  权限表里，所以读它、改它各会先问一次。拆分项目见 `moving-sessions` 条目。
 - **手写**（Obsidian、ShuviX 笔记本、任何编辑器）：不需要元数据；库下的人工编辑在下一次扫描时被读到，
   随下一次观察到的写入一起提交。侧栏的**新建条目**自己写好全套元数据（`type: Memory`、
   `status: draft`），只是不带 `generated`，署名 `human`。

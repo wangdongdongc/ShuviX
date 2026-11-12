@@ -140,6 +140,8 @@ export interface KnowledgeCommitEvent {
   /** bundle 相对路径 */
   path: string
   actor?: string
+  /** 迁移收尾的删除：条目去了哪个库（trailer `Knowledge-Moved-To`，两个库各有自己的仓库，历史不跟着走） */
+  movedTo?: string
 }
 
 interface PendingBatch {
@@ -154,16 +156,24 @@ let chain: Promise<void> = Promise.resolve()
 
 function buildMessage(events: KnowledgeCommitEvent[]): string {
   const actor = events.find((e) => e.actor)?.actor
+  const movedTo = [...new Set(events.flatMap((e) => (e.movedTo ? [e.movedTo] : [])))].map(
+    (where) => `Knowledge-Moved-To: ${where}`
+  )
   if (events.length === 1) {
     const [e] = events
     const trailers = [
       `Knowledge-Op: ${e.op.toLowerCase()}`,
-      ...(actor ? [`Knowledge-Actor: ${actor}`] : [])
+      ...(actor ? [`Knowledge-Actor: ${actor}`] : []),
+      ...movedTo
     ]
     return `kb(${e.op.toLowerCase()}): /${e.path}\n\n${trailers.join('\n')}`
   }
   const lines = events.map((e) => `- ${e.op.toLowerCase()} /${e.path}`)
-  const trailers = ['Knowledge-Op: batch', ...(actor ? [`Knowledge-Actor: ${actor}`] : [])]
+  const trailers = [
+    'Knowledge-Op: batch',
+    ...(actor ? [`Knowledge-Actor: ${actor}`] : []),
+    ...movedTo
+  ]
   return `kb(batch): ${events.length} changes\n\n${lines.join('\n')}\n\n${trailers.join('\n')}`
 }
 

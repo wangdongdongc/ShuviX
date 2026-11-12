@@ -67,6 +67,7 @@ export {
   KnowledgeParamsSchema,
   KNOWLEDGE_TOOL_NAME,
   KNOWLEDGE_DESCRIPTION,
+  KNOWLEDGE_MIGRATE_MAX_ENTRIES,
   type KnowledgeAction,
   type KnowledgeToolParams,
   type KnowledgeToolDeps,
@@ -74,16 +75,19 @@ export {
   type KnowledgeBundleTarget,
   type KnowledgeBundleScan,
   type KnowledgeSearchHit,
-  type KnowledgeAdminRun
+  type KnowledgeAdminRun,
+  type KnowledgeProjectBaseAccess
 } from './knowledgeTool'
 export {
   KNOWLEDGE_WRITER_PROFILE_NAME,
   KNOWLEDGE_ADMIN_CONTRACT,
+  KNOWLEDGE_MIGRATION_CONTRACT,
   KNOWLEDGE_ENTRY_CHANGES,
   buildKnowledgeAdminPrompt,
   readKnowledgeAdminResult,
   stampKnowledgeReview,
   type KnowledgeSubmission,
+  type KnowledgeMigratedEntry,
   type KnowledgeAdminOutcome,
   type KnowledgeEntryChange,
   type KnowledgeEntryChangeRecord

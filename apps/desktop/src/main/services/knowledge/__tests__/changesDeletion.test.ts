@@ -28,7 +28,11 @@ vi.mock('../../../logger', () => ({
 }))
 
 import { appEventBus } from '../../../utils/appEventBus'
-import { flushKnowledgeChanges, notifyKnowledgeFileChanged } from '../changes'
+import {
+  flushKnowledgeChanges,
+  notifyKnowledgeFileChanged,
+  recordKnowledgeChange
+} from '../changes'
 import { ensureBundleRepo } from '../repo'
 import { invalidateKnowledgeScan, knownKnowledgePaths, scanBundle } from '../scan'
 import {
@@ -101,6 +105,54 @@ describe('notifyKnowledgeFileChanged — delete / move', () => {
     expect(gitStatus(dir)).toBe('')
     expect(events).toEqual([{ type: 'knowledge.changed' }])
     expect((await scanBundle(BUNDLE)).files.map((f) => f.path)).toEqual(['seed.md'])
+  })
+
+  it('KD-1b 迁移收尾的删除（recordKnowledgeChange 带 movedTo）：提交信息多一行 Knowledge-Moved-To；同一批的几条只写一次', async () => {
+    await makeBundle({ 'seed.md': '# seed\n', 'a.md': '# a\n', 'b.md': '# b\n' })
+    rmSync(fileAt(root, BUNDLE, 'a.md'))
+    recordKnowledgeChange({
+      bundle: BUNDLE,
+      path: 'a.md',
+      op: 'Deletion',
+      actor: ACTOR,
+      movedTo: 'project "Auth"'
+    })
+    await flushKnowledgeChanges()
+    expect(gitHeadMessage(dir)).toBe(
+      [
+        'kb(deletion): /a.md',
+        '',
+        'Knowledge-Op: deletion',
+        `Knowledge-Actor: ${ACTOR}`,
+        'Knowledge-Moved-To: project "Auth"'
+      ].join('\n')
+    )
+
+    rmSync(fileAt(root, BUNDLE, 'b.md'))
+    rmSync(fileAt(root, BUNDLE, 'seed.md'))
+    for (const path of ['b.md', 'seed.md']) {
+      recordKnowledgeChange({
+        bundle: BUNDLE,
+        path,
+        op: 'Deletion',
+        actor: ACTOR,
+        movedTo: 'project "Auth"'
+      })
+    }
+    await flushKnowledgeChanges()
+    expect(gitHeadMessage(dir)).toBe(
+      [
+        'kb(batch): 2 changes',
+        '',
+        '- deletion /b.md',
+        '- deletion /seed.md',
+        '',
+        'Knowledge-Op: batch',
+        `Knowledge-Actor: ${ACTOR}`,
+        'Knowledge-Moved-To: project "Auth"'
+      ].join('\n')
+    )
+    expect(headTree()).toEqual([])
   })
 
   it('KD-2 挪一条：一条 batch 提交（deletion + creation），HEAD 树里换了位置', async () => {

@@ -35,8 +35,8 @@ describe.each(localized('knowledge-writer'))('BA knowledge-writer · %s', (file)
   /** 正文里那段 ```yaml 示例 */
   const example = /```yaml\n([\s\S]*?)```/.exec(text)?.[1] ?? ''
 
-  it('BA-1 三段结构一致：恰三个 `## ` 段（收录 / 元数据 / 交回），没有编号步骤', () => {
-    expect(sections).toHaveLength(3)
+  it('BA-1 四段结构一致：恰四个 `## ` 段（收录 / 迁来的条目 / 元数据 / 交回），没有编号步骤', () => {
+    expect(sections).toHaveLength(4)
     // 改版前的「search → create → edit → validate」四步流程不该残留
     expect(text.split('\n').some((line) => /^\d+\. /.test(line))).toBe(false)
   })

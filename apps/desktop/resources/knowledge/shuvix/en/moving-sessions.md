@@ -69,5 +69,16 @@ it stays unless it is named too.
   out of date and the user decides whether to rebuild.
 - The conversation is untouched. Paths written in it still point where they pointed.
 
-Knowledge-base entries are not moved by this: the entries of the old project stay in the old
-project's knowledge base.
+## Knowledge-base entries
+
+Moving a session does not move knowledge: the entries of the old project stay in the old project's
+knowledge base. They are migrated separately, again from a session of the new project: ask the
+agent to bring over the entries about a subject from the other project's knowledge base. It looks
+into that base (`knowledge` with `project`, the other project's name), then calls `migrate` with
+the entries it picked, at most 10 per call. The librarian of this project's base decides for each
+entry — take it as it is, merge it, or turn it down — and only the ones it took are removed from
+the old project's base. The result lists what was taken, what stayed, and the links in the old base
+that now point at removed entries. The `knowledge-entry` entry has the details.
+
+Entries that both projects need belong in one of the user's own knowledge bases, ticked in both
+projects: migrate them with that base as `base`.

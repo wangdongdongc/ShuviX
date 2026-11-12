@@ -11,6 +11,11 @@
  * `verified` 记管理员的机器确认（OKF 的 machine-confirmed 档）。模型手里从来没有「宣称自己核实过」这条路；
  * 人工审阅（`human:` actor）只来自 UI 动作。
  *
+ * **迁移（2026-11-11，docs/project-split-design.md §5）**：`knowledge` 工具的 `migrate` 交上来的不是一段内容，而是另一个
+ * 项目库里的现成条目（原路径 + 原文，宿主读的，不经发起迁移的 agent 重抄）。照旧派管理员，任务文本与结果契约各换
+ * 一份：它多交一项 `taken` —— 它收下的那几条（按原路径）；宿主之后只把这几条从源库删掉。点名「收下的」而不是
+ * 「没收的」：它漏写或写错一条时，那一条留在源库（两边各一份），而不是被删掉。盖章规则与提交相同。
+ *
  * 管理员只能经这里调起（宿主专用档案，派发工具按名解析不到）。它的边界（只动库里的文件、不碰用户自己的笔记、
  * 不去库外核实事实）只写在它的提示词里 —— 不设硬卡点（2026-11-08 裁决）。
  */
@@ -60,6 +65,57 @@ export const KNOWLEDGE_ADMIN_CONTRACT: ResultContract = {
   sourceLabel: 'knowledge submit'
 }
 
+/**
+ * 迁移的结果契约：同提交那一份，多一项必填的 `taken`（它收下的条目，按原路径）。单独一份而不是给提交的契约
+ * 加一个可选项：那份契约的字段描述每次提交都进管理员的 `next` 工具，迁移才用得上的字段不该让每次提交都付。
+ */
+export const KNOWLEDGE_MIGRATION_CONTRACT: ResultContract = {
+  schema: {
+    type: 'object',
+    properties: {
+      accepted: {
+        type: 'boolean',
+        description:
+          'true when the base now holds at least one of the migrated entries; false when you turned all of them down'
+      },
+      entries: {
+        type: 'array',
+        description:
+          'Every entry of this base you created, changed or deleted, by its path inside the base ("/auth/session.md"). A rename is the old name deleted and the new one created.',
+        items: {
+          type: 'object',
+          properties: {
+            entry: { type: 'string' },
+            change: { type: 'string', enum: [...KNOWLEDGE_ENTRY_CHANGES] }
+          },
+          required: ['entry', 'change'],
+          additionalProperties: false
+        }
+      },
+      taken: {
+        type: 'array',
+        description:
+          'The original path of every migrated entry this base now holds — taken as it was, merged or renamed. Exactly these are removed from the base they came from; the ones you leave out stay there.',
+        items: { type: 'string' }
+      },
+      report: {
+        type: 'string',
+        description:
+          'A few lines for whoever asked for the migration: where each entry went, and why you turned any down. Name entries by their path inside the base, never by the directory.'
+      }
+    },
+    required: ['accepted', 'entries', 'taken', 'report'],
+    additionalProperties: false
+  },
+  sourceLabel: 'knowledge migrate'
+}
+
+/** 一次迁移里交给管理员的一条：它在原来那个库里的路径（不带前导 `/`）与原文 */
+export interface KnowledgeMigratedEntry {
+  entry: string
+  text: string
+}
+
 /** 交给宿主的一次提交 */
 export interface KnowledgeSubmission {
   /** 工具里点名的 base */
@@ -74,6 +130,11 @@ export interface KnowledgeSubmission {
   entry?: string
   /** 提交它的 agent（`shuvix-<profile>/<model>`） */
   submittedBy: string
+  /**
+   * 迁移（`migrate`）：这次交上来的是另一个库里的现成条目，`content` 为空串。`from` 是源库的人读标签
+   * （`project "big"`）—— 源库的目录不给管理员，它只动自己那个库
+   */
+  migration?: { from: string; entries: KnowledgeMigratedEntry[] }
 }
 
 /** 管理员交回的一条改动（`entry` 已归一成库内相对路径，不带前导 `/`） */
@@ -90,6 +151,8 @@ export type KnowledgeAdminOutcome =
       report: string
       /** 管理员的 actor（`shuvix-knowledge-writer/<model>`）—— 收录时记进 `verified.by` */
       admin: string
+      /** 迁移：它收下的条目（原路径，不带前导 `/`）；提交没有这一项 */
+      taken?: string[]
     }
   | { error: string }
 
@@ -101,6 +164,7 @@ export type KnowledgeAdminOutcome =
 export function buildKnowledgeAdminPrompt(
   req: KnowledgeSubmission & { sessionId?: string; workingDirectory?: string }
 ): string {
+  if (req.migration) return buildKnowledgeMigrationPrompt(req, req.migration)
   return [
     'Record this submission in the knowledge base.',
     '',
@@ -127,20 +191,53 @@ export function buildKnowledgeAdminPrompt(
   ].join('\n')
 }
 
+/**
+ * 迁移的任务文本：哪个库、库目录、条目从哪来、谁发起的，然后是每一条的原路径与原文。条目各套一层 `<entry>` 围栏
+ * —— 原文自带 frontmatter 的 `---`，不围起来分不清一条到哪里结束。怎么收的规矩在管理员的 md 里。
+ */
+function buildKnowledgeMigrationPrompt(
+  req: KnowledgeSubmission,
+  migration: NonNullable<KnowledgeSubmission['migration']>
+): string {
+  return [
+    'Take these entries into the knowledge base. They are being migrated from another base: each one you take in is removed from there afterwards.',
+    '',
+    `- Base: "${req.base}" (${req.label}) — directory ${req.bundleDir}`,
+    `- They come from: the base of ${migration.from}`,
+    `- Migrated by: ${req.submittedBy}`,
+    '',
+    `Entries (${migration.entries.length}), each with the path it had there:`,
+    '',
+    ...migration.entries.flatMap((e) => [
+      `<entry path="/${entryName(e.entry)}">`,
+      e.text.trimEnd(),
+      '</entry>',
+      ''
+    ])
+  ]
+    .join('\n')
+    .trimEnd()
+}
+
 /** 库内路径的归一：去空白、反斜杠转正、去前导 `/` */
 function entryName(raw: string): string {
   return raw.trim().replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
 /** 结果契约捕获的对象 → `{accepted, entries, report}`；形状不对返回 null（当作没交回结论） */
-export function readKnowledgeAdminResult(
-  structured: unknown
-): { accepted: boolean; entries: KnowledgeEntryChangeRecord[]; report: string } | null {
+export function readKnowledgeAdminResult(structured: unknown): {
+  accepted: boolean
+  entries: KnowledgeEntryChangeRecord[]
+  report: string
+  /** 迁移的结论才有：收下的条目（归一成库内相对路径、去重） */
+  taken?: string[]
+} | null {
   if (typeof structured !== 'object' || structured === null) return null
-  const { accepted, entries, report } = structured as {
+  const { accepted, entries, report, taken } = structured as {
     accepted?: unknown
     entries?: unknown
     report?: unknown
+    taken?: unknown
   }
   if (typeof accepted !== 'boolean') return null
   const changes: KnowledgeEntryChangeRecord[] = []
@@ -151,7 +248,22 @@ export function readKnowledgeAdminResult(
     if (!KNOWLEDGE_ENTRY_CHANGES.includes(change as KnowledgeEntryChange)) continue
     changes.push({ entry: entryName(entry), change: change as KnowledgeEntryChange })
   }
-  return { accepted, entries: changes, report: typeof report === 'string' ? report.trim() : '' }
+  const tookIn = Array.isArray(taken)
+    ? [
+        ...new Set(
+          taken
+            .filter((d): d is string => typeof d === 'string')
+            .map(entryName)
+            .filter(Boolean)
+        )
+      ]
+    : undefined
+  return {
+    accepted,
+    entries: changes,
+    report: typeof report === 'string' ? report.trim() : '',
+    ...(tookIn ? { taken: tookIn } : {})
+  }
 }
 
 function flowStamp(s: { by: string; at: string }): string {
