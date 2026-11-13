@@ -3,7 +3,7 @@
  * 输入框里对模型藏起来的值（docs/auto-redaction-design.md §14；jsdom）：
  *
  *   SC-1 （桌面）「+」→ 菜单（模型不能看图时只有「添加敏感信息」）→ 表单：不回显的输入框、三个类别；添加 → 光标处一个
- *        胶囊（镜像层 `data-secret-chip`），textarea 里是胶囊文字、不是真值；发送 → agent.prompt 带着真值与
+ *        胶囊（镜像层 `data-token-kind="secret"`），textarea 里是胶囊文字、不是真值；发送 → agent.prompt 带着真值与
  *        secrets；乐观占位气泡里没有真值
  *   SC-2 打开表单时选中了一段 → 预填、添加后替换那一段；Esc 关掉表单什么都不加
  *   SC-3 提示：停笔之后问 redaction.inspect（会话 + 正文 + 粘贴全文）；提示行列出那一项，正文里画虚线；点「隐藏」→
@@ -14,7 +14,7 @@
  *   SC-7 宿主没有 inspect（旧宿主 / 渠道端）：不提示、照常发
  *
  * 话没发出去放回输入框时（真值只在胶囊的登记里）：
- *   SC-8  胶囊经 notSent 放回：textarea 里是胶囊文字、镜像层有 data-secret-chip、整个 DOM 里没有真值；重发带真值与 secrets
+ *   SC-8  胶囊经 notSent 放回：textarea 里是胶囊文字、镜像层有敏感信息胶囊、整个 DOM 里没有真值；重发带真值与 secrets
  *   SC-9  经 lost + 宽限放回：每个检查点（占位、被拒、等待、放回）DOM 里都没有真值
  *   SC-10 粘贴芯片里确认的（没有胶囊、只有值）：放回之后粘贴芯片回来，重发的 secrets 还带着它
  *   SC-11 放回之后：藏起来的值不再提示；新加的胶囊编号 #2
@@ -24,6 +24,20 @@
  * 运行中发（steer 与空闲竞态退回的 prompt，粘贴芯片随 token 走）：
  *   SC-14 粘贴芯片里确认的值：运行中回车 → steer 的 text 是标记态（没有真值）、paste token 的 payload 带真值、secrets 带它，
  *         发完 DOM 里没有真值；点下去时已是 idle → agent.prompt 收同样的载荷，乐观占位里没有真值、paste token 还在
+ *
+ * 胶囊的画法（与 @ / 粘贴胶囊同一个 TokenChip）：
+ *   SC-15 镜像层里是 inline 的 TokenChip（kind = secret）：和 @ 引用一个样子 —— 没有括号、没有图标，类型色的字 +
+ *         淡底；粘贴胶囊也是；悬停卡与点开的弹窗里是类别和一句说明，没有真值
+ *
+ * 回退把发过的消息放回输入框（消息里存的是宿主换上的占位符）：
+ *   SC-16 占位符换回胶囊（真值问 redaction.resolve）：textarea 里是胶囊文字、同一个占位符出现两次是同一个胶囊、DOM 里
+ *         没有真值；再发带真值与 secrets
+ *   SC-17 真值已经在缓存里（气泡显示过）：不再问，同一拍就回填
+ *   SC-18 真值取不到（表里有、解不开；或宿主没有 resolve）：占位符原样留着、不成胶囊，照发、secrets 为空
+ *   SC-19 回退盖掉了原来的草稿：原来的胶囊不再作数，编号从 #1 起，发送不带旧值
+ *
+ * 胶囊的字没有括号隔开：
+ *   SC-20 `password: ` 后面跟着胶囊：规则把胶囊的字（Password）当成值报回来 —— 碰到胶囊的提示不算，没有提示行
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -56,6 +70,7 @@ import { InputArea, type InputAreaProps } from '../InputArea'
 import { V, resetStore } from '../../../__tests__/support/views'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 import { HINT_DEBOUNCE_MS } from '../../../hooks/useRedactionHints'
+import { requestRedactions, resetRedactionCacheForTests } from '../../../stores/redactionCache'
 import { PROMPT_OUTCOME_GRACE_MS as GRACE } from '../../../stores/promptOutcome'
 import {
   advance,
@@ -268,11 +283,11 @@ describe('+ 添加敏感信息', () => {
     ).toEqual(['PASSWORD', 'API_KEY', 'SECRET'])
     await fillSecret(PASSWORD, 'API_KEY')
 
-    const chipText = '[🔒 API key #1]'
+    const chipText = 'API key #1'
     expect(q('[data-plus-panel]')).toBeNull()
     expect(textarea().value).toBe(`use ${chipText}`)
     expect(textarea().value).not.toContain(PASSWORD)
-    expect(container.querySelector('[data-secret-chip]')!.textContent).toBe(chipText)
+    expect(container.querySelector('[data-token-kind="secret"]')!.textContent).toBe(chipText)
 
     // 回之前看一眼乐观气泡
     let release: () => void = () => {}
@@ -304,13 +319,13 @@ describe('+ 添加敏感信息', () => {
     await click(q('[data-plus-secret]')!)
     expect(q<HTMLInputElement>('[data-secret-input]')!.value).toBe(PASSWORD)
     await click(q('[data-secret-add]')!)
-    expect(textarea().value).toBe('root / [🔒 Password #1] ok')
+    expect(textarea().value).toBe('root / Password #1 ok')
 
     await click(plus())
     await click(q('[data-plus-secret]')!)
     await key(q('[data-secret-input]')!, 'Escape')
     expect(q('[data-secret-form]')).toBeNull()
-    expect(textarea().value).toBe('root / [🔒 Password #1] ok')
+    expect(textarea().value).toBe('root / Password #1 ok')
   })
 })
 
@@ -339,7 +354,7 @@ describe('提示', () => {
     expect(container.querySelector('[data-redaction-hint-span]')!.textContent).toBe(PASSWORD)
 
     await click(bar.querySelector('[data-redaction-hide-all]')!)
-    expect(textarea().value).toBe('sudo password [🔒 Password #1] please')
+    expect(textarea().value).toBe('sudo password Password #1 please')
     expect(q('[data-redaction-hints]')).toBeNull()
 
     await key(textarea(), 'Enter')
@@ -405,13 +420,13 @@ describe('胶囊的编辑与触屏', () => {
     expect(q('[data-secret-input]')!.className).toContain('text-[16px]')
     await fillSecret(PASSWORD)
     expect(q('[data-touch-sheet="secret"]')).toBeNull()
-    expect(textarea().value).toBe('[🔒 Password #1]')
+    expect(textarea().value).toBe('Password #1')
   })
 })
 
 describe('话没发出去，放回输入框', () => {
   const ALSO = 'Second#Value9'
-  const chipOf = (seq: number): string => `[🔒 Password #${seq}]`
+  const chipOf = (seq: number): string => `Password #${seq}`
   const hidden = (...values: string[]): Array<{ value: string; category: string }> =>
     values.map((value) => ({ value, category: 'PASSWORD' }))
   const hintEverywhere = (text: string): RedactionHint[] => {
@@ -431,7 +446,7 @@ describe('话没发出去，放回输入框', () => {
 
   const expectChipBack = (value: string, seq = 1): void => {
     expect(textarea().value).toBe(value)
-    expect(container.querySelector('[data-secret-chip]')!.textContent).toBe(chipOf(seq))
+    expect(container.querySelector('[data-token-kind="secret"]')!.textContent).toBe(chipOf(seq))
     expect(document.body.innerHTML).not.toContain(PASSWORD)
     expect(textarea().value).not.toContain(PASSWORD)
   }
@@ -520,7 +535,7 @@ describe('话没发出去，放回输入框', () => {
     expect(q('[data-redaction-hints]')).toBeNull()
 
     await addChip(ALSO)
-    expect(container.querySelector('[data-secret-chip]')!.textContent).toBe(chipOf(2))
+    expect(container.querySelector('[data-token-kind="secret"]')!.textContent).toBe(chipOf(2))
     await key(textarea(), 'Enter')
     expect(prompt.mock.calls[1]![0].secrets).toEqual(hidden(ALSO, PASSWORD))
   })
@@ -530,7 +545,7 @@ describe('话没发出去，放回输入框', () => {
     await addChip(ALSO)
     expect(textarea().value).toBe(`use ${chipOf(1)}${chipOf(2)}`)
     expect(
-      [...container.querySelectorAll('[data-secret-chip]')].map((chip) => chip.textContent)
+      [...container.querySelectorAll('[data-token-kind="secret"]')].map((chip) => chip.textContent)
     ).toEqual([chipOf(1), chipOf(2)])
     await key(textarea(), 'Enter')
     expect(prompt.mock.calls[1]![0]).toEqual({
@@ -546,7 +561,7 @@ describe('话没发出去，放回输入框', () => {
     el.selectionStart = el.selectionEnd = el.value.length
     await key(el, 'Backspace')
     expect(textarea().value).toBe('use ')
-    expect(container.querySelector('[data-secret-chip]')).toBeNull()
+    expect(container.querySelector('[data-token-kind="secret"]')).toBeNull()
     await type('use nothing')
     await key(textarea(), 'Enter')
     expect(prompt.mock.calls[1]![0]).toEqual({
@@ -560,7 +575,7 @@ describe('话没发出去，放回输入框', () => {
     await sendAndRestore()
     const edited = `use ${chipOf(1).replace('Password', 'Pasword')}`
     await type(edited)
-    expect(container.querySelector('[data-secret-chip]')).toBeNull()
+    expect(container.querySelector('[data-token-kind="secret"]')).toBeNull()
     await key(textarea(), 'Enter')
     expect(prompt.mock.calls[1]![0]).toEqual({ sessionId: 's1', text: edited, secrets: [] })
   })
@@ -664,5 +679,175 @@ describe('话没发出去，放回输入框', () => {
       await act(async () => resolve({ success: true }))
       await flush()
     })
+  })
+})
+
+describe('胶囊的画法', () => {
+  it('SC-15 与 @ 引用同一种画法（粘贴胶囊也是）；悬停卡与弹窗里没有真值', async () => {
+    vi.useFakeTimers()
+    await mountInput()
+    await type('use ')
+    await click(plus())
+    await click(q('[data-plus-secret]')!)
+    await fillSecret(PASSWORD)
+
+    const chip = container.querySelector<HTMLElement>('[data-token-kind="secret"]')!
+    expect(chip.getAttribute('role')).toBe('button')
+    expect(chip.dataset.tokenDisplay).toBe('Password #1')
+    expect(chip.textContent).toBe('Password #1')
+    // inline 变体：只动颜色，没有内边距；不再是单独的黄底
+    expect(chip.className).toContain('box-decoration-clone')
+    expect(chip.className).not.toContain('px-')
+    expect(chip.className).not.toContain('bg-warning')
+    // 类型色的字 + 同色淡底（颜色按类型分，不必和别的胶囊一样）
+    expect(chip.style.color).toBe('var(--viz-2)')
+    expect(chip.style.backgroundColor).toContain('var(--viz-2)')
+
+    // 粘贴胶囊同一种样子：没有括号、没有图标，同一组类名
+    await pasteInto(textarea(), longPaste('line'))
+    const pasted = container.querySelector<HTMLElement>('[data-token-kind="paste"]')!
+    expect(pasted.textContent).toBe('Pasted text #1 · 12 lines')
+    expect(pasted.className).toBe(chip.className)
+    for (const el of [chip, pasted]) {
+      expect(el.textContent).not.toMatch(/[[\]🔒]/u)
+      expect(el.querySelector('svg')).toBeNull()
+    }
+
+    // 悬停卡：类别 + 「Sensitive」+ 一句说明
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    })
+    await flush(400)
+    expect(document.body.textContent).toContain(en.input.atSourceSecret)
+    expect(document.body.textContent).toContain(en.input.secretNote)
+    expect(document.body.innerHTML).not.toContain(PASSWORD)
+
+    // 点开：弹窗里同样是说明
+    await click(chip)
+    expect(q('.dialog-panel')!.textContent).toContain(en.input.secretNote)
+    expect(document.body.innerHTML).not.toContain(PASSWORD)
+  })
+})
+
+describe('回退放回输入框', () => {
+  const PLACEHOLDER = '{{REDACTED_PASSWORD_k3v7x2mq}}'
+  const CHIP = 'Password #1'
+  let resolve: ReturnType<typeof vi.fn>
+
+  const withResolve = (answer: Record<string, { category: string; value?: string }>): void => {
+    resolve = vi.fn(async () => answer)
+    const api = (window as unknown as { api: { redaction: Record<string, unknown> } }).api
+    api.redaction.resolve = resolve
+  }
+
+  const rollbackTo = async (content: string): Promise<void> => {
+    await act(async () => {
+      useChatStore.getState().requestDraftRestore(content)
+    })
+    await flush()
+  }
+
+  const secretChips = (): string[] =>
+    [...container.querySelectorAll('[data-token-kind="secret"]')].map((c) => c.textContent ?? '')
+
+  beforeEach(() => resetRedactionCacheForTests())
+
+  it('SC-16 占位符换回胶囊；同一个占位符两处是同一个胶囊；再发带真值与 secrets', async () => {
+    withResolve({ [PLACEHOLDER]: { category: 'PASSWORD', value: PASSWORD } })
+    await mountInput()
+    await rollbackTo(`login with ${PLACEHOLDER}, retry with ${PLACEHOLDER}`)
+
+    expect(resolve).toHaveBeenCalledTimes(1)
+    expect(resolve.mock.calls[0]![0]).toEqual({ sessionId: 's1', placeholders: [PLACEHOLDER] })
+    expect(textarea().value).toBe(`login with ${CHIP}, retry with ${CHIP}`)
+    expect(secretChips()).toEqual([CHIP, CHIP])
+    expect(document.body.innerHTML).not.toContain(PASSWORD)
+
+    await key(textarea(), 'Enter')
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(prompt.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: `login with ${PASSWORD}, retry with ${PASSWORD}`,
+      secrets: [{ value: PASSWORD, category: 'PASSWORD' }]
+    })
+  })
+
+  it('SC-17 真值已在缓存里：不再问', async () => {
+    withResolve({ [PLACEHOLDER]: { category: 'API_KEY', value: PASSWORD } })
+    await mountInput()
+    // 气泡显示这个占位符时问过一次
+    await act(async () => requestRedactions('s1', [PLACEHOLDER]))
+    await flush()
+    expect(resolve).toHaveBeenCalledTimes(1)
+
+    await rollbackTo(`key ${PLACEHOLDER}`)
+    expect(resolve).toHaveBeenCalledTimes(1)
+    expect(textarea().value).toBe('key API key #1')
+    expect(secretChips()).toEqual(['API key #1'])
+  })
+
+  it('SC-18 真值取不到：占位符原样留着，照发、secrets 为空', async () => {
+    withResolve({ [PLACEHOLDER]: { category: 'PASSWORD' } })
+    await mountInput()
+    await rollbackTo(`login with ${PLACEHOLDER}`)
+    expect(textarea().value).toBe(`login with ${PLACEHOLDER}`)
+    expect(secretChips()).toEqual([])
+
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: `login with ${PLACEHOLDER}`,
+      secrets: []
+    })
+  })
+
+  it('SC-18 宿主没有 resolve：同样原样留着', async () => {
+    await mountInput()
+    await rollbackTo(`login with ${PLACEHOLDER}`)
+    expect(textarea().value).toBe(`login with ${PLACEHOLDER}`)
+    expect(secretChips()).toEqual([])
+  })
+
+  it('SC-19 回退盖掉原来的草稿：原来的胶囊不再作数，编号从 #1 起', async () => {
+    const OLD = 'old-Secret-77'
+    withResolve({ [PLACEHOLDER]: { category: 'PASSWORD', value: PASSWORD } })
+    await mountInput()
+    await type('draft ')
+    await click(plus())
+    await click(q('[data-plus-secret]')!)
+    await fillSecret(OLD, 'SECRET')
+    expect(textarea().value).toBe('draft Secret #1')
+
+    await rollbackTo(`login with ${PLACEHOLDER}`)
+    expect(textarea().value).toBe(`login with ${CHIP}`)
+    expect(secretChips()).toEqual([CHIP])
+
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: `login with ${PASSWORD}`,
+      secrets: [{ value: PASSWORD, category: 'PASSWORD' }]
+    })
+    expect(JSON.stringify(prompt.mock.calls[0]![0])).not.toContain(OLD)
+  })
+})
+
+describe('胶囊的字没有括号', () => {
+  it('SC-20 碰到胶囊的提示不算', async () => {
+    // 规则把 `password: ` 后面那个词当成值
+    hintsFor = (text) => {
+      const i = text.indexOf('Password')
+      return i === -1 ? [] : [{ start: i, end: i + 'Password'.length, category: 'PASSWORD' }]
+    }
+    await mountInput()
+    await type('password: ')
+    await click(plus())
+    await click(q('[data-plus-secret]')!)
+    await fillSecret(PASSWORD)
+    expect(textarea().value).toBe('password: Password #1')
+    await flush(HINT_DEBOUNCE_MS + 50)
+    expect(inspect).toHaveBeenCalled()
+    expect(q('[data-redaction-hints]')).toBeNull()
+    expect(q('[data-redaction-hint-span]')).toBeNull()
   })
 })

@@ -177,10 +177,10 @@ export function composerShot(container: Element): ComposerShot {
   return {
     text: textarea.value,
     images: useChatStore.getState().pendingImages,
-    chips: [...(mirror?.querySelectorAll('span[role="button"]') ?? [])].map((s) =>
-      (s.textContent ?? '').trim()
-    ),
-    secretChips: [...(mirror?.querySelectorAll('[data-secret-chip]') ?? [])].map(
+    chips: [
+      ...(mirror?.querySelectorAll('span[role="button"]:not([data-token-kind="secret"])') ?? [])
+    ].map((s) => (s.textContent ?? '').trim()),
+    secretChips: [...(mirror?.querySelectorAll('[data-token-kind="secret"]') ?? [])].map(
       (s) => s.textContent ?? ''
     ),
     slash: area.querySelector('[data-token-kind="cmd"]')?.getAttribute('data-token-display') ?? null

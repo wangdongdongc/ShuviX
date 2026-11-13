@@ -15,7 +15,8 @@ import { isUserWordsToken } from '@shuvix/chat-protocol/userWords'
  * 加的插话说明（chat-protocol midRunNote.ts），只有标签、没有标题；`trigger` = 触发器发的消息里的事件
  * （triggerEvent.ts），标题是触发时间；`sender` = 别的会话发来的消息的发送方（sessionSender.ts），标题是那条会话的标题；
  * `userWords` = 父会话发来的消息上宿主附的用户原话（userWords.ts），标题是附了几条；`goal` = 设定目标那条消息上系统写的
- * 说明（goalSet.ts），同 note 只有标签、没有标题
+ * 说明（goalSet.ts），同 note 只有标签、没有标题；`secret` = 输入框里要对模型藏起来的值的胶囊（useSecretChips），
+ * 只在输入框的镜像层里有，不进消息
  */
 export type TokenKind =
   | 'cmd'
@@ -23,12 +24,16 @@ export type TokenKind =
   | 'knowledge'
   | 'session'
   | 'paste'
+  | 'secret'
   | 'note'
   | 'trigger'
   | 'sender'
   | 'userWords'
   | 'goal'
   | 'other'
+
+/** 输入框里敏感信息胶囊的 token 类型：只给镜像层画胶囊用，不随消息发出、不落记录 */
+export const SECRET_TOKEN_TYPE = 'secret'
 
 /**
  * 判别展示类型；at token 以 id 的 `knowledge:` 前缀区分知识条目与工作区文件。会话引用同时看 payload（atTokenRef 同一个
@@ -42,6 +47,7 @@ export function tokenKind(token: InlineToken): TokenKind {
   if (isGoalSetToken(token)) return 'goal'
   if (token.type === 'cmd') return 'cmd'
   if (token.type === 'paste') return 'paste'
+  if (token.type === SECRET_TOKEN_TYPE) return 'secret'
   if (token.type === 'at') {
     if (token.id.startsWith('knowledge:')) return 'knowledge'
     if (token.id.startsWith('session:') && token.payload.startsWith('[session: id ')) {

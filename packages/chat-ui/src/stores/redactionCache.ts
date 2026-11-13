@@ -106,6 +106,22 @@ async function resolveChunk(sessionId: string, placeholders: string[]): Promise<
   notify()
 }
 
+/**
+ * 现在就问，问完才回（已知的不再问）：给马上要用真值的地方 —— 回退把消息放回输入框时，占位符要换回胶囊。
+ * 问不到的照旧记成没问到；调用方之后用 redactionInfo 取。
+ */
+export async function resolveRedactionsNow(
+  sessionId: string,
+  placeholders: readonly string[]
+): Promise<void> {
+  const wanted = [...new Set(placeholders)].filter((p) => !known.get(sessionId)?.has(p))
+  const chunks: string[][] = []
+  for (let i = 0; i < wanted.length; i += MAX_RESOLVE_PLACEHOLDERS) {
+    chunks.push(wanted.slice(i, i + MAX_RESOLVE_PLACEHOLDERS))
+  }
+  await Promise.all(chunks.map((chunk) => resolveChunk(sessionId, chunk)))
+}
+
 export function subscribeRedactions(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)

@@ -209,7 +209,7 @@ export function atTokenRef(token: InlineToken): AtMentionRef {
 export interface PasteLike {
   /** 完整粘贴内容（发给 LLM 的正文） */
   payload: string
-  /** 占位/胶囊展示文本（如 `[粘贴文本 #1 · 45 行]`，前端按 locale 构造，与 textarea 占位明文一致） */
+  /** 占位/胶囊展示文本（如 `粘贴文本 #1 · 45 行`，前端按 locale 构造，与 textarea 占位明文一致） */
   displayText: string
   /** 草稿内序号（1 起），作实体标识 */
   seq: number

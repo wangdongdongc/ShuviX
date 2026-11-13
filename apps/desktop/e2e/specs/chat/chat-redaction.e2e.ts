@@ -13,6 +13,9 @@
  *        真 bash 打出来的都是那个值（还原时按引号转义）。沙箱不可用就跳过（受限命令才不问）
  *   RD-6 关掉内置策略（真开关 mdMeta.setEnabled）：新读到的按真值存、按真值发，旧占位符还在请求里；模型用旧占位符写文件，
  *        磁盘上是真值；输入框不再提示。之后重新打开
+ *   RD-7 回退：@ 文件引用、+ 加的值和一段长粘贴一起发出去 —— 输入框里三种胶囊一个样子（没有括号、没有图标）；再回退到
+ *        那条消息：占位符换回胶囊、三个胶囊都回来、页面上没有真值；不改直接再发，模型收到的还是同一句话（同一个占位符）。
+ *        设了 `SHUVIX_E2E_SHOTS=<目录>` 时把输入框截一张图
  *
  * 前置：会话绑项目，write 的目标在项目目录里（ask-on-external-path 不问）。占位符的 8 位摘要用这个实例自己的密钥，
  * 用例里算不出来 —— 假模型用 `build` 从请求里取。
@@ -32,7 +35,13 @@ import {
   waitRendererReady,
   type EventRecorder
 } from '../../harness/seed'
-import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import {
+  atPopoverPane,
+  chatPane,
+  sidebarPane,
+  type ChatPane,
+  type SidebarPane
+} from '../../harness/pages'
 
 const MODEL = 'e2e-model'
 const PROVIDER_NAME = 'E2E Fake'
@@ -116,6 +125,46 @@ const addSecret = async (value: string, category: string): Promise<void> => {
   )
 }
 
+/** 往输入框里粘贴一段文字（真的 paste 事件：长文会折成粘贴胶囊） */
+const pasteText = async (text: string): Promise<void> => {
+  await app.main.eval(`(() => {
+    const ta = document.querySelector('textarea')
+    ta.focus()
+    ta.selectionStart = ta.selectionEnd = ta.value.length
+    const data = new DataTransfer()
+    data.setData('text/plain', ${JSON.stringify(text)})
+    ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+  })()`)
+  await new Promise((r) => setTimeout(r, 100))
+}
+
+/** 输入卡片截一张图（给人看的证据，不是断言）：只在设了 SHUVIX_E2E_SHOTS 时 */
+const shootComposer = async (name: string): Promise<void> => {
+  const dir = process.env.SHUVIX_E2E_SHOTS
+  if (!dir) return
+  const rect = await app.main.eval<{
+    x: number
+    y: number
+    width: number
+    height: number
+  }>(`(() => {
+    const r = document.querySelector('textarea').parentElement.parentElement.getBoundingClientRect()
+    return { x: r.left, y: r.top, width: r.width, height: r.height }
+  })()`)
+  const shot = await app.main.send<{ data: string }>('Page.captureScreenshot', {
+    format: 'png',
+    clip: {
+      x: rect.x - 8,
+      y: rect.y - 8,
+      width: rect.width + 16,
+      height: rect.height + 16,
+      scale: 2
+    }
+  })
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, name), Buffer.from(shot.data, 'base64'))
+}
+
 const policyNames = (): Promise<string[]> =>
   app.main.eval<string[]>(`window.api.policy.list().then((ps) => ps.map((p) => p.name))`)
 
@@ -161,6 +210,7 @@ beforeAll(async () => {
   sids.plain = await createSession('R-plain', project.id)
   sids.quote = await createSession('R-quote', project.id)
   sids.off = await createSession('R-off', project.id)
+  sids.back = await createSession('R-back', project.id)
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -214,7 +264,7 @@ describe('自动脱敏', () => {
       )
     ).toBe(KEY)
     await hideHinted()
-    expect(await composerText()).toBe('save my key [🔒 API key #1] into .env')
+    expect(await composerText()).toBe('save my key API key #1 into .env')
     await chat.clickSend()
     await events.waitFor('agent_end', { sessionId: sids.mask })
     await chat.waitIdle()
@@ -416,7 +466,7 @@ describe('自动脱敏', () => {
     await chat.ready()
     await chat.type('the password is ')
     await addSecret(PASSWORD, 'PASSWORD')
-    expect(await composerText()).toBe('the password is [🔒 Password #1]')
+    expect(await composerText()).toBe('the password is Password #1')
     await chat.clickSend()
     await events.waitFor('agent_end', { sessionId: sids.quote })
     await chat.waitIdle()
@@ -496,5 +546,85 @@ describe('自动脱敏', () => {
       rmSync(notes, { force: true })
       rmSync(written, { force: true })
     }
+  })
+
+  it('RD-7 回退：占位符在输入框里换回胶囊，再发还是同一个占位符', async () => {
+    const PASSWORD = 'Xk9#mP2q-e2e'
+    const PASSWORD_PLACEHOLDER = /\{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\}/
+    const LONG = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n')
+    const SECRET_CHIP = 'Password #1'
+    const PASTE_CHIP = 'Pasted text #1 · 12 lines'
+    writeFileSync(join(projDir, 'deploy.md'), '# deploy\n')
+    provider.reset()
+    await events.clear()
+    provider.script({ text: 'first' }, { text: 'second' })
+
+    /** 镜像层里的胶囊：类型 */
+    const chipLooks = (): Promise<{ kind: string }[]> =>
+      app.main.eval<{ kind: string }[]>(
+        `[...document.querySelectorAll('[aria-hidden="true"] [data-token-kind]')].map((e) => ({ kind: e.dataset.tokenKind }))`
+      )
+
+    expect(await sidebar.openSession('R-back')).toBe(true)
+    await chat.ready()
+    // @ 文件引用
+    const popover = atPopoverPane(app.main)
+    await chat.type('@deploy')
+    await until(
+      async () => (await popover.rows()).find((r) => r.key === 'deploy.md') ?? null,
+      'popover row deploy.md'
+    )
+    expect(await popover.select('deploy.md')).toBe(true)
+    const mention = (await composerText()).trimEnd()
+    expect(mention).toBe('@deploy.md')
+    // + 加的值、一段长粘贴
+    await chat.type(`${mention} log in with `)
+    await addSecret(PASSWORD, 'PASSWORD')
+    await chat.type(`${mention} log in with ${SECRET_CHIP} then run `)
+    await pasteText(LONG)
+    const DRAFT = `${mention} log in with ${SECRET_CHIP} then run ${PASTE_CHIP}`
+    const CHIPS = [mention, SECRET_CHIP, PASTE_CHIP]
+    expect(await composerText()).toBe(DRAFT)
+    // 三种胶囊同一个组件、一个样子：没有括号、没有图标
+    expect(await chat.composerChips()).toEqual(CHIPS)
+    const looks = await chipLooks()
+    expect(looks.map((l) => l.kind)).toEqual(['file', 'secret', 'paste'])
+    await shootComposer('redaction-composer-before-send.png')
+    await chat.clickSend()
+    await events.waitFor('agent_end', { sessionId: sids.back })
+    await chat.waitIdle()
+
+    const first = provider.requests()[0]!
+    const placeholder = PASSWORD_PLACEHOLDER.exec(first.lastUserText)?.[0]
+    expect(placeholder).toBeDefined()
+    expect(first.raw).not.toContain(PASSWORD)
+
+    const userId = await app.main.eval<string>(
+      `window.api.message.list(${JSON.stringify(sids.back)}).then((ms) => ms.filter((m) => m.role === 'user').at(-1).id)`
+    )
+    await chat.clickRollback(userId)
+    expect(await chat.confirmOpen()).toBe(true)
+    await chat.confirmAccept()
+
+    // 回填的是胶囊文字，不是 {{REDACTED_…}} 那串；三个胶囊都回来了，页面上没有真值
+    await until(async () => (await composerText()) === DRAFT, 'draft rebuilt with the secret chip')
+    expect(await chat.composerChips()).toEqual(CHIPS)
+    expect((await chipLooks()).map((l) => l.kind)).toEqual(['file', 'secret', 'paste'])
+    expect(
+      await app.main.eval<boolean>(`document.body.innerHTML.includes(${JSON.stringify(PASSWORD)})`)
+    ).toBe(false)
+    await shootComposer('redaction-composer-after-rollback.png')
+
+    // 不改直接再发：和第一次发的是同一句话（同一个占位符），请求与记录里都没有真值
+    await events.clear()
+    await chat.clickSend()
+    await events.waitFor('agent_end', { sessionId: sids.back })
+    await chat.waitIdle()
+    const requests = provider.requests()
+    expect(requests).toHaveLength(2)
+    expect(requests[1]!.lastUserText).toBe(first.lastUserText)
+    expect(requests[1]!.lastUserText).toContain(`log in with ${placeholder} then run`)
+    for (const req of requests) expect(req.raw).not.toContain(PASSWORD)
+    expect(await listedText(sids.back)).not.toContain(PASSWORD)
   })
 })

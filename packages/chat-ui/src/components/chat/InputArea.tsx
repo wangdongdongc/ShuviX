@@ -38,12 +38,13 @@ import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
 import { CacheBreakConfirmHost } from './CacheBreakConfirm'
 import { MentionHighlighter } from './MentionHighlighter'
-import { useAtMentions, type AtSuggestion } from '../../hooks/useAtMentions'
-import { usePasteChips } from '../../hooks/usePasteChips'
-import { useSecretChips } from '../../hooks/useSecretChips'
+import { matchMentions, useAtMentions, type AtSuggestion } from '../../hooks/useAtMentions'
+import { matchPasteChips, usePasteChips } from '../../hooks/usePasteChips'
+import { matchSecretChips, useSecretChips } from '../../hooks/useSecretChips'
 import { useRedactionHints, type RedactionHintItem } from '../../hooks/useRedactionHints'
 import { ComposerPlusMenu, RedactionHintBar } from './ComposerSecrets'
-import type { UserSecret } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import { placeholdersIn, type UserSecret } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import { redactionInfo, resolveRedactionsNow } from '../../stores/redactionCache'
 import { isImeComposing } from '../../utils/ime'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useChatDensity } from '../../host/chatHostContext'
@@ -228,6 +229,18 @@ export function InputArea({
   // 要对模型藏起来的值（docs/auto-redaction-design.md §14）：+ 添加的、确认了提示的。发送时随 secrets 交给宿主
   const secrets = useSecretChips()
   // 提示：可能是敏感信息的几处 —— 只提示，点了才藏；不理会的照原样发
+  // 各个胶囊在文字里占的区间：提示不认胶囊里的字
+  const atMentions = at.mentions
+  const pasteChips = paste.chips
+  const secretChips = secrets.chips
+  const chipSpans = useCallback(
+    (text: string) => [
+      ...matchMentions(text, atMentions),
+      ...matchPasteChips(text, pasteChips),
+      ...matchSecretChips(text, secretChips)
+    ],
+    [atMentions, pasteChips, secretChips]
+  )
   const hints = useRedactionHints({
     sessionId: activeSessionId,
     provider: chatHost.models.activeProvider ?? undefined,
@@ -235,6 +248,7 @@ export function InputArea({
     text: inputText,
     pastes: paste.chips.map((chip) => chip.payload),
     isHidden: secrets.isHidden,
+    chipSpans,
     enabled: !sendBlocked
   })
   // 背景镜像层（画 @ / 粘贴胶囊）—— 与 textarea 同步 scrollTop
@@ -369,6 +383,8 @@ export function InputArea({
 
   // 消息回退：把历史消息重建为可编辑草稿——paste/at 重新登记恢复胶囊，cmd 转 /id 明文（发送时重新解析）。
   // 直接回填裸 content 会让 {{shuvixInlineToken}} 标记失去 metadata → token 失效丢信息。
+  // 当初藏起来的值在消息里是宿主换上的占位符（`{{REDACTED_…}}`）：换回胶囊，真值取自会话对照表 —— 气泡显示过它，
+  // 通常已经在缓存里；不在就先问，问到再回填（问不到的那个占位符原样留着，照发宿主也认得）。
   const draftRestore = useChatStore((s) => s.draftRestoreRequest)
   useEffect(() => {
     if (!draftRestore) return
@@ -377,11 +393,25 @@ export function InputArea({
       draftRestore.content,
       draftRestore.inlineTokens
     )
-    if (pasteTokens.length > 0) paste.restoreFromTokens(pasteTokens)
-    if (atTokens.length > 0) at.restoreFromTokens(atTokens)
-    setInputText(text)
-    setTimeout(() => textareaRef.current?.focus(), 0)
-  }, [draftRestore, at, paste, setInputText])
+    const sid = useChatStore.getState().activeSessionId
+    const fill = (): void => {
+      if (pasteTokens.length > 0) paste.restoreFromTokens(pasteTokens)
+      if (atTokens.length > 0) at.restoreFromTokens(atTokens)
+      // 整段换掉了：之前草稿里的胶囊不再作数
+      secrets.reset()
+      setInputText(sid ? secrets.adopt(text, (p) => redactionInfo(sid, p)) : text)
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    }
+    const unknown = sid ? placeholdersIn(text).filter((p) => !redactionInfo(sid, p)) : []
+    if (!sid || unknown.length === 0) {
+      fill()
+      return
+    }
+    void resolveRedactionsNow(sid, unknown).then(() => {
+      // 等的这一下换了会话：那条草稿不是给这里的
+      if (useChatStore.getState().activeSessionId === sid) fill()
+    })
+  }, [draftRestore, at, paste, secrets, setInputText])
 
   // 话没发出去：放回输入框（胶囊原样）、报原因。用户已经写了新内容就只报原因：不盖掉，也不掺在一起
   const composerRestore = useChatStore((s) => s.composerRestoreRequest)

@@ -39,12 +39,15 @@ What the user types in the input box is not checked: **the user decides** (next 
 
 - **+ → Add a sensitive value**: type or paste a password, key or token into a field that does not
   show it, pick a kind (password, API key, secret) and add it. It sits in the message as a shaded
-  chip such as `[🔒 Password #1]`; the model gets a placeholder, and a tool the agent runs with it
+  chip such as `Password #1`; the model gets a placeholder, and a tool the agent runs with it
   gets the real value. Text selected in the input box when you open the form is filled in and
   replaced by the chip. On a phone + opens a sheet with the same choices.
 - **Hints**: while you type, what looks like a secret or personal data — and would be kept from
   the conversation's model by the policy — is underlined, and a row above the text lists it. Click
   an item (or Hide all) to turn it into a chip; × hides the hints.
+- **Rolling back**: when you roll back to a message that had a chip, it comes back in the input
+  box as a chip (not as the `{{REDACTED_…}}` placeholder text); sent again unchanged, the model
+  gets the same placeholder.
 - **Nothing else is replaced.** A message sent from the input box goes to the model exactly as
   written apart from the chips, and values you left visible are not replaced later in that
   conversation either — the model has already seen them. The same holds for an answer typed into a

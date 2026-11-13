@@ -606,7 +606,7 @@ describe('放回的内容', () => {
 
   describe('SF-17 粘贴芯片', () => {
     const TEXT = longPaste('line')
-    const CHIP = '[Pasted text #1 · 12 lines]'
+    const CHIP = 'Pasted text #1 · 12 lines'
 
     async function restored(): Promise<void> {
       await type('see ')
@@ -635,7 +635,7 @@ describe('放回的内容', () => {
       expect(textarea().value).toBe('see ')
       expect(shot().chips).toEqual([])
       await paste(longPaste('other'))
-      expect(shot().chips).toEqual(['[Pasted text #2 · 12 lines]'])
+      expect(shot().chips).toEqual(['Pasted text #2 · 12 lines'])
     })
 
     it('放回之后接着粘贴：序号不撞，两段全文都发得出去', async () => {
@@ -643,7 +643,7 @@ describe('放回的内容', () => {
       await restored()
       const other = longPaste('other')
       await paste(other)
-      expect(shot().chips).toEqual([CHIP, '[Pasted text #2 · 12 lines]'])
+      expect(shot().chips).toEqual([CHIP, 'Pasted text #2 · 12 lines'])
       await pressEnter()
       const tokens = prompt.mock.calls[1]![0].inlineTokens as Record<string, { payload: string }>
       expect(Object.values(tokens).map((token) => token.payload)).toEqual([TEXT, other])
@@ -657,7 +657,7 @@ describe('放回的内容', () => {
     await type(`${textarea().value} and `)
     await addSecret(SECRET)
     await act(async () => useChatStore.setState({ pendingImages: [IMG_1] }))
-    expect(shot().chips).toEqual(['@a.ts', '[Pasted text #1 · 12 lines]'])
+    expect(shot().chips).toEqual(['@a.ts', 'Pasted text #1 · 12 lines'])
     expect(shot().secretChips).toHaveLength(1)
     await expectRoundTrip(async () => {
       await rejectPrompt(lost())

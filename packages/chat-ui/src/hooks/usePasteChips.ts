@@ -1,14 +1,16 @@
 /**
  * usePasteChips —— 聊天输入框长文粘贴折叠为「粘贴芯片」。
  *
- * 粘贴文本超阈值（行数/字符数）时不落入 textarea，改插入短占位明文（如 `[粘贴文本 #1 · 45 行]`），
+ * 粘贴文本超阈值（行数/字符数）时不落入 textarea，改插入短占位明文（如 `粘贴文本 #1 · 45 行`），
  * 完整内容暂存草稿态；发送时把每处占位替换成 {{shuvixInlineToken:pN}} 标记 + 构造 paste 类型
  * InlineToken（payload 随 metadata 持久化），后端 resolveTokensForAgent 展开为完整原文交给 LLM，
  * 气泡侧则渲染为 TokenChip 胶囊（点击弹窗看原文）——聊天记录不再被超长粘贴撑爆。
  *
  * 与 @ 引用同用「textarea 存明文 + 镜像层画胶囊」方案（见 useAtMentions / MentionHighlighter）；
- * 占位明文自带 `[...]` 括号与递增序号，草稿内天然唯一，故匹配用严格字面量、不做词边界判定
+ * 占位明文和 @ 引用一样没有括号、没有图标（三种胶囊一个样子，用户 2026-11-12 的要求）；它带递增序号，序号后面
+ * 跟着 ` · `，草稿内唯一、互不为前缀，故匹配用严格字面量、不做词边界判定
  * （用户在占位符内部编辑即破坏字面量 → prune 丢弃芯片，残文降级为普通文字，与 @ 引用一致）。
+ * 以前发出去的消息里存的是带括号的写法（`[粘贴文本 #1 · 45 行]`）：回退时按存下的 displayText 原样登记，照样成胶囊。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -22,7 +24,7 @@ export const PASTE_CHAR_THRESHOLD = 800
 
 /** 一条已登记的粘贴芯片 */
 export interface PasteChip {
-  /** 写入 textarea 的占位明文（含括号），如 `[粘贴文本 #1 · 45 行]` */
+  /** 写入 textarea 的占位明文，如 `粘贴文本 #1 · 45 行` */
   text: string
   /** 完整粘贴内容（行尾已归一为 \n） */
   payload: string

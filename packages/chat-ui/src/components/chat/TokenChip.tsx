@@ -6,6 +6,7 @@ import {
   ClipboardPaste,
   CornerDownRight,
   FileText,
+  Lock,
   MessagesSquare,
   Quote,
   Target,
@@ -47,6 +48,8 @@ const KIND_META: Record<
     Icon: ClipboardPaste,
     labelKey: 'input.atSourcePaste'
   },
+  // 输入框里要对模型藏起来的值（只在镜像层）：payload 是一句说明，不是真值 —— 真值不上屏
+  secret: { color: 'var(--viz-2)', Icon: Lock, labelKey: 'input.atSourceSecret' },
   // 运行时加的插话说明：只有标签，没有标题（displayText 是空串）
   note: {
     color: 'var(--theme-text-tertiary)',
@@ -77,7 +80,7 @@ function chipBg(color: string, hovered: boolean, inline: boolean): string {
 
 /**
  * TokenChip —— 可复用的内联 Token 胶囊。按类型分色 + 图标 + 本地化源标签（cmd 紫 / at 文件 蓝 /
- * at 知识 琥珀 / paste 灰）；悬停 ~300ms 浮出预览卡（标题 + 源标签 + 来源路径 + payload 前三行），
+ * at 知识 琥珀 / paste 灰 / 敏感信息 橙）；悬停 ~300ms 浮出预览卡（标题 + 源标签 + 来源路径 + payload 前三行），
  * 点击仍弹完整 TokenPayloadDialog。三处共用：用户气泡/子代理消息里的 token 段、输入框斜杠命令芯片、
  * 输入框 `@` 引用 / 粘贴镜像层。
  *

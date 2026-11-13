@@ -37,13 +37,18 @@ export function useRedactionHints(params: {
   pastes: string[]
   /** 已经要藏的值 */
   isHidden: (value: string) => boolean
+  /**
+   * 这段文字里各个胶囊（@ 引用、粘贴、要藏的值）占的区间：碰到胶囊的提示不算。胶囊的占位明文是给人看的名字
+   * （`Password #1`、`@deploy.md`），没有括号隔开，前面写着 `password:` 时规则会把它当成值。
+   */
+  chipSpans: (text: string) => readonly { start: number; end: number }[]
   enabled: boolean
 }): {
   items: RedactionHintItem[]
   spans: RedactionHintSpan[]
   dismiss: () => void
 } {
-  const { sessionId, provider, model, text, pastes, isHidden, enabled } = params
+  const { sessionId, provider, model, text, pastes, isHidden, chipSpans, enabled } = params
   const [result, setResult] = useState<InspectResult | null>(null)
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set())
   const pastesKey = pastes.join('\u0000')
@@ -91,12 +96,21 @@ export function useRedactionHints(params: {
     if (text.length === 0 && pastes.length === 0) setDismissed(new Set())
   }, [text, pastes.length])
 
+  // 输入框正文里的提示，去掉碰到胶囊的
+  const textHints = useMemo((): RedactionHint[] => {
+    if (!result) return []
+    const chips = chipSpans(result.text)
+    return (result.hints[0] ?? []).filter(
+      (hint) => !chips.some((chip) => hint.start < chip.end && chip.start < hint.end)
+    )
+  }, [result, chipSpans])
+
   const items = useMemo((): RedactionHintItem[] => {
     if (!result) return []
     const sources = [result.text, ...result.pastes]
     const seen = new Map<string, RedactionHintItem>()
     result.hints.forEach((list, i) => {
-      for (const hint of list ?? []) {
+      for (const hint of i === 0 ? textHints : (list ?? [])) {
         const value = sources[i]?.slice(hint.start, hint.end)
         if (!value || seen.has(value) || dismissed.has(value) || isHidden(value)) continue
         // 还在文本里（或还在某块粘贴里）才算
@@ -105,13 +119,13 @@ export function useRedactionHints(params: {
       }
     })
     return [...seen.values()]
-  }, [result, dismissed, isHidden, text, pastes])
+  }, [result, textHints, dismissed, isHidden, text, pastes])
 
   const spans = useMemo((): RedactionHintSpan[] => {
     if (!result || result.text !== text) return []
     const shown = new Set(items.map((item) => item.value))
-    return (result.hints[0] ?? []).filter((hint) => shown.has(text.slice(hint.start, hint.end)))
-  }, [result, text, items])
+    return textHints.filter((hint) => shown.has(text.slice(hint.start, hint.end)))
+  }, [result, text, items, textHints])
 
   const dismiss = useCallback(() => {
     setDismissed((prev) => new Set([...prev, ...items.map((item) => item.value)]))

@@ -1,20 +1,29 @@
 /**
  * useSecretChips —— 输入框里要对模型藏起来的值（docs/auto-redaction-design.md §14）：+ 添加的，和确认了提示的。
  *
- * 与粘贴芯片同法（usePasteChips）：textarea 里放一段占位明文（`[🔒 密码 #1]`），镜像层把它画成胶囊；真值只在这里
+ * 与粘贴芯片同法（usePasteChips）：textarea 里放一段占位明文（`密码 #1`），镜像层把它画成胶囊；真值只在这里
  * （内存），发送时展开回真值、随 `secrets` 交给宿主 —— 宿主换成占位符，模型只看到占位符。确认的提示落在粘贴芯片的
  * 全文里时没有胶囊可放，只记下这个值（`extra`），同样随 `secrets` 交出去（宿主按值替换）。
  *
- * 占位明文自带括号与递增序号，草稿内唯一；在它内部编辑即破坏字面量 → prune 丢掉这个胶囊（真值随之丢掉，不会
- * 以残文形式发出去 —— 残文是占位明文，不是真值）。
+ * 发出去的消息里存的是宿主换上的占位符（`{{REDACTED_…}}`）。回退把那条消息放回输入框时经 `adopt` 换回胶囊
+ * （真值问会话对照表）：再发时和新加的胶囊走同一条路，宿主沿用同一个占位符。
+ *
+ * 占位明文是类别 + 递增序号，草稿内唯一；和 @ 引用一样没有括号、没有图标（三种胶囊一个样子，用户 2026-11-12 的
+ * 要求）。在它内部编辑即破坏字面量 → prune 丢掉这个胶囊（真值随之丢掉，不会以残文形式发出去 —— 残文是占位明文，
+ * 不是真值）。没有括号收尾，`密码 #1` 是 `密码 #10` 的开头：同一处起点取长的那个（matchSecretChips），退格也只认
+ * 整个命中的结尾。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { UserSecret } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import {
+  splitPlaceholders,
+  type RedactionMarkInfo,
+  type UserSecret
+} from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 
 /** 一个胶囊 */
 export interface SecretChip {
-  /** 写进 textarea 的占位明文（含括号），如 `[🔒 密码 #1]` */
+  /** 写进 textarea 的占位明文，如 `密码 #1` */
   text: string
   value: string
   category: string
@@ -28,7 +37,7 @@ export interface SecretMatch {
   chip: SecretChip
 }
 
-/** 文本里各胶囊的非重叠命中（镜像层画胶囊 + 发送时展开共用） */
+/** 文本里各胶囊的非重叠命中（镜像层画胶囊 + 发送时展开共用）。同一处起点取长的（`密码 #10` 不算成 `密码 #1` 加个 0） */
 export function matchSecretChips(text: string, chips: readonly SecretChip[]): SecretMatch[] {
   const hits: SecretMatch[] = []
   for (const chip of chips) {
@@ -63,6 +72,11 @@ export interface UseSecretChips {
   ) => { text: string; caret: number }
   /** 确认一条提示：文本里所有出现的 value 换成一个胶囊；文本里没有（在粘贴芯片里）就只记下这个值 */
   hide: (value: string, category: string, text: string) => string
+  /**
+   * 回退把发过的消息放回输入框：文本里宿主当初换下的占位符（`{{REDACTED_…}}`）换回胶囊，真值取自会话对照表
+   * （`infoOf`）。取不到真值的原样留着 —— 那个占位符本身照发，宿主认得。
+   */
+  adopt: (text: string, infoOf: (placeholder: string) => RedactionMarkInfo | undefined) => string
   /** 文本变化后剪掉占位已不在的胶囊 */
   prune: (text: string) => void
   /** 光标紧贴胶囊尾部时，一次退格删掉整个胶囊；否则 null */
@@ -133,6 +147,36 @@ export function useSecretChips(): UseSecretChips {
     [makeChip]
   )
 
+  const adopt = useCallback(
+    (text: string, infoOf: (placeholder: string) => RedactionMarkInfo | undefined): string => {
+      const segments = splitPlaceholders(text)
+      if (segments.every((segment) => typeof segment === 'string')) return text
+      // 同一个占位符（= 同一个值）出现几次都是同一个胶囊；null = 取不到真值
+      const adopted = new Map<string, SecretChip | null>()
+      let out = ''
+      for (const segment of segments) {
+        if (typeof segment === 'string') {
+          out += segment
+          continue
+        }
+        let chip = adopted.get(segment.placeholder)
+        if (chip === undefined) {
+          const info = infoOf(segment.placeholder)
+          chip = info?.value ? makeChip(info.value, info.category) : null
+          adopted.set(segment.placeholder, chip)
+        }
+        out += chip?.text ?? segment.placeholder
+      }
+      const added = [...adopted.values()].filter((chip): chip is SecretChip => chip !== null)
+      if (added.length > 0) {
+        chipsRef.current = [...chipsRef.current, ...added]
+        setChips(chipsRef.current)
+      }
+      return out
+    },
+    [makeChip]
+  )
+
   const prune = useCallback((text: string): void => {
     setChips((prev) => {
       const next = prev.filter((c) => text.includes(c.text))
@@ -144,13 +188,9 @@ export function useSecretChips(): UseSecretChips {
 
   const backspace = useCallback(
     (text: string, caret: number): { text: string; caret: number } | null => {
-      for (const c of chipsRef.current) {
-        const s = caret - c.text.length
-        if (s >= 0 && text.slice(s, caret) === c.text) {
-          return { text: text.slice(0, s) + text.slice(caret), caret: s }
-        }
-      }
-      return null
+      // 只认整个命中的结尾：光标在 `密码 #1|0` 里不是 #1 的结尾
+      const hit = matchSecretChips(text, chipsRef.current).find((m) => m.end === caret)
+      return hit ? { text: text.slice(0, hit.start) + text.slice(caret), caret: hit.start } : null
     },
     []
   )
@@ -214,6 +254,7 @@ export function useSecretChips(): UseSecretChips {
     chips,
     insert,
     hide,
+    adopt,
     prune,
     backspace,
     expand,

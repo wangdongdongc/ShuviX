@@ -371,7 +371,7 @@ describe('输入框只发消息', () => {
     await mount([ASK])
     await addSecretChip(container, 'hunter2-value')
     await flush()
-    expect(container.querySelector('[data-secret-chip]')).not.toBeNull()
+    expect(container.querySelector('[data-token-kind="secret"]')).not.toBeNull()
     await type(`${textarea().value} use this`)
     await pressEnter()
     expect(agent.respondToInput).not.toHaveBeenCalled()
