@@ -140,14 +140,6 @@ export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSign
     }
     if (signal.kind === 'started') send({ type: 'agent_start', sessionId: target })
     else send({ type: 'agent_end', sessionId: target, reason: signal.reason })
-    // 根运行的结束交给目标模式（docs/goal-mode-design.md §4.1）：派生 agent 的不算
-    if (signal.agentId === undefined && signal.kind === 'ended' && runObserver !== null) {
-      try {
-        runObserver.rootRunEnded(sessionId, signal.reason)
-      } catch (error) {
-        log.warn(`根运行观察者失败 session=${sessionId}: ${errorText(error)}`)
-      }
-    }
   }
 
   function release(entry: Held): void {
@@ -245,18 +237,6 @@ let askObserver: SessionAskObserver | null = null
 /** 登记询问的观察者（main 入口接 notificationService；null = 摘掉） */
 export function setSessionAskObserver(observer: SessionAskObserver | null): void {
   askObserver = observer
-}
-
-/** 根运行结束的观察者（目标模式）：main 入口登记；没登记 → 只广播 agent_start / agent_end */
-export interface SessionRunObserver {
-  rootRunEnded(sessionId: string, reason: 'ok' | 'aborted' | 'error'): void
-}
-
-let runObserver: SessionRunObserver | null = null
-
-/** 登记根运行结束的观察者（main 入口接 goalService；null = 摘掉） */
-export function setSessionRunObserver(observer: SessionRunObserver | null): void {
-  runObserver = observer
 }
 
 let installed: SessionSignals | undefined

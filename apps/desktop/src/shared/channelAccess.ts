@@ -56,10 +56,8 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:newSessionDefaults': 'read', // 新会话会用的模型 / 档位：与 agent:init 对一条刚建的会话报的同一份
   'agent:askCounts': 'read',
   'agent:pendingInputs': 'read', // 询问本身（命令、路径、改动）：与会话视图里的同一份，读会话就读得到
-  'agent:goal': 'read',
-  // 设目标 = 以人的来源发一条消息（与 agent:prompt 同级）；暂停 / 继续 / 编辑 / 清除同理
-  'agent:goalAct': 'write',
-  'agent:goalStatuses': 'read',
+  // 设目标 = fork 出管理员会话、以人的来源往里发一条消息（与 agent:prompt、session:fork 同级）
+  'agent:goalStart': 'write',
   'agent:systemPromptStatus': 'read', // 冻结的系统提示词与此刻的来源比一比：只读（可能把会话打开来读）
   'agent:rebuildSystemPrompt': 'write', // 删掉冻结的系统提示词，下一条消息重新渲染
   'agent:destroy': 'write',
@@ -652,7 +650,6 @@ export const SETTING_KEY_FACTS: Readonly<Record<string, CallFacts>> = {
   'session.': { scope: 'sessions', access: 'admin' }, // 重启后续跑中断的会话
   'triggers.': { scope: 'agents', access: 'admin' }, // 触发源开关：关掉内置 timer 就没有 bot 会被定时叫起来
   'bots.': { scope: 'agents', access: 'admin' }, // 随应用提供的 bot 的内置 id 认定（daily-bot-access 据此放宽权限）
-  'goal.': { scope: 'agents', access: 'admin' }, // 目标的缺省花费 / 轮数上限：花谁的钱、让 agent 自己跑多久
   'sandbox.': { scope: 'security', access: 'admin' },
   'general.classifierProvider': { scope: 'security', access: 'admin' }, // 命令风险分类器：read_only 的命令跳过审查
   'general.classifierModel': { scope: 'security', access: 'admin' },

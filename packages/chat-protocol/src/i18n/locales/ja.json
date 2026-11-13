@@ -477,53 +477,9 @@
     "title": "タスクリスト"
   },
   "goal": {
-    "commandDescription": "ゴールを設定：チェッカーが達成と判定するまで、ShuviX がこの会話の作業を続けます",
+    "commandDescription": "目標を設定：この会話をコピーした管理セッションが、何をもって完了とするかをあなたと決め、作業をこの会話に任せ、報告をもとに検収します",
     "placeholder": "どうなれば達成かを書いてください（例：src/ のテストがすべて通り、ビルドが成功する）",
     "usageHint": "/goal の後にゴールを書いてください（例：/goal すべてのテストが通る）。",
-    "newTitle": "新しいゴール",
-    "objectiveLabel": "ゴール",
-    "limitNone": "上限なし",
-    "turnsLimitLabel": "継続ターンの上限",
-    "timeLimitLabel": "時間の上限（分）",
-    "setGoal": "ゴールを設定",
-    "save": "保存",
-    "saveAndResume": "保存して再開",
-    "raiseHint": "ゴールを一時停止させた上限を引き上げてください。保存するとゴールが再開します。",
-    "action": {
-      "pause": "一時停止",
-      "resume": "再開",
-      "raiseAndResume": "上限を上げて再開",
-      "edit": "編集",
-      "clear": "クリア",
-      "setAgain": "同じ内容で再設定",
-      "dismiss": "閉じる"
-    },
-    "expand": "ゴールの詳細を表示",
-    "collapse": "ゴールの詳細を隠す",
-    "checkerMissing": "ゴールチェックがフックでオフになっています。このターンの後、ゴールはチェックされずに一時停止します。",
-    "lastCheck": "直近の判定：{{verdict}} — {{reason}}",
-    "lastCheckLabel": "直近の判定：{{verdict}}",
-    "verdict": {
-      "met": "達成",
-      "not_met": "未達成",
-      "impossible": "達成不可能"
-    },
-    "nextStep": "次の一手：",
-    "limitTurns": "継続は最大 {{n}} ターン",
-    "limitStall": "{{n}} ターン連続で進展がなければ一時停止",
-    "limitTime": "時間上限 {{time}}",
-    "turnOf": "{{turn}}/{{max}} ターン目",
-    "durationUnderMinute": "1分未満",
-    "durationMinutes": "{{m}}分",
-    "durationHours": "{{h}}時間{{m}}分",
-    "state": {
-      "active": "ゴール進行中",
-      "checking": "ゴールをチェック中…",
-      "waiting": "ゴールはあなたの回答待ち",
-      "paused": "一時停止中：{{reason}}",
-      "met": "ゴール達成",
-      "impossible": "ゴールは達成不可能と判定"
-    },
     "reason": {
       "user": "あなたが一時停止",
       "stopped": "あなたがターンを停止",
@@ -535,30 +491,12 @@
       "judge-unavailable": "チェッカーの判定なし",
       "run-error": "ターンがエラーで終了"
     },
-    "pause": {
-      "user": "ゴールを一時停止しました。",
-      "stopped": "ゴールを一時停止しました：ターンが停止されました。",
-      "restart": "ゴールを一時停止しました：進行中に ShuviX が再起動しました。",
-      "forked": "ゴールを一時停止しました：この会話は別の会話からフォークされました。",
-      "turns": "ゴールを一時停止しました：継続ターンが上限に達しました。",
-      "stalled": "ゴールを一時停止しました：数ターン連続で進展がありません。",
-      "wall-clock": "ゴールを一時停止しました：時間が上限に達しました。",
-      "judge-unavailable": "ゴールを一時停止しました：ゴールチェッカーが判定を返しませんでした。",
-      "run-error": "ゴールを一時停止しました：ターンがエラーで終了しました。"
-    },
-    "notifyMet": "ゴール達成：{{reason}}",
-    "notifyImpossible": "ゴールは達成不可能と判定されました：{{reason}}",
-    "errorInvalidAction": "そのゴールの操作は無効です。",
-    "errorNoGoal": "この会話にはゴールがありません。",
     "errorObjectiveLength": "ゴールは 1〜{{max}} 文字で書いてください。",
     "errorNotEligible": "ゴールを設定できるのは、あなた自身のトップレベルの会話だけです。サブセッション、bot セッション、ノートブック、ブラウザのタブでは設定できません。",
-    "errorEnded": "このゴールはすでに終了しています。新しいゴールを設定してください。",
-    "resumeBlocked": {
-      "turns": "継続ターンがまだ上限に達しています。上限を引き上げてから再開してください。",
-      "wall-clock": "時間がまだ上限に達しています。上限を引き上げてから再開してください。"
-    },
-    "errorTurnsInvalid": "継続ターンの上限は 1 以上の整数にしてください。",
-    "errorTimeInvalid": "時間の上限は 0 分より大きい値にしてください。上限なしにするには空欄のままにします。",
+    "errorManagerSession": "この会話はすでに目標の管理役です。目標を変えるには、そのまま伝えてください。",
+    "errorManagerBusy": "この会話の目標管理セッション「{{title}}」がまだ作業中です。そちらで話しかけるか、停止してから新しい目標を設定してください。",
+    "errorBusy": "この会話は実行中です。このターンが終わってから目標を設定してください。",
+    "errorForkFailed": "目標の管理セッションを作成できませんでした。もう一度お試しください。",
     "notice": {
       "generic": "ゴール",
       "continue": "ゴールを継続（{{turn}} ターン目）",
@@ -575,8 +513,7 @@
       "cleared": "ゴールをクリア",
       "replaced": "新しいゴールに置き換え"
     },
-    "sidebarActive": "ゴール進行中",
-    "sidebarPaused": "ゴール一時停止中"
+    "sidebarManager": "目標の管理役"
   },
   "threadDrawer": {
     "running": "実行中…",
@@ -844,8 +781,6 @@
     "notificationDoneHint": "実行が正常に終了したときに通知します",
     "notificationFailed": "実行エラー",
     "notificationFailedHint": "実行がエラーで終了したときに通知します",
-    "notificationGoal": "ゴールの終了・一時停止",
-    "notificationGoalHint": "会話のゴールが達成されたとき、達成不可能と判定されたとき、ShuviX によって一時停止されたとき（上限到達、進展なし、エラー）に通知します。自分で一時停止・クリアしたときは通知しません。",
     "defaultProvider": "デフォルトプロバイダー",
     "defaultModel": "デフォルトモデル",
     "defaultModelNone": "なし",
@@ -1315,14 +1250,7 @@
     "triggerLogOpenSession": "チャットを開く",
     "triggerLogBinding": "{{file}} のバインディング {{index}} · {{trigger}}",
     "triggerLogNoCondition": "（when 条件なし —— 毎回一致）",
-    "triggerLogClearConfirm": "トリガーログをすべて消去しますか？",
-    "goalSection": "ゴール",
-    "goalSectionHint": "これから /goal で設定するゴールの上限です。ShuviX 自身が適用し、どれかに達するとゴールは一時停止します。個々のゴールの上限はゴールバーで変更できます。",
-    "goalDefaultTurns": "継続ターンの上限",
-    "goalDefaultTurnsHint": "ShuviX が新しいゴールを自動で何回継続したら一時停止するか。あなた自身が送ったメッセージは数えません。",
-    "goalStallTurns": "進展のないターンで一時停止",
-    "goalStallTurnsHint": "ツール呼び出しがない、ツール呼び出しがすべて失敗した、または判定理由が前のターンとまったく同じ、というターンがこの回数続いたらゴールを一時停止します。",
-    "goalSessions": "ゴールのある会話"
+    "triggerLogClearConfirm": "トリガーログをすべて消去しますか？"
   },
   "about": {
     "description": "あなたのAIアシスタント",

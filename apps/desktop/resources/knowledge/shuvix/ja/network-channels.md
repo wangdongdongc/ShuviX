@@ -49,8 +49,8 @@ ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い
 
 - group: `agent`, `bgTask`, `calendar`, `command`, `mentions`, `message`, `redaction`, `runtime`, `session`, `suggestion`, `sync`, `tracking`
 - route: `shown`
-- read: `agent:askCounts`, `agent:goal`, `agent:goalStatuses`, `agent:init`, `agent:newSessionDefaults`, `agent:pendingInputs`, `agent:previewChange`, `agent:systemPromptStatus`, `agentMonitor:detail`, `agentMonitor:list`, `bgTask:list`, `bgTask:listAll`, `bgTask:readInvocation`, `bgTask:readLog`, `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:reportDaysInMonth`, `calendar:reportOnDay`, `calendar:sessionsOnDay`, `command:list`, `message:list`, `runtime:statuses`, `session:getById`, `session:list`, `session:mentionEntries`, `session:unread`, `sync:frame`, `tracking:list`
-- write: `agent:abort`, `agent:continue`, `agent:destroy`, `agent:followUp`, `agent:getInfo`, `agent:goalAct`, `agent:prompt`, `agent:rebuildSystemPrompt`, `agent:respondToInput`, `agent:setModel`, `agent:setThinkingLevel`, `agent:steer`, `agent:subAgentPrompt`, `agent:withdrawQueued`, `bgTask:clearDone`, `bgTask:dismiss`, `bgTask:stop`, `calendar:deleteReport`, `calendar:openReport`, `message:clear`, `message:rollback`, `redaction:inspect`, `runtime:destroy`, `session:create`, `session:delete`, `session:fork`, `session:markAllRead`, `session:markRead`, `session:markUnread`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`, `subSession:destroy`, `subSession:interrupt`, `suggestion:accept`, `tracking:deleteItem`, `tracking:openFolder`, `tracking:openNote`, `tracking:setStatus`
+- read: `agent:askCounts`, `agent:init`, `agent:newSessionDefaults`, `agent:pendingInputs`, `agent:previewChange`, `agent:systemPromptStatus`, `agentMonitor:detail`, `agentMonitor:list`, `bgTask:list`, `bgTask:listAll`, `bgTask:readInvocation`, `bgTask:readLog`, `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:reportDaysInMonth`, `calendar:reportOnDay`, `calendar:sessionsOnDay`, `command:list`, `message:list`, `runtime:statuses`, `session:getById`, `session:list`, `session:mentionEntries`, `session:unread`, `sync:frame`, `tracking:list`
+- write: `agent:abort`, `agent:continue`, `agent:destroy`, `agent:followUp`, `agent:getInfo`, `agent:goalStart`, `agent:prompt`, `agent:rebuildSystemPrompt`, `agent:respondToInput`, `agent:setModel`, `agent:setThinkingLevel`, `agent:steer`, `agent:subAgentPrompt`, `agent:withdrawQueued`, `bgTask:clearDone`, `bgTask:dismiss`, `bgTask:stop`, `calendar:deleteReport`, `calendar:openReport`, `message:clear`, `message:rollback`, `redaction:inspect`, `runtime:destroy`, `session:create`, `session:delete`, `session:fork`, `session:markAllRead`, `session:markRead`, `session:markUnread`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`, `subSession:destroy`, `subSession:interrupt`, `suggestion:accept`, `tracking:deleteItem`, `tracking:openFolder`, `tracking:openNote`, `tracking:setStatus`
 - admin: `redaction:resolve`
 - `settings:set` admin: `session.*`
 
@@ -100,7 +100,7 @@ ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い
 - read: `bot:list`, `bot:listArchived`, `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`, `trigger:logs`, `trigger:status`
 - write: `bot:openFolder`, `subAgent:openBuiltinNote`, `subAgent:openFolder`, `trigger:clearLogs`
 - admin: `bot:archive`, `bot:createNew`, `bot:deleteArchived`, `bot:deleteByFile`, `bot:deleteSessions`, `bot:openNote`, `bot:restore`, `mdMeta:setFill`, `mdMeta:unsetFill`, `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
-- `settings:set` admin: `bots.*`, `general.defaultChatAgent`, `general.defaultProjectAgent`, `goal.*`, `triggers.*`
+- `settings:set` admin: `bots.*`, `general.defaultChatAgent`, `general.defaultProjectAgent`, `triggers.*`
 
 ### `extensions`
 

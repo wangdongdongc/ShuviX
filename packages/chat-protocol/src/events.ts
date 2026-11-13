@@ -11,7 +11,6 @@
  * 的登记与收尾、后台任务，以及只带数字的 `ask_count`（侧栏徽标与「卡在等人」标记读它，询问内容只在视图里）。
  */
 
-import type { GoalView } from '@shuvix/chat-protocol/types/goal'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
@@ -77,17 +76,6 @@ export interface ChatToolReviewEvent extends ChatEventBase {
 export interface ChatAskCountEvent extends ChatEventBase {
   type: 'ask_count'
   count: number
-}
-
-// ─── 目标 ──────────────────────────────────────────────
-
-/**
- * 一条会话的目标变了（设定、判定、续跑、暂停、结束、清除 —— docs/goal-mode-design.md §9）：主进程每次写目标记录、
- * 或判定开始 / 落定时发整份视图。`goal: null` = 这条会话现在没有目标。新来的前端经 `goal.get` 补种。
- */
-export interface ChatGoalEvent extends ChatEventBase {
-  type: 'goal'
-  goal: GoalView | null
 }
 
 // ─── 资源事件 ──────────────────────────────────────────
@@ -245,4 +233,3 @@ export type ChatEvent =
   | ChatMcpConnectingEvent
   | ChatErrorEvent
   | ChatAskCountEvent
-  | ChatGoalEvent

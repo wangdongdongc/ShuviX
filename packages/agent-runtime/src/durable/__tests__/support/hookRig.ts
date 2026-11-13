@@ -13,9 +13,6 @@
  *    ctx.abortSignal, ownerTaskId: api.taskId})` → `'verdict:'+decision`，null → `'asked-human'`。
  *  - **faux 按内容路由**（队列是全局的）：titler 的请求带 `<hook_event trigger="session.prompt-accepted">`、
  *    reviewer 的带 `trigger="permission.request"`，其余是根的（`queueRoles`）。
- *  - **goal.check**（目标模式）：档案 `GOAL_JUDGE`（工具 `['read']`，`low`）、hook `GOAL_HOOK`、围栏 `GOAL_FENCE`、
- *    `goalPayload()`；不在缺省表里 —— 用例经 `profiles` / `hooks` 选项加。`decide` 有两种调法：
- *    `decide(payload?, opts?)` = permission.request（原样），`decide(trigger, payload, opts?)` = 任一判定型埋点。
  */
 import { Type, type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
 import {
@@ -30,7 +27,6 @@ import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import {
   createHookRunner,
   type HookDecideOptions,
-  type HookDecision,
   type HookRegistryEntry,
   type HookRunEvent,
   type HookRunner,
@@ -38,11 +34,7 @@ import {
 } from '../../../hook/hookRunner'
 import type { ParsedHookFile } from '../../../hook/hookFile'
 import { resolveHookRunModel, type HookModelSelection } from '../../../hook/runModel'
-import type {
-  DecideTriggerId,
-  TriggerPayloadMap,
-  TriggerResultMap
-} from '../../../hook/triggerPoints'
+import type { TriggerPayloadMap } from '../../../hook/triggerPoints'
 import type { SubAgentManager } from '../../../subagent/manager'
 import type { InProcessAgentType } from '../../../subagent/types'
 import { backgroundContext as BG } from '../../context'
@@ -100,47 +92,6 @@ export const REVIEW_HOOK: ParsedHookFile = {
 
 export const TITLE_FENCE = '<hook_event trigger="session.prompt-accepted">'
 export const REVIEW_FENCE = '<hook_event trigger="permission.request">'
-
-/** 目标判定的档案（与内置 goal-judge 同形：只有 read，low） */
-export const GOAL_JUDGE = testProfile({
-  name: 'goal-judge',
-  displayName: 'Goal Checker',
-  tools: ['read'],
-  thinkingLevel: 'low',
-  systemPrompt: 'You judge goals'
-})
-
-export const GOAL_HOOK: ParsedHookFile = {
-  name: 'goal-check',
-  displayName: 'Goal Check',
-  description: '',
-  agent: 'goal-judge',
-  bindings: [{ trigger: 'goal.check' }],
-  prompt: 'Judge the goal.'
-}
-
-export const GOAL_FENCE = '<hook_event trigger="goal.check">'
-
-export function goalPayload(
-  over: Partial<TriggerPayloadMap['goal.check']> = {}
-): TriggerPayloadMap['goal.check'] {
-  return {
-    sessionId: 's1',
-    profileName: 'work',
-    title: 'T',
-    isDefaultTitle: false,
-    goal: {
-      id: 'g_1',
-      objective: 'Make e2e green',
-      turns: 0,
-      limits: { maxTurns: 50, stallTurns: 3 },
-      activeMinutes: 1
-    },
-    userMessages: [],
-    lastRun: { assistantText: 'All tests pass.', toolCalls: [], filesWritten: [] },
-    ...over
-  }
-}
 
 export function promptPayload(
   over: Partial<TriggerPayloadMap['session.prompt-accepted']> = {}
@@ -241,17 +192,11 @@ export interface HookRig {
   skips(): Extract<HookRunEvent, { type: 'skip' }>[]
   warns(): string[]
   infos(): string[]
-  /** 判定（askOp 之外直接调）：缺省 permission.request */
+  /** 判定（askOp 之外直接调） */
   decide(
     payload?: TriggerPayloadMap['permission.request'],
     opts?: HookDecideOptions
-  ): Promise<HookDecision<TriggerResultMap['permission.request']> | null>
-  /** 判定：任一判定型埋点（goal.check …） */
-  decide<K extends DecideTriggerId>(
-    trigger: K,
-    payload: TriggerPayloadMap[K],
-    opts?: HookDecideOptions
-  ): Promise<HookDecision<TriggerResultMap[K]> | null>
+  ): ReturnType<HookRunner['decide']>
 }
 
 function sessionConfig(source: TestHostOptions['agentConfig'], sessionId: string): AgentConfig {
@@ -414,18 +359,8 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
         events.filter((e): e is Extract<HookRunEvent, { type: 'skip' }> => e.type === 'skip'),
       warns: () => logs.filter((l) => l.level === 'warn').map((l) => l.msg),
       infos: () => logs.filter((l) => l.level === 'info').map((l) => l.msg),
-      decide: ((first?: unknown, second?: unknown, third?: unknown) =>
-        typeof first === 'string'
-          ? runner.decide(
-              first as DecideTriggerId,
-              second as TriggerPayloadMap[DecideTriggerId],
-              (third ?? {}) as HookDecideOptions
-            )
-          : runner.decide(
-              'permission.request',
-              (first ?? permissionPayload()) as TriggerPayloadMap['permission.request'],
-              (second ?? {}) as HookDecideOptions
-            )) as HookRig['decide']
+      decide: (payload = permissionPayload(), opts = {}) =>
+        runner.decide('permission.request', payload, opts)
     }
     current.rig = built
     const session = await t.host.open('s1')

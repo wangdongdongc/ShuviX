@@ -328,14 +328,6 @@ export interface NotifyOptions {
    * 缺省自动生成。
    */
   requestId?: string
-  /**
-   * 空闲时要不要起一轮（忙时一律 steer、中断时一律只写，不受这一项影响）：
-   *  - `auto`（缺省）：按自动续跑的规矩 —— 用户喊停之后、或设置 `session.autoResume` 关着时只写；
-   *  - `goal`：目标续跑（docs/goal-mode-design.md §5）—— 只看用户有没有喊停，不看那个全局开关：用户设了目标，
-   *    就是明确要它自己接着干；
-   *  - `never`：只写，不起轮（目标的结局通知：模型下一次说话时看到）。
-   */
-  resume?: 'auto' | 'goal' | 'never'
 }
 
 /** 某个 requestId 在当前对话里的状态（P2-09）：没有 / 未落定（排队或在跑）/ 已落定 */
@@ -455,11 +447,6 @@ export interface DurableSession {
   notify(text: string, options?: NotifyOptions): Promise<void>
   /** 中止当前对话（显式喊停：到下一次 submitUser 之前不自动续跑） */
   abort(): Promise<void>
-  /**
-   * 用户明确要它接着干（目标的设定 / 恢复 / 改写，docs/goal-mode-design.md §5）：撤掉「显式喊停」的收敛。插话（steer）不撤它，
-   * 目标续跑却要它撤掉 —— 否则用户停过一次之后，设新目标、点继续都起不了轮。
-   */
-  allowAutoResume(): void
   /** 设置当前对话的思考档位（下一次请求生效；从不开启调度器） */
   setThinkingLevel(level: ThinkingLevel): Promise<void>
   /** 发起一条用户询问（工具用） */
@@ -879,8 +866,6 @@ interface PendingNotice {
   readonly kind: string
   /** 每条都有（缺省时进窗口那一刻生成）：退回写入 / 关停保存都沿用它（PIN-11） */
   readonly requestId: string
-  /** 空闲时起不起轮（`NotifyOptions.resume`；缺省 auto） */
-  readonly resume?: 'auto' | 'goal' | 'never'
 }
 
 export class DurableSessionImpl implements DurableSession {
@@ -2123,8 +2108,7 @@ export class DurableSessionImpl implements DurableSession {
           const notice: PendingNotice = {
             text,
             kind,
-            requestId: options.requestId ?? randomId(),
-            ...(options.resume !== undefined ? { resume: options.resume } : {})
+            requestId: options.requestId ?? randomId()
           }
           if (this.isInterrupted()) {
             await this.writeNoticeNow(notice)
@@ -2134,7 +2118,7 @@ export class DurableSessionImpl implements DurableSession {
             await this.steerNotices(await this.currentConversation(), [notice])
             return
           }
-          if (!this.canAutoResume(notice.resume)) {
+          if (!this.canAutoResume()) {
             await this.writeNoticeNow(notice)
             return
           }
@@ -2151,13 +2135,8 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
-  allowAutoResume(): void {
-    this.stoppedByUser = false
-  }
-
-  private canAutoResume(resume: 'auto' | 'goal' | 'never' = 'auto'): boolean {
-    if (resume === 'never' || this.stoppedByUser) return false
-    if (resume === 'goal') return true
+  private canAutoResume(): boolean {
+    if (this.stoppedByUser) return false
     try {
       return this.deps.autoResume()
     } catch {
@@ -2182,12 +2161,12 @@ export class DurableSessionImpl implements DurableSession {
             for (const notice of undelivered) await this.writeNoticeNow(notice)
             return
           }
-          // 窗口期间开关被关、或被喊停：起不了轮的各自退回写通知（目标续跑只看喊停，见 NotifyOptions.resume）
-          const notices = undelivered.filter((notice) => this.canAutoResume(notice.resume))
-          for (const notice of undelivered) {
-            if (!notices.includes(notice)) await this.writeNoticeNow(notice)
+          // 窗口期间开关被关、或被喊停：起不了轮，退回写通知
+          if (!this.canAutoResume()) {
+            for (const notice of undelivered) await this.writeNoticeNow(notice)
+            return
           }
-          if (notices.length === 0) return
+          const notices = undelivered
           // 没锁先创建 agent（K3）；创建不成（被拒 / 被取消）就退回写通知，通知不丢
           if ((await this.ensureAgent()) !== undefined) {
             for (const notice of notices) await this.writeNoticeNow(notice)

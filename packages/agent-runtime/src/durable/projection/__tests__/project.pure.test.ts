@@ -8,7 +8,8 @@
  *   34-36 实时卡与 toolRuns      37-38 run.retry / run.compacting    39 队列
  *   41 询问                      42-43 上下文占用                    46-50 纯度、确定性、严格 JSON、外壳
  *   51 AgentView                 52 不依赖 Node、包入口导出          54 搬家后的导出身份
- *   PJ-1 目标通知的 noticeKind（steer / 空闲续跑的 pi.user 按形状、写下的 shuvix.notice 按 data.kind）
+ *   PJ-1 旧目标模式留在会话里的目标通知（夹具照抄当时的正文）的 noticeKind（steer / 空闲续跑的 pi.user 按形状、
+ *        写下的 shuvix.notice 按 data.kind）
  *   PJ-2 合并的通知丢了目标种类（照样是通知）；设定目标那条是带 goal Token 的用户气泡，不是通知
  */
 import { readFileSync } from 'node:fs'
@@ -28,13 +29,14 @@ import * as runtime from '../../../index'
 import { truncationDiagnostic, type ProcessToolOutputResult } from '../../../toolOutput/spill'
 import { EMPTY_REPLY_NOTICE_TEXT } from '../../emptyReply'
 import { goalSetMessage } from '@shuvix/chat-protocol/goalSet'
-import type { GoalRecord } from '@shuvix/chat-protocol/types/goal'
 import {
-  renderGoalCheckin,
-  renderGoalContinue,
-  renderGoalStatus,
-  renderGoalUpdated
-} from '../../../goal/goalNotices'
+  LEGACY_GOAL_BUDGET,
+  legacyGoalCheckin,
+  legacyGoalContinue,
+  legacyGoalStatus,
+  legacyGoalUpdated,
+  type LegacyGoal
+} from '../../__tests__/support/legacyGoalNotices'
 import { imagePlaceholder } from '../../../toolResultText'
 import * as displayModule from '../display'
 import * as entryTextModule from '../entryText'
@@ -65,14 +67,6 @@ import {
   thinking,
   wrap
 } from './support'
-
-/**
- * v0.2.58–v0.2.59 写的花费越线收尾通知（`renderGoalBudget`，2026-11-09 删掉）：旧会话里还有，必须照旧认成通知
- */
-const LEGACY_GOAL_BUDGET =
-  '<goal-budget id="g_1">\nThe goal\'s spending limit is reached (Used: $6.00 of $5.00 · continuation 2 of 50.)\n' +
-  'Finish this turn soon: stop starting new work, and say what is done, what is verified, and what remains. ' +
-  'The goal is paused until the user raises the limit.\n</goal-budget>'
 
 const assistant = (view: { messages: ChatMessage[] }, id: string): AssistantMessage => {
   const message = view.messages.find((m) => m.id === id)
@@ -1266,23 +1260,13 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
 })
 
 describe('PJ · goal notices in the projection', () => {
-  const GOAL: GoalRecord = {
-    id: 'g_1',
-    objective: 'Make e2e green',
-    status: 'active',
-    setAt: 0,
-    limits: { maxTurns: 50, stallTurns: 3 },
-    turns: 2,
-    stalls: 0,
-    activeMs: 0,
-    activeSince: 0
-  }
+  const GOAL: LegacyGoal = { id: 'g_1', objective: 'Make e2e green', turns: 2, maxTurns: 50 }
   const NOTICES: [string, string][] = [
-    ['goal-continue', renderGoalContinue(GOAL, { reason: 'tests fail' })],
-    ['goal-checkin', renderGoalCheckin(GOAL, 31)],
+    ['goal-continue', legacyGoalContinue(GOAL, { reason: 'tests fail' })],
+    ['goal-checkin', legacyGoalCheckin(GOAL, 31)],
     ['goal-budget', LEGACY_GOAL_BUDGET],
-    ['goal-updated', renderGoalUpdated(GOAL)],
-    ['goal-status', renderGoalStatus(GOAL, { event: 'met', reason: 'green' })]
+    ['goal-updated', legacyGoalUpdated(GOAL)],
+    ['goal-status', legacyGoalStatus(GOAL, { event: 'met', reason: 'green' })]
   ]
 
   it('PJ-1 each goal tag: a pi.user (steer / idle continuation) and a written shuvix.notice both carry noticeKind = the tag', () => {
@@ -1304,7 +1288,11 @@ describe('PJ · goal notices in the projection', () => {
     const joined = `${bg('t1', 'done')}\n\n${NOTICES[0]![1]}`
     expect(P([U(1, joined)]).messages[0]!.metadata).toStrictEqual({ isSystemNotice: true })
 
-    const message = goalSetMessage({ objective: 'Make e2e green', goalId: 'g_1' })
+    const message = goalSetMessage({
+      objective: 'Make e2e green',
+      goalId: 'g_1',
+      worker: { id: 'worker-1', title: 'Fix the login flow' }
+    })
     const view = P([U(2, message.text, 100)], {
       display: new Map([[2, display(message.display.content, message.display.tokens)]])
     })

@@ -477,53 +477,9 @@
     "title": "任务列表"
   },
   "goal": {
-    "commandDescription": "设定目标：ShuviX 让这段对话一直做下去，直到检查员判定达成",
+    "commandDescription": "设定目标：从这条会话复制出一条管理员会话，它和你商定怎样算完成，把活交给这条会话，再按汇报验收",
     "placeholder": "写下怎样才算达成，例如：src/ 下的测试全部通过，构建成功",
     "usageHint": "在 /goal 后面写下目标，例如：/goal 所有测试通过。",
-    "newTitle": "新目标",
-    "objectiveLabel": "目标",
-    "limitNone": "不限",
-    "turnsLimitLabel": "续跑轮数上限",
-    "timeLimitLabel": "时长上限（分钟）",
-    "setGoal": "设定目标",
-    "save": "保存",
-    "saveAndResume": "保存并继续",
-    "raiseHint": "调高让目标暂停的那项上限，保存后目标继续。",
-    "action": {
-      "pause": "暂停",
-      "resume": "继续",
-      "raiseAndResume": "调高上限并继续",
-      "edit": "编辑",
-      "clear": "清除",
-      "setAgain": "沿用原文再设",
-      "dismiss": "移除"
-    },
-    "expand": "展开目标详情",
-    "collapse": "收起目标详情",
-    "checkerMissing": "目标检查已在 Hooks 里停用：这一轮结束后目标会暂停，不会被检查。",
-    "lastCheck": "最近判定：{{verdict}}。{{reason}}",
-    "lastCheckLabel": "最近判定：{{verdict}}",
-    "verdict": {
-      "met": "已达成",
-      "not_met": "未达成",
-      "impossible": "做不到"
-    },
-    "nextStep": "建议下一步：",
-    "limitTurns": "最多续跑 {{n}} 轮",
-    "limitStall": "连续 {{n}} 轮没有进展即暂停",
-    "limitTime": "时长上限 {{time}}",
-    "turnOf": "第 {{turn}}/{{max}} 轮",
-    "durationUnderMinute": "不到 1 分钟",
-    "durationMinutes": "{{m}} 分钟",
-    "durationHours": "{{h}} 小时 {{m}} 分",
-    "state": {
-      "active": "目标进行中",
-      "checking": "正在检查目标…",
-      "waiting": "目标在等你回答",
-      "paused": "已暂停：{{reason}}",
-      "met": "目标已达成",
-      "impossible": "目标判定为做不到"
-    },
     "reason": {
       "user": "你暂停了它",
       "stopped": "你停止了这一轮",
@@ -535,30 +491,12 @@
       "judge-unavailable": "检查员没有给出结论",
       "run-error": "这一轮出错结束"
     },
-    "pause": {
-      "user": "你暂停了目标。",
-      "stopped": "目标已暂停：你停止了这一轮。",
-      "restart": "目标已暂停：进行中时 ShuviX 重启了。",
-      "forked": "目标已暂停：这段对话是从别的对话 fork 出来的。",
-      "turns": "目标已暂停：续跑轮数到了上限。",
-      "stalled": "目标已暂停：连续几轮没有进展。",
-      "wall-clock": "目标已暂停：时长到了上限。",
-      "judge-unavailable": "目标已暂停：目标检查员没有给出结论。",
-      "run-error": "目标已暂停：这一轮出错结束。"
-    },
-    "notifyMet": "目标已达成：{{reason}}",
-    "notifyImpossible": "目标判定为做不到：{{reason}}",
-    "errorInvalidAction": "这个目标操作无效。",
-    "errorNoGoal": "这段对话没有目标。",
     "errorObjectiveLength": "目标要写 1 到 {{max}} 个字。",
     "errorNotEligible": "只能在你自己的顶层对话里设目标，子会话、bot 会话、笔记本和浏览器标签页里都不行。",
-    "errorEnded": "这个目标已经结束了，请设一个新目标。",
-    "resumeBlocked": {
-      "turns": "续跑轮数仍在上限上，先调高上限再继续。",
-      "wall-clock": "时长仍在上限上，先调高上限再继续。"
-    },
-    "errorTurnsInvalid": "续跑轮数上限要是不小于 1 的整数。",
-    "errorTimeInvalid": "时长上限要大于 0 分钟；不限就留空。",
+    "errorManagerSession": "这条会话已经是某个目标的管理员。要改目标，直接跟它说。",
+    "errorManagerBusy": "这条会话的目标管理员「{{title}}」还在工作。请到那里和它说，或者先停掉它再设新目标。",
+    "errorBusy": "这条会话正在运行。等这一轮结束后再设目标。",
+    "errorForkFailed": "没能建出目标的管理员会话，请再试一次。",
     "notice": {
       "generic": "目标",
       "continue": "目标续跑（第 {{turn}} 轮）",
@@ -575,8 +513,7 @@
       "cleared": "目标已清除",
       "replaced": "目标已被新目标替换"
     },
-    "sidebarActive": "目标进行中",
-    "sidebarPaused": "目标已暂停"
+    "sidebarManager": "目标管理员"
   },
   "threadDrawer": {
     "running": "运行中…",
@@ -844,8 +781,6 @@
     "notificationDoneHint": "一轮运行正常结束时通知你",
     "notificationFailed": "运行出错",
     "notificationFailedHint": "一轮运行因错误结束时通知你",
-    "notificationGoal": "目标结束或暂停",
-    "notificationGoalHint": "对话的目标达成、判定为做不到，或被 ShuviX 暂停（撞到上限、没有进展、出错）时通知。你自己暂停或清除目标不通知。",
     "defaultProvider": "默认提供商",
     "defaultModel": "默认模型",
     "defaultModelNone": "无",
@@ -1315,14 +1250,7 @@
     "triggerLogOpenSession": "打开会话",
     "triggerLogBinding": "{{file}} 的第 {{index}} 条绑定 · {{trigger}}",
     "triggerLogNoCondition": "（没有 when 条件，每次都命中）",
-    "triggerLogClearConfirm": "清空全部触发日志？",
-    "goalSection": "目标",
-    "goalSectionHint": "之后用 /goal 设定的目标的上限。由 ShuviX 自己执行：撞到任何一项，目标就暂停。单个目标的上限可以在它的目标栏里改。",
-    "goalDefaultTurns": "续跑轮数上限",
-    "goalDefaultTurnsHint": "ShuviX 替新目标自动续跑多少轮后暂停。你自己发的消息不算。",
-    "goalStallTurns": "连续几轮无进展就暂停",
-    "goalStallTurnsHint": "连续这么多轮没有工具调用、工具调用全部失败，或判定理由与上一轮一字不差，就暂停目标。",
-    "goalSessions": "有目标的对话"
+    "triggerLogClearConfirm": "清空全部触发日志？"
   },
   "about": {
     "description": "您的 AI 助手",

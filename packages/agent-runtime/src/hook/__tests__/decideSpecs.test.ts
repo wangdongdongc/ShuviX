@@ -7,21 +7,12 @@
  * control.terminate（一次请求出结论），不合格的逐字段报错（isError 结果 —— P1-04 起 BaseTool 模板把
  * 抛错收成失败结果，裁定 Q12）、不带 details。
  * parse 是交给 runner 之前的最后一道（认不出 = 这个 hook 没有意见），severity 决定多个结论谁胜出。
- *
- *   HK-1 goal.check（目标模式，docs/goal-mode-design.md §4.2）：目录里是判定型、会话域；schema 就是
- *        GOAL_VERDICT_SCHEMA 本身且过得了契约自检；真 NextTool 捕获三种结论、拒 {verdict:'done'} / {reason: 1}；
- *        parse 认不出 → null；severity 跟 goalVerdictSeverity（not_met > impossible > met）
  */
 import { describe, expect, it } from 'vitest'
 import {
   PERMISSION_VERDICT_SCHEMA,
   type PermissionVerdict
 } from '@shuvix/chat-protocol/types/permissionReview'
-import {
-  GOAL_VERDICT_SCHEMA,
-  goalVerdictSeverity,
-  type GoalVerdict
-} from '@shuvix/chat-protocol/types/goal'
 import { DECIDE_SPECS, TRIGGER_POINTS, type TriggerId } from '../triggerPoints'
 import { NextTool, validateContractSchema } from '../../subagent/nextTool'
 import { invokeTool, type InvokedToolResult } from '../../tools/testing/invokeTool'
@@ -157,75 +148,4 @@ describe('severity —— 只看 decision', () => {
       expect(sev(decision, 'medium')).toBe(sev(decision, 'high'))
     }
   )
-})
-
-describe('HK-1 goal.check 的结论契约', () => {
-  const GOAL_SPEC = DECIDE_SPECS['goal.check']
-  const goalVerdict = (over: Partial<GoalVerdict> = {}): GoalVerdict => ({
-    verdict: 'not_met',
-    reason: 'The e2e run still fails in login.spec.',
-    next_step: 'Fix the login selector and rerun e2e.',
-    ...over
-  })
-
-  it('目录：判定型、会话域；schema 就是 GOAL_VERDICT_SCHEMA 本身，且过得了契约自检', () => {
-    expect(TRIGGER_POINTS['goal.check']).toMatchObject({
-      id: 'goal.check',
-      kind: 'decide',
-      scope: 'session'
-    })
-    expect(GOAL_SPEC.schema).toBe(GOAL_VERDICT_SCHEMA)
-    expect(validateContractSchema(GOAL_SPEC.schema)).toBeNull()
-  })
-
-  it.each(['met', 'not_met', 'impossible'] as const)(
-    '真 NextTool：%s 原样捕获、带 terminate',
-    async (kind) => {
-      const tool = new NextTool(GOAL_SPEC.schema)
-      const value = kind === 'not_met' ? goalVerdict() : { verdict: kind, reason: 'r' }
-      const out = await callNext(tool, value)
-      expect(out.details).toEqual({ result: value })
-      expect(out.control).toEqual({ terminate: true })
-    }
-  )
-
-  it.each([
-    ["verdict: 'done'", { verdict: 'done', reason: 'r' }, /\/verdict:/],
-    ['reason: 1', { verdict: 'met', reason: 1 }, /\/reason: must be string/],
-    ['缺 reason', { verdict: 'met' }, /must have required properties reason/],
-    [
-      '多出 confidence',
-      { verdict: 'met', reason: 'r', confidence: 1 },
-      /must not have additional properties/
-    ]
-  ])('真 NextTool：不合格（%s）→ isError、不带 details', async (_label, params, pattern) => {
-    const out = await callNext(new NextTool(GOAL_SPEC.schema), params)
-    expect(out.isError).toBe(true)
-    expect(out.details).toBeUndefined()
-    expect(textOf(out)).toMatch(pattern)
-  })
-
-  it('parse：合格 → 等值；认不出 → null 且不抛', () => {
-    expect(GOAL_SPEC.parse(goalVerdict())).toEqual(goalVerdict())
-    for (const bad of [
-      undefined,
-      null,
-      'met',
-      { verdict: 'done', reason: 'r' },
-      { verdict: 'met', reason: 1 }
-    ]) {
-      expect(() => GOAL_SPEC.parse(bad)).not.toThrow()
-      expect(GOAL_SPEC.parse(bad)).toBeNull()
-    }
-  })
-
-  it('severity：not_met > impossible > met，与 goalVerdictSeverity 一致', () => {
-    const sev = (verdict: GoalVerdict['verdict']): number =>
-      GOAL_SPEC.severity(goalVerdict({ verdict }))
-    expect(sev('not_met')).toBeGreaterThan(sev('impossible'))
-    expect(sev('impossible')).toBeGreaterThan(sev('met'))
-    for (const verdict of ['met', 'not_met', 'impossible'] as const) {
-      expect(sev(verdict)).toBe(goalVerdictSeverity(verdict))
-    }
-  })
 })

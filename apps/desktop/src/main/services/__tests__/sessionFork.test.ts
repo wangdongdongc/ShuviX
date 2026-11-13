@@ -38,7 +38,6 @@
  *   SF-26 源会话没有 shown/S → 不建 shown/F
  *   SF-27 拷快照抛错（包一层：拷完再抛）→ failed；fork 的行没了、shown/F 不留，shown/S 原样
  *   SF-28 branchAt 拒绝（SF-10 那条路，拷完之后）→ shown/F 不留（完整删除管到它）；源原样
- *   GV-42 目标模式的 fork 观察者（`setSessionForkObserver`）：行进库之后恰调一次（源 id, fork id）；它抛错 fork 照样成功
  * fork 沿用源会话的 agent、共用临时目录（2026-11-06）：
  *   SF-29 (C1) 源会话没借谁的临时目录 → fork 的 tempDirOwner = 源会话 id（项目会话、临时会话都一样）
  *   SF-30 (C2) fork 的 fork → tempDirOwner 仍是最初那条会话
@@ -235,11 +234,10 @@ import { clearMemoryAclForTests } from '../acl/store'
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
 let forkSession: (typeof import('../sessionFork'))['forkSession']
-let setSessionForkObserver: (typeof import('../sessionFork'))['setSessionForkObserver']
 let sessionService: (typeof import('../sessionService'))['sessionService']
 
 beforeAll(async () => {
-  ;({ forkSession, setSessionForkObserver } = await import('../sessionFork'))
+  ;({ forkSession } = await import('../sessionFork'))
   ;({ sessionService } = await import('../sessionService'))
 })
 
@@ -860,26 +858,6 @@ describe('SF-11..13 the fork row', () => {
 })
 
 // ─── SF-14 / SF-15：出错收场 ─────────────────
-
-describe('GV-42 the goal fork observer', () => {
-  afterEach(() => {
-    setSessionForkObserver(null)
-  })
-
-  it('GV-42 called once after the row is inserted, with (source, fork); a throwing observer does not fail the fork', async () => {
-    const seen: Array<[string, string, boolean]> = []
-    setSessionForkObserver((sourceId, forkId) => {
-      seen.push([sourceId, forkId, sessionRecords.findById(forkId) !== undefined])
-      throw new Error('observer down')
-    })
-    seedRow()
-    openSource()
-    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
-    expect(seen).toEqual([[SRC, forkId, true]])
-    expect(sessionRecords.findById(forkId)).toBeDefined()
-    expect(mocks.deleteStorage).not.toHaveBeenCalled()
-  })
-})
 
 describe('SF-14/15 failure cleanup', () => {
   it.each<[string, () => void]>([

@@ -1,11 +1,11 @@
 /**
- * 输入框的内置命令 `/goal`（目标模式，docs/goal-mode-design.md §3）—— 纯逻辑，InputArea 用。
+ * 输入框的内置命令 `/goal`（目标，docs/goal-mode-design.md §16）—— 纯逻辑，InputArea 用。
  *
- * `/goal` 不是项目命令也不是技能：它不展开成 cmd Token、不当消息发，而是交给宿主（`agent.goalAct` 的 `set`），
- * 由宿主替用户发出那条带「目标」Token 的消息。所以它只在输入框里合进命令表（`kind: 'builtin'`），从不写进
- * `chatStore.slashCommands`，别的入口（子代理追问框）看不到它。
+ * `/goal` 不是项目命令也不是技能：它不展开成 cmd Token、不当消息发，而是交给宿主（`agent.goalStart`）—— 宿主把这条
+ * 会话 fork 一份作目标的管理员，替用户把那条带「目标」Token 的消息发进管理员会话。所以它只在输入框里合进命令表
+ * （`kind: 'builtin'`），从不写进 `chatStore.slashCommands`，别的入口（子代理追问框）看不到它。
  *
- * 只在宿主有 `goalAct`、且这条会话的形态能设目标时出现（`goalEligibleSession`）；能不能设以主进程为准
+ * 只在宿主有 `goalStart`、且这条会话的形态能设目标时出现（`goalEligibleSession`）；能不能设以主进程为准
  * （goalService.eligible），这里只是不把注定被拒的入口摆出来。
  */
 import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
@@ -50,16 +50,19 @@ export interface GoalSessionShape {
     bot?: string
     notebookPath?: string
     chromeTab?: unknown
+    goalManagerOf?: string
   } | null
 }
 
 /**
- * 这条会话的形态能不能设目标（裁决 D9：人发起的根会话；子会话、bot 会话、笔记本、Chrome 标签页都不行）。
- * 找不到会话行（还没拉到列表）按能处理 —— 设不了时宿主会回一句说明
+ * 这条会话的形态能不能设目标（裁决 D9：人发起的根会话；子会话、bot 会话、笔记本、Chrome 标签页都不行；目标的管理员
+ * 自己也不行 —— 要改目标，直接跟它说）。找不到会话行（还没拉到列表）按能处理 —— 设不了时宿主会回一句说明
  */
 export function goalEligibleSession(row: GoalSessionShape | undefined): boolean {
   if (!row) return true
   if (row.parentId) return false
   const settings = row.settings ?? {}
-  return !settings.bot && !settings.notebookPath && !chromeTabOf(settings)
+  return (
+    !settings.bot && !settings.notebookPath && !chromeTabOf(settings) && !settings.goalManagerOf
+  )
 }

@@ -172,7 +172,7 @@ export function initNotificationService(injected: NotificationServiceDeps): void
     sessionTitle: (sessionId) => sessionRecords.findById(sessionId)?.title,
     enabled: notificationEnabled,
     runErrorText: (sessionId) => runErrorTextSource?.(sessionId),
-    goalActive: (sessionId) => goalActiveReader?.(sessionId) === true,
+    quietRunEnd: (sessionId) => quietRunEndReader?.(sessionId) === true,
     t: (key, vars) => t(key, vars),
     logger: { warn: (message) => log.warn(message) }
   })
@@ -221,17 +221,11 @@ export function notifyAskRaised(sessionId: string, request: InputRequest): void 
   center?.askRaised(sessionId, request)
 }
 
-/** 目标的读口（goalService 在 main 入口登记）：有进行中目标的会话，一轮正常收尾不弹「完成」 */
-let goalActiveReader: ((sessionId: string) => boolean) | null = null
+/** 「这一轮正常收尾不弹完成」的读口（goalService 在 main 入口登记，见 NotificationCenterDeps.quietRunEnd） */
+let quietRunEndReader: ((sessionId: string) => boolean) | null = null
 
-export function setGoalActiveReader(reader: ((sessionId: string) => boolean) | null): void {
-  goalActiveReader = reader
-}
-
-/** 目标有了结局（达成 / 做不到 / 被宿主暂停）—— 与事件那一路同一道过滤 */
-export function notifyGoalEnded(sessionId: string, body: string): void {
-  if (!notifiable(sessionId)) return
-  center?.goalEnded(sessionId, body)
+export function setQuietRunEndReader(reader: ((sessionId: string) => boolean) | null): void {
+  quietRunEndReader = reader
 }
 
 /** 询问落定（答了 / 取消 / 会话关了）→ 撤回它的通知 */

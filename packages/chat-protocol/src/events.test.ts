@@ -26,12 +26,11 @@ const RESIDUE: Record<ChatEvent['type'], true> = {
   agent_closing: true,
   mcp_connecting: true,
   error: true,
-  ask_count: true,
-  goal: true
+  ask_count: true
 }
 
 describe('P3-08-43 ChatEvent 余项', () => {
-  it('类型恰好是这 14 种', () => {
+  it('类型恰好是这 13 种', () => {
     expect(Object.keys(RESIDUE).sort()).toEqual(
       [
         'agent_closing',
@@ -39,7 +38,6 @@ describe('P3-08-43 ChatEvent 余项', () => {
         'agent_end',
         'agent_start',
         'ask_count',
-        'goal',
         'bg_task',
         'browser_event',
         'error',

@@ -88,6 +88,12 @@ export interface SessionSettings {
    */
   titleOrigin?: 'user' | 'auto'
   /**
+   * 这条会话是某个目标的管理员（`/goal`，docs/goal-mode-design.md §16）：值是干活的那条会话的 id —— 管理员是设目标
+   * 那一刻从它 fork 出来的（goalService.start，唯一写入口）。有值：侧栏画 ◎、输入框不给 `/goal`、叫醒它的通知不看
+   * `session.autoResume`、它派了活在等时一轮收尾不弹「完成」。fork 不带这个键（insertForkRow 只抄列出的键）
+   */
+  goalManagerOf?: string
+  /**
    * Chrome 标签页会话挂着的标签页（用户在那个页上打开了 ShuviX 侧边栏）。有值即为标签页会话 ——
    * 无项目、根档案由形态推出基座 `tab`、不进侧栏与日历、标签页关掉就删。创建那一刻定死。
    * 判定一律经 chat-protocol `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。

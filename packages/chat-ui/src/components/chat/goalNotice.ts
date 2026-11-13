@@ -1,6 +1,7 @@
 /**
- * 目标通知的解析（docs/goal-mode-design.md §9.2）：宿主写给模型的 `<goal-…>` 信封（agent-runtime
- * `goal/goalNotices.ts`），解出转写里那一行要说的事 —— 第几次续跑、判定理由、暂停原因、结局。
+ * 旧目标模式（v0.2.58–v0.2.60）留在会话里的目标通知的解析：那时宿主写给模型的 `<goal-…>` 信封，解出转写里那一行要说
+ * 的事 —— 第几次续跑、判定理由、暂停原因、结局。现在不再写这些通知了（目标改由管理员会话推动，
+ * docs/goal-mode-design.md §16），这里只为旧会话照旧显示。
  *
  * 文案是模型面向的英文，格式属于 agent-runtime；这里只做「够看」的解析：认不出的部分留空，行上退回只有标签的样子，
  * 原文照旧在展开态里。插进信封的文字都转义过（`&` `<` `>`，属性值另加 `"`），解出来的要反转义。
@@ -10,7 +11,20 @@ import {
   systemNoticeBlockRe,
   type GoalNoticeKind
 } from '@shuvix/chat-protocol/systemNoticeContract'
-import { GOAL_PAUSE_REASONS, type GoalPauseReason } from '@shuvix/chat-protocol/types/goal'
+
+/** 旧目标模式的暂停原因（`<goal-status event="paused" reason="…">`） */
+export const GOAL_PAUSE_REASONS = [
+  'user',
+  'stopped',
+  'restart',
+  'forked',
+  'turns',
+  'stalled',
+  'wall-clock',
+  'judge-unavailable',
+  'run-error'
+] as const
+export type GoalPauseReason = (typeof GOAL_PAUSE_REASONS)[number]
 
 /** `<goal-status event="…">` 的几种结局 */
 export const GOAL_STATUS_EVENTS = ['met', 'impossible', 'paused', 'cleared', 'replaced'] as const

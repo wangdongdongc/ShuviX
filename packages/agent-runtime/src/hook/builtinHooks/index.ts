@@ -29,18 +29,9 @@ export const AUTO_REVIEW_HOOK_SPEC: BuiltinHookSpec = {
   name: 'auto-review'
 }
 
-/**
- * 目标检查：一条有进行中目标的会话跑完一次根运行后，判定型埋点 `goal.check` 派发内置 `goal-judge`，它的结论决定续跑、
- * 结束还是暂停（设计稿 docs/goal-mode-design.md §4.2）。停用它，目标在第一次判定时就会暂停（没有裁判就不续跑）。
- */
-export const GOAL_CHECK_HOOK_SPEC: BuiltinHookSpec = {
-  name: 'goal-check'
-}
-
 export const BUILTIN_HOOK_SPECS: readonly BuiltinHookSpec[] = [
   AUTO_TITLE_HOOK_SPEC,
-  AUTO_REVIEW_HOOK_SPEC,
-  GOAL_CHECK_HOOK_SPEC
+  AUTO_REVIEW_HOOK_SPEC
 ]
 
 /** 按宿主 deps 现算全部内置 hook（语言切换自动跟随） */

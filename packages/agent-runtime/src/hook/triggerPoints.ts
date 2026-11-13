@@ -34,14 +34,6 @@ import {
   permissionDecisionSeverity,
   type PermissionVerdict
 } from '@shuvix/chat-protocol/types/permissionReview'
-import {
-  GOAL_VERDICT_SCHEMA,
-  goalVerdictSeverity,
-  isGoalVerdict,
-  type GoalLimits,
-  type GoalVerdict,
-  type GoalVerdictKind
-} from '@shuvix/chat-protocol/types/goal'
 
 /** 会话域埋点的公共上下文（emit 侧从会话状态现取） */
 interface SessionTriggerBase {
@@ -132,46 +124,6 @@ export interface TimerFiredPayload {
 }
 
 /**
- * `goal.check` 的 payload（docs/goal-mode-design.md §4.3）—— 一条有进行中目标的会话跑完一次根运行、宿主决定要判定时，
- * 那一刻的事实。和审查员的输入相反，判定**必须**看 agent 做了什么；防注入靠分栏：`lastRun.assistantText` 是干活的
- * agent 自己的说法，`toolCalls` / `filesWritten` / `subSessions` 是宿主记下的事实。
- */
-export interface GoalCheckPayload extends SessionTriggerBase {
-  goal: {
-    id: string
-    /** 用户的原话 */
-    objective: string
-    /** 宿主为目标续跑过的轮数 */
-    turns: number
-    limits: GoalLimits
-    /** 处于进行中的累计时长（分钟） */
-    activeMinutes: number
-    /** 干活的 agent 在第一轮写下的验收规格文件（绝对路径，判定 agent 用 read 读它此刻的内容）；没有就缺省 */
-    specPath?: string
-  }
-  /** 目标设定之后人写的消息（转写摘要的口径：通知、别的会话发来的不算），最近的在后 */
-  userMessages: Array<{ text: string; at: number }>
-  previousVerdict?: { verdict: GoalVerdictKind; reason: string; nextStep?: string }
-  lastRun: {
-    /** 本轮助手正文（尾部截断）—— 干活的 agent 的说法，不是证据 */
-    assistantText: string
-    /** 宿主记录的本轮工具调用，按次序 */
-    toolCalls: Array<{
-      tool: string
-      /** 命令首行 / 路径 / 工具参数摘要 */
-      summary: string
-      outcome: 'ok' | 'error'
-      /** 结果尾部（截断） */
-      outputTail?: string
-      /** 完整输出落盘的位置（截断了才有）：判定 agent 可以用 read 打开 */
-      outputPath?: string
-    }>
-    /** 本轮文件工具写过的路径 */
-    filesWritten: string[]
-  }
-}
-
-/**
  * 埋点 id → payload 形状的类型目录。emit 侧 `fire('session.turn-completed', {...})`
  * 由此获得编译期校验；hook md 的 CEL `when` 与派发给 agent 的事件围栏读的就是这份数据。
  */
@@ -206,11 +158,6 @@ export interface TriggerPayloadMap {
    * allow / ask（照旧问人）/ deny；没有 hook 命中或都没给出结论时照旧问人。
    */
   'permission.request': PermissionRequestPayload
-  /**
-   * 判定型：一条有进行中目标的会话跑完一次根运行（没有后台工作、没撞上护栏）。命中的 hook 判断目标达成没有：
-   * met / not_met（宿主带着理由续跑）/ impossible；都没给出结论 → 目标暂停。
-   */
-  'goal.check': GoalCheckPayload
   /** 全局：timer 触发源的一次触发（见 TimerFiredPayload）。只有 bot 订阅 */
   'timer.fired': TimerFiredPayload
 }
@@ -218,7 +165,6 @@ export interface TriggerPayloadMap {
 /** 判定型埋点 → 结论形状（即派发时结果契约的形状，见 DECIDE_SPECS） */
 export interface TriggerResultMap {
   'permission.request': PermissionVerdict
-  'goal.check': GoalVerdict
 }
 
 export type TriggerId = keyof TriggerPayloadMap
@@ -246,12 +192,6 @@ export const DECIDE_SPECS: { [K in DecideTriggerId]: DecideSpec<TriggerResultMap
     schema: PERMISSION_VERDICT_SCHEMA,
     parse: (value) => (isPermissionVerdict(value) ? value : null),
     severity: (verdict) => permissionDecisionSeverity(verdict.decision)
-  },
-  'goal.check': {
-    schema: GOAL_VERDICT_SCHEMA,
-    parse: (value) => (isGoalVerdict(value) ? value : null),
-    // 宽松指「接受完成」：只要有一个 hook 认为没做完，就接着做
-    severity: (verdict) => goalVerdictSeverity(verdict.verdict)
   }
 }
 
@@ -291,13 +231,6 @@ export const TRIGGER_POINTS: Record<TriggerId, TriggerPointDef> = {
     kind: 'decide',
     description:
       'A security policy wants an operation judged; a decide hook may answer before the user is asked',
-    scope: 'session'
-  },
-  'goal.check': {
-    id: 'goal.check',
-    kind: 'decide',
-    description:
-      'A session with an active goal finished a run; a decide hook judges whether the goal is met',
     scope: 'session'
   },
   'timer.fired': {

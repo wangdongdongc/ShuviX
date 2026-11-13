@@ -522,16 +522,6 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     expect(builtin!.source).toBe('builtin')
     expect(judge('knowledge-writer')).toBe(false)
   })
-
-  it('HO-2 目标判定员（只由内置 goal-check hook 派发）：getProfile 解析得到，但恒 false —— 用户按名覆盖也一样', () => {
-    const builtin = agentService.getProfile('goal-judge')
-    expect(builtin).toBeDefined()
-    expect(builtin!.source).toBe('builtin')
-    expect(judge('goal-judge')).toBe(false)
-    writeAgentFile('goal-judge.md', agentMd('goal-judge'))
-    expect(agentService.getProfile('goal-judge')!.source).toBe('user')
-    expect(judge('goal-judge')).toBe(false)
-  })
 })
 
 /**

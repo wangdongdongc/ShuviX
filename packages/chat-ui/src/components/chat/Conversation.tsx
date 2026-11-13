@@ -28,7 +28,6 @@ import { StreamingFooter } from './StreamingFooter'
 import { TaskListPanel } from './TaskListPanel'
 import { PendingInputsCard, pendingCardOnScreen } from './PendingInputsCard'
 import { InputArea } from './InputArea'
-import { GoalBar } from './GoalBar'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ViewLoadGate } from './ConversationLoadBar'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -641,15 +640,7 @@ export function Conversation({
         <div
           className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
         >
-          <InputArea
-            thread={
-              <>
-                <GoalBar key={sessionId} sessionId={sessionId} />
-                {inputTop}
-              </>
-            }
-            onHeightChange={handleInputHeightChange}
-          />
+          <InputArea thread={inputTop} onHeightChange={handleInputHeightChange} />
         </div>
       </div>
 

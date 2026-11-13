@@ -15,7 +15,6 @@
  *        普通会话的原样交
  *   NE-2 内存父会话的子会话（内存）→ 不交；对照：持久父会话的子会话 → 交
  *   NE-3 内存会话删除之后迟到的事件 → 不交（它的子会话一样）
- *   NT-3 目标结局的通知（`notifyGoalEnded`）同一道过滤：内存会话 / 删掉的内存会话不交，普通会话交
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
@@ -29,7 +28,6 @@ const mocks = vi.hoisted(() => {
   return {
     handleEvent: vi.fn(),
     askRaised: vi.fn(),
-    goalEnded: vi.fn(),
     createNotificationCenter: vi.fn(),
     daoInsert: vi.fn((s: Record<string, unknown>) => {
       rows().set(s.id as string, clone(s))
@@ -169,7 +167,6 @@ beforeAll(async () => {
   mocks.createNotificationCenter.mockReturnValue({
     handleEvent: mocks.handleEvent,
     askRaised: mocks.askRaised,
-    goalEnded: mocks.goalEnded,
     askResolved: vi.fn(),
     runEnded: vi.fn(),
     sessionOpened: vi.fn()
@@ -184,7 +181,6 @@ beforeEach(() => {
   sessionRecords.clearEphemeralForTests()
   mocks.handleEvent.mockClear()
   mocks.askRaised.mockClear()
-  mocks.goalEnded.mockClear()
 })
 
 const EPH = { ephemeral: true }
@@ -273,17 +269,5 @@ describe('NE-3 删掉之后迟到的事件', () => {
     deliver(normal.id)
     expect(delivered(md.id)).toBe(0)
     expect(delivered(normal.id)).toBe(3)
-  })
-})
-
-describe('NT-3 目标结局的通知', () => {
-  it('NT-3 内存会话（含删掉之后）不交 goalEnded；普通会话交', async () => {
-    const md = sessionService.create({ notebookPath: 'a.md' }, EPH)
-    const normal = sessionService.create({ title: 'kept' })
-    notifications.notifyGoalEnded(md.id, 'met')
-    notifications.notifyGoalEnded(normal.id, 'met')
-    await sessionService.delete(md.id)
-    notifications.notifyGoalEnded(md.id, 'paused')
-    expect(mocks.goalEnded.mock.calls).toEqual([[normal.id, 'met']])
   })
 })

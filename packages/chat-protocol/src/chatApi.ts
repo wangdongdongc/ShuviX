@@ -9,12 +9,7 @@
  * DB 行类型平行；Electron 侧通过编译期断言（renderer/src/host/chatApiContract.ts）保证
  * window.api 结构满足本契约，从而零漂移。
  */
-import type {
-  GoalAction,
-  GoalActResult,
-  GoalStatus,
-  GoalView
-} from '@shuvix/chat-protocol/types/goal'
+import type { GoalStartResult } from '@shuvix/chat-protocol/types/goal'
 import type { RebuildSystemPromptResult, SystemPromptStatus } from './systemPromptStatus'
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
@@ -117,6 +112,11 @@ export interface SessionSettings {
   notebookPath?: string
   /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session 工具）。缺省视同 'user' */
   titleOrigin?: 'user' | 'auto'
+  /**
+   * 这条会话是某个目标的管理员（`/goal`，docs/goal-mode-design.md §16）：值是干活的那条会话的 id —— 管理员是设目标
+   * 那一刻从它 fork 出来的。只由主进程在设目标时写；侧栏据此画 ◎，输入框据此不再给 `/goal`
+   */
+  goalManagerOf?: string
   /**
    * Chrome 标签页会话挂着的标签页（用户在那个页上打开了 ShuviX 侧边栏）。有值即为标签页会话；
    * 判定经 `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
@@ -897,12 +897,11 @@ export interface HostApi {
      * 可选：没有它的宿主（Chrome 侧栏）收件箱只列会话、不摆卡片
      */
     pendingInputs?: () => Promise<Record<string, InputRequest[]>>
-    /** 一条会话的目标（docs/goal-mode-design.md）；没有目标 → null。新来的前端补种用，之后跟 `goal` 事件 */
-    goal: (sessionId: string) => Promise<GoalView | null>
-    /** 对目标的操作：设定（发出那条人的消息）、暂停、继续、编辑、清除 */
-    goalAct: (params: { sessionId: string; action: GoalAction }) => Promise<GoalActResult>
-    /** 有进行中 / 暂停中目标的会话（侧栏徽标） */
-    goalStatuses: () => Promise<Record<string, GoalStatus>>
+    /**
+     * 设定目标（`/goal <条件>`，docs/goal-mode-design.md §16）：把 `sessionId` 这条会话 fork 一份作目标的管理员，
+     * 替用户把条件原文发进管理员会话；成了交回管理员会话的 id（界面切过去），原会话接着干活
+     */
+    goalStart: (params: { sessionId: string; objective: string }) => Promise<GoalStartResult>
     /**
      * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的设置重建（正在跑的 run
      * 会被中止）。换模型 / 扩展能力用不着它（那些当场重配）；它是重建运行时的出口：MCP 工具列表变了、沙箱开关

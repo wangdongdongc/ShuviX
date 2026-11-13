@@ -289,12 +289,11 @@ await g.check('README "Data files" names the movement field quantity, not qty', 
     .filter((sentence) => /\bqty\b/.test(sentence))
     .filter(
       (sentence) =>
-        !/\b(old|older|legacy|previous|earlier|before|convert\w*|migrat\w*|1\.4)\b|旧/i.test(sentence)
+        !/\b(old|older|legacy|previous|earlier|before|convert\w*|migrat\w*|1\.4)\b|旧/i.test(
+          sentence
+        )
     )
-  g.ok(
-    stale.length === 0,
-    `the Data files section still says qty: ${stale[0]}`
-  )
+  g.ok(stale.length === 0, `the Data files section still says qty: ${stale[0]}`)
 })
 
 g.done()

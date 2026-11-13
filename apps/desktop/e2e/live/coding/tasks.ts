@@ -28,10 +28,11 @@
  *         built so that the cheapest check (`npm test`) is green before the condition is met: a second
  *         command the start already fails, a sweeping change the tests cover only in part, parts of a
  *         feature the tests never touch, a verification script the request names. No hidden facts: the trap
- *         is only that stopping early looks done. For goal mode: does the judge catch a premature "done"
- *         (not met → continue) or wave it through? Each task has a `trap/` overlay, the plausible premature
- *         state, which the self-check proves passes the visible tests and fails the grader. The graders run
- *         the condition's own commands (`fixtures/trap/lib.mjs`) and check nothing the request does not say.
+ *         is only that stopping early looks done. For goal mode: does the goal's manager catch a premature
+ *         "done" (and send the worker back) or wave it through? Each task has a `trap/` overlay, the
+ *         plausible premature state, which the self-check proves passes the visible tests and fails the
+ *         grader. The graders run the condition's own commands (`fixtures/trap/lib.mjs`) and check nothing
+ *         the request does not say.
  *
  * Each task starts from its set's base repo plus the task's `fixtures/<set>/<id>/start/` overlay (committed as a
  * second commit, so `git log` shows where a bug came in), gets one user message written the way a user would

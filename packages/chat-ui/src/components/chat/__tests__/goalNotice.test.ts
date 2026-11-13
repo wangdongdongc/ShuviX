@@ -1,9 +1,9 @@
 /**
- * 目标通知的解析与一行文案（`goalNotice.ts`，目标模式 docs/goal-mode-design.md §9.2）。
+ * 目标通知的解析与一行文案（`goalNotice.ts`）—— 旧目标模式（v0.2.58–v0.2.60）留在会话里的通知，旧会话照旧画成通知行。
  *
- * 通知正文是宿主写给**模型**的 `<goal-…>` 信封，格式属于 agent-runtime 的 `goal/goalNotices.ts`。下面的夹具**照抄**那里的
- * 拼法（`block` / 转义 / 各 render 函数的行），生产方改格式时这里会一起红 —— 解析是「够看」的宽松解析，认不出的部分
- * 留空（行上退回只有标签），原文照旧在展开态里。
+ * 通知正文是那时宿主写给**模型**的 `<goal-…>` 信封，格式属于 agent-runtime 的 `goal/goalNotices.ts`（已随目标的管理员
+ * 会话改版删掉，现在不再写这些通知）。下面的夹具**照抄**当时的拼法（`block` / 转义 / 各 render 函数的行）—— 解析是
+ * 「够看」的宽松解析，认不出的部分留空（行上退回只有标签），原文照旧在展开态里。
  *
  *   GN-1 续跑：turn、判定理由、建议的下一步、重述的原文都解出来；理由里的 `</goal-continue>` 等是转义过的，解出来还原
  *   GN-2 续跑没有建议的下一步：理由照样解出（不吞下一行 Used:）；多行理由整段保留
@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import { goalNoticeText, isGoalNoticeKind, parseGoalNotice, unescapeGoalText } from '../goalNotice'
 
-// ─── 夹具：照抄 agent-runtime goal/goalNotices.ts ───
+// ─── 夹具：照抄 agent-runtime goal/goalNotices.ts（已删，旧会话里的正文就是这个拼法） ───
 
 const escapeText = (text: string): string =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')

@@ -6,7 +6,7 @@
  *   SK-2 代码里另外读写的 key（不在 KNOWN_SETTINGS 里的常量与字面量）同样都有；含 botTriggerService 记各条绑定上一次
  *        跑成时刻的内部键 `triggers.bot.lastFired`（落在 `triggers.` → agents / admin），与 botService 记内置 bot id
  *        认定的 `bots.builtinFiles`（落在 `bots.` → agents / admin）
- *   NK-R1 通知的四个开关：类别清单与键名是字面值（设置页、主进程、数据库里存的都是它），都在册，都归 preferences / write；
+ *   NK-R1 通知的三个开关：类别清单与键名是字面值（设置页、主进程、数据库里存的都是它），都在册，都归 preferences / write；
  *         `notification.` 底下没有别的已知键（`notification.enabled` 不复活）
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -81,11 +81,11 @@ describe('SK 设置项都有明确的 scope 与 access', () => {
   })
 })
 
-describe('NK-R1 通知的四个开关', () => {
-  const KEYS = ['notification.ask', 'notification.done', 'notification.failed', 'notification.goal']
+describe('NK-R1 通知的三个开关', () => {
+  const KEYS = ['notification.ask', 'notification.done', 'notification.failed']
 
-  it('NK-R1 类别与键名是这四个字面值；都在册、都归 preferences / write；通道判定一致；notification. 下没有别的已知键', () => {
-    expect(AGENT_NOTIFICATION_KINDS).toEqual(['ask', 'done', 'failed', 'goal'])
+  it('NK-R1 类别与键名是这三个字面值；都在册、都归 preferences / write；通道判定一致；notification. 下没有别的已知键', () => {
+    expect(AGENT_NOTIFICATION_KINDS).toEqual(['ask', 'done', 'failed'])
     expect(AGENT_NOTIFICATION_KINDS.map(notificationSettingKey)).toEqual(KEYS)
     for (const key of KEYS) {
       expect(KNOWN_SETTINGS).toHaveProperty([key])

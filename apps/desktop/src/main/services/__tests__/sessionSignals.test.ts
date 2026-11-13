@@ -11,8 +11,6 @@
  *            没有 input_request 广播；会话关掉 → 挂着的询问逐条撤回
  *   P3-08-56 失败文本（PIN-08）：最终失败之后 runErrorText 是投影里最后一条错误行的正文
  *   P3-08-09 就绪（PIN-09）：打开即登记一个就绪 promise，投影挂上才落定
- *   WR-1 根运行起止的观察者（目标模式，`setSessionRunObserver`）：根的每一对恰各一次（带根会话 id 与结局）；
- *        派生 agent（hook 判定）的一对从不交给它；观察者抛错只记日志、agent_end 照发；关掉之后什么都不交
  *
  * 不起 Electron：事件汇与同步接线换成替身（接线的扇出由用例自己给）。
  */
@@ -29,7 +27,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { createSessionSignals, setSessionRunObserver, type SessionSignals } from '../sessionSignals'
+import { createSessionSignals, type SessionSignals } from '../sessionSignals'
 import {
   makeHost,
   primeRoot,
@@ -361,93 +359,4 @@ describe('P3-08-54 询问走 subscribeInputs', () => {
       count: 0
     })
   })
-})
-
-describe('WR-1 根运行结束的观察者（目标模式）', () => {
-  afterEach(() => {
-    setSessionRunObserver(null)
-  })
-
-  it(
-    '根的每一次结束 → rootRunEnded(根会话 id, 结局)；中止 → aborted、失败 → error',
-    async () => {
-      const calls: string[] = []
-      setSessionRunObserver({
-        rootRunEnded: (sid, reason) => void calls.push(`end:${sid}:${reason}`)
-      })
-      const { t, signals } = await rigWith()
-      const session = await t.open('s1')
-      await signals.ready('s1')
-      t.kit.queue(answer('hello'))
-      expect(await session.submitUser('hi')).toEqual({})
-      const stall = stalled()
-      t.kit.queue(stall.step)
-      const sending = session.submitUser('go')
-      await withTimeout(stall.reached, 5000, 'stalled')
-      await session.abort()
-      await sending
-      t.kit.queue(modelError('503 boom'))
-      await session.submitUser('again')
-      await flush()
-      expect(calls).toEqual(['end:s1:ok', 'end:s1:aborted', 'end:s1:error'])
-    },
-    T
-  )
-
-  it(
-    '登记过的派生 agent（hook 判定）的一对照发 agent_start / agent_end，但从不交给观察者（判定自己的结束不触发判定）',
-    async () => {
-      const calls: string[] = []
-      setSessionRunObserver({
-        rootRunEnded: (sid, reason) => void calls.push(`end:${sid}:${reason}`)
-      })
-      const d = await hostD()
-      const hooks = fanout()
-      const events: ChatEvent[] = []
-      const signals = createSessionSignals({
-        hooks,
-        broadcast: (event) => events.push(event),
-        askRaised: () => {},
-        askResolved: () => {},
-        isRegisteredAgent: () => true,
-        publishReadiness: false
-      })
-      hooks.opened(d.session)
-      await signals.ready(d.session.sessionId)
-      const seeded = await seedAgent(d.session, { record: hookRec() })
-      d.t.kit.queue(answer('{"verdict":"met"}'))
-      const submission = await startRun(d.session, seeded.conversationId, 'judge please')
-      await withTimeout(submission.wait(BG), 5000, 'hook run')
-      await flush()
-      expect(lifecycle(events)).toHaveLength(2)
-      expect(calls).toEqual([])
-      signals.dispose()
-    },
-    T
-  )
-
-  it(
-    '观察者抛错：只记日志，agent_end 照发；关掉会话之后再没有回调',
-    async () => {
-      const ended: string[] = []
-      setSessionRunObserver({
-        rootRunEnded: (sid, reason) => {
-          ended.push(`${sid}:${reason}`)
-          throw new Error('observer down')
-        }
-      })
-      const { t, signals } = await rigWith()
-      const session = await t.open('s1')
-      await signals.ready('s1')
-      t.kit.queue(answer('hello'))
-      expect(await session.submitUser('hi')).toEqual({})
-      await flush()
-      expect(lifecycle(t.broadcasts).map((e) => e.type)).toEqual(['agent_start', 'agent_end'])
-      expect(ended).toEqual(['s1:ok'])
-      await t.host.close('s1')
-      await flush()
-      expect(ended).toEqual(['s1:ok'])
-    },
-    T
-  )
 })

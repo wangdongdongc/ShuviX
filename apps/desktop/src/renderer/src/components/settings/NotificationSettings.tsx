@@ -16,8 +16,7 @@ import { SettingsRow, SettingsSection, Toggle } from './SettingsPrimitives'
 const ROW_TEXT: Record<AgentNotificationKind, { title: string; hint: string }> = {
   ask: { title: 'settings.notificationAsk', hint: 'settings.notificationAskHint' },
   done: { title: 'settings.notificationDone', hint: 'settings.notificationDoneHint' },
-  failed: { title: 'settings.notificationFailed', hint: 'settings.notificationFailedHint' },
-  goal: { title: 'settings.notificationGoal', hint: 'settings.notificationGoalHint' }
+  failed: { title: 'settings.notificationFailed', hint: 'settings.notificationFailedHint' }
 }
 
 export function NotificationSettings(): React.JSX.Element | null {

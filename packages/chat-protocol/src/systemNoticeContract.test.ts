@@ -142,14 +142,15 @@ describe('<session> 通知里夹着 <running-background-tasks>（BT-70）', () =
 })
 
 /**
- * 目标模式的通知（docs/goal-mode-design.md §5）：续跑消息 steer 进当前轮时只能按正文形状认 —— 标签漏登记，
- * 续跑消息（连同判定理由）就会被转写摘要当成人写的。
+ * 旧目标模式（v0.2.58–v0.2.60）的通知：现在不再写了（目标改由管理员会话推动，docs/goal-mode-design.md §16），但旧
+ * 会话里还有。续跑消息是 steer 进当前轮的，只能按正文形状认 —— 标签从表里摘掉，旧会话里的续跑消息（连同判定理由）
+ * 就会被转写摘要当成人写的。
  *
  *   NC-1 五个 goal-* 标签都在标签表里；`goal-set` / `goal` 不是通知标签（设定目标那条是人的消息）
  *   NC-2 `goalNoticeKindOf`：只由同一种 goal-* 块组成 → 那个标签；混了别的、夹了人话、半截 → undefined。
  *        混拼的一条照样是系统通知（安全性质不随种类丢失）
  */
-describe('goal notices (目标模式)', () => {
+describe('goal notices (旧目标模式留在会话里的通知)', () => {
   const goalBlock = (tag: string): string => `<${tag} id="g_1">\nbody\n</${tag}>`
 
   it('NC-1 每个 goal-* 标签都登记在 SYSTEM_NOTICE_TAGS；一整块各自都认；goal-set / goal 不是通知标签', () => {

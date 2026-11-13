@@ -194,7 +194,7 @@ afterAll(async () => {
 describe('内置 hook 的停用开关', () => {
   it('HD-1 内置行带 objectId 与 disableable、只有 harness 停掉的 auto-review 停用；内置行菜单有 toggle-enabled（Disable）；卡片上的开关开着', async () => {
     const builtins = (await listHooks()).filter((h) => h.source === 'builtin')
-    expect(builtins.map((h) => h.name).sort()).toEqual(['auto-review', 'auto-title', 'goal-check'])
+    expect(builtins.map((h) => h.name).sort()).toEqual(['auto-review', 'auto-title'])
     for (const h of builtins) {
       expect(h, h.name).toMatchObject({ objectId: `hook:builtin:${h.name}`, disableable: true })
     }

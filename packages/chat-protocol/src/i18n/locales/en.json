@@ -477,53 +477,9 @@
     "title": "Task list"
   },
   "goal": {
-    "commandDescription": "Set a goal: ShuviX keeps this conversation working until a checker judges it met",
+    "commandDescription": "Set a goal: a manager session copied from this conversation agrees on what \"done\" means with you, hands the work to this conversation and checks its reports",
     "placeholder": "Describe when the goal is met, e.g. all tests in src/ pass and the build succeeds",
     "usageHint": "Write the goal after /goal, e.g. /goal all tests pass.",
-    "newTitle": "New goal",
-    "objectiveLabel": "Goal",
-    "limitNone": "No limit",
-    "turnsLimitLabel": "Max continuations",
-    "timeLimitLabel": "Time limit (minutes)",
-    "setGoal": "Set goal",
-    "save": "Save",
-    "saveAndResume": "Save and resume",
-    "raiseHint": "Raise the limit that paused the goal. It resumes when you save.",
-    "action": {
-      "pause": "Pause",
-      "resume": "Resume",
-      "raiseAndResume": "Raise limit and resume",
-      "edit": "Edit",
-      "clear": "Clear",
-      "setAgain": "Set again",
-      "dismiss": "Dismiss"
-    },
-    "expand": "Show goal details",
-    "collapse": "Hide goal details",
-    "checkerMissing": "Goal check is turned off in Hooks, so the goal will pause after this run instead of being checked.",
-    "lastCheck": "Last check: {{verdict}} — {{reason}}",
-    "lastCheckLabel": "Last check: {{verdict}}",
-    "verdict": {
-      "met": "met",
-      "not_met": "not met",
-      "impossible": "impossible"
-    },
-    "nextStep": "Suggested next step:",
-    "limitTurns": "up to {{n}} continuations",
-    "limitStall": "pauses after {{n}} turns without progress",
-    "limitTime": "time limit {{time}}",
-    "turnOf": "turn {{turn}}/{{max}}",
-    "durationUnderMinute": "<1m",
-    "durationMinutes": "{{m}}m",
-    "durationHours": "{{h}}h {{m}}m",
-    "state": {
-      "active": "Goal in progress",
-      "checking": "Checking the goal…",
-      "waiting": "Goal waiting for your answer",
-      "paused": "Paused — {{reason}}",
-      "met": "Goal met",
-      "impossible": "Goal judged impossible"
-    },
     "reason": {
       "user": "paused by you",
       "stopped": "you stopped the turn",
@@ -535,30 +491,12 @@
       "judge-unavailable": "the checker gave no verdict",
       "run-error": "the turn ended with an error"
     },
-    "pause": {
-      "user": "Goal paused by you.",
-      "stopped": "Goal paused: you stopped the turn.",
-      "restart": "Goal paused: ShuviX restarted while it was in progress.",
-      "forked": "Goal paused: this conversation was forked from another one.",
-      "turns": "Goal paused: it reached its limit on continuations.",
-      "stalled": "Goal paused: several turns in a row made no progress.",
-      "wall-clock": "Goal paused: the time limit is reached.",
-      "judge-unavailable": "Goal paused: the goal checker gave no verdict.",
-      "run-error": "Goal paused: the turn ended with an error."
-    },
-    "notifyMet": "Goal met: {{reason}}",
-    "notifyImpossible": "Goal judged impossible: {{reason}}",
-    "errorInvalidAction": "That goal request isn't valid.",
-    "errorNoGoal": "This conversation has no goal.",
     "errorObjectiveLength": "A goal must be 1 to {{max}} characters long.",
     "errorNotEligible": "Goals can be set only in your own top-level conversations, not in sub-sessions, bot sessions, notebooks or browser tabs.",
-    "errorEnded": "This goal has ended; set a new goal instead.",
-    "resumeBlocked": {
-      "turns": "The continuation limit is still reached; raise it before resuming.",
-      "wall-clock": "The time limit is still reached; raise it before resuming."
-    },
-    "errorTurnsInvalid": "Enter a whole number of continuations, 1 or more.",
-    "errorTimeInvalid": "Enter a time limit above 0 minutes, or leave it empty for no limit.",
+    "errorManagerSession": "This conversation already manages a goal. To change the goal, just tell it.",
+    "errorManagerBusy": "The goal manager “{{title}}” for this conversation is still working. Talk to it there, or stop it before setting a new goal.",
+    "errorBusy": "This conversation is in the middle of a turn. Set the goal when it has finished.",
+    "errorForkFailed": "Couldn't create the goal manager session. Try again.",
     "notice": {
       "generic": "Goal",
       "continue": "Goal continuing (turn {{turn}})",
@@ -575,8 +513,7 @@
       "cleared": "Goal cleared",
       "replaced": "Goal replaced by a new one"
     },
-    "sidebarActive": "Goal in progress",
-    "sidebarPaused": "Goal paused"
+    "sidebarManager": "Goal manager"
   },
   "threadDrawer": {
     "running": "Running…",
@@ -844,8 +781,6 @@
     "notificationDoneHint": "Notify when a run ends normally",
     "notificationFailed": "Run failed",
     "notificationFailedHint": "Notify when a run ends with an error",
-    "notificationGoal": "Goal ended or paused",
-    "notificationGoalHint": "Notify when a conversation's goal is met, judged impossible, or paused by ShuviX (a limit, no progress, an error). Pausing or clearing a goal yourself never notifies.",
     "defaultProvider": "Default Provider",
     "defaultModel": "Default Model",
     "defaultModelNone": "None",
@@ -1315,14 +1250,7 @@
     "triggerLogOpenSession": "Open chat",
     "triggerLogBinding": "{{file}}, binding {{index}} · {{trigger}}",
     "triggerLogNoCondition": "(no when condition — matches every time)",
-    "triggerLogClearConfirm": "Clear the whole trigger log?",
-    "goalSection": "Goals",
-    "goalSectionHint": "Limits for goals you set with /goal from now on. ShuviX enforces them itself: when one is hit, the goal pauses. A single goal's limits can be changed in its goal bar.",
-    "goalDefaultTurns": "Max continuations",
-    "goalDefaultTurnsHint": "How many times ShuviX continues a new goal on its own before pausing it. Messages you send yourself don't count.",
-    "goalStallTurns": "Pause after turns without progress",
-    "goalStallTurnsHint": "Pause a goal after this many turns in a row with no tool calls, only failed tool calls, or the same verdict as the turn before.",
-    "goalSessions": "Conversations with a goal"
+    "triggerLogClearConfirm": "Clear the whole trigger log?"
   },
   "about": {
     "description": "Your AI Assistant",

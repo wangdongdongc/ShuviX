@@ -4,7 +4,8 @@
  *   GC-1 芯片态：内置 goal 芯片 → 参数原文（去首尾空白，多行保留）；空参数 → ''；别的芯片（同名的项目命令也算）→ null
  *   GC-2 直输态：`/goal` / `/goal 条件` / 前后空白 / 换行分隔 → 条件；`/goals`、`/goal-x`、`x /goal`、普通文字 → null
  *   GC-3 合进命令表：排第一；同名的项目命令 / 技能让位；不可用（null）→ 原表原样（同一个引用）
- *   GC-4 会话形态：根会话能设；子会话、bot、笔记本、Chrome 标签页不能；找不到会话行按能处理
+ *   GC-4 会话形态：根会话能设；子会话、bot、笔记本、Chrome 标签页不能；目标的管理员会话（`settings.goalManagerOf`）
+ *        自己也不能；找不到会话行按能处理
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -77,6 +78,11 @@ describe('goalEligibleSession', () => {
         settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 3 } }
       })
     ).toBe(false)
+    // 目标的管理员自己不能再设目标（要改目标，直接跟它说）
+    expect(goalEligibleSession({ parentId: null, settings: { goalManagerOf: 'worker-1' } })).toBe(
+      false
+    )
+    expect(goalEligibleSession({ parentId: null, settings: { goalManagerOf: '' } })).toBe(true)
     // 不完整的标签页绑定不算标签页会话（同 chromeTabOf）
     expect(goalEligibleSession({ parentId: null, settings: { chromeTab: { tabId: -1 } } })).toBe(
       true

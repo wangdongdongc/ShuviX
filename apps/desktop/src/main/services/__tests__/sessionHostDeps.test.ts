@@ -18,6 +18,8 @@
  *   D10-21 onRunStateChange → settings.runState；值没变不写、不 bump updatedAt
  *   D10-22 审查 seam（真 reviewState）
  *   D10-23 autoResume 每次现读设置
+ *   D10-23b 目标的管理员会话（`settings.goalManagerOf`，goal-mode-design §16）不看这个开关：恒 true、不读设置；
+ *           别的会话（含它管的那条干活的会话）照旧读设置；每次现读会话行
  *   D10-24 isPinned = 会话还有活着的后台任务（PIN-04）
  *   P3-05-15 onSessionOpened / onSessionClosed 接 syncWiring 的扇出（D10-13 的延伸）
  *   P3-05-17 isPinned 再数 hub 的订阅（D10-24 的延伸：矩阵、hub 没建不建、hasSubscribers 抛错 = 钉住）
@@ -805,6 +807,25 @@ describe('D10-23 autoResume', () => {
     mocks.settingsGet.mockImplementation((key) => (key === AUTO_RESUME_KEY ? 'false' : undefined))
     expect(deps.autoResume?.('s')).toBe('false')
     expect(mocks.settingsGet).toHaveBeenCalledWith('session.autoResume')
+  })
+
+  it('D10-23b 目标的管理员会话恒 true、不读设置；干活的会话与普通会话照旧读设置；会话行每次现读', () => {
+    mocks.settingsGet.mockImplementation((key) => (key === AUTO_RESUME_KEY ? 'false' : undefined))
+    sessionRecords.insert(row('worker'))
+    sessionRecords.insert(
+      row('manager', { settings: { enabledTools: [], goalManagerOf: 'worker' } })
+    )
+
+    expect(deps.autoResume?.('manager')).toBe(true)
+    expect(mocks.settingsGet).not.toHaveBeenCalled()
+
+    // 干活的会话不是管理员：开关关着就是关着
+    expect(deps.autoResume?.('worker')).toBe('false')
+    expect(mocks.settingsGet).toHaveBeenCalledWith('session.autoResume')
+
+    // 现读：干活的会话行上写了 goalManagerOf 之后（它自己成了另一个目标的管理员）立即生效
+    sessionRecords.updateSettings('worker', { goalManagerOf: 'other' })
+    expect(deps.autoResume?.('worker')).toBe(true)
   })
 })
 

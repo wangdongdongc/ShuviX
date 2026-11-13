@@ -179,10 +179,6 @@ export function ProjectSessionGroups({
   const bgRunKinds = useBgTaskStore(selectBgRunKinds)
   const pendingCounts = useChatStore(selectAllPendingCounts)
   const unreadSessions = useUnreadStore((s) => s.unread)
-  // 目标的 ◎（进行中 / 暂停中）：直接读 store 的那张表（值不变时引用稳定）；只装了一部分 store 的宿主 / 替身里可能没有它
-  const goalStatuses = useChatStore((s) => s.sessionGoalStatuses) as
-    | Record<string, 'active' | 'paused'>
-    | undefined
   const interruptedSessions = useChatStore(selectInterruptedSessions)
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
@@ -523,7 +519,7 @@ export function ProjectSessionGroups({
               pendingCount={pendingCounts[item.id]}
               unread={item.id in unreadSessions}
               unreadFailed={!!unreadSessions[item.id]?.failed}
-              goalStatus={goalStatuses?.[item.id]}
+              goalManager={!!item.settings.goalManagerOf}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
               isBot={isBotSessionSettings(item.settings)}

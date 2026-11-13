@@ -233,24 +233,6 @@ export const RedactionTableDoc = defineDoc<RedactionTableState>({
   initial: () => ({ items: {} })
 })
 
-export type GoalDocState = {
-  /** 当前目标（`GoalRecord`，JSON）；没有目标时缺省 */
-  goal?: JsonObject
-}
-
-/**
- * 会话的目标（docs/goal-mode-design.md §2）：一条会话同一时刻至多一个。整条会话一份（scope session）—— 派生 agent、
- * hook agent 共用；会话 fork 时随存储整拷（宿主随即把副本里的目标置为暂停，§8），删会话时随存储删掉，回退不动。
- * **不补种**：第一次设目标时才建，读的一侧把「没有这份文档」当成「没有目标」。形状由 chat-protocol `GoalRecord` 给出，
- * 读出来经 `goalRecordOf` 校验。
- */
-export const GoalDoc = defineDoc<GoalDocState>({
-  kind: 'shuvix.goal',
-  version: 1,
-  scope: 'session',
-  initial: () => ({})
-})
-
 export type NoticeData = { kind: string; [key: string]: JsonValue }
 
 export const NoticeEntry = defineEntry<NoticeData>('shuvix.notice')

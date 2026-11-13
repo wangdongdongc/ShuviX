@@ -80,32 +80,23 @@ const parseSource = (raw: string): ParsedHookFile => {
 }
 
 describe('内置 hook 清单与交付', () => {
-  it('HB-1 auto-title、auto-review、goal-check 三份（auto-title 居首）；三语言文件与盘上原文逐字一致（经读取口）；buildBuiltinHooks 恰三份', () => {
-    expect(BUILTIN_HOOK_SPECS.map((spec) => spec.name)).toEqual([
-      'auto-title',
-      'auto-review',
-      'goal-check'
-    ])
+  it('HB-1 auto-title、auto-review 两份（auto-title 居首）；三语言文件与盘上原文逐字一致（经读取口）；buildBuiltinHooks 恰两份', () => {
+    expect(BUILTIN_HOOK_SPECS.map((spec) => spec.name)).toEqual(['auto-title', 'auto-review'])
     expect(BUILTIN_HOOK_SPECS[0]).toBe(AUTO_TITLE_HOOK_SPEC)
     expect(BUILTIN_HOOK_SPECS[1]).toBe(AUTO_REVIEW_HOOK_SPEC)
-    // 内联表恰好是三份 hook 的三语言各三份 —— 孤儿 md 会随包发布但运行时读不到
+    // 内联表恰好是两份 hook 的三语言各三份 —— 孤儿 md 会随包发布但运行时读不到
     const reviewFileName = (lang: string): string =>
       lang === 'en' ? 'auto-review.md' : `auto-review.${lang}.md`
-    const goalFileName = (lang: string): string =>
-      lang === 'en' ? 'goal-check.md' : `goal-check.${lang}.md`
     expect(inlinedHookMdFileNames().sort()).toEqual(
-      [...LANGS.map(mdFileName), ...LANGS.map(reviewFileName), ...LANGS.map(goalFileName)].sort()
+      [...LANGS.map(mdFileName), ...LANGS.map(reviewFileName)].sort()
     )
-    for (const lang of LANGS) {
-      expect(INLINE_HOOK_MD(goalFileName(lang))).toBe(onDisk(goalFileName(lang)))
-    }
     for (const lang of LANGS) expect(INLINE_HOOK_MD(mdFileName(lang))).toBe(DISK[lang])
     for (const lang of LANGS) {
       expect(INLINE_HOOK_MD(reviewFileName(lang))).toBe(onDisk(reviewFileName(lang)))
     }
 
     const built = build()
-    expect(built.map((hook) => hook.name)).toEqual(['auto-title', 'auto-review', 'goal-check'])
+    expect(built.map((hook) => hook.name)).toEqual(['auto-title', 'auto-review'])
   })
 
   it('HB-2 en 结构钉板：派 titler、两条绑定与条件、显示名与描述、正文点名字段且无模板语法', () => {
@@ -675,31 +666,4 @@ describe('内置 hook 的对象 id（shuvix-id）', () => {
       }
     }
   )
-})
-
-/**
- * HK-5 内置 goal-check 钉板：三语都只绑 goal.check（判定型）、派 goal-judge、没有 when；派发的是内置档案且不是基座。
- */
-describe('HK-5 goal-check 钉板', () => {
-  const goalOf = (language?: string): ReturnType<typeof buildBuiltinHooks>[number] => {
-    const hook = build(language).find((entry) => entry.name === 'goal-check')
-    expect(hook, `goal-check.${language ?? 'en'}`).toBeDefined()
-    return hook!
-  }
-
-  it.each(LANGS)('%s：派 goal-judge、恰一条 goal.check 绑定、没有 when；正文点名 next', (lang) => {
-    const hook = goalOf(lang)
-    expect(hook.agent).toBe('goal-judge')
-    expect(hook.bindings).toStrictEqual([{ trigger: 'goal.check' }])
-    expect(hook.prompt).toContain('`next`')
-    expect(hook.prompt).not.toContain('{{')
-  })
-
-  it('派发的 agent 是内置档案，且不是基座', () => {
-    const hook = goalOf()
-    expect(
-      buildBuiltinProfiles({ readMd: createInlineMdReader() }).map((profile) => profile.name)
-    ).toContain(hook.agent)
-    expect(BASE_PROFILE_NAMES.has(hook.agent)).toBe(false)
-  })
 })

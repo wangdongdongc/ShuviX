@@ -164,11 +164,6 @@ export function useAgentEvents(): void {
           store.setAskCount(sid, event.count)
           break
 
-        // 目标变了（设定 / 判定开始与落定 / 续跑 / 暂停 / 结束 / 清除）：整份视图，null = 没有目标了
-        case 'goal':
-          store.setSessionGoal(sid, event.goal)
-          break
-
         case 'runtime_event':
           store.setRuntime(sid, event.runtimeId, event.status)
           break

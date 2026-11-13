@@ -97,22 +97,6 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.triggersTimerEnabled',
     desc: 'true | false — the built-in timer trigger source (experimental): fires timer.fired every minute so bots can run on a schedule; off = no bot is started by time; default true'
   },
-  'notification.goal': {
-    labelKey: 'settings.notificationGoal',
-    desc: 'true | false — notify when a session goal is met, judged impossible, or paused by ShuviX (default true)'
-  },
-  'goal.defaultMaxTurns': {
-    labelKey: 'settings.goalDefaultTurns',
-    desc: 'number as string — how many times ShuviX continues a goal before pausing it (default 50)'
-  },
-  'goal.stallTurns': {
-    labelKey: 'settings.goalStallTurns',
-    desc: 'number as string — pause a goal after this many turns in a row without progress (default 3)'
-  },
-  'goal.sessions': {
-    labelKey: 'settings.goalSessions',
-    desc: 'JSON (written by ShuviX) — sessions with a goal in progress or paused, for the sidebar and the startup sweep'
-  },
   'sandbox.enabled': {
     labelKey: 'settings.sandboxEnabled',
     desc: 'true | false — run agent bash commands confined in the macOS sandbox, without asking (default true; takes effect for new conversations)'

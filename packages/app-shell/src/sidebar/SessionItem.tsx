@@ -21,19 +21,12 @@ import { RedactedText, RedactionSessionProvider, type SessionRunKind } from '@sh
 import { RowMenuButton } from './RowMenuButton'
 import { SessionIcon, sessionIconShape } from './SessionIcon'
 
-/**
- * 目标记号（同 chat-ui 的 GoalMark：外圈 + 圆点；暂停中圆点是空心的）。app-shell 的 DOM 用例整份 mock 掉
- * `@shuvix/chat-ui`，所以这里画自己的一份，改样子两处一起改
- */
-function GoalGlyph({ active }: { active: boolean }): React.JSX.Element {
+/** 目标记号（外圈 + 圆点）：这条会话是某个目标的管理员 */
+function GoalGlyph(): React.JSX.Element {
   return (
     <svg width="10" height="10" viewBox="0 0 16 16" aria-hidden>
       <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.75" />
-      {active ? (
-        <circle cx="8" cy="8" r="2.75" fill="currentColor" />
-      ) : (
-        <circle cx="8" cy="8" r="2.75" fill="none" stroke="currentColor" strokeWidth="1.75" />
-      )}
+      <circle cx="8" cy="8" r="2.75" fill="currentColor" />
     </svg>
   )
 }
@@ -61,10 +54,10 @@ export interface SessionItemProps {
   /** 那条新回复是出错收场的（未读的点画成红色） */
   unreadFailed?: boolean
   /**
-   * 这条会话的目标（目标模式，docs/goal-mode-design.md §9.3）：进行中 ◎、暂停中空心 ◎；达成 / 做不到 / 没有目标不标。
-   * 询问徽标照旧排在最右，它更急
+   * 这条会话是某个目标的管理员（`settings.goalManagerOf`，docs/goal-mode-design.md §16）：标一个 ◎。它忙不忙看行首的
+   * 运行状态，和别的会话一样。询问徽标照旧排在最右，它更急
    */
-  goalStatus?: 'active' | 'paused'
+  goalManager?: boolean
   /** 专注模式下淡化（由宿主计算后传入） */
   dim?: boolean
   /** 笔记本会话（绑定 md 文件）—— 显示笔记本图标，选中后中间区为 live-preview */
@@ -100,7 +93,7 @@ export function SessionItem({
   pendingCount = 0,
   unread = false,
   unreadFailed = false,
-  goalStatus,
+  goalManager,
   dim = false,
   isNotebook = false,
   isBot = false,
@@ -202,16 +195,14 @@ export function SessionItem({
             className="shrink-0 ml-auto h-1.5 w-1.5 rounded-full bg-warning"
           />
         )}
-        {goalStatus && (
+        {goalManager && (
           <span
-            data-goal-mark={goalStatus}
-            title={t(goalStatus === 'active' ? 'goal.sidebarActive' : 'goal.sidebarPaused')}
-            aria-label={t(goalStatus === 'active' ? 'goal.sidebarActive' : 'goal.sidebarPaused')}
-            className={`shrink-0 flex items-center ${interrupted && !busy ? '' : 'ml-auto'} ${
-              goalStatus === 'active' ? 'text-accent' : 'text-text-tertiary'
-            }`}
+            data-goal-mark="manager"
+            title={t('goal.sidebarManager')}
+            aria-label={t('goal.sidebarManager')}
+            className={`shrink-0 flex items-center text-accent ${interrupted && !busy ? '' : 'ml-auto'}`}
           >
-            <GoalGlyph active={goalStatus === 'active'} />
+            <GoalGlyph />
           </span>
         )}
         {unread && run !== 'agent' && pendingCount === 0 && (
@@ -220,7 +211,7 @@ export function SessionItem({
             title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
             aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
             className={`shrink-0 h-[7px] w-[7px] rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'} ${
-              location || (interrupted && !busy) || goalStatus ? '' : 'ml-auto'
+              location || (interrupted && !busy) || goalManager ? '' : 'ml-auto'
             }`}
           />
         )}
@@ -228,7 +219,7 @@ export function SessionItem({
           <span
             data-pending-asks={pendingCount}
             className={`flex items-center gap-1 shrink-0 ${
-              (interrupted && !busy) || goalStatus ? '' : 'ml-auto'
+              (interrupted && !busy) || goalManager ? '' : 'ml-auto'
             }`}
           >
             <span className="relative flex h-1.5 w-1.5">

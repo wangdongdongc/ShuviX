@@ -1,9 +1,4 @@
-import type {
-  GoalAction,
-  GoalActResult,
-  GoalStatus,
-  GoalView
-} from '@shuvix/chat-protocol/types/goal'
+import type { GoalStartResult } from '@shuvix/chat-protocol/types/goal'
 import type {
   RebuildSystemPromptResult,
   SystemPromptStatus
@@ -435,9 +430,7 @@ declare global {
       pendingInputs: () => Promise<
         Record<string, import('@shuvix/chat-protocol/types/inputRequest').InputRequest[]>
       >
-      goal: (sessionId: string) => Promise<GoalView | null>
-      goalAct: (params: { sessionId: string; action: GoalAction }) => Promise<GoalActResult>
-      goalStatuses: () => Promise<Record<string, GoalStatus>>
+      goalStart: (params: { sessionId: string; objective: string }) => Promise<GoalStartResult>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */
       destroy: (sessionId: string) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>

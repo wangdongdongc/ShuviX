@@ -67,10 +67,10 @@ export interface NotificationCenterDeps {
    */
   runErrorText?(sessionId: string): string | undefined
   /**
-   * 这条会话有进行中的目标吗（docs/goal-mode-design.md §9.3）：有 → 一轮正常收尾不弹「完成」—— 目标还要接着做，
-   * 它的结局另由 `goalEnded` 弹。失败照常弹。
+   * 这条会话这一轮正常收尾要不要安静（不弹「完成」）：事情还没到要人看的时候 —— 目标的管理员派了活在等、干活的
+   * 会话这一轮是它的管理员派的（docs/goal-mode-design.md §16；管理员停下来问人或汇报时照常弹）。失败照常弹。
    */
-  goalActive?(sessionId: string): boolean
+  quietRunEnd?(sessionId: string): boolean
   logger?: { warn(message: string): void }
 }
 
@@ -96,8 +96,6 @@ export interface NotificationCenter {
    * 通知的意义是「你不在的时候发生了事」，人到了就没意义了。
    */
   sessionOpened(sessionId: string): void
-  /** 目标有了结局（达成 / 做不到 / 被宿主暂停）：同一会话只留最新一条。`body` 是现成的一句人话 */
-  goalEnded(sessionId: string, body: string): void
 }
 
 /** 通知正文上限 —— 两端原生通知都只给一两行，长了会被系统硬截在难看的地方 */
@@ -204,7 +202,7 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
     // 的形式回到父 agent，父 agent 那轮的 agent_end 才是真正的结局
     if (rootOf(sessionId) !== sessionId) return
     if (reason === 'aborted') return
-    if (reason !== 'error' && pending === undefined && safeGoalActive(sessionId)) return
+    if (reason !== 'error' && pending === undefined && safeQuietRunEnd(sessionId)) return
     if (reason === 'error' || pending !== undefined) {
       const text = pending ?? errorText ?? safeRunErrorText(sessionId)
       notifyRunEnd(sessionId, true, text)
@@ -213,9 +211,9 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
     }
   }
 
-  function safeGoalActive(sessionId: string): boolean {
+  function safeQuietRunEnd(sessionId: string): boolean {
     try {
-      return deps.goalActive?.(sessionId) === true
+      return deps.quietRunEnd?.(sessionId) === true
     } catch {
       return false
     }
@@ -232,16 +230,6 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
   }
 
   return {
-    goalEnded(sessionId: string, body: string): void {
-      show({
-        key: `goal:${sessionId}`,
-        kind: 'goal',
-        sessionId,
-        title: titleOf(sessionId),
-        body: oneLine(body)
-      })
-    },
-
     handleEvent(event: ChatEvent): void {
       switch (event.type) {
         case 'sub_session_register': {

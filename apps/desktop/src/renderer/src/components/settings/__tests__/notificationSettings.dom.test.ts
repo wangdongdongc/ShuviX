@@ -3,7 +3,7 @@
  * 设置 → 通用 → 通知：一类一个开关，存在 `notification.<kind>`，只有字面 'false' 才算关。
  *
  *   NK-D1 读到之前不画：没有先画「开」再跳成「关」
- *   NK-D2 缺省：四行按 ask / done / failed / goal 排，文案是真 en 资源，都开着；只读这四个键，打开不写
+ *   NK-D2 缺省：三行按 ask / done / failed 排，文案是真 en 资源，都开着；只读这三个键，打开不写
  *   NK-D3 读回来的值：只有 'false' 是关；'true'、空串、'FALSE'、'0' 都是开
  *   NK-D4 点开关：每点一次写一次，值是字符串 'false' / 'true'，键是这一类的；别的行不动
  *   NK-D5 连着点不同的行：每次都基于最新状态，三次写入各自对
@@ -47,13 +47,8 @@ import {
   type Mounted
 } from '../../browser/__tests__/browserDomSupport'
 
-const KINDS: AgentNotificationKind[] = ['ask', 'done', 'failed', 'goal']
-const KEYS = [
-  'notification.ask',
-  'notification.done',
-  'notification.failed',
-  'notification.goal'
-]
+const KINDS: AgentNotificationKind[] = ['ask', 'done', 'failed']
+const KEYS = ['notification.ask', 'notification.done', 'notification.failed']
 
 let api: FakeApi
 let get: Mock<(key: string) => Promise<unknown>>
@@ -104,7 +99,7 @@ afterEach(() => {
 })
 
 describe('NotificationSettings', () => {
-  it('NK-D1 四个值都读到之前不画；画出来的第一帧 done 就是关', async () => {
+  it('NK-D1 三个值都读到之前不画；画出来的第一帧 done 就是关', async () => {
     const resolvers: Record<string, (value: unknown) => void> = {}
     get.mockImplementation((key) => new Promise((resolve) => (resolvers[key] = resolve)))
     await mount()
@@ -113,7 +108,6 @@ describe('NotificationSettings', () => {
     await act(async () => {
       resolvers['notification.ask'](undefined)
       resolvers['notification.failed'](undefined)
-      resolvers['notification.goal'](undefined)
     })
     await flush()
     expect(section()).toBeNull()
@@ -123,10 +117,10 @@ describe('NotificationSettings', () => {
     })
     await flush()
     expect(section()).not.toBeNull()
-    expect(states()).toEqual([true, false, true, true])
+    expect(states()).toEqual([true, false, true])
   })
 
-  it('NK-D2 缺省：四行的顺序与文案、都开着；只读这四个键，不写', async () => {
+  it('NK-D2 缺省：三行的顺序与文案、都开着；只读这三个键，不写', async () => {
     await mount()
     expect(section()!.querySelector('h3')!.textContent).toBe('Notifications')
 
@@ -135,11 +129,10 @@ describe('NotificationSettings', () => {
     expect(rows.map((el) => el.textContent)).toEqual([
       'Waiting for you',
       'Run finished',
-      'Run failed',
-      'Goal ended or paused'
+      'Run failed'
     ])
 
-    expect(states()).toEqual([true, true, true, true])
+    expect(states()).toEqual([true, true, true])
     expect(get.mock.calls.map(([key]) => key)).toEqual(KEYS)
     expect(api.settings.set).not.toHaveBeenCalled()
   })
@@ -150,21 +143,21 @@ describe('NotificationSettings', () => {
     ['', true],
     ['FALSE', true],
     ['0', true]
-  ])('NK-D3 notification.done = %j → 开着 = %s；另外三类还开着', async (value, on) => {
+  ])('NK-D3 notification.done = %j → 开着 = %s；另外两类还开着', async (value, on) => {
     stored['notification.done'] = value
     await mount()
-    expect(states()).toEqual([true, on, true, true])
+    expect(states()).toEqual([true, on, true])
   })
 
   it("NK-D4 点两下 done：写 'false' 再写 'true'，都是字符串；只有这一行变", async () => {
     await mount()
 
     click(toggle('done'))
-    expect(states()).toEqual([true, false, true, true])
+    expect(states()).toEqual([true, false, true])
     expect(setCalls()).toEqual([{ key: 'notification.done', value: 'false' }])
 
     click(toggle('done'))
-    expect(states()).toEqual([true, true, true, true])
+    expect(states()).toEqual([true, true, true])
     expect(setCalls()).toEqual([
       { key: 'notification.done', value: 'false' },
       { key: 'notification.done', value: 'true' }
@@ -179,7 +172,7 @@ describe('NotificationSettings', () => {
     click(toggle('failed'))
     click(toggle('done'))
 
-    expect(states()).toEqual([false, true, false, true])
+    expect(states()).toEqual([false, true, false])
     expect(setCalls()).toEqual([
       { key: 'notification.ask', value: 'false' },
       { key: 'notification.failed', value: 'false' },
@@ -208,7 +201,7 @@ describe('GeneralSettings', () => {
   const notificationReads = (): unknown[] =>
     get.mock.calls.map(([key]) => key).filter((key) => key.startsWith('notification.'))
 
-  it('NK-D7a 桌面：有通知这一节，读这四个键', async () => {
+  it('NK-D7a 桌面：有通知这一节，读这三个键', async () => {
     await mount(GeneralSettings)
     expect(section()).not.toBeNull()
     expect(notificationReads()).toEqual(KEYS)

@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 /**
- * 输入框的内置命令 `/goal`（目标模式，docs/goal-mode-design.md §3；jsdom）：`/goal 条件` 不当消息发，交给宿主的
- * `agent.goalAct`（set），别的发送一概不受影响。
+ * 输入框的内置命令 `/goal`（目标，docs/goal-mode-design.md §16；jsdom）：`/goal 条件` 不当消息发，交给宿主的
+ * `agent.goalStart` —— 宿主把这条会话 fork 一份作目标的管理员，界面切到交回的那条管理员会话。别的发送一概不受影响。
  *
- *   IG-1 敲 `/goal 条件` 回车 → 变芯片、goalAct(set, 条件)，没有 prompt；成功之后输入框与芯片都清掉
- *   IG-2 被拒 → 话和芯片都留着，卡片上是宿主那句话（不套「发送失败」）；再改一个字提示就没了
- *   IG-3 弹层：`/go` 时 `/goal` 排第一、带「实验」标签；回车选中成芯片；只有芯片时回车 → 不发，打开「设新目标」编辑器
- *   IG-4 已有进行中的目标时只发 `/goal` → 打开「改目标」编辑器
- *   IG-5 普通消息、别的命令照常走 prompt，goalAct 一次没调
- *   IG-6 宿主没有 goalAct（旧宿主）/ 会话是笔记本 → 没有内置命令，`/goal x` 当普通文字发
- *   IG-7 会话在跑：`/goal x` 回车 → goalAct，不 steer
- *   IG-8 欢迎页：只发 `/goal` → 提示用法、不建会话；`/goal x` → 先建会话再设目标
+ *   IG-1 敲 `/goal 条件` 回车 → 变芯片、goalStart(会话, 条件)，没有 prompt；成功之后输入框与芯片都清掉、会话列表
+ *        刷新、打开交回的管理员会话（宿主有 `openSession` 用它，没有就 `setActiveSessionId`）
+ *   IG-2 被拒 → 话和芯片都留着，卡片上是宿主那句话（不套「发送失败」），不开任何会话；再改一个字提示就没了；
+ *        goalStart 抛错同样留话、报原因
+ *   IG-3 弹层：`/go` 时 `/goal` 排第一、带「实验」标签；回车选中成芯片；只有芯片时回车 → 提示用法，不发、不开会话
+ *   IG-4 等宿主回话的时候换到了别的会话 → 列表照样刷新，不替用户切走
+ *   IG-5 普通消息、别的命令照常走 prompt，goalStart 一次没调
+ *   IG-6 宿主没有 goalStart（旧宿主）/ 会话是笔记本 / 会话是目标的管理员 → 没有内置命令，`/goal x` 当普通文字发
+ *   IG-7 会话在跑：`/goal x` 回车 → goalStart，不 steer
+ *   IG-8 欢迎页：只发 `/goal` → 提示用法、不建会话；`/goal x` → 先建会话再设目标，成功后打开管理员会话
  *   IG-9 条件里的长文粘贴芯片就地展开成文字
  *
  * 后端是假的 `window.api`（同 inputAreaSendFailure.dom.test.tsx）。
@@ -22,7 +24,12 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { AvailableModel, ProviderInfo } from '@shuvix/chat-protocol/types/provider'
-import type { GoalActResult, GoalView } from '@shuvix/chat-protocol/types/goal'
+import type { GoalStartResult } from '@shuvix/chat-protocol/types/goal'
+
+/** 宿主的 `openSession`（app-shell 给的导航口）：缺省有；`current = undefined` 模拟没有它的宿主 */
+const hostNav = vi.hoisted(() => ({
+  current: undefined as ((sessionId: string) => void) | undefined
+}))
 
 vi.mock('@shuvix/chat-ui', () => {
   const api = (): unknown => (globalThis as unknown as { window: { api: unknown } }).window.api
@@ -35,7 +42,8 @@ vi.mock('@shuvix/chat-ui', () => {
         activeModel: 'model-m',
         setActiveProvider: vi.fn(),
         setActiveModel: vi.fn()
-      }
+      },
+      ...(hostNav.current ? { openSession: hostNav.current } : {})
     })
   }
 })
@@ -64,6 +72,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const P = 'prov-1'
 const M = 'model-m'
 const A = 's1'
+/** goalStart 交回的管理员会话 */
+const MANAGER = 'manager-1'
 const CMD = {
   commandId: 'cmd',
   name: 'Cmd',
@@ -73,22 +83,26 @@ const CMD = {
 
 let prompt: ReturnType<typeof vi.fn>
 let steer: ReturnType<typeof vi.fn>
-let goalAct: ReturnType<typeof vi.fn>
-let goalResults: Array<Deferred<GoalActResult>>
+let goalStart: ReturnType<typeof vi.fn>
+let goalResults: Array<Deferred<GoalStartResult>>
 let createSession: ReturnType<typeof vi.fn>
+let listSessions: ReturnType<typeof vi.fn>
+let openSession: ReturnType<typeof vi.fn<(sessionId: string) => void>>
 
 function buildApi(opts: { goal?: boolean } = {}): Record<string, unknown> {
   goalResults = []
   prompt = vi.fn(async () => ({ success: true }))
   steer = vi.fn(async () => ({ success: true }))
-  goalAct = vi.fn(() => {
-    const next = deferred<GoalActResult>()
+  goalStart = vi.fn(() => {
+    const next = deferred<GoalStartResult>()
     goalResults.push(next)
     return next.promise
   })
   createSession = vi.fn(async () => ({ id: 'new-session' }))
+  // 宿主设好目标之后的列表：原会话 + fork 出来的管理员会话
+  listSessions = vi.fn(async () => [row(A), row(MANAGER, { goalManagerOf: A })])
   return {
-    session: { list: async () => [], create: createSession, delete: vi.fn(async () => ({})) },
+    session: { list: listSessions, create: createSession, delete: vi.fn(async () => ({})) },
     agent: {
       init: async () => ({ success: true }),
       prompt,
@@ -98,7 +112,7 @@ function buildApi(opts: { goal?: boolean } = {}): Record<string, unknown> {
       respondToInput: vi.fn(async () => ({ success: true })),
       setModel: vi.fn(async () => ({ success: true })),
       setThinkingLevel: vi.fn(async () => ({ success: true })),
-      ...(opts.goal === false ? {} : { goalAct })
+      ...(opts.goal === false ? {} : { goalStart })
     },
     tools: { list: async () => [] },
     files: { scan: async () => ({ root: '/w/proj', paths: [], truncated: false }) },
@@ -147,20 +161,6 @@ const row = (
   lastActiveAt: 0
 })
 
-const GOAL: GoalView = {
-  id: 'g_1',
-  sessionId: A,
-  objective: 'ship it',
-  status: 'active',
-  setAt: 0,
-  limits: { maxTurns: 50, stallTurns: 3 },
-  turns: 2,
-  stalls: 0,
-  activeMs: 0,
-  judging: false,
-  checkerMissing: false
-}
-
 let container: HTMLDivElement
 let root: Root
 
@@ -184,8 +184,8 @@ async function send(value: string): Promise<void> {
   await pressEnter()
 }
 
-/** 第 n 次 goalAct 落定（缺省最后一次） */
-async function settleGoal(result: GoalActResult, index = -1): Promise<void> {
+/** 第 n 次 goalStart 落定（缺省最后一次） */
+async function settleGoal(result: GoalStartResult, index = -1): Promise<void> {
   await act(async () => goalResults.at(index)!.resolve(result))
   await flush()
 }
@@ -213,8 +213,6 @@ function seed(opts: { active?: string | null; settings?: Record<string, unknown>
     modelSupportsVision: false,
     maxContextTokens: 0,
     composerRestoreRequest: null,
-    sessionGoals: {},
-    goalEditor: null,
     welcomeEnabledTools: [],
     welcomeKnowledgeBases: null
   })
@@ -231,6 +229,8 @@ function seed(opts: { active?: string | null; settings?: Record<string, unknown>
 
 beforeEach(() => {
   ;(window as unknown as { api: unknown }).api = buildApi()
+  openSession = vi.fn<(sessionId: string) => void>()
+  hostNav.current = openSession
   useModelCatalogStore.setState({ loaded: true, providers: [PROVIDER], availableModels: [MODEL] })
   seed()
   container = document.createElement('div')
@@ -244,37 +244,90 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
+const sessionIds = (): string[] => store().sessions.map((session) => session.id)
+
 describe('/goal 条件', () => {
-  it('IG-1 变芯片、goalAct(set)、不发 prompt；成功后清空', async () => {
+  it('IG-1 变芯片、goalStart、不发 prompt；成功后清空、刷新列表、打开管理员会话（openSession）', async () => {
     await mount()
     await type('/goal make tests pass')
     expect(shot()).toMatchObject({ text: 'make tests pass', slash: '/goal' })
 
     await pressEnter()
-    expect(goalAct).toHaveBeenCalledTimes(1)
-    expect(goalAct).toHaveBeenCalledWith({
-      sessionId: A,
-      action: { type: 'set', objective: 'make tests pass' }
-    })
+    expect(goalStart).toHaveBeenCalledTimes(1)
+    expect(goalStart).toHaveBeenCalledWith({ sessionId: A, objective: 'make tests pass' })
     expect(prompt).not.toHaveBeenCalled()
-    // 等宿主回话期间话还在
+    // 等宿主回话期间话还在，什么都没打开
     expect(shot()).toMatchObject({ text: 'make tests pass', slash: '/goal' })
+    expect(openSession).not.toHaveBeenCalled()
+    expect(sessionIds()).toEqual([A])
 
-    await settleGoal({ ok: true })
+    await settleGoal({ ok: true, sessionId: MANAGER })
     expect(shot()).toMatchObject({ text: '', slash: null })
     expect(sendError()).toBeNull()
+    expect(listSessions).toHaveBeenCalledTimes(1)
+    expect(sessionIds()).toEqual([A, MANAGER])
+    expect(openSession.mock.calls).toEqual([[MANAGER]])
+    expect(prompt).not.toHaveBeenCalled()
   })
 
-  it('IG-2 被拒：话和芯片留着，卡片上是宿主那句话；改一个字提示消失', async () => {
+  it('IG-1 宿主没有 openSession → setActiveSessionId(管理员会话)', async () => {
+    hostNav.current = undefined
     await mount()
     await send('/goal make tests pass')
-    await settleGoal({ ok: false, error: 'Goals can be set only in your own conversations.' })
+    expect(store().activeSessionId).toBe(A)
+    await settleGoal({ ok: true, sessionId: MANAGER })
+    expect(store().activeSessionId).toBe(MANAGER)
+    expect(sessionIds()).toEqual([A, MANAGER])
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('IG-1 刷新列表失败不算失败：照样清空、打开管理员会话', async () => {
+    listSessions.mockRejectedValueOnce(new Error('list failed'))
+    await mount()
+    await send('/goal make tests pass')
+    await settleGoal({ ok: true, sessionId: MANAGER })
+    expect(shot()).toMatchObject({ text: '', slash: null })
+    expect(sendError()).toBeNull()
+    expect(sessionIds()).toEqual([A])
+    expect(openSession.mock.calls).toEqual([[MANAGER]])
+  })
+
+  it('IG-2 被拒：话和芯片留着，卡片上是宿主那句话，不开会话；改一个字提示消失', async () => {
+    await mount()
+    await send('/goal make tests pass')
+    await settleGoal({ ok: false, error: 'This session is busy. Set the goal when it stops.' })
     expect(shot()).toMatchObject({ text: 'make tests pass', slash: '/goal' })
-    expect(sendError()).toBe('Goals can be set only in your own conversations.')
+    expect(sendError()).toBe('This session is busy. Set the goal when it stops.')
     expect(prompt).not.toHaveBeenCalled()
+    expect(openSession).not.toHaveBeenCalled()
+    expect(listSessions).not.toHaveBeenCalled()
+    expect(store().activeSessionId).toBe(A)
 
     await type('make tests pass!')
     expect(sendError()).toBeNull()
+  })
+
+  it('IG-2 goalStart 抛错：话留着、报原因、不开会话；之后还能再发', async () => {
+    await mount()
+    await send('/goal make tests pass')
+    await act(async () => goalResults.at(-1)!.reject(new Error('boom')))
+    await flush()
+    expect(shot()).toMatchObject({ text: 'make tests pass', slash: '/goal' })
+    expect(sendError()).not.toBeNull()
+    expect(openSession).not.toHaveBeenCalled()
+
+    await pressEnter()
+    expect(goalStart).toHaveBeenCalledTimes(2)
+  })
+
+  it('IG-4 等回话时换到了别的会话：列表照样刷新，不替用户切走', async () => {
+    await mount()
+    await send('/goal make tests pass')
+    act(() => store().setActiveSessionId('elsewhere'))
+    await settleGoal({ ok: true, sessionId: MANAGER })
+    expect(sessionIds()).toEqual([A, MANAGER])
+    expect(openSession).not.toHaveBeenCalled()
+    expect(store().activeSessionId).toBe('elsewhere')
   })
 
   it('IG-9 长文粘贴芯片就地展开进条件', async () => {
@@ -283,16 +336,15 @@ describe('/goal 条件', () => {
     const long = longPaste('req')
     await pasteInto(textarea(), long)
     await pressEnter()
-    expect(goalAct).toHaveBeenCalledTimes(1)
-    const objective = (goalAct.mock.calls[0][0] as { action: { objective: string } }).action
-      .objective
+    expect(goalStart).toHaveBeenCalledTimes(1)
+    const { objective } = goalStart.mock.calls[0][0] as { objective: string }
     expect(objective).toContain('req 0')
     expect(objective).toContain('req 11')
   })
 })
 
 describe('只发 /goal', () => {
-  it('IG-3 弹层里排第一、带实验标签；选中成芯片；再回车 → 打开「设新目标」编辑器，不发', async () => {
+  it('IG-3 弹层里排第一、带实验标签；选中成芯片；再回车 → 提示用法，不发、不开会话', async () => {
     await mount()
     await type('/go')
     const items = [...container.querySelectorAll('button')].filter((b) =>
@@ -304,23 +356,18 @@ describe('只发 /goal', () => {
     await type('/goal')
     await pressEnter()
     expect(shot()).toMatchObject({ text: '', slash: '/goal' })
-    expect(goalAct).not.toHaveBeenCalled()
+    expect(goalStart).not.toHaveBeenCalled()
+    expect(sendError()).toBeNull()
 
     await pressEnter()
-    expect(goalAct).not.toHaveBeenCalled()
+    expect(sendError()).toBe(en.goal.usageHint)
+    expect(goalStart).not.toHaveBeenCalled()
     expect(prompt).not.toHaveBeenCalled()
-    expect(store().goalEditor).toMatchObject({ sessionId: A, mode: 'new' })
-    expect(shot()).toMatchObject({ text: '', slash: null })
-  })
-
-  it('IG-4 已有进行中的目标 → 打开「改目标」编辑器', async () => {
-    useChatStore.setState({ sessionGoals: { [A]: GOAL } })
-    await mount()
-    await type('/goal')
-    await pressEnter()
-    await pressEnter()
-    expect(store().goalEditor).toMatchObject({ sessionId: A, mode: 'edit' })
-    expect(goalAct).not.toHaveBeenCalled()
+    expect(openSession).not.toHaveBeenCalled()
+    expect(listSessions).not.toHaveBeenCalled()
+    expect(store().activeSessionId).toBe(A)
+    // 芯片还在：接着写条件就行
+    expect(shot()).toMatchObject({ text: '', slash: '/goal' })
   })
 })
 
@@ -344,10 +391,10 @@ describe('别的发送不受影响', () => {
     // 文字里提到 /goal 不算命令
     await send('please read /goal docs')
     expect(prompt).toHaveBeenCalledTimes(3)
-    expect(goalAct).not.toHaveBeenCalled()
+    expect(goalStart).not.toHaveBeenCalled()
   })
 
-  it('IG-6a 宿主没有 goalAct → 没有内置命令，`/goal x` 当文字发', async () => {
+  it('IG-6a 宿主没有 goalStart → 没有内置命令，`/goal x` 当文字发', async () => {
     ;(window as unknown as { api: unknown }).api = buildApi({ goal: false })
     await mount()
     await type('/go')
@@ -362,12 +409,23 @@ describe('别的发送不受影响', () => {
     seed({ settings: { notebookPath: 'notes/a.md' } })
     await mount()
     await send('/goal x')
-    expect(goalAct).not.toHaveBeenCalled()
+    expect(goalStart).not.toHaveBeenCalled()
     expect(prompt).toHaveBeenCalledTimes(1)
     expect(prompt.mock.calls[0][0]).toMatchObject({ text: '/goal x' })
   })
 
-  it('IG-7 会话在跑：/goal x → goalAct，不 steer', async () => {
+  it('IG-6c 目标的管理员会话（settings.goalManagerOf）→ 没有内置命令，`/goal x` 当文字发', async () => {
+    seed({ settings: { goalManagerOf: 'worker-1' } })
+    await mount()
+    await type('/go')
+    expect(container.textContent).not.toContain('/goal')
+    await send('/goal x')
+    expect(goalStart).not.toHaveBeenCalled()
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(prompt.mock.calls[0][0]).toMatchObject({ text: '/goal x' })
+  })
+
+  it('IG-7 会话在跑：/goal x → goalStart，不 steer', async () => {
     applySessionView(
       A,
       V(A, {
@@ -377,9 +435,9 @@ describe('别的发送不受影响', () => {
     )
     await mount()
     await send('/goal keep going until green')
-    expect(goalAct).toHaveBeenCalledWith({
+    expect(goalStart).toHaveBeenCalledWith({
       sessionId: A,
-      action: { type: 'set', objective: 'keep going until green' }
+      objective: 'keep going until green'
     })
     expect(steer).not.toHaveBeenCalled()
     expect(prompt).not.toHaveBeenCalled()
@@ -395,21 +453,23 @@ describe('欢迎页', () => {
     await pressEnter()
     expect(sendError()).toBe(en.goal.usageHint)
     expect(createSession).not.toHaveBeenCalled()
-    expect(goalAct).not.toHaveBeenCalled()
+    expect(goalStart).not.toHaveBeenCalled()
+    expect(openSession).not.toHaveBeenCalled()
   })
 
-  it('IG-8b /goal x → 先建会话，再在新会话上设目标；成功后清空', async () => {
+  it('IG-8b /goal x → 先建会话，再在新会话上设目标；成功后清空、打开管理员会话', async () => {
     seed({ active: null })
     await mount()
     await send('/goal write the report')
     await flush()
     expect(createSession).toHaveBeenCalledTimes(1)
-    expect(goalAct).toHaveBeenCalledWith({
+    expect(goalStart).toHaveBeenCalledWith({
       sessionId: 'new-session',
-      action: { type: 'set', objective: 'write the report' }
+      objective: 'write the report'
     })
-    await settleGoal({ ok: true })
     expect(store().activeSessionId).toBe('new-session')
+    await settleGoal({ ok: true, sessionId: MANAGER })
+    expect(openSession.mock.calls).toEqual([[MANAGER]])
     expect(shot()).toMatchObject({ text: '', slash: null })
     expect(prompt).not.toHaveBeenCalled()
   })

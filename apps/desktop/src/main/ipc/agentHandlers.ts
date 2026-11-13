@@ -1,4 +1,3 @@
-import type { GoalAction } from '@shuvix/chat-protocol/types/goal'
 import { goalService } from '../services/goalService'
 import { defineHandler } from './registry'
 import { chatGateway, operationContext, createClientContext } from '../frontend'
@@ -160,18 +159,15 @@ export function registerAgentHandlers(): void {
   /** 各会话此刻挂着的询问本身（只读）：收件箱不打开会话就地回答 / 批准，应答仍走 agent:respondToInput */
   defineHandler('agent:pendingInputs', () => chatGateway.pendingInputs())
 
-  /** 目标模式（docs/goal-mode-design.md）：一条会话的目标视图（只读，补种用） */
-  defineHandler('agent:goal', (_ctx, sessionId: string) => goalService.get(sessionId))
-
-  /** 对目标的操作：来源按这次操作的连接盖章（设定目标那条消息是人发的） */
-  defineHandler('agent:goalAct', (ctx, params: { sessionId: string; action: GoalAction }) =>
-    operationContext.run(createClientContext(ctx, params.sessionId), () =>
-      goalService.act(params.sessionId, params.action, inputOriginOfClient(ctx))
+  /**
+   * 设定目标（docs/goal-mode-design.md §16）：fork 这条会话作目标的管理员，把条件原文发给它。来源按这次操作的
+   * 连接盖章（那条消息是人发的）。参数来自前端（含网络客户端）：形状由 goalService 自己验
+   */
+  defineHandler('agent:goalStart', (ctx, params: { sessionId: string; objective: string }) =>
+    operationContext.run(createClientContext(ctx, params?.sessionId), () =>
+      goalService.start(params?.sessionId, params?.objective, inputOriginOfClient(ctx))
     )
   )
-
-  /** 有进行中 / 暂停中目标的会话（只读）：侧栏徽标 */
-  defineHandler('agent:goalStatuses', () => goalService.statuses())
 
   /**
    * 销毁会话的根 Agent 运行时（会话横幅 agent 胶囊上的 X）：会话与历史都在，下一条消息按

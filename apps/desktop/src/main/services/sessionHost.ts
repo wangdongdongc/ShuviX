@@ -154,7 +154,12 @@ export function buildSessionHostDeps(
     onSessionOpened: sessionHostHooks.opened,
     onSessionClosed: sessionHostHooks.closed,
     interruptedSendPolicy: INTERRUPTED_SEND_POLICY,
-    autoResume: () => settingsService.get(AUTO_RESUME_KEY),
+    // 目标的管理员（`settings.goalManagerOf`，docs/goal-mode-design.md §16）不看这个开关：用户设了目标就是要它自己
+    // 接着推 —— 干活的会话那一轮结束时的完成通知得能把它叫回来（用户喊停照样挡住，那是 durableSession 自己的判断）
+    autoResume: (sessionId) =>
+      sessionRecords.pickSettings(sessionId, ['goalManagerOf'])?.goalManagerOf
+        ? true
+        : settingsService.get(AUTO_RESUME_KEY),
     today: () => localDate(),
     onReport: (sessionId, error) =>
       log.warn(`durable report session=${sessionId}: ${errorText(error)}`),

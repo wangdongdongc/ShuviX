@@ -92,7 +92,6 @@ export type {
   CancelResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
-import type { GoalStatus, GoalView } from '@shuvix/chat-protocol/types/goal'
 
 /** 模型相关元数据 */
 export interface SessionModelMetadata {
@@ -112,6 +111,8 @@ export interface SessionSettings {
   workProject?: string
   /** 触发器开出来的运行会话（侧栏行首是定时器图标） */
   triggerRun?: boolean
+  /** 这条会话是某个目标的管理员：值是干活的那条会话的 id（`/goal`，docs/goal-mode-design.md §16） */
+  goalManagerOf?: string
   /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目外的文件为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
@@ -184,18 +185,6 @@ export interface SlashChip {
  * 'builtin' = 输入框自己加上、由宿主处理的内置命令（`/goal`），从不进 `slashCommands`，也从不展开成 cmd Token
  */
 export type SlashCommandKind = 'project' | 'skill' | 'builtin'
-
-/** 目标编辑器做什么：设新目标 / 改目标（原文与上限）/ 调高上限并继续（暂停在上限上的目标） */
-export type GoalEditorMode = 'new' | 'edit' | 'raise'
-
-export interface GoalEditorState {
-  sessionId: string
-  mode: GoalEditorMode
-  nonce: number
-}
-
-/** 侧栏要标的目标状态（进行中 / 暂停中）；达成、做不到的不标 */
-export type SidebarGoalStatus = Extract<GoalStatus, 'active' | 'paused'>
 
 /** 清空输入框之前记下的输入态（话没发出去时放回） */
 export interface ComposerSnapshot {
@@ -430,21 +419,6 @@ interface ChatState {
    * 缺键 = 折叠；活动（流式/审批）的上升沿由 ThreadDrawer 自动置 true，手动折叠置 false。
    */
   sessionThreadOpen: Record<string, boolean>
-  /**
-   * 各会话的目标（docs/goal-mode-design.md §9）：`goal` 事件整份推来，打开会话时经 `agent.goal` 补种（`useGoalSeed`）。
-   * 缺键 = 这条会话没有目标（或还不知道）
-   */
-  sessionGoals: Record<string, GoalView>
-  /**
-   * 有进行中 / 暂停中目标的会话（侧栏的 ◎）：`agent.goalStatuses` 补种，之后跟 `goal` 事件。只给侧栏用 ——
-   * 目标栏读 `sessionGoals`
-   */
-  sessionGoalStatuses: Record<string, SidebarGoalStatus>
-  /**
-   * 开着的目标编辑器（目标栏里那张小表单）：哪条会话、做什么 —— 设新目标（输入框里只发了 `/goal`）、改目标、调高上限并
-   * 继续。放在 store 里而不是目标栏自己的状态里：输入框要能打开它。`nonce` 每次打开都换，表单据此重新取初值
-   */
-  goalEditor: GoalEditorState | null
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -498,14 +472,6 @@ interface ChatState {
   setAskCount: (sessionId: string, count: number) => void
   /** 整份换掉询问计数（`agent.askCounts`）：新来的前端补上错过的 `ask_count`，已经落定的也随之消失 */
   setAskCounts: (counts: Record<string, number>) => void
-  /** 一条会话的目标变了（`goal` 事件 / `agent.goal` 补种）；null = 没有目标。侧栏的状态跟着改 */
-  setSessionGoal: (sessionId: string, goal: GoalView | null) => void
-  /** 整份换掉侧栏的目标状态（`agent.goalStatuses`）：只留进行中 / 暂停中 */
-  setGoalStatuses: (statuses: Record<string, GoalStatus>) => void
-  /** 打开某会话的目标编辑器（输入框的 `/goal`、目标栏的「编辑」「调高上限并继续」） */
-  openGoalEditor: (sessionId: string, mode: GoalEditorMode) => void
-  /** 关掉目标编辑器（保存成功 / 取消） */
-  closeGoalEditor: () => void
   /** 本地错误行（没有条目的 `error` 事件，PIN-02）：只给当前会话记，挂在此刻最后一条消息后面 */
   addLocalError: (sessionId: string, content: string) => void
   setInputText: (text: string) => void
@@ -825,11 +791,6 @@ function residueStream(
   return prev ? { ...prev, isStreaming } : emptyStream(isStreaming)
 }
 
-/** 侧栏标哪种：进行中 / 暂停中；终态不标 */
-function sidebarGoalStatus(status: GoalStatus): SidebarGoalStatus | undefined {
-  return status === 'active' || status === 'paused' ? status : undefined
-}
-
 function withKey<T>(map: Record<string, T>, key: string, value: T | undefined): Record<string, T> {
   if (value === undefined) {
     if (!(key in map)) return map
@@ -882,9 +843,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionActiveInputId: {},
   sessionLocalErrors: {},
   sessionThreadOpen: {},
-  sessionGoals: {},
-  sessionGoalStatuses: {},
-  goalEditor: null,
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
   // 只有宿主的启动种子算「默认档」；没有宿主种子（扩展侧栏、单测）时照旧当作已选
@@ -1087,40 +1045,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sameCounts(state.sessionAskCounts, counts) ? {} : { sessionAskCounts: counts }
     ),
 
-  setSessionGoal: (sessionId, goal) =>
-    set((state) => {
-      const sessionGoals = withKey(state.sessionGoals, sessionId, goal ?? undefined)
-      const sessionGoalStatuses = withKey(
-        state.sessionGoalStatuses,
-        sessionId,
-        goal ? sidebarGoalStatus(goal.status) : undefined
-      )
-      return sessionGoals === state.sessionGoals &&
-        sessionGoalStatuses === state.sessionGoalStatuses
-        ? {}
-        : { sessionGoals, sessionGoalStatuses }
-    }),
-
-  setGoalStatuses: (statuses) =>
-    set((state) => {
-      const next: Record<string, SidebarGoalStatus> = {}
-      for (const [sid, status] of Object.entries(statuses)) {
-        const shown = sidebarGoalStatus(status)
-        if (shown) next[sid] = shown
-      }
-      const prev = state.sessionGoalStatuses
-      const same =
-        Object.keys(next).length === Object.keys(prev).length &&
-        Object.keys(next).every((k) => prev[k] === next[k])
-      return same ? {} : { sessionGoalStatuses: next }
-    }),
-
-  openGoalEditor: (sessionId, mode) =>
-    set((state) => ({
-      goalEditor: { sessionId, mode, nonce: (state.goalEditor?.nonce ?? 0) + 1 }
-    })),
-  closeGoalEditor: () => set((state) => (state.goalEditor ? { goalEditor: null } : {})),
-
   addLocalError: (sessionId, content) =>
     set((state) => {
       if (sessionId !== state.activeSessionId) return {}
@@ -1189,8 +1113,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     forgetRedactions(id)
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
-      sessionGoals: withKey(state.sessionGoals, id, undefined),
-      sessionGoalStatuses: withKey(state.sessionGoalStatuses, id, undefined),
       // 删除的是当前激活会话才清空 active
       ...(state.active?.type === 'session' && state.active.id === id
         ? { ...deriveActive(null), messages: NO_MESSAGES }

@@ -114,10 +114,10 @@ export function InputArea({
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
   /**
-   * 内置命令 `/goal`（目标模式，实验，docs/goal-mode-design.md §3）：宿主能设目标（有 `agent.goalAct`）、这条会话的形态
-   * 也能设（人发起的根会话；欢迎页发出时新建的就是）才出现。它排在命令表第一，同名的项目命令 / 技能让位
+   * 内置命令 `/goal`（目标，实验，docs/goal-mode-design.md §16）：宿主能设目标（有 `agent.goalStart`）、这条会话的形态
+   * 也能设（人发起的根会话，不是目标的管理员；欢迎页发出时新建的就是）才出现。它排在命令表第一，同名的项目命令 / 技能让位
    */
-  const goalSupported = !!getHostApi()?.agent?.goalAct
+  const goalSupported = !!getHostApi()?.agent?.goalStart
   const activeRow = useChatStore((s) =>
     s.activeSessionId ? s.sessions.find((row) => row.id === s.activeSessionId) : undefined
   )
@@ -753,9 +753,9 @@ export function InputArea({
   }
 
   /**
-   * 内置命令 `/goal`（目标模式）：不当消息发，交给宿主 —— `agent.goalAct` 的 `set` 由宿主替用户发出那条带「目标」Token
-   * 的消息（会话在跑时并进当前轮）。成功才清空输入框；被拒（宿主给一句说明）或出错，话留在输入框里、原因写在卡片上。
-   * 只写了 `/goal`：不发任何东西，展开目标栏的编辑器（有目标 → 改，没有 → 设新目标）；欢迎页还没有会话，提示用法。
+   * 内置命令 `/goal`（目标）：不当消息发，交给宿主 —— `agent.goalStart` 把这条会话 fork 一份作目标的管理员，替用户把
+   * 条件原文发进管理员会话，这条会话接着干活。成功：清空输入框、切到管理员会话（提问与汇报都在那里）；被拒（宿主给
+   * 一句说明，如这条会话正在跑）或出错，话留在输入框里、原因写在卡片上。只写了 `/goal`：不发任何东西，提示用法。
    * 欢迎页带条件发出：先照常建会话，再设目标。
    *
    * 条件里的 @ 引用、粘贴芯片就地展开成文字（目标只有文字）；要藏的值不展开 —— 宿主这条路没有收真值的口子，
@@ -767,17 +767,12 @@ export function InputArea({
     if (goalSendingRef.current) return
     clearSendError()
     if (!args) {
-      if (!from) {
-        setSendError({ sessionId: null, text: t('goal.usageHint'), running: false, notice: true })
-        return
-      }
-      const store = useChatStore.getState()
-      const goal = store.sessionGoals[from]
-      store.openGoalEditor(
-        from,
-        goal && (goal.status === 'active' || goal.status === 'paused') ? 'edit' : 'new'
-      )
-      resetComposer()
+      setSendError({
+        sessionId: from,
+        text: t('goal.usageHint'),
+        running: isSessionRunning(from),
+        notice: true
+      })
       return
     }
     const objective = paste.resolveInline(at.resolveInline(args))
@@ -789,13 +784,25 @@ export function InputArea({
         sid = await createSessionForSend()
         if (!sid) return
       }
-      const goalAct = getHostApi()?.agent?.goalAct
-      if (!goalAct) return
-      const result = await goalAct({ sessionId: sid, action: { type: 'set', objective } })
+      const host = getHostApi()
+      const goalStart = host?.agent?.goalStart
+      if (!host || !goalStart) return
+      const result = await goalStart({ sessionId: sid, objective })
       if (result.ok) {
-        useChatStore.getState().touchSessionActive(sid)
-        // 等的时候换到了别的会话：那边的输入框不是这一份，不动它
-        if (useChatStore.getState().activeSessionId === sid) resetComposer()
+        const store = useChatStore.getState()
+        // 等的时候换到了别的会话：那边的输入框不是这一份，不动它，也不替用户切走
+        const stillHere = store.activeSessionId === sid
+        if (stillHere) resetComposer()
+        // 管理员会话已经建好了：刷新列表失败不算失败（主进程的列表广播随后也会刷新）
+        try {
+          store.setSessions(await host.session.list())
+        } catch {
+          /* 列表等广播 */
+        }
+        if (stillHere) {
+          if (chatHost.openSession) chatHost.openSession(result.sessionId)
+          else useChatStore.getState().setActiveSessionId(result.sessionId)
+        }
         return
       }
       failGoalCommand(sid, from, result.error, snapshot)
@@ -906,7 +913,7 @@ export function InputArea({
    * 图片不随这两档走，留在输入框里。
    */
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
-    // 运行中也一样：`/goal 条件` 交给宿主（会话在跑时宿主把那条消息并进当前轮）
+    // 运行中也一样：`/goal 条件` 交给宿主（会话在跑时宿主会拒，给一句说明）
     if (tryGoalCommand()) return
     const raw = inputText.trim()
     if ((!raw && !slashChip) || !activeSessionId) return

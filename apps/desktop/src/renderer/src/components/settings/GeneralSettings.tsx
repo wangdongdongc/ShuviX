@@ -18,7 +18,6 @@ import { useCompactLayout } from '../../mobile/useCompactLayout'
 import { setPhoneFontSize, usePhoneFontSize } from '../../mobile/phoneFontSize'
 import { isWebHost } from '../../host/hostMedia'
 import { NotificationSettings } from './NotificationSettings'
-import { GoalSettings } from './GoalSettings'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -154,9 +153,6 @@ export function GeneralSettings(): React.JSX.Element {
       />
 
       {!isWebHost && <NotificationSettings />}
-
-      {/* 目标（/goal）的缺省上限：存在运行 ShuviX 的那台机器上，浏览器 / 手机里改的也是它 */}
-      <GoalSettings />
 
       <ModelDefaultsSettings
         availableModels={availableModels}
