@@ -14,6 +14,7 @@
  *   KS-1..KS-9      submit 的准入与先后：管理员自己、缺 content / base、库解析失败、只读库、宿主不支持、entry 校验
  *   KS-10..KS-14    交给管理员的请求：字段恰好、entry 归一、提交者按调用现取、取消信号
  *   KS-20..KS-27    管理员结论的分支：没跑成、抛错、不收、空报告、报告里的目录换成条目名、中止
+ *   KO-1..KO-6      organize：准入、派管理员（`organize: true`、转述的要求）、回包、盖章记管理员、只挪位置的不盖
  *   KS-30..KS-46    收了之后的盖章：created / updated 盖、deleted 跳过、普通笔记不动、不在 / 符号链接 / 不是条目名
  *                   记在那一行、人工章保留、afterWrite、没改不写、正文字节不动
  *
@@ -308,12 +309,20 @@ describe('KT-1′ schema 与运行时守卫', () => {
     { enum?: string[]; description?: string }
   >
 
-  it('KT-1′ action 枚举恰为 bases / search / list / read / submit / migrate；参数恰为 action / base / query / entry / project / entries / content / offset / limit（没有 path）；replay 取最保守的 unsafe', () => {
+  it('KT-1′ action 枚举恰为 bases / search / list / read / submit / organize / migrate；参数恰为 action / base / query / entry / project / entries / content / offset / limit（没有 path）；replay 取最保守的 unsafe', () => {
     expect(KNOWLEDGE_TOOL_NAME).toBe('knowledge')
     const { tool } = makeTool()
     expect(tool.name).toBe('knowledge')
     expect(tool.label).toBe('Knowledge')
-    expect(props.action.enum).toEqual(['bases', 'search', 'list', 'read', 'submit', 'migrate'])
+    expect(props.action.enum).toEqual([
+      'bases',
+      'search',
+      'list',
+      'read',
+      'submit',
+      'organize',
+      'migrate'
+    ])
     // 动作 / 参数一旦漂回旧形状，模型就会以为还能交一个路径
     expect(Object.keys(props).sort()).toEqual([
       'action',
@@ -364,13 +373,15 @@ describe('KT-1′ schema 与运行时守卫', () => {
     expectNothingHappened(h)
   })
 
-  it('KT-1c 未知动作（如旧的 write / create）：失败并列出合法的六个', async () => {
+  it('KT-1c 未知动作（如旧的 write / create）：失败并列出合法的七个', async () => {
     const h = makeTool()
     for (const action of ['write', 'create', 'validate']) {
       expect(
         await rejectionOf(h.run('c1', { action } as unknown as KnowledgeToolParams)),
         action
-      ).toBe(`Unknown action "${action}". Valid: bases, search, list, read, submit, migrate`)
+      ).toBe(
+        `Unknown action "${action}". Valid: bases, search, list, read, submit, organize, migrate`
+      )
     }
     expectNothingHappened(h)
   })
@@ -382,7 +393,7 @@ describe('KT-12′ 给 agent 的文案', () => {
     { description?: string }
   >
 
-  it('KT-12′ 两处文案都指向 "bases"、不点名 "project"；base 的说明点名 list / read / submit / migrate 必填、search 可省', () => {
+  it('KT-12′ 两处文案都指向 "bases"、不点名 "project"；base 的说明点名 list / read / submit / organize / migrate 必填、search 可省', () => {
     for (const [where, copy] of [
       ['base.description', props.base.description],
       ['KNOWLEDGE_DESCRIPTION', KNOWLEDGE_DESCRIPTION]
@@ -391,16 +402,17 @@ describe('KT-12′ 给 agent 的文案', () => {
       expect(copy, where).not.toContain('"project"')
     }
     expect(props.base.description).toContain(
-      'Required for "list", "read", "submit" and "migrate" (where the entries go)'
+      'Required for "list", "read", "submit", "organize" and "migrate" (where the entries go)'
     )
     expect(props.base.description).toContain('"search" without it')
     // entry 的说明：名字就是 search / list 给出来的那一种
     expect(props.entry.description).toContain('as "search" and "list" give it')
     expect(props.content.description).toContain('"submit"')
+    expect(props.content.description).toContain('"organize"')
     expect(props.offset.description).toContain('"read"')
   })
 
-  it('KT-12′ 描述讲 read 与 submit（交给 librarian、它决定怎么记）；动作条目恰为六个（末尾是 migrate）', () => {
+  it('KT-12′ 描述讲 read、submit（交给 librarian、它决定留什么）与 organize（用户要整理时）；动作条目恰为七个（末尾是 migrate）', () => {
     for (const phrase of [
       'user picks which bases',
       'leave `base` out',
@@ -411,7 +423,10 @@ describe('KT-12′ 给 agent 的文案', () => {
       "hand the base's librarian",
       '`content`',
       'name that `entry`',
-      'The librarian decides',
+      'The librarian decides what the base keeps',
+      'part of what you sent, or nothing',
+      'when the user wants a base tidied up',
+      'removing what has no lasting value',
       '"/auth/token-refresh.md"'
     ]) {
       expect(KNOWLEDGE_DESCRIPTION, phrase).toContain(phrase)
@@ -419,7 +434,15 @@ describe('KT-12′ 给 agent 的文案', () => {
     const actionLines = KNOWLEDGE_DESCRIPTION.split('\n')
       .filter((line) => line.startsWith('- "'))
       .map((line) => /^- "([a-z]+)"/.exec(line)?.[1])
-    expect(actionLines).toEqual(['bases', 'search', 'list', 'read', 'submit', 'migrate'])
+    expect(actionLines).toEqual([
+      'bases',
+      'search',
+      'list',
+      'read',
+      'submit',
+      'organize',
+      'migrate'
+    ])
   })
 
   it('KT-12′ 描述与参数说明里没有文件工具、目录、元数据的话：不教 write / edit / grep，不说 directory / permanent / verified', () => {
@@ -1850,13 +1873,13 @@ describe('KS-1..KS-9 submit 的准入', () => {
     expectNothingHappened(h)
   })
 
-  it('KS-7 entry 全空白 = 没点名：照常派，请求里没有 entry 键，也不为它扫描', async () => {
+  it('KS-7 entry 全空白 = 没点名：照常派，请求里没有 entry 键；扫描只有派管理员之前记库的样子那一次', async () => {
     const h = makeTool({ files: FILES })
     const res = await h.run('c1', { action: 'submit', base: 'project', content: 'x', entry: '  ' })
     expect(res.isError, textOf(res)).toBeFalsy()
     expect(h.admin).toHaveBeenCalledTimes(1)
     expect(h.admin.mock.calls[0][0]).not.toHaveProperty('entry')
-    expect(h.scan).not.toHaveBeenCalled()
+    expect(h.scan).toHaveBeenCalledTimes(1)
   })
 
   it('KS-8 不注入 isAdmin 时 submit 照常（缺省 = 不是管理员）', async () => {
@@ -2546,6 +2569,198 @@ describe('KS-30..KS-46 收录之后宿主盖章', () => {
   })
 })
 
+// ─── organize：请管理员把一个库整个过一遍（2026-11-12）──────────────────────────
+
+describe('KO-1..KO-6 organize', () => {
+  /** 人工核实过的一条：`generated` 早于 `verified`，核实仍当前 */
+  const HUMAN = doc([
+    'shuvix: okf v0.2',
+    'type: Concept',
+    'title: State machine',
+    'description: ds',
+    'status: stable',
+    'generated: { by: "shuvix-work/gpt-5", at: "2026-10-12T03:10:00.000Z" }',
+    'verified: { by: "human:alice", at: "2026-10-20T08:00:00.000Z" }'
+  ])
+  /** 管理员合并出来的一条：写钩子已经把 generated 盖成了它自己 */
+  const MERGED = doc(
+    [
+      'shuvix: okf v0.2',
+      'type: Decision',
+      'title: Export paging',
+      'description: de',
+      'status: stable',
+      `generated: { by: "${ADMIN}", at: "2026-11-08T07:59:00.000Z" }`
+    ],
+    'merged body'
+  )
+  const FILES = {
+    [`${ROOT}/a.md`]: ENTRY,
+    [`${ROOT}/b.md`]: doc(['shuvix: okf v0.2', 'type: Memory', 'title: B', 'status: stable']),
+    [`${ROOT}/state.md`]: HUMAN,
+    [`${ROOT}/note.md`]: PLAIN
+  }
+
+  it('KO-1 准入：管理员自己被拒；缺 base、base 解析失败、只读库、宿主不支持都是失败，一律不派', async () => {
+    const admin = makeTool({ files: FILES, isAdmin: () => true })
+    expect(await rejectionOf(admin.run('c1', { action: 'organize', base: 'project' }))).toBe(
+      'You are the librarian: reorganize the base yourself with the file tools, and answer with `next`.'
+    )
+    expect(admin.admin).not.toHaveBeenCalled()
+
+    const h = makeTool({ files: FILES })
+    expect(await rejectionOf(h.run('c2', { action: 'organize' }))).toContain(
+      '"organize" needs `base`'
+    )
+    expect(h.admin).not.toHaveBeenCalled()
+
+    const missing = makeTool({ bundle: { error: 'No base "x" in this session.' } })
+    expect(await rejectionOf(missing.run('c3', { action: 'organize', base: 'x' }))).toBe(
+      'No base "x" in this session.'
+    )
+
+    const readonly = makeTool({ bundle: { dir: '/kb/b', label: 'ref', readonly: true } })
+    expect(await rejectionOf(readonly.run('c4', { action: 'organize', base: 'shuvix' }))).toBe(
+      '"shuvix" is read-only — it is ShuviX\'s own reference, shipped with the app. Only the user\'s knowledge bases can be reorganized ("bases" lists them).'
+    )
+    expect(readonly.admin).not.toHaveBeenCalled()
+
+    const extension = makeTool({ files: FILES, admin: null })
+    expect(await rejectionOf(extension.run('c5', { action: 'organize', base: 'project' }))).toBe(
+      'Reorganizing a knowledge base is not available on this host'
+    )
+  })
+
+  it('KO-2 空库：一句话，不派管理员', async () => {
+    const h = makeTool()
+    const res = await h.run('c1', { action: 'organize', base: 'project' })
+    expect(res.isError).toBeFalsy()
+    expect(textOf(res)).toBe('Base "project" has no entries yet — there is nothing to reorganize.')
+    expect(h.admin).not.toHaveBeenCalled()
+  })
+
+  it('KO-3 派管理员：请求带 `organize: true`、库目录、发起者；content 是转述的要求（去首尾空白，没给就是空串）；没有 entry / migration', async () => {
+    const h = makeTool({ files: FILES })
+    await h.run('c1', {
+      action: 'organize',
+      base: ' project ',
+      content: '  merge the auth notes \n'
+    })
+    expect(h.admin).toHaveBeenCalledTimes(1)
+    expect(h.admin.mock.calls[0][0]).toEqual({
+      base: 'project',
+      label: 'project "Acme"',
+      bundleDir: ROOT,
+      content: 'merge the auth notes',
+      submittedBy: ACTOR,
+      organize: true
+    })
+
+    const bare = makeTool({ files: FILES })
+    await bare.run('c2', { action: 'organize', base: 'project' })
+    expect(bare.admin.mock.calls[0][0]).toMatchObject({ content: '', organize: true })
+  })
+
+  it('KO-4 回包：表头报整理前后的文件数、逐条改动、空行、报告；报告里漏出来的库目录换成条目名；一条没动另说一句', async () => {
+    const h = makeTool({
+      files: FILES,
+      admin: librarian(
+        { 'export/paging.md': MERGED, 'a.md': null, 'b.md': null },
+        (req) => `Merged ${req.bundleDir}/a.md and b.md into ${req.bundleDir}/export/paging.md.`
+      )
+    })
+    const res = await h.run('c1', { action: 'organize', base: 'project' })
+    expect(res.isError, textOf(res)).toBeFalsy()
+    expect(textOf(res).split('\n')).toEqual([
+      'Reorganized base "project" — 4 file(s) before, 3 now:',
+      '- /export/paging.md (created)',
+      '- /a.md (deleted)',
+      '- /b.md (deleted)',
+      '',
+      'Merged /a.md and b.md into /export/paging.md.'
+    ])
+    expect(textOf(res)).not.toContain(ROOT)
+
+    const idle = makeTool({ files: FILES, admin: reports([], 'Already in order.') })
+    const nothing = await idle.run('c2', { action: 'organize', base: 'project' })
+    expect(textOf(nothing)).toBe('Nothing was changed in base "project".\n\nAlready in order.')
+    expect(idle.calls).toEqual(['admin:project'])
+  })
+
+  it('KO-5 盖章：管理员改写的条目两个章都记管理员（合并出来的正文是它写的，不是发起整理的 agent）', async () => {
+    const h = makeTool({ files: FILES, admin: librarian({ 'export/paging.md': MERGED }) })
+    await h.run('c1', { action: 'organize', base: 'project' })
+    const stamped = h.files.get(`${ROOT}/export/paging.md`)!
+    expect(stamped).toContain(`generated: { by: "${ADMIN}", at: "${NOW_ISO}" }`)
+    expect(stamped).toContain(VERIFIED_LINE)
+    expect(stamped).not.toContain(ACTOR)
+    expect(h.afterWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('KO-6 只挪了位置的条目（路径是新的、原文一字未改）不盖章：人工核实仍当前；用户的普通笔记挪了也不动。submit 里的改名同理', async () => {
+    const moves: AdminImpl = async (req, _ctx, files) => {
+      for (const [from, to] of [
+        ['state.md', 'order/state.md'],
+        ['note.md', 'misc/note.md']
+      ]) {
+        files.set(`${req.bundleDir}/${to}`, files.get(`${req.bundleDir}/${from}`)!)
+        files.delete(`${req.bundleDir}/${from}`)
+      }
+      return {
+        accepted: true,
+        entries: [
+          { entry: 'state.md', change: 'deleted' },
+          { entry: 'order/state.md', change: 'created' },
+          { entry: 'note.md', change: 'deleted' },
+          { entry: 'misc/note.md', change: 'created' }
+        ],
+        report: 'moved',
+        admin: ADMIN
+      }
+    }
+    for (const params of [
+      { action: 'organize', base: 'project' },
+      { action: 'submit', base: 'project', content: 'x' }
+    ] as KnowledgeToolParams[]) {
+      const h = makeTool({ files: FILES, admin: moves })
+      const res = await h.run('c1', params)
+      expect(res.isError, textOf(res)).toBeFalsy()
+      expect(textOf(res), params.action).toContain('- /order/state.md (created)')
+      // 一个字节都没写：原文、章都还是挪之前的
+      expect(h.files.get(`${ROOT}/order/state.md`), params.action).toBe(HUMAN)
+      expect(h.files.get(`${ROOT}/misc/note.md`), params.action).toBe(PLAIN)
+      expect(
+        h.calls.filter((c) => c.startsWith('write:')),
+        params.action
+      ).toEqual([])
+      expect(h.afterWrite, params.action).not.toHaveBeenCalled()
+      const concept = parseConceptText(h.files.get(`${ROOT}/order/state.md`)!, 'order/state.md')!
+      expect(isVerificationCurrent(concept)).toBe(true)
+      expect(currentTrustTierOf(concept)).toBe('human-reviewed')
+    }
+  })
+})
+
+describe('KO-7 挤了的文件夹随请求交给管理员', () => {
+  it('KO-7 submit / organize：库里有文件夹直接放着一打以上条目时请求带 `crowded`（数的是在册的笔记，用户的普通笔记也算）；没有就没有这个键', async () => {
+    const crowdedFiles: Record<string, string> = { [`${ROOT}/note.md`]: PLAIN }
+    for (let i = 0; i < 12; i++) crowdedFiles[`${ROOT}/e${i}.md`] = ENTRY
+    for (let i = 0; i < 3; i++) crowdedFiles[`${ROOT}/pay/p${i}.md`] = ENTRY
+    for (const params of [
+      { action: 'submit', base: 'project', content: 'x' },
+      { action: 'organize', base: 'project' }
+    ] as KnowledgeToolParams[]) {
+      const h = makeTool({ files: crowdedFiles })
+      await h.run('c1', params)
+      expect(h.admin.mock.calls[0][0].crowded, params.action).toEqual([{ folder: '', entries: 13 }])
+
+      const roomy = makeTool({ files: { [`${ROOT}/a.md`]: ENTRY } })
+      await roomy.run('c2', params)
+      expect(roomy.admin.mock.calls[0][0], params.action).not.toHaveProperty('crowded')
+    }
+  })
+})
+
 describe('KT-2′ 中止', () => {
   it('KT-2′ 已中止的 signal → 任何动作都 reject 注入的 abortError', async () => {
     const h = makeTool({
@@ -2560,7 +2775,8 @@ describe('KT-2′ 中止', () => {
       { action: 'list', base: 'project' },
       { action: 'search', base: 'project', query: 'q' },
       { action: 'read', base: 'project', entry: 'a.md' },
-      { action: 'submit', base: 'project', content: 'x' }
+      { action: 'submit', base: 'project', content: 'x' },
+      { action: 'organize', base: 'project' }
     ] as KnowledgeToolParams[]) {
       await expect(h.run('c1', params, ac.signal), params.action).rejects.toThrow('TOOL_ABORTED')
     }

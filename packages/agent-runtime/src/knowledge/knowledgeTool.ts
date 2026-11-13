@@ -18,6 +18,13 @@
  * `migrate` —— 宿主读出点名条目的原文交给**目标库**的管理员（模型不重抄正文），它逐条决定收不收；收下的，宿主从
  * 源库删掉。管理员照旧只动自己那个库。宿主不注入 `resolveProjectBase`（扩展端）则两样都不可用。
  *
+ * **把关与整理（2026-11-12）**：用户反馈库很容易劣化 —— 工作会话把中间过程当知识交上来，管理员照单全收。管理员的
+ * md 现在按「对项目有没有长期保存价值」判断收不收、只留能留的那部分，并在每次提交时顺手整理提交落进去的那一块。
+ * 这里配三样：`organize` —— 什么都不交，请管理员把一个库整个过一遍（用户说「整理一下知识库」时用）；提交与整理的
+ * 请求里带上已经挤了的文件夹（review.ts `crowdedFolders`）—— 让它自己数条目，实测它不数；盖章跳过
+ * 只挪了位置的条目（`stampChanged` 的 `before`）—— 管理员按主题分文件夹时挪的条目一字未改，不该被重新记成
+ * 「刚由这次的提交者写下」，那会让人工核实过的条目变成「核实后又改过」。
+ *
  * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索 / 管理员派发全部注入。
  */
 import { Type } from 'typebox'
@@ -49,15 +56,17 @@ import {
   type BundleFile
 } from './validate'
 import {
+  crowdedFolders,
   stampKnowledgeReview,
   type KnowledgeAdminOutcome,
+  type KnowledgeCrowdedFolder,
   type KnowledgeEntryChangeRecord,
   type KnowledgeSubmission
 } from './review'
 
 export const KNOWLEDGE_TOOL_NAME = 'knowledge'
 
-const ACTIONS = ['bases', 'search', 'list', 'read', 'submit', 'migrate'] as const
+const ACTIONS = ['bases', 'search', 'list', 'read', 'submit', 'organize', 'migrate'] as const
 export type KnowledgeAction = (typeof ACTIONS)[number]
 
 /** 一次 `migrate` 最多点名多少条：每条的原文都进管理员那一轮的提示词，它还要逐条安放 */
@@ -77,7 +86,7 @@ export const KnowledgeParamsSchema = Type.Object({
   base: Type.Optional(
     Type.String({
       description:
-        'A name from "bases". Required for "list", "read", "submit" and "migrate" (where the entries go); "search" without it covers every base.'
+        'A name from "bases". Required for "list", "read", "submit", "organize" and "migrate" (where the entries go); "search" without it covers every base.'
     })
   ),
   query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
@@ -99,7 +108,10 @@ export const KnowledgeParamsSchema = Type.Object({
     })
   ),
   content: Type.Optional(
-    Type.String({ description: 'For "submit": what to record, in markdown.' })
+    Type.String({
+      description:
+        'For "submit": what to record, in markdown. For "organize": what the user asked for in particular, if anything.'
+    })
   ),
   offset: Type.Optional(
     Type.Number({ description: 'For "read": the line to start at (1-based).' })
@@ -136,7 +148,8 @@ Actions:
 - "search": find entries by free text (\`query\`); leave \`base\` out to search every base. Only titles, descriptions, tags, types and headings are indexed, not the prose — pick by title and description, then "read" the entry.
 - "list": list every entry in one base.
 - "read": read one entry (\`base\`, \`entry\`); a long one pages with \`offset\` and \`limit\` (lines). A link inside an entry that starts with "/" names another entry of the same base.
-- "submit": hand the base's librarian something worth looking up again (\`content\`, markdown): the subject, what holds, and where each claim comes from (a path, URL or commit). When it corrects or extends an entry that "search", "list" or "read" showed you, name that \`entry\`. The librarian decides how the base records it — a new entry, a change to existing ones, or nothing — and says what it did.
+- "submit": hand the base's librarian something a later session will need (\`content\`, markdown): the subject, what holds, and where each claim comes from (a path, URL or commit). When it corrects or extends an entry that "search", "list" or "read" showed you, name that \`entry\`. The librarian decides what the base keeps — a new entry, a change to existing ones, part of what you sent, or nothing — and says what it did and why.
+- "organize": when the user wants a base tidied up, have its librarian go through all of it (\`base\`) — merging entries on the same subject, removing what has no lasting value, grouping the rest into folders. Put what the user asked for in particular in \`content\`. It says what it changed.
 - "migrate": bring entries of another project's own base into one of this session's bases — \`project\` is the project they come from, \`entries\` their paths there, \`base\` where they go (a name from "bases"). ShuviX hands the librarian the entries as they are; do not copy their text. The librarian takes each one in, merges it or turns it down, and the ones it took are removed from the other project's base.
 
 To see what another project's base holds — to choose what to migrate — pass \`project\` with "list", "search" or "read" in place of \`base\`. The user is asked before another project's base is read or changed.`
@@ -272,6 +285,13 @@ export interface KnowledgeProjectBaseAccess {
 
 type Result = ToolResult<{ action: KnowledgeAction; path?: string } | undefined>
 
+/** 派管理员之前库的样子：有哪些文件（库内相对路径）、各是什么原文，以及哪些文件夹已经挤了 */
+interface BaseSnapshot {
+  paths: ReadonlySet<string>
+  texts: ReadonlySet<string>
+  crowded: KnowledgeCrowdedFolder[]
+}
+
 const DEFAULT_LIMIT = 20
 
 /**
@@ -357,6 +377,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         return this.read(params, admin, { call, toolCallId, signal })
       case 'submit':
         return this.submit(toolCallId, params, signal, call, admin)
+      case 'organize':
+        return this.organize(toolCallId, params, signal, call, admin)
       case 'migrate':
         return this.migrate(toolCallId, params, signal, call, admin)
       default:
@@ -672,6 +694,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       : undefined
 
     const submittedBy = this.deps.actor(call)
+    const before = await this.snapshot(target)
     const outcome = await this.deps.admin(
       {
         base,
@@ -679,7 +702,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         bundleDir: target.dir,
         content,
         ...(entry ? { entry } : {}),
-        submittedBy
+        submittedBy,
+        ...(before.crowded.length > 0 ? { crowded: before.crowded } : {})
       },
       { call, toolCallId, signal }
     )
@@ -699,7 +723,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       target,
       submittedBy,
       outcome.admin,
-      call
+      call,
+      before
     )
     const lines = outcome.entries.map((e) => {
       const flag = stamped.problems.get(e.entry)
@@ -709,6 +734,98 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       action: 'submit',
       ...(outcome.entries[0] ? { path: outcome.entries[0].entry } : {})
     })
+  }
+
+  /**
+   * 整理：什么都不交，同步派管理员把这个库整个过一遍（合并、删掉没有长期价值的、按主题分文件夹）。它改写过的条目
+   * 照提交那样盖章，只是 `generated` 记管理员自己 —— 合并出来的正文是它写的，不是发起整理的那个 agent；只是挪了
+   * 位置的条目不盖（原文没变）。
+   */
+  private async organize(
+    toolCallId: string,
+    params: KnowledgeToolParams,
+    signal: AbortSignal | undefined,
+    call: ToolCallScope | undefined,
+    admin: boolean
+  ): Promise<Result> {
+    if (admin) {
+      throw new Error(
+        'You are the librarian: reorganize the base yourself with the file tools, and answer with `next`.'
+      )
+    }
+    const base = this.requireBase(params)
+    const target = await this.deps.resolveBase(base)
+    if ('error' in target) throw new Error(target.error)
+    if (target.readonly) {
+      throw new Error(
+        `"${base}" is read-only — it is ShuviX's own reference, shipped with the app. Only the user's knowledge bases can be reorganized ("bases" lists them).`
+      )
+    }
+    if (!this.deps.admin)
+      throw new Error('Reorganizing a knowledge base is not available on this host')
+    const before = await this.snapshot(target)
+    if (before.paths.size === 0) {
+      return text([`Base "${base}" has no entries yet — there is nothing to reorganize.`], {
+        action: 'organize'
+      })
+    }
+    const outcome = await this.deps.admin(
+      {
+        base,
+        label: target.label,
+        bundleDir: target.dir,
+        content: params.content?.trim() ?? '',
+        submittedBy: this.deps.actor(call),
+        organize: true,
+        ...(before.crowded.length > 0 ? { crowded: before.crowded } : {})
+      },
+      { call, toolCallId, signal }
+    )
+    if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
+    if ('error' in outcome) {
+      throw new Error(
+        `The knowledge librarian could not reorganize the base: ${this.scrubDir(outcome.error, target)}`
+      )
+    }
+    const report = this.scrubDir(outcome.report, target) || '(no report)'
+    if (outcome.entries.length === 0) {
+      return text([`Nothing was changed in base "${base}".`, '', report], { action: 'organize' })
+    }
+    const stamped = await this.stampChanged(
+      outcome.entries,
+      target,
+      outcome.admin,
+      outcome.admin,
+      call,
+      before
+    )
+    const lines = outcome.entries.map((e) => {
+      const flag = stamped.problems.get(e.entry)
+      return `- ${entryLabel(e.entry)} (${e.change}${flag ? `; ${flag}` : ''})`
+    })
+    const { notes } = await this.deps.scan(target.dir)
+    return text(
+      [
+        `Reorganized base "${base}" — ${before.paths.size} file(s) before, ${notes.length} now:`,
+        ...lines,
+        '',
+        report
+      ],
+      { action: 'organize' }
+    )
+  }
+
+  /**
+   * 派管理员之前库里有哪些文件、各是什么原文。之后它报上来的条目里，**路径是新的、原文却与当时某个文件一字不差**
+   * 的就是只挪了位置（改名、按主题分进文件夹）：不盖章。
+   */
+  private async snapshot(target: KnowledgeBundleTarget): Promise<BaseSnapshot> {
+    const { files, notes } = await this.deps.scan(target.dir)
+    return {
+      paths: new Set(files.map((f) => normalizeBundlePath(f.path))),
+      texts: new Set(files.map((f) => f.text)),
+      crowded: crowdedFolders(notes.map((n) => n.path))
+    }
   }
 
   /**
@@ -826,6 +943,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
 
     const submittedBy = this.deps.actor(call)
+    const before = await this.snapshot(target)
     const outcome = await runAdmin(
       {
         base,
@@ -863,7 +981,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       target,
       submittedBy,
       outcome.admin,
-      call
+      call,
+      before
     )
     const failed =
       taken.length > 0 ? await removeEntries(source, taken, { call, movedTo: target.label }) : []
@@ -930,13 +1049,18 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   /**
    * 给管理员报了 created / updated、此刻仍在、且是合规 OKF 条目的那几条盖章。没盖上的记一句原因
    * （列在回包那一行里）：普通笔记（没有元数据）照用户的写法留着，不算问题，不记。
+   *
+   * `before`：派管理员之前库的样子。路径是新的、原文却与当时某个文件一字不差的条目不盖 —— 它只是被挪了位置
+   * （改名、按主题分进文件夹），内容不是这次写下的；盖了会把 `generated` 改成这次的提交者，人工核实过的条目随之
+   * 变成「核实后又改过」。
    */
   private async stampChanged(
     entries: readonly KnowledgeEntryChangeRecord[],
     target: KnowledgeBundleTarget,
     submittedBy: string,
     adminActor: string,
-    call: ToolCallScope | undefined
+    call: ToolCallScope | undefined,
+    before?: BaseSnapshot
   ): Promise<{ problems: Map<string, string> }> {
     const problems = new Map<string, string>()
     const at = this.deps.now().toISOString()
@@ -964,6 +1088,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         continue
       }
       const current = await this.deps.port.readFile(abs)
+      if (before && !before.paths.has(rel) && before.texts.has(current)) continue
       // 先校验、再判是不是 OKF 条目：带了自述行却写坏了 frontmatter（缺 `type`、YAML 解析不了）的文件
       // isOkfConceptText 认不出，不先校验就会被当成普通笔记悄悄放过
       const errors = validateKnowledgeText(current, rel).filter((d) => d.level === 'error')

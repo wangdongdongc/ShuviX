@@ -46,8 +46,14 @@ describe('KG-1..4 知识库围栏正文', () => {
     // 入口：用哪个工具、什么时候搜、什么值得交、交了说一句
     expect(text).toContain('`search`')
     expect(text).toContain('`knowledge` tool')
-    expect(text).toContain('Submit what will be looked up again')
-    expect(text).toContain('Say in one line what you submitted.')
+    expect(text).toContain(
+      'Submit only what a later session will need and cannot read off the repository'
+    )
+    // 2026-11-12 收紧：做完的事不是知识、多数任务没有可交的、被删减或否决之后不再交一次
+    expect(text).toContain('Finished work is not knowledge')
+    expect(text).toContain('Most tasks leave nothing to submit.')
+    expect(text).toContain('do not submit it again')
+    expect(text.replace(/\n/g, ' ')).toContain('Say in one line what you submitted.')
     expect(text).not.toContain('`create`')
     // 「留空 base 搜全部」是怎么用，归工具描述（KT-12 钉在那边），围栏不再重复付一遍
     expect(text).not.toContain('`base` out')

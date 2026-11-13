@@ -1,7 +1,7 @@
 /**
  * knowledge 工具（桌面注册）—— 复用 @shuvix/agent-runtime 的共享 createKnowledgeTool 内核。
  *
- * 检索、盘点、读条目，加把内容**交给知识库管理员**（`submit`）。库目录只有管理员知道（2026-11-08）：
+ * 检索、盘点、读条目，加把内容**交给知识库管理员**（`submit`）、请它把一个库整个整理一遍（`organize`）。库目录只有管理员知道（2026-11-08）：
  * 它拿文件工具（read / write / edit / move / delete）改库，由写钩子刷新 `generated`、由 fileToolDeps 的
  * onFileChange 接同一条变更管线。
  *
@@ -20,6 +20,7 @@ import {
   createKnowledgeTool,
   KNOWLEDGE_ADMIN_CONTRACT,
   KNOWLEDGE_MIGRATION_CONTRACT,
+  KNOWLEDGE_ORGANIZE_CONTRACT,
   KNOWLEDGE_DESCRIPTION,
   KNOWLEDGE_TOOL_NAME,
   KNOWLEDGE_WRITER_PROFILE_NAME,
@@ -108,13 +109,21 @@ async function runAdmin(
       sessionId: ctx.sessionId,
       workingDirectory: resolveProjectConfig(ctx.sessionId).workingDirectory
     }),
-    description: req.migration ? `Migrate into ${req.base}` : `Record in ${req.base}`,
-    // 迁移多交一项「收下了哪几条」（按原路径）：宿主只把这几条从源库删掉
-    resultContract: req.migration ? KNOWLEDGE_MIGRATION_CONTRACT : KNOWLEDGE_ADMIN_CONTRACT,
+    description: req.migration
+      ? `Migrate into ${req.base}`
+      : req.organize
+        ? `Organize ${req.base}`
+        : `Record in ${req.base}`,
+    // 迁移多交一项「收下了哪几条」（按原路径）：宿主只把这几条从源库删掉；整理没有「收没收」
+    resultContract: req.migration
+      ? KNOWLEDGE_MIGRATION_CONTRACT
+      : req.organize
+        ? KNOWLEDGE_ORGANIZE_CONTRACT
+        : KNOWLEDGE_ADMIN_CONTRACT,
     // 每次 submit 派一个新的知识库管理员：落定即卸，不在监控面板里闲挂
     oneShot: true
   })
-  const result = readKnowledgeAdminResult(outcome.structured)
+  const result = readKnowledgeAdminResult(outcome.structured, req.organize ? 'organize' : 'submit')
   if (!result) return { error: outcome.error ?? 'it finished without an answer' }
   return { ...result, admin: adminActor(ctx, outcome.conversationId, name) }
 }

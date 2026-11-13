@@ -35,8 +35,9 @@ describe.each(localized('knowledge-writer'))('BA knowledge-writer · %s', (file)
   /** 正文里那段 ```yaml 示例 */
   const example = /```yaml\n([\s\S]*?)```/.exec(text)?.[1] ?? ''
 
-  it('BA-1 四段结构一致：恰四个 `## ` 段（收录 / 迁来的条目 / 元数据 / 交回），没有编号步骤', () => {
-    expect(sections).toHaveLength(4)
+  it('BA-1 六段结构一致：恰六个 `## ` 段（库里留什么 / 收录 / 让库保持整洁 / 迁来的条目 / 元数据 / 交回），没有编号步骤', () => {
+    // 2026-11-12：把关标准与整理各成一段（用户反馈库很容易劣化）
+    expect(sections).toHaveLength(6)
     // 改版前的「search → create → edit → validate」四步流程不该残留
     expect(text.split('\n').some((line) => /^\d+\. /.test(line))).toBe(false)
   })

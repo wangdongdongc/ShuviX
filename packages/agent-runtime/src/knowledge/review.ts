@@ -16,6 +16,11 @@
  * 一份：它多交一项 `taken` —— 它收下的那几条（按原路径）；宿主之后只把这几条从源库删掉。点名「收下的」而不是
  * 「没收的」：它漏写或写错一条时，那一条留在源库（两边各一份），而不是被删掉。盖章规则与提交相同。
  *
+ * **整理（2026-11-12）**：`knowledge` 工具的 `organize` 什么都不交，只请管理员把一个库整个过一遍（合并讲同一件事的
+ * 条目、删掉没有长期价值的、按主题分文件夹）。起因是用户反馈库很容易劣化：工作会话把中间过程当知识交上来，条目
+ * 数量很快膨胀。平时管理员在每次提交时只顺手整理提交落进去的那一块（规矩在它的 md 里）；已经劣化的库要有一条
+ * 一次过完的路。照旧派管理员，任务文本与结果契约各一份：没有「收没收」，只交动了哪几条和一段报告。
+ *
  * 管理员只能经这里调起（宿主专用档案，派发工具按名解析不到）。它的边界（只动库里的文件、不碰用户自己的笔记、
  * 不去库外核实事实）只写在它的提示词里 —— 不设硬卡点（2026-11-08 裁决）。
  */
@@ -110,6 +115,39 @@ export const KNOWLEDGE_MIGRATION_CONTRACT: ResultContract = {
   sourceLabel: 'knowledge migrate'
 }
 
+/**
+ * 整理的结果契约：没有「收没收」—— 什么都没交上来。只交它动了哪几条（合并、删除、挪动都算）和给发起者看的报告。
+ */
+export const KNOWLEDGE_ORGANIZE_CONTRACT: ResultContract = {
+  schema: {
+    type: 'object',
+    properties: {
+      entries: {
+        type: 'array',
+        description:
+          'Every entry you created, changed or deleted, by its path inside the base ("/auth/session.md"). A rename or move is the old name deleted and the new one created. Empty when the base needed nothing.',
+        items: {
+          type: 'object',
+          properties: {
+            entry: { type: 'string' },
+            change: { type: 'string', enum: [...KNOWLEDGE_ENTRY_CHANGES] }
+          },
+          required: ['entry', 'change'],
+          additionalProperties: false
+        }
+      },
+      report: {
+        type: 'string',
+        description:
+          'A few lines for whoever asked: what you merged, what you removed and why, how the base is grouped now, and what you left as it was. Name entries by their path inside the base, never by the directory.'
+      }
+    },
+    required: ['entries', 'report'],
+    additionalProperties: false
+  },
+  sourceLabel: 'knowledge organize'
+}
+
 /** 一次迁移里交给管理员的一条：它在原来那个库里的路径（不带前导 `/`）与原文 */
 export interface KnowledgeMigratedEntry {
   entry: string
@@ -135,6 +173,50 @@ export interface KnowledgeSubmission {
    * （`project "big"`）—— 源库的目录不给管理员，它只动自己那个库
    */
   migration?: { from: string; entries: KnowledgeMigratedEntry[] }
+  /**
+   * 整理（`organize`）：这次没有交任何内容，请管理员把整个库过一遍。`content` 是发起者转述的具体要求（可为空串）
+   */
+  organize?: boolean
+  /**
+   * 库里已经挤了的文件夹（条目数超过 `KNOWLEDGE_CROWDED_FOLDER`；`folder` 是库内路径，顶层是空串），多的在前。
+   * 只是事实：管理员的 md 说「任务点名的拥挤文件夹，这次就按主题分开」—— 让它自己数，实测它不数
+   */
+  crowded?: KnowledgeCrowdedFolder[]
+}
+
+/** 一个文件夹里直接放着的条目超过这个数就算挤了（管理员的 md 里写的是「about a dozen」） */
+export const KNOWLEDGE_CROWDED_FOLDER = 12
+
+/** 一个挤了的文件夹：库内路径（顶层是空串）与它直接放着的条目数 */
+export interface KnowledgeCrowdedFolder {
+  folder: string
+  entries: number
+}
+
+/**
+ * 库里哪些文件夹挤了：按条目的库内路径数每个文件夹**直接**放着几条（子文件夹里的不算），超过
+ * `KNOWLEDGE_CROWDED_FOLDER` 的列出来，多的在前、同数按名字。
+ */
+export function crowdedFolders(paths: Iterable<string>): KnowledgeCrowdedFolder[] {
+  const counts = new Map<string, number>()
+  for (const raw of paths) {
+    const path = entryName(raw)
+    if (!path) continue
+    const cut = path.lastIndexOf('/')
+    const folder = cut < 0 ? '' : path.slice(0, cut)
+    counts.set(folder, (counts.get(folder) ?? 0) + 1)
+  }
+  return [...counts]
+    .filter(([, entries]) => entries > KNOWLEDGE_CROWDED_FOLDER)
+    .map(([folder, entries]) => ({ folder, entries }))
+    .sort((a, b) => b.entries - a.entries || a.folder.localeCompare(b.folder))
+}
+
+/** 任务文本里的那一行；没有挤了的文件夹就没有这一行 */
+function crowdedLine(crowded: readonly KnowledgeCrowdedFolder[] | undefined): string[] {
+  if (!crowded || crowded.length === 0) return []
+  const names = crowded.map((c) => `${c.folder ? `/${c.folder}` : 'the top level'} (${c.entries})`)
+  return [`- Folders with more than ${KNOWLEDGE_CROWDED_FOLDER} entries: ${names.join(', ')}`]
 }
 
 /** 管理员交回的一条改动（`entry` 已归一成库内相对路径，不带前导 `/`） */
@@ -165,10 +247,12 @@ export function buildKnowledgeAdminPrompt(
   req: KnowledgeSubmission & { sessionId?: string; workingDirectory?: string }
 ): string {
   if (req.migration) return buildKnowledgeMigrationPrompt(req, req.migration)
+  if (req.organize) return buildKnowledgeOrganizePrompt(req)
   return [
     'Record this submission in the knowledge base.',
     '',
     `- Base: "${req.base}" (${req.label}) — directory ${req.bundleDir}`,
+    ...crowdedLine(req.crowded),
     `- Submitted by: ${req.submittedBy}`,
     ...(req.entry ? [`- It corrects or extends: /${req.entry}`] : []),
     // 提交的内容里写的多半是项目相对路径（`src/auth/refresh.ts`）；管理员的提示词里没有环境段，不给它工作目录，
@@ -219,13 +303,33 @@ function buildKnowledgeMigrationPrompt(
     .trimEnd()
 }
 
+/**
+ * 整理的任务文本：哪个库、库目录、谁发起的、发起者转述的具体要求。怎么整理的规矩在管理员的 md 里
+ * （「Keeping the base in order」）；这里只说这一次是整个库、没有新内容要记。
+ */
+function buildKnowledgeOrganizePrompt(req: KnowledgeSubmission): string {
+  const asked = req.content.trim()
+  return [
+    'Reorganize this knowledge base. Nothing is being submitted: go through everything it holds.',
+    '',
+    `- Base: "${req.base}" (${req.label}) — directory ${req.bundleDir}`,
+    ...crowdedLine(req.crowded),
+    `- Asked for by: ${req.submittedBy}`,
+    ...(asked ? ['', 'What was asked for in particular:', '', asked] : [])
+  ].join('\n')
+}
+
 /** 库内路径的归一：去空白、反斜杠转正、去前导 `/` */
 function entryName(raw: string): string {
   return raw.trim().replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
 /** 结果契约捕获的对象 → `{accepted, entries, report}`；形状不对返回 null（当作没交回结论） */
-export function readKnowledgeAdminResult(structured: unknown): {
+export function readKnowledgeAdminResult(
+  structured: unknown,
+  /** 整理的结论没有 `accepted`：动了条目就算成了 */
+  kind: 'submit' | 'organize' = 'submit'
+): {
   accepted: boolean
   entries: KnowledgeEntryChangeRecord[]
   report: string
@@ -239,7 +343,8 @@ export function readKnowledgeAdminResult(structured: unknown): {
     report?: unknown
     taken?: unknown
   }
-  if (typeof accepted !== 'boolean') return null
+  if (kind === 'submit' && typeof accepted !== 'boolean') return null
+  if (kind === 'organize' && !Array.isArray(entries)) return null
   const changes: KnowledgeEntryChangeRecord[] = []
   for (const item of Array.isArray(entries) ? entries : []) {
     if (typeof item !== 'object' || item === null) continue
@@ -259,7 +364,7 @@ export function readKnowledgeAdminResult(structured: unknown): {
       ]
     : undefined
   return {
-    accepted,
+    accepted: typeof accepted === 'boolean' ? accepted : changes.length > 0,
     entries: changes,
     report: typeof report === 'string' ? report.trim() : '',
     ...(tookIn ? { taken: tookIn } : {})

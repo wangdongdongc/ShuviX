@@ -13,6 +13,10 @@
  *   KR-10..KR-27 盖章（stampKnowledgeReview，行为未变）：行级改写只动 frontmatter 的那两个顶层键；旧机器章
  *                让位、人工章原样保留；结果经真 YAML 回读、信任档按为当前内容背书的那几条判
  *
+ *   KR-28..KR-30 整理（`organize`，2026-11-12）：任务文本只说「整个库过一遍、没有东西要记」加库与发起者；
+ *                结果契约没有 `accepted`；读法按 `organize` 认 —— 动了条目就算成了
+ *   KR-31..KR-32 挤了的文件夹：按条目路径数每个文件夹直接放着几条，超过一打的列出来；任务文本里多一行事实
+ *
  * 记号：`S` = submittedBy（提交者），`R` = reviewer（管理员的 actor），`T` = 这次盖章的时刻；T0 < T。
  */
 import { describe, it, expect } from 'vitest'
@@ -22,9 +26,12 @@ import { BASE_PROFILE_NAMES, HOST_ONLY_PROFILE_NAMES } from '../../subagent/buil
 import { upsertFrontmatterMappings } from '../../shuvixMdWrite'
 import {
   KNOWLEDGE_ADMIN_CONTRACT,
+  KNOWLEDGE_CROWDED_FOLDER,
   KNOWLEDGE_ENTRY_CHANGES,
+  KNOWLEDGE_ORGANIZE_CONTRACT,
   KNOWLEDGE_WRITER_PROFILE_NAME,
   buildKnowledgeAdminPrompt,
+  crowdedFolders,
   readKnowledgeAdminResult,
   stampKnowledgeReview,
   type KnowledgeEntryChangeRecord,
@@ -386,6 +393,137 @@ describe('KR-7..KR-8 readKnowledgeAdminResult', () => {
       entries: [{ entry: 'a.md', change: 'updated' }],
       report: 'no'
     })
+  })
+})
+
+describe('KR-28..KR-30 整理（organize）', () => {
+  const REQ: KnowledgeSubmission = {
+    base: 'project',
+    label: 'project "Acme"',
+    bundleDir: '/kb/p1',
+    content: '',
+    submittedBy: S,
+    organize: true
+  }
+
+  it('KR-28 任务文本：一句任务（没有东西交上来、整个库过一遍）+ 库（带目录）/ 发起者；转述的要求排在最后；没有 Submission、工作目录、会话出处', () => {
+    expect(buildKnowledgeAdminPrompt(REQ).split('\n')).toEqual([
+      'Reorganize this knowledge base. Nothing is being submitted: go through everything it holds.',
+      '',
+      '- Base: "project" (project "Acme") — directory /kb/p1',
+      `- Asked for by: ${S}`
+    ])
+    const asked = buildKnowledgeAdminPrompt({
+      ...REQ,
+      content: '\n merge the auth notes \n',
+      sessionId: 's1',
+      workingDirectory: '/Users/me/acme'
+    })
+    expect(asked.split('\n').slice(4)).toEqual([
+      '',
+      'What was asked for in particular:',
+      '',
+      'merge the auth notes'
+    ])
+    for (const gone of ['Submission:', 'Working directory', 'shuvix://session', 'Submitted by']) {
+      expect(asked, gone).not.toContain(gone)
+    }
+  })
+
+  it('KR-29 结果契约：schema 合法，必填恰为 entries / report（没有 accepted），不收别的键；来源标签点名 knowledge organize', () => {
+    expect(validateContractSchema(KNOWLEDGE_ORGANIZE_CONTRACT.schema)).toBeNull()
+    const schema = KNOWLEDGE_ORGANIZE_CONTRACT.schema as {
+      required: string[]
+      additionalProperties: boolean
+      properties: Record<string, unknown>
+    }
+    expect(schema.required).toEqual(['entries', 'report'])
+    expect(Object.keys(schema.properties).sort()).toEqual(['entries', 'report'])
+    expect(schema.additionalProperties).toBe(false)
+    expect(KNOWLEDGE_ORGANIZE_CONTRACT.sourceLabel).toBe('knowledge organize')
+  })
+
+  it('KR-30 读法：按 organize 认 —— 没有 accepted 也是结论，动了条目 = 成了、一条没动 = 没成；entries 不是数组仍读成没有结论；按 submit 认时照旧要 accepted', () => {
+    const changed = { entries: [{ entry: '/a.md', change: 'deleted' }], report: ' merged ' }
+    expect(readKnowledgeAdminResult(changed, 'organize')).toEqual({
+      accepted: true,
+      entries: [{ entry: 'a.md', change: 'deleted' }],
+      report: 'merged'
+    })
+    expect(readKnowledgeAdminResult({ entries: [], report: 'in order' }, 'organize')).toEqual({
+      accepted: false,
+      entries: [],
+      report: 'in order'
+    })
+    expect(readKnowledgeAdminResult({ report: 'r' }, 'organize')).toBeNull()
+    expect(readKnowledgeAdminResult(undefined, 'organize')).toBeNull()
+    expect(readKnowledgeAdminResult(changed)).toBeNull()
+    expect(readKnowledgeAdminResult(changed, 'submit')).toBeNull()
+  })
+})
+
+describe('KR-31..KR-32 挤了的文件夹', () => {
+  const many = (folder: string, n: number): string[] =>
+    Array.from({ length: n }, (_, i) => `${folder}${folder ? '/' : ''}e${i}.md`)
+
+  it('KR-31 crowdedFolders：只数文件夹里直接放着的条目（子文件夹里的不算），恰好一打不算挤；多的在前、同数按名字；路径归一（前导 /、反斜杠）', () => {
+    expect(KNOWLEDGE_CROWDED_FOLDER).toBe(12)
+    expect(crowdedFolders([])).toEqual([])
+    expect(crowdedFolders(many('', 12))).toEqual([])
+    expect(crowdedFolders(many('', 13))).toEqual([{ folder: '', entries: 13 }])
+    // 顶层 2 条 + pay 14 条 + pay/refund 13 条 + auth 14 条：顶层与子文件夹各数各的
+    expect(
+      crowdedFolders([
+        'a.md',
+        '/b.md',
+        ...many('pay', 14),
+        ...many('pay\\refund', 13),
+        ...many('/auth', 14)
+      ])
+    ).toEqual([
+      { folder: 'auth', entries: 14 },
+      { folder: 'pay', entries: 14 },
+      { folder: 'pay/refund', entries: 13 }
+    ])
+  })
+
+  it('KR-32 任务文本：提交与整理都在库那一行之后多一行，点名挤了的文件夹（顶层写成 the top level）；没有就没有这一行；迁移不带', () => {
+    const base = {
+      base: 'project',
+      label: 'project "Acme"',
+      bundleDir: '/kb/p1',
+      submittedBy: S
+    }
+    const crowded = [
+      { folder: '', entries: 27 },
+      { folder: 'pay', entries: 14 }
+    ]
+    const LINE = '- Folders with more than 12 entries: the top level (27), /pay (14)'
+    const submit = buildKnowledgeAdminPrompt({ ...base, content: 'x', crowded }).split('\n')
+    expect(submit.slice(2, 5)).toEqual([
+      '- Base: "project" (project "Acme") — directory /kb/p1',
+      LINE,
+      `- Submitted by: ${S}`
+    ])
+    const organize = buildKnowledgeAdminPrompt({ ...base, content: '', organize: true, crowded })
+    expect(organize.split('\n').slice(2, 5)).toEqual([
+      '- Base: "project" (project "Acme") — directory /kb/p1',
+      LINE,
+      `- Asked for by: ${S}`
+    ])
+    for (const none of [undefined, []]) {
+      expect(buildKnowledgeAdminPrompt({ ...base, content: 'x', crowded: none })).not.toContain(
+        'Folders with more than'
+      )
+    }
+    expect(
+      buildKnowledgeAdminPrompt({
+        ...base,
+        content: '',
+        crowded,
+        migration: { from: 'project "big"', entries: [{ entry: 'a.md', text: 'x' }] }
+      })
+    ).not.toContain('Folders with more than')
   })
 })
 

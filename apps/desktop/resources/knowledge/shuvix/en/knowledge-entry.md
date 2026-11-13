@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Knowledge base entry (shuvix: okf v0.2)'
-description: 'The complete specification of a note in a ShuviX knowledge base — what a base is, "read wide, write strict", every frontmatter key of the OKF profile, links and `shuvix://` references, file naming, the `knowledge` tool''s actions, how the knowledge librarian records a submission, validation tiers, and the reserved names.'
+description: 'The complete specification of a note in a ShuviX knowledge base — what a base is, "read wide, write strict", every frontmatter key of the OKF profile, links and `shuvix://` references, file naming, the `knowledge` tool''s actions, what the knowledge librarian keeps from a submission and how it keeps a base in order, validation tiers, and the reserved names.'
 tags: [shuvix, knowledge, okf, format, spec]
 status: stable
 sources:
@@ -122,17 +122,33 @@ ASCII is lower-cased, the result is cut to 60 characters, and a taken name gets 
   what holds and where each claim comes from (a path, URL or commit); add `entry` when it
   corrects or extends that one. ShuviX runs the builtin knowledge librarian (the
   `knowledge-writer` agent) on it right away, inside the submitting conversation. The librarian
-  is the only agent that writes a base: it reads what the base already holds and decides how to
-  record the submission — a new entry, a change to existing ones (extending, correcting, splitting,
-  merging, renaming, moving, marking `deprecated` or deleting), or nothing — and answers with the
-  entries it touched and a short report. It writes with the file tools (`read`, `write`, `edit`,
-  `move`, `delete`, `grep`) inside the base's directory, gives every entry it writes the
-  frontmatter above, leaves the user's own notes (files without frontmatter) as they are, and
-  never opens anything outside the base to check a submission's facts. ShuviX then stamps each
-  entry it reported that passes the strict checks: `generated` (the submitter) and `verified` (the
-  librarian's machine confirmation). The librarian runs only this way — the `agent` tool cannot
-  dispatch it — and its model follows the usual rule (its md's `shuvix-model`, else the caller's).
-  Override `~/.shuvix/agents/knowledge-writer.md` to change how it organizes bases.
+  is the only agent that writes a base, and a submission is a proposal to it, not an order: it
+  keeps what a later session will need and cannot read off the repository (see "What to record"
+  below), so it may record only part of a submission — the finding of an investigation without
+  the steps that led to it — or turn it down, and it says which and why. It reads what the base
+  already holds and decides how to record what it keeps — a new entry or a change to existing ones
+  (extending, correcting, splitting, merging, renaming, moving, marking `deprecated` or deleting).
+  It also tends the part of the base the submission lands in: entries on the same subject are
+  merged into one, entries that hold nothing lasting are folded into the entry on their subject
+  and deleted, and a folder that has grown past about a dozen entries is grouped into folders by
+  subject. It answers with the entries it touched and a short report. It writes with the file
+  tools (`read`, `write`, `edit`, `move`, `delete`, `grep`) inside the base's directory, gives
+  every entry it writes the frontmatter above, leaves the user's own notes (files without
+  frontmatter) as they are, never merges away or deletes an entry a person checked, and never
+  opens anything outside the base to check a submission's facts. ShuviX then stamps each entry it
+  reported that passes the strict checks: `generated` (the submitter) and `verified` (the
+  librarian's machine confirmation). An entry it only moved or renamed — the text is unchanged —
+  keeps the stamps it had. The librarian runs only through the `knowledge` tool — the `agent`
+  tool cannot dispatch it — and its model follows the usual rule (its md's `shuvix-model`, else
+  the caller's). Override `~/.shuvix/agents/knowledge-writer.md` to change what it keeps and how
+  it organizes bases.
+- **Have a base reorganized** (`knowledge`, `action: organize` with `base`, and `content` for
+  anything the user asked for in particular): for a base that has already grown messy. Nothing
+  is submitted; the librarian goes through the whole base the same way — merging entries on the
+  same subject, removing what has no lasting value, grouping the rest into folders, fixing the
+  links — and reports what it changed. Every change is a commit in the base's own git history, so
+  it can be rolled back. Entries it rewrote are stamped with the librarian as both `generated` and
+  `verified`; moved ones keep their stamps.
 - **Migrate it from another project** (`knowledge`, `action: migrate` with `project`, `entries`
   and `base`): when a project is split, an agent of a session in the new project brings entries
   over from the other project's own base. ShuviX reads the named entries and hands them to the
@@ -158,9 +174,10 @@ The `knowledge` tool's actions: `bases` (what this session may name), `search` (
 without `base` it covers every enabled base, grouped per base — separate BM25 indexes, scores not
 comparable across bases; Chinese and Japanese text is word-segmented before indexing), `list`
 (every note of one base), `read` (one entry by its path inside the base, `offset` / `limit` for
-long ones), `submit` (above). Results name entries by their path inside the base; only the
-librarian's calls also show the base's directory. The reference base `shuvix` is read-only:
-`submit` is refused there; an app update restores the shipped files anyway.
+long ones), `submit`, `organize` and `migrate` (above). Results name entries by their path inside
+the base; only the librarian's calls also show the base's directory. The reference base `shuvix`
+is read-only: `submit` and `organize` are refused there; an app update restores the shipped
+files anyway.
 
 ## Validation tiers
 
@@ -177,8 +194,18 @@ strict checks.
 
 ## What to record
 
-What will be looked up again: a decision and why it went that way, a pitfall that cost time, a
-convention the code does not state, a fact that took effort to establish — in the base the
-subject belongs to, handed over with `submit`. Search first and name the entry that already covers
-the subject when the submission extends it; do not submit what the repository already states or
-what only matters to the current conversation.
+Only what someone working on the subject months from now, who was never in the conversation,
+will need and cannot read off the repository: a decision and why it went that way, a limit or
+behaviour of the system or its surroundings that the code does not state, a pitfall that will
+bite again (its cause and how to recognize it), a convention or a standing preference of the
+user, how a recurring task is done — in the base the subject belongs to, handed over with
+`submit` and written as what holds rather than as what happened. Search first and name the entry
+that already covers the subject when the submission extends it.
+
+Not knowledge, and turned down by the librarian: the record of a piece of work (what was done,
+changed, tried or tested, in which files and commits — the repository's history has it), a
+problem that is now fixed (unless something stays true afterwards that will constrain later
+work), the state of something at one moment (progress, to-dos, plans, a test run, a
+measurement), what the code already says, and what the base already holds. Most tasks leave
+nothing to submit. When the librarian keeps only part of a submission or turns it down, pass on
+what it said; do not submit it again.
