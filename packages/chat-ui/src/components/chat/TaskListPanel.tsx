@@ -11,8 +11,8 @@
  * 两个位置（`placement`，同 PendingInputsPanel）：
  *  - `conversation`（普通会话）：对话流末尾、最新一条消息之下（Conversation 的 Footer），自带一圈圆角描边，
  *    排在等人回答的询问卡片之上 —— 那张更急，要紧挨着输入框；
- *  - `composer`（笔记本）：对话本身就在输入框卡片里（ThreadDrawer），列表跟着待在卡片里，形态与 QueuePanel
- *    同源：自身无边框 / 圆角 / 阴影，只用一条 border-b 与下方分隔。
+ *  - `composer`（笔记本）：对话本身就在输入框卡片里（ThreadDrawer），列表跟着待在卡片里，形态与
+ *    PendingInputsPanel 同源：自身无边框 / 圆角 / 阴影，只用一条 border-b 与下方分隔。
  * 长列表自身封顶滚动：输入框里不把输入区顶出屏幕，对话里不让一张长列表占满一屏。
  */
 import { useMemo } from 'react'

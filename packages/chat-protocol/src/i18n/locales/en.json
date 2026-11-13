@@ -458,9 +458,6 @@
     "recordHideOptions": "Hide options"
   },
   "queue": {
-    "title": "Queue {{count}}",
-    "expand": "Expand queue",
-    "collapse": "Collapse queue",
     "steer": "Now",
     "followUp": "Append",
     "steerHint": "Steer now: delivered at the next turn boundary, interrupting the current course",

@@ -32,7 +32,7 @@ export interface ChatItem {
  * id 固定是 `pending-prompt`（chat-ui 的 `PENDING_PROMPT_ID`）—— 它**不是** entry id，
  * 树上还没有这条消息，所以气泡上不给回退，且压淡一档（`data-msg-pending`）。
  */
-/** 队列面板的一行（QueuePanel 的 `data-queue-row`，P3-11） */
+/** 对话流末尾的一条排队气泡（MessageRenderer 的 `data-queue-row`，P3-11） */
 export interface QueueRowShot {
   submissionId: number
   /** steer = 立即，followUp = 追加 */
@@ -289,9 +289,9 @@ export interface ChatPane {
   sendError(): Promise<string | null>
   /** 运行中点某个档位按钮（`data-queue-tier`：steer = 立即，followUp = 追加） */
   clickQueueTier(tier: 'steer' | 'followUp'): Promise<void>
-  /** 队列面板的行（折叠着就先展开；面板不在 = 空数组） */
+  /** 对话流末尾的排队气泡（没有 = 空数组） */
   queueRows(): Promise<QueueRowShot[]>
-  /** 点某一行的撤回按钮（面板须已展开，见 queueRows） */
+  /** 点某条排队气泡的撤回按钮 */
   withdrawQueued(submissionId: number): Promise<void>
   inputValue(): Promise<string>
   /** 发送按钮（lucide-send）是否禁用 */
@@ -702,22 +702,12 @@ export function chatPane(main: CdpClient): ChatPane {
       if (!clicked) throw new Error(`queue tier ${tier} is not clickable`)
       await sleep(200)
     },
-    queueRows: async () => {
-      const expanded = await main.eval<boolean>(`(() => {
-        const panel = document.querySelector('[data-queue-panel]')
-        if (!panel || panel.querySelector('[data-queue-row]')) return false
-        panel.querySelector('[data-queue-toggle]')?.click()
-        return true
-      })()`)
-      if (expanded) await sleep(100)
-      return main.eval<
-        QueueRowShot[]
-      >(`[...document.querySelectorAll('[data-queue-row]')].map((row) => ({
+    queueRows: () =>
+      main.eval<QueueRowShot[]>(`[...document.querySelectorAll('[data-queue-row]')].map((row) => ({
         submissionId: Number(row.getAttribute('data-queue-row')),
         mode: row.getAttribute('data-queue-mode') || '',
-        text: (row.querySelector('.truncate')?.textContent || '').trim()
-      }))`)
-    },
+        text: (row.querySelector('[data-user-bubble]')?.textContent || '').trim()
+      }))`),
     withdrawQueued: async (submissionId) => {
       const clicked = await main.eval<boolean>(`(() => {
         const button = document.querySelector('[data-queue-withdraw="${submissionId}"]')

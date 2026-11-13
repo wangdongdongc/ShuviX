@@ -13,7 +13,8 @@ import {
   selectActivePendingInput,
   selectIsStreaming,
   selectPendingInputs,
-  selectPendingPrompt
+  selectPendingPrompt,
+  selectSessionQueueItems
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { forkRefusalKey, selectSessionForkable, useSessionFork } from '../../hooks/useSessionFork'
@@ -309,6 +310,38 @@ function MessageList({
     }
   }, [activeAskId, stickToBottom, measureAskCard])
 
+  // 排队气泡露面（运行中发出一条，列表末尾多一条占位气泡）：同新询问 —— 人在底部就跟到底（刚发的那句与它下面的
+  // 询问卡片都还露着），人在翻历史就不动。只看变多：放下 / 撤回让末尾变矮，不需要跟
+  const queuedCount = useMemo(
+    () => items.reduce((count, item) => count + (item.queued ? 1 : 0), 0),
+    [items]
+  )
+  const prevQueuedCount = useRef(queuedCount)
+  useEffect(() => {
+    const grew = queuedCount > prevQueuedCount.current
+    prevQueuedCount.current = queuedCount
+    if (!grew || !atBottomRef.current) return
+    const scroller = scrollerRef.current
+    const listeners = new AbortController()
+    const release = (): void => {
+      revealAskRef.current = false
+    }
+    revealAskRef.current = true
+    stickToBottom()
+    const done = setTimeout(() => {
+      release()
+      measureAskCard()
+    }, REVEAL_ASK_MS)
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+      scroller?.addEventListener(type, release, { passive: true, signal: listeners.signal })
+    }
+    return () => {
+      clearTimeout(done)
+      listeners.abort()
+      release()
+    }
+  }, [queuedCount, stickToBottom, measureAskCard])
+
   // 日历跳转。请求经一次 IPC 才到，可能早于也可能晚于列表挂载：早于 → 上面已当作初始定位用掉，这里只清；
   // 晚于 → 等初始定位过了再滚 —— Virtuoso 的初始定位要隔几帧才落地，赶在它之前滚，会被它拉回底部。
   // 滚完或目标不在当前上下文都清掉，免得 items 再变（流式/新消息）把用户弹回去
@@ -454,13 +487,15 @@ export function Conversation({
   const isStreaming = useChatStore(selectIsStreaming)
   // 正在发送、后端还没落库的那条用户消息（乐观占位；视图里出现这条用户消息就撤）
   const pendingPrompt = useChatStore(selectPendingPrompt)
+  // 运行中发出、还排着等边界的输入：画成列表末尾的占位气泡（可撤回）
+  const queue = useChatStore(selectSessionQueueItems)
   // 悬浮输入卡片高度 → 根容器 CSS 变量（列表 Footer / 空态 padding 引用），避免卡片遮住末尾内容。
   // 直接写 DOM 变量而非 state：高度随输入增长高频变化，不触发列表重渲染
   const rootRef = useRef<HTMLDivElement>(null)
   const handleInputHeightChange = useCallback((h: number) => {
     const root = rootRef.current
     if (!root) return
-    // 询问卡片本来整张露着，输入卡片长高（打字、发出一条进了队列的消息）：列表跟着上移，别盖住它。卡片没露全时不动，
+    // 询问卡片本来整张露着，输入卡片长高（打字）：列表跟着上移，别盖住它。卡片没露全时不动，
     // 不替翻历史的人挪位置。要在写新值之前量：用的是长高之前盖住的那一截
     const card = root.querySelector<HTMLElement>('[data-pending-card]')
     const grew = h - (parseFloat(root.style.getPropertyValue('--chat-input-h')) || 0)
@@ -513,8 +548,8 @@ export function Conversation({
   // 注：被压缩掉的历史不在其中 —— message.list 走 buildContextEntries，自带压缩过滤，
   // 压缩点之前的消息原地换成一张摘要卡片，UI 不提供回看入口。
   const visibleItems = useMemo(
-    () => buildVisibleItems(messages, isStreaming, pendingPrompt),
-    [messages, isStreaming, pendingPrompt]
+    () => buildVisibleItems(messages, isStreaming, pendingPrompt, queue),
+    [messages, isStreaming, pendingPrompt, queue]
   )
   // 「新内容」分隔线（docs/inbox-read-state-design.md §7）：这次打开时它是未读的，就在那一轮开跑之后的第一项前画一条；
   // 锚点是切进来那一刻记下的（打开即已读，未读随即没了），离开这条会话就不再画

@@ -1,8 +1,15 @@
 import { AlertCircle, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { AssistantMessage, ChatMessage, ErrorEventMessage } from '../../stores/chatStore'
+import type {
+  AssistantMessage,
+  ChatMessage,
+  ErrorEventMessage,
+  UserTextMessage
+} from '../../stores/chatStore'
 import { useChatStore, PENDING_PROMPT_ID } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
+import { QueuedBubble } from './QueuedBubble'
+import type { QueuedInputView } from '@shuvix/chat-protocol/types/sessionView'
 import { AssistantBubble } from './AssistantBubble'
 import { BackgroundNoticeRow } from './BackgroundNoticeRow'
 import { DateNoticeRow } from './DateNoticeRow'
@@ -39,6 +46,8 @@ export interface VisibleItem {
   msgs?: AssistantMessage[]
   /** 该组末尾是流式占位卡 */
   isStreamingPlaceholder?: boolean
+  /** 排着等边界的一条输入（视图的 `queue`）：`msg` 是为它造的占位用户消息，画成排队气泡 */
+  queued?: QueuedInputView
 }
 
 interface MessageRendererProps {
@@ -102,7 +111,19 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
 const CONTENT_MAX_W = 'max-w-[784px] mx-auto'
 
 export function MessageRenderer(props: MessageRendererProps): React.JSX.Element {
-  const { msg } = props.item
+  const { msg, queued } = props.item
+  // 排队气泡不是会话里的条目：不带 data-msg-*（数条目的地方不该数到它），带的是队列自己的锚点
+  if (queued) {
+    return (
+      <div
+        className={CONTENT_MAX_W}
+        data-queue-row={queued.submissionId}
+        data-queue-mode={queued.mode}
+      >
+        <QueuedBubble msg={msg as UserTextMessage} entry={queued} />
+      </div>
+    )
+  }
   return (
     <div
       className={CONTENT_MAX_W}

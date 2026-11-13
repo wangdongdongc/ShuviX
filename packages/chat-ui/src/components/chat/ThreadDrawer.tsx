@@ -3,7 +3,7 @@
  * 把主会话对话流渲染成一块限高、可折叠的面板 —— 笔记本以 markdown live-preview 为主界面，
  * 对话是输入框的延伸，不占满屏。
  *
- * 形态与 PendingInputsPanel / QueuePanel 同源：渲染进输入框卡片内部，自身无边框/底色/阴影，
+ * 形态与 PendingInputsPanel 同源：渲染进输入框卡片内部，自身无边框/底色/阴影，
  * 只用一条 border-b 与下方分隔；顶部圆角由本组件承担（它是卡片首格，位于待处理输入之上）。
  * 默认折叠成一条细摘要条（计数 + 运行状态/末条摘要）；展开限高滚动。
  *
@@ -25,6 +25,7 @@ import {
   useChatStore,
   selectIsStreaming,
   selectPendingInputs,
+  selectSessionQueueItems,
   selectStreamingContent,
   selectStreamingThinking,
   type ChatMessage,
@@ -92,9 +93,11 @@ export function ThreadDrawer({ sessionId }: { sessionId: string }): React.JSX.El
     else if (pendingFell && isStreaming) setThreadOpen(sessionId, true)
   }, [isStreaming, hasPending, sessionId, setThreadOpen])
 
+  // 运行中发出、还排着的输入：与普通会话一样画成末尾的占位气泡
+  const queue = useChatStore(selectSessionQueueItems)
   const visibleItems = useMemo(
-    () => buildVisibleItems(messages, isStreaming),
-    [messages, isStreaming]
+    () => buildVisibleItems(messages, isStreaming, null, queue),
+    [messages, isStreaming, queue]
   )
   // 仅当最后一条消息是助手消息时才允许重新生成（与 Conversation 同口径）
   const lastAssistantId = useMemo(() => {

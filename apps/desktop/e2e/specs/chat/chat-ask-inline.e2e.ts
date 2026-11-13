@@ -26,7 +26,7 @@
  *        记录在；开关 ≥ 32px 高
  *   E-21 卡片挂着时切走再切回，两次：卡片露着，提示藏着
  *   E-26 选择题又勾又写：这一行没有自己的键，底部发送；模型收到两样，记录两样都在；带要藏的值：存储与请求里都没有真值
- *   E-22 卡片挂着时在输入框回车：进队列（队列面板有它），卡片还在且整张露着、提示藏着（队列细条把输入卡片撑高，列表跟着让），
+ *   E-22 卡片挂着时在输入框回车：进队列（对话末尾有它的排队气泡），卡片还在且整张露着、提示藏着，
  *        请求数不动；允许之后模型收到这条消息
  *   E-23 焦点在卡片那一行按可信的 1：是打字，卡片还等着
  *   E-24 卡片那一行写八行：高度封顶 120，这一行的底不被输入卡片压住
@@ -374,11 +374,11 @@ describe('询问卡片在对话流里（桌面）', () => {
     await chat.typeAndSend(STEER_WORDS)
     await until(async () => (await chat.inputValue()) === '', 'composer cleared')
     await until(
-      () => app.main.eval<boolean>(`!!document.querySelector('[data-queue-panel]')`),
-      'queue bar'
+      () => app.main.eval<boolean>(`!!document.querySelector('[data-queue-row]')`),
+      'queued bubble'
     )
     await sleep(500)
-    // 队列细条把输入卡片撑高了：列表跟着让，卡片没被压住，提示没有盖在卡片上
+    // 排队气泡加在列表末尾、卡片之上：卡片还整张露着，没被压住，提示没有盖在卡片上
     expect(await ask.cardKind()).toBe('ask')
     expect(await ask.cardOnScreen()).toBe(true)
     await ask.waitJump(false)

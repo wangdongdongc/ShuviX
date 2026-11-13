@@ -5,7 +5,7 @@
  * 视图同步订阅，见 `sync/syncClient` 与 `useSessionView`）给出，store 里的会话切片 —— 当前会话的
  * `messages`、各会话的 `sessionStreams` / `sessionToolExecutions` / `sessionPendingInputs`、
  * `usedContextTokens` —— 全部只由 **`applySessionView`** 写（唯一的写入口）。选择器名字保持不变，组件不用改。
- * 排着的输入不另派生：队列面板直接读视图的 `queue`（`selectSessionQueueItems`，P3-11）。
+ * 排着的输入不另派生：对话流末尾的排队气泡直接读视图的 `queue`（`selectSessionQueueItems`，P3-11）。
  *
  * 视图之外只剩几样**本端叠加**（不进服务端、不跨窗口）：
  *  - 乐观占位的用户消息（`sessionPendingPrompt`，Q-P3-07）：发送那一刻顶上，视图里出现一条发送时还没有的

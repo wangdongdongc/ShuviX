@@ -458,9 +458,6 @@
     "recordHideOptions": "選択肢を閉じる"
   },
   "queue": {
-    "title": "キュー {{count}}",
-    "expand": "キューを開く",
-    "collapse": "キューを閉じる",
     "steer": "即時",
     "followUp": "追加",
     "steerHint": "即時挿入：次のターン境界で届き、現在の流れに割り込みます",

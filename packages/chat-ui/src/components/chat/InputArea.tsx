@@ -3,7 +3,6 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } fr
 import { useTranslation } from 'react-i18next'
 import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
 import { TokenChip } from './TokenChip'
-import { QueuePanel } from './QueuePanel'
 import { SystemPromptIndicator } from './SystemPromptIndicator'
 import {
   expandCommandTemplate,
@@ -65,7 +64,7 @@ type ComposerCommand = ReturnType<typeof useChatStore.getState>['slashCommands']
  * 立即（pi steer，下个轮次边界插入）/ 追加（followUp，本轮本应结束时续跑）。
  *
  * Enter 绑第一个（运行中回车 = 立即）；追加没有快捷键（PIN-12）。两者落地的消息数据完全相同，
- * 差别只在 pi 把它插进 agent loop 的时机。排着的那些可以在队列面板里撤回。
+ * 差别只在 pi 把它插进 agent loop 的时机。排着的那些画成对话流末尾的占位气泡，可以在气泡上撤回。
  */
 const QUEUE_TIERS = [
   { tier: 'steer' as const, Icon: Zap, primary: true },
@@ -1352,9 +1351,6 @@ export function InputArea({
             <>
               {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
               {accessory}
-
-              {/* 待投递队列（可逐条撤回）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
-              <QueuePanel />
 
               {/* 被中断的运行（P3-12）：横幅 +「继续」，提示行在横幅可见时恒显示（PIN-20） */}
               {isInterrupted && (

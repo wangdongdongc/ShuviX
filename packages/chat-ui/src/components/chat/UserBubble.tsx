@@ -17,6 +17,12 @@ interface UserBubbleProps {
   onRollback?: () => void
   /** 乐观占位：正在发送、后端还没落库 —— 压淡一档，落库后换成真实那条时恢复 */
   pending?: boolean
+  /** 气泡右上方那一行的附加内容（排队气泡的档位标记） */
+  metaSlot?: React.ReactNode
+  /** 操作行末尾的附加内容，常驻显示（排队气泡的撤回） */
+  actionSlot?: React.ReactNode
+  /** 没有文字时气泡里显示的占位（排队气泡：只有图片的那条） */
+  emptyText?: string
 }
 
 /** 超过任一阈值即默认折叠（行数 / 字符数，字符兜底捕捉无换行长段落） */
@@ -37,7 +43,10 @@ const COLLAPSE_FADE_HEIGHT = 40
 export const UserBubble = memo(function UserBubble({
   msg,
   onRollback,
-  pending = false
+  pending = false,
+  metaSlot,
+  actionSlot,
+  emptyText
 }: UserBubbleProps): React.JSX.Element {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
@@ -74,7 +83,7 @@ export const UserBubble = memo(function UserBubble({
   const tone = originTone(origin)
   // 右上方那行有没有东西：来源只标非本机的（originTone 认得的种类，同 OriginBadge），提议只标采纳来的
   const fromSuggestion = !!origin && 'suggestion' in origin && !!origin.suggestion
-  const hasMeta = !!tone || fromSuggestion
+  const hasMeta = !!tone || fromSuggestion || !!metaSlot
   // 操作图标：桌面常驻占位、悬浮显形（不跳版）；触屏点过气泡才渲染
   const iconCls = touch
     ? 'h-8 w-8 flex items-center justify-center rounded active:bg-bg-hover'
@@ -94,6 +103,7 @@ export const UserBubble = memo(function UserBubble({
         <div data-user-meta="" className="flex max-w-[85%] items-center justify-end gap-1">
           <SuggestionOriginTag origin={origin} />
           {origin && <OriginBadge origin={origin} />}
+          {metaSlot}
         </div>
       )}
 
@@ -145,6 +155,7 @@ export const UserBubble = memo(function UserBubble({
               if (seg.type === 'token') return <TokenBadge key={idx} segment={seg} />
               return <InvalidTokenBadge key={idx} segment={seg} />
             })}
+            {!msg.content && emptyText && <span className="text-text-tertiary">{emptyText}</span>}
           </div>
         </div>
       </div>
@@ -183,6 +194,7 @@ export const UserBubble = memo(function UserBubble({
             <RotateCcw size={iconSize} />
           </button>
         )}
+        {actionSlot}
       </div>
     </div>
   )

@@ -3,7 +3,7 @@
  * 旧格式会话的输入卡片（jsdom，P4-01，§2A）：
  *
  *   P4-01-01 legacy 视图：`[data-legacy-banner]` 出现，文案逐字是 `chat.legacySessionReadOnly`；没有中断横幅
- *   P4-01-02 卡片里只有横幅：没有输入框、发送按钮、模型 / 工具选择器、分档按钮、队列面板、待处理输入；
+ *   P4-01-02 卡片里只有横幅：没有输入框、发送按钮、模型 / 工具选择器、分档按钮、待处理输入；
  *            什么也发不出去（prompt / steer / followUp / continue），不建占位
  *   P4-01-03 横幅上没有任何按钮（[新建对话] 已移除）：什么也不建、不删、不清空
  *   P4-01-07 渠道端（没有 HostApi）：同一条横幅与文案，也没有输入框
@@ -285,7 +285,7 @@ describe('P4-01-01 / 02 legacy view', () => {
     expect(selectPendingPrompt(store())).toBeNull()
   })
 
-  it('P4-01-02 the banner is the only content of the card: no queue panel, no pending-input accessory', async () => {
+  it('P4-01-02 the banner is the only content of the card: no pending-input accessory', async () => {
     await apply(legacyView())
     await mount({ inline: true, accessory: createElement('div', { 'data-accessory': '' }) })
     expect([...card().children]).toEqual([legacyBanner()])

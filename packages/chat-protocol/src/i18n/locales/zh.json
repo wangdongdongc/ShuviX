@@ -458,9 +458,6 @@
     "recordHideOptions": "收起选项"
   },
   "queue": {
-    "title": "队列 {{count}}",
-    "expand": "展开队列",
-    "collapse": "收起队列",
     "steer": "立即",
     "followUp": "追加",
     "steerHint": "立即插入：下个轮次边界送达，打断当前思路",

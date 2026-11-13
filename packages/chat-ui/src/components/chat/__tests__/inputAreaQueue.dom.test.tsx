@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * P3-11 · 两档输入框与队列面板（jsdom，设计稿 P3-11-12..19）：
+ * P3-11 · 两档输入框与排队气泡（jsdom，设计稿 P3-11-12..19）：
  *
  *   12 运行中：恰好两个档位按钮 [立即 Now, 追加 Append] + 停止；没有第三个、没有「下一轮」的图标；
  *      空闲 / 被中断：一个发送按钮
@@ -11,12 +11,12 @@
  *   14b 追加按钮带粘贴芯片：followUp 的载荷是标记态原文 + paste token（同 13）
  *   15 档位竞态：点下去时视图已是 idle / interrupted → 两档都改走 `agent.prompt`；关停中什么都不调
  *   15b 同上带粘贴芯片：`agent.prompt` 收标记态原文 + paste token；乐观占位也是标记态（带 p0，没有长文）
- *   16 队列面板：空队列、legacy / none 视图 → 不渲染；三条 → 细条 `Queue 3`、`Now 2`、`Append 1`；展开的
- *      次序是立即在前、档内按收件箱次序（PIN-11）；只有图片的那条显示 `(images only)` 与 `2 image(s)`
- *   17 key 稳定（按 submissionId）：一条离开队列，其余行的 DOM 节点还是原来那个
+ *   16 排队气泡（对话流末尾，与乐观占位同一个样子）：空队列、legacy / none 视图 → 没有；三条 → 次序是立即在前、
+ *      档内按收件箱次序（PIN-11），各带档位标记，不带 `data-msg-*`；只有图片的那条显示 `(images only)` 与 `2 image(s)`
+ *   17 key 稳定（按 submissionId）：一条离开队列，其余气泡的 DOM 节点还是原来那个
  *   18 撤回：`agent.withdrawQueued({sessionId, submissionId})` 一次；在途时按钮禁用、连点只发一次；不乐观
  *      移除（等视图）；没有 HostApi（Chrome 侧边栏）也有撤回按钮
- *   19 撤回结果（PIN-10）：`already_placed` → `[data-queue-notice]` 一句、约 3 秒后消失；`settled` /
+ *   19 撤回结果（PIN-10）：`already_placed` → 那条气泡下 `[data-queue-notice]` 一句、约 3 秒后消失；`settled` /
  *      `not_found` 不出声；拒绝 → 提示里带错误文案；每种情况按钮都恢复可用
  *
  * 发送失败（`ERR` = input.sendFailed 包着 input.connectionLost）。两档当场就回，断线窗口很窄，所以 `lost` 也当场算失败：
@@ -38,7 +38,7 @@
  * 后端是假的 `window.api`（同 inputAreaWelcomeSend.dom.test.tsx 的做法）；状态只经 `applySessionView` 写。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, Fragment } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
@@ -75,12 +75,15 @@ import {
   selectActivePendingInput,
   selectIsStreaming,
   selectPendingPrompt,
+  selectSessionQueueItems,
   useChatStore
 } from '../../../stores/chatStore'
 import { PROMPT_OUTCOME_GRACE_MS as GRACE } from '../../../stores/promptOutcome'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { InputArea, type InputAreaProps } from '../InputArea'
-import { QueuePanel, QUEUE_NOTICE_MS } from '../QueuePanel'
+import { QUEUE_NOTICE_MS } from '../QueuedBubble'
+import { MessageRenderer } from '../MessageRenderer'
+import { buildVisibleItems } from '../conversationItems'
 import { V, resetStore, store, user } from '../../../__tests__/support/views'
 import {
   advance,
@@ -209,9 +212,21 @@ async function mountInput(props: InputAreaProps = {}): Promise<void> {
   await flush()
 }
 
-async function mountPanel(): Promise<void> {
+/** 对话流里只画排队的那几项（与 Conversation 同一条路：视图的 queue → buildVisibleItems → MessageRenderer） */
+function QueueItems(): React.JSX.Element {
+  const queue = useChatStore(selectSessionQueueItems)
+  return createElement(
+    Fragment,
+    null,
+    buildVisibleItems([], false, null, queue).map((item) =>
+      createElement(MessageRenderer, { key: item.key, item, lastAssistantId: null })
+    )
+  )
+}
+
+async function mountQueue(): Promise<void> {
   await act(async () => {
-    root.render(createElement(QueuePanel))
+    root.render(createElement(QueueItems))
   })
 }
 
@@ -522,24 +537,22 @@ describe('P3-11-12..15 两档输入框', () => {
   )
 })
 
-describe('P3-11-16..19 队列面板', () => {
+describe('P3-11-16..19 排队气泡', () => {
   const THREE = [q(3, 'followUp', 'b'), q(4, 'steer', 'a'), q(5, 'steer', '', 2)]
 
   const rowIds = (): number[] =>
     [...container.querySelectorAll<HTMLElement>('[data-queue-row]')].map((row) =>
       Number(row.dataset.queueRow)
     )
+  const row = (id: number): HTMLElement =>
+    container.querySelector<HTMLElement>(`[data-queue-row="${id}"]`)!
   const withdrawButton = (id: number): HTMLButtonElement =>
     container.querySelector<HTMLButtonElement>(`[data-queue-withdraw="${id}"]`)!
   const notice = (): string | null =>
     container.querySelector('[data-queue-notice]')?.textContent ?? null
 
-  async function expand(): Promise<void> {
-    await click(container.querySelector('[data-queue-toggle]')!)
-  }
-
-  it('P3-11-16 空队列、legacy / none 视图 → 不渲染', async () => {
-    await mountPanel()
+  it('P3-11-16 空队列、legacy / none 视图 → 没有排队气泡', async () => {
+    await mountQueue()
     expect(container.innerHTML).toBe('')
     act(() =>
       applySessionView(
@@ -555,31 +568,34 @@ describe('P3-11-16..19 队列面板', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('P3-11-16 三条：细条 Queue 3 / Now 2 / Append 1；展开是立即在前、档内按收件箱次序；只有图片的那条', async () => {
+  it('P3-11-16 三条：立即在前、档内按收件箱次序；占位气泡的样子、档位标记；只有图片的那条', async () => {
     busy({ queue: THREE })
-    await mountPanel()
-    const bar = container.querySelector('[data-queue-toggle]')!.textContent!
-    expect(bar).toContain('Queue 3')
-    expect(bar).toContain('Now 2')
-    expect(bar).toContain('Append 1')
-    expect(container.querySelector('[data-queue-row]')).toBeNull()
-    await expand()
+    await mountQueue()
     expect(rowIds()).toEqual([4, 5, 3])
-    const imagesOnly = container.querySelector('[data-queue-row="5"]')!.textContent!
-    expect(imagesOnly).toContain('(images only)')
-    expect(imagesOnly).toContain('2 image(s)')
+    expect([4, 5, 3].map((id) => row(id).dataset.queueMode)).toEqual(['steer', 'steer', 'followUp'])
+    // 与乐观占位同一个样子（压淡的用户气泡），但不是会话里的条目：不带 data-msg-*
+    for (const id of [4, 5, 3]) {
+      expect(row(id).querySelector('[data-msg-pending]'), `row ${id}`).not.toBeNull()
+      expect(row(id).hasAttribute('data-msg-id')).toBe(false)
+    }
+    expect(container.querySelector('[data-msg-id]')).toBeNull()
+    expect(row(4).querySelector('[data-user-bubble]')!.textContent).toBe('a')
+    expect(row(4).querySelector('[data-queue-tier-badge]')!.textContent).toBe(en.queue.steer)
+    expect(row(3).querySelector('[data-queue-tier-badge]')!.textContent).toBe(en.queue.followUp)
+    expect(row(4).querySelector('[data-queue-images]')).toBeNull()
+    expect(row(5).querySelector('[data-user-bubble]')!.textContent).toBe('(images only)')
+    expect(row(5).querySelector('[data-queue-images]')!.textContent).toBe('2 image(s)')
   })
 
-  it('P3-11-17 一条离开队列：其余行的 DOM 节点不换（按 submissionId 作 key）', async () => {
+  it('P3-11-17 一条离开队列：其余气泡的 DOM 节点不换（按 submissionId 作 key）', async () => {
     busy({ queue: THREE })
-    await mountPanel()
-    await expand()
-    const s2 = container.querySelector('[data-queue-row="5"]')
-    const f1 = container.querySelector('[data-queue-row="3"]')
+    await mountQueue()
+    const s2 = row(5)
+    const f1 = row(3)
     busy({ queue: [THREE[0]!, THREE[2]!] })
     expect(rowIds()).toEqual([5, 3])
-    expect(container.querySelector('[data-queue-row="5"]')).toBe(s2)
-    expect(container.querySelector('[data-queue-row="3"]')).toBe(f1)
+    expect(row(5)).toBe(s2)
+    expect(row(3)).toBe(f1)
   })
 
   it('P3-11-18 撤回：一次调用、在途禁用、连点只发一次；不乐观移除；没有 HostApi 也有撤回', async () => {
@@ -587,8 +603,7 @@ describe('P3-11-16..19 队列面板', () => {
     const reply = deferred<WithdrawReply>()
     agent.withdrawQueued.mockReturnValueOnce(reply.promise)
     busy({ queue: THREE })
-    await mountPanel()
-    await expand()
+    await mountQueue()
     for (const id of [4, 5, 3]) expect(withdrawButton(id), `row ${id}`).not.toBeNull()
     const button = withdrawButton(4)
     await act(async () => {
@@ -598,10 +613,11 @@ describe('P3-11-16..19 队列面板', () => {
     expect(agent.withdrawQueued).toHaveBeenCalledTimes(1)
     expect(agent.withdrawQueued.mock.calls[0]![0]).toEqual({ sessionId: 's1', submissionId: 4 })
     expect(withdrawButton(4).disabled).toBe(true)
+    expect(withdrawButton(5).disabled).toBe(false)
     await click(withdrawButton(4))
     expect(agent.withdrawQueued).toHaveBeenCalledTimes(1)
     await act(async () => reply.resolve({ result: 'aborted' }))
-    // 不乐观移除：那一行等视图
+    // 不乐观移除：那条气泡等视图
     expect(rowIds()).toEqual([4, 5, 3])
     expect(withdrawButton(4).disabled).toBe(false)
     expect(notice()).toBeNull()
@@ -609,34 +625,34 @@ describe('P3-11-16..19 队列面板', () => {
     expect(rowIds()).toEqual([5, 3])
   })
 
-  it('P3-11-19 already_placed → 一句提示、约 3 秒后消失（视图里那一行已经没了也照样显示）', async () => {
+  it('P3-11-19 already_placed → 气泡下一句提示、约 3 秒后消失；气泡离开队列时提示跟着走', async () => {
     vi.useFakeTimers()
-    agent.withdrawQueued.mockResolvedValueOnce({ result: 'already_placed' })
-    busy({ queue: [q(4, 'steer', 'a')] })
-    await mountPanel()
-    await act(async () => {
-      ;(container.querySelector('[data-queue-toggle]') as HTMLElement).click()
-    })
+    agent.withdrawQueued.mockResolvedValue({ result: 'already_placed' })
+    busy({ queue: [q(4, 'steer', 'a'), q(6, 'steer', 'c')] })
+    await mountQueue()
     await act(async () => {
       withdrawButton(4).click()
     })
-    expect(notice()).toBe(en.queue.alreadyPlaced)
+    expect(row(4).querySelector('[data-queue-notice]')!.textContent).toBe(en.queue.alreadyPlaced)
+    expect(row(6).querySelector('[data-queue-notice]')).toBeNull()
     expect(withdrawButton(4).disabled).toBe(false)
-    // 它被放下了：视图里不再有它，面板为提示留着
-    busy({ queue: [] })
-    expect(notice()).toBe(en.queue.alreadyPlaced)
     act(() => vi.advanceTimersByTime(QUEUE_NOTICE_MS - 100))
     expect(notice()).toBe(en.queue.alreadyPlaced)
     act(() => vi.advanceTimersByTime(200))
     expect(notice()).toBeNull()
+    // 它被放下了：视图里不再有它 —— 气泡连同提示一起没了（同一句话已经是会话里的真消息）
+    await act(async () => {
+      withdrawButton(6).click()
+    })
+    expect(notice()).toBe(en.queue.alreadyPlaced)
+    busy({ queue: [] })
     expect(container.innerHTML).toBe('')
   })
 
   it.each(['settled', 'not_found'])('P3-11-19 %s → 不出声，按钮恢复', async (result) => {
     agent.withdrawQueued.mockResolvedValueOnce({ result })
     busy({ queue: [q(4, 'steer', 'a')] })
-    await mountPanel()
-    await expand()
+    await mountQueue()
     await click(withdrawButton(4))
     expect(agent.withdrawQueued).toHaveBeenCalledTimes(1)
     expect(notice()).toBeNull()
@@ -646,8 +662,7 @@ describe('P3-11-16..19 队列面板', () => {
   it('P3-11-19 拒绝 → 提示里带错误文案，按钮恢复', async () => {
     agent.withdrawQueued.mockRejectedValueOnce(new Error('bridge down'))
     busy({ queue: [q(4, 'steer', 'a')] })
-    await mountPanel()
-    await expand()
+    await mountQueue()
     await click(withdrawButton(4))
     expect(notice()).toContain('bridge down')
     expect(withdrawButton(4).disabled).toBe(false)

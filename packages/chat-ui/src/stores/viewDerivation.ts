@@ -1,7 +1,7 @@
 /**
  * 视图 → store 切片的纯推导（P3-08）。`applySessionView`（chatStore）与 `applyAgentView`（subSessionStore）
  * 都只经这里把一份 `SessionView` / `AgentView` 变成界面读的那些形状：流式正文 / 思考 / 正在生成的工具调用、
- * 工具执行进度（排着的输入不推导：队列面板直接读视图的 `queue`）。
+ * 工具执行进度（排着的输入不推导：对话流末尾的排队气泡直接读视图的 `queue`）。
  *
  * **结构共享**是这里的另一半职责：chord 的复制状态在增量更新时已经共享没变的子树（一条流式追加只换
  * `live` 那一枝），但整份 `reset` / `replaced` 交来的是一棵全新的树。`shareStructure` 把新树里与旧树

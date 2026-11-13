@@ -8,6 +8,7 @@
  * `Conversation.tsx` 仍然按同名再导出，既有 import 路径一个都不用改。
  */
 import type { ChatMessage, AssistantMessage, UserTextMessage } from '../../stores/chatStore'
+import type { QueuedInputView } from '@shuvix/chat-protocol/types/sessionView'
 import { STREAMING_PLACEHOLDER_ID, type VisibleItem } from './MessageRenderer'
 
 /** 助手消息（会话树里一条 assistant entry = 一次 LLM 调用） */
@@ -47,6 +48,50 @@ function singleItem(msg: ChatMessage): VisibleItem {
   return item
 }
 
+/** 排队气泡的项 key / 消息 id 前缀：`queued:<submissionId>`（这个 id 不会进 messages） */
+export const QUEUED_ITEM_PREFIX = 'queued:'
+
+/**
+ * 排着的一条输入 → 对话流末尾的一条占位气泡。视图每一帧都可能换一批对象，所以按内容比：同一条
+ * （submissionId、档位、文字、图片数都没变）交回同一个项，气泡不重渲染。
+ */
+const queuedItemCache = new Map<number, VisibleItem>()
+
+function queuedItem(sessionId: string, entry: QueuedInputView): VisibleItem {
+  const cached = queuedItemCache.get(entry.submissionId)
+  const q = cached?.queued
+  if (
+    cached &&
+    q &&
+    q.mode === entry.mode &&
+    q.text === entry.text &&
+    q.imageCount === entry.imageCount &&
+    cached.msg.sessionId === sessionId
+  ) {
+    return cached
+  }
+  const id = `${QUEUED_ITEM_PREFIX}${entry.submissionId}`
+  const item: VisibleItem = {
+    key: id,
+    // createdAt 取 0：它还没发生，「新内容」分隔线不该画在它前面
+    msg: {
+      id,
+      sessionId,
+      role: 'user',
+      type: 'text',
+      content: entry.text,
+      model: '',
+      createdAt: 0,
+      metadata: {}
+    },
+    queued: entry
+  }
+  // 只留最近的一小批：队列里的条目放下 / 撤回后不会再来
+  if (queuedItemCache.size > 200) queuedItemCache.clear()
+  queuedItemCache.set(entry.submissionId, item)
+  return item
+}
+
 /** 流式占位卡：正文/思考/工具调用由 AssistantBubble 自己从 store 读 */
 export function streamingPlaceholder(sessionId: string): AssistantMessage {
   return {
@@ -82,11 +127,16 @@ export function streamingPlaceholder(sessionId: string): AssistantMessage {
  *
  * `pending` 是正在发送、后端还没落库的那条用户消息（乐观占位）：排在列表末尾、流式占位卡
  * 之前；它落库后会话视图带来真实 entry，占位随即撤下，同一句话换成真的那条。
+ *
+ * `queue` 是运行中发出、还排着等边界的输入（视图的 `queue`）：每条画成一条占位气泡，排在**最末尾**
+ * （流式占位卡之后 —— 它们要等正在跑的这一步），立即（steer）在前、追加（followUp）在后，档内按收件箱
+ * 次序。它们不算轮次：放下之后视图带来真实的用户消息，那时才起新的一轮。
  */
 export function buildVisibleItems(
   messages: ChatMessage[],
   isStreaming: boolean,
-  pending?: UserTextMessage | null
+  pending?: UserTextMessage | null,
+  queue?: readonly QueuedInputView[]
 ): VisibleItem[] {
   const items: VisibleItem[] = []
   let group: AssistantMessage[] = []
@@ -160,6 +210,15 @@ export function buildVisibleItems(
     flush(true)
   } else {
     flush()
+  }
+
+  if (queue && queue.length > 0) {
+    const sessionId = pending?.sessionId || messages[messages.length - 1]?.sessionId || ''
+    for (const mode of ['steer', 'followUp'] as const) {
+      for (const entry of queue) {
+        if (entry.mode === mode) items.push(queuedItem(sessionId, entry))
+      }
+    }
   }
 
   return items

@@ -565,3 +565,66 @@ describe('buildVisibleItems —— 项的复用', () => {
     expect(warm[1]).not.toBe(cold[1])
   })
 })
+
+describe('buildVisibleItems —— 排队气泡', () => {
+  const q = (
+    submissionId: number,
+    mode: 'steer' | 'followUp',
+    text: string,
+    imageCount = 0
+  ): { submissionId: number; mode: 'steer' | 'followUp'; text: string; imageCount: number } => ({
+    submissionId,
+    mode,
+    text,
+    imageCount
+  })
+
+  it('QB-1 排在最末尾（流式占位卡之后），立即在前、追加在后，档内按收件箱次序', () => {
+    const items = buildVisibleItems(
+      [userMsg('qb1-u'), agentMsg('qb1-m', { tools: 1 })],
+      true,
+      null,
+      [q(3, 'followUp', 'b'), q(4, 'steer', 'a'), q(5, 'steer', 'c')]
+    )
+    expect(items.map((i) => i.key)).toEqual([
+      'qb1-u',
+      'turn:1.0',
+      'queued:4',
+      'queued:5',
+      'queued:3'
+    ])
+    expect(items[1].isStreamingPlaceholder).toBe(true)
+    expect(items.slice(2).map((i) => i.queued?.submissionId)).toEqual([4, 5, 3])
+  })
+
+  it('QB-2 占位消息：用户文本形状、id 即 key、createdAt 0（不招来「新内容」分隔线）', () => {
+    const [u, item] = buildVisibleItems([userMsg('qb2-u')], false, null, [q(7, 'steer', 'hi', 2)])
+    expect(u.queued).toBeUndefined()
+    expect(item.msg).toMatchObject({
+      id: 'queued:7',
+      sessionId: SID,
+      role: 'user',
+      type: 'text',
+      content: 'hi',
+      createdAt: 0
+    })
+    expect(item.queued).toEqual(q(7, 'steer', 'hi', 2))
+  })
+
+  it('QB-3 不算轮次：排着的气泡不改助手卡的 key；空队列与不给一样', () => {
+    const messages = [userMsg('qb3-u'), agentMsg('qb3-m', { tools: 1 })]
+    const withQueue = buildVisibleItems(messages, true, null, [q(8, 'steer', 'x')])
+    const without = buildVisibleItems(messages, true)
+    expect(withQueue.slice(0, 2).map((i) => i.key)).toEqual(without.map((i) => i.key))
+    expect(buildVisibleItems(messages, true, null, [])).toEqual(without)
+  })
+
+  it('QB-4 同一条排队输入（内容没变的新对象）交回同一个项；文字或档位变了是新项', () => {
+    const first = buildVisibleItems([], false, null, [q(9, 'steer', 'same')])[0]
+    expect(buildVisibleItems([], false, null, [q(9, 'steer', 'same')])[0]).toBe(first)
+    const edited = buildVisibleItems([], false, null, [q(9, 'steer', 'changed')])[0]
+    expect(edited).not.toBe(first)
+    expect(edited.msg.content).toBe('changed')
+    expect(buildVisibleItems([], false, null, [q(9, 'followUp', 'changed')])[0]).not.toBe(edited)
+  })
+})

@@ -184,7 +184,7 @@ afterEach(() => {
 })
 
 describe('输入框卡片与任务列表', () => {
-  it('TLU-16 会话在跑、消息里有成功的列表调用：卡片里有待处理输入与队列，没有任务列表', async () => {
+  it('TLU-16 会话在跑、消息里有成功的列表调用：卡片里有待处理输入，没有任务列表（排着的输入也不在卡片里）', async () => {
     act(() =>
       applySessionView(
         's1',
@@ -198,7 +198,7 @@ describe('输入框卡片与任务列表', () => {
     await mountInput(createElement('div', { 'data-test-accessory': '' }, 'ask'))
 
     expect(container.querySelector('[data-test-accessory]')).not.toBeNull()
-    expect(container.querySelector('[data-queue-panel]')).not.toBeNull()
+    expect(container.querySelector('[data-queue-row]')).toBeNull()
     expect(taskList()).toBeNull()
   })
 
