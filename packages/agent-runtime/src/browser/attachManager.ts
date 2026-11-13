@@ -47,6 +47,9 @@ export interface ConsoleEntry {
 const MAX_NETWORK_ENTRIES = 200
 const MAX_CONSOLE_ENTRIES = 200
 const MAX_EVENT_ENTRIES = 1000
+/** 待报告的对话框说明：条数上限、每条里页面文字的长度上限 */
+const MAX_DIALOG_NOTES = 5
+const MAX_DIALOG_TEXT = 300
 
 /** JSON.stringify 兜底（循环引用等异常返回占位串，避免采集抛错破坏事件流） */
 function safeStringify(value: unknown): string {
@@ -137,6 +140,10 @@ export class TabCdpSession {
   /** 对话框自动处理开关（默认自动 dismiss，避免 alert/confirm 卡死自动化链） */
   private autoDismissDialogs = true
   private dialogEnabled = false
+  /** 页面弹过、还没告诉 agent 的对话框（每条一行）；由下一个工具结果带走（takeDialogNotes） */
+  private dialogNotes: string[] = []
+  /** 正在执行的 agent 动作数（见 duringAction）：> 0 时弹出的 confirm / prompt 算是这次动作引起的 */
+  private actionDepth = 0
   private endReason: SessionEndReason | null = null
   /** 页面的渲染进程此刻是崩溃的（Inspector.targetCrashed 到 targetReloadedAfterCrash 之间） */
   private pageCrashed = false
@@ -252,6 +259,62 @@ export class TabCdpSession {
     this.autoDismissDialogs = on
   }
 
+  /**
+   * 取走还没报告过的对话框说明。对话框是页面对动作的回应（「确定删除吗？」「保存失败」），
+   * 自动处理掉却不说，agent 只会看到动作「成功」而页面没反应。
+   */
+  takeDialogNotes(): string[] {
+    const notes = this.dialogNotes
+    this.dialogNotes = []
+    return notes
+  }
+
+  /**
+   * 把一段工作标成「agent 的动作」（点击、填写、按键、evaluate）。期间弹出的 confirm / prompt 是页面
+   * 对这次动作的追问（「确定删除吗？」）：agent 是有意做这件事的，答「取消」等于把它刚做的撤销掉，
+   * 而它没有别的办法答「确定」。所以期间的答确定（prompt 用页面给的默认值）；其余时候弹出的 ——
+   * 页面自己的定时器、别的脚本 —— 照旧答取消。
+   */
+  async duringAction<T>(fn: () => Promise<T>): Promise<T> {
+    this.actionDepth++
+    try {
+      return await fn()
+    } finally {
+      this.actionDepth--
+    }
+  }
+
+  private noteDialog(
+    type: string,
+    message: string,
+    /** null = 没有自动处理；否则是自动给的答复 */
+    answer: { accept: boolean; promptText?: string } | null
+  ): void {
+    // 文字是页面给的：加引号、限长，只当证据转述
+    const quoted = JSON.stringify(
+      message.length > MAX_DIALOG_TEXT ? `${message.slice(0, MAX_DIALOG_TEXT)}…` : message
+    )
+    const what =
+      type === 'beforeunload'
+        ? 'The page asked to confirm leaving it'
+        : type === 'alert'
+          ? `The page showed ${quoted}`
+          : `The page asked ${quoted}`
+    const how = !answer
+      ? 'it is still open: answer it with cdp Page.handleJavaScriptDialog'
+      : type === 'beforeunload'
+        ? 'allowed automatically'
+        : type === 'alert'
+          ? 'closed automatically'
+          : !answer.accept
+            ? 'answered Cancel automatically'
+            : type === 'prompt'
+              ? `answered OK automatically with its default text ${JSON.stringify(answer.promptText ?? '')}, because it opened during your action`
+              : 'answered OK automatically, because it opened during your action'
+    this.dialogNotes.push(`[dialog ${type}] ${what} — ${how}.`)
+    if (this.dialogNotes.length > MAX_DIALOG_NOTES) this.dialogNotes.shift()
+  }
+
   private pushEvent(method: string, params: Record<string, unknown>): void {
     let stored = params
     let truncatedFrom: number | undefined
@@ -313,6 +376,8 @@ export class TabCdpSession {
     this.eventBuffer = []
     this.eventSeq = 0
     this.dialogEnabled = false
+    this.dialogNotes = []
+    this.actionDepth = 0
     this.notifyCaptureChange?.()
   }
 
@@ -348,11 +413,24 @@ export class TabCdpSession {
 
     // 对话框自动处理：alert/confirm/beforeunload 弹出即 dismiss，避免卡死后续 CDP 命令。
     // 关掉自动处理时（agent 显式接管）不动，等 agent 用 cdp Page.handleJavaScriptDialog 响应。
-    if (method === 'Page.javascriptDialogOpening' && this.autoDismissDialogs) {
+    if (method === 'Page.javascriptDialogOpening') {
       const dtype = String(params.type ?? 'alert')
-      // beforeunload accept（放行导航）；alert 无 cancel 语义须 accept；confirm/prompt dismiss
-      const accept = dtype === 'beforeunload' || dtype === 'alert'
-      void this.send('Page.handleJavaScriptDialog', { accept }).catch(() => {})
+      const message = String(params.message ?? '')
+      if (!this.autoDismissDialogs) {
+        this.noteDialog(dtype, message, null)
+      } else {
+        // beforeunload accept（放行导航）；alert 无 cancel 语义须 accept；confirm / prompt 在 agent 的
+        // 动作期间弹出的答确定，其余答取消（见 duringAction）
+        const asked = dtype !== 'beforeunload' && dtype !== 'alert'
+        const accept = !asked || this.actionDepth > 0
+        const promptText =
+          accept && dtype === 'prompt' ? String(params.defaultPrompt ?? '') : undefined
+        this.noteDialog(dtype, message, { accept, promptText })
+        void this.send('Page.handleJavaScriptDialog', {
+          accept,
+          ...(promptText !== undefined ? { promptText } : {})
+        }).catch(() => {})
+      }
     }
 
     // 网络（预制摘要视图）

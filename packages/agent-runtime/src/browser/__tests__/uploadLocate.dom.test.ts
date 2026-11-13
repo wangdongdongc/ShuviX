@@ -54,7 +54,8 @@ beforeAll(async () => {
       }
       // 没找到 input：op 以业务错误收尾，函数原文已经拿到
       return { result: {} }
-    }
+    },
+    takeDialogNotes: () => []
   } as unknown as TabCdpSession
   await uploadFileOp(session, 'e1', ['/tmp/a.txt'])
   expect(declaration).toMatch(/^function\s*\(/)

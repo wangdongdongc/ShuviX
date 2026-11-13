@@ -237,7 +237,7 @@ const TOOLS: readonly BrowserToolSpec[] = [
     name: 'click',
     title: 'Click an element',
     description: () =>
-      'Click an element by its uid from the latest snapshot — a trusted mouse click at its centre. It scrolls the element into view first; when the element is hidden or covered by something else (a dialog, banner or overlay) it says so instead of clicking. When the click navigates, it waits for the new page and says so — snapshot again before interacting.',
+      'Click an element by its uid from the latest snapshot — a trusted mouse click at its centre. It scrolls the element into view first; when the element is hidden or covered by something else (a dialog, banner or overlay) it says so instead of clicking. When the click navigates, it waits for the new page and says so — snapshot again before interacting. When nothing on the page reacted to the click, it says that too.',
     params: { tabId: TAB_ID, uid: UID },
     required: ['tabId', 'uid'],
     hints: INTERACTS

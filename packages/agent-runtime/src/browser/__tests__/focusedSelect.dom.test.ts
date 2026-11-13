@@ -66,6 +66,8 @@ function jsdomSession(sent: string[]): TabCdpSession {
       return {}
     },
     eventCursor: () => 0,
+    duringAction: <T>(fn: () => Promise<T>) => fn(),
+    takeDialogNotes: () => [],
     getEvents: () => ({ entries: [], nextSeq: 0 }),
     controller: { reset: () => {} }
   } as unknown as TabCdpSession
@@ -80,7 +82,9 @@ beforeAll(async () => {
         return { result: { value: true } }
       }
       return {}
-    }
+    },
+    duringAction: <T>(fn: () => Promise<T>) => fn(),
+    takeDialogNotes: () => []
   } as unknown as TabCdpSession
   const out = await pressKeyOp(session, 'ArrowDown')
   expect(out.details?.error).toMatch(/^Focus is on a <select>/)

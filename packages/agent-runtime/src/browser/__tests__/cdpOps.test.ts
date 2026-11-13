@@ -12,7 +12,9 @@ import {
   readPageOp,
   hoverOp,
   uploadFileOp,
-  snapshotOp
+  snapshotOp,
+  evaluateOp,
+  scrollOp
 } from '../cdpOps'
 import { PAGE_CRASHED_MESSAGE, type SessionEndReason, type TabCdpSession } from '../attachManager'
 import type { NavKind } from '../backend'
@@ -86,6 +88,13 @@ interface FakeSession {
    * `reject` 为真时那条 Runtime.evaluate 失败
    */
   selectProbe: { value?: unknown; reject?: boolean }
+  /** 会话攒下、还没报告的对话框说明：往里放，下一个成功的操作取走 */
+  dialogNotes: string[]
+  /**
+   * 页面变动计数（CHANGE_PROBE）的回答序列：每读一次取下一个，剩最后一个时一直沿用；
+   * null = 回包里没有数字，'throw' = 那条 Runtime.evaluate 失败。空（缺省）= 一直没有数字
+   */
+  changes: Array<number | null | 'throw'>
 }
 
 /**
@@ -144,6 +153,9 @@ function fakeSession(overrides: Params = {}): FakeSession {
   let seq = 0
   let reaction: Reaction | null = null
   let lastInserted = ''
+  /** 会话攒下、还没报告的对话框说明（真会话的 takeDialogNotes 取走即清空） */
+  const dialogNotes: string[] = []
+  const changes: FakeSession['changes'] = []
 
   const push = (method: string, params: Params = {}): void => {
     events.push({ seq: ++seq, method, params })
@@ -153,6 +165,12 @@ function fakeSession(overrides: Params = {}): FakeSession {
     if (isSelectProbe(expression)) {
       if (selectProbe.reject) throw new Error('Execution context was destroyed.')
       return { result: { value: selectProbe.value } }
+    }
+    // 页面变动计数的探针里也有 defineProperty(window —— 要先认出来
+    if (isChangeProbe(expression)) {
+      const next = changes.length > 1 ? changes.shift() : changes[0]
+      if (next === 'throw') throw new Error('Execution context was destroyed.')
+      return { result: { value: typeof next === 'number' ? { changes: next } : {} } }
     }
     // DOM 安静探针（及其清理）里也有 defineProperty(window —— 要先认出来
     if (expression.includes('__shuvixQuiet')) return { result: { value: 1000 } }
@@ -225,6 +243,8 @@ function fakeSession(overrides: Params = {}): FakeSession {
       return {}
     }),
     eventCursor: vi.fn(() => seq),
+    takeDialogNotes: vi.fn((): string[] => dialogNotes.splice(0)),
+    duringAction: vi.fn(<T>(fn: () => Promise<T>): Promise<T> => fn()),
     getEvents: vi.fn((opts: { event?: string; sinceSeq?: number; limit?: number }) => {
       const since = opts.sinceSeq
       const matched = events.filter(
@@ -255,8 +275,15 @@ function fakeSession(overrides: Params = {}): FakeSession {
     navigateResult,
     history,
     results,
-    selectProbe
+    selectProbe,
+    dialogNotes,
+    changes
   }
+}
+
+/** 页面变动计数的探针（按表达式特征认） */
+function isChangeProbe(expression: string): boolean {
+  return expression.includes('__shuvixChanges')
 }
 
 /** 「焦点是不是单选 <select>」探针（按表达式特征认） */
@@ -275,7 +302,12 @@ const mouseUp: Match = (c) =>
 const keyUp: Match = (c) => c.method === 'Input.dispatchKeyEvent' && c.params?.type === 'keyUp'
 /** 动作前给文档打记号的 evaluate（DOM 安静探针里也有 defineProperty(window，但总在它之后发） */
 const markEvaluate: Match = (c) =>
-  c.method === 'Runtime.evaluate' && String(c.params?.expression).includes('defineProperty(window')
+  c.method === 'Runtime.evaluate' &&
+  String(c.params?.expression).includes('defineProperty(window') &&
+  !isChangeProbe(String(c.params?.expression))
+/** 读页面变动计数的那条 evaluate */
+const changeProbeEvaluate: Match = (c) =>
+  c.method === 'Runtime.evaluate' && isChangeProbe(String(c.params?.expression))
 /** 按键前问「焦点是不是单选 <select>」的那条 evaluate */
 const selectProbeEvaluate: Match = (c) =>
   c.method === 'Runtime.evaluate' && isSelectProbe(String(c.params?.expression))
@@ -1728,7 +1760,11 @@ describe('hoverOp', () => {
     await ctl.buildSnapshot('u')
     commands.length = 0
 
-    const session = { controller: ctl, send } as unknown as TabCdpSession
+    const session = {
+      controller: ctl,
+      send,
+      takeDialogNotes: () => []
+    } as unknown as TabCdpSession
     const out = await within(hoverOp(session, 'e1'), 200)
     expect(commands.map((c) => c.method)).toEqual([
       'DOM.resolveNode',
@@ -2192,5 +2228,307 @@ describe('waitForOp：页面崩了就不再等（CR-U9）', () => {
     expect(out.details).toEqual({ error: message })
     if (crashAfterMs === null) expect(evaluates()).toBe(0)
     else expect(evaluates() - evaluatesAtCrash).toBeLessThanOrEqual(1)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// 对话框回报（DG-B）：会话攒下的对话框说明由下一个成功的操作带走，只带一次
+// ═══════════════════════════════════════════════════════════════════════
+
+const ALERT_LINE = '[dialog alert] The page showed "Saved" — closed automatically.'
+const CONFIRM_LINE = '[dialog confirm] The page asked "Delete?" — answered Cancel automatically.'
+
+describe('对话框回报：操作结果带上页面弹过的对话框（DG-B）', () => {
+  it('DG-B1 有一条待报告 → 接在结果正文后面另起一行；下一次操作不再带', async () => {
+    const plain = (await evaluateOp(fakeSession().session, '1')).text
+    const fake = fakeSession()
+    fake.dialogNotes.push(ALERT_LINE)
+    const out = await evaluateOp(fake.session, '1')
+    expect(out.text).toBe(`${plain}\n${ALERT_LINE}`)
+    expect(fake.session.takeDialogNotes).toHaveBeenCalledTimes(1)
+    const again = await evaluateOp(fake.session, '1')
+    expect(again.text).toBe(plain)
+  })
+
+  it('DG-B2 多条按顺序各占一行；details 原样保留', async () => {
+    const fake = fakeSession()
+    const plain = await eventsOp(fake.session, {})
+    fake.dialogNotes.push(ALERT_LINE, CONFIRM_LINE)
+    const out = await eventsOp(fake.session, {})
+    expect(out.text).toBe(`${plain.text}\n${ALERT_LINE}\n${CONFIRM_LINE}`)
+    expect(out.details).toEqual(plain.details)
+  })
+
+  it('DG-B3 没有待报告的 → 结果与原来一字不差', async () => {
+    const fake = fakeSession()
+    const out = await clickOp(fake.session, 'e7')
+    expect(out).toEqual({ text: 'Clicked button "Submit" (uid=e7).' })
+  })
+
+  it('DG-B4 操作抛错不取走：留给下一次成功的操作', async () => {
+    const fake = fakeSession()
+    fake.dialogNotes.push(ALERT_LINE)
+    fake.ctl.resolveElement.mockRejectedValueOnce(new Error('stale element'))
+    await expect(clickOp(fake.session, 'e7')).rejects.toThrow('stale element')
+    expect(fake.session.takeDialogNotes).not.toHaveBeenCalled()
+    expect(fake.dialogNotes).toEqual([ALERT_LINE])
+    const out = await snapshotOp(fake.session, 'https://a.com/')
+    expect(out.text?.endsWith(`\n${ALERT_LINE}`)).toBe(true)
+    expect(fake.dialogNotes).toEqual([])
+  })
+
+  it.each<[string, (f: FakeSession) => Promise<{ text?: string }>]>([
+    ['snapshot', (f) => snapshotOp(f.session, 'https://a.com/')],
+    ['read_page', (f) => readPageOp(f.session)],
+    ['click', (f) => clickOp(f.session, 'e7')],
+    ['fill', (f) => fillOp(f.session, 'e7', 'hello')],
+    ['type', (f) => typeOp(f.session, 'hi')],
+    ['press_key', (f) => pressKeyOp(f.session, 'Tab')],
+    ['scroll', (f) => scrollOp(f.session, { direction: 'down' })],
+    ['hover', (f) => hoverOp(f.session, 'e7')],
+    ['evaluate', (f) => evaluateOp(f.session, '1')],
+    [
+      'navigate',
+      (f) => {
+        when(f, cmd('Page.navigate'), () => {
+          f.page.marked = false
+        })
+        return navigateOp(f.session, 'goto', 'https://a.com/')
+      }
+    ],
+    ['cdp', (f) => cdpOp(f.session, 'Page.enable', undefined)],
+    ['events', (f) => eventsOp(f.session, {})]
+  ])('DG-B5 %s 的结果以对话框那一行收尾', async (_label, run) => {
+    const fake = fakeSession()
+    fake.dialogNotes.push(CONFIRM_LINE)
+    const out = await run(fake)
+    expect(out.text?.endsWith(CONFIRM_LINE)).toBe(true)
+    expect(fake.dialogNotes).toEqual([])
+  })
+
+  it('DG-B6 click / fill / type / press_key / evaluate 算 agent 的动作（期间的 confirm 答确定）；看、滚、悬停不算', async () => {
+    const acting: Array<[string, (f: FakeSession) => Promise<unknown>]> = [
+      ['click', (f) => clickOp(f.session, 'e7')],
+      ['fill', (f) => fillOp(f.session, 'e7', 'x')],
+      ['type', (f) => typeOp(f.session, 'x')],
+      ['press_key', (f) => pressKeyOp(f.session, 'Enter')],
+      ['evaluate', (f) => evaluateOp(f.session, '1')]
+    ]
+    for (const [label, run] of acting) {
+      const fake = fakeSession()
+      await run(fake)
+      expect(fake.session.duringAction, label).toHaveBeenCalledTimes(1)
+    }
+    const passive: Array<[string, (f: FakeSession) => Promise<unknown>]> = [
+      ['snapshot', (f) => snapshotOp(f.session, 'u')],
+      ['scroll', (f) => scrollOp(f.session, {})],
+      ['hover', (f) => hoverOp(f.session, 'e7')],
+      ['events', (f) => eventsOp(f.session, {})]
+    ]
+    for (const [label, run] of passive) {
+      const fake = fakeSession()
+      await run(fake)
+      expect(fake.session.duringAction, label).not.toHaveBeenCalled()
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// 「页面没反应」（NC-C）：click / press_key / type+submitKey 之后前后两次变动计数相等，
+// 400ms 后再读一次仍相等才说；读不到、弹过对话框、有导航 / URL 变化 / 新 tab 都不说
+// ═══════════════════════════════════════════════════════════════════════
+
+const NO_CHANGE =
+  'The page has not changed in response (no DOM, URL, focus or form-value change seen) — take a snapshot to check before repeating the action.'
+
+describe('动作之后页面毫无反应 → 明说（NC-C）', () => {
+  it('NC-C1 click 三次读数都相等 → 带上那句话；第三次读在 400ms 复查之后', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    const work = clickOp(fake.session, 'e7')
+    await stillWaitingAfter(work, 300)
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(2)
+    const out = await within(work, 400)
+    expect(out.text).toBe(`Clicked button "Submit" (uid=e7). ${NO_CHANGE}`)
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(3)
+    expect(sent(fake, changeProbeEvaluate)[0].params).toMatchObject({ returnByValue: true })
+    // 动作前的那一次读在鼠标事件之前
+    expectCommandOrder(fake, changeProbeEvaluate, cmd('Input.dispatchMouseEvent'))
+    expect(fake.ctl.reset).not.toHaveBeenCalled()
+  })
+
+  it('NC-C2 动作后读数变了 → 不说，也不做 400ms 复查', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7, 8)
+    const out = await within(clickOp(fake.session, 'e7'), 200)
+    expect(out.text).toBe('Clicked button "Submit" (uid=e7).')
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(2)
+  })
+
+  it('NC-C3 复查时读数变了（异步请求回来才改页面）→ 不说', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7, 7, 9)
+    const out = await within(clickOp(fake.session, 'e7'), 700)
+    expect(out.text).toBe('Clicked button "Submit" (uid=e7).')
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(3)
+  })
+
+  it('NC-C4a 动作前没读到数字 → 不下结论，之后一次都不再读', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    const out = await within(clickOp(fake.session, 'e7'), 200)
+    expect(out.text).toBe('Clicked button "Submit" (uid=e7).')
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(1)
+  })
+
+  it.each<[string, Array<number | null | 'throw'>, number]>([
+    ['动作前那次读失败', ['throw'], 1],
+    ['动作后那次读失败', [7, 'throw'], 2],
+    ['动作后那次没有数字', [7, null], 2],
+    ['复查那次读失败', [7, 7, 'throw'], 3],
+    ['复查那次没有数字', [7, 7, null], 3]
+  ])('NC-C4b %s → 不说，操作照常成功', async (_label, answers, reads) => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(...answers)
+    const out = await within(clickOp(fake.session, 'e7'), 700)
+    expect(out.text).toBe('Clicked button "Submit" (uid=e7).')
+    expect(out.details?.error).toBeUndefined()
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(reads)
+  })
+
+  it('NC-C5a 动作弹了对话框 → 算有反应：不说、动作后不再读；对话框那一行照带', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    when(fake, mouseUp, () => {
+      fake.push('Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete?' })
+      fake.dialogNotes.push(CONFIRM_LINE)
+    })
+    const out = await within(clickOp(fake.session, 'e7'), 200)
+    expect(out.text).toBe(`Clicked button "Submit" (uid=e7).\n${CONFIRM_LINE}`)
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(1)
+  })
+
+  it('NC-C5b 对话框在 400ms 复查期间才弹 → 不说', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    const work = clickOp(fake.session, 'e7')
+    await stillWaitingAfter(work, 300)
+    expect(sent(fake, changeProbeEvaluate)).toHaveLength(2)
+    fake.push('Page.javascriptDialogOpening', { type: 'alert', message: 'Saved' })
+    const out = await within(work, 400)
+    expect(out.text).toBe('Clicked button "Submit" (uid=e7).')
+  })
+
+  it('NC-C5c 动作之前就弹过的对话框不算这次的反应 → 照说', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.push('Page.javascriptDialogOpening', { type: 'alert', message: 'earlier' })
+    fake.changes.push(7)
+    const out = await within(clickOp(fake.session, 'e7'), 700)
+    expect(out.text).toBe(`Clicked button "Submit" (uid=e7). ${NO_CHANGE}`)
+  })
+
+  it('NC-C6a 同文档路由（URL 变了）→ 只有 URL 那句', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    when(fake, mouseUp, () => {
+      fake.push('Page.navigatedWithinDocument', { frameId: 'F', url: 'https://a.com/next' })
+      fake.page.url = 'https://a.com/next'
+    })
+    const out = await within(clickOp(fake.session, 'e7'), 700)
+    expect(out.text).toContain('Page URL changed to https://a.com/next')
+    expect(out.text).not.toContain('has not changed')
+  })
+
+  it('NC-C6b 开了新 tab → 只有新 tab 那句', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    when(fake, mouseUp, () => fake.push('Page.windowOpen', { url: 'https://b.com/' }))
+    const out = await within(clickOp(fake.session, 'e7'), 700)
+    expect(out.text).toBe(
+      'Clicked button "Submit" (uid=e7). It opened a new tab — use list_tabs to find it.'
+    )
+  })
+
+  it('NC-C6c 真导航 → 只有导航那句', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    when(fake, keyUp, () => navigateTo(fake, 'https://a.com/results'))
+    const out = await within(pressKeyOp(fake.session, 'Enter'), 700)
+    expect(out.text).toBe(
+      'Pressed Enter. Page navigated to https://a.com/results — take a new snapshot before further interaction.'
+    )
+  })
+
+  it.each<[string, (f: FakeSession) => void, string]>([
+    ['tab 关了', (f) => endSession(f, 'tab-closed'), TAB_CLOSED_NOTE],
+    ['页面崩了', (f) => crashPage(f), S]
+  ])('NC-C6d %s → 只有原来那句', async (_label, effect, note) => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    when(fake, mouseUp, () => effect(fake))
+    const out = await within(clickOp(fake.session, 'e7'), 700)
+    expect(out.text).toBe(`Clicked button "Submit" (uid=e7). ${note}`)
+  })
+
+  it('NC-C7 press_key：读数在按键之前取，没反应 → Pressed Enter. + 那句话', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    const out = await within(pressKeyOp(fake.session, 'Enter'), 700)
+    expect(out.text).toBe(`Pressed Enter. ${NO_CHANGE}`)
+    expectCommandOrder(
+      fake,
+      selectProbeEvaluate,
+      changeProbeEvaluate,
+      cmd('Input.dispatchKeyEvent')
+    )
+  })
+
+  it('NC-C7 type 带 submitKey：读数在打字之后、按键之前取，没反应 → 带那句话', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    const out = await within(typeOp(fake.session, 'hi', undefined, 'Enter'), 700)
+    expect(out.text).toBe(`Typed "hi". Pressed Enter. ${NO_CHANGE}`)
+    expectCommandOrder(
+      fake,
+      cmd('Input.insertText'),
+      changeProbeEvaluate,
+      cmd('Input.dispatchKeyEvent')
+    )
+  })
+
+  it.each<[string, (f: FakeSession) => Promise<{ text?: string }>]>([
+    ['type 不带 submitKey', (f) => typeOp(f.session, 'hi')],
+    ['hover', (f) => hoverOp(f.session, 'e7')],
+    ['fill', (f) => fillOp(f.session, 'e7', 'hello')],
+    ['scroll', (f) => scrollOp(f.session, { direction: 'down' })]
+  ])('NC-C7 %s 不看变动计数：一次都不读，也不说', async (_label, run) => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.changes.push(7)
+    const out = await within(run(fake), 1000)
+    expect(sent(fake, changeProbeEvaluate)).toEqual([])
+    expect(out.text).not.toContain('has not changed')
+  })
+
+  it('NC-C7 焦点在单选 <select> 上被拒绝的按键：不读变动计数', async () => {
+    const fake = fakeSession()
+    fake.changes.push(7)
+    fake.selectProbe.value = true
+    const out = await pressKeyOp(fake.session, 'ArrowDown')
+    expect(out.details?.error).toMatch(/^Focus is on a <select>/)
+    expect(sent(fake, changeProbeEvaluate)).toEqual([])
   })
 })

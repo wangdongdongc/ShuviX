@@ -478,6 +478,212 @@ describe('对话框自动处理', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════
+// 对话框说明（DG-A）：每弹一次记一行，由下一个工具结果带走（takeDialogNotes）
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('对话框说明：弹过的对话框记一行，取走即清空（DG-A）', () => {
+  async function attached(): Promise<{
+    ft: FakeTransport
+    session: Awaited<ReturnType<CdpAttachManager['session']>>
+  }> {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    await session.enableDialogHandling()
+    return { ft, session }
+  }
+
+  const answers = (ft: FakeTransport): unknown[] =>
+    ft.commands.filter((c) => c.method === 'Page.handleJavaScriptDialog').map((c) => c.params)
+
+  it('DG-A1 alert → 「showed … closed automatically」，照旧 accept', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'Saved' })
+    await flush()
+    expect(session.takeDialogNotes()).toEqual([
+      '[dialog alert] The page showed "Saved" — closed automatically.'
+    ])
+    expect(answers(ft)).toEqual([{ accept: true }])
+  })
+
+  it('DG-A2 confirm / prompt → 「asked … answered Cancel automatically」，按弹出顺序，照旧 dismiss', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete?' })
+    ft.emit('Page.javascriptDialogOpening', { type: 'prompt', message: 'Name?' })
+    await flush()
+    expect(session.takeDialogNotes()).toEqual([
+      '[dialog confirm] The page asked "Delete?" — answered Cancel automatically.',
+      '[dialog prompt] The page asked "Name?" — answered Cancel automatically.'
+    ])
+    expect(answers(ft)).toEqual([{ accept: false }, { accept: false }])
+  })
+
+  it('DG-A13 动作期间弹的 confirm / prompt → 答确定（prompt 带默认值），说明里写明原因；alert 不变', async () => {
+    const { ft, session } = await attached()
+    await session.duringAction(async () => {
+      ft.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete?' })
+      ft.emit('Page.javascriptDialogOpening', {
+        type: 'prompt',
+        message: 'Name?',
+        defaultPrompt: 'untitled'
+      })
+      ft.emit('Page.javascriptDialogOpening', { type: 'prompt', message: 'Tag?' })
+      ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'Saved' })
+      await flush()
+    })
+    const why = 'because it opened during your action.'
+    expect(session.takeDialogNotes()).toEqual([
+      `[dialog confirm] The page asked "Delete?" — answered OK automatically, ${why}`,
+      `[dialog prompt] The page asked "Name?" — answered OK automatically with its default text "untitled", ${why}`,
+      `[dialog prompt] The page asked "Tag?" — answered OK automatically with its default text "", ${why}`,
+      '[dialog alert] The page showed "Saved" — closed automatically.'
+    ])
+    expect(answers(ft)).toEqual([
+      { accept: true },
+      { accept: true, promptText: 'untitled' },
+      { accept: true, promptText: '' },
+      { accept: true }
+    ])
+  })
+
+  it('DG-A14 动作结束之后（含抛错收尾的动作）弹的 confirm 又回到答取消；关掉自动处理时动作期间也不答', async () => {
+    const { ft, session } = await attached()
+    await session.duringAction(async () => {})
+    await expect(
+      session.duringAction(async () => {
+        throw new Error('boom')
+      })
+    ).rejects.toThrow('boom')
+    ft.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'Leave?' })
+    await flush()
+    expect(answers(ft)).toEqual([{ accept: false }])
+    expect(session.takeDialogNotes()).toEqual([
+      '[dialog confirm] The page asked "Leave?" — answered Cancel automatically.'
+    ])
+
+    session.setAutoDismissDialogs(false)
+    await session.duringAction(async () => {
+      ft.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'Sure?' })
+      await flush()
+    })
+    expect(answers(ft)).toEqual([{ accept: false }])
+  })
+
+  it('DG-A3 beforeunload → 不带页面文字，「allowed automatically」，照旧 accept', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', { type: 'beforeunload', message: 'anything' })
+    await flush()
+    expect(session.takeDialogNotes()).toEqual([
+      '[dialog beforeunload] The page asked to confirm leaving it — allowed automatically.'
+    ])
+    expect(answers(ft)).toEqual([{ accept: true }])
+  })
+
+  it('DG-A4 只带走一次：再取为空；之后弹的只有新的那一条', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'one' })
+    expect(session.takeDialogNotes()).toHaveLength(1)
+    expect(session.takeDialogNotes()).toEqual([])
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'two' })
+    expect(session.takeDialogNotes()).toEqual([
+      '[dialog alert] The page showed "two" — closed automatically.'
+    ])
+  })
+
+  it('DG-A5 页面文字按 JSON 字符串加引号：引号、反斜杠、换行都转义，一条仍是一行', async () => {
+    const { ft, session } = await attached()
+    const message = 'He said "hi"\\ \nline2'
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message })
+    const [line] = session.takeDialogNotes()
+    expect(line).toBe(
+      `[dialog alert] The page showed ${JSON.stringify(message)} — closed automatically.`
+    )
+    expect(line).not.toContain('\n')
+    expect(line).toContain('\\"hi\\"')
+  })
+
+  it('DG-A6 300 个字符整条保留；301 个字符截到 300 再加 …', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'a'.repeat(300) })
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'b'.repeat(301) })
+    expect(session.takeDialogNotes()).toEqual([
+      `[dialog alert] The page showed "${'a'.repeat(300)}" — closed automatically.`,
+      `[dialog alert] The page showed "${'b'.repeat(300)}…" — closed automatically.`
+    ])
+  })
+
+  it('DG-A7 最多留 5 条：更早的丢掉', async () => {
+    const { ft, session } = await attached()
+    for (let i = 1; i <= 7; i++) {
+      ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: `m${i}` })
+    }
+    expect(session.takeDialogNotes()).toEqual(
+      [3, 4, 5, 6, 7].map((i) => `[dialog alert] The page showed "m${i}" — closed automatically.`)
+    )
+  })
+
+  it('DG-A8 关掉自动处理 → 说它还开着、用 cdp Page.handleJavaScriptDialog 回答；不自动响应', async () => {
+    const { ft, session } = await attached()
+    session.setAutoDismissDialogs(false)
+    ft.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'ok?' })
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'hi' })
+    ft.emit('Page.javascriptDialogOpening', { type: 'beforeunload', message: '' })
+    await flush()
+    const tail = 'it is still open: answer it with cdp Page.handleJavaScriptDialog.'
+    expect(session.takeDialogNotes()).toEqual([
+      `[dialog confirm] The page asked "ok?" — ${tail}`,
+      `[dialog alert] The page showed "hi" — ${tail}`,
+      `[dialog beforeunload] The page asked to confirm leaving it — ${tail}`
+    ])
+    expect(answers(ft)).toEqual([])
+  })
+
+  it('DG-A9 事件里没有 type / message → 当 alert、文字为空', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', {})
+    await flush()
+    expect(session.takeDialogNotes()).toEqual([
+      '[dialog alert] The page showed "" — closed automatically.'
+    ])
+    expect(answers(ft)).toEqual([{ accept: true }])
+  })
+
+  it('DG-A10 会话结束 → 没带走的说明一并丢掉', async () => {
+    const { ft, session } = await attached()
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'Saved' })
+    session.disposeLocal('tab-closed')
+    expect(session.takeDialogNotes()).toEqual([])
+  })
+
+  it('DG-A11 自动回答失败（对话框已经不在了）→ 没有未处理的 rejection，那一行照留', async () => {
+    const { ft, session } = await attached()
+    const watch = watchUnhandledRejections()
+    ft.react = (method) => {
+      if (method === 'Page.handleJavaScriptDialog') throw new Error('No dialog is showing')
+    }
+    ft.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'Saved' })
+    await flush()
+    await flush()
+    watch.stop()
+    expect(watch.seen).toEqual([])
+    expect(session.takeDialogNotes()).toHaveLength(1)
+  })
+
+  it('DG-A12 对话框事件进通用事件缓冲（没开任何采集也进）：「动作之后弹过对话框吗」靠它回答', async () => {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    const cursor = session.eventCursor()
+    ft.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'ok?' })
+    const { entries } = session.getEvents({
+      event: 'Page.javascriptDialogOpening',
+      sinceSeq: cursor
+    })
+    expect(entries.map((e) => e.params)).toEqual([{ type: 'confirm', message: 'ok?' }])
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
 // 页面的渲染进程崩了（CR-U1…U4）：发给页面的命令当场失败，不挂到有人重新加载
 // ═══════════════════════════════════════════════════════════════════════
 

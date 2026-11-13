@@ -37,7 +37,7 @@ The other browser tools cover the common flows. For anything else, drive the raw
 - uid macros: anywhere in params you may write {"$uid":"e7"} → the element's backendNodeId, {"$uidX":"e7"} / {"$uidY":"e7"} → its centre x / y (scrolled into view first). uids come from snapshot; this is how snapshot connects to CSS / DOM / Input by element.
 - Events are pull-based: after cdp(Domain.enable) that domain's events are buffered with a monotonic seq. Pull them with events; pass sinceSeq=<the last nextSeq> to get only new ones. The buffer keeps ~1000 entries.
 - Large results (traces, big response bodies, heap snapshots) are not returned inline: depending on the host they are written to a file whose path is returned (read or grep it), or truncated with a note. Network.getResponseBody bodies in base64 are decoded for you.
-- Dialogs: alert / confirm / prompt are dismissed automatically so they cannot wedge automation; take over with cdp(Page.handleJavaScriptDialog, {accept:true[, promptText]}).
+- Dialogs: alert / confirm / prompt are answered automatically so they cannot wedge automation (alert closed; a confirm / prompt that opens while an action of yours on the page is running (a click, typing, a key press, a script you run) is answered OK, prompt with its default text; one that opens at any other time is answered Cancel), and the next tool result on that tab quotes each one as a [dialog …] line.
 
 ## Recipes
 

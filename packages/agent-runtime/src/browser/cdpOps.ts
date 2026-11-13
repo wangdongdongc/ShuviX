@@ -275,7 +275,84 @@ const HIT_TEST_FN = pageFn(
  */
 const DOC_MARK = '__shuvixDocMark'
 
+/**
+ * 页面变动计数：DOM 变动（含 open shadow root 与同源 iframe）、表单的 input / change、焦点移动、
+ * 选区 / 光标移动、滚动各记一笔。动作前后各读一次，数字没变 = 这次动作页面没有任何反应。
+ *
+ * 两类不算变动（否则数字永远在涨）：把属性写回原值（有的页面每帧重写一次 class），以及同一个
+ * 元素 200ms 内的连续 style 改动（动画循环）；一个元素的第一次 style 改动照算（靠 style.display
+ * 显示的菜单）。每次读都重新扫一遍：之后才出现的 shadow root / iframe 文档本身就是一次变动。
+ * 看不到的：跨源 iframe、canvas 重绘、不动 DOM 的纯 CSS 状态。
+ */
+const CHANGE_PROBE = String.raw`(() => {
+  let s = window.__shuvixChanges;
+  const first = !s;
+  if (first) {
+    s = { n: 0, styled: new WeakMap(), seen: new WeakSet() };
+    Object.defineProperty(window, '__shuvixChanges', { value: s, configurable: true });
+  }
+  const listen = (win) => {
+    for (const t of ['input', 'change', 'focusin', 'focusout', 'scroll']) win.addEventListener(t, () => { s.n++; }, true);
+  };
+  const observe = (root) => {
+    new MutationObserver((records) => {
+      const now = performance.now();
+      let real = false;
+      for (const r of records) {
+        if (r.attributeName && r.oldValue === r.target.getAttributeNS(r.attributeNamespace, r.attributeName)) continue;
+        if (r.attributeName !== 'style') real = true;
+        else if (now - (s.styled.get(r.target) ?? -1e9) > 200) real = true;
+        if (r.attributeName === 'style') s.styled.set(r.target, now);
+      }
+      if (real) s.n++;
+    }).observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
+  };
+  const scan = (root, depth) => {
+    if (!s.seen.has(root)) {
+      s.seen.add(root);
+      observe(root);
+      if (root.nodeType === 9) {
+        if (root.defaultView) listen(root.defaultView);
+        root.addEventListener('selectionchange', () => { s.n++; });
+      }
+      if (!first) s.n++;
+    }
+    if (depth > 8) return;
+    for (const e of root.querySelectorAll('*')) {
+      if (e.shadowRoot) scan(e.shadowRoot, depth + 1);
+      else if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
+        let doc = null;
+        try { doc = e.contentDocument; } catch {}
+        if (doc) scan(doc, depth + 1);
+      }
+    }
+  };
+  scan(document, 0);
+  return { changes: s.n };
+})()`
+
+/** 读页面变动计数；读不到（页面在切换、执行上下文没了）回 null */
+async function changeCount(session: TabCdpSession): Promise<number | null> {
+  try {
+    const { result } = await session.send<{ result?: { value?: { changes?: unknown } } }>(
+      'Runtime.evaluate',
+      { expression: CHANGE_PROBE, returnByValue: true }
+    )
+    const n = result?.value?.changes
+    return typeof n === 'number' ? n : null
+  } catch {
+    return null
+  }
+}
+
+/** 动作没引起任何变动时，再等这么久确认一次（异步请求回来才改页面的情形） */
+const NO_CHANGE_RECHECK_MS = 400
+const NO_CHANGE_NOTE =
+  'The page has not changed in response (no DOM, URL, focus or form-value change seen) — take a snapshot to check before repeating the action.'
+
 export interface DocMark {
+  /** 动作前的页面变动计数（见 CHANGE_PROBE）；只有要回报「页面没反应」的动作才取 */
+  changes?: number | null
   token: string
   url: string | null
   /** 动作前的事件序号：之后只看此后的 Page.* 事件 */
@@ -283,7 +360,11 @@ export interface DocMark {
   frameId: string | null
 }
 
-export async function markDocument(session: TabCdpSession): Promise<DocMark> {
+export async function markDocument(
+  session: TabCdpSession,
+  opts: { watchChanges?: boolean } = {}
+): Promise<DocMark> {
+  const changes = opts.watchChanges ? await changeCount(session) : null
   const token = Math.random().toString(36).slice(2)
   const seq = session.eventCursor()
   const frameId = await session
@@ -302,7 +383,7 @@ export async function markDocument(session: TabCdpSession): Promise<DocMark> {
   } catch {
     // 此刻没有可用的执行上下文（页面正在切换）—— 挂不上记号，之后按新文档处理
   }
-  return { token, url, seq, frameId }
+  return { token, url, seq, frameId, changes }
 }
 
 interface PageState {
@@ -535,7 +616,8 @@ async function settleAfterAction(
       // 同文档路由（SPA pushState）：没有新页面要等，但内容换了
       return `Page URL changed to ${now.url} — take a new snapshot before further interaction.${newTabNote}`
     }
-    return newTabNote.trim() || null
+    if (newTabNote) return newTabNote.trim()
+    return (await unchangedSince(session, before)) ? NO_CHANGE_NOTE : null
   }
 
   const load = await waitForLoad(session, { mark: before })
@@ -549,9 +631,23 @@ async function settleAfterAction(
   return `${what}${loadNote(load.state)} — take a new snapshot before further interaction.${newTabNote}`
 }
 
+/**
+ * 动作之后页面是否毫无反应。只在前后两次计数都读到、且相等时才说「没变」—— 读不到就不下结论。
+ * 弹过对话框也算有反应（对话框那一行会单独报告）。
+ */
+async function unchangedSince(session: TabCdpSession, before: DocMark): Promise<boolean> {
+  if (typeof before.changes !== 'number') return false
+  const dialog = (): boolean =>
+    session.getEvents({ event: 'Page.javascriptDialogOpening', sinceSeq: before.seq }).entries
+      .length > 0
+  if (dialog() || (await changeCount(session)) !== before.changes) return false
+  await sleep(NO_CHANGE_RECHECK_MS)
+  return !dialog() && (await changeCount(session)) === before.changes
+}
+
 // ====== Snapshot ======
 
-export async function snapshotOp(
+async function snapshotOpRaw(
   session: TabCdpSession,
   pageUrl: string,
   /** viewer：看这份快照的是谁 —— 差异的基线按它分开存（见 CdpController.lastBodies） */
@@ -579,7 +675,7 @@ export async function snapshotOp(
  * webContents.executeJavaScript 4s 内不兑现，mainFrame.executeJavaScript 与
  * Runtime.evaluate 都立即拿到结果。选 CDP 而非 mainFrame 是为了和本文件其余操作同源。
  */
-export async function readPageOp(session: TabCdpSession): Promise<BrowserOpOutput> {
+async function readPageOpRaw(session: TabCdpSession): Promise<BrowserOpOutput> {
   const { result, exceptionDetails } = await session.send<{
     result: { value?: ExtractedPage }
     exceptionDetails?: { text: string; exception?: { description?: string } }
@@ -607,7 +703,7 @@ export async function readPageOp(session: TabCdpSession): Promise<BrowserOpOutpu
  * 视口外的元素点在视口外（事件落在 <html> 上）；元素已被重渲染替换，脱离文档的旧节点坐标全 0，
  * 点中了页面左上角的别的东西；元素被弹窗 / cookie 横幅盖住，点中的是盖在上面的那个。
  */
-export async function clickOp(session: TabCdpSession, uid: string): Promise<BrowserOpOutput> {
+async function clickOpRaw(session: TabCdpSession, uid: string): Promise<BrowserOpOutput> {
   const ctl = session.controller
   const el = await ctl.resolveElement(uid)
   const target = describeUid(session, uid)
@@ -656,7 +752,7 @@ export async function clickOp(session: TabCdpSession, uid: string): Promise<Brow
     )
   }
 
-  const before = await markDocument(session)
+  const before = await markDocument(session, { watchChanges: true })
   const { x, y } = point
   await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
   await session.send('Input.dispatchMouseEvent', {
@@ -740,7 +836,7 @@ function sameValue(actual: string, expected: string, kind: FieldKind): boolean {
  * disabled（脚本稍后才放开）→ 先等；页面在聚焦时把焦点挪去另一个输入框 → 如实报告字落在了哪；
  * 字没留住（被重渲染冲掉等）→ 重新定位后再试一次，仍不行就报错而不是报成功。
  */
-export async function fillOp(
+async function fillOpRaw(
   session: TabCdpSession,
   uid: string,
   text: string,
@@ -853,7 +949,7 @@ export async function fillOp(
 
 // ====== Type ======
 
-export async function typeOp(
+async function typeOpRaw(
   session: TabCdpSession,
   text: string,
   uid?: string,
@@ -883,7 +979,7 @@ export async function typeOp(
   if (text) await session.send('Input.insertText', { text })
   let settled: string | null = null
   if (submitKey) {
-    const before = await markDocument(session)
+    const before = await markDocument(session, { watchChanges: true })
     await dispatchKey((m, p) => session.send(m, p), submitKey)
     settled = await settleAfterAction(session, before, { quiet: false })
   }
@@ -937,10 +1033,10 @@ async function refuseKeyOnSelect(
   )
 }
 
-export async function pressKeyOp(session: TabCdpSession, combo: string): Promise<BrowserOpOutput> {
+async function pressKeyOpRaw(session: TabCdpSession, combo: string): Promise<BrowserOpOutput> {
   const refused = await refuseKeyOnSelect(session, combo)
   if (refused) return refused
-  const before = await markDocument(session)
+  const before = await markDocument(session, { watchChanges: true })
   await dispatchKey((m, p) => session.send(m, p), combo)
   const settled = await settleAfterAction(session, before, { quiet: false })
   return { text: settled ? `Pressed ${combo}. ${settled}` : `Pressed ${combo}.` }
@@ -948,7 +1044,7 @@ export async function pressKeyOp(session: TabCdpSession, combo: string): Promise
 
 // ====== Scroll ======
 
-export async function scrollOp(
+async function scrollOpRaw(
   session: TabCdpSession,
   p: { direction?: ScrollDirection; amount?: number; uid?: string }
 ): Promise<BrowserOpOutput> {
@@ -985,7 +1081,7 @@ const HOVER_SETTLE_MS = 150
  * 把鼠标移到元素上（先滚进视口）—— 菜单、tooltip 这类「悬停才出现」的东西靠它。
  * 只发一次 mouseMoved：悬停没有「成功」可读回，出现了什么由随后的快照回答。
  */
-export async function hoverOp(session: TabCdpSession, uid: string): Promise<BrowserOpOutput> {
+async function hoverOpRaw(session: TabCdpSession, uid: string): Promise<BrowserOpOutput> {
   const target = describeUid(session, uid)
   let point: { x: number; y: number }
   try {
@@ -1021,7 +1117,7 @@ const FIND_FILE_INPUT_FN = String.raw`function(){
  * 给文件 input 设上本地文件（DOM.setFileInputFiles，浏览器随之派发 input / change）。
  * paths 必须是**已经过安全门**的绝对路径 —— 这一步之后文件就交给网页了。
  */
-export async function uploadFileOp(
+async function uploadFileOpRaw(
   session: TabCdpSession,
   uid: string,
   paths: string[]
@@ -1073,10 +1169,7 @@ export async function uploadFileOp(
 
 // ====== Evaluate ======
 
-export async function evaluateOp(
-  session: TabCdpSession,
-  expression: string
-): Promise<BrowserOpOutput> {
+async function evaluateOpRaw(session: TabCdpSession, expression: string): Promise<BrowserOpOutput> {
   const { result, exceptionDetails } = await session.send<{
     result: { type: string; value?: unknown; description?: string }
     exceptionDetails?: { text: string; exception?: { description?: string } }
@@ -1103,7 +1196,7 @@ export async function evaluateOp(
 /** wait_for 轮询上限：超长 timeout 会把一轮工具调用挂死，clamp 到 2 分钟 */
 const WAIT_FOR_MAX_TIMEOUT = 120_000
 
-export async function waitForOp(
+async function waitForOpRaw(
   session: TabCdpSession,
   text: string,
   timeout = 10000,
@@ -1183,7 +1276,7 @@ async function navigated(
   }
 }
 
-export async function navigateOp(
+async function navigateOpRaw(
   session: TabCdpSession,
   nav: NavKind,
   url?: string
@@ -1242,7 +1335,7 @@ export async function navigateOp(
 
 // ====== Network ======
 
-export async function networkOp(session: TabCdpSession, limit?: number): Promise<BrowserOpOutput> {
+async function networkOpRaw(session: TabCdpSession, limit?: number): Promise<BrowserOpOutput> {
   await session.enableNetworkCapture()
   const all = session.getNetworkRequests()
 
@@ -1271,7 +1364,7 @@ export async function networkOp(session: TabCdpSession, limit?: number): Promise
 
 // ====== Console ======
 
-export async function consoleOp(session: TabCdpSession, limit?: number): Promise<BrowserOpOutput> {
+async function consoleOpRaw(session: TabCdpSession, limit?: number): Promise<BrowserOpOutput> {
   await session.enableConsoleCapture()
   const all = session.getConsoleMessages()
 
@@ -1322,7 +1415,7 @@ export type CdpSpill = (content: string, ext: string) => Promise<string>
  *   2. 发送命令
  *   3. getResponseBody 的 base64 自动解码；结果过大则落盘（spill）返回摘要 + 路径
  */
-export async function cdpOp(
+async function cdpOpRaw(
   session: TabCdpSession,
   method: string,
   params: Record<string, unknown> | undefined,
@@ -1373,7 +1466,7 @@ export async function cdpOp(
 }
 
 /** 增量拉取事件缓冲 */
-export async function eventsOp(
+async function eventsOpRaw(
   session: TabCdpSession,
   opts: { event?: string; sinceSeq?: number; limit?: number }
 ): Promise<BrowserOpOutput> {
@@ -1395,3 +1488,42 @@ export async function eventsOp(
     details: { nextSeq }
   }
 }
+
+// ====== 对话框回报 ======
+
+/**
+ * 给每个操作的结果附上这段时间里页面弹过的对话框（alert / confirm / prompt / beforeunload）。
+ * 会话把它们自动处理掉了（见 TabCdpSession），不说的话 agent 只看到动作「成功」而页面没反应 ——
+ * 「确定删除吗？」被答了取消、「保存失败」被关掉，它都无从知道。操作抛错时不取走，留给下一次。
+ */
+function reportingDialogs<A extends unknown[]>(
+  op: (session: TabCdpSession, ...args: A) => Promise<BrowserOpOutput>,
+  /** action：这是 agent 对页面做的动作 —— 期间弹出的 confirm / prompt 答确定（见 TabCdpSession.duringAction） */
+  opts: { action?: boolean } = {}
+): (session: TabCdpSession, ...args: A) => Promise<BrowserOpOutput> {
+  return async (session, ...args) => {
+    const out = await (opts.action
+      ? session.duringAction(() => op(session, ...args))
+      : op(session, ...args))
+    const notes = session.takeDialogNotes()
+    if (notes.length === 0) return out
+    return { ...out, text: [out.text, ...notes].filter(Boolean).join('\n') }
+  }
+}
+
+export const snapshotOp = reportingDialogs(snapshotOpRaw)
+export const readPageOp = reportingDialogs(readPageOpRaw)
+export const clickOp = reportingDialogs(clickOpRaw, { action: true })
+export const fillOp = reportingDialogs(fillOpRaw, { action: true })
+export const typeOp = reportingDialogs(typeOpRaw, { action: true })
+export const pressKeyOp = reportingDialogs(pressKeyOpRaw, { action: true })
+export const scrollOp = reportingDialogs(scrollOpRaw)
+export const hoverOp = reportingDialogs(hoverOpRaw)
+export const uploadFileOp = reportingDialogs(uploadFileOpRaw)
+export const evaluateOp = reportingDialogs(evaluateOpRaw, { action: true })
+export const waitForOp = reportingDialogs(waitForOpRaw)
+export const navigateOp = reportingDialogs(navigateOpRaw)
+export const networkOp = reportingDialogs(networkOpRaw)
+export const consoleOp = reportingDialogs(consoleOpRaw)
+export const cdpOp = reportingDialogs(cdpOpRaw)
+export const eventsOp = reportingDialogs(eventsOpRaw)
