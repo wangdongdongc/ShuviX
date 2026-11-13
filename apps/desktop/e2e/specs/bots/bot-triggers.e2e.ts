@@ -465,7 +465,11 @@ describe('timer.fired 叫起 bot', () => {
     await chat.clickRollback(user.id)
     expect(await chat.confirmOpen()).toBe(true)
     await chat.confirmAccept()
-    await until(async () => (await chat.inputValue()) === vaultMasked, 'draft restored')
+    // 回填的是胶囊文字，不是 {{REDACTED_…}} 那串（985e3daa：回退把占位符换回胶囊）；再发还是同一个占位符
+    await until(async () => {
+      const value = await chat.inputValue()
+      return value.startsWith(VAULT_MESSAGE_PREFIX) && !value.includes('{{REDACTED')
+    }, 'draft restored')
     await until(async () => (await chat.settledItems()).length === 0, 'history rolled back')
 
     await chat.pressEnter()

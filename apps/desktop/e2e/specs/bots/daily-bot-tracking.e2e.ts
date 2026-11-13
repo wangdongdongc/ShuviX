@@ -436,9 +436,11 @@ describe('收件箱的「跟踪中」一节', () => {
       strings.trackingArchived.replace('{{title}}', 'Waiting on Li')
     )
     await until(() => statusLine('w.md') === 'archived', 'w.md archived on disk')
-    // 主列表里没有它了；已归档的行要展开「已归档 N」才画（重开收件箱后它是折着的）
+    // 主列表里没有它了；已归档的行要展开「已归档 N」才画。收件箱常驻在右侧面板里（56ff4502），前面的用例展开过
+    // 「已归档 N」就一直开着 —— 所以只看它不再以未归档的样子出现
     await until(
-      async () => !(await tracking.rows()).some((r) => r.fileName === 'w.md'),
+      async () =>
+        !(await tracking.rows()).some((r) => r.fileName === 'w.md' && r.status !== 'archived'),
       'w.md left the main list'
     )
     expect(await tracking.archivedToggle()).toBe('2')

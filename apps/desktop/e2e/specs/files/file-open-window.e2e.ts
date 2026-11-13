@@ -240,10 +240,16 @@ describe('files.open → 独立窗口', () => {
     try {
       const icons = await panel.tabIcons()
       expect(icons).toEqual(
-        expect.arrayContaining(['lucide-wrench', 'lucide-calendar-days', 'lucide-activity'])
+        expect.arrayContaining([
+          'lucide-inbox',
+          'lucide-wrench',
+          'lucide-calendar-days',
+          'lucide-activity'
+        ])
       )
       expect(icons).not.toContain('lucide-eye')
-      expect(icons).toHaveLength(3)
+      // 收件箱是右侧面板的第一个 tab（56ff4502）
+      expect(icons).toHaveLength(4)
     } finally {
       await panel.close()
     }
