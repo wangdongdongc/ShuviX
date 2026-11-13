@@ -5,7 +5,7 @@
  * 工具把任务发给原会话（不弹权限卡片）→ 原会话那一轮结束 → 完成通知把空闲的管理员叫回来（设置 `session.autoResume`
  * 关着也一样）→ 管理员收尾。
  *
- *   G-1 原会话先聊过一句；`/goal <条件>` + 回车：出现一条管理员会话（`settings.goalManagerOf` = 原会话、标题 = 目标原文、
+ *   G-1 原会话先聊过一句；`/goal <条件>` + 回车：出现一条管理员会话（`settings.goalManagerOf` = 原会话、标题 =「Goal · 原会话标题」、
  *       侧栏 ◎），界面切到它、输入框清空、用户气泡带「目标」胶囊；发给管理员的第一个请求是原文 + `<goal-set>` 说明
  *       （点名原会话的 id 与标题、身份是管理员），历史里有设目标之前那句话；它调 `session`/`prompt-session` 把任务发给
  *       原会话 —— 没有权限卡片，原会话收到任务（带发送方说明）；原会话那一轮挂着时管理员已经停下来等
@@ -48,7 +48,12 @@ import {
 
 const MODEL = 'e2e-model'
 const TITLES = { loop: 'Goal loop', refuse: 'Goal refuse', asks: 'Goal asks' }
-/** 都不超过 60 字：管理员会话的标题就是原文（更长的截断由单测管） */
+/** 管理员会话的标题：「Goal · <原会话标题>」 */
+const MANAGER_TITLES = {
+  loop: 'Goal · Goal loop',
+  refuse: 'Goal · Goal refuse',
+  asks: 'Goal · Goal asks'
+}
 const OBJECTIVES = {
   loop: 'G1: write notes.txt in the project with the word READY',
   refuse: 'G3: keep the manager busy for a while',
@@ -238,15 +243,15 @@ describe('设目标 → 管理员派活 → 汇报 → 收尾', () => {
     const manager = managers[0]!
     managerId = manager.id
     expect(manager.id).not.toBe(sids.loop)
-    expect(manager.title).toBe(OBJECTIVES.loop)
+    expect(manager.title).toBe(MANAGER_TITLES.loop)
     expect(manager.settings?.titleOrigin).toBe('user')
 
     // 界面切到了管理员：侧栏选中的是它、带 ◎；原会话不带
     await until(
-      async () => (await sidebar.activeTitle()) === OBJECTIVES.loop,
+      async () => (await sidebar.activeTitle()) === MANAGER_TITLES.loop,
       'manager session is the active one'
     )
-    expect(await sidebar.goalMarkOf(OBJECTIVES.loop)).toBe('manager')
+    expect(await sidebar.goalMarkOf(MANAGER_TITLES.loop)).toBe('manager')
     expect(await sidebar.goalMarkOf(TITLES.loop)).toBeNull()
 
     // 输入框清空；管理员对话里的用户气泡带「目标」胶囊，正文是原文
@@ -299,7 +304,7 @@ describe('设目标 → 管理员派活 → 汇报 → 收尾', () => {
 
     // 界面还在管理员会话里：结论出现在这条对话里
     await waitReply(MANAGER_FINAL, 60_000)
-    await waitRowSettled(OBJECTIVES.loop)
+    await waitRowSettled(MANAGER_TITLES.loop)
     await waitRowSettled(TITLES.loop)
 
     const reqs = provider.requests()
@@ -351,10 +356,10 @@ describe('被拒', () => {
     await until(() => provider.holding(), 'manager turn held', 30_000)
     const again = await goalStart(sids.refuse, 'a second goal')
     expect(again).toMatchObject({ ok: false })
-    expect((again as { error: string }).error).toContain(OBJECTIVES.refuse)
+    expect((again as { error: string }).error).toContain(MANAGER_TITLES.refuse)
     expect(await managersOf(sids.refuse)).toHaveLength(1)
     provider.release()
-    await waitRowSettled(OBJECTIVES.refuse)
+    await waitRowSettled(MANAGER_TITLES.refuse)
     expect((await sessionRows()).length).toBe(before + 1)
   }, 120_000)
 })
@@ -383,7 +388,7 @@ describe('管理员先问人', () => {
 
     // 界面已经在管理员会话里：它的问题就在眼前；这时还没有任何东西发给原会话
     await until(
-      async () => (await sidebar.activeTitle()) === OBJECTIVES.asks,
+      async () => (await sidebar.activeTitle()) === MANAGER_TITLES.asks,
       'manager session is the active one'
     )
     await until(async () => (await asks.cardKind()) === 'choice', 'manager ask card', 30_000)
@@ -395,7 +400,7 @@ describe('管理员先问人', () => {
     await until(async () => (await asks.cardKind()) === null, 'ask card answered', 20_000)
 
     await waitReply(MANAGER_FINAL, 90_000)
-    await waitRowSettled(OBJECTIVES.asks)
+    await waitRowSettled(MANAGER_TITLES.asks)
     const reqs = provider.requests()
     const managerReqs = reqs.filter(isManager)
     const workerReqs = reqs.filter(isWorker)

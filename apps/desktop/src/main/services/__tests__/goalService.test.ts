@@ -19,7 +19,7 @@
  *   GS-6  成功：fork 的行 goalManagerOf = 原会话 id、标题 = 条件的第一行非空行、titleOrigin 'user'；
  *         grantSession(管理员, 原会话, 'write')（权限表里真有那一行）；发进管理员的是 goalSetMessage 的模型文本 + 显示
  *         侧车，来源 = 给定的 origin（没给就不带 source）；先等会话信号就绪再发；广播一次列表；交回管理员的 id
- *   GS-7  标题：第一行非空行、去首尾空白、封顶 60 字 + `…`（恰 60 字不截）、认 CRLF
+ *   GS-7  标题：「目标 · <原会话标题>」；原会话还是缺省标题时用目标原文第一行（去首尾空白、封顶 40 字 + `…`、认 CRLF）
  *   GS-8  脱敏：发出去的原文是 maskTexts 换过的那份（模型文本与侧车同一份）；标题是用户的原文；maskTexts 没交回东西
  *         就用原文
  *   GS-9  没发出去（admitSteer 交回 `{ error }` / 抛错 / 拿不到门面 / 脱敏抛错）→ 管理员会话删掉（行与权限表）、
@@ -483,7 +483,7 @@ describe('GS-6 a goal is set', () => {
 
     const manager = sessionRecords.findById('fork-1')!
     expect(manager.settings.goalManagerOf).toBe(WORKER)
-    expect(manager.title).toBe(OBJECTIVE)
+    expect(manager.title).toBe(`goal.managerTitle|${JSON.stringify({ title: WORKER_TITLE })}`)
     expect(manager.settings.titleOrigin).toBe('user')
     expect(manager.parentId).toBeNull()
     expect(isGoalManager('fork-1')).toBe(true)
@@ -543,7 +543,7 @@ describe('GS-6 a goal is set', () => {
       const row = sessionRecords.findById('fork-1')!
       // 受理那一刻：身份、标题、权限都已经就位，列表还没广播
       expect(row.settings.goalManagerOf).toBe(WORKER)
-      expect(row.title).toBe(OBJECTIVE)
+      expect(row.title).toBe(`goal.managerTitle|${JSON.stringify({ title: WORKER_TITLE })}`)
       expect(sessionAcl.sessionGrants('fork-1')).toHaveLength(1)
       expect(mocks.listChanged).not.toHaveBeenCalled()
       return {}
@@ -557,29 +557,33 @@ describe('GS-6 a goal is set', () => {
 // ─── GS-7：标题 ─────────────────────────────
 
 describe('GS-7 the manager title', () => {
+  const titled = (title: string): string => `goal.managerTitle|${JSON.stringify({ title })}`
+
+  it('GS-7 a titled worker: "Goal · <worker title>", whatever the objective says', async () => {
+    seed(WORKER)
+    const objective = `${'b'.repeat(200)}\nshort`
+    const managerId = await started(objective)
+    expect(sessionRecords.findById(managerId)!.title).toBe(titled(WORKER_TITLE))
+    // 发出去的是整段原文，不是标题
+    expect(sent().text.startsWith(`${objective}\n\n<goal-set id="`)).toBe(true)
+  })
+
+  // 原会话还是缺省标题（刚建就设目标）：用目标原文的第一行，封顶 40 字
   it.each<[string, string, string]>([
     ['one line', 'Ship the report', 'Ship the report'],
     [
       'the first non-empty line, trimmed',
-      'Ship the report  \n\nwith charts\nand a summary',
-      'Ship the report'
-    ],
-    [
-      'blank lines first',
       '   \n\t\n  Second line is the first with words  \nmore',
       'Second line is the first with words'
     ],
     ['CRLF', 'First line\r\nsecond line', 'First line'],
-    ['exactly 60 characters', 'a'.repeat(60), 'a'.repeat(60)],
-    ['61 characters', 'a'.repeat(61), `${'a'.repeat(60)}…`],
-    ['a long first line of several', `${'b'.repeat(200)}\nshort`, `${'b'.repeat(60)}…`],
+    ['exactly 40 characters', 'a'.repeat(40), 'a'.repeat(40)],
+    ['41 characters', 'a'.repeat(41), `${'a'.repeat(40)}…`],
     ['CJK', '让 e2e 全绿\n并且构建通过', '让 e2e 全绿']
-  ])('GS-7 %s', async (_label, objective, title) => {
-    seed(WORKER)
+  ])('GS-7 a worker with the default title: %s', async (_label, objective, name) => {
+    seed(WORKER, { title: 'agent.defaultTitle' })
     const managerId = await started(objective)
-    expect(sessionRecords.findById(managerId)!.title).toBe(title)
-    // 发出去的是整段原文（去掉首尾空白），不是标题
-    expect(sent().text.startsWith(`${objective.trim()}\n\n<goal-set id="`)).toBe(true)
+    expect(sessionRecords.findById(managerId)!.title).toBe(titled(name))
   })
 })
 
@@ -589,7 +593,7 @@ describe('GS-8 redaction', () => {
   const SECRET = 'sk-proj-SECRETSECRET'
   const MASKED = '{{REDACTED_API_KEY_aaaaaaaa}}'
 
-  it('GS-8 the masked objective is what is sent (model text and sidecar alike); the title keeps the user words', async () => {
+  it('GS-8 the masked objective is what is sent (model text and sidecar alike)', async () => {
     seed(WORKER)
     facade.maskTexts.mockImplementation(async (texts) =>
       texts.map((text) => text.replaceAll(SECRET, MASKED))
@@ -607,7 +611,9 @@ describe('GS-8 redaction', () => {
     expect(text).toBe(expected.text)
     expect(options.display).toEqual(expected.display)
     expect(JSON.stringify([text, options])).not.toContain(SECRET)
-    expect(sessionRecords.findById(managerId)!.title).toBe(objective)
+    expect(sessionRecords.findById(managerId)!.title).toBe(
+      `goal.managerTitle|${JSON.stringify({ title: WORKER_TITLE })}`
+    )
   })
 
   it('GS-8 maskTexts hands back nothing → the objective is sent as written', async () => {

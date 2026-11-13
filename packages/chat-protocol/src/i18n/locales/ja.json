@@ -513,7 +513,8 @@
       "cleared": "ゴールをクリア",
       "replaced": "新しいゴールに置き換え"
     },
-    "sidebarManager": "目標の管理役"
+    "sidebarManager": "目標の管理役",
+    "managerTitle": "目標 · {{title}}"
   },
   "threadDrawer": {
     "running": "実行中…",

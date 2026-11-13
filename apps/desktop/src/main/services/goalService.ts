@@ -5,7 +5,7 @@
  *  1. fork 这条会话（整段当前对话；会话正在跑 → 拒，什么都不建）。fork 沿用原会话的 agent：同一份人设、同一组工具、
  *     提示词缓存不丢，工作目录也是同一个；
  *  2. 在 fork 的会话行上记 `settings.goalManagerOf = <原会话 id>`（侧栏的 ◎、输入框不再给 `/goal`、下面两条规矩都读它），
- *     标题换成目标原文；
+ *     标题是「目标 · <原会话标题>」；
  *  3. 给 fork 一行对原会话的「对话」权限（权限表 `kind:'session'`、write）—— 用户设目标就是同意它去派活，之后它给
  *     原会话发消息不再弹卡片；
  *  4. 以人的来源把目标原文发进 fork（原文 + 「目标」Token），消息末尾的说明把它的身份切成管理员（chat-protocol
@@ -41,12 +41,20 @@ import { taskRegistry } from './taskRegistry'
 
 const log = createLogger('Goal')
 
-/** 管理员会话的标题：目标原文的第一行，封顶 */
-const MANAGER_TITLE_MAX = 60
+/** 原会话还是缺省标题时，管理员标题里用目标原文的第一行，封顶 */
+const OBJECTIVE_TITLE_MAX = 40
 
-function managerTitle(objective: string): string {
-  const line = (objective.split(/\r?\n/).find((l) => l.trim() !== '') ?? objective).trim()
-  return line.length > MANAGER_TITLE_MAX ? `${line.slice(0, MANAGER_TITLE_MAX)}…` : line
+/**
+ * 管理员会话的标题：「目标 · <原会话标题>」—— 侧栏里一眼对得上它管的是哪条会话（用户 2026-11-13）。原会话还是缺省
+ * 标题（刚建就设目标）→ 用目标原文的第一行（截短）代替
+ */
+function managerTitle(worker: Session, objective: string): string {
+  let name = worker.title.trim()
+  if (name === '' || name === t('agent.defaultTitle')) {
+    const line = (objective.split(/\r?\n/).find((l) => l.trim() !== '') ?? objective).trim()
+    name = line.length > OBJECTIVE_TITLE_MAX ? `${line.slice(0, OBJECTIVE_TITLE_MAX)}…` : line
+  }
+  return t('goal.managerTitle', { title: name })
 }
 
 function errorText(error: unknown): string {
@@ -115,7 +123,7 @@ export class GoalService {
     const managerId = forked.sessionId
     try {
       sessionRecords.updateSettings(managerId, { goalManagerOf: sessionId })
-      sessionService.updateTitle(managerId, managerTitle(objective), 'user')
+      sessionService.updateTitle(managerId, managerTitle(worker, objective), 'user')
       sessionAcl.grantSession(managerId, sessionId, 'write')
       const agent = await sessionService.ensureAgentSession(managerId)
       if (agent === undefined) throw new Error(t('goal.errorForkFailed'))

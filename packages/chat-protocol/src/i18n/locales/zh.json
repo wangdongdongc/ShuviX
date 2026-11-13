@@ -513,7 +513,8 @@
       "cleared": "目标已清除",
       "replaced": "目标已被新目标替换"
     },
-    "sidebarManager": "目标管理员"
+    "sidebarManager": "目标管理员",
+    "managerTitle": "目标 · {{title}}"
   },
   "threadDrawer": {
     "running": "运行中…",

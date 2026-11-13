@@ -513,7 +513,8 @@
       "cleared": "Goal cleared",
       "replaced": "Goal replaced by a new one"
     },
-    "sidebarManager": "Goal manager"
+    "sidebarManager": "Goal manager",
+    "managerTitle": "Goal · {{title}}"
   },
   "threadDrawer": {
     "running": "Running…",
