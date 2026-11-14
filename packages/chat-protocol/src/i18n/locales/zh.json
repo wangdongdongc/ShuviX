@@ -1371,6 +1371,14 @@
     "subAgentAdd": "添加自定义智能体",
     "subAgentCreateRequired": "名称、描述、系统提示词为必填",
     "subAgentPromptBlocks": "提示词块",
+    "promptBlock": {
+      "document": "笔记本会话打开的文档，以及它是哪种 ShuviX 文件",
+      "drawing": "怎么画图（需要作图技能）",
+      "environment": "工作目录、平台、日期、语言和版本",
+      "agents_md": "工作目录里的 AGENTS.md",
+      "claude_md": "工作目录里的 CLAUDE.md",
+      "project_prompt": "项目设置里写的提示词"
+    },
     "subAgentUserWords": "接收用户原话",
     "subAgentDescription": "描述",
     "subAgentBasicGroup": "基本信息",

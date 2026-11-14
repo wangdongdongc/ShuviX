@@ -1371,6 +1371,14 @@
     "subAgentAdd": "カスタムエージェントを追加",
     "subAgentCreateRequired": "名前・説明・システムプロンプトは必須です",
     "subAgentPromptBlocks": "プロンプトブロック",
+    "promptBlock": {
+      "document": "ノートブックセッションで開いているドキュメントと、それがどの種類の ShuviX ファイルか",
+      "drawing": "図の描き方（描画スキルが必要）",
+      "environment": "作業ディレクトリ、プラットフォーム、日付、言語、バージョン",
+      "agents_md": "作業ディレクトリの AGENTS.md",
+      "claude_md": "作業ディレクトリの CLAUDE.md",
+      "project_prompt": "プロジェクト設定に書かれたプロンプト"
+    },
     "subAgentUserWords": "ユーザーの原文を受け取る",
     "subAgentDescription": "説明",
     "subAgentBasicGroup": "基本情報",

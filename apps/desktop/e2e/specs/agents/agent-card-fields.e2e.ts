@@ -995,17 +995,17 @@ describe('E 组 · 宿主差异', () => {
           `(${rowSelector('shuvix-tools')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
         )
       ).toContain('bash, read')
-      // 提示词块清单是普通逗号串输入（csv 键里只有 tools 挂候选项选择器）
+      // 提示词块清单与工具同一种触发器（固定词表的多选弹层）：触发器上是当前清单，只读时禁用
       expect(
         await inWin<string>(
           `(${rowSelector('shuvix-prompt-blocks')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
         )
-      ).toBe('')
-      expect(
-        await inWin<string>(
-          `${rowSelector('shuvix-prompt-blocks')}?.querySelector('input')?.value ?? ''`
-        )
       ).toBe('environment')
+      expect(
+        await inWin<boolean>(
+          `${rowSelector('shuvix-prompt-blocks')}?.querySelector('button')?.disabled ?? false`
+        )
+      ).toBe(true)
       expect(
         await inWin<boolean>(
           `[...document.querySelectorAll('.cm-shuvix-fmcard-input')].every((i) => i.disabled)`

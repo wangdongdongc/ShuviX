@@ -7,8 +7,9 @@
  *     契约，不像工具/模型那样依赖运行时目录。
  *   - `shuvix-thinking`（select）→ 同一个 EnumField，候选项是 SELECTABLE_THINKING_LEVELS
  *     （与输入框思考选择器同一份，解析器也只收这几档）。
- *   - 其余 csv 键（如 `shuvix-prompt-blocks` 的提示词块清单）→ 纯文本逗号串输入。分派按**键**而非 kind：
- *     kind 只说"是个列表"，该配哪个控件是键的事。
+ *   - `shuvix-prompt-blocks`（csv）→ 固定词表的多选弹层（PromptBlocksField），每项带一句说明。
+ *   - 其余 csv 键 → 纯文本逗号串输入。分派按**键**而非 kind：kind 只说"是个列表"，
+ *     该配哪个控件是键的事。
  *
  * 卡片本身是纯 DOM 的 CM6 widget，故这里由 LivePreviewEditor 用独立 React root
  * 挂进槽位（widget.destroy → unmount）。独立 root 不继承应用的 Provider，但两个
@@ -20,6 +21,12 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 import { ModelSelect, useModelCatalogStore, getChatApi } from '@shuvix/chat-ui'
 import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
+import {
+  AGENT_PROMPT_BLOCKS,
+  AGENT_PROMPT_BLOCKS_KEY,
+  isAgentPromptBlock,
+  orderPromptBlocks
+} from '@shuvix/chat-protocol/agentPromptBlocks'
 import {
   AGENT_MODEL_KEY,
   AGENT_THINKING_KEY,
@@ -73,7 +80,7 @@ const FLAT_CONTROL =
   'appearance-none rounded-md border bg-transparent transition-colors enabled:hover:bg-bg-tertiary/40 focus:outline-none focus:bg-bg-primary focus:border-accent/50'
 
 /**
- * 工具白名单编辑：紧凑触发器 + ToolSelectList 弹层。
+ * 多选清单的共用外壳：紧凑触发器 + 弹层（工具白名单与提示词块共用，弹层里放什么由调用方给）。
  *
  * 弹层经 portal 渲染到 body（fixed 定位 + 空间不足时上翻）—— 属性卡的圆角盒子带
  * `overflow-hidden`（分隔线与圆角要它），absolute 定位的弹层会被裁掉；ModelSelect
@@ -82,9 +89,27 @@ const FLAT_CONTROL =
  * 触发器上的清单**折行、不截断**：内置档案只读，触发器禁用、弹层打不开，这一行就是看见清单的
  * 唯一地方。箭头留在首行（mt-1 = (20px 行高 - 12px 图标) / 2），只有一行时高度不变。
  */
-function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
+function PopoverListField({
+  value,
+  onChange,
+  readOnly = false,
+  panelClassName,
+  width = 300,
+  onOpened,
+  normalize,
+  children
+}: FieldControlProps & {
+  /** 弹层的标识 class（e2e 与样式按它找） */
+  panelClassName: string
+  width?: number
+  /** 弹层打开的那一刻（懒加载候选项用） */
+  onOpened?: () => void
+  /** 写回前整理草稿（如按固定次序排）；缺省原样 */
+  normalize?: (draft: string[]) => string[]
+  /** 弹层内容：当前草稿 + 改草稿 */
+  children: (selected: string[], setSelected: (next: string[]) => void) => React.ReactNode
+}): React.JSX.Element {
   const { t } = useTranslation()
-  const [tools, setTools] = useState<ToolItem[]>([])
   const [open, setOpen] = useState(false)
   /** 弹层打开期间的草稿（null = 未打开）—— 见下方 closePanel 的一次性写回 */
   const [draft, setDraft] = useState<string[] | null>(null)
@@ -101,25 +126,6 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
     [value]
   )
 
-  useEffect(() => {
-    if (!open || tools.length > 0) return
-    let alive = true
-    void getChatApi()
-      .tools.list()
-      .then((list) => {
-        if (!alive) return
-        // 派发工具 agent 不在 tools.list 里（那份清单服务于聊天工具选择器，它是 hidden），
-        // 但它是 shuvix-tools 的合法条目 —— 合成注入
-        setTools([
-          ...list,
-          { name: 'agent', label: t('tool.subAgentDispatchLabel'), group: 'agent' }
-        ])
-      })
-    return () => {
-      alive = false
-    }
-  }, [open, tools.length, t])
-
   /**
    * 关闭即写回（一次）。**不逐项写回**：每次写回都会让 YAML 变化 → widget 重建 →
    * React root 卸载 → 弹层消失，多选就得反复打开；一次性写回同时把一整轮选择
@@ -129,12 +135,15 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
     setOpen(false)
     setPanelStyle(null)
     setDraft((current) => {
-      if (current && current.join(', ') !== enabled.join(', ')) {
-        onChange(current.length > 0 ? current.join(', ') : null)
+      if (current) {
+        const next = normalize ? normalize(current) : current
+        if (next.join(', ') !== enabled.join(', ')) {
+          onChange(next.length > 0 ? next.join(', ') : null)
+        }
       }
       return null
     })
-  }, [enabled, onChange])
+  }, [enabled, onChange, normalize])
 
   /** 定位：贴触发器下方右对齐；下方空间不足则上翻。在开合的那一刻算（rect 此刻已知） */
   const toggleOpen = useCallback(() => {
@@ -148,7 +157,6 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
       if (!el) return false
       setDraft(enabled)
       const r = el.getBoundingClientRect()
-      const width = 300
       const below = window.innerHeight - r.bottom - 8
       const flip = below < 200 && r.top > below
       setPanelStyle({
@@ -160,7 +168,8 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
       })
       return true
     })
-  }, [open, closePanel, enabled])
+    onOpened?.()
+  }, [open, closePanel, enabled, width, onOpened])
 
   // 点外部关闭：触发器与弹层都算「内部」（弹层已 portal 到 body，不在触发器子树里）
   useEffect(() => {
@@ -205,18 +214,106 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
           <div
             ref={panelRef}
             style={panelStyle}
-            className="cm-shuvix-fmcard-tools-panel z-50 overflow-y-auto rounded-xl border border-border-secondary bg-bg-secondary shadow-lg p-1.5"
+            className={`${panelClassName} z-50 overflow-y-auto rounded-xl border border-border-secondary bg-bg-secondary shadow-lg p-1.5`}
           >
-            <ToolSelectList
-              tools={tools}
-              enabledTools={draft ?? enabled}
-              onChange={setDraft}
-              compact
-            />
+            {children(draft ?? enabled, setDraft)}
           </div>,
           document.body
         )}
     </>
+  )
+}
+
+/** 工具白名单编辑：ToolSelectList 弹层，候选项打开时才拉 */
+function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
+  const { t } = useTranslation()
+  const [tools, setTools] = useState<ToolItem[]>([])
+
+  const load = useCallback(() => {
+    if (tools.length > 0) return
+    void getChatApi()
+      .tools.list()
+      .then((list) => {
+        // 派发工具 agent 不在 tools.list 里（那份清单服务于聊天工具选择器，它是 hidden），
+        // 但它是 shuvix-tools 的合法条目 —— 合成注入
+        setTools([
+          ...list,
+          { name: 'agent', label: t('tool.subAgentDispatchLabel'), group: 'agent' }
+        ])
+      })
+  }, [tools.length, t])
+
+  return (
+    <PopoverListField
+      value={value}
+      onChange={onChange}
+      readOnly={readOnly}
+      panelClassName="cm-shuvix-fmcard-tools-panel"
+      onOpened={load}
+    >
+      {(selected, setSelected) => (
+        <ToolSelectList tools={tools} enabledTools={selected} onChange={setSelected} compact />
+      )}
+    </PopoverListField>
+  )
+}
+
+/** 写回提示词块清单：认识的按词表次序，不认识的（手写的、新版本才有的）原样留在后面 —— 不替用户删 */
+function normalizePromptBlocks(draft: string[]): string[] {
+  const known = orderPromptBlocks(draft.map((name) => name.toLowerCase()))
+  const unknown = draft.filter((name) => !isAgentPromptBlock(name.toLowerCase()))
+  return [...known, ...new Set(unknown)]
+}
+
+/**
+ * 提示词块（`shuvix-prompt-blocks`）：固定词表的多选，每一项带一句说明 —— 用户不必记块名，也不会打错。
+ * 列的次序就是系统提示词里的次序（清单是集合，写回时按它排）。
+ */
+function PromptBlocksField({
+  value,
+  onChange,
+  readOnly = false
+}: FieldControlProps): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <PopoverListField
+      value={value}
+      onChange={onChange}
+      readOnly={readOnly}
+      panelClassName="cm-shuvix-fmcard-blocks-panel"
+      width={340}
+      normalize={normalizePromptBlocks}
+    >
+      {(selected, setSelected) => {
+        const on = new Set(selected.map((name) => name.toLowerCase()))
+        const toggle = (name: string): void =>
+          setSelected(
+            on.has(name)
+              ? selected.filter((entry) => entry.toLowerCase() !== name)
+              : [...selected, name]
+          )
+        return AGENT_PROMPT_BLOCKS.map((name) => (
+          <label
+            key={name}
+            data-prompt-block={name}
+            className="flex items-start gap-1.5 w-full px-2 py-1 rounded-md hover:bg-bg-hover transition-colors cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={on.has(name)}
+              onChange={() => toggle(name)}
+              className="mt-0.5 rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+            />
+            <span className="min-w-0">
+              <span className="block text-[11px] font-mono text-accent">{name}</span>
+              <span className="block text-[10px] leading-4 text-text-tertiary">
+                {t(`tool.promptBlock.${name}`)}
+              </span>
+            </span>
+          </label>
+        ))
+      }}
+    </PopoverListField>
   )
 }
 
@@ -439,9 +536,11 @@ export function FrontmatterFieldPicker({
       />
     )
   }
-  return fieldKey === 'shuvix-tools' ? (
-    <ToolsField value={value} onChange={onChange} readOnly={readOnly} />
-  ) : (
-    <TextListField value={value} onChange={onChange} readOnly={readOnly} />
-  )
+  if (fieldKey === 'shuvix-tools') {
+    return <ToolsField value={value} onChange={onChange} readOnly={readOnly} />
+  }
+  if (fieldKey === AGENT_PROMPT_BLOCKS_KEY) {
+    return <PromptBlocksField value={value} onChange={onChange} readOnly={readOnly} />
+  }
+  return <TextListField value={value} onChange={onChange} readOnly={readOnly} />
 }

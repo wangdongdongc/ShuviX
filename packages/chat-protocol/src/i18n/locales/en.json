@@ -1371,6 +1371,14 @@
     "subAgentAdd": "Add custom agent",
     "subAgentCreateRequired": "Name, description and system prompt are required",
     "subAgentPromptBlocks": "Prompt blocks",
+    "promptBlock": {
+      "document": "The document a notebook session has open, and what kind of ShuviX file it is",
+      "drawing": "How to draw figures (needs the drawing skill)",
+      "environment": "Working directory, platform, date, language and version",
+      "agents_md": "AGENTS.md in the working directory",
+      "claude_md": "CLAUDE.md in the working directory",
+      "project_prompt": "The prompt written in the project's settings"
+    },
     "subAgentUserWords": "Receives the user's words",
     "subAgentDescription": "Description",
     "subAgentBasicGroup": "Basic info",

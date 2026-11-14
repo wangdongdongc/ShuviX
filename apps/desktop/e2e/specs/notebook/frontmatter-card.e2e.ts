@@ -255,12 +255,8 @@ describe('frontmatter 属性卡', () => {
       )
     // 工具触发器显示当前白名单（原样逗号串）
     expect(await slotText('shuvix-tools')).toContain('bash, read, write')
-    // 提示词块清单是普通输入框（值在 input.value 上，不是触发器文案）
-    expect(
-      await app.main.eval<string>(
-        `document.querySelector('.cm-shuvix-fmcard-row[data-key="shuvix-prompt-blocks"] input')?.value ?? ''`
-      )
-    ).toBe('environment, agents_md')
+    // 提示词块清单与工具同一种触发器（点开是固定词表的多选弹层）：触发器上是当前清单
+    expect(await slotText('shuvix-prompt-blocks')).toBe('environment, agents_md')
 
     // 布尔行只有用户原话（缺省 unset —— prompt-blocks 是清单不是开关；项目感知那个开关 2026-11-13 并进了
     // 提示词块清单的 project_prompt 一项，会话感知更早退役；用户原话是 2026-11-07 加的 shuvix-user-words）；夹具里写着 true 的内置自述标记 shuvix-builtin
