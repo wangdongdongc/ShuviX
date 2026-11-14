@@ -10,8 +10,10 @@
  *（AT-20 用它），所以凡是要断「没有知识行 / 候选恰为某几条」的用例都放在 AtProjB —— 那个项目的
  * 项目库是空的（目录都没建），隐式启用也不产生任何候选。
  *
- * 内置说明书是缺省的（2026-11-02）：谁都没设过的会话，它的条目也进候选。这里的用例要数的是种下去的文件行与条目，
- * 所以「不勾任何库」一律写成明确的 `[]`（说明书也跟着没有），不留给缺省。
+ * 内置说明书（`shuvix`）在每个会话里都隐式启用（2026-11-14，不再是可去掉的缺省）：库序 项目 → bot → 勾选 → 说明书，
+ * IPC 候选里它的条目恒在最后，明确的 `[]` 也去不掉它。所以「没有知识段 / 候选恰为某几条」改断「除说明书外」。
+ * 空 query（裸 @）的知识行照宿主给的库次序取前 5（searchKnowledgeEntries），说明书垫底 —— 会话有别的库时它们在前；
+ * 要看某一库的行的用例照旧打一个只有那一库命中的 query（说明书的标题与描述里没有「刷新」「配置」）。
  *
  * 种子约定（seedKnowledgeBase 的说明同样适用）：知识库条目必须**在会话于 UI 里激活之前**
  * 铺好 —— 渲染端 provider 按 sessionId 缓存候选表。AT-14 / AT-15 是「会话激活后改启用库
@@ -74,6 +76,10 @@ const LOCALES: Record<string, FilesMenuLocale> = { en, ja, zh }
 const K_TOKEN = 'knowledge:knowledge/kb-a/notes/token-refresh.md'
 const K_CONFIG_A = 'knowledge:knowledge/kb-a/notes/config-center.md'
 const K_CONFIG_B = 'knowledge:knowledge/kb-b/guides/config-center.md'
+/** 内置说明书条目的行锚点前缀（它的 bundle id 是 `builtin/shuvix`） */
+const K_BUILTIN_PREFIX = 'knowledge:builtin/shuvix/'
+const isKnowledgeRow = (r: AtSuggestionRow): boolean => r.key.startsWith('knowledge:')
+const isBuiltinRow = (r: AtSuggestionRow): boolean => r.key.startsWith(K_BUILTIN_PREFIX)
 /** 发送展开后的知识条目指针（buildAtToken 的逐字契约） */
 const POINTER_TOKEN = '[knowledge entry: base kb-a, path /notes/token-refresh.md — Token 刷新]'
 const POINTER_CONFIG_A = '[knowledge entry: base kb-a, path /notes/config-center.md — 配置中心]'
@@ -157,6 +163,10 @@ const openAndType = async (title: string, text: string): Promise<void> => {
   await chat.type(text)
 }
 
+/** 等弹层出现任意一条知识行 */
+const waitKnowledgeRow = (what = 'popover knowledge row'): Promise<AtSuggestionRow> =>
+  until(async () => (await popover.rows()).find(isKnowledgeRow) ?? null, what)
+
 /** 等弹层出现某行并回行快照 */
 const waitRow = (key: string, what = `popover row ${key}`): Promise<AtSuggestionRow> =>
   until(async () => (await popover.rows()).find((r) => r.key === key) ?? null, what)
@@ -234,7 +244,7 @@ beforeAll(async () => {
   seedProjectKnowledgeBase(app, projectId, [entries('notes/current-proj.md', '项目手册')])
 
   // AtProj 的项目库有一条条目（AT-20），它的会话候选里恒多出那一行（项目库隐式启用）；
-  // 断「没有知识行 / 候选恰为某几条」的用例（AT-2/3/5/6/14/15）因此放 AtProjB —— 那里项目库是空的。
+  // 断「除说明书外没有知识行 / 候选恰为某几条」的用例（AT-2/3/5/6/14/15）因此放 AtProjB —— 那里项目库是空的。
   // AtProj 14 条（含切走对照）、AtProjB 14 条，都远低于分组上限
   const inP1 = (title: string, kb?: string[]): Promise<string> =>
     createSession(title, kb, project.id)
@@ -290,35 +300,41 @@ afterAll(async () => {
 describe('A · 合并弹层（裸 @）', () => {
   it('AT-1 裸 @ 三段分区 + 段头（2026-10-20 起多了「会话」：除这一条以外、侧栏看得见的会话）', async () => {
     await openAndType('AT-1', '@')
-    await waitRow(K_TOKEN)
+    await waitKnowledgeRow()
+    await waitRow('README.md')
     const rows = await popover.rows()
-    // 文件行、知识行、会话行同时在屏（这个实例里种了一批会话，AT-1 自己不在其中）
-    expect(rows.some((r) => r.key === 'README.md')).toBe(true)
-    expect(rows.some((r) => r.key === K_TOKEN)).toBe(true)
+    // 文件行、知识行、会话行同时在屏（这个实例里种了一批会话，AT-1 自己不在其中）；
+    // 裸 @ 的知识行照库次序，说明书垫底（见文件头）；kb-a 的行由打 query 的用例看
+    expect(rows.some(isKnowledgeRow)).toBe(true)
     expect(rows.some((r) => r.key.startsWith('session:'))).toBe(true)
     expect(rows.some((r) => r.key === `session:${sids['AT-1']}`)).toBe(false)
     // 三个段头（文件、知识库、会话 = provider 注册序）
     expect(await popover.sections()).toEqual(['file', 'knowledge', 'session'])
   })
 
-  it('AT-2 未启用任何库（项目库隐式在、但是空的）→ 没有知识段（文件段 + 会话段）；IPC 候选为空', async () => {
+  it('AT-2 未启用任何库（项目库隐式在、但是空的）→ 知识段只有说明书的行；IPC 候选只有说明书', async () => {
     await openAndType('AT-2', '@')
     await waitRow('README.md')
+    await waitKnowledgeRow()
     const rows = await popover.rows()
-    expect(rows.length).toBeGreaterThan(0)
-    expect(rows.every((r) => !r.key.startsWith('knowledge:'))).toBe(true)
-    expect(await popover.sections()).toEqual(['file', 'session'])
-    expect(await listKnowledgeEntries(sids['AT-2'])).toEqual([])
+    expect(rows.filter(isKnowledgeRow).every(isBuiltinRow)).toBe(true)
+    expect(await popover.sections()).toEqual(['file', 'knowledge', 'session'])
+    const ipc = await listKnowledgeEntries(sids['AT-2'])
+    expect(ipc.length).toBeGreaterThan(0)
+    expect(ipc.every((e) => e.baseName === 'shuvix')).toBe(true)
   })
 
-  it('AT-3 启用空库 → 知识段不出现（观感同未启用）', async () => {
+  it('AT-3 启用空库 → 不多出任何知识行（观感同未启用：只有说明书的行）', async () => {
     await openAndType('AT-3', '@')
     await waitRow('README.md')
-    // 空库条目是 0 条：断言跨过一个落定窗口后知识行仍不出现
+    await waitKnowledgeRow()
+    // 空库条目是 0 条：断言跨过一个落定窗口后仍只有说明书的知识行
     await sleep(400)
     const rows = await popover.rows()
-    expect(rows.every((r) => !r.key.startsWith('knowledge:'))).toBe(true)
-    expect(await popover.sections()).toEqual(['file', 'session'])
+    expect(rows.filter(isKnowledgeRow).every(isBuiltinRow)).toBe(true)
+    expect(await popover.sections()).toEqual(['file', 'knowledge', 'session'])
+    const ipc = await listKnowledgeEntries(sids['AT-3'])
+    expect(ipc.every((e) => e.baseName === 'shuvix')).toBe(true)
   })
 
   it('AT-4 每源 ≤5（两源各种 7 条同前缀）', async () => {
@@ -340,10 +356,16 @@ describe('A · 合并弹层（裸 @）', () => {
 
   it('AT-5 方向键跨段扁平循环 + 回卷 + Enter 选中', async () => {
     await openAndType('AT-5', '@')
-    await waitRow(K_TOKEN)
-    const total = (await popover.rows()).length
-    // 5 文件 + 2 知识 + 5 会话 = 12 行；初始选中第 0 行
-    expect(total).toBe(12)
+    await waitKnowledgeRow()
+    await waitRow('README.md')
+    const initial = await popover.rows()
+    const total = initial.length
+    // 5 文件 + 5 知识（kb-a 2 条 + 说明书，每源截到 5）+ 5 会话 = 15 行；初始选中第 0 行
+    expect(total).toBe(15)
+    expect(initial.filter(isKnowledgeRow)).toHaveLength(5)
+    // 知识段的最后一行：下面 Enter 选它
+    const lastKnowledge = initial.map(isKnowledgeRow).lastIndexOf(true)
+    expect(lastKnowledge).toBe(9)
     await waitSelected(0)
 
     // 扁平序逐行迁移（跨段不需要任何特殊操作）
@@ -357,43 +379,47 @@ describe('A · 合并弹层（裸 @）', () => {
     await chat.pressKey('ArrowUp')
     await waitSelected(total - 1)
 
-    // 往回走到知识段的最后一行（第 6 行 = 知识条目 Token 刷新），Enter 选它：插明文（含尾随空格）并关弹层
-    for (let want = total - 2; want >= 6; want--) {
+    // 往回走到知识段的最后一行（第 9 行），Enter 选它：插明文（含尾随空格）并关弹层
+    for (let want = total - 2; want >= lastKnowledge; want--) {
       await chat.pressKey('ArrowUp')
       await waitSelected(want)
     }
     await chat.pressKey('Enter')
+    const label = initial[lastKnowledge].label
     await until(
-      async () => (await chat.inputValue()) === '@knowledge:Token 刷新 ',
+      async () => (await chat.inputValue()) === `@knowledge:${label} `,
       'mention inserted'
     )
     expect(await popover.open()).toBe(false)
   })
 
   it('AT-6 候选范围 = 启用库（种 kb-a/kb-b 只启用 kb-a）', async () => {
-    // IPC 口径：启用库硬边界 —— 全部条目都来自 kb-a
+    // IPC 口径：启用库硬边界 —— 说明书之外的条目全部来自 kb-a；说明书（每个会话都有）排在最后
     const entries = await listKnowledgeEntries(sids['AT-6'])
-    expect(entries).toHaveLength(2)
-    expect(entries.every((e) => e.baseName === 'kb-a')).toBe(true)
+    const own = entries.filter((e) => e.baseName !== 'shuvix')
+    expect(own).toHaveLength(2)
+    expect(own.every((e) => e.baseName === 'kb-a')).toBe(true)
+    expect(entries.slice(0, 2)).toEqual(own)
+    expect(entries.length).toBeGreaterThan(2)
 
-    // DOM 口径：弹层里没有 kb-b 的行
-    await openAndType('AT-6', '@')
-    await waitRow(K_TOKEN)
+    // DOM 口径：两库都有「配置中心」，弹层里只有 kb-a 的那条，没有 kb-b 的行
+    await openAndType('AT-6', '@knowledge:配置')
+    await waitRow(K_CONFIG_A)
     const rows = await popover.rows()
-    expect(rows.some((r) => r.key.startsWith('knowledge:'))).toBe(true)
+    expect(rows.some((r) => r.key === K_CONFIG_B)).toBe(false)
     expect(rows.every((r) => !r.key.includes('kb-b'))).toBe(true)
   })
 
   it('AT-7 Esc 关闭弹层；切会话收起弹层', async () => {
     await openAndType('AT-7', '@')
-    await waitRow(K_TOKEN)
+    await waitKnowledgeRow()
     await chat.pressKey('Escape')
     await until(async () => !(await popover.open()), 'popover closed by Esc')
 
     // 文本已是 '@'：React 对同值 input 事件去重，先清空再敲才能重新触发 onChange
     await chat.type('')
     await chat.type('@')
-    await waitRow(K_TOKEN)
+    await waitKnowledgeRow()
     expect(await sidebar.openSession('AT-scratch')).toBe(true)
     await until(async () => !(await popover.open()), 'popover collapsed on session switch')
   })
@@ -518,21 +544,27 @@ describe('C · 消歧与混排', () => {
 
 describe('D · 启用配置时序', () => {
   it('AT-14 会话已激活且拉过候选（无库）→ mid-session 启用 kb-a → 知识行出现', async () => {
+    // 先裸 @ 让 knowledge provider 拉过这个会话的候选表（出现说明书的行即拉过）
     await openAndType('AT-14', '@')
-    await waitRow('README.md')
-    // 此刻无库：无知识行，IPC 候选为空（候选表已按 sessionId 缓存）
-    expect((await popover.rows()).every((r) => !r.key.startsWith('knowledge:'))).toBe(true)
-    expect(await listKnowledgeEntries(sids['AT-14'])).toEqual([])
+    await waitKnowledgeRow()
+    // 只有 kb-a 的「Token 刷新」命中「刷新」（文件、会话、说明书都不命中）：此刻无库 → 弹层不开
+    await chat.type('@刷新')
+    await sleep(400)
+    expect(await popover.open()).toBe(false)
+    // IPC 候选只有说明书（候选表已按 sessionId 缓存）
+    expect((await listKnowledgeEntries(sids['AT-14'])).every((e) => e.baseName === 'shuvix')).toBe(
+      true
+    )
 
     await app.main.eval(
       `window.api.session.updateKnowledgeBases(${JSON.stringify({ id: sids['AT-14'], knowledgeBases: ['kb-a'] })})`
     )
-    // 弹层不必重开：会话配置变更广播驱动 knowledge provider 重拉（D-1 修复前这里恒超时）
+    // 不必重打：会话配置变更广播驱动 knowledge provider 重拉（D-1 修复前这里恒超时）
     await waitRow(K_TOKEN, 'knowledge rows appear after mid-session enable')
   })
 
-  it('AT-15 反向：已出知识行 → 设回 [] → 知识行消失', async () => {
-    await openAndType('AT-15', '@')
+  it('AT-15 反向：已出 kb-a 的知识行 → 设回 [] → 那一行消失（弹层随之收起：别的源都不命中）', async () => {
+    await openAndType('AT-15', '@刷新')
     await waitRow(K_TOKEN)
 
     await app.main.eval(
@@ -540,8 +572,9 @@ describe('D · 启用配置时序', () => {
     )
     await until(async () => {
       const rows = await popover.rows()
-      return rows.length > 0 && rows.every((r) => !r.key.startsWith('knowledge:')) ? true : null
-    }, 'knowledge rows gone after disable')
+      return rows.every((r) => !r.key.includes('kb-a')) ? true : null
+    }, 'kb-a rows gone after disable')
+    expect(await popover.open()).toBe(false)
   })
 
   it('AT-16 knowledge:createEntry 广播 knowledge.changed → 防抖后新条目出现在候选', async () => {
@@ -619,9 +652,11 @@ describe('E · 发送展开与持久化', () => {
 
   it('AT-20 项目库（隐式启用，没勾任何库）：行 detail = 项目当前名；payload base project；IPC baseName project', async () => {
     const ipcEntries = await listKnowledgeEntries(sids['AT-20'])
-    expect(ipcEntries).toHaveLength(1)
+    // 说明书之外只有项目库那一条，且项目库打头、说明书在后
+    expect(ipcEntries.filter((e) => e.baseName !== 'shuvix')).toHaveLength(1)
     expect(ipcEntries[0].baseName).toBe('project')
     expect(ipcEntries[0].path).toBe(`projects/${projectId}/notes/current-proj.md`)
+    expect(ipcEntries.slice(1).every((e) => e.baseName === 'shuvix')).toBe(true)
 
     provider.reset()
     await events.clear()

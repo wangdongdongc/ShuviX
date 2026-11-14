@@ -5,7 +5,7 @@
  * 真的 isolated 实例，种 4 个最小 widget（A 在账目里一分钟前打开过，其余没打开过）；归档经 IPC 摆好，恢复 / 删除在设置窗口里点。
  * 面板顺序看主窗右侧面板的卡片。三语取串照抄 archived-projects.e2e.ts：隔离实例跟系统语言走，断的是「是哪一句」。
  *
- *   AW-1 已归档页的子 tab 是「项目」「小组件」「Bots」；小组件 tab：没有归档的 → widgets.noArchived；归档三个 → 按归档时间倒序列出；
+ *   AW-1 已归档页的子 tab 是「项目」「小组件」「Bots」「跟踪项」；小组件 tab：没有归档的 → widgets.noArchived；归档三个 → 按归档时间倒序列出；
  *        每行行首是归档图标，没有 v0.2.16 的小组件图标
  *   AW-1b 没有悬停的设备（触屏模拟让 `(hover: none)` 成立）上行尾的恢复 / 删除一直显示；有悬停、鼠标不在行上时透明
  *   AW-2 恢复 → 那一行没了；面板里它排在最前（它打开过，别的没有），不是末尾
@@ -33,6 +33,7 @@ const L = [en, zh, ja]
 const SUB_TAB_PROJECTS = L.map((l) => l.settings.archivedSubTabProjects)
 const SUB_TAB_WIDGETS = L.map((l) => l.settings.archivedSubTabWidgets)
 const SUB_TAB_BOTS = L.map((l) => l.settings.archivedSubTabBots)
+const SUB_TAB_TRACKING = L.map((l) => l.settings.archivedSubTabTracking)
 const NO_ARCHIVED_WIDGETS = L.map((l) => l.widgets.noArchived)
 const NO_ARCHIVED_PROJECTS = L.map((l) => l.settings.projectsNoArchived)
 const RESTORE = L.map((l) => l.widgets.restore)
@@ -113,11 +114,12 @@ afterAll(async () => {
 describe('archived widgets in settings', () => {
   it('AW-1 Projects and Widgets sub tabs; the widgets tab lists archived widgets newest first', async () => {
     const bar = (await archived.tabBar())!
-    // 第三个是 Bots（2026-10-31，归档的 bot 在那里）
-    expect(bar.tabs).toHaveLength(3)
+    // 第三个是 Bots（2026-10-31，归档的 bot 在那里），第四个是跟踪项（2026-11-14）
+    expect(bar.tabs).toHaveLength(4)
     expect(SUB_TAB_PROJECTS).toContain(bar.tabs[0].text)
     expect(SUB_TAB_WIDGETS).toContain(bar.tabs[1].text)
     expect(SUB_TAB_BOTS).toContain(bar.tabs[2].text)
+    expect(SUB_TAB_TRACKING).toContain(bar.tabs[3].text)
 
     await archived.selectSubTab(SUB_TAB_WIDGETS)
     const empty = await archived.waitEmpty()

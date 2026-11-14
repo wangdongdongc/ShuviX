@@ -257,9 +257,15 @@ describe('frozen system prompt: indicator and rebuild', () => {
     // 与第一次请求逐字节相同
     expect(system).toBe(requestSystemText(requestFor('first')!))
 
+    // 跑完小图标还在，三段都还算变了（指令文件 2026-11-13 拆成 agents_md / claude_md 两段）
+    expect((await status()).stale.map((s) => s.key)).toEqual([
+      'agents_md',
+      'claude_md',
+      'project_prompt'
+    ])
     await until(async () => {
       const after = await indicator.indicator()
-      return after && after.stale.length === 2 ? after : null
+      return after && after.stale.length === 3 ? after : null
     }, 'indicator after the run')
     const after = await indicator.openPopover()
     expect(after.rebuildDisabled).toBe(false)

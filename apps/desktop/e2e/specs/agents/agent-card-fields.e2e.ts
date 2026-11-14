@@ -1017,14 +1017,14 @@ describe('E 组 · 宿主差异', () => {
         )
       ).toBe(true)
       expect(await winCount('.cm-shuvix-fmcard-src')).toBe(0)
-      // 布尔行两行：项目感知（项目提示词与项目记忆合成的那一个；会话感知已退役）与用户原话（shuvix-user-words，
-      // 作为子会话收父会话里用户的原话）。内置自述标记 shuvix-builtin 不是开关：夹具没写它，所以这里既没有那一行，
-      // 标题行也没有标签
+      // 布尔行只剩一行：用户原话（shuvix-user-words，作为子会话收父会话里用户的原话）。项目感知开关
+      // （shuvix-project-awareness）2026-11-13 并进了 shuvix-prompt-blocks —— 那一行是上面断过的多选弹层按钮，同样禁用。
+      // 内置自述标记 shuvix-builtin 不是开关：夹具没写它，所以这里既没有那一行，标题行也没有标签
       expect(
         await inWin<boolean[]>(
           `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((t) => t.disabled)`
         )
-      ).toEqual([true, true])
+      ).toEqual([true])
       expect(await winCount('.cm-shuvix-fmcard-tag')).toBe(0)
       // 主窗口里没有冒出第二张卡：预览不再落在右侧面板
       expect(await count('.cm-shuvix-fmcard')).toBe(0)
