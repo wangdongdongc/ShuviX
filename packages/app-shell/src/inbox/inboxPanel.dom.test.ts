@@ -25,6 +25,11 @@
  *   INP-TL1..18  agent 在跑的行订视图、实时画当前请求的列表；新回复的行用摘录那次取回的消息画完成 / 已停止，替掉摘录；
  *                等你回答、只剩后台命令、停着的一家的抬头、跟踪项都不画（也不订视图）
  *
+ * 已归档的跟踪项不在收件箱里（2026-11-14，挪到设置 → 已归档 → 跟踪项）
+ *
+ *   IT-A1..8  只列在跟 / 等待中的；没有归档开关、没有恢复；只剩已归档的就没有这一节（空页）；行菜单没有恢复；
+ *             归档最后一项后是空页但「已归档 · 撤销」还在，撤销写回原状态
+ *
  * `@shuvix/chat-ui` 整份换成替身（同 projectSessionGroupsRunning）；后台任务的口径用 chat-ui 的真函数
  * （taskRunKind / selectBgRunKinds，按相对路径取源码）。selectBgRunKinds 按 tasks 的引用记忆，每个用例写一份新的。
  * 缺省的替身没有 `agent.pendingInputs`（询问表取不到），挂着询问的会话画成普通的一行；用例要卡片时给 `store.api`
@@ -141,6 +146,7 @@ vi.mock('@shuvix/chat-ui', async () => {
 })
 
 import { InboxPanel } from './InboxPanel'
+import { ContextMenuProvider } from '../contextmenu/ContextMenuProvider'
 import { InboxRow } from '../sidebar/InboxRow'
 import { useInboxHoldStore } from './inboxStore'
 import type { InboxTrackingAdapter } from './InboxTracking'
@@ -1453,5 +1459,153 @@ describe('INP-TL the task list under a row', () => {
     const list = listOf('S')
     expect(list).not.toBeNull()
     expect(stepStatuses(list!)).toEqual(['completed', 'in_progress', 'pending'])
+  })
+})
+
+describe('IT-A archived tracked items are not in the inbox', () => {
+  const tItem = (
+    fileName: string,
+    status: TrackingItem['status'],
+    over: Partial<TrackingItem> = {}
+  ): TrackingItem => ({
+    fileName,
+    title: `Track ${fileName}`,
+    updatedAt: 1,
+    path: `/x/${fileName}`,
+    status,
+    latest: `latest ${fileName}`,
+    conclusion: `conclusion ${fileName}`,
+    ...over
+  })
+  // InboxPanel 的参数带缺省值（`= {}`），createElement 的重载认不出它收 props：按它的签名收窄一下
+  const Panel = InboxPanel as (props: { tracking?: InboxTrackingAdapter }) => React.JSX.Element
+
+  function adapterOf(items: TrackingItem[]): InboxTrackingAdapter & {
+    setStatus: ReturnType<typeof vi.fn>
+  } {
+    return {
+      list: async () => items.map((x) => ({ ...x })),
+      open: () => {},
+      openFolder: () => {},
+      revealFile: () => {},
+      remove: async () => {},
+      setStatus: vi.fn(async () => {})
+    }
+  }
+  /** 菜单渲染器替身：记下每次弹出的菜单项，取消（null） */
+  let menus: Array<Array<{ id?: string; type?: string }>> = []
+  const render = (items: Array<{ id?: string; type?: string }>): Promise<string | null> => {
+    menus.push(items)
+    return Promise.resolve(null)
+  }
+  // ContextMenuProvider 的 children 是必填 prop：createElement 第三个参数给的 children 它的重载认不出来，按可选收窄一下
+  const MenuHost = ContextMenuProvider as (props: {
+    render: typeof render
+    children?: React.ReactNode
+  }) => React.JSX.Element
+  async function mountWith(tracking?: InboxTrackingAdapter): Promise<void> {
+    menus = []
+    act(() => root.render(createElement(MenuHost, { render }, createElement(Panel, { tracking }))))
+    await flush()
+  }
+  const trackingRows = (): string[] =>
+    [...container.querySelectorAll('[data-tracking-item]')].map(
+      (el) => el.getAttribute('data-tracking-item') ?? ''
+    )
+
+  it('IT-A1 active + waiting + archived → only the active and waiting rows', async () => {
+    await mountWith(
+      adapterOf([tItem('a.md', 'active'), tItem('w.md', 'waiting'), tItem('z.md', 'archived')])
+    )
+    expect(trackingRows().sort()).toEqual(['a.md', 'w.md'])
+    expect(container.querySelector('[data-tracking-status="archived"]')).toBeNull()
+    expect(container.querySelector('[data-inbox-section="tracking"]')).not.toBeNull()
+  })
+
+  it('IT-A2 no archived toggle and no restore button', async () => {
+    await mountWith(
+      adapterOf([tItem('a.md', 'active'), tItem('z.md', 'archived'), tItem('y.md', 'archived')])
+    )
+    expect(container.querySelector('[data-tracking-archived-toggle]')).toBeNull()
+    expect(container.querySelector('[data-tracking-restore]')).toBeNull()
+    expect(container.textContent).not.toContain('Track z.md')
+  })
+
+  it('IT-A3 every item archived, no sessions → no tracking section, the empty state shows', async () => {
+    await mountWith(adapterOf([tItem('z.md', 'archived'), tItem('y.md', 'archived')]))
+    expect(container.querySelector('[data-inbox-section="tracking"]')).toBeNull()
+    expect(container.querySelector('[data-inbox-empty]')).not.toBeNull()
+  })
+
+  it('IT-A4 one archived item + one unread session → the session block shows, the tracking section does not', async () => {
+    store.sessions = [session('U')]
+    store.unreadState = { unread: { U: unreadEntry() } }
+    await mountWith(adapterOf([tItem('z.md', 'archived')]))
+    expect(container.querySelector('[data-inbox-unread="U"]')).not.toBeNull()
+    expect(container.querySelector('[data-inbox-section="tracking"]')).toBeNull()
+    expect(container.querySelector('[data-inbox-empty]')).toBeNull()
+  })
+
+  it('IT-A5 the row menu has no restore', async () => {
+    await mountWith(adapterOf([tItem('a.md', 'active'), tItem('w.md', 'waiting')]))
+    const ids = (): string[] => menus[menus.length - 1].map((m) => m.id ?? m.type ?? '')
+    const rowOf = (file: string): HTMLElement =>
+      container.querySelector<HTMLElement>(`[data-tracking-item="${file}"]`)!
+    await act(async () => {
+      rowOf('a.md').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    })
+    expect(ids()).toEqual([
+      'archive',
+      'waiting',
+      'separator',
+      'reveal',
+      'copy-path',
+      'separator',
+      'delete'
+    ])
+    await act(async () => {
+      rowOf('w.md').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    })
+    expect(ids()).toEqual([
+      'archive',
+      'active',
+      'separator',
+      'reveal',
+      'copy-path',
+      'separator',
+      'delete'
+    ])
+    expect(menus.flat().some((m) => m.id === 'restore')).toBe(false)
+  })
+
+  it('IT-A6 / IT-A7 archiving the only live item → empty page with the toast; Undo puts it back', async () => {
+    const adapter = adapterOf([tItem('w.md', 'waiting'), tItem('z.md', 'archived')])
+    await mountWith(adapter)
+    const circle = container.querySelector<HTMLButtonElement>(
+      '[data-tracking-item="w.md"] [data-tracking-archive]'
+    )!
+    await act(async () => circle.click())
+    await flush()
+    expect(adapter.setStatus).toHaveBeenCalledWith('w.md', 'archived')
+    expect(container.querySelector('[data-tracking-item="w.md"]')).toBeNull()
+    expect(container.querySelector('[data-inbox-empty]')).not.toBeNull()
+    const toast = container.querySelector('[data-inbox-archived]')
+    expect(toast).not.toBeNull()
+    expect(toast!.textContent).toContain('Track w.md')
+
+    // IT-A7 撤销：写回原来的状态（等待中仍是等待中），行回来
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-inbox-undo]')!.click())
+    await flush()
+    expect(adapter.setStatus).toHaveBeenLastCalledWith('w.md', 'waiting')
+    const back = container.querySelector('[data-tracking-item="w.md"]')
+    expect(back).not.toBeNull()
+    expect(back!.getAttribute('data-tracking-status')).toBe('waiting')
+    expect(container.querySelector('[data-inbox-empty]')).toBeNull()
+  })
+
+  it('IT-A8 [WB] no adapter → no tracking section, the empty state shows', async () => {
+    await mountWith(undefined)
+    expect(container.querySelector('[data-inbox-section="tracking"]')).toBeNull()
+    expect(container.querySelector('[data-inbox-empty]')).not.toBeNull()
   })
 })

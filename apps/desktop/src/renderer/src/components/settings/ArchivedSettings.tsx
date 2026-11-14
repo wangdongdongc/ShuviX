@@ -1,13 +1,15 @@
 /**
  * 已归档设置页（桌面）—— 薄封装共享 <ArchivedSettings>（已归档项目列表 + 恢复），
  * 注入桌面专属删除：弹 ConfirmDialog 确认，确认后级联删除并在必要时重指活跃会话；
- * 再加两类只有桌面才有的归档对象：小组件（ArchivedWidgets）与 bot（ArchivedBots —— 删除连同它的会话）。
+ * 再加三类只有桌面才有的归档对象：小组件（ArchivedWidgets）、bot（ArchivedBots —— 删除连同它的会话）与跟踪项
+ * （ArchivedTracking —— 收件箱只列还在跟的，归档了的在这里恢复或删除）。
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Users, Wrench } from 'lucide-react'
+import { ListTodo, Users, Wrench } from 'lucide-react'
 import { ArchivedWidgets } from './ArchivedWidgets'
 import { ArchivedBots } from './ArchivedBots'
+import { ArchivedTracking } from './ArchivedTracking'
 import { ArchivedSettings as SharedArchivedSettings } from '@shuvix/app-shell'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -45,6 +47,12 @@ export function ArchivedSettings(): React.JSX.Element {
             label: t('settings.archivedSubTabBots'),
             Icon: Users,
             content: <ArchivedBots />
+          },
+          {
+            key: 'tracking',
+            label: t('settings.archivedSubTabTracking'),
+            Icon: ListTodo,
+            content: <ArchivedTracking />
           }
         ]}
       />

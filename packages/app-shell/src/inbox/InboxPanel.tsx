@@ -211,8 +211,9 @@ export function InboxPanel({ tracking }: InboxPanelProps = {}): React.JSX.Elemen
   }
 
   const total = waiting.length + unread.length + running.length
-  // 页面有没有东西可摆：收件箱的三节，或者跟踪项（连已归档的也算 —— 归档那一格是能点开的）
-  const hasContent = total > 0 || (!!tracking && (trackingItems?.length ?? 0) > 0)
+  // 页面有没有东西可摆：收件箱的三节，或者还在跟的跟踪项（已归档的在设置 → 已归档里，不算）
+  const hasContent =
+    total > 0 || (!!tracking && (trackingItems ?? []).some((item) => item.status !== 'archived'))
 
   const renderUnreadRow = (
     item: UnreadInboxItem,

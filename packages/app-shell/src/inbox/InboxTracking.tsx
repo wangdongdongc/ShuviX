@@ -4,9 +4,9 @@
  *
  * - 一行（M1：单行，状态靠图形）：圆圈（点一下归档，底部出「已归档 · 撤销」；在等别人的项是琥珀虚线圈）、标题、
  *   最新一条进展（没有就是结论的第一句）；日期（文件最后修改）只在悬停时出现。点行 = 打开那份 md 的笔记本。
- * - `active` 与 `waiting` 混排，按修改时间倒序；已归档的折在这一节末尾的归档图标 + 数字后面，展开后每行是结论，
- *   悬停出「恢复」。
- * - 行菜单（右键）：归档 / 恢复、标为等待中 / 不再等待、在文件夹中显示、复制路径、删除（先确认）。
+ * - `active` 与 `waiting` 混排，按修改时间倒序。**已归档的不在收件箱里**（2026-11-14 用户：挪到设置里）—— 设置 →
+ *   已归档 → 跟踪项（桌面 `ArchivedTracking.tsx`）恢复或删除；收件箱只管还在跟的。
+ * - 行菜单（右键）：归档、标为等待中 / 不再等待、在文件夹中显示、复制路径、删除（先确认）。
  * - 状态写在文件里（frontmatter 的 `status`），这里只调宿主的 `setStatus`；乐观地先挪行，`tracking.changed` 重扫对齐。
  *
  * 宿主不给 adapter（Chrome 侧栏、手机）就没有这一节。
@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Archive, Check } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { copyToClipboard, useAppEvent } from '@shuvix/chat-ui'
 import type { TrackingItem, TrackingStatus } from '@shuvix/chat-protocol/trackingNotes'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -23,16 +23,13 @@ import { RowMenuButton } from '../sidebar/RowMenuButton'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { unreadTimeLabel } from './inboxItems'
-import { GlyphCell, InboxLine } from './InboxLine'
+import { InboxLine } from './InboxLine'
 
 /** 宿主注入的跟踪项能力：侧栏那一组的全部，加上改状态 */
 export interface InboxTrackingAdapter extends TrackingGroupAdapter {
   /** 改一项的状态（只改 frontmatter 的 `status` 一行，宿主提交并广播 `tracking.changed`） */
   setStatus: (fileName: string, status: TrackingStatus) => Promise<unknown>
 }
-
-/** 已归档展开后一次多显示几项 */
-const ARCHIVED_PAGE = 20
 
 /**
  * 跟踪项清单：打开即扫，之后窗口聚焦与 `tracking.changed` 重扫（stale-guard 防乱序回包）。`patch` 让界面先挪行
@@ -95,13 +92,10 @@ export function InboxTrackingSection({
 }: InboxTrackingSectionProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
-  const [showArchived, setShowArchived] = useState(false)
-  const [archivedShown, setArchivedShown] = useState(ARCHIVED_PAGE)
   const [confirmingDelete, setConfirmingDelete] = useState<TrackingItem | null>(null)
 
   const live = items.filter((x) => x.status !== 'archived')
-  const archived = items.filter((x) => x.status === 'archived')
-  if (live.length === 0 && archived.length === 0) return null
+  if (live.length === 0) return null
 
   const setStatus = (item: TrackingItem, status: TrackingStatus): void => {
     if (item.status === status) return
@@ -112,15 +106,12 @@ export function InboxTrackingSection({
   }
 
   const openRowMenu = (item: TrackingItem, e: React.MouseEvent): void => {
-    const menu: ContextMenuItem[] =
-      item.status === 'archived'
-        ? [{ id: 'restore', label: t('inbox.trackingRestore') }]
-        : [
-            { id: 'archive', label: t('inbox.trackingArchive') },
-            item.status === 'waiting'
-              ? { id: 'active', label: t('inbox.trackingMarkActive') }
-              : { id: 'waiting', label: t('inbox.trackingMarkWaiting') }
-          ]
+    const menu: ContextMenuItem[] = [
+      { id: 'archive', label: t('inbox.trackingArchive') },
+      item.status === 'waiting'
+        ? { id: 'active', label: t('inbox.trackingMarkActive') }
+        : { id: 'waiting', label: t('inbox.trackingMarkWaiting') }
+    ]
     menu.push({ type: 'separator' })
     if (adapter.revealFile) menu.push({ id: 'reveal', label: t('sidebar.trackingRevealFile') })
     menu.push({ id: 'copy-path', label: t('sidebar.trackingCopyPath') })
@@ -130,7 +121,7 @@ export function InboxTrackingSection({
     }
     void showContextMenu(e, menu, (action) => {
       if (action === 'archive') setStatus(item, 'archived')
-      if (action === 'restore' || action === 'active') setStatus(item, 'active')
+      if (action === 'active') setStatus(item, 'active')
       if (action === 'waiting') setStatus(item, 'waiting')
       if (action === 'reveal') adapter.revealFile?.(item.path)
       if (action === 'copy-path') copyToClipboard(item.path)
@@ -211,75 +202,10 @@ export function InboxTrackingSection({
     />
   )
 
-  const archivedRow = (item: TrackingItem): React.JSX.Element => (
-    <InboxLine
-      key={item.fileName}
-      attrs={{ 'data-tracking-item': item.fileName, 'data-tracking-status': 'archived' }}
-      onContextMenu={(e) => openRowMenu(item, e)}
-      leading={
-        <GlyphCell>
-          <Archive size={14} aria-hidden="true" className="text-text-tertiary" />
-        </GlyphCell>
-      }
-      title={<span data-tracking-title="">{item.title}</span>}
-      titleClassName="text-text-secondary"
-      preview={item.conclusion ? <span data-tracking-latest="">{item.conclusion}</span> : null}
-      hoverMeta={
-        <button
-          type="button"
-          data-tracking-restore=""
-          onClick={() => setStatus(item, 'active')}
-          className="rounded-md border border-border-primary bg-bg-primary px-2 py-0.5 text-[12px] text-text-primary transition-colors hover:border-accent/60 hover:text-accent"
-        >
-          {t('inbox.trackingRestore')}
-        </button>
-      }
-      openTitle={item.fileName}
-      openAttrs={{ 'data-tracking-open': '' }}
-      onOpen={() => void adapter.open(item.fileName, item.title)}
-    />
-  )
-
   return (
     <section data-inbox-section="tracking" aria-label={t('inbox.trackingSection')}>
       {heading}
       <div className="flex flex-col">{live.map(liveRow)}</div>
-      {archived.length > 0 && (
-        <div className="flex flex-col">
-          <button
-            type="button"
-            data-tracking-archived-toggle=""
-            aria-expanded={showArchived}
-            aria-label={t('inbox.trackingArchivedCount', { count: archived.length })}
-            title={t('inbox.trackingArchivedCount', { count: archived.length })}
-            onClick={() => setShowArchived((v) => !v)}
-            className={`flex items-center gap-2.5 self-start rounded-md py-1 pl-2 pr-2.5 text-[12px] tabular-nums transition-colors hover:bg-bg-hover/60 hover:text-text-primary ${
-              showArchived ? 'text-text-primary' : 'text-text-tertiary'
-            }`}
-          >
-            <GlyphCell>
-              <Archive size={13} aria-hidden="true" />
-            </GlyphCell>
-            {archived.length}
-          </button>
-          {showArchived && (
-            <div className="flex flex-col">
-              {archived.slice(0, archivedShown).map(archivedRow)}
-              {archived.length > archivedShown && (
-                <button
-                  type="button"
-                  onClick={() => setArchivedShown((n) => n + ARCHIVED_PAGE)}
-                  className="self-start rounded-md py-1.5 pl-9 pr-2 text-[12px] text-text-tertiary transition-colors hover:text-text-primary"
-                >
-                  {t('inbox.trackingShowMore', {
-                    count: Math.min(ARCHIVED_PAGE, archived.length - archivedShown)
-                  })}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
       {confirmingDelete && adapter.remove && (
         <ConfirmDialog
           title={t('sidebar.trackingConfirmDeleteTitle')}

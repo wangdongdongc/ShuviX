@@ -8391,6 +8391,16 @@ export interface ArchivedSettingsPane {
   archivedBots(): Promise<Array<{ fileName: string; displayName: string; detail: string }>>
   /** 点某个归档 bot 行上的恢复 / 删除（`data-archived-bot-restore` / `-delete`）；行或按钮找不到抛 */
   clickArchivedBot(fileName: string, action: 'restore' | 'delete'): Promise<void>
+  /**
+   * 「跟踪项」子 tab（ArchivedTracking，`[data-archived-tracking]`，2026-11-14 起已归档的跟踪项在这里而不在收件箱）里的行
+   * （`data-archived-tracking-item=<fileName>`，DOM 序）：标题，与第二行整段（「结论 · 文件名」，没有结论只有文件名）
+   */
+  archivedTracking(): Promise<Array<{ fileName: string; title: string; detail: string }>>
+  /**
+   * 点某个已归档跟踪项行上的恢复 / 删除（`data-archived-tracking-restore` / `-delete`；按钮悬停才显示，点它不用悬停）；
+   * 删除随后弹确认框（`confirmPane(settings)`）。行或按钮找不到抛
+   */
+  trackingAction(fileName: string, action: 'restore' | 'delete'): Promise<void>
 }
 
 /** 「已归档」设置页（ArchivedSettings；openSettings('archived') 后调用） */
@@ -8533,6 +8543,29 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
         return true
       })()`)
       if (!ok) throw new Error(`archived bot "${fileName}" ${action} button not found`)
+      await sleep(200)
+    },
+    archivedTracking: () =>
+      settings.eval<Array<{ fileName: string; title: string; detail: string }>>(
+        `[...((${CONTENT})?.querySelectorAll('[data-archived-tracking-item]') ?? [])].map((r) => {
+          const lines = [...(r.querySelector('.truncate')?.parentElement?.children ?? [])]
+          return {
+            fileName: r.getAttribute('data-archived-tracking-item') ?? '',
+            title: (lines[0]?.textContent ?? '').trim(),
+            detail: (lines[1]?.textContent ?? '').trim()
+          }
+        })`
+      ),
+    trackingAction: async (fileName, action) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const row = [...((${CONTENT})?.querySelectorAll('[data-archived-tracking-item]') ?? [])].find(
+          (r) => r.getAttribute('data-archived-tracking-item') === ${JSON.stringify(fileName)})
+        const btn = row?.querySelector('[data-archived-tracking-${action}]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`archived tracking item "${fileName}" ${action} button not found`)
       await sleep(200)
     },
     archivedWidgetRow: (id) =>
@@ -15208,9 +15241,9 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
 // 锚点：侧栏「资料库」里的收件箱一行 `[data-inbox-row]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱面板
 // `[data-inbox-panel]`，这一节 `[data-inbox-section="tracking"]`；行 `[data-tracking-item=<fileName>]`（`data-tracking-status`），
 // 行里 `[data-tracking-archive]` 圆圈、`[data-tracking-open]` 标题区（点它 = 中间打开那份文件的**笔记本会话**，收件箱不动）、
-// `[data-tracking-title]` / `[data-tracking-latest]`（已归档的行是结论）、`[data-tracking-waiting]`（在等别人：圆圈上的标记）、
-// `[data-tracking-restore]`（悬停才看得见，点它不用悬停）；已归档那一格（归档图标 + 数字）是 `[data-tracking-archived-toggle]`；归档后底部 `[data-inbox-archived]` 带
-// `[data-inbox-undo]`。这一节在收件箱打开时扫一次，之后窗口聚焦 / 节头菜单「刷新」/ `tracking.changed` 重扫 ——
+// `[data-tracking-title]` / `[data-tracking-latest]`、`[data-tracking-waiting]`（在等别人：圆圈上的标记）；归档后底部
+// `[data-inbox-archived]` 带 `[data-inbox-undo]`。**已归档的不在收件箱里**（2026-11-14）：只列 active / waiting，没有归档开关与恢复 ——
+// 恢复 / 删除在设置 → 已归档 → 跟踪项（`archivedSettingsPane` 的 `archivedTracking` / `trackingAction`）。这一节在收件箱打开时扫一次，之后窗口聚焦 / 节头菜单「刷新」/ `tracking.changed` 重扫 ——
 // 磁盘外写入不广播，种完文件要 refresh（或重开收件箱）。行菜单只有右键一个入口（没有 ⋮）。
 //
 // ⚠️ 节头菜单的 `open-folder`、行菜单的 `reveal` **只许做存在性断言，绝不点**：它们开的是 OS 文件管理器，e2e 关不掉；
@@ -15220,9 +15253,9 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
 export interface InboxTrackingRow {
   fileName: string
   title: string
-  /** active / waiting / archived */
+  /** active / waiting（已归档的不在收件箱里） */
   status: string
-  /** 那一句：最新一条进展（已归档的行是结论）；没有为 '' */
+  /** 那一句：最新一条进展；没有为 '' */
   latest: string
   /** 圆圈是「等待中」的样子（琥珀虚线） */
   waitingTag: boolean
@@ -15239,18 +15272,17 @@ export interface InboxTrackingPane {
   sidebarGroupPresent(): Promise<boolean>
   /** 这一节在不在 */
   present(): Promise<boolean>
-  /** 这一节里的行（DOM 序；已归档的只在展开后才有） */
+  /** 这一节里的行（DOM 序；只有 active / waiting） */
   rows(): Promise<InboxTrackingRow[]>
-  /** 已归档那一格的文字（只有数字）；没有已归档的为 null */
-  archivedToggle(): Promise<string | null>
-  /** 展开「已归档 N」 */
-  expandArchived(): Promise<void>
-  /** 点一行的标题区（打开它的笔记本），等中间的笔记本里出现这一行的标题 */
-  openRow(fileName: string): Promise<void>
+  /** 收件箱里还有没有旧的已归档控件（归档开关 `[data-tracking-archived-toggle]` / 恢复 `[data-tracking-restore]`）—— 2026-11-14 起不该有 */
+  hasArchivedControls(): Promise<boolean>
+  /**
+   * 点一行的标题区（打开它的笔记本），等中间的笔记本里出现 `expectText`（缺省是这一行的标题）。没有一级标题的文件
+   * 行字是文件名、正文里没有它 —— 传正文里的一句，否则只能碰巧等到前一份笔记本还没换下来
+   */
+  openRow(fileName: string, expectText?: string): Promise<void>
   /** 点一行的圆圈（归档） */
   archive(fileName: string): Promise<void>
-  /** 点已归档那一行的「恢复」（先展开「已归档 N」） */
-  restore(fileName: string): Promise<void>
   /** 底部「已归档 · 撤销」那一句的文字；不在为 null */
   archivedToast(): Promise<string | null>
   /** 点那一句里的「撤销」 */
@@ -15266,7 +15298,7 @@ export interface InboxTrackingPane {
   /** 右键一行并选中一项（随后核对该项真的在菜单里）。不收 reveal / copy-path（见上） */
   pickRowMenu(
     fileName: string,
-    actionId: 'delete' | 'archive' | 'restore' | 'waiting' | 'active'
+    actionId: 'delete' | 'archive' | 'waiting' | 'active'
   ): Promise<void>
 }
 
@@ -15282,13 +15314,6 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
     main.eval<boolean>(
       `(() => { const el = ${PANEL}; return !!el && getComputedStyle(el).visibility !== 'hidden' })()`
     )
-  const expandArchived = async (): Promise<void> => {
-    const toggle = `${SECTION}?.querySelector('[data-tracking-archived-toggle]')`
-    await until(() => main.eval<boolean>(`!!(${toggle})`), 'archived toggle')
-    if ((await main.eval<string | null>(`(${toggle})?.getAttribute('aria-expanded')`)) !== 'true') {
-      await main.eval(`(${toggle}).click()`)
-    }
-  }
   return {
     open: async () => {
       if (!(await isOpen())) {
@@ -15312,6 +15337,10 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
         `document.querySelector('div[class*="group/header"][data-group="tracking"]') !== null`
       ),
     present: () => main.eval<boolean>(`${SECTION} !== null`),
+    hasArchivedControls: () =>
+      main.eval<boolean>(
+        `document.querySelector('[data-tracking-archived-toggle], [data-tracking-restore]') !== null`
+      ),
     rows: () =>
       main.eval<InboxTrackingRow[]>(
         `[...(${SECTION}?.querySelectorAll('[data-tracking-item]') ?? [])].map((r) => ({
@@ -15322,16 +15351,13 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
           waitingTag: !!r.querySelector('[data-tracking-waiting]')
         }))`
       ),
-    archivedToggle: () =>
-      main.eval<string | null>(
-        `(() => { const b = ${SECTION}?.querySelector('[data-tracking-archived-toggle]'); return b ? (b.textContent ?? '').trim() : null })()`
-      ),
-    expandArchived,
-    openRow: async (fileName) => {
+    openRow: async (fileName, expectText) => {
       await waitRow(fileName)
-      const title = await main.eval<string>(
-        `(${ROW(fileName)}.querySelector('[data-tracking-title]')?.textContent ?? '').trim()`
-      )
+      const title =
+        expectText ??
+        (await main.eval<string>(
+          `(${ROW(fileName)}.querySelector('[data-tracking-title]')?.textContent ?? '').trim()`
+        ))
       await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-open]').click()`)
       // 收件箱常驻在右侧面板里，打开不会关上它：等中间的笔记本里出现这一项的标题（一级标题就是它）
       await until(
@@ -15345,11 +15371,6 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
     archive: async (fileName) => {
       await waitRow(fileName)
       await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-archive]').click()`)
-    },
-    restore: async (fileName) => {
-      await expandArchived()
-      await waitRow(fileName)
-      await main.eval(`${ROW(fileName)}.querySelector('[data-tracking-restore]').click()`)
     },
     archivedToast: () =>
       main.eval<string | null>(

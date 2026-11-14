@@ -486,4 +486,34 @@ describe('i18n 语言包', () => {
       expect(new Set(texts).size, `${lang}: ${JSON.stringify(texts)}`).toBe(KEYS.length)
     }
   })
+
+  /**
+   * AT-L1：已归档的跟踪项挪到设置 → 已归档 → 跟踪项（2026-11-14）。新的三句三语都有、非空、不含插值；
+   * 收件箱里那个归档开关、恢复按钮、「再显示 N 项」的文案三语都已下线（复数形式的 `_one` / `_other` 也是）。
+   */
+  it('AT-L1 settings.archivedSubTabTracking / archivedTrackingEmpty / archivedTrackingRestore 三语都有；收件箱的归档 / 恢复文案三语都已下线', () => {
+    const ADDED = [
+      'archivedSubTabTracking',
+      'archivedTrackingEmpty',
+      'archivedTrackingRestore'
+    ].map((name) => `settings.${name}`)
+    const REMOVED = [
+      'trackingRestore',
+      'trackingArchivedCount',
+      'trackingArchivedCount_one',
+      'trackingArchivedCount_other',
+      'trackingShowMore',
+      'trackingShowMore_one',
+      'trackingShowMore_other'
+    ].map((name) => `inbox.${name}`)
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of ADDED) {
+        const text = leaf(bundle, key)
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} ${key}`).toEqual([])
+      }
+      const present = new Set(flatten(bundle))
+      for (const key of REMOVED) expect(present.has(key), `${lang} ${key}`).toBe(false)
+    }
+  })
 })
