@@ -191,27 +191,23 @@ export function searchKnowledgeEntries(
   limit = 12
 ): KnowledgeMentionEntry[] {
   const q = query.toLowerCase()
-  // 空 query：没有可排名的信号，按条目 id 字典序取前 limit 条（确定性；该源没有文件的「层级浅」可言）
-  if (!q) {
-    return [...entries]
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-      .slice(0, limit)
-  }
-  const scored: { entry: KnowledgeMentionEntry; score: number }[] = []
-  for (const entry of entries) {
+  // 空 query：没有可排名的信号，照宿主给的次序取前 limit 条 —— 宿主按库排（项目库、bot 库、用户勾的库，内置说明书垫底），
+  // 每库内按路径。从前按条目 id 字典序排：`builtin/shuvix/…` 排在 `knowledge/…` / `projects/…` 前面，说明书恒启用之后
+  // （2026-11-14）裸 `@` 的知识段就全是说明书条目，用户自己的库要打字才看得到
+  if (!q) return entries.slice(0, limit)
+  const scored: { entry: KnowledgeMentionEntry; score: number; index: number }[] = []
+  for (const [index, entry] of entries.entries()) {
     const titleL = entry.title.toLowerCase()
     let score: number
     if (titleL.startsWith(q)) score = 3
     else if (titleL.includes(q)) score = 2
     else if (entry.description.toLowerCase().includes(q)) score = 1
     else continue
-    scored.push({ entry, score })
+    scored.push({ entry, score, index })
   }
+  // 同分同长：照宿主的库次序（说明书垫底），不按条目 id 字典序
   scored.sort(
-    (a, b) =>
-      b.score - a.score ||
-      a.entry.title.length - b.entry.title.length ||
-      (a.entry.path < b.entry.path ? -1 : a.entry.path > b.entry.path ? 1 : 0)
+    (a, b) => b.score - a.score || a.entry.title.length - b.entry.title.length || a.index - b.index
   )
   return scored.slice(0, limit).map(({ entry }) => entry)
 }

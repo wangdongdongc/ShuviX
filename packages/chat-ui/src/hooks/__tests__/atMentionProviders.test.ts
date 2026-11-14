@@ -78,21 +78,31 @@ describe('searchKnowledgeEntries（B5）', () => {
     expect(hits.map((h) => h.title)).toEqual(['认证', '认证指南（长版）', '部署'])
   })
 
-  it('同分按标题短者优先、再按条目 id 字典序', () => {
+  it('同分同长按宿主给的次序（库次序：说明书垫底），不按条目 id 字典序', () => {
     const same = [
       entry('knowledge/notes/z/ab.md', 'x认证x'),
-      entry('knowledge/notes/a/ab.md', 'x认证x')
+      entry('knowledge/notes/a/ab.md', 'x认证x'),
+      entry('builtin/shuvix/ab.md', 'x认证x')
     ]
     const hits = searchKnowledgeEntries(same, '认证')
-    expect(hits[0].path).toBe('knowledge/notes/a/ab.md')
+    expect(hits.map((h) => h.path)).toEqual([
+      'knowledge/notes/z/ab.md',
+      'knowledge/notes/a/ab.md',
+      'builtin/shuvix/ab.md'
+    ])
   })
 
-  it('空 query 按条目 id 字典序取前 limit 条；limit 截断', () => {
-    const hits = searchKnowledgeEntries(entries, '', 2)
-    expect(hits.map((h) => h.path)).toEqual([
-      'knowledge/notes/a/auth.md',
-      'knowledge/notes/b/auth-guide.md'
+  it('空 query 照宿主给的次序取前 limit 条；limit 截断（2026-11-14：说明书条目不再因 `builtin/` 排到最前）', () => {
+    const ordered = [
+      entry('projects/p1/x.md', '项目条目'),
+      entry('knowledge/notes/a/auth.md', '认证'),
+      entry('builtin/shuvix/bot-md.md', 'Bot 文件')
+    ]
+    expect(searchKnowledgeEntries(ordered, '', 2).map((h) => h.path)).toEqual([
+      'projects/p1/x.md',
+      'knowledge/notes/a/auth.md'
     ])
+    expect(searchKnowledgeEntries(entries, '', 2)).toEqual(entries.slice(0, 2))
   })
 
   it('标题带空格：query 里的空格是名字的一部分，尾随空格也算数', () => {
