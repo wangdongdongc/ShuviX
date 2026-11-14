@@ -277,10 +277,8 @@ describe('NAS-7..NAS-10 准入引导', () => {
       projectId: null,
       title: tr('settings.networkPolicyChatTitle')
     })
-    expect(chat.updateKnowledgeBases).toHaveBeenCalledWith({
-      id: 's-new',
-      knowledgeBases: ['shuvix']
-    })
+    // 不再替新会话勾知识库：ShuviX 系统说明对每条会话恒启用
+    expect(chat.updateKnowledgeBases).not.toHaveBeenCalled()
     const draft = buildNetworkPolicyPrompt(i18n.t.bind(i18n), status)
     expect(app.openSessionWithDraft).toHaveBeenCalledWith({ sessionId: 's-new', draft })
     expect(draft).toContain(DEVICE)

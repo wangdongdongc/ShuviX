@@ -1,6 +1,6 @@
 /**
- * 缺省启用内置说明书落到权限表上（ACL-D1，2026-11-02）：谁都没设过的会话，派生行里有一行只读的 `shuvix`，
- * agent 读说明书才不用问；显式的 `[]` 就没有这一行。
+ * 内置说明书落到权限表上（ACL-D1）：它对每条会话都是隐式的（2026-11-14 裁决：始终可查，不是选项），派生行里
+ * 总有一行只读的 `shuvix`、排在项目库和用户勾的库之后，agent 读说明书才不用问；显式的 `[]` 也去不掉它。
  *
  * derive.test.ts 把 enabledTargets 整个换成了假实现，看不到回落链，所以这里单开一份：**真的 derive + 真的
  * sessionBundle**，只替掉 dao、路径与会话目录。
@@ -84,7 +84,7 @@ afterEach(() => {
   rmSync(builtinRootOf(root), { recursive: true, force: true })
 })
 
-describe('ACL-D1 缺省启用的内置说明书在权限表里', () => {
+describe('ACL-D1 隐式的内置说明书在权限表里', () => {
   it('ACL-D1 谁都没设过：有一行只读的 shuvix，没有 write；项目会话排在项目库之后，用户库不进表', () => {
     const manual = {
       source: 'knowledge',
@@ -109,12 +109,30 @@ describe('ACL-D1 缺省启用的内置说明书在权限表里', () => {
     ])
   })
 
-  it('ACL-D1 显式的 []：没有 shuvix 这一行', () => {
+  it('ACL-D1 显式的 [] 也有说明书那一行（只读）；勾上的用户库排在它前面', () => {
+    const manualTarget = builtinLangAt(root, 'shuvix', 'en')
+
     mockSession({ projectId: null, settings: { knowledgeBases: [] } })
-    expect(knowledgeRows()).toEqual([])
+    expect(knowledgeRows()).toEqual([
+      { source: 'knowledge', sourceKey: 'shuvix', target: manualTarget, access: 'read' }
+    ])
 
     mockSession({ projectId: 'p1', settings: { knowledgeBases: [] } })
     vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
-    expect(knowledgeRows().map((e) => e.sourceKey)).toEqual(['project'])
+    expect(knowledgeRows().map((e) => e.sourceKey)).toEqual(['project', 'shuvix'])
+
+    // 选择里写了 shuvix：不重复；用户库在说明书之前
+    mockSession({ projectId: 'p1', settings: { knowledgeBases: ['shuvix', 'notes'] } })
+    expect(knowledgeRows().map((e) => [e.sourceKey, e.access])).toEqual([
+      ['project', 'write'],
+      ['notes', 'write'],
+      ['shuvix', 'read']
+    ])
+  })
+
+  it('ACL-D1 说明书目录不在：没有 shuvix 这一行、不抛', () => {
+    rmSync(builtinRootOf(root), { recursive: true, force: true })
+    mockSession({ projectId: null })
+    expect(knowledgeRows()).toEqual([])
   })
 })

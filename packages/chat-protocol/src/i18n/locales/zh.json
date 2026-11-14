@@ -612,8 +612,8 @@
     "extensionsDesc": "MCP 与技能随时可改：智能体已创建时当场生效（会让提示词缓存失效的改动会先问你）",
     "extensionDeclared": "智能体「{{profile}}」默认带着这一项。在这里取消勾选只在这里生效，不改动这个智能体本身。",
     "knowledgeGroup": "知识库",
-    "knowledgeDesc": "这条会话还能搜、能写哪几个库（属于项目的会话恒带本项目的库，不用勾）。改完立刻生效，不用新开会话。",
-    "knowledgeDefault": "还没选过 —— 新会话缺省只启用 ShuviX 系统说明（属于项目的会话恒带本项目的库）。勾上这条会话要用的库，改完立即生效。"
+    "knowledgeDesc": "这条会话还能搜、能写你自己的哪几个库。ShuviX 系统说明恒启用，属于项目的会话恒带本项目的库，都不用勾。改完立刻生效，不用新开会话。",
+    "knowledgeDefault": "还没选过 —— 新会话缺省不启用你自己的库。ShuviX 系统说明恒启用，属于项目的会话恒带本项目的库。勾上这条会话要用的库，改完立即生效。"
   },
   "sessionAcl": {
     "title": "文件访问",
@@ -689,7 +689,7 @@
     "systemPrompt": "项目提示词",
     "systemPromptPlaceholder": "注入到本项目每个会话的纯文本提示词(留空则不注入)",
     "knowledgeBases": "知识库",
-    "knowledgeBasesDesc": "本项目的知识库在它的会话里恒启用；这里选的是新会话缺省还用哪几个库，每条会话之后都能自己改。"
+    "knowledgeBasesDesc": "本项目的知识库和 ShuviX 系统说明在它的会话里都恒启用；这里选的是新会话缺省还用你自己的哪几个库，每条会话之后都能自己改。"
   },
   "settings": {
     "title": "设置",

@@ -43,10 +43,9 @@ where what was learned about the project goes, so it is not something to tick (i
 in the cards). **The other bases are the user's selection** (the Knowledge bases row under
 session config → Extensions, or the tool picker by the input box; project config sets the default
 for new sessions). Unset, a session follows its parent session, then its project's default; when
-nobody chose, **only `shuvix` is enabled**: none of your own bases are on by default, and unticking
-`shuvix` turns it off for that session. The other exception is a notebook
-opened on one of ShuviX's own files (a policy, hook, agent, bot, skill or knowledge entry): it
-always has `shuvix`, so its agent can look up that file's specification.
+nobody chose, none of your own bases are on. **Every session also always has `shuvix`**, listed
+last: like `project` it is not something to tick and is not offered in the cards, so an agent can
+always look up how ShuviX's own files are written.
 The selection is a hard boundary: `bases` lists only the enabled ones, and naming any other is
 refused. The `<knowledge_bases>` fence in the system prompt lists the same names.
 
@@ -60,7 +59,7 @@ The selection also decides what the session may touch without asking. An enabled
 **read-write** row of the session's permission table (`vars.aclWrite` in the `policy-md` entry) —
 the librarian runs inside the submitting session and writes with the file tools, so reading,
 creating, moving and deleting files in it never asks; every change is committed to the base's
-own git and can be rolled back. `shuvix`, when enabled, is a **read-only** row (`vars.aclRead`
+own git and can be rolled back. `shuvix` is a **read-only** row (`vars.aclRead`
 only). A base that is not enabled is like any other folder in your home: reading it asks.
 
 ## Read wide, write strict

@@ -3375,22 +3375,22 @@ async function toggleExtIn(
  */
 export interface KnowledgeItemShot {
   /**
-   * 选择里存的名字（用户库的目录名 / 保留名 `shuvix`），即 `data-knowledge-base`。项目库 `project`
-   * 在项目会话里隐式启用，不是候选项，所以卡上没有它的 chip
+   * 选择里存的名字（用户库的目录名），即 `data-knowledge-base`。项目库 `project` 与内置说明书 `shuvix`
+   * 都隐式启用（后者 2026-11-14 起），不是候选项，所以卡上与选择器里都没有它们的 chip
    */
   name: string
-  /**
-   * 名字那一段（`data-chip-name`）。用户库是目录名；内置库与内置 MCP 同一个画法，是界面语言的
-   * 名字 `knowledge.builtinBaseName`（与侧栏那一行同一个键）
-   */
+  /** 名字那一段（`data-chip-name`）：用户库的目录名 */
   label: string
-  /** 名字旁并排的标识名（`data-chip-identifier`）：内置库是 `shuvix`，用户库没有（空串） */
+  /**
+   * 名字旁并排的标识名（`data-chip-identifier`）。只有内置库才有，而内置库已不是候选项 ——
+   * 照样读出来，好断「没有任何 chip 带它」（空串）
+   */
   identifier: string
-  /** 带内置记号（`data-builtin-badge`，小包裹图标）—— 只有内置库 */
+  /** 带内置记号（`data-builtin-badge`）。同上：今天恒为假，读出来是为了断这一点 */
   builtin: boolean
   /**
-   * 界面语言的那行说明：配置卡在悬停提示（`title`）里，选择器在名字后面的说明列（`data-chip-hint`）。
-   * 内置库是 `knowledge.builtinBase`；用户库在配置卡上是它自己的名字、在选择器里没有
+   * 那行说明：配置卡在悬停提示（`title`）里，选择器在名字后面的说明列（`data-chip-hint`）。
+   * 用户库在配置卡上是它自己的名字、在选择器里没有
    */
   hint: string
   checked: boolean
@@ -3433,7 +3433,7 @@ async function toggleKnowledgeIn(
  * scope 内知识库那一段说明：扩展能力卡标题旁的问号气泡里，排在卡片说明之后的那一段
  * （`data-knowledge-hint`）。没有这张卡、没有知识库一行、或没有这段说明时回空串。
  *
- * 「还没选过（只勾着内置说明书）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
+ * 「还没选过（一个用户库都没勾）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
  * （三语取自 chat-protocol 的语言包），不是这里的结构。
  */
 const KNOWLEDGE_HINT = (scope: string): string =>

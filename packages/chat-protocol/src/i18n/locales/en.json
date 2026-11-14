@@ -612,8 +612,8 @@
     "extensionsDesc": "MCP servers and skills can be changed at any time: a running agent picks them up at once (changes that would invalidate the prompt cache ask first)",
     "extensionDeclared": "The {{profile}} agent includes this by default. Unticking it here applies only here and leaves the agent itself unchanged.",
     "knowledgeGroup": "Knowledge bases",
-    "knowledgeDesc": "Which other bases this session can search and write to (a session in a project always has that project's own base). Changes take effect right away.",
-    "knowledgeDefault": "Not picked yet — new sessions start with only the ShuviX System Guide (a session in a project always has that project's own base). Tick the bases this session should use; changes take effect right away."
+    "knowledgeDesc": "Which of your own bases this session can search and write to. The ShuviX System Guide is always on, and a session in a project always has that project's own base. Changes take effect right away.",
+    "knowledgeDefault": "Not picked yet — new sessions start with none of your own bases. The ShuviX System Guide is always on, and a session in a project always has that project's own base. Tick the bases this session should use; changes take effect right away."
   },
   "sessionAcl": {
     "title": "File access",
@@ -689,7 +689,7 @@
     "systemPrompt": "Project prompt",
     "systemPromptPlaceholder": "Plain-text prompt injected into every session of this project (leave empty for none)",
     "knowledgeBases": "Knowledge bases",
-    "knowledgeBasesDesc": "This project's own base is always on in its sessions; pick which other bases new sessions start with. Each session can change its own afterwards."
+    "knowledgeBasesDesc": "This project's own base is always on in its sessions, and so is the ShuviX System Guide; pick which of your own bases new sessions start with. Each session can change its own afterwards."
   },
   "settings": {
     "title": "Settings",

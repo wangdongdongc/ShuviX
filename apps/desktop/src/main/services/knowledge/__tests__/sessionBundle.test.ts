@@ -5,20 +5,21 @@
  * 排在最前，不管各级选择写了什么（`[]` 也一样）；它不是配置卡的候选项，存量选择里残留的 `project` 读时
  * 剔掉。隐藏载体项目（`__agents__` …）不算项目（SB-P1..P10）。
  *
+ * **内置说明书 `shuvix` 也是隐式的**（2026-11-14 裁决：始终可查，不是选项；SB-D1..D7）：每条会话都有它、排在
+ * **最后**（项目库 → 用户勾的库 → 说明书），不管各级选择写了什么（`[]` 也一样）；它不是配置卡的候选项，存量选择
+ * 里残留的 `shuvix` 读时剔掉。目录不在（开发期没拷资源）就没有它，别的一切照旧。
+ *
  * 其余的库由用户圈定，是一条**活的回落链**（不落库、不快照）：会话设过 → 父会话设过 → 项目设过 →
- * **缺省只启用内置说明书 `shuvix`**（2026-11-02 裁决，SB-D1..D6；用户库仍然一个都不默认启用）。显式的 `[]` 是
- * 「这条会话不用知识库」，内置说明书也跟着没有。与扩展能力勾选的快照语义刻意不同 —— 知识库是每次调用现查的。
- * 夹具里内置库根默认不存在（见 mock），所以没种内置库的用例看到的「没人选过」解析不出任何库，`selected` 里却仍是
- * `shuvix` 这个名字：回落链只管名字，此刻在不在是解析那一步的事（SB-D3）。
+ * **缺省一个都不启用**。显式的 `[]` 是「这条会话不用我自己的库」。与扩展能力勾选的快照语义刻意不同 —— 知识库是
+ * 每次调用现查的。夹具里内置库根默认不存在（见 mock），所以没种内置库的用例里看不到说明书。
  *
  * 选择是**硬边界**：`bases` 只列启用且此刻真在的库，点名没启用的名字报错并列出启用了哪些。
  * 库名按目录清单精确匹配（NFC 归一、大小写敏感）；保留名有两个 —— `project` 是项目库、`shuvix` 是只读的
  * 内置库（SB-19..27），同名的用户目录都够不着。
  * `sessionBundle` 本身仍然只回答「本会话所属项目的库是哪一个」，不判断目录建没建过（读宽）。
  *
- * **内置说明书对 ShuviX 文件的笔记本也是隐式的**（2026-10-30，SB-M1..M8）：会话挂在安全策略 / hook / 智能体 /
- * bot / 技能 / 知识库的承载项目下（chat-protocol `shuvixFileKindOfProject`），`shuvix` 就恒启用、排在用户圈定的
- * 库之前，不归选择管（`[]` 也一样），配置卡里也不再列它；日报 / 跟踪项与普通会话照旧。
+ * ShuviX 文件的笔记本（安全策略 / hook / 智能体 / bot / 技能 / 知识库的承载项目，SB-M1..M8）不再是特例：
+ * 2026-10-30 起它们先隐式带上说明书、排在选择之前；现在与每条会话一样，说明书排在最后。
  *
  * **bot 会话引用的工作项目**（`settings.workProject`，它不是项目的成员）同样有项目库、同样按那个项目回落（KB-B1）。
  *
@@ -129,7 +130,7 @@ const mockProjectBases = (id: string, knowledgeBases: string[]): void => {
 
 /**
  * 会话属于项目 p1。`bases` 是这条会话自己的选择 —— 缺省里没有用户库，所以要用到某个用户库的用例必须
- * 显式勾上；不传就是「谁都没设过」，那正是「只启用内置说明书」（内置库目录不在时等于一个都没有）。
+ * 显式勾上；不传就是「谁都没设过」，用户库一个都不启用（说明书是隐式的，种了内置库才看得到）。
  */
 const inProject = (bases?: string[]): void => {
   mockPick({ projectId: 'p1', ...(bases ? { settings: { knowledgeBases: bases } } : {}) })
@@ -230,7 +231,7 @@ describe('resolveBase / listBases —— 选择', () => {
     }
 
     // 缺省里没有用户库：磁盘上有两个库，照样一个都不启用 —— 范围得用户自己圈；项目会话只有隐式的项目库
-    // （缺省的那一个内置说明书，这条没种，见 SB-D1）
+    // （隐式的内置说明书这条没种，见 SB-D1）
     inProject()
     expect((await listBases('s1')).map((b) => b.base)).toEqual(['project'])
     expect(await resolveBase('s1', 'notes')).toEqual({
@@ -397,7 +398,7 @@ describe('resolveBase / listBases —— 选择', () => {
       explicit: false
     })
 
-    // 会话没设过、项目也没设过 → 候选照列，用户库一个都没勾，选择是缺省的那个名字，explicit 为假；
+    // 会话没设过、项目也没设过 → 候选照列，一个都没勾（选择是空的），explicit 为假；
     // 会话在项目里也不多出 project 这一项
     inProject()
     expect(knowledgeBaseOptions('s1')).toEqual({
@@ -405,7 +406,7 @@ describe('resolveBase / listBases —— 选择', () => {
         { name: 'alpha', label: 'alpha' },
         { name: 'notes', label: 'notes' }
       ],
-      selected: ['shuvix'],
+      selected: [],
       explicit: false
     })
 
@@ -417,7 +418,7 @@ describe('resolveBase / listBases —— 选择', () => {
 
 /**
  * 回落链的边角（SB-11..18）。三条主线：
- *   - 「设过」的判据只有一个 —— **是不是数组**。`[]` 是一个明确的「一个库都不要」，不能往缺省（内置说明书）落；
+ *   - 「设过」的判据只有一个 —— **是不是数组**。`[]` 是一个明确的「我的库一个都不要」，不能往下一级落；
  *     字符串 / null / 对象这类坏值则压根不算设过，继续往下一级找。
  *   - 选择是**活的**：不落快照、不写库，两次解析之间磁盘或设置变了，下一次就作数。
  *   - 围栏列的清单与工具解析的是**同一份结果**（同一次 enabledTargets），NFC 归一只做一次。
@@ -456,7 +457,7 @@ describe('SB-11..18 回落链与围栏清单', () => {
     mockProjectBases('p1', ['alpha'])
     expect(await baseNames()).toEqual(['project', 'alpha'])
 
-    // 三级都是坏值 → 落到缺省：一个用户库都不启用（项目库照旧在；内置说明书这里没种，见 SB-D1）
+    // 三级都是坏值 → 落到缺省：一个用户库都不启用（项目库照旧在；隐式的内置说明书这里没种，见 SB-D1）
     projects.set('p1', { settings: { knowledgeBases: {} } })
     expect(await baseNames()).toEqual(['project'])
   })
@@ -491,13 +492,13 @@ describe('SB-11..18 回落链与围栏清单', () => {
     seedBases('alpha', 'notes')
     mockPick({ projectId: null })
 
-    // project 从来不是候选项（有项目时它隐式启用，没项目时它解析不出来）—— 这里也一样没有
+    // project 从来不是候选项（有项目时它隐式启用，没项目时它解析不出来）—— 这里也一样没有；没人设过，一个都不勾
     expect(knowledgeBaseOptions('s1')).toEqual({
       options: [
         { name: 'alpha', label: 'alpha' },
         { name: 'notes', label: 'notes' }
       ],
-      selected: ['shuvix'],
+      selected: [],
       explicit: false
     })
   })
@@ -525,7 +526,7 @@ describe('SB-11..18 回落链与围栏清单', () => {
 
     expect(knowledgeBaseOptions('s1')).toEqual({
       options: [{ name: 'notes', label: 'notes' }],
-      selected: ['shuvix'],
+      selected: [],
       explicit: false
     })
   })
@@ -562,8 +563,8 @@ describe('SB-11..18 回落链与围栏清单', () => {
  *
  * 三条主线：
  *   - 它是**第二个保留名**：与 `project` 同一条规则（保留名优先于同名用户目录），但大小写敏感。
- *   - 它**垫底**：配置卡候选里排在用户库与项目库之后 —— 说明书不是用户的内容。它是**缺省里唯一的一项**
- *     （2026-11-02：不知道说明书的 agent 只能去翻 `~/.shuvix` 和应用包），但仍然是「取消得掉的一项」，不是强制项。
+ *   - 它是**隐式的、垫底的**（2026-11-14 裁决：始终可查，不是选项）：每条会话都有它、排在项目库与用户勾的库之后
+ *     —— 说明书不是用户的内容；配置卡里不列它、取消不掉，选择里写了它也不重复。
  *   - 它**只读**，而且**缺席是正常态**：开发期没拷资源、打包漏了，都只该让它自己消失，不能带累别的库。
  */
 describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
@@ -595,38 +596,33 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
   })
   const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
 
-  it('SB-19 内置库是缺省里唯一的一项：谁都没设过时启用的只有它（项目会话排在项目库之后），用户库一个不带；有人设过就按设的那份', async () => {
+  it('SB-19 内置库对每条会话都隐式、永远垫底：谁都没设过时用户库一个不带、只有它（项目会话排在项目库之后）；有人设过时排在设的那份之后，选择里写它的位置不算数', async () => {
     seedBases('alpha', 'notes')
     seedBuiltinBase()
 
-    // 说明书随应用发布、就在那儿，也是唯一默认启用的库；用户库在磁盘上照样不启用
+    // 说明书随应用发布、就在那儿；用户库在磁盘上照样不启用，选择也是空的（它不在选择里）
     inProject()
-    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['shuvix'], explicit: false })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: [], explicit: false })
     expect(await baseNames()).toEqual(['project', 'shuvix'])
     mockPick({ projectId: null })
     expect(await baseNames()).toEqual(['shuvix'])
 
-    // 勾上别的：项目库之后按选择写的那一份，不再有「垫底」这条内建规则
+    // 勾上别的：项目库 → 选择写的那一份 → 说明书；选择里把 shuvix 写在前面也挪不动它
     inProject(['shuvix', 'alpha'])
-    expect(await baseNames()).toEqual(['project', 'shuvix', 'alpha'])
-
-    // 选择里不写它就没有 —— 缺省只是回落，不是强制项（SB-23、SB-D2）
-    inProject(['alpha'])
-    expect(await baseNames()).toEqual(['project', 'alpha'])
+    expect(await baseNames()).toEqual(['project', 'alpha', 'shuvix'])
+    inProject(['alpha', 'notes'])
+    expect(await baseNames()).toEqual(['project', 'alpha', 'notes', 'shuvix'])
   })
 
-  it('SB-20 `shuvix` 是第二个保留名：目录恰好叫 shuvix 的用户库进不了候选，点名 shuvix 解析到内置库', async () => {
+  it('SB-20 `shuvix` 是第二个保留名：目录恰好叫 shuvix 的用户库进不了候选（内置那一项也不是候选），点名 shuvix 解析到内置库', async () => {
     const userRoot = seedBases('notes')
     // 同名的用户库：真有内容，但保留名优先 —— 这是与 `project` 一样的一条已知代价
     seedConcept(userRoot, 'shuvix/a.md', ['type: Memory', 'title: A'])
     seedBuiltinBase()
     mockPick({ projectId: null, settings: { knowledgeBases: ['notes', 'shuvix'] } })
 
-    // 候选里那一行 shuvix 是内置库（人读名是产品名），不是用户那个目录（那样 label 会是目录名）
-    expect(knowledgeBaseOptions('s1').options).toEqual([
-      { name: 'notes', label: 'notes' },
-      { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
-    ])
+    // 候选里没有 shuvix 这一行：用户那个目录被保留名遮住，内置库又是隐式的、不是选项
+    expect(knowledgeBaseOptions('s1').options).toEqual([{ name: 'notes', label: 'notes' }])
     expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
     // 用户那一份原样躺着 —— 够不着工具不等于被动过
     expect(readdirSync(join(userRoot, 'shuvix'))).toEqual(['a.md'])
@@ -679,20 +675,25 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     expect(treeOf(builtinRootOf(root))).toEqual(['shuvix/'])
   })
 
-  it('SB-23 内置库可以取消勾选：选择里不写 shuvix 就没有它，只写 shuvix 就只剩它', async () => {
+  it('SB-23 内置库取消不掉：显式的 [] 或一份不含 shuvix 的选择都照样有它，选择里点名 shuvix 也不重复', async () => {
     seedBases('notes')
     seedBuiltinBase()
 
-    // 它只是候选里多出来的一项，勾不勾全看用户 —— 不是强制项
+    // 不含 shuvix 的明确选择：用户库之后照样有它
     mockPick({ projectId: null, settings: { knowledgeBases: ['notes'] } })
-    expect(await baseNames()).toEqual(['notes'])
-    expect(await resolveBase('s1', 'shuvix')).toEqual({
-      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes".`
-    })
+    expect(await baseNames()).toEqual(['notes', 'shuvix'])
+    expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
 
-    mockPick({ projectId: null, settings: { knowledgeBases: ['shuvix'] } })
+    // 显式的 []：「我的库一个都不要」，说明书不归它管
+    mockPick({ projectId: null, settings: { knowledgeBases: [] } })
     expect(await baseNames()).toEqual(['shuvix'])
     expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
+
+    // 点名了 shuvix（存量选择）：只出现一次、仍然垫底
+    mockPick({ projectId: null, settings: { knowledgeBases: ['shuvix'] } })
+    expect(await baseNames()).toEqual(['shuvix'])
+    mockPick({ projectId: null, settings: { knowledgeBases: ['shuvix', 'notes', ' shuvix '] } })
+    expect(await baseNames()).toEqual(['notes', 'shuvix'])
   })
 
   it('SB-24 listBases 只给内置那一行 note（只读提示）与绝对目录，项目库 / 用户库那两行不带 note', async () => {
@@ -717,27 +718,45 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     expect(bases.every((b) => !!b.dir && isAbsolute(b.dir))).toBe(true)
   })
 
-  it('SB-25 配置卡里的内置项：name 恒为 shuvix、label 走 i18n 的 knowledge.builtinBaseName；不传会话的项目对话框口径同样有它、同样垫底（两边都没有 project）', () => {
+  it('SB-25 配置卡里没有内置项：不传会话的项目对话框口径与各种会话（项目 / 无项目 / 子会话 / bot / ShuviX 文件笔记本 / 日报）的候选都只有用户库，没有 shuvix 也没有 project', () => {
     seedBases('notes')
     seedBuiltinBase()
-    const builtinOption = { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
+    const userOnly = [{ name: 'notes', label: 'notes' }]
 
-    // 项目配置对话框（不传 sessionId）配的是「这个项目的新会话用哪些」—— 内置库也该能勾
-    expect(knowledgeBaseOptions()).toEqual({
-      options: [{ name: 'notes', label: 'notes' }, builtinOption],
-      selected: ['shuvix'],
-      explicit: false
-    })
+    // 项目配置对话框（不传 sessionId）：说明书恒启用，没得勾；选择是空的
+    expect(knowledgeBaseOptions()).toEqual({ options: userOnly, selected: [], explicit: false })
 
-    // 会话配置卡：同一项、同样垫底；人读名与语言一起变，不是磁盘上的目录名
-    inProject()
-    expect(knowledgeBaseOptions('s1').options).toEqual([
-      { name: 'notes', label: 'notes' },
-      builtinOption
-    ])
+    // 会话配置卡：哪种会话都一样
+    const kinds: Array<[string, () => void]> = [
+      ['project', () => inProject()],
+      ['no project', () => mockPick({ projectId: null })],
+      [
+        'sub-session',
+        () => {
+          mockPick({ projectId: null, parentId: 'parent' })
+          mockSessionRow('parent', { projectId: null })
+        }
+      ],
+      [
+        'bot',
+        () => {
+          vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+          mockPick({ projectId: null, settings: { bot: 'scout', workProject: 'p1' } })
+        }
+      ],
+      ['shuvix-file notebook', () => mockPick({ projectId: '__policies__' })],
+      ['daily', () => mockPick({ projectId: '__daily__' })],
+      ['missing row', () => mockPick(undefined)]
+    ]
+    for (const [kind, arrange] of kinds) {
+      arrange()
+      const { options, selected } = knowledgeBaseOptions('s1')
+      expect(options, kind).toEqual(userOnly)
+      expect(selected, kind).not.toContain('shuvix')
+    }
   })
 
-  it('SB-26 围栏给模型的内置库 label 是那句英文说明，与配置卡的人读名刻意不是一回事', () => {
+  it('SB-26 围栏给模型的内置库 label 是那句英文说明，不是 i18n 的人读名（配置卡里本就没有它）', () => {
     seedBases('notes')
     seedBuiltinBase()
     mockPick({ projectId: null, settings: { knowledgeBases: ['notes', 'shuvix'] } })
@@ -754,11 +773,10 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
       }
     ])
 
-    // 两张面：模型读的是说明，用户读的是产品名 —— 哪天有人把它们并成一个键，这条会红
+    // 模型读的是说明，不是界面上的产品名 —— 哪天有人把围栏的 label 换成 i18n 那个键，这条会红
     const guide = choices.find((c) => c.name === 'shuvix')?.label
-    const shown = knowledgeBaseOptions('s1').options.find((o) => o.name === 'shuvix')?.label
-    expect(shown).toBe(BUILTIN_DISPLAY_NAME)
-    expect(guide).not.toBe(shown)
+    expect(guide).not.toBe(BUILTIN_DISPLAY_NAME)
+    expect(knowledgeBaseOptions('s1').options.map((o) => o.name)).toEqual(['notes'])
   })
 
   it('SB-27 围栏里那句说明不带路径也不带计数：不含 `/` 与任何数字', () => {
@@ -808,7 +826,7 @@ describe('SB-P1..P10 隐式的项目库', () => {
         { name: 'alpha', label: 'alpha' },
         { name: 'notes', label: 'notes' }
       ],
-      selected: ['shuvix'],
+      selected: [],
       explicit: false
     })
     expect(existsSync(join(root, PROJECTS))).toBe(false)
@@ -945,9 +963,8 @@ describe('SB-P1..P10 隐式的项目库', () => {
     expect(await resolveBase('s1', 'notes')).toEqual(notInBases('notes', '"project"'))
   })
 
-  it('SB-P10 隐藏载体项目不算项目：没有隐式的项目库，点名 project 回 NO_PROJECT（这里没种内置说明书 —— 载体隐式带的说明书见 SB-M）', async () => {
-    // 这几个载体都是 ShuviX 文件的笔记本，会隐式启用内置说明书 `shuvix`；这条只钉「没有项目库」，所以不种内置库，
-    // 启用清单因此是空的（种了内置库的情形见 SB-M1）
+  it('SB-P10 隐藏载体项目不算项目：没有隐式的项目库，点名 project 回 NO_PROJECT（这里没种内置说明书 —— 载体里的说明书见 SB-M）', async () => {
+    // 内置说明书对每条会话都隐式；这条只钉「没有项目库」，所以不种内置库，启用清单因此是空的（种了的情形见 SB-M1）
     seedBases('notes')
     for (const hidden of ['__agents__', '__knowledge__', '__bots__']) {
       // 载体项目行在库里是真有的 —— 判据是「隐藏」，不是「找不到」
@@ -1036,17 +1053,17 @@ describe('KB-B1 bot 会话引用的工作项目也有项目库', () => {
 })
 
 /**
- * ShuviX 文件笔记本隐式启用内置说明书（SB-M1..M8，2026-10-30）。四条主线：
+ * ShuviX 文件笔记本里的内置说明书（SB-M1..M8）。2026-10-30 起它们是唯一隐式带说明书的会话（排在选择之前）；
+ * 2026-11-14 起说明书对每条会话都隐式，这些载体不再是特例。四条主线：
  *   - 会话挂在 ShuviX 文件的承载项目下（策略 / agent / bot / hook / 技能 / 知识库，含内置的只读载体）→ `shuvix`
- *     恒启用、排在用户圈定的库之前，与各级选择无关（`[]` 也一样）；选择里也写了 `shuvix` 不重复。
+ *     恒启用、**排在用户圈定的库之后**，与各级选择无关（`[]` 也一样）；选择里也写了 `shuvix` 不重复。
  *   - 内置库不在（开发期没拷资源）→ 隐式的那份也没有，别的库照常，不建任何目录。
- *   - 载体之外（普通项目、无项目、日报、跟踪项）它归选择管：没人设过是缺省的那一份，明确设成 `[]` 就没有。
- *   - 配置卡在载体会话里不列 `shuvix`（恒启用，列成没勾的选项只会误导）；`selected` 仍是原样的选择。
+ *   - 载体之外（普通项目、无项目、日报、跟踪项）一模一样：`[]` 也好、没人设过也好，都有它、都垫底。
+ *   - 配置卡在哪种会话里都不列 `shuvix`；存量选择里的 `shuvix` 读时剔掉。
  */
-describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
+describe('SB-M ShuviX 文件笔记本里的内置说明书（与每条会话一样隐式、垫底）', () => {
   const BUILTIN_LABEL = 'ShuviX reference (read-only)'
   const BUILTIN_NOTE = 'read-only: search and read it; nothing can be submitted here'
-  const BUILTIN_DISPLAY_NAME = 'i18n(knowledge.builtinBaseName)'
   /** 几种 ShuviX 文件的载体（注册表、内置注册表、技能外部目录、知识库用户库） */
   const CARRIERS = [
     '__policies__',
@@ -1105,17 +1122,21 @@ describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
     }
   )
 
-  it('SB-M2 载体里同时勾了用户库：说明书打头、用户库按选择的顺序；选择里也写了 shuvix 不重复', async () => {
-    seedBases('notes')
+  it('SB-M2 载体里同时勾了用户库：用户库按选择的顺序、说明书垫底；选择里也写了 shuvix（写在哪儿都一样）不重复', async () => {
+    seedBases('alpha', 'notes')
     seedBuiltinBase()
-    for (const bases of [['notes'], ['notes', 'shuvix'], ['shuvix', 'shuvix', 'notes']]) {
+    for (const bases of [
+      ['alpha', 'notes'],
+      ['alpha', 'shuvix', 'notes'],
+      ['shuvix', 'shuvix', 'alpha', 'notes']
+    ]) {
       const what = JSON.stringify(bases)
       mockPick({ projectId: '__policies__', settings: { knowledgeBases: bases } })
-      expect(await baseNames(), what).toEqual(['shuvix', 'notes'])
+      expect(await baseNames(), what).toEqual(['alpha', 'notes', 'shuvix'])
       expect(
         enabledBaseChoices('s1').map((c) => c.name),
         what
-      ).toEqual(['shuvix', 'notes'])
+      ).toEqual(['alpha', 'notes', 'shuvix'])
     }
   })
 
@@ -1157,36 +1178,36 @@ describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
     expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
 
-  it('SB-M5 载体之外没有隐式的说明书：普通项目 / 无项目 / 日报 / 跟踪项明确设成 [] 就没有，没人设过是缺省的那一份；勾上照旧按选择排；载体正控制组', async () => {
+  it('SB-M5 载体之外同样隐式：普通项目 / 无项目 / 日报 / 跟踪项，明确设成 [] 还是没人设过都有说明书、都垫底；勾上的用户库排在它前面', async () => {
     seedBases('alpha', 'notes')
     seedBuiltinBase()
 
-    // 正控制组：同一份磁盘布局，载体会话连 [] 都挡不住它 —— 下面的「没有」不是因为内置库没种好
+    // 载体会话：[] 挡不住它
     mockPick({ projectId: '__hooks__', settings: { knowledgeBases: [] } })
     expect(await baseNames()).toEqual(['shuvix'])
 
+    // 普通项目 / 无项目：一模一样
     inProject([])
-    expect(await baseNames()).toEqual(['project'])
-
+    expect(await baseNames()).toEqual(['project', 'shuvix'])
     mockPick({ projectId: null, settings: { knowledgeBases: [] } })
-    expect(await baseNames()).toEqual([])
-
-    // 日报、跟踪项是用户自己的笔记：隐藏载体，但不是 ShuviX 文件
-    for (const userNotes of ['__daily__', '__tracking__']) {
-      mockPick({ projectId: userNotes, settings: { knowledgeBases: [] } })
-      expect(await baseNames(), userNotes).toEqual([])
-      // 没人设过：有它，但那是缺省，不是隐式
-      mockPick({ projectId: userNotes })
-      expect(await baseNames(), userNotes).toEqual(['shuvix'])
-    }
-
+    expect(await baseNames()).toEqual(['shuvix'])
     inProject()
     expect(await baseNames()).toEqual(['project', 'shuvix'])
     mockPick({ projectId: null })
     expect(await baseNames()).toEqual(['shuvix'])
 
-    // 回归：普通项目里勾上的说明书照旧排在选择写的位置
+    // 日报、跟踪项（用户自己的笔记，隐藏载体但不是 ShuviX 文件）：同样
+    for (const userNotes of ['__daily__', '__tracking__']) {
+      mockPick({ projectId: userNotes, settings: { knowledgeBases: [] } })
+      expect(await baseNames(), userNotes).toEqual(['shuvix'])
+      mockPick({ projectId: userNotes })
+      expect(await baseNames(), userNotes).toEqual(['shuvix'])
+    }
+
+    // 顺序是项目库 → 选择 → 说明书，选择里把 shuvix 写在哪儿都不算数
     inProject(['alpha', 'shuvix'])
+    expect(await baseNames()).toEqual(['project', 'alpha', 'shuvix'])
+    inProject(['shuvix', 'alpha'])
     expect(await baseNames()).toEqual(['project', 'alpha', 'shuvix'])
   })
 
@@ -1225,50 +1246,43 @@ describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
     })
   })
 
-  it('SB-M8 knowledgeBaseOptions：载体会话的候选里没有 shuvix（用户库照列）；普通项目会话与项目对话框照旧垫底；selected 是原样的选择', () => {
+  it('SB-M8 knowledgeBaseOptions：载体会话、普通项目会话、项目对话框的候选里都没有 shuvix（用户库照列）；selected 剔掉 shuvix、其余原样', () => {
     seedBases('alpha', 'notes')
     seedBuiltinBase()
-    const builtinOption = { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
+    const userOptions = [
+      { name: 'alpha', label: 'alpha' },
+      { name: 'notes', label: 'notes' }
+    ]
 
-    // 载体会话：说明书恒启用，不再是候选项；选择原样交回（改了名、已不在的库照留；写了 shuvix 也留着）
+    // 载体会话：选择原样交回（改了名、已不在的库照留），只有存量的 shuvix 被剔掉
     mockPick({
       projectId: '__policies__',
       settings: { knowledgeBases: ['notes', 'renamed-away', 'shuvix'] }
     })
     expect(knowledgeBaseOptions('s1')).toEqual({
-      options: [
-        { name: 'alpha', label: 'alpha' },
-        { name: 'notes', label: 'notes' }
-      ],
-      selected: ['notes', 'renamed-away', 'shuvix'],
+      options: userOptions,
+      selected: ['notes', 'renamed-away'],
       explicit: true
     })
 
-    // 普通项目会话：照旧垫底
+    // 普通项目会话
     inProject()
-    expect(knowledgeBaseOptions('s1').options).toEqual([
-      { name: 'alpha', label: 'alpha' },
-      { name: 'notes', label: 'notes' },
-      builtinOption
-    ])
+    expect(knowledgeBaseOptions('s1').options).toEqual(userOptions)
 
-    // 项目对话框（不传会话）：照旧垫底
-    expect(knowledgeBaseOptions().options).toEqual([
-      { name: 'alpha', label: 'alpha' },
-      { name: 'notes', label: 'notes' },
-      builtinOption
-    ])
+    // 项目对话框（不传会话）
+    expect(knowledgeBaseOptions().options).toEqual(userOptions)
   })
 })
 
 /**
- * 缺省启用内置说明书（SB-D1..D6，2026-11-02 裁决）。不知道说明书的 agent 替用户新建 bot 时只能去翻 `~/.shuvix`
- * 和应用包，所以谁都没设过时启用它（用户库仍然一个都不默认启用）。三条主线：
- *   - 只是回落链的最后一级：显式的 `[]` 和任何一份明确的选择都盖得过它。
- *   - 内置库目录不在（开发期没拷资源）→ 一切照旧，不抛、不留空围栏。
+ * 内置说明书恒启用（SB-D1..D7，2026-11-14 裁决「始终可查，不是选项」，接替 2026-11-02 的「缺省启用、可取消」）。
+ * 不知道说明书的 agent 替用户新建 bot 时只能去翻 `~/.shuvix` 和应用包。四条主线：
+ *   - 它不在回落链里：`selectedBaseNames` 缺省是 `[]`，各级存量选择里的 `shuvix` 读时剔掉；显式的 `[]` 和
+ *     任何一份明确的选择都去不掉它。项目外、谁都没勾的会话因此也有围栏（只列说明书）。
+ *   - 内置库目录不在（开发期没拷资源）→ 哪儿都没有 shuvix，一切照旧，不抛、不留空围栏。
  *   - 围栏里那段说明只跟内置库走，指到的文件名是说明书里真实存在的那几篇（三语都有）。
  */
-describe('SB-D 缺省启用内置说明书', () => {
+describe('SB-D 内置说明书恒启用', () => {
   const seedBases = (...names: string[]): void => {
     for (const name of names) mkdirSync(join(userRootOf(root), name), { recursive: true })
   }
@@ -1279,20 +1293,23 @@ describe('SB-D 缺省启用内置说明书', () => {
   const shuvixRow = (): ReturnType<typeof enabledBaseChoices>[number] | undefined =>
     enabledBaseChoices('s1').find((c) => c.name === 'shuvix')
 
-  it('SB-D1 谁都没设过：selectedBaseNames 是 [shuvix]；围栏清单里它只读、带一段非空的说明', () => {
+  it('SB-D1 谁都没设过：selectedBaseNames 是 []，但围栏清单里有 shuvix、排在最后、只读、带一段非空的说明；项目外的会话也有围栏', () => {
     seedBases('notes')
     seedBuiltinBase()
 
     for (const arrange of [() => mockPick({ projectId: null }), () => inProject()]) {
       arrange()
-      expect(selectedBaseNames('s1')).toEqual(['shuvix'])
+      expect(selectedBaseNames('s1')).toEqual([])
       expect(shuvixRow()).toMatchObject({ readonly: true, note: expect.stringMatching(/\S/) })
+      expect(enabledBaseChoices('s1').at(-1)?.name).toBe('shuvix')
     }
+    mockPick({ projectId: null })
+    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toContain('shuvix')
     // 活的回落链：解析不落库
     expect(sessionDao.updateSettings).not.toHaveBeenCalled()
   })
 
-  it('SB-D2 显式的 [] —— 会话 / 父会话 / 项目 哪一级都一样，还有一份不含它的明确选择：都没有 shuvix；项目外的 [] 整段围栏都不注入', async () => {
+  it('SB-D2 显式的 [] —— 会话 / 父会话 / 项目 哪一级都一样，还有一份不含它的明确选择：选择照原样，shuvix 照样在、排最后；项目外的 [] 围栏里只剩说明书', async () => {
     seedBases('notes')
     seedBuiltinBase()
     vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
@@ -1300,39 +1317,48 @@ describe('SB-D 缺省启用内置说明书', () => {
     // 会话自己
     mockPick({ projectId: null, settings: { knowledgeBases: [] } })
     expect(selectedBaseNames('s1')).toEqual([])
-    expect(await baseNames()).toEqual([])
-    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toBeNull()
+    expect(await baseNames()).toEqual(['shuvix'])
+    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toContain('shuvix')
 
     // 父会话
     mockPick({ projectId: null, parentId: 'parent' })
     mockSessionRow('parent', { projectId: null, settings: { knowledgeBases: [] } })
     expect(selectedBaseNames('s1')).toEqual([])
-    expect(await baseNames()).toEqual([])
-    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toBeNull()
+    expect(await baseNames()).toEqual(['shuvix'])
+    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toContain('shuvix')
 
-    // 项目：项目库不归选择管，围栏还在，但没有 shuvix
+    // 项目：项目库打头、说明书垫底
     mockPick({ projectId: 'p1' })
     mockProjectBases('p1', [])
     expect(selectedBaseNames('s1')).toEqual([])
-    expect(await baseNames()).toEqual(['project'])
-    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).not.toContain('- shuvix')
+    expect(await baseNames()).toEqual(['project', 'shuvix'])
 
     // 一份不含它的明确选择
     mockPick({ projectId: null, settings: { knowledgeBases: ['notes'] } })
     expect(selectedBaseNames('s1')).toEqual(['notes'])
-    expect(await baseNames()).toEqual(['notes'])
-    expect(shuvixRow()).toBeUndefined()
+    expect(await baseNames()).toEqual(['notes', 'shuvix'])
+    expect(shuvixRow()).toBeDefined()
   })
 
-  it('SB-D3 内置库目录不在、谁都没设过：没有 shuvix 那一行、没有围栏、不抛、不建目录；点名它按「一个都没启用」报错', async () => {
+  it('SB-D3 内置库目录不在：哪儿都没有 shuvix（选择、启用清单、围栏、配置卡），不抛、不建目录；项目外没勾就没有围栏，点名它按「一个都没启用」报错', async () => {
     seedBases('notes')
     mockPick({ projectId: null })
 
-    expect(selectedBaseNames('s1')).toEqual(['shuvix'])
+    expect(selectedBaseNames('s1')).toEqual([])
     expect(enabledBaseChoices('s1')).toEqual([])
     expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toBeNull()
     expect(await listBases('s1')).toEqual([])
     expect(await resolveBase('s1', 'shuvix')).toEqual({ error: NO_BASES })
+    expect(knowledgeBaseOptions('s1').options.map((o) => o.name)).toEqual(['notes'])
+
+    // 存量选择里写了 shuvix、项目会话、ShuviX 文件笔记本：同样没有它
+    mockPick({ projectId: null, settings: { knowledgeBases: ['shuvix', 'notes'] } })
+    expect(selectedBaseNames('s1')).toEqual(['notes'])
+    expect(await baseNames()).toEqual(['notes'])
+    inProject()
+    expect(await baseNames()).toEqual(['project'])
+    mockPick({ projectId: '__agents__' })
+    expect(await baseNames()).toEqual([])
     expect(existsSync(builtinRootOf(root))).toBe(false)
   })
 
@@ -1383,12 +1409,49 @@ describe('SB-D 缺省启用内置说明书', () => {
     }
   })
 
-  it('SB-D6 knowledgeBaseOptions() 不传会话（项目对话框口径）：selected 是 [shuvix]、explicit 为假；内置库目录不在时 selected 是空的', () => {
+  it('SB-D6 knowledgeBaseOptions() 不传会话（项目对话框口径）：selected 是 []、explicit 为假，候选里没有 shuvix —— 内置库目录在不在都一样', () => {
     seedBases('notes')
-    expect(knowledgeBaseOptions()).toMatchObject({ selected: [], explicit: false })
+    expect(knowledgeBaseOptions()).toEqual({
+      options: [{ name: 'notes', label: 'notes' }],
+      selected: [],
+      explicit: false
+    })
 
     seedBuiltinBase()
-    expect(knowledgeBaseOptions()).toMatchObject({ selected: ['shuvix'], explicit: false })
+    expect(knowledgeBaseOptions()).toEqual({
+      options: [{ name: 'notes', label: 'notes' }],
+      selected: [],
+      explicit: false
+    })
+  })
+
+  it('SB-D7 存量选择里的 shuvix 在会话 / 父会话 / 项目哪一级都读时剔掉（含首尾空白的写法）；只写了 shuvix 的那一级仍算「设过」，不往下落', async () => {
+    seedBases('alpha', 'notes')
+    seedBuiltinBase()
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    // 会话自己
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: [' shuvix ', 'notes', 'shuvix'] } })
+    expect(selectedBaseNames('s1')).toEqual(['notes'])
+    expect(await baseNames()).toEqual(['project', 'notes', 'shuvix'])
+
+    // 父会话
+    mockPick({ projectId: 'p1', parentId: 'parent' })
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: ['shuvix', 'alpha'] } })
+    expect(selectedBaseNames('s1')).toEqual(['alpha'])
+    expect(await baseNames()).toEqual(['project', 'alpha', 'shuvix'])
+
+    // 项目
+    mockPick({ projectId: 'p1' })
+    mockProjectBases('p1', ['notes', 'shuvix'])
+    expect(selectedBaseNames('s1')).toEqual(['notes'])
+    expect(await baseNames()).toEqual(['project', 'notes', 'shuvix'])
+
+    // 会话只写了 shuvix：剔完是 []，但那是一份明确的选择 —— 不落到项目那份 notes（与 SB-P3 的 project 同理）
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: ['shuvix'] } })
+    expect(selectedBaseNames('s1')).toEqual([])
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: [], explicit: true })
+    expect(await baseNames()).toEqual(['project', 'shuvix'])
   })
 })
 

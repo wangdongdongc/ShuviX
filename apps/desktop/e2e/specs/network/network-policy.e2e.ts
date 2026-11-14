@@ -24,7 +24,7 @@
  * NP-4  一个经局域网地址连着、什么也不发的 WebSocket：写一份拒绝它的 network-admission（不经应用）→ 定时核对接住，
  *       它以 1008 断开、原因是规则的话；127.0.0.1 上的连接照旧
  * NP-5  删掉用户策略回到内置：设置页的引导是 builtin 那一段（端口代进去）、带两个按钮、客户端行带设备 ID、「最近拒绝」
- *       与 status 同序；点「让 agent 帮我设置」→ 新建一条会话（不属于项目、知识库 shuvix）、主窗口切过去、输入框里是
+ *       与 status 同序；点「让 agent 帮我设置」→ 新建一条会话（不属于项目；不替它勾知识库 —— ShuviX 系统说明恒启用）、主窗口切过去、输入框里是
  *       提示词（带端口、状态、network-policy、network-admission.md、连着的设备 ID），没有发出去（没有消息、没有请求）
  * NP-6  停用内置 network-admission（md 扩展元数据的开关）：admission disabled、引导是警告、局域网地址 → 200；
  *       再启用 → 回到 builtin、局域网地址 → 403
@@ -643,11 +643,19 @@ describe('network access: who may connect is a security policy', () => {
       'the new policy session'
     )
     expect(created.projectId ?? null).toBeNull()
+    // 不再替它勾知识库：ShuviX 系统说明（策略条目在里面）对每条会话恒启用，选择里不写它
     expect(
       await app.main.eval<string[] | undefined>(
         `window.api.session.getById(${JSON.stringify(created.id)}).then((x) => x?.settings?.knowledgeBases)`
       )
-    ).toEqual(['shuvix'])
+    ).toBeUndefined()
+    expect(
+      (
+        await app.main.eval<Array<{ name: string }>>(
+          `window.api.knowledge.baseOptions({ sessionId: ${JSON.stringify(created.id)} }).then((r) => r.options)`
+        )
+      ).map((o) => o.name)
+    ).not.toContain('shuvix')
 
     // 主窗口切到它，提示词填进输入框
     await until(

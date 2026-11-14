@@ -44,7 +44,7 @@ import {
   Toggle,
   InlineInput
 } from './SettingsPrimitives'
-import { buildNetworkPolicyPrompt, NETWORK_POLICY_CHAT_KNOWLEDGE } from './networkPolicyPrompt'
+import { buildNetworkPolicyPrompt } from './networkPolicyPrompt'
 
 /** 监听失败的原因（主进程给的 Node 错误码或消息）→ 人读的一句 */
 function errorText(
@@ -263,10 +263,7 @@ export function NetworkAccessSettings(): React.JSX.Element {
         projectId: null,
         title: t('settings.networkPolicyChatTitle')
       })
-      await api.session.updateKnowledgeBases({
-        id: session.id,
-        knowledgeBases: [...NETWORK_POLICY_CHAT_KNOWLEDGE]
-      })
+      // 不用勾知识库：network-policy / policy-md 条目在 ShuviX 系统说明里，它对每条会话恒启用
       await window.api.app.openSessionWithDraft({ sessionId: session.id, draft })
     } catch {
       load()

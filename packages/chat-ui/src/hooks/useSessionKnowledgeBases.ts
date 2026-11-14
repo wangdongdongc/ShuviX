@@ -9,7 +9,7 @@ const NO_NAMES: string[] = []
 
 export interface SessionKnowledgeBasesState {
   /**
-   * 候选库（用户库 + 内置库；项目库不在其中 —— 项目会话恒带它）。还没拉到、或宿主没有知识库
+   * 候选库（只有用户自己的库；项目库与内置说明书不在其中 —— 它们恒启用）。还没拉到、或宿主没有知识库
    * （渠道端、扩展端）时为空，调用方据此不画这一组
    */
   options: KnowledgeBaseOptionsResult['options']
@@ -37,7 +37,7 @@ function flip(names: readonly string[], name: string): string[] {
  *
  * 没有会话（欢迎页）时勾的是 store 里的草稿 `welcomeKnowledgeBases`，直接发送新建会话时由输入框
  * 写进新会话（InputArea 的 `createSessionForSend`），之后清空。草稿没动过（`null`）时显示宿主给的缺省，
- * 第一次勾选在缺省上改 —— 否则勾一个库会把缺省启用的内置说明书悄悄去掉。
+ * 第一次勾选在缺省上改（项目设过缺省时，勾一个库不该把那几个悄悄去掉）。
  */
 export function useSessionKnowledgeBases(sessionId: string | null): SessionKnowledgeBasesState {
   // 连同它是哪条会话的一起存：会话一换，上一条的那份不上屏

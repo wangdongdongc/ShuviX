@@ -14,9 +14,6 @@ const PROMPT_DENIALS = 5
 /** 提示词是纯文本（进输入框、进剪贴板），不做 HTML 转义 —— 不依赖全局的 i18next 配置 */
 const PLAIN = { interpolation: { escapeValue: false } } as const
 
-/** 新会话勾上的知识库：ShuviX 自己的手册（network-policy / policy-md 条目在里面） */
-export const NETWORK_POLICY_CHAT_KNOWLEDGE = ['shuvix'] as const
-
 export function buildNetworkPolicyPrompt(t: T, status: NetworkStatus): string {
   const state = t(`settings.networkPromptState_${status.admission}`)
   const none = t('settings.networkPromptNone')

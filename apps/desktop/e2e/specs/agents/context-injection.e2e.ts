@@ -314,17 +314,17 @@ describe('覆盖 work 的清单省略语义', () => {
  * 项目的会话照样有围栏（只要它有库）。唯一的门是档案的工具清单里有没有 `knowledge`。
  *
  * 用户库**缺省一个都不启用**（2026-09-17）；2026-10-10 起项目会话的**项目库隐式启用**、排在最前（不归选择管）；
- * 2026-11-02 起谁都没设过时**内置说明书启用**。所以谁都没设过的会话恒有围栏；要圈别的库、或明确不要说明书，
- * 用例靠 `createAgentSession({ knowledgeBases })` 在根 Agent 起来之前把选择放好（`[]` = 不用知识库）。项目库之后的
- * 次序就是选择里的次序。
+ * 2026-11-14 起**内置说明书 `shuvix` 恒启用**、排在最后（也不归选择管：选择里写了它读时剔掉，显式的 `[]` 也去不掉它）。
+ * 所以每条会话都恒有围栏（说明书的目录在 —— e2e 里就是仓库的 resources/knowledge）；要圈用户库，用例靠
+ * `createAgentSession({ knowledgeBases })` 在根 Agent 起来之前把选择放好（`[]` = 不用我自己的库）。次序恒为
+ * 项目库 → 选择里的用户库（照选择的次序）→ 说明书。
  *
  * 围栏里**只有清单、没有内容**：不列条目文件名、不报条目数，也**不带库目录**（2026-11-08 起：库目录只有
  * 知识库管理员知道，别的 agent 按库名 + 条目名经 `knowledge` 读、经 `submit` 交）。例外是内置说明书自己那段
  * 说明（2026-11-02）：它点名该读哪几篇（`/bot-md.md` 这样的条目名），不是库的内容，也不是计数。
  *
- * 选择改了之后围栏**当场跟上**（pi-durable 起，P3-06 PIN-08 / P3-15）：知识库是活段落
- * （`shuvix.prompt.knowledge`，`durable/prompt/sections.ts`），只有人设冻结 —— 下一次请求把变了的那段作为
- * `pi.system` 增量重发，不用重建运行时。KBF-E-4 钉的就是这条新边界：同一个运行时，改选择即生效、改回来即回来。
+ * 选择改了之后围栏**不当场跟上**（2026-11-06 起整份系统提示词按对话冻结）：改选择只让提醒里出现知识库那一段，
+ * 用户点重建才按此刻的来源重渲染。KBF-E-4 钉的就是这条边界；`tool` 那一面（`knowledge` 每次调用现查）照样即时。
  */
 describe('知识库围栏', () => {
   const OPEN = '<knowledge_bases>'
@@ -368,8 +368,8 @@ describe('知识库围栏', () => {
         .then((info) => info.systemPrompt)`
     )
 
-  it('KBF-E-1 项目会话谁都没勾：围栏照样在、排在项目提示词之后，列出 `- project — <项目名>` 与缺省的说明书，不带库目录、条目与计数；没有项目记忆那段', async () => {
-    // 不传 knowledgeBases：项目库是隐式启用的，说明书是缺省的，都不用勾
+  it('KBF-E-1 项目会话谁都没勾：围栏照样在、排在项目提示词之后，列出 `- project — <项目名>` 与恒在的说明书，不带库目录、条目与计数；没有项目记忆那段', async () => {
+    // 不传 knowledgeBases：项目库与说明书都是隐式启用的，都不用勾
     const { systemPrompt: sp } = await createAgentSession(app.main, {
       projectId,
       title: 'e2e-kbf-1'
@@ -389,56 +389,55 @@ describe('知识库围栏', () => {
   it('KBF-E-2 不属于任何项目的会话照样有围栏（列出用户自己的库），且没有项目那两段', async () => {
     mkdirSync(userBaseDir(), { recursive: true })
 
+    // 选择里只有用户库：说明书不用勾，它恒在
     const { systemPrompt: sp } = await createAgentSession(app.main, {
       title: 'e2e-kbf-2',
-      knowledgeBases: [USER_BASE, 'shuvix']
+      knowledgeBases: [USER_BASE]
     })
     expect(sp).toContain(OPEN)
     expect(fenceBodyOf(sp)).toContain(`- ${USER_BASE}\n`)
     expect(fenceBodyOf(sp)).not.toContain(userBaseDir())
-    // 内置库那一行带一句它是什么、且只读 —— 那句话本身不含路径与计数
+    // 内置库那一行带一句它是什么、且只读 —— 那句话本身不含路径与计数；它排在用户库之后
     expect(fenceBodyOf(sp)).toMatch(/\n- shuvix — .*read-only/)
+    expect(fenceBodyOf(sp).indexOf(`- ${USER_BASE}`)).toBeLessThan(
+      fenceBodyOf(sp).indexOf('- shuvix — ')
+    )
     expectNoContent(fenceBodyOf(sp))
     // 项目那两段与围栏无关：没有项目就是没有，围栏照旧
     expect(sp).not.toContain('<project_prompt>')
     expect(sp).not.toContain('<project_memory>')
   })
 
-  it('KBF-E-3 谁都没设过（缺省）→ 围栏只列内置说明书、带它的说明、不教记录；明确设成空 → 整段不注入，也不因此多出空行', async () => {
-    // 库在磁盘上、内置库也随应用发布着 —— 「没有库」说的是**没启用**，不是没有
+  it('KBF-E-3 谁都没设过 → 围栏只列恒在的内置说明书、带它的说明、不教记录；明确设成空 → 围栏一字不差（说明书去不掉）', async () => {
+    // 库在磁盘上 —— 「没有用户库」说的是**没启用**，不是没有
     mkdirSync(userBaseDir(), { recursive: true })
 
-    const noFence = (sp: string, label: string): void => {
-      expect(sp, label).not.toContain(OPEN)
-      expect(sp, label).not.toContain(CLOSE)
-      // 无项目会话里知识库是**最后**一段：注入一个空围栏、或只追加了那个空行分隔符，
-      // 都会在末尾留下一个空行 —— 这是「整段不注入」与「注入了一段空东西」的分界
-      expect(sp, `${label}: no dangling blank line from an empty append`).not.toMatch(
-        /\n[ \t]*\n[ \t]*$/
-      )
+    const onlyManual = (fence: string, label: string): void => {
+      const listed = fence.split('\n').filter((line) => line.startsWith('- '))
+      expect(listed, label).toHaveLength(1)
+      expect(listed[0], label).toMatch(/^- shuvix — .*read-only/)
+      // 手头全是只读的库：不教「记下来」，只说什么时候来查
+      expect(fence, label).not.toContain('submit')
+      expect(fence, label).toContain('`/bot-md.md`')
+      expectNoContent(fence)
     }
 
-    // (a) 谁都没设过 —— 这是新会话的常态（2026-11-02 起缺省只启用内置说明书，磁盘上的用户库不算）
+    // (a) 谁都没设过 —— 这是新会话的常态（用户库缺省一个都不启用，说明书恒在）
     const fence = fenceBodyOf(
       (await createAgentSession(app.main, { title: 'e2e-kbf-3-default' })).systemPrompt
     )
-    const listed = fence.split('\n').filter((line) => line.startsWith('- '))
-    expect(listed).toHaveLength(1)
-    expect(listed[0]).toMatch(/^- shuvix — .*read-only/)
-    // 手头全是只读的库：不教「记下来」，只说什么时候来查
-    expect(fence).not.toContain('submit')
-    expect(fence).toContain('`/bot-md.md`')
-    expectNoContent(fence)
+    onlyManual(fence, 'never chosen')
 
-    // (b) 明确设成空：走的是另一条分支（「设过」的判据是是不是数组），说明书也跟着没有
-    noFence(
+    // (b) 明确设成空：走的是另一条分支（「设过」的判据是是不是数组），说明书照样在 —— 围栏与 (a) 一字不差
+    const explicitEmpty = fenceBodyOf(
       (await createAgentSession(app.main, { title: 'e2e-kbf-3-empty', knowledgeBases: [] }))
-        .systemPrompt,
-      'explicitly empty'
+        .systemPrompt
     )
+    onlyManual(explicitEmpty, 'explicitly empty')
+    expect(explicitEmpty).toBe(fence)
   })
 
-  it('KBF-E-4 改选择不动已冻结的围栏，提醒里是知识库那一段；用户点重建才换：清空 → 用户库那几行消失（项目会话只剩项目库那一行，无项目会话整段消失），选回来再重建 → 逐字节回来', async () => {
+  it('KBF-E-4 改选择不动已冻结的围栏，提醒里是知识库那一段；用户点重建才换：清空 → 用户库那几行消失（项目会话剩项目库与说明书，无项目会话只剩说明书那一行），选回来再重建 → 逐字节回来', async () => {
     // 2026-11-06 用户裁决「历史状态不变」：整份系统提示词（知识库围栏在内）在这段对话第一次建 agent 时冻结，
     // 来源改了只提醒，用户点「重建」才按此刻的来源重渲染（chat-system-prompt-frozen.e2e.ts 走的是界面那条路）
     mkdirSync(userBaseDir(), { recursive: true })
@@ -503,6 +502,7 @@ describe('知识库围栏', () => {
     const projFence = fenceBodyOf(projCleared)
     expect(projFence).toContain('- project — InjProj')
     expect(projFence).not.toContain(`- ${USER_BASE}`)
+    expect(projFence).toMatch(/\n- shuvix — .*read-only/)
     expect(await proj.staleKeys()).toEqual([])
     // 围栏之外逐字不动
     expect(projCleared.slice(0, projCleared.indexOf(OPEN))).toBe(
@@ -519,9 +519,11 @@ describe('知识库围栏', () => {
     await proj.rebuild()
     expect(await systemPromptOf(proj.sid)).toBe(proj.sp0)
 
-    // (b) 不属于项目的会话：清空 → 重建之前不变；重建 → 整段消失（连同它前面那个段落分隔符），选回来再重建 → 回来
+    // (b) 不属于项目的会话：清空 → 重建之前不变；重建 → 围栏还在、只剩说明书那一行（它恒启用），
+    // 围栏之外逐字不动；选回来再重建 → 逐字节回来
     const free = await start({ title: 'e2e-kbf-4-free' })
-    expect(free.sp0).toContain(OPEN)
+    expect(fenceBodyOf(free.sp0)).toContain(`- ${USER_BASE}`)
+    expect(fenceBodyOf(free.sp0)).toContain('- shuvix — ')
 
     await free.setBases([])
     expect(await free.runtimeCreated()).toBe(true)
@@ -529,11 +531,13 @@ describe('知识库围栏', () => {
     expect(await free.staleKeys()).toEqual(['knowledge_bases'])
     await free.rebuild()
     const cleared = await systemPromptOf(free.sid)
-    expect(cleared).not.toContain(OPEN)
-    expect(cleared).not.toContain(CLOSE)
+    const freeFence = fenceBodyOf(cleared)
+    const listed = freeFence.split('\n').filter((line) => line.startsWith('- '))
+    expect(listed).toHaveLength(1)
+    expect(listed[0]).toMatch(/^- shuvix — .*read-only/)
     const sp0 = free.sp0
-    const fenceEnd = sp0.indexOf(CLOSE) + CLOSE.length
-    expect(cleared).toBe(sp0.slice(0, sp0.indexOf(OPEN)).replace(/\n\n$/, '') + sp0.slice(fenceEnd))
+    expect(cleared.slice(0, cleared.indexOf(OPEN))).toBe(sp0.slice(0, sp0.indexOf(OPEN)))
+    expect(cleared.slice(cleared.indexOf(CLOSE))).toBe(sp0.slice(sp0.indexOf(CLOSE)))
 
     await free.setBases([USER_BASE])
     await free.rebuild()
@@ -542,14 +546,14 @@ describe('知识库围栏', () => {
     expect(restored).toBe(sp0)
   })
 
-  it('KBF-E-5 项目会话的围栏次序：项目库恒打头，其后是选择里的次序（`project` → `shuvix` → 用户库），整段仍然无条目/计数、每行带库目录', async () => {
+  it('KBF-E-5 项目会话的围栏次序：项目库恒打头、用户库居中、说明书恒垫底（不论选择怎么写），整段仍然无条目/计数、不带库目录', async () => {
     // 这一条要的正是「用户库 + 项目库 + 内置库」三种都在的那一屏
     mkdirSync(userBaseDir(), { recursive: true })
 
     const { systemPrompt: sp } = await createAgentSession(app.main, {
       projectId,
       title: 'e2e-kbf-5',
-      // 选择里把项目库写在中间（存量写法）、内置库写在用户库前面：项目库照样打头，其余照选择的次序
+      // 存量写法：说明书写在最前、项目库写在中间 —— 两个都读时剔掉，次序由宿主定
       knowledgeBases: ['shuvix', 'project', USER_BASE]
     })
     const fence = fenceBodyOf(sp)
@@ -559,11 +563,12 @@ describe('知识库围栏', () => {
       expect(i, `fence lists ${JSON.stringify(line)}: ${fence}`).toBeGreaterThanOrEqual(0)
       return i
     }
-    // 项目库恒打头；之后宿主不重排：勾选写成什么次序，围栏就是什么次序
-    expect(at('- project — InjProj')).toBeLessThan(at('- shuvix — '))
-    expect(at('- shuvix — ')).toBeLessThan(at(`- ${USER_BASE}`))
-    // 项目库只出现一次（选择里残留的 project 不会再列一遍）
+    // 项目库恒打头，说明书恒垫底，用户库在中间
+    expect(at('- project — InjProj')).toBeLessThan(at(`- ${USER_BASE}`))
+    expect(at(`- ${USER_BASE}`)).toBeLessThan(at('- shuvix — '))
+    // 项目库与说明书都只出现一次（选择里残留的那两个不会再列一遍）
     expect(fence.split('- project — ').length).toBe(2)
+    expect(fence.split('- shuvix — ').length).toBe(2)
     // 内置那一行自带一句「是什么 + 只读」，好让模型知道什么问题该来这里查、又别把笔记记进来
     expect(fence).toMatch(/\n- shuvix — .*read-only/)
 
@@ -573,10 +578,10 @@ describe('知识库围栏', () => {
     expect(fence).toContain(`- ${USER_BASE}\n`)
   })
 
-  it('KBF-E-6 取消勾选 `shuvix` 后新建的会话围栏里没有那一行；已有运行时的系统提示词逐字节不变', async () => {
+  it('KBF-E-6 选择里没有 `shuvix` 的会话围栏里照样有那一行（与写了它的会话一字不差）；改已有运行时的选择，系统提示词逐字节不变', async () => {
     mkdirSync(userBaseDir(), { recursive: true })
 
-    // (a) 先有一个勾了内置库的运行时 —— 它的围栏里有那一行
+    // (a) 先有一个选择里写了 shuvix 的运行时（存量写法）—— 它的围栏里有那一行
     const live = (
       await createAgentSession(app.main, {
         projectId,
@@ -606,11 +611,18 @@ describe('知识库围栏', () => {
     const fence = fenceBodyOf(sp)
     expect(fence).toContain(`- ${USER_BASE}`)
     expect(fence).toContain('- project — InjProj')
-    // 取消勾选 = 它不再是这条会话的库：围栏里连那一行都没有
-    expect(fence).not.toContain('- shuvix')
+    // 说明书恒启用：选择里没写它，围栏里照样有、垫底
+    expect(fence).toMatch(/\n- shuvix — .*read-only/)
+    expect(fence.indexOf(`- ${USER_BASE}`)).toBeLessThan(fence.indexOf('- shuvix — '))
     expectNoContent(fence)
+    // 选择里写没写 shuvix 不影响结果：两条会话的围栏一字不差
+    expect(fence).toBe(fenceBodyOf(before))
 
-    // (c) 已有的那个运行时不受任何影响 —— 系统提示词逐字节不变
+    // (c) 把已有运行时的选择改成不含 shuvix 的一份：生效的选择没变，系统提示词逐字节不变
+    const res = await app.main.eval<{ success: boolean }>(
+      `window.api.session.updateKnowledgeBases(${JSON.stringify({ id: live, knowledgeBases: [USER_BASE] })})`
+    )
+    expect(res.success).toBe(true)
     expect(await systemPromptOf(live)).toBe(before)
   })
 })

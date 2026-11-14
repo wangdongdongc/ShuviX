@@ -32,8 +32,8 @@ export function ProjectEditDialog({
   const [loading, setLoading] = useState(true)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
-  // 知识库：候选项来自宿主，勾选来自项目设置；没设过就显示宿主给的缺省（只有内置说明书，
-  // 见 sessionBundle.selectedBaseNames），而且不写回 —— 用户动过才存，否则一次
+  // 知识库：候选项来自宿主，勾选来自项目设置；没设过就显示宿主给的缺省（一个都不勾 ——
+  // 内置说明书恒启用、不是候选项，见 sessionBundle.selectedBaseNames），而且不写回 —— 用户动过才存，否则一次
   // 「打开看看就关掉」会把此刻这份冻成快照，这个项目从此不再跟着缺省走
   const [kbOptions, setKbOptions] = useState<{ name: string; label: string }[]>([])
   const [knowledgeBases, setKnowledgeBases] = useState<string[]>([])
