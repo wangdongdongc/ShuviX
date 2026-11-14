@@ -84,7 +84,7 @@ vi.mock('../../agents/agentHost', () => ({
     }
   },
   desktopPromptHost: {},
-  desktopPromptVars: () => ({}),
+  desktopPromptBlocks: () => ({}),
   resolveProfileModelSpec: () => null
 }))
 // 运行时的事件经桌面的 electronEventSink 到前端注册表（这里直通假的注册表）
@@ -186,8 +186,7 @@ const profile = (name: string): Record<string, unknown> => ({
   description: '',
   tools: [],
   systemPrompt: '',
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 const FAUX_SELECTION = { provider: 'faux', modelId: 'faux-1' }

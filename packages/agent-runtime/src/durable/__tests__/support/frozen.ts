@@ -1,10 +1,11 @@
 /**
- * 系统提示词冻结（2026-11-06）用例的共用夹具：场景 W 换上带日期 / 版本 / 系统的档案正文与一个可变来源的
+ * 系统提示词冻结（2026-11-06）用例的共用夹具：场景 W 换上带日期 / 版本 / 系统的 `environment` 块与一个可变来源的
  * PromptHost（`support/prompt.ts` 的 `sourceHost`），外加第一次上锁时的期望文本。lock.persona / lock.promptStatus /
  * durableSession.rebuildSystemPrompt 共用。
  */
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { expect } from 'vitest'
+import type { PromptBlockTexts } from '../../../agentProfile/promptBlocks'
 import { normalizeToolNames } from '../../agentSpec'
 import { backgroundContext as BG } from '../../context'
 import { AgentStateDoc, type AgentStateRecord } from '../../docs'
@@ -22,19 +23,24 @@ import { withTimeout } from './wait'
 
 export const REUSED_LOG = 'reusing the frozen system prompt'
 
-/** 变量表里会随环境变的那几项（日期、版本、系统），外加调用次数 */
+/** `environment` 块里会随环境变的那几项（日期、版本、系统），外加调用次数 */
 export interface EnvVars {
   readonly state: { date: string; appVersion: string; os: string; calls: number }
-  promptVars: () => Record<string, string>
+  promptBlocks: () => PromptBlockTexts
+}
+
+/** 这几项渲染成的 `environment` 块正文 */
+export function environmentText(state: { date: string; appVersion: string; os: string }): string {
+  return `- OS: ${state.os}\n- Current date: ${state.date}\n- ShuviX version: ShuviX ${state.appVersion}`
 }
 
 export function envVars(): EnvVars {
   const state = { date: '2026-11-05', appVersion: '0.2.56', os: 'Darwin 25.0.0', calls: 0 }
   return {
     state,
-    promptVars: () => {
+    promptBlocks: () => {
       state.calls++
-      return { marker: 'M1', date: state.date, appVersion: state.appVersion, os: state.os }
+      return { environment: environmentText(state) }
     }
   }
 }
@@ -46,13 +52,17 @@ export function driftEnvironment(vars: EnvVars, day: string): void {
   vars.state.os = `Darwin 25.${day.slice(-2)}.0`
 }
 
-export const BODY =
-  'You are {{shuvix:marker}}. Today is {{shuvix:date}} (v{{shuvix:appVersion}}, {{shuvix:os}}).'
-export const PERSONA_1 = 'You are M1. Today is 2026-11-05 (v0.2.56, Darwin 25.0.0).'
+export const BODY = 'You are M1.'
+/** 第一次上锁时的人设：正文 + 那一刻的 `environment` 块 */
+export const PERSONA_1 = `${BODY}\n\n<environment>\n${environmentText({
+  date: '2026-11-05',
+  appVersion: '0.2.56',
+  os: 'Darwin 25.0.0'
+})}\n</environment>`
 
 /** 场景 W 的三段（指令文件 AGENTS.md、项目提示词、知识库）按 sourceHost 的初始值 */
 export const SECTIONS_A = {
-  project_instructions: fenceInstructionFile('AGENTS.md', 'Use pnpm.'),
+  agents_md: fenceInstructionFile('AGENTS.md', 'Use pnpm.'),
   project_prompt: fenceProjectPrompt('Acme billing.'),
   knowledge_bases: fenceKnowledgeBases('Bases: notes.')
 }
@@ -63,7 +73,8 @@ export const RENDER_CALLS_A = [`instructions:s1:${W_CWD}:AGENTS.md`, 'project:s1
 export function promptOf(persona: string, sections: Record<string, string | null>): string {
   const order = [
     'placeholders',
-    'project_instructions',
+    'agents_md',
+    'claude_md',
     'project_prompt',
     'knowledge_bases',
     'bot_profile'
@@ -97,7 +108,7 @@ export interface FrozenScenario {
   sources: SourceHost
 }
 
-/** 场景 W：档案正文用到日期 / 版本 / 系统，段落来自一个可变来源的宿主 */
+/** 场景 W：人设带一个写着日期 / 版本 / 系统的 `environment` 块，段落来自一个可变来源的宿主 */
 export async function envScenario(
   options: {
     edit?: (config: AgentConfig) => void
@@ -112,7 +123,7 @@ export async function envScenario(
   const sources = options.sources ?? sourceHost()
   const { t } = await scenarioW({
     config,
-    promptVars: vars.promptVars,
+    promptBlocks: vars.promptBlocks,
     promptHost: sources.host,
     ...options.host
   })

@@ -150,7 +150,7 @@ declare global {
     id: string
     name: string
     path: string
-    /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
+    /** 项目提示词（纯文本；档案的提示词块里有 project_prompt 的 agent 会收到） */
     systemPrompt: string
     settings: ProjectSettings
     archivedAt: number
@@ -356,10 +356,8 @@ declare global {
     overridden?: boolean
     /** 压过它的那份自定义文件的文件名 */
     overriddenBy?: string
-    /** 项目指令文件清单（shuvix-instruction-files），顺序即优先级；空 = 不注入 */
-    instructionFiles: string[]
-    /** 项目感知：是否注入项目提示词（shuvix-project-awareness） */
-    projectAwareness: boolean
+    /** 正文之后追加哪几块（shuvix-prompt-blocks）；空 = 不追加 */
+    promptBlocks: string[]
     source: 'builtin' | 'user'
     basePath: string
   }

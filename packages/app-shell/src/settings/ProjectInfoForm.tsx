@@ -15,7 +15,7 @@ export interface ProjectInfoFormProps {
   path?: string
   /** 传入则文件夹可更换；缺省为只读展示 */
   onSelectFolder?: () => void
-  /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
+  /** 项目提示词（纯文本；档案的提示词块里有 project_prompt 的 agent 会收到） */
   systemPrompt?: string
   /** 传入则卡片末尾渲染提示词输入；缺省不渲染 */
   onSystemPromptChange?: (v: string) => void

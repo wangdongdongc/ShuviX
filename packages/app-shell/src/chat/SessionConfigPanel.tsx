@@ -79,7 +79,7 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
  * 会话配置面板（除会话标题外的所有配置）。
  *
  * 两节：扩展能力（这条会话的 MCP 勾选与知识库，随时可改）、文件访问
- * （会话权限表，见 SessionAclSection）。项目指令文件的「读哪些」已整体搬进 agent md 的 `shuvix-instruction-files` 清单
+ * （会话权限表，见 SessionAclSection）。项目指令文件的「读哪些」已整体搬进 agent md 的 `shuvix-prompt-blocks`（`agents_md` / `claude_md`）
  * （那是 agent 的人格设定，不是每个会话的临时选择），这里不再有对应开关。
  * 既可嵌入到 SessionConfigDialog 弹窗中，也可在空会话时直接居中展示。
  *

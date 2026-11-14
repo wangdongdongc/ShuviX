@@ -30,7 +30,7 @@ export interface Project {
   name: string
   /** 项目根目录绝对路径 */
   path: string
-  /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
+  /** 项目提示词（纯文本；档案的提示词块里有 project_prompt 的 agent 会收到） */
   systemPrompt: string
   /** 项目扩展配置 */
   settings: ProjectSettings

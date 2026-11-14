@@ -455,7 +455,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     tools: [...INT_TOOLS, 'agent'],
     overlay: ['mcp:docs', 'mcp:ctx'],
-    persona: 'You are {{shuvix:marker}} [lane:root]',
+    persona: 'You are [lane:root]',
     mcp: { docs: ['lookup', 'slow'], ctx: ['whoami'] },
     trustedMcp: ['ctx'],
     ...(options.sessions === undefined ? {} : { sessions: options.sessions }),

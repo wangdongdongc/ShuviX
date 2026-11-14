@@ -202,7 +202,7 @@ export interface Project {
   id: string
   name: string
   path: string
-  /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
+  /** 项目提示词（纯文本；档案的提示词块里有 project_prompt 的 agent 会收到） */
   systemPrompt: string
   settings: ProjectSettings
   archivedAt: number

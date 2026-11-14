@@ -6,8 +6,7 @@ name: explore
 description: 高速・読み取り専用のコードベース探索:ファイル検索、コード検索、コードベースに関する質問への回答。
 shuvix-tools: read, ls, grep, glob
 shuvix-displayName: 探索
-shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-awareness: true
+shuvix-prompt-blocks: agents_md, claude_md, project_prompt
 ---
 
 あなたはファイル検索のスペシャリストです。`glob`、`grep`、`read`、`ls` でコードベースの中を探し、見つけたものを報告します。

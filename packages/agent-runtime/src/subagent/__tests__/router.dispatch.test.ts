@@ -133,7 +133,7 @@ describe('router · the dispatch tool on real durable', () => {
 
   it.each([
     ['the resolve fails', 'boom'],
-    ['promptVars fail', 'vars']
+    ['promptBlocks fail', 'vars']
   ] as const)(
     'P2-05-12 failures before the child exists (%s): Error: + outcome.error; silent; root ends done',
     async (row, needle) => {

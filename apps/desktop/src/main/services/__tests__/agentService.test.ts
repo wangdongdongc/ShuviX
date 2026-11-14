@@ -94,12 +94,12 @@ function withoutMintedId(text: string): string {
   return text.replace(line, '')
 }
 
-/** 注入开关写成非布尔 → 解析器判整份非法（人读原因带键名与 rejected） */
+/** 布尔键写成非布尔 → 解析器判整份非法（人读原因带键名与 rejected） */
 const INVALID_MD = [
   '---',
   'shuvix: agent v1',
   'name: broken',
-  'shuvix-project-awareness: yes please',
+  'shuvix-user-words: yes please',
   '---',
   '',
   'Invalid agent body.',
@@ -194,10 +194,14 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     }
   })
 
-  it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent', () => {
+  it('AS-4 内置回写保真：提示词块清单原样带进副本，会话相关的块不烤进正文', () => {
     const workText = (agentService.getSource('work', 'builtin') as { text: string }).text
-    // 会话级变量在 createAgent 才替换 —— 副本里必须还是占位符，否则用户拿到的是别人的环境
-    expect(workText).toContain('{{shuvix:workingDirectory}}')
+    // 会话相关的内容在 createAgent 才由宿主渲染成块追加 —— 副本里只有那行清单，否则用户拿到的是别人的环境
+    expect(workText).toContain(
+      'shuvix-prompt-blocks: drawing, environment, agents_md, claude_md, project_prompt'
+    )
+    expect(workText).not.toContain('<environment>')
+    expect(workText).not.toContain('{{shuvix:')
   })
 
   it('AS-35 内置 titler 的回写 md 带 shuvix-thinking: off，且再解析仍是 off（覆盖副本不丢「不思考」这条声明）', () => {
@@ -305,7 +309,7 @@ describe('agentService.createAgentSource —— 按原文新建', () => {
     expect(existsSync(state.dir)).toBe(false)
     const result = agentService.createAgentSource(INVALID_MD)
     expect(result.success).toBe(false)
-    expect(result.error).toContain("'shuvix-project-awareness' must be a boolean")
+    expect(result.error).toContain("'shuvix-user-words' must be a boolean")
     expect(result.error).toContain('the whole file is rejected')
     // 解析在 ensureUserDir 之前 —— 一次失败的新建不该在用户家目录里留下空目录
     expect(existsSync(state.dir)).toBe(false)
@@ -540,7 +544,7 @@ describe('agentService.listInvalid / deleteByFile —— 解析不过的档案',
     const invalid = agentService.listInvalid()
     expect(invalid).toEqual([{ fileName: 'broken.md', error: expect.any(String) }])
     // 理由就是属性卡横幅上的那句话：丢了它，用户只看到一个不生效的文件名
-    expect(invalid[0].error).toContain("'shuvix-project-awareness' must be a boolean")
+    expect(invalid[0].error).toContain("'shuvix-user-words' must be a boolean")
     expect(invalid[0].error).toContain('the whole file is rejected')
 
     const names = agentService.listAll().map((a) => a.name)
@@ -662,40 +666,23 @@ describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent
     description: 'structured write fixture',
     systemPrompt: `Body of ${name}.`,
     tools: ['read'],
-    instructionFiles: [],
-    projectAwareness: false,
+    promptBlocks: [],
     ...extra
   })
 
-  it('IF-U-22 越界的指令文件条目一律拒绝：save 磁盘逐字节不变、create 目录零新增', () => {
-    // 结构化写路径的自检是「序列化 → 回读」：`..` 在解析侧判整份非法，于是写盘被挡在门外。
-    // 这里只钉「不写出不可读文件」这一条 —— 拒绝的**原因文案**当前把用户输入错误报成了
-    // 内部错误（serializer/parser 漂移与用户输错共用一句话），那是实现待修的账，
-    // 钉住文案只会把这笔账焊死在测试里。
-    const outside = { instructionFiles: ['../outside.md'] }
-
-    // save 路径：先有一份合法档案，非法覆写后磁盘必须一个字节都没动
-    expect(agentService.createAgentSource(agentMd('gui-target')).success).toBe(true)
-    const before = readAgentFile('gui-target.md')
-    expect(agentService.saveAgent('gui-target', parsed('gui-target', outside)).success).toBe(false)
-    expect(readAgentFile('gui-target.md')).toBe(before)
-    expect(files()).toEqual(['gui-target.md'])
-
-    // create 路径：目录里不该多出任何文件（半截的坏档案会被扫描静默跳过，最难排查）
-    expect(agentService.createAgent(parsed('gui-created', outside)).success).toBe(false)
-    expect(files()).toEqual(['gui-target.md'])
-  })
-
-  it('IF-U-23 合法子路径照常落盘：`docs/house.md` 写进 shuvix-instruction-files（正斜杠原样）', () => {
+  it('IF-U-23 提示词块照常落盘：写进 shuvix-prompt-blocks（按词表次序），读得回来', () => {
     const result = agentService.createAgent(
-      parsed('gui-subpath', { instructionFiles: ['docs/house.md'] })
+      parsed('gui-blocks', { promptBlocks: ['project_prompt', 'environment'] })
     )
-    expect(result).toEqual({ success: true, name: 'gui-subpath' })
-    expect(readAgentFile('gui-subpath.md')).toContain('shuvix-instruction-files: docs/house.md')
+    expect(result).toEqual({ success: true, name: 'gui-blocks' })
+    expect(readAgentFile('gui-blocks.md')).toContain(
+      'shuvix-prompt-blocks: environment, project_prompt'
+    )
 
     // 落盘后读得回来 —— 「写出去的是可读文件」才是这条写路径的合同
-    expect(agentService.listAll().find((a) => a.name === 'gui-subpath')!.instructionFiles).toEqual([
-      'docs/house.md'
+    expect(agentService.listAll().find((a) => a.name === 'gui-blocks')!.promptBlocks).toEqual([
+      'environment',
+      'project_prompt'
     ])
   })
 })
@@ -784,8 +771,7 @@ describe('agentService —— 同名的几份：注册表与设置页是同一�
         description: 'saved through the registry',
         systemPrompt: 'TWIN SAVED',
         tools: ['read'],
-        instructionFiles: [],
-        projectAwareness: false
+        promptBlocks: []
       })
     ).toEqual({ success: true })
     expect(readAgentFile('twin.md')).not.toBe(twinBefore)
@@ -860,8 +846,7 @@ describe('agentService —— 对象 id（shuvix-id）', () => {
     description: 'object id fixture',
     systemPrompt: `Body of ${name}.`,
     tools: ['read'],
-    instructionFiles: [],
-    projectAwareness: false,
+    promptBlocks: [],
     ...extra
   })
 

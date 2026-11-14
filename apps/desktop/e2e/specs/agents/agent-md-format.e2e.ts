@@ -41,8 +41,7 @@ interface AgentRow {
   tools: string[]
   description: string
   model?: string
-  instructionFiles: string[]
-  projectAwareness: boolean
+  promptBlocks: string[]
 }
 
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
@@ -54,18 +53,23 @@ describe('agent md 格式（纯 md 驱动）', () => {
     expect(list.find((a) => a.name === 'legacy-key')?.tools).toEqual([])
   })
 
-  it('保存序列化写 shuvix-tools 与注入开关，无裸 tools key', async () => {
+  it('保存序列化写 shuvix-tools 与提示词块清单（按词表次序），无裸 tools key、无改制前的两个键', async () => {
     const res = await app.main.eval<{ success: boolean }>(
       `window.api.subAgent.save({ originalName: 'new-key', agent: {
         name: 'new-key', displayName: 'new-key', description: 'd2', systemPrompt: 'B2.',
-        tools: ['read'], instructionFiles: ['AGENTS.md', 'docs/rules.md'],
-        projectAwareness: false } })`
+        tools: ['read'], promptBlocks: ['claude_md', 'environment'] } })`
     )
     expect(res.success).toBe(true)
     const text = readFileSync(join(app.agentsDir, 'new-key.md'), 'utf8')
     expect(text).toContain('shuvix-tools: read')
-    expect(text).toContain('shuvix-instruction-files: AGENTS.md, docs/rules.md')
+    // 清单是集合：写出时按词表次序（environment 在 claude_md 之前），与传入的顺序无关
+    expect(text).toContain('shuvix-prompt-blocks: environment, claude_md')
+    expect(text).not.toContain('shuvix-instruction-files')
     expect(text).not.toContain('shuvix-project-awareness')
+    expect((await listAgents()).find((a) => a.name === 'new-key')?.promptBlocks).toEqual([
+      'environment',
+      'claude_md'
+    ])
     expect(text).not.toMatch(/^tools:/m)
   })
 
@@ -75,7 +79,7 @@ describe('agent md 格式（纯 md 驱动）', () => {
         `window.api.subAgent.save({ originalName: 'unresolvable-model', agent: {
           name: 'unresolvable-model', displayName: 'unresolvable-model', description: 'd',
           systemPrompt: 'B.', tools: ['read'], model: ${JSON.stringify(model)},
-          instructionFiles: [], projectAwareness: false } })`
+          promptBlocks: [] } })`
       )
     const filePath = join(app.agentsDir, 'unresolvable-model.md')
 
@@ -122,20 +126,20 @@ describe('agent md 格式（纯 md 驱动）', () => {
   it('新建：三字段必填 + 文件落盘；同名拒绝', async () => {
     const missing = await app.main.eval<{ success: boolean; error?: string }>(
       `window.api.subAgent.create({ agent: { name: 'x', displayName: 'x', description: '',
-        systemPrompt: 'b', tools: [], instructionFiles: [], projectAwareness: false } })`
+        systemPrompt: 'b', tools: [], promptBlocks: [] } })`
     )
     expect(missing.success).toBe(false)
 
     const created = await app.main.eval<{ success: boolean; name?: string }>(
       `window.api.subAgent.create({ agent: { name: 'made-by-ipc', displayName: 'made-by-ipc',
-        description: 'd', systemPrompt: 'b', tools: [], instructionFiles: [], projectAwareness: false } })`
+        description: 'd', systemPrompt: 'b', tools: [], promptBlocks: [] } })`
     )
     expect(created.success).toBe(true)
     expect(existsSync(join(app.agentsDir, 'made-by-ipc.md'))).toBe(true)
 
     const dup = await app.main.eval<{ success: boolean }>(
       `window.api.subAgent.create({ agent: { name: 'made-by-ipc', displayName: 'x',
-        description: 'd', systemPrompt: 'b', tools: [], instructionFiles: [], projectAwareness: false } })`
+        description: 'd', systemPrompt: 'b', tools: [], promptBlocks: [] } })`
     )
     expect(dup.success).toBe(false)
   })

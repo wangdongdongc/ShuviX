@@ -242,7 +242,7 @@ bot 自己那份文件是这条会话权限表里的一行（**Bot 文件**，�
 `~/.shuvix/bots/` 下别的写入是一次会话权限表以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
 自动审查时可能由审查员回答（想让每次这样的写入 —— 包括 bot 自己那份文件 —— 都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`
 策略，见 `policy-md`）。
-与 `notebook` 一样，这个基座声明项目感知但不读指令文件（AGENTS.md / CLAUDE.md 是给真正写代码的
+与 `notebook` 一样，这个基座列了 `project_prompt` 块，但不列两个指令文件块（`agents_md` / `claude_md`：AGENTS.md / CLAUDE.md 是给真正写代码的
 子会话看的约定）。基座与任何内置 agent 一样可以按名字覆盖（`~/.shuvix/agents/bot.md`）。
 
 ## 生命周期备注

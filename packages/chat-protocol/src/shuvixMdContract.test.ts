@@ -110,7 +110,7 @@ describe('readShuvixMarker', () => {
   it('键的词法边界：shuvix- 前缀键与 xshuvix 不误认', () => {
     expect(readShuvixMarker('shuvix-tools: bash, read')).toBeNull()
     expect(readShuvixMarker('xshuvix: agent v1')).toBeNull()
-    expect(readShuvixMarker('shuvix-instruction-files: true\nshuvix: agent v1')).toEqual({
+    expect(readShuvixMarker('shuvix-prompt-blocks: environment\nshuvix: agent v1')).toEqual({
       type: 'agent',
       version: '1'
     })
@@ -159,8 +159,7 @@ describe('detectShuvixMarker', () => {
       'name: explore',
       'description: 只读探索代理',
       'shuvix-tools: read, grep, glob',
-      'shuvix-instruction-files: true',
-      'shuvix-project-awareness: false',
+      'shuvix-prompt-blocks: agents_md, claude_md',
       '---',
       '',
       '# 角色',

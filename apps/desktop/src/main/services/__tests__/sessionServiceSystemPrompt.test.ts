@@ -89,8 +89,7 @@ vi.mock('../agentService', () => ({
     getProfile: vi.fn((name: string) => ({
       name,
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     }))
   }
 }))
@@ -124,7 +123,7 @@ beforeAll(async () => {
 const NONE: SystemPromptStatus = { frozen: false, stale: [] }
 const STALE: SystemPromptStatus = {
   frozen: true,
-  stale: [{ key: 'persona' }, { key: 'project_instructions', file: 'CLAUDE.md' }]
+  stale: [{ key: 'persona' }, { key: 'claude_md', file: 'CLAUDE.md' }]
 }
 
 let seq = 0

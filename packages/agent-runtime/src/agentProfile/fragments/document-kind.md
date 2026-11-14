@@ -1,10 +1,10 @@
 ## What this document is
 
 <!-- shuvix:agent-start -->
-This document is an **agent profile** (`shuvix: agent v1`) in ShuviX's agents folder: the frontmatter decides the agent's tools, model and context (`shuvix-tools`, `shuvix-model`, `shuvix-instruction-files` …) and the body is that agent's entire system prompt. ShuviX reads it whenever it creates an agent from it, so a saved change reaches agents created afterwards; a running one keeps the version it started with. A file whose `name` matches a builtin profile (work, chat, coding, notebook …) replaces that builtin.
+This document is an **agent profile** (`shuvix: agent v1`) in ShuviX's agents folder: the frontmatter decides the agent's tools, model and context (`shuvix-tools`, `shuvix-model` …) and the body is that agent's system prompt, with the blocks named in `shuvix-prompt-blocks` appended after it. ShuviX reads it whenever it creates an agent from it, so a saved change reaches agents created afterwards; a running one keeps the version it started with. A file whose `name` matches a builtin profile (work, chat, coding, notebook …) replaces that builtin.
 
 <!-- shuvix:manual-start -->
-The full specification — every key, the placeholders, what makes the file invalid, examples — is the ShuviX manual entry `/agent-md.md`. Read it with the `knowledge` tool (base `shuvix`) before changing something you are not sure of, instead of inferring the format from other files.
+The full specification — every key, the prompt blocks, what makes the file invalid, examples — is the ShuviX manual entry `/agent-md.md`. Read it with the `knowledge` tool (base `shuvix`) before changing something you are not sure of, instead of inferring the format from other files.
 <!-- shuvix:manual-end -->
 <!-- shuvix:agent-end -->
 

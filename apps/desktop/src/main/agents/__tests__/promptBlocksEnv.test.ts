@@ -1,33 +1,38 @@
 /**
- * 桌面变量表的**环境类标量**（`desktopPromptVars` 的 workingDirectory / projectName / isGitRepo / date）
+ * 桌面提示词块里的**环境清单**（`desktopPromptBlocks` 的 `environment`：工作目录 / Git 仓库 / 日期 / 临时目录几行）
  * 与「Git repository」一行的取值（`gitRepoLine`）。
  *
- *  1. 派生 agent 的 ctx 里 `sessionId` 是 agentId、`cwd` 是 ''：工作目录与项目都按 `rootSessionId`
- *     （根会话）查 —— 旧代码直接回 ctx.cwd（''）、拿 agentId 查项目（''），isGitRepo 则看 process.cwd()，
- *     也就是 ShuviX 自己的检出（于是一律说 Yes）。根 ctx 有非空 cwd 时照用它、不去查；没传 rootSessionId
- *     的旧调用方按 sessionId 算（ENV-1…5）。根会话是 bot 会话时项目名取它引用的工作项目（ENV-2b）。
+ * 清单一行一项，**给了才有那一行**：工作目录与临时目录两行只给手里有文件工具的 agent，Git / Shell / OS 三行只给
+ * 有 bash / powershell 的；所以下面每条用例的名单都带着它要看的那一行所需的工具。
+ *
+ *  1. 派生 agent 的 ctx 里 `sessionId` 是 agentId、`cwd` 是 ''：工作目录按 `rootSessionId`（根会话）查 ——
+ *     旧代码直接回 ctx.cwd（''），isGitRepo 则看 process.cwd()，也就是 ShuviX 自己的检出（于是一律说 Yes）。
+ *     根 ctx 有非空 cwd 时照用它、不去查；没传 rootSessionId 的旧调用方按 sessionId 算（ENV-1…5）。
  *  2. `gitRepoLine`：从工作目录往上找第一个 `.git`（目录或文件都算）；工作目录在家目录**之下**时不查家目录
  *     本身及以上（家目录里的 dotfiles 仓库不能让每个项目都读成 Yes），工作目录**就是**家目录时只查它自己，
  *     家目录之外一路查到文件系统根；根在工作目录之上时写出根（ENV-6…10）。路径按构造时的写法比（不 realpath：
  *     macOS 的 /var 与 /private/var），家目录一律显式传临时布局，不碰 os.homedir()。
- *  3. date 是**本地**日历日，不是 UTC 日（ENV-11）。做法：运行时改 process.env.TZ —— vitest 4 缺省的 forks
+ *  3. 日期那一行是**本地**日历日，不是 UTC 日（ENV-11）。做法：运行时改 process.env.TZ —— vitest 4 缺省的 forks
  *     池里这一改立即生效（threads 池里会被静默忽略），再用假的 Date 把时刻钉在「UTC 与本地不在同一天」的
  *     那一刻。两个方向各一次（东八区凌晨 1 点 / 夏威夷晚上 7 点）；先自检 getHours()，池换了、TZ 没生效时
  *     大声失败而不是碰巧通过。不选 America/Los_Angeles：开发机本身就在那个时区，TZ 没切也会过。
  *
- *  4. tempDirectory（「临时文件」那一行，TMP-1…7）：目录由主进程启动时注入的解析器给（`setSessionTempDirResolver`），
+ *  4. 「临时文件」那一行（TMP-1…7）：目录由主进程启动时注入的解析器给（`setSessionTempDirResolver`），
  *     **只按根会话问**（派生 agent 用根会话的临时目录）；根会话行已不在时不问、不出这一行（不把删掉的目录建回来）；
- *     解析器给不出（null / 空串）同样不出；commands 那半句只看这一个 agent 的名单里有没有 bash / powershell。
- *     值一律与 renderTempDirectory 的输出比，不抄措辞。
+ *     解析器给不出（null / 空串）同样不出；名单里没有文件工具也不出；commands 那半句只看这一个 agent 的名单里
+ *     有没有 bash / powershell。那一行一律与 renderTempDirectory 的输出比，不抄措辞。
  *
- * mock 集合同 promptVarsWiring.test.ts（dao 会开 SQLite，electron / mcp 在 node 下起不来）；另把 resolveProjectConfig
+ *  5. 整份清单（ENV-13）：每一种名单下环境清单**恰是**哪几行 —— 上面各条只看某一行在不在，多出一行
+ *     （没有命令工具的 agent 被告知 Shell / Git / OS）它们看不出来。
+ *
+ * mock 集合同 promptBlocksWiring.test.ts（dao 会开 SQLite，electron / mcp 在 node 下起不来）；另把 resolveProjectConfig
  * 桩成可控的、把 os.homedir 桩成可换的（缺省仍是真的家目录）—— ENV-5 要一个能挡住祖先目录的家目录边界。
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { PromptVarsCtx } from '@shuvix/agent-runtime'
+import type { PromptBlocksCtx } from '@shuvix/agent-runtime'
 
 const mocks = vi.hoisted(() => ({
   pick: vi.fn(),
@@ -77,9 +82,9 @@ vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
 
 import i18next from 'i18next'
 import { localDate, renderTempDirectory } from '@shuvix/agent-runtime'
-import { desktopPromptVars, gitRepoLine, setSessionTempDirResolver } from '../agentHost'
+import { desktopPromptBlocks, gitRepoLine, setSessionTempDirResolver } from '../agentHost'
 
-const SPAWNED: PromptVarsCtx = {
+const SPAWNED: PromptBlocksCtx = {
   kind: 'spawned',
   sessionId: 'agent-xyz',
   rootSessionId: 'sess-root',
@@ -87,10 +92,37 @@ const SPAWNED: PromptVarsCtx = {
   toolNames: []
 }
 
+/** 这个 ctx 的环境清单正文 */
+const envOf = async (ctx: PromptBlocksCtx): Promise<string> =>
+  (await desktopPromptBlocks(ctx)).environment ?? ''
+
+/** 清单里 `- <label>: <value>` 那一行的值；没有那一行 → undefined（界面语言 en 的标签） */
+function lineOf(environment: string, label: string): string | undefined {
+  const head = `- ${label}: `
+  const line = environment.split('\n').find((entry) => entry.startsWith(head))
+  return line?.slice(head.length)
+}
+
+/** 环境清单里不属于任何带标签事实的行 —— 也就是「临时文件」那一行（en）；没有 → [] */
+const ENV_LABELS = [
+  'Working directory',
+  'Git repository',
+  'Platform',
+  'Shell',
+  'OS',
+  'Current date',
+  'User language',
+  'ShuviX version'
+]
+const tempLinesOf = (environment: string): string[] =>
+  environment
+    .split('\n')
+    .filter((entry) => entry && !ENV_LABELS.some((label) => entry.startsWith(`- ${label}: `)))
+
 /** 每个用例自己的临时布局（afterEach 一并删） */
 let temps: string[] = []
 function tempLayout(): string {
-  const t = mkdtempSync(join(tmpdir(), 'shuvix-promptvars-env-'))
+  const t = mkdtempSync(join(tmpdir(), 'shuvix-promptblocks-env-'))
   temps.push(t)
   return t
 }
@@ -135,108 +167,80 @@ afterEach(() => {
   temps = []
 })
 
-describe('desktopPromptVars —— 派生 agent 按根会话取工作目录与项目（ENV-1…5）', () => {
-  it('ENV-1 派生 ctx（cwd 空）：workingDirectory 是根会话的工作目录；只按 sess-root 查，从不拿 agentId 查', async () => {
+describe('desktopPromptBlocks —— 派生 agent 按根会话取工作目录（ENV-1…5）', () => {
+  it('ENV-1 派生 ctx（cwd 空）：工作目录那一行是根会话的工作目录；只按 sess-root 查，从不拿 agentId 查；名单里没有文件工具就没有这一行', async () => {
     workingDirectories({ 'sess-root': '/w/root' })
 
-    const vars = await desktopPromptVars(SPAWNED)
+    const env = await envOf({ ...SPAWNED, toolNames: ['read'] })
 
-    expect(vars.workingDirectory).toBe('/w/root')
+    expect(lineOf(env, 'Working directory')).toBe('/w/root')
     expect(mocks.resolveProjectConfig).toHaveBeenCalledWith('sess-root')
     expect(mocks.resolveProjectConfig).not.toHaveBeenCalledWith('agent-xyz')
-  })
 
-  it('ENV-2 projectName 按根会话的项目给（会话查询认 id：只有 sess-root 有项目）', async () => {
-    workingDirectories({ 'sess-root': '/w/root' })
-    mocks.pick.mockImplementation((id: string) =>
-      id === 'sess-root' ? { projectId: 'proj-1' } : undefined
-    )
-    mocks.projectPick.mockImplementation((id: string) =>
-      id === 'proj-1' ? { name: 'Proj' } : undefined
-    )
-
-    const vars = await desktopPromptVars(SPAWNED)
-
-    expect(vars.projectName).toBe('Proj')
-    const lookedUp = mocks.pick.mock.calls.map((call) => call[0])
-    expect(lookedUp).toContain('sess-root')
-    expect(lookedUp).not.toContain('agent-xyz')
-  })
-
-  it('ENV-2b 根会话是引用工作项目的 bot 会话（projectId 空、settings.workProject）→ projectName 是那个项目的名字', async () => {
-    workingDirectories({ 'sess-root': '/w/root' })
-    mocks.pick.mockImplementation((id: string) =>
-      id === 'sess-root' ? { id, projectId: null } : undefined
-    )
-    mocks.pickSettings.mockImplementation((id: string, keys: string[]) =>
-      id === 'sess-root' && keys.includes('workProject') ? { workProject: 'proj-2' } : {}
-    )
-    mocks.projectPick.mockImplementation((id: string) =>
-      id === 'proj-2' ? { name: 'Referenced' } : undefined
-    )
-
-    expect((await desktopPromptVars(SPAWNED)).projectName).toBe('Referenced')
-    const settingsLookups = mocks.pickSettings.mock.calls
-      .filter((call) => (call[1] as string[]).includes('workProject'))
-      .map((call) => call[0])
-    expect(settingsLookups).toContain('sess-root')
-    expect(settingsLookups).not.toContain('agent-xyz')
-
-    // 引用的项目已被删 → 空
-    mocks.projectPick.mockReturnValue(undefined)
-    expect((await desktopPromptVars(SPAWNED)).projectName).toBe('')
+    // 没有能碰文件的工具：工作目录对它没有意义，不说
+    expect(lineOf(await envOf(SPAWNED), 'Working directory')).toBeUndefined()
   })
 
   it('ENV-3 (a) 根 ctx 的 cwd 非空 → 照用、不去查；(b) 没传 rootSessionId 的旧调用方 → 按 sessionId 查', async () => {
     mocks.resolveProjectConfig.mockReturnValue({ workingDirectory: '/elsewhere' })
-    const root = await desktopPromptVars({
+    const root = await envOf({
       kind: 'root',
       sessionId: 'sess-root',
       rootSessionId: 'sess-root',
       cwd: '/w/proj',
-      toolNames: []
+      toolNames: ['read']
     })
-    expect(root.workingDirectory).toBe('/w/proj')
+    expect(lineOf(root, 'Working directory')).toBe('/w/proj')
     expect(mocks.resolveProjectConfig).not.toHaveBeenCalled()
 
     workingDirectories({ 'sess-1': '/w/one' })
-    const legacy = await desktopPromptVars({
+    const legacy = await envOf({
       kind: 'root',
       sessionId: 'sess-1',
       cwd: '',
-      toolNames: []
+      toolNames: ['read']
     })
-    expect(legacy.workingDirectory).toBe('/w/one')
+    expect(lineOf(legacy, 'Working directory')).toBe('/w/one')
     expect(mocks.resolveProjectConfig).toHaveBeenCalledWith('sess-1')
   })
 
-  it('ENV-4 根会话已删（查配置抛、查会话无行）：不抛；workingDirectory 空、isGitRepo No（不看 process.cwd()）、projectName 空，其余都是字符串', async () => {
+  it('ENV-4 根会话已删（查配置抛、查会话无行）：不抛；没有工作目录那一行、Git repository No（不看 process.cwd()），每一块都是字符串', async () => {
     // 前提：这条用例本身跑在一个 git 检出里 —— 旧代码看 process.cwd()，会在这里说 Yes
     expect(gitRepoLine(process.cwd())).toMatch(/^Yes/)
     workingDirectories({})
     mocks.pick.mockReturnValue(undefined)
 
-    const vars = await desktopPromptVars({ ...SPAWNED, rootSessionId: 'gone' })
+    const blocks = await desktopPromptBlocks({
+      ...SPAWNED,
+      rootSessionId: 'gone',
+      toolNames: ['bash']
+    })
+    const env = blocks.environment ?? ''
 
-    expect(vars.workingDirectory).toBe('')
+    // 工作目录解析不出（空）→ 那一行不出，而不是一行空值
+    expect(lineOf(env, 'Working directory')).toBeUndefined()
     // 行不在就不去解析：解析会给已删的会话重新建出临时工作区
     expect(mocks.resolveProjectConfig).not.toHaveBeenCalled()
-    expect(vars.isGitRepo).toBe('No')
-    expect(vars.projectName).toBe('')
-    for (const [name, value] of Object.entries(vars)) expect(value, name).toBeTypeOf('string')
+    expect(lineOf(env, 'Git repository')).toBe('No')
+    for (const [name, value] of Object.entries(blocks)) expect(value, name).toBeTypeOf('string')
   })
 
-  it('ENV-5 isGitRepo 按解析出的根工作目录算：R 里有 .git → Yes；拿掉 .git（家目录边界挡住祖先）→ No', async () => {
+  it('ENV-5 Git repository 按解析出的根工作目录算：R 里有 .git → Yes；拿掉 .git（家目录边界挡住祖先）→ No；名单里没有命令工具就没有这一行', async () => {
     const home = tempLayout()
     const repo = mkdir(join(home, 'proj'))
     gitDir(repo)
     mocks.home = home
     workingDirectories({ 'sess-root': repo })
+    const withShell = { ...SPAWNED, toolNames: ['bash'] }
 
-    expect((await desktopPromptVars(SPAWNED)).isGitRepo).toBe('Yes')
+    expect(lineOf(await envOf(withShell), 'Git repository')).toBe('Yes')
+    // 没有 bash / powershell：Git 那一行对它没有意义，不说
+    expect(
+      lineOf(await envOf({ ...SPAWNED, toolNames: ['read'] }), 'Git repository')
+    ).toBeUndefined()
 
     rmSync(join(repo, '.git'), { recursive: true, force: true })
-    expect((await desktopPromptVars(SPAWNED)).isGitRepo).toBe('No')
+    expect(lineOf(await envOf(withShell), 'Git repository')).toBe('No')
   })
 })
 
@@ -326,7 +330,7 @@ describe('gitRepoLine —— 从工作目录往上找第一个 .git，家目录�
   })
 
   // 大小写不敏感的卷（macOS 默认、Windows）上，c:\Users\Foo 与 C:\Users\Foo 是同一个家目录
-  const t0 = mkdtempSync(join(tmpdir(), 'shuvix-promptvars-case-'))
+  const t0 = mkdtempSync(join(tmpdir(), 'shuvix-promptblocks-case-'))
   mkdirSync(join(t0, 'Probe'))
   const caseInsensitive = existsSync(join(t0, 'probe'))
   rmSync(t0, { recursive: true, force: true })
@@ -343,13 +347,13 @@ describe('gitRepoLine —— 从工作目录往上找第一个 .git，家目录�
   )
 })
 
-describe('desktopPromptVars —— date 是本地日历日（ENV-11）', () => {
-  /** 在给定时区、给定时刻跑一次变量表；TZ 与真定时器在 finally 里还原 */
+describe('desktopPromptBlocks —— 日期那一行是本地日历日（ENV-11）', () => {
+  /** 在给定时区、给定时刻渲染一次环境清单；TZ 与真定时器在 finally 里还原 */
   async function dateAt(
     tz: string,
     instant: string,
     localHour: number
-  ): Promise<{ date: string; local: string; utc: string }> {
+  ): Promise<{ date: string | undefined; local: string; utc: string }> {
     const savedTz = process.env.TZ
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
@@ -357,8 +361,13 @@ describe('desktopPromptVars —— date 是本地日历日（ENV-11）', () => {
       vi.setSystemTime(new Date(instant))
       // 自检：TZ 真的生效了（换成 threads 池时这一改会被静默忽略 —— 那就在这里失败）
       expect(new Date().getHours(), `TZ=${tz} 没生效`).toBe(localHour)
-      const vars = await desktopPromptVars({ ...SPAWNED, cwd: '/w/x' })
-      return { date: vars.date, local: localDate(), utc: new Date().toISOString().slice(0, 10) }
+      // 名单为空：日期那一行不看工具，任何 agent 都有
+      const env = await envOf({ ...SPAWNED, cwd: '/w/x' })
+      return {
+        date: lineOf(env, 'Current date'),
+        local: localDate(),
+        utc: new Date().toISOString().slice(0, 10)
+      }
     } finally {
       vi.useRealTimers()
       if (savedTz === undefined) delete process.env.TZ
@@ -379,10 +388,16 @@ describe('desktopPromptVars —— date 是本地日历日（ENV-11）', () => {
   })
 })
 
-describe('desktopPromptVars —— 本会话临时目录那一行（TMP-1…7）', () => {
+describe('desktopPromptBlocks —— 本会话临时目录那一行（TMP-1…7）', () => {
   /** 注入的解析器：给哪个会话就答哪个会话的目录（看得出问的是谁） */
   const resolver = vi.fn((id: string): string | null => `/fixture/tmp/${id}`)
-  const ROOT: PromptVarsCtx = { kind: 'root', sessionId: 'sess-1', cwd: '/w/x', toolNames: [] }
+  /** 名单里有一个文件工具（read）：这一行只给手里有文件工具的 agent */
+  const ROOT: PromptBlocksCtx = {
+    kind: 'root',
+    sessionId: 'sess-1',
+    cwd: '/w/x',
+    toolNames: ['read']
+  }
 
   /** 只有给定的会话 id 有会话行 */
   function rows(...ids: string[]): void {
@@ -399,119 +414,176 @@ describe('desktopPromptVars —— 本会话临时目录那一行（TMP-1…7）
     setSessionTempDirResolver(() => null)
   })
 
-  it('TMP-1 从没注入解析器（新加载的模块）→ 空串，根会话行在也一样', async () => {
+  it('TMP-1 从没注入解析器（新加载的模块）→ 没有这一行，根会话行在也一样', async () => {
     rows('sess-1')
     vi.resetModules()
     const fresh = await import('../agentHost')
-    const vars = await fresh.desktopPromptVars({ ...ROOT, toolNames: ['bash'] })
-    expect(vars.tempDirectory).toBe('')
-    // 正控制组：同一份新模块注入之后就有这一行 —— 上面的空串确实来自「没注入」
+    const before = (await fresh.desktopPromptBlocks({ ...ROOT, toolNames: ['bash'] })).environment
+    expect(tempLinesOf(before ?? '')).toEqual([])
+    // 正控制组：同一份新模块注入之后就有这一行 —— 上面的「没有」确实来自「没注入」
     fresh.setSessionTempDirResolver(resolver)
-    expect((await fresh.desktopPromptVars({ ...ROOT, toolNames: ['bash'] })).tempDirectory).toBe(
+    const after = (await fresh.desktopPromptBlocks({ ...ROOT, toolNames: ['bash'] })).environment
+    expect(tempLinesOf(after ?? '')).toEqual([
       renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands: true })
-    )
+    ])
   })
 
-  it('TMP-2 根 ctx：值是根会话目录那一行；没传 rootSessionId 按 sessionId 问，传了按 rootSessionId 问，都只问一次', async () => {
+  it('TMP-2 根 ctx：那一行说的是根会话的目录；没传 rootSessionId 按 sessionId 问，传了按 rootSessionId 问，都只问一次', async () => {
     setSessionTempDirResolver(resolver)
     rows('sess-1', 'sess-root')
 
-    const legacy = await desktopPromptVars(ROOT)
-    expect(legacy.tempDirectory).toBe(renderTempDirectory('en', { dir: '/fixture/tmp/sess-1' }))
+    const legacy = await envOf(ROOT)
+    expect(tempLinesOf(legacy)).toEqual([renderTempDirectory('en', { dir: '/fixture/tmp/sess-1' })])
     expect(resolver).toHaveBeenCalledTimes(1)
     expect(resolver).toHaveBeenCalledWith('sess-1')
 
     resolver.mockClear()
-    const rooted = await desktopPromptVars({
+    const rooted = await envOf({
       ...ROOT,
       sessionId: 'sess-root',
       rootSessionId: 'sess-root',
       toolNames: ['bash']
     })
-    expect(rooted.tempDirectory).toBe(
+    expect(tempLinesOf(rooted)).toEqual([
       renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: true })
-    )
+    ])
     expect(resolver).toHaveBeenCalledTimes(1)
     expect(resolver).toHaveBeenCalledWith('sess-root')
     // 正控制组：确实是一行内容，而不是两边都空
-    expect(rooted.tempDirectory).toContain('/fixture/tmp/sess-root')
+    expect(rooted).toContain('/fixture/tmp/sess-root')
   })
 
-  it('TMP-3 派生 ctx（sessionId 是 agentId、cwd 空）：只按根会话问，值说的是根会话的目录', async () => {
+  it('TMP-3 派生 ctx（sessionId 是 agentId、cwd 空）：只按根会话问，那一行说的是根会话的目录', async () => {
     setSessionTempDirResolver(resolver)
     workingDirectories({ 'sess-root': '/w/root' })
 
-    const vars = await desktopPromptVars(SPAWNED)
+    const env = await envOf({ ...SPAWNED, toolNames: ['read'] })
 
     expect(resolver.mock.calls.map((call) => call[0])).toEqual(['sess-root'])
-    expect(vars.tempDirectory).toBe(renderTempDirectory('en', { dir: '/fixture/tmp/sess-root' }))
-    expect(vars.tempDirectory).not.toContain('agent-xyz')
+    expect(tempLinesOf(env)).toEqual([renderTempDirectory('en', { dir: '/fixture/tmp/sess-root' })])
+    expect(env).not.toContain('agent-xyz')
   })
 
-  it('TMP-4 根会话行已不在：空串，而且根本不去问解析器（问了就会把删掉的目录建回来）', async () => {
+  it('TMP-4 根会话行已不在：没有这一行，而且根本不去问解析器（问了就会把删掉的目录建回来）', async () => {
     setSessionTempDirResolver(resolver)
     rows()
 
-    expect((await desktopPromptVars({ ...ROOT, toolNames: ['bash'] })).tempDirectory).toBe('')
+    expect(tempLinesOf(await envOf({ ...ROOT, toolNames: ['bash'] }))).toEqual([])
     expect(
-      (await desktopPromptVars({ ...SPAWNED, rootSessionId: 'gone', toolNames: ['bash'] }))
-        .tempDirectory
-    ).toBe('')
+      tempLinesOf(await envOf({ ...SPAWNED, rootSessionId: 'gone', toolNames: ['bash'] }))
+    ).toEqual([])
     expect(resolver).not.toHaveBeenCalled()
   })
 
   it.each([
     ['null', null],
     ['空串', '']
-  ])('TMP-5 解析器给不出目录（%s）→ 空串', async (_label, answer) => {
+  ])('TMP-5 解析器给不出目录（%s）→ 没有这一行', async (_label, answer) => {
     setSessionTempDirResolver(() => answer)
     rows('sess-1')
-    expect((await desktopPromptVars({ ...ROOT, toolNames: ['bash'] })).tempDirectory).toBe('')
+    expect(tempLinesOf(await envOf({ ...ROOT, toolNames: ['bash'] }))).toEqual([])
   })
 
   it.each([
-    [[], false],
+    // 名单里没有文件工具：这一行整行不出，解析器也不问
+    [[], null],
+    [['Bash', 'shell', 'mcp:bash'], null],
     [['read', 'write'], false],
     [['bash'], true],
     [['powershell'], true],
     [['bash', 'powershell'], true],
-    [['read', 'bash'], true],
-    [['Bash', 'shell', 'mcp:bash'], false]
-  ] as Array<[string[], boolean]>)(
-    'TMP-6 根 ctx 名单 %j → commands=%s（只认这个 agent 名单里的 bash / powershell）',
+    [['read', 'bash'], true]
+  ] as Array<[string[], boolean | null]>)(
+    'TMP-6 根 ctx 名单 %j → commands=%s（null = 整行不出；只认这个 agent 名单里的 bash / powershell）',
     async (toolNames, commands) => {
       setSessionTempDirResolver(resolver)
       rows('sess-1')
-      const vars = await desktopPromptVars({ ...ROOT, toolNames })
-      expect(vars.tempDirectory).toBe(
-        renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands })
-      )
+      const lines = tempLinesOf(await envOf({ ...ROOT, toolNames }))
+      if (commands === null) {
+        expect(lines).toEqual([])
+        expect(resolver).not.toHaveBeenCalled()
+      } else {
+        expect(lines).toEqual([renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands })])
+      }
     }
   )
 
   it('TMP-6 派生 ctx 名单有 bash → commands 那半句在（按派生 agent 自己的名单，不按根的）', async () => {
     setSessionTempDirResolver(resolver)
     workingDirectories({ 'sess-root': '/w/root' })
-    const vars = await desktopPromptVars({ ...SPAWNED, toolNames: ['bash'] })
-    expect(vars.tempDirectory).toBe(
+    const lines = tempLinesOf(await envOf({ ...SPAWNED, toolNames: ['bash'] }))
+    expect(lines).toEqual([
       renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: true })
-    )
+    ])
     // 两版确实不同 —— 否则上面这条分不出 commands 的真假
-    expect(vars.tempDirectory).not.toBe(
+    expect(lines[0]).not.toBe(
       renderTempDirectory('en', { dir: '/fixture/tmp/sess-root', commands: false })
     )
   })
+
+  const BASE_LABELS = ['Platform', 'Current date', 'User language', 'ShuviX version']
+  const FILE_LABELS = ['Working directory', 'Temp', ...BASE_LABELS]
+  const ALL_LABELS = [
+    'Working directory',
+    'Temp',
+    'Git repository',
+    'Platform',
+    'Shell',
+    'OS',
+    'Current date',
+    'User language',
+    'ShuviX version'
+  ]
+  it.each([
+    // 没有文件工具也没有命令工具：只有四行恒有的；名字里带 bash 的 mcp: 条目什么都不给
+    [[], BASE_LABELS, null],
+    [['ask', 'skill', 'mcp:chrome', 'mcp:bash'], BASE_LABELS, null],
+    // 文件工具：多出工作目录与临时目录两行，临时目录那一行没有 commands 半句
+    [['doc_read'], FILE_LABELS, false],
+    [['read'], FILE_LABELS, false],
+    // 命令工具：九行全有（命令工具本身就算文件工具），临时目录那一行带 commands 半句
+    [['bash'], ALL_LABELS, true],
+    [['edit', 'powershell', 'mcp:x'], ALL_LABELS, true]
+  ] as Array<[string[], string[], boolean | null]>)(
+    'ENV-13 根 ctx 名单 %j → 环境清单恰是这几行 %j（一行不多：没有那项能力就没有那一行）',
+    async (toolNames, labels, commands) => {
+      setSessionTempDirResolver(resolver)
+      rows('sess-1')
+      const env = await envOf({ ...ROOT, cwd: '/w', toolNames })
+      const lines = env.split('\n')
+      const tempLine =
+        commands === null
+          ? undefined
+          : renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands })
+      // 每行的标签（第一个冒号之前）；临时目录那一行整行比对，记作 Temp
+      expect(
+        lines.map((line) => (line === tempLine ? 'Temp' : line.slice(2, line.indexOf(':'))))
+      ).toEqual(labels)
+      for (const line of lines) {
+        expect(line).toMatch(/^- \S/)
+        expect(line).not.toMatch(/: (undefined|null)?$/)
+      }
+      expect(env).not.toContain('\n\n')
+      if (commands !== null) {
+        expect(lineOf(env, 'Working directory')).toBe('/w')
+        expect(tempLinesOf(env)).toEqual([tempLine])
+      } else {
+        expect(tempLinesOf(env)).toEqual([])
+        expect(env).not.toContain('/fixture/tmp')
+      }
+    }
+  )
 
   it.each(['zh', 'ja'])('TMP-7 界面语言 %s：取那一语言的片段', async (language) => {
     setSessionTempDirResolver(resolver)
     rows('sess-1')
     await i18next.changeLanguage(language)
     try {
-      const vars = await desktopPromptVars({ ...ROOT, toolNames: ['bash'] })
-      expect(vars.tempDirectory).toBe(
+      const lines = (await envOf({ ...ROOT, toolNames: ['bash'] })).split('\n')
+      expect(lines).toContain(
         renderTempDirectory(language, { dir: '/fixture/tmp/sess-1', commands: true })
       )
-      expect(vars.tempDirectory).not.toBe(
+      expect(lines).not.toContain(
         renderTempDirectory('en', { dir: '/fixture/tmp/sess-1', commands: true })
       )
     } finally {

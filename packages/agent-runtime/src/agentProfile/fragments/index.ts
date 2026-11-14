@@ -2,12 +2,12 @@
  * 提示片段（Prompt fragments）—— 多个档案共用、但不属于任何一个档案的提示段落。
  *
  * 与 `builtinAgents/md/` 的区别是归属：那里一份 md 就是一个 agent 的全部人格，
- * 这里一份 md 是一段**能力说明**，由若干档案各自在正文里用一行占位符引入。
+ * 这里一份 md 是一段**能力说明**，由宿主渲染成提示词块、追加在点了名的档案正文之后。
  * 二者同样以 md 维护、同样 `?raw` 内联、同样一语言一文件按整份回退 —— 一页提示散文
  * 写进 locale JSON 不可评审，这条规矩两边一致。
  *
- * 取值时机是**创建期**（`{{shuvix:*}}` 变量表），不是档案构建期：这样用户自己的
- * `~/.shuvix/agents/work.md` 覆盖了基座档案之后，只要正文里留着那行占位符就照样拿到
+ * 取值时机是**创建期**（提示词块，见 `../promptBlocks.ts`），不是档案构建期：这样用户自己的
+ * `~/.shuvix/agents/work.md` 覆盖了基座档案之后，只要 `shuvix-prompt-blocks` 里还列着那一块就照样拿到
  * 同一份说明 —— 覆盖人格不该顺带丢掉一项能力。语言由宿主传入（宿主是界面语言的权威）。
  */
 import {
@@ -43,8 +43,8 @@ const TEMP_DIRECTORY_SOURCES = { en: tempDirectoryEn, zh: tempDirectoryZh, ja: t
  *
  * 片段里的五段，各由一对界桩 `<!-- shuvix:<name>-start -->` … `<!-- shuvix:<name>-end -->` 圈出：
  *
- *  - `carrier` —— **这张图去哪儿**：聊天里是回复的一部分。一份片段两个出口：{{shuvix:visualGuide}}
- *    带载体，{{shuvix:visualCraft}}（笔记本 / 协同编辑：图往文件里画）不带 —— 载体那段对它们是死路。
+ *  - `carrier` —— **这张图去哪儿**：聊天里是回复的一部分。一份片段两个出口，同属 `drawing` 块：`renderVisualGuide`
+ *    带载体，`renderVisualCraft`（笔记本 / 协同编辑：图往文件里画）不带 —— 载体那段对它们是死路。
  *  - `adopt`（嵌在 carrier 里）—— 改图走 `artifact adopt`。只给手里真有 `artifact` 工具的 agent。
  *  - `load` —— 「本会话第一张图之前先加载技能」。两个出口都有；技能在架才会走到这里。
  *  - `interactive` —— ```interactive 交互块：什么时候用，以及「写之前先读技能里的 interactive.md」。
@@ -72,7 +72,7 @@ function applySection(guide: string, name: string, keep: boolean, replacement = 
 }
 
 /**
- * 前两个选项描述**这一个 agent 手里有什么**，由宿主按创建时的工具名单判定（见 PromptVarsCtx.toolNames）
+ * 前两个选项描述**这一个 agent 手里有什么**，由宿主按创建时的工具名单判定（见 PromptBlocksCtx.toolNames）
  * —— 不是「这个宿主支持什么」。按宿主判就会出现名单上没有、提示里却指着的死路：派发出来的 agent
  * 被告知去加载一个它货架上没有的技能，扩展端被教一个它调不到的 `adopt`。缺省即「没有」。
  * 第三个（`interactive`）是例外，理由见它自己的注释；缺省同样是「没有」。
@@ -92,10 +92,10 @@ export interface VisualGuideOptions {
 }
 
 /**
- * `{{shuvix:visualGuide}}` 的取值 —— 聊天里的内联作图：```svg 围栏是什么、先加载作图技能、改图走 adopt，
- * 以及（回复落在能跑它的地方时）交互块。技能不在架时为空串（占位符处整块消失）。
+ * `drawing` 块在聊天里的正文 —— 内联作图：```svg 围栏是什么、先加载作图技能、改图走 adopt，
+ * 以及（回复落在能跑它的地方时）交互块。技能不在架时为空串（整块不出）。
  *
- * 自含块：值自带小标题，可直接嵌在正文任意位置。**围栏本身**刻意不做宿主分支 —— 渲染在
+ * 值自带小标题。**围栏本身**刻意不做宿主分支 —— 渲染在
  * chat-ui 里（两端共用同一个 CodeBlock），两端都成立。
  */
 export function renderVisualGuide(
@@ -106,7 +106,7 @@ export function renderVisualGuide(
 }
 
 /**
- * `{{shuvix:visualCraft}}` 的取值 —— **同一份片段去掉载体那一段**：只剩「先加载作图技能」。
+ * `drawing` 块在改文档的 agent 那里的正文 —— **同一份片段去掉载体那一段**：只剩「先加载作图技能」。
  *
  * 给的是「图往文件里画」的档案（笔记本 / 协同编辑：```svg 围栏在 markdown live preview 里就地渲染，
  * 见 atomic-editor 的 svg-blocks）。载体那段讲的是聊天的规矩 —— 图是回复的一部分、改图走
@@ -163,13 +163,13 @@ export interface DocumentKindOptions {
 }
 
 /**
- * `{{shuvix:documentKind}}` 的取值 —— 笔记本会话的文档是一份 ShuviX 文件（安全策略、hook、智能体档案、
+ * `document` 块的后半（`renderDocumentBlock` 的 `kindGuide`）—— 笔记本会话的文档是一份 ShuviX 文件（安全策略、hook、智能体档案、
  * bot、技能、知识库条目）时，告诉 agent 这是什么文件、什么时候生效、改坏了会怎样、完整规范是说明书里
  * 哪一条。从前它只知道自己在改「markdown 文档 `x.md`」，得靠翻同目录的别的文件反推格式。
  *
  * 只写模型不可能自己知道的 ShuviX 事实：格式细节一律留在说明书里（策略那条 56 KB，每轮都付不值），
  * 这里只给指路的条目名（经 `knowledge` 的 `read` 读，库 `shuvix`）。种类在会话建起就定了（承载项目不变），所以创建期取值、随人设冻结没有问题。
- * 自含块：值自带小标题；不是 ShuviX 文件时为空串，占位符处整块消失。
+ * 值自带小标题；不是 ShuviX 文件时为空串。
  */
 export function renderDocumentKind(
   language: string | undefined,
@@ -202,8 +202,8 @@ export interface ExtensionDiscoveryEntry {
 }
 
 /**
- * `{{shuvix:extensionDiscovery}}`：这条会话可以申请开启哪些扩展。没有可开启的（或这个 agent 没有 `tool_search`，宿主
- * 就传空表）→ 空串，占位符整块消失：提示词不指向够不着的东西。
+ * `extensions` 块的正文：这条会话可以申请开启哪些扩展。这一块不在档案的词表里，跟着 `tool_search` 工具走。没有可开启的（或这个 agent 没有 `tool_search`，宿主
+ * 就传空表）→ 空串，整块不出：提示词不指向够不着的东西。
  *
  * 只有名字和内置说明，从不带第三方服务器自己写的描述 —— 用户还没批准它，那段文字不该先进系统提示词。
  */
@@ -231,11 +231,11 @@ export interface TempDirectoryOptions {
 }
 
 /**
- * `{{shuvix:tempDirectory}}` 的取值 —— 环境清单里的一行：本会话自己的临时目录在哪儿。
+ * `environment` 块里的一行（`EnvironmentFacts.tempDirectoryLine`）：本会话自己的临时目录在哪儿。
  *
  * 宿主早就给每个会话备了一个临时目录（会话权限表里可写的一行，命令的 TMPDIR），可提示词从没说过它：
  * 模型照习惯往 `/tmp` 写，文件工具每写一次都问用户，受限命令被沙箱拒、再申请越界交给审查。
- * 路径按会话 id 算、不随时间变，随人设冻结没有问题。自含块：值就是一整行列表项，没有目录时为空串。
+ * 路径按会话 id 算、不随时间变，随人设冻结没有问题。值就是一整行列表项，没有目录时为空串。
  */
 export function renderTempDirectory(
   language: string | undefined,

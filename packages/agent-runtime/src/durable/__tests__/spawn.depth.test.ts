@@ -119,7 +119,7 @@ describe('SpawnCoordinator · depth', () => {
     const text = depthText(2, 2)
     expect(d.forced).toEqual([{ result: text, error: text }])
     expect(await conversationIds(d.session)).toHaveLength(3)
-    // G 的那次解析之后没有再解析、没有再算变量表
+    // G 的那次解析之后没有再解析、没有再渲染提示词块
     expect(resolves()).toBe(atG)
     expect(d.vars.state.calls).toBe(varsAtG + 1)
   })

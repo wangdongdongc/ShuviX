@@ -273,8 +273,7 @@ describe('SCT-5 标签页会话跑起来：tab 基座、临时工作区、没有
     mocks.getProfile.mockImplementation((name: string) => ({
       name,
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     }))
     const config = await sessionService.resolveAgentConfig(id)
     expect(config.profile.name).toBe('tab')

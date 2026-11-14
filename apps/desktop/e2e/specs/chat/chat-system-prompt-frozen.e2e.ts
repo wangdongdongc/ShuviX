@@ -8,7 +8,7 @@
  *   E-2  在对话之外改项目提示词（project.update），窗口拿到焦点 → 小图标出现在用量环左边，`data-stale` =
  *        project_prompt；真鼠标点开气泡，说明里点名「project prompt」；Esc 收起
  *   E-3  再把 AGENTS.md 删掉、写一份 CLAUDE.md，切到别的会话（那边没有小图标）再切回来 → `data-stale` =
- *        project_instructions project_prompt，气泡里点名 CLAUDE.md；点到别处收起
+ *        agents_md claude_md project_prompt（两个指令文件各是一段），气泡里点名 AGENTS.md 与 CLAUDE.md；点到别处收起
  *   E-4  再发一条（挂住这一轮）：跑着的时候小图标还在，气泡里 [重建] 不可点、提示换成「等它停下」；请求仍是冻结的
  *        旧版本（P-OLD、AGENTS.md），与第一次逐字节相同；跑完小图标还在
  *   E-5  真鼠标点开气泡、点 [重建]：气泡收起，小图标消失，状态 frozen:false
@@ -195,12 +195,16 @@ describe('frozen system prompt: indicator and rebuild', () => {
     expect((await indicator.indicator())?.expanded).toBe(false)
   })
 
-  it('E-3 AGENTS.md removed and CLAUDE.md written; after switching away and back the popover names CLAUDE.md', async () => {
+  it('E-3 AGENTS.md removed and CLAUDE.md written; after switching away and back the popover names both files', async () => {
     rmSync(join(projDir, 'AGENTS.md'))
     writeFileSync(join(projDir, 'CLAUDE.md'), RULE_NEW)
     expect(await status()).toEqual({
       frozen: true,
-      stale: [{ key: 'project_instructions', file: 'CLAUDE.md' }, { key: 'project_prompt' }]
+      stale: [
+        { key: 'agents_md', file: 'AGENTS.md' },
+        { key: 'claude_md', file: 'CLAUDE.md' },
+        { key: 'project_prompt' }
+      ]
     })
 
     expect(await sidebar.openSession(OTHER)).toBe(true)
@@ -212,15 +216,15 @@ describe('frozen system prompt: indicator and rebuild', () => {
     await chat.ready()
     const shot = await until(async () => {
       const current = await indicator.indicator()
-      return current && current.stale.length === 2 ? current : null
-    }, 'indicator with both sources after switching back')
-    expect(shot.stale).toEqual(['project_instructions', 'project_prompt'])
+      return current && current.stale.length === 3 ? current : null
+    }, 'indicator with all three sources after switching back')
+    expect(shot.stale).toEqual(['agents_md', 'claude_md', 'project_prompt'])
     expect(shot.beforeContextRing).toBe(true)
 
     const popover = await indicator.openPopover()
     expect(popover.text).toContain('CLAUDE.md')
     expect(popover.text).toContain('project prompt')
-    expect(popover.text).not.toContain('AGENTS.md')
+    expect(popover.text).toContain('AGENTS.md')
     if (SHOT) await indicator.screenshotComposer(SHOT, 16)
 
     await indicator.clickOutside()
@@ -236,7 +240,7 @@ describe('frozen system prompt: indicator and rebuild', () => {
     await until(() => provider.holding() || null, 'second turn holding')
     expect(await chat.isBusy()).toBe(true)
     const during = await indicator.indicator()
-    expect(during?.stale).toEqual(['project_instructions', 'project_prompt'])
+    expect(during?.stale).toEqual(['agents_md', 'claude_md', 'project_prompt'])
     const popover = await indicator.openPopover()
     expect(popover.rebuildDisabled).toBe(true)
     expect(popover.hint).toBe(BUSY_HINT)

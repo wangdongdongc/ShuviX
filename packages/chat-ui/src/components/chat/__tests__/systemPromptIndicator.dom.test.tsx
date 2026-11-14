@@ -9,7 +9,7 @@
  *   UI-2  HostApi 没有这两个方法（只有其中一个也算）→ 什么都不画
  *   UI-3  sessionId 为 null → 什么都不画、不问
  *   UI-4  frozen:false / stale [] → 不画
- *   UI-5  stale [persona, project_instructions{CLAUDE.md}, knowledge_bases] → 图标：data-stale、按钮的
+ *   UI-5  stale [persona, claude_md{CLAUDE.md}, knowledge_bases] → 图标：data-stale、按钮的
  *         aria-label / title = staleTitle、aria-expanded；点开气泡（role=dialog）：staleDetail 里的来源列表、
  *         提示行、[重建]；再点收起
  *   UI-6  指令文件那一段没带文件名 → 「instruction file」
@@ -103,13 +103,9 @@ function deferred<T>(): Deferred<T> {
 
 const STALE: SystemPromptStatus = {
   frozen: true,
-  stale: [
-    { key: 'persona' },
-    { key: 'project_instructions', file: 'CLAUDE.md' },
-    { key: 'knowledge_bases' }
-  ]
+  stale: [{ key: 'persona' }, { key: 'claude_md', file: 'CLAUDE.md' }, { key: 'knowledge_bases' }]
 }
-const STALE_KEYS = 'persona project_instructions knowledge_bases'
+const STALE_KEYS = 'persona claude_md knowledge_bases'
 const ONLY_KNOWLEDGE: SystemPromptStatus = { frozen: true, stale: [{ key: 'knowledge_bases' }] }
 const ONLY_PERSONA: SystemPromptStatus = { frozen: true, stale: [{ key: 'persona' }] }
 const CURRENT: SystemPromptStatus = { frozen: true, stale: [] }
@@ -350,7 +346,8 @@ describe('SystemPromptIndicator · what it says', () => {
       stale: [
         { key: 'persona' },
         { key: 'placeholders' },
-        { key: 'project_instructions', file: 'AGENTS.md' },
+        { key: 'agents_md', file: 'AGENTS.md' },
+        { key: 'claude_md', file: 'CLAUDE.md' },
         { key: 'project_prompt' },
         { key: 'knowledge_bases' },
         { key: 'bot_profile' }
@@ -364,6 +361,7 @@ describe('SystemPromptIndicator · what it says', () => {
           S.source.persona,
           S.source.placeholders,
           'AGENTS.md',
+          'CLAUDE.md',
           S.source.project_prompt,
           S.source.knowledge_bases,
           S.source.bot_profile
@@ -372,13 +370,14 @@ describe('SystemPromptIndicator · what it says', () => {
     )
   })
 
-  it('UI-6 the instruction-file section without a file name reads "instruction file"', async () => {
+  it('UI-6 an instruction-file section without a file name falls back to its label, which is the file name', async () => {
     const sid = fresh('ui6')
-    answers[sid] = { frozen: true, stale: [{ key: 'project_instructions' }] }
+    answers[sid] = { frozen: true, stale: [{ key: 'claude_md' }] }
     await show(sid)
     await openPopover()
-    expect(detail()).toBe(detailText(S.source.project_instructions))
-    expect(S.source.project_instructions).toBe('instruction file')
+    expect(detail()).toBe(detailText(S.source.claude_md))
+    expect(S.source.claude_md).toBe('CLAUDE.md')
+    expect(S.source.agents_md).toBe('AGENTS.md')
   })
 
   it('UI-18 an open popover closes on a pointerdown outside and on Escape; a pointerdown inside it or another key keeps it', async () => {
@@ -801,7 +800,8 @@ describe('locales', () => {
     const SOURCES = [
       'persona',
       'placeholders',
-      'project_instructions',
+      'agents_md',
+      'claude_md',
       'project_prompt',
       'knowledge_bases',
       'bot_profile'

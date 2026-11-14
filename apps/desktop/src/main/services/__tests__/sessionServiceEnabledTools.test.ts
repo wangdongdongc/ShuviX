@@ -97,8 +97,7 @@ vi.mock('../agentService', () => ({
     getProfile: vi.fn((name: string) => ({
       name,
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     }))
   }
 }))

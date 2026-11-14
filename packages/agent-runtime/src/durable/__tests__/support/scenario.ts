@@ -1,7 +1,7 @@
 /**
  * 场景 W（锁的用例共用）：会话 s1；faux 两个模型 faux-1（窗口 40000）/ faux-2（8000）；可拨的时钟；
  * 场景 W 的会话配置、ToolHost（darwin 内置集、技能 builtin:drawing / pdf、假 MCP ctx [resolve, docs]、
- * 沙箱开）与人设变量表（marker M1）。重启（`t.restart()`）沿用配置 / 变量表 / 时钟，换新的 faux 套件
+ * 沙箱开）与人设提示词块（marker M1）。重启（`t.restart()`）沿用配置 / 提示词块 / 时钟，换新的 faux 套件
  * 与 ToolHost。
  */
 import { AgentDoc, ROOT_CONVERSATION_ID, type ConversationId } from '@earendil-works/pi-durable'
@@ -53,7 +53,7 @@ export async function scenarioW(
     makeKit: wKit,
     toolHost: scenarioToolHost(),
     agentConfig: config,
-    promptVars: vars.promptVars,
+    promptBlocks: vars.promptBlocks,
     now: () => clock.now,
     ...hostOverrides
   })
@@ -65,7 +65,7 @@ export function wExtensions(conversationId: ConversationId = ROOT_CONVERSATION_I
   return [
     'shuvix.builtin',
     PROMPT_EXTENSION.persona,
-    PROMPT_EXTENSION.instructions,
+    PROMPT_EXTENSION.agentsMd,
     PROMPT_EXTENSION.projectPrompt,
     PROMPT_EXTENSION.knowledge,
     `shuvix.agent.${conversationId}`

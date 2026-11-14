@@ -29,7 +29,13 @@ import { fenceProjectPrompt } from '../prompt/fences'
 import { computeFrozenAgentPrompt } from '../prompt/persona'
 import { createPromptExtensions, PROMPT_EXTENSION, promptExtensionsFor } from '../prompt/sections'
 import type { ResultContract } from '../../subagent/nextTool'
-import { markerVars, scenarioToolHost, testProfile } from './support/agentConfig'
+import {
+  MARKER_BODY,
+  markerPersona,
+  markerVars,
+  scenarioToolHost,
+  testProfile
+} from './support/agentConfig'
 import { recordPublications } from './support/commits'
 import { crashWith } from './support/crash'
 import { answer, callTool, fauxKit, held } from './support/faux'
@@ -93,7 +99,7 @@ describe('P3-06 A · agentInfo content', () => {
       const prompt = createPromptExtensions(promptHost)
       const toolNames = normalizeToolNames(inputs.kind, inputs.profile.tools, inputs.toolOverlay)
       const frozen = await computeFrozenAgentPrompt(
-        { promptVars: () => inputs.promptVars },
+        { promptBlocks: () => inputs.promptBlocks },
         {
           kind: inputs.kind,
           sessionId: inputs.sessionId,
@@ -132,17 +138,17 @@ describe('P3-06 A · agentInfo content', () => {
     const vars = markerVars('M1')
     const t = await makeHost({
       agentConfig: {
-        profile: testProfile({ systemPrompt: 'You are {{shuvix:marker}}' }),
+        profile: testProfile({ systemPrompt: MARKER_BODY, promptBlocks: ['environment'] }),
         model: { provider: 'faux', modelId: 'faux-1' }
       },
-      promptVars: vars.promptVars
+      promptBlocks: vars.promptBlocks
     })
     const session = await t.open()
     await session.createAgent()
     const info = await session.agentInfo(session.lock!.conversationId)
     t.kit.queue(answer('ok'))
     expect(await session.submitUser('hi')).toEqual({})
-    expect(info!.systemPrompt).toBe('You are M1')
+    expect(info!.systemPrompt).toBe(markerPersona('M1'))
     expect(info!.systemPrompt).toBe(t.kit.requests[0]!.systemPrompt)
     expect(t.configCalls).toHaveLength(1)
     expect(vars.state.calls).toBe(1)
@@ -152,7 +158,7 @@ describe('P3-06 A · agentInfo content', () => {
     const seam = { text: 'A' }
     const t = await makeHost({
       agentConfig: {
-        profile: testProfile({ systemPrompt: 'Persona', projectAwareness: true }),
+        profile: testProfile({ systemPrompt: 'Persona', promptBlocks: ['project_prompt'] }),
         model: { provider: 'faux', modelId: 'faux-1' }
       },
       promptHost: { resolveProjectPrompt: () => seam.text }
@@ -192,7 +198,7 @@ describe('P3-06 A · agentInfo content', () => {
     const seam: { text: string; fail: boolean } = { text: 'A', fail: true }
     const t = await makeHost({
       agentConfig: {
-        profile: testProfile({ systemPrompt: 'Persona', projectAwareness: true }),
+        profile: testProfile({ systemPrompt: 'Persona', promptBlocks: ['project_prompt'] }),
         model: { provider: 'faux', modelId: 'faux-1' }
       },
       promptHost: {

@@ -570,16 +570,21 @@ export type {
   SubAgentRegistry
 } from './subagent/types'
 
-// ── Agent 档案体系：创建期变量表 / 注册表接口（统一创建管线的纯逻辑层） ──
+// ── Agent 档案体系：提示词块 / 注册表接口（统一创建管线的纯逻辑层） ──
 export {
-  renderProfileSystemPrompt,
-  substitutePromptVars,
+  composePersona,
+  fencePromptBlock,
   formatLanguageDisplay,
+  renderDocumentBlock,
+  renderEnvironment,
   type AgentKind,
-  type PromptVars,
-  type PromptVarsCtx
-} from './agentProfile/promptVars'
-// 档案共用的提示片段（各档案在正文里用 {{shuvix:*}} 占位符引入；宿主在变量表里供值）
+  type DocumentBlockOptions,
+  type EnvironmentFacts,
+  type PersonaBlock,
+  type PromptBlockTexts,
+  type PromptBlocksCtx
+} from './agentProfile/promptBlocks'
+// 档案共用的提示片段（宿主渲染提示词块时用）
 export {
   renderVisualGuide,
   renderVisualCraft,
@@ -636,7 +641,6 @@ export {
   botSectionText,
   createPromptExtensions,
   fencedSectionText,
-  instructionSectionText,
   PersonaNotFrozenError,
   PROMPT_EXTENSION,
   PLACEHOLDER_NOTE,

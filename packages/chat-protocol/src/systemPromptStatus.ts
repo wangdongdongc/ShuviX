@@ -12,7 +12,8 @@
 export type SystemPromptSectionKey =
   | 'persona'
   | 'placeholders'
-  | 'project_instructions'
+  | 'agents_md'
+  | 'claude_md'
   | 'project_prompt'
   | 'knowledge_bases'
   | 'bot_profile'
@@ -20,7 +21,7 @@ export type SystemPromptSectionKey =
 /** 来源变了的一段 */
 export interface StaleSystemPromptSection {
   key: SystemPromptSectionKey
-  /** 指令文件那一段：此刻（或冻结时）读的是哪个文件，如 `CLAUDE.md` */
+  /** 两个指令文件段落（`agents_md` / `claude_md`）：读的是哪个文件，如 `CLAUDE.md` */
   file?: string
 }
 
@@ -38,7 +39,8 @@ export type RebuildSystemPromptResult = { success: true } | { success: false; re
 export const SYSTEM_PROMPT_SECTION_ORDER: readonly SystemPromptSectionKey[] = [
   'persona',
   'placeholders',
-  'project_instructions',
+  'agents_md',
+  'claude_md',
   'project_prompt',
   'knowledge_bases',
   'bot_profile'

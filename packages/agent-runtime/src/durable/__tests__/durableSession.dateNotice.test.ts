@@ -556,7 +556,7 @@ describe('date notice before a user input (DurableSession wiring)', () => {
     await lockPrompt(
       conversation,
       t.kit,
-      frozenPrompt({ persona: `Today: ${D1}.`, instructionFiles: [] }),
+      frozenPrompt({ persona: `Today: ${D1}.`, promptBlocks: ['project_prompt'] }),
       [prompt.get('shuvix.prompt.persona'), prompt.get('shuvix.prompt.project-prompt')]
     )
     t.kit.queue(answer('a1'))

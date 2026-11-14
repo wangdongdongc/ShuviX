@@ -5,7 +5,7 @@
  *
  *   RBD-1  空闲、有锁 → success；锁没了、镜像 false、一对 agent_closing；一个提交删锁并删掉 persona / personaKey /
  *          sections；身份字段与 lastAnnouncedDate 留着
- *   RBD-2  下一次发送：变量表再调一次、段落按此刻的来源渲染（不是比对）、摘要 = 此刻的、请求带新文本；提醒 frozen []
+ *   RBD-2  下一次发送：提示词块再渲染一次、段落按此刻的来源渲染（不是比对）、摘要 = 此刻的、请求带新文本；提醒 frozen []
  *   RBD-3  空闲、没锁 → success；一个提交，只碰当前对话的 agent-state；没有 closing 广播；不建锁
  *   RBD-4  从没冻结过 → success；没锁、frozen:false
  *   RBD-5  在跑 → busy；那一轮照常跑完；文档不变；不发布
@@ -56,7 +56,7 @@ const IDENTITY = {
   kind: 'root',
   profileName: 'work',
   rootSessionId: 's1',
-  instructionFiles: ['AGENTS.md']
+  promptBlocks: ['environment', 'agents_md', 'project_prompt']
 } as const
 
 async function rebuild(session: DurableSession): Promise<unknown> {
@@ -95,7 +95,7 @@ describe('DurableSession · rebuildSystemPrompt', () => {
   )
 
   it(
-    'RBD-2 the next send renders afresh: promptVars once more, the sections from the current sources (not a comparison), the current key, the request carries the new texts; then frozen with nothing stale',
+    'RBD-2 the next send renders afresh: promptBlocks once more, the sections from the current sources (not a comparison), the current key, the request carries the new texts; then frozen with nothing stale',
     async () => {
       const { t, vars, config, sources } = await envScenario()
       const session = await t.open()
@@ -112,7 +112,7 @@ describe('DurableSession · rebuildSystemPrompt', () => {
       expect(sources.notes).toEqual([])
       const after = await stateOf(session)
       expect(after?.personaKey).toBe(keyOf(config))
-      expect(after?.persona).toContain('Today is 2026-11-06')
+      expect(after?.persona).toContain('Current date: 2026-11-06')
       expect(after?.persona).toContain('New.')
       const prompt = t.kit.requests.at(-1)!.systemPrompt
       expect(prompt).toContain('Use npm.')
@@ -198,7 +198,11 @@ describe('DurableSession · rebuildSystemPrompt', () => {
         host: {
           promptHost: sources.host,
           agentConfig: {
-            profile: testProfile({ name: 'work', systemPrompt: 'P', projectAwareness: true }),
+            profile: testProfile({
+              name: 'work',
+              systemPrompt: 'P',
+              promptBlocks: ['project_prompt']
+            }),
             model: { provider: 'faux', modelId: 'faux-1' }
           }
         }

@@ -1,10 +1,10 @@
 ## このドキュメントは何か
 
 <!-- shuvix:agent-start -->
-このドキュメントは ShuviX の agents フォルダにある**エージェントプロファイル**（`shuvix: agent v1`）です。frontmatter がエージェントのツール、モデル、コンテキストを決め（`shuvix-tools`、`shuvix-model`、`shuvix-instruction-files` …）、本文がそのエージェントのシステムプロンプトのすべてです。ShuviX はこのファイルからエージェントを作るたびに読み直すので、保存した変更はその後に作られるエージェントに効きます。動作中のエージェントは起動時の版のままです。`name` が組み込みプロファイル（work、chat、coding、notebook …）と同じファイルは、その組み込みを置き換えます。
+このドキュメントは ShuviX の agents フォルダにある**エージェントプロファイル**（`shuvix: agent v1`）です。frontmatter がエージェントのツール、モデル、コンテキストを決め（`shuvix-tools`、`shuvix-model` …）、本文がそのエージェントのシステムプロンプトで、`shuvix-prompt-blocks` に挙げたブロックがその後ろに追加されます。ShuviX はこのファイルからエージェントを作るたびに読み直すので、保存した変更はその後に作られるエージェントに効きます。動作中のエージェントは起動時の版のままです。`name` が組み込みプロファイル（work、chat、coding、notebook …）と同じファイルは、その組み込みを置き換えます。
 
 <!-- shuvix:manual-start -->
-完全な仕様 —— すべてのキー、プレースホルダー、ファイルが無効になる条件、例 —— は ShuviX マニュアルの項目 `/agent-md.md` です。自信のない箇所を変える前に `knowledge` ツール（ベース `shuvix`）でそれを読み、他のファイルから形式を推測しないこと。
+完全な仕様 —— すべてのキー、プロンプトブロック、ファイルが無効になる条件、例 —— は ShuviX マニュアルの項目 `/agent-md.md` です。自信のない箇所を変える前に `knowledge` ツール（ベース `shuvix`）でそれを読み、他のファイルから形式を推測しないこと。
 <!-- shuvix:manual-end -->
 <!-- shuvix:agent-end -->
 

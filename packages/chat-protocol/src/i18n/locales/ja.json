@@ -1370,8 +1370,7 @@
     "subAgentDeleteConfirmDesc": "\"{{name}}\" の定義ファイルを削除します。この操作は元に戻せません。",
     "subAgentAdd": "カスタムエージェントを追加",
     "subAgentCreateRequired": "名前・説明・システムプロンプトは必須です",
-    "subAgentInstructionFiles": "指示ファイル",
-    "subAgentProjectAwareness": "プロジェクト認識",
+    "subAgentPromptBlocks": "プロンプトブロック",
     "subAgentUserWords": "ユーザーの原文を受け取る",
     "subAgentDescription": "説明",
     "subAgentBasicGroup": "基本情報",
@@ -2019,7 +2018,8 @@
     "source": {
       "persona": "エージェントプロファイル",
       "placeholders": "ShuviX 組み込みの説明",
-      "project_instructions": "指示ファイル",
+      "agents_md": "AGENTS.md",
+      "claude_md": "CLAUDE.md",
       "project_prompt": "プロジェクトプロンプト",
       "knowledge_bases": "ナレッジベース",
       "bot_profile": "Bot のペルソナと記憶"

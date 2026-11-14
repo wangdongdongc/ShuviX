@@ -4,7 +4,7 @@
  *
  * 事件日志：`open:<id>`（打开存储）、`close:<id>`（存储真正关闭）、`delete:<id>`（删除存储）。
  * `restart()` = closeAll + 同一目录上的新宿主 / 新 faux 套件 / 新 ToolHost（新的调用记录、新的假 MCP
- * 服务器）—— 模拟换了一个进程；会话配置、provider 行、人设变量表这些「DB 里的东西」沿用同一份。
+ * 服务器）—— 模拟换了一个进程；会话配置、provider 行、人设提示词块这些「DB 里的东西」沿用同一份。
  *
  * 锁（P1-09）：每会话一个注册表（`registryOf(id)`，K1）；`mirror` 记 onLockChange；缺省配置（K15）
  * 是空档案 + faux/faux-1，ToolHost 没有内置工具，按 agent 的工具 = `tools`（创建 / 重建那一刻现读）。
@@ -27,7 +27,7 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { afterEach } from 'vitest'
 import type { FakePort } from '../../../models/__tests__/fakePort'
-import type { PromptVars, PromptVarsCtx } from '../../../agentProfile/promptVars'
+import type { PromptBlockTexts, PromptBlocksCtx } from '../../../agentProfile/promptBlocks'
 import type { DurableSession } from '../../durableSession'
 import type { Models } from '@earendil-works/pi-ai'
 import type {
@@ -82,7 +82,7 @@ export interface TestHostOptions {
   models?: Models
   modelCatalog?: ModelCatalog
   promptHost?: PromptHost
-  promptVars?: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  promptBlocks?: (ctx: PromptBlocksCtx) => PromptBlockTexts | Promise<PromptBlockTexts>
   /** onLockChange 抛错（LR-09） */
   onLockChange?: (sessionId: string, locked: boolean) => void
   maxIdleOpen?: number
@@ -276,7 +276,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     },
     modelCatalog: options.modelCatalog ?? fauxCatalog(kit, port),
     ...(options.promptHost === undefined ? {} : { promptHost: options.promptHost }),
-    ...(options.promptVars === undefined ? {} : { promptVars: options.promptVars }),
+    ...(options.promptBlocks === undefined ? {} : { promptBlocks: options.promptBlocks }),
     onLockChange: (sessionId, locked) => {
       mirror.push([sessionId, locked])
       options.onLockChange?.(sessionId, locked)

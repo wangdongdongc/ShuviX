@@ -13,6 +13,7 @@
  * 等专属 summarize 能力时再扩展本类型。
  */
 
+import { AGENT_PROMPT_BLOCKS_KEY } from './agentPromptBlocks'
 import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
 import { SHUVIX_BUILTIN_KEY, SHUVIX_ID_KEY } from './mdMeta'
 
@@ -113,8 +114,7 @@ const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
     { key: AGENT_THINKING_KEY, labelKey: 'tool.subAgentThinking', kind: 'select' },
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
-    { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
-    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' },
+    { key: AGENT_PROMPT_BLOCKS_KEY, labelKey: 'tool.subAgentPromptBlocks', kind: 'csv' },
     { key: 'shuvix-user-words', labelKey: 'tool.subAgentUserWords', kind: 'boolean' },
     BUILTIN_MARKER_FIELD,
     OBJECT_ID_FIELD

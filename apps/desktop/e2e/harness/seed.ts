@@ -34,9 +34,11 @@ export interface AgentMdSeed {
   model?: string
   body?: string
   displayName?: string
-  /** shuvix-instruction-files 逗号串（如 'AGENTS.md, CLAUDE.md'） */
-  instructionFiles?: string
-  projectAwareness?: boolean
+  /**
+   * shuvix-prompt-blocks 逗号串（如 'environment, agents_md, claude_md, project_prompt'）——
+   * 正文之后追加哪几块；词表见 chat-protocol `agentPromptBlocks.ts`。省略 = 一块都不追加
+   */
+  promptBlocks?: string
   /** 追加的原始 frontmatter 行（测未知/废弃 key 时用） */
   rawLines?: string[]
 }
@@ -50,8 +52,7 @@ export function writeAgentMd(app: E2EApp, name: string, seed: AgentMdSeed = {}):
   if (seed.tools) lines.push(`shuvix-tools: ${seed.tools}`)
   if (seed.model) lines.push(`shuvix-model: ${seed.model}`)
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
-  if (seed.instructionFiles) lines.push(`shuvix-instruction-files: ${seed.instructionFiles}`)
-  if (seed.projectAwareness) lines.push('shuvix-project-awareness: true')
+  if (seed.promptBlocks) lines.push(`shuvix-prompt-blocks: ${seed.promptBlocks}`)
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BODY.')
   const filePath = join(app.agentsDir, `${name}.md`)

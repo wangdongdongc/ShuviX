@@ -272,8 +272,8 @@ grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, ar
 組み込みポリシー **ask-on-external-path** の確認になり、自動レビューがオンならレビュアーが答えることも
 あります（そうした書き込みを —— bot 自身のファイルも含めて —— 必ずユーザーに届けたいなら、`vars.botsDir` に対する `force-ask` のポリシーを
 書きます —— `policy-md` を参照）。
-`notebook` と同じく、このベースはプロジェクト認識を宣言しますが指示ファイルは読みません（AGENTS.md /
-CLAUDE.md は実際にコードを書くサブセッションのための約束事です）。
+`notebook` と同じく、このベースは `project_prompt` ブロックを列挙しますが、指示ファイルの二つのブロックは
+列挙しません（`agents_md` / `claude_md`：AGENTS.md / CLAUDE.md は実際にコードを書くサブセッションのための約束事です）。
 ベースは他の組み込みエージェントと同じく名前で上書きできます（`~/.shuvix/agents/bot.md`）。
 
 ## ライフサイクルの注意

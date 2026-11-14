@@ -149,8 +149,7 @@ function profileWithTools(tools: string[]): void {
   mocks.getProfile.mockImplementation((name) => ({
     name,
     tools,
-    instructionFiles: [],
-    projectAwareness: false
+    promptBlocks: []
   }))
 }
 

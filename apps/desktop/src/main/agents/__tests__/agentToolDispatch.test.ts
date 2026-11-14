@@ -65,8 +65,7 @@ function profileOf(name: string, source: 'builtin' | 'user' = 'builtin'): AgentP
     description: `${name} agent`,
     systemPrompt: `${name} prompt`,
     tools: ['read'],
-    instructionFiles: [],
-    projectAwareness: false,
+    promptBlocks: [],
     source,
     basePath: source === 'user' ? `/home/u/.shuvix/agents/${name}.md` : ''
   }

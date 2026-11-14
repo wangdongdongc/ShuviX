@@ -69,8 +69,13 @@ describe('buildBuiltinProfile — md 解析', () => {
     expect(built.tools).toEqual(['read', 'ls', 'grep', 'glob'])
   })
 
-  it('会话级 {{shuvix:*}} 占位符不在此替换（留给 createAgent）', () => {
-    expect(profile(WORK_PROFILE_NAME).systemPrompt).toContain('{{shuvix:workingDirectory}}')
+  it('内置正文是纯文字：任何一份、任何语言里都不再有 {{shuvix:*}} 占位符（会话相关的内容走提示词块）', () => {
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      for (const language of LANGS) {
+        const built = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!
+        expect(built.systemPrompt, `${spec.name}.${language}`).not.toContain('{{shuvix:')
+      }
+    }
   })
 })
 
@@ -144,14 +149,13 @@ describe('buildBuiltinProfiles — 全集现算', () => {
     }
   })
 
-  it('语言切换不改变结构字段（工具白名单/注入开关只在 en 文件里定义一次的等价物）', () => {
+  it('语言切换不改变结构字段（工具白名单/提示词块清单只在 en 文件里定义一次的等价物）', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const en = buildBuiltinProfile(spec, { ...ALL_PARAMS, language: 'en' })!
       for (const language of ['zh', 'ja']) {
         const loc = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!
         expect(loc.tools, `${spec.name}.${language} tools`).toEqual(en.tools)
-        expect(loc.instructionFiles, `${spec.name}.${language}`).toEqual(en.instructionFiles)
-        expect(loc.projectAwareness, `${spec.name}.${language}`).toBe(en.projectAwareness)
+        expect(loc.promptBlocks, `${spec.name}.${language}`).toEqual(en.promptBlocks)
       }
     }
   })
@@ -167,7 +171,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
  * 提示词里必须在场的那几段。
  */
 describe('knowledge-writer 档案钉板（知识库管理员）', () => {
-  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/write/edit/move/delete/grep（增删改查用文件工具，不给 bash、ls、glob），不注入项目文档、不开项目感知、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/write/edit/move/delete/grep（增删改查用文件工具，不给 bash、ls、glob），一个提示词块都不点（不注入项目文档与项目提示词）、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
     // 要检查的文件、所在的库、提交者都由任务文本给出 —— 零参数也建得出来
     expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { readMd })).not.toBeNull()
@@ -188,8 +192,7 @@ describe('knowledge-writer 档案钉板（知识库管理员）', () => {
         'delete',
         'grep'
       ])
-      expect(built!.projectAwareness, language).toBe(false)
-      expect(built!.instructionFiles, language).toEqual([])
+      expect(built!.promptBlocks, language).toEqual([])
       expect(built!.model, language).toBeUndefined()
     }
   })
@@ -317,50 +320,47 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     // git 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
     // work.md 加入，子代理经白名单解析不受默认集限制）
     expect(built.tools, 'work 不应持有 git').not.toContain('git')
-    // 环境/工作区模板已内化进 body（{{shuvix:*}} 占位符,createAgent 时替换）
-    for (const v of [
-      'isGitRepo',
-      'platform',
-      'shell',
-      'os',
-      'date',
-      'language',
-      'appVersion',
-      'workingDirectory'
-    ]) {
-      expect(built.systemPrompt).toContain(`{{shuvix:${v}}}`)
-    }
-    for (const gone of ['referenceDirs', 'projectEnvVars', 'projectPromptSections']) {
-      expect(built.systemPrompt).not.toContain(`{{shuvix:${gone}}}`)
+    // 环境清单、作图说明不在正文里了：档案点名提示词块，宿主渲染后追加在正文后面
+    expect(built.promptBlocks).toEqual([
+      'drawing',
+      'environment',
+      'agents_md',
+      'claude_md',
+      'project_prompt'
+    ])
+    for (const language of LANGS) {
+      const body = profile(WORK_PROFILE_NAME, language).systemPrompt
+      expect(body, language).not.toContain('{{shuvix:')
+      expect(body, language).not.toMatch(/^## (Environment|环境信息|環境)/m)
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / titler / permission-reviewer / knowledge-writer 除外）、项目感知默认开（titler / permission-reviewer / knowledge-writer 除外）', () => {
-    /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
-    // 权限审查员同理：它的全部输入就是那次操作的事件，项目文档只会稀释审查规则。
-    // 知识库写手（库管员）也是：它只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
-    const NO_INJECTION = ['titler', 'permission-reviewer', 'knowledge-writer']
+  it('内置档案各自点的提示词块：work / chat / coding 五块全点；bot / notebook / tab 不点指令文件；explore 只要项目上下文；titler / permission-reviewer / knowledge-writer 一块都不点', () => {
+    const FULL = ['drawing', 'environment', 'agents_md', 'claude_md', 'project_prompt']
+    // 各档案的取舍：
+    //  - 指令文件（agents_md / claude_md）：notebook 不点 —— AGENTS.md / CLAUDE.md 是写代码的工程约定，改一篇笔记用不上；
+    //    bot 同一取舍：它是对话人格，真正写代码的是它派出去的子会话，那条会话自己会读这两个文件；
+    //    tab（Chrome 侧边栏会话）也不点：它处理的是网页，工作目录只是个临时目录；
+    //  - 项目提示词（project_prompt）：notebook / bot 照常点 —— 笔记就写在项目里；
+    //  - explore 是派出去读代码的：要项目文档与项目提示词，不画图，环境清单也用不上；
+    //  - titler / 权限审查员 / 知识库管理员一块都不点：上下文无关的一次性任务，项目文档只会稀释指令
+    //    （管理员只看条目与库里已有的内容，工程文档只会把它往「去读代码核实」那边带）。
+    const EXPECTED: Record<string, string[]> = {
+      [WORK_PROFILE_NAME]: FULL,
+      chat: FULL,
+      coding: FULL,
+      [BOT_PROFILE_NAME]: ['drawing', 'environment', 'project_prompt'],
+      [NOTEBOOK_PROFILE_NAME]: ['document', 'drawing', 'environment', 'project_prompt'],
+      [TAB_PROFILE_NAME]: ['drawing', 'environment'],
+      explore: ['agents_md', 'claude_md', 'project_prompt']
+    }
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
-      // 两项注入的开关面不同：
-      //  - 指令文件：notebook 不吃 —— AGENTS.md/CLAUDE.md 是写代码的工程约定，改一篇笔记用不上；
-      //  - 项目感知：notebook 照常开 —— 笔记就写在项目里，项目提示词与项目记忆正是它的上下文；
-      //  - titler 两样都不要：拟一个标题用不上项目文档，注入只是噪声。
-      // bot 与 notebook 同一取舍：bot 是对话人格，AGENTS.md/CLAUDE.md 是写代码的工程
-      // 约定 —— 真正写代码的是它派出去的子会话，那条会话自己会吃这份文件。
-      // tab（Chrome 侧边栏会话）也不吃：它处理的是网页，工作目录只是个临时目录。
-      const instructionsOn =
-        spec.name !== NOTEBOOK_PROFILE_NAME &&
-        spec.name !== BOT_PROFILE_NAME &&
-        spec.name !== TAB_PROFILE_NAME &&
-        !NO_INJECTION.includes(spec.name)
-      const awarenessOn = !NO_INJECTION.includes(spec.name)
-      // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
-      expect(built.instructionFiles, spec.name).toEqual(
-        instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : []
-      )
-      expect(built.projectAwareness, spec.name).toBe(awarenessOn)
+      expect(built.promptBlocks, spec.name).toEqual(EXPECTED[spec.name] ?? [])
     }
+    // 自检：表里的名字都是真的内置档案
+    const names = BUILTIN_PROFILE_SPECS.map((spec) => spec.name)
+    for (const name of Object.keys(EXPECTED)) expect(names, name).toContain(name)
   })
 
   it('三语 description 都点名 "work"、不再提 "default"（覆盖提示指向正确的文件名）', () => {
@@ -653,7 +653,7 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
     return built!
   }
 
-  it("PRV-1 三语结构钉板：工具恰为 ['read']、不吃指令文件、项目感知关、thinkingLevel low、不声明模型；名字即常量；不依赖任何宿主参数", () => {
+  it("PRV-1 三语结构钉板：工具恰为 ['read']、一个提示词块都不点、thinkingLevel low、不声明模型；名字即常量；不依赖任何宿主参数", () => {
     expect(PERMISSION_REVIEWER_PROFILE_NAME).toBe('permission-reviewer')
     expect(PERMISSION_REVIEWER_SPEC.name).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
     // 零参数也建得出来 —— 它不点名宿主的任何目录
@@ -663,8 +663,7 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
       expect(built.name, language).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
       // 只有 `read`：能看一眼被运行的脚本，跑不了命令、写不了文件；结论经结果契约附带的 `next` 交回
       expect(built.tools, language).toEqual(['read'])
-      expect(built.instructionFiles, language).toEqual([])
-      expect(built.projectAwareness, language).toBe(false)
+      expect(built.promptBlocks, language).toEqual([])
       expect(built.thinkingLevel, language).toBe('low')
       // 模型随派发方（会话当前模型）；要钉便宜模型就覆盖这份 md
       expect(built.model, language).toBeUndefined()
@@ -756,11 +755,11 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
     expect(built.tools).not.toContain('edit')
   })
 
-  it('body 引用 notebookPath 占位符 —— 端在渲染时替换为当前笔记路径', () => {
+  it('点了 document 块 —— 当前打开的是哪份文档由宿主在那一块里说（正文里不再有 notebookPath 占位符）', () => {
     for (const language of LANGS) {
-      expect(profile(NOTEBOOK_PROFILE_NAME, language).systemPrompt).toContain(
-        '{{shuvix:notebookPath}}'
-      )
+      const built = profile(NOTEBOOK_PROFILE_NAME, language)
+      expect(built.promptBlocks, language).toContain('document')
+      expect(built.systemPrompt, language).not.toContain('{{shuvix:notebookPath}}')
     }
   })
 
@@ -1128,7 +1127,9 @@ describe('tab 档案钉板（Chrome 标签页会话的基座）', () => {
     for (const language of LANGS) {
       const built = profile(TAB_PROFILE_NAME, language)
       expect(built.tools, `tab.${language}`).toEqual(en.tools)
-      expect(built.instructionFiles, `tab.${language}`).toEqual([])
+      expect(built.promptBlocks, `tab.${language}`).toEqual(en.promptBlocks)
+      expect(built.promptBlocks, `tab.${language}`).not.toContain('agents_md')
+      expect(built.promptBlocks, `tab.${language}`).not.toContain('claude_md')
       expect(built.model, `tab.${language}`).toBeUndefined()
     }
     expect(BASE_PROFILE_NAMES.has(TAB_PROFILE_NAME)).toBe(true)
@@ -1161,20 +1162,17 @@ describe('mcp:plan 默认不勾（任务列表，实验）', () => {
 
 /**
  * 命令工具按平台二选一（bash：macOS / Linux，powershell：Windows）—— 内置档案因此**成对**点名两个，
- * 由宿主只装配这台机器上存在的那个；正文里不写死任何一个，而是用 `{{shuvix:shellTool}}` 指代
- * 「本平台的那个 shell 工具」。三条钉住这套约定，漏一处的后果都是静默的：
+ * 由宿主只装配这台机器上存在的那个；正文里不写死任何一个（正文是纯文字，没有占位符可以指代
+ * 「本平台的那个 shell 工具」—— 哪个 shell 由 `environment` 块与命令工具自己的描述讲）。
+ * 两条钉住这套约定，漏一处的后果都是静默的：
  *  - 只点了 bash 的档案在 Windows 上没有命令工具（反之亦然）；
- *  - 正文里写死的 `bash` 在 Windows 上指向一个不存在的工具，模型会照着去调；
- *  - 没有命令工具的档案里出现 shellTool，渲染出来的是一句指向空处的话。
+ *  - 正文里写死的 `bash` 在 Windows 上指向一个不存在的工具，模型会照着去调。
  */
-describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全集）', () => {
-  const SHELL_TOOL = '{{shuvix:shellTool}}'
+describe('命令工具成对 + 正文不写死哪一个（三语全集）', () => {
   const allProfiles = (): { profile: AgentProfile; language: string }[] =>
     LANGS.flatMap((language) =>
       buildBuiltinProfiles({ ...ALL_PARAMS, language }).map((p) => ({ profile: p, language }))
     )
-  const holdsShell = (p: AgentProfile): boolean =>
-    p.tools.includes('bash') || p.tools.includes('powershell')
   /**
    * 正文去掉代码围栏的 info string（```bash 是给代码块着色的语言名，不是在指代工具）。
    * 围栏里的内容照查 —— 今天没有哪份正文在那里写 bash / powershell。
@@ -1203,18 +1201,6 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
     }
     // 自检：剥 info string 这一步确实剥得掉（今天没有哪份正文带 ```bash 代码块，拿一段样例验）
     expect(withoutFenceInfo('a\n```bash\nls\n```\n')).toBe('a\n```\nls\n```\n')
-  })
-
-  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天没有内置档案引用它（引用过它的 widget 已改为技能，work / chat / coding 的「优先专用工具」由命令工具自己的描述讲）', () => {
-    const referencing = new Set<string>()
-    for (const { profile: p, language } of allProfiles()) {
-      const what = `${p.name}.${language}`
-      if (p.systemPrompt.includes(SHELL_TOOL)) {
-        expect(holdsShell(p), `${what} 引用了 shellTool 却没有命令工具`).toBe(true)
-        referencing.add(p.name)
-      }
-    }
-    expect([...referencing].sort()).toEqual([])
   })
 })
 
@@ -1276,7 +1262,7 @@ describe('内置档案的对象 id（shuvix-id）', () => {
         const text = serializeAgentDefinitionFile({
           ...built,
           tools: [...built.tools],
-          instructionFiles: [...built.instructionFiles]
+          promptBlocks: [...built.promptBlocks]
         })
         expect(parseAgentDefinitionFile(text, 'x')?.objectId, `${spec.name}.${language}`).toBe(
           built.objectId
@@ -1286,39 +1272,31 @@ describe('内置档案的对象 id（shuvix-id）', () => {
   })
 })
 
-describe('{{shuvix:extensionDiscovery}} 的归属（RG）', () => {
-  const PLACEHOLDER = '{{shuvix:extensionDiscovery}}'
-  const count = (text: string): number => text.split(PLACEHOLDER).length - 1
-
+/**
+ * 「可以申请开启的扩展」那一段跟着 `tool_search` 工具走：它不在提示词块的词表里，档案点不了它的名，
+ * 宿主只给手里有这个工具的 agent 渲染 `extensions` 块。所以归属就是「谁声明了 tool_search」。
+ */
+describe('extensions 块的归属：跟着 tool_search（RG）', () => {
   it.each(
     LANGS.flatMap((language) => ['work', 'chat', 'coding', 'bot'].map((name) => [name, language]))
-  )('RG-1 %s.%s：占位符恰好一次，手里有 tool_search，占位符前后都隔着空行', (name, language) => {
+  )('RG-1 %s.%s：手里有 tool_search；正文里没有那个旧占位符', (name, language) => {
     const built = profile(name, language)
-    expect(count(built.systemPrompt)).toBe(1)
     expect(built.tools).toContain('tool_search')
-    const lines = built.systemPrompt.split('\n')
-    const at = lines.indexOf(PLACEHOLDER)
-    expect(at).toBeGreaterThan(0)
-    expect(lines[at - 1]).toBe('')
-    expect(lines[at + 1]).toBe('')
+    expect(built.systemPrompt).not.toContain('{{shuvix:extensionDiscovery}}')
   })
 
   it.each(LANGS.flatMap((language) => ['notebook', 'tab'].map((name) => [name, language])))(
-    'RG-2 %s.%s：正文不提它，名单里也没有 tool_search',
+    'RG-2 %s.%s：名单里没有 tool_search',
     (name, language) => {
-      const built = profile(name, language)
-      expect(count(built.systemPrompt)).toBe(0)
-      expect(built.tools).not.toContain('tool_search')
+      expect(profile(name, language).tools).not.toContain('tool_search')
     }
   )
 
-  it('RG-3 全部内置档案里只有 work / chat / coding / bot 引用它、声明 tool_search', () => {
+  it('RG-3 全部内置档案里只有 work / chat / coding / bot 声明 tool_search', () => {
     for (const language of LANGS) {
       const profiles = buildBuiltinProfiles({ ...ALL_PARAMS, language })
       const holders = profiles.filter((p) => p.tools.includes('tool_search')).map((p) => p.name)
-      const users = profiles.filter((p) => count(p.systemPrompt) > 0).map((p) => p.name)
       expect([...holders].sort(), language).toEqual(['bot', 'chat', 'coding', 'work'])
-      expect([...users].sort(), language).toEqual(['bot', 'chat', 'coding', 'work'])
     }
   })
 })

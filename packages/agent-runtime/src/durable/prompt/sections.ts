@@ -1,11 +1,12 @@
 /**
- * 系统提示词的五个段落 —— 每段一个 ShuviX 扩展，沿旧 createAgent 的围栏切开（裁决：Mapping #5 prompt）。
+ * 系统提示词的段落 —— 每段一个 ShuviX 扩展，沿旧 createAgent 的围栏切开（裁决：Mapping #5 prompt）。
  *
  * | 扩展                            | 段落 key               | 内容                         | 何时选中                        |
  * |---------------------------------|------------------------|------------------------------|---------------------------------|
  * | `shuvix.prompt.persona`         | `persona`              | 冻结的人设（AgentStateDoc）   | 恒选                            |
- * | `shuvix.prompt.instructions`    | `project_instructions` | 指令文件（现解析）            | 档案声明了指令文件清单           |
- * | `shuvix.prompt.project-prompt`  | `project_prompt`       | 项目提示词（现解析）          | 项目感知                        |
+ * | `shuvix.prompt.agents-md`       | `agents_md`            | 工作目录的 AGENTS.md（现解析）| 档案的提示词块里有 `agents_md`   |
+ * | `shuvix.prompt.claude-md`       | `claude_md`            | 工作目录的 CLAUDE.md（现解析）| 档案的提示词块里有 `claude_md`   |
+ * | `shuvix.prompt.project-prompt`  | `project_prompt`       | 项目提示词（现解析）          | 档案的提示词块里有 `project_prompt` |
  * | `shuvix.prompt.knowledge`       | `knowledge_bases`      | 知识库引导（现解析）          | agent 的工具名单里有 `knowledge` |
  * | `shuvix.prompt.bot`             | `bot_profile`          | bot 人设与记忆（现解析）      | bot 档案上的根 agent            |
  * | `shuvix.prompt.placeholders`    | `placeholders`         | 自动脱敏的占位符怎么用（固定）| 宿主做自动脱敏                  |
@@ -13,7 +14,9 @@
  * 几条规矩：
  *  - **逐字节等于旧系统提示词**：全部 `tag: false`（文本原样，durable 不再包标签），段落之间由 pi-ai
  *    以 "\n\n" 拼接 —— 正是旧 createAgent 的 `+= '\n\n' + 围栏`。P1-00 的黄金 fixture 对照。
- *  - **固定次序**：durable 按对话选中的扩展顺序排段落。五个扩展必须按 `PROMPT_EXTENSION_ORDER` 选，
+ *  - **两个指令文件各读各的**（2026-11-13）：都选中、都存在就都进提示词，各自一个 `<project_instructions file=…>`
+ *    围栏；内容完全相同（一个是另一个的链接或副本）时 `claude_md` 那一段缺席，只留一份。
+ *  - **固定次序**：durable 按对话选中的扩展顺序排段落。这些扩展必须按 `PROMPT_EXTENSION_ORDER` 选，
  *    且别的扩展不该再带段落（工具扩展没有段落，排在哪里都不影响）。
  *  - **人设冻结、其余四段是活的**：段落只在有意的状态变化时变（用户改了项目提示词、勾了别的库、
  *    bot 改了自己的记忆……），从不因环境波动而变；变了的那一段在下一次请求里作为 `pi.system` 增量重发。
@@ -35,7 +38,11 @@ import {
   type PromptInput,
   type PromptSection
 } from '@earendil-works/pi-durable'
-import type { AgentKind } from '../../agentProfile/promptVars'
+import {
+  INSTRUCTION_FILE_OF_BLOCK,
+  type InstructionFileBlock
+} from '@shuvix/chat-protocol/agentPromptBlocks'
+import type { AgentKind } from '../../agentProfile/promptBlocks'
 import { KNOWLEDGE_TOOL_NAME } from '../../knowledge/knowledgeTool'
 import { BOT_PROFILE_NAME } from '../../subagent/builtinAgents'
 import type { InProcessAgentType } from '../../subagent/types'
@@ -45,10 +52,13 @@ import { fenceInstructionFile, fenceKnowledgeBases, fenceProjectPrompt } from '.
 
 // ─────────────────────────── 名字 ───────────────────────────
 
-/** 五个扩展的名字 */
+/** 段落扩展的名字 */
 export const PROMPT_EXTENSION = {
   persona: 'shuvix.prompt.persona',
-  instructions: 'shuvix.prompt.instructions',
+  /** 2026-11-13 之前的单段指令文件：只为已冻结的旧对话留着（见 {@link PROMPT_EXTENSION_ORDER} 上的说明） */
+  legacyInstructions: 'shuvix.prompt.instructions',
+  agentsMd: 'shuvix.prompt.agents-md',
+  claudeMd: 'shuvix.prompt.claude-md',
   projectPrompt: 'shuvix.prompt.project-prompt',
   knowledge: 'shuvix.prompt.knowledge',
   bot: 'shuvix.prompt.bot',
@@ -61,7 +71,9 @@ export type PromptExtensionName = (typeof PROMPT_EXTENSION)[PromptExtensionId]
 /** 每个扩展唯一那一段的 key（与围栏标签同名；对支持中途 system 消息的模型可见） */
 export const PROMPT_SECTION_KEY: Record<PromptExtensionId, string> = {
   persona: 'persona',
-  instructions: 'project_instructions',
+  legacyInstructions: 'project_instructions',
+  agentsMd: 'agents_md',
+  claudeMd: 'claude_md',
   projectPrompt: 'project_prompt',
   knowledge: 'knowledge_bases',
   bot: 'bot_profile',
@@ -82,7 +94,12 @@ export const PROMPT_EXTENSION_ORDER: readonly PromptExtensionName[] = [
   PROMPT_EXTENSION.persona,
   // 固定文本紧跟冻结的人设：前缀缓存不受后面那几个活段落变化的影响
   PROMPT_EXTENSION.placeholders,
-  PROMPT_EXTENSION.instructions,
+  // 旧对话冻结的那一段指令文件（key `project_instructions`）：从不为新对话选中，也不现解析 —— 只在对话的
+  // 冻结段落里有这个 key 时原样读出来。没有它，旧对话下一次上锁（重启后、回退、芯片上的 X）指令文件就从
+  // 系统提示词里悄悄没了，还要整段重算缓存（「历史状态不变」，2026-11-06）。用户点重建之后走新的两段
+  PROMPT_EXTENSION.legacyInstructions,
+  PROMPT_EXTENSION.agentsMd,
+  PROMPT_EXTENSION.claudeMd,
   PROMPT_EXTENSION.projectPrompt,
   PROMPT_EXTENSION.knowledge,
   PROMPT_EXTENSION.bot
@@ -93,7 +110,7 @@ export const PROMPT_EXTENSION_ORDER: readonly PromptExtensionName[] = [
 /** 选择段落要看的那几项 */
 export interface PromptSelectionSpec {
   kind: AgentKind
-  profile: Pick<InProcessAgentType, 'name' | 'instructionFiles' | 'projectAwareness'>
+  profile: Pick<InProcessAgentType, 'name' | 'promptBlocks'>
   /** 归一后的工具名单（档案 + 会话勾选） */
   toolNames: readonly string[]
   /** 宿主做自动脱敏（对话记录里有占位符）—— 由 createPromptExtensions 按宿主配置填 */
@@ -101,16 +118,18 @@ export interface PromptSelectionSpec {
 }
 
 /**
- * 一个对话选中哪几个段落扩展（固定次序）：人设恒选；指令文件 iff 档案清单非空；项目提示词
- * iff 项目感知；知识库 iff 工具名单里有 `knowledge`（库由宿主按会话解析 —— 有项目时恒含项目库 —— 与项目感知无关）；bot iff bot 档案
+ * 一个对话选中哪几个段落扩展（固定次序）：人设恒选；两个指令文件与项目提示词 iff 档案的提示词块
+ * 点了它们的名；知识库 iff 工具名单里有 `knowledge`（库由宿主按会话解析 —— 有项目时恒含项目库 —— 与项目感知无关）；bot iff bot 档案
  * 上的根 agent（人设影响怎么说话、不影响怎么干活 —— 派生 agent 拿不到）。
  */
 export function promptExtensionsFor(spec: PromptSelectionSpec): PromptExtensionName[] {
   const { profile } = spec
   const selected = new Set<PromptExtensionName>([PROMPT_EXTENSION.persona])
   if (spec.placeholders === true) selected.add(PROMPT_EXTENSION.placeholders)
-  if ((profile.instructionFiles?.length ?? 0) > 0) selected.add(PROMPT_EXTENSION.instructions)
-  if (profile.projectAwareness) selected.add(PROMPT_EXTENSION.projectPrompt)
+  const blocks = new Set<string>(profile.promptBlocks ?? [])
+  if (blocks.has('agents_md')) selected.add(PROMPT_EXTENSION.agentsMd)
+  if (blocks.has('claude_md')) selected.add(PROMPT_EXTENSION.claudeMd)
+  if (blocks.has('project_prompt')) selected.add(PROMPT_EXTENSION.projectPrompt)
   if (spec.toolNames.includes(KNOWLEDGE_TOOL_NAME)) selected.add(PROMPT_EXTENSION.knowledge)
   if (spec.kind === 'root' && profile.name === BOT_PROFILE_NAME) selected.add(PROMPT_EXTENSION.bot)
   return PROMPT_EXTENSION_ORDER.filter((name) => selected.has(name))
@@ -122,15 +141,6 @@ export function promptExtensionsFor(spec: PromptSelectionSpec): PromptExtensionN
 function trimmed(text: string | null | undefined): string | undefined {
   const value = text?.trim()
   return value ? value : undefined
-}
-
-/** 指令文件段落：内容修剪后为空 → 缺席；否则 `<project_instructions file="…">` 围栏 */
-export function instructionSectionText(
-  resolved: { filename: string; content: string } | null | undefined
-): string | undefined {
-  if (!resolved) return undefined
-  const content = trimmed(resolved.content)
-  return content === undefined ? undefined : fenceInstructionFile(resolved.filename, content)
 }
 
 /** 单段文本 + 围栏：修剪后为空 → 缺席 */
@@ -172,8 +182,8 @@ export interface LiveSectionInput {
   rootSessionId: string
   /** agent 的工作目录（`pi.agent.cwd`；根 agent = 会话工作目录） */
   cwd: string
-  /** 冻结在 AgentStateDoc 里的指令文件清单 */
-  instructionFiles: readonly string[]
+  /** 冻结在 AgentStateDoc 里的提示词块清单（指令文件段落据此判断另一个文件在不在选中之列） */
+  promptBlocks: readonly string[]
   /** 只是拿来比对（不进提示词），见 `PromptRenderOptions.compare` */
   compare?: boolean
 }
@@ -197,7 +207,7 @@ function frozenOrLive(key: string, render: LiveRender) {
     return render({
       rootSessionId,
       cwd: input.agent.cwd ?? '',
-      instructionFiles: state.instructionFiles ?? []
+      promptBlocks: state.promptBlocks ?? []
     })
   }
 }
@@ -213,7 +223,7 @@ export interface RenderSectionsSpec extends LiveSectionInput {
 }
 
 export interface PromptExtensions {
-  /** 全部六个，固定次序（全部装进注册表） */
+  /** 全部，固定次序（全部装进注册表） */
   readonly all: readonly Extension[]
   /** 按名取 */
   get(name: PromptExtensionName): Extension
@@ -248,6 +258,27 @@ export function createPromptExtensions(
   host: PromptHost,
   opts: { placeholders?: boolean } = {}
 ): PromptExtensions {
+  /** 一个指令文件修剪后的内容；没有这个文件 / 空 / 宿主没实现 → undefined */
+  const readInstruction = async (
+    block: InstructionFileBlock,
+    { rootSessionId, cwd }: LiveSectionInput
+  ): Promise<string | undefined> => {
+    if (!host.resolveInstruction) return undefined
+    const resolved = await host.resolveInstruction(rootSessionId, cwd, [
+      INSTRUCTION_FILE_OF_BLOCK[block]
+    ])
+    return trimmed(resolved?.content)
+  }
+  const instructionFile = async (
+    block: InstructionFileBlock,
+    input: LiveSectionInput
+  ): Promise<string | undefined> => {
+    const content = await readInstruction(block, input)
+    return content === undefined
+      ? undefined
+      : fenceInstructionFile(INSTRUCTION_FILE_OF_BLOCK[block], content)
+  }
+
   // 人设之外的每一段：现解析的渲染函数（段落回调与 renderSections 共用）
   const renders = new Map<PromptExtensionName, LiveRender>([
     [
@@ -257,13 +288,22 @@ export function createPromptExtensions(
           ? `<placeholders>\n${PLACEHOLDER_NOTE}\n</placeholders>`
           : undefined
     ],
+    // 只读冻结的文本：现解析恒缺席
+    [PROMPT_EXTENSION.legacyInstructions, () => undefined],
+    [PROMPT_EXTENSION.agentsMd, (input) => instructionFile('agents_md', input)],
     [
-      PROMPT_EXTENSION.instructions,
-      async ({ rootSessionId, cwd, instructionFiles }) => {
-        if (!host.resolveInstruction || instructionFiles.length === 0) return undefined
-        return instructionSectionText(
-          await host.resolveInstruction(rootSessionId, cwd, [...instructionFiles])
-        )
+      PROMPT_EXTENSION.claudeMd,
+      async (input) => {
+        const own = await readInstruction('claude_md', input)
+        if (own === undefined) return undefined
+        // 两个文件内容完全相同（链接或副本）：只留 AGENTS.md 那一份
+        if (
+          input.promptBlocks.includes('agents_md') &&
+          (await readInstruction('agents_md', input)) === own
+        ) {
+          return undefined
+        }
+        return fenceInstructionFile(INSTRUCTION_FILE_OF_BLOCK.claude_md, own)
       }
     ],
     [
@@ -321,7 +361,9 @@ export function createPromptExtensions(
   const byName = new Map<PromptExtensionName, Extension>([
     [PROMPT_EXTENSION.persona, persona],
     [PROMPT_EXTENSION.placeholders, liveExtension('placeholders')],
-    [PROMPT_EXTENSION.instructions, liveExtension('instructions')],
+    [PROMPT_EXTENSION.legacyInstructions, liveExtension('legacyInstructions')],
+    [PROMPT_EXTENSION.agentsMd, liveExtension('agentsMd')],
+    [PROMPT_EXTENSION.claudeMd, liveExtension('claudeMd')],
     [PROMPT_EXTENSION.projectPrompt, liveExtension('projectPrompt')],
     [PROMPT_EXTENSION.knowledge, liveExtension('knowledge')],
     [PROMPT_EXTENSION.bot, liveExtension('bot')]

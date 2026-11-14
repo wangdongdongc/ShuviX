@@ -1,10 +1,11 @@
 /**
- * 会话配置（`resolveAgentConfig`）与人设变量表的测试桩，外加 faux 的模型目录、场景 W 的完整配置。
+ * 会话配置（`resolveAgentConfig`）与人设提示词块的测试桩，外加 faux 的模型目录、场景 W 的完整配置。
  *
  * 配置是一份可变对象（相当于 DB 里的会话设置 —— 重启之后还是那份）：用例改它，下一次创建就读到新值；
- * 调用次数由测试宿主按进程记（`TestHost.configCalls`）。人设正文 `You are {{shuvix:marker}}` 配一个
- * 可变的 marker，用来看人设是不是在创建那一刻冻结的。
+ * 调用次数由测试宿主按进程记（`TestHost.configCalls`）。人设正文 `You are` 后面跟宿主渲染的
+ * `environment` 块，块正文是一个可变的 marker（{@link markerPersona}），用来看人设是不是在创建那一刻冻结的。
  */
+import type { PromptBlockTexts } from '../../../agentProfile/promptBlocks'
 import type { InProcessAgentType } from '../../../subagent/types'
 import type { McpToolDeclaration } from '../../../mcpManager'
 import { piProviderIdOf } from '../../../models/port'
@@ -34,20 +35,28 @@ export function defaultAgentConfig(): AgentConfig {
   }
 }
 
-/** 可变的人设变量表：`promptVars` 现读 `state.marker`；`state.fail` 给了就抛它；`calls` 记调用次数 */
+/** marker 人设的档案正文（块在它后面） */
+export const MARKER_BODY = 'You are'
+
+/** 人设 = 正文 + `environment` 块（块正文是 marker）—— `composePersona` 的口径，手写一份作对照 */
+export function markerPersona(marker = 'M1', body = MARKER_BODY): string {
+  return `${body}\n\n<environment>\n${marker}\n</environment>`
+}
+
+/** 可变的人设提示词块：`promptBlocks` 现读 `state.marker` 作 `environment` 块；`state.fail` 给了就抛它；`calls` 记调用次数 */
 export interface MarkerVars {
   readonly state: { marker: string; fail?: string; calls: number }
-  promptVars: () => Record<string, string>
+  promptBlocks: () => PromptBlockTexts
 }
 
 export function markerVars(marker = 'M1'): MarkerVars {
   const state: MarkerVars['state'] = { marker, calls: 0 }
   return {
     state,
-    promptVars: () => {
+    promptBlocks: () => {
       state.calls++
       if (state.fail !== undefined) throw new Error(state.fail)
-      return { marker: state.marker }
+      return { environment: state.marker }
     }
   }
 }
@@ -121,9 +130,8 @@ export function scenarioConfig(): AgentConfig {
       name: 'work',
       displayName: 'Work',
       tools: [...W_PROFILE_TOOLS],
-      systemPrompt: 'You are {{shuvix:marker}}',
-      instructionFiles: ['AGENTS.md'],
-      projectAwareness: true
+      systemPrompt: MARKER_BODY,
+      promptBlocks: ['environment', 'agents_md', 'project_prompt']
     }),
     toolOverlay: ['mcp:ctx'],
     model: { provider: 'faux', modelId: 'faux-1' },

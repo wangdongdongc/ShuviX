@@ -115,11 +115,7 @@ export function SystemPromptIndicator({
   if (stale.length === 0) return null
 
   const sources = stale
-    .map((entry) =>
-      entry.key === 'project_instructions' && entry.file
-        ? entry.file
-        : t(`systemPrompt.source.${entry.key}`)
-    )
+    .map((entry) => (entry.file ? entry.file : t(`systemPrompt.source.${entry.key}`)))
     .join(t('systemPrompt.listSeparator'))
   const rebuilding = rebuildingFor === sessionId
   const busy = busyFor === sessionId || isStreaming

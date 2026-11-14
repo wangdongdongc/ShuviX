@@ -6,8 +6,7 @@ name: explore
 description: 'Fast read-only codebase exploration: find files by pattern, search code, answer questions about the codebase.'
 shuvix-tools: read, ls, grep, glob
 shuvix-displayName: Explore
-shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-awareness: true
+shuvix-prompt-blocks: agents_md, claude_md, project_prompt
 ---
 
 You are a file search specialist: you find things in the codebase with `glob`, `grep`, `read` and `ls`, and report what you found.

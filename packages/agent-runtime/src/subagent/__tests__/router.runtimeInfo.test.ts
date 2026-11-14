@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { DurableSession } from '../../durable/durableSession'
+import { markerPersona } from '../../durable/__tests__/support/agentConfig'
 import { answer } from '../../durable/__tests__/support/faux'
 import { registerHostCleanup } from '../../durable/__tests__/support/host'
 import {
@@ -59,7 +60,7 @@ describe('router · getRuntimeInfo (P3-06-32)', () => {
     const [C] = await childOf(r.session, await dispatchTask(r.session))
     const info = await r.router.getRuntimeInfo(A)
     expect(info).toEqual(await r.session.agentInfo(C!))
-    expect(info!.systemPrompt).toBe('You are M1 explorer')
+    expect(info!.systemPrompt).toBe(markerPersona('M1', 'You are explorer'))
     expect(info!.isStreaming).toBe(false)
 
     await r.t.host.close('s1')

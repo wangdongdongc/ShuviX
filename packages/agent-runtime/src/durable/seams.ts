@@ -19,7 +19,7 @@ import type {
   ToolRegistration
 } from '@earendil-works/pi-durable'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import type { AgentKind, PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
+import type { AgentKind, PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
 import type { McpToolDeclaration } from '../mcpManager'
 import type { LockModel, ModelSelection } from '../models/lockModel'
 import type { ModelRegistry } from '../models/modelRegistry'
@@ -83,8 +83,8 @@ export interface SessionHostDeps {
   modelCatalog: ModelCatalog
   /** 系统提示词活段落的 seam（缺省 = 都不实现，只有人设段落） */
   promptHost?: PromptHost
-  /** 人设冻结时的变量表（缺省 = 空表） */
-  promptVars?: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  /** 人设冻结时渲染的提示词块（缺省 = 一块都没有） */
+  promptBlocks?: (ctx: PromptBlocksCtx) => PromptBlockTexts | Promise<PromptBlockTexts>
   /**
    * 锁状态镜像（K11）：创建后 true、销毁 / 打开时自动清锁后 false，**每次打开都调用一次**对账
    * （治好 DB 与存储之间的漂移）。抛错只记日志，从不影响创建 / 销毁本身。

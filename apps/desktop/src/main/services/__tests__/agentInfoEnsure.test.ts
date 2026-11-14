@@ -86,7 +86,7 @@ vi.mock('../../agents/agentHost', () => ({
     rebuildAgentTools: () => ({})
   }),
   desktopPromptHost: {},
-  desktopPromptVars: () => ({}),
+  desktopPromptBlocks: () => ({}),
   resolveProfileModelSpec: () => null
 }))
 vi.mock('../agentRuntimeAdapters', () => ({
@@ -183,8 +183,7 @@ const profile = (name: string): Record<string, unknown> => ({
   description: '',
   tools: ['probe'],
   systemPrompt: PERSONA,
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 const FAUX_SELECTION = { provider: 'faux', modelId: 'faux-1' }
@@ -253,7 +252,7 @@ const countingToolHost: ToolHost = {
 function overrides(kit: FauxKit, extra: Partial<SessionHostDeps> = {}): Partial<SessionHostDeps> {
   return testDepsOverrides(kit, {
     toolHost: countingToolHost,
-    promptVars: () => {
+    promptBlocks: () => {
       counters.vars++
       return {}
     },

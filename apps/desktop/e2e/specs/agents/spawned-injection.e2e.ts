@@ -7,8 +7,8 @@
  * 而根会话那条一切正常 —— 只看根会话是发现不了的。
  *
  * 接缝是假提供商记下的 payload（`chatRequests().raw`）：派生 agent 不经 `agent.getInfo`，
- * 它的系统提示词只有真的发出去才看得见。两个 agent 各列**不同的**文件名
- * （根=AGENTS.md、派生=SUB.md），断言据此认人而不认请求顺序。
+ * 它的系统提示词只有真的发出去才看得见。两个 agent 列的提示词块**不同**（根 = work 基座，两个指令文件都列；
+ * 派生只列 `claude_md` 与 `environment`），断言据此认人而不认请求顺序。
  *
  * P3-14-22（同一个实例）：会话面板任务页里那条派生 agent 展开之后经 agent 视图实时流式 —— 扣住时正文已在
  * 面板里，放行之后终答恰一份。
@@ -32,6 +32,7 @@ const MODEL = 'e2e-model'
 let app: E2EApp
 let provider: FakeProvider
 let projectId = ''
+let projDir = ''
 
 beforeAll(async () => {
   app = await launchApp()
@@ -39,17 +40,17 @@ beforeAll(async () => {
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
 
-  const projDir = join(app.home, 'proj-spawn-inject')
+  projDir = join(app.home, 'proj-spawn-inject')
   mkdirSync(projDir, { recursive: true })
-  // 根会话（work 档案）认 AGENTS.md；派生档案只认 SUB.md —— 两份内容互不重叠
+  // 根会话（work 档案）两个文件都读；派生档案只列 claude_md —— 两份内容互不重叠
   writeFileSync(join(projDir, 'AGENTS.md'), 'ROOT RULES CONTENT.')
-  writeFileSync(join(projDir, 'SUB.md'), 'SUB RULES CONTENT.')
+  writeFileSync(join(projDir, 'CLAUDE.md'), 'SUB RULES CONTENT.')
   projectId = (await createProject(app.main, { name: 'SpawnInjProj', path: projDir })).id
 
   writeAgentMd(app, 'ins-sub', {
-    description: 'e2e spawned agent with its own instruction file list',
+    description: 'e2e spawned agent with its own prompt block list',
     tools: 'read',
-    instructionFiles: 'SUB.md',
+    promptBlocks: 'environment, claude_md',
     body: 'SUB BODY.'
   })
 })
@@ -63,7 +64,7 @@ afterAll(async () => {
 const inPayload = (text: string): string => JSON.stringify(text).slice(1, -1)
 
 describe('派生 agent 的指令文件', () => {
-  it('IF-E-7 派生的 cwd 为空串，按根会话工作目录兜底：自己那条围栏是 SUB.md，根那条仍是 AGENTS.md', async () => {
+  it('IF-E-7 派生的 cwd 为空串，按根会话工作目录兜底：自己只有 CLAUDE.md 那条围栏、环境清单里是根会话的工作目录，根那条仍带 AGENTS.md', async () => {
     provider.reset()
     provider.script(
       // turn1（根）：派发 ins-sub
@@ -103,11 +104,13 @@ describe('派生 agent 的指令文件', () => {
     const chats = provider.chatRequests()
     expect(chats.length).toBeGreaterThanOrEqual(2)
 
-    // 派生那条：身份认自己的档案正文，围栏必须是它清单里的 SUB.md
+    // 派生那条：身份认自己的档案正文，围栏必须是它清单里的 claude_md（根会话工作目录下的 CLAUDE.md）
     const spawned = chats.filter((r) => r.raw.includes('SUB BODY.'))
     expect(spawned, '派生 agent 的请求应恰好一条').toHaveLength(1)
-    expect(spawned[0].raw).toContain(inPayload('<project_instructions file="SUB.md">'))
+    expect(spawned[0].raw).toContain(inPayload('<project_instructions file="CLAUDE.md">'))
     expect(spawned[0].raw).toContain('SUB RULES CONTENT.')
+    // 环境清单同一条兜底：派生没有自己的工作目录，写的是根会话的
+    expect(spawned[0].raw).toContain(`- Working directory: ${projDir}`)
     // 注入按**档案清单**取，不是把根会话解析好的那份原样继承
     expect(spawned[0].raw).not.toContain(inPayload('file="AGENTS.md"'))
     expect(spawned[0].raw).not.toContain('ROOT RULES CONTENT.')
@@ -117,6 +120,8 @@ describe('派生 agent 的指令文件', () => {
     expect(root.length).toBeGreaterThan(0)
     expect(root[0].raw).toContain(inPayload('<project_instructions file="AGENTS.md">'))
     expect(root[0].raw).toContain('ROOT RULES CONTENT.')
+    // work 基座两个文件都列：CLAUDE.md 那一块也在根的提示词里（各读各的）
+    expect(root[0].raw).toContain(inPayload('<project_instructions file="CLAUDE.md">'))
   })
 
   it('P3-14-22 面板里的派生 agent 实时流式：扣住时看得到 CHILD PART；放行之后终答在面板里恰一次；父会话拿到派发结果', async () => {

@@ -20,7 +20,7 @@ import {
   TOOL_SEARCH_TOOL_NAME
 } from '@shuvix/chat-protocol/toolSelection'
 import type { InProcessAgentType } from '../subagent/types'
-import type { AgentKind } from '../agentProfile/promptVars'
+import type { AgentKind } from '../agentProfile/promptBlocks'
 
 /**
  * 名单归一：档案白名单 ± 会话勾选 overlay，去重保序。

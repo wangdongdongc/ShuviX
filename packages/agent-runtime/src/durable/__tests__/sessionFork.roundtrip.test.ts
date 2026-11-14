@@ -15,7 +15,7 @@
  *         不认领的同一份拷贝打开时清锁
  *   RT-D5 源会话跑过几轮（中途重配把工具次序弄成非 K6 的，轮与轮之间日期变了）→ 整段 fork：fork 的第一次请求
  *         与源会话的下一次请求系统提示词逐字节相同、工具同名同序同声明、模型相同；pi.provider 原样拷来
- *   RT-D7 从回复分支（branchAt 更早的那张卡）：锁销毁、在分支上重建 —— 人设沿用（日期变了也不调变量表），
+ *   RT-D7 从回复分支（branchAt 更早的那张卡）：锁销毁、在分支上重建 —— 人设沿用（日期变了也不重新渲染块），
  *         工具按模型在分支点之前见过的次序，系统提示词等于源会话在那一刻的
  *   RT-D8 认领标记丢了（第一次打开之前换了进程）：打开时清锁、发送时重建，人设沿用、工具按见过的次序，
  *         请求与源会话的下一次相同
@@ -464,7 +464,7 @@ describe('session fork · copy, reset, open', () => {
       expect(await s2.systemPromptStatus()).toEqual({
         frozen: true,
         stale: [
-          { key: 'project_instructions', file: 'AGENTS.md' },
+          { key: 'agents_md', file: 'AGENTS.md' },
           { key: 'project_prompt' },
           { key: 'knowledge_bases' },
           { key: 'bot_profile' }
@@ -541,8 +541,8 @@ async function adoptedFork(t: TestHost, source: DurableSession, toId: string): P
 }
 
 /**
- * s1（场景 W，正文带日期）：U1 A1 → 日期变了、中途勾上 new（勾选里排在 ctx 前，重配把它追加在最后）→ U2 A2
- * → 日期又变了 → U3 A3。交回宿主、变量表与 U1 / A1 的 id。
+ * s1（场景 W，`environment` 块带日期）：U1 A1 → 日期变了、中途勾上 new（勾选里排在 ctx 前，重配把它追加在最后）→ U2 A2
+ * → 日期又变了 → U3 A3。交回宿主、块的状态与 U1 / A1 的 id。
  */
 async function sourceWithHistory(): Promise<{
   t: TestHost
@@ -550,16 +550,12 @@ async function sourceWithHistory(): Promise<{
   ids: { u1: number; a1: number }
 }> {
   const config = scenarioConfig()
-  config.profile = {
-    ...config.profile,
-    systemPrompt: 'You are {{shuvix:marker}} on {{shuvix:date}}'
-  }
   const state = { date: '2026-11-05', calls: 0 }
   const { t } = await scenarioW({
     config,
-    promptVars: () => {
+    promptBlocks: () => {
       state.calls++
-      return { marker: 'M1', date: state.date }
+      return { environment: `M1\n- Current date: ${state.date}` }
     }
   })
   const s1 = await t.open('s1')

@@ -62,11 +62,12 @@ describe('instructionFileOf', () => {
 })
 
 describe('SYSTEM_PROMPT_SECTION_ORDER', () => {
-  it('CP-2 lists the six section keys once each, in system-prompt order', () => {
+  it('CP-2 lists the seven section keys once each, in system-prompt order', () => {
     expect(SYSTEM_PROMPT_SECTION_ORDER).toEqual([
       'persona',
       'placeholders',
-      'project_instructions',
+      'agents_md',
+      'claude_md',
       'project_prompt',
       'knowledge_bases',
       'bot_profile'

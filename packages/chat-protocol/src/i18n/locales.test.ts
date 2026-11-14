@@ -101,7 +101,12 @@ describe('i18n 语言包', () => {
       expect(keys[lang], lang).not.toContain('tool.subAgentSessionAwareness')
     }
     // 正控制组：邻居键还在
-    expect(keys.en).toContain('tool.subAgentProjectAwareness')
+    expect(keys.en).toContain('tool.subAgentPromptBlocks')
+    // 提示词块取代了指令文件清单与项目感知两个键（2026-11-13）：它们在卡片上的文案随之下线
+    for (const lang of ['en', 'zh', 'ja'] as const) {
+      expect(keys[lang], lang).not.toContain('tool.subAgentProjectAwareness')
+      expect(keys[lang], lang).not.toContain('tool.subAgentInstructionFiles')
+    }
   })
 
   /**

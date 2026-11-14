@@ -14,19 +14,14 @@
  *     货架是侧栏里启用着的全部技能，档案不再逐个点名（2026-10-28，按主流用法）：旧写法
  *     `skill:<name>` 读作 `skill`；
  *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`，
- *     与两个上下文注入声明：
- *     `shuvix-instruction-files`（**逗号分隔的文件清单**，如
- *     `shuvix-instruction-files: AGENTS.md, CLAUDE.md`：该 agent 认哪些项目指令文件，
- *     按列出顺序取**第一个存在且非空**的注入，至多一个；省略 = 不注入），
- *     与布尔开关 `shuvix-project-awareness`（**项目感知**：该 agent 是否了解它所在的项目 ——
- *     注入项目提示词；旧项目记忆索引曾与它同开关，已于 2026-10-10 随项目记忆一并退役）；
- *     项目感知曾是 `shuvix-project-prompt` / `shuvix-project-memory` 两个开关，合成一个是因为
- *     它们同源同废：都由「这个 agent 要不要知道自己在哪个项目里」这一个意图决定，都按**根会话
- *     的项目**解析、无项目时同样降级为不注入。拆成两问只是把同一个决定问了两遍，而两个答案
- *     不一致（认项目提示词却不认项目记忆）表达不出任何有用的策略。指令文件不并进来 ——
- *     它按 cwd 扫盘、顺序即优先级，是清单不是布尔，与「在不在项目里」无关；
- *     指令文件的「选哪个」曾是会话设置里的单选下拉，现已整体收进本文件 ——
- *     一个 agent 该吃哪份项目文档，是它的人格设定，不是每个会话各自的临时选择；
+ *     与提示词块清单 `shuvix-prompt-blocks`（逗号分隔，固定词表见 chat-protocol `agentPromptBlocks.ts`，
+ *     如 `shuvix-prompt-blocks: environment, drawing, agents_md, claude_md, project_prompt`）：
+ *     系统提示词在正文之后还追加哪几块，每块由宿主渲染、包在一个 XML 标签里。它是集合不是顺序
+ *     （先后由宿主固定）；省略 = 一块都不追加；不认识的名字忽略并发一条软提示（词表以后会长，
+ *     新版本写的档案不该在旧版本里整份失效）。它取代了正文里的 `{{shuvix:*}}` 变量（对用户难懂）
+ *     与两个旧键 `shuvix-instruction-files`（拆成 `agents_md` / `claude_md` 两项，各读各的）、
+ *     `shuvix-project-awareness`（`project_prompt`）—— 2026-11-13，无迁移：旧键按未知键忽略，
+ *     正文里的旧变量原样留着；
  *   - 布尔开关 `shuvix-user-words`（**用户原话**：这个 agent 作为子会话收父会话的消息时，宿主把用户在父会话里自己
  *     写的话原样附上 —— 打的消息与对 ask 卡片的回答，父 agent 改不了；桌面 services/userWords.ts）。它写在**接收方**
  *     档案里，因为要不要知道用户的原话是这个 agent 怎么干活的一部分（2026-11-07 裁定，与 `shuvix-thinking` 同理：
@@ -48,7 +43,6 @@
  *     点名的子会话把它作为种子写进会话树；写在基座上是这类会话没选过档位时的缺省（会话里选的优先）。它是一个键而不是
  *     宿主规则，是因为「这个 agent 不思考」这类运行方式必须写在档案里、打开就看得见 —— 宿主替某个
  *     agent 悄悄关掉，用户既看不到，也不知道该去改哪里；
- *   - 正文可内嵌 `{{shuvix:name}}` 占位符（createAgent 时按宿主变量表替换）；
  *   - frontmatter 用完整 YAML 解析（支持多行字符串、引号、注释等）。
  *
  * 无历史兼容：旧方言 key（`whenToUse` / `displayName`）、已废弃的 requiredMcp 系 key、
@@ -56,14 +50,12 @@
  * 会话的人格」曾是档案的属性；会话内切换档案下线、根档案改由会话形态推导之后，唯一还问
  * 这个问题的是子会话的 `agent_profile`，而它只需要「不是基座」——一个只剩一个消费方、
  * 又要用户自己在 GUI 里勾的开关不值得留，刻意不做迁移：老文件里的这一行按未知键忽略），
- * `shuvix-prompt-sections`（动态段机制已被 {{shuvix:*}} 变量取代）、被 `shuvix-project-awareness`
- * 合并掉的 `shuvix-project-prompt` / `shuvix-project-memory` 与通用 `tools` key
+ * `shuvix-prompt-sections`、`shuvix-instruction-files`、`shuvix-project-awareness`、更早的
+ * `shuvix-project-prompt` / `shuvix-project-memory` 与通用 `tools` key
  * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` /
- * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、`shuvix-thinking` 仅接受那几档之一、
- * 布尔 key `shuvix-project-awareness` / `shuvix-user-words` 仅接受布尔，
- * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级 —— 包括
- * `shuvix-instruction-files: true` 这种改制前的写法：布尔已不再是合法取值，
- * 拒绝理由里直说「改列文件名」，比默默按老语义猜一份清单可诊断。
+ * `shuvix-prompt-blocks` / `shuvix-model` 仅接受字符串、`shuvix-thinking` 仅接受那几档之一、
+ * 布尔 key `shuvix-user-words` 仅接受布尔，
+ * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
@@ -71,6 +63,13 @@ import {
   isSelectableThinkingLevel,
   type SelectableThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
+import {
+  AGENT_PROMPT_BLOCKS,
+  AGENT_PROMPT_BLOCKS_KEY,
+  isAgentPromptBlock,
+  orderPromptBlocks,
+  type AgentPromptBlock
+} from '@shuvix/chat-protocol/agentPromptBlocks'
 import {
   MD_FM_FILL_KEYS,
   MD_IDENTITY_KEYS,
@@ -101,16 +100,9 @@ export interface ParsedAgentFile {
   /** `shuvix-thinking` 声明的思考档位（已归一为小写）；省略 = 不声明 */
   thinkingLevel?: SelectableThinkingLevel
   /**
-   * `shuvix-instruction-files`：该 agent 认的项目指令文件清单（工作目录内的相对路径，
-   * 已归一去重保序）。**顺序即优先级** —— 注入侧取第一个存在且非空的，至多一个。
-   * 缺省 = 空数组（不注入）。
+   * `shuvix-prompt-blocks`：正文之后追加哪几块（已归一：去重、按词表次序）。缺省 = 空数组（一块都不追加）。
    */
-  instructionFiles: string[]
-  /**
-   * `shuvix-project-awareness`：项目感知 —— 是否向该 agent 注入项目提示词
-   * （按根会话的项目解析）；缺省 false。
-   */
-  projectAwareness: boolean
+  promptBlocks: AgentPromptBlock[]
   /**
    * `shuvix-user-words`：作为子会话时收不收父会话里用户的原话（宿主原样附上）；只在为真时出现，省略 = false
    */
@@ -134,24 +126,6 @@ function normalizeToolName(raw: string): string {
   return entry.toLowerCase()
 }
 
-/**
- * 单个指令文件条目归一：分隔符统一为 `/`，剥掉 `./` 与空段。
- *
- * 只接受**工作目录内的相对路径** —— 绝对路径与含 `..` 的越界段返回 null（判文件非法）。
- * 清单是用户自己写的，本不是攻击面；拦它是因为两端的解析底座不同（桌面 join+读盘、
- * 扩展按目录句柄逐级下钻），越界路径在扩展端根本无从表达，与其一端能一端不能，
- * 不如在契约层就把可写的形状收敛成两端都成立的那一种。
- */
-function normalizeInstructionEntry(raw: string): string | null {
-  const entry = raw.trim().replace(/\\/g, '/')
-  if (!entry) return null
-  // 绝对路径：POSIX 的 /x、Windows 的 C:/x 与 UNC 的 //host/share
-  if (entry.startsWith('/') || /^[a-zA-Z]:\//.test(entry)) return null
-  const parts = entry.split('/').filter((s) => s && s !== '.')
-  if (parts.length === 0 || parts.includes('..')) return null
-  return parts.join('/')
-}
-
 /** 拆分逗号分隔的列表字段（唯一合法写法，对齐 Claude Code） */
 function splitList(value: string): string[] {
   return value
@@ -166,7 +140,7 @@ function stringField(fields: Record<string, unknown>, key: string): string | und
 }
 
 /**
- * agent 形状字段（displayName / description / tools / model / thinking / 两个上下文注入声明）。
+ * agent 形状字段（displayName / description / tools / model / thinking / 提示词块清单）。
  *
  * 抽成独立函数是 bot md v1 时代的遗留：那时 bot md 是 agent md 的超集，这几个键在两种文件里
  * 必须逐字同义。bot md v2 只剩身份与正文，已不调用它 —— 这里的键如今只属于 agent md，
@@ -178,8 +152,7 @@ export interface AgentSharedFields {
   tools: string[]
   model?: string
   thinkingLevel?: SelectableThinkingLevel
-  instructionFiles: string[]
-  projectAwareness: boolean
+  promptBlocks: AgentPromptBlock[]
   /** `shuvix-user-words`；只在为真时出现 */
   userWords?: boolean
   knowledge?: boolean
@@ -187,7 +160,8 @@ export interface AgentSharedFields {
 
 export function parseAgentSharedFields(
   fields: Record<string, unknown>,
-  name: string
+  name: string,
+  warn?: (msg: string) => void
 ): { fields: AgentSharedFields } | { error: string } {
   // 列表字段仅接受逗号分隔字符串、布尔字段仅接受布尔；类型不符 = 文件非法
   const toolsRaw = fields['shuvix-tools'] ?? null
@@ -209,20 +183,14 @@ export function parseAgentSharedFields(
       error: `'shuvix-thinking' must be one of: ${SELECTABLE_THINKING_LEVELS.join(', ')}`
     }
   }
-  const projectAwarenessRaw = fields['shuvix-project-awareness'] ?? null
-  if (projectAwarenessRaw !== null && typeof projectAwarenessRaw !== 'boolean') {
-    return { error: "'shuvix-project-awareness' must be a boolean (true / false)" }
-  }
   const userWordsRaw = fields['shuvix-user-words'] ?? null
   if (userWordsRaw !== null && typeof userWordsRaw !== 'boolean') {
     return { error: "'shuvix-user-words' must be a boolean (true / false)" }
   }
-  const instructionRaw = fields['shuvix-instruction-files'] ?? null
-  if (instructionRaw !== null && typeof instructionRaw !== 'string') {
+  const blocksRaw = fields[AGENT_PROMPT_BLOCKS_KEY] ?? null
+  if (blocksRaw !== null && typeof blocksRaw !== 'string') {
     return {
-      error:
-        "'shuvix-instruction-files' must be a comma-separated file list " +
-        '(e.g. "AGENTS.md, CLAUDE.md"); the boolean form is gone — list the file names instead'
+      error: `'${AGENT_PROMPT_BLOCKS_KEY}' must be a comma-separated string (e.g. "environment, drawing"), not a list`
     }
   }
 
@@ -232,17 +200,18 @@ export function parseAgentSharedFields(
       ? []
       : [...new Set(splitList(toolsRaw).map(normalizeToolName))].filter(Boolean)
 
-  // 指令文件清单：逐条归一，越界条目判整份文件非法
-  const instructionFiles: string[] = []
-  for (const entry of instructionRaw === null ? [] : splitList(instructionRaw)) {
-    const normalized = normalizeInstructionEntry(entry)
-    if (!normalized) {
-      return {
-        error: `'shuvix-instruction-files' entry '${entry}' must be a relative path inside the working directory`
-      }
+  // 提示词块：大小写不敏感；不认识的名字忽略并提示（词表会长，旧版本读新档案不该整份拒绝）
+  const blockNames = (blocksRaw === null ? [] : splitList(blocksRaw)).map((entry) =>
+    entry.toLowerCase()
+  )
+  for (const entry of blockNames) {
+    if (!isAgentPromptBlock(entry)) {
+      warn?.(
+        `agent '${name}': unknown prompt block '${entry}' in '${AGENT_PROMPT_BLOCKS_KEY}' is ignored (known: ${AGENT_PROMPT_BLOCKS.join(', ')})`
+      )
     }
-    if (!instructionFiles.includes(normalized)) instructionFiles.push(normalized)
   }
+  const promptBlocks = orderPromptBlocks(blockNames)
 
   return {
     fields: {
@@ -251,8 +220,7 @@ export function parseAgentSharedFields(
       tools,
       model: stringField(fields, 'shuvix-model'),
       ...(isSelectableThinkingLevel(thinking) ? { thinkingLevel: thinking } : {}),
-      instructionFiles,
-      projectAwareness: projectAwarenessRaw ?? false,
+      promptBlocks,
       ...(userWordsRaw === true ? { userWords: true } : {})
       // 只在为真时写出：类型上可选、省略等同 false（既有的档案字面量与往返断言零改动）
     }
@@ -318,7 +286,7 @@ export function parseAgentDefinitionFile(
   const reject = (why: string): null => rejectAs(name, why)
 
   // agent 形状字段（与 bot md 共用同一份纪律）
-  let shared = parseAgentSharedFields(fields, name)
+  let shared = parseAgentSharedFields(fields, name, warn)
   if ('error' in shared) return reject(shared.error)
 
   const objectId = readObjectIdField(fields, `agent '${name}'`, warn)
@@ -370,10 +338,9 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
   if (data.displayName.trim() && data.displayName.trim() !== data.name) {
     fields['shuvix-displayName'] = data.displayName.trim()
   }
-  if (data.instructionFiles.length > 0) {
-    fields['shuvix-instruction-files'] = data.instructionFiles.join(', ')
+  if (data.promptBlocks.length > 0) {
+    fields[AGENT_PROMPT_BLOCKS_KEY] = orderPromptBlocks(data.promptBlocks).join(', ')
   }
-  if (data.projectAwareness) fields['shuvix-project-awareness'] = true
   if (data.userWords) fields['shuvix-user-words'] = true
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()

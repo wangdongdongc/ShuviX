@@ -9,7 +9,8 @@ import type { Message, SystemMessage } from '@earendil-works/pi-ai'
 import type { Conversation, Extension } from '@earendil-works/pi-durable'
 import { SessionStateDoc } from '../../docs'
 import { lockRecordJson, type LockRecord } from '../../lock'
-import type { AgentKind, PromptVars } from '../../../agentProfile/promptVars'
+import type { AgentKind, PromptBlockTexts } from '../../../agentProfile/promptBlocks'
+import type { AgentPromptBlock } from '@shuvix/chat-protocol/agentPromptBlocks'
 import type { InProcessAgentType } from '../../../subagent/types'
 import { backgroundContext as BG } from '../../context'
 import { freezePersona, type FrozenAgentPrompt } from '../../prompt/persona'
@@ -31,18 +32,29 @@ export interface GoldenFixture {
     sessionId: string
     rootSessionId: string
     cwd: string
-    profile: InProcessAgentType & { instructionFiles: string[]; projectAwareness: boolean }
+    profile: InProcessAgentType & { promptBlocks: AgentPromptBlock[] }
     toolOverlay: string[]
-    promptVars: PromptVars
+    /** 宿主为人设渲染出的块正文（`promptBlocks(ctx)` 的返回值） */
+    promptBlocks: PromptBlockTexts
     resolvers: {
-      resolveInstruction: Resolver<{ filename: string; content: string } | null>
+      /** 工作目录里有哪几个指令文件（文件名 → 内容）；两个文件各问各的 */
+      resolveInstruction:
+        | { implemented: false }
+        | { implemented: true; files: Record<string, string> }
       resolveProjectPrompt: Resolver<string | null>
       resolveKnowledgeBases: Resolver<string | null>
     }
     systemContext: string[]
   }
   observed: {
-    promptVarsCtx: { sessionId: string; kind: AgentKind; cwd: string; toolNames: string[] }
+    promptBlocksCtx: {
+      sessionId: string
+      rootSessionId: string
+      kind: AgentKind
+      cwd: string
+      toolNames: string[]
+    }
+    /** 每个 seam 的调用参数；`resolveInstruction` 是它被问到的每一种参数（每个选中的文件一种） */
     resolverCalls: Record<string, unknown[]>
     warnings: string[]
   }
@@ -57,7 +69,10 @@ export function loadGoldenFixtures(): GoldenFixture[] {
     .map((file) => JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as GoldenFixture)
 }
 
-/** seam 名 → 最近一次调用的参数（每个 seam 每次请求恰调一次时就是那一次） */
+/**
+ * seam 名 → 最近一次调用的参数（每个 seam 每次请求恰调一次时就是那一次）。`resolveInstruction` 例外：
+ * 两个指令文件各问各的（比对内容是否相同时还会再问），记的是出现过的每一种参数（去重、按首次出现）。
+ */
 export type SeamCalls = Record<string, unknown[]>
 
 /** 按 fixture 的 resolver 记录搭宿主：未实现 → 不提供 seam；bot 段落由 systemContext 喂 */
@@ -73,10 +88,14 @@ export function fixturePromptHost(
   }
   const host: PromptHost = {}
   if (resolvers.resolveInstruction.implemented) {
-    const value = resolvers.resolveInstruction.returns
+    const files = resolvers.resolveInstruction.files
     host.resolveInstruction = (sessionId, cwd, candidates) => {
-      note('resolveInstruction', [sessionId, cwd, [...candidates]])
-      return value
+      const args = [sessionId, cwd, [...candidates]]
+      const seen = (calls.resolveInstruction ??= [])
+      if (!seen.some((known) => JSON.stringify(known) === JSON.stringify(args))) seen.push(args)
+      counts.resolveInstruction = (counts.resolveInstruction ?? 0) + 1
+      const filename = candidates.find((name) => files[name] !== undefined)
+      return filename === undefined ? null : { filename, content: files[filename]! }
     }
   }
   if (resolvers.resolveProjectPrompt.implemented) {
@@ -141,14 +160,14 @@ export async function lockPrompt(
   await markLocked(conversation, kit, extensions, frozen)
 }
 
-/** 一个最小的待冻结记录（不经变量表） */
+/** 一个最小的待冻结记录（不经提示词块） */
 export function frozenPrompt(overrides: Partial<FrozenAgentPrompt> = {}): FrozenAgentPrompt {
   return {
     kind: 'root',
     profileName: 'work',
     rootSessionId: 's1',
     persona: '## Persona\n\nYou are a test agent.',
-    instructionFiles: ['AGENTS.md'],
+    promptBlocks: ['agents_md'],
     ...overrides
   }
 }
@@ -166,9 +185,8 @@ export type SourceSeam = 'instructions' | 'project' | 'knowledge' | 'bot'
 /**
  * 一个来源随时可改的 PromptHost：值现读、每次调用记一行、可按名抛错、记下 `noteSectionsCurrent`。
  *
- * `calls` 的形状：`instructions:<sid>:<cwd>:<候选,…>` / `project:<sid>` / `knowledge:<sid>` /
- * `bot:<sid>`（比对时 `bot:<sid>:compare`）。指令文件按候选的次序取第一个 `files` 里有内容的（AGENTS.md 删了
- * CLAUDE.md 就胜出），一个都没有 → null。
+ * `calls` 的形状：`instructions:<sid>:<cwd>:<文件名>` / `project:<sid>` / `knowledge:<sid>` /
+ * `bot:<sid>`（比对时 `bot:<sid>:compare`）。指令文件一次问一个：`files` 里有内容就交回，没有 → null。
  */
 export interface SourceHost {
   readonly host: PromptHost

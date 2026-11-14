@@ -12,7 +12,7 @@ import { SessionClosedError } from '../durableSession'
 import type { DurableSession } from '../durableSession'
 import type { ReconfigurePreview } from '../lock'
 import type { AgentConfig } from '../seams'
-import { scenarioConfig, scenarioToolHost } from './support/agentConfig'
+import { markerPersona, scenarioConfig, scenarioToolHost } from './support/agentConfig'
 import { answer } from './support/faux'
 import { registerHostCleanup, type TestHost } from './support/host'
 import { recordPublications } from './support/commits'
@@ -156,13 +156,13 @@ describe('lock · preview', () => {
     })
   })
 
-  it('PV-7 skills are not part of a reconfigure: a changed shelf on the host and a legacy skill entry in the selection → kept even on faux, neither ["tools"] nor ["prompt"]; the persona vars are not rendered again', async () => {
+  it('PV-7 skills are not part of a reconfigure: a changed shelf on the host and a legacy skill entry in the selection → kept even on faux, neither ["tools"] nor ["prompt"]; the persona blocks are not rendered again', async () => {
     let calls = 0
-    const promptVars = (): Record<string, string> => {
+    const promptBlocks = (): { environment: string } => {
       calls++
-      return { marker: 'M1' }
+      return { environment: 'M1' }
     }
-    const { t, session } = await lockedW({ promptVars })
+    const { t, session } = await lockedW({ promptBlocks })
     expect(calls).toBe(1)
     t.toolHost.options.skills = ['pdf']
     const legacy = change({ toolOverlay: [...OVERLAY, '-skill:builtin:drawing', 'skill:other'] })
@@ -172,7 +172,7 @@ describe('lock · preview', () => {
       reasons: []
     })
     expect(calls).toBe(1)
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[0]!.systemPrompt).toBe(markerPersona('M1'))
   })
 
   it('PV-8 a host without reconfigureAgentTools → locked, cache none', async () => {

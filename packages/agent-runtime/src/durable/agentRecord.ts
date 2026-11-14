@@ -26,7 +26,7 @@ import type {
   Tx
 } from '@earendil-works/pi-durable'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import type { AgentKind } from '../agentProfile/promptVars'
+import type { AgentKind } from '../agentProfile/promptBlocks'
 import type { McpToolDeclaration } from '../mcpManager'
 import type { LockModel } from '../models/lockModel'
 import type { ResultContract } from '../subagent/nextTool'

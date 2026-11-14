@@ -56,7 +56,7 @@ import {
   type Registry,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { AgentKind, PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
+import type { AgentKind, PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
 import { resolveLockModel, type LockModelRefusalKind } from '../models/lockModel'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
 import { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
@@ -73,8 +73,8 @@ import {
   reusableFrozenPrompt,
   type PersonaInput
 } from './prompt/persona'
+import { INSTRUCTION_FILE_OF_BLOCK } from '@shuvix/chat-protocol/agentPromptBlocks'
 import {
-  instructionFileOf,
   SYSTEM_PROMPT_SECTION_ORDER,
   type StaleSystemPromptSection,
   type SystemPromptSectionKey,
@@ -287,6 +287,13 @@ function prefixed(names: readonly string[], prefix: 'mcp:'): string[] {
   return names.filter((name) => name.startsWith(prefix)).map((name) => name.slice(prefix.length))
 }
 
+/** 两个指令文件段落各自读的文件名（提醒里直接说文件名）；别的段落 → undefined */
+function instructionFileOfKey(key: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(INSTRUCTION_FILE_OF_BLOCK, key)
+    ? INSTRUCTION_FILE_OF_BLOCK[key as keyof typeof INSTRUCTION_FILE_OF_BLOCK]
+    : undefined
+}
+
 /** 同一把锁（同一次创建）：提交发布会换出新的记录对象，所以不按对象比 */
 function sameLock(a: LockRecord | undefined, b: LockRecord): boolean {
   return a !== undefined && a.conversationId === b.conversationId && a.createdAt === b.createdAt
@@ -304,7 +311,7 @@ export interface AgentLockDeps {
   resolveAgentConfig: (sessionId: string) => AgentConfig | Promise<AgentConfig>
   modelCatalog: ModelCatalog
   promptExtensions: PromptExtensions
-  promptVars: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  promptBlocks: (ctx: PromptBlocksCtx) => PromptBlockTexts | Promise<PromptBlockTexts>
   eventSink: RuntimeEventSink
   onLockChange?: (sessionId: string, locked: boolean) => void
   logger: RuntimeLogger
@@ -634,7 +641,7 @@ export class AgentLock {
     const reused = reusableFrozenPrompt(stored, personaInput, personaKey)
     const frozen = reused ?? {
       ...(await computeFrozenAgentPrompt(
-        { promptVars: this.deps.promptVars, logger },
+        { promptBlocks: this.deps.promptBlocks, logger },
         personaInput
       )),
       personaKey
@@ -681,7 +688,7 @@ export class AgentLock {
           names: toRender,
           rootSessionId: sessionId,
           cwd,
-          instructionFiles: frozen.instructionFiles,
+          promptBlocks: frozen.promptBlocks,
           onError: (key, error) => {
             unfrozen.add(key)
             logger.warn(
@@ -1036,8 +1043,12 @@ export class AgentLock {
     const selectedKeys = new Set(selectedNow.map(sectionKeyOf))
     // 冻结里有、档案此刻却不会再选的段落（关了项目感知、去掉了指令文件……）：重建之后它就没了 —— 也算变了
     for (const key of Object.keys(stored.sections)) {
-      if (!selectedKeys.has(key))
-        stale.set(key as SystemPromptSectionKey, { key } as StaleSystemPromptSection)
+      if (selectedKeys.has(key)) continue
+      const file = instructionFileOfKey(key)
+      stale.set(
+        key as SystemPromptSectionKey,
+        (file === undefined ? { key } : { key, file }) as StaleSystemPromptSection
+      )
     }
     // 上次没冻结成的那几段（seam 出错，见上锁）：此刻照旧现解析、下一次上锁再冻结，没什么可比的
     const added = selectedNow.filter((name) => {
@@ -1049,12 +1060,12 @@ export class AgentLock {
         names: added,
         rootSessionId: sessionId,
         cwd,
-        instructionFiles: config.profile.instructionFiles ?? [],
+        promptBlocks: config.profile.promptBlocks ?? [],
         compare: true
       })
       for (const [key, text] of Object.entries(live)) {
         if (text === null) continue
-        const file = key === 'project_instructions' ? instructionFileOf(text) : undefined
+        const file = instructionFileOfKey(key)
         const entry = file === undefined ? { key } : { key, file }
         stale.set(key as SystemPromptSectionKey, entry as StaleSystemPromptSection)
       }
@@ -1088,7 +1099,7 @@ export class AgentLock {
       names,
       rootSessionId: sessionId,
       cwd,
-      instructionFiles: stored.instructionFiles ?? [],
+      promptBlocks: stored.promptBlocks ?? [],
       compare: true,
       // 读不出来的那一段：不算变也不算没变（不提醒、不转告）
       onError: (key, error) =>
@@ -1107,10 +1118,7 @@ export class AgentLock {
         current.push(key)
         continue
       }
-      const file =
-        key === 'project_instructions'
-          ? (instructionFileOf(now) ?? instructionFileOf(was))
-          : undefined
+      const file = instructionFileOfKey(key)
       stale.push(file === undefined ? { key } : { key, file })
     }
     this.deps.promptExtensions.noteSectionsCurrent(sessionId, current)

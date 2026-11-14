@@ -24,7 +24,7 @@ import {
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc, noticeEntryDraft } from '../docs'
 import { lockRecordJson, parseLockRecord, type LockRecord } from '../lock'
-import { DECL_RESOLVE } from './support/agentConfig'
+import { DECL_RESOLVE, markerPersona } from './support/agentConfig'
 import { recordPublications } from './support/commits'
 import { makeHost, registerHostCleanup } from './support/host'
 import { agentState, lockW, scenarioW, wKit } from './support/scenario'
@@ -246,20 +246,14 @@ describe('agent records · parse / serialise', () => {
     const raw = {
       ...spawnedAgentRecordJson(r),
       persona: 'You are Explorer',
-      instructionFiles: ['AGENTS.md'],
+      promptBlocks: ['agents_md'],
       rootSessionId: 's1',
       lastAnnouncedDate: '2026-10-04',
       foo: 'bar'
     }
     const parsed = parseSpawnedAgentRecord(raw)
     expect(parsed).toEqual(r)
-    for (const key of [
-      'persona',
-      'instructionFiles',
-      'rootSessionId',
-      'lastAnnouncedDate',
-      'foo'
-    ]) {
+    for (const key of ['persona', 'promptBlocks', 'rootSessionId', 'lastAnnouncedDate', 'foo']) {
       expect(parsed).not.toHaveProperty(key)
     }
   })
@@ -328,7 +322,7 @@ describe('agent records · AgentStateDoc fields', () => {
       kind: 'spawned',
       profileName: 'titler',
       persona: 'You are Auto title',
-      instructionFiles: [],
+      promptBlocks: [],
       rootSessionId: 's1'
     })
     // 根的文档没被碰
@@ -380,7 +374,7 @@ describe('agent records · AgentStateDoc fields', () => {
     expect(state).not.toHaveProperty('resultContract')
     expect(state).toMatchObject({
       persona: 'You are edited',
-      instructionFiles: [],
+      promptBlocks: [],
       rootSessionId: 's1',
       lastAnnouncedDate: '2026-10-04'
     })
@@ -393,7 +387,7 @@ describe('agent records · AgentStateDoc fields', () => {
     const child = seeded.conversationId
     const persona = {
       persona: 'You are Explorer',
-      instructionFiles: [],
+      promptBlocks: [],
       rootSessionId: 's1'
     }
     let state = (await agentState(session, child)) as Record<string, unknown>
@@ -426,7 +420,7 @@ describe('agent records · AgentStateDoc fields', () => {
     const child = seeded.conversationId
     const persona = {
       persona: 'You are Explorer',
-      instructionFiles: [],
+      promptBlocks: [],
       rootSessionId: 's1'
     }
     let state = (await agentState(session, child)) as Record<string, unknown>
@@ -455,12 +449,12 @@ describe('agent records · AgentStateDoc fields', () => {
       kind: 'root',
       profileName: 'work',
       rootSessionId: 's1',
-      persona: 'You are Aria',
-      instructionFiles: ['AGENTS.md'],
+      persona: markerPersona('Aria'),
+      promptBlocks: ['environment', 'agents_md', 'project_prompt'],
       // 冻结时的输入摘要：只用来提醒「档案改过了」（2026-11-06）
-      personaKey: expect.stringMatching(/^v1:/),
+      personaKey: expect.stringMatching(/^v2:/),
       // 其余段落冻结在这里（2026-11-06：系统提示词首次渲染后不再自己变）：场景 W 选中的三段，宿主没有 seam → 缺席
-      sections: { project_instructions: null, project_prompt: null, knowledge_bases: null }
+      sections: { agents_md: null, project_prompt: null, knowledge_bases: null }
     })
     expect(parseSpawnedAgentRecord(rootState)).toBeUndefined()
     const fresh = await session.harness.createConversation({ ownership: { kind: 'ownerless' } }, BG)

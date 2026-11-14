@@ -1,19 +1,19 @@
 /**
  * 锁 · 冻结的系统提示词与此刻的来源比一比（`DurableSession.systemPromptStatus` → `AgentLock.promptStatus`，
- * 2026-11-06）：只读 —— 不建锁、不调变量表、不连 MCP、不解析工具、不写；人设按摘要比（环境值不算），其余段落按
+ * 2026-11-06）：只读 —— 不建锁、不渲染提示词块、不连 MCP、不解析工具、不写；人设按摘要比（环境值不算），其余段落按
  * 此刻的来源现渲染一遍（compare）、与冻结的文本逐字比；一致的转告宿主（`noteSectionsCurrent`）。
  *
  *   STS-1  从没上过锁 / 没文档 → {frozen:false, stale:[]}；不读配置、不调 seam、不发布
  *   STS-2  旧文档（有人设、没段落）→ frozen:false
  *   STS-3  刚上锁、什么都没变 → {frozen:true, stale:[]}；转告全部冻结的段落
- *   STS-4  恰一段变了（各一）：项目提示词 / 知识库 / bot / 指令文件内容（{key, file:'AGENTS.md'}）/ 脱敏说明（文本→null）
- *   STS-5  人设：正文 / 工作目录 / 指令文件清单 / 非 mcp: 工具集合 / 档案名 → [{key:'persona'}]；变量表的值、mcp: 勾选、
+ *   STS-4  恰一段变了（各一）：项目提示词 / 知识库 / bot / 指令文件内容（{key:'agents_md', file:'AGENTS.md'}）/ 脱敏说明（文本→null）
+ *   STS-5  人设：正文 / 工作目录 / 提示词块清单 / 非 mcp: 工具集合 / 档案名 → [{key:'persona'}]；环境块里的值、mcp: 勾选、
  *          技能货架、工具换序 → 不算
  *   STS-6  null→文本、文本→null 都算变了
- *   STS-7  指令文件归属：AGENTS.md 删了 CLAUDE.md 胜出 → file CLAUDE.md；此刻缺席 → 冻结时的文件名；冻结时缺席、
- *          此刻有 → 此刻的文件名
+ *   STS-7  两个指令文件各是一段：AGENTS.md 删了、CLAUDE.md 新有 → 两段都报；CLAUDE.md 是 AGENTS.md 的副本 → 不报；
+ *          此刻都没有 → 报冻结过的那一段；冻结时缺席、此刻有 → 报
  *   STS-8  六段全变 → 固定次序
- *   STS-9  只读（有锁、没锁都是）：没有发布、不建锁、不调变量表、不解析工具；bot seam 收到 {compare:true}
+ *   STS-9  只读（有锁、没锁都是）：没有发布、不建锁、不渲染提示词块、不解析工具；bot seam 收到 {compare:true}
  *   STS-10 只转告一致的；全变了不转告；每问一次转告一次
  *   STS-11 改了又改回来 → []
  *   STS-12 重建之后 frozen:false，直到下一次上锁 → frozen:true []
@@ -23,8 +23,8 @@
  *   STS-16 某段的 seam 抛错 → 那一段不算（不报、不转告）、照样答、记一条警告；会话关了 → SessionClosedError
  *   STS-17 档案此刻会选、却没冻结进来的段落（D2）：此刻有内容 → 报；此刻缺席 → 不报
  *   STS-18 上次没冻结成的段落（unfrozenSections，seam 出错）：不比对、不算新加 —— 不报、不转告
- *   STS-19 冻结里有、档案此刻不会再选的段落 → 报（{key}）：关了项目感知 → project_prompt；去掉指令文件 →
- *          persona + project_instructions
+ *   STS-19 冻结里有、档案此刻不会再选的段落 → 报（指令文件段落带文件名），清单变了所以人设也报：去掉 project_prompt 块 →
+ *          persona + project_prompt；去掉指令文件块 → persona + {key:'agents_md', file:'AGENTS.md'}
  *   BOT-1  bot：第一次上锁 resolveBotContext(s1, undefined) 一次；空闲重启、正文没变 → 只有 {compare:true} 的调用，
  *          转告里有 bot_profile
  *   BOT-2  重新上锁之前 bot 正文变了 → 转告里没有 bot_profile，提醒报它
@@ -128,7 +128,7 @@ describe('lock · systemPromptStatus', () => {
     const session = await frozenSession(scenario)
     expect(await statusOf(session)).toEqual(CURRENT)
     expect(scenario.sources.notes).toEqual([
-      ['s1', ['project_instructions', 'project_prompt', 'knowledge_bases']]
+      ['s1', ['agents_md', 'project_prompt', 'knowledge_bases']]
     ])
   })
 
@@ -148,11 +148,11 @@ describe('lock · systemPromptStatus', () => {
       { key: 'knowledge_bases' }
     ],
     [
-      'project_instructions (content)',
+      'agents_md (the content of AGENTS.md)',
       (s: FrozenScenario) => {
         s.sources.values.files = { 'AGENTS.md': 'Use npm.' }
       },
-      { key: 'project_instructions', file: 'AGENTS.md' }
+      { key: 'agents_md', file: 'AGENTS.md' }
     ]
   ] as const)(
     'STS-4 exactly one section changed: %s',
@@ -205,9 +205,12 @@ describe('lock · systemPromptStatus', () => {
       }
     ],
     [
-      'the instruction-file list',
+      'the prompt-block list',
       (config: AgentConfig) => {
-        config.profile = { ...config.profile, instructionFiles: ['AGENTS.md', 'CLAUDE.md'] }
+        config.profile = {
+          ...config.profile,
+          promptBlocks: ['environment', 'agents_md', 'claude_md', 'project_prompt']
+        }
       }
     ],
     [
@@ -237,7 +240,7 @@ describe('lock · systemPromptStatus', () => {
   )
 
   it(
-    'STS-5 not the persona: the promptVars values, mcp: ticks, the skill shelf, a tool reorder',
+    'STS-5 not the persona: the values inside the environment block, mcp: ticks, the skill shelf, a tool reorder',
     async () => {
       const scenario = await envScenario()
       const session = await frozenSession(scenario)
@@ -272,32 +275,42 @@ describe('lock · systemPromptStatus', () => {
   )
 
   it(
-    'STS-7 which instruction file: AGENTS.md deleted so CLAUDE.md wins → CLAUDE.md; nothing now → the frozen file; nothing frozen, one now → the current file',
+    'STS-7 each instruction file is its own section: AGENTS.md deleted and CLAUDE.md new → both; CLAUDE.md a copy of AGENTS.md → nothing; neither now → the one that was frozen; nothing frozen, one now → that one',
     async () => {
       const scenario = await envScenario({
         edit: (config) => {
-          config.profile = { ...config.profile, instructionFiles: ['AGENTS.md', 'CLAUDE.md'] }
+          config.profile = {
+            ...config.profile,
+            promptBlocks: ['environment', 'agents_md', 'claude_md', 'project_prompt']
+          }
         }
       })
       const session = await frozenSession(scenario)
+      expect((await stateOf(session))?.sections?.claude_md).toBeNull()
+      // 副本不进提示词：冻结时缺席、此刻照旧缺席
+      scenario.sources.values.files = { 'AGENTS.md': 'Use pnpm.', 'CLAUDE.md': 'Use pnpm.' }
+      expect(await statusOf(session)).toEqual(CURRENT)
       scenario.sources.values.files = { 'CLAUDE.md': 'Be brief.' }
       expect(await statusOf(session)).toEqual({
         frozen: true,
-        stale: [{ key: 'project_instructions', file: 'CLAUDE.md' }]
+        stale: [
+          { key: 'agents_md', file: 'AGENTS.md' },
+          { key: 'claude_md', file: 'CLAUDE.md' }
+        ]
       })
       scenario.sources.values.files = {}
       expect(await statusOf(session)).toEqual({
         frozen: true,
-        stale: [{ key: 'project_instructions', file: 'AGENTS.md' }]
+        stale: [{ key: 'agents_md', file: 'AGENTS.md' }]
       })
 
       const empty = await envScenario({ sources: sourceHost({ files: {} }) })
       const second = await frozenSession(empty)
-      expect((await stateOf(second))?.sections?.project_instructions).toBeNull()
+      expect((await stateOf(second))?.sections?.agents_md).toBeNull()
       empty.sources.values.files = { 'AGENTS.md': 'Use pnpm.' }
       expect(await statusOf(second)).toEqual({
         frozen: true,
-        stale: [{ key: 'project_instructions', file: 'AGENTS.md' }]
+        stale: [{ key: 'agents_md', file: 'AGENTS.md' }]
       })
     },
     TIMEOUT
@@ -325,7 +338,7 @@ describe('lock · systemPromptStatus', () => {
         stale: [
           { key: 'persona' },
           { key: 'placeholders' },
-          { key: 'project_instructions', file: 'AGENTS.md' },
+          { key: 'agents_md', file: 'AGENTS.md' },
           { key: 'project_prompt' },
           { key: 'knowledge_bases' },
           { key: 'bot_profile' }
@@ -336,7 +349,7 @@ describe('lock · systemPromptStatus', () => {
   )
 
   it(
-    'STS-9 read-only with a lock and without one: nothing published, no lock created, promptVars not asked, no tool resolution; the bot seam is asked with { compare: true }',
+    'STS-9 read-only with a lock and without one: nothing published, no lock created, promptBlocks not asked, no tool resolution; the bot seam is asked with { compare: true }',
     async () => {
       const scenario = await botScenario()
       const { t, vars, sources } = scenario
@@ -378,8 +391,8 @@ describe('lock · systemPromptStatus', () => {
       await statusOf(session)
       await statusOf(session)
       expect(scenario.sources.notes).toEqual([
-        ['s1', ['project_instructions', 'project_prompt']],
-        ['s1', ['project_instructions', 'project_prompt']]
+        ['s1', ['agents_md', 'project_prompt']],
+        ['s1', ['agents_md', 'project_prompt']]
       ])
       changeAllSources(scenario.sources)
       await statusOf(session)
@@ -487,7 +500,7 @@ describe('lock · systemPromptStatus', () => {
       scenario.sources.values.knowledge = 'Bases: recipes.'
       scenario.sources.fail.add('project')
       expect(await statusOf(session)).toEqual({ frozen: true, stale: [{ key: 'knowledge_bases' }] })
-      expect(scenario.sources.notes).toEqual([['s1', ['project_instructions']]])
+      expect(scenario.sources.notes).toEqual([['s1', ['agents_md']]])
       const warnings = scenario.t.warnings.filter((line) =>
         line.includes('reading the source of system prompt section project_prompt failed')
       )
@@ -507,18 +520,24 @@ describe('lock · systemPromptStatus', () => {
       const scenario = await envScenario({
         sources,
         edit: (config) => {
-          config.profile = { ...config.profile, projectAwareness: false }
+          config.profile = { ...config.profile, promptBlocks: ['environment', 'agents_md'] }
         }
       })
       const session = await frozenSession(scenario)
       expect(Object.keys((await stateOf(session))?.sections ?? {})).not.toContain('project_prompt')
 
-      scenario.config.profile = { ...scenario.config.profile, projectAwareness: true }
-      // 此刻缺席 → 不报
-      expect(await statusOf(session)).toEqual(CURRENT)
+      scenario.config.profile = {
+        ...scenario.config.profile,
+        promptBlocks: ['environment', 'agents_md', 'project_prompt']
+      }
+      // 此刻缺席 → 这一段不报（清单变了，人设照报）
+      expect(await statusOf(session)).toEqual({ frozen: true, stale: [{ key: 'persona' }] })
       // 此刻有内容 → 报
       sources.values.projectPrompt = 'Acme billing.'
-      expect(await statusOf(session)).toEqual({ frozen: true, stale: [{ key: 'project_prompt' }] })
+      expect(await statusOf(session)).toEqual({
+        frozen: true,
+        stale: [{ key: 'persona' }, { key: 'project_prompt' }]
+      })
       // 请求照旧没有这一段
       await session.destroyAgent()
       await send(scenario.t, session, 'u2')
@@ -539,25 +558,26 @@ describe('lock · systemPromptStatus', () => {
       scenario.sources.calls.length = 0
       expect(await statusOf(session)).toEqual(CURRENT)
       expect(scenario.sources.calls).not.toContain('project:s1')
-      expect(scenario.sources.notes).toEqual([['s1', ['project_instructions', 'knowledge_bases']]])
+      expect(scenario.sources.notes).toEqual([['s1', ['agents_md', 'knowledge_bases']]])
     },
     TIMEOUT
   )
 
   it.each([
     [
-      'project awareness turned off',
+      'the project_prompt block dropped from the profile',
       (config: AgentConfig) => {
-        config.profile = { ...config.profile, projectAwareness: false }
+        config.profile = { ...config.profile, promptBlocks: ['environment', 'agents_md'] }
       },
-      [{ key: 'project_prompt' }]
+      [{ key: 'persona' }, { key: 'project_prompt' }]
     ],
     [
-      'the instruction files dropped from the profile',
+      'the instruction-file block dropped from the profile',
       (config: AgentConfig) => {
-        config.profile = { ...config.profile, instructionFiles: [] }
+        config.profile = { ...config.profile, promptBlocks: ['environment', 'project_prompt'] }
       },
-      [{ key: 'persona' }, { key: 'project_instructions' }]
+      // 指令文件段落照样带文件名
+      [{ key: 'persona' }, { key: 'agents_md', file: 'AGENTS.md' }]
     ]
   ] as const)(
     'STS-19 a frozen section the profile would no longer select is reported: %s',
@@ -596,7 +616,7 @@ describe('lock · bot section and the read note', () => {
         'bot:s1:compare'
       ])
       expect(scenario.sources.notes).toEqual([
-        ['s1', ['project_instructions', 'project_prompt', 'knowledge_bases', 'bot_profile']]
+        ['s1', ['agents_md', 'project_prompt', 'knowledge_bases', 'bot_profile']]
       ])
     },
     TIMEOUT
@@ -613,7 +633,7 @@ describe('lock · bot section and the read note', () => {
       await send(scenario.t, session, 'u2')
       expect(scenario.t.kit.requests.at(-1)!.systemPrompt).toBe(first)
       expect(scenario.sources.notes).toEqual([
-        ['s1', ['project_instructions', 'project_prompt', 'knowledge_bases']]
+        ['s1', ['agents_md', 'project_prompt', 'knowledge_bases']]
       ])
       expect(await statusOf(session)).toEqual({ frozen: true, stale: [{ key: 'bot_profile' }] })
     },

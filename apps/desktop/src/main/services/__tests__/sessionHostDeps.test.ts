@@ -81,7 +81,7 @@ const mocks = vi.hoisted(() => ({
   },
   createDesktopToolHost: vi.fn(),
   promptHost: { tag: 'promptHost' },
-  promptVars: vi.fn(() => ({})),
+  promptBlocks: vi.fn(() => ({})),
   onDrivenSettled: vi.fn(async () => {})
 }))
 
@@ -152,7 +152,7 @@ vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: mocks.sink }))
 vi.mock('../../agents/agentHost', () => ({
   createDesktopToolHost: mocks.createDesktopToolHost,
   desktopPromptHost: mocks.promptHost,
-  desktopPromptVars: mocks.promptVars,
+  desktopPromptBlocks: mocks.promptBlocks,
   resolveProfileModelSpec: vi.fn()
 }))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
@@ -231,8 +231,7 @@ const profile = (name: string): AgentProfile =>
     description: `${name} profile`,
     tools: ['read'],
     systemPrompt: `${name} prompt`,
-    instructionFiles: [],
-    projectAwareness: false
+    promptBlocks: []
   }) as unknown as AgentProfile
 
 const KNOWN_PROFILES = new Set(['work', 'chat', 'notebook', 'bot', 'tab', 'coding'])
@@ -307,7 +306,7 @@ describe('D10-13 身份 seam 与单例', () => {
     expect(mocks.createDesktopToolHost).toHaveBeenCalledWith({ sessionOf: sessionOfForDeps })
     expect(mocks.createDesktopToolHost.mock.calls[0][0]).not.toHaveProperty('lockOf')
     expect(deps.promptHost).toBe(mocks.promptHost)
-    expect(deps.promptVars).toBe(mocks.promptVars)
+    expect(deps.promptBlocks).toBe(mocks.promptBlocks)
     expect(deps.openStorage).toBe(storage.openSessionStorage)
     expect(deps.storageExists).toBe(storage.sessionStorageExists)
     expect(deps.deleteStorage).toBe(storage.deleteSessionStorage)

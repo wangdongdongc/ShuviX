@@ -79,7 +79,7 @@ vi.mock('../../agents/agentHost', () => ({
     rebuildAgentTools: () => ({})
   }),
   desktopPromptHost: {},
-  desktopPromptVars: () => ({}),
+  desktopPromptBlocks: () => ({}),
   resolveProfileModelSpec: () => null
 }))
 vi.mock('../agentRuntimeAdapters', () => ({
@@ -176,8 +176,7 @@ const profile = (name: string): Record<string, unknown> => ({
   description: '',
   tools: [],
   systemPrompt: '',
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 function row(id: string, patch: Partial<Session> = {}): Session {

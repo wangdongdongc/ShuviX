@@ -160,8 +160,7 @@ function world(shape: Shape): void {
 const existing = (name: string): Partial<AgentProfile> => ({
   name,
   tools: [],
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 const resolve = (): string => sessionService.resolveAgentProfileName(SID)

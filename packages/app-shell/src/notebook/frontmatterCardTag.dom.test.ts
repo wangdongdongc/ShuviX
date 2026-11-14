@@ -7,7 +7,7 @@
  *   FT-2 没写、写成别的（字符串 "true"、yes / on / 1、null、列表、映射、块标量）→ 什么都不画，也不落通用行；
  *        True / TRUE 是 YAML 的布尔 true，照样画
  *   FT-3 YAML 写坏：视图照建，报错横幅在，没有标签、没有字段区
- *   FT-4 只读与可编辑长得一样：标签的有无相同，开关行都是 shuvix-project-awareness 与 shuvix-user-words，只读时才 disabled
+ *   FT-4 只读与可编辑长得一样：标签的有无相同，开关行只有 shuvix-user-words，只读时才 disabled
  *   FT-5 标签是死的（mousedown 不改文档、不动选区、卡片不塌）；旁边的开关照常改那一行、不碰 shuvix-builtin；
  *        标签跟着缓冲区走
  *
@@ -85,9 +85,9 @@ const togglesOf = (view: EditorView): HTMLButtonElement[] => [
 ]
 const keyOfToggle = (toggle: HTMLElement): string | undefined =>
   toggle.closest<HTMLElement>('.cm-shuvix-fmcard-row')?.dataset.key
-const awarenessToggle = (view: EditorView): HTMLButtonElement => {
-  const toggle = togglesOf(view).find((t) => keyOfToggle(t) === 'shuvix-project-awareness')
-  if (!toggle) throw new Error('shuvix-project-awareness toggle not rendered')
+const userWordsToggle = (view: EditorView): HTMLButtonElement => {
+  const toggle = togglesOf(view).find((t) => keyOfToggle(t) === 'shuvix-user-words')
+  if (!toggle) throw new Error('shuvix-user-words toggle not rendered')
   return toggle
 }
 
@@ -178,7 +178,7 @@ describe('属性卡 —— 内置标签', () => {
     ['true', 1],
     ['false', 0]
   ])(
-    'FT-4 shuvix-builtin: %s：只读与可编辑一个样，开关是 awareness 与 user-words，只读时才禁用',
+    'FT-4 shuvix-builtin: %s：只读与可编辑一个样，开关只有 user-words，只读时才禁用',
     (value, tags) => {
       const doc = docOf('agent v1', [`shuvix-builtin: ${value}`])
       for (const readOnly of [false, true]) {
@@ -186,10 +186,7 @@ describe('属性卡 —— 内置标签', () => {
         expect(tagsOf(view), `readOnly=${readOnly}`).toHaveLength(tags)
 
         const toggles = togglesOf(view)
-        expect(toggles.map(keyOfToggle), `readOnly=${readOnly}`).toEqual([
-          'shuvix-project-awareness',
-          'shuvix-user-words'
-        ])
+        expect(toggles.map(keyOfToggle), `readOnly=${readOnly}`).toEqual(['shuvix-user-words'])
         for (const toggle of toggles) {
           expect(toggle.disabled, `readOnly=${readOnly}`).toBe(readOnly)
         }
@@ -212,19 +209,19 @@ describe('属性卡 —— 内置标签', () => {
     expect(card?.isConnected).toBe(true)
   })
 
-  it('FT-5 旁边的开关照常：只多一行 awareness，shuvix-builtin 那行不动；重建的卡上标签还在、开关是 on', () => {
+  it('FT-5 旁边的开关照常：只多一行 user-words，shuvix-builtin 那行不动；重建的卡上标签还在、开关是 on', () => {
     const view = makeView(docOf('agent v1', ['shuvix-builtin: true']))
 
-    mouseDown(awarenessToggle(view))
+    mouseDown(userWordsToggle(view))
 
     const lines = view.state.doc.toString().split('\n')
-    expect(lines).toContain('shuvix-project-awareness: true')
+    expect(lines).toContain('shuvix-user-words: true')
     expect(lines).toContain('shuvix-builtin: true')
     expect(lines.filter((line) => line.startsWith('shuvix-builtin'))).toEqual([
       'shuvix-builtin: true'
     ])
     expect(tagsOf(view)).toHaveLength(1)
-    expect(awarenessToggle(view).dataset.state).toBe('on')
+    expect(userWordsToggle(view).dataset.state).toBe('on')
   })
 
   it('FT-5 标签跟着缓冲区走：改成 false 就没了，改回 true 又回来', () => {

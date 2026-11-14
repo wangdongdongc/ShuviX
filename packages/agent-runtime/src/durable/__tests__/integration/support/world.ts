@@ -3,11 +3,11 @@
  * `restart()` 模拟换一个进程。
  *
  * 世界级（熬过重启）：MemFs（「磁盘」）、MCP 调用日志、落盘记录、审查事件、时钟 / 日期、会话配置与
- * 人设变量表（「DB 里的东西」）、SQLite 目录。进程级（重启换新）：会话宿主、faux 套件与脚本、
+ * 人设提示词块（「DB 里的东西」）、SQLite 目录。进程级（重启换新）：会话宿主、faux 套件与脚本、
  * McpManager（连接计数从 0 数）、真 ToolHost、提交记录器、广播 / 运行状态 / 锁镜像的记录。
  *
  * 缺省世界 W（设计 §1）：会话 s1；faux 模型 faux-1（窗口 40000）与 tiny（3000 / 输出 1000）；档案 `int`
- * 的工具 [read, write, edit, ask, dump, boom]，会话勾选 [mcp:docs]，人设 `You are {{shuvix:marker}}`；
+ * 的工具 [read, write, edit, ask, dump, boom]，会话勾选 [mcp:docs]，人设 `You are` + marker 的 `environment` 块（`markerPersona`）；
  * 选择 faux/faux-1、思考 low；MCP docs = [lookup, slow]（另有一台 notes = [search]，只在被选中时连）；
  * `/ws/notes.txt` = `alpha\nbeta`。提供给模型的工具 E（K6 次序）见 `E_TOOLS`。
  * settings 覆盖是**整份替换**（P1-07 的缺省 —— 重试关、压缩关），每个场景按需整份给。日期通知开着
@@ -23,7 +23,7 @@ import type { PermissionRequestEvent } from '../../../../security/types'
 import type { DurableSession } from '../../../durableSession'
 import type { AgentConfig, ModelCatalog } from '../../../seams'
 import type { ShuviXSettingsOverrides } from '../../../settings'
-import { markerVars, testProfile, type MarkerVars } from '../../support/agentConfig'
+import { MARKER_BODY, markerVars, testProfile, type MarkerVars } from '../../support/agentConfig'
 import { fauxKit } from '../../support/faux'
 import { makeHost, type TestHost, type TestHostOptions } from '../../support/host'
 import { waitFor, withTimeout } from '../../support/wait'
@@ -80,7 +80,7 @@ export interface WorldOptions {
   mcp?: Record<string, SdkToolName[]>
   /** 可信的内置能力服务器（inproc + isBuiltin；P2-11 的 `ctx`） */
   trustedMcp?: readonly string[]
-  /** 根档案的人设（缺省 `You are {{shuvix:marker}}`） */
+  /** 根档案的正文（缺省 `You are`）；marker 的 `environment` 块总跟在后面 */
   persona?: string
   /** 真 ToolHost 的 P2-11 选项（派发工具、额外内置工具、MCP 调用方、审查接缝）；每个进程现取 */
   toolHost?: (
@@ -203,7 +203,8 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
         name: 'int',
         displayName: 'Int',
         tools: [...(spec.tools ?? options.tools ?? INT_TOOLS)],
-        systemPrompt: options.persona ?? 'You are {{shuvix:marker}}'
+        systemPrompt: options.persona ?? MARKER_BODY,
+        promptBlocks: ['environment']
       }),
       toolOverlay: [...(spec.overlay ?? options.overlay ?? ['mcp:docs'])],
       model: {
@@ -268,7 +269,7 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
     makeKit: options.makeKit ?? defaultKit,
     makeToolHost,
     agentConfig: (sessionId) => configs.get(sessionId) ?? config,
-    promptVars: vars.promptVars,
+    promptBlocks: vars.promptBlocks,
     settingsOverrides: options.settings ?? OFF,
     autoResume: () => autoResume.value,
     noticeCoalesceMs: options.noticeCoalesceMs ?? 20,

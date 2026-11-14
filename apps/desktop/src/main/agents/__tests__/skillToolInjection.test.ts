@@ -206,8 +206,7 @@ describe('STI 根 agent', () => {
       description: parsed.description,
       tools: [...parsed.tools],
       systemPrompt: parsed.systemPrompt,
-      instructionFiles: [...parsed.instructionFiles],
-      projectAwareness: parsed.projectAwareness
+      promptBlocks: [...parsed.promptBlocks]
     }
     const resolved = await host.resolveAgentTools(requestD({ names, profile }), {
       signal: new AbortController().signal

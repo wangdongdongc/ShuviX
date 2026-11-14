@@ -835,7 +835,7 @@ export function resolveSessionDocument(sessionId: string): string | null {
 }
 
 /**
- * 这条会话的文档是哪种 ShuviX 文件（按承载项目判，同 agentHost 的 `{{shuvix:documentKind}}` 与知识库的
+ * 这条会话的文档是哪种 ShuviX 文件（按承载项目判，同 agentHost 的 `document` 提示词块 与知识库的
  * 隐式说明书）；普通笔记、不是笔记本会话 → null
  */
 export function sessionDocumentKind(sessionId: string): ShuvixFileKind | null {

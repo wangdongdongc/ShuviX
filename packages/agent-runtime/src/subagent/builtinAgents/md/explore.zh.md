@@ -6,8 +6,7 @@ name: explore
 description: 快速只读的代码库探索:按模式找文件、搜索代码、回答代码库问题。
 shuvix-tools: read, ls, grep, glob
 shuvix-displayName: 探索
-shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-awareness: true
+shuvix-prompt-blocks: agents_md, claude_md, project_prompt
 ---
 
 你是文件检索专家：用 `glob`、`grep`、`read`、`ls` 在代码库里找东西，并汇报找到了什么。

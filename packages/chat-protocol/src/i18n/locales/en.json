@@ -1370,8 +1370,7 @@
     "subAgentDeleteConfirmDesc": "This deletes the definition file of \"{{name}}\" and cannot be undone.",
     "subAgentAdd": "Add custom agent",
     "subAgentCreateRequired": "Name, description and system prompt are required",
-    "subAgentInstructionFiles": "Instruction files",
-    "subAgentProjectAwareness": "Project awareness",
+    "subAgentPromptBlocks": "Prompt blocks",
     "subAgentUserWords": "Receives the user's words",
     "subAgentDescription": "Description",
     "subAgentBasicGroup": "Basic info",
@@ -2019,7 +2018,8 @@
     "source": {
       "persona": "agent profile",
       "placeholders": "ShuviX built-in notes",
-      "project_instructions": "instruction file",
+      "agents_md": "AGENTS.md",
+      "claude_md": "CLAUDE.md",
       "project_prompt": "project prompt",
       "knowledge_bases": "knowledge bases",
       "bot_profile": "bot persona and memory"

@@ -4,7 +4,7 @@
  *
  * 判定按**承载项目**，不按文件里的 `shuvix:` 标记（见 shuvixFileNotes.ts 文件头）：会话挂在哪个隐藏目录
  * 从建起就不变，那个目录决定宿主拿它当什么用。两处读这份判定 —— 笔记本 agent 的
- * `{{shuvix:documentKind}}` 与会话的隐式说明书 `shuvix` —— 口径必须一致，所以这里把映射逐条钉死。
+ * `document` 块里的文档种类说明与会话的隐式说明书 `shuvix` —— 口径必须一致，所以这里把映射逐条钉死。
  *
  *   FK-1 七个注册表载体逐条：bot / agent（含内置）/ policy（含内置）/ hook（含内置）
  *   FK-2 技能的三个形态（默认 / 内置 / 外部目录，含共用目录 claude）→ skill；知识库三个载体 → knowledge

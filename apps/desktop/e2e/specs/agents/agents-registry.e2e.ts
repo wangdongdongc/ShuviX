@@ -25,15 +25,14 @@ interface AgentRow {
   name: string
   source: 'builtin' | 'user'
   description: string
-  instructionFiles: string[]
-  projectAwareness: boolean
+  promptBlocks: string[]
   overridden?: boolean
 }
 
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十个内置齐全，上下文注入默认全开（notebook/bot/tab 只开项目感知、派发专用与宿主专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十个内置齐全，各自的提示词块清单（写代码的三个全套、notebook/bot/tab 不吃指令文件、宿主专用的窄档案一块不要），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
     // 旧 Bots 的意图门控 bot-intent 随管线一并拆除。tab 是 Chrome 标签页会话（侧边栏）的基座；
@@ -51,22 +50,29 @@ describe('内置档案', () => {
       'titler',
       'work'
     ])
-    // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，
-    // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声。审查员（permission-reviewer）
-    // 更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入。知识库写手是库管员：
-    // 只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
-    const narrow = ['titler', 'permission-reviewer', 'knowledge-writer']
+    // 提示词块清单（`shuvix-prompt-blocks`，按词表次序）。写代码的三个要全套：作图说明、环境清单、两个指令文件、
+    // 项目提示词。notebook 是笔记本会话根 Agent 的基座：多一块「打开的文档」，要项目提示词（笔记就写在项目里），
+    // 但不吃指令文件。bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正写代码的是
+    // 它派出去的子会话 —— 那条会话自己会吃这份文件。tab（Chrome 侧边栏会话）处理的是网页，工作目录只是个临时
+    // 目录，也没有项目。explore 只读代码：要工程约定与项目提示词，不画图、正文之外不另给环境清单。
+    // 其余的窄档案一块都不要：拟一个标题（titler）不是工程活，项目上下文对它只是噪声；审查员
+    // （permission-reviewer）更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入；知识库写手
+    // 是库管员：只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
+    const full = ['drawing', 'environment', 'agents_md', 'claude_md', 'project_prompt']
+    const expected: Record<string, string[]> = {
+      work: full,
+      chat: full,
+      coding: full,
+      bot: ['drawing', 'environment', 'project_prompt'],
+      notebook: ['document', 'drawing', 'environment', 'project_prompt'],
+      tab: ['drawing', 'environment'],
+      explore: ['agents_md', 'claude_md', 'project_prompt']
+    }
     for (const a of builtins) {
-      // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
-      // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正
-      // 写代码的是它派出去的子会话 —— 那条会话自己会吃这份文件。tab（Chrome 侧边栏会话）也不吃：
-      // 它处理的是网页，工作目录只是个临时目录
-      const noInstructions = ['notebook', 'bot', 'tab']
-      const instructionsOn = !noInstructions.includes(a.name) && !narrow.includes(a.name)
-      const awarenessOn = !narrow.includes(a.name)
-      // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
-      expect(a.instructionFiles, a.name).toEqual(instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : [])
-      expect(a.projectAwareness, a.name).toBe(awarenessOn)
+      expect(a.promptBlocks, a.name).toEqual(expected[a.name] ?? [])
+      // 改制前的两个字段（指令文件清单 / 项目感知）已随键一并退役：IPC 行上不再有它们
+      expect('instructionFiles' in a, a.name).toBe(false)
+      expect('projectAwareness' in a, a.name).toBe(false)
       // 会话感知这个键已退役（子会话的 agent_profile 只看「不是基座」）：IPC 行上不再有它
       expect('sessionAwareness' in a, a.name).toBe(false)
       expect(a.description.length, a.name).toBeGreaterThan(0)

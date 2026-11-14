@@ -1,10 +1,10 @@
 /**
  * P2-11 · J8：每个对话自己的人设黄金（PIN-08）。同一条会话里根 agent 按根 fixture、派出的 coding 子 agent 按
- * `coding-spawned-all-injections` 逐字节出系统提示词：人设在创建那一刻冻结（变量表按 `ctx.kind` 取各自的
+ * `coding-spawned-all-injections` 逐字节出系统提示词：人设在创建那一刻冻结（宿主的块按 `ctx.kind` 取各自的
  * fixture 值），子 agent 的活段落按根会话 id 现调宿主 seam（子 agent 的 cwd 为空）；bot 段落只给 bot 档案的根。
  * 根 agent 的段落在第一次上锁时冻结（2026-11-06）：之后的请求不再调 seam，只有重新上锁时为比对调一次。
  */
-import type { PromptVars, PromptVarsCtx } from '../../../agentProfile/promptVars'
+import type { PromptBlockTexts, PromptBlocksCtx } from '../../../agentProfile/promptBlocks'
 import { describe, expect, it } from 'vitest'
 import { PROMPT_SECTION_KEY } from '../../prompt/sections'
 import type { PromptHost } from '../../seams'
@@ -41,7 +41,8 @@ const SPAWNED = fixtures.get('coding-spawned-all-injections')!
 
 const PART_KEY: Record<string, string> = {
   persona: PROMPT_SECTION_KEY.persona,
-  instructionFile: PROMPT_SECTION_KEY.instructions,
+  agentsMd: PROMPT_SECTION_KEY.agentsMd,
+  claudeMd: PROMPT_SECTION_KEY.claudeMd,
   projectPrompt: PROMPT_SECTION_KEY.projectPrompt,
   knowledgeBases: PROMPT_SECTION_KEY.knowledge,
   systemContext: PROMPT_SECTION_KEY.bot
@@ -62,20 +63,20 @@ function expectedSections(fixture: GoldenFixture): [string, string][] {
 
 interface GoldenWorld {
   sw: SpawnWorld
-  /** 变量表收到的上下文（按次序） */
-  contexts: PromptVarsCtx[]
+  /** 渲染块时收到的上下文（按次序） */
+  contexts: PromptBlocksCtx[]
   /** 每次宿主 seam 调用：[名字, 参数]（按次序，跨进程） */
   seamCalls: [string, unknown[]][]
-  /** 派生变量表（可改：J8-03 改日期） */
-  spawnedVars: { value: PromptVars }
+  /** 派生 agent 的块（可改：J8-03 改日期） */
+  spawnedBlocks: { value: PromptBlockTexts }
 }
 
 /** 黄金世界（设计 §1.9）：会话 `sess-golden-root`，根与子共用 fixture 的 PromptHost，按 fixture 输出路由 */
 async function goldenWorld(rootCase: string): Promise<GoldenWorld> {
   const root = fixtures.get(rootCase)!
-  const contexts: PromptVarsCtx[] = []
+  const contexts: PromptBlocksCtx[] = []
   const seamCalls: [string, unknown[]][] = []
-  const spawnedVars = { value: structuredClone(SPAWNED.inputs.promptVars) }
+  const spawnedBlocks = { value: structuredClone(SPAWNED.inputs.promptBlocks) }
   const fixtureHost = fixturePromptHost(root, {}, {})
   const promptHost: PromptHost = {}
   for (const [name, seam] of Object.entries(fixtureHost)) {
@@ -93,9 +94,9 @@ async function goldenWorld(rootCase: string): Promise<GoldenWorld> {
     profileObjects: [coding],
     host: {
       promptHost,
-      promptVars: (ctx) => {
+      promptBlocks: (ctx) => {
         contexts.push(structuredClone(ctx))
-        return ctx.kind === 'spawned' ? spawnedVars.value : root.inputs.promptVars
+        return ctx.kind === 'spawned' ? spawnedBlocks.value : root.inputs.promptBlocks
       }
     },
     lanes: (model) => {
@@ -110,7 +111,7 @@ async function goldenWorld(rootCase: string): Promise<GoldenWorld> {
     thinkingLevel: 'low',
     cwd: root.inputs.cwd
   })
-  return { sw, contexts, seamCalls, spawnedVars }
+  return { sw, contexts, seamCalls, spawnedBlocks }
 }
 
 const CODING_CALL = callTool(
@@ -119,11 +120,15 @@ const CODING_CALL = callTool(
   'r-agent'
 )
 
+/** 子 agent 的 seam 调用，折成 fixture 的形状：指令文件是问到的每一种参数（去重），其余是最近一次的参数 */
 function childSeamCalls(seamCalls: [string, unknown[]][]): Record<string, unknown[]> {
   const found: Record<string, unknown[]> = {}
   for (const [name, args] of seamCalls) {
-    if (name === 'resolveInstruction' && args[1] !== '') continue
-    if (name !== 'resolveBotContext') found[name] = args
+    if (name === 'resolveInstruction') {
+      if (args[1] !== '') continue
+      const seen = (found[name] ??= [])
+      if (!seen.some((known) => JSON.stringify(known) === JSON.stringify(args))) seen.push(args)
+    } else if (name !== 'resolveBotContext') found[name] = args
   }
   return found
 }
@@ -150,7 +155,7 @@ describe('P2-11 · J8 per-conversation persona golden', () => {
       const C = await childOfCall(session, 'r-agent', 1)
       const A = (await recordOf(session, C))!.agentId
       expect(contexts.filter((ctx) => ctx.kind === 'spawned')).toEqual([
-        { ...SPAWNED.observed.promptVarsCtx, sessionId: A, rootSessionId: SID }
+        { ...SPAWNED.observed.promptBlocksCtx, sessionId: A, rootSessionId: SID }
       ])
       expect(childSeamCalls(seamCalls)).toEqual(SPAWNED.observed.resolverCalls)
       expect(seamCalls.some(([name]) => name === 'resolveBotContext')).toBe(false)
@@ -194,9 +199,9 @@ describe('P2-11 · J8 per-conversation persona golden', () => {
   )
 
   it(
-    'J8-03 [SQLite] the child persona stays frozen across a crash even when the spawned vars change',
+    'J8-03 [SQLite] the child persona stays frozen across a crash even when the spawned blocks change',
     async () => {
-      const { sw, contexts, seamCalls, spawnedVars } = await goldenWorld(
+      const { sw, contexts, seamCalls, spawnedBlocks } = await goldenWorld(
         'coding-root-all-injections'
       )
       const { world } = sw
@@ -206,7 +211,11 @@ describe('P2-11 · J8 per-conversation persona golden', () => {
       world.model.chatIn('golden-child', stall.step)
       void session.submitUser('go')
       await withTimeout(stall.reached, 3000, 'child request')
-      spawnedVars.value = { ...spawnedVars.value, date: '2030-01-01' }
+      spawnedBlocks.value = {
+        ...spawnedBlocks.value,
+        environment: spawnedBlocks.value.environment!.replace('2026-10-04', '2030-01-01')
+      }
+      expect(spawnedBlocks.value.environment).toContain('2030-01-01')
       await withTimeout(sw.restart(), 10000, 'restart')
 
       const contextsBefore = contexts.length

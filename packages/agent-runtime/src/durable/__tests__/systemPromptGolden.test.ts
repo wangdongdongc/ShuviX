@@ -3,7 +3,8 @@
  *
  * fixture 由 `agentProfile/__tests__/systemPromptGolden.capture.test.ts` 在旧依赖（pi 0.80.10 的
  * AgentHarness 运行时）上捕获（捕获完成后那份捕获用例已在 P1-01 删除）：每份记录 createAgent 的输入、
- * 输出与按围栏拆开的 `parts`。pi-durable 之后系统提示词由若干 section 以 "\n\n" 拼接，section 渲染器
+ * 输出与按围栏拆开的 `parts`。2026-11-13 改成提示词块之后，输入换成了新的档案形状，`output` / `parts` 由产品
+ * 之外的一份参照拼装重算（见各 fixture 的 `amended`）：人设 = 正文 + 块，指令文件拆成 AGENTS.md / CLAUDE.md 两段。pi-durable 之后系统提示词由若干 section 以 "\n\n" 拼接，section 渲染器
  * 要逐字节复现这些输出（P1-08）。
  *
  * 这里只验 fixture 自身的一致性，**刻意不 import createAgent / 任何 pi 包**：切换依赖之后它仍要能跑。
@@ -24,7 +25,8 @@ const MIN_FIXTURES = 20
 /** createAgent 的拼接次序（systemContext 可重复，恒在最后） */
 const PART_ORDER = [
   'persona',
-  'instructionFile',
+  'agentsMd',
+  'claudeMd',
   'projectPrompt',
   'knowledgeBases',
   'systemContext'

@@ -2,14 +2,16 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Agent definition file (shuvix: agent v1)'
-description: 'The complete specification of a ShuviX agent file — every frontmatter key, the tool whitelist syntax, the `{{shuvix:*}}` placeholders in the body, what makes a file invalid, the builtin agents, and how an agent is put to use.'
+description: 'The complete specification of a ShuviX agent file — every frontmatter key, the tool whitelist syntax, the prompt blocks ShuviX appends after the body, what makes a file invalid, the builtin agents, and how an agent is put to use.'
 tags: [shuvix, agent, format, spec]
 status: stable
 sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/agentProfile/definitionFile.ts
     title: definitionFile.ts — the parser (source of truth)
-  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/agentProfile/promptVars.ts
-    title: promptVars.ts — `{{shuvix:*}}` placeholders
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/agentProfile/promptBlocks.ts
+    title: promptBlocks.ts — the blocks appended after the body
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/chat-protocol/src/agentPromptBlocks.ts
+    title: agentPromptBlocks.ts — the `shuvix-prompt-blocks` vocabulary
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/subagent/builtinAgents/md
     title: builtin agents, one md per language
 ---
@@ -36,13 +38,11 @@ shuvix-displayName: Code reviewer
 shuvix-tools: read, ls, grep, glob, bash, skill
 shuvix-model: anthropic/claude-sonnet-4-5
 shuvix-thinking: low
-shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-awareness: true
+shuvix-prompt-blocks: environment, agents_md, claude_md, project_prompt
 ---
 
-You are a code reviewer working in {{shuvix:workingDirectory}} on {{shuvix:date}}.
-Read the diff the caller points you at, then report: correctness risks first, then
-style, each with file and line. Never modify files.
+You are a code reviewer. Read the diff the caller points you at, then report:
+correctness risks first, then style, each with file and line. Never modify files.
 ```
 
 ## Frontmatter keys
@@ -56,8 +56,7 @@ style, each with file and line. Never modify files.
 | `shuvix-tools`              | comma-separated string| no       | The tool whitelist (see below). **A string, not a YAML list** — a list makes the file invalid. Omitted = no tools at all.                                                                                                                                                                                                  |
 | `shuvix-model`              | string                | no       | Which model this agent runs on: `<providerId>/<modelId>` (what the UI writes) or a bare `<modelId>`. On a base (`work` / `chat` / `notebook` / `bot`) it is the model that kind of session runs on until one is picked in the session, ahead of the default model in Settings. Omitted = the agent follows the session it runs in (or the caller that dispatched it). A model that is not enabled in Settings is treated as absent.                                                                  |
 | `shuvix-thinking`           | string                | no       | How deeply this agent thinks: `off` / `low` / `medium` / `high` / `xhigh` / `max` (case-insensitive). A dispatched agent runs at this level; a sub-session that names the agent through `agent_profile` starts at it (and can be changed in that session afterwards); on a base it is the level that kind of session runs at until one is picked in the session. Omitted = the caller's level (a sub-session follows its parent). Any other value makes the file invalid. |
-| `shuvix-instruction-files`  | comma-separated string| no       | Project instruction files the agent reads, as paths **relative to the working directory**, in priority order: the first one that exists and is non-empty is injected, at most one. An absolute path, a `..` segment, or a boolean value makes the file invalid. Omitted = nothing injected.                              |
-| `shuvix-project-awareness`  | boolean               | no       | `true` = the agent is told which project it is in: the project's prompt is appended to its system prompt (resolved against the root session's project; nothing when the session has no project). Must be a real YAML boolean. Default `false`.                                        |
+| `shuvix-prompt-blocks`      | comma-separated string| no       | Which blocks ShuviX appends to the system prompt after the body (see below): any of `document`, `drawing`, `environment`, `agents_md`, `claude_md`, `project_prompt`. **A string, not a YAML list.** Omitted = nothing appended. |
 | `shuvix-user-words`         | boolean               | no       | `true` = when this agent runs as a sub-session, each message its parent session sends it also carries the user's own words from the parent session — what the user typed there and their answers to its questions — quoted verbatim by ShuviX after the parent's text, so the agent can tell them from the parent's paraphrase. The first message carries everything so far (the first and the latest ten, each up to 4000 characters), later ones only what is new. Only the parent's own sub-sessions get it. Must be a real YAML boolean. Default `false`; the built-in `coding` agent has it on. |
 | `shuvix-builtin`            | boolean               | no       | Self-marker of files ShuviX ships. Not read by the parser; do not add it to user files.                                                                                                                                                                                                                                    |
 | `shuvix-id`                 | string                | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file.                                          |
@@ -65,7 +64,10 @@ style, each with file and line. Never modify files.
 Keys that are **ignored** (read as unknown, no error, no effect): the generic `tools` key (other
 applications' meaning of tool names would be misread — use `shuvix-tools`), and the retired keys
 `whenToUse`, `displayName`, `shuvix-dispatch-only`, `shuvix-session-awareness`,
-`shuvix-prompt-sections`, `shuvix-project-prompt`, `shuvix-project-memory`.
+`shuvix-prompt-sections`, `shuvix-project-prompt`, `shuvix-project-memory`,
+`shuvix-instruction-files` (now the blocks `agents_md` / `claude_md`) and
+`shuvix-project-awareness` (now the block `project_prompt`). A file that still carries the last
+two gets no instruction file and no project prompt until it lists the blocks.
 
 ### `shuvix-tools` — the whitelist
 
@@ -109,28 +111,45 @@ edit, ask, suggest, show_image, ls, grep, glob, agent, session, knowledge, artif
 
 ### The body — the system prompt
 
-Everything after the frontmatter, trimmed, is the system prompt. It may embed **placeholders**
-of the form `{{shuvix:name}}`, substituted when the agent is created. On the desktop host:
+Everything after the frontmatter, trimmed, is the system prompt, sent to the model exactly as
+written. It is plain prose — there is no template syntax. The `{{shuvix:name}}` placeholders of
+earlier versions are no longer replaced: one left in a body reaches the model as that literal
+text, so delete it and list the block that carries the same information instead.
 
-| Placeholder                    | Value                                                                              |
-| ------------------------------ | ---------------------------------------------------------------------------------- |
-| `{{shuvix:workingDirectory}}`  | absolute working directory of the session                                           |
-| `{{shuvix:isGitRepo}}`         | `Yes` / `No` — whether that directory has a `.git`                                 |
-| `{{shuvix:platform}}`          | `darwin` / `win32` / `linux`                                                        |
-| `{{shuvix:shell}}`             | the shell the command tool runs in: `bash`, on Windows `PowerShell 7 (pwsh)` / `Windows PowerShell 5.1` |
-| `{{shuvix:shellTool}}`         | the command tool on this platform: `bash` / `powershell`                            |
-| `{{shuvix:os}}`                | OS type and release                                                                 |
-| `{{shuvix:date}}`              | today, `YYYY-MM-DD`                                                                 |
-| `{{shuvix:language}}`          | the UI language, e.g. `中文 (zh)` / `English (en)`                                  |
-| `{{shuvix:appVersion}}`        | the ShuviX version                                                                  |
-| `{{shuvix:projectName}}`       | the project's name, empty outside a project                                         |
-| `{{shuvix:notebookPath}}`      | the bound file of a notebook session (root agents of notebook sessions only)        |
-| `{{shuvix:documentKind}}`      | when that file is one of ShuviX's own (policy, hook, agent, bot, skill, knowledge entry): a section saying what it is, when it takes effect and which manual entry specifies it; empty otherwise (root agents only) |
+### `shuvix-prompt-blocks` — what ShuviX appends after the body
 
-An unknown placeholder is kept verbatim (and logged as a warning); an empty value collapses the
-blank lines around it, so a sentence built on an empty variable disappears cleanly. The syntax
-does not clash with i18n templates. Everything else in the body is plain prose — there is no
-other template syntax.
+What depends on the session (where the agent works, today's date, the project's own
+instructions …) is not written in the body. ShuviX renders it as **blocks**, each wrapped in an
+XML tag, and appends them after the body; the file only says which ones it wants.
+
+| Block            | Appended as                                  | Contains                                                                                                                                                                                                                                              | Not appended when                                                                                  |
+| ---------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `document`       | `<document>`                                 | The document a notebook session has open (its path relative to the working directory). When it is one of ShuviX's own files (policy, hook, agent, bot, skill, knowledge entry): what it is, when a saved change applies, and which manual entry specifies it. | The agent is not the root agent of a notebook session.                                             |
+| `drawing`        | `<drawing>`                                  | How to draw: load the builtin drawing skill before the first figure. In a chat it also says that a figure is part of the reply; an agent that edits a document (it holds `doc_edit`) gets only the load line.                                          | The agent has no `skill` tool, or the builtin drawing skill is switched off.                       |
+| `environment`    | `<environment>`                              | A list, one fact per line: working directory and the session's temporary folder (only for an agent holding a file tool or a command tool); Git repository, Shell and OS (only with `bash` / `powershell`); Platform, Current date, User language, ShuviX version (always). | —                                                                                                  |
+| `agents_md`      | `<project_instructions file="AGENTS.md">`    | The content of `AGENTS.md` in the working directory.                                                                                                                                                                                                  | The file is missing or empty.                                                                      |
+| `claude_md`      | `<project_instructions file="CLAUDE.md">`    | The content of `CLAUDE.md` in the working directory.                                                                                                                                                                                                  | The file is missing or empty, or `agents_md` is listed too and the two files have the same content. |
+| `project_prompt` | `<project_prompt>`                           | The project's prompt (the text in the project's settings).                                                                                                                                                                                            | The session has no project, or the project has no prompt.                                          |
+
+- **The list is a set.** The order you write does not matter and names are case-insensitive:
+  ShuviX always appends in the order of the table, and writes the key back in that order.
+- **Listed does not mean present.** A block whose condition does not hold is left out whole, so
+  the prompt never points at something the agent does not have.
+- **Both instruction files are read.** With `agents_md` and `claude_md` both listed and both
+  files present, both are in the prompt, `AGENTS.md` first. When their content is identical (one
+  is a copy of, or a link to, the other) it is kept once, as `AGENTS.md`.
+- **An unknown name is ignored** with a warning; it never rejects the file. Omitting the key appends nothing.
+- A dispatched agent gets the same blocks, resolved against the session that dispatched it: that
+  session's working directory, temporary folder and project. `document` is for a notebook
+  session's root agent only.
+- Guidance that belongs to one tool follows the tool, not this list: an agent holding
+  `knowledge` gets `<knowledge_bases>` (the session's knowledge bases and when to use them), and
+  a root agent holding `tool_search` gets `<extensions>` (what the session can turn on).
+
+The blocks are rendered when the agent is created. A session's root agent then keeps its system
+prompt for the whole conversation — a later edit of the agent file, `AGENTS.md` / `CLAUDE.md` or
+the project prompt does not change it until you rebuild it (the small indicator before the usage
+ring in the input box says when a source has changed and offers “Rebuild system prompt”).
 
 ## What makes the file invalid
 
@@ -139,15 +158,11 @@ the sidebar's Agents group with the reason as its tooltip, and never shadows a b
 name) when:
 
 - there is no YAML frontmatter block, or the YAML does not parse, or it is not a mapping;
-- `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` is not a string (a YAML list is
+- `shuvix-tools` / `shuvix-model` / `shuvix-prompt-blocks` is not a string (a YAML list is
   the usual mistake);
 - `shuvix-thinking` is not one of `off` / `low` / `medium` / `high` / `xhigh` / `max` (`false` is not
   accepted either — write `off`);
-- `shuvix-project-awareness` is not a boolean;
-- `shuvix-user-words` is not a boolean;
-- an entry of `shuvix-instruction-files` is absolute or escapes the working directory (`..`), or
-  the key holds the pre-2026 boolean form (`shuvix-instruction-files: true` — list file names
-  instead).
+- `shuvix-user-words` is not a boolean.
 
 An empty frontmatter (`---` directly followed by `---`) is valid: every field takes its default.
 
@@ -194,8 +209,8 @@ writes knowledge bases, recording what other agents submit through the `knowledg
 1. **Dispatched as a sub-agent** through the `agent` tool (the caller's own list must include
    `agent`): `name` = this file's `name`, plus a `prompt` and a short `description`. The sub-agent
    runs in memory as a peer of the root agent, inherits the session's model and thinking level
-   unless `shuvix-model` / `shuvix-thinking` say otherwise, gets the same instruction-file / project injections
-   resolved against the root session's project, and returns its final text. The tool does **not**
+   unless `shuvix-model` / `shuvix-thinking` say otherwise, gets the blocks its own file lists
+   (resolved against the root session's working directory and project), and returns its final text. The tool does **not**
    enumerate available agents to the model — a name must be known from the prompt or from the
    user.
 2. **As the persona of a sub-session** — the `session` tool's `agent_profile` (any agent that is
@@ -205,6 +220,5 @@ writes knowledge bases, recording what other agents submit through the `knowledg
 3. **As a hook's agent** (`shuvix-hook-agent` — see the `hook-md` entry).
 4. **As a base override** (above).
 
-Context injections apply in every case: `shuvix-instruction-files` and
-`shuvix-project-awareness` are read from **this** file, and the knowledge-base guide is injected
-whenever the tool list contains `knowledge`.
+The blocks apply in every case: `shuvix-prompt-blocks` is read from **this** file, and the
+knowledge-base guide is appended whenever the tool list contains `knowledge`.

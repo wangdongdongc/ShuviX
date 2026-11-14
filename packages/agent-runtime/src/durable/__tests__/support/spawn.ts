@@ -160,7 +160,7 @@ export interface SeedOptions {
   settle?: boolean
   /** 锚任务所在的对话（= 记录的 parentConversationId；缺省根）。给了 TaskId 拥有者时取那个任务的对话 */
   parent?: ConversationId
-  /** 同一提交里冻结一份派生人设（kind / profileName / persona / instructionFiles / rootSessionId；缺省 true） */
+  /** 同一提交里冻结一份派生人设（kind / profileName / persona / promptBlocks / rootSessionId；缺省 true） */
   persona?: boolean
   /** 同一提交里在子对话建一个 HoldTask（闸门名） */
   hold?: string
@@ -212,7 +212,7 @@ export async function seedAgent(
         profileName: record.profileName,
         rootSessionId: session.sessionId,
         persona: `You are ${record.displayName}`,
-        instructionFiles: []
+        promptBlocks: []
       })
     }
     await writeSpawnedAgentRecord(tx, child.id, record)
@@ -402,13 +402,15 @@ export const PROFILES = {
     name: 'explore',
     displayName: 'Explorer',
     tools: ['probe'],
-    systemPrompt: 'You are {{shuvix:marker}} explorer'
+    systemPrompt: 'You are explorer',
+    promptBlocks: ['environment']
   }),
   nester: testProfile({
     name: 'nester',
     displayName: 'Nester',
     tools: ['probe', 'agent'],
-    systemPrompt: 'You are {{shuvix:marker}} nester'
+    systemPrompt: 'You are nester',
+    promptBlocks: ['environment']
   }),
   modeled: testProfile({
     name: 'modeled',
@@ -427,9 +429,8 @@ export const PROFILES = {
     name: 'aware',
     displayName: 'Aware',
     tools: ['probe', 'knowledge'],
-    systemPrompt: 'You are {{shuvix:marker}} aware',
-    instructionFiles: ['AGENTS.md'],
-    projectAwareness: true
+    systemPrompt: 'You are aware',
+    promptBlocks: ['environment', 'agents_md', 'project_prompt']
   })
 } satisfies Record<string, InProcessAgentType>
 
@@ -485,7 +486,7 @@ export interface HostD {
   readonly tools: ToolRegistration[]
   readonly getSession: () => DurableSession
   /**
-   * 换一个进程（`t.restart()` 沿用全部宿主选项，包括派发工具；结果数组、变量表、fakeRPM 共用）再打开会话。
+   * 换一个进程（`t.restart()` 沿用全部宿主选项，包括派发工具；结果数组、提示词块、fakeRPM 共用）再打开会话。
    * `before` 在新宿主建好、会话打开之前调用（设 ToolHost 旋钮用）。
    */
   readonly reopen: (before?: (t: TestHost) => void) => Promise<HostD>
@@ -500,12 +501,12 @@ export interface HostDOptions {
   host?: Partial<TestHostOptions>
   /** 不建根 agent */
   noPrime?: boolean
-  /** 自带变量表 / fakeRPM（重启共用） */
+  /** 自带提示词块 / fakeRPM（重启共用） */
   vars?: MarkerVars
   rpm?: FakeRpm
 }
 
-/** 宿主 D：faux 两个模型、test.spawn 扩展、marker 变量表、固定时钟、fakeRPM、派发工具 + probe */
+/** 宿主 D：faux 两个模型、test.spawn 扩展、marker 提示词块、固定时钟、fakeRPM、派发工具 + probe */
 export async function hostD(options: HostDOptions = {}): Promise<HostD> {
   const vars = options.vars ?? markerVars('M1')
   const rpm = options.rpm ?? fakeRpm()
@@ -522,7 +523,7 @@ export async function hostD(options: HostDOptions = {}): Promise<HostD> {
   const t = await makeHost({
     makeKit: wKit,
     extensions: [TEST_SPAWN_EXTENSION],
-    promptVars: vars.promptVars,
+    promptBlocks: vars.promptBlocks,
     now: () => W_NOW,
     resolveProfileModel: rpm.resolve,
     toolHost: { agentTools: tools, dispatchTool },

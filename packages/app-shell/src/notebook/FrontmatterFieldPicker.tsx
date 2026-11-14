@@ -7,11 +7,8 @@
  *     契约，不像工具/模型那样依赖运行时目录。
  *   - `shuvix-thinking`（select）→ 同一个 EnumField，候选项是 SELECTABLE_THINKING_LEVELS
  *     （与输入框思考选择器同一份，解析器也只收这几档）。
- *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
- *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
- *     根本不知道这份档案将来跑在哪个工作目录 —— 一个只能列出「此刻某个目录」的选择器
- *     会把它伪装成受限枚举。分派按**键**而非 kind：kind 只说"是个列表"，
- *     该配哪个控件是键的事。
+ *   - 其余 csv 键（如 `shuvix-prompt-blocks` 的提示词块清单）→ 纯文本逗号串输入。分派按**键**而非 kind：
+ *     kind 只说"是个列表"，该配哪个控件是键的事。
  *
  * 卡片本身是纯 DOM 的 CM6 widget，故这里由 LivePreviewEditor 用独立 React root
  * 挂进槽位（widget.destroy → unmount）。独立 root 不继承应用的 Provider，但两个

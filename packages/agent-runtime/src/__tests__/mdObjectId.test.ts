@@ -187,8 +187,7 @@ describe('OI-8 序列化器与行写入器写出同一份文本', () => {
     tools: ['read', 'grep'],
     model: 'openai/gpt-5',
     thinkingLevel: 'low',
-    instructionFiles: ['AGENTS.md'],
-    projectAwareness: true
+    promptBlocks: ['agents_md', 'project_prompt']
   }
   const bot = { name: 'b1', displayName: 'Bot One', description: 'd', body: 'Persona.' }
   const policy: ParsedPolicyFile = {

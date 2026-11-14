@@ -17,7 +17,7 @@
  *      （与创建同一条惰性连接的路；预判时不连）；技能工具不在其中（货架在创建时定下），沿用哪些、怎么排由运行时定。
  *  - `desktopPromptHost` —— `PromptHost`：系统提示词四个活段落（指令文件 / 项目提示词 / 知识库 /
  *    bot 人设）的数据源，每次请求准备时现调。
- *  - `desktopPromptVars` —— 人设冻结时的变量表（`{{shuvix:*}}` 占位符的取值）。
+ *  - `desktopPromptBlocks` —— 人设冻结时渲染的提示词块（档案正文之后追加的会话相关内容）。
  *
  * 工具的**次序**不在这里拼：运行时的锁（`composeAgentTools`，K6）按「名单序内置 → agent → skill →
  * MCP 逐台逐个 → 其它」拼，这里只交出各段。
@@ -37,6 +37,8 @@ import {
   renderKnowledgeGuide,
   renderExtensionDiscovery,
   renderTempDirectory,
+  renderDocumentBlock,
+  renderEnvironment,
   renderVisualCraft,
   renderVisualGuide,
   type AgentToolSet,
@@ -49,8 +51,8 @@ import {
   type McpRegistrationOptions,
   type McpToolDeclaration,
   type PromptHost,
-  type PromptVars,
-  type PromptVarsCtx,
+  type PromptBlockTexts,
+  type PromptBlocksCtx,
   type ReconfiguredAgentTools,
   type ResolvedAgentTools,
   type SpawnedAgentRecord,
@@ -462,7 +464,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
   }
 }
 
-// ─── 创建期变量表（{{shuvix:*}} 占位符取值；原 environment/workspace 段拆解而来） ───
+// ─── 创建期的提示词块（原 {{shuvix:*}} 变量表） ───
 
 /** 内置作图技能的全局名 */
 const DRAWING_SKILL = 'builtin:drawing'
@@ -553,12 +555,28 @@ export function gitRepoLine(workingDirectory: string, home: string = homedir()):
   }
 }
 
+/** 这个 agent 手里有没有能碰文件的工具（工作目录、临时目录两行对它才有意义） */
+const FILE_TOOL_NAMES = new Set([
+  'read',
+  'write',
+  'edit',
+  'ls',
+  'grep',
+  'glob',
+  'bash',
+  'powershell',
+  'doc_read'
+])
+
 /**
- * 桌面变量表：environment 类标量（git/平台/shell/os/日期/语言/版本，取值逻辑自原
- * environment 段平移）+ 工作目录 + 项目名。文本本身（标题/标签/句式）已内化进
- * agent md body；项目提示词不是变量 —— 走活段落（见 desktopPromptHost.resolveProjectPrompt）。
+ * 桌面的提示词块：档案正文之后追加的会话相关内容（`shuvix-prompt-blocks` 点名的 `document` / `drawing` /
+ * `environment`，加上跟着 `tool_search` 走的 `extensions`）。这里只管渲染出每一块的正文、判断它该不该出；
+ * 档案要不要它、包标签、排次序在运行时（`composePersona`）。项目提示词与指令文件不在这里 —— 走活段落
+ * （见 desktopPromptHost）。
  */
-export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<PromptVars> {
+export function desktopPromptBlocks(
+  ctx: PromptBlocksCtx
+): PromptBlockTexts | Promise<PromptBlockTexts> {
   // 派生 agent 的 sessionId 是 agentId、cwd 是 ''：工作目录与项目都按根会话查（与 resolveInstruction 同口径）
   const rootSessionId = ctx.rootSessionId ?? ctx.sessionId
   const workingDirectory = ctx.cwd || rootWorkingDirectory(rootSessionId)
@@ -570,13 +588,15 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
       return 'unknown'
     }
   })()
-  const project = sessionProject(rootSessionId)
-  // 作图说明的两个开关按**这一个 agent** 的名单判，与工具解析读的是同一份（ctx.toolNames）：
-  // 技能在架才有这份说明（契约与手艺都在技能里，常驻的只有「先加载」），否则整份不出；
-  // 手里有 artifact 才教 adopt。
-  // 这样说明里提到的每样东西都真在它手里 —— 派发出来的、覆盖了档案的、在侧栏停用了技能的都一样
+  const language = i18next.language
+  // 每一行、每一块都按**这一个 agent** 的名单判，与工具解析读的是同一份（ctx.toolNames）：
+  // 块里提到的每样东西都真在它手里 —— 派发出来的、覆盖了档案的、在侧栏停用了技能的都一样
+  const hasShell = ctx.toolNames.some((name) => name === 'bash' || name === 'powershell')
+  const hasFiles = ctx.toolNames.some((name) => FILE_TOOL_NAMES.has(name))
   const visual = {
+    // 技能在架才有作图说明（契约与手艺都在技能里，常驻的只有「先加载」），否则整块不出
     drawingSkill: hasDrawingSkill(ctx.toolNames),
+    // 手里有 artifact 才教 adopt
     artifact: ctx.toolNames.includes(ARTIFACT_TOOL_NAME),
     // 交互块不看名单，看回复落在哪儿：只有根 agent 的回复会显示成一条对话（派生 agent 的回复是
     // 交回父 agent 的工具结果），而 Chrome 标签页会话显示在扩展侧栏里 —— 那里的 CSP 跑不了它
@@ -584,40 +604,54 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
       ctx.kind === 'root' &&
       !isChromeTabSessionSettings(sessionRecords.pickSettings(ctx.sessionId, ['chromeTab']))
   }
+  // 笔记本会话打开的文档：只有根 agent 有（派生 ctx.sessionId 是 agentId，无从解析）
+  const notebookPath =
+    ctx.kind === 'root'
+      ? (sessionRecords.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? '')
+      : ''
   return {
-    workingDirectory,
-    isGitRepo: gitRepoLine(workingDirectory),
-    platform: platform(),
-    // Shell 一行说的是**命令工具**跑在哪个 shell 里，不是用户的登录 shell：模型据此选语法。
-    // 过去取 $SHELL —— 从开始菜单启动的 Windows 应用没有它，模型看到的是 `Shell: unknown`，
-    // 于是按 Windows 的直觉写 PowerShell，再被 bash 吞掉 `$`
-    shell:
-      shellTool === 'powershell'
-        ? powerShellEditionLabel(getPowerShellConfig().edition)
-        : (shellTool ?? 'unknown'),
-    // 本平台命令工具的名字 —— 档案正文用它指代「那个 shell 工具」，而不必写死 bash
-    shellTool: shellTool ?? '',
-    os: `${osType()} ${osRelease()}`,
-    // 本地日历日：与日期通知（dateNotice）同一口径 —— toISOString 是 UTC，东八区 0–8 点会说成前一天
-    date: localDate(),
-    language: formatLanguageDisplay(i18next.language),
-    appVersion,
-    // 内联作图：```svg 围栏是什么 + 「本会话第一张图前先加载作图技能」（契约与手艺都在技能里），
-    // 技能不在架时为空串、占位符整块消失。与 body 同语言：界面语言是宿主的权威，档案构建期挑 body
-    // 用的也是这一个。
-    visualGuide: renderVisualGuide(i18next.language, visual),
-    visualCraft: renderVisualCraft(i18next.language, visual),
-    projectName: project?.name ?? '',
-    // 本会话的临时目录（环境清单里的一行）：派生 agent 用根会话的 —— 它的工具也按根会话的权限表走。
-    // 不提就是模型照习惯写 /tmp：文件工具每写一次都问，受限命令被沙箱拒了再申请越界
-    tempDirectory: renderTempDirectory(i18next.language, {
-      dir: rootTempDirectory(rootSessionId),
-      commands: ctx.toolNames.some((name) => name === 'bash' || name === 'powershell')
+    // 环境清单：给了才有那一行。没有命令工具就不说 Shell / Git / OS（bot 手里没有 shell，从前也被告知了
+    // 这三行），没有文件工具就不说工作目录与临时目录（Chrome 标签页会话）
+    environment: renderEnvironment(language, {
+      ...(hasFiles
+        ? {
+            workingDirectory,
+            // 本会话的临时目录：派生 agent 用根会话的 —— 它的工具也按根会话的权限表走。
+            // 不提就是模型照习惯写 /tmp：文件工具每写一次都问，受限命令被沙箱拒了再申请越界
+            tempDirectoryLine: renderTempDirectory(language, {
+              dir: rootTempDirectory(rootSessionId),
+              commands: hasShell
+            })
+          }
+        : {}),
+      ...(hasShell
+        ? {
+            isGitRepo: gitRepoLine(workingDirectory),
+            // Shell 一行说的是**命令工具**跑在哪个 shell 里，不是用户的登录 shell：模型据此选语法。
+            // 过去取 $SHELL —— 从开始菜单启动的 Windows 应用没有它，模型看到的是 `Shell: unknown`，
+            // 于是按 Windows 的直觉写 PowerShell，再被 bash 吞掉 `$`
+            shell:
+              shellTool === 'powershell'
+                ? powerShellEditionLabel(getPowerShellConfig().edition)
+                : (shellTool ?? 'unknown'),
+            os: `${osType()} ${osRelease()}`
+          }
+        : {}),
+      platform: platform(),
+      // 本地日历日：与日期通知（dateNotice）同一口径 —— toISOString 是 UTC，东八区 0–8 点会说成前一天
+      date: localDate(),
+      language: formatLanguageDisplay(language),
+      appVersion
     }),
+    // 作图说明：一个块名两种正文。聊天里图是回复的一部分（带载体那段、改图走 adopt、交互块）；
+    // 改文档的 agent（手里有 doc_edit）图往文件里画，只留「先加载作图技能」—— 载体那段对它是死路
+    drawing: ctx.toolNames.includes('doc_edit')
+      ? renderVisualCraft(language, visual)
+      : renderVisualGuide(language, visual),
     // 这条会话可以申请开启哪些扩展（只有持有 tool_search 的 agent 才说）。创建时定下、记进人设，重配不动它 ——
     // 之后才启用的服务器不在名单里，但照样搜得到
-    extensionDiscovery: renderExtensionDiscovery(
-      i18next.language,
+    extensions: renderExtensionDiscovery(
+      language,
       ctx.toolNames.includes(TOOL_SEARCH_TOOL_NAME)
         ? extensionPromptEntries({
             names: ctx.toolNames,
@@ -627,23 +661,20 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
           })
         : []
     ),
-    // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
-    // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
-    // 占位符原样保留并 warn（派生档案本就不该引用它）。{{shuvix:documentKind}} 同口径：文档是 ShuviX
-    // 文件（按承载项目判，知识库那边隐式启用说明书用的是同一个判定）时说这是什么文件、规范在哪一条
-    ...(ctx.kind === 'root'
-      ? {
-          notebookPath:
-            sessionRecords.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? '',
-          documentKind: renderDocumentKind(i18next.language, {
+    // 打开的文档；它是 ShuviX 自己的文件（按承载项目判，知识库那边隐式启用说明书用的是同一个判定）时
+    // 再说这是什么文件、规范在哪一条。不是笔记本会话 → 整块不出
+    document: renderDocumentBlock(language, {
+      path: notebookPath,
+      kindGuide: notebookPath
+        ? renderDocumentKind(language, {
             kind: shuvixFileKindOfProject(
               sessionRecords.pick(ctx.sessionId, ['projectId'])?.projectId
             ),
             manual: builtinManualDir() !== null,
             knowledge: ctx.toolNames.includes('knowledge')
           })
-        }
-      : {})
+        : ''
+    })
   }
 }
 

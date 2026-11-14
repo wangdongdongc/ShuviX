@@ -39,8 +39,12 @@ describe('newAgentTemplate', () => {
     expect(parsed!.name).toBe('my-agent')
     expect(parsed!.tools).toEqual(['read', 'bash', 'powershell', 'skill'])
     // 新建的 agent 默认与内置档案同一套上下文注入
-    expect(parsed!.instructionFiles).toEqual(['AGENTS.md', 'CLAUDE.md'])
-    expect(parsed!.projectAwareness).toBe(true)
+    expect(parsed!.promptBlocks).toEqual([
+      'environment',
+      'agents_md',
+      'claude_md',
+      'project_prompt'
+    ])
   })
 
   it.each([

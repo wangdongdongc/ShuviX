@@ -1,19 +1,19 @@
 /**
- * SpawnCoordinator · 人设冻结（P2-03，D 段 24–27）：派生人设在创建提交里冻结（变量表按 agentId、cwd 为空，
+ * SpawnCoordinator · 人设冻结（P2-03，D 段 24–27）：派生人设在创建提交里冻结（渲染块的上下文按 agentId、cwd 为空，
  * Q-P2-13）；活段落按子对话自己的 AgentStateDoc（根会话 id）解析；根一概不受影响。
  *
- *   PK-A13（2026-11-06 人设沿用）：派生 agent 不写 personaKey、每次派生都调变量表；根的摘要不受影响
+ *   PK-A13（2026-11-06 人设沿用）：派生 agent 不写 personaKey、每次派生都渲染提示词块；根的摘要不受影响
  *   FRZ-16（2026-11-06 系统提示词冻结）：派生 agent 的文档没有 sections / personaKey，它的段落照旧现解析（来源改了，
  *          下一次请求就是新的）；根的文档不受影响
  */
-import type { PromptVarsCtx } from '../../agentProfile/promptVars'
+import type { PromptBlocksCtx } from '../../agentProfile/promptBlocks'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { parseSpawnedAgentRecord } from '../agentRecord'
 import { AgentStateDoc } from '../docs'
 import type { PromptHost } from '../seams'
-import { markerVars, type MarkerVars } from './support/agentConfig'
+import { markerPersona, markerVars, type MarkerVars } from './support/agentConfig'
 import { answer } from './support/faux'
 import { registerHostCleanup } from './support/host'
 import { callAgent, hostD } from './support/spawn'
@@ -21,21 +21,21 @@ import { systemDeltas } from './support/transcript'
 
 registerHostCleanup()
 
-/** marker 变量表，外加记下每次的上下文 */
-function recordingVars(contexts: PromptVarsCtx[]): MarkerVars {
+/** marker 提示词块，外加记下每次的上下文 */
+function recordingVars(contexts: PromptBlocksCtx[]): MarkerVars {
   const base = markerVars('M1')
   return {
     state: base.state,
-    promptVars: ((ctx: PromptVarsCtx) => {
+    promptBlocks: ((ctx: PromptBlocksCtx) => {
       contexts.push(ctx)
-      return base.promptVars()
-    }) as unknown as MarkerVars['promptVars']
+      return base.promptBlocks()
+    }) as unknown as MarkerVars['promptBlocks']
   }
 }
 
 describe('SpawnCoordinator · persona', () => {
-  it('P2-03-24 frozen fields and the promptVars context (sessionId = agentId, cwd "", rootSessionId = root)', async () => {
-    const contexts: PromptVarsCtx[] = []
+  it('P2-03-24 frozen fields and the promptBlocks context (sessionId = agentId, cwd "", rootSessionId = root)', async () => {
+    const contexts: PromptBlocksCtx[] = []
     const d = await hostD({ vars: recordingVars(contexts) })
     d.t.kit.queue(callAgent('explore', 'find X'), answer('found'), answer('done'))
     expect(await d.session.submitUser('go')).toEqual({})
@@ -44,8 +44,8 @@ describe('SpawnCoordinator · persona', () => {
       kind: 'spawned',
       profileName: 'explore',
       rootSessionId: 's1',
-      persona: 'You are M1 explorer',
-      instructionFiles: []
+      persona: markerPersona('M1', 'You are explorer'),
+      promptBlocks: ['environment']
     })
     // rootSessionId = 根会话（ENV-12）：宿主据它给派生 agent 查工作目录与项目
     expect(contexts.at(-1)).toEqual({
@@ -102,9 +102,12 @@ describe('SpawnCoordinator · persona', () => {
     expect(calls.resolveProjectPrompt).toContainEqual(['s1'])
     expect(calls.resolveKnowledgeBases).toContainEqual(['s1'])
     const child = d.t.kit.requests[1]!.systemPrompt
-    const order = ['You are M1 aware', 'INSTRUCTION BODY', 'PROJECT BODY', 'KNOWLEDGE BODY'].map(
-      (text) => child.indexOf(text)
-    )
+    const order = [
+      markerPersona('M1', 'You are aware'),
+      'INSTRUCTION BODY',
+      'PROJECT BODY',
+      'KNOWLEDGE BODY'
+    ].map((text) => child.indexOf(text))
     expect(order.every((index) => index >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     // 根的档案不声明这些：根的请求里一段都没有
@@ -126,20 +129,20 @@ describe('SpawnCoordinator · persona', () => {
       profileName: 'work',
       rootSessionId: 's1',
       persona: '',
-      instructionFiles: [],
-      personaKey: expect.stringMatching(/^v1:/),
+      promptBlocks: [],
+      personaKey: expect.stringMatching(/^v2:/),
       // 其余段落冻结在这里（2026-11-06）：宿主 D 的 work 档案只选人设 → 没有别的段落
       sections: {}
     })
     expect(parseSpawnedAgentRecord(after)).toBeUndefined()
   })
 
-  it('PK-A13 spawned agents write no personaKey and ask promptVars on every spawn; the root key is untouched', async () => {
+  it('PK-A13 spawned agents write no personaKey and ask promptBlocks on every spawn; the root key is untouched', async () => {
     const d = await hostD()
     d.t.kit.queue(answer('warm'))
     expect(await d.session.submitUser('hello')).toEqual({})
     const rootBefore = await d.session.harness.snapshot(AgentStateDoc, ROOT_CONVERSATION_ID, BG)
-    expect(rootBefore?.personaKey).toMatch(/^v1:/)
+    expect(rootBefore?.personaKey).toMatch(/^v2:/)
     const callsBefore = d.vars.state.calls
 
     d.t.kit.queue(
@@ -155,7 +158,7 @@ describe('SpawnCoordinator · persona', () => {
     for (const outcome of d.outcomes) {
       const child = await d.session.harness.snapshot(AgentStateDoc, outcome.conversationId!, BG)
       expect(child?.kind).toBe('spawned')
-      expect(child?.persona).toBe('You are M1 explorer')
+      expect(child?.persona).toBe(markerPersona('M1', 'You are explorer'))
       expect(child).not.toHaveProperty('personaKey')
       expect(child).not.toHaveProperty('sections')
     }

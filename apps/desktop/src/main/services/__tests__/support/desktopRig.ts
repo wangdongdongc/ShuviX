@@ -304,8 +304,7 @@ export function profile(
     description: `${name} profile`,
     tools,
     systemPrompt: `ROLE:${name}`,
-    instructionFiles: [],
-    projectAwareness: false,
+    promptBlocks: [],
     ...extra
   }
 }

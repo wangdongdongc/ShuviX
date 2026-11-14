@@ -6,6 +6,7 @@
  * InProcessAgentType：创建/派发执行时用的运行投影（工具白名单 + 系统提示 + sections 声明）。
  * SubAgentRegistry：档案来源的端适配接口（桌面=文件系统扫描；扩展=内嵌常量）。
  */
+import type { AgentPromptBlock } from '@shuvix/chat-protocol/agentPromptBlocks'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import type { SelectableThinkingLevel, ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
@@ -39,16 +40,10 @@ export interface AgentProfile {
    */
   thinkingLevel?: SelectableThinkingLevel
   /**
-   * `shuvix-instruction-files`：该档案认的项目指令文件清单（工作目录内的相对路径）。
-   * 顺序即优先级，注入侧取第一个存在且非空的，至多一个；空数组 = 不注入。
-   * 派生 agent 按根会话的工作目录解析。
+   * `shuvix-prompt-blocks`：系统提示词在正文之后追加哪几块（chat-protocol `agentPromptBlocks.ts` 的词表，
+   * 已归一：去重、按词表次序）。空数组 = 一块都不追加。派生 agent 的块按根会话的工作目录与项目解析。
    */
-  instructionFiles: readonly string[]
-  /**
-   * `shuvix-project-awareness`：项目感知 —— 是否让该 agent 了解它所在的项目：
-   * 注入项目提示词（项目设置的纯文本；派生按根会话的项目解析）。
-   */
-  projectAwareness: boolean
+  promptBlocks: readonly AgentPromptBlock[]
   /**
    * `shuvix-user-words`：作为子会话收父会话的消息时，宿主把用户在父会话里自己写的话原样附上（桌面 services/userWords.ts）。
    * 只在为真时出现，省略 = false。
@@ -66,7 +61,7 @@ export interface InProcessAgentType {
   displayName: string
   description: string
   tools: string[]
-  /** md 正文（可含 {{shuvix:*}} 占位符，createAgent 时按宿主变量表替换） */
+  /** md 正文（纯文字；会话相关的内容由 `promptBlocks` 点名的块追加在后面） */
   systemPrompt: string
   /**
    * 档案声明的模型（`shuvix-model` 原样值）。**仅 spawned 生效**：派生 agent 没有会话树
@@ -79,10 +74,8 @@ export interface InProcessAgentType {
    * 优先于派发方继承；root 以会话树为准（钉档案时作为种子写进树）。
    */
   thinkingLevel?: ThinkingLevel
-  /** 项目指令文件清单，顺序即优先级（缺省/空 = 不注入；派生按根会话的项目上下文解析） */
-  instructionFiles?: readonly string[]
-  /** 项目感知：是否注入项目提示词（缺省 false；派生按根会话的项目上下文解析） */
-  projectAwareness?: boolean
+  /** 正文之后追加哪几块（缺省/空 = 不追加；派生按根会话的项目上下文解析） */
+  promptBlocks?: readonly AgentPromptBlock[]
   /** 知识库感知：是否注入 `<knowledge>` 围栏（缺省 false；派生按根会话的作用域解析） */
   knowledge?: boolean
 }

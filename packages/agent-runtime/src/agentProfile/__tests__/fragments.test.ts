@@ -1,7 +1,9 @@
 /**
  * 提示片段（`agentProfile/fragments/`）—— `renderVisualGuide` / `renderVisualCraft` 的语言回退、
- * 三个开关（`drawingSkill` / `artifact` / `interactive`）各自带来哪一段，以及「哪些内置档案引用了
- * `{{shuvix:visualGuide}}` / `{{shuvix:visualCraft}}`」这份归属。
+ * 三个开关（`drawingSkill` / `artifact` / `interactive`）各自带来哪一段，以及「哪些内置档案点了
+ * `drawing` / `document` / `environment` 这几个提示词块」这份归属（2026-11-13 之前是正文里的
+ * `{{shuvix:visualGuide}}` / `{{shuvix:visualCraft}}` 等占位符；现在正文是纯文字，档案用
+ * `shuvix-prompt-blocks` 点名，宿主把片段渲染成块追加在正文后面）。
  *
  * **2026-09-24 契约换了形状**（用户裁决，照 Claude 自己 `show_widget` + `read_me` 的模式）：
  * ```svg 的契约、框箭头预算与范例图**只在 `builtin:drawing` 技能里**；片段只剩载体（这张图去哪儿，
@@ -11,10 +13,9 @@
  * app-shell 的 builtinSkillsFigures.dom.test.ts 钉（它现在扫的是 SKILL.md）。
  *
  * 两件事分开在两处钉：
- *  - **谁引用** 在这里（档案自己的事，纯文本，不需要宿主）；
- *  - **谁供值** 在两端各自的 promptVarsWiring 用例里（宿主的事）。
- * 合成一条就会出现「一端供了值、另一端没供」照样绿的情形 —— 少供一个值不报错，
- * `substitutePromptVars` 只会把裸占位符原样发给模型。
+ *  - **谁点名** 在这里（档案自己的事，只看 frontmatter，不需要宿主）；
+ *  - **谁供值** 在宿主的 promptBlocksWiring 用例里（宿主的事）。
+ * 合成一条就会出现「档案点了名、宿主没供」照样绿的情形 —— 少供一块不报错，那一块只是不出现。
  *
  * 刻意不测片段 md 的散文文案：那是提示词措辞，会随调优改动，钉住只会制造维护噪声。
  * 这里只钉结构（语言回退、非空、自含块、被谁引用），段落只凭**代码记号**认 —— 三种语言里
@@ -47,18 +48,19 @@
  *    （它原先从无参渲染里取特征串，契约改了之后那里是空串，断言就空转了）。
  *
  * 第二份片段 `renderDocumentKind`（DK 组，2026-10-30）：笔记本会话的文档是一份 ShuviX 文件时，
- * `{{shuvix:documentKind}}` 说这是什么文件、规范在说明书哪一条、改动会不会被检查。同样只凭三语一字
+ * `document` 块里的这一段说这是什么文件、规范在说明书哪一条、改动会不会被检查。同样只凭三语一字
  * 不差的记号认段落：每种文件的自述行（`shuvix: agent v1` …，技能是 `SKILL.md`、知识库是 `shuvix: okf v0.2`）、
  * 说明书目录（用例里传 `/m`）、「改动会被检查」那段里的 `doc_read`。
  *
- * 第三份片段 `renderTempDirectory`（TD 组，2026-11-01）：`{{shuvix:tempDirectory}}` 是环境清单里的
+ * 第三份片段 `renderTempDirectory`（TD 组，2026-11-01）：它是 `environment` 块（环境清单）里的
  * 一行 —— 本会话自己的临时目录。同样只凭代码记号认：目录本身（反引号包着）、`/tmp`（「写那里要问」
  * 那半句）；命令那半句只凭「多出来的一段连续文字」认，不认措辞。
  *
- * 第四份片段 `renderExtensionDiscovery`（RX 组，2026-11-03）：`{{shuvix:extensionDiscovery}}` 列这条会话能申请开启的
- * 扩展。空表 ⇒ 空串（占位符整块消失）；同样只凭 `tool_search` 与名字认，不认措辞。
+ * 第四份片段 `renderExtensionDiscovery`（RX 组，2026-11-03）：`extensions` 块列这条会话能申请开启的
+ * 扩展。空表 ⇒ 空串（整块不出）；同样只凭 `tool_search` 与名字认，不认措辞。
  */
 import { describe, it, expect } from 'vitest'
+import type { AgentPromptBlock } from '@shuvix/chat-protocol/agentPromptBlocks'
 import {
   PARSED_SHUVIX_FILE_KINDS,
   type ShuvixFileKind
@@ -141,21 +143,34 @@ const paragraphs = (text: string): string[] =>
 
 /** 内置 md 的读取口：测试读构建期内联的**同一批文件**（桌面运行时读随包目录） */
 const readMd = createInlineMdReader()
-/** 文本里引用到的 `{{shuvix:name}}` 名字（去重排序） */
-const placeholdersOf = (text: string): string[] =>
-  [...new Set([...text.matchAll(/\{\{shuvix:([A-Za-z][\w-]*)\}\}/g)].map((m) => m[1]))].sort()
-
-/** 引用了某个占位符的内置档案名（按名去重，跨语言取并集） */
-const profilesUsing = (placeholder: string): string[] => {
+/** 点了某个提示词块的内置档案名（按名去重，跨语言取并集） */
+const profilesListing = (block: AgentPromptBlock): string[] => {
   const names = new Set<string>()
   for (const language of LANGUAGES) {
     for (const profile of buildBuiltinProfiles({ language, readMd })) {
-      if (placeholdersOf(profile.systemPrompt).includes(placeholder)) names.add(profile.name)
+      if (profile.promptBlocks.includes(block)) names.add(profile.name)
     }
   }
   return [...names].sort()
 }
-const profilesUsingVisualGuide = (): string[] => profilesUsing('visualGuide')
+/**
+ * `drawing` 块给哪一档由宿主按工具定：手里有 `doc_edit`（图画进文档）的拿不带载体的 craft，其余拿 guide。
+ * 这里按同一条线把点了 `drawing` 的档案分成两拨。
+ */
+const drawsIntoDocument = (profile: { tools: readonly string[] }): boolean =>
+  profile.tools.includes('doc_edit')
+const profilesDrawing = (intoDocument: boolean): string[] => {
+  const names = new Set<string>()
+  for (const language of LANGUAGES) {
+    for (const profile of buildBuiltinProfiles({ language, readMd })) {
+      if (profile.promptBlocks.includes('drawing') && drawsIntoDocument(profile) === intoDocument) {
+        names.add(profile.name)
+      }
+    }
+  }
+  return [...names].sort()
+}
+const profilesUsingVisualGuide = (): string[] => profilesDrawing(false)
 
 describe('renderVisualGuide —— 语言回退', () => {
   // 技能不在架时两个出口都是空串（VG-9），语言回退只在技能在架时看得见 —— 这一组因此都全开渲染
@@ -392,18 +407,17 @@ describe('renderVisualGuide / renderVisualCraft —— 开关（VG）', () => {
 })
 
 /**
- * `{{shuvix:visualCraft}}` —— 同一份片段去掉「载体」那一段。两个出口的差集就是载体，
+ * `renderVisualCraft` —— 同一份片段去掉「载体」那一段。两个出口的差集就是载体，
  * 而载体讲的是聊天的规矩（图是回复的一部分、改图走 `artifact adopt`）；把那几段讲给一个
  * 正在编辑文件的 agent，是教它一条走不通的路。
  */
-describe('{{shuvix:visualCraft}} —— 不带载体的那一档', () => {
-  // 这一层只看得见占位符本身：`buildBuiltinProfiles` 出来的正文尚未代入（代入在创建期，
-  // 由宿主的变量表供值）。「notebook 实际拿到的是什么」因此钉在两端的
-  // promptVarsWiring 用例里 —— 与文件头说的「谁引用 / 谁供值分开钉」同一条分工。
-  it('恰好 notebook 一个档案引用它', () => {
+describe('renderVisualCraft —— 不带载体的那一档', () => {
+  // 这一层只看得见档案点了哪几块：块的正文在创建期由宿主渲染。「notebook 实际拿到的是什么」因此钉在
+  // 宿主的 promptBlocksWiring 用例里 —— 与文件头说的「谁点名 / 谁供值分开钉」同一条分工。
+  it('点了 drawing 的档案里恰好 notebook 一个手里有 doc_edit（宿主据此给它这一档）', () => {
     // 图往**文件**里画的档案才该拿这一档。多一个引用点 = 回来改这条，顺带交代理由
     //（协作编辑窗口的 coedit 已并进 notebook：图画进用户的文档，不是画在回复里）
-    expect(profilesUsing('visualCraft')).toEqual(['notebook'])
+    expect(profilesDrawing(true)).toEqual(['notebook'])
   })
 
   it.each(LANGUAGES)(
@@ -491,13 +505,13 @@ describe('「框与箭头」预算不常驻（BG）', () => {
 })
 
 /**
- * 「谁带技能工具」与「谁的正文用作图说明」必须是同一批档案：作图技能只能经技能工具加载（2026-10-28 起
- * 档案不再逐个点名技能，`skill` 就是整个货架），带着技能工具却不引用片段，模型就永远不会被叫去加载
- * 作图技能；引用了片段却没有技能工具，那个占位符就永远是空串 —— 两边对不上时都不报错。
+ * 「谁带技能工具」与「谁点了 `drawing` 块」必须是同一批档案：作图技能只能经技能工具加载（2026-10-28 起
+ * 档案不再逐个点名技能，`skill` 就是整个货架），带着技能工具却不点这一块，模型就永远不会被叫去加载
+ * 作图技能；点了这一块却没有技能工具，那一块就永远不出 —— 两边对不上时都不报错。
  */
 describe('作图技能的归属（OWN）', () => {
   it.each(LANGUAGES)(
-    'OWN-1 %s：列了 skill 工具的档案集合 = 引用 visualGuide / visualCraft 的档案集合',
+    'OWN-1 %s：列了 skill 工具的档案集合 = 点了 drawing 块的档案集合',
     (language) => {
       const profiles = buildBuiltinProfiles({ language, readMd })
       const declaring = profiles
@@ -505,10 +519,7 @@ describe('作图技能的归属（OWN）', () => {
         .map((p) => p.name)
         .sort()
       const referencing = profiles
-        .filter((p) => {
-          const used = placeholdersOf(p.systemPrompt)
-          return used.includes('visualGuide') || used.includes('visualCraft')
-        })
+        .filter((p) => p.promptBlocks.includes('drawing'))
         .map((p) => p.name)
         .sort()
       expect(declaring).toEqual(['bot', 'chat', 'coding', 'notebook', 'tab', 'work'])
@@ -517,8 +528,8 @@ describe('作图技能的归属（OWN）', () => {
   )
 })
 
-describe('{{shuvix:visualGuide}} 的归属', () => {
-  it('恰好 work / chat / coding / bot / tab 五个档案引用它', () => {
+describe('drawing 块（带载体的那一档）的归属', () => {
+  it('恰好 work / chat / coding / bot / tab 五个档案点了 drawing 且图画在回复里（没有 doc_edit）', () => {
     // 加一个引用点 = 必须回来改这条，顺带交代理由。五个之外的档案引用它通常是复制粘贴
     // 带出来的（例如从 work 抄一段到 titler），而那一段提示对那个 agent 毫无意义。
     // tab（Chrome 侧边栏会话）在列：侧边栏里的 chat-ui 同样渲染 ```svg 图，用户问「把这页的数据画出来」
@@ -526,17 +537,18 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
     expect(profilesUsingVisualGuide()).toEqual(['bot', 'chat', 'coding', 'tab', 'work'])
   })
 
-  it('三种语言的引用集一致（翻译时漏改占位符 = 那个语言下变量失效）', () => {
+  it('三种语言点的块一致（翻译时漏改 frontmatter = 那个语言下这一块不出）', () => {
     for (const name of profilesUsingVisualGuide()) {
       for (const language of LANGUAGES) {
         const profile = buildBuiltinProfiles({ language, readMd }).find((p) => p.name === name)!
-        expect(placeholdersOf(profile.systemPrompt), `${name}.${language}`).toContain('visualGuide')
+        expect(profile.promptBlocks, `${name}.${language}`).toContain('drawing')
+        expect(drawsIntoDocument(profile), `${name}.${language}`).toBe(false)
       }
     }
   })
 
   it.each(['titler', 'knowledge-writer', 'explore'])(
-    '%s 不引用它，正文里也不含片段正文的特征串',
+    '%s 不点 drawing 块，正文里也不含片段正文的特征串',
     (name) => {
       // 特征串从片段本身取（不抄文案）：全开渲染里每一行足够长的、别处不会出现的文本。
       // 必须全开渲染 —— 技能不在架时片段是空串，从空串里取特征串，下面那圈就空转了
@@ -549,9 +561,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
       for (const language of LANGUAGES) {
         const profile = buildBuiltinProfiles({ language, readMd }).find((p) => p.name === name)
         expect(profile, `${name}.${language} 应当存在`).toBeDefined()
-        expect(placeholdersOf(profile!.systemPrompt), `${name}.${language}`).not.toContain(
-          'visualGuide'
-        )
+        expect(profile!.promptBlocks, `${name}.${language}`).not.toContain('drawing')
         for (const mark of marks) {
           expect(profile!.systemPrompt, `${name}.${language}`).not.toContain(mark)
         }
@@ -559,7 +569,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
     }
   )
 
-  it('基座名单里只有 notebook 不引用 visualGuide —— 它拿的是 visualCraft（图画进文档）', () => {
+  it('基座名单里只有 notebook 不在这一拨 —— 它拿的是不带载体的那一档（图画进文档）', () => {
     const using = new Set(profilesUsingVisualGuide())
     const basesWithout = [...BASE_PROFILE_NAMES].filter((n) => !using.has(n)).sort()
     expect(basesWithout).toEqual(['notebook'])
@@ -701,7 +711,7 @@ describe('第三个开关 interactive（VG-I）', () => {
 })
 
 /**
- * `{{shuvix:documentKind}}`（DK）—— 笔记本文档是 ShuviX 文件时，说这是什么文件、什么时候生效、规范在
+ * `renderDocumentKind`（DK）—— `document` 块里的那一段：笔记本文档是 ShuviX 文件时，说这是什么文件、什么时候生效、规范在
  * 说明书哪一条（`manual` + `knowledge` 都在才指路 —— 2026-11-08 起说明书经 `knowledge` 的 `read` 按条目名读，
  * 不给目录）、改动会不会被检查（只有宿主真解析的四种）。
  *
@@ -876,38 +886,32 @@ describe('renderDocumentKind —— 笔记本文档是哪种 ShuviX 文件（DK�
     }
   })
 
-  it('DK-9 只有 notebook 引用 {{shuvix:documentKind}}：三语各恰好一次、独占一段，位于第一个小标题的正文之后、第二个小标题之前', () => {
-    expect(profilesUsing('documentKind')).toEqual(['notebook'])
-    const placeholder = '{{shuvix:documentKind}}'
+  it('DK-9 只有 notebook 点了 document 块（这段说明在那一块里）：三语都点；没有任何内置正文还留着占位符', () => {
+    expect(profilesListing('document')).toEqual(['notebook'])
     for (const language of LANGUAGES) {
-      const notebook = buildBuiltinProfiles({ language, readMd }).find((p) => p.name === 'notebook')
+      const profiles = buildBuiltinProfiles({ language, readMd })
+      const notebook = profiles.find((p) => p.name === 'notebook')
       expect(notebook, `notebook.${language}`).toBeDefined()
-      const body = notebook!.systemPrompt
-      expect(countOf(body, placeholder), language).toBe(1)
-      const ps = paragraphs(body)
-      const at = ps.indexOf(placeholder)
-      expect(at, `${language}：占位符应当独占一段`).toBeGreaterThanOrEqual(0)
-      const headings = ps.map((p, i) => (p.startsWith('## ') ? i : -1)).filter((i) => i >= 0)
-      expect(headings.length, language).toBeGreaterThanOrEqual(2)
-      // 第一个小标题之后至少隔着它自己的一段正文（身份那段），再到占位符
-      expect(at, language).toBeGreaterThan(headings[0] + 1)
-      expect(at, language).toBeLessThan(headings[1])
+      expect(notebook!.promptBlocks, language).toContain('document')
+      // 正文是纯文字：说明不再经占位符嵌在正文里
+      for (const profile of profiles) {
+        expect(profile.systemPrompt, `${profile.name}.${language}`).not.toContain('{{shuvix:')
+      }
     }
   })
 })
 
 /**
  * `renderTempDirectory`（TD 组）—— 环境清单里「临时文件」那一行：本会话自己的临时目录（宿主建好了的绝对路径）。
- * 没有目录 ⇒ 空串（占位符独占一行，整行连同换行一起去掉，见 promptVars 的 PV-EL）；有目录 ⇒ 恰好一行
+ * 没有目录 ⇒ 空串（环境清单里就没有这一行）；有目录 ⇒ 恰好一行
  * 列表项。`commands` 只往这一行里插一段连续的话（「命令的临时目录也是它」）—— 用公共前缀 + 公共后缀
  * 还原另一版来认，不认措辞。
  */
 describe('renderTempDirectory —— 本会话临时目录那一行（TD）', () => {
   const DIR = '/fixture/tmp/shuvix-501/abcd1234'
   const COMMANDS = [undefined, false, true] as const
-  /** 归属 tempDirectory 的档案（三语各一份正文） */
-  const OWNERS = ['bot', 'chat', 'coding', 'work']
-  const PLACEHOLDER = '{{shuvix:tempDirectory}}'
+  /** 点了 environment 块的档案（这一行在那一块里；宿主只给手里有文件工具的 agent） */
+  const OWNERS = ['bot', 'chat', 'coding', 'notebook', 'tab', 'work']
 
   /** 两个字符串的最长公共前缀 / 后缀长度（后缀不与前缀重叠，上限是短的那个减去前缀） */
   const commonPrefix = (a: string, b: string): number => {
@@ -994,54 +998,25 @@ describe('renderTempDirectory —— 本会话临时目录那一行（TD）', ()
     }
   })
 
-  it('TD-6 恰好 bot / chat / coding / work 引用它，三语每份正文各恰好一次；别的内置档案三语都在、都不引用', () => {
-    expect(profilesUsing('tempDirectory')).toEqual(OWNERS)
-    let bodies = 0
+  it('TD-6 恰好 bot / chat / coding / notebook / tab / work 点了 environment 块（这一行所在的那一块），三语一致；别的内置档案三语都在、都不点', () => {
+    expect(profilesListing('environment')).toEqual(OWNERS)
+    let checked = 0
     for (const language of LANGUAGES) {
       const profiles = buildBuiltinProfiles({ language, readMd })
       for (const name of OWNERS) {
         const profile = profiles.find((p) => p.name === name)
         expect(profile, `${name}.${language}`).toBeDefined()
-        expect(countOf(profile!.systemPrompt, PLACEHOLDER), `${name}.${language}`).toBe(1)
-        bodies++
-      }
-      // 自检：下面这几个确实被查过（profilesUsing 的「不引用」不是因为档案不存在）
-      for (const name of [
-        'notebook',
-        'tab',
-        'explore',
-        'titler',
-        'permission-reviewer',
-        'knowledge-writer'
-      ]) {
-        const profile = profiles.find((p) => p.name === name)
-        expect(profile, `${name}.${language} 应当存在`).toBeDefined()
-        expect(profile!.systemPrompt, `${name}.${language}`).not.toContain(PLACEHOLDER)
-      }
-    }
-    expect(bodies).toBe(12)
-  })
-
-  it('TD-7 每份正文里占位符独占一行，紧跟在工作目录那一行之后，下一行也是列表项（环境清单中间）', () => {
-    let checked = 0
-    for (const language of LANGUAGES) {
-      const profiles = buildBuiltinProfiles({ language, readMd })
-      for (const name of OWNERS) {
-        const what = `${name}.${language}`
-        const lines = profiles.find((p) => p.name === name)!.systemPrompt.split('\n')
-        const at = lines.findIndex((line) => line.includes(PLACEHOLDER))
-        expect(at, what).toBeGreaterThan(0)
-        expect(lines[at], `${what}：占位符应当独占一行`).toBe(PLACEHOLDER)
-        expect(lines[at - 1].startsWith('- '), what).toBe(true)
-        expect(lines[at - 1], what).toContain('{{shuvix:workingDirectory}}')
-        expect(
-          lines[at + 1]?.startsWith('- '),
-          `${what}：下一行 ${JSON.stringify(lines[at + 1])}`
-        ).toBe(true)
+        expect(profile!.promptBlocks, `${name}.${language}`).toContain('environment')
         checked++
       }
+      // 自检：下面这几个确实被查过（profilesListing 的「不点」不是因为档案不存在）
+      for (const name of ['explore', 'titler', 'permission-reviewer', 'knowledge-writer']) {
+        const profile = profiles.find((p) => p.name === name)
+        expect(profile, `${name}.${language} 应当存在`).toBeDefined()
+        expect(profile!.promptBlocks, `${name}.${language}`).not.toContain('environment')
+      }
     }
-    expect(checked).toBe(12)
+    expect(checked).toBe(18)
   })
 })
 

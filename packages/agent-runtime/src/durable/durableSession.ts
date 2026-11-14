@@ -102,7 +102,7 @@ import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
+import type { PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
 import { AgentProjectorImpl, type AgentProjector } from './projection/agentProjector'
 import {
@@ -822,7 +822,7 @@ export interface DurableSessionDeps {
   resolveAgentConfig: (sessionId: string) => AgentConfig | Promise<AgentConfig>
   modelCatalog: ModelCatalog
   promptExtensions: PromptExtensions
-  promptVars: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  promptBlocks: (ctx: PromptBlocksCtx) => PromptBlockTexts | Promise<PromptBlockTexts>
   onLockChange?: (sessionId: string, locked: boolean) => void
   /** 传给 Harness.open 的那份 settings（`effectiveSettings` 原样交出） */
   settings: HarnessSettings
@@ -953,7 +953,7 @@ export class DurableSessionImpl implements DurableSession {
       resolveAgentConfig: deps.resolveAgentConfig,
       modelCatalog: deps.modelCatalog,
       promptExtensions: deps.promptExtensions,
-      promptVars: deps.promptVars,
+      promptBlocks: deps.promptBlocks,
       eventSink: deps.eventSink,
       ...(deps.onLockChange === undefined ? {} : { onLockChange: deps.onLockChange }),
       logger: deps.logger,
@@ -978,7 +978,7 @@ export class DurableSessionImpl implements DurableSession {
       toolHost: deps.toolHost,
       modelCatalog: deps.modelCatalog,
       promptExtensions: deps.promptExtensions,
-      promptVars: deps.promptVars,
+      promptBlocks: deps.promptBlocks,
       ...(deps.resolveProfileModel === undefined
         ? {}
         : { resolveProfileModel: deps.resolveProfileModel }),

@@ -182,8 +182,7 @@ const profileOf = (name: string): AgentProfile => ({
   description: '',
   systemPrompt: 'BODY',
   tools: ['session'],
-  instructionFiles: [],
-  projectAwareness: false,
+  promptBlocks: [],
   source: 'builtin',
   basePath: ''
 })

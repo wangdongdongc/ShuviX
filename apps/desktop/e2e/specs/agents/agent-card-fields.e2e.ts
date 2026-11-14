@@ -226,7 +226,7 @@ const E_READONLY_CARD = md(
   'shuvix: agent v1',
   'name: readonly-card-agent',
   'shuvix-tools: bash, read',
-  'shuvix-instruction-files: AGENTS.md',
+  'shuvix-prompt-blocks: environment',
   'description: AC-22 read-only host',
   '---',
   '',
@@ -420,17 +420,17 @@ afterAll(async () => {
 })
 
 describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
-  it('AC-1 缺键的 tools/model/thinking/instruction-files 都开槽，触发器给占位文案', async () => {
+  it('AC-1 缺键的 tools/model/thinking/prompt-blocks 都开槽，触发器给占位文案', async () => {
     const seed = byFile('a1-open.md')
     await openNotebook(seed)
     await card.waitReady()
 
-    // 四个可点选字段：tools（csv）/ model（select）/ thinking（select）/ instruction-files（csv 清单）
+    // 四个可点选字段：tools（csv）/ model（select）/ thinking（select）/ prompt-blocks（csv 清单）
     expect(await count('.cm-shuvix-fmcard-slot')).toBe(4)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-thinking'))).toBe(true)
-    expect(await app.main.eval<boolean>(rowHasSlot('shuvix-instruction-files'))).toBe(true)
+    expect(await app.main.eval<boolean>(rowHasSlot('shuvix-prompt-blocks'))).toBe(true)
 
     // 两个占位文案刻意不同：工具用卡片的「未设置」，模型用 ModelSelect 自己的「选择模型」
     expect(await card.triggerText('shuvix-tools')).toMatch(UNSET_RE)
@@ -458,7 +458,7 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
     await openNotebook(seed)
     await card.waitReady()
 
-    // 这两行退回只读；缺键的 thinking / instruction-files 照常开槽（同 AC-1），故总数 2
+    // 这两行退回只读；缺键的 thinking / prompt-blocks 照常开槽（同 AC-1），故总数 2
     expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(false)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(false)
@@ -475,7 +475,7 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
     await openNotebook(seed)
     await card.waitReady()
 
-    // model + thinking + instruction-files 三个缺键字段开槽，折行的 tools 退回只读
+    // model + thinking + prompt-blocks 三个缺键字段开槽，折行的 tools 退回只读
     expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(false)
@@ -987,7 +987,7 @@ describe('E 组 · 宿主差异', () => {
       )
       await fmCardPane(win).waitReady({ slots: 4 })
 
-      // 只读宿主渲染同一套控件（model / thinking / tools / instruction-files 四个槽位 + 文本输入框），
+      // 只读宿主渲染同一套控件（model / thinking / tools / prompt-blocks 四个槽位 + 文本输入框），
       // 只是全部禁用 —— 只读不换长相，只换可否交互
       expect(await winCount('.cm-shuvix-fmcard-slot')).toBe(4)
       expect(
@@ -995,17 +995,17 @@ describe('E 组 · 宿主差异', () => {
           `(${rowSelector('shuvix-tools')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
         )
       ).toContain('bash, read')
-      // 指令文件清单是普通逗号串输入（刻意不挂文件选择器：档案编辑期不知道将来的工作目录）
+      // 提示词块清单是普通逗号串输入（csv 键里只有 tools 挂候选项选择器）
       expect(
         await inWin<string>(
-          `(${rowSelector('shuvix-instruction-files')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
+          `(${rowSelector('shuvix-prompt-blocks')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
         )
       ).toBe('')
       expect(
         await inWin<string>(
-          `${rowSelector('shuvix-instruction-files')}?.querySelector('input')?.value ?? ''`
+          `${rowSelector('shuvix-prompt-blocks')}?.querySelector('input')?.value ?? ''`
         )
-      ).toBe('AGENTS.md')
+      ).toBe('environment')
       expect(
         await inWin<boolean>(
           `[...document.querySelectorAll('.cm-shuvix-fmcard-input')].every((i) => i.disabled)`

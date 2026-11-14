@@ -10,7 +10,7 @@
  *  - RL-1..9：改了什么、怎么提交、下一次请求看到的差异（最小差异：留下的原样、新的追加）；技能工具与
  *    货架原样（RL-5）；
  *  - RL-10..14：没锁 / 宿主不支持 / 模型用不了 / 宿主抛错 / MCP 连不上（只连这一次新要的服务器，F5）；
- *  - RL-15..17：重配从不动人设、不调变量表（日期之类的波动不重发）、旧锁照样不动人设；
+ *  - RL-15..17：重配从不动人设、不重新渲染提示词块（日期之类的波动不重发）、旧锁照样不动人设；
  *  - RL-18..21：运行中（下一次请求起生效、在途请求不受影响、被拿掉的工具 tool_unavailable、发送等重配）；
  *  - RL-22..29：合流、失败、取消（销毁 / 回退 / 关停取消，停下不取消 F3）、与创建 / 销毁串行；
  *  - RL-30..34：关了再开、重启、连续重配的差异形状；
@@ -27,9 +27,10 @@ import {
   DECL_DOCS,
   DECL_RESOLVE,
   E_W,
-  W_PROFILE_TOOLS,
+  markerPersona,
   scenarioConfig,
-  scenarioToolHost
+  scenarioToolHost,
+  W_PROFILE_TOOLS
 } from './support/agentConfig'
 import { recordPublications } from './support/commits'
 import { answer, callTool, held, requestTools, stalled } from './support/faux'
@@ -505,7 +506,7 @@ describe('lock · reconfigure: refusals and failures', () => {
 describe('lock · reconfigure: the persona', () => {
   it('RL-15 a reconfigure never touches the persona: even with a changed shelf on the host and a legacy skill entry in the selection, the commit carries pi.agent and the lock only, the frozen persona stays and the next delta has no persona section', async () => {
     const { t, config, session } = await lockedW()
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[0]!.systemPrompt).toBe(markerPersona('M1'))
     t.toolHost.options.skills = ['pdf']
     const recorder = recordPublications(session.harness)
     config.toolOverlay = [...OVERLAY, '-skill:builtin:drawing', 'mcp:new']
@@ -516,10 +517,10 @@ describe('lock · reconfigure: the persona', () => {
       expect.arrayContaining(['pi.agent#1', 'shuvix.session-state'])
     )
     expect(recorder.touching('shuvix.agent-state#1')).toEqual([])
-    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are M1')
+    expect(((await agentState(session)) as { persona: string }).persona).toBe(markerPersona('M1'))
 
     await sendNext(t, session)
-    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[1]!.systemPrompt).toBe(markerPersona('M1'))
     expect(await lastDelta(session)).toEqual({
       sections: [],
       toolsAdded: ['mcp__new__fresh'],
@@ -527,7 +528,7 @@ describe('lock · reconfigure: the persona', () => {
     })
   })
 
-  it('RL-16 environment drift (a var that changed since creation) is never resent: a reconfigure does not even call the vars', async () => {
+  it('RL-16 environment drift (a block value that changed since creation) is never resent: a reconfigure does not even ask for the blocks', async () => {
     const { t, config, session, scenario } = await lockedW()
     const { vars } = scenario
     expect(vars.state.calls).toBe(1)
@@ -535,9 +536,9 @@ describe('lock · reconfigure: the persona', () => {
     config.toolOverlay = []
     expect((await reconfigure(session)).applied).toBe(true)
     expect(vars.state.calls).toBe(1)
-    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are M1')
+    expect(((await agentState(session)) as { persona: string }).persona).toBe(markerPersona('M1'))
     await sendNext(t, session)
-    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[1]!.systemPrompt).toBe(markerPersona('M1'))
     const deltas = await systemDeltas(await session.currentConversation())
     expect(deltas.slice(1).some((delta) => delta.sections.includes('persona'))).toBe(false)
 
@@ -551,14 +552,14 @@ describe('lock · reconfigure: the persona', () => {
     delete config.toolOverlay
     const { t, session, scenario } = await lockedW({ config })
     expect(session.lock!.selection).toBeUndefined()
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[0]!.systemPrompt).toBe(markerPersona('M1'))
     const calls = scenario.vars.state.calls
     config.toolOverlay = ['mcp:new']
     expect((await reconfigure(session)).applied).toBe(true)
     expect(session.lock!.selection).toEqual(['mcp:new'])
     expect(session.lock!.skills).toEqual(['builtin:drawing', 'pdf'])
     expect(scenario.vars.state.calls).toBe(calls)
-    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are M1')
+    expect(((await agentState(session)) as { persona: string }).persona).toBe(markerPersona('M1'))
   })
 })
 

@@ -22,7 +22,7 @@
  *   TC-DOC7 已存在文件的大小写变体 → 认（只在大小写不敏感的文件系统上跑）
  *
  * sessionDocumentKind —— 这条会话的文档是哪种 ShuviX 文件（按**本会话**的承载项目判，同 agentHost 的
- * `{{shuvix:documentKind}}` 与知识库的隐式说明书）：
+ * `document` 提示词块与知识库的隐式说明书）：
  *   TC-DK1 `__hooks__` → hook、`__skills_builtin__` → skill；普通项目 / 会话行不存在 → null；只读本会话那一行
  *
  * 会话权限表的宿主胶水（HG-1）：

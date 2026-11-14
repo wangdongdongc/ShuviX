@@ -38,7 +38,7 @@ const BROKEN_MD = [
   '---',
   'shuvix: agent v1',
   'name: coding',
-  'shuvix-project-awareness: yes please',
+  'shuvix-prompt-blocks: true',
   '---',
   '',
   'Broken.',

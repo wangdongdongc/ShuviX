@@ -294,11 +294,11 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
     expect(referenced).toBeGreaterThan(0)
   })
 
-  it('BS-10 内置 agent 档案不再逐个点名技能（`shuvix-tools` 里没有 `skill:<name>`）；正文引入作图说明的档案都带技能工具 `skill`（三语全集）', () => {
+  it('BS-10 内置 agent 档案不再逐个点名技能（`shuvix-tools` 里没有 `skill:<name>`）；点了 `drawing` 提示词块的档案都带技能工具 `skill`（三语全集）', () => {
     // 2026-10-28：技能按主流用法走 —— 档案写 `skill` 就带上侧栏里启用着的全部技能（内置的在其中），
-    // 不再写 `skill:builtin:<name>`。与 BS-6 同一类死链换了个出口：作图说明（`{{shuvix:visualGuide}}` /
-    // `{{shuvix:visualCraft}}`）叫模型先加载 builtin:drawing，而宿主只在 agent 带着技能工具、货架上真有它时
-    // 才渲染那一段（agentHost 的 hasDrawingSkill）—— 档案引入了作图说明却没带 `skill`，那一段就静默消失，
+    // 不再写 `skill:builtin:<name>`。与 BS-6 同一类死链换了个出口：作图说明（`shuvix-prompt-blocks` 里的
+    // `drawing` 块）叫模型先加载 builtin:drawing，而宿主只在 agent 带着技能工具、货架上真有它时
+    // 才渲染那一段（agentHost 的 hasDrawingSkill）—— 档案点了作图块却没带 `skill`，那一段就静默消失，
     // agent 少了那本手艺。技能本身在不在场由 BS-6（片段的指路）与上面的三语齐全钉
     const files = readdirSync(BUILTIN_AGENTS_MD_DIR).filter((f) => f.endsWith('.md'))
     expect(files.length, `档案目录是空的：${BUILTIN_AGENTS_MD_DIR}`).toBeGreaterThan(0)
@@ -308,19 +308,23 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
       const text = readFileSync(join(BUILTIN_AGENTS_MD_DIR, file), 'utf8')
       const fm = /^---\n([\s\S]*?)\n---\n/.exec(text)
       expect(fm, `${file}: 没有 frontmatter`).not.toBeNull()
-      const declared = (parseYaml(fm![1]) as Record<string, unknown>)['shuvix-tools']
+      const frontmatter = parseYaml(fm![1]) as Record<string, unknown>
+      const declared = frontmatter['shuvix-tools']
+      const listed = frontmatter['shuvix-prompt-blocks']
+      const blocks =
+        typeof listed === 'string' ? listed.split(',').map((block) => block.trim()) : []
       const tools =
         typeof declared === 'string' ? declared.split(',').map((tool) => tool.trim()) : []
       expect(
         tools.filter((tool) => /^skill:/i.test(tool)),
         `${file} 还在用旧写法 skill:<name>`
       ).toEqual([])
-      if (/\{\{shuvix:visual(?:Guide|Craft)\}\}/.test(text)) {
-        expect(tools, `${file} 引入了作图说明却没带技能工具 skill`).toContain('skill')
+      if (blocks.includes('drawing')) {
+        expect(tools, `${file} 点了 drawing 块却没带技能工具 skill`).toContain('skill')
         relying++
       }
     }
-    expect(relying, '没有任何档案引入作图说明 —— 这条守护在空转').toBeGreaterThan(0)
+    expect(relying, '没有任何档案点 drawing 块 —— 这条守护在空转').toBeGreaterThan(0)
   })
 
   it.each(MATRIX)(

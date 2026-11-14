@@ -13,7 +13,7 @@
  *   - 改名以 frontmatter `name` 为准、文件路径不变；内置档案没有文件，openNote 不认它；
  *   - 落盘即生效：覆盖 work 后**下一个会话的系统提示词真的换人**，删除后复原。
  *
- * agent 侧与 policy 的差异都在这里：`{{shuvix:*}}` 会话变量必须原样留给 createAgent、
+ * agent 侧与 policy 的差异都在这里：会话相关的内容不在正文里（档案只用 `shuvix-prompt-blocks` 点名要哪几块）、
  * 工具名归一是读时投影（磁盘原文不被改写）、系统提示词可经 createAgentSession 直接断言。
  *
  * 断言全部走 IPC（window.api.subAgent.* / files.write）+ fs 直读，不碰任何 DOM。
@@ -78,13 +78,14 @@ const simpleAgent = (opts: {
     ''
   )
 
-/** 注入开关写成非布尔 → 解析器判整份非法（人读原因带键名 + rejected） */
+/** 提示词块清单写成 YAML 列表 → 解析器判整份非法（人读原因带键名 + rejected） */
 const invalidAgent = (name: string): string =>
   mdText(
     '---',
     'shuvix: agent v1',
     `name: ${name}`,
-    'shuvix-project-awareness: yes please',
+    'shuvix-prompt-blocks:',
+    '  - environment',
     '---',
     '',
     'Invalid body.',
@@ -165,7 +166,7 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 经笔记本编辑', (
     })
   })
 
-  it('AE-3 内置回写等价 md：自身经 shuvixMd.validate 判合法，会话变量原样、无自述标记', async () => {
+  it('AE-3 内置回写等价 md：自身经 shuvixMd.validate 判合法，带提示词块清单、正文里没有会话的值、无自述标记', async () => {
     const result = await getSource('work', 'builtin')
     expect('text' in result).toBe(true)
     const { text } = result as { text: string }
@@ -176,8 +177,13 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 经笔记本编辑', (
     )
     expect(validation).toEqual({ status: 'valid', messages: [] })
 
-    // 会话级变量在 createAgent 才替换 —— 副本里必须还是占位符，否则用户拿到的是别人的环境
-    expect(text).toContain('{{shuvix:workingDirectory}}')
+    // 会话相关的内容由宿主在创建 agent 时按块追加 —— 副本里只有清单，没有占位符，也没有别人的环境
+    expect(text).toContain(
+      'shuvix-prompt-blocks: drawing, environment, agents_md, claude_md, project_prompt'
+    )
+    expect(text).not.toContain('{{shuvix:')
+    expect(text).not.toContain('<environment>')
+    expect(text).not.toContain('Working directory')
     // 序列化键集是固定白名单：复制一份内置去改不会自称内置
     expect(text).not.toContain('shuvix-builtin')
   })
@@ -202,7 +208,7 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 经笔记本编辑', (
     const before = agentFiles()
     const result = await createSource(invalidAgent('ae5-invalid'))
     expect(result.success).toBe(false)
-    expect(result.error).toContain("'shuvix-project-awareness' must be a boolean")
+    expect(result.error).toContain("'shuvix-prompt-blocks' must be a comma-separated string")
     expect(result.error).toContain('the whole file is rejected')
     expect(agentFiles()).toEqual(before)
   })
@@ -246,7 +252,7 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 经笔记本编辑', (
     expect(readAgentFile('ae6-file.md')).toBe(invalid)
 
     const entry = (await listInvalid()).find((f) => f.fileName === 'ae6-file.md')
-    expect(entry?.error).toContain("'shuvix-project-awareness' must be a boolean")
+    expect(entry?.error).toContain("'shuvix-prompt-blocks' must be a comma-separated string")
     expect(entry?.error).toContain('the whole file is rejected')
     expect((await listAgents()).some((a) => a.name === 'ae6-dst')).toBe(false)
 

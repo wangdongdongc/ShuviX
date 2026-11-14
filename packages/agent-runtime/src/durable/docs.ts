@@ -90,12 +90,12 @@ export type AgentStateRecord = {
   profileName?: string
   /**
    * 创建 agent 时冻结的人设正文（P1-08，`prompt/persona.ts` 的 `freezePersona`）：档案正文经
-   * promptVars 替换后的那份。`undefined` = 还没冻结（agent 没创建）；`''` = 冻结了但正文为空。
+   * 加上它点名的提示词块的那份。`undefined` = 还没冻结（agent 没创建）；`''` = 冻结了但正文为空。
    */
   persona?: string
   /**
    * 冻结那一刻人设是照什么渲染的（根 agent 才写，`prompt/persona.ts` 的 `personaKeyOf`）：档案、正文、工具名单、
-   * 工作目录、指令文件清单。**只用来提醒**：系统提示词冻结之后从不自己重新渲染（2026-11-06，用户裁决
+   * 工作目录、提示词块清单。**只用来提醒**：系统提示词冻结之后从不自己重新渲染（2026-11-06，用户裁决
    * 「历史状态不变」），此刻的输入算出的摘要与它不同，就告诉用户「档案改过了」，由用户点重建。
    */
   personaKey?: string
@@ -110,8 +110,8 @@ export type AgentStateRecord = {
    * 不记的话，下一次上锁只选冻结了的那几段，这一段就从提示词里没了。
    */
   unfrozenSections?: string[]
-  /** 档案的指令文件清单（顺序即优先级），与人设一起冻结；指令文件段落按它解析 */
-  instructionFiles?: string[]
+  /** 档案的提示词块清单，与人设一起冻结；两个指令文件段落按它判断另一个在不在（内容相同只留一份） */
+  promptBlocks?: string[]
   /**
    * 活段落（指令文件 / 项目提示词 / 知识库 / bot）解析所对着的根会话 id，与人设一起冻结
    * （派生 agent 按根会话的项目上下文解析）。

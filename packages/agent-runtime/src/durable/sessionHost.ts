@@ -335,7 +335,7 @@ class SessionHostImpl implements SessionHost {
           resolveAgentConfig: this.deps.resolveAgentConfig,
           modelCatalog: this.deps.modelCatalog,
           promptExtensions: this.promptExtensions,
-          promptVars: this.deps.promptVars ?? (() => ({})),
+          promptBlocks: this.deps.promptBlocks ?? (() => ({})),
           ...(this.deps.onLockChange === undefined ? {} : { onLockChange: this.deps.onLockChange }),
           ...(this.deps.onDrivenSettled === undefined
             ? {}

@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { AgentStateDoc } from '../docs'
 import { backgroundContext as BG } from '../context'
 import { builtinExtension } from '../lock'
-import { DECL_DOCS, DECL_RESOLVE, scenarioConfig } from './support/agentConfig'
+import { DECL_DOCS, DECL_RESOLVE, markerPersona, scenarioConfig } from './support/agentConfig'
 import { answer, callTool, requestTools } from './support/faux'
 import { registerHostCleanup } from './support/host'
 import { scenarioBuiltins } from './support/toolHost'
@@ -127,15 +127,15 @@ describe('lock · stable while locked', () => {
     const scenario = await scenarioW({ config })
     const { t, vars } = scenario
     const session = await lockedTurn(scenario)
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[0]!.systemPrompt).toBe(markerPersona('M1'))
     vars.state.marker = 'M2'
     config.profile = { ...config.profile, systemPrompt: 'Something else entirely' }
     t.kit.queue(answer('second'))
     expect(await session.submitUser('u2')).toEqual({})
-    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
+    expect(t.kit.requests[1]!.systemPrompt).toBe(markerPersona('M1'))
     expect(
       (await session.harness.snapshot(AgentStateDoc, session.lock!.conversationId, BG))?.persona
-    ).toBe('You are M1')
+    ).toBe(markerPersona('M1'))
     const deltas = await systemDeltas(await session.currentConversation())
     expect(deltas.slice(1).some((delta) => delta.sections.includes('persona'))).toBe(false)
     expect(vars.state.calls).toBe(1)

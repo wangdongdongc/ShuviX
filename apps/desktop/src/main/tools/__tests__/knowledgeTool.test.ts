@@ -194,8 +194,7 @@ const adminProfile = (overrides: Partial<AgentProfile> = {}): AgentProfile => ({
   description: 'keeps the knowledge bases',
   systemPrompt: 'librarian prompt',
   tools: ['read', 'write', 'edit', 'move', 'delete', 'knowledge'],
-  instructionFiles: [],
-  projectAwareness: false,
+  promptBlocks: [],
   source: 'builtin',
   basePath: '',
   ...overrides

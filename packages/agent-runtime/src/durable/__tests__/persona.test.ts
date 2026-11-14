@@ -1,24 +1,27 @@
 /**
- * 人设冻结（P1-08）：创建 agent 时现算一次变量表、渲染档案正文（`renderProfileSystemPrompt` 同一口径），
+ * 人设冻结（P1-08）：创建 agent 时宿主现渲染一次提示词块、拼在档案正文后面（`composePersona` 同一口径），
  * 写进对话文档 `AgentStateDoc`；此后 persona 段落只读文档 —— 重启不重算、fork 拿 fork 点时的那份。
  *
  * 系统提示词冻结（2026-11-06，「历史状态不变」）：根 agent 冻结时记 `personaKey`（只用来提醒），重新上锁时
  * 存着的人设原样沿用 —— 不看摘要、不看档案名，只看种类：
- *   PKY-1  personaKeyOf 一个参数，同一输入同一摘要，以 `v1:` 开头
- *   PKY-2  种类 / 档案名 / 正文 / 增删非 mcp: 工具 / 工作目录 / 指令文件内容与次序各自得到不同的摘要
- *   PKY-3  会话 id、增删 mcp:、非 mcp: 换序、instructionFiles undefined 与 []、displayName / description → 同一摘要
+ *   PKY-1  personaKeyOf 一个参数，同一输入同一摘要，以 `v2:` 开头
+ *   PKY-2  种类 / 档案名 / 正文 / 增删非 mcp: 工具 / 工作目录 / 提示词块清单各自得到不同的摘要
+ *   PKY-3  会话 id、增删 mcp:、非 mcp: 换序、promptBlocks undefined 与 []、displayName / description → 同一摘要
+ *   PKY-11 提示词块清单按集合算：只是写法不同（先后、大小写、重复、不认识的名字）的两份档案得到同一摘要
  *   PKY-4  重复的工具名只算一次（集合，D9）
  *   PKY-5  reusableFrozenPrompt 只在三种情形拒绝：没存、没人设、种类不同（档案名、摘要不同照样沿用，D3）
  *   PKY-6  存着的摘要原样留着；没有摘要 → 记下这次的摘要
- *   PKY-7  人设原样（'' 也算）、指令文件是存着那份的副本（没有 → []）、身份按这次的输入
+ *   PKY-7  人设原样（'' 也算）、提示词块清单是存着那份的副本（存着的 [] 也算；没存 → 这次档案的清单，档案也没有 → []）、身份按这次的输入
  *   PKY-8  forgetFrozenPrompt 只删人设、摘要、段落
  *   PKY-9  freezeSections 存副本、整份替换、null 照存
  *   PKY-10 freezePersona 给了摘要就写、没给就删
  */
 import { getCurrentSystemPrompt } from '@earendil-works/pi-ai'
 import { ROOT_CONVERSATION_ID, SystemEntry } from '@earendil-works/pi-durable'
+import type { AgentPromptBlock } from '@shuvix/chat-protocol/agentPromptBlocks'
 import { describe, expect, it } from 'vitest'
-import { renderProfileSystemPrompt } from '../../agentProfile/promptVars'
+import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
+import { composePersona } from '../../agentProfile/promptBlocks'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc } from '../docs'
 import {
@@ -49,25 +52,31 @@ const INPUT: PersonaInput = {
   toolNames: ['read', 'knowledge'],
   profile: {
     name: 'work',
-    systemPrompt: '  Hello {{shuvix:name}}\n\n\n\n{{shuvix:empty}}\n\n\nBye  ',
-    instructionFiles: ['AGENTS.md', 'CLAUDE.md']
+    systemPrompt: '  Hello\n\n\n\nBye  ',
+    promptBlocks: ['environment', 'agents_md', 'claude_md']
   }
 }
 
+/** 宿主为 INPUT 渲染出的块，以及由此拼出的人设（正文只修剪首尾，块跟在后面） */
+const BLOCKS = { environment: 'X' }
+const PERSONA = 'Hello\n\n\n\nBye\n\n<environment>\nX\n</environment>'
+
 describe('persona rendering and freezing', () => {
-  it('P-01 renders with the old createAgent rule: substitute, collapse 3+ newlines, trim', () => {
-    const vars = { name: 'X', empty: '' }
-    expect(renderPersona(INPUT.profile, vars)).toBe('Hello X\n\nBye')
-    expect(renderPersona(INPUT.profile, vars)).toBe(renderProfileSystemPrompt(INPUT.profile, vars))
+  it('P-01 renders the body as written (trimmed only) followed by the listed blocks that have text', () => {
+    // drawing 没列在档案里、document 列了也没有正文 → 都不出；正文里的空行原样
+    const blocks = { environment: 'X', drawing: 'not listed' }
+    expect(renderPersona(INPUT.profile, blocks)).toBe(PERSONA)
+    expect(renderPersona(INPUT.profile, blocks)).toBe(composePersona(INPUT.profile, blocks))
+    expect(renderPersona(INPUT.profile, {})).toBe('Hello\n\n\n\nBye')
   })
 
-  it('P-02 computeFrozenAgentPrompt asks promptVars once with the agent context and packages the identity', async () => {
+  it('P-02 computeFrozenAgentPrompt asks promptBlocks once with the agent context and packages the identity', async () => {
     const contexts: unknown[] = []
     const frozen = await computeFrozenAgentPrompt(
       {
-        promptVars: async (ctx) => {
+        promptBlocks: async (ctx) => {
           contexts.push(ctx)
-          return { name: 'X', empty: '' }
+          return BLOCKS
         }
       },
       INPUT
@@ -86,20 +95,20 @@ describe('persona rendering and freezing', () => {
       kind: 'root',
       profileName: 'work',
       rootSessionId: 's1',
-      persona: 'Hello X\n\nBye',
-      instructionFiles: ['AGENTS.md', 'CLAUDE.md']
+      persona: PERSONA,
+      promptBlocks: ['environment', 'agents_md', 'claude_md']
     })
     // 冻结的是副本：档案对象之后被改不影响
-    expect(frozen.instructionFiles).not.toBe(INPUT.profile.instructionFiles)
+    expect(frozen.promptBlocks).not.toBe(INPUT.profile.promptBlocks)
   })
 
   it('ENV-12 a spawned input forwards rootSessionId too: sessionId = agentId, cwd "", rootSessionId = the root session', async () => {
     const contexts: unknown[] = []
     await computeFrozenAgentPrompt(
       {
-        promptVars: (ctx) => {
+        promptBlocks: (ctx) => {
           contexts.push(ctx)
-          return { name: 'X', empty: '' }
+          return BLOCKS
         }
       },
       { ...INPUT, kind: 'spawned', sessionId: 'agent-1', rootSessionId: 's1', cwd: '' }
@@ -115,16 +124,15 @@ describe('persona rendering and freezing', () => {
     ])
   })
 
-  it('P-03 an unknown placeholder is kept verbatim and warned about once, at the freeze only', async () => {
+  it('P-03 a leftover {{shuvix:*}} in the body is plain text: kept verbatim, nothing substituted, no warning', async () => {
     const warnings: string[] = []
     const logger = { info: () => {}, warn: (m: string) => warnings.push(m), error: () => {} }
     const frozen = await computeFrozenAgentPrompt(
-      { promptVars: () => ({ name: 'X', empty: '' }), logger },
+      { promptBlocks: () => ({}), logger },
       { ...INPUT, profile: { ...INPUT.profile, systemPrompt: 'Hi {{shuvix:nope}}.' } }
     )
     expect(frozen.persona).toBe('Hi {{shuvix:nope}}.')
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('{{shuvix:nope}}')
+    expect(warnings).toHaveLength(0)
 
     const t = await makeHost()
     const prompt = createPromptExtensions({})
@@ -135,7 +143,7 @@ describe('persona rendering and freezing', () => {
     t.kit.queue(answer('a1'), answer('a2'))
     await session.submitUser('u1')
     await session.submitUser('u2')
-    expect(warnings).toHaveLength(1)
+    expect(warnings).toHaveLength(0)
     expect(getCurrentSystemPrompt(t.kit.requests[1]!.messages)).toBe('Hi {{shuvix:nope}}.')
   })
 
@@ -150,7 +158,7 @@ describe('persona rendering and freezing', () => {
         freezePersona(
           tx,
           ROOT_CONVERSATION_ID,
-          frozenPrompt({ persona: 'P1', rootSessionId: 'root-1', instructionFiles: ['A.md'] })
+          frozenPrompt({ persona: 'P1', rootSessionId: 'root-1', promptBlocks: ['claude_md'] })
         ),
       BG
     )
@@ -159,18 +167,18 @@ describe('persona rendering and freezing', () => {
       profileName: 'work',
       rootSessionId: 'root-1',
       persona: 'P1',
-      instructionFiles: ['A.md'],
+      promptBlocks: ['claude_md'],
       lastAnnouncedDate: '2026-10-01'
     })
     expect(await frozenPersonaOf(session.harness, ROOT_CONVERSATION_ID, BG)).toBe('P1')
   })
 
   it('P-05 survives a restart with interrupted work on SQLite (option A keeps the lock): same prompt, no re-render, no new pi.system', async () => {
-    let promptVarsCalls = 0
+    let promptBlocksCalls = 0
     const host = {
-      promptVars: () => {
-        promptVarsCalls++
-        return { name: 'X', empty: '' }
+      promptBlocks: () => {
+        promptBlocksCalls++
+        return BLOCKS
       }
     }
     const t = await makeHost()
@@ -193,8 +201,8 @@ describe('persona rendering and freezing', () => {
       .then((conversation) => conversation.configure({ model: t2.kit.model }, BG))
     t2.kit.queue(answer('a2'))
     expect(await reopened.continue()).toEqual({})
-    expect(promptVarsCalls).toBe(1)
-    expect(getCurrentSystemPrompt(t2.kit.requests[0]!.messages)).toBe('Hello X\n\nBye')
+    expect(promptBlocksCalls).toBe(1)
+    expect(getCurrentSystemPrompt(t2.kit.requests[0]!.messages)).toBe(PERSONA)
     const systems = (await allEntries(await reopened.currentConversation())).filter((entry) =>
       SystemEntry.is(entry)
     )
@@ -242,22 +250,22 @@ function storedFor(input: PersonaInput, key: string): AgentStateRecord {
     profileName: input.profile.name,
     rootSessionId: 'source-session',
     persona: 'Frozen text',
-    instructionFiles: ['AGENTS.md'],
+    promptBlocks: ['agents_md'],
     personaKey: key,
     sections: { project_prompt: '<project_prompt>\nX\n</project_prompt>' }
   }
 }
 
 describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
-  it('PKY-1 personaKeyOf takes one argument, is stable for the same input and starts with v1:', () => {
+  it('PKY-1 personaKeyOf takes one argument, is stable for the same input and starts with v2:', () => {
     const base = personaKeyOf(INPUT)
-    expect(base).toMatch(/^v1:/)
+    expect(base).toMatch(/^v2:/)
     expect(personaKeyOf(INPUT)).toBe(base)
     expect(personaKeyOf(variant({}))).toBe(base)
     expect(personaKeyOf.length).toBe(1)
   })
 
-  it('PKY-2 each intentional input gives its own key: kind, profile name, body, a non-mcp tool added or removed, cwd, the instruction-file content and order', () => {
+  it('PKY-2 each intentional input gives its own key: kind, profile name, body, a non-mcp tool added or removed, cwd, the prompt-block list', () => {
     const base = personaKeyOf(INPUT)
     const changed: [string, string][] = [
       ['kind', personaKeyOf(variant({ kind: 'spawned' }))],
@@ -267,23 +275,27 @@ describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
       ['tool removed', personaKeyOf(variant({ toolNames: ['read'] }))],
       ['cwd', personaKeyOf(variant({ cwd: '/work/other' }))],
       [
-        'instructionFiles content',
-        personaKeyOf(variant({ profile: { instructionFiles: ['AGENTS.md'] } }))
+        'promptBlocks: one fewer',
+        personaKeyOf(variant({ profile: { promptBlocks: ['environment', 'agents_md'] } }))
       ],
       [
-        'instructionFiles order',
-        personaKeyOf(variant({ profile: { instructionFiles: ['CLAUDE.md', 'AGENTS.md'] } }))
+        'promptBlocks: one more',
+        personaKeyOf(
+          variant({
+            profile: { promptBlocks: ['drawing', 'environment', 'agents_md', 'claude_md'] }
+          })
+        )
       ]
     ]
     for (const [field, key] of changed) {
-      expect(key, field).toMatch(/^v1:/)
+      expect(key, field).toMatch(/^v2:/)
       expect(key, field).not.toBe(base)
     }
     // 两两不同
     expect(new Set(changed.map(([, key]) => key)).size).toBe(changed.length)
   })
 
-  it('PKY-3 the same key for: other session ids, mcp: names added or removed, non-mcp names reordered, instructionFiles undefined vs [], displayName / description', () => {
+  it('PKY-3 the same key for: other session ids, mcp: names added or removed, non-mcp names reordered, promptBlocks undefined vs [], displayName / description', () => {
     const base = personaKeyOf(INPUT)
     expect(personaKeyOf(variant({ sessionId: 'fork-1', rootSessionId: 'fork-1' }))).toBe(base)
     expect(personaKeyOf(variant({ toolNames: ['read', 'mcp:ctx', 'knowledge'] }))).toBe(base)
@@ -292,8 +304,8 @@ describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
     ).toBe(base)
     // 非 mcp: 名单按集合算（D9）：换序不变
     expect(personaKeyOf(variant({ toolNames: ['knowledge', 'read'] }))).toBe(base)
-    expect(personaKeyOf(variant({ profile: { instructionFiles: undefined } }))).toBe(
-      personaKeyOf(variant({ profile: { instructionFiles: [] } }))
+    expect(personaKeyOf(variant({ profile: { promptBlocks: undefined } }))).toBe(
+      personaKeyOf(variant({ profile: { promptBlocks: [] } }))
     )
     expect(
       personaKeyOf(variant({ profile: { displayName: 'Another name', description: 'Another' } }))
@@ -342,7 +354,7 @@ describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
     expect(reusableFrozenPrompt(noKey, INPUT, current)?.personaKey).toBe(current)
   })
 
-  it('PKY-7 reuse hands back the persona verbatim (an empty one counts), a copy of the stored instruction files ([] if absent) and the identity of this input', () => {
+  it('PKY-7 reuse hands back the persona verbatim (an empty one counts), a copy of the stored prompt-block list (a stored [] wins; absent → the profile’s list of this input, [] when it has none) and the identity of this input', () => {
     const input = variant({
       sessionId: 'fork-1',
       rootSessionId: 'fork-1',
@@ -356,14 +368,52 @@ describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
       profileName: 'chat',
       rootSessionId: 'fork-1',
       persona: 'Frozen text',
-      instructionFiles: ['AGENTS.md'],
+      promptBlocks: ['agents_md'],
       personaKey: key
     })
-    // 指令文件是存着的那份（不是这次档案的 AGENTS.md, CLAUDE.md），而且是副本
-    expect(reused!.instructionFiles).not.toBe(stored.instructionFiles)
+    // 清单是存着的那份（不是这次档案的 environment, agents_md, claude_md），而且是副本
+    expect(reused!.promptBlocks).not.toBe(stored.promptBlocks)
     expect(reusableFrozenPrompt({ ...stored, persona: '' }, input, key)?.persona).toBe('')
-    const { instructionFiles: _files, ...noFiles } = stored
-    expect(reusableFrozenPrompt(noFiles, input, key)?.instructionFiles).toEqual([])
+    // 存着的清单是空的也算数：不回退到档案
+    expect(reusableFrozenPrompt({ ...stored, promptBlocks: [] }, input, key)?.promptBlocks).toEqual(
+      []
+    )
+    // 旧记录没存清单（2026-11-13 之前）→ 这次档案的清单（两个指令文件的去重才判得对），而且是副本
+    const { promptBlocks: _blocks, ...noBlocks } = stored
+    const fallback = reusableFrozenPrompt(noBlocks, input, key)!.promptBlocks
+    expect(fallback).toEqual(['environment', 'agents_md', 'claude_md'])
+    expect(fallback).toEqual(input.profile.promptBlocks)
+    expect(fallback).not.toBe(input.profile.promptBlocks)
+    // 档案也没有清单 → []
+    const bare = variant({ profile: { promptBlocks: undefined } })
+    expect(reusableFrozenPrompt(noBlocks, bare, key)?.promptBlocks).toEqual([])
+  })
+
+  it('PKY-11 the prompt-block list counts as a set: two files that differ only in how the list is written (order, case, a duplicate, an unknown name) freeze to the same key; dropping a block changes it', () => {
+    const file = (blocks: string): string =>
+      [
+        '---',
+        'name: pk',
+        'shuvix-tools: read, bash',
+        `shuvix-prompt-blocks: ${blocks}`,
+        '---',
+        'Same body.'
+      ].join('\n')
+    const keyOfFile = (blocks: string): string => {
+      const parsed = parseAgentDefinitionFile(file(blocks), 'pk')!
+      return personaKeyOf({ kind: 'root', cwd: '/w', toolNames: parsed.tools, profile: parsed })
+    }
+    const first = keyOfFile('environment, drawing, agents_md')
+    expect(keyOfFile('AGENTS_MD, Drawing, environment, drawing, nonsense')).toBe(first)
+    expect(keyOfFile('environment, drawing')).not.toBe(first)
+
+    // 不经解析器、手工拼的档案也一样：先后与重复不算改动
+    const hand = (promptBlocks: AgentPromptBlock[]): string =>
+      personaKeyOf(variant({ profile: { promptBlocks } }))
+    expect(hand(['drawing', 'environment'])).toBe(hand(['environment', 'drawing']))
+    expect(hand(['environment', 'drawing', 'environment'])).toBe(hand(['drawing', 'environment']))
+    expect(hand(['claude_md', 'agents_md', 'environment'])).toBe(personaKeyOf(INPUT))
+    expect(hand(['drawing', 'environment'])).not.toBe(hand(['drawing']))
   })
 
   it('PKY-8 forgetFrozenPrompt deletes persona, personaKey and sections only', async () => {
@@ -376,7 +426,7 @@ describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
       await freezePersona(
         tx,
         ROOT_CONVERSATION_ID,
-        frozenPrompt({ persona: 'P1', instructionFiles: ['A.md'], personaKey: 'v1:a' })
+        frozenPrompt({ persona: 'P1', promptBlocks: ['claude_md'], personaKey: 'v1:a' })
       )
       await freezeSections(tx, ROOT_CONVERSATION_ID, { project_prompt: 'X', bot_profile: null })
     }, BG)
@@ -385,7 +435,7 @@ describe('frozen system prompt: persona key and reuse (2026-11-06)', () => {
       kind: 'root',
       profileName: 'work',
       rootSessionId: 's1',
-      instructionFiles: ['A.md'],
+      promptBlocks: ['claude_md'],
       lastAnnouncedDate: '2026-11-05'
     })
   })

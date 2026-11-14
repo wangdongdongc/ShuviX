@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { AGENT_PROMPT_BLOCKS } from '@shuvix/chat-protocol/agentPromptBlocks'
 import { SHUVIX_MD_DESCRIPTORS } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import {
@@ -30,8 +31,7 @@ describe('parseAgentDefinitionFile', () => {
     expect(parsed!.tools).toEqual(['read', 'grep', 'glob', 'bash'])
     expect(parsed!.systemPrompt).toBe('You are a senior code reviewer.')
     // 新字段缺省
-    expect(parsed!.instructionFiles).toEqual([])
-    expect(parsed!.projectAwareness).toBe(false)
+    expect(parsed!.promptBlocks).toEqual([])
   })
 
   it('解析 shuvix- 前缀字段与 mcp:/skill/agent 工具语法', () => {
@@ -41,8 +41,7 @@ describe('parseAgentDefinitionFile', () => {
       'shuvix-displayName: 小助手',
       'description: does things',
       'shuvix-tools: read, mcp:Context7, Skill, Agent',
-      'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
-      'shuvix-project-awareness: true',
+      'shuvix-prompt-blocks: agents_md, claude_md, project_prompt',
       '---',
       'prompt body'
     ].join('\n')
@@ -51,8 +50,7 @@ describe('parseAgentDefinitionFile', () => {
     expect(parsed.displayName).toBe('小助手')
     // mcp: 前缀归小写、余部大小写保留；其余全小写（`Skill` → skill，旧文件的 `Agent` 归一为 agent）
     expect(parsed.tools).toEqual(['read', 'mcp:Context7', 'skill', 'agent'])
-    expect(parsed.instructionFiles).toEqual(['AGENTS.md', 'CLAUDE.md'])
-    expect(parsed.projectAwareness).toBe(true)
+    expect(parsed.promptBlocks).toEqual(['agents_md', 'claude_md', 'project_prompt'])
   })
 
   it('旧写法 skill:<name> 读作 skill（技能不再按档案点名）：前缀大小写不论，多个与 skill 并存都去重成一个、占第一次出现的位置', () => {
@@ -107,48 +105,136 @@ describe('parseAgentDefinitionFile', () => {
     expect(parseAgentDefinitionFile('---\nshuvix-user-words: [a]\n---\nbody', 'x')).toBeNull()
   })
 
-  it('注入开关(project-awareness)非布尔 → 文件非法', () => {
-    expect(
-      parseAgentDefinitionFile('---\nshuvix-project-awareness: [a]\n---\nbody', 'x')
-    ).toBeNull()
-    expect(
-      parseAgentDefinitionFile('---\nshuvix-project-awareness: sure\n---\nbody', 'x')
-    ).toBeNull()
-  })
-
-  it('shuvix-instruction-files 改制前的布尔写法 → 文件非法（拒绝理由指向文件清单）', () => {
+  it('shuvix-prompt-blocks 非字符串（布尔 / YAML 数组）→ 文件非法（拒绝理由指向逗号分隔写法）', () => {
     const warnings: string[] = []
     expect(
-      parseAgentDefinitionFile('---\nshuvix-instruction-files: true\n---\nbody', 'x', (m) =>
+      parseAgentDefinitionFile('---\nshuvix-prompt-blocks: true\n---\nbody', 'x', (m) =>
         warnings.push(m)
       )
     ).toBeNull()
-    expect(warnings.join('\n')).toContain('comma-separated file list')
-    expect(
-      parseAgentDefinitionFile('---\nshuvix-instruction-files: false\n---\nbody', 'x')
-    ).toBeNull()
+    expect(warnings.join('\n')).toContain('comma-separated string')
+    expect(parseAgentDefinitionFile('---\nshuvix-prompt-blocks: false\n---\nbody', 'x')).toBeNull()
     // YAML 数组写法同样拒绝（与 shuvix-tools 同策：逗号分隔字符串是唯一合法写法）
     expect(
-      parseAgentDefinitionFile('---\nshuvix-instruction-files: [AGENTS.md]\n---\nbody', 'x')
+      parseAgentDefinitionFile('---\nshuvix-prompt-blocks: [environment]\n---\nbody', 'x')
     ).toBeNull()
   })
 
-  it('shuvix-instruction-files 条目归一：去重保序、剥 ./、反斜杠转正斜杠', () => {
+  it('shuvix-prompt-blocks 是集合：去重、按词表次序（与文件里的先后无关）、大小写不敏感', () => {
     const md =
-      '---\nshuvix-instruction-files: ./AGENTS.md, AGENTS.md, docs\\house.md, CLAUDE.md\n---\nbody'
-    expect(parseAgentDefinitionFile(md, 'x')!.instructionFiles).toEqual([
-      'AGENTS.md',
-      'docs/house.md',
-      'CLAUDE.md'
+      '---\nshuvix-prompt-blocks: project_prompt, Environment, CLAUDE_MD, environment, document\n---\nbody'
+    expect(parseAgentDefinitionFile(md, 'x')!.promptBlocks).toEqual([
+      'document',
+      'environment',
+      'claude_md',
+      'project_prompt'
     ])
+    // 省略 / 留空 = 一块都不追加
+    expect(
+      parseAgentDefinitionFile('---\nshuvix-prompt-blocks:\n---\nbody', 'x')!.promptBlocks
+    ).toEqual([])
   })
 
-  it('shuvix-instruction-files 越出工作目录（绝对路径 / ..）→ 文件非法', () => {
-    for (const entry of ['/etc/passwd', 'C:/secrets.md', '../outside.md', 'a/../../b.md']) {
+  it('shuvix-prompt-blocks 里不认识的名字：忽略并各发一条软提示，文件照常可用', () => {
+    const warnings: string[] = []
+    const parsed = parseAgentDefinitionFile(
+      '---\nname: b\nshuvix-prompt-blocks: environment, widgets, AGENTS.md\n---\nbody',
+      'x',
+      (m) => warnings.push(m)
+    )
+    expect(parsed).not.toBeNull()
+    expect(parsed!.promptBlocks).toEqual(['environment'])
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toContain("unknown prompt block 'widgets'")
+    expect(warnings[0]).toContain("'shuvix-prompt-blocks'")
+    expect(warnings[1]).toContain("'agents.md'")
+    for (const message of warnings) expect(message).not.toContain('the whole file is rejected')
+  })
+
+  it('DF-PB-1 shuvix-prompt-blocks 的其余取值：数字 / 映射也是「非字符串」→ 文件非法；空串 / 只有逗号 / YAML null → 空清单且零提示；空项不算不认识的名字', () => {
+    for (const value of ['123', '{a: 1}']) {
+      const warnings: string[] = []
       expect(
-        parseAgentDefinitionFile(`---\nshuvix-instruction-files: ${entry}\n---\nbody`, 'x'),
-        entry
+        parseAgentDefinitionFile(`---\nshuvix-prompt-blocks: ${value}\n---\nbody`, 'x', (m) =>
+          warnings.push(m)
+        ),
+        value
       ).toBeNull()
+      expect(warnings, value).toHaveLength(1)
+      expect(warnings[0], value).toContain("'shuvix-prompt-blocks'")
+      expect(warnings[0], value).toContain('comma-separated string')
+    }
+    for (const value of ['""', '" , ,, "', '~']) {
+      const warnings: string[] = []
+      const parsed = parseAgentDefinitionFile(
+        `---\nshuvix-prompt-blocks: ${value}\n---\nbody`,
+        'x',
+        (m) => warnings.push(m)
+      )
+      expect(parsed, value).not.toBeNull()
+      expect(parsed!.promptBlocks, value).toEqual([])
+      expect(warnings, value).toEqual([])
+    }
+    const warnings: string[] = []
+    const parsed = parseAgentDefinitionFile(
+      '---\nshuvix-prompt-blocks: "environment,, drawing ,"\n---\nbody',
+      'x',
+      (m) => warnings.push(m)
+    )
+    expect(parsed!.promptBlocks).toEqual(['drawing', 'environment'])
+    expect(warnings).toEqual([])
+  })
+
+  it('DF-PB-2 差一点的名字就是不认识的名字（agents-md / extensions / persona），写回之后不再出现', () => {
+    const warnings: string[] = []
+    const parsed = parseAgentDefinitionFile(
+      '---\nname: b\nshuvix-prompt-blocks: agents-md, extensions, Drawing, drawing, persona\n---\nbody',
+      'x',
+      (m) => warnings.push(m)
+    )
+    expect(parsed).not.toBeNull()
+    expect(parsed!.promptBlocks).toEqual(['drawing'])
+    expect(warnings).toHaveLength(3)
+    const unknown = ['agents-md', 'extensions', 'persona']
+    unknown.forEach((name, index) => {
+      expect(warnings[index]).toContain(`unknown prompt block '${name}'`)
+      // 提示里列的是六个词表名；`extensions` 不能点名（它跟着 tool_search 走），不在其中
+      expect(warnings[index]).toContain(`(known: ${AGENT_PROMPT_BLOCKS.join(', ')})`)
+    })
+    expect(AGENT_PROMPT_BLOCKS).toHaveLength(6)
+    expect(AGENT_PROMPT_BLOCKS).not.toContain('extensions')
+
+    const out = serializeAgentDefinitionFile(parsed!)
+    expect(out).toContain('shuvix-prompt-blocks: drawing\n')
+    for (const name of unknown) expect(out, name).not.toContain(name)
+    const again: string[] = []
+    const reparsed = parseAgentDefinitionFile(out, 'x', (m) => again.push(m))
+    expect(reparsed!.promptBlocks).toEqual(['drawing'])
+    expect(again).toEqual([])
+  })
+
+  it('shuvix-instruction-files 与 shuvix-project-awareness 都已退役：只是未知键，不报错、不进结果、不回写', () => {
+    // 2026-11-13 提示词块取代了这两个键（无迁移）：老文件里的这两行按未知键忽略，写成什么值都不再是拒绝理由，
+    // 也不会被悄悄换算成块
+    for (const raw of [
+      'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
+      'shuvix-instruction-files: true',
+      'shuvix-instruction-files: ../outside.md',
+      'shuvix-project-awareness: true',
+      'shuvix-project-awareness: sure'
+    ]) {
+      const warnings: string[] = []
+      const parsed = parseAgentDefinitionFile(`---\nname: x\n${raw}\n---\nbody`, 'x', (m) =>
+        warnings.push(m)
+      )
+      expect(parsed, raw).not.toBeNull()
+      expect(warnings, raw).toEqual([])
+      expect(parsed!.promptBlocks, raw).toEqual([])
+      expect(parsed, raw).not.toHaveProperty('instructionFiles')
+      expect(parsed, raw).not.toHaveProperty('projectAwareness')
+      const out = serializeAgentDefinitionFile(parsed!)
+      expect(out, raw).not.toContain('shuvix-instruction-files')
+      expect(out, raw).not.toContain('shuvix-project-awareness')
     }
   })
 
@@ -187,7 +273,7 @@ describe('parseAgentDefinitionFile', () => {
     }
   })
 
-  it('正文里的 {{shuvix:*}} 占位符原样保留（替换发生在 createAgent，解析层不动）', () => {
+  it('正文里的 {{shuvix:*}} 原样保留（正文是纯文字：没有任何一层再替换它）', () => {
     const md = '---\nname: vars\n---\nWorking dir: {{shuvix:workingDirectory}}'
     expect(parseAgentDefinitionFile(md, 'x')!.systemPrompt).toBe(
       'Working dir: {{shuvix:workingDirectory}}'
@@ -293,24 +379,25 @@ describe('serializeAgentDefinitionFile', () => {
       description: 'Expert reviewer: use after writing code. Handles edge-cases, too.',
       systemPrompt: 'You are a reviewer.\n\n- be thorough\n- cite lines',
       tools: ['read', 'grep', 'mcp:Context7', 'skill', 'agent'],
-      instructionFiles: ['AGENTS.md', 'docs/house-rules.md'],
-      projectAwareness: true
-    }
+      promptBlocks: ['drawing', 'environment', 'agents_md', 'project_prompt']
+    } satisfies ParsedAgentFile
     const md = serializeAgentDefinitionFile(def)
-    expect(md).toContain('shuvix-instruction-files: AGENTS.md, docs/house-rules.md')
-    expect(md).toContain('shuvix-project-awareness: true')
+    expect(md).toContain('shuvix-prompt-blocks: drawing, environment, agents_md, project_prompt')
     expect(parseAgentDefinitionFile(md, 'other-name')).toEqual(def)
+    // 写出时也按词表次序（清单是集合）
+    expect(
+      serializeAgentDefinitionFile({ ...def, promptBlocks: ['project_prompt', 'drawing'] })
+    ).toContain('shuvix-prompt-blocks: drawing, project_prompt\n')
   })
 
-  it('省略规则：displayName 等于 name、空 description/tools、空指令清单均不写 key', () => {
+  it('省略规则：displayName 等于 name、空 description/tools、空的提示词块清单均不写 key', () => {
     const md = serializeAgentDefinitionFile({
       name: 'minimal',
       displayName: 'minimal',
       description: '',
       systemPrompt: 'body',
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     })
     expect(md).toBe('---\nshuvix: agent v1\nname: minimal\n---\n\nbody\n')
     expect(parseAgentDefinitionFile(md, 'x')).toEqual({
@@ -319,8 +406,7 @@ describe('serializeAgentDefinitionFile', () => {
       description: '',
       systemPrompt: 'body',
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     })
   })
 
@@ -331,8 +417,7 @@ describe('serializeAgentDefinitionFile', () => {
       description: '',
       systemPrompt: 'body',
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     }
     expect(serializeAgentDefinitionFile({ ...base, model: 'openai/gpt-4o' })).toContain(
       'shuvix-model: openai/gpt-4o'
@@ -342,7 +427,7 @@ describe('serializeAgentDefinitionFile', () => {
     expect(serializeAgentDefinitionFile({ ...base, model: '   ' })).not.toContain('shuvix-model')
   })
 
-  it('key 顺序固定：shuvix → name → description → tools → model → thinking → displayName → 注入开关', () => {
+  it('key 顺序固定：shuvix → name → description → tools → model → thinking → displayName → 提示词块', () => {
     const md = serializeAgentDefinitionFile({
       name: 'ordered',
       displayName: '显示名',
@@ -351,8 +436,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: ['read'],
       model: 'openai/gpt-4o',
       thinkingLevel: 'low',
-      instructionFiles: ['AGENTS.md'],
-      projectAwareness: true
+      promptBlocks: ['agents_md', 'project_prompt']
     })
     const keys = md
       .split('\n---')[0]
@@ -367,8 +451,7 @@ describe('serializeAgentDefinitionFile', () => {
       'shuvix-model',
       'shuvix-thinking',
       'shuvix-displayName',
-      'shuvix-instruction-files',
-      'shuvix-project-awareness'
+      'shuvix-prompt-blocks'
     ])
   })
 
@@ -384,9 +467,8 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'You are a helper.',
       tools: ['read', 'grep'],
       model,
-      instructionFiles: ['AGENTS.md'],
-      projectAwareness: false
-    }
+      promptBlocks: ['agents_md', 'project_prompt']
+    } satisfies ParsedAgentFile
     expect(parseAgentDefinitionFile(serializeAgentDefinitionFile(def), 'other-name')).toEqual(def)
   })
 
@@ -402,8 +484,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: [],
       model,
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     })
     expect(parseAgentDefinitionFile(md, 'x')!.model).toBe(model)
   })
@@ -415,8 +496,7 @@ describe('serializeAgentDefinitionFile', () => {
       description: '',
       systemPrompt: 'body',
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     })
     expect(md.split('\n')[1]).toBe(`${AGENT_FILE_MARKER_KEY}: ${AGENT_FILE_MARKER}`)
   })
@@ -429,8 +509,7 @@ describe('serializeAgentDefinitionFile', () => {
       description: 'old file',
       systemPrompt: 'body',
       tools: ['read'],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     })
   })
 
@@ -442,8 +521,7 @@ describe('serializeAgentDefinitionFile', () => {
       description,
       systemPrompt: '',
       tools: [],
-      instructionFiles: [],
-      projectAwareness: false
+      promptBlocks: []
     })
     const parsed = parseAgentDefinitionFile(md, 'x')
     expect(parsed).not.toBeNull()
@@ -529,8 +607,7 @@ describe('TK —— shuvix-thinking 的取值纪律', () => {
     description: '',
     systemPrompt: 'body',
     tools: [],
-    instructionFiles: [],
-    projectAwareness: false
+    promptBlocks: []
   }
 
   it('TK-1 每一档逐一可读（循环共享常量）：原样读出、零诊断 —— 裸写 off 也读成字符串', () => {
@@ -670,20 +747,26 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
     expect(msg).toContain('<provider>/<modelId>')
   })
 
-  it('WU-6 shuvix-instruction-files 非字符串：点名该键并指路文件清单', () => {
-    // 改制前的写法 `true` 是最真实的误写 —— 诊断必须说清「改列文件名」，否则用户
-    // 只看到一份档案凭空消失
-    const msg = soleWarn('---\nname: b\nshuvix-instruction-files: true\n---\nbody')
-    expect(msg).toContain("'shuvix-instruction-files'")
-    expect(msg).toContain('comma-separated file list')
-    expect(msg).toContain('the boolean form is gone')
+  it('WU-6 shuvix-prompt-blocks 非字符串：点名该键并给出逗号分隔写法', () => {
+    const msg = soleWarn('---\nname: b\nshuvix-prompt-blocks: [environment, drawing]\n---\nbody')
+    expect(msg).toContain("agent 'b'")
+    expect(msg).toContain("'shuvix-prompt-blocks'")
+    expect(msg).toContain('must be a comma-separated string')
+    expect(msg).toContain('"environment, drawing"')
   })
 
-  it('WU-14 shuvix-instruction-files 条目越界：点名该键并回显出问题的那一条', () => {
-    const msg = soleWarn('---\nname: b\nshuvix-instruction-files: ../outside.md\n---\nbody')
-    expect(msg).toContain("'shuvix-instruction-files'")
-    expect(msg).toContain('../outside.md')
-    expect(msg).toContain('relative path')
+  it('WU-14 shuvix-prompt-blocks 里不认识的名字：软提示点名该键、回显那个名字并列出词表；文件不被拒绝', () => {
+    const { result, messages } = parseWithWarn(
+      '---\nname: b\nshuvix-prompt-blocks: environment, enviroment\n---\nbody'
+    )
+    expect(result).not.toBeNull()
+    expect(result!.promptBlocks).toEqual(['environment'])
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain("agent 'b'")
+    expect(messages[0]).toContain("'shuvix-prompt-blocks'")
+    expect(messages[0]).toContain("'enviroment'")
+    expect(messages[0]).toContain(AGENT_PROMPT_BLOCKS.join(', '))
+    expect(messages[0]).not.toContain('the whole file is rejected')
   })
 
   it('WU-15 shuvix-thinking 取值不对：点名该键并列出全部合法档位；布尔与清单外的词是同一句', () => {
@@ -698,7 +781,7 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
     expect(soleWarn('---\nname: quiet\nshuvix-thinking: minimal\n---\nbody')).toBe(msg)
   })
 
-  it.each([['WU-7', 'shuvix-project-awareness']])(
+  it.each([['WU-7', 'shuvix-user-words']])(
     '%s %s 非布尔：点名该键并给出 true / false',
     (_id, key) => {
       // `yes please` 是最真实的误写：YAML 里 `yes` 本身是布尔，加了词才落回字符串
@@ -729,7 +812,8 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
       '---\n- a\n---\nbody',
       '---\nshuvix-tools: [a]\n---\nbody',
       '---\nshuvix-model: 4\n---\nbody',
-      '---\nshuvix-project-awareness: nope please\n---\nbody'
+      '---\nshuvix-prompt-blocks: true\n---\nbody',
+      '---\nshuvix-user-words: nope please\n---\nbody'
     ]
     for (const raw of cases) {
       expect(soleWarn(raw), raw).toMatch(/; the whole file is rejected$/)
@@ -761,7 +845,7 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
 describe('DG —— 诊断完整性守卫', () => {
   it('DG-1 没有静默拒绝：任何被判非法的输入都恰好产出一条人读原因', () => {
     // 覆盖解析器的全部拒绝分支（无 frontmatter / YAML 错 / 非映射 / 字符串键 / 档位枚举键 /
-    // 指令文件清单 / 布尔键）
+    // 提示词块清单 / 布尔键）
     const rejected = [
       'no frontmatter at all',
       '# Title\n\n---\nname: mid\n---\nbody',
@@ -773,9 +857,9 @@ describe('DG —— 诊断完整性守卫', () => {
       '---\nshuvix-model: [a]\n---\nbody',
       '---\nshuvix-thinking: minimal\n---\nbody',
       '---\nshuvix-thinking: false\n---\nbody',
-      '---\nshuvix-instruction-files: true\n---\nbody',
-      '---\nshuvix-instruction-files: ../outside.md\n---\nbody',
-      '---\nshuvix-project-awareness: [a]\n---\nbody'
+      '---\nshuvix-prompt-blocks: true\n---\nbody',
+      '---\nshuvix-prompt-blocks: [environment]\n---\nbody',
+      '---\nshuvix-user-words: [a]\n---\nbody'
     ]
     for (const raw of rejected) {
       const messages: string[] = []
@@ -988,8 +1072,7 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-model',
       'shuvix-thinking',
       'shuvix-tools',
-      'shuvix-instruction-files',
-      'shuvix-project-awareness',
+      'shuvix-prompt-blocks',
       'shuvix-user-words',
       'shuvix-builtin',
       'shuvix-id'
@@ -1004,12 +1087,12 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
     })
     expect(parseAgentDefinitionFile('---\nshuvix-builtin: nope\n---\nbody', 'x')).not.toBeNull()
 
-    // boolean kind 的键 = 解析器强制布尔的那两个（非布尔即整份非法）
+    // boolean kind 的键 = 解析器强制布尔的那一个（非布尔即整份非法）
     const booleanKeys = agentDescriptor.fields
       .filter((f) => f.kind === 'boolean')
       .map((f) => f.key)
       .sort()
-    expect(booleanKeys).toEqual(['shuvix-project-awareness', 'shuvix-user-words'])
+    expect(booleanKeys).toEqual(['shuvix-user-words'])
     for (const key of booleanKeys) {
       expect(parseAgentDefinitionFile(`---\n${key}: nope\n---\nbody`, 'x'), key).toBeNull()
       expect(parseAgentDefinitionFile(`---\n${key}: true\n---\nbody`, 'x'), key).not.toBeNull()
@@ -1021,8 +1104,8 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       .map((f) => f.key)
       .sort()
     expect(stringKeys).toEqual([
-      'shuvix-instruction-files',
       'shuvix-model',
+      'shuvix-prompt-blocks',
       'shuvix-thinking',
       'shuvix-tools'
     ])
@@ -1130,8 +1213,7 @@ describe('OID —— shuvix-id 对象 id', () => {
       systemPrompt: 'Body.',
       tools: ['read'],
       model: 'openai/gpt-5',
-      instructionFiles: ['AGENTS.md'],
-      projectAwareness: true
+      promptBlocks: ['agents_md', 'project_prompt']
     }
     const without = serializeAgentDefinitionFile(data)
     expect(without).not.toMatch(/^shuvix-id:/m)
@@ -1311,13 +1393,13 @@ describe('FILL —— 扩展元数据补缺', () => {
   it('FILL-9 整份非法的文件（带合法 id）→ null，读口从未被问，诊断只有拒绝原因', () => {
     const fill = spyFill({ 'shuvix-model': 'p/m' })
     const { parsed, warns } = parse(
-      file(`shuvix-id: ${U}`, ['shuvix-project-awareness: yes please']),
+      file(`shuvix-id: ${U}`, ['shuvix-prompt-blocks: true']),
       fill.fn
     )
     expect(parsed).toBeNull()
     expect(fill.calls).toEqual([])
     expect(warns).toHaveLength(1)
-    expect(warns[0]).toContain("'shuvix-project-awareness'")
+    expect(warns[0]).toContain("'shuvix-prompt-blocks'")
     expect(warns[0]).toContain('the whole file is rejected')
   })
 
@@ -1336,7 +1418,7 @@ describe('FILL —— 扩展元数据补缺', () => {
     expect(parsed?.thinkingLevel).toBe('high')
   })
 
-  it('FILL-12 白名单外的键补不进来：没写工具的文件收到 shuvix-tools → 仍是空白名单；description / project-awareness 同样无视；零告警', () => {
+  it('FILL-12 白名单外的键补不进来：没写工具的文件收到 shuvix-tools → 仍是空白名单；description / shuvix-prompt-blocks 同样无视；零告警', () => {
     const noTools = [
       '---',
       'shuvix: agent v1',
@@ -1354,11 +1436,14 @@ describe('FILL —— 扩展元数据补缺', () => {
     expect(r1.parsed?.tools).toEqual([])
     expect(r1.parsed).toEqual(base)
 
-    const r2 = parse(noTools, spyFill({ description: 'x', 'shuvix-project-awareness': true }).fn)
+    const r2 = parse(
+      noTools,
+      spyFill({ description: 'x', 'shuvix-prompt-blocks': 'environment, agents_md' }).fn
+    )
     expect(r2.warns).toEqual([])
     expect(r2.parsed).toEqual(base)
     expect(r2.parsed?.description).toBe('')
-    expect(r2.parsed?.projectAwareness).toBe(false)
+    expect(r2.parsed?.promptBlocks).toEqual([])
   })
 })
 
@@ -1390,9 +1475,7 @@ describe('validateAgentFill', () => {
     expect(validateAgentFill({ 'shuvix-model': ['x'] })).toContain("'shuvix-model'")
   })
 
-  it('VF-3 白名单外的键也走同一套校验：project-awareness 写成字符串 → 报错', () => {
-    expect(validateAgentFill({ 'shuvix-project-awareness': 'yes' })).toContain(
-      "'shuvix-project-awareness'"
-    )
+  it('VF-3 白名单外的键也走同一套校验：shuvix-prompt-blocks 写成布尔 → 报错', () => {
+    expect(validateAgentFill({ 'shuvix-prompt-blocks': true })).toContain("'shuvix-prompt-blocks'")
   })
 })

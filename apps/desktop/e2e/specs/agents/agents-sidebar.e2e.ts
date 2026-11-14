@@ -82,13 +82,14 @@ let exploreSource = ''
 const agentPath = (fileName: string): string => join(app.agentsDir, fileName)
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
-/** 注入开关写成非布尔 → 解析器判整份非法（人读原因带键名 + rejected） */
+/** 提示词块清单写成 YAML 列表 → 解析器判整份非法（人读原因带键名 + rejected） */
 const invalidAgent = (name: string): string =>
   [
     '---',
     'shuvix: agent v1',
     `name: ${name}`,
-    'shuvix-project-awareness: yes please',
+    'shuvix-prompt-blocks:',
+    '  - environment',
     '---',
     '',
     'Invalid body.',
@@ -220,8 +221,10 @@ describe('侧栏智能体分组', () => {
       `[...document.querySelectorAll('.cm-shuvix-fmcard-row')].map((r) => r.dataset.key)`
     )
     expect(fieldKeys).toContain('description')
-    expect(fieldKeys).toContain('shuvix-instruction-files')
-    expect(fieldKeys).toContain('shuvix-project-awareness')
+    expect(fieldKeys).toContain('shuvix-prompt-blocks')
+    // 改制前的两个键不再是卡片上的字段
+    expect(fieldKeys).not.toContain('shuvix-instruction-files')
+    expect(fieldKeys).not.toContain('shuvix-project-awareness')
 
     // ④ 正文来自盘上同一路径 —— 这条就是「跑的和看的是同一份文件」的全部内容
     await note.waitBody(bodyMarkerOf(listed.basePath))
@@ -367,7 +370,7 @@ describe('侧栏智能体分组', () => {
     expect(await pane.activeRow()).toEqual({ invalidRow: 'explore.md' })
     // 原因在笔记里属性卡的横幅上 —— 分组里不另起原因框
     await until(
-      async () => (await note.bannerText()).includes('must be a boolean'),
+      async () => (await note.bannerText()).includes('must be a comma-separated string'),
       'card banner shows the parser verdict'
     )
     // 非法文件不遮蔽内置

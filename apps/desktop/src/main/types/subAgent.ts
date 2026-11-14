@@ -3,6 +3,8 @@
  * 载荷与 services/agentDefinitionFile 的 ParsedAgentFile 同构
  * （types 层不得反向依赖 services，故此处结构重复声明）。
  */
+import type { AgentPromptBlock } from '@shuvix/chat-protocol/agentPromptBlocks'
+
 export interface SubAgentPayload {
   name: string
   displayName: string
@@ -11,10 +13,8 @@ export interface SubAgentPayload {
   tools: string[]
   /** `shuvix-model`：指定模型 `<providerId>/<modelId>`；省略 = 不声明（跟随会话） */
   model?: string
-  /** `shuvix-instruction-files`：项目指令文件清单，顺序即优先级；空 = 不注入 */
-  instructionFiles: string[]
-  /** `shuvix-project-awareness`：项目感知 —— 是否注入项目提示词 */
-  projectAwareness: boolean
+  /** `shuvix-prompt-blocks`：正文之后追加哪几块（chat-protocol agentPromptBlocks.ts 的词表）；空 = 不追加 */
+  promptBlocks: AgentPromptBlock[]
 }
 
 export interface SubAgentSaveParams {

@@ -5,7 +5,7 @@
  *   - 一个窗口一条**内存会话**：标题与 notebookPath 是文件名，工作目录是文件所在目录（真实路径），
  *     不属于任何项目；不进会话列表（主窗口侧栏里没有它），不落对话树、不建临时工作区；
  *   - 根 Agent 是 notebook 档案（与主窗口里的笔记本同一个：只经 doc_* 改这份活文档，不握 edit），系统提示词里写着
- *     那个目录与文件名（`Open document: <文件名>`），没有项目围栏；
+ *     那个目录与文件名（`<document>` 块里的 Open document 一行），没有项目围栏；
  *   - 编辑器就是笔记本：打字自动保存回**原文件**（原子保存不留临时文件）；经符号链接打开的，
  *     写的是链接指向的那份，链接本身还是链接；md 里的相对图片按文件所在目录显示；
  *   - 关窗 = 删会话，用户的文件与目录原样都在；
@@ -17,7 +17,7 @@
  *
  *   MWE-1 会话的形态：标题 / notebookPath / 工作目录 / 无项目；不在 session.list()；
  *         没有 data/sessions/<sid>.jsonl，也没有 temp_workspace/<sid>
- *   MWE-2 agent.getInfo(ensure) 的系统提示词含那个目录与 `Open document: a.md`，占位符替换干净，没有 <project_prompt>
+ *   MWE-2 agent.getInfo(ensure) 的系统提示词含那个目录与 <document> 块里的 Open document a.md，正文里没有占位符，没有 <project_prompt>
  *         围栏；工具有 doc_edit，没有 edit / write
  *   MWE-4 `![](img/a.png)` 显示成 shuvix-preview:// 的图，指向 <dir>/img/a.png，解码成功
  *   MWE-3 在编辑器里打字 → 原文件被改、不留 .a.md.*.tmp；经链接打开的 → 写到目标、链接仍是链接
@@ -132,7 +132,7 @@ describe('md 窗口背后的内存会话', () => {
       `window.api.agent.getInfo(${JSON.stringify(aSid)}, { ensure: true })`
     )
     expect(info.systemPrompt).toContain(docs)
-    expect(info.systemPrompt).toContain('Open document: a.md')
+    expect(info.systemPrompt).toContain('<document>\nOpen document: `a.md`')
     expect(info.systemPrompt).not.toContain('{{shuvix:')
     expect(info.systemPrompt).not.toContain('<project_prompt>')
     // notebook 档案的工具白名单：改文档只经 doc_*（没有 edit；write 只写别的文件，碰这份文档会被拒），

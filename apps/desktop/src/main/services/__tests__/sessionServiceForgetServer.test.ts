@@ -187,8 +187,7 @@ beforeEach(() => {
   mocks.getProfile.mockImplementation((name) => ({
     name,
     tools: [],
-    instructionFiles: [],
-    projectAwareness: false
+    promptBlocks: []
   }))
   resetFakeHost()
 })

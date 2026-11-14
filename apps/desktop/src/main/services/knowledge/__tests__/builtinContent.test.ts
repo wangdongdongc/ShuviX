@@ -14,7 +14,7 @@
  * `verified` —— 说明书是人写的产品内容）、以及 `sources` 指向的解析器**真的还在那个路径上**。
  * 最后一条是「说明书跟着解析器搬家」的守护：解析器换了目录而说明书没跟上，这里先红。
  *
- * BK-26 反过来守笔记本提示词那一头：`{{shuvix:documentKind}}`（agent-runtime `renderDocumentKind`）按文件种类
+ * BK-26 反过来守笔记本提示词那一头：`document` 提示词块里的种类说明（agent-runtime `renderDocumentKind`）按文件种类
  * 指向说明书里的某几篇，用的是这里的真实目录 —— 说明书改了文件名而片段没跟上，这里先红。
  *
  * BK-27 / BK-28 守 bot 定时运行的权限核对（设计稿 docs/bot-access-check-design.md）在说明书里的那两处：policy-md
@@ -71,6 +71,7 @@ import {
   type OkfStatus
 } from '@shuvix/chat-protocol/knowledge'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
+import { AGENT_PROMPT_BLOCKS_KEY } from '@shuvix/chat-protocol/agentPromptBlocks'
 import { parseObjectId } from '@shuvix/chat-protocol/mdMeta'
 import type { ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import enLocale from '@shuvix/chat-protocol/i18n/locales/en.json'
@@ -229,8 +230,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     'shuvix-model',
     'shuvix-thinking',
     'shuvix-displayName',
-    'shuvix-instruction-files',
-    'shuvix-project-awareness'
+    AGENT_PROMPT_BLOCKS_KEY
   ]
   const KEY_GUIDES: [file: string, keys: readonly string[]][] = [
     ['hook-md.md', [HOOK_ON_KEY, HOOK_AGENT_KEY]],

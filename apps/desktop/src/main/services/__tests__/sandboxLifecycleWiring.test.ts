@@ -233,8 +233,7 @@ const profileOf = (name: string): Record<string, unknown> => ({
   description: '',
   tools: [],
   systemPrompt: `${name} prompt`,
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 /** 让已排队的微任务 / 定时器回调跑完（关停挂起时，后面的步骤不该偷跑） */

@@ -97,7 +97,7 @@ export function testDepsOverrides(
     modelCatalog: fauxCatalog(kit, fauxPort()),
     ...(options.realToolHost ? {} : { toolHost: emptyToolHost }),
     promptHost: {},
-    promptVars: () => ({}),
+    promptBlocks: () => ({}),
     settingsOverrides: TEST_SETTINGS_OVERRIDES,
     today: undefined,
     ...extra

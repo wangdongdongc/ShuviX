@@ -1,12 +1,12 @@
 /**
  * 派生 agent 路由的测试夹具（P2-05）：不做断言。
  *
- *  - **宿主 R**：宿主 D 的那一套（faux 两个模型、`test.spawn`、marker 变量表、固定时钟、fakeRPM、probe），派发
+ *  - **宿主 R**：宿主 D 的那一套（faux 两个模型、`test.spawn`、marker 提示词块、固定时钟、fakeRPM、probe），派发
  *    工具换成**真的** `createDispatchAgentTool`（按会话一份，`manager` = 当前进程的路由），外加 `force_agent`
  *    （真派发工具的改名拷贝，放在按 agent 工具里 —— 不受 `canSpawn` 门控，深度用例用它撞上限）。
  *  - **路由 R**：`createSubAgentManager({sessions: 宿主（记下 get / peek）, broadcast → events, tasks: 真
  *    taskRegistry（coalesceMs 5）, getAbortedNote: 'ABORTED_NOTE'})`。`reopen()` = 换一个进程：新宿主、新路由、
- *    新的事件 / 任务数组（档案表、变量表、fakeRPM 共用）。
+ *    新的事件 / 任务数组（档案表、提示词块、fakeRPM 共用）。
  *  - **假协调器 FC**（单元用例）：`fakeSession()` 是一个会话桩，`agents.spawn/continue/interrupt/destroy` 按脚本
  *    走，`onCreated` 由脚本按需调用；`fakeScope()` 是一次工具调用的 scope。
  */
@@ -60,8 +60,7 @@ export function agentProfileOf(profile: InProcessAgentType): AgentProfile {
     ...(profile.thinkingLevel === undefined
       ? {}
       : { thinkingLevel: profile.thinkingLevel as SelectableThinkingLevel }),
-    instructionFiles: [...(profile.instructionFiles ?? [])],
-    projectAwareness: profile.projectAwareness ?? false,
+    promptBlocks: [...(profile.promptBlocks ?? [])],
     source: 'builtin',
     basePath: ''
   }
@@ -206,7 +205,7 @@ export interface HostR extends RouterKit {
   /** 打开（并建 agent）另一条会话 */
   open(sessionId: string): Promise<DurableSession>
   /**
-   * 换一个进程（宿主选项、档案表、变量表、fakeRPM 沿用）：新宿主、新路由、新的观察数组；再打开 s1。
+   * 换一个进程（宿主选项、档案表、提示词块、fakeRPM 沿用）：新宿主、新路由、新的观察数组；再打开 s1。
    * `options` 换掉这个进程的路由选项（缺省沿用）。
    */
   reopen(options?: Partial<HostROptions>): Promise<HostR>
@@ -247,7 +246,7 @@ export async function hostR(options: HostROptions = {}): Promise<HostR> {
   const t = await makeHost({
     makeKit: wKit,
     extensions: [TEST_SPAWN_EXTENSION],
-    promptVars: vars.promptVars,
+    promptBlocks: vars.promptBlocks,
     now: () => W_NOW,
     resolveProfileModel: rpm.resolve,
     toolHost: { agentTools, dispatchTool: dispatchFor },

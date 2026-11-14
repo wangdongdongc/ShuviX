@@ -2,14 +2,16 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Agent 定義ファイル（shuvix: agent v1）'
-description: 'ShuviX の agent ファイルの完全な仕様 —— すべての frontmatter キー、ツールホワイトリストの書き方、本文の `{{shuvix:*}}` プレースホルダー、ファイルが不正になる条件、組み込みエージェント、そして agent の使われ方。'
+description: 'ShuviX の agent ファイルの完全な仕様 —— すべての frontmatter キー、ツールホワイトリストの書き方、本文の後に ShuviX が追加するプロンプトブロック、ファイルが不正になる条件、組み込みエージェント、そして agent の使われ方。'
 tags: [shuvix, agent, format, spec]
 status: stable
 sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/agentProfile/definitionFile.ts
     title: definitionFile.ts —— パーサー（真実の源）
-  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/agentProfile/promptVars.ts
-    title: promptVars.ts —— `{{shuvix:*}}` プレースホルダー
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/agentProfile/promptBlocks.ts
+    title: promptBlocks.ts —— 本文の後に追加されるブロック
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/chat-protocol/src/agentPromptBlocks.ts
+    title: agentPromptBlocks.ts —— `shuvix-prompt-blocks` の語彙
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/subagent/builtinAgents/md
     title: 組み込みエージェント、言語ごとに一つの md
 ---
@@ -36,13 +38,11 @@ shuvix-displayName: Code reviewer
 shuvix-tools: read, ls, grep, glob, bash, skill
 shuvix-model: anthropic/claude-sonnet-4-5
 shuvix-thinking: low
-shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-awareness: true
+shuvix-prompt-blocks: environment, agents_md, claude_md, project_prompt
 ---
 
-You are a code reviewer working in {{shuvix:workingDirectory}} on {{shuvix:date}}.
-Read the diff the caller points you at, then report: correctness risks first, then
-style, each with file and line. Never modify files.
+You are a code reviewer. Read the diff the caller points you at, then report:
+correctness risks first, then style, each with file and line. Never modify files.
 ```
 
 ## frontmatter キー
@@ -56,8 +56,7 @@ style, each with file and line. Never modify files.
 | `shuvix-tools`              | カンマ区切り文字列 | いいえ | ツールのホワイトリスト（後述）。**YAML リストではなく文字列** —— リストにするとファイルは不正。省略 = ツールなし。                                                                                                                                    |
 | `shuvix-model`              | 文字列             | いいえ | このエージェントが動くモデル：`<providerId>/<modelId>`（UI が書く形）か、素の `<modelId>`。ベース（`work` / `chat` / `notebook` / `bot`）に書くと、その種類のセッションでモデルが選ばれるまで使われるモデルになり、設定の既定モデルより優先される。省略 = 動いているセッション（または派遣元）に従う。設定で有効になっていないモデルは無いものとして扱われる。                                                    |
 | `shuvix-thinking`           | 文字列             | いいえ | このエージェントの思考の深さ：`off` / `low` / `medium` / `high` / `xhigh` / `max`（大文字小文字は問わない）。派遣されたエージェントはこのレベルで動く。サブセッションの `agent_profile` で指名されると、そのサブセッションの初期レベルになる（後からセッション内で変えられる）。ベースに書くと、その種類のセッションでレベルが選ばれるまで使われるレベルになる。省略 = 派遣元のレベル（サブセッションは親に従う）。それ以外の値はファイルを不正にする。 |
-| `shuvix-instruction-files`  | カンマ区切り文字列 | いいえ | エージェントが読むプロジェクト指示ファイル。**作業ディレクトリからの相対パス**を優先順に並べる：存在して空でない最初の一つが注入され、最大一つ。絶対パス、`..` セグメント、ブール値はファイルを不正にする。省略 = 注入なし。                                  |
-| `shuvix-project-awareness`  | ブール             | いいえ | `true` = エージェントにどのプロジェクトにいるかを伝える：プロジェクトのプロンプトがシステムプロンプトに追加される（ルートセッションのプロジェクトで解決；プロジェクトが無ければ何も注入されない）。本物の YAML ブール値であること。既定 `false`。 |
+| `shuvix-prompt-blocks`      | カンマ区切り文字列 | いいえ | 本文の後に ShuviX がシステムプロンプトへ追加するブロック（後述）：`document`、`drawing`、`environment`、`agents_md`、`claude_md`、`project_prompt` のうち任意のもの。**YAML リストではなく文字列。** 省略 = 何も追加しない。 |
 | `shuvix-user-words`         | ブール             | いいえ | `true` = このエージェントがサブセッションとして動くとき、親セッションから届く各メッセージに、親セッションでユーザー自身が書いた言葉（入力したメッセージと、親セッションの質問への回答）を ShuviX がそのまま引用し、親セッションの文の後ろに添えます。ユーザーの原文と親セッションの言い換えを区別できます。最初のメッセージにはそれまでの分（最初の 1 件と直近 10 件、各 4000 文字まで）、以降は新しい分だけ。親セッション自身のサブセッションのみ。YAML の真偽値であること。既定は `false`、組み込みの `coding` はオン。 |
 | `shuvix-builtin`            | ブール             | いいえ | ShuviX が同梱するファイルの自己申告マーカー。パーサーは読まない。ユーザーファイルに加えないこと。                                                                                                                                                    |
 | `shuvix-id`                 | 文字列             | いいえ | オブジェクト ID —— ファイルをどこへ移しても、ShuviX はこれで識別します。ShuviX が作成するファイルでは UUID、同梱ファイルでは `<種類>:builtin:<名前>`。コピーは元と同じ ID を共有します。ShuviX が書き込むので触れないでください。不正な値は警告が出るだけで、ファイル全体は拒否されません。                                |
@@ -65,7 +64,9 @@ style, each with file and line. Never modify files.
 **無視される**キー（未知のキーとして読まれ、エラーも効果もない）：汎用の `tools` キー（他アプリの
 ツール名の意味で誤読されるため —— `shuvix-tools` を使う）、および廃止された `whenToUse`、
 `displayName`、`shuvix-dispatch-only`、`shuvix-session-awareness`、`shuvix-prompt-sections`、
-`shuvix-project-prompt`、`shuvix-project-memory`。
+`shuvix-project-prompt`、`shuvix-project-memory`、`shuvix-instruction-files`（現在はブロック
+`agents_md` / `claude_md`）、`shuvix-project-awareness`（現在はブロック `project_prompt`）。最後の二つを
+まだ持っているファイルは、対応するブロックを列挙するまで、指示ファイルもプロジェクトのプロンプトも受け取りません。
 
 ### `shuvix-tools` —— ホワイトリスト
 
@@ -108,27 +109,45 @@ knowledge, artifact, widget, tool_search, shuvix, skill`）を共有し、本文
 
 ### 本文 —— システムプロンプト
 
-frontmatter の後の全部（前後の空白を除く）がシステムプロンプトです。`{{shuvix:name}}` 形式の
-**プレースホルダー**を埋め込め、エージェント作成時に置換されます。デスクトップホストで使えるもの：
+frontmatter の後の全部（前後の空白を除く）がシステムプロンプトで、書いたとおりにモデルへ送られます。
+普通の文章であり、テンプレート構文はありません。以前の版の `{{shuvix:name}}` プレースホルダーはもう
+置換されません：本文に残したものはその文字のままモデルに届くので、削除して、同じ情報を運ぶブロックを
+列挙してください。
 
-| プレースホルダー                 | 値                                                                   |
-| -------------------------------- | -------------------------------------------------------------------- |
-| `{{shuvix:workingDirectory}}`    | セッションの作業ディレクトリの絶対パス                               |
-| `{{shuvix:isGitRepo}}`           | `Yes` / `No` —— そのディレクトリに `.git` があるか                    |
-| `{{shuvix:platform}}`            | `darwin` / `win32` / `linux`                                          |
-| `{{shuvix:shell}}`               | コマンドツールが動くシェル：`bash`、Windows では `PowerShell 7 (pwsh)` / `Windows PowerShell 5.1` |
-| `{{shuvix:shellTool}}`           | このプラットフォームのコマンドツール：`bash` / `powershell`           |
-| `{{shuvix:os}}`                  | OS の種類とリリース                                                  |
-| `{{shuvix:date}}`                | 今日、`YYYY-MM-DD`                                                    |
-| `{{shuvix:language}}`            | UI の言語、例：`中文 (zh)` / `English (en)`                           |
-| `{{shuvix:appVersion}}`          | ShuviX のバージョン                                                   |
-| `{{shuvix:projectName}}`         | プロジェクト名、プロジェクト外では空                                 |
-| `{{shuvix:notebookPath}}`        | ノートブックセッションが結び付いたファイル（ノートブックセッションのルートエージェントのみ） |
-| `{{shuvix:documentKind}}`        | そのファイルが ShuviX 自身のファイル（セキュリティポリシー、hook、エージェントプロファイル、bot、スキル、ナレッジ項目）のとき：それが何か、いつ効くか、どのマニュアル項目が仕様かを述べる節。それ以外は空（ルートエージェントのみ） |
+### `shuvix-prompt-blocks` —— 本文の後に ShuviX が追加するもの
 
-未知のプレースホルダーはそのまま残ります（警告がログされる）。空の値は周囲の空行を畳むので、空の変数に
-基づく文はきれいに消えます。この構文は i18n テンプレートと衝突しません。本文のそれ以外は普通の文章です
-—— 他のテンプレート構文はありません。
+セッションに依存する内容（エージェントがどこで作業するか、今日の日付、プロジェクト自身の指示 …）は本文には
+書きません。ShuviX がそれを**ブロック**として描画し、それぞれ XML タグで包んで本文の後に追加します。ファイルは
+どれが欲しいかを言うだけです。
+
+| ブロック         | 追加される形                                 | 内容                                                                                                                                                                                                                                 | 追加されないとき                                                                           |
+| ---------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `document`       | `<document>`                                 | ノートブックセッションが開いているドキュメント（作業ディレクトリからの相対パス）。それが ShuviX 自身のファイル（セキュリティポリシー、hook、エージェントプロファイル、bot、スキル、ナレッジ項目）のとき：それが何か、保存した変更がいつ効くか、どのマニュアル項目が仕様か。 | エージェントがノートブックセッションのルートエージェントでない。                           |
+| `drawing`        | `<drawing>`                                  | 図の描き方：最初の図の前に組み込みの作図スキルを読み込むこと。チャットでは、図が返信の一部であることも述べる。ドキュメントを編集するエージェント（`doc_edit` を持つ）は「先に読み込む」の一行だけを受け取る。                         | エージェントに `skill` ツールが無い、または組み込みの作図スキルがオフ。                    |
+| `environment`    | `<environment>`                              | 一行一項目のリスト：作業ディレクトリとセッションの一時フォルダ（ファイルツールかコマンドツールを持つエージェントのみ）、Git リポジトリ・Shell・OS（`bash` / `powershell` があるときのみ）、Platform・現在の日付・ユーザー言語・ShuviX バージョン（常に）。 | ——                                                                                         |
+| `agents_md`      | `<project_instructions file="AGENTS.md">`    | 作業ディレクトリの `AGENTS.md` の内容。                                                                                                                                                                                              | ファイルが無い、または空。                                                                 |
+| `claude_md`      | `<project_instructions file="CLAUDE.md">`    | 作業ディレクトリの `CLAUDE.md` の内容。                                                                                                                                                                                              | ファイルが無い、または空。あるいは `agents_md` も列挙されていて二つのファイルの内容が同じ。 |
+| `project_prompt` | `<project_prompt>`                           | プロジェクトのプロンプト（プロジェクト設定のテキスト）。                                                                                                                                                                             | セッションにプロジェクトが無い、またはプロジェクトにプロンプトが無い。                     |
+
+- **リストは集合です。** 書いた順序は関係なく、名前の大文字小文字も問いません：ShuviX は常に表の順で追加し、
+  キーを書き戻すときもその順です。
+- **列挙しても必ず現れるとは限りません。** 条件を満たさないブロックは丸ごと省かれるので、プロンプトが
+  エージェントの持っていないものを指すことはありません。
+- **指示ファイルは両方読まれます。** `agents_md` と `claude_md` の両方を列挙し、両方のファイルがあれば、
+  どちらもプロンプトに入ります（`AGENTS.md` が先）。内容がまったく同じ（一方が他方のコピーかリンク）なら
+  一つだけ、`AGENTS.md` として残ります。
+- **未知の名前は無視され**、警告が出ます。ファイルは拒否されません。キーを
+  省略すると何も追加されません。
+- 派遣されたエージェントも同じブロックを受け取り、派遣したセッションに対して解決されます：そのセッションの
+  作業ディレクトリ、一時フォルダ、プロジェクト。`document` はノートブックセッションのルートエージェントだけです。
+- 一つのツールに属する案内はこのリストではなくツールに従います：`knowledge` を持つエージェントは
+  `<knowledge_bases>`（セッションのナレッジベースと使いどき）を、`tool_search` を持つルートエージェントは
+  `<extensions>`（セッションで有効にできるもの）を受け取ります。
+
+ブロックはエージェントの作成時に描画されます。セッションのルートエージェントはその後、会話のあいだ
+システムプロンプトを保ちます —— 後からエージェントファイル、`AGENTS.md` / `CLAUDE.md`、プロジェクトの
+プロンプトを編集しても、作り直すまで変わりません（入力ボックスの使用量リングの手前にある小さなアイコンが、
+出どころが変わったことを知らせ、「システムプロンプトを再構築」を出します）。
 
 ## ファイルが不正になる条件
 
@@ -136,14 +155,11 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 琥珀色の行として一覧され（理由はツールチップ）、同名の組み込みを隠すことはありません）：
 
 - YAML frontmatter ブロックが無い、YAML が解析できない、マッピングでない；
-- `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` が文字列でない（YAML リストがよくある
+- `shuvix-tools` / `shuvix-model` / `shuvix-prompt-blocks` が文字列でない（YAML リストがよくある
   間違い）；
 - `shuvix-thinking` が `off` / `low` / `medium` / `high` / `xhigh` / `max` のいずれでもない（`false` も不可 ——
   `off` と書く）；
-- `shuvix-project-awareness` がブールでない；
-- `shuvix-user-words` がブールでない；
-- `shuvix-instruction-files` の項目が絶対パスであるか `..` で作業ディレクトリを抜ける、またはこのキーが
-  2026 年より前のブール形式（`shuvix-instruction-files: true` —— 代わりにファイル名を列挙する）。
+- `shuvix-user-words` がブールでない。
 
 空の frontmatter（`---` の直後に `---`）は有効です：すべてのフィールドが既定値になります。
 
@@ -186,8 +202,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 1. **`agent` ツールでサブエージェントとして派遣**（呼び出し側自身のリストに `agent` が必要）：`name` =
    このファイルの `name`、加えて `prompt` と短い `description`。サブエージェントはルートエージェントと
    対等にメモリ内で走り、セッションのモデルと思考レベルを継承し（`shuvix-model` / `shuvix-thinking`
-   で宣言されていればそれが優先）、ルート
-   セッションのプロジェクトに対して解決された同じ指示ファイル / プロジェクト注入を受け取り、最終テキストを
+   で宣言されていればそれが優先）、自分のファイルが列挙する
+   ブロック（ルートセッションの作業ディレクトリとプロジェクトに対して解決）を受け取り、最終テキストを
    返します。このツールは利用可能なエージェントをモデルに列挙**しません** —— 名前はプロンプトか
    ユーザーから知る必要があります。
 2. **サブセッションの人格として** —— `session` ツールの `agent_profile`（ベースでない任意の
@@ -197,5 +213,5 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 3. **hook のエージェントとして**（`shuvix-hook-agent` —— `hook-md` エントリを参照）。
 4. **ベースの上書きとして**（上記）。
 
-コンテキスト注入はどの場合にも適用されます：`shuvix-instruction-files` と `shuvix-project-awareness` は
-**このファイル**から読まれ、ツールリストに `knowledge` があればナレッジベースの案内が注入されます。
+ブロックはどの場合にも適用されます：`shuvix-prompt-blocks` は**このファイル**から読まれ、ツールリストに
+`knowledge` があればナレッジベースの案内が追加されます。

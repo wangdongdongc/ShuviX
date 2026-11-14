@@ -10,7 +10,14 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc, SessionStateDoc } from '../docs'
 import { AgentCreationError, lockRecordJson, parseLockRecord, withoutOmittedTools } from '../lock'
-import { E_W, scenarioConfig, scenarioToolHost, testProfile, W_CWD } from './support/agentConfig'
+import {
+  E_W,
+  markerPersona,
+  scenarioConfig,
+  scenarioToolHost,
+  testProfile,
+  W_CWD
+} from './support/agentConfig'
 import { recordPublications } from './support/commits'
 import { fauxProvider } from '@earendil-works/pi-ai'
 import { createModelRegistry } from '../../models/modelRegistry'
@@ -172,12 +179,12 @@ describe('lock · create', () => {
       kind: 'root',
       profileName: 'work',
       rootSessionId: 's1',
-      persona: 'You are Aria',
-      instructionFiles: ['AGENTS.md'],
+      persona: markerPersona('Aria'),
+      promptBlocks: ['environment', 'agents_md', 'project_prompt'],
       // 冻结时的输入摘要：只用来提醒「档案改过了」（2026-11-06）
-      personaKey: expect.stringMatching(/^v1:/),
+      personaKey: expect.stringMatching(/^v2:/),
       // 其余段落冻结在这里（2026-11-06：系统提示词首次渲染后不再自己变）：场景 W 选中的三段，宿主没有 seam → 缺席
-      sections: { project_instructions: null, project_prompt: null, knowledge_bases: null }
+      sections: { agents_md: null, project_prompt: null, knowledge_bases: null }
     })
     expect(vars.state.calls).toBe(1)
   })
@@ -230,7 +237,7 @@ describe('lock · create', () => {
     }
   )
 
-  it('LC-11 a failure before the commit (tool resolution or promptVars throws) writes nothing; the next send retries the creation', async () => {
+  it('LC-11 a failure before the commit (tool resolution or promptBlocks throws) writes nothing; the next send retries the creation', async () => {
     const { t, vars } = await scenarioW()
     const session = await t.open()
     t.toolHost.failResolve = new Error('tools exploded')
@@ -387,7 +394,7 @@ describe('lock · create', () => {
     ['an opt-out of a skill', ['-skill:builtin:drawing']],
     ['an opt-out plus a tick', ['-skill:builtin:drawing', 'skill:pdf']]
   ])(
-    'LC-16b a legacy skill entry left in the selection (%s) does nothing: resolution, promptVars and the shelf are as without it; the lock keeps the selection verbatim, also after a reopen',
+    'LC-16b a legacy skill entry left in the selection (%s) does nothing: resolution, promptBlocks and the shelf are as without it; the lock keeps the selection verbatim, also after a reopen',
     async (_label, legacy) => {
       const config = scenarioConfig()
       config.profile = {
@@ -400,9 +407,9 @@ describe('lock · create', () => {
       const seen: string[][] = []
       const { t } = await scenarioW({
         config,
-        promptVars: (ctx) => {
+        promptBlocks: (ctx) => {
           seen.push([...ctx.toolNames])
-          return { marker: 'M1' }
+          return { environment: 'M1' }
         }
       })
       const session = await t.open()
@@ -410,7 +417,7 @@ describe('lock · create', () => {
 
       const resolved = t.toolHost.resolveCalls[0]!.names
       expect(resolved).toEqual(['read', 'ls', 'ask', 'edit', 'skill', 'mcp:ctx'])
-      // 冻结人设时的变量表看到的是同一份名单 —— 里面没有任何 skill: 条目
+      // 冻结人设时渲染块的宿主看到的是同一份名单 —— 里面没有任何 skill: 条目
       expect(seen).toHaveLength(1)
       expect(seen[0]).toEqual(resolved)
       // 技能工具照旧在，货架照旧是宿主启用着的全部
@@ -471,7 +478,7 @@ describe('lock · create', () => {
     expect(extensionTools(t, 'shuvix.agent.1')).toBeUndefined()
     expect(await piAgent(session, ROOT_CONVERSATION_ID)).toEqual({})
     expect(await session.harness.snapshot(AgentStateDoc, fork.id, BG)).toMatchObject({
-      persona: 'You are M1'
+      persona: markerPersona('M1')
     })
   })
 
@@ -620,12 +627,12 @@ describe('lock · omitBuiltin', () => {
     expect(input).toEqual(['read', 'widget', 'mcp:ctx'])
   })
 
-  it('OM-2 create: the host still sees the requested name; the lock, the offered tools and the persona variables do not have it; the session-level builtin extension still does', async () => {
+  it('OM-2 create: the host still sees the requested name; the lock, the offered tools and the persona blocks do not have it; the session-level builtin extension still does', async () => {
     const seen: string[][] = []
     const { t } = await scenarioW({
-      promptVars: (ctx) => {
+      promptBlocks: (ctx) => {
         seen.push([...ctx.toolNames])
-        return { marker: 'M1' }
+        return { environment: 'M1' }
       }
     })
     omit(t)

@@ -1,12 +1,13 @@
 /**
  * 笔记本会话的根 Agent —— notebook 基座档案的端到端语义：
  *
- *   - 笔记本会话恒为 notebook 档案（由会话形态推导）：systemPrompt 内嵌 settings.notebookPath
- *     原文（{{shuvix:notebookPath}} 是 root 级变量），工具白名单取自 builtin notebook md；
+ *   - 笔记本会话恒为 notebook 档案（由会话形态推导）：systemPrompt 的 `<document>` 块里写着
+ *     settings.notebookPath 原文（`document` 是 notebook 档案列的提示词块，只给根 agent），工具白名单取自
+ *     builtin notebook md；
  *   - 发送走普通 agent.prompt 管线，用户消息持久化到会话树；
  *   - settings 里没有 agentProfile 键；哪怕直写一个戳（coding），笔记本判定先于戳、根会话
  *     也不读戳，重建后仍是笔记本档案；
- *   - 非笔记本会话引用 {{shuvix:notebookPath}} 替换为空串（不是残留占位符）；
+ *   - 非笔记本会话的档案即使列了 `document`，这一块也整块不出；
  *   - `~/.shuvix/agents/notebook.md` 按名覆盖 builtin，对新笔记本会话生效。
  *
  * 断言全走 IPC（window.api.*），无 DOM；不种任何模型/提供商 —— 运行时创建与
@@ -30,7 +31,7 @@ let projectId: string
 /** 首个用例建的笔记本会话，工具白名单 / 钉死用例复用它 */
 let nbSid: string
 
-/** settings.notebookPath 原文（相对项目根）—— 变量替换取它原样，不做绝对化 */
+/** settings.notebookPath 原文（相对项目根）—— `<document>` 块取它原样，不做绝对化 */
 const NOTE_REL = 'notes/e2e-note.md'
 
 const runtimeInfo = (sid: string): Promise<{ systemPrompt: string; tools: { name: string }[] }> =>
@@ -50,10 +51,15 @@ afterAll(async () => {
 })
 
 describe('笔记本会话的根 Agent', () => {
-  it('systemPrompt 内嵌 notebookPath 原文，{{shuvix:*}} 全部替换干净', async () => {
+  it('systemPrompt 的 <document> 块写着 notebookPath 原文，正文里没有占位符', async () => {
     const res = await createAgentSession(app.main, { projectId, notebookPath: NOTE_REL })
     nbSid = res.sid
-    expect(res.systemPrompt).toContain(NOTE_REL)
+    expect(res.systemPrompt).toContain(`<document>\nOpen document: \`${NOTE_REL}\``)
+    expect(res.systemPrompt).toContain('</document>')
+    // 块的先后由宿主固定：打开的文档在环境清单之前
+    expect(res.systemPrompt.indexOf('<document>')).toBeLessThan(
+      res.systemPrompt.indexOf('<environment>')
+    )
     expect(res.systemPrompt).not.toContain('{{shuvix:')
   })
 
@@ -99,18 +105,20 @@ describe('笔记本会话的根 Agent', () => {
   })
 })
 
-describe('非笔记本会话的 {{shuvix:notebookPath}}', () => {
-  it('普通会话引用它：替换为空串（标记对可见，无残留占位符）', async () => {
-    // 根会话的档案不可切换：覆盖无项目会话的基座 chat.md 来引用这个变量（prompt-vars.e2e 同款手法）
+describe('非笔记本会话的 document 块', () => {
+  it('普通会话的档案列了 document：这一块整块不出（列了不等于一定出现），别的块照常', async () => {
+    // 根会话的档案不可切换：覆盖无项目会话的基座 chat.md 来列这一块（prompt-blocks.e2e 同款手法）
     writeAgentMd(app, 'chat', {
       description: 'probe',
       tools: 'read',
-      body: 'NB PROBE nb=[{{shuvix:notebookPath}}] end.'
+      promptBlocks: 'document, environment',
+      body: 'NB PROBE BODY.'
     })
     try {
       const { systemPrompt } = await createAgentSession(app.main)
-      expect(systemPrompt).toContain('nb=[] end.')
-      expect(systemPrompt).not.toContain('{{shuvix:notebookPath}}')
+      expect(systemPrompt.startsWith('NB PROBE BODY.\n\n<environment>\n')).toBe(true)
+      expect(systemPrompt).not.toContain('<document>')
+      expect(systemPrompt).not.toContain('Open document')
     } finally {
       await app.main.eval(`window.api.subAgent.delete({ name: 'chat' })`)
     }
@@ -122,14 +130,20 @@ describe('用户覆盖 notebook 档案', () => {
     writeAgentMd(app, 'notebook', {
       description: 'ovr',
       tools: 'read, ask',
-      body: 'NOTEBOOK OVERRIDE nb={{shuvix:notebookPath}}'
+      promptBlocks: 'document',
+      body: 'NOTEBOOK OVERRIDE.'
     })
     try {
       const { systemPrompt } = await createAgentSession(app.main, {
         projectId,
         notebookPath: NOTE_REL
       })
-      expect(systemPrompt.startsWith(`NOTEBOOK OVERRIDE nb=${NOTE_REL}`)).toBe(true)
+      // 覆盖档案的正文打头，它列的 document 块紧跟其后（普通项目笔记：只有「打开的文档」一行，没有文件种类说明）
+      expect(
+        systemPrompt.startsWith(
+          `NOTEBOOK OVERRIDE.\n\n<document>\nOpen document: \`${NOTE_REL}\`\n</document>`
+        )
+      ).toBe(true)
     } finally {
       await app.main.eval(`window.api.subAgent.delete({ name: 'notebook' })`)
     }

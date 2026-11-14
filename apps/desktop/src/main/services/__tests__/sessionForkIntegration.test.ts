@@ -96,7 +96,7 @@ vi.mock('../../agents/agentHost', () => ({
     rebuildAgentTools: () => ({})
   }),
   desktopPromptHost: {},
-  desktopPromptVars: () => ({}),
+  desktopPromptBlocks: () => ({}),
   resolveProfileModelSpec: () => null
 }))
 vi.mock('../agentRuntimeAdapters', () => ({
@@ -215,8 +215,7 @@ const profile = (name: string): Record<string, unknown> => ({
   description: '',
   tools: [],
   systemPrompt: '',
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 const TIMEOUT = 25000
@@ -714,15 +713,16 @@ describe('SI-10 the fork keeps the source agent (cache-preserving)', () => {
       resetSessionHostForTests(
         testDepsOverrides(kit, {
           toolHost: toolsToolHost(() => tools),
-          promptVars: () => {
+          promptBlocks: () => {
             vars.calls++
-            return { date: vars.date }
+            return { environment: `- Current date: ${vars.date}` }
           }
         })
       )
       mocks.getProfile.mockImplementation((name) => ({
         ...profile(name),
-        systemPrompt: 'You work on {{shuvix:date}}'
+        systemPrompt: 'You work here',
+        promptBlocks: ['environment']
       }))
 
       insert('s')

@@ -37,7 +37,7 @@ import {
 import {
   createDesktopToolHost,
   desktopPromptHost,
-  desktopPromptVars,
+  desktopPromptBlocks,
   resolveProfileModelSpec,
   type DesktopToolHostDeps
 } from '../agents/agentHost'
@@ -128,7 +128,7 @@ export function buildSessionHostDeps(
     modelCatalog: { registry: registry!, port: providerCredentialPort },
     toolHost: createDesktopToolHost({ sessionOf }),
     promptHost: desktopPromptHost,
-    promptVars: desktopPromptVars,
+    promptBlocks: desktopPromptBlocks,
     // 派生 agent 档案的 `shuvix-model`（P2-05：派发在桌面真跑起来了）：不可用 → null，协调器回落调用方的模型
     resolveProfileModel: (spec) => {
       const hit = resolveProfileModelSpec(spec)

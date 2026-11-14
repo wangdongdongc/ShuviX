@@ -172,8 +172,7 @@ const profile = (name: string): Record<string, unknown> => ({
   description: '',
   tools: [],
   systemPrompt: '',
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 function insert(id: string, patch: Partial<Session> = {}): string {

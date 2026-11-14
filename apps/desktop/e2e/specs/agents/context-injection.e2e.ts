@@ -1,11 +1,13 @@
 /**
- * 上下文注入（append 进系统提示词）：顺序（body → 指令文件 → 项目提示词）、
- * 不落独立消息、环境变量零泄漏、换一份指令文件清单经失效重建生效。
+ * 上下文注入（append 进系统提示词）：顺序（body + 人设块 → AGENTS.md → CLAUDE.md → 项目提示词）、
+ * 不落独立消息、环境变量零泄漏、换一份提示词块清单即换注入。
  *
- * 「读哪个指令文件」由 agent 档案的 `shuvix-instruction-files` 清单决定（顺序即优先级），
- * 不再有会话级单选 —— 故换文件 = 换档案。根会话的档案由形态推导、不可切换，所以「换档案」
- * 在这里用**带戳的子会话**表达（seed.ts#createPinnedChildSession）：projectId 恒随父，
- * 工作目录相同，指令文件的解析一模一样，只有档案（清单）不同。
+ * 「读哪个指令文件、要不要项目提示词」由 agent 档案的 `shuvix-prompt-blocks` 决定（2026-11-13：
+ * `agents_md` / `claude_md` / `project_prompt` 三项取代了 `shuvix-instruction-files` 与
+ * `shuvix-project-awareness`；清单是集合，先后由宿主固定，两个指令文件各读各的），不再有会话级单选 ——
+ * 故换文件 = 换档案。根会话的档案由形态推导、不可切换，所以「换档案」在这里用**带戳的子会话**表达
+ * （seed.ts#createPinnedChildSession）：projectId 恒随父，工作目录相同，指令文件的解析一模一样，
+ * 只有档案（清单）不同。
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -24,16 +26,19 @@ let app: E2EApp
 let projectId: string
 let projDir: string
 
+const AGENTS_OPEN = '<project_instructions file="AGENTS.md">'
+const CLAUDE_OPEN = '<project_instructions file="CLAUDE.md">'
+
+/** 子串出现的次数 */
+const countOf = (text: string, needle: string): number => text.split(needle).length - 1
+
 beforeAll(async () => {
   app = await launchApp()
   await ensureDefaultModel(app.main)
   projDir = join(app.home, 'proj-inject')
-  mkdirSync(join(projDir, 'docs'), { recursive: true })
+  mkdirSync(projDir, { recursive: true })
   writeFileSync(join(projDir, 'AGENTS.md'), 'AGENT RULES CONTENT.')
   writeFileSync(join(projDir, 'CLAUDE.md'), 'CLAUDE RULES CONTENT.')
-  // 存在但纯空白：降级链里「命中了文件也不算命中」的那一档
-  writeFileSync(join(projDir, 'EMPTY.md'), '   \n')
-  writeFileSync(join(projDir, 'docs', 'house.md'), 'HOUSE RULES CONTENT.')
   const project = await createProject(app.main, {
     name: 'InjProj',
     path: projDir,
@@ -41,61 +46,78 @@ beforeAll(async () => {
     envVars: [{ key: 'SECRET_FOO', value: 'v' }]
   })
   projectId = project.id
-  // 只认 CLAUDE.md 的档案：证明清单是唯一的选取依据（AGENTS.md 同样在盘上，但没被列出）
+  // 只列 claude_md 的档案：证明清单是唯一的选取依据（AGENTS.md 同样在盘上，但没被列出；
+  // 也没列 project_prompt，所以项目提示词不进来）
   writeAgentMd(app, 'claude-only', {
     tools: 'read',
-    instructionFiles: 'CLAUDE.md',
+    promptBlocks: 'claude_md',
     body: 'CLAUDE-ONLY BODY.'
   })
-  // 同样两份文件、只有清单顺序不同 —— 「顺序即优先级」的端到端对照组
-  writeAgentMd(app, 'pref-claude', {
+  // 两项都列，只有书写顺序不同 —— 「清单是集合、先后由宿主固定」的端到端对照组
+  writeAgentMd(app, 'both-claude-first', {
     tools: 'read',
-    instructionFiles: 'CLAUDE.md, AGENTS.md',
-    body: 'PREF BODY.'
+    promptBlocks: 'claude_md, agents_md',
+    body: 'BOTH BODY.'
   })
-  writeAgentMd(app, 'pref-agents', {
+  writeAgentMd(app, 'both-agents-first', {
     tools: 'read',
-    instructionFiles: 'AGENTS.md, CLAUDE.md',
-    body: 'PREF BODY.'
+    promptBlocks: 'agents_md, claude_md',
+    body: 'BOTH BODY.'
   })
-  // 降级链：缺失 → 空白 → 命中
-  writeAgentMd(app, 'fallback-chain', {
+  // 只要项目提示词
+  writeAgentMd(app, 'prompt-only', {
     tools: 'read',
-    instructionFiles: 'MISSING.md, EMPTY.md, CLAUDE.md',
-    body: 'FALLBACK BODY.'
-  })
-  // 子目录条目
-  writeAgentMd(app, 'subdir-house', {
-    tools: 'read',
-    instructionFiles: 'docs/house.md',
-    body: 'SUBDIR BODY.'
+    promptBlocks: 'project_prompt',
+    body: 'PROMPT-ONLY BODY.'
   })
 })
 afterAll(async () => {
   await app.stop()
 })
 
+/** 钉一条该档案的子会话 → 建运行时 → 取完整系统提示词（无 LLM 调用） */
+const pinnedPrompt = async (parentSid: string, agentProfile: string): Promise<string> => {
+  const child = await createPinnedChildSession(app, { parentSid, agentProfile })
+  return app.main.eval<string>(
+    `window.api.agent
+      .getInfo(${JSON.stringify(child)}, { ensure: true })
+      .then((info) => info.systemPrompt)`
+  )
+}
+
 describe('append 注入', () => {
   let sid: string
 
-  it('系统提示词按序含：body 环境块 → 指令文件（AGENTS.md 优先） → 项目提示词', async () => {
+  it('系统提示词按序含：body 环境块 → AGENTS.md → CLAUDE.md（两个文件都在 → 两块都进） → 项目提示词', async () => {
+    // work 基座列的是 drawing, environment, agents_md, claude_md, project_prompt
     const created = await createAgentSession(app.main, { projectId })
     sid = created.sid
     const sp = created.systemPrompt
     const iEnv = sp.indexOf('Working directory:')
-    const iIns = sp.indexOf('<project_instructions file="AGENTS.md">')
-    const iRules = sp.indexOf('AGENT RULES CONTENT.')
-    const iInsEnd = sp.indexOf('</project_instructions>')
+    const iEnvEnd = sp.indexOf('</environment>')
+    const iAgents = sp.indexOf(AGENTS_OPEN)
+    const iAgentRules = sp.indexOf('AGENT RULES CONTENT.')
+    const iAgentsEnd = sp.indexOf('</project_instructions>')
+    const iClaude = sp.indexOf(CLAUDE_OPEN)
+    const iClaudeRules = sp.indexOf('CLAUDE RULES CONTENT.')
+    const iClaudeEnd = sp.lastIndexOf('</project_instructions>')
     const iProj = sp.indexOf('<project_prompt>')
     const iHaiku = sp.indexOf('HAIKU MODE ONLY.')
     const iProjEnd = sp.indexOf('</project_prompt>')
-    expect(iEnv).toBeGreaterThan(-1)
-    expect(iIns).toBeGreaterThan(iEnv)
-    expect(iRules).toBeGreaterThan(iIns)
-    expect(iInsEnd).toBeGreaterThan(iRules)
-    expect(iProj).toBeGreaterThan(iInsEnd)
+    expect(sp.indexOf('<environment>')).toBeGreaterThan(-1)
+    expect(iEnv).toBeGreaterThan(sp.indexOf('<environment>'))
+    expect(iEnvEnd).toBeGreaterThan(iEnv)
+    expect(iAgents).toBeGreaterThan(iEnvEnd)
+    expect(iAgentRules).toBeGreaterThan(iAgents)
+    expect(iAgentsEnd).toBeGreaterThan(iAgentRules)
+    expect(iClaude).toBeGreaterThan(iAgentsEnd)
+    expect(iClaudeRules).toBeGreaterThan(iClaude)
+    expect(iClaudeEnd).toBeGreaterThan(iClaudeRules)
+    expect(iProj).toBeGreaterThan(iClaudeEnd)
     expect(iHaiku).toBeGreaterThan(iProj)
     expect(iProjEnd).toBeGreaterThan(iHaiku)
+    // 一个文件一个围栏，各一次
+    expect(countOf(sp, '<project_instructions ')).toBe(2)
   })
 
   it('prompt 后消息树无注入消息；项目环境变量零泄漏', async () => {
@@ -106,89 +128,112 @@ describe('append 注入', () => {
     expect(all).not.toContain('Project environment variables')
   })
 
-  it('钉着只列 CLAUDE.md 档案的子会话（同一工作目录）→ 指令文件换成 CLAUDE.md（AGENTS.md 内容消失）', async () => {
+  it('钉着只列 claude_md 档案的子会话（同一工作目录）→ 只有 CLAUDE.md 那一块（AGENTS.md 内容与项目提示词都不进）', async () => {
     // 子会话的 projectId 恒随父：工作目录与父会话相同，同一批文件在盘上，命中只随档案清单变
-    const child = await createPinnedChildSession(app, {
-      parentSid: sid,
-      agentProfile: 'claude-only'
-    })
-    const sp = await app.main.eval<string>(
-      `window.api.agent
-        .getInfo(${JSON.stringify(child)}, { ensure: true })
-        .then((info) => info.systemPrompt)`
-    )
+    const sp = await pinnedPrompt(sid, 'claude-only')
     expect(sp.startsWith('CLAUDE-ONLY BODY.')).toBe(true)
-    expect(sp).toContain('<project_instructions file="CLAUDE.md">')
+    expect(sp).toContain(CLAUDE_OPEN)
     expect(sp).toContain('CLAUDE RULES CONTENT.')
     expect(sp).not.toContain('AGENT RULES CONTENT.')
+    expect(sp).not.toContain(AGENTS_OPEN)
+    // 没列的块一块都不追加：项目提示词、环境清单都不在
+    expect(sp).not.toContain('<project_prompt>')
+    expect(sp).not.toContain('HAIKU MODE ONLY.')
+    expect(sp).not.toContain('<environment>')
+  })
+
+  it('钉着只列 project_prompt 档案的子会话 → 只有项目提示词，没有指令文件围栏', async () => {
+    const sp = await pinnedPrompt(sid, 'prompt-only')
+    expect(sp.startsWith('PROMPT-ONLY BODY.')).toBe(true)
+    expect(sp).toContain('<project_prompt>\nHAIKU MODE ONLY.\n</project_prompt>')
+    expect(sp).not.toContain('<project_instructions')
   })
 })
 
 /**
- * 清单本身的选取规则（顺序 / 降级 / 子目录），端到端一路走到 `agent.getInfo` 的
- * systemPrompt —— 单测钉的是解析器，这里钉的是「档案里写的那串字，最后真的按这个顺序生效」。
+ * 两个指令文件块的规则（都读 / 缺了空了就不出 / 内容相同只留一份），端到端一路走到 `agent.getInfo` 的
+ * systemPrompt —— 单测钉的是解析器与段落函数，这里钉的是「档案里写的那串字，最后真的这样生效」。
  */
-describe('指令文件清单', () => {
+describe('指令文件块', () => {
   let sid: string
 
-  /** 在项目会话下钉一条该档案的子会话 → 建运行时 → 取完整系统提示词（无 LLM 调用） */
-  const switchTo = async (name: string): Promise<string> => {
-    const child = await createPinnedChildSession(app, { parentSid: sid, agentProfile: name })
-    const sp = await app.main.eval<string>(
-      `window.api.agent
-        .getInfo(${JSON.stringify(child)}, { ensure: true })
-        .then((info) => info.systemPrompt)`
-    )
-    // 戳确实生效了（否则下面测的是父形态基座的清单，而它恰好也是 AGENTS.md 优先）
-    expect(
-      sp.startsWith(
-        name === 'subdir-house'
-          ? 'SUBDIR BODY.'
-          : name === 'fallback-chain'
-            ? 'FALLBACK BODY.'
-            : 'PREF BODY.'
-      ),
-      `pinned ${name}`
-    ).toBe(true)
-    return sp
+  /** 另起一个项目（自己的目录、自己的两个文件）并在里面建一条会话，回会话 id */
+  const sessionIn = async (
+    dirName: string,
+    files: { agents?: string; claude?: string }
+  ): Promise<string> => {
+    const dir = join(app.home, dirName)
+    mkdirSync(dir, { recursive: true })
+    if (files.agents !== undefined) writeFileSync(join(dir, 'AGENTS.md'), files.agents)
+    if (files.claude !== undefined) writeFileSync(join(dir, 'CLAUDE.md'), files.claude)
+    const project = await createProject(app.main, { name: dirName, path: dir })
+    return (await createAgentSession(app.main, { projectId: project.id, title: dirName })).sid
   }
 
   beforeAll(async () => {
     sid = (await createAgentSession(app.main, { projectId, title: 'e2e-list' })).sid
   })
 
-  it('IF-E-1 顺序即优先级：同样两份文件在盘上，命中随清单顺序翻转', async () => {
-    const claudeFirst = await switchTo('pref-claude')
-    expect(claudeFirst).toContain('<project_instructions file="CLAUDE.md">')
-    expect(claudeFirst).toContain('CLAUDE RULES CONTENT.')
-    expect(claudeFirst).not.toContain('AGENT RULES CONTENT.')
-
-    const agentsFirst = await switchTo('pref-agents')
-    expect(agentsFirst).toContain('<project_instructions file="AGENTS.md">')
-    expect(agentsFirst).toContain('AGENT RULES CONTENT.')
-    expect(agentsFirst).not.toContain('CLAUDE RULES CONTENT.')
+  it('IF-E-1 两个文件都在 → 两块都进，AGENTS.md 恒在前：清单是集合，书写顺序不改变结果', async () => {
+    const claudeFirst = await pinnedPrompt(sid, 'both-claude-first')
+    const agentsFirst = await pinnedPrompt(sid, 'both-agents-first')
+    for (const sp of [claudeFirst, agentsFirst]) {
+      // 戳确实生效了（否则测的是父形态基座的清单）
+      expect(sp.startsWith('BOTH BODY.')).toBe(true)
+      expect(sp).toContain(`${AGENTS_OPEN}\nAGENT RULES CONTENT.\n</project_instructions>`)
+      expect(sp).toContain(`${CLAUDE_OPEN}\nCLAUDE RULES CONTENT.\n</project_instructions>`)
+      expect(sp.indexOf(AGENTS_OPEN)).toBeLessThan(sp.indexOf(CLAUDE_OPEN))
+      expect(countOf(sp, '<project_instructions ')).toBe(2)
+    }
+    // 两种写法得到同一份系统提示词
+    expect(claudeFirst).toBe(agentsFirst)
   })
 
-  it('IF-E-2 降级链：缺失的跳过、纯空白的也跳过，落到第三条 CLAUDE.md', async () => {
-    const sp = await switchTo('fallback-chain')
-    expect(sp).toContain('<project_instructions file="CLAUDE.md">')
-    expect(sp).toContain('CLAUDE RULES CONTENT.')
+  it('IF-E-2 缺失的不出、纯空白的也不出：只有 AGENTS.md 有内容 → 只有它那一块，没有空围栏', async () => {
+    const parent = await sessionIn('proj-inject-blank', {
+      agents: 'ONLY AGENTS CONTENT.',
+      claude: '   \n'
+    })
+    const sp = await pinnedPrompt(parent, 'both-agents-first')
+    expect(sp).toContain(`${AGENTS_OPEN}\nONLY AGENTS CONTENT.\n</project_instructions>`)
     // 空文件不该以「命中但空围栏」的形式出现
-    expect(sp).not.toContain('file="EMPTY.md"')
-    expect(sp).not.toContain('file="MISSING.md"')
+    expect(sp).not.toContain('file="CLAUDE.md"')
+    expect(countOf(sp, '<project_instructions ')).toBe(1)
+
+    // 两个都不在：一个围栏都没有
+    const bare = await sessionIn('proj-inject-none', {})
+    const none = await pinnedPrompt(bare, 'both-agents-first')
+    expect(none.startsWith('BOTH BODY.')).toBe(true)
+    expect(none).not.toContain('<project_instructions')
   })
 
-  it('IF-E-3 子目录条目：围栏的 file= 原样是 docs/house.md（正斜杠不被改写）', async () => {
-    const sp = await switchTo('subdir-house')
-    expect(sp).toContain('<project_instructions file="docs/house.md">')
-    expect(sp).toContain('HOUSE RULES CONTENT.')
+  it('IF-E-3 两个文件内容相同（副本 / 链接，只差首尾空白也算）→ 只留 AGENTS.md 那一份', async () => {
+    const parent = await sessionIn('proj-inject-same', {
+      agents: 'SHARED RULES CONTENT.',
+      claude: 'SHARED RULES CONTENT.\n'
+    })
+    const sp = await pinnedPrompt(parent, 'both-claude-first')
+    expect(sp).toContain(`${AGENTS_OPEN}\nSHARED RULES CONTENT.\n</project_instructions>`)
+    expect(sp).not.toContain('file="CLAUDE.md"')
+    expect(countOf(sp, 'SHARED RULES CONTENT.')).toBe(1)
+
+    // 只列 claude_md 时没有「另一份」可去重：CLAUDE.md 照常进
+    const only = await pinnedPrompt(parent, 'claude-only')
+    expect(only).toContain(`${CLAUDE_OPEN}\nSHARED RULES CONTENT.\n</project_instructions>`)
   })
 })
 
-describe('布尔存量档案', () => {
-  it('IF-E-5 `shuvix-instruction-files: true` 整份被判非法：该档案不出现在列表里，邻居照常', async () => {
-    // 改制前的写法（开关而非清单）。解析器判整份非法 → 扫描静默跳过：
-    // 「不生效也不遮蔽内置」是有意设计，但它必须只连累自己这一份文件
+describe('存量档案里的旧键', () => {
+  it('IF-E-5 `shuvix-instruction-files` / `shuvix-project-awareness` 按未知键忽略：档案照常在列表里，但什么都不注入', async () => {
+    // 改制前的两个键（连同更早的布尔写法）。2026-11-13 起解析器不再读它们 —— 不判非法、也不生效，无迁移
+    writeAgentMd(app, 'legacy-keys', {
+      tools: 'read',
+      rawLines: [
+        'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
+        'shuvix-project-awareness: true'
+      ],
+      body: 'LEGACY KEYS BODY.'
+    })
     writeAgentMd(app, 'legacy-bool', {
       tools: 'read',
       rawLines: ['shuvix-instruction-files: true'],
@@ -198,9 +243,17 @@ describe('布尔存量档案', () => {
     const names = await app.main.eval<string[]>(
       `window.api.subAgent.list().then((rows) => rows.map((r) => r.name))`
     )
-    expect(names).not.toContain('legacy-bool')
-    expect(names).toContain('pref-claude')
-    expect(names).toContain('subdir-house')
+    expect(names).toContain('legacy-keys')
+    expect(names).toContain('legacy-bool')
+    expect(names).toContain('both-agents-first')
+
+    const parent = (await createAgentSession(app.main, { projectId, title: 'e2e-legacy' })).sid
+    const sp = await pinnedPrompt(parent, 'legacy-keys')
+    expect(sp.startsWith('LEGACY KEYS BODY.')).toBe(true)
+    expect(sp).not.toContain('<project_instructions')
+    expect(sp).not.toContain('<project_prompt>')
+    expect(sp).not.toContain('AGENT RULES CONTENT.')
+    expect(sp).not.toContain('HAIKU MODE ONLY.')
   })
 })
 
@@ -218,7 +271,7 @@ describe('会话级选取项已下线', () => {
 })
 
 /**
- * 覆盖 work 但**省略** `shuvix-instruction-files` = 不注入。
+ * 覆盖 work 但**省略** `shuvix-prompt-blocks` = 一块都不追加。
  *
  * 独立 describe + 自清理：这条会往 `~/.shuvix/agents/work.md` 落一份覆盖档案，
  * 它对同实例后续所有新项目会话都生效，漏删就会把别的用例带成「无端不注入」。
@@ -237,6 +290,8 @@ describe('覆盖 work 的清单省略语义', () => {
     expect(overridden.systemPrompt.startsWith('NO-INJECTION WORK BODY.')).toBe(true)
     expect(overridden.systemPrompt).not.toContain('<project_instructions')
     expect(overridden.systemPrompt).not.toContain('AGENT RULES CONTENT.')
+    expect(overridden.systemPrompt).not.toContain('<project_prompt>')
+    expect(overridden.systemPrompt).not.toContain('<environment>')
 
     const res = await app.main.eval<{ success: boolean }>(
       `window.api.subAgent.delete({ name: 'work' })`
@@ -244,8 +299,10 @@ describe('覆盖 work 的清单省略语义', () => {
     expect(res.success).toBe(true)
 
     const restored = await createAgentSession(app.main, { projectId, title: 'e2e-reinject' })
-    expect(restored.systemPrompt).toContain('<project_instructions file="AGENTS.md">')
+    expect(restored.systemPrompt).toContain(AGENTS_OPEN)
     expect(restored.systemPrompt).toContain('AGENT RULES CONTENT.')
+    expect(restored.systemPrompt).toContain(CLAUDE_OPEN)
+    expect(restored.systemPrompt).toContain('<project_prompt>')
   })
 })
 
@@ -253,7 +310,7 @@ describe('覆盖 work 的清单省略语义', () => {
  * 知识库围栏 `<knowledge_bases>` —— 上下文注入的第三段，位置在项目提示词之后（项目记忆已退役，
  * 由项目库接替，它不再有自己的围栏）。
  *
- * 它**不跟项目感知走**：库是用户按会话选的，与「知不知道自己在哪个项目里」无关，所以不属于任何
+ * 它**不跟提示词块清单走**：库是用户按会话选的，与「知不知道自己在哪个项目里」无关，所以不属于任何
  * 项目的会话照样有围栏（只要它有库）。唯一的门是档案的工具清单里有没有 `knowledge`。
  *
  * 用户库**缺省一个都不启用**（2026-09-17）；2026-10-10 起项目会话的**项目库隐式启用**、排在最前（不归选择管）；
@@ -342,7 +399,7 @@ describe('知识库围栏', () => {
     // 内置库那一行带一句它是什么、且只读 —— 那句话本身不含路径与计数
     expect(fenceBodyOf(sp)).toMatch(/\n- shuvix — .*read-only/)
     expectNoContent(fenceBodyOf(sp))
-    // 项目感知那两段与围栏无关：没有项目就是没有，围栏照旧
+    // 项目那两段与围栏无关：没有项目就是没有，围栏照旧
     expect(sp).not.toContain('<project_prompt>')
     expect(sp).not.toContain('<project_memory>')
   })

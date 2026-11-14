@@ -2,28 +2,29 @@
  * DSC —— 「提示里指路」与「货架上真有」是同一个判断。
  *
  * 作图技能在桌面上出现在两处，由两段代码各自决定：
- *  - 变量表（`desktopPromptVars`）：名单里有技能工具 `skill` 且 findModelInvocable 里有 `builtin:drawing` →
- *    visualGuide / visualCraft 带一句「先加载 `builtin:drawing`」的指路；否则两个值都是空串
+ *  - 提示词块（`desktopPromptBlocks` 的 `drawing`）：名单里有技能工具 `skill` 且 findModelInvocable 里有 `builtin:drawing` →
+ *    块的两种正文（聊天里的 visualGuide、改文档的 agent —— 名单里有 `doc_edit` —— 拿的 visualCraft）都带一句
+ *    「先加载 `builtin:drawing`」的指路；否则两种都是空串
  *    （2026-09-24 起契约、预算与范例只在技能里，整份作图说明都挂在「技能在架」上）；
  *  - 工具解析（ToolHost 的 `resolveAgentTools` → 真的 `SkillTool('enabled')`）：名单里有 `skill` →
  *    findModelInvocable 的全部进货架索引（2026-10-28 起档案不逐个点名技能）。
  * 两边读的是同一份名单（锁先算好名单，冻结人设与解析工具各拿一份）。这一组把两边放在同一组输入下
  * 逐格比对：指路出现的地方技能一定加载得到，加载得到的地方提示一定指了路 —— 任何一边自己改了
- * 判断（例如又给 root 恒挂一个 SkillTool、或变量表按宿主而不是按名单判），矩阵里就会有一格对不上。
+ * 判断（例如又给 root 恒挂一个 SkillTool、或提示词块按宿主而不是按名单判），矩阵里就会有一格对不上。
  *
- * P1-11 起两边是 agentHost 直接导出的 `desktopPromptVars` 与 `createDesktopToolHost(...).resolveAgentTools`。
+ * 两边是 agentHost 直接导出的 `desktopPromptBlocks` 与 `createDesktopToolHost(...).resolveAgentTools`。
  * 这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩 skillService（可控的 findEnabled /
  * findModelInvocable —— 两边都该只看后者，DSC-4 钉住）、
  * `../../i18n`（顶层 import electron）与 ripgrep（真二进制），注册表桩要带 `registerBuiltinTool`
  * （skillTool.ts 加载即自注册）。派生 agent 的四格（P2-04-35）：工具一侧解析一个派生请求（根会话 SID、
- * agent AGENT_ID、不能再派生、coding），变量表一侧照旧按派生身份查（`varsOf('spawned')`）—— 两边仍是
+ * agent AGENT_ID、不能再派生、coding），提示词块一侧照旧按派生身份查（`varsOf('spawned')`）—— 两边仍是
  * 同一个判断；派生 agent 的回复不是一条对话，所以它的提示里没有交互段。
  *
  * 2026-09-24 DSC-1 同号改写：从前「不指路时手艺范例常驻」，如今不指路时两个值都是空串，
  * 指路时恰好一次、不带范例。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { AgentToolsRequest, PromptVars } from '@shuvix/agent-runtime'
+import type { AgentToolsRequest } from '@shuvix/agent-runtime'
 import type { Skill } from '../../types/skill'
 
 const mocks = vi.hoisted(() => ({
@@ -98,7 +99,7 @@ vi.mock('../../services/knowledge', () => ({
   builtinManualDir: () => null
 }))
 
-import { createDesktopToolHost, desktopPromptVars } from '../agentHost'
+import { createDesktopToolHost, desktopPromptBlocks } from '../agentHost'
 import { inProcess, profileOf } from './support/toolHostFixtures'
 
 const SID = 'sess-drawing-consistency'
@@ -137,21 +138,35 @@ function arrangeSkills(enabled: Skill[], modelInvocable: Skill[] = enabled): voi
 
 type Kind = 'root' | 'spawned'
 
-/** 变量表一侧（按 agent 自己的身份） */
-async function varsOf(kind: Kind, names: string[]): Promise<PromptVars> {
-  return await desktopPromptVars({
-    sessionId: kind === 'root' ? SID : AGENT_ID,
-    kind,
-    cwd: kind === 'root' ? '/w/proj' : '',
-    toolNames: names
-  })
+/** `drawing` 块的两种正文：聊天里的（带载体）与改文档的 agent 的（名单里多一个 `doc_edit`，只有「先加载」） */
+interface DrawingTexts {
+  visualGuide: string
+  visualCraft: string
 }
 
-/** 同一组输入下的两边：变量表与这个 agent 的工具解析（名单同一份；root 或派生） */
+/** 提示词块一侧（按 agent 自己的身份） */
+async function varsOf(kind: Kind, names: string[]): Promise<DrawingTexts> {
+  const drawingFor = async (toolNames: string[]): Promise<string> => {
+    const { drawing } = await desktopPromptBlocks({
+      sessionId: kind === 'root' ? SID : AGENT_ID,
+      kind,
+      cwd: kind === 'root' ? '/w/proj' : '',
+      toolNames
+    })
+    expect(drawing, 'drawing 块应当是字符串').toBeTypeOf('string')
+    return drawing!
+  }
+  return {
+    visualGuide: await drawingFor(names),
+    visualCraft: await drawingFor([...names, 'doc_edit'])
+  }
+}
+
+/** 同一组输入下的两边：提示词块与这个 agent 的工具解析（名单同一份；root 或派生） */
 async function bothSides(
   kind: Kind,
   names: string[]
-): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
+): Promise<{ vars: DrawingTexts; tools: Array<{ name?: string; description?: string }> }> {
   const vars = await varsOf(kind, names)
   const request: AgentToolsRequest =
     kind === 'root'

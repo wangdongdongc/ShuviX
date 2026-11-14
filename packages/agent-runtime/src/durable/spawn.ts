@@ -78,7 +78,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
+import type { PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
 import { resolveLockModel, type LockModel, type ModelSelection } from '../models/lockModel'
 import {
   NEXT_NUDGE_TEXT,
@@ -383,7 +383,7 @@ export interface SpawnHost {
   readonly toolHost: ToolHost
   readonly modelCatalog: ModelCatalog
   readonly promptExtensions: PromptExtensions
-  readonly promptVars: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  readonly promptBlocks: (ctx: PromptBlocksCtx) => PromptBlockTexts | Promise<PromptBlockTexts>
   readonly resolveProfileModel?: (
     spec: string
   ) => ModelSelection | null | undefined | Promise<ModelSelection | null | undefined>
@@ -664,7 +664,7 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
       )
       names = withoutOmittedTools(names, resolved.omitBuiltin)
       frozen = await computeFrozenAgentPrompt(
-        { promptVars: host.promptVars, logger },
+        { promptBlocks: host.promptBlocks, logger },
         {
           kind: 'spawned',
           sessionId: agentId,

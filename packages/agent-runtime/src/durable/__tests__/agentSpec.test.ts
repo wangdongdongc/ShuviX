@@ -20,8 +20,8 @@ const PROFILE: InProcessAgentType = {
   displayName: 'Default',
   description: '',
   tools: ['read', 'grep', 'agent'],
-  systemPrompt: 'BASE {{shuvix:persona}}',
-  instructionFiles: ['AGENTS.md', 'CLAUDE.md']
+  systemPrompt: 'BASE',
+  promptBlocks: ['environment', 'agents_md', 'claude_md']
 }
 
 describe('resolveThinkingLevel / normalizeToolNames — root 决策列', () => {
@@ -73,7 +73,7 @@ describe('resolveThinkingLevel — 档案思考档位（shuvix-thinking）', () 
  * 底子；root 会话的勾选（overlay）在其上**增减**，只管 MCP 服务器：`mcp:` 加一台，`-mcp:` 取消档案声明的
  * 一台（记号见 chat-protocol `toolSelection.ts`；同一项既勾又取消时取消赢）。内置名（`skill` 也是）既带
  * 不进来，也取消不掉；技能不在勾选里（2026-10-28），旧会话存着的 `skill:` / `-skill:` 条目什么也不做。
- * spawned 没有勾选，档案即全部。同一份名单喂给人设冻结时的变量表（`promptVars` 的 `toolNames`）与工具解析
+ * spawned 没有勾选，档案即全部。同一份名单喂给人设冻结时的提示词块（`promptBlocks` 的 `toolNames`）与工具解析
  *（都在锁里，见 lock.create.test.ts）。
  */
 describe('normalizeToolNames —— 工具名单归一（TN）', () => {

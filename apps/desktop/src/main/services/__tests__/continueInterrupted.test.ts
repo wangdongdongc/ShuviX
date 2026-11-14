@@ -77,7 +77,7 @@ vi.mock('../../agents/agentHost', () => ({
     rebuildAgentTools: () => ({})
   }),
   desktopPromptHost: {},
-  desktopPromptVars: () => ({}),
+  desktopPromptBlocks: () => ({}),
   resolveProfileModelSpec: () => null
 }))
 vi.mock('../agentRuntimeAdapters', () => ({
@@ -170,8 +170,7 @@ const profile = (name: string): Record<string, unknown> => ({
   description: '',
   tools: [],
   systemPrompt: 'You are the desktop agent',
-  instructionFiles: [],
-  projectAwareness: false
+  promptBlocks: []
 })
 
 const FAUX_SELECTION = { provider: 'faux', modelId: 'faux-1' }

@@ -140,8 +140,7 @@ export function inProcess(profile: AgentProfile): InProcessAgentType {
     systemPrompt: profile.systemPrompt,
     model: profile.model,
     thinkingLevel: profile.thinkingLevel,
-    instructionFiles: [...profile.instructionFiles],
-    projectAwareness: profile.projectAwareness
+    promptBlocks: [...(profile.promptBlocks ?? [])]
   }
 }
 

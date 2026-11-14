@@ -1,10 +1,10 @@
 ## 这份文档是什么
 
 <!-- shuvix:agent-start -->
-这份文档是 ShuviX agents 目录里的一份**智能体档案**（`shuvix: agent v1`）：frontmatter 决定这个智能体的工具、模型和上下文（`shuvix-tools`、`shuvix-model`、`shuvix-instruction-files` ……），正文就是它的全部系统提示词。ShuviX 每次用它创建智能体时都重新读一遍，所以存下的改动作用于之后创建的智能体；正在跑的那个保持它启动时的版本。`name` 与某个内置档案（work、chat、coding、notebook ……）相同的文件会顶替那个内置档案。
+这份文档是 ShuviX agents 目录里的一份**智能体档案**（`shuvix: agent v1`）：frontmatter 决定这个智能体的工具、模型和上下文（`shuvix-tools`、`shuvix-model` ……），正文就是它的系统提示词，`shuvix-prompt-blocks` 点名的块追加在正文之后。ShuviX 每次用它创建智能体时都重新读一遍，所以存下的改动作用于之后创建的智能体；正在跑的那个保持它启动时的版本。`name` 与某个内置档案（work、chat、coding、notebook ……）相同的文件会顶替那个内置档案。
 
 <!-- shuvix:manual-start -->
-完整规范 —— 每个键、占位符、什么会让文件无效、示例 —— 是 ShuviX 说明书条目 `/agent-md.md`。改你没把握的地方之前先用 `knowledge` 工具读它（库 `shuvix`），不要从别的文件反推格式。
+完整规范 —— 每个键、提示词块、什么会让文件无效、示例 —— 是 ShuviX 说明书条目 `/agent-md.md`。改你没把握的地方之前先用 `knowledge` 工具读它（库 `shuvix`），不要从别的文件反推格式。
 <!-- shuvix:manual-end -->
 <!-- shuvix:agent-end -->
 

@@ -2,23 +2,29 @@
  * 锁 · 系统提示词冻结（2026-11-06，用户裁决「历史状态不变」；`prompt/persona.ts`、`prompt/sections.ts` 开头）：
  * 根 agent 的系统提示词在这段对话第一次上锁时渲染一次 —— 人设、`personaKey`（只用来提醒）与其余段落
  * （`AgentStateDoc.sections`）写进上锁的那个提交；之后重启后空闲清了锁、芯片上的 X、回退到后面的消息再上锁，
- * 都原样沿用，不调变量表、请求时不调段落的 seam（只在重新上锁时为比对调一次）。来源变了只在提醒里报
+ * 都原样沿用，不重新渲染提示词块、请求时不调段落的 seam（只在重新上锁时为比对调一次）。来源变了只在提醒里报
  * （`systemPromptStatus`），用户点重建（`rebuildSystemPrompt`）之后下一次上锁才重新渲染。
  *
  *   FRZ-1  第一次上锁：人设、摘要、恰是选中的那几段写进上锁的提交；seam 各调一次、不是比对；第一次请求逐字节
  *   FRZ-2  同一把锁里来源全变了 → 请求逐字节相同、没有新的 pi.system、不调 seam
- *   FRZ-3  空闲重启 + 来源 / 环境 / 正文 / 工作目录 / 指令文件清单都变了 → 逐字节相同、变量表不调、seam 只为比对
+ *   FRZ-3  空闲重启 + 来源 / 环境 / 正文 / 工作目录 / 提示词块清单都变了 → 逐字节相同、提示词块不渲染、seam 只为比对
  *          调（存着的清单、此刻的工作目录）、日志「reusing the frozen system prompt」、文档深相等（旧摘要）
  *   FRZ-4  芯片上的 X（destroyAgent()）之后发送：同 FRZ-3；删锁的提交不碰 agent-state
  *   FRZ-5  回退到后面的用户消息 → F 带着回退点的段落、沿用；回退到第一条 → 全新渲染
  *   FRZ-6  清空（存储删掉）→ 全新渲染
- *   FRZ-7  旧文档（有人设、没摘要、没段落）→ 人设沿用、变量表不调、摘要 = 此刻的、段落按此刻的来源渲染（不是比对）；
+ *   FRZ-7  旧文档（有人设、没摘要、没段落）→ 人设沿用、提示词块不渲染、摘要 = 此刻的、段落按此刻的来源渲染（不是比对）；
  *          提醒 {frozen:true, stale:[]}
  *   FRZ-8  旧文档、摘要与此刻不同 → 沿用、摘要留着；提醒 [persona]
  *   FRZ-9  冻结时没开自动脱敏、重启后开了 → 段落集合也冻结着：placeholders 照旧缺席、请求不变；提醒 [placeholders]。
  *          反过来（冻结时开着、后来关了）→ 那一段照旧在；提醒 [placeholders]
- *   FRZ-10 档案去掉指令文件 / 项目感知 / knowledge → 请求逐字节相同、提醒含 persona；反过来档案加了指令文件 →
- *          请求不变、提醒 [persona, project_instructions{CLAUDE.md}]；重建之后那个文件进了提示词
+ *   FRZ-10 档案去掉指令文件块 / 项目提示词块 / knowledge → 请求逐字节相同、提醒含 persona 与那三段（指令文件带文件名）；反过来档案加了指令文件块 →
+ *          请求不变、提醒 [persona, claude_md]；重建之后那个文件进了提示词
+ *   FRZ-19 两个指令文件内容相同：只有 AGENTS.md 一个围栏（claude_md 冻结成 null）；副本改了 → 只报 claude_md、请求不变；
+ *          重建之后两个围栏，AGENTS.md 在前
+ *   FRZ-20 冻结成副本之后改了 AGENTS.md → 两段都报（CLAUDE.md 没动，但它那一段此刻会出现）
+ *   LCK-1  [WB] 2026-11-13 之前冻结的对话（sections.project_instructions）：每次重新上锁那一段逐字节保留；提醒不报旧 key；
+ *          重建之后换成新的两段
+ *   LCK-2  [WB] 没存提示词块清单的旧文档 + 两个相同的指令文件：按档案的清单去重，清单写回
  *   FRZ-11 chat → work（档案名变了，D3）：人设沿用；提醒 [persona]；文档的档案名写成此刻的
  *   FRZ-12 重新上锁时恰调一次 noteSectionsCurrent、只给一致的那几段、固定次序；第一次上锁不调；全变了不调
  *   FRZ-13 重新上锁比对时某段的 seam 抛错 → 照样上锁、发冻结的文本、记一条按段的警告、那一段不转告
@@ -37,6 +43,7 @@ import { backgroundContext as BG } from '../context'
 import { AgentStateDoc } from '../docs'
 import { AgentCreationError, type AgentLock } from '../lock'
 import { fenceInstructionFile, fenceKnowledgeBases, fenceProjectPrompt } from '../prompt/fences'
+import type { AgentConfig } from '../seams'
 import { scenarioToolHost } from './support/agentConfig'
 import { recordPublications } from './support/commits'
 import { answer, callTool } from './support/faux'
@@ -67,6 +74,18 @@ import { deferred, waitFor, withTimeout } from './support/wait'
 registerHostCleanup()
 
 const TIMEOUT = 20000
+
+/** 档案两个指令文件块都点（外加环境与项目提示词） */
+const BOTH_FILES = (config: AgentConfig): void => {
+  config.profile = {
+    ...config.profile,
+    promptBlocks: ['environment', 'agents_md', 'claude_md', 'project_prompt']
+  }
+}
+
+/** 系统提示词里有几个指令文件围栏 */
+const fenceCount = (prompt: string): number => prompt.split('<project_instructions').length - 1
+
 describe('lock · frozen system prompt', () => {
   it(
     'FRZ-1 the first lock writes the persona, the key and exactly the selected sections in the lock commit; each seam once, not a comparison; the first request byte for byte',
@@ -82,7 +101,7 @@ describe('lock · frozen system prompt', () => {
         profileName: 'work',
         rootSessionId: 's1',
         persona: PERSONA_1,
-        instructionFiles: ['AGENTS.md'],
+        promptBlocks: ['environment', 'agents_md', 'project_prompt'],
         personaKey: keyOf(config),
         sections: SECTIONS_A
       })
@@ -121,7 +140,7 @@ describe('lock · frozen system prompt', () => {
   )
 
   it(
-    'FRZ-3 idle restart with the sources, the environment, the profile body, the working directory and the instruction-file list all changed: byte-identical, promptVars not asked, the seams only for the comparison, the reuse logged, the document deep-equal',
+    'FRZ-3 idle restart with the sources, the environment, the profile body, the working directory and the prompt-block list all changed: byte-identical, promptBlocks not asked, the seams only for the comparison, the reuse logged, the document deep-equal',
     async () => {
       const { t, vars, config, sources } = await envScenario()
       const session = await t.open()
@@ -134,7 +153,7 @@ describe('lock · frozen system prompt', () => {
       config.profile = {
         ...config.profile,
         systemPrompt: `${BODY} Changed.`,
-        instructionFiles: ['CLAUDE.md', 'AGENTS.md']
+        promptBlocks: ['drawing', 'environment', 'agents_md', 'claude_md', 'project_prompt']
       }
       config.cwd = '/work/other'
       sources.calls.length = 0
@@ -146,7 +165,7 @@ describe('lock · frozen system prompt', () => {
       expect(reopened.lock).toBeDefined()
       expect(t2.kit.requests[0]!.systemPrompt).toBe(first)
       expect(vars.state.calls).toBe(1)
-      // 比对：存着的清单（AGENTS.md）、此刻的工作目录；请求时一次都不读
+      // 比对：冻结了的那几段（AGENTS.md，没有 CLAUDE.md）、此刻的工作目录；请求时一次都不读
       expect(sources.calls).toEqual([
         'instructions:s1:/work/other:AGENTS.md',
         'project:s1',
@@ -221,9 +240,9 @@ describe('lock · frozen system prompt', () => {
       await send(t, session, 'fresh')
       expect(vars.state.calls).toBe(2)
       const fresh = await stateOf(session, F2)
-      expect(fresh?.persona).toContain('Today is 2026-11-06')
+      expect(fresh?.persona).toContain('Current date: 2026-11-06')
       expect(fresh?.sections).toEqual({
-        project_instructions: fenceInstructionFile('AGENTS.md', 'Use npm.'),
+        agents_md: fenceInstructionFile('AGENTS.md', 'Use npm.'),
         project_prompt: fenceProjectPrompt('Acme billing, v2.'),
         knowledge_bases: fenceKnowledgeBases('Bases: recipes.')
       })
@@ -245,7 +264,7 @@ describe('lock · frozen system prompt', () => {
       const cleared = await t.open()
       await send(t, cleared, 'after clear')
       expect(vars.state.calls).toBe(2)
-      expect(t.kit.requests.at(-1)!.systemPrompt).toContain('Today is 2026-11-07')
+      expect(t.kit.requests.at(-1)!.systemPrompt).toContain('Current date: 2026-11-07')
       expect(t.kit.requests.at(-1)!.systemPrompt).toContain('Acme billing, v2.')
       expect((await stateOf(cleared))?.sections?.project_prompt).toBe(
         fenceProjectPrompt('Acme billing, v2.')
@@ -255,7 +274,7 @@ describe('lock · frozen system prompt', () => {
   )
 
   it(
-    'FRZ-7 a document from before (persona, no key, no sections): the persona is reused without asking promptVars, the key becomes the current one, the sections are rendered from the current sources (not a comparison); the status is frozen with nothing stale',
+    'FRZ-7 a document from before (persona, no key, no sections): the persona is reused without asking promptBlocks, the key becomes the current one, the sections are rendered from the current sources (not a comparison); the status is frozen with nothing stale',
     async () => {
       const { t, vars, config, sources } = await envScenario()
       const session = await t.open()
@@ -352,7 +371,7 @@ describe('lock · frozen system prompt', () => {
   )
 
   it(
-    'FRZ-10 the profile drops instruction files, project awareness and knowledge after the freeze: byte-identical; the status reports the persona and the three sections it would no longer select',
+    'FRZ-10 the profile drops its instruction-file block, its project_prompt block and knowledge after the freeze: byte-identical; the status reports the persona and the three sections it would no longer select (the instruction file with its file name)',
     async () => {
       const { t, config } = await envScenario()
       const session = await t.open()
@@ -361,8 +380,7 @@ describe('lock · frozen system prompt', () => {
 
       config.profile = {
         ...config.profile,
-        instructionFiles: [],
-        projectAwareness: false,
+        promptBlocks: ['environment'],
         tools: config.profile.tools.filter((name) => name !== 'knowledge')
       }
       const t2 = await t.restart()
@@ -375,7 +393,8 @@ describe('lock · frozen system prompt', () => {
         frozen: true,
         stale: [
           { key: 'persona' },
-          { key: 'project_instructions' },
+          // 不再选的指令文件段落照样带文件名（提醒里说得出是哪个文件）
+          { key: 'agents_md', file: 'AGENTS.md' },
           { key: 'project_prompt' },
           { key: 'knowledge_bases' }
         ]
@@ -385,13 +404,13 @@ describe('lock · frozen system prompt', () => {
   )
 
   it(
-    'FRZ-10 the profile adds instruction files after the freeze: the prompt is unchanged, the status reports [persona, project_instructions(CLAUDE.md)]; after a rebuild the file is in the prompt',
+    'FRZ-10 the profile adds the instruction-file blocks after the freeze: the prompt is unchanged, the status reports [persona, claude_md] (the file that exists); after a rebuild the file is in the prompt',
     async () => {
       const sources = sourceHost({ files: { 'CLAUDE.md': 'Be brief.' } })
       const { t, config } = await envScenario({
         sources,
         edit: (c) => {
-          c.profile = { ...c.profile, instructionFiles: [] }
+          c.profile = { ...c.profile, promptBlocks: ['environment', 'project_prompt'] }
         }
       })
       const session = await t.open()
@@ -403,14 +422,18 @@ describe('lock · frozen system prompt', () => {
         'knowledge_bases'
       ])
 
-      config.profile = { ...config.profile, instructionFiles: ['AGENTS.md', 'CLAUDE.md'] }
+      config.profile = {
+        ...config.profile,
+        promptBlocks: ['environment', 'agents_md', 'claude_md', 'project_prompt']
+      }
       await session.destroyAgent()
       await send(t, session, 'u2')
       expect(t.kit.requests.at(-1)!.systemPrompt).toBe(first)
-      expect(session.lock?.extensions).not.toContain('shuvix.prompt.instructions')
+      expect(session.lock?.extensions).not.toContain('shuvix.prompt.agents-md')
+      expect(session.lock?.extensions).not.toContain('shuvix.prompt.claude-md')
       expect(await session.systemPromptStatus()).toEqual({
         frozen: true,
-        stale: [{ key: 'persona' }, { key: 'project_instructions', file: 'CLAUDE.md' }]
+        stale: [{ key: 'persona' }, { key: 'claude_md', file: 'CLAUDE.md' }]
       })
 
       expect(await session.rebuildSystemPrompt()).toEqual({ success: true })
@@ -419,6 +442,176 @@ describe('lock · frozen system prompt', () => {
         fenceInstructionFile('CLAUDE.md', 'Be brief.')
       )
       expect(await session.systemPromptStatus()).toEqual({ frozen: true, stale: [] })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'FRZ-19 identical instruction files end to end: one fence (claude_md frozen as null); the copy diverges → the status reports only claude_md and the prompt stays byte-identical; after a rebuild both fences, AGENTS.md first, between the environment block and the project prompt',
+    async () => {
+      const sources = sourceHost({ files: { 'AGENTS.md': 'Use pnpm.', 'CLAUDE.md': 'Use pnpm.' } })
+      const { t } = await envScenario({ sources, edit: BOTH_FILES })
+      const session = await t.open()
+      await send(t, session, 'u1')
+      const frozen = { ...SECTIONS_A, claude_md: null }
+      const first = t.kit.requests[0]!.systemPrompt
+      expect(first).toBe(promptOf(PERSONA_1, frozen))
+      expect(fenceCount(first)).toBe(1)
+      expect(first).toContain('<project_instructions file="AGENTS.md">')
+      expect((await stateOf(session))?.sections).toEqual(frozen)
+
+      sources.values.files = { 'AGENTS.md': 'Use pnpm.', 'CLAUDE.md': 'Never push.' }
+      expect(await session.systemPromptStatus()).toEqual({
+        frozen: true,
+        stale: [{ key: 'claude_md', file: 'CLAUDE.md' }]
+      })
+      await send(t, session, 'u2')
+      expect(t.kit.requests[1]!.systemPrompt).toBe(first)
+
+      expect(await session.rebuildSystemPrompt()).toEqual({ success: true })
+      await send(t, session, 'u3')
+      const rebuilt = t.kit.requests.at(-1)!.systemPrompt
+      const agents = fenceInstructionFile('AGENTS.md', 'Use pnpm.')
+      const claude = fenceInstructionFile('CLAUDE.md', 'Never push.')
+      expect(rebuilt).toBe(promptOf(PERSONA_1, { ...SECTIONS_A, claude_md: claude }))
+      expect(fenceCount(rebuilt)).toBe(2)
+      // 各在自己的围栏里，AGENTS.md 在前；都在 </environment> 之后、<project_prompt> 之前
+      expect(rebuilt).toContain(`</environment>\n\n${agents}\n\n${claude}\n\n<project_prompt>`)
+      expect((await stateOf(session))?.sections).toEqual({ ...SECTIONS_A, claude_md: claude })
+      expect(await session.systemPromptStatus()).toEqual({ frozen: true, stale: [] })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'FRZ-20 frozen as a copy, then AGENTS.md is edited away from the identical CLAUDE.md: both sections are stale — CLAUDE.md did not change on disk, yet its section would now appear',
+    async () => {
+      const sources = sourceHost({ files: { 'AGENTS.md': 'Use pnpm.', 'CLAUDE.md': 'Use pnpm.' } })
+      const { t } = await envScenario({ sources, edit: BOTH_FILES })
+      const session = await t.open()
+      await send(t, session, 'u1')
+      expect((await stateOf(session))?.sections).toMatchObject({ claude_md: null })
+
+      sources.values.files = { 'AGENTS.md': 'Use npm.', 'CLAUDE.md': 'Use pnpm.' }
+      expect(await session.systemPromptStatus()).toEqual({
+        frozen: true,
+        stale: [
+          { key: 'agents_md', file: 'AGENTS.md' },
+          { key: 'claude_md', file: 'CLAUDE.md' }
+        ]
+      })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'LCK-1 [WB] a conversation frozen before 2026-11-13 (sections.project_instructions, no promptBlocks, a v1 key): every re-lock keeps that fence byte for byte through the legacy extension and never reads the file for the prompt; the status reports [persona, claude_md] (the old key itself is never reported); a rebuild moves it to the new sections',
+    async () => {
+      const LEGACY = '<project_instructions file="CLAUDE.md">\nOld rules.\n</project_instructions>'
+      const OLD_SECTIONS = {
+        project_instructions: LEGACY,
+        project_prompt: SECTIONS_A.project_prompt,
+        knowledge_bases: SECTIONS_A.knowledge_bases
+      }
+      const sources = sourceHost({ files: { 'CLAUDE.md': 'Old rules.' } })
+      const { t, vars } = await envScenario({ sources, edit: BOTH_FILES })
+      const session = await t.open()
+      // 改动之前的构建冻结下来的文档：一段指令文件（key project_instructions）、文件清单、v1 摘要，没有提示词块清单
+      await session.harness.commit(async (tx) => {
+        const state = await tx.doc(AgentStateDoc, ROOT_CONVERSATION_ID)
+        Object.assign(state, {
+          kind: 'root',
+          profileName: 'work',
+          rootSessionId: 's1',
+          persona: PERSONA_1,
+          personaKey: 'v1:abc',
+          instructionFiles: ['AGENTS.md', 'CLAUDE.md'],
+          sections: OLD_SECTIONS
+        })
+      }, BG)
+
+      const expected = [
+        PERSONA_1,
+        LEGACY,
+        SECTIONS_A.project_prompt,
+        SECTIONS_A.knowledge_bases
+      ].join('\n\n')
+      await send(t, session, 'u1')
+      expect(t.kit.requests[0]!.systemPrompt).toBe(expected)
+      expect(vars.state.calls).toBe(0)
+      expect(session.lock?.extensions).toContain('shuvix.prompt.instructions')
+      expect(session.lock?.extensions).not.toContain('shuvix.prompt.agents-md')
+      expect(session.lock?.extensions).not.toContain('shuvix.prompt.claude-md')
+      const after = await stateOf(session)
+      expect(after?.sections).toEqual(OLD_SECTIONS)
+      expect(after?.personaKey).toBe('v1:abc')
+      expect(await session.systemPromptStatus()).toEqual({
+        frozen: true,
+        stale: [{ key: 'persona' }, { key: 'claude_md', file: 'CLAUDE.md' }]
+      })
+
+      // 文件改了、重启后再上锁：还是冻结的那份，逐字节
+      sources.values.files = { 'AGENTS.md': 'Brand new.', 'CLAUDE.md': 'New rules.' }
+      const t2 = await t.restart()
+      const reopened = await t2.open()
+      await send(t2, reopened, 'u2')
+      expect(t2.kit.requests[0]!.systemPrompt).toBe(expected)
+      expect((await stateOf(reopened))?.sections).toEqual(OLD_SECTIONS)
+      expect(await reopened.systemPromptStatus()).toEqual({
+        frozen: true,
+        stale: [
+          { key: 'persona' },
+          { key: 'agents_md', file: 'AGENTS.md' },
+          { key: 'claude_md', file: 'CLAUDE.md' }
+        ]
+      })
+
+      // 用户点重建：换成新的两段，旧 key 不在了
+      expect(await reopened.rebuildSystemPrompt()).toEqual({ success: true })
+      await send(t2, reopened, 'u3')
+      const rebuiltSections = {
+        ...SECTIONS_A,
+        agents_md: fenceInstructionFile('AGENTS.md', 'Brand new.'),
+        claude_md: fenceInstructionFile('CLAUDE.md', 'New rules.')
+      }
+      expect(t2.kit.requests.at(-1)!.systemPrompt).toBe(promptOf(PERSONA_1, rebuiltSections))
+      expect((await stateOf(reopened))?.sections).toEqual(rebuiltSections)
+      expect(reopened.lock?.extensions).not.toContain('shuvix.prompt.instructions')
+      expect(await reopened.systemPromptStatus()).toEqual({ frozen: true, stale: [] })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'LCK-2 [WB] a document from before without promptBlocks (persona only) and identical instruction files: the re-lock de-duplicates with the profile’s list — one fence, claude_md frozen as null, the list stored',
+    async () => {
+      const sources = sourceHost({ files: { 'AGENTS.md': 'Use pnpm.', 'CLAUDE.md': 'Use pnpm.' } })
+      const { t, config } = await envScenario({ sources, edit: BOTH_FILES })
+      const session = await t.open()
+      await send(t, session, 'u1')
+      await session.harness.commit(async (tx) => {
+        const state = await tx.doc(AgentStateDoc, ROOT_CONVERSATION_ID)
+        delete state.personaKey
+        delete state.sections
+        delete state.promptBlocks
+      }, BG)
+
+      const t2 = await t.restart()
+      const reopened = await t2.open()
+      await send(t2, reopened, 'u2')
+      const prompt = t2.kit.requests[0]!.systemPrompt
+      expect(fenceCount(prompt)).toBe(1)
+      expect(prompt).toBe(promptOf(PERSONA_1, { ...SECTIONS_A, claude_md: null }))
+      const after = await stateOf(reopened)
+      expect(after?.sections).toEqual({ ...SECTIONS_A, claude_md: null })
+      expect(after?.promptBlocks).toEqual(config.profile.promptBlocks)
+      expect(after?.promptBlocks).toEqual([
+        'environment',
+        'agents_md',
+        'claude_md',
+        'project_prompt'
+      ])
+      expect(await reopened.systemPromptStatus()).toEqual({ frozen: true, stale: [] })
     },
     TIMEOUT
   )
@@ -462,7 +655,7 @@ describe('lock · frozen system prompt', () => {
       sources.values.projectPrompt = 'Acme billing, v2.'
       await session.destroyAgent()
       await send(t, session, 'u2')
-      expect(sources.notes).toEqual([['s1', ['project_instructions', 'knowledge_bases']]])
+      expect(sources.notes).toEqual([['s1', ['agents_md', 'knowledge_bases']]])
 
       changeAllSources(sources)
       await session.destroyAgent()
@@ -490,7 +683,7 @@ describe('lock · frozen system prompt', () => {
       )
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain('project exploded')
-      expect(sources.notes).toEqual([['s1', ['project_instructions', 'knowledge_bases']]])
+      expect(sources.notes).toEqual([['s1', ['agents_md', 'knowledge_bases']]])
     },
     TIMEOUT
   )
@@ -504,7 +697,7 @@ describe('lock · frozen system prompt', () => {
       await session.createAgent()
       expect(session.lock).toBeDefined()
       expect((await stateOf(session))?.sections).toEqual({
-        project_instructions: SECTIONS_A.project_instructions,
+        agents_md: SECTIONS_A.agents_md,
         knowledge_bases: SECTIONS_A.knowledge_bases
       })
       const warnings = t.warnings.filter((line) =>
@@ -550,7 +743,7 @@ describe('lock · frozen system prompt', () => {
       expect(reopened.lock?.extensions).toContain('shuvix.prompt.project-prompt')
       // 冻结了的两段比对、待冻结的那一段渲染：各一次
       expect([...sources.calls].sort()).toEqual([...RENDER_CALLS_A].sort())
-      expect(sources.notes).toEqual([['s1', ['project_instructions', 'knowledge_bases']]])
+      expect(sources.notes).toEqual([['s1', ['agents_md', 'knowledge_bases']]])
       // 冻结之后请求时不再调它
       sources.calls.length = 0
       await send(t2, reopened, 'u3')

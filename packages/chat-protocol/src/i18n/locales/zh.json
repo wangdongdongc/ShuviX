@@ -1370,8 +1370,7 @@
     "subAgentDeleteConfirmDesc": "将删除 \"{{name}}\" 的定义文件，此操作不可恢复。",
     "subAgentAdd": "添加自定义智能体",
     "subAgentCreateRequired": "名称、描述、系统提示词为必填",
-    "subAgentInstructionFiles": "指令文件",
-    "subAgentProjectAwareness": "项目感知",
+    "subAgentPromptBlocks": "提示词块",
     "subAgentUserWords": "接收用户原话",
     "subAgentDescription": "描述",
     "subAgentBasicGroup": "基本信息",
@@ -2019,7 +2018,8 @@
     "source": {
       "persona": "智能体档案",
       "placeholders": "ShuviX 内置说明",
-      "project_instructions": "指令文件",
+      "agents_md": "AGENTS.md",
+      "claude_md": "CLAUDE.md",
       "project_prompt": "项目提示词",
       "knowledge_bases": "知识库",
       "bot_profile": "Bot 人设与记忆"

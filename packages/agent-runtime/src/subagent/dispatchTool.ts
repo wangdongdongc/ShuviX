@@ -62,8 +62,7 @@ export function toInProcessAgentType(def: AgentProfile): InProcessAgentType {
     systemPrompt: def.systemPrompt,
     model: def.model,
     thinkingLevel: def.thinkingLevel,
-    instructionFiles: [...def.instructionFiles],
-    projectAwareness: def.projectAwareness
+    promptBlocks: [...def.promptBlocks]
   }
 }
 

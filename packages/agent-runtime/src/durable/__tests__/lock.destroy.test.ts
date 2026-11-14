@@ -10,7 +10,12 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { SessionStateDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
-import { DECL_RESOLVE, scenarioConfig, scenarioToolHost } from './support/agentConfig'
+import {
+  DECL_RESOLVE,
+  markerPersona,
+  scenarioConfig,
+  scenarioToolHost
+} from './support/agentConfig'
 import { recordPublications, type PublicationSummary } from './support/commits'
 import { answer, callTool, held, modelError, stalled } from './support/faux'
 import { registerHostCleanup } from './support/host'
@@ -215,8 +220,8 @@ describe('lock · destroy', () => {
     expect(lock.toolNames.slice(-3)).toEqual(['skill', 'mcp__broken__noop', 'mcp__ssh__exec'])
     expect(lock.skills).toEqual(['pdf', 'builtin:widget'])
     expect(t.kit.requests[1]!.modelId).toBe('faux-2')
-    // 系统提示词冻结着（2026-11-06）：销毁再建不重新渲染人设，变量表里的 marker 变了也照旧
-    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
+    // 系统提示词冻结着（2026-11-06）：销毁再建不重新渲染人设，块里的 marker 变了也照旧
+    expect(t.kit.requests[1]!.systemPrompt).toBe(markerPersona('M1'))
     expect(t.kit.requests[1]!.systemPrompt).toBe(t.kit.requests[0]!.systemPrompt)
     expect(vars.state.calls).toBe(1)
     expect(await toolDeltaCount(await session.currentConversation())).toBe(2)

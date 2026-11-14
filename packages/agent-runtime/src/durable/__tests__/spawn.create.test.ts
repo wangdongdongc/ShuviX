@@ -14,7 +14,7 @@ import { parseSpawnedAgentRecord, spawnedAgentRecordOf } from '../agentRecord'
 import { AgentStateDoc } from '../docs'
 import { PROMPT_EXTENSION } from '../prompt/sections'
 import type { SpawnCreatedInfo } from '../spawn'
-import { testProfile } from './support/agentConfig'
+import { markerPersona, testProfile } from './support/agentConfig'
 import { summarize } from './support/commits'
 import { answer, callTools } from './support/faux'
 import { registerHostCleanup } from './support/host'
@@ -104,7 +104,10 @@ describe('SpawnCoordinator · creation', () => {
     expect(creating[0]!.docs).toContain(`shuvix.agent-state#${C}`)
     const state = creating[0]!.state as Record<string, unknown>
     expect(parseSpawnedAgentRecord(state)).toBeDefined()
-    expect(state).toMatchObject({ persona: 'You are M1 explorer', rootSessionId: 's1' })
+    expect(state).toMatchObject({
+      persona: markerPersona('M1', 'You are explorer'),
+      rootSessionId: 's1'
+    })
     expect(kinds).toEqual(['spawned'])
     // 之后没有发布再写子对话的记录键
     const later = raw.slice(raw.indexOf(creating[0]!) + 1).filter((entry) => entry.state)
@@ -275,13 +278,13 @@ describe('SpawnCoordinator · creation', () => {
     expect(d.t.registryOf('s1')!.snapshot().extension('shuvix.builtin')).toBe(builtinBefore)
   })
 
-  it('P2-03-05b the host omits a builtin for this agent: the request still has the name, the persona variables and the record do not', async () => {
+  it('P2-03-05b the host omits a builtin for this agent: the request still has the name, the persona blocks and the record do not', async () => {
     const seen: Array<{ kind: string; toolNames: string[] }> = []
     const d = await hostD({
       host: {
-        promptVars: (ctx) => {
+        promptBlocks: (ctx) => {
           seen.push({ kind: ctx.kind, toolNames: [...ctx.toolNames] })
-          return { marker: 'M1' }
+          return { environment: 'M1' }
         }
       }
     })

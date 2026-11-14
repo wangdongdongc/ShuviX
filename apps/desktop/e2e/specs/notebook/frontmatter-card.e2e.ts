@@ -32,7 +32,7 @@ const CARD_MD = [
   'name: card-demo-agent',
   'description: e2e frontmatter card',
   'shuvix-tools: bash, read, write',
-  'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
+  'shuvix-prompt-blocks: environment, agents_md',
   'shuvix-builtin: true',
   'x-e2e-note: generic row',
   '---',
@@ -242,7 +242,7 @@ describe('frontmatter 属性卡', () => {
     )
     expect(badge).toBe('ShuviX agent · v1')
 
-    // 可编辑宿主（笔记本注入了 mountField）：model / thinking / tools / instruction-files 四行是
+    // 可编辑宿主（笔记本注入了 mountField）：model / thinking / tools / prompt-blocks 四行是
     // **选择器槽位**，由宿主挂载 ModelSelect / 档位下拉 / ToolSelectList / 清单输入框，卡片自身不再渲染 chips。
     // 只读宿主（FilePreview）走另一分支，仍是 .cm-shuvix-fmcard-chip 只读展示。
     const slots = await app.main.eval<number>(
@@ -255,23 +255,20 @@ describe('frontmatter 属性卡', () => {
       )
     // 工具触发器显示当前白名单（原样逗号串）
     expect(await slotText('shuvix-tools')).toContain('bash, read, write')
-    // 指令文件清单是普通输入框（值在 input.value 上，不是触发器文案）
+    // 提示词块清单是普通输入框（值在 input.value 上，不是触发器文案）
     expect(
       await app.main.eval<string>(
-        `document.querySelector('.cm-shuvix-fmcard-row[data-key="shuvix-instruction-files"] input')?.value ?? ''`
+        `document.querySelector('.cm-shuvix-fmcard-row[data-key="shuvix-prompt-blocks"] input')?.value ?? ''`
       )
-    ).toBe('AGENTS.md, CLAUDE.md')
+    ).toBe('environment, agents_md')
 
-    // 布尔行是项目感知与用户原话（缺省都 unset —— instruction-files 是清单不是开关，项目提示词与项目记忆
-    // 已合成项目感知一个开关，会话感知已退役；用户原话是 2026-11-07 加的 shuvix-user-words）；夹具里写着 true 的内置自述标记 shuvix-builtin
+    // 布尔行只有用户原话（缺省 unset —— prompt-blocks 是清单不是开关；项目感知那个开关 2026-11-13 并进了
+    // 提示词块清单的 project_prompt 一项，会话感知更早退役；用户原话是 2026-11-07 加的 shuvix-user-words）；夹具里写着 true 的内置自述标记 shuvix-builtin
     // 不是开关，是标题行上一枚只读标签（文案是本地化的「内置」）
     const toggles = await app.main.eval<string[][]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((n) => [n.closest('.cm-shuvix-fmcard-row')?.dataset.key ?? '', n.dataset.state])`
     )
-    expect(toggles).toEqual([
-      ['shuvix-project-awareness', 'unset'],
-      ['shuvix-user-words', 'unset']
-    ])
+    expect(toggles).toEqual([['shuvix-user-words', 'unset']])
     expect(
       await app.main.eval<string | null>(
         `document.querySelector('.cm-shuvix-fmcard-head .cm-shuvix-fmcard-tag[data-key="shuvix-builtin"]')?.textContent ?? null`
@@ -310,9 +307,8 @@ describe('frontmatter 属性卡', () => {
     await maybeScreenshot()
   })
 
-  it('卡上开关 → 行级写回：project-awareness 缺省态点开 → 文件闭合线前插入 true 行', async () => {
-    // 布尔行只剩两个（instruction-files 是清单、项目提示词与记忆已合成项目感知）：
-    // project-awareness 排第一
+  it('卡上开关 → 行级写回：user-words 缺省态点开 → 文件闭合线前插入 true 行', async () => {
+    // 布尔行只剩一个（prompt-blocks 是清单；项目感知已并进它的 project_prompt 一项）：user-words
     await app.main.eval(
       `document.querySelectorAll('.cm-shuvix-fmcard-toggle')[0]` +
         `.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`
@@ -328,7 +324,7 @@ describe('frontmatter 属性卡', () => {
     // 笔记本防抖自动保存落盘：插入行位于闭合定界线之前，其余行原样保留
     await until(() => {
       const text = readFileSync(cardMdPath, 'utf8')
-      return /shuvix-project-awareness: true\r?\n---/.test(text)
+      return /shuvix-user-words: true\r?\n---/.test(text)
     }, 'scoped line write persisted')
     const text = readFileSync(cardMdPath, 'utf8')
     expect(text).toContain('shuvix-builtin: true')
