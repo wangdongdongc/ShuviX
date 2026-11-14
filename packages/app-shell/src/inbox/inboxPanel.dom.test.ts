@@ -20,6 +20,11 @@
  *   INT-6  侧栏「收件箱」那一行只打开面板：没有选中态，数字照旧
  *   INK-1/2/3/8  J / K / ⏎ 与数字键只在焦点落在面板里时归它；换了会话，焦点从面板里交还出去
  *
+ * 行下面的任务列表（2026-11-14，InboxTaskList.tsx）
+ *
+ *   INP-TL1..18  agent 在跑的行订视图、实时画当前请求的列表；新回复的行用摘录那次取回的消息画完成 / 已停止，替掉摘录；
+ *                等你回答、只剩后台命令、停着的一家的抬头、跟踪项都不画（也不订视图）
+ *
  * `@shuvix/chat-ui` 整份换成替身（同 projectSessionGroupsRunning）；后台任务的口径用 chat-ui 的真函数
  * （taskRunKind / selectBgRunKinds，按相对路径取源码）。selectBgRunKinds 按 tasks 的引用记忆，每个用例写一份新的。
  * 缺省的替身没有 `agent.pendingInputs`（询问表取不到），挂着询问的会话画成普通的一行；用例要卡片时给 `store.api`
@@ -37,6 +42,13 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { TaskInfo, TaskSubject } from '@shuvix/chat-protocol/types/task'
 import type { SessionUnread } from '@shuvix/chat-protocol/sessionUnread'
 import type { ChoiceInputRequest, InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  AssistantBlock,
+  AssistantMessage,
+  ChatMessage,
+  UserTextMessage
+} from '@shuvix/chat-protocol/types/chatMessage'
+import type { TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
 
 /** getChatApi() 交回的那一份（每个用例一份，同一用例里引用不变） */
 interface FakeApi {
@@ -68,6 +80,10 @@ const store = vi.hoisted(() => ({
   bg: { tasks: {} as Record<string, TaskInfo> },
   /** useUnreadStore 的状态 */
   unreadState: { unread: {} as Record<string, SessionUnread> },
+  /** chatStore 的会话视图切片（在跑的行订了视图才读得到任务列表；缺省没有） */
+  sessionViews: {} as Record<string, unknown>,
+  /** useSessionView 被叫到的会话 */
+  viewSubscriptions: [] as string[],
   /** useChatStore.subscribe 的监听（inboxStore 第一次 hold 时订上，之后一直在） */
   listeners: new Set<StoreListener>(),
   api: { agent: {}, session: {}, message: { list: async () => [] } } as FakeApi,
@@ -92,6 +108,13 @@ vi.mock('@shuvix/chat-ui', async () => {
       }
     }),
     selectStreamingSessions: (s: typeof store) => s.streaming,
+    // 在跑的行下面的任务列表：订视图只记下来，步骤行用真的组件
+    useSessionView: (id: string) => {
+      store.viewSubscriptions.push(id)
+      return { status: 'loading' }
+    },
+    TaskListSteps: (await import('../../../chat-ui/src/components/chat/TaskListPanel'))
+      .TaskListSteps,
     selectAllPendingCounts: (s: typeof store) => s.pending,
     useBgTaskStore: (selector: (s: typeof store.bg) => unknown) => selector(store.bg),
     selectBgRunKinds: bgTasks.selectBgRunKinds,
@@ -120,6 +143,7 @@ vi.mock('@shuvix/chat-ui', async () => {
 import { InboxPanel } from './InboxPanel'
 import { InboxRow } from '../sidebar/InboxRow'
 import { useInboxHoldStore } from './inboxStore'
+import type { InboxTrackingAdapter } from './InboxTracking'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -275,6 +299,8 @@ beforeEach(() => {
   store.streaming = {}
   store.pending = {}
   store.unreadState = { unread: {} }
+  store.sessionViews = {}
+  store.viewSubscriptions = []
   store.api = { agent: {}, session: {}, message: { list: async () => [] } }
   store.respondToInput = vi.fn(async () => ({ success: true }))
   store.picks = []
@@ -1105,5 +1131,327 @@ describe('INK-8 focus is handed back when another session opens', () => {
     } finally {
       outside.remove()
     }
+  })
+})
+
+// ─── 行下面的任务列表（INP-TL） ──────────────────────────────────────
+
+describe('INP-TL the task list under a row', () => {
+  const STEPS = ['Read the code', 'Write the fix', 'Run the tests']
+  type St = 'pending' | 'in_progress' | 'completed'
+
+  const tlUser = (id: string, sid: string): UserTextMessage => ({
+    id,
+    sessionId: sid,
+    role: 'user',
+    type: 'text',
+    content: 'please',
+    model: '',
+    createdAt: 0,
+    metadata: null
+  })
+  const tlAssistant = (id: string, sid: string, blocks: AssistantBlock[]): AssistantMessage => ({
+    id,
+    sessionId: sid,
+    role: 'assistant',
+    type: 'message',
+    content: blocks
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map((b) => b.text)
+      .join(''),
+    model: 'm',
+    createdAt: 0,
+    blocks,
+    metadata: null
+  })
+  const planCall = (
+    id: string,
+    args: Record<string, unknown>,
+    name = 'update_plan'
+  ): AssistantBlock => ({ type: 'tool', toolCallId: id, toolName: name, args, result: 'ok' })
+  const readCall = (id: string): AssistantBlock => ({
+    type: 'tool',
+    toolCallId: id,
+    toolName: 'read',
+    args: {},
+    result: 'x'
+  })
+  const itemsArgs = (...st: St[]): Record<string, unknown> => ({
+    items: st.map((status, i) => ({ content: STEPS[i], status }))
+  })
+
+  /** 一个请求：用户消息 + 发列表的卡（带一次别的工具，所以还没以终答收尾） */
+  function req(
+    sid: string,
+    args = itemsArgs('in_progress', 'pending', 'pending'),
+    name?: string
+  ): ChatMessage[] {
+    return [
+      tlUser(`u-${sid}`, sid),
+      tlAssistant(`a-${sid}`, sid, [planCall(`p-${sid}`, args, name), readCall(`r-${sid}`)])
+    ]
+  }
+  const answer = (sid: string, text = 'All done.'): ChatMessage =>
+    tlAssistant(`f-${sid}`, sid, [{ type: 'text', text }])
+
+  function setView(sid: string, messages: ChatMessage[], state: 'busy' | 'idle' = 'busy'): void {
+    store.sessionViews = { ...store.sessionViews, [sid]: { messages, run: { state } } }
+  }
+
+  const listOf = (sid: string): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`[data-inbox-task-list="${sid}"]`)
+  const stepStatuses = (el: HTMLElement): Array<string | null> =>
+    [...el.querySelectorAll('[data-task-step]')].map((li) => li.getAttribute('data-status'))
+
+  it('INP-TL1 agent row, busy view with 3 steps → the list under the row, phase running; still a running row', async () => {
+    store.sessions = [session('S')]
+    store.streaming = { S: true }
+    setView('S', req('S'))
+    await mountPage()
+    const row = mustRow('S')
+    expect(row.getAttribute('data-inbox-kind')).toBe('running')
+    const list = listOf('S')
+    expect(list).not.toBeNull()
+    expect(row.contains(list)).toBe(true)
+    expect(openButtonOf(row).contains(list)).toBe(false)
+    expect(list!.getAttribute('data-task-list-phase')).toBe('running')
+    expect(stepStatuses(list!)).toEqual(['in_progress', 'pending', 'pending'])
+    expect([...list!.querySelectorAll('[data-task-step]')].map((li) => li.textContent)).toEqual(
+      STEPS
+    )
+    expect(store.viewSubscriptions).toContain('S')
+  })
+
+  it('INP-TL2 the view advances → statuses update in place, the row is not remounted', async () => {
+    store.sessions = [session('S')]
+    store.streaming = { S: true }
+    setView('S', req('S'))
+    await mountPage()
+    const row = mustRow('S')
+    const button = openButtonOf(row)
+    setView('S', [
+      ...req('S'),
+      tlAssistant('a2-S', 'S', [planCall('p2-S', { advance: true }), readCall('r2-S')])
+    ])
+    await rerender()
+    expect(mustRow('S')).toBe(row)
+    expect(openButtonOf(row)).toBe(button)
+    expect(stepStatuses(listOf('S')!)).toEqual(['completed', 'in_progress', 'pending'])
+  })
+
+  it('INP-TL3 no list in the current request (or only in an earlier one) → no list; the row looks like the no-view case', async () => {
+    store.sessions = [session('S')]
+    store.streaming = { S: true }
+    await mountPage()
+    const baseline = mustRow('S').outerHTML
+
+    setView('S', [tlUser('u1', 'S'), tlAssistant('a1', 'S', [readCall('r1')])])
+    await rerender()
+    expect(listOf('S')).toBeNull()
+    expect(mustRow('S').outerHTML).toBe(baseline)
+
+    // 列表在上一个请求里：新的一轮开始就清掉了
+    setView('S', [...req('S'), answer('S'), tlUser('u2', 'S'), tlAssistant('a3', 'S', [])])
+    await rerender()
+    expect(listOf('S')).toBeNull()
+    expect(mustRow('S').outerHTML).toBe(baseline)
+  })
+
+  it('INP-TL4 view not loaded → no list, no throw; it subscribes', async () => {
+    store.sessions = [session('S')]
+    store.streaming = { S: true }
+    await mountPage()
+    expect(mustRow('S')).not.toBeNull()
+    expect(listOf('S')).toBeNull()
+    expect(store.viewSubscriptions).toContain('S')
+  })
+
+  it('INP-TL5 a waiting row (run agent, a list in the view) → no list, no subscription', async () => {
+    store.sessions = [session('S')]
+    store.pending = { S: 1 }
+    store.streaming = { S: true }
+    setView('S', req('S'))
+    await mountPage()
+    expect(mustRow('S').getAttribute('data-inbox-kind')).toBe('waiting')
+    expect(listOf('S')).toBeNull()
+    expect(store.viewSubscriptions).not.toContain('S')
+  })
+
+  it('INP-TL6 a resident row → no list, the command preview stays, no subscription', async () => {
+    store.sessions = [session('S')]
+    setTasks([bash('t1', 'S', 'npm run dev')])
+    setView('S', req('S'))
+    await mountPage()
+    const row = mustRow('S')
+    expect(row.getAttribute('data-run')).toBe('resident')
+    expect(listOf('S')).toBeNull()
+    expect(row.querySelector('[data-inbox-commands]')?.textContent).toBe('npm run dev')
+    expect(store.viewSubscriptions).not.toContain('S')
+  })
+
+  it('INP-TL7 a click on the list of a running row opens it once', async () => {
+    store.sessions = [session('S')]
+    store.streaming = { S: true }
+    setView('S', req('S'))
+    await mountPage()
+    act(() => listOf('S')!.querySelector<HTMLElement>('[data-task-step]')!.click())
+    expect(selectSpy.mock.calls).toEqual([['S']])
+  })
+
+  it('INP-TL8 unread row whose request ended with a final answer → done, all completed, no excerpt', async () => {
+    store.sessions = [session('S')]
+    store.unreadState = { unread: { S: S_UNREAD } }
+    store.api.message.list = async () => [...req('S'), answer('S')]
+    await mountPage()
+    const row = mustUnread('S')
+    const list = listOf('S')
+    expect(list).not.toBeNull()
+    expect(row.contains(list)).toBe(true)
+    expect(list!.getAttribute('data-task-list-phase')).toBe('done')
+    expect(stepStatuses(list!)).toEqual(['completed', 'completed', 'completed'])
+    expect(openButtonOf(row).children).toHaveLength(1)
+    expect(row.textContent).not.toContain('All done.')
+    // 新回复的行不订视图（用摘录那次取回来的消息）
+    expect(store.viewSubscriptions).not.toContain('S')
+  })
+
+  it('INP-TL9 unread row without a final answer → stopped, statuses as they were', async () => {
+    store.sessions = [session('S')]
+    store.unreadState = { unread: { S: S_UNREAD } }
+    store.api.message.list = async () => req('S', itemsArgs('completed', 'in_progress', 'pending'))
+    await mountPage()
+    const list = listOf('S')!
+    expect(list.getAttribute('data-task-list-phase')).toBe('stopped')
+    expect(stepStatuses(list)).toEqual(['completed', 'in_progress', 'pending'])
+    expect(list.querySelector('svg.lucide-circle-pause')).not.toBeNull()
+  })
+
+  it('INP-TL10 unread row without a list → the excerpt as before, no list', async () => {
+    store.sessions = [session('S')]
+    store.unreadState = { unread: { S: S_UNREAD } }
+    store.api.message.list = async () => [tlUser('u1', 'S'), answer('S', 'Done.')]
+    await mountPage()
+    const row = mustUnread('S')
+    expect(listOf('S')).toBeNull()
+    expect(openButtonOf(row).children).toHaveLength(2)
+    expect(openButtonOf(row).children[1].textContent).toBe('Done.')
+  })
+
+  it("INP-TL11 a click on an unread row's list → held, then selected (as INH-5)", async () => {
+    store.sessions = [session('S'), session('U')]
+    store.unreadState = { unread: { S: S_UNREAD, U: U_UNREAD } }
+    store.api.session.markRead = vi.fn(async () => {})
+    store.api.message.list = async (id: string) => (id === 'S' ? [...req('S'), answer('S')] : [])
+    await mountPage()
+    act(() => listOf('S')!.querySelector<HTMLElement>('[data-task-step]')!.click())
+    expect(selectSpy.mock.calls).toEqual([['S']])
+    expect(heldAtSelect).toEqual([{ sessionId: 'S', unread: S_UNREAD }])
+  })
+
+  it('INP-TL12 the held unread row keeps its list', async () => {
+    store.sessions = [session('S'), session('U')]
+    store.unreadState = { unread: { S: S_UNREAD, U: U_UNREAD } }
+    store.api.session.markRead = vi.fn(async () => {})
+    store.api.message.list = async (id: string) => (id === 'S' ? [...req('S'), answer('S')] : [])
+    await mountPage()
+    act(() => openButtonOf(mustUnread('S')).click())
+    store.unreadState = { unread: { U: U_UNREAD } }
+    await rerender()
+    const row = mustUnread('S')
+    expect(row.hasAttribute('data-inbox-held')).toBe(true)
+    const list = listOf('S')
+    expect(list).not.toBeNull()
+    expect(list!.getAttribute('data-task-list-phase')).toBe('done')
+  })
+
+  it('INP-TL13 message.list rejects → no excerpt, no list, no crash', async () => {
+    store.sessions = [session('S')]
+    store.unreadState = { unread: { S: S_UNREAD } }
+    store.api.message.list = async () => {
+      throw new Error('nope')
+    }
+    await mountPage()
+    const row = mustUnread('S')
+    expect(listOf('S')).toBeNull()
+    expect(openButtonOf(row).children).toHaveLength(1)
+  })
+
+  it('INP-TL14 idle family head with a running child → no list on the head; the expanded child shows its own', async () => {
+    store.sessions = [session('R'), session('K', { parentId: 'R' })]
+    store.streaming = { K: true }
+    setView('R', req('R'), 'idle')
+    setView('K', req('K'))
+    await mountPage()
+    const head = container.querySelector<HTMLElement>('[data-inbox-family-head="R"]')!
+    expect(head.querySelector('[data-inbox-task-list]')).toBeNull()
+    expect(listOf('R')).toBeNull()
+    expect(store.viewSubscriptions).not.toContain('R')
+
+    act(() => head.querySelector<HTMLButtonElement>('[data-inbox-family-toggle]')!.click())
+    const child = mustRow('K')
+    const list = listOf('K')
+    expect(list).not.toBeNull()
+    expect(child.contains(list)).toBe(true)
+    expect(list!.getAttribute('data-task-list-phase')).toBe('running')
+  })
+
+  it('INP-TL15 [WB] a root that is itself running and has children → its row shows its list', async () => {
+    store.sessions = [session('R'), session('K', { parentId: 'R' })]
+    store.streaming = { R: true, K: true }
+    setView('R', req('R'))
+    await mountPage()
+    const row = mustRow('R')
+    expect(row.querySelector('[data-pip]')).not.toBeNull()
+    const list = listOf('R')
+    expect(list).not.toBeNull()
+    expect(row.contains(list)).toBe(true)
+    expect(list!.getAttribute('data-task-list-phase')).toBe('running')
+  })
+
+  it('INP-TL16 [WB] agent row only through a dispatched child task (view idle, ended with an answer) → done', async () => {
+    store.sessions = [session('S')]
+    setTasks([dispatched('d1', 'S')])
+    setView('S', [...req('S'), answer('S')], 'idle')
+    await mountPage()
+    expect(mustRow('S').getAttribute('data-run')).toBe('agent')
+    const list = listOf('S')!
+    expect(list.getAttribute('data-task-list-phase')).toBe('done')
+    expect(stepStatuses(list)).toEqual(['completed', 'completed', 'completed'])
+  })
+
+  it('INP-TL17 [WB] tracking items → no list, no subscription', async () => {
+    const items: TrackingItem[] = [
+      {
+        fileName: 'a.md',
+        title: 'Track A',
+        updatedAt: 1,
+        path: '/x/a.md',
+        status: 'active',
+        latest: 'latest'
+      }
+    ]
+    const tracking: InboxTrackingAdapter = {
+      list: async () => items,
+      open: () => {},
+      openFolder: () => {},
+      setStatus: async () => {}
+    }
+    // InboxPanel 的参数带缺省值（`= {}`），createElement 的重载认不出它收 props：按它的签名收窄一下
+    const Panel = InboxPanel as (props: { tracking?: InboxTrackingAdapter }) => React.JSX.Element
+    act(() => root.render(createElement(Panel, { tracking })))
+    await flush()
+    expect(container.querySelector('[data-tracking-item="a.md"]')).not.toBeNull()
+    expect(container.querySelector('[data-inbox-task-list]')).toBeNull()
+    expect(store.viewSubscriptions).toEqual([])
+  })
+
+  it('INP-TL18 [WB] legacy mcp__plan__update calls → the list is shown', async () => {
+    store.sessions = [session('S')]
+    store.streaming = { S: true }
+    setView('S', req('S', itemsArgs('completed', 'in_progress', 'pending'), 'mcp__plan__update'))
+    await mountPage()
+    const list = listOf('S')
+    expect(list).not.toBeNull()
+    expect(stepStatuses(list!)).toEqual(['completed', 'in_progress', 'pending'])
   })
 })

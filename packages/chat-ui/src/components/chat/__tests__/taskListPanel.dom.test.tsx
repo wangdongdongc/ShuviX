@@ -17,6 +17,7 @@
  *   TLU-14     列表的无障碍名称三种语言
  *   TLU-15     长列表自身封顶滚动
  *   TLU-18     两个位置：对话里自带圆角描边、外面套一层居中的列宽；输入框里只有 border-b
+ *   TLS-1…3    `TaskListSteps`（收件箱与对话共用的步骤行）直接挂：ol + 样子、attrs / className、暂停与转圈
  *
  * 直接挂 `<TaskListPanel/>`；状态只经 `applySessionView` 写（与 inputAreaQueue.dom.test.tsx 同一种做法）。
  * 文件是 .tsx 但不写 JSX，一律 createElement。
@@ -31,14 +32,19 @@ import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { RunViewState } from '@shuvix/chat-protocol/types/sessionView'
-import { TASK_LIST_TOOL_NAME, type TaskListStatus } from '@shuvix/chat-protocol/taskList'
+import {
+  TASK_LIST_TOOL_NAME,
+  type TaskListItem,
+  type TaskListPhase,
+  type TaskListStatus
+} from '@shuvix/chat-protocol/taskList'
 import { MID_RUN_NOTE_UID, midRunNoteToken } from '@shuvix/chat-protocol/midRunNote'
 
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
 import { applySessionView, pendingPromptMessage } from '../../../stores/chatStore'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
-import { TaskListPanel } from '../TaskListPanel'
+import { TaskListPanel, TaskListSteps } from '../TaskListPanel'
 import {
   V,
   assistant,
@@ -415,5 +421,58 @@ describe('两个位置（TLU-18）', () => {
     expect(el.className).toContain('border-b')
     expect(el.className).not.toContain('rounded-xl')
     expect(el.parentElement).toBe(container)
+  })
+})
+
+describe('TaskListSteps 直接挂（TLS-1…TLS-3）', () => {
+  const stepItems = (...st: TaskListStatus[]): TaskListItem[] =>
+    st.map((status, i) => ({ content: STEPS[i], status }))
+
+  function mountSteps(props: {
+    items: TaskListItem[]
+    phase: TaskListPhase
+    className?: string
+    attrs?: Record<string, string | undefined>
+  }): void {
+    act(() => root.render(createElement(TaskListSteps, props)))
+  }
+
+  it('TLS-1 三步、running：一个 ol，样子 running，三行状态对得上，有无障碍名称', () => {
+    mountSteps({ items: stepItems('completed', 'in_progress', 'pending'), phase: 'running' })
+    const lists = container.querySelectorAll('ol')
+    expect(lists).toHaveLength(1)
+    const ol = lists[0]
+    expect(ol.getAttribute('data-task-list-phase')).toBe('running')
+    expect(ol.getAttribute('aria-label')).toBe('Task list')
+    expect(statuses()).toEqual(['completed', 'in_progress', 'pending'])
+    expect(steps().map((s) => s.text)).toEqual(STEPS)
+    // 没有 data-task-list（那是 TaskListPanel 自己加的）
+    expect(ol.hasAttribute('data-task-list')).toBe(false)
+  })
+
+  it('TLS-2 attrs、className 落到 ol 上，space-y-0.5 保留', () => {
+    mountSteps({
+      items: stepItems('in_progress', 'pending'),
+      phase: 'running',
+      className: 'mb-1.5 extra-class',
+      attrs: { 'data-inbox-task-list': 'sX' }
+    })
+    const ol = container.querySelector('ol')!
+    expect(ol.getAttribute('data-inbox-task-list')).toBe('sX')
+    expect(ol.className).toContain('mb-1.5')
+    expect(ol.className).toContain('extra-class')
+    expect(ol.className).toContain('space-y-0.5')
+  })
+
+  it('TLS-3 stopped 时进行中那一步是暂停图标；running 时是转圈', () => {
+    mountSteps({ items: stepItems('completed', 'in_progress', 'pending'), phase: 'stopped' })
+    let current = stepRows()[1]
+    expect(current.querySelector('svg.lucide-circle-pause')).not.toBeNull()
+    expect(current.querySelector('svg.animate-spin')).toBeNull()
+
+    mountSteps({ items: stepItems('completed', 'in_progress', 'pending'), phase: 'running' })
+    current = stepRows()[1]
+    expect(current.querySelector('svg.animate-spin')).not.toBeNull()
+    expect(current.querySelector('svg.lucide-circle-pause')).toBeNull()
   })
 })

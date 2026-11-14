@@ -12,6 +12,7 @@
  *   INH-17 点开的按钮：有预览两层（第二层是预览），没有预览（null / undefined / false / ''）只有一层；第一层是标题 + 时间
  *   INH-18 selected → 外层 aria-current="true" + data-selected=""，否则两样都没有；attrs 写在外层；
  *          点按钮 onOpen 一次，点行尾自带的按钮不触发 onOpen
+ *   IL-B1…4 `below`（任务列表那一块）：不给 / null 不多出外壳；给了在按钮之后、不在按钮里；点它 onOpen 一次；不多一个 Tab 停靠点
  *
  * InboxLine 只从 inboxItems 引类型，不用替身。文件是 `.ts`，一律 createElement。
  */
@@ -219,5 +220,64 @@ describe('InboxLine', () => {
     act(() => container.querySelector<HTMLButtonElement>('[data-trail]')!.click())
     expect(onTrailing).toHaveBeenCalledTimes(1)
     expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('InboxLine below（IL-B）', () => {
+  function line(props: Partial<InboxLineProps> = {}): void {
+    act(() =>
+      root.render(
+        createElement(InboxLine, {
+          leading: createElement('span', { 'data-lead': '' }),
+          title: 'T',
+          meta: '12:00',
+          onOpen: () => {},
+          ...props
+        })
+      )
+    )
+  }
+  const openButton = (): HTMLButtonElement => container.querySelector<HTMLButtonElement>('button')!
+  const belowContent = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-below-content]')
+  const content = (): React.ReactNode =>
+    createElement('ol', { 'data-below-content': '' }, createElement('li', null, 'step'))
+
+  it.each<[string, React.ReactNode]>([
+    ['omitted', undefined],
+    ['null', null]
+  ])('IL-B1 below %s → the open button is alone in its column', (_label, below) => {
+    line(below === undefined ? {} : { below })
+    const column = openButton().parentElement!
+    expect([...column.children]).toEqual([openButton()])
+  })
+
+  it('IL-B2 below given → right after the open button, not inside it', () => {
+    line({ below: content() })
+    const el = belowContent()
+    expect(el).not.toBeNull()
+    expect(openButton().contains(el)).toBe(false)
+    const column = openButton().parentElement!
+    expect(column.children).toHaveLength(2)
+    expect(column.children[0]).toBe(openButton())
+    expect(column.children[1].contains(el)).toBe(true)
+  })
+
+  it('IL-B3 a click inside below → onOpen once', () => {
+    const onOpen = vi.fn()
+    line({ below: content(), onOpen })
+    act(() => container.querySelector<HTMLElement>('[data-below-content] li')!.click())
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('IL-B4 [WB] below adds no tab stop: still one focusable element, the wrapper has no tabindex', () => {
+    line({ below: content() })
+    const focusables = container.querySelectorAll(
+      'button, [tabindex]:not([tabindex="-1"]), a[href], input, select, textarea'
+    )
+    expect([...focusables]).toEqual([openButton()])
+    const wrapper = openButton().nextElementSibling as HTMLElement
+    expect(wrapper.hasAttribute('tabindex')).toBe(false)
+    expect(wrapper.getAttribute('role')).toBeNull()
   })
 })

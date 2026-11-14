@@ -15395,6 +15395,95 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 收件箱里会话行下面的任务列表（InboxTaskList，2026-11-14）—— agent 在跑的行（`[data-inbox-item=<sid>]`）订那条会话的
+// 视图实时画列表；新回复的行（`[data-inbox-unread=<sid>]`）画摘录那次取回的消息里的列表，替掉那一句摘录。列表本身是
+// `[data-inbox-task-list=<sid>]`（`data-task-list-phase` = running / done / stopped），步骤行与对话末尾的同一个组件
+// （`[data-task-step]` + `data-status`）。行里点开会话的是第一颗 button；它的第二个子元素是摘录 / 预览（没有就只有一层）。
+
+/** 收件箱里一条会话的行 */
+export interface InboxSessionRowShot {
+  /** running = 在运行的行（`data-inbox-kind`，等你回答的是 waiting）；unread = 新回复的行 */
+  kind: string
+  /** 点开按钮里第二层的文字（摘录 / 命令预览）；没有为 '' */
+  preview: string
+  /** 正开在中间（aria-current） */
+  selected: boolean
+  /** 行下面的任务列表；没有为 null */
+  taskList: {
+    phase: string | null
+    steps: Array<{ n: number; status: string; text: string }>
+  } | null
+}
+
+export interface InboxSessionsPane {
+  /** 点侧栏的收件箱一行，等右侧面板切到收件箱 */
+  open(): Promise<void>
+  /** 这条会话在收件箱里的行；不在为 null */
+  row(sessionId: string): Promise<InboxSessionRowShot | null>
+  /** 点这条会话行下面任务列表的第一步（点它 = 打开会话） */
+  clickTaskList(sessionId: string): Promise<void>
+  /** 把主窗口整个截成 PNG（给人看的证据，不是断言） */
+  screenshot(filePath: string): Promise<void>
+}
+
+export function inboxSessionsPane(main: CdpClient): InboxSessionsPane {
+  const PANEL = `document.querySelector('[data-inbox-panel]')`
+  const ROW = (sid: string): string =>
+    `(${PANEL}?.querySelector('[data-inbox-item=' + ${JSON.stringify(JSON.stringify(sid))} + '],[data-inbox-unread=' + ${JSON.stringify(JSON.stringify(sid))} + ']') ?? null)`
+  const LIST = (sid: string): string =>
+    `(${PANEL}?.querySelector('[data-inbox-task-list=' + ${JSON.stringify(JSON.stringify(sid))} + ']') ?? null)`
+  const isOpen = (): Promise<boolean> =>
+    main.eval<boolean>(
+      `(() => { const el = ${PANEL}; return !!el && getComputedStyle(el).visibility !== 'hidden' })()`
+    )
+  return {
+    open: async () => {
+      if (!(await isOpen())) {
+        await until(
+          () => main.eval<boolean>(`!!document.querySelector('[data-inbox-row]')`),
+          'sidebar inbox row'
+        )
+        await main.eval(`document.querySelector('[data-inbox-row]').click()`)
+      }
+      await until(isOpen, 'inbox panel shown')
+    },
+    row: (sid) =>
+      main.eval<InboxSessionRowShot | null>(`(() => {
+        const row = ${ROW(sid)}
+        if (!row) return null
+        const button = row.querySelector('button')
+        const list = ${LIST(sid)}
+        return {
+          kind: row.hasAttribute('data-inbox-unread') ? 'unread' : (row.getAttribute('data-inbox-kind') ?? ''),
+          preview: ((button?.children[1]?.textContent) ?? '').trim(),
+          selected: row.getAttribute('aria-current') === 'true',
+          taskList: list && row.contains(list)
+            ? {
+                phase: list.getAttribute('data-task-list-phase'),
+                steps: [...list.querySelectorAll('[data-task-step]')].map((li) => ({
+                  n: Number(li.getAttribute('data-task-step')),
+                  status: li.getAttribute('data-status') ?? '',
+                  text: (li.querySelector('span')?.textContent ?? '').trim()
+                }))
+              }
+            : null
+        }
+      })()`),
+    clickTaskList: async (sid) => {
+      const ok = await main.eval<boolean>(
+        `(() => { const s = ${LIST(sid)}?.querySelector('[data-task-step]'); if (!s) return false; s.click(); return true })()`
+      )
+      if (!ok) throw new Error(`no task list under the inbox row of ${sid}`)
+    },
+    screenshot: async (filePath) => {
+      const shot = await main.send<{ data: string }>('Page.captureScreenshot', { format: 'png' })
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
+    }
+  }
+}
+
 /** 主区那张属性卡上的一行：`data-key` + 是不是通用 key/value 行（描述符里没有的键才落通用行） */
 export interface FmCardRowKey {
   key: string

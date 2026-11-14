@@ -52,6 +52,7 @@ import { FamilyPips, GlyphCell, InboxLine } from './InboxLine'
 import { SessionIcon, sessionIconShape } from '../sidebar/SessionIcon'
 import { usePendingInputs } from './usePendingInputs'
 import { InboxTrackingSection, useTrackingItems, type InboxTrackingAdapter } from './InboxTracking'
+import { InboxLiveTaskList } from './InboxTaskList'
 
 type SectionName = 'waiting' | 'unread' | 'running'
 
@@ -267,6 +268,12 @@ export function InboxPanel({ tracking }: InboxPanelProps = {}): React.JSX.Elemen
               : item.run === 'resident'
                 ? commandsPreview(item.commands)
                 : null
+          }
+          // agent 在跑：这条会话的任务列表（有的话）实时挂在下面，见 InboxTaskList.tsx
+          below={
+            !waitingRow && item.run === 'agent' ? (
+              <InboxLiveTaskList sessionId={session.id} />
+            ) : undefined
           }
           trailing={trailing}
           indent={indent}

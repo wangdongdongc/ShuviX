@@ -20,6 +20,11 @@ export interface InboxLineProps {
   /** 标题的字重 / 颜色（新回复加粗，已归档变灰） */
   titleClassName?: string
   preview?: React.ReactNode
+  /**
+   * 预览下面的整块内容（会话的任务列表，InboxTaskList.tsx）：在点开的按钮之外（列表不能放进按钮），与标题对齐；
+   * 点它照样打开会话。组件自己决定有没有东西可画（返回 null 就什么都不占）
+   */
+  below?: React.ReactNode
   /** 行尾的时间之类（灰色小字） */
   meta?: React.ReactNode
   /** 只在悬停时出现的行尾内容（盖在 meta 上） */
@@ -47,6 +52,7 @@ export function InboxLine({
   title,
   titleClassName = 'text-text-primary',
   preview,
+  below,
   meta,
   hoverMeta,
   trailing,
@@ -72,33 +78,43 @@ export function InboxLine({
     >
       {/* 行首、行尾与上层那一行对齐：上层是 6px 内边距 + 18px 行高，中线在 15px */}
       <span className={LINE_SLOT}>{leading}</span>
-      <button
-        type="button"
-        {...openAttrs}
-        onClick={onOpen}
-        title={openTitle}
-        className="flex min-w-0 flex-1 flex-col py-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <span className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${titleClassName}`}>
-            {title}
-          </span>
-          {meta !== undefined && meta !== null && (
+      <div className="flex min-w-0 flex-1 flex-col">
+        <button
+          type="button"
+          {...openAttrs}
+          onClick={onOpen}
+          title={openTitle}
+          className="flex min-w-0 flex-col py-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <span className="flex min-w-0 items-center gap-2">
             <span
-              className={`shrink-0 text-[12px] tabular-nums text-text-tertiary ${
-                hoverMeta ? 'group-hover:invisible group-focus-within:invisible' : ''
-              }`}
+              className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${titleClassName}`}
             >
-              {meta}
+              {title}
+            </span>
+            {meta !== undefined && meta !== null && (
+              <span
+                className={`shrink-0 text-[12px] tabular-nums text-text-tertiary ${
+                  hoverMeta ? 'group-hover:invisible group-focus-within:invisible' : ''
+                }`}
+              >
+                {meta}
+              </span>
+            )}
+          </span>
+          {hasPreview && (
+            <span className="mt-px min-w-0 truncate text-[12px] leading-4 text-text-secondary">
+              {preview}
             </span>
           )}
-        </span>
-        {hasPreview && (
-          <span className="mt-px min-w-0 truncate text-[12px] leading-4 text-text-secondary">
-            {preview}
-          </span>
+        </button>
+        {below !== undefined && below !== null && (
+          // 键盘走上面的按钮；这里只接鼠标点击，点列表与点标题一样打开会话
+          <div onClick={onOpen} className="min-w-0 cursor-pointer">
+            {below}
+          </div>
         )}
-      </button>
+      </div>
       {hoverMeta && (
         <span className="absolute right-2 top-[3px] flex items-center opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           {hoverMeta}

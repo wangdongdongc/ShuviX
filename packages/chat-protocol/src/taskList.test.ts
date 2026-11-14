@@ -10,6 +10,7 @@
  *   TL-F   `foldTaskList`：request 清空；解析或套用失败的调用跳过、不清空
  *   TL-B   `startsTaskListRequest`：只有「用户发起一轮」的消息开始新请求
  *   TL-M   `taskListOfMessages`：从投影消息折出当前请求的列表 + 是否以终答收尾 + 开始这个请求的消息 id
+ *   TL-X   `taskListDisplay`：在跑 → 进行中；空闲 + 终答 → 已完成（全部 completed）；空闲无终答 → 已停止
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -23,9 +24,11 @@ import {
   isTaskListToolName,
   parseTaskListUpdate,
   startsTaskListRequest,
+  taskListDisplay,
   taskListOfMessages,
   type TaskListEvent,
   type TaskListItem,
+  type TaskListSnapshot,
   type TaskListStatus,
   type TaskListUpdate
 } from './taskList'
@@ -873,5 +876,49 @@ describe('isTaskListToolName 与新旧名混用', () => {
         assistant('a3', [text('ok')])
       ])
     ).toBeUndefined()
+  })
+})
+
+// ─── 界面画什么（`taskListDisplay`，对话末尾与收件箱共用） ─────────
+
+describe('taskListDisplay（TL-X）', () => {
+  const snap = (items: TaskListItem[], endedWithAnswer: boolean): TaskListSnapshot => ({
+    items,
+    endedWithAnswer,
+    requestId: 'u1'
+  })
+
+  it('TL-X1 在跑 → running，步骤照实', () => {
+    const items = list(C, I, P)
+    const out = taskListDisplay(snap(items, false), true)
+    expect(out.phase).toBe('running')
+    expect(out.items).toStrictEqual(list(C, I, P))
+  })
+
+  it('TL-X2 空闲 + 终答 → done，每步 completed，文字不变', () => {
+    const out = taskListDisplay(snap(list(C, I, P), true), false)
+    expect(out.phase).toBe('done')
+    expect(statusesOf(out.items)).toStrictEqual([C, C, C])
+    expect(out.items.map((item) => item.content)).toStrictEqual(['step 1', 'step 2', 'step 3'])
+  })
+
+  it('TL-X3 空闲、没有终答 → stopped，状态照实', () => {
+    const out = taskListDisplay(snap(list(C, I, P), false), false)
+    expect(out.phase).toBe('stopped')
+    expect(statusesOf(out.items)).toStrictEqual([C, I, P])
+  })
+
+  it('TL-X4 在跑但已经以终答收尾 → 仍是 running，步骤不补满', () => {
+    const out = taskListDisplay(snap(list(C, I, P), true), true)
+    expect(out.phase).toBe('running')
+    expect(statusesOf(out.items)).toStrictEqual([C, I, P])
+  })
+
+  it('TL-X5 [WB] 不改输入的快照（冻结的输入照样能算）', () => {
+    const input = deepFreeze(snap(list(C, I, P), true))
+    const out = taskListDisplay(input, false)
+    expect(statusesOf(out.items)).toStrictEqual([C, C, C])
+    expect(statusesOf(input.items)).toStrictEqual([C, I, P])
+    expect(out.items).not.toBe(input.items)
   })
 })

@@ -227,3 +227,22 @@ export function taskListOfMessages(messages: readonly ChatMessage[]): TaskListSn
     !last.blocks.some((block) => block.type === 'tool')
   return { items, endedWithAnswer, requestId: start > 0 ? messages[start - 1].id : '' }
 }
+
+/** 列表此刻的样子：进行中（会话在跑）/ 已完成（空闲、以最终回复收尾）/ 已停止（空闲、没有最终回复） */
+export type TaskListPhase = 'running' | 'done' | 'stopped'
+
+/**
+ * 界面上画什么（对话末尾的列表与收件箱共用）：样子，以及要画的步骤 —— 已完成时剩下的步骤一律算完成
+ * （收尾归宿主，模型不用发收尾调用），其余照实。
+ */
+export function taskListDisplay(
+  snapshot: TaskListSnapshot,
+  running: boolean
+): { phase: TaskListPhase; items: TaskListItem[] } {
+  const phase: TaskListPhase = running ? 'running' : snapshot.endedWithAnswer ? 'done' : 'stopped'
+  const items =
+    phase === 'done'
+      ? snapshot.items.map((item) => ({ ...item, status: 'completed' as const }))
+      : snapshot.items
+  return { phase, items }
+}

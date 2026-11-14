@@ -18,14 +18,23 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Circle, CircleCheck, CirclePause, Loader2 } from 'lucide-react'
-import { taskListOfMessages, type TaskListItem } from '@shuvix/chat-protocol/taskList'
+import {
+  taskListDisplay,
+  taskListOfMessages,
+  type TaskListItem,
+  type TaskListPhase
+} from '@shuvix/chat-protocol/taskList'
 import { useChatStore, selectPendingPrompt, selectSessionRun } from '../../stores/chatStore'
 import { useChatDensity } from '../../host/chatHostContext'
 
-type Phase = 'running' | 'done' | 'stopped'
-
 /** 一行步骤的图标：进行中转圈；已停止时进行中那一步换成暂停 */
-function StepIcon({ item, phase }: { item: TaskListItem; phase: Phase }): React.JSX.Element {
+function StepIcon({
+  item,
+  phase
+}: {
+  item: TaskListItem
+  phase: TaskListPhase
+}): React.JSX.Element {
   if (item.status === 'completed') {
     return <CircleCheck size={13} className="flex-shrink-0 text-success" />
   }
@@ -39,39 +48,29 @@ function StepIcon({ item, phase }: { item: TaskListItem; phase: Phase }): React.
   return <Circle size={13} className="flex-shrink-0 text-text-tertiary" />
 }
 
-export function TaskListPanel({
-  placement = 'conversation'
+/**
+ * 步骤行本身（对话末尾的列表与收件箱共用）：一行一步，图标说状态，三种样子只体现在图标上。外框、留白由调用方给
+ * （`className`）；`attrs` 写到 `<ol>` 上。
+ */
+export function TaskListSteps({
+  items,
+  phase,
+  touch = false,
+  className = '',
+  attrs
 }: {
-  placement?: 'conversation' | 'composer'
-}): React.JSX.Element | null {
+  items: readonly TaskListItem[]
+  phase: TaskListPhase
+  touch?: boolean
+  className?: string
+  attrs?: Record<string, string | undefined>
+}): React.JSX.Element {
   const { t } = useTranslation()
-  const messages = useChatStore((s) => s.messages)
-  const run = useChatStore(selectSessionRun)
-  const pendingPrompt = useChatStore(selectPendingPrompt)
-  const touch = useChatDensity() === 'touch'
-  const snapshot = useMemo(() => taskListOfMessages(messages), [messages])
-
-  // 一条新的请求正在发出：旧请求的列表让位
-  if (!snapshot || pendingPrompt) return null
-
-  const phase: Phase =
-    run.state === 'busy' ? 'running' : snapshot.endedWithAnswer ? 'done' : 'stopped'
-  const items =
-    phase === 'done'
-      ? snapshot.items.map((item) => ({ ...item, status: 'completed' as const }))
-      : snapshot.items
-  const inComposer = placement === 'composer'
-
-  const panel = (
+  return (
     <ol
       aria-label={t('taskList.title')}
-      className={`space-y-0.5 max-h-[30vh] overflow-y-auto thin-scrollbar px-3.5 py-1.5 ${
-        inComposer
-          ? 'border-b border-border-secondary/40'
-          : 'rounded-xl border border-border-secondary/40 bg-bg-primary'
-      }`}
-      data-task-list=""
-      data-task-list-placement={placement}
+      className={`space-y-0.5 ${className}`}
+      {...attrs}
       data-task-list-phase={phase}
     >
       {items.map((item, i) => (
@@ -96,6 +95,38 @@ export function TaskListPanel({
         </li>
       ))}
     </ol>
+  )
+}
+
+export function TaskListPanel({
+  placement = 'conversation'
+}: {
+  placement?: 'conversation' | 'composer'
+}): React.JSX.Element | null {
+  const messages = useChatStore((s) => s.messages)
+  const run = useChatStore(selectSessionRun)
+  const pendingPrompt = useChatStore(selectPendingPrompt)
+  const touch = useChatDensity() === 'touch'
+  const snapshot = useMemo(() => taskListOfMessages(messages), [messages])
+
+  // 一条新的请求正在发出：旧请求的列表让位
+  if (!snapshot || pendingPrompt) return null
+
+  const { phase, items } = taskListDisplay(snapshot, run.state === 'busy')
+  const inComposer = placement === 'composer'
+
+  const panel = (
+    <TaskListSteps
+      items={items}
+      phase={phase}
+      touch={touch}
+      className={`max-h-[30vh] overflow-y-auto thin-scrollbar px-3.5 py-1.5 ${
+        inComposer
+          ? 'border-b border-border-secondary/40'
+          : 'rounded-xl border border-border-secondary/40 bg-bg-primary'
+      }`}
+      attrs={{ 'data-task-list': '', 'data-task-list-placement': placement }}
+    />
   )
 
   if (inComposer) return panel
