@@ -9,14 +9,18 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  isSessionScopedToolName,
   isToolOptOut,
   isToolSelected,
   isToolSelectionEntry,
   optedOutTools,
+  ROOT_ONLY_TOOL_NAMES,
   setToolSelected,
+  TOOL_SEARCH_TOOL_NAME,
   toolOptOut,
   withToolsSelected
 } from './toolSelection'
+import { TASK_LIST_TOOL_NAME } from './taskList'
 
 describe('记号分类', () => {
   it('TS-1 isToolOptOut / isToolSelectionEntry / toolOptOut', () => {
@@ -176,5 +180,16 @@ describe('withToolsSelected —— 确保这几项开着（斜杠命令用）', 
     expect(out).toEqual(input)
     expect(out).toHaveLength(input.length)
     out.forEach((entry, i) => expect(entry).toBe(input[i]))
+  })
+})
+
+// 设计稿里这条叫 TS-1；本文件的 TS-1..5 早已占用，按序接成 TS-6
+describe('ROOT_ONLY_TOOL_NAMES —— 只给会话根 agent 的内置工具', () => {
+  it('TS-6 恰是 {tool_search, update_plan}；update_plan 是内置工具名，不是会话勾选的那一类', () => {
+    expect([...ROOT_ONLY_TOOL_NAMES].sort()).toEqual(['tool_search', 'update_plan'])
+    expect(ROOT_ONLY_TOOL_NAMES.has(TOOL_SEARCH_TOOL_NAME)).toBe(true)
+    expect(ROOT_ONLY_TOOL_NAMES.has(TASK_LIST_TOOL_NAME)).toBe(true)
+    expect(isSessionScopedToolName('update_plan')).toBe(false)
+    expect(isToolSelectionEntry('update_plan')).toBe(false)
   })
 })

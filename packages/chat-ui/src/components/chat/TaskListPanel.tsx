@@ -1,7 +1,7 @@
 /**
- * TaskListPanel — 任务列表（内置能力服务器 `plan`，docs/task-list-design.md §3.4，实验）
+ * TaskListPanel — 任务列表（内置工具 `update_plan`，docs/task-list-design.md §3.4、§9）
  *
- * 读的是投影出来的消息（`taskListOfMessages`）：当前请求里成功的 `mcp__plan__update` 调用按顺序折叠出来的
+ * 读的是投影出来的消息（`taskListOfMessages`）：当前请求里成功的 `update_plan`（旧会话里是 `mcp__plan__update`）调用按顺序折叠出来的
  * 列表，不存任何状态。只有逐行的步骤：没有标题行，也不折叠（2026-11-10 用户要求简化）。三种样子只体现在图标上：
  *  - **进行中**（会话在跑）：各步照实，进行中那一步转圈；
  *  - **已完成**（会话空闲，请求以一条最终回复收尾）：剩下的步骤一律算完成 —— 收尾归宿主，模型不用发收尾调用；

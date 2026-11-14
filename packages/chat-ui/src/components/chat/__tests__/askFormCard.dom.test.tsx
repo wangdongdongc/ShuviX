@@ -562,9 +562,9 @@ describe('AskForm：开启扩展的卡片', () => {
   })
 
   it('AC-13 名字和标识名不一样：两个都摆出来', () => {
-    render(extensionAsk({ server: 'plan', source: { type: 'builtin' } }))
-    expect(card().textContent).toContain(tr('tool.taskListLabel'))
-    expect(card().textContent).toContain('plan')
+    render(extensionAsk({ server: 'database', source: { type: 'builtin' } }))
+    expect(card().textContent).toContain(tr('tool.remoteDbLabel'))
+    expect(card().textContent).toContain('database')
   })
 
   it('AC-14 第三方：标识名就是名字，只摆一遍', () => {

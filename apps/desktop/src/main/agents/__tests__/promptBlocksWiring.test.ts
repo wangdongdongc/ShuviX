@@ -924,16 +924,16 @@ describe('desktopPromptBlocks —— 可以申请开启的扩展（PBW-E）', ()
     expect(extensions).not.toContain('SECRET')
   })
 
-  it('PBW-E3 已在名单里的（勾着 / 档案声明的）不列；chrome 与 plan 不列', async () => {
+  it('PBW-E3 已在名单里的（勾着 / 档案声明的）不列；chrome 不列', async () => {
+    // 任务列表曾是内置 server `plan`（同样不列），2026-11-14 转为内置工具 update_plan，v42 迁移删掉了那一行
     mocks.configuredServers.mockReturnValue([
       mcpServer('ticked'),
       mcpServer('chrome', 'inproc'),
-      mcpServer('plan', 'inproc'),
       mcpServer('free')
     ])
     const { extensions } = await blocksFor({ toolNames: ['tool_search', 'mcp:ticked'] })
     expect(extensions).toContain('`free`')
-    for (const name of ['ticked', 'chrome', 'plan']) {
+    for (const name of ['ticked', 'chrome']) {
       expect(extensions).not.toContain(`\`${name}\``)
     }
   })

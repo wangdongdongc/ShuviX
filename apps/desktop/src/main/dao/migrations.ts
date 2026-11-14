@@ -1223,6 +1223,39 @@ export const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_library_links_target ON library_links (targetType, targetId);
       `)
     }
+  },
+  {
+    version: 42,
+    description:
+      '任务列表转正为内置工具 update_plan：删掉 v37 种的内置 server 行 plan，会话与项目勾选里的 mcp:plan / -mcp:plan 一并抹掉',
+    up: (db) => {
+      // 只删内置行本身（按 id）：v37 让位改名的自定义 `plan-custom…` 不动。勾选里的 `mcp:plan` 只可能指内置行
+      // —— 从 v37 起名字一直被它占着，自定义 server 叫不了这个名字 —— 留着就是一台不存在的服务器显示成勾上。
+      // 旧会话转写里的 `mcp__plan__update` 调用不改：界面与工具按旧名照旧折叠（chat-protocol taskList.ts）
+      db.prepare(`DELETE FROM mcp_servers WHERE id = ? AND isBuiltin = 1`).run('builtin-mcp-plan')
+      const stale = new Set(['mcp:plan', '-mcp:plan'])
+      for (const table of ['sessions', 'projects']) {
+        const rows = db
+          .prepare(`SELECT id, settings FROM ${table} WHERE settings LIKE '%mcp:plan%'`)
+          .all() as Array<{ id: string; settings: string }>
+        const update = db.prepare(`UPDATE ${table} SET settings = ? WHERE id = ?`)
+        for (const row of rows) {
+          let settings: Record<string, unknown>
+          try {
+            settings = JSON.parse(row.settings)
+          } catch {
+            continue // 解析不过的设置不碰，改写只会把它原来那份冲掉
+          }
+          if (!settings || !Array.isArray(settings.enabledTools)) continue
+          const kept = settings.enabledTools.filter(
+            (entry: unknown) => typeof entry !== 'string' || !stale.has(entry)
+          )
+          if (kept.length === settings.enabledTools.length) continue
+          settings.enabledTools = kept
+          update.run(JSON.stringify(settings), row.id)
+        }
+      }
+    }
   }
 ]
 

@@ -89,10 +89,11 @@ describe('builtinExtensionCopy', () => {
 })
 
 describe('builtinExtensionCopy — 任务列表', () => {
-  it('COPY-1 plan 与 mcp:plan：名字与说明是任务列表的那两个键', () => {
+  // 任务列表曾是实验的内置 server `plan`，2026-11-14 转正为内置工具 `update_plan`：它不再是一台 server，
+  // 名字 `plan` 也就和任何自定义名一样不给文案（内置工具的标签走 builtinToolPresentations）
+  it('COPY-1 plan 与 mcp:plan：不再是内置 server，不给文案', () => {
     const T = (key: string): string => `T(${key})`
-    const expected = { label: 'T(tool.taskListLabel)', hint: 'T(tool.taskListHint)' }
-    expect(builtinMcpCopy('plan', T)).toStrictEqual(expected)
-    expect(builtinMcpCopy('mcp:plan', T)).toStrictEqual(expected)
+    expect(builtinMcpCopy('plan', T)).toBeUndefined()
+    expect(builtinMcpCopy('mcp:plan', T)).toBeUndefined()
   })
 })

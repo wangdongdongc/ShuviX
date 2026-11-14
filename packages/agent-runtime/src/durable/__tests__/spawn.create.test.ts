@@ -301,6 +301,38 @@ describe('SpawnCoordinator · creation', () => {
     expect(record!.toolNames).toEqual(['probe'])
   })
 
+  it('SC-1 a dispatched profile listing update_plan: the request names, the persona blocks and the record all go without it (root-only tool)', async () => {
+    const planner = testProfile({
+      name: 'planner',
+      displayName: 'Planner',
+      tools: ['probe', 'update_plan'],
+      systemPrompt: 'You are planner',
+      promptBlocks: ['environment']
+    })
+    const seen: Array<{ kind: string; toolNames: string[] }> = []
+    const d = await hostD({
+      dispatch: { profiles: { ...PROFILES, planner } },
+      host: {
+        promptBlocks: (ctx) => {
+          seen.push({ kind: ctx.kind, toolNames: [...ctx.toolNames] })
+          return { environment: 'M1' }
+        }
+      }
+    })
+    d.t.kit.queue(callAgent('planner', 'find X'), answer('found'), answer('done'))
+    expect(await d.session.submitUser('go')).toEqual({})
+
+    expect(d.t.toolHost.resolveCalls.at(-1)!.names).toEqual(['probe'])
+    const child = seen.filter((entry) => entry.kind === 'spawned')
+    expect(child).toHaveLength(1)
+    expect(child[0]!.toolNames).toEqual(['probe'])
+    expect(child[0]!.toolNames).not.toContain('update_plan')
+    const C = d.outcomes[0]!.conversationId!
+    const record = await spawnedAgentRecordOf(d.session.harness, C, BG)
+    expect(record!.toolNames).toEqual(['probe'])
+    expect(extensionTools(d.t, `shuvix.agent.${C}`)).toEqual(['probe'])
+  })
+
   it('P2-03-06 install, then submit: the child request offers exactly the profile tools on faux-1', async () => {
     const d = await hostD()
     const rootExtension = d.t.registryOf('s1')!.snapshot().extension('shuvix.agent.1')

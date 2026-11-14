@@ -5,7 +5,7 @@
  * 'safe' 才重跑，否则这次调用记为「中断，可能已部分执行」交给模型（P1-04，Verified fact 1）。
  * 规则一句话：只读、**或按构造幂等**、重跑无害的才 'safe' —— read / ls / grep / glob 只读；session 的每个
  * 动作都幂等（create 的 id 记在 memo 里、prompt 按幂等键重新挂上、wait 记下目标，P2-10 / Q-P2-01）；show_image 重放
- * 只是再快照一次（按内容去重，RT-1，2026-11-01）；
+ * 只是再快照一次（按内容去重，RT-1，2026-11-01）；update_plan 只读已提交的转写、交回一行状态（RT-1，2026-11-14）；
  * 其余一律 'unsafe'（BaseTool 缺省）。把 'safe' 写到一个有副作用、又不幂等的工具上，恢复时它就会把那个
  * 副作用再做一遍，所以逐个钉。
  *
@@ -24,7 +24,15 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({}),
   TOOL_ABORTED: 'Aborted'
 }))
-vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: () => {} }))
+// 记下注册项：函数式注册的工具（update_plan）没有类可 new，从注册项的 factory 造
+const registered = vi.hoisted(
+  () => [] as Array<{ name: string; factory?: (ctx: unknown) => unknown }>
+)
+vi.mock('../../services/toolRegistry', () => ({
+  registerBuiltinTool: (meta: { name: string; factory?: (ctx: unknown) => unknown }) =>
+    void registered.push(meta)
+}))
+vi.mock('../../services/sessionHost', () => ({ peekSessionHost: () => undefined }))
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/shuvix-tool-replay-test', isPackaged: false },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) }
@@ -108,6 +116,7 @@ import { PowerShellTool } from '../powershell'
 import { SkillTool } from '../../services/skillTool'
 import { WidgetTool } from '../widget'
 import { ShowImageTool } from '../showImage'
+import '../taskList'
 
 const ctx = { sessionId: 'sess-replay' } as ToolContext
 
@@ -126,6 +135,14 @@ describe('RT 桌面内置工具的重跑策略', () => {
   it('RT-1 show_image 重放只是再快照一次（按内容去重）→ safe', () => {
     const tool = new ShowImageTool(ctx)
     expect(tool.name).toBe('show_image')
+    expect(tool.replay).toBe('safe')
+  })
+
+  it('RT-1 update_plan 只读转写、不改任何东西 → safe', () => {
+    const meta = registered.find((m) => m.name === 'update_plan')
+    expect(meta?.factory).toBeDefined()
+    const tool = meta!.factory!(ctx) as { name: string; replay: string }
+    expect(tool.name).toBe('update_plan')
     expect(tool.replay).toBe('safe')
   })
 

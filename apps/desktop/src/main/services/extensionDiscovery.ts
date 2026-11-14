@@ -16,8 +16,8 @@ import i18next from 'i18next'
 import { mcpService } from './mcpService'
 import { widgetRegistry } from './widget/widgetRegistry'
 
-/** 不拿去问的内置服务器：chrome 只属于 Chrome 标签页会话，plan 是进度显示，不是模型需要的能力 */
-const NOT_OFFERED = new Set(['chrome', 'plan'])
+/** 不拿去问的内置服务器：chrome 只属于 Chrome 标签页会话 */
+const NOT_OFFERED = new Set(['chrome'])
 
 const BUILTIN_COPY_LANGUAGES = ['en', 'zh', 'ja'] as const
 

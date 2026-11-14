@@ -13,7 +13,6 @@ export const EXPERIMENTAL_FEATURES = {
   bots: 'experimental.hint',
   triggers: 'experimental.hint',
   tracking: 'experimental.hint',
-  taskList: 'experimental.hint',
   /** 目标（输入框的 `/goal`：fork 出一条管理员会话，docs/goal-mode-design.md §16） */
   goal: 'experimental.hint',
   telegramBots: 'experimental.hintTelegramBots'
@@ -25,9 +24,8 @@ export type ExperimentalFeature = keyof typeof EXPERIMENTAL_FEATURES
  * 实验性质的内置能力服务器（server 名 → 功能）：扩展选择器与设置 → MCP 里的那一行带标签。
  * 名字与内置行一一对应（撞名的自定义行会被种子迁移改名），调用方仍应先看 isBuiltin。
  */
-const EXPERIMENTAL_BUILTIN_MCP: Readonly<Record<string, ExperimentalFeature>> = {
-  plan: 'taskList'
-}
+// 任务列表（`plan`）2026-11-14 转为内置工具 `update_plan`，表里暂时没有别的
+const EXPERIMENTAL_BUILTIN_MCP: Readonly<Record<string, ExperimentalFeature>> = {}
 
 /** 内置 server 名（或选择器里的 `mcp:<name>`）→ 它算哪个实验功能；不是 → undefined */
 export function experimentalFeatureOfMcp(name: string): ExperimentalFeature | undefined {

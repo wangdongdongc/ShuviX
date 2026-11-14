@@ -271,6 +271,7 @@ const SHARED_BASE_TOOLS = [
   'edit',
   'ask',
   'suggest',
+  'update_plan',
   'show_image',
   'ls',
   'grep',
@@ -303,6 +304,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'edit',
       'ask',
       'suggest',
+      'update_plan',
       'show_image',
       'ls',
       'grep',
@@ -386,6 +388,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'edit',
       'ask',
       'suggest',
+      'update_plan',
       'show_image',
       'ls',
       'grep',
@@ -502,6 +505,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'edit',
       'ask',
       'suggest',
+      'update_plan',
       'show_image',
       'ls',
       'grep',
@@ -828,13 +832,14 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十六件（十五个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
+  it('REG-4 三语工具清单恰为十七件（十六个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
     // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
     // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
     // 三份清单相同的那条惯例在这里刻意不适用）。`write` 自 2026-10-12 起在：知识库条目由 agent
     // 用 write 直接写进库再 submit，没有它 bot 就记不了东西（正文限定它只用来记条目）。
     // `tool_search` 自 2026-11-04 起在：组件是一台台 MCP 服务器，bot 得能找到并请用户开启（每次开启都问，不算给能力）。
+    // `update_plan` 自 2026-11-14 起在：任务列表只是进度显示（钉在对话流末尾），不给任何能力。
     // 最后一件是技能工具：技能只往上下文里注入文本、不引入任何能力，窄清单的实质不变。货架不由档案
     // 点名（2026-10-28），是侧栏启用着的全部技能 —— 日报 bot 要的跟踪项技能、作图技能都在其中
     for (const language of LANGS) {
@@ -846,6 +851,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'glob',
         'ask',
         'suggest',
+        'update_plan',
         'show_image',
         'write',
         'edit',
@@ -857,7 +863,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'tool_search',
         'skill'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(16)
+      expect(built.tools, `bot.${language}`).toHaveLength(17)
       for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
@@ -1137,10 +1143,11 @@ describe('tab 档案钉板（Chrome 标签页会话的基座）', () => {
 })
 
 /**
- * 任务列表（内置能力服务器 `plan`，实验，docs/task-list-design.md D7）在每个会话里默认不勾：没有哪份内置档案
- * 声明 `mcp:plan`（声明了就成了「档案默认勾上」，用户得自己去取消）。
+ * 任务列表曾是实验的内置能力服务器 `plan`（docs/task-list-design.md D7），每个会话默认不勾，没有哪份内置档案声明
+ * `mcp:plan`。2026-11-14 它转正为内置工具 `update_plan`（work / chat / coding / bot 的名单里写它，见 REG-1..4），
+ * v42 迁移删掉了那台 server —— 这一条留着防旧名回流：档案里再写 `mcp:plan` 指向的是一台不存在的服务器。
  */
-describe('mcp:plan 默认不勾（任务列表，实验）', () => {
+describe('mcp:plan 不再出现（任务列表已转为内置工具 update_plan）', () => {
   it('REG-1 三语：没有任何内置档案（含宿主专用的）的工具清单含 mcp:plan，md 原文里也不写', () => {
     for (const language of LANGS) {
       const built = buildBuiltinProfiles({ ...ALL_PARAMS, language })
@@ -1155,6 +1162,26 @@ describe('mcp:plan 默认不勾（任务列表，实验）', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
       for (const [language, source] of Object.entries(sourcesOf(spec.name))) {
         expect(source, `${spec.name}.${language}`).not.toMatch(/mcp:plan\b/)
+      }
+    }
+  })
+
+  it('RP-1 三语：持有 update_plan 的内置档案恰是 bot / chat / coding / work；notebook、tab、explore 与宿主专用的都没有', () => {
+    for (const language of LANGS) {
+      const built = buildBuiltinProfiles({ ...ALL_PARAMS, language })
+      expect(
+        built.map((p) => p.name),
+        language
+      ).toEqual(BUILTIN_PROFILE_SPECS.map((s) => s.name))
+      const holders = built
+        .filter((p) => p.tools.includes('update_plan'))
+        .map((p) => p.name)
+        .sort()
+      expect(holders, language).toEqual(['bot', 'chat', 'coding', 'work'])
+      for (const name of ['notebook', 'tab', 'explore', ...HOST_ONLY_PROFILE_NAMES]) {
+        const profile = built.find((p) => p.name === name)
+        expect(profile, `${name}.${language}`).toBeDefined()
+        expect(profile!.tools, `${name}.${language}`).not.toContain('update_plan')
       }
     }
   })

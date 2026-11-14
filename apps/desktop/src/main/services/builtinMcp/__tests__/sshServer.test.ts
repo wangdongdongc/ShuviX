@@ -2431,33 +2431,42 @@ describe('ssh 内置服务器传输结果的翻译', () => {
 // ─── 装配期对账 ──────────────────────────────────────────────────────────
 
 describe('内置能力服务器的清单', () => {
-  it('SSHS-U-41: 工厂表的键与迁移种下的内置行同名（v22 种 ssh，v27 种 browser，v28 种 database，v29 种 chrome，v37 种 plan）', () => {
+  it('SSHS-U-41: 工厂表的键与迁移种下、留到最新的内置行同名（v22 种 ssh，v27 种 browser，v28 种 database，v29 种 chrome；v37 种的 plan 由 v42 删掉）', () => {
     // 两边对不上 = 会话里勾了这台服务器、建连时 registry 抛「No builtin MCP server registered」。
-    // 新增一台内置能力服务器 = 工厂表加一行 + 一条种子迁移，这条用例就是那对括号。
+    // 新增一台内置能力服务器 = 工厂表加一行 + 一条种子迁移，这条用例就是那对括号；撤掉一台 = 删工厂 + 一条删行迁移
+    // （任务列表 plan 2026-11-14 转为内置工具 update_plan，v42 按 id 删了它的种子行）。
     // v22 把名字写死在 SQL 里，v27 / v28 / v29 / v37 用绑定参数（(id, name, createdAt, updatedAt)）—— 两种都认
-    const seeded = new Set<string>()
+    /** 种下的内置 inproc 行：id → 名字 */
+    const seeded = new Map<string, string>()
     const db = {
       prepare: (sql: string) => ({
         // v27 / v28 / v29 / v37 先查「内置行在不在 / 名字有没有被占」：空库，一律没有
         get: (): undefined => undefined,
+        // v42 找勾过 mcp:plan 的会话 / 项目：空库，一行也没有
+        all: (): unknown[] => [],
         run: (...args: unknown[]): void => {
+          if (/DELETE\s+FROM\s+mcp_servers/i.test(sql)) {
+            if (typeof args[0] === 'string') seeded.delete(args[0])
+            return
+          }
           if (!/INSERT[\s\S]*INTO\s+mcp_servers/i.test(sql) || !/'inproc'/.test(sql)) return
           const literal = /VALUES\s*\(\s*\?\s*,\s*'([^']+)'\s*,\s*'inproc'/i.exec(sql)
           const name = literal ? literal[1] : args[1]
-          if (typeof name === 'string') seeded.add(name)
+          if (typeof args[0] === 'string' && typeof name === 'string') seeded.set(args[0], name)
         }
       }),
       exec: (): void => {}
     }
 
-    for (const version of [22, 27, 28, 29, 37]) {
+    for (const version of [22, 27, 28, 29, 37, 42]) {
       const m = migrations.find((x) => x.version === version)
-      expect(m, `迁移 v${version} 应当存在（内置能力服务器的种子）`).toBeDefined()
+      expect(m, `迁移 v${version} 应当存在（内置能力服务器的种子 / 撤行）`).toBeDefined()
       m!.up(db as unknown as Parameters<(typeof migrations)[number]['up']>[0])
     }
 
-    expect([...seeded].sort()).toEqual(['browser', 'chrome', 'database', 'plan', 'ssh'])
-    expect(Object.keys(BUILTIN_MCP_FACTORIES).sort()).toEqual([...seeded].sort())
+    const live = [...seeded.values()].sort()
+    expect(live).toEqual(['browser', 'chrome', 'database', 'ssh'])
+    expect(Object.keys(BUILTIN_MCP_FACTORIES).sort()).toEqual(live)
   })
 })
 

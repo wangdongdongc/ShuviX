@@ -27,7 +27,6 @@ import {
   builtinMcpRegistry,
   mcpService,
   setBuiltinMcpAgentResolver,
-  setBuiltinMcpTaskListReader,
   setComputedMcpServers
 } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
@@ -112,7 +111,7 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
-import { readTaskList, setWhenHostFunctions } from '@shuvix/agent-runtime'
+import { setWhenHostFunctions } from '@shuvix/agent-runtime'
 import { activeSessionsOnDay } from './services/sessionDayPromptService'
 import { builtinTimer } from './services/triggerTimer'
 import { botTriggers } from './services/botTriggerService'
@@ -1170,13 +1169,6 @@ app.whenReady().then(async () => {
         set: (key, value) => settingsDao.upsert(key, value)
       },
       toolResultsDir: getToolResultsDir
-    })
-  )
-  // 任务列表 server（`plan`）从开着的 durable 会话读当前列表：同样注入（见 mcpService）
-  step('builtin MCP task list reader', () =>
-    setBuiltinMcpTaskListReader(async (sessionId, before) => {
-      const session = peekSessionHost()?.get(sessionId)
-      return session === undefined ? undefined : readTaskList(session, before)
     })
   )
 

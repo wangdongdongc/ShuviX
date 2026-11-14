@@ -17,7 +17,7 @@ import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import {
   isSessionScopedToolName,
   optedOutTools,
-  TOOL_SEARCH_TOOL_NAME
+  ROOT_ONLY_TOOL_NAMES
 } from '@shuvix/chat-protocol/toolSelection'
 import type { InProcessAgentType } from '../subagent/types'
 import type { AgentKind } from '../agentProfile/promptBlocks'
@@ -45,10 +45,10 @@ export function normalizeToolNames(
   overlay: readonly string[] | undefined
 ): string[] {
   if (kind !== 'root') {
-    // `tool_search` 开启的是会话的选择，而选择只作用于根 agent：派生 agent 的档案写了也不给（工具名单相同的
-    // coding 既能是子会话的根，也能被派发）
+    // 只属于根 agent 的工具（`tool_search`、`update_plan`，见 ROOT_ONLY_TOOL_NAMES）：派生 agent 的档案写了也不给
+    //（工具名单相同的 coding 既能是子会话的根，也能被派发）
     return [...new Set([...profileTools, ...(overlay ?? [])])].filter(
-      (name) => name !== TOOL_SEARCH_TOOL_NAME
+      (name) => !ROOT_ONLY_TOOL_NAMES.has(name)
     )
   }
   const selection = overlay ?? []

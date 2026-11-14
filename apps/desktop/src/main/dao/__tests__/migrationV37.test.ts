@@ -11,8 +11,10 @@
  *   MIG37-3  plan-custom 也被占 → -2，再占 → -3；已占着那些名字的行不动
  *   MIG37-4  重跑 v37 是空操作（停用了的内置行仍是停用、不再改任何人的名字）
  *   MIG37-5  名字只差大小写（`Plan`）不算撞名 —— SQLite 的 UNIQUE 比较区分大小写
- *   MIG37-6  真的 runMigrations：v36 库 → ≥ v37、内置行在；sessions 表一个字节不动（勾过 `mcp:plan` 的会话
- *            settings.enabledTools 原样，那个勾从此指向内置行，同 v27）
+ *   MIG37-6  真的 runMigrations：v36 库 → ≥ v37；刚跑完 v37 那一刻（薄壳在写 user_version = 37 时拍快照）内置行在、
+ *            sessions 表一个字节不动（勾过 `mcp:plan` 的会话 settings.enabledTools 原样，那个勾指向内置行，同 v27）。
+ *            之后的 v42（任务列表转为内置工具 update_plan）删掉内置行、抹掉勾 —— 那是 v42 自己的用例的事，
+ *            这里只钉「跑到最新时那一行已不在、让位改名的用户行不受牵连」
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -99,14 +101,22 @@ const builtinPlanRow = (): Row => ({
   updatedAt: NOW
 })
 
-/** runMigrations 用到的 better-sqlite3 面：prepare / exec / pragma / transaction */
-function betterSqliteShim(db: DatabaseSync): Parameters<typeof runMigrations>[0] {
+/**
+ * runMigrations 用到的 better-sqlite3 面：prepare / exec / pragma / transaction。
+ * `onVersion(v)`：runMigrations 在 v 的事务里写完 `user_version = v` 时调 —— 这时 v 的 up() 已经跑完、后面的版本还没跑
+ */
+function betterSqliteShim(
+  db: DatabaseSync,
+  onVersion?: (version: number) => void
+): Parameters<typeof runMigrations>[0] {
   return {
     prepare: (sql: string) => db.prepare(sql),
     exec: (sql: string) => db.exec(sql),
     pragma: (source: string, opts?: { simple?: boolean }) => {
       if (source.includes('=')) {
         db.exec(`PRAGMA ${source}`)
+        const set = /^\s*user_version\s*=\s*(\d+)\s*$/.exec(source)
+        if (set) onVersion?.(Number(set[1]))
         return []
       }
       const row = db.prepare(`PRAGMA ${source}`).get() as Row
@@ -221,7 +231,7 @@ describe('迁移 v37：内置 plan 的种子与撞名让位', () => {
     expect(byName(db, 'Plan')?.id).toBe('u1')
   })
 
-  it('MIG37-6 真的 runMigrations：v36 库 → ≥ v37、内置行在；sessions 一个字节不动，勾过的 mcp:plan 从此指向内置行', () => {
+  it('MIG37-6 真的 runMigrations：v36 库 → ≥ v37、跑完 v37 时内置行在；sessions 一个字节不动，勾过的 mcp:plan 指向内置行', () => {
     const db = new DatabaseSync(':memory:')
     for (const m of migrations) {
       if (m.version > 36) break
@@ -237,17 +247,37 @@ describe('迁移 v37：内置 plan 的种子与撞名让位', () => {
     const sessionsBefore = allRows(db, 'sessions')
     vi.spyOn(Date, 'now').mockReturnValue(NOW)
 
-    expect(runMigrations(betterSqliteShim(db))).toBe(migrations.at(-1)!.version - 36)
+    /** 刚跑完 v37 那一刻的库（v37 的事务还没提交，但它的写入在同一连接上看得见） */
+    let atV37:
+      | { builtin?: Row; custom?: Row; planByName?: Row; sessions: Row[]; settings: unknown }
+      | undefined
+    const shim = betterSqliteShim(db, (version) => {
+      if (version !== 37) return
+      atV37 = {
+        builtin: byId(db, 'builtin-mcp-plan'),
+        custom: byId(db, 'u1'),
+        planByName: byName(db, 'plan'),
+        sessions: allRows(db, 'sessions'),
+        settings: (db.prepare("SELECT settings FROM sessions WHERE id = 's1'").get() as Row)
+          .settings
+      }
+    })
+
+    expect(runMigrations(shim)).toBe(migrations.at(-1)!.version - 36)
     expect(userVersion(db)).toBe(migrations.at(-1)!.version)
     expect(userVersion(db)).toBeGreaterThanOrEqual(37)
 
-    expect(byId(db, 'builtin-mcp-plan')).toEqual(builtinPlanRow())
-    expect(byId(db, 'u1')?.name).toBe('plan-custom')
+    expect(atV37, 'runMigrations 应当跑过 v37').toBeDefined()
+    expect(atV37!.builtin).toEqual(builtinPlanRow())
+    expect(atV37!.custom?.name).toBe('plan-custom')
     // sessions 表一行一列都没动：enabledTools 逐字节原样
-    expect(allRows(db, 'sessions')).toEqual(sessionsBefore)
-    const after = db.prepare("SELECT settings FROM sessions WHERE id = 's1'").get() as Row
-    expect(after.settings).toBe(settings)
-    // 那个勾按名字解析：`plan` 现在是内置行
-    expect(byName(db, 'plan')?.id).toBe('builtin-mcp-plan')
+    expect(atV37!.sessions).toEqual(sessionsBefore)
+    expect(atV37!.settings).toBe(settings)
+    // 那个勾按名字解析：`plan` 那时是内置行
+    expect(atV37!.planByName?.id).toBe('builtin-mcp-plan')
+
+    // 跑到最新：v42 已把内置行删掉（任务列表转为内置工具 update_plan）；让位改名的用户行不受牵连
+    expect(byId(db, 'builtin-mcp-plan')).toBeUndefined()
+    expect(byId(db, 'u1')?.name).toBe('plan-custom')
   })
 })

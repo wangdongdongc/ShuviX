@@ -18,6 +18,8 @@ import './delete'
 import './ask'
 // suggest：给用户留几条一键采纳的提议，不等回答（采纳 = 那条的话作为用户回复发进会话）
 import './suggest'
+// update_plan：任务列表（进度显示，钉在对话流末尾；只给会话的根 agent）
+import './taskList'
 // tool_search：查找并申请开启这条会话没选的 MCP 服务器
 import './toolSearch'
 // shuvix：agent 经设置 API 改 ShuviX 自己的设置（能调哪些通道见 services/agentChannels.ts 的注解）

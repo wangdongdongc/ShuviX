@@ -18,6 +18,8 @@
  * 用这里的 `isToolSelected` / `setToolSelected` 读写，两边按同一个记号说话。
  */
 
+import { TASK_LIST_TOOL_NAME } from './taskList'
+
 /** 取消记号的前缀 */
 export const TOOL_OPT_OUT_PREFIX = '-'
 
@@ -41,6 +43,17 @@ export function toolOptOut(name: string): string {
 
 /** 查找并申请开启这条会话没选的 MCP 服务器的那个内置工具 */
 export const TOOL_SEARCH_TOOL_NAME = 'tool_search'
+
+/**
+ * 只给会话根 agent 的内置工具：派出的 agent 档案里写了也不给（agent-runtime `normalizeToolNames`）。
+ *  - `tool_search`：开启的是会话的选择，而选择只作用于根 agent；
+ *  - `update_plan`：任务列表只画在这条会话的对话流末尾，读的也是根 agent 那条对话（chat-protocol `taskList.ts`）。
+ * 工具名单相同的 coding 既能是子会话的根，也能被派发，所以这一条按身份裁，不按档案。
+ */
+export const ROOT_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TOOL_SEARCH_TOOL_NAME,
+  TASK_LIST_TOOL_NAME
+])
 
 /** agent 改 ShuviX 自己的设置的那个内置工具（经设置 API，见 desktop 的 services/agentApi） */
 export const SHUVIX_TOOL_NAME = 'shuvix'

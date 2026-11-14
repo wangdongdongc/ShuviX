@@ -1,15 +1,14 @@
 /**
- * 任务列表（内置能力服务器 `plan`，docs/task-list-design.md §3，实验）—— 单测各管一段（taskList.test.ts 的折叠、
- * taskListReader / taskListParity 的 server 侧读者、planServer.test.ts 的工具、migrationV37.test.ts 的种子行、
- * taskListPanel / assistantBubbleTaskList 的界面），这里只走一遍它们都替身掉的那条链：v37 在真库上种下内置行 →
- * 会话默认不勾 → 勾上后模型真调 `mcp__plan__update` → main 启动时注册的读者（`setBuiltinMcpTaskListReader`）
- * 从已提交的条目折叠出上一次的列表 → 结果行回给模型 → 渲染端把列表钉在对话流末尾，每次调用在卡片里照普通
- * 工具行显示。
+ * 任务列表（内置工具 `update_plan`，docs/task-list-design.md §3、§9）—— 单测各管一段（taskList.test.ts 的折叠、
+ * taskListReader / taskListParity 的工具侧读者、registry.test.ts 的档案名单、taskListPanel / assistantBubbleTaskList
+ * 的界面），这里只走一遍它们都替身掉的那条链：work 档案默认带着它 → 模型真调 `update_plan` → 桌面注册的工具从
+ * 开着的会话里读已提交的条目、折叠出上一次的列表 → 结果行回给模型 → 渲染端把列表钉在对话流末尾，每次调用在卡片里
+ * 照普通工具行显示。2026-11-14 之前它是实验的内置 MCP（`plan` server 的 `mcp__plan__update`，要逐会话勾选）。
  *
- *   TLE-1 `mcp.list()` 有内置的 `plan` 行（inproc、启用）；设置 → MCP 那一行带内置徽章与「实验」标签
- *   TLE-2 没勾的会话：`tools.list` 列出 `mcp:plan`（内置、没有档案声明、不在勾选里），选择器那一行带「实验」标签、
- *         没勾；发一条消息，请求里没有 `mcp__plan__update`
- *   TLE-3 勾上的会话，三轮脚本（列表与第一次真调用同一条消息 → 推进 → 终答）：
+ *   TLE-1 `mcp.list()` 没有 `plan` 行（v42 删掉了 v37 种的那一行）；`tools.list` 里 `update_plan` 是内置工具、
+ *         按会话档案缺省开启；设置 → MCP 没有 plan 那一行，内置行都不带「实验」标签
+ *   TLE-2 什么扩展都没勾的会话：选择器里没有 `mcp:plan`；发一条消息，请求里带着 `update_plan`，模型不调它列表就不出现
+ *   TLE-3 同一种会话，三轮脚本（列表与第一次真调用同一条消息 → 推进 → 终答）：
  *         a 第二轮挂着时列表在跑、各步状态（列表只有步骤行，没有标题行、不折叠）；列表在对话的滚动区里，不在输入框卡片里；
  *         b 同一时刻卡片里：第一轮的列表调用和 ls 并成一个合并行（摘要里有第一步），第二轮正在流式生成的
  *           那次是一条 generating 的列表行；
@@ -50,8 +49,7 @@ import {
 } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
-const PLAN = 'mcp__plan__update'
-const PLAN_ID = 'builtin-mcp-plan'
+const PLAN = 'update_plan'
 const STEPS = ['Read the code', 'Fix the bug', 'Run the tests']
 const ITEMS = STEPS.map((content, i) => ({
   content,
@@ -69,7 +67,9 @@ interface McpRow {
 
 interface ListedTool {
   name: string
+  group?: string
   isBuiltin?: boolean
+  defaultEnabled?: boolean
   declaredBy?: string
 }
 
@@ -106,10 +106,6 @@ const sids: Record<keyof typeof TITLES, string> = { off: '', on: '', stop: '' }
 const createSession = (title: string, projectId: string): Promise<string> =>
   app.main.eval<string>(
     `window.api.session.create(${JSON.stringify({ title, projectId })}).then((s) => s.id)`
-  )
-const writeTools = (sid: string, enabledTools: string[]): Promise<{ success: boolean }> =>
-  app.main.eval(
-    `window.api.session.updateEnabledTools(${JSON.stringify({ id: sid, enabledTools })})`
   )
 const storedTools = (sid: string): Promise<unknown> =>
   app.main.eval(
@@ -151,9 +147,7 @@ beforeAll(async () => {
   sids.off = await createSession(TITLES.off, project.id)
   sids.on = await createSession(TITLES.on, project.id)
   sids.stop = await createSession(TITLES.stop, project.id)
-  // 第一条消息之前勾上：agent 建出来时就带着 plan 的工具
-  expect((await writeTools(sids.on, ['mcp:plan'])).success).toBe(true)
-  expect((await writeTools(sids.stop, ['mcp:plan'])).success).toBe(true)
+  // 什么都不勾：项目会话的基座 work 名单里写着 update_plan，agent 建出来时就带着它
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -172,54 +166,45 @@ afterAll(async () => {
   await app?.stop()
 })
 
-describe('种子行与设置', () => {
-  it('TLE-1 迁移 v37 种下的内置 plan 行：inproc、启用；设置 → MCP 那一行带内置徽章与「实验」标签', async () => {
+describe('内置工具，不是 MCP', () => {
+  it('TLE-1 没有 plan 行（v42 删了 v37 种的那一行）；update_plan 是内置工具、按档案缺省开启；设置 → MCP 没有 plan 行、内置行都不带「实验」标签', async () => {
     const rows = await app.main.eval<McpRow[]>(`window.api.mcp.list()`)
-    const plans = rows.filter((r) => r.name === 'plan')
-    expect(plans).toHaveLength(1)
-    expect(plans[0]).toMatchObject({
-      id: PLAN_ID,
-      name: 'plan',
-      type: 'inproc',
-      isBuiltin: 1,
-      isEnabled: 1
+    expect(rows.filter((r) => r.name === 'plan')).toEqual([])
+    expect(rows.filter((r) => r.id === 'builtin-mcp-plan')).toEqual([])
+
+    const listed = await app.main.eval<ListedTool[]>(
+      `window.api.tools.list(${JSON.stringify(sids.on)})`
+    )
+    expect(listed.find((t) => t.name === PLAN)).toMatchObject({
+      group: 'general',
+      defaultEnabled: true
     })
+    expect(listed.some((t) => t.name === 'mcp:plan')).toBe(false)
 
     settings = await app.openSettings('mcp')
     const mcp = mcpSettingsPane(settings)
-    const row = await mcp.waitRow('plan')
-    expect(row).toMatchObject({ builtinBadge: true, typeBadge: 'inproc', experimental: 'taskList' })
-    // 对照：别的内置行没有这枚标签
     expect((await mcp.waitRow('browser')).experimental).toBeNull()
+    const shots = await mcp.rows()
+    expect(shots.map((r) => r.name)).not.toContain('plan')
+    expect(shots.filter((r) => r.builtinBadge && r.experimental !== null)).toEqual([])
   }, 120_000)
 })
 
-describe('默认不勾', () => {
-  it('TLE-2 没勾的会话：列得出 mcp:plan（内置、带「实验」标签、没勾），请求里没有列表工具', async () => {
+describe('不用勾', () => {
+  it('TLE-2 什么扩展都没勾的会话：选择器里没有 mcp:plan；请求里带着 update_plan，不调就没有列表', async () => {
     provider.reset()
     await events.clear()
 
-    const listed = await app.main.eval<ListedTool[]>(
-      `window.api.tools.list(${JSON.stringify(sids.off)})`
-    )
-    const item = listed.find((t) => t.name === 'mcp:plan')
-    expect(item).toMatchObject({ isBuiltin: true })
-    // 没有哪个基座档案声明它：要用户自己勾
-    expect(item?.declaredBy).toBeUndefined()
-    expect(((await storedTools(sids.off)) as string[] | undefined) ?? []).not.toContain('mcp:plan')
+    expect(((await storedTools(sids.off)) as string[] | undefined) ?? []).toEqual([])
 
     await openSession('off')
     await picker.open()
     const items = await until(async () => {
       const all = await picker.items()
-      return all.some((i) => i.name === 'mcp:plan') ? all : null
-    }, 'tool picker lists mcp:plan')
-    expect(items.find((i) => i.name === 'mcp:plan')).toMatchObject({
-      checked: false,
-      declared: false,
-      experimental: 'taskList'
-    })
-    expect(items.find((i) => i.name === 'mcp:browser')?.experimental).toBeNull()
+      return all.some((i) => i.name === 'mcp:browser') ? all : null
+    }, 'tool picker lists its MCP rows')
+    expect(items.some((i) => i.name === 'mcp:plan')).toBe(false)
+    expect(items.filter((i) => i.experimental !== null)).toEqual([])
     await picker.close()
 
     provider.script({ text: 'Hello there.', usage: { prompt: 80, completion: 5 } })
@@ -229,13 +214,13 @@ describe('默认不勾', () => {
 
     expect(provider.chatRequestCount()).toBe(1)
     const tools = requestToolNames(provider.requests()[0]!)
-    expect(tools.length).toBeGreaterThan(0)
-    expect(tools).not.toContain(PLAN)
+    expect(tools).toContain(PLAN)
+    expect(tools).not.toContain('mcp__plan__update')
     expect(await list.present()).toBe(false)
   }, 120_000)
 })
 
-describe('勾上之后', () => {
+describe('列表的一生', () => {
   it('TLE-3 列表随第一次真调用发出、推进一步、终答收尾：对话末尾的列表，卡片里照常有它的行，结果行出自真读者', async () => {
     provider.reset()
     await events.clear()
@@ -259,7 +244,7 @@ describe('勾上之后', () => {
     await chat.typeAndSend('fix the bug')
     await until(() => provider.holding(), 'second turn held', 30_000)
 
-    // 第一轮的请求里有列表工具（勾上的会话，agent 建出来时就带着）
+    // 第一轮的请求里有列表工具（档案名单里写着，agent 建出来时就带着）
     expect(requestToolNames(provider.requests()[0]!)).toContain(PLAN)
 
     // TLE-3a 第二轮挂着：第一轮的列表在跑

@@ -286,3 +286,25 @@ describe('buildToolSummary — tool_search', () => {
     expect(def.presentation?.icon).toBe('Puzzle')
   })
 })
+
+/** 任务列表：新名 `update_plan` 与转正之前的旧名 `mcp__plan__update` 共用一份摘要 */
+describe('任务列表的摘要（新名与旧名）', () => {
+  const step = (content: string, status: string): { content: string; status: string } => ({
+    content,
+    status
+  })
+  it.each<[string, Record<string, unknown>, string | undefined]>([
+    [
+      '进行中那一步',
+      { items: [step('Read', 'completed'), step('Fix', 'in_progress'), step('Test', 'pending')] },
+      'Fix'
+    ],
+    ['没有进行中 → 第一步', { items: [step('Read', 'pending'), step('Fix', 'pending')] }, 'Read'],
+    ['advance', { advance: true }, undefined],
+    ['done', { done: [1], start: 2 }, undefined],
+    ["items: 'x'", { items: 'x' }, undefined]
+  ])('PR-1 %s：update_plan 与 mcp__plan__update 的摘要相同', (_label, args, expected) => {
+    expect(buildToolSummary('update_plan', args)).toBe(expected)
+    expect(buildToolSummary('mcp__plan__update', args)).toBe(expected)
+  })
+})

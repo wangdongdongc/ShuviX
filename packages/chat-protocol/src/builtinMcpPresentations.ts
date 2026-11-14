@@ -5,19 +5,20 @@
  * （进程内、代码随产品发布）的工具名是确定的 `mcp__<server>__<tool>`，于是可以像内置工具一样
  * 给图标、标签、折叠摘要和详情形态。
  *
- * **认名字要认全**：server 名唯一、内置行占着 `browser` / `ssh` / `database` / `chrome` / `plan`（桌面 v27 / v28 / v29 / v37 迁移、
+ * **认名字要认全**：server 名唯一、内置行占着 `browser` / `ssh` / `database` / `chrome`（桌面 v27 / v28 / v29 迁移、
  * 扩展 mcpStore 都会给撞名的自定义行改名），但光凭前缀还不够 —— 一台叫 `browser__x` 的自定义 server，
  * 它的工具 `mcp__browser__x__tool` 也以 `mcp__browser__` 开头，于是会在询问卡片上顶着
  * 「浏览器」的名字和图标出现。所以前缀之后的那一截还必须是这台内置 server 真有的工具名
  * （`toolNames`；与 server 那边工具目录的一致性由守护用例钉住）。
  *
  * 另收**历史兼容**：browser 曾是一个 multiplex 内置工具（名字就叫 `browser`），database 曾是一个
- * 内置工具（名字就叫 `database`）—— 旧会话里的这些块要照旧有图标与标签（摘要仍在 toolSummaries
- * 的 `browser` / `database` 条目里）。
+ * 内置工具（名字就叫 `database`），任务列表反过来曾是内置 server `plan`（`mcp__plan__update`，现为内置工具
+ * `update_plan`）—— 旧会话里的这些块要照旧有图标与标签（摘要仍在 toolSummaries 的同名条目里）。
  */
 import type { ToolPresentation } from './types/toolPresentation'
 import { asStr, fileNameOf } from './toolSummaryHelpers'
 import { parseWidgetToolName } from './widgetServers'
+import { TASK_LIST_PRESENTATION } from './builtinToolPresentations'
 
 interface BuiltinMcpServerPresentationDef {
   /** i18n label key（各端用自身 t 解析） */
@@ -171,19 +172,6 @@ export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentat
             .filter(Boolean)
             .join(' · ') || undefined
         : undefined
-  },
-  // 任务列表（实验）：每次调用照普通工具行显示（让人看得到列表是什么时候怎么改的），摘要是那时进行中的步骤
-  plan: {
-    labelKey: 'tool.taskListLabel',
-    hintKey: 'tool.taskListHint',
-    toolNames: ['update'],
-    presentation: { icon: 'ListChecks', iconColor: '#8b5cf6' },
-    summary: (_tool, args) => {
-      if (!Array.isArray(args.items)) return undefined
-      const steps = args.items as Array<{ content?: unknown; status?: unknown }>
-      const current = steps.find((step) => step?.status === 'in_progress') ?? steps[0]
-      return asStr(current?.content)
-    }
   }
 }
 
@@ -193,7 +181,9 @@ const LEGACY_TOOL_PRESENTATIONS: Record<
   { labelKey: string; presentation: Omit<ToolPresentation, 'label'> }
 > = {
   browser: { labelKey: 'tool.browserLabel', presentation: BROWSER_ICON },
-  database: { labelKey: 'tool.remoteDbLabel', presentation: DATABASE_ICON }
+  database: { labelKey: 'tool.remoteDbLabel', presentation: DATABASE_ICON },
+  // 任务列表曾是实验的内置 MCP `plan`（2026-11-14 转为内置工具 `update_plan`，摘要见 toolSummaries）
+  mcp__plan__update: { labelKey: 'tool.taskListLabel', presentation: TASK_LIST_PRESENTATION }
 }
 
 /**

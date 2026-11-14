@@ -12,20 +12,19 @@ import { createSshMcpServerFactory } from './sshServer'
 import { createDesktopBrowserMcpServerFactory } from './browserServer'
 import { createDatabaseMcpServerFactory, DATABASE_MCP_SERVER_NAME } from './databaseServer'
 import { CHROME_MCP_SERVER_NAME, createChromeMcpServerFactory } from './chromeServer'
-import { createPlanMcpServerFactory, PLAN_MCP_SERVER_NAME } from './planServer'
 
 /**
  * 键就是 `mcp_servers.name`，也是工具名前缀
- * （`mcp__ssh__list-hosts`、`mcp__browser__click`、`mcp__database__query`、`mcp__chrome__click`、`mcp__plan__update`）
+ * （`mcp__ssh__list-hosts`、`mcp__browser__click`、`mcp__database__query`、`mcp__chrome__click`）
+ *
+ * 任务列表曾是这里的 `plan`（实验），2026-11-14 转正为内置工具 `update_plan`（tools/taskList.ts）；v42 迁移删掉了它的种子行
  */
 export const BUILTIN_MCP_FACTORIES: Record<string, BuiltinMcpFactory<DesktopBuiltinMcpScope>> = {
   ssh: createSshMcpServerFactory(),
   [BROWSER_MCP_SERVER_NAME]: createDesktopBrowserMcpServerFactory(),
   [DATABASE_MCP_SERVER_NAME]: createDatabaseMcpServerFactory(),
   // 用户真实的 Chrome：只由 Chrome 标签页会话的基座档案 `tab` 声明，普通会话选不到（见 chromeServer.ts）
-  [CHROME_MCP_SERVER_NAME]: createChromeMcpServerFactory(),
-  // 任务列表（实验）：每个会话默认不勾，见 planServer.ts
-  [PLAN_MCP_SERVER_NAME]: createPlanMcpServerFactory()
+  [CHROME_MCP_SERVER_NAME]: createChromeMcpServerFactory()
 }
 
 export { CHROME_MCP_SERVER_NAME }

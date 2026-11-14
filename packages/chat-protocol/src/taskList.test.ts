@@ -1,6 +1,7 @@
 /**
- * 任务列表（内置能力服务器 `plan`，docs/task-list-design.md §3）的契约 —— `taskList.ts`。不存状态：列表就是一个
- * 请求里所有成功调用的参数按顺序折叠出来的；server 与界面各自把手上的东西摊成同一种事件交给这一份折叠。
+ * 任务列表（内置工具 `update_plan`，docs/task-list-design.md §3；2026-11-14 之前是实验的内置 server `plan` 的
+ * `mcp__plan__update`，旧会话里那个名字照旧算数）的契约 —— `taskList.ts`。不存状态：列表就是一个请求里所有成功调用的
+ * 参数按顺序折叠出来的；工具与界面各自把手上的东西摊成同一种事件交给这一份折叠。
  *
  *   TL-C   常量
  *   TL-P   `parseTaskListUpdate`：参数 → 三种更新之一，或一句给模型读的错误（逐字）
@@ -14,12 +15,12 @@ import { describe, expect, it } from 'vitest'
 import {
   TASK_LIST_MAX_ITEMS,
   TASK_LIST_MAX_ITEM_CHARS,
-  TASK_LIST_MCP_SERVER_NAME,
-  TASK_LIST_TOOL,
+  LEGACY_TASK_LIST_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
   applyTaskListUpdate,
   describeTaskList,
   foldTaskList,
+  isTaskListToolName,
   parseTaskListUpdate,
   startsTaskListRequest,
   taskListOfMessages,
@@ -45,7 +46,7 @@ import type {
 // ─── 夹具 ───────────────────────────────────────────────
 
 const SID = 's1'
-const PLAN = 'mcp__plan__update'
+const PLAN = 'update_plan'
 
 const C: TaskListStatus = 'completed'
 const I: TaskListStatus = 'in_progress'
@@ -173,10 +174,14 @@ const Y = [
 // ─── 常量 ───────────────────────────────────────────────
 
 describe('常量', () => {
-  it('TL-C-1 server / 工具名 / 上限', () => {
-    expect(TASK_LIST_MCP_SERVER_NAME).toBe('plan')
-    expect(TASK_LIST_TOOL).toBe('update')
-    expect(TASK_LIST_TOOL_NAME).toBe('mcp__plan__update')
+  it('TL-C-1 工具名（新名 + 转正之前的旧名）/ 上限', () => {
+    expect(TASK_LIST_TOOL_NAME).toBe('update_plan')
+    expect(LEGACY_TASK_LIST_TOOL_NAME).toBe('mcp__plan__update')
+    expect(isTaskListToolName('update_plan')).toBe(true)
+    expect(isTaskListToolName('mcp__plan__update')).toBe(true)
+    for (const name of ['update', 'Update_plan', 'mcp__plan-custom__update', undefined, null]) {
+      expect(isTaskListToolName(name), String(name)).toBe(false)
+    }
     expect(TASK_LIST_MAX_ITEMS).toBe(12)
     expect(TASK_LIST_MAX_ITEM_CHARS).toBe(200)
   })
@@ -584,6 +589,14 @@ describe('taskListOfMessages', () => {
         assistant('a2', [text('done')])
       ])
     ).toStrictEqual({ items: X, endedWithAnswer: true, requestId: 'u1' })
+    // 旧会话里转正之前的名字照样折叠
+    expect(
+      taskListOfMessages([
+        user('u1', 'go'),
+        assistant('a1', [tool('p1', LEGACY_TASK_LIST_TOOL_NAME, { items: X })]),
+        assistant('a2', [text('done')])
+      ])
+    ).toStrictEqual({ items: X, endedWithAnswer: true, requestId: 'u1' })
   })
 
   it.each([
@@ -592,7 +605,8 @@ describe('taskListOfMessages', () => {
     ['名字只叫 update', tool('p1', 'update', { items: X })],
     ['改了名的自定义 server', tool('p1', 'mcp__plan-custom__update', { items: X })],
     ['同 server 别的工具', tool('p1', 'mcp__plan__other', { items: X })],
-    ['工具名多了后缀', tool('p1', 'mcp__plan__update_x', { items: X })]
+    ['旧名多了后缀', tool('p1', 'mcp__plan__update_x', { items: X })],
+    ['新名多了后缀', tool('p1', 'update_plan_x', { items: X })]
   ])('TL-M-3 %s → 不折叠', (_label, block) => {
     expect(
       taskListOfMessages([user('u1', 'go'), assistant('a1', [block]), assistant('a2', [text('x')])])
@@ -784,5 +798,80 @@ describe('taskListOfMessages', () => {
     ])
     expect(snapshot?.requestId).toBe('u2')
     expect(snapshot?.items).toStrictEqual(list(C, I, P))
+  })
+})
+
+// ─── 新名与旧名（`update_plan` / 转正之前的 `mcp__plan__update`） ─────────
+
+describe('isTaskListToolName 与新旧名混用', () => {
+  it('TLN-1 只认 update_plan 与 mcp__plan__update', () => {
+    expect(isTaskListToolName('update_plan')).toBe(true)
+    expect(isTaskListToolName('mcp__plan__update')).toBe(true)
+    for (const name of [
+      'update',
+      'Update_plan',
+      'update_plan_x',
+      'mcp__update_plan',
+      'mcp__plan__other',
+      'mcp__plan-custom__update',
+      undefined,
+      null,
+      42,
+      {}
+    ]) {
+      expect(isTaskListToolName(name), JSON.stringify(name) ?? 'undefined').toBe(false)
+    }
+  })
+
+  it('TLN-3 同一个请求里新旧名混用：旧名 items + 新名 advance、新名 items + 旧名 advance 都接成一张列表；终答收尾', () => {
+    expect(
+      taskListOfMessages([
+        user('u1', 'go'),
+        assistant('a1', [tool('p1', LEGACY_TASK_LIST_TOOL_NAME, { items: X })]),
+        assistant('a2', [tool('p2', TASK_LIST_TOOL_NAME, { advance: true })]),
+        assistant('a3', [text('done')])
+      ])
+    ).toStrictEqual({ items: list(C, I, P), endedWithAnswer: true, requestId: 'u1' })
+    expect(
+      taskListOfMessages([
+        user('u1', 'go'),
+        assistant('a1', [tool('p1', TASK_LIST_TOOL_NAME, { items: X })]),
+        assistant('a2', [tool('p2', LEGACY_TASK_LIST_TOOL_NAME, { advance: true })]),
+        assistant('a3', [text('done')])
+      ])
+    ).toStrictEqual({ items: list(C, I, P), endedWithAnswer: true, requestId: 'u1' })
+  })
+
+  it.each([
+    ['失败（isError）', { isError: true }],
+    ['还在跑（没有 result）', { result: null }]
+  ] as const)('TLN-4 旧名的调用%s → 不算', (_label, opts) => {
+    expect(
+      taskListOfMessages([
+        user('u1', 'go'),
+        assistant('a1', [tool('p1', LEGACY_TASK_LIST_TOOL_NAME, { items: X }, opts)]),
+        assistant('a2', [text('x')])
+      ])
+    ).toBeUndefined()
+    // 前面有一张旧名建的列表时，失败 / 还在跑的那次推进也不算
+    expect(
+      taskListOfMessages([
+        user('u1', 'go'),
+        assistant('a1', [tool('p1', LEGACY_TASK_LIST_TOOL_NAME, { items: X })]),
+        assistant('a2', [tool('p2', LEGACY_TASK_LIST_TOOL_NAME, { advance: true }, opts)])
+      ])?.items
+    ).toStrictEqual(X)
+  })
+
+  it('TLN-5 新的用户请求清掉旧名调用建的列表', () => {
+    expect(
+      taskListOfMessages([
+        user('u1', 'go'),
+        assistant('a1', [tool('p1', LEGACY_TASK_LIST_TOOL_NAME, { items: X })]),
+        assistant('a2', [text('done')]),
+        user('u2', 'something else'),
+        assistant('a3', [text('ok')])
+      ])
+    ).toBeUndefined()
   })
 })

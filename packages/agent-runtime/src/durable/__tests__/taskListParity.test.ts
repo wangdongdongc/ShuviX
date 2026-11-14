@@ -16,6 +16,7 @@
  *   TLP-9  中止截断的正文不算「以终答收尾」    TLP-11 带命令 Token 的用户消息开新请求
  *   TLP-12 带图的插话（带说明）不开新请求
  *   TLT-2  旧列表之后来一条触发消息：新请求      TLT-3  触发消息 → 列表 → 插话 → 推进：两边都不重置
+ *   TLP-13 新旧两个名字（`update_plan` 与转正之前的 `mcp__plan__update`）混在一份转写里：两边逐次一致
  * （TLP-10「消息原文恰好以说明结尾」两边判法不同，是接受的已知偏差 S9，不写用例。）
  */
 import type { EntryRecord, JsonObject } from '@earendil-works/pi-durable'
@@ -28,6 +29,8 @@ import { triggerEventMessage } from '@shuvix/chat-protocol/triggerEvent'
 import {
   applyTaskListUpdate,
   foldTaskList,
+  isTaskListToolName,
+  LEGACY_TASK_LIST_TOOL_NAME,
   parseTaskListUpdate,
   startsTaskListRequest,
   taskListOfMessages,
@@ -59,6 +62,7 @@ import {
 } from '../projection/__tests__/support'
 
 const PLAN = TASK_LIST_TOOL_NAME
+const LEGACY = LEGACY_TASK_LIST_TOOL_NAME
 const SUFFIX = `${MID_RUN_NOTE_SEPARATOR}${MID_RUN_NOTE_TEXT}`
 
 const ITEMS: JsonObject = {
@@ -81,6 +85,17 @@ const FAILED = [text('failed')]
 /** 一次列表调用（单独一条 assistant）+ 结果 */
 const planned = (id: number, callId: string, args: JsonObject, isError = false): EntryRecord[] => [
   A(id, [call(PLAN, args, callId)], 0, { stopReason: 'toolUse' }),
+  R(id + 1, callId, isError ? FAILED : OK, { isError })
+]
+
+/** 同上，转正之前的旧名（旧会话的转写） */
+const legacyPlanned = (
+  id: number,
+  callId: string,
+  args: JsonObject,
+  isError = false
+): EntryRecord[] => [
+  A(id, [call(LEGACY, args, callId)], 0, { stopReason: 'toolUse' }),
   R(id + 1, callId, isError ? FAILED : OK, { isError })
 ]
 
@@ -127,7 +142,7 @@ function planCalls(entries: readonly EntryRecord[]): PlanCall[] {
     if (message === undefined) return
     if (message.stopReason === 'error' && message.errorMessage) return
     message.content.forEach((block, index) => {
-      if (block.type !== 'toolCall' || block.name !== PLAN) return
+      if (block.type !== 'toolCall' || !isTaskListToolName(block.name)) return
       out.push({
         entryIndex,
         entryId: entry.id,
@@ -171,7 +186,7 @@ function uiFold(
     }
     if (message.role !== 'assistant') continue
     for (const block of message.blocks) {
-      if (block.type !== 'tool' || block.toolName !== PLAN) continue
+      if (block.type !== 'tool' || !isTaskListToolName(block.toolName)) continue
       const isTarget = message.id === String(c.entryId) && block.toolCallId === c.callId
       if (isTarget && !through) return foldTaskList(events)
       if (block.result !== undefined && !block.isError)
@@ -437,5 +452,43 @@ describe('TLP · server and UI fold the same list', () => {
     )
     expect(statuses(server)).toEqual(['completed', 'in_progress', 'pending'])
     expect(snapshot?.requestId).toBe('1')
+  })
+
+  it('TLP-13 both names in one transcript (legacy mcp__plan__update and update_plan) agree call by call', () => {
+    const s = steer(9, 'and also this')
+    const { server, snapshot } = expectParity(
+      [
+        U(1, 'go'),
+        ...legacyPlanned(2, 'p1', ITEMS),
+        ...planned(4, 'p2', ADVANCE),
+        A(6, [call(LEGACY, ADVANCE, 'p3'), call(PLAN, { done: [1] }, 'p4')], 0, {
+          stopReason: 'toolUse'
+        }),
+        R(7, 'p3', OK),
+        R(8, 'p4', OK),
+        s.entry,
+        ...legacyPlanned(10, 'p5', { start: 9 }, true),
+        ...planned(12, 'p6', { start: 1 })
+      ],
+      new Map([s.display])
+    )
+    expect(statuses(server)).toEqual(['in_progress', 'completed', 'pending'])
+    expect(snapshot).toMatchObject({ endedWithAnswer: false, requestId: '1' })
+
+    // 第二个请求：旧名开一张新列表，新名推进 —— 只剩第二个请求的
+    const next = expectParity([
+      U(1, 'first'),
+      ...planned(2, 'p1', ITEMS),
+      A(4, [text('done')]),
+      U(5, 'second'),
+      ...legacyPlanned(6, 'p2', OTHER),
+      ...planned(8, 'p3', ADVANCE),
+      A(10, [text('all done')])
+    ])
+    expect(next.server).toEqual([
+      { content: 'Plan B one', status: 'completed' },
+      { content: 'Plan B two', status: 'in_progress' }
+    ])
+    expect(next.snapshot).toMatchObject({ endedWithAnswer: true, requestId: '5' })
   })
 })

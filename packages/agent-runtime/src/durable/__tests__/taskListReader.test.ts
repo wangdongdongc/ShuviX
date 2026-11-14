@@ -8,6 +8,8 @@
  *             重用 id 的更早调用都算）
  *   TLR-10/11 一条消息里两次调用按块序；同一 id 再登记以新的为准；多个请求只剩最后一个的列表
  *   DS-4      别的会话发来的消息：只带发送方说明的开请求，发送方 + 插话说明的不开
+ *   TLR-12..15 转正之前的旧名 `mcp__plan__update`（旧会话的转写）照旧算数：单独一次、与新名混着折、`before` 指向
+ *             旧名调用、旧名与新名重用同一个 id
  *
  * 会话上的真流程（条目在工具执行前已落定、插话、回退）在 taskListReader.session.test.ts；与界面折叠的对照在
  * taskListParity.test.ts。
@@ -17,6 +19,7 @@ import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol
 import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import {
   foldTaskList,
+  LEGACY_TASK_LIST_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
   type TaskListEvent
 } from '@shuvix/chat-protocol/taskList'
@@ -26,6 +29,7 @@ import { taskListEventsOfEntries } from '../taskListReader'
 import { A, C, IMAGE, N, R, U, bg, call, text, wrap } from '../projection/__tests__/support'
 
 const PLAN = TASK_LIST_TOOL_NAME
+const LEGACY = LEGACY_TASK_LIST_TOOL_NAME
 const NOTE = MID_RUN_NOTE_TEXT
 const SUFFIX = `${MID_RUN_NOTE_SEPARATOR}${NOTE}`
 
@@ -261,5 +265,58 @@ describe('TLR · taskListEventsOfEntries', () => {
         taskListEventsOfEntries([U(1, 'first'), ...planned(2, 'c1', ITEMS_A), U(4, 'second')])
       )
     ).toBeUndefined()
+  })
+
+  it('TLR-12 a legacy-named call (mcp__plan__update) with an ok result is one update', () => {
+    expect(LEGACY).toBe('mcp__plan__update')
+    const events = taskListEventsOfEntries([
+      U(1, 'go'),
+      A(2, [call(LEGACY, ITEMS_A, 'c1')], 0, { stopReason: 'toolUse' }),
+      R(3, 'c1', ok)
+    ])
+    expect(events).toStrictEqual([REQUEST, update(ITEMS_A)])
+    expect(foldTaskList(events)).toEqual(ITEMS_A.items)
+  })
+
+  it('TLR-13 legacy items, then a new-named advance: events in order, the fold gives the advanced list', () => {
+    const events = taskListEventsOfEntries([
+      U(1, 'go'),
+      A(2, [call(LEGACY, ITEMS_A, 'c1')], 0, { stopReason: 'toolUse' }),
+      R(3, 'c1', ok),
+      ...planned(4, 'c2', ADVANCE)
+    ])
+    expect(events).toStrictEqual([REQUEST, update(ITEMS_A), update(ADVANCE)])
+    expect(foldTaskList(events)).toEqual([
+      { content: 'Read the code', status: 'completed' },
+      { content: 'Fix it', status: 'in_progress' },
+      { content: 'Test it', status: 'pending' }
+    ])
+  })
+
+  it('TLR-14 before = the id of a legacy-named call: that call is skipped like a new-named one', () => {
+    const entries = [
+      U(1, 'go'),
+      ...planned(2, 'c1', ITEMS_A),
+      A(4, [call(LEGACY, ADVANCE, 'c2')], 0, { stopReason: 'toolUse' }),
+      R(5, 'c2', ok)
+    ]
+    expect(taskListEventsOfEntries(entries, 'c2')).toStrictEqual([REQUEST, update(ITEMS_A)])
+    expect(taskListEventsOfEntries(entries)).toStrictEqual([
+      REQUEST,
+      update(ITEMS_A),
+      update(ADVANCE)
+    ])
+  })
+
+  it('TLR-15 [WB] a legacy call c1 and a later new-named call reusing c1: only the later is current, the earlier folds', () => {
+    const entries = [
+      U(1, 'go'),
+      A(2, [call(LEGACY, ITEMS_A, 'c1')], 0, { stopReason: 'toolUse' }),
+      R(3, 'c1', ok),
+      A(4, [call(PLAN, ADVANCE, 'c1')], 0, { stopReason: 'toolUse' })
+    ]
+    const events = taskListEventsOfEntries(entries, 'c1')
+    expect(events).toStrictEqual([REQUEST, update(ITEMS_A)])
+    expect(foldTaskList(events)).toEqual(ITEMS_A.items)
   })
 })

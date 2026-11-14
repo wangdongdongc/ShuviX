@@ -2605,7 +2605,7 @@ export function shownImagesPane(main: CdpClient): ShownImagesPane {
   }
 }
 
-// ─── 任务列表（内置能力服务器 `plan`，chat-ui TaskListPanel，2026-10-31，实验） ───
+// ─── 任务列表（内置工具 `update_plan`，chat-ui TaskListPanel，2026-10-31；2026-11-14 前是实验的内置 server `plan`） ───
 // 对话流末尾、询问卡片之上的那一块（笔记本在输入框卡片里，`data-task-list-placement` 分两处）。只有步骤行：
 // 没有标题行，也不折叠（2026-11-10）。认的全是 data 属性：`[data-task-list]`（根，`data-task-list-phase` =
 // running / done / stopped）、`[data-task-step]`（一行步骤，值是 1 起的步骤号，`data-status` = pending /
@@ -4210,7 +4210,7 @@ export interface ToolPickerItem {
   declared: boolean
   /** 悬停提示（`title`）：声明项是「哪个档案带的」，其余没有 —— 有没有运行时都一样 */
   title: string
-  /** 这一行上的「实验」小标签（`data-experimental` 的值，如 `taskList`）；没有 → null */
+  /** 这一行上的「实验」小标签（`data-experimental` 的值，即实验功能 id）；没有 → null。目前没有哪一台内置 server 带 */
   experimental: string | null
 }
 
@@ -7851,7 +7851,7 @@ export interface McpRowShot {
   name: string
   /** 「内置」徽章（琥珀色那枚）在不在 */
   builtinBadge: boolean
-  /** 头行里的「实验」小标签（`data-experimental` 的值，如 `taskList`）；没有 → null */
+  /** 头行里的「实验」小标签（`data-experimental` 的值，即实验功能 id）；没有 → null。目前没有哪一台内置 server 带 */
   experimental: string | null
   /** 类型徽章上的字（stdio / http / inproc） */
   typeBadge: string

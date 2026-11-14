@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 任务列表（TaskListPanel，内置能力服务器 `plan`，docs/task-list-design.md §3.4；jsdom）：
+ * 任务列表（TaskListPanel，内置工具 `update_plan`，docs/task-list-design.md §3.4；jsdom）：
  *
  *   TLU-1      没有列表调用 / 只有失败的或还在跑的 → 不渲染
  *   TLU-2      进行中：样子、逐行状态与图标

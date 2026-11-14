@@ -282,10 +282,10 @@ describe('TS-U2 没命中', () => {
     expectNothingHappened()
   })
 
-  it('TS-U2 候选排除 chrome / plan：叫它们的名字也是没命中', async () => {
-    state.configuredServers.mockReturnValue([builtin('chrome'), builtin('plan')])
+  it('TS-U2 候选排除 chrome：叫它的名字也是没命中', async () => {
+    // 任务列表曾是内置 server `plan`（同样排除），2026-11-14 转为内置工具 update_plan，v42 删掉了那一行
+    state.configuredServers.mockReturnValue([builtin('chrome')])
     expect(await textOf('chrome')).toBe(NO_MATCH)
-    expect(await textOf('plan')).toBe(NO_MATCH)
     expectNothingHappened()
   })
 })

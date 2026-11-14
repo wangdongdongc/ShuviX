@@ -12,7 +12,7 @@
  * - 其余工具（实现散落在各端进程内，函数无法随 presentation 跨序列化边界）：
  *   直接在下方 EXTRA_SUMMARY_BUILDERS 按工具名补充。
  */
-import { BUILTIN_TOOL_PRESENTATIONS } from './builtinToolPresentations'
+import { BUILTIN_TOOL_PRESENTATIONS, taskListSummary } from './builtinToolPresentations'
 import { builtinMcpToolSummary } from './builtinMcpPresentations'
 import { asStr, field, fileField } from './toolSummaryHelpers'
 
@@ -50,6 +50,8 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
       asStr(args.event)
     return [asStr(args.action), detail].filter(Boolean).join(' ') || undefined
   },
+  // ── 任务列表转正之前的工具名（实验的内置 MCP `plan`，2026-11-14 转为内置工具 `update_plan`） ──
+  mcp__plan__update: taskListSummary,
   // ── 旧派发工具名（现为小写 `agent`，保留供历史会话展示） ──
   Agent: (args) => BUILTIN_TOOL_PRESENTATIONS.agent.buildSummary?.(args)
 }

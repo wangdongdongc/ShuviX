@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 /**
- * 卡片里的任务列表调用（AssistantBubble，docs/task-list-design.md §3.4；jsdom）：`mcp__plan__update` 调用照普通
+ * 卡片里的任务列表调用（AssistantBubble，docs/task-list-design.md §3.4；jsdom）：`update_plan` 调用照普通
  * 工具行显示 —— 用户要看得到列表是什么时候、怎么改的（对话末尾那张列表只给出现在的样子）。
+ *
+ * `update_plan` 是内置工具，标签与图标来自宿主下发的呈现表（`toolPresentations`），不是兜底 —— 所以这里照桌面的
+ * 注册（tools/taskList.ts）给 store 塞一条它的呈现。
  *
  *   TLC-1  落定的卡：成功的列表调用和旁边的 read 并成一个步骤组，展开后两行都在，列表行的摘要是进行中的步骤
  *   TLC-2  还在跑的列表调用（没有结果）：一行，不进步骤组
@@ -23,6 +26,7 @@ import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { AssistantBlock, AssistantMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { TASK_LIST_TOOL_NAME } from '@shuvix/chat-protocol/taskList'
+import { TASK_LIST_PRESENTATION } from '@shuvix/chat-protocol/builtinToolPresentations'
 
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 vi.mock('../../../hooks/useTtsPlayback', () => {
@@ -36,7 +40,7 @@ vi.mock('../../../hooks/useTtsPlayback', () => {
   return { useTtsPlayback: () => tts }
 })
 
-import { applySessionView } from '../../../stores/chatStore'
+import { applySessionView, useChatStore } from '../../../stores/chatStore'
 import { AssistantBubble } from '../AssistantBubble'
 import { streamingPlaceholder } from '../conversationItems'
 import {
@@ -133,6 +137,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetStore(SID)
+  // 宿主（桌面）为内置工具 update_plan 下发的呈现：标签按界面语言，图标同 BUILTIN_TOOL_PRESENTATIONS
+  useChatStore.setState({
+    toolPresentations: { [PLAN]: { label: en.tool.taskListLabel, ...TASK_LIST_PRESENTATION } }
+  })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)

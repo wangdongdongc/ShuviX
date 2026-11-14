@@ -212,6 +212,53 @@ describe('normalizeToolNames —— 工具名单归一（TN）', () => {
       'mcp:ctx'
     ])
   })
+
+  // `update_plan`（任务列表）只画在会话的对话流末尾，读的也是根 agent 那条对话：与 tool_search 同一条（ROOT_ONLY_TOOL_NAMES）
+  it('TN-12 spawned：档案写了 update_plan 也去掉，overlay 里的同样；别的工具原位', () => {
+    expect(normalizeToolNames('spawned', ['read', 'update_plan', 'grep'], undefined)).toEqual([
+      'read',
+      'grep'
+    ])
+    expect(normalizeToolNames('spawned', ['read'], ['update_plan', 'mcp:ctx'])).toEqual([
+      'read',
+      'mcp:ctx'
+    ])
+  })
+
+  it('TN-13 spawned：tool_search 与 update_plan 同时在 → 两个都去掉，其余保持顺序', () => {
+    expect(
+      normalizeToolNames(
+        'spawned',
+        ['update_plan', 'read', 'tool_search', 'grep', 'skill'],
+        ['mcp:a', 'tool_search', 'update_plan', 'mcp:b']
+      )
+    ).toEqual(['read', 'grep', 'skill', 'mcp:a', 'mcp:b'])
+  })
+
+  it('TN-14 root：档案声明的 update_plan 原位留着；overlay 的 -update_plan 取消不掉它', () => {
+    expect(normalizeToolNames('root', ['read', 'update_plan', 'skill'], undefined)).toEqual([
+      'read',
+      'update_plan',
+      'skill'
+    ])
+    expect(
+      normalizeToolNames('root', ['update_plan', 'skill'], ['mcp:ctx', '-update_plan'])
+    ).toEqual(['update_plan', 'skill', 'mcp:ctx'])
+  })
+
+  it('TN-15 root 的 overlay 加不上 update_plan：档案没写就是没有', () => {
+    expect(normalizeToolNames('root', ['read', 'ls'], ['update_plan', 'mcp:ctx'])).toEqual([
+      'read',
+      'ls',
+      'mcp:ctx'
+    ])
+  })
+
+  it('TN-16 [WB] spawned：只按原名裁 —— Update_plan（大小写不同）与 mcp:update_plan 都不是那个工具，留着', () => {
+    expect(
+      normalizeToolNames('spawned', ['read', 'Update_plan'], ['mcp:update_plan', 'update_plan'])
+    ).toEqual(['read', 'Update_plan', 'mcp:update_plan'])
+  })
 })
 
 /**

@@ -104,8 +104,8 @@ correctness risks first, then style, each with file and line. Never modify files
 モデルに使わせたくない skill はサイドバーでオフにします —— それ以降に作られるエージェントに効き、動いて
 いるエージェントは作られたときの skill のまま、作り直すまで（エージェントチップの X）変わりません。リストを狭めることは ShuviX で役割を表す方法では
 **ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
-は意図的に一つのリスト（`bash, powershell, read, write, edit, ask, suggest, show_image, ls, grep, glob, agent, session,
-knowledge, artifact, widget, tool_search, shuvix, skill`）を共有し、本文だけが異なります。`tool_search` はセッションのルートエージェントだけに渡されます：派遣されたエージェントはファイルに書いてあっても受け取りません。有効にするのはセッション全体の選択だからです。
+は意図的に一つのリスト（`bash, powershell, read, write, edit, ask, suggest, update_plan, show_image, ls, grep, glob, agent, session,
+knowledge, artifact, widget, tool_search, shuvix, skill`）を共有し、本文だけが異なります。`tool_search` と `update_plan` はセッションのルートエージェントだけに渡されます：派遣されたエージェントはファイルに書いてあっても受け取りません。`tool_search` が有効にするのはセッション全体の選択で、`update_plan` が保つタスクリストはそのセッション自身の会話にだけ表示されるからです。
 
 ### 本文 —— システムプロンプト
 

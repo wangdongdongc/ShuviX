@@ -732,52 +732,61 @@ describe('内置项以界面语言的名字为主', () => {
   })
 })
 
-describe('实验性质的内置 server（任务列表 plan）带「实验」标签', () => {
-  const PLAN: ToolItem = { name: 'mcp:plan', label: 'plan', group: 'mcp:plan', isBuiltin: true }
+/**
+ * 实验标签（`experimentalFeatureOfMcp`）：唯一带过它的内置 server 是任务列表 `plan`，2026-11-14 它转正为内置工具
+ * `update_plan` —— 现在没有哪一台内置 server 是实验性质的，选择器里一个标签也不该出现。
+ */
+describe('实验标签：内置 server 目前都不带', () => {
+  /** 没人声明的两台内置 server（browser 在 ITEMS 里，由档案声明） */
+  const SSH: ToolItem = { name: 'mcp:ssh', label: 'ssh', group: 'mcp:ssh', isBuiltin: true }
+  const DATABASE: ToolItem = {
+    name: 'mcp:database',
+    label: 'database',
+    group: 'mcp:database',
+    isBuiltin: true
+  }
   const tagIn = (name: string): HTMLElement | null =>
     row(name).querySelector<HTMLElement>('[data-experimental]')
 
-  it('TP-X-1 内置 mcp:plan：行内有 [data-experimental="taskList"]，字是 experimental.tag、悬停是 experimental.hint', async () => {
+  it('TP-X-1 内置 mcp:browser / mcp:ssh / mcp:database：行内都没有 [data-experimental]', async () => {
     seedSession([])
-    await renderPicker([...ITEMS, PLAN])
+    await renderPicker([...ITEMS, SSH, DATABASE])
     await openPanel()
-    const tag = tagIn('mcp:plan')
-    expect(tag).not.toBeNull()
-    expect(tag!.getAttribute('data-experimental')).toBe('taskList')
-    expect(i18n.t('experimental.tag')).not.toBe('experimental.tag')
-    expect(tag!.textContent).toBe(i18n.t('experimental.tag'))
-    expect(tag!.title).toBe(i18n.t('experimental.hint'))
-    expect(row('mcp:plan').contains(tag)).toBe(true)
-    expect(document.querySelectorAll('[data-experimental]')).toHaveLength(1)
+    for (const name of ['mcp:browser', 'mcp:ssh', 'mcp:database']) {
+      expect(tagIn(name), name).toBeNull()
+    }
+    expect(document.querySelector('[data-experimental]')).toBeNull()
   })
 
   it('TP-X-2 内置 mcp:browser 没有标签；不是内置的同名 mcp:plan 也没有', async () => {
     seedSession([])
-    await renderPicker([...ITEMS, { ...PLAN, isBuiltin: false }])
+    await renderPicker([
+      ...ITEMS,
+      { name: 'mcp:plan', label: 'plan', group: 'mcp:plan', isBuiltin: false }
+    ])
     await openPanel()
     expect(tagIn('mcp:browser')).toBeNull()
     expect(tagIn('mcp:plan')).toBeNull()
     expect(document.querySelector('[data-experimental]')).toBeNull()
   })
 
-  it('TP-X-3 触屏抽屉里同样带标签', async () => {
+  it('TP-X-3 触屏抽屉里同样不带标签', async () => {
     seedSession([])
-    await renderPicker([...ITEMS, PLAN], { density: 'touch' })
+    await renderPicker([...ITEMS, SSH, DATABASE], { density: 'touch' })
     await openPanel()
     const sheet = document.querySelector<HTMLElement>('[data-touch-sheet="extensions"]')
     expect(sheet).not.toBeNull()
-    const tag = tagIn('mcp:plan')
-    expect(tag?.getAttribute('data-experimental')).toBe('taskList')
-    expect(tag?.textContent).toBe(i18n.t('experimental.tag'))
-    expect(sheet!.contains(tag)).toBe(true)
+    expect(sheet!.contains(row('mcp:ssh'))).toBe(true)
+    expect(tagIn('mcp:ssh')).toBeNull()
+    expect(sheet!.querySelector('[data-experimental]')).toBeNull()
   })
 
-  it('TP-X-4 没人声明时缺省不勾：没有 data-declared、勾选框没勾、勾选里没有它', async () => {
+  it('TP-X-4 没人声明的内置 server 缺省不勾：没有 data-declared、勾选框没勾、勾选里没有它', async () => {
     seedSession([])
-    await renderPicker([...ITEMS, PLAN])
+    await renderPicker([...ITEMS, SSH])
     await openPanel()
-    expect(row('mcp:plan').hasAttribute('data-declared')).toBe(false)
-    expect(box('mcp:plan').checked).toBe(false)
+    expect(row('mcp:ssh').hasAttribute('data-declared')).toBe(false)
+    expect(box('mcp:ssh').checked).toBe(false)
     expect(storedTools()).toEqual([])
   })
 })

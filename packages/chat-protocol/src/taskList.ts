@@ -1,9 +1,12 @@
 /**
- * 任务列表（内置能力服务器 `plan`，docs/task-list-design.md §3）的契约 —— agent 用 `mcp__plan__update` 维护
- * 「这次请求的步骤 + 状态」，界面把它钉在对话流末尾（笔记本在输入框卡片里）。是**进度显示**，不是审批流程。
+ * 任务列表（内置工具 `update_plan`，docs/task-list-design.md §3、§9）的契约 —— agent 用它维护「这次请求的步骤 +
+ * 状态」，界面把它钉在对话流末尾（笔记本在输入框卡片里）。是**进度显示**，不是审批流程。
+ *
+ * 2026-11-14 从实验的内置 MCP（`plan` server 的 `mcp__plan__update`）转正为内置工具。旧会话转写里的
+ * `mcp__plan__update` 调用照旧算数（`isTaskListToolName`）：重开旧会话、回退到旧的那一段，列表照样折叠得出来。
  *
  * **不存状态**（与 `suggest` 同一条纪律）：列表的内容就是工具调用的参数。一个请求里所有**成功**的调用按顺序
- * 折叠（`foldTaskList`）就是当前列表 —— server（读已提交的条目）与界面（读投影出来的消息）各自把手上的东西
+ * 折叠（`foldTaskList`）就是当前列表 —— 工具（读已提交的条目）与界面（读投影出来的消息）各自把手上的东西
  * 摊成同一种事件序列，再交给这一份折叠，所以两边不会分叉；回退、分支、fork 之后状态自然跟着转写走。
  *
  * **请求的边界**：一条「用户发起一轮」的消息开始一个新请求，列表随之清空。运行中插进来的话（带插话说明，
@@ -18,12 +21,15 @@
 import type { ChatMessage } from './types/chatMessage'
 import { hasMidRunNote } from './midRunNote'
 
-/** `mcp_servers.name` —— 也是工具名前缀 */
-export const TASK_LIST_MCP_SERVER_NAME = 'plan'
-/** server 里唯一的工具 */
-export const TASK_LIST_TOOL = 'update'
-/** 转写里的完整工具名 */
-export const TASK_LIST_TOOL_NAME = `mcp__${TASK_LIST_MCP_SERVER_NAME}__${TASK_LIST_TOOL}`
+/** 内置工具名（与 Codex、Claude 桌面端的同类工具同名，模型认得它是做什么的） */
+export const TASK_LIST_TOOL_NAME = 'update_plan'
+/** 转正之前（实验的内置 MCP `plan`）的工具名：旧会话转写里还在，照旧算数 */
+export const LEGACY_TASK_LIST_TOOL_NAME = 'mcp__plan__update'
+
+/** 转写里这个工具调用是不是任务列表的（新名字或转正之前的名字） */
+export function isTaskListToolName(name: unknown): boolean {
+  return name === TASK_LIST_TOOL_NAME || name === LEGACY_TASK_LIST_TOOL_NAME
+}
 
 export const TASK_LIST_MAX_ITEMS = 12
 export const TASK_LIST_MAX_ITEM_CHARS = 200
@@ -205,7 +211,7 @@ export function taskListOfMessages(messages: readonly ChatMessage[]): TaskListSn
     const message = messages[i]
     if (message.role !== 'assistant') continue
     for (const block of message.blocks) {
-      if (block.type !== 'tool' || block.toolName !== TASK_LIST_TOOL_NAME) continue
+      if (block.type !== 'tool' || !isTaskListToolName(block.toolName)) continue
       if (block.result === undefined || block.isError) continue
       events.push({ type: 'update', args: block.args })
     }

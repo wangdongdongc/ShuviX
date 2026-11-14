@@ -98,7 +98,7 @@ describe('MCP 行里的浏览器设置入口（BS-U45）', () => {
     expect(render!({ isBuiltin: 0, name: 'browser' })).toBeNull()
   })
 
-  it('MCP-X-3 McpSettings：内置 plan 行（任务列表）没有附加区', async () => {
+  it('MCP-X-3 McpSettings：只认 browser / database / chrome —— 名叫 plan 的内置行（任务列表转为内置工具前的旧行）没有附加区', async () => {
     m = await mountInto(McpSettings, {})
     const render = captured.props?.renderServerExtra
     expect(render).toBeTypeOf('function')

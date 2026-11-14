@@ -1,11 +1,11 @@
 /**
- * 任务列表的 server 侧读者（docs/task-list-design.md §3.2）：从当前对话**已提交**的条目折叠出这次调用之前的列表。
+ * 任务列表的工具侧读者（docs/task-list-design.md §3.2）：从当前对话**已提交**的条目折叠出这次调用之前的列表。
  *
  * 与界面读投影消息的 `taskListOfMessages` 用同一份折叠（chat-protocol `foldTaskList`），只是把条目摊成事件：
  *  - `pi.user`：通知形状（`isSystemNoticeText`）与带插话说明的（模型文本以说明结尾，`midRunNote.ts`）不算新请求，
  *    其余开始一个新请求 —— 与界面的 `startsTaskListRequest` 同一口径（界面看侧车里的 Token，这里看它写进模型
  *    文本的那段说明，两者出自同一次写入）；
- *  - `pi.assistant` 里的 `mcp__plan__update` 调用登记下来，配上**没出错**的 `pi.toolResult` 才算一次更新；
+ *  - `pi.assistant` 里的列表调用（`update_plan`，或转正之前的 `mcp__plan__update`）登记下来，配上**没出错**的 `pi.toolResult` 才算一次更新；
  *  - 失败轮（`stopReason === 'error'` 且带 errorMessage）里的调用不登记，与转写摘要相同。
  * `beforeToolCallId` 那次调用（正在执行的这一次）不算：结果只反映它之外、已经落定的那些。
  *
@@ -22,7 +22,7 @@ import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import {
   foldTaskList,
-  TASK_LIST_TOOL_NAME,
+  isTaskListToolName,
   type TaskListEvent,
   type TaskListItem
 } from '@shuvix/chat-protocol/taskList'
@@ -53,11 +53,7 @@ export function taskListEventsOfEntries(
       if (entry.kind !== AssistantEntry.kind) return
       const content = firstMessage(entry, 'assistant')?.content
       ;(Array.isArray(content) ? content : []).forEach((block, blockIndex) => {
-        if (
-          block?.type === 'toolCall' &&
-          block.name === TASK_LIST_TOOL_NAME &&
-          block.id === before
-        ) {
+        if (block?.type === 'toolCall' && isTaskListToolName(block.name) && block.id === before) {
           current = { entry: entryIndex, block: blockIndex }
         }
       })
@@ -82,7 +78,7 @@ export function taskListEventsOfEntries(
         if (message.stopReason === 'error' && message.errorMessage) break
         const content = Array.isArray(message.content) ? message.content : []
         content.forEach((block, blockIndex) => {
-          if (block?.type !== 'toolCall' || block.name !== TASK_LIST_TOOL_NAME) return
+          if (block?.type !== 'toolCall' || !isTaskListToolName(block.name)) return
           if (current?.entry === entryIndex && current.block === blockIndex) {
             // 正在执行的这一次不算；之前登记的同名调用也作废（它的结果若还没到，就不会再到了）
             pending.delete(block.id)

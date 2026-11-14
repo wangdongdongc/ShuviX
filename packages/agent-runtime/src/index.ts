@@ -88,6 +88,15 @@ export {
   type SuggestImagePresenter,
   type SuggestTool
 } from './suggestTool'
+// update_plan：任务列表（进度显示；只给会话的根 agent，见 durable/agentSpec.ts）
+export {
+  createTaskListTool,
+  TaskListParamsSchema,
+  TASK_LIST_DESCRIPTION,
+  type CreateTaskListToolOptions,
+  type TaskListReader,
+  type TaskListTool
+} from './taskListTool'
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
 export { toBuiltinToolDefinitions, type ToolDefinitionEntry } from './tools/toolDefinitions'
 // 文件工具共享内核（端口注入 File API；桌面 Node fs / 扩展 FSA）

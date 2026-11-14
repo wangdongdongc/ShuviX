@@ -396,45 +396,44 @@ describe('编辑对话框 —— env / headers 到这里已是明文 JSON（落�
   })
 })
 
-describe('实验性质的内置 server（任务列表 plan）', () => {
-  /** 内置 plan：inproc、设置页里恒「未启动」、没有工具 */
-  const PLAN = row({ id: 'builtin-mcp-plan', name: 'plan', type: 'inproc', isBuiltin: 1 })
-  /** 桌面 McpSettings 的形状：只给 browser / database / chrome 挂东西，别的内置行（plan）什么也不给 */
+/**
+ * 实验标签（`experimentalFeatureOfMcp`）：唯一带过它的内置 server 是任务列表 `plan`，2026-11-14 它转正为内置工具
+ * `update_plan`（v42 迁移删掉了种子行）—— 现在没有哪一台内置 server 是实验性质的。标签的接线（`s.isBuiltin` 才问、
+ * 排在「内置」与类型徽标之间）还在面板里，表一有条目就会重新亮起来。
+ */
+describe('实验标签：内置 server 行目前都不带', () => {
+  /** 其余几台内置 server：inproc、设置页里恒「未启动」、没有工具 */
+  const SSH = row({ id: 'builtin-mcp-ssh', name: 'ssh', type: 'inproc', isBuiltin: 1 })
+  const DATABASE = row({
+    id: 'builtin-mcp-database',
+    name: 'database',
+    type: 'inproc',
+    isBuiltin: 1
+  })
+  const CHROME = row({ id: 'builtin-mcp-chrome', name: 'chrome', type: 'inproc', isBuiltin: 1 })
+  /** 桌面 McpSettings 的形状：只给 browser / database / chrome 挂东西，别的内置行（ssh）什么也不给 */
   const desktopExtra = (s: McpServerInfo): ReactNode =>
     s.isBuiltin === 1 && ['browser', 'database', 'chrome'].includes(s.name)
       ? createElement('div', { 'data-probe': `${s.name}-extra` }, s.name)
       : null
   const headerOf = (name: string): HTMLElement => serverRow(name).firstElementChild as HTMLElement
-  const badgeOf = (name: string, text: string): HTMLElement | undefined =>
-    [...headerOf(name).querySelectorAll<HTMLElement>('span')].find(
-      (span) => span.textContent === text
-    )
 
-  it('MCP-X-1 内置 plan 行：「内置」徽标与 [data-experimental="taskList"] 都在，标签排在类型徽标之前', async () => {
-    servers = [TAVILY, BROWSER, PLAN]
-    toolsById[PLAN.id] = []
+  it('MCP-X-1 四台内置行（ssh / browser / database / chrome）都有「内置」徽标与说明一行，没有一台带 [data-experimental]', async () => {
+    servers = [TAVILY, SSH, BROWSER, DATABASE, CHROME]
+    for (const s of [SSH, BROWSER, DATABASE, CHROME]) toolsById[s.id] = []
     await renderPanel()
-    const builtin = badgeOf('plan', i18n.t('settings.mcpBuiltin'))
-    const type = badgeOf('plan', 'inproc')
-    const tag = headerOf('plan').querySelector<HTMLElement>('[data-experimental]')
-    expect(builtin).toBeDefined()
-    expect(type).toBeDefined()
-    expect(tag).not.toBeNull()
-    expect(tag!.getAttribute('data-experimental')).toBe('taskList')
-    expect(tag!.textContent).toBe(i18n.t('experimental.tag'))
-    expect(tag!.title).toBe(i18n.t('experimental.hint'))
-    expect(builtin!.compareDocumentPosition(tag!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    )
-    expect(tag!.compareDocumentPosition(type!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    )
-    // 名字是界面文案、说明一行也在
-    expect(headerOf('plan').textContent).toContain(i18n.t('tool.taskListLabel'))
-    expect(headerOf('plan').querySelector('[data-mcp-hint]')?.textContent).toBe(
-      i18n.t('tool.taskListHint')
-    )
-    expect(container.querySelectorAll('[data-experimental]')).toHaveLength(1)
+    for (const name of ['ssh', 'browser', 'database', 'chrome']) {
+      const header = headerOf(name)
+      expect(
+        [...header.querySelectorAll('span')].some(
+          (span) => span.textContent === i18n.t('settings.mcpBuiltin')
+        ),
+        name
+      ).toBe(true)
+      expect(header.querySelector('[data-mcp-hint]')?.textContent, name).toBeTruthy()
+      expect(header.querySelector('[data-experimental]'), name).toBeNull()
+    }
+    expect(container.querySelector('[data-experimental]')).toBeNull()
   })
 
   it('MCP-X-2 不是内置的同名 plan 行、内置 browser 行都没有标签', async () => {
@@ -445,15 +444,15 @@ describe('实验性质的内置 server（任务列表 plan）', () => {
     expect(container.querySelector('[data-experimental]')).toBeNull()
   })
 
-  it('MCP-X-3 按桌面的接线展开 plan 行：没有附加区，展开区只有状态一句', async () => {
-    servers = [BROWSER, PLAN]
-    toolsById[PLAN.id] = []
+  it('MCP-X-3 按桌面的接线展开一台什么也不挂的内置行（ssh）：没有附加区，展开区只有状态一句', async () => {
+    servers = [BROWSER, SSH]
+    toolsById[SSH.id] = []
     await renderPanel({ renderServerExtra: desktopExtra })
-    await toggle('plan')
-    expect(api.getTools).toHaveBeenCalledWith(PLAN.id)
-    expect(extraOf('plan')).toBeNull()
+    await toggle('ssh')
+    expect(api.getTools).toHaveBeenCalledWith(SSH.id)
+    expect(extraOf('ssh')).toBeNull()
     expect(container.querySelector('[data-mcp-server-extra]')).toBeNull()
-    expect(expandedArea('plan').textContent).toBe(i18n.t('settings.mcpStatusDisconnected'))
+    expect(expandedArea('ssh').textContent).toBe(i18n.t('settings.mcpStatusDisconnected'))
   })
 })
 

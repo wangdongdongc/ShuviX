@@ -33,6 +33,20 @@ function firstLine(v: unknown): string | undefined {
   return line.length > 48 ? `${line.slice(0, 47)}…` : line
 }
 
+/** 任务列表（`update_plan`）的图标 —— 旧名 `mcp__plan__update` 的历史呈现也用它 */
+export const TASK_LIST_PRESENTATION: Omit<ToolPresentation, 'label'> = {
+  icon: 'ListChecks',
+  iconColor: '#8b5cf6'
+}
+
+/** 任务列表调用的折叠摘要：`items` 调用里那时进行中的一步（没有就第一步）；推进类调用参数里没有步骤名 */
+export const taskListSummary: ToolSummaryBuilder = (args) => {
+  if (!Array.isArray(args.items)) return undefined
+  const steps = args.items as Array<{ content?: unknown; status?: unknown }>
+  const current = steps.find((step) => step?.status === 'in_progress') ?? steps[0]
+  return asStr(current?.content)
+}
+
 export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationDef> = {
   read: {
     labelKey: 'tool.readLabel',
@@ -128,6 +142,13 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
           : undefined
       return title && list.length > 1 ? `${title} · +${list.length - 1}` : title
     }
+  },
+  // 任务列表：每次调用照普通工具行显示（让人看得到列表是什么时候怎么改的），摘要是那时进行中的步骤；
+  // 转正之前的 `mcp__plan__update` 在旧会话里用同一份摘要（toolSummaries）与呈现（builtinMcpPresentations 的历史表）
+  update_plan: {
+    labelKey: 'tool.taskListLabel',
+    presentation: TASK_LIST_PRESENTATION,
+    buildSummary: taskListSummary
   },
   // 落定的调用画成图片块（chat-ui ShownImagesBlock），走到这一行的只有执行中 / 出错的那几次
   show_image: {

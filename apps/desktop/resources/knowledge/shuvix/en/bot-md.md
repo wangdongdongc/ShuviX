@@ -274,7 +274,7 @@ Otherwise it is an ordinary rooted session: model picker, extensions, compaction
 where their parent works) and background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
+`read, ls, grep, glob, ask, suggest, update_plan, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions, or allow the bot's request through `tool_search` — that
 is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with

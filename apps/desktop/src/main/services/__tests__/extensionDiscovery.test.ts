@@ -2,7 +2,8 @@
  * 查找这条会话没开启的 MCP 服务器（`tool_search` 与提示词那段说明共用）。全程不连接；第三方的描述只参与匹配。
  *
  *   ED-1 内置服务器按工具名 + 三种语言的名字与说明找得到；非 ASCII 的词也认子串，ASCII 不认
- *   ED-2 chrome / plan 不拿去问；单字符（任何文字）与停用词不算词 → 空
+ *   ED-2 chrome 不拿去问（任务列表 plan 曾也不问，2026-11-14 转为内置工具 update_plan，不再是 server）；
+ *        单字符（任何文字）与停用词不算词 → 空
  *   ED-3 查询就是名字（不分大小写，也认 mcp: / mcp__）→ 只回它
  *   ED-4 只留不低于最高分一半的：3 比 1 只留最高，2 比 1 都留
  *   ED-5 第三方：描述里的词找得到它，但 extensionChoiceLine 不带描述；名字过滤、截到 64、最多 8 个工具；cachedTools 坏了不抛
@@ -70,7 +71,7 @@ const builtin = (name: string): McpServer => server(name, { type: 'inproc', isBu
 const withTools = (name: string, tools: unknown, patch: Partial<McpServer> = {}): McpServer =>
   server(name, { cachedTools: JSON.stringify(tools), ...patch })
 
-const BUILTINS = ['browser', 'chrome', 'database', 'plan', 'ssh'].map(builtin)
+const BUILTINS = ['browser', 'chrome', 'database', 'ssh'].map(builtin)
 
 const namesFound = (query: string): string[] =>
   findExtensions(query, offeredServers()).map((found) => found.name)
@@ -136,7 +137,7 @@ describe('ED-1 内置服务器按工具名与三种语言的文案找得到', ()
 })
 
 describe('ED-2 不拿去问的、不算词的', () => {
-  it.each(['chrome', 'plan', 'mcp:chrome', 'a', 'the'])('ED-2 %s → 空', (query) => {
+  it.each(['chrome', 'mcp:chrome', 'a', 'the'])('ED-2 %s → 空', (query) => {
     expect(namesFound(query)).toEqual([])
   })
 
@@ -144,7 +145,7 @@ describe('ED-2 不拿去问的、不算词的', () => {
     expect(namesFound(query)).toEqual([])
   })
 
-  it('ED-2 offeredServers 排除 chrome 与 plan，其余照 configuredServers 的顺序', () => {
+  it('ED-2 offeredServers 排除 chrome，其余照 configuredServers 的顺序', () => {
     expect(offeredServers().map((found) => found.name)).toEqual(['browser', 'database', 'ssh'])
   })
 })
@@ -351,7 +352,6 @@ describe('ED-8 isExtensionOff 与提示词列表', () => {
       server('declared'),
       server('out'),
       builtin('chrome'),
-      builtin('plan'),
       builtin('browser'),
       withTools('my tool', [{ name: 'x', description: 'SECRET_DESCRIPTION' }])
     ])

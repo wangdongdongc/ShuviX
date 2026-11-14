@@ -14,7 +14,8 @@
  * 跟踪项，旧措辞会让它拒绝动手。
  *
  * show_image（2026-11-01，docs/show-image-design.md D7）：
- *   BA-SI 每种语言的文件里，`show_image` 恰在 work / chat / coding / bot 的 shuvix-tools 里、紧跟在 suggest 之后；
+ *   BA-SI 每种语言的文件里，`show_image` 恰在 work / chat / coding / bot 的 shuvix-tools 里，排在 suggest 之后、
+ *         中间只隔着任务列表 `update_plan`（2026-11-14 转正为内置工具）；
  *         notebook / tab / explore / titler / knowledge-writer / permission-reviewer 都没有
  */
 import { describe, it, expect } from 'vitest'
@@ -78,7 +79,7 @@ describe('BA bot 基座档案', () => {
     }
   } as const
   const TOOLS =
-    'read, ls, grep, glob, ask, suggest, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
+    'read, ls, grep, glob, ask, suggest, update_plan, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
 
   it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
     'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',
@@ -149,7 +150,10 @@ describe('BA suggest', () => {
   )
 })
 
-/** 摆图给用户（`show_image`，2026-11-01，D7）：只有能回复用户的主路线基座与 bot 持有它，紧跟 suggest */
+/**
+ * 摆图给用户（`show_image`，2026-11-01，D7）：只有能回复用户的主路线基座与 bot 持有它，排在 suggest 之后 ——
+ * 2026-11-14 起中间夹着任务列表 `update_plan`（`suggest, update_plan, show_image`）
+ */
 describe('BA show_image', () => {
   const HOLDERS = ['work', 'chat', 'coding', 'bot']
   const NON_HOLDERS = [
@@ -167,12 +171,13 @@ describe('BA show_image', () => {
   }
 
   it.each(HOLDERS.flatMap(localized))(
-    'BA-SI %s：shuvix-tools 里有 show_image，紧跟在 suggest 之后',
+    'BA-SI %s：shuvix-tools 里有 show_image，顺序是 suggest, update_plan, show_image',
     (file) => {
       const tools = toolsOf(file)
       expect(tools).toContain('show_image')
       expect(tools.filter((t) => t === 'show_image')).toHaveLength(1)
-      expect(tools.indexOf('show_image')).toBe(tools.indexOf('suggest') + 1)
+      const at = tools.indexOf('suggest')
+      expect(tools.slice(at, at + 3)).toEqual(['suggest', 'update_plan', 'show_image'])
     }
   )
 
