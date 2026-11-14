@@ -30,6 +30,12 @@
  *   W-10 已开窗口的文件之后被删了：再开仍聚焦那扇窗、回 true（查表先于分类）
  *   PW-H1 无头运行（已初始化）：可预览的 .txt 与 .md 都回 false；不交给 openMarkdownFile、不开窗、不装守卫
  *
+ * 记住位置与大小（可选的 `frameMemory`，键 `window.filePreview`；这里是 placement / track 两个间谍）：
+ *   W-15 placement 给了大小与位置 → 原样用（不再另加 24）；第三个参数是已开的预览窗口数；开窗后 track；
+ *        再开同一个文件不再问、不再 track
+ *   W-16 placement 只给大小 → 大小用它，位置回到「聚焦窗口旁边」；没有聚焦窗口不给 x/y
+ *   W-17 placement 回 null → 默认大小与位置，仍 track；不可预览 / 无头 → 两个都不调
+ *
  * `shown:<sha256>.<ext>`（show_image 的快照引用）：到会话自己的快照目录 `<userData>/shown/<sid>/` 里取，解成绝对
  * 路径再照常开窗（userData 是另一个临时目录，app.getPath 指过去，utils/paths 用真实现）：
  *   W-11 活会话 + 合法引用（快照在）→ 开窗；hash 里的 path 是快照的真实路径，不在工作目录下
@@ -469,6 +475,110 @@ describe('W-9 错开', () => {
     const win = onlyWindow()
     expect(win.options).not.toHaveProperty('x')
     expect(win.options).not.toHaveProperty('y')
+  })
+})
+
+describe('W-15…17 记住位置与大小', () => {
+  const FRAME_KEY = 'window.filePreview'
+  const MIN = { width: 360, height: 300 }
+
+  function initWithMemory(
+    placed: { width: number; height: number; x?: number; y?: number } | null,
+    zoom = ZOOM
+  ): { placement: ReturnType<typeof vi.fn>; track: ReturnType<typeof vi.fn> } {
+    const frameMemory = { placement: vi.fn(() => placed), track: vi.fn() }
+    service.initPreviewWindowService({
+      getThemeBgColor: () => '#101010',
+      getZoomFactor: () => zoom,
+      frameMemory
+    })
+    return frameMemory
+  }
+
+  function focusAnchor(): FakeWindow {
+    const anchor = new fx.FakeWindow({})
+    anchor.bounds = { x: 100, y: 50, width: 1200, height: 800 }
+    fx.FakeWindow.focused = anchor
+    return anchor
+  }
+
+  afterEach(async () => {
+    ;(await import('../../utils/headless')).resetHeadlessModeForTests()
+  })
+
+  it('W-15 placement 给了大小与位置 → 原样用；第三个参数是已开窗口数；开窗后 track；重开不再问', async () => {
+    const { placement, track } = initWithMemory({ width: 1100, height: 640, x: 300, y: 200 })
+    focusAnchor()
+
+    expect(await open(p('dir', 'a.txt'))).toBe(true)
+    const first = windows()[1]
+    expect(first.options).toMatchObject({
+      width: 1100,
+      height: 640,
+      x: 300,
+      y: 200,
+      minWidth: 360,
+      minHeight: 300
+    })
+    expect(placement.mock.calls).toEqual([[FRAME_KEY, MIN, 0]])
+    expect(track.mock.calls).toEqual([[FRAME_KEY, first]])
+
+    expect(await open(p('dir', 'code.ts'))).toBe(true)
+    const second = windows()[2]
+    expect(placement).toHaveBeenCalledTimes(2)
+    expect(placement.mock.calls[1]).toEqual([FRAME_KEY, MIN, 1])
+    // 错开是 placement 的事：这里不再另加 24
+    expect(second.options).toMatchObject({ width: 1100, height: 640, x: 300, y: 200 })
+    expect(track.mock.calls[1]).toEqual([FRAME_KEY, second])
+
+    expect(await open(p('dir', 'a.txt'))).toBe(true)
+    expect(windows()).toHaveLength(3)
+    expect(placement).toHaveBeenCalledTimes(2)
+    expect(track).toHaveBeenCalledTimes(2)
+  })
+
+  it('W-16 placement 只给大小 → 大小用它，位置在聚焦窗口旁边', async () => {
+    initWithMemory({ width: 1100, height: 640 })
+    const anchor = focusAnchor()
+    expect(await open(p('dir', 'a.txt'))).toBe(true)
+    expect(windows()[1].options).toMatchObject({
+      width: 1100,
+      height: 640,
+      x: anchor.bounds.x + 24,
+      y: anchor.bounds.y + 24
+    })
+  })
+
+  it('W-16 placement 只给大小、没有聚焦窗口 → 不给 x/y', async () => {
+    initWithMemory({ width: 1100, height: 640 })
+    expect(await open(p('dir', 'a.txt'))).toBe(true)
+    const win = onlyWindow()
+    expect(win.options).toMatchObject({ width: 1100, height: 640 })
+    expect(win.options).not.toHaveProperty('x')
+    expect(win.options).not.toHaveProperty('y')
+  })
+
+  it('W-17 placement 回 null → 默认大小与位置，仍 track', async () => {
+    const { placement, track } = initWithMemory(null, 1.25)
+    focusAnchor()
+    expect(await open(p('dir', 'a.txt'))).toBe(true)
+    const win = windows()[1]
+    expect(win.options).toMatchObject({ width: 1125, height: 760, x: 124, y: 74 })
+    expect(placement).toHaveBeenCalledTimes(1)
+    expect(track.mock.calls).toEqual([[FRAME_KEY, win]])
+  })
+
+  it('W-17 不可预览（.zip）/ 无头 → placement 与 track 都不调', async () => {
+    const { placement, track } = initWithMemory({ width: 1100, height: 640, x: 300, y: 200 })
+    expect(await open(p('dir', 'arch.zip'))).toBe(false)
+
+    const headless = await import('../../utils/headless')
+    headless.enableHeadlessMode()
+    expect(await open(p('dir', 'a.txt'))).toBe(false)
+
+    expect(windows()).toHaveLength(0)
+    expect(placement).not.toHaveBeenCalled()
+    expect(track).not.toHaveBeenCalled()
   })
 })
 

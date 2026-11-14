@@ -34,6 +34,12 @@
  *   MW-12 （白盒）delete 失败 → 记一条 warn，不抛、不留未处理的 rejection
  *   MW-H1 无头运行（已初始化、真的 md）→ false，不开窗、不建会话、不绑前端
  *   W1    开窗不挂接：编辑器报到之前，会话的 doc 请求走磁盘回落，窗口什么都没收到
+ *
+ * 记住位置与大小（可选的 `frameMemory`，键 `window.markdownWindow`；这里是 placement / track 两个间谍）：
+ *   MW-13 placement 给了大小与位置 → 原样用（不再另加 24）；第三个参数是已开的 md 窗口数；开窗后 track；
+ *         会话照建、前端照绑；再开同一个文件不再问、不再 track
+ *   MW-14 placement 只给大小 → 大小用它，位置回到「聚焦窗口旁边」；没有聚焦窗口不给 x/y
+ *   MW-15 placement 回 null → 默认大小与位置，仍 track；非 md / 无头 → 两个都不调
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -504,6 +510,123 @@ describe('MW-8 / MW-8b / MW-9 同一个文件 / 链接 / 多个文件', () => {
       expect(win.options).not.toHaveProperty('x')
       expect(win.options).not.toHaveProperty('y')
     }
+  })
+})
+
+describe('MW-13 ~ MW-15 记住位置与大小', () => {
+  const FRAME_KEY = 'window.markdownWindow'
+  const MIN = { width: 480, height: 400 }
+
+  function initWithMemory(
+    placed: { width: number; height: number; x?: number; y?: number } | null
+  ): { placement: ReturnType<typeof vi.fn>; track: ReturnType<typeof vi.fn> } {
+    const frameMemory = { placement: vi.fn(() => placed), track: vi.fn() }
+    service.initMarkdownWindowService({
+      getThemeBgColor: () => '#101010',
+      getZoomFactor: () => 1.25,
+      frameMemory,
+      createFrontend: (window, id) => {
+        const frontend = { id, window } as FakeFrontend
+        frontends.push(frontend)
+        return frontend as never
+      }
+    })
+    return frameMemory
+  }
+
+  function focusAnchor(): FakeWindow {
+    const anchor = new fx.FakeWindow({})
+    anchor.bounds = { x: 100, y: 200, width: 800, height: 600 }
+    fx.FakeWindow.focused = anchor
+    return anchor
+  }
+
+  afterEach(async () => {
+    ;(await import('../../utils/headless')).resetHeadlessModeForTests()
+  })
+
+  it('MW-13 placement 给了大小与位置 → 原样用；第三个参数是已开窗口数；开窗后 track；会话照建、前端照绑', () => {
+    const { placement, track } = initWithMemory({ width: 1100, height: 640, x: 300, y: 200 })
+    focusAnchor()
+
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(true)
+    const first = windows()[1]
+    expect(first.options).toMatchObject({
+      width: 1100,
+      height: 640,
+      x: 300,
+      y: 200,
+      minWidth: 480,
+      minHeight: 400
+    })
+    expect(placement.mock.calls).toEqual([[FRAME_KEY, MIN, 0]])
+    expect(track.mock.calls).toEqual([[FRAME_KEY, first]])
+
+    expect(fx.create).toHaveBeenCalledTimes(1)
+    const sid = fx.create.mock.results[0].value.id as string
+    expect(frontends).toHaveLength(1)
+    expect(frontends[0]).toMatchObject({ id: `markdown-window:${sid}`, window: first })
+    expect(registry.bind).toHaveBeenCalledWith(sid, frontends[0])
+
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'b.md'))).toBe(true)
+    const second = windows()[2]
+    expect(placement).toHaveBeenCalledTimes(2)
+    expect(placement.mock.calls[1]).toEqual([FRAME_KEY, MIN, 1])
+    // 错开是 placement 的事：这里不再另加 24
+    expect(second.options).toMatchObject({ width: 1100, height: 640, x: 300, y: 200 })
+    expect(track.mock.calls[1]).toEqual([FRAME_KEY, second])
+    expect(fx.create).toHaveBeenCalledTimes(2)
+    expect(registry.bind).toHaveBeenCalledTimes(2)
+
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(true)
+    expect(windows()).toHaveLength(3)
+    expect(placement).toHaveBeenCalledTimes(2)
+    expect(track).toHaveBeenCalledTimes(2)
+  })
+
+  it('MW-14 placement 只给大小 → 大小用它，位置在聚焦窗口旁边', () => {
+    initWithMemory({ width: 1100, height: 640 })
+    const anchor = focusAnchor()
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(true)
+    expect(windows()[1].options).toMatchObject({
+      width: 1100,
+      height: 640,
+      x: anchor.bounds.x + 24,
+      y: anchor.bounds.y + 24
+    })
+  })
+
+  it('MW-14 placement 只给大小、没有聚焦窗口 → 不给 x/y', () => {
+    initWithMemory({ width: 1100, height: 640 })
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(true)
+    const win = onlyWindow()
+    expect(win.options).toMatchObject({ width: 1100, height: 640 })
+    expect(win.options).not.toHaveProperty('x')
+    expect(win.options).not.toHaveProperty('y')
+  })
+
+  it('MW-15 placement 回 null → 默认大小与位置，仍 track', () => {
+    const { placement, track } = initWithMemory(null)
+    focusAnchor()
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(true)
+    const win = windows()[1]
+    expect(win.options).toMatchObject({ width: 1000, height: 820, x: 124, y: 224 })
+    expect(placement).toHaveBeenCalledTimes(1)
+    expect(track.mock.calls).toEqual([[FRAME_KEY, win]])
+  })
+
+  it('MW-15 非 md / 无头 → placement 与 track 都不调', async () => {
+    const { placement, track } = initWithMemory({ width: 1100, height: 640, x: 300, y: 200 })
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'notes.txt'))).toBe(false)
+
+    const headless = await import('../../utils/headless')
+    headless.enableHeadlessMode()
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(false)
+
+    expect(windows()).toHaveLength(0)
+    expect(fx.create).not.toHaveBeenCalled()
+    expect(placement).not.toHaveBeenCalled()
+    expect(track).not.toHaveBeenCalled()
   })
 })
 

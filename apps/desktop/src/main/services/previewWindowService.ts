@@ -28,6 +28,7 @@ import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { createLogger } from '../logger'
 import { loadRendererPage } from '../utils/rendererPage'
 import { isHeadless } from '../utils/headless'
+import type { WindowFrameMemory } from '../utils/windowFrameMemory'
 
 const log = createLogger('PreviewWindow')
 
@@ -35,11 +36,18 @@ const log = createLogger('PreviewWindow')
 const CASCADE_STEP = 24
 const WINDOW_CSS_WIDTH = 900
 const WINDOW_HEIGHT = 760
+const MIN_SIZE = { width: 360, height: 300 }
+/** 这一类窗口记下的位置与大小存在哪个设置键下 */
+const FRAME_KEY = 'window.filePreview'
 
 interface PreviewWindowDeps {
   getThemeBgColor: () => string
   /** 用户的 UI 缩放（zoomFactor）：页面按它缩放，窗口宽度也得跟着换算 */
   getZoomFactor: () => number
+  /**
+   * 用户上次把这类窗口摆在哪、拉成多大（一类窗口记一份）。不给就每次按默认大小开在聚焦窗口旁边
+   */
+  frameMemory?: WindowFrameMemory
 }
 
 let deps: PreviewWindowDeps | null = null
@@ -128,12 +136,21 @@ function openPreviewWindow(
   const fileName = basename(path)
   const offset = windows.size * CASCADE_STEP
   const anchor = BrowserWindow.getFocusedWindow()?.getBounds()
+  // 用户摆过这类窗口：按记下的大小开在记下的位置（已开着几扇就错开几步）；
+  // 没记过、或记下的位置已不在任何屏幕上：默认大小 / 聚焦窗口旁边
+  const remembered = deps.frameMemory?.placement(FRAME_KEY, MIN_SIZE, windows.size)
+  const position =
+    remembered?.x !== undefined && remembered.y !== undefined
+      ? { x: remembered.x, y: remembered.y }
+      : anchor
+        ? { x: anchor.x + CASCADE_STEP + offset, y: anchor.y + CASCADE_STEP + offset }
+        : {}
   const win = new BrowserWindow({
-    width: Math.round(WINDOW_CSS_WIDTH * deps.getZoomFactor()),
-    height: WINDOW_HEIGHT,
-    ...(anchor ? { x: anchor.x + CASCADE_STEP + offset, y: anchor.y + CASCADE_STEP + offset } : {}),
-    minWidth: 360,
-    minHeight: 300,
+    width: remembered?.width ?? Math.round(WINDOW_CSS_WIDTH * deps.getZoomFactor()),
+    height: remembered?.height ?? WINDOW_HEIGHT,
+    ...position,
+    minWidth: MIN_SIZE.width,
+    minHeight: MIN_SIZE.height,
     title: fileName,
     show: false,
     backgroundColor: deps.getThemeBgColor(),
@@ -152,6 +169,7 @@ function openPreviewWindow(
     win.show()
     win.focus()
   })
+  deps.frameMemory?.track(FRAME_KEY, win)
   // 页面自己的 <title> 不该盖掉文件名
   win.on('page-title-updated', (event) => event.preventDefault())
   win.on('closed', () => {

@@ -21,6 +21,7 @@ import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
+import { createWindowFrameMemory } from './utils/windowFrameMemory'
 import { browserHistoryDao } from './dao/browserHistoryDao'
 import {
   builtinMcpRegistry,
@@ -565,6 +566,25 @@ function getSavedPanelLayout(): PanelLayout {
 }
 
 /** 启动时尚未创建 webContents，需根据保存的 uiZoom 计算 zoomFactor 把 CSS 像素换算成 DIP */
+/**
+ * 文件预览窗口 / md 窗口的位置与大小记忆（每类窗口一份，存在设置表里）。
+ * 显示器信息在开窗那一刻才取（screen 要等 app ready）；主显示器排第一个
+ */
+const fileWindowFrames = createWindowFrameMemory({
+  read: (key) => settingsDao.findByKey(key) ?? undefined,
+  write: (key, value) => settingsDao.upsert(key, value),
+  workAreas: () => {
+    const primary = screen.getPrimaryDisplay()
+    return [
+      primary.workArea,
+      ...screen
+        .getAllDisplays()
+        .filter((d) => d.id !== primary.id)
+        .map((d) => d.workArea)
+    ]
+  }
+})
+
 function getStartupZoomFactor(): number {
   const pct = Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1
   return Math.max(0.5, Math.min(2.2, pct))
@@ -676,12 +696,17 @@ function initSharedWindowServices(): void {
     initMarkdownWindowService({
       getThemeBgColor,
       getZoomFactor: getStartupZoomFactor,
+      frameMemory: fileWindowFrames,
       createFrontend: (window, id) => new ElectronFrontend(window, id)
     })
   )
   // 应用内点开的文件：md 进上面的协作编辑窗口，其余可预览的进只读预览窗口（不建会话）
   step('windowServices › preview', () =>
-    initPreviewWindowService({ getThemeBgColor, getZoomFactor: getStartupZoomFactor })
+    initPreviewWindowService({
+      getThemeBgColor,
+      getZoomFactor: getStartupZoomFactor,
+      frameMemory: fileWindowFrames
+    })
   )
 }
 
