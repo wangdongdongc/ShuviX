@@ -34,6 +34,9 @@ export {
   toShuvixRelative,
   toUserRelative,
   projectBundleId,
+  botBundleId,
+  isBotBundle,
+  BOTS_CONTAINER,
   userBundleId,
   isUserBundle,
   isValidLibraryName,
@@ -60,6 +63,7 @@ export {
   listAllBuiltinBundleIds,
   listBundleDirs,
   listProjectBundles,
+  listBotBundles,
   listUserLibraries,
   invalidateKnowledgeScan
 } from './scan'
@@ -79,4 +83,5 @@ export {
   type KnowledgeChange
 } from './changes'
 export { listKnowledgeEntries } from './entries'
+export { setBotKnowledgeHost, type BotKnowledgeHost } from './botBases'
 export { listKnowledgeMentionEntries } from './mentionEntries'

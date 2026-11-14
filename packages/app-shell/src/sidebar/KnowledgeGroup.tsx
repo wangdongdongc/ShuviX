@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppEvent } from '@shuvix/chat-ui'
-import { KNOWLEDGE_PROJECTS_DIR } from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_BOTS_DIR, KNOWLEDGE_PROJECTS_DIR } from '@shuvix/chat-protocol/knowledge'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { useFocusDim } from './useFocusDim'
@@ -44,10 +44,12 @@ export interface KnowledgeGroupProps {
   adapter: KnowledgeGroupAdapter
 }
 
-/** 项目库的条目 / 目录 id 前缀 —— 这一组不画它们 */
-const PROJECTS_PREFIX = `${KNOWLEDGE_PROJECTS_DIR}/`
+/**
+ * 项目库与 bot 库的条目 / 目录 id —— 这一组不画它们：它们挂在各自的项目组 / bot 组里（「项目知识库」/「Bot 知识库」）
+ */
+const OWNED_CONTAINERS = [KNOWLEDGE_PROJECTS_DIR, KNOWLEDGE_BOTS_DIR]
 const notProjectBundle = (id: string): boolean =>
-  id !== KNOWLEDGE_PROJECTS_DIR && !id.startsWith(PROJECTS_PREFIX)
+  !OWNED_CONTAINERS.some((c) => id === c || id.startsWith(`${c}/`))
 
 export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Element {
   const { t } = useTranslation()

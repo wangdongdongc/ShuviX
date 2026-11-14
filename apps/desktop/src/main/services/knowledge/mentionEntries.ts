@@ -8,13 +8,16 @@
  */
 import {
   KNOWLEDGE_BUILTIN_BASE,
+  KNOWLEDGE_BOT_BASE,
   KNOWLEDGE_PROJECT_BASE,
   type KnowledgeMentionEntry
 } from '@shuvix/chat-protocol/knowledge'
+import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
 import { projectDao } from '../../dao/projectDao'
 import { sessionRecords } from '../sessionRecords'
 import { builtinBaseDisplayName } from './knowledgePaths'
 import { scanBundle } from './scan'
+import { botDisplayNameOf, botKeyOfSession } from './botBases'
 import { enabledTargets } from './sessionBundle'
 
 /** 该会话启用库内的全部条目（库序同 enabledTargets：有项目时项目库打头，其余按选择的顺序；每库内按路径字典序） */
@@ -24,17 +27,22 @@ export async function listKnowledgeMentionEntries(
   const targets = enabledTargets(sessionId)
   if (targets.length === 0) return []
   // 项目库显示名 = 项目当前的名字（改名即时生效，同侧栏口径）
-  const projectId = sessionRecords.pick(sessionId, ['projectId'])?.projectId
+  // bot 会话的工作项目（`workProject`）也算 —— 与 sessionBundle 的 rootProject 同口径
+  const projectId = projectContextIdOf(sessionRecords.pick(sessionId, ['projectId', 'settings']))
   const projectName = (projectId ? projectDao.findById(projectId)?.name : undefined)?.trim()
+  const botKey = botKeyOfSession(sessionId)
+  const botLabel = (botKey ? botDisplayNameOf(botKey) : undefined)?.trim()
 
   const out: KnowledgeMentionEntry[] = []
   for (const { name, target } of targets) {
     const bundleLabel =
       name === KNOWLEDGE_PROJECT_BASE
         ? projectName || name
-        : name === KNOWLEDGE_BUILTIN_BASE
-          ? builtinBaseDisplayName()
-          : name
+        : name === KNOWLEDGE_BOT_BASE
+          ? botLabel || name
+          : name === KNOWLEDGE_BUILTIN_BASE
+            ? builtinBaseDisplayName()
+            : name
     const scan = await scanBundle(target.bundle)
     for (const note of scan.notes) {
       out.push({

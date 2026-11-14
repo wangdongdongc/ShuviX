@@ -30,6 +30,7 @@ metadata, the body is the knowledge, and the only reserved names are `index.md` 
 | ------------------- | ------------------------------------------------- | --------------------------------------------- |
 | the user's own      | `~/.shuvix/knowledge/<name>/` — **every non-hidden sub-directory is one base**; no marker file needed | the directory name                             |
 | this project's      | `~/.shuvix/knowledge-shuvix/projects/<projectId>/` (written by the knowledge librarian, never by hand) | `project` (reserved)                          |
+| this bot's          | `~/.shuvix/knowledge-shuvix/bots/<key>/`, `<key>` from the bot's identity — its `shuvix-id`, or `name-<name>` when the file has none (written by the knowledge librarian, never by hand) | `bot` (reserved)                              |
 | ShuviX's reference  | inside the application (read-only, per UI language) | `shuvix` (reserved)                           |
 
 A base needs nothing but its directory: copy a folder of notes in and it is a base. Hidden files
@@ -42,9 +43,12 @@ committed as `kb(<op>): /path` with `Knowledge-Op` / `Knowledge-Actor` trailers.
 where what was learned about the project goes, so it is not something to tick (it is not offered
 in the cards). **The other bases are the user's selection** (the Knowledge bases row under
 session config → Extensions, or the tool picker by the input box; project config sets the default
-for new sessions). Unset, a session follows its parent session, then its project's default; when
-nobody chose, none of your own bases are on. **Every session also always has `shuvix`**, listed
-last: like `project` it is not something to tick and is not offered in the cards, so an agent can
+for new sessions). **A bot's own sessions likewise always have that bot's base**, `bot`, listed
+right after `project` (see the `bot-md` entry): a bot's scheduled runs and the agents its sessions
+dispatch have it too, a sub-session the bot opens does not. Unset, a session follows its parent
+session, then its project's default; when nobody chose, none of your own bases are on. **Every
+session also always has `shuvix`**, listed
+last: like `project` and `bot` it is not something to tick and is not offered in the cards, so an agent can
 always look up how ShuviX's own files are written.
 The selection is a hard boundary: `bases` lists only the enabled ones, and naming any other is
 refused. The `<knowledge_bases>` fence in the system prompt lists the same names.

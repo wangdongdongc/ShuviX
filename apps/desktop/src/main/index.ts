@@ -119,6 +119,7 @@ import { triggerLogService } from './services/triggerLogService'
 import { botService } from './services/botService'
 import { setBotScheduleProjectLookup } from './services/botScheduleHint'
 import { setBotAccessChecker } from './services/botAccessHint'
+import { setBotKnowledgeHost } from './services/knowledge'
 import { desktopBotAccessChecker } from './services/botAccessWiring'
 import { projectService } from './services/projectService'
 import { sessionService } from './services/sessionService'
@@ -1215,6 +1216,11 @@ app.whenReady().then(async () => {
   setBotScheduleProjectLookup((name) => projectService.projectsNamed(name).length)
   // bot 文件 / 点名 bot 的策略的写入回执里那段定时运行权限核对（同上：回执挂在 file 工具上，不能静态引入服务）
   setBotAccessChecker(desktopBotAccessChecker())
+  // 每个 bot 自己的知识库（knowledge-shuvix 的 bots/<key>）：知识库模块是内聚模块，不能反向依赖 botService，由这里注入
+  setBotKnowledgeHost({
+    keyOfSession: (sid) => botService.knowledgeKeyOfSession(sid),
+    displayNameOf: (key) => botService.displayNameOfKnowledgeKey(key)
+  })
 
   // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
   // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在

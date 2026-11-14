@@ -69,6 +69,7 @@ const fake = vi.hoisted(() => ({
   deleteByFile: vi.fn(),
   createNew: vi.fn(),
   openFolder: vi.fn(async () => {}),
+  knowledgeKeyForFile: vi.fn((): string | null => null),
   sessionDelete: vi.fn(async (id: string) => {
     state.calls.push(`delete:${id}`)
     state.sessions = state.sessions.filter((s) => s.id !== id && s.parentId !== id)
@@ -97,7 +98,8 @@ vi.mock('../../services/botService', () => ({
     deleteArchivedFile: fake.deleteArchivedFile,
     deleteByFile: fake.deleteByFile,
     createNew: fake.createNew,
-    openFolder: fake.openFolder
+    openFolder: fake.openFolder,
+    knowledgeKeyForFile: fake.knowledgeKeyForFile
   }
 }))
 vi.mock('../../services/sessionService', () => ({
@@ -405,5 +407,42 @@ describe('BH-4 bot:archive', () => {
     })
     expect(fake.findByProjectAndNotebookPath).not.toHaveBeenCalled()
     expect(fake.sessionDelete).not.toHaveBeenCalled()
+  })
+})
+
+describe('BH-KB 每个 bot 自己的知识库', () => {
+  it('BH-KB1 bot:list 的生效行与被遮蔽行都按 knowledgeKeyForFile(file, basePath) 带上 knowledgeBundle = bots/<key>；算不出 key 的行没有这个键；invalid / archived 不变', async () => {
+    const scoutFile = { name: 'scout', displayName: 'Scout', description: '' }
+    const plainFile = { name: 'plain', displayName: '', description: '' }
+    const shadowFile = { name: 'scout', displayName: 'Scout 2', description: '' }
+    fake.listWithInvalid.mockReturnValueOnce({
+      valid: [
+        { file: scoutFile, basePath: '/bots/scout.md' },
+        { file: plainFile, basePath: '/bots/plain.md' }
+      ],
+      shadowed: [{ file: shadowFile, basePath: '/bots/a.md', shadowedBy: 'scout.md' }],
+      invalid: [{ fileName: 'broken.md', reason: 'bad' }]
+    })
+    state.archived = [archived('old')]
+    fake.knowledgeKeyForFile.mockImplementation(((_file: unknown, basePath: string) =>
+      basePath === '/bots/scout.md' ? 'k1' : basePath === '/bots/a.md' ? 'k2' : null) as never)
+    try {
+      const res = (await invoke('bot:list')) as {
+        bots: Array<Record<string, unknown>>
+        shadowed: Array<Record<string, unknown>>
+        invalid: unknown
+        archived: unknown
+      }
+      expect(res.bots[0].knowledgeBundle).toBe('bots/k1')
+      expect(res.bots[1]).not.toHaveProperty('knowledgeBundle')
+      expect(res.shadowed[0].knowledgeBundle).toBe('bots/k2')
+      expect(res.invalid).toEqual([{ fileName: 'broken.md', reason: 'bad' }])
+      expect(res.archived).toEqual(['old'])
+      expect(fake.knowledgeKeyForFile).toHaveBeenCalledWith(scoutFile, '/bots/scout.md')
+      expect(fake.knowledgeKeyForFile).toHaveBeenCalledWith(plainFile, '/bots/plain.md')
+      expect(fake.knowledgeKeyForFile).toHaveBeenCalledWith(shadowFile, '/bots/a.md')
+    } finally {
+      fake.knowledgeKeyForFile.mockImplementation(() => null)
+    }
   })
 })

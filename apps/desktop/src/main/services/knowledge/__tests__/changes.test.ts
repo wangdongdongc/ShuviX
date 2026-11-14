@@ -628,3 +628,46 @@ describe('内置库（只读）', () => {
     expect(builtin.concepts).toHaveLength(2)
   })
 })
+
+/**
+ * bot 自己的库（`bots/<key>`，2026-11-14）与项目库同一条管线：没有建库步骤，第一次观察到写入时 init 自己的仓库、
+ * 以自己的提交落地；容器 `bots` 本身不是仓库。
+ */
+describe('bot 库', () => {
+  it('CH-B1 bot 库目录此前不存在：经写钩子观察到第一条写入后只有这条与 .git，一条 kb(creation) 提交；容器 bots 与别的库都不长 .git；恰一个事件', async () => {
+    const bundle = 'bots/k1'
+    const k1 = bundleAt(root, bundle)
+    expect(existsSync(k1)).toBe(false)
+    await makeBundle(BUNDLE)
+    const projectCommits = gitCommitCount(dir)
+    events = []
+
+    const x = seedConcept(root, `${bundle}/x.md`, [
+      'shuvix: okf v0.2',
+      'type: Memory',
+      'title: X',
+      'status: stable'
+    ])
+    notifyKnowledgeFileChanged(x, { kind: 'write', actor: ACTOR })
+    await flushKnowledgeChanges()
+
+    expect(readdirSync(k1).sort()).toEqual(['.git', 'x.md'])
+    expect(gitCommitCount(k1)).toBe(1)
+    expect(gitHeadMessage(k1)).toBe(
+      'kb(creation): /x.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
+    )
+    expect(gitStatus(k1)).toBe('')
+    expectNoBookkeeping(k1)
+    expect(existsSync(join(root, 'bots', '.git'))).toBe(false)
+    expect(gitCommitCount(dir)).toBe(projectCommits)
+    expect(events).toEqual([{ type: 'knowledge.changed' }])
+  })
+
+  it('CH-B1 容器里的散文件不属于任何 bundle：无提交、无事件、不 init', async () => {
+    const loose = seedFile(root, 'bots/x.md', '# loose\n')
+    notifyKnowledgeFileChanged(loose, { kind: 'write', actor: ACTOR })
+    await flushKnowledgeChanges()
+    expect(events).toEqual([])
+    expect(existsSync(join(root, 'bots', '.git'))).toBe(false)
+  })
+})

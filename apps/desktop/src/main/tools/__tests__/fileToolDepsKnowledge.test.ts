@@ -559,3 +559,35 @@ describe('桌面文件工具 — 知识库条目的覆盖保护', () => {
     expect(readFileSync(p, 'utf-8')).toContain('our body')
   })
 })
+
+/**
+ * bot 自己的库（knowledge-shuvix 的 `bots/<key>`，2026-11-14）与项目库是同一种 bundle：落在里面的条目盖章、
+ * 进变更管线，没读过的既有条目不许整篇覆盖。库目录第一次写进东西之前不存在 —— write 连父目录一起建。
+ */
+describe('桌面文件工具 — bot 库', () => {
+  it('FD-B1 bot 库里的 write（库目录此前不存在）：盖 generated、回执 [OKF] Stamped、变更管线收到 write；不弹卡', async () => {
+    const p = join(state.kb, 'bots', 'k1', 'x.md')
+    const res = await executeTool(makeWriteTool(ctx), 'fdb1', { path: p, content: DRAFT })
+
+    expect(state.requests).toEqual([])
+    expect(readFileSync(p, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
+    expect(textOf(res)).toContain('[OKF] Stamped')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenCalledWith(p, { kind: 'write', actor: 'shuvix-work/gpt-5' })
+  })
+
+  it('FD-B2 bot 库里一份本会话没读过的既有条目 → write 被拒（同 FD-9），字节不变', async () => {
+    const p = join(state.kb, 'bots', 'k1', 'fdb2.md')
+    mkdirSync(join(p, '..'), { recursive: true })
+    const theirs = DRAFT.replace('body', 'their body')
+    writeFileSync(p, theirs, 'utf-8')
+
+    const msg = await failureText(
+      executeTool(makeWriteTool(ctx), 'fdb2', { path: p, content: DRAFT })
+    )
+    expect(msg).toContain('already exists in the knowledge base')
+    expect(readFileSync(p, 'utf-8')).toBe(theirs)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(state.notify).not.toHaveBeenCalled()
+  })
+})

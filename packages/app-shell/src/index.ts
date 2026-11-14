@@ -50,8 +50,12 @@ export type { CalendarViewProps } from './sidebar/CalendarView'
 export { DayReportHeader } from './sidebar/DayReportHeader'
 export type { DayReportHeaderProps } from './sidebar/DayReportHeader'
 export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
-export { ProjectKnowledgeFolder } from './sidebar/ProjectKnowledgeFolder'
-export type { ProjectKnowledgeFolderProps } from './sidebar/ProjectKnowledgeFolder'
+export {
+  BotKnowledgeFolder,
+  OwnedKnowledgeFolder,
+  ProjectKnowledgeFolder
+} from './sidebar/ProjectKnowledgeFolder'
+export type { OwnedKnowledgeFolderProps } from './sidebar/ProjectKnowledgeFolder'
 export type {
   KnowledgeGroupProps,
   KnowledgeGroupAdapter,

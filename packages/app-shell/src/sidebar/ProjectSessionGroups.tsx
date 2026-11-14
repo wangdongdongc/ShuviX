@@ -30,7 +30,7 @@ import { parentsToAutoExpand } from './autoExpandSubs'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { useSessionExport } from './useSessionExport'
-import { ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
+import { BotKnowledgeFolder, ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
 import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 import { RowMenuButton } from './RowMenuButton'
 import {
@@ -128,7 +128,8 @@ export interface ProjectSessionGroupsProps {
   projectsSection?: { dividerAbove?: boolean; onNewProject?: () => void }
   /**
    * 知识库能力（宿主注入；桌面 window.api.knowledge，扩展无）。注入后每个项目组内多一层
-   * 「项目知识库」子文件夹（ProjectKnowledgeFolder）—— 那个项目自己的库。
+   * 「项目知识库」子文件夹（ProjectKnowledgeFolder）—— 那个项目自己的库；每个有库的 bot 组内多一层
+   * 「Bot 知识库」（BotKnowledgeFolder，2026-11-14）—— 那个 bot 自己的库。
    */
   projectKnowledge?: KnowledgeGroupAdapter
 }
@@ -647,6 +648,16 @@ export function ProjectSessionGroups({
           onAdd={hideEmptyGroups ? undefined : (e) => openLocationPicker(bot, e)}
           addLabel={t('sidebar.newChat')}
         >
+          {projectKnowledge && bot.knowledgeBundle && !hideEmptyGroups && (
+            <BotKnowledgeFolder
+              botName={bot.name}
+              bundle={bot.knowledgeBundle}
+              adapter={projectKnowledge}
+              // 折叠的 bot 组不扫盘
+              enabled={!botCollapsed(key)}
+              dim={dim && activeGroupKey === key}
+            />
+          )}
           {groupSessions.length === 0 ? (
             <div
               data-bot-new-chat=""

@@ -1,5 +1,8 @@
 /**
- * ProjectKnowledgeFolder —— 项目组内的「项目知识库」子文件夹（2026-10-10，接替退役的项目记忆的位置）。
+ * OwnedKnowledgeFolder —— 挂在某个组里、属于那个组的知识库子文件夹：项目组内的「项目知识库」（2026-10-10，接替退役的
+ * 项目记忆的位置）与 bot 组内的「Bot 知识库」（2026-11-14，每个 bot 一个独立的库）。两者只差 bundle、文案与锚点属性，
+ * 下面的说明以项目库为例。
+ *
  *
  * 列的是这个项目自己的知识库 bundle（`~/.shuvix/knowledge-shuvix/projects/<projectId>/`）：属于这个
  * 项目的会话恒带这个库（agent 经 `knowledge` 工具以 `project` 之名读写它），所以它跟着项目挂在项目
@@ -33,8 +36,15 @@ import {
   type KnowledgeListing
 } from './KnowledgeTreeView'
 
-export interface ProjectKnowledgeFolderProps {
-  projectId: string
+export interface OwnedKnowledgeFolderProps {
+  /** 这个库的 bundle id（`projects/<projectId>` / `bots/<key>`） */
+  bundle: string
+  /** 行文案、悬停说明、空库提示 */
+  label: string
+  hint: string
+  emptyHint: string
+  /** 行上的锚点属性（e2e 与页面对象按它找：`data-project-knowledge` / `data-bot-knowledge`） */
+  anchor: Record<string, string>
   adapter: KnowledgeGroupAdapter
   /** 所属项目组是否展开 —— 折叠的组不扫描（侧栏可能有几十个项目） */
   enabled: boolean
@@ -64,15 +74,18 @@ function findDir(node: KnowledgeTreeDir, path: string): KnowledgeTreeDir | null 
   return null
 }
 
-export function ProjectKnowledgeFolder({
-  projectId,
+export function OwnedKnowledgeFolder({
+  bundle,
+  label,
+  hint,
+  emptyHint,
+  anchor,
   adapter,
   enabled,
   dim = false
-}: ProjectKnowledgeFolderProps): React.JSX.Element {
+}: OwnedKnowledgeFolderProps): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
-  const bundle = `${KNOWLEDGE_PROJECTS_DIR}/${projectId}`
   const prefix = `${bundle}/`
 
   const [listing, setListing] = useState<KnowledgeListing | null>(null)
@@ -163,10 +176,10 @@ export function ProjectKnowledgeFolder({
   return (
     <div>
       <div
-        data-project-knowledge={projectId}
+        {...anchor}
         onClick={toggle}
         onContextMenu={openMenu}
-        title={t('sidebar.projectKnowledgeHint')}
+        title={hint}
         className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${
           isActive
             ? 'text-text-primary'
@@ -175,7 +188,7 @@ export function ProjectKnowledgeFolder({
       >
         <Library className={`sb-icon ${isActive ? 'text-accent' : 'text-text-tertiary'}`} />
         <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-5">
-          <span className="truncate">{t('sidebar.projectKnowledge')}</span>
+          <span className="truncate">{label}</span>
           {entryCount > 0 && (
             <span className="ml-auto shrink-0 text-[0.8em] tabular-nums text-text-tertiary">
               {entryCount}
@@ -208,11 +221,59 @@ export function ProjectKnowledgeFolder({
               />
             )}
             {entryCount === 0 && !(node && node.dirs.length > 0) && !drafts.draft && (
-              <div className="sb-hint sb-depth-1">{t('sidebar.projectKnowledgeEmpty')}</div>
+              <div className="sb-hint sb-depth-1">{emptyHint}</div>
             )}
           </>
         )}
       </AnimatedCollapse>
     </div>
+  )
+}
+
+/** 项目组内的「项目知识库」：那个项目自己的库 */
+export function ProjectKnowledgeFolder({
+  projectId,
+  ...rest
+}: {
+  projectId: string
+  adapter: KnowledgeGroupAdapter
+  enabled: boolean
+  dim?: boolean
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <OwnedKnowledgeFolder
+      bundle={`${KNOWLEDGE_PROJECTS_DIR}/${projectId}`}
+      label={t('sidebar.projectKnowledge')}
+      hint={t('sidebar.projectKnowledgeHint')}
+      emptyHint={t('sidebar.projectKnowledgeEmpty')}
+      anchor={{ 'data-project-knowledge': projectId }}
+      {...rest}
+    />
+  )
+}
+
+/** bot 组内的「Bot 知识库」：那个 bot 自己的库（`bundle` 由宿主随 bot 清单给） */
+export function BotKnowledgeFolder({
+  botName,
+  bundle,
+  ...rest
+}: {
+  botName: string
+  bundle: string
+  adapter: KnowledgeGroupAdapter
+  enabled: boolean
+  dim?: boolean
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <OwnedKnowledgeFolder
+      bundle={bundle}
+      label={t('sidebar.botKnowledge')}
+      hint={t('sidebar.botKnowledgeHint')}
+      emptyHint={t('sidebar.botKnowledgeEmpty')}
+      anchor={{ 'data-bot-knowledge': botName }}
+      {...rest}
+    />
   )
 }

@@ -22,9 +22,12 @@ import {
 } from '@shuvix/agent-runtime'
 import {
   KNOWLEDGE_BUILTIN_BASE,
+  KNOWLEDGE_BOT_BASE,
+  KNOWLEDGE_BOTS_DIR,
   KNOWLEDGE_PROJECT_BASE,
   KNOWLEDGE_PROJECTS_DIR
 } from '@shuvix/chat-protocol/knowledge'
+import { botDisplayNameOf } from './botBases'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import { projectDao } from '../../dao/projectDao'
 import { appEventBus } from '../../utils/appEventBus'
@@ -133,7 +136,10 @@ function resolveDir(dirId: string): { bundle: string; rel: string; abs: string }
       segs[0] === KNOWLEDGE_PROJECTS_DIR &&
       !isHiddenProjectId(segs[1]) &&
       !!projectDao.findById(segs[1])
-    if (!isProjectRoot) return null
+    // bot 库同理：以 bot 的 key 命名的目录，第一次写进东西之前不存在（侧栏 bot 组里的「Bot 知识库」却总在）
+    const isBotRoot =
+      segs.length === 2 && segs[0] === KNOWLEDGE_BOTS_DIR && botDisplayNameOf(segs[1]) !== undefined
+    if (!isProjectRoot && !isBotRoot) return null
     return { bundle, rel: '', abs: bundleDir(bundle) }
   }
   // 只读的内置库在这里就解析不出落点 —— 两个调用方各自先回一句可读的原因（见下），这一道是结构上的
@@ -152,9 +158,13 @@ export function createKnowledgeBase(rawName: string): KnowledgeCreateResult {
   const name = rawName.trim()
   const bad = nameError(name) ?? (isValidLibraryName(name) ? null : t('knowledge.errInvalidName'))
   if (bad) return { success: false, error: bad }
-  // `project` / `shuvix` 是工具里的保留名（项目库 / 内置库）：叫这个名字的用户库工具够不着，
+  // `project` / `bot` / `shuvix` 是工具里的保留名（项目库 / bot 库 / 内置库）：叫这个名字的用户库工具够不着，
   // 别让人建出一个点不着的库
-  if (name === KNOWLEDGE_PROJECT_BASE || name === KNOWLEDGE_BUILTIN_BASE) {
+  if (
+    name === KNOWLEDGE_PROJECT_BASE ||
+    name === KNOWLEDGE_BOT_BASE ||
+    name === KNOWLEDGE_BUILTIN_BASE
+  ) {
     return { success: false, error: t('knowledge.errReserved', { name }) }
   }
 

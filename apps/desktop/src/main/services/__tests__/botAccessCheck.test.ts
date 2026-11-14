@@ -67,7 +67,9 @@ const state = {
   /** 内置 id → ShuviX 写下的那份文件（botService 的认定表） */
   trusted: {} as Record<string, string>,
   /** 试算里额外喊一句的 logger 告警（看 logger 是不是核对自己那份） */
-  trialWarning: null as string | null
+  trialWarning: null as string | null,
+  /** bot 名 → 它自己的知识库目录（没写的 bot 没有库） */
+  botKnowledgeDirs: new Map<string, string>()
 }
 
 type RunArg = Parameters<BotAccessDeps['trial']>[0]
@@ -143,6 +145,7 @@ const checker = createBotAccessChecker({
   identityForFile: deps.identityForFile,
   projectsNamed: deps.projectsNamed,
   projectKnowledgeDir: KB,
+  botKnowledgeDir: (file) => state.botKnowledgeDirs.get(file.name) ?? null,
   temporaryWorkspace: () => TEMP,
   aclDir: deps.aclDir,
   userPolicies: deps.userPolicies,
@@ -154,6 +157,7 @@ const checker = createBotAccessChecker({
 })
 
 beforeEach(() => {
+  state.botKnowledgeDirs = new Map()
   state.bots = []
   state.users = []
   state.disabled = new Set()
@@ -721,5 +725,61 @@ describe('BAC-10 / BAC-11 每次现读', () => {
     expect(out).toContain(
       `- files in ~/.shuvix/daily/: read allowed (buddy-diary); write ${REVIEW('ask-on-external-path')}.`
     )
+  })
+})
+
+describe('BAC-KB 每个 bot 自己的知识库', () => {
+  const BOTKB = '/Users/u/.shuvix/knowledge-shuvix/bots/' + UUID
+
+  it('BAC-KB1 bot 自己的库在每个位置的权限表里都排最后一行（可读写）；aclDir 也问过它', () => {
+    state.botKnowledgeDirs.set('buddy', BOTKB)
+    state.projects = [{ id: 'p1', name: 'Acme', path: '/Users/u/work/acme' }]
+    checker.forBotFile(
+      botText('buddy', { id: UUID, bindings: [binding(), binding({ project: 'Acme' })] }),
+      pathOf('buddy')
+    )
+    const [temp, project] = deps.trial.mock.calls.map((c) => c[0])
+    expect(temp.aclRead).toEqual([TEMP, pathOf('buddy'), BOTKB])
+    expect(temp.aclWrite).toEqual([TEMP, pathOf('buddy'), BOTKB])
+    const dirs = ['/Users/u/work/acme', pathOf('buddy'), KB('p1'), BOTKB]
+    expect(project.aclRead).toEqual(dirs)
+    expect(project.aclWrite).toEqual(dirs)
+    expect(deps.aclDir.mock.calls.map((c) => c[0])).toContain(BOTKB)
+  })
+
+  it('BAC-KB2 bot 没有库 → 权限表与 BAC-2 一模一样；aclDir 对它回 null → 丢掉', () => {
+    checker.forBotFile(botText('buddy', { id: UUID }), pathOf('buddy'))
+    expect(deps.trial.mock.calls[0][0]).toMatchObject({
+      aclRead: [TEMP, pathOf('buddy')],
+      aclWrite: [TEMP, pathOf('buddy')]
+    })
+
+    deps.trial.mockClear()
+    state.botKnowledgeDirs.set('buddy', BOTKB)
+    deps.aclDir.mockImplementationOnce((dir: string) => dir)
+    deps.aclDir.mockImplementationOnce((dir: string) => dir)
+    deps.aclDir.mockImplementationOnce(() => null)
+    checker.forBotFile(botText('buddy', { id: UUID }), pathOf('buddy'))
+    expect(deps.trial.mock.calls[0][0]).toMatchObject({
+      aclRead: [TEMP, pathOf('buddy')],
+      aclWrite: [TEMP, pathOf('buddy')]
+    })
+  })
+
+  it('BAC-KB3 配套策略点名 bot 库里的一个文件：回执里那次写入是放行的（不问、不停）；没有库时同一份策略那次写要问', () => {
+    const note = `${BOTKB}/notes.md`
+    state.users = [
+      userPolicy(
+        policyText('buddy-access', [sessionRead(UUID), pathRule(UUID, note, 'allow')]),
+        'buddy-access.md'
+      )
+    ]
+    const without = checker.forBotFile(botText('buddy', { id: UUID }), pathOf('buddy'))!
+    state.botKnowledgeDirs.set('buddy', BOTKB)
+    const withKb = checker.forBotFile(botText('buddy', { id: UUID }), pathOf('buddy'))!
+    const line = '- ~/.shuvix/knowledge-shuvix/bots/' + UUID + '/notes.md: read and write '
+    expect(without).toContain(`${line}asks (ask-on-external-path`)
+    expect(withKb).toContain(`${line}allowed (buddy-access).`)
+    expect(withKb).not.toContain(`${line}asks`)
   })
 })

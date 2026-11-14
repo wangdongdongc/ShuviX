@@ -2953,14 +2953,14 @@ async function pickFromMenu(
  * 这里只需「钉好要选哪一项 → 点 ⋮ → 顺带核对该项在不在菜单里」（见上方 pickFromMenu）。
  */
 export function sidebarPane(main: CdpClient): SidebarPane {
-  // 「项目知识库」文件夹行（`data-project-knowledge`）同样是「div > div > span.truncate」的形状，
+  // 「项目知识库」/「Bot 知识库」文件夹行（`data-project-knowledge` / `data-bot-knowledge`）同样是「div > div > span.truncate」的形状，
   // 但它不是会话 —— 每个项目组都有一行，不滤掉就会混进 titles() / openSession 里
   // 每组先只放 8 条，更早的折在「查看更多」（`data-view-more`）后面：按标题找行之前先把它们都点开 ——
   // 点开是下一帧的事，这一次查不到的行由调用方的 until 在下一轮拿到
   const ROWS = `(() => {
     for (const more of document.querySelectorAll('[data-view-more]')) more.click()
     return [...document.querySelectorAll('div[class*="cursor-pointer"]')]
-      .filter((d) => d.querySelector(':scope > div > span.truncate') && !d.hasAttribute('data-project-knowledge'))
+      .filter((d) => d.querySelector(':scope > div > span.truncate') && !d.hasAttribute('data-project-knowledge') && !d.hasAttribute('data-bot-knowledge'))
   })()`
   /** 按标题定位会话行（标题在行内那层 span.truncate，与顶栏标题区分） */
   const ROW = (title: string): string =>
@@ -3200,7 +3200,8 @@ export function sidebarPane(main: CdpClient): SidebarPane {
           .filter(
             (d) =>
               d.querySelector(':scope > div > span.truncate') &&
-              !d.hasAttribute('data-project-knowledge')
+              !d.hasAttribute('data-project-knowledge') &&
+              !d.hasAttribute('data-bot-knowledge')
           )
           .map((d) => ({
             title: (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim(),

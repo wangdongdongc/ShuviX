@@ -18,6 +18,8 @@ export interface BotGroupItem {
   description: string
   /** bots 目录下的文件名 —— 笔记本会话按它认（名字随编辑在变，文件名不变） */
   fileName: string
+  /** 这个 bot 自己的知识库 bundle id（`bots/<key>`，宿主给）；没有就不画「Bot 知识库」 */
+  knowledgeBundle?: string
 }
 
 /** 同名的另一份压过了它、当前不生效的 bot 文件 */

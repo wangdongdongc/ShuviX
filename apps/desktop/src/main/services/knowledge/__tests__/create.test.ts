@@ -48,6 +48,7 @@ vi.mock('../../../dao/projectDao', () => ({
 
 import { appEventBus } from '../../../utils/appEventBus'
 import { createKnowledgeBase, createKnowledgeEntry, createKnowledgeFolder } from '../create'
+import { setBotKnowledgeHost } from '../botBases'
 import { invalidateKnowledgeScan, listBundles } from '../scan'
 import {
   builtinRootOf,
@@ -677,5 +678,114 @@ describe('项目库的根：目录还不存在也是落点', () => {
     expect(recordChange).not.toHaveBeenCalled()
     expect(events).toEqual([])
     expect(disk()).toEqual(before)
+  })
+})
+
+// ────────────────────── bot 库（`bots/<key>`） ──────────────────────
+
+/**
+ * bot 库是 knowledge-shuvix 下以 bot 的 key 命名的目录：与项目库一样，第一次写进东西之前它不存在，侧栏 bot 组里的
+ * 「Bot 知识库」却总在 —— 所以它的根也是落点，前提是那个 key 此刻属于一个**生效的** bot（宿主 displayNameOf 给得出
+ * 名字；归档了的 bot 宿主不认，见 botService.test.ts 的 PSv-KB）。
+ */
+describe('bot 库', () => {
+  /** 宿主替身：认得的 key → 显示名 */
+  const hostKnows = (names: Record<string, string>): void =>
+    setBotKnowledgeHost({ keyOfSession: () => null, displayNameOf: (key) => names[key] })
+
+  afterEach(() => setBotKnowledgeHost(null))
+
+  it('CR-B1 bot 是保留名不让建（带自己的名字，trim 之后判）；只有全小写精确命中才算，Bot / BOT 照建', () => {
+    expect(createKnowledgeBase('bot')).toEqual({
+      success: false,
+      error: 'knowledge.errReserved:bot'
+    })
+    expect(createKnowledgeBase('  bot  ')).toEqual({
+      success: false,
+      error: 'knowledge.errReserved:bot'
+    })
+    expect(existsSync(userRoot)).toBe(false)
+    expect(events).toEqual([])
+
+    expect(createKnowledgeBase('Bot')).toEqual({ success: true, id: 'knowledge/Bot' })
+    rmSync(join(userRoot, 'Bot'), { recursive: true })
+    expect(createKnowledgeBase('BOT')).toEqual({ success: true, id: 'knowledge/BOT' })
+    expect(disk()).toEqual({ shuvix: [], user: ['BOT/'] })
+  })
+
+  it('CR-B2 认得的 bot、库目录还没有：新建条目建出目录与文件（元数据同 CR-1），记一条 Creation 变更；同标题再建落 -2', () => {
+    hostKnows({ k1: 'Diary Helper' })
+    expect(existsSync(join(root, 'bots'))).toBe(false)
+
+    expect(createKnowledgeEntry('bots/k1', 'My Note')).toEqual({
+      success: true,
+      id: 'bots/k1/my-note.md'
+    })
+    expect(readFileSync(join(root, 'bots', 'k1', 'my-note.md'), 'utf-8')).toBe(
+      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: My Note\nstatus: draft\n---\n\n'
+    )
+    expect(recordChange).toHaveBeenCalledTimes(1)
+    expect(recordChange).toHaveBeenCalledWith({
+      bundle: 'bots/k1',
+      path: 'my-note.md',
+      op: 'Creation',
+      actor: 'human'
+    })
+
+    expect(createKnowledgeEntry('bots/k1', 'My Note')).toEqual({
+      success: true,
+      id: 'bots/k1/my-note-2.md'
+    })
+  })
+
+  it('CR-B2 认得的 bot、库目录还没有：新建文件夹建出库目录与那一层，广播一次 knowledge.changed，不进变更管线', () => {
+    hostKnows({ k1: 'Diary Helper' })
+    expect(createKnowledgeFolder('bots/k1', 'sub')).toEqual({ success: true, id: 'bots/k1/sub' })
+    expect(events).toEqual([{ type: 'knowledge.changed' }])
+    expect(recordChange).not.toHaveBeenCalled()
+    expect(disk()).toEqual({ shuvix: ['bots/', 'bots/k1/', 'bots/k1/sub/'], user: [] })
+  })
+
+  it('CR-B3 不是落点：不认得的 key（含归档了的 bot —— 宿主只认生效的）/ 宿主没注入 / 容器本身 / 库目录不在时的更深一层 / 隐藏段 / `..` —— errNoSuchDir，不建任何目录', () => {
+    const tryAll = (): void => {
+      for (const id of ['bots/k1', 'bots', 'bots/k1/sub', 'bots/.k1', 'bots/k1/..']) {
+        expect(createKnowledgeFolder(id, 'x'), `folder @ ${id}`).toEqual({
+          success: false,
+          error: NO_SUCH_DIR
+        })
+        expect(createKnowledgeEntry(id, 'X'), `entry @ ${id}`).toEqual({
+          success: false,
+          error: NO_SUCH_DIR
+        })
+      }
+    }
+    // 宿主没注入
+    tryAll()
+    // 宿主在，但 k1 不是生效 bot 的 key（归档了的 bot 在宿主那里就是这样）
+    hostKnows({ other: 'Other' })
+    tryAll()
+    // 宿主认得 k1：根是落点，但更深一层 / 容器 / 隐藏段 / `..` 照旧拒
+    hostKnows({ k1: 'Diary Helper', '.k1': 'Hidden' })
+    for (const id of ['bots', 'bots/k1/sub', 'bots/.k1', 'bots/k1/..']) {
+      expect(createKnowledgeFolder(id, 'x'), `folder @ ${id}`).toEqual({
+        success: false,
+        error: NO_SUCH_DIR
+      })
+    }
+    expect(recordChange).not.toHaveBeenCalled()
+    expect(events).toEqual([])
+    expect(existsSync(join(root, 'bots'))).toBe(false)
+  })
+
+  it('CR-B4 库目录在了之后与任何 bundle 一样：深一层照常收；库名大小写对不上 → errNoSuchDir', () => {
+    mkdirSync(join(root, 'bots', 'k1', 'sub'), { recursive: true })
+    invalidateKnowledgeScan()
+    hostKnows({ k1: 'Diary Helper' })
+
+    expect(createKnowledgeEntry('bots/k1/sub', 'X')).toEqual({
+      success: true,
+      id: 'bots/k1/sub/x.md'
+    })
+    expect(createKnowledgeEntry('bots/K1', 'Y')).toEqual({ success: false, error: NO_SUCH_DIR })
   })
 })

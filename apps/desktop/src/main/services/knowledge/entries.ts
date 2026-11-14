@@ -23,6 +23,7 @@ import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
 import { toKnowledgeEntryFromNote } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import {
+  BOTS_CONTAINER,
   PROJECTS_CONTAINER,
   builtinBaseDisplayName,
   bundleDir,
@@ -30,9 +31,10 @@ import {
   getUserKnowledgeRoot,
   isBuiltinBundle
 } from './knowledgePaths'
+import { botDisplayNameOf } from './botBases'
 import { listBundleDirs, scanAllBundles } from './scan'
 
-/** 项目库 bundle id → 项目当前的名字（查不到的不给）；内置库 → 产品名 */
+/** 项目库 bundle id → 项目当前的名字；bot 库 → bot 当前的显示名（查不到的都不给）；内置库 → 产品名 */
 function bundleDisplayNames(bundles: readonly string[]): Record<string, string> {
   const names: Record<string, string> = {}
   for (const bundle of bundles) {
@@ -41,6 +43,11 @@ function bundleDisplayNames(bundles: readonly string[]): Record<string, string> 
       continue
     }
     const [container, id] = bundle.split('/')
+    if (container === BOTS_CONTAINER && id) {
+      const name = botDisplayNameOf(id)?.trim()
+      if (name) names[bundle] = name
+      continue
+    }
     if (container !== PROJECTS_CONTAINER || !id) continue
     const name = projectDao.findById(id)?.name?.trim()
     if (name) names[bundle] = name

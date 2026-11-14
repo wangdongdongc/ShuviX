@@ -32,6 +32,8 @@ vi.mock('../../../dao/sessionDao', () => ({
 import { projectDao } from '../../../dao/projectDao'
 import { sessionDao } from '../../../dao/sessionDao'
 import { listKnowledgeMentionEntries } from '../mentionEntries'
+import { setBotKnowledgeHost } from '../botBases'
+import { baseNameFromEntryPath } from '@shuvix/chat-protocol/knowledge'
 import { invalidateKnowledgeScan } from '../scan'
 import { PROJECTS, builtinRootOf, makeTempRoot, seedConcept, userRootOf } from './fixture'
 
@@ -159,5 +161,76 @@ describe('listKnowledgeMentionEntries', () => {
     session({ projectId: '__agents__' })
 
     expect(await listKnowledgeMentionEntries('s1')).toEqual([])
+  })
+})
+
+describe('listKnowledgeMentionEntries —— bot 自己的库', () => {
+  /** s1 → k1；显示名由用例给 */
+  const host = (names: Record<string, string>): void =>
+    setBotKnowledgeHost({
+      keyOfSession: (sid) => (sid === 's1' ? 'k1' : null),
+      displayNameOf: (key) => names[key]
+    })
+
+  afterEach(() => setBotKnowledgeHost(null))
+
+  it('ME-B1 bot 会话列出 bot 库的条目：baseName bot、显示名是 bot 的名字（trim）；有工作项目时排在项目库之后；每条的指针与条目 id 一致', async () => {
+    seedEntry(root, 'bots/k1/a.md', 'Ay')
+    seedEntry(root, 'bots/k1/sub/b.md', 'Bee')
+    seedEntry(root, 'projects/p1/p.md', 'Pee')
+    host({ k1: '  Diary Helper ' })
+    session({ projectId: null, settings: { bot: 'diary', workProject: 'p1' } })
+
+    const listed = await listKnowledgeMentionEntries('s1')
+    expect(listed.map((e) => e.path)).toEqual([
+      'projects/p1/p.md',
+      'bots/k1/a.md',
+      'bots/k1/sub/b.md'
+    ])
+    expect(listed.filter((e) => e.baseName === 'bot')).toEqual([
+      {
+        path: 'bots/k1/a.md',
+        baseName: 'bot',
+        bundlePath: '/a.md',
+        title: 'Ay',
+        description: '',
+        bundleLabel: 'Diary Helper'
+      },
+      {
+        path: 'bots/k1/sub/b.md',
+        baseName: 'bot',
+        bundlePath: '/sub/b.md',
+        title: 'Bee',
+        description: '',
+        bundleLabel: 'Diary Helper'
+      }
+    ])
+    for (const e of listed) {
+      expect(baseNameFromEntryPath(e.path)).toEqual({
+        baseName: e.baseName,
+        bundlePath: e.bundlePath
+      })
+    }
+  })
+
+  it('ME-B2 显示名为空白 / 没有 → 显示名退回 `bot`；bot 库目录不在 → 没有它的条目且不建；不是 bot 会话 → 磁盘上的 bots/ 不进来', async () => {
+    seedEntry(root, 'bots/k1/a.md', 'Ay')
+    session({ projectId: null, settings: { bot: 'diary' } })
+
+    for (const names of [{ k1: '   ' }, {}] as Array<Record<string, string>>) {
+      host(names)
+      expect((await listKnowledgeMentionEntries('s1')).map((e) => e.bundleLabel)).toEqual(['bot'])
+    }
+
+    // 不是 bot 会话：宿主回 null
+    setBotKnowledgeHost({ keyOfSession: () => null, displayNameOf: () => 'Diary Helper' })
+    expect(await listKnowledgeMentionEntries('s1')).toEqual([])
+
+    // bot 库目录不在
+    rmSync(join(root, 'bots'), { recursive: true, force: true })
+    invalidateKnowledgeScan()
+    host({ k1: 'Diary Helper' })
+    expect(await listKnowledgeMentionEntries('s1')).toEqual([])
+    expect(existsSync(join(root, 'bots'))).toBe(false)
   })
 })

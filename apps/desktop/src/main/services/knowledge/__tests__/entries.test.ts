@@ -42,6 +42,7 @@ vi.mock('i18next', () => ({
 }))
 
 import { listKnowledgeEntries } from '../entries'
+import { setBotKnowledgeHost } from '../botBases'
 import { builtinBaseDisplayName } from '../knowledgePaths'
 import { invalidateKnowledgeScan } from '../scan'
 import {
@@ -542,5 +543,75 @@ describe('listKnowledgeEntries', () => {
     expect(listed.dirs).toEqual(['projects/p1', 'knowledge/notes'])
     expect(listed.bundleNames).toEqual({ 'projects/p1': 'Live Name' })
     expect(existsSync(builtinRootOf(root))).toBe(false)
+  })
+})
+
+// ────────────────────── bot 库（`bots/<key>`）进清单 ──────────────────────
+
+describe('listKnowledgeEntries —— bot 库', () => {
+  /** 宿主替身：key → 显示名 */
+  const hostWith = (names: Record<string, string | undefined>): void =>
+    setBotKnowledgeHost({ keyOfSession: () => null, displayNameOf: (key) => names[key] })
+
+  afterEach(() => setBotKnowledgeHost(null))
+
+  it('EN-B1 bot 库与项目库一样进清单：path / bundle 用 `bots/<key>`；dirs 给库与子目录（空的也给），容器 bots 不占行；bundleNames 取 bot 当前显示名（trim）；项目库名字照旧来自 projectDao', async () => {
+    seedConcept(root, 'bots/k1/a.md', ['type: Memory', 'title: A'])
+    seedConcept(root, 'bots/k1/sub/b.md', ['type: Memory', 'title: B'])
+    mkdirSync(join(root, 'bots', 'k1', 'empty'), { recursive: true })
+    seedConcept(root, 'projects/p1/c.md', ['type: Memory', 'title: C'])
+    state.projects = { p1: { name: 'Proj' } }
+    hostWith({ k1: '  Diary Helper ' })
+
+    const listed = await listKnowledgeEntries()
+    const bot = listed.entries.filter((e) => e.bundle === 'bots/k1')
+    expect(bot.map((e) => e.path)).toEqual(['bots/k1/a.md', 'bots/k1/sub/b.md'])
+    expect(listed.dirs).toEqual(expect.arrayContaining(['bots/k1', 'bots/k1/sub', 'bots/k1/empty']))
+    expect(listed.dirs).not.toContain('bots')
+    expect(listed.bundleNames).toEqual({ 'projects/p1': 'Proj', 'bots/k1': 'Diary Helper' })
+  })
+
+  it('EN-B2 bot 库拿不到名字时 bundleNames 不给它：key 不认识 / 名字全是空白 / 宿主没注入 / 宿主抛错（清单照常）', async () => {
+    seedConcept(root, 'bots/k1/a.md', ['type: Memory', 'title: A'])
+
+    hostWith({})
+    expect((await listKnowledgeEntries()).bundleNames).toEqual({})
+    hostWith({ k1: '   ' })
+    expect((await listKnowledgeEntries()).bundleNames).toEqual({})
+    setBotKnowledgeHost(null)
+    expect((await listKnowledgeEntries()).bundleNames).toEqual({})
+    setBotKnowledgeHost({
+      keyOfSession: () => null,
+      displayNameOf: () => {
+        throw new Error('boom')
+      }
+    })
+    const listed = await listKnowledgeEntries()
+    expect(listed.bundleNames).toEqual({})
+    expect(listed.entries.map((e) => e.path)).toEqual(['bots/k1/a.md'])
+  })
+
+  it('EN-B2 项目库的 id 恰好等于某个 bot key：只拿 bot 库去问 bot 的显示名', async () => {
+    seedConcept(root, 'projects/k1/a.md', ['type: Memory', 'title: P'])
+    seedConcept(root, 'bots/k1/b.md', ['type: Memory', 'title: B'])
+    state.projects = { k1: { name: 'Proj K1' } }
+    const displayNameOf = vi.fn((key: string) => (key === 'k1' ? 'Bot K1' : undefined))
+    setBotKnowledgeHost({ keyOfSession: () => null, displayNameOf })
+
+    const listed = await listKnowledgeEntries()
+    expect(listed.bundleNames).toEqual({ 'projects/k1': 'Proj K1', 'bots/k1': 'Bot K1' })
+    expect(displayNameOf.mock.calls).toEqual([['k1']])
+  })
+
+  it('EN-B3 清单只读：bot 库里不多出 index.md / .git；宿主认识、磁盘上没有目录的 key 不出现', async () => {
+    seedConcept(root, 'bots/k1/a.md', ['type: Memory', 'title: A'])
+    hostWith({ k1: 'Diary Helper', k2: 'Ghost' })
+    const before = treeOf(root)
+
+    const listed = await listKnowledgeEntries()
+    expect(treeOf(root)).toEqual(before)
+    expect(listed.dirs.filter((d) => d.startsWith('bots/k2'))).toEqual([])
+    expect(listed.entries.filter((e) => e.bundle === 'bots/k2')).toEqual([])
+    expect(listed.bundleNames).not.toHaveProperty('bots/k2')
   })
 })

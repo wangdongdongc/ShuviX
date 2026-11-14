@@ -23,6 +23,7 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import i18next from 'i18next'
 import {
+  KNOWLEDGE_BOTS_DIR,
   KNOWLEDGE_BUILTIN_DIR,
   KNOWLEDGE_PROJECTS_DIR,
   KNOWLEDGE_USER_ROOT_DIR
@@ -51,6 +52,19 @@ export function getBuiltinKnowledgeRoot(): string {
 
 /** 项目 bundle 的容器目录（knowledge-shuvix 根相对） */
 export const PROJECTS_CONTAINER = KNOWLEDGE_PROJECTS_DIR
+
+/** bot bundle 的容器目录（knowledge-shuvix 根相对） */
+export const BOTS_CONTAINER = KNOWLEDGE_BOTS_DIR
+
+/** bot 库 key（chat-protocol `botKnowledgeKey`）→ bundle id（`bots/<key>`） */
+export function botBundleId(key: string): string {
+  return `${BOTS_CONTAINER}/${key}`
+}
+
+/** bundle id / 条目 id 是否指向 bot 库 */
+export function isBotBundle(id: string): boolean {
+  return normalizeBundlePath(id).split('/')[0] === BOTS_CONTAINER
+}
 
 /** 用户库 bundle id 的首段 */
 export const USER_CONTAINER = KNOWLEDGE_USER_ROOT_DIR
@@ -161,7 +175,7 @@ export function toBuiltinRelative(absPath: string): string | null {
 
 /**
  * 绝对路径 → 它所属的 bundle id 与 bundle 内相对路径；不在任何 bundle 内返回 null。
- * 项目库的边界是 `projects/<projectId>`（容器目录本身与更浅的层级都不是 bundle）；
+ * 项目库的边界是 `projects/<projectId>`、bot 库是 `bots/<key>`（容器目录本身与更浅的层级都不是 bundle）；
  * 用户库的边界是用户根下的第一层子目录（用户根下的散文件不属于任何库）；
  * 内置库的边界是 `<库名>/<语言>`，且只认**此刻生效**的那个语言目录 —— 另一种语言的同名文件不属于任何
  * bundle（写钩子与变更管线据此绕开它们，笔记本也只打开生效的一版）。
@@ -174,7 +188,11 @@ export function locateBundle(absPath: string): { bundle: string; rel: string } |
   const shuvixRel = toShuvixRelative(absPath)
   if (shuvixRel !== null) {
     const segs = normalizeBundlePath(shuvixRel).split('/')
-    if (segs.length < 3 || segs[0] !== PROJECTS_CONTAINER || hasHiddenSegment(segs.slice(1))) {
+    if (
+      segs.length < 3 ||
+      (segs[0] !== PROJECTS_CONTAINER && segs[0] !== BOTS_CONTAINER) ||
+      hasHiddenSegment(segs.slice(1))
+    ) {
       return null
     }
     return { bundle: `${segs[0]}/${segs[1]}`, rel: segs.slice(2).join('/') }

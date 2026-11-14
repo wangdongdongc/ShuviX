@@ -30,6 +30,7 @@ import {
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
 import { boundBotOf } from '@shuvix/chat-protocol/botSession'
+import { botKnowledgeKey } from '@shuvix/chat-protocol/knowledge'
 import { parseObjectId } from '@shuvix/chat-protocol/mdMeta'
 import { getDefaultBotsDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
@@ -110,6 +111,10 @@ class BotService {
   } | null = null
   /** identityOf 的短时缓存（名字 → 对象 id）：改了 id 的文件最多晚 IDENTITY_CACHE_MS 生效 */
   private readonly identityCache = new Map<string, { id: string; at: number }>()
+  /** knowledgeKeyOfSession 的短时缓存（名字 → bot 库 key；没有为 null），口径同 identityCache */
+  private readonly knowledgeKeyCache = new Map<string, { key: string | null; at: number }>()
+  /** displayNameOfKnowledgeKey 的短时缓存（key → 生效 bot 的显示名） */
+  private knowledgeNamesCache: { names: Map<string, string>; at: number } | null = null
   /** fileOf 的短时缓存（名字 → 生效那份文件的绝对路径；不在为 null），口径同 identityCache */
   private readonly fileCache = new Map<string, { file: string | null; at: number }>()
 
@@ -292,6 +297,48 @@ class BotService {
   }
 
   /**
+   * 一份 bot 文件自己的知识库 key（2026-11-14，chat-protocol `botKnowledgeKey`）：按它的身份算，与安全策略的 `subject.bot`
+   * 同一个值 —— 对象 id，没有（或冒用了 ShuviX 没写过的内置 id）就是名字
+   */
+  knowledgeKeyForFile(
+    file: Pick<ParsedBotFile, 'name' | 'objectId'>,
+    basePath: string
+  ): string | null {
+    return botKnowledgeKey(this.identityForFile(file, basePath))
+  }
+
+  /** 一条会话**自己**绑定的 bot 的知识库 key；不是 bot 会话 / bot 文件不在 → null */
+  knowledgeKeyOfSession(sessionId: string): string | null {
+    const name = boundBotOf(sessionRecords.pick(sessionId, ['settings'])?.settings)
+    if (!name) return null
+    // 权限表每次被读都会经 enabledTargets 问到这里：同一个名字短时复用上一次的结果（与 identityOf 同策）
+    const now = Date.now()
+    const cached = this.knowledgeKeyCache.get(name)
+    if (cached && now - cached.at < IDENTITY_CACHE_MS) return cached.key
+    const entry = this.get(name)
+    const key = entry ? this.knowledgeKeyForFile(entry.file, entry.basePath) : null
+    this.knowledgeKeyCache.set(name, { key, at: now })
+    return key
+  }
+
+  /**
+   * 某个知识库 key 此刻属于哪个**生效的** bot —— 显示名；没有 → undefined（归档了的 bot 的库还在磁盘上，但侧栏不画它、
+   * 也不往它根里新建）。权限表每次被读都会经 enabledTargets 问到这里：整张表短时复用（与 identityOf 同策）
+   */
+  displayNameOfKnowledgeKey(key: string): string | undefined {
+    const now = Date.now()
+    if (!this.knowledgeNamesCache || now - this.knowledgeNamesCache.at >= IDENTITY_CACHE_MS) {
+      const names = new Map<string, string>()
+      for (const entry of this.listAll()) {
+        const k = this.knowledgeKeyForFile(entry.file, entry.basePath)
+        if (k && !names.has(k)) names.set(k, entry.file.displayName || entry.file.name)
+      }
+      this.knowledgeNamesCache = { names, at: now }
+    }
+    return this.knowledgeNamesCache.names.get(key)
+  }
+
+  /**
    * 一条会话绑定的那份 bot 文件的绝对路径（会话权限表的 `bot` 派生行 —— bot 往里记偏好不用问）；不是 bot 会话、
    * 或绑定的 md 已不在 → null。不记日志、同一个名字短时复用上一次扫描：权限表每次被读都会对账一次
    */
@@ -312,6 +359,8 @@ class BotService {
   ): void {
     this.trustStore = store
     this.identityCache.clear()
+    this.knowledgeKeyCache.clear()
+    this.knowledgeNamesCache = null
   }
 
   /** 内置 id → ShuviX 写入的那份文件（没注入 / 读坏了按空表：宁可不认，不可错认） */
@@ -335,6 +384,8 @@ class BotService {
     if (Object.keys(kept).length === Object.keys(trusted).length) return
     this.trustStore?.set(BUILTIN_FILES_KEY, JSON.stringify(kept))
     this.identityCache.clear()
+    this.knowledgeKeyCache.clear()
+    this.knowledgeNamesCache = null
   }
 
   // ─── 随应用提供的 bot ──────────────────────────────────
@@ -667,6 +718,8 @@ class BotService {
     this.namesByPath.delete(target.basePath)
     this.fileCache.clear()
     this.identityCache.clear()
+    this.knowledgeKeyCache.clear()
+    this.knowledgeNamesCache = null
     log.info(`已归档 bot "${name}" → ${dest}`)
     appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
@@ -694,6 +747,8 @@ class BotService {
     }
     this.fileCache.clear()
     this.identityCache.clear()
+    this.knowledgeKeyCache.clear()
+    this.knowledgeNamesCache = null
     appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
   }

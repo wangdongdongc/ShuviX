@@ -120,7 +120,7 @@ talking about, and you never pad feedback with praise.
 | `shuvix-displayName`  | string    | no       | Label in the sidebar and the session header. Defaults to `name`. Must be a string if present.                            |
 | `description`         | string    | no       | One line for the list and the new-bot-chat picker. Purely display. Must be a string if present.                          |
 | `shuvix-bot-on`       | binding list | no | Trigger bindings (experimental): `[{ trigger, when?, message }]` — when to wake this bot and what to tell it. See "Trigger bindings" below. Absent = it speaks only when someone talks to it. |
-| `shuvix-id`           | string    | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file. |
+| `shuvix-id`           | string    | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. With it, it also names the bot's own knowledge base (see "The body"). Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file. |
 
 Everything else is ignored, with one exception: the retired v1 key `shuvix-bot-pipeline` (from
 the pipeline era, when a bot named a workflow) still parses but earns a **warning asking you to
@@ -152,8 +152,27 @@ injection lasts for the whole conversation.
   learns them — one the user states, a correction, the same choice made again; only what the
   person showed, never its own rules or anything it did not see happen — keeps the scope it holds in, writes an inferred one as such, and tidies on every edit (by topic, merging
   near-duplicates, replacing what is contradicted, deleting what turned out wrong). It is an
-  organized picture of the person (each entry the preference and its scope, not how it was learned), not a log of conversations or of the work done; facts about a
-  project go to its knowledge base. To change that, override the `bot` agent.
+  organized picture of the person (each entry the preference and its scope, not how it was learned), not a log of conversations or of the work done; how a
+  project is set up goes to the project's knowledge base, and anything else worth looking up later
+  goes to the bot's own knowledge base: what works on this machine, and material the user asks it to
+  keep (notes, facts, lists, explanations), even about what they are learning or doing. The file keeps
+  at most one line about that ("studying for the JLPT N3"), never the material itself. To change that,
+  override the `bot` agent.
+- **The bot's own knowledge base** (since 2026-11-14 every bot has one) is
+  `~/.shuvix/knowledge-shuvix/bots/<key>/`, `<key>` taken from the bot's identity — the same value a
+  policy sees as `subject.bot`: a UUID `shuvix-id` as is (renaming keeps the base, a copy carrying the
+  same id shares it), the diary bot's `bot:builtin:daily` as `builtin-daily`, and for a file without a
+  `shuvix-id` — such as a bot an agent wrote, like the `recap` example above — `name-<name>`. Renaming
+  such a bot changes its identity, so it moves to a new, empty base, just as a companion policy written
+  by name stops matching; ShuviX does not add a `shuvix-id` to such a file, since that would change
+  `subject.bot` and break those policies. Characters a folder name cannot hold become `-`, and the
+  folder appears with the first entry. In the
+  `knowledge` tool it is the reserved name `bot`, always on in the bot's own sessions (scheduled runs
+  included) and for the agents they dispatch, but not in a sub-session the bot opens; it is listed after
+  `project` and is never something to tick (see the `knowledge-entry` entry). In the sidebar it is the **Bot knowledge
+  base** folder inside the bot's group, never in the Knowledge group. A conversation started before the
+  bot had a base keeps its system prompt, which does not list `bot` until it is rebuilt; the tool
+  reaches the base at once.
 
 ## Trigger bindings (experimental)
 
@@ -218,7 +237,8 @@ shuvix-policy-rules:
 
 The tool result of writing a bot file that has a binding includes an **unattended access check**. It runs the real
 policies as one of the bot's scheduled runs would meet them (its root agent, in the binding's project or a temporary
-folder, with nothing granted in the permission table) and says, for reading and messaging other sessions, for each
+folder, with nothing granted in the permission table — the working folder, the bot file, the project's knowledge
+base and the bot's own count as the session's own, as in a real run) and says, for reading and messaging other sessions, for each
 path named in the policies that name the bot, and for a few places that should still ask (the home folder outside
 the working folder, outside the home folder, files next to the named paths), whether it is allowed, goes to the
 automatic review or would stop the run. It also says how a policy refers to this bot — its `shuvix-id`, or its name
@@ -277,7 +297,7 @@ Its root persona is the builtin **`bot`** base, whose tool list is deliberately 
 `read, ls, grep, glob, ask, suggest, update_plan, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions, or allow the bot's request through `tool_search` — that
-is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with
+is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Its own knowledge base is a read-write row too, so what it records there never asks, scheduled runs included; every change is committed to the base's own git. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write, the bot's own file included, reach the user — see `policy-md`).
 Like `notebook`, the base lists the `project_prompt` block but neither instruction-file block
@@ -295,7 +315,8 @@ Like `notebook`, the base lists the `project_prompt` block but neither instructi
 - **Archiving** a bot (its menu → Archive) moves its file into `~/.shuvix/bots/archived/`: the bot and its sessions
   leave the sidebar and the calendar, its bindings stop firing, and Settings → Archived → Bots restores it.
   **Deleting** happens there, like a project, and takes the bot's sessions (sub-sessions included) with it — unless
-  another file still holds the same name, since sessions are bound by name.
+  another file still holds the same name, since sessions are bound by name. Neither touches the bot's knowledge
+  base: archiving keeps it for a restore, and deleting leaves it on disk, the way a deleted project's base stays.
 - A bot file deleted **outside ShuviX** leaves its sessions in a greyed group under the bot's name, whose menu deletes
   them; a file with that name coming back takes them over again.
 - Same-name copies follow the rule in the `shuvix-files` entry — the losing copies are shown

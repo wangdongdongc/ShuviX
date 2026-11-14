@@ -4,6 +4,7 @@ import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import { sessionRecords } from '../services/sessionRecords'
 import { defineHandler } from './registry'
 import { botService, type BotEntry } from '../services/botService'
+import { KNOWLEDGE_BOTS_DIR } from '@shuvix/chat-protocol/knowledge'
 import { openRegistryNote } from '../services/registryNotes'
 import { sessionService } from '../services/sessionService'
 
@@ -33,6 +34,13 @@ interface BotListRow {
   description: string
   basePath: string
   fileName: string
+  /** 这个 bot 自己的知识库 bundle id（`bots/<key>`）；身份算不出 key 就没有 */
+  knowledgeBundle?: string
+}
+
+function withKnowledgeBundle(b: BotEntry): { knowledgeBundle?: string } {
+  const key = botService.knowledgeKeyForFile(b.file, b.basePath)
+  return key ? { knowledgeBundle: `${KNOWLEDGE_BOTS_DIR}/${key}` } : {}
 }
 
 /**
@@ -55,7 +63,9 @@ export function registerBotHandlers(): void {
       displayName: b.file.displayName,
       description: b.file.description,
       basePath: b.basePath,
-      fileName: basename(b.basePath)
+      fileName: basename(b.basePath),
+      // 这个 bot 自己的知识库（侧栏 bot 组里的「Bot 知识库」文件夹）
+      ...withKnowledgeBundle(b)
     })
     return {
       bots: valid.map(info),

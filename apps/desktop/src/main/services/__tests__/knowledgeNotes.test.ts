@@ -776,3 +776,43 @@ describe('syncKnowledgeBuiltinProject', () => {
     expect(carrier?.path).toBe(builtinLangDir('zh'))
   })
 })
+
+/**
+ * bot 自己的库（`bots/<key>`，在 knowledge-shuvix 根下）与项目库共用承载项目 `__knowledge__`：notebookPath 就是
+ * 条目 id。容器里的散文件、库目录本身照旧落不进任何 bundle。
+ */
+describe('openKnowledgeNote —— bot 库', () => {
+  it('KN-B1 bot 库条目挂在 `__knowledge__` 下、notebookPath = 条目 id；归一写法复用同一条会话；库目录本身 / 容器里的散文件拒绝且什么都不碰', async () => {
+    const entry = 'bots/k1/sub/x.md'
+    await openKnowledgeNote(entry)
+    expect(sessionService.create).toHaveBeenCalledWith({
+      projectId: KNOWLEDGE_PROJECT_ID,
+      notebookPath: entry,
+      title: 'x'
+    })
+
+    const existing = {
+      id: 's-bot',
+      title: 'x',
+      projectId: KNOWLEDGE_PROJECT_ID,
+      parentId: null,
+      settings: { notebookPath: entry },
+      createdAt: 1,
+      updatedAt: 1
+    } as Session
+    vi.mocked(sessionDao.findByProjectAndNotebookPath).mockImplementation((projectId, path) =>
+      projectId === KNOWLEDGE_PROJECT_ID && path === entry ? existing : undefined
+    )
+    expect(await openKnowledgeNote(`/${entry}/`)).toBe(existing)
+    expect(sessionService.create).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    for (const path of ['bots/k1', 'bots/x.md', 'bots/.k1/x.md', 'bots/k1/.git/x.md']) {
+      await expect(openKnowledgeNote(path), path).rejects.toThrow(/Invalid knowledge path/)
+    }
+    expect(projectDao.findById).not.toHaveBeenCalled()
+    expect(projectDao.insert).not.toHaveBeenCalled()
+    expect(sessionDao.findByProjectAndNotebookPath).not.toHaveBeenCalled()
+    expect(sessionService.create).not.toHaveBeenCalled()
+  })
+})

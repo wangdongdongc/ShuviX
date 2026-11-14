@@ -88,6 +88,7 @@ vi.mock('@shuvix/chat-ui', async () => {
 import { ProjectSessionGroups, type ProjectSessionGroupsProps } from './ProjectSessionGroups'
 import type { BotsSectionCaps } from './ProjectSessionGroups'
 import type { BotGroupAdapter, BotGroupItem, BotRegistry } from './useBotRegistry'
+import type { KnowledgeGroupAdapter, KnowledgeListing } from './KnowledgeTreeView'
 import { ContextMenuProvider } from '../contextmenu/ContextMenuProvider'
 
 declare global {
@@ -843,5 +844,97 @@ describe('PG-8 找不到 / 归档 / 还没扫回来', () => {
     expect(groupEl('scout').hasAttribute('data-bot-group-pending')).toBe(false)
     expect(groupEl('scout').querySelector('[data-group-add]')).not.toBeNull()
     expect(container.querySelector('[data-bot-missing-group]')).toBeNull()
+  })
+})
+
+// ─── PG-KB：每个 bot 自己的知识库 ─────────────────────────────────────
+
+/**
+ * 注入 `projectKnowledge` 时，每个带 `knowledgeBundle`（宿主随 bot 清单给）的 bot 组里多一行「Bot knowledge base」
+ * （`[data-bot-knowledge=<bot 名>]`）；没有 bundle 的 bot、不注入能力、日历里都不画；组折叠时不扫。
+ * 项目组 p1 一律传成折叠的，免得它自己的「项目知识库」也去扫、把 list 的计数搅进来。
+ */
+describe('PG-KB Bot 知识库', () => {
+  const EMPTY_LISTING: KnowledgeListing = {
+    entries: [],
+    root: '/kb-shuvix',
+    userRoot: '/kb-user',
+    dirs: [],
+    bundleNames: {}
+  }
+  const knowledgeAdapter = (): KnowledgeGroupAdapter & {
+    list: Mock<() => Promise<KnowledgeListing>>
+  } => ({
+    list: vi.fn(async () => EMPTY_LISTING),
+    open: vi.fn(),
+    openFolder: vi.fn()
+  })
+  const withKb = (name: string, bundle: string): BotGroupItem => ({
+    ...bot(name),
+    knowledgeBundle: bundle
+  })
+  const folderIn = (name: string): HTMLElement | null =>
+    groupEl(name).querySelector<HTMLElement>(`[data-bot-knowledge="${name}"]`)
+
+  it('PG-KB1 有库的 bot 组里一行「Bot knowledge base」（文案与悬停提示），没库的没有；还没有会话的 bot 同时有它和「New Chat」', async () => {
+    store.sessions = [botRow('b1', 'plain')]
+    const projectKnowledge = knowledgeAdapter()
+    await mount(
+      {
+        adapter: makeAdapter(registryOf({ bots: [withKb('scout', 'bots/k1'), bot('plain')] }))
+      },
+      { projectKnowledge, collapsed: new Set(['p1']) }
+    )
+    await click(toggleButtonOf('scout'))
+    await click(toggleButtonOf('plain'))
+
+    const folder = folderIn('scout')!
+    expect(folder).not.toBeNull()
+    expect(folder.textContent).toContain(S.botKnowledge)
+    expect(folder.getAttribute('title')).toBe(S.botKnowledgeHint)
+    expect(groupEl('scout').querySelector('[data-bot-new-chat]')).not.toBeNull()
+    expect(container.querySelector('[data-bot-knowledge="plain"]')).toBeNull()
+    expect(container.querySelectorAll('[data-bot-knowledge]')).toHaveLength(1)
+  })
+
+  it('PG-KB2 不注入 projectKnowledge → 哪儿都没有；日历（hideEmptyGroups）里也没有', async () => {
+    store.sessions = [botRow('b1', 'scout')]
+    const registry = registryOf({ bots: [withKb('scout', 'bots/k1')] })
+    await mount({ adapter: makeAdapter(registry) }, { collapsed: new Set(['p1']) })
+    await click(toggleButtonOf('scout'))
+    expect(container.querySelector('[data-bot-knowledge]')).toBeNull()
+
+    // 重新挂一棵（不带上一棵的展开状态）：日历里组缺省摊开
+    act(() => root.unmount())
+    root = createRoot(container)
+    const projectKnowledge = knowledgeAdapter()
+    await mount(
+      { adapter: makeAdapter(registry) },
+      {
+        projectKnowledge,
+        collapsed: new Set(['p1']),
+        hideEmptyGroups: true,
+        sessionsOverride: store.sessions as never
+      }
+    )
+    expect(groupOrder()).toEqual(['scout'])
+    expect(isCollapsed(groupEl('scout'))).toBe(false)
+    expect(rowIds(groupEl('scout'))).toEqual(['b1'])
+    expect(container.querySelector('[data-bot-knowledge]')).toBeNull()
+    expect(projectKnowledge.list).not.toHaveBeenCalled()
+  })
+
+  it('PG-KB2 bot 组收着时不扫；展开后扫一次', async () => {
+    store.sessions = [botRow('b1', 'scout')]
+    const projectKnowledge = knowledgeAdapter()
+    await mount(
+      { adapter: makeAdapter(registryOf({ bots: [withKb('scout', 'bots/k1')] })) },
+      { projectKnowledge, collapsed: new Set(['p1']) }
+    )
+    expect(isCollapsed(groupEl('scout'))).toBe(true)
+    expect(projectKnowledge.list).not.toHaveBeenCalled()
+
+    await click(toggleButtonOf('scout'))
+    expect(projectKnowledge.list).toHaveBeenCalledTimes(1)
   })
 })

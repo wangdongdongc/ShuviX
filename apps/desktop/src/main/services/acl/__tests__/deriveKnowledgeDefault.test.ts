@@ -48,6 +48,7 @@ import {
   userRootOf
 } from '../../knowledge/__tests__/fixture'
 import { derivePathEntries, type DerivedPathEntry } from '../derive'
+import { setBotKnowledgeHost } from '../../knowledge/botBases'
 
 const PROJECT = {
   id: 'p1',
@@ -134,5 +135,47 @@ describe('ACL-D1 隐式的内置说明书在权限表里', () => {
     rmSync(builtinRootOf(root), { recursive: true, force: true })
     mockSession({ projectId: null })
     expect(knowledgeRows()).toEqual([])
+  })
+})
+
+/**
+ * bot 自己的库（2026-11-14）：bot 会话本身有一行可读写的 `bot`，排在项目库之后、说明书之前；目录还不存在也照列
+ * （第一次写进东西时才建）。子会话与别的会话宿主回 null，没有这一行。
+ */
+describe('ACL-B bot 自己的库在权限表里', () => {
+  beforeEach(() => {
+    setBotKnowledgeHost({
+      keyOfSession: (sid) => (sid === 's1' ? 'k1' : null),
+      displayNameOf: () => 'Diary Helper'
+    })
+  })
+  afterEach(() => setBotKnowledgeHost(null))
+
+  it('ACL-B1 有工作项目的 bot 会话：项目库 write → bot 库 write → 说明书 read；bot 那一行指向 bots/<key>（目录不必存在）', () => {
+    mockSession({ projectId: null, settings: { bot: 'diary', workProject: 'p1' } })
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    const rows = knowledgeRows()
+    expect(rows.map((e) => [e.sourceKey, e.access])).toEqual([
+      ['project', 'write'],
+      ['bot', 'write'],
+      ['shuvix', 'read']
+    ])
+    expect(rows[1]).toEqual({
+      source: 'knowledge',
+      sourceKey: 'bot',
+      target: join(root, 'bots', 'k1'),
+      access: 'write'
+    })
+  })
+
+  it('ACL-B2 宿主对这条会话回 null（bot 开的子会话、普通会话）：没有 bot 那一行', () => {
+    setBotKnowledgeHost({ keyOfSession: () => null, displayNameOf: () => 'Diary Helper' })
+    mockSession({ projectId: null, parentId: 'parent', settings: { workProject: 'p1' } })
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    expect(knowledgeRows().filter((e) => e.sourceKey === 'bot')).toEqual([])
+
+    mockSession({ projectId: null })
+    expect(knowledgeRows().map((e) => e.sourceKey)).toEqual(['shuvix'])
   })
 })

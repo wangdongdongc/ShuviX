@@ -48,6 +48,8 @@ export interface BotAccessDeps {
   projectsNamed(name: string): Array<{ id: string; name: string; path: string }>
   /** 项目知识库的目录（定时运行在项目里时它在会话权限表里，可读写） */
   projectKnowledgeDir(projectId: string): string
+  /** 这个 bot 自己的知识库目录（会话权限表里可读写的一行）；身份算不出 key → null */
+  botKnowledgeDir(bot: ParsedBotFile, basePath: string): string | null
   /** 临时运行的工作目录（每次运行一份新的；这里只要一个形状对的路径） */
   temporaryWorkspace(): string
   /** 一个目录进会话权限表的写法（realpath；`/`、覆盖家目录 → null），同权限表的派生行 */
@@ -116,6 +118,7 @@ export function createBotAccessChecker(deps: BotAccessDeps): BotAccessChecker {
       places.set(`project ${project.name}`, { workdir: project.path, projectId: project.id })
     }
     if (places.size === 0) return null
+    const botDir = deps.botKnowledgeDir(bot, basePath)
 
     // 试算给的变量与一条真的会话一样全（getDesktopBotRunTrial），所以「vars.x 宿主没给」只会是策略里拼错了变量名 ——
     // 照实报给 agent，不滤
@@ -130,7 +133,8 @@ export function createBotAccessChecker(deps: BotAccessDeps): BotAccessChecker {
       const dirs = [
         deps.aclDir(place.workdir),
         deps.aclDir(basePath),
-        place.projectId ? deps.aclDir(deps.projectKnowledgeDir(place.projectId)) : null
+        place.projectId ? deps.aclDir(deps.projectKnowledgeDir(place.projectId)) : null,
+        botDir ? deps.aclDir(botDir) : null
       ].filter((d): d is string => !!d)
       const trial = deps.trial(
         { bot: identity, workingDirectory: place.workdir, aclRead: dirs, aclWrite: dirs },

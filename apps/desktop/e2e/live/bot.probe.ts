@@ -6,7 +6,9 @@
  *   - 用户说出偏好、纠正它之后，它有没有**当场**把偏好记进自己那份文件，记的是不是带范围的、分好类的；
  *   - 「行，先这样」这种没有新东西的一轮，文件是不是没被乱动；
  *   - 新开一条会话，它会不会不等人问就照着记忆办（短答、pnpm）；
- *   - 换到项目之外的会话，只在「这个仓库」成立的偏好会不会被乱套。
+ *   - 换到项目之外的会话，只在「这个仓库」成立的偏好会不会被乱套；
+ *   - （2026-11-14，每个 bot 一个独立的知识库）替用户收集的资料、这台机器上的事实，记进它自己的库 `bot`，
+ *     不塞进 bot 文件；偏好照旧记在 bot 文件里。报告每一轮后列出 bot 库里的条目。
  *
  * 模型：`PROBE_PROVIDER=kimi`（缺省，`SHUVIX_PROBE_KIMI_KEY`）或 `deepseek`
  * （`SHUVIX_PROBE_COMPLETIONS_KEY` / `_MODEL`），key 只从 `~/.shuvix-probe.env`（或环境变量）来。
@@ -14,7 +16,14 @@
  *
  * 权限询问只放行不碰这台电脑真实主目录的（`settle`，见 redactionProbeShared.ts —— 2026-10-19 的事故）。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, it } from 'vitest'
@@ -41,6 +50,7 @@ import {
 const OUT = process.env.PROBE_OUT ?? join(tmpdir(), 'shuvix-bot-probe.md')
 const LANG = process.env.PROBE_LANG ?? 'zh'
 const BOT = 'xiaozhou'
+const BOT_ID = '01937a6e-3b7c-7d2e-9f10-4a5b6c7d8e9f'
 
 const BOT_BODY = [
   '## 我是谁',
@@ -116,6 +126,16 @@ const TURNS: Turn[] = [
     label: 'C1 项目外的会话：范围有没有乱套',
     session: 'C',
     text: '随便问一下，Python 里怎么读一个 JSON 文件？'
+  },
+  {
+    label: 'C2 替用户收集的资料（该进 bot 库，不进 bot 文件）',
+    session: 'C',
+    text: '我在备考日语 N3，有几个语法老搞混，帮我记着，以后问你的时候用得上：～ようにする 是「努力做到、养成习惯」；～ことにする 是「自己决定」；～ことになる 是「（非自己决定地）定下来、结果变成」。'
+  },
+  {
+    label: 'C3 这台机器上的事实（该进 bot 库）',
+    session: 'C',
+    text: '顺便告诉你，这台电脑上 Python 是 3.12，装在 /opt/homebrew/bin/python3，系统自带那个 3.9 别用。'
   }
 ]
 
@@ -217,8 +237,17 @@ it(
     const botFile = writeBotMd(app, BOT, {
       displayName: '小舟',
       description: '编程搭子',
-      body: BOT_BODY
+      body: BOT_BODY,
+      // 有对象 id 才有 bot 自己的知识库（knowledge-shuvix/bots/<id>）
+      rawLines: [`shuvix-id: ${BOT_ID}`]
     })
+    const botBaseDir = join(app.home, '.shuvix', 'knowledge-shuvix', 'bots', BOT_ID)
+    const botBaseFiles = (): string[] =>
+      existsSync(botBaseDir)
+        ? readdirSync(botBaseDir, { recursive: true, encoding: 'utf8' })
+            .filter((f) => f.endsWith('.md') && !f.startsWith('.git'))
+            .sort()
+        : []
 
     const reportDir = mkdtempSync(join(tmpdir(), 'probe-bot-report-'))
     const debug = makeDebug(reportDir)
@@ -274,11 +303,18 @@ it(
         '',
         `- 工具调用：${calls.length ? calls.map((c) => '`' + c.replace(botFile, '<bot 文件>') + '`').join(', ') : '（无）'}`,
         `- 用 ask 问了 ${questions} 次`,
-        `- bot 文件：${after === before ? '没变' : '**改了**'}`
+        `- bot 文件：${after === before ? '没变' : '**改了**'}`,
+        `- bot 库里的条目：${botBaseFiles().join(', ') || '（无）'}`
       )
       if (after !== before) report.push('', '```md', after, '```')
       before = after
     }
+
+    report.push('', '## 最后的 bot 库', '')
+    for (const f of botBaseFiles()) {
+      report.push(`### ${f}`, '', '```md', readFileSync(join(botBaseDir, f), 'utf8'), '```', '')
+    }
+    report.push(`- 系统提示词列出了 bot 库：${/\n- bot — /.test(systemPrompt) ? '是' : '**否**'}`)
 
     for (const [name, sid] of Object.entries(sessions)) {
       if (!sid) continue

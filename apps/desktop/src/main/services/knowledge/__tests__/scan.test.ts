@@ -38,14 +38,17 @@ vi.mock('../../../logger', () => ({
 }))
 
 import {
+  BOTS_CONTAINER,
   BUILTIN_CONTAINER,
   PROJECTS_CONTAINER,
+  botBundleId,
   USER_CONTAINER,
   builtinBundleId,
   builtinLanguageDir,
   bundleDir,
   bundleFilePath,
   entryFilePath,
+  isBotBundle,
   isBuiltinBundle,
   isUserBundle,
   isValidLibraryName,
@@ -58,6 +61,7 @@ import {
 import {
   invalidateKnowledgeScan,
   knownKnowledgePaths,
+  listBotBundles,
   listBuiltinBundles,
   listBundleDirs,
   listBundles,
@@ -642,5 +646,74 @@ describe('内置库：listBuiltinBundles / listBundles / scanBundle / listBundle
 
     expect(listBundleDirs('builtin/shuvix')).toEqual(['sub', 'sub/deep'])
     expect(listBundleDirs('builtin/missing')).toEqual([])
+  })
+})
+
+// ────────────────────── bot 库（knowledge-shuvix 的 `bots/<key>`） ──────────────────────
+
+describe('bot 库 —— 路径与扫描', () => {
+  it('SN-B1 bot bundle 的路径算术与 locateBundle：边界是 `bots/<key>`，容器本身 / 容器里的散文件 / 隐藏段都不属于任何 bundle；来回一致', () => {
+    expect(BOTS_CONTAINER).toBe('bots')
+    expect(botBundleId('k1')).toBe('bots/k1')
+    expect(bundleDir('bots/k1')).toBe(join(root, 'bots', 'k1'))
+    expect(entryFilePath('bots/k1/sub/x.md')).toBe(join(root, 'bots', 'k1', 'sub', 'x.md'))
+
+    expect(locateBundle(join(root, 'bots', 'k1', 'x.md'))).toEqual({
+      bundle: 'bots/k1',
+      rel: 'x.md'
+    })
+    expect(locateBundle(join(root, 'bots', 'k1', 'sub', 'x.md'))).toEqual({
+      bundle: 'bots/k1',
+      rel: 'sub/x.md'
+    })
+    expect(locateBundle(join(root, 'bots', 'k1'))).toBeNull()
+    expect(locateBundle(join(root, 'bots', 'x.md'))).toBeNull()
+    expect(locateBundle(join(root, 'bots', 'k1', '.git', 'x.md'))).toBeNull()
+    expect(locateBundle(join(root, 'bots', '.k', 'x.md'))).toBeNull()
+
+    for (const id of ['bots/k1/x.md', 'bots/k1/sub/deep/y.md', 'bots/builtin-daily/a.md']) {
+      const abs = entryFilePath(id)
+      const hit = locateBundle(abs)!
+      expect(`${hit.bundle}/${hit.rel}`).toBe(id)
+    }
+  })
+
+  it('SN-B2 isBotBundle：只认首段恰好是 bots（`./` 与反斜杠归一）', () => {
+    for (const id of ['bots/k1', 'bots/k1/x.md', './bots/k1', 'bots\\k1\\x.md']) {
+      expect(isBotBundle(id), id).toBe(true)
+    }
+    for (const id of ['projects/k1', 'knowledge/bots', 'botsx/k1', 'bot/k1', '']) {
+      expect(isBotBundle(id), id).toBe(false)
+    }
+  })
+
+  it('SN-B3 listBotBundles：容器不在 → [] 且不建；只列非隐藏子目录，字典序', () => {
+    expect(listBotBundles()).toEqual([])
+    expect(readdirSync(root)).not.toContain('bots')
+
+    for (const d of ['b2', 'a1', '.hidden']) mkdirSync(join(root, 'bots', d), { recursive: true })
+    writeFileSync(join(root, 'bots', 'f.md'), '# loose\n')
+    expect(listBotBundles()).toEqual(['bots/a1', 'bots/b2'])
+  })
+
+  it('SN-B4 listBundles 的次序是项目库 → bot 库 → 用户库 → 内置库；scanAllBundles 同序，bot 库照项目库那样扫（无 frontmatter 的 md 是笔记）', async () => {
+    seedConcept(root, 'projects/p1/a.md', ['type: Memory', 'title: P'])
+    seedConcept(root, 'bots/k1/c.md', ['type: Memory', 'title: B'])
+    seedFile(root, 'bots/k1/plain.md', '# 普通笔记\n\nbody\n')
+    seedConcept(userRootOf(root), 'notes/a.md', ['type: Memory', 'title: N'])
+    seedBuiltin(root, 'shuvix/en/a.md', '# s\n')
+
+    expect(listBundles()).toEqual(['projects/p1', 'bots/k1', 'knowledge/notes', 'builtin/shuvix'])
+    const scans = await scanAllBundles()
+    expect(scans.map((s) => s.bundle)).toEqual([
+      'projects/p1',
+      'bots/k1',
+      'knowledge/notes',
+      'builtin/shuvix'
+    ])
+    const bot = scans.find((s) => s.bundle === 'bots/k1')!
+    expect(bot.concepts.map((c) => c.title)).toEqual(['B'])
+    expect(bot.notes.map((n) => n.path)).toEqual(['c.md', 'plain.md'])
+    expect(knownKnowledgePaths().has('bots/k1/plain.md')).toBe(true)
   })
 })

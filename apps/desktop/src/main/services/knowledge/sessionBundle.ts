@@ -5,6 +5,9 @@
  * 启用、排在最前，不进选择、不是界面上的候选项 —— 它是「这个项目学到了什么」的唯一去处，不该还要
  * 用户先勾一下。存量选择里残留的 `project` 读时剔掉（有项目时它本来就在，没项目时它解析不出来）。
  *
+ * **bot 库也是隐式的**（2026-11-14 裁决：每个 bot 一个独立的库）：bot 会话本身恒带它，排在项目库之后，不是候选项。
+ * 库在 knowledge-shuvix 的 `bots/<key>/`，key 由 bot 文件的对象 id 算出（改名不变）；bot 开的子会话没有它。
+ *
  * **内置说明书 `shuvix` 也是隐式的**（2026-11-14 裁决：始终可查，不进选择）：每条会话都有它，排在最后，界面上不是
  * 候选项，存量选择里残留的 `shuvix` 读时剔掉。它讲的是 ShuviX 自己，条目少、不跨领域，关掉它没有好处 —— 不知道
  * 它的 agent 只能去翻 `~/.shuvix` 和应用包（e2e/live/botKnowledge.probe.ts 量过：建一个 bot 要惊动 8–15 次权限审查）。
@@ -26,17 +29,28 @@
  */
 import { existsSync } from 'fs'
 import { projectContextIdOf } from '@shuvix/chat-protocol/botSession'
-import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_BOT_BASE,
+  KNOWLEDGE_BUILTIN_BASE,
+  KNOWLEDGE_PROJECT_BASE
+} from '@shuvix/chat-protocol/knowledge'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import type { KnowledgeBaseInfo, KnowledgeGuideBase } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionRecords } from '../sessionRecords'
 import type { Project } from '../../dao/types/project'
-import { builtinBundleId, bundleDir, projectBundleId, userBundleId } from './knowledgePaths'
+import { botDisplayNameOf, botKeyOfSession } from './botBases'
+import {
+  botBundleId,
+  builtinBundleId,
+  bundleDir,
+  projectBundleId,
+  userBundleId
+} from './knowledgePaths'
 import { listUserLibraries } from './scan'
 
 export interface SessionBundleTarget {
-  /** bundle id（`projects/<projectId>` / `knowledge/<库名>` / `builtin/<库名>`） */
+  /** bundle id（`projects/<projectId>` / `bots/<key>` / `knowledge/<库名>` / `builtin/<库名>`） */
   bundle: string
   /** bundle 根的绝对路径（项目库的目录可能还不存在） */
   dir: string
@@ -57,8 +71,14 @@ export interface KnowledgeBaseOption {
 const NO_PROJECT =
   'This session does not belong to a project, so it has no "project" knowledge base.'
 
+const NO_BOT = 'This session has no "bot" knowledge base — only a bot\'s own sessions have one.'
+
 /** 保留名：工具里优先于同名用户库 */
-const RESERVED_BASE_NAMES: readonly string[] = [KNOWLEDGE_PROJECT_BASE, KNOWLEDGE_BUILTIN_BASE]
+const RESERVED_BASE_NAMES: readonly string[] = [
+  KNOWLEDGE_PROJECT_BASE,
+  KNOWLEDGE_BOT_BASE,
+  KNOWLEDGE_BUILTIN_BASE
+]
 
 /** 内置库在 `<knowledge_bases>` 围栏里的那一行（英文：那是提示词）：只读，免得它把笔记往这里记 */
 const BUILTIN_GUIDE_LABEL = "ShuviX's own manual (read-only)"
@@ -202,8 +222,21 @@ export function projectBaseNamed(
 }
 
 /**
- * 这条会话能点名的库：有项目时项目库打头，接用户圈定且这台机器上真有的那些，内置说明书垫底（项目库与说明书都隐式，
- * 见文件头；说明书的目录不在 —— 开发期没拷资源 —— 就没有它）
+ * 本会话绑定的 bot 自己的库（2026-11-14）：只有 bot 会话本身有（它派出的 agent 按根会话解析，也有）；bot 开的子会话
+ * 自己没有 `settings.bot`，所以没有。key 跟着 bot 的身份（见 chat-protocol `botKnowledgeKey`）。目录可能还不存在
+ * —— 与项目库一样，第一次写进东西时才建。
+ */
+function botTarget(rootSessionId: string): SessionBundleTarget | null {
+  const key = botKeyOfSession(rootSessionId)
+  if (!key) return null
+  const bundle = botBundleId(key)
+  const name = botDisplayNameOf(key)?.trim()
+  return { bundle, dir: bundleDir(bundle), label: name ? `bot "${name}"` : 'bot' }
+}
+
+/**
+ * 这条会话能点名的库：有项目时项目库打头，bot 会话接着是 bot 自己的库，再接用户圈定且这台机器上真有的那些，内置说明书
+ * 垫底（项目库、bot 库与说明书都隐式，见文件头；说明书的目录不在 —— 开发期没拷资源 —— 就没有它）
  */
 export function enabledTargets(
   rootSessionId: string
@@ -211,6 +244,8 @@ export function enabledTargets(
   const out: { name: string; target: SessionBundleTarget }[] = []
   const project = sessionBundle(rootSessionId)
   if (!('error' in project)) out.push({ name: KNOWLEDGE_PROJECT_BASE, target: project })
+  const bot = botTarget(rootSessionId)
+  if (bot) out.push({ name: KNOWLEDGE_BOT_BASE, target: bot })
 
   const names = userBaseNames()
   for (const wanted of selectedBaseNames(rootSessionId)) {
@@ -238,6 +273,7 @@ export async function resolveBase(
   if (hit) return hit.target
   // 项目库恒启用，点不中只可能是会话不属于项目 —— 直说原因，别让它以为是用户没勾
   if (name === KNOWLEDGE_PROJECT_BASE) return { error: NO_PROJECT }
+  if (name === KNOWLEDGE_BOT_BASE) return { error: NO_BOT }
 
   if (enabled.length === 0) {
     return {
@@ -258,6 +294,8 @@ export async function resolveBase(
  */
 export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] {
   const projectName = rootProject(rootSessionId)?.name ?? ''
+  const botKey = botKeyOfSession(rootSessionId)
+  const botName = (botKey ? botDisplayNameOf(botKey) : undefined)?.trim() ?? ''
   return enabledTargets(rootSessionId).map(({ name, target }) => ({
     name,
     readonly: target.readonly,
@@ -265,9 +303,11 @@ export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] 
     label:
       name === KNOWLEDGE_PROJECT_BASE
         ? projectName
-        : name === KNOWLEDGE_BUILTIN_BASE
-          ? BUILTIN_GUIDE_LABEL
-          : ''
+        : name === KNOWLEDGE_BOT_BASE
+          ? botName
+          : name === KNOWLEDGE_BUILTIN_BASE
+            ? BUILTIN_GUIDE_LABEL
+            : ''
   }))
 }
 

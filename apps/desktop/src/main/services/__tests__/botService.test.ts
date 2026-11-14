@@ -1910,3 +1910,271 @@ describe('PSv-NEW —— createNew 跳过生效的、归档的与会话还绑着
     expect(botService.createNew()).toMatchObject({ success: true, name: 'my-bot-5' })
   })
 })
+
+// ────────────────────── PSv-KB：每个 bot 自己的知识库 key ──────────────────────
+
+/**
+ * 每个 bot 一个知识库（2026-11-14）：库在 knowledge-shuvix 的 `bots/<key>`，key 由 bot 的**身份**算出（chat-protocol
+ * `botKnowledgeKey`，身份 = identityForFile：对象 id，没有 / 冒用了没认定的内置 id 就是名字）——
+ *   UUID → 小写 UUID；认定的内置 id → `builtin-<name>`；名字 → `name-<名字>`。
+ *
+ *   BS-K1  knowledgeKeyForFile：按文件算，三种形态；冒用内置 id、别的 kind 的内置 id 都按名字算；改名换 key（无 id 时）
+ *   BS-K2  knowledgeKeyOfSession：只认这条会话**自己**绑定的、此刻生效的那份
+ *   BS-K3  有 id 的 bot 改名 / 复制：key 不变
+ *   BS-K4  displayNameOfKnowledgeKey：只看**生效的** bot（归档的不算）
+ *   BS-K5  归档 / 恢复立刻生效（不等 2 s 缓存）
+ *   BS-K7  归档目录里的文件不被咨询（连读都不读）
+ *   BS-K8  显示名表 2 s 内只扫一次；归档 / 认定表变动清掉它
+ *   BS-K9  随应用提供的日记 bot 归档再恢复：认定被撤销，身份回落成名字，key 变成 `name-daily`
+ *
+ * knowledgeKeyOfSession / displayNameOfKnowledgeKey 都有跨用例存活的 2 s 缓存：时钟跳到别的分组碰不到的地方、每条用例
+ * 再往前跳一截；afterEach 经 setBuiltinTrustStore(null) 清掉两张表。
+ */
+describe('PSv-KB —— bot 知识库的 key', () => {
+  const U1 = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f20'
+  const U2 = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f21'
+  const DAILY_ID = 'bot:builtin:daily'
+  let now = Date.now() + 900_000_000
+  const tick = (ms = 10_000): void => {
+    now += ms
+  }
+  const withId = (text: string, id: string): string =>
+    text.replace('shuvix: bot v2\n', `shuvix: bot v2\nshuvix-id: ${id}\n`)
+  const bindTo = (bot: string | undefined): void => {
+    mocks.pick.mockReturnValue(bot === undefined ? { settings: {} } : { settings: { bot } })
+  }
+  const archivedPath = (fileName: string): string => join(dirs.bots, 'archived', fileName)
+  const trustStore = (): void => {
+    settingsStore.clear()
+    botService.setBuiltinTrustStore({
+      get: (key) => settingsStore.get(key),
+      set: (key, value) => void settingsStore.set(key, value)
+    })
+  }
+
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    tick()
+  })
+  afterEach(() => {
+    // 顺带清掉 knowledgeKeyCache 与显示名表：它们的时间戳在未来，留着会挡住后面按真时钟跑的用例
+    botService.setBuiltinTrustStore(null)
+    vi.restoreAllMocks()
+  })
+
+  it('BS-K1 knowledgeKeyForFile：UUID → 小写 UUID；没有 id → name-<名字>；认定的那份内置 id → builtin-<name>，别处 / 别的 kind → name-<名字>；无 id 的 bot 改名换 key', () => {
+    const daily = join(dirs.bots, 'daily.md')
+    botService.setBuiltinTrustStore({
+      get: (key) => (key === BUILTIN_FILES_KEY ? JSON.stringify({ [DAILY_ID]: daily }) : undefined),
+      set: () => {}
+    })
+    const buddyPath = join(dirs.bots, 'buddy.md')
+    expect(botService.knowledgeKeyForFile({ name: 'buddy' }, buddyPath)).toBe('name-buddy')
+    expect(botService.knowledgeKeyForFile({ name: 'buddy', objectId: U1 }, buddyPath)).toBe(U1)
+    expect(
+      botService.knowledgeKeyForFile({ name: 'buddy', objectId: U1.toUpperCase() }, buddyPath)
+    ).toBe(U1)
+    expect(botService.knowledgeKeyForFile({ name: 'daily', objectId: DAILY_ID }, daily)).toBe(
+      'builtin-daily'
+    )
+    // 冒用：同一个内置 id 写在别的文件上，身份按名字算
+    expect(
+      botService.knowledgeKeyForFile({ name: 'daily', objectId: DAILY_ID }, `${daily}.bak`)
+    ).toBe('name-daily')
+    expect(
+      botService.knowledgeKeyForFile(
+        { name: 'copycat', objectId: DAILY_ID },
+        join(dirs.bots, 'copycat.md')
+      )
+    ).toBe('name-copycat')
+    // 别的 kind 的内置 id：不认，按名字算
+    expect(
+      botService.knowledgeKeyForFile({ name: 'odd', objectId: 'agent:builtin:x' }, buddyPath)
+    ).toBe('name-odd')
+    // 没有 id：改名就换了身份，库也跟着换
+    expect(botService.knowledgeKeyForFile({ name: 'pal' }, buddyPath)).toBe('name-pal')
+
+    // 没注入认定表：内置形态的 id 一律按名字算
+    botService.setBuiltinTrustStore(null)
+    expect(botService.knowledgeKeyForFile({ name: 'daily', objectId: DAILY_ID }, daily)).toBe(
+      'name-daily'
+    )
+  })
+
+  it('BS-K2 knowledgeKeyOfSession：bot 根会话 / 带工作项目的分支会话 → 绑定那份的 key；子会话、非 bot 会话、绑的名字没有生效文件、会话不在 → null；没写 id 的 bot → name-<名字>', () => {
+    put('kb2-buddy', withId(md('kb2-buddy'), U1))
+    put('kb2-plain', md('kb2-plain'))
+
+    mocks.pick.mockReturnValue({ settings: { bot: 'kb2-buddy' } })
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+    mocks.pick.mockReturnValue({ settings: { bot: 'kb2-buddy', workProject: 'p1' } })
+    expect(botService.knowledgeKeyOfSession('fork')).toBe(U1)
+
+    mocks.pick.mockReturnValue({ parentId: 's1', settings: {} })
+    expect(botService.knowledgeKeyOfSession('sub')).toBeNull()
+    bindTo(undefined)
+    expect(botService.knowledgeKeyOfSession('s2')).toBeNull()
+    bindTo('kb2-ghost')
+    expect(botService.knowledgeKeyOfSession('s3')).toBeNull()
+    mocks.pick.mockReturnValue(undefined)
+    expect(botService.knowledgeKeyOfSession('gone')).toBeNull()
+
+    bindTo('kb2-plain')
+    expect(botService.knowledgeKeyOfSession('s4')).toBe('name-kb2-plain')
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('BS-K2 knowledgeKeyOfSession 按 bot 名字缓存 2 s：期间改了 id 仍回旧 key；满 2 s 才看到新 key', () => {
+    const file = put('kb2-cachey', withId(md('kb2-cachey'), U1))
+    bindTo('kb2-cachey')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+
+    writeFileSync(file, withId(md('kb2-cachey'), U2))
+    tick(1999)
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+    tick(1)
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U2)
+  })
+
+  it('BS-K3 有 id 的 bot 改名、复制：key 跟着 id 走，不变', () => {
+    const file = put('kb3-buddy', withId(md('kb3-buddy'), U1))
+    bindTo('kb3-buddy')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+
+    // 改名（新名字，避开 2 s 缓存）
+    writeFileSync(file, withId(md('kb3-pal'), U1))
+    bindTo('kb3-pal')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+
+    // 复制出的同 id 文件：两份同一个 key（共用一个库）
+    const other = put('kb3-other', withId(md('kb3-other'), U1))
+    const pal = botService.get('kb3-pal')!
+    const copy = botService.get('kb3-other')!
+    expect(copy.basePath).toBe(other)
+    expect(botService.knowledgeKeyForFile(pal.file, pal.basePath)).toBe(U1)
+    expect(botService.knowledgeKeyForFile(copy.file, copy.basePath)).toBe(U1)
+  })
+
+  it('BS-K3 没有 id 的 bot 改名：key 跟着名字换（库也就换了一个）', () => {
+    const file = put('kb3-anon', md('kb3-anon'))
+    bindTo('kb3-anon')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe('name-kb3-anon')
+
+    writeFileSync(file, md('kb3-renamed'))
+    bindTo('kb3-renamed')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe('name-kb3-renamed')
+  })
+
+  it('BS-K4 displayNameOfKnowledgeKey 只看生效的 bot：有显示名用显示名、没有用名字；无 id 的 bot 按 name-<名字> 查得到；归档的、不认识的 → undefined；同一个 key 生效与归档各一份 → 生效那份的名字', () => {
+    put('kb4-diary', withId(md('kb4-diary', { displayName: 'Diary Helper' }), U1))
+    put('kb4-plain', withId(md('kb4-plain'), '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f22'))
+    put('kb4-anon', md('kb4-anon', { displayName: 'Anon' }))
+    mkdirSync(join(dirs.bots, 'archived'), { recursive: true })
+    writeFileSync(archivedPath('kb4-old.md'), withId(md('kb4-old', { displayName: 'Old' }), U2))
+    writeFileSync(
+      archivedPath('kb4-shadow.md'),
+      withId(md('kb4-shadow', { displayName: 'Shadow' }), U1)
+    )
+
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('Diary Helper')
+    expect(botService.displayNameOfKnowledgeKey('0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f22')).toBe(
+      'kb4-plain'
+    )
+    expect(botService.displayNameOfKnowledgeKey('name-kb4-anon')).toBe('Anon')
+    expect(botService.displayNameOfKnowledgeKey(U2)).toBeUndefined()
+    expect(botService.displayNameOfKnowledgeKey('name-kb4-old')).toBeUndefined()
+    expect(botService.displayNameOfKnowledgeKey('nope')).toBeUndefined()
+  })
+
+  it('BS-K4 认定的日记 bot → builtin-daily 有名字；没认定（没注入认定表）→ builtin-daily 没有，name-daily 有', () => {
+    trustStore()
+    botService.seedBuiltinBots('en')
+    const daily = botService.get('daily')!
+    const name = daily.file.displayName || daily.file.name
+    expect(botService.displayNameOfKnowledgeKey('builtin-daily')).toBe(name)
+    expect(botService.displayNameOfKnowledgeKey('name-daily')).toBeUndefined()
+
+    botService.setBuiltinTrustStore(null)
+    expect(botService.displayNameOfKnowledgeKey('builtin-daily')).toBeUndefined()
+    expect(botService.displayNameOfKnowledgeKey('name-daily')).toBe(name)
+  })
+
+  it('BS-K5 归档 / 恢复立刻生效：key 与显示名都不等 2 s 缓存', () => {
+    put('kb5-buddy', withId(md('kb5-buddy', { displayName: 'Buddy' }), U1))
+    bindTo('kb5-buddy')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('Buddy')
+
+    expect(botService.archive('kb5-buddy').success).toBe(true)
+    expect(botService.knowledgeKeyOfSession('s1')).toBeNull()
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBeUndefined()
+
+    expect(botService.restore('kb5-buddy.md').success).toBe(true)
+    expect(botService.knowledgeKeyOfSession('s1')).toBe(U1)
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('Buddy')
+  })
+
+  it('BS-K7 归档目录里的文件不被咨询：查显示名一次都不读 archived/ 下的文件（哪怕它声明着内置 id 或同一个 UUID）', () => {
+    put('kb7-live', withId(md('kb7-live'), U1))
+    mkdirSync(join(dirs.bots, 'archived'), { recursive: true })
+    writeFileSync(archivedPath('kb7-x.md'), withId(md('kb7-x'), 'bot:builtin:x'))
+    writeFileSync(archivedPath('kb7-y.md'), withId(md('kb7-y'), U2))
+    vi.mocked(readFileSync).mockClear()
+
+    expect(botService.displayNameOfKnowledgeKey('builtin-x')).toBeUndefined()
+    expect(botService.displayNameOfKnowledgeKey(U2)).toBeUndefined()
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('kb7-live')
+    const reads = vi.mocked(readFileSync).mock.calls.map((c) => String(c[0]))
+    expect(reads.filter((p) => p.includes(`${join(dirs.bots, 'archived')}`))).toEqual([])
+  })
+
+  it('BS-K8 显示名表 2 s 内只扫一次（多个 key 共用一张表）；满 2 s 重扫；归档、认定表变动都清掉它', () => {
+    const live = put('kb8-a', withId(md('kb8-a'), U1))
+    put('kb8-b', withId(md('kb8-b'), U2))
+    const readsOf = (p: string): number =>
+      vi.mocked(readFileSync).mock.calls.filter((c) => String(c[0]) === p).length
+
+    vi.mocked(readFileSync).mockClear()
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('kb8-a')
+    expect(readsOf(live)).toBe(1)
+    tick(1999)
+    expect(botService.displayNameOfKnowledgeKey(U2)).toBe('kb8-b')
+    expect(botService.displayNameOfKnowledgeKey('nope')).toBeUndefined()
+    expect(readsOf(live)).toBe(1)
+
+    // 窗口内文件改了名字：仍回旧名；满 2 s 才看到
+    writeFileSync(live, withId(md('kb8-a', { displayName: 'Renamed' }), U1))
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('kb8-a')
+    tick(1)
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('Renamed')
+    expect(readsOf(live)).toBe(2)
+
+    // 认定表换了：表清掉，下一次重扫
+    botService.setBuiltinTrustStore(null)
+    expect(botService.displayNameOfKnowledgeKey(U1)).toBe('Renamed')
+    expect(readsOf(live)).toBe(3)
+
+    // 归档：表清掉，立刻看不到它
+    expect(botService.archive('kb8-b').success).toBe(true)
+    expect(botService.displayNameOfKnowledgeKey(U2)).toBeUndefined()
+  })
+
+  it('BS-K9 随应用提供的日记 bot 归档再恢复：认定被撤销，身份回落成名字 —— key 从 builtin-daily 变成 name-daily', () => {
+    trustStore()
+    botService.seedBuiltinBots('en')
+    bindTo('daily')
+    expect(botService.knowledgeKeyOfSession('s1')).toBe('builtin-daily')
+
+    expect(botService.archive('daily').success).toBe(true)
+    expect(botService.knowledgeKeyOfSession('s1')).toBeNull()
+    expect(botService.restore('daily.md').success).toBe(true)
+
+    expect(JSON.parse(settingsStore.get(BUILTIN_FILES_KEY) ?? '{}')).toEqual({})
+    expect(botService.knowledgeKeyOfSession('s1')).toBe('name-daily')
+    expect(botService.displayNameOfKnowledgeKey('builtin-daily')).toBeUndefined()
+    const daily = botService.get('daily')!
+    expect(botService.displayNameOfKnowledgeKey('name-daily')).toBe(
+      daily.file.displayName || daily.file.name
+    )
+  })
+})

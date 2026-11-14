@@ -11,7 +11,7 @@ import { buildBuiltinPolicies } from '@shuvix/agent-runtime'
 import { botService } from './botService'
 import { createBotAccessChecker, type BotAccessChecker } from './botAccessCheck'
 import { hookService } from './hookService'
-import { bundleDir, projectBundleId } from './knowledge'
+import { botBundleId, bundleDir, projectBundleId } from './knowledge'
 import { policyService } from './policyService'
 import { projectService } from './projectService'
 import { settingDirForAcl } from './sandbox'
@@ -30,6 +30,10 @@ export function desktopBotAccessChecker(): BotAccessChecker {
     projectsNamed: (name) =>
       projectService.projectsNamed(name).map((p) => ({ id: p.id, name: p.name, path: p.path })),
     projectKnowledgeDir: (projectId) => bundleDir(projectBundleId(projectId)),
+    botKnowledgeDir: (file, basePath) => {
+      const key = botService.knowledgeKeyForFile(file, basePath)
+      return key ? bundleDir(botBundleId(key)) : null
+    },
     // 临时运行的工作目录是 temp_workspace/<新会话 id>：试算只要一个那里的路径
     temporaryWorkspace: () => join(getTempWorkspaceBase(), 'shuvix-access-check'),
     aclDir: (dir) => settingDirForAcl(dir),

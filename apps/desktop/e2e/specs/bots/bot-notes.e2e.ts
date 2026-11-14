@@ -163,6 +163,8 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
         description: 'e2e ranger bot',
         basePath: botPath('ranger.md'),
         fileName: 'ranger.md',
+        // 每个 bot 都有自己的知识库（2026-11-14）：没写 shuvix-id 的按名字（`bots/name-<名字>`）
+        knowledgeBundle: 'bots/name-scout',
         shadowedBy: 'scout.md'
       }
     ])

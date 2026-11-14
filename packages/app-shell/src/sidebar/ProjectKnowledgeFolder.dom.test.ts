@@ -56,7 +56,7 @@ vi.mock('@shuvix/chat-ui', async () => {
   }
 })
 
-import { ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
+import { BotKnowledgeFolder, ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
 import { KnowledgeGroup } from './KnowledgeGroup'
 import type { KnowledgeGroupAdapter, KnowledgeListing } from './KnowledgeTreeView'
 import { ContextMenuProvider } from '../contextmenu/ContextMenuProvider'
@@ -405,5 +405,114 @@ describe('KnowledgeGroup —— 项目库不在这一组里', () => {
     expect(rows).toEqual(
       expect.arrayContaining(['knowledge/notes/n.md', 'builtin/shuvix/guide.md'])
     )
+  })
+})
+
+/**
+ * bot 组里的「Bot 知识库」（2026-11-14）：与「项目知识库」同一个组件，只差 bundle（宿主随 bot 清单给的 `bots/<key>`）、
+ * 文案（`sidebar.botKnowledge*`）与锚点（`[data-bot-knowledge=<bot 名>]`）。
+ */
+describe('BotKnowledgeFolder', () => {
+  const BOT_LISTING: KnowledgeListing = {
+    entries: [
+      entry('bots/builtin-a/x.md', 'Ex'),
+      // 同前缀的另一个 key、同名的项目库与名叫 bots 的用户库：都不是这个库
+      entry('bots/builtin-ab/y.md', 'Why'),
+      entry('projects/builtin-a/z.md', 'Zed'),
+      entry('knowledge/bots/w.md', 'Double')
+    ],
+    root: '/kb-shuvix',
+    userRoot: '/kb-user',
+    dirs: ['bots/builtin-a', 'bots/builtin-ab', 'projects/builtin-a', 'knowledge/bots'],
+    bundleNames: {}
+  }
+  const botFolderEl = (name = 'scout'): HTMLElement => {
+    const el = container.querySelector(`[data-bot-knowledge="${name}"]`) as HTMLElement
+    if (!el) throw new Error(`bot folder ${name} not rendered`)
+    return el
+  }
+  const botFolder = (adapter: Adapter, bundle = 'bots/builtin-a'): ReactElement =>
+    createElement(BotKnowledgeFolder, { botName: 'scout', bundle, adapter, enabled: true })
+
+  it('BK-1 只数、只列自己这个 bundle 的条目（同前缀的 key、同 id 的项目库、名叫 bots 的用户库都不算）；文案与悬停提示；没有条目时展开是空态文案', async () => {
+    const adapter = makeAdapter(BOT_LISTING)
+    await render(botFolder(adapter))
+
+    const el = botFolderEl()
+    expect(el.textContent).toContain(en.sidebar.botKnowledge)
+    expect(el.getAttribute('title')).toBe(en.sidebar.botKnowledgeHint)
+    expect(container.querySelector('[data-project-knowledge]')).toBeNull()
+    expect(el.querySelector('span.tabular-nums')?.textContent).toBe('1')
+
+    await click(el)
+    const body = el.nextElementSibling as HTMLElement
+    expect(rowPaths(body)).toEqual(['bots/builtin-a/x.md'])
+
+    // 一条都没有的 key：展开是 bot 的空态文案
+    await render(botFolder(makeAdapter(BOT_LISTING), 'bots/none'))
+    await click(botFolderEl())
+    const empty = botFolderEl().nextElementSibling as HTMLElement
+    expect(empty.textContent).toContain(en.sidebar.botKnowledgeEmpty)
+    expect(rowPaths(empty)).toEqual([])
+  })
+
+  it('BK-2 菜单 = [new-entry, new-folder]，落点是 bot 库根：新建条目 → createEntry → 重扫 → 打开；新建文件夹 → createFolder', async () => {
+    const adapter = makeAdapter({ ...BOT_LISTING, entries: [], dirs: [] })
+    await render(botFolder(adapter))
+
+    pick = 'new-entry'
+    expect(ids(await contextMenu(botFolderEl()))).toEqual(['new-entry', 'new-folder'])
+    const input = container.querySelector(
+      '[data-knowledge-draft="entry"] input'
+    ) as HTMLInputElement
+    const listCalls = adapter.list.mock.calls.length
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(input, 'Note')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await flush()
+    expect(adapter.createEntry).toHaveBeenCalledWith('bots/builtin-a', 'Note')
+    expect(adapter.list.mock.calls.length).toBeGreaterThan(listCalls)
+    expect(adapter.open).toHaveBeenCalledWith('bots/builtin-a/note.md', 'Note')
+
+    pick = 'new-folder'
+    await contextMenu(botFolderEl())
+    const folderInput = container.querySelector(
+      '[data-knowledge-draft="folder"] input'
+    ) as HTMLInputElement
+    await act(async () => {
+      setter.call(folderInput, 'sub')
+      folderInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      folderInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await flush()
+    expect(adapter.createFolder).toHaveBeenCalledWith('bots/builtin-a', 'sub')
+  })
+})
+
+describe('KnowledgeGroup —— bot 库也不在这一组里', () => {
+  it('KG-2 清单里有 bot 库的条目与目录：分组里一行都不画（连 `bots` 容器也没有）；名叫 bots 的用户库照常', async () => {
+    const adapter = makeAdapter({
+      entries: [entry('bots/k1/a.md', 'Bot entry'), entry('knowledge/bots/n.md', 'User bots note')],
+      root: '/kb-shuvix',
+      userRoot: '/kb-user',
+      dirs: ['bots', 'bots/k1', 'bots/k1/sub', 'knowledge/bots'],
+      bundleNames: { 'bots/k1': 'Diary' }
+    })
+    await render(createElement(KnowledgeGroup, { adapter }))
+    await click(container.querySelector('[data-group="knowledge"] button')!)
+
+    const dirs = dirPaths()
+    expect(dirs.filter((d) => d === 'bots' || d.startsWith('bots/'))).toEqual([])
+    expect(dirs).toContain('knowledge/bots')
+    const rows = rowPaths()
+    expect(rows.filter((p) => p.startsWith('bots/'))).toEqual([])
+    expect(rows).toContain('knowledge/bots/n.md')
   })
 })

@@ -76,6 +76,7 @@ import {
   sessionBundle
 } from '../sessionBundle'
 import { invalidateKnowledgeScan } from '../scan'
+import { setBotKnowledgeHost } from '../botBases'
 import {
   PROJECTS,
   builtinLangAt,
@@ -1545,5 +1546,152 @@ describe('projectBaseNamed —— 另一个项目的库（SB-M）', () => {
       error: 'Project "Big Thing" has no knowledge base yet — nothing was ever recorded in it.'
     })
     expect(existsSync(bundleAt(root, `${PROJECTS}/pBig`))).toBe(false)
+  })
+})
+
+// ────────────────────── bot 自己的库（保留名 `bot`） ──────────────────────
+
+/**
+ * 每个 bot 一个库（2026-11-14）：bot 会话本身恒带它，排在项目库之后、用户勾的库之前，不是候选项；宿主（botService）
+ * 经 setBotKnowledgeHost 注入「这条会话绑的 bot 的 key」与「key 的显示名」。别的会话（含 bot 开的子会话）宿主回 null。
+ */
+describe('SB-BOT bot 自己的库', () => {
+  const NO_BOT = 'This session has no "bot" knowledge base — only a bot\'s own sessions have one.'
+  const seedBases = (...names: string[]): void => {
+    for (const name of names) mkdirSync(join(userRootOf(root), name), { recursive: true })
+  }
+  const seedBuiltinBase = (): void => {
+    mkdirSync(builtinLangAt(root, 'shuvix', 'en'), { recursive: true })
+  }
+  /** s1 → k1（显示名可换）；别的会话 → null */
+  const host = (names: Record<string, string> = { k1: 'Diary Helper' }): void =>
+    setBotKnowledgeHost({
+      keyOfSession: (sid) => (sid === 's1' ? 'k1' : null),
+      displayNameOf: (key) => names[key]
+    })
+  const namesOf = async (sid: string): Promise<string[]> =>
+    (await listBases(sid)).map((b) => b.base)
+
+  afterEach(() => setBotKnowledgeHost(null))
+
+  it('SB-BOT1 项目外的 bot 会话：bot 库打头、勾的库居中、说明书垫底；bot 那一行带 bot 的名字与绝对目录、不只读；不建目录', async () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    host()
+    mockPick({ projectId: null, settings: { bot: 'diary', knowledgeBases: ['notes'] } })
+
+    const bases = await listBases('s1')
+    expect(bases.map((b) => b.base)).toEqual(['bot', 'notes', 'shuvix'])
+    const bot = bases[0]
+    expect(bot).toEqual({ base: 'bot', label: 'bot "Diary Helper"', dir: join(root, 'bots', 'k1') })
+    expect(bot).not.toHaveProperty('note')
+    expect(existsSync(join(root, 'bots'))).toBe(false)
+  })
+
+  it('SB-BOT2 有工作项目的 bot 会话：项目库 → bot 库 → 勾的库 → 说明书；围栏里 bot 那一行紧跟项目那一行', () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    host()
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    mockPick({
+      projectId: null,
+      settings: { bot: 'diary', workProject: 'p1', knowledgeBases: ['notes'] }
+    })
+
+    const choices = enabledBaseChoices('s1')
+    expect(choices.map((c) => c.name)).toEqual(['project', 'bot', 'notes', 'shuvix'])
+    expect(choices[1]).toMatchObject({ name: 'bot', label: 'Diary Helper' })
+    expect(choices[1].readonly).toBeFalsy()
+    const guide = renderKnowledgeGuide(choices)!
+    expect(guide).toContain('- project — Acme Corp\n- bot — Diary Helper\n')
+  })
+
+  it('SB-BOT3 resolveBase(`bot`)：bot 会话里（含首尾空白）解析到 bots/<key>；别的会话回 NO_BOT —— 有勾的库 / 一个都没勾 / 有个用户目录恰好叫 bot 都一样；保留名大小写敏感', async () => {
+    seedBases('notes', 'bot')
+    host()
+    mockPick({ projectId: null, settings: { bot: 'diary' } })
+    const target = await resolveBase('s1', 'bot')
+    expect(target).toMatchObject({ bundle: 'bots/k1', dir: join(root, 'bots', 'k1') })
+    expect(await resolveBase('s1', '  bot  ')).toEqual(target)
+
+    for (const bases of [['notes'], [], ['bot']]) {
+      mockSessionRow('s2', { projectId: null, settings: { knowledgeBases: bases } })
+      expect(await resolveBase('s2', 'bot'), JSON.stringify(bases)).toEqual({ error: NO_BOT })
+    }
+    mockSessionRow('s2', { projectId: null, settings: { knowledgeBases: ['notes'] } })
+    expect(await resolveBase('s2', 'Bot')).toEqual({
+      error: '"Bot" is not one of this session\'s knowledge bases. Enabled: "notes".'
+    })
+  })
+
+  it('SB-BOT4 用户目录恰好叫 bot：被保留名遮住 —— 不是候选、选择里剔掉，listBases 里只有一行 bot 且是 bot 库；别的会话勾了 bot 也没有它', async () => {
+    seedBases('bot', 'notes')
+    host()
+    mockPick({ projectId: null, settings: { bot: 'diary', knowledgeBases: ['bot', 'notes'] } })
+
+    const opts = knowledgeBaseOptions('s1')
+    expect(opts.options.map((o) => o.name)).toEqual(['notes'])
+    expect(opts.selected).toEqual(['notes'])
+    const bots = (await listBases('s1')).filter((b) => b.base === 'bot')
+    expect(bots).toHaveLength(1)
+    expect(bots[0].dir).toBe(join(root, 'bots', 'k1'))
+
+    mockSessionRow('s2', { projectId: null, settings: { knowledgeBases: ['bot'] } })
+    expect(await namesOf('s2')).toEqual([])
+    expect(knowledgeBaseOptions('s2').options.map((o) => o.name)).toEqual(['notes'])
+  })
+
+  it('SB-BOT5 存量选择里的 bot 在会话 / 父会话 / 项目哪一级都读时剔掉（含首尾空白）；只写了 bot 的那一级仍算设过，不往下落', () => {
+    seedBases('alpha', 'notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: [' bot ', 'notes', 'bot'] } })
+    expect(selectedBaseNames('s1')).toEqual(['notes'])
+
+    mockPick({ projectId: 'p1', parentId: 'parent' })
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: ['bot', 'alpha'] } })
+    expect(selectedBaseNames('s1')).toEqual(['alpha'])
+
+    mockPick({ projectId: 'p1' })
+    mockProjectBases('p1', ['notes', 'bot'])
+    expect(selectedBaseNames('s1')).toEqual(['notes'])
+
+    // 只写了 bot：剔完是 []，但那是一份明确的选择 —— 不落到项目那份 notes
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: ['bot'] } })
+    expect(selectedBaseNames('s1')).toEqual([])
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: [], explicit: true })
+  })
+
+  it('SB-BOT6 key 有、显示名没有：listBases 的标签就是 `bot`，围栏那一行是 `- bot`（没有破折号）', async () => {
+    host({})
+    mockPick({ projectId: null, settings: { bot: 'diary' } })
+
+    expect((await listBases('s1'))[0]).toMatchObject({ base: 'bot', label: 'bot' })
+    const guide = renderKnowledgeGuide(enabledBaseChoices('s1'))!
+    expect(guide.split('\n')).toContain('- bot')
+    expect(guide).not.toContain('- bot —')
+  })
+
+  it('SB-BOT7 宿主没注入 / keyOfSession 抛错：没有 bot 库、点名 bot 回 NO_BOT，别的库照常，不抛', async () => {
+    seedBases('notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    mockPick({ projectId: 'p1', settings: { bot: 'diary', knowledgeBases: ['notes'] } })
+
+    const check = async (): Promise<void> => {
+      expect(await namesOf('s1')).toEqual(['project', 'notes'])
+      expect(enabledBaseChoices('s1').map((c) => c.name)).toEqual(['project', 'notes'])
+      expect(await resolveBase('s1', 'bot')).toEqual({ error: NO_BOT })
+      expect(await resolveBase('s1', 'notes')).toMatchObject({ bundle: 'knowledge/notes' })
+      expect(await resolveBase('s1', 'project')).toMatchObject({ bundle: 'projects/p1' })
+    }
+    setBotKnowledgeHost(null)
+    await check()
+    setBotKnowledgeHost({
+      keyOfSession: () => {
+        throw new Error('boom')
+      },
+      displayNameOf: () => 'X'
+    })
+    await check()
   })
 })

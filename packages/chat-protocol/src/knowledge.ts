@@ -13,6 +13,7 @@
  * 一个库就是一个目录。跨 bundle 引用**不用 bundle 绝对路径**（那只在自己 bundle 内成立），
  * 用 `shuvix://` URI —— 链接校验对带 scheme 的目标天然跳过。
  */
+import { parseObjectId } from './mdMeta'
 
 /** 承载知识库笔记本会话的隐藏项目 id（项目列表不可见） */
 export const KNOWLEDGE_PROJECT_ID = '__knowledge__'
@@ -56,14 +57,55 @@ export const KNOWLEDGE_MARKER = `${KNOWLEDGE_MARKER_TYPE} v${OKF_VERSION}`
 export const KNOWLEDGE_USER_ROOT_DIR = 'knowledge'
 export const KNOWLEDGE_SHUVIX_ROOT_DIR = 'knowledge-shuvix'
 
-/** `knowledge-shuvix/` 下的容器目录名（本期只有 projects） */
+/** `knowledge-shuvix/` 下的容器目录名：项目库 `projects/<projectId>`、bot 库 `bots/<key>` */
 export const KNOWLEDGE_PROJECTS_DIR = 'projects'
+export const KNOWLEDGE_BOTS_DIR = 'bots'
 
 /**
  * `knowledge` 工具里「本会话所属项目的库」的名字。用户库按目录名点名，保留名优先 ——
  * 目录恰好叫 `project` 的用户库因此够不着工具，这是一条已知的代价。
  */
 export const KNOWLEDGE_PROJECT_BASE = 'project'
+
+/**
+ * `knowledge` 工具里「本会话绑定的 bot 自己的库」的名字（2026-11-14，用户裁决：每个 bot 一个独立的库）。
+ * 与 `project` 同一条规则：保留名优先，目录恰好叫 `bot` 的用户库够不着工具。只有 bot 会话本身（及它派出的
+ * agent）有它；bot 开的子会话没有。库的 key 见 {@link botKnowledgeKey}。
+ */
+export const KNOWLEDGE_BOT_BASE = 'bot'
+
+/** 一个名字里不能进目录名的字符（任一平台）换成 `-`，首尾的空白与点去掉（Windows 不认结尾的点） */
+function safeDirSegment(name: string): string {
+  return (
+    name
+      // eslint-disable-next-line no-control-regex -- 控制字符正是要换掉的东西
+      .replace(/[/\\:*?"<>|\u0000-\u001f]/g, '-')
+      .replace(/^[\s.]+|[\s.]+$/g, '')
+  )
+}
+
+/**
+ * bot 库的目录名（`bots/<key>` 的 key），由 bot 的**身份**算出 —— 与安全策略看到的 `subject.bot` 是同一个值
+ * （botService.identityForFile：文件的对象 id，没有就是名字）：
+ *   - UUID → 原样（小写）：改名不变，复制出的同 id 文件共用一个库；
+ *   - 内置形态 `bot:builtin:<name>` → `builtin-<name>`（冒号在 Windows 上不能做目录名）；
+ *   - 别的（文件没写 `shuvix-id`，身份就是名字）→ `name-<名字>`：改名就换了身份，库也跟着换 —— 与按名字写的配套策略
+ *     改名后不再匹配同一个道理。刻意不替这类文件补 id：补了 `subject.bot` 就从名字变成 id，按名字写的配套策略随即失效。
+ * 空身份 → null。
+ */
+export function botKnowledgeKey(identity: string | null | undefined): string | null {
+  const text = identity?.trim()
+  if (!text) return null
+  const parsed = parseObjectId(text)
+  if (parsed?.form === 'uuid') return parsed.id
+  if (parsed?.form === 'builtin') {
+    if (parsed.kind !== 'bot') return null
+    const seg = safeDirSegment(parsed.name)
+    return seg ? `builtin-${seg}` : null
+  }
+  const seg = safeDirSegment(text)
+  return seg ? `name-${seg}` : null
+}
 
 /**
  * ShuviX 自带的知识库（随应用发布、只读）在工具里的保留名 —— 与 `project` 同一条规则：保留名优先，
@@ -181,7 +223,7 @@ export interface KnowledgeMentionEntry {
 
 /**
  * 条目 id → knowledge 工具指针（baseName + bundlePath）。库名映射：用户库 `knowledge/<名>` →
- * base `<名>`；项目库 `projects/<id>` → `project`；内置库 `builtin/<名>` → `shuvix`。
+ * base `<名>`；项目库 `projects/<id>` → `project`；bot 库 `bots/<key>` → `bot`；内置库 `builtin/<名>` → `shuvix`。
  * 落不进任何一种形态（或条目 id 只到库、没有文件部分）返回 null。
  */
 export function baseNameFromEntryPath(
@@ -193,6 +235,7 @@ export function baseNameFromEntryPath(
   const bundlePath = `/${rest.join('/')}`
   if (container === KNOWLEDGE_USER_ROOT_DIR) return { baseName: segs[1], bundlePath }
   if (container === KNOWLEDGE_PROJECTS_DIR) return { baseName: KNOWLEDGE_PROJECT_BASE, bundlePath }
+  if (container === KNOWLEDGE_BOTS_DIR) return { baseName: KNOWLEDGE_BOT_BASE, bundlePath }
   if (container === KNOWLEDGE_BUILTIN_DIR) return { baseName: KNOWLEDGE_BUILTIN_BASE, bundlePath }
   return null
 }

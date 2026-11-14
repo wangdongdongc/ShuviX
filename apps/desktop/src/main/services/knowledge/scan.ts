@@ -22,6 +22,7 @@ import {
 import { rgFilesList } from '../../utils/toolUtils/ripgrep'
 import { createLogger } from '../../logger'
 import {
+  BOTS_CONTAINER,
   PROJECTS_CONTAINER,
   builtinBundleId,
   bundleDir,
@@ -78,6 +79,11 @@ export function listProjectBundles(): string[] {
   return subdirectories(bundleDir(PROJECTS_CONTAINER)).map((d) => `${PROJECTS_CONTAINER}/${d}`)
 }
 
+/** 磁盘上现存的 bot 库 bundle id（`bots/<key>`，字典序）—— 归档了的 bot 的库照样在（库跟着 bot 的 id，不跟文件） */
+export function listBotBundles(): string[] {
+  return subdirectories(bundleDir(BOTS_CONTAINER)).map((d) => `${BOTS_CONTAINER}/${d}`)
+}
+
 /** 用户知识库的名字：`~/.shuvix/knowledge/` 下**每个**非隐藏子目录都算一个，不要求任何标记 */
 export function listUserLibraries(): string[] {
   return subdirectories(getUserKnowledgeRoot()).filter(isValidLibraryName)
@@ -122,6 +128,7 @@ export function listAllBuiltinBundleIds(): string[] {
 export function listBundles(): string[] {
   return [
     ...listProjectBundles(),
+    ...listBotBundles(),
     ...listUserLibraries().map(userBundleId),
     ...listBuiltinBundles()
   ]

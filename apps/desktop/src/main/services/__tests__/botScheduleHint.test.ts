@@ -327,6 +327,7 @@ describe('botScheduleHint —— 接着的权限核对', () => {
         identityForFile: (file) => file.objectId ?? file.name,
         projectsNamed: () => [],
         projectKnowledgeDir: (id) => `/kb/${id}`,
+        botKnowledgeDir: () => null,
         temporaryWorkspace: () => '/tmp/ws',
         aclDir: (dir) => dir,
         userPolicies: () => [],
