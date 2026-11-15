@@ -15,7 +15,7 @@
  * 挂进槽位（widget.destroy → unmount）。独立 root 不继承应用的 Provider，但两个
  * 组件依赖的都是全局单例（i18next 默认实例、zustand store、getChatApi），无需 Provider。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
@@ -62,6 +62,11 @@ export interface FrontmatterFieldPickerProps {
    * 目前只有 select 的两个补缺键（模型 / 思考档位）用得到，其余控件忽略它
    */
   sourced?: boolean
+  /**
+   * 手机那一副长相（属性卡的 `compact`）：清单排成小标签，超过两行的收成「+N」，点它展开全部。
+   * 只有多选清单（工具、提示词块）认它
+   */
+  compact?: boolean
 }
 
 /** 单个控件的入参（分派由外层做完，控件本身不看文件类型 / key / kind） */
@@ -80,6 +85,70 @@ const FLAT_CONTROL =
   'appearance-none rounded-md border bg-transparent transition-colors enabled:hover:bg-bg-tertiary/40 focus:outline-none focus:bg-bg-primary focus:border-accent/50'
 
 /**
+ * 手机那一副长相里的清单：一项一枚小标签，超过两行的收成「+N」，点「+N」展开全部。
+ *
+ * 「两行」是量出来的，不是数出来的（工具名有长有短）：每次渲染后看各枚标签落在第几行，从末尾一枚一枚藏起来、
+ * 直到连同「+N」都在两行之内。藏与显直接写 DOM（`hidden`）—— 量完再 setState 会先画出一帧没收的。
+ */
+function ChipList({ entries }: { entries: string[] }): React.JSX.Element {
+  const boxRef = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  useLayoutEffect(() => {
+    const box = boxRef.current
+    if (!box) return undefined
+    const chips = [...box.querySelectorAll<HTMLElement>('[data-chip]')]
+    const more = box.querySelector<HTMLElement>('[data-chip-more]')
+    const clamp = (): void => {
+      for (const chip of chips) chip.hidden = false
+      if (!more) return
+      more.hidden = true
+      if (expanded) return
+      const rows = (): number =>
+        new Set([...chips, more].filter((node) => !node.hidden).map((node) => node.offsetTop)).size
+      if (rows() <= 2) return
+      more.hidden = false
+      let shown = chips.length
+      while (shown > 1 && rows() > 2) {
+        shown -= 1
+        chips[shown].hidden = true
+        more.textContent = `+${chips.length - shown}`
+      }
+    }
+    clamp()
+    // 宽度变了（转屏）一行放得下的枚数也变
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(clamp)
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [entries, expanded])
+  return (
+    <div ref={boxRef} className="cm-shuvix-fmcard-chiplist flex min-w-0 flex-1 flex-wrap gap-1.5">
+      {entries.map((entry, index) => (
+        <span
+          // 清单里可能有重复项（手写的 `read, read`）：键带上位置
+          key={`${index}:${entry}`}
+          data-chip={entry}
+          className="cm-shuvix-fmcard-chip rounded-md bg-bg-tertiary px-1.5 py-0.5 font-mono text-[12px] leading-5 text-text-secondary"
+        >
+          {entry}
+        </span>
+      ))}
+      <button
+        type="button"
+        data-chip-more=""
+        onMouseDown={(e) => {
+          // 展开清单，不是打开选择弹层（外层那一整块才是触发器）
+          e.preventDefault()
+          e.stopPropagation()
+          setExpanded(true)
+        }}
+        className="rounded-md bg-bg-tertiary px-1.5 py-0.5 font-mono text-[12px] leading-5 text-accent"
+      />
+    </div>
+  )
+}
+
+/**
  * 多选清单的共用外壳：紧凑触发器 + 弹层（工具白名单与提示词块共用，弹层里放什么由调用方给）。
  *
  * 弹层经 portal 渲染到 body（fixed 定位 + 空间不足时上翻）—— 属性卡的圆角盒子带
@@ -93,6 +162,7 @@ function PopoverListField({
   value,
   onChange,
   readOnly = false,
+  compact = false,
   panelClassName,
   width = 300,
   onOpened,
@@ -114,7 +184,7 @@ function PopoverListField({
   /** 弹层打开期间的草稿（null = 未打开）—— 见下方 closePanel 的一次性写回 */
   const [draft, setDraft] = useState<string[] | null>(null)
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
+  const triggerRef = useRef<HTMLElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const enabled = useMemo(
@@ -192,22 +262,46 @@ function PopoverListField({
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={readOnly}
-        onMouseDown={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          if (!readOnly) toggleOpen()
-        }}
-        className={`${FLAT_CONTROL} border-transparent flex items-start gap-1.5 max-w-full px-2 py-px text-left text-[12px] leading-5 text-text-primary disabled:cursor-default disabled:text-text-secondary`}
-      >
-        <span className="min-w-0 whitespace-normal break-words font-mono">
-          {enabled.length > 0 ? enabled.join(', ') : t('notebook.frontmatter.unset')}
-        </span>
-        <ChevronDown size={12} className="mt-1 shrink-0 text-text-tertiary" />
-      </button>
+      {compact ? (
+        // 手机：清单是一排小标签；整块是触发器（只读时点了没反应），「+N」自己拦下那一下
+        <div
+          ref={triggerRef as React.Ref<HTMLDivElement>}
+          role={readOnly ? undefined : 'button'}
+          data-list-trigger=""
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            if (!readOnly) toggleOpen()
+          }}
+          className="flex w-full items-start gap-2 px-2 py-0.5"
+        >
+          {enabled.length > 0 ? (
+            <ChipList entries={enabled} />
+          ) : (
+            <span className="min-w-0 flex-1 text-[12px] leading-6 text-text-tertiary/70">
+              {t('notebook.frontmatter.unset')}
+            </span>
+          )}
+          {!readOnly && <ChevronDown size={14} className="mt-1.5 shrink-0 text-text-tertiary" />}
+        </div>
+      ) : (
+        <button
+          ref={triggerRef as React.Ref<HTMLButtonElement>}
+          type="button"
+          disabled={readOnly}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            if (!readOnly) toggleOpen()
+          }}
+          className={`${FLAT_CONTROL} border-transparent flex items-start gap-1.5 max-w-full px-2 py-px text-left text-[12px] leading-5 text-text-primary disabled:cursor-default disabled:text-text-secondary`}
+        >
+          <span className="min-w-0 whitespace-normal break-words font-mono">
+            {enabled.length > 0 ? enabled.join(', ') : t('notebook.frontmatter.unset')}
+          </span>
+          <ChevronDown size={12} className="mt-1 shrink-0 text-text-tertiary" />
+        </button>
+      )}
       {open &&
         panelStyle &&
         createPortal(
@@ -225,7 +319,12 @@ function PopoverListField({
 }
 
 /** 工具白名单编辑：ToolSelectList 弹层，候选项打开时才拉 */
-function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
+function ToolsField({
+  value,
+  onChange,
+  readOnly = false,
+  compact
+}: FieldControlProps): React.JSX.Element {
   const { t } = useTranslation()
   const [tools, setTools] = useState<ToolItem[]>([])
 
@@ -248,6 +347,7 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
       value={value}
       onChange={onChange}
       readOnly={readOnly}
+      compact={compact}
       panelClassName="cm-shuvix-fmcard-tools-panel"
       onOpened={load}
     >
@@ -272,7 +372,8 @@ function normalizePromptBlocks(draft: string[]): string[] {
 function PromptBlocksField({
   value,
   onChange,
-  readOnly = false
+  readOnly = false,
+  compact
 }: FieldControlProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -280,6 +381,7 @@ function PromptBlocksField({
       value={value}
       onChange={onChange}
       readOnly={readOnly}
+      compact={compact}
       panelClassName="cm-shuvix-fmcard-blocks-panel"
       width={340}
       normalize={normalizePromptBlocks}
@@ -485,7 +587,8 @@ export function FrontmatterFieldPicker({
   value,
   onChange,
   readOnly,
-  sourced
+  sourced,
+  compact
 }: FrontmatterFieldPickerProps): React.JSX.Element {
   if (kind === 'select') {
     // **按键显式分派**：模型选择器只认模型键。曾经它是 select 的兜底，于是任何新加的
@@ -537,10 +640,12 @@ export function FrontmatterFieldPicker({
     )
   }
   if (fieldKey === 'shuvix-tools') {
-    return <ToolsField value={value} onChange={onChange} readOnly={readOnly} />
+    return <ToolsField value={value} onChange={onChange} readOnly={readOnly} compact={compact} />
   }
   if (fieldKey === AGENT_PROMPT_BLOCKS_KEY) {
-    return <PromptBlocksField value={value} onChange={onChange} readOnly={readOnly} />
+    return (
+      <PromptBlocksField value={value} onChange={onChange} readOnly={readOnly} compact={compact} />
+    )
   }
   return <TextListField value={value} onChange={onChange} readOnly={readOnly} />
 }

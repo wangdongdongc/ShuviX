@@ -5,6 +5,11 @@
 import type { SessionConfigSection } from '@shuvix/app-shell'
 
 export const DETAIL_HISTORY_MARK = 'shuvixMobileDetail'
+/**
+ * 某一段的子页是从对话页**直接**推入的（空对话页的入口行），下面没有详情首页那一条：返回一步就回对话页。
+ * 只在子页那一条上有意义。
+ */
+export const DETAIL_DIRECT_MARK = 'shuvixMobileDetailDirect'
 
 /** 详情那一层此刻在哪一页：首页，或某一段的子页 */
 export type MobileDetailPage = 'index' | SessionConfigSection
@@ -24,8 +29,19 @@ export function detailPageOf(state: unknown): MobileDetailPage | null {
   return SECTIONS.includes(value as SessionConfigSection) ? (value as SessionConfigSection) : null
 }
 
-/** 这一条在对话页那一条上面第几层：不在详情里 0，详情首页 1，子页 2（关对话页时要一起退掉） */
+/** 这一条是不是从对话页直接推入的子页 */
+export function detailDirectOf(state: unknown): boolean {
+  const page = detailPageOf(state)
+  if (page === null || page === 'index') return false
+  return (state as Record<string, unknown> | null)?.[DETAIL_DIRECT_MARK] === true
+}
+
+/**
+ * 这一条在对话页那一条上面第几层：不在详情里 0，详情首页 1，子页 2 —— 从对话页直接推入的子页是 1
+ * （关对话页时要一起退掉）
+ */
 export function detailDepthOf(state: unknown): number {
   const page = detailPageOf(state)
-  return page === null ? 0 : page === 'index' ? 1 : 2
+  if (page === null) return 0
+  return page === 'index' || detailDirectOf(state) ? 1 : 2
 }

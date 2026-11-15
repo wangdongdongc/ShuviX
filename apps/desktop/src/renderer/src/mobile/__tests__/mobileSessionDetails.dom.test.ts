@@ -14,6 +14,7 @@
  *   MD-21..24 行的顺序、第二张卡没有行就不画、权限行的数、点一行
  *   MD-25..26 删除会话、确认框画在这一页里
  *   MD-27..29 各子页、子页的返回、首页 ↔ 子页是同一个组件
+ *   MD-60..65 返回键上的字：首页、从首页进的子页是「详情」、从对话页直接进的子页（`direct`）是回对话页
  *   MD-30     名称那一格与外面改了标题：没动过就跟上（失焦不写回旧标题）、打过字就留着、没存上就退回
  *
  * `@shuvix/chat-ui` 换成替身：`useChatStore` 是工厂里建的真 zustand store，`isImeComposing` 是按源码路径引的真函数；
@@ -162,12 +163,13 @@ async function flush(): Promise<void> {
     })
   }
 }
-function render(page: MobileDetailPage = 'index', sessionId = 's1'): void {
+function render(page: MobileDetailPage = 'index', sessionId = 's1', direct?: boolean): void {
   act(() =>
     root.render(
       h(MobileSessionDetails, {
         sessionId,
         page,
+        ...(direct === undefined ? {} : { direct }),
         onOpenSection: onOpenSection as (section: Section) => void,
         onBack
       })
@@ -624,5 +626,67 @@ describe('MobileSessionDetails: section pages', () => {
     expect(toolsList).toHaveBeenCalledTimes(1)
     expect(nameInput().value).toBe('Title')
     expect(rowOf('extensions')).not.toBeNull()
+  })
+})
+
+describe('MobileSessionDetails: the back label and a section opened directly', () => {
+  const backLabel = (): string | null => q('[data-mobile-details-back]')!.textContent
+  const title = (): string | null => q('[data-mobile-details-title]')!.textContent
+
+  it('MD-60 the index goes back to the chat', async () => {
+    await mount('index')
+    expect(backLabel()).toBe(M.detailsBack)
+  })
+
+  it.each<[string, boolean | undefined]>([
+    ['omitted', undefined],
+    ['false', false]
+  ])('MD-61 a section with direct %s goes back to the details', async (_label, direct) => {
+    render('paths', 's1', direct)
+    await flush()
+    expect(backLabel()).toBe(M.details)
+  })
+
+  it.each(SECTIONS)(
+    'MD-62 the %s page opened directly goes back to the chat; its title is still its own',
+    async (section) => {
+      render(section, 's1', true)
+      await flush()
+      expect(backLabel()).toBe(M.detailsBack)
+      expect(title()).toBe(SECTION_TITLE[section])
+      expect(q(`[data-mobile-detail-section="${section}"]`)).not.toBeNull()
+      expect(rec.panel.at(-1)).toMatchObject({ sessionId: 's1', section })
+    }
+  )
+
+  it('MD-63 the index with direct set is an ordinary index', async () => {
+    render('index', 's1', true)
+    await flush()
+    expect(backLabel()).toBe(M.detailsBack)
+    expect(title()).toBe(M.details)
+    expect(rowOf('paths')).not.toBeNull()
+    expect(nameInput()).not.toBeNull()
+    expect(q('[data-stub-config-panel]')).toBeNull()
+  })
+
+  it('MD-64 back on a direct section calls onBack once and nothing else', async () => {
+    render('paths', 's1', true)
+    await flush()
+    click(q('[data-mobile-details-back]')!)
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(onOpenSection).not.toHaveBeenCalled()
+    expect(updateTitle).not.toHaveBeenCalled()
+    expect(requestDelete).not.toHaveBeenCalled()
+  })
+
+  it('MD-65 the label follows direct on the same instance', async () => {
+    render('paths', 's1', true)
+    await flush()
+    expect(backLabel()).toBe(M.detailsBack)
+    render('paths', 's1', false)
+    expect(backLabel()).toBe(M.details)
+    render('paths', 's1', true)
+    expect(backLabel()).toBe(M.detailsBack)
+    expect(toolsList).toHaveBeenCalledTimes(1)
   })
 })

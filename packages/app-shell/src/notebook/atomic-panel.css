@@ -630,6 +630,160 @@ button.cm-atomic-search-btn svg {
   user-select: none;
 }
 
+/* —— 手机上的那一副长相（frontmatterCard.ts 的 `compact`，2026-11-15）——
+   一张圆角的分组卡片：标题行点一下开合；展开后每行一条发丝线，短的值名字在左、值在右，长的（描述、列表、
+   结构摘要）名字在上、内容整宽在下。行的骨架仍是那几个 Tailwind 类名常量，这里按 `.is-compact` 改尺寸与对齐
+   （本文件不在 @layer 里，盖得过工具类；字号多写一级选择器，盖过手机字号的那组规则）。 */
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-head {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-chevron {
+  transition: transform 0.15s ease;
+}
+.cm-shuvix-fmcard.is-compact[data-open='true'] .cm-shuvix-fmcard-chevron {
+  transform: rotate(180deg);
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-banner {
+  margin: 0 14px 8px;
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-rows > .cm-shuvix-fmcard-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:is(.is-long, .is-block) {
+  display: block;
+  padding: 8px 14px 10px;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row
+  > .cm-shuvix-fmcard-label {
+  width: auto;
+  max-width: 45%;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--color-text-secondary);
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:is(.is-long, .is-block)
+  > .cm-shuvix-fmcard-label {
+  display: block;
+  max-width: none;
+  margin-bottom: 2px;
+  font-size: 13px;
+  line-height: 20px;
+}
+/* 短的值靠右：只读文字、输入框、开关、宿主挂进来的选择器 */
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  > .cm-shuvix-fmcard-value {
+  margin-left: 0;
+  font-size: 15px;
+  text-align: right;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  textarea.cm-shuvix-fmcard-input {
+  padding-right: 0;
+  font-size: 15px;
+  text-align: right;
+}
+/* 下拉（思考档位、条目状态…）：字靠右贴着箭头；没设置时是弱色 */
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  select.cm-shuvix-fmcard-input {
+  font-size: 15px;
+  line-height: 24px;
+  text-align: right;
+  text-align-last: right;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  select.cm-shuvix-fmcard-input:has(option[value='']:checked) {
+  color: var(--color-text-secondary);
+}
+/* 模型选择器（chat-ui ModelSelect 的 boxed 档）：不占固定宽度，「名字 + 箭头」贴右 */
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  .cm-shuvix-fmcard-slot
+  div[style*='width'] {
+  width: auto !important;
+  max-width: 100%;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  .cm-shuvix-fmcard-slot
+  button {
+  font-size: 15px;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  .cm-shuvix-fmcard-slot
+  button
+  > .flex-1 {
+  flex: 0 1 auto;
+}
+/* 开关放大到手指按得准的尺寸（从右边放大，不挤后面的字） */
+.cm-shuvix-fmcard.is-compact :is(.cm-shuvix-fmcard-toggle, .cm-shuvix-fmcard-meta-toggle) {
+  transform: scale(1.4);
+  transform-origin: right center;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row.is-long
+  .cm-shuvix-fmcard-input {
+  font-size: 15px;
+  line-height: 22px;
+}
+.cm-shuvix-fmcard.is-compact
+  .cm-shuvix-fmcard-rows
+  > .cm-shuvix-fmcard-row:not(.is-long, .is-block)
+  > :is(.cm-shuvix-fmcard-slot, .cm-shuvix-fmcard-bool) {
+  margin-left: 0;
+  justify-content: flex-end;
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-meta:not(:empty) {
+  padding: 8px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+}
+/* 「ShuviX 设置」条（FrontmatterMetaStrip）：槽位已经画了发丝线与留白，条自己的上边线与缩进收掉；开关靠右 */
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-meta-strip {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-meta-strip > div {
+  padding-left: 0;
+  padding-right: 0;
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-meta-row {
+  align-items: center;
+  min-height: 36px;
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-meta-row > span:first-child {
+  width: auto;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--color-text-secondary);
+}
+.cm-shuvix-fmcard.is-compact .cm-shuvix-fmcard-meta-row > div {
+  justify-content: flex-end;
+}
+
 /* 属性卡里「值来自 ShuviX、不在文件里」的补缺值（FrontmatterFillField → FrontmatterFieldPicker 的
    `sourced`）：只做样式上的区别 —— 强调色 + 一条浅的点状下划线，不挂文字标签；点状下划线本身就是
    「悬停看解释」的老规矩，解释在补缺行包裹的 title 里。 */

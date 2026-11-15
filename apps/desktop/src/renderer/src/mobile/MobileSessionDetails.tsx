@@ -7,17 +7,10 @@
  *
  * 哪一页由 MobileChatView 管（它连着浏览器历史，见 detailHistory.ts）；这里只画。
  */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import {
-  getChatApi,
-  getSessionChannelApi,
-  isImeComposing,
-  useChatStore,
-  useSessionKnowledgeBases,
-  useSessionTools
-} from '@shuvix/chat-ui'
+import { getChatApi, isImeComposing, useChatStore, useSessionKnowledgeBases } from '@shuvix/chat-ui'
 import {
   SessionConfigPanel,
   useSessionAclCounts,
@@ -25,36 +18,9 @@ import {
   type SessionConfigSection
 } from '@shuvix/app-shell'
 import { boundBotOf } from '@shuvix/chat-protocol/botSession'
-import { isToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import type { MobileDetailPage } from './detailHistory'
+import { useMcpSummary } from './useMcpSummary'
 import { useSessionLocation } from './useSessionLocation'
-
-/** 这条会话有几台 MCP 可勾、勾着几台（档案声明的缺省勾着） */
-function useMcpSummary(sessionId: string): { total: number; selected: number } {
-  const { enabledTools } = useSessionTools(sessionId)
-  const [tools, setTools] = useState<Array<{ name: string; declared: boolean }>>([])
-  useEffect(() => {
-    let alive = true
-    void getSessionChannelApi()
-      .tools.list(sessionId)
-      .then((list) => {
-        if (!alive) return
-        setTools(
-          list
-            .filter((tool) => tool.group?.startsWith('mcp:'))
-            .map((tool) => ({ name: tool.name, declared: !!tool.declaredBy }))
-        )
-      })
-      .catch(() => undefined)
-    return () => {
-      alive = false
-    }
-  }, [sessionId])
-  return {
-    total: tools.length,
-    selected: tools.filter((tool) => isToolSelected(enabledTools, tool.name, tool.declared)).length
-  }
-}
 
 const card = 'overflow-hidden rounded-xl bg-bg-secondary divide-y divide-border-secondary/50'
 const rowBase = 'flex min-h-[44px] w-full items-center gap-3 px-4 text-left text-[16px]'
@@ -63,6 +29,8 @@ const row = `${rowBase} text-text-primary`
 export interface MobileSessionDetailsProps {
   sessionId: string
   page: MobileDetailPage
+  /** 这一段的子页是从对话页直接进来的（空对话页的入口行）：返回是回对话页，不经详情首页 */
+  direct?: boolean
   /** 推入某一段的子页 */
   onOpenSection: (section: SessionConfigSection) => void
   /** 返回上一层（子页 → 首页 → 对话页） */
@@ -72,6 +40,7 @@ export interface MobileSessionDetailsProps {
 export function MobileSessionDetails({
   sessionId,
   page,
+  direct,
   onOpenSection,
   onBack
 }: MobileSessionDetailsProps): React.JSX.Element {
@@ -148,7 +117,7 @@ export function MobileSessionDetails({
           className="flex h-9 items-center gap-0.5 rounded-full pl-1 pr-3 text-[16px] text-accent active:bg-bg-hover"
         >
           <ChevronLeft size={22} aria-hidden="true" />
-          <span>{isIndex ? t('mobile.detailsBack') : t('mobile.details')}</span>
+          <span>{isIndex || direct ? t('mobile.detailsBack') : t('mobile.details')}</span>
         </button>
       </div>
       <h1

@@ -86,6 +86,13 @@ export interface FrontmatterCardConfig {
    * 宿主不往槽里放东西，槽就是一个零高度的空 div。不提供本接缝 = 没有这一条。
    */
   mountMetaStrip?: (slot: HTMLElement, ctx: FrontmatterMetaMount) => (() => void) | void
+  /**
+   * 手机上的那一副长相（2026-11-15）：卡片是一张圆角的分组卡片，**默认收起**成一行 —— 文件类型与校验态，下面一句
+   * 摘要（名字 · 几个工具 · 几个提示词块）—— 点它展开；展开后短的值一行（名字在左、值在右），长的（描述、列表）
+   * 名字在上、内容整宽在下，「编辑源码」在标题行里（手机上没有悬停）。开合记在这个编辑器上，YAML 变了重建卡片也不变。
+   * 缺省（桌面）是无盒的两列清单，一直展开。
+   */
+  compact?: boolean
 }
 
 /** 「ShuviX 设置」条的挂载上下文 */
@@ -671,7 +678,7 @@ function buildFieldRow(
     row.dataset.key = spec.key
     row.appendChild(labelEl(`cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
     const state = value === undefined ? 'unset' : value ? 'on' : 'off'
-    const right = el('div', 'min-w-0 flex-1 flex items-center gap-2 h-6')
+    const right = el('div', 'cm-shuvix-fmcard-bool min-w-0 flex-1 flex items-center gap-2 h-6')
     const toggle = el(
       'button',
       `cm-shuvix-fmcard-toggle inline-flex items-center w-7 h-4 rounded-full px-[2px] transition-colors ${
@@ -804,6 +811,80 @@ function buildGenericRow(key: string, value: unknown): HTMLElement {
  * 它们会在 YAML 一字不动的情况下变 —— 用户在别处补上那份 agent md 再切回来，重开的卡片不能
  * 还举着旧警告。聚焦是全应用「重扫」的同一时机（侧栏各组、笔记本都在这一下重读），卡片跟它走。
  */
+/** 手机那一副长相（config.compact）的开合：记在编辑器上 —— YAML 一变卡片就重建，开着的不能因此合上 */
+const compactOpen = new WeakMap<EditorView, boolean>()
+
+/** 收起时摘要里当名字用的键，依次找第一个有字的 */
+const SUMMARY_NAME_KEYS = ['shuvix-displayName', 'title', 'name'] as const
+
+/**
+ * 收起时的那一句摘要：名字（显示名 > 标题 > 标识名），后面是各个列表字段有几项（「17 个工具」）。
+ * 一样都没有就用描述；都没有返回空串（那一行不画）。
+ */
+export function frontmatterSummary(
+  known: readonly ShuvixMdFieldSpec[],
+  fields: Record<string, unknown>,
+  t: FrontmatterCardConfig['t']
+): string {
+  const text = (key: string): string => {
+    const value = fields[key]
+    return typeof value === 'string' ? value.trim() : ''
+  }
+  const parts: string[] = []
+  for (const key of SUMMARY_NAME_KEYS) {
+    const name = text(key)
+    if (name) {
+      parts.push(name)
+      break
+    }
+  }
+  const pattern = t('notebook.frontmatter.summaryCount')
+  for (const f of known) {
+    if (f.kind === 'hidden' || f.kind === 'tag') continue
+    const value = fields[f.key]
+    // 只数「本来就是清单」的字段：逗号清单，与结构化的那几种（规则、绑定、来源）。标量字段手写成数组不算
+    const scalar =
+      f.kind === 'text' || f.kind === 'mono' || f.kind === 'select' || f.kind === 'boolean'
+    const count =
+      f.kind === 'csv'
+        ? csvEntries(value).length
+        : !scalar && Array.isArray(value)
+          ? value.length
+          : 0
+    if (count > 0) {
+      parts.push(pattern.replace('{n}', String(count)).replace('{label}', t(f.labelKey)))
+    }
+  }
+  return parts.length > 0 ? parts.join(' · ') : text('description')
+}
+
+/** 手机那一副长相里哪些行是「名字在上、内容整宽在下」：列表、描述、写得长的文字 */
+function isLongField(spec: ShuvixMdFieldSpec, value: unknown): boolean {
+  if (spec.kind === 'csv') return true
+  if (spec.kind !== 'text') return false
+  return spec.key === 'description' || (typeof value === 'string' && value.length > 18)
+}
+
+/** 标题行末尾的箭头（lucide chevron-down 的那一笔；展开时由 CSS 转过来） */
+function chevronIcon(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(ns, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', '18')
+  svg.setAttribute('height', '18')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  svg.setAttribute('class', 'cm-shuvix-fmcard-chevron shrink-0 text-text-tertiary')
+  const path = document.createElementNS(ns, 'path')
+  path.setAttribute('d', 'm6 9 6 6 6-6')
+  svg.appendChild(path)
+  return svg
+}
+
 const validationCache = new Map<string, ShuvixMdValidation>()
 const VALIDATION_CACHE_MAX = 64
 if (typeof window !== 'undefined') {
@@ -849,8 +930,21 @@ class FrontmatterCardWidget extends WidgetType {
     //
     // group：让「编辑源码」只在悬停 / 卡内聚焦时浮现（见 head）。底边一条极淡的细线是
     // 元数据与正文的唯一分界 —— 卡片没有盒子了，这条线代替盒子说「属性到此为止」。
-    const wrap = el('div', 'cm-shuvix-fmcard group pt-3 pb-2 border-b border-border-secondary/40')
+    const compact = !!this.config.compact
+    // 手机那一副长相：上下留白之间是一张圆角卡片（见 FrontmatterCardConfig.compact），没有底边那条线
+    const wrap = el(
+      'div',
+      compact
+        ? 'cm-shuvix-fmcard is-compact pt-2 pb-4'
+        : 'cm-shuvix-fmcard group pt-3 pb-2 border-b border-border-secondary/40'
+    )
     wrap.setAttribute('contenteditable', 'false')
+    // 卡片的盒子，与收起时藏起来的那一截（横幅、各行、「ShuviX 设置」条）；桌面两者都是 wrap 自己
+    const card = compact
+      ? el('div', 'cm-shuvix-fmcard-card overflow-hidden rounded-xl bg-bg-secondary')
+      : wrap
+    const body = compact ? el('div', 'cm-shuvix-fmcard-body') : wrap
+    if (compact) wrap.appendChild(card)
 
     // 点卡片空白处（标签、行间、卡片背景）不得把光标送进 frontmatter —— 卡片位于
     // contenteditable 区域内，浏览器默认会把选区落到 widget 旁边，于是「聚焦 + 选区
@@ -889,9 +983,16 @@ class FrontmatterCardWidget extends WidgetType {
 
     // 标题行：类型徽章 + 校验态（合法时只是一个绿点）+ 「编辑源码」（悬停才浮现）——
     // 三者都是小字弱色。它的职责只是「这是一份什么文件」，不是一个区块的抬头。
-    const head = el('div', 'cm-shuvix-fmcard-head flex items-center gap-2 h-6 px-1 mb-0.5')
+    const head = el(
+      'div',
+      compact
+        ? 'cm-shuvix-fmcard-head flex min-h-[44px] items-center gap-2 px-3.5 py-2'
+        : 'cm-shuvix-fmcard-head flex items-center gap-2 h-6 px-1 mb-0.5'
+    )
+    // 徽章、标签、校验态排在哪一行里：桌面就是标题行；手机上标题行左边是两行（这一行 + 摘要），右边是箭头
+    const headLine = compact ? el('div', 'flex min-w-0 items-center gap-2') : head
     const version = this.marker.version !== null ? ` · v${this.marker.version}` : ''
-    head.appendChild(
+    headLine.appendChild(
       el(
         'span',
         'cm-shuvix-fmcard-badge text-[11px] font-medium tracking-wide text-text-tertiary',
@@ -907,10 +1008,10 @@ class FrontmatterCardWidget extends WidgetType {
         t(f.labelKey)
       )
       tag.dataset.key = f.key
-      head.appendChild(tag)
+      headLine.appendChild(tag)
     }
     if (fields === null) {
-      head.appendChild(
+      headLine.appendChild(
         el(
           'span',
           'cm-shuvix-fmcard-err text-[10px] px-1.5 py-px rounded bg-red-500/10 text-red-500',
@@ -925,12 +1026,15 @@ class FrontmatterCardWidget extends WidgetType {
     const statusText = el('span', 'cm-shuvix-fmcard-status-text')
     statusChip.appendChild(statusDot)
     statusChip.appendChild(statusText)
-    head.appendChild(statusChip)
-    head.appendChild(el('div', 'flex-1'))
+    headLine.appendChild(statusChip)
+    let src: HTMLButtonElement | null = null
     if (!readOnly) {
-      const src = el(
+      src = el(
         'button',
-        'cm-shuvix-fmcard-src shrink-0 text-[11px] text-text-tertiary hover:text-text-primary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity',
+        compact
+          ? // 手机上没有悬停：展开后一直在标题行里
+            'cm-shuvix-fmcard-src shrink-0 rounded-full px-2 py-1 text-[13px] text-accent active:bg-bg-hover'
+          : 'cm-shuvix-fmcard-src shrink-0 text-[11px] text-text-tertiary hover:text-text-primary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity',
         t('notebook.frontmatter.sourceButton')
       )
       src.type = 'button'
@@ -939,14 +1043,56 @@ class FrontmatterCardWidget extends WidgetType {
         e.stopPropagation()
         revealSource(view)
       })
-      head.appendChild(src)
     }
-    wrap.appendChild(head)
+    if (compact) {
+      const main = el('div', 'min-w-0 flex-1')
+      main.appendChild(headLine)
+      const summary = el(
+        'div',
+        'cm-shuvix-fmcard-summary mt-0.5 truncate text-[15px] leading-5 text-text-primary',
+        fields ? frontmatterSummary(descriptor?.fields ?? [], fields, t) : ''
+      )
+      main.appendChild(summary)
+      head.appendChild(main)
+      if (src) head.appendChild(src)
+      head.appendChild(chevronIcon())
+      head.setAttribute('role', 'button')
+      head.tabIndex = 0
+      const apply = (open: boolean): void => {
+        wrap.dataset.open = String(open)
+        head.setAttribute('aria-expanded', String(open))
+        body.hidden = !open
+        summary.hidden = open || summary.textContent === ''
+        if (src) src.hidden = !open
+      }
+      const toggle = (): void => {
+        const next = !(compactOpen.get(view) ?? false)
+        compactOpen.set(view, next)
+        apply(next)
+        // 块高变了：让 CM6 重量（否则卡片以下每一行的落点都偏这一截）
+        view.requestMeasure()
+      }
+      apply(compactOpen.get(view) ?? false)
+      head.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement | null)?.closest('.cm-shuvix-fmcard-src')) return
+        toggle()
+      })
+      head.addEventListener('keydown', (e) => {
+        if (e.target !== head || (e.key !== 'Enter' && e.key !== ' ')) return
+        e.preventDefault()
+        toggle()
+      })
+    } else {
+      head.appendChild(el('div', 'flex-1'))
+      if (src) head.appendChild(src)
+    }
+    card.appendChild(head)
+    if (compact) card.appendChild(body)
 
     // 解析器级校验（异步；缓存命中同步上屏）
     const banner = el('div', BANNER_BASE)
     banner.hidden = true
-    wrap.appendChild(banner)
+    body.appendChild(banner)
     const { validate } = this.config
     if (validate) {
       const paint = (result: ShuvixMdValidation): void => {
@@ -1020,23 +1166,23 @@ class FrontmatterCardWidget extends WidgetType {
       for (const f of known) {
         // hidden：已知但不渲染（机器面的所有权声明之类）；tag 画在标题行 —— 都留在 seen 里防落通用行
         if (f.kind === 'hidden' || f.kind === 'tag') continue
-        box.appendChild(
-          buildFieldRow(
-            view,
-            this.config,
-            this.marker.type,
-            f,
-            fields[f.key],
-            readOnly,
-            this.cleanups
-          )
+        const row = buildFieldRow(
+          view,
+          this.config,
+          this.marker.type,
+          f,
+          fields[f.key],
+          readOnly,
+          this.cleanups
         )
+        if (compact && isLongField(f, fields[f.key])) row.classList.add('is-long')
+        box.appendChild(row)
       }
       for (const [key, value] of Object.entries(fields)) {
         if (seen.has(key)) continue
         box.appendChild(buildGenericRow(key, value))
       }
-      wrap.appendChild(box)
+      body.appendChild(box)
     }
 
     // 「ShuviX 设置」条：数据库里的补缺值与对象 id（见 FrontmatterCardConfig.mountMetaStrip）。
@@ -1044,7 +1190,7 @@ class FrontmatterCardWidget extends WidgetType {
     const { mountMetaStrip } = this.config
     if (mountMetaStrip) {
       const slot = el('div', 'cm-shuvix-fmcard-meta')
-      wrap.appendChild(slot)
+      body.appendChild(slot)
       const cleanup = mountMetaStrip(slot, {
         markerType: this.marker.type,
         yaml: this.yaml,

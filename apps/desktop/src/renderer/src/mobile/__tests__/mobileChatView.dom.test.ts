@@ -9,14 +9,17 @@
  * - 「⋯」的菜单：文件、后台任务（数 = 还在跑的）、产物 | 导出对话（笔记本会话没有）、分支会话（宿主给、形态给
  *   才有；这一轮在跑 / 被中断时置灰）| 详情。文件 / 任务 / 产物是底部抽屉；点菜单外、Esc、返回手势收起；
  * - 详情那一层连着浏览器历史：首页一条、子页再一条（都带着下面各层的标记），返回键 / 返回手势一层一层退；
- *   换了会话就是另一份详情。
+ *   换了会话就是另一份详情；
+ * - 空对话页（MobileEmptyChat，按会话 id 作 key）的入口行**直接**推入详情里的那一段：只压一条历史，带
+ *   `shuvixMobileDetailDirect: true`，返回一步就回对话页；从首页进去的子页那个记号是 false。
  *
  *   CH-1..15  顶栏：三格、返回、返回键后面的数、小字与状态、没有活跃会话
  *   CH-20..39 菜单：位置、各种会话的项、任务数、置灰的分支、各项做什么、怎么收起、分支被拒的说明
  *   CH-40..49 详情的历史：推入、子页、一层一层退、前进、没有标记时直接收起、没有会话不画、换会话换一份
+ *   CH-50..62 空对话页的入口：给 ChatBody 的空态、直接推入的那一段、返回一步、前进、记号不粘、换会话
  *
  * `@shuvix/chat-ui` / `@shuvix/app-shell` 整个换成替身（chat store 是工厂里建的真 zustand store）；
- * MobileSessionDetails / useSessionLocation / 笔记本 / 欢迎页也是替身；PullDownMenu、BottomSheet、detailHistory、
+ * MobileSessionDetails / MobileEmptyChat / useSessionLocation / 笔记本也是替身；PullDownMenu、BottomSheet、detailHistory、
  * chat-protocol 的 sessionFork 是真的。jsdom 的 `history.back()` 异步发 popstate：`back()` 在 act 里等到它。
  * 文件是 `.ts`，一律 createElement。
  */
@@ -62,7 +65,11 @@ const rec = vi.hoisted(() => ({
   artifacts: [] as Array<Record<string, unknown>>,
   details: [] as Array<Record<string, unknown>>,
   /** 详情替身挂载过几次（每挂一次是一个新实例） */
-  detailMounts: 0
+  detailMounts: 0,
+  /** 空对话页替身收到的 props */
+  empties: [] as Array<Record<string, unknown>>,
+  /** ChatBody 拿到的空态元素的 key（每次渲染记一次） */
+  emptyKeys: [] as Array<string | null>
 }))
 
 vi.mock('@shuvix/chat-ui', async () => {
@@ -95,8 +102,22 @@ vi.mock('@shuvix/chat-ui', async () => {
 vi.mock('@shuvix/app-shell', async () => {
   const { createElement: h } = await import('react')
   return {
-    ChatBody: ({ header, banner, overlays }: Props) =>
-      h('div', { 'data-stub-chat-body': '' }, header as never, banner as never, overlays as never),
+    ChatBody: ({ header, banner, overlays, conversationEmptyState }: Props) => {
+      // 真 ChatBody 在有活跃会话、对话还空着时画它；替身只要有活跃会话就画
+      const sid = rec.store.getState().activeSessionId
+      const empty = sid
+        ? (conversationEmptyState as ((id: string) => { key: string | null }) | undefined)?.(sid)
+        : null
+      if (empty) rec.emptyKeys.push(empty.key)
+      return h(
+        'div',
+        { 'data-stub-chat-body': '' },
+        header as never,
+        banner as never,
+        empty as never,
+        overlays as never
+      )
+    },
     MediaUrlProvider: ({ children }: { children: unknown }) => children,
     StatusBanner: () => null,
     WelcomeView: () => null,
@@ -128,7 +149,26 @@ vi.mock('@shuvix/app-shell', async () => {
   }
 })
 
-vi.mock('../../components/chat/WelcomeView', () => ({ EmptySessionHint: () => null }))
+vi.mock('../MobileEmptyChat', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    MobileEmptyChat: (props: Props) => {
+      rec.empties.push(props)
+      return h(
+        'div',
+        { 'data-stub-empty': String(props.sessionId) },
+        ['extensions', 'knowledge', 'paths'].map((section) =>
+          h('button', {
+            key: section,
+            type: 'button',
+            'data-stub-empty-row': section,
+            onClick: () => (props.onOpenSection as (s: string) => void)(section)
+          })
+        )
+      )
+    }
+  }
+})
 vi.mock('../../components/notebook/NotebookSessionView', () => ({
   NotebookSessionView: () => null
 }))
@@ -143,6 +183,7 @@ vi.mock('../MobileSessionDetails', async () => {
       return h('div', {
         'data-stub-details': String(props.page),
         'data-stub-details-session': String(props.sessionId),
+        'data-stub-details-direct': String(props.direct),
         'data-stub-details-instance': String(instance)
       })
     }
@@ -160,6 +201,7 @@ const M = en.mobile
 const CHAT = 'shuvixMobileChat'
 const SCOPE = 'shuvixMobileScope'
 const DETAIL = 'shuvixMobileDetail'
+const DIRECT = 'shuvixMobileDetailDirect'
 
 const onBack = vi.fn<() => void>()
 const fork = vi.fn<(...args: unknown[]) => Promise<void>>()
@@ -261,6 +303,9 @@ const sheetTitle = (): string | null =>
 const details = (): HTMLElement | null => q('[data-stub-details]')
 const detailsPage = (): string | null => details()?.getAttribute('data-stub-details') ?? null
 const lastDetails = (): Record<string, unknown> => rec.details.at(-1)!
+const detailsDirect = (): string | null =>
+  details()?.getAttribute('data-stub-details-direct') ?? null
+const emptyRow = (section: string): HTMLElement => q(`[data-stub-empty-row="${section}"]`)!
 const openSection = (section: string): void =>
   act(() => (lastDetails().onOpenSection as (s: string) => void)(section))
 
@@ -298,6 +343,8 @@ beforeEach(() => {
   rec.artifacts.length = 0
   rec.details.length = 0
   rec.detailMounts = 0
+  rec.empties.length = 0
+  rec.emptyKeys.length = 0
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -695,7 +742,7 @@ describe('MobileChatView: the details layer and the browser history', () => {
     const push = vi.spyOn(window.history, 'pushState')
     click(titleButton())
     expect(push).toHaveBeenCalledTimes(1)
-    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [DETAIL]: 'index' })
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [DETAIL]: 'index', [DIRECT]: false })
     expect(lastDetails()).toMatchObject({ sessionId: 's1', page: 'index' })
     expect(detailsPage()).toBe('index')
   })
@@ -704,7 +751,7 @@ describe('MobileChatView: the details layer and the browser history', () => {
     seed({ [CHAT]: true })
     mount()
     click(titleButton())
-    expect(state()).toEqual({ [CHAT]: true, [DETAIL]: 'index' })
+    expect(state()).toEqual({ [CHAT]: true, [DETAIL]: 'index', [DIRECT]: false })
   })
 
   it('CH-42 opening a section pushes one more entry', () => {
@@ -714,7 +761,7 @@ describe('MobileChatView: the details layer and the browser history', () => {
     click(titleButton())
     openSection('paths')
     expect(push).toHaveBeenCalledTimes(2)
-    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [DETAIL]: 'paths' })
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [DETAIL]: 'paths', [DIRECT]: false })
     expect(detailsPage()).toBe('paths')
     expect(lastDetails()).toMatchObject({ sessionId: 's1', page: 'paths' })
   })
@@ -827,5 +874,161 @@ describe('MobileChatView: the details layer and the browser history', () => {
     ).not.toThrow()
     expect(rec.details.length).toBe(before)
     expect(body('[data-mobile-pulldown-layer]')).toBeNull()
+  })
+})
+
+describe('MobileChatView: the empty page entries open a section directly', () => {
+  const seed = (marks: Record<string, unknown> = { [CHAT]: true, [SCOPE]: true }): void =>
+    window.history.replaceState(marks, '')
+
+  it('CH-50 the empty state given to ChatBody is MobileEmptyChat for the active session', () => {
+    mount()
+    expect(q('[data-stub-empty]')!.getAttribute('data-stub-empty')).toBe('s1')
+    expect(rec.empties.at(-1)).toMatchObject({ sessionId: 's1' })
+    expect(typeof rec.empties.at(-1)!.onOpenSection).toBe('function')
+  })
+
+  it('CH-50 the empty state element is keyed by the session id', () => {
+    rec.store.setState({ sessions: [session(), session({ id: 's2', title: 'Second' })] })
+    mount()
+    expect(rec.emptyKeys.at(-1)).toBe('s1')
+    setStore({ activeSessionId: 's2' })
+    expect(rec.emptyKeys.at(-1)).toBe('s2')
+    expect(q('[data-stub-empty]')!.getAttribute('data-stub-empty')).toBe('s2')
+  })
+
+  it('CH-51 tapping an entry pushes exactly one entry, marked direct, keeping the marks below', () => {
+    seed()
+    mount()
+    const before = window.history.length
+    const push = vi.spyOn(window.history, 'pushState')
+    click(emptyRow('paths'))
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(window.history.length).toBe(before + 1)
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [DETAIL]: 'paths', [DIRECT]: true })
+  })
+
+  it('CH-52 the details then show that section, told it was opened directly', () => {
+    seed()
+    mount()
+    click(emptyRow('paths'))
+    expect(detailsPage()).toBe('paths')
+    expect(lastDetails()).toMatchObject({ sessionId: 's1', page: 'paths', direct: true })
+  })
+
+  it.each(['extensions', 'knowledge', 'paths'])(
+    'CH-53 the %s entry opens its own section directly',
+    (section) => {
+      seed()
+      mount()
+      const push = vi.spyOn(window.history, 'pushState')
+      click(emptyRow(section))
+      expect(push).toHaveBeenCalledTimes(1)
+      expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [DETAIL]: section, [DIRECT]: true })
+      expect(lastDetails()).toMatchObject({ page: section, direct: true })
+    }
+  )
+
+  it("CH-54 the page's back from a direct section is one step back to the chat page", async () => {
+    seed()
+    mount()
+    click(emptyRow('paths'))
+    const historyBack = vi.spyOn(window.history, 'back')
+    await awaitPop(() => (lastDetails().onBack as () => void)())
+    expect(historyBack).toHaveBeenCalledTimes(1)
+    expect(details()).toBeNull()
+    expect(mark(DETAIL)).toBe(false)
+    expect(mark(CHAT)).toBe(true)
+    expect(mark(SCOPE)).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CH-55 the back gesture from a direct section does the same', async () => {
+    seed()
+    mount()
+    click(emptyRow('paths'))
+    await back()
+    expect(details()).toBeNull()
+    expect(mark(DETAIL)).toBe(false)
+    expect(mark(CHAT)).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CH-56 going forward re-opens the direct section as direct', async () => {
+    seed()
+    mount()
+    click(emptyRow('paths'))
+    await back()
+    await awaitPop(() => window.history.forward())
+    expect(detailsPage()).toBe('paths')
+    expect(lastDetails()).toMatchObject({ page: 'paths', direct: true })
+  })
+
+  it('CH-57 the index opened from the title is not direct', () => {
+    seed()
+    mount()
+    click(titleButton())
+    expect(state()?.[DIRECT]).toBe(false)
+    expect(lastDetails()).toMatchObject({ page: 'index', direct: false })
+  })
+
+  it('CH-58 a section opened from the index is not direct, and back lands on the index', async () => {
+    seed()
+    mount()
+    click(titleButton())
+    openSection('paths')
+    expect(state()?.[DIRECT]).toBe(false)
+    expect(lastDetails()).toMatchObject({ page: 'paths', direct: false })
+    await back()
+    expect(detailsPage()).toBe('index')
+    expect(detailsDirect()).toBe('false')
+  })
+
+  it('CH-59 the direct flag does not stick to later pages', async () => {
+    seed()
+    mount()
+    click(emptyRow('paths'))
+    expect(detailsDirect()).toBe('true')
+    await back()
+    click(titleButton())
+    expect(lastDetails()).toMatchObject({ page: 'index', direct: false })
+    openSection('paths')
+    expect(lastDetails()).toMatchObject({ page: 'paths', direct: false })
+    expect(state()?.[DIRECT]).toBe(false)
+  })
+
+  it('CH-60 a direct section whose entry lost its mark closes at once and resets the flag', () => {
+    seed()
+    mount()
+    click(emptyRow('paths'))
+    window.history.replaceState({}, '')
+    const historyBack = vi.spyOn(window.history, 'back')
+    act(() => (lastDetails().onBack as () => void)())
+    expect(details()).toBeNull()
+    expect(historyBack).not.toHaveBeenCalled()
+    click(titleButton())
+    expect(lastDetails()).toMatchObject({ page: 'index', direct: false })
+  })
+
+  it('CH-61 an index entry carrying the direct mark is still an ordinary index', () => {
+    seed()
+    mount()
+    window.history.replaceState({ [CHAT]: true, [DETAIL]: 'index', [DIRECT]: true }, '')
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(detailsPage()).toBe('index')
+    expect(lastDetails()).toMatchObject({ page: 'index', direct: false })
+  })
+
+  it('CH-62 another session becoming active under a direct section: a new page, same section', () => {
+    seed()
+    rec.store.setState({ sessions: [session(), session({ id: 's2', title: 'Second' })] })
+    mount()
+    click(emptyRow('paths'))
+    const first = details()!.getAttribute('data-stub-details-instance')
+    setStore({ activeSessionId: 's2' })
+    expect(details()!.getAttribute('data-stub-details-instance')).not.toBe(first)
+    expect(lastDetails()).toMatchObject({ sessionId: 's2', page: 'paths', direct: true })
   })
 })

@@ -1471,6 +1471,73 @@ describe('phone layout: the shell', () => {
     await toTab('sessions')
   })
 
+  it('M-17b an empty conversation shows entry rows instead of the config cards; a row opens its details page directly and back returns to the chat', async () => {
+    await app.main.eval(
+      `window.api.session.create(${JSON.stringify({ title: 'MOB-empty', projectId: projects.main.id })}).then((s) => s.id)`
+    )
+    await toTab('sessions')
+    await openFromList('MOB-empty')
+    const empty = await until(async () => {
+      const e = await mobile().emptyChat()
+      // 文件访问那一行的数等权限表取回来才有
+      return e?.rows.find((r) => r.section === 'paths')?.value ? e : null
+    }, 'the entry card with its file access count')
+    expect(empty.desktopConfig, 'no desktop config cards on the empty page').toBe(false)
+    expect(Number(empty.rows.find((r) => r.section === 'paths')?.value)).toBeGreaterThan(0)
+    expect(empty.rows.find((r) => r.section === 'extensions')?.value).toBe(
+      en.mobile.emptyExtensionsOff
+    )
+
+    const before = await mobile().history()
+    await mobile().tap({ emptyRow: 'paths' })
+    const paths = await until(async () => {
+      const d = await mobile().details()
+      return d?.page === 'paths' && d.sectionText ? d : null
+    }, 'the file access page, straight from the chat')
+    expect(paths.title).toBe(en.sessionAcl.title)
+    // 下面没有详情首页：返回键写的是「对话」，一步就回对话页
+    expect(await mobile().detailsBackLabel()).toBe(en.mobile.detailsBack)
+    expect(await mobile().history()).toEqual({ mark: true, length: before.length + 1 })
+    await mobile().tap({ details: 'back' })
+    await until(async () => (await mobile().details()) === null, 'one step back closes the page')
+    expect(await mobile().chatOpen()).toBe(true)
+    expect(await mobile().emptyChat()).not.toBeNull()
+    await backToList()
+  })
+
+  it('M-17c a notebook property card is collapsed to a summary on the phone; a tap on its head opens and closes it', async () => {
+    await toTab('library')
+    await mobile().tap({ libraryGroup: 'agents' })
+    const agents = agentsSidebarPane(page())
+    const builtin = await until(async () => {
+      const rows = await agents.builtinRows()
+      return rows.length > 0 ? rows[0] : null
+    }, 'a builtin agent row on the agents page')
+    await mobile().tap({ agentBuiltinRow: builtin.name })
+    await until(() => mobile().chatOpen(), 'the builtin agent notebook')
+    const closed = await until(async () => {
+      const c = await mobile().propertyCard()
+      return c?.summary ? c : null
+    }, 'the property card with its summary')
+    expect(closed).toMatchObject({ compact: true, open: false, visibleRows: 0 })
+
+    await mobile().tap({ propertyCard: 'head' })
+    const open = await until(async () => {
+      const c = await mobile().propertyCard()
+      return c?.open ? c : null
+    }, 'the property card opened')
+    expect(open.visibleRows).toBeGreaterThan(2)
+
+    await mobile().tap({ propertyCard: 'head' })
+    await until(
+      async () => (await mobile().propertyCard())?.open === false,
+      'the property card closed again'
+    )
+    expect((await mobile().propertyCard())?.visibleRows).toBe(0)
+    await backToList()
+    await toTab('sessions')
+  })
+
   it('M-18 focus mode (on by default) dims nothing in the shell; the desktop layout dims', async () => {
     await openFromList('MOB-chat')
     await backToList()
@@ -2359,6 +2426,8 @@ describe('phone layout: the shell', () => {
       //   点的行都在可见区的下半截：点之前把它滚到正中（pointOf）要往下滚，而列表已经到底，所以位置不动
       await pane.tap({ settingsTab: 'providers' })
       const long = await subList('the provider list for the scroll walk', fakeProviderId)
+      // 子页上屏后标签栏晚一拍才收起（滚动层随之高出一截）：等它收了再量，不然量到的「底」会变
+      await until(async () => !(await pane.tabBarShown()), 'the tab bar hidden on the section page')
       const bottom = await pane.settingsSubScrollToBottom()
       expect(bottom, 'the provider list overflows its scroller').not.toBeNull()
       expect(bottom!.scrollTop).toBeGreaterThan(0)

@@ -47,11 +47,17 @@ import {
   type SessionConfigSection
 } from '@shuvix/app-shell'
 import { isForkableSessionShape } from '@shuvix/chat-protocol/sessionFork'
-import { EmptySessionHint } from '../components/chat/WelcomeView'
 import { NotebookSessionView } from '../components/notebook/NotebookSessionView'
 import { hostMediaResolver } from '../host/hostMedia'
 import { BottomSheet } from './BottomSheet'
-import { DETAIL_HISTORY_MARK, detailPageOf, type MobileDetailPage } from './detailHistory'
+import {
+  DETAIL_DIRECT_MARK,
+  DETAIL_HISTORY_MARK,
+  detailDirectOf,
+  detailPageOf,
+  type MobileDetailPage
+} from './detailHistory'
+import { MobileEmptyChat } from './MobileEmptyChat'
 import { MobileSessionDetails } from './MobileSessionDetails'
 import { useSessionLocation } from './useSessionLocation'
 import { PullDownMenu, type PullDownItem } from './PullDownMenu'
@@ -85,24 +91,34 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
 
   // 详情那一层：哪一页记在浏览器历史里，返回键 / 返回手势退一条就是退一页
   const [detail, setDetail] = useState<MobileDetailPage | null>(null)
+  // 这一页是从对话页直接进来的（空对话页的入口行）：下面没有详情首页，返回一步回对话
+  const [detailDirect, setDetailDirect] = useState(false)
   useEffect(() => {
-    const onPop = (): void => setDetail(detailPageOf(window.history.state))
+    const onPop = (): void => {
+      setDetail(detailPageOf(window.history.state))
+      setDetailDirect(detailDirectOf(window.history.state))
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
-  const pushDetail = useCallback((page: MobileDetailPage): void => {
+  const pushDetail = useCallback((page: MobileDetailPage, direct = false): void => {
     window.history.pushState(
       {
         ...((window.history.state as Record<string, unknown> | null) ?? {}),
-        [DETAIL_HISTORY_MARK]: page
+        [DETAIL_HISTORY_MARK]: page,
+        [DETAIL_DIRECT_MARK]: direct
       },
       ''
     )
     setDetail(page)
+    setDetailDirect(direct)
   }, [])
   const backFromDetail = useCallback((): void => {
     if (detailPageOf(window.history.state) !== null) window.history.back()
-    else setDetail(null)
+    else {
+      setDetail(null)
+      setDetailDirect(false)
+    }
   }, [])
 
   // 「⋯」的下拉菜单：贴着按钮展开（记下按钮此刻在视口里的位置）
@@ -230,7 +246,14 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
         renderNotebook={(path, sid) => (
           <NotebookSessionView key={sid} path={path} sessionId={sid} />
         )}
-        conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
+        conversationEmptyState={(sid) => (
+          <MobileEmptyChat
+            // 换了会话就是另一份（几台 MCP、权限表几行都是按会话取的，上一条的数不能留在这一条上）
+            key={sid}
+            sessionId={sid}
+            onOpenSection={(section) => pushDetail(section, true)}
+          />
+        )}
         overlays={
           <>
             {detail && activeSessionId && (
@@ -239,6 +262,7 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
                 key={activeSessionId}
                 sessionId={activeSessionId}
                 page={detail}
+                direct={detailDirect}
                 onOpenSection={(section: SessionConfigSection) => pushDetail(section)}
                 onBack={backFromDetail}
               />

@@ -14,7 +14,14 @@ import { describe, expect, it } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type { ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
-import { frontmatterCard } from './frontmatterCard'
+import {
+  descriptorForType,
+  type ShuvixMdFieldSpec
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import en from '@shuvix/chat-protocol/i18n/locales/en.json'
+import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
+import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import { frontmatterCard, frontmatterSummary } from './frontmatterCard'
 
 /** 一条装饰：区间 + 卡片 widget 带的标记（不是卡片的装饰没有标记） */
 interface Deco {
@@ -100,5 +107,145 @@ const TABLE: { name: string; doc: string; fallback?: string; expected: Deco[] }[
 describe('frontmatterCard —— 出卡判定（fallbackMarkerType）', () => {
   it.each(TABLE)('FC-1 $name', ({ doc, fallback, expected }) => {
     expect(decosOf(doc, fallback)).toEqual(expected)
+  })
+})
+
+/**
+ * 手机上收起的属性卡那一句摘要（`frontmatterSummary`，纯函数）：名字（显示名 > 标题 > 标识名），后面是各个
+ * 列表字段有几项；一样都没有才用描述；都没有是空串。
+ */
+describe('frontmatterSummary', () => {
+  const PATTERN_KEY = 'notebook.frontmatter.summaryCount'
+  const t = (key: string): string => (key === PATTERN_KEY ? '{n} {label}' : key)
+  const known: ShuvixMdFieldSpec[] = [
+    { key: 'name', labelKey: 'L.name', kind: 'mono' },
+    { key: 'shuvix-displayName', labelKey: 'L.display', kind: 'text' },
+    { key: 'description', labelKey: 'L.desc', kind: 'text' },
+    { key: 'tools', labelKey: 'L.tools', kind: 'csv' },
+    { key: 'blocks', labelKey: 'L.blocks', kind: 'csv' },
+    { key: 'bindings', labelKey: 'L.bindings', kind: 'hookBindings' },
+    { key: 'secret', labelKey: 'L.secret', kind: 'hidden' },
+    { key: 'builtin', labelKey: 'L.builtin', kind: 'tag' }
+  ]
+  const sum = (fields: Record<string, unknown>): string => frontmatterSummary(known, fields, t)
+
+  it('FS-1 shuvix-displayName wins over title and name', () => {
+    expect(sum({ name: 'n', title: 'T', 'shuvix-displayName': 'D' })).toBe('D')
+  })
+
+  it.each<[string, unknown]>([
+    ['empty', ''],
+    ['whitespace', '   '],
+    ['a number', 7],
+    ['null', null]
+  ])('FS-2 a display name that is %s falls to title, then name', (_label, display) => {
+    expect(sum({ name: 'n', title: 'T', 'shuvix-displayName': display })).toBe('T')
+    expect(sum({ name: 'n', title: '  ', 'shuvix-displayName': display })).toBe('n')
+  })
+
+  it('FS-2 an array as the display name is neither a name nor a list to count (a scalar field)', () => {
+    expect(sum({ name: 'n', title: 'T', 'shuvix-displayName': ['D'] })).toBe('T')
+  })
+
+  it('FS-3 the name is trimmed', () => {
+    expect(sum({ name: '  spaced  ' })).toBe('spaced')
+  })
+
+  it('FS-4 a csv field as a comma string counts its non-blank entries', () => {
+    expect(sum({ tools: 'a, b,, c ' })).toBe('3 L.tools')
+  })
+
+  it('FS-5 a csv field as a YAML array counts its entries, blanks dropped', () => {
+    expect(sum({ tools: ['a', 'b'] })).toBe('2 L.tools')
+    expect(sum({ tools: ['a', 5, '', '  '] })).toBe('2 L.tools')
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['an empty string', { tools: '' }],
+    ['missing', {}],
+    ['null', { tools: null }]
+  ])('FS-6 a csv field that is %s gives no part', (_label, fields) => {
+    expect(sum({ name: 'n', ...fields })).toBe('n')
+  })
+
+  it('FS-7 a non-csv field counts only an array value', () => {
+    expect(sum({ bindings: [{ a: 1 }, { b: 2 }, { c: 3 }] })).toBe('3 L.bindings')
+    expect(sum({ name: 'n', bindings: 'a, b' })).toBe('n')
+    expect(sum({ name: 'n', bindings: { a: 1, b: 2 } })).toBe('n')
+    expect(sum({ name: 'n', bindings: [] })).toBe('n')
+  })
+
+  it('FS-8 hidden and tag fields are skipped even with array values', () => {
+    expect(sum({ name: 'n', secret: ['a', 'b'], builtin: ['a'] })).toBe('n')
+  })
+
+  it('FS-9 parts follow the order of the known fields, name first', () => {
+    expect(sum({ bindings: [1], blocks: 'x', tools: 'a, b', name: 'n' })).toBe(
+      'n · 2 L.tools · 1 L.blocks · 1 L.bindings'
+    )
+  })
+
+  it('FS-10 counts without a name have no leading separator', () => {
+    expect(sum({ tools: 'a', blocks: 'x, y' })).toBe('1 L.tools · 2 L.blocks')
+  })
+
+  it('FS-11 a name without counts stands alone', () => {
+    expect(sum({ name: 'n', description: 'about it' })).toBe('n')
+  })
+
+  it('FS-12 with no name and no counts the trimmed description is used', () => {
+    expect(sum({ description: '  about it  ' })).toBe('about it')
+    expect(sum({ description: 42 })).toBe('')
+    expect(sum({ description: null })).toBe('')
+  })
+
+  it('FS-13 nothing at all gives an empty string', () => {
+    expect(sum({})).toBe('')
+  })
+
+  it('FS-14 the description is not used beside a name or a count', () => {
+    expect(sum({ title: 'T', description: 'about it' })).toBe('T')
+    expect(sum({ tools: 'a', description: 'about it' })).toBe('1 L.tools')
+  })
+
+  it('FS-15 a pattern with the label first has both placeholders replaced', () => {
+    const jaT = (key: string): string => (key === PATTERN_KEY ? '{label} {n} 件' : key)
+    expect(frontmatterSummary(known, { tools: 'a, b' }, jaT)).toBe('L.tools 2 件')
+  })
+
+  it('FS-16 a key that is not a known field is not counted', () => {
+    expect(sum({ name: 'n', extra: ['a', 'b'], tags: 'a, b' })).toBe('n')
+  })
+
+  it('FS-17 the real agent descriptor gives name, tools, prompt blocks', () => {
+    const agent = descriptorForType('agent')
+    expect(agent).not.toBeNull()
+    expect(
+      frontmatterSummary(
+        agent!.fields,
+        {
+          name: 'x',
+          'shuvix-displayName': 'Name',
+          description: 'about it',
+          'shuvix-tools': 'read, write',
+          'shuvix-prompt-blocks': 'environment',
+          'shuvix-builtin': true
+        },
+        t
+      )
+    ).toBe('Name · 2 tool.subAgentTools · 1 tool.subAgentPromptBlocks')
+  })
+
+  it.each([
+    ['en', en],
+    ['zh', zh],
+    ['ja', ja]
+  ] as const)('FS-18 the %s locale has a usable count pattern and empty-page values', (_l, loc) => {
+    const pattern = loc.notebook.frontmatter.summaryCount
+    expect(pattern.split('{n}')).toHaveLength(2)
+    expect(pattern.split('{label}')).toHaveLength(2)
+    expect(pattern).not.toContain('{{')
+    expect(loc.mobile.emptyExtensionsOff.trim()).not.toBe('')
+    expect(loc.mobile.emptyKnowledgeNone.trim()).not.toBe('')
   })
 })

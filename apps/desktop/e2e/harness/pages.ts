@@ -13537,6 +13537,10 @@ export type WebMobileTouchTarget =
   /** 详情页：顶上的返回、首页的某一行（`data-mobile-detail-row=<段>`）、删除会话 */
   | { details: 'back' | 'delete' }
   | { detailRow: 'extensions' | 'knowledge' | 'paths' | 'sessions' | 'widgets' }
+  /** 空对话页入口卡片里的一行（`data-mobile-empty-row`） */
+  | { emptyRow: 'extensions' | 'knowledge' | 'paths' }
+  /** 笔记本属性卡的标题行（手机上点它开合） */
+  | { propertyCard: 'head' }
   | { sessions: 'calendarToggle' | 'newChat' }
   /** 新建会话抽屉里的一项（'' = 临时会话，否则项目 id） */
   | { newChatTarget: string }
@@ -13905,6 +13909,25 @@ export interface WebMobilePane {
     rows: Array<{ section: string; count: number | null }>
     sectionText: string | null
   } | null>
+  /** 详情页左上角返回键上的字（没开 → null） */
+  detailsBackLabel(): Promise<string | null>
+  /**
+   * 空对话页（`data-mobile-empty-chat`）：入口卡片各行（段 + 行尾的字）、页里有没有桌面那套会话配置卡片。
+   * 不是空对话页 → null
+   */
+  emptyChat(): Promise<{
+    rows: Array<{ section: string; value: string }>
+    desktopConfig: boolean
+  } | null>
+  /**
+   * 笔记本的属性卡（手机那一副长相）：是不是那副长相、开着没有、收起时的摘要、看得见的行数。没有卡 → null
+   */
+  propertyCard(): Promise<{
+    compact: boolean
+    open: boolean
+    summary: string
+    visibleRows: number
+  } | null>
   /** 对话页里有没有 agent 胶囊（`data-agent-chip`） */
   chatAgentChip(): Promise<boolean>
   /** 整页里有没有 agent 胶囊（桌面布局的横幅里） */
@@ -14209,6 +14232,9 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     }
     if ('detailRow' in target)
       return `document.querySelector('[data-mobile-details] [data-mobile-detail-row=${JSON.stringify(target.detailRow)}]')`
+    if ('emptyRow' in target)
+      return `document.querySelector('[data-mobile-empty-chat] [data-mobile-empty-row=${JSON.stringify(target.emptyRow)}]')`
+    if ('propertyCard' in target) return `${PAGE('chat')}?.querySelector('.cm-shuvix-fmcard-head')`
     if ('sessions' in target) {
       const attr =
         target.sessions === 'calendarToggle'
@@ -14481,6 +14507,43 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
             disabled: b.disabled === true
           }
         })
+      })()`),
+    detailsBackLabel: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-mobile-details] [data-mobile-details-back]')?.textContent?.trim() ?? null`
+      ),
+    emptyChat: () =>
+      client.eval<{
+        rows: Array<{ section: string; value: string }>
+        desktopConfig: boolean
+      } | null>(`(() => {
+        const root = document.querySelector('[data-mobile-empty-chat]')
+        if (!root) return null
+        return {
+          rows: [...root.querySelectorAll('[data-mobile-empty-row]')].map((r) => ({
+            section: r.getAttribute('data-mobile-empty-row') ?? '',
+            value: (r.querySelector('[data-mobile-empty-value]')?.textContent ?? '').trim()
+          })),
+          desktopConfig: !!root.querySelector('[data-acl-entry]')
+        }
+      })()`),
+    propertyCard: () =>
+      client.eval<{
+        compact: boolean
+        open: boolean
+        summary: string
+        visibleRows: number
+      } | null>(`(() => {
+        const card = ${PAGE('chat')}?.querySelector('.cm-shuvix-fmcard')
+        if (!card) return null
+        return {
+          compact: card.classList.contains('is-compact'),
+          open: card.getAttribute('data-open') === 'true',
+          summary: (card.querySelector('.cm-shuvix-fmcard-summary')?.textContent ?? '').trim(),
+          visibleRows: [...card.querySelectorAll('.cm-shuvix-fmcard-row')].filter(
+            (r) => r.getClientRects().length > 0
+          ).length
+        }
       })()`),
     details: () =>
       client.eval<{

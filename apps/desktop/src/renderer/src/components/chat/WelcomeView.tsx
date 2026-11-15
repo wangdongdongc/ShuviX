@@ -9,7 +9,7 @@ import { boundBotOf } from '@shuvix/chat-protocol/botSession'
 // 此文件仅保留桌面专属的 EmptySessionHint 包装（注入桌面能力开关）。
 
 /** bot 会话的空态：绑定的 bot 自我介绍（名字 + 一句话描述）。注册表一变（bot.changed）就重查 */
-function BotEmptyState({ bot }: { bot: string }): React.JSX.Element {
+export function BotEmptyState({ bot }: { bot: string }): React.JSX.Element {
   const { t } = useTranslation()
   // 结果连同它是替哪个 bot 查的一起存：从一条 bot 会话切到另一条时，上一个 bot 的自我介绍不能串过来
   const [result, setResult] = useState<{ bot: string; info: BotInfo | null } | null>(null)

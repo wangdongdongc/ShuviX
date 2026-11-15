@@ -19,6 +19,7 @@ import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import { createRoot } from 'react-dom/client'
 import {
+  useChatDensity,
   useChatStore,
   getChatApi,
   getSessionChannelApi,
@@ -716,6 +717,9 @@ export function LivePreviewEditor({
   // 属性卡的字段槽位：把仓库既有的成熟选择器（ToolSelectList / ModelSelect）挂进去。
   // 卡片是纯 DOM 的 CM6 widget，故用独立 React root 挂载，widget.destroy 时卸载
   // （unmount 推到微任务：React 不允许在渲染/提交过程中同步卸载另一棵树）。
+  // 属性卡在手机上是另一副长相（见 FrontmatterCardConfig.compact）。独立 React root 里拿不到 ChatHost 的
+  // context，所以在这里读一次、当 prop 传进去
+  const touch = useChatDensity() === 'touch'
   const mountField = useCallback(
     (slot: HTMLElement, ctx: FrontmatterFieldMount): (() => void) => {
       const root = createRoot(slot)
@@ -746,12 +750,13 @@ export function LivePreviewEditor({
             value={ctx.value}
             onChange={ctx.onChange}
             readOnly={ctx.readOnly}
+            compact={touch}
           />
         )
       )
       return () => queueMicrotask(() => root.unmount())
     },
-    [ownsSessionFile, sessionId]
+    [ownsSessionFile, sessionId, touch]
   )
 
   // 属性卡的「ShuviX 设置」条（md 扩展元数据）：内置安全策略 / hook 的停用开关。只给能停用的文件类型、
@@ -784,7 +789,9 @@ export function LivePreviewEditor({
       name: documentId.split(/[\\/]/).pop(),
       mountField,
       mountMetaStrip,
-      fallbackMarkerType: frontmatterFallbackType
+      fallbackMarkerType: frontmatterFallbackType,
+      // 手机（touch 档）：卡片收成一行，点开是一张分组卡片
+      compact: touch
     })
     const extra = extraExtensions ?? []
     if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure, fmCard, ...extra]
@@ -835,7 +842,8 @@ export function LivePreviewEditor({
     mountMetaStrip,
     extraExtensions,
     readOnly,
-    attachable
+    attachable,
+    touch
   ])
 
   return (

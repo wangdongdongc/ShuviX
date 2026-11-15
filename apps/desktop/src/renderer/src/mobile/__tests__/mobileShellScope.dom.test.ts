@@ -682,9 +682,13 @@ describe('MobileShell: search', () => {
  */
 describe('MobileShell: closing the chat page with the details open', () => {
   /** 详情那一层压的一条历史：带着下面各层的标记，再加上自己是哪一页 */
-  const pushDetail = (page: string): void =>
+  const pushDetail = (page: string, direct?: boolean): void =>
     window.history.pushState(
-      { ...((window.history.state as Record<string, unknown> | null) ?? {}), [DETAIL]: page },
+      {
+        ...((window.history.state as Record<string, unknown> | null) ?? {}),
+        [DETAIL]: page,
+        ...(direct === undefined ? {} : { shuvixMobileDetailDirect: direct })
+      },
       ''
     )
   /** 从别处打开一条会话（不是点列表） */
@@ -781,6 +785,72 @@ describe('MobileShell: closing the chat page with the details open', () => {
     await deleted()
     expect(go).toHaveBeenCalledTimes(1)
     expect(go).toHaveBeenCalledWith(-1)
+  })
+
+  it('MS-22d a section pushed directly from the empty chat page: back past two entries', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('paths', true)
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+    expect(mark(DETAIL)).toBe(false)
+  })
+
+  it('MS-23d a section reached through the index (direct: false): back past all three', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('index', false)
+    pushDetail('paths', false)
+    expect((window.history.state as Record<string, unknown>).shuvixMobileDetailDirect).toBe(false)
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-3)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+  })
+
+  it('MS-24d an index entry carrying the direct mark is still one layer', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('index', true)
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+  })
+
+  it('MS-25d an unknown detail value with the direct mark counts as no details', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('bogus', true)
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-1)
+  })
+
+  it('MS-26d a direct section opened from a group: it lands in the group, still open', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openScope('p1', 'Proj')
+    openSessionFromList()
+    pushDetail('paths', true)
+    expect(mark(SCOPE)).toBe(true)
+    rec.activeSessionId = 's1'
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+    expect(drill().scope).toBe('p1')
+    expect(mark(SCOPE)).toBe(true)
+    expect(mark(CHAT)).toBe(false)
+    expect(mark(DETAIL)).toBe(false)
   })
 
   it('MS-28 with no chat mark on the current entry the page closes without navigating', () => {
