@@ -222,6 +222,8 @@ export interface ExtensionsSectionProps {
   readonlyHint?: string
   /** 知识库一行；不给或没有候选库时不显示 */
   knowledge?: ExtensionsKnowledge
+  /** 只画其中一行（手机布局的会话详情页一行一页）；缺省两行都画 */
+  only?: 'mcp' | 'knowledge'
 }
 
 export function ExtensionsSection({
@@ -232,7 +234,8 @@ export function ExtensionsSection({
   onChange,
   readonly = false,
   readonlyHint,
-  knowledge
+  knowledge,
+  only
 }: ExtensionsSectionProps): React.JSX.Element {
   const { t } = useTranslation()
   // MCP 的 label 就是 server 名，和展示名重复，不当描述用；内置 server 有本地化的名字与一行说明
@@ -301,16 +304,18 @@ export function ExtensionsSection({
       title={title}
       description={footer}
       footer={
-        kbOptions.length > 0 && knowledge?.hint ? (
+        only !== 'mcp' && kbOptions.length > 0 && knowledge?.hint ? (
           <span data-knowledge-hint>{knowledge.hint}</span>
         ) : undefined
       }
     >
       <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 divide-y divide-border-secondary/40">
-        <ExtGroupRow title="MCP" icon={<Puzzle size={12} />} tone="purple" locked={readonly}>
-          {extChips(mcpItems, 'purple')}
-        </ExtGroupRow>
-        {knowledge && kbOptions.length > 0 && (
+        {only !== 'knowledge' && (
+          <ExtGroupRow title="MCP" icon={<Puzzle size={12} />} tone="purple" locked={readonly}>
+            {extChips(mcpItems, 'purple')}
+          </ExtGroupRow>
+        )}
+        {only !== 'mcp' && knowledge && kbOptions.length > 0 && (
           <ExtGroupRow
             title={t('sessionConfig.knowledgeGroup')}
             icon={<Library size={12} />}

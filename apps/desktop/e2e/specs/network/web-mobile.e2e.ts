@@ -125,7 +125,6 @@ import {
   agentsSidebarPane,
   chatOriginBadges,
   chatPane,
-  sessionConfigPane,
   sidebarPane,
   webClientPane,
   webMobilePane,
@@ -635,8 +634,16 @@ async function resetShell(): Promise<void> {
   if (!(await mobile().shellPresent())) return
   if (await webClientPane(page()).domMenu()) await mobile().pressEscape()
   await closeTouchSheets()
-  const config = sessionConfigPane(page())
-  if (await config.isOpen()) await config.close()
+  if ((await mobile().chatMenu()) !== null) await mobile().pressEscape()
+  // 详情页开着（首页或某一段的子页）：一层一层退回对话页
+  for (let i = 0; i < 2 && (await mobile().details()) !== null; i++) {
+    const before = (await mobile().details())?.page
+    await mobile().tap({ details: 'back' })
+    await until(
+      async () => (await mobile().details())?.page !== before,
+      'reset: one details page back'
+    )
+  }
   if (await mobile().sheet()) {
     await mobile().tap({ sheetBackdrop: true })
     await until(async () => (await mobile().sheet()) === null, 'reset: the sheet closed')
@@ -948,23 +955,89 @@ describe('phone layout: the shell', () => {
     }
   })
 
-  it('M-11 the chat page has none of the desktop header buttons; the title opens the session config', async () => {
+  it('M-11 the chat header: location under the title, one ⋯ button; the title pushes the details page and back pops it', async () => {
     await openFromList('MOB-chat')
     expect(await mobile().desktopHeaderControls()).toEqual({
       openBrowserWindow: false,
       sideToggles: 0
     })
-    const config = sessionConfigPane(page())
-    expect(await config.isOpen()).toBe(false)
+    // 小字：在哪干活（停着的会话没有状态）
+    // 项目清单取回来之前小字先空着，不会先写成「未命名项目」
+    const header = await until(async () => {
+      const h = await mobile().chatHeader()
+      expect(h?.subtitle ?? '', 'never a wrong location while loading').toMatch(
+        new RegExp(`^(${projects.main.name})?$`)
+      )
+      return h?.subtitle === projects.main.name ? h : null
+    }, 'the project name under the title')
+    expect(header.state).toBeNull()
+    expect(await mobile().details()).toBeNull()
+
+    const before = await mobile().history()
     await mobile().tap({ chat: 'title' })
-    await config.waitOpen()
-    expect(await config.titleValue()).toBe('MOB-chat')
-    await config.close()
+    const index = await until(async () => {
+      const d = await mobile().details()
+      return d?.location === projects.main.name ? d : null
+    }, 'the details page with its location')
+    expect(index.page).toBe('index')
+    expect(index.title).toBe(en.mobile.details)
+    expect(index.name).toBe('MOB-chat')
+    expect(index.rows.map((r) => r.section)).toEqual(
+      expect.arrayContaining(['paths', 'sessions', 'widgets'])
+    )
+    // 文件访问那一行的数 = 权限表里的路径行数（工作目录至少一行）
+    expect(index.rows.find((r) => r.section === 'paths')?.count ?? 0).toBeGreaterThan(0)
+    // 压了一条历史，对话页的标记还在
+    expect(await mobile().history()).toEqual({ mark: true, length: before.length + 1 })
+
+    // 一行推入它那一段的子页；返回一层一层退
+    await mobile().tap({ detailRow: 'paths' })
+    const paths = await until(async () => {
+      const d = await mobile().details()
+      return d?.page === 'paths' && d.sectionText ? d : null
+    }, 'the file access page')
+    expect(paths.title).toBe(en.sessionAcl.title)
+    await mobile().tap({ details: 'back' })
+    await until(
+      async () => (await mobile().details())?.page === 'index',
+      'back on the details index'
+    )
+    await page().eval(`(history.back(), true)`)
+    await until(
+      async () => (await mobile().details()) === null,
+      'the back gesture closes the details'
+    )
+    expect(await mobile().chatOpen()).toBe(true)
+    // 落回对话页那一条；详情首页与子页那两条留在「前进」方向上
+    expect(await mobile().history()).toEqual({ mark: true, length: before.length + 2 })
   })
 
-  it('M-12 the files sheet lists hello.txt and closes on its backdrop; the tasks sheet is the empty state', async () => {
+  it('M-12 the ⋯ menu lists files / tasks / artifacts, export, fork and details; files and tasks open their sheets', async () => {
     await openFromList('MOB-chat')
-    await mobile().tap({ chat: 'files' })
+    await mobile().tap({ chat: 'menu' })
+    const menu = await until(() => mobile().chatMenu(), 'the pull-down menu')
+    expect(menu.map((m) => m.id)).toEqual([
+      'files',
+      'tasks',
+      'artifacts',
+      'export',
+      'fork',
+      'details'
+    ])
+    expect(menu.map((m) => m.label)).toEqual([
+      en.mobile.files,
+      en.mobile.backgroundTasks,
+      en.mobile.artifacts,
+      en.mobile.exportChat,
+      en.mobile.forkChat,
+      en.mobile.details
+    ])
+    // 没有后台任务：不带数；停着的会话可以分支
+    expect(menu.find((m) => m.id === 'tasks')?.count).toBeNull()
+    expect(menu.find((m) => m.id === 'fork')?.disabled).toBe(false)
+
+    await mobile().tap({ chatMenu: 'files' })
+    expect(await mobile().chatMenu()).toBeNull()
     const listed = await until(async () => {
       const paths = await mobile().sheetFiles()
       return paths.some((p) => p === 'hello.txt' || p.endsWith('/hello.txt')) ? paths : null
@@ -974,26 +1047,35 @@ describe('phone layout: the shell', () => {
     await mobile().tap({ sheetBackdrop: true })
     await until(async () => (await mobile().sheet()) === null, 'the files sheet closed')
 
-    await mobile().tap({ chat: 'tasks' })
+    await mobile().tap({ chat: 'menu' })
+    await until(() => mobile().chatMenu(), 'the pull-down menu again')
+    await mobile().tap({ chatMenu: 'tasks' })
     const tasks = await until(() => mobile().sheet(), 'the tasks sheet')
-    expect(tasks.title).toBe(en.mobile.tasks)
+    expect(tasks.title).toBe(en.mobile.backgroundTasks)
     expect(await until(() => mobile().tasksEmpty(), 'the empty tasks state')).toBe(
       en.mobile.noTasks
     )
     await mobile().tap({ sheetBackdrop: true })
     await until(async () => (await mobile().sheet()) === null, 'the tasks sheet closed')
+
+    // 详情也在菜单里
+    await mobile().tap({ chat: 'menu' })
+    await until(() => mobile().chatMenu(), 'the pull-down menu a third time')
+    await mobile().tap({ chatMenu: 'details' })
+    await until(async () => (await mobile().details())?.page === 'index', 'details from the menu')
+    await mobile().tap({ details: 'back' })
+    await until(async () => (await mobile().details()) === null, 'the details closed')
     expect(await mobile().chatOpen()).toBe(true)
     await backToList()
   })
 
-  it('M-13 deleting the session from its config closes the chat, drops the row and pops the history mark', async () => {
+  it('M-13 deleting the session from its details page closes the details and the chat, drops the row and pops the history marks', async () => {
     await openFromList('MOB-doomed')
     expect((await mobile().history()).mark).toBe(true)
     await mobile().tap({ chat: 'title' })
-    const config = sessionConfigPane(page())
-    await config.waitOpen()
-    expect(await config.titleValue()).toBe('MOB-doomed')
-    await config.clickDelete()
+    const details = await until(() => mobile().details(), 'the details page')
+    expect(details.name).toBe('MOB-doomed')
+    await mobile().tap({ details: 'delete' })
     await until(async () => !(await mobile().chatOpen()), 'the chat page closed after the delete')
     await until(
       async () => !(await mobile().listRows()).includes('MOB-doomed'),
@@ -1001,7 +1083,7 @@ describe('phone layout: the shell', () => {
     )
     expect((await sessionsInMain()).some((s) => s.id === sids.doomed)).toBe(false)
     expect((await mobile().history()).mark).toBe(false)
-    expect(await config.isOpen()).toBe(false)
+    expect(await mobile().details()).toBeNull()
   })
 
   it('M-14 a tap opens the widget full screen in the page; back returns to the cards; ↗ opens a tab; a long press shows the card menu', async () => {
@@ -1734,7 +1816,6 @@ describe('phone layout: the shell', () => {
   })
 
   it('M-26 the model sheet: inside the viewport, 44px rows, a 16px search that does not take focus; its backdrop closes only the sheet', async () => {
-    const config = sessionConfigPane(page())
     const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(MODEL)
     const pillText = async (): Promise<string | null> => (await layout())?.modelPill?.text ?? null
     const row = (model: string): string => `${fakeProviderId}/${model}`
@@ -1759,7 +1840,7 @@ describe('phone layout: the shell', () => {
       for (const r of sheet.rows) expect(r.height, `${r.id} ${what}`).toBeGreaterThanOrEqual(44)
 
       // 遮罩离顶 40px 那一点压在对话页的标题上：只关抽屉，不点穿到标题（那会开会话设置）
-      expect(await config.isOpen()).toBe(false)
+      expect(await mobile().details()).toBeNull()
       await mobile().tap({ touchSheetBackdrop: 'model' })
       await until(
         async () => (await mobile().touchSheet('model')) === null,
@@ -1768,7 +1849,7 @@ describe('phone layout: the shell', () => {
       await sleep(400)
       expect(await mobile().chatOpen()).toBe(true)
       expect(await mobile().chatTitle()).toBe('MOB-composer')
-      expect(await config.isOpen()).toBe(false)
+      expect(await mobile().details()).toBeNull()
 
       // 第二个模型（beforeAll 在同一家提供商下加的 LONG）：换过去，胶囊跟着；再换回来
       expect(
@@ -1796,7 +1877,6 @@ describe('phone layout: the shell', () => {
   })
 
   it('M-27 the extensions sheet: 48px rows, 20px checkboxes; a tick writes the session and keeps the sheet open; the backdrop closes it', async () => {
-    const config = sessionConfigPane(page())
     const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(MODEL)
     const before = await enabledToolsOf(sids.composer)
     try {
@@ -1852,7 +1932,7 @@ describe('phone layout: the shell', () => {
       )
       await sleep(400)
       expect(await mobile().chatOpen()).toBe(true)
-      expect(await config.isOpen()).toBe(false)
+      expect(await mobile().details()).toBeNull()
     } finally {
       await closeTouchSheets()
       await app.main.eval(
@@ -2544,7 +2624,9 @@ async function openFilesSheet(): Promise<void> {
   if (!(await mobile().chatOpen()) || (await mobile().chatTitle()) !== 'MOB-chat') {
     await openFromList('MOB-chat')
   }
-  await mobile().tap({ chat: 'files' })
+  await mobile().tap({ chat: 'menu' })
+  await until(() => mobile().chatMenu(), 'the pull-down menu')
+  await mobile().tap({ chatMenu: 'files' })
   await until(
     async () => (await mobile().sheetFiles()).includes('hello.txt'),
     'hello.txt in the files sheet'

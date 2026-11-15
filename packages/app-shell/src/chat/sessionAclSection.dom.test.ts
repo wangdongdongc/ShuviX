@@ -16,6 +16,8 @@
  *         标签 Bot file、图标 lucide Bot；有只读 / 读写切换、没有删除；点 Read only 调 setAclAccess
  *   XS-68 会话种类的行（kind: 'session'）另起一卡「Session access」（见文件末尾的 describe）
  *   WT4-UI-06..09 组件种类的行（kind: 'widget'）另起一卡「Widget access」；widgetDir 路径行（见文件末尾的 describe）
+ *   AC-1..12  `only`：只画一种行（手机布局的会话详情页，每种各是一页）；会话 / 小组件那两种没有行时画一句空态
+ *   AC-20..29 useSessionAclCounts：各种行的条数（见文件末尾的两个 describe）
  *
  * `@shuvix/chat-ui` 换成替身（getChatApi / getHostApi / useAppEvent）；i18n 走真 en 资源。文件是 `.ts`，一律 createElement。
  */
@@ -52,7 +54,12 @@ vi.mock('@shuvix/chat-ui', () => ({
   }
 }))
 
-import { SessionAclSection, sortAclEntries } from './SessionAclSection'
+import {
+  SessionAclSection,
+  sortAclEntries,
+  useSessionAclCounts,
+  type SessionAclSectionProps
+} from './SessionAclSection'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -114,7 +121,9 @@ afterEach(() => {
   container.remove()
 })
 
-async function render(props: { defaultExpanded?: boolean } = {}): Promise<void> {
+async function render(
+  props: Pick<SessionAclSectionProps, 'defaultExpanded' | 'only'> = {}
+): Promise<void> {
   await act(async () => {
     root.render(createElement(SessionAclSection, { sessionId: SID, ...props }))
   })
@@ -698,5 +707,374 @@ describe('SessionAclSection 的组件访问', () => {
     expect(dir.querySelector('[data-acl-remove]')).toBeNull()
     expect(dir.textContent).toContain(en.sessionAcl.write)
     expect(dir.querySelector('[title]')?.getAttribute('title')).toBe(en.sessionAcl.managed)
+  })
+})
+
+/**
+ * `only`：只画其中一种行（手机布局的会话详情页：文件 / 会话 / 小组件访问各是一页）。
+ *
+ *   AC-1 / AC-2 不给 `only`：三节照旧，没有行的那两节整节不出现，也没有空态那句话（桌面不变）
+ *   AC-3..5  `paths`：只有「File access」，别的种类有行也不画；照样听 defaultExpanded；一条路径行都没有时这一节
+ *            还在（添加路径那一行）
+ *   AC-6 / AC-7 `sessions`：只有「Session access」；一行都没有 → 一句空态（不是一张空卡）
+ *   AC-8     `widgets`：同上
+ *   AC-9     表还没取回来：什么都不画（不先闪一下空态）
+ *   AC-10    删掉最后一行 → 空态
+ *   AC-11    单种模式下行照样能切访问方式
+ *   AC-12    单种模式下这条会话的 session.configChanged 照样重取，别的会话的不理
+ */
+describe('SessionAclSection 的 only（只画一种行）', () => {
+  const sessionRow = (target: string, over: Partial<AclEntry> = {}): AclEntry =>
+    row('user', target, { kind: 'session', access: 'read', ...over })
+  const widgetRow = (target: string, over: Partial<AclEntry> = {}): AclEntry =>
+    row('user', target, { kind: 'widget', access: 'read', ...over })
+  /** 工作目录、你授予的路径、会话目录（收着的）、两条会话行、一条小组件行 */
+  const mix = (): AclEntry[] => [
+    row('workdir', '/Users/u/proj'),
+    row('user', '/data', { access: 'read' }),
+    row('system', '/tmp/s1', { sourceKey: 'tmp' }),
+    sessionRow('sess-a', { targetTitle: 'Alpha' }),
+    sessionRow('sess-b'),
+    widgetRow('reading-list', { targetTitle: 'Reading list' })
+  ]
+
+  const sections = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('section')]
+  const titles = (): Array<string | undefined> =>
+    sections().map((el) => el.querySelector('h3')?.textContent ?? undefined)
+  const pathCard = (): HTMLElement | null => container.querySelector('[data-session-acl]')
+  const sessionsCard = (): HTMLElement | null =>
+    container.querySelector('[data-session-acl-sessions]')
+  const widgetsCard = (): HTMLElement | null =>
+    container.querySelector('[data-session-acl-widgets]')
+  const empty = (kind?: string): HTMLElement | null =>
+    container.querySelector(kind ? `[data-acl-empty="${kind}"]` : '[data-acl-empty]')
+  const pathSources = (): string[] =>
+    [...(pathCard()?.querySelectorAll<HTMLElement>('[data-acl-entry]') ?? [])].map(
+      (el) => el.dataset.aclSource!
+    )
+  const toggle = (): HTMLButtonElement | null => container.querySelector('[data-acl-toggle]')
+
+  beforeEach(() => {
+    seq = 0
+    hoisted.entries = mix()
+  })
+
+  it('AC-1 no `only`, mixed rows: three cards and no empty sentence', async () => {
+    await render()
+    expect(titles()).toEqual([
+      en.sessionAcl.title,
+      en.sessionAcl.sessionsTitle,
+      en.sessionAcl.widgetsTitle
+    ])
+    expect(empty()).toBeNull()
+  })
+
+  it('AC-2 no `only`, no session or widget rows: those cards are absent, with no sentence', async () => {
+    hoisted.entries = [row('workdir', '/Users/u/proj'), row('user', '/data')]
+    await render()
+    expect(titles()).toEqual([en.sessionAcl.title])
+    expect(empty()).toBeNull()
+  })
+
+  it('AC-3 `paths`: only file access, even when the other kinds have rows', async () => {
+    await render({ only: 'paths' })
+    expect(titles()).toEqual([en.sessionAcl.title])
+    expect(pathCard()).not.toBeNull()
+    expect(container.querySelector('[data-acl-add]')).not.toBeNull()
+    expect(sessionsCard()).toBeNull()
+    expect(widgetsCard()).toBeNull()
+    expect(container.querySelector('[data-acl-kind="session"]')).toBeNull()
+    expect(container.querySelector('[data-acl-kind="widget"]')).toBeNull()
+    expect(empty()).toBeNull()
+  })
+
+  it('AC-4 `paths` respects defaultExpanded', async () => {
+    await render({ only: 'paths' })
+    expect(pathSources()).toEqual(['workdir', 'user'])
+    expect(toggle()!.textContent).toBe(i18n.t('sessionAcl.showAll', { count: 1 }))
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await render({ only: 'paths', defaultExpanded: true })
+    expect(pathSources()).toEqual(['workdir', 'user', 'system'])
+    expect(toggle()!.textContent).toBe(en.sessionAcl.showLess)
+  })
+
+  it('AC-5 `paths` with no path rows: the section and its add row are still there', async () => {
+    hoisted.entries = [sessionRow('sess-a'), sessionRow('sess-b')]
+    await render({ only: 'paths' })
+    expect(titles()).toEqual([en.sessionAcl.title])
+    expect(container.querySelector('[data-acl-add]')).not.toBeNull()
+    expect(pathCard()).toBeNull()
+    expect(empty()).toBeNull()
+  })
+
+  it('AC-6 `sessions` with rows: the session card alone', async () => {
+    await render({ only: 'sessions' })
+    expect(titles()).toEqual([en.sessionAcl.sessionsTitle])
+    expect(
+      [...container.querySelectorAll<HTMLElement>('[data-acl-kind="session"]')].map(
+        (el) => el.dataset.aclTarget
+      )
+    ).toEqual(['sess-a', 'sess-b'])
+    expect(sessionsCard()!.dataset.sessionAclSessions).toBe(SID)
+    expect(pathCard()).toBeNull()
+    expect(container.querySelector('[data-acl-add]')).toBeNull()
+    expect(toggle()).toBeNull()
+    expect(widgetsCard()).toBeNull()
+    expect(empty()).toBeNull()
+  })
+
+  it('AC-7 `sessions` with no session rows: one sentence, no card', async () => {
+    hoisted.entries = [row('workdir', '/Users/u/proj'), widgetRow('reading-list')]
+    await render({ only: 'sessions' })
+    expect(empty('sessions')!.textContent).toBe(en.sessionAcl.sessionsEmpty)
+    expect(sections()).toHaveLength(0)
+    expect(empty('widgets')).toBeNull()
+    expect(widgetsCard()).toBeNull()
+    expect(pathCard()).toBeNull()
+  })
+
+  it('AC-8 `widgets` with rows: the widget card alone', async () => {
+    await render({ only: 'widgets' })
+    expect(titles()).toEqual([en.sessionAcl.widgetsTitle])
+    expect(
+      [...container.querySelectorAll<HTMLElement>('[data-acl-kind="widget"]')].map(
+        (el) => el.dataset.aclTarget
+      )
+    ).toEqual(['reading-list'])
+    expect(widgetsCard()!.dataset.sessionAclWidgets).toBe(SID)
+    expect(pathCard()).toBeNull()
+    expect(container.querySelector('[data-acl-add]')).toBeNull()
+    expect(toggle()).toBeNull()
+    expect(sessionsCard()).toBeNull()
+    expect(empty()).toBeNull()
+  })
+
+  it('AC-8 `widgets` with no widget rows: one sentence, no card', async () => {
+    hoisted.entries = [row('workdir', '/Users/u/proj'), sessionRow('sess-a')]
+    await render({ only: 'widgets' })
+    expect(empty('widgets')!.textContent).toBe(en.sessionAcl.widgetsEmpty)
+    expect(sections()).toHaveLength(0)
+    expect(empty('sessions')).toBeNull()
+    expect(sessionsCard()).toBeNull()
+    expect(pathCard()).toBeNull()
+  })
+
+  it('AC-9 nothing is shown before the list arrives; the empty sentence only once it has', async () => {
+    let arrive!: (list: AclEntry[]) => void
+    hoisted.listAcl.mockReturnValue(new Promise<AclEntry[]>((resolve) => (arrive = resolve)))
+    await render({ only: 'sessions' })
+    expect(container.innerHTML).toBe('')
+    await act(async () => arrive([]))
+    expect(empty('sessions')!.textContent).toBe(en.sessionAcl.sessionsEmpty)
+  })
+
+  it('AC-10 removing the last row leaves the empty sentence', async () => {
+    seq = 0
+    hoisted.entries = [row('workdir', '/Users/u/proj'), sessionRow('sess-a')]
+    await render({ only: 'sessions' })
+    expect(empty()).toBeNull()
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-acl-remove]')!.click())
+    expect(hoisted.removeAclEntry).toHaveBeenCalledWith({ id: SID, entryId: 'e2' })
+    expect(sessionsCard()).toBeNull()
+    expect(empty('sessions')).not.toBeNull()
+  })
+
+  it('AC-11 rows still change access in single-kind mode', async () => {
+    await render({ only: 'widgets' })
+    const target = container.querySelector<HTMLElement>('[data-acl-kind="widget"]')!
+    expect(target.dataset.aclAccess).toBe('read')
+    await act(async () => buttonText(target, en.sessionAcl.widgetWrite)!.click())
+    expect(hoisted.setAclAccess).toHaveBeenCalledWith({
+      id: SID,
+      entryId: target.dataset.aclEntry,
+      access: 'write'
+    })
+    expect(
+      container.querySelector<HTMLElement>('[data-acl-kind="widget"]')!.dataset.aclAccess
+    ).toBe('write')
+  })
+
+  it("AC-12 this session's configChanged refetches in single-kind mode; another session's does not", async () => {
+    hoisted.entries = [row('workdir', '/Users/u/proj')]
+    await render({ only: 'sessions' })
+    expect(empty('sessions')).not.toBeNull()
+
+    hoisted.entries = [row('workdir', '/Users/u/proj'), sessionRow('sess-new')]
+    const calls = hoisted.listAcl.mock.calls.length
+    await act(async () => hoisted.handlers.get('session.configChanged')!({ sessionId: 'other' }))
+    expect(hoisted.listAcl.mock.calls.length).toBe(calls)
+    expect(empty('sessions')).not.toBeNull()
+
+    await act(async () => hoisted.handlers.get('session.configChanged')!({ sessionId: SID }))
+    expect(hoisted.listAcl.mock.calls.length).toBe(calls + 1)
+    expect(empty()).toBeNull()
+    expect(sessionsCard()).not.toBeNull()
+  })
+})
+
+/**
+ * useSessionAclCounts：权限表里各种行的条数（会话详情页的行尾数字）。
+ *
+ *   AC-20 表还没取回来 → null
+ *   AC-21 按种类数；路径行不分来源都算
+ *   AC-22 空表是三个 0，不是 null
+ *   AC-23 / AC-24 这条会话的 session.configChanged 重取，别的会话的不理
+ *   AC-25 / AC-26 第一次没取到 → 还是 null、不抛；之后取到就有；重取失败留着上一次的数
+ *   AC-27 换了 sessionId 给那一条重取
+ *   AC-28 两次取叠在一起、先发的后到：留着后发那一次的数
+ *   AC-29 换了会话之后才回来的上一条会话的结果不盖住新的
+ */
+describe('useSessionAclCounts', () => {
+  const kindRow = (kind: 'session' | 'widget', target: string): AclEntry =>
+    row('user', target, { kind, access: 'read' })
+  const paths = (n: number): AclEntry[] =>
+    Array.from({ length: n }, (_, i) => row('user', `/p${i}`))
+
+  function Probe({ sessionId }: { sessionId: string }): React.JSX.Element {
+    const counts = useSessionAclCounts(sessionId)
+    return createElement('output', { 'data-counts': counts ? JSON.stringify(counts) : 'null' })
+  }
+  async function mountProbe(sessionId = SID): Promise<void> {
+    await act(async () => {
+      root.render(createElement(Probe, { sessionId }))
+    })
+  }
+  const counts = (): unknown => {
+    const raw = container.querySelector('[data-counts]')!.getAttribute('data-counts')!
+    return raw === 'null' ? null : JSON.parse(raw)
+  }
+  const fire = async (sessionId: string): Promise<void> => {
+    await act(async () => hoisted.handlers.get('session.configChanged')!({ sessionId }))
+  }
+  /** 一次还没回来的 listAcl */
+  function pending(): { promise: Promise<AclEntry[]>; resolve: (list: AclEntry[]) => void } {
+    let resolve!: (list: AclEntry[]) => void
+    const promise = new Promise<AclEntry[]>((r) => (resolve = r))
+    return { promise, resolve }
+  }
+
+  it('AC-20 null until the list arrives', async () => {
+    const first = pending()
+    hoisted.listAcl.mockReturnValue(first.promise)
+    await mountProbe()
+    expect(counts()).toBeNull()
+    expect(hoisted.listAcl).toHaveBeenCalledWith(SID)
+    await act(async () => first.resolve([]))
+    expect(counts()).not.toBeNull()
+  })
+
+  it('AC-21 counts by kind; every path row counts, whatever its source', async () => {
+    hoisted.entries = [
+      row('workdir', '/Users/u/proj'),
+      row('user', '/data'),
+      row('widgetDir', '/w/reading-list', { sourceKey: 'reading-list' }),
+      row('knowledge', '/kb/notes', { sourceKey: 'notes' }),
+      row('skill', '/skills', { access: 'read' }),
+      row('system', '/tmp/s1', { sourceKey: 'tmp' }),
+      kindRow('session', 'sess-a'),
+      kindRow('session', 'sess-b'),
+      kindRow('widget', 'reading-list')
+    ]
+    await mountProbe()
+    expect(counts()).toEqual({ paths: 6, sessions: 2, widgets: 1 })
+  })
+
+  it('AC-22 an empty table is zeros, not null', async () => {
+    hoisted.entries = []
+    await mountProbe()
+    expect(counts()).toEqual({ paths: 0, sessions: 0, widgets: 0 })
+  })
+
+  it("AC-23 refreshes on this session's session.configChanged", async () => {
+    hoisted.entries = paths(1)
+    await mountProbe()
+    expect(counts()).toEqual({ paths: 1, sessions: 0, widgets: 0 })
+    hoisted.entries = [...paths(2), kindRow('widget', 'w1')]
+    const calls = hoisted.listAcl.mock.calls.length
+    await fire(SID)
+    expect(hoisted.listAcl.mock.calls.length).toBe(calls + 1)
+    expect(counts()).toEqual({ paths: 2, sessions: 0, widgets: 1 })
+  })
+
+  it("AC-24 ignores another session's event", async () => {
+    hoisted.entries = paths(1)
+    await mountProbe()
+    hoisted.entries = paths(5)
+    const calls = hoisted.listAcl.mock.calls.length
+    await fire('other')
+    expect(hoisted.listAcl.mock.calls.length).toBe(calls)
+    expect(counts()).toEqual({ paths: 1, sessions: 0, widgets: 0 })
+  })
+
+  it('AC-25 a failed first load stays null without throwing; a later load gives the counts', async () => {
+    hoisted.listAcl.mockRejectedValueOnce(new Error('offline'))
+    await mountProbe()
+    expect(counts()).toBeNull()
+    hoisted.entries = paths(2)
+    await fire(SID)
+    expect(counts()).toEqual({ paths: 2, sessions: 0, widgets: 0 })
+  })
+
+  it('AC-26 a failed refresh keeps the last counts', async () => {
+    hoisted.entries = paths(3)
+    await mountProbe()
+    hoisted.listAcl.mockRejectedValueOnce(new Error('offline'))
+    await fire(SID)
+    expect(counts()).toEqual({ paths: 3, sessions: 0, widgets: 0 })
+  })
+
+  it('AC-27 a new sessionId refetches for that id and then listens for it', async () => {
+    hoisted.entries = paths(1)
+    await mountProbe()
+    await mountProbe('s2')
+    expect(hoisted.listAcl).toHaveBeenLastCalledWith('s2')
+    const calls = hoisted.listAcl.mock.calls.length
+    await fire(SID)
+    expect(hoisted.listAcl.mock.calls.length).toBe(calls)
+    await fire('s2')
+    expect(hoisted.listAcl.mock.calls.length).toBe(calls + 1)
+    expect(hoisted.listAcl).toHaveBeenLastCalledWith('s2')
+  })
+
+  it('AC-28 two overlapping loads that resolve out of order keep the newer counts', async () => {
+    const first = pending()
+    const second = pending()
+    hoisted.listAcl.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    await mountProbe()
+    await fire(SID)
+    expect(hoisted.listAcl).toHaveBeenCalledTimes(2)
+
+    await act(async () => second.resolve(paths(3)))
+    expect(counts()).toEqual({ paths: 3, sessions: 0, widgets: 0 })
+    await act(async () => first.resolve(paths(1)))
+    expect(counts()).toEqual({ paths: 3, sessions: 0, widgets: 0 })
+  })
+
+  it('AC-28 the older load arriving first is not shown either', async () => {
+    const first = pending()
+    const second = pending()
+    hoisted.listAcl.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    await mountProbe()
+    await fire(SID)
+
+    await act(async () => first.resolve(paths(1)))
+    expect(counts()).toBeNull()
+    await act(async () => second.resolve(paths(3)))
+    expect(counts()).toEqual({ paths: 3, sessions: 0, widgets: 0 })
+  })
+
+  it("AC-29 after sessionId changes, a late response for the old id does not replace the new session's counts", async () => {
+    const old = pending()
+    const next = pending()
+    hoisted.listAcl.mockImplementation((id: string) => (id === SID ? old.promise : next.promise))
+    await mountProbe()
+    await mountProbe('s2')
+
+    await act(async () => next.resolve([...paths(2), kindRow('session', 'sess-a')]))
+    expect(counts()).toEqual({ paths: 2, sessions: 1, widgets: 0 })
+    await act(async () => old.resolve(paths(7)))
+    expect(counts()).toEqual({ paths: 2, sessions: 1, widgets: 0 })
   })
 })

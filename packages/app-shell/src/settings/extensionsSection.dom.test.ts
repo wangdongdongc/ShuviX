@@ -16,7 +16,8 @@
  *     都不出现；
  *     它那段说明与卡片说明叠在同一个问号气泡里、排在后面（带 `data-knowledge-hint`）；
  *   - 技能不在这张卡上（2026-10-28：侧栏里启用着的全部上货架，没有按会话 / 按项目的勾选）：卡上只有 MCP 与
- *     知识库两行，没有 Skills 一行、没有 `skill:` 条目（ES-10）。
+ *     知识库两行，没有 Skills 一行、没有 `skill:` 条目（ES-10）；
+ *   - `only`（手机布局的会话详情页一行一页）：只画 MCP 那一行或知识库那一行，缺省两行都画（EX-1..12，文件末尾）。
  *
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
  * i18n 走真 zh 资源，悬停文案用同一个实例的 `i18n.t` 现算，不抄文案。
@@ -425,5 +426,176 @@ describe('技能不在这张卡上（2026-10-28）', () => {
       'mcp:foo',
       'mcp:bar'
     ])
+  })
+})
+
+/**
+ * `only`：只画其中一行（手机布局的会话详情页：扩展能力与知识库各是一页）。缺省两行都画。
+ *
+ *   EX-1  不给 `only`：两行都在（桌面不变）
+ *   EX-2 / EX-3 `mcp` 只有 MCP 那一行；`knowledge` 只有知识库那一行
+ *   EX-4 / EX-5 各自的勾选照旧：MCP 交回整份勾选，知识库只调 onToggle
+ *   EX-6 / EX-7 `knowledge` 不随只读上锁、不挂锁；`mcp` + 只读照样锁
+ *   EX-8  `knowledge` 没有候选库：一行都没有，标题还在
+ *   EX-9  `mcp` 没有 MCP：一行空的 MCP
+ *   EX-10 `mcp` 下内置项照样排前
+ *   EX-11 `mcp`：气泡里没有知识库那一段，卡片说明还在
+ *   EX-12 `knowledge`：气泡里就是知识库那一段
+ */
+describe('only：只画一行', () => {
+  const OPTIONS = [{ name: 'notes' }, { name: 'shuvix' }]
+  let onToggle: ReturnType<typeof vi.fn<(name: string) => void>>
+  const kb = (
+    over: Partial<NonNullable<ExtensionsSectionProps['knowledge']>> = {}
+  ): NonNullable<ExtensionsSectionProps['knowledge']> => ({
+    options: OPTIONS,
+    selected: ['notes'],
+    onToggle,
+    ...over
+  })
+  const kbLabels = (): HTMLLabelElement[] => [
+    ...container.querySelectorAll<HTMLLabelElement>('label[data-knowledge-base]')
+  ]
+  const kbBox = (name: string): HTMLInputElement => {
+    const hit = kbLabels().find((label) => label.getAttribute('data-knowledge-base') === name)
+    if (!hit) throw new Error(`knowledge base ${name} not rendered`)
+    return hit.querySelector('input[type="checkbox"]') as HTMLInputElement
+  }
+  /** 卡片里的各组行（外层两列网格的 subgrid 行） */
+  const groupRows = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.col-span-2')]
+  /** 各组行的组名 */
+  const groupTitles = (): string[] =>
+    groupRows().map((el) => el.firstElementChild?.textContent ?? '')
+  const kbGroup = (): string => i18n.t('sessionConfig.knowledgeGroup')
+  /** 标题旁的问号气泡（悬上去才挂到 body 上）；没有问号 → 空串 */
+  const hintText = (): string => {
+    const btn = container.querySelector<HTMLElement>('[data-info-hint]')
+    if (!btn) return ''
+    act(() => {
+      btn.dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })
+      )
+    })
+    return document.querySelector('[data-info-tip]')?.textContent ?? ''
+  }
+
+  beforeEach(() => {
+    onToggle = vi.fn<(name: string) => void>()
+  })
+
+  it('EX-1 no `only`: both rows', () => {
+    render({ knowledge: kb() })
+    expect(kbGroup()).not.toBe('sessionConfig.knowledgeGroup')
+    expect(keys()).toEqual(MCP_TOOLS.map((tool) => tool.name))
+    expect(kbLabels()).toHaveLength(2)
+    expect(groupTitles()).toEqual(['MCP', kbGroup()])
+  })
+
+  it('EX-2 `mcp`: the MCP row only', () => {
+    render({ only: 'mcp', knowledge: kb() })
+    expect(keys()).toEqual(MCP_TOOLS.map((tool) => tool.name))
+    expect(kbLabels()).toHaveLength(0)
+    expect(groupTitles()).toEqual(['MCP'])
+    expect(container.textContent).not.toContain(kbGroup())
+  })
+
+  it('EX-3 `knowledge`: the knowledge row only', () => {
+    render({ only: 'knowledge', knowledge: kb() })
+    expect(items()).toHaveLength(0)
+    expect(kbLabels().map((label) => label.getAttribute('data-knowledge-base'))).toEqual([
+      'notes',
+      'shuvix'
+    ])
+    expect(groupTitles()).toEqual([kbGroup()])
+    expect(kbBox('notes').checked).toBe(true)
+    expect(kbBox('shuvix').checked).toBe(false)
+  })
+
+  it('EX-4 `mcp`: a tick hands back the whole selection as before, and never touches knowledge', () => {
+    render({ only: 'mcp', knowledge: kb() })
+    click('mcp:bar')
+    expect(onChange).toHaveBeenLastCalledWith(['mcp:foo', 'mcp:bar'])
+    click('mcp:ctx')
+    expect(onChange).toHaveBeenLastCalledWith(['mcp:foo', '-mcp:ctx'])
+    expect(onChange).toHaveBeenCalledTimes(2)
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('EX-5 `knowledge`: a tick calls onToggle only', () => {
+    render({ only: 'knowledge', knowledge: kb() })
+    act(() => {
+      kbBox('notes').click()
+    })
+    expect(onToggle).toHaveBeenCalledExactlyOnceWith('notes')
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('EX-6 `knowledge` is not locked by readonly and shows no lock', () => {
+    render({ only: 'knowledge', readonly: true, readonlyHint: READONLY_HINT, knowledge: kb() })
+    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(0)
+    for (const label of kbLabels()) {
+      expect(label.hasAttribute('aria-disabled')).toBe(false)
+      expect(label.querySelector('input')!.disabled).toBe(false)
+    }
+    act(() => {
+      kbBox('shuvix').click()
+    })
+    expect(onToggle).toHaveBeenCalledExactlyOnceWith('shuvix')
+  })
+
+  it('EX-7 `mcp` + readonly still locks', () => {
+    render({ only: 'mcp', readonly: true, readonlyHint: READONLY_HINT, knowledge: kb() })
+    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(1)
+    for (const key of keys()) {
+      expect(box(key).disabled, key).toBe(true)
+      forceClick(key)
+    }
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('EX-8 `knowledge` with no knowledge prop or no options: no row, the title still there', () => {
+    expect(() => render({ only: 'knowledge' })).not.toThrow()
+    expect(groupRows()).toHaveLength(0)
+    expect(container.querySelector('h3')!.textContent).toBe('Extensions')
+
+    expect(() => render({ only: 'knowledge', knowledge: kb({ options: [] }) })).not.toThrow()
+    expect(groupRows()).toHaveLength(0)
+    expect(kbLabels()).toHaveLength(0)
+    expect(container.querySelector('h3')!.textContent).toBe('Extensions')
+  })
+
+  it('EX-9 `mcp` with no MCP tools: one MCP row with no chips', () => {
+    expect(() => render({ only: 'mcp', mcpTools: [], knowledge: kb() })).not.toThrow()
+    expect(groupTitles()).toEqual(['MCP'])
+    expect(items()).toHaveLength(0)
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
+  })
+
+  it('EX-10 built-in items still sort first under `mcp`', () => {
+    render({
+      only: 'mcp',
+      enabledTools: [],
+      mcpTools: [
+        mcp('user-a'),
+        mcp('ssh', { isBuiltin: true }),
+        mcp('user-b', { declaredBy: PROFILE }),
+        mcp('tavily', { isBuiltin: true })
+      ]
+    })
+    expect(keys()).toEqual(['mcp:ssh', 'mcp:tavily', 'mcp:user-a', 'mcp:user-b'])
+  })
+
+  it('EX-11 `mcp`: the bubble keeps the card description and drops the knowledge paragraph', () => {
+    render({ only: 'mcp', footer: 'CARD', knowledge: kb({ hint: 'KB-HINT' }) })
+    expect(hintText()).toBe('CARD')
+    expect(document.querySelector('[data-knowledge-hint]')).toBeNull()
+  })
+
+  it('EX-12 `knowledge` with no card description: the bubble is the knowledge paragraph alone', () => {
+    render({ only: 'knowledge', knowledge: kb({ hint: 'KB-HINT' }) })
+    expect(hintText()).toBe('KB-HINT')
+    expect(document.querySelector('[data-info-tip] [data-knowledge-hint]')?.textContent).toBe(
+      'KB-HINT'
+    )
   })
 })

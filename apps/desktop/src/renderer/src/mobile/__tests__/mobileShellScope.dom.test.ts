@@ -24,6 +24,8 @@
  *   MS-19 收件箱页：没有菜单的槽、工具栏的槽藏着、标签栏还在
  *   MS-20 搜索框：只在顶层（不在日历那种看法、组里、收件箱页）；输入的字交给 `drill.query`；有字才有清除钮，点它清空
  *   MS-21 收件箱那一行包在一张卡片里
+ *   MS-22..29 对话页上面还开着详情（`shuvixMobileDetail`，见 detailHistory.ts）时会话没了：连详情那几条一起退掉，
+ *         落在打开对话之前的那一条上（顶层或那一组）；没开详情照旧退一条；顶栏的返回键照旧退一条
  *
  * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏的替身记下 props 并画出
  * `sessionsPrepend`。chat store 是按 selector 读、能订阅的小替身；小组件 store 是一个真的 zustand store。
@@ -140,6 +142,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const SCOPE = 'shuvixMobileScope'
 const CHAT = 'shuvixMobileChat'
 const WIDGET = 'shuvixMobileWidget'
+const DETAIL = 'shuvixMobileDetail'
 
 type Drill = {
   scope: string | null
@@ -601,5 +604,136 @@ describe('MobileShell: search', () => {
     click(q('[data-mobile-calendar-toggle]')!)
     expect(searchInput()).not.toBeNull()
     expect(sidebarWrapper().style.display).toBe('')
+  })
+})
+
+/**
+ * 对话页上面还开着详情时关对话页（会话在详情里被删掉）：详情首页一条、子页再一条，都带着对话页的标记；
+ * `closeChat` 连它们一起退掉。这里 MobileChatView 是替身，详情那几条历史由用例自己压（真的那个压的就是这样的条目）。
+ */
+describe('MobileShell: closing the chat page with the details open', () => {
+  /** 详情那一层压的一条历史：带着下面各层的标记，再加上自己是哪一页 */
+  const pushDetail = (page: string): void =>
+    window.history.pushState(
+      { ...((window.history.state as Record<string, unknown> | null) ?? {}), [DETAIL]: page },
+      ''
+    )
+  /** 从别处打开一条会话（不是点列表） */
+  const openActive = (): void => act(() => rec.setActive('s1'))
+  /** 这条会话被删掉：活跃会话变成 null，外壳退掉对话页那几条历史 */
+  const deleted = (): Promise<void> => awaitPop(() => rec.setActive(null))
+
+  it('MS-22 the details index is open and the session is deleted: one step back past both entries', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('index')
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+    expect(mark(DETAIL)).toBe(false)
+    expect(mark(SCOPE)).toBe(false)
+    expect(drill().scope).toBeNull()
+  })
+
+  it('MS-23 a section page is open: back past all three entries', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('index')
+    pushDetail('paths')
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-3)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+    expect(mark(DETAIL)).toBe(false)
+    expect(mark(SCOPE)).toBe(false)
+  })
+
+  it('MS-24 opened from a group: it lands in the group, and one more back reaches the top level', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openScope('p1', 'Proj')
+    openSessionFromList()
+    pushDetail('index')
+    expect(mark(SCOPE)).toBe(true)
+    rec.activeSessionId = 's1'
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+    expect(drill().scope).toBe('p1')
+    expect(mark(SCOPE)).toBe(true)
+    expect(mark(CHAT)).toBe(false)
+    expect(mark(DETAIL)).toBe(false)
+    expect(toolbarSlot().style.display).toBe('')
+    expect(tabbar().style.display).toBe('none')
+
+    await back()
+    expect(drill().scope).toBeNull()
+    expect(mark(SCOPE)).toBe(false)
+  })
+
+  it('MS-25 no details open: a plain single step', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-1)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+  })
+
+  it('MS-26 the depth comes from the entry the history is on now', async () => {
+    mount()
+    openActive()
+    pushDetail('index')
+    pushDetail('paths')
+    await back()
+    expect(chatPage()).not.toBeNull()
+    expect((window.history.state as Record<string, unknown>)[DETAIL]).toBe('index')
+    const go = vi.spyOn(window.history, 'go')
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+  })
+
+  it('MS-27 an unknown detail value counts as no details', async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openActive()
+    pushDetail('bogus')
+    await deleted()
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-1)
+  })
+
+  it('MS-28 with no chat mark on the current entry the page closes without navigating', () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    const historyBack = vi.spyOn(window.history, 'back')
+    openActive()
+    window.history.replaceState(null, '')
+    act(() => rec.setActive(null))
+    expect(chatPage()).toBeNull()
+    expect(go).not.toHaveBeenCalled()
+    expect(historyBack).not.toHaveBeenCalled()
+  })
+
+  it("MS-29 the chat header's back button still goes one step", async () => {
+    mount()
+    const go = vi.spyOn(window.history, 'go')
+    openSessionFromList()
+    await awaitPop(() => q('[data-stub-chat-back]')!.click())
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-1)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
   })
 })

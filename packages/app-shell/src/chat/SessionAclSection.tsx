@@ -14,7 +14,7 @@
  *
  * 数据现取（`session.listAcl` —— 主进程先按此刻的设置对账再回），`session.configChanged` 时重取。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bot,
@@ -353,11 +353,47 @@ export interface SessionAclSectionProps {
   sessionId: string
   /** 一开始就把来自会话设置的那些行也摆出来（会话设置弹窗里是；空会话的欢迎页里收着） */
   defaultExpanded?: boolean
+  /**
+   * 只画其中一种行（手机布局的会话详情页：文件 / 会话 / 小组件访问各是一页）。会话与小组件那两种一行都没有时
+   * 画一句空态（整份面板里它们没有行就整节不出现）。缺省 = 三节照旧
+   */
+  only?: 'paths' | 'sessions' | 'widgets'
+}
+
+/** 权限表里各种行的条数（会话详情页的行尾数字）；还没取回来 → null。跟着 `session.configChanged` 重取 */
+export function useSessionAclCounts(
+  sessionId: string
+): { paths: number; sessions: number; widgets: number } | null {
+  const [counts, setCounts] = useState<{ paths: number; sessions: number; widgets: number } | null>(
+    null
+  )
+  // 只认最后发出的那一次：先发后到的旧结果（或换了会话之后才回来的上一条会话的结果）不盖住新的
+  const latest = useRef(0)
+  const load = useCallback((): void => {
+    const request = ++latest.current
+    void getChatApi()
+      .session.listAcl(sessionId)
+      .then((list) => {
+        if (request !== latest.current) return
+        setCounts({
+          paths: list.filter((e) => e.kind === 'path').length,
+          sessions: list.filter((e) => e.kind === 'session').length,
+          widgets: list.filter((e) => e.kind === 'widget').length
+        })
+      })
+      .catch(() => undefined)
+  }, [sessionId])
+  useEffect(load, [load])
+  useAppEvent('session.configChanged', (event) => {
+    if (event.sessionId === sessionId) load()
+  })
+  return counts
 }
 
 export function SessionAclSection({
   sessionId,
-  defaultExpanded = false
+  defaultExpanded = false,
+  only
 }: SessionAclSectionProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const [entries, setEntries] = useState<AclEntry[] | null>(null)
@@ -404,32 +440,46 @@ export function SessionAclSection({
 
   return (
     <>
-      <SettingsSection title={t('sessionAcl.title')} description={t('sessionAcl.description')}>
-        {shown.length > 0 && (
-          <div data-session-acl={sessionId} className="divide-y divide-border-secondary/40">
-            {shown.map((entry) => (
-              <AclRow
-                key={entry.id}
-                entry={entry}
-                onAccess={(access) => setAccess(entry, access)}
-                onRemove={() => remove(entry)}
-              />
-            ))}
-          </div>
-        )}
-        {rest.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            data-acl-toggle=""
-            className="w-full px-4 py-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover/60 hover:text-text-secondary"
-          >
-            {expanded ? t('sessionAcl.showLess') : t('sessionAcl.showAll', { count: rest.length })}
-          </button>
-        )}
-        <AclAddRow sessionId={sessionId} onAdded={load} />
-      </SettingsSection>
-      {sessions.length > 0 && (
+      {(!only || only === 'paths') && (
+        <SettingsSection title={t('sessionAcl.title')} description={t('sessionAcl.description')}>
+          {shown.length > 0 && (
+            <div data-session-acl={sessionId} className="divide-y divide-border-secondary/40">
+              {shown.map((entry) => (
+                <AclRow
+                  key={entry.id}
+                  entry={entry}
+                  onAccess={(access) => setAccess(entry, access)}
+                  onRemove={() => remove(entry)}
+                />
+              ))}
+            </div>
+          )}
+          {rest.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              data-acl-toggle=""
+              className="w-full px-4 py-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover/60 hover:text-text-secondary"
+            >
+              {expanded
+                ? t('sessionAcl.showLess')
+                : t('sessionAcl.showAll', { count: rest.length })}
+            </button>
+          )}
+          <AclAddRow sessionId={sessionId} onAdded={load} />
+        </SettingsSection>
+      )}
+      {only === 'sessions' && sessions.length === 0 && (
+        <p data-acl-empty="sessions" className="px-1 text-[12px] text-text-tertiary">
+          {t('sessionAcl.sessionsEmpty')}
+        </p>
+      )}
+      {only === 'widgets' && widgets.length === 0 && (
+        <p data-acl-empty="widgets" className="px-1 text-[12px] text-text-tertiary">
+          {t('sessionAcl.widgetsEmpty')}
+        </p>
+      )}
+      {(!only || only === 'sessions') && sessions.length > 0 && (
         <SettingsSection
           title={t('sessionAcl.sessionsTitle')}
           description={t('sessionAcl.sessionsDescription')}
@@ -449,7 +499,7 @@ export function SessionAclSection({
           </div>
         </SettingsSection>
       )}
-      {widgets.length > 0 && (
+      {(!only || only === 'widgets') && widgets.length > 0 && (
         <SettingsSection
           title={t('sessionAcl.widgetsTitle')}
           description={t('sessionAcl.widgetsDescription')}

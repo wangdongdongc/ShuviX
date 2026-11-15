@@ -13479,7 +13479,8 @@ export function widgetWindowPane(client: CdpClient): WidgetWindowPane {
 //     `aria-hidden` + `visibility: hidden`）；
 //   - 会话页的列表与日历都装在 `data-mobile-list` 里：两个孩子，带 `.calendar-container` 的那个是日历 ——
 //     **会话行只在列表那一半里认**（sidebarPane 的行选择器连日历里的行一起认）；
-//   - 对话页顶栏 `data-mobile-back` / `data-mobile-chat-title` / `data-mobile-files` / `data-mobile-tasks`，
+//   - 对话页顶栏 `data-mobile-back`（+ `data-mobile-back-count`）/ `data-mobile-chat-title` / `data-mobile-chat-menu`
+//     （下拉菜单 `data-mobile-pulldown`，项 `data-mobile-menu-item`），详情页 `data-mobile-details`，
 //     底部抽屉 `data-bottom-sheet`（遮罩 `data-bottom-sheet-backdrop`，面板 role=dialog）；
 //   - 设置的叠放布局 `data-settings-stacked`（列表行 `data-settings-tab=<id>`、返回键 `data-settings-back`
 //     带 `data-settings-level`（`section` 回设置列表 / `item` 回分区自己的列表）、头部名字 `data-settings-heading`），
@@ -13521,7 +13522,12 @@ export type WebMobileTouchTarget =
   | { widgetCardCorner: string }
   /** 整屏开着的小组件（前台应用）顶栏上的返回 / 重新加载 / 在独立窗口打开 */
   | { widgetApp: 'back' | 'reload' | 'popout' }
-  | { chat: 'back' | 'title' | 'files' | 'tasks' }
+  | { chat: 'back' | 'title' | 'menu' }
+  /** 对话页「⋯」下拉菜单里的一项（`data-mobile-menu-item=<id>`；菜单得先点开） */
+  | { chatMenu: 'files' | 'tasks' | 'artifacts' | 'export' | 'fork' | 'details' }
+  /** 详情页：顶上的返回、首页的某一行（`data-mobile-detail-row=<段>`）、删除会话 */
+  | { details: 'back' | 'delete' }
+  | { detailRow: 'extensions' | 'knowledge' | 'paths' | 'sessions' | 'widgets' }
   | { sessions: 'calendarToggle' | 'newChat' }
   /** 新建会话抽屉里的一项（'' = 临时会话，否则项目 id） */
   | { newChatTarget: string }
@@ -13862,6 +13868,34 @@ export interface WebMobilePane {
 
   chatOpen(): Promise<boolean>
   chatTitle(): Promise<string>
+  /**
+   * 对话页顶栏：返回键后面的数（`data-mobile-back-count`；没有 → null）、标题下那一行小字（`data-mobile-chat-subtitle`）
+   * 与其中的状态（`data-mobile-chat-state`：waiting / replying；停着 → null）。对话页没开 → null
+   */
+  chatHeader(): Promise<{
+    backCount: number | null
+    subtitle: string
+    state: 'waiting' | 'replying' | null
+  } | null>
+  /** 开着的「⋯」下拉菜单的各项（DOM 序；`count` = 行尾的小数字，没有 → null）；菜单没开 → null */
+  chatMenu(): Promise<Array<{
+    id: string
+    label: string
+    count: number | null
+    disabled: boolean
+  }> | null>
+  /**
+   * 开着的详情页（`data-mobile-details=<页>`）：哪一页（index 或某一段）、大标题、首页的名称输入框与位置、首页各行
+   * （段 + 行尾的数，没有 → null）、子页里有没有那一段的内容。没开 → null
+   */
+  details(): Promise<{
+    page: string
+    title: string
+    name: string | null
+    location: string | null
+    rows: Array<{ section: string; count: number | null }>
+    sectionText: string | null
+  } | null>
   /** 对话页里有没有 agent 胶囊（`data-agent-chip`） */
   chatAgentChip(): Promise<boolean>
   /** 整页里有没有 agent 胶囊（桌面布局的横幅里） */
@@ -14122,11 +14156,19 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       const attr = {
         back: 'data-mobile-back',
         title: 'data-mobile-chat-title',
-        files: 'data-mobile-files',
-        tasks: 'data-mobile-tasks'
+        menu: 'data-mobile-chat-menu'
       }[target.chat]
       return `${PAGE('chat')}?.querySelector('[${attr}]')`
     }
+    if ('chatMenu' in target)
+      return `document.querySelector('[data-mobile-pulldown] [data-mobile-menu-item=${JSON.stringify(target.chatMenu)}]')`
+    if ('details' in target) {
+      const attr =
+        target.details === 'back' ? 'data-mobile-details-back' : 'data-mobile-detail-delete'
+      return `document.querySelector('[data-mobile-details] [${attr}]')`
+    }
+    if ('detailRow' in target)
+      return `document.querySelector('[data-mobile-details] [data-mobile-detail-row=${JSON.stringify(target.detailRow)}]')`
     if ('sessions' in target) {
       const attr =
         target.sessions === 'calendarToggle'
@@ -14366,9 +14408,70 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     },
 
     chatOpen: () => client.eval<boolean>(`!!${PAGE('chat')}`),
+    chatHeader: () =>
+      client.eval<{
+        backCount: number | null
+        subtitle: string
+        state: 'waiting' | 'replying' | null
+      } | null>(`(() => {
+        const header = ${PAGE('chat')}?.querySelector('[data-mobile-chat-header]')
+        if (!header) return null
+        const count = header.querySelector('[data-mobile-back-count]')
+        return {
+          backCount: count ? Number((count.textContent ?? '').trim()) : null,
+          subtitle: (header.querySelector('[data-mobile-chat-subtitle]')?.textContent ?? '').trim(),
+          state: header.querySelector('[data-mobile-chat-state]')?.getAttribute('data-mobile-chat-state') ?? null
+        }
+      })()`),
+    chatMenu: () =>
+      client.eval<Array<{
+        id: string
+        label: string
+        count: number | null
+        disabled: boolean
+      }> | null>(`(() => {
+        const menu = document.querySelector('[data-mobile-pulldown]')
+        if (!menu) return null
+        return [...menu.querySelectorAll('[data-mobile-menu-item]')].map((b) => {
+          const count = b.querySelector('[data-mobile-menu-count]')
+          return {
+            id: b.getAttribute('data-mobile-menu-item') ?? '',
+            label: (b.querySelector('span')?.textContent ?? '').trim(),
+            count: count ? Number((count.textContent ?? '').trim()) : null,
+            disabled: b.disabled === true
+          }
+        })
+      })()`),
+    details: () =>
+      client.eval<{
+        page: string
+        title: string
+        name: string | null
+        location: string | null
+        rows: Array<{ section: string; count: number | null }>
+        sectionText: string | null
+      } | null>(`(() => {
+        const root = document.querySelector('[data-mobile-details]')
+        if (!root) return null
+        const section = root.querySelector('[data-mobile-detail-section]')
+        return {
+          page: root.getAttribute('data-mobile-details') ?? '',
+          title: (root.querySelector('[data-mobile-details-title]')?.textContent ?? '').trim(),
+          name: root.querySelector('[data-mobile-detail-name]')?.value ?? null,
+          location: root.querySelector('[data-mobile-detail-location]')?.textContent?.trim() ?? null,
+          rows: [...root.querySelectorAll('[data-mobile-detail-row]')].map((r) => {
+            const count = r.querySelector('[data-mobile-detail-count]')
+            return {
+              section: r.getAttribute('data-mobile-detail-row') ?? '',
+              count: count ? Number((count.textContent ?? '').trim()) : null
+            }
+          }),
+          sectionText: section ? (section.textContent ?? '').replace(/\\s+/g, ' ').trim() : null
+        }
+      })()`),
     chatTitle: () =>
       client.eval<string>(
-        `(${PAGE('chat')}?.querySelector('[data-mobile-chat-title]')?.textContent ?? '').trim()`
+        `(${PAGE('chat')}?.querySelector('[data-mobile-chat-title] > span')?.textContent ?? '').trim()`
       ),
     chatAgentChip: () =>
       client.eval<boolean>(`!!${PAGE('chat')}?.querySelector('[data-agent-chip]')`),

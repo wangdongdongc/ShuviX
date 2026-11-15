@@ -49,6 +49,7 @@ import { MobileChatView } from './MobileChatView'
 import { BottomSheet } from './BottomSheet'
 import { installLongPressContextMenu } from './longPress'
 import { usePhoneFontSize } from './phoneFontSize'
+import { detailDepthOf } from './detailHistory'
 
 type MobileTab = 'sessions' | 'widgets' | 'library' | 'settings'
 
@@ -186,7 +187,8 @@ function MobileShellBody(): React.JSX.Element {
   const closeChat = useCallback((): void => {
     if (!chatOpenRef.current) return
     if (historyHas(HISTORY_MARK)) {
-      window.history.back()
+      // 对话页上面还开着详情（会话在详情里被删掉）：连那几条一起退掉，落在打开对话之前的那一条上
+      window.history.go(-(1 + detailDepthOf(window.history.state)))
     } else {
       chatOpenRef.current = false
       setChatOpen(false)

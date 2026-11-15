@@ -15,7 +15,15 @@ export interface SessionConfigPanelProps {
   sessionId: string
   /** 文件访问一节一开始就把来自会话设置的行也摆出来（会话设置弹窗里是；空会话的欢迎页里收着） */
   aclExpanded?: boolean
+  /**
+   * 只画其中一段（手机布局的会话详情页：每一段各是一页）—— `extensions` = MCP 勾选，`knowledge` = 知识库，
+   * `paths` / `sessions` / `widgets` = 权限表的那一种行。缺省 = 整份面板（桌面的弹窗与空会话页）
+   */
+  section?: SessionConfigSection
 }
+
+/** 会话配置里可以单独成页的各段（见 SessionConfigPanelProps.section） */
+export type SessionConfigSection = 'extensions' | 'knowledge' | 'paths' | 'sessions' | 'widgets'
 
 /**
  * 会话的扩展能力：MCP 勾选与知识库，与输入框的工具选择器同一份数据、同一个写入口
@@ -29,7 +37,13 @@ export interface SessionConfigPanelProps {
  * 弹窗可能开在一条非当前会话上，所以挂载时自己向后端拉一次勾选，不依赖当前会话
  * 的初始化。两组都没有条目时整节不显示（扩展端落在这里：它没有会话级扩展能力，也没有知识库）。
  */
-function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.JSX.Element | null {
+function SessionExtensionsSection({
+  sessionId,
+  only
+}: {
+  sessionId: string
+  only?: 'mcp' | 'knowledge'
+}): React.JSX.Element | null {
   const { t } = useTranslation()
   const { enabledTools, setEnabledTools } = useSessionTools(sessionId)
   const knowledge = useSessionKnowledgeBases(sessionId)
@@ -52,13 +66,21 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
   if (mcpTools.length === 0 && knowledge.options.length === 0) {
     return null
   }
+  if (only === 'mcp' && mcpTools.length === 0) return null
+  if (only === 'knowledge' && knowledge.options.length === 0) return null
 
   return (
     <>
       <CacheBreakConfirmHost />
       <ExtensionsSection
-        title={t('sessionConfig.extensionsGroup')}
-        footer={t('sessionConfig.extensionsDesc')}
+        only={only}
+        title={
+          only === 'knowledge'
+            ? t('sessionConfig.knowledgeGroup')
+            : t('sessionConfig.extensionsGroup')
+        }
+        // 只画知识库那一行时不带 MCP 的那段说明
+        footer={only === 'knowledge' ? undefined : t('sessionConfig.extensionsDesc')}
         mcpTools={mcpTools}
         enabledTools={enabledTools}
         onChange={(next) => void setEnabledTools(next)}
@@ -91,8 +113,20 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
  */
 export function SessionConfigPanel({
   sessionId,
-  aclExpanded = false
+  aclExpanded = false,
+  section
 }: SessionConfigPanelProps): React.JSX.Element {
+  if (section === 'extensions' || section === 'knowledge') {
+    return (
+      <SessionExtensionsSection
+        sessionId={sessionId}
+        only={section === 'knowledge' ? 'knowledge' : 'mcp'}
+      />
+    )
+  }
+  if (section) {
+    return <SessionAclSection sessionId={sessionId} defaultExpanded only={section} />
+  }
   return (
     <div className="space-y-5">
       {/* 扩展能力（含知识库，后者不随 Agent 上锁） */}
