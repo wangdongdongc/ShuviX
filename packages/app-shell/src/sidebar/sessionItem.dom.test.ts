@@ -416,12 +416,20 @@ describe('run kinds (S1)', () => {
 })
 
 /**
- * 两层的行（`detail`，手机布局的会话列表）：上层标题 + 行尾时间，下层摘要；未读的点挪到行首的空隙里。
+ * 两层的行（`detail`，手机布局的会话列表）：上层标题 + 行尾时间，下层摘要。行首没有图标，只有一列圆点
+ * （`[data-row-dot]`）：有询问在等你 = 琥珀点（`data-pending-asks`），有没看的新回复 = 未读点（`data-unread`），
+ * 都没有就空着。
  *
- *   SD-1..6   有没有那一层、时间、摘要（文字 / 空 / 节点）、「在等你回答」的警示色
- *   SD-7..9   未读的点：两层的行在行首（根节点的直接子节点），单层的行照旧在标题那一行
- *   SD-10..12 其余记号、位置、加粗都在
+ *   SD-1..6   有没有那一层、时间、摘要（文字 / 空 / 节点）、摘要的语气（`data-preview-tone`）
+ *   SD-7..9   未读的点：两层的行在行首那一列里，单层的行照旧在标题那一行
+ *   SD-10..12 中断 / 目标的记号、位置、加粗都在标题那一层
  *   SD-13..15 折叠钮、右键菜单、data-run / data-running / data-sub 与单层的行一样
+ *   SD-16     行首那一列圆点永远在；没有图标
+ *   SD-17     询问：琥珀点在那一列里（盖过未读），不在标题那一行；单层的行照旧是标题行上的徽标
+ *   SD-18     定时运行：标题前一枚小定时器
+ *   SD-19     子会话的折叠钮在标题那一行（数量 + 箭头，aria-expanded）
+ *   SD-20     两层的行不画选中底色
+ *   SD-21     `muted` 语气
  */
 describe('detail rows (phone session list)', () => {
   const row = (): HTMLElement => container.querySelector<HTMLElement>('[data-session-row]')!
@@ -431,19 +439,26 @@ describe('detail rows (phone session list)', () => {
     container.querySelector<HTMLElement>('[data-session-time]')
   const previewEl = (): HTMLElement | null =>
     container.querySelector<HTMLElement>('[data-session-preview]')
+  const dotSlot = (): HTMLElement | null => container.querySelector<HTMLElement>('[data-row-dot]')
   const unreadDots = (): HTMLElement[] => [
     ...container.querySelectorAll<HTMLElement>('[data-unread]')
   ]
+  const askMarks = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-pending-asks]')
+  ]
+  const toggle = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('button[data-subs-toggle]')
   /** a 在 b 之前（文档顺序） */
   const before = (a: Element, b: Element): boolean =>
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
   const DETAIL = { time: '09:41' }
 
-  it('SD-1 without detail there is no detail layer, time or preview', () => {
+  it('SD-1 without detail there is no detail layer, time, preview or dot column', () => {
     render({})
     expect(detailEl()).toBeNull()
     expect(timeEl()).toBeNull()
     expect(previewEl()).toBeNull()
+    expect(dotSlot()).toBeNull()
   })
 
   it('SD-2 detail with a time only: the layer and the time, no preview', () => {
@@ -458,14 +473,20 @@ describe('detail rows (phone session list)', () => {
   it('SD-3 a preview is shown, in the normal tone', () => {
     render({ detail: { ...DETAIL, preview: 'Last reply' } })
     expect(previewEl()!.textContent).toBe('Last reply')
-    expect(previewEl()!.classList.contains('text-warning')).toBe(false)
+    expect(previewEl()!.getAttribute('data-preview-tone')).toBe('normal')
   })
 
-  it('SD-4 previewTone waiting draws the preview in the warning colour', () => {
+  it('SD-4 previewTone waiting marks the preview as waiting; normal stays normal', () => {
     render({ detail: { ...DETAIL, preview: '1 question waiting', previewTone: 'waiting' } })
-    expect(previewEl()!.classList.contains('text-warning')).toBe(true)
+    expect(previewEl()!.getAttribute('data-preview-tone')).toBe('waiting')
     render({ detail: { ...DETAIL, preview: 'Last reply', previewTone: 'normal' } })
-    expect(previewEl()!.classList.contains('text-warning')).toBe(false)
+    expect(previewEl()!.getAttribute('data-preview-tone')).toBe('normal')
+  })
+
+  it('SD-21 previewTone muted marks the preview as muted', () => {
+    render({ detail: { ...DETAIL, preview: 'No messages yet', previewTone: 'muted' } })
+    expect(previewEl()!.textContent).toBe('No messages yet')
+    expect(previewEl()!.getAttribute('data-preview-tone')).toBe('muted')
   })
 
   it.each<[string, React.ReactNode]>([
@@ -485,13 +506,12 @@ describe('detail rows (phone session list)', () => {
     expect(inner!.textContent).toBe('hi')
   })
 
-  it('SD-7 unread in a detail row: one dot, in the gutter, a direct child of the row', () => {
+  it('SD-7 unread in a detail row: one dot, inside the dot column, outside the detail layer', () => {
     render({ detail: DETAIL, unread: true })
     expect(unreadDots()).toHaveLength(1)
     const el = unreadDots()[0]
-    expect(el.parentElement).toBe(row())
+    expect(el.parentElement).toBe(dotSlot())
     expect(detailEl()!.contains(el)).toBe(false)
-    expect(el.classList.contains('sb-unread-gutter')).toBe(true)
     expect(el.getAttribute('data-unread')).toBe('')
     expect(el.title).toBe(en.sidebar.unread)
     expect(el.getAttribute('aria-label')).toBe(en.sidebar.unread)
@@ -502,7 +522,7 @@ describe('detail rows (phone session list)', () => {
     expect(unreadDots()).toHaveLength(1)
     const el = unreadDots()[0]
     expect(el.getAttribute('data-unread')).toBe('failed')
-    expect(el.parentElement).toBe(row())
+    expect(el.parentElement).toBe(dotSlot())
     expect(el.title).toBe(en.inbox.failed)
     expect(el.getAttribute('aria-label')).toBe(en.inbox.failed)
   })
@@ -521,13 +541,12 @@ describe('detail rows (phone session list)', () => {
     render({ unread: true })
     expect(unreadDots()).toHaveLength(1)
     const el = unreadDots()[0]
-    expect(el.classList.contains('sb-unread-gutter')).toBe(false)
     expect(el.parentElement).not.toBe(row())
+    expect(el.closest('[data-row-dot]')).toBeNull()
   })
 
   it.each<[string, Partial<SessionItemProps>, string]>([
     ['interrupted', { interrupted: true }, '[data-interrupted]'],
-    ['pending asks', { pendingCount: 2 }, '[data-pending-asks="2"]'],
     ['goal manager', { goalManager: true }, '[data-goal-mark]']
   ])('SD-10 the %s mark stays on the title line of a detail row', (_label, props, selector) => {
     render({ detail: DETAIL, ...props })
@@ -570,9 +589,8 @@ describe('detail rows (phone session list)', () => {
     const onSelect = vi.fn()
     const onToggleSubs = vi.fn()
     render({ detail: { ...DETAIL, preview: 'Last reply' }, subCount: 2, onSelect, onToggleSubs })
-    const toggle = container.querySelector<HTMLButtonElement>('button[data-subs-toggle]')
-    expect(toggle).not.toBeNull()
-    act(() => toggle!.click())
+    expect(toggle()).not.toBeNull()
+    act(() => toggle()!.click())
     expect(onToggleSubs.mock.calls).toEqual([['s1']])
     expect(onSelect).not.toHaveBeenCalled()
 
@@ -610,4 +628,112 @@ describe('detail rows (phone session list)', () => {
       if (props.isSub) expect(row().hasAttribute('data-sub')).toBe(true)
     }
   )
+
+  it.each<[string, Partial<SessionItemProps>]>([
+    ['plain', {}],
+    ['agent working', { run: 'agent' }],
+    ['only background commands', { run: 'resident' }],
+    ['bot', { isBot: true }],
+    ['notebook', { isNotebook: true }],
+    ['pinned', { isPinned: true }],
+    ['with sub-sessions', { subCount: 2 }],
+    ['sub-session', { isSub: true }]
+  ])(
+    'SD-16 a %s detail row starts with an empty dot column and has no session icon',
+    (_l, props) => {
+      render({ detail: DETAIL, ...props })
+      expect(container.querySelectorAll('[data-row-dot]')).toHaveLength(1)
+      expect(row().firstElementChild).toBe(dotSlot())
+      expect(dotSlot()!.childElementCount).toBe(0)
+      expect(row().querySelector('[data-session-icon]')).toBeNull()
+      for (const cls of [
+        'lucide-message-square',
+        'lucide-messages-square',
+        'lucide-messages-square-solid',
+        'lucide-bot',
+        'lucide-file-text',
+        'lucide-picture-in-picture-2'
+      ]) {
+        expect(row().querySelector(`svg.${cls}`), cls).toBeNull()
+      }
+    }
+  )
+
+  it('SD-17 pending asks in a detail row: one amber dot in the dot column, none on the title line', () => {
+    render({ detail: DETAIL, pendingCount: 2 })
+    expect(askMarks()).toHaveLength(1)
+    const mark = askMarks()[0]
+    expect(mark.getAttribute('data-pending-asks')).toBe('2')
+    expect(mark.parentElement).toBe(dotSlot())
+    expect(detailEl()!.contains(mark)).toBe(false)
+    expect(mark.title).toBe('2 questions waiting')
+    expect(mark.getAttribute('aria-label')).toBe('2 questions waiting')
+  })
+
+  it('SD-17 pending asks win over unread in the dot column', () => {
+    render({ detail: DETAIL, pendingCount: 1, unread: true })
+    expect(dotSlot()!.childElementCount).toBe(1)
+    expect(dotSlot()!.querySelector('[data-pending-asks="1"]')).not.toBeNull()
+    expect(unreadDots()).toHaveLength(0)
+    expect(askMarks()[0].title).toBe('1 question waiting')
+  })
+
+  it('SD-17 without detail the pending-ask badge stays on the title line with its count', () => {
+    render({ pendingCount: 2 })
+    expect(askMarks()).toHaveLength(1)
+    expect(askMarks()[0].textContent).toBe('2')
+    expect(askMarks()[0].closest('[data-row-dot]')).toBeNull()
+  })
+
+  it('SD-18 a trigger run in a detail row carries a small timer before the title', () => {
+    render({ detail: DETAIL, isTriggerRun: true, isBot: true })
+    const timer = detailEl()!.querySelector('svg.lucide-timer')
+    expect(timer).not.toBeNull()
+    const title = [...row().querySelectorAll<HTMLElement>('span.truncate')].find(
+      (el) => el.textContent === 'Session one'
+    )!
+    expect(before(timer!, title)).toBe(true)
+    expect(timer!.parentElement).toBe(title.parentElement)
+    expect(row().hasAttribute('data-trigger-run')).toBe(true)
+    expect(row().querySelector('svg.lucide-bot')).toBeNull()
+  })
+
+  it('SD-18 a detail row that is not a trigger run has no timer', () => {
+    render({ detail: DETAIL, isBot: true })
+    expect(row().querySelector('svg.lucide-timer')).toBeNull()
+  })
+
+  it.each<[string, boolean, string, string]>([
+    ['collapsed', true, 'false', 'lucide-chevron-right'],
+    ['expanded', false, 'true', 'lucide-chevron-down']
+  ])(
+    'SD-19 the sub-session toggle of a detail row is on the title line, %s',
+    (_label, subCollapsed, expanded, chevron) => {
+      render({ detail: DETAIL, subCount: 3, subCollapsed })
+      expect(container.querySelectorAll('[data-subs-toggle]')).toHaveLength(1)
+      const button = toggle()!
+      expect(detailEl()!.contains(button)).toBe(true)
+      expect(button.parentElement).toBe(timeEl()!.parentElement)
+      expect(before(button, timeEl()!)).toBe(true)
+      expect(button.textContent).toBe('3')
+      expect(button.getAttribute('aria-expanded')).toBe(expanded)
+      expect(button.querySelector(`svg.${chevron}`)).not.toBeNull()
+      const label = en.sidebar.subSessions.replace('{{count}}', '3')
+      expect(button.getAttribute('aria-label')).toBe(label)
+      expect(row().getAttribute('data-subs')).toBe(subCollapsed ? 'collapsed' : 'expanded')
+      expect(row().getAttribute('data-sub-count')).toBe('3')
+    }
+  )
+
+  it('SD-19 a detail row without sub-sessions has no toggle', () => {
+    render({ detail: DETAIL, onToggleSubs: vi.fn() })
+    expect(toggle()).toBeNull()
+  })
+
+  it('SD-20 an active detail row draws no selected background; a single-line one does', () => {
+    render({ detail: DETAIL, active: true })
+    expect(row().classList.contains('bg-bg-active/80')).toBe(false)
+    render({ active: true })
+    expect(row().classList.contains('bg-bg-active/80')).toBe(true)
+  })
 })

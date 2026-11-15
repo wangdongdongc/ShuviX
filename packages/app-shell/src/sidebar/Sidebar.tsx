@@ -3,7 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { Settings } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from './useFocusDim'
-import { ProjectSessionGroups, TEMP_GROUP_KEY, type BotsSectionCaps } from './ProjectSessionGroups'
+import {
+  ProjectSessionGroups,
+  TEMP_GROUP_KEY,
+  type BotsSectionCaps,
+  type DrillNav
+} from './ProjectSessionGroups'
 import type { ProjectRef } from './useProjects'
 import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 
@@ -60,7 +65,7 @@ export interface SidebarProps {
    * 两层导航（手机布局，见 ProjectSessionGroups 的 `drill`）：顶层是导航行，进了某一组只画那一组。
    * 进组时列表回到顶上，退回顶层时回到离开前的位置；`groupsPrepend` 只在顶层画
    */
-  drill?: { scope: string | null; onOpen: (key: string, label: string) => void }
+  drill?: DrillNav
 }
 
 /**
@@ -198,7 +203,7 @@ export function Sidebar({
         onScroll={trackIndexScroll}
         className={`flex-1 overflow-y-auto no-scrollbar ${density === 'touch' ? 'px-3 pb-4' : 'px-2.5 pb-3'}`}
       >
-        {drillScope ? null : groupsPrepend}
+        {drillScope || drill?.query?.trim() ? null : groupsPrepend}
         {/* 一个会话、一个项目都没有（全新安装）也是这一套分节：「项目」里是「打开一个文件夹作为项目」，
             「聊天」里是一行「新对话」—— 两种对话的入口都看得见，web 客户端没有菜单栏可退 */}
         <ProjectSessionGroups

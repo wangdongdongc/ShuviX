@@ -153,18 +153,43 @@ span.sb-icon {
 .sb-row-wrap > .sb-label {
   padding-block: calc((var(--sb-row-h) - 1.3em) / 2);
 }
-/* 两层的会话行（手机布局的会话列表，SessionItem 的 detail）：未读的点在行首的空隙里，与标题那一行同高；
-   带子会话的行首是折叠钮（图标外面包了一层 4px 的内边距），顶对齐时按图标的位置垫下来 */
-.sb-unread-gutter {
-  position: absolute;
-  /* 在行的左内边距之外、列表自己的留白里：不挨着图标 */
-  left: -7px;
-  top: calc(var(--sb-row-h) / 2 - 4px);
-  width: 8px;
-  height: 8px;
+/* 两层的会话行（手机布局的会话列表，SessionItem 的 detail）：行首没有图标，只有一列 8px 的圆点（询问 / 未读），
+   与标题那一行同高；行不画圆角底色（Mail 的邮件列表是通栏的行，靠内缩的细线分开） */
+.sb-row-detail {
+  gap: 10px;
+  border-radius: 0;
 }
-.sb-row-wrap > [data-subs-toggle] {
-  margin-top: calc((var(--sb-row-h) - var(--sb-icon)) / 2 - 4px);
+.sb-dot-slot {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: var(--sb-row-h);
+}
+/* 分组卡片（手机布局会话页的顶层，照 iOS 的分组列表）：一节里的导航行收进一张圆角卡片，行与行之间一条从标签
+   起头的细线。卡片的直接子元素各含一行（组的外壳 / 行自己），第一行不画线 */
+.sb-card {
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+}
+.sb-card .sb-row {
+  min-height: 44px;
+  border-radius: 0;
+}
+.sb-card .sb-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: calc(var(--sb-pad) + var(--sb-icon) + var(--sb-gap));
+  height: 1px;
+  background: color-mix(in srgb, var(--color-border-secondary) 70%, transparent);
+}
+.sb-card > :first-child .sb-row::before,
+.sb-card > .sb-row:first-child::before {
+  display: none;
 }
 .sb-body {
   --sb-base: var(--sb-indent);

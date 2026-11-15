@@ -10,6 +10,7 @@
  *   SG-8    `bot` 形态：自带的头像、名字、会话数、箭头
  *   SG-9    项目的导航行永远画合上的文件夹
  *   SG-10/11 不给 nav：与原来一样（项目可折叠、有「+」；temp 是摊开的分节）
+ *   SG-12   导航行不画「当前会话所在的组」那层底色；不给 nav 的组照旧画
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -183,5 +184,26 @@ describe('SessionGroup without nav (desktop)', () => {
     expect(section.querySelector('button')).toBeNull()
     expect(section.querySelector('svg')).toBeNull()
     expect(child()).not.toBeNull()
+  })
+})
+
+describe('SessionGroup: the active-group tint', () => {
+  /** 组头外面那一层（底色画在它上面） */
+  const box = (): HTMLElement => header().parentElement!
+
+  it.each<[string, Partial<SessionGroupProps>]>([
+    ['project', { variant: 'project', nav: { key: 'p1', count: 2, onOpen: () => {} } }],
+    ['bot', { variant: 'bot', nav: { key: 'bot:scout', onOpen: () => {} } }],
+    ['chats', { variant: 'temp', nav: { key: '__no_project__', onOpen: () => {} } }]
+  ])('SG-12 an active %s nav row draws no tint', (_label, props) => {
+    render({ active: true, ...props })
+    expect(box().classList.contains('bg-bg-primary/30')).toBe(false)
+  })
+
+  it('SG-12 an active group without nav still draws the tint; an inactive one does not', () => {
+    render({ active: true })
+    expect(box().classList.contains('bg-bg-primary/30')).toBe(true)
+    render({ active: false })
+    expect(box().classList.contains('bg-bg-primary/30')).toBe(false)
   })
 })

@@ -341,9 +341,10 @@ async function desktopView(): Promise<void> {
   await until(async () => !(await mobile().shellPresent()), 'back to the desktop layout')
 }
 
-/** 切到某个标签（已经是它就不点） */
+/** 切到某个标签（已经是它就不点）。会话页进了某一组时标签栏收着（底部是那一组的工具栏）：先退回顶层 */
 async function toTab(key: WebMobileTab): Promise<void> {
   if ((await mobile().activeTab()) === key) return
+  await leaveGroup()
   await mobile().tap({ tab: key })
   await until(async () => (await mobile().activeTab()) === key, `the ${key} tab`)
 }
@@ -743,10 +744,24 @@ describe('phone layout: the shell', () => {
     expect(await mobile().chatOpen()).toBe(false)
   })
 
-  it('M-2 tabs mount lazily, visited ones stay mounted, the group you were in survives a round trip', async () => {
+  it('M-2 tabs mount lazily and stay mounted; inside a group the tab bar gives way to the group toolbar', async () => {
     expect(await mobile().listScope()).toBeNull()
+    expect(await mobile().tabBarShown()).toBe(true)
+    // 进了某一组：底部是那一组的工具栏，标签栏收着；退回顶层才换页
     await enterGroup(projects.main.id)
     expect(await mobile().listScopeTitle()).toBe(projects.main.name)
+    expect(await mobile().tabBarShown()).toBe(false)
+    // 这一组两条会话（MOB-chat / MOB-wide）；有没有未读随前面的用例走，只认开头的总数
+    const bar = await until(() => mobile().scopeToolbar(), 'the group toolbar in its slot')
+    expect(bar.count).toMatch(/^2 chats( · \d+ unread)?$/)
+    expect({ filter: bar.filter, newChat: bar.newChat, menu: bar.menu }).toEqual({
+      filter: false,
+      newChat: true,
+      menu: true
+    })
+    await leaveGroup()
+    expect(await mobile().tabBarShown()).toBe(true)
+    expect(await mobile().scopeToolbar()).toBeNull()
     const order = ['widgets', 'library', 'settings', 'sessions'] as const
     const seen = new Set<string>(['sessions'])
     for (const key of order) {
@@ -766,8 +781,7 @@ describe('phone layout: the shell', () => {
       }
     }
     expect(await mobile().mountedPages()).toEqual(['sessions', 'widgets', 'library', 'settings'])
-    expect(await mobile().listScope()).toBe(projects.main.id)
-    await leaveGroup()
+    expect(await mobile().listScope()).toBeNull()
   })
 
   it('M-3 the sessions page has only the session groups and no desktop chrome', async () => {
@@ -992,7 +1006,8 @@ describe('phone layout: the shell', () => {
 
   it('M-14 a tap opens the widget full screen in the page; back returns to the cards; ↗ opens a tab; a long press shows the card menu', async () => {
     const cards = widgetPanelPane(page())
-    await mobile().tap({ tab: 'widgets' })
+    // 上一条用例停在某一组里（那里没有标签栏）：toTab 先退回顶层
+    await toTab('widgets')
     await until(async () => (await cards.cardIds()).includes(WIDGET_ID), 'the widget card')
     const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
     const before = await mobile().widgetHistory()
@@ -1006,10 +1021,10 @@ describe('phone layout: the shell', () => {
     expect(await cards.panelApps()).toEqual([WIDGET_ID])
     expect(await mobile().widgetAppOpen()).toBe(true)
     expect(await mobile().tabBarShown()).toBe(false)
-    // 压了一条带标记的（前面的用例留下的「前进」条目被它换掉，长度不一定加一）
+    // 压了一条带标记的。长度不比：前面的用例退出分组、对话页时留下的「前进」条目被这一条换掉，可能比打开前还短
     const opened = await mobile().widgetHistory()
     expect(opened.mark).toBe(true)
-    expect(opened.length).toBeGreaterThanOrEqual(before.length)
+    expect(opened.length).toBeGreaterThanOrEqual(2)
     // 页面说「画好了」才揭开；里面是组件自己写的字
     await until(() => cards.frameRevealed(WIDGET_ID), 'the widget frame revealed', 30_000)
     const frameUrl = `http://127.0.0.1:${P}/w/${WIDGET_ID}/`
@@ -1267,9 +1282,8 @@ describe('phone layout: the shell', () => {
     await until(() => pane.chatOpen(), 'the next tap opens the chat')
     await backToList()
 
-    // 资料库里内置智能体的行：按住 → 它的菜单（创建覆盖副本）
-    await pane.tap({ tab: 'library' })
-    await until(async () => (await pane.activeTab()) === 'library', 'the library tab')
+    // 资料库里内置智能体的行：按住 → 它的菜单（创建覆盖副本）。此刻还在「聊天」那一组里，toTab 先退回顶层
+    await toTab('library')
     const agents = agentsSidebarPane(page())
     await agents.expand()
     const builtin = await until(async () => {
@@ -1308,7 +1322,7 @@ describe('phone layout: the shell', () => {
     expect(await mobile().composerFontSize()).toBe('16px')
     await backToList()
 
-    // 进了项目之后那一页：「新对话」行与「项目知识库」文件夹行同一个高度；会话行是两层的（有摘要），不比它们矮
+    // 进了项目之后那一页：会话行是两层的（有摘要），不比「项目知识库」文件夹行矮；底部工具栏里的「新对话」是手指的尺寸
     await enterGroup(projects.main.id)
     // 三行都上屏且连着两次量到同样的数
     let prev = ''
@@ -1321,12 +1335,10 @@ describe('phone layout: the shell', () => {
         return null
       }
       return { header: r.header, knowledge: r.knowledge, row: r.row }
-    }, 'the MobProj header, its knowledge folder and the MOB-chat row measured')
-    expect(rhythm.row, JSON.stringify(rhythm)).toBeGreaterThanOrEqual(rhythm.header - 2)
-    expect(Math.abs(rhythm.header - rhythm.knowledge), JSON.stringify(rhythm)).toBeLessThanOrEqual(
-      2
-    )
+    }, 'the MobProj new-chat button, its knowledge folder and the MOB-chat row measured')
+    expect(rhythm.row, JSON.stringify(rhythm)).toBeGreaterThanOrEqual(rhythm.knowledge - 2)
     expect(rhythm.row).toBeGreaterThanOrEqual(40)
+    expect(rhythm.knowledge).toBeGreaterThanOrEqual(40)
     expect(rhythm.header).toBeGreaterThanOrEqual(40)
     await enterGroup(TEMP_GROUP)
     const phoneTemp = await until(

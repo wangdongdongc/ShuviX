@@ -16,6 +16,7 @@ import {
   type PolicyGroupAdapter,
   type BotGroupAdapter,
   type BotsSectionCaps,
+  type DrillNav,
   KnowledgeGroup,
   type KnowledgeGroupAdapter,
   SkillGroup,
@@ -69,7 +70,7 @@ export interface SidebarProps {
    * 两层导航（手机布局的会话页，`mode="sessions"` 时用；见 app-shell Sidebar 的 `drill`）：顶层是导航行，
    * 进了某一组只画那一组的会话
    */
-  drill?: { scope: string | null; onOpen: (key: string, label: string) => void }
+  drill?: DrillNav
   /** `mode="sessions"` 的顶层列表最上面多画的东西（手机：收件箱那一行） */
   sessionsPrepend?: React.ReactNode
 }

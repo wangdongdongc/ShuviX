@@ -161,7 +161,7 @@ export function SessionGroup({
           这一层自然看不见） */}
       <div
         className={`mb-px rounded-[var(--sb-radius)] ${flat && showDividerAbove ? 'mt-1' : ''} ${
-          active && !flat ? 'bg-bg-primary/30' : ''
+          active && !flat && !nav ? 'bg-bg-primary/30' : ''
         }`}
       >
         {flat ? (

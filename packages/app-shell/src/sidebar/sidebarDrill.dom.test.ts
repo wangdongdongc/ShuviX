@@ -14,6 +14,7 @@
  *   SB-7 不给 drill：重渲染从不动滚动位置
  *   SB-8 一挂上就在某一组里，再回顶层 → 0
  *   SB-9 浏览器把短页面的位置压回 0 也不丢顶层的位置
+ *   SB-10 顶层在搜索（`drill.query` 去掉空白后非空）：groupsPrepend 也不画；空白 / 清空之后回来；不给 drill 时没有这回事
  *
  * jsdom 没有布局：`scrollTop` 可写可读、不夹值，也不会自己发 scroll 事件 —— 用例里设完位置手动发一次。
  * Sidebar 与 ProjectSessionGroups 是真的；`@shuvix/chat-ui` 同 sidebarSections 那份测试换成替身。
@@ -324,5 +325,42 @@ describe('Sidebar drill: scroll position', () => {
 
     await renderAt(null)
     expect(el.scrollTop).toBe(400)
+  })
+})
+
+describe('Sidebar drill: search', () => {
+  const searching = (query: string | undefined): Drill => ({ scope: null, onOpen: () => {}, query })
+
+  it('SB-10 while a query is typed the prepend slot is hidden and only the results are drawn', async () => {
+    await render({ drill: searching('title a') })
+    expect(q('[data-prepend]')).toBeNull()
+    expect(q('[data-search-results]')).not.toBeNull()
+    expect(q('[data-group-nav]')).toBeNull()
+    expect(container.querySelectorAll('[data-session-row]')).toHaveLength(1)
+  })
+
+  it.each<[string, string | undefined]>([
+    ['whitespace only', '   '],
+    ['empty', ''],
+    ['not given', undefined]
+  ])('SB-10 a query that is %s keeps the prepend slot', async (_label, query) => {
+    await render({ drill: searching(query) })
+    expect(q('[data-prepend]')).not.toBeNull()
+    expect(q('[data-search-results]')).toBeNull()
+    expect(navKeys()).toEqual(['p2', 'p1', '__no_project__'])
+  })
+
+  it('SB-10 clearing the query brings the prepend slot back', async () => {
+    await render({ drill: searching('title') })
+    expect(q('[data-prepend]')).toBeNull()
+    await render({ drill: searching('') })
+    expect(q('[data-prepend]')).not.toBeNull()
+    expect(q('[data-search-results]')).toBeNull()
+  })
+
+  it('SB-10 a query with no match hides the prepend slot too', async () => {
+    await render({ drill: searching('zzz') })
+    expect(q('[data-prepend]')).toBeNull()
+    expect(q('[data-search-empty]')).not.toBeNull()
   })
 })

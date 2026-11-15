@@ -2,9 +2,11 @@
  * web 客户端的手机布局（窄屏，见 useCompactLayout）—— 桌面布局（侧栏 + 对话 + 右侧 / 底部面板）在手机上放不下，
  * 这里把同一批组件换一种排法，桌面的组件只多了几个缺省关闭的参数：
  *
- * - 会话页是两层（2026-11-14，对标 iOS Mail）：顶层是「邮箱」那一层 —— 收件箱、各 bot、各项目、聊天，每行带数量与
- *   箭头；点一行进那一组的会话列表（标题 + 时间 + 两行摘要），顶上是返回与那一组的名字。进组时压一条浏览器历史，
- *   返回键 / 返回手势退回顶层；对话页是再往上的一层；
+ * - 会话页是两层（2026-11-14，对标 iOS Mail）：顶层是「邮箱」那一层 —— 搜索框，下面收件箱、各 bot、各项目、聊天
+ *   各是一张分组卡片里的行，每行带数量与箭头；点一行进那一组的会话列表（标题 + 时间 + 两行摘要，行首只有一列圆点），
+ *   顶上是返回、那一组的菜单「⋯」与它的名字，底部的标签栏换成那一组的工具栏（只看未读 · 「N 条会话 · M 条未读」 ·
+ *   新对话）。工具栏和「⋯」是列表自己画进这里留的两个槽里的（ProjectSessionGroups 的 `drill`）。进组时压一条
+ *   浏览器历史，返回键 / 返回手势退回顶层；对话页是再往上的一层；
  * - 底部四个标签：会话（项目与临时会话，可切到日历）、小组件（卡片列表；点开就地整屏打开）、资料库（Bots / 智能体 /
  *   安全策略 / Hooks / 技能 / 知识库）、设置（分区列表 → 分区；外加智能体监视）；
  * - 打开一个小组件 → 小组件页收起页头与标签栏、应用占满整屏（应用本身还挂在 WidgetPanel 里，回列表不关）；
@@ -27,6 +29,8 @@ import {
   Library,
   List,
   MessagesSquare,
+  Search,
+  X,
   SquarePen,
   Settings,
   FolderClosed,
@@ -133,6 +137,11 @@ function MobileShellBody(): React.JSX.Element {
   /** 会话页的第二层：正在看的那一组（或收件箱）；null = 顶层 */
   const [scope, setScope] = useState<{ key: string; label: string } | null>(null)
   const scopeRef = useRef(false)
+  /** 顶层的搜索词（按标题找会话） */
+  const [query, setQuery] = useState('')
+  /** 第二层留给列表的两个槽：顶栏右边的「⋯」和底部的工具栏（列表经 portal 画进来） */
+  const [menuSlot, setMenuSlot] = useState<HTMLElement | null>(null)
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null)
   const { projects } = useProjects()
   const fontSize = usePhoneFontSize()
   const widgetApp = useWidgetStore((s) => s.foregroundApp)
@@ -275,27 +284,33 @@ function MobileShellBody(): React.JSX.Element {
   const inboxOpen = scope?.key === INBOX_SCOPE
   // 交给侧栏的两层导航：收件箱那一页不是侧栏画的，那时侧栏留在顶层（藏着）
   const drill = useMemo(
-    () => ({ scope: scope && scope.key !== INBOX_SCOPE ? scope.key : null, onOpen: openScope }),
-    [scope, openScope]
+    () => ({
+      scope: scope && scope.key !== INBOX_SCOPE ? scope.key : null,
+      onOpen: openScope,
+      query,
+      menuSlot,
+      toolbarSlot
+    }),
+    [scope, openScope, query, menuSlot, toolbarSlot]
   )
+  /** 正在看某一组的会话列表（不是收件箱）：底部是那一组的工具栏，标签栏收起 */
+  const groupOpen = tab === 'sessions' && scope !== null && !inboxOpen
 
+  // 顶层的顶栏：日历（顶层的另一种看法）与新建。进了某一组，新建在底部的工具栏里，顶栏右边是那一组的「⋯」
   const sessionsActions = (
     <>
-      {/* 日历是顶层的另一种看法：进了某一组就不给 */}
-      {!scope && (
-        <button
-          type="button"
-          data-mobile-calendar-toggle=""
-          className={headerIcon}
-          onClick={() => {
-            setCalendar((v) => !v)
-            setCalendarMounted(true)
-          }}
-          aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
-        >
-          {calendar ? <List size={21} /> : <CalendarDays size={21} />}
-        </button>
-      )}
+      <button
+        type="button"
+        data-mobile-calendar-toggle=""
+        className={headerIcon}
+        onClick={() => {
+          setCalendar((v) => !v)
+          setCalendarMounted(true)
+        }}
+        aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
+      >
+        {calendar ? <List size={21} /> : <CalendarDays size={21} />}
+      </button>
       <button
         type="button"
         data-mobile-new-chat=""
@@ -349,13 +364,46 @@ function MobileShellBody(): React.JSX.Element {
                       <ChevronLeft size={22} aria-hidden="true" />
                       <span>{t('mobile.tabSessions')}</span>
                     </button>
+                    {/* 那一组的菜单「⋯」：列表画进来（收件箱那一页没有） */}
+                    {!inboxOpen && (
+                      <div ref={setMenuSlot} data-mobile-scope-menu-slot="" className="ml-auto" />
+                    )}
                   </div>
-                  <div data-mobile-scope-title="">
-                    {pageTitle(scope.label, inboxOpen ? undefined : sessionsActions)}
-                  </div>
+                  <div data-mobile-scope-title="">{pageTitle(scope.label)}</div>
                 </>
               ) : (
-                pageTitle(t('mobile.tabSessions'), sessionsActions)
+                <>
+                  {pageTitle(t('mobile.tabSessions'), sessionsActions)}
+                  {/* 搜索（日历那种看法里没有）：按标题找会话，列表就地换成结果 */}
+                  {!calendar && (
+                    <div className="flex flex-shrink-0 items-center gap-2 px-3 pb-3">
+                      <label className="flex h-9 min-w-0 flex-1 items-center gap-1.5 rounded-[10px] bg-bg-secondary px-2.5 text-text-tertiary">
+                        <Search size={16} aria-hidden="true" className="shrink-0" />
+                        <input
+                          data-mobile-search=""
+                          type="search"
+                          enterKeyHint="search"
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                          placeholder={t('mobile.search')}
+                          aria-label={t('mobile.search')}
+                          className="min-w-0 flex-1 appearance-none bg-transparent text-text-primary outline-none placeholder:text-text-tertiary [&::-webkit-search-cancel-button]:hidden"
+                        />
+                        {query && (
+                          <button
+                            type="button"
+                            data-mobile-search-clear=""
+                            onClick={() => setQuery('')}
+                            aria-label={t('mobile.cancel')}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-hover text-text-secondary"
+                          >
+                            <X size={14} aria-hidden="true" />
+                          </button>
+                        )}
+                      </label>
+                    </div>
+                  )}
+                </>
               )}
               {/* 列表与日历都挂着、只切显示：切回列表时项目的展开状态与滚动位置都还在。列表就是桌面的侧栏，
                   只是密度换成手指的那一档（Sidebar mode="sessions" → density touch） */}
@@ -369,7 +417,9 @@ function MobileShellBody(): React.JSX.Element {
                     onOpenSession={openChat}
                     drill={drill}
                     sessionsPrepend={
-                      <InboxNavRow onOpen={() => openScope(INBOX_SCOPE, t('inbox.title'))} />
+                      <div className="sb-card">
+                        <InboxNavRow onOpen={() => openScope(INBOX_SCOPE, t('inbox.title'))} />
+                      </div>
                     }
                   />
                 </div>
@@ -444,11 +494,18 @@ function MobileShellBody(): React.JSX.Element {
           )}
         </div>
 
-        {/* 底部标签栏（小组件整屏开着时收起） */}
+        {/* 某一组的会话列表开着：底部是那一组的工具栏（列表画进这个槽里），标签栏收起 —— 回到顶层才换页 */}
+        <div
+          ref={setToolbarSlot}
+          data-mobile-scope-toolbar-slot=""
+          className="flex-shrink-0 border-t border-border-secondary/60 bg-bg-secondary/80 pb-[env(safe-area-inset-bottom)]"
+          style={groupOpen ? undefined : { display: 'none' }}
+        />
+        {/* 底部标签栏（小组件整屏开着、或某一组的会话列表开着时收起） */}
         <nav
           data-mobile-tabbar=""
           className="flex-shrink-0 flex border-t border-border-secondary/60 bg-bg-secondary/80 pb-[env(safe-area-inset-bottom)]"
-          style={widgetAppOpen ? { display: 'none' } : undefined}
+          style={widgetAppOpen || groupOpen ? { display: 'none' } : undefined}
         >
           {TABS.map(({ key, labelKey, Icon }) => (
             <button

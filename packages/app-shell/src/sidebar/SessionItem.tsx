@@ -17,11 +17,14 @@
  * 把活全交给子会话）。
  *
  * `detail`（手机布局的会话列表，2026-11-14 对标 iOS Mail 的邮件列表）：同一行换成两层 —— 上层是标题与行尾的时间，
- * 下层是两行灰色的摘要，行与行之间一条内缩的细线；未读的点挪到行首的空隙里（Mail 的位置），其余记号
- * （询问、中断、目标）照旧在标题那一行。数据锚点一个不少，只多了 `data-session-detail` / `data-session-time` /
- * `data-session-preview`。
+ * 下层是两行灰色的摘要，行与行之间一条内缩的细线。**行首没有图标**，只有一列圆点（Mail 的未读点那一列）：
+ * 有询问在等你 = 琥珀点（`data-pending-asks`），有没看的新回复 = 蓝点 / 出错红点（`data-unread`），都没有就空着。
+ * 图标原来说的事换个地方说：在不在跑由摘要那一句说（调用方给「正在回复」），定时运行在标题前面一枚小的定时器，
+ * 子会话的折叠钮是标题后面的「数量 + 箭头」。选中态不画（手机上列表与对话不同屏）。中断、目标的记号照旧在标题那一行。
+ * 数据锚点：`data-session-detail` / `data-session-time` / `data-session-preview`（+ `data-preview-tone`）/ `data-row-dot`。
  */
 import { useTranslation } from 'react-i18next'
+import { ChevronDown, ChevronRight, Timer } from 'lucide-react'
 import { RedactedText, RedactionSessionProvider, type SessionRunKind } from '@shuvix/chat-ui'
 import { RowMenuButton } from './RowMenuButton'
 import { SessionIcon, sessionIconShape } from './SessionIcon'
@@ -88,9 +91,14 @@ export interface SessionItemProps {
   location?: string
   /**
    * 两层的行（手机布局的会话列表）：`time` 是行尾的时间，`preview` 是标题下面的摘要（调用方已经按状态选好：
-   * 在等你回答 / 正在运行 / 最后一条回复；没有就不画那一层）。`previewTone` 让「在等你回答」那一句换成警示色
+   * 在等你回答 / 正在运行 / 最后一条回复；没有就不画那一层）。`previewTone`：`waiting` 让「在等你回答」那一句换成
+   * 警示色，`muted` 是「还没有消息」那种占位的淡字
    */
-  detail?: { time: string; preview?: React.ReactNode; previewTone?: 'normal' | 'waiting' }
+  detail?: {
+    time: string
+    preview?: React.ReactNode
+    previewTone?: 'normal' | 'waiting' | 'muted'
+  }
   // —— 桌面专属（可选） ——
   isPinned?: boolean
 }
@@ -135,15 +143,18 @@ export function SessionItem({
   const busy = run !== null
   const showUnread = unread && run !== 'agent' && pendingCount === 0
   // 标题那一行里靠右的记号（中断 / 目标 / 询问）有没有：行尾的时间、位置靠它决定要不要自己顶到右边
-  const hasMark = (interrupted && !busy) || !!goalManager || pendingCount > 0
+  const hasMark = (interrupted && !busy) || !!goalManager
+  const title = (
+    <span className={`truncate ${unread ? 'font-semibold' : ''}`}>
+      {/* 标题可能带自动脱敏的占位符（起标题的 agent 看到的是占位符）：按这一行的会话显示成标记 */}
+      <RedactionSessionProvider sessionId={session.id}>
+        <RedactedText text={session.title} />
+      </RedactionSessionProvider>
+    </span>
+  )
   const titleAndCount = (
     <>
-      <span className={`truncate ${unread ? 'font-semibold' : ''}`}>
-        {/* 标题可能带自动脱敏的占位符（起标题的 agent 看到的是占位符）：按这一行的会话显示成标记 */}
-        <RedactionSessionProvider sessionId={session.id}>
-          <RedactedText text={session.title} />
-        </RedactionSessionProvider>
-      </span>
+      {title}
       {subCount > 0 && (
         <span
           className={`shrink-0 text-[0.8em] tabular-nums ${
@@ -155,7 +166,7 @@ export function SessionItem({
       )}
     </>
   )
-  /** 标题那一行里的记号。`withUnread`：单层的行把未读的点也排在这里；两层的行把它挪到行首的空隙里 */
+  /** 标题那一行里的记号。`withUnread`：单层的行把未读的点、询问的徽标也排在这里；两层的行把这两样挪到行首那一列圆点里 */
   const marks = (withUnread: boolean): React.JSX.Element => (
     <>
       {interrupted && !busy && (
@@ -186,7 +197,7 @@ export function SessionItem({
           }`}
         />
       )}
-      {pendingCount > 0 && (
+      {withUnread && pendingCount > 0 && (
         <span
           data-pending-asks={pendingCount}
           className={`flex items-center gap-1 shrink-0 ${
@@ -220,21 +231,31 @@ export function SessionItem({
       data-subs={subCount > 0 ? (subCollapsed ? 'collapsed' : 'expanded') : undefined}
       // 缩进口径与知识库一致（base.css 的 .sb-row）：子会话再进一级，图标对齐父行的标签
       className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${detail ? 'sb-row-wrap sb-row-detail' : ''} ${isSub ? 'sb-depth-1' : ''} ${
-        active
+        active && !detail
           ? 'bg-bg-active/80 text-text-primary'
           : `text-text-primary hover:bg-bg-hover/60 ${dim ? 'opacity-30 hover:opacity-100' : ''}`
       }`}
     >
-      {detail && showUnread && (
-        // 两层的行：未读的点在行首的空隙里，与标题那一行同高
-        <span
-          data-unread={unreadFailed ? 'failed' : ''}
-          title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
-          aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
-          className={`sb-unread-gutter rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'}`}
-        />
-      )}
-      {subCount > 0 ? (
+      {detail ? (
+        // 两层的行：行首是一列圆点（询问 > 未读），与标题那一行同高；没有就空着，标题照样对齐
+        <span data-row-dot="" className="sb-dot-slot">
+          {pendingCount > 0 ? (
+            <span
+              data-pending-asks={pendingCount}
+              title={t('inbox.asks', { count: pendingCount })}
+              aria-label={t('inbox.asks', { count: pendingCount })}
+              className="h-2 w-2 rounded-full bg-amber-400"
+            />
+          ) : showUnread ? (
+            <span
+              data-unread={unreadFailed ? 'failed' : ''}
+              title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+              aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+              className={`h-2 w-2 rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'}`}
+            />
+          ) : null}
+        </span>
+      ) : subCount > 0 ? (
         // 有子会话：图标本身就是折叠钮（同知识库目录行点图标展开），点行的其余部分照常
         // 打开这条会话。`data-subs-toggle` 是 e2e 认它的锚点 —— 钮里的图标随会话身份变
         <button
@@ -259,7 +280,34 @@ export function SessionItem({
           className="sb-label flex-1 min-w-0 border-b border-border-secondary/40"
         >
           <div className="flex min-w-0 items-center gap-1.5">
-            {titleAndCount}
+            {isTriggerRun && (
+              <Timer
+                className="h-[0.9em] w-[0.9em] shrink-0 text-text-tertiary"
+                aria-hidden="true"
+              />
+            )}
+            {title}
+            {subCount > 0 && (
+              // 子会话的折叠钮：数量 + 箭头（行首没有图标可包）
+              <button
+                data-subs-toggle=""
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onToggleSubs?.(session.id)
+                }}
+                title={t('sidebar.subSessions', { count: subCount })}
+                aria-label={t('sidebar.subSessions', { count: subCount })}
+                aria-expanded={!subCollapsed}
+                className="-my-1 flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-1 text-[0.8em] tabular-nums text-text-tertiary active:bg-bg-hover"
+              >
+                {subCount}
+                {subCollapsed ? (
+                  <ChevronRight className="h-[1em] w-[1em]" aria-hidden="true" />
+                ) : (
+                  <ChevronDown className="h-[1em] w-[1em]" aria-hidden="true" />
+                )}
+              </button>
+            )}
             {marks(false)}
             <span
               data-session-time=""
@@ -281,8 +329,13 @@ export function SessionItem({
           {detail.preview !== undefined && detail.preview !== null && detail.preview !== '' && (
             <div
               data-session-preview=""
+              data-preview-tone={detail.previewTone ?? 'normal'}
               className={`mt-0.5 line-clamp-2 text-[0.85em] leading-snug ${
-                detail.previewTone === 'waiting' ? 'text-warning' : 'text-text-secondary'
+                detail.previewTone === 'waiting'
+                  ? 'text-warning'
+                  : detail.previewTone === 'muted'
+                    ? 'text-text-tertiary'
+                    : 'text-text-secondary'
               }`}
             >
               {detail.preview}

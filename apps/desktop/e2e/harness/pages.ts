@@ -13836,6 +13836,16 @@ export interface WebMobilePane {
   listNavCount(key: string): Promise<number | null>
   /** 第二层顶上的大标题（`data-mobile-scope-title`）；在顶层 → null */
   listScopeTitle(): Promise<string | null>
+  /**
+   * 第二层底部的工具栏（`data-scope-toolbar`，画在 `data-mobile-scope-toolbar-slot` 里）：中间那句话、「只看未读」按没按下、
+   * 有没有「新对话」、顶栏有没有那一组的「⋯」（`data-scope-menu`）。不在某一组里（槽藏着）→ null
+   */
+  scopeToolbar(): Promise<{
+    count: string
+    filter: boolean
+    newChat: boolean
+    menu: boolean
+  } | null>
   /** 第二层列表里一条会话行的时间与摘要（`data-session-time` / `data-session-preview`）；行不在 → null */
   listRowDetail(title: string): Promise<{ time: string; preview: string | null } | null>
 
@@ -13915,8 +13925,8 @@ export interface WebMobilePane {
    */
   sessionRowHeight(title: string, scope: 'list' | 'document'): Promise<number | null>
   /**
-   * 手机会话页进了一个项目之后那一页里三种行的高度：第一行「新对话」（`data-scope-new-chat`）、它的「项目知识库」
-   * 文件夹行（`data-project-knowledge=<projectId>`）、按标题的一条会话行（两层的行，有摘要时更高）。
+   * 手机会话页进了一个项目之后那一页里三样东西的高度：底部工具栏里的「新对话」（`data-scope-new-chat`，`header`）、
+   * 它的「项目知识库」文件夹行（`data-project-knowledge=<projectId>`）、按标题的一条会话行（两层的行，有摘要时更高）。
    * 哪一个不在 / 看不见 → 那一项 null
    */
   listGroupRhythm(
@@ -14300,6 +14310,23 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
         if (!row) return null
         return Number(row.querySelector('[data-group-count]')?.textContent ?? 0)
       })()`),
+    scopeToolbar: () =>
+      client.eval<{
+        count: string
+        filter: boolean
+        newChat: boolean
+        menu: boolean
+      } | null>(`(() => {
+        const slot = document.querySelector('[data-mobile-scope-toolbar-slot]')
+        const bar = slot?.querySelector('[data-scope-toolbar]')
+        if (!slot || !bar || getComputedStyle(slot).display === 'none') return null
+        return {
+          count: (bar.querySelector('[data-scope-count]')?.textContent ?? '').trim(),
+          filter: bar.querySelector('[data-scope-filter]')?.getAttribute('aria-pressed') === 'true',
+          newChat: !!bar.querySelector('[data-scope-new-chat]'),
+          menu: !!document.querySelector('[data-mobile-scope-menu-slot] [data-scope-menu]')
+        }
+      })()`),
     listScopeTitle: () =>
       client.eval<string | null>(
         `(document.querySelector('[data-mobile-scope-title] h1')?.textContent ?? null)`
@@ -14504,7 +14531,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           (el) => el.getAttribute('data-project-knowledge') === ${JSON.stringify(project.id)}
         )
         return {
-          header: h(list?.querySelector('[data-scope-new-chat]')),
+          header: h(document.querySelector('[data-mobile-scope-toolbar-slot] [data-scope-new-chat]')),
           knowledge: h(folder),
           row: h(${ROW_IN(LIST, rowTitle)})
         }

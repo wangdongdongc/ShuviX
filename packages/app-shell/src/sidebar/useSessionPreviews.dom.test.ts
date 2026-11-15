@@ -18,6 +18,15 @@
  *   PH-9..11  缺戳当空串、开关来回、后来排进前 30 的再取
  *   PH-12     失败的那一条不记账，下一次有动静时重取；成功的不重取
  *   PH-13     晚到的旧响应不盖住新的
+ *
+ * `sessionPendingQuestion(messages)` —— 此刻还没答的那个选择题（最后一条消息是助手消息、里面有没结果的 `ask` 调用）：
+ *   PQ-1..4   没有消息 / 有 → 问题那一句 / 答过了 / 最后一条是用户消息
+ *   PQ-5/6    问题不是字符串、没有 args；没有 blocks、别的工具、别的块
+ *   PQ-7      与摘要同一种压法，160 个码点的上限
+ *   PQ-8/9    几个 ask 块取第一个还没答的；只看最后一条消息；空问题跳过
+ *
+ * `useSessionDigests(sessions, stamps, enabled)` —— 会话 id → `{ text, question }`：
+ *   PD-1..4   摘要与问题一起回来；没有问题是 null；取失败是两个 null；读到之前不在表里；与 useSessionPreviews 同一份摘要
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -30,7 +39,13 @@ vi.mock('@shuvix/chat-ui', () => ({
   getChatApi: () => ({ message: { list: (id: string) => list(id) } })
 }))
 
-import { sessionPreviewText, useSessionPreviews } from './useSessionPreviews'
+import {
+  sessionPendingQuestion,
+  sessionPreviewText,
+  useSessionDigests,
+  useSessionPreviews,
+  type SessionDigest
+} from './useSessionPreviews'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -447,5 +462,221 @@ describe('useSessionPreviews', () => {
     render(['a'], { a: 's2' })
     await flush()
     expect(list).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ── the pending question ────────────────────────────────────────────────────────────────────
+
+interface AskBlock {
+  type: string
+  toolCallId?: string
+  toolName?: string
+  args?: Record<string, unknown>
+  result?: string
+  content?: string
+}
+const ask = (question: unknown, over: Partial<AskBlock> = {}): AskBlock => ({
+  type: 'tool',
+  toolCallId: `c${++seq}`,
+  toolName: 'ask',
+  args: { question },
+  ...over
+})
+const withBlocks = (blocks: AskBlock[] | undefined, content = ''): ChatMessage =>
+  ({ id: `m${++seq}`, role: 'assistant', content, blocks }) as unknown as ChatMessage
+
+describe('sessionPendingQuestion', () => {
+  it('PQ-1 no messages → null', () => {
+    expect(sessionPendingQuestion([])).toBeNull()
+  })
+
+  it('PQ-2 an unanswered ask block in the last assistant message → its question', () => {
+    expect(sessionPendingQuestion([user('go'), withBlocks([ask('Which branch?')])])).toBe(
+      'Which branch?'
+    )
+  })
+
+  it('PQ-3 an answered ask block → null', () => {
+    expect(
+      sessionPendingQuestion([withBlocks([ask('Which branch?', { result: 'main' })])])
+    ).toBeNull()
+  })
+
+  it('PQ-3 any result counts as answered, even an empty one', () => {
+    expect(sessionPendingQuestion([withBlocks([ask('Which branch?', { result: '' })])])).toBeNull()
+  })
+
+  it('PQ-4 the last message is a user message → null', () => {
+    expect(
+      sessionPendingQuestion([withBlocks([ask('Which branch?')]), user('use main')])
+    ).toBeNull()
+  })
+
+  it('PQ-4 the last message is not an assistant message → null', () => {
+    expect(
+      sessionPendingQuestion([withBlocks([ask('Which branch?')]), msg('system_notify', 'note')])
+    ).toBeNull()
+  })
+
+  it.each<[string, AskBlock]>([
+    ['a number', ask(42)],
+    ['an object', ask({ text: 'Which?' })],
+    ['missing', ask(undefined)],
+    ['no args at all', { type: 'tool', toolName: 'ask' }]
+  ])('PQ-5 a question that is %s → null', (_label, block) => {
+    expect(sessionPendingQuestion([withBlocks([block])])).toBeNull()
+  })
+
+  it('PQ-6 no blocks, an empty block list, other block kinds, other tools → null', () => {
+    expect(sessionPendingQuestion([assistant('just text')])).toBeNull()
+    expect(sessionPendingQuestion([withBlocks(undefined, 'just text')])).toBeNull()
+    expect(sessionPendingQuestion([withBlocks([])])).toBeNull()
+    expect(
+      sessionPendingQuestion([
+        withBlocks([
+          { type: 'text', content: 'Which branch?' },
+          { type: 'thinking', content: 'hm' }
+        ])
+      ])
+    ).toBeNull()
+    expect(
+      sessionPendingQuestion([
+        withBlocks([{ type: 'tool', toolName: 'bash', args: { question: 'Which branch?' } }])
+      ])
+    ).toBeNull()
+  })
+
+  it('PQ-7 the question is flattened like the preview text', () => {
+    expect(
+      sessionPendingQuestion([withBlocks([ask('**Which** `branch`\n\n  should I use?')])])
+    ).toBe('Which branch should I use?')
+  })
+
+  it('PQ-7 the question is capped at 160 code points', () => {
+    expect(sessionPendingQuestion([withBlocks([ask('q'.repeat(200))])])).toBe('q'.repeat(160))
+    const result = sessionPendingQuestion([withBlocks([ask(`${'a'.repeat(159)}😀😀`)])])!
+    expect(Array.from(result)).toHaveLength(160)
+    expect(result.endsWith('😀')).toBe(true)
+  })
+
+  it('PQ-8 with several ask blocks the first unanswered one with a question is taken', () => {
+    expect(
+      sessionPendingQuestion([
+        withBlocks([ask('First?', { result: 'yes' }), ask('Second?'), ask('Third?')])
+      ])
+    ).toBe('Second?')
+    expect(sessionPendingQuestion([withBlocks([ask(7), ask('Second?')])])).toBe('Second?')
+  })
+
+  it('PQ-9 a question with no text after flattening is skipped', () => {
+    expect(sessionPendingQuestion([withBlocks([ask('   \n ')])])).toBeNull()
+    expect(sessionPendingQuestion([withBlocks([ask('```\ncode\n```'), ask('Real one?')])])).toBe(
+      'Real one?'
+    )
+  })
+
+  it('PQ-9 only the last message is looked at', () => {
+    expect(
+      sessionPendingQuestion([withBlocks([ask('Earlier?')]), assistant('a later reply')])
+    ).toBeNull()
+  })
+})
+
+// ── the digest hook ─────────────────────────────────────────────────────────────────────────
+
+describe('useSessionDigests', () => {
+  let digests: Record<string, SessionDigest> = {}
+  let texts: Record<string, string | null> = {}
+  const reportDigests = (value: Record<string, SessionDigest>): void => {
+    digests = value
+  }
+  const reportTexts = (value: Record<string, string | null>): void => {
+    texts = value
+  }
+  function DigestProbe(props: {
+    sessions: Session[]
+    stamps: Record<string, string>
+    report: (value: Record<string, SessionDigest>) => void
+  }): null {
+    const value = useSessionDigests(props.sessions, props.stamps, true)
+    props.report(value)
+    return null
+  }
+  function renderDigests(ids: string[], stamps: Record<string, string>): void {
+    act(() =>
+      root.render(
+        createElement(DigestProbe, {
+          sessions: sessionsOf(...ids),
+          stamps: { ...stamps },
+          report: reportDigests
+        })
+      )
+    )
+  }
+
+  beforeEach(() => {
+    digests = {}
+    texts = {}
+  })
+
+  it('PD-1 a session waiting on a question: its last text and the question', async () => {
+    list.mockImplementation(async () => [
+      user('go'),
+      withBlocks([ask('Which **branch**?')], 'Let me check with you.')
+    ])
+    renderDigests(['a'], { a: '1' })
+    await flush()
+    expect(digests).toEqual({ a: { text: 'Let me check with you.', question: 'Which branch?' } })
+  })
+
+  it('PD-2 no pending question → question null; no text either → both null', async () => {
+    list.mockImplementation(async (id) => (id === 'a' ? [user('q'), assistant('answer')] : []))
+    renderDigests(['a', 'b'], { a: '1', b: '1' })
+    await flush()
+    expect(digests).toEqual({
+      a: { text: 'answer', question: null },
+      b: { text: null, question: null }
+    })
+  })
+
+  it('PD-3 a fetch that fails → both null; absent until it settles', async () => {
+    const pending = deferred()
+    list.mockImplementation(() => pending.promise)
+    renderDigests(['a'], { a: '1' })
+    await flush()
+    expect('a' in digests).toBe(false)
+
+    await act(async () => pending.reject(new Error('disconnected')))
+    await flush()
+    expect(digests).toEqual({ a: { text: null, question: null } })
+  })
+
+  it('PD-3 a refetch that fails keeps the previous digest', async () => {
+    list.mockImplementation(async () => [withBlocks([ask('Which?')], 'kept')])
+    renderDigests(['a'], { a: '1' })
+    await flush()
+    list.mockImplementation(async () => {
+      throw new Error('disconnected')
+    })
+    renderDigests(['a'], { a: '2' })
+    await flush()
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(digests).toEqual({ a: { text: 'kept', question: 'Which?' } })
+  })
+
+  it('PD-4 useSessionPreviews gives the same text, without the question', async () => {
+    list.mockImplementation(async () => [withBlocks([ask('Which?')], 'the reply')])
+    act(() =>
+      root.render(
+        createElement(Probe, {
+          sessions: sessionsOf('a'),
+          stamps: { a: '1' },
+          enabled: true,
+          report: reportTexts
+        })
+      )
+    )
+    await flush()
+    expect(texts).toEqual({ a: 'the reply' })
   })
 })

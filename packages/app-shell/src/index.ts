@@ -42,7 +42,11 @@ export type { SessionItemProps } from './sidebar/SessionItem'
 export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
-export type { ProjectSessionGroupsProps, BotsSectionCaps } from './sidebar/ProjectSessionGroups'
+export type {
+  ProjectSessionGroupsProps,
+  BotsSectionCaps,
+  DrillNav
+} from './sidebar/ProjectSessionGroups'
 export { Sidebar } from './sidebar/Sidebar'
 export type { SidebarProps, SidebarCaps } from './sidebar/Sidebar'
 export { CalendarView } from './sidebar/CalendarView'

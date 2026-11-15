@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getChatApi, type ChatMessage, type Session } from '@shuvix/chat-ui'
 
 /** 一屏会话列表里取摘要的上限：每条都是一次 `message.list`（整段对话的投影），不给无限条 */
@@ -54,20 +54,42 @@ export function sessionPreviewText(messages: ChatMessage[]): string | null {
   return text ? Array.from(text).slice(0, PREVIEW_CHARS).join('') : null
 }
 
+/** 一条会话里此刻还没答的那个选择题（`ask` 工具的调用还没有结果）：问题那一句；没有 → null */
+export function sessionPendingQuestion(messages: ChatMessage[]): string | null {
+  const last = messages[messages.length - 1]
+  if (!last || last.role !== 'assistant') return null
+  for (const block of last.blocks ?? []) {
+    if (block.type !== 'tool' || block.toolName !== 'ask' || block.result !== undefined) continue
+    const question = block.args?.question
+    if (typeof question !== 'string') continue
+    const text = plainPreview(question)
+    if (text) return Array.from(text).slice(0, PREVIEW_CHARS).join('')
+  }
+  return null
+}
+
+/** 一条会话取回来的那一份：最后一条回复的摘要，和（有的话）此刻在等你回答的那个问题 */
+export interface SessionDigest {
+  text: string | null
+  question: string | null
+}
+
+const EMPTY_DIGEST: SessionDigest = { text: null, question: null }
+
 /**
- * 会话列表各行的摘要（手机布局的会话列表：标题下面那两行灰字）—— 会话 id → 摘要；还没读到的不在表里，
- * 读到了但没有字的是 null。
+ * 会话列表各行的摘要（手机布局的会话列表：标题下面那两行灰字）—— 会话 id → 那一份；还没读到的不在表里，
+ * 读到了但没有字的是 `{ text: null, question: null }`。
  *
- * `stamps` 是每条会话「内容此刻的版本」（调用方拼：最后动手的时间、在不在跑、未读从哪一刻起）：它变了才重取 ——
+ * `stamps` 是每条会话「内容此刻的版本」（调用方拼：最后动手的时间、在不在跑、未读从哪一刻起、有几个询问）：它变了才重取 ——
  * 一轮跑完（在跑 → 不在跑）正是回复写完的那一刻。重取期间留着上一份摘要，不闪成空；
  * 取失败的那一条不记账，列表下一次变化时重取。
  */
-export function useSessionPreviews(
+export function useSessionDigests(
   sessions: Session[],
   stamps: Record<string, string>,
   enabled: boolean
-): Record<string, string | null> {
-  const [previews, setPreviews] = useState<Record<string, string | null>>({})
+): Record<string, SessionDigest> {
+  const [digests, setDigests] = useState<Record<string, SessionDigest>>({})
   const requested = useRef(new Map<string, string>())
   useEffect(() => {
     if (!enabled) return
@@ -81,15 +103,35 @@ export function useSessionPreviews(
         .message.list(session.id)
         .then((messages) => {
           if (!current()) return
-          setPreviews((prev) => ({ ...prev, [session.id]: sessionPreviewText(messages) }))
+          const digest: SessionDigest = {
+            text: sessionPreviewText(messages),
+            question: sessionPendingQuestion(messages)
+          }
+          setDigests((prev) => ({ ...prev, [session.id]: digest }))
         })
         .catch(() => {
           if (!current()) return
           // 没取到：忘掉这一次，列表下一次有动静时再取（断线重连之后不至于一直空着）
           requested.current.delete(session.id)
-          setPreviews((prev) => (session.id in prev ? prev : { ...prev, [session.id]: null }))
+          setDigests((prev) =>
+            session.id in prev ? prev : { ...prev, [session.id]: EMPTY_DIGEST }
+          )
         })
     }
   }, [sessions, stamps, enabled])
-  return previews
+  return digests
+}
+
+/** 只要摘要那一句的调用方：会话 id → 摘要（没有字的是 null；还没读到的不在表里） */
+export function useSessionPreviews(
+  sessions: Session[],
+  stamps: Record<string, string>,
+  enabled: boolean
+): Record<string, string | null> {
+  const digests = useSessionDigests(sessions, stamps, enabled)
+  return useMemo(() => {
+    const out: Record<string, string | null> = {}
+    for (const [id, digest] of Object.entries(digests)) out[id] = digest.text
+    return out
+  }, [digests])
 }

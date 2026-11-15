@@ -5,8 +5,9 @@ import {
   workProjectOf
 } from '@shuvix/chat-protocol/botSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Plus } from 'lucide-react'
+import { AlertTriangle, CircleEllipsis, ListFilter, SquarePen } from 'lucide-react'
 import {
   BotAvatar,
   useChatStore,
@@ -35,8 +36,8 @@ import { useSessionExport } from './useSessionExport'
 import { BotKnowledgeFolder, ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
 import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 import { RowMenuButton } from './RowMenuButton'
-import { useSessionPreviews } from './useSessionPreviews'
-import { unreadTimeLabel } from '../inbox/inboxItems'
+import { useSessionDigests } from './useSessionPreviews'
+import { listTimeLabel } from './listTime'
 import {
   useBotRegistry,
   type BotGroupAdapter,
@@ -80,6 +81,8 @@ export interface BotsSectionCaps {
 const GROUP_VISIBLE_LIMIT = 8
 /** 两层导航里进了某一组之后那一页先放出的条数：那一页整屏都是这一组，不必像树里那样只露 8 条 */
 const SCOPE_VISIBLE_LIMIT = 30
+/** 顶层搜索最多列出几条 */
+const SEARCH_RESULT_LIMIT = 50
 /** 每点一次「查看更多」再多放出的条数 */
 const GROUP_PAGE_SIZE = 20
 
@@ -141,12 +144,23 @@ export interface ProjectSessionGroupsProps {
   /**
    * 两层导航（web 客户端的手机布局传，2026-11-14 对标 iOS Mail；缺省 = 桌面那棵就地展开的树）：
    *   - `scope: null` —— 顶层：分节照旧，每个项目 / bot / 「聊天」是一行导航行（会话数 + 箭头），点它 `onOpen(组 key, 名字)`，
-   *     组的正文不画；
-   *   - `scope: <组 key>` —— 只画那一组：第一行「新对话」、它的知识库文件夹、然后是两层的会话行（标题 + 时间 +
-   *     摘要，见 SessionItem 的 `detail`）。组不在了（项目被删）就是一句空态。
+   *     组的正文不画；一节里的导航行收进一张分组卡片（base.css 的 .sb-card）。`query` 非空时顶层换成按标题搜到的会话；
+   *   - `scope: <组 key>` —— 只画那一组：两层的会话行（标题 + 时间 + 摘要，见 SessionItem 的 `detail`），末尾是它的
+   *     知识库文件夹。组不在了（项目被删）就是一句空态。底部工具栏（只看未读 · 「N 条会话 · M 条未读」 · 新对话）
+   *     画进 `toolbarSlot`，组的菜单「⋯」画进 `menuSlot` —— 这两个是宿主页面里的元素（列表之外的顶栏与底栏）；
+   *     `toolbarSlot` 不给时工具栏画在列表末尾，`menuSlot` 不给就没有「⋯」（长按组行的菜单还在顶层）。
    * 组 key 与折叠集合同一套：项目 id / `TEMP_GROUP_KEY` / `botGroupKey(name)`。行与组头的菜单照旧（长按 = 右键）
    */
-  drill?: { scope: string | null; onOpen: (key: string, label: string) => void }
+  drill?: DrillNav
+}
+
+/** 两层导航的那一份（见 ProjectSessionGroupsProps.drill） */
+export interface DrillNav {
+  scope: string | null
+  onOpen: (key: string, label: string) => void
+  query?: string
+  menuSlot?: HTMLElement | null
+  toolbarSlot?: HTMLElement | null
 }
 
 /**
@@ -180,7 +194,7 @@ export function ProjectSessionGroups({
   projectKnowledge,
   drill
 }: ProjectSessionGroupsProps): React.JSX.Element {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const showContextMenu = useContextMenu()
   const storeSessions = useChatStore((s) => s.sessions)
   // sessionsOverride 只定「哪几条」，每条的内容仍以 store 为准：日历的当日列表是一次性快照，
@@ -195,6 +209,7 @@ export function ProjectSessionGroups({
   const streamingSessions = useChatStore(selectStreamingSessions)
   const bgRunKinds = useBgTaskStore(selectBgRunKinds)
   const pendingCounts = useChatStore(selectAllPendingCounts)
+  const pendingInputs = useChatStore((s) => s.sessionPendingInputs)
   const unreadSessions = useUnreadStore((s) => s.unread)
   const interruptedSessions = useChatStore(selectInterruptedSessions)
   const { dim } = useFocusDim()
@@ -320,35 +335,101 @@ export function ProjectSessionGroups({
     }
     return groups.find(([key]) => key === scope)?.[1] ?? []
   }, [scope, groups, botSessions, botRegistry])
-  // 摘要按「内容此刻的版本」重取：最后动手的时间、在不在跑（跑完那一刻回复才写完）、未读从哪一刻起
+  // 只看未读（底部工具栏左边那一颗）：只管此刻这一组，离开（换一组、回顶层）就关掉 —— 再进来是全部
+  const [unreadOnly, setUnreadOnly] = useState(false)
+  const [filterScope, setFilterScope] = useState(scope)
+  if (filterScope !== scope) {
+    setFilterScope(scope)
+    setUnreadOnly(false)
+  }
+  const needsYou = (s: Session): boolean => s.id in unreadSessions || (pendingCounts[s.id] ?? 0) > 0
+  const scopeUnreadCount = scopeSessions.filter(needsYou).length
+  const scopeListed = unreadOnly ? scopeSessions.filter(needsYou) : scopeSessions
+  // 顶层的搜索：按标题找（不分大小写），最近动过的在前；子会话也找得到。只在顶层列得出来的会话里找 ——
+  // 各组里的（项目、聊天、没归档的 bot）和它们的子会话；藏起来的（载体项目里的笔记本会话、归档 / 删掉的项目、
+  // 归档的 bot）搜不到
+  const query = scope === null ? (drill?.query ?? '').trim().toLowerCase() : ''
+  const searchResults = useMemo(() => {
+    if (!query) return []
+    const roots = groups.flatMap(([, list]) => list)
+    for (const [name, list] of botSessions) {
+      if (!botRegistry?.archived?.includes(name)) roots.push(...list)
+    }
+    return roots
+      .flatMap((s) => [s, ...(childrenByParent.get(s.id) ?? [])])
+      .filter((s) => s.title.toLowerCase().includes(query))
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+      .slice(0, SEARCH_RESULT_LIMIT)
+  }, [query, groups, botSessions, botRegistry, childrenByParent])
+  /** 此刻画成两层行的那些会话（某一组的，或搜到的）：给它们取摘要 */
+  const detailSessions = scope !== null ? scopeSessions : searchResults
+  // 摘要按「内容此刻的版本」重取：最后动手的时间、在不在跑（跑完那一刻回复才写完）、未读从哪一刻起、有几个询问
   const previewStamps = useMemo(() => {
     const out: Record<string, string> = {}
-    for (const s of scopeSessions) {
+    for (const s of detailSessions) {
       out[s.id] =
-        `${s.lastActiveAt}:${streamingSessions[s.id] ? 1 : 0}:${unreadSessions[s.id]?.since ?? ''}`
+        `${s.lastActiveAt}:${streamingSessions[s.id] ? 1 : 0}:${unreadSessions[s.id]?.since ?? ''}:${pendingCounts[s.id] ?? 0}`
     }
     return out
-  }, [scopeSessions, streamingSessions, unreadSessions])
-  const previews = useSessionPreviews(scopeSessions, previewStamps, scope !== null)
-  // 行尾时间只分「今天写时分 / 更早写月-日」，挂上那一刻的钟就够
+  }, [detailSessions, streamingSessions, unreadSessions, pendingCounts])
+  const digests = useSessionDigests(detailSessions, previewStamps, detailSessions.length > 0)
+  // 行尾时间按日历日分档（今天 / 昨天 / 星期几 / 月-日），挂上那一刻的钟就够
   const [mountedAt] = useState(() => Date.now())
-  /** 两层的行要的那一份：时间 + 摘要（在等你回答 > 正在回复 > 最后一条回复） */
+  /** 在等你回答的那一句：开着的那张卡片上的问题（审批是工具写的说明或命令本身）；会话没加载过就从它的消息里找选择题 */
+  const pendingQuestionOf = (id: string): string | null => {
+    const request = pendingInputs?.[id]?.[0]
+    if (request) {
+      const text =
+        request.kind === 'ask' ? request.description?.trim() || request.command : request.question
+      if (text?.trim()) return text.trim().replace(/\s+/g, ' ')
+    }
+    return digests[id]?.question ?? null
+  }
+  /** 两层的行要的那一份：时间 + 摘要（在等你回答 > 正在回复 > 最后一条回复 > 还没有消息） */
   const detailOf = (
     item: Session
-  ): { time: string; preview?: React.ReactNode; previewTone?: 'normal' | 'waiting' } => {
-    const time = unreadTimeLabel(item.lastActiveAt, mountedAt)
+  ): { time: string; preview?: React.ReactNode; previewTone?: 'normal' | 'waiting' | 'muted' } => {
+    const time = listTimeLabel(item.lastActiveAt, mountedAt, {
+      yesterday: t('mobile.yesterday'),
+      locale: i18n.language
+    })
+    const redacted = (text: string): React.JSX.Element => (
+      <RedactionSessionProvider sessionId={item.id}>
+        <RedactedText text={text} />
+      </RedactionSessionProvider>
+    )
     const asks = pendingCounts[item.id] ?? 0
-    if (asks > 0) return { time, preview: t('inbox.asks', { count: asks }), previewTone: 'waiting' }
-    if (streamingSessions[item.id]) return { time, preview: t('inbox.replying') }
-    const text = previews[item.id]
-    return {
-      time,
-      preview: text ? (
-        <RedactionSessionProvider sessionId={item.id}>
-          <RedactedText text={text} />
-        </RedactionSessionProvider>
-      ) : undefined
+    if (asks > 0) {
+      const question = pendingQuestionOf(item.id)
+      return {
+        time,
+        preview: question ? (
+          <>
+            {t('mobile.waitingPrefix')}
+            {redacted(question)}
+          </>
+        ) : (
+          t('inbox.asks', { count: asks })
+        ),
+        previewTone: 'waiting'
+      }
     }
+    if (streamingSessions[item.id]) return { time, preview: t('inbox.replying') }
+    const digest = digests[item.id]
+    // 还没读到：先不画那一层；读到了但一句话都没有：「还没有消息」
+    if (!digest) return { time }
+    if (!digest.text) return { time, preview: t('mobile.noMessages'), previewTone: 'muted' }
+    return { time, preview: redacted(digest.text) }
+  }
+  /** 一条会话落在哪一组，那一组叫什么（搜索结果的行尾标它） */
+  const groupLabelOf = (s: Session): string => {
+    const key = groupKeyOf(s)
+    if (!key || key === TEMP_GROUP_KEY) return t('sidebar.tempChats')
+    if (key.startsWith(BOT_GROUP_PREFIX)) {
+      const name = key.slice(BOT_GROUP_PREFIX.length)
+      return botRegistry?.bots.find((b) => b.name === name)?.displayName ?? name
+    }
+    return projectNames[key] || t('sidebar.unnamedProject')
   }
 
   // 会话行菜单（右键整行 / 点行尾的 ⋮ 是同一份）：
@@ -803,7 +884,7 @@ export function ProjectSessionGroups({
         showDividerAbove={projectsSection?.dividerAbove}
         onMenu={hideEmptyGroups ? undefined : openBotsSectionMenu}
       >
-        <div data-sidebar-section="bots">
+        <div data-sidebar-section="bots" className={drill ? 'sb-card' : undefined}>
           {sorted.map(renderBotGroup)}
           {unknown.map((name) => {
             const key = botGroupKey(name)
@@ -941,7 +1022,7 @@ export function ProjectSessionGroups({
     const botName = scope.startsWith(BOT_GROUP_PREFIX) ? scope.slice(BOT_GROUP_PREFIX.length) : null
     const bot = botName ? (botRegistry?.bots.find((b) => b.name === botName) ?? null) : null
     const isProject = !isTemp && !botName && Object.hasOwn(projectNames, scope)
-    // 新对话：项目 / 聊天直接建；bot 先选工作位置（清单还没扫回来或文件不在了就没有这一行）
+    // 新对话：项目 / 聊天直接建；bot 先选工作位置（清单还没扫回来或文件不在了就没有这一颗）
     const newChat: ((e: React.MouseEvent) => void) | null = isTemp
       ? () => onNewChat(null)
       : isProject
@@ -955,47 +1036,157 @@ export function ProjectSessionGroups({
       !botRegistry?.archived?.includes(botName) &&
       (!!bot || botRegistry === null || scopeSessions.length > 0)
     const known = isTemp || isProject || botKnown
+    // 这一组的菜单（顶层长按组行的那同一份）：项目 / 聊天、bot、文件不在了的 bot；别的没有
+    const groupMenu: ((e: React.MouseEvent) => void) | null =
+      isTemp || isProject
+        ? (e) => openGroupMenu(scope, isTemp, e)
+        : bot
+          ? (e) => openBotMenu(bot, e)
+          : botName && botKnown && botRegistry !== null && bots?.adapter.deleteSessions
+            ? (e) => openMissingBotMenu(botName, scopeSessions.length, e)
+            : null
+    const countText = unreadOnly
+      ? t('mobile.filterOn')
+      : [
+          t('mobile.scopeCount', { count: scopeSessions.length }),
+          scopeUnreadCount > 0 ? t('mobile.scopeUnread', { count: scopeUnreadCount }) : ''
+        ]
+          .filter(Boolean)
+          .join(' · ')
+    const toolbarButton =
+      'flex h-11 w-11 shrink-0 items-center justify-center rounded-full active:bg-bg-hover'
+    const toolbar = (
+      <div data-scope-toolbar="" className="flex h-12 items-center px-2 text-accent">
+        <button
+          type="button"
+          data-scope-filter=""
+          aria-pressed={unreadOnly}
+          aria-label={t('mobile.filterUnread')}
+          title={t('mobile.filterUnread')}
+          onClick={() => setUnreadOnly((on) => !on)}
+          className={`${toolbarButton} ${unreadOnly ? 'bg-accent/15' : ''}`}
+        >
+          <ListFilter size={21} aria-hidden="true" />
+        </button>
+        <span
+          data-scope-count=""
+          className="min-w-0 flex-1 truncate text-center text-[12px] text-text-secondary"
+        >
+          {countText}
+        </span>
+        {newChat ? (
+          <button
+            type="button"
+            data-scope-new-chat=""
+            aria-label={t('sidebar.newChat')}
+            title={t('sidebar.newChat')}
+            onClick={newChat}
+            className={toolbarButton}
+          >
+            <SquarePen size={21} aria-hidden="true" />
+          </button>
+        ) : (
+          <span className="h-11 w-11 shrink-0" />
+        )}
+      </div>
+    )
+    const menuButton = groupMenu && (
+      <button
+        type="button"
+        data-scope-menu=""
+        aria-label={t('sidebar.moreActions')}
+        title={t('sidebar.moreActions')}
+        onClick={groupMenu}
+        className="flex h-9 w-9 items-center justify-center rounded-full text-accent active:bg-bg-hover"
+      >
+        <CircleEllipsis size={22} aria-hidden="true" />
+      </button>
+    )
     return (
       <div data-scope-list={scope}>
-        {newChat && (
-          <div
-            data-scope-new-chat=""
-            onClick={newChat}
-            className="sb-row cursor-pointer text-accent hover:bg-bg-hover/60"
-          >
-            <Plus className="sb-icon" />
-            <span className="truncate">{t('sidebar.newChat')}</span>
-          </div>
-        )}
-        {projectKnowledge && isProject && (
-          <ProjectKnowledgeFolder
-            projectId={scope}
-            adapter={projectKnowledge}
-            enabled
-            dim={false}
-          />
-        )}
-        {projectKnowledge && bot?.knowledgeBundle && (
-          <BotKnowledgeFolder
-            botName={bot.name}
-            bundle={bot.knowledgeBundle}
-            adapter={projectKnowledge}
-            enabled
-            dim={false}
-          />
-        )}
-        {scopeSessions.length === 0 ? (
+        {scopeListed.length === 0 ? (
           <div data-scope-empty="" className="sb-hint">
-            {known ? t('mobile.scopeEmpty') : t('mobile.scopeGone')}
+            {!known
+              ? t('mobile.scopeGone')
+              : unreadOnly
+                ? t('mobile.filterEmpty')
+                : t('mobile.scopeEmpty')}
           </div>
         ) : (
-          renderRows(scope, scopeSessions, botName ? locationOf : undefined, true)
+          renderRows(scope, scopeListed, botName ? locationOf : undefined, true)
+        )}
+        {/* 这一组的知识库：排在会话后面，另起一节（它不是一条会话，行首有图标） */}
+        {projectKnowledge && (isProject || bot?.knowledgeBundle) && (
+          <div data-scope-knowledge="" style={{ marginTop: 'var(--sb-section-space)' }}>
+            {isProject && (
+              <ProjectKnowledgeFolder
+                projectId={scope}
+                adapter={projectKnowledge}
+                enabled
+                dim={false}
+              />
+            )}
+            {bot?.knowledgeBundle && (
+              <BotKnowledgeFolder
+                botName={bot.name}
+                bundle={bot.knowledgeBundle}
+                adapter={projectKnowledge}
+                enabled
+                dim={false}
+              />
+            )}
+          </div>
+        )}
+        {drill?.toolbarSlot === undefined
+          ? toolbar
+          : drill.toolbarSlot && createPortal(toolbar, drill.toolbarSlot)}
+        {menuButton && drill?.menuSlot && createPortal(menuButton, drill.menuSlot)}
+      </div>
+    )
+  }
+
+  // 顶层在搜索：按标题搜到的会话，平铺成两层的行，行尾标它在哪一组
+  if (drill && query) {
+    return (
+      <div data-search-results="">
+        {searchResults.length === 0 ? (
+          <div data-search-empty="" className="sb-hint">
+            {t('mobile.searchEmpty')}
+          </div>
+        ) : (
+          searchResults.map((item) => (
+            <SessionItem
+              key={item.id}
+              session={item}
+              active={false}
+              run={streamingSessions[item.id] ? 'agent' : (bgRunKinds[item.id] ?? null)}
+              interrupted={interruptedSessions[item.id]}
+              pendingCount={pendingCounts[item.id]}
+              unread={item.id in unreadSessions}
+              unreadFailed={!!unreadSessions[item.id]?.failed}
+              goalManager={!!item.settings.goalManagerOf}
+              isTriggerRun={!!item.settings.triggerRun}
+              onSelect={handleSelect}
+              onMenu={hasSessionMenu(!!item.settings.notebookPath) ? openSessionMenu : undefined}
+              location={groupLabelOf(item)}
+              detail={detailOf(item)}
+            />
+          ))
         )}
       </div>
     )
   }
 
   const botsSection = renderBotsSection()
+  /** 顶层两层导航：一节里的导航行收进一张分组卡片；桌面那棵树原样 */
+  const navCard = (rows: React.ReactNode): React.ReactNode =>
+    drill ? (
+      <div data-nav-card="" className="sb-card">
+        {rows}
+      </div>
+    ) : (
+      rows
+    )
 
   return (
     <>
@@ -1017,16 +1208,20 @@ export function ProjectSessionGroups({
               {t('sidebar.emptyHint')}
             </div>
           ) : (
-            projectGroups.map((group) => renderGroup(group))
+            navCard(projectGroups.map((group) => renderGroup(group)))
           )}
         </SessionGroup>
       ) : (
-        projectGroups.map((group) => renderGroup(group))
+        navCard(projectGroups.map((group) => renderGroup(group)))
       )}
       {tempGroup &&
         (drill ? (
           // 顶层的「聊天」是一行导航行，不是分节：自己隔开一节的距离
-          <div data-sidebar-section="temp-nav" style={{ marginTop: 'var(--sb-section-space)' }}>
+          <div
+            data-sidebar-section="temp-nav"
+            className="sb-card"
+            style={{ marginTop: 'var(--sb-section-space)' }}
+          >
             {renderGroup(tempGroup)}
           </div>
         ) : (

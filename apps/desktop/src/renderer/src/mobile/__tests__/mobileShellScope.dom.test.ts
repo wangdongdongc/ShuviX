@@ -7,7 +7,7 @@
  * 所以从对话退回来落在那一组里，再退一次才回顶层。
  *
  *   MS-1  顶层：收件箱行、日历钮、没有返回键、没有标记
- *   MS-2  进一组：标题是那一组的名字、返回键、标记、drill.scope；日历钮没有，新对话钮还在
+ *   MS-2  进一组：标题是那一组的名字、返回键、标记、drill.scope；顶栏没有日历钮与新对话钮（新对话在底部的工具栏里）
  *   MS-3 / MS-4 返回键与返回手势都回顶层
  *   MS-5 / MS-6 从组里 / 从顶层打开对话：历史上的标记，退回来落在哪
  *   MS-7  store 里换了活跃会话（不是点列表）时人在组里：对话那一条也带两个标记
@@ -19,6 +19,11 @@
  *   MS-14 历史上没有标记时返回键直接收起
  *   MS-15 收件箱行上的数字与琥珀点
  *   MS-16 离开收件箱：那一页卸掉，侧栏回来
+ *   MS-17 顶层：工具栏的槽挂着但藏着（交给侧栏的 `drill.toolbarSlot` 就是它），没有菜单的槽，标签栏在
+ *   MS-18 进一组：返回那一行里有菜单的槽（`drill.menuSlot`）、工具栏的槽露出来、标签栏收起；退回顶层各归原位
+ *   MS-19 收件箱页：没有菜单的槽、工具栏的槽藏着、标签栏还在
+ *   MS-20 搜索框：只在顶层（不在日历那种看法、组里、收件箱页）；输入的字交给 `drill.query`；有字才有清除钮，点它清空
+ *   MS-21 收件箱那一行包在一张卡片里
  *
  * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏的替身记下 props 并画出
  * `sessionsPrepend`。chat store 是按 selector 读、能订阅的小替身；小组件 store 是一个真的 zustand store。
@@ -136,7 +141,13 @@ const SCOPE = 'shuvixMobileScope'
 const CHAT = 'shuvixMobileChat'
 const WIDGET = 'shuvixMobileWidget'
 
-type Drill = { scope: string | null; onOpen: (key: string, label: string) => void }
+type Drill = {
+  scope: string | null
+  onOpen: (key: string, label: string) => void
+  query?: string
+  menuSlot?: HTMLElement | null
+  toolbarSlot?: HTMLElement | null
+}
 
 let container: HTMLDivElement
 let root: Root
@@ -160,6 +171,20 @@ const lastInbox = (): Record<string, unknown> => rec.inbox.at(-1)!
 const sidebarWrapper = (): HTMLElement => q('[data-stub-sidebar="sessions"]')!.parentElement!
 const chatPage = (): HTMLElement | null => q('[data-mobile-page="chat"]')
 const scopeTitle = (): string | null => q('[data-mobile-scope-title]')?.textContent ?? null
+const menuSlot = (): HTMLElement | null => q('[data-mobile-scope-menu-slot]')
+const toolbarSlot = (): HTMLElement => q('[data-mobile-scope-toolbar-slot]')!
+const tabbar = (): HTMLElement => q('[data-mobile-tabbar]')!
+const searchInput = (): HTMLInputElement | null =>
+  container.querySelector<HTMLInputElement>('[data-mobile-search]')
+const searchClear = (): HTMLElement | null => q('[data-mobile-search-clear]')
+/** 在受控的输入框里打字：走原生的 value setter 再发 input 事件，React 才认 */
+function typeInto(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  act(() => {
+    setter.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
 
 /** 做一件会退一条历史的事，等到 popstate（jsdom 异步发） */
 async function awaitPop(trigger: () => void): Promise<void> {
@@ -229,7 +254,7 @@ describe('MobileShell: the two levels of the Chats tab', () => {
     expect(mark(SCOPE)).toBe(false)
   })
 
-  it('MS-2 entering a group: its name as the title, a back button, a history entry, no calendar toggle', () => {
+  it('MS-2 entering a group: its name as the title, a back button, a history entry, no header actions', () => {
     mount()
     openScope('p1', 'Proj')
     expect(scopeTitle()).toContain('Proj')
@@ -237,8 +262,9 @@ describe('MobileShell: the two levels of the Chats tab', () => {
     expect(mark(SCOPE)).toBe(true)
     expect(mark(CHAT)).toBe(false)
     expect(drill().scope).toBe('p1')
+    // 顶栏右边不再是日历与新建：新建在底部的工具栏里，右边是那一组的「⋯」
     expect(q('[data-mobile-calendar-toggle]')).toBeNull()
-    expect(q('[data-mobile-new-chat]')).not.toBeNull()
+    expect(q('[data-mobile-new-chat]')).toBeNull()
     expect(q('[data-mobile-inbox]')).toBeNull()
   })
 
@@ -443,5 +469,137 @@ describe('MobileShell: the inbox page', () => {
     expect(mark(SCOPE)).toBe(false)
     expect(q('[data-mobile-new-chat]')).not.toBeNull()
     expect(q('[data-mobile-calendar-toggle]')).not.toBeNull()
+  })
+})
+
+describe('MobileShell: the slots and the tab bar', () => {
+  it('MS-17 the top level: a hidden toolbar slot handed to the list, no menu slot, the tab bar', () => {
+    mount()
+    expect(toolbarSlot().style.display).toBe('none')
+    expect(drill().toolbarSlot).toBe(toolbarSlot())
+    expect(menuSlot()).toBeNull()
+    expect(drill().menuSlot ?? null).toBeNull()
+    expect(tabbar().style.display).toBe('')
+  })
+
+  it('MS-18 inside a group: the menu slot in the back row, the toolbar slot shown, the tab bar hidden', () => {
+    mount()
+    openScope('p1', 'Proj')
+    const slot = menuSlot()
+    expect(slot).not.toBeNull()
+    expect(slot!.parentElement).toBe(q('[data-mobile-scope-back]')!.parentElement)
+    expect(drill().menuSlot).toBe(slot)
+    expect(drill().toolbarSlot).toBe(toolbarSlot())
+    expect(toolbarSlot().style.display).toBe('')
+    expect(tabbar().style.display).toBe('none')
+    expect(drill().scope).toBe('p1')
+  })
+
+  it('MS-18 leaving the group puts the tab bar back and hides the toolbar slot again', async () => {
+    mount()
+    openScope('p1', 'Proj')
+    await back()
+    expect(tabbar().style.display).toBe('')
+    expect(toolbarSlot().style.display).toBe('none')
+    expect(menuSlot()).toBeNull()
+    expect(drill().menuSlot ?? null).toBeNull()
+    expect(drill().toolbarSlot).toBe(toolbarSlot())
+  })
+
+  it('MS-18 the toolbar slot is the same element at the top level and inside a group', () => {
+    mount()
+    const slot = toolbarSlot()
+    openScope('p1', 'Proj')
+    expect(toolbarSlot()).toBe(slot)
+    openScope('p2', 'Other')
+    expect(toolbarSlot()).toBe(slot)
+    expect(drill().toolbarSlot).toBe(slot)
+  })
+
+  it('MS-19 the inbox page: no menu slot, the toolbar slot hidden, the tab bar still shown', () => {
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    expect(q('[data-mobile-inbox]')).not.toBeNull()
+    expect(q('[data-mobile-scope-back]')).not.toBeNull()
+    expect(menuSlot()).toBeNull()
+    expect(drill().menuSlot ?? null).toBeNull()
+    expect(toolbarSlot().style.display).toBe('none')
+    expect(tabbar().style.display).toBe('')
+  })
+
+  it("MS-18 a chat opened above a group keeps the group's bottom bar for the way back", async () => {
+    mount()
+    openScope('p1', 'Proj')
+    openSessionFromList()
+    expect(chatPage()).not.toBeNull()
+    await back()
+    expect(toolbarSlot().style.display).toBe('')
+    expect(tabbar().style.display).toBe('none')
+    expect(drill().menuSlot).toBe(menuSlot())
+  })
+
+  it('MS-21 the inbox row sits in a card', () => {
+    mount()
+    const card = q('[data-mobile-inbox-row]')!.closest('.sb-card')
+    expect(card).not.toBeNull()
+    expect(q('[data-stub-sidebar="sessions"]')!.contains(card)).toBe(true)
+    expect(card!.querySelectorAll('[data-mobile-inbox-row]')).toHaveLength(1)
+  })
+})
+
+describe('MobileShell: search', () => {
+  it('MS-20 the top level has a search box; an empty one passes an empty query and has no clear button', () => {
+    mount()
+    expect(searchInput()).not.toBeNull()
+    expect(searchInput()!.value).toBe('')
+    expect(searchInput()!.getAttribute('aria-label')).toBe(en.mobile.search)
+    expect(drill().query).toBe('')
+    expect(searchClear()).toBeNull()
+  })
+
+  it('MS-20 what is typed is passed to the list as drill.query', () => {
+    mount()
+    typeInto(searchInput()!, 'alp')
+    expect(searchInput()!.value).toBe('alp')
+    expect(drill().query).toBe('alp')
+    expect(drill().scope).toBeNull()
+    expect(searchClear()).not.toBeNull()
+    // 搜索不压历史：它不是一层
+    expect(mark(SCOPE)).toBe(false)
+
+    typeInto(searchInput()!, 'alpha ')
+    expect(drill().query).toBe('alpha ')
+  })
+
+  it('MS-20 the clear button empties the box and the query, then goes away', () => {
+    mount()
+    typeInto(searchInput()!, 'alp')
+    click(searchClear()!)
+    expect(searchInput()!.value).toBe('')
+    expect(drill().query).toBe('')
+    expect(searchClear()).toBeNull()
+  })
+
+  it('MS-20 there is no search box inside a group or on the inbox page; it is back at the top level', async () => {
+    mount()
+    openScope('p1', 'Proj')
+    expect(searchInput()).toBeNull()
+    await back()
+    expect(searchInput()).not.toBeNull()
+
+    click(q('[data-mobile-inbox-row]')!)
+    expect(searchInput()).toBeNull()
+    await back()
+    expect(searchInput()).not.toBeNull()
+  })
+
+  it('MS-20 there is no search box in the calendar view', () => {
+    mount()
+    click(q('[data-mobile-calendar-toggle]')!)
+    expect(searchInput()).toBeNull()
+    expect(sidebarWrapper().style.display).toBe('none')
+    click(q('[data-mobile-calendar-toggle]')!)
+    expect(searchInput()).not.toBeNull()
+    expect(sidebarWrapper().style.display).toBe('')
   })
 })
