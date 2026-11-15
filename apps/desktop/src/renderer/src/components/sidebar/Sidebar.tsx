@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
 import { forkRefusalKey, getChatApi, useChatStore, useSessionFork } from '@shuvix/chat-ui'
@@ -11,12 +11,13 @@ import {
   HookGroup,
   type HookGroupAdapter,
   InboxRow,
-  TrackingGroup,
   PolicyGroup,
   type PolicyGroupAdapter,
   type BotGroupAdapter,
   type BotsSectionCaps,
   type DrillNav,
+  type LibraryDrill,
+  LIBRARY_KNOWLEDGE_BASE_PREFIX,
   KnowledgeGroup,
   type KnowledgeGroupAdapter,
   SkillGroup,
@@ -29,7 +30,6 @@ import {
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { useBrowserStore } from '../../stores/browserStore'
-import { useTrackingAdapter } from '../../host/useTrackingAdapter'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
 import { newHookTemplate } from './hookTemplate'
@@ -54,7 +54,7 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *     + 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
  *     技能平铺，点行开那个技能 SKILL.md 的笔记本，启用开关与增删在菜单里）+ 知识库置顶分组
  *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）。
- *     分组顺序：tracking → agents → policies → hooks → skills → knowledge（e2e PS-H2 钉死）
+ *     分组顺序：agents → policies → hooks → skills → knowledge（e2e PS-H2 钉死）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → 已归档 → 项目」
  */
@@ -71,6 +71,11 @@ export interface SidebarProps {
    * 进了某一组只画那一组的会话
    */
   drill?: DrillNav
+  /**
+   * 资料库的两层导航（手机布局的资料库页，`mode="library"` 时用；见 app-shell LibraryPage）：顶层是各组的导航行，
+   * 进了某一组只画那一组的那一页。缺省 = 各组就地展开的树
+   */
+  libraryDrill?: LibraryDrill
   /** `mode="sessions"` 的顶层列表最上面多画的东西（手机：收件箱那一行） */
   sessionsPrepend?: React.ReactNode
 }
@@ -86,6 +91,7 @@ export function Sidebar({
   mode = 'full',
   onOpenSession,
   drill,
+  libraryDrill,
   sessionsPrepend
 }: SidebarProps = {}): React.JSX.Element {
   const { t } = useTranslation()
@@ -217,7 +223,6 @@ export function Sidebar({
   }, [setActiveSessionId])
 
   /** 跟踪项分组（实验，只在手机的资料库页里：桌面的跟踪项在收件箱的「跟踪中」一节） */
-  const trackingGroupAdapter = useTrackingAdapter(setActiveSessionId)
 
   /**
    * 确认删除：删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，自动保存会把
@@ -684,7 +689,27 @@ export function Sidebar({
     [botGroupAdapter, pickFolderAsProject, archivedProjects]
   )
 
-  // 桌面侧栏的资料库没有「跟踪项」一组了（跟踪项搬进了收件箱页，2026-11-10）；手机还没有收件箱，资料库页里先留着它
+  // 资料库的两层导航：各层共用一个滚动容器 —— 往下钻一层回到顶上，退回来回到离开那一层时的位置
+  const libraryScrollerRef = useRef<HTMLDivElement>(null)
+  const libraryPositions = useRef(new Map<string, number>())
+  const libraryScope = libraryDrill?.scope ?? null
+  const lastLibraryScope = useRef<string | null>(libraryScope)
+  useLayoutEffect(() => {
+    const el = libraryScrollerRef.current
+    const prev = lastLibraryScope.current
+    lastLibraryScope.current = libraryScope
+    if (!el || prev === libraryScope) return
+    const depthOf = (scope: string | null): number =>
+      scope === null ? 0 : scope.startsWith(LIBRARY_KNOWLEDGE_BASE_PREFIX) ? 2 : 1
+    if (depthOf(libraryScope) > depthOf(prev)) {
+      libraryPositions.current.delete(libraryScope ?? '')
+      el.scrollTop = 0
+    } else {
+      el.scrollTop = libraryPositions.current.get(libraryScope ?? '') ?? 0
+    }
+  }, [libraryScope])
+
+  // 资料库各组。跟踪项不在这里：它在收件箱里（桌面是右侧面板的收件箱，手机是会话页顶上的收件箱那一页）
   const groups = (
     <>
       <AgentGroup adapter={agentGroupAdapter} />
@@ -813,14 +838,39 @@ export function Sidebar({
 
   // 手机布局的「资料库」页：只有那几组注册表（不画项目 / 会话、不画底部设置栏）
   if (mode === 'library') {
+    // 两层导航：顶层两张分组卡片（智能体 / 技能 / 知识库，安全策略 / Hooks）；进了某一组，那一组画自己的那一页、
+    // 别的组什么都不画。两种情形同一副外壳（只换卡片的 class）：各组不重挂，扫到的清单不丢
+    const top = libraryDrill ? libraryDrill.scope === null : false
     return (
       <div
+        ref={libraryScrollerRef}
+        // 位置在滚动时记（等到换页那一刻再读，短的那一页已经把它压回去了）
+        onScroll={(e) =>
+          libraryPositions.current.set(lastLibraryScope.current ?? '', e.currentTarget.scrollTop)
+        }
         className="h-full overflow-y-auto px-3 pb-4"
         data-mobile-list=""
         data-sidebar-density="touch"
       >
-        <TrackingGroup adapter={trackingGroupAdapter} />
-        {groups}
+        {libraryDrill ? (
+          <>
+            <div data-library-card="" className={top ? 'sb-card' : undefined}>
+              <AgentGroup adapter={agentGroupAdapter} drill={libraryDrill} />
+              <SkillGroup adapter={skillGroupAdapter} drill={libraryDrill} />
+              <KnowledgeGroup adapter={knowledgeAdapter} drill={libraryDrill} />
+            </div>
+            <div
+              data-library-card=""
+              className={top ? 'sb-card' : undefined}
+              style={top ? { marginTop: 'var(--sb-section-space)' } : undefined}
+            >
+              <PolicyGroup adapter={policyGroupAdapter} drill={libraryDrill} />
+              <HookGroup adapter={hookGroupAdapter} drill={libraryDrill} />
+            </div>
+          </>
+        ) : (
+          groups
+        )}
         {overlays}
       </div>
     )

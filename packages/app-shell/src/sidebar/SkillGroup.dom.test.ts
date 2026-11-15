@@ -25,10 +25,22 @@
  *   SKG-12 空态表：连一行可画的都没有才显示提示（空的外部目录也算一行）；
  *   SKG-13 跨载体高亮：同一个 `drawing/SKILL.md`，内置载体只亮内置那行，默认载体只亮默认那行。
  *
+ * 两层导航（`drill`，手机布局的资料库，见 LibraryPage）—— 文件末尾那一组：
+ *
+ *   SK-1 / SK-2 / SK-3 顶层只有一行导航行：数量 = 所有目录里的技能（内置、关着的都算），挂上就扫；点它 = onOpen；
+ *         长按 = 组头菜单；
+ *   SK-4 / SK-5 / SK-6 / SK-7 技能页的节：我的（默认目录）→ 共用 / 外部目录各一节 → 内置，与宿主给的顺序无关；
+ *         空的共用 / 外部目录也画一节（一句话），空的默认 / 内置目录不画；一节都没有 → 整页的那一句；
+ *   SK-8 / SK-9 / SK-10 / SK-17 目录小标题的长按菜单；关着的目录：小标题划线、组内每一行都是「已停用」；
+ *   SK-11 / SK-12 行的内容：内置 = 锁 + 本地化名字（+ 标识名）+ 界面说明，其余 = 原名 + description；
+ *   SK-13 / SK-14 点一行 = open 那个技能对象；长按一行的菜单；
+ *   SK-15 / SK-16 工具栏那句话（没有新建）与「⋯」；
+ *   SK-18 别的页开着：什么都不画但扫过，`skill.changed` 重扫；SK-19 不给 drill：挂上不扫、没有导航行。
+ *
  * 右键菜单走 ContextMenuProvider 的 `render` 注入：记录菜单项、按预设回一个 id（模拟用户点了它）——
  * 预设的 id 不在这份菜单里就回 null（真菜单点不出一个它没有的项）。`@shuvix/chat-ui` 替掉
- * useAppEvent / useChatStore / useChatHost；chatStore 的状态放在可变的 `store` 里（SKG-5 换活动会话）。
- * 文件是 `.ts`，一律 createElement。
+ * useAppEvent（记下订阅者，SK-18 按事件名派发）/ useChatStore / useChatHost；chatStore 的状态放在可变的
+ * `store` 里（SKG-5 换活动会话）。文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, type ComponentProps } from 'react'
@@ -47,12 +59,28 @@ const store = vi.hoisted(() => ({
   sessions: [] as StoreSession[],
   activeSessionId: null as string | null
 }))
+const appEvents = vi.hoisted(() => new Map<string, Set<() => void>>())
 
-vi.mock('@shuvix/chat-ui', () => ({
-  useAppEvent: () => {},
-  useChatStore: (selector: (s: typeof store) => unknown) => selector(store),
-  useChatHost: () => ({ appearance: { focusMode: false } })
-}))
+vi.mock('@shuvix/chat-ui', async () => {
+  const { useEffect, useRef } = await import('react')
+  return {
+    // 记下每个订阅者，用例里按事件名派发；回调走 ref，拿到的总是最新一次渲染的闭包
+    useAppEvent: (type: string, handler: () => void) => {
+      const ref = useRef(handler)
+      ref.current = handler
+      useEffect(() => {
+        const fn = (): void => ref.current()
+        if (!appEvents.has(type)) appEvents.set(type, new Set())
+        appEvents.get(type)!.add(fn)
+        return () => {
+          appEvents.get(type)?.delete(fn)
+        }
+      }, [type])
+    },
+    useChatStore: (selector: (s: typeof store) => unknown) => selector(store),
+    useChatHost: () => ({ appearance: { focusMode: false } })
+  }
+})
 
 import {
   SkillGroup,
@@ -60,6 +88,7 @@ import {
   type SkillGroupFolder,
   type SkillGroupItem
 } from './SkillGroup'
+import type { LibraryDrill } from './LibraryPage'
 import { ContextMenuProvider } from '../contextmenu/ContextMenuProvider'
 
 declare global {
@@ -286,6 +315,7 @@ beforeAll(async () => {
 beforeEach(() => {
   menus = []
   pick = null
+  appEvents.clear()
   store.sessions = []
   store.activeSessionId = null
   container = document.createElement('div')
@@ -698,4 +728,455 @@ describe('SkillGroup —— 跨载体高亮', () => {
       expect(activeRows()).toEqual([lit])
     }
   )
+})
+
+/**
+ * 两层导航（手机布局的资料库）。夹具按宿主给的顺序：内置（drawing、widget）→ 共用 claude（关着，1 个）→
+ * 共用 agents（开着，空的）→ 外部 team（开着，2 个，其中一个自己关着）→ 默认目录（2 个）。
+ */
+describe('SkillGroup drill mode (the phone library)', () => {
+  const slots: HTMLElement[] = []
+  function slot(): HTMLElement {
+    const node = document.createElement('div')
+    node.setAttribute('data-test-slot', '')
+    document.body.appendChild(node)
+    slots.push(node)
+    return node
+  }
+  afterEach(() => {
+    for (const node of slots.splice(0)) node.remove()
+  })
+
+  const teamFolder = (over: Partial<SkillGroupFolder> = {}): SkillGroupFolder =>
+    folder({
+      dirName: 'team',
+      dirPath: '/home/u/work/team-skills',
+      skills: [skill('team:lint', 'lint'), skill('team:ship', 'ship', { isEnabled: false })],
+      ...over
+    })
+  const hostOrder = (): SkillGroupFolder[] => [
+    twoBuiltins(),
+    claudeFolder(),
+    agentsFolder({ isEnabled: true, skills: [] }),
+    teamFolder(),
+    defaultFolder({ skills: [skill('mine', 'mine'), skill('notes', 'notes')] })
+  ]
+  const TOTAL = 7
+  const OWN = 5
+  const GROUP_MENU = [
+    'add-folder',
+    'open-default',
+    'toggle-default',
+    'toggle-builtin',
+    'separator',
+    'refresh'
+  ]
+
+  const drillAt = (scope: string | null, extra: Partial<LibraryDrill> = {}): LibraryDrill => ({
+    scope,
+    onOpen: vi.fn(),
+    ...extra
+  })
+  /** 渲染带 drill 的分组（不点组头）；同一条用例里再调 = 同一个实例换 props */
+  async function mountDrill(adapter: Adapter, drill?: LibraryDrill): Promise<void> {
+    type ProviderProps = ComponentProps<typeof ContextMenuProvider>
+    const props: Omit<ProviderProps, 'children'> = {
+      render: async (items: ContextMenuItem[]) => {
+        menus.push(items)
+        return pick !== null && items.some((it) => it.id === pick) ? pick : null
+      }
+    }
+    act(() =>
+      root.render(
+        createElement(
+          ContextMenuProvider,
+          props as ProviderProps,
+          createElement(SkillGroup, { adapter, drill })
+        )
+      )
+    )
+    await flush()
+  }
+  const NAV = '[data-group-nav="skills"]'
+  const navCount = (): string | null =>
+    container.querySelector('[data-group-count]')?.textContent ?? null
+  const sectionKeys = (): Array<string | null> =>
+    [...container.querySelectorAll('[data-library-section]')].map((node) =>
+      node.getAttribute('data-library-section')
+    )
+  const sectionSel = (dirName: string): string => `[data-library-section="dir:${dirName}"]`
+  const sectionLabel = (dirName: string): HTMLElement =>
+    el(`${sectionSel(dirName)} [data-library-section-label]`)
+  const sectionRows = (dirName: string): Array<string | null> =>
+    [...el(sectionSel(dirName)).querySelectorAll('[data-library-row]')].map((node) =>
+      node.getAttribute('data-skill-row')
+    )
+  const titleOf = (name: string): HTMLElement => el(`${rowSel(name)} [data-library-row-title]`)
+  const part = (name: string, what: string): string | null =>
+    el(rowSel(name)).querySelector(`[data-library-row-${what}]`)?.textContent ?? null
+  const hasLock = (name: string): boolean =>
+    el(rowSel(name)).querySelector('[data-library-row-lock]') !== null
+  const countText = (): string | null =>
+    container.querySelector('[data-library-count]')?.textContent ?? null
+  const skillsLabel = (): string => i18n.t('sidebar.skillsGroup')
+  function emit(type: string): void {
+    act(() => {
+      for (const fn of [...(appEvents.get(type) ?? [])]) fn()
+    })
+  }
+
+  it('SK-1 the top level: one nav row; the count is every skill in every folder (builtin, off folders and off skills too); scanned once at mount', async () => {
+    const adapter = makeAdapter(hostOrder())
+    await mountDrill(adapter, drillAt(null))
+    const row = el(NAV)
+    expect(row.getAttribute('data-group')).toBe('skills')
+    expect(row.textContent).toContain(skillsLabel())
+    expect(navCount()).toBe(String(TOTAL))
+    expect(adapter.list).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-skill-row]')).toBeNull()
+    expect(container.querySelector('[data-library-page]')).toBeNull()
+  })
+
+  it('SK-2 a click on the nav row → onOpen("skills", the group label)', async () => {
+    const drill = drillAt(null)
+    const adapter = makeAdapter(hostOrder())
+    await mountDrill(adapter, drill)
+    await act(async () => {
+      ;(el(`${NAV} button`) as HTMLButtonElement).click()
+    })
+    expect(drill.onOpen).toHaveBeenCalledTimes(1)
+    expect(drill.onOpen).toHaveBeenCalledWith('skills', skillsLabel())
+    expect(container.querySelector('[data-skill-row]')).toBeNull()
+    expect(adapter.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('SK-3 a long press on the nav row opens the group menu; add-folder → adapter.addFolder()', async () => {
+    const adapter = makeAdapter(hostOrder())
+    await mountDrill(adapter, drillAt(null))
+    pick = 'add-folder'
+    expect(ids(await menuOf(NAV))).toEqual(GROUP_MENU)
+    expect(adapter.addFolder).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string, () => SkillGroupFolder[]]>([
+    ['the host order', hostOrder],
+    ['the reverse order', () => [...hostOrder()].reverse()]
+  ])(
+    'SK-4 section order with %s: Mine → shared / external folders → Built-in',
+    async (_l, list) => {
+      await mountDrill(makeAdapter(list()), drillAt('skills'))
+      expect(el('[data-library-page]').getAttribute('data-library-page')).toBe('skills')
+      const keys = sectionKeys()
+      expect(keys[0]).toBe('dir:default')
+      expect(keys.at(-1)).toBe('dir:builtin')
+      expect([...keys.slice(1, -1)].sort()).toEqual(['dir:agents', 'dir:claude', 'dir:team'])
+      expect(keys).toHaveLength(5)
+    }
+  )
+
+  it('SK-4 the folders in between keep the host’s order', async () => {
+    await mountDrill(makeAdapter(hostOrder()), drillAt('skills'))
+    expect(sectionKeys()).toEqual([
+      'dir:default',
+      'dir:claude',
+      'dir:agents',
+      'dir:team',
+      'dir:builtin'
+    ])
+    expect(sectionRows('default')).toEqual(['mine', 'notes'])
+    expect(sectionRows('team')).toEqual(['team:lint', 'team:ship'])
+    expect(sectionRows('builtin')).toEqual(['builtin:drawing', 'builtin:widget'])
+  })
+
+  it('SK-5 section labels: Mine / the folder’s label or dirName / Built-in; only shared and external labels carry data-skill-folder', async () => {
+    await mountDrill(makeAdapter(hostOrder()), drillAt('skills'))
+    expect(sectionLabel('default').textContent).toBe(i18n.t('mobile.libraryMine'))
+    expect(sectionLabel('claude').textContent).toBe('~/.claude/skills')
+    expect(sectionLabel('agents').textContent).toBe('~/.agents/skills')
+    expect(sectionLabel('team').textContent).toBe('team')
+    expect(sectionLabel('builtin').textContent).toBe(i18n.t('mobile.libraryBuiltin'))
+
+    expect(sectionLabel('claude').getAttribute('data-skill-folder')).toBe('claude')
+    expect(sectionLabel('agents').getAttribute('data-skill-folder')).toBe('agents')
+    expect(sectionLabel('team').getAttribute('data-skill-folder')).toBe('team')
+    expect(sectionLabel('default').hasAttribute('data-skill-folder')).toBe(false)
+    expect(sectionLabel('builtin').hasAttribute('data-skill-folder')).toBe(false)
+  })
+
+  it('SK-6 an empty shared / external folder is drawn with a sentence; an empty default or builtin folder is not drawn', async () => {
+    await mountDrill(makeAdapter(hostOrder()), drillAt('skills'))
+    const agents = el(sectionSel('agents'))
+    expect(agents.textContent).toContain(i18n.t('settings.skillEmpty'))
+    expect(agents.querySelector('[data-library-row]')).toBeNull()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mountDrill(
+      makeAdapter([builtinFolder({ skills: [] }), teamFolder(), defaultFolder({ skills: [] })]),
+      drillAt('skills')
+    )
+    expect(sectionKeys()).toEqual(['dir:team'])
+  })
+
+  it.each<[string, SkillGroupFolder[]]>([
+    ['no folders at all', []],
+    [
+      'only an empty default and an empty builtin folder',
+      [builtinFolder({ skills: [] }), defaultFolder({ skills: [] })]
+    ]
+  ])('SK-7 nothing to draw (%s) → the page’s empty sentence', async (_l, folders) => {
+    await mountDrill(makeAdapter(folders), drillAt('skills'))
+    expect(sectionKeys()).toEqual([])
+    expect(container.querySelector('[data-library-empty]')?.textContent).toBe(
+      i18n.t('settings.skillEmpty')
+    )
+  })
+
+  it('SK-8 a long press on a folder label: shared = toggle + open, external adds remove; the actions reach the adapter with the folder', async () => {
+    const folders = hostOrder()
+    const adapter = makeAdapter(folders)
+    await mountDrill(adapter, drillAt('skills'))
+    const labelSel = (dirName: string): string =>
+      `${sectionSel(dirName)} [data-library-section-label]`
+
+    pick = 'toggle'
+    expect(ids(await menuOf(labelSel('claude')))).toEqual(['toggle', 'open'])
+    expect(adapter.setFolderEnabled.mock.calls).toEqual([[folders[1], true]])
+
+    pick = 'remove'
+    expect(ids(await menuOf(labelSel('team')))).toEqual(['toggle', 'open', 'separator', 'remove'])
+    expect(adapter.removeFolder.mock.calls).toEqual([[folders[3]]])
+
+    // 共用目录没有「移除」：点不出来
+    await menuOf(labelSel('agents'))
+    expect(adapter.removeFolder).toHaveBeenCalledTimes(1)
+
+    // 「我的」与「内置」的小标题没有菜单
+    const before = menus.length
+    await act(async () => {
+      sectionLabel('default').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+      )
+      sectionLabel('builtin').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+      )
+    })
+    await flush()
+    expect(menus.length).toBe(before)
+  })
+
+  it('SK-9 an off folder: a struck label with data-skill-off; its skill row is off although the skill itself is enabled', async () => {
+    await mountDrill(makeAdapter(hostOrder()), drillAt('skills'))
+    const label = sectionLabel('claude')
+    expect(label.className).toContain('line-through')
+    expect(label.hasAttribute('data-skill-off')).toBe(true)
+    expect(sectionLabel('team').className).not.toContain('line-through')
+    expect(sectionLabel('team').hasAttribute('data-skill-off')).toBe(false)
+
+    const row = el(rowSel('claude:pdf'))
+    expect(row.hasAttribute('data-skill-off')).toBe(true)
+    expect(titleOf('claude:pdf').className).toContain('line-through')
+    expect(row.className).toContain('opacity-50')
+    expect(part('claude:pdf', 'badge')).toBe(i18n.t('sidebar.disabledBadge'))
+  })
+
+  it('SK-10 one off skill in an on folder: only that row is off', async () => {
+    await mountDrill(makeAdapter(hostOrder()), drillAt('skills'))
+    const off = el(rowSel('team:ship'))
+    expect(off.hasAttribute('data-skill-off')).toBe(true)
+    expect(part('team:ship', 'badge')).toBe(i18n.t('sidebar.disabledBadge'))
+    expect(titleOf('team:ship').className).toContain('line-through')
+
+    const on = el(rowSel('team:lint'))
+    expect(on.hasAttribute('data-skill-off')).toBe(false)
+    expect(part('team:lint', 'badge')).toBeNull()
+    expect(on.className).not.toContain('opacity-50')
+    expect(titleOf('team:lint').className).not.toContain('line-through')
+    expect(offRows()).toEqual(['claude:pdf', 'team:ship'])
+  })
+
+  it('SK-11 builtin rows: a lock, the localized name, the identifier only when it differs by more than case, the interface hint', async () => {
+    await mountDrill(
+      makeAdapter([
+        builtinFolder({
+          skills: [
+            skill('builtin:drawing', 'drawing'),
+            skill('builtin:widget', 'widget'),
+            skill('builtin:zzz', 'zzz')
+          ]
+        })
+      ]),
+      drillAt('skills')
+    )
+    expect(hasLock('builtin:drawing')).toBe(true)
+    expect(titleOf('builtin:drawing').textContent).toBe(en.builtinSkill.drawing.label)
+    expect(part('builtin:drawing', 'identifier')).toBeNull()
+    expect(part('builtin:drawing', 'description')).toBe(en.builtinSkill.drawing.hint)
+
+    expect(hasLock('builtin:widget')).toBe(true)
+    expect(titleOf('builtin:widget').textContent).toBe(en.builtinSkill.widget.label)
+    expect(part('builtin:widget', 'identifier')).toBe('widget')
+    expect(part('builtin:widget', 'description')).toBe(en.builtinSkill.widget.hint)
+
+    // 没有界面文案的内置：原名、没有标识名、说明退回 description
+    expect(hasLock('builtin:zzz')).toBe(true)
+    expect(titleOf('builtin:zzz').textContent).toBe('zzz')
+    expect(part('builtin:zzz', 'identifier')).toBeNull()
+    expect(part('builtin:zzz', 'description')).toBe('builtin:zzz description')
+  })
+
+  it('SK-12 rows outside the builtin folder: no lock, the display name, the skill’s own description; a default skill named drawing gets no localized copy', async () => {
+    await mountDrill(
+      makeAdapter([
+        twoBuiltins(),
+        teamFolder(),
+        defaultFolder({ skills: [skill('drawing', 'drawing')] })
+      ]),
+      drillAt('skills')
+    )
+    expect(hasLock('team:lint')).toBe(false)
+    expect(titleOf('team:lint').textContent).toBe('lint')
+    expect(part('team:lint', 'description')).toBe('team:lint description')
+    expect(part('team:lint', 'identifier')).toBeNull()
+
+    expect(hasLock('drawing')).toBe(false)
+    expect(titleOf('drawing').textContent).toBe('drawing')
+    expect(part('drawing', 'description')).toBe('drawing description')
+    expect(part('drawing', 'identifier')).toBeNull()
+  })
+
+  it('SK-13 a tap → adapter.open with that skill object, once', async () => {
+    const folders = hostOrder()
+    const adapter = makeAdapter(folders)
+    await mountDrill(adapter, drillAt('skills'))
+    await act(async () => {
+      el(rowSel('team:lint')).click()
+    })
+    expect(adapter.open).toHaveBeenCalledTimes(1)
+    expect(adapter.open.mock.calls[0][0]).toBe(folders[3].skills[0])
+
+    await act(async () => {
+      el(rowSel('builtin:widget')).click()
+    })
+    expect(adapter.open).toHaveBeenCalledTimes(2)
+    expect(adapter.open.mock.calls[1][0]).toBe(folders[0].skills[1])
+  })
+
+  it('SK-14 a long press on a row: default folder = toggle + delete, every other folder = toggle only', async () => {
+    const folders = hostOrder()
+    const adapter = makeAdapter(folders)
+    await mountDrill(adapter, drillAt('skills'))
+
+    pick = 'delete'
+    expect(ids(await menuOf(rowSel('mine')))).toEqual(['toggle', 'separator', 'delete'])
+    expect(adapter.deleteSkill.mock.calls).toEqual([[folders[4].skills[0]]])
+
+    // 别的目录点不出删除
+    expect(ids(await menuOf(rowSel('claude:pdf')))).toEqual(['toggle'])
+    expect(ids(await menuOf(rowSel('team:lint')))).toEqual(['toggle'])
+    expect(ids(await menuOf(rowSel('builtin:drawing')))).toEqual(['toggle'])
+    expect(adapter.deleteSkill).toHaveBeenCalledTimes(1)
+
+    pick = 'toggle'
+    const onItems = await menuOf(rowSel('team:lint'))
+    expect(labelOf(onItems, 'toggle')).toBe(en.common.disable)
+    expect(adapter.setSkillEnabled.mock.calls).toEqual([[folders[3].skills[0], false]])
+    const offItems = await menuOf(rowSel('team:ship'))
+    expect(labelOf(offItems, 'toggle')).toBe(en.common.enable)
+    expect(adapter.setSkillEnabled.mock.calls[1]).toEqual([folders[3].skills[1], true])
+  })
+
+  it('SK-15 the toolbar: all skills, then how many are outside the builtin folder; no new button', async () => {
+    await mountDrill(makeAdapter(hostOrder()), drillAt('skills'))
+    expect(countText()).toBe(
+      `${i18n.t('mobile.libraryCount', { count: TOTAL, name: skillsLabel() })} · ${i18n.t(
+        'mobile.libraryOwn',
+        { count: OWN }
+      )}`
+    )
+    expect(container.querySelector('[data-library-new]')).toBeNull()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mountDrill(makeAdapter([twoBuiltins(), defaultFolder({ skills: [] })]), drillAt('skills'))
+    expect(countText()).toBe(i18n.t('mobile.libraryCount', { count: 2, name: skillsLabel() }))
+    expect(container.querySelector('[data-library-new]')).toBeNull()
+  })
+
+  it('SK-16 the menu button in menuSlot opens the group menu', async () => {
+    const menuSlot = slot()
+    const adapter = makeAdapter(hostOrder())
+    await mountDrill(adapter, drillAt('skills', { menuSlot }))
+    const button = menuSlot.querySelector('[data-library-menu]') as HTMLButtonElement | null
+    expect(button).not.toBeNull()
+    expect(container.querySelector('[data-library-menu]')).toBeNull()
+    expect(button!.getAttribute('aria-label')).toBe(i18n.t('sidebar.moreActions'))
+    const before = menus.length
+    await act(async () => {
+      button!.click()
+    })
+    await flush()
+    expect(menus.length).toBe(before + 1)
+    expect(ids(menus.at(-1)!)).toEqual(GROUP_MENU)
+  })
+
+  it('SK-17 the default or the builtin folder switched off: its Mine / Built-in label is struck', async () => {
+    await mountDrill(
+      makeAdapter([twoBuiltins({ isEnabled: false }), defaultFolder({ isEnabled: false })]),
+      drillAt('skills')
+    )
+    expect(sectionLabel('default').className).toContain('line-through')
+    expect(sectionLabel('builtin').className).toContain('line-through')
+    expect(offRows()).toEqual(['mine', 'builtin:drawing', 'builtin:widget'])
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mountDrill(makeAdapter([twoBuiltins(), defaultFolder()]), drillAt('skills'))
+    expect(sectionLabel('default').className).not.toContain('line-through')
+    expect(sectionLabel('builtin').className).not.toContain('line-through')
+  })
+
+  it.each(['agents', 'knowledge', 'knowledge:knowledge/notes'])(
+    'SK-18 another page open (%s): nothing is drawn, yet it scanned once; skill.changed rescans',
+    async (scope) => {
+      const adapter = makeAdapter(hostOrder())
+      await mountDrill(adapter, drillAt(scope))
+      expect(container.children).toHaveLength(0)
+      expect(adapter.list).toHaveBeenCalledTimes(1)
+
+      emit('skill.changed')
+      await flush()
+      expect(adapter.list).toHaveBeenCalledTimes(2)
+
+      // 轮到自己：直接有行，不再扫
+      await mountDrill(adapter, drillAt('skills'))
+      expect(sectionKeys()).toHaveLength(5)
+      expect(adapter.list).toHaveBeenCalledTimes(2)
+    }
+  )
+
+  it('SK-18 skill.changed at the top level rescans and the count follows', async () => {
+    const adapter = makeAdapter(hostOrder())
+    await mountDrill(adapter, drillAt(null))
+    expect(navCount()).toBe(String(TOTAL))
+    adapter.list.mockResolvedValue([twoBuiltins()])
+    emit('skill.changed')
+    await flush()
+    expect(adapter.list).toHaveBeenCalledTimes(2)
+    expect(navCount()).toBe('2')
+  })
+
+  it('SK-19 without drill: nothing is scanned at mount and the header is not a nav row', async () => {
+    const adapter = makeAdapter(hostOrder())
+    await mountDrill(adapter)
+    expect(adapter.list).not.toHaveBeenCalled()
+    expect(el(GROUP).hasAttribute('data-group-nav')).toBe(false)
+    expect(container.querySelector('[data-group-count]')).toBeNull()
+    expect(container.querySelector('[data-library-page]')).toBeNull()
+
+    // 事件在展开之前不触发扫描（桌面：展开才扫）
+    emit('skill.changed')
+    await flush()
+    expect(adapter.list).not.toHaveBeenCalled()
+  })
 })

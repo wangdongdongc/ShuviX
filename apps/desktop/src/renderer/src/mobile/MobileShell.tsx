@@ -38,7 +38,12 @@ import {
   Bot
 } from 'lucide-react'
 import { ChatHostProvider, getChatApi, useChatHost, useChatStore } from '@shuvix/chat-ui'
-import { InboxPanel, useInboxSections, useProjects } from '@shuvix/app-shell'
+import {
+  InboxPanel,
+  STACKED_SETTINGS_HISTORY_MARK,
+  useInboxSections,
+  useProjects
+} from '@shuvix/app-shell'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { CalendarPanel } from '../components/browser/CalendarPanel'
 import { WidgetPanel } from '../components/browser/WidgetPanel'
@@ -50,6 +55,7 @@ import { BottomSheet } from './BottomSheet'
 import { installLongPressContextMenu } from './longPress'
 import { usePhoneFontSize } from './phoneFontSize'
 import { detailDepthOf } from './detailHistory'
+import { useTrackingAdapter } from '../host/useTrackingAdapter'
 
 type MobileTab = 'sessions' | 'widgets' | 'library' | 'settings'
 
@@ -66,11 +72,28 @@ const HISTORY_MARK = 'shuvixMobileChat'
 const WIDGET_HISTORY_MARK = 'shuvixMobileWidget'
 /** 同上，会话页进了某一组（或收件箱）时压的；在它上面再压的对话 / 小组件那一条也带着它 */
 const SCOPE_HISTORY_MARK = 'shuvixMobileScope'
+/** 同上，资料库页进了某一组（或知识库里的某个库）时压的；值是钻到了第几层 */
+const LIBRARY_HISTORY_MARK = 'shuvixMobileLibrary'
 /** 会话页第二层里「收件箱」那一页的 key（别的 key 是 ProjectSessionGroups 的组 key） */
 const INBOX_SCOPE = 'inbox'
 
 const historyHas = (mark: string): boolean =>
   Boolean((window.history.state as Record<string, unknown> | null)?.[mark])
+
+/** 当前这条历史上某个记号的数值（没有 = 0） */
+const historyNumber = (mark: string): number => {
+  const value = (window.history.state as Record<string, unknown> | null)?.[mark]
+  return typeof value === 'number' ? value : 0
+}
+
+/**
+ * 设置页此刻钻到第几层的记号（app-shell useStackedHistory 压的）：在它上面再压对话 / 小组件那一条时照样带上 ——
+ * 退回来落在这一条上，设置还该停在那个分区里
+ */
+const settingsMarkHere = (): Record<string, number> => {
+  const depth = historyNumber(STACKED_SETTINGS_HISTORY_MARK)
+  return depth > 0 ? { [STACKED_SETTINGS_HISTORY_MARK]: depth } : {}
+}
 
 const headerIcon =
   'h-10 w-10 flex items-center justify-center rounded-full text-text-secondary active:bg-bg-hover'
@@ -143,6 +166,13 @@ function MobileShellBody(): React.JSX.Element {
   /** 第二层留给列表的两个槽：顶栏右边的「⋯」和底部的工具栏（列表经 portal 画进来） */
   const [menuSlot, setMenuSlot] = useState<HTMLElement | null>(null)
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null)
+  /** 资料库页往下钻的那几层（空 = 顶层）：某一组，知识库再多一层某个库 */
+  const [libraryStack, setLibraryStack] = useState<Array<{ key: string; label: string }>>([])
+  const libraryDepthRef = useRef(0)
+  const [libraryMenuSlot, setLibraryMenuSlot] = useState<HTMLElement | null>(null)
+  const [libraryToolbarSlot, setLibraryToolbarSlot] = useState<HTMLElement | null>(null)
+  /** 设置页钻到了第几层（0 = 分区列表）：进了某个分区，标签栏收起 */
+  const [settingsDepth, setSettingsDepth] = useState(0)
   const { projects } = useProjects()
   const fontSize = usePhoneFontSize()
   const widgetApp = useWidgetStore((s) => s.foregroundApp)
@@ -157,7 +187,9 @@ function MobileShellBody(): React.JSX.Element {
     window.history.pushState(
       {
         [HISTORY_MARK]: true, // 在第二层上面再压的这一条也带上它的标记：退回来落在这一条上，第二层还该开着
-        ...(scopeRef.current ? { [SCOPE_HISTORY_MARK]: true } : {})
+        ...(scopeRef.current ? { [SCOPE_HISTORY_MARK]: true } : {}),
+        ...(libraryDepthRef.current > 0 ? { [LIBRARY_HISTORY_MARK]: libraryDepthRef.current } : {}),
+        ...settingsMarkHere()
       },
       ''
     )
@@ -170,6 +202,31 @@ function MobileShellBody(): React.JSX.Element {
       window.history.pushState({ [SCOPE_HISTORY_MARK]: true }, '')
     }
     setScope({ key, label })
+  }, [])
+
+  /** 资料库往下钻一层（某一组；知识库那一页里再点一个库）：压一条历史，带着下面那几层的记号 */
+  const openLibrary = useCallback((key: string, label: string): void => {
+    const depth = libraryDepthRef.current + 1
+    libraryDepthRef.current = depth
+    window.history.pushState(
+      {
+        ...((window.history.state as Record<string, unknown> | null) ?? {}),
+        [LIBRARY_HISTORY_MARK]: depth
+      },
+      ''
+    )
+    setLibraryStack((stack) => [...stack, { key, label }])
+  }, [])
+
+  /** 资料库那一页的返回键：退掉那一层压的历史（popstate 再收起一层），与返回手势同一条路 */
+  const backInLibrary = useCallback((): void => {
+    if (libraryDepthRef.current === 0) return
+    if (historyNumber(LIBRARY_HISTORY_MARK) === libraryDepthRef.current) {
+      window.history.back()
+    } else {
+      libraryDepthRef.current -= 1
+      setLibraryStack((stack) => stack.slice(0, -1))
+    }
   }, [])
 
   /** 第二层的返回键：退掉进组时压的那条历史（popstate 再回顶层），与返回手势同一条路 */
@@ -200,7 +257,8 @@ function MobileShellBody(): React.JSX.Element {
     if (
       historyHas(HISTORY_MARK) ||
       historyHas(WIDGET_HISTORY_MARK) ||
-      historyHas(SCOPE_HISTORY_MARK)
+      historyHas(SCOPE_HISTORY_MARK) ||
+      historyHas(LIBRARY_HISTORY_MARK)
     ) {
       window.history.replaceState(null, '')
     }
@@ -213,6 +271,12 @@ function MobileShellBody(): React.JSX.Element {
       if (scopeRef.current && !historyHas(SCOPE_HISTORY_MARK)) {
         scopeRef.current = false
         setScope(null)
+      }
+      // 资料库：退回到的那一条说它在第几层，比此刻浅就收到那一层
+      const libraryDepth = historyNumber(LIBRARY_HISTORY_MARK)
+      if (libraryDepth < libraryDepthRef.current) {
+        libraryDepthRef.current = libraryDepth
+        setLibraryStack((stack) => stack.slice(0, libraryDepth))
       }
     }
     window.addEventListener('popstate', onPop)
@@ -233,7 +297,11 @@ function MobileShellBody(): React.JSX.Element {
         window.history.pushState(
           {
             [WIDGET_HISTORY_MARK]: true, // 在第二层上面再压的这一条也带上它的标记：退回来落在这一条上，第二层还该开着
-            ...(scopeRef.current ? { [SCOPE_HISTORY_MARK]: true } : {})
+            ...(scopeRef.current ? { [SCOPE_HISTORY_MARK]: true } : {}),
+            ...(libraryDepthRef.current > 0
+              ? { [LIBRARY_HISTORY_MARK]: libraryDepthRef.current }
+              : {}),
+            ...settingsMarkHere()
           },
           ''
         )
@@ -297,6 +365,24 @@ function MobileShellBody(): React.JSX.Element {
   )
   /** 正在看某一组的会话列表（不是收件箱）：底部是那一组的工具栏，标签栏收起 */
   const groupOpen = tab === 'sessions' && scope !== null && !inboxOpen
+  /** 推入的页面不带标签栏：只有四个顶层页面有（会话页的某一组与收件箱页、设置的分区页、资料库的分组页） */
+  const libraryPage = libraryStack.length > 0 ? libraryStack[libraryStack.length - 1] : null
+  const libraryOpen = tab === 'library' && libraryPage !== null
+  const libraryDrill = useMemo(
+    () => ({
+      scope: libraryPage?.key ?? null,
+      onOpen: openLibrary,
+      menuSlot: libraryMenuSlot,
+      toolbarSlot: libraryToolbarSlot
+    }),
+    [libraryPage, openLibrary, libraryMenuSlot, libraryToolbarSlot]
+  )
+  const pushedPageOpen =
+    (tab === 'sessions' && scope !== null) ||
+    libraryOpen ||
+    (tab === 'settings' && settingsDepth > 0)
+  // 跟踪项在收件箱里（资料库不再有它的入口）
+  const trackingAdapter = useTrackingAdapter(openFromInbox)
 
   // 顶层的顶栏：日历（顶层的另一种看法）与新建。进了某一组，新建在底部的工具栏里，顶栏右边是那一组的「⋯」
   const sessionsActions = (
@@ -428,7 +514,7 @@ function MobileShellBody(): React.JSX.Element {
                 {inboxOpen && (
                   // 收件箱页：桌面右侧面板里那同一个组件，字号按手机放大
                   <div className="absolute inset-0" data-mobile-inbox="" data-mobile-scale="">
-                    <InboxPanel onSelectSession={openFromInbox} />
+                    <InboxPanel tracking={trackingAdapter} onSelectSession={openFromInbox} />
                   </div>
                 )}
                 {calendarMounted && (
@@ -468,9 +554,36 @@ function MobileShellBody(): React.JSX.Element {
               className="absolute inset-0 flex flex-col"
               style={tab === 'library' ? undefined : { display: 'none' }}
             >
-              {pageTitle(t('mobile.tabLibrary'))}
+              {libraryPage ? (
+                <>
+                  {/* 推入页的顶栏：返回写着上一层的名字，右边是这一组的菜单「⋯」（列表画进来） */}
+                  <div className="flex items-center pl-2 pr-2 pt-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      data-mobile-library-back=""
+                      onClick={backInLibrary}
+                      className="flex h-9 max-w-[70%] items-center gap-0.5 rounded-full pl-1 pr-3 text-[16px] text-accent active:bg-bg-hover"
+                    >
+                      <ChevronLeft size={22} className="flex-shrink-0" aria-hidden="true" />
+                      <span className="truncate">
+                        {libraryStack.length > 1
+                          ? libraryStack[libraryStack.length - 2].label
+                          : t('mobile.tabLibrary')}
+                      </span>
+                    </button>
+                    <div
+                      ref={setLibraryMenuSlot}
+                      data-mobile-library-menu-slot=""
+                      className="ml-auto"
+                    />
+                  </div>
+                  <div data-mobile-library-title="">{pageTitle(libraryPage.label)}</div>
+                </>
+              ) : (
+                pageTitle(t('mobile.tabLibrary'))
+              )}
               <div className="flex-1 min-h-0">
-                <Sidebar mode="library" onOpenSession={openChat} />
+                <Sidebar mode="library" onOpenSession={openChat} libraryDrill={libraryDrill} />
               </div>
             </section>
           )}
@@ -483,9 +596,12 @@ function MobileShellBody(): React.JSX.Element {
             >
               <SettingsPanel
                 stacked
+                onStackedDepthChange={setSettingsDepth}
                 extraTabs={[
                   {
                     id: 'agents',
+                    // 与监视器、已归档同一张卡片
+                    group: 'maintenance',
                     label: t('panel.agents'),
                     icon: <Bot size={14} />,
                     content: <AgentMonitorPanel active={tab === 'settings' && !chatOpen} />
@@ -503,11 +619,18 @@ function MobileShellBody(): React.JSX.Element {
           className="flex-shrink-0 border-t border-border-secondary/60 bg-bg-secondary/80 pb-[env(safe-area-inset-bottom)]"
           style={groupOpen ? undefined : { display: 'none' }}
         />
-        {/* 底部标签栏（小组件整屏开着、或某一组的会话列表开着时收起） */}
+        {/* 资料库某一组的那一页：底部是它的工具栏（数量 · 新建），同样由列表画进这个槽里 */}
+        <div
+          ref={setLibraryToolbarSlot}
+          data-mobile-library-toolbar-slot=""
+          className="flex-shrink-0 border-t border-border-secondary/60 bg-bg-secondary/80 pb-[env(safe-area-inset-bottom)]"
+          style={libraryOpen ? undefined : { display: 'none' }}
+        />
+        {/* 底部标签栏：只有四个顶层页面有 —— 小组件整屏开着、或任何一页推入的页面开着时收起 */}
         <nav
           data-mobile-tabbar=""
           className="flex-shrink-0 flex border-t border-border-secondary/60 bg-bg-secondary/80 pb-[env(safe-area-inset-bottom)]"
-          style={widgetAppOpen || groupOpen ? { display: 'none' } : undefined}
+          style={widgetAppOpen || pushedPageOpen ? { display: 'none' } : undefined}
         >
           {TABS.map(({ key, labelKey, Icon }) => (
             <button

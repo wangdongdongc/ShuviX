@@ -34,6 +34,12 @@ import {
 import { builtinSkillCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
+import {
+  LibraryPage,
+  type LibraryDrill,
+  type LibraryPageRow,
+  type LibraryPageSection
+} from './LibraryPage'
 import { RowMenuButton } from './RowMenuButton'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { useFocusDim } from './useFocusDim'
@@ -99,9 +105,11 @@ export interface SkillGroupAdapter {
 
 export interface SkillGroupProps {
   adapter: SkillGroupAdapter
+  /** 两层导航（手机布局的资料库，见 LibraryPage）：顶层画一行导航行，轮到自己时只画这一组的那一页 */
+  drill?: LibraryDrill
 }
 
-export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
+export function SkillGroup({ adapter, drill }: SkillGroupProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
   const showContextMenu = useContextMenu()
@@ -151,6 +159,20 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
     setCollapsed(next)
     if (!next) void scan()
   }
+
+  // 两层导航：顶层那一行要写数量，一挂上就扫（桌面的树是展开时才扫）
+  const drilling = drill !== undefined
+  useEffect(() => {
+    if (!drilling) return
+    let alive = true
+    // 延后一拍：扫描回来才写状态，不在 effect 里同步动它
+    void Promise.resolve().then(() => {
+      if (alive) void scan()
+    })
+    return () => {
+      alive = false
+    }
+  }, [drilling, scan])
 
   const toggleDir = (dirName: string): void =>
     setOpenDirs((prev) => {
@@ -306,6 +328,103 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
           onOpen={(e) => openSkillMenu(folder, skill, e)}
         />
       </div>
+    )
+  }
+
+  if (drill) {
+    const label = t('sidebar.skillsGroup')
+    const folders = scanned ?? []
+    const total = folders.reduce((n, folder) => n + folder.skills.length, 0)
+    if (drill.scope === null) {
+      return (
+        <SessionGroup
+          label={label}
+          variant="skills"
+          onMenu={openGroupMenu}
+          nav={{ key: 'skills', count: total, onOpen: () => drill.onOpen('skills', label) }}
+        >
+          {null}
+        </SessionGroup>
+      )
+    }
+    if (drill.scope !== 'skills') return null
+    const rowOf = (folder: SkillGroupFolder, skill: SkillGroupItem): LibraryPageRow => {
+      // 整组关掉时组内技能一律失效 —— 行上要看得出来
+      const off = !skill.isEnabled || !folder.isEnabled
+      // 内置技能以本地化名字为主，标识名并排留着；说明也换成界面文案
+      const copy = folder.isBuiltin ? builtinSkillCopy(skill.name, t) : undefined
+      const showIdentifier = !!copy && !sameAsIdentifier(copy.label, skill.displayName)
+      return {
+        key: skill.name,
+        attrs: { 'data-skill-row': skill.name, ...(off ? { 'data-skill-off': '' } : {}) },
+        title: copy?.label ?? skill.displayName,
+        identifier: showIdentifier ? skill.displayName : undefined,
+        description: copy?.hint ?? skill.description,
+        locked: folder.isBuiltin,
+        struck: off,
+        dimmed: off,
+        badge: off ? t('sidebar.disabledBadge') : undefined,
+        onOpen: () => void adapter.open(skill),
+        onMenu: (e) => openSkillMenu(folder, skill, e)
+      }
+    }
+    // 自己的在上（默认目录），然后是共用 / 外部目录各一节（空目录也画：移除入口在它的菜单上），内置在最后
+    const sections: LibraryPageSection[] = [
+      ...folders
+        .filter((folder) => folder.isDefault)
+        .map(
+          (folder): LibraryPageSection => ({
+            key: `dir:${folder.dirName}`,
+            label: t('mobile.libraryMine'),
+            off: !folder.isEnabled,
+            rows: folder.skills.map((skill) => rowOf(folder, skill))
+          })
+        ),
+      ...folders
+        .filter((folder) => !folder.isDefault && !folder.isBuiltin)
+        .map(
+          (folder): LibraryPageSection => ({
+            key: `dir:${folder.dirName}`,
+            label: folder.label ?? folder.dirName,
+            attrs: {
+              'data-skill-folder': folder.dirName,
+              ...(folder.isEnabled ? {} : { 'data-skill-off': '' })
+            },
+            off: !folder.isEnabled,
+            onMenu: (e) => openFolderMenu(folder, e),
+            rows: folder.skills.map((skill) => rowOf(folder, skill)),
+            emptyHint: t('settings.skillEmpty')
+          })
+        ),
+      ...folders
+        .filter((folder) => folder.isBuiltin)
+        .map(
+          (folder): LibraryPageSection => ({
+            key: `dir:${folder.dirName}`,
+            label: t('mobile.libraryBuiltin'),
+            off: !folder.isEnabled,
+            rows: folder.skills.map((skill) => rowOf(folder, skill))
+          })
+        )
+    ]
+    const own = folders
+      .filter((folder) => !folder.isBuiltin)
+      .reduce((n, folder) => n + folder.skills.length, 0)
+    return (
+      <LibraryPage
+        pageKey="skills"
+        drill={drill}
+        sections={sections}
+        emptyHint={t('settings.skillEmpty')}
+        countText={[
+          t('mobile.libraryCount', { count: total, name: label }),
+          own > 0 ? t('mobile.libraryOwn', { count: own }) : ''
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        onMenu={openGroupMenu}
+        menuLabel={t('sidebar.moreActions')}
+      />
     )
   }
 

@@ -23,7 +23,13 @@ import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
-import { buildKnowledgeTree } from './knowledgeTree'
+import { buildKnowledgeTree, type KnowledgeTreeDir } from './knowledgeTree'
+import {
+  LIBRARY_KNOWLEDGE_BASE_PREFIX,
+  LibraryPage,
+  type LibraryDrill,
+  type LibraryPageRow
+} from './LibraryPage'
 import {
   EMPTY_KNOWLEDGE_LISTING,
   KnowledgeTreeView,
@@ -42,6 +48,11 @@ export type {
 
 export interface KnowledgeGroupProps {
   adapter: KnowledgeGroupAdapter
+  /**
+   * 两层导航（手机布局的资料库，见 LibraryPage）：顶层画一行导航行；`knowledge` 那一页是各个库，
+   * `knowledge:<库的路径>` 是那个库里的文件夹与条目（文件夹照旧就地展开）
+   */
+  drill?: LibraryDrill
 }
 
 /**
@@ -51,7 +62,7 @@ const OWNED_CONTAINERS = [KNOWLEDGE_PROJECTS_DIR, KNOWLEDGE_BOTS_DIR]
 const notProjectBundle = (id: string): boolean =>
   !OWNED_CONTAINERS.some((c) => id === c || id.startsWith(`${c}/`))
 
-export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Element {
+export function KnowledgeGroup({ adapter, drill }: KnowledgeGroupProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
   const showContextMenu = useContextMenu()
@@ -104,6 +115,20 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     if (!next) void scan()
   }
 
+  // 两层导航：顶层那一行要写数量，一挂上就扫（桌面的树是展开时才扫）
+  const drilling = drill !== undefined
+  useEffect(() => {
+    if (!drilling) return
+    let alive = true
+    // 延后一拍：扫描回来才写状态，不在 effect 里同步动它
+    void Promise.resolve().then(() => {
+      if (alive) void scan()
+    })
+    return () => {
+      alive = false
+    }
+  }, [drilling, scan])
+
   const toggleDir = (path: string): void =>
     setToggled((prev) => {
       const next = new Set(prev)
@@ -126,6 +151,12 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
 
   /** 建库的输入行长在根上：组先展开 —— 输入框长在收着的地方没人看得见 */
   const startBaseDraft = (): void => {
+    if (drill) {
+      // 两层导航：输入行长在「知识库」那一页的最上面 —— 还在资料库顶层就先进那一页
+      if (drill.scope !== 'knowledge') drill.onOpen('knowledge', t('sidebar.knowledgeGroup'))
+      drafts.start('base', '')
+      return
+    }
     if (collapsed) {
       setCollapsed(false)
       void scan()
@@ -147,6 +178,139 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       if (action === 'open-folder') void adapter.openFolder()
       if (action === 'refresh') void scan()
     })
+  }
+
+  if (drill) {
+    const label = t('sidebar.knowledgeGroup')
+    /** 一个目录里（连同更深的各层）有几个条目 */
+    const entryCount = (dir: KnowledgeTreeDir): number =>
+      dir.files.length + dir.dirs.reduce((n, child) => n + entryCount(child), 0)
+    const nameOf = (dir: KnowledgeTreeDir): string => dir.title ?? dir.name
+    if (drill.scope === null) {
+      return (
+        <SessionGroup
+          label={label}
+          variant="knowledge"
+          onMenu={openGroupMenu}
+          nav={{
+            key: 'knowledge',
+            count: tree.dirs.length,
+            onOpen: () => drill.onOpen('knowledge', label)
+          }}
+        >
+          {null}
+        </SessionGroup>
+      )
+    }
+    if (drill.scope === 'knowledge') {
+      const rowOf = (dir: KnowledgeTreeDir): LibraryPageRow => ({
+        key: dir.path,
+        attrs: { 'data-knowledge-dir': dir.path },
+        title: nameOf(dir),
+        description: t('mobile.libraryEntries', { count: entryCount(dir) }),
+        locked: dir.readonly,
+        onOpen: () => drill.onOpen(`${LIBRARY_KNOWLEDGE_BASE_PREFIX}${dir.path}`, nameOf(dir))
+      })
+      const own = tree.dirs.filter((dir) => !dir.readonly)
+      return (
+        <LibraryPage
+          pageKey="knowledge"
+          drill={drill}
+          header={drafts.draft?.kind === 'base' ? renderKnowledgeDraft(drafts, 0) : undefined}
+          sections={[
+            { key: 'mine', label: t('mobile.libraryMine'), rows: own.map(rowOf) },
+            {
+              key: 'builtin',
+              label: t('mobile.libraryBuiltin'),
+              rows: tree.dirs.filter((dir) => dir.readonly).map(rowOf)
+            }
+          ]}
+          emptyHint={t('sidebar.knowledgeEmpty')}
+          countText={[
+            t('mobile.libraryCount', { count: tree.dirs.length, name: label }),
+            own.length > 0 ? t('mobile.libraryOwn', { count: own.length }) : ''
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+          onNew={adapter.createBase ? () => drafts.start('base', '') : undefined}
+          newLabel={t('knowledge.newBase')}
+          onMenu={openGroupMenu}
+          menuLabel={t('sidebar.moreActions')}
+        />
+      )
+    }
+    if (!drill.scope.startsWith(LIBRARY_KNOWLEDGE_BASE_PREFIX)) return null
+    // 某个库的那一页：它里面的文件夹与条目（文件夹照旧就地展开）；库不在了（外面删掉了）就是一句空态
+    const basePath = drill.scope.slice(LIBRARY_KNOWLEDGE_BASE_PREFIX.length)
+    const base = tree.dirs.find((dir) => dir.path === basePath)
+    const writable = !!base && !base.readonly
+    const openBaseMenu = (e: React.MouseEvent): void => {
+      const items: ContextMenuItem[] = [
+        ...(writable && adapter.createEntry
+          ? [{ id: 'new-entry', label: t('knowledge.newEntry') }]
+          : []),
+        ...(writable && adapter.createFolder
+          ? [{ id: 'new-folder', label: t('knowledge.newFolder') }]
+          : []),
+        ...(writable ? [{ type: 'separator' as const }] : []),
+        { id: 'refresh', label: t('panel.filesRefresh') }
+      ]
+      void showContextMenu(e, items, (action) => {
+        if (action === 'new-entry') drafts.start('entry', basePath)
+        if (action === 'new-folder') drafts.start('folder', basePath)
+        if (action === 'refresh') void scan()
+      })
+    }
+    return (
+      <LibraryPage
+        pageKey={drill.scope}
+        drill={drill}
+        sections={[]}
+        countText={t('mobile.libraryEntriesCount', { count: base ? entryCount(base) : 0 })}
+        onNew={writable && adapter.createEntry ? () => drafts.start('entry', basePath) : undefined}
+        newLabel={t('knowledge.newEntry')}
+        onMenu={openBaseMenu}
+        menuLabel={t('sidebar.moreActions')}
+      >
+        {scanned !== null && (
+          <div
+            data-library-knowledge-base={basePath}
+            // 有内容时整棵树收进一张分组卡片（与别的分组页同一副样子）
+            className={base && base.files.length + base.dirs.length > 0 ? 'sb-card' : undefined}
+          >
+            {base ? (
+              <>
+                {/* 往库的根上新建：输入行长在最上面（更深一层的由那一层的目录行自己画） */}
+                {drafts.draft && drafts.draft.kind !== 'base' && drafts.draft.parent === basePath
+                  ? renderKnowledgeDraft(drafts, 0)
+                  : null}
+                <KnowledgeTreeView
+                  adapter={adapter}
+                  listing={scanned}
+                  files={base.files}
+                  dirs={base.dirs}
+                  depth={0}
+                  drafts={drafts}
+                  isDirOpen={isDirOpen}
+                  toggleDir={toggleDir}
+                  activeNotePath={null}
+                  dimInactive={false}
+                />
+                {base.files.length === 0 && base.dirs.length === 0 && !drafts.draft && (
+                  <div data-library-empty="" className="sb-hint">
+                    {t('sidebar.knowledgeEmpty')}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div data-library-empty="" className="sb-hint">
+                {t('mobile.scopeGone')}
+              </div>
+            )}
+          </div>
+        )}
+      </LibraryPage>
+    )
   }
 
   return (

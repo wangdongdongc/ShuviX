@@ -5,7 +5,8 @@
  * 契约：`full`（缺省，桌面）= 共享侧栏 + 窗口拖拽 / 悬浮徽标 + 底部设置栏 + 五个资料库分组（智能体 →
  * 安全策略 → Hooks → 技能 → 知识库；跟踪项 2026-11-10 起在收件箱页里，桌面侧栏没有这一组了）；`sessions`（手机
  * 「会话」页）= 共享侧栏，不带任何 caps、不画底部设置栏、不画那几组；`library`（手机「资料库」页）= 不画共享侧栏，
- * 跟踪项（手机还没有收件箱，先留在这里）+ 那五组，装在 `[data-mobile-list]` 里。
+ * 只有那五组（跟踪项在收件箱页里），装在 `[data-mobile-list]` 里；给了 `libraryDrill`（两层导航）时那五组分在两张
+ * `[data-library-card]` 里（智能体 / 技能 / 知识库，安全策略 / Hooks），各组都拿到同一个 `drill`。
  * Bots 不在资料库里了（2026-10-31）：它是共享侧栏的一节（`bots` 能力，bot 会话收在各自 bot 名下），full 与
  * sessions 两种画法都带着它。
  * 侧栏里每一次「打开会话」（点行，同一个再点一次也算；笔记本会话）都先写 store、再告诉 `onOpenSession`；
@@ -14,7 +15,8 @@
  *
  *   DS-1 full：caps {windowDrag, pin}、hideFooter false、groupsPrepend = Agent, Policy, Hook, Skill, Knowledge（没有 Tracking）
  *   DS-2 sessions：caps {}、hideFooter true、没有分组
- *   DS-3 library：没有共享侧栏；Tracking + 五组都在 [data-mobile-list] 里
+ *   DS-3 library（不给 libraryDrill）：没有共享侧栏；五组按桌面的顺序在 [data-mobile-list] 里，没有 Tracking、
+ *        没有 [data-library-card]，各组的 drill 是 undefined
  *   DS-4 拿到的 onSelectSession('s1') 叫两次 → store 写两次、onOpenSession 两次；null 不到 onOpenSession
  *   DS-5 Bots 分节 adapter 的 open('a.md') → onOpenSession(新会话 id)
  *   DS-6 换了回调重渲染 → 用新的；adapter 对象引用不变
@@ -39,6 +41,10 @@ type Props = Record<string, unknown>
 const rec = vi.hoisted(() => ({
   shared: [] as Array<Record<string, unknown>>,
   groups: new Map<string, unknown[]>(),
+  /** 各分组替身每次渲染收到的 `drill` */
+  groupDrills: new Map<string, unknown[]>(),
+  /** 各分组替身挂上了几次（重挂 = 扫到的清单丢了） */
+  groupMounts: new Map<string, number>(),
   confirms: [] as Array<Record<string, unknown>>,
   storeSet: null as unknown as Mock<(id: string | null) => void>,
   state: {
@@ -60,11 +66,16 @@ const rec = vi.hoisted(() => ({
 }))
 
 vi.mock('@shuvix/app-shell', async () => {
-  const { createElement: h, Fragment } = await import('react')
+  const { createElement: h, Fragment, useEffect } = await import('react')
   const projectsStub = { projects: [], archivedProjects: [] }
-  const group = (name: string) => (props: { adapter: unknown }) => {
+  const group = (name: string) => (props: { adapter: unknown; drill?: unknown }) => {
     if (!rec.groups.has(name)) rec.groups.set(name, [])
     rec.groups.get(name)!.push(props.adapter)
+    if (!rec.groupDrills.has(name)) rec.groupDrills.set(name, [])
+    rec.groupDrills.get(name)!.push(props.drill)
+    useEffect(() => {
+      rec.groupMounts.set(name, (rec.groupMounts.get(name) ?? 0) + 1)
+    }, [])
     return h('div', { 'data-stub-group': name })
   }
   return {
@@ -87,6 +98,8 @@ vi.mock('@shuvix/app-shell', async () => {
     HookGroup: group('Hook'),
     SkillGroup: group('Skill'),
     KnowledgeGroup: group('Knowledge'),
+    // 侧栏按它认「知识库某个库的那一页」比「知识库那一页」深一层（滚动位置）
+    LIBRARY_KNOWLEDGE_BASE_PREFIX: 'knowledge:',
     // 与真 hook 一样给稳定的引用（它的两张表都是 state）
     useProjects: () => projectsStub,
     useSessionDelete: () => ({ requestDelete: () => undefined, deleteDialog: null }),
@@ -151,8 +164,6 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 /** 桌面侧栏资料库里的那几组（跟踪项不在：它在收件箱页） */
 const GROUP_ORDER = ['Agent', 'Policy', 'Hook', 'Skill', 'Knowledge']
-/** 手机资料库页：跟踪项打头，然后同那几组 */
-const MOBILE_LIBRARY_ORDER = ['Tracking', ...GROUP_ORDER]
 
 const api = {
   bot: {
@@ -206,6 +217,8 @@ function render(props: SidebarProps = {}): void {
 
 const lastShared = (): Record<string, unknown> => rec.shared.at(-1)!
 const lastAdapter = (name: string): unknown => rec.groups.get(name)?.at(-1)
+/** 某一组的替身最近一次收到的 `drill` */
+const lastDrill = (name: string): unknown => rec.groupDrills.get(name)?.at(-1)
 /** 「Bots」分节的 adapter（交给共享侧栏的 `bots` 能力） */
 const botsAdapter = (): unknown => (lastShared().bots as { adapter: unknown } | undefined)?.adapter
 const stubGroups = (scope: ParentNode = container): string[] =>
@@ -222,6 +235,8 @@ beforeAll(async () => {
 beforeEach(() => {
   rec.shared.length = 0
   rec.groups.clear()
+  rec.groupDrills.clear()
+  rec.groupMounts.clear()
   rec.confirms.length = 0
   rec.state.sessions = []
   rec.state.activeSessionId = null
@@ -266,14 +281,17 @@ describe('desktop Sidebar modes', () => {
     expect(rec.groups.size).toBe(0)
   })
 
-  it('DS-3 library: no shared sidebar; Tracking + the five groups inside [data-mobile-list]', () => {
+  it('DS-3 library without libraryDrill: no shared sidebar; the five groups in the desktop order inside [data-mobile-list], no Tracking, no cards, no drill', () => {
     render({ mode: 'library' })
     expect(rec.shared).toHaveLength(0)
     expect(container.querySelector('[data-stub-shared]')).toBeNull()
     const list = container.querySelector('[data-mobile-list]')
     expect(list).not.toBeNull()
-    expect(stubGroups(list!)).toEqual(MOBILE_LIBRARY_ORDER)
-    expect(stubGroups()).toEqual(MOBILE_LIBRARY_ORDER)
+    expect(stubGroups(list!)).toEqual(GROUP_ORDER)
+    expect(stubGroups()).toEqual(GROUP_ORDER)
+    expect(rec.groups.has('Tracking')).toBe(false)
+    expect(container.querySelector('[data-library-card]')).toBeNull()
+    for (const name of GROUP_ORDER) expect(lastDrill(name), name).toBeUndefined()
   })
 
   it('DS-4 every open — the same session twice too — writes the store and tells onOpenSession; null never reaches it', async () => {
@@ -371,6 +389,12 @@ describe('INT-7 the inbox row', () => {
       expect(rec.inboxRow).toHaveLength(0)
     }
   )
+
+  it('INT-7 / DS-17 library with a libraryDrill: still no inbox row', () => {
+    render({ mode: 'library', libraryDrill: { scope: null, onOpen: vi.fn() } })
+    expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
+    expect(rec.inboxRow).toHaveLength(0)
+  })
 })
 
 /**
@@ -577,5 +601,216 @@ describe('drill and sessionsPrepend (phone sessions page)', () => {
     expect(rec.shared).toHaveLength(0)
     expect(container.querySelector('[data-stub-shared]')).toBeNull()
     expect(container.querySelector('[data-sp]')).toBeNull()
+  })
+
+  it('DS-17 library with a libraryDrill: still no shared sidebar and no sessionsPrepend', () => {
+    const drill = { scope: 'p1', onOpen: vi.fn() }
+    render({
+      mode: 'library',
+      drill,
+      sessionsPrepend: marker(),
+      libraryDrill: { scope: null, onOpen: vi.fn() }
+    })
+    expect(rec.shared).toHaveLength(0)
+    expect(container.querySelector('[data-stub-shared]')).toBeNull()
+    expect(container.querySelector('[data-sp]')).toBeNull()
+    expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
+  })
+})
+
+/**
+ * 资料库的两层导航（手机布局的资料库页）：`libraryDrill` 只在 `mode="library"` 时用。
+ *
+ *   DS-12 顶层（scope null）：两张 [data-library-card]（都带 sb-card；第二张有内联的上边距）—— 智能体 / 技能 / 知识库，
+ *         安全策略 / Hooks；没有 Tracking；各组拿到的 drill 就是传进来的那个对象
+ *   DS-13 进了某一组：还是两张 [data-library-card]，但不带 sb-card、没有内联边距；五组都还挂着（没有重挂）、
+ *         拿到新的 drill，adapter 引用不变
+ *   DS-14 full / sessions 不认 libraryDrill
+ *   DS-15 libraryDrill 换了对象，各组的 adapter 引用不变
+ *   DS-16 资料库分组 adapter 的 open → 写 store、告诉 onOpenSession；同一份再开一次也告诉（手机要再推一次对话页）
+ *   DS-18 各层共用 [data-mobile-list] 这一个滚动容器（B6）：往下钻一层回到顶上，退回来回到离开那一层时的位置
+ *         （位置在 scroll 事件里记）；同一层横着换（点不出来，只有重渲染能到）走「退回来」那条路：记过就回到记的
+ *         位置，没记过回 0；不给 libraryDrill 时谁也不碰 scrollTop
+ */
+describe('libraryDrill (phone library page)', () => {
+  const LIBRARY_CARDS = [
+    ['Agent', 'Skill', 'Knowledge'],
+    ['Policy', 'Hook']
+  ]
+  const cards = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-library-card]')
+  ]
+  const scroller = (): HTMLElement => container.querySelector<HTMLElement>('[data-mobile-list]')!
+  /** 用户把列表滚到 `top`（jsdom 的 scrollTop 是个普通属性；React 的 onScroll 直接挂在元素上） */
+  function scrollTo(top: number): void {
+    act(() => {
+      scroller().scrollTop = top
+      scroller().dispatchEvent(new Event('scroll'))
+    })
+  }
+  const libraryAt = (scope: string | null, onOpen = vi.fn()): SidebarProps => ({
+    mode: 'library',
+    libraryDrill: { scope, onOpen }
+  })
+
+  it('DS-12 the top level: two cards (agents / skills / knowledge, policies / hooks), no Tracking, every group gets the same drill object', () => {
+    const libraryDrill = { scope: null, onOpen: vi.fn() }
+    render({ mode: 'library', libraryDrill })
+    expect(rec.shared).toHaveLength(0)
+    const list = scroller()
+    expect(list.getAttribute('data-sidebar-density')).toBe('touch')
+    expect(cards()).toHaveLength(2)
+    expect(cards().map((card) => stubGroups(card))).toEqual(LIBRARY_CARDS)
+    for (const card of cards()) {
+      expect(list.contains(card)).toBe(true)
+      expect(card.classList.contains('sb-card')).toBe(true)
+    }
+    expect(cards()[0].style.marginTop).toBe('')
+    expect(cards()[1].getAttribute('style') ?? '').toContain('margin-top')
+    expect(container.querySelector('[data-stub-group="Tracking"]')).toBeNull()
+    expect(rec.groups.has('Tracking')).toBe(false)
+    for (const name of GROUP_ORDER) expect(lastDrill(name), name).toBe(libraryDrill)
+  })
+
+  it('DS-13 a group page open: the same two wrappers without the card look; the five groups stay mounted with the new drill', () => {
+    render(libraryAt(null))
+    const adaptersBefore = GROUP_ORDER.map(lastAdapter)
+    const mountsBefore = GROUP_ORDER.map((name) => rec.groupMounts.get(name))
+    expect(mountsBefore).toEqual([1, 1, 1, 1, 1])
+
+    const libraryDrill = { scope: 'agents', onOpen: vi.fn() }
+    render({ mode: 'library', libraryDrill })
+    expect(cards()).toHaveLength(2)
+    expect(cards().map((card) => stubGroups(card))).toEqual(LIBRARY_CARDS)
+    for (const card of cards()) {
+      expect(card.classList.contains('sb-card')).toBe(false)
+      expect(card.getAttribute('style') ?? '').not.toContain('margin-top')
+    }
+    for (const name of GROUP_ORDER) expect(lastDrill(name), name).toBe(libraryDrill)
+    expect(GROUP_ORDER.map((name) => rec.groupMounts.get(name))).toEqual(mountsBefore)
+    GROUP_ORDER.forEach((name, i) => expect(lastAdapter(name), name).toBe(adaptersBefore[i]))
+  })
+
+  it('DS-14 full and sessions ignore libraryDrill', () => {
+    const libraryDrill = { scope: 'agents', onOpen: vi.fn() }
+    render({ libraryDrill })
+    expect(stubGroups()).toEqual(GROUP_ORDER)
+    for (const name of GROUP_ORDER) expect(lastDrill(name), name).toBeUndefined()
+    expect(container.querySelector('[data-stub-inbox-row]')).not.toBeNull()
+    expect(container.querySelector('[data-library-card]')).toBeNull()
+    expect(container.querySelector('[data-mobile-list]')).toBeNull()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    rec.groups.clear()
+    rec.groupDrills.clear()
+    render({ mode: 'sessions', libraryDrill })
+    expect(stubGroups()).toEqual([])
+    expect(rec.groups.size).toBe(0)
+    expect(container.querySelector('[data-library-card]')).toBeNull()
+  })
+
+  it('DS-15 a new libraryDrill object on re-render leaves the adapters’ identity alone', () => {
+    render(libraryAt(null))
+    const adaptersBefore = GROUP_ORDER.map(lastAdapter)
+    render(libraryAt(null))
+    render(libraryAt('knowledge'))
+    render(libraryAt('knowledge:knowledge/notes'))
+    GROUP_ORDER.forEach((name, i) => expect(lastAdapter(name), name).toBe(adaptersBefore[i]))
+    expect(GROUP_ORDER.map((name) => rec.groupMounts.get(name))).toEqual([1, 1, 1, 1, 1])
+  })
+
+  it('DS-16 a library adapter’s open writes the store and tells onOpenSession, also when that note is opened again', async () => {
+    const onOpenSession = vi.fn()
+    const openNote = vi.fn(async (_arg: { fileName: string; title?: string }) => ({ id: 'n9' }))
+    ;(window as unknown as { api: Record<string, unknown> }).api = {
+      ...api,
+      subAgent: { openNote }
+    }
+    render({ mode: 'library', onOpenSession, libraryDrill: { scope: 'agents', onOpen: vi.fn() } })
+    const agents = lastAdapter('Agent') as {
+      open: (fileName: string, title?: string) => Promise<void>
+    }
+    await act(async () => {
+      await agents.open('a.md', 'A')
+    })
+    expect(openNote).toHaveBeenCalledWith({ fileName: 'a.md', title: 'A' })
+    expect(rec.storeSet.mock.calls).toEqual([['n9']])
+    expect(onOpenSession.mock.calls).toEqual([['n9']])
+
+    // 已经是活跃的那一份再开一次：手机还得再推一次对话页
+    await act(async () => {
+      await agents.open('a.md', 'A')
+    })
+    expect(rec.storeSet.mock.calls).toEqual([['n9'], ['n9']])
+    expect(onOpenSession.mock.calls).toEqual([['n9'], ['n9']])
+  })
+
+  it('DS-18 going deeper resets the scroller to the top; going back returns to the position recorded for that page', () => {
+    render(libraryAt(null))
+    expect(scroller().scrollTop).toBe(0)
+
+    render(libraryAt('knowledge'))
+    expect(scroller().scrollTop).toBe(0)
+    scrollTo(300)
+
+    render(libraryAt('knowledge:knowledge/notes'))
+    expect(scroller().scrollTop).toBe(0)
+    scrollTo(50)
+
+    render(libraryAt('knowledge'))
+    expect(scroller().scrollTop).toBe(300)
+
+    // 顶层从没滚过：回到 0
+    render(libraryAt(null))
+    expect(scroller().scrollTop).toBe(0)
+  })
+
+  it('DS-18 the top level’s own position comes back after a group page', () => {
+    render(libraryAt(null))
+    scrollTo(200)
+    render(libraryAt('agents'))
+    expect(scroller().scrollTop).toBe(0)
+    scrollTo(40)
+    render(libraryAt(null))
+    expect(scroller().scrollTop).toBe(200)
+  })
+
+  it('DS-18 entering a page again starts at the top: the position recorded on an earlier visit is dropped', () => {
+    render(libraryAt(null))
+    render(libraryAt('agents'))
+    scrollTo(120)
+    render(libraryAt(null))
+    render(libraryAt('agents'))
+    expect(scroller().scrollTop).toBe(0)
+  })
+
+  it('DS-18 sideways at the same depth (re-render only): the stored position of that page, or 0', () => {
+    render(libraryAt(null))
+    render(libraryAt('agents'))
+    scrollTo(120)
+    // 同一层换一组不算「往下钻」：没记过 → 0
+    render(libraryAt('skills'))
+    expect(scroller().scrollTop).toBe(0)
+    scrollTo(70)
+    // 记过的那一页 → 回到记的位置
+    render(libraryAt('agents'))
+    expect(scroller().scrollTop).toBe(120)
+  })
+
+  it('DS-18 a re-render at the same scope leaves the scroll position alone', () => {
+    render(libraryAt('agents'))
+    scrollTo(90)
+    render(libraryAt('agents'))
+    expect(scroller().scrollTop).toBe(90)
+  })
+
+  it('DS-18 without libraryDrill nothing touches scrollTop', () => {
+    render({ mode: 'library' })
+    scrollTo(77)
+    render({ mode: 'library' })
+    expect(scroller().scrollTop).toBe(77)
+    render({ mode: 'library', onOpenSession: vi.fn() })
+    expect(scroller().scrollTop).toBe(77)
   })
 })

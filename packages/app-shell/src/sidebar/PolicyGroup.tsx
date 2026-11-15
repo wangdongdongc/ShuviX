@@ -28,6 +28,7 @@ import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
+import { LibraryPage, registrySections, type LibraryDrill } from './LibraryPage'
 import { RowMenuButton } from './RowMenuButton'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
@@ -92,6 +93,8 @@ export interface PolicyGroupAdapter {
 
 export interface PolicyGroupProps {
   adapter: PolicyGroupAdapter
+  /** 两层导航（手机布局的资料库，见 LibraryPage）：顶层画一行导航行，轮到自己时只画这一组的那一页 */
+  drill?: LibraryDrill
 }
 
 /** 展示顺序：内置始终置顶（同设置页），组内保持后端的排序 —— 同名的几份本就挨着 */
@@ -99,7 +102,7 @@ function orderPolicies(list: PolicyGroupItem[]): PolicyGroupItem[] {
   return [...list.filter((p) => p.source === 'builtin'), ...list.filter((p) => p.source === 'user')]
 }
 
-export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
+export function PolicyGroup({ adapter, drill }: PolicyGroupProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
   const showContextMenu = useContextMenu()
@@ -164,6 +167,20 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
     setCollapsed(next)
     if (!next) void scan()
   }
+
+  // 两层导航：顶层那一行要写数量，一挂上就扫（桌面的树是展开时才扫）
+  const drilling = drill !== undefined
+  useEffect(() => {
+    if (!drilling) return
+    let alive = true
+    // 延后一拍：扫描回来才写状态，不在 effect 里同步动它
+    void Promise.resolve().then(() => {
+      if (alive) void scan()
+    })
+    return () => {
+      alive = false
+    }
+  }, [drilling, scan])
 
   /** 打开一份用户策略 / 非法文件的笔记（已经是活动的那份就别重复开） */
   const openFile = (fileName: string, title?: string): void => {
@@ -243,6 +260,79 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
             dim && isNoteActive ? 'opacity-30 hover:opacity-100' : ''
           }`
     }`
+
+  if (drill) {
+    const label = t('sidebar.policiesGroup')
+    const items = scanned?.policies ?? []
+    // 数的是在生效的那几份（同名里被压过的不算）
+    const live = items.filter((item) => !item.overridden)
+    if (drill.scope === null) {
+      return (
+        <SessionGroup
+          label={label}
+          variant="policies"
+          onMenu={openGroupMenu}
+          nav={{
+            key: 'policies',
+            count: live.length,
+            onOpen: () => drill.onOpen('policies', label)
+          }}
+        >
+          {null}
+        </SessionGroup>
+      )
+    }
+    if (drill.scope !== 'policies') return null
+    const own = live.filter((item) => item.source === 'user').length
+    return (
+      <LibraryPage
+        pageKey="policies"
+        drill={drill}
+        sections={registrySections(items, scanned?.invalid ?? [], {
+          labels: {
+            mine: t('mobile.libraryMine'),
+            builtin: t('mobile.libraryBuiltin'),
+            overridden: t('settings.policyOverridden'),
+            disabled: t('sidebar.disabledBadge')
+          },
+          attrsOf: (item) => ({
+            ...(item.source === 'builtin'
+              ? { 'data-policy-builtin-row': item.name }
+              : { 'data-policy-row': item.fileName }),
+            ...(item.overridden ? { 'data-policy-overridden': '' } : {}),
+            ...(item.disabled ? { 'data-policy-disabled': '' } : {})
+          }),
+          invalidAttrs: (fileName) => ({ 'data-policy-invalid-row': fileName }),
+          hintOf: (item) =>
+            item.overridden && item.source === 'user'
+              ? t('settings.shadowedByFileHint', { file: item.overriddenBy })
+              : undefined,
+          onOpen: (item) =>
+            item.source === 'builtin'
+              ? void adapter.openBuiltin(item)
+              : void adapter.open(item.fileName, item.displayName),
+          onOpenInvalid: (fileName) => void adapter.open(fileName),
+          menuOf: (item) =>
+            item.source === 'builtin'
+              ? openBuiltinMenu.bind(null, item)
+              : item.overridden
+                ? openFileMenu.bind(null, item.fileName)
+                : openUserMenu.bind(null, item),
+          invalidMenu: (fileName) => openFileMenu.bind(null, fileName)
+        })}
+        countText={[
+          t('mobile.libraryCount', { count: live.length, name: label }),
+          own > 0 ? t('mobile.libraryOwn', { count: own }) : ''
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        onNew={() => void adapter.create()}
+        newLabel={t('sidebar.newPolicy')}
+        onMenu={openGroupMenu}
+        menuLabel={t('sidebar.moreActions')}
+      />
+    )
+  }
 
   return (
     <SessionGroup

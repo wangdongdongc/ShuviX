@@ -202,13 +202,21 @@ export function SettingsSection({
     <section>
       <div className="flex items-start justify-between mb-2 px-1 gap-3">
         <div className="min-w-0 flex items-center gap-1.5">
-          <h3 className="text-[13px] font-semibold text-text-primary">{title}</h3>
+          <h3
+            data-settings-section-title=""
+            className="text-[13px] font-semibold text-text-primary"
+          >
+            {title}
+          </h3>
           {hint && <InfoHint hint={hint} />}
         </div>
         {headerAction && <div className="shrink-0">{headerAction}</div>}
       </div>
       {preamble && <div className="mb-2">{preamble}</div>}
-      <div className="rounded-xl border border-border-secondary/60 bg-bg-secondary/30 overflow-hidden divide-y divide-border-secondary/40">
+      <div
+        data-settings-card=""
+        className="rounded-xl border border-border-secondary/60 bg-bg-secondary/30 overflow-hidden divide-y divide-border-secondary/40"
+      >
         {children}
       </div>
     </section>
@@ -269,7 +277,7 @@ export function SettingsBlock({
   children: ReactNode
 }): React.JSX.Element {
   return (
-    <div className="px-4 py-3 space-y-2">
+    <div data-settings-block="" className="px-4 py-3 space-y-2">
       {(label || description || subtitle) && (
         <div className="min-w-0">
           {(label || description) && (

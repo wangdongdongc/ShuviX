@@ -21,13 +21,24 @@
  *   MS-16 离开收件箱：那一页卸掉，侧栏回来
  *   MS-17 顶层：工具栏的槽挂着但藏着（交给侧栏的 `drill.toolbarSlot` 就是它），没有菜单的槽，标签栏在
  *   MS-18 进一组：返回那一行里有菜单的槽（`drill.menuSlot`）、工具栏的槽露出来、标签栏收起；退回顶层各归原位
- *   MS-19 收件箱页：没有菜单的槽、工具栏的槽藏着、标签栏还在
+ *   MS-19 收件箱页：没有菜单的槽、工具栏的槽藏着（它只给各组用）、标签栏收起（收件箱也是推入的一页）；退回顶层标签栏回来
  *   MS-20 搜索框：只在顶层（不在日历那种看法、组里、收件箱页）；输入的字交给 `drill.query`；有字才有清除钮，点它清空
  *   MS-21 收件箱那一行包在一张卡片里
  *   MS-22..29 对话页上面还开着详情（`shuvixMobileDetail`，见 detailHistory.ts）时会话没了：连详情那几条一起退掉，
  *         落在打开对话之前的那一条上（顶层或那一组）；没开详情照旧退一条；顶栏的返回键照旧退一条
  *
- * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏的替身记下 props 并画出
+ * 资料库页的两层（`shuvixMobileLibrary`，值是钻到了第几层；知识库多一层某个库）、设置页的层数与收件箱里的跟踪项：
+ *   MS-30 / MS-31 资料库页第一次切到才挂；顶层没有返回键与菜单的槽，工具栏的槽藏着；两个槽交给列表的 `libraryDrill`
+ *   MS-32 / MS-33 / MS-34 进一组、再进一个库：各压一条（1、2），原有的记号留着；标题与返回键上的字；标签栏收起
+ *   MS-35 / MS-36 / MS-37 返回键与返回手势一层一层退；go(-2) 一步回顶层
+ *   MS-38 历史上没有记号时返回键直接收起一层
+ *   MS-39..MS-44 从资料库的页里打开对话 / 小组件 / 详情：那几条也带着资料库的层数，退回来还在那一页
+ *   MS-45 重新加载留下的记号在挂载时摘掉；MS-46 `libraryDrill` 的引用在无关的重渲染之间不变
+ *   MS-50 / MS-51 / MS-52 设置页：`stacked`、额外的智能体分区；钻进分区（层数 > 0）标签栏收起，只在设置是当前页时
+ *   MS-53 / MS-54 设置的分区开着时压的对话 / 小组件那一条也带着 `shuvixSettingsDepth`（B3）；没有那个记号就不带
+ *   MS-55..MS-58 收件箱页带着跟踪项的 adapter（引用稳定；open = 打开那份笔记并推对话页）；资料库的侧栏不再有它
+ *
+ * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏与设置的替身记下 props，侧栏的还画出
  * `sessionsPrepend`。chat store 是按 selector 读、能订阅的小替身；小组件 store 是一个真的 zustand store。
  * jsdom 的 `history.back()` 异步发 popstate：`back()` 在 act 里等到它。文件是 `.ts`，一律 createElement。
  */
@@ -49,6 +60,8 @@ interface ChatState {
 const rec = vi.hoisted(() => ({
   sidebar: [] as Array<Record<string, unknown>>,
   inbox: [] as Array<Record<string, unknown>>,
+  /** SettingsPanel 替身每次渲染收到的 props */
+  settings: [] as Array<Record<string, unknown>>,
   /** useInboxSections 交回的那份 */
   sections: { waiting: [] as unknown[], unread: [] as unknown[], running: [] as unknown[] },
   activeSessionId: null as string | null,
@@ -93,7 +106,9 @@ vi.mock('@shuvix/app-shell', async () => {
       return h('div', { 'data-stub-inbox': '' })
     },
     useInboxSections: () => rec.sections,
-    useProjects: () => projects
+    useProjects: () => projects,
+    // 外壳按它读「设置此刻钻到第几层」的记号（app-shell useStackedHistory 压的）
+    STACKED_SETTINGS_HISTORY_MARK: 'shuvixSettingsDepth'
   }
 })
 
@@ -109,7 +124,15 @@ vi.mock('../../components/sidebar/Sidebar', async () => {
 vi.mock('../../components/browser/CalendarPanel', () => ({ CalendarPanel: () => null }))
 vi.mock('../../components/browser/WidgetPanel', () => ({ WidgetPanel: () => null }))
 vi.mock('../../components/browser/AgentMonitorPanel', () => ({ AgentMonitorPanel: () => null }))
-vi.mock('../../components/settings/SettingsPanel', () => ({ SettingsPanel: () => null }))
+vi.mock('../../components/settings/SettingsPanel', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    SettingsPanel: (props: Props) => {
+      rec.settings.push(props)
+      return h('div', { 'data-stub-settings': '' })
+    }
+  }
+})
 vi.mock('../MobileChatView', async () => {
   const { createElement: h } = await import('react')
   return {
@@ -143,6 +166,8 @@ const SCOPE = 'shuvixMobileScope'
 const CHAT = 'shuvixMobileChat'
 const WIDGET = 'shuvixMobileWidget'
 const DETAIL = 'shuvixMobileDetail'
+const LIB = 'shuvixMobileLibrary'
+const SETTINGS_DEPTH = 'shuvixSettingsDepth'
 
 type Drill = {
   scope: string | null
@@ -169,6 +194,19 @@ const lastSidebar = (): Record<string, unknown> => {
   return props
 }
 const drill = (): Drill => lastSidebar().drill as Drill
+/** 「资料库」页那个侧栏最近一次收到的 props */
+const lastLibrary = (): Record<string, unknown> => {
+  const props = rec.sidebar.filter((p) => p.mode === 'library').at(-1)
+  if (!props) throw new Error('the library sidebar was never rendered')
+  return props
+}
+const libDrill = (): Drill => lastLibrary().libraryDrill as Drill
+/** 当前这条历史上资料库的层数（没有记号 = 0） */
+const libMark = (): number => {
+  const value = (window.history.state as Record<string, unknown> | null)?.[LIB]
+  return typeof value === 'number' ? value : 0
+}
+const lastSettings = (): Record<string, unknown> => rec.settings.at(-1)!
 const lastInbox = (): Record<string, unknown> => rec.inbox.at(-1)!
 /** 侧栏替身外面那一层（收件箱 / 日历开着时外壳把它藏起来） */
 const sidebarWrapper = (): HTMLElement => q('[data-stub-sidebar="sessions"]')!.parentElement!
@@ -229,6 +267,7 @@ beforeEach(() => {
   window.history.replaceState(null, '')
   rec.sidebar.length = 0
   rec.inbox.length = 0
+  rec.settings.length = 0
   rec.sections = { waiting: [], unread: [], running: [] }
   rec.activeSessionId = null
   rec.listeners.clear()
@@ -519,15 +558,21 @@ describe('MobileShell: the slots and the tab bar', () => {
     expect(drill().toolbarSlot).toBe(slot)
   })
 
-  it('MS-19 the inbox page: no menu slot, the toolbar slot hidden, the tab bar still shown', () => {
+  it('MS-19 the inbox page: no menu slot, the toolbar slot hidden, the tab bar hidden too (a pushed page); back at the top it returns', async () => {
     mount()
     click(q('[data-mobile-inbox-row]')!)
     expect(q('[data-mobile-inbox]')).not.toBeNull()
     expect(q('[data-mobile-scope-back]')).not.toBeNull()
     expect(menuSlot()).toBeNull()
     expect(drill().menuSlot ?? null).toBeNull()
+    // 工具栏的槽只给各组用；标签栏只有四个顶层页面有
     expect(toolbarSlot().style.display).toBe('none')
+    expect(tabbar().style.display).toBe('none')
+
+    await back()
+    expect(q('[data-mobile-inbox]')).toBeNull()
     expect(tabbar().style.display).toBe('')
+    expect(toolbarSlot().style.display).toBe('none')
   })
 
   it("MS-18 a chat opened above a group keeps the group's bottom bar for the way back", async () => {
@@ -733,6 +778,498 @@ describe('MobileShell: closing the chat page with the details open', () => {
     await awaitPop(() => q('[data-stub-chat-back]')!.click())
     expect(go).toHaveBeenCalledTimes(1)
     expect(go).toHaveBeenCalledWith(-1)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+  })
+})
+
+/**
+ * 资料库页的两层：`libraryDrill`（scope / onOpen / 两个槽）交给 `mode="library"` 的侧栏；往下钻一层压一条标了
+ * `shuvixMobileLibrary: <层数>` 的历史，返回键 / 返回手势一层一层退。
+ */
+describe('MobileShell: the library tab', () => {
+  const toTab = (key: string): void => click(q(`[data-mobile-tab="${key}"]`)!)
+  const openLibrary = (key: string, label: string): void => act(() => libDrill().onOpen(key, label))
+  const openFromLibrary = (): void => act(() => (lastLibrary().onOpenSession as () => void)())
+  const libraryTitle = (): string | null => q('[data-mobile-library-title]')?.textContent ?? null
+  const libraryBack = (): HTMLElement | null => q('[data-mobile-library-back]')
+  const libraryMenuSlot = (): HTMLElement | null => q('[data-mobile-library-menu-slot]')
+  const libraryToolbarSlot = (): HTMLElement => q('[data-mobile-library-toolbar-slot]')!
+  const state = (): Record<string, unknown> | null =>
+    window.history.state as Record<string, unknown> | null
+  const pushDetail = (page: string): void =>
+    window.history.pushState({ ...(state() ?? {}), [DETAIL]: page }, '')
+
+  it('MS-30 the library sidebar mounts on the first visit; the top level has no back button and no menu slot, a hidden toolbar slot, the tab bar', () => {
+    mount()
+    expect(rec.sidebar.some((p) => p.mode === 'library')).toBe(false)
+    expect(q('[data-stub-sidebar="library"]')).toBeNull()
+
+    toTab('library')
+    expect(q('[data-stub-sidebar="library"]')).not.toBeNull()
+    expect(q('[data-mobile-page="library"] h1')?.textContent).toBe(en.mobile.tabLibrary)
+    expect(libraryBack()).toBeNull()
+    expect(libraryTitle()).toBeNull()
+    expect(libraryMenuSlot()).toBeNull()
+    expect(lastLibrary().mode).toBe('library')
+    expect(typeof lastLibrary().onOpenSession).toBe('function')
+    expect(libDrill().scope).toBeNull()
+    expect(libraryToolbarSlot().style.display).toBe('none')
+    expect(tabbar().style.display).toBe('')
+    expect(libMark()).toBe(0)
+  })
+
+  it('MS-31 the slots handed to the list: the toolbar slot always, the menu slot only while a page is open', async () => {
+    mount()
+    toTab('library')
+    expect(libDrill().toolbarSlot).toBe(libraryToolbarSlot())
+    expect(libDrill().menuSlot ?? null).toBeNull()
+
+    openLibrary('agents', 'Agents')
+    expect(libraryMenuSlot()).not.toBeNull()
+    expect(libraryMenuSlot()!.parentElement).toBe(libraryBack()!.parentElement)
+    expect(libDrill().menuSlot).toBe(libraryMenuSlot())
+    expect(libDrill().toolbarSlot).toBe(libraryToolbarSlot())
+
+    await back()
+    expect(libraryMenuSlot()).toBeNull()
+    expect(libDrill().menuSlot ?? null).toBeNull()
+    expect(libDrill().toolbarSlot).toBe(libraryToolbarSlot())
+  })
+
+  it('MS-32 opening a group: one history entry marked 1, its name as the title, the back button named Library, the tab bar replaced by the library toolbar slot', () => {
+    mount()
+    toTab('library')
+    const push = vi.spyOn(window.history, 'pushState')
+    openLibrary('agents', 'Agents')
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(state()).toEqual({ [LIB]: 1 })
+    expect(libraryTitle()).toContain('Agents')
+    expect((libraryBack()!.textContent ?? '').trim()).toBe(en.mobile.tabLibrary)
+    expect(libDrill().scope).toBe('agents')
+    expect(libraryToolbarSlot().style.display).toBe('')
+    expect(tabbar().style.display).toBe('none')
+    // 会话页那一组的工具栏的槽不归它管
+    expect(toolbarSlot().style.display).toBe('none')
+  })
+
+  it('MS-33 the push keeps the marks already there: a library page above an open inbox page', async () => {
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    expect(mark(SCOPE)).toBe(true)
+    // 收件箱页上标签栏是收起的（点不到）；这里直接切，只为在历史上留着会话页那一层的记号
+    expect(tabbar().style.display).toBe('none')
+    toTab('library')
+    expect(tabbar().style.display).toBe('')
+    openLibrary('agents', 'Agents')
+    expect(state()).toEqual({ [SCOPE]: true, [LIB]: 1 })
+    expect(tabbar().style.display).toBe('none')
+
+    await back()
+    expect(libDrill().scope).toBeNull()
+    expect(libMark()).toBe(0)
+    expect(mark(SCOPE)).toBe(true)
+    expect(tabbar().style.display).toBe('')
+
+    toTab('sessions')
+    expect(q('[data-mobile-inbox]')).not.toBeNull()
+    expect(tabbar().style.display).toBe('none')
+  })
+
+  it('MS-34 a second level (a knowledge base): two entries marked 1 then 2; the back button names the level below', () => {
+    mount()
+    toTab('library')
+    const push = vi.spyOn(window.history, 'pushState')
+    openLibrary('knowledge', 'Knowledge Base')
+    openLibrary('knowledge:knowledge/notes', 'notes')
+    expect(push.mock.calls.map(([s]) => (s as Record<string, unknown>)[LIB])).toEqual([1, 2])
+    expect(libMark()).toBe(2)
+    expect(libraryTitle()).toContain('notes')
+    expect((libraryBack()!.textContent ?? '').trim()).toBe('Knowledge Base')
+    expect(libDrill().scope).toBe('knowledge:knowledge/notes')
+    expect(tabbar().style.display).toBe('none')
+    expect(libraryToolbarSlot().style.display).toBe('')
+  })
+
+  /** 跑一遍「从第二层一层一层退回顶层」，`step` 是退一层的那个动作 */
+  async function unwind(step: () => Promise<void>): Promise<void> {
+    mount()
+    toTab('library')
+    openLibrary('knowledge', 'Knowledge Base')
+    openLibrary('knowledge:knowledge/notes', 'notes')
+
+    await step()
+    expect(libDrill().scope).toBe('knowledge')
+    expect(libraryTitle()).toContain('Knowledge Base')
+    expect((libraryBack()!.textContent ?? '').trim()).toBe(en.mobile.tabLibrary)
+    expect(libMark()).toBe(1)
+    expect(tabbar().style.display).toBe('none')
+    expect(libraryToolbarSlot().style.display).toBe('')
+
+    await step()
+    expect(libDrill().scope).toBeNull()
+    expect(libMark()).toBe(0)
+    expect(libraryBack()).toBeNull()
+    expect(libraryMenuSlot()).toBeNull()
+    expect(tabbar().style.display).toBe('')
+    expect(libraryToolbarSlot().style.display).toBe('none')
+  }
+
+  it('MS-35 the back button goes one level per press', async () => {
+    await unwind(() => awaitPop(() => libraryBack()!.click()))
+  })
+
+  it('MS-36 the back gesture goes one level per step', async () => {
+    await unwind(back)
+  })
+
+  it('MS-37 history.go(-2) from the second level reaches the top level in one step', async () => {
+    mount()
+    toTab('library')
+    openLibrary('knowledge', 'Knowledge Base')
+    openLibrary('knowledge:knowledge/notes', 'notes')
+    await awaitPop(() => window.history.go(-2))
+    expect(libDrill().scope).toBeNull()
+    expect(libMark()).toBe(0)
+    expect(libraryBack()).toBeNull()
+    expect(tabbar().style.display).toBe('')
+  })
+
+  it('MS-38 with no library mark on the current entry the back button closes one level without navigating', () => {
+    mount()
+    toTab('library')
+    openLibrary('knowledge', 'Knowledge Base')
+    openLibrary('knowledge:knowledge/notes', 'notes')
+    window.history.replaceState(null, '')
+    const historyBack = vi.spyOn(window.history, 'back')
+    const go = vi.spyOn(window.history, 'go')
+    click(libraryBack()!)
+    expect(historyBack).not.toHaveBeenCalled()
+    expect(go).not.toHaveBeenCalled()
+    expect(libDrill().scope).toBe('knowledge')
+
+    click(libraryBack()!)
+    expect(historyBack).not.toHaveBeenCalled()
+    expect(libDrill().scope).toBeNull()
+    expect(libraryBack()).toBeNull()
+  })
+
+  it('MS-39 a chat opened from a library page carries the library depth; back lands on the page, back again at the top', async () => {
+    mount()
+    toTab('library')
+    openLibrary('agents', 'Agents')
+    openFromLibrary()
+    expect(chatPage()).not.toBeNull()
+    expect(state()).toEqual({ [CHAT]: true, [LIB]: 1 })
+
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(libDrill().scope).toBe('agents')
+    expect(libMark()).toBe(1)
+    expect(tabbar().style.display).toBe('none')
+    expect(libraryToolbarSlot().style.display).toBe('')
+
+    await back()
+    expect(libDrill().scope).toBeNull()
+    expect(libMark()).toBe(0)
+    expect(tabbar().style.display).toBe('')
+  })
+
+  it('MS-40 a chat opened from the library top level carries no library mark', async () => {
+    mount()
+    toTab('library')
+    openFromLibrary()
+    expect(chatPage()).not.toBeNull()
+    expect(state()).toEqual({ [CHAT]: true })
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(libDrill().scope).toBeNull()
+  })
+
+  it('MS-41 a session that becomes active from elsewhere while on a base page: the chat entry is marked 2 and back keeps the base page', async () => {
+    mount()
+    toTab('library')
+    openLibrary('knowledge', 'Knowledge Base')
+    openLibrary('knowledge:knowledge/notes', 'notes')
+    act(() => rec.setActive('s1'))
+    expect(chatPage()).not.toBeNull()
+    expect(state()).toEqual({ [CHAT]: true, [LIB]: 2 })
+
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(libDrill().scope).toBe('knowledge:knowledge/notes')
+    expect(libMark()).toBe(2)
+  })
+
+  it('MS-42 a widget entry carries the library depth; leaving the widget keeps the library page', async () => {
+    mount()
+    toTab('library')
+    openLibrary('agents', 'Agents')
+    act(() => useWidgetStore.setState({ foregroundApp: 'w' }))
+    expect(state()).toEqual({ [WIDGET]: true, [LIB]: 1 })
+
+    await awaitPop(() => useWidgetStore.getState().goHome())
+    expect(useWidgetStore.getState().foregroundApp).toBeNull()
+    expect(libDrill().scope).toBe('agents')
+    expect(libMark()).toBe(1)
+    expect(mark(WIDGET)).toBe(false)
+  })
+
+  it('MS-43 details above a chat above a library page: each back closes one layer and the page stays', async () => {
+    mount()
+    toTab('library')
+    openLibrary('agents', 'Agents')
+    openFromLibrary()
+    pushDetail('index')
+    expect(state()).toEqual({ [CHAT]: true, [LIB]: 1, [DETAIL]: 'index' })
+
+    await back()
+    expect(chatPage()).not.toBeNull()
+    expect(libMark()).toBe(1)
+    expect(libDrill().scope).toBe('agents')
+
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(libDrill().scope).toBe('agents')
+    expect(libMark()).toBe(1)
+  })
+
+  it('MS-44 the session deleted with the details open over a library page: one step past both entries, onto the page', async () => {
+    mount()
+    toTab('library')
+    openLibrary('agents', 'Agents')
+    openFromLibrary()
+    pushDetail('index')
+    rec.activeSessionId = 's1'
+    const go = vi.spyOn(window.history, 'go')
+    await awaitPop(() => rec.setActive(null))
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(go).toHaveBeenCalledWith(-2)
+    expect(chatPage()).toBeNull()
+    expect(libDrill().scope).toBe('agents')
+    expect(libMark()).toBe(1)
+    expect(mark(CHAT)).toBe(false)
+    expect(mark(DETAIL)).toBe(false)
+  })
+
+  it('MS-45 a library mark left by a reload is removed on mount', () => {
+    window.history.replaceState({ [LIB]: 2 }, '')
+    mount()
+    expect(window.history.state).toBeNull()
+    toTab('library')
+    expect(libDrill().scope).toBeNull()
+    expect(libraryBack()).toBeNull()
+  })
+
+  it('MS-46 libraryDrill keeps its identity across unrelated re-renders', () => {
+    mount()
+    toTab('library')
+    const before = libDrill()
+    const renders = rec.sidebar.filter((p) => p.mode === 'library').length
+    toTab('sessions')
+    typeInto(searchInput()!, 'alp')
+    typeInto(searchInput()!, 'alpha')
+    expect(rec.sidebar.filter((p) => p.mode === 'library').length).toBeGreaterThan(renders)
+    expect(libDrill()).toBe(before)
+  })
+
+  it('MS-58 the library sidebar gets only mode, onOpenSession and libraryDrill', () => {
+    mount()
+    toTab('library')
+    expect(Object.keys(lastLibrary()).sort()).toEqual(['libraryDrill', 'mode', 'onOpenSession'])
+    openLibrary('agents', 'Agents')
+    expect(Object.keys(lastLibrary()).sort()).toEqual(['libraryDrill', 'mode', 'onOpenSession'])
+  })
+})
+
+/**
+ * 设置页：`SettingsPanel stacked`（替身记 props）。容器报上来的层数（`onStackedDepthChange`）> 0 时标签栏收起 ——
+ * 只在设置是当前页的时候。设置的分区开着时（app-shell useStackedHistory 在当前条目上留着 `shuvixSettingsDepth`）
+ * 再压的对话 / 小组件那一条也带着这个记号：退回来落在那一条上，设置还停在那个分区里（B3）。
+ */
+describe('MobileShell: the settings tab', () => {
+  const toTab = (key: string): void => click(q(`[data-mobile-tab="${key}"]`)!)
+  const setDepth = (depth: number): void =>
+    act(() => (lastSettings().onStackedDepthChange as (depth: number) => void)(depth))
+  const state = (): Record<string, unknown> | null =>
+    window.history.state as Record<string, unknown> | null
+  /** 设置里往下钻时 useStackedHistory 压的那一条（SettingsPanel 是替身，这里自己压） */
+  const pushSettingsEntry = (depth: number): void =>
+    window.history.pushState({ ...(state() ?? {}), [SETTINGS_DEPTH]: depth }, '')
+
+  it('MS-50 the settings panel is stacked, reports its depth, and gets the agents monitor as an extra tab in the maintenance card', () => {
+    mount()
+    expect(rec.settings).toHaveLength(0)
+    toTab('settings')
+    expect(q('[data-mobile-page="settings"] [data-stub-settings]')).not.toBeNull()
+    const props = lastSettings()
+    expect(props.stacked).toBe(true)
+    expect(typeof props.onStackedDepthChange).toBe('function')
+    const extra = props.extraTabs as Array<Record<string, unknown>>
+    expect(extra).toHaveLength(1)
+    expect(extra[0].id).toBe('agents')
+    expect(extra[0].group).toBe('maintenance')
+    expect(extra[0].label).toBe(i18n.t('panel.agents'))
+  })
+
+  it('MS-51 a depth above 0 hides the tab bar; 0 shows it again; neither toolbar slot is ever shown', () => {
+    mount()
+    toTab('settings')
+    expect(tabbar().style.display).toBe('')
+    const slotsHidden = (): boolean =>
+      toolbarSlot().style.display === 'none' &&
+      q('[data-mobile-library-toolbar-slot]')!.style.display === 'none'
+    expect(slotsHidden()).toBe(true)
+
+    setDepth(1)
+    expect(tabbar().style.display).toBe('none')
+    expect(slotsHidden()).toBe(true)
+    setDepth(2)
+    expect(tabbar().style.display).toBe('none')
+    expect(slotsHidden()).toBe(true)
+    setDepth(0)
+    expect(tabbar().style.display).toBe('')
+    expect(slotsHidden()).toBe(true)
+  })
+
+  it('MS-52 the depth hides the tab bar only while Settings is the current tab', () => {
+    mount()
+    toTab('settings')
+    toTab('sessions')
+    setDepth(1)
+    expect(tabbar().style.display).toBe('')
+    toTab('library')
+    expect(tabbar().style.display).toBe('')
+    toTab('settings')
+    expect(tabbar().style.display).toBe('none')
+  })
+
+  it('MS-53 a chat opened while a settings section is open carries the settings depth; back lands on that entry', async () => {
+    mount()
+    toTab('settings')
+    pushSettingsEntry(1)
+    act(() => rec.setActive('s1'))
+    expect(chatPage()).not.toBeNull()
+    expect(state()).toEqual({ [CHAT]: true, [SETTINGS_DEPTH]: 1 })
+
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(state()).toEqual({ [SETTINGS_DEPTH]: 1 })
+  })
+
+  it('MS-53 the settings depth rides along with the scope and library marks', () => {
+    mount()
+    openScope('p1', 'Proj')
+    toTab('library')
+    act(() => libDrill().onOpen('agents', 'Agents'))
+    toTab('settings')
+    pushSettingsEntry(2)
+    act(() => rec.setActive('s1'))
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [LIB]: 1, [SETTINGS_DEPTH]: 2 })
+  })
+
+  it('MS-54 a widget opened while a settings section is open carries the settings depth', async () => {
+    mount()
+    toTab('settings')
+    pushSettingsEntry(1)
+    act(() => useWidgetStore.setState({ foregroundApp: 'w1' }))
+    expect(state()).toEqual({ [WIDGET]: true, [SETTINGS_DEPTH]: 1 })
+
+    await back()
+    expect(useWidgetStore.getState().foregroundApp).toBeNull()
+    expect(state()).toEqual({ [SETTINGS_DEPTH]: 1 })
+  })
+
+  it.each<[string, Record<string, unknown> | null]>([
+    ['no mark', null],
+    ['a mark of 0', { [SETTINGS_DEPTH]: 0 }],
+    ['a mark that is not a number', { [SETTINGS_DEPTH]: true }]
+  ])('MS-53 / MS-54 with %s on the current entry neither entry carries it', async (_l, entry) => {
+    mount()
+    if (entry) window.history.pushState(entry, '')
+    act(() => rec.setActive('s1'))
+    expect(state()).toEqual({ [CHAT]: true })
+    await back()
+
+    act(() => useWidgetStore.setState({ foregroundApp: 'w1' }))
+    expect(state()).toEqual({ [WIDGET]: true })
+    await back()
+  })
+})
+
+/** 跟踪项在收件箱里（资料库不再有它的入口）：收件箱页拿到的 `tracking` 就是 useTrackingAdapter 那一份 */
+describe('MobileShell: tracking in the inbox', () => {
+  type Tracking = Record<string, (...args: unknown[]) => unknown>
+  const tracking = (): Tracking => lastInbox().tracking as Tracking
+  const openNote = vi.fn(async (_arg: { fileName: string; title?: string }) => ({ id: 't1' }))
+
+  beforeEach(() => {
+    openNote.mockClear()
+    ;(window as unknown as { api: unknown }).api = { tracking: { openNote } }
+  })
+  afterEach(() => {
+    delete (window as unknown as { api?: unknown }).api
+  })
+
+  it('MS-55 the inbox page gets a tracking adapter beside onSelectSession', () => {
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    for (const name of ['list', 'open', 'openFolder', 'revealFile', 'remove', 'setStatus']) {
+      expect(typeof tracking()[name], name).toBe('function')
+    }
+    expect(typeof lastInbox().onSelectSession).toBe('function')
+  })
+
+  it('MS-56 the tracking adapter is the same object after leaving and re-entering the inbox', async () => {
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    const first = tracking()
+    const select = lastInbox().onSelectSession
+    await back()
+    typeInto(searchInput()!, 'x')
+    click(q('[data-mobile-inbox-row]')!)
+    expect(tracking()).toBe(first)
+    expect(lastInbox().onSelectSession).toBe(select)
+  })
+
+  it('MS-57 opening a tracked item opens its note, selects it and pushes the chat page above the inbox', async () => {
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    await act(async () => {
+      await tracking().open('t.md', 'T')
+    })
+    expect(openNote.mock.calls).toEqual([[{ fileName: 't.md', title: 'T' }]])
+    expect(rec.setActive).toHaveBeenCalledWith('t1')
+    expect(chatPage()).not.toBeNull()
+    expect(mark(CHAT)).toBe(true)
+    expect(mark(SCOPE)).toBe(true)
+
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(q('[data-mobile-inbox]')).not.toBeNull()
+  })
+
+  it('MS-57 the chat page is pushed even when that note is already the active session', async () => {
+    rec.activeSessionId = 't1'
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    const push = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      await tracking().open('t.md', 'T')
+    })
+    expect(chatPage()).not.toBeNull()
+    expect(pushesWith(push, CHAT)).toBe(1)
+    expect(mark(SCOPE)).toBe(true)
+  })
+
+  it('MS-57 a note that is no longer there opens nothing', async () => {
+    openNote.mockRejectedValueOnce(new Error('gone'))
+    mount()
+    click(q('[data-mobile-inbox-row]')!)
+    await act(async () => {
+      await tracking().open('gone.md', 'Gone')
+    })
+    expect(rec.setActive).not.toHaveBeenCalled()
     expect(chatPage()).toBeNull()
     expect(mark(CHAT)).toBe(false)
   })

@@ -67,17 +67,56 @@ export interface SettingsPanelProps {
   stacked?: boolean
   /** 排在最后的额外分区（手机布局：智能体监视 —— 桌面上它在右侧面板里） */
   extraTabs?: SettingsTab[]
+  /** 叠放布局钻到了第几层（0 = 分区列表）：手机壳据此收起标签栏 */
+  onStackedDepthChange?: (depth: number) => void
+}
+
+/**
+ * 叠放布局的分区列表里，行尾那个词或数：开着几家提供商、开着几台 MCP 服务器、远程访问开没开。
+ * 列表每次露出来取一次（从分区里改完退回来就是新的）；没取到就不画（上一次取到的也撤掉，不留一个可能过时的数）
+ */
+function useStackedTabValues(active: boolean): Record<string, React.ReactNode> {
+  const { t } = useTranslation()
+  const [values, setValues] = useState<Record<string, React.ReactNode>>({})
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    const put = (id: string, value: React.ReactNode): void => {
+      if (alive) setValues((prev) => ({ ...prev, [id]: value }))
+    }
+    void window.api.provider
+      .listEnabled()
+      .then((list) => put('providers', list.length > 0 ? list.length : undefined))
+      .catch(() => put('providers', undefined))
+    void window.api.mcp
+      .list()
+      .then((list) => {
+        const on = list.filter((server) => !!server.isEnabled).length
+        put('mcp', on > 0 ? on : undefined)
+      })
+      .catch(() => put('mcp', undefined))
+    void window.api.network
+      .status()
+      .then((status) => put('network', status.enabled ? t('mobile.on') : t('mobile.off')))
+      .catch(() => put('network', undefined))
+    return () => {
+      alive = false
+    }
+  }, [active, t])
+  return values
 }
 
 export function SettingsPanel({
   stacked = false,
-  extraTabs = []
+  extraTabs = [],
+  onStackedDepthChange
 }: SettingsPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
   /** 叠放布局里此刻显示的是分区列表（hash 点名了某个分区就直接进去） */
   const [showList, setShowList] = useState(() => !parseSettingsHash().tab)
   const [extraTab, setExtraTab] = useState<string | null>(null)
+  const stackedValues = useStackedTabValues(stacked && showList)
   // 子 tab 初值直接从 hash 取（惰性初始化，不走 effect）
   const [monitorSubTab, setMonitorSubTab] = useState<MonitorSubTab>(() => {
     const { sub } = parseSettingsHash()
@@ -92,6 +131,7 @@ export function SettingsPanel({
   const tabs: SettingsTab[] = [
     {
       id: 'general',
+      group: 'basics',
       label: t('settings.tabGeneral'),
       icon: <Settings size={14} />,
       content: (
@@ -102,6 +142,7 @@ export function SettingsPanel({
     },
     {
       id: 'providers',
+      group: 'basics',
       label: t('settings.tabProviders'),
       icon: <Layers size={14} />,
       content: (
@@ -112,12 +153,14 @@ export function SettingsPanel({
     },
     {
       id: 'tools',
+      group: 'capabilities',
       label: t('settings.tabTools'),
       icon: <Wrench size={14} />,
       content: <ToolSettings />
     },
     {
       id: 'mcp',
+      group: 'capabilities',
       label: t('settings.tabMcp'),
       icon: <Puzzle size={14} />,
       content: (
@@ -128,6 +171,7 @@ export function SettingsPanel({
     },
     {
       id: 'network',
+      group: 'capabilities',
       label: t('settings.tabNetwork'),
       icon: <Globe size={14} />,
       content: (
@@ -138,6 +182,7 @@ export function SettingsPanel({
     },
     {
       id: 'voice',
+      group: 'experimental',
       label: t('settings.tabVoice'),
       experimental: 'voice',
       icon: <Mic size={14} />,
@@ -149,6 +194,7 @@ export function SettingsPanel({
     },
     {
       id: 'triggers',
+      group: 'experimental',
       label: t('settings.tabTriggers'),
       experimental: 'triggers',
       icon: <Timer size={14} />,
@@ -160,6 +206,7 @@ export function SettingsPanel({
     },
     {
       id: 'telegramBots',
+      group: 'experimental',
       label: t('settings.tabTelegramBots'),
       experimental: 'telegramBots',
       icon: <Send size={14} />,
@@ -167,18 +214,21 @@ export function SettingsPanel({
     },
     {
       id: 'monitor',
+      group: 'maintenance',
       label: t('settings.tabMonitor'),
       icon: <Activity size={14} />,
       content: <MonitorSettings subTab={monitorSubTab} onSubTabChange={setMonitorSubTab} />
     },
     {
       id: 'archived',
+      group: 'maintenance',
       label: t('settings.tabArchived'),
       icon: <Archive size={14} />,
       content: <ArchivedSettings />
     },
     {
       id: 'about',
+      group: 'about',
       label: t('settings.tabAbout'),
       icon: <Info size={14} />,
       content: (
@@ -195,7 +245,9 @@ export function SettingsPanel({
   ]
 
   if (stacked) {
-    const allTabs = [...tabs, ...extraTabs]
+    const allTabs = [...tabs, ...extraTabs].map((tab) =>
+      tab.id in stackedValues ? { ...tab, value: stackedValues[tab.id] } : tab
+    )
     return (
       <SettingsContainer
         tabs={allTabs}
@@ -210,7 +262,11 @@ export function SettingsPanel({
           setShowList(false)
         }}
         title={t('settings.title')}
-        stacked={{ showList, onBack: () => setShowList(true) }}
+        stacked={{
+          showList,
+          onBack: () => setShowList(true),
+          onDepthChange: onStackedDepthChange
+        }}
       />
     )
   }

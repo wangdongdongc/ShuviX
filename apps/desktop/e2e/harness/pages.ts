@@ -13516,6 +13516,12 @@ export type WebMobileTouchTarget =
   | { botGroup: string }
   /** 资料库智能体组里的内置行（档案名） */
   | { agentBuiltinRow: string }
+  /** 资料库顶层某一组的导航行（`data-group-nav=<组 key>`） */
+  | { libraryGroup: string }
+  /** 资料库某一组那一页：顶上的返回、底部工具栏的新建、顶栏的「⋯」 */
+  | { library: 'back' | 'new' | 'menu' }
+  /** 资料库某一组那一页里按标题的一行（`data-library-row`） */
+  | { libraryRow: string }
   /** 小组件页里的卡片（widget id） */
   | { widgetCard: string }
   /** 同一张卡片，点它右上角往里 CARD_CORNER_INSET 的那一点（桌面上悬浮按钮所在的地方） */
@@ -14062,6 +14068,26 @@ export interface WebMobilePane {
   widgetAppOpen(): Promise<boolean>
   /** 底部标签栏此刻显示着（计算 display 不是 none）；不在 → false */
   tabBarShown(): Promise<boolean>
+  /** 资料库顶层各导航行的组 key 与行尾的数（DOM 序；进了某一组时为空） */
+  libraryNav(): Promise<Array<{ key: string; count: number | null }>>
+  /**
+   * 资料库此刻开着的那一页（`data-library-page`：组 key，或 `knowledge:<库的路径>`）：大标题、返回键上的字、各行
+   * （标题 / 说明 / 有没有锁 / 行尾标签，DOM 序）、底部工具栏那句话、有没有「新建」与「⋯」。在顶层 → null
+   */
+  libraryPage(): Promise<{
+    key: string
+    title: string
+    back: string
+    rows: Array<{
+      title: string
+      description: string | null
+      locked: boolean
+      badge: string | null
+    }>
+    count: string
+    hasNew: boolean
+    hasMenu: boolean
+  } | null>
 }
 
 export function webMobilePane(client: CdpClient): WebMobilePane {
@@ -14142,6 +14168,17 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `[...((${LIST})?.querySelectorAll('[data-bot-group]') ?? [])].find((g) => g.getAttribute('data-bot-group') === ${JSON.stringify(target.botGroup)})?.querySelector('div[class*="group/header"][data-group="bot"]')`
     if ('agentBuiltinRow' in target)
       return `${PAGE('library')}?.querySelector('[data-agent-builtin-row=${JSON.stringify(target.agentBuiltinRow)}]')`
+    if ('libraryGroup' in target)
+      return `${PAGE('library')}?.querySelector('[data-group-nav=${JSON.stringify(target.libraryGroup)}] > button')`
+    if ('library' in target) {
+      if (target.library === 'back')
+        return `${PAGE('library')}?.querySelector('[data-mobile-library-back]')`
+      return target.library === 'new'
+        ? `document.querySelector('[data-mobile-library-toolbar-slot] [data-library-new]')`
+        : `document.querySelector('[data-mobile-library-menu-slot] [data-library-menu]')`
+    }
+    if ('libraryRow' in target)
+      return `[...(${PAGE('library')}?.querySelectorAll('[data-library-row]') ?? [])].find((r) => (r.querySelector('[data-library-row-title]')?.textContent ?? '').trim() === ${JSON.stringify(target.libraryRow)})`
     if ('widgetCard' in target)
       return `${PAGE('widgets')}?.querySelector('[data-widget-card=${JSON.stringify(target.widgetCard)}]')`
     if ('widgetCardCorner' in target)
@@ -15067,6 +15104,50 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       ),
     widgetAppOpen: () =>
       client.eval<boolean>(`!!${PAGE('widgets')}?.hasAttribute('data-widget-app-open')`),
+    libraryNav: () =>
+      client.eval<Array<{ key: string; count: number | null }>>(
+        `[...(${PAGE('library')}?.querySelectorAll('[data-group-nav]') ?? [])].map((row) => {
+          const count = row.querySelector('[data-group-count]')
+          return {
+            key: row.getAttribute('data-group-nav') ?? '',
+            count: count ? Number((count.textContent ?? '').trim()) : null
+          }
+        })`
+      ),
+    libraryPage: () =>
+      client.eval<{
+        key: string
+        title: string
+        back: string
+        rows: Array<{
+          title: string
+          description: string | null
+          locked: boolean
+          badge: string | null
+        }>
+        count: string
+        hasNew: boolean
+        hasMenu: boolean
+      } | null>(`(() => {
+        const root = ${PAGE('library')}
+        const page = root?.querySelector('[data-library-page]')
+        if (!root || !page) return null
+        const bar = document.querySelector('[data-mobile-library-toolbar-slot]')
+        return {
+          key: page.getAttribute('data-library-page') ?? '',
+          title: (root.querySelector('[data-mobile-library-title] h1')?.textContent ?? '').trim(),
+          back: (root.querySelector('[data-mobile-library-back]')?.textContent ?? '').trim(),
+          rows: [...page.querySelectorAll('[data-library-row]')].map((r) => ({
+            title: (r.querySelector('[data-library-row-title]')?.textContent ?? '').trim(),
+            description: r.querySelector('[data-library-row-description]')?.textContent?.trim() ?? null,
+            locked: !!r.querySelector('[data-library-row-lock]'),
+            badge: r.querySelector('[data-library-row-badge]')?.textContent?.trim() ?? null
+          })),
+          count: (bar?.querySelector('[data-library-count]')?.textContent ?? '').trim(),
+          hasNew: !!bar?.querySelector('[data-library-new]'),
+          hasMenu: !!document.querySelector('[data-mobile-library-menu-slot] [data-library-menu]')
+        }
+      })()`),
     tabBarShown: () =>
       client.eval<boolean>(`(() => {
         const nav = document.querySelector('[data-mobile-tabbar]')

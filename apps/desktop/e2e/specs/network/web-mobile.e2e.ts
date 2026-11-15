@@ -151,9 +151,10 @@ const MODEL = 'e2e-model'
 const USAGE = { prompt: 90, completion: 10 }
 const WIDGET_ID = 'mob-widget'
 const BOT = 'mobbot'
-const REGISTRY_GROUPS = ['tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
-/** 桌面布局的资料库：没有跟踪项（2026-11-10 起它在收件箱里；手机还没有收件箱，资料库页留着它） */
-const DESKTOP_REGISTRY_GROUPS = REGISTRY_GROUPS.filter((g) => g !== 'tracking')
+/** 手机资料库顶层的五行导航行（两张卡片：智能体 / 技能 / 知识库，安全策略 / Hooks）；跟踪项在收件箱里，这里没有 */
+const REGISTRY_GROUPS = ['agents', 'skills', 'knowledge', 'policies', 'hooks']
+/** 桌面布局的资料库：同样五组，是就地展开的树 */
+const DESKTOP_REGISTRY_GROUPS = ['agents', 'policies', 'hooks', 'skills', 'knowledge']
 /** 会话页顶层「聊天」那一行的组 key（app-shell 的 TEMP_GROUP_KEY） */
 const TEMP_GROUP = '__no_project__'
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
@@ -340,10 +341,28 @@ async function desktopView(): Promise<void> {
   await until(async () => !(await mobile().shellPresent()), 'back to the desktop layout')
 }
 
-/** 切到某个标签（已经是它就不点）。会话页进了某一组时标签栏收着（底部是那一组的工具栏）：先退回顶层 */
+/** 推入的页面（会话页的某一组、资料库的某一组、设置的某个分区）都收着标签栏：一层一层退回顶层 */
+async function leavePushedPages(): Promise<void> {
+  await leaveGroup()
+  for (let i = 0; i < 3 && (await mobile().libraryPage()) !== null; i++) {
+    const before = (await mobile().libraryPage())?.key
+    await mobile().tap({ library: 'back' })
+    await until(
+      async () => ((await mobile().libraryPage())?.key ?? null) !== before,
+      'one library page back'
+    )
+  }
+  for (let i = 0; i < 3 && (await mobile().settingsBackButton()) !== null; i++) {
+    const before = await mobile().settingsHeader()
+    await mobile().tap({ settingsBack: true })
+    await until(async () => (await mobile().settingsHeader()) !== before, 'one settings page back')
+  }
+}
+
+/** 切到某个标签（已经是它就不点）。推入的页面开着时标签栏收着：先退回顶层 */
 async function toTab(key: WebMobileTab): Promise<void> {
   if ((await mobile().activeTab()) === key) return
-  await leaveGroup()
+  await leavePushedPages()
   await mobile().tap({ tab: key })
   await until(async () => (await mobile().activeTab()) === key, `the ${key} tab`)
 }
@@ -802,11 +821,61 @@ describe('phone layout: the shell', () => {
     })
   })
 
-  it('M-4 the library page has exactly the six registry groups (no Bots group)', async () => {
+  it('M-4 the library page is five nav rows with counts (no tracking, no Bots); a group is its own page with a toolbar instead of the tab bar', async () => {
+    await toTab('library')
     expect(await mobile().groupsIn('library')).toEqual(REGISTRY_GROUPS)
+    const nav = await until(async () => {
+      const rows = await mobile().libraryNav()
+      // 数量扫回来才有：内置智能体至少一份
+      return (rows.find((r) => r.key === 'agents')?.count ?? 0) > 0 ? rows : null
+    }, 'the library nav rows with their counts')
+    expect(nav.map((r) => r.key)).toEqual(REGISTRY_GROUPS)
+    expect(await mobile().libraryPage()).toBeNull()
+    expect(await mobile().tabBarShown()).toBe(true)
+
+    await mobile().tap({ libraryGroup: 'agents' })
+    const agents = await until(async () => {
+      const p = await mobile().libraryPage()
+      return p && p.rows.length > 0 ? p : null
+    }, 'the agents page')
+    expect(agents.key).toBe('agents')
+    expect(agents.title).toBe(en.sidebar.agentsGroup)
+    expect(agents.back).toBe(en.mobile.tabLibrary)
+    // 内置的每行带锁和一句说明；数量与顶层那一行一致
+    expect(agents.rows.every((r) => r.locked)).toBe(true)
+    expect(agents.rows.some((r) => !!r.description)).toBe(true)
+    expect(agents.rows).toHaveLength(nav.find((r) => r.key === 'agents')?.count ?? -1)
+    expect(agents.hasNew).toBe(true)
+    expect(agents.hasMenu).toBe(true)
+    expect(await mobile().tabBarShown()).toBe(false)
+    expect(await mobile().groupsIn('library')).toEqual([])
+
+    // 返回手势回顶层；知识库多一层
+    await page().eval(`(history.back(), true)`)
+    await until(async () => (await mobile().libraryPage()) === null, 'back at the library top')
+    expect(await mobile().tabBarShown()).toBe(true)
+    await mobile().tap({ libraryGroup: 'knowledge' })
+    const bases = await until(async () => {
+      const p = await mobile().libraryPage()
+      return p?.key === 'knowledge' && p.rows.length > 0 ? p : null
+    }, 'the knowledge bases page')
+    await mobile().tap({ libraryRow: bases.rows[0].title })
+    const base = await until(async () => {
+      const p = await mobile().libraryPage()
+      return p?.key.startsWith('knowledge:') ? p : null
+    }, 'one base page')
+    expect(base.title).toBe(bases.rows[0].title)
+    expect(base.back).toBe(en.sidebar.knowledgeGroup)
+    await mobile().tap({ library: 'back' })
+    await until(async () => (await mobile().libraryPage())?.key === 'knowledge', 'the bases again')
+    await mobile().tap({ library: 'back' })
+    await until(async () => (await mobile().libraryPage()) === null, 'the library top again')
+    await toTab('sessions')
   })
 
   it('M-5 a real tap on a row pushes the chat page and a marked history entry; no agent chip in its banner', async () => {
+    // 先进到那一组再取基准：进组压的那一条会清掉之前的用例留在「前进」方向上的条目，之后点行正好多一条
+    await enterGroup(projects.main.id)
     const before = await mobile().history()
     expect(before.mark).toBe(false)
     await openFromList('MOB-chat')
@@ -1233,8 +1302,8 @@ describe('phone layout: the shell', () => {
       'telegramBots',
       'monitor',
       'archived',
-      'about',
-      'agents'
+      'agents',
+      'about'
     ])
     expect(en.experimental.tag).toBe('Beta')
     expect(Object.fromEntries(list.map((t) => [t.id, t.experimental]))).toMatchObject({
@@ -1263,13 +1332,24 @@ describe('phone layout: the shell', () => {
       level: 'section'
     })
     expect(await mobile().settingsTabs()).toEqual([])
+    // 分区页是推入的一页：标签栏收起
+    expect(await mobile().tabBarShown()).toBe(false)
     const row = await until(() => mobile().settingsRowStyle(), 'a settings row in General')
     expect(row.flexWrap).toBe('wrap')
-    expect(parseFloat(row.titleMinWidth)).toBeCloseTo(9 * parseFloat(row.titleFontSize), 1)
+    expect(parseFloat(row.titleMinWidth)).toBeCloseTo(5 * parseFloat(row.titleFontSize), 1)
 
     await mobile().tap({ settingsBack: true })
     await until(async () => (await mobile().settingsTabs()).length === 12, 'the list again')
     expect(await mobile().settingsHeader()).toBeNull()
+    expect(await mobile().tabBarShown()).toBe(true)
+    // 返回手势同样退回分区列表
+    await mobile().tap({ settingsTab: 'general' })
+    await until(
+      async () => (await mobile().settingsHeader()) === en.settings.tabGeneral,
+      'the General section again'
+    )
+    await page().eval(`(history.back(), true)`)
+    await until(async () => (await mobile().settingsTabs()).length === 12, 'the list by gesture')
 
     await mobile().tap({ settingsTab: 'agents' })
     await until(async () => (await mobile().settingsHeader()) === en.panel.agents, 'Agents')
@@ -1366,20 +1446,19 @@ describe('phone layout: the shell', () => {
 
     // 资料库里内置智能体的行：按住 → 它的菜单（创建覆盖副本）。此刻还在「聊天」那一组里，toTab 先退回顶层
     await toTab('library')
+    await pane.tap({ libraryGroup: 'agents' })
     const agents = agentsSidebarPane(page())
-    await agents.expand()
     const builtin = await until(async () => {
       const rows = await agents.builtinRows()
       return rows.length > 0 ? rows[0] : null
-    }, 'a builtin agent row')
+    }, 'a builtin agent row on the agents page')
     await pane.longPress({ agentBuiltinRow: builtin.name }, 800)
     const menu = await until(() => dom.domMenu(), 'the builtin agent row menu')
     expect(menu.map((m) => m.label)).toContain(en.tool.subAgentCreateOverride)
     expect(await pane.chatOpen()).toBe(false)
     await pane.pressEscape()
     await until(async () => (await dom.domMenu()) === null, 'the agent menu closed')
-    await pane.tap({ tab: 'sessions' })
-    await until(async () => (await pane.activeTab()) === 'sessions', 'the sessions tab')
+    await toTab('sessions')
   })
 
   it('M-18 focus mode (on by default) dims nothing in the shell; the desktop layout dims', async () => {

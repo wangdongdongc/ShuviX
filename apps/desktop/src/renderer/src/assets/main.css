@@ -102,7 +102,40 @@ body:has([data-mobile-shell]) [data-context-menu] [role='menuitem'] {
   flex-wrap: wrap;
 }
 [data-settings-stacked] [data-settings-row] > :first-child {
-  min-width: 9em;
+  min-width: 5em;
+}
+/*
+ * 叠放设置里分区页的样子（2026-11-15，照 iOS 设置的分组列表）：每一节是一张没有边框的圆角卡片，组名是卡片上方
+ * 的小灰字，行至少 44px 高。只换外观 —— 控件还是桌面那一套（分段、下拉、开关），放不下时照上面那条换行。
+ */
+[data-settings-stacked] [data-settings-card] {
+  border: 0;
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+}
+[data-settings-stacked] [data-settings-section-title] {
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+[data-settings-stacked] [data-settings-row] {
+  min-height: 44px;
+  padding-block: 8px;
+}
+/* 分区自己的列表页（提供商、LLM 工具）：整列收进一张分组卡片，与分区列表同一副样子 */
+[data-settings-stacked] [data-stacked-list] {
+  padding: 4px 12px 24px;
+}
+[data-settings-stacked] [data-stacked-row] {
+  background: var(--color-bg-secondary);
+}
+[data-settings-stacked] [data-stacked-row]:first-child {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+[data-settings-stacked] [data-stacked-row]:last-child {
+  border-bottom: 0;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
 }
 @keyframes mobile-sheet-in {
   from {
