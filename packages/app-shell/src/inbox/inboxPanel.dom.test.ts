@@ -1609,3 +1609,113 @@ describe('IT-A archived tracked items are not in the inbox', () => {
     expect(container.querySelector('[data-inbox-empty]')).not.toBeNull()
   })
 })
+
+// ─── 宿主接管「打开会话」（`onSelectSession`，手机布局） ──────────────────────────────────────
+
+/**
+ * 手机布局把 `onSelectSession` 传进来：那里「打开」还要把对话页推进来，点的是此刻已经活跃的那一条也要推。
+ * 给了它，面板里每一处「打开这条会话」都走它，不再写 store；不给照旧（INH-15）。
+ *
+ *   IS-1 运行中的行；IS-2 家的头行；IS-3 未读行（先留着那一条再回调）；IS-4 已经活跃的那一条照样回调；
+ *   IS-5 不给 → store；IS-6 询问卡片上的「打开会话」
+ */
+describe('IS onSelectSession takes over opening a session', () => {
+  /** 回调那一刻留着的是哪条 */
+  let heldAtCallback: Array<ReturnType<typeof useInboxHoldStore.getState>['held']> = []
+  const onSelectSession = vi.fn((_id: string) => {
+    heldAtCallback.push(useInboxHoldStore.getState().held)
+  })
+  /** 同一份 props 再画一遍（替身的 hook 不重渲染） */
+  async function mountSelecting(): Promise<void> {
+    // InboxPanel 的参数带缺省值（`= {}`），createElement 的重载认不出它的 props 类型 —— 显式收窄
+    const Panel = InboxPanel as (props: {
+      onSelectSession?: (id: string) => void
+    }) => React.JSX.Element
+    act(() => root.render(createElement(Panel, { onSelectSession })))
+    await flush()
+  }
+
+  beforeEach(() => {
+    onSelectSession.mockClear()
+    heldAtCallback = []
+  })
+
+  it('IS-1 a running row calls onSelectSession, not the store', async () => {
+    store.sessions = [session('A'), session('B')]
+    store.streaming = { A: true }
+    await mountSelecting()
+    act(() => openButtonOf(mustRow('A')).click())
+    expect(onSelectSession.mock.calls).toEqual([['A']])
+    expect(selectSpy).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-inbox-panel]')).not.toBeNull()
+  })
+
+  it('IS-2 a family head calls onSelectSession, not the store', async () => {
+    store.sessions = [session('R'), session('K', { parentId: 'R' })]
+    store.streaming = { K: true }
+    await mountSelecting()
+    const head = container.querySelector<HTMLElement>('[data-inbox-family-head="R"]')!
+    act(() => openButtonOf(head).click())
+    expect(onSelectSession.mock.calls).toEqual([['R']])
+    expect(selectSpy).not.toHaveBeenCalled()
+  })
+
+  it('IS-3 an unread row is held before the callback runs', async () => {
+    store.sessions = [session('S'), session('U'), session('T')]
+    store.unreadState = { unread: { S: S_UNREAD, U: U_UNREAD } }
+    store.api.session.markRead = vi.fn(async () => {})
+    await mountSelecting()
+    act(() => openButtonOf(mustUnread('S')).click())
+    expect(onSelectSession.mock.calls).toEqual([['S']])
+    expect(heldAtCallback).toEqual([{ sessionId: 'S', unread: S_UNREAD }])
+    expect(selectSpy).not.toHaveBeenCalled()
+  })
+
+  it('IS-4 the row of the session that is already active still calls onSelectSession', async () => {
+    store.sessions = [session('A')]
+    store.streaming = { A: true }
+    store.activeSessionId = 'A'
+    await mountSelecting()
+    act(() => openButtonOf(mustRow('A')).click())
+    expect(onSelectSession.mock.calls).toEqual([['A']])
+    expect(selectSpy).not.toHaveBeenCalled()
+  })
+
+  it('IS-5 without the prop a row click goes to the store', async () => {
+    store.sessions = [session('A')]
+    store.streaming = { A: true }
+    await mountPage()
+    act(() => openButtonOf(mustRow('A')).click())
+    expect(selectSpy.mock.calls).toEqual([['A']])
+    expect(onSelectSession).not.toHaveBeenCalled()
+  })
+
+  it("IS-6 the ask card's open-session button calls onSelectSession, not the store", async () => {
+    store.sessions = [session('Y', { lastActiveAt: 900 }), session('X', { lastActiveAt: 100 })]
+    store.pending = { X: 1, Y: 1 }
+    store.api.agent.pendingInputs = async () => ({ X: [choice('qx')], Y: [choice('qy')] })
+    await mountSelecting()
+    const row = container.querySelector<HTMLElement>('[data-inbox-ask-session="X"]')!
+    act(() => openButtonOf(row).click())
+    const card = container.querySelector<HTMLElement>('[data-inbox-card-session="X"]')
+    expect(card).not.toBeNull()
+    expect(onSelectSession).not.toHaveBeenCalled()
+
+    act(() => card!.querySelector<HTMLButtonElement>('[data-inbox-open-session]')!.click())
+    expect(onSelectSession.mock.calls).toEqual([['X']])
+    expect(selectSpy).not.toHaveBeenCalled()
+  })
+
+  it('IS-6 the open card of the already active session opens it through onSelectSession too', async () => {
+    store.sessions = [session('Y', { lastActiveAt: 900 })]
+    store.pending = { Y: 1 }
+    store.activeSessionId = 'Y'
+    store.api.agent.pendingInputs = async () => ({ Y: [choice('qy')] })
+    await mountSelecting()
+    const card = container.querySelector<HTMLElement>('[data-inbox-card-session="Y"]')
+    expect(card).not.toBeNull()
+    act(() => card!.querySelector<HTMLButtonElement>('[data-inbox-open-session]')!.click())
+    expect(onSelectSession.mock.calls).toEqual([['Y']])
+    expect(selectSpy).not.toHaveBeenCalled()
+  })
+})

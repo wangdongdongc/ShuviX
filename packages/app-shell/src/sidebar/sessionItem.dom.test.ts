@@ -414,3 +414,200 @@ describe('run kinds (S1)', () => {
     })
   })
 })
+
+/**
+ * 两层的行（`detail`，手机布局的会话列表）：上层标题 + 行尾时间，下层摘要；未读的点挪到行首的空隙里。
+ *
+ *   SD-1..6   有没有那一层、时间、摘要（文字 / 空 / 节点）、「在等你回答」的警示色
+ *   SD-7..9   未读的点：两层的行在行首（根节点的直接子节点），单层的行照旧在标题那一行
+ *   SD-10..12 其余记号、位置、加粗都在
+ *   SD-13..15 折叠钮、右键菜单、data-run / data-running / data-sub 与单层的行一样
+ */
+describe('detail rows (phone session list)', () => {
+  const row = (): HTMLElement => container.querySelector<HTMLElement>('[data-session-row]')!
+  const detailEl = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-session-detail]')
+  const timeEl = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-session-time]')
+  const previewEl = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-session-preview]')
+  const unreadDots = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-unread]')
+  ]
+  /** a 在 b 之前（文档顺序） */
+  const before = (a: Element, b: Element): boolean =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+  const DETAIL = { time: '09:41' }
+
+  it('SD-1 without detail there is no detail layer, time or preview', () => {
+    render({})
+    expect(detailEl()).toBeNull()
+    expect(timeEl()).toBeNull()
+    expect(previewEl()).toBeNull()
+  })
+
+  it('SD-2 detail with a time only: the layer and the time, no preview', () => {
+    render({ detail: DETAIL })
+    expect(detailEl()).not.toBeNull()
+    expect(timeEl()!.textContent).toBe('09:41')
+    expect(previewEl()).toBeNull()
+    expect((container.firstElementChild as HTMLElement).hasAttribute('data-session-row')).toBe(true)
+    expect(container.querySelectorAll('[data-session-row]')).toHaveLength(1)
+  })
+
+  it('SD-3 a preview is shown, in the normal tone', () => {
+    render({ detail: { ...DETAIL, preview: 'Last reply' } })
+    expect(previewEl()!.textContent).toBe('Last reply')
+    expect(previewEl()!.classList.contains('text-warning')).toBe(false)
+  })
+
+  it('SD-4 previewTone waiting draws the preview in the warning colour', () => {
+    render({ detail: { ...DETAIL, preview: '1 question waiting', previewTone: 'waiting' } })
+    expect(previewEl()!.classList.contains('text-warning')).toBe(true)
+    render({ detail: { ...DETAIL, preview: 'Last reply', previewTone: 'normal' } })
+    expect(previewEl()!.classList.contains('text-warning')).toBe(false)
+  })
+
+  it.each<[string, React.ReactNode]>([
+    ['an empty string', ''],
+    ['null', null],
+    ['undefined', undefined]
+  ])('SD-5 a preview of %s draws no preview layer', (_label, preview) => {
+    render({ detail: { ...DETAIL, preview } })
+    expect(previewEl()).toBeNull()
+    expect(timeEl()!.textContent).toBe('09:41')
+  })
+
+  it('SD-6 a preview that is a React element renders inside the preview layer', () => {
+    render({ detail: { ...DETAIL, preview: createElement('em', { 'data-x': '' }, 'hi') } })
+    const inner = previewEl()!.querySelector('[data-x]')
+    expect(inner).not.toBeNull()
+    expect(inner!.textContent).toBe('hi')
+  })
+
+  it('SD-7 unread in a detail row: one dot, in the gutter, a direct child of the row', () => {
+    render({ detail: DETAIL, unread: true })
+    expect(unreadDots()).toHaveLength(1)
+    const el = unreadDots()[0]
+    expect(el.parentElement).toBe(row())
+    expect(detailEl()!.contains(el)).toBe(false)
+    expect(el.classList.contains('sb-unread-gutter')).toBe(true)
+    expect(el.getAttribute('data-unread')).toBe('')
+    expect(el.title).toBe(en.sidebar.unread)
+    expect(el.getAttribute('aria-label')).toBe(en.sidebar.unread)
+  })
+
+  it('SD-7 a failed unread reply in a detail row is marked failed', () => {
+    render({ detail: DETAIL, unread: true, unreadFailed: true })
+    expect(unreadDots()).toHaveLength(1)
+    const el = unreadDots()[0]
+    expect(el.getAttribute('data-unread')).toBe('failed')
+    expect(el.parentElement).toBe(row())
+    expect(el.title).toBe(en.inbox.failed)
+    expect(el.getAttribute('aria-label')).toBe(en.inbox.failed)
+  })
+
+  it.each<[string, Partial<SessionItemProps>, number]>([
+    ['agent working', { unread: true, run: 'agent' }, 0],
+    ['a pending ask', { unread: true, pendingCount: 1 }, 0],
+    ['only background commands', { unread: true, run: 'resident' }, 1],
+    ['not unread', { unread: false }, 0]
+  ])('SD-8 unread suppression in a detail row, %s', (_label, props, count) => {
+    render({ detail: DETAIL, ...props })
+    expect(unreadDots()).toHaveLength(count)
+  })
+
+  it('SD-9 without detail the unread dot stays on the title line', () => {
+    render({ unread: true })
+    expect(unreadDots()).toHaveLength(1)
+    const el = unreadDots()[0]
+    expect(el.classList.contains('sb-unread-gutter')).toBe(false)
+    expect(el.parentElement).not.toBe(row())
+  })
+
+  it.each<[string, Partial<SessionItemProps>, string]>([
+    ['interrupted', { interrupted: true }, '[data-interrupted]'],
+    ['pending asks', { pendingCount: 2 }, '[data-pending-asks="2"]'],
+    ['goal manager', { goalManager: true }, '[data-goal-mark]']
+  ])('SD-10 the %s mark stays on the title line of a detail row', (_label, props, selector) => {
+    render({ detail: DETAIL, ...props })
+    const mark = container.querySelector(selector)
+    expect(mark).not.toBeNull()
+    expect(detailEl()!.contains(mark)).toBe(true)
+    expect(before(mark!, timeEl()!)).toBe(true)
+    expect(mark!.parentElement).toBe(timeEl()!.parentElement)
+  })
+
+  it('SD-11 location in a detail row: its own line after the time and before the preview, no title', () => {
+    render({ detail: { ...DETAIL, preview: 'Last reply' }, location: 'Proj' })
+    const loc = container.querySelector<HTMLElement>('[data-session-location]')!
+    expect(loc.textContent).toBe('Proj')
+    expect(detailEl()!.contains(loc)).toBe(true)
+    expect(before(timeEl()!, loc)).toBe(true)
+    expect(before(loc, previewEl()!)).toBe(true)
+    expect(loc.hasAttribute('title')).toBe(false)
+  })
+
+  it('SD-11 without detail the location keeps its title', () => {
+    render({ location: 'Proj' })
+    const loc = container.querySelector<HTMLElement>('[data-session-location]')!
+    expect(loc.getAttribute('title')).toBe('Proj')
+  })
+
+  it.each<[string, Partial<SessionItemProps>, boolean]>([
+    ['unread', { unread: true }, true],
+    ['unread and agent working', { unread: true, run: 'agent' }, true],
+    ['not unread', {}, false]
+  ])('SD-12 the bold title follows unread in a detail row, %s', (_label, props, bold) => {
+    render({ detail: DETAIL, ...props })
+    const span = [...row().querySelectorAll<HTMLElement>('span.truncate')].find(
+      (el) => el.textContent === 'Session one'
+    )!
+    expect(span.classList.contains('font-semibold')).toBe(bold)
+  })
+
+  it('SD-13 a detail row with sub-sessions: the toggle folds, the preview selects', () => {
+    const onSelect = vi.fn()
+    const onToggleSubs = vi.fn()
+    render({ detail: { ...DETAIL, preview: 'Last reply' }, subCount: 2, onSelect, onToggleSubs })
+    const toggle = container.querySelector<HTMLButtonElement>('button[data-subs-toggle]')
+    expect(toggle).not.toBeNull()
+    act(() => toggle!.click())
+    expect(onToggleSubs.mock.calls).toEqual([['s1']])
+    expect(onSelect).not.toHaveBeenCalled()
+
+    act(() => previewEl()!.click())
+    expect(onSelect.mock.calls).toEqual([['s1']])
+    expect(onToggleSubs).toHaveBeenCalledTimes(1)
+  })
+
+  it('SD-14 a context menu on a detail row calls onMenu', () => {
+    const onMenu = vi.fn()
+    render({ detail: DETAIL, onMenu })
+    act(() => {
+      row().dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    expect(onMenu).toHaveBeenCalledTimes(1)
+    expect(onMenu.mock.calls[0][0]).toBe('s1')
+  })
+
+  it.each<[string, Partial<SessionItemProps>]>([
+    ['agent', { run: 'agent' }],
+    ['resident', { run: 'resident' }],
+    ['idle', { run: null }],
+    ['sub-session', { isSub: true }]
+  ])(
+    'SD-15 %s: data-run, data-running and data-sub are the same with and without detail',
+    (_l, props) => {
+      const anchors = (): Array<string | null> =>
+        ['data-run', 'data-running', 'data-sub'].map((name) => row().getAttribute(name))
+      render(props)
+      const plain = anchors()
+      render({ ...props, detail: DETAIL })
+      expect(detailEl()).not.toBeNull()
+      expect(anchors()).toEqual(plain)
+      if (props.run) expect(row().getAttribute('data-run')).toBe(props.run)
+      if (props.isSub) expect(row().hasAttribute('data-sub')).toBe(true)
+    }
+  )
+})

@@ -42,7 +42,7 @@
  *        菜单里有「创建覆盖副本」
  *   M-18 专注模式缺省开着：手机布局里打开再返回，壳里没有 .opacity-30；1280 宽的桌面布局里至少一处
  *   M-19 手机布局里对话输入框 16px；1280 宽时不是 16px。会话行与项目组头、「项目知识库」文件夹行同高（±2px：
- *        侧栏的行是一套 .sb-row），手机上是触屏那一档（≥ 40px），桌面侧栏里同一条会话行是 Finder 那一档（24px ±1）
+ *        侧栏的行是一套 .sb-row），手机上是触屏那一档（≥ 40px），桌面侧栏里同一条会话行是桌面那一档（27px ±1）
  *   M-20 popstate 只在落到不带标记的那一条时收起对话页；重载时留下的那条带标记的历史在挂载时被摘掉
  *   M-21 360 宽的卡片（英文、模型名很长）：空闲时发送键在卡片里、模型名截断；用发送键发出（触屏的回车是换行）、
  *        运行中没打字时只有停止；打了字是一颗「立即」（没有字那格，aria-label / title 是字）+ 停止，都 ≥ 36px、
@@ -155,6 +155,8 @@ const BOT = 'mobbot'
 const REGISTRY_GROUPS = ['tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
 /** 桌面布局的资料库：没有跟踪项（2026-11-10 起它在收件箱里；手机还没有收件箱，资料库页留着它） */
 const DESKTOP_REGISTRY_GROUPS = REGISTRY_GROUPS.filter((g) => g !== 'tracking')
+/** 会话页顶层「聊天」那一行的组 key（app-shell 的 TEMP_GROUP_KEY） */
+const TEMP_GROUP = '__no_project__'
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
 const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }
 /** M-21：最窄的常见手机 */
@@ -310,13 +312,27 @@ async function phone(): Promise<void> {
  */
 async function listSettled(): Promise<void> {
   await until(async () => {
-    const rows = await mobile().listRows()
-    if (!rows.includes('MOB-temp')) return false
-    return (
-      (await mobile().listGroupExpanded(projects.main.name)) === false &&
-      (await mobile().listGroupExpanded(projects.other.name)) === false
-    )
+    const groups = await mobile().listNavGroups()
+    return [projects.main.id, projects.other.id, TEMP_GROUP].every((k) => groups.includes(k))
   }, 'the phone session list settled')
+}
+
+/** 会话页进到某一组（已经在那一组就不动；在别的组先退回顶层） */
+async function enterGroup(key: string): Promise<void> {
+  await toTab('sessions')
+  const now = await mobile().listScope()
+  if (now === key) return
+  if (now !== null) await leaveGroup()
+  await until(async () => (await mobile().listNavGroups()).includes(key), `the nav row for ${key}`)
+  await mobile().tap({ listGroup: key })
+  await until(async () => (await mobile().listScope()) === key, `inside the group ${key}`)
+}
+
+/** 第二层顶上的返回键：回会话页顶层 */
+async function leaveGroup(): Promise<void> {
+  if ((await mobile().listScope()) === null) return
+  await mobile().tap({ scope: 'back' })
+  await until(async () => (await mobile().listScope()) === null, 'back at the top level')
 }
 
 /** 回到桌面大小（不重载：布局跟着媒体查询切） */
@@ -332,9 +348,15 @@ async function toTab(key: WebMobileTab): Promise<void> {
   await until(async () => (await mobile().activeTab()) === key, `the ${key} tab`)
 }
 
-/** 推入对话页（真点会话列表里的一行）并等它上屏 */
+/** 推入对话页（先进它所在的那一组，再真点那一行）并等它上屏 */
 async function openFromList(title: string): Promise<void> {
-  await toTab('sessions')
+  const session = (await sessionsInMain()).find((s) => s.title === title)
+  if (!session) throw new Error(`no session titled ${title}`)
+  await enterGroup(session.projectId ?? TEMP_GROUP)
+  await until(
+    async () => (await mobile().listRows()).includes(title),
+    `the row ${title} in its group's list`
+  )
   await mobile().tap({ sessionRow: title })
   await until(
     async () => (await mobile().chatOpen()) && (await mobile().chatTitle()) === title,
@@ -721,13 +743,10 @@ describe('phone layout: the shell', () => {
     expect(await mobile().chatOpen()).toBe(false)
   })
 
-  it('M-2 tabs mount lazily, visited ones stay mounted, an expanded project group survives a round trip', async () => {
-    expect(await mobile().listGroupExpanded(projects.main.name)).toBe(false)
-    await mobile().tap({ listGroupToggle: projects.main.name })
-    await until(
-      async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
-      'MobProj expanded'
-    )
+  it('M-2 tabs mount lazily, visited ones stay mounted, the group you were in survives a round trip', async () => {
+    expect(await mobile().listScope()).toBeNull()
+    await enterGroup(projects.main.id)
+    expect(await mobile().listScopeTitle()).toBe(projects.main.name)
     const order = ['widgets', 'library', 'settings', 'sessions'] as const
     const seen = new Set<string>(['sessions'])
     for (const key of order) {
@@ -747,7 +766,8 @@ describe('phone layout: the shell', () => {
       }
     }
     expect(await mobile().mountedPages()).toEqual(['sessions', 'widgets', 'library', 'settings'])
-    expect(await mobile().listGroupExpanded(projects.main.name)).toBe(true)
+    expect(await mobile().listScope()).toBe(projects.main.id)
+    await leaveGroup()
   })
 
   it('M-3 the sessions page has only the session groups and no desktop chrome', async () => {
@@ -804,6 +824,9 @@ describe('phone layout: the shell', () => {
   })
 
   it('M-8 the calendar opens sessions (the active one too) and keeps its day and the list state across toggles', async () => {
+    // 日历开关、新建抽屉与 bot 组头都在会话页的顶层：前面的用例可能把页面留在某一组里
+    await toTab('sessions')
+    await leaveGroup()
     expect(await mobile().calendarToggleLabel()).toBe(en.mobile.calendar)
     expect(await mobile().calendarState()).toEqual({ mounted: false, visible: false })
     await mobile().tap({ sessions: 'calendarToggle' })
@@ -841,7 +864,6 @@ describe('phone layout: the shell', () => {
     await until(async () => !(await mobile().calendarState()).visible, 'back to the list')
     expect(await mobile().calendarToggleLabel()).toBe(en.mobile.calendar)
     expect((await mobile().calendarState()).mounted).toBe(true)
-    expect(await mobile().listGroupExpanded(projects.main.name)).toBe(true)
     await mobile().tap({ sessions: 'calendarToggle' })
     await until(async () => (await mobile().calendarState()).visible, 'the calendar again')
     expect(await mobile().calendarSelectedDay()).toBe(other)
@@ -850,6 +872,9 @@ describe('phone layout: the shell', () => {
   })
 
   it('M-9 the new-chat sheet: temporary + every project; the backdrop creates nothing; a project creates one session there', async () => {
+    // 日历开关、新建抽屉与 bot 组头都在会话页的顶层：前面的用例可能把页面留在某一组里
+    await toTab('sessions')
+    await leaveGroup()
     await mobile().tap({ sessions: 'newChat' })
     const sheet = await until(() => mobile().sheet(), 'the new-chat sheet')
     expect(sheet.title).toBe(en.mobile.newChatIn)
@@ -886,6 +911,9 @@ describe('phone layout: the shell', () => {
   })
 
   it('M-10 holding a bot group header on the sessions page → "Edit bot" opens its notebook on the chat page; back lands on the sessions page; again reopens', async () => {
+    // 日历开关、新建抽屉与 bot 组头都在会话页的顶层：前面的用例可能把页面留在某一组里
+    await toTab('sessions')
+    await leaveGroup()
     await toTab('sessions')
     const dom = webClientPane(page())
     for (const what of ['first', 'again (the notebook is the active session now)']) {
@@ -1206,6 +1234,8 @@ describe('phone layout: the shell', () => {
     const pane = mobile()
     const dom = webClientPane(page())
     expect(await pane.activeTab()).toBe('sessions')
+    await enterGroup(TEMP_GROUP)
+    await until(async () => (await pane.listRows()).includes('MOB-temp'), 'MOB-temp in the list')
     await pane.installContextMenuCounter()
 
     await pane.longPress({ sessionRow: 'MOB-temp' }, 800)
@@ -1278,13 +1308,9 @@ describe('phone layout: the shell', () => {
     expect(await mobile().composerFontSize()).toBe('16px')
     await backToList()
 
-    // 会话行、项目组头、「项目知识库」文件夹行同一个高度（手机上不再单独加高会话行）
-    await mobile().tap({ listGroupToggle: projects.main.name })
-    await until(
-      async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
-      'MobProj expanded'
-    )
-    // 展开动画走完、三行都上屏且连着两次量到同样的数
+    // 进了项目之后那一页：「新对话」行与「项目知识库」文件夹行同一个高度；会话行是两层的（有摘要），不比它们矮
+    await enterGroup(projects.main.id)
+    // 三行都上屏且连着两次量到同样的数
     let prev = ''
     const rhythm = await until(async () => {
       const r = await mobile().listGroupRhythm(projects.main, 'MOB-chat')
@@ -1296,13 +1322,17 @@ describe('phone layout: the shell', () => {
       }
       return { header: r.header, knowledge: r.knowledge, row: r.row }
     }, 'the MobProj header, its knowledge folder and the MOB-chat row measured')
-    expect(Math.abs(rhythm.row - rhythm.header), JSON.stringify(rhythm)).toBeLessThanOrEqual(2)
-    expect(Math.abs(rhythm.row - rhythm.knowledge), JSON.stringify(rhythm)).toBeLessThanOrEqual(2)
+    expect(rhythm.row, JSON.stringify(rhythm)).toBeGreaterThanOrEqual(rhythm.header - 2)
     expect(Math.abs(rhythm.header - rhythm.knowledge), JSON.stringify(rhythm)).toBeLessThanOrEqual(
       2
     )
     expect(rhythm.row).toBeGreaterThanOrEqual(40)
-    const phoneTemp = await mobile().sessionRowHeight('MOB-temp', 'list')
+    expect(rhythm.header).toBeGreaterThanOrEqual(40)
+    await enterGroup(TEMP_GROUP)
+    const phoneTemp = await until(
+      () => mobile().sessionRowHeight('MOB-temp', 'list'),
+      'the MOB-temp row in the phone list'
+    )
     expect(phoneTemp).not.toBeNull()
 
     await desktopView()
@@ -1310,13 +1340,13 @@ describe('phone layout: the shell', () => {
     const desktopFont = await mobile().composerFontSize()
     expect(desktopFont).not.toBeNull()
     expect(desktopFont).not.toBe('16px')
-    // 桌面侧栏里同一条会话行：同一副排版的桌面那一档（Finder 侧栏的 24px）
+    // 桌面侧栏里同一条会话行：同一副排版的桌面那一档（照 Mail 侧栏定的 27px，行间另有 1px）
     const desktopTemp = await until(
       () => mobile().sessionRowHeight('MOB-temp', 'document'),
       'the MOB-temp row in the desktop sidebar'
     )
     expect(phoneTemp!).toBeGreaterThanOrEqual(40)
-    expect(Math.abs(desktopTemp - 24)).toBeLessThanOrEqual(1)
+    expect(Math.abs(desktopTemp - 27)).toBeLessThanOrEqual(1)
   })
 
   it('M-20 popstate closes the chat only onto an unmarked entry; a mark left behind by a reload is cleared', async () => {
@@ -1548,13 +1578,6 @@ describe('phone layout: the shell', () => {
       )
       // 会话在项目组里：单跑这一条时组还收着（M-2 起整份文件跑的时候已经展开）
       await toTab('sessions')
-      if ((await mobile().listGroupExpanded(projects.main.name)) === false) {
-        await mobile().tap({ listGroupToggle: projects.main.name })
-        await until(
-          async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
-          'the project group expanded'
-        )
-      }
       await openFromList('MOB-wide')
       await chat.ready()
       await until(async () => {
@@ -2288,17 +2311,6 @@ describe('phone layout: the shell', () => {
       if ((await page().eval<number>('innerWidth')) !== PHONE.width) await phone()
       await toTab('sessions')
       // 单跑这一条时 MobProj 是收着的（M-2 才展开它）
-      if ((await mobile().listGroupExpanded(projects.main.name)) === false) {
-        await mobile().tap({ listGroupToggle: projects.main.name })
-        await until(
-          async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
-          'MobProj expanded'
-        )
-      }
-      await until(
-        async () => (await mobile().listRows()).includes('MOB-ask'),
-        'MOB-ask in the phone list'
-      )
       await openFromList('MOB-ask')
       await chat.ready()
 

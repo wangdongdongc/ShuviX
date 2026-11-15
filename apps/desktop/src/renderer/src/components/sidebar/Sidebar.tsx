@@ -65,6 +65,13 @@ export interface SidebarProps {
   mode?: 'full' | 'sessions' | 'library'
   /** 用户从这里打开了一个会话（含笔记本会话；同一个会话再点一次也算）—— 手机布局据此推入对话页 */
   onOpenSession?: (sessionId: string) => void
+  /**
+   * 两层导航（手机布局的会话页，`mode="sessions"` 时用；见 app-shell Sidebar 的 `drill`）：顶层是导航行，
+   * 进了某一组只画那一组的会话
+   */
+  drill?: { scope: string | null; onOpen: (key: string, label: string) => void }
+  /** `mode="sessions"` 的顶层列表最上面多画的东西（手机：收件箱那一行） */
+  sessionsPrepend?: React.ReactNode
 }
 
 /** 侧栏「收件箱」一行：打开右侧面板并切到收件箱（它不是主区的一页） */
@@ -74,7 +81,12 @@ function openInboxPanel(): void {
   panel.open()
 }
 
-export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): React.JSX.Element {
+export function Sidebar({
+  mode = 'full',
+  onOpenSession,
+  drill,
+  sessionsPrepend
+}: SidebarProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const storeSetActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const onOpenSessionRef = useRef(onOpenSession)
@@ -863,8 +875,11 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
             <InboxRow onOpen={openInboxPanel} />
             {groups}
           </>
-        ) : undefined
+        ) : (
+          sessionsPrepend
+        )
       }
+      drill={full ? undefined : drill}
       overlays={overlays}
     />
   )

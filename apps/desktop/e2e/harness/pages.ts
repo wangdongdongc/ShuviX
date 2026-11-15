@@ -13498,8 +13498,15 @@ export type WebMobileTouchTarget =
   | { tab: WebMobileTab }
   /** 会话页列表里的会话行（按标题；不含日历） */
   | { sessionRow: string }
-  /** 会话页列表里一个项目组头的折叠钮（按项目名） */
-  | { listGroupToggle: string }
+  /**
+   * 会话页顶层列表里一组的导航行（`data-group-nav=<组 key>`：项目 id / `__no_project__`（聊天）/ `bot:<name>`）——
+   * 点它进那一组的会话列表
+   */
+  | { listGroup: string }
+  /** 会话页第二层顶上的返回键（`data-mobile-scope-back`） */
+  | { scope: 'back' }
+  /** 会话页顶层最上面的收件箱那一行（`data-mobile-inbox-row`） */
+  | { inboxRow: true }
   /** 日历里选中那天的会话行（按标题） */
   | { calendarRow: string }
   /** 日历里的一天（`YYYY-MM-DD`，react-day-picker 的 `data-day`） */
@@ -13817,10 +13824,20 @@ export interface WebMobilePane {
   sidebarSettingsRow(): Promise<boolean>
   /** 整页里的分组头（`data-group`，DOM 序）—— 桌面布局里是一整条侧栏 */
   documentGroups(): Promise<string[]>
-  /** 会话页列表里的会话行标题（DOM 序；不含日历） */
+  /** 会话页列表里的会话行标题（DOM 序；不含日历）—— 顶层没有会话行，进了某一组才有 */
   listRows(): Promise<string[]>
-  /** 会话页列表里一个项目组是不是展开着（组头不在 → null） */
-  listGroupExpanded(project: string): Promise<boolean | null>
+  /** 会话页顶层列表里各导航行的组 key（DOM 序；进了某一组时为空） */
+  listNavGroups(): Promise<string[]>
+  /**
+   * 会话页此刻在第二层的哪一页：某一组的 key（`data-scope-list`）、收件箱页是 `'inbox'`；在顶层 → null
+   */
+  listScope(): Promise<string | null>
+  /** 顶层一行导航行行尾的会话数（`data-group-count`；没有数字 = 0，行不在 → null） */
+  listNavCount(key: string): Promise<number | null>
+  /** 第二层顶上的大标题（`data-mobile-scope-title`）；在顶层 → null */
+  listScopeTitle(): Promise<string | null>
+  /** 第二层列表里一条会话行的时间与摘要（`data-session-time` / `data-session-preview`）；行不在 → null */
+  listRowDetail(title: string): Promise<{ time: string; preview: string | null } | null>
 
   /** 真触摸点一下（按下 `holdMs` 后松开，缺省 60ms） */
   tap(target: WebMobileTouchTarget, opts?: { holdMs?: number }): Promise<void>
@@ -13898,8 +13915,9 @@ export interface WebMobilePane {
    */
   sessionRowHeight(title: string, scope: 'list' | 'document'): Promise<number | null>
   /**
-   * 手机会话页列表里一个项目组的三种行的高度：组头（`group/header` 那层）、它的「项目知识库」文件夹行
-   * （`data-project-knowledge=<projectId>`）、组里按标题的一条会话行。哪一个不在 / 看不见 → 那一项 null
+   * 手机会话页进了一个项目之后那一页里三种行的高度：第一行「新对话」（`data-scope-new-chat`）、它的「项目知识库」
+   * 文件夹行（`data-project-knowledge=<projectId>`）、按标题的一条会话行（两层的行，有摘要时更高）。
+   * 哪一个不在 / 看不见 → 那一项 null
    */
   listGroupRhythm(
     project: { id: string; name: string },
@@ -14009,13 +14027,13 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
   const MOBILE_LIST = `${PAGE('sessions')}?.querySelector('[data-mobile-list]')`
   const LIST = `[...(${MOBILE_LIST}?.children ?? [])].find((c) => !c.querySelector('.calendar-container'))`
   const CALENDAR = `[...(${MOBILE_LIST}?.children ?? [])].find((c) => c.querySelector('.calendar-container'))`
-  const ROW_TITLE = `((r) => (r.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim())`
+  // 标题那一格：单层的行在行的第一层 div 里，两层的行（手机会话列表）再深一层
+  const ROW_TITLE = `((r) => (r.querySelector(':scope > div > span.truncate, :scope > div > div > span.truncate')?.textContent ?? '').trim())`
   const ROW_IN = (scope: string, title: string): string =>
     `[...((${scope})?.querySelectorAll('[data-session-row]') ?? [])].find((r) => ${ROW_TITLE}(r) === ${JSON.stringify(title)})`
-  const LIST_HEADER = (project: string): string =>
-    `[...((${LIST})?.querySelectorAll('div[class*="group/header"][data-group="project"]') ?? [])].find(
-      (h) => (h.querySelector('button span.truncate')?.textContent ?? '').trim() === ${JSON.stringify(project)}
-    )`
+  /** 顶层列表里一组的导航行（按组 key） */
+  const NAV_ROW = (key: string): string =>
+    `[...((${LIST})?.querySelectorAll('[data-group-nav]') ?? [])].find((h) => h.getAttribute('data-group-nav') === ${JSON.stringify(key)})`
   const SHEET = `document.querySelector('[data-bottom-sheet]')`
   const STACKED = `document.querySelector('[data-settings-stacked]')`
   const STACKED_LIST = `${STACKED}?.querySelector('[data-stacked-list]')`
@@ -14069,8 +14087,10 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     if ('tab' in target)
       return `document.querySelector('[data-mobile-tab=${JSON.stringify(target.tab)}]')`
     if ('sessionRow' in target) return ROW_IN(LIST, target.sessionRow)
-    if ('listGroupToggle' in target)
-      return `[...(${LIST_HEADER(target.listGroupToggle)}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+    if ('listGroup' in target)
+      return `${NAV_ROW(target.listGroup)}?.querySelector(':scope > button')`
+    if ('scope' in target) return `document.querySelector('[data-mobile-scope-back]')`
+    if ('inboxRow' in target) return `document.querySelector('[data-mobile-inbox-row]')`
     if ('calendarRow' in target) return ROW_IN(CALENDAR, target.calendarRow)
     if ('calendarDay' in target)
       return `(${CALENDAR})?.querySelector('[data-day=${JSON.stringify(target.calendarDay)}] button')`
@@ -14265,13 +14285,33 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       client.eval<string[]>(
         `[...((${LIST})?.querySelectorAll('[data-session-row]') ?? [])].map(${ROW_TITLE})`
       ),
-    listGroupExpanded: (project) =>
-      client.eval<boolean | null>(`(() => {
-        const header = ${LIST_HEADER(project)}
-        if (!header) return null
-        // 项目组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层：展开 1fr、收起 0fr）
-        const rows = header.nextElementSibling?.style.gridTemplateRows
-        return rows ? rows === '1fr' : true
+    listNavGroups: () =>
+      client.eval<string[]>(
+        `[...((${LIST})?.querySelectorAll('[data-group-nav]') ?? [])].map((h) => h.getAttribute('data-group-nav') ?? '')`
+      ),
+    listScope: () =>
+      client.eval<string | null>(`(() => {
+        if (document.querySelector('[data-mobile-inbox]')) return 'inbox'
+        return (${LIST})?.querySelector('[data-scope-list]')?.getAttribute('data-scope-list') ?? null
+      })()`),
+    listNavCount: (key) =>
+      client.eval<number | null>(`(() => {
+        const row = ${NAV_ROW(key)}
+        if (!row) return null
+        return Number(row.querySelector('[data-group-count]')?.textContent ?? 0)
+      })()`),
+    listScopeTitle: () =>
+      client.eval<string | null>(
+        `(document.querySelector('[data-mobile-scope-title] h1')?.textContent ?? null)`
+      ),
+    listRowDetail: (title) =>
+      client.eval<{ time: string; preview: string | null } | null>(`(() => {
+        const row = ${ROW_IN(LIST, title)}
+        if (!row) return null
+        return {
+          time: (row.querySelector('[data-session-time]')?.textContent ?? '').trim(),
+          preview: row.querySelector('[data-session-preview]')?.textContent?.trim() ?? null
+        }
       })()`),
 
     tap: async (target, opts = {}) => {
@@ -14464,7 +14504,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           (el) => el.getAttribute('data-project-knowledge') === ${JSON.stringify(project.id)}
         )
         return {
-          header: h(${LIST_HEADER(project.name)}),
+          header: h(list?.querySelector('[data-scope-new-chat]')),
           knowledge: h(folder),
           row: h(${ROW_IN(LIST, rowTitle)})
         }

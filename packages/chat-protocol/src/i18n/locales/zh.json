@@ -1958,6 +1958,8 @@
     "newChatIn": "在哪里新建会话",
     "tempChat": "临时会话",
     "noTasks": "这个会话还没有后台任务",
+    "scopeEmpty": "这里还没有会话",
+    "scopeGone": "这一组已经不在了",
     "fontSizeHint": "只改这台设备上的字号，桌面和别的设备不受影响"
   },
   "daily": {

@@ -6,7 +6,7 @@ import {
 } from '@shuvix/chat-protocol/botSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Plus } from 'lucide-react'
 import {
   BotAvatar,
   useChatStore,
@@ -17,6 +17,8 @@ import {
   useBgTaskStore,
   useUnreadStore,
   getChatApi,
+  RedactedText,
+  RedactionSessionProvider,
   type Session
 } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -33,6 +35,8 @@ import { useSessionExport } from './useSessionExport'
 import { BotKnowledgeFolder, ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
 import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 import { RowMenuButton } from './RowMenuButton'
+import { useSessionPreviews } from './useSessionPreviews'
+import { unreadTimeLabel } from '../inbox/inboxItems'
 import {
   useBotRegistry,
   type BotGroupAdapter,
@@ -74,6 +78,8 @@ export interface BotsSectionCaps {
 
 /** 每组先给几条（超出的折在「查看更多」后面）—— 侧栏一眼该看得完，旧会话按需再放 */
 const GROUP_VISIBLE_LIMIT = 8
+/** 两层导航里进了某一组之后那一页先放出的条数：那一页整屏都是这一组，不必像树里那样只露 8 条 */
+const SCOPE_VISIBLE_LIMIT = 30
 /** 每点一次「查看更多」再多放出的条数 */
 const GROUP_PAGE_SIZE = 20
 
@@ -132,6 +138,15 @@ export interface ProjectSessionGroupsProps {
    * 「Bot 知识库」（BotKnowledgeFolder，2026-11-14）—— 那个 bot 自己的库。
    */
   projectKnowledge?: KnowledgeGroupAdapter
+  /**
+   * 两层导航（web 客户端的手机布局传，2026-11-14 对标 iOS Mail；缺省 = 桌面那棵就地展开的树）：
+   *   - `scope: null` —— 顶层：分节照旧，每个项目 / bot / 「聊天」是一行导航行（会话数 + 箭头），点它 `onOpen(组 key, 名字)`，
+   *     组的正文不画；
+   *   - `scope: <组 key>` —— 只画那一组：第一行「新对话」、它的知识库文件夹、然后是两层的会话行（标题 + 时间 +
+   *     摘要，见 SessionItem 的 `detail`）。组不在了（项目被删）就是一句空态。
+   * 组 key 与折叠集合同一套：项目 id / `TEMP_GROUP_KEY` / `botGroupKey(name)`。行与组头的菜单照旧（长按 = 右键）
+   */
+  drill?: { scope: string | null; onOpen: (key: string, label: string) => void }
 }
 
 /**
@@ -162,7 +177,8 @@ export function ProjectSessionGroups({
   sessionsOverride,
   hideEmptyGroups,
   projectsSection,
-  projectKnowledge
+  projectKnowledge,
+  drill
 }: ProjectSessionGroupsProps): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
@@ -290,6 +306,50 @@ export function ProjectSessionGroups({
   }, [projects, sessions, projectNames, childrenByParent, bots])
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
+
+  // ─── 两层导航：进了某一组之后那一页 ────────────────────────────────────
+  const scope = drill?.scope ?? null
+  /** 那一组的顶层会话（不含折在父行下面的子会话）；没在看某一组 → 空 */
+  const scopeSessions = useMemo(() => {
+    if (!scope) return []
+    if (scope.startsWith(BOT_GROUP_PREFIX)) {
+      const name = scope.slice(BOT_GROUP_PREFIX.length)
+      // 已归档的 bot 顶层不列，在里面时被归档了也一样：它的会话不再列出来
+      if (botRegistry?.archived?.includes(name)) return []
+      return botSessions.get(name) ?? []
+    }
+    return groups.find(([key]) => key === scope)?.[1] ?? []
+  }, [scope, groups, botSessions, botRegistry])
+  // 摘要按「内容此刻的版本」重取：最后动手的时间、在不在跑（跑完那一刻回复才写完）、未读从哪一刻起
+  const previewStamps = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const s of scopeSessions) {
+      out[s.id] =
+        `${s.lastActiveAt}:${streamingSessions[s.id] ? 1 : 0}:${unreadSessions[s.id]?.since ?? ''}`
+    }
+    return out
+  }, [scopeSessions, streamingSessions, unreadSessions])
+  const previews = useSessionPreviews(scopeSessions, previewStamps, scope !== null)
+  // 行尾时间只分「今天写时分 / 更早写月-日」，挂上那一刻的钟就够
+  const [mountedAt] = useState(() => Date.now())
+  /** 两层的行要的那一份：时间 + 摘要（在等你回答 > 正在回复 > 最后一条回复） */
+  const detailOf = (
+    item: Session
+  ): { time: string; preview?: React.ReactNode; previewTone?: 'normal' | 'waiting' } => {
+    const time = unreadTimeLabel(item.lastActiveAt, mountedAt)
+    const asks = pendingCounts[item.id] ?? 0
+    if (asks > 0) return { time, preview: t('inbox.asks', { count: asks }), previewTone: 'waiting' }
+    if (streamingSessions[item.id]) return { time, preview: t('inbox.replying') }
+    const text = previews[item.id]
+    return {
+      time,
+      preview: text ? (
+        <RedactionSessionProvider sessionId={item.id}>
+          <RedactedText text={text} />
+        </RedactionSessionProvider>
+      ) : undefined
+    }
+  }
 
   // 会话行菜单（右键整行 / 点行尾的 ⋮ 是同一份）：
   // 复制链接（日历注入）/ 配置（回调注入）/ 导出（内置能力；笔记本会话不提供）/ 删除（回调注入）
@@ -500,9 +560,11 @@ export function ProjectSessionGroups({
   const renderRows = (
     groupKey: string,
     groupSessions: Session[],
-    location?: (s: Session) => string
+    location?: (s: Session) => string,
+    detailed = false
   ): React.JSX.Element => {
-    const limit = GROUP_VISIBLE_LIMIT + (extraVisible[groupKey] ?? 0)
+    const limit =
+      (detailed ? SCOPE_VISIBLE_LIMIT : GROUP_VISIBLE_LIMIT) + (extraVisible[groupKey] ?? 0)
     const shownSessions =
       groupSessions.length <= limit ? groupSessions : groupSessions.slice(0, limit)
     return (
@@ -533,6 +595,7 @@ export function ProjectSessionGroups({
               onSelect={handleSelect}
               onMenu={hasSessionMenu(!!item.settings.notebookPath) ? openSessionMenu : undefined}
               location={!isSub && location ? location(item) : undefined}
+              detail={detailed ? detailOf(item) : undefined}
             />
           )
           if (children.length === 0) return row(s, false)
@@ -602,6 +665,15 @@ export function ProjectSessionGroups({
         // 「聊天」分节头的「+」：直接开一条临时会话（日历里不给，与 bot 组一样）
         onAdd={isTemp && !hideEmptyGroups ? () => onNewChat(null) : undefined}
         addLabel={isTemp ? t('sidebar.newChat') : undefined}
+        nav={
+          drill
+            ? {
+                key: groupKey,
+                count: groupSessions.length,
+                onOpen: () => drill.onOpen(groupKey, label)
+              }
+            : undefined
+        }
       >
         {projectKnowledge && !isTemp && (
           <ProjectKnowledgeFolder
@@ -647,6 +719,15 @@ export function ProjectSessionGroups({
           onMenu={hideEmptyGroups ? undefined : (e) => openBotMenu(bot, e)}
           onAdd={hideEmptyGroups ? undefined : (e) => openLocationPicker(bot, e)}
           addLabel={t('sidebar.newChat')}
+          nav={
+            drill
+              ? {
+                  key,
+                  count: groupSessions.length,
+                  onOpen: () => drill.onOpen(key, bot.displayName)
+                }
+              : undefined
+          }
         >
           {projectKnowledge && bot.knowledgeBundle && !hideEmptyGroups && (
             <BotKnowledgeFolder
@@ -736,6 +817,15 @@ export function ProjectSessionGroups({
                   onToggle={() => toggleBot(key)}
                   active={activeGroupKey === key}
                   dim={dim && activeGroupKey !== key}
+                  nav={
+                    drill
+                      ? {
+                          key,
+                          count: (botSessions.get(name) ?? []).length,
+                          onOpen: () => drill.onOpen(key, name)
+                        }
+                      : undefined
+                  }
                 >
                   {renderRows(key, botSessions.get(name) ?? [], locationOf)}
                 </SessionGroup>
@@ -822,6 +912,11 @@ export function ProjectSessionGroups({
                       ? undefined
                       : (e) => openMissingBotMenu(name, orphans.length, e)
                   }
+                  nav={
+                    drill
+                      ? { key, count: orphans.length, onOpen: () => drill.onOpen(key, name) }
+                      : undefined
+                  }
                 >
                   <div className="sb-hint">{t('sidebar.botFileMissing')}</div>
                   {renderRows(key, orphans, locationOf)}
@@ -838,8 +933,69 @@ export function ProjectSessionGroups({
   // 资料库那几组由宿主经 groupsPrepend 插在最上面；「Bots」分节在资料库与项目之间
   const projectGroups = visible.filter(([key]) => key !== TEMP_GROUP_KEY)
   const tempGroup = visible.find(([key]) => key === TEMP_GROUP_KEY)
-  const botsSection = renderBotsSection()
   const onNewProject = projectsSection?.onNewProject
+
+  // 两层导航：正在看某一组 → 只画那一组（不画分节、不画别的组）
+  if (scope) {
+    const isTemp = scope === TEMP_GROUP_KEY
+    const botName = scope.startsWith(BOT_GROUP_PREFIX) ? scope.slice(BOT_GROUP_PREFIX.length) : null
+    const bot = botName ? (botRegistry?.bots.find((b) => b.name === botName) ?? null) : null
+    const isProject = !isTemp && !botName && Object.hasOwn(projectNames, scope)
+    // 新对话：项目 / 聊天直接建；bot 先选工作位置（清单还没扫回来或文件不在了就没有这一行）
+    const newChat: ((e: React.MouseEvent) => void) | null = isTemp
+      ? () => onNewChat(null)
+      : isProject
+        ? () => onNewChat(scope)
+        : bot
+          ? (e) => openLocationPicker(bot, e)
+          : null
+    // bot 组还在：文件在；或者文件不在了但还留着会话（顶层那个灰色的组）；清单没扫回来之前先当它在
+    const botKnown =
+      !!botName &&
+      !botRegistry?.archived?.includes(botName) &&
+      (!!bot || botRegistry === null || scopeSessions.length > 0)
+    const known = isTemp || isProject || botKnown
+    return (
+      <div data-scope-list={scope}>
+        {newChat && (
+          <div
+            data-scope-new-chat=""
+            onClick={newChat}
+            className="sb-row cursor-pointer text-accent hover:bg-bg-hover/60"
+          >
+            <Plus className="sb-icon" />
+            <span className="truncate">{t('sidebar.newChat')}</span>
+          </div>
+        )}
+        {projectKnowledge && isProject && (
+          <ProjectKnowledgeFolder
+            projectId={scope}
+            adapter={projectKnowledge}
+            enabled
+            dim={false}
+          />
+        )}
+        {projectKnowledge && bot?.knowledgeBundle && (
+          <BotKnowledgeFolder
+            botName={bot.name}
+            bundle={bot.knowledgeBundle}
+            adapter={projectKnowledge}
+            enabled
+            dim={false}
+          />
+        )}
+        {scopeSessions.length === 0 ? (
+          <div data-scope-empty="" className="sb-hint">
+            {known ? t('mobile.scopeEmpty') : t('mobile.scopeGone')}
+          </div>
+        ) : (
+          renderRows(scope, scopeSessions, botName ? locationOf : undefined, true)
+        )}
+      </div>
+    )
+  }
+
+  const botsSection = renderBotsSection()
 
   return (
     <>
@@ -868,7 +1024,14 @@ export function ProjectSessionGroups({
         projectGroups.map((group) => renderGroup(group))
       )}
       {tempGroup &&
-        renderGroup(tempGroup, projectGroups.length > 0 || !!botsSection || !!projectsSection)}
+        (drill ? (
+          // 顶层的「聊天」是一行导航行，不是分节：自己隔开一节的距离
+          <div data-sidebar-section="temp-nav" style={{ marginTop: 'var(--sb-section-space)' }}>
+            {renderGroup(tempGroup)}
+          </div>
+        ) : (
+          renderGroup(tempGroup, projectGroups.length > 0 || !!botsSection || !!projectsSection)
+        ))}
     </>
   )
 }

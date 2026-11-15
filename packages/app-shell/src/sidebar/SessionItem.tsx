@@ -15,6 +15,11 @@
  * 普通会话的图标换成 MessagesSquare（两片叠起来的对话框 = 这里不止一场对话），bot / 定时运行 / 悬浮
  * 会话保留自己的身份图标 —— 身份图标若顶掉折叠钮，它们的子会话在侧栏里就够不着了（bot 恰恰
  * 把活全交给子会话）。
+ *
+ * `detail`（手机布局的会话列表，2026-11-14 对标 iOS Mail 的邮件列表）：同一行换成两层 —— 上层是标题与行尾的时间，
+ * 下层是两行灰色的摘要，行与行之间一条内缩的细线；未读的点挪到行首的空隙里（Mail 的位置），其余记号
+ * （询问、中断、目标）照旧在标题那一行。数据锚点一个不少，只多了 `data-session-detail` / `data-session-time` /
+ * `data-session-preview`。
  */
 import { useTranslation } from 'react-i18next'
 import { RedactedText, RedactionSessionProvider, type SessionRunKind } from '@shuvix/chat-ui'
@@ -81,6 +86,11 @@ export interface SessionItemProps {
    * 缺省不画
    */
   location?: string
+  /**
+   * 两层的行（手机布局的会话列表）：`time` 是行尾的时间，`preview` 是标题下面的摘要（调用方已经按状态选好：
+   * 在等你回答 / 正在运行 / 最后一条回复；没有就不画那一层）。`previewTone` 让「在等你回答」那一句换成警示色
+   */
+  detail?: { time: string; preview?: React.ReactNode; previewTone?: 'normal' | 'waiting' }
   // —— 桌面专属（可选） ——
   isPinned?: boolean
 }
@@ -105,6 +115,7 @@ export function SessionItem({
   onSelect,
   onMenu,
   location,
+  detail,
   isPinned = false
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -122,6 +133,77 @@ export function SessionItem({
     />
   )
   const busy = run !== null
+  const showUnread = unread && run !== 'agent' && pendingCount === 0
+  // 标题那一行里靠右的记号（中断 / 目标 / 询问）有没有：行尾的时间、位置靠它决定要不要自己顶到右边
+  const hasMark = (interrupted && !busy) || !!goalManager || pendingCount > 0
+  const titleAndCount = (
+    <>
+      <span className={`truncate ${unread ? 'font-semibold' : ''}`}>
+        {/* 标题可能带自动脱敏的占位符（起标题的 agent 看到的是占位符）：按这一行的会话显示成标记 */}
+        <RedactionSessionProvider sessionId={session.id}>
+          <RedactedText text={session.title} />
+        </RedactionSessionProvider>
+      </span>
+      {subCount > 0 && (
+        <span
+          className={`shrink-0 text-[0.8em] tabular-nums ${
+            subCollapsed ? 'text-text-tertiary' : 'text-text-tertiary/60'
+          }`}
+        >
+          {subCount}
+        </span>
+      )}
+    </>
+  )
+  /** 标题那一行里的记号。`withUnread`：单层的行把未读的点也排在这里；两层的行把它挪到行首的空隙里 */
+  const marks = (withUnread: boolean): React.JSX.Element => (
+    <>
+      {interrupted && !busy && (
+        <span
+          data-interrupted=""
+          title={t('sidebar.interrupted')}
+          aria-label={t('sidebar.interrupted')}
+          className="shrink-0 ml-auto h-1.5 w-1.5 rounded-full bg-warning"
+        />
+      )}
+      {goalManager && (
+        <span
+          data-goal-mark="manager"
+          title={t('goal.sidebarManager')}
+          aria-label={t('goal.sidebarManager')}
+          className={`shrink-0 flex items-center text-accent ${interrupted && !busy ? '' : 'ml-auto'}`}
+        >
+          <GoalGlyph />
+        </span>
+      )}
+      {withUnread && showUnread && (
+        <span
+          data-unread={unreadFailed ? 'failed' : ''}
+          title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+          aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+          className={`shrink-0 h-[7px] w-[7px] rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'} ${
+            location || (interrupted && !busy) || goalManager ? '' : 'ml-auto'
+          }`}
+        />
+      )}
+      {pendingCount > 0 && (
+        <span
+          data-pending-asks={pendingCount}
+          className={`flex items-center gap-1 shrink-0 ${
+            (interrupted && !busy) || goalManager ? '' : 'ml-auto'
+          }`}
+        >
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+          </span>
+          <span className="text-[9px] text-amber-400 font-semibold tabular-nums">
+            {pendingCount}
+          </span>
+        </span>
+      )}
+    </>
+  )
   return (
     <div
       onClick={() => onSelect(session.id)}
@@ -137,12 +219,21 @@ export function SessionItem({
       data-sub-count={subCount > 0 ? subCount : undefined}
       data-subs={subCount > 0 ? (subCollapsed ? 'collapsed' : 'expanded') : undefined}
       // 缩进口径与知识库一致（base.css 的 .sb-row）：子会话再进一级，图标对齐父行的标签
-      className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${isSub ? 'sb-depth-1' : ''} ${
+      className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${detail ? 'sb-row-wrap sb-row-detail' : ''} ${isSub ? 'sb-depth-1' : ''} ${
         active
           ? 'bg-bg-active/80 text-text-primary'
           : `text-text-primary hover:bg-bg-hover/60 ${dim ? 'opacity-30 hover:opacity-100' : ''}`
       }`}
     >
+      {detail && showUnread && (
+        // 两层的行：未读的点在行首的空隙里，与标题那一行同高
+        <span
+          data-unread={unreadFailed ? 'failed' : ''}
+          title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+          aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
+          className={`sb-unread-gutter rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'}`}
+        />
+      )}
       {subCount > 0 ? (
         // 有子会话：图标本身就是折叠钮（同知识库目录行点图标展开），点行的其余部分照常
         // 打开这条会话。`data-subs-toggle` 是 e2e 认它的锚点 —— 钮里的图标随会话身份变
@@ -162,76 +253,57 @@ export function SessionItem({
       ) : (
         icon
       )}
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-6">
-        <span className={`truncate ${unread ? 'font-semibold' : ''}`}>
-          {/* 标题可能带自动脱敏的占位符（起标题的 agent 看到的是占位符）：按这一行的会话显示成标记 */}
-          <RedactionSessionProvider sessionId={session.id}>
-            <RedactedText text={session.title} />
-          </RedactionSessionProvider>
-        </span>
-        {subCount > 0 && (
-          <span
-            className={`shrink-0 text-[0.8em] tabular-nums ${
-              subCollapsed ? 'text-text-tertiary' : 'text-text-tertiary/60'
-            }`}
-          >
-            {subCount}
-          </span>
-        )}
-        {location && (
-          <span
-            data-session-location=""
-            title={location}
-            className="ml-auto min-w-0 max-w-[45%] shrink truncate text-[0.85em] text-text-tertiary group-hover:invisible"
-          >
-            {location}
-          </span>
-        )}
-        {interrupted && !busy && (
-          <span
-            data-interrupted=""
-            title={t('sidebar.interrupted')}
-            aria-label={t('sidebar.interrupted')}
-            className="shrink-0 ml-auto h-1.5 w-1.5 rounded-full bg-warning"
-          />
-        )}
-        {goalManager && (
-          <span
-            data-goal-mark="manager"
-            title={t('goal.sidebarManager')}
-            aria-label={t('goal.sidebarManager')}
-            className={`shrink-0 flex items-center text-accent ${interrupted && !busy ? '' : 'ml-auto'}`}
-          >
-            <GoalGlyph />
-          </span>
-        )}
-        {unread && run !== 'agent' && pendingCount === 0 && (
-          <span
-            data-unread={unreadFailed ? 'failed' : ''}
-            title={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
-            aria-label={unreadFailed ? t('inbox.failed') : t('sidebar.unread')}
-            className={`shrink-0 h-[7px] w-[7px] rounded-full ${unreadFailed ? 'bg-error' : 'bg-accent'} ${
-              location || (interrupted && !busy) || goalManager ? '' : 'ml-auto'
-            }`}
-          />
-        )}
-        {pendingCount > 0 && (
-          <span
-            data-pending-asks={pendingCount}
-            className={`flex items-center gap-1 shrink-0 ${
-              (interrupted && !busy) || goalManager ? '' : 'ml-auto'
-            }`}
-          >
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+      {detail ? (
+        <div
+          data-session-detail=""
+          className="sb-label flex-1 min-w-0 border-b border-border-secondary/40"
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
+            {titleAndCount}
+            {marks(false)}
+            <span
+              data-session-time=""
+              className={`shrink-0 text-[0.8em] tabular-nums text-text-tertiary ${
+                hasMark ? '' : 'ml-auto'
+              }`}
+            >
+              {detail.time}
             </span>
-            <span className="text-[9px] text-amber-400 font-semibold tabular-nums">
-              {pendingCount}
+          </div>
+          {location && (
+            <div
+              data-session-location=""
+              className="mt-0.5 truncate text-[0.8em] text-text-tertiary"
+            >
+              {location}
+            </div>
+          )}
+          {detail.preview !== undefined && detail.preview !== null && detail.preview !== '' && (
+            <div
+              data-session-preview=""
+              className={`mt-0.5 line-clamp-2 text-[0.85em] leading-snug ${
+                detail.previewTone === 'waiting' ? 'text-warning' : 'text-text-secondary'
+              }`}
+            >
+              {detail.preview}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-6">
+          {titleAndCount}
+          {location && (
+            <span
+              data-session-location=""
+              title={location}
+              className="ml-auto min-w-0 max-w-[45%] shrink truncate text-[0.85em] text-text-tertiary group-hover:invisible"
+            >
+              {location}
             </span>
-          </span>
-        )}
-      </div>
+          )}
+          {marks(true)}
+        </div>
+      )}
       {onMenu && (
         <RowMenuButton
           className="absolute right-1.5 opacity-0 group-hover:opacity-100"

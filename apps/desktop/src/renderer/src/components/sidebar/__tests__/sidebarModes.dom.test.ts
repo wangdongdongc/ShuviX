@@ -522,3 +522,60 @@ describe('DS-7 the desktop bots adapter', () => {
     }
   )
 })
+
+/**
+ * 两层导航（手机布局的会话页）：`drill` 与 `sessionsPrepend` 只在 `mode="sessions"` 时交给共享侧栏
+ * （`sessionsPrepend` 画在分组上面 —— 「收件箱」那一行）；`full`（桌面）与 `library` 都不认它们。
+ *
+ *   DS-8 sessions：drill 原样交下去，sessionsPrepend 画在共享侧栏里；没有桌面那行收件箱、没有资料库分组
+ *   DS-9 full：两个都不认，与 DS-1 一样
+ *   DS-10 sessions 不给这两个：与 DS-2 一样
+ *   DS-11 library：没有共享侧栏，也不画 sessionsPrepend
+ */
+describe('drill and sessionsPrepend (phone sessions page)', () => {
+  const marker = (): React.ReactNode => createElement('div', { 'data-sp': '' })
+
+  it('DS-8 sessions: drill reaches the shared sidebar as is and sessionsPrepend is drawn inside it', () => {
+    const drill = { scope: 'p1', onOpen: vi.fn() }
+    render({ mode: 'sessions', drill, sessionsPrepend: marker() })
+    expect(lastShared().drill).toBe(drill)
+    const shared = container.querySelector('[data-stub-shared]')!
+    expect(shared.querySelector('[data-sp]')).not.toBeNull()
+    expect(container.querySelectorAll('[data-sp]')).toHaveLength(1)
+    expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
+    expect(stubGroups()).toEqual([])
+    expect(lastShared().caps).toEqual({})
+    expect(lastShared().hideFooter).toBe(true)
+  })
+
+  it('DS-8 sessions: a top-level drill (scope null) is passed through too', () => {
+    const drill = { scope: null, onOpen: vi.fn() }
+    render({ mode: 'sessions', drill })
+    expect(lastShared().drill).toBe(drill)
+  })
+
+  it('DS-9 full: neither prop is used; the inbox row and the five groups are as on the desktop', () => {
+    const drill = { scope: 'p1', onOpen: vi.fn() }
+    render({ drill, sessionsPrepend: marker() })
+    expect(lastShared().drill).toBeUndefined()
+    expect(container.querySelector('[data-sp]')).toBeNull()
+    expect(container.querySelector('[data-stub-inbox-row]')).not.toBeNull()
+    expect(stubGroups()).toEqual(GROUP_ORDER)
+    expect(lastShared().caps).toEqual({ windowDrag: true, pin: true })
+    expect(lastShared().hideFooter).toBe(false)
+  })
+
+  it('DS-10 sessions without the new props: no drill and nothing prepended', () => {
+    render({ mode: 'sessions' })
+    expect(lastShared().drill).toBeUndefined()
+    expect(lastShared().groupsPrepend).toBeUndefined()
+  })
+
+  it('DS-11 library: no shared sidebar and no sessionsPrepend', () => {
+    const drill = { scope: 'p1', onOpen: vi.fn() }
+    render({ mode: 'library', drill, sessionsPrepend: marker() })
+    expect(rec.shared).toHaveLength(0)
+    expect(container.querySelector('[data-stub-shared]')).toBeNull()
+    expect(container.querySelector('[data-sp]')).toBeNull()
+  })
+})

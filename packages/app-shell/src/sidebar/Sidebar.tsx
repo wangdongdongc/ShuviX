@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Settings } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
@@ -52,10 +52,15 @@ export interface SidebarProps {
   /** 不画底部的设置栏（web 客户端的手机布局：设置是底部标签栏里单独的一页） */
   hideFooter?: boolean
   /**
-   * 行的尺寸（base.css 的 .sb-row 那组变量）：`regular`（缺省，桌面 —— Finder 侧栏的 24px 一行）/ `touch`
+   * 行的尺寸（base.css 的 .sb-row 那组变量）：`regular`（缺省，桌面 —— 照 Mail 侧栏定比例的 27px 一行）/ `touch`
    * （手机 —— 同一副排版放大到 40px、16px 字）
    */
   density?: 'regular' | 'touch'
+  /**
+   * 两层导航（手机布局，见 ProjectSessionGroups 的 `drill`）：顶层是导航行，进了某一组只画那一组。
+   * 进组时列表回到顶上，退回顶层时回到离开前的位置；`groupsPrepend` 只在顶层画
+   */
+  drill?: { scope: string | null; onOpen: (key: string, label: string) => void }
 }
 
 /**
@@ -82,7 +87,8 @@ export function Sidebar({
   bots,
   projectKnowledge,
   hideFooter = false,
-  density = 'regular'
+  density = 'regular',
+  drill
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -141,6 +147,29 @@ export function Sidebar({
       return next
     })
 
+  // 两层导航：同一个滚动容器先后画顶层与某一组 —— 进组回到顶上，退回顶层回到离开前的位置。
+  // 顶层的位置在滚动时记：等到进组那一刻再读就晚了 —— 组里内容短，浏览器已经把位置压回去了
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const indexScrollTop = useRef(0)
+  const drillScope = drill?.scope ?? null
+  const lastScope = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    const prev = lastScope.current
+    lastScope.current = drillScope
+    if (!el || prev === drillScope) return
+    if (drillScope) {
+      el.scrollTop = 0
+    } else {
+      el.scrollTop = indexScrollTop.current
+    }
+  }, [drillScope])
+  const trackIndexScroll = drill
+    ? (e: React.UIEvent<HTMLDivElement>): void => {
+        if (lastScope.current === null) indexScrollTop.current = e.currentTarget.scrollTop
+      }
+    : undefined
+
   const platform = getChatApi().app.platform
   // 拖拽带只在 macOS 有意义（hiddenInset 交通灯留白 + app-region: drag）；
   // Windows 是原生标题栏，app-region 惰性，留条空带纯属占位
@@ -165,9 +194,11 @@ export function Sidebar({
       {/* 会话列表 */}
       {/* 左右同宽的边：选中的那一块是内缩的圆角块（Finder），两边要对称 */}
       <div
+        ref={scrollerRef}
+        onScroll={trackIndexScroll}
         className={`flex-1 overflow-y-auto no-scrollbar ${density === 'touch' ? 'px-3 pb-4' : 'px-2.5 pb-3'}`}
       >
-        {groupsPrepend}
+        {drillScope ? null : groupsPrepend}
         {/* 一个会话、一个项目都没有（全新安装）也是这一套分节：「项目」里是「打开一个文件夹作为项目」，
             「聊天」里是一行「新对话」—— 两种对话的入口都看得见，web 客户端没有菜单栏可退 */}
         <ProjectSessionGroups
@@ -189,6 +220,7 @@ export function Sidebar({
           caps={{ pin: caps.pin }}
           pinnedSessionIds={pinnedSessionIds}
           projectKnowledge={projectKnowledge}
+          drill={drill}
         />
       </div>
 

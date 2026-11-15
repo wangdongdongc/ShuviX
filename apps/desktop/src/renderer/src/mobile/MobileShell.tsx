@@ -2,6 +2,9 @@
  * web 客户端的手机布局（窄屏，见 useCompactLayout）—— 桌面布局（侧栏 + 对话 + 右侧 / 底部面板）在手机上放不下，
  * 这里把同一批组件换一种排法，桌面的组件只多了几个缺省关闭的参数：
  *
+ * - 会话页是两层（2026-11-14，对标 iOS Mail）：顶层是「邮箱」那一层 —— 收件箱、各 bot、各项目、聊天，每行带数量与
+ *   箭头；点一行进那一组的会话列表（标题 + 时间 + 两行摘要），顶上是返回与那一组的名字。进组时压一条浏览器历史，
+ *   返回键 / 返回手势退回顶层；对话页是再往上的一层；
  * - 底部四个标签：会话（项目与临时会话，可切到日历）、小组件（卡片列表；点开就地整屏打开）、资料库（Bots / 智能体 /
  *   安全策略 / Hooks / 技能 / 知识库）、设置（分区列表 → 分区；外加智能体监视）；
  * - 打开一个小组件 → 小组件页收起页头与标签栏、应用占满整屏（应用本身还挂在 WidgetPanel 里，回列表不关）；
@@ -17,6 +20,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Inbox,
   LayoutGrid,
   Library,
   List,
@@ -28,7 +34,7 @@ import {
   Bot
 } from 'lucide-react'
 import { ChatHostProvider, getChatApi, useChatHost, useChatStore } from '@shuvix/chat-ui'
-import { useProjects } from '@shuvix/app-shell'
+import { InboxPanel, useInboxSections, useProjects } from '@shuvix/app-shell'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { CalendarPanel } from '../components/browser/CalendarPanel'
 import { WidgetPanel } from '../components/browser/WidgetPanel'
@@ -53,6 +59,10 @@ const TABS: { key: MobileTab; labelKey: string; Icon: typeof MessagesSquare }[] 
 const HISTORY_MARK = 'shuvixMobileChat'
 /** 同上，打开小组件时压的 */
 const WIDGET_HISTORY_MARK = 'shuvixMobileWidget'
+/** 同上，会话页进了某一组（或收件箱）时压的；在它上面再压的对话 / 小组件那一条也带着它 */
+const SCOPE_HISTORY_MARK = 'shuvixMobileScope'
+/** 会话页第二层里「收件箱」那一页的 key（别的 key 是 ProjectSessionGroups 的组 key） */
+const INBOX_SCOPE = 'inbox'
 
 const historyHas = (mark: string): boolean =>
   Boolean((window.history.state as Record<string, unknown> | null)?.[mark])
@@ -83,6 +93,34 @@ export function MobileShell(): React.JSX.Element {
   )
 }
 
+/** 会话页顶层最上面那一行：收件箱（等你回答 + 新回复的条数；有会话在等你时数字前一个琥珀点） */
+function InboxNavRow({ onOpen }: { onOpen: () => void }): React.JSX.Element {
+  const { t } = useTranslation()
+  const { waiting, unread } = useInboxSections()
+  const count = waiting.length + unread.length
+  return (
+    <div
+      data-mobile-inbox-row=""
+      onClick={onOpen}
+      className="sb-row cursor-pointer text-text-primary"
+    >
+      <Inbox className="sb-icon text-accent" aria-hidden="true" />
+      <span className="truncate">{t('inbox.title')}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 text-text-tertiary">
+        {waiting.length > 0 && (
+          <span data-inbox-alert="" className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+        )}
+        {count > 0 && (
+          <span data-inbox-count="" className="text-[0.9em] tabular-nums">
+            {count}
+          </span>
+        )}
+        <ChevronRight className="h-[1em] w-[1em]" aria-hidden="true" />
+      </span>
+    </div>
+  )
+}
+
 function MobileShellBody(): React.JSX.Element {
   const { t } = useTranslation()
   const [tab, setTab] = useState<MobileTab>('sessions')
@@ -92,6 +130,9 @@ function MobileShellBody(): React.JSX.Element {
   const [calendar, setCalendar] = useState(false)
   const [calendarMounted, setCalendarMounted] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
+  /** 会话页的第二层：正在看的那一组（或收件箱）；null = 顶层 */
+  const [scope, setScope] = useState<{ key: string; label: string } | null>(null)
+  const scopeRef = useRef(false)
   const { projects } = useProjects()
   const fontSize = usePhoneFontSize()
   const widgetApp = useWidgetStore((s) => s.foregroundApp)
@@ -103,8 +144,33 @@ function MobileShellBody(): React.JSX.Element {
   const openChat = useCallback((): void => {
     if (chatOpenRef.current) return
     chatOpenRef.current = true
-    window.history.pushState({ [HISTORY_MARK]: true }, '')
+    window.history.pushState(
+      {
+        [HISTORY_MARK]: true, // 在第二层上面再压的这一条也带上它的标记：退回来落在这一条上，第二层还该开着
+        ...(scopeRef.current ? { [SCOPE_HISTORY_MARK]: true } : {})
+      },
+      ''
+    )
     setChatOpen(true)
+  }, [])
+
+  const openScope = useCallback((key: string, label: string): void => {
+    if (!scopeRef.current) {
+      scopeRef.current = true
+      window.history.pushState({ [SCOPE_HISTORY_MARK]: true }, '')
+    }
+    setScope({ key, label })
+  }, [])
+
+  /** 第二层的返回键：退掉进组时压的那条历史（popstate 再回顶层），与返回手势同一条路 */
+  const closeScope = useCallback((): void => {
+    if (!scopeRef.current) return
+    if (historyHas(SCOPE_HISTORY_MARK)) {
+      window.history.back()
+    } else {
+      scopeRef.current = false
+      setScope(null)
+    }
   }, [])
 
   /** 返回键：退掉打开对话时压的那条历史（popstate 再收起对话页），与手机的返回手势同一条路 */
@@ -120,15 +186,23 @@ function MobileShellBody(): React.JSX.Element {
 
   useEffect(() => {
     // 重新加载时对话页 / 小组件开着：那条标记过的历史还在，但页面已经不在 —— 摘掉标记，免得之后要多退一次
-    if (historyHas(HISTORY_MARK) || historyHas(WIDGET_HISTORY_MARK)) {
+    if (
+      historyHas(HISTORY_MARK) ||
+      historyHas(WIDGET_HISTORY_MARK) ||
+      historyHas(SCOPE_HISTORY_MARK)
+    ) {
       window.history.replaceState(null, '')
     }
     const onPop = (): void => {
-      if (!chatOpenRef.current) return
-      // 退回到的那一条还带着标记（比如页面里一个 #锚点 的前进 / 后退）：对话页还该开着
-      if (historyHas(HISTORY_MARK)) return
-      chatOpenRef.current = false
-      setChatOpen(false)
+      // 退回到的那一条还带着标记（比如页面里一个 #锚点 的前进 / 后退）：那一层还该开着
+      if (chatOpenRef.current && !historyHas(HISTORY_MARK)) {
+        chatOpenRef.current = false
+        setChatOpen(false)
+      }
+      if (scopeRef.current && !historyHas(SCOPE_HISTORY_MARK)) {
+        scopeRef.current = false
+        setScope(null)
+      }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -145,7 +219,13 @@ function MobileShellBody(): React.JSX.Element {
     const off = useWidgetStore.subscribe((state, prev) => {
       if (state.foregroundApp === prev.foregroundApp) return
       if (prev.foregroundApp === null) {
-        window.history.pushState({ [WIDGET_HISTORY_MARK]: true }, '')
+        window.history.pushState(
+          {
+            [WIDGET_HISTORY_MARK]: true, // 在第二层上面再压的这一条也带上它的标记：退回来落在这一条上，第二层还该开着
+            ...(scopeRef.current ? { [SCOPE_HISTORY_MARK]: true } : {})
+          },
+          ''
+        )
       } else if (state.foregroundApp === null && historyHas(WIDGET_HISTORY_MARK)) {
         window.history.back()
       }
@@ -184,20 +264,38 @@ function MobileShellBody(): React.JSX.Element {
     }
   }
 
+  /** 收件箱里点一行：选中它并推入对话页（点的是此刻已经活跃的那一条也推） */
+  const openFromInbox = useCallback(
+    (id: string): void => {
+      useChatStore.getState().setActiveSessionId(id)
+      openChat()
+    },
+    [openChat]
+  )
+  const inboxOpen = scope?.key === INBOX_SCOPE
+  // 交给侧栏的两层导航：收件箱那一页不是侧栏画的，那时侧栏留在顶层（藏着）
+  const drill = useMemo(
+    () => ({ scope: scope && scope.key !== INBOX_SCOPE ? scope.key : null, onOpen: openScope }),
+    [scope, openScope]
+  )
+
   const sessionsActions = (
     <>
-      <button
-        type="button"
-        data-mobile-calendar-toggle=""
-        className={headerIcon}
-        onClick={() => {
-          setCalendar((v) => !v)
-          setCalendarMounted(true)
-        }}
-        aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
-      >
-        {calendar ? <List size={21} /> : <CalendarDays size={21} />}
-      </button>
+      {/* 日历是顶层的另一种看法：进了某一组就不给 */}
+      {!scope && (
+        <button
+          type="button"
+          data-mobile-calendar-toggle=""
+          className={headerIcon}
+          onClick={() => {
+            setCalendar((v) => !v)
+            setCalendarMounted(true)
+          }}
+          aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
+        >
+          {calendar ? <List size={21} /> : <CalendarDays size={21} />}
+        </button>
+      )}
       <button
         type="button"
         data-mobile-new-chat=""
@@ -238,22 +336,55 @@ function MobileShellBody(): React.JSX.Element {
               className="absolute inset-0 flex flex-col"
               style={tab === 'sessions' ? undefined : { display: 'none' }}
             >
-              {pageTitle(t('mobile.tabSessions'), sessionsActions)}
+              {scope ? (
+                <>
+                  {/* 第二层的顶栏：返回（写着上一层的名字）在上，那一组的名字是大标题 */}
+                  <div className="flex items-center pl-2 pr-2 pt-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      data-mobile-scope-back=""
+                      onClick={closeScope}
+                      className="flex h-9 items-center gap-0.5 rounded-full pl-1 pr-3 text-[16px] text-accent active:bg-bg-hover"
+                    >
+                      <ChevronLeft size={22} aria-hidden="true" />
+                      <span>{t('mobile.tabSessions')}</span>
+                    </button>
+                  </div>
+                  <div data-mobile-scope-title="">
+                    {pageTitle(scope.label, inboxOpen ? undefined : sessionsActions)}
+                  </div>
+                </>
+              ) : (
+                pageTitle(t('mobile.tabSessions'), sessionsActions)
+              )}
               {/* 列表与日历都挂着、只切显示：切回列表时项目的展开状态与滚动位置都还在。列表就是桌面的侧栏，
                   只是密度换成手指的那一档（Sidebar mode="sessions" → density touch） */}
               <div className="flex-1 min-h-0 relative" data-mobile-list="">
                 <div
                   className="absolute inset-0"
-                  style={calendar ? { display: 'none' } : undefined}
+                  style={(calendar && !scope) || inboxOpen ? { display: 'none' } : undefined}
                 >
-                  <Sidebar mode="sessions" onOpenSession={openChat} />
+                  <Sidebar
+                    mode="sessions"
+                    onOpenSession={openChat}
+                    drill={drill}
+                    sessionsPrepend={
+                      <InboxNavRow onOpen={() => openScope(INBOX_SCOPE, t('inbox.title'))} />
+                    }
+                  />
                 </div>
+                {inboxOpen && (
+                  // 收件箱页：桌面右侧面板里那同一个组件，字号按手机放大
+                  <div className="absolute inset-0" data-mobile-inbox="" data-mobile-scale="">
+                    <InboxPanel onSelectSession={openFromInbox} />
+                  </div>
+                )}
                 {calendarMounted && (
                   <div
                     className="absolute inset-0"
                     data-mobile-scale=""
                     data-sidebar-density="touch"
-                    style={calendar ? undefined : { display: 'none' }}
+                    style={calendar && !scope ? undefined : { display: 'none' }}
                   >
                     <CalendarPanel onOpenSession={openChat} />
                   </div>

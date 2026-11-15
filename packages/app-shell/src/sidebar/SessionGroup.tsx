@@ -34,10 +34,12 @@
 import {
   Bot,
   BookOpen,
+  ChevronRight,
   FolderClosed,
   FolderOpen,
   Library,
   ListChecks,
+  MessageSquare,
   Plus,
   Shield,
   Users,
@@ -83,6 +85,12 @@ export interface SessionGroupProps {
   onMenu?: (e: React.MouseEvent) => void
   /** 实验功能：标签后缀一枚「实验」小标签 */
   experimental?: ExperimentalFeature
+  /**
+   * 导航行（手机布局的顶层列表，对标 iOS Mail 的「邮箱」那一层）：组头不再就地展开，点它是「进这一组」——
+   * 行尾是会话数与一个箭头，正文不画，「+」也不画（新对话在进去之后那一页的第一行）。`temp` 形态给了它
+   * 也画成一行（对话气泡图标），不再是摊开的分节。`key` 是这一组的 key，写在 `data-group-nav` 上（e2e 认它）
+   */
+  nav?: { key: string; count?: number; onOpen: () => void }
   /** 分组内的会话项（SessionItem 列表） */
   children: React.ReactNode
 }
@@ -122,10 +130,11 @@ export function SessionGroup({
   onAdd,
   addLabel,
   muted = false,
+  nav,
   children
 }: SessionGroupProps): React.JSX.Element {
-  // temp / section 是摊开的纯分节：没有折叠，也就没有折叠图标（见文件头注释）
-  const flat = variant === 'temp' || variant === 'section'
+  // temp / section 是摊开的纯分节：没有折叠，也就没有折叠图标（见文件头注释）；导航行永远是一行
+  const flat = (variant === 'temp' || variant === 'section') && !nav
   const Icon =
     variant === 'knowledge'
       ? Library
@@ -141,9 +150,11 @@ export function SessionGroup({
                 ? BookOpen
                 : variant === 'tracking'
                   ? ListChecks
-                  : collapsed
-                    ? FolderClosed
-                    : FolderOpen
+                  : variant === 'temp'
+                    ? MessageSquare
+                    : collapsed || nav
+                      ? FolderClosed
+                      : FolderOpen
   return (
     <div className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}>
       {/* 当前会话所在的组：整组垫一层很淡的底（桌面侧栏上看得出「我在哪个项目里」；手机侧栏底色就是 bg-primary，
@@ -182,16 +193,17 @@ export function SessionGroup({
           /* 可折叠的组（项目、Bots、智能体…）是一行「位置」：着色的图标 + 正常字重的名字，与它里面的行同高 */
           <div
             data-group={variant}
+            data-group-nav={nav ? nav.key : undefined}
             className={`sb-row group/header cursor-pointer ${
               active ? 'text-text-primary' : 'text-text-primary hover:bg-bg-hover/60'
             } ${muted ? 'opacity-50' : ''}`}
             onContextMenu={onMenu}
           >
             <button
-              onClick={onToggle}
-              data-has-add={onAdd ? '' : undefined}
+              onClick={nav ? nav.onOpen : onToggle}
+              data-has-add={onAdd && !nav ? '' : undefined}
               className={`flex items-center gap-[var(--sb-gap)] flex-1 min-w-0 self-stretch text-left ${
-                onAdd ? 'group-hover/header:pr-12' : 'group-hover/header:pr-6'
+                nav ? '' : onAdd ? 'group-hover/header:pr-12' : 'group-hover/header:pr-6'
               }`}
             >
               {icon ? (
@@ -201,9 +213,19 @@ export function SessionGroup({
               )}
               <span className={`truncate ${muted ? 'line-through' : ''}`}>{label}</span>
               {experimental && <ExperimentalTag feature={experimental} />}
+              {nav && (
+                <span className="ml-auto flex shrink-0 items-center gap-1 text-text-tertiary">
+                  {nav.count !== undefined && nav.count > 0 && (
+                    <span data-group-count="" className="text-[0.9em] tabular-nums">
+                      {nav.count}
+                    </span>
+                  )}
+                  <ChevronRight className="h-[1em] w-[1em]" aria-hidden="true" />
+                </span>
+              )}
             </button>
-            {onAdd && addButton(onAdd, addLabel)}
-            {onMenu && (
+            {onAdd && !nav && addButton(onAdd, addLabel)}
+            {onMenu && !nav && (
               <RowMenuButton
                 className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"
                 onOpen={onMenu}
@@ -211,7 +233,7 @@ export function SessionGroup({
             )}
           </div>
         )}
-        {flat ? (
+        {nav ? null : flat ? (
           <div>{children}</div>
         ) : (
           <AnimatedCollapse open={!collapsed}>

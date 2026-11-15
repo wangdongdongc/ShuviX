@@ -59,6 +59,11 @@ type SectionName = 'waiting' | 'unread' | 'running'
 export interface InboxPanelProps {
   /** 跟踪项（桌面）；不给就没有「跟踪中」一节 */
   tracking?: InboxTrackingAdapter
+  /**
+   * 打开一条会话（缺省 chatStore.setActiveSessionId）。手机布局传：那里「打开」还要把对话页推进来，
+   * 而且点的是此刻已经活跃的那一条也要推（store 里 id 没变，订阅看不到）
+   */
+  onSelectSession?: (id: string) => void
 }
 
 /** 底部那一句：归档了一项（带「撤销」） */
@@ -81,7 +86,7 @@ function useMinuteClock(): number {
   return now
 }
 
-export function InboxPanel({ tracking }: InboxPanelProps = {}): React.JSX.Element {
+export function InboxPanel({ tracking, onSelectSession }: InboxPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const held = useHeldUnread()
   const sections = useInboxSections(held)
@@ -92,7 +97,8 @@ export function InboxPanel({ tracking }: InboxPanelProps = {}): React.JSX.Elemen
     rescan: rescanTracking
   } = useTrackingItems(tracking)
   const sessions = useChatStore((s) => s.sessions)
-  const select = useChatStore((s) => s.setActiveSessionId)
+  const storeSelect = useChatStore((s) => s.setActiveSessionId)
+  const select = onSelectSession ?? storeSelect
   const activeId = useChatStore((s) => s.activeSessionId)
   const rootRef = useRef<HTMLDivElement>(null)
   // 开着那张卡的数字键：焦点在面板里才算（对话里那张卡在焦点不在这里时照旧接）
@@ -296,6 +302,7 @@ export function InboxPanel({ tracking }: InboxPanelProps = {}): React.JSX.Elemen
         context={answering.context}
         onCollapse={answering.collapse}
         onResponse={(response) => answering.respond(ask, response)}
+        onOpenSession={onSelectSession}
       />
     ) : (
       <InboxAskRow

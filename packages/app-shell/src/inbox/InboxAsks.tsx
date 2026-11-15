@@ -260,6 +260,8 @@ export interface InboxAskCardProps {
   context: string | null
   onCollapse: () => void
   onResponse: (response: InputResponse) => Promise<void>
+  /** 「打开会话」怎么开；不给 = 切到那个会话（手机上要给：已经是当前会话时也得把对话页推出来） */
+  onOpenSession?: (sessionId: string) => void
 }
 
 export function InboxAskCard({
@@ -267,10 +269,12 @@ export function InboxAskCard({
   waited,
   context,
   onCollapse,
-  onResponse
+  onResponse,
+  onOpenSession
 }: InboxAskCardProps): React.JSX.Element {
   const { t } = useTranslation()
-  const openSession = useChatStore((s) => s.setActiveSessionId)
+  const storeOpen = useChatStore((s) => s.setActiveSessionId)
+  const openSession = onOpenSession ?? storeOpen
   const { session, request } = ask
   const ref = useRef<HTMLElement>(null)
   // J / K、答完换下一条时可能换到屏幕外的一行
