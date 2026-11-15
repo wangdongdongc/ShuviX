@@ -983,6 +983,16 @@ describe('询问卡片在对话流里（手机）', () => {
     const mobile = webMobilePane(page)
     await until(() => mobile.shellPresent(), 'phone shell')
     await sleep(800)
+    // 会话页是两层：先进「聊天」那一组（这条会话不属于任何项目），再点它那一行
+    await until(
+      async () => (await mobile.listNavGroups()).includes('__no_project__'),
+      'the nav row of the chats group'
+    )
+    await mobile.tap({ listGroup: '__no_project__' })
+    await until(
+      async () => (await mobile.listRows()).includes(PHONE_TITLE),
+      'the session row in its group'
+    )
     await mobile.tap({ sessionRow: PHONE_TITLE })
     await until(
       async () => (await mobile.chatOpen()) && (await mobile.chatTitle()) === PHONE_TITLE,
