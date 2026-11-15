@@ -11,7 +11,7 @@ export const SESSION_PANEL_MAX_W = 600
 export type SessionPanelTool = 'files' | 'subagent' | 'tasks' | 'artifacts'
 
 /**
- * 共享会话面板视图状态（桌面 / 扩展共用）—— 聊天区内部右侧的「会话工具栏」悬浮卡片
+ * 共享会话面板视图状态（桌面 / 扩展共用）—— 聊天区内部右侧的会话面板
  * （装载 Files / 后台任务，见 SessionPanel / SessionToolbar）。
  *
  * 与 usePanelStore（app 级右侧面板）的定位区分：本面板挂在对话列内部、与会话绑定 ——
@@ -24,7 +24,7 @@ export interface SessionPanelStoreState {
   /** 面板宽度（px） */
   width: number
 
-  /** 工具栏点按语义：已开且同工具 → 收起；否则展开并切到该工具 */
+  /** 已开且同工具 → 收起；否则展开并切到该工具（工具栏自己按「展示出来的工具」判，用 show / close） */
   toggle: (sessionId: string, tool: SessionPanelTool) => void
   /** 揭示语义：确保展开并切到该工具（不 toggle）—— 任务揭示用 */
   show: (sessionId: string, tool: SessionPanelTool) => void

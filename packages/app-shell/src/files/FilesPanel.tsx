@@ -25,7 +25,6 @@ import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
 import { FilesTree, type FilesTreeContextMenuItem } from './FilesTree'
 import { LoadedSlices, dirKeyOf, dirParamOf } from './lazyTree'
-import { usePanelCloseInset } from '../panel/panelCloseInset'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import {
   useChatStore,
@@ -100,7 +99,6 @@ export function FilesPanel({
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
-  const closeInset = usePanelCloseInset()
   const touch = useChatDensity() === 'touch'
   const showContextMenu = useContextMenu()
 
@@ -499,11 +497,8 @@ export function FilesPanel({
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
       {/* 顶栏：左侧工作目录名（大写）+ 右侧搜索截断提示 + 搜索 + 刷新 */}
-      {/* 头部：会话面板里要给悬在卡片右上角的收起按钮让出位置（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
       <div
-        className={`flex-shrink-0 flex items-center justify-between gap-2 ${sz.bar} border-b border-border-secondary/30${
-          closeInset ? ' pr-8' : ''
-        }`}
+        className={`flex-shrink-0 flex items-center justify-between gap-2 ${sz.bar} border-b border-border-secondary/30`}
       >
         <div className="flex items-center gap-0.5 min-w-0 max-w-[60%]">
           <span

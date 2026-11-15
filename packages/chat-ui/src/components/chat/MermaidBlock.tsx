@@ -23,6 +23,7 @@ import { useMarkdownStreaming } from './markdownStreaming'
 import { FigureExportButton } from '../figure/FigureExportPanel'
 import { authoredFigureSource, figureLabelOf } from '../figure/figureExport'
 import { mermaidTitleOf } from '../figure/figureExportPure'
+import { FigureBlock, FIGURE_SOURCE_CLASS } from '../figure/FigureBlock'
 import {
   MERMAID_FONT_SIZE,
   MERMAID_MAX_HEIGHT,
@@ -44,8 +45,8 @@ import {
  *    （才写了图类型那一行）时显示「正在生成」占位。错误卡只在消息写完后出。帧只在多写完一行时
  *    重算 —— 渲染的输入是「到最后一个换行为止」的那一截。
  * 3. **配色是 token。** pele 的产物把颜色写成 `var(--pele-*)`，themes.css 的 `.pele` 那段把它们接到
- *    主题 token 上；卡片挂着 `data-figure-surface="card"`，图于是知道自己坐在卡片底上（标签衬底
- *    与卡片同色、节点比卡片凸一级）。切主题不重渲。
+ *    主题 token 上；图直接画在页面上（外壳 FigureBlock 挂 `data-figure-surface="page"`，就是 themes.css
+ *    的缺省：标签衬底与页面同色、节点比页面凸一级），与笔记本里的同一种图一致。切主题不重渲。
  * 4. **限高。** 内联只占一块不超过 MERMAID_MAX_HEIGHT 的地方：宽度先交给 pele 按栏宽重排，
  *    仍然太高时整张缩得进去且字还读得清就整张缩，读不清就按栏宽显示、截在限高处（底部渐隐）——
  *    规则见 mermaidLayout。限高藏住或缩小了图时给「展开 / 收起」（工具栏一个；截断时图底下也有一条，
@@ -74,7 +75,7 @@ const mermaidUnfoldState = new Map<string, boolean>()
 const settledCache = new Map<string, MermaidRenderResult>()
 const SETTLED_CACHE_MAX = 64
 
-/** 卡片的左右内边距（p-3）：放图那一格比卡片窄这么多 */
+/** 放图那一格的左右内边距（p-3）：能放图的宽度比外壳窄这么多 */
 const FIGURE_PADDING_X = 24
 
 /** 对话里画字的两种字体：正文是 body 的字体，等宽的与正文里的 `code` 同一份（base.css） */
@@ -280,63 +281,59 @@ export function MermaidBlock({
     : undefined
 
   return (
-    <div
-      ref={cardRef}
-      data-figure-surface="card"
-      className="my-2 rounded-lg overflow-hidden"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+    <FigureBlock
+      kind="mermaid"
+      shellRef={cardRef}
+      pinActions={showSource}
+      actions={
+        <>
+          {/* 只导出写完了的图：流式中途屏幕上的是按半截源码画出的一帧 —— 与 ```svg「写完才导出」同一条 */}
+          {svg && settled && (
+            <FigureExportButton
+              getSource={() =>
+                authoredFigureSource(svg, {
+                  name: mermaidTitleOf(code) ?? figureLabelOf(svg) ?? 'mermaid',
+                  surface: 'page',
+                  inheritFrom: () => figureRef.current
+                })
+              }
+            />
+          )}
+          {svg && unfoldable && !showSource && (
+            <button
+              onClick={() => setUnfolded(!showUnfolded)}
+              data-mermaid-unfold
+              aria-expanded={showUnfolded}
+              className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+            >
+              {showUnfolded ? <FoldVertical size={10} /> : <UnfoldVertical size={10} />}
+              <span>{showUnfolded ? t('message.diagramFold') : t('message.diagramUnfold')}</span>
+            </button>
+          )}
+          {svg && zoomable && !showSource && (
+            <button
+              onClick={() => setExpanded(true)}
+              data-mermaid-expand
+              className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+            >
+              <Maximize2 size={10} />
+              <span>{t('message.diagramExpand')}</span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowSource(!showSource)}
+            data-mermaid-source-toggle
+            className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+            title={showSource ? t('message.showDiagram') : t('message.source')}
+          >
+            {showSource ? <FileText size={10} /> : <Code size={10} />}
+            <span>{showSource ? t('message.diagram') : t('message.source')}</span>
+          </button>
+        </>
+      }
     >
-      <div
-        className="flex items-center gap-3 px-4 py-1.5"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        <span className="text-[10px] text-text-tertiary font-medium mr-auto">Mermaid</span>
-        {/* 只导出写完了的图：流式中途屏幕上的是按半截源码画出的一帧 —— 与 ```svg「写完才导出」同一条 */}
-        {svg && settled && (
-          <FigureExportButton
-            getSource={() =>
-              authoredFigureSource(svg, {
-                name: mermaidTitleOf(code) ?? figureLabelOf(svg) ?? 'mermaid',
-                surface: 'card',
-                inheritFrom: () => figureRef.current
-              })
-            }
-          />
-        )}
-        {svg && unfoldable && !showSource && (
-          <button
-            onClick={() => setUnfolded(!showUnfolded)}
-            data-mermaid-unfold
-            aria-expanded={showUnfolded}
-            className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-          >
-            {showUnfolded ? <FoldVertical size={10} /> : <UnfoldVertical size={10} />}
-            <span>{showUnfolded ? t('message.diagramFold') : t('message.diagramUnfold')}</span>
-          </button>
-        )}
-        {svg && zoomable && !showSource && (
-          <button
-            onClick={() => setExpanded(true)}
-            data-mermaid-expand
-            className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-          >
-            <Maximize2 size={10} />
-            <span>{t('message.diagramExpand')}</span>
-          </button>
-        )}
-        <button
-          onClick={() => setShowSource(!showSource)}
-          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-          title={showSource ? t('message.showDiagram') : t('message.source')}
-        >
-          {showSource ? <FileText size={10} /> : <Code size={10} />}
-          <span>{showSource ? t('message.diagram') : t('message.source')}</span>
-        </button>
-      </div>
       {showSource ? (
-        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto max-h-[480px]">
-          {code}
-        </pre>
+        <pre className={`${FIGURE_SOURCE_CLASS} max-h-[480px] overflow-auto`}>{code}</pre>
       ) : svg ? (
         <>
           <div
@@ -347,7 +344,7 @@ export function MermaidBlock({
             className={`flex justify-center overflow-hidden p-3 [&_svg]:h-auto ${
               layout ? '[&_svg]:w-[min(100%,var(--mermaid-w))]' : '[&_svg]:max-w-full'
             } ${
-              // 截断时底部渐隐：遮罩作用在内容本身，不必猜卡片底色（它是半透明的）
+              // 截断时底部渐隐：遮罩作用在内容本身，不必知道底下是什么颜色
               layout?.mode === 'clip'
                 ? 'items-start [mask-image:linear-gradient(to_bottom,black_calc(100%_-_56px),transparent)]'
                 : ''
@@ -355,13 +352,13 @@ export function MermaidBlock({
             dangerouslySetInnerHTML={figureHtml}
           />
           {/* 截断处一条「展开」、展开后图底下一条「收起」：读到图被切掉的地方 / 读到图的末尾，
-            手边就有按钮，不必回到卡片顶上的工具栏 */}
+            手边就有按钮，不必去找说明行里悬停才出现的那一个 */}
           {(showUnfolded || layout?.mode === 'clip') && (
             <button
               onClick={() => setUnfolded(!showUnfolded)}
               data-mermaid-unfold-bar
               aria-expanded={showUnfolded}
-              className="flex w-full items-center justify-center gap-1 py-1.5 text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+              className="flex w-full items-center justify-center gap-1 py-1.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
             >
               {showUnfolded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
               <span>{showUnfolded ? t('message.diagramFold') : t('message.diagramUnfold')}</span>
@@ -369,7 +366,7 @@ export function MermaidBlock({
           )}
         </>
       ) : (
-        <div data-mermaid-pending className="px-4 py-3 text-[11px] text-text-tertiary">
+        <div data-mermaid-pending className="px-1 py-3 text-[11px] text-text-tertiary">
           {streaming && !closed
             ? t('message.diagramGenerating', { lines })
             : t('message.rendering')}
@@ -378,7 +375,7 @@ export function MermaidBlock({
       {expanded && svg && (
         <MermaidDialog svg={svg} width={size?.width} onClose={() => setExpanded(false)} />
       )}
-    </div>
+    </FigureBlock>
   )
 }
 

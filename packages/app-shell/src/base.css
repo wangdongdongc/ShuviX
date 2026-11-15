@@ -269,28 +269,17 @@ span.sb-icon {
    overflow 容器（Office/Hex/Ebook 预览、图表错误面、子代理展开区…），不逐个挂
    .thin-scrollbar，直接按子树兜底。文件树在 shadow root 里、CSS 进不去，另经
    pierre 的变量与 unsafeCSS 对齐（见 FilesTree.tsx）。 */
-.session-panel-card ::-webkit-scrollbar {
+.session-panel ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
-.session-panel-card ::-webkit-scrollbar-track {
+.session-panel ::-webkit-scrollbar-track {
   background: transparent;
 }
-.session-panel-card ::-webkit-scrollbar-thumb,
-.session-panel-card ::-webkit-scrollbar-thumb:hover {
+.session-panel ::-webkit-scrollbar-thumb,
+.session-panel ::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
   border-radius: 3px;
-}
-
-/* 会话面板展开时：正文列的滚动条紧贴面板卡片左缘，故轨道按「卡片留白 + 圆角半径」内缩 ——
-   上 = pt-1(4) + rounded-xl(12)，下 = pb-2(8) + 12，使滑块只落在卡片左缘的直边段内，
-   不探出圆角、也不在圆角处与描边分出缝。类由 ChatBody 在面板展开时挂到正文列上。
-   两种正文各有自己的滚动主：对话是 Virtuoso 列表本身，笔记本是编辑器内部的 .cm-scroller
-   （故经 .notebook-scroller 限定，避免波及对话里工具块内嵌的 CodeMirror）。 */
-.chat-scroll-inset .conversation-scroller::-webkit-scrollbar-track,
-.chat-scroll-inset .notebook-scroller .cm-scroller::-webkit-scrollbar-track {
-  margin-top: 16px;
-  margin-bottom: 20px;
 }
 
 /* 弹窗动画 */
@@ -700,6 +689,12 @@ span.sb-icon {
   overflow-wrap: anywhere;
   /* 兜底：真有拦不住的超宽内容时仍可横向滚动，而不是被裁掉 */
   overflow-x: auto;
+}
+
+/* 对话里图块（chat-ui 的 FigureBlock）的操作悬停才显形；导出面板开着时鼠标在面板上、不在图上，
+   操作得留着 —— 面板是锚在导出按钮上的，按钮不能在它底下淡掉。 */
+[data-figure-actions]:has([data-figure-export][aria-expanded='true']) {
+  opacity: 1;
 }
 
 .markdown-body code {

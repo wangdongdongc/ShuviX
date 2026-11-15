@@ -6,7 +6,7 @@
  *   - **缺省显示图**（DF）：同步出图；图类型第一次出现时先「渲染中」，分包加载完才画（DF-2 / LD-1）；
  *   - **流式期间逐帧画**（ST）：围栏开着时丢掉写到一半的最后一行、补尾巴、往回退 —— 帧只在多写完一行
  *     时重算（ST-5），一帧都画不出时是「正在生成」占位；错误卡只在消息写完后出（ST-6 / CB-2）；
- *   - **配色是 token**（TH）：切主题不重渲、连 DOM 都不换；图卡挂着 `data-figure-surface="card"`；
+ *   - **配色是 token**（TH）：切主题不重渲、连 DOM 都不换；图块外壳挂着 `data-figure-surface="page"`（图直接画在页面上）；
  *   - **限高 + 按栏宽重排**（LY / FW）：布局规则本身在 mermaidFit.test.ts、帧与重排规则在 chat-protocol
  *     的 mermaidFence 测试，这里只钉组件把它们落成了什么；LY-5 是一张接线矩阵 —— 几种图 × 几种栏宽，
  *     每一格的按钮与摆法都得与 mermaidLayout / mermaidUnfoldable / mermaidUnfoldedLayout 一致；
@@ -201,9 +201,9 @@ const barOf = (scope: Element = container): HTMLButtonElement | null =>
 /** 放图那一格是不是展开着（`data-mermaid-unfolded`） */
 const isUnfolded = (scope: Element = container): boolean =>
   figureOf(scope)?.hasAttribute('data-mermaid-unfolded') ?? false
-/** 卡片外壳（收起后滚回视野的就是它） */
+/** 图块外壳（收起后滚回视野的就是它） */
 const cardOf = (scope: Element = container): HTMLElement | null =>
-  scope.querySelector<HTMLElement>('[data-figure-surface="card"]')
+  scope.querySelector<HTMLElement>('[data-figure-block="mermaid"]')
 const exportBtn = (scope: Element = container): HTMLButtonElement | null =>
   scope.querySelector<HTMLButtonElement>('[data-figure-export]')
 /** 图 / 源码切换按钮：工具栏里除「导出」外唯一带 title 的按钮 */
@@ -300,7 +300,7 @@ const lrLabelChain = (prefix: string, n: number): string =>
     )
   ].join('\n')
 /**
- * 桩 `getBoundingClientRect`：卡片外壳（`[data-figure-surface="card"]`）量出 `width` 宽，别的元素全 0
+ * 桩 `getBoundingClientRect`：图块外壳（`[data-figure-block="mermaid"]`）量出 `width` 宽，别的元素全 0
  * （jsdom 缺省）。只桩这一个方法、用完 `mockRestore()` —— 不能 `vi.restoreAllMocks()`，那会把 pele 的
  * 透传 spy 一起撤掉
  */
@@ -308,7 +308,7 @@ const stubCardRect = (width: number): { mockRestore: () => void } =>
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
     this: HTMLElement
   ): DOMRect {
-    const w = this.matches('[data-figure-surface="card"]') ? width : 0
+    const w = this.matches('[data-figure-block="mermaid"]') ? width : 0
     return {
       width: w,
       height: 0,
@@ -386,7 +386,7 @@ afterEach(() => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('缺省显示图（DF）', () => {
-  it('MB-DF-1 写完的流程图：第一次提交就是图（svg.pele.pele-flowchart），没有占位 / 错误卡；切换按钮写「Source」；卡片挂 data-figure-surface="card"', () => {
+  it('MB-DF-1 写完的流程图：第一次提交就是图（svg.pele.pele-flowchart），没有占位 / 错误卡；切换按钮写「Source」；外壳是 mermaid 图块、挂 data-figure-surface="page"', () => {
     show('graph TD\n  df1a --> df1b')
     expect(
       container.querySelector('[data-mermaid-figure] > svg.pele.pele-flowchart')
@@ -395,7 +395,8 @@ describe('缺省显示图（DF）', () => {
     expect(errorOf()).toBeNull()
     expect(toggleOf().textContent).toBe('Source')
     const card = container.firstElementChild!.firstElementChild!
-    expect(card.getAttribute('data-figure-surface')).toBe('card')
+    expect(card.getAttribute('data-figure-block')).toBe('mermaid')
+    expect(card.getAttribute('data-figure-surface')).toBe('page')
     expect(card.contains(figureOf())).toBe(true)
   })
 
@@ -1465,14 +1466,14 @@ describe('导出（EXP）—— 面板本身见 figure/__tests__/figureExportPan
     expect(exportBtn()).toBeNull()
   })
 
-  it('MB-EXP-2 交给面板的是屏幕上那份标记：底色层 card，字体从放图那一格抄', async () => {
+  it('MB-EXP-2 交给面板的是屏幕上那份标记：底色层 page，字体从放图那一格抄', async () => {
     show('graph TD\n  exp2a --> exp2b')
     await openExport()
     expect(authoredSpy).toHaveBeenCalledTimes(1)
     const [markup, opts] = authoredSpy.mock.calls[0]
     const fig = figureOf()!
     expect(markup).toBe(fig.innerHTML)
-    expect(opts.surface).toBe('card')
+    expect(opts.surface).toBe('page')
     expect(opts.inheritFrom?.()).toBe(fig)
   })
 

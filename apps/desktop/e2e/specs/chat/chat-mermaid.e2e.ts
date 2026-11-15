@@ -6,9 +6,9 @@
  *      从消息状态经 AssistantBubble → ReactMarkdown → CodeBlock 一路传到图」这条链没有任何单测覆盖。
  *      E-2 / E-3 / E-5 的「流式中逐帧画、写完才出错、写完才给导出」只有这条链真的接上才成立；
  *   2. **真级联里的颜色**：pele 的产物把颜色写成 `var(--pele-*)`，themes.css 的 `.pele` 那段把它们接到
- *      主题 token 上，卡片的 `data-figure-surface="card"` 再告诉它坐在哪层底上 —— 节点面 =
- *      `--theme-bg-primary`（比卡片凸一级）、标签字色 = `--theme-text-primary`、边标签衬底 = 卡片那层
- *      底（`--figure-surface`）；切主题只换色、不重渲（同一个 `<svg>` 元素）。jsdom 不做级联；
+ *      主题 token 上；图直接画在页面上（外壳挂 `data-figure-surface="page"`，走缺省）—— 节点面 =
+ *      `--theme-bg-tertiary`（比页面凸一级）、标签字色 = `--theme-text-primary`、边标签衬底 = 页面底
+ *      （`--theme-bg-primary`）；切主题只换色、不重渲（同一个 `<svg>` 元素）。jsdom 不做级联；
  *   3. **真 Chromium 的布局与滚动**：长竖图按栏宽截断 —— 框高封顶、图按原宽画（不是整张压扁）、底部
  *      渐隐；就地「展开」后不限高、整张按原宽摆在对话里（同一个 <svg>），切走会话再回来仍是展开的；
  *      从图底下那条「收起」时卡片一下子矮了一千多像素，组件把它拉回视野，而不是让视野落进后面的
@@ -132,7 +132,7 @@ afterAll(async () => {
 })
 
 describe('对话里的 mermaid 图', () => {
-  it('E-1 写完的图缺省显示图：节点面 = bg-primary、标签 = text-primary、边标签衬底 = 卡片底；切主题只换色不重渲，切回来复原', async () => {
+  it('E-1 写完的图缺省显示图：节点面 = bg-tertiary、标签 = text-primary、边标签衬底 = 页面底；切主题只换色不重渲，切回来复原', async () => {
     await openSession('mermaid-E1')
     provider.reset()
     provider.script({
@@ -152,12 +152,13 @@ describe('对话里的 mermaid 图', () => {
 
     const original = await mermaid.theme()
     const before = await mermaid.colors()
-    // 卡片里的图：节点比卡片凸一级（--figure-raised = bg-primary），边标签衬底与卡片同色
-    expect(before.nodeFill, `节点面 ${JSON.stringify(before)}`).toBe(before.bgPrimary)
+    // 图直接画在页面上：节点比页面凸一级（bg-tertiary），边标签衬底与页面同色（bg-primary）
+    expect(before.nodeFill, `节点面 ${JSON.stringify(before)}`).toBe(before.bgTertiary)
     expect(before.labelColor, '标签字色').toBe(before.textPrimary)
     expect(before.edgeLabelFill, '边标签衬底').not.toBe('')
     expect(before.edgeLabelFill, '边标签衬底').toBe(before.figureSurface)
-    // 图直接坐在卡片底色上 —— 没有另垫一块底
+    expect(before.figureSurface, '图坐着的那层底就是页面底').toBe(before.bgPrimary)
+    // 图直接坐在页面底色上 —— 没有另垫一块底
     expect(before.figureBackground).toBe('rgba(0, 0, 0, 0)')
     const tag = await mermaid.svgTag()
     expect(tag).toBeGreaterThan(0)
@@ -167,7 +168,7 @@ describe('对话里的 mermaid 图', () => {
     await mermaid.setTheme(other)
     const after = await until(async () => {
       const c = await mermaid.colors()
-      return c.nodeFill === c.bgPrimary && c.nodeFill !== before.nodeFill ? c : null
+      return c.nodeFill === c.bgTertiary && c.nodeFill !== before.nodeFill ? c : null
     }, `mermaid node fill follows ${other}`)
     expect(after.labelColor, '切主题后的标签字色').toBe(after.textPrimary)
     expect(after.labelColor).not.toBe(before.labelColor)

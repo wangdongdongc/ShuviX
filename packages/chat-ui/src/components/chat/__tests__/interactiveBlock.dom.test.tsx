@@ -274,8 +274,9 @@ const pendingOf = (scope: ParentNode = container): HTMLElement | null =>
 const unsupportedOf = (): HTMLElement | null =>
   container.querySelector<HTMLElement>('[data-interactive-unsupported]')
 /** 卡片工具栏上的名字（第一个 span） */
+/** 图底下说明行里的名字（围栏图没有名字 = ''；artifact 引用是它的标题） */
 const toolbarTitle = (figure: Element): string =>
-  figure.querySelector('span')?.textContent?.trim() ?? ''
+  figure.querySelector('[data-figure-label]')?.textContent?.trim() ?? ''
 const frameHeight = (frame: HTMLIFrameElement): string => frame.style.height
 
 const click = (el: Element): void => {
@@ -372,7 +373,8 @@ describe('挂载与沙箱（IB-1）', () => {
     expect(frame.getAttribute('srcdoc')).toBe(expectedDoc(code, 'ib1'))
     expect(frame.getAttribute('title')).toBe('Interactive figure')
     expect(frameHeight(frame)).toBe('120px')
-    expect(toolbarTitle(figures()[0])).toBe('Interactive')
+    // 围栏图没有名字：说明行不再挂「Interactive」这种类型标签
+    expect(toolbarTitle(figures()[0])).toBe('')
     expect(pendingOf()).toBeNull()
   })
 })

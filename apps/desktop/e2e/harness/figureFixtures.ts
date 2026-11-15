@@ -241,9 +241,7 @@ export async function cssColorIn(main: CdpClient, themeId: string, css: string):
   return parseComputedColor(raw)
 }
 
-/** 卡片底（对话图卡）与页面底（笔记本）的配方 —— 与 themes / 卡片源码里写的同一个式子 */
-export const CARD_SURFACE_CSS =
-  'color-mix(in srgb, var(--theme-bg-tertiary) 60%, var(--theme-bg-primary))'
+/** 页面底的配方（对话与笔记本里的图都直接画在页面上）—— 与 figureExport 的 SURFACE_CSS.page 同一个式子 */
 export const PAGE_SURFACE_CSS = 'var(--theme-bg-primary)'
 
 // ─── 读导出的 SVG（在页面里按 XML 解析） ────────────────────

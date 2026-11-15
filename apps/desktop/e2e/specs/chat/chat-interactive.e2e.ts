@@ -551,8 +551,8 @@ describe('对话里的 interactive 交互图', () => {
     expect(shot.pending).toBe(false)
     expect(shot.unsupported).toBe(false)
     expect(shot.rerun && shot.toggle).toBe(true)
-    // 围栏没给名字：工具栏与 iframe 的 title 用缺省文案（界面语言随环境，三语都认）
-    expect([en, ja, zh].map((l) => l.message.interactive)).toContain(shot.toolbarTitle)
+    // 围栏没给名字：说明行不挂类型标签；iframe 的 title 用缺省文案（界面语言随环境，三语都认）
+    expect(shot.toolbarTitle).toBe('')
     expect([en, ja, zh].map((l) => l.message.interactiveFrameTitle)).toContain(shot.frameTitle)
 
     const [line] = await waitComposerLines('PROBE ')

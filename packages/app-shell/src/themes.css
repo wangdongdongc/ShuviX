@@ -98,9 +98,10 @@
      - tint 是**半透明**的 14%：叠在哪张卡片、哪套主题的底色上都就地合成，不必知道底色是什么；
      - ink 往**极点**混 60%（浅档往黑、深档往白），不往 --theme-text-primary 混 —— 后者在
        solarized-light 这类低对比文字色的主题上会把黄槽拖到 2.3:1。
-     验算（卡片底 = bg-tertiary 60% 叠 bg-primary，再叠 tint）：11 套主题 × 8 槽，ink 对 tint 最差
-     5.16:1（nord 的 viz-6），过 AA 的 4.5。卡片底的比例是这个数的一部分 —— 直接叠在纯 bg-tertiary
-     上最差只剩约 4.54，改卡片底色时要重算。有测试按同一公式逐套主题复算，改色或加主题时会报。
+     验算（图直接画在页面底 bg-primary 上，再叠 tint）：11 套主题 × 8 槽，ink 对 tint 最差
+     6.24:1（nord 的 viz-6），过 AA 的 4.5。图底下那层底是这个数的一部分 —— 垫一张 bg-tertiary 60% 的
+     卡片（2026-11-14 之前对话里的图卡）是 5.16，直接叠在纯 bg-tertiary 上最差只剩约 4.53，给图换底色时
+     要重算。有测试按同一公式逐套主题复算，改色或加主题时会报。
 
      --viz-wash 是中性的同一件事：指标卡、图例条、表头这类「比卡片高一级」的浅底。取文字色 5% ——
      浅主题上是一层淡灰、深主题上是一层淡白，永远朝「离底色更远」的方向。 */
@@ -175,8 +176,10 @@
   fill: var(--viz-1-ink);
 }
 
-/* 对话的图卡：卡片底是 bg-tertiary 60% 叠在 bg-primary 上（CodeBlock / MermaidBlock 的卡片，也是
-   导出面板「card」底色的配方 —— figureExport 的 SURFACE_CSS），节点取 bg-primary，在卡片上挖出来。 */
+/* 坐在卡片上的图：卡片底是 bg-tertiary 60% 叠在 bg-primary 上（也是导出面板「card」底色的配方 ——
+   figureExport 的 SURFACE_CSS），节点取 bg-primary，在卡片上挖出来。
+   对话里的图 2026-11-14 起直接画在页面上（FigureBlock 挂的是 `page`，走上面的缺省），目前没有
+   产品界面把图放在卡片上；这一层留给以后真要把图放进卡片的地方。 */
 [data-figure-surface='card'] {
   --figure-surface: color-mix(in srgb, var(--theme-bg-tertiary) 60%, var(--theme-bg-primary));
   --figure-raised: var(--theme-bg-primary);

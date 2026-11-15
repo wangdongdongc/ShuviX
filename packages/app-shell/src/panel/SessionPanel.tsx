@@ -1,24 +1,24 @@
 import { useCallback, useEffect, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Folder, Layers, Shapes, X } from 'lucide-react'
+import { Folder, Layers, Shapes } from 'lucide-react'
 import { useChatStore, useBgTaskCount, useBgTaskRunningCount } from '@shuvix/chat-ui'
 import { BgTaskPanel } from './BgTaskPanel'
 import { ArtifactsPanel } from './ArtifactsPanel'
 import { useSessionArtifactCount } from './sessionArtifacts'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
-import { PanelCloseInsetContext } from './panelCloseInset'
 import { startPanelDrag } from '../common/panelDrag'
 
 /**
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
- *   - SessionToolbar：顶栏右侧按钮簇里的工具入口组（在窗口控制那一簇左侧、以竖线分隔）。
- *     Files 常驻；任务仅当前会话有后台任务时出现（含数量徽标）；产物仅当前会话（或它的子会话）
- *     有产物时出现。点按展开面板并切到该工具。
+ *   - SessionToolbar：顶栏右侧按钮簇里的工具入口组（在窗口控制那一簇左侧、以竖线分隔），
+ *     同时就是面板的标签栏。Files 常驻；任务仅当前会话有后台任务时出现（含数量徽标）；
+ *     产物仅当前会话（或它的子会话）有产物时出现。点一个没开着的 → 展开并切到它；
+ *     点开着的那个 → 收起面板。
  *     （文件预览不在面板里 —— 桌面统一开独立窗口。）
- *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
- *     对话收缩让位）。收起按钮悬在卡片右上角、与各工具自己的首行同线（工具切换在顶栏的
- *     tabs），让位机制见 panelCloseInset.ts。
+ *   - SessionPanel：正文区右侧的一列（与对话并排、对话收缩让位），外观同 app 级右侧面板：
+ *     平铺到底、与正文同色，只靠左、上两道细线与对话和顶栏分开；没有圆角、投影、留白，
+ *     也没有自己的收起按钮 —— 顶栏里那枚带下划线的标签就是它的开关。
  *     装载 Files / 后台任务 / 产物，展开期间各工具均保持挂载、visibility 切换
  *     （保住手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
  *
@@ -114,11 +114,15 @@ function useSessionPanelToolItems(sessionId: string | null): SessionPanelToolIte
 }
 
 /**
- * 会话工具栏（顶栏右侧）—— 面板收起与展开时**同一处**的工具入口：
- *   - 收起：仅图标，点按展开并切到该工具；
- *   - 展开：即面板的 tabs（当前工具带文字），点按切换工具。
- * **只负责开与切，不负责关**：收起按钮在面板卡片自己身上（见下方 SessionPanel）——
- * 关闭一个东西的按钮长在那个东西上，而不是长在另一头的顶栏里。
+ * 会话工具栏（顶栏右侧）—— 会话面板的标签栏，开、切、关都在这一处：
+ *   - 面板收起：仅图标，点按展开并切到该工具；
+ *   - 面板展开：当前工具带文字，底下一道 accent 下划线（与右侧面板 PanelTabBar 同一记号）；
+ *     点别的工具切过去，再点当前这个收起面板。
+ *
+ * 下划线画在**顶栏的底边**上（根节点与按钮都撑满顶栏高度）：面板的上边线正从那里起，
+ * 于是「标签 + 下划线 + 面板」读起来是一件东西，面板自己不必再长一个收起按钮。
+ * 撑满靠 ChatHeader 的 rightActions 容器 self-stretch；宿主若把它放进别的不撑高的容器，
+ * 下划线就贴在按钮自己的底边，仍然成立。
  *
  * 宿主把它放进 ChatHeader 的 rightActions（原先挂在状态横幅右侧，为它单占一行）；
  * 专注模式的淡化因此由顶栏整体负责 —— 这里再叠一层 opacity 会与顶栏相乘。
@@ -128,34 +132,49 @@ export function SessionToolbar({
 }: {
   sessionId: string | null
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
   const activeTool = useSessionPanelTool(sessionId)
   const tools = useSessionPanelToolItems(sessionId)
   if (!sessionId) return null
 
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex items-stretch self-stretch gap-0.5">
       {tools.map(({ tool, Icon, label, badge }) => {
         const active = tool === activeTool
         return (
           <button
             key={tool}
             data-session-tool={tool}
+            data-active={active ? '' : undefined}
+            aria-pressed={active}
+            // 关按「展示出来的工具」判，而不是 store 里记的那个：停在任务页但任务清空后展示的是
+            // Files（见 useSessionPanelTool 的兜底），此时点 Files 应当收起，而不是先「切到 Files」空转一次
             onClick={() =>
-              activeTool
-                ? useSessionPanelStore.getState().show(sessionId, tool)
-                : useSessionPanelStore.getState().toggle(sessionId, tool)
-            }
-            className={`flex items-center gap-1 min-w-0 px-1 h-6 rounded-md text-xs font-medium transition-colors ${
               active
-                ? 'text-accent bg-accent/10'
-                : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50'
-            }`}
-            title={label}
+                ? useSessionPanelStore.getState().close(sessionId)
+                : useSessionPanelStore.getState().show(sessionId, tool)
+            }
+            className="group relative flex items-center min-w-0"
+            title={active ? t('panel.sessionPanelCollapse', { name: label }) : label}
           >
-            <Icon size={14} className="flex-shrink-0" />
-            {active && <span className="truncate">{label}</span>}
-            {badge !== undefined && badge > 0 && (
-              <span className="text-[10px] tabular-nums">{badge}</span>
+            <span
+              className={`flex items-center gap-1 min-w-0 px-1 h-6 rounded-md text-xs font-medium transition-colors ${
+                active
+                  ? 'text-text-primary group-hover:bg-bg-hover/50'
+                  : 'text-text-tertiary group-hover:text-text-secondary group-hover:bg-bg-hover/50'
+              }`}
+            >
+              <Icon size={14} className="flex-shrink-0" />
+              {active && <span className="truncate">{label}</span>}
+              {badge !== undefined && badge > 0 && (
+                <span className="text-[10px] tabular-nums">{badge}</span>
+              )}
+            </span>
+            {active && (
+              <span
+                data-session-tool-underline=""
+                className="absolute bottom-0 left-1 right-1 h-[2px] bg-accent rounded-t"
+              />
             )}
           </button>
         )
@@ -170,108 +189,70 @@ export interface SessionPanelProps {
   filesContent: ReactNode
 }
 
-/** 会话面板卡片本体 —— 收起（或无会话）时渲染 null */
+/** 会话面板本体 —— 收起（或无会话）时渲染 null */
 export function SessionPanel({
   sessionId,
   filesContent
 }: SessionPanelProps): React.JSX.Element | null {
-  const { t } = useTranslation()
   const tool = useSessionPanelTool(sessionId)
   const width = useSessionPanelStore((s) => s.width)
   if (!sessionId || !tool) return null
 
   return (
-    // 外层：占位列（宽度参与 flex 布局），右/下留白让卡片「悬浮」；上留白略小使其贴近顶栏工具区。
-    // 左侧刻意不留白：那道缝会把对话列的滚动条卡在「正文与面板之间」悬空一条，
-    // 卡片左缘直接贴住对话列右缘后，滚动条紧靠面板描边（与面板收起时贴窗口右缘同一观感）。
-    // 下留白 pb-2 = 8px，与输入框悬浮卡片的容器留白（InputArea 的 p-2）一致 —— 两张卡片底边齐平。
+    /*
+      平铺的一列：宽度参与 flex 布局，贴着顶栏底边、一直到正文区底，四周不留白。
+      左、上两道线与 app 级右侧面板同一把尺：左线 = 它与对话之间那条分隔（border-secondary/50，
+      对话列的滚动条就贴在这条线左边），上线 = 它标签栏的底线（border-secondary/30）——
+      顶栏里当前工具的下划线正压在这条上线上。
+
+      底色对齐对话正文：面板内**整个子树**把 bg-primary / bg-secondary 两个 token 对调 ——
+      各工具页一直用 bg-bg-secondary 当底、bg-bg-primary 当其上的凸起面（卡片/输入框/代码块），
+      这里换掉变量即可让「底 = 主窗口色（theme-bg-primary）、凸起面 = 原来的灰（theme-bg-secondary）」，
+      层级关系与透明度变体（/40、/60…经 color-mix 解析同一变量）全部自动跟随，改一处即可整体回退。
+      注意：本子树内读 bg-bg-secondary 拿到的是主窗口色，bg-bg-primary 才是凸起面。
+    */
     <div
-      className="relative flex-shrink-0 min-w-[200px] max-w-[calc(100%-320px)] pr-2.5 pt-1 pb-2"
-      style={{ width }}
+      data-session-panel=""
+      className="session-panel relative flex flex-col flex-shrink-0 min-w-[200px] max-w-[calc(100%-320px)] border-l border-t border-l-border-secondary/50 border-t-border-secondary/30 bg-bg-secondary"
+      style={
+        {
+          width,
+          '--color-bg-primary': 'var(--theme-bg-secondary)',
+          '--color-bg-secondary': 'var(--theme-bg-primary)'
+        } as React.CSSProperties
+      }
     >
       <ResizeHandle />
-      {/*
-        卡片本体：圆角 + 边框 + 投影；overflow-hidden 让内部内容随圆角裁切。
-
-        底色对齐对话正文：面板内**整个子树**把 bg-primary / bg-secondary 两个 token 对调 ——
-        各工具页一直用 bg-bg-secondary 当底、bg-bg-primary 当其上的凸起面（卡片/输入框/代码块），
-        这里换掉变量即可让「底 = 主窗口色（theme-bg-primary）、凸起面 = 原来的灰（theme-bg-secondary）」，
-        层级关系与透明度变体（/40、/60…经 color-mix 解析同一变量）全部自动跟随，改一处即可整体回退。
-        注意：本子树内读 bg-bg-secondary 拿到的是主窗口色，bg-bg-primary 才是凸起面。
-      */}
-      <div
-        // 底色与正文同色后，卡片边界全靠这圈描边：border-secondary/60 在 one-dark 下与底只差
-        // 4.8/255（几乎看不见），故提到 border-primary/60 —— 最弱主题也有 18/255，与浅色主题原先的观感齐平
-        // 投影与输入框悬浮卡片同款 shadow-md；向左的弥散（会糊在紧贴的滚动条上把滑块压深）
-        // 由 clipPath 在左缘一刀切干净（见 style），使滑块底色与面板收起时逐字节相同。
-        // 左描边单独降到 /40 —— 与对话列滑块同一色同一透明度（.thin-scrollbar 也是
-        // border-primary 40%），两者紧贴时合成一条粗细均匀的淡边，而不是「淡滑块 + 深描边」
-        // 叠出一条更重的线（那正是面板一开滚动条就显得变粗变深的原因）。
-        // -ml-px：左描边压在滚动条槽最右 1px 上（卡片是后序兄弟，画在对话列之上），
-        // 于是「滑块 + 描边」合起来仍是 4px —— 与面板收起时的滚动条等宽，开面板不再让它变粗
-        className="session-panel-card -ml-px relative flex flex-col h-full rounded-xl border border-border-primary/60 border-l-border-primary/40 bg-bg-secondary shadow-md overflow-hidden"
-        style={
-          {
-            '--color-bg-primary': 'var(--theme-bg-secondary)',
-            '--color-bg-secondary': 'var(--theme-bg-primary)',
-            // 左缘齐切、其余三边放开 40px：位移+负 spread 只能压住投影的实心部分，
-            // 高斯尾巴仍会往左扫出十几像素的 1~3/255 灰，正好落在紧贴的滚动条上把它压深。
-            // clip-path 按边框盒裁切（含 box-shadow），右/上/下的浮起感原样保留。
-            clipPath: 'inset(-40px -40px -40px 0)'
-          } as React.CSSProperties
-        }
-      >
-        {/*
-          收起按钮：绝对定位在卡片右上角，**不占一行** —— 各工具首行经 PanelCloseInsetContext
-          让出右侧那一块（见 panelCloseInset.ts），于是它与 Files 的搜索/刷新落在同一条线上。
-          尺寸与定位照抄 Files 头部那两枚按钮（11px 图标 + p-1 + 距边 8px），于是它读起来就是
-          那一行的第三枚图标，而不是一枚压在上面的浮标。
-          底色取 bg-bg-secondary（卡内该 token 已被换成卡片底色）：子代理 / 后台任务是整块
-          滚动区，内容会从按钮下面淌过去，得有块底把它挡住。
-        */}
-        <button
-          onClick={() => useSessionPanelStore.getState().close(sessionId)}
-          className="absolute top-1 right-2 z-10 p-1 rounded bg-bg-secondary text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
-          title={t('common.close')}
+      {/* 内容区 —— 各工具共存，visibility 切换 */}
+      <div className="flex-1 min-h-0 relative overflow-hidden">
+        <div
+          className="absolute inset-0"
+          style={tool === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
         >
-          <X size={11} />
-        </button>
-        {/* 各工具首行据此让出右上角那一块（收起按钮悬在那儿） */}
-        <PanelCloseInsetContext.Provider value={true}>
-          {/* 内容区 —— 各工具共存，visibility 切换 */}
-          <div className="flex-1 min-h-0 relative">
-            <div
-              className="absolute inset-0"
-              style={tool === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-            >
-              {filesContent}
-            </div>
-            <div
-              className="absolute inset-0"
-              style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-            >
-              {/* 按会话重挂：展开哪条、折叠与否都是那个会话的事，不该带到下一个会话里 */}
-              <BgTaskPanel key={sessionId} sessionId={sessionId} />
-            </div>
-            <div
-              className="absolute inset-0"
-              style={
-                tool === 'artifacts' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
-              }
-            >
-              <ArtifactsPanel key={sessionId} sessionId={sessionId} />
-            </div>
-          </div>
-        </PanelCloseInsetContext.Provider>
+          {filesContent}
+        </div>
+        <div
+          className="absolute inset-0"
+          style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+        >
+          {/* 按会话重挂：展开哪条、折叠与否都是那个会话的事，不该带到下一个会话里 */}
+          <BgTaskPanel key={sessionId} sessionId={sessionId} />
+        </div>
+        <div
+          className="absolute inset-0"
+          style={tool === 'artifacts' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+        >
+          <ArtifactsPanel key={sessionId} sessionId={sessionId} />
+        </div>
       </div>
     </div>
   )
 }
 
 /**
- * 占位列左缘拖拽条 —— 向左拖增宽（面板贴对话区右侧）。
- * 命中区贴着卡片左缘往内 6px（无可见高亮，仅 col-resize 光标提示）：
- * 刻意不外扩到卡片之外，否则会盖住紧邻的对话列滚动条、抢走拖动。
+ * 面板左缘拖拽条 —— 向左拖增宽（面板贴对话区右侧）。与右侧面板的分隔条同一手感：
+ * 命中区从左边线起往面板内 6px，悬停 / 拖动时那条 1px 的线亮成 accent。
+ * 刻意不外扩到面板之外，否则会盖住紧邻的对话列滚动条、抢走拖动。
  * 宽度经共享 store 钳制；持久化由宿主外接。拖动手势见 startPanelDrag（往左拖会经过对话里的 iframe）。
  */
 function ResizeHandle(): React.JSX.Element {
@@ -284,9 +265,12 @@ function ResizeHandle(): React.JSX.Element {
   }, [])
 
   return (
+    // -left-px：命中区盖住左边线本身（那 1px 是面板的，不是对话列的）
     <div
-      className="absolute inset-y-2 left-0 w-[6px] cursor-col-resize z-20"
+      className="group absolute inset-y-0 -left-px w-[7px] cursor-col-resize z-20"
       onMouseDown={onMouseDown}
-    />
+    >
+      <div className="absolute inset-y-0 left-0 w-px group-hover:bg-accent/40 group-active:bg-accent/60 transition-colors" />
+    </div>
   )
 }

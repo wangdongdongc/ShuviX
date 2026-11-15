@@ -59,10 +59,10 @@ export interface FigureExportSource {
   build(opts: FigureBuildOptions): Promise<StandaloneSvg>
 }
 
-/** 图底下那一层的颜色：卡片（对话）或页面（笔记本） */
+/** 图底下那一层的颜色：页面（对话与笔记本的图都直接画在页面上）或卡片（目前没有界面在用） */
 export type FigureSurface = 'card' | 'page'
 
-/** 各底色对应的 CSS —— 卡片底与 CodeBlock 的图卡同一个配方（bg-tertiary 60% 叠 bg-primary） */
+/** 各底色对应的 CSS —— 卡片底与 themes.css 的 `[data-figure-surface='card']` 同一个配方（bg-tertiary 60% 叠 bg-primary） */
 const SURFACE_CSS: Record<FigureSurface, string> = {
   card: 'color-mix(in srgb, var(--theme-bg-tertiary) 60%, var(--theme-bg-primary))',
   page: 'var(--theme-bg-primary)'

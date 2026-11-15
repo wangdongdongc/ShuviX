@@ -9,7 +9,7 @@
  *   2. **浅 / 深按用户设定的那两套主题取色**（FE-4/9）：界面是 nord，导出浅色得是 solarized-light 的
  *      颜色 —— 包括 `--viz-wash` 这种在 themes.css 里由别的 token 派生的（只声明在 :root 上时它会
  *      顶着 nord 的文字色，这条就是那一改的回归护栏）；mermaid（pele 画的、颜色是 `var(--pele-*)`）
- *      与手写图同一条烘焙路径，连边标签衬底都按它坐着的卡片底取色；
+ *      与手写图同一条烘焙路径，连边标签衬底都按它坐着的那层底（页面底）取色；
  *   3. **真落盘 / 真位图**（FE-0/5/6/15）：`Page.setDownloadBehavior` 把「另存为」改成直接写进临时目录
  *      （**FE-0 先跑**：没生效的话后面每一条都会挂在一个关不掉的系统面板上），PNG 的 IHDR / JPEG 的
  *      SOF 尺寸、像素、透明；
@@ -46,7 +46,7 @@ import {
   type SidebarPane
 } from '../../harness/pages'
 import {
-  CARD_SURFACE_CSS,
+  PAGE_SURFACE_CSS,
   armDownloads,
   channelDelta,
   clipboardCapture,
@@ -350,7 +350,7 @@ describe('对话图卡的导出', () => {
     expect([bg.x, bg.y, bg.width, bg.height]).toEqual(['0', '0', '320', '200'])
     expect(bg['data-k']).toBeUndefined()
     expect(bg['fill-opacity']).toBeUndefined()
-    near(hexRgb(bg.fill), surface, 1, 'background rect vs on-screen card surface')
+    near(hexRgb(bg.fill), surface, 1, 'background rect vs on-screen surface')
   }, 120_000)
 
   it('FE-3 导出的 SVG 当图片画到画布上：像素 = 屏幕颜色（实心、半透明叠在底上、空隙是底）', async () => {
@@ -385,7 +385,7 @@ describe('对话图卡的导出', () => {
     expect(gap.a).toBe(255)
   }, 120_000)
 
-  it('FE-4 浅 / 深按设定的两套主题取色（界面 nord）：浅色 = solarized-light 的 viz-1 / 文字色派生的 wash / 卡片底；深色 = nord 的', async () => {
+  it('FE-4 浅 / 深按设定的两套主题取色（界面 nord）：浅色 = solarized-light 的 viz-1 / 文字色派生的 wash / 页面底；深色 = nord 的', async () => {
     const card = await figureCard('FE-4', 'svg', fence('svg', FIG))
     await card.openExport()
     await panel.choose('format', 'svg')
@@ -399,14 +399,14 @@ describe('对话图卡的导出', () => {
     // --viz-wash = 文字色 5%：必须是**那套主题**的文字色（只声明在 :root 上时它顶着 nord 的）
     expect(light.perK.w.fill).toBe(lightText)
     expect(light.perK.w.fillOpacity).toBe('0.05')
-    const lightCard = await cssColorIn(app.main, LIGHT, CARD_SURFACE_CSS)
+    const lightCard = await cssColorIn(app.main, LIGHT, PAGE_SURFACE_CSS)
     near(hexRgb(light.first!.attrs.fill), lightCard, 1, 'light background')
 
     await panel.choose('scheme', 'dark')
     const dark = await svgFileFacts(app.main, await panel.previewSvg())
     expect(dark.perK.a.fill).toBe('#3987e5')
     expect(dark.perK.w.fill).toBe(darkText)
-    const darkCard = await cssColorIn(app.main, DARK, CARD_SURFACE_CSS)
+    const darkCard = await cssColorIn(app.main, DARK, PAGE_SURFACE_CSS)
     near(hexRgb(dark.first!.attrs.fill), darkCard, 1, 'dark background')
     expect(rgbHex(lightCard)).not.toBe(rgbHex(darkCard))
 
@@ -546,7 +546,7 @@ describe('对话图卡的导出', () => {
     expect(p.checkerboard).toBe(true)
   }, 120_000)
 
-  it('FE-9 mermaid（pele）：与手写图同样烘焙 —— 当前主题 = 屏幕上的颜色、边标签衬底 = 卡片底；文件名取 title；浅色按 solarized-light 取色（透明底也一样）；PNG 里标签画出来了', async () => {
+  it('FE-9 mermaid（pele）：与手写图同样烘焙 —— 当前主题 = 屏幕上的颜色、边标签衬底 = 页面底；文件名取 title；浅色按 solarized-light 取色（透明底也一样）；PNG 里标签画出来了', async () => {
     const code = '---\ntitle: Flow chart\n---\ngraph LR\n  fe9a[Plan] -->|go| fe9b[Ship it]'
     const card = await figureCard('FE-9', 'mermaid', fence('mermaid', code))
     const screen = await mermaidPane(app.main, 'MARK-FE-9').colors()
@@ -565,10 +565,15 @@ describe('对话图卡的导出', () => {
     expect(Number(cur.width)).toBeGreaterThan(0)
     expect(cur.first?.tag).toBe('rect')
     const curBg = hexRgb(cur.first!.attrs.fill)
-    near(curBg, await cssColorIn(app.main, DARK, CARD_SURFACE_CSS), 1, 'current bg = nord card')
+    near(curBg, await cssColorIn(app.main, DARK, PAGE_SURFACE_CSS), 1, 'current bg = nord page')
     const curNode = await mermaidFileFacts(app.main, current)
     near(rgbOf(curNode.nodeFill), rgbOf(screen.nodeFill), 1, 'current node fill = on screen')
-    near(rgbOf(curNode.nodeFill), rgbOf(screen.bgPrimary), 1, 'current node fill = nord bg-primary')
+    near(
+      rgbOf(curNode.nodeFill),
+      rgbOf(screen.bgTertiary),
+      1,
+      'current node fill = nord bg-tertiary'
+    )
     near(rgbOf(curNode.labelFill), rgbOf(screen.labelColor), 1, 'current label = on screen')
     near(rgbOf(curNode.edgeLabelFill), curBg, 1, 'current edge label backing = bg rect')
 
@@ -579,11 +584,11 @@ describe('对话图卡的导出', () => {
     const lf = await svgFileFacts(app.main, lightSvg)
     expect(lf.parseError).toBe(false)
     expect(lightSvg).not.toMatch(NOT_STANDALONE)
-    const lightCard = await cssColorIn(app.main, LIGHT, CARD_SURFACE_CSS)
+    const lightCard = await cssColorIn(app.main, LIGHT, PAGE_SURFACE_CSS)
     const node = await mermaidFileFacts(app.main, lightSvg)
     near(
       rgbOf(node.nodeFill),
-      await cssColorIn(app.main, LIGHT, 'var(--theme-bg-primary)'),
+      await cssColorIn(app.main, LIGHT, 'var(--theme-bg-tertiary)'),
       1,
       'light node fill'
     )
@@ -594,7 +599,7 @@ describe('对话图卡的导出', () => {
       DARK
     )
 
-    // 浅色 + 透明底：没有底色矩形，边标签衬底仍是浅色卡片底（图坐在卡片上，衬底跟着卡片走）
+    // 浅色 + 透明底：没有底色矩形，边标签衬底仍是浅色页面底（图坐在页面上，衬底跟着页面走）
     await panel.choose('background', 'none')
     const bare = await panel.previewSvg()
     const bf = await svgFileFacts(app.main, bare)

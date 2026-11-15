@@ -6,7 +6,6 @@ import type { SessionArtifact } from '@shuvix/chat-protocol/artifacts'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { RowMenuButton } from '../sidebar/RowMenuButton'
-import { usePanelCloseInset } from './panelCloseInset'
 import { useSessionArtifacts } from './sessionArtifacts'
 
 /**
@@ -94,7 +93,6 @@ function scrollRowIntoView(box: HTMLElement, key: string): void {
 
 export function ArtifactsPanel({ sessionId }: { sessionId: string }): React.JSX.Element {
   const { t } = useTranslation()
-  const closeInset = usePanelCloseInset()
   const rows = useSessionArtifacts(sessionId)
   const groups = useMemo(() => groupBySession(rows ?? []), [rows])
   // 初值是挂载前就发出、还没人处理的那条揭示请求
@@ -129,16 +127,13 @@ export function ArtifactsPanel({ sessionId }: { sessionId: string }): React.JSX.
   return (
     <div
       ref={scrollRef}
-      className="h-full overflow-y-auto no-scrollbar p-1.5 bg-bg-secondary"
+      // 平铺：分组只是一行小标题，行直接铺满面板宽度，没有卡片外框也没有行间线（同右侧面板的列表）
+      className="h-full overflow-y-auto no-scrollbar pb-2 bg-bg-secondary"
       data-artifacts-panel=""
     >
-      {groups.map((group, idx) => (
-        <div key={group.sessionId} className="mb-1.5 last:mb-0">
-          <div
-            className={`flex items-center gap-1 px-1 py-1 text-[11px] text-text-tertiary${
-              closeInset && idx === 0 ? ' pr-6' : ''
-            }`}
-          >
+      {groups.map((group) => (
+        <div key={group.sessionId} className="mb-1 last:mb-0">
+          <div className="flex items-center gap-1 px-2 h-7 text-[11px] text-text-tertiary">
             <span className="truncate">
               {group.subSessionTitle !== undefined
                 ? t('panel.artifactsSubSession', { title: group.subSessionTitle })
@@ -146,19 +141,16 @@ export function ArtifactsPanel({ sessionId }: { sessionId: string }): React.JSX.
             </span>
             <span className="tabular-nums">{group.items.length}</span>
           </div>
-          <div className="rounded-lg border border-border-secondary/40 bg-bg-primary overflow-hidden">
-            {group.items.map((artifact, i) => (
-              <ArtifactRow
-                key={keyOf(artifact)}
-                artifact={artifact}
-                divided={i > 0}
-                expanded={expanded === keyOf(artifact)}
-                onToggle={() =>
-                  setExpanded((cur) => (cur === keyOf(artifact) ? null : keyOf(artifact)))
-                }
-              />
-            ))}
-          </div>
+          {group.items.map((artifact) => (
+            <ArtifactRow
+              key={keyOf(artifact)}
+              artifact={artifact}
+              expanded={expanded === keyOf(artifact)}
+              onToggle={() =>
+                setExpanded((cur) => (cur === keyOf(artifact) ? null : keyOf(artifact)))
+              }
+            />
+          ))}
         </div>
       ))}
     </div>
@@ -167,12 +159,10 @@ export function ArtifactsPanel({ sessionId }: { sessionId: string }): React.JSX.
 
 function ArtifactRow({
   artifact,
-  divided,
   expanded,
   onToggle
 }: {
   artifact: SessionArtifact
-  divided: boolean
   expanded: boolean
   onToggle: () => void
 }): React.JSX.Element {
@@ -193,7 +183,6 @@ function ArtifactRow({
 
   return (
     <div
-      className={divided ? 'border-t border-border-secondary/30' : ''}
       data-artifact-row={artifact.name}
       data-artifact-key={keyOf(artifact)}
       data-artifact-expanded={expanded ? 'true' : 'false'}

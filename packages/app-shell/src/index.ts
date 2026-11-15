@@ -153,7 +153,7 @@ export type { PanelTabBarProps, PanelTabItem } from './panel/PanelTabBar'
 // 右侧面板共享视图状态（isOpen/activeTab/width）—— 持久化/边界/原生同步由各宿主在 store 外接
 export { usePanelStore } from './panel/panelStore'
 export type { PanelStoreState } from './panel/panelStore'
-// 会话面板（聊天区内悬浮卡片：Files/Sub-agent）—— 状态按会话记忆；宽度持久化由宿主外接
+// 会话面板（聊天区内右侧平铺的一列：Files / 后台任务 / 产物）—— 状态按会话记忆；宽度持久化由宿主外接
 export {
   useSessionPanelStore,
   SESSION_PANEL_MIN_W,

@@ -326,7 +326,7 @@ async function shoot(title: string, file: string): Promise<number> {
     const rects = await app.main.eval<
       Array<{ x: number; y: number; width: number; height: number }>
     >(`(() => {
-      const cards = [...document.querySelectorAll('[data-figure-surface="card"], .markdown-body .my-2.rounded-lg')]
+      const cards = [...document.querySelectorAll('.markdown-body [data-figure-block]')]
         .filter((el, i, all) => all.findIndex((o) => o.contains(el) && o !== el) === -1)
       return cards.map((el) => {
         el.scrollIntoView({ block: 'start' })
@@ -343,7 +343,7 @@ async function shoot(title: string, file: string): Promise<number> {
         width: number
         height: number
       } | null>(`(() => {
-        const cards = [...document.querySelectorAll('[data-figure-surface="card"], .markdown-body .my-2.rounded-lg')]
+        const cards = [...document.querySelectorAll('.markdown-body [data-figure-block]')]
           .filter((el, i, all) => all.findIndex((o) => o.contains(el) && o !== el) === -1)
         const el = cards[${i}]
         if (!el) return null

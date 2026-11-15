@@ -11,7 +11,7 @@
  *   CB-3 传了 header：横幅、浮层、欢迎 / 对话 / 笔记本照常
  *
  * `./ChatHeader` 换成记下 props 的替身；`@shuvix/chat-ui` 只给 Conversation 替身与一个按 selector 读的
- * store；会话面板的 `useSessionPanelTool` 恒为 null。文件是 `.ts`，一律 createElement。
+ * store。文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -45,8 +45,6 @@ vi.mock('@shuvix/chat-ui', async () => {
     useChatStore: (selector: (s: StoreState) => unknown) => selector(hoisted.state)
   }
 })
-
-vi.mock('../panel/SessionPanel', () => ({ useSessionPanelTool: () => null }))
 
 import { ChatBody, type ChatBodyProps } from './ChatBody'
 

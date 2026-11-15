@@ -121,9 +121,12 @@ export function ChatHeader({
         )}
       </div>
 
-      {/* 右侧：宿主专属按钮簇 */}
+      {/* 右侧：宿主专属按钮簇。self-stretch：容器撑满顶栏高度（按钮照旧垂直居中），
+          会话工具栏据此把当前标签的下划线画到顶栏底边、压在会话面板的上边线上 */}
       {rightActions && (
-        <div className={`${noDrag} flex items-center gap-0.5 flex-shrink-0`}>{rightActions}</div>
+        <div className={`${noDrag} flex items-center self-stretch gap-0.5 flex-shrink-0`}>
+          {rightActions}
+        </div>
       )}
     </div>
   )

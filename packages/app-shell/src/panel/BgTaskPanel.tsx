@@ -20,7 +20,6 @@ import { SYNC_NOT_FOUND } from '@shuvix/chat-protocol/sync'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { SubSessionStream } from '../subagent/SubAgentStream'
-import { usePanelCloseInset } from './panelCloseInset'
 import { FINISHED_PREVIEW, endedAgo, orderTasks } from './bgTaskOrder'
 
 /**
@@ -295,8 +294,7 @@ function TaskGroup({
   collapsed,
   onToggleCollapsed,
   onClear,
-  footer,
-  reserveTopRight = false
+  footer
 }: {
   label: string
   /** 本组此刻画出来的行（已完成组可能只是最近几条） */
@@ -311,17 +309,15 @@ function TaskGroup({
   collapsed: boolean
   onToggleCollapsed: () => void
   onClear?: () => void
-  /** 卡片底部（已完成组的「显示更早的 N 条」） */
+  /** 组尾（已完成组的「显示更早的 N 条」） */
   footer?: ReactNode
-  /** 本组是面板首个可见分组：组头右侧给会话面板悬在卡片右上角的收起按钮让位 */
-  reserveTopRight?: boolean
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   if (total === 0) return null
 
   return (
-    <div className="mb-1.5 last:mb-0">
-      <div className={`flex items-center gap-1 px-1 py-1${reserveTopRight ? ' pr-6' : ''}`}>
+    <div className="mb-1 last:mb-0">
+      <div className="flex items-center gap-1 px-2 h-7">
         <button
           onClick={onToggleCollapsed}
           className="flex items-center gap-1 min-w-0 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
@@ -341,15 +337,15 @@ function TaskGroup({
         )}
       </div>
       {!collapsed && (
-        <div className="rounded-lg border border-border-secondary/40 bg-bg-primary overflow-hidden">
-          {tasks.map((task, idx) => (
+        // 平铺：行直接铺满面板宽度，没有卡片外框也没有行间线（同右侧面板的列表）
+        <div>
+          {tasks.map((task) => (
             <TaskRow
               key={task.taskId}
               task={task}
               now={now}
               expanded={expandedId === task.taskId}
               blocked={blockedIds.has(task.taskId)}
-              divided={idx > 0}
               onToggle={() => onToggleExpand(task.taskId)}
             />
           ))}
@@ -391,7 +387,6 @@ function TaskRow({
   now,
   expanded,
   blocked,
-  divided,
   onToggle
 }: {
   task: TaskInfo
@@ -399,7 +394,6 @@ function TaskRow({
   expanded: boolean
   /** 卡在等人回答 —— 它不会自己好起来，是这张表里唯一需要用户动手的状态，要一眼看得出来 */
   blocked: boolean
-  divided: boolean
   onToggle: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
@@ -449,7 +443,7 @@ function TaskRow({
 
   return (
     <div
-      className={`${divided ? 'border-t border-border-secondary/30' : ''}${blocked ? ' bg-warning/5' : ''}`}
+      className={blocked ? 'bg-warning/5' : undefined}
       data-task-row={task.kind}
       data-task-status={task.status}
       data-task-id={task.taskId}
@@ -530,7 +524,6 @@ function scrollRowIntoView(box: HTMLElement, taskId: string): void {
 
 export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.JSX.Element {
   const { t } = useTranslation()
-  const closeInset = usePanelCloseInset()
   const tasks = useBgTasks(sessionId)
   // 最近一次揭示请求：既驱动「滚到那一行」，也让被揭示的那条在已完成组里哪怕排在折叠线以下也画出来。
   // 初值是挂载前就发出、还没人处理的那条（见 handledReveal）
@@ -623,7 +616,7 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
             setReveal(null)
           } else setShowAllFinished(true)
         }}
-        className="w-full border-t border-border-secondary/30 px-2 py-1 text-left text-[10px] text-text-tertiary hover:bg-bg-hover/30 hover:text-text-secondary transition-colors"
+        className="w-full px-2 py-1 text-left text-[10px] text-text-tertiary hover:bg-bg-hover/30 hover:text-text-secondary transition-colors"
       >
         {showAll
           ? t('panel.tasksShowRecent', { count: FINISHED_PREVIEW })
@@ -632,8 +625,7 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
     ) : undefined
 
   return (
-    <div ref={scrollRef} className="h-full overflow-y-auto no-scrollbar p-1.5 bg-bg-secondary">
-      {/* 让位只给**首个可见**分组：空组渲染成 null，运行中为空时首行就是「已完成」那条 */}
+    <div ref={scrollRef} className="h-full overflow-y-auto no-scrollbar pb-2 bg-bg-secondary">
       <TaskGroup
         label={t('panel.tasksRunning')}
         tasks={running}
@@ -644,7 +636,6 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
         onToggleExpand={toggleExpand}
         collapsed={collapsed.running}
         onToggleCollapsed={() => setCollapsed((c) => ({ ...c, running: !c.running }))}
-        reserveTopRight={closeInset && running.length > 0}
       />
       <TaskGroup
         label={t('panel.tasksFinished')}
@@ -658,7 +649,6 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
         onToggleCollapsed={() => setCollapsed((c) => ({ ...c, finished: !c.finished }))}
         onClear={clearFinished}
         footer={finishedFooter}
-        reserveTopRight={closeInset && running.length === 0}
       />
     </div>
   )

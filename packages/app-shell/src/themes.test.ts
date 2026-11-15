@@ -17,16 +17,17 @@
  *
  * 3. **分类框的「浅底 + 同色深字」在每套主题、每个槽位上都读得清（TH-1…6）。** `--viz-N-tint` /
  *    `--viz-N-ink` 从 `--viz-N` **派生**、不逐主题调 —— 于是「11 套主题 × 8 槽都过 AA」不是某个人
- *    调出来的结果，而是一个公式的推论，改一个槽位色、加一套主题、换一下卡片底色都可能悄悄打破它。
+ *    调出来的结果，而是一个公式的推论，改一个槽位色、加一套主题、换一下图底下那层底色都可能悄悄打破它。
  *    这组用例从 css 里把公式的每一项（槽位色、混合比例、极点、各主题的底色与 color-scheme）解析出来，
- *    再从聊天卡片的组件源码里取卡片底的比例，按同一公式逐套主题复算 ink 对 tint 的对比度。数值本身
- *    不从 css 注释里抄：注释里的 5.16 只是「现在最差的那一格」，这里只守门槛 4.5。
+ *    按同一公式逐套主题复算 ink 对 tint 的对比度。图底下那一层是**页面底**（bg-primary）：对话里的图
+ *    2026-11-14 起直接画在页面上、不再垫卡片（TH-6 守着图块源码里没有再垫一层底），笔记本一直如此。
+ *    数值本身不从 css 注释里抄：注释里的数只是「现在最差的那一格」，这里只守门槛 4.5。
  *
  * 4. **mermaid 图（pele）的配色全部接到主题 token 上（TH-9…11）。** pele 的产物把每个颜色写成
  *    `var(--pele-*, <它自己的缺省>)`；`.pele` 那一块漏接一个名字，那一处就静默落回 pele 的缺省色
  *    （白底黑字），只在某种图、某个元素上露出来。TH-11 用**真 pele** 把几种常见图都渲一遍，收集产物里
  *    出现的每个 `--pele-*`，逐个查 `.pele` 里有没有接 —— 名单从产物算出来，不抄。图坐在哪一层底色上
- *    由 `[data-figure-surface]` 告诉它（TH-9 与 TH-8 的导出卡片底是同一个比例）。
+ *    由 `[data-figure-surface]` 告诉它（缺省是页面；TH-9 钉 `card` 那一层与导出的卡片底是同一个比例）。
  *
  *    TH-12 钉 ```mermaid 里唯一的强调 `:::accent`：`.pele .pele-node.accent` 把节点的中转变量换成
  *    第一个槽位的浅底 + 描边、标注取同槽位的深字（pele 产物那一侧的细节由 builtinSkillsMermaid.dom.test 的
@@ -223,18 +224,17 @@ const INK_RE =
   /^color-mix\(in srgb, var\(--viz-(\d+)\) (\d+(?:\.\d+)?)%, light-dark\((#[0-9a-f]{3,6}), (#[0-9a-f]{3,6})\)\)$/i
 const WASH_RE = /^color-mix\(in srgb, var\(--theme-text-primary\) (\d+(?:\.\d+)?)%, transparent\)$/
 
-/** 聊天里画图的两张卡片：```svg（CodeBlock 的 AuthoredSvgBlock）与 ```interactive（InteractiveBlock） */
-const CARD_SOURCES = ['CodeBlock.tsx', 'InteractiveBlock.tsx'].map((file) => ({
-  file,
-  text: readFileSync(resolve(HERE, '../../chat-ui/src/components/chat', file), 'utf8')
-}))
+/** 对话里画图的三个图块：```svg / ```artifact（CodeBlock）、```mermaid（MermaidBlock）、```interactive（InteractiveBlock） */
+const FIGURE_SOURCES = ['CodeBlock.tsx', 'MermaidBlock.tsx', 'InteractiveBlock.tsx'].map(
+  (file) => ({
+    file,
+    text: readFileSync(resolve(HERE, '../../chat-ui/src/components/chat', file), 'utf8')
+  })
+)
+/** 从前图卡的底：bg-tertiary 按比例叠出来的一层。图块源码里再出现它 = 图底下又垫了一层，复算的底就不对了 */
 const CARD_RE = /color-mix\(in srgb, var\(--color-bg-tertiary\) (\d+(?:\.\d+)?)%, transparent\)/g
-
-/** 各卡片源码里卡片底的百分比（去重） */
-const cardPercents = CARD_SOURCES.map(({ file, text }) => ({
-  file,
-  percents: [...new Set([...text.matchAll(CARD_RE)].map((m) => Number(m[1])))]
-}))
+/** 图底下那一层里 bg-tertiary 的比例：页面底 = 0（纯 bg-primary） */
+const PAGE_FRACTION = 0
 
 /** 各主题块里的底色与明暗（与上一组同一种块切法） */
 const THEMES = [...CSS.matchAll(/^\[data-theme='([^']+)'\]\s*\{([\s\S]*?)^\}/gm)].map((m) => {
@@ -276,16 +276,16 @@ const parseFormula = (): {
 interface InkPair {
   theme: string
   slot: number
-  /** ink 对「tint 叠在卡片上、卡片叠在页面上」的对比度 */
+  /** ink 对「tint 叠在图底下那层底上」的对比度 */
   ratio: number
   /** 同一块底上直接拿 --viz-N 当字色的对比度（TH-5 的对照） */
   rawRatio: number
 }
 
 /**
- * 11 套主题 × 8 槽的 ink / tint 对比度。c = 卡片底里 bg-tertiary 的比例（取自卡片源码，TH-6）。
- *   card = c·T + (1−c)·P        （卡片底：bg-tertiary 按 c 叠在 bg-primary 上）
- *   surf = p·V + (1−p)·card     （tint：--viz-N 按 p 叠在卡片上）
+ * 11 套主题 × 8 槽的 ink / tint 对比度。c = 图底下那层底里 bg-tertiary 的比例（页面底 = 0，见 TH-6）。
+ *   card = c·T + (1−c)·P        （图底下那层：bg-tertiary 按 c 叠在 bg-primary 上；c = 0 就是页面）
+ *   surf = p·V + (1−p)·card     （tint：--viz-N 按 p 叠在那层底上）
  *   ink  = q·V + (1−q)·K        （ink：--viz-N 往极点 K 混，浅档 K=黑、深档 K=白）
  */
 const inkPairs = (cardFraction: number): InkPair[] => {
@@ -349,15 +349,19 @@ describe('themes.css —— 分类框的 tint / ink 与中性 wash（TH-1…6）
     expect(Number(wash![1])).toBeLessThan(100)
   })
 
-  it('TH-6 卡片底的比例从两张卡片的源码里取：两处都找得到、而且相同；两个宿主的 --color-bg-tertiary 都指向 --theme-bg-tertiary', () => {
-    for (const { file, percents } of cardPercents) {
-      expect(percents, `${file} 里找不到卡片底的 color-mix`).toHaveLength(1)
+  it('TH-6 对话里的图直接画在页面上：三个图块的源码里都没有再垫一层 bg-tertiary 的底，外壳挂的是 page；两个宿主的 --color-bg-tertiary 都指向 --theme-bg-tertiary', () => {
+    for (const { file, text } of FIGURE_SOURCES) {
+      expect([...text.matchAll(CARD_RE)], `${file} 又给图垫了一层底`).toHaveLength(0)
+      // 导出时说的也是页面那一层
+      expect(text, file).not.toMatch(/surface:\s*'card'/)
     }
-    const [svgCard, interactiveCard] = cardPercents.map((c) => c.percents[0])
-    expect(interactiveCard, '两张卡片的底色比例不一致').toBe(svgCard)
-    expect(svgCard).toBeGreaterThan(0)
-    expect(svgCard).toBeLessThanOrEqual(100)
-    // 卡片取的是 Tailwind 的 --color-bg-tertiary；复算用的是 --theme-bg-tertiary，两者之间这条映射得在
+    const shell = readFileSync(
+      resolve(HERE, '../../chat-ui/src/components/figure/FigureBlock.tsx'),
+      'utf8'
+    )
+    expect(shell).toMatch(/data-figure-surface="page"/)
+    expect([...shell.matchAll(CARD_RE)]).toHaveLength(0)
+    // 页面底取的是 Tailwind 的 --color-bg-*；复算用的是 --theme-bg-*，两者之间这条映射得在
     for (const host of [
       '../../../apps/desktop/src/renderer/src/assets/main.css',
       '../../../apps/extension/src/sidepanel/styles.css'
@@ -367,9 +371,7 @@ describe('themes.css —— 分类框的 tint / ink 与中性 wash（TH-1…6）
     }
   })
 
-  it('TH-3 11 套主题 × 8 槽：tint 上的 ink 对比度都 ≥ 4.5（按 css 里的公式与卡片源码里的底色比例复算）', () => {
-    const card = cardPercents[0].percents[0]
-    expect(Number.isFinite(card), '卡片底比例没取到（见 TH-6）').toBe(true)
+  it('TH-3 11 套主题 × 8 槽：tint 上的 ink 对比度都 ≥ 4.5（按 css 里的公式、图直接坐在页面底上复算）', () => {
     // 前提：11 套主题的底色与明暗都解析出来了（缺一项，下面那套主题会变成 NaN 而不是报错）
     expect(THEMES).toHaveLength(11)
     for (const t of THEMES) {
@@ -377,7 +379,7 @@ describe('themes.css —— 分类框的 tint / ink 与中性 wash（TH-1…6）
       expect(t.bgPrimary, t.theme).toMatch(/^#[0-9a-f]{3,6}$/i)
       expect(t.bgTertiary, t.theme).toMatch(/^#[0-9a-f]{3,6}$/i)
     }
-    const failures = inkPairs(card / 100)
+    const failures = inkPairs(PAGE_FRACTION)
       .filter((pair) => !(pair.ratio >= 4.5))
       .map((pair) => `${pair.theme} viz-${pair.slot} ${pair.ratio.toFixed(2)}`)
     expect(failures).toEqual([])
@@ -395,7 +397,7 @@ describe('themes.css —— 分类框的 tint / ink 与中性 wash（TH-1…6）
     // 三位写法按位展开
     expect(hexRgb('#abc')).toEqual(hexRgb('#aabbcc'))
 
-    const pairs = inkPairs(cardPercents[0].percents[0] / 100)
+    const pairs = inkPairs(PAGE_FRACTION)
     expect(pairs).toHaveLength(88)
     expect(new Set(pairs.map((p) => `${p.theme}/${p.slot}`)).size).toBe(88)
     for (const pair of pairs) {
@@ -406,13 +408,13 @@ describe('themes.css —— 分类框的 tint / ink 与中性 wash（TH-1…6）
 
   it('TH-5 这道门真的会关：同一块底上直接拿 --viz-N 当字色，至少有一格过不了 4.5', () => {
     // 否则 TH-3 的全绿可能只是算法恒真（比如底色取错成与字色无关的常量）
-    const pairs = inkPairs(cardPercents[0].percents[0] / 100)
+    const pairs = inkPairs(PAGE_FRACTION)
     const raw = pairs.filter((pair) => pair.rawRatio < 4.5)
     expect(raw.length).toBeGreaterThan(0)
   })
 })
 
-// ─── 调色板挂在哪些元素上（TH-7）与导出用的卡片底（TH-8） ─────────────────
+// ─── 调色板挂在哪些元素上（TH-7）与导出用的底色（TH-8） ─────────────────
 
 /**
  * 声明某个自定义属性的那一块的选择器列表（注释剥掉、按逗号切、去空白）。
@@ -445,24 +447,14 @@ describe('themes.css —— 调色板挂在每个带主题的元素上（TH-7）
   })
 })
 
-describe('导出的卡片底（TH-8）', () => {
-  /** figureExport.ts 里卡片底色的配方（bg-tertiary 按比例叠在 bg-primary 上） */
+describe('导出的底色（TH-8）', () => {
   const EXPORT_SRC = readFileSync(
     resolve(HERE, '../../chat-ui/src/components/figure/figureExport.ts'),
     'utf8'
   )
-  const EXPORT_CARD_RE =
-    /card:\s*'color-mix\(in srgb, var\(--theme-bg-tertiary\) (\d+(?:\.\d+)?)%, var\(--theme-bg-primary\)\)'/
 
-  it('TH-8 导出「填充」的卡片底与对话里 ```svg / mermaid 图卡是同一个比例', () => {
-    const exportPct = Number(EXPORT_CARD_RE.exec(EXPORT_SRC)?.[1])
-    expect(Number.isFinite(exportPct), 'figureExport.ts 的 SURFACE_CSS.card 写法变了').toBe(true)
-    for (const file of ['CodeBlock.tsx', 'MermaidBlock.tsx']) {
-      const text = readFileSync(resolve(HERE, '../../chat-ui/src/components/chat', file), 'utf8')
-      const pcts = [...new Set([...text.matchAll(CARD_RE)].map((m) => Number(m[1])))]
-      expect(pcts, `${file} 里找不到卡片底的 color-mix`).toHaveLength(1)
-      expect(pcts[0], file).toBe(exportPct)
-    }
+  it('TH-8 导出「填充」的页面底就是 bg-primary —— 与对话、笔记本里图坐着的那层同一个颜色', () => {
+    expect(EXPORT_SRC).toMatch(/page:\s*'var\(--theme-bg-primary\)'/)
   })
 })
 

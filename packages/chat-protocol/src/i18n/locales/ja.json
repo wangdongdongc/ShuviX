@@ -1477,6 +1477,7 @@
     "newTerminal": "新規ターミナル",
     "closeTerminal": "ターミナルを閉じる",
     "files": "ファイル",
+    "sessionPanelCollapse": "{{name}}を閉じる",
     "filesLoading": "ワークスペースをスキャン中…",
     "filesError": "ファイルのスキャンに失敗しました",
     "filesTruncated": "最初の {{count}} 件を表示しています",

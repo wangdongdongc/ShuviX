@@ -22,6 +22,7 @@ import { InteractiveBlock, InteractiveUnsupportedBlock } from './InteractiveBloc
 import { useMarkdownMessageId, useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
 import { FigureExportButton } from '../figure/FigureExportPanel'
 import { authoredFigureSource } from '../figure/figureExport'
+import { FigureBlock, FIGURE_SOURCE_CLASS } from '../figure/FigureBlock'
 import { useRestoreForCopy } from '../../hooks/useRedaction'
 
 /** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
@@ -213,50 +214,46 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
   }
 
   return (
-    <div
-      className="my-2 rounded-lg overflow-hidden"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+    <FigureBlock
+      kind="svg"
+      pinActions={showSource}
+      actions={
+        <>
+          {/* 只导出写完的图：流式中途的一帧是半张图 */}
+          {settled && svgHtml && (
+            <FigureExportButton
+              getSource={() =>
+                authoredFigureSource(svgHtml, {
+                  surface: 'page',
+                  inheritFrom: () => figureRef.current
+                })
+              }
+            />
+          )}
+          <button
+            onClick={() => setShowSource(!showSource)}
+            className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+            title={showSource ? t('message.showDiagram') : t('message.source')}
+          >
+            {showSource ? <FileText size={10} /> : <Code size={10} />}
+            <span>{showSource ? t('message.diagram') : t('message.source')}</span>
+          </button>
+        </>
+      }
     >
-      <div
-        className="flex items-center gap-3 px-4 py-1.5"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        <span className="text-[10px] text-text-tertiary font-medium mr-auto">SVG</span>
-        {/* 只导出写完的图：流式中途的一帧是半张图 */}
-        {settled && svgHtml && (
-          <FigureExportButton
-            getSource={() =>
-              authoredFigureSource(svgHtml, {
-                surface: 'card',
-                inheritFrom: () => figureRef.current
-              })
-            }
-          />
-        )}
-        <button
-          onClick={() => setShowSource(!showSource)}
-          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-          title={showSource ? t('message.showDiagram') : t('message.source')}
-        >
-          {showSource ? <FileText size={10} /> : <Code size={10} />}
-          <span>{showSource ? t('message.diagram') : t('message.source')}</span>
-        </button>
-      </div>
       {showSource ? (
-        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
-          {code}
-        </pre>
+        <pre className={FIGURE_SOURCE_CLASS}>{code}</pre>
       ) : (
         /* overflow-hidden 而非 auto：图按 viewBox 自适应宽度（提示片段要求必须带 viewBox、
            不写死 width/height），超出的部分是画错了而不是该滚动的内容；同时它也是
-           「图里的东西跑不出这张卡」的兜底围栏。 */
+           「图里的东西跑不出这一格」的兜底围栏。 */
         <div
           ref={figureRef}
           className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
           dangerouslySetInnerHTML={{ __html: svgHtml }}
         />
       )}
-    </div>
+    </FigureBlock>
   )
 }
 
@@ -306,11 +303,11 @@ type ArtifactLoadState =
  * 一件会话 Artifact 的渲染（引用围栏与会话面板「产物」页共用）：svg 内联、`.html` 进交互图沙箱、
  * 其余显示源码。`sessionId` 是去哪场会话找（`artifact:read` 还会往下找一层子会话）。
  *
- *  - `messageId`：引用所在那条回复 —— 给了就取那条回复钉住的那一版，并在标题栏标出它与当前的关系：
+ *  - `messageId`：引用所在那条回复 —— 给了就取那条回复钉住的那一版，并在图底下的说明行标出它与当前的关系：
  *    钉下的那一版之后又被改过 →「已有新版」（点它在会话面板的产物页里亮出这件）；没钉过 →「当前版本」。
  *  - `followChanges`：`artifacts.changed` 一来就重取（钉住的内容不变，但「已有新版」要跟上；没钉的
  *    要跟上新内容；回复落定后钉才写下，也靠这一下换成钉住的那一版）。面板那边换 key 重挂，不用它。
- *  - `hideTitle`：面板那一行已经写着标题，展开的预览里不再重复（svg 的导出按钮、版本标记照留）。
+ *  - `hideTitle`：面板那一行已经写着标题，展开的预览的说明行里不再重复（svg 的导出按钮、版本标记照留）。
  */
 export function ArtifactPreview({
   sessionId,
@@ -419,17 +416,20 @@ export function ArtifactPreview({
       ) : null
     ) : null
 
-  // .html 的 artifact 是认领下来的交互图：与 ```interactive 围栏同一个沙箱（它有自己的标题栏，
-  // 版本标记放在它上面一行）
+  // .html 的 artifact 是认领下来的交互图：与 ```interactive 围栏同一个沙箱，版本标记进它的说明行
   if (state.kind === 'ok' && artifactRefIsHtml(state.name)) {
-    return (
+    return canRunInteractive ? (
+      <InteractiveBlock
+        code={state.content}
+        closed
+        title={hideTitle ? undefined : state.title}
+        frameTitle={state.title}
+        extras={versionMark}
+      />
+    ) : (
       <>
         {versionMark && <div className="flex justify-end -mb-1 mt-2">{versionMark}</div>}
-        {canRunInteractive ? (
-          <InteractiveBlock code={state.content} closed title={state.title} />
-        ) : (
-          <InteractiveUnsupportedBlock code={state.content} />
-        )}
+        <InteractiveUnsupportedBlock code={state.content} />
       </>
     )
   }
@@ -439,33 +439,25 @@ export function ArtifactPreview({
 
   const showExport = state.kind === 'ok' && !!svgHtml
   return (
-    <div
-      className="my-2 rounded-lg overflow-hidden"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+    <FigureBlock
+      kind="artifact"
+      label={hideTitle ? undefined : state.kind === 'ok' ? state.title : name}
+      extras={versionMark}
+      actions={
+        showExport ? (
+          <FigureExportButton
+            getSource={() =>
+              authoredFigureSource(svgHtml, {
+                // 产物有标题：比图里的 aria-label 更像用户认得的名字
+                name: state.title || null,
+                surface: 'page',
+                inheritFrom: () => figureRef.current
+              })
+            }
+          />
+        ) : undefined
+      }
     >
-      {(!hideTitle || showExport || versionMark) && (
-        <div
-          className="flex items-center gap-3 px-4 py-1.5"
-          style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-        >
-          <span className="text-[10px] text-text-tertiary font-medium truncate mr-auto">
-            {hideTitle ? '' : state.kind === 'ok' ? state.title : name}
-          </span>
-          {versionMark}
-          {showExport && (
-            <FigureExportButton
-              getSource={() =>
-                authoredFigureSource(svgHtml, {
-                  // 产物有标题：比图里的 aria-label 更像用户认得的名字
-                  name: state.title || null,
-                  surface: 'card',
-                  inheritFrom: () => figureRef.current
-                })
-              }
-            />
-          )}
-        </div>
-      )}
       {state.kind === 'loading' ? (
         <div className="p-3 text-[11px] text-text-tertiary">{t('message.rendering')}</div>
       ) : svgHtml ? (
@@ -475,11 +467,9 @@ export function ArtifactPreview({
           dangerouslySetInnerHTML={{ __html: svgHtml }}
         />
       ) : (
-        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
-          {state.content}
-        </pre>
+        <pre className={FIGURE_SOURCE_CLASS}>{state.content}</pre>
       )}
-    </div>
+    </FigureBlock>
   )
 }
 

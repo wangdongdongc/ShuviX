@@ -1477,6 +1477,7 @@
     "newTerminal": "新建终端",
     "closeTerminal": "关闭终端",
     "files": "文件",
+    "sessionPanelCollapse": "收起{{name}}",
     "filesLoading": "正在扫描工作区…",
     "filesError": "扫描文件失败",
     "filesTruncated": "已显示前 {{count}} 个文件",

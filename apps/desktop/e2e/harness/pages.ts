@@ -1304,8 +1304,10 @@ export function bubbleWatch(main: CdpClient): BubbleWatch {
 // `data-mermaid-expand`（「Full size」弹窗按钮：只在展开了也还被栏宽缩着时有）、`data-mermaid-dialog`
 // （弹窗的面板；遮罩是它的父节点，面板本身不是遮罩）。
 // 图里面是 pele 的产物：节点 `g.pele-node`（形状是它的 rect / path / polygon / circle，标签
-// `text.pele-label`），边上的标签 `g.pele-edge-label`（一块衬底 rect + 一段 text）。卡片外壳挂着
-// `data-figure-surface="card"`（themes.css 由它给出 --figure-surface / --figure-raised）。
+// `text.pele-label`），边上的标签 `g.pele-edge-label`（一块衬底 rect + 一段 text）。图块外壳是
+// `[data-figure-block="mermaid"]`（chat-ui 的 FigureBlock），挂 `data-figure-surface="page"`：图直接画在
+// 页面上，走 themes.css 的缺省（衬底 = bg-primary、节点 = bg-tertiary）。图 / 源码切换按钮
+// `[data-mermaid-source-toggle]`。
 // 卡片上的东西一律在**正文里含本轮标记的那条**助手消息里找（见 assistantBodyWith）—— 同一会话
 // 前几轮的图还在上面；弹窗 portal 到 body 上，全局只会有一个。弹窗里的图认「不是 `.lucide` 的
 // 那个 svg」：关闭按钮的 X 也是 svg。
@@ -1363,7 +1365,9 @@ export interface MermaidColors {
   bgPrimary: string
   /** 此刻 `var(--theme-text-primary)` 的解析值 */
   textPrimary: string
-  /** 卡片（`[data-figure-surface]`）里面解析出来的 `var(--figure-surface)` —— 图坐着的那层底 */
+  /** 此刻 `var(--theme-bg-tertiary)` 的解析值 */
+  bgTertiary: string
+  /** 外壳（`[data-figure-surface]`）里面解析出来的图坐着的那层底：`--figure-surface`，没设就是页面底 bg-primary */
   figureSurface: string
   /** 放图那一格的 computed background-color（透明 = 图直接坐在卡片底色上） */
   figureBackground: string
@@ -1414,7 +1418,7 @@ export interface MermaidVSpan {
 
 /** 卡片在对话滚动区里的位置（`.conversation-scroller`；视口坐标，CSS px） */
 export interface MermaidViewport {
-  /** 卡片外壳（`[data-figure-surface="card"]`） */
+  /** 图块外壳（`[data-figure-block="mermaid"]`） */
   card: MermaidVSpan
   /** 图底下那一条；没有 = null */
   bar: MermaidVSpan | null
@@ -1438,7 +1442,7 @@ export interface MermaidPaintFrame {
   /** watchPaint() 之后的第几次 rAF（从 1 数） */
   frame: number
   /**
-   * 卡片外壳（`[data-figure-surface="card"]`）的页内编号（与 svgTag 同一套 `__e2eSvgTags` 发号）；
+   * 图块外壳（`[data-figure-block="mermaid"]`）的页内编号（与 svgTag 同一套 `__e2eSvgTags` 发号）；
    * 0 = 卡片不在 DOM 里。认卡片经卡片里的 mermaid 锚点（图 / 占位行），所以占位阶段也认得出
    */
   card: number
@@ -1577,9 +1581,8 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
             : null
         }
         if (!figure && !pending && !error && !body.querySelector('[data-mermaid-expand]')) {
-          // 切到源码的卡片没有上面任何一个锚点，只剩 <pre> —— 靠工具栏的「Mermaid」字样认
-          const card = [...body.querySelectorAll('span')].find((s) => s.textContent === 'Mermaid')
-          if (!card) return null
+          // 切到源码的图块没有上面任何一个锚点，只剩 <pre> —— 靠外壳自己认
+          if (!body.querySelector('[data-figure-block="mermaid"]')) return null
         }
         return {
           figure: figure ? figure.getAttribute('data-mermaid-figure') : null,
@@ -1628,8 +1631,11 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
           labelColor: label ? getComputedStyle(label).fill : '',
           edgeLabelFill: edgeBg ? getComputedStyle(edgeBg).fill : '',
           bgPrimary: resolveIn(document.body, 'var(--theme-bg-primary)'),
+          bgTertiary: resolveIn(document.body, 'var(--theme-bg-tertiary)'),
           textPrimary: resolveIn(document.body, 'var(--theme-text-primary)'),
-          figureSurface: card ? resolveIn(card, 'var(--figure-surface)') : '',
+          figureSurface: card
+            ? resolveIn(card, 'var(--figure-surface, var(--theme-bg-primary))')
+            : '',
           figureBackground: getComputedStyle(figure).backgroundColor
         }
       })()`),
@@ -1692,7 +1698,7 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
     },
     revealCard: async () => {
       await main.eval(`(() => {
-        const card = (${FIGURE})?.closest('[data-figure-surface="card"]')
+        const card = (${FIGURE})?.closest('[data-figure-block="mermaid"]')
         if (!card) throw new Error('no mermaid card on screen')
         card.scrollIntoView({ block: 'start' })
         return true
@@ -1702,7 +1708,7 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
     viewport: () =>
       main.eval<MermaidViewport>(`(() => {
         const figure = ${FIGURE}
-        const card = figure?.closest('[data-figure-surface="card"]')
+        const card = figure?.closest('[data-figure-block="mermaid"]')
         const scroller = document.querySelector('.conversation-scroller')
         if (!card || !scroller) throw new Error('no mermaid card in the conversation')
         const span = (el) => {
@@ -1771,7 +1777,7 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
           const body = ${BODY}
           // 经卡片里的 mermaid 锚点认卡片：占位阶段（还没有图）也认得出
           const anchor = body?.querySelector('[data-mermaid-figure],[data-mermaid-pending]')
-          const card = anchor?.closest('[data-figure-surface="card"]') ?? null
+          const card = anchor?.closest('[data-figure-block="mermaid"]') ?? null
           const figure = card?.querySelector('[data-mermaid-figure]') ?? null
           const svg = figure?.querySelector(':scope > svg') ?? null
           const vb = (svg?.getAttribute('viewBox') ?? '').trim().split(/[\\s,]+/).map(Number)
@@ -1944,7 +1950,7 @@ export interface InteractiveShot {
   /** srcdoc 的前 600 字符（CSP meta 在最前面，够看） */
   srcdocHead: string
   srcdocLength: number
-  /** 工具栏上的名字（卡片第一行的第一个 span） */
+  /** 图底下说明行里的名字（`[data-figure-label]`：artifact 引用的标题；围栏图没有名字 = ''） */
   toolbarTitle: string
   /** iframe 的 `title` 属性；没有 iframe = null */
   frameTitle: string | null
@@ -2032,7 +2038,7 @@ export function interactivePane(main: CdpClient, marker: string): InteractivePan
         srcdocLength: srcdoc.length,
         toolbarTitle: unsupported
           ? ''
-          : (card.firstElementChild?.querySelector('span')?.textContent ?? '').trim(),
+          : (card.querySelector('[data-figure-label]')?.textContent ?? '').trim(),
         frameTitle: frame ? frame.getAttribute('title') : null,
         height: frame ? frame.style.height : '',
         source: !unsupported && pre ? (pre.textContent ?? '') : null,
@@ -11365,8 +11371,8 @@ export function tasksPanelPane(main: CdpClient): TasksPanelPane {
       await until(() => main.eval<boolean>(`!!${TOOL}`), 'tasks toolbar button', timeoutMs)
       await main.eval(`(() => {
         const btn = ${TOOL}
-        // 已经在任务页（按钮是激活态）就别再点：收起态点它是展开，展开态点它是切页，都不会收起
-        if (btn && !btn.className.includes('text-accent')) btn.click()
+        // 已经在任务页（按钮是激活态）就别再点：再点一次开着的标签是收起面板
+        if (btn && !btn.hasAttribute('data-active')) btn.click()
         return true
       })()`)
       await until(
@@ -11761,9 +11767,9 @@ export function conversationScrollPane(main: CdpClient): ConversationScrollPane 
 // `[data-figure-download]` / `[data-figure-action-error]`；入口按钮一律 `[data-figure-export]`（对话图卡
 // 工具栏上的那颗，或笔记本 widget 上 `.cm-atomic-figure-export` 那颗 —— 后者的值是 svg / mermaid）。
 //
-// 对话里的图卡没有自己的 data 属性：三种卡片（```svg、```artifact 引用的 svg、```mermaid）共用同一个
-// 外壳 `div.my-2.rounded-lg.overflow-hidden`（第一个孩子是工具栏，第一个 span 是卡片标签）—— 按标签与
-// mermaid 自己的锚点分种类，卡片都在**正文里含本轮标记的那条**助手消息里找（assistantBodyWith）。
+// 对话里的图块（```svg、```artifact 引用的 svg、```mermaid）共用同一个外壳 `[data-figure-block=<种类>]`
+// （chat-ui 的 FigureBlock：图直接画在页面上，图底下一行说明 —— 名字在 `[data-figure-label]`，操作悬停才
+// 显形但一直在 DOM 里）。图块都在**正文里含本轮标记的那条**助手消息里找（assistantBodyWith）。
 // 笔记本里的图认 widget 的类名：`.cm-atomic-svg` / `.cm-atomic-mermaid`（外壳），
 // `.cm-atomic-svg-figure` / `.cm-atomic-mermaid-diagram`（放 <svg> 的那一格）。
 
@@ -11789,7 +11795,7 @@ export interface OnScreenPaint {
 
 /** 一张对话图卡的此刻 */
 export interface FigureCardShot {
-  /** 工具栏标签（SVG / Mermaid / 产物标题） */
+  /** 说明行里的名字（产物标题；围栏图没有名字 = ''） */
   label: string
   /** 图画出来了 */
   figure: boolean
@@ -11828,15 +11834,7 @@ export function figureCardPane(
   const CARD = `((() => {
     const body = ${BODY}
     if (!body) return null
-    const kindOf = (c) => {
-      if (c.querySelector('[data-mermaid-figure],[data-mermaid-pending],[data-mermaid-expand]')) return 'mermaid'
-      const label = (c.firstElementChild?.querySelector('span')?.textContent ?? '').trim()
-      if (label === 'Mermaid') return 'mermaid'
-      if (label === 'SVG') return 'svg'
-      return 'artifact'
-    }
-    const cards = [...body.querySelectorAll('div.my-2.rounded-lg.overflow-hidden')]
-      .filter((c) => !c.closest('[data-interactive-figure]') && kindOf(c) === ${JSON.stringify(kind)})
+    const cards = [...body.querySelectorAll('[data-figure-block=${JSON.stringify(kind)}]')]
     return cards[${index}] ?? null
   })())`
   const SVG =
@@ -11862,7 +11860,7 @@ export function figureCardPane(
         if (!card) return null
         const btn = ${BTN}
         return {
-          label: (card.firstElementChild?.querySelector('span')?.textContent ?? '').trim(),
+          label: (card.querySelector('[data-figure-label]')?.textContent ?? '').trim(),
           figure: !!(${SVG}),
           hasExport: !!btn,
           exportText: (btn?.textContent ?? '').trim()
@@ -12318,7 +12316,7 @@ export function sessionToolKeys(main: CdpClient): Promise<string[]> {
 
 // ─── 会话面板 · Files 页（FilesPanel 的文件树：@pierre/trees，行在 shadow DOM 里）──────────────
 //
-// 锚点：工具栏按钮 `[data-session-tool="files"]`；面板卡片 `.session-panel-card`；树的行是 pierre 的
+// 锚点：工具栏按钮 `[data-session-tool="files"]`；面板 `[data-session-panel]`；树的行是 pierre 的
 // `button[data-type="item"][data-item-path=<树内相对路径>]`（目录带尾斜杠），名字那一格 `[data-item-section="content"]`。
 // 条目右键菜单是原生的（桌面）：经 bootstrap.cjs 的 `contextMenu:popup` 桩，钉选 / 读项同侧栏（armMenu / lastMenuItems）。
 
@@ -12340,7 +12338,7 @@ export interface FilesPanelPane {
 
 export function filesPanelPane(main: CdpClient): FilesPanelPane {
   const TOOL = `document.querySelector('[data-session-tool="files"]')`
-  const CARD = `document.querySelector('.session-panel-card')`
+  const CARD = `document.querySelector('[data-session-panel]')`
   const ROW = (path: string): string => FILES_TREE_ROW(CARD, path)
 
   const centreOf = async (path: string): Promise<{ x: number; y: number }> => {
@@ -12375,7 +12373,9 @@ export function filesPanelPane(main: CdpClient): FilesPanelPane {
     open: async (timeoutMs = 15_000) => {
       await until(() => main.eval<boolean>(`!!${TOOL}`), 'files toolbar button', timeoutMs)
       await main.eval(`(() => {
-        ${TOOL}?.click()
+        const btn = ${TOOL}
+        // 已经在 Files 页（按钮是激活态）就别再点：再点一次开着的标签是收起面板
+        if (btn && !btn.hasAttribute('data-active')) btn.click()
         return true
       })()`)
       await until(
@@ -12462,11 +12462,11 @@ export interface ArtifactsPanelPane {
   rows(): Promise<ArtifactRowShot[]>
   /** 展开某一行（已展开就不动），等它的预览出现 */
   expand(name: string, timeoutMs?: number): Promise<void>
-  /** 工具栏按钮簇与面板卡片合起来的矩形（截图用）；面板没开 → null */
+  /** 工具栏按钮簇与面板合起来的矩形（截图用）；面板没开 → null */
   shotRect(): Promise<{ x: number; y: number; width: number; height: number } | null>
   /** 产物页此刻看得见（面板展开、停在产物页） */
   shown(): Promise<boolean>
-  /** 收起会话面板（卡片右上角的 ×；本来就收着就不动），等它卸下 */
+  /** 收起会话面板（再点一次工具栏里开着的那个标签；本来就收着就不动），等它卸下 */
   close(timeoutMs?: number): Promise<void>
 }
 
@@ -12483,8 +12483,8 @@ export function artifactsPanelPane(main: CdpClient): ArtifactsPanelPane {
       await until(() => main.eval<boolean>(`!!${TOOL}`), 'artifacts toolbar button', timeoutMs)
       await main.eval(`(() => {
         const btn = ${TOOL}
-        // 已经在产物页（按钮是激活态）就别再点：收起态点它是展开，展开态点它是切页，都不会收起
-        if (btn && !btn.className.includes('text-accent')) btn.click()
+        // 已经在产物页（按钮是激活态）就别再点：再点一次开着的标签是收起面板
+        if (btn && !btn.hasAttribute('data-active')) btn.click()
         return true
       })()`)
       await until(
@@ -12532,7 +12532,7 @@ export function artifactsPanelPane(main: CdpClient): ArtifactsPanelPane {
     },
     shotRect: () =>
       main.eval<{ x: number; y: number; width: number; height: number } | null>(`(() => {
-        const card = document.querySelector('.session-panel-card')
+        const card = document.querySelector('[data-session-panel]')
         const tools = document.querySelector('[data-session-tool]')?.parentElement
         if (!card || !tools) return null
         const a = card.getBoundingClientRect()
@@ -12545,13 +12545,13 @@ export function artifactsPanelPane(main: CdpClient): ArtifactsPanelPane {
       })()`),
     shown: () => main.eval<boolean>(SHOWN),
     close: async (timeoutMs = 10_000) => {
-      // × 是卡片的第一个子按钮（SessionPanel：绝对定位在右上角）
+      // 面板没有自己的收起按钮：再点一次工具栏里开着的那个标签（`data-active`）就是收起
       await main.eval(`(() => {
-        document.querySelector('.session-panel-card > button')?.click()
+        document.querySelector('[data-session-tool][data-active]')?.click()
         return true
       })()`)
       await until(
-        () => main.eval<boolean>(`!document.querySelector('.session-panel-card')`),
+        () => main.eval<boolean>(`!document.querySelector('[data-session-panel]')`),
         'session panel closed',
         timeoutMs
       )
@@ -12624,8 +12624,8 @@ export function artifactRefsPane(main: CdpClient): ArtifactRefsPane {
         if (!scroller || !svg) return false
         // 一轮落定后对话区「贴底跟随」：先像用户滚了一下轮子那样解除，不然下一帧又被贴回底部
         scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true }))
-        // 引用块是图外面那层圆角卡片（标题栏 + 图）；认不出就按图本身
-        const block = svg.closest('.rounded-lg') ?? svg
+        // 引用块是图外面那层外壳（图 + 说明行）；认不出就按图本身
+        const block = svg.closest('[data-figure-block]') ?? svg
         scroller.scrollTop +=
           block.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8
         return true

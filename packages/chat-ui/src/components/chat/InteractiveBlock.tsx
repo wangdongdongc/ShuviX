@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Code, Play, RotateCcw } from 'lucide-react'
 import {
@@ -10,6 +10,7 @@ import {
 import { useChatStore } from '../../stores/chatStore'
 import { ChatHostContext } from '../../host/chatHostContext'
 import { useThemeId } from './useThemeId'
+import { FigureBlock, FIGURE_SOURCE_CLASS } from '../figure/FigureBlock'
 
 /**
  * ```interactive 围栏 → 沙箱里跑的一块交互图（也给 `.html` 的 artifact 引用用）。
@@ -59,13 +60,19 @@ function fillComposer(text: string): void {
 export function InteractiveBlock({
   code,
   closed,
-  title
+  title,
+  frameTitle,
+  extras
 }: {
   code: string
   /** 围栏已闭合（或消息已写完）—— 之前只显示占位 */
   closed: boolean
-  /** 工具栏上的名字（artifact 引用给它的标题；围栏缺省「交互图」） */
+  /** 说明行上的名字（artifact 引用给它的标题；围栏没有名字，不写） */
   title?: string
+  /** iframe 的无障碍名字（缺省取 title，再缺省是通用的那一句）—— 产物面板里不重复标题，但 iframe 仍要有名字 */
+  frameTitle?: string
+  /** 说明行里常驻的东西（artifact 引用的版本标记） */
+  extras?: ReactNode
 }): React.JSX.Element {
   const { t } = useTranslation()
   const themeId = useThemeId()
@@ -104,20 +111,15 @@ export function InteractiveBlock({
   const lines = code.split('\n').length
 
   return (
-    <div
-      data-interactive-figure
-      className="my-2 rounded-lg overflow-hidden"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-    >
-      <div
-        className="flex items-center justify-between gap-2 px-4 py-1.5"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        <span className="text-[10px] text-text-tertiary font-medium truncate">
-          {title ?? t('message.interactive')}
-        </span>
-        {closed && (
-          <div className="flex items-center gap-3 flex-shrink-0">
+    <FigureBlock
+      kind="interactive"
+      attrs={{ 'data-interactive-figure': '' }}
+      label={title}
+      extras={extras}
+      pinActions={showSource}
+      actions={
+        closed ? (
+          <>
             {!showSource && (
               <button
                 data-interactive-rerun
@@ -138,17 +140,16 @@ export function InteractiveBlock({
               {showSource ? <Play size={10} /> : <Code size={10} />}
               <span>{showSource ? t('message.interactive') : t('message.source')}</span>
             </button>
-          </div>
-        )}
-      </div>
+          </>
+        ) : undefined
+      }
+    >
       {!closed ? (
-        <div data-interactive-pending className="px-4 py-3 text-[11px] text-text-tertiary">
+        <div data-interactive-pending className="px-1 py-3 text-[11px] text-text-tertiary">
           {t('message.interactiveBuilding', { lines })}
         </div>
       ) : showSource ? (
-        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
-          {code}
-        </pre>
+        <pre className={FIGURE_SOURCE_CLASS}>{code}</pre>
       ) : (
         <iframe
           key={`${themeId}\u0000${run}`}
@@ -156,13 +157,13 @@ export function InteractiveBlock({
           // 边界本身 —— 见组件头注释第 1 条。只能是这一个值
           sandbox="allow-scripts"
           srcDoc={srcDoc}
-          title={title ?? t('message.interactiveFrameTitle')}
+          title={frameTitle ?? title ?? t('message.interactiveFrameTitle')}
           referrerPolicy="no-referrer"
           className="block w-full border-0 bg-transparent"
           style={{ height }}
         />
       )}
-    </div>
+    </FigureBlock>
   )
 }
 
@@ -170,17 +171,11 @@ export function InteractiveBlock({
 export function InteractiveUnsupportedBlock({ code }: { code: string }): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <div
-      data-interactive-unsupported
-      className="my-2 rounded-lg overflow-hidden"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-    >
-      <div className="px-4 py-1.5 text-[10px] text-text-tertiary">
+    <div data-interactive-unsupported className="my-2">
+      <div className="px-1 py-1 text-[10px] text-text-tertiary">
         {t('message.interactiveDesktopOnly')}
       </div>
-      <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
-        {code}
-      </pre>
+      <pre className={FIGURE_SOURCE_CLASS}>{code}</pre>
     </div>
   )
 }
