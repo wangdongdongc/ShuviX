@@ -524,7 +524,7 @@ function MobileShellBody(): React.JSX.Element {
                     data-sidebar-density="touch"
                     style={calendar && !scope ? undefined : { display: 'none' }}
                   >
-                    <CalendarPanel onOpenSession={openChat} />
+                    <CalendarPanel mobile onOpenSession={openChat} />
                   </div>
                 )}
               </div>

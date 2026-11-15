@@ -137,6 +137,67 @@ body:has([data-mobile-shell]) [data-context-menu] [role='menuitem'] {
   border-bottom-left-radius: 12px;
   border-bottom-right-radius: 12px;
 }
+/*
+ * 手机布局的日历（2026-11-15）：没有周数一列，七列日期铺满宽度、字放大；选中的那天是实心的强调色圆（上面的点换成
+ * 白的，照样看得见），今天是强调色的数字；月份切换与「今天」是强调色。桌面的月历不动（它在 calendar.css 里）
+ */
+[data-calendar-panel='mobile'] .rdp-root {
+  --rdp-day-width: calc(100cqw / 7);
+  --rdp-day-height: 40px;
+  --rdp-day_button-width: 36px;
+  --rdp-day_button-height: 36px;
+  --rdp-day_button-border-radius: 50%;
+  --rdp-day-font: 15px var(--font-sans, system-ui);
+  --rdp-month_caption-font: 600 17px var(--font-sans, system-ui);
+  --rdp-nav-height: 32px;
+  font-size: 13px;
+  width: 100%;
+}
+[data-calendar-panel='mobile'] .rdp-months,
+[data-calendar-panel='mobile'] .rdp-month,
+[data-calendar-panel='mobile'] .rdp-month_grid {
+  width: 100%;
+  max-width: none;
+}
+[data-calendar-panel='mobile'] .rdp-month_caption {
+  padding-left: 16px;
+}
+/* 日期的圆在它那一格里居中（格子比圆宽） */
+[data-calendar-panel='mobile'] .rdp-day,
+[data-calendar-panel='mobile'] .rdp-weekday {
+  text-align: center;
+}
+[data-calendar-panel='mobile'] .rdp-day_button {
+  margin: 0 auto;
+}
+[data-calendar-panel='mobile'] .rdp-selected .rdp-day_button {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+}
+[data-calendar-panel='mobile'] .rdp-selected .rdp-day_button::after,
+[data-calendar-panel='mobile'] .rdp-selected .rdp-day_button::before {
+  background: #fff;
+}
+[data-calendar-panel='mobile'] .rdp-has-sessions:not(.rdp-selected) .rdp-day_button::after {
+  background: var(--color-text-tertiary);
+}
+[data-calendar-panel='mobile'] .rdp-nav,
+[data-calendar-panel='mobile'] .rdp-nav button {
+  color: var(--color-accent);
+  opacity: 1;
+  font-size: 15px;
+}
+[data-calendar-panel='mobile'] .rdp-nav .rdp-button_previous svg,
+[data-calendar-panel='mobile'] .rdp-nav .rdp-button_next svg {
+  width: 18px;
+  height: 18px;
+}
+/* 平铺的会话卡片：最后一行下面不再画线（卡片的边就是它的边） */
+[data-flat-list] > [data-session-row]:last-child [data-session-detail] {
+  border-bottom: 0;
+}
 @keyframes mobile-sheet-in {
   from {
     transform: translateY(100%);

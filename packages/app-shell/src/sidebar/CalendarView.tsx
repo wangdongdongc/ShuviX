@@ -25,6 +25,8 @@ export interface CalendarViewProps {
   onSelect: (date: Date) => void
   month: Date
   onMonthChange: (month: Date) => void
+  /** 不画左边的周数一列（手机布局：宽度让给日期）；缺省按宽度定 */
+  hideWeekNumber?: boolean
 }
 
 /**
@@ -43,10 +45,11 @@ export function CalendarView({
   selected,
   onSelect,
   month,
-  onMonthChange
+  onMonthChange,
+  hideWeekNumber = false
 }: CalendarViewProps): React.JSX.Element {
   const { i18n, t } = useTranslation()
-  const showWeekNumber = width >= 240
+  const showWeekNumber = !hideWeekNumber && width >= 240
 
   // 拖动占位高度：chrome（caption/nav/weekday header 恒定）+ 6 行 × day cell（跟随 sidebar 宽度）
   // 公式与 calendar.css 中 --rdp-day-height: clamp(26px, 12cqw, 40px) 一致

@@ -145,6 +145,7 @@ export interface ProjectSessionGroupsProps {
    * 两层导航（web 客户端的手机布局传，2026-11-14 对标 iOS Mail；缺省 = 桌面那棵就地展开的树）：
    *   - `scope: null` —— 顶层：分节照旧，每个项目 / bot / 「聊天」是一行导航行（会话数 + 箭头），点它 `onOpen(组 key, 名字)`，
    *     组的正文不画；一节里的导航行收进一张分组卡片（base.css 的 .sb-card）。`query` 非空时顶层换成按标题搜到的会话；
+   *     `flat` 时不画组，全部会话平铺成两层的行（日历按天的那一列）；
    *   - `scope: <组 key>` —— 只画那一组：两层的会话行（标题 + 时间 + 摘要，见 SessionItem 的 `detail`），末尾是它的
    *     知识库文件夹。组不在了（项目被删）就是一句空态。底部工具栏（只看未读 · 「N 条会话 · M 条未读」 · 新对话）
    *     画进 `toolbarSlot`，组的菜单「⋯」画进 `menuSlot` —— 这两个是宿主页面里的元素（列表之外的顶栏与底栏）；
@@ -159,6 +160,11 @@ export interface DrillNav {
   scope: string | null
   onOpen: (key: string, label: string) => void
   query?: string
+  /**
+   * 不分组：给进来的会话（`sessionsOverride`）排成一张卡片里的两层行，最近动过的在前，行上标它所在的组 ——
+   * 手机布局的日历按天列会话用它（同搜索结果那种行，只是不筛）
+   */
+  flat?: boolean
   menuSlot?: HTMLElement | null
   toolbarSlot?: HTMLElement | null
 }
@@ -349,20 +355,42 @@ export function ProjectSessionGroups({
   // 各组里的（项目、聊天、没归档的 bot）和它们的子会话；藏起来的（载体项目里的笔记本会话、归档 / 删掉的项目、
   // 归档的 bot）搜不到
   const query = scope === null ? (drill?.query ?? '').trim().toLowerCase() : ''
-  const searchResults = useMemo(() => {
-    if (!query) return []
-    const roots = groups.flatMap(([, list]) => list)
+  /**
+   * 顶层列得出来的全部会话：各组里的（项目、聊天、没归档的 bot）和它们的子会话。藏起来的（载体项目里的笔记本会话、
+   * 归档 / 删掉的项目、归档的 bot）不在里面 —— 搜索与平铺都只在这里面取
+   */
+  const listableSessions = useMemo(() => {
+    // 父会话不在这一份清单里（日历按天：那天只有子会话动过）的子会话是平铺出来的顶层行，按它自己的字段会落进
+    // 「聊天」—— 可它其实跟着父会话走：父会话在藏起来的地方（归档的 bot、不在列表里的项目），它也不列
+    const orphanOfHidden = (s: Session): boolean => {
+      if (!s.parentId) return false
+      const parent = storeSessions.find((x) => x.id === s.parentId)
+      if (!parent) return false
+      const bot = bots ? botGroupOf(parent) : undefined
+      if (bot) return !!botRegistry?.archived?.includes(bot)
+      return !!parent.projectId && !Object.hasOwn(projectNames, parent.projectId)
+    }
+    const roots = groups.flatMap(([, list]) => list).filter((s) => !orphanOfHidden(s))
     for (const [name, list] of botSessions) {
       if (!botRegistry?.archived?.includes(name)) roots.push(...list)
     }
-    return roots
-      .flatMap((s) => [s, ...(childrenByParent.get(s.id) ?? [])])
+    return roots.flatMap((s) => [s, ...(childrenByParent.get(s.id) ?? [])])
+  }, [groups, botSessions, botRegistry, childrenByParent, storeSessions, bots, projectNames])
+  const searchResults = useMemo(() => {
+    if (!query) return []
+    return listableSessions
       .filter((s) => s.title.toLowerCase().includes(query))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
       .slice(0, SEARCH_RESULT_LIMIT)
-  }, [query, groups, botSessions, botRegistry, childrenByParent])
-  /** 此刻画成两层行的那些会话（某一组的，或搜到的）：给它们取摘要 */
-  const detailSessions = scope !== null ? scopeSessions : searchResults
+  }, [query, listableSessions])
+  // 不分组的平铺（日历按天的那一列）：给进来的会话里顶层列得出来的那些，最近动过的在前
+  const flat = scope === null && !!drill?.flat
+  const flatSessions = useMemo(
+    () => (flat ? [...listableSessions].sort((a, b) => b.lastActiveAt - a.lastActiveAt) : []),
+    [flat, listableSessions]
+  )
+  /** 此刻画成两层行的那些会话（某一组的、平铺的，或搜到的）：给它们取摘要 */
+  const detailSessions = scope !== null ? scopeSessions : flat ? flatSessions : searchResults
   // 摘要按「内容此刻的版本」重取：最后动手的时间、在不在跑（跑完那一刻回复才写完）、未读从哪一刻起、有几个询问
   const previewStamps = useMemo(() => {
     const out: Record<string, string> = {}
@@ -373,8 +401,15 @@ export function ProjectSessionGroups({
     return out
   }, [detailSessions, streamingSessions, unreadSessions, pendingCounts])
   const digests = useSessionDigests(detailSessions, previewStamps, detailSessions.length > 0)
-  // 行尾时间按日历日分档（今天 / 昨天 / 星期几 / 月-日），挂上那一刻的钟就够
-  const [mountedAt] = useState(() => Date.now())
+  // 行尾时间按日历日分档（今天 / 昨天 / 星期几 / 月-日）。两层导航的列表一直挂着（手机的标签页不卸载）：
+  // 钟每分钟走一下，过了午夜「今天」的那些才会变成「昨天」
+  const [mountedAt, setClock] = useState(() => Date.now())
+  const ticking = drill !== undefined
+  useEffect(() => {
+    if (!ticking) return
+    const timer = window.setInterval(() => setClock(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [ticking])
   /** 在等你回答的那一句：开着的那张卡片上的问题（审批是工具写的说明或命令本身）；会话没加载过就从它的消息里找选择题 */
   const pendingQuestionOf = (id: string): string | null => {
     const request = pendingInputs?.[id]?.[0]
@@ -1145,16 +1180,22 @@ export function ProjectSessionGroups({
     )
   }
 
-  // 顶层在搜索：按标题搜到的会话，平铺成两层的行，行尾标它在哪一组
-  if (drill && query) {
+  // 顶层在搜索：按标题搜到的会话，平铺成两层的行，行尾标它在哪一组。平铺（日历按天）是同一种行，收进一张卡片
+  if (drill && (query || flat)) {
+    const listed = flat ? flatSessions : searchResults
     return (
-      <div data-search-results="">
-        {searchResults.length === 0 ? (
-          <div data-search-empty="" className="sb-hint">
-            {t('mobile.searchEmpty')}
-          </div>
+      <div
+        {...(flat ? { 'data-flat-list': '' } : { 'data-search-results': '' })}
+        className={flat && listed.length > 0 ? 'overflow-hidden rounded-xl bg-bg-secondary' : ''}
+      >
+        {listed.length === 0 ? (
+          flat ? null : (
+            <div data-search-empty="" className="sb-hint">
+              {t('mobile.searchEmpty')}
+            </div>
+          )
         ) : (
-          searchResults.map((item) => (
+          listed.map((item) => (
             <SessionItem
               key={item.id}
               session={item}

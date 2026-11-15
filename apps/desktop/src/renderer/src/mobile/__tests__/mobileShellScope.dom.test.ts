@@ -37,8 +37,11 @@
  *   MS-50 / MS-51 / MS-52 设置页：`stacked`、额外的智能体分区；钻进分区（层数 > 0）标签栏收起，只在设置是当前页时
  *   MS-53 / MS-54 设置的分区开着时压的对话 / 小组件那一条也带着 `shuvixSettingsDepth`（B3）；没有那个记号就不带
  *   MS-55..MS-58 收件箱页带着跟踪项的 adapter（引用稳定；open = 打开那份笔记并推对话页）；资料库的侧栏不再有它
+ *   MS-59 日历第一次切到才挂，拿到 `mobile` 与 `onOpenSession`；切回列表还挂着、藏起来
+ *   MS-60 从日历里打开一条会话：推对话页
+ *   MS-61 小组件页的 WidgetPanel 拿到 `mobile`
  *
- * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏与设置的替身记下 props，侧栏的还画出
+ * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏、设置、日历与小组件的替身记下 props，侧栏的还画出
  * `sessionsPrepend`。chat store 是按 selector 读、能订阅的小替身；小组件 store 是一个真的 zustand store。
  * jsdom 的 `history.back()` 异步发 popstate：`back()` 在 act 里等到它。文件是 `.ts`，一律 createElement。
  */
@@ -62,6 +65,9 @@ const rec = vi.hoisted(() => ({
   inbox: [] as Array<Record<string, unknown>>,
   /** SettingsPanel 替身每次渲染收到的 props */
   settings: [] as Array<Record<string, unknown>>,
+  /** CalendarPanel / WidgetPanel 替身每次渲染收到的 props */
+  calendar: [] as Array<Record<string, unknown>>,
+  widget: [] as Array<Record<string, unknown>>,
   /** useInboxSections 交回的那份 */
   sections: { waiting: [] as unknown[], unread: [] as unknown[], running: [] as unknown[] },
   activeSessionId: null as string | null,
@@ -121,8 +127,24 @@ vi.mock('../../components/sidebar/Sidebar', async () => {
     }
   }
 })
-vi.mock('../../components/browser/CalendarPanel', () => ({ CalendarPanel: () => null }))
-vi.mock('../../components/browser/WidgetPanel', () => ({ WidgetPanel: () => null }))
+vi.mock('../../components/browser/CalendarPanel', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    CalendarPanel: (props: Props) => {
+      rec.calendar.push(props)
+      return h('div', { 'data-stub-calendar': '' })
+    }
+  }
+})
+vi.mock('../../components/browser/WidgetPanel', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    WidgetPanel: (props: Props) => {
+      rec.widget.push(props)
+      return h('div', { 'data-stub-widget': '' })
+    }
+  }
+})
 vi.mock('../../components/browser/AgentMonitorPanel', () => ({ AgentMonitorPanel: () => null }))
 vi.mock('../../components/settings/SettingsPanel', async () => {
   const { createElement: h } = await import('react')
@@ -268,6 +290,8 @@ beforeEach(() => {
   rec.sidebar.length = 0
   rec.inbox.length = 0
   rec.settings.length = 0
+  rec.calendar.length = 0
+  rec.widget.length = 0
   rec.sections = { waiting: [], unread: [], running: [] }
   rec.activeSessionId = null
   rec.listeners.clear()
@@ -1272,5 +1296,56 @@ describe('MobileShell: tracking in the inbox', () => {
     expect(rec.setActive).not.toHaveBeenCalled()
     expect(chatPage()).toBeNull()
     expect(mark(CHAT)).toBe(false)
+  })
+})
+
+/** 手机布局的日历与小组件页：外壳把 `mobile` 交给两块面板（它们各自换成手机的样子） */
+describe('MobileShell: the calendar and the Widgets tab get the phone layout', () => {
+  const toTab = (key: string): void => click(q(`[data-mobile-tab="${key}"]`)!)
+  const calendarStub = (): HTMLElement | null => q('[data-stub-calendar]')
+  const lastCalendar = (): Record<string, unknown> => rec.calendar.at(-1)!
+
+  it('MS-59 the calendar is mounted on its first toggle, gets mobile and onOpenSession, and stays mounted when toggled back', () => {
+    mount()
+    expect(rec.calendar).toHaveLength(0)
+    expect(calendarStub()).toBeNull()
+
+    click(q('[data-mobile-calendar-toggle]')!)
+    expect(calendarStub()).not.toBeNull()
+    expect(lastCalendar().mobile).toBe(true)
+    expect(typeof lastCalendar().onOpenSession).toBe('function')
+    const wrapper = calendarStub()!.parentElement!
+    expect(wrapper.getAttribute('data-sidebar-density')).toBe('touch')
+    expect(wrapper.hasAttribute('data-mobile-scale')).toBe(true)
+    expect(wrapper.style.display).toBe('')
+
+    click(q('[data-mobile-calendar-toggle]')!)
+    expect(calendarStub()).not.toBeNull()
+    expect(calendarStub()!.parentElement!.style.display).toBe('none')
+    expect(lastCalendar().mobile).toBe(true)
+  })
+
+  it('MS-60 opening a session from the calendar pushes the chat page', async () => {
+    mount()
+    click(q('[data-mobile-calendar-toggle]')!)
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+
+    act(() => (lastCalendar().onOpenSession as (id: string) => void)('s1'))
+    expect(mark(CHAT)).toBe(true)
+    expect(chatPage()).not.toBeNull()
+
+    await back()
+    expect(chatPage()).toBeNull()
+    // 退回来还是日历那种看法
+    expect(calendarStub()!.parentElement!.style.display).toBe('')
+  })
+
+  it('MS-61 the Widgets tab renders WidgetPanel with mobile', () => {
+    mount()
+    expect(rec.widget).toHaveLength(0)
+    toTab('widgets')
+    expect(q('[data-mobile-page="widgets"] [data-stub-widget]')).not.toBeNull()
+    expect(rec.widget.at(-1)!.mobile).toBe(true)
   })
 })

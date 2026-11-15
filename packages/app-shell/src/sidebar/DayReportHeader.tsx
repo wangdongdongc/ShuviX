@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FilePlus2, NotebookText } from 'lucide-react'
+import { ChevronRight, FilePlus2, NotebookText } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { copyToClipboard } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -22,6 +22,11 @@ export interface DayReportHeaderProps {
   onRevealFile?: (path: string) => void
   /** 删掉那天的日报（行菜单里的一项，确认框由这里弹，确认后才调）；宿主不注入则整项不出现 */
   onDelete?: () => void
+  /**
+   * 卡片的样子（手机布局的日历）：日期是卡片上方的小灰字，日报是一张卡片里的一行 ——「日记」加正文开头的一句，
+   * 行尾一个箭头；还没写就是一行「写这一天的日报」。缺省 = 桌面那一行（文件名 + 小签，不放摘录）
+   */
+  card?: boolean
 }
 
 /** 路径的最后一段（日报文件名，如 `2026-10-25.md`）；Windows 的反斜杠一样认 */
@@ -46,7 +51,8 @@ export function DayReportHeader({
   active = false,
   onOpen,
   onRevealFile,
-  onDelete
+  onDelete,
+  card = false
 }: DayReportHeaderProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const showContextMenu = useContextMenu()
@@ -71,6 +77,75 @@ export function DayReportHeader({
     day: 'numeric',
     weekday: 'short'
   })
+  const deleteDialog = confirmingDelete && onDelete && (
+    <ConfirmDialog
+      title={t('daily.confirmDeleteTitle')}
+      description={t('daily.confirmDeleteDescription', { day: label })}
+      confirmText={t('common.delete')}
+      cancelText={t('common.cancel')}
+      onConfirm={() => {
+        setConfirmingDelete(false)
+        onDelete()
+      }}
+      onCancel={() => setConfirmingDelete(false)}
+    />
+  )
+  if (card) {
+    const row =
+      'flex min-h-[44px] w-full cursor-pointer items-center gap-3 px-4 py-2 text-left text-[16px] active:bg-bg-hover'
+    return (
+      <div data-day-report-header="" data-day-report-card="" className="pb-4">
+        <div className="truncate px-4 pb-1.5 text-[13px] text-text-secondary">{label}</div>
+        {report && (
+          <div className="overflow-hidden rounded-xl bg-bg-secondary">
+            <div
+              role="button"
+              tabIndex={0}
+              data-daily-report=""
+              onClick={onOpen}
+              onContextMenu={(e) => openMenu(report.path, e)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onOpen()
+                }
+              }}
+              title={t('daily.open')}
+              className={`${row} text-text-primary`}
+            >
+              <NotebookText size={19} className="shrink-0 text-accent" aria-hidden="true" />
+              <div className="min-w-0 flex-1">
+                <div data-daily-tag="">{t('daily.tag')}</div>
+                {report.excerpt && (
+                  <div
+                    data-daily-excerpt=""
+                    className="mt-0.5 truncate text-[0.82em] text-text-secondary"
+                  >
+                    {report.excerpt}
+                  </div>
+                )}
+              </div>
+              <ChevronRight size={16} className="shrink-0 text-text-tertiary" aria-hidden="true" />
+            </div>
+          </div>
+        )}
+        {report === null && writable && (
+          <div className="overflow-hidden rounded-xl bg-bg-secondary">
+            <button
+              type="button"
+              data-daily-write=""
+              onClick={onOpen}
+              className={`${row} text-accent`}
+            >
+              <FilePlus2 size={19} className="shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{t('mobile.writeDiary')}</span>
+            </button>
+          </div>
+        )}
+        {deleteDialog}
+      </div>
+    )
+  }
   return (
     <div data-day-report-header="" className="pb-1">
       <div className="sb-section" style={{ marginTop: 0 }}>
@@ -127,19 +202,7 @@ export function DayReportHeader({
           />
         </div>
       )}
-      {confirmingDelete && onDelete && (
-        <ConfirmDialog
-          title={t('daily.confirmDeleteTitle')}
-          description={t('daily.confirmDeleteDescription', { day: label })}
-          confirmText={t('common.delete')}
-          cancelText={t('common.cancel')}
-          onConfirm={() => {
-            setConfirmingDelete(false)
-            onDelete()
-          }}
-          onCancel={() => setConfirmingDelete(false)}
-        />
-      )}
+      {deleteDialog}
     </div>
   )
 }

@@ -13527,7 +13527,10 @@ export type WebMobileTouchTarget =
   /** 同一张卡片，点它右上角往里 CARD_CORNER_INSET 的那一点（桌面上悬浮按钮所在的地方） */
   | { widgetCardCorner: string }
   /** 整屏开着的小组件（前台应用）顶栏上的返回 / 重新加载 / 在独立窗口打开 */
-  | { widgetApp: 'back' | 'reload' | 'popout' }
+  /** 手机上整屏开着的小组件的顶栏：返回、右边的「⋯」 */
+  | { widgetApp: 'back' | 'menu' }
+  /** 小组件「⋯」下拉菜单里的一项（`data-mobile-menu-item=<id>`；菜单得先点开） */
+  | { widgetAppMenu: 'reload' | 'popout' | 'export' | 'stop' }
   | { chat: 'back' | 'title' | 'menu' }
   /** 对话页「⋯」下拉菜单里的一项（`data-mobile-menu-item=<id>`；菜单得先点开） */
   | { chatMenu: 'files' | 'tasks' | 'artifacts' | 'export' | 'fork' | 'details' }
@@ -14184,11 +14187,11 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     if ('widgetCardCorner' in target)
       return `${PAGE('widgets')}?.querySelector('[data-widget-card=${JSON.stringify(target.widgetCardCorner)}]')`
     if ('widgetApp' in target) {
-      const attr = { back: 'data-app-back', reload: 'data-app-reload', popout: 'data-app-popout' }[
-        target.widgetApp
-      ]
+      const attr = { back: 'data-app-back', menu: 'data-app-menu' }[target.widgetApp]
       return `${PAGE('widgets')}?.querySelector('[data-panel-app][data-foreground] [${attr}]')`
     }
+    if ('widgetAppMenu' in target)
+      return `document.querySelector('[data-mobile-pulldown] [data-mobile-menu-item=${JSON.stringify(target.widgetAppMenu)}]')`
     if ('chat' in target) {
       const attr = {
         back: 'data-mobile-back',

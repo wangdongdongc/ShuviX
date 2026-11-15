@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronLeft,
+  ChevronRight,
+  CircleEllipsis,
   RotateCw,
   AppWindow,
+  Share,
   Wrench,
   Trash2,
   Archive,
@@ -11,7 +14,8 @@ import {
   Folder
 } from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
-import { useContextMenu } from '@shuvix/app-shell'
+import { listTimeLabel, useContextMenu } from '@shuvix/app-shell'
+import { PullDownMenu, type PullDownItem } from '../../mobile/PullDownMenu'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { isWebHost } from '../../host/hostMedia'
 import { downloadServerFile } from '../../host/serverDownload'
@@ -38,7 +42,7 @@ export interface WidgetPanelProps {
 }
 
 export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JSX.Element {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const showContextMenu = useContextMenu()
   const widgets = useWidgetStore((s) => s.widgets)
   const loaded = useWidgetStore((s) => s.loaded)
@@ -58,6 +62,18 @@ export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JS
 
   const [reloadNonces, setReloadNonces] = useState<Record<string, number>>({})
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  // 手机布局：开着的应用顶栏右边那颗「⋯」的下拉菜单（哪个应用的、贴着按钮的哪个位置）
+  const [appMenu, setAppMenu] = useState<{
+    id: string
+    anchor: { right: number; bottom: number }
+  } | null>(null)
+  // 行尾时间按日历日分档。手机上这一页一直挂着：钟每分钟走一下，「刚刚」才会变旧、过了午夜才会换成「昨天」
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!mobile) return
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [mobile])
   const [exportResult, setExportResult] = useState<
     | { kind: 'success'; name: string; zipPath: string }
     | { kind: 'error'; name: string; message: string }
@@ -150,8 +166,11 @@ export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JS
     )
   }
 
+  // 那个小组件不在了（在别处被归档 / 删掉）或已经不在前台：菜单跟着收掉，不留着等它回来再冒出来
+  if (appMenu && (!byId.has(appMenu.id) || foregroundApp !== appMenu.id)) setAppMenu(null)
+
   const deletingWidget = widgets.find((w) => w.id === deletingId) ?? null
-  const bar = mobile ? TOUCH_APP_BAR : COMPACT_APP_BAR
+  const bar = COMPACT_APP_BAR
 
   return (
     <div data-widget-panel="" className="relative h-full bg-bg-primary overflow-hidden">
@@ -172,6 +191,29 @@ export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JS
               <p className="text-[11px] text-text-tertiary/60 leading-relaxed">
                 {t('widgets.panelEmptyHint')}
               </p>
+            </div>
+          </div>
+        ) : mobile ? (
+          // 手机：一张分组卡片里的行（与会话行同一副骨架：行首一列圆点，名字 + 说明，行尾时间与箭头）
+          <div className="px-3 pb-6 pt-1">
+            <div data-widget-rows="" className="overflow-hidden rounded-xl bg-bg-secondary">
+              {widgets.map((w, index) => (
+                <WidgetRow
+                  key={w.id}
+                  widget={w}
+                  isRunning={runningIds.has(w.id)}
+                  first={index === 0}
+                  time={widgetTimeLabel(w.lastOpenedAt || w.createdAt, now, {
+                    never: t('widgets.never'),
+                    justNow: t('widgets.justNow'),
+                    yesterday: t('mobile.yesterday'),
+                    locale: i18n.language
+                  })}
+                  onOpen={() => handleLaunch(w.id)}
+                  onContextMenu={(e) => handleContextMenu(e, w)}
+                  t={t}
+                />
+              ))}
             </div>
           </div>
         ) : (
@@ -209,40 +251,83 @@ export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JS
             className="absolute inset-0 flex flex-col bg-bg-primary"
             style={visible ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
           >
-            <div className={bar.row}>
-              <button
-                type="button"
-                data-app-back=""
-                onClick={goHome}
-                className={bar.back}
-                title={t('widgets.backToHome')}
-                aria-label={t('widgets.backToHome')}
+            {mobile ? (
+              // 手机：与对话页同一副顶栏 —— 强调色的返回、居中的名字、右边一颗「⋯」（重新加载 / 新标签页 | 导出 / 停止）
+              <div
+                data-app-bar=""
+                className="flex h-12 flex-shrink-0 items-center border-b border-border-secondary/40 px-1"
               >
-                <ChevronLeft size={bar.chevron} className="flex-shrink-0" />
-                <span className={bar.name}>{w.name}</span>
-              </button>
-              <div className="flex-1" />
-              <button
-                type="button"
-                data-app-reload=""
-                onClick={() => setReloadNonces((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))}
-                className={bar.icon}
-                title={t('widgets.windowReload')}
-                aria-label={t('widgets.windowReload')}
-              >
-                <RotateCw size={bar.reload} />
-              </button>
-              <button
-                type="button"
-                data-app-popout=""
-                onClick={() => void openInWindow(id)}
-                className={bar.icon}
-                title={t('widgets.openInWindow')}
-                aria-label={t('widgets.openInWindow')}
-              >
-                <AppWindow size={bar.popout} />
-              </button>
-            </div>
+                <div className="flex w-16 flex-shrink-0 items-center">
+                  <button
+                    type="button"
+                    data-app-back=""
+                    onClick={goHome}
+                    className="flex h-10 items-center rounded-full pl-1.5 pr-2 text-accent active:bg-bg-hover"
+                    title={t('widgets.backToHome')}
+                    aria-label={t('widgets.backToHome')}
+                  >
+                    <ChevronLeft size={24} aria-hidden="true" />
+                  </button>
+                </div>
+                <span
+                  data-app-name=""
+                  className="min-w-0 flex-1 truncate px-1 text-center text-[15px] font-medium text-text-primary"
+                >
+                  {w.name}
+                </span>
+                <div className="flex w-16 flex-shrink-0 items-center justify-end">
+                  <button
+                    type="button"
+                    data-app-menu=""
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      setAppMenu({ id, anchor: { right: rect.right, bottom: rect.bottom } })
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-full text-accent active:bg-bg-hover"
+                    aria-label={t('mobile.moreActions')}
+                    aria-haspopup="menu"
+                    aria-expanded={appMenu?.id === id}
+                  >
+                    <CircleEllipsis size={23} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className={bar.row}>
+                <button
+                  type="button"
+                  data-app-back=""
+                  onClick={goHome}
+                  className={bar.back}
+                  title={t('widgets.backToHome')}
+                  aria-label={t('widgets.backToHome')}
+                >
+                  <ChevronLeft size={bar.chevron} className="flex-shrink-0" />
+                  <span className={bar.name}>{w.name}</span>
+                </button>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  data-app-reload=""
+                  onClick={() => setReloadNonces((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))}
+                  className={bar.icon}
+                  title={t('widgets.windowReload')}
+                  aria-label={t('widgets.windowReload')}
+                >
+                  <RotateCw size={bar.reload} />
+                </button>
+                <button
+                  type="button"
+                  data-app-popout=""
+                  onClick={() => void openInWindow(id)}
+                  className={bar.icon}
+                  title={t('widgets.openInWindow')}
+                  aria-label={t('widgets.openInWindow')}
+                >
+                  <AppWindow size={bar.popout} />
+                </button>
+              </div>
+            )}
             <WidgetFrame
               widgetId={id}
               title={w.name}
@@ -252,6 +337,39 @@ export function WidgetPanel({ mobile = false }: WidgetPanelProps = {}): React.JS
           </div>
         )
       })}
+
+      {appMenu && byId.get(appMenu.id) && (
+        <PullDownMenu
+          anchor={appMenu.anchor}
+          groups={[
+            [
+              { id: 'reload', label: t('widgets.windowReload'), icon: <RotateCw size={19} /> },
+              { id: 'popout', label: t('mobile.widgetOpenTab'), icon: <AppWindow size={19} /> }
+            ],
+            [
+              { id: 'export', label: t('mobile.widgetExport'), icon: <Share size={19} /> },
+              ...(runningIds.has(appMenu.id)
+                ? ([
+                    {
+                      id: 'stop',
+                      label: t('widgets.stop'),
+                      icon: <Square size={17} />
+                    }
+                  ] satisfies PullDownItem[])
+                : [])
+            ]
+          ]}
+          onClose={() => setAppMenu(null)}
+          onPick={(action) => {
+            const id = appMenu.id
+            const widget = byId.get(id)
+            if (action === 'reload') setReloadNonces((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))
+            if (action === 'popout') void openInWindow(id)
+            if (action === 'export' && widget) void handleExport(widget)
+            if (action === 'stop') void stopWidget(id)
+          }}
+        />
+      )}
 
       {deletingWidget && (
         <ConfirmDialog
@@ -315,15 +433,18 @@ const COMPACT_APP_BAR = {
   popout: 14
 }
 
-/** 手机布局：与手机对话页的顶栏（MobileChatView）同一档 —— 48px 高、40px 的按钮 */
-const TOUCH_APP_BAR = {
-  row: 'flex-shrink-0 flex items-center gap-1 h-12 px-1 border-b border-border-secondary/40',
-  back: 'flex items-center gap-0.5 min-w-0 h-10 pl-1 pr-3 rounded-full text-text-secondary active:bg-bg-hover',
-  name: 'truncate text-[15px] font-medium text-text-primary',
-  icon: 'h-10 w-10 flex-shrink-0 flex items-center justify-center rounded-full text-text-secondary active:bg-bg-hover',
-  chevron: 24,
-  reload: 18,
-  popout: 19
+/**
+ * 手机那一行行尾的时间：没有时间（从没打开过、widget.json 里也没有创建时间）→「从未打开」；一分钟之内 →「刚刚」；
+ * 其余按列表的写法（今天时分 / 昨天 / 星期几 / 月-日）
+ */
+function widgetTimeLabel(
+  at: number,
+  now: number,
+  labels: { never: string; justNow: string; yesterday: string; locale: string }
+): string {
+  if (!at) return labels.never
+  if (now - at < 60_000) return labels.justNow
+  return listTimeLabel(at, now, { yesterday: labels.yesterday, locale: labels.locale })
 }
 
 /** 把 widget:exportAsVite 返回的 code 映射成本地化错误描述 */
@@ -344,6 +465,76 @@ function errorMessageForExportCode(
     default:
       return fallback
   }
+}
+
+/**
+ * 手机布局的一行（2026-11-15）：行首一列圆点（绿色 = 这个小组件还在后台开着），名字 + 两行说明 + 用过它的项目，
+ * 行尾是上次打开的时间与箭头。长按 = 卡片的那份菜单。数据锚点沿用卡片的 `data-widget-card` / `data-running`
+ */
+function WidgetRow({
+  widget,
+  isRunning,
+  first,
+  time,
+  onOpen,
+  onContextMenu,
+  t
+}: {
+  widget: WidgetSummary
+  isRunning: boolean
+  first: boolean
+  time: string
+  onOpen: () => void
+  onContextMenu: (e: React.MouseEvent) => void
+  t: (k: string, opts?: Record<string, unknown>) => string
+}): React.JSX.Element {
+  return (
+    <div
+      data-widget-card={widget.id}
+      data-widget-row=""
+      data-running={isRunning ? '' : undefined}
+      onClick={onOpen}
+      onContextMenu={onContextMenu}
+      className="flex cursor-pointer items-stretch gap-2.5 pl-3 text-[16px] text-text-primary active:bg-bg-hover"
+    >
+      <span className="flex h-[44px] w-2 flex-shrink-0 items-center justify-center">
+        {isRunning && (
+          <span
+            data-widget-running=""
+            title={t('mobile.widgetRunning')}
+            aria-label={t('mobile.widgetRunning')}
+            className="h-2 w-2 rounded-full bg-emerald-400"
+          />
+        )}
+      </span>
+      <div
+        className={`flex min-h-[44px] min-w-0 flex-1 items-start gap-2 py-2.5 pr-3 ${
+          first ? '' : 'border-t border-border-secondary/50'
+        }`}
+      >
+        <div className="min-w-0 flex-1">
+          <div data-widget-name="" className="truncate">
+            {widget.name}
+          </div>
+          {widget.description && (
+            <p
+              data-widget-description=""
+              className="mt-0.5 line-clamp-2 text-[0.82em] leading-snug text-text-secondary"
+            >
+              {widget.description}
+            </p>
+          )}
+          <ProjectTags projects={widget.projects ?? []} t={t} />
+        </div>
+        <span className="flex h-6 flex-shrink-0 items-center gap-1 text-text-tertiary">
+          <span data-widget-time="" className="text-[0.82em] tabular-nums">
+            {time}
+          </span>
+          <ChevronRight size={16} aria-hidden="true" />
+        </span>
+      </div>
+    </div>
+  )
 }
 
 interface WidgetCardProps {

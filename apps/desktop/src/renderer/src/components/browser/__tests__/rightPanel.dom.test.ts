@@ -7,6 +7,8 @@
  *         useInboxSections 从不带 held 调（侧栏同一口径：留着的那条不计数）
  *   INT-4 持久化里留着已移除的标签（files / preview）→ 落到 inbox，一次；已有的标签不动
  *   INT-5 收件箱面板常驻挂载：别的标签开着时它的外层 visibility hidden + pointer-events none；tracking 是宿主给的那份
+ *   WD-10 WidgetPanel 不带 `mobile`（手机那一副只由手机壳给）
+ *   CM-15 CalendarPanel 不带 `mobile`、不带 `onOpenSession`
  *
  * `@shuvix/app-shell` 整份换成记 props 的替身（PanelTabBar / InboxPanel / useInboxSections）；右侧面板的 store、
  * 组件 store、跟踪项适配器、三块别的面板与 chat-ui 的 store 都换成替身。i18n 走真 en 资源。
@@ -29,6 +31,8 @@ interface Sections {
 const rec = vi.hoisted(() => ({
   tabBar: [] as Props[],
   inboxPanel: [] as Props[],
+  widgetPanel: [] as Props[],
+  calendarPanel: [] as Props[],
   panel: {
     activeTab: 'inbox' as string,
     setActiveTab: null as unknown as Mock<(tab: string) => void>,
@@ -67,8 +71,18 @@ vi.mock('../../../stores/widgetStore', () => ({
 vi.mock('../../../host/useTrackingAdapter', () => ({
   useTrackingAdapter: () => rec.tracking
 }))
-vi.mock('../WidgetPanel', () => ({ WidgetPanel: () => null }))
-vi.mock('../CalendarPanel', () => ({ CalendarPanel: () => null }))
+vi.mock('../WidgetPanel', () => ({
+  WidgetPanel: (props: Props) => {
+    rec.widgetPanel.push(props)
+    return null
+  }
+}))
+vi.mock('../CalendarPanel', () => ({
+  CalendarPanel: (props: Props) => {
+    rec.calendarPanel.push(props)
+    return null
+  }
+}))
 vi.mock('../AgentMonitorPanel', () => ({ AgentMonitorPanel: () => null }))
 vi.mock('@shuvix/chat-ui', () => {
   const state = { setActiveSessionId: () => {} }
@@ -101,6 +115,8 @@ beforeAll(async () => {
 beforeEach(() => {
   rec.tabBar.length = 0
   rec.inboxPanel.length = 0
+  rec.widgetPanel.length = 0
+  rec.calendarPanel.length = 0
   rec.panel.activeTab = 'inbox'
   rec.panel.setActiveTab = vi.fn()
   rec.widgets = []
@@ -200,4 +216,34 @@ describe('INT-5 the inbox panel stays mounted', () => {
     expect(wrapper.style.pointerEvents).toBe('')
     expect(rec.inboxPanel.at(-1)!.tracking).toBe(rec.tracking)
   })
+})
+
+describe('the widget and calendar panels get the desktop layout', () => {
+  it.each(['inbox', 'widget', 'calendar'])(
+    'WD-10 WidgetPanel is rendered with no `mobile` prop (active tab: %s)',
+    (tab) => {
+      rec.panel.activeTab = tab
+      render()
+      expect(rec.widgetPanel.length).toBeGreaterThan(0)
+      for (const props of rec.widgetPanel) {
+        expect('mobile' in props).toBe(false)
+        expect(props.mobile).toBeUndefined()
+      }
+    }
+  )
+
+  it.each(['inbox', 'widget', 'calendar'])(
+    'CM-15 CalendarPanel is rendered with no `mobile` and no `onOpenSession` (active tab: %s)',
+    (tab) => {
+      rec.panel.activeTab = tab
+      render()
+      expect(rec.calendarPanel.length).toBeGreaterThan(0)
+      for (const props of rec.calendarPanel) {
+        expect('mobile' in props).toBe(false)
+        expect(props.mobile).toBeUndefined()
+        expect('onOpenSession' in props).toBe(false)
+        expect(props.onOpenSession).toBeUndefined()
+      }
+    }
+  )
 })

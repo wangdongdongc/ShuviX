@@ -32,7 +32,7 @@
  *        应用留在后台；再点 → 同一个 iframe 回到前台；顶栏的返回 → 回列表并退掉那条历史；顶栏的 ↗ → 新标签页
  *        #widget-window?widgetId=…（面板收走它）；真长按卡片 → DOM 菜单恰是「在独立窗口打开 / 导出 / 归档 / 删除」
  *        （运行中多一个「停止」），没有「在面板中打开」
- *   M-14b 真点卡片右上角（桌面上悬浮按钮所在的地方）→ 与点中间一样就地打开：没有归档、没有删除确认框、没有停掉
+ *   M-14b 手机上的小组件是一行、没有悬浮按钮；真点它的右上角 → 与点中间一样就地打开：没有归档、没有删除确认框、没有停掉
  *   M-15 设置：分区列表 general … about + agents（voice / triggers / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
  *        设置行 flex-wrap: wrap 且标题栏 min-width 9em；回列表；「智能体」分区头部是 Agents
  *   M-16 #settings/general 在手机宽度直接进分区、返回是列表；#settings 是列表；1280 宽不是叠放
@@ -1217,11 +1217,21 @@ describe('phone layout: the shell', () => {
     expect((await mobile().widgetHistory()).length).toBe(opened.length)
     expect(await mobile().tabBarShown()).toBe(true)
 
-    // 顶栏的 ↗：真开一个新标签页，面板收走它
+    // 顶栏的「⋯」：重新加载 / 在新标签页打开 | 导出 / 停止（开着的小组件才有停止）
     await mobile().tap({ widgetCard: WIDGET_ID })
     await until(async () => (await cards.foregroundApp()) === WIDGET_ID, 'opened for the popout')
     const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
-    await mobile().tap({ widgetApp: 'popout' })
+    await mobile().tap({ widgetApp: 'menu' })
+    const appMenu = await until(() => mobile().chatMenu(), 'the widget pull-down menu')
+    expect(appMenu.map((m) => m.id)).toEqual(['reload', 'popout', 'export', 'stop'])
+    expect(appMenu.map((m) => m.label)).toEqual([
+      en.widgets.windowReload,
+      en.mobile.widgetOpenTab,
+      en.mobile.widgetExport,
+      en.widgets.stop
+    ])
+    // 「在新标签页打开」：真开一个新标签页，面板收走它
+    await mobile().tap({ widgetAppMenu: 'popout' })
     const tab = await waitBrowserTab(app, (u) => u === tabUrl, 'the #widget-window tab')
     openedTabs.add(tab.id)
     await until(async () => (await cards.panelApps()).length === 0, 'the panel let it go')
@@ -1250,7 +1260,7 @@ describe('phone layout: the shell', () => {
     await until(async () => (await webClientPane(page()).domMenu()) === null, 'the menu closed')
   })
 
-  it('M-14b a tap on the top-right corner of a card opens it like a tap in the middle (no hidden hover buttons)', async () => {
+  it('M-14b a phone widget row has no hover buttons; a tap on its top-right corner opens it like a tap in the middle', async () => {
     const cards = widgetPanelPane(page())
     const registered = async (): Promise<string[]> =>
       (await app.main.eval<{ registeredIds?: string[] }>('window.api.widget.getServerStatus()'))
@@ -1258,8 +1268,8 @@ describe('phone layout: the shell', () => {
     // afterEach 的 resetShell 把壳放回了会话页
     await toTab('widgets')
     await until(async () => (await cards.cardIds()).includes(WIDGET_ID), 'the widget card')
-    // 那一点正是悬浮按钮（删除）所在的地方：按钮在触屏上不接点击，点下去的是卡片
-    expect(await cards.cornerButton(WIDGET_ID)).not.toBeNull()
+    // 手机上是一行，没有桌面卡片右上角那几颗悬浮按钮（停止 / 归档 / 删除在长按菜单里）：那一点点下去就是这一行
+    expect(await cards.cornerButton(WIDGET_ID)).toBeNull()
     const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
     await mobile().tap({ widgetCardCorner: WIDGET_ID })
     await until(

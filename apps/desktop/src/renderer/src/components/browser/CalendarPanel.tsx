@@ -47,9 +47,20 @@ function daysToDates(days: string[]): Date[] {
 export interface CalendarPanelProps {
   /** 用户从日历里打开了一个会话（同一个再点一次也算）—— 手机布局据此推入对话页；桌面不传 */
   onOpenSession?: (sessionId: string) => void
+  /**
+   * 手机布局（2026-11-15）：月历不画周数一列；当天的日报是一张卡片；会话不按项目排成树，平铺成一张卡片里的
+   * 两层行（标题 + 时间、所在的组、摘要），最近动过的在前。缺省 = 桌面右侧面板那一副
+   */
+  mobile?: boolean
 }
 
-export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React.JSX.Element {
+/** 平铺模式用不到往下钻：给列表一个什么都不做的 onOpen */
+const FLAT_DRILL = { scope: null, onOpen: () => undefined, flat: true }
+
+export function CalendarPanel({
+  onOpenSession,
+  mobile = false
+}: CalendarPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { projects } = useProjects()
   const width = useBrowserStore((s) => s.width)
@@ -227,8 +238,11 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
   }
 
   return (
-    <div className="flex flex-col h-full bg-bg-primary overflow-hidden">
-      <div className="flex-1 overflow-y-auto pl-2 pr-2 py-1 no-scrollbar">
+    <div
+      data-calendar-panel={mobile ? 'mobile' : ''}
+      className="flex flex-col h-full bg-bg-primary overflow-hidden"
+    >
+      <div className={`flex-1 overflow-y-auto py-1 no-scrollbar ${mobile ? 'px-3' : 'pl-2 pr-2'}`}>
         <CalendarView
           width={width}
           daysWithSessions={daysWithSessions}
@@ -242,6 +256,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
               onOpen={() => void handleOpenReport()}
               onRevealFile={(path) => void getHostApi()?.app.revealPath(path)}
               onDelete={() => void handleDeleteReport()}
+              card={mobile}
             />
           }
           daySessions={daySessions}
@@ -249,6 +264,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
           onSelect={setSelected}
           month={month}
           onMonthChange={setMonth}
+          hideWeekNumber={mobile}
           renderGroupedSessionsForDay={(list: Session[]) => (
             <ProjectSessionGroups
               projects={projects}
@@ -271,6 +287,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
               bots={botsSection}
               caps={{ pin: true }}
               pinnedSessionIds={pinnedSessionIds}
+              drill={mobile ? FLAT_DRILL : undefined}
             />
           )}
         />

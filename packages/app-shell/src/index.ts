@@ -43,6 +43,7 @@ export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
 export { LIBRARY_KNOWLEDGE_BASE_PREFIX } from './sidebar/LibraryPage'
+export { listTimeLabel } from './sidebar/listTime'
 export { STACKED_SETTINGS_HISTORY_MARK } from './settings/useStackedHistory'
 export type { LibraryDrill, LibraryGroupKey } from './sidebar/LibraryPage'
 export type {

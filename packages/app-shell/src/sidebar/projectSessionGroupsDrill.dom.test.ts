@@ -34,6 +34,16 @@
  *   DR-48..53 顶层搜索（`drill.query`）：只画结果、按最近动过排、最多 50 条、行尾标它在哪一组、空态、取摘要、
  *             空白不算搜索、组里不认、点一条就是选中
  *
+ * 2026-11-15 平铺（`drill.flat`，手机布局的日历按天列会话）：
+ *   FL-1..7   一张卡片里的两层行、最近动过的在前、行上标它所在的组（子会话随父会话）、子会话各自成行
+ *   FL-8..15  摘要（最后一条回复 / 还没有消息 / 正在回复 / 在等你回答）、只取前 30 条、圆点、时间
+ *   FL-16..19 点行、不画选中、行菜单、定时运行的标记
+ *   FL-20..25 空列表、`flat` 压过 `query`、组里不认、标题随 store、不改给进来的数组、桌面照旧
+ *   FL-26..30 顶层列不出来的会话（项目不在列表里、隐藏载体项目里的笔记本、归档的 bot）和它们的子会话不列；
+ *             列得出来的父会话的子会话照列
+ *   FL-31..33 钟每分钟走一下（过了午夜「今天」变「昨天」）；不传 `drill` 不装这个钟；卸载时清掉
+ *   FL-34     归档 bot 的会话开出的子会话、父会话不在当天那几条里：跟着父会话走，不列
+ *
  * `@shuvix/chat-ui` 换成替身（同 projectSessionGroupsRunning / Bots 那两份），`getChatApi().message.list` 是可数的 spy。
  * 替身的 store 不是响应式的：改了之后手动重渲染。文件是 `.ts`，一律 createElement。
  */
@@ -1677,5 +1687,474 @@ describe('drill top level: search', () => {
     await rerender({ drill: searching('alpha') })
     expect(rowTitles()).toEqual([])
     expect(container.querySelector('[data-search-empty]')).not.toBeNull()
+  })
+})
+
+// ─── 平铺：日历按天的那一列（`drill.flat`） ─────────────────────────────────────
+
+describe('drill top level: the flat list', () => {
+  const NOW = new Date(2025, 5, 18, 15, 30, 0).getTime()
+  const flat = (over: Partial<Drill> = {}): Drill => ({ ...drillAt(null), flat: true, ...over })
+  const flatList = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-flat-list]')
+  /** 当天的那几条既是 `sessionsOverride` 也在 store 里（找父会话读 store） */
+  async function mountFlat(
+    list: StoreSession[],
+    props: Partial<ProjectSessionGroupsProps> = {}
+  ): Promise<void> {
+    store.sessions = list
+    await mount({
+      drill: flat(),
+      sessionsOverride: list as never,
+      hideEmptyGroups: true,
+      bots: botsCaps(SCOUT),
+      ...props
+    })
+  }
+  /** 项目、聊天、bot 各一条，标题与最后动手的时间各不相同 */
+  const mixed = (): StoreSession[] => [
+    row('a1', { title: 'Plan the launch', lastActiveAt: 10 }),
+    temp('t1', { title: 'Loose notes', lastActiveAt: 40 }),
+    botRow('b1', 'scout', {}, { title: 'Morning digest', lastActiveAt: 20 }),
+    row('a2', { title: 'Fix the dots', lastActiveAt: 30 })
+  ]
+  const previewText = (title: string): string | null =>
+    rowByTitle(title).querySelector('[data-session-preview]')?.textContent ?? null
+  const previewTone = (title: string): string | null =>
+    rowByTitle(title).querySelector('[data-session-preview]')?.getAttribute('data-preview-tone') ??
+    null
+  const timeText = (title: string): string | null =>
+    rowByTitle(title).querySelector('[data-session-time]')?.textContent ?? null
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('FL-1 one list and no groups: every row sits inside the flat list', async () => {
+    await mountFlat(mixed())
+    expect(container.querySelectorAll('[data-flat-list]')).toHaveLength(1)
+    for (const anchor of [
+      '[data-group-nav]',
+      '[data-group]',
+      '[data-sidebar-section]',
+      '[data-nav-card]',
+      '[data-search-results]',
+      '[data-scope-list]',
+      '[data-view-more]'
+    ]) {
+      expect(container.querySelector(anchor), anchor).toBeNull()
+    }
+    expect(sessionRows()).toHaveLength(4)
+    for (const el of sessionRows()) expect(flatList()!.contains(el)).toBe(true)
+  })
+
+  it('FL-2 the most recently active chat is first, across projects, chats and bots', async () => {
+    await mountFlat(mixed())
+    expect(rowTitles()).toEqual([
+      'Loose notes',
+      'Fix the dots',
+      'Morning digest',
+      'Plan the launch'
+    ])
+  })
+
+  it('FL-3 every row is a two-line row with a dot column, a time and its group', async () => {
+    await mountFlat(mixed())
+    for (const el of sessionRows()) {
+      expect(el.querySelector('[data-session-detail]')).not.toBeNull()
+      expect(el.querySelector('[data-row-dot]')).not.toBeNull()
+      expect(el.querySelector('[data-session-time]')).not.toBeNull()
+      expect(el.querySelector('[data-session-location]')).not.toBeNull()
+    }
+  })
+
+  it('FL-4 each row names its group: the project, Chats, or the bot', async () => {
+    await mountFlat(mixed())
+    expect(locationOfRow(rowByTitle('Plan the launch'))).toBe('Proj')
+    expect(locationOfRow(rowByTitle('Loose notes'))).toBe(S.tempChats)
+    expect(locationOfRow(rowByTitle('Morning digest'))).toBe('Scout')
+  })
+
+  it('FL-5 a sub-session takes the group of its parent', async () => {
+    await mountFlat([
+      ...mixed(),
+      row('c1', { title: 'Child of plan', parentId: 'a1', createdAt: 2, lastActiveAt: 5 }),
+      temp('c2', { title: 'Child of digest', parentId: 'b1', createdAt: 2, lastActiveAt: 6 }),
+      temp('c3', { title: 'Child of notes', parentId: 't1', createdAt: 2, lastActiveAt: 7 })
+    ])
+    expect(locationOfRow(rowByTitle('Child of plan'))).toBe('Proj')
+    expect(locationOfRow(rowByTitle('Child of digest'))).toBe('Scout')
+    expect(locationOfRow(rowByTitle('Child of notes'))).toBe(S.tempChats)
+  })
+
+  it('FL-6 sub-sessions are rows of their own, not folded under the parent', async () => {
+    await mountFlat([
+      row('a1', { title: 'Parent chat', lastActiveAt: 30 }),
+      row('c1', { title: 'First child', parentId: 'a1', createdAt: 2, lastActiveAt: 20 }),
+      row('c2', { title: 'Second child', parentId: 'a1', createdAt: 3, lastActiveAt: 10 })
+    ])
+    expect(rowTitles()).toEqual(['Parent chat', 'First child', 'Second child'])
+    for (const el of sessionRows()) {
+      expect(el.hasAttribute('data-sub')).toBe(false)
+      expect(el.hasAttribute('data-sub-count')).toBe(false)
+      expect(el.querySelector('[data-subs-toggle]')).toBeNull()
+    }
+  })
+
+  it('FL-7 a project without a name, a bot whose registry is pending and a host without bots are still named', async () => {
+    await mountFlat(mixed(), {
+      projects: [{ id: 'p1', name: '' }],
+      bots: botsCaps(pendingRegistry)
+    })
+    expect(locationOfRow(rowByTitle('Plan the launch'))).toBe(S.unnamedProject)
+    expect(locationOfRow(rowByTitle('Morning digest'))).toBe('scout')
+
+    // 宿主没有 bot 这一节：bot 会话落在「聊天」里
+    await rerender({ bots: undefined, projects: [PROJECT] })
+    expect(locationOfRow(rowByTitle('Morning digest'))).toBe(S.tempChats)
+  })
+
+  it('FL-8 the preview is the last reply', async () => {
+    api.list.mockImplementation(async () => reply('hello there'))
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    expect(previewText('Plan the launch')).toBe('hello there')
+  })
+
+  it('FL-9 a chat with no messages reads "No messages yet", muted', async () => {
+    api.list.mockImplementation(async () => [])
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    expect(previewText('Plan the launch')).toBe(en.mobile.noMessages)
+    expect(previewTone('Plan the launch')).toBe('muted')
+  })
+
+  it('FL-10 a chat whose turn is running reads "Replying", whatever its last reply', async () => {
+    store.streaming = { a1: true }
+    api.list.mockImplementation(async () => reply('a finished reply'))
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    expect(previewText('Plan the launch')).toBe(en.inbox.replying)
+    expect(rowByTitle('Plan the launch').getAttribute('data-run')).toBe('agent')
+  })
+
+  it('FL-11 a waiting question wins over replying; the dot column carries the asks mark', async () => {
+    store.pending = { a1: 1 }
+    store.streaming = { a1: true }
+    store.sessionPendingInputs = {
+      a1: [{ id: 'q1', toolName: 'ask', createdAt: 1, kind: 'choice', question: 'Ship it?' }]
+    }
+    api.list.mockImplementation(async () => reply('a finished reply'))
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    expect(previewText('Plan the launch')).toBe(`${en.mobile.waitingPrefix}Ship it?`)
+    expect(previewTone('Plan the launch')).toBe('waiting')
+    expect(
+      rowByTitle('Plan the launch').querySelector('[data-row-dot] [data-pending-asks]')
+    ).not.toBeNull()
+
+    // 不知道问的是什么：写条数
+    store.sessionPendingInputs = {}
+    await rerender()
+    expect(previewText('Plan the launch')).toBe(i18n.t('inbox.asks', { count: 1 }))
+    expect(previewTone('Plan the launch')).toBe('waiting')
+  })
+
+  it('FL-12 no preview line before the fetch returns; it appears once it does', async () => {
+    const pending = deferred<PreviewMessage[]>()
+    api.list.mockImplementation(() => pending.promise)
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    expect(rowByTitle('Plan the launch').querySelector('[data-session-preview]')).toBeNull()
+
+    await act(async () => pending.resolve(reply('late reply')))
+    await flush()
+    expect(previewText('Plan the launch')).toBe('late reply')
+  })
+
+  it('FL-13 every chat of the day is listed, previews are fetched for the 30 most recent', async () => {
+    await mountFlat(
+      Array.from({ length: 40 }, (_, i) =>
+        row(`n${i}`, { title: `Chat number ${i}`, lastActiveAt: i + 1 })
+      )
+    )
+    expect(sessionRows()).toHaveLength(40)
+    expect(viewMore()).toBeNull()
+    expect(rowTitles()[0]).toBe('Chat number 39')
+    expect(rowTitles()[39]).toBe('Chat number 0')
+    expect(calledIds()).toEqual(Array.from({ length: 30 }, (_, i) => `n${39 - i}`))
+  })
+
+  it('FL-14 the dot column: unread, failed, or empty', async () => {
+    store.unread = { a1: { since: 1 } as SessionUnread }
+    await mountFlat([
+      row('a1', { title: 'Plan the launch', lastActiveAt: 2 }),
+      row('a2', { title: 'Fix the dots', lastActiveAt: 1 })
+    ])
+    const dot = rowByTitle('Plan the launch').querySelector('[data-row-dot] [data-unread]')
+    expect(dot).not.toBeNull()
+    expect(dot!.getAttribute('data-unread')).toBe('')
+    expect(rowByTitle('Fix the dots').querySelector('[data-row-dot]')!.childElementCount).toBe(0)
+
+    store.unread = { a1: { since: 1, failed: true } as SessionUnread }
+    await rerender()
+    expect(
+      rowByTitle('Plan the launch')
+        .querySelector('[data-row-dot] [data-unread]')!
+        .getAttribute('data-unread')
+    ).toBe('failed')
+  })
+
+  it('FL-15 the time is the list-time label: hours and minutes today, "Yesterday" the day before', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+    await mountFlat([
+      row('a1', { title: 'Plan the launch', lastActiveAt: new Date(2025, 5, 18, 9, 5).getTime() }),
+      row('a2', { title: 'Fix the dots', lastActiveAt: new Date(2025, 5, 17, 23, 59).getTime() })
+    ])
+    expect(timeText('Plan the launch')).toBe('09:05')
+    expect(timeText('Fix the dots')).toBe(en.mobile.yesterday)
+  })
+
+  it('FL-16 a tap selects through onSelect, for a root row and for a sub-session row', async () => {
+    const onSelect = vi.fn()
+    const setActive = vi.fn()
+    store.setActiveSessionId = setActive
+    await mountFlat(
+      [
+        row('a1', { title: 'Parent chat', lastActiveAt: 2 }),
+        row('c1', { title: 'First child', parentId: 'a1', createdAt: 2, lastActiveAt: 1 })
+      ],
+      { onSelect }
+    )
+    await click(rowByTitle('Parent chat'))
+    await click(rowByTitle('First child'))
+    expect(onSelect.mock.calls).toEqual([['a1'], ['c1']])
+    expect(setActive).not.toHaveBeenCalled()
+  })
+
+  it('FL-16 without onSelect a tap selects through the store', async () => {
+    const setActive = vi.fn()
+    store.setActiveSessionId = setActive
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    await click(rowByTitle('Plan the launch'))
+    expect(setActive.mock.calls).toEqual([['a1']])
+  })
+
+  it('FL-17 the active chat is not drawn selected', async () => {
+    store.activeSessionId = 'a1'
+    await mountFlat([row('a1', { title: 'Plan the launch' })])
+    expect(rowByTitle('Plan the launch').className).not.toContain('bg-bg-active')
+  })
+
+  it('FL-18 a long press opens the row menu, with the calendar entries, and its picks call back', async () => {
+    const onCopyLink = vi.fn()
+    const onConfigureSession = vi.fn()
+    const onDelete = vi.fn()
+    await mountFlat([row('a1', { title: 'Plan the launch' })], {
+      onCopyLink,
+      onConfigureSession,
+      onDelete
+    })
+    await rightClick(rowByTitle('Plan the launch'))
+    expect(menus).toHaveLength(1)
+    expect(menuIds(menus[0])).toEqual(
+      expect.arrayContaining(['copy-link', 'session-config', 'export-session', 'delete-session'])
+    )
+
+    for (const pick of ['copy-link', 'session-config', 'delete-session']) {
+      picks.push(pick)
+      await rightClick(rowByTitle('Plan the launch'))
+    }
+    expect(onCopyLink.mock.calls).toEqual([['a1']])
+    expect(onConfigureSession.mock.calls).toEqual([['a1']])
+    expect(onDelete.mock.calls).toEqual([['a1']])
+  })
+
+  it('FL-19 a scheduled run keeps its mark', async () => {
+    await mountFlat([
+      botRow('b1', 'scout', { triggerRun: true }, { title: 'Morning digest', lastActiveAt: 2 }),
+      botRow('b2', 'scout', {}, { title: 'Asked by hand', lastActiveAt: 1 })
+    ])
+    expect(rowByTitle('Morning digest').hasAttribute('data-trigger-run')).toBe(true)
+    expect(rowByTitle('Asked by hand').hasAttribute('data-trigger-run')).toBe(false)
+  })
+
+  it('FL-20 an empty day: the list is there with no rows, no hint, no card, no fetch', async () => {
+    await mountFlat([])
+    expect(flatList()).not.toBeNull()
+    expect(sessionRows()).toHaveLength(0)
+    expect(container.querySelector('[data-search-empty]')).toBeNull()
+    expect(flatList()!.classList.contains('rounded-xl')).toBe(false)
+    expect(api.list).not.toHaveBeenCalled()
+  })
+
+  it('FL-20 a day with chats: the rows sit in one card', async () => {
+    await mountFlat(mixed())
+    expect(flatList()!.classList.contains('rounded-xl')).toBe(true)
+    expect(flatList()!.classList.contains('bg-bg-secondary')).toBe(true)
+  })
+
+  it('FL-21 flat wins over a query: every chat is listed, not the search results', async () => {
+    await mountFlat(mixed(), { drill: flat({ query: 'plan' }) })
+    expect(flatList()).not.toBeNull()
+    expect(searchResults()).toBeNull()
+    expect(sessionRows()).toHaveLength(4)
+  })
+
+  it('FL-22 flat is ignored inside a group', async () => {
+    await mountFlat(mixed(), { drill: { ...drillAt('p1'), flat: true } })
+    expect(container.querySelector('[data-scope-list="p1"]')).not.toBeNull()
+    expect(flatList()).toBeNull()
+  })
+
+  it('FL-23 a row shows the title the store has now, not the one in the given list', async () => {
+    const stale = [row('a1', { title: 'Old title' })]
+    store.sessions = [row('a1', { title: 'New title' })]
+    await mount({ drill: flat(), sessionsOverride: stale as never, hideEmptyGroups: true })
+    expect(rowTitles()).toEqual(['New title'])
+  })
+
+  it('FL-24 the given array is not reordered', async () => {
+    const list = mixed()
+    const order = list.map((s) => s.id)
+    await mountFlat(list)
+    expect(list.map((s) => s.id)).toEqual(order)
+    expect(rowTitles()[0]).toBe('Loose notes')
+  })
+
+  it('FL-25 without drill the same list is the per-project tree, with no two-line rows and no fetch', async () => {
+    const list = mixed()
+    store.sessions = list
+    await mount({ sessionsOverride: list as never, hideEmptyGroups: true, bots: botsCaps(SCOUT) })
+    expect(container.querySelector('[data-group]')).not.toBeNull()
+    expect(flatList()).toBeNull()
+    expect(container.querySelector('[data-session-detail]')).toBeNull()
+    expect(api.list).not.toHaveBeenCalled()
+  })
+
+  // 平铺只列顶层列得出来的会话（同搜索，DR-54）：藏起来的那几种和它们的子会话不列
+  it('FL-26 a chat whose project is not in the list (archived or deleted) is not listed, nor its sub-session', async () => {
+    await mountFlat([
+      row('g1', { title: 'Gone project chat', projectId: 'not-in-the-list', lastActiveAt: 30 }),
+      row('gc', {
+        title: 'Gone project child',
+        projectId: 'not-in-the-list',
+        parentId: 'g1',
+        createdAt: 2,
+        lastActiveAt: 20
+      }),
+      row('a1', { title: 'Plan the launch', lastActiveAt: 10 })
+    ])
+    expect(rowTitles()).toEqual(['Plan the launch'])
+    expect(calledIds()).toEqual(['a1'])
+  })
+
+  it('FL-27 a notebook session in a hidden carrier project is not listed', async () => {
+    await mountFlat([
+      row('h1', {
+        title: 'Agent profile note',
+        projectId: '__agents__',
+        settings: { notebookPath: 'a.md' },
+        lastActiveAt: 30
+      }),
+      temp('t1', { title: 'Loose notes', lastActiveAt: 10 })
+    ])
+    expect(rowTitles()).toEqual(['Loose notes'])
+  })
+
+  it('FL-28 a chat of an archived bot is not listed, nor its sub-session', async () => {
+    await mountFlat(
+      [
+        botRow('o1', 'old', {}, { title: 'Old bot chat', lastActiveAt: 30 }),
+        temp('oc', { title: 'Old bot child', parentId: 'o1', createdAt: 2, lastActiveAt: 20 }),
+        botRow('b1', 'scout', {}, { title: 'Morning digest', lastActiveAt: 10 })
+      ],
+      { bots: botsCaps(registryOf({ bots: [bot('scout', 'Scout')], archived: ['old'] })) }
+    )
+    expect(rowTitles()).toEqual(['Morning digest'])
+    expect(locationOfRow(rowByTitle('Morning digest'))).toBe('Scout')
+  })
+
+  it('FL-29 with nothing but hidden chats the list is empty and nothing is fetched', async () => {
+    await mountFlat(
+      [
+        row('g1', { title: 'Gone project chat', projectId: 'not-in-the-list' }),
+        row('h1', {
+          title: 'Agent profile note',
+          projectId: '__agents__',
+          settings: { notebookPath: 'a.md' }
+        }),
+        botRow('o1', 'old', {}, { title: 'Old bot chat' })
+      ],
+      { bots: botsCaps(registryOf({ bots: [bot('scout', 'Scout')], archived: ['old'] })) }
+    )
+    expect(flatList()).not.toBeNull()
+    expect(sessionRows()).toHaveLength(0)
+    expect(flatList()!.classList.contains('rounded-xl')).toBe(false)
+    // bot 的清单是异步扫回来的：扫回来之前还不知道 old 归档了，那一条不在这里断
+    expect(calledIds()).not.toContain('g1')
+    expect(calledIds()).not.toContain('h1')
+  })
+
+  // 父会话不在当天那几条里时，子会话是平铺出来的顶层行；它跟着父会话走 —— 父会话在归档的 bot 名下，它也不列
+  it('FL-34 a sub-session of an archived bot chat is not listed when its parent was not active that day', async () => {
+    // 父会话在 store 里、不在当天的那几条里
+    const parent = botRow('o1', 'old', {}, { title: 'Old bot chat' })
+    const child = temp('oc', { title: 'Old bot child', parentId: 'o1', createdAt: 2 })
+    store.sessions = [parent, child]
+    await mount({
+      drill: flat(),
+      sessionsOverride: [child] as never,
+      hideEmptyGroups: true,
+      bots: botsCaps(registryOf({ bots: [bot('scout', 'Scout')], archived: ['old'] }))
+    })
+    expect(rowTitles()).toEqual([])
+  })
+
+  it('FL-30 the sub-session of a listed chat is still listed, beside hidden ones', async () => {
+    await mountFlat([
+      row('g1', { title: 'Gone project chat', projectId: 'not-in-the-list', lastActiveAt: 50 }),
+      row('a1', { title: 'Parent chat', lastActiveAt: 40 }),
+      row('c1', { title: 'First child', parentId: 'a1', createdAt: 2, lastActiveAt: 30 }),
+      temp('t1', { title: 'Loose notes', lastActiveAt: 20 }),
+      temp('c2', { title: 'Notes child', parentId: 't1', createdAt: 2, lastActiveAt: 10 })
+    ])
+    expect(rowTitles()).toEqual(['Parent chat', 'First child', 'Loose notes', 'Notes child'])
+  })
+
+  it('FL-31 the clock ticks every minute: past midnight a time of today becomes "Yesterday"', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2025, 5, 18, 23, 59, 30).getTime())
+    await mountFlat([
+      row('a1', { title: 'Plan the launch', lastActiveAt: new Date(2025, 5, 18, 23, 50).getTime() })
+    ])
+    expect(timeText('Plan the launch')).toBe('23:50')
+
+    act(() => {
+      vi.advanceTimersByTime(59_000)
+    })
+    expect(timeText('Plan the launch')).toBe('23:50')
+    act(() => {
+      vi.advanceTimersByTime(1_000)
+    })
+    expect(timeText('Plan the launch')).toBe(en.mobile.yesterday)
+  })
+
+  it('FL-32 the clock is installed for any drill and cleared on unmount', async () => {
+    const set = vi.spyOn(window, 'setInterval')
+    const clear = vi.spyOn(window, 'clearInterval')
+    store.sessions = mixed()
+    await mount({ drill: drillAt('p1') })
+    const minuteTimers = set.mock.calls.filter(([, ms]) => ms === 60_000)
+    expect(minuteTimers).toHaveLength(1)
+    const id = set.mock.results[set.mock.calls.indexOf(minuteTimers[0])].value
+
+    act(() => root.render(null))
+    expect(clear).toHaveBeenCalledWith(id)
+  })
+
+  it('FL-33 without drill (desktop) no clock is installed', async () => {
+    const set = vi.spyOn(window, 'setInterval')
+    const list = mixed()
+    store.sessions = list
+    await mount({ sessionsOverride: list as never, hideEmptyGroups: true, bots: botsCaps(SCOUT) })
+    expect(set.mock.calls.filter(([, ms]) => ms === 60_000)).toHaveLength(0)
   })
 })
