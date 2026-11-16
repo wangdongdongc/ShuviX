@@ -239,17 +239,9 @@ describe('files.open → 独立窗口', () => {
     await panel.open()
     try {
       const icons = await panel.tabIcons()
-      expect(icons).toEqual(
-        expect.arrayContaining([
-          'lucide-inbox',
-          'lucide-wrench',
-          'lucide-calendar-days',
-          'lucide-activity'
-        ])
-      )
+      // 右侧面板只剩 widget 与 agents（收件箱与日历自 3a69300a 起是左侧栏的视图）
+      expect(icons).toEqual(['lucide-wrench', 'lucide-activity'])
       expect(icons).not.toContain('lucide-eye')
-      // 收件箱是右侧面板的第一个 tab（56ff4502）
-      expect(icons).toHaveLength(4)
     } finally {
       await panel.close()
     }

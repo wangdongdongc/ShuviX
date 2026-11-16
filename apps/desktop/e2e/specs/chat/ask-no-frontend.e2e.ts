@@ -6,9 +6,9 @@
  *         的请求之后，3 秒内没有下一次请求
  *   AW-E2 第二个实例把窗口建回来：askCounts 是 {A:1,B:1}，两行都有徽标；打开 A、答它：工具结果是成功，A 的徽标没了，B 的还在；
  *         再允许 B：B 也跑完
- *   AW-E3 约两次触发：一个无条件的 bot 绑定，整分钟之前关掉窗口，第一次触发的运行停在询问上。窗口回来：最新一条日志是
- *         started、带会话，lastFired 还是空的；下一次触发 skipped，没有第二条会话；答了之后 completed，lastFired 等于第一次
- *         围栏里的 firedAt。bot 的行在收起的组里：断言走 askCounts
+ *   AW-E3 一次触发（2026-11-16 起：触发器开出来的运行是无人值守的，docs/unattended-run-design.md）：一个无条件的 bot
+ *         绑定，整分钟之前关掉窗口。第一次触发的运行里模型调 ask —— 不挂起，工具结果是「没人在场回答」，这一轮自己跑完：
+ *         日志 completed、带会话，没有 skipped，lastFired 等于围栏里的 firedAt；窗口回来之后没有哪条会话在等人
  *
  * 只有 macOS 关窗不退出；别的平台关掉主窗口进程就退了，没有这个场景（无头的同一件事见 network/web-ask-reconnect）。
  */
@@ -223,7 +223,7 @@ describe.skipIf(process.platform !== 'darwin')('an ask raised with no frontend w
   }, 150_000)
 
   it(
-    'AW-E3 a scheduled run stops on its ask; the next firing is skipped; answering completes it',
+    'AW-E3 a scheduled run does not stop on its ask: the model is told nobody is there and the run completes',
     async () => {
       const MESSAGE = 'AW-E3 asker check-in.'
       const firstStep = stepOf(MESSAGE, 0)
@@ -259,35 +259,12 @@ describe.skipIf(process.platform !== 'darwin')('an ask raised with no frontend w
         'the first firing reached the model',
         NEXT_FIRE_MS
       )
-      await sleep(2000)
-      expect(requestsOf(provider, MESSAGE)).toHaveLength(1)
-
-      const page = await reopenMainWindow(app)
-      main = page
-      const started = logs().at(-1)!
-      expect(started.outcome).toBe('started')
-      expect(started.sessionId).not.toBe('')
-      expect(lastFired()).toBeNull()
-      await until(
-        async () => (await askCounts(page))[started.sessionId] === 1,
-        'the run is waiting on its ask',
+      // 没人在：询问不挂起，模型马上收到说明，这一轮自己跑完
+      const followUp = await until(
+        () => requestsOf(provider, MESSAGE).find((r) => toolMessages(r).length === 1),
+        'the model got the answer to its ask without anyone there',
         20_000
       )
-
-      await until(
-        () => logs().some((row) => row.outcome === 'skipped'),
-        'the next firing is skipped',
-        NEXT_FIRE_MS
-      )
-      const skipped = logs().find((row) => row.outcome === 'skipped')!
-      expect(skipped.sessionId).toBe('')
-      const bound = await page.eval<string[]>(
-        `window.api.session.list().then((ss) => ss.filter((s) => s.settings && s.settings.bot === 'asker').map((s) => s.id))`
-      )
-      expect(bound).toEqual([started.sessionId])
-      expect(requestsOf(provider, MESSAGE)).toHaveLength(1)
-
-      await respond(page, started.sessionId, 'call_bot', { kind: 'choice', selections: ['B'] })
       await until(
         () => logs().some((row) => row.outcome === 'completed'),
         'the run completed',
@@ -296,12 +273,22 @@ describe.skipIf(process.platform !== 'darwin')('an ask raised with no frontend w
       // 别让下一分钟再起一次
       rmSync(join(app.botsDir, 'asker.md'), { force: true })
 
+      const page = await reopenMainWindow(app)
+      main = page
+      const done = logs().at(-1)!
+      expect(done.outcome).toBe('completed')
+      expect(done.sessionId).not.toBe('')
+      expect(logs().some((row) => row.outcome === 'skipped')).toBe(false)
+      // 窗口回来：没有哪条会话在等人
+      expect((await askCounts(page))[done.sessionId] ?? 0).toBe(0)
+
       const firedAt = /firedAt: (\S+)/.exec(first.raw.replaceAll('\\n', '\n'))?.[1]
       expect(firedAt).toBeTruthy()
       const recorded = JSON.parse(lastFired()!) as Record<string, string>
       expect(Object.values(recorded)).toEqual([firedAt!.replace(/^['"]|['"]$/g, '')])
-      const followUp = requestsOf(provider, MESSAGE).find((r) => toolMessages(r).length === 1)!
-      expect(contentText(toolMessages(followUp)[0]!)).toContain('User selected: B')
+      expect(contentText(toolMessages(followUp)[0]!)).toMatch(
+        /^\[Unattended run\] Nobody is here to answer/
+      )
       expect(JSON.stringify(toolMessages(followUp))).not.toContain('Aborted')
     },
     LONG

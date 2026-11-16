@@ -178,13 +178,8 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
   })
 
   it('AM-2 agents tab 存在且是最后一个可见 tab；preview 默认隐藏（认图标 + DOM 序，不认文案）', async () => {
-    // 面板已在 AM-1 打开；可见集合 = 收件箱 / widget / calendar / agents（浏览器是独立窗口，不在面板里）
-    expect(await pane.tabIcons()).toEqual([
-      'lucide-inbox',
-      'lucide-wrench',
-      'lucide-calendar-days',
-      'lucide-activity'
-    ])
+    // 面板已在 AM-1 打开；可见集合 = widget / agents（收件箱与日历自 3a69300a 起是左侧栏的视图；浏览器是独立窗口）
+    expect(await pane.tabIcons()).toEqual(['lucide-wrench', 'lucide-activity'])
   })
 
   it('AM-10 新会话未发消息：横幅整条不出现 —— chip 缺席且 banner 元素缺席（不是「banner 在但空」）；IPC 无该 sid entry', async () => {
