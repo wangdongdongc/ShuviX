@@ -66,6 +66,17 @@ export interface SidebarProps {
    * 进组时列表回到顶上，退回顶层时回到离开前的位置；`groupsPrepend` 只在顶层画
    */
   drill?: DrillNav
+  /**
+   * 侧栏顶上那一行右端的内容（桌面：视图切换 SidebarViewSwitch）。给了就总有这一行 —— macOS 上它与交通灯同一行，
+   * 别的平台是侧栏最上面单独的一行
+   */
+  header?: React.ReactNode
+  /**
+   * 会话列表之外的视图（桌面：收件箱、日历），画在列表的位置上；哪一个可见由宿主自己切（都挂着、只切显示）。
+   * 与 `hideList` 成对：切到别的视图时会话列表藏起来但不卸载，回来时各组的展开状态与滚动位置都还在
+   */
+  extraViews?: React.ReactNode
+  hideList?: boolean
 }
 
 /**
@@ -93,7 +104,10 @@ export function Sidebar({
   projectKnowledge,
   hideFooter = false,
   density = 'regular',
-  drill
+  drill,
+  header,
+  extraViews,
+  hideList = false
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -169,6 +183,15 @@ export function Sidebar({
       el.scrollTop = indexScrollTop.current
     }
   }, [drillScope])
+  // 切到别的视图时列表整块 display:none：Chromium 回来时会还原滚动位置，别的浏览器（web 客户端）不一定 ——
+  // 藏之前记下、回来时写回
+  const listScrollTop = useRef(0)
+  const wasHidden = useRef(false)
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (el && wasHidden.current && !hideList) el.scrollTop = listScrollTop.current
+    wasHidden.current = hideList
+  }, [hideList])
   const trackIndexScroll = drill
     ? (e: React.UIEvent<HTMLDivElement>): void => {
         if (lastScope.current === null) indexScrollTop.current = e.currentTarget.scrollTop
@@ -190,18 +213,35 @@ export function Sidebar({
       className={`flex flex-col h-full ${density === 'touch' ? '' : 'bg-bg-secondary/50'}`}
     >
       {/* 窗口拖拽带（macOS）；打开文件夹在「项目」分节头的菜单里 */}
-      {showHeader && (
+      {header ? (
+        // 顶上那一行：macOS 上左边是交通灯的留白、整行可拖，右端的内容自己不可拖；别的平台就是一行
         <div
-          className={`${drag} flex items-center pl-3 pr-2 pb-2 ${topPad} transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
-        />
+          data-sidebar-header=""
+          className={`${drag} flex flex-shrink-0 items-center justify-end pr-2.5 ${
+            needDragStrip ? 'h-11 pl-20' : 'pl-2.5 pt-2.5 pb-1'
+          } transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+        >
+          <div className="titlebar-no-drag flex items-center">{header}</div>
+        </div>
+      ) : (
+        showHeader && (
+          <div
+            className={`${drag} flex items-center pl-3 pr-2 pb-2 ${topPad} transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+          />
+        )
       )}
 
       {/* 会话列表 */}
       {/* 左右同宽的边：选中的那一块是内缩的圆角块（Finder），两边要对称 */}
       <div
         ref={scrollerRef}
-        onScroll={trackIndexScroll}
+        onScroll={(e) => {
+          if (!hideList) listScrollTop.current = e.currentTarget.scrollTop
+          trackIndexScroll?.(e)
+        }}
+        data-sidebar-list=""
         className={`flex-1 overflow-y-auto no-scrollbar ${density === 'touch' ? 'px-3 pb-4' : 'px-2.5 pb-3'}`}
+        style={hideList ? { display: 'none' } : undefined}
       >
         {drillScope || drill?.query?.trim() ? null : groupsPrepend}
         {/* 一个会话、一个项目都没有（全新安装）也是这一套分节：「项目」里是「打开一个文件夹作为项目」，
@@ -228,6 +268,8 @@ export function Sidebar({
           drill={drill}
         />
       </div>
+
+      {extraViews}
 
       {/* 底部设置栏 + 宿主额外按钮（桌面更新提示） */}
       {!hideFooter && (

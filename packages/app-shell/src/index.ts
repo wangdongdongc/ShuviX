@@ -78,8 +78,13 @@ export type {
 } from './sidebar/knowledgeTree'
 export { TrackingGroup } from './sidebar/TrackingGroup'
 export type { TrackingGroupProps, TrackingGroupAdapter } from './sidebar/TrackingGroup'
-export { InboxRow } from './sidebar/InboxRow'
-export type { InboxRowProps } from './sidebar/InboxRow'
+export {
+  SidebarViewSwitch,
+  SIDEBAR_VIEWS,
+  SIDEBAR_VIEW_LABEL_KEYS,
+  toSidebarView
+} from './sidebar/SidebarViewSwitch'
+export type { SidebarView, SidebarViewSwitchProps } from './sidebar/SidebarViewSwitch'
 export { InboxPanel } from './inbox/InboxPanel'
 export type { InboxPanelProps } from './inbox/InboxPanel'
 export type { InboxTrackingAdapter } from './inbox/InboxTracking'

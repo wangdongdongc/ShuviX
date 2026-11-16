@@ -2,28 +2,24 @@
 /**
  * 手机布局「会话」页的两层与浏览器历史（mobile/MobileShell.tsx，jsdom）。
  *
- * 契约：顶层是收件箱那一行 + 侧栏的导航行（`drill.scope === null`）；进一组（或收件箱）压一条标了
- * `shuvixMobileScope` 的历史，返回键 / 返回手势退回顶层；在它上面再压的对话 / 小组件那一条也带着这个标记，
- * 所以从对话退回来落在那一组里，再退一次才回顶层。
+ * 契约：顶层是三种视图（2026-11-16，与桌面侧栏同一个切换、同一份记忆）：分组列表 / 收件箱 / 日历 —— 标题旁一枚
+ * 视图切换，收件箱与日历头一次切到才挂、之后一直挂着只切显示；它们不是推入的页面：不压历史、标签栏留着。
+ * 分组列表里进一组压一条标了 `shuvixMobileScope` 的历史，返回键 / 返回手势退回顶层；在它上面再压的对话 / 小组件
+ * 那一条也带着这个标记，所以从对话退回来落在那一组里，再退一次才回顶层。
  *
- *   MS-1  顶层：收件箱行、日历钮、没有返回键、没有标记
- *   MS-2  进一组：标题是那一组的名字、返回键、标记、drill.scope；顶栏没有日历钮与新对话钮（新对话在底部的工具栏里）
+ *   MS-2  进一组：标题是那一组的名字、返回键、标记、drill.scope；顶栏没有视图切换与新对话钮（新对话在底部的工具栏里）
  *   MS-3 / MS-4 返回键与返回手势都回顶层
  *   MS-5 / MS-6 从组里 / 从顶层打开对话：历史上的标记，退回来落在哪
  *   MS-7  store 里换了活跃会话（不是点列表）时人在组里：对话那一条也带两个标记
  *   MS-8  小组件那一条同样带着组的标记
  *   MS-9  在组里再进另一组：不再压历史
- *   MS-10 收件箱页：InboxPanel、标题、标记；侧栏留在顶层并藏起来；顶栏没有新对话与日历
- *   MS-11 / MS-12 收件箱里点一行：已经活跃的那一条也推对话页；别的会话只推一次
  *   MS-13 重新加载留下的标记在挂载时摘掉
  *   MS-14 历史上没有标记时返回键直接收起
- *   MS-15 收件箱行上的数字与琥珀点
- *   MS-16 离开收件箱：那一页卸掉，侧栏回来
  *   MS-17 顶层：工具栏的槽挂着但藏着（交给侧栏的 `drill.toolbarSlot` 就是它），没有菜单的槽，标签栏在
  *   MS-18 进一组：返回那一行里有菜单的槽（`drill.menuSlot`）、工具栏的槽露出来、标签栏收起；退回顶层各归原位
- *   MS-19 收件箱页：没有菜单的槽、工具栏的槽藏着（它只给各组用）、标签栏收起（收件箱也是推入的一页）；退回顶层标签栏回来
- *   MS-20 搜索框：只在顶层（不在日历那种看法、组里、收件箱页）；输入的字交给 `drill.query`；有字才有清除钮，点它清空
- *   MS-21 收件箱那一行包在一张卡片里
+ *   MS-20 搜索框：只在分组列表那种视图的顶层；输入的字交给 `drill.query`；有字才有清除钮，点它清空
+ *   MV-1..31 三种视图：切换的接法与条数、标题跟着视图走、搜索框只在列表视图、三块只显示一块、头一次用才挂、
+ *         从收件箱 / 日历打开对话后退回来还在那种视图、开着一组时外面换了视图不打扰那一组
  *   MS-22..29 对话页上面还开着详情（`shuvixMobileDetail`，见 detailHistory.ts）时会话没了：连详情那几条一起退掉，
  *         落在打开对话之前的那一条上（顶层或那一组）；没开详情照旧退一条；顶栏的返回键照旧退一条
  *
@@ -36,13 +32,12 @@
  *   MS-45 重新加载留下的记号在挂载时摘掉；MS-46 `libraryDrill` 的引用在无关的重渲染之间不变
  *   MS-50 / MS-51 / MS-52 设置页：`stacked`、额外的智能体分区；钻进分区（层数 > 0）标签栏收起，只在设置是当前页时
  *   MS-53 / MS-54 设置的分区开着时压的对话 / 小组件那一条也带着 `shuvixSettingsDepth`（B3）；没有那个记号就不带
- *   MS-55..MS-58 收件箱页带着跟踪项的 adapter（引用稳定；open = 打开那份笔记并推对话页）；资料库的侧栏不再有它
- *   MS-59 日历第一次切到才挂，拿到 `mobile` 与 `onOpenSession`；切回列表还挂着、藏起来
- *   MS-60 从日历里打开一条会话：推对话页
+ *   MS-58 资料库的侧栏不再有跟踪项（它在收件箱视图里，见 MV-21..23）
  *   MS-61 小组件页的 WidgetPanel 拿到 `mobile`
  *
- * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏、设置、日历与小组件的替身记下 props，侧栏的还画出
- * `sessionsPrepend`。chat store 是按 selector 读、能订阅的小替身；小组件 store 是一个真的 zustand store。
+ * 外壳挂的所有重组件都换成替身（侧栏、日历、小组件、设置、对话页、收件箱）；侧栏、设置、日历与小组件的替身记下 props；
+ * 视图切换的替身记下 props、画三枚会调 `onChange` 的按钮。chat store 是按 selector 读、能订阅的小替身；小组件 store
+ * 与视图 store 各是一个真的 zustand store（视图 store 不碰 localStorage，每个用例回到 `sessions`）。
  * jsdom 的 `history.back()` 异步发 popstate：`back()` 在 act 里等到它。文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -63,6 +58,11 @@ interface ChatState {
 const rec = vi.hoisted(() => ({
   sidebar: [] as Array<Record<string, unknown>>,
   inbox: [] as Array<Record<string, unknown>>,
+  /** 视图切换的替身每次渲染收到的 props */
+  viewSwitch: [] as Array<Record<string, unknown>>,
+  /** 收件箱 / 日历的替身各挂上了几次 */
+  inboxMounts: 0,
+  calendarMounts: 0,
   /** SettingsPanel 替身每次渲染收到的 props */
   settings: [] as Array<Record<string, unknown>>,
   /** CalendarPanel / WidgetPanel 替身每次渲染收到的 props */
@@ -104,12 +104,39 @@ vi.mock('@shuvix/chat-ui', async () => {
 })
 
 vi.mock('@shuvix/app-shell', async () => {
-  const { createElement: h } = await import('react')
+  const { createElement: h, useEffect } = await import('react')
   const projects = { projects: [] }
+  const views = ['sessions', 'inbox', 'calendar']
   return {
     InboxPanel: (props: Props) => {
       rec.inbox.push(props)
+      useEffect(() => {
+        rec.inboxMounts++
+      }, [])
       return h('div', { 'data-stub-inbox': '' })
+    },
+    // 视图切换：与真的同一副锚点（根 + 三枚按钮），点没选中的那枚调 onChange
+    SidebarViewSwitch: (props: Props) => {
+      rec.viewSwitch.push(props)
+      return h(
+        'div',
+        { 'data-sidebar-view-switch': String(props.value) },
+        views.map((view) =>
+          h('button', {
+            key: view,
+            type: 'button',
+            'data-sidebar-view': view,
+            onClick: () => {
+              if (view !== props.value) (props.onChange as (v: string) => void)(view)
+            }
+          })
+        )
+      )
+    },
+    SIDEBAR_VIEW_LABEL_KEYS: {
+      sessions: 'sidebar.viewSessions',
+      inbox: 'inbox.title',
+      calendar: 'panel.calendar'
     },
     useInboxSections: () => rec.sections,
     useProjects: () => projects,
@@ -123,15 +150,18 @@ vi.mock('../../components/sidebar/Sidebar', async () => {
   return {
     Sidebar: (props: Props) => {
       rec.sidebar.push(props)
-      return h('div', { 'data-stub-sidebar': String(props.mode) }, props.sessionsPrepend as never)
+      return h('div', { 'data-stub-sidebar': String(props.mode) })
     }
   }
 })
 vi.mock('../../components/browser/CalendarPanel', async () => {
-  const { createElement: h } = await import('react')
+  const { createElement: h, useEffect } = await import('react')
   return {
     CalendarPanel: (props: Props) => {
       rec.calendar.push(props)
+      useEffect(() => {
+        rec.calendarMounts++
+      }, [])
       return h('div', { 'data-stub-calendar': '' })
     }
   }
@@ -175,9 +205,24 @@ vi.mock('../../stores/widgetStore', async () => {
     }))
   }
 })
+// 视图 store：真的那份牵着 app-shell 的 toSidebarView 与 localStorage（见 sidebarViewStore 自己的测试）；这里是同形的小 store
+vi.mock('../../stores/sidebarViewStore', async () => {
+  const { create } = await import('zustand')
+  interface ViewState {
+    view: string
+    setView: (view: string) => void
+  }
+  return {
+    useSidebarViewStore: create<ViewState>((set) => ({
+      view: 'sessions',
+      setView: (view) => set({ view })
+    }))
+  }
+})
 
 import { MobileShell } from '../MobileShell'
 import { useWidgetStore } from '../../stores/widgetStore'
+import { useSidebarViewStore } from '../../stores/sidebarViewStore'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -232,6 +277,27 @@ const lastSettings = (): Record<string, unknown> => rec.settings.at(-1)!
 const lastInbox = (): Record<string, unknown> => rec.inbox.at(-1)!
 /** 侧栏替身外面那一层（收件箱 / 日历开着时外壳把它藏起来） */
 const sidebarWrapper = (): HTMLElement => q('[data-stub-sidebar="sessions"]')!.parentElement!
+/** 收件箱 / 日历那一块的外层（没挂 = null） */
+const inboxWrapper = (): HTMLElement | null => q('[data-mobile-inbox]')
+const calendarWrapper = (): HTMLElement | null => q('[data-stub-calendar]')?.parentElement ?? null
+const lastSwitch = (): Record<string, unknown> => rec.viewSwitch.at(-1)!
+/** 点视图切换上的一段 */
+function sw(view: 'sessions' | 'inbox' | 'calendar'): void {
+  click(q(`[data-sidebar-view="${view}"]`)!)
+}
+/** 外面（另一个窗口的同一份记忆、或桌面那枚切换）换了视图 */
+function setViewOutside(view: 'sessions' | 'inbox' | 'calendar'): void {
+  act(() => useSidebarViewStore.getState().setView(view))
+}
+/** 三块里此刻显示着的（没挂的不算） */
+function shownViews(): string[] {
+  const out: string[] = []
+  if (sidebarWrapper().style.display !== 'none') out.push('sessions')
+  if (inboxWrapper() && inboxWrapper()!.style.display !== 'none') out.push('inbox')
+  if (calendarWrapper() && calendarWrapper()!.style.display !== 'none') out.push('calendar')
+  return out
+}
+const viewTitle = (): HTMLElement | null => q('[data-mobile-view-title]')
 const chatPage = (): HTMLElement | null => q('[data-mobile-page="chat"]')
 const scopeTitle = (): string | null => q('[data-mobile-scope-title]')?.textContent ?? null
 const menuSlot = (): HTMLElement | null => q('[data-mobile-scope-menu-slot]')
@@ -289,6 +355,10 @@ beforeEach(() => {
   window.history.replaceState(null, '')
   rec.sidebar.length = 0
   rec.inbox.length = 0
+  rec.viewSwitch.length = 0
+  rec.inboxMounts = 0
+  rec.calendarMounts = 0
+  useSidebarViewStore.setState({ view: 'sessions' })
   rec.settings.length = 0
   rec.calendar.length = 0
   rec.widget.length = 0
@@ -309,14 +379,22 @@ afterEach(() => {
 })
 
 describe('MobileShell: the two levels of the Chats tab', () => {
-  it('MS-1 the top level: the inbox row, the calendar toggle, no back button, no scope mark', () => {
+  it('MV-1 the top level: the view switch before the new-chat button, no inbox row, no calendar toggle, no back button, no scope mark', () => {
     mount()
-    expect(q('[data-stub-sidebar="sessions"] [data-mobile-inbox-row]')).not.toBeNull()
+    const header = viewTitle()!
+    const viewSwitch = header.querySelector('[data-sidebar-view-switch]')!
+    const newChat = header.querySelector('[data-mobile-new-chat]')!
+    expect(viewSwitch).not.toBeNull()
+    expect(newChat).not.toBeNull()
+    expect(
+      viewSwitch.compareDocumentPosition(newChat) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(q('[data-mobile-page="sessions"]')!.contains(viewSwitch)).toBe(true)
+    expect(q('[data-mobile-calendar-toggle]')).toBeNull()
+    expect(q('[data-mobile-inbox-row]')).toBeNull()
     expect(drill().scope).toBeNull()
     expect(q('[data-mobile-scope-back]')).toBeNull()
     expect(q('[data-mobile-scope-title]')).toBeNull()
-    expect(q('[data-mobile-calendar-toggle]')).not.toBeNull()
-    expect(q('[data-mobile-new-chat]')).not.toBeNull()
     expect(mark(SCOPE)).toBe(false)
   })
 
@@ -328,9 +406,10 @@ describe('MobileShell: the two levels of the Chats tab', () => {
     expect(mark(SCOPE)).toBe(true)
     expect(mark(CHAT)).toBe(false)
     expect(drill().scope).toBe('p1')
-    // 顶栏右边不再是日历与新建：新建在底部的工具栏里，右边是那一组的「⋯」
-    expect(q('[data-mobile-calendar-toggle]')).toBeNull()
+    // 顶栏右边不再是视图切换与新建：新建在底部的工具栏里，右边是那一组的「⋯」
+    expect(q('[data-sidebar-view-switch]')).toBeNull()
     expect(q('[data-mobile-new-chat]')).toBeNull()
+    expect(viewTitle()).toBeNull()
     expect(q('[data-mobile-inbox]')).toBeNull()
   })
 
@@ -340,7 +419,10 @@ describe('MobileShell: the two levels of the Chats tab', () => {
     await awaitPop(() => q('[data-mobile-scope-back]')!.click())
     expect(drill().scope).toBeNull()
     expect(q('[data-mobile-scope-back]')).toBeNull()
-    expect(q('[data-mobile-calendar-toggle]')).not.toBeNull()
+    expect(q('[data-sidebar-view-switch]')!.getAttribute('data-sidebar-view-switch')).toBe(
+      'sessions'
+    )
+    expect(q('[data-mobile-new-chat]')).not.toBeNull()
     expect(mark(SCOPE)).toBe(false)
   })
 
@@ -465,40 +547,196 @@ describe('MobileShell: a chat or a widget opened above a group', () => {
   })
 })
 
-describe('MobileShell: the inbox page', () => {
-  it('MS-10 the inbox row opens the inbox page above a hidden top-level sidebar', () => {
+describe('MobileShell: the three views of the Chats tab', () => {
+  it('MV-2 the switch is touch-sized and wired to the store', () => {
     mount()
-    click(q('[data-mobile-inbox-row]')!)
-    expect(q('[data-mobile-inbox] [data-stub-inbox]')).not.toBeNull()
-    expect(scopeTitle()).toContain(en.inbox.title)
-    expect(q('[data-mobile-scope-back]')).not.toBeNull()
-    expect(mark(SCOPE)).toBe(true)
-    expect(drill().scope).toBeNull()
-    expect(sidebarWrapper().style.display).toBe('none')
-    expect(q('[data-mobile-new-chat]')).toBeNull()
-    expect(q('[data-mobile-calendar-toggle]')).toBeNull()
+    expect(lastSwitch().size).toBe('touch')
+    expect(lastSwitch().value).toBe('sessions')
+    expect(lastSwitch().onChange).toBe(useSidebarViewStore.getState().setView)
+    sw('calendar')
+    expect(useSidebarViewStore.getState().view).toBe('calendar')
+    expect(lastSwitch().value).toBe('calendar')
   })
 
-  it('MS-11 selecting the already active session from the inbox still pushes the chat page', async () => {
+  it.each<[number, number, number, boolean]>([
+    [0, 0, 0, false],
+    [0, 2, 2, false],
+    [1, 0, 1, true],
+    [2, 3, 5, true]
+  ])('MV-3 waiting %i, unread %i → count %i, alert %s', (waiting, unread, count, alert) => {
+    rec.sections = {
+      waiting: Array.from({ length: waiting }, (_, i) => ({ id: `w${i}` })),
+      unread: Array.from({ length: unread }, (_, i) => ({ id: `u${i}` })),
+      running: [{ id: 'r' }]
+    }
+    mount()
+    expect(lastSwitch().inboxCount).toBe(count)
+    expect(lastSwitch().inboxAlert).toBe(alert)
+  })
+
+  it('MV-4 the sessions sidebar gets only mode, onOpenSession and drill (the inbox card is gone)', () => {
+    mount()
+    expect(Object.keys(lastSidebar()).sort()).toEqual(['drill', 'mode', 'onOpenSession'])
+    expect(q('.sb-card')).toBeNull()
+    sw('inbox')
+    expect(Object.keys(lastSidebar()).sort()).toEqual(['drill', 'mode', 'onOpenSession'])
+  })
+
+  it('MV-5 the large title follows the view', () => {
+    mount()
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('sessions')
+    expect(viewTitle()!.querySelector('h1')!.textContent).toBe(en.mobile.tabSessions)
+    sw('inbox')
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('inbox')
+    expect(viewTitle()!.querySelector('h1')!.textContent).toBe(en.inbox.title)
+    sw('calendar')
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('calendar')
+    expect(viewTitle()!.querySelector('h1')!.textContent).toBe(en.panel.calendar)
+  })
+
+  it('MV-8 the sessions view from the start: neither the inbox nor the calendar is mounted', () => {
+    mount()
+    expect(inboxWrapper()).toBeNull()
+    expect(rec.inbox).toHaveLength(0)
+    expect(calendarWrapper()).toBeNull()
+    expect(rec.calendar).toHaveLength(0)
+    expect(shownViews()).toEqual(['sessions'])
+  })
+
+  it('MV-9 the inbox view: mounted in place of a hidden, still mounted sidebar; the list stays at its top level', () => {
+    mount()
+    sw('inbox')
+    expect(q('[data-mobile-inbox] [data-stub-inbox]')).not.toBeNull()
+    expect(inboxWrapper()!.style.display).toBe('')
+    expect(inboxWrapper()!.hasAttribute('data-mobile-scale')).toBe(true)
+    expect(sidebarWrapper().style.display).toBe('none')
+    expect(q('[data-stub-sidebar="sessions"]')).not.toBeNull()
+    expect(drill().scope).toBeNull()
+    expect(shownViews()).toEqual(['inbox'])
+  })
+
+  it('MV-10 selecting a view pushes no history entry and sets no scope mark', () => {
+    mount()
+    const push = vi.spyOn(window.history, 'pushState')
+    const length = window.history.length
+    sw('inbox')
+    sw('calendar')
+    sw('sessions')
+    expect(push).not.toHaveBeenCalled()
+    expect(window.history.length).toBe(length)
+    expect(mark(SCOPE)).toBe(false)
+    expect(window.history.state).toBeNull()
+  })
+
+  it('MV-11 the inbox view is not a pushed page: the tab bar, the switch and the new-chat button stay; no back button, no slots', () => {
+    mount()
+    sw('inbox')
+    expect(tabbar().style.display).toBe('')
+    expect(toolbarSlot().style.display).toBe('none')
+    expect(menuSlot()).toBeNull()
+    expect(drill().menuSlot ?? null).toBeNull()
+    expect(q('[data-mobile-scope-back]')).toBeNull()
+    expect(q('[data-mobile-scope-title]')).toBeNull()
+    expect(q('[data-sidebar-view-switch]')).not.toBeNull()
+    expect(q('[data-mobile-new-chat]')).not.toBeNull()
+  })
+
+  it('MV-12 back to the sessions view: the inbox stays mounted, hidden; the sidebar shows again', () => {
+    mount()
+    sw('inbox')
+    const wrapper = inboxWrapper()!
+    sw('sessions')
+    expect(inboxWrapper()).toBe(wrapper)
+    expect(wrapper.style.display).toBe('none')
+    expect(sidebarWrapper().style.display).toBe('')
+    expect(rec.inboxMounts).toBe(1)
+    sw('inbox')
+    expect(inboxWrapper()).toBe(wrapper)
+    expect(wrapper.style.display).toBe('')
+    expect(rec.inboxMounts).toBe(1)
+  })
+
+  it('MV-13 the calendar view: mounted on first use with mobile and onOpenSession, then kept mounted and hidden', () => {
+    mount()
+    sw('inbox')
+    sw('calendar')
+    expect(calendarWrapper()).not.toBeNull()
+    expect(rec.calendar.at(-1)!.mobile).toBe(true)
+    expect(typeof rec.calendar.at(-1)!.onOpenSession).toBe('function')
+    const wrapper = calendarWrapper()!
+    expect(wrapper.getAttribute('data-sidebar-density')).toBe('touch')
+    expect(wrapper.hasAttribute('data-mobile-scale')).toBe(true)
+    expect(wrapper.style.display).toBe('')
+    expect(sidebarWrapper().style.display).toBe('none')
+    expect(inboxWrapper()!.style.display).toBe('none')
+
+    sw('sessions')
+    expect(calendarWrapper()).toBe(wrapper)
+    expect(wrapper.style.display).toBe('none')
+    expect(rec.calendar.at(-1)!.mobile).toBe(true)
+    expect(rec.calendarMounts).toBe(1)
+  })
+
+  it('MV-14 exactly one of the three is displayed at every step', () => {
+    mount()
+    expect(shownViews()).toEqual(['sessions'])
+    sw('inbox')
+    expect(shownViews()).toEqual(['inbox'])
+    sw('calendar')
+    expect(shownViews()).toEqual(['calendar'])
+    sw('inbox')
+    expect(shownViews()).toEqual(['inbox'])
+    sw('sessions')
+    expect(shownViews()).toEqual(['sessions'])
+  })
+
+  it('MV-15 the inbox as the remembered view: shown on the first render', () => {
+    useSidebarViewStore.setState({ view: 'inbox' })
+    mount()
+    expect(shownViews()).toEqual(['inbox'])
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('inbox')
+    expect(searchInput()).toBeNull()
+    expect(calendarWrapper()).toBeNull()
+    expect(rec.calendar).toHaveLength(0)
+    expect(rec.inboxMounts).toBe(1)
+    expect(tabbar().style.display).toBe('')
+  })
+
+  it('MV-16 the calendar as the remembered view: mirror', () => {
+    useSidebarViewStore.setState({ view: 'calendar' })
+    mount()
+    expect(shownViews()).toEqual(['calendar'])
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('calendar')
+    expect(searchInput()).toBeNull()
+    expect(inboxWrapper()).toBeNull()
+    expect(rec.inbox).toHaveLength(0)
+    expect(rec.calendarMounts).toBe(1)
+  })
+
+  it('MV-17 / MV-19 selecting the already active session from the inbox still pushes the chat page, with no scope mark; back lands on the inbox view', async () => {
     rec.activeSessionId = 's1'
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     act(() => (lastInbox().onSelectSession as (id: string) => void)('s1'))
     expect(rec.setActive).toHaveBeenCalledWith('s1')
     expect(chatPage()).not.toBeNull()
-    expect(mark(CHAT)).toBe(true)
-    expect(mark(SCOPE)).toBe(true)
+    expect(window.history.state).toEqual({ [CHAT]: true })
+    expect(mark(SCOPE)).toBe(false)
+    expect(inboxWrapper()).not.toBeNull()
 
     await back()
     expect(chatPage()).toBeNull()
-    expect(q('[data-mobile-inbox]')).not.toBeNull()
-    expect(mark(SCOPE)).toBe(true)
+    expect(useSidebarViewStore.getState().view).toBe('inbox')
+    expect(shownViews()).toEqual(['inbox'])
+    expect(tabbar().style.display).toBe('')
+    expect(mark(CHAT)).toBe(false)
+    expect(rec.inboxMounts).toBe(1)
   })
 
-  it('MS-12 selecting another session from the inbox pushes the chat page exactly once', () => {
+  it('MV-18 selecting another session from the inbox pushes the chat page exactly once', () => {
     rec.activeSessionId = 's1'
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     const push = vi.spyOn(window.history, 'pushState')
     act(() => (lastInbox().onSelectSession as (id: string) => void)('s2'))
     expect(rec.activeSessionId).toBe('s2')
@@ -507,34 +745,99 @@ describe('MobileShell: the inbox page', () => {
     expect(push).toHaveBeenCalledTimes(1)
   })
 
-  it.each<[string, number, number, string | null, boolean]>([
-    ['one waiting and two unread', 1, 2, '3', true],
-    ['two unread only', 0, 2, '2', false],
-    ['nothing', 0, 0, null, false]
-  ])('MS-15 the inbox row with %s', (_label, waiting, unread, count, alert) => {
-    rec.sections = {
-      waiting: Array.from({ length: waiting }, (_, i) => ({ id: `w${i}` })),
-      unread: Array.from({ length: unread }, (_, i) => ({ id: `u${i}` })),
-      running: [{ id: 'r' }]
-    }
+  it('MV-20 a session opened from the calendar pushes the chat page; back lands on the calendar view', async () => {
     mount()
-    const row = q('[data-mobile-inbox-row]')!
-    expect(row.textContent).toContain(en.inbox.title)
-    expect(row.querySelector('[data-inbox-count]')?.textContent ?? null).toBe(count)
-    expect(row.querySelector('[data-inbox-alert]') !== null).toBe(alert)
+    sw('calendar')
+    expect(chatPage()).toBeNull()
+    expect(mark(CHAT)).toBe(false)
+
+    act(() => (rec.calendar.at(-1)!.onOpenSession as (id: string) => void)('s1'))
+    expect(window.history.state).toEqual({ [CHAT]: true })
+    expect(chatPage()).not.toBeNull()
+
+    await back()
+    expect(chatPage()).toBeNull()
+    expect(shownViews()).toEqual(['calendar'])
+    expect(rec.calendarMounts).toBe(1)
   })
 
-  it('MS-16 leaving the inbox unmounts it and shows the sidebar again', async () => {
+  it('MV-24 entering a group hides the switch, the new-chat button and the view title; back restores them with the same view', async () => {
     mount()
-    click(q('[data-mobile-inbox-row]')!)
-    expect(q('[data-mobile-inbox]')).not.toBeNull()
+    openScope('p1', 'Proj')
+    expect(q('[data-sidebar-view-switch]')).toBeNull()
+    expect(q('[data-mobile-new-chat]')).toBeNull()
+    expect(viewTitle()).toBeNull()
     await back()
-    expect(q('[data-mobile-inbox]')).toBeNull()
-    expect(sidebarWrapper().style.display).toBe('')
-    expect(q('[data-mobile-scope-back]')).toBeNull()
-    expect(mark(SCOPE)).toBe(false)
+    expect(q('[data-sidebar-view-switch]')!.getAttribute('data-sidebar-view-switch')).toBe(
+      'sessions'
+    )
+    expect(lastSwitch().value).toBe('sessions')
     expect(q('[data-mobile-new-chat]')).not.toBeNull()
-    expect(q('[data-mobile-calendar-toggle]')).not.toBeNull()
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('sessions')
+  })
+
+  it.each<['inbox' | 'calendar']>([['inbox'], ['calendar']])(
+    'MV-25 / MV-26 the view changed to %s from outside while a group is open: the group stays; leaving it shows that view',
+    async (view) => {
+      mount()
+      openScope('p1', 'Proj')
+      setViewOutside(view)
+      expect(shownViews()).toEqual(['sessions'])
+      expect(drill().scope).toBe('p1')
+      expect(scopeTitle()).toContain('Proj')
+      const other = view === 'inbox' ? inboxWrapper() : calendarWrapper()
+      expect(other).not.toBeNull()
+      expect(other!.style.display).toBe('none')
+      expect(tabbar().style.display).toBe('none')
+      expect(toolbarSlot().style.display).toBe('')
+
+      await back()
+      expect(drill().scope).toBeNull()
+      expect(shownViews()).toEqual([view])
+      expect(sidebarWrapper().style.display).toBe('none')
+      expect(tabbar().style.display).toBe('')
+      expect(toolbarSlot().style.display).toBe('none')
+      expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe(view)
+    }
+  )
+
+  it('MV-28 switching tabs keeps the view and the mounted panes', () => {
+    mount()
+    sw('calendar')
+    sw('inbox')
+    const inbox = inboxWrapper()
+    const calendar = calendarWrapper()
+    click(q('[data-mobile-tab="widgets"]')!)
+    expect(q('[data-mobile-page="sessions"]')!.style.display).toBe('none')
+    click(q('[data-mobile-tab="sessions"]')!)
+    expect(useSidebarViewStore.getState().view).toBe('inbox')
+    expect(shownViews()).toEqual(['inbox'])
+    expect(inboxWrapper()).toBe(inbox)
+    expect(calendarWrapper()).toBe(calendar)
+    expect(rec.inboxMounts).toBe(1)
+    expect(rec.calendarMounts).toBe(1)
+  })
+
+  it.each<['sessions' | 'inbox' | 'calendar']>([['sessions'], ['inbox'], ['calendar']])(
+    'MV-29 the new-chat button opens the location picker in the %s view',
+    (view) => {
+      mount()
+      if (view !== 'sessions') sw(view)
+      expect(document.querySelector('[data-mobile-new-chat-sheet]')).toBeNull()
+      click(q('[data-mobile-new-chat]')!)
+      expect(document.querySelector('[data-mobile-new-chat-sheet]')).not.toBeNull()
+      expect(document.querySelector('[data-mobile-new-chat-target]')).not.toBeNull()
+    }
+  )
+
+  it('MV-31 a scope mark left by a reload is removed on mount when the remembered view is the inbox', () => {
+    window.history.replaceState({ [SCOPE]: true }, '')
+    useSidebarViewStore.setState({ view: 'inbox' })
+    mount()
+    expect(window.history.state).toBeNull()
+    expect(drill().scope).toBeNull()
+    expect(q('[data-mobile-scope-back]')).toBeNull()
+    expect(shownViews()).toEqual(['inbox'])
   })
 })
 
@@ -582,22 +885,20 @@ describe('MobileShell: the slots and the tab bar', () => {
     expect(drill().toolbarSlot).toBe(slot)
   })
 
-  it('MS-19 the inbox page: no menu slot, the toolbar slot hidden, the tab bar hidden too (a pushed page); back at the top it returns', async () => {
-    mount()
-    click(q('[data-mobile-inbox-row]')!)
-    expect(q('[data-mobile-inbox]')).not.toBeNull()
-    expect(q('[data-mobile-scope-back]')).not.toBeNull()
-    expect(menuSlot()).toBeNull()
-    expect(drill().menuSlot ?? null).toBeNull()
-    // 工具栏的槽只给各组用；标签栏只有四个顶层页面有
-    expect(toolbarSlot().style.display).toBe('none')
-    expect(tabbar().style.display).toBe('none')
-
-    await back()
-    expect(q('[data-mobile-inbox]')).toBeNull()
-    expect(tabbar().style.display).toBe('')
-    expect(toolbarSlot().style.display).toBe('none')
-  })
+  it.each<['inbox' | 'calendar']>([['inbox'], ['calendar']])(
+    "MV-30 the slots in the %s view are the top level's: the same hidden toolbar slot, no menu slot",
+    (view) => {
+      mount()
+      const slot = toolbarSlot()
+      sw(view)
+      expect(toolbarSlot()).toBe(slot)
+      expect(slot.style.display).toBe('none')
+      expect(drill().toolbarSlot).toBe(slot)
+      expect(menuSlot()).toBeNull()
+      expect(drill().menuSlot ?? null).toBeNull()
+      expect(tabbar().style.display).toBe('')
+    }
+  )
 
   it("MS-18 a chat opened above a group keeps the group's bottom bar for the way back", async () => {
     mount()
@@ -608,14 +909,6 @@ describe('MobileShell: the slots and the tab bar', () => {
     expect(toolbarSlot().style.display).toBe('')
     expect(tabbar().style.display).toBe('none')
     expect(drill().menuSlot).toBe(menuSlot())
-  })
-
-  it('MS-21 the inbox row sits in a card', () => {
-    mount()
-    const card = q('[data-mobile-inbox-row]')!.closest('.sb-card')
-    expect(card).not.toBeNull()
-    expect(q('[data-stub-sidebar="sessions"]')!.contains(card)).toBe(true)
-    expect(card!.querySelectorAll('[data-mobile-inbox-row]')).toHaveLength(1)
   })
 })
 
@@ -652,27 +945,37 @@ describe('MobileShell: search', () => {
     expect(searchClear()).toBeNull()
   })
 
-  it('MS-20 there is no search box inside a group or on the inbox page; it is back at the top level', async () => {
+  it('MS-20 there is no search box inside a group; it is back at the top level', async () => {
     mount()
     openScope('p1', 'Proj')
     expect(searchInput()).toBeNull()
     await back()
     expect(searchInput()).not.toBeNull()
-
-    click(q('[data-mobile-inbox-row]')!)
-    expect(searchInput()).toBeNull()
-    await back()
-    expect(searchInput()).not.toBeNull()
   })
 
-  it('MS-20 there is no search box in the calendar view', () => {
+  it('MV-6 the search box belongs to the sessions view only', () => {
     mount()
-    click(q('[data-mobile-calendar-toggle]')!)
+    expect(searchInput()).not.toBeNull()
+    sw('inbox')
+    expect(searchInput()).toBeNull()
+    sw('calendar')
     expect(searchInput()).toBeNull()
     expect(sidebarWrapper().style.display).toBe('none')
-    click(q('[data-mobile-calendar-toggle]')!)
+    sw('sessions')
     expect(searchInput()).not.toBeNull()
     expect(sidebarWrapper().style.display).toBe('')
+  })
+
+  it('MV-7 a query typed before switching away is still there on return (and stays in drill.query meanwhile)', () => {
+    mount()
+    typeInto(searchInput()!, 'foo')
+    sw('inbox')
+    expect(searchInput()).toBeNull()
+    expect(drill().query).toBe('foo')
+    sw('sessions')
+    expect(searchInput()!.value).toBe('foo')
+    expect(drill().query).toBe('foo')
+    expect(searchClear()).not.toBeNull()
   })
 })
 
@@ -947,11 +1250,11 @@ describe('MobileShell: the library tab', () => {
     expect(toolbarSlot().style.display).toBe('none')
   })
 
-  it('MS-33 the push keeps the marks already there: a library page above an open inbox page', async () => {
+  it('MS-33 the push keeps the marks already there: a library page above an open group', async () => {
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    openScope('p1', 'Proj')
     expect(mark(SCOPE)).toBe(true)
-    // 收件箱页上标签栏是收起的（点不到）；这里直接切，只为在历史上留着会话页那一层的记号
+    // 组里标签栏是收起的（点不到）；这里直接切，只为在历史上留着会话页那一层的记号
     expect(tabbar().style.display).toBe('none')
     toTab('library')
     expect(tabbar().style.display).toBe('')
@@ -966,8 +1269,26 @@ describe('MobileShell: the library tab', () => {
     expect(tabbar().style.display).toBe('')
 
     toTab('sessions')
-    expect(q('[data-mobile-inbox]')).not.toBeNull()
+    expect(drill().scope).toBe('p1')
     expect(tabbar().style.display).toBe('none')
+  })
+
+  it('MV-27 a library page above the inbox view: no scope mark; back on the Chats tab the inbox view is still shown', async () => {
+    mount()
+    sw('inbox')
+    toTab('library')
+    openLibrary('agents', 'Agents')
+    expect(state()).toEqual({ [LIB]: 1 })
+    expect(mark(SCOPE)).toBe(false)
+    expect(tabbar().style.display).toBe('none')
+
+    await back()
+    expect(libDrill().scope).toBeNull()
+    expect(tabbar().style.display).toBe('')
+
+    toTab('sessions')
+    expect(shownViews()).toEqual(['inbox'])
+    expect(tabbar().style.display).toBe('')
   })
 
   it('MS-34 a second level (a knowledge base): two entries marked 1 then 2; the back button names the level below', () => {
@@ -1291,7 +1612,7 @@ describe('MobileShell: the settings tab', () => {
   })
 })
 
-/** 跟踪项在收件箱里（资料库不再有它的入口）：收件箱页拿到的 `tracking` 就是 useTrackingAdapter 那一份 */
+/** 跟踪项在收件箱里（资料库不再有它的入口）：收件箱视图拿到的 `tracking` 就是 useTrackingAdapter 那一份 */
 describe('MobileShell: tracking in the inbox', () => {
   type Tracking = Record<string, (...args: unknown[]) => unknown>
   const tracking = (): Tracking => lastInbox().tracking as Tracking
@@ -1305,30 +1626,35 @@ describe('MobileShell: tracking in the inbox', () => {
     delete (window as unknown as { api?: unknown }).api
   })
 
-  it('MS-55 the inbox page gets a tracking adapter beside onSelectSession', () => {
+  it('MV-21 the inbox view gets a tracking adapter beside onSelectSession', () => {
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     for (const name of ['list', 'open', 'openFolder', 'revealFile', 'remove', 'setStatus']) {
       expect(typeof tracking()[name], name).toBe('function')
     }
     expect(typeof lastInbox().onSelectSession).toBe('function')
+    expect(Object.keys(lastInbox()).sort()).toEqual(['onSelectSession', 'tracking'])
   })
 
-  it('MS-56 the tracking adapter is the same object after leaving and re-entering the inbox', async () => {
+  it('MV-22 the tracking adapter and onSelectSession keep their identity across view switches', () => {
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     const first = tracking()
     const select = lastInbox().onSelectSession
-    await back()
+    sw('sessions')
     typeInto(searchInput()!, 'x')
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     expect(tracking()).toBe(first)
     expect(lastInbox().onSelectSession).toBe(select)
+    for (const props of rec.inbox) {
+      expect(props.tracking).toBe(first)
+      expect(props.onSelectSession).toBe(select)
+    }
   })
 
-  it('MS-57 opening a tracked item opens its note, selects it and pushes the chat page above the inbox', async () => {
+  it('MV-23 opening a tracked item opens its note, selects it and pushes the chat page above the inbox view', async () => {
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     await act(async () => {
       await tracking().open('t.md', 'T')
     })
@@ -1336,30 +1662,31 @@ describe('MobileShell: tracking in the inbox', () => {
     expect(rec.setActive).toHaveBeenCalledWith('t1')
     expect(chatPage()).not.toBeNull()
     expect(mark(CHAT)).toBe(true)
-    expect(mark(SCOPE)).toBe(true)
+    expect(mark(SCOPE)).toBe(false)
 
     await back()
     expect(chatPage()).toBeNull()
-    expect(q('[data-mobile-inbox]')).not.toBeNull()
+    expect(shownViews()).toEqual(['inbox'])
   })
 
-  it('MS-57 the chat page is pushed even when that note is already the active session', async () => {
+  it('MV-23 the chat page is pushed even when that note is already the active session', async () => {
     rec.activeSessionId = 't1'
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     const push = vi.spyOn(window.history, 'pushState')
     await act(async () => {
       await tracking().open('t.md', 'T')
     })
     expect(chatPage()).not.toBeNull()
     expect(pushesWith(push, CHAT)).toBe(1)
-    expect(mark(SCOPE)).toBe(true)
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(mark(SCOPE)).toBe(false)
   })
 
-  it('MS-57 a note that is no longer there opens nothing', async () => {
+  it('MV-23 a note that is no longer there opens nothing', async () => {
     openNote.mockRejectedValueOnce(new Error('gone'))
     mount()
-    click(q('[data-mobile-inbox-row]')!)
+    sw('inbox')
     await act(async () => {
       await tracking().open('gone.md', 'Gone')
     })
@@ -1369,47 +1696,9 @@ describe('MobileShell: tracking in the inbox', () => {
   })
 })
 
-/** 手机布局的日历与小组件页：外壳把 `mobile` 交给两块面板（它们各自换成手机的样子） */
-describe('MobileShell: the calendar and the Widgets tab get the phone layout', () => {
+/** 手机布局的小组件页：外壳把 `mobile` 交给面板（日历那一块见上面的 MV-13 / MV-20） */
+describe('MobileShell: the Widgets tab gets the phone layout', () => {
   const toTab = (key: string): void => click(q(`[data-mobile-tab="${key}"]`)!)
-  const calendarStub = (): HTMLElement | null => q('[data-stub-calendar]')
-  const lastCalendar = (): Record<string, unknown> => rec.calendar.at(-1)!
-
-  it('MS-59 the calendar is mounted on its first toggle, gets mobile and onOpenSession, and stays mounted when toggled back', () => {
-    mount()
-    expect(rec.calendar).toHaveLength(0)
-    expect(calendarStub()).toBeNull()
-
-    click(q('[data-mobile-calendar-toggle]')!)
-    expect(calendarStub()).not.toBeNull()
-    expect(lastCalendar().mobile).toBe(true)
-    expect(typeof lastCalendar().onOpenSession).toBe('function')
-    const wrapper = calendarStub()!.parentElement!
-    expect(wrapper.getAttribute('data-sidebar-density')).toBe('touch')
-    expect(wrapper.hasAttribute('data-mobile-scale')).toBe(true)
-    expect(wrapper.style.display).toBe('')
-
-    click(q('[data-mobile-calendar-toggle]')!)
-    expect(calendarStub()).not.toBeNull()
-    expect(calendarStub()!.parentElement!.style.display).toBe('none')
-    expect(lastCalendar().mobile).toBe(true)
-  })
-
-  it('MS-60 opening a session from the calendar pushes the chat page', async () => {
-    mount()
-    click(q('[data-mobile-calendar-toggle]')!)
-    expect(chatPage()).toBeNull()
-    expect(mark(CHAT)).toBe(false)
-
-    act(() => (lastCalendar().onOpenSession as (id: string) => void)('s1'))
-    expect(mark(CHAT)).toBe(true)
-    expect(chatPage()).not.toBeNull()
-
-    await back()
-    expect(chatPage()).toBeNull()
-    // 退回来还是日历那种看法
-    expect(calendarStub()!.parentElement!.style.display).toBe('')
-  })
 
   it('MS-61 the Widgets tab renders WidgetPanel with mobile', () => {
     mount()

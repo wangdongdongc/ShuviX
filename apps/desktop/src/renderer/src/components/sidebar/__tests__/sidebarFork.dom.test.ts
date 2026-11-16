@@ -47,7 +47,10 @@ vi.mock('@shuvix/app-shell', async () => {
       )
     },
     BotGroup: group(),
-    InboxRow: group(),
+    // 侧栏的三种视图（会话 / 收件箱 / 日历）：这里只看 fork，切换与两块面板都是空壳
+    SidebarViewSwitch: () => null,
+    InboxPanel: () => null,
+    useInboxSections: () => ({ waiting: [], unread: [], running: [] }),
     TrackingGroup: group(),
     AgentGroup: group(),
     PolicyGroup: group(),
@@ -90,10 +93,13 @@ vi.mock('@shuvix/chat-ui', async () => {
   }
 })
 
-// 右侧面板的 store 牵着 app-shell 的 usePanelStore（这里整份换成了替身）：侧栏只用它打开收件箱那一格
-vi.mock('../../../stores/browserStore', () => ({
-  useBrowserStore: { getState: () => ({ open: () => {}, setActiveTab: () => {} }) }
+// 视图 store 牵着 app-shell 的 toSidebarView（这里整份换成了替身）；日历面板与跟踪项 adapter 这里用不到
+vi.mock('../../../stores/sidebarViewStore', () => ({
+  useSidebarViewStore: (selector: (st: Props) => unknown) =>
+    selector({ view: 'sessions', setView: () => {} })
 }))
+vi.mock('../../../host/useTrackingAdapter', () => ({ useTrackingAdapter: () => ({}) }))
+vi.mock('../../browser/CalendarPanel', () => ({ CalendarPanel: () => null }))
 vi.mock('../ProjectEditDialog', () => ({ ProjectEditDialog: () => null }))
 vi.mock('../SkillDirDialog', () => ({ SkillDirDialog: () => null }))
 

@@ -22,11 +22,14 @@
  *   DS-6 换了回调重渲染 → 用新的；adapter 对象引用不变
  *   DS-7 桌面 bots 能力：newSession 的 session.create 形状、archive 先离开那份文件的笔记本、pickFolderAsProject、
  *        deleteSessions 的确认流程（详见文件末尾那一组）
- *   INT-7 「收件箱」那一行（只在 full）：onOpen = 右侧面板切到 inbox 并打开，不碰选中的会话；sessions / library 不画它
+ *   DS-V1..19 侧栏的三种视图（2026-11-16，只在 full）：顶上那一行是视图切换（条数 = 等你回答 + 新回复，有在等的才带点）；
+ *        切到收件箱 / 日历 → 会话列表藏起来（`hideList`），那一种视图头一次用到才挂、之后一直挂着只切显示；
+ *        sessions / library 没有切换、没有这两块。原先侧栏里的「收件箱」那一行（开右侧面板）没有了
  *
- * 整个 `@shuvix/app-shell` 换成记 props 的替身（共享 Sidebar 与六个分组、useProjects、useSessionDelete、
- * SessionConfigDialog）；`@shuvix/chat-ui` 只给按 selector 读的 store（setActiveSessionId 是 spy）与 getChatApi；
- * 侧栏自己的三个弹窗（项目编辑 / 技能目录 / 确认框）换成替身；`window.api` 只铺用到的几项。
+ * 整个 `@shuvix/app-shell` 换成记 props 的替身（共享 Sidebar 与六个分组、视图切换、收件箱面板、useInboxSections、
+ * useProjects、useSessionDelete、SessionConfigDialog）；日历面板、跟踪项 adapter、视图 store 也是替身（store 的 hook
+ * 不会让组件重渲染，改了视图就再 `render()` 一次）；`@shuvix/chat-ui` 只给按 selector 读的 store（setActiveSessionId
+ * 是 spy）与 getChatApi；侧栏自己的三个弹窗（项目编辑 / 技能目录 / 确认框）换成替身；`window.api` 只铺用到的几项。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { act, createElement } from 'react'
@@ -58,11 +61,22 @@ const rec = vi.hoisted(() => ({
   },
   /** getChatApi() 交回的那份（DS-7 换成可数的；缺省与之前一样） */
   chatApi: null as unknown as Record<string, Record<string, (...args: never[]) => unknown>>,
-  /** 「收件箱」那一行的替身收到的 props */
-  inboxRow: [] as Array<Record<string, unknown>>,
-  /** 右侧面板 store 的两个动作（侧栏只用它们打开收件箱） */
-  panelOpen: null as unknown as Mock<() => void>,
-  panelSetActiveTab: null as unknown as Mock<(tab: string) => void>
+  /** 视图切换的替身每次渲染收到的 props */
+  viewSwitch: [] as Array<Record<string, unknown>>,
+  /** 收件箱面板 / 日历面板的替身每次渲染收到的 props，与各自挂上了几次 */
+  inboxPanel: [] as Array<Record<string, unknown>>,
+  calendarPanel: [] as Array<Record<string, unknown>>,
+  inboxMounts: 0,
+  calendarMounts: 0,
+  /** useInboxSections 的替身交回的三节，与每次调用收到的参数 */
+  sections: { waiting: [] as unknown[], unread: [] as unknown[], running: [] as unknown[] },
+  sectionsArgs: [] as unknown[][],
+  /** 视图 store 的替身 */
+  view: 'sessions' as string,
+  setView: null as unknown as Mock<(view: string) => void>,
+  /** useTrackingAdapter 的替身：收到的 select 与交回的那一份 */
+  trackingSelects: [] as unknown[],
+  trackingAdapter: { tracking: 'adapter' } as Record<string, unknown>
 }))
 
 vi.mock('@shuvix/app-shell', async () => {
@@ -84,14 +98,28 @@ vi.mock('@shuvix/app-shell', async () => {
       return h(
         'div',
         { 'data-stub-shared': '' },
+        h(Fragment, null, props.header as never),
         h(Fragment, null, props.groupsPrepend as never),
+        h(Fragment, null, props.extraViews as never),
         h(Fragment, null, props.overlays as never)
       )
     },
-    InboxRow: (props: Record<string, unknown>) => {
-      rec.inboxRow.push(props)
-      return h('div', { 'data-stub-inbox-row': '' })
+    SidebarViewSwitch: (props: Record<string, unknown>) => {
+      rec.viewSwitch.push(props)
+      return h('div', { 'data-stub-view-switch': '' })
     },
+    InboxPanel: (props: Record<string, unknown>) => {
+      rec.inboxPanel.push(props)
+      useEffect(() => {
+        rec.inboxMounts++
+      }, [])
+      return h('div', { 'data-stub-inbox-panel': '' })
+    },
+    useInboxSections: (...args: unknown[]) => {
+      rec.sectionsArgs.push(args)
+      return rec.sections
+    },
+    toSidebarView: (value: unknown) => value,
     TrackingGroup: group('Tracking'),
     AgentGroup: group('Agent'),
     PolicyGroup: group('Policy'),
@@ -135,14 +163,31 @@ vi.mock('@shuvix/chat-ui', async () => {
   }
 })
 
-// 右侧面板的 store 牵着 app-shell 的 usePanelStore（这里整份换成了替身）：侧栏只用它打开收件箱那一格
-vi.mock('../../../stores/browserStore', async () => {
+vi.mock('../../../stores/sidebarViewStore', async () => {
   const { vi: v } = await import('vitest')
-  rec.panelOpen = v.fn()
-  rec.panelSetActiveTab = v.fn()
+  rec.setView = v.fn((view: string) => {
+    rec.view = view
+  })
   return {
-    useBrowserStore: {
-      getState: () => ({ open: rec.panelOpen, setActiveTab: rec.panelSetActiveTab })
+    useSidebarViewStore: (selector: (st: Props) => unknown) =>
+      selector({ view: rec.view, setView: rec.setView })
+  }
+})
+vi.mock('../../../host/useTrackingAdapter', () => ({
+  useTrackingAdapter: (select: unknown) => {
+    rec.trackingSelects.push(select)
+    return rec.trackingAdapter
+  }
+}))
+vi.mock('../../browser/CalendarPanel', async () => {
+  const { createElement: h, useEffect } = await import('react')
+  return {
+    CalendarPanel: (props: Record<string, unknown>) => {
+      rec.calendarPanel.push(props)
+      useEffect(() => {
+        rec.calendarMounts++
+      }, [])
+      return h('div', { 'data-stub-calendar-panel': '' })
     }
   }
 })
@@ -241,9 +286,16 @@ beforeEach(() => {
   rec.state.sessions = []
   rec.state.activeSessionId = null
   rec.storeSet.mockClear()
-  rec.inboxRow.length = 0
-  rec.panelOpen?.mockClear()
-  rec.panelSetActiveTab?.mockClear()
+  rec.viewSwitch.length = 0
+  rec.inboxPanel.length = 0
+  rec.calendarPanel.length = 0
+  rec.inboxMounts = 0
+  rec.calendarMounts = 0
+  rec.sections = { waiting: [], unread: [], running: [] }
+  rec.sectionsArgs.length = 0
+  rec.view = 'sessions'
+  rec.setView.mockClear()
+  rec.trackingSelects.length = 0
   api.bot.openNote.mockReset()
   api.bot.deleteByFile.mockReset()
   api.bot.archive.mockReset().mockResolvedValue({ success: true })
@@ -369,31 +421,211 @@ describe('desktop Sidebar modes', () => {
   })
 })
 
-describe('INT-7 the inbox row', () => {
-  it('INT-7 full: the row opens the right panel on the inbox tab and leaves the selected session alone', () => {
+/** 把视图 store 换到 `view` 并重渲染（替身的 hook 不会自己让组件重渲染） */
+function switchTo(view: string, props: SidebarProps = {}): void {
+  rec.view = view
+  render(props)
+}
+const lastSwitch = (): Record<string, unknown> => rec.viewSwitch.at(-1)!
+const pane = (key: string): HTMLElement | null =>
+  container.querySelector<HTMLElement>(`[data-sidebar-view-pane="${key}"]`)
+const panes = (): string[] =>
+  [...container.querySelectorAll('[data-sidebar-view-pane]')].map(
+    (el) => el.getAttribute('data-sidebar-view-pane')!
+  )
+
+describe('DS-V the three sidebar views (full only)', () => {
+  it('DS-V1 full, sessions view: the header is the view switch wired to the store; the list shows', () => {
     render()
-    expect(container.querySelector('[data-stub-inbox-row]')).not.toBeNull()
-    const onOpen = rec.inboxRow.at(-1)!.onOpen as () => void
-    expect(typeof onOpen).toBe('function')
-    act(() => onOpen())
-    expect(rec.panelSetActiveTab.mock.calls).toEqual([['inbox']])
-    expect(rec.panelOpen).toHaveBeenCalledTimes(1)
-    expect(rec.storeSet).not.toHaveBeenCalled()
+    expect(container.querySelectorAll('[data-stub-view-switch]')).toHaveLength(1)
+    const header = lastShared().header as { props: Record<string, unknown> }
+    expect(header.props.value).toBe('sessions')
+    expect(lastSwitch().value).toBe('sessions')
+    expect(lastSwitch().onChange).toBe(rec.setView)
+    expect(lastSwitch().size).toBeUndefined()
+    expect(lastShared().hideList).toBe(false)
+    expect(lastShared().extraViews).toBeDefined()
   })
 
-  it.each<['sessions' | 'library']>([['sessions'], ['library']])(
-    'INT-7 %s: no inbox row',
-    (mode) => {
-      render({ mode })
-      expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
-      expect(rec.inboxRow).toHaveLength(0)
+  it.each<[number, number, number, number, boolean]>([
+    [0, 0, 2, 0, false],
+    [0, 3, 0, 3, false],
+    [2, 0, 0, 2, true],
+    [1, 4, 5, 5, true]
+  ])(
+    'DS-V2 waiting %i, unread %i, running %i → count %i, alert %s',
+    (waiting, unread, running, count, alert) => {
+      const rows = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ id: i }))
+      rec.sections = { waiting: rows(waiting), unread: rows(unread), running: rows(running) }
+      render()
+      expect(lastSwitch().inboxCount).toBe(count)
+      expect(lastSwitch().inboxAlert).toBe(alert)
     }
   )
 
-  it('INT-7 / DS-17 library with a libraryDrill: still no inbox row', () => {
+  it('DS-V3 the count is taken without a held row', () => {
+    render()
+    expect(rec.sectionsArgs.length).toBeGreaterThan(0)
+    for (const args of rec.sectionsArgs) expect(args[0]).toBeUndefined()
+  })
+
+  it.each([['inbox'], ['calendar']])('DS-V4 full, %s view: the list is hidden', (view) => {
+    rec.view = view
+    render()
+    expect(lastShared().hideList).toBe(true)
+    expect(lastSwitch().value).toBe(view)
+  })
+
+  it('DS-V5 the switch changes only the view', () => {
+    render()
+    act(() => (lastSwitch().onChange as (v: string) => void)('calendar'))
+    expect(rec.setView.mock.calls).toEqual([['calendar']])
+    expect(rec.storeSet).not.toHaveBeenCalled()
+  })
+
+  it('DS-V6 full, sessions view from the start: neither pane is mounted', () => {
+    render()
+    expect(panes()).toEqual([])
+    expect(rec.inboxPanel).toHaveLength(0)
+    expect(rec.calendarPanel).toHaveLength(0)
+  })
+
+  it('DS-V7..11 a pane mounts on first use and then stays, only its display changes', () => {
+    render()
+    switchTo('inbox')
+    // V7
+    expect(panes()).toEqual(['inbox'])
+    const inboxPane = pane('inbox')!
+    expect(inboxPane.style.display).toBe('')
+    expect(inboxPane.querySelector('[data-stub-inbox-panel]')).not.toBeNull()
+    expect(rec.inboxPanel.at(-1)!.tracking).toBe(rec.trackingAdapter)
+    expect('onSelectSession' in rec.inboxPanel.at(-1)!).toBe(false)
+    expect(Object.keys(rec.inboxPanel.at(-1)!)).toEqual(['tracking'])
+    expect(rec.calendarPanel).toHaveLength(0)
+    // V8
+    expect(rec.trackingSelects.length).toBeGreaterThan(0)
+    for (const select of rec.trackingSelects) expect(select).toBe(rec.storeSet)
+
+    // V9
+    switchTo('calendar')
+    expect(panes()).toEqual(['inbox', 'calendar'])
+    expect(pane('inbox')!.style.display).toBe('none')
+    expect(pane('calendar')!.style.display).toBe('')
+    expect(pane('calendar')!.querySelector('[data-stub-calendar-panel]')).not.toBeNull()
+    for (const props of rec.calendarPanel) {
+      expect('mobile' in props).toBe(false)
+      expect('onOpenSession' in props).toBe(false)
+    }
+    expect(lastShared().hideList).toBe(true)
+
+    // V10
+    switchTo('sessions')
+    expect(panes()).toEqual(['inbox', 'calendar'])
+    expect(pane('inbox')!.style.display).toBe('none')
+    expect(pane('calendar')!.style.display).toBe('none')
+    expect(rec.inboxMounts).toBe(1)
+    expect(rec.calendarMounts).toBe(1)
+    expect(lastShared().hideList).toBe(false)
+
+    // V11
+    switchTo('inbox')
+    expect(pane('inbox')).toBe(inboxPane)
+    expect(inboxPane.style.display).toBe('')
+    expect(pane('calendar')!.style.display).toBe('none')
+    expect(rec.inboxMounts).toBe(1)
+    expect(rec.calendarMounts).toBe(1)
+    // V19：交给收件箱的 adapter 从头到尾是同一个
+    for (const props of rec.inboxPanel) expect(props.tracking).toBe(rec.trackingAdapter)
+  })
+
+  it('DS-V12 the inbox as the initial view: mounted and shown on the first render', () => {
+    rec.view = 'inbox'
+    render()
+    expect(rec.shared[0].hideList).toBe(true)
+    expect(panes()).toEqual(['inbox'])
+    expect(pane('inbox')!.style.display).toBe('')
+    expect(rec.calendarPanel).toHaveLength(0)
+    expect(rec.inboxMounts).toBe(1)
+  })
+
+  it('DS-V13 the calendar as the initial view: mirror', () => {
+    rec.view = 'calendar'
+    render()
+    expect(rec.shared[0].hideList).toBe(true)
+    expect(panes()).toEqual(['calendar'])
+    expect(pane('calendar')!.style.display).toBe('')
+    expect(rec.inboxPanel).toHaveLength(0)
+    expect(rec.calendarMounts).toBe(1)
+  })
+
+  it('DS-V14 the panes are inbox then calendar whichever was opened first', () => {
+    render()
+    switchTo('calendar')
+    expect(panes()).toEqual(['calendar'])
+    switchTo('inbox')
+    expect(panes()).toEqual(['inbox', 'calendar'])
+    expect(pane('inbox')!.style.display).toBe('')
+    expect(pane('calendar')!.style.display).toBe('none')
+    expect(rec.calendarMounts).toBe(1)
+  })
+
+  it('DS-V15 full: no inbox row — the Library heading is followed directly by the five groups', () => {
+    render()
+    const heading = container.querySelector('[data-sidebar-section="library"]')!
+    expect(heading.textContent).toBe(en.sidebar.library)
+    const following: string[] = []
+    for (let el = heading.nextElementSibling; el; el = el.nextElementSibling) {
+      if (!el.hasAttribute('data-stub-group')) break
+      following.push(el.getAttribute('data-stub-group')!)
+    }
+    expect(following).toEqual(GROUP_ORDER)
+    expect(heading.nextElementSibling!.getAttribute('data-stub-group')).toBe('Agent')
+    expect(container.querySelector('[data-inbox-row]')).toBeNull()
+  })
+
+  it('DS-V16 sessions with the store on inbox: no switch, no panes, the list shows', () => {
+    rec.view = 'inbox'
+    render({ mode: 'sessions' })
+    expect(lastShared().header).toBeUndefined()
+    expect(lastShared().extraViews).toBeUndefined()
+    expect(lastShared().hideList).toBe(false)
+    expect(lastShared().groupsPrepend).toBeUndefined()
+    expect(panes()).toEqual([])
+    expect(container.querySelector('[data-stub-view-switch]')).toBeNull()
+    expect(rec.inboxPanel).toHaveLength(0)
+    expect(rec.calendarPanel).toHaveLength(0)
+  })
+
+  it('DS-V16 library with the store on inbox: no shared sidebar, no switch, no panes', () => {
+    rec.view = 'inbox'
+    render({ mode: 'library' })
+    expect(rec.shared).toHaveLength(0)
+    expect(panes()).toEqual([])
+    expect(container.querySelector('[data-stub-view-switch]')).toBeNull()
+    expect(rec.inboxPanel).toHaveLength(0)
+    expect(rec.calendarPanel).toHaveLength(0)
+  })
+
+  it('DS-V17 library with a libraryDrill and the store on calendar: the same', () => {
+    rec.view = 'calendar'
     render({ mode: 'library', libraryDrill: { scope: null, onOpen: vi.fn() } })
-    expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
-    expect(rec.inboxRow).toHaveLength(0)
+    expect(rec.shared).toHaveLength(0)
+    expect(panes()).toEqual([])
+    expect(container.querySelector('[data-stub-view-switch]')).toBeNull()
+    expect(rec.inboxPanel).toHaveLength(0)
+    expect(rec.calendarPanel).toHaveLength(0)
+  })
+
+  it('DS-V18 an unrelated prop change does not remount the pane', () => {
+    rec.view = 'inbox'
+    render({ onOpenSession: vi.fn() })
+    const before = pane('inbox')
+    const adaptersBefore = GROUP_ORDER.map(lastAdapter)
+    render({ onOpenSession: vi.fn() })
+    expect(pane('inbox')).toBe(before)
+    expect(rec.inboxMounts).toBe(1)
+    GROUP_ORDER.forEach((name, i) => expect(lastAdapter(name), name).toBe(adaptersBefore[i]))
+    expect(rec.inboxPanel.at(-1)!.tracking).toBe(rec.trackingAdapter)
   })
 })
 
@@ -548,25 +780,21 @@ describe('DS-7 the desktop bots adapter', () => {
 })
 
 /**
- * 两层导航（手机布局的会话页）：`drill` 与 `sessionsPrepend` 只在 `mode="sessions"` 时交给共享侧栏
- * （`sessionsPrepend` 画在分组上面 —— 「收件箱」那一行）；`full`（桌面）与 `library` 都不认它们。
+ * 两层导航（手机布局的会话页）：`drill` 只在 `mode="sessions"` 时交给共享侧栏；`full`（桌面）与 `library` 都不认它。
+ * 分组上面不再有前置的内容（原先的 `sessionsPrepend` —— 「收件箱」那一行 —— 2026-11-16 没有了）。
  *
- *   DS-8 sessions：drill 原样交下去，sessionsPrepend 画在共享侧栏里；没有桌面那行收件箱、没有资料库分组
- *   DS-9 full：两个都不认，与 DS-1 一样
- *   DS-10 sessions 不给这两个：与 DS-2 一样
- *   DS-11 library：没有共享侧栏，也不画 sessionsPrepend
+ *   DS-8 sessions：drill 原样交下去；分组上面什么都不放、没有视图切换、没有资料库分组
+ *   DS-9 full：不认 drill，与 DS-1 一样
+ *   DS-10 sessions 不给 drill：与 DS-2 一样
+ *   DS-11 library：没有共享侧栏
  */
-describe('drill and sessionsPrepend (phone sessions page)', () => {
-  const marker = (): React.ReactNode => createElement('div', { 'data-sp': '' })
-
-  it('DS-8 sessions: drill reaches the shared sidebar as is and sessionsPrepend is drawn inside it', () => {
+describe('drill (phone sessions page)', () => {
+  it('DS-8 sessions: drill reaches the shared sidebar as is; nothing is prepended', () => {
     const drill = { scope: 'p1', onOpen: vi.fn() }
-    render({ mode: 'sessions', drill, sessionsPrepend: marker() })
+    render({ mode: 'sessions', drill })
     expect(lastShared().drill).toBe(drill)
-    const shared = container.querySelector('[data-stub-shared]')!
-    expect(shared.querySelector('[data-sp]')).not.toBeNull()
-    expect(container.querySelectorAll('[data-sp]')).toHaveLength(1)
-    expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
+    expect(lastShared().groupsPrepend).toBeUndefined()
+    expect(container.querySelector('[data-stub-view-switch]')).toBeNull()
     expect(stubGroups()).toEqual([])
     expect(lastShared().caps).toEqual({})
     expect(lastShared().hideFooter).toBe(true)
@@ -578,43 +806,35 @@ describe('drill and sessionsPrepend (phone sessions page)', () => {
     expect(lastShared().drill).toBe(drill)
   })
 
-  it('DS-9 full: neither prop is used; the inbox row and the five groups are as on the desktop', () => {
+  it('DS-9 full: drill is not used; no inbox row; the five groups are as on the desktop', () => {
     const drill = { scope: 'p1', onOpen: vi.fn() }
-    render({ drill, sessionsPrepend: marker() })
+    render({ drill })
     expect(lastShared().drill).toBeUndefined()
-    expect(container.querySelector('[data-sp]')).toBeNull()
-    expect(container.querySelector('[data-stub-inbox-row]')).not.toBeNull()
+    expect(container.querySelector('[data-inbox-row]')).toBeNull()
     expect(stubGroups()).toEqual(GROUP_ORDER)
     expect(lastShared().caps).toEqual({ windowDrag: true, pin: true })
     expect(lastShared().hideFooter).toBe(false)
   })
 
-  it('DS-10 sessions without the new props: no drill and nothing prepended', () => {
+  it('DS-10 sessions without drill: no drill and nothing prepended', () => {
     render({ mode: 'sessions' })
     expect(lastShared().drill).toBeUndefined()
     expect(lastShared().groupsPrepend).toBeUndefined()
   })
 
-  it('DS-11 library: no shared sidebar and no sessionsPrepend', () => {
+  it('DS-11 library: no shared sidebar', () => {
     const drill = { scope: 'p1', onOpen: vi.fn() }
-    render({ mode: 'library', drill, sessionsPrepend: marker() })
+    render({ mode: 'library', drill })
     expect(rec.shared).toHaveLength(0)
     expect(container.querySelector('[data-stub-shared]')).toBeNull()
-    expect(container.querySelector('[data-sp]')).toBeNull()
   })
 
-  it('DS-17 library with a libraryDrill: still no shared sidebar and no sessionsPrepend', () => {
+  it('DS-17 library with a libraryDrill: still no shared sidebar', () => {
     const drill = { scope: 'p1', onOpen: vi.fn() }
-    render({
-      mode: 'library',
-      drill,
-      sessionsPrepend: marker(),
-      libraryDrill: { scope: null, onOpen: vi.fn() }
-    })
+    render({ mode: 'library', drill, libraryDrill: { scope: null, onOpen: vi.fn() } })
     expect(rec.shared).toHaveLength(0)
     expect(container.querySelector('[data-stub-shared]')).toBeNull()
-    expect(container.querySelector('[data-sp]')).toBeNull()
-    expect(container.querySelector('[data-stub-inbox-row]')).toBeNull()
+    expect(container.querySelector('[data-stub-view-switch]')).toBeNull()
   })
 })
 
@@ -696,7 +916,7 @@ describe('libraryDrill (phone library page)', () => {
     render({ libraryDrill })
     expect(stubGroups()).toEqual(GROUP_ORDER)
     for (const name of GROUP_ORDER) expect(lastDrill(name), name).toBeUndefined()
-    expect(container.querySelector('[data-stub-inbox-row]')).not.toBeNull()
+    expect(container.querySelector('[data-stub-view-switch]')).not.toBeNull()
     expect(container.querySelector('[data-library-card]')).toBeNull()
     expect(container.querySelector('[data-mobile-list]')).toBeNull()
 

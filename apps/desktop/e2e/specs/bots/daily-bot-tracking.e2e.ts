@@ -184,7 +184,7 @@ describe('收件箱的「跟踪中」一节', () => {
   it('DT-E4 桌面侧栏没有「跟踪项」分组；目录还没有时收件箱里没有这一节，打开收件箱也不建目录', async () => {
     const tracking = inboxTrackingPane(app.main)
     await until(
-      () => app.main.eval<boolean>(`!!document.querySelector('[data-inbox-row]')`),
+      () => app.main.eval<boolean>(`!!document.querySelector('[data-sidebar-view="inbox"]')`),
       'sidebar inbox row'
     )
     expect(await tracking.sidebarGroupPresent()).toBe(false)

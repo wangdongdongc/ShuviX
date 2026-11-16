@@ -8685,8 +8685,8 @@ export interface RightPanelPane {
    */
   setPanelWidth(px: number): Promise<void>
   /**
-   * 切到日历 tab（标签栏里含 `.lucide-calendar-days` 的那颗）并等日历内容区可见。日历内容区 = 内容区固定序
-   * 里倒数第二个子节点（widget / calendar / agents 常驻挂载；文件预览已是独立窗口，面板里没有它）
+   * 切到日历（左侧栏顶上视图切换里的那一段，`data-sidebar-view="calendar"`）并等它上屏。名字是历史遗留：
+   * 日历原先是右侧面板的一个标签，2026-11-16 起是侧栏的一种视图
    */
   activateCalendarTab(): Promise<void>
   /**
@@ -8708,7 +8708,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   // widget tab 里的卡片（WidgetPanel 的 `data-widget-card` = widget id，DOM 序 = 列表顺序）；第一个标签是收件箱
   const WIDGET_CARDS = `[...(${PANEL}?.querySelector('[data-widget-panel]')?.querySelectorAll('[data-widget-card]') ?? [])]`
   // 日历面板 = 内容区固定序的倒数第二个（见 activateCalendarTab）
-  const CALENDAR = `(() => { const c = ${PANEL}?.querySelector(':scope > div.relative')?.children; return c ? c[c.length - 2] : null })()`
+  // 日历是左侧栏的一种视图（2026-11-16 起；原先是右侧面板的一个标签）
+  const CALENDAR = `document.querySelector('[data-sidebar-view-pane="calendar"]')`
 
   const tabPresent = (): Promise<boolean> => main.eval<boolean>(`${AGENTS_TAB} !== undefined`)
   const agentsActive = (): Promise<boolean> =>
@@ -8854,16 +8855,15 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       )
     },
     activateCalendarTab: async () => {
-      const TAB = `[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
-        .find((b) => b.querySelector('.lucide-calendar-days'))`
-      await until(() => main.eval<boolean>(`!!${TAB}`), 'calendar tab mounted')
+      const TAB = `document.querySelector('[data-sidebar-view-switch] [data-sidebar-view="calendar"]')`
+      await until(() => main.eval<boolean>(`!!${TAB}`), 'the sidebar view switch')
       await main.eval(`${TAB}.click()`)
       await until(
         () =>
           main.eval<boolean>(
-            `(() => { const c = ${CALENDAR}; return !!c && getComputedStyle(c).visibility === 'visible' })()`
+            `(() => { const c = ${CALENDAR}; return !!c && c.getClientRects().length > 0 })()`
           ),
-        'calendar tab visible'
+        'the calendar view shown in the sidebar'
       )
     },
     clickCalendarSession: async (title) => {
@@ -13506,8 +13506,8 @@ export type WebMobileTouchTarget =
   | { listGroup: string }
   /** 会话页第二层顶上的返回键（`data-mobile-scope-back`） */
   | { scope: 'back' }
-  /** 会话页顶层最上面的收件箱那一行（`data-mobile-inbox-row`） */
-  | { inboxRow: true }
+  /** 会话页标题旁视图切换里的一段（`data-sidebar-view`）：分组列表 / 收件箱 / 日历 */
+  | { view: 'sessions' | 'inbox' | 'calendar' }
   /** 日历里选中那天的会话行（按标题） */
   | { calendarRow: string }
   /** 日历里的一天（`YYYY-MM-DD`，react-day-picker 的 `data-day`） */
@@ -13541,7 +13541,7 @@ export type WebMobileTouchTarget =
   | { emptyRow: 'extensions' | 'knowledge' | 'paths' }
   /** 笔记本属性卡的标题行（手机上点它开合） */
   | { propertyCard: 'head' }
-  | { sessions: 'calendarToggle' | 'newChat' }
+  | { sessions: 'newChat' }
   /** 新建会话抽屉里的一项（'' = 临时会话，否则项目 id） */
   | { newChatTarget: string }
   /** 设置分区列表里的一行（tab id） */
@@ -13848,7 +13848,7 @@ export interface WebMobilePane {
   /** 会话页顶层列表里各导航行的组 key（DOM 序；进了某一组时为空） */
   listNavGroups(): Promise<string[]>
   /**
-   * 会话页此刻在第二层的哪一页：某一组的 key（`data-scope-list`）、收件箱页是 `'inbox'`；在顶层 → null
+   * 会话页此刻在第二层的哪一页：某一组的 key（`data-scope-list`）；在顶层 → null
    */
   listScope(): Promise<string | null>
   /** 顶层一行导航行行尾的会话数（`data-group-count`；没有数字 = 0，行不在 → null） */
@@ -13949,7 +13949,8 @@ export interface WebMobilePane {
   chatNotebook(): Promise<boolean>
 
   /** 日历开关的 aria-label */
-  calendarToggleLabel(): Promise<string>
+  /** 会话页顶层此刻是哪种视图（`data-sidebar-view-switch` 的值）：sessions / inbox / calendar；没有切换 → '' */
+  sessionsView(): Promise<string>
   /** 日历挂着没有、此刻看不看得见 */
   calendarState(): Promise<{ mounted: boolean; visible: boolean }>
   /** 日历里选中的那天（`data-day`）；日历不在 → null */
@@ -14186,7 +14187,8 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     if ('listGroup' in target)
       return `${NAV_ROW(target.listGroup)}?.querySelector(':scope > button')`
     if ('scope' in target) return `document.querySelector('[data-mobile-scope-back]')`
-    if ('inboxRow' in target) return `document.querySelector('[data-mobile-inbox-row]')`
+    if ('view' in target)
+      return `${PAGE('sessions')}?.querySelector('[data-sidebar-view=${JSON.stringify(target.view)}]')`
     if ('calendarRow' in target) return ROW_IN(CALENDAR, target.calendarRow)
     if ('calendarDay' in target)
       return `(${CALENDAR})?.querySelector('[data-day=${JSON.stringify(target.calendarDay)}] button')`
@@ -14236,11 +14238,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `document.querySelector('[data-mobile-empty-chat] [data-mobile-empty-row=${JSON.stringify(target.emptyRow)}]')`
     if ('propertyCard' in target) return `${PAGE('chat')}?.querySelector('.cm-shuvix-fmcard-head')`
     if ('sessions' in target) {
-      const attr =
-        target.sessions === 'calendarToggle'
-          ? 'data-mobile-calendar-toggle'
-          : 'data-mobile-new-chat'
-      return `${PAGE('sessions')}?.querySelector('[${attr}]')`
+      return `${PAGE('sessions')}?.querySelector('[data-mobile-new-chat]')`
     }
     if ('newChatTarget' in target)
       return `[...document.querySelectorAll('[data-mobile-new-chat-target]')].find((b) => b.getAttribute('data-mobile-new-chat-target') === ${JSON.stringify(target.newChatTarget)})`
@@ -14409,7 +14407,6 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       ),
     listScope: () =>
       client.eval<string | null>(`(() => {
-        if (document.querySelector('[data-mobile-inbox]')) return 'inbox'
         return (${LIST})?.querySelector('[data-scope-list]')?.getAttribute('data-scope-list') ?? null
       })()`),
     listNavCount: (key) =>
@@ -14624,9 +14621,9 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       ),
     chatNotebook: () => client.eval<boolean>(`!!${PAGE('chat')}?.querySelector('.cm-editor')`),
 
-    calendarToggleLabel: () =>
+    sessionsView: () =>
       client.eval<string>(
-        `${PAGE('sessions')}?.querySelector('[data-mobile-calendar-toggle]')?.getAttribute('aria-label') ?? ''`
+        `${PAGE('sessions')}?.querySelector('[data-sidebar-view-switch]')?.getAttribute('data-sidebar-view-switch') ?? ''`
       ),
     calendarState: () =>
       client.eval<{ mounted: boolean; visible: boolean }>(`(() => {
@@ -15556,7 +15553,7 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
 // 收件箱在右侧面板的第一个标签里（2026-11-12，E1）：点侧栏那一行 = 打开面板并切到它；面板里的各标签常驻挂着、
 // 用 visibility 切换，所以「开着」= 面板 `[data-inbox-panel]` 在且看得见。
 //
-// 锚点：侧栏「资料库」里的收件箱一行 `[data-inbox-row]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱面板
+// 锚点：侧栏顶上视图切换里的收件箱那一段 `[data-sidebar-view="inbox"]`（`data-inbox-count` = 等你回答 + 新回复，跟踪项不计），收件箱面板
 // `[data-inbox-panel]`，这一节 `[data-inbox-section="tracking"]`；行 `[data-tracking-item=<fileName>]`（`data-tracking-status`），
 // 行里 `[data-tracking-archive]` 圆圈、`[data-tracking-open]` 标题区（点它 = 中间打开那份文件的**笔记本会话**，收件箱不动）、
 // `[data-tracking-title]` / `[data-tracking-latest]`、`[data-tracking-waiting]`（在等别人：圆圈上的标记）；归档后底部
@@ -15630,16 +15627,16 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
     until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
   const isOpen = (): Promise<boolean> =>
     main.eval<boolean>(
-      `(() => { const el = ${PANEL}; return !!el && getComputedStyle(el).visibility !== 'hidden' })()`
+      `(() => { const el = ${PANEL}; return !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden' })()`
     )
   return {
     open: async () => {
       if (!(await isOpen())) {
         await until(
-          () => main.eval<boolean>(`!!document.querySelector('[data-inbox-row]')`),
-          'sidebar inbox row'
+          () => main.eval<boolean>(`!!document.querySelector('[data-sidebar-view="inbox"]')`),
+          'the sidebar view switch'
         )
-        await main.eval(`document.querySelector('[data-inbox-row]').click()`)
+        await main.eval(`document.querySelector('[data-sidebar-view="inbox"]').click()`)
       }
       await until(isOpen, 'inbox panel shown')
       // 扫描回来之前这一节不画：给它一拍，空目录时它本来就不在
@@ -15648,7 +15645,7 @@ export function inboxTrackingPane(main: CdpClient): InboxTrackingPane {
     isOpen,
     inboxCount: () =>
       main.eval<number>(
-        `Number(document.querySelector('[data-inbox-row]')?.getAttribute('data-inbox-count') ?? -1)`
+        `Number(document.querySelector('[data-sidebar-view="inbox"]')?.getAttribute('data-inbox-count') ?? -1)`
       ),
     sidebarGroupPresent: () =>
       main.eval<boolean>(
@@ -15774,16 +15771,16 @@ export function inboxSessionsPane(main: CdpClient): InboxSessionsPane {
     `(${PANEL}?.querySelector('[data-inbox-task-list=' + ${JSON.stringify(JSON.stringify(sid))} + ']') ?? null)`
   const isOpen = (): Promise<boolean> =>
     main.eval<boolean>(
-      `(() => { const el = ${PANEL}; return !!el && getComputedStyle(el).visibility !== 'hidden' })()`
+      `(() => { const el = ${PANEL}; return !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden' })()`
     )
   return {
     open: async () => {
       if (!(await isOpen())) {
         await until(
-          () => main.eval<boolean>(`!!document.querySelector('[data-inbox-row]')`),
-          'sidebar inbox row'
+          () => main.eval<boolean>(`!!document.querySelector('[data-sidebar-view="inbox"]')`),
+          'the sidebar view switch'
         )
-        await main.eval(`document.querySelector('[data-inbox-row]').click()`)
+        await main.eval(`document.querySelector('[data-sidebar-view="inbox"]').click()`)
       }
       await until(isOpen, 'inbox panel shown')
     },

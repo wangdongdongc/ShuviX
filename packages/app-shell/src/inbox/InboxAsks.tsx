@@ -323,7 +323,8 @@ export function InboxAskCard({
           </p>
         )}
       </RedactionSessionProvider>
-      <div className="pl-7">
+      {/* 表单不再往右缩进一截：收件箱在左侧栏里（窄），缩进会让选项偏在卡片右半边；与卡片两边等距 */}
+      <div data-inbox-form="">
         <InputRequestForm
           key={askKeyOf(ask)}
           sessionId={session.id}

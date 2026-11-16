@@ -10,7 +10,10 @@ import {
   type AgentGroupAdapter,
   HookGroup,
   type HookGroupAdapter,
-  InboxRow,
+  InboxPanel,
+  SidebarViewSwitch,
+  type SidebarView,
+  useInboxSections,
   PolicyGroup,
   type PolicyGroupAdapter,
   type BotGroupAdapter,
@@ -29,7 +32,9 @@ import {
 } from '@shuvix/app-shell'
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
-import { useBrowserStore } from '../../stores/browserStore'
+import { useSidebarViewStore } from '../../stores/sidebarViewStore'
+import { useTrackingAdapter } from '../../host/useTrackingAdapter'
+import { CalendarPanel } from '../browser/CalendarPanel'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
 import { newHookTemplate } from './hookTemplate'
@@ -76,25 +81,47 @@ export interface SidebarProps {
    * 进了某一组只画那一组的那一页。缺省 = 各组就地展开的树
    */
   libraryDrill?: LibraryDrill
-  /** `mode="sessions"` 的顶层列表最上面多画的东西（手机：收件箱那一行） */
-  sessionsPrepend?: React.ReactNode
 }
 
-/** 侧栏「收件箱」一行：打开右侧面板并切到收件箱（它不是主区的一页） */
-function openInboxPanel(): void {
-  const panel = useBrowserStore.getState()
-  panel.setActiveTab('inbox')
-  panel.open()
+/**
+ * 侧栏的另两种视图（收件箱、日历）：原先是右侧面板里的两个标签，组件与里面的交互一点没变，只是换到了侧栏里
+ * （2026-11-16）。头一次切到哪一种才挂哪一种，之后一直挂着、只切显示 —— 切回来时滚动位置、展开的询问卡片都还在。
+ */
+function SidebarExtraViews({ view }: { view: SidebarView }): React.JSX.Element {
+  const selectSession = useChatStore((s) => s.setActiveSessionId)
+  const trackingAdapter = useTrackingAdapter(selectSession)
+  const [mounted, setMounted] = useState<ReadonlySet<SidebarView>>(() => new Set([view]))
+  if (!mounted.has(view)) setMounted(new Set([...mounted, view]))
+  const pane = (key: SidebarView, node: React.ReactNode): React.ReactNode =>
+    mounted.has(key) && (
+      <div
+        data-sidebar-view-pane={key}
+        className="min-h-0 flex-1"
+        style={view === key ? undefined : { display: 'none' }}
+      >
+        {node}
+      </div>
+    )
+  return (
+    <>
+      {pane('inbox', <InboxPanel tracking={trackingAdapter} />)}
+      {pane('calendar', <CalendarPanel />)}
+    </>
+  )
 }
 
 export function Sidebar({
   mode = 'full',
   onOpenSession,
   drill,
-  libraryDrill,
-  sessionsPrepend
+  libraryDrill
 }: SidebarProps = {}): React.JSX.Element {
   const { t } = useTranslation()
+  const full = mode === 'full'
+  // 侧栏的三种视图（会话 / 收件箱 / 日历）：只有桌面整条侧栏有；手机的会话页自己画切换
+  const view = useSidebarViewStore((st) => st.view)
+  const setView = useSidebarViewStore((st) => st.setView)
+  const { waiting, unread } = useInboxSections()
   const storeSetActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const onOpenSessionRef = useRef(onOpenSession)
   useEffect(() => {
@@ -876,7 +903,6 @@ export function Sidebar({
     )
   }
 
-  const full = mode === 'full'
   return (
     <SharedSidebar
       caps={full ? { windowDrag: true, pin: true } : {}}
@@ -915,6 +941,18 @@ export function Sidebar({
           </button>
         ) : undefined
       }
+      header={
+        full ? (
+          <SidebarViewSwitch
+            value={view}
+            onChange={setView}
+            inboxAlert={waiting.length > 0}
+            inboxCount={waiting.length + unread.length}
+          />
+        ) : undefined
+      }
+      hideList={full && view !== 'sessions'}
+      extraViews={full ? <SidebarExtraViews view={view} /> : undefined}
       groupsPrepend={
         full ? (
           <>
@@ -922,13 +960,9 @@ export function Sidebar({
             <div className="sb-section" data-sidebar-section="library">
               {t('sidebar.library')}
             </div>
-            {/* 收件箱：资料库的第一行，智能体上面；收件箱本身在右侧面板的第一个标签里 */}
-            <InboxRow onOpen={openInboxPanel} />
             {groups}
           </>
-        ) : (
-          sessionsPrepend
-        )
+        ) : undefined
       }
       drill={full ? undefined : drill}
       overlays={overlays}

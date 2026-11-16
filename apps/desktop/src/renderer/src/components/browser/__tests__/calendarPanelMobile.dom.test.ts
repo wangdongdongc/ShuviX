@@ -319,6 +319,23 @@ describe('CalendarPanel：手机与桌面各给子组件什么', () => {
     expect(lastGroups().drill).toBeUndefined()
   })
 
+  it('CP-1 桌面（不传）：根上没有自己的底色（跟着侧栏走），骨架的 class 还在', async () => {
+    await mount()
+    const rootEl = container.querySelector<HTMLElement>('[data-calendar-panel=""]')!
+    expect(rootEl).not.toBeNull()
+    expect(rootEl.classList.contains('bg-bg-primary')).toBe(false)
+    for (const cls of ['flex', 'flex-col', 'h-full', 'overflow-hidden']) {
+      expect(rootEl.classList.contains(cls), cls).toBe(true)
+    }
+  })
+
+  it('CP-2 mobile：根上是页面的底色', async () => {
+    await mount({ mobile: true })
+    const rootEl = container.querySelector<HTMLElement>('[data-calendar-panel="mobile"]')!
+    expect(rootEl).not.toBeNull()
+    expect(rootEl.classList.contains('bg-bg-primary')).toBe(true)
+  })
+
   it('CM-3 drill 跨重渲染是同一个对象', async () => {
     await mount({ mobile: true })
     const first = rec.groups[0].drill

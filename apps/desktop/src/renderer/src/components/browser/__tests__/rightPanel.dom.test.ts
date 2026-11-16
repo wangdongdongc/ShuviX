@@ -1,17 +1,21 @@
 // @vitest-environment jsdom
 /**
- * 桌面右侧面板（components/browser/RightPanel.tsx，jsdom）—— 收件箱是第一个标签（2026-11-12 用户选定 E1）：
+ * 桌面右侧面板（components/browser/RightPanel.tsx，jsdom）—— 只剩小组件与智能体两个标签（2026-11-16：收件箱与日历
+ * 搬去了左侧栏，是那里的两种视图；见 sidebarModes 的 DS-V）：
  *
- *   INT-2 标签依次是 inbox / widget / calendar / agents，第一个的文字是「收件箱」
- *   INT-3 收件箱标签的数字 = 等你回答 + 新回复（只是在跑的不算），有等你回答的才有琥珀点；widget 标签仍是组件数；
- *         useInboxSections 从不带 held 调（侧栏同一口径：留着的那条不计数）
- *   INT-4 持久化里留着已移除的标签（files / preview）→ 落到 inbox，一次；已有的标签不动
- *   INT-5 收件箱面板常驻挂载：别的标签开着时它的外层 visibility hidden + pointer-events none；tracking 是宿主给的那份
- *   WD-10 WidgetPanel 不带 `mobile`（手机那一副只由手机壳给）
- *   CM-15 CalendarPanel 不带 `mobile`、不带 `onOpenSession`
+ *   RP-1 标签依次是 widget / agents，文字是 `panel.widget` / `panel.agents`
+ *   RP-2 widget 标签的数字 = 组件数；agents 没有数字；谁都不带琥珀点
+ *   RP-3 持久化里留着已移除的标签（inbox / calendar / files / preview / 认不得的）→ 落到 widget，一次
+ *   RP-4 还在的标签不动
+ *   RP-5 内容区只有两块常驻的面板：小组件、智能体；收件箱 / 日历不在这里
+ *   RP-6 没开着的那块 visibility hidden + pointer-events none
+ *   RP-7 WidgetPanel 不带 `mobile`（手机那一副只由手机壳给；原 WD-10）
+ *   RP-8 标签栏的 onSelect('agents') → setActiveTab('agents')
+ *   RP-9 活动标签还是过期的 'inbox' 的那一帧：两块都藏着、不抛
  *
- * `@shuvix/app-shell` 整份换成记 props 的替身（PanelTabBar / InboxPanel / useInboxSections）；右侧面板的 store、
- * 组件 store、跟踪项适配器、三块别的面板与 chat-ui 的 store 都换成替身。i18n 走真 en 资源。
+ * `@shuvix/app-shell` 整份换成只有 PanelTabBar 的替身 —— 面板要是还去拿 InboxPanel / useInboxSections，vitest 的
+ * 替身模块会在取不存在的导出时抛错，用例就红；日历面板、跟踪项 adapter、chat-ui 都不 mock：右侧面板不该再引它们
+ * （引了就会加载真模块）。右侧面板的 store、组件 store、两块面板换成替身。i18n 走真 en 资源。
  * 桌面 vitest 对渲染层只收 `*.test.ts`（本文件自己切 jsdom），一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
@@ -22,42 +26,26 @@ import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 
 type Props = Record<string, unknown>
-interface Sections {
-  waiting: unknown[]
-  unread: unknown[]
-  running: unknown[]
-}
 
 const rec = vi.hoisted(() => ({
   tabBar: [] as Props[],
-  inboxPanel: [] as Props[],
   widgetPanel: [] as Props[],
-  calendarPanel: [] as Props[],
+  agentsPanel: [] as Props[],
   panel: {
-    activeTab: 'inbox' as string,
+    activeTab: 'widget' as string,
     setActiveTab: null as unknown as Mock<(tab: string) => void>,
     width: 360
   },
-  widgets: [] as unknown[],
-  sections: { waiting: [], unread: [], running: [] } as Sections,
-  useInboxSections: null as unknown as Mock<(held?: unknown) => Sections>,
-  tracking: { sentinel: 'tracking-adapter' }
+  widgets: [] as unknown[]
 }))
 
 vi.mock('@shuvix/app-shell', async () => {
-  const { vi: v } = await import('vitest')
   const { createElement: h } = await import('react')
-  rec.useInboxSections = v.fn((_held?: unknown) => rec.sections)
   return {
     PanelTabBar: (props: Props) => {
       rec.tabBar.push(props)
       return h('div', { 'data-stub-tab-bar': '' })
-    },
-    InboxPanel: (props: Props) => {
-      rec.inboxPanel.push(props)
-      return h('div', { 'data-stub-inbox-panel': '' })
-    },
-    useInboxSections: (...args: [unknown?]) => rec.useInboxSections(...args)
+    }
   }
 })
 
@@ -68,25 +56,23 @@ vi.mock('../../../stores/widgetStore', () => ({
   useWidgetStore: (selector: (s: { widgets: unknown[] }) => unknown) =>
     selector({ widgets: rec.widgets })
 }))
-vi.mock('../../../host/useTrackingAdapter', () => ({
-  useTrackingAdapter: () => rec.tracking
-}))
-vi.mock('../WidgetPanel', () => ({
-  WidgetPanel: (props: Props) => {
-    rec.widgetPanel.push(props)
-    return null
+vi.mock('../WidgetPanel', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    WidgetPanel: (props: Props) => {
+      rec.widgetPanel.push(props)
+      return h('div', { 'data-stub-widget-panel': '' })
+    }
   }
-}))
-vi.mock('../CalendarPanel', () => ({
-  CalendarPanel: (props: Props) => {
-    rec.calendarPanel.push(props)
-    return null
+})
+vi.mock('../AgentMonitorPanel', async () => {
+  const { createElement: h } = await import('react')
+  return {
+    AgentMonitorPanel: (props: Props) => {
+      rec.agentsPanel.push(props)
+      return h('div', { 'data-stub-agents-panel': '' })
+    }
   }
-}))
-vi.mock('../AgentMonitorPanel', () => ({ AgentMonitorPanel: () => null }))
-vi.mock('@shuvix/chat-ui', () => {
-  const state = { setActiveSessionId: () => {} }
-  return { useChatStore: (selector: (s: typeof state) => unknown) => selector(state) }
 })
 
 import { RightPanel } from '../RightPanel'
@@ -114,14 +100,11 @@ beforeAll(async () => {
 
 beforeEach(() => {
   rec.tabBar.length = 0
-  rec.inboxPanel.length = 0
   rec.widgetPanel.length = 0
-  rec.calendarPanel.length = 0
-  rec.panel.activeTab = 'inbox'
+  rec.agentsPanel.length = 0
+  rec.panel.activeTab = 'widget'
   rec.panel.setActiveTab = vi.fn()
   rec.widgets = []
-  rec.sections = { waiting: [], unread: [], running: [] }
-  rec.useInboxSections.mockClear()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -145,82 +128,84 @@ interface TabItem {
 const lastTabs = (): TabItem[] => rec.tabBar.at(-1)!.tabs as TabItem[]
 const tabOf = (key: string): TabItem => lastTabs().find((t) => t.key === key)!
 const filled = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ i }))
-/** 收件箱面板替身的外层（各面板共存、按 visibility 切换的那一层） */
-const inboxWrapper = (): HTMLElement => {
-  const stub = container.querySelector<HTMLElement>('[data-stub-inbox-panel]')
-  if (!stub) throw new Error('inbox panel not mounted')
+/** 某块面板替身的外层（各面板共存、按 visibility 切换的那一层） */
+const wrapperOf = (name: 'widget' | 'agents'): HTMLElement => {
+  const stub = container.querySelector<HTMLElement>(`[data-stub-${name}-panel]`)
+  if (!stub) throw new Error(`${name} panel not mounted`)
   return stub.parentElement!
 }
+const hidden = (el: HTMLElement): boolean =>
+  el.style.visibility === 'hidden' && el.style.pointerEvents === 'none'
+const shown = (el: HTMLElement): boolean =>
+  el.style.visibility === '' && el.style.pointerEvents === ''
 
-describe('INT-2 the tabs', () => {
-  it('INT-2 inbox, widget, calendar, agents; the first is labelled Inbox', () => {
+describe('the right panel tabs', () => {
+  it('RP-1 widget, agents — and nothing else', () => {
     render()
-    expect(lastTabs().map((t) => t.key)).toEqual(['inbox', 'widget', 'calendar', 'agents'])
-    expect(lastTabs()[0].label).toBe(en.inbox.title)
+    expect(lastTabs().map((t) => t.key)).toEqual(['widget', 'agents'])
+    expect(lastTabs().map((t) => t.label)).toEqual([en.panel.widget, en.panel.agents])
   })
-})
 
-describe('INT-3 the inbox badge', () => {
-  it.each<[string, Sections, number, boolean]>([
-    [
-      'waiting + unread (running ignored)',
-      { waiting: filled(2), unread: filled(1), running: filled(5) },
-      3,
-      true
-    ],
-    ['unread only', { waiting: [], unread: filled(1), running: filled(4) }, 1, false],
-    ['nothing', { waiting: [], unread: [], running: [] }, 0, false]
-  ])('INT-3 %s', (_label, sections, badge, alert) => {
-    rec.sections = sections
-    rec.widgets = filled(4)
+  it.each([[0], [3]])('RP-2 the widget badge is the widget count (%i); no alert anywhere', (n) => {
+    rec.widgets = filled(n)
     render()
-    expect(tabOf('inbox').badge).toBe(badge)
-    expect(tabOf('inbox').alert).toBe(alert)
-    expect(tabOf('widget').badge).toBe(4)
-    expect(rec.useInboxSections).toHaveBeenCalled()
-    for (const args of rec.useInboxSections.mock.calls) {
-      expect(args[0]).toBeUndefined()
+    expect(tabOf('widget').badge).toBe(n)
+    expect(tabOf('agents').badge).toBeUndefined()
+    for (const tab of lastTabs()) expect(tab.alert).toBeFalsy()
+  })
+
+  it.each(['inbox', 'calendar', 'files', 'preview', '', 'nonsense'])(
+    'RP-3 a removed or unknown active tab %j → setActiveTab("widget") once',
+    (tab) => {
+      rec.panel.activeTab = tab
+      render()
+      expect(rec.panel.setActiveTab.mock.calls).toEqual([['widget']])
     }
-  })
-})
+  )
 
-describe('INT-4 an unknown active tab falls back to the inbox', () => {
-  it.each(['files', 'preview'])('INT-4 %s → setActiveTab("inbox") once', (tab) => {
-    rec.panel.activeTab = tab
-    render()
-    expect(rec.panel.setActiveTab.mock.calls).toEqual([['inbox']])
-  })
-
-  it.each(['calendar', 'inbox'])('INT-4 %s → left alone', (tab) => {
+  it.each(['widget', 'agents'])('RP-4 %s → left alone', (tab) => {
     rec.panel.activeTab = tab
     render()
     expect(rec.panel.setActiveTab).not.toHaveBeenCalled()
   })
+
+  it('RP-8 selecting a tab writes the store', () => {
+    render()
+    const onSelect = rec.tabBar.at(-1)!.onSelect as (key: string) => void
+    act(() => onSelect('agents'))
+    expect(rec.panel.setActiveTab.mock.calls).toEqual([['agents']])
+    expect(rec.tabBar.at(-1)!.activeKey).toBe('widget')
+  })
 })
 
-describe('INT-5 the inbox panel stays mounted', () => {
-  it('INT-5 widget tab active: the inbox panel is hidden, not unmounted, and gets the tracking adapter', () => {
+describe('the right panel content', () => {
+  it('RP-5 two always-mounted panels: widgets and agents; no inbox, no calendar', () => {
+    render()
+    const content = wrapperOf('widget').parentElement!
+    expect(wrapperOf('agents').parentElement).toBe(content)
+    expect(content.children).toHaveLength(2)
+    expect(content.children[0]).toBe(wrapperOf('widget'))
+    expect(content.children[1]).toBe(wrapperOf('agents'))
+    expect(container.querySelector('[data-inbox-panel]')).toBeNull()
+    expect(container.querySelector('[data-calendar-panel]')).toBeNull()
+  })
+
+  it('RP-6 only the active panel is visible; the agents panel polls only while active', () => {
     rec.panel.activeTab = 'widget'
     render()
-    const wrapper = inboxWrapper()
-    expect(wrapper.style.visibility).toBe('hidden')
-    expect(wrapper.style.pointerEvents).toBe('none')
-    expect(rec.inboxPanel.at(-1)!.tracking).toBe(rec.tracking)
-  })
+    expect(shown(wrapperOf('widget'))).toBe(true)
+    expect(hidden(wrapperOf('agents'))).toBe(true)
+    expect(rec.agentsPanel.at(-1)!.active).toBe(false)
 
-  it('INT-5 inbox tab active: no visibility style on its wrapper', () => {
-    rec.panel.activeTab = 'inbox'
+    rec.panel.activeTab = 'agents'
     render()
-    const wrapper = inboxWrapper()
-    expect(wrapper.style.visibility).toBe('')
-    expect(wrapper.style.pointerEvents).toBe('')
-    expect(rec.inboxPanel.at(-1)!.tracking).toBe(rec.tracking)
+    expect(hidden(wrapperOf('widget'))).toBe(true)
+    expect(shown(wrapperOf('agents'))).toBe(true)
+    expect(rec.agentsPanel.at(-1)!.active).toBe(true)
   })
-})
 
-describe('the widget and calendar panels get the desktop layout', () => {
-  it.each(['inbox', 'widget', 'calendar'])(
-    'WD-10 WidgetPanel is rendered with no `mobile` prop (active tab: %s)',
+  it.each(['widget', 'agents'])(
+    'RP-7 WidgetPanel is rendered with no `mobile` prop (active tab: %s)',
     (tab) => {
       rec.panel.activeTab = tab
       render()
@@ -232,18 +217,11 @@ describe('the widget and calendar panels get the desktop layout', () => {
     }
   )
 
-  it.each(['inbox', 'widget', 'calendar'])(
-    'CM-15 CalendarPanel is rendered with no `mobile` and no `onOpenSession` (active tab: %s)',
-    (tab) => {
-      rec.panel.activeTab = tab
-      render()
-      expect(rec.calendarPanel.length).toBeGreaterThan(0)
-      for (const props of rec.calendarPanel) {
-        expect('mobile' in props).toBe(false)
-        expect(props.mobile).toBeUndefined()
-        expect('onOpenSession' in props).toBe(false)
-        expect(props.onOpenSession).toBeUndefined()
-      }
-    }
-  )
+  it('RP-9 a stale "inbox" before the fallback lands: both panels hidden, nothing throws', () => {
+    rec.panel.activeTab = 'inbox'
+    expect(() => render()).not.toThrow()
+    expect(hidden(wrapperOf('widget'))).toBe(true)
+    expect(hidden(wrapperOf('agents'))).toBe(true)
+    expect(rec.agentsPanel.at(-1)!.active).toBe(false)
+  })
 })

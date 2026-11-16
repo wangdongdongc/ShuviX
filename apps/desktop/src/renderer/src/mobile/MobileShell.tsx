@@ -21,13 +21,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  CalendarDays,
   ChevronLeft,
-  ChevronRight,
-  Inbox,
   LayoutGrid,
   Library,
-  List,
   MessagesSquare,
   Search,
   X,
@@ -41,10 +37,14 @@ import { ChatHostProvider, getChatApi, useChatHost, useChatStore } from '@shuvix
 import {
   InboxPanel,
   STACKED_SETTINGS_HISTORY_MARK,
+  SIDEBAR_VIEW_LABEL_KEYS,
+  SidebarViewSwitch,
   useInboxSections,
+  type SidebarView,
   useProjects
 } from '@shuvix/app-shell'
 import { Sidebar } from '../components/sidebar/Sidebar'
+import { useSidebarViewStore } from '../stores/sidebarViewStore'
 import { CalendarPanel } from '../components/browser/CalendarPanel'
 import { WidgetPanel } from '../components/browser/WidgetPanel'
 import { useWidgetStore } from '../stores/widgetStore'
@@ -75,7 +75,6 @@ const SCOPE_HISTORY_MARK = 'shuvixMobileScope'
 /** 同上，资料库页进了某一组（或知识库里的某个库）时压的；值是钻到了第几层 */
 const LIBRARY_HISTORY_MARK = 'shuvixMobileLibrary'
 /** 会话页第二层里「收件箱」那一页的 key（别的 key 是 ProjectSessionGroups 的组 key） */
-const INBOX_SCOPE = 'inbox'
 
 const historyHas = (mark: string): boolean =>
   Boolean((window.history.state as Record<string, unknown> | null)?.[mark])
@@ -121,42 +120,19 @@ export function MobileShell(): React.JSX.Element {
   )
 }
 
-/** 会话页顶层最上面那一行：收件箱（等你回答 + 新回复的条数；有会话在等你时数字前一个琥珀点） */
-function InboxNavRow({ onOpen }: { onOpen: () => void }): React.JSX.Element {
-  const { t } = useTranslation()
-  const { waiting, unread } = useInboxSections()
-  const count = waiting.length + unread.length
-  return (
-    <div
-      data-mobile-inbox-row=""
-      onClick={onOpen}
-      className="sb-row cursor-pointer text-text-primary"
-    >
-      <Inbox className="sb-icon text-accent" aria-hidden="true" />
-      <span className="truncate">{t('inbox.title')}</span>
-      <span className="ml-auto flex shrink-0 items-center gap-1.5 text-text-tertiary">
-        {waiting.length > 0 && (
-          <span data-inbox-alert="" className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-        )}
-        {count > 0 && (
-          <span data-inbox-count="" className="text-[0.9em] tabular-nums">
-            {count}
-          </span>
-        )}
-        <ChevronRight className="h-[1em] w-[1em]" aria-hidden="true" />
-      </span>
-    </div>
-  )
-}
-
 function MobileShellBody(): React.JSX.Element {
   const { t } = useTranslation()
   const [tab, setTab] = useState<MobileTab>('sessions')
   const [visited, setVisited] = useState<Set<MobileTab>>(() => new Set(['sessions']))
   const [chatOpen, setChatOpen] = useState(false)
   const chatOpenRef = useRef(false)
-  const [calendar, setCalendar] = useState(false)
-  const [calendarMounted, setCalendarMounted] = useState(false)
+  // 会话页顶层的三种视图（与桌面侧栏同一个切换、同一份记忆）：分组列表 / 收件箱 / 日历。收件箱与日历头一次切到
+  // 才挂，之后一直挂着、只切显示
+  const view = useSidebarViewStore((st) => st.view)
+  const setView = useSidebarViewStore((st) => st.setView)
+  const [viewsMounted, setViewsMounted] = useState<ReadonlySet<SidebarView>>(() => new Set([view]))
+  if (!viewsMounted.has(view)) setViewsMounted(new Set([...viewsMounted, view]))
+  const { waiting, unread } = useInboxSections()
   const [newChatOpen, setNewChatOpen] = useState(false)
   /** 会话页的第二层：正在看的那一组（或收件箱）；null = 顶层 */
   const [scope, setScope] = useState<{ key: string; label: string } | null>(null)
@@ -351,11 +327,10 @@ function MobileShellBody(): React.JSX.Element {
     },
     [openChat]
   )
-  const inboxOpen = scope?.key === INBOX_SCOPE
-  // 交给侧栏的两层导航：收件箱那一页不是侧栏画的，那时侧栏留在顶层（藏着）
+  // 交给侧栏的两层导航
   const drill = useMemo(
     () => ({
-      scope: scope && scope.key !== INBOX_SCOPE ? scope.key : null,
+      scope: scope?.key ?? null,
       onOpen: openScope,
       query,
       menuSlot,
@@ -363,9 +338,10 @@ function MobileShellBody(): React.JSX.Element {
     }),
     [scope, openScope, query, menuSlot, toolbarSlot]
   )
-  /** 正在看某一组的会话列表（不是收件箱）：底部是那一组的工具栏，标签栏收起 */
-  const groupOpen = tab === 'sessions' && scope !== null && !inboxOpen
-  /** 推入的页面不带标签栏：只有四个顶层页面有（会话页的某一组与收件箱页、设置的分区页、资料库的分组页） */
+  /** 正在看某一组的会话列表：底部是那一组的工具栏，标签栏收起 */
+  const groupOpen = tab === 'sessions' && scope !== null
+  /** 推入的页面不带标签栏：只有四个顶层页面有（会话页的某一组、设置的分区页、资料库的分组页）。收件箱与日历是
+   *  会话页顶层的两种视图，不是推入的页面，标签栏留着 */
   const libraryPage = libraryStack.length > 0 ? libraryStack[libraryStack.length - 1] : null
   const libraryOpen = tab === 'library' && libraryPage !== null
   const libraryDrill = useMemo(
@@ -384,21 +360,17 @@ function MobileShellBody(): React.JSX.Element {
   // 跟踪项在收件箱里（资料库不再有它的入口）
   const trackingAdapter = useTrackingAdapter(openFromInbox)
 
-  // 顶层的顶栏：日历（顶层的另一种看法）与新建。进了某一组，新建在底部的工具栏里，顶栏右边是那一组的「⋯」
+  // 顶层的顶栏：视图切换（会话 / 收件箱 / 日历）与新建。进了某一组，新建在底部的工具栏里，顶栏右边是那一组的「⋯」
   const sessionsActions = (
     <>
-      <button
-        type="button"
-        data-mobile-calendar-toggle=""
-        className={headerIcon}
-        onClick={() => {
-          setCalendar((v) => !v)
-          setCalendarMounted(true)
-        }}
-        aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
-      >
-        {calendar ? <List size={21} /> : <CalendarDays size={21} />}
-      </button>
+      <SidebarViewSwitch
+        value={view}
+        onChange={setView}
+        inboxAlert={waiting.length > 0}
+        inboxCount={waiting.length + unread.length}
+        size="touch"
+        className="mr-1"
+      />
       <button
         type="button"
         data-mobile-new-chat=""
@@ -452,18 +424,24 @@ function MobileShellBody(): React.JSX.Element {
                       <ChevronLeft size={22} aria-hidden="true" />
                       <span>{t('mobile.tabSessions')}</span>
                     </button>
-                    {/* 那一组的菜单「⋯」：列表画进来（收件箱那一页没有） */}
-                    {!inboxOpen && (
-                      <div ref={setMenuSlot} data-mobile-scope-menu-slot="" className="ml-auto" />
-                    )}
+                    {/* 那一组的菜单「⋯」：列表画进来 */}
+                    <div ref={setMenuSlot} data-mobile-scope-menu-slot="" className="ml-auto" />
                   </div>
                   <div data-mobile-scope-title="">{pageTitle(scope.label)}</div>
                 </>
               ) : (
                 <>
-                  {pageTitle(t('mobile.tabSessions'), sessionsActions)}
-                  {/* 搜索（日历那种看法里没有）：按标题找会话，列表就地换成结果 */}
-                  {!calendar && (
+                  {/* 大标题跟着视图走：会话 / 收件箱 / 日历 */}
+                  <div data-mobile-view-title={view}>
+                    {pageTitle(
+                      view === 'sessions'
+                        ? t('mobile.tabSessions')
+                        : t(SIDEBAR_VIEW_LABEL_KEYS[view]),
+                      sessionsActions
+                    )}
+                  </div>
+                  {/* 搜索（只有分组列表那种视图有）：按标题找会话，列表就地换成结果 */}
+                  {view === 'sessions' && (
                     <div className="flex flex-shrink-0 items-center gap-2 px-3 pb-3">
                       <label className="flex h-9 min-w-0 flex-1 items-center gap-1.5 rounded-[10px] bg-bg-secondary px-2.5 text-text-tertiary">
                         <Search size={16} aria-hidden="true" className="shrink-0" />
@@ -498,31 +476,27 @@ function MobileShellBody(): React.JSX.Element {
               <div className="flex-1 min-h-0 relative" data-mobile-list="">
                 <div
                   className="absolute inset-0"
-                  style={(calendar && !scope) || inboxOpen ? { display: 'none' } : undefined}
+                  style={view !== 'sessions' && !scope ? { display: 'none' } : undefined}
                 >
-                  <Sidebar
-                    mode="sessions"
-                    onOpenSession={openChat}
-                    drill={drill}
-                    sessionsPrepend={
-                      <div className="sb-card">
-                        <InboxNavRow onOpen={() => openScope(INBOX_SCOPE, t('inbox.title'))} />
-                      </div>
-                    }
-                  />
+                  <Sidebar mode="sessions" onOpenSession={openChat} drill={drill} />
                 </div>
-                {inboxOpen && (
-                  // 收件箱页：桌面右侧面板里那同一个组件，字号按手机放大
-                  <div className="absolute inset-0" data-mobile-inbox="" data-mobile-scale="">
+                {viewsMounted.has('inbox') && (
+                  // 收件箱视图：桌面侧栏里那同一个组件，字号按手机放大
+                  <div
+                    className="absolute inset-0"
+                    data-mobile-inbox=""
+                    data-mobile-scale=""
+                    style={view === 'inbox' && !scope ? undefined : { display: 'none' }}
+                  >
                     <InboxPanel tracking={trackingAdapter} onSelectSession={openFromInbox} />
                   </div>
                 )}
-                {calendarMounted && (
+                {viewsMounted.has('calendar') && (
                   <div
                     className="absolute inset-0"
                     data-mobile-scale=""
                     data-sidebar-density="touch"
-                    style={calendar && !scope ? undefined : { display: 'none' }}
+                    style={view === 'calendar' && !scope ? undefined : { display: 'none' }}
                   >
                     <CalendarPanel mobile onOpenSession={openChat} />
                   </div>

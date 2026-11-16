@@ -12,12 +12,11 @@
  *   INP-8 父会话停着：抬头是线框两片、灰色；子会话的圆点 running、resident；点开后各自的行带各自的种类
  *   INP-9 父会话只剩后台命令、子会话在跑：父行绿色实心两片，圆点 running；这一家排在只剩后台命令的别家前面
  *   INP-10 只剩后台命令又有出错的新回复：只有新回复那一行（红点）
- *   INP-11 侧栏「收件箱」那一行的数字：等你回答 + 新回复，只是在跑的不算
+ *   INP-11 侧栏视图切换上收件箱那一段的数字：等你回答 + 新回复，只是在跑的不算；有在等的才带琥珀点
  *
- * 收件箱在右侧面板里（2026-11-12 E1）：留着的那一条、选中态、按键的范围
+ * 留着的那一条、选中态、按键的范围（2026-11-12 E1 起在右侧面板里；2026-11-16 起是侧栏的一种视图）
  *
  *   INH-5..16, 19, 20  作为新回复打开的那条留在原处（held），切到别的会话才走；正开着的那条的行带选中；点行不动面板
- *   INT-6  侧栏「收件箱」那一行只打开面板：没有选中态，数字照旧
  *   INK-1/2/3/8  J / K / ⏎ 与数字键只在焦点落在面板里时归它；换了会话，焦点从面板里交还出去
  *
  * 行下面的任务列表（2026-11-14，InboxTaskList.tsx）
@@ -147,8 +146,8 @@ vi.mock('@shuvix/chat-ui', async () => {
 
 import { InboxPanel } from './InboxPanel'
 import { ContextMenuProvider } from '../contextmenu/ContextMenuProvider'
-import { InboxRow } from '../sidebar/InboxRow'
-import { useInboxHoldStore } from './inboxStore'
+import { SidebarViewSwitch } from '../sidebar/SidebarViewSwitch'
+import { useInboxHoldStore, useInboxSections } from './inboxStore'
 import type { InboxTrackingAdapter } from './InboxTracking'
 
 declare global {
@@ -158,6 +157,25 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 let container: HTMLDivElement
 let root: Root
+
+/**
+ * 侧栏那枚视图切换的接法（同桌面侧栏）：真的 `useInboxSections()`（不带 held），条数 = 等你回答 + 新回复，
+ * 有在等的才带点。原先这里是侧栏的「收件箱」那一行（InboxRow，2026-11-16 删掉）
+ */
+function SwitchProbe(): React.JSX.Element {
+  const { waiting, unread } = useInboxSections()
+  return createElement(SidebarViewSwitch, {
+    value: 'sessions',
+    onChange: () => {},
+    inboxAlert: waiting.length > 0,
+    inboxCount: waiting.length + unread.length
+  })
+}
+const inboxSegment = (): HTMLElement => {
+  const el = container.querySelector<HTMLElement>('[data-sidebar-view="inbox"]')
+  if (!el) throw new Error('no inbox segment')
+  return el
+}
 
 function session(id: string, over: Partial<StoreSession> = {}): StoreSession {
   return {
@@ -553,13 +571,11 @@ describe('INP-10 resident with a failed new reply', () => {
 
 describe('INP-11 the sidebar inbox count', () => {
   const mountRow = (): HTMLElement => {
-    act(() => root.render(createElement(InboxRow, { onOpen: () => {} })))
-    const el = container.querySelector<HTMLElement>('[data-inbox-row]')
-    if (!el) throw new Error('no inbox row')
-    return el
+    act(() => root.render(createElement(SwitchProbe)))
+    return inboxSegment()
   }
 
-  it.each<[string, () => void, string, string | null]>([
+  it.each<[string, () => void, string, boolean]>([
     [
       'resident + unread',
       () => {
@@ -567,9 +583,9 @@ describe('INP-11 the sidebar inbox count', () => {
         store.unreadState = { unread: { S: unreadEntry() } }
       },
       '1',
-      null
+      false
     ],
-    ['resident only', () => setTasks([bash('t1', 'S')]), '0', null],
+    ['resident only', () => setTasks([bash('t1', 'S')]), '0', false],
     [
       'background agent + unread',
       () => {
@@ -577,7 +593,7 @@ describe('INP-11 the sidebar inbox count', () => {
         store.unreadState = { unread: { S: unreadEntry() } }
       },
       '0',
-      null
+      false
     ],
     [
       'asks + resident',
@@ -586,14 +602,14 @@ describe('INP-11 the sidebar inbox count', () => {
         store.pending = { S: 1 }
       },
       '1',
-      '1'
+      true
     ]
-  ])('INP-11 %s', (_label, arrange, count, waiting) => {
+  ])('INP-11 %s', (_label, arrange, count, alert) => {
     store.sessions = [session('S')]
     arrange()
     const el = mountRow()
     expect(el.getAttribute('data-inbox-count')).toBe(count)
-    expect(el.getAttribute('data-inbox-waiting')).toBe(waiting)
+    expect(el.querySelector('[data-view-alert]') !== null).toBe(alert)
   })
 })
 
@@ -765,12 +781,7 @@ describe('INH-11 the sidebar count ignores the held row', () => {
     const both = (): void =>
       act(() =>
         root.render(
-          createElement(
-            'div',
-            null,
-            createElement(InboxRow, { onOpen: () => {} }),
-            createElement(InboxPanel)
-          )
+          createElement('div', null, createElement(SwitchProbe), createElement(InboxPanel))
         )
       )
     both()
@@ -778,14 +789,13 @@ describe('INH-11 the sidebar count ignores the held row', () => {
     store.unreadState = { unread: {} }
     both()
     await flush()
-    const row = container.querySelector<HTMLElement>('[data-inbox-row]')!
-    expect(row.getAttribute('data-inbox-count')).toBe('0')
+    expect(inboxSegment().getAttribute('data-inbox-count')).toBe('0')
     expect(mustUnread('S').hasAttribute('data-inbox-held')).toBe(true)
 
     store.unreadState = { unread: { U: U_UNREAD } }
     both()
     await flush()
-    expect(row.getAttribute('data-inbox-count')).toBe('1')
+    expect(inboxSegment().getAttribute('data-inbox-count')).toBe('1')
   })
 })
 
@@ -979,52 +989,6 @@ describe('INH-20 a held child pip in the panel', () => {
     expect(has(pips[0], 'bg-text-tertiary/50')).toBe(true)
     expect(has(pips[1], 'bg-accent')).toBe(true)
   })
-})
-
-// ─── 侧栏那一行只打开面板（INT-6） ──────────────────────────────────────
-
-describe('INT-6 the sidebar inbox row', () => {
-  it.each<[string, string | null]>([
-    ['nothing open', null],
-    ['S open', 'S']
-  ])(
-    'INT-6 with %s: a click only opens the panel; never selected; the count stays',
-    (_label, active) => {
-      store.sessions = [session('S'), session('U')]
-      store.pending = { S: 1 }
-      store.unreadState = { unread: { U: unreadEntry() } }
-      store.activeSessionId = active
-      const onOpen = vi.fn()
-      const draw = (): HTMLElement => {
-        act(() => root.render(createElement(InboxRow, { onOpen })))
-        return container.querySelector<HTMLElement>('[data-inbox-row]')!
-      }
-      const notSelected = (el: HTMLElement): void => {
-        expect(el.hasAttribute('aria-current')).toBe(false)
-        expect(el.hasAttribute('data-selected')).toBe(false)
-        expect(
-          [...el.classList].some((c) => c === 'bg-bg-active' || c.startsWith('bg-bg-active/'))
-        ).toBe(false)
-      }
-      let row = draw()
-      notSelected(row)
-      expect(row.getAttribute('data-inbox-count')).toBe('2')
-      expect(row.getAttribute('data-inbox-waiting')).toBe('1')
-      expect(row.querySelector('.animate-ping')).not.toBeNull()
-
-      act(() => row.click())
-      expect(onOpen).toHaveBeenCalledTimes(1)
-      expect(selectSpy).not.toHaveBeenCalled()
-      row = draw()
-      notSelected(row)
-      expect(row.getAttribute('data-inbox-count')).toBe('2')
-
-      store.pending = {}
-      row = draw()
-      expect(row.hasAttribute('data-inbox-waiting')).toBe(false)
-      expect(row.querySelector('.animate-ping')).toBeNull()
-    }
-  )
 })
 
 // ─── 按键只在焦点落在面板里时归它（INK） ──────────────────────────────────────

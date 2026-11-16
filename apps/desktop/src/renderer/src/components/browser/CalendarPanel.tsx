@@ -240,7 +240,8 @@ export function CalendarPanel({
   return (
     <div
       data-calendar-panel={mobile ? 'mobile' : ''}
-      className="flex flex-col h-full bg-bg-primary overflow-hidden"
+      // 桌面上它在左侧栏里（侧栏的一种视图），底色跟侧栏走；手机上是会话页里的一页，用页面的底色
+      className={`flex flex-col h-full overflow-hidden ${mobile ? 'bg-bg-primary' : ''}`}
     >
       <div className={`flex-1 overflow-y-auto py-1 no-scrollbar ${mobile ? 'px-3' : 'pl-2 pr-2'}`}>
         <CalendarView
