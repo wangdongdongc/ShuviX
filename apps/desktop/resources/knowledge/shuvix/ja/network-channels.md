@@ -104,10 +104,11 @@ ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い
 
 ### `extensions`
 
-- group: `chromeExtension`, `dbCredential`, `mcp`, `skill`, `tools`
+- group: `chromeExtension`, `dbCredential`, `mcp`, `skill`, `tools`, `webSearch`
 - read: `chromeExtension:status`, `mcp:getTools`, `skill:getDefaultDir`, `skill:list`, `skill:listExternalDirs`, `skill:listGrouped`, `skill:parseMarkdown`, `tools:definitions`, `tools:list`
 - write: `skill:pickExternalDir`
-- admin: `chromeExtension:repair`, `dbCredential:add`, `dbCredential:delete`, `dbCredential:list`, `dbCredential:testConnection`, `dbCredential:update`, `mcp:add`, `mcp:connect`, `mcp:delete`, `mcp:disconnect`, `mcp:list`, `mcp:update`, `skill:addExternalDir`, `skill:deleteDefault`, `skill:openNote`, `skill:removeExternalDir`, `skill:setGroupEnabled`, `skill:update`
+- admin: `chromeExtension:repair`, `dbCredential:add`, `dbCredential:delete`, `dbCredential:list`, `dbCredential:testConnection`, `dbCredential:update`, `mcp:add`, `mcp:connect`, `mcp:delete`, `mcp:disconnect`, `mcp:list`, `mcp:update`, `skill:addExternalDir`, `skill:deleteDefault`, `skill:openNote`, `skill:removeExternalDir`, `skill:setGroupEnabled`, `skill:update`, `webSearch:config`, `webSearch:deleteKey`, `webSearch:setKey`, `webSearch:test`
+- `settings:set` admin: `webSearch.*`
 
 ### `models`
 

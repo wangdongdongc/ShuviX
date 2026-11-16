@@ -1256,6 +1256,21 @@ export const migrations: Migration[] = [
         }
       }
     }
+  },
+  {
+    version: 43,
+    description:
+      'web_search 的 API 方式：商业搜索 API 的密钥表 web_search_keys（一家一行，apiKey 是密文）',
+    up: (db) => {
+      // 只建表。密钥不进 settings：那张表是明文，settings:get 智能体与远程访问都读得到
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS web_search_keys (
+          provider   TEXT    PRIMARY KEY,
+          apiKey     TEXT    NOT NULL,
+          updatedAt  INTEGER NOT NULL
+        )
+      `)
+    }
   }
 ]
 

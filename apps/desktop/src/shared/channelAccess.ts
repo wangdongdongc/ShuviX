@@ -177,6 +177,12 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   // 输入框的提示：会用会话的已知值认（发一条不带 secrets 的消息看它被不被换掉也能试出来），与发消息同级
   'redaction:inspect': 'write',
 
+  // ─── webSearch：搜索 API 的密钥（只进不出；交回的只有存没存与末四位）───
+  'webSearch:config': 'admin',
+  'webSearch:setKey': 'admin',
+  'webSearch:deleteKey': 'admin',
+  'webSearch:test': 'admin', // 拿存着的密钥向外发一次请求，花一次额度
+
   // ─── dbCredential：数据库凭据 ───
   'dbCredential:list': 'admin', // 不含密码，但主机 / 用户名 / 驱动参数都属凭据
   'dbCredential:add': 'admin',
@@ -557,6 +563,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   mcp: 'extensions',
   skill: 'extensions',
   dbCredential: 'extensions',
+  webSearch: 'extensions',
   chromeExtension: 'extensions',
   provider: 'models',
   policy: 'security',
@@ -644,6 +651,8 @@ export const SETTING_KEY_FACTS: Readonly<Record<string, CallFacts>> = {
   'shuvix.figureExport.': { scope: 'preferences', access: 'write' },
   'browser.': { scope: 'browser', access: 'write' }, // 搜索引擎、视图模式、DevTools 高度
   'tool.browser.': { scope: 'browser', access: 'admin' }, // 忽略证书错误
+  // web_search 用哪种方式搜：换成一家搜索 API 就是把搜索词发给第三方、花那把密钥的额度（与密钥本身同级）
+  'webSearch.': { scope: 'extensions', access: 'admin' },
   'general.defaultProvider': { scope: 'models', access: 'admin' },
   'general.defaultModel': { scope: 'models', access: 'admin' },
   'general.defaultThinkingLevel': { scope: 'models', access: 'admin' },

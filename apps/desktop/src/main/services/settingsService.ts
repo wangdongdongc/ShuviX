@@ -57,6 +57,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.toolBrowserSearchEngine',
     desc: 'google | bing | baidu | duckduckgo — what the in-app browser address bar searches with when the input is not a web address; default google'
   },
+  'webSearch.provider': {
+    labelKey: 'settings.webSearchProvider',
+    desc: 'browser | tavily | exa — how the web_search tool searches: the in-app browser with its search engine (default), or a search API whose key is saved under Settings → LLM tools → web_search; a failing API is reported, never replaced by another method'
+  },
   'voice.tts.enabled': {
     labelKey: 'settings.voiceTtsEnabled',
     desc: 'true | false — auto-play TTS after agent response'

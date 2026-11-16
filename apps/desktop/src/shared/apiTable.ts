@@ -213,6 +213,12 @@ export const API_TABLE = {
     inspect: invoke('redaction:inspect', 1)
   },
   /** 数据库凭据 */
+  webSearch: {
+    config: invoke('webSearch:config', 0),
+    setKey: invoke('webSearch:setKey', 1),
+    deleteKey: invoke('webSearch:deleteKey', 1),
+    test: invoke('webSearch:test', 1)
+  },
   dbCredential: {
     list: invoke('dbCredential:list', 0),
     add: invoke('dbCredential:add', 1),

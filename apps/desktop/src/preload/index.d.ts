@@ -604,6 +604,21 @@ declare global {
         texts: string[]
       }) => Promise<RedactionHint[][]>
     }
+    /** `web_search` 的搜索方式设置：密钥只进不出，交回的只有存没存与末四位 */
+    webSearch: {
+      config: () => Promise<import('../shared/webSearchProviders').WebSearchConfig>
+      setKey: (params: {
+        provider: string
+        apiKey: string
+      }) => Promise<import('../shared/webSearchProviders').WebSearchConfig>
+      deleteKey: (
+        provider: string
+      ) => Promise<import('../shared/webSearchProviders').WebSearchConfig>
+      /** 用存着的密钥真的搜一次（花一次额度） */
+      test: (
+        provider: string
+      ) => Promise<import('../shared/webSearchProviders').WebSearchTestResult>
+    }
     dbCredential: {
       list: () => Promise<Omit<DbCredential, 'password'>[]>
       add: (params: DbCredentialAddParams) => Promise<{ id: string }>

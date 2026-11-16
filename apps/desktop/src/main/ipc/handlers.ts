@@ -14,6 +14,7 @@ import { registerAppLogHandlers } from './appLogHandlers'
 import { registerMcpHandlers } from './mcpHandlers'
 import { registerSkillHandlers } from './skillHandlers'
 import { registerDbCredentialHandlers } from './dbCredentialHandlers'
+import { registerWebSearchHandlers } from './webSearchHandlers'
 import { registerTelegramHandlers } from './telegramHandlers'
 import { registerCommandHandlers } from './commandHandlers'
 import { registerTtsHandlers } from './ttsHandlers'
@@ -66,6 +67,7 @@ export function registerIpcHandlers(): void {
   registerMcpHandlers()
   registerSkillHandlers()
   registerDbCredentialHandlers()
+  registerWebSearchHandlers()
   registerTelegramHandlers()
   registerCommandHandlers()
   registerTtsHandlers()

@@ -76,6 +76,7 @@ export {
   SearchNeedsHumanCheck,
   type WebSearchOutcome
 } from './webSearch'
+export { formatResults } from './searchResults'
 export {
   initBrowserWindowService,
   openBrowserWindow,

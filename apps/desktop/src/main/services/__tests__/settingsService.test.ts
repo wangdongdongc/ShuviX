@@ -143,3 +143,84 @@ describe('KNOWN_SETTINGS —— 通知开关', () => {
     expect(KNOWN_SETTINGS).not.toHaveProperty(['notification.enabled'])
   })
 })
+
+/**
+ * `web_search` 的搜索方式（`webSearch.provider`，2026-11-16）—— 设置 → LLM 工具 → web_search 里的三选一，也是
+ * settings 工具能改的键。密钥不是设置项：settings 表是明文，`settings:get` 智能体与远程访问都读得到。
+ */
+describe('KNOWN_SETTINGS —— web_search 的搜索方式', () => {
+  const leaf = (bundle: unknown, path: string): unknown =>
+    path
+      .split('.')
+      .reduce<unknown>(
+        (node, part) => (node as Record<string, unknown> | undefined)?.[part],
+        bundle
+      )
+
+  it('ST-WS-1 webSearch.provider 在册：标签键、三个取值、缺省是浏览器、失败不换方式', () => {
+    const entry = KNOWN_SETTINGS['webSearch.provider']
+    expect(entry).toBeDefined()
+    expect(entry.labelKey).toBe('settings.webSearchProvider')
+    expect(entry.desc.startsWith('browser | tavily | exa')).toBe(true)
+    expect(entry.desc).toMatch(/in-app browser[^;]*\(default\)/)
+    expect(entry.desc).toContain('never replaced by another method')
+    expect(getSettingKeyDescriptions()).toContain('webSearch.provider')
+  })
+
+  it('ST-WS-2 密钥不是设置项：注册表里没有搜索 API 密钥的键，描述文本里也没有', () => {
+    const keys = Object.keys(KNOWN_SETTINGS)
+    expect(keys.filter((k) => /webSearch.*(key|token|secret)/i.test(k))).toEqual([])
+    expect(keys.filter((k) => /tavily|\bexa\b/i.test(k))).toEqual([])
+    expect(keys.filter((k) => k.startsWith('webSearch.'))).toEqual(['webSearch.provider'])
+    const text = getSettingKeyDescriptions()
+    expect(text).not.toMatch(/webSearch\.[A-Za-z.]*(key|token|secret)/i)
+    expect(text).not.toMatch(/apiKey/i)
+  })
+
+  it('ST-WS-3 设置页用到的文案三语都有，占位符同名', () => {
+    const uiKeys = [
+      'webSearchProvider',
+      'webSearchBrowser',
+      'webSearchBrowserHint',
+      'webSearchBrowserSettings',
+      'webSearchNoKey',
+      'webSearchKeySaved',
+      'webSearchKeyPlaceholder',
+      'webSearchSave',
+      'webSearchTest',
+      'webSearchTesting',
+      'webSearchDeleteKey',
+      'webSearchMissingKey',
+      'webSearchTestOk'
+    ]
+    const placeholders = (text: string): string[] =>
+      [...text.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort()
+    const enSettings = (en as unknown as { settings: Record<string, string> }).settings
+    expect(
+      Object.keys(enSettings)
+        .filter((k) => k.startsWith('webSearch'))
+        .sort()
+    ).toEqual([...uiKeys].sort())
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const uiKey of uiKeys) {
+        const text = leaf(bundle, `settings.${uiKey}`)
+        expect(typeof text === 'string' && text.trim() !== '', `${lang} ${uiKey}`).toBe(true)
+        expect(placeholders(text as string), `${lang} ${uiKey}`).toEqual(
+          placeholders(enSettings[uiKey])
+        )
+      }
+    }
+    expect(placeholders(enSettings.webSearchBrowserHint)).toEqual(['engine'])
+    expect(placeholders(enSettings.webSearchKeySaved)).toEqual(['last4'])
+    expect(placeholders(enSettings.webSearchKeyPlaceholder)).toEqual(['name'])
+    expect(placeholders(enSettings.webSearchTestOk)).toEqual(['count', 'seconds'])
+
+    // 工具卡片上的提示不再说「在浏览器里搜」（选了 API 时那是错的）
+    for (const bundle of [en, zh, ja]) {
+      const hint = leaf(bundle, 'tool.webSearchHint') as string
+      expect(typeof hint === 'string' && hint.trim() !== '').toBe(true)
+    }
+    expect(leaf(en, 'tool.webSearchHint')).not.toMatch(/search engine chosen there/i)
+    expect(leaf(en, 'tool.webSearchHint')).toMatch(/search API/i)
+  })
+})

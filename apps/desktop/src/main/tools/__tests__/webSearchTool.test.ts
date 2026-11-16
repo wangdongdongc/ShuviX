@@ -9,6 +9,12 @@
  *   WT-10..12 交给 runWebSearch 的参数、结果、失败
  *   WT-13..15 人机验证：SearchNeedsHumanCheck 成为普通的失败结果，不问用户，没有询问通道也一样
  *   WT-23..24 工具从不打开浏览器窗口、不碰询问通道；人机验证的文案键已删
+ *
+ * 搜索 API 方式（2026-11-16，设置里选了 Tavily / Exa；services/webSearchApiService 桩掉，失败用真的
+ * WebSearchApiError 造）：
+ *   WT-30..31 浏览器方式不变；选的方式每次调用读一次，工具的名字 / 描述 / 参数不随它变
+ *   WT-32..43 API 方式：过门的是那家的端点、门先于请求、条数（1–10）、结果的排版与浏览器方式同形、没有结果
+ *   WT-44..51 不换方式：每一种失败都是失败的工具结果，浏览器一次都不碰；密钥不进结果
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -22,14 +28,22 @@ const h = vi.hoisted(() => ({
   enforceUrl: vi.fn(),
   respond: vi.fn(),
   ask: vi.fn(),
-  t: vi.fn()
+  t: vi.fn(),
+  format: vi.fn(),
+  providerOf: vi.fn(),
+  api: vi.fn()
 }))
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/shuvix-web-search-test' } }))
 vi.mock('../../services/browser', () => ({
   runWebSearch: h.run,
   configuredSearchEngine: h.engineOf,
+  formatResults: h.format,
   WEB_SEARCH_MAX_RESULTS: 10
+}))
+vi.mock('../../services/webSearchApiService', () => ({
+  configuredWebSearchProvider: h.providerOf,
+  searchWithApi: h.api
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforceUrl: h.enforceUrl }),
@@ -58,6 +72,12 @@ import {
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import { searchUrl } from '../../../shared/browserSearchEngines'
 import type { ToolContext } from '../../services/toolContext'
+import {
+  WebSearchApiError,
+  missingKeyError,
+  networkError,
+  parseApiSearchResponse
+} from '../../utils/toolUtils/webSearchApi'
 import { WEB_SEARCH_DESCRIPTION, WebSearchParamsSchema, WebSearchTool } from '../webSearch'
 
 // ─── 夹具 ───────────────────────────────────────────────
@@ -105,7 +125,23 @@ const unhandled: unknown[] = []
 const onUnhandled = (reason: unknown): void => void unhandled.push(reason)
 
 beforeEach(() => {
-  for (const fn of [h.run, h.engineOf, h.enforceUrl, h.respond, h.ask]) fn.mockReset()
+  for (const fn of [
+    h.run,
+    h.engineOf,
+    h.enforceUrl,
+    h.respond,
+    h.ask,
+    h.format,
+    h.providerOf,
+    h.api
+  ])
+    fn.mockReset()
+  h.providerOf.mockReturnValue('browser')
+  h.api.mockResolvedValue([])
+  h.format.mockImplementation(
+    (query: string, engineName: string, results: unknown[]) =>
+      `FMT ${engineName} ${JSON.stringify(query)} ${results.length}`
+  )
   h.t.mockClear()
   h.t.mockImplementation((key: string, vars?: Record<string, unknown>) =>
     vars ? `${key} ${JSON.stringify(vars)}` : key
@@ -383,5 +419,323 @@ describe('不打扰用户', () => {
     const keys = new Set(h.t.mock.calls.map((c) => c[0] as string))
     expect([...keys].filter((k) => k.includes('Verify'))).toEqual([])
     expect(keys.has('tool.webSearchAskDescription')).toBe(true)
+  })
+})
+
+// ─── 搜索 API 方式 ─────────────────────────────────────
+
+type ApiProvider = 'tavily' | 'exa'
+const API: Record<ApiProvider, { name: string; endpoint: string }> = {
+  tavily: { name: 'Tavily', endpoint: 'https://api.tavily.com/search' },
+  exa: { name: 'Exa', endpoint: 'https://api.exa.ai/search' }
+}
+const KEY = ['tvly', 'SECRETSECRET', '1234'].join('-')
+const hit = (n: number): { title: string; url: string; snippet: string } => ({
+  title: `Title ${n}`,
+  url: `https://example.com/${n}`,
+  snippet: `Snippet ${n}`
+})
+/** 真的解析函数对一个回包抛出来的错 */
+function apiError(provider: ApiProvider, status: number, body: unknown, key?: string): Error {
+  try {
+    parseApiSearchResponse(provider, status, body, 8, key)
+  } catch (error) {
+    return error as Error
+  }
+  throw new Error('expected a failure')
+}
+
+describe('浏览器方式不变', () => {
+  it('WT-30 选的是浏览器：过门的是结果页地址，去搜一次，不碰搜索 API', async () => {
+    expect(resultText(await call({ query: 'cats' }))).toBe('ok')
+    expect((h.enforceUrl.mock.calls[0][0] as { host: string }).host).toBe('www.google.com')
+    expect(h.run).toHaveBeenCalledTimes(1)
+    expect(h.api).not.toHaveBeenCalled()
+    expect(h.format).not.toHaveBeenCalled()
+  })
+
+  it('WT-31 选的方式每次调用读一次；工具的名字 / 描述 / 参数不随它变', async () => {
+    const shapeOf = (): unknown => {
+      const t = tool()
+      return { name: t.name, description: t.description, parameters: t.parameters }
+    }
+    const asBrowser = shapeOf()
+    h.providerOf.mockReturnValue('tavily')
+    expect(shapeOf()).toEqual(asBrowser)
+    expect(WEB_SEARCH_DESCRIPTION).not.toMatch(/tavily|exa\b/i)
+
+    const t = tool()
+    h.providerOf.mockClear()
+    await invokeTool(t, { query: 'cats' } as never)
+    expect(h.providerOf).toHaveBeenCalledTimes(1)
+    expect(h.api).toHaveBeenCalledTimes(1)
+    // 同一个工具实例：设置换了，下一次调用就按新的来
+    h.providerOf.mockReturnValue('browser')
+    await invokeTool(t, { query: 'cats' } as never)
+    expect(h.providerOf).toHaveBeenCalledTimes(2)
+    expect(h.api).toHaveBeenCalledTimes(1)
+    expect(h.run).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('API 方式', () => {
+  beforeEach(() => {
+    h.providerOf.mockReturnValue('tavily')
+    h.api.mockResolvedValue([hit(1), hit(2), hit(3)])
+  })
+
+  it('WT-32 Tavily：过门的是它的端点，说明里是它的名字；搜索词去空白、缺省 8 条；浏览器不碰', async () => {
+    await call({ query: '  rust async  ' }, { callId: 'call-api', taskId: 4, conversationId: 7 })
+    expect(h.enforceUrl).toHaveBeenCalledTimes(1)
+    const [object, options] = h.enforceUrl.mock.calls[0] as [unknown, Record<string, unknown>]
+    expect(object).toEqual(urlObjectOf(API.tavily.endpoint, 'app'))
+    expect(object).toMatchObject({ browser: 'app', scheme: 'https', host: 'api.tavily.com' })
+    expect(options).toMatchObject({
+      toolCallId: 'call-api',
+      taskId: 4,
+      conversationId: 7,
+      toolName: 'web_search',
+      abortError: 'Aborted',
+      missingChannel: 'deny',
+      description: `tool.webSearchAskDescription ${JSON.stringify({ engine: 'Tavily', query: 'rust async' })}`
+    })
+    expect(h.api).toHaveBeenCalledTimes(1)
+    expect(h.api.mock.calls[0].slice(0, 3)).toEqual(['tavily', 'rust async', 8])
+    expect(h.run).not.toHaveBeenCalled()
+    expect(h.engineOf).not.toHaveBeenCalled()
+  })
+
+  it('WT-33 Exa：端点、名字、搜的是 exa', async () => {
+    h.providerOf.mockReturnValue('exa')
+    await call({ query: 'cats' })
+    const [object, options] = h.enforceUrl.mock.calls[0] as [
+      { url: string },
+      { description: string }
+    ]
+    expect(object).toEqual(urlObjectOf(API.exa.endpoint, 'app'))
+    expect(options.description).toBe(
+      `tool.webSearchAskDescription ${JSON.stringify({ engine: 'Exa', query: 'cats' })}`
+    )
+    expect(h.api.mock.calls[0][0]).toBe('exa')
+    expect(h.run).not.toHaveBeenCalled()
+  })
+
+  it('WT-34 门先于请求：门没答之前不发请求', async () => {
+    const gate = deferred<void>()
+    h.enforceUrl.mockImplementation(() => gate.promise)
+    const work = call({ query: 'cats' })
+    await settle()
+    expect(h.enforceUrl).toHaveBeenCalledTimes(1)
+    expect(h.api).not.toHaveBeenCalled()
+    gate.resolve()
+    await work
+    expect(h.api).toHaveBeenCalledTimes(1)
+  })
+
+  it('WT-35 门拒绝 → 失败文字是它的消息；不发请求，也不去浏览器', async () => {
+    h.enforceUrl.mockRejectedValue(new Error('Denied by policy no-search'))
+    expect(await failureText(call({ query: 'cats' }))).toBe('Denied by policy no-search')
+    expect(h.api).not.toHaveBeenCalled()
+    expect(h.run).not.toHaveBeenCalled()
+  })
+
+  it('WT-36 门还没答就被中止，之后门放行 → 以 reason 收场，不发请求', async () => {
+    const gate = deferred<void>()
+    h.enforceUrl.mockImplementation(() => gate.promise)
+    const abort = new AbortController()
+    const work = call({ query: 'cats' }, { signal: abort.signal })
+    await settle()
+    const reason = new Error('stopped')
+    abort.abort(reason)
+    gate.resolve()
+    await expect(work).rejects.toBe(reason)
+    expect(h.api).not.toHaveBeenCalled()
+    expect(h.run).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [1, 1],
+    [3, 3],
+    [10, 10],
+    [undefined, 8]
+  ])('WT-37 max_results %j → 条数 %i', async (max_results, limit) => {
+    await call({ query: 'cats', max_results })
+    expect(h.api.mock.calls[0][2]).toBe(limit)
+  })
+
+  it.each([
+    [0, 1],
+    [-4, 1],
+    [50, 10],
+    [2.7, 2],
+    [Number.NaN, 8],
+    ['5', 8]
+  ])('WT-43 max_results %j（绕过 schema）→ 条数 %i：1–10 的整数', async (max_results, limit) => {
+    await call({ query: 'cats', max_results })
+    expect(h.api.mock.calls[0][2]).toBe(limit)
+  })
+
+  it('WT-38 结果交给 formatResults(搜索词, 名字, 结果)，工具结果就是它的返回值', async () => {
+    const list = [hit(1), hit(2)]
+    h.api.mockResolvedValue(list)
+    const result = await call({ query: ' rust async ' })
+    expect(h.format).toHaveBeenCalledTimes(1)
+    expect(h.format.mock.calls[0][0]).toBe('rust async')
+    expect(h.format.mock.calls[0][1]).toBe('Tavily')
+    expect(h.format.mock.calls[0][2]).toBe(list)
+    expect(result.content).toEqual([{ type: 'text', text: 'FMT Tavily "rust async" 2' }])
+    expect(result.details).toBeUndefined()
+    expect(result.isError).toBeUndefined()
+  })
+
+  it('WT-39 真的 formatResults：与浏览器方式同一种排版，抬头是这家的名字', async () => {
+    const actual = await vi.importActual<{
+      formatResults: (query: string, engineName: string, results: unknown[]) => string
+    }>('../../services/browser/searchResults')
+    h.format.mockImplementation(actual.formatResults)
+    h.api.mockResolvedValue([
+      hit(1),
+      { title: 'No snippet', url: 'https://example.com/2', snippet: '' }
+    ])
+    expect(resultText(await call({ query: 'rust async' }))).toBe(
+      'Tavily results for "rust async":\n\n' +
+        '1. Title 1\n   https://example.com/1\n   Snippet 1\n\n' +
+        '2. No snippet\n   https://example.com/2'
+    )
+  })
+
+  it('WT-40 没有结果 → 一句话（不是失败）：哪家、搜的什么；不排版，也不去浏览器再搜', async () => {
+    h.api.mockResolvedValue([])
+    const result = await call({ query: 'rust "async"' })
+    expect(result.isError).toBeUndefined()
+    expect(resultText(result)).toBe('Tavily found no results for "rust \\"async\\"".')
+    expect(h.format).not.toHaveBeenCalled()
+    expect(h.run).not.toHaveBeenCalled()
+  })
+
+  it('WT-41 调用带 signal → 传给 searchWithApi；不带就没有这个键', async () => {
+    const abort = new AbortController()
+    await call({ query: 'cats' }, { signal: abort.signal })
+    const withSignal = h.api.mock.calls[0][3] as { signal?: AbortSignal }
+    expect(withSignal.signal).toBeInstanceOf(AbortSignal)
+    expect(withSignal.signal!.aborted).toBe(false)
+    abort.abort(new Error('later'))
+    expect(withSignal.signal!.aborted).toBe(true)
+  })
+
+  it.each([[{ query: '' }], [{ query: '   ' }], [{ query: 'a'.repeat(401) }]])(
+    'WT-42 搜索词不合格（%#）照旧拒收：不过门、不发请求、不去浏览器',
+    async (args) => {
+      await failureText(call(args))
+      expect(h.enforceUrl).not.toHaveBeenCalled()
+      expect(h.api).not.toHaveBeenCalled()
+      expect(h.run).not.toHaveBeenCalled()
+    }
+  )
+})
+
+describe('不换方式', () => {
+  const FAILURES: Array<[string, (provider: ApiProvider) => Error]> = [
+    ['no-key', (p) => missingKeyError(p)],
+    ['bad-key', (p) => apiError(p, 401, { detail: { error: 'Unauthorized' } })],
+    ['quota', (p) => apiError(p, 402, { error: 'credits exhausted' })],
+    ['quota', (p) => apiError(p, 432, {})],
+    ['rate-limit', (p) => apiError(p, 429, {})],
+    ['http', (p) => apiError(p, 500, {})],
+    ['network', (p) => networkError(p, new TypeError('fetch failed'))],
+    ['shape', (p) => apiError(p, 200, {})]
+  ]
+  const CASES = (['tavily', 'exa'] as ApiProvider[]).flatMap((provider) =>
+    FAILURES.map(([kind, make], i) => [provider, kind, i, make] as const)
+  )
+
+  it.each(CASES)(
+    'WT-44 %s %s（%#）→ 失败的工具结果，文字就是那句话；浏览器一次都不碰',
+    async (provider, kind, _i, make) => {
+      const error = make(provider)
+      expect(error).toBeInstanceOf(WebSearchApiError)
+      expect((error as WebSearchApiError).kind).toBe(kind)
+      h.providerOf.mockReturnValue(provider)
+      h.api.mockRejectedValue(error)
+      // 浏览器那一头是好的：能搜也不搜
+      h.run.mockResolvedValue({ engine: 'google', text: 'browser results', resultCount: 3 })
+
+      const text = await failureText(call({ query: 'cats' }))
+      expect(text).toBe(error.message)
+      expect(h.run).not.toHaveBeenCalled()
+      expect(h.engineOf).not.toHaveBeenCalled()
+      expect(h.api).toHaveBeenCalledTimes(1)
+      expect(h.api.mock.calls[0][0]).toBe(provider)
+      expect(h.enforceUrl).toHaveBeenCalledTimes(1)
+      expect(h.format).not.toHaveBeenCalled()
+      expect(h.ask).not.toHaveBeenCalled()
+      expect(h.respond).not.toHaveBeenCalled()
+
+      // WT-45 给模型的话：哪一家、用户在设置里选的、不换方式、告诉用户、这一轮别再调
+      const name = API[provider].name
+      expect(text).toContain(name)
+      expect(text).toContain(`The user chose ${name} for web search in ShuviX's settings`)
+      expect(text).toContain('does not switch to another search method')
+      expect(text).toContain('Tell the user')
+      expect(text).toContain('do not call web_search again this turn')
+    }
+  )
+
+  it('WT-46 意料之外的错（普通 Error）也是失败，照样不去浏览器', async () => {
+    h.providerOf.mockReturnValue('tavily')
+    h.api.mockRejectedValue(new Error('boom'))
+    expect(await failureText(call({ query: 'cats' }))).toBe('boom')
+    expect(h.run).not.toHaveBeenCalled()
+  })
+
+  it('WT-47 调用方中止 → 以 reason 收场，不是一句 API 失败的话；不去浏览器', async () => {
+    h.providerOf.mockReturnValue('exa')
+    const abort = new AbortController()
+    const reason = new Error('stopped')
+    h.api.mockImplementation(
+      (_p: string, _q: string, _n: number, opts: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) =>
+          opts.signal.addEventListener('abort', () => reject(opts.signal.reason))
+        )
+    )
+    const work = call({ query: 'cats' }, { signal: abort.signal })
+    await settle()
+    abort.abort(reason)
+    await expect(work).rejects.toBe(reason)
+    expect(h.run).not.toHaveBeenCalled()
+  })
+
+  it('WT-49 失败之后把设置换回浏览器：下一次调用才去浏览器', async () => {
+    h.providerOf.mockReturnValue('tavily')
+    h.api.mockRejectedValue(missingKeyError('tavily'))
+    await failureText(call({ query: 'cats' }))
+    expect(h.run).not.toHaveBeenCalled()
+
+    h.providerOf.mockReturnValue('browser')
+    expect(resultText(await call({ query: 'cats' }))).toBe('ok')
+    expect(h.run).toHaveBeenCalledTimes(1)
+    expect(h.api).toHaveBeenCalledTimes(1)
+  })
+
+  it('WT-50 API 方式从不出卡：成功、没有结果、失败都不碰询问通道', async () => {
+    h.providerOf.mockReturnValue('tavily')
+    h.api.mockResolvedValueOnce([hit(1)])
+    await call({ query: 'cats' })
+    h.api.mockResolvedValueOnce([])
+    await call({ query: 'cats' })
+    h.api.mockRejectedValueOnce(apiError('tavily', 429, {}))
+    await failureText(call({ query: 'cats' }))
+    expect(h.ask).not.toHaveBeenCalled()
+    expect(h.respond).not.toHaveBeenCalled()
+  })
+
+  it('WT-51 服务方把密钥回显在 401 里：工具结果里没有它', async () => {
+    h.providerOf.mockReturnValue('tavily')
+    h.api.mockRejectedValue(
+      apiError('tavily', 401, { detail: { error: `Invalid API key: ${KEY}` } }, KEY)
+    )
+    const text = await failureText(call({ query: 'cats' }))
+    expect(text).toContain('Tavily rejected the API key (401)')
+    expect(text).not.toContain(KEY)
   })
 })

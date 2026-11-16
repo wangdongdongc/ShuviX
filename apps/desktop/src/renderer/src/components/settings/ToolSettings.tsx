@@ -1,18 +1,26 @@
 import { BuiltinToolsView } from '@shuvix/app-shell'
 import { SandboxSettings } from './SandboxSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 
 /**
  * 工具配置页：复用共享的 <BuiltinToolsView>（每工具一个子页 + 顶部 metadata 卡片）。
  * 浏览器的数据 / 证书设置与数据库的已保存连接随各自的能力搬到了 MCP 设置里内置 `browser` /
  * `database` 那一行（BrowserSettingsLink / DatabaseConnectionsSettings）。
  * 子智能体管理已移至侧栏的「智能体」分组（AgentGroup）。
- * bash 子页下方挂命令沙箱的开关（SandboxSettings，平台没有沙箱时不渲染）。
+ * bash 子页下方挂命令沙箱的开关（SandboxSettings，平台没有沙箱时不渲染）；web_search 子页下方挂搜索方式
+ * （WebSearchSettings：内置浏览器或一家搜索 API 及其密钥）。
  */
 export function ToolSettings(): React.JSX.Element {
   return (
     <BuiltinToolsView
       loadDefinitions={() => window.api.tools.definitions()}
-      renderToolExtra={(toolName) => (toolName === 'bash' ? <SandboxSettings /> : null)}
+      renderToolExtra={(toolName) =>
+        toolName === 'bash' ? (
+          <SandboxSettings />
+        ) : toolName === 'web_search' ? (
+          <WebSearchSettings />
+        ) : null
+      }
     />
   )
 }

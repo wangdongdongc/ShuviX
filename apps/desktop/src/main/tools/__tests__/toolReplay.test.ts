@@ -103,6 +103,11 @@ vi.mock('../../services/browser', () => ({
   configuredSearchEngine: vi.fn(),
   WEB_SEARCH_MAX_RESULTS: 10
 }))
+// web_search 的 API 方式（services/webSearchApiService）读设置与密钥表 —— 真的会去开数据库
+vi.mock('../../services/webSearchApiService', () => ({
+  configuredWebSearchProvider: () => 'browser',
+  searchWithApi: vi.fn()
+}))
 vi.mock('../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
 vi.mock('../../services/widgetPreviewService', () => ({
   parsePreviewSizes: vi.fn(),

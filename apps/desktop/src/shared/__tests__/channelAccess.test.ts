@@ -652,3 +652,47 @@ describe('AF-CA 添加的文件要 admin', () => {
     expect(channelCallAccessOf('session:list', [{ attachedPaths: ['/x'] }])).toBe('read')
   })
 })
+
+/**
+ * `web_search` 的搜索 API 密钥（2026-11-16）：四条通道都是 extensions 的 admin —— 读 config 也要 admin（它说出
+ * 哪家存了密钥、末四位），test 拿存着的密钥向外发一次请求。没有任何一条通道把密钥交回来。
+ */
+describe('CA-WS web_search 的搜索 API 密钥', () => {
+  const CHANNELS = [
+    ['webSearch:config', 'config', 0],
+    ['webSearch:setKey', 'setKey', 1],
+    ['webSearch:deleteKey', 'deleteKey', 1],
+    ['webSearch:test', 'test', 1]
+  ] as const
+
+  it.each(CHANNELS)('CA-WS-1 %s 是 admin / extensions', (channel) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(CHANNEL_ACCESS[channel]).toBe('admin')
+    expect(channelAccessOf(channel)).toBe('admin')
+    expect(channelScopeOf(channel)).toBe('extensions')
+    expect(channelCallFactsOf(channel, [])).toEqual({ scope: 'extensions', access: 'admin' })
+  })
+
+  it('CA-WS-2 API_TABLE.webSearch 恰好这四个成员，都是 invoke', () => {
+    expect(API_TABLE.webSearch).toEqual(
+      Object.fromEntries(
+        CHANNELS.map(([channel, member, args]) => [member, { kind: 'invoke', channel, args }])
+      )
+    )
+  })
+
+  it('CA-WS-3 scope 来自分组（GROUP_SCOPE.webSearch），没有一条点名在 CHANNEL_SCOPE_OVERRIDES', () => {
+    expect(GROUP_SCOPE.webSearch).toBe('extensions')
+    for (const [channel] of CHANNELS) {
+      expect(channelGroupOf(channel)).toBe('webSearch')
+      expect(Object.hasOwn(CHANNEL_SCOPE_OVERRIDES, channel), channel).toBe(false)
+    }
+  })
+
+  it('CA-WS-4 webSearch: 前缀的请求通道只有这四条（没有读密钥的通道）', () => {
+    const all = new Set([...REQUEST_CHANNELS, ...Object.keys(CHANNEL_ACCESS)])
+    expect([...all].filter((c) => c.toLowerCase().startsWith('websearch:')).sort()).toEqual(
+      CHANNELS.map(([channel]) => channel).sort()
+    )
+  })
+})
