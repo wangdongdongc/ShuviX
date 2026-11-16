@@ -176,7 +176,7 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
     expect(mocks.clearAgentScopedState).toHaveBeenCalledWith('c1')
     await gateway.prompt('c1', TASK)
     expect(prompt.mock.calls).toStrictEqual([
-      [TASK, undefined, undefined, undefined, PARENT, undefined]
+      [TASK, undefined, undefined, undefined, PARENT, undefined, true]
     ])
   })
 
@@ -258,7 +258,8 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
       sent.display,
       DRIVE,
       undefined,
-      undefined
+      undefined,
+      false
     ])
     await gateway.prompt('c1', TASK)
     expect(sourceOf(1)).toBeUndefined()
@@ -344,7 +345,7 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       await gateway.prompt('c1', TASK)
     })
     expect(prompt.mock.calls).toStrictEqual([
-      [TASK, undefined, undefined, undefined, PARENT, undefined]
+      [TASK, undefined, undefined, undefined, PARENT, undefined, true]
     ])
   })
 
@@ -374,7 +375,7 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       await gateway.prompt('c1', 'typed by a human')
     })
     expect(prompt.mock.calls).toStrictEqual([
-      ['typed by a human', undefined, undefined, undefined, REMOTE, undefined]
+      ['typed by a human', undefined, undefined, undefined, REMOTE, undefined, false]
     ])
   })
 
@@ -394,7 +395,8 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       sent.display,
       DRIVE,
       undefined,
-      undefined
+      undefined,
+      false
     ])
     expect(sourceOf(1)).toStrictEqual(REMOTE)
   })
@@ -443,7 +445,7 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
         await gateway.prompt('t1', M)
       })
       expect(prompt.mock.calls).toStrictEqual([
-        [M, undefined, undefined, undefined, REMOTE, undefined]
+        [M, undefined, undefined, undefined, REMOTE, undefined, false]
       ])
     })
 
@@ -455,7 +457,7 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
         await gateway.prompt('t1', long)
       })
       expect(prompt.mock.calls).toStrictEqual([
-        [long, undefined, undefined, undefined, TRIGGER, undefined]
+        [long, undefined, undefined, undefined, TRIGGER, undefined, true]
       ])
       expect(prompt.mock.calls[0]![0]).not.toContain(TRIGGER_EVENT_NOTE_TEXT)
     })
@@ -553,7 +555,7 @@ describe('别的会话发来的那条：回退之后再发（sessionSender.ts）
       await gateway.prompt('c1', 'typed by a human')
     })
     expect(prompt.mock.calls).toStrictEqual([
-      ['typed by a human', undefined, undefined, undefined, REMOTE, undefined]
+      ['typed by a human', undefined, undefined, undefined, REMOTE, undefined, false]
     ])
   })
 
@@ -565,7 +567,7 @@ describe('别的会话发来的那条：回退之后再发（sessionSender.ts）
       await gateway.prompt('c1', TASK)
     })
     expect(prompt.mock.calls).toStrictEqual([
-      [TASK, undefined, undefined, undefined, SOURCE, undefined]
+      [TASK, undefined, undefined, undefined, SOURCE, undefined, true]
     ])
   })
 
@@ -578,7 +580,7 @@ describe('别的会话发来的那条：回退之后再发（sessionSender.ts）
       await gateway.prompt('c1', TASK)
     })
     expect(prompt.mock.calls).toStrictEqual([
-      [TASK, undefined, undefined, undefined, SOURCE, undefined]
+      [TASK, undefined, undefined, undefined, SOURCE, undefined, true]
     ])
   })
 
@@ -620,7 +622,55 @@ describe('别的会话发来的那条：回退之后再发（sessionSender.ts）
       await gateway.prompt('t1', TASK)
     })
     expect(prompt.mock.calls).toStrictEqual([
-      [TASK, undefined, undefined, undefined, REMOTE, undefined]
+      [TASK, undefined, undefined, undefined, REMOTE, undefined, false]
     ])
+  })
+})
+
+/**
+ * 无人值守的运行（docs/unattended-run-design.md §2）：人点的「重新生成」/ 回退后原样重发一条机器来源的消息 ——
+ * 来源章沿用原来的，但这一轮算有人值守（session.prompt 的第 7 个参数 humanPresent）。
+ *   GW-U6 沿用了来源的那一次 → humanPresent true，来源原样（连存下的 unattended:true 也不改）；紧接着的下一次、
+ *         改过的文字、人打的那条、被驱动的发送 → false
+ */
+describe('GW-U6 重发机器来源的消息：这一轮有人值守', () => {
+  const humanPresentOf = (n: number): unknown => prompt.mock.calls[n]?.[6]
+
+  it('GW-U6 回退掉无人值守的父会话代发的那条、原样重发：来源原样（带 unattended:true），humanPresent true', async () => {
+    const UNATTENDED_PARENT = { ...PARENT, unattended: true } as const
+    mocks.getAgentSession.mockReturnValue(agentWith(CHILD_MESSAGES, [['u1', UNATTENDED_PARENT]]))
+    await gateway.rollbackMessage('c1', 'u1')
+    await gateway.prompt('c1', TASK)
+    expect(sourceOf(0)).toStrictEqual(UNATTENDED_PARENT)
+    expect(humanPresentOf(0)).toBe(true)
+  })
+
+  it('GW-U6 触发消息原样重发：来源仍是 trigger，humanPresent true', async () => {
+    const TRIGGER = { kind: 'trigger', trigger: 'timer.fired', bot: 'ticker' } as const
+    mocks.getAgentSession.mockReturnValue(
+      agentWith([{ id: 'u9', role: 'user', content: TASK }], [['u9', TRIGGER]])
+    )
+    await gateway.rollbackMessage('t1', 'u9')
+    await gateway.prompt('t1', TASK)
+    expect(sourceOf(0)).toStrictEqual(TRIGGER)
+    expect(humanPresentOf(0)).toBe(true)
+  })
+
+  it('GW-U6 只给紧接着的那一次：再发一次同样的话 → false', async () => {
+    await gateway.rollbackMessage('c1', 'u1')
+    await gateway.prompt('c1', TASK)
+    await gateway.prompt('c1', TASK)
+    expect(humanPresentOf(0)).toBe(true)
+    expect(humanPresentOf(1)).toBe(false)
+  })
+
+  it('GW-U6 没沿用来源的发送都是 false：改过的文字、人打的那条、被驱动的发送', async () => {
+    await gateway.rollbackMessage('c1', 'u1')
+    await gateway.prompt('c1', `${TASK}!`)
+    await gateway.rollbackMessage('c1', 'u2')
+    await gateway.prompt('c1', 'typed by a human')
+    await gateway.rollbackMessage('c1', 'u1')
+    await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
+    expect(prompt.mock.calls.map((call) => call[6])).toEqual([false, false, false])
   })
 })

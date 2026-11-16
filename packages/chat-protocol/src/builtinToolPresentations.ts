@@ -227,6 +227,11 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
         .filter(Boolean)
         .join(' · ') || undefined
   },
+  web_search: {
+    labelKey: 'tool.webSearchLabel',
+    presentation: { icon: 'Globe', iconColor: '#38bdf8' },
+    buildSummary: (args) => asStr(args.query)
+  },
   tool_search: {
     labelKey: 'tool.toolSearchLabel',
     presentation: { icon: 'Puzzle', iconColor: '#8b5cf6' },

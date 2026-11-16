@@ -23,6 +23,11 @@ import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { AskInputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { invokeTool, resultText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
+import {
+  UNATTENDED_FIELDS_TEXT,
+  isUnattendedResult,
+  unattendedApprovalText
+} from '@shuvix/chat-protocol/unattended'
 
 const state = vi.hoisted(() => ({
   registered: [] as Array<Record<string, unknown>>,
@@ -476,5 +481,75 @@ describe('SX-9 mcp:delete', () => {
       { label: 'Name', value: 'github' },
       { label: 'Command', value: 'npx -y pkg' }
     ])
+  })
+})
+
+/**
+ * 无人值守的运行（docs/unattended-run-design.md §3）：要用户亲手填的值没人能填；要批准的改动没人能批。
+ *   SV-1 填值卡落定为 unattended → 失败，文案是 UNATTENDED_FIELDS_TEXT；通道不调
+ *   SV-2 门（审批卡）以「没人能批」拒绝 → 失败，文案原样带着标记；通道不调
+ *   SV-3 读通道 / describe 不问任何人，照常
+ *   SV-4 别的取消原因仍是 Aborted；拒绝仍是原来那句（回归）
+ */
+describe('SV 无人值守', () => {
+  const args = { name: 'x', type: 'stdio', command: 'run', env: { KEY: '' } }
+
+  it('SV-1 填值卡没人能填：UNATTENDED_FIELDS_TEXT，通道不调', async () => {
+    state.requestUserInputFor.mockResolvedValue({
+      kind: 'cancel',
+      reason: 'unattended'
+    } satisfies InputResponse)
+    const { isError, text } = await run({ action: 'call', channel: 'mcp:add', args }, 'call-u')
+    expect(isError).toBe(true)
+    expect(text).toContain(UNATTENDED_FIELDS_TEXT)
+    expect(isUnattendedResult(text)).toBe(true)
+    expect(text).not.toContain('Aborted')
+    expect(text).not.toContain('declined')
+    expect(state.requestUserInputFor).toHaveBeenCalledTimes(1)
+    expect(state.invokeAsAgent).not.toHaveBeenCalled()
+  })
+
+  it('SV-2 审批卡没人能批：门抛的那句原样交给模型（标记在开头），通道不调', async () => {
+    const refusal = unattendedApprovalText('mcp:add')
+    state.assertChannelAccess.mockRejectedValue(new Error(refusal))
+    const { isError, text } = await run({
+      action: 'call',
+      channel: 'mcp:add',
+      args: { name: 'x', type: 'stdio', command: 'run' }
+    })
+    expect(isError).toBe(true)
+    expect(text).toContain(refusal)
+    expect(isUnattendedResult(text)).toBe(true)
+    expect(state.invokeAsAgent).not.toHaveBeenCalled()
+    expect(state.requestUserInputFor).not.toHaveBeenCalled()
+  })
+
+  it('SV-3 读通道与 describe 不问任何人', async () => {
+    state.servers = [server('github')]
+    const list = await run({ action: 'call', channel: 'mcp:list' })
+    expect(list.isError).toBe(false)
+    const described = await run({ action: 'describe' })
+    expect(described.isError).toBe(false)
+    expect(state.requestUserInputFor).not.toHaveBeenCalled()
+  })
+
+  it.each(['aborted', 'closed', 'superseded'] as const)(
+    'SV-4 取消原因 %s 仍是 Aborted，不带标记',
+    async (reason) => {
+      state.requestUserInputFor.mockResolvedValue({ kind: 'cancel', reason } as InputResponse)
+      const { isError, text } = await run({ action: 'call', channel: 'mcp:add', args })
+      expect(isError).toBe(true)
+      expect(text).toContain('Aborted')
+      expect(isUnattendedResult(text)).toBe(false)
+      expect(state.invokeAsAgent).not.toHaveBeenCalled()
+    }
+  )
+
+  it('SV-4 拒绝填值仍是原来那句', async () => {
+    state.requestUserInputFor.mockResolvedValue({ kind: 'ask', allowed: false } as InputResponse)
+    const { isError, text } = await run({ action: 'call', channel: 'mcp:add', args })
+    expect(isError).toBe(true)
+    expect(text).toContain('the user declined to fill in the values')
+    expect(isUnattendedResult(text)).toBe(false)
   })
 })

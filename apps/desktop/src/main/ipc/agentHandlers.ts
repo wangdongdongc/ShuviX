@@ -156,6 +156,12 @@ export function registerAgentHandlers(): void {
   /** 各会话挂着几条询问（只读）：窗口重建 / 客户端重连后补侧栏徽标 */
   defineHandler('agent:askCounts', () => chatGateway.pendingAskCounts())
 
+  /** 此刻这一轮无人值守的会话（只读）：窗口重建 / 客户端重连后补头部图标 */
+  defineHandler('agent:unattended', () => chatGateway.unattendedSessions())
+
+  /** 「我在这儿」：这条会话的这一轮从此有人值守，之后的询问照常出卡片 */
+  defineHandler('agent:attend', (_ctx, sessionId: string) => chatGateway.attend(sessionId))
+
   /** 各会话此刻挂着的询问本身（只读）：收件箱不打开会话就地回答 / 批准，应答仍走 agent:respondToInput */
   defineHandler('agent:pendingInputs', () => chatGateway.pendingInputs())
 

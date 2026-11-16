@@ -78,6 +78,15 @@ export interface ChatAskCountEvent extends ChatEventBase {
   count: number
 }
 
+/**
+ * 这条会话当前这一轮有没有人在（docs/unattended-run-design.md）：触发器开出来的运行是无人值守，人发来消息或点了
+ * 「我在这儿」之后转回。只在变化时发；新来的前端经 `agent.unattended` 查。
+ */
+export interface ChatUnattendedEvent extends ChatEventBase {
+  type: 'unattended'
+  unattended: boolean
+}
+
 // ─── 资源事件 ──────────────────────────────────────────
 
 /** 运行时资源状态信息（前端直接渲染，不理解具体资源类型） */
@@ -233,3 +242,4 @@ export type ChatEvent =
   | ChatMcpConnectingEvent
   | ChatErrorEvent
   | ChatAskCountEvent
+  | ChatUnattendedEvent

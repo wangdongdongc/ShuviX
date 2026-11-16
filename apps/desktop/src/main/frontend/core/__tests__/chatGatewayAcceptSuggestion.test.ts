@@ -274,7 +274,7 @@ describe('GA-3 · 空闲：起一轮，不等它', () => {
     expect(await accept()).toStrictEqual({ success: true })
     await flush()
     expect(prompt.mock.calls).toStrictEqual([
-      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }, undefined]
+      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }, undefined, false]
     ])
     expect(mocks.ensureAgentSession).toHaveBeenCalledWith('s1')
     pending.resolve({})
@@ -375,7 +375,7 @@ describe('GA-IMG · 带图的提议：采纳只发那句话', () => {
     expect(await accept()).toStrictEqual({ success: true })
     await flush()
     expect(prompt.mock.calls).toStrictEqual([
-      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }, undefined]
+      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }, undefined, false]
     ])
     expectNoImage(prompt.mock.calls[0]!)
   })

@@ -893,6 +893,13 @@ export interface HostApi {
      */
     askCounts: () => Promise<Record<string, number>>
     /**
+     * 此刻这一轮无人值守的会话（docs/unattended-run-design.md）。`unattended` 是事件，新来的前端靠这份补。
+     * 可选：没有它的宿主（Chrome 侧栏）不显示这个状态
+     */
+    unattended?: () => Promise<string[]>
+    /** 「我在这儿」：这条会话的这一轮从此有人值守，之后的询问照常出卡片。可选，同上 */
+    attend?: (sessionId: string) => Promise<{ success: boolean }>
+    /**
      * 各会话此刻挂着的询问本身（只列有的）：收件箱不打开会话就地回答 / 批准，应答仍走 `respondToInput`。
      * 可选：没有它的宿主（Chrome 侧栏）收件箱只列会话、不摆卡片
      */

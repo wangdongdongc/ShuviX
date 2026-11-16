@@ -19,6 +19,7 @@
  * 拒绝文案与迁移前逐字一致（既有询问测试的等价护栏）；无通道文案随 ask 词汇统一改写过。
  */
 import { safeExtensionName } from '@shuvix/chat-protocol/toolSelection'
+import { unattendedApprovalText } from '@shuvix/chat-protocol/unattended'
 import {
   isPermissionVerdict,
   type PermissionVerdict
@@ -415,6 +416,11 @@ export async function executeDecision(args: {
     createdAt: Date.now()
   })
 
+  if (response.kind === 'cancel' && response.reason === 'unattended') {
+    // 没人在（docs/unattended-run-design.md §3）：不是谁拒绝了，也不是中止 —— 告诉模型这一步为什么没做、接下来怎么办
+    record('unattended', true, review)
+    throw new Error(unattendedApprovalText(askCommand))
+  }
   if (response.kind === 'cancel') {
     record('cancel', true, review)
     throw new Error(opts.abortError ?? 'Aborted')

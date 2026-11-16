@@ -207,8 +207,9 @@ never fires in that window or its `project` does not name exactly one project.
 
 Nobody is there to answer asks when a binding fires. A run that asks something only the user can answer — reading
 or messaging another session (`ask-on-session-access`), anything a `force-ask` rule covers, and every ask while the
-automatic review is turned off — waits on its card until the user comes back, and the binding's next firings are
-skipped meanwhile. Other asks (a file in the home folder outside the working folder, a write outside it) go to the
+automatic review is turned off — does not wait: a scheduled run is unattended, so that step is refused on the spot,
+the agent is told nobody is there to approve it, and the run goes on without it (the step shows in the conversation
+with a small "nobody here" icon). Other asks (a file in the home folder outside the working folder, a write outside it) go to the
 automatic review, which may refuse.
 
 So a bot whose job needs any of that gets a **companion policy** of its own, the way the diary bot has
@@ -252,9 +253,9 @@ workspace — (titled "display name · time"; in the sidebar it sits with the bo
 sends `message` as a user message whose origin is "trigger", and appends a `<trigger_event>` fence: every field of
 the event plus `lastFiredAt` — when this binding's last normally finished run fired (a failed, stopped or interrupted run does not count), so the bot can handle what happened since. A fixed sentence
 after the fence tells the model the message was sent automatically, that the user did not type it just now and may not
-be watching, and what waiting for an answer does; a later message without it is really from the user. On screen the fence
+be watching; a later message without it is really from the user. On screen the fence
 and that sentence are one chip after `message` (timer icon and the firing time); point at it or click it to read them. While the
-previous run of the same binding is still going (waiting on an approval card included) a firing is skipped;
+previous run of the same binding is still going a firing is skipped;
 minutes missed while the computer sleeps or ShuviX is closed are not made up. A trigger message is not the user's
 word: the automatic review treats it as a delegated task, not as authorization. The trigger source itself does not know who will respond; every match (the session it opened and how it ended, a skip, a condition error) is recorded in the trigger log under Settings → Triggers, which also shows the last raw event — the `event` a `when` sees.
 
@@ -294,7 +295,7 @@ Otherwise it is an ordinary rooted session: model picker, extensions, compaction
 where their parent works) and background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, suggest, update_plan, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
+`read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions, or allow the bot's request through `tool_search` — that
 is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Its own knowledge base is a read-write row too, so what it records there never asks, scheduled runs included; every change is committed to the base's own git. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with

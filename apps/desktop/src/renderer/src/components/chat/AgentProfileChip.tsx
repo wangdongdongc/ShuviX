@@ -6,6 +6,9 @@
  * （`shuvix-displayName`，没写回落档案名），档案名放在悬停提示里。相位灯与 AgentMonitorPanel
  * 同一套「在跑」语义：turn / compaction 绿色脉冲；idle 与 interrupted（停着，等继续）灰色、不脉冲。
  *
+ * 这一轮无人值守时（触发器开出来的运行，docs/unattended-run-design.md §6）整枚标记换成琥珀色，最前面多一个呼吸的
+ * 计时器图标：点它 = 「我在这儿」（`agent.attend`），之后的询问照常问用户。没有新增文字，说明只在悬停提示里。
+ *
  * 两个按钮并排（按钮不能套按钮）：
  *  - 主体：点开右栏 agents tab 并按本会话筛选（rootSessionId 匹配，root 与派生 entry 都入选），
  *    筛选可由面板工具栏的 chip 清除；
@@ -18,7 +21,8 @@
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X } from 'lucide-react'
+import { Timer, X } from 'lucide-react'
+import { useChatStore } from '@shuvix/chat-ui'
 import { refreshAgentMonitor, useAgentMonitorStore } from '../../stores/agentMonitorStore'
 import { useBrowserStore } from '../../stores/browserStore'
 
@@ -27,6 +31,7 @@ export function AgentProfileChip({ sessionId }: { sessionId: string }): React.JS
   const entry = useAgentMonitorStore((s) =>
     s.entries.find((e) => e.kind === 'root' && e.agentId === sessionId)
   )
+  const unattendedRun = useChatStore((s) => s.sessionUnattended?.[sessionId] === true)
   const [destroying, setDestroying] = useState(false)
   if (!entry) return null
 
@@ -54,16 +59,32 @@ export function AgentProfileChip({ sessionId }: { sessionId: string }): React.JS
   const name = entry.displayName || entry.profileName
   const openTitle = t('panel.agentChipTitle', { name, profile: entry.profileName })
   const destroyTitle = t('panel.agentChipDestroy')
+  // 只在这一轮还在跑的时候显示：跑完之后没有哪张卡会被拒，图标回到原样（状态本身留着，自动续跑的那一轮照旧无人值守）
+  const unattended = unattendedRun && (entry.phase === 'turn' || entry.phase === 'compaction')
+  const unattendedTitle = t('toolCall.unattendedRun')
+  const tone = unattended ? 'var(--color-warning)' : 'var(--color-accent)'
 
   return (
     <span
       data-agent-chip={entry.profileName}
       className="inline-flex items-center rounded-full text-xs"
+      data-unattended={unattended ? '' : undefined}
       style={{
-        color: 'var(--color-accent)',
-        backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)'
+        color: tone,
+        backgroundColor: `color-mix(in srgb, ${tone} 10%, transparent)`
       }}
     >
+      {unattended && (
+        <button
+          data-agent-chip-attend
+          onClick={() => void window.api.agent.attend(sessionId).catch(() => undefined)}
+          title={unattendedTitle}
+          aria-label={unattendedTitle}
+          className="ml-1 rounded-full p-0.5 transition-colors hover:bg-current/20"
+        >
+          <Timer size={12} className="animate-pulse motion-reduce:animate-none" />
+        </button>
+      )}
       <button
         onClick={handleOpenPanel}
         title={openTitle}

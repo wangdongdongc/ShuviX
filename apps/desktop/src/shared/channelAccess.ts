@@ -55,6 +55,9 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:previewChange': 'read', // 只预判：不连服务器、什么也不写（与 agent:init 一样可能把锁着的会话打开来读）
   'agent:newSessionDefaults': 'read', // 新会话会用的模型 / 档位：与 agent:init 对一条刚建的会话报的同一份
   'agent:askCounts': 'read',
+  'agent:unattended': 'read',
+  // 「我在这儿」：之后的询问会交到人面前（与答一张卡同级）
+  'agent:attend': 'write',
   'agent:pendingInputs': 'read', // 询问本身（命令、路径、改动）：与会话视图里的同一份，读会话就读得到
   // 设目标 = fork 出管理员会话、以人的来源往里发一条消息（与 agent:prompt、session:fork 同级）
   'agent:goalStart': 'write',

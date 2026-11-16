@@ -104,6 +104,7 @@ vi.mock('../../logger', () => ({
 
 import { chatFrontendRegistry } from '../../frontend/core/ChatFrontendRegistry'
 import { requestUserInputFor, respondToUserInput } from '../userInputBroker'
+import { withDriverAttendance } from '../driverAttendance'
 
 let sessionService: (typeof import('../sessionService'))['sessionService']
 let getAgentSpy: ReturnType<typeof vi.spyOn>
@@ -387,5 +388,59 @@ describe('PAC-1 pendingAskCounts', () => {
     expect(sessionService.pendingAskCounts()).toEqual({ root: 1 })
     expect(respondToUserInput('child-call', ANSWER)).toBe(true)
     expect(sessionService.pendingAskCounts()).toEqual({})
+  })
+})
+
+/**
+ * 无人值守的运行（docs/unattended-run-design.md）：
+ *   SS-U1 unattendedSessions：只列开着且这一轮无人值守的会话；关了的不在；宿主没建 → []，不去建
+ *   SS-U2 发送方状态的查询（构造时登记）：发送方开着且无人值守 → 来源章带 unattended:true；开着但有人值守 / 没开着 /
+ *         宿主没建 → 不带，且不为了问这一句去建宿主
+ */
+describe('SS-U 无人值守', () => {
+  beforeEach(() => {
+    resetFakeHost()
+    hostSpies.get.mockClear()
+    hostSpies.peek.mockClear()
+    hostSpies.peek.mockImplementation(() => fakeHost)
+    getAgentSpy.mockImplementation(realGetAgentSession)
+    liveSpy.mockImplementation(realLiveAgentSessions)
+  })
+
+  it('SS-U1 只列开着且无人值守的会话', async () => {
+    fakeHost.put('bot-run', { unattended: true })
+    fakeHost.put('human')
+    fakeHost.put('closing', { unattended: true })
+    expect(sessionService.unattendedSessions().sort()).toEqual(['bot-run', 'closing'])
+    await fakeHost.close('closing')
+    expect(sessionService.unattendedSessions()).toEqual(['bot-run'])
+  })
+
+  it('SS-U1 一条都没有 → []；宿主还没建 → []，且不去建它', () => {
+    fakeHost.put('human')
+    expect(sessionService.unattendedSessions()).toEqual([])
+    hostSpies.peek.mockImplementation(() => undefined)
+    hostSpies.get.mockClear()
+    expect(sessionService.unattendedSessions()).toEqual([])
+    expect(hostSpies.get).not.toHaveBeenCalled()
+  })
+
+  it('SS-U2 发送方开着且无人值守 → 盖 unattended:true；状态现读', () => {
+    const sender = fakeHost.put('sender', { unattended: true })
+    const ref = { kind: 'parent-session', sessionId: 'sender' } as const
+    expect(withDriverAttendance(ref)).toStrictEqual({ ...ref, unattended: true })
+    sender.unattended = false
+    expect(withDriverAttendance(ref)).toBe(ref)
+  })
+
+  it('SS-U2 发送方没开着 / 宿主没建 → 不带，也不去建宿主', () => {
+    const ref = { kind: 'session', sessionId: 'not-open' } as const
+    expect(withDriverAttendance(ref)).toBe(ref)
+    hostSpies.peek.mockImplementation(() => undefined)
+    hostSpies.get.mockClear()
+    expect(withDriverAttendance({ kind: 'session', sessionId: 'sender' })).not.toHaveProperty(
+      'unattended'
+    )
+    expect(hostSpies.get).not.toHaveBeenCalled()
   })
 })

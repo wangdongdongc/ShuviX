@@ -17,6 +17,8 @@
  *   CH-20..39 菜单：位置、各种会话的项、任务数、置灰的分支、各项做什么、怎么收起、分支被拒的说明
  *   CH-40..49 详情的历史：推入、子页、一层一层退、前进、没有标记时直接收起、没有会话不画、换会话换一份
  *   CH-50..62 空对话页的入口：给 ChatBody 的空态、直接推入的那一段、返回一步、前进、记号不粘、换会话
+ *   MB-1..4   无人值守的一轮（docs/unattended-run-design.md §6）：标题前一个计时器图标，只在这条会话正在回复且
+ *             store 里记着它无人值守时画；小字不加词；它不是单独的点击目标（手机上没有「我在这儿」）
  *
  * `@shuvix/chat-ui` / `@shuvix/app-shell` 整个换成替身（chat store 是工厂里建的真 zustand store）；
  * MobileSessionDetails / MobileEmptyChat / useSessionLocation / 笔记本也是替身；PullDownMenu、BottomSheet、detailHistory、
@@ -37,6 +39,7 @@ interface ChatState {
   asks: Record<string, number>
   streaming: Record<string, boolean>
   forkable: Record<string, boolean>
+  sessionUnattended?: Record<string, true>
 }
 interface StoreApi {
   getState: () => ChatState
@@ -324,7 +327,8 @@ beforeEach(() => {
     sessions: [session()],
     asks: {},
     streaming: {},
-    forkable: { s1: true }
+    forkable: { s1: true },
+    sessionUnattended: {}
   })
   rec.location = 'Proj'
   rec.tasks = {}
@@ -1030,5 +1034,94 @@ describe('MobileChatView: the empty page entries open a section directly', () =>
     setStore({ activeSessionId: 's2' })
     expect(details()!.getAttribute('data-stub-details-instance')).not.toBe(first)
     expect(lastDetails()).toMatchObject({ sessionId: 's2', page: 'paths', direct: true })
+  })
+})
+
+describe('MobileChatView: an unattended run', () => {
+  const icon = (): Element | null => q('[data-mobile-chat-unattended]')
+
+  it('MB-1 replying and unattended: a timer before the title text, labelled, no extra words', () => {
+    rec.store.setState({ streaming: { s1: true }, sessionUnattended: { s1: true } })
+    mount()
+    const el = icon()!
+    expect(el).not.toBeNull()
+    expect(el.tagName.toLowerCase()).toBe('svg')
+    expect(titleButton().contains(el)).toBe(true)
+    expect(el.getAttribute('aria-label')).toBe(en.toolCall.unattendedRun)
+    expect(el.getAttribute('class')).toContain('text-warning')
+    // 图标在标题文字之前，标题文字不变
+    const title = titleButton().querySelector('span')!
+    expect(title.firstElementChild).toBe(el)
+    expect(title.textContent).toBe('My chat')
+    // 小字还是「位置 · 正在回复」，不加词
+    expect(subtitle()!.textContent).toBe(`Proj · ${en.inbox.replying}`)
+    // 头部还是三个按钮：图标不是按钮
+    expect(q('[data-mobile-chat-header]')!.querySelectorAll('button')).toHaveLength(3)
+  })
+
+  it('MB-1 the store still says unattended after the run ended: no icon', () => {
+    rec.store.setState({ streaming: {}, sessionUnattended: { s1: true } })
+    mount()
+    expect(icon()).toBeNull()
+    expect(subtitle()!.textContent).toBe('Proj')
+  })
+
+  it.each<[string, Partial<ChatState>]>([
+    ['another session is unattended', { streaming: { s1: true }, sessionUnattended: { s2: true } }],
+    ['attended and replying', { streaming: { s1: true }, sessionUnattended: {} }],
+    [
+      'another session is the one replying',
+      { streaming: { s2: true }, sessionUnattended: { s1: true } }
+    ],
+    [
+      'no active session',
+      { activeSessionId: null, streaming: { s1: true }, sessionUnattended: { s1: true } }
+    ],
+    [
+      'a host whose store has no such table',
+      { streaming: { s1: true }, sessionUnattended: undefined }
+    ]
+  ])('MB-2 %s: no icon', (_label, patch) => {
+    rec.store.setState(patch)
+    expect(mount).not.toThrow()
+    expect(icon()).toBeNull()
+  })
+
+  it('MB-3 a tap on the icon is a tap on the title: it opens the details, nothing else', () => {
+    rec.store.setState({ streaming: { s1: true }, sessionUnattended: { s1: true } })
+    mount()
+    click(icon()!)
+    expect(detailsPage()).toBe('index')
+    expect(mark(DETAIL)).toBe(true)
+    // 状态没被点掉
+    expect(rec.store.getState().sessionUnattended).toStrictEqual({ s1: true })
+  })
+
+  it('MB-4 the icon follows the store without remounting the header', () => {
+    rec.store.setState({ streaming: { s1: true } })
+    mount()
+    const header = q('[data-mobile-chat-header]')!
+    const title = titleButton()
+    expect(icon()).toBeNull()
+
+    setStore({ sessionUnattended: { s1: true } })
+    expect(icon()).not.toBeNull()
+
+    setStore({ sessionUnattended: {} })
+    expect(icon()).toBeNull()
+
+    setStore({ sessionUnattended: { s1: true } })
+    setStore({ streaming: {} })
+    expect(icon()).toBeNull()
+
+    expect(q('[data-mobile-chat-header]')).toBe(header)
+    expect(titleButton()).toBe(title)
+  })
+
+  it('MB-4 waiting for an answer (not replying) while marked unattended: no icon', () => {
+    rec.store.setState({ asks: { s1: 1 }, sessionUnattended: { s1: true } })
+    mount()
+    expect(icon()).toBeNull()
+    expect(chatState()!.getAttribute('data-mobile-chat-state')).toBe('waiting')
   })
 })

@@ -79,7 +79,7 @@ describe('BA bot 基座档案', () => {
     }
   } as const
   const TOOLS =
-    'read, ls, grep, glob, ask, suggest, update_plan, show_image, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
+    'read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
 
   it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
     'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',
@@ -188,6 +188,47 @@ describe('BA show_image', () => {
   it('BA-SI 目录里每个 md：持有 show_image 的恰是 work / chat / coding / bot（每种语言都三份齐）', () => {
     const files = readdirSync(MD_DIR).filter((f) => f.endsWith('.md'))
     const holders = files.filter((f) => toolsOf(f).includes('show_image')).sort()
+    expect(holders).toStrictEqual(HOLDERS.flatMap(localized).sort())
+  })
+})
+
+/**
+ * 网络搜索（`web_search`，2026-11-16）：三条主路线基座持有它，紧跟在 show_image 之后；bot 与其余档案都没有
+ */
+describe('BA web_search', () => {
+  // bot 自 2026-11-16 起也有（用户裁定）：遇到人机验证不再停住，自动触发的消息让它把会话当作无人值守
+  const HOLDERS = ['work', 'chat', 'coding', 'bot']
+  const NON_HOLDERS = [
+    'notebook',
+    'tab',
+    'explore',
+    'titler',
+    'knowledge-writer',
+    'permission-reviewer'
+  ]
+  const toolsOf = (file: string): string[] => {
+    const text = readFileSync(join(MD_DIR, file), 'utf8')
+    const line = /^shuvix-tools: (.*)$/m.exec(text)?.[1] ?? ''
+    return line.split(',').map((t) => t.trim())
+  }
+
+  it.each(HOLDERS.flatMap(localized))(
+    'BA-WS-1 %s：shuvix-tools 里恰有一个 web_search，紧跟在 show_image 之后',
+    (file) => {
+      const tools = toolsOf(file)
+      expect(tools.filter((t) => t === 'web_search')).toHaveLength(1)
+      const at = tools.indexOf('show_image')
+      expect(tools.slice(at, at + 2)).toEqual(['show_image', 'web_search'])
+    }
+  )
+
+  it.each(NON_HOLDERS.flatMap(localized))('BA-WS-2 %s：没有 web_search', (file) => {
+    expect(toolsOf(file)).not.toContain('web_search')
+  })
+
+  it('BA-WS-3 目录里每个 md：持有 web_search 的恰是 work / chat / coding / bot 的三语十二份', () => {
+    const files = readdirSync(MD_DIR).filter((f) => f.endsWith('.md'))
+    const holders = files.filter((f) => toolsOf(f).includes('web_search')).sort()
     expect(holders).toStrictEqual(HOLDERS.flatMap(localized).sort())
   })
 })

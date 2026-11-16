@@ -90,6 +90,7 @@ vi.mock('../../logger', () => ({
 import type { AdmitResult } from '@shuvix/agent-runtime'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { AgentSession } from '../agentSession'
+import { setDriverAttendanceLookup } from '../driverAttendance'
 import { resetCardValuesForTests, takeCardValues } from '../cardValues'
 import {
   FakeDurableSession,
@@ -123,6 +124,7 @@ beforeEach(() => {
   mocks.resolveAgentProfileName.mockReturnValue('chat')
   mocks.fire.mockImplementation((name) => void mocks.calls.push(`fire:${name}`))
   resetFakeHost()
+  setDriverAttendanceLookup(() => false)
 })
 
 describe('AS-1 maskTexts', () => {
@@ -888,5 +890,90 @@ describe('WP2 来源与答题方', () => {
         sessionId: 'P3'
       })
     })
+  })
+})
+
+/**
+ * 无人值守的运行（docs/unattended-run-design.md §4）：被驱动的发送在来源章上盖发送方那一轮的状态。
+ *   AF-1 发送方无人值守 → source = 驱动来源 + unattended:true；prompt-accepted 的 origin 仍是来源种类
+ *   AF-2 发送方有人值守 → 没有 unattended 键
+ *   AF-3 不是被驱动的发送：来源原样交下去，不查发送方
+ *   AF-4 unattended / attend() 委托给 durable
+ *   AF-5 humanPresent（第 7 个参数）：true 才进 options；来源章不变
+ *   AF-6 被驱动的 admitSteer 不自己盖章（网关盖好了交进来）
+ */
+describe('AF 无人值守', () => {
+  const TRIGGER = { kind: 'trigger', trigger: 'timer.fired', bot: 'b' } as const
+  const drive = { requestId: 'subsession:P1:1', driven: { parentId: 'P1', background: true } }
+
+  it('AF-1 发送方无人值守：source 带 unattended:true；查的是发送方', async () => {
+    const lookup = vi.fn(() => true)
+    setDriverAttendanceLookup(lookup)
+    const { durable, session } = facade()
+    await session.prompt('t', undefined, undefined, drive)
+    const [, , options] = durable.callsOf('submitUser')[0]!
+    expect((options as { source?: unknown }).source).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P1',
+      unattended: true
+    })
+    expect(lookup.mock.calls).toEqual([['P1']])
+    expect(fired('session.prompt-accepted')[0]).toMatchObject({ origin: 'parent-session' })
+  })
+
+  it('AF-2 发送方有人值守：source 没有 unattended 键', async () => {
+    const { durable, session } = facade()
+    await session.prompt('t', undefined, undefined, drive)
+    const [, , options] = durable.callsOf('submitUser')[0]!
+    expect((options as { source?: unknown }).source).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P1'
+    })
+  })
+
+  it.each([TRIGGER, { kind: 'local' } as const])(
+    'AF-3 不是被驱动的发送（$kind）：来源原样，不查发送方',
+    async (source) => {
+      const lookup = vi.fn(() => true)
+      setDriverAttendanceLookup(lookup)
+      const { durable, session } = facade()
+      await session.prompt('t', undefined, undefined, undefined, source)
+      const [, , options] = durable.callsOf('submitUser')[0]!
+      expect((options as { source?: unknown }).source).toBe(source)
+      expect(options).not.toHaveProperty('humanPresent')
+      expect(lookup).not.toHaveBeenCalled()
+    }
+  )
+
+  it('AF-4 unattended 现读 durable；attend() 委托', () => {
+    const { durable, session } = facade()
+    expect(session.unattended).toBe(false)
+    durable.unattended = true
+    expect(session.unattended).toBe(true)
+    session.attend()
+    expect(durable.callsOf('attend')).toHaveLength(1)
+    expect(session.unattended).toBe(false)
+  })
+
+  it('AF-5 humanPresent：true 才进 options，来源章不变；false / 不给 → 没有这个键', async () => {
+    const { durable, session } = facade()
+    await session.prompt('t', undefined, undefined, undefined, TRIGGER, undefined, true)
+    await session.prompt('t', undefined, undefined, undefined, TRIGGER, undefined, false)
+    await session.prompt('t', undefined, undefined, undefined, TRIGGER)
+    const [present, absent, omitted] = durable.callsOf('submitUser').map(([, , o]) => o)
+    expect(present).toMatchObject({ source: TRIGGER, humanPresent: true })
+    expect(absent).not.toHaveProperty('humanPresent')
+    expect(omitted).not.toHaveProperty('humanPresent')
+    expect((absent as { source?: unknown }).source).toBe(TRIGGER)
+  })
+
+  it('AF-6 admitSteer 不自己盖章：交进来的来源原样到 durable.steer', async () => {
+    const lookup = vi.fn(() => true)
+    setDriverAttendanceLookup(lookup)
+    const { durable, session } = facade()
+    const source = { kind: 'parent-session', sessionId: 'P1' } as const
+    await session.admitSteer('go', { requestId: 'r1', source })
+    expect(durable.steerOptions[0]!.source).toBe(source)
+    expect(lookup).not.toHaveBeenCalled()
   })
 })

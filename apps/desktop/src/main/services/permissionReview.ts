@@ -221,6 +221,12 @@ function drivenInputsOf(
 
 /** 决策日志里一条记录的结果（给审查员看的一个词组） */
 function outcomeOf(record: SecurityDecisionRecord): string {
+  // 无人值守的运行里没人能批（不是用户拒绝）：审查员要知道这一步当时就没做成
+  if (record.userResponse === 'unattended') {
+    return record.review
+      ? `reviewer ${record.review.decision}, then refused: nobody was there to approve`
+      : 'refused: nobody was there to approve'
+  }
   if (record.review) {
     return record.userResponse
       ? `reviewer ${record.review.decision}, then user ${record.userResponse}`

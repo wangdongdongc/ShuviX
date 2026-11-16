@@ -81,6 +81,7 @@ import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStora
 import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
+import { setDriverAttendanceLookup } from './driverAttendance'
 import { botService } from './botService'
 import { unreadService } from './unreadService'
 import { getSessionHost, peekSessionHost } from './sessionHost'
@@ -219,6 +220,11 @@ export class SessionService {
   constructor() {
     // 后台任务 / 子会话跑完 → 告知该会话（见 deliverNotice）
     setBgTaskNotifier((sessionId, text) => void this.deliverNotice(sessionId, text))
+    // 别的会话发进来的消息跟发送方那一轮的状态（无人值守的运行开出来的那一轮也是无人值守）
+    setDriverAttendanceLookup(
+      (sessionId) =>
+        peekSessionHost() !== undefined && this.getAgentSession(sessionId)?.unattended === true
+    )
   }
 
   /** 主进程唯一的 SessionHost（懒建） */
@@ -1478,6 +1484,14 @@ export class SessionService {
       if (requests.length > 0) result[session.sessionId] = requests
     }
     return result
+  }
+
+  /** 此刻这一轮无人值守的会话（只看开着的；docs/unattended-run-design.md） */
+  unattendedSessions(): string[] {
+    if (!peekSessionHost()) return []
+    return this.liveAgentSessions()
+      .filter((session) => session.unattended)
+      .map((session) => session.sessionId)
   }
 
   liveAgentSessions(): AgentSession[] {

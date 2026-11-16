@@ -142,7 +142,8 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
       undefined,
       undefined,
       origin,
-      undefined
+      undefined,
+      false
     ])
   })
 
@@ -154,7 +155,8 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
       undefined,
       undefined,
       undefined,
-      undefined
+      undefined,
+      false
     ])
   })
 
@@ -173,7 +175,8 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
       sent.display,
       DRIVE,
       undefined,
-      undefined
+      undefined,
+      false
     ])
   })
   it('UW-G1 被驱动的发送带了用户原话 → 原文 + 引用块 + 发送方说明（认领上面那段）；drive 里不留 userWords', async () => {
@@ -197,7 +200,8 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
       sent.display,
       DRIVE,
       undefined,
-      undefined
+      undefined,
+      false
     ])
     expect(sent.text).toContain('\n\n<user-words from="parent-session" scope="start">')
     expect(sent.text).toContain('except the <user-words> block')

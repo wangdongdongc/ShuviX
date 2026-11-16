@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   sshDisconnectRuntime:
     vi.fn<(sessionId: string, runtimeId: string) => Promise<boolean> | undefined>(),
   respondToUserInput: vi.fn<(requestId: string, response: unknown, meta?: unknown) => boolean>(),
+  unattendedSessions: vi.fn<() => string[]>(),
   mcpInfos: [] as Array<Record<string, unknown>>,
   builtinNames: ['read', 'bash'] as string[]
 }))
@@ -87,7 +88,8 @@ vi.mock('../../../services/sessionService', () => ({
     previewAgentChange: mocks.previewAgentChange,
     invalidateAgent: mocks.invalidateAgent,
     systemPromptStatus: mocks.systemPromptStatus,
-    rebuildSystemPrompt: mocks.rebuildSystemPrompt
+    rebuildSystemPrompt: mocks.rebuildSystemPrompt,
+    unattendedSessions: mocks.unattendedSessions
   }
 }))
 vi.mock('../../../services/messageService', () => ({
@@ -505,6 +507,44 @@ describe('P3-08-45 DefaultChatGateway.respondToInput —— 没人认领什么�
       ['r2', response, undefined]
     ])
     expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 无人值守的运行（docs/unattended-run-design.md §6）：头部图标的查询与「我在这儿」。
+ *   GW-U4 attend：会话开着 → 它的 attend() 恰一次，{success:true}；没开着 → {success:false}，不打开它、不广播
+ *   GW-U5 unattendedSessions：原样交回 sessionService 的那份
+ */
+describe('GW-U attend / unattendedSessions', () => {
+  it('GW-U4 会话开着 → session.attend() 恰一次，答 {success: true}；不广播', () => {
+    const attend = vi.fn()
+    mocks.getAgentSession.mockReturnValue({ attend })
+    expect(chatGateway.attend(SID)).toStrictEqual({ success: true })
+    expect(mocks.getAgentSession.mock.calls).toEqual([[SID]])
+    expect(attend).toHaveBeenCalledTimes(1)
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+
+  it('GW-U4 会话没开着 → {success: false}；不 peek、不打开', () => {
+    mocks.getAgentSession.mockReturnValue(undefined)
+    mocks.peekAgentSession.mockReset()
+    expect(chatGateway.attend('ghost')).toStrictEqual({ success: false })
+    expect(mocks.peekAgentSession).not.toHaveBeenCalled()
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, null, 42, {}])(
+    'GW-U4 参数不是会话 id（%s）→ {success: false}，不抛',
+    (bad) => {
+      mocks.getAgentSession.mockReturnValue(undefined)
+      expect(chatGateway.attend(bad as never)).toStrictEqual({ success: false })
+    }
+  )
+
+  it('GW-U5 unattendedSessions 原样交回', () => {
+    mocks.unattendedSessions.mockReset().mockReturnValueOnce(['a', 'b']).mockReturnValueOnce([])
+    expect(chatGateway.unattendedSessions()).toEqual(['a', 'b'])
+    expect(chatGateway.unattendedSessions()).toEqual([])
   })
 })
 

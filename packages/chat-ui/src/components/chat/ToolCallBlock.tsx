@@ -63,6 +63,8 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
 import { AnsweredByParentBadge, BackgroundBadge, BgTaskRowState } from './BgTaskTag'
 import { ReviewedMark, ReviewingIcon } from './ReviewTag'
+import { UnattendedMark } from './UnattendedMark'
+import { isUnattendedResult } from '@shuvix/chat-protocol/unattended'
 import { InvocationView } from './SandboxTag'
 import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
 import { toolAnswersOf } from '@shuvix/chat-protocol/types/toolAnswer'
@@ -275,6 +277,9 @@ export function ToolCallBlock({
   // 这里退化成普通工具卡 —— 参数 + 结果文本，结果就是派生 agent 的最终答复。
   // 退化本身不损失什么：内联转写一直是内存态，刷新一次就已经是这个形态了。
 
+  // 无人值守的运行里没人能批 / 没人能答的那一步：行尾一个图标（没人答的 ask 也照普通一行显示，不画成答完的记录）
+  const unattended = isUnattendedResult(result)
+
   // 摘要行内容：图标槽为状态（无状态时落回工具图标），其后名称 + 摘要
   const rowProps = {
     lead: statusIcon ?? undefined,
@@ -288,8 +293,9 @@ export function ToolCallBlock({
       <AnsweredByParentBadge title={details.answeredBy.title} kind={details.answeredBy.kind} />
     ) : undefined,
     trailing:
-      reviewNote || toolCallId ? (
+      reviewNote || toolCallId || unattended ? (
         <>
+          {unattended && <UnattendedMark />}
           {reviewNote && <ReviewedMark note={reviewNote} />}
           {toolCallId && <BgTaskRowState toolCallId={toolCallId} />}
         </>
@@ -304,7 +310,7 @@ export function ToolCallBlock({
   const answerLines = <ToolAnswerLines notes={answers} />
 
   // 答完的选择题：问题与答案留在对话里，不再是一行工具调用
-  if (status === 'done' && details?.type === 'ask') {
+  if (status === 'done' && details?.type === 'ask' && !unattended) {
     return (
       <div {...rowData}>
         <AskRecord details={details} args={args} result={result} />

@@ -8,7 +8,9 @@
  *   - 显示名取档案 md 的 displayName（空串回落档案名），档案名在 `data-agent-chip` 与悬停提示里；
  *   - X 只发一次销毁，落定之后才重拉监控（重拉先等在途的那一轮轮询），两者都落定之前 X 一直禁用；
  *   - 销毁失败只告警、照样重拉、X 恢复，不留未处理的 rejection；
- *   - 重拉回来没有 root 条目了 → 胶囊消失。
+ *   - 重拉回来没有 root 条目了 → 胶囊消失；
+ *   - 无人值守的一轮（docs/unattended-run-design.md §6）：这一轮在跑（turn / compaction）**且** store 里这条会话记着
+ *     无人值守时，整枚换成琥珀色、最前面多一个计时器按钮，点它 = `agent.attend`（「我在这儿」）；跑完就回到原样。
  *
  * 桌面 vitest 对渲染层只收 `*.test.ts`（本文件自己切 jsdom），不带 react 插件 —— 一律 createElement。
  * `useBrowserStore` 用真的，只把它底下的 `@shuvix/app-shell`（共享面板 store）与布局持久化换成小替身；
@@ -49,6 +51,7 @@ import { usePanelStore } from '@shuvix/app-shell'
 import { AgentProfileChip } from '../AgentProfileChip'
 import { subscribeAgentMonitor, useAgentMonitorStore } from '../../../stores/agentMonitorStore'
 import { useBrowserStore } from '../../../stores/browserStore'
+import { useChatStore } from '@shuvix/chat-ui'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -59,6 +62,7 @@ const SID = 'sess-chip'
 
 const api = {
   destroy: vi.fn<(sessionId: string) => Promise<{ success: boolean }>>(),
+  attend: vi.fn<(sessionId: string) => Promise<{ success: boolean }>>(),
   monitorList: vi.fn<() => Promise<AgentMonitorEntry[]>>()
 }
 /** destroy 与 monitorList 的到达顺序 */
@@ -406,5 +410,174 @@ describe('X：销毁运行时，落定后重拉监控', () => {
     } finally {
       unsubscribe()
     }
+  })
+})
+
+describe('无人值守的一轮：琥珀色 + 「我在这儿」', () => {
+  const attendButton = (): HTMLButtonElement | null =>
+    chip()!.querySelector<HTMLButtonElement>('[data-agent-chip-attend]')
+  const nameButton = (): HTMLButtonElement =>
+    chip()!.querySelector('[data-agent-chip-name]')!.closest('button')!
+  const tone = (): string => chip()!.getAttribute('style') ?? ''
+  const setUnattended = async (sessionId: string, value: boolean): Promise<void> => {
+    await act(async () => {
+      useChatStore.getState().setUnattended(sessionId, value)
+    })
+  }
+
+  beforeEach(() => {
+    useChatStore.setState({ sessionUnattended: {} })
+    api.attend.mockReset().mockResolvedValue({ success: true })
+  })
+
+  it('CH-1 在跑 + 无人值守：data-unattended、琥珀色、名字前多一个计时器按钮，说明只在悬停提示里', async () => {
+    seed([entry({ phase: 'turn' })])
+    await setUnattended(SID, true)
+    await mount()
+    expect(chip()!.hasAttribute('data-unattended')).toBe(true)
+    expect(tone()).toContain('var(--color-warning)')
+    expect(tone()).not.toContain('var(--color-accent)')
+
+    const button = attendButton()!
+    const hint = tr('toolCall.unattendedRun')
+    expect(button.title).toBe(hint)
+    expect(button.getAttribute('aria-label')).toBe(hint)
+    expect(button.textContent).toBe('')
+    expect(button.querySelector('svg')).not.toBeNull()
+    expect(button.querySelector('svg')!.getAttribute('class')).toContain('animate-pulse')
+    // 在名字那个按钮之前
+    expect(
+      button.compareDocumentPosition(nameButton()) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    // 没有新增的可见文字：胶囊上还是只有显示名
+    expect(chip()!.textContent).toBe('Chat Persona')
+  })
+
+  it('CH-1 压缩中也算在跑', async () => {
+    seed([entry({ phase: 'compaction' })])
+    await setUnattended(SID, true)
+    await mount()
+    expect(attendButton()).not.toBeNull()
+    expect(chip()!.hasAttribute('data-unattended')).toBe(true)
+  })
+
+  it('CH-2 点计时器 → agent.attend(本会话) 恰一次；不开面板、不改筛选、不销毁、不重拉监控', async () => {
+    seed([entry({ phase: 'turn' })])
+    await setUnattended(SID, true)
+    await mount()
+    await clickEl(attendButton()!)
+    await flush()
+    expect(api.attend).toHaveBeenCalledTimes(1)
+    expect(api.attend).toHaveBeenCalledWith(SID)
+    expect(useBrowserStore.getState().isOpen).toBe(false)
+    expect(useAgentMonitorStore.getState().sessionFilter).toBeNull()
+    expect(api.destroy).not.toHaveBeenCalled()
+    expect(api.monitorList).not.toHaveBeenCalled()
+    // 状态由后端的事件改，点了不自己先改
+    expect(attendButton()).not.toBeNull()
+  })
+
+  it('CH-2 attend 被拒：不留未处理的 rejection，胶囊还在', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => void unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      api.attend.mockRejectedValue(new Error('disconnected'))
+      seed([entry({ phase: 'turn' })])
+      await setUnattended(SID, true)
+      await mount()
+      await clickEl(attendButton()!)
+      await flush()
+      await flush()
+      expect(unhandled).toEqual([])
+      expect(chip()).not.toBeNull()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('CH-3 只有别的会话无人值守：没有计时器，还是原来的颜色', async () => {
+    seed([entry({ phase: 'turn' })])
+    await setUnattended('someone-else', true)
+    await mount()
+    expect(attendButton()).toBeNull()
+    expect(chip()!.hasAttribute('data-unattended')).toBe(false)
+    expect(tone()).toContain('var(--color-accent)')
+    expect(tone()).not.toContain('var(--color-warning)')
+  })
+
+  it('CH-4 转回有人值守：计时器没了、颜色回来；名字那个按钮没有重挂', async () => {
+    seed([entry({ phase: 'turn' })])
+    await setUnattended(SID, true)
+    await mount()
+    const before = nameButton()
+    expect(attendButton()).not.toBeNull()
+
+    await setUnattended(SID, false)
+    expect(attendButton()).toBeNull()
+    expect(chip()!.hasAttribute('data-unattended')).toBe(false)
+    expect(tone()).toContain('var(--color-accent)')
+    expect(nameButton()).toBe(before)
+
+    await setUnattended(SID, true)
+    expect(attendButton()).not.toBeNull()
+    expect(nameButton()).toBe(before)
+  })
+
+  it('CH-5 没有监控条目：store 里记着无人值守也不画', async () => {
+    seed([])
+    await setUnattended(SID, true)
+    await mount()
+    expect(chip()).toBeNull()
+    expect(container.innerHTML).toBe('')
+  })
+
+  it.each(['idle', 'interrupted'] as const)(
+    'CH-6 这一轮没在跑（%s）：store 里还记着无人值守，胶囊也是原样（没有哪张卡会被拒）',
+    async (phase) => {
+      seed([entry({ phase })])
+      await setUnattended(SID, true)
+      await mount()
+      expect(attendButton()).toBeNull()
+      expect(chip()!.hasAttribute('data-unattended')).toBe(false)
+      expect(tone()).toContain('var(--color-accent)')
+    }
+  )
+
+  it('CH-6 跑完回到原样；自动续跑的下一轮又亮起来（状态一直留着）', async () => {
+    seed([entry({ phase: 'turn' })])
+    await setUnattended(SID, true)
+    await mount()
+    expect(attendButton()).not.toBeNull()
+
+    await act(async () => {
+      seed([entry({ phase: 'idle' })])
+    })
+    expect(attendButton()).toBeNull()
+    expect(tone()).toContain('var(--color-accent)')
+
+    await act(async () => {
+      seed([entry({ phase: 'turn' })])
+    })
+    expect(attendButton()).not.toBeNull()
+    expect(tone()).toContain('var(--color-warning)')
+  })
+
+  it('CH-7 三个按钮并排，谁也不套谁', async () => {
+    seed([entry({ phase: 'turn' })])
+    await setUnattended(SID, true)
+    await mount()
+    const buttons = [...chip()!.querySelectorAll('button')]
+    expect(buttons).toEqual([attendButton(), nameButton(), destroyButton()])
+    for (const button of buttons) {
+      expect(button.parentElement).toBe(chip())
+      expect(button.querySelector('button')).toBeNull()
+    }
+  })
+
+  it('CH-7 有人值守时还是两个按钮（与从前一样）', async () => {
+    seed([entry({ phase: 'turn' })])
+    await mount()
+    expect(chip()!.querySelectorAll('button')).toHaveLength(2)
   })
 })

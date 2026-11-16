@@ -90,6 +90,8 @@ export const API_TABLE = {
     systemPromptStatus: invoke('agent:systemPromptStatus', 1),
     rebuildSystemPrompt: invoke('agent:rebuildSystemPrompt', 1),
     askCounts: invoke('agent:askCounts', 0),
+    unattended: invoke('agent:unattended', 0),
+    attend: invoke('agent:attend', 1),
     pendingInputs: invoke('agent:pendingInputs', 0),
     goalStart: invoke('agent:goalStart', 1),
     destroy: invoke('agent:destroy', 1),

@@ -1019,7 +1019,7 @@ export interface SecurityDecisionRecord {
   winning: string
   /** 放行时执行点要做的处置（有才记） */
   dispositions?: Disposition[]
-  userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel'
+  userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel' | 'unattended'
   /** 自动审查的判决（ask 经审查接缝回答了才有；转给人时 userResponse 另记人的回答） */
   review?: { decision: PermissionDecision; risk: PermissionRisk; source: string; ms: number }
   /** 命令客体的风险分类（分了才有，见 CommandRisk） */

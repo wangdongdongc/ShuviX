@@ -98,7 +98,7 @@ import type {
   RebuildSystemPromptResult,
   SystemPromptStatus
 } from '@shuvix/chat-protocol/systemPromptStatus'
-import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import { isUnattendedOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -240,6 +240,11 @@ export interface UserSendOptions {
    * 没有 requestId 时自动生成一个。读的一侧见 `inputSource.ts` 与投影（`metadata.origin`）。
    */
   source?: InputOrigin
+  /**
+   * 来源是机器的、却是人此刻亲手发的（「重新生成」/ 回退后原样重发）：这一轮算有人值守（docs/unattended-run-design.md）。
+   * 来源章照旧（审查、界面仍按原来的来源认这句话）
+   */
+  humanPresent?: boolean
   /**
    * 这条输入被受理的那一刻（durable 已接下这次提交，run 还没落定）调用一次。被拒（忙 / 模型被拒 /
    * 会话已关 / 创建被取消）时从不调用；重新挂上也不调用。抛错只记日志，不影响发送本身（桌面：
@@ -449,8 +454,18 @@ export interface DurableSession {
   abort(): Promise<void>
   /** 设置当前对话的思考档位（下一次请求生效；从不开启调度器） */
   setThinkingLevel(level: ThinkingLevel): Promise<void>
-  /** 发起一条用户询问（工具用） */
+  /**
+   * 发起一条用户询问（工具用）。这一轮无人值守时不挂起：当场以 `{ kind: 'cancel', reason: 'unattended' }` 落定
+   * （docs/unattended-run-design.md §3）
+   */
   requestUserInput(request: InputRequest): Promise<InputResponse>
+  /**
+   * 这一轮此刻是不是无人值守：最近一条带来源的输入不是人发的（触发器，或另一轮无人值守的运行发来的）。
+   * 只在内存里 —— 会话被换出再打开、进程重启之后从有人值守算起（那时没有哪一轮在跑；被中断的触发运行不会自动续上）
+   */
+  readonly unattended: boolean
+  /** 用户说「我在这儿」：这一轮从此有人值守（下一条不是人发的输入会再改回去） */
+  attend(): void
   /**
    * 应答一条挂起的询问；不存在时返回 false（先到者胜）。`meta.clientId` = 答题方（P3-08 PIN-20），原样交给
    * 询问钩子的 onResolved 供审计
@@ -880,6 +895,8 @@ export class DurableSessionImpl implements DurableSession {
   private state: RunState = 'idle'
   private current: ConversationId = ROOT_CONVERSATION_ID
   private closedFlag = false
+  /** 见 `DurableSessionApi.unattended` */
+  private unattendedFlag = false
   private closing: Promise<void> | undefined
   private activeOps = 0
   /** 这条会话在本进程里的记录（宿主持有：LRU 关了再开还是同一份；锁的含义、显式喊停都记在这里） */
@@ -1458,6 +1475,8 @@ export class DurableSessionImpl implements DurableSession {
       if (joining.length > 0) await this.steerNotices(conversation, joining)
       throw error
     }
+    // 受理之后才算数（被拒的发送不该把正在跑的那一轮改成无人值守）
+    this.noteInputSource(options.source, options.humanPresent)
     // driven-run 标记在受理之后、受理回调之前（PIN-12）：被拒的发送从不留下标记
     if (options.driven !== undefined) {
       await this.armDriven(conversation.id, requestId!, options.driven, submission.id)
@@ -1750,6 +1769,7 @@ export class DurableSessionImpl implements DurableSession {
             { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
             BG
           )
+          this.noteInputSource(options.source)
           this.admitted(submission.id, options)
           return { submissionId: submission.id }
         })
@@ -2786,7 +2806,39 @@ export class DurableSessionImpl implements DurableSession {
   // ─── 用户询问 ───────────────────────────────────
 
   requestUserInput(request: InputRequest): Promise<InputResponse> {
+    // 没人在：不进挂起表（无人值守的一轮里挂起表恒空），发问方各自把它翻成给模型的话
+    if (this.unattendedFlag) return Promise.resolve({ kind: 'cancel', reason: 'unattended' })
     return this.inputs.request(request)
+  }
+
+  get unattended(): boolean {
+    return this.unattendedFlag
+  }
+
+  attend(): void {
+    this.setUnattended(false)
+  }
+
+  /**
+   * 一条带来源的输入被受理：这一轮有没有人在跟着它（没带来源的 —— 系统通知、自动续跑 —— 不改）。
+   * `humanPresent`：来源是机器的、却是人此刻亲手发的（「重新生成」/ 回退后原样重发一条触发消息或别的会话的消息）—— 有人在
+   */
+  private noteInputSource(source: InputOrigin | undefined, humanPresent?: boolean): void {
+    if (source === undefined) return
+    this.setUnattended(humanPresent === true ? false : isUnattendedOrigin(source))
+  }
+
+  private setUnattended(next: boolean): void {
+    if (this.unattendedFlag === next) return
+    this.unattendedFlag = next
+    // 转成无人值守时已经挂着的卡（人在子会话里问到一半，无人值守的父会话又发来一条）也收掉：这一轮里挂起表恒空
+    if (next) this.inputs.cancelAll('unattended')
+    // 界面头部的图标读它（瞬时信号；新来的前端经宿主的查询补，见桌面 agent.unattended）
+    this.broadcastUnattended(next)
+  }
+
+  private broadcastUnattended(unattended: boolean): void {
+    this.deps.eventSink.broadcast({ type: 'unattended', sessionId: this.sessionId, unattended })
   }
 
   respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean {
@@ -2966,6 +3018,11 @@ export class DurableSessionImpl implements DurableSession {
       }
     }
     this.closedFlag = true
+    // 关着的会话没有哪一轮在跑：界面上的标记跟着收掉（再打开时从有人值守算起）
+    if (this.unattendedFlag) {
+      this.unattendedFlag = false
+      this.broadcastUnattended(false)
+    }
     this.disposeProjectors()
     this.placementWaiters.clear()
     this.runStateListeners.clear()

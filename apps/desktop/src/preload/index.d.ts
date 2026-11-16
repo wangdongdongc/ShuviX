@@ -426,6 +426,10 @@ declare global {
       rebuildSystemPrompt: (sessionId: string) => Promise<RebuildSystemPromptResult>
       /** 各会话此刻挂着几条询问（只列 > 0 的；窗口重建 / 客户端重连后补侧栏徽标） */
       askCounts: () => Promise<Record<string, number>>
+      /** 此刻这一轮无人值守的会话（窗口重建 / 客户端重连后补头部图标） */
+      unattended: () => Promise<string[]>
+      /** 「我在这儿」：这条会话的这一轮从此有人值守 */
+      attend: (sessionId: string) => Promise<{ success: boolean }>
       /** 各会话此刻挂着的询问本身（只列有的；收件箱就地回答 / 批准） */
       pendingInputs: () => Promise<
         Record<string, import('@shuvix/chat-protocol/types/inputRequest').InputRequest[]>

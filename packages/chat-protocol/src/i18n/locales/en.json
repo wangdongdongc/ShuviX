@@ -551,6 +551,8 @@
     "imageZoomHint": "Click to open at full size",
     "imageMissing": "This image file is no longer available",
     "reviewingHint": "The automatic review is looking at this call before it runs",
+    "unattendedHint": "Nobody was here: this step needed your approval or answer, and the run did not wait",
+    "unattendedRun": "Let nothing wait for you: this run started automatically. Click to take over, and requests will ask you again",
     "reviewedHint": "Let through by the automatic review without asking you ({{risk}})",
     "reviewRisk": {
       "low": "Low risk",
@@ -1342,6 +1344,9 @@
     },
     "sessionLabel": "Session",
     "sessionHint": "Read or change the session this task belongs to — rename it, and create and drive sub-sessions",
+    "webSearchLabel": "Web search",
+    "webSearchHint": "Searches the web in ShuviX's browser with the search engine chosen there, and returns the results as titles, addresses and snippets",
+    "webSearchAskDescription": "Search {{engine}} for: {{query}}",
     "toolSearchLabel": "Tool search",
     "toolSearchHint": "Looks through the MCP servers and widgets that are off in this session and, once you confirm, turns on the one it needs",
     "extensionWidgetHint": "the widget “{{name}}”",

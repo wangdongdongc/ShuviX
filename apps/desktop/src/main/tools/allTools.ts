@@ -26,6 +26,8 @@ import './toolSearch'
 import './shuvix'
 // show_image：把本机的图片摆进对话给用户看（快照进会话目录；模型收不到图）
 import './showImage'
+// web_search：在内置浏览器里开一个 tab 搜一次，整理好结果交回（搜索引擎是浏览器的那项设置）
+import './webSearch'
 // browser / database 不在这里：它们是按会话勾选的内置 MCP 能力服务器
 // （services/builtinMcp/browserServer.ts / databaseServer.ts），ssh 同理
 // git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、

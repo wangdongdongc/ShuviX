@@ -302,12 +302,12 @@ function bare(name: string, matches: string[], lets?: Record<string, string>): P
 const REVIEW = (by: string): string =>
   `asks (${by}; the automatic review answers at run time and may refuse)`
 const STOPS = (by: string): string =>
-  `asks (${by}; only the user can answer, so the run would stop)`
+  `asks (${by}; only the user can answer and nobody is there in a scheduled run, so this step is refused)`
 const HEADER = (where: string, name = 'xiaozhou'): string =>
   `Unattended access check for bot ${name} (scheduled runs have nobody to answer asks; as run in ${where}):`
 const STOP_LINE =
-  'A run that asks something only the user can answer waits until they come back, and that binding’s next ' +
-  'firings are skipped while it waits.'
+  'A scheduled run does not wait for the user: a step only they can approve is refused on the spot, the agent ' +
+  'is told why, and the run goes on without it.'
 const ELSEWHERE_REVIEW =
   '- elsewhere: read a file in the home folder outside its working folder, write there, write outside the home ' +
   `folder: ${REVIEW('ask-on-external-path')}.`
@@ -579,11 +579,11 @@ describe('AC-5 / AC-6 没有策略点名它', () => {
     expect(noteOf()).toBe(
       [
         'Unattended access check for bot xiaozhou (scheduled runs have nobody to answer asks; as run in a temporary folder):',
-        '- read other sessions: asks (ask-on-session-access; only the user can answer, so the run would stop).',
-        '- send messages into other sessions: asks (ask-on-session-access; only the user can answer, so the run would stop).',
+        '- read other sessions: asks (ask-on-session-access; only the user can answer and nobody is there in a scheduled run, so this step is refused).',
+        '- send messages into other sessions: asks (ask-on-session-access; only the user can answer and nobody is there in a scheduled run, so this step is refused).',
         '- elsewhere: read a file in the home folder outside its working folder, write there, write outside the home folder: asks (ask-on-external-path; the automatic review answers at run time and may refuse).',
         "In a policy this bot is `subject.bot == '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'` (its shuvix-id). No policy names it.",
-        'A run that asks something only the user can answer waits until they come back, and that binding’s next firings are skipped while it waits.',
+        'A scheduled run does not wait for the user: a step only they can approve is refused on the spot, the agent is told why, and the run goes on without it.',
         "If the bot’s job needs any of the above, tell the user what it needs and why, and offer a companion policy for this bot, the way the diary bot has daily-bot-access: one `force-allow` rule per need (a plain `allow` does not override an ask), each matching `has(subject.bot) && subject.bot == '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10' && subject.agentKind == 'root'` plus the narrowest condition on the object; the policy-md manual entry has the template. Write it into ~/.shuvix/policies/ only after the user agrees — the result of that write checks the bot again."
       ].join('\n')
     )

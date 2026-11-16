@@ -6,6 +6,7 @@
  * 规则一句话：只读、**或按构造幂等**、重跑无害的才 'safe' —— read / ls / grep / glob 只读；session 的每个
  * 动作都幂等（create 的 id 记在 memo 里、prompt 按幂等键重新挂上、wait 记下目标，P2-10 / Q-P2-01）；show_image 重放
  * 只是再快照一次（按内容去重，RT-1，2026-11-01）；update_plan 只读已提交的转写、交回一行状态（RT-1，2026-11-14）；
+ * web_search 重跑只是再搜一次（RT-WS，2026-11-16）；
  * 其余一律 'unsafe'（BaseTool 缺省）。把 'safe' 写到一个有副作用、又不幂等的工具上，恢复时它就会把那个
  * 副作用再做一遍，所以逐个钉。
  *
@@ -96,6 +97,13 @@ vi.mock('../../services/widget/widgetRegistry', () => ({
   WIDGET_ID_REGEX: /^[a-z0-9]+(-[a-z0-9]+)+$/
 }))
 vi.mock('../../services/widgetWindowService', () => ({ open: vi.fn() }))
+// web_search 连着内置浏览器与询问通道：只看它的 replay 声明
+vi.mock('../../services/browser', () => ({
+  runWebSearch: vi.fn(),
+  configuredSearchEngine: vi.fn(),
+  WEB_SEARCH_MAX_RESULTS: 10
+}))
+vi.mock('../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
 vi.mock('../../services/widgetPreviewService', () => ({
   parsePreviewSizes: vi.fn(),
   parsePreviewTheme: vi.fn(),
@@ -117,6 +125,7 @@ import { SkillTool } from '../../services/skillTool'
 import { WidgetTool } from '../widget'
 import { ShowImageTool } from '../showImage'
 import '../taskList'
+import '../webSearch'
 
 const ctx = { sessionId: 'sess-replay' } as ToolContext
 
@@ -143,6 +152,14 @@ describe('RT 桌面内置工具的重跑策略', () => {
     expect(meta?.factory).toBeDefined()
     const tool = meta!.factory!(ctx) as { name: string; replay: string }
     expect(tool.name).toBe('update_plan')
+    expect(tool.replay).toBe('safe')
+  })
+
+  it('RT-WS web_search 重跑只是再搜一次 → safe', () => {
+    const meta = registered.find((m) => m.name === 'web_search')
+    expect(meta?.factory).toBeDefined()
+    const tool = meta!.factory!(ctx) as { name: string; replay: string }
+    expect(tool.name).toBe('web_search')
     expect(tool.replay).toBe('safe')
   })
 

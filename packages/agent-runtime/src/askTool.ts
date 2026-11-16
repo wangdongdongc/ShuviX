@@ -19,6 +19,7 @@ import type { ToolRegistration } from '@earendil-works/pi-durable'
 import type { AskToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { catchToolErrors, toExecutionResult, type ToolResult } from './tools/toolResult'
+import { UNATTENDED_QUESTION_TEXT } from '@shuvix/chat-protocol/unattended'
 import { backstopOutputLimits } from './tools/outputLimits'
 
 export const AskParamsSchema = Type.Object({
@@ -96,7 +97,10 @@ export function createAskTool({
         // 有答题方就不是用户本人（宿主只在父会话代答时写它，挂起的询问不信载荷里的那一项）
         const answeredBy = response.answeredBy
         const byParent = answeredBy !== undefined
-        if (response.kind === 'cancel') {
+        if (response.kind === 'cancel' && response.reason === 'unattended') {
+          // 没人在场：不算出错（定时运行的会话不该满屏红行），模型自己决定或把问题留在回复里
+          text = UNATTENDED_QUESTION_TEXT
+        } else if (response.kind === 'cancel') {
           throw new Error(abortError)
         } else if (response.kind === 'other') {
           text = byParent

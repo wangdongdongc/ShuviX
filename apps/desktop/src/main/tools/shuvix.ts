@@ -34,6 +34,7 @@ import { takeCardValues } from '../services/cardValues'
 import { withCallAgent } from '../services/toolAgent'
 import { assertChannelAccess, type ToolContext } from '../services/toolContext'
 import { registerBuiltinTool } from '../services/toolRegistry'
+import { UNATTENDED_FIELDS_TEXT } from '@shuvix/chat-protocol/unattended'
 import { requestUserInputFor } from '../services/userInputBroker'
 import { t } from '../i18n'
 
@@ -198,6 +199,9 @@ export class ShuvixTool extends BaseTool<typeof ShuvixParamsSchema> {
     }
     if (response.kind === 'other') {
       throw new Error(`Nothing was changed. The user wrote instead: ${response.text}`)
+    }
+    if (response.kind === 'cancel' && response.reason === 'unattended') {
+      throw new Error(UNATTENDED_FIELDS_TEXT)
     }
     if (response.kind === 'cancel') throw new Error('Aborted')
     throw new Error('Nothing was changed: the user declined to fill in the values.')

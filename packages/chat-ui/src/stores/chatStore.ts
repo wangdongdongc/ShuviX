@@ -402,6 +402,11 @@ interface ChatState {
    */
   sessionAskCounts: Record<string, number>
   /**
+   * 这一轮无人值守的会话（`unattended` 事件 / `agent.unattended`，docs/unattended-run-design.md）：头部的图标读它。
+   * 只记 true 的
+   */
+  sessionUnattended: Record<string, true>
+  /**
    * 各 session 中各 request 的草稿状态(按 sessionId+requestId 隔离)。
    * 切换会话或切换 tab 时不清除,询问从视图里消失时才清。
    */
@@ -472,6 +477,10 @@ interface ChatState {
   setAskCount: (sessionId: string, count: number) => void
   /** 整份换掉询问计数（`agent.askCounts`）：新来的前端补上错过的 `ask_count`，已经落定的也随之消失 */
   setAskCounts: (counts: Record<string, number>) => void
+  /** `unattended` 事件：某会话这一轮有没有人在 */
+  setUnattended: (sessionId: string, unattended: boolean) => void
+  /** 整份换掉（`agent.unattended`）：新来的前端补上错过的事件 */
+  setUnattendedSessions: (sessionIds: readonly string[]) => void
   /** 本地错误行（没有条目的 `error` 事件，PIN-02）：只给当前会话记，挂在此刻最后一条消息后面 */
   addLocalError: (sessionId: string, content: string) => void
   setInputText: (text: string) => void
@@ -839,6 +848,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionToolReviewing: {},
   sessionPendingInputs: {},
   sessionAskCounts: {},
+  sessionUnattended: {},
   sessionInputDrafts: {},
   sessionActiveInputId: {},
   sessionLocalErrors: {},
@@ -1044,6 +1054,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) =>
       sameCounts(state.sessionAskCounts, counts) ? {} : { sessionAskCounts: counts }
     ),
+
+  setUnattended: (sessionId, unattended) =>
+    set((state) => {
+      const next = withKey(state.sessionUnattended, sessionId, unattended ? true : undefined)
+      return next === state.sessionUnattended ? {} : { sessionUnattended: next }
+    }),
+
+  setUnattendedSessions: (sessionIds) =>
+    set((state) => {
+      const next = new Set(sessionIds)
+      const current = Object.keys(state.sessionUnattended)
+      if (current.length === next.size && current.every((id) => next.has(id))) return {}
+      return { sessionUnattended: Object.fromEntries([...next].map((id) => [id, true as const])) }
+    }),
 
   addLocalError: (sessionId, content) =>
     set((state) => {

@@ -4,10 +4,11 @@
  *  - `agent_end` 不带 message / usage，`reason` 必填（PIN-18）；
  *  - `ChatTokenUsage` / `ChatQueuedMessage` 不再导出。
  *
- * 解读：设计稿列的是 12 种；PIN-01 的裁决（`ask_count {sessionId, count}` 余项）再加一种 —— 一共 13 种。
+ * 解读：设计稿列的是 12 种；PIN-01 的裁决（`ask_count {sessionId, count}` 余项）再加一种 —— 一共 13 种；2026-11-16 再加 `unattended`
+ * （这一轮有没有人在，docs/unattended-run-design.md）—— 14 种。
  */
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import type { ChatAgentEndEvent, ChatEvent } from './events'
+import type { ChatAgentEndEvent, ChatEvent, ChatUnattendedEvent } from './events'
 // @ts-expect-error ChatTokenUsage 已删（用量在视图与 message.list 里）
 import type { ChatTokenUsage } from './events'
 // @ts-expect-error ChatQueuedMessage 已删（队列在视图里）
@@ -26,11 +27,12 @@ const RESIDUE: Record<ChatEvent['type'], true> = {
   agent_closing: true,
   mcp_connecting: true,
   error: true,
-  ask_count: true
+  ask_count: true,
+  unattended: true
 }
 
 describe('P3-08-43 ChatEvent 余项', () => {
-  it('类型恰好是这 13 种', () => {
+  it('类型恰好是这 14 种', () => {
     expect(Object.keys(RESIDUE).sort()).toEqual(
       [
         'agent_closing',
@@ -45,7 +47,8 @@ describe('P3-08-43 ChatEvent 余项', () => {
         'runtime_event',
         'sub_session_end',
         'sub_session_register',
-        'tool_review'
+        'tool_review',
+        'unattended'
       ].sort()
     )
     expectTypeOf<'text_delta'>().not.toMatchTypeOf<ChatEvent['type']>()
@@ -64,6 +67,18 @@ describe('P3-08-43 ChatEvent 余项', () => {
     const missing: ChatAgentEndEvent = { type: 'agent_end', sessionId: 's1' }
     expect(missing.type).toBe('agent_end')
     expectTypeOf<ChatAgentEndEvent['reason']>().toEqualTypeOf<'ok' | 'aborted' | 'error'>()
+  })
+
+  it('unattended：sessionId + 布尔值，是 ChatEvent 的一员', () => {
+    const on: ChatUnattendedEvent = { type: 'unattended', sessionId: 's1', unattended: true }
+    const asEvent: ChatEvent = on
+    expect(asEvent.type).toBe('unattended')
+    expectTypeOf<ChatUnattendedEvent['unattended']>().toEqualTypeOf<boolean>()
+    expectTypeOf<ChatUnattendedEvent['sessionId']>().toEqualTypeOf<string>()
+    // @ts-expect-error unattended 必填
+    const missing: ChatUnattendedEvent = { type: 'unattended', sessionId: 's1' }
+    expect(missing.sessionId).toBe('s1')
+    expectTypeOf<Extract<ChatEvent, { type: 'unattended' }>>().toEqualTypeOf<ChatUnattendedEvent>()
   })
 
   it('已删的辅助类型导不出（编译期，见文件头的 @ts-expect-error）', () => {

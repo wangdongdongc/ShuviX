@@ -164,6 +164,10 @@ export function useAgentEvents(): void {
           store.setAskCount(sid, event.count)
           break
 
+        case 'unattended':
+          store.setUnattended(sid, event.unattended)
+          break
+
         case 'runtime_event':
           store.setRuntime(sid, event.runtimeId, event.status)
           break

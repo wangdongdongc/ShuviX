@@ -780,7 +780,7 @@ describe('BK-27 policy-md 里给一个 bot 配的配套策略模板', () => {
       const lines = note.split('\n')
       expect(lines).toContain('- read other sessions: allowed (xiaozhou-access).')
       expect(lines).toContain(
-        '- send messages into other sessions: asks (ask-on-session-access; only the user can answer, so the run would stop).'
+        '- send messages into other sessions: asks (ask-on-session-access; only the user can answer and nobody is there in a scheduled run, so this step is refused).'
       )
       expect(lines).toContain(
         '- ~/notes/daily-summary.md: read and write allowed (xiaozhou-access).'
@@ -1195,7 +1195,7 @@ describe.each(EXPECTED_LANGS)('BK-35..BK-40 完整示例过真实引擎 · %s', 
     const lines = note.split('\n')
     expect(lines).toContain('- read other sessions: allowed (recap-access).')
     expect(lines).toContain(
-      '- send messages into other sessions: asks (ask-on-session-access; only the user can answer, so the run would stop).'
+      '- send messages into other sessions: asks (ask-on-session-access; only the user can answer and nobody is there in a scheduled run, so this step is refused).'
     )
     expect(lines).toContain('- ~/notes/daily-summary.md: read and write allowed (recap-access).')
     expect(note).toContain('Policies that name it: recap-access.')

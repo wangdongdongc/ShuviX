@@ -70,6 +70,13 @@ export {
 } from './history'
 export { fetchSearchSuggestions } from './searchSuggest'
 export {
+  runWebSearch,
+  configuredSearchEngine,
+  WEB_SEARCH_MAX_RESULTS,
+  SearchNeedsHumanCheck,
+  type WebSearchOutcome
+} from './webSearch'
+export {
   initBrowserWindowService,
   openBrowserWindow,
   closeBrowserWindowWithMain,

@@ -13,6 +13,9 @@
  *          （-1 / 1.5 / NaN / '0' / Infinity 都不算），0 算；只拷三个字段
  *   IO-02b `inputOriginOf` 带 `suggestion`：人的四种来源（local / remote / chrome / telegram）留下合法的引用（拷出新对象）；
  *          引用形状不对 → 这句话照样是人的、只是没有引用；trigger / session / parent-session 从不带它
+ *   IO-03a `isUnattendedOrigin`（docs/unattended-run-design.md §2）：人的四种（含采纳的提议）→ 有人；触发器 → 没人；
+ *          别的会话 → 只看来源章上的 `unattended === true`
+ *   IO-03b `inputOriginOf` × `unattended`：只有驱动它的会话带这一项，且只留字面的 true；人 / 触发器上的一律丢掉
  */
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { DrivingSessionRef } from './inputRequest'
@@ -20,6 +23,7 @@ import {
   inputOriginOf,
   isDrivingOrigin,
   isMachineOrigin,
+  isUnattendedOrigin,
   type HumanOrigin,
   type InputOrigin,
   type MachineOrigin,
@@ -296,5 +300,82 @@ describe('IO-02b · inputOriginOf × suggestion', () => {
   it('IO-02b 人的来源本身认不出（remote 缺 clientId）→ 整项 undefined，引用救不回来', () => {
     expect(inputOriginOf({ kind: 'remote', address: '1.2.3.4', suggestion: REF })).toBeUndefined()
     expect(inputOriginOf({ kind: 'telegram', botId: 'b', suggestion: REF })).toBeUndefined()
+  })
+})
+
+describe('IO-03a · isUnattendedOrigin', () => {
+  it.each([
+    ['local', LOCAL],
+    ['remote', REMOTE],
+    ['chrome 光秃秃', { kind: 'chrome' } as const],
+    ['chrome 带 installId', CHROME],
+    ['telegram', TELEGRAM]
+  ] as const)('IO-03a %s → 有人值守；带采纳的提议也一样', (_label, origin) => {
+    expect(isUnattendedOrigin(origin)).toBe(false)
+    expect(isUnattendedOrigin({ ...origin, suggestion: REF })).toBe(false)
+  })
+
+  it('IO-03a 触发器 → 无人值守（有没有 sourceId 都一样）', () => {
+    expect(isUnattendedOrigin(TRIGGER)).toBe(true)
+    expect(isUnattendedOrigin(TRIGGER_NO_SOURCE)).toBe(true)
+  })
+
+  it.each([
+    ['parent-session', PARENT],
+    ['session', OTHER]
+  ] as const)('IO-03a %s：只有 unattended: true 才是无人值守', (_label, origin) => {
+    expect(isUnattendedOrigin(origin)).toBe(false)
+    expect(isUnattendedOrigin({ ...origin, unattended: false })).toBe(false)
+    expect(isUnattendedOrigin({ ...origin, unattended: true })).toBe(true)
+  })
+})
+
+describe('IO-03b · inputOriginOf × unattended', () => {
+  it.each([
+    ['parent-session', PARENT],
+    ['session', OTHER]
+  ] as const)('IO-03b %s 带 unattended: true → 留下，title 也在', (_label, origin) => {
+    const read = inputOriginOf({ ...origin, unattended: true, extra: 'x' })
+    expect(read).toStrictEqual({ ...origin, unattended: true })
+    expect(isUnattendedOrigin(read!)).toBe(true)
+  })
+
+  it('IO-03b 没有 title 的也留下 unattended', () => {
+    expect(inputOriginOf({ kind: 'session', sessionId: 'X', unattended: true })).toStrictEqual({
+      kind: 'session',
+      sessionId: 'X',
+      unattended: true
+    })
+  })
+
+  it.each<[string, unknown]>([
+    ['false', false],
+    ["'true'", 'true'],
+    ['1', 1],
+    ['null', null],
+    ['对象', {}]
+  ])('IO-03b unattended 是 %s → 键不在（不是 false）', (_label, value) => {
+    for (const origin of [PARENT, OTHER]) {
+      const read = inputOriginOf({ ...origin, unattended: value })
+      expect(read, origin.kind).toStrictEqual(origin)
+      expect(read, origin.kind).not.toHaveProperty('unattended')
+      expect(isUnattendedOrigin(read!), origin.kind).toBe(false)
+    }
+  })
+
+  it.each([
+    ['local', LOCAL],
+    ['remote', REMOTE],
+    ['chrome', CHROME],
+    ['telegram', TELEGRAM],
+    ['trigger', TRIGGER]
+  ] as const)('IO-03b %s 上多出来的 unattended: true 丢掉', (_label, origin) => {
+    const read = inputOriginOf({ ...origin, unattended: true })
+    expect(read).toStrictEqual(origin)
+    expect(read).not.toHaveProperty('unattended')
+  })
+
+  it('IO-03b 人的来源写了 unattended: true 也还是有人值守', () => {
+    expect(isUnattendedOrigin(inputOriginOf({ ...LOCAL, unattended: true })!)).toBe(false)
   })
 })

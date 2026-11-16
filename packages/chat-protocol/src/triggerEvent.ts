@@ -22,11 +22,12 @@ export const TRIGGER_EVENT_TOKEN_TYPE = 'trigger'
 export const TRIGGER_EVENT_UID = 'trigger'
 
 /**
- * 模型面向的说明（英文）：只写模型自己不知道的事实，不下命令 —— 该不该问、怎么留话由 agent 判断。
- * 「后面的触发被跳过」是 botTriggerService 的 inFlight：一次运行 = 这一轮，停在询问上同样算在跑。
+ * 模型面向的说明（英文）：只写模型自己不知道的事实，不下命令。没人在场这件事不靠这段话 —— 触发器开出来的那一轮是
+ * 无人值守的（docs/unattended-run-design.md）：要交给人的询问不挂起，当场以工具结果告诉模型。所以这里不再说
+ * 「把会话当作无人值守」，也不再说「停下来等回答会挡住后面的触发」（已经不会停住了）。
  */
 export const TRIGGER_EVENT_NOTE_TEXT =
-  "[Sent automatically: a trigger in your bot file fired and ShuviX sent this for it. The user did not type it just now and may not be watching; they can read this session later and reply here. If you stop to wait for an answer, this run stays open and the trigger's next firings are skipped until it ends.]"
+  '[Sent automatically: a trigger in your bot file fired and ShuviX sent this for it. The user did not type it just now and may not be watching; they can read this session later and reply here.]'
 
 /** 模型文本里 message、事件围栏、说明之间的分隔 */
 const SEPARATOR = '\n\n'

@@ -147,10 +147,23 @@ export function inputOriginOf(item: unknown): InputOrigin | undefined {
     case 'parent-session':
     case 'session':
       if (!str(o.sessionId)) return undefined
-      return typeof o.title === 'string'
-        ? { kind: o.kind, sessionId: o.sessionId, title: o.title }
-        : { kind: o.kind, sessionId: o.sessionId }
+      return {
+        kind: o.kind,
+        sessionId: o.sessionId,
+        ...(typeof o.title === 'string' ? { title: o.title } : {}),
+        ...(o.unattended === true ? { unattended: true } : {})
+      }
     default:
       return undefined
   }
+}
+
+/**
+ * 这条输入开启（或插进）的那一轮有没有人在（docs/unattended-run-design.md §2）：人在某个前端里打的 → 有人；
+ * 触发器发的 → 没人；别的会话发的 → 跟发送方那一轮当时的状态（来源章上的 `unattended`）。
+ */
+export function isUnattendedOrigin(origin: InputOrigin): boolean {
+  if (origin.kind === 'trigger') return true
+  if (isDrivingOrigin(origin)) return origin.unattended === true
+  return false
 }

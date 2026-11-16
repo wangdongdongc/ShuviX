@@ -28,6 +28,7 @@ import * as runtime from '../index'
 import { AskParamsSchema, ASK_DESCRIPTION, PARENT_ANSWERED, createAskTool } from '../askTool'
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from '../fileTools/truncate'
 import { invokeTool, resultText } from '../tools/testing/invokeTool'
+import { isUnattendedResult, UNATTENDED_QUESTION_TEXT } from '@shuvix/chat-protocol/unattended'
 
 const ARGS = {
   question: 'Which style?',
@@ -401,5 +402,71 @@ describe('ASK details.other（答完之后留在对话里的记录读它）', ()
     const { result } = await run({ kind: 'cancel', reason: 'closed' } as InputResponse)
     expect(result.isError).toBe(true)
     expect(result.details).toBeUndefined()
+  })
+})
+
+describe('ASK 无人值守的运行（docs/unattended-run-design.md §3，Q3）', () => {
+  const unattended = (): InputResponse => ({ kind: 'cancel', reason: 'unattended' })
+
+  it('AK-1 没人在：普通结果（不是 isError、不抛），文字是固定那段，details 是没选任何项的 ask', async () => {
+    const { result } = await invokeTool(createAskTool(channel(unattended)), ARGS)
+
+    expect(result).toStrictEqual({
+      content: [{ type: 'text', text: UNATTENDED_QUESTION_TEXT }],
+      details: { type: 'ask', question: 'Which style?', selections: [] }
+    })
+    expect(result.isError).toBeUndefined()
+    expect(result.details).not.toHaveProperty('other')
+    expect(result.details).not.toHaveProperty('answeredBy')
+    expect(isUnattendedResult(resultText(result))).toBe(true)
+  })
+
+  it('AK-1b 宿主给的 abortError 不取代那段文字', async () => {
+    const { result } = await invokeTool(
+      createAskTool({ ...channel(unattended), abortError: 'TOOL_ABORTED' }),
+      ARGS
+    )
+    expect(result.isError).toBeUndefined()
+    expect(resultText(result)).toBe(UNATTENDED_QUESTION_TEXT)
+  })
+
+  it.each(['aborted', 'closed', 'superseded'] as const)(
+    'AK-2 别的取消原因（%s）照旧是失败：isError，文字是 abortError',
+    async (reason) => {
+      const { result } = await invokeTool(
+        createAskTool(channel(() => ({ kind: 'cancel', reason }))),
+        ARGS
+      )
+      expect(result.isError).toBe(true)
+      expect(resultText(result)).toBe('Aborted')
+      expect(isUnattendedResult(resultText(result))).toBe(false)
+    }
+  )
+
+  it('AK-3 应答是「没人在」、但调用在等待中已被取消 → 拒绝（中止优先，不交回结果）', async () => {
+    const ac = new AbortController()
+    const requestUserInput = vi.fn(async (): Promise<InputResponse> => {
+      ac.abort()
+      return unattended()
+    })
+    await expect(
+      invokeTool(createAskTool({ requestUserInput }), ARGS, { signal: ac.signal })
+    ).rejects.toBeDefined()
+  })
+
+  it('AK-4 工具自己不预判有没有人：请求照常交给通道，形状不变', async () => {
+    const { requestUserInput } = channel(unattended)
+    await invokeTool(createAskTool({ requestUserInput }), ARGS, { callId: 'call-u', taskId: 3 })
+
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0][0]).toStrictEqual({
+      id: 'call-u',
+      kind: 'choice',
+      toolName: 'ask',
+      conversationId: expect.any(Number),
+      question: 'Which style?',
+      options: ARGS.options,
+      createdAt: expect.any(Number)
+    })
   })
 })

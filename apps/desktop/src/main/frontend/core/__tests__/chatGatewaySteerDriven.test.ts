@@ -32,6 +32,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { withSessionSender } from '@shuvix/chat-protocol/sessionSender'
 import { withUserWords } from '@shuvix/chat-protocol/userWords'
 import type { ClientContext } from '../../../ipc/registry'
+import { setDriverAttendanceLookup } from '../../../services/driverAttendance'
 import {
   createChromeContext,
   createClientContext,
@@ -109,6 +110,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset()
+  setDriverAttendanceLookup(() => false)
 })
 
 const DRIVE = { requestId: 'subsession-steer:P1:9', parentId: 'P1' }
@@ -226,6 +228,46 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
       sessionId: 'c1',
       error: 'The conversation is closed'
     })
+  })
+})
+
+/**
+ * 无人值守的运行（docs/unattended-run-design.md §4）：插话的来源章跟发送方那一轮此刻的状态。
+ *   GW-U1 发送方无人值守 → admitSteer 的 source 带 unattended:true；模型文本与侧车（发送方说明）不变
+ *   GW-U2 发送方有人值守 → 没有这个键；查的是发送方（驱动方），不是 target
+ */
+describe('GW-U steerDriven 盖发送方的状态', () => {
+  it('GW-U1 发送方无人值守：source.unattended === true，文本与侧车照旧', async () => {
+    const lookup = vi.fn((id: string) => id === 'P1')
+    setDriverAttendanceLookup(lookup)
+    const session = openSession(async () => ({ submissionId: 7 }))
+    expect(await chatGateway.steerDriven('c1', 'm', DRIVE)).toStrictEqual({})
+    const [text, options] = steerCall(DRIVE.requestId, PARENT_SOURCE)
+    expect(session.admitSteer.mock.calls).toStrictEqual([
+      [text, { ...options, source: { ...PARENT_SOURCE, unattended: true } }]
+    ])
+    expect(lookup.mock.calls).toEqual([['P1']])
+  })
+
+  it('GW-U1 别的会话（不是父会话）无人值守时同样盖', async () => {
+    setDriverAttendanceLookup(() => true)
+    const session = openSession(async () => ({ submissionId: 8 }))
+    await chatGateway.steerDriven('t1', 'm', { requestId: 'session-steer:X:1', parentId: 'X' })
+    expect(session.admitSteer.mock.calls[0]![1].source).toStrictEqual({
+      kind: 'session',
+      sessionId: 'X',
+      unattended: true
+    })
+  })
+
+  it('GW-U2 发送方有人值守（target 自己无人值守也一样）：没有 unattended 键', async () => {
+    const lookup = vi.fn((id: string) => id === 'c1')
+    setDriverAttendanceLookup(lookup)
+    const session = openSession(async () => ({ submissionId: 9 }))
+    await chatGateway.steerDriven('c1', 'm', DRIVE)
+    expect(session.admitSteer.mock.calls).toStrictEqual([steerCall(DRIVE.requestId, PARENT_SOURCE)])
+    expect(session.admitSteer.mock.calls[0]![1].source).not.toHaveProperty('unattended')
+    expect(lookup.mock.calls).toEqual([['P1']])
   })
 })
 

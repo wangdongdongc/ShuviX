@@ -26,6 +26,7 @@ import type {
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
+import { withDriverAttendance } from '../../services/driverAttendance'
 import { detectSensitive, type InputSource } from '@shuvix/agent-runtime'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
@@ -197,7 +198,9 @@ export class DefaultChatGateway implements ChatGateway {
       display,
       drive,
       source,
-      cleanUserSecrets(secrets)
+      cleanUserSecrets(secrets),
+      // 人点的「重新生成」/ 原样重发：来源沿用原来那条（触发器、别的会话），但此刻有人在
+      resent !== undefined
     )
   }
 
@@ -231,7 +234,7 @@ export class DefaultChatGateway implements ChatGateway {
       )
       const result = await session.admitSteer(sent.text, {
         requestId: drive.requestId,
-        source: sessionRecords.drivingSourceOf(sessionId, drive.parentId),
+        source: withDriverAttendance(sessionRecords.drivingSourceOf(sessionId, drive.parentId)),
         display: sent.display as unknown as JsonObject
       })
       return result.error ? { error: result.error, code: result.code } : {}
@@ -386,6 +389,18 @@ export class DefaultChatGateway implements ChatGateway {
 
   pendingInputs(): Record<string, InputRequest[]> {
     return sessionService.pendingInputs()
+  }
+
+  /** 此刻这一轮无人值守的会话（只看开着的）：新来的前端补头部图标的状态 */
+  unattendedSessions(): string[] {
+    return sessionService.unattendedSessions()
+  }
+
+  /** 用户说「我在这儿」：这条会话的这一轮从此有人值守（没开着 = 无事可做） */
+  attend(sessionId: string): { success: boolean } {
+    const session = sessionService.getAgentSession(sessionId)
+    session?.attend()
+    return { success: session !== undefined }
   }
 
   // ─── 运行时调整 ────────────────────────────────

@@ -21,7 +21,8 @@ import {
   Info,
   Layers,
   Shapes,
-  Share
+  Share,
+  Timer
 } from 'lucide-react'
 import {
   forkRefusalKey,
@@ -82,6 +83,10 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
   const location = useSessionLocation(session)
   const asks = useChatStore(selectAllPendingCounts)[activeSessionId ?? ''] ?? 0
   const replying = !!useChatStore(selectStreamingSessions)[activeSessionId ?? '']
+  // 只在这一轮还在跑的时候显示（跑完之后没有哪张卡会被拒）
+  const unattended =
+    useChatStore((st) => !!activeSessionId && st.sessionUnattended?.[activeSessionId] === true) &&
+    replying
 
   // 返回键后面的数字：别处还有几条会话在等你（收件箱那个数，去掉此刻开着的这一条）
   const { waiting, unread } = useInboxSections()
@@ -195,6 +200,14 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
         title={t('mobile.details')}
       >
         <span className="max-w-full truncate text-[15px] font-medium leading-tight text-text-primary">
+          {unattended && (
+            <Timer
+              size={14}
+              data-mobile-chat-unattended=""
+              aria-label={t('toolCall.unattendedRun')}
+              className="mr-1 inline-block align-[-2px] text-warning animate-pulse motion-reduce:animate-none"
+            />
+          )}
           <RedactedText text={title} />
         </span>
         {activeSessionId && (

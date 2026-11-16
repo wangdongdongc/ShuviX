@@ -1986,6 +1986,39 @@ describe('PR —— recentOperations 取自决策日志', () => {
     expect(payload.recentOperations).toStrictEqual(rows.map(([, expected]) => expected))
   })
 
+  it('PR-U1 / PR-U2 无人值守时没人能批的一步：结果写成「没人在」，不写成用户的回答', async () => {
+    const sid = newSession()
+    recordDecision(
+      decisionRecord(sid, 1, {
+        objectSummary: 'cat ~/notes.txt',
+        effect: 'ask',
+        userResponse: 'unattended'
+      })
+    )
+    recordDecision(
+      decisionRecord(sid, 2, {
+        objectSummary: 'git push',
+        effect: 'ask',
+        review: { decision: 'ask', risk: 'medium', source: 'auto-review', ms: 500 },
+        userResponse: 'unattended'
+      })
+    )
+
+    const payload = await buildPermissionRequestPayload(makeEvent(sid))
+    expect(payload.recentOperations).toStrictEqual([
+      { target: 'bash: cat ~/notes.txt', outcome: 'refused: nobody was there to approve' },
+      {
+        target: 'bash: git push',
+        outcome: 'reviewer ask, then refused: nobody was there to approve'
+      }
+    ])
+    // 不是用户说了什么：载荷里哪儿都不该把它写成用户的答复
+    const text = JSON.stringify(payload)
+    expect(text).not.toContain('user unattended')
+    expect(text).not.toContain('user allowed')
+    expect(text).not.toContain('user denied')
+  })
+
   it('PR-18b 共 12 条：这一次调用的记录落在最新 11 条之内（被排除）或之外，都得到 10 条', async () => {
     const targets = (numbers: number[]): string[] => numbers.map((n) => `bash: echo ${n}`)
 

@@ -551,6 +551,8 @@
     "imageZoomHint": "クリックで原寸表示",
     "imageMissing": "この画像ファイルは利用できません",
     "reviewingHint": "自動レビューがこの呼び出しを確認中です。確認が終わってから実行されます",
+    "unattendedHint": "誰もいませんでした：この手順には承認か回答が必要でしたが、実行は待ちませんでした",
+    "unattendedRun": "この実行は自動で始まったため、確認は待たずに進みます。クリックで引き継ぐと、以降は通常どおり確認します",
     "reviewedHint": "自動レビューがあなたに確認せず通しました（{{risk}}）",
     "reviewRisk": {
       "low": "低リスク",
@@ -1342,6 +1344,9 @@
     },
     "sessionLabel": "セッション",
     "sessionHint": "このタスクが属するセッションを読み書きする —— 名前の変更と、サブセッションの作成・実行",
+    "webSearchLabel": "ウェブ検索",
+    "webSearchHint": "ShuviX のブラウザで、そこで選んだ検索エンジンを使って検索し、結果をタイトル・アドレス・概要にまとめます",
+    "webSearchAskDescription": "{{engine}} で検索：{{query}}",
     "toolSearchLabel": "ツール検索",
     "toolSearchHint": "このセッションでオフの MCP サーバーとウィジェットから必要なツールを探し、あなたの確認後に有効にします",
     "extensionWidgetHint": "ウィジェット「{{name}}」",

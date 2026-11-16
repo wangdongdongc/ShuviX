@@ -261,7 +261,7 @@ const pathRule = (identity: string, path: string, effect = 'force-allow'): strin
 const HEADER = (name: string, where: string): string =>
   `Unattended access check for bot ${name} (scheduled runs have nobody to answer asks; as run in ${where}):`
 const STOPS = (by: string): string =>
-  `asks (${by}; only the user can answer, so the run would stop)`
+  `asks (${by}; only the user can answer and nobody is there in a scheduled run, so this step is refused)`
 const REVIEW = (by: string): string =>
   `asks (${by}; the automatic review answers at run time and may refuse)`
 const NO_SCHEDULE = (name: string): string =>

@@ -238,6 +238,7 @@ const DARWIN_BUILTINS = [
   'update_plan',
   'tool_search',
   'show_image',
+  'web_search',
   'git',
   'artifact',
   'session',

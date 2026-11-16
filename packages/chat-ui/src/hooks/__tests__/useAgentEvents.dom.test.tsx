@@ -512,3 +512,56 @@ describe('LA-R1 agent_closing re-pulls the session tool state', () => {
     expect(store().sessionAgentCreated.s1).toBeUndefined()
   })
 })
+
+describe('unattended（这一轮有没有人在，docs/unattended-run-design.md §6）', () => {
+  const table = (): Record<string, true> => useChatStore.getState().sessionUnattended
+
+  beforeEach(() => {
+    act(() => useChatStore.setState({ sessionUnattended: {} }))
+  })
+
+  it('AE-1 不是当前会话的也记：unattended:true → 表里有它', () => {
+    expect(store().activeSessionId).toBe('s1')
+    emit({ type: 'unattended', sessionId: 'bg', unattended: true })
+    expect(table()).toStrictEqual({ bg: true })
+    emit({ type: 'unattended', sessionId: 's1', unattended: true })
+    expect(table()).toStrictEqual({ bg: true, s1: true })
+  })
+
+  it('AE-2 unattended:false → 键删掉，别的会话的键不动；重复的事件不换引用', () => {
+    emit({ type: 'unattended', sessionId: 'bg', unattended: true })
+    emit({ type: 'unattended', sessionId: 's1', unattended: true })
+    emit({ type: 'unattended', sessionId: 'bg', unattended: false })
+    expect(table()).toStrictEqual({ s1: true })
+    const before = table()
+    emit({ type: 'unattended', sessionId: 'bg', unattended: false })
+    emit({ type: 'unattended', sessionId: 's1', unattended: true })
+    expect(table()).toBe(before)
+  })
+
+  it('AE-2 只动这一张表：消息、询问计数、运行标记都不变', () => {
+    apply('s1', V('s1', { messages: [user('u1', 'hi')] }))
+    const before = useChatStore.getState()
+    emit({ type: 'unattended', sessionId: 's1', unattended: true })
+    const after = useChatStore.getState()
+    expect(after.messages).toBe(before.messages)
+    expect(after.sessionAskCounts).toBe(before.sessionAskCounts)
+    expect(selectStreamingSessions(after)).toEqual(selectStreamingSessions(before))
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['agent_start', { type: 'agent_start' }],
+    ['agent_end', { type: 'agent_end', reason: 'ok' }],
+    ['agent_end aborted', { type: 'agent_end', reason: 'aborted' }],
+    ['error', { type: 'error', error: 'boom' }],
+    ['agent_closing{true}', { type: 'agent_closing', closing: true }],
+    ['agent_closing{false}', { type: 'agent_closing', closing: false }]
+  ])(
+    'AE-3 %s 不清这个状态：它只跟着 unattended 事件走（运行结束后自动续跑的那一轮照旧无人值守；图标由界面按「在不在跑」收）',
+    (_label, event) => {
+      emit({ type: 'unattended', sessionId: 'bg', unattended: true })
+      emit({ ...event, sessionId: 'bg' })
+      expect(table()).toStrictEqual({ bg: true })
+    }
+  )
+})

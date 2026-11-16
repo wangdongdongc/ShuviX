@@ -264,7 +264,7 @@ function outcomeText(o: AccessOutcome): string {
     case 'review':
       return `asks (${o.by}; the automatic review answers at run time and may refuse)`
     case 'stops':
-      return `asks (${o.by}; only the user can answer, so the run would stop)`
+      return `asks (${o.by}; only the user can answer and nobody is there in a scheduled run, so this step is refused)`
     case 'denied':
       return `denied (${o.by})`
   }
@@ -484,8 +484,8 @@ export function botAccessNote(input: BotAccessCheckInput): string {
   }
   if (stops) {
     out.push(
-      'A run that asks something only the user can answer waits until they come back, and that binding’s next ' +
-        'firings are skipped while it waits.'
+      'A scheduled run does not wait for the user: a step only they can approve is refused on the spot, the agent ' +
+        'is told why, and the run goes on without it.'
     )
   }
   if (input.naming.length === 0) {

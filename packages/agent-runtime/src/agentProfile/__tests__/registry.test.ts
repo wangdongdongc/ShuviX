@@ -273,6 +273,7 @@ const SHARED_BASE_TOOLS = [
   'suggest',
   'update_plan',
   'show_image',
+  'web_search',
   'ls',
   'grep',
   'glob',
@@ -306,6 +307,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'suggest',
       'update_plan',
       'show_image',
+      'web_search',
       'ls',
       'grep',
       'glob',
@@ -390,6 +392,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'suggest',
       'update_plan',
       'show_image',
+      'web_search',
       'ls',
       'grep',
       'glob',
@@ -507,6 +510,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'suggest',
       'update_plan',
       'show_image',
+      'web_search',
       'ls',
       'grep',
       'glob',
@@ -853,6 +857,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'suggest',
         'update_plan',
         'show_image',
+        'web_search',
         'write',
         'edit',
         'session',
@@ -863,7 +868,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'tool_search',
         'skill'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(17)
+      expect(built.tools, `bot.${language}`).toHaveLength(18)
       for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
@@ -1012,6 +1017,7 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     'ask',
     'suggest',
     'show_image',
+    'web_search',
     'git',
     'session',
     'knowledge',

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_TOOL_PRESENTATIONS } from './builtinToolPresentations'
 import { TOOL_SUMMARY_BUILDERS, buildToolSummary } from './toolSummaries'
+import en from './i18n/locales/en.json'
+import ja from './i18n/locales/ja.json'
+import zh from './i18n/locales/zh.json'
 
 describe('buildToolSummary', () => {
   it('includes the bash timeout after its description', () => {
@@ -307,4 +310,48 @@ describe('任务列表的摘要（新名与旧名）', () => {
     expect(buildToolSummary('update_plan', args)).toBe(expected)
     expect(buildToolSummary('mcp__plan__update', args)).toBe(expected)
   })
+})
+
+/** 网络搜索（`web_search`，2026-11-16）：折叠行就是搜索词；人机验证那张卡的两个选项靠文字区分 */
+describe('buildToolSummary — web_search', () => {
+  it('TS-WS-1 摘要是搜索词；没有 / 空的搜索词没有摘要', () => {
+    expect(buildToolSummary('web_search', { query: 'rust async traits' })).toBe('rust async traits')
+    expect(buildToolSummary('web_search', { query: 'q', max_results: 3 })).toBe('q')
+    expect(buildToolSummary('web_search', {})).toBeUndefined()
+    expect(buildToolSummary('web_search', { query: '' })).toBeUndefined()
+    expect(buildToolSummary('web_search', { query: '   ' })).toBeUndefined()
+    // 与用 asStr 的兄弟工具（tool_search）同一个口径
+    expect(buildToolSummary('web_search', { query: 42 })).toBe(
+      buildToolSummary('tool_search', { query: 42 })
+    )
+  })
+
+  it("TS-WS-2 labelKey 'tool.webSearchLabel'，图标 'Globe'", () => {
+    expect(BUILTIN_TOOL_PRESENTATIONS.web_search.labelKey).toBe('tool.webSearchLabel')
+    expect(BUILTIN_TOOL_PRESENTATIONS.web_search.presentation?.icon).toBe('Globe')
+  })
+
+  it.each([
+    ['en', en],
+    ['zh', zh],
+    ['ja', ja]
+  ] as const)(
+    'TS-WS-3 %s：工具的三条文案齐全，占位符在；人机验证的卡的文案已删',
+    (_lang, locale) => {
+      const tool = locale.tool as unknown as Record<string, string>
+      for (const key of ['webSearchLabel', 'webSearchHint', 'webSearchAskDescription']) {
+        expect(typeof tool[key], key).toBe('string')
+        expect(tool[key].trim(), key).not.toBe('')
+      }
+      expect(tool.webSearchAskDescription).toContain('{{engine}}')
+      expect(tool.webSearchAskDescription).toContain('{{query}}')
+      // 搜索不再出卡等用户：webSearchVerify* 一条都不留
+      expect(Object.keys(tool).filter((key) => key.startsWith('webSearchVerify'))).toEqual([])
+      expect(
+        Object.keys(tool)
+          .filter((key) => key.startsWith('webSearch'))
+          .sort()
+      ).toEqual(['webSearchAskDescription', 'webSearchHint', 'webSearchLabel'])
+    }
+  )
 })

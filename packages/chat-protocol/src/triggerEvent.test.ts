@@ -155,9 +155,29 @@ describe('TE-5 the note', () => {
     expect(NOTE).toMatch(/read this session later and reply/i)
   })
 
-  it("says waiting for an answer holds the trigger's next firings", () => {
-    expect(NOTE).toMatch(/wait for an answer/i)
-    expect(NOTE).toMatch(/next firings are skipped/i)
+  it('gives no instructions and does not claim that waiting holds the trigger (the run is unattended by state)', () => {
+    expect(NOTE).not.toMatch(/treat this session as unattended/i)
+    expect(NOTE).not.toMatch(/wait for an answer/i)
+    expect(NOTE).not.toMatch(/next firings/i)
+  })
+
+  it('does not use the word unattended at all, nor talk about skipped runs', () => {
+    expect(NOTE).not.toMatch(/unattended/i)
+    expect(NOTE).not.toMatch(/skipped|stays open/i)
+  })
+
+  it('closes the model text exactly once; the visible display content never carries it', () => {
+    const built = triggerEventMessage({
+      message: M,
+      fence: F,
+      trigger: 'timer.fired',
+      firedLabel: LABEL
+    })
+    expect(built.text.endsWith(NOTE)).toBe(true)
+    expect(built.text.split(NOTE)).toHaveLength(2)
+    expect(built.display.content).not.toContain(NOTE)
+    // 侧车里只在 Token 的 payload 上（重新生成靠它展开回模型文本）
+    expect(built.display.tokens[TRIGGER_EVENT_UID]!.payload!.endsWith(NOTE)).toBe(true)
   })
 })
 

@@ -45,6 +45,7 @@
  *   AC-4 历史记录：clear / remove / remove-url 是 write，list / suggest 是 admin（经 channelCallFactsOf 看）
  */
 import { describe, expect, it } from 'vitest'
+import { CHROME_PANEL_CHANNEL_PATHS } from '@shuvix/chat-protocol/chromeBridge'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
 import {
   CHANNEL_ACCESS,
@@ -465,6 +466,39 @@ describe('PAC-3 询问计数与后台任务快照', () => {
       scope: 'sessions',
       access: 'read'
     })
+  })
+})
+
+describe('UA-CH 无人值守的两条通道（docs/unattended-run-design.md §6）', () => {
+  it('UA-CH-1 agent:unattended：零参的 invoke，sessions 的 read（只读的远程连接能补头部图标）', () => {
+    expect(API_TABLE.agent.unattended).toEqual({
+      kind: 'invoke',
+      channel: 'agent:unattended',
+      args: 0
+    })
+    expect(CHANNEL_ACCESS['agent:unattended']).toBe('read')
+    expect(channelScopeOf('agent:unattended')).toBe('sessions')
+    expect(channelCallFactsOf('agent:unattended', [])).toEqual({
+      scope: 'sessions',
+      access: 'read'
+    })
+  })
+
+  it('UA-CH-2 agent:attend：一参的 invoke，sessions 的 write（与答一张卡同级，只读的连接不能说「我在这儿」）', () => {
+    expect(API_TABLE.agent.attend).toEqual({ kind: 'invoke', channel: 'agent:attend', args: 1 })
+    expect(CHANNEL_ACCESS['agent:attend']).toBe('write')
+    expect(channelAccessOf('agent:attend')).toBe(channelAccessOf('agent:respondToInput'))
+    expect(channelScopeOf('agent:attend')).toBe('sessions')
+    expect(channelCallFactsOf('agent:attend', ['s1'])).toEqual({
+      scope: 'sessions',
+      access: 'write'
+    })
+    expect(channelCallFactsOf('agent:attend', [])).toEqual({ scope: 'sessions', access: 'write' })
+  })
+
+  it('UA-CH-3 Chrome 侧栏的通道白名单里没有这两条（侧栏不显示这个状态）', () => {
+    expect(CHROME_PANEL_CHANNEL_PATHS).not.toContain('agent.attend')
+    expect(CHROME_PANEL_CHANNEL_PATHS).not.toContain('agent.unattended')
   })
 })
 

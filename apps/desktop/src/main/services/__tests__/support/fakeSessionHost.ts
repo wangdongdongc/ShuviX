@@ -354,6 +354,14 @@ export class FakeDurableSession implements DurableSession {
     this.calls.push(['setThinkingLevel', level])
   }
 
+  /** 这一轮此刻是不是无人值守（用例直接改） */
+  unattended = false
+
+  attend(): void {
+    this.calls.push(['attend'])
+    this.unattended = false
+  }
+
   requestUserInput(request: InputRequest): Promise<InputResponse> {
     this.calls.push(['requestUserInput', request])
     return Promise.resolve({ kind: 'cancel', reason: 'fake' } as unknown as InputResponse)
@@ -722,7 +730,11 @@ function facadeOf(durable: DurableSession): Record<string, unknown> {
       },
       get pendingInputSummaries() {
         return durable.pendingInputSummaries
-      }
+      },
+      get unattended() {
+        return durable.unattended
+      },
+      attend: () => durable.attend()
     }
     facades.set(durable, facade)
   }

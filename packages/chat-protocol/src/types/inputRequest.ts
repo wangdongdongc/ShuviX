@@ -256,6 +256,11 @@ export interface DrivingSessionRef {
   kind: 'parent-session' | 'session'
   sessionId: string
   title?: string
+  /**
+   * 作为一条消息的来源时：发送方那一轮当时是不是无人值守（docs/unattended-run-design.md §4）。宿主在发送时盖，
+   * 接收方这一轮跟着它；缺省 = 有人值守。作答题方时不带
+   */
+  unattended?: boolean
 }
 
 interface InputResponseBase {
@@ -317,7 +322,7 @@ export interface OtherResponse extends InputResponseBase {
  * - `closed`:会话运行时被关停(LRU 回收 / 退出 / 删除),这条询问再也不会有人应答;
  * - `superseded`:同一个 id 又发起了一次询问,先前那条作废(只有最新的一条能被应答)。
  */
-export type CancelReason = 'aborted' | 'closed' | 'superseded'
+export type CancelReason = 'aborted' | 'closed' | 'superseded' | 'unattended'
 
 /**
  * 取消响应:仅由后端产生(中止 / 关停 / 被同 id 新询问顶替),前端 UI 不暴露此动作。

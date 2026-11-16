@@ -24,6 +24,7 @@ import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isDrivingOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { withDriverAttendance } from './driverAttendance'
 import { tokensWithoutSystemTokens, withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { cleanUserSecrets } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
@@ -157,7 +158,9 @@ export class AgentSession {
      */
     source?: InputOrigin,
     /** 输入框发来的（docs/auto-redaction-design.md §14）：只把这些换成占位符，其余照原样 */
-    secrets?: UserSecret[]
+    secrets?: UserSecret[],
+    /** 来源是机器的、却是人此刻亲手重发的（「重新生成」/ 回退后原样重发）：这一轮算有人值守 */
+    humanPresent?: boolean
   ): Promise<SubmitResult> {
     // 不记正文：用户可能把密码贴在里面，日志不经脱敏
     log.info(`prompt session=${this.sessionId} chars=${text.length} images=${images?.length || 0}`)
@@ -170,7 +173,9 @@ export class AgentSession {
     const origin =
       drive === undefined
         ? source
-        : sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
+        : withDriverAttendance(
+            sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
+          )
     const dayPrompt = this.dayPromptCallbacks(origin)
     // 发送的图片进文件库（docs/file-library-design.md §5），挂在落下的那条用户消息上
     const keepImages = images && images.length > 0 ? this.libraryImageCallback(images) : undefined
@@ -198,6 +203,7 @@ export class AgentSession {
           ? {}
           : { source: origin }
         : { requestId: drive.requestId, driven: drive.driven, source: origin }),
+      ...(humanPresent === true ? { humanPresent: true } : {}),
       onAdmitted: (info) => {
         admitted = true
         this.runOrigin = origin
@@ -426,6 +432,16 @@ export class AgentSession {
 
   requestUserInput(request: InputRequest): Promise<InputResponse> {
     return this.durable.requestUserInput(request)
+  }
+
+  /** 这一轮此刻是不是无人值守（docs/unattended-run-design.md）：询问不挂起、当场告诉模型 */
+  get unattended(): boolean {
+    return this.durable.unattended
+  }
+
+  /** 用户说「我在这儿」：这一轮从此有人值守 */
+  attend(): void {
+    this.durable.attend()
   }
 
   /** 应答一条挂起的询问（先到者胜）；`meta.clientId` = 答题方，交给运行时供审计（P3-08 PIN-20） */
