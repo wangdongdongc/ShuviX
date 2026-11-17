@@ -1,14 +1,20 @@
 /**
  * `read` 读 http(s) 地址 —— 单测（urlFetch / read / readPageRenderer）把 Electron 的网络栈和窗口都替身掉了，这里走它们替身掉的那几段：
- * 真的 `shuvix-read-url` 内存 session 发出去的请求长什么样（服务器这边记下每个头）、真的隐藏窗口里跑页面的脚本、窗口有没有被看见、
- * 分区落没落盘、中止时窗口和连接有没有放掉。
+ * read 用的是内置浏览器的身份（2026-11-17）—— 真的 `persist:shuvix-browser` 分区发出去的请求长什么样（服务器这边记下每个头）、
+ * 用户在内置浏览器里留下的 cookie 带没带上、真的隐藏窗口里跑页面的脚本、窗口有没有被看见、读过的地址进没进浏览历史、
+ * 中止时窗口和连接有没有放掉。
  *
  * 一个真的 isolated 实例 + 脚本化的假提供商（每一轮：模型调 `read` → 收尾正文，按这一轮的提示词认领）+ 一个 127.0.0.1:0 的内联服务器。
+ * 起来时先以用户的身份在内置浏览器里开一个 tab 去 `/id/set-login`（服务器发一个只对 `/id` 有效的 cookie）再关掉 —— 这就是
+ * 「用户在内置浏览器里登录过」；那个 tab 的请求头里的 UA 就是内置浏览器的 UA。浏览器窗口从头到尾没打开（tab 住在停放窗口里）。
  *
- *   E-1  第一次读：UA 里没有 Electron / ShuviX、Chrome 主版本与渲染进程的相同，带语言，没有 Cookie
+ *   E-1  第一次读普通网页：一次请求 + 一次隐藏页面的导航，两次的 UA 都是内置浏览器的那个（与 tab 的相同；Chrome 的样子：
+ *        主版本与内置 Chromium 的相同，没有 Electron / ShuviX）；没有 Cookie（这个站点路径上没登录过）；
+ *        渲染窗口恰好一个、没被看见、关了；结果是页面本身，不带 note
  *   E-2  真的 GBK 页面（只有 meta 声明）不乱码
- *   E-3  JSON（地址是 .html）一个字节不改，converted=false，没开窗
- *   E-4  一直 403 的静态页：两次请求（Chrome UA、ShuviX UA）+ 一次渲染，工具行是失败的，错误只有一次前缀，正文不在错误里
+ *   E-3  JSON（地址是 .html）一个字节不改，converted=false，只有一次请求，没开窗
+ *   E-4  一直 403 的静态页：两次请求（浏览器的 UA、ShuviX UA）+ 一次渲染，工具行是失败的，错误只有一次前缀，正文不在错误里，
+ *        提示说的是去 ShuviX 的浏览器里登录 / 过验证
  *   E-5  正文只由脚本写出来的 200 页面：结果里是脚本写的字；渲染窗口从没显示 / 聚焦、关了（E-8 前半）
  *   E-6  对请求回 403、对导航回正文（服务器按 Sec-Fetch-Mode 分）：结果是渲染出来的正文
  *   E-7  隐藏页面想开弹窗：服务器收不到弹窗的请求，没留下多余的窗口，也没交给系统打开
@@ -18,9 +24,15 @@
  *   E-11 渲染中途用户按停：很快落定，工具行是中止，窗口关了
  *   E-12 先发 cookie 再跳回自己的站点：第二次带着 cookie，读得到（credentials: include）
  *   E-13 服务器不存在（连接被拒）：错误里有原因
- *   E-14 `Partitions/shuvix-read-url` 不在 userData 下（内存分区）；整个 spec 没有未捕获异常、没弹原生框
+ *   E-14 `Partitions/shuvix-read-url` 不在 userData 下；整个 spec 没有未捕获异常、没弹原生框
+ *   E-15 用户在内置浏览器里登录过的站点：read 的请求带着那个 cookie、UA 与 tab 的相同，读到登录后才有的内容
+ *   E-16 同上，但只有隐藏页面的导航拿得到正文：导航也带着 cookie、同一个 UA
+ *   E-17 读过的地址进浏览历史：记在发起的会话名下、标题是页面的、不算用户的访问（地址栏建议的候选只看用户的访问数），
+ *        没有开出 tab；用户自己那次访问照旧记在用户头上
+ *   E-18 脚本把正文收起来的页面：用请求到的那份（渲染出来的字更少）
+ *   E-20 JSON 也带着登录的 cookie，照样只请求一次、不开窗
  *
- * 弹框、打印、下载、mailto 不进 e2e（守卫一旦回退，那些会在开发者屏幕上弹出系统界面）—— 由单测覆盖。
+ * 弹框、打印、下载、mailto 不进 e2e（守卫一旦回退，那些会在开发者屏幕上弹出系统界面）—— 由单测覆盖。并发上限也只在单测里。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from 'node:http'
@@ -42,9 +54,9 @@ import {
   type E2EApp,
   type WindowHistory
 } from '../../harness/launch'
-import { nativeDialogRequests } from '../../harness/networkFixtures'
 import { externalOpens } from '../../harness/providerOAuthFixtures'
-import { seedFakeProvider, waitRendererReady } from '../../harness/seed'
+import { browserTabs, closeBrowserTab, nativeDialogRequests } from '../../harness/networkFixtures'
+import { seedFakeProvider, sqliteJson, waitRendererReady } from '../../harness/seed'
 import { syncProbe, toolResultsIn, type SyncProbe, type ToolResult } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
@@ -54,6 +66,13 @@ const RUN_TIMEOUT = 60_000
 const JS_TEXT = 'JS-ADDED-TEXT'
 const NAV_TEXT = 'NAV-ONLY-TEXT'
 const STATIC_MARKER = 'STATIC-403-BODY'
+const SIGNED_IN_TEXT = 'SIGNED-IN-TEXT'
+const SIGNED_IN_NAV_TEXT = 'SIGNED-IN-NAV-TEXT'
+const STATIC_FULL = 'STATIC-FULL'
+const READ_TITLE = 'READ-TITLE'
+const HISTORY_SESSION_TITLE = 'read history owner'
+/** 「登录」的 cookie：只对 /id 下的路径有效，别的用例的请求不带它 */
+const LOGIN_COOKIE = 'login=1'
 /** GBK 的「中文」 */
 const GBK_ZHONGWEN = Buffer.from([0xd6, 0xd0, 0xce, 0xc4])
 
@@ -72,6 +91,8 @@ let seq = 0
 /** 起来时已有的窗口与页面 target：结束时要回到这一份 */
 let baselineWindows = new Set<number>()
 let baselineTargets: string[] = []
+/** 内置浏览器的 tab 发请求用的 UA（起来时那个「登录」的 tab 留下的） */
+let browserUa = ''
 
 const hits: Hit[] = []
 const sockets = new Set<Socket>()
@@ -163,6 +184,38 @@ function route(path: string, headers: IncomingHttpHeaders, res: ServerResponse):
       res.writeHead(302, { location: '/cookie-loop', 'set-cookie': 'passed=1; Path=/' })
       res.end()
       return
+    case '/id/set-login':
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'set-cookie': `${LOGIN_COOKIE}; Path=/id`
+      })
+      res.end(htmlPage('<p>signed in</p>'))
+      return
+    case '/id/whoami':
+      return headers.cookie?.includes(LOGIN_COOKIE)
+        ? sendHtml(res, htmlPage(`<p>${longText(SIGNED_IN_TEXT)}</p>`))
+        : sendHtml(res, 'sign in first', 403)
+    case '/id/whoami-nav':
+      return headers.cookie?.includes(LOGIN_COOKIE) && isNavigation(headers)
+        ? sendHtml(res, htmlPage(`<p>${longText(SIGNED_IN_NAV_TEXT)}</p>`))
+        : sendHtml(res, 'refused', 403)
+    case '/id/data.json':
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"signedIn":true}')
+      return
+    case '/shrinks':
+      // 请求到的那份有全文；脚本一跑就把正文换成一句短的
+      return sendHtml(
+        res,
+        htmlPage(
+          `<div id="root"><p>${longText(STATIC_FULL)}</p></div><script>document.getElementById('root').textContent = 'collapsed'</script>`
+        )
+      )
+    case '/titled':
+      return sendHtml(
+        res,
+        `<!doctype html><html><head><title>${READ_TITLE}</title></head><body><p>${longText('titled')}</p></body></html>`
+      )
     default:
       res.writeHead(404)
       res.end()
@@ -196,9 +249,9 @@ async function startRead(session: string, url: string): Promise<{ callId: string
   return { callId, done }
 }
 
-/** 跑一轮直到工具块落盘、这一轮落定；`read` 读地址不该问任何东西 */
-async function runRead(url: string): Promise<ToolResult> {
-  const session = await newSession(`read ${seq + 1}`)
+/** 跑一轮直到工具块落盘、这一轮落定；`read` 读地址不该问任何东西。`inSession` = 用这条会话（缺省新建一条） */
+async function runRead(url: string, inSession?: string): Promise<ToolResult> {
+  const session = inSession ?? (await newSession(`read ${seq + 1}`))
   const { callId, done } = await startRead(session, url)
   const result = await until(
     async () => {
@@ -245,6 +298,21 @@ const pageTargets = async (): Promise<string[]> =>
     .map((t) => t.webSocketDebuggerUrl)
     .sort()
 
+/** 浏览历史里这个地址的每一次访问（直接读库：历史记录页的 IPC 只认浏览器窗口，而这里不开它） */
+interface VisitRow {
+  title: string
+  visitCount: number
+  typedCount: number
+  sessionId: string | null
+}
+const visitsOf = (url: string): VisitRow[] =>
+  sqliteJson<VisitRow>(
+    app.home,
+    `SELECT u.title, u.visitCount, u.typedCount, v.sessionId
+       FROM browser_history_visits v JOIN browser_history_urls u ON u.id = v.urlId
+      WHERE u.url = '${url.replace(/'/g, "''")}' ORDER BY v.id`
+  )
+
 /** /etc/hosts 里有内容的行：这些字样不能从任何一条结果里漏出来 */
 const hostsLines = (): string[] =>
   readFileSync('/etc/hosts', 'utf8')
@@ -274,6 +342,28 @@ beforeAll(async () => {
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
   probe = syncProbe(app.main)
+
+  // 用户在内置浏览器里「登录」：开一个 tab 去 /id/set-login，收到请求后关掉（浏览器窗口不打开，tab 住在停放窗口里）
+  const loginTab = await app.main.eval<string>(
+    `window.api.browserView.createTab(${JSON.stringify(`${origin}/id/set-login`)})`
+  )
+  const loginHit = await until(() => hitsOf('/id/set-login')[0] ?? null, 'login tab request')
+  browserUa = String(loginHit.headers['user-agent'])
+  await until(
+    () => visitsOf(`${origin}/id/set-login`).length > 0 || null,
+    'login visit recorded in history'
+  )
+  await closeBrowserTab(app, loginTab)
+  await until(async () => (await browserTabs(app)).length === 0 || null, 'login tab closed')
+  // 等页面 target 稳定下来再记基线（tab 的 target 关掉要一点时间）
+  let lastTargets = ''
+  await until(async () => {
+    const now = (await pageTargets()).join('\n')
+    const stable = now === lastTargets
+    lastTargets = now
+    return stable || null
+  }, 'page targets settled')
+
   baselineWindows = new Set(windowsOf(windowEvents(app)).map((w) => w.id))
   baselineTargets = await pageTargets()
 }, 120_000)
@@ -287,25 +377,35 @@ afterAll(async () => {
 
 describe('read 读地址', () => {
   it(
-    'E-1 第一次读：UA 像这个内置 Chromium 的 Chrome，带语言，没有 Cookie',
+    'E-1 第一次读普通网页：请求 + 隐藏页面各一次，UA 都是内置浏览器的那个（Chrome 的样子），没有 Cookie；窗口没被看见',
     async () => {
+      // 内置浏览器分区的 UA 是 Chrome 的样子：主版本与内置 Chromium 的相同，没有 Electron / ShuviX
       const rendererUa = await app.main.eval<string>('navigator.userAgent')
       const major = /Chrome\/(\d+)/.exec(rendererUa)?.[1]
       expect(major).toBeTruthy()
-
+      expect(browserUa).toContain(`Chrome/${major}.0.0.0`)
+      expect(browserUa).not.toMatch(/Electron|ShuviX/i)
+      const since = windowEvents(app).length
       const tool = await runRead(`${origin}/plain`)
       expect(tool.isError, tool.result).toBe(false)
       expect(tool.result).toContain('plain plain')
+      expect(tool.result).not.toContain('Note: the page returned very little text')
       expect(tool.details).toMatchObject({ format: 'URL', converted: true })
 
-      const [first, ...rest] = hitsOf('/plain')
-      expect(rest).toEqual([])
-      const ua = String(first.headers['user-agent'])
-      expect(ua).toContain(`Chrome/${major}.0.0.0`)
-      expect(ua).not.toMatch(/Electron|ShuviX/i)
-      expect(first.headers['accept']).toContain('text/html')
-      expect(first.headers['accept-language']).toBeTruthy()
-      expect(first.headers.cookie).toBeUndefined()
+      // 先直接请求，再在隐藏页面里载入一遍（网页总是渲染）
+      const seen = hitsOf('/plain')
+      expect(seen.map((h) => isNavigation(h.headers))).toEqual([false, true])
+      for (const hit of seen) {
+        expect(String(hit.headers['user-agent'])).toBe(browserUa)
+        // 登录的 cookie 只对 /id 有效：这里什么 cookie 都没有
+        expect(hit.headers.cookie).toBeUndefined()
+      }
+      expect(seen[0].headers['accept']).toContain('text/html')
+
+      const wins = renderWindows('/plain', since)
+      expect(wins).toHaveLength(1)
+      expectUnseen(wins[0])
+      await until(() => renderWindows('/plain', since)[0].closed || null, 'render window closed')
     },
     IT_TIMEOUT
   )
@@ -331,6 +431,7 @@ describe('read 读地址', () => {
         `URL: ${origin}/data.html (application/json)\n\n{\n\n  "a":   1\n}\n`
       )
       expect(tool.details).toMatchObject({ converted: false })
+      expect(hitsOf('/data.html')).toHaveLength(1)
       expect(
         windowEvents(app)
           .slice(since)
@@ -348,17 +449,17 @@ describe('read 读地址', () => {
       expect(tool.result).toMatch(/^Failed to fetch URL: HTTP 403 from /)
       expect(tool.result.match(/Failed to fetch URL/g)).toHaveLength(1)
       expect(tool.result).toContain('refused')
-      expect(tool.result).toContain('Calling read again will not help')
-      expect(tool.result).toContain('browser tools')
+      expect(tool.result).toContain('Calling read again right now will not help')
+      expect(tool.result).toContain("open this address in ShuviX's browser")
+      expect(tool.result).not.toContain('browser tools')
       expect(tool.result).not.toContain(STATIC_MARKER)
 
       const seen = hitsOf('/blocked')
       expect(seen).toHaveLength(3)
       const uas = seen.map((h) => String(h.headers['user-agent']))
-      expect(uas[0]).toMatch(/Chrome\/\d+\.0\.0\.0/)
+      expect(uas[0]).toBe(browserUa)
       expect(uas[1]).toBe('Mozilla/5.0 (compatible; ShuviX/1.0)')
-      expect(uas[2]).toMatch(/Chrome\/\d+\.0\.0\.0/)
-      expect(uas[2]).not.toMatch(/Electron|ShuviX/i)
+      expect(uas[2]).toBe(browserUa)
       // 前两次是请求，第三次才是页面导航
       expect(seen.map((h) => isNavigation(h.headers))).toEqual([false, false, true])
 
@@ -527,13 +628,140 @@ describe('read 读地址', () => {
   )
 
   it(
+    'E-15 用户在内置浏览器里登录过：read 的请求带着那个 cookie、同一个 UA，读到登录后的内容',
+    async () => {
+      const tool = await runRead(`${origin}/id/whoami`)
+      expect(tool.isError, tool.result).toBe(false)
+      expect(tool.result).toContain(SIGNED_IN_TEXT)
+
+      const seen = hitsOf('/id/whoami')
+      expect(seen.map((h) => isNavigation(h.headers))).toEqual([false, true])
+      for (const hit of seen) {
+        expect(hit.headers.cookie).toContain(LOGIN_COOKIE)
+        expect(String(hit.headers['user-agent'])).toBe(browserUa)
+      }
+    },
+    IT_TIMEOUT
+  )
+
+  it(
+    'E-16 只有隐藏页面的导航拿得到正文：导航也带着登录的 cookie、同一个 UA，窗口没被看见',
+    async () => {
+      const since = windowEvents(app).length
+      const tool = await runRead(`${origin}/id/whoami-nav`)
+      expect(tool.isError, tool.result).toBe(false)
+      expect(tool.result).toContain(SIGNED_IN_NAV_TEXT)
+
+      const seen = hitsOf('/id/whoami-nav')
+      expect(seen.map((h) => isNavigation(h.headers))).toEqual([false, false, true])
+      const navigation = seen[2]
+      expect(navigation.headers.cookie).toContain(LOGIN_COOKIE)
+      expect(String(navigation.headers['user-agent'])).toBe(browserUa)
+      // 直接请求也带着 cookie（被拒只因为不是导航）
+      expect(seen[0].headers.cookie).toContain(LOGIN_COOKIE)
+
+      const wins = renderWindows('/id/whoami-nav', since)
+      expect(wins).toHaveLength(1)
+      expectUnseen(wins[0])
+    },
+    IT_TIMEOUT
+  )
+
+  it(
+    'E-17 读过的地址进浏览历史：记在这条会话名下、带页面标题、不算用户的访问；没有开出 tab',
+    async () => {
+      const session = await newSession(HISTORY_SESSION_TITLE)
+      const url = `${origin}/titled`
+      const tool = await runRead(url, session)
+      expect(tool.isError, tool.result).toBe(false)
+
+      const rows = await until(() => {
+        const now = visitsOf(url)
+        return now.length > 0 && now[0].title === READ_TITLE ? now : null
+      }, 'read visit recorded with the page title')
+      // 一次 read = 一次访问（请求和隐藏页面的导航不各记一次）
+      expect(rows).toHaveLength(1)
+      expect(rows[0].sessionId).toBe(session)
+      // 地址栏建议的候选只取用户去过的（visitCount > 0）：agent 读的不算
+      expect(rows[0].visitCount).toBe(0)
+      expect(rows[0].typedCount).toBe(0)
+
+      // 起来时用户自己开 tab 的那次：照旧记在用户头上
+      const own = visitsOf(`${origin}/id/set-login`)
+      expect(own).toHaveLength(1)
+      expect(own[0].sessionId).toBeNull()
+      expect(own[0].visitCount).toBe(1)
+
+      // E-1 读过的普通网页：标题是页面自己的，不是隐藏页面起步那张空白页的
+      const plain = visitsOf(`${origin}/plain`)
+      expect(plain).toHaveLength(1)
+      expect(plain[0].title).toBe('Fixture')
+      expect(plain[0].sessionId).toBeTruthy()
+
+      // JSON（不渲染）和一直 403 的也都记了一次，都在某条会话名下
+      for (const path of ['/data.html', '/blocked']) {
+        const visits = visitsOf(`${origin}${path}`)
+        expect(visits, path).toHaveLength(1)
+        expect(visits[0].sessionId, path).toBeTruthy()
+        expect(visits[0].visitCount, path).toBe(0)
+      }
+
+      // read 不开 tab
+      expect(await browserTabs(app)).toEqual([])
+    },
+    IT_TIMEOUT
+  )
+
+  it(
+    'E-18 脚本把正文收起来的页面：渲染出来的字更少，用请求到的那份',
+    async () => {
+      const since = windowEvents(app).length
+      const tool = await runRead(`${origin}/shrinks`)
+      expect(tool.isError, tool.result).toBe(false)
+      expect(tool.result).toContain(STATIC_FULL)
+      expect(tool.result).not.toContain('collapsed')
+      expect(tool.result).not.toContain('Note: the page returned very little text')
+
+      expect(hitsOf('/shrinks').map((h) => isNavigation(h.headers))).toEqual([false, true])
+      const wins = renderWindows('/shrinks', since)
+      expect(wins).toHaveLength(1)
+      expectUnseen(wins[0])
+      await until(() => renderWindows('/shrinks', since)[0].closed || null, 'render window closed')
+    },
+    IT_TIMEOUT
+  )
+
+  it(
+    'E-20 JSON 也带着登录的 cookie：只请求一次，不开窗',
+    async () => {
+      const since = windowEvents(app).length
+      const tool = await runRead(`${origin}/id/data.json`)
+      expect(tool.isError, tool.result).toBe(false)
+      expect(tool.result).toBe(
+        `URL: ${origin}/id/data.json (application/json)\n\n{"signedIn":true}`
+      )
+      const seen = hitsOf('/id/data.json')
+      expect(seen).toHaveLength(1)
+      expect(seen[0].headers.cookie).toContain(LOGIN_COOKIE)
+      expect(String(seen[0].headers['user-agent'])).toBe(browserUa)
+      expect(
+        windowEvents(app)
+          .slice(since)
+          .filter((e) => e.event === 'created')
+      ).toEqual([])
+    },
+    IT_TIMEOUT
+  )
+
+  it(
     'E-8 整个 spec 的隐藏窗口：都没显示、没聚焦、都关了，页面 target 回到起来时那一份',
     async () => {
       const hidden = await until(() => {
         const list = windowsOf(windowEvents(app)).filter((w) => !baselineWindows.has(w.id))
         return list.every((w) => w.closed) ? list : null
       }, 'every hidden window closed')
-      expect(hidden.length).toBeGreaterThanOrEqual(4)
+      // 每读一张网页就有一个隐藏窗口（JSON、连不上的那几次没有）
+      expect(hidden.length).toBeGreaterThanOrEqual(12)
       for (const w of hidden) expectUnseen(w)
       await until(async () => {
         const now = await pageTargets()
@@ -543,7 +771,7 @@ describe('read 读地址', () => {
     IT_TIMEOUT
   )
 
-  it('E-14 分区不落盘；没有未捕获异常、没弹原生框', () => {
+  it('E-14 shuvix-read-url 没落盘；没有未捕获异常、没弹原生框', () => {
     const partitions = join(app.userData, 'Partitions')
     expect(existsSync(join(partitions, 'shuvix-read-url'))).toBe(false)
     if (existsSync(partitions)) {

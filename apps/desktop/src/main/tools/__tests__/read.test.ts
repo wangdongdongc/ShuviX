@@ -42,16 +42,27 @@ const enforceUrl = vi.hoisted(() =>
 )
 
 /**
- * read 的网络面：专用 session 的 fetch 回一个 HTML 页面（转换器是下面的 mock，不看正文），其余两条路（defaultSession /
- * 全局 fetch）一调就算错。渲染是 readPageRenderer 的 renderPage，窗口那一面在它自己的单测里，这里换成 spy。
+ * read 的网络面：内置浏览器分区（persist:shuvix-browser）的 fetch 回一个 HTML 页面（转换器是下面的 mock，不看正文），
+ * 其余几条路（`shuvix-read-url` 那个内存 session / defaultSession / 全局 fetch）一调就算错。浏览器模块换成几个 spy：
+ * 读过的地址记进历史（historyNoteAgentRead）要看它。渲染是 readPageRenderer 的 renderPage，窗口那一面在它自己的单测里，这里换成 spy。
  */
 const net = vi.hoisted(() => {
   const respondHtml = async (): Promise<Response> =>
     new Response(new TextEncoder().encode('<html><body>x</body></html>'), {
       headers: { 'content-type': 'text/html; charset=utf-8' }
     })
-  const readSession = {
+  /** 内置浏览器的分区：read 的请求走它 */
+  const browserSession = {
     fetch: vi.fn(async (_url: string, _init: RequestInit): Promise<Response> => respondHtml()),
+    getUserAgent: vi.fn(() => 'BROWSER-PARTITION-UA/1.0 Electron/0'),
+    setUserAgent: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    on: vi.fn()
+  }
+  /** `shuvix-read-url`：搜索 API 的内存 session，read 不该碰 */
+  const searchSession = {
+    fetch: vi.fn(),
     setUserAgent: vi.fn(),
     setPermissionRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
@@ -59,8 +70,13 @@ const net = vi.hoisted(() => {
   }
   return {
     respondHtml,
-    readSession,
-    fromPartition: vi.fn((_partition: string) => readSession),
+    browserSession,
+    searchSession,
+    fromPartition: vi.fn((partition: string) =>
+      partition === 'persist:shuvix-browser' ? browserSession : searchSession
+    ),
+    initBrowserSession: vi.fn(),
+    historyNoteAgentRead: vi.fn((_sessionId: string, _url: string): void => {}),
     defaultSessionFetch: vi.fn(),
     renderPage: vi.fn(
       async (_url: string, _signal?: AbortSignal): Promise<{ html: string } | null> => null
@@ -223,7 +239,16 @@ vi.mock('word-extractor', () => ({
   }
 }))
 
-// 只换 renderPage；readUrlSession / UA / 语言是真的（RD-URL 要看它们接没接对）
+// 浏览器模块：分区名是真的那个，其余是 spy（真模块会拉起整个内置浏览器）
+vi.mock('../../services/browser', () => ({
+  BROWSER_PARTITION: 'persist:shuvix-browser',
+  initBrowserSession: net.initBrowserSession,
+  historyNoteAgentRead: net.historyNoteAgentRead,
+  historyNoteReadTitle: vi.fn(),
+  markUnattendedPage: vi.fn()
+}))
+
+// 只换 renderPage；browserReadSession / browserReadUserAgent / noteReadVisit 是真的（RD-URL 要看它们接没接对）
 vi.mock('../../services/readPageRenderer', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/readPageRenderer')>()),
   renderPage: net.renderPage
@@ -983,7 +1008,7 @@ describe('read 工具 - 本地 HTML 原文', () => {
   })
 })
 
-/** Node 下没有 process.versions.chrome（Electron 才有）；readUrlSession / readUserAgent 要读它。下面图片那组也读 URL */
+/** Node 下没有 process.versions.chrome（Electron 才有）；readPageRenderer 里搜索 API 那个 session 的 UA 要读它 */
 const originalChrome = Object.getOwnPropertyDescriptor(process.versions, 'chrome')
 beforeAll(() => {
   Object.defineProperty(process.versions, 'chrome', {
@@ -1008,11 +1033,15 @@ describe('read 工具 - URL 抓取', () => {
   })
 
   beforeEach(() => {
-    net.readSession.fetch.mockReset()
-    net.readSession.fetch.mockImplementation(net.respondHtml)
+    net.browserSession.fetch.mockReset()
+    net.browserSession.fetch.mockImplementation(net.respondHtml)
     net.renderPage.mockReset()
     net.renderPage.mockResolvedValue(null)
     net.defaultSessionFetch.mockReset()
+    net.searchSession.fetch.mockReset()
+    net.fromPartition.mockClear()
+    net.initBrowserSession.mockClear()
+    net.historyNoteAgentRead.mockClear()
     globalFetch.mockReset()
     enforceUrl.mockReset()
     enforceUrl.mockResolvedValue(undefined)
@@ -1021,7 +1050,7 @@ describe('read 工具 - URL 抓取', () => {
   })
 
   const sessionUserAgent = (): string =>
-    (net.readSession.fetch.mock.calls[0][1].headers as Record<string, string>)['User-Agent']
+    (net.browserSession.fetch.mock.calls[0][1].headers as Record<string, string>)['User-Agent']
 
   it('RD-HTML-03 .html HTTPS URL 仍完整交给 convert 并返回 Markdown', async () => {
     const url = 'https://example.com/page.html'
@@ -1042,6 +1071,9 @@ describe('read 工具 - URL 抓取', () => {
     expect(details.format).toBe('URL')
     expect(details.converted).toBe(true)
     expect(details.url).toBe(url)
+    // 网页总是再渲染一遍（这里渲染没拿到 → 用请求到的那份）
+    expect(net.renderPage).toHaveBeenCalledTimes(1)
+    expect(net.renderPage.mock.calls[0][0]).toBe(url)
   })
 
   it('URL 返回包含页面标题', async () => {
@@ -1084,64 +1116,48 @@ describe('read 工具 - URL 抓取', () => {
     expect(text).toContain('Mock content from URL.')
   })
 
-  it('RD-URL-01 走 shuvix-read-url 分区的 fetch，不走 defaultSession 也不走全局 fetch', async () => {
+  it('RD-URL-01 走内置浏览器分区的 fetch，不走 shuvix-read-url、defaultSession 也不走全局 fetch', async () => {
     const url = 'https://example.com/page'
     await executeTool(makeReadTool(ctx), 'tc-url6', { path: url })
-    expect(net.fromPartition).toHaveBeenCalledWith('shuvix-read-url')
-    expect(net.readSession.fetch).toHaveBeenCalledTimes(1)
-    expect(net.readSession.fetch.mock.calls[0][0]).toBe(url)
+    expect(net.fromPartition).toHaveBeenCalledWith('persist:shuvix-browser')
+    expect(net.fromPartition).not.toHaveBeenCalledWith('shuvix-read-url')
+    expect(net.browserSession.fetch).toHaveBeenCalledTimes(1)
+    expect(net.browserSession.fetch.mock.calls[0][0]).toBe(url)
+    expect(net.browserSession.fetch.mock.calls[0][1].credentials).toBe('include')
+    expect(net.searchSession.fetch).not.toHaveBeenCalled()
     expect(net.defaultSessionFetch).not.toHaveBeenCalled()
     expect(globalFetch).not.toHaveBeenCalled()
   })
 
-  it('RD-URL-02 UA 是内置 Chromium 主版本的 Chrome，没有 Electron / ShuviX；语言来自 app.getLocale', async () => {
+  it('RD-URL-02 UA 就是内置浏览器分区自己的那个（原样）；不带 Accept-Language', async () => {
     await executeTool(makeReadTool(ctx), 'tc-url7', { path: 'https://example.com/page' })
-    const ua = sessionUserAgent()
-    expect(ua).toContain('Chrome/142.0.0.0')
-    expect(ua).not.toMatch(/Electron|ShuviX/)
-    const headers = net.readSession.fetch.mock.calls[0][1].headers as Record<string, string>
-    expect(headers['Accept-Language']).toBe('zh-CN,en;q=0.8')
+    expect(sessionUserAgent()).toBe('BROWSER-PARTITION-UA/1.0 Electron/0')
+    const headers = net.browserSession.fetch.mock.calls[0][1].headers as Record<string, string>
+    expect(headers).not.toHaveProperty('Accept-Language')
   })
 
-  it('RD-URL-03 session 只配置一次：UA、语言，权限一律拒，下载一律拦', async () => {
+  it('RD-URL-03 分区的规矩是浏览器模块自己的：read 只调 initBrowserSession，不改分区的 UA / 权限 / 下载', async () => {
     const tool = makeReadTool(ctx)
     await executeTool(tool, 'tc-url8', { path: 'https://example.com/a' })
     await executeTool(tool, 'tc-url9', { path: 'https://example.com/b' })
-    // 模块级只配一次；本文件之前的用例可能已经配过，所以按「总共一次」看
-    expect(net.readSession.setUserAgent).toHaveBeenCalledTimes(1)
-    const [ua, languages] = net.readSession.setUserAgent.mock.calls[0]
-    expect(ua).toContain('Chrome/142.0.0.0')
-    expect(languages).toBe('zh-CN,en;q=0.8')
-    expect(net.readSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1)
-    const decide = vi.fn()
-    const handler = net.readSession.setPermissionRequestHandler.mock.calls[0][0] as (
-      wc: unknown,
-      permission: string,
-      callback: (allowed: boolean) => void
-    ) => void
-    handler(null, 'geolocation', decide)
-    expect(decide).toHaveBeenCalledWith(false)
-    const check = net.readSession.setPermissionCheckHandler.mock.calls[0][0] as () => boolean
-    expect(check()).toBe(false)
-    const [eventName, onDownload] = net.readSession.on.mock.calls[0] as [
-      string,
-      (event: { preventDefault: () => void }) => void
-    ]
-    expect(eventName).toBe('will-download')
-    const preventDefault = vi.fn()
-    onDownload({ preventDefault })
-    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(net.initBrowserSession).toHaveBeenCalled()
+    for (const ses of [net.browserSession, net.searchSession]) {
+      expect(ses.setUserAgent).not.toHaveBeenCalled()
+      expect(ses.setPermissionRequestHandler).not.toHaveBeenCalled()
+      expect(ses.setPermissionCheckHandler).not.toHaveBeenCalled()
+      expect(ses.on).not.toHaveBeenCalled()
+    }
   })
 
   it('RD-URL-04 非中止的错误只带一次 Failed to fetch URL: 前缀', async () => {
     const url = 'https://example.com/missing'
-    net.readSession.fetch.mockResolvedValue(new Response(null, { status: 404 }))
+    net.browserSession.fetch.mockResolvedValue(new Response(null, { status: 404 }))
     const msg = await failureText(executeTool(makeReadTool(ctx), 'tc-url10', { path: url }))
     expect(msg).toBe(`Failed to fetch URL: HTTP 404 from ${url}.`)
   })
 
   it('RD-URL-05 网络错误也只带一次前缀，错误链展开', async () => {
-    net.readSession.fetch.mockRejectedValue(
+    net.browserSession.fetch.mockRejectedValue(
       new TypeError('fetch failed', { cause: new Error('net::ERR_CONNECTION_REFUSED') })
     )
     const msg = await failureText(
@@ -1152,7 +1168,7 @@ describe('read 工具 - URL 抓取', () => {
 
   it('RD-URL-06 中止：拒绝的错误恰好是 Aborted，没有前缀（工具层靠这句认出中止）', async () => {
     const controller = new AbortController()
-    net.readSession.fetch.mockImplementation(
+    net.browserSession.fetch.mockImplementation(
       (_url, init) =>
         new Promise((_resolve, reject) => {
           init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
@@ -1171,9 +1187,29 @@ describe('read 工具 - URL 抓取', () => {
     expect(error?.message).toBe('Aborted')
   })
 
+  it('RD-URL-07b 普通网页（200）渲染时中止：同样恰好是 Aborted，渲染拿到这次调用的 signal', async () => {
+    const controller = new AbortController()
+    net.renderPage.mockImplementation(async () => {
+      controller.abort()
+      return null
+    })
+    const error = await executeTool(
+      makeReadTool(ctx),
+      'tc-url13b',
+      { path: 'https://example.com/a' },
+      controller.signal
+    ).then(
+      () => null,
+      (e: Error) => e
+    )
+    expect(error?.message).toBe('Aborted')
+    expect(net.renderPage).toHaveBeenCalledTimes(1)
+    expect(net.renderPage.mock.calls[0][1]).toBeInstanceOf(AbortSignal)
+  })
+
   it('RD-URL-07 渲染时中止：恰好是 Aborted，渲染拿到的是这次调用的 signal', async () => {
     const controller = new AbortController()
-    net.readSession.fetch.mockResolvedValue(new Response(null, { status: 403 }))
+    net.browserSession.fetch.mockResolvedValue(new Response(null, { status: 403 }))
     net.renderPage.mockImplementation(async () => {
       controller.abort()
       return null
@@ -1199,7 +1235,7 @@ describe('read 工具 - URL 抓取', () => {
       title: 'Rendered',
       markdown: 'r'.repeat(400)
     }))
-    net.readSession.fetch.mockResolvedValue(new Response(null, { status: 503 }))
+    net.browserSession.fetch.mockResolvedValue(new Response(null, { status: 503 }))
     net.renderPage.mockResolvedValue({ html: '<html><body>rendered</body></html>' })
     const result = await executeTool(makeReadTool(ctx), 'tc-url14', {
       path: 'https://example.com/a'
@@ -1222,7 +1258,7 @@ describe('read 工具 - URL 抓取', () => {
     expect(opts).toMatchObject({ toolCallId: 'tc-url15', toolName: 'read', abortError: 'Aborted' })
     expect(enforcePath).not.toHaveBeenCalled()
     expect(enforceUrl.mock.invocationCallOrder[0]).toBeLessThan(
-      net.readSession.fetch.mock.invocationCallOrder[0]
+      net.browserSession.fetch.mock.invocationCallOrder[0]
     )
   })
 
@@ -1233,20 +1269,25 @@ describe('read 工具 - URL 抓取', () => {
     )
     expect(msg).toContain('Blocked by policy')
     expect(msg).not.toContain('Failed to fetch URL')
-    expect(net.readSession.fetch).not.toHaveBeenCalled()
+    expect(net.browserSession.fetch).not.toHaveBeenCalled()
     expect(net.renderPage).not.toHaveBeenCalled()
     expect(markItDownConvert).not.toHaveBeenCalled()
+    // 门没过：也不进浏览历史
+    expect(net.historyNoteAgentRead).not.toHaveBeenCalled()
   })
 
   it('RD-URL-11 本地文件不问 enforceUrl', async () => {
     await executeTool(makeReadTool(ctx), 'tc-url17', { path: join(TEST_DIR, 'hello.txt') })
     expect(enforceUrl).not.toHaveBeenCalled()
     expect(enforcePath).toHaveBeenCalled()
+    // 本地文件与内置浏览器无关：不进浏览历史、不碰它的分区
+    expect(net.historyNoteAgentRead).not.toHaveBeenCalled()
+    expect(net.fromPartition).not.toHaveBeenCalled()
   })
 
   it('RD-URL-12 JSON 不进转换器：原样返回，converted=false', async () => {
     const url = 'https://example.com/data.json'
-    net.readSession.fetch.mockResolvedValue(
+    net.browserSession.fetch.mockResolvedValue(
       new Response(new TextEncoder().encode('{"a":\n\n1}'), {
         headers: { 'content-type': 'application/json' }
       })
@@ -1255,12 +1296,67 @@ describe('read 工具 - URL 抓取', () => {
     expect(getText(result)).toBe(`URL: ${url} (application/json)\n\n{"a":\n\n1}`)
     expect(detailsOf(result).converted).toBe(false)
     expect(markItDownConvert).not.toHaveBeenCalled()
+    expect(net.renderPage).not.toHaveBeenCalled()
   })
 
-  it('RD-URL-13 description 说明文本原样返回、隐藏页面没有登录', () => {
+  it('RD-URL-13 description：文本原样返回；网页用 ShuviX 的浏览器载入，带着用户在那儿的登录', () => {
     const description = makeReadTool(ctx).description
     expect(description).toMatch(/JSON, XML and other text come back as they are/)
-    expect(description).toMatch(/hidden browser page, without any login/)
+    expect(description).toMatch(/Pages are loaded with ShuviX's browser/)
+    expect(description).toMatch(/including the sites the user is signed in to there/)
+    expect(description).toMatch(
+      /until the user has opened it in ShuviX's browser and signed in or passed the check/
+    )
+    expect(description).not.toMatch(/without any login/)
+    expect(description).not.toMatch(/hidden browser page/)
+  })
+
+  it('RD-URL-14 读过的地址记进浏览历史：记在这次调用的会话名下，恰好一次，在发请求之前', async () => {
+    const url = 'https://example.com/page'
+    await executeTool(makeReadTool(ctx), 'tc-url19', { path: url })
+    expect(net.historyNoteAgentRead.mock.calls).toEqual([[SESSION_ID, url]])
+    expect(net.historyNoteAgentRead.mock.invocationCallOrder[0]).toBeLessThan(
+      net.browserSession.fetch.mock.invocationCallOrder[0]
+    )
+    expect(enforceUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      net.historyNoteAgentRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('RD-URL-15 读到什么都记：JSON、404、连不上', async () => {
+    const tool = makeReadTool(ctx)
+    net.browserSession.fetch.mockResolvedValueOnce(
+      new Response(new TextEncoder().encode('{}'), {
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    await executeTool(tool, 'tc-url20', { path: 'https://example.com/a.json' })
+    net.browserSession.fetch.mockResolvedValueOnce(new Response(null, { status: 404 }))
+    await failureText(executeTool(tool, 'tc-url21', { path: 'https://example.com/missing' }))
+    net.browserSession.fetch.mockRejectedValueOnce(new TypeError('fetch failed'))
+    await failureText(executeTool(tool, 'tc-url22', { path: 'https://example.com/down' }))
+    expect(net.historyNoteAgentRead.mock.calls).toEqual([
+      [SESSION_ID, 'https://example.com/a.json'],
+      [SESSION_ID, 'https://example.com/missing'],
+      [SESSION_ID, 'https://example.com/down']
+    ])
+  })
+
+  it('RD-URL-16 各记各的会话：两个会话的工具读同一个地址', async () => {
+    const url = 'https://example.com/page'
+    await executeTool(makeReadTool({ sessionId: 'session-a' }), 'tc-url23', { path: url })
+    await executeTool(makeReadTool({ sessionId: 'session-b' }), 'tc-url24', { path: url })
+    expect(net.historyNoteAgentRead.mock.calls).toEqual([
+      ['session-a', url],
+      ['session-b', url]
+    ])
+  })
+
+  it('RD-URL-17 没有会话 id 的工具：照读，不进浏览历史', async () => {
+    const url = 'https://example.com/page'
+    const result = await executeTool(makeReadTool({ sessionId: '' }), 'tc-url25', { path: url })
+    expect(getText(result)).toContain(`URL: ${url}`)
+    expect(net.historyNoteAgentRead).not.toHaveBeenCalled()
   })
 })
 

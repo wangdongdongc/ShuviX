@@ -72,6 +72,8 @@ import {
   historyNoteUser,
   historyNoteUserNavigation
 } from './history'
+import { isUnattendedPage } from './unattendedPages'
+import { chromeUserAgent } from '../../utils/toolUtils/urlFetch'
 import type { HistoryTransition } from '../../../shared/browserHistory'
 import type { DevtoolsDockState } from '../../../shared/browserAgentDevtools'
 import {
@@ -189,6 +191,9 @@ export function initBrowserSession(): void {
   sessionInitialized = true
 
   const sess = session.fromPartition(BROWSER_PARTITION)
+  // UA 照 Chrome 的样子（用户裁定，2026-11-17）：Electron 缺省的 UA 带着 `Electron/…` 和应用名，有的站点见了就拒。
+  // 版本号是内置 Chromium 自己的主版本，TLS 指纹和它对得上。标签页、read 的请求和隐藏页面都用这一个。
+  sess.setUserAgent(chromeUserAgent(process.platform, process.versions.chrome))
   // 这也是页面**导航**到非网页协议（同框链接、改 location、iframe、cdp Page.navigate）通往系统的
   // 那道门：Electron 以 `openExternal` 权限来问，这里照样拒绝。弹窗的去向另在 createTab 的
   // setWindowOpenHandler 里裁决（externalOpen.ts）。
@@ -199,7 +204,13 @@ export function initBrowserSession(): void {
   // 下载：没人接的话 Electron 缺省弹「另存为」框。用户正看着浏览器窗口（多半是自己点的）就照常；
   // 否则是 agent 在后台点出来的 —— 取消，不弹框。已经带着保存路径的（比如 agent 经 cdp
   // Page.setDownloadBehavior 指定了目录）不会弹框，放它走。
-  sess.on('will-download', (event, item) => {
+  sess.on('will-download', (event, item, webContents) => {
+    // read 工具的隐藏页面：没人在看，浏览器窗口在不在前台都取消
+    if (isUnattendedPage(webContents)) {
+      log.info(`Download from a page nobody is looking at: cancelled ${clipUrl(item.getURL())}`)
+      event.preventDefault()
+      return
+    }
     if (browserWindowInFront() || item.getSavePath()) return
     log.info(
       `Download while the browser window is not in front: cancelled ${clipUrl(item.getURL())}`

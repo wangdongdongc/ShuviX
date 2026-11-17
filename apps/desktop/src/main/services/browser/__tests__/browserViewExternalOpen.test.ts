@@ -87,7 +87,12 @@ const state = vi.hoisted(() => {
     showMessageBox:
       vi.fn<(win: unknown, opts: MessageBoxOptions) => Promise<{ response: number }>>(),
     openExternal: vi.fn<(url: string) => Promise<void>>(),
+    /** initBrowserSession 给 partition 定的 UA（每次调用的全部参数） */
+    setUserAgent: vi.fn<(...args: unknown[]) => void>(),
     fromPartition: vi.fn((_partition: string) => ({
+      setUserAgent(...args: unknown[]): void {
+        s.setUserAgent(...args)
+      },
       setPermissionRequestHandler(handler: PermissionHandler): void {
         s.permissionHandler = handler
       },
@@ -282,6 +287,9 @@ beforeEach(() => {
   state.views.length = 0
   state.permissionHandler = undefined
   state.downloadHandlers.length = 0
+  state.setUserAgent.mockClear()
+  // Node 下没有 process.versions.chrome（Electron 才有）：initBrowserSession 的 UA 要读它
+  Object.defineProperty(process.versions, 'chrome', { value: '142.0.7444.59', configurable: true })
   state.showMessageBox.mockReset()
   state.showMessageBox.mockResolvedValue({ response: 1 })
   state.openExternal.mockReset()
@@ -290,7 +298,11 @@ beforeEach(() => {
   state.host = makeHost()
 })
 
+const originalChrome = Object.getOwnPropertyDescriptor(process.versions, 'chrome')
+
 afterEach(() => {
+  if (originalChrome) Object.defineProperty(process.versions, 'chrome', originalChrome)
+  else Reflect.deleteProperty(process.versions, 'chrome')
   vi.useRealTimers()
 })
 
@@ -718,13 +730,21 @@ function putAway(svc: Service, how: NotInFront): void {
   if (how === 'no browser window') svc.setHostWindow(null)
 }
 
-/** 以浏览器 partition 的名义开始一次下载；回事件（看它被没被取消） */
-function download(savePath = ''): { preventDefault: Mock } {
+/** 以浏览器 partition 的名义开始一次下载；回事件（看它被没被取消）。`webContents` = 发起下载的那张页面 */
+function download(savePath = '', webContents: unknown = {}): { preventDefault: Mock } {
   const event = { preventDefault: vi.fn() }
   const item = { getSavePath: () => savePath, getURL: () => 'https://files.example/x.zip' }
   expect(state.downloadHandlers, 'initBrowserSession 没有登记 will-download').toHaveLength(1)
-  for (const handler of state.downloadHandlers) handler(event, item, {})
+  for (const handler of state.downloadHandlers) handler(event, item, webContents)
   return event
+}
+
+/** 一张标成「没人在看」的页面（read 工具的隐藏页面）：记号要打在这次 load() 的那份模块上 */
+async function hiddenPage(): Promise<object> {
+  const page = {}
+  const { markUnattendedPage } = await import('../unattendedPages')
+  markUnattendedPage(page as never)
+  return page
 }
 
 describe('浏览器窗口不在前台：外部协议与下载一律不打扰（ST-U9b）', () => {
@@ -813,6 +833,67 @@ describe('浏览器窗口不在前台：外部协议与下载一律不打扰（S
       expect(download('/tmp/shuvix-downloads/x.zip').preventDefault).not.toHaveBeenCalled()
     }
   )
+})
+
+describe('内置浏览器分区的 UA：Chrome 的样子（标签页、read 的请求和隐藏页面都用它）', () => {
+  it('ST-UA1 initBrowserSession 定一次 UA：内置 Chromium 主版本的 Chrome，没有 Electron / ShuviX；不带第二个参数（不改语言）', async () => {
+    const svc = await load()
+    svc.initBrowserSession()
+    svc.initBrowserSession()
+    expect(state.setUserAgent).toHaveBeenCalledTimes(1)
+    const args = state.setUserAgent.mock.calls[0]
+    expect(args).toHaveLength(1)
+    const ua = String(args[0])
+    expect(ua).toContain('Chrome/142.0.0.0')
+    expect(ua).toMatch(
+      /^Mozilla\/5\.0 \(.+\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/142\.0\.0\.0 Safari\/537\.36$/
+    )
+    expect(ua).not.toMatch(/Electron|ShuviX/i)
+    expect(state.fromPartition).toHaveBeenCalledWith('persist:shuvix-browser')
+  })
+})
+
+describe('read 工具的隐藏页面：下载一律取消，浏览器窗口在不在前台都一样（ST-U9c）', () => {
+  it('ST-U9c 用户正看着浏览器窗口：隐藏页面的下载照样取消', async () => {
+    const svc = await load()
+    svc.initBrowserSession()
+    expect(download('', await hiddenPage()).preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('ST-U9c 带着保存路径也取消（tab 的那条放行对它不适用）', async () => {
+    const svc = await load()
+    svc.initBrowserSession()
+    const page = await hiddenPage()
+    expect(download('/tmp/shuvix-downloads/x.zip', page).preventDefault).toHaveBeenCalledTimes(1)
+    putAway(svc, 'hidden')
+    expect(download('/tmp/shuvix-downloads/x.zip', page).preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(NOT_IN_FRONT)('ST-U9c 窗口 %s：隐藏页面的下载取消', async (how) => {
+    const svc = await load()
+    svc.initBrowserSession()
+    putAway(svc, how)
+    expect(download('', await hiddenPage()).preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('ST-U9c 对照：有一张隐藏页面在，普通 tab 的规矩不变（在前台放行；不在前台取消，带保存路径放行）', async () => {
+    const svc = await load()
+    svc.initBrowserSession()
+    await hiddenPage()
+    const tab = {}
+    expect(download('', tab).preventDefault).not.toHaveBeenCalled()
+    putAway(svc, 'visible but unfocused')
+    expect(download('', tab).preventDefault).toHaveBeenCalledTimes(1)
+    expect(download('/tmp/shuvix-downloads/x.zip', tab).preventDefault).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, null])('ST-U9c 说不出是哪张页面的下载（%s）：照老规矩，不抛', async (wc) => {
+    const svc = await load()
+    svc.initBrowserSession()
+    expect(download('', wc).preventDefault).not.toHaveBeenCalled()
+    putAway(svc, 'minimized')
+    expect(download('', wc).preventDefault).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('browserViewService：tab 不做后台节流（构造时就定）', () => {

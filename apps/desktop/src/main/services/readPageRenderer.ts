@@ -1,8 +1,13 @@
 /**
- * read 工具的网络面：一个专用的内存 session，以及在它上面渲染网页的隐藏页面。
+ * read 工具的网络面：读网页用内置浏览器的身份（它的分区：cookie、登录状态、通过过的人机验证都在），
+ * 以及在那个分区上渲染网页的隐藏页面。
  *
- * - session 不能是 defaultSession：那上面挂着 widget token 注入，还放着应用自己的 cookie。也不是内置浏览器的分区：
- *   那里有用户的登录状态，而 read 不询问就能读。这个分区不落盘，跟随系统代理，退出就没了。
+ * - 用户裁定（2026-11-17）：读网页直接用内置浏览器 —— 成功率比速度要紧，内置浏览器本来就是给 agent 放开用的。
+ *   所以 read 读到的是「用户在内置浏览器里打开这个地址会看到的那一页」，登录后才有的内容也读得到。
+ *   请求和隐藏页面都用分区自己的 UA（有的验证通过凭据是绑 UA 的，换一个就白过了）。
+ * - 不开 tab：tab 会在标签栏里闪一下、占 tab 上限、页面弹出的新页还会留下。隐藏页面同一个分区、同一份身份，
+ *   弹窗 / 下载 / 弹框这些都关在里面。读过的地址照 agent 的访问记进浏览历史（记在发起的会话名下）。
+ * - `readUrlSession` 那个不落盘的内存 session 还在：搜索 API 的请求走它（不带任何浏览器身份）。
  * - 隐藏页面用一个从不显示的窗口（与 widget 预览同一条路，见 widgetPreviewService）：不抢焦点、不进任务栏，
  *   读完就销毁。主进程启动时带着 `disable-backgrounding-occluded-windows`，没显示过的窗口照样运行页面。
  * - 页面是模型指定的外站：弹窗、跳到非 http(s)、下载、权限请求一律拒绝，也不交给系统（没人在看，交给系统就是替 agent
@@ -18,11 +23,19 @@ import { SILENCE_DIALOGS } from '../utils/silenceDialogs'
 import { untilAborted } from '../utils/untilAborted'
 import { chromeUserAgent, MAX_RESPONSE_BYTES } from '../utils/toolUtils/urlFetch'
 
+/**
+ * 浏览器模块按需加载：它一导入就带上窗口那一整套，而 read 工具被很多只碰文件的代码（和它们的测试）导入。
+ * 真正读网页时才需要它。
+ */
+let loadedBrowserModule: Promise<typeof import('./browser')> | undefined
+const browserModule = (): Promise<typeof import('./browser')> =>
+  (loadedBrowserModule ??= import('./browser'))
+
 const log = createLogger('ReadPageRenderer')
 
 const READ_URL_PARTITION = 'shuvix-read-url'
 
-const RENDER_CONCURRENCY = 2
+const RENDER_CONCURRENCY = 3
 const RENDER_BUDGET_MS = 15_000
 /** 正常流程最多是预算加两次问页面，留点余量 */
 const RENDER_DEADLINE_MS = 25_000
@@ -64,8 +77,43 @@ export function readUrlSession(): Electron.Session {
   return ses
 }
 
+/**
+ * 内置浏览器的分区（用户的 cookie 和登录状态在这儿）。权限请求一律拒绝是分区自己的规矩（initBrowserSession，可重复调）。
+ */
+export async function browserReadSession(): Promise<Electron.Session> {
+  const { BROWSER_PARTITION, initBrowserSession } = await browserModule()
+  initBrowserSession()
+  return electronSession.fromPartition(BROWSER_PARTITION)
+}
+
+/** 内置浏览器发请求用的 UA：read 的请求和它一致 */
+export async function browserReadUserAgent(): Promise<string> {
+  return (await browserReadSession()).getUserAgent()
+}
+
+/** read 读了这个地址：照 agent 的访问记进浏览历史 */
+export async function noteReadVisit(sessionId: string | undefined, url: string): Promise<void> {
+  if (!sessionId) return
+  const { historyNoteAgentRead } = await browserModule()
+  historyNoteAgentRead(sessionId, url)
+}
+
 function isWebAddress(target: string): boolean {
   return /^https?:\/\//i.test(target)
+}
+
+/** 同一个地址（不算锚点） */
+function sameAddress(a: string, b: string): boolean {
+  try {
+    const x = new URL(a)
+    const y = new URL(b)
+    x.hash = ''
+    y.hash = ''
+    x.username = x.password = y.username = y.password = ''
+    return x.href === y.href
+  } catch {
+    return false
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -81,6 +129,9 @@ function askPage<T>(wc: Electron.WebContents, code: string): Promise<T | undefin
 }
 
 async function renderOnce(url: string, signal?: AbortSignal): Promise<{ html: string } | null> {
+  const { historyNoteReadTitle, markUnattendedPage } = await browserModule()
+  const browserSession = await browserReadSession()
+  if (signal?.aborted) return null
   const win = new BrowserWindow({
     show: false,
     width: 1280,
@@ -94,7 +145,7 @@ async function renderOnce(url: string, signal?: AbortSignal): Promise<{ html: st
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      session: readUrlSession(),
+      session: browserSession,
       backgroundThrottling: false,
       // Linux 上无头运行时不离屏的窗口一建就崩（见 rendersOffscreen）
       ...(rendersOffscreen() ? { offscreen: true } : {})
@@ -108,6 +159,8 @@ async function renderOnce(url: string, signal?: AbortSignal): Promise<{ html: st
   const gone = (): boolean => win.isDestroyed() || wc.isDestroyed() || !!signal?.aborted
   try {
     wc.setAudioMuted(true)
+    // 分区上「用户正看着浏览器窗口就放行下载」的规矩对这张页面不适用：一律取消
+    markUnattendedPage(wc)
     wc.setWindowOpenHandler(() => ({ action: 'deny' }))
     const refuseNonWeb = (event: { preventDefault(): void }, target: string): void => {
       if (!isWebAddress(target)) event.preventDefault()
@@ -126,6 +179,10 @@ async function renderOnce(url: string, signal?: AbortSignal): Promise<{ html: st
     // 先载入空白页才有渲染进程可以挂脚本
     await wc.loadURL('about:blank')
     if (gone()) return null
+    // 标题记到历史里那个地址上：空白页自己的、跳到别处之后的都不算（按地址写，写错了会盖掉用户自己访问留下的标题）
+    wc.on('page-title-updated', (_e, title) => {
+      if (sameAddress(wc.getURL(), url)) historyNoteReadTitle(url, title)
+    })
     wc.debugger.attach('1.3')
     await wc.debugger.sendCommand('Page.enable')
     await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {

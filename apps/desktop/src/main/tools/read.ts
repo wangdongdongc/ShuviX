@@ -19,9 +19,9 @@ import { suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
 import { getToolResultsDir } from '../utils/paths'
 import { readUrlContent } from '../utils/toolUtils/urlFetch'
 import {
-  readAcceptLanguage,
-  readUrlSession,
-  readUserAgent,
+  browserReadSession,
+  browserReadUserAgent,
+  noteReadVisit,
   renderPage
 } from '../services/readPageRenderer'
 import {
@@ -381,15 +381,23 @@ async function readLegacyDoc(
   }
 }
 
-/** URL 抓取：编码、大小限制和错误说明在 urlFetch，这里只接上 Electron 的网络栈、隐藏页面渲染和 markitdown */
-async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
+/**
+ * URL 抓取：编码、大小限制和错误说明在 urlFetch，这里只接上内置浏览器的网络栈（用户的 cookie 和登录状态）、
+ * 隐藏页面渲染和 markitdown。读过的地址记进浏览历史，记在这个会话名下。
+ */
+async function readUrl(
+  url: string,
+  signal: AbortSignal | undefined,
+  sessionId: string
+): Promise<ReadResult> {
   log.info(`Fetching URL: ${url}`)
+  await noteReadVisit(sessionId, url)
+  const browserSession = await browserReadSession()
   return readUrlContent(url, {
-    fetch: (input, init) => readUrlSession().fetch(input, init),
+    fetch: (input, init) => browserSession.fetch(input, init),
     convert: async (response) => (await getMarkItDown()).convert(response),
     render: renderPage,
-    userAgent: readUserAgent(),
-    acceptLanguage: readAcceptLanguage(),
+    userAgent: await browserReadUserAgent(),
     signal,
     abortError: TOOL_ABORTED
   })
@@ -403,7 +411,7 @@ async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
  */
 const makeReadDecoders = (ctx: ToolContext): ReadDecoders => ({
   isUrl,
-  readUrl,
+  readUrl: (url, signal) => readUrl(url, signal, ctx.sessionId),
   imageMimeByExt: IMAGE_MIME_BY_EXT,
   readImage: (portPath, displayPath, ext, fileSize) =>
     readImage(portPath, displayPath, fileSize, ext, ctx.sessionId),

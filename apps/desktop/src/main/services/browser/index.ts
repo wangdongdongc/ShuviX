@@ -66,6 +66,8 @@ export {
   removeHistoryUrl,
   clearHistory,
   historyNoteUser,
+  historyNoteAgentRead,
+  historyNoteReadTitle,
   setHistoryStore
 } from './history'
 export { fetchSearchSuggestions } from './searchSuggest'
@@ -102,3 +104,4 @@ export {
 export { openDevtoolsDock, closeDevtoolsDock, setDevtoolsLayout } from './devtoolsDock'
 export { setBrowserPopover } from './browserPopover'
 export { agentDevtoolsSnapshot, clearAgentDevtoolsCalls } from './agentDevtools'
+export { markUnattendedPage, isUnattendedPage } from './unattendedPages'

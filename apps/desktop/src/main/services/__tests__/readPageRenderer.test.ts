@@ -1,16 +1,18 @@
 /**
- * readPageRenderer —— read 工具的隐藏页面：从不显示的窗口、同一个内存 session、最多同时两个。
+ * readPageRenderer —— read 工具的隐藏页面：从不显示的窗口、开在内置浏览器的分区上（用户的 cookie 和登录状态）、最多同时三个。
  *
  * electron 换成自己的小假货：窗口记下构造选项和 show / focus 一类的间谍，webContents 的每一步进一份调用日志（断先后用），
  * 页面的行为由 `fx` 按用例改。模块级状态（排队、session 配没配过）每条用例重新导入。计时器是假的。
  * 「抽出来的 HTML 里没有脚本」要真的跑那段代码，放进 jsdom 里跑。
  *
- *   RP-W*  窗口与 session：选项、没有 preload、从不显示 / 聚焦、offscreen 只看 rendersOffscreen、session 只配一次
+ *   RP-W*  窗口与 session：选项、没有 preload、从不显示 / 聚焦、offscreen 只看 rendersOffscreen；窗口用内置浏览器的分区，
+ *          `shuvix-read-url` 那个内存 session 只剩搜索 API 在用（只配一次）
+ *   RP-B*  内置浏览器的身份：分区、UA、历史（访问记在会话名下、标题只在还是请求的那个地址时记）、隐藏页面标成没人在看
  *   RP-F*  围栏：弹窗、非 http(s) 导航、静音、弹框脚本先于页面、载入顺序
  *   RP-T*  什么时候算好：够多的字 1s、很少的字 5s、还在载入不算、预算 15s、问不到只算还没好
  *   RP-R*  结果：HTML 去掉脚本等；载入失败 / 地址不是网页 / 太大 / 问不到 → null
  *   RP-D*  窗口在所有路径上都销毁
- *   RP-Q*  并发：最多两个、排队先来先走、排队时中止不开窗、失败也让位
+ *   RP-Q*  并发：最多三个、排队先来先走、排队时中止不开窗、失败也让位
  *   RP-A*  中止：窗口立刻没、结果是 null
  */
 import { EventEmitter } from 'node:events'
@@ -52,11 +54,27 @@ const fx = vi.hoisted(() => ({
   log: [] as string[],
   offscreen: false,
   sessions: [] as string[],
+  /** `shuvix-read-url`：搜索 API 用的内存 session */
   fakeSession: {
     setUserAgent: vi.fn(),
     setPermissionRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
     on: vi.fn()
+  },
+  /** 内置浏览器的分区：read 的请求和隐藏页面都用它 */
+  browserSession: {
+    setUserAgent: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    on: vi.fn(),
+    getUserAgent: vi.fn(() => 'BROWSER-PARTITION-UA/1.0')
+  },
+  /** services/browser 的那几个入口 */
+  browser: {
+    initBrowserSession: vi.fn(),
+    markUnattendedPage: vi.fn(),
+    historyNoteAgentRead: vi.fn(),
+    historyNoteReadTitle: vi.fn()
   },
   /** 按用例改的行为 */
   hooks: {} as {
@@ -73,7 +91,7 @@ vi.mock('electron', () => ({
   session: {
     fromPartition: (partition: string) => {
       fx.sessions.push(partition)
-      return fx.fakeSession
+      return partition === 'persist:shuvix-browser' ? fx.browserSession : fx.fakeSession
     }
   },
   BrowserWindow: class {
@@ -81,6 +99,16 @@ vi.mock('electron', () => ({
       return fx.makeWindow(options) as object
     }
   }
+}))
+vi.mock('../browser', () => ({
+  BROWSER_PARTITION: 'persist:shuvix-browser',
+  initBrowserSession: (...args: unknown[]) => fx.browser.initBrowserSession(...args),
+  markUnattendedPage: (wc: unknown) => {
+    fx.log.push('markUnattendedPage')
+    fx.browser.markUnattendedPage(wc)
+  },
+  historyNoteAgentRead: (...args: unknown[]) => fx.browser.historyNoteAgentRead(...args),
+  historyNoteReadTitle: (...args: unknown[]) => fx.browser.historyNoteReadTitle(...args)
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -157,6 +185,8 @@ const windows = (): FakeWindow[] => fx.windows as FakeWindow[]
 
 const load = async (): Promise<typeof import('../readPageRenderer')> => {
   vi.resetModules()
+  // 被测模块按需加载浏览器模块（第一次是真的异步加载，假计时器推不动它）：先加载好，之后都只是微任务
+  await import('../browser')
   return import('../readPageRenderer')
 }
 
@@ -199,6 +229,8 @@ beforeEach(() => {
   fx.hooks = {}
   fx.makeWindow = makeWindow
   for (const spy of Object.values(fx.fakeSession)) spy.mockClear()
+  for (const spy of Object.values(fx.browserSession)) spy.mockClear()
+  for (const spy of Object.values(fx.browser)) spy.mockClear()
   Object.defineProperty(process.versions, 'chrome', {
     value: '142.0.7444.59',
     configurable: true
@@ -230,16 +262,23 @@ describe('窗口与 session', () => {
       nodeIntegration: false,
       disableDialogs: true,
       backgroundThrottling: false,
-      session: fx.fakeSession
+      session: fx.browserSession
     })
     expect(web).not.toHaveProperty('preload')
     expect(web).not.toHaveProperty('offscreen')
   })
 
-  it('RP-W2 窗口用的是 shuvix-read-url 分区', async () => {
+  it('RP-W2 窗口用的是内置浏览器的分区；渲染不碰 shuvix-read-url，也不改任何 session 的配置', async () => {
     const { renderPage } = await load()
     await finish(renderPage(TARGET))
-    expect(new Set(fx.sessions)).toEqual(new Set(['shuvix-read-url']))
+    expect(new Set(fx.sessions)).toEqual(new Set(['persist:shuvix-browser']))
+    expect(fx.browser.initBrowserSession).toHaveBeenCalled()
+    for (const ses of [fx.browserSession, fx.fakeSession]) {
+      expect(ses.setUserAgent).not.toHaveBeenCalled()
+      expect(ses.setPermissionRequestHandler).not.toHaveBeenCalled()
+      expect(ses.setPermissionCheckHandler).not.toHaveBeenCalled()
+      expect(ses.on).not.toHaveBeenCalled()
+    }
   })
 
   it('RP-W3 从不显示、从不聚焦', async () => {
@@ -258,10 +297,11 @@ describe('窗口与 session', () => {
     expect(windows()[0].options.webPreferences).toMatchObject({ offscreen: true })
   })
 
-  it('RP-W5 session 只配一次：UA、语言、权限全拒、下载全拦', async () => {
+  it('RP-W5 搜索 API 的内存 session（shuvix-read-url）只配一次：UA、语言、权限全拒、下载全拦', async () => {
     const { readUrlSession } = await load()
     expect(readUrlSession()).toBe(fx.fakeSession)
     readUrlSession()
+    expect(new Set(fx.sessions)).toEqual(new Set(['shuvix-read-url']))
     expect(fx.fakeSession.setUserAgent).toHaveBeenCalledTimes(1)
     const [ua, languages] = fx.fakeSession.setUserAgent.mock.calls[0]
     expect(ua).toContain('Chrome/142.0.0.0')
@@ -279,10 +319,118 @@ describe('窗口与 session', () => {
     expect(preventDefault).toHaveBeenCalled()
   })
 
-  it('RP-W6 UA 与语言', async () => {
+  it('RP-W6 搜索 API 那个 session 的 UA 与语言', async () => {
     const { readUserAgent, readAcceptLanguage } = await load()
     expect(readUserAgent()).toContain('Chrome/142.0.0.0')
     expect(readAcceptLanguage()).toBe('ja,en;q=0.8')
+  })
+})
+
+describe('内置浏览器的身份', () => {
+  it('RP-B1 browserReadSession：每次都先 initBrowserSession，回的是内置浏览器的分区；不碰 shuvix-read-url', async () => {
+    const { browserReadSession } = await load()
+    expect(await browserReadSession()).toBe(fx.browserSession)
+    expect(await browserReadSession()).toBe(fx.browserSession)
+    expect(fx.browser.initBrowserSession).toHaveBeenCalledTimes(2)
+    expect(fx.sessions).toEqual(['persist:shuvix-browser', 'persist:shuvix-browser'])
+    expect(fx.browserSession.setUserAgent).not.toHaveBeenCalled()
+  })
+
+  it('RP-B2 browserReadUserAgent：分区自己的 UA，原样', async () => {
+    const { browserReadUserAgent } = await load()
+    expect(await browserReadUserAgent()).toBe('BROWSER-PARTITION-UA/1.0')
+    fx.browserSession.getUserAgent.mockReturnValueOnce('Mozilla/5.0 Chrome/1 Electron/2 shuvix/3')
+    expect(await browserReadUserAgent()).toBe('Mozilla/5.0 Chrome/1 Electron/2 shuvix/3')
+    expect(fx.sessions.every((name) => name === 'persist:shuvix-browser')).toBe(true)
+  })
+
+  it('RP-B3 noteReadVisit：有会话 id 就照 agent 的访问记一次；没有（undefined / 空串）不记', async () => {
+    const { noteReadVisit } = await load()
+    await noteReadVisit('s1', TARGET)
+    expect(fx.browser.historyNoteAgentRead.mock.calls).toEqual([['s1', TARGET]])
+    await noteReadVisit(undefined, TARGET)
+    await noteReadVisit('', TARGET)
+    expect(fx.browser.historyNoteAgentRead).toHaveBeenCalledTimes(1)
+  })
+
+  it('RP-B4 隐藏页面标成没人在看：恰好是这个窗口的 webContents，在载入任何东西之前', async () => {
+    const { renderPage } = await load()
+    await finish(renderPage(TARGET))
+    expect(fx.browser.markUnattendedPage).toHaveBeenCalledTimes(1)
+    expect(fx.browser.markUnattendedPage.mock.calls[0][0]).toBe(windows()[0].webContents)
+    const firstLoad = fx.log.findIndex((l) => l.startsWith('loadURL'))
+    expect(fx.log.indexOf('markUnattendedPage')).toBeLessThan(firstLoad)
+  })
+
+  it('RP-B5 渲染自己不记访问（那是工具的事，免得记两次）', async () => {
+    const { renderPage } = await load()
+    await finish(renderPage(TARGET))
+    expect(fx.browser.historyNoteAgentRead).not.toHaveBeenCalled()
+  })
+
+  /** 页面在轮询期间报标题：`at` = 报的时候页面所在的地址 */
+  const titleDuringRender = async (
+    at: string,
+    title: string,
+    requested = TARGET
+  ): Promise<unknown[][]> => {
+    const { renderPage } = await load()
+    const pending = renderPage(requested)
+    await vi.advanceTimersByTimeAsync(300)
+    const wc = windows()[0].webContents
+    wc.url = at
+    wc.emit('page-title-updated', {}, title)
+    await finish(pending)
+    return fx.browser.historyNoteReadTitle.mock.calls
+  }
+
+  it('RP-B6 页面还在请求的那个地址上报标题：记到请求的地址上', async () => {
+    expect(await titleDuringRender(TARGET, 'Page Title')).toEqual([[TARGET, 'Page Title']])
+  })
+
+  it.each([
+    ['只多了锚点', `${TARGET}#section`, TARGET],
+    ['请求的地址带锚点', TARGET, `${TARGET}#top`],
+    ['请求的地址带用户名密码', TARGET, 'https://user:pw@example.test/page']
+  ])('RP-B6 %s：算同一个地址，照记（记在请求的那个地址上）', async (_name, at, requested) => {
+    expect(await titleDuringRender(at, 'T', requested)).toEqual([[requested, 'T']])
+  })
+
+  it.each([
+    ['跳到了别的站点', 'https://login.example.test/signin'],
+    ['同站点别的路径', 'https://example.test/other'],
+    ['查询串不同', `${TARGET}?next=1`],
+    ['错误页', 'chrome-error://chromewebdata/'],
+    ['空白页', 'about:blank'],
+    ['地址读不出来', '']
+  ])(
+    'RP-B7 %s 之后报的标题：不记（按地址写，写错了会盖掉用户自己那次访问的标题）',
+    async (_n, at) => {
+      expect(await titleDuringRender(at, 'Sign in')).toEqual([])
+    }
+  )
+
+  it('RP-B8 空白页载入时报的标题不记：那时还没在听', async () => {
+    fx.hooks.loadURL = (url, wc) => {
+      if (url === 'about:blank')
+        (wc as FakeWebContents).emit('page-title-updated', {}, 'about:blank')
+    }
+    const { renderPage } = await load()
+    await finish(renderPage(TARGET))
+    expect(fx.browser.historyNoteReadTitle).not.toHaveBeenCalled()
+  })
+
+  it('RP-B9 目标页载入时报的标题照记（同一张页面先报空白页的、再报自己的 → 只有自己的）', async () => {
+    fx.hooks.loadURL = (url, wc) => {
+      ;(wc as FakeWebContents).emit(
+        'page-title-updated',
+        {},
+        url === 'about:blank' ? 'about:blank' : 'Real Title'
+      )
+    }
+    const { renderPage } = await load()
+    await finish(renderPage(TARGET))
+    expect(fx.browser.historyNoteReadTitle.mock.calls).toEqual([[TARGET, 'Real Title']])
   })
 })
 
@@ -340,6 +488,7 @@ describe('围栏', () => {
     const order = fx.log.filter((l) => !['new window', 'destroy'].includes(l))
     expect(order).toEqual([
       'setAudioMuted',
+      'markUnattendedPage',
       'loadURL about:blank',
       'attach 1.3',
       'Page.enable',
@@ -603,23 +752,25 @@ describe('并发', () => {
     fx.hooks.textLength = everChanging()
   }
 
-  it('RP-Q1 最多同时两个；第三个等到有一个完了才开窗', async () => {
+  it('RP-Q1 最多同时三个；第四个等到有一个完了才开窗', async () => {
     slowPages()
     const { renderPage } = await load()
     const a = track(renderPage('https://a.test/'))
     const b = track(renderPage('https://b.test/'))
     const c = track(renderPage('https://c.test/'))
+    const d = track(renderPage('https://d.test/'))
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(windows()).toHaveLength(2)
-    expect(c.settled()).toBe(false)
+    expect(windows()).toHaveLength(3)
+    expect(d.settled()).toBe(false)
 
     await vi.advanceTimersByTimeAsync(5_500)
     expect(a.settled()).toBe(true)
     expect(b.settled()).toBe(true)
-    await vi.advanceTimersByTimeAsync(100)
-    expect(windows()).toHaveLength(3)
-    await vi.advanceTimersByTimeAsync(20_000)
     expect(c.settled()).toBe(true)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(windows()).toHaveLength(4)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(d.settled()).toBe(true)
   })
 
   it('RP-Q2 先来先走', async () => {
@@ -632,7 +783,7 @@ describe('并发', () => {
     expect(targets).toEqual(['a', 'b', 'c', 'd', 'e'].map((n) => `loadURL https://${n}.test/`))
   })
 
-  it('RP-Q3 任何时刻窗口没销毁的不超过两个', async () => {
+  it('RP-Q3 任何时刻窗口没销毁的不超过三个', async () => {
     slowPages()
     let peak = 0
     fx.makeWindow = (options) => {
@@ -645,7 +796,7 @@ describe('并发', () => {
     await vi.advanceTimersByTimeAsync(200_000)
     await Promise.all(pages)
     expect(windows()).toHaveLength(7)
-    expect(peak).toBe(2)
+    expect(peak).toBe(3)
   })
 
   it('RP-Q4 排队时中止：不开窗，回 null；前面的不受影响，后面的照跑', async () => {
@@ -653,6 +804,7 @@ describe('并发', () => {
     const { renderPage } = await load()
     const a = track(renderPage('https://a.test/'))
     const b = track(renderPage('https://b.test/'))
+    const c = track(renderPage('https://c.test/'))
     const controller = new AbortController()
     const queued = track(renderPage('https://queued.test/', controller.signal))
     const after = track(renderPage('https://after.test/'))
@@ -663,13 +815,13 @@ describe('并发', () => {
     expect(queued.settled()).toBe(true)
     await vi.advanceTimersByTimeAsync(60_000)
 
-    expect(a.settled() && b.settled()).toBe(true)
+    expect(a.settled() && b.settled() && c.settled()).toBe(true)
     expect(queued.result()).toBeNull()
     expect(after.result()).toEqual({ html: HTML })
     const targets = fx.log.filter((l) => l.startsWith('loadURL https:'))
     expect(targets).not.toContain('loadURL https://queued.test/')
     expect(targets).toContain('loadURL https://after.test/')
-    expect(windows()).toHaveLength(3)
+    expect(windows()).toHaveLength(4)
   })
 
   it('RP-Q6 页面卡死时到硬上限就放手：回 null、销毁窗口、让出名额', async () => {
@@ -681,9 +833,11 @@ describe('并发', () => {
       fx.hooks.loadURL = () => new Promise<void>(() => {})
       const a = track(renderPage('https://a.test/'))
       const b = track(renderPage('https://b.test/'))
+      const c = track(renderPage('https://c.test/'))
       const after = track(renderPage('https://after.test/'))
       await vi.advanceTimersByTimeAsync(60_000)
-      expect(a.settled() || b.settled()).toBe(false)
+      expect(a.settled() || b.settled() || c.settled()).toBe(false)
+      expect(windows()).toHaveLength(3)
       expect(spy).toHaveBeenCalledWith(25_000)
 
       fx.hooks.loadURL = undefined
@@ -691,11 +845,13 @@ describe('并发', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(a.result()).toBeNull()
       expect(b.result()).toBeNull()
+      expect(c.result()).toBeNull()
       expect(windows()[0].destroy).toHaveBeenCalled()
       expect(windows()[1].destroy).toHaveBeenCalled()
-      // 名额让出来了：排在后面的那个开始了
-      expect(windows()).toHaveLength(3)
+      expect(windows()[2].destroy).toHaveBeenCalled()
+      // 名额让出来了：排在后面的那个轮到了（它拿到的是同一个已中止的硬上限替身，所以不开窗、直接回 null）
       expect(after.settled()).toBe(true)
+      expect(after.result()).toBeNull()
     } finally {
       spy.mockRestore()
     }
@@ -718,31 +874,25 @@ describe('并发', () => {
     const a = renderPage('https://a.test/').catch((e: Error) => e.message)
     const b = track(renderPage('https://b.test/'))
     const c = track(renderPage('https://c.test/'))
+    const d = track(renderPage('https://d.test/'))
     await expect(finish(a)).resolves.toBe('first fails')
     expect(b.result()).toEqual({ html: HTML })
     expect(c.result()).toEqual({ html: HTML })
+    expect(d.result()).toEqual({ html: HTML })
   })
 
-  it('RP-Q7 全部结束后名额还回来了：又能同时两个', async () => {
+  it('RP-Q7 全部结束后名额还回来了：又能同时三个', async () => {
     slowPages()
     const { renderPage } = await load()
-    await finish(
-      Promise.all([
-        renderPage('https://a.test/'),
-        renderPage('https://b.test/'),
-        renderPage('https://c.test/')
-      ])
-    )
-    expect(windows()).toHaveLength(3)
+    await finish(Promise.all(['a', 'b', 'c', 'd'].map((n) => renderPage(`https://${n}.test/`))))
+    expect(windows()).toHaveLength(4)
 
-    const d = track(renderPage('https://d.test/'))
-    const e = track(renderPage('https://e.test/'))
-    const f = track(renderPage('https://f.test/'))
+    const later = ['e', 'f', 'g', 'h'].map((n) => track(renderPage(`https://${n}.test/`)))
     await vi.advanceTimersByTimeAsync(1000)
-    expect(windows()).toHaveLength(5)
+    expect(windows()).toHaveLength(7)
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(d.settled() && e.settled() && f.settled()).toBe(true)
-    expect(windows()).toHaveLength(6)
+    expect(later.every((p) => p.settled())).toBe(true)
+    expect(windows()).toHaveLength(8)
   })
 })
 

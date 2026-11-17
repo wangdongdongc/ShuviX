@@ -1,7 +1,9 @@
 /**
  * read 工具的 URL 分支：抓取 + 解码 + 转 Markdown，不依赖 Electron（fetch、转换器、渲染都由调用方注入）。
  *
- * 先直接请求。网站拒绝、页面是空的或几乎没有文字时，再交给 `render`（隐藏页面里跑一遍 JS）取渲染后的 HTML。
+ * 先直接请求（要靠它知道是什么类型）。是网页就再交给 `render`（隐藏页面里跑一遍 JS）取渲染后的 HTML，
+ * 两份里文字多的那份算数（2026-11-17 用户裁定：成功率比速度要紧）；网站拒绝直接请求时也交给它。
+ * 请求和渲染用的都是内置浏览器的身份（调用方注入），所以登录后才有的内容读得到。
  *
  * 转换器（markitdown）只按 UTF-8 读字节，JSON / 非 feed 的 XML 一律转换失败且错误信息带着整个响应体，还会把
  * 文本压空行，把任何字节当表格读。所以只把它真能转的东西交给它：HTML（先按声明的编码转成 UTF-8）、feed、notebook
@@ -22,7 +24,7 @@ export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 const THIN_PAGE_MIN_BYTES = 4 * 1024
 const THIN_PAGE_TEXT_CHARS = 300
 
-/** Chrome UA 被 403 时重试用的 UA：如实说明是 ShuviX */
+/** 浏览器的 UA 被 403 时重试用的 UA：如实说明是 ShuviX */
 export const SELF_DECLARED_USER_AGENT = 'Mozilla/5.0 (compatible; ShuviX/1.0)'
 
 /** 这些状态码多半是网站拒绝自动化客户端，同样的请求重试没有意义 */
@@ -31,9 +33,12 @@ const REFUSED_STATUSES = new Set([401, 403, 429, 451, 503])
 /** 这些拒绝可能是要求先过一遍浏览器验证，值得渲染；429（限流）和 451（法律原因）换个方式请求也一样 */
 const RENDERABLE_STATUSES = new Set([401, 403, 503])
 
-/** 没有写工具名：read 也给拿不到浏览器工具的 agent 用，提示不能指向它用不了的东西 */
+/**
+ * read 已经是用内置浏览器的身份读的：还读不到，多半是用户没在那儿登录过这个站点、或者站点要人机验证。
+ * 用户在内置浏览器里打开这个地址、登录或点过验证之后，read 就读得到了。
+ */
 const NEEDS_BROWSER_HINT =
-  'Calling read again will not help. If you have browser tools or can turn them on, open the page there; otherwise tell the user it could not be read.'
+  "Calling read again right now will not help. read loads pages with ShuviX's browser, so if the page needs a login or a human check, tell the user to open this address in ShuviX's browser and sign in or pass the check there; after that read can load it."
 
 const THIN_PAGE_NOTE = `Note: the page returned very little text. It may need a login or a security check, so its real content may be missing. ${NEEDS_BROWSER_HINT}\n\n`
 
@@ -324,7 +329,7 @@ export async function readUrlContent(
       options.fetch(url, {
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         cache: 'no-store',
-        // 有的站点先发 cookie 再跳转回同一地址，不带就一直转到超时；这个 session 只在内存里，也没有登录态
+        // 带上 cookie：用的是内置浏览器的身份；有的站点还会先发 cookie 再跳转回同一地址，不带就一直转到超时
         credentials: 'include',
         headers: {
           'User-Agent': userAgent,
@@ -381,15 +386,15 @@ export async function readUrlContent(
   if (kind === 'binary' && isErrorPlaceholder(markdown)) markdown = ''
 
   if (kind === 'html') {
+    // 网页总是再渲染一遍：渲染出的文字比直接请求到的多才用它（脚本把正文收起来的页面，直接请求的那份更全）
+    const chars = markdown ? visibleTextLength(markdown) : 0
+    const rendered = await viaBrowser(chars + 1)
+    if (rendered) return rendered
     if (!markdown) {
-      const rendered = await viaBrowser(1)
-      if (rendered) return rendered
       throw new Error(`the page at ${url} has no readable text. ${NEEDS_BROWSER_HINT}`)
     }
-    const chars = visibleTextLength(markdown)
     const thin = bytes.length >= THIN_PAGE_MIN_BYTES && chars < THIN_PAGE_TEXT_CHARS
-    if (!thin) return markdownResult(converted, markdown, '')
-    return (await viaBrowser(chars + 1)) ?? markdownResult(converted, markdown, THIN_PAGE_NOTE)
+    return markdownResult(converted, markdown, thin ? THIN_PAGE_NOTE : '')
   }
 
   if (markdown) return markdownResult(converted, markdown, '')

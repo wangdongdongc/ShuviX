@@ -351,6 +351,93 @@ describe('忘掉一个 tab（HS-9）', () => {
   })
 })
 
+describe('read 读的地址（HS-15 / HS-16）', () => {
+  it('HS-15 照 agent 的访问记一次：规范化的地址（用户名密码去掉）、空标题、now、link、那个会话', () => {
+    h.historyNoteAgentRead('s1', 'https://u:p@a.test/x', NOW)
+    expect(visits()).toEqual([
+      { url: 'https://a.test/x', title: '', visitedAt: NOW, transition: 'link', sessionId: 's1' }
+    ])
+  })
+
+  it.each(['about:blank', 'data:text/html,x', 'javascript:void 0', 'not a url'])(
+    'HS-15 不记的地址 %j：什么也不记，不修剪',
+    (url) => {
+      h.historyNoteAgentRead('s1', url, NOW)
+      expect(store.addVisit).not.toHaveBeenCalled()
+      expect(store.pruneBefore).not.toHaveBeenCalled()
+    }
+  )
+
+  it('HS-15 同一个地址读两次：两次访问（不是 tab 里的刷新）；各记各的会话', () => {
+    h.historyNoteAgentRead('s1', DOC, NOW)
+    h.historyNoteAgentRead('s1', DOC, NOW + 1)
+    h.historyNoteAgentRead('s2', DOC, NOW + 2)
+    expect(visits().map((v) => [v.sessionId, v.visitedAt])).toEqual([
+      ['s1', NOW],
+      ['s1', NOW + 1],
+      ['s2', NOW + 2]
+    ])
+  })
+
+  it('HS-15 不动 tab 的账：之后用户在 tab 里去同一个地址仍记在用户头上；tab 的标题仍记到 tab 自己最近的地址', () => {
+    commit('t', 'https://other.test/')
+    h.historyNoteAgentRead('s1', DOC, NOW)
+    h.historyNoteTitle('t', 'Other')
+    expect(store.setTitle.mock.calls).toEqual([['https://other.test/', 'Other']])
+
+    commit('t', DOC)
+    expect(last()).toMatchObject({ url: DOC, sessionId: null })
+    // 再读一次也不算这个 tab 的刷新
+    commit('t2', DOC)
+    expect(last()).toMatchObject({ url: DOC, sessionId: null })
+    expect(visitedUrls()).toEqual(['https://other.test/', DOC, DOC, DOC])
+  })
+
+  it('HS-15 跟提交一样顺手修剪', () => {
+    h.historyNoteAgentRead('s1', DOC, NOW)
+    expect(store.pruneBefore.mock.calls).toEqual([[NOW - RETENTION]])
+  })
+
+  it('HS-16 标题：trim 后记到那个地址上（用户名密码去掉，对得上记下的地址）', () => {
+    h.historyNoteReadTitle('https://u:p@a.test/x', '  Page Title \n')
+    expect(store.setTitle.mock.calls).toEqual([['https://a.test/x', 'Page Title']])
+  })
+
+  it('HS-16 标题截到 1024 字', () => {
+    h.historyNoteReadTitle(DOC, 'x'.repeat(2000))
+    expect(store.setTitle.mock.calls).toEqual([[DOC, 'x'.repeat(1024)]])
+  })
+
+  it.each([
+    ['空标题', DOC, ''],
+    ['只有空白', DOC, ' \t\n'],
+    ['不记的地址', 'about:blank', 'about:blank']
+  ])('HS-16 %s：不记', (_name, url, title) => {
+    h.historyNoteReadTitle(url, title)
+    expect(store.setTitle).not.toHaveBeenCalled()
+  })
+
+  it('HS-16 不靠 tab 的账：没有任何 tab 提交过也照记', () => {
+    h.historyNoteReadTitle(DOC, 'T')
+    expect(store.setTitle).toHaveBeenCalledTimes(1)
+  })
+
+  it('HS-15 / HS-16 落盘处抛错、或者没注入：都不往外抛', () => {
+    store.addVisit.mockImplementation(() => {
+      throw new Error('disk full')
+    })
+    store.setTitle.mockImplementation(() => {
+      throw new Error('disk full')
+    })
+    expect(() => h.historyNoteAgentRead('s1', DOC, NOW)).not.toThrow()
+    expect(() => h.historyNoteReadTitle(DOC, 'T')).not.toThrow()
+
+    h.setHistoryStore(null)
+    expect(() => h.historyNoteAgentRead('s1', DOC, NOW)).not.toThrow()
+    expect(() => h.historyNoteReadTitle(DOC, 'T')).not.toThrow()
+  })
+})
+
 describe('落盘处出错或没注入（HS-10）', () => {
   it('HS-10 addVisit / setTitle / setFavicon 抛错：不往外抛', () => {
     store.addVisit.mockImplementation(() => {

@@ -171,6 +171,33 @@ export function historyNoteFavicon(tabId: string, favicon: string | undefined): 
   }
 }
 
+/**
+ * agent 用 `read` 读了一个网址（隐藏页面，不是 tab）：照 agent 的访问记一次，记在那个会话名下。
+ * 读网页用的是用户的浏览器身份，历史记录页是用户事后看「agent 拿我的登录状态读过什么」的地方。
+ */
+export function historyNoteAgentRead(sessionId: string, url: string, now = Date.now()): void {
+  const stored = historyUrlOf(url)
+  if (!stored) return
+  try {
+    store?.addVisit({ url: stored, title: '', visitedAt: now, transition: 'link', sessionId })
+    maybePrune(now)
+  } catch (err) {
+    log.warn('recording a read visit failed', err)
+  }
+}
+
+/** `read` 的隐藏页面报了标题：记到那个地址上（没记过这个地址就什么也不做） */
+export function historyNoteReadTitle(url: string, title: string): void {
+  const stored = historyUrlOf(url)
+  const text = title.trim().slice(0, MAX_TITLE_LENGTH)
+  if (!stored || !text) return
+  try {
+    store?.setTitle(stored, text)
+  } catch (err) {
+    log.warn('recording a read title failed', err)
+  }
+}
+
 /** tab 关了：忘掉它的账（历史本身留着） */
 export function historyForgetTab(tabId: string): void {
   actors.delete(tabId)

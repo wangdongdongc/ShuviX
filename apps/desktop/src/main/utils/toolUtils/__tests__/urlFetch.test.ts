@@ -30,7 +30,9 @@ const CHROME_UA = 'Mozilla/5.0 (test) Chrome/142.0.0.0 Safari/537.36'
 const ABORTED = 'Aborted'
 const HTML = 'text/html; charset=utf-8'
 const SECRET = 'SECRET-BODY-MARKER'
-const HINT = 'Calling read again will not help'
+const HINT = 'Calling read again right now will not help'
+/** 整句提示：read 用的是 ShuviX 的浏览器，要登录或人机验证就请用户去那儿过一遍 */
+const HINT_FULL = `${HINT}. read loads pages with ShuviX's browser, so if the page needs a login or a human check, tell the user to open this address in ShuviX's browser and sign in or pass the check there; after that read can load it.`
 const NOTE_START = 'Note: the page returned very little text.'
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s)
@@ -176,7 +178,7 @@ describe('chromeUserAgent', () => {
 })
 
 describe('请求', () => {
-  it('UF-R1 请求头、缓存、凭据、signal', async () => {
+  it('UF-R1 请求头（UA 是调用方给的那个）、缓存、凭据、signal', async () => {
     const fetch = fetchSeq(respond('{}', 'application/json'))
     const signal = new AbortController().signal
     await readUrlContent(URL_, options(fetch, { acceptLanguage: 'zh-CN,en;q=0.8', signal }))
@@ -212,7 +214,8 @@ describe('请求', () => {
     expect(uaOf(0)).toBe(CHROME_UA)
     expect(uaOf(1)).toBe(SELF_DECLARED_USER_AGENT)
     expect(textOf(result)).toContain('a'.repeat(500))
-    expect(render).not.toHaveBeenCalled()
+    // 重试拿到的是网页：照样再渲染一遍（渲染没拿到 → 用请求到的那份）
+    expect(render).toHaveBeenCalledTimes(1)
   })
 
   it('UF-R4 重试过的 403 不再重试第三次；第一次响应的流被取消', async () => {
@@ -508,10 +511,16 @@ describe('HTML 与转换器', () => {
     expect(textOf(result)).toContain('# Hi')
   })
 
-  it('UF-H5 普通 HTML 不渲染', async () => {
-    const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
-    await readUrlContent(URL_, options(fetchSeq(respond(page(500), HTML)), { render }))
-    expect(render).not.toHaveBeenCalled()
+  it('UF-H5 普通 HTML 也渲染一遍：恰好一次、带地址和 signal；渲染没拿到就用请求到的，不带 note', async () => {
+    const render = vi.fn<UrlRenderer>(async () => null)
+    const signal = new AbortController().signal
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(page(500), HTML)), { render, signal })
+    )
+    expect(render).toHaveBeenCalledTimes(1)
+    expect(render.mock.calls[0]).toEqual([URL_, signal])
+    expect(textOf(result)).toBe(`URL: ${URL_} — T — converted to Markdown\n\n${'a'.repeat(500)}`)
   })
 })
 
@@ -920,7 +929,7 @@ describe('大小限制', () => {
 
 describe('状态码', () => {
   const refusedMessage = (status: number): string =>
-    `HTTP ${status} from ${URL_}. The site refused the request, often because it blocks automated clients. ${HINT}. If you have browser tools or can turn them on, open the page there; otherwise tell the user it could not be read.`
+    `HTTP ${status} from ${URL_}. The site refused the request, often because it blocks automated clients. ${HINT_FULL}`
 
   it.each([401, 403, 503])('UF-V1 %d：渲染出够一页的正文就用它', async (status) => {
     const render = vi.fn<UrlRenderer>(async () => ({ html: page(300) }))
@@ -972,7 +981,7 @@ describe('状态码', () => {
     expect(render).not.toHaveBeenCalled()
   })
 
-  it('UF-V6 拒绝的错误：有状态码、refused、不要再调、browser tools，没写具体工具名，没有响应体', async () => {
+  it('UF-V6 拒绝的错误：有状态码、refused、整句提示（ShuviX 的浏览器），不提 browser tools，没写具体工具名，没有响应体', async () => {
     const error = await readUrlContent(
       URL_,
       options(fetchSeq(respond(SECRET, HTML, { status: 429 })))
@@ -980,8 +989,8 @@ describe('状态码', () => {
     const message = (error as Error).message
     expect(message).toContain('429')
     expect(message).toContain('refused')
-    expect(message).toContain(HINT)
-    expect(message).toContain('browser tools')
+    expect(message).toContain(HINT_FULL)
+    expect(message).not.toContain('browser tools')
     expect(message).not.toMatch(/mcp__|open_tab|navigate|snapshot|read_page|evaluate/)
     expect(message).not.toContain(SECRET)
   })
@@ -1084,8 +1093,10 @@ describe('空页面与几乎没字的页面', () => {
         URL_,
         options(fetchSeq(respond(EMPTY_PAGE, HTML)), { render })
       ).catch((e: Error) => e)
-      expect((error as Error).message.startsWith(NO_TEXT)).toBe(true)
-      expect((error as Error).message).toContain('browser tools')
+      expect((error as Error).message).toBe(
+        `the page at ${URL_} has no readable text. ${HINT_FULL}`
+      )
+      expect((error as Error).message).not.toContain('browser tools')
       expect((error as Error).message).not.toContain('window died')
     })
 
@@ -1145,7 +1156,8 @@ describe('空页面与几乎没字的页面', () => {
       expect(text.startsWith(`URL: ${URL_} — T — converted to Markdown\n\n${NOTE_START}`)).toBe(
         true
       )
-      expect(text).toContain(HINT)
+      expect(text).toContain(HINT_FULL)
+      expect(text).not.toContain('browser tools')
       expect(text.endsWith(`\n\n${'a'.repeat(20)}`)).toBe(true)
       expect(render).toHaveBeenCalledTimes(1)
     })
@@ -1169,17 +1181,18 @@ describe('空页面与几乎没字的页面', () => {
         URL_,
         options(fetchSeq(respond(below, HTML)), { render })
       )
-      expect(render).not.toHaveBeenCalled()
+      // 渲染照样有（网页总是渲染）；只是不算「几乎没字」，不带 note
+      expect(render).toHaveBeenCalledTimes(1)
       expect(textOf(belowResult)).not.toContain(NOTE_START)
     })
 
-    it('UF-M6 阈值：够 300 个字就不算，再大也不渲染', async () => {
-      const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000, 'b') }))
+    it('UF-M6 阈值：够 300 个字就不算几乎没字（再大也一样）：渲染没拿到 → 请求到的页面，不带 note', async () => {
+      const render = vi.fn<UrlRenderer>(async () => null)
       const result = await readUrlContent(
         URL_,
         options(fetchSeq(respond(paddedPage(300, 100_000), HTML)), { render })
       )
-      expect(render).not.toHaveBeenCalled()
+      expect(render).toHaveBeenCalledTimes(1)
       expect(textOf(result)).not.toContain(NOTE_START)
       expect(textOf(result)).toContain('a'.repeat(300))
     })
@@ -1206,6 +1219,190 @@ describe('空页面与几乎没字的页面', () => {
       expect(render).not.toHaveBeenCalled()
       expect(textOf(result)).not.toContain(NOTE_START)
     })
+  })
+})
+
+describe('网页总是再渲染一遍：渲染出的文字比请求到的多才用它', () => {
+  /** 标题不同的两份：看结果用的是哪一份 */
+  const titled = (title: string, n: number, ch: string): string =>
+    `<!doctype html><html><head><title>${title}</title></head><body><p>${ch.repeat(n)}</p></body></html>`
+  const N = 400
+  const FETCHED = titled('Fetched', N, 'a')
+  const fetchedText = `URL: ${URL_} — Fetched — converted to Markdown\n\n${'a'.repeat(N)}`
+
+  it('UF-P1 渲染多一个字：用渲染的那份（标题也是它的），不带 note', async () => {
+    const render = vi.fn<UrlRenderer>(async () => ({ html: titled('Rendered', N + 1, 'b') }))
+    const result = await readUrlContent(URL_, options(fetchSeq(respond(FETCHED, HTML)), { render }))
+    expect(render).toHaveBeenCalledTimes(1)
+    expect(textOf(result)).toBe(
+      `URL: ${URL_} — Rendered — converted to Markdown\n\n${'b'.repeat(N + 1)}`
+    )
+    expect(result.details).toEqual({
+      type: 'read',
+      format: 'URL',
+      converted: true,
+      truncated: false,
+      url: URL_
+    })
+  })
+
+  it.each([
+    ['一样多（字不同）', async () => ({ html: titled('Rendered', N, 'b') })],
+    ['少一个字', async () => ({ html: titled('Rendered', N - 1, 'b') })],
+    ['没有文字', async () => ({ html: EMPTY_PAGE })],
+    ['返回 null', async () => null],
+    ['抛错', async () => Promise.reject(new Error(`window died ${SECRET}`))]
+  ])('UF-P2 渲染%s：用请求到的那份（标题也是它的），不带 note', async (_name, impl) => {
+    const render = vi.fn(impl) as unknown as UrlRenderer
+    const result = await readUrlContent(URL_, options(fetchSeq(respond(FETCHED, HTML)), { render }))
+    expect(render).toHaveBeenCalledTimes(1)
+    expect(textOf(result)).toBe(fetchedText)
+  })
+
+  it('UF-P3 渲染的那份转换器转不出来：用请求到的那份', async () => {
+    let calls = 0
+    const convert = vi.fn<UrlConverter>(async () => {
+      if (++calls > 1) throw new Error(`could not ${SECRET}`)
+      return { title: 'Fetched', markdown: 'a'.repeat(N) }
+    })
+    const render = vi.fn<UrlRenderer>(async () => ({ html: titled('Rendered', 5000, 'b') }))
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(FETCHED, HTML)), { render, convert })
+    )
+    expect(convert).toHaveBeenCalledTimes(2)
+    expect(textOf(result)).toBe(fetchedText)
+  })
+
+  it('UF-P4 比的是可见文字，不是字节：渲染的那份大得多、字却更少 → 用请求到的', async () => {
+    const links = Array.from(
+      { length: 200 },
+      (_, i) =>
+        `<a href="https://example.test/${'x'.repeat(40)}${i}">l</a><img src="/i${i}.png" alt="">`
+    ).join(' ')
+    const html = `<!doctype html><html><head><title>Rendered</title></head><body>${links}</body></html>`
+    expect(Buffer.byteLength(html)).toBeGreaterThan(Buffer.byteLength(FETCHED) * 5)
+    const render = vi.fn<UrlRenderer>(async () => ({ html }))
+    const result = await readUrlContent(URL_, options(fetchSeq(respond(FETCHED, HTML)), { render }))
+    expect(textOf(result)).toBe(fetchedText)
+  })
+
+  it('UF-P5 小页面（不到 4 KB、50 个字，自己不带 note）：渲染出 60 个字 → 用渲染的，带 note', async () => {
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(60, 'b') }))
+    const small = page(50)
+    expect(Buffer.byteLength(small)).toBeLessThan(4096)
+    const result = await readUrlContent(URL_, options(fetchSeq(respond(small, HTML)), { render }))
+    const text = textOf(result)
+    expect(text.startsWith(`URL: ${URL_} — T — converted to Markdown\n\n${NOTE_START}`)).toBe(true)
+    expect(text.endsWith(`\n\n${'b'.repeat(60)}`)).toBe(true)
+
+    // 对照：渲染没拿到时，这份小页面自己不带 note
+    const plain = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(small, HTML)), { render: async () => null })
+    )
+    expect(textOf(plain)).toBe(`URL: ${URL_} — T — converted to Markdown\n\n${'a'.repeat(50)}`)
+  })
+
+  it('UF-P6 先后：请求 → 读完响应体、转完请求到的那份 → 渲染 → 转渲染的那份', async () => {
+    const order: string[] = []
+    const fetch = vi.fn<UrlFetch>(async () => {
+      order.push('fetch')
+      return respond(FETCHED, HTML)
+    })
+    const convert = vi.fn<UrlConverter>(async () => {
+      order.push('convert')
+      return { title: null, markdown: 'a'.repeat(N) }
+    })
+    const render = vi.fn<UrlRenderer>(async () => {
+      order.push('render')
+      return { html: page(N + 1) }
+    })
+    await readUrlContent(URL_, options(fetch, { render, convert }))
+    expect(order).toEqual(['fetch', 'convert', 'render', 'convert'])
+  })
+
+  it('UF-P7 没有注入 render：普通网页照常返回，不报错', async () => {
+    const result = await readUrlContent(URL_, options(fetchSeq(respond(FETCHED, HTML))))
+    expect(textOf(result)).toBe(fetchedText)
+  })
+
+  const RSS =
+    '<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title><item><title>A</title><description>D</description></item></channel></rss>'
+  const NOTEBOOK = JSON.stringify({
+    cells: [{ cell_type: 'markdown', source: ['# Note'] }],
+    metadata: {},
+    nbformat: 4,
+    nbformat_minor: 5
+  })
+
+  it.each([
+    ['JSON', URL_, '{"a":1}', 'application/json'],
+    ['纯文本', URL_, 'hello', 'text/plain'],
+    ['Markdown', URL_, '# hi', 'text/markdown'],
+    ['XML（不是 feed）', URL_, '<?xml version="1.0"?><root><a>1</a></root>', 'application/xml'],
+    ['feed', URL_, RSS, 'application/rss+xml'],
+    ['notebook', 'https://example.test/a.ipynb', NOTEBOOK, 'application/json'],
+    ['没有类型、嗅探成文本', URL_, 'just some text', undefined],
+    ['octet-stream、嗅探成文本', URL_, 'just some text', 'application/octet-stream']
+  ])('UF-P8 %s：不渲染', async (_name, url, body, type) => {
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(5000) }))
+    const result = await readUrlContent(url, options(fetchSeq(respond(body, type)), { render }))
+    expect(render).not.toHaveBeenCalled()
+    expect(textOf(result)).not.toContain('a'.repeat(5000))
+  })
+
+  it('UF-P8 图片：不渲染，转不了的错误', async () => {
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(5000) }))
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
+    await expect(
+      readUrlContent(URL_, options(fetchSeq(respond(png, 'image/png')), { render }))
+    ).rejects.toThrow(`could not convert image/png from ${URL_}`)
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it('UF-P9 没有类型、嗅探成 HTML：渲染一次', async () => {
+    const render = vi.fn<UrlRenderer>(async () => null)
+    await readUrlContent(URL_, options(fetchSeq(respond(FETCHED)), { render }))
+    expect(render).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('提示：read 用的是 ShuviX 的浏览器', () => {
+  const PARTS = [
+    'Calling read again right now will not help',
+    "read loads pages with ShuviX's browser",
+    "open this address in ShuviX's browser",
+    'sign in or pass the check',
+    'after that read can load it'
+  ]
+  const expectHint = (text: string): void => {
+    for (const part of PARTS) expect(text).toContain(part)
+    expect(text).not.toContain('browser tools')
+    expect(text).not.toContain(SECRET)
+  }
+  const failure = async (fetch: UrlFetch, render?: UrlRenderer): Promise<string> =>
+    ((await readUrlContent(URL_, options(fetch, { render })).catch((e: Error) => e)) as Error)
+      .message
+
+  it('UF-N1 403（渲染也没拿到）、429、读不出文字：都带整句提示，没有响应体', async () => {
+    expectHint(await failure(fetchSeq(respond(SECRET, HTML, { status: 403 })), async () => null))
+    expectHint(await failure(fetchSeq(respond(SECRET, HTML, { status: 429 }))))
+    expectHint(await failure(fetchSeq(respond(EMPTY_PAGE, HTML)), async () => null))
+  })
+
+  it('UF-N2 几乎没字的 note 里也是这句', async () => {
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(paddedPage(20, 8000), HTML)), { render: async () => null })
+    )
+    expectHint(textOf(result))
+    expect(textOf(result)).toContain(NOTE_START)
+  })
+
+  it.each([404, 500])('UF-N3 %d：没有提示', async (status) => {
+    const message = await failure(fetchSeq(respond(SECRET, HTML, { status })))
+    expect(message).toBe(`HTTP ${status} from ${URL_}.`)
   })
 })
 
@@ -1417,6 +1614,30 @@ describe('用户中止', () => {
     )
     await started
     controller.abort()
+    await abortedExactly(pending)
+  })
+
+  it('UF-A7b 普通网页（够多的字）渲染时中止：不回请求到的页面', async () => {
+    const { controller, started, render } = renderAborted(async () => null)
+    const pending = readUrlContent(
+      URL_,
+      options(fetchSeq(respond(page(500), HTML)), { render, signal: controller.signal })
+    )
+    await started
+    controller.abort()
+    await abortedExactly(pending)
+  })
+
+  it('UF-A7c 普通网页：渲染回来时已经中止（渲染自己没理会 signal）→ 中止错误，不回任何一份', async () => {
+    const controller = new AbortController()
+    const render = vi.fn<UrlRenderer>(async () => {
+      controller.abort()
+      return { html: page(5000, 'b') }
+    })
+    const pending = readUrlContent(
+      URL_,
+      options(fetchSeq(respond(page(500), HTML)), { render, signal: controller.signal })
+    )
     await abortedExactly(pending)
   })
 
