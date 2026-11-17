@@ -7,7 +7,12 @@
  *   标题 + 一行小字「在哪干活 · 状态」（有询问 > 正在回复；停着只有位置；位置空着就没有分隔点），点它推入详情；
  *   右边一颗「⋯」；
  * - 「⋯」的菜单：文件、后台任务（数 = 还在跑的）、产物 | 导出对话（笔记本会话没有）、分支会话（宿主给、形态给
- *   才有；这一轮在跑 / 被中断时置灰）| 详情。文件 / 任务 / 产物是底部抽屉；点菜单外、Esc、返回手势收起；
+ *   才有；这一轮在跑 / 被中断时置灰）| 详情。点菜单外、Esc、返回手势收起；
+ * - 文件 / 任务 / 产物各是整屏推入的页面（2026-11-16，此前是底部抽屉）：一摞页面记在浏览器历史里
+ *   （`shuvixMobilePanel`，见 panelHistory.ts），每进一层压一条、带着下面各层的标记；一摞都挂着、只露最上面那一页；
+ *   页面自己的返回与返回手势一层一层退，退完还在对话页；「在对话中引用」之后、换了会话之后整摞收起（一次退够）；
+ *   会话没了由外壳连同对话页一起退，这里不动；对话里点了任务状态 / 「已有新版」→ 推入列表页 + 详情页（子会话的
+ *   任务只到列表页），已经开着这几页时不理；
  * - 详情那一层连着浏览器历史：首页一条、子页再一条（都带着下面各层的标记），返回键 / 返回手势一层一层退；
  *   换了会话就是另一份详情；
  * - 空对话页（MobileEmptyChat，按会话 id 作 key）的入口行**直接**推入详情里的那一段：只压一条历史，带
@@ -15,13 +20,15 @@
  *
  *   CH-1..15  顶栏：三格、返回、返回键后面的数、小字与状态、没有活跃会话
  *   CH-20..39 菜单：位置、各种会话的项、任务数、置灰的分支、各项做什么、怎么收起、分支被拒的说明
+ *   CV-1..15  文件 / 任务 / 产物那一摞页面与浏览器历史
  *   CH-40..49 详情的历史：推入、子页、一层一层退、前进、没有标记时直接收起、没有会话不画、换会话换一份
  *   CH-50..62 空对话页的入口：给 ChatBody 的空态、直接推入的那一段、返回一步、前进、记号不粘、换会话
  *   MB-1..4   无人值守的一轮（docs/unattended-run-design.md §6）：标题前一个计时器图标，只在这条会话正在回复且
  *             store 里记着它无人值守时画；小字不加词；它不是单独的点击目标（手机上没有「我在这儿」）
  *
  * `@shuvix/chat-ui` / `@shuvix/app-shell` 整个换成替身（chat store 是工厂里建的真 zustand store）；
- * MobileSessionDetails / MobileEmptyChat / useSessionLocation / 笔记本也是替身；PullDownMenu、BottomSheet、detailHistory、
+ * MobileSessionDetails / MobileEmptyChat / useSessionLocation / 笔记本、文件 / 任务 / 产物各页（MobileFilesPage /
+ * MobileTasksPage / MobileArtifactsPage，记 props 与挂载次数）也是替身；PullDownMenu、detailHistory、panelHistory、
  * chat-protocol 的 sessionFork 是真的。jsdom 的 `history.back()` 异步发 popstate：`back()` 在 act 里等到它。
  * 文件是 `.ts`，一律 createElement。
  */
@@ -40,6 +47,8 @@ interface ChatState {
   streaming: Record<string, boolean>
   forkable: Record<string, boolean>
   sessionUnattended?: Record<string, true>
+  taskRevealRequest?: { taskId: string } | null
+  artifactRevealRequest?: { sessionId: string; name: string } | null
 }
 interface StoreApi {
   getState: () => ChatState
@@ -63,9 +72,14 @@ const rec = vi.hoisted(() => ({
   fork: null as unknown as (...args: unknown[]) => Promise<void>,
   clearForkError: null as unknown as () => void,
   exportSession: null as unknown as (...args: unknown[]) => Promise<void>,
-  files: [] as Array<Record<string, unknown>>,
-  bgPanel: [] as Array<Record<string, unknown>>,
-  artifacts: [] as Array<Record<string, unknown>>,
+  /** 后台任务表（`useBgTaskStore.getState().tasks`）：任务 id → 只要 kind */
+  bgTasks: {} as Record<string, { kind: string }>,
+  /** 文件 / 任务 / 产物各页替身收到的 props（每次渲染记一次，带上哪一种与第几个实例） */
+  pages: [] as Array<Record<string, unknown>>,
+  /** 各页替身挂载过几次（每挂一次是一个新实例） */
+  pageMounts: 0,
+  /** 任务详情页替身：这些会话里找不到那条任务，一挂上就自己 onBack（真的那一页就是这样） */
+  taskGoneIn: new Set<string>(),
   details: [] as Array<Record<string, unknown>>,
   /** 详情替身挂载过几次（每挂一次是一个新实例） */
   detailMounts: 0,
@@ -91,6 +105,7 @@ vi.mock('@shuvix/chat-ui', async () => {
     selectStreamingSessions: (s: ChatState) => s.streaming,
     selectSessionForkable: (s: ChatState, id: string | null) => !!id && s.forkable[id] === true,
     useBgTasks: (id: string | null) => rec.tasks[id ?? ''] ?? [],
+    useBgTaskStore: { getState: () => ({ tasks: rec.bgTasks }) },
     useSessionFork: () => ({
       available: rec.canFork,
       forkSession: (...args: unknown[]) => rec.fork(...args),
@@ -124,18 +139,7 @@ vi.mock('@shuvix/app-shell', async () => {
     MediaUrlProvider: ({ children }: { children: unknown }) => children,
     StatusBanner: () => null,
     WelcomeView: () => null,
-    FilesPanel: (props: Props) => {
-      rec.files.push(props)
-      return h('div', { 'data-stub-files': '' })
-    },
-    BgTaskPanel: (props: Props) => {
-      rec.bgPanel.push(props)
-      return h('div', { 'data-stub-bg-tasks': '' })
-    },
-    ArtifactsPanel: (props: Props) => {
-      rec.artifacts.push(props)
-      return h('div', { 'data-stub-artifacts': '' })
-    },
+    basename: (p: string) => p.replace(/\/+$/, '').split('/').pop() ?? '',
     ConfirmDialog: ({ title, description, onConfirm }: Props) =>
       h(
         'div',
@@ -172,6 +176,38 @@ vi.mock('../MobileEmptyChat', async () => {
     }
   }
 })
+/** 一张推入页的替身：记 props、数挂载次数；文件页带一个输入框（看它在不在原处） */
+async function pageStub(
+  kind: string,
+  extra?: (props: Props) => void
+): Promise<(props: Props) => unknown> {
+  const { createElement: h, useEffect, useState } = await import('react')
+  return (props: Props) => {
+    const [instance] = useState(() => ++rec.pageMounts)
+    rec.pages.push({ ...props, kind, instance })
+    useEffect(() => {
+      extra?.(props)
+      // 只在挂上时看一次
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+    return h(
+      'div',
+      { 'data-stub-page': kind, 'data-stub-page-instance': String(instance) },
+      kind === 'files' ? h('input', { 'data-stub-page-input': '' }) : null
+    )
+  }
+}
+vi.mock('../MobileFilesPage', async () => ({ MobileFilesPage: await pageStub('files') }))
+vi.mock('../MobileTasksPage', async () => ({
+  MobileTasksPage: await pageStub('tasks'),
+  MobileTaskDetailPage: await pageStub('task', (props) => {
+    if (rec.taskGoneIn.has(String(props.sessionId))) (props.onBack as () => void)()
+  })
+}))
+vi.mock('../MobileArtifactsPage', async () => ({
+  MobileArtifactsPage: await pageStub('artifacts'),
+  MobileArtifactDetailPage: await pageStub('artifact')
+}))
 vi.mock('../../components/notebook/NotebookSessionView', () => ({
   NotebookSessionView: () => null
 }))
@@ -205,6 +241,7 @@ const CHAT = 'shuvixMobileChat'
 const SCOPE = 'shuvixMobileScope'
 const DETAIL = 'shuvixMobileDetail'
 const DIRECT = 'shuvixMobileDetailDirect'
+const PANEL = 'shuvixMobilePanel'
 
 const onBack = vi.fn<() => void>()
 const fork = vi.fn<(...args: unknown[]) => Promise<void>>()
@@ -296,11 +333,25 @@ function pick(id: string): void {
   click(menuItem(id))
 }
 
-// 抽屉
-const sheet = (): HTMLElement | null => q('[data-bottom-sheet]')
-/** 抽屉的标题：把手下面那一行 */
-const sheetTitle = (): string | null =>
-  sheet()?.querySelector('[role="dialog"]')?.children[1]?.textContent ?? null
+// 文件 / 任务 / 产物那一摞页面（各页是替身）
+const layerEls = (): HTMLElement[] =>
+  Array.from(container.querySelectorAll<HTMLElement>('[data-mobile-panel-layer]'))
+/** 挂着的各层，从下往上 */
+const layers = (): Array<string | null> =>
+  layerEls().map((el) => el.getAttribute('data-mobile-panel-layer'))
+/** 露着的那几层（应该只有最上面一层） */
+const shownLayers = (): Array<string | null> =>
+  layerEls()
+    .filter((el) => el.style.display !== 'none')
+    .map((el) => el.getAttribute('data-mobile-panel-layer'))
+const stack = (): unknown => state()?.[PANEL]
+/** 某一种页面替身最近一次收到的 props（`match` 再挑：哪个文件夹、哪条任务） */
+const pageProps = (kind: string, match: Record<string, unknown> = {}): Record<string, unknown> =>
+  rec.pages.findLast(
+    (p) => p.kind === kind && Object.entries(match).every(([key, value]) => p[key] === value)
+  )!
+const call = (props: Record<string, unknown>, name: string, ...args: unknown[]): void =>
+  act(() => (props[name] as (...a: unknown[]) => void)(...args))
 
 // 详情（替身）
 const details = (): HTMLElement | null => q('[data-stub-details]')
@@ -321,6 +372,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  // 前一个用例退回去之后留下的「前进」条目先截掉（不然再压一条时 history.length 不长）
+  window.history.pushState(null, '')
   window.history.replaceState(null, '')
   rec.store.setState({
     activeSessionId: 's1',
@@ -328,7 +381,9 @@ beforeEach(() => {
     asks: {},
     streaming: {},
     forkable: { s1: true },
-    sessionUnattended: {}
+    sessionUnattended: {},
+    taskRevealRequest: null,
+    artifactRevealRequest: null
   })
   rec.location = 'Proj'
   rec.tasks = {}
@@ -342,9 +397,10 @@ beforeEach(() => {
   rec.fork = fork
   rec.clearForkError = clearForkError
   rec.exportSession = exportSession
-  rec.files.length = 0
-  rec.bgPanel.length = 0
-  rec.artifacts.length = 0
+  rec.bgTasks = {}
+  rec.pages.length = 0
+  rec.pageMounts = 0
+  rec.taskGoneIn = new Set()
   rec.details.length = 0
   rec.detailMounts = 0
   rec.empties.length = 0
@@ -551,15 +607,15 @@ describe('MobileChatView: the pull-down menu', () => {
     expect(menu()!.querySelectorAll('[data-mobile-menu-count]')).toHaveLength(1)
   })
 
-  it('CH-22 with only finished tasks there is no number, but the sheet still lists them', () => {
+  it('CH-22 with only finished tasks there is no number, and Tasks still opens the tasks page', () => {
     rec.tasks = { s1: [{ status: 'exited' }, { status: 'killed' }] }
     mount()
     openMenu()
     expect(menuCount('tasks')).toBeNull()
     expect(menu()!.querySelector('[data-mobile-menu-count]')).toBeNull()
     click(menuItem('tasks'))
-    expect(sheet()!.querySelector('[data-stub-bg-tasks]')).not.toBeNull()
-    expect(q('[data-mobile-tasks-empty]')).toBeNull()
+    expect(shownLayers()).toEqual(['tasks'])
+    expect(q('[data-mobile-panel-layer="tasks"] [data-stub-page="tasks"]')).not.toBeNull()
   })
 
   it('CH-22 with no tasks there is no number', () => {
@@ -607,38 +663,34 @@ describe('MobileChatView: the pull-down menu', () => {
     expect(menu()).not.toBeNull()
   })
 
-  it('CH-27 Files opens the files sheet', () => {
+  it('CH-27 Files pushes the files page, not a sheet', () => {
     mount()
     pick('files')
     expect(menu()).toBeNull()
-    expect(sheet()!.querySelector('[data-stub-files]')).not.toBeNull()
-    expect(sheetTitle()).toBe(M.files)
+    expect(shownLayers()).toEqual(['files'])
+    expect(q('[data-mobile-panel-layer="files"] [data-stub-page="files"]')).not.toBeNull()
+    expect(q('[data-bottom-sheet]')).toBeNull()
   })
 
-  it('CH-28 Background tasks with no tasks: the sheet says so', () => {
+  it.each([
+    ['no tasks', []],
+    ['tasks', [{ status: 'running' }, { status: 'exited' }]]
+  ])('CH-28 Background tasks with %s pushes the tasks page for the session', (_label, tasks) => {
+    rec.tasks = { s1: tasks }
     mount()
     pick('tasks')
     expect(menu()).toBeNull()
-    expect(sheetTitle()).toBe(M.backgroundTasks)
-    expect(q('[data-bottom-sheet] [data-mobile-tasks-empty]')!.textContent).toBe(M.noTasks)
-    expect(q('[data-stub-bg-tasks]')).toBeNull()
+    expect(shownLayers()).toEqual(['tasks'])
+    expect(pageProps('tasks')).toMatchObject({ sessionId: 's1' })
+    expect(q('[data-bottom-sheet]')).toBeNull()
   })
 
-  it("CH-29 Background tasks with tasks: the session's task panel", () => {
-    rec.tasks = { s1: [{ status: 'running' }, { status: 'exited' }] }
-    mount()
-    pick('tasks')
-    expect(sheet()!.querySelector('[data-stub-bg-tasks]')).not.toBeNull()
-    expect(rec.bgPanel.at(-1)).toMatchObject({ sessionId: 's1' })
-    expect(q('[data-mobile-tasks-empty]')).toBeNull()
-  })
-
-  it("CH-30 Artifacts opens the session's artifacts", () => {
+  it("CH-30 Artifacts pushes the session's artifacts page", () => {
     mount()
     pick('artifacts')
-    expect(q('[data-bottom-sheet] [data-mobile-artifacts] [data-stub-artifacts]')).not.toBeNull()
-    expect(rec.artifacts.at(-1)).toMatchObject({ sessionId: 's1' })
-    expect(sheetTitle()).toBe(M.artifacts)
+    expect(shownLayers()).toEqual(['artifacts'])
+    expect(pageProps('artifacts')).toMatchObject({ sessionId: 's1' })
+    expect(q('[data-bottom-sheet]')).toBeNull()
   })
 
   it('CH-31 Export chat exports this session and opens nothing', () => {
@@ -647,7 +699,7 @@ describe('MobileChatView: the pull-down menu', () => {
     expect(exportSession).toHaveBeenCalledTimes(1)
     expect(exportSession).toHaveBeenCalledWith('s1')
     expect(menu()).toBeNull()
-    expect(sheet()).toBeNull()
+    expect(layers()).toEqual([])
     expect(details()).toBeNull()
     expect(fork).not.toHaveBeenCalled()
   })
@@ -675,7 +727,7 @@ describe('MobileChatView: the pull-down menu', () => {
     click(body('[data-mobile-pulldown-layer]')!)
     expect(menu()).toBeNull()
     expect(menuButton().getAttribute('aria-expanded')).toBe('false')
-    expect(sheet()).toBeNull()
+    expect(layers()).toEqual([])
     expect(details()).toBeNull()
     expect(exportSession).not.toHaveBeenCalled()
     expect(fork).not.toHaveBeenCalled()
@@ -700,22 +752,8 @@ describe('MobileChatView: the pull-down menu', () => {
     })
     expect(menu()).toBeNull()
     expect(menuButton().getAttribute('aria-expanded')).toBe('false')
-    expect(sheet()).toBeNull()
+    expect(layers()).toEqual([])
     expect(details()).toBeNull()
-  })
-
-  it('CH-36 the sheet closes from its backdrop', () => {
-    mount()
-    pick('files')
-    click(q('[data-bottom-sheet-backdrop]')!)
-    expect(sheet()).toBeNull()
-  })
-
-  it('CH-37 inserting a mention from the files sheet closes it', () => {
-    mount()
-    pick('files')
-    act(() => (rec.files.at(-1)!.onMentionInserted as () => void)())
-    expect(sheet()).toBeNull()
   })
 
   it('CH-38 a refused fork shows one dialog that says why', () => {
@@ -878,6 +916,424 @@ describe('MobileChatView: the details layer and the browser history', () => {
     ).not.toThrow()
     expect(rec.details.length).toBe(before)
     expect(body('[data-mobile-pulldown-layer]')).toBeNull()
+  })
+})
+
+describe('MobileChatView: the files / tasks / artifacts pages and the browser history', () => {
+  const seed = (marks: Record<string, unknown> = { [CHAT]: true, [SCOPE]: true }): void =>
+    window.history.replaceState(marks, '')
+  const filesAt = (dir: string): Record<string, unknown> => pageProps('files', { dir })
+  /** 做一件事，当场（popstate 还没到）看一眼，再等到 popstate */
+  async function thenPop(trigger: () => void, check: () => void = () => {}): Promise<void> {
+    const popped = new Promise<void>((resolve) => {
+      window.addEventListener('popstate', () => resolve(), { once: true })
+    })
+    act(trigger)
+    check()
+    await act(async () => {
+      await popped
+    })
+  }
+  const reveal = (patch: Partial<ChatState>): void => setStore(patch)
+
+  it('CV-1 Files pushes one entry that keeps the marks below it and shows one page', () => {
+    seed()
+    mount()
+    const before = window.history.length
+    pick('files')
+    expect(window.history.length).toBe(before + 1)
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [PANEL]: ['files'] })
+    expect(layers()).toEqual(['files'])
+    expect(shownLayers()).toEqual(['files'])
+    expect(filesAt('')).toMatchObject({ sessionId: 's1', dir: '', backLabel: M.detailsBack })
+    expect(q('[data-bottom-sheet]')).toBeNull()
+    expect(menu()).toBeNull()
+    expect(details()).toBeNull()
+  })
+
+  it.each([
+    ['tasks', ['tasks']],
+    ['artifacts', ['artifacts']]
+  ])('CV-1 %s pushes its own first page the same way', (id, expected) => {
+    seed({ [CHAT]: true })
+    mount()
+    const before = window.history.length
+    pick(id)
+    expect(window.history.length).toBe(before + 1)
+    expect(state()).toEqual({ [CHAT]: true, [PANEL]: expected })
+    expect(shownLayers()).toEqual(expected)
+  })
+
+  it('CV-2 each folder is one more entry and one more page; only the last is shown', () => {
+    seed()
+    mount()
+    pick('files')
+    const before = window.history.length
+
+    call(filesAt(''), 'onOpenDir', 'src')
+    expect(window.history.length).toBe(before + 1)
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [PANEL]: ['files', 'files:src'] })
+
+    call(filesAt('src'), 'onOpenDir', 'src/main')
+    expect(window.history.length).toBe(before + 2)
+    expect(stack()).toEqual(['files', 'files:src', 'files:src/main'])
+    expect(layers()).toEqual(['files', 'files:src', 'files:src/main'])
+    expect(shownLayers()).toEqual(['files:src/main'])
+
+    expect(filesAt('').backLabel).toBe(M.detailsBack)
+    expect(filesAt('src').backLabel).toBe(M.files)
+    expect(filesAt('src/main').backLabel).toBe('src')
+    expect(filesAt('src/main')).toMatchObject({ sessionId: 's1', dir: 'src/main' })
+  })
+
+  it('CV-3 a task opens its detail page above the list', () => {
+    seed()
+    mount()
+    pick('tasks')
+    call(pageProps('tasks'), 'onOpenTask', 't1')
+    expect(stack()).toEqual(['tasks', 'task:t1'])
+    expect(shownLayers()).toEqual(['task:t1'])
+    expect(pageProps('task')).toMatchObject({ sessionId: 's1', taskId: 't1' })
+  })
+
+  it('CV-3 an artifact opens its detail page above the list, keyed by its own session', () => {
+    seed()
+    mount()
+    pick('artifacts')
+    call(pageProps('artifacts'), 'onOpenArtifact', { sessionId: 'sub1', name: 'a.svg' })
+    expect(stack()).toEqual(['artifacts', 'artifact:sub1/a.svg'])
+    expect(shownLayers()).toEqual(['artifact:sub1/a.svg'])
+    expect(pageProps('artifact')).toMatchObject({ sessionId: 's1', artifactKey: 'sub1/a.svg' })
+  })
+
+  it('CV-4 the pages below stay mounted: the root page is the same one after a folder and back', async () => {
+    seed()
+    mount()
+    pick('files')
+    const rootInput = q(
+      '[data-mobile-panel-layer="files"] [data-stub-page-input]'
+    ) as HTMLInputElement
+    rootInput.value = 'typed'
+    const instance = filesAt('').instance
+
+    call(filesAt(''), 'onOpenDir', 'src')
+    expect(rec.pageMounts).toBe(2)
+    expect(q('[data-mobile-panel-layer="files"] [data-stub-page-input]')).toBe(rootInput)
+
+    await back()
+    expect(layers()).toEqual(['files'])
+    expect(shownLayers()).toEqual(['files'])
+    expect(rec.pageMounts).toBe(2)
+    expect(filesAt('').instance).toBe(instance)
+    const again = q('[data-mobile-panel-layer="files"] [data-stub-page-input]') as HTMLInputElement
+    expect(again).toBe(rootInput)
+    expect(again.value).toBe('typed')
+  })
+
+  it("CV-5 a page's back goes one level at a time and never closes the chat page", async () => {
+    seed()
+    mount()
+    pick('files')
+    call(filesAt(''), 'onOpenDir', 'src')
+    const historyBack = vi.spyOn(window.history, 'back')
+
+    await awaitPop(() => (filesAt('src').onBack as () => void)())
+    expect(historyBack).toHaveBeenCalledTimes(1)
+    expect(stack()).toEqual(['files'])
+    expect(shownLayers()).toEqual(['files'])
+    expect(mark(CHAT)).toBe(true)
+
+    await awaitPop(() => (filesAt('').onBack as () => void)())
+    expect(historyBack).toHaveBeenCalledTimes(2)
+    expect(layers()).toEqual([])
+    expect(mark(PANEL)).toBe(false)
+    expect(mark(CHAT)).toBe(true)
+    expect(mark(SCOPE)).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, () => void]>([
+    ['the task detail', () => call(pageProps('tasks'), 'onOpenTask', 't1')],
+    [
+      'the artifact detail',
+      () => call(pageProps('artifacts'), 'onOpenArtifact', { sessionId: 's1', name: 'a.svg' })
+    ]
+  ])("CV-5 %s's back lands on its list", async (label, openDetail) => {
+    const kind = label.includes('task') ? 'tasks' : 'artifacts'
+    const detail = label.includes('task') ? 'task' : 'artifact'
+    seed()
+    mount()
+    pick(kind)
+    openDetail()
+    await awaitPop(() => (pageProps(detail).onBack as () => void)())
+    expect(shownLayers()).toEqual([kind])
+    await awaitPop(() => (pageProps(kind).onBack as () => void)())
+    expect(layers()).toEqual([])
+    expect(mark(CHAT)).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CV-6 the back gesture does the same, and forward re-opens the stack stored on the entry', async () => {
+    seed()
+    mount()
+    pick('files')
+    call(filesAt(''), 'onOpenDir', 'src')
+
+    await back()
+    expect(shownLayers()).toEqual(['files'])
+    await back()
+    expect(layers()).toEqual([])
+    expect(mark(CHAT)).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+
+    await awaitPop(() => window.history.forward())
+    expect(layers()).toEqual(['files'])
+    await awaitPop(() => window.history.forward())
+    expect(layers()).toEqual(['files', 'files:src'])
+    expect(shownLayers()).toEqual(['files:src'])
+  })
+
+  it('CV-7 with no stack on the current entry, back closes the pages at once', () => {
+    seed()
+    mount()
+    pick('files')
+    window.history.replaceState({ [CHAT]: true }, '')
+    const historyBack = vi.spyOn(window.history, 'back')
+    const historyGo = vi.spyOn(window.history, 'go')
+    call(filesAt(''), 'onBack')
+    expect(layers()).toEqual([])
+    expect(historyBack).not.toHaveBeenCalled()
+    expect(historyGo).not.toHaveBeenCalled()
+  })
+
+  it('CV-8 no page is drawn without an active session, even with a stack on the entry', () => {
+    rec.store.setState({ activeSessionId: null })
+    seed({ [CHAT]: true, [PANEL]: ['files', 'files:src'] })
+    mount()
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(layers()).toEqual([])
+    expect(menuButton().disabled).toBe(true)
+  })
+
+  it('CV-8 a broken stack on the entry draws nothing', () => {
+    seed({ [CHAT]: true, [PANEL]: ['tasks', 'files:src'] })
+    mount()
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(layers()).toEqual([])
+  })
+
+  it('CV-9 a mention inserted from a folder three levels deep closes the whole stack in one go', async () => {
+    seed()
+    mount()
+    pick('files')
+    call(filesAt(''), 'onOpenDir', 'src')
+    call(filesAt('src'), 'onOpenDir', 'src/main')
+    const before = window.history.length
+    const historyGo = vi.spyOn(window.history, 'go')
+    const historyBack = vi.spyOn(window.history, 'back')
+
+    await thenPop(
+      () => (filesAt('src/main').onMentionInserted as () => void)(),
+      // 页面当场收起，不等 popstate
+      () => expect(layers()).toEqual([])
+    )
+    expect(historyGo).toHaveBeenCalledTimes(1)
+    expect(historyGo).toHaveBeenCalledWith(-3)
+    expect(historyBack).not.toHaveBeenCalled()
+    expect(layers()).toEqual([])
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true })
+    expect(window.history.length).toBe(before)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CV-9 with no stack on the entry the pages are cleared without touching history', () => {
+    seed()
+    mount()
+    pick('files')
+    window.history.replaceState({ [CHAT]: true }, '')
+    const historyGo = vi.spyOn(window.history, 'go')
+    call(filesAt(''), 'onMentionInserted')
+    expect(layers()).toEqual([])
+    expect(historyGo).not.toHaveBeenCalled()
+  })
+
+  it("CV-10 another session becoming active closes the pages: they were the other session's", async () => {
+    seed()
+    rec.store.setState({ sessions: [session(), session({ id: 'child', title: 'Child' })] })
+    mount()
+    pick('tasks')
+    const historyGo = vi.spyOn(window.history, 'go')
+
+    await thenPop(
+      () => rec.store.setState({ activeSessionId: 'child' }),
+      () => expect(layers()).toEqual([])
+    )
+    expect(historyGo).toHaveBeenCalledTimes(1)
+    expect(historyGo).toHaveBeenCalledWith(-1)
+    expect(layers()).toEqual([])
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true })
+    // 任务页没有换成新会话的再画一遍
+    expect(rec.pages.some((p) => p.sessionId === 'child')).toBe(false)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CV-10 another session becoming active with no page open touches no history', () => {
+    seed()
+    rec.store.setState({ sessions: [session(), session({ id: 's2' })] })
+    mount()
+    const historyGo = vi.spyOn(window.history, 'go')
+    setStore({ activeSessionId: 's2' })
+    expect(historyGo).not.toHaveBeenCalled()
+  })
+
+  it('CV-11 the session going away is left to the shell: no history call here, no page drawn', () => {
+    seed()
+    mount()
+    pick('files')
+    call(filesAt(''), 'onOpenDir', 'src')
+    const historyGo = vi.spyOn(window.history, 'go')
+    const historyBack = vi.spyOn(window.history, 'back')
+    setStore({ activeSessionId: null })
+    expect(historyGo).not.toHaveBeenCalled()
+    expect(historyBack).not.toHaveBeenCalled()
+    expect(layers()).toEqual([])
+    expect(stack()).toEqual(['files', 'files:src'])
+  })
+
+  it.each([
+    ['a command', { t9: { kind: 'bash' } }],
+    ['an agent', { t9: { kind: 'agent' } }],
+    ['a task the list does not know', {}]
+  ])('CV-12 a task reveal for %s pushes the list, then its detail', async (_label, tasks) => {
+    rec.bgTasks = tasks
+    seed()
+    mount()
+    const before = window.history.length
+    reveal({ taskRevealRequest: { taskId: 't9' } })
+    expect(window.history.length).toBe(before + 2)
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true, [PANEL]: ['tasks', 'task:t9'] })
+    expect(layers()).toEqual(['tasks', 'task:t9'])
+    expect(shownLayers()).toEqual(['task:t9'])
+    expect(pageProps('task')).toMatchObject({ sessionId: 's1', taskId: 't9' })
+
+    await back()
+    expect(stack()).toEqual(['tasks'])
+    expect(shownLayers()).toEqual(['tasks'])
+    await back()
+    expect(layers()).toEqual([])
+    expect(mark(CHAT)).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CV-12 a task reveal for a sub-session turn pushes the list only', async () => {
+    rec.bgTasks = { t9: { kind: 'sub-session' } }
+    seed()
+    mount()
+    const before = window.history.length
+    reveal({ taskRevealRequest: { taskId: 't9' } })
+    expect(window.history.length).toBe(before + 1)
+    expect(stack()).toEqual(['tasks'])
+    expect(shownLayers()).toEqual(['tasks'])
+    expect(rec.pages.some((p) => p.kind === 'task')).toBe(false)
+    await back()
+    expect(layers()).toEqual([])
+    expect(mark(CHAT)).toBe(true)
+  })
+
+  it('CV-12 the same request object seen again pushes nothing more; a new one does', async () => {
+    seed()
+    mount()
+    const request = { taskId: 't9' }
+    reveal({ taskRevealRequest: request })
+    await back()
+    await back()
+    const before = window.history.length
+    setStore({ asks: { s1: 1 } })
+    expect(layers()).toEqual([])
+    reveal({ taskRevealRequest: { taskId: 't9' } })
+    expect(stack()).toEqual(['tasks', 'task:t9'])
+    expect(window.history.length).toBe(before)
+  })
+
+  it('CV-13 an artifact reveal pushes the list, then its detail', async () => {
+    seed()
+    mount()
+    const before = window.history.length
+    reveal({ artifactRevealRequest: { sessionId: 'sub1', name: 'a.svg' } })
+    expect(window.history.length).toBe(before + 2)
+    expect(state()).toEqual({
+      [CHAT]: true,
+      [SCOPE]: true,
+      [PANEL]: ['artifacts', 'artifact:sub1/a.svg']
+    })
+    expect(shownLayers()).toEqual(['artifact:sub1/a.svg'])
+    expect(pageProps('artifact')).toMatchObject({ sessionId: 's1', artifactKey: 'sub1/a.svg' })
+    await back()
+    expect(shownLayers()).toEqual(['artifacts'])
+  })
+
+  it.each<[string, Partial<ChatState>]>([
+    ['a task', { taskRevealRequest: { taskId: 't9' } }],
+    ['an artifact', { artifactRevealRequest: { sessionId: 's1', name: 'a.svg' } }]
+  ])('CV-14 with a page already open, a reveal of %s changes nothing', (_label, patch) => {
+    seed()
+    mount()
+    pick('files')
+    const before = window.history.length
+    const push = vi.spyOn(window.history, 'pushState')
+    reveal(patch)
+    expect(push).not.toHaveBeenCalled()
+    expect(window.history.length).toBe(before)
+    expect(stack()).toEqual(['files'])
+    expect(layers()).toEqual(['files'])
+  })
+
+  it('CV-14 a reveal with no active session pushes nothing', () => {
+    rec.store.setState({ activeSessionId: null })
+    seed()
+    mount()
+    const push = vi.spyOn(window.history, 'pushState')
+    reveal({ taskRevealRequest: { taskId: 't9' } })
+    reveal({ artifactRevealRequest: { sessionId: 's1', name: 'a.svg' } })
+    expect(push).not.toHaveBeenCalled()
+    expect(layers()).toEqual([])
+  })
+
+  it('CV-15 the session changing under a task detail goes back exactly as deep as the stack', async () => {
+    seed()
+    rec.store.setState({ sessions: [session(), session({ id: 's2', title: 'Second' })] })
+    // 新会话里没有那条任务：详情页要是给它重画一遍，会自己再退一步
+    rec.taskGoneIn = new Set(['s2'])
+    mount()
+    pick('tasks')
+    call(pageProps('tasks'), 'onOpenTask', 't1')
+    const historyGo = vi.spyOn(window.history, 'go')
+    const historyBack = vi.spyOn(window.history, 'back')
+
+    await thenPop(() => rec.store.setState({ activeSessionId: 's2' }))
+    expect(historyGo).toHaveBeenCalledTimes(1)
+    expect(historyGo).toHaveBeenCalledWith(-2)
+    expect(historyBack).not.toHaveBeenCalled()
+    expect(layers()).toEqual([])
+    // 对话页那一条还在
+    expect(state()).toEqual({ [CHAT]: true, [SCOPE]: true })
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('CV-15 after unmount the store is no longer listened to', () => {
+    seed()
+    mount()
+    unmount()
+    const push = vi.spyOn(window.history, 'pushState')
+    const historyGo = vi.spyOn(window.history, 'go')
+    rec.store.setState({ taskRevealRequest: { taskId: 't9' } })
+    rec.store.setState({ activeSessionId: 's2' })
+    expect(push).not.toHaveBeenCalled()
+    expect(historyGo).not.toHaveBeenCalled()
   })
 })
 

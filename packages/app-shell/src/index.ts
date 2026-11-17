@@ -184,7 +184,9 @@ export {
   useSessionPanelReveal
 } from './panel/SessionPanel'
 export type { SessionPanelProps } from './panel/SessionPanel'
-export { BgTaskPanel } from './panel/BgTaskPanel'
+export { BgTaskPanel, BgTaskDetail, useBlockedTaskIds, useTaskKindLabel } from './panel/BgTaskPanel'
+export { FINISHED_PREVIEW, endedAgo, orderTasks } from './panel/bgTaskOrder'
+export { useSessionArtifacts } from './panel/sessionArtifacts'
 // 侧边栏共享视图状态（isOpen/width）—— 持久化/边界由各宿主在 store 外接（桌面 isResizing 留宿主外层）
 export { useSidebarStore } from './sidebar/sidebarStore'
 export type { SidebarStoreState } from './sidebar/sidebarStore'

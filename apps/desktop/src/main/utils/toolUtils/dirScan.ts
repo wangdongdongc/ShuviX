@@ -30,7 +30,18 @@ export interface DirScanResult {
   files: string[]
   /** 直接子目录（尾斜杠形式，forward-slash），已排序 */
   dirs: string[]
+  /** 调用方要了才有（`stat: true`）：各个直接子文件的大小与修改时刻；读不出的那几个没有条目 */
+  stats?: Record<string, DirFileStat>
 }
+
+/** 一个文件的大小（字节）与修改时刻（ms） */
+export interface DirFileStat {
+  size: number
+  mtime: number
+}
+
+/** 一次并发 stat 这么多个（一个目录里上万个文件时不把文件描述符一口气占满） */
+const STAT_BATCH = 64
 
 /** 校验并归一 dir 参数：必须是 root 内的相对路径；返回 forward-slash 相对路径（'' = 根） */
 export function normalizeScanDir(dir: string): string | null {
@@ -42,7 +53,11 @@ export function normalizeScanDir(dir: string): string | null {
 }
 
 /** 浅扫描 root 下的 dir 目录（只扫一层）。目录不存在 / 不可读 / dir 越界时返回空列表。 */
-export async function scanDirShallow(root: string, dir: string): Promise<DirScanResult> {
+export async function scanDirShallow(
+  root: string,
+  dir: string,
+  options: { stat?: boolean } = {}
+): Promise<DirScanResult> {
   const rel = normalizeScanDir(dir)
   if (rel === null) return { files: [], dirs: [] }
 
@@ -90,5 +105,21 @@ export async function scanDirShallow(root: string, dir: string): Promise<DirScan
 
   files.sort()
   dirs.sort()
-  return { files, dirs }
+  if (!options.stat) return { files, dirs }
+
+  // 手机布局的文件页一行两排（名字 / 大小 · 修改时刻）：只对直接子文件各 stat 一次，跟随符号链接
+  const stats: Record<string, DirFileStat> = {}
+  for (let i = 0; i < files.length; i += STAT_BATCH) {
+    await Promise.all(
+      files.slice(i, i + STAT_BATCH).map(async (file) => {
+        try {
+          const st = await stat(join(root, file))
+          stats[file] = { size: st.size, mtime: st.mtimeMs }
+        } catch {
+          /* 读不出（悬空链接、刚被删）：这一个没有条目 */
+        }
+      })
+    )
+  }
+  return { files, dirs, stats }
 }

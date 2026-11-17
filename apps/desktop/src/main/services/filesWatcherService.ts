@@ -14,7 +14,7 @@
 import { watch, existsSync, type FSWatcher } from 'fs'
 import { dirname, basename } from 'path'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
-import { scanDirShallow } from '../utils/toolUtils/dirScan'
+import { scanDirShallow, type DirFileStat } from '../utils/toolUtils/dirScan'
 import { sessionService } from './sessionService'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { appEventBus } from '../utils/appEventBus'
@@ -54,15 +54,21 @@ export async function scanSessionFiles(
  */
 export async function scanSessionDir(
   sessionId: string,
-  dir: string
-): Promise<{ files: string[]; dirs: string[]; root: string | null }> {
+  dir: string,
+  options: { stat?: boolean } = {}
+): Promise<{
+  files: string[]
+  dirs: string[]
+  root: string | null
+  stats?: Record<string, DirFileStat>
+}> {
   const session = sessionService.getById(sessionId)
   const workingDirectory = session?.workingDirectory
   if (!workingDirectory) {
     return { files: [], dirs: [], root: null }
   }
-  const { files, dirs } = await scanDirShallow(workingDirectory, dir)
-  return { files, dirs, root: workingDirectory }
+  const scanned = await scanDirShallow(workingDirectory, dir, options)
+  return { ...scanned, root: workingDirectory }
 }
 
 // ─────────────────────────── 单文件内容监听 ───────────────────────────

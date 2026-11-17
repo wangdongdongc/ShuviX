@@ -73,7 +73,7 @@ function isBlockedIn(s: ChatState, task: TaskInfo): boolean {
  * selector 交回拼好的字符串而不是数组 —— 原始值才比得出「没变」，数组每次都是新引用，
  * 等于每次 chatStore 变动都重渲染整张面板。
  */
-function useBlockedTaskIds(tasks: TaskInfo[]): Set<string> {
+export function useBlockedTaskIds(tasks: TaskInfo[]): Set<string> {
   const key = useChatStore((s) =>
     tasks
       .filter((task) => !isTaskFinished(task) && isBlockedIn(s, task))
@@ -84,7 +84,7 @@ function useBlockedTaskIds(tasks: TaskInfo[]): Set<string> {
 }
 
 /** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段（驱动别的会话的那一轮写「会话」） */
-function useKindLabel(task: TaskInfo): string {
+export function useTaskKindLabel(task: TaskInfo): string {
   const { t } = useTranslation()
   if (task.kind === 'agent') return t('panel.tasksKindAgent')
   if (task.subject.kind === 'sub-session') {
@@ -135,7 +135,7 @@ function TaskAction({
 }
 
 /** bash 详情：命令 + 实时输出（后台任务没有输入通道，见 bgTaskService 文件头） */
-function BashDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
+function BashDetail({ task, page }: { task: TaskInfo; page?: boolean }): React.JSX.Element | null {
   const { t } = useTranslation()
   const [log, setLog] = useState('')
   const [missing, setMissing] = useState(false)
@@ -191,7 +191,8 @@ function BashDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
         running={running}
         exitCode={running ? undefined : (exitCode ?? undefined)}
         stickToBottom
-        outputMaxHClass="max-h-56"
+        // 整屏的详情页（手机）：输出块不压在 14 行里，留给它大半屏
+        outputMaxHClass={page ? 'max-h-[62dvh]' : 'max-h-56'}
       />
 
       {running && (
@@ -277,9 +278,23 @@ function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
  * 所以这类行干脆不可展开 —— 点开一个空抽屉比没有抽屉更糟。
  */
 function TaskDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
+  return <BgTaskDetail task={task} />
+}
+
+/**
+ * 一条任务的详情（命令的输出 / 派生 agent 的转写；子会话没有）。面板里是行下面展开的那一块；手机布局把它
+ * 单独推成一页（`page`：输出块放高）。
+ */
+export function BgTaskDetail({
+  task,
+  page
+}: {
+  task: TaskInfo
+  page?: boolean
+}): React.JSX.Element | null {
   if (task.kind === 'agent') return <AgentDetail task={task} />
   if (task.kind === 'sub-session') return null
-  return <BashDetail task={task} />
+  return <BashDetail task={task} page={page} />
 }
 
 /** 一个状态分组（运行中 / 已完成），组头可折叠 */
@@ -398,7 +413,7 @@ function TaskRow({
 }): React.JSX.Element {
   const { t } = useTranslation()
   const { state, duration } = useBgTaskStatus(task, now)
-  const kindLabel = useKindLabel(task)
+  const kindLabel = useTaskKindLabel(task)
   const finished = isTaskFinished(task)
   // 子会话没有可展开的详情（转写在它自己的会话里），标题行上给一个「打开」直接过去
   const openTarget = task.subject.kind === 'sub-session' ? task.subject.childSessionId : null

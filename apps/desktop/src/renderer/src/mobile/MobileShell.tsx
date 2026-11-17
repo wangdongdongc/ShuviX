@@ -55,6 +55,9 @@ import { BottomSheet } from './BottomSheet'
 import { installLongPressContextMenu } from './longPress'
 import { usePhoneFontSize } from './phoneFontSize'
 import { detailDepthOf } from './detailHistory'
+import { panelDepthOf } from './panelHistory'
+import { MobileProjectSettings } from './MobileProjectSettings'
+import { PROJECT_PAGES, type MobileProjectPage } from './panelPure'
 import { useTrackingAdapter } from '../host/useTrackingAdapter'
 
 type MobileTab = 'sessions' | 'widgets' | 'library' | 'settings'
@@ -74,6 +77,19 @@ const WIDGET_HISTORY_MARK = 'shuvixMobileWidget'
 const SCOPE_HISTORY_MARK = 'shuvixMobileScope'
 /** 同上，资料库页进了某一组（或知识库里的某个库）时压的；值是钻到了第几层 */
 const LIBRARY_HISTORY_MARK = 'shuvixMobileLibrary'
+/** 同上，项目设置那一页压的；值是 `{ id, page }`（首页一条、子页再一条） */
+const PROJECT_HISTORY_MARK = 'shuvixMobileProject'
+
+/** 一条历史条目说的项目设置的哪一页；不是项目设置的条目 → null */
+function projectPageOf(state: unknown): { id: string; page: MobileProjectPage } | null {
+  const value = (state as Record<string, unknown> | null)?.[PROJECT_HISTORY_MARK] as
+    | { id?: unknown; page?: unknown }
+    | undefined
+  if (!value || typeof value.id !== 'string') return null
+  return PROJECT_PAGES.includes(value.page as MobileProjectPage)
+    ? { id: value.id, page: value.page as MobileProjectPage }
+    : null
+}
 /** 会话页第二层里「收件箱」那一页的 key（别的 key 是 ProjectSessionGroups 的组 key） */
 
 const historyHas = (mark: string): boolean =>
@@ -149,6 +165,11 @@ function MobileShellBody(): React.JSX.Element {
   const [libraryToolbarSlot, setLibraryToolbarSlot] = useState<HTMLElement | null>(null)
   /** 设置页钻到了第几层（0 = 分区列表）：进了某个分区，标签栏收起 */
   const [settingsDepth, setSettingsDepth] = useState(0)
+  /** 项目设置（从项目那一组的菜单推入）：哪个项目、在哪一页；null = 没开 */
+  const [projectSettings, setProjectSettings] = useState<{
+    id: string
+    page: MobileProjectPage
+  } | null>(null)
   const { projects } = useProjects()
   const fontSize = usePhoneFontSize()
   const widgetApp = useWidgetStore((s) => s.foregroundApp)
@@ -221,7 +242,9 @@ function MobileShellBody(): React.JSX.Element {
     if (!chatOpenRef.current) return
     if (historyHas(HISTORY_MARK)) {
       // 对话页上面还开着详情（会话在详情里被删掉）：连那几条一起退掉，落在打开对话之前的那一条上
-      window.history.go(-(1 + detailDepthOf(window.history.state)))
+      window.history.go(
+        -(1 + detailDepthOf(window.history.state) + panelDepthOf(window.history.state))
+      )
     } else {
       chatOpenRef.current = false
       setChatOpen(false)
@@ -234,7 +257,8 @@ function MobileShellBody(): React.JSX.Element {
       historyHas(HISTORY_MARK) ||
       historyHas(WIDGET_HISTORY_MARK) ||
       historyHas(SCOPE_HISTORY_MARK) ||
-      historyHas(LIBRARY_HISTORY_MARK)
+      historyHas(LIBRARY_HISTORY_MARK) ||
+      historyHas(PROJECT_HISTORY_MARK)
     ) {
       window.history.replaceState(null, '')
     }
@@ -248,6 +272,8 @@ function MobileShellBody(): React.JSX.Element {
         scopeRef.current = false
         setScope(null)
       }
+      // 项目设置：退回到的那一条说的是哪一页就是哪一页（没有 = 收起）
+      setProjectSettings(projectPageOf(window.history.state))
       // 资料库：退回到的那一条说它在第几层，比此刻浅就收到那一层
       const libraryDepth = historyNumber(LIBRARY_HISTORY_MARK)
       if (libraryDepth < libraryDepthRef.current) {
@@ -258,6 +284,36 @@ function MobileShellBody(): React.JSX.Element {
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
+
+  /** 项目设置：推入首页或某一子页，压一条历史（带着下面那几层的记号） */
+  const pushProjectSettings = useCallback((id: string, page: MobileProjectPage): void => {
+    window.history.pushState(
+      {
+        ...((window.history.state as Record<string, unknown> | null) ?? {}),
+        [PROJECT_HISTORY_MARK]: { id, page }
+      },
+      ''
+    )
+    setProjectSettings({ id, page })
+  }, [])
+  const backFromProjectSettings = useCallback((): void => {
+    if (projectPageOf(window.history.state)) window.history.back()
+    else setProjectSettings(null)
+  }, [])
+  /** 项目归档了（它那一组也没了）：项目设置连同那一组的页面一起退掉，回到会话页顶层 */
+  const closeProjectSettings = useCallback((): void => {
+    const here = projectPageOf(window.history.state)
+    if (!here) {
+      setProjectSettings(null)
+      return
+    }
+    const steps = (here.page === 'index' ? 1 : 2) + (historyHas(SCOPE_HISTORY_MARK) ? 1 : 0)
+    window.history.go(-steps)
+  }, [])
+  const editProject = useCallback(
+    (id: string): void => pushProjectSettings(id, 'index'),
+    [pushProjectSettings]
+  )
 
   // 小组件：打开（卡片）压一条历史；顶栏的返回（goHome）退掉它；返回手势退掉它 → 回卡片列表
   useEffect(() => {
@@ -478,7 +534,12 @@ function MobileShellBody(): React.JSX.Element {
                   className="absolute inset-0"
                   style={view !== 'sessions' && !scope ? { display: 'none' } : undefined}
                 >
-                  <Sidebar mode="sessions" onOpenSession={openChat} drill={drill} />
+                  <Sidebar
+                    mode="sessions"
+                    onOpenSession={openChat}
+                    drill={drill}
+                    onEditProject={editProject}
+                  />
                 </div>
                 {viewsMounted.has('inbox') && (
                   // 收件箱视图：桌面侧栏里那同一个组件，字号按手机放大
@@ -653,6 +714,27 @@ function MobileShellBody(): React.JSX.Element {
           </div>
         </BottomSheet>
       </div>
+
+      {/* 项目设置：整屏推入（盖住会话页与它的工具栏） */}
+      {projectSettings && !chatOpen && (
+        <div
+          data-mobile-page="project"
+          className="absolute inset-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-bg-primary"
+        >
+          <div className="relative h-full">
+            <MobileProjectSettings
+              // 换了项目就是另一份（名称那一格的草稿不能带过去）
+              key={projectSettings.id}
+              projectId={projectSettings.id}
+              page={projectSettings.page}
+              backLabel={scope?.label ?? t('mobile.tabSessions')}
+              onOpenPage={(page) => pushProjectSettings(projectSettings.id, page)}
+              onBack={backFromProjectSettings}
+              onClosed={closeProjectSettings}
+            />
+          </div>
+        </div>
+      )}
 
       {/* 对话页：整屏推入 */}
       {chatOpen && (

@@ -19,6 +19,8 @@ export interface ProjectUpdateParams {
   path?: string
   systemPrompt?: string
   enabledTools?: string[]
+  /** 新会话缺省启用的用户知识库（不给 = 不动） */
+  knowledgeBases?: string[]
   tool?: ToolSettings
   archived?: boolean
 }

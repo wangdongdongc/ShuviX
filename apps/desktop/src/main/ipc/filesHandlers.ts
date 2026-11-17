@@ -25,8 +25,10 @@ export function registerFilesHandlers(): void {
     scanSessionFiles(params.sessionId)
   )
   // 按目录浅扫描（文件树懒加载）：dir 相对工作目录，空串 = 根
-  defineHandler('files:scanDir', (_ctx, params: { sessionId: string; dir: string }) =>
-    scanSessionDir(params.sessionId, params.dir)
+  defineHandler(
+    'files:scanDir',
+    (_ctx, params: { sessionId: string; dir: string; stat?: boolean }) =>
+      scanSessionDir(params.sessionId, params.dir, { stat: params.stat === true })
   )
   // 监听 / 取消监听单个已打开文件的内容变更（笔记本 / 预览自动刷新）
   defineHandler('files:watch', (_ctx, params: { sessionId: string; path: string }) => {

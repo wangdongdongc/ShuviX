@@ -574,12 +574,23 @@ describe('MobileShell: the three views of the Chats tab', () => {
     expect(lastSwitch().inboxAlert).toBe(alert)
   })
 
-  it('MV-4 the sessions sidebar gets only mode, onOpenSession and drill (the inbox card is gone)', () => {
+  it('MV-4 the sessions sidebar gets only mode, onOpenSession, drill and onEditProject (the inbox card is gone)', () => {
     mount()
-    expect(Object.keys(lastSidebar()).sort()).toEqual(['drill', 'mode', 'onOpenSession'])
+    // onEditProject：项目那一组的「编辑项目」在手机上推入整屏的项目设置（见 mobileShellProject.dom.test.ts）
+    expect(Object.keys(lastSidebar()).sort()).toEqual([
+      'drill',
+      'mode',
+      'onEditProject',
+      'onOpenSession'
+    ])
     expect(q('.sb-card')).toBeNull()
     sw('inbox')
-    expect(Object.keys(lastSidebar()).sort()).toEqual(['drill', 'mode', 'onOpenSession'])
+    expect(Object.keys(lastSidebar()).sort()).toEqual([
+      'drill',
+      'mode',
+      'onEditProject',
+      'onOpenSession'
+    ])
   })
 
   it('MV-5 the large title follows the view', () => {

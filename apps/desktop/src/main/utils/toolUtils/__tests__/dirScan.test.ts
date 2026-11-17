@@ -5,6 +5,7 @@
  * files.scan 全量接口）。唯一保留的过滤是 `.git`（既不列出也不进入）。
  * 用真实临时目录树验证，含符号链接语义（链接目录显示为目录但不递归，防环）。
  */
+import { statSync } from 'fs'
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -162,5 +163,98 @@ describe('scanDirShallow — 容错', () => {
   it('dir 越界返回空列表', async () => {
     expect(await scanDirShallow(root, '../x')).toEqual({ files: [], dirs: [] })
     expect(await scanDirShallow(root, '/abs')).toEqual({ files: [], dirs: [] })
+  })
+})
+
+/**
+ * `stat: true`（2026-11-16，手机布局的文件页一行两排：名字 / 大小 · 修改时刻）：只给直接子文件各带一份大小与
+ * 修改时刻，跟随符号链接；读不出的（悬空链接）没有条目。不要就没有 `stats` 这个键。
+ * 用自己的一棵小树（上面那棵的文件都是空的）：
+ *  one.txt（5 字节）, two.bin（1024 字节）, sub/inner.txt, link → two.bin, dangling → 不存在
+ */
+describe('scanDirShallow — stat', () => {
+  let tree: string
+  let links = false
+
+  beforeAll(async () => {
+    tree = await mkdtemp(join(tmpdir(), 'shuvix-dirscan-stat-'))
+    await mkdir(join(tree, 'sub'))
+    await writeFile(join(tree, 'one.txt'), 'hello')
+    await writeFile(join(tree, 'two.bin'), Buffer.alloc(1024))
+    await writeFile(join(tree, 'sub/inner.txt'), 'abc')
+    try {
+      await symlink('two.bin', join(tree, 'link'), 'file')
+      await symlink('no-such-target', join(tree, 'dangling'), 'file')
+      links = true
+    } catch {
+      /* 平台不支持 symlink —— 相关用例自行跳过 */
+    }
+  })
+
+  afterAll(async () => {
+    await rm(tree, { recursive: true, force: true })
+  })
+
+  it('DS-1 不要 stat（缺省 / {} / stat:false）：结果里没有 stats 这个键，files / dirs 不变', async () => {
+    const plain = await scanDirShallow(tree, '')
+    for (const result of [
+      plain,
+      await scanDirShallow(tree, '', {}),
+      await scanDirShallow(tree, '', { stat: false })
+    ]) {
+      expect('stats' in result).toBe(false)
+      expect(result.files).toEqual(plain.files)
+      expect(result.dirs).toEqual(plain.dirs)
+    }
+    expect(plain.files).toEqual(expect.arrayContaining(['one.txt', 'two.bin']))
+    expect(plain.dirs).toEqual(['sub/'])
+  })
+
+  it('DS-2 stat:true：每个列出的文件一条（键 = files 里的相对路径），大小与 mtimeMs；目录没有条目', async () => {
+    const result = await scanDirShallow(tree, '', { stat: true })
+    const plain = await scanDirShallow(tree, '')
+    expect(result.files).toEqual(plain.files)
+    expect(result.dirs).toEqual(plain.dirs)
+    const stats = result.stats!
+    expect(Object.keys(stats).sort()).toEqual(result.files.filter((f) => f !== 'dangling'))
+    expect(stats['one.txt']).toEqual({
+      size: 5,
+      mtime: statSync(join(tree, 'one.txt')).mtimeMs
+    })
+    expect(stats['two.bin'].size).toBe(1024)
+    expect(typeof stats['two.bin'].mtime).toBe('number')
+    expect(stats['sub/']).toBeUndefined()
+    expect(stats['sub']).toBeUndefined()
+  })
+
+  it('DS-2b 子目录：键带着前缀，与 files 同形', async () => {
+    const result = await scanDirShallow(tree, 'sub', { stat: true })
+    expect(result.files).toEqual(['sub/inner.txt'])
+    expect(result.stats).toEqual({
+      'sub/inner.txt': { size: 3, mtime: statSync(join(tree, 'sub/inner.txt')).mtimeMs }
+    })
+  })
+
+  it('DS-3 指向文件的符号链接：目标的大小与修改时刻（不是链接自己的）', async () => {
+    if (!links) return
+    const { stats } = await scanDirShallow(tree, '', { stat: true })
+    expect(stats!['link']).toEqual({
+      size: 1024,
+      mtime: statSync(join(tree, 'two.bin')).mtimeMs
+    })
+  })
+
+  it('DS-4 悬空链接：照样列在 files 里，但没有 stats 条目；别的文件照样有', async () => {
+    if (!links) return
+    const result = await scanDirShallow(tree, '', { stat: true })
+    expect(result.files).toContain('dangling')
+    expect('dangling' in result.stats!).toBe(false)
+    expect(result.stats!['one.txt']).toBeDefined()
+    expect(result.stats!['two.bin']).toBeDefined()
+  })
+
+  it('DS-5 目录不存在 / dir 越界：带着 stat:true 也是空列表，不抛错', async () => {
+    expect(await scanDirShallow(tree, 'nope', { stat: true })).toEqual({ files: [], dirs: [] })
+    expect(await scanDirShallow(tree, '../x', { stat: true })).toEqual({ files: [], dirs: [] })
   })
 })

@@ -13579,13 +13579,27 @@ export type WebMobileTouchTarget =
   | { replyBody: string }
   /** 输入卡片顶格待处理面板里审批卡的一行（`[data-pending-inputs] [data-ask-option=<id>]`：allow / remember-path / …） */
   | { pendingOption: string }
-  /**
-   * 开着的底部抽屉里文件树（@pierre/trees，行在 shadow DOM 里）的一行：`data-item-path`（树内相对路径；目录
-   * 写不写尾斜杠都认），不含吸顶的那份副本
-   */
+  /** 最上面那张推入页（文件 / 后台任务 / 产物 / 项目设置，`data-mobile-panel`）顶上的返回键 */
+  | { panel: 'back' }
+  /** 文件页（最上面那一层）里的一行：`data-file-path`（工作目录里的相对路径，文件夹不带尾斜杠） */
   | { filesRow: string }
-  /** 开着的底部抽屉里 Files 面板顶栏的搜索 / 刷新钮（按图标认：`.lucide-search` / `.lucide-refresh-cw`） */
-  | { filesSheetButton: 'search' | 'refresh' }
+  /** 文件页右上角的「⋯」，与它拉下来的菜单里的一项 */
+  | { filesMenu: true }
+  | { filesMenuItem: 'refresh' | 'hidden' }
+  /** 文件页的搜索框、框里的清除钮 */
+  | { filesSearch: true }
+  | { filesSearchClear: true }
+  /** 后台任务页里的一行（`data-task-id`） */
+  | { taskRow: string }
+  /** 任务详情页右上角的停止 / 移除 */
+  | { taskAction: 'stop' | 'dismiss' }
+  /** 后台任务页「已完成」那一组的清空、查看更早的 */
+  | { tasks: 'clear' | 'older' }
+  /** 产物页里的一行（文件名） */
+  | { artifactRow: string }
+  /** 项目设置首页的一行（推入它那一页）、名称那一格、归档 */
+  | { projectRow: 'prompt' | 'extensions' | 'knowledge' }
+  | { project: 'name' | 'archive' }
   /** 开着的 DOM 右键菜单（`[role="menu"]`）里文字为它的那一项 —— 真点（`pickDomMenu` 是 el.click()，没有按下） */
   | { domMenuItem: string }
 
@@ -13782,19 +13796,25 @@ export interface AssistantActionShot {
   icon: BoxShot | null
 }
 
-/** 底部抽屉里 Files 面板此刻的尺寸（见 `filesSheetShot`；视口坐标，CSS px） */
-export interface FilesSheetShot {
-  /** 文件树的那一行（pierre 的 `button[data-type="item"]`） */
-  row: BoxShot
-  /** 行里名字那一格（`[data-item-section="content"]`）的计算字号；没有那一格 → null */
-  labelFontSize: string | null
-  /** 顶栏的搜索 / 刷新钮；不在 → null */
-  search: BoxShot | null
-  refresh: BoxShot | null
-  /** 搜索框（开着时才有）的计算字号；没有 → null */
-  searchInputFontSize: string | null
-  /** 手机壳（`data-mobile-shell`）上 `--app-font-size` 的计算值；壳不在 → null */
-  appFontSize: string | null
+/** 手机文件页此刻的尺寸（见 `filesPageShot`；CSS px） */
+export interface FilesPageShot {
+  /** 那一行的高 */
+  rowHeight: number
+  /** 行里名字那一格的计算字号 */
+  nameFontSize: string | null
+  /** 搜索框的计算字号 */
+  searchFontSize: string | null
+  /** 那一页与整页有没有横向溢出 */
+  overflowX: boolean
+}
+
+/** 最上面那张推入页（`data-mobile-panel`）的骨架 */
+export interface MobilePanelShot {
+  kind: string
+  title: string
+  subtitle: string | null
+  backLabel: string
+  toolbar: string | null
 }
 
 /**
@@ -13851,6 +13871,8 @@ export interface WebMobilePane {
    * 会话页此刻在第二层的哪一页：某一组的 key（`data-scope-list`）；在顶层 → null
    */
   listScope(): Promise<string | null>
+  /** 顶层列表里一组导航行上写的名字；没有那一行 → null */
+  listNavLabel(key: string): Promise<string | null>
   /** 顶层一行导航行行尾的会话数（`data-group-count`；没有数字 = 0，行不在 → null） */
   listNavCount(key: string): Promise<number | null>
   /** 第二层顶上的大标题（`data-mobile-scope-title`）；在顶层 → null */
@@ -13936,13 +13958,66 @@ export interface WebMobilePane {
   desktopHeaderControls(): Promise<{ openBrowserWindow: boolean; sideToggles: number }>
   /** 开着的底部抽屉（标题与正文文字 —— 连同 shadow DOM 里的，空白折成一个空格）；没有 → null */
   sheet(): Promise<{ title: string; text: string } | null>
-  /**
-   * 开着的底部抽屉里文件树（@pierre/trees，行在 shadow DOM 里）列出的文件路径（`data-item-path`，
-   * 只要 `data-item-type="file"` 的；树里的文件名是拆段渲染的，按文字认不出来）；没有抽屉 → []
-   */
-  sheetFiles(): Promise<string[]>
-  /** 任务抽屉里的空态文字（`data-mobile-tasks-empty`）；没有 → null */
+  /** 最上面那张看得见的推入页（文件 / 后台任务 / 产物 / 项目设置；垫在下面、`display: none` 的不算）；没有 → null */
+  panel(): Promise<MobilePanelShot | null>
+  /** 对话页上面那一摞（`data-mobile-panel-layer` 的值，DOM 序） */
+  panelStack(): Promise<string[]>
+  /** 此刻这条历史上的记号：对话页、那一摞页面、项目设置 */
+  historyMarks(): Promise<{ chat: boolean; panel: string[]; project: boolean; length: number }>
+  /** 文件页（最上面那一层）列出的行，DOM 序 */
+  filesRows(): Promise<Array<{ kind: 'dir' | 'file'; path: string; meta: string | null }>>
+  /** 文件页的空态是哪一种（`data-mobile-files-empty`）；没有 → null */
+  filesEmpty(): Promise<'folder' | 'error' | 'search' | null>
+  /** 文件页底部那行数量 */
+  filesCount(): Promise<string>
+  /** 某一层文件页（`data-mobile-panel-layer` 的值，缺省最上面那层）搜索框里的字；没有 → null */
+  filesSearchValue(layer?: string): Promise<string | null>
+  /** 文件页（最上面那一层）一行与搜索框的尺寸；那一行不在 → null */
+  filesPageShot(path: string): Promise<FilesPageShot | null>
+  /** 后台任务页的空态文字（`data-mobile-tasks-empty`）；没有 → null */
   tasksEmpty(): Promise<string | null>
+  /** 后台任务页的行，DOM 序 */
+  taskRows(): Promise<
+    Array<{
+      group: 'running' | 'finished'
+      id: string
+      kind: string
+      status: string
+      dot: string
+      title: string
+      meta: string
+    }>
+  >
+  /** 任务详情页；没有 → null */
+  taskDetail(): Promise<{
+    kind: string
+    id: string
+    state: string
+    action: 'stop' | 'dismiss'
+    text: string
+  } | null>
+  /** 产物页的行（`group` = 那一组的会话 id） */
+  artifactRows(): Promise<
+    Array<{ key: string; name: string; title: string; meta: string; group: string }>
+  >
+  /** 产物详情页（`svg` = 里面画出了内联 svg）；没有 → null */
+  artifactDetail(): Promise<{ name: string; svg: boolean } | null>
+  /** 产物页的空态文字；没有 → null */
+  artifactsEmpty(): Promise<string | null>
+  /** 项目设置页；没有 → null */
+  projectSettings(): Promise<{
+    page: 'index' | 'prompt' | 'extensions' | 'knowledge'
+    name: string | null
+    path: string | null
+    prompt: string | null
+    rows: Array<{ id: string; value: string | null }>
+  } | null>
+  /**
+   * 往推入页的一格里打字（可信输入）：先聚焦、全选，再插入 —— 原来的字被换掉。`filesSearch` 认最上面那一层
+   */
+  typeInto(field: 'filesSearch' | 'projectName' | 'projectPrompt', text: string): Promise<void>
+  /** 让焦点离开此刻聚焦的那一格（失焦即存的那几格） */
+  blurActive(): Promise<void>
   /** 新建会话抽屉里的各项（DOM 序；id '' = 临时会话） */
   newChatTargets(): Promise<Array<{ id: string; label: string }>>
   /** 对话页里有没有笔记本编辑器（`.cm-editor`） */
@@ -14070,11 +14145,6 @@ export interface WebMobilePane {
   pressDigitOnBodyTrusted(digit: string): Promise<void>
 
   /**
-   * 开着的底部抽屉里 Files 面板的尺寸：文件树的一行（同 `{ filesRow }` 的认法）与它名字那一格的计算字号、顶栏
-   * 搜索 / 刷新钮、搜索框（开着的话）的计算字号，以及手机壳上的 `--app-font-size`；抽屉或那一行不在 → null
-   */
-  filesSheetShot(path: string): Promise<FilesSheetShot | null>
-  /**
    * 把 `navigator.clipboard.writeText` 换成记录器（并清空记录）—— 绝不写跑测试的人的剪贴板；`clipboardWrites`
    * 读记录（按次序）
    */
@@ -14132,6 +14202,13 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
   const NAV_ROW = (key: string): string =>
     `[...((${LIST})?.querySelectorAll('[data-group-nav]') ?? [])].find((h) => h.getAttribute('data-group-nav') === ${JSON.stringify(key)})`
   const SHEET = `document.querySelector('[data-bottom-sheet]')`
+  /** 最上面那张看得见的推入页（垫在下面的层是 display: none，没有盒子） */
+  const TOP_PANEL = `[...document.querySelectorAll('[data-mobile-panel]')].filter((p) => p.getClientRects().length > 0).at(-1)`
+  const PANEL_FIELD = {
+    filesSearch: `(${TOP_PANEL})?.querySelector('[data-mobile-files-search]')`,
+    projectName: `(${TOP_PANEL})?.querySelector('[data-mobile-project-name]')`,
+    projectPrompt: `(${TOP_PANEL})?.querySelector('[data-mobile-project-prompt]')`
+  }
   const STACKED = `document.querySelector('[data-settings-stacked]')`
   const STACKED_LIST = `${STACKED}?.querySelector('[data-stacked-list]')`
   /** 叠放分区里真正在滚的那一层（stackedSettings.tsx 的 scrollerOf 同一条规则）；没有 → null */
@@ -14266,11 +14343,27 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `document.querySelector('[data-msg-id=${JSON.stringify(target.replyBody)}] .min-w-0 > .markdown-body')`
     if ('pendingOption' in target)
       return `document.querySelector('[data-pending-inputs] [data-ask-option=${JSON.stringify(target.pendingOption)}]')`
-    if ('filesRow' in target) return FILES_TREE_ROW(SHEET, target.filesRow)
-    if ('filesSheetButton' in target) {
-      const icon = target.filesSheetButton === 'search' ? 'lucide-search' : 'lucide-refresh-cw'
-      return `${SHEET}?.querySelector('.${icon}')?.closest('button')`
-    }
+    if ('panel' in target) return `(${TOP_PANEL})?.querySelector('[data-mobile-panel-back]')`
+    if ('filesRow' in target)
+      return `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-file-row]') ?? [])].find((r) => r.getAttribute('data-file-path') === ${JSON.stringify(target.filesRow.replace(/\/+$/, ''))})`
+    if ('filesMenu' in target) return `(${TOP_PANEL})?.querySelector('[data-mobile-files-menu]')`
+    if ('filesMenuItem' in target)
+      return `document.querySelector('[data-mobile-pulldown] [data-mobile-menu-item=${JSON.stringify(target.filesMenuItem)}]')`
+    if ('filesSearch' in target) return PANEL_FIELD.filesSearch
+    if ('filesSearchClear' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-files-search-clear]')`
+    if ('taskRow' in target)
+      return `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-task-row]') ?? [])].find((r) => r.getAttribute('data-task-id') === ${JSON.stringify(target.taskRow)})`
+    if ('taskAction' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-task-${target.taskAction}]')`
+    if ('tasks' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-tasks-${target.tasks}]')`
+    if ('artifactRow' in target)
+      return `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-artifact-row]') ?? [])].find((r) => r.getAttribute('data-mobile-artifact-row') === ${JSON.stringify(target.artifactRow)})`
+    if ('projectRow' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-project-row=${JSON.stringify(target.projectRow)}]')`
+    if ('project' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-project-${target.project}]')`
     if ('domMenuItem' in target)
       return `[...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(target.domMenuItem)})`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
@@ -14409,6 +14502,10 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       client.eval<string | null>(`(() => {
         return (${LIST})?.querySelector('[data-scope-list]')?.getAttribute('data-scope-list') ?? null
       })()`),
+    listNavLabel: (key) =>
+      client.eval<string | null>(
+        `(${NAV_ROW(key)})?.querySelector(':scope > button > span.truncate')?.textContent?.trim() ?? null`
+      ),
     listNavCount: (key) =>
       client.eval<number | null>(`(() => {
         const row = ${NAV_ROW(key)}
@@ -14593,25 +14690,154 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           text: ${DEEP_TEXT}(body)
         }
       })()`),
-    sheetFiles: () =>
-      client.eval<string[]>(`(() => {
-        const out = []
-        const walk = (root) => {
-          for (const el of root.querySelectorAll('*')) {
-            if (el.getAttribute('data-item-type') === 'file' && el.hasAttribute('data-item-path')) {
-              out.push(el.getAttribute('data-item-path'))
-            }
-            if (el.shadowRoot) walk(el.shadowRoot)
-          }
+    panel: () =>
+      client.eval<MobilePanelShot | null>(`(() => {
+        const p = ${TOP_PANEL}
+        if (!p) return null
+        const text = (sel) => {
+          const el = p.querySelector(':scope > ' + sel)
+          return el ? (el.textContent ?? '').trim() : null
         }
-        const sheet = ${SHEET}
-        if (sheet) walk(sheet)
-        return [...new Set(out)]
+        return {
+          kind: p.getAttribute('data-mobile-panel') ?? '',
+          title: text('[data-mobile-panel-title]') ?? '',
+          subtitle: text('[data-mobile-panel-subtitle]'),
+          backLabel: (p.querySelector('[data-mobile-panel-back]')?.textContent ?? '').trim(),
+          toolbar: text('[data-mobile-panel-toolbar]')
+        }
+      })()`),
+    panelStack: () =>
+      client.eval<string[]>(
+        `[...document.querySelectorAll('[data-mobile-panel-layer]')].map((l) => l.getAttribute('data-mobile-panel-layer') ?? '')`
+      ),
+    historyMarks: () =>
+      client.eval<{ chat: boolean; panel: string[]; project: boolean; length: number }>(
+        `({
+          chat: !!history.state?.shuvixMobileChat,
+          panel: Array.isArray(history.state?.shuvixMobilePanel) ? history.state.shuvixMobilePanel : [],
+          project: !!history.state?.shuvixMobileProject,
+          length: history.length
+        })`
+      ),
+    filesRows: () =>
+      client.eval<Array<{ kind: 'dir' | 'file'; path: string; meta: string | null }>>(
+        `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-file-row]') ?? [])].map((r) => ({
+          kind: r.getAttribute('data-mobile-file-row'),
+          path: r.getAttribute('data-file-path') ?? '',
+          meta: r.querySelector('[data-file-meta]')?.textContent?.trim() ?? null
+        }))`
+      ),
+    filesEmpty: () =>
+      client.eval<'folder' | 'error' | 'search' | null>(
+        `(${TOP_PANEL})?.querySelector('[data-mobile-files-empty]')?.getAttribute('data-mobile-files-empty') ?? null`
+      ),
+    filesCount: () =>
+      client.eval<string>(
+        `((${TOP_PANEL})?.querySelector('[data-mobile-files-count]')?.textContent ?? '').trim()`
+      ),
+    filesSearchValue: (layer) =>
+      client.eval<string | null>(
+        layer === undefined
+          ? `${PANEL_FIELD.filesSearch}?.value ?? null`
+          : `[...document.querySelectorAll('[data-mobile-panel-layer]')].find((l) => l.getAttribute('data-mobile-panel-layer') === ${JSON.stringify(layer)})?.querySelector('[data-mobile-files-search]')?.value ?? null`
+      ),
+    filesPageShot: (path) =>
+      client.eval<FilesPageShot | null>(`(() => {
+        const p = ${TOP_PANEL}
+        const row = [...(p?.querySelectorAll('[data-mobile-file-row]') ?? [])].find((r) => r.getAttribute('data-file-path') === ${JSON.stringify(path)})
+        if (!p || !row) return null
+        const name = row.querySelector('span.truncate')
+        const input = p.querySelector('[data-mobile-files-search]')
+        const doc = document.documentElement
+        return {
+          rowHeight: row.getBoundingClientRect().height,
+          nameFontSize: name ? getComputedStyle(name).fontSize : null,
+          searchFontSize: input ? getComputedStyle(input).fontSize : null,
+          overflowX: p.scrollWidth > p.clientWidth + 1 || doc.scrollWidth > doc.clientWidth + 1
+        }
       })()`),
     tasksEmpty: () =>
       client.eval<string | null>(
         `document.querySelector('[data-mobile-tasks-empty]')?.textContent?.trim() ?? null`
       ),
+    taskRows: () =>
+      client.eval(
+        `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-task-row]') ?? [])].map((r) => ({
+          group: r.closest('[data-mobile-task-group]')?.getAttribute('data-mobile-task-group') ?? '',
+          id: r.getAttribute('data-task-id') ?? '',
+          kind: r.getAttribute('data-mobile-task-row') ?? '',
+          status: r.getAttribute('data-task-status') ?? '',
+          dot: r.querySelector('[data-task-dot]')?.getAttribute('data-task-dot') ?? '',
+          title: (r.querySelector('span > span')?.textContent ?? '').trim(),
+          meta: (r.querySelector('[data-task-meta]')?.textContent ?? '').trim()
+        }))`
+      ),
+    taskDetail: () =>
+      client.eval(`(() => {
+        const p = ${TOP_PANEL}
+        const body = p?.querySelector('[data-mobile-task-detail]')
+        if (!p || !body) return null
+        return {
+          kind: body.getAttribute('data-mobile-task-detail') ?? '',
+          id: body.getAttribute('data-task-id') ?? '',
+          state: p.querySelector('[data-mobile-task-state]')?.getAttribute('data-mobile-task-state') ?? '',
+          action: p.querySelector('[data-mobile-task-stop]') ? 'stop' : 'dismiss',
+          text: (body.textContent ?? '').replace(/\\s+/g, ' ').trim()
+        }
+      })()`),
+    artifactRows: () =>
+      client.eval(
+        `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-artifact-row]') ?? [])].map((r) => ({
+          key: r.getAttribute('data-artifact-key') ?? '',
+          name: r.getAttribute('data-mobile-artifact-row') ?? '',
+          title: (r.querySelector('span > span')?.textContent ?? '').trim(),
+          meta: (r.querySelector('[data-artifact-meta]')?.textContent ?? '').trim(),
+          group: r.closest('[data-mobile-artifact-group]')?.getAttribute('data-mobile-artifact-group') ?? ''
+        }))`
+      ),
+    artifactDetail: () =>
+      client.eval<{ name: string; svg: boolean } | null>(`(() => {
+        const body = (${TOP_PANEL})?.querySelector('[data-mobile-artifact-detail]')
+        if (!body) return null
+        return {
+          name: body.getAttribute('data-mobile-artifact-detail') ?? '',
+          svg: !!body.querySelector('svg[viewBox]:not(.lucide)')
+        }
+      })()`),
+    artifactsEmpty: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-mobile-artifacts-empty]')?.textContent?.trim() ?? null`
+      ),
+    projectSettings: () =>
+      client.eval(`(() => {
+        const p = ${TOP_PANEL}
+        const kind = p?.getAttribute('data-mobile-panel') ?? ''
+        if (!p || !kind.startsWith('project-')) return null
+        return {
+          page: kind.slice('project-'.length),
+          name: p.querySelector('[data-mobile-project-name]')?.value ?? null,
+          path: p.querySelector('[data-mobile-project-path]')?.textContent?.trim() ?? null,
+          prompt: p.querySelector('[data-mobile-project-prompt]')?.value ?? null,
+          rows: [...p.querySelectorAll('[data-mobile-project-row]')].map((r) => ({
+            id: r.getAttribute('data-mobile-project-row') ?? '',
+            value: r.querySelector('[data-mobile-project-value]')?.textContent?.trim() ?? null
+          }))
+        }
+      })()`),
+    typeInto: async (field, text) => {
+      const focused = await client.eval<boolean>(`(() => {
+        const el = ${PANEL_FIELD[field]}
+        if (!el) return false
+        el.focus()
+        el.select()
+        return document.activeElement === el
+      })()`)
+      if (!focused) throw new Error(`no ${field} field to type into`)
+      await client.send('Input.insertText', { text })
+    },
+    blurActive: async () => {
+      await client.eval(`(document.activeElement?.blur?.(), true)`)
+    },
     newChatTargets: () =>
       client.eval<Array<{ id: string; label: string }>>(
         `[...document.querySelectorAll('[data-mobile-new-chat-target]')].map((b) => ({
@@ -15108,29 +15334,6 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
     },
 
-    filesSheetShot: (path) =>
-      client.eval<FilesSheetShot | null>(`(() => {
-        const box = (el) => {
-          if (!el) return null
-          const r = el.getBoundingClientRect()
-          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
-        }
-        const sheet = ${SHEET}
-        const row = ${FILES_TREE_ROW(SHEET, path)}
-        if (!sheet || !row) return null
-        const label = row.querySelector('[data-item-section="content"]')
-        const button = (icon) => sheet.querySelector('.' + icon)?.closest('button') ?? null
-        const input = sheet.querySelector('input')
-        const shell = ${SHELL}
-        return {
-          row: box(row),
-          labelFontSize: label ? getComputedStyle(label).fontSize : null,
-          search: box(button('lucide-search')),
-          refresh: box(button('lucide-refresh-cw')),
-          searchInputFontSize: input ? getComputedStyle(input).fontSize : null,
-          appFontSize: shell ? getComputedStyle(shell).getPropertyValue('--app-font-size').trim() : null
-        }
-      })()`),
     stubClipboard: async () => {
       await client.eval(`(() => {
         window.__e2eClipboard = []

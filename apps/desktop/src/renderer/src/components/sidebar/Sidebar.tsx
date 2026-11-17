@@ -81,6 +81,10 @@ export interface SidebarProps {
    * 进了某一组只画那一组的那一页。缺省 = 各组就地展开的树
    */
   libraryDrill?: LibraryDrill
+  /**
+   * 「项目配置」换一种开法（手机布局：整屏推入的项目设置页）；缺省 = 桌面那个居中的对话框
+   */
+  onEditProject?: (projectId: string) => void
 }
 
 /**
@@ -114,7 +118,8 @@ export function Sidebar({
   mode = 'full',
   onOpenSession,
   drill,
-  libraryDrill
+  libraryDrill,
+  onEditProject
 }: SidebarProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const full = mode === 'full'
@@ -918,7 +923,7 @@ export function Sidebar({
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onForkSession={(id) => void forkSession(id)}
-      onEditProject={setEditingProjectId}
+      onEditProject={onEditProject ?? setEditingProjectId}
       footerActions={
         // 设置行右侧：有更新时的提示（点开设置的「关于」页）
         hasUpdate ? (

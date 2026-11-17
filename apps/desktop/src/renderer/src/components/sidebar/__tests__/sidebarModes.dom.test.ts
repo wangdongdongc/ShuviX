@@ -22,6 +22,8 @@
  *   DS-6 换了回调重渲染 → 用新的；adapter 对象引用不变
  *   DS-7 桌面 bots 能力：newSession 的 session.create 形状、archive 先离开那份文件的笔记本、pickFolderAsProject、
  *        deleteSessions 的确认流程（详见文件末尾那一组）
+ *   SE-1 / SE-2 「项目配置」的开法（2026-11-16）：不给 `onEditProject` = 桌面那个居中的对话框；给了（手机布局）就只
+ *        调它、不挂对话框
  *   DS-V1..19 侧栏的三种视图（2026-11-16，只在 full）：顶上那一行是视图切换（条数 = 等你回答 + 新回复，有在等的才带点）；
  *        切到收件箱 / 日历 → 会话列表藏起来（`hideList`），那一种视图头一次用到才挂、之后一直挂着只切显示；
  *        sessions / library 没有切换、没有这两块。原先侧栏里的「收件箱」那一行（开右侧面板）没有了
@@ -49,6 +51,8 @@ const rec = vi.hoisted(() => ({
   /** 各分组替身挂上了几次（重挂 = 扫到的清单丢了） */
   groupMounts: new Map<string, number>(),
   confirms: [] as Array<Record<string, unknown>>,
+  /** 项目编辑对话框的替身每次渲染收到的 props */
+  projectDialogs: [] as Array<Record<string, unknown>>,
   storeSet: null as unknown as Mock<(id: string | null) => void>,
   state: {
     sessions: [] as Array<{
@@ -191,7 +195,12 @@ vi.mock('../../browser/CalendarPanel', async () => {
     }
   }
 })
-vi.mock('../ProjectEditDialog', () => ({ ProjectEditDialog: () => null }))
+vi.mock('../ProjectEditDialog', () => ({
+  ProjectEditDialog: (props: Props) => {
+    rec.projectDialogs.push(props)
+    return null
+  }
+}))
 vi.mock('../SkillDirDialog', () => ({ SkillDirDialog: () => null }))
 vi.mock('../../common/ConfirmDialog', () => ({
   ConfirmDialog: (props: Props) => {
@@ -283,6 +292,7 @@ beforeEach(() => {
   rec.groupDrills.clear()
   rec.groupMounts.clear()
   rec.confirms.length = 0
+  rec.projectDialogs.length = 0
   rec.state.sessions = []
   rec.state.activeSessionId = null
   rec.storeSet.mockClear()
@@ -1032,5 +1042,33 @@ describe('libraryDrill (phone library page)', () => {
     expect(scroller().scrollTop).toBe(77)
     render({ mode: 'library', onOpenSession: vi.fn() })
     expect(scroller().scrollTop).toBe(77)
+  })
+})
+
+/**
+ * 项目那一组菜单里的「编辑项目」：共享侧栏调 `onEditProject(projectId)`。桌面缺省开居中的对话框；手机布局给了
+ * 自己的回调（整屏推入的项目设置页），对话框就不挂。
+ */
+describe('desktop Sidebar: how "edit project" opens', () => {
+  const editFromShared = (id: string): void =>
+    act(() => (lastShared().onEditProject as (id: string) => void)(id))
+
+  it('SE-1 without onEditProject the centred project dialog opens (and closes through its onClose)', () => {
+    render()
+    expect(rec.projectDialogs).toHaveLength(0)
+    editFromShared('p1')
+    expect(rec.projectDialogs.at(-1)?.projectId).toBe('p1')
+    const count = rec.projectDialogs.length
+    act(() => (rec.projectDialogs.at(-1)!.onClose as () => void)())
+    expect(rec.projectDialogs).toHaveLength(count)
+  })
+
+  it('SE-2 with onEditProject it is called with the project id and no dialog is mounted', () => {
+    const onEditProject = vi.fn()
+    render({ mode: 'sessions', onEditProject })
+    editFromShared('p1')
+    expect(onEditProject).toHaveBeenCalledTimes(1)
+    expect(onEditProject).toHaveBeenCalledWith('p1')
+    expect(rec.projectDialogs).toHaveLength(0)
   })
 })

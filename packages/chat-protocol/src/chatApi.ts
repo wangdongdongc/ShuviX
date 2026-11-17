@@ -784,12 +784,14 @@ export interface SessionChannelApi {
      * 子文件（相对工作目录的完整相对路径，forward-slash，后端排序保证确定性，无截断）；
      * dirs 为该目录的直接子目录（尾斜杠形式）。浏览场景所见即磁盘所有 —— 不做
      * .gitignore 过滤（gitignore 语义只留在搜索场景的 scan 全量接口），唯一例外是
-     * `.git` 目录不列出。目录不存在时返回空列表。
+     * `.git` 目录不列出。目录不存在时返回空列表。`stat: true` 时另带 `stats`：各个直接子文件的
+     * 大小（字节）与修改时刻（ms），读不出的没有条目（手机布局的文件页一行两排用）。
      */
-    scanDir: (params: { sessionId: string; dir: string }) => Promise<{
+    scanDir: (params: { sessionId: string; dir: string; stat?: boolean }) => Promise<{
       files: string[]
       dirs: string[]
       root: string | null
+      stats?: Record<string, { size: number; mtime: number }>
     }>
     read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
     /** 监听某个已打开文件的内容变更（笔记本 / 预览自动刷新）；变更经 events.subscribe 广播。
