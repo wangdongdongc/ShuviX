@@ -857,3 +857,61 @@ describe('SettingsContainer stacked: the levels on the browser history', () => {
     expect(historyState()).toBeNull()
   })
 })
+
+/**
+ * `onOpen`（2026-11-17）：叠放布局的分区列表里点这一行不进分区，而是宿主自己做一件事（手机上的「浏览器」整屏推入
+ * 它自己的一摞页面）。桌面的左侧导航不看它。
+ */
+describe('SettingsContainer stacked: a tab with onOpen', () => {
+  it('SC-O1 a click on a row with onOpen calls it and not onTabChange', () => {
+    const onOpen = vi.fn()
+    const onTabChange = vi.fn()
+    const tabs = [plainTab('a'), plainTab('pushed', { content: null, onOpen })]
+    render({ tabs, activeTab: 'a', onTabChange, stacked: { showList: true, onBack: vi.fn() } })
+    act(() => tabRow('pushed').click())
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onTabChange).not.toHaveBeenCalled()
+  })
+
+  it('SC-O2 a row without onOpen in the same list still calls onTabChange(id)', () => {
+    const onOpen = vi.fn()
+    const onTabChange = vi.fn()
+    const tabs = [plainTab('a'), plainTab('pushed', { content: null, onOpen })]
+    render({ tabs, activeTab: 'a', onTabChange, stacked: { showList: true, onBack: vi.fn() } })
+    act(() => tabRow('a').click())
+    expect(onTabChange.mock.calls).toEqual([['a']])
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('SC-O3 a tab with onOpen and no content draws its row: label, icon and the optional value', () => {
+    const tabs = [
+      plainTab('pushed', {
+        content: null,
+        onOpen: vi.fn(),
+        icon: createElement('i', { 'data-icon': 'pushed' }),
+        value: '2 tabs'
+      }),
+      plainTab('bare', { content: null, onOpen: vi.fn() })
+    ]
+    render({ tabs, activeTab: 'pushed', stacked: { showList: true, onBack: vi.fn() } })
+    const row = tabRow('pushed')
+    expect(row.querySelector('[data-tab-label]')?.textContent).toBe('Label pushed')
+    expect(row.querySelector('[data-icon="pushed"]')).not.toBeNull()
+    expect(row.querySelector('[data-settings-tab-value]')?.textContent).toBe('2 tabs')
+    expect(tabRow('bare').querySelector('[data-settings-tab-value]')).toBeNull()
+    expect(tabRow('bare').querySelector('[data-tab-label]')?.textContent).toBe('Label bare')
+  })
+
+  it('SC-O4 the desktop nav ignores onOpen: a click calls onTabChange', () => {
+    const onOpen = vi.fn()
+    const onTabChange = vi.fn()
+    const tabs = [plainTab('a'), plainTab('pushed', { onOpen })]
+    render({ tabs, activeTab: 'a', onTabChange })
+    const button = qa('[data-settings-nav] button').find((el) =>
+      (el.textContent ?? '').includes('Label pushed')
+    )!
+    act(() => button.click())
+    expect(onTabChange.mock.calls).toEqual([['pushed']])
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+})

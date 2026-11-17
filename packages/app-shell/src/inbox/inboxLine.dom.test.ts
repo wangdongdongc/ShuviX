@@ -281,3 +281,49 @@ describe('InboxLine below（IL-B）', () => {
     expect(wrapper.getAttribute('role')).toBeNull()
   })
 })
+
+/** 手机布局的浏览器页等处按这些记号认一行的各部分（2026-11-17） */
+describe('InboxLine anchors（IN-A1）', () => {
+  function line(props: Partial<InboxLineProps> = {}): void {
+    act(() =>
+      root.render(
+        createElement(InboxLine, {
+          leading: createElement('span', { 'data-lead': '' }),
+          title: 'T',
+          onOpen: () => {},
+          ...props
+        })
+      )
+    )
+  }
+  const all = (sel: string): HTMLElement[] => [...container.querySelectorAll<HTMLElement>(sel)]
+
+  it('IN-A1 the open button, title, meta, preview and both slots carry their data attributes', () => {
+    line({
+      meta: '12:00',
+      preview: 'a preview',
+      trailing: createElement('span', { 'data-trail': '' })
+    })
+    const open = all('[data-inbox-line-open]')
+    expect(open).toHaveLength(1)
+    expect(open[0].tagName).toBe('BUTTON')
+    expect(open[0].querySelector('[data-inbox-line-title]')?.textContent).toBe('T')
+    expect(open[0].querySelector('[data-inbox-line-meta]')?.textContent).toBe('12:00')
+    expect(open[0].querySelector('[data-inbox-line-preview]')?.textContent).toBe('a preview')
+    const slots = all('[data-inbox-line-slot]')
+    expect(slots).toHaveLength(2)
+    expect(slots[0].querySelector('[data-lead]')).not.toBeNull()
+    expect(slots[1].querySelector('[data-trail]')).not.toBeNull()
+  })
+
+  it('IN-A1 without meta, preview and trailing: only the open button, the title and the leading slot', () => {
+    line()
+    expect(all('[data-inbox-line-open]')).toHaveLength(1)
+    expect(all('[data-inbox-line-title]')).toHaveLength(1)
+    expect(all('[data-inbox-line-meta]')).toHaveLength(0)
+    expect(all('[data-inbox-line-preview]')).toHaveLength(0)
+    const slots = all('[data-inbox-line-slot]')
+    expect(slots).toHaveLength(1)
+    expect(slots[0].querySelector('[data-lead]')).not.toBeNull()
+  })
+})

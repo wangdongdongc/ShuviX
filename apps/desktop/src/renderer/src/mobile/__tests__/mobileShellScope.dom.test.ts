@@ -1532,10 +1532,16 @@ describe('MobileShell: the settings tab', () => {
     expect(props.stacked).toBe(true)
     expect(typeof props.onStackedDepthChange).toBe('function')
     const extra = props.extraTabs as Array<Record<string, unknown>>
-    expect(extra).toHaveLength(1)
-    expect(extra[0].id).toBe('agents')
-    expect(extra[0].group).toBe('maintenance')
-    expect(extra[0].label).toBe(i18n.t('panel.agents'))
+    // 两个额外分区：浏览器（排在 MCP 后面、点了整屏推入）在前，智能体监视在后
+    expect(extra.map((tab) => tab.id)).toEqual(['browser', 'agents'])
+    expect(extra[0].after).toBe('mcp')
+    expect(extra[0].group).toBe('capabilities')
+    expect(extra[0].label).toBe(i18n.t('browser.manager.title'))
+    expect(typeof extra[0].onOpen).toBe('function')
+    expect(extra[1].group).toBe('maintenance')
+    expect(extra[1].label).toBe(i18n.t('panel.agents'))
+    expect(extra[1].after).toBeUndefined()
+    expect(extra[1].onOpen).toBeUndefined()
   })
 
   it('MS-51 a depth above 0 hides the tab bar; 0 shows it again; neither toolbar slot is ever shown', () => {

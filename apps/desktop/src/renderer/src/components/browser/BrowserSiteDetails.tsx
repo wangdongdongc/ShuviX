@@ -56,10 +56,13 @@ const trashBtn = 'p-1 text-text-tertiary hover:text-error transition-colors'
  */
 export function BrowserSiteDetails({
   site,
-  onBack
+  onBack,
+  embedded = false
 }: {
   site: string
   onBack: () => void
+  /** 画在一张自带返回键与标题的页里（手机布局）：这里不再画返回键与网站名 */
+  embedded?: boolean
 }): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const [details, setDetails] = useState<SiteDetails | null | undefined>(undefined)
@@ -138,7 +141,7 @@ export function BrowserSiteDetails({
       </button>
     )
 
-  const header = (
+  const header = embedded ? null : (
     <button
       onClick={onBack}
       className="flex items-center gap-1.5 text-[12px] text-text-secondary hover:text-text-primary"
@@ -153,7 +156,7 @@ export function BrowserSiteDetails({
     return (
       <div className="space-y-4" data-site-details={site}>
         {header}
-        <h2 className="text-[16px] font-medium font-mono">{site}</h2>
+        {!embedded && <h2 className="text-[16px] font-medium font-mono">{site}</h2>}
         <p className="text-[12px] text-text-tertiary" data-site-details-failed>
           {t('browser.siteData.loadFailed')}
         </p>
@@ -177,7 +180,7 @@ export function BrowserSiteDetails({
     return (
       <div className="space-y-4" data-site-details={site}>
         {header}
-        <h2 className="text-[16px] font-medium font-mono">{site}</h2>
+        {!embedded && <h2 className="text-[16px] font-medium font-mono">{site}</h2>}
         <p className="text-[12px] text-text-tertiary" data-site-details-empty>
           {t('browser.siteData.noData')}
         </p>
@@ -196,7 +199,7 @@ export function BrowserSiteDetails({
 
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <h2 className="text-[16px] font-medium font-mono truncate">{site}</h2>
+          {!embedded && <h2 className="text-[16px] font-medium font-mono truncate">{site}</h2>}
           <p className="mt-1 text-[12px] text-text-tertiary">
             {[
               formatBytes(total),

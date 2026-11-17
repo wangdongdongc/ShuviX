@@ -66,16 +66,24 @@ export interface SettingsPanelProps {
    */
   stacked?: boolean
   /** 排在最后的额外分区（手机布局：智能体监视 —— 桌面上它在右侧面板里） */
-  extraTabs?: SettingsTab[]
+  extraTabs?: StackedExtraTab[]
   /** 叠放布局钻到了第几层（0 = 分区列表）：手机壳据此收起标签栏 */
   onStackedDepthChange?: (depth: number) => void
+  /**
+   * 叠放布局：这个数一变，分区列表行尾的那些词和数重新取一遍。宿主在自己推入的整屏页面（`onOpen` 的那种，不经过
+   * 分区）收起时换一个数 —— 那几页里可能改了行尾写的东西（开了几个标签页）
+   */
+  stackedValuesEpoch?: number
 }
+
+/** 手机布局额外的分区；`after` = 排在哪个分区后面（缺省排在最后） */
+export type StackedExtraTab = SettingsTab & { after?: string }
 
 /**
  * 叠放布局的分区列表里，行尾那个词或数：开着几家提供商、开着几台 MCP 服务器、远程访问开没开。
  * 列表每次露出来取一次（从分区里改完退回来就是新的）；没取到就不画（上一次取到的也撤掉，不留一个可能过时的数）
  */
-function useStackedTabValues(active: boolean): Record<string, React.ReactNode> {
+function useStackedTabValues(active: boolean, epoch: number): Record<string, React.ReactNode> {
   const { t } = useTranslation()
   const [values, setValues] = useState<Record<string, React.ReactNode>>({})
   useEffect(() => {
@@ -95,6 +103,16 @@ function useStackedTabValues(active: boolean): Record<string, React.ReactNode> {
         put('mcp', on > 0 ? on : undefined)
       })
       .catch(() => put('mcp', undefined))
+    // 标签页的清单是 admin：这台设备被策略拒了就不写数
+    void window.api.browserView
+      .listTabs()
+      .then((list) =>
+        put(
+          'browser',
+          list.length > 0 ? t('browser.manager.tabCount', { count: list.length }) : undefined
+        )
+      )
+      .catch(() => put('browser', undefined))
     void window.api.network
       .status()
       .then((status) => put('network', status.enabled ? t('mobile.on') : t('mobile.off')))
@@ -102,21 +120,22 @@ function useStackedTabValues(active: boolean): Record<string, React.ReactNode> {
     return () => {
       alive = false
     }
-  }, [active, t])
+  }, [active, epoch, t])
   return values
 }
 
 export function SettingsPanel({
   stacked = false,
   extraTabs = [],
-  onStackedDepthChange
+  onStackedDepthChange,
+  stackedValuesEpoch = 0
 }: SettingsPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
   /** 叠放布局里此刻显示的是分区列表（hash 点名了某个分区就直接进去） */
   const [showList, setShowList] = useState(() => !parseSettingsHash().tab)
   const [extraTab, setExtraTab] = useState<string | null>(null)
-  const stackedValues = useStackedTabValues(stacked && showList)
+  const stackedValues = useStackedTabValues(stacked && showList, stackedValuesEpoch)
   // 子 tab 初值直接从 hash 取（惰性初始化，不走 effect）
   const [monitorSubTab, setMonitorSubTab] = useState<MonitorSubTab>(() => {
     const { sub } = parseSettingsHash()
@@ -245,7 +264,14 @@ export function SettingsPanel({
   ]
 
   if (stacked) {
-    const allTabs = [...tabs, ...extraTabs].map((tab) =>
+    // 额外的分区：点了名排在谁后面的插到那里，其余排在最后
+    const ordered: SettingsTab[] = [...tabs]
+    for (const { after, ...tab } of extraTabs) {
+      const index = after === undefined ? -1 : ordered.findIndex((entry) => entry.id === after)
+      if (index < 0) ordered.push(tab)
+      else ordered.splice(index + 1, 0, tab)
+    }
+    const allTabs = ordered.map((tab) =>
       tab.id in stackedValues ? { ...tab, value: stackedValues[tab.id] } : tab
     )
     return (

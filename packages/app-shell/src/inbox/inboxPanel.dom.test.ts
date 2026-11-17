@@ -925,6 +925,19 @@ describe('INH-15 clicking rows opens the session; the panel stays', () => {
     expect(container.querySelector('[data-inbox-panel]')).not.toBeNull()
   })
 
+  it('IN-A2 the expanded ask card marks its title span with data-inbox-card-title', async () => {
+    store.sessions = [session('Y', { lastActiveAt: 900 })]
+    store.pending = { Y: 1 }
+    store.api.agent.pendingInputs = async () => ({ Y: [choice('qy')] })
+    await mountPage()
+    const card = container.querySelector<HTMLElement>('[data-inbox-card-session="Y"]')!
+    const titles = card.querySelectorAll<HTMLElement>('[data-inbox-card-title]')
+    expect(titles).toHaveLength(1)
+    expect(titles[0].tagName).toBe('SPAN')
+    expect(titles[0].textContent).toBe('Title Y')
+    expect(card.querySelector('[data-inbox-collapse]')!.contains(titles[0])).toBe(true)
+  })
+
   it('INH-15 a collapsed ask row expands in place without opening; the card ↗ opens the session', async () => {
     store.sessions = [session('Y', { lastActiveAt: 900 }), session('X', { lastActiveAt: 100 })]
     store.pending = { X: 1, Y: 1 }

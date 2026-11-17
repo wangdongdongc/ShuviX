@@ -35,7 +35,7 @@
  *        #widget-window?widgetId=…（面板收走它）；真长按卡片 → DOM 菜单恰是「在独立窗口打开 / 导出 / 归档 / 删除」
  *        （运行中多一个「停止」），没有「在面板中打开」
  *   M-14b 手机上的小组件是一行、没有悬浮按钮；真点它的右上角 → 与点中间一样就地打开：没有归档、没有删除确认框、没有停掉
- *   M-15 设置：分区列表 general … about + agents（voice / triggers / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
+ *   M-15 设置：分区列表 general … about + browser（排在 mcp 后面）+ agents（voice / triggers / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
  *        设置行 flex-wrap: wrap 且标题栏 min-width 9em；回列表；「智能体」分区头部是 Agents
  *   M-16 #settings/general 在手机宽度直接进分区、返回是列表；#settings 是列表；1280 宽不是叠放
  *   M-17 真触摸：按住 800ms → DOM 菜单、不推入对话页、页面里的 contextmenu 恰一次（window 捕获阶段数：菜单处理
@@ -106,6 +106,17 @@
  *       首页写着 Set、主进程读到的项目有那段提示词；再返回 → 顶层、标签栏回来、那一行是新名字
  *   E-5 文件页开着（两层）时会话在别处被删：对话页连同那两页一步收起，回到列表，历史上没有对话 / 那一摞的记号
  *
+ * 「浏览器」那几页（设置页的一行整屏推入；web 客户端自己也是内置浏览器里的一个标签页，所以数量按主进程的清单比）：
+ *   M-B1 设置列表里「Browser」排在 MCP 后面、行尾是「N tabs」；点它 → 标签页列表（返回键写着 Settings、每个标签页
+ *        一行、夹具页那一行第二排是它的主机、底部「N tabs」、标签栏被盖住）；从表单开第三个 → 不碰别的就多一行、输入框清空
+ *   M-B2 点一行 → 那一页（标题 = 页面标题、小字 = 地址、截图出来）；关闭 → 自己退回列表、那一行没了、主进程里也没了
+ *   M-B3 一层一条历史：列表 → 浏览器设置 → 网站数据 → 一个网站；返回手势四次一次一层，最后是设置列表、标签栏露出来、
+ *        历史上没有那一摞。在第二层重载 → 壳里没有那几页；再退一条（那条还带着上一次加载的记号）也不打开
+ *   M-B4 真的网站数据：夹具页写了 cookie → 浏览器设置里网站数 ≥ 1；列表里 localhost 那行「1 cookie」；搜它下面的
+ *        主机还在；点进去是嵌着的站点详情（没有自己的返回键与标题）、有 e2e_visit；删掉 → 返回 → 那一行没了
+ *   M-B5 查看对话：会话里的 agent 开了一页 → 那一行写着「In use by “<标题>”」；它那一页点「View conversation」→
+ *        对话页（那几页不在 DOM 里）；返回 → 还是那一页。刷新先问一句，取消什么都不动
+ *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
  * + `setTouchEmulationEnabled`），切到手机布局后重载一次（M-1 要一个刚挂上的壳）；点击 / 长按都是
@@ -116,7 +127,13 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
-import { connectTabPage } from '../../harness/browserFixtures'
+import {
+  FIXTURE_COOKIE,
+  browserDriver,
+  connectTabPage,
+  startFixtureServer,
+  type FixtureServer
+} from '../../harness/browserFixtures'
 import { connect, listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
@@ -149,6 +166,7 @@ import {
 } from '../../harness/pages'
 import {
   createProject,
+  eventRecorder,
   installAutoAllow,
   newSessionsAfter,
   seedFakeProvider,
@@ -1339,6 +1357,7 @@ describe('phone layout: the shell', () => {
       'providers',
       'tools',
       'mcp',
+      'browser',
       'network',
       'voice',
       'triggers',
@@ -1382,7 +1401,7 @@ describe('phone layout: the shell', () => {
     expect(parseFloat(row.titleMinWidth)).toBeCloseTo(5 * parseFloat(row.titleFontSize), 1)
 
     await mobile().tap({ settingsBack: true })
-    await until(async () => (await mobile().settingsTabs()).length === 12, 'the list again')
+    await until(async () => (await mobile().settingsTabs()).length === 13, 'the list again')
     expect(await mobile().settingsHeader()).toBeNull()
     expect(await mobile().tabBarShown()).toBe(true)
     // 返回手势同样退回分区列表
@@ -1392,13 +1411,13 @@ describe('phone layout: the shell', () => {
       'the General section again'
     )
     await page().eval(`(history.back(), true)`)
-    await until(async () => (await mobile().settingsTabs()).length === 12, 'the list by gesture')
+    await until(async () => (await mobile().settingsTabs()).length === 13, 'the list by gesture')
 
     await mobile().tap({ settingsTab: 'agents' })
     await until(async () => (await mobile().settingsHeader()) === en.panel.agents, 'Agents')
     expect(en.panel.agents).toBe('Agents')
     await mobile().tap({ settingsBack: true })
-    await until(async () => (await mobile().settingsTabs()).length === 12, 'the list again')
+    await until(async () => (await mobile().settingsTabs()).length === 13, 'the list again')
     await mobile().tap({ tab: 'sessions' })
     await until(async () => (await mobile().activeTab()) === 'sessions', 'the sessions tab')
   })
@@ -2379,7 +2398,7 @@ describe('phone layout: the shell', () => {
     let flipped: ProviderRow | undefined
 
     const sectionList = (): Promise<unknown> =>
-      until(async () => (await pane.settingsTabs()).length === 12, 'the settings section list')
+      until(async () => (await pane.settingsTabs()).length === 13, 'the settings section list')
     const subList = (
       what: string,
       id?: string
@@ -3121,6 +3140,398 @@ describe('phone layout: the shell', () => {
     )
     expect(await pane.activeTab()).toBe('sessions')
     expect(await pane.listScope()).toBe(projects.main.id)
+  })
+
+  describe('the browser pages (Settings → Browser)', () => {
+    let fx: FixtureServer
+    /** 夹具表单页那个标签页（写下 cookie；整组用例都开着） */
+    let formTab = ''
+    const formUrl = (): string => fx.localhostUrl('/form.html')
+    const fxHost = (): string => new URL(fx.localhostOrigin).host
+
+    const tabsInMain = (): Promise<Array<{ id: string; url: string; title: string }>> =>
+      app.main.eval(
+        `window.api.browserView.listTabs().then((ts) => ts.map((t) => ({ id: t.id, url: t.url, title: t.title })))`
+      )
+    const openTabInMain = async (url: string): Promise<string> => {
+      const id = await app.main.eval<string>(
+        `window.api.browserView.createTab(${JSON.stringify(url)}, 'typed')`
+      )
+      openedTabs.add(id)
+      return id
+    }
+    const closeTab = async (id: string): Promise<void> => {
+      await closeBrowserTab(app, id)
+      openedTabs.delete(id)
+    }
+    const panelKind = async (): Promise<string | null> => (await mobile().panel())?.kind ?? null
+
+    /** 设置标签的分区列表，行尾的数是刚取的（进一个分区再退回来：列表每次露出来取一次） */
+    async function freshSettingsList(): Promise<void> {
+      await toTab('settings')
+      await settingsToList()
+      await mobile().tap({ settingsTab: 'general' })
+      await until(
+        async () => (await mobile().settingsHeader()) === en.settings.tabGeneral,
+        'the General section'
+      )
+      await mobile().tap({ settingsBack: true })
+      await until(async () => (await mobile().settingsTabs()).length === 13, 'the settings list')
+    }
+
+    /** 从设置列表推入标签页列表，等清单到货 */
+    async function openBrowserPages(): Promise<void> {
+      await toTab('settings')
+      await settingsToList()
+      await mobile().tap({ settingsTab: 'browser' })
+      await until(async () => (await panelKind()) === 'browser-tabs', 'the browser tabs page')
+      await until(
+        async () => (await mobile().browserTabs()).some((t) => t.id === formTab),
+        'the tab list arrived'
+      )
+    }
+
+    beforeAll(async () => {
+      fx = await startFixtureServer()
+      formTab = await openTabInMain(formUrl())
+      await until(
+        async () => (await tabsInMain()).find((t) => t.id === formTab)?.title === 'E2E Form',
+        'the fixture form page loaded'
+      )
+    }, 60_000)
+
+    afterAll(async () => {
+      for (const id of [...openedTabs]) await closeTab(id)
+      await fx?.close()
+    })
+
+    it('M-B1 the Browser row sits after MCP with the tab count; it pushes the tab list; a tab opened from the form appears by itself', async () => {
+      const pane = mobile()
+      const blank = await app.main.eval<string>(`window.api.browserView.createTab()`)
+      openedTabs.add(blank)
+      let third = ''
+      try {
+        const inMain = await tabsInMain()
+        await freshSettingsList()
+        const ids = (await pane.settingsTabs()).map((t) => t.id)
+        expect(ids[ids.indexOf('mcp') + 1]).toBe('browser')
+        expect((await pane.settingsTabs()).find((t) => t.id === 'browser')?.label).toBe(
+          en.browser.manager.title
+        )
+        await until(
+          async () => (await pane.settingsTabValue('browser')) === `${inMain.length} tabs`,
+          `the row value "${inMain.length} tabs"`
+        )
+
+        await pane.tap({ settingsTab: 'browser' })
+        await until(async () => (await panelKind()) === 'browser-tabs', 'the browser tabs page')
+        const rows = await until(async () => {
+          const list = await pane.browserTabs()
+          return list.length === inMain.length ? list : null
+        }, 'one row per tab')
+        expect(rows.map((r) => r.id)).toEqual(inMain.map((t) => t.id))
+        expect(await pane.panel()).toMatchObject({
+          kind: 'browser-tabs',
+          title: en.browser.manager.title,
+          backLabel: en.mobile.tabSettings,
+          toolbar: `${inMain.length} tabs`
+        })
+        expect(rows.find((r) => r.id === formTab)).toMatchObject({
+          title: 'E2E Form',
+          meta: fxHost(),
+          crashed: false,
+          agent: null
+        })
+        // 空白页没有第二排
+        expect(rows.find((r) => r.id === blank)?.meta).toBeNull()
+        expect(await pane.mountedPages()).toContain('browser')
+        expect(await pane.browserCoversTabBar()).toBe(true)
+        expect(await pane.browserHistoryStack()).toEqual(['tabs'])
+        // 没有进设置的分区
+        expect(await pane.settingsHeader()).toBeNull()
+
+        // 从表单开第三个：不碰别的，列表自己多一行
+        const url = fx.localhostUrl('/counter.html?from=phone')
+        await pane.typeInto('browserNewTab', url)
+        await until(async () => (await pane.browserNewTabValue()) === url, 'the typed address')
+        await pane.tap({ browserList: 'open' })
+        const opened = await until(
+          async () => (await tabsInMain()).find((t) => t.url === url) ?? null,
+          'the new tab in main'
+        )
+        third = opened.id
+        openedTabs.add(third)
+        await until(
+          async () => (await pane.browserTabs()).some((r) => r.id === third),
+          'a row for the new tab'
+        )
+        await until(async () => (await pane.browserNewTabValue()) === '', 'the input cleared')
+        await until(
+          async () => (await pane.panel())?.toolbar === `${inMain.length + 1} tabs`,
+          'the count followed'
+        )
+        expect(fx.hits('/counter.html?from=phone')).toBeGreaterThanOrEqual(1)
+
+        await pane.tap({ panel: 'back' })
+        await until(async () => (await panelKind()) === null, 'back on the settings list')
+        expect(await pane.mountedPages()).not.toContain('browser')
+        // 那几页收起后行尾的数重新取过
+        await until(
+          async () => (await pane.settingsTabValue('browser')) === `${inMain.length + 1} tabs`,
+          'the row value refetched'
+        )
+      } finally {
+        await closeTab(blank)
+        if (third) await closeTab(third)
+      }
+    })
+
+    it('M-B2 a tab page shows title, address and a screenshot; Close returns to the list by itself and really closes the tab', async () => {
+      const pane = mobile()
+      const url = fx.localhostUrl('/counter.html?close=me')
+      const doomed = await openTabInMain(url)
+      await until(
+        async () => !!(await tabsInMain()).find((t) => t.id === doomed)?.title,
+        'the page to close loaded'
+      )
+      const title = (await tabsInMain()).find((t) => t.id === doomed)!.title
+      await openBrowserPages()
+      await until(
+        async () => (await pane.browserTabs()).find((r) => r.id === doomed)?.title === title,
+        'the row of the page to close'
+      )
+      await pane.tap({ browserTab: doomed })
+      await until(async () => (await panelKind()) === 'browser-tab', 'the tab page')
+      expect(await pane.panel()).toMatchObject({
+        kind: 'browser-tab',
+        title,
+        subtitle: url,
+        backLabel: en.browser.manager.title
+      })
+      expect(await pane.browserHistoryStack()).toEqual(['tabs', `tab:${doomed}`])
+      expect(await pane.browserLayers()).toEqual(['tabs', `tab:${doomed}`])
+      const shot = await until(async () => {
+        const p = await pane.browserTabPage()
+        return p && p.screenshot !== 'loading' ? p : null
+      }, 'the screenshot settled')
+      expect(shot).toMatchObject({
+        id: doomed,
+        screenshot: 'shown',
+        image: true,
+        agent: null,
+        openSession: false
+      })
+
+      await pane.tap({ browserTabAction: 'close' })
+      await until(async () => (await panelKind()) === 'browser-tabs', 'back on the list by itself')
+      await until(
+        async () => !(await pane.browserTabs()).some((r) => r.id === doomed),
+        'the row gone'
+      )
+      expect(await pane.browserGuard()).toBeNull()
+      expect(await pane.browserHistoryStack()).toEqual(['tabs'])
+      expect((await tabsInMain()).some((t) => t.id === doomed)).toBe(false)
+      openedTabs.delete(doomed)
+    })
+
+    it('M-B3 one history entry a level: four pages down, the back gesture pops one each; a reload leaves no pages and a stale entry does not reopen them', async () => {
+      const pane = mobile()
+      // web 客户端自己的网站（127.0.0.1：设备 cookie）一直在
+      const SITE = '127.0.0.1'
+      await openBrowserPages()
+      const length = (await pane.historyMarks()).length
+      await pane.tap({ browserList: 'settings' })
+      await until(async () => (await panelKind()) === 'browser-settings', 'browser settings')
+      expect(await pane.panel()).toMatchObject({
+        title: en.mobile.browserSettings,
+        backLabel: en.browser.manager.title
+      })
+      await pane.tap({ browserSettings: 'sites' })
+      await until(async () => (await panelKind()) === 'browser-sites', 'site data')
+      expect(await pane.panel()).toMatchObject({
+        title: en.browser.settingsPage.siteData,
+        backLabel: en.mobile.browserSettings
+      })
+      await until(
+        async () => (await pane.browserSites()).rows.some((r) => r.site === SITE),
+        'the site list'
+      )
+      await pane.tap({ browserSite: SITE })
+      await until(async () => (await panelKind()) === 'browser-site', 'one site')
+      expect(await pane.panel()).toMatchObject({
+        title: SITE,
+        backLabel: en.browser.settingsPage.siteData
+      })
+      expect(await pane.browserHistoryStack()).toEqual([
+        'tabs',
+        'settings',
+        'sites',
+        `site:${SITE}`
+      ])
+      expect(await pane.browserLayers()).toEqual(['tabs', 'settings', 'sites', `site:${SITE}`])
+      expect((await pane.historyMarks()).length).toBe(length + 3)
+
+      for (const kind of ['browser-sites', 'browser-settings', 'browser-tabs']) {
+        await page().eval(`(history.back(), true)`)
+        await until(async () => (await panelKind()) === kind, `back to ${kind}`)
+      }
+      expect(await pane.browserHistoryStack()).toEqual(['tabs'])
+      await page().eval(`(history.back(), true)`)
+      await until(async () => (await panelKind()) === null, 'the pages closed')
+      expect(await pane.mountedPages()).not.toContain('browser')
+      expect(await pane.browserHistoryStack()).toEqual([])
+      expect(await pane.activeTab()).toBe('settings')
+      expect(await pane.tabBarShown()).toBe(true)
+      expect(await pane.browserCoversTabBar()).toBe(false)
+      expect((await pane.settingsTabs()).length).toBe(13)
+
+      // 在第二层重载：壳重新挂上，那几页不在；退到还带着上一次加载的记号的那一条也不打开
+      await pane.tap({ settingsTab: 'browser' })
+      await until(async () => (await panelKind()) === 'browser-tabs', 'the tabs page again')
+      await pane.tap({ browserList: 'settings' })
+      await until(async () => (await panelKind()) === 'browser-settings', 'browser settings again')
+      await reload(page())
+      await until(() => mobile().shellPresent(), 'the shell after the reload')
+      await listSettled()
+      expect(await pane.mountedPages()).not.toContain('browser')
+      expect(await pane.browserHistoryStack()).toEqual([])
+      await page().eval(`(history.back(), true)`)
+      await until(
+        async () => (await pane.browserHistoryStack()).join() === 'tabs',
+        'on the entry the earlier load marked'
+      )
+      await sleep(300)
+      expect(await pane.mountedPages()).not.toContain('browser')
+      expect(await panelKind()).toBeNull()
+      expect(await pane.activeTab()).toBe('sessions')
+    })
+
+    it('M-B4 real site data: the count, the localhost row with its cookie, search by a host under it, embedded details, delete → the row is gone', async () => {
+      const pane = mobile()
+      const SITE = 'localhost'
+      const sitesInMain = (): Promise<string[]> =>
+        app.main.eval(`window.api.browserData.listSites().then((l) => l.map((s) => s.site))`)
+      await until(async () => (await sitesInMain()).includes(SITE), 'the fixture cookie stored')
+      await openBrowserPages()
+      await pane.tap({ browserList: 'settings' })
+      await until(async () => (await panelKind()) === 'browser-settings', 'browser settings')
+      const count = await until(() => pane.browserSiteCount(), 'the site count')
+      expect(count).toBe((await sitesInMain()).length)
+      expect(count).toBeGreaterThanOrEqual(1)
+
+      await pane.tap({ browserSettings: 'sites' })
+      await until(async () => (await panelKind()) === 'browser-sites', 'site data')
+      const row = await until(
+        async () => (await pane.browserSites()).rows.find((r) => r.site === SITE) ?? null,
+        'the localhost row'
+      )
+      expect(row.meta).toMatch(/ · 1 cookie$/)
+      await pane.typeInto('browserSitesSearch', `www.${SITE}`)
+      await until(
+        async () => (await pane.browserSites()).rows.map((r) => r.site).join() === SITE,
+        'only the localhost row matches a host under it'
+      )
+
+      await pane.tap({ browserSite: SITE })
+      await until(async () => (await panelKind()) === 'browser-site', 'the site page')
+      const detail = await until(async () => {
+        const d = await pane.browserSiteDetail()
+        return d && d.cookies.length > 0 ? d : null
+      }, 'the embedded site details')
+      expect(detail).toMatchObject({ site: SITE, ownBack: false, ownHeading: false, empty: false })
+      expect(detail.cookies).toContain(FIXTURE_COOKIE)
+
+      await pane.tap({ browserSiteData: 'delete' })
+      await pane.tap({ browserSiteData: 'confirm' })
+      await until(async () => (await pane.browserSiteDetail())?.empty === true, 'the empty state')
+      // 嵌着的详情删完不自己返回
+      expect(await panelKind()).toBe('browser-site')
+      expect(await sitesInMain()).not.toContain(SITE)
+
+      await pane.tap({ panel: 'back' })
+      await until(async () => (await panelKind()) === 'browser-sites', 'back on the site list')
+      // 回到最上面时重新取：那一行没了（搜索词还在，所以是「没有匹配」）
+      await until(async () => {
+        const list = await pane.browserSites()
+        return list.rows.length === 0 && list.empty === 'search'
+      }, 'the localhost row gone')
+      await pane.tap({ panel: 'back' })
+      await until(async () => (await panelKind()) === 'browser-settings', 'browser settings again')
+      await until(
+        async () => (await pane.browserSiteCount()) === count - 1,
+        'the site count refetched'
+      )
+    })
+
+    it('M-B5 a tab an agent uses names its session; View conversation opens it and back returns to the tab page; Reload asks first', async () => {
+      const pane = mobile()
+      const TITLE = 'MOB-browser'
+      const sid = await app.main.eval<string>(
+        `window.api.session.create(${JSON.stringify({ title: TITLE, projectId: null })}).then((s) => s.id)`
+      )
+      await app.main.eval(
+        `window.api.session.updateEnabledTools(${JSON.stringify({ id: sid, enabledTools: ['mcp:browser'] })})`
+      )
+      const events = eventRecorder(app.main)
+      await events.install()
+      const driver = browserDriver({ main: app.main, provider, events })
+      const url = fx.localhostUrl('/counter.html?agent=1')
+      const run = await driver.run(sid, [{ id: 'mob_open', tool: 'open_tab', args: { url } }])
+      expect(run.ends.mob_open?.isError, run.ends.mob_open?.result).toBe(false)
+      const agentTab = (
+        await until(
+          async () => (await tabsInMain()).find((t) => t.url === url) ?? null,
+          'the tab the agent opened'
+        )
+      ).id
+      openedTabs.add(agentTab)
+
+      await openBrowserPages()
+      const row = await until(
+        async () => (await pane.browserTabs()).find((r) => r.id === agentTab && r.agent) ?? null,
+        'the row of the agent tab'
+      )
+      expect(row.agent).toBe(sid)
+      expect(row.meta).toBe(`${fxHost()} · In use by “${TITLE}”`)
+
+      await pane.tap({ browserTab: agentTab })
+      const tabPage = await until(async () => {
+        const p = await pane.browserTabPage()
+        return p?.id === agentTab ? p : null
+      }, 'the agent tab page')
+      expect(tabPage.agent).toBe(`“${TITLE}” is using this page`)
+      expect(tabPage.openSession).toBe(true)
+
+      await pane.tap({ browserTabAction: 'open-session' })
+      await until(
+        async () => (await pane.chatOpen()) && (await pane.chatTitle()) === TITLE,
+        'the conversation of the session using the tab'
+      )
+      expect(await pane.mountedPages()).not.toContain('browser')
+      expect(await pane.historyMarks()).toMatchObject({ chat: true })
+
+      await backToList()
+      await until(
+        async () => (await pane.browserTabPage())?.id === agentTab,
+        'the same tab page again'
+      )
+      expect(await pane.browserLayers()).toEqual(['tabs', `tab:${agentTab}`])
+      expect(await pane.browserHistoryStack()).toEqual(['tabs', `tab:${agentTab}`])
+
+      // agent 用着的页：刷新先问一句；取消什么都不动
+      const hits = fx.hits('/counter.html?agent=1')
+      await pane.tap({ browserTabAction: 'reload' })
+      await until(async () => (await pane.browserGuard()) === 'reload', 'the reload question')
+      expect((await confirmPane(page()).snapshot()).title).toBe(
+        en.browser.manager.confirmReloadTitle
+      )
+      await confirmPane(page()).cancel()
+      await until(async () => (await pane.browserGuard()) === null, 'the question closed')
+      await sleep(500)
+      expect(fx.hits('/counter.html?agent=1')).toBe(hits)
+      expect((await pane.browserTabPage())?.id).toBe(agentTab)
+      expect((await tabsInMain()).some((t) => t.id === agentTab)).toBe(true)
+    })
   })
 })
 

@@ -31,7 +31,8 @@ import {
   Settings,
   FolderClosed,
   MessageSquare,
-  Bot
+  Bot,
+  Compass
 } from 'lucide-react'
 import { ChatHostProvider, getChatApi, useChatHost, useChatStore } from '@shuvix/chat-ui'
 import {
@@ -57,6 +58,8 @@ import { usePhoneFontSize } from './phoneFontSize'
 import { detailDepthOf } from './detailHistory'
 import { panelDepthOf } from './panelHistory'
 import { MobileProjectSettings } from './MobileProjectSettings'
+import { MobileBrowserPages } from './MobileBrowserPages'
+import { BROWSER_HISTORY_MARK, browserStackOf, canPushBrowserPage } from './browserHistory'
 import { PROJECT_PAGES, type MobileProjectPage } from './panelPure'
 import { useTrackingAdapter } from '../host/useTrackingAdapter'
 
@@ -89,6 +92,17 @@ function projectPageOf(state: unknown): { id: string; page: MobileProjectPage } 
   return PROJECT_PAGES.includes(value.page as MobileProjectPage)
     ? { id: value.id, page: value.page as MobileProjectPage }
     : null
+}
+/**
+ * 「浏览器」那一摞的条目还带着「是这一次加载压的」：重新加载之后，更早的条目上留着旧的那一摞，退回到它时不该
+ * 把浏览器页盖回来（那时外壳已经回到会话页）
+ */
+const BROWSER_LOAD_MARK = 'shuvixMobileBrowserLoad'
+const LOAD_ID = Math.random().toString(36).slice(2)
+/** 当前这条历史说的「浏览器」那一摞；不是这一次加载压的 → 空 */
+const browserStackHere = (): string[] => {
+  const state = window.history.state as Record<string, unknown> | null
+  return state?.[BROWSER_LOAD_MARK] === LOAD_ID ? browserStackOf(state) : []
 }
 /** 会话页第二层里「收件箱」那一页的 key（别的 key 是 ProjectSessionGroups 的组 key） */
 
@@ -170,6 +184,8 @@ function MobileShellBody(): React.JSX.Element {
     id: string
     page: MobileProjectPage
   } | null>(null)
+  /** 「浏览器」那一摞页面（从设置页的那一行推入，见 browserHistory.ts）；空 = 没开 */
+  const [browserStack, setBrowserStack] = useState<string[]>([])
   const { projects } = useProjects()
   const fontSize = usePhoneFontSize()
   const widgetApp = useWidgetStore((s) => s.foregroundApp)
@@ -258,7 +274,8 @@ function MobileShellBody(): React.JSX.Element {
       historyHas(WIDGET_HISTORY_MARK) ||
       historyHas(SCOPE_HISTORY_MARK) ||
       historyHas(LIBRARY_HISTORY_MARK) ||
-      historyHas(PROJECT_HISTORY_MARK)
+      historyHas(PROJECT_HISTORY_MARK) ||
+      historyHas(BROWSER_HISTORY_MARK)
     ) {
       window.history.replaceState(null, '')
     }
@@ -274,6 +291,13 @@ function MobileShellBody(): React.JSX.Element {
       }
       // 项目设置：退回到的那一条说的是哪一页就是哪一页（没有 = 收起）
       setProjectSettings(projectPageOf(window.history.state))
+      // 「浏览器」那一摞：同上（摞没变就不换数组，免得那几页白画一遍）
+      const nextBrowser = browserStackHere()
+      setBrowserStack((stack) =>
+        stack.length === nextBrowser.length && stack.every((page, i) => page === nextBrowser[i])
+          ? stack
+          : nextBrowser
+      )
       // 资料库：退回到的那一条说它在第几层，比此刻浅就收到那一层
       const libraryDepth = historyNumber(LIBRARY_HISTORY_MARK)
       if (libraryDepth < libraryDepthRef.current) {
@@ -314,6 +338,28 @@ function MobileShellBody(): React.JSX.Element {
     (id: string): void => pushProjectSettings(id, 'index'),
     [pushProjectSettings]
   )
+
+  /** 「浏览器」往里进一层：压一条历史（带着下面那几层的记号）。这一摞里放不下的页（见 canPushBrowserPage）不推 */
+  const pushBrowserPage = useCallback((page: string): void => {
+    const here = browserStackHere()
+    if (!canPushBrowserPage(here, page)) return
+    const next = [...here, page]
+    window.history.pushState(
+      {
+        ...((window.history.state as Record<string, unknown> | null) ?? {}),
+        [BROWSER_HISTORY_MARK]: next,
+        [BROWSER_LOAD_MARK]: LOAD_ID
+      },
+      ''
+    )
+    setBrowserStack(next)
+  }, [])
+  const openBrowser = useCallback((): void => pushBrowserPage('tabs'), [pushBrowserPage])
+  /** 「浏览器」里的返回键：退掉那一层压的历史（popstate 再收起一层），与返回手势同一条路 */
+  const backInBrowser = useCallback((): void => {
+    if (browserStackHere().length > 0) window.history.back()
+    else setBrowserStack([])
+  }, [])
 
   // 小组件：打开（卡片）压一条历史；顶栏的返回（goHome）退掉它；返回手势退掉它 → 回卡片列表
   useEffect(() => {
@@ -632,7 +678,19 @@ function MobileShellBody(): React.JSX.Element {
               <SettingsPanel
                 stacked
                 onStackedDepthChange={setSettingsDepth}
+                // 「浏览器」那几页收起时重新取一遍行尾的数（里面可能开过、关过标签页）
+                stackedValuesEpoch={browserStack.length > 0 ? 1 : 0}
                 extraTabs={[
+                  {
+                    // 那台电脑上的内置浏览器：点了不进分区，整屏推入它自己的一摞页面
+                    id: 'browser',
+                    after: 'mcp',
+                    group: 'capabilities',
+                    label: t('browser.manager.title'),
+                    icon: <Compass size={14} />,
+                    content: null,
+                    onOpen: openBrowser
+                  },
                   {
                     id: 'agents',
                     // 与监视器、已归档同一张卡片
@@ -731,6 +789,23 @@ function MobileShellBody(): React.JSX.Element {
               onOpenPage={(page) => pushProjectSettings(projectSettings.id, page)}
               onBack={backFromProjectSettings}
               onClosed={closeProjectSettings}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 浏览器：整屏推入（盖住设置页与标签栏）。字号是这几页自己定的，不按比例放大 */}
+      {browserStack.length > 0 && !chatOpen && (
+        <div
+          data-mobile-page="browser"
+          className="absolute inset-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-bg-primary"
+        >
+          <div className="relative h-full">
+            <MobileBrowserPages
+              stack={browserStack}
+              onPush={pushBrowserPage}
+              onBack={backInBrowser}
+              onOpenSession={openFromInbox}
             />
           </div>
         </div>

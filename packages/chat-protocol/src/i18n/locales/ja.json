@@ -2048,7 +2048,8 @@
     "projectPromptSet": "入力済み",
     "projectPromptUnset": "未入力",
     "projectPromptHint": "このプロジェクトのすべての会話のシステムプロンプトに追加されます。空欄なら追加しません。変更は自動で保存されます。",
-    "projectDefaults": "新しい会話の既定値"
+    "projectDefaults": "新しい会話の既定値",
+    "browserSettings": "ブラウザ設定"
   },
   "daily": {
     "title": "{{day}} の日報",

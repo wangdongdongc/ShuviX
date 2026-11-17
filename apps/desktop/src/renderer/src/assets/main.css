@@ -82,6 +82,27 @@
 [data-mobile-shell] [data-mobile-scale] .text-sm {
   font-size: var(--app-font-size, 14px);
 }
+/*
+ * 收件箱的行与提问卡片的标题（手机）：与会话列表的行同一档 —— 标题 16px、预览 14px、时间 13px，上下各留 8px。桌面那一行的标题
+ * 行高写死 18px，只按比例放大字号的话字挤在一起、整行也比会话列表矮一截。行首行尾的图标跟着新的中线下移。
+ */
+[data-mobile-shell] [data-mobile-inbox] [data-inbox-line-open] {
+  padding-block: 8px;
+}
+[data-mobile-shell] [data-mobile-inbox] :is([data-inbox-line-title], [data-inbox-card-title]) {
+  font-size: 16px;
+  line-height: 22px;
+}
+[data-mobile-shell] [data-mobile-inbox] [data-inbox-line-preview] {
+  font-size: 14px;
+  line-height: 19px;
+}
+[data-mobile-shell] [data-mobile-inbox] [data-inbox-line-meta] {
+  font-size: 13px;
+}
+[data-mobile-shell] [data-mobile-inbox] [data-inbox-line-slot] {
+  margin-top: 4px;
+}
 /* 长按出来的 DOM 菜单（ContextMenuPopup，portal 在 body 上、不在壳里）：手机布局开着时与侧栏的行同一档，
    40px 一项、16px 字 —— 桌面应用用原生菜单，碰不到这里 */
 body:has([data-mobile-shell]) [data-context-menu] {

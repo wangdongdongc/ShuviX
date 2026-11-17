@@ -2048,7 +2048,8 @@
     "projectPromptSet": "已填写",
     "projectPromptUnset": "未填写",
     "projectPromptHint": "会加进这个项目每个会话的系统提示词；留空就不加。改动自动保存。",
-    "projectDefaults": "新会话的默认值"
+    "projectDefaults": "新会话的默认值",
+    "browserSettings": "浏览器设置"
   },
   "daily": {
     "title": "{{day}} 日报",

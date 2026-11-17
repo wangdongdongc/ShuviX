@@ -298,7 +298,10 @@ export function InboxAskCard({
             className="flex min-w-0 flex-1 items-center gap-2.5 py-1 text-left"
           >
             <AskGlyph request={request} />
-            <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-primary">
+            <span
+              data-inbox-card-title=""
+              className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-primary"
+            >
               <RedactedText text={session.title} />
             </span>
             <span className="shrink-0 text-[12px] tabular-nums text-text-tertiary">{waited}</span>

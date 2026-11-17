@@ -716,3 +716,75 @@ describe('别的设备看的详情：Cookie 的值没给（SDD-H1 / SDD-H2）', 
     expect(text()).not.toContain(HIDDEN)
   })
 })
+
+/**
+ * `embedded`（2026-11-17）：画在一张自带返回键与标题的页里（手机布局的「一个网站」那一页）—— 这里不再画自己的
+ * 返回键与网站名，别的原样。
+ */
+describe('画在别人的页里（embedded，SD-E1..E5）', () => {
+  async function mountEmbedded(site = 'github.com', embedded = true): Promise<void> {
+    m = await mountInto(
+      BrowserSiteDetails,
+      embedded ? { site, onBack, embedded } : { site, onBack }
+    )
+    await flush()
+  }
+  const noOwnHeader = (): void => {
+    expect($('[data-site-details-back]')).toBeNull()
+    expect($('[data-site-details] h2')).toBeNull()
+  }
+
+  it('SD-E1 有数据：没有返回键、没有网站名；那一行汇总、各类、来源、Cookie 与删除照有', async () => {
+    await mountEmbedded()
+    noOwnHeader()
+    expect(root()?.getAttribute('data-site-details')).toBe('github.com')
+    expect(text()).toContain('3 KB · 4 cookies · 2 origins')
+    expect(categories().length).toBeGreaterThan(0)
+    expect(originRows()).toEqual(['https://github.com', 'https://www.github.com'])
+    expect(cookieKeys()).toHaveLength(4)
+    expect(del('site').textContent).toBe('Delete all data for this site')
+    expect(del('cookies')).not.toBeNull()
+  })
+
+  it('SD-E2 读不到：读不到那句话，没有返回键、没有网站名', async () => {
+    api.browserData.siteDetails.mockImplementation(async () => {
+      throw new Error('refused')
+    })
+    await mountEmbedded()
+    expect($('[data-site-details-failed]')).not.toBeNull()
+    noOwnHeader()
+  })
+
+  it('SD-E3 没有数据：空态那句话，没有返回键、没有网站名', async () => {
+    await mountEmbedded('nothing.test')
+    expect($('[data-site-details-empty]')?.textContent).toBe('This site has no stored data.')
+    noOwnHeader()
+  })
+
+  it.each([
+    ['有数据', 'github.com', false],
+    ['没有数据', 'nothing.test', false],
+    ['读不到', 'github.com', true]
+  ])('SD-E4 不给 embedded（缺省）：%s 时返回键与网站名都在', async (_name, site, fails) => {
+    if (fails) {
+      api.browserData.siteDetails.mockImplementation(async () => {
+        throw new Error('refused')
+      })
+    }
+    await mountEmbedded(site, false)
+    expect($('[data-site-details-back]')).not.toBeNull()
+    expect($('[data-site-details] h2')?.textContent).toBe(site)
+  })
+
+  it('SD-E5 删掉整个网站的数据：不调 onBack，这一页留着、显示空态', async () => {
+    await mountEmbedded()
+    click(del('site'))
+    api.browserData.siteDetails.mockImplementation(async () => null)
+    click(confirmBtn('site')!)
+    await flush()
+    expect(api.browserData.clearSite.mock.calls).toEqual([['github.com']])
+    expect(onBack).not.toHaveBeenCalled()
+    expect($('[data-site-details-empty]')).not.toBeNull()
+    noOwnHeader()
+  })
+})

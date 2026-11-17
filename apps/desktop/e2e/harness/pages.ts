@@ -13602,6 +13602,18 @@ export type WebMobileTouchTarget =
   | { project: 'name' | 'archive' }
   /** 开着的 DOM 右键菜单（`[role="menu"]`）里文字为它的那一项 —— 真点（`pickDomMenu` 是 el.click()，没有按下） */
   | { domMenuItem: string }
+  /** 「浏览器」标签页列表里的一行（`data-mobile-browser-tab=<标签页 id>`） */
+  | { browserTab: string }
+  /** 标签页列表：开新标签页那一行的「打开」、进「浏览器设置」的那一行 */
+  | { browserList: 'open' | 'settings' }
+  /** 一个标签页那一页上的动作：查看对话 / 刷新 / 关闭 */
+  | { browserTabAction: 'open-session' | 'reload' | 'close' }
+  /** 浏览器设置里进「网站数据」的那一行 */
+  | { browserSettings: 'sites' }
+  /** 网站数据列表里的一行（`data-mobile-browser-site=<网站>`） */
+  | { browserSite: string }
+  /** 一个网站那一页：「删除全部数据」与它的确认 */
+  | { browserSiteData: 'delete' | 'confirm' }
 
 /** 手机布局里一个标签按钮 */
 export interface WebMobileTabShot {
@@ -13806,6 +13818,31 @@ export interface FilesPageShot {
   searchFontSize: string | null
   /** 那一页与整页有没有横向溢出 */
   overflowX: boolean
+}
+
+/** 手机「浏览器」标签页列表里的一行 */
+export interface MobileBrowserTabShot {
+  id: string
+  title: string
+  /** 第二排（网站 · 状态）；没有 → null */
+  meta: string | null
+  crashed: boolean
+  /** `data-tab-agent`：用着它的会话 id；没有 → null */
+  agent: string | null
+}
+
+/** 手机「浏览器」里一个标签页那一页 */
+export interface MobileBrowserTabPageShot {
+  /** `data-mobile-browser-tab-detail` 的标签页 id */
+  id: string
+  /** 截图卡片的状态（`data-mobile-browser-screenshot`）；内部页面没有 → null */
+  screenshot: string | null
+  /** 截图那张图的 src 是不是 data: 地址 */
+  image: boolean
+  /** 「谁在用」那一行的字；没有 → null */
+  agent: string | null
+  /** 有没有「查看对话」 */
+  openSession: boolean
 }
 
 /** 最上面那张推入页（`data-mobile-panel`）的骨架 */
@@ -14015,7 +14052,43 @@ export interface WebMobilePane {
   /**
    * 往推入页的一格里打字（可信输入）：先聚焦、全选，再插入 —— 原来的字被换掉。`filesSearch` 认最上面那一层
    */
-  typeInto(field: 'filesSearch' | 'projectName' | 'projectPrompt', text: string): Promise<void>
+  typeInto(
+    field: 'filesSearch' | 'projectName' | 'projectPrompt' | 'browserNewTab' | 'browserSitesSearch',
+    text: string
+  ): Promise<void>
+  /**
+   * 设置分区列表里一行行尾的词或数（`data-settings-tab-value`）；那一行没有值 → null
+   */
+  settingsTabValue(id: string): Promise<string | null>
+  /** 此刻这条历史上「浏览器」那一摞（`shuvixMobileBrowser`）；没有 → [] */
+  browserHistoryStack(): Promise<string[]>
+  /** 标签栏正中那一点此刻是不是被「浏览器」那几页（`data-mobile-page="browser"`）盖着 */
+  browserCoversTabBar(): Promise<boolean>
+  /** 「浏览器」那一摞挂着的层（`data-mobile-browser-layer` 的值，DOM 序）；没开 → [] */
+  browserLayers(): Promise<string[]>
+  /** 标签页列表（最上面那张推入页）里的行，DOM 序 */
+  browserTabs(): Promise<MobileBrowserTabShot[]>
+  /** 开新标签页那一格里的字；不在列表页 → null */
+  browserNewTabValue(): Promise<string | null>
+  /** 一个标签页那一页（最上面那张）；不是它 → null */
+  browserTabPage(): Promise<MobileBrowserTabPageShot | null>
+  /** agent 用着的页上先问的那一句（`data-browser-tab-agent-confirm` 的值：reload / close / navigate）；没开 → null */
+  browserGuard(): Promise<string | null>
+  /** 浏览器设置那一页「网站数据」行尾的数；没写 → null */
+  browserSiteCount(): Promise<number | null>
+  /** 网站数据列表里的行（DOM 序）；`empty` = 空态是哪一种（没有 → null） */
+  browserSites(): Promise<{ rows: Array<{ site: string; meta: string }>; empty: string | null }>
+  /**
+   * 一个网站那一页（`data-mobile-browser-site-detail`）里嵌着的站点详情：它自己的返回键 / 网站名标题画没画、
+   * 是不是空态、Cookie 的名字；不在 → null
+   */
+  browserSiteDetail(): Promise<{
+    site: string
+    ownBack: boolean
+    ownHeading: boolean
+    empty: boolean
+    cookies: string[]
+  } | null>
   /** 让焦点离开此刻聚焦的那一格（失焦即存的那几格） */
   blurActive(): Promise<void>
   /** 新建会话抽屉里的各项（DOM 序；id '' = 临时会话） */
@@ -14207,7 +14280,9 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
   const PANEL_FIELD = {
     filesSearch: `(${TOP_PANEL})?.querySelector('[data-mobile-files-search]')`,
     projectName: `(${TOP_PANEL})?.querySelector('[data-mobile-project-name]')`,
-    projectPrompt: `(${TOP_PANEL})?.querySelector('[data-mobile-project-prompt]')`
+    projectPrompt: `(${TOP_PANEL})?.querySelector('[data-mobile-project-prompt]')`,
+    browserNewTab: `(${TOP_PANEL})?.querySelector('[data-mobile-browser-new-tab-input]')`,
+    browserSitesSearch: `(${TOP_PANEL})?.querySelector('[data-mobile-browser-sites-search]')`
   }
   const STACKED = `document.querySelector('[data-settings-stacked]')`
   const STACKED_LIST = `${STACKED}?.querySelector('[data-stacked-list]')`
@@ -14366,6 +14441,18 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `(${TOP_PANEL})?.querySelector('[data-mobile-project-${target.project}]')`
     if ('domMenuItem' in target)
       return `[...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(target.domMenuItem)})`
+    if ('browserTab' in target)
+      return `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-browser-tab]') ?? [])].find((r) => r.getAttribute('data-mobile-browser-tab') === ${JSON.stringify(target.browserTab)})`
+    if ('browserList' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-browser-${target.browserList === 'open' ? 'new-tab-open' : 'open-settings'}]')`
+    if ('browserTabAction' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-browser-tab-${target.browserTabAction}]')`
+    if ('browserSettings' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-mobile-browser-open-sites]')`
+    if ('browserSite' in target)
+      return `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-browser-site]') ?? [])].find((r) => r.getAttribute('data-mobile-browser-site') === ${JSON.stringify(target.browserSite)})`
+    if ('browserSiteData' in target)
+      return `(${TOP_PANEL})?.querySelector('[data-site-data-${target.browserSiteData}="site"]')`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
   }
 
@@ -14838,6 +14925,94 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     blurActive: async () => {
       await client.eval(`(document.activeElement?.blur?.(), true)`)
     },
+    settingsTabValue: (id) =>
+      client.eval<string | null>(`(() => {
+        const value = ${STACKED}?.querySelector('[data-settings-tab=${JSON.stringify(id)}] [data-settings-tab-value]')
+        return value ? (value.textContent ?? '').trim() : null
+      })()`),
+    browserHistoryStack: () =>
+      client.eval<string[]>(
+        `Array.isArray(history.state?.shuvixMobileBrowser) ? history.state.shuvixMobileBrowser : []`
+      ),
+    browserCoversTabBar: () =>
+      client.eval<boolean>(`(() => {
+        const nav = document.querySelector('[data-mobile-tabbar]')
+        if (!nav) return false
+        const r = nav.getBoundingClientRect()
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        return !!at?.closest('[data-mobile-page="browser"]')
+      })()`),
+    browserLayers: () =>
+      client.eval<string[]>(
+        `[...document.querySelectorAll('[data-mobile-browser-layer]')].map((l) => l.getAttribute('data-mobile-browser-layer') ?? '')`
+      ),
+    browserTabs: () =>
+      client.eval<MobileBrowserTabShot[]>(
+        `[...((${TOP_PANEL})?.querySelectorAll('[data-mobile-browser-tab]') ?? [])].map((r) => {
+          const meta = r.querySelector('[data-tab-meta]')
+          return {
+            id: r.getAttribute('data-mobile-browser-tab') ?? '',
+            title: (r.querySelector('span.block')?.textContent ?? '').trim(),
+            meta: meta ? (meta.textContent ?? '').trim() : null,
+            crashed: r.getAttribute('data-tab-crashed') === 'true',
+            agent: r.getAttribute('data-tab-agent')
+          }
+        })`
+      ),
+    browserNewTabValue: () =>
+      client.eval<string | null>(`(${PANEL_FIELD.browserNewTab})?.value ?? null`),
+    browserTabPage: () =>
+      client.eval<MobileBrowserTabPageShot | null>(`(() => {
+        const detail = (${TOP_PANEL})?.querySelector('[data-mobile-browser-tab-detail]')
+        if (!detail) return null
+        const shot = detail.querySelector('[data-mobile-browser-screenshot]')
+        const agent = detail.querySelector('[data-mobile-browser-tab-agent] span.flex-1')
+        return {
+          id: detail.getAttribute('data-mobile-browser-tab-detail') ?? '',
+          screenshot: shot ? shot.getAttribute('data-mobile-browser-screenshot') : null,
+          image: (shot?.querySelector('[data-mobile-browser-screenshot-image]')?.getAttribute('src') ?? '').startsWith('data:'),
+          agent: agent ? (agent.textContent ?? '').trim() : null,
+          openSession: !!detail.querySelector('[data-mobile-browser-tab-open-session]')
+        }
+      })()`),
+    browserGuard: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-browser-tab-agent-confirm]')?.getAttribute('data-browser-tab-agent-confirm') ?? null`
+      ),
+    browserSiteCount: () =>
+      client.eval<number | null>(`(() => {
+        const count = (${TOP_PANEL})?.querySelector('[data-mobile-browser-site-count]')
+        return count ? Number(count.textContent) : null
+      })()`),
+    browserSites: () =>
+      client.eval<{ rows: Array<{ site: string; meta: string }>; empty: string | null }>(`(() => {
+        const p = ${TOP_PANEL}
+        return {
+          rows: [...(p?.querySelectorAll('[data-mobile-browser-site]') ?? [])].map((r) => ({
+            site: r.getAttribute('data-mobile-browser-site') ?? '',
+            meta: (r.querySelector('[data-site-meta]')?.textContent ?? '').trim()
+          })),
+          empty: p?.querySelector('[data-mobile-browser-sites-empty]')?.getAttribute('data-mobile-browser-sites-empty') ?? null
+        }
+      })()`),
+    browserSiteDetail: () =>
+      client.eval<{
+        site: string
+        ownBack: boolean
+        ownHeading: boolean
+        empty: boolean
+        cookies: string[]
+      } | null>(`(() => {
+        const root = (${TOP_PANEL})?.querySelector('[data-mobile-browser-site-detail] [data-site-details]')
+        if (!root) return null
+        return {
+          site: root.getAttribute('data-site-details') ?? '',
+          ownBack: !!root.querySelector('[data-site-details-back]'),
+          ownHeading: !!root.querySelector('h2'),
+          empty: !!root.querySelector('[data-site-details-empty]'),
+          cookies: [...root.querySelectorAll('[data-site-cookie]')].map((c) => c.getAttribute('data-site-cookie') ?? '')
+        }
+      })()`),
     newChatTargets: () =>
       client.eval<Array<{ id: string; label: string }>>(
         `[...document.querySelectorAll('[data-mobile-new-chat-target]')].map((b) => ({

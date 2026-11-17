@@ -77,23 +77,28 @@ export function InboxLine({
       } ${indent ? 'pl-[30px]' : 'pl-2'}`}
     >
       {/* 行首、行尾与上层那一行对齐：上层是 6px 内边距 + 18px 行高，中线在 15px */}
-      <span className={LINE_SLOT}>{leading}</span>
+      <span data-inbox-line-slot="" className={LINE_SLOT}>
+        {leading}
+      </span>
       <div className="flex min-w-0 flex-1 flex-col">
         <button
           type="button"
           {...openAttrs}
+          data-inbox-line-open=""
           onClick={onOpen}
           title={openTitle}
           className="flex min-w-0 flex-col py-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <span className="flex min-w-0 items-center gap-2">
             <span
+              data-inbox-line-title=""
               className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${titleClassName}`}
             >
               {title}
             </span>
             {meta !== undefined && meta !== null && (
               <span
+                data-inbox-line-meta=""
                 className={`shrink-0 text-[12px] tabular-nums text-text-tertiary ${
                   hoverMeta ? 'group-hover:invisible group-focus-within:invisible' : ''
                 }`}
@@ -103,7 +108,10 @@ export function InboxLine({
             )}
           </span>
           {hasPreview && (
-            <span className="mt-px min-w-0 truncate text-[12px] leading-4 text-text-secondary">
+            <span
+              data-inbox-line-preview=""
+              className="mt-px min-w-0 truncate text-[12px] leading-4 text-text-secondary"
+            >
               {preview}
             </span>
           )}
@@ -120,7 +128,11 @@ export function InboxLine({
           {hoverMeta}
         </span>
       )}
-      {trailing && <span className={LINE_SLOT}>{trailing}</span>}
+      {trailing && (
+        <span data-inbox-line-slot="" className={LINE_SLOT}>
+          {trailing}
+        </span>
+      )}
     </div>
   )
 }

@@ -2048,7 +2048,8 @@
     "projectPromptSet": "Set",
     "projectPromptUnset": "Not set",
     "projectPromptHint": "Added to the system prompt of every chat in this project; leave it empty to add nothing. Changes are saved automatically.",
-    "projectDefaults": "Defaults for new chats"
+    "projectDefaults": "Defaults for new chats",
+    "browserSettings": "Browser settings"
   },
   "daily": {
     "title": "Daily report · {{day}}",

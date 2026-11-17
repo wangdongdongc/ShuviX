@@ -30,6 +30,11 @@ export interface SettingsTab {
   group?: string
   /** 叠放布局的分区列表里行尾的一个词或数（几家提供商、开没开）；不给不画 */
   value?: ReactNode
+  /**
+   * 叠放布局的分区列表里点这一行不进分区，而是做这件事（宿主自己推入一摞整屏页面，比如手机上的「浏览器」）。
+   * 给了它，`content` 不会被画出来。桌面的左侧导航不看它
+   */
+  onOpen?: () => void
 }
 
 export interface SettingsContainerProps {
@@ -111,7 +116,7 @@ export function SettingsContainer({
                       key={tab.id}
                       type="button"
                       data-settings-tab={tab.id}
-                      onClick={() => onTabChange(tab.id)}
+                      onClick={() => (tab.onOpen ? tab.onOpen() : onTabChange(tab.id))}
                       className="flex w-full items-stretch gap-3 pl-4 text-left text-[16px] text-text-primary active:bg-bg-hover"
                     >
                       <span className="flex flex-shrink-0 items-center text-accent [&>svg]:h-[19px] [&>svg]:w-[19px]">
