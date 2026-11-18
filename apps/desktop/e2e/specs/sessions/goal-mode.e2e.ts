@@ -12,6 +12,9 @@
  *   G-2 放行：原会话汇报 → 管理员被叫回来（请求里是 `<session …>` 完成通知，让它用 `wait-for-sessions` 去取）→ 它取回
  *       汇报（工具结果里是原会话的原话）→ 说出结论；管理员四个请求、原会话两个，没有别的 agent
  *   G-3 被拒的几种（IPC）：在管理员会话里再设目标；原会话正在跑；原会话的管理员还在忙。都不留下新会话
+ *   G-5 原会话把活转给自己的子会话、结束这一轮（交回的只是「已转交」）：管理员被完成通知叫回来，调
+ *       `wait-for-next-turn` 挂住 —— 原会话此刻是空闲的（`wait-for-sessions` 会立刻返回）；子会话跑完把原会话叫起来、
+ *       它汇报、那一轮结束 → 管理员的等待交回这份汇报 → 管理员收尾。那一轮不是管理员发起的，没有任何通知会叫它
  *   G-4 管理员第一轮先 `ask`：卡片就在界面切过去的那条对话里等人；答了 → 同一轮接着跑、把任务发给原会话 → 汇报 → 收尾
  *
  * 请求按内容认领：管理员的请求历史里有 `<goal-set id=`（设目标那条消息的说明），原会话的没有。会话标题都不是缺省标题：
@@ -47,17 +50,24 @@ import {
 } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
-const TITLES = { loop: 'Goal loop', refuse: 'Goal refuse', asks: 'Goal asks' }
+const TITLES = {
+  loop: 'Goal loop',
+  refuse: 'Goal refuse',
+  asks: 'Goal asks',
+  handoff: 'Goal handoff'
+}
 /** 管理员会话的标题：「Goal · <原会话标题>」 */
 const MANAGER_TITLES = {
   loop: 'Goal · Goal loop',
   refuse: 'Goal · Goal refuse',
-  asks: 'Goal · Goal asks'
+  asks: 'Goal · Goal asks',
+  handoff: 'Goal · Goal handoff'
 }
 const OBJECTIVES = {
   loop: 'G1: write notes.txt in the project with the word READY',
   refuse: 'G3: keep the manager busy for a while',
-  asks: 'G4: speed up the build'
+  asks: 'G4: speed up the build',
+  handoff: 'G5: build the report in parts'
 }
 const BEFORE_GOAL = 'Remember: the marker colour is BLUE'
 const TASK =
@@ -84,13 +94,16 @@ let sidebar: SidebarPane
 let goals: GoalPane
 let asks: InlineAskPane
 let projDir = ''
-const sids: Record<keyof typeof TITLES, string> = { loop: '', refuse: '', asks: '' }
+const sids: Record<keyof typeof TITLES, string> = { loop: '', refuse: '', asks: '', handoff: '' }
 
 // ─── 请求认领 ───
 
 /** 管理员的请求：历史里有设目标那条消息的说明 */
 const isManager = (req: FakeRequest): boolean => req.raw.includes('<goal-set id=')
-const isWorker = (req: FakeRequest): boolean => !isManager(req)
+/** 原会话自己开的子会话（G-5）：它收到的消息带「父会话发来」的发送方说明 */
+const isWorkerSub = (req: FakeRequest): boolean =>
+  !isManager(req) && req.lastUserFullText.includes('[Sent by your parent session')
+const isWorker = (req: FakeRequest): boolean => !isManager(req) && !isWorkerSub(req)
 
 const managerTurn = (turn: Omit<FakeTurn, 'when'>): FakeTurn => ({
   usage: { prompt: 80, completion: 5 },
@@ -412,4 +425,95 @@ describe('管理员先问人', () => {
     expect(managerReqs[3]!.lastUserText).toContain(`<session id="${sids.asks}"`)
     expect(managerReqs[4]!.raw).toContain(WORKER_REPORT)
   }, 120_000)
+})
+
+describe('原会话转交给自己的子会话', () => {
+  it('G-5 原会话这一轮只交回「已转交」：管理员用 wait-for-next-turn 挂住，等到子会话跑完、原会话下一轮的汇报', async () => {
+    provider.reset()
+    // 原会话要能被自己子会话的完成通知叫起来（这条会话不是管理员：看全局开关）
+    await app.main.eval(`window.api.settings.set({ key: 'session.autoResume', value: 'true' })`)
+    const SUB_TASK = 'Build part A of the report and say PART-A-DONE.'
+    const HANDED = 'Handed part A to my sub-session; waiting for it.'
+    const WORKER_FINAL = 'Report finished: part A came back as PART-A-DONE.'
+    try {
+      provider.script(
+        handOff(sids.handoff, TASK),
+        managerTurn({ text: MANAGER_WAITING }),
+        // 原会话：开子会话、把活发过去、交回「已转交」—— 这一轮就此结束
+        workerTurn({
+          toolCalls: [
+            {
+              id: 'call_sub_create',
+              name: 'session',
+              args: JSON.stringify({ action: 'create-sub-session', title: 'Part A' })
+            }
+          ]
+        }),
+        workerTurn({
+          toolCalls: [
+            {
+              id: 'call_sub_prompt',
+              name: 'session',
+              args: JSON.stringify({ action: 'prompt-session', message: SUB_TASK })
+            }
+          ]
+        }),
+        workerTurn({ text: HANDED }),
+        // 子会话：挂住，等管理员挂上等待再放行
+        {
+          usage: { prompt: 80, completion: 5 },
+          text: 'PART-A-DONE',
+          holdMs: 60_000,
+          when: isWorkerSub
+        },
+        // 管理员被完成通知叫回来：等原会话的下一轮
+        managerTurn({
+          toolCalls: [
+            {
+              id: 'call_next_turn',
+              name: 'session',
+              args: JSON.stringify({ action: 'wait-for-next-turn', session_id: sids.handoff })
+            }
+          ]
+        }),
+        // 原会话被子会话的完成通知叫起来，汇报
+        workerTurn({ text: WORKER_FINAL }),
+        managerTurn({ text: MANAGER_FINAL })
+      )
+      await openSession(TITLES.handoff)
+      await setGoalInComposer(OBJECTIVES.handoff)
+
+      // 管理员第三个请求（被叫回来的那一轮）发出、它调了 wait-for-next-turn；此刻子会话还挂着
+      await until(() => provider.holding(), 'sub-session turn held', 30_000)
+      await until(
+        () => provider.requests().filter(isManager).length >= 3,
+        'manager woken by the first completion notice',
+        30_000
+      )
+      const woken = provider.requests().filter(isManager)[2]!
+      expect(woken.lastUserText).toContain(`<session id="${sids.handoff}"`)
+      // 管理员正挂在等待上：没有第四个请求
+      await sleep(800)
+      expect(provider.requests().filter(isManager)).toHaveLength(3)
+
+      provider.release()
+      await waitReply(MANAGER_FINAL, 60_000)
+      await waitRowSettled(MANAGER_TITLES.handoff)
+
+      const reqs = provider.requests()
+      const managerReqs = reqs.filter(isManager)
+      const workerReqs = reqs.filter(isWorker)
+      expect(reqs.filter(isWorkerSub)).toHaveLength(1)
+      expect(reqs.filter(isWorkerSub)[0]!.lastUserText).toBe(SUB_TASK)
+      // 原会话：建子会话、派活、交回「已转交」、被叫起来汇报
+      expect(workerReqs).toHaveLength(4)
+      expect(workerReqs[3]!.lastUserText).toContain('<session id=')
+      // 管理员：设目标 → 回执 → 被叫回来 → 等到的那一轮（工具结果里是原会话下一轮的汇报）
+      expect(managerReqs).toHaveLength(4)
+      expect(managerReqs[3]!.raw).toContain(WORKER_FINAL)
+      expect(managerReqs[3]!.raw).toContain('<sessions status=\\"settled\\">')
+    } finally {
+      await app.main.eval(`window.api.settings.set({ key: 'session.autoResume', value: 'false' })`)
+    }
+  }, 150_000)
 })

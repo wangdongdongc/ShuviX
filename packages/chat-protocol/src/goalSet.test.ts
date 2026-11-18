@@ -129,10 +129,11 @@ describe('GSM-4 withoutGoalSetNote（侧车没解析到时的兜底）', () => {
 })
 
 describe('GSM-5 管理员说明', () => {
-  it('写着干活的会话的 id 与标题：介绍它的那一句、派活的那一步各带一次 id', () => {
+  it('写着干活的会话的 id 与标题：介绍它的那一句、派活的那一步、等它下一轮的那一步各带一次 id', () => {
     expect(NOTE).toContain(`("${WORKER.title}", session id ${WORKER.id})`)
     expect(NOTE).toContain(`action \`prompt-session\`, session_id ${WORKER.id}`)
-    expect(NOTE.split(WORKER.id)).toHaveLength(3)
+    expect(NOTE).toContain(`action \`wait-for-next-turn\` and session_id ${WORKER.id}`)
+    expect(NOTE.split(WORKER.id)).toHaveLength(4)
     // 换一条会话，说明跟着换
     const other = goalManagerNote({ id: 'sess-other', title: 'Another one' })
     expect(other).toContain('("Another one", session id sess-other)')

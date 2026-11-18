@@ -1328,6 +1328,160 @@ describe('wait —— 替掉 sleep 轮询的那个原语', () => {
   })
 })
 
+/**
+ * NT-*：`wait-for-next-turn`（2026-11-18 用户裁决）—— 阻塞到那条会话**下一轮**结束，对空闲的会话也挂住。
+ * 起因：工作会话把活转给自己的子会话后结束了这一轮，wait 对空闲的会话立刻返回，之后接着干的那一轮谁也等不到。
+ * 一轮结束由会话信号报来（main 入口 → `onRunEnded`），停下来问由询问钩子报来（`onAskRaised`）。
+ */
+describe('NT waitForFollowingTurn —— 等那条会话的下一轮', () => {
+  const settledWithin = async <T>(p: Promise<T>, ms: number): Promise<boolean> => {
+    let done = false
+    void p.then(() => (done = true))
+    await new Promise((r) => setTimeout(r, ms))
+    return done
+  }
+
+  beforeEach(() => {
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+  })
+
+  it('NT-1 对方空闲：不立刻返回（wait 会）；它下一轮结束才交回那一轮的答复', async () => {
+    const idle = fakeAgent()
+    mocks.getAgentSession.mockReturnValue(idle)
+    const pending = runner.waitForFollowingTurn({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 30
+    })
+    expect(await settledWithin(pending, 300)).toBe(false)
+    // 它自己的后台通知把它叫起来、跑了一轮
+    idle.lastAnswer.mockResolvedValue({ text: 'SUB-SESSION RESULTS MERGED.' })
+    runner.onRunEnded(CHILD)
+    const res = ok(await pending) as { kind: string; results: Array<{ answer?: string }> }
+    expect(res.kind).toBe('settled')
+    expect(res.results.map((r) => r.answer)).toEqual(['SUB-SESSION RESULTS MERGED.'])
+  })
+
+  it('NT-2 对方正在跑：等这一轮结束', async () => {
+    const busy = fakeAgent({ isStreaming: true })
+    mocks.getAgentSession.mockReturnValue(busy)
+    const pending = runner.waitForFollowingTurn({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 30
+    })
+    expect(await settledWithin(pending, 300)).toBe(false)
+    busy.isStreaming = false
+    busy.lastAnswer.mockResolvedValue({ text: 'DONE.' })
+    runner.onRunEnded(CHILD)
+    expect((ok(await pending) as { kind: string }).kind).toBe('settled')
+  })
+
+  it('NT-3 别的会话一轮结束不叫醒它；超时如实回报，什么也不中止', async () => {
+    const idle = fakeAgent()
+    mocks.getAgentSession.mockReturnValue(idle)
+    const pending = runner.waitForFollowingTurn({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 1
+    })
+    runner.onRunEnded('some-other-session')
+    const res = ok(await pending) as { kind: string }
+    expect(res.kind).toBe('timeout')
+    expect(idle.abort).not.toHaveBeenCalled()
+    // 超时之后再结束一轮：已经没人等了，不出错
+    runner.onRunEnded(CHILD)
+  })
+
+  it('NT-4 停下来问也叫醒它（不会自己好起来）；开始时已经停在询问上 / 被中断 ⇒ 立刻返回', async () => {
+    const agent = fakeAgent({ isStreaming: true })
+    mocks.getAgentSession.mockReturnValue(agent)
+    const pending = runner.waitForFollowingTurn({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 30
+    })
+    expect(await settledWithin(pending, 300)).toBe(false)
+    agent.pendingInputCount = 1
+    agent.pendingInputSummaries = ['bash: rm -rf build']
+    runner.onAskRaised(CHILD, { id: 'ask-1' } as InputRequest)
+    expect((ok(await pending) as { kind: string }).kind).not.toBe('timeout')
+
+    // 已经停在询问上
+    const asking = fakeAgent({ pendingInputCount: 1 })
+    mocks.getAgentSession.mockReturnValue(asking)
+    expect(
+      await settledWithin(
+        runner.waitForFollowingTurn({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 }),
+        100
+      )
+    ).toBe(true)
+    // 被中断：不会自己跑完
+    mocks.getAgentSession.mockReturnValue(fakeAgent({ isInterrupted: true }))
+    const cut = ok(
+      await runner.waitForFollowingTurn({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 })
+    ) as { kind: string; results: Array<{ status: string }> }
+    expect(cut.results[0].status).toBe('interrupted')
+  })
+
+  it('NT-5 调用方被停 ⇒ aborted，对方照跑', async () => {
+    const idle = fakeAgent()
+    mocks.getAgentSession.mockReturnValue(idle)
+    const controller = new AbortController()
+    const pending = runner.waitForFollowingTurn({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 30,
+      signal: controller.signal
+    })
+    controller.abort()
+    expect((ok(await pending) as { kind: string }).kind).toBe('aborted')
+    expect(idle.abort).not.toHaveBeenCalled()
+  })
+
+  it('NT-6 两个调用同时等同一条：一轮结束两个都回来', async () => {
+    mocks.getAgentSession.mockReturnValue(fakeAgent())
+    const a = runner.waitForFollowingTurn({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 })
+    const b = runner.waitForFollowingTurn({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 })
+    // 两个都挂上之后（授权那一步是异步的）
+    await new Promise((r) => setTimeout(r, 50))
+    runner.onRunEnded(CHILD)
+    expect((ok(await a) as { kind: string }).kind).toBe('settled')
+    expect((ok(await b) as { kind: string }).kind).toBe('settled')
+  })
+
+  it('NT-7 别的会话按「读」过授权（拒绝原样抛出、不挂住）；不存在的 id 同一套拒绝', async () => {
+    mocks.pick.mockImplementation((id: string) =>
+      id === PARENT
+        ? { settings: {}, parentId: null }
+        : id === 'stranger'
+          ? { settings: {}, parentId: 'other', title: 'S' }
+          : undefined
+    )
+    const authorize = vi.fn(async () => {
+      throw new Error('User denied reading session "S" (stranger)')
+    })
+    await expect(
+      runner.waitForFollowingTurn({
+        parentId: PARENT,
+        childId: 'stranger',
+        timeoutSeconds: 5,
+        authorize
+      })
+    ).rejects.toThrow('User denied reading')
+    expect(authorize).toHaveBeenCalledWith(
+      { id: 'stranger', title: 'S', relation: 'other' },
+      'read',
+      false
+    )
+    expect(
+      err(
+        await runner.waitForFollowingTurn({ parentId: PARENT, childId: 'ghost', timeoutSeconds: 5 })
+      )
+    ).toContain('There is no session "ghost"')
+  })
+})
+
 describe('list / read / stop', () => {
   it('list：状态取自运行时 —— 用户自己在子会话里发消息同样算 running', async () => {
     mocks.findChildren.mockReturnValue([

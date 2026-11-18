@@ -54,7 +54,8 @@ vi.mock('../../services/sessionMove', () => ({
 }))
 vi.mock('../../services/subSessionRunner', () => ({
   subSessionRunner: {},
-  DEFAULT_WAIT_TIMEOUT_SEC: 300
+  DEFAULT_WAIT_TIMEOUT_SEC: 300,
+  DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC: 1800
 }))
 vi.mock('../../services/artifacts/store', () => ({
   listArtifacts: vi.fn(),

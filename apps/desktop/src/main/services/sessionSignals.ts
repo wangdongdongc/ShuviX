@@ -140,6 +140,14 @@ export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSign
     }
     if (signal.kind === 'started') send({ type: 'agent_start', sessionId: target })
     else send({ type: 'agent_end', sessionId: target, reason: signal.reason })
+    // 根会话一轮结束（派生 agent 的不算）：`wait-for-next-turn` 等的就是它
+    if (signal.kind === 'ended' && signal.agentId === undefined && runEndObserver !== null) {
+      try {
+        runEndObserver(sessionId)
+      } catch (error) {
+        log.warn(`一轮结束的观察者失败 session=${sessionId}: ${errorText(error)}`)
+      }
+    }
   }
 
   function release(entry: Held): void {
@@ -237,6 +245,13 @@ let askObserver: SessionAskObserver | null = null
 /** 登记询问的观察者（main 入口接 notificationService；null = 摘掉） */
 export function setSessionAskObserver(observer: SessionAskObserver | null): void {
   askObserver = observer
+}
+
+let runEndObserver: ((sessionId: string) => void) | null = null
+
+/** 登记「根会话一轮结束」的观察者（main 入口接 subSessionRunner 的 watch；null = 摘掉） */
+export function setSessionRunEndObserver(observer: ((sessionId: string) => void) | null): void {
+  runEndObserver = observer
 }
 
 let installed: SessionSignals | undefined

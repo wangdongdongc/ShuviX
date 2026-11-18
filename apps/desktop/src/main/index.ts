@@ -48,7 +48,11 @@ import {
   setRunErrorTextSource
 } from './services/notificationService'
 import { sessionRecords } from './services/sessionRecords'
-import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
+import {
+  sessionRunErrorText,
+  setSessionAskObserver,
+  setSessionRunEndObserver
+} from './services/sessionSignals'
 import { goalService } from './services/goalService'
 import { subSessionRunner } from './services/subSessionRunner'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
@@ -657,6 +661,8 @@ function initSharedWindowServices(): void {
       }
     }
   }
+  // `wait-for-next-turn`：根会话一轮结束时叫醒盯着它的调用
+  setSessionRunEndObserver((sessionId) => subSessionRunner.onRunEnded(sessionId))
   setSessionAskObserver({
     askRaised: (sessionId, request) =>
       eachSafely(

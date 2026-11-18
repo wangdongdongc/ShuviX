@@ -59,6 +59,7 @@ import {
 import {
   subSessionRunner,
   DEFAULT_WAIT_TIMEOUT_SEC,
+  DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC,
   type AnswerFields,
   type AuthorizeSessionAccess,
   type PromptOutcome,
@@ -77,6 +78,7 @@ const ACTIONS = [
   'create-sub-session',
   'prompt-session',
   'wait-for-sessions',
+  'wait-for-next-turn',
   'list-sessions',
   'read-session',
   'stop-session',
@@ -174,7 +176,7 @@ export const SessionParamsSchema = Type.Object({
   ),
   timeout_seconds: Type.Optional(
     Type.Number({
-      description: `For "wait-for-sessions": how long to wait (default ${DEFAULT_WAIT_TIMEOUT_SEC}s). On timeout everything keeps running.`
+      description: `For "wait-for-sessions" (default ${DEFAULT_WAIT_TIMEOUT_SEC}s) and "wait-for-next-turn" (default ${DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC}s): how long to wait. On timeout everything keeps running.`
     })
   ),
   active_since: Type.Optional(
@@ -197,13 +199,14 @@ A sub-session is an ordinary session you own — its own conversation, model, to
 
 Give each sub-session a responsibility — a module, a feature, a recurring kind of work — and name it in the title. It keeps what it has read and learned (and compacts its own history), so later work in the same area goes back to it with "prompt-session" rather than to a new one that has to explore everything again; create another only for a separate area, or for work that has to run while the right one is busy.
 
-Other sessions: when the user mentions a session in a message you see \`[session: id <id> — "<title>"]\`; pass that exact id in \`session_id\` to use it with the same actions as a sub-session (all but "create-sub-session"). Never guess an id. The first time you read or message a session that is not your sub-session, the user is asked to approve — reading ("read-session", "inspect-session", "wait-for-sessions") and talking ("prompt-session" and the rest) separately; collecting, answering, steering or stopping a turn you started there needs no further approval. If the user declines, do not look for another way in.
+Other sessions: when the user mentions a session in a message you see \`[session: id <id> — "<title>"]\`; pass that exact id in \`session_id\` to use it with the same actions as a sub-session (all but "create-sub-session"). Never guess an id. The first time you read or message a session that is not your sub-session, the user is asked to approve — reading ("read-session", "inspect-session", "wait-for-sessions", "wait-for-next-turn") and talking ("prompt-session" and the rest) separately; collecting, answering, steering or stopping a turn you started there needs no further approval. If the user declines, do not look for another way in.
 
 Actions:
 - "set-title": rename THIS session (\`title\`, at most ${TITLE_MAX_CHARS} characters).
 - "create-sub-session": start an empty sub-session and return its id (optional \`title\` and \`agent_profile\`). It inherits this session's project, model, thinking level, MCP servers and skills.
 - "prompt-session": send \`message\` into \`session_id\` as if the user typed it. It returns a receipt at once and the turn runs in the background. This is also how a new sub-session gets its first task.
-- "wait-for-sessions": block until the turns you started finish (or one stops to ask something) and return all their answers — the only action that waits.
+- "wait-for-sessions": block until the turns you started finish (or one stops to ask something) and return all their answers. It returns at once for a session that is not running a turn.
+- "wait-for-next-turn": block until \`session_id\` finishes its NEXT turn, whoever starts it, and return its answer — also when it is idle now. Use it when a turn you started has ended but the work goes on there: it handed work to its own sub-sessions or left something running in the background, and its next turn (when that work comes back) is the one you need. You get no notice for a turn you did not start, so wait for it instead of ending your turn. It also returns when the session stops to ask something, and at once if it is already waiting on a question or was cut off.
 - "list-sessions": your sub-sessions and the other sessions you may use, with their status (idle / running / waiting-input / interrupted). With \`active_since\` (and optionally \`active_until\`): the sessions that had messages in that date range, as on the calendar — only those you may read without asking are listed (each with \`last_active\`, the \`bot\` it is bound to, and \`inputs\`: who wrote its messages in that range — \`local\` / \`remote\` / \`chrome\` / \`telegram\` are the user, \`trigger\` a bot trigger, \`session\` / \`parent-session\` another session); the others are only counted. Your own session is marked \`self="true"\`.
 - "read-session": the latest answer of \`session_id\`.
 - "stop-session": stop what \`session_id\` is doing (in another session, only a turn you started).
@@ -318,6 +321,7 @@ const PLACEHOLDER_LIKE = /[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}/
 const CARRY_BACK_ACTIONS: ReadonlySet<string> = new Set([
   'prompt-session',
   'wait-for-sessions',
+  'wait-for-next-turn',
   'read-session',
   'answer-session',
   'steer-session',
@@ -547,6 +551,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
         return this.promptSubSession(params, call, authorize)
       case 'wait-for-sessions':
         return this.waitForSubSessions(params, call, authorize, signal)
+      case 'wait-for-next-turn':
+        return this.waitForFollowingTurn(params, authorize, signal)
       case 'list-sessions':
         if (params.active_until !== undefined && params.active_since === undefined) {
           throw new Error(
@@ -848,6 +854,41 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     // run_in_background、prompt / answer 的回执都是）。wait 什么也没起 —— 它是一次
     // 读取；即便超时，还在跑的那件活是**上一次 prompt** 甩下的，标签早就打在那张卡上了。
     // blocked 更不是：那时根本没有东西在跑，是有人在等用户点批准。
+    return text(`<sessions status="${res.kind}">\n${body}\n</sessions>`, trailer)
+  }
+
+  /**
+   * `wait-for-next-turn`：阻塞到那条会话下一轮结束（空闲的也等），交回它的答复。不起任何活，所以同 wait 一样不带后台标签
+   */
+  private async waitForFollowingTurn(
+    params: SessionToolParams,
+    authorize: AuthorizeSessionAccess,
+    signal?: AbortSignal
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
+    const id = params.session_id?.trim()
+    if (!id)
+      throw new Error(
+        '"wait-for-next-turn" needs `session_id`: the session whose next turn to wait for.'
+      )
+    const res = await subSessionRunner.waitForFollowingTurn({
+      parentId: this.ctx.sessionId,
+      childId: id,
+      timeoutSeconds: params.timeout_seconds ?? DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC,
+      signal,
+      authorize
+    })
+    if ('error' in res) throw new Error(res.error)
+    const body = res.results.map(renderChild).join('\n')
+    const trailer =
+      res.kind === 'timeout'
+        ? 'No turn ended there before the timeout. Nothing was cancelled — wait again, or carry on.'
+        : res.kind === 'aborted'
+          ? 'The wait was interrupted; that session carries on.'
+          : res.kind === 'asking'
+            ? 'It stopped to ask a question. If the turn is yours, answer it with "answer-session"; otherwise relay it to the user.'
+            : res.kind === 'blocked'
+              ? 'It is waiting for something only the user can answer — relay it to the user.'
+              : 'Its turn ended. If the work is still going on there (handed off again, or still running in the background), wait for its next turn again.'
     return text(`<sessions status="${res.kind}">\n${body}\n</sessions>`, trailer)
   }
 

@@ -118,6 +118,8 @@ const SEND_CONFIRM_MS = 50
 
 /** `wait-for-sessions` 的缺省上限（秒）。到点交回，不中止任何会话 */
 export const DEFAULT_WAIT_TIMEOUT_SEC = 300
+/** `wait-for-next-turn` 的缺省等待（秒）：等的是对方下一轮，可能要等它的后台工作很久 */
+export const DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC = 1800
 
 /**
  * 没发出去的那几类结果（PIN-02）：忙、模型被拒、会话已关、还排着队 —— 以及没有分类的错误（网关打不开
@@ -300,6 +302,8 @@ class SubSessionRunner {
   private superseded = new Set<string>()
   /** 正在被 `wait` 等着的子会话（计数：可能有几个 wait 同时握着它） */
   private waiters = new Map<string, number>()
+  /** `wait-for-next-turn` 挂着的那些：会话 id → 它下一轮结束（或停下来问）时要叫醒的回调 */
+  private watchers = new Map<string, Set<() => void>>()
   /**
    * 还在确认窗里的发送（按幂等键）：这时「没发出去」由那次调用自己报。过了确认窗才落定为「没发出去」的（打开会话慢、
    * 模型解析慢……）没人等着报 —— 由 `settle` 单独通知父会话，否则它会以为活在跑、永远等不到回音（§20）
@@ -1337,6 +1341,80 @@ class SubSessionRunner {
     return answerable ? 'asking' : 'blocked'
   }
 
+  /** 会话信号报来根会话一轮结束（main 入口接 `setSessionRunEndObserver`）：叫醒盯着它的 watch */
+  onRunEnded(sessionId: string): void {
+    this.fireWatchers(sessionId)
+  }
+
+  private fireWatchers(sessionId: string): void {
+    const set = this.watchers.get(sessionId)
+    if (!set) return
+    this.watchers.delete(sessionId)
+    for (const wake of set) wake()
+  }
+
+  /**
+   * `wait-for-next-turn`（2026-11-18 用户裁决）：阻塞到 `childId` 的**下一轮**结束 —— 不管那一轮是谁起的（它自己的后台
+   * 通知把它叫起来、用户、别的会话）；此刻正在跑就等这一轮。它停下来问（询问、批准卡）也算，那不会自己好起来；此刻已经
+   * 停在询问上、或者被中断（不会自己跑完）就立刻返回。和 wait 的区别：wait 只等此刻在跑的那几轮，对方空闲就立刻返回；
+   * watch 对空闲的会话也挂住。起因：目标的管理员把活交给工作会话，工作会话转给自己的子会话后结束了这一轮，之后接着
+   * 干的那几轮是它自己的通知起的、不归任何人驱动，管理员就再也收不到消息。不登记任何东西：超时、被停就只是返回。
+   * 授权同 wait（读）。交回的落定若正好是调用方驱动的那一轮，同 wait 一样记成在本轮交回，不再另发完成通知。
+   */
+  async waitForFollowingTurn(params: {
+    parentId: string
+    childId: string
+    timeoutSeconds: number
+    signal?: AbortSignal
+    authorize?: AuthorizeSessionAccess
+  }): Promise<{ error: string } | WaitOutcome> {
+    const { parentId, timeoutSeconds, signal } = params
+    const detached = this.rejectIfDetached(parentId)
+    if (detached) return { error: detached }
+    const resolved = this.resolveTarget(parentId, params.childId)
+    if ('error' in resolved) return { error: resolved.error }
+    await this.authorizeAccess(parentId, resolved, 'read', params.authorize)
+    const id = resolved.id
+    this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1)
+    let kind: 'settled' | 'timeout' | 'aborted'
+    try {
+      const now = this.statusOf(id)
+      if (now === 'waiting-input' || now === 'interrupted') {
+        kind = 'settled'
+      } else {
+        kind = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
+          let done = false
+          const finish = (r: 'settled' | 'timeout' | 'aborted'): void => {
+            if (done) return
+            done = true
+            this.watchers.get(id)?.delete(wake)
+            if (this.watchers.get(id)?.size === 0) this.watchers.delete(id)
+            clearTimeout(timer)
+            signal?.removeEventListener('abort', onAbort)
+            resolve(r)
+          }
+          const wake = (): void => finish('settled')
+          const onAbort = (): void => finish('aborted')
+          const timer = setTimeout(() => finish('timeout'), Math.max(1, timeoutSeconds) * 1000)
+          let set = this.watchers.get(id)
+          if (!set) this.watchers.set(id, (set = new Set()))
+          set.add(wake)
+          if (signal?.aborted) return finish('aborted')
+          signal?.addEventListener('abort', onAbort, { once: true })
+        })
+      }
+      await this.collectInBand([id])
+      const run = this.boundRun(id)
+      if (run?.parentId === parentId) this.markShown(run.requestId, this.pendingAsksOf(id))
+    } finally {
+      const n = (this.waiters.get(id) ?? 1) - 1
+      if (n > 0) this.waiters.set(id, n)
+      else this.waiters.delete(id)
+    }
+    const results = await this.infoWithAnswers(parentId, [id])
+    return { kind: kind === 'settled' ? this.stoppedKind(parentId, results) : kind, results }
+  }
+
   /** 续上一条被中断的子会话（没开着就打开；不等它跑完） */
   private async resumeChild(childId: string): Promise<void> {
     const agent =
@@ -1442,6 +1520,8 @@ class SubSessionRunner {
    * 没有绑定任务（用户自己发起的一轮、已落定、重启之后）→ 什么都不做，也就没有通知。
    */
   onAskRaised(sessionId: string, _request: InputRequest): void {
+    // 停下来问了：它不会自己好起来，盯着它的该回来看看
+    this.fireWatchers(sessionId)
     const run = this.boundRun(sessionId)
     if (!run) return
     taskRegistry.update(run.requestId, { status: 'waiting-input' })
@@ -2025,6 +2105,7 @@ class SubSessionRunner {
     this.agentStopped.clear()
     this.superseded.clear()
     this.waiters.clear()
+    this.watchers.clear()
     this.shownAsks.clear()
     this.confirming.clear()
     this.turnErrors.clear()

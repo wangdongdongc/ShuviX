@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   runnerCreate: vi.fn(),
   runnerPrompt: vi.fn(),
   runnerWait: vi.fn(),
+  runnerFollowingTurn: vi.fn(),
   runnerList: vi.fn(),
   runnerRead: vi.fn(),
   runnerStop: vi.fn(),
@@ -72,10 +73,12 @@ vi.mock('../../services/sessionService', () => ({
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.registerBuiltinTool }))
 vi.mock('../../services/subSessionRunner', () => ({
   DEFAULT_WAIT_TIMEOUT_SEC: 300,
+  DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC: 1800,
   subSessionRunner: {
     create: mocks.runnerCreate,
     prompt: mocks.runnerPrompt,
     wait: mocks.runnerWait,
+    waitForFollowingTurn: mocks.runnerFollowingTurn,
     list: mocks.runnerList,
     read: mocks.runnerRead,
     stop: mocks.runnerStop,
@@ -693,6 +696,48 @@ describe('SessionTool — 子会话 action', () => {
     expect(out).toContain('Waiting again will not help')
   })
 
+  it('NT-T1 wait-for-next-turn：要 session_id；缺省等 1800 秒、带中止信号；结果同 wait 的围栏，结尾提醒活还在那边就再等', async () => {
+    expect(
+      await failureText(executeTool(tool, 'tc-1', { action: 'wait-for-next-turn' }))
+    ).toContain('needs `session_id`')
+    expect(mocks.runnerFollowingTurn).not.toHaveBeenCalled()
+    mocks.runnerFollowingTurn.mockResolvedValue({
+      kind: 'settled',
+      results: [
+        { id: 'w1', title: 'W', status: 'idle', driven: false, updatedAt: 1, answer: 'MERGED' }
+      ]
+    })
+    const out = textOf(
+      await executeTool(tool, 'tc-1', { action: 'wait-for-next-turn', session_id: 'w1' })
+    )
+    expect(mocks.runnerFollowingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ parentId: 's1', childId: 'w1', timeoutSeconds: 1800 })
+    )
+    expect(mocks.runnerFollowingTurn.mock.calls[0][0]).toHaveProperty('signal')
+    expect(out).toContain('<sessions status="settled">')
+    expect(out).toContain('MERGED')
+    expect(out).toContain('wait for its next turn again')
+  })
+
+  it('NT-T2 wait-for-next-turn 超时：说清没有一轮结束、什么也没取消', async () => {
+    mocks.runnerFollowingTurn.mockResolvedValue({
+      kind: 'timeout',
+      results: [{ id: 'w1', title: 'W', status: 'idle', driven: false, updatedAt: 1 }]
+    })
+    const out = textOf(
+      await executeTool(tool, 'tc-1', {
+        action: 'wait-for-next-turn',
+        session_id: 'w1',
+        timeout_seconds: 60
+      })
+    )
+    expect(mocks.runnerFollowingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutSeconds: 60 })
+    )
+    expect(out).toContain('<sessions status="timeout">')
+    expect(out).toContain('No turn ended there before the timeout')
+  })
+
   it('list-sessions：每行 id + 状态 + 标题 + 关系（别的会话带权限表那一行的 access）；空名单给出创建指引', async () => {
     mocks.runnerList.mockReturnValue({
       subSessions: [
@@ -813,13 +858,13 @@ const approvalAsk = (id: string, summary: string): PendingAskInfo => ({
 })
 
 describe('SessionTool — §19 参数面', () => {
-  it('WP3-83 / BG-37 action 恰 11 项（2026-11-11 加了 move-session）、含 §19 的三个动作；未知 action 的错误列出这 11 个；新参数各自注明 For "…"；timeout_seconds 只属于 wait', async () => {
+  it('WP3-83 / BG-37 action 恰 12 项（2026-11-11 加了 move-session，2026-11-18 加了 wait-for-next-turn）、含 §19 的三个动作；未知 action 的错误列出这 11 个；新参数各自注明 For "…"；timeout_seconds 只属于 wait', async () => {
     const props = mod.SessionParamsSchema.properties as unknown as Record<
       string,
       { description?: string; enum?: string[] }
     >
     const actions = props.action.enum!
-    expect(actions).toHaveLength(11)
+    expect(actions).toHaveLength(12)
     expect(actions).toEqual(
       expect.arrayContaining(['answer-session', 'steer-session', 'inspect-session'])
     )
@@ -833,11 +878,12 @@ describe('SessionTool — §19 参数面', () => {
     for (const action of ['"prompt-session"', '"steer-session"', '"answer-session"']) {
       expect(props.message.description).toContain(action)
     }
-    // §20：没有 run_in_background；timeout_seconds 只给 wait（缺省 300s，到点什么都不停）
+    // §20：没有 run_in_background；timeout_seconds 只给两个等待动作（wait 缺省 300s、等下一轮缺省 1800s，到点什么都不停）
     expect(props).not.toHaveProperty('run_in_background')
     const timeout = props.timeout_seconds.description!
     expect(timeout.startsWith('For "wait-for-sessions"')).toBe(true)
     expect(timeout).toContain('300')
+    expect(timeout).toContain('"wait-for-next-turn" (default 1800s)')
     expect(timeout).toContain('keeps running')
     expect(timeout).not.toContain('prompt-session')
     expect(timeout).not.toContain('answer-session')
@@ -1108,7 +1154,8 @@ describe('SessionTool — §19 渲染', () => {
     }
     for (const phrase of [
       'It returns a receipt at once and the turn runs in the background',
-      'the only action that waits',
+      'It returns at once for a session that is not running a turn',
+      'block until `session_id` finishes its NEXT turn, whoever starts it',
       'Everything you send runs in the background',
       'comes back early when one stops to ask',
       'Stopping this session does not stop the turns it started',
@@ -1243,6 +1290,7 @@ const CURRENT_ACTIONS = [
   'create-sub-session',
   'prompt-session',
   'wait-for-sessions',
+  'wait-for-next-turn',
   'list-sessions',
   'read-session',
   'stop-session',

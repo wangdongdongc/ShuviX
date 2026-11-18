@@ -44,6 +44,7 @@ vi.mock('../../services/sessionService', () => ({
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.registerBuiltinTool }))
 vi.mock('../../services/subSessionRunner', () => ({
   DEFAULT_WAIT_TIMEOUT_SEC: 300,
+  DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC: 1800,
   subSessionRunner: {
     create: mocks.runnerCreate,
     prompt: mocks.runnerPrompt,
@@ -161,12 +162,12 @@ function fenceParts(text: string): { inside: string[]; after: string } {
 // ─────────────────────────── 参数面 ───────────────────────────
 
 describe('inspect-session —— 参数面', () => {
-  it('WP4-126 动作枚举 11 项含 inspect-session；turns 是数字，item / match / before 是字符串，各自注明 For "inspect-session"', async () => {
+  it('WP4-126 动作枚举 12 项含 inspect-session；turns 是数字，item / match / before 是字符串，各自注明 For "inspect-session"', async () => {
     const props = mod.SessionParamsSchema.properties as unknown as Record<
       string,
       { type?: string; enum?: string[]; description?: string }
     >
-    expect(props.action.enum).toHaveLength(11)
+    expect(props.action.enum).toHaveLength(12)
     expect(props.action.enum).toContain('inspect-session')
     expect(props.turns.type).toBe('number')
     for (const key of ['item', 'match', 'before']) expect(props[key].type).toBe('string')
