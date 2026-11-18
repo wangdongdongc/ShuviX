@@ -395,6 +395,18 @@ describe('GW-T1 steer / followUp 带内联 Token', () => {
   const other = (m: (typeof METHODS)[number]): (typeof METHODS)[number] =>
     m === 'steer' ? 'followUp' : 'steer'
 
+  it.each(METHODS)('GW-T2 %s 带图片：图片作第 5 个参数原样交给会话；空数组不递', async (m) => {
+    const IMG = { type: 'image' as const, data: 'aGk=', mimeType: 'image/png' }
+    const session = openSession(async () => ({}))
+    chatGateway[m]('c1', 'look', undefined, undefined, [IMG])
+    chatGateway[m]('c1', 'plain', undefined, undefined, [])
+    await flush()
+    expect(session[m].mock.calls).toStrictEqual([
+      ['look', undefined, undefined, undefined, [IMG]],
+      ['plain', undefined, undefined, undefined]
+    ])
+  })
+
   it.each(METHODS)(
     'GW-T1 %s：模型拿展开后的全文，侧车是标记态原文 + tokens；空的 secret 丢掉',
     async (m) => {
@@ -528,7 +540,7 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
   )
 
   it.each(FILES)(
-    'WP2-78b %s：chatGateway.steer / followUp 是 (sessionId, text, 载荷的 secrets, 载荷的 inlineTokens)（来源不经参数递进去）',
+    'WP2-78b %s：chatGateway.steer / followUp 是 (sessionId, text, 载荷的 secrets, 载荷的 inlineTokens, 载荷的 images)（来源不经参数递进去）',
     (file) => {
       const sourceFile = parse(file)
       const queued = callsIn(sourceFile).filter(
@@ -538,9 +550,10 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
       )
       expect(queued.map((call) => calleeName(call)).sort()).toEqual(['followUp', 'steer'])
       for (const call of queued) {
-        expect(call.arguments.length, call.getText(sourceFile)).toBe(4)
+        expect(call.arguments.length, call.getText(sourceFile)).toBe(5)
         expect(call.arguments[2]!.getText(sourceFile)).toMatch(/^(params|p)\.secrets$/)
         expect(call.arguments[3]!.getText(sourceFile)).toMatch(/^(params|p)\.inlineTokens$/)
+        expect(call.arguments[4]!.getText(sourceFile)).toMatch(/^(params|p)\.images$/)
       }
     }
   )

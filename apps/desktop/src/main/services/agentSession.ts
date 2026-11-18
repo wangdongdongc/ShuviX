@@ -82,6 +82,14 @@ export interface DriveOptions {
   driven: DrivenSendOptions
 }
 
+/** 文字 + 图片 → 交给运行时的用户输入（没有图片就是那段文字） */
+function inputWithImages(
+  text: string,
+  images: Array<{ type: 'image'; data: string; mimeType: string }> | undefined
+): UserInput {
+  return images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
+}
+
 /** steer / followUp 被拒时交给调用方的错误文案（模型被拒同样本地化） */
 function admissionErrorText(result: AdmitResult): string {
   return result.code === 'no_model' ? noModelErrorText(result.error!) : result.error!
@@ -164,8 +172,7 @@ export class AgentSession {
   ): Promise<SubmitResult> {
     // 不记正文：用户可能把密码贴在里面，日志不经脱敏
     log.info(`prompt session=${this.sessionId} chars=${text.length} images=${images?.length || 0}`)
-    const content: UserInput =
-      images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
+    const content = inputWithImages(text, images)
     // 会话信号先就绪（PIN-09）：投影句柄挂上之前开跑的一轮没有 agent_start / agent_end
     await sessionSignalsReady(this.sessionId)
     let admitted = false
@@ -241,17 +248,23 @@ export class AgentSession {
   /** 运行中插话（空闲时起一轮）；`source` = 这条输入从哪来（网关盖的章）。被拒 → reject（调用方把文案报给界面） */
   /** `secrets`：输入框发来的（docs/auto-redaction-design.md §14）—— 只把这些换成占位符，其余照原样 */
   /** `display`：输入框的内联 Token（标记态原文 + tokens），同 `prompt` */
+  /** `images`：随这句话发的图片，同 `prompt`（落下时进文件库） */
   async steer(
     text: string,
     source?: InputOrigin,
     secrets?: UserSecret[],
-    display?: InlineTokensSidecar
+    display?: InlineTokensSidecar,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
-    const result = await this.admitSteer(text, {
-      ...(source === undefined ? {} : { source }),
-      ...(secrets === undefined ? {} : { composer: { secrets } }),
-      ...(display === undefined ? {} : { display: display as unknown as JsonObject })
-    })
+    const result = await this.admitSteer(
+      text,
+      {
+        ...(source === undefined ? {} : { source }),
+        ...(secrets === undefined ? {} : { composer: { secrets } }),
+        ...(display === undefined ? {} : { display: display as unknown as JsonObject })
+      },
+      images
+    )
     if (result.error) throw new Error(admissionErrorText(result))
   }
 
@@ -266,26 +279,28 @@ export class AgentSession {
       source?: InputOrigin
       composer?: ComposerInput
       display?: JsonObject
-    } = {}
+    } = {},
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<AdmitResult> {
     await carryFromDriver(options.source, this.sessionId, text)
-    const result = await this.durable.steer(text, {
-      ...this.dayPromptCallbacks(options.source),
+    const result = await this.durable.steer(inputWithImages(text, images), {
+      ...this.queuedInputCallbacks(options.source, images),
       ...options
     })
     return result.error ? { ...result, error: admissionErrorText(result) } : result
   }
 
-  /** 本轮结束后接着说（空闲时起一轮）；`source` / `secrets` / `display` 同 `steer`。被拒 → reject */
+  /** 本轮结束后接着说（空闲时起一轮）；`source` / `secrets` / `display` / `images` 同 `steer`。被拒 → reject */
   async followUp(
     text: string,
     source?: InputOrigin,
     secrets?: UserSecret[],
-    display?: InlineTokensSidecar
+    display?: InlineTokensSidecar,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
     await carryFromDriver(source, this.sessionId, text)
-    const result = await this.durable.followUp(text, {
-      ...this.dayPromptCallbacks(source),
+    const result = await this.durable.followUp(inputWithImages(text, images), {
+      ...this.queuedInputCallbacks(source, images),
       ...(source === undefined ? {} : { source }),
       ...(secrets === undefined ? {} : { composer: { secrets } }),
       ...(display === undefined ? {} : { display: display as unknown as JsonObject })
@@ -568,6 +583,26 @@ export class AgentSession {
     return {
       onAdmitted: (info) => record(info.entryId),
       onPlaced: (info) => record(info.entryId)
+    }
+  }
+
+  /** steer / followUp 的受理回调：活跃时间入账 + 带的图片进文件库（都按落下的那条用户条目的 id，各记一次） */
+  private queuedInputCallbacks(
+    origin: InputOrigin | undefined,
+    images: Array<{ type: 'image'; data: string; mimeType: string }> | undefined
+  ): Required<Pick<AdmitOptions, 'onAdmitted' | 'onPlaced'>> {
+    const dayPrompt = this.dayPromptCallbacks(origin)
+    const keepImages = images && images.length > 0 ? this.libraryImageCallback(images) : undefined
+    if (keepImages === undefined) return dayPrompt
+    return {
+      onAdmitted: (info) => {
+        dayPrompt.onAdmitted(info)
+        keepImages(info.entryId)
+      },
+      onPlaced: (info) => {
+        dayPrompt.onPlaced(info)
+        keepImages(info.entryId)
+      }
     }
   }
 

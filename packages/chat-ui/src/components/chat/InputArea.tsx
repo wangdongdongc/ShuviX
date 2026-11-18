@@ -24,6 +24,8 @@ import {
   selectSessionRun,
   selectSessionSource,
   pendingPromptMessage,
+  stashComposerChips,
+  takeComposerChips,
   type ComposerSnapshot,
   type SlashChip
 } from '../../stores/chatStore'
@@ -262,6 +264,44 @@ export function InputArea({
     setChipWidth(node?.offsetWidth ?? 0)
   }, [])
 
+  // 草稿里的胶囊跟着会话走：InputArea 不按会话重挂，正文与图片由 store 按会话存取，胶囊的登记（命令芯片、@ 引用、
+  // 粘贴芯片、要藏的值）在这几个 hook 里 —— 离开一条会话（或卸载）时存下，回来（或重新挂上）时取回。不这样做的话，
+  // 切走再回来正文还在、胶囊却成了普通文字，粘贴的全文与要藏的真值就丢了；命令芯片则会跟到别的会话上。
+  // 用 layout effect：换会话的那一帧不能先画出「B 的正文 + A 的胶囊」
+  const slashChipRef = useRef(slashChip)
+  useEffect(() => {
+    slashChipRef.current = slashChip
+  })
+  const chipSessionRef = useRef<string | null | undefined>(undefined)
+  useLayoutEffect(() => {
+    const from = chipSessionRef.current
+    chipSessionRef.current = activeSessionId
+    const saved = activeSessionId ? takeComposerChips(activeSessionId) : undefined
+    if (saved) {
+      setSlashChip(saved.slashChip)
+      at.restore(saved.at)
+      paste.restore(saved.paste)
+      secrets.restore(saved.secrets)
+    } else if (from !== undefined && from !== null) {
+      // 从另一条会话换过来、这里没有存下的：清空。刚挂上（hook 本来就是空的）和从欢迎页建出会话（发送正在路上，
+      // 还要用这些胶囊展开真值）都不动
+      setSlashChip(null)
+      at.reset()
+      paste.reset()
+      secrets.reset()
+    }
+    return () => {
+      if (!activeSessionId) return
+      stashComposerChips(activeSessionId, {
+        slashChip: slashChipRef.current,
+        at: at.snapshot(),
+        paste: paste.snapshot(),
+        secrets: secrets.snapshot()
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只跟着会话走；各 hook 的存取函数都是稳定引用
+  }, [activeSessionId])
+
   /**
    * 自动勾上命令依赖的扩展能力（fire-and-forget）。与工具选择器同一个写入口：会话已有 Agent
    * 运行时（勾选只读）/ 渠道端时什么也不做；`sid` 为 null（欢迎页）时并进草稿。
@@ -393,12 +433,21 @@ export function InputArea({
       draftRestore.inlineTokens
     )
     const sid = useChatStore.getState().activeSessionId
+    const images = draftRestore.images
     const fill = (): void => {
       if (pasteTokens.length > 0) paste.restoreFromTokens(pasteTokens)
       if (atTokens.length > 0) at.restoreFromTokens(atTokens)
       // 整段换掉了：之前草稿里的胶囊不再作数
       secrets.reset()
-      setInputText(sid ? secrets.adopt(text, (p) => redactionInfo(sid, p)) : text)
+      // 只有图片的消息，正文是发送时补的那句占位：不当成用户写的话放回来
+      const body = images && images.length > 0 && text === t('input.imageOnly') ? '' : text
+      setInputText(sid ? secrets.adopt(body, (p) => redactionInfo(sid, p)) : body)
+      // 那条消息带的图片一起回来（整段换掉：之前待发的图片不留）
+      if (images) {
+        const store = useChatStore.getState()
+        store.clearPendingImages()
+        for (const image of images) store.addPendingImage(image)
+      }
       setTimeout(() => textareaRef.current?.focus(), 0)
     }
     const unknown = sid ? placeholdersIn(text).filter((p) => !redactionInfo(sid, p)) : []
@@ -410,7 +459,7 @@ export function InputArea({
       // 等的这一下换了会话：那条草稿不是给这里的
       if (useChatStore.getState().activeSessionId === sid) fill()
     })
-  }, [draftRestore, at, paste, secrets, setInputText])
+  }, [draftRestore, at, paste, secrets, setInputText, t])
 
   // 话没发出去：放回输入框（胶囊原样）、报原因。用户已经写了新内容就只报原因：不盖掉，也不掺在一起
   const composerRestore = useChatStore((s) => s.composerRestoreRequest)
@@ -420,7 +469,7 @@ export function InputArea({
     store.clearComposerRestore()
     showSendError(composerRestore.sessionId, composerRestore.error)
     const { snapshot } = composerRestore
-    // 队列通道发送时本来就不带走图片和命令芯片：还是原来那份，不算新内容
+    // 发送时清掉的图片和命令芯片若还是原来那份，不算新内容
     const newImages = store.pendingImages.length > 0 && store.pendingImages !== snapshot.images
     const newChip = slashChip !== null && slashChip !== snapshot.slashChip
     if (store.inputText.trim() || newImages || newChip) return
@@ -909,21 +958,26 @@ export function InputArea({
    *
    * 文字与内联 Token 的构造和空闲时发送同一条路（buildSlashOutgoing）：@ 引用、粘贴芯片、斜杠命令在聊天记录里
    * 照样是芯片，模型照样拿到展开后的全文（显示侧车由运行时按幂等键记下，排队之后落下的那条也认得它）。
-   * 图片不随这两档走，留在输入框里。
+   * 待发的图片也随这两档走（排着的那条气泡标张数，落下之后就是带图的用户消息）；只有图片也能发。
    */
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
     // 运行中也一样：`/goal 条件` 交给宿主（会话在跑时宿主会拒，给一句说明）
     if (tryGoalCommand()) return
     const raw = inputText.trim()
-    if ((!raw && !slashChip) || !activeSessionId) return
+    const images = pendingImages
+    if ((!raw && !slashChip && images.length === 0) || !activeSessionId) return
     // 关停中哪儿也不发（话留在输入框里）
     if (useChatStore.getState().sessionClosing[activeSessionId]) return
     const attached = at.attachedPaths(raw)
     const expanded = secrets.expand(raw)
     const hidden = expanded.secrets
     // 要在清空引用 / 粘贴登记之前算
-    const outgoing = buildSlashOutgoing(expanded.text, activeSessionId)
-    if (!outgoing.contentText && !outgoing.inlineTokens) return
+    const built = buildSlashOutgoing(expanded.text, activeSessionId)
+    if (!built.contentText && !built.inlineTokens && images.length === 0) return
+    // 只有图片：正文补上与空闲时发送同一句占位
+    const outgoing = built.inlineTokens
+      ? built
+      : { contentText: built.contentText || t('input.imageOnly') }
     const snapshot = takeComposerSnapshot()
     // 乐观占位与队列里都不出现要藏的真值（换回胶囊文字）
     const shown = {
@@ -933,6 +987,7 @@ export function InputArea({
     }
     const store = useChatStore.getState()
     store.setInputText('')
+    store.clearPendingImages()
     setSlashChip(null)
     // 引用登记也清：留着的话，之后手打同样的文字会再算一次添加的文件
     at.reset()
@@ -942,13 +997,30 @@ export function InputArea({
     // 竞态保护：点下去的那一刻 run 可能刚好结束（视图已是 idle / interrupted）—— 两档都退回普通 prompt
     // （中断态的发送由运行时先中止再发）
     if (!store.sessionStreams[activeSessionId]?.isStreaming) {
-      await promptWithPlaceholder(activeSessionId, outgoing, shown, [], hidden, attached, snapshot)
+      await promptWithPlaceholder(
+        activeSessionId,
+        outgoing,
+        shown,
+        images,
+        hidden,
+        attached,
+        snapshot
+      )
       return
     }
     try {
       await getSessionChannelApi().agent[tier]({
         sessionId: activeSessionId,
         text: outgoing.contentText,
+        ...(images.length > 0
+          ? {
+              images: images.map((img) => ({
+                type: 'image' as const,
+                data: img.data,
+                mimeType: img.mimeType
+              }))
+            }
+          : {}),
         inlineTokens: outgoing.inlineTokens,
         secrets: hidden,
         attachedPaths: attached.length > 0 ? attached : undefined
@@ -1049,7 +1121,7 @@ export function InputArea({
       if (tryGoalCommand()) return
       // streaming 时发送 steer 消息
       if (isStreaming) {
-        if (inputText.trim()) handleQueueSend('steer')
+        if (inputText.trim() || pendingImages.length > 0) handleQueueSend('steer')
         return
       }
       handleSend()
@@ -1167,7 +1239,7 @@ export function InputArea({
     </>
   ) : null
 
-  const queueDisabled = !inputText.trim()
+  const queueDisabled = !inputText.trim() && pendingImages.length === 0
   /** 圆钮（触屏）/ 小方钮（桌面）的外形；颜色由各个按钮自己给 */
   const roundCls = touch
     ? 'flex-shrink-0 h-9 w-9 rounded-full flex items-center justify-center transition-colors'

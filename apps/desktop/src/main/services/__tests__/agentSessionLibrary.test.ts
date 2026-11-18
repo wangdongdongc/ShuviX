@@ -188,6 +188,41 @@ describe('AS-LIB-2 排队发送', () => {
   })
 })
 
+describe('AS-LIB-6 运行中发的话带图片（steer / followUp）', () => {
+  it.each(['steer', 'followUp'] as const)(
+    '%s：交给运行时的是 [文字, 图片…]；条目放下时进库一次（受理与放下都到也只一次）',
+    async (m) => {
+      const { durable, session } = facade()
+      const seen: unknown[] = []
+      durable[m] = async (content, options = {}) => {
+        seen.push(content)
+        options.onAdmitted?.({ entryId: undefined } as never)
+        options.onPlaced?.({ entryId: 9 })
+        options.onPlaced?.({ entryId: 9 })
+        return { submissionId: 1 as never }
+      }
+      await session[m]('look', undefined, undefined, undefined, [IMG1, IMG2])
+      expect(seen).toEqual([[{ type: 'text', text: 'look' }, IMG1, IMG2]])
+      expect(mocks.keepSentImages).toHaveBeenCalledTimes(1)
+      expect(mocks.keepSentImages).toHaveBeenCalledWith(durable.sessionId, 9, [IMG1, IMG2])
+    }
+  )
+
+  it.each(['steer', 'followUp'] as const)('%s 不带图片：内容还是那段文字，不进库', async (m) => {
+    const { durable, session } = facade()
+    const seen: unknown[] = []
+    durable[m] = async (content, options = {}) => {
+      seen.push(content)
+      options.onPlaced?.({ entryId: 9 })
+      return { submissionId: 1 as never }
+    }
+    await session[m]('plain')
+    await session[m]('empty', undefined, undefined, undefined, [])
+    expect(seen).toEqual(['plain', 'empty'])
+    expect(mocks.keepSentImages).not.toHaveBeenCalled()
+  })
+})
+
 describe('AS-LIB-3 不调的情况', () => {
   it('没有图 / 图是空数组', async () => {
     const { session } = facade()

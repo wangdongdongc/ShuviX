@@ -208,12 +208,16 @@ export class DefaultChatGateway implements ChatGateway {
     sessionId: string,
     text: string,
     secrets?: UserSecret[],
-    inlineTokens?: Record<string, InlineToken>
+    inlineTokens?: Record<string, InlineToken>,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): void {
     const origin = currentInputOrigin()
     const sent = composerTokens(text, inlineTokens)
     this.enqueue(sessionId, (session) =>
-      session.steer(sent.text, origin, cleanUserSecrets(secrets), sent.display)
+      // 没带图片就不递这一格（调用形状与从前一样）
+      images && images.length > 0
+        ? session.steer(sent.text, origin, cleanUserSecrets(secrets), sent.display, images)
+        : session.steer(sent.text, origin, cleanUserSecrets(secrets), sent.display)
     )
   }
 
@@ -253,12 +257,16 @@ export class DefaultChatGateway implements ChatGateway {
     sessionId: string,
     text: string,
     secrets?: UserSecret[],
-    inlineTokens?: Record<string, InlineToken>
+    inlineTokens?: Record<string, InlineToken>,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): void {
     const origin = currentInputOrigin()
     const sent = composerTokens(text, inlineTokens)
     this.enqueue(sessionId, (session) =>
-      session.followUp(sent.text, origin, cleanUserSecrets(secrets), sent.display)
+      // 没带图片就不递这一格（调用形状与从前一样）
+      images && images.length > 0
+        ? session.followUp(sent.text, origin, cleanUserSecrets(secrets), sent.display, images)
+        : session.followUp(sent.text, origin, cleanUserSecrets(secrets), sent.display)
     )
   }
 

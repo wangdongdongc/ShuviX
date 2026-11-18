@@ -69,12 +69,13 @@ export interface ChatGateway {
     secrets?: UserSecret[]
   ): Promise<{ error?: string; code?: SubmitErrorCode }>
 
-  /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向）；`inlineTokens` 同 `prompt` */
+  /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向）；`inlineTokens` / `images` 同 `prompt` */
   steer(
     sessionId: string,
     text: string,
     secrets?: UserSecret[],
-    inlineTokens?: Record<string, InlineToken>
+    inlineTokens?: Record<string, InlineToken>,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): void
   /**
    * 父会话往自己驱动着的子会话里插话（§19.6）：与 `steer` 同一道门，但**交回受理结果**（`{error}` = 没送到，
@@ -85,12 +86,13 @@ export interface ChatGateway {
     text: string,
     drive: { requestId: string; parentId: string; userWords?: UserWordsQuote }
   ): Promise<{ error?: string; code?: SubmitErrorCode }>
-  /** 本轮本应结束时续跑同一次运行（pi followUp 队列）；`inlineTokens` 同 `prompt` */
+  /** 本轮本应结束时续跑同一次运行（pi followUp 队列）；`inlineTokens` / `images` 同 `prompt` */
   followUp(
     sessionId: string,
     text: string,
     secrets?: UserSecret[],
-    inlineTokens?: Record<string, InlineToken>
+    inlineTokens?: Record<string, InlineToken>,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): void
   /**
    * 撤回一条排着的用户输入（P3-11）：只对打开着的会话（不打开、不 peek）；`submissionId` 不是正的安全整数、

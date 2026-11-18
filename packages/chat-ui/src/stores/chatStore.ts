@@ -205,6 +205,34 @@ interface SessionDraft {
 const sessionDrafts = new Map<string, SessionDraft>()
 
 /**
+ * 草稿里各种胶囊的登记（命令芯片、@ 引用、粘贴芯片、要藏的值）—— 正文里只有它们的占位明文，真正的内容（粘贴的全文、
+ * 要藏的真值、引用指向的文件）在这份登记里。登记活在 InputArea 的 hook 里，而 InputArea 不按会话重挂：换会话时
+ * 它把离开的那条会话的登记存到这里，回来时取走放回。不存的话，切走再回来正文还在、胶囊却退成了普通文字 ——
+ * 粘贴的全文和要藏的真值就此丢掉，发出去的是占位明文。只在内存里，与上面的正文草稿同寿命。
+ */
+export type ComposerChips = Pick<ComposerSnapshot, 'slashChip' | 'at' | 'paste' | 'secrets'>
+const sessionComposerChips = new Map<string, ComposerChips>()
+
+/** 记下一条会话草稿里的胶囊登记（一颗都没有 → 不留） */
+export function stashComposerChips(sessionId: string, chips: ComposerChips): void {
+  const empty =
+    chips.slashChip === null &&
+    chips.at.length === 0 &&
+    chips.paste.chips.length === 0 &&
+    chips.secrets.chips.length === 0 &&
+    chips.secrets.extra.length === 0
+  if (empty) sessionComposerChips.delete(sessionId)
+  else sessionComposerChips.set(sessionId, chips)
+}
+
+/** 取走一条会话草稿里的胶囊登记（取一次就没了；没有 → undefined） */
+export function takeComposerChips(sessionId: string): ComposerChips | undefined {
+  const chips = sessionComposerChips.get(sessionId)
+  sessionComposerChips.delete(sessionId)
+  return chips
+}
+
+/**
  * 当前激活目标的唯一来源：会话 / 无。
  * 单一来源（active）派生出所有镜像字段，杜绝多个独立「激活字段」相互竞争。
  * 注：md live-preview 仅经「笔记本会话」进入（普通会话选择，中间区据 session.settings.notebookPath
@@ -262,6 +290,7 @@ interface ChatState {
   draftRestoreRequest: {
     content: string
     inlineTokens?: Record<string, InlineToken>
+    images?: PendingImage[]
     nonce: number
   } | null
   /**
@@ -435,7 +464,12 @@ interface ChatState {
   revealTask: (taskId: string) => void
   revealArtifact: (sessionId: string, name: string) => void
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
-  requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
+  requestDraftRestore: (
+    content: string,
+    inlineTokens?: Record<string, InlineToken>,
+    /** 那条消息带的图片：一起放回输入框（不给 = 输入框里的图片不动） */
+    images?: PendingImage[]
+  ) => void
   clearDraftRestore: () => void
   requestComposerRestore: (request: {
     sessionId: string
@@ -914,11 +948,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nonce: (state.artifactRevealRequest?.nonce ?? 0) + 1
       }
     })),
-  requestDraftRestore: (content, inlineTokens) =>
+  requestDraftRestore: (content, inlineTokens, images) =>
     set((state) => ({
       draftRestoreRequest: {
         content,
         inlineTokens,
+        images,
         nonce: (state.draftRestoreRequest?.nonce ?? 0) + 1
       }
     })),
@@ -1407,4 +1442,6 @@ export function resetSessionViewStateForTests(): void {
   residueRunning.clear()
   runBaselines.clear()
   runSettledListeners.clear()
+  sessionDrafts.clear()
+  sessionComposerChips.clear()
 }

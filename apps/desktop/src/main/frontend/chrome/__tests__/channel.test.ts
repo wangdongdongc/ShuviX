@@ -474,11 +474,13 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
     ['agent.steer', 'steer'],
     ['agent.followUp', 'followUp']
   ])(
-    'CH-5 %s 转 (sessionId, text, secrets, inlineTokens)，回 {success:true}，在上下文里',
+    'CH-5 %s 转 (sessionId, text, secrets, inlineTokens, images)，回 {success:true}，在上下文里',
     async (path, method) => {
       const result = await call(path, [{ sessionId: OWNED, text: 'more', extra: 1 }])
       expect(result).toStrictEqual({ success: true })
-      expect(mocks.gateway[method].mock.calls).toEqual([[OWNED, 'more', undefined, undefined]])
+      expect(mocks.gateway[method].mock.calls).toEqual([
+        [OWNED, 'more', undefined, undefined, undefined]
+      ])
       expect(mocks.calls[0].ctx).toEqual(CHROME_CTX(OWNED))
     }
   )
@@ -827,7 +829,7 @@ describe('CH-G agent.prompt 先把带上的标签页所在的站点记为已同�
       conn = makeConn({ 5: { id: 5, url: 'https://a.example/' } })
       await call(path, [{ sessionId: OWNED, text: 'x', inlineTokens: { a: tabToken(5) } }])
       expect(mocks.gateway[method]!.mock.calls).toStrictEqual([
-        [OWNED, 'x', undefined, { a: tabToken(5) }]
+        [OWNED, 'x', undefined, { a: tabToken(5) }, undefined]
       ])
       expect(conn.request).not.toHaveBeenCalled()
       expect(mocks.grantSite).not.toHaveBeenCalled()

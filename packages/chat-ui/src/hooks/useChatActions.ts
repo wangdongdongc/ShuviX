@@ -1,9 +1,32 @@
 import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useRef, useState } from 'react'
-import { useChatStore, pendingPromptMessage, selectSessionViewOf } from '../stores/chatStore'
+import {
+  useChatStore,
+  pendingPromptMessage,
+  selectSessionViewOf,
+  type PendingImage
+} from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ImageMeta, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { tokensWithoutMidRunNote, withoutMidRunNote } from '@shuvix/chat-protocol/midRunNote'
+import { tokensWithoutSystemTokens, withoutSystemTokens } from '@shuvix/chat-protocol/triggerEvent'
+
+/**
+ * 一条用户消息带的图片 → 能再发一次的形状（回退放回输入框、重新生成重发）。只取带着数据的：只剩预览的（旧消息）
+ * 发不出去，不算。
+ */
+export function sendableImages(images: readonly ImageMeta[] | undefined): PendingImage[] {
+  const out: PendingImage[] = []
+  for (const image of images ?? []) {
+    if (!image.data || !image.mimeType) continue
+    out.push({
+      data: image.data,
+      mimeType: image.mimeType,
+      preview: `data:${image.mimeType};base64,${image.data}`
+    })
+  }
+  return out
+}
 
 type ChatStoreState = ReturnType<typeof useChatStore.getState>
 
@@ -67,8 +90,11 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
 
     const host = getHostApi()
     if (!host) return // 渠道端只读：不可回退历史
-    const rollbackContent = target.content
-    const rollbackTokens = target.metadata?.inlineTokens
+    // 系统写的 Token（运行中插话的说明、发送方……）不是用户打的字：不放回输入框，否则它们的文字会混进草稿
+    const rollbackContent = withoutSystemTokens(target.content, target.metadata?.inlineTokens)
+    const rollbackTokens = tokensWithoutSystemTokens(target.metadata?.inlineTokens)
+    // 那条消息带的图片跟着回到输入框（否则回退之后图片就没了，只能重新找来再加一遍）
+    const rollbackImages = sendableImages(target.metadata?.images)
     // 当前对话换成该用户消息之前的 fork（旧分支留在存储里）。列表不重拉：回退后的消息经视图同步推过来
     const { success } = await host.message.rollback({
       sessionId: activeSessionId,
@@ -81,7 +107,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     // 将用户消息重建为输入框草稿（含内联 Token 恢复），便于编辑后重新发送。
     // 直接回填裸 content 会让 {{shuvixInlineToken}} 标记失去 metadata → token 失效丢信息，
     // 故经 draftRestoreRequest 信号交由 InputArea 重建明文并重新登记粘贴芯片/@ 引用。
-    store.requestDraftRestore(rollbackContent, rollbackTokens)
+    store.requestDraftRestore(rollbackContent, rollbackTokens, rollbackImages)
   }, [activeSessionId, pendingRollbackId])
 
   /** 取消回退 */
@@ -102,6 +128,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       // 不是用户的话，回退到它再把信封当输入重发就错了
       let lastUserText = ''
       let lastUserTokens: Record<string, InlineToken> | undefined
+      let lastUserImages: PendingImage[] = []
       let userMsgId = ''
       for (let j = idx - 1; j >= 0; j--) {
         const m = store.messages[j]
@@ -114,6 +141,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
           // 插话说明不跟着重发：重发的是一条普通消息（运行时按那时的情形重新判断，见 midRunNote.ts）
           lastUserText = withoutMidRunNote(m.content, m.metadata?.inlineTokens)
           lastUserTokens = tokensWithoutMidRunNote(m.metadata?.inlineTokens)
+          lastUserImages = sendableImages(m.metadata?.images)
           userMsgId = m.id
           break
         }
@@ -138,12 +166,24 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         store.touchSessionActive(activeSessionId)
         store.setPendingPrompt(
           activeSessionId,
-          pendingPromptMessage(activeSessionId, lastUserText, { inlineTokens: lastUserTokens })
+          pendingPromptMessage(activeSessionId, lastUserText, {
+            inlineTokens: lastUserTokens,
+            images: lastUserImages.map(({ data, mimeType }) => ({ data, mimeType }))
+          })
         )
         try {
           await getSessionChannelApi().agent.prompt({
             sessionId: activeSessionId,
             text: lastUserText,
+            // 原消息带的图片一起重发：不带的话重新生成的那一轮模型就看不到图了
+            images:
+              lastUserImages.length > 0
+                ? lastUserImages.map(({ data, mimeType }) => ({
+                    type: 'image' as const,
+                    data,
+                    mimeType
+                  }))
+                : undefined,
             inlineTokens: lastUserTokens
           })
         } finally {

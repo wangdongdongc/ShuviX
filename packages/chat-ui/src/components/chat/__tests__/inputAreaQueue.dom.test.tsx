@@ -364,7 +364,7 @@ describe('P3-11-12..15 两档输入框', () => {
     }
   })
 
-  it('P3-11-13 运行中回车 = steer 一次（粘贴芯片是 token）；输入清空，待发图片留着', async () => {
+  it('P3-11-13 运行中回车 = steer 一次（粘贴芯片是 token）；待发图片随这一条走；输入与图片都清空', async () => {
     await mountInput()
     busy()
     const image = { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
@@ -379,13 +379,35 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(agent.steer.mock.calls[0]![0]).toEqual({
       sessionId: 's1',
       text: 'see {{shuvixInlineToken:p0}}',
+      images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }],
       inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: long }) },
       secrets: []
     })
     expect(agent.followUp).not.toHaveBeenCalled()
     expect(agent.prompt).not.toHaveBeenCalled()
     expect(store().inputText).toBe('')
-    expect(store().pendingImages).toEqual([image])
+    expect(store().pendingImages).toEqual([])
+  })
+
+  it('P3-11-13b 运行中只有图片、没有字：两档可用；追加 → followUp 带图片，正文是「只有图片」的占位', async () => {
+    await mountInput()
+    busy()
+    const image = { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
+    useChatStore.setState({ pendingImages: [image] })
+    await flush()
+    const followUp = container.querySelector<HTMLButtonElement>('[data-queue-tier="followUp"]')!
+    expect(followUp.disabled).toBe(false)
+    await act(async () => followUp.click())
+    await flush()
+    expect(agent.followUp).toHaveBeenCalledTimes(1)
+    expect(agent.followUp.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: en.input.imageOnly,
+      images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }],
+      secrets: []
+    })
+    expect(agent.steer).not.toHaveBeenCalled()
+    expect(store().pendingImages).toEqual([])
   })
 
   it('P3-11-13 有待答的询问：回车还是 steer 一次，不答卡片；只有空白：什么都不发', async () => {
@@ -718,6 +740,7 @@ describe('发送失败', () => {
       expect(agent.steer.mock.calls[0]![0]).toEqual({
         sessionId: 's1',
         text: 'see {{shuvixInlineToken:p0}}',
+        images: [{ type: 'image', data: IMAGE.data, mimeType: IMAGE.mimeType }],
         inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: long }) },
         secrets: []
       })

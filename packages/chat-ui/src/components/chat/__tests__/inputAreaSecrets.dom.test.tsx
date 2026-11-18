@@ -851,3 +851,148 @@ describe('胶囊的字没有括号', () => {
     expect(q('[data-redaction-hint-span]')).toBeNull()
   })
 })
+
+describe('换会话、重新挂上：草稿里的胶囊跟着会话走', () => {
+  const session = (id: string): Record<string, unknown> => ({
+    id,
+    title: id,
+    projectId: null,
+    parentId: null,
+    settings: {},
+    createdAt: 0,
+    updatedAt: 0,
+    lastActiveAt: 0
+  })
+  const secretChips = (): string[] =>
+    [...container.querySelectorAll('[data-token-kind="secret"]')].map((c) => c.textContent ?? '')
+  const cmdChip = (): string | null =>
+    container.querySelector('[data-token-kind="cmd"]')?.getAttribute('data-token-display') ?? null
+  const openSession = async (id: string): Promise<void> => {
+    await act(async () => useChatStore.getState().setActiveSessionId(id))
+    await flush()
+  }
+  const addSecret = async (value: string): Promise<void> => {
+    await click(plus())
+    await click(q('[data-plus-secret]')!)
+    await fillSecret(value)
+  }
+
+  beforeEach(() => {
+    useChatStore.setState({ sessions: [session('s1'), session('s2')] as never })
+    act(() => applySessionView('s2', V('s2', { run: { state: 'idle' } })))
+  })
+
+  it('SW-1 s1 里加了胶囊 → 去 s2 打字 → 回 s1：还是胶囊（不是普通文字），发送带真值与 secrets', async () => {
+    await mountInput()
+    await type('use ')
+    await addSecret(PASSWORD)
+    expect(textarea().value).toBe('use Password #1')
+
+    await openSession('s2')
+    expect(textarea().value).toBe('')
+    expect(secretChips()).toEqual([])
+    // 在别的会话里打字会剪掉文字里已经没有的胶囊：不能连 s1 的那颗一起剪掉
+    await type('something else')
+    await openSession('s1')
+
+    expect(textarea().value).toBe('use Password #1')
+    expect(secretChips()).toEqual(['Password #1'])
+    expect(document.body.innerHTML).not.toContain(PASSWORD)
+    await key(textarea(), 'Enter')
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(prompt.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: `use ${PASSWORD}`,
+      secrets: [{ value: PASSWORD, category: 'PASSWORD' }]
+    })
+  })
+
+  it('SW-2 两条会话各有一颗胶囊：各回各的，真值不串；s2 的编号从 #1 起', async () => {
+    const OTHER = 'Zz7!other'
+    await mountInput()
+    await addSecret(PASSWORD)
+    await openSession('s2')
+    await addSecret(OTHER)
+    expect(textarea().value).toBe('Password #1')
+    await openSession('s1')
+    expect(secretChips()).toEqual(['Password #1'])
+    await openSession('s2')
+    expect(secretChips()).toEqual(['Password #1'])
+
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[0]![0]).toEqual({
+      sessionId: 's2',
+      text: OTHER,
+      secrets: [{ value: OTHER, category: 'PASSWORD' }]
+    })
+  })
+
+  it('SW-3 命令芯片不跟到别的会话上，回来还在', async () => {
+    useChatStore.setState({
+      slashCommands: [
+        { commandId: 'cmd', name: 'Cmd', description: 'a command', template: 'Run: $ARGUMENTS' }
+      ]
+    })
+    await mountInput()
+    await type('/cmd later')
+    expect(cmdChip()).toBe('/cmd')
+    expect(textarea().value).toBe('later')
+
+    await openSession('s2')
+    expect(cmdChip()).toBeNull()
+    await openSession('s1')
+    expect(cmdChip()).toBe('/cmd')
+    expect(textarea().value).toBe('later')
+  })
+
+  it('SW-4 输入框卸载再挂上（同一条会话）：胶囊还在，发送带真值', async () => {
+    await mountInput()
+    await type('use ')
+    await addSecret(PASSWORD)
+    await act(async () => root.render(null))
+    await mountInput()
+
+    expect(textarea().value).toBe('use Password #1')
+    expect(secretChips()).toEqual(['Password #1'])
+    await key(textarea(), 'Enter')
+    expect(prompt.mock.calls[0]![0]).toMatchObject({
+      text: `use ${PASSWORD}`,
+      secrets: [{ value: PASSWORD, category: 'PASSWORD' }]
+    })
+  })
+})
+
+describe('回退带回图片', () => {
+  const IMG = { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
+  const OLD = { data: 'b2xk', mimeType: 'image/png', preview: 'data:image/png;base64,b2xk' }
+
+  it('RB-1 那条消息的图片回到待发图片里（换掉原来待发的）；正文照常回填', async () => {
+    await mountInput()
+    await act(async () => useChatStore.setState({ pendingImages: [OLD] }))
+    await act(async () =>
+      useChatStore.getState().requestDraftRestore('look at this', undefined, [IMG])
+    )
+    await flush()
+    expect(textarea().value).toBe('look at this')
+    expect(useChatStore.getState().pendingImages).toEqual([IMG])
+  })
+
+  it('RB-2 只有图片的消息：正文是发送时补的占位，不放回输入框', async () => {
+    await mountInput()
+    await act(async () =>
+      useChatStore.getState().requestDraftRestore(en.input.imageOnly, undefined, [IMG])
+    )
+    await flush()
+    expect(textarea().value).toBe('')
+    expect(useChatStore.getState().pendingImages).toEqual([IMG])
+  })
+
+  it('RB-3 不带图片参数（别处填草稿）：待发图片不动', async () => {
+    await mountInput()
+    await act(async () => useChatStore.setState({ pendingImages: [OLD] }))
+    await act(async () => useChatStore.getState().requestDraftRestore('hello'))
+    await flush()
+    expect(textarea().value).toBe('hello')
+    expect(useChatStore.getState().pendingImages).toEqual([OLD])
+  })
+})

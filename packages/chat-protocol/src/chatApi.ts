@@ -369,6 +369,8 @@ export interface AgentSubAgentPromptParams {
 export interface AgentSteerParams {
   sessionId: string
   text: string
+  /** 同 `AgentPromptParams.images`：运行中发的话也能带图（排着的那条在视图里只标张数，落下之后是带图的用户消息） */
+  images?: ImageContentParam[]
   /**
    * 同 `AgentPromptParams.inlineTokens`：@ 引用、粘贴芯片、斜杠命令在运行中发也保持芯片（显示侧车按幂等键记下，
    * 排队之后落下的那条消息照样认得它）

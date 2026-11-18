@@ -182,9 +182,13 @@ const callsOf = (name: string): unknown[][] =>
 /** 被记进 timeline 的 store 写入口（模块级只包一次） */
 const originalRequestDraftRestore = useChatStore.getState().requestDraftRestore
 useChatStore.setState({
-  requestDraftRestore: (content, tokens) => {
-    timeline.push({ name: 'store.requestDraftRestore', args: [content, tokens] })
-    originalRequestDraftRestore(content, tokens)
+  requestDraftRestore: (content, tokens, images) => {
+    // 图片只在带了的时候记（没有图片的消息交来的是空数组）
+    timeline.push({
+      name: 'store.requestDraftRestore',
+      args: images && images.length > 0 ? [content, tokens, images] : [content, tokens]
+    })
+    originalRequestDraftRestore(content, tokens, images)
   }
 })
 
@@ -604,14 +608,55 @@ describe('重新生成 / 回退一条运行中插话', () => {
     expect(pendingAtPrompt).toEqual([{ content: sentText, tokens: { p1: PASTE } }])
   })
 
-  it('RG-3 confirmRollback 回退一条插话：(content, tokens) 原样交给 requestDraftRestore（丢说明是 InputArea 的事）', async () => {
+  it('RG-3 confirmRollback 回退一条插话：说明不是用户打的字，交给 requestDraftRestore 之前就去掉（不混进草稿）', async () => {
     const steer = midRunNoteDisplay('pivot')
     seed([user('3', steer.content, steer.tokens), assistant('4')])
     await mountProbe()
     await pickRollback('3')
     await act(async () => actions.confirmRollback())
 
-    expect(callsOf('store.requestDraftRestore')).toEqual([[steer.content, steer.tokens]])
+    expect(callsOf('store.requestDraftRestore')).toEqual([['pivot', undefined]])
+  })
+})
+
+describe('回退 / 重新生成一条带图片的消息', () => {
+  const withImages = (id: string, content: string): UserTextMessage => ({
+    ...user(id, content),
+    metadata: {
+      images: [
+        { data: 'aGk=', mimeType: 'image/png' },
+        // 只剩预览的（没有数据）发不出去：不算
+        { preview: 'data:image/png;base64,eA==', mimeType: 'image/png' }
+      ]
+    }
+  })
+
+  it('IMG-1 confirmRollback：带数据的图片随草稿回到输入框（data + mimeType + 预览地址）', async () => {
+    seed([withImages('3', 'look'), assistant('4')])
+    await mountProbe()
+    await pickRollback('3')
+    await act(async () => actions.confirmRollback())
+
+    const image = { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
+    expect(callsOf('store.requestDraftRestore')).toEqual([['look', undefined, [image]]])
+    expect(store().draftRestoreRequest).toMatchObject({ content: 'look', images: [image] })
+  })
+
+  it('IMG-2 handleRegenerate：原消息的图片一起重发', async () => {
+    seed([withImages('3', 'look'), assistant('4')])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('4'))
+
+    expect(callsOf('agent.prompt')).toEqual([
+      [
+        {
+          sessionId: SID,
+          text: 'look',
+          images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }],
+          inlineTokens: undefined
+        }
+      ]
+    ])
   })
 })
 
