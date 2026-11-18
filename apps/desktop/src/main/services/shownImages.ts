@@ -17,7 +17,7 @@
 import { createHash } from 'crypto'
 import { cpSync, existsSync, rmSync } from 'fs'
 import { mkdir, readFile, realpath, stat, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { nativeImage } from 'electron'
 import { parseImagePixelSize } from '@shuvix/agent-runtime'
 import {
@@ -32,6 +32,7 @@ import type { ShownImage } from '@shuvix/chat-protocol/types/chatMessage'
 import { getShownImagesDir, isSafeSessionId } from '../utils/paths'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { formatSize } from '../../shared/node/truncate'
+import { recordSessionFiles } from './fileLibrary'
 import { createLogger } from '../logger'
 
 const log = createLogger('ShownImages')
@@ -220,6 +221,19 @@ export async function presentImages(
       }
     }
     out.push(shown)
+  }
+  // 摆出来的图登记进文件库（留在快照目录，不复制），挂在这条会话上 —— 时间线上看得到；登记的是原图
+  try {
+    recordSessionFiles(
+      sessionId,
+      'shown',
+      out.map((image) => ({
+        path: join(dir, image.original ?? image.file),
+        name: basename(image.source)
+      }))
+    )
+  } catch (err) {
+    log.warn(`登记进文件库失败：${err instanceof Error ? err.message : String(err)}`)
   }
   return out
 }

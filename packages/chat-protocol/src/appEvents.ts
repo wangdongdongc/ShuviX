@@ -25,6 +25,8 @@ export type AppEvent =
     }
   /** 提供商/模型配置变更（增删改/同步/导入）—— 与通用设置 KV 区分，避免一条事件过泛 */
   | { type: 'providers.changed' }
+  /** 文件库变了（进库、关联、删除）—— 时间线重取 */
+  | { type: 'library.changed' }
   | { type: 'project.changed' }
   | { type: 'session.configChanged'; sessionId: string }
   /** 会话标题变更（AI 自动生成）—— 载荷带 title，消费者直接更新、无需回查；用户手动改名由发起端自更 */

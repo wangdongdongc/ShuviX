@@ -30,6 +30,8 @@
  *   WR-2    设定目标的通道：`agent:goalStart` 在 `createClientContext(ctx, sessionId)` 的请求上下文里把 (sessionId,
  *           objective, 来源) 交给 goalService.start —— 来源由宿主按调用方盖（窗口 → local、网络客户端 → remote；载荷里
  *           伪造的不认）；结果原样交回；访问级别 write；旧的 `agent:goal` / `agent:goalAct` / `agent:goalStatuses` 不再注册
+ *   TL-93…95 输入框里添加的文件登记进文件库（docs/file-library-timeline-tests.md §7.3）：四条通道都在交给网关之前
+ *           调 `recordAttachedPaths(sessionId, 载荷里的 attachedPaths 原样)`；网络客户端一样
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -59,6 +61,8 @@ const state = vi.hoisted(() => ({
   contexts: [] as unknown[],
   /** sessionAcl.grantAttachedFiles 收到的参数 */
   grants: [] as unknown[][],
+  /** fileLibrary.recordAttachedPaths 收到的参数（TL-93…95） */
+  attached: [] as unknown[][],
   /** createClientContext 收到的调用上下文的传输（经 IPC 适配器来的都是 'ipc'） */
   transports: [] as string[],
   /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
@@ -106,6 +110,9 @@ vi.mock('../../services/agentToolBuilder', () => ({ getBuiltinToolDefinitions: v
 vi.mock('../../agents/AgentManager', () => ({ agentManager: state.router }))
 vi.mock('../../services/acl', () => ({
   sessionAcl: { grantAttachedFiles: (...args: unknown[]) => state.grants.push(args) }
+}))
+vi.mock('../../services/fileLibrary', () => ({
+  recordAttachedPaths: (...args: unknown[]) => state.attached.push(args)
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: state.warn, error: () => {} })
@@ -672,5 +679,68 @@ describe('WR-2 设定目标的 IPC', () => {
       expect(channels, gone).not.toContain(gone)
       expect(gone in CHANNEL_ACCESS, gone).toBe(false)
     }
+  })
+})
+
+describe('TL-93…95 添加的文件登记进文件库', () => {
+  const CASES = [
+    ['agent:prompt', 'prompt', { text: 't' }],
+    ['agent:steer', 'steer', { text: 't' }],
+    ['agent:followUp', 'followUp', { text: 't' }],
+    [
+      'agent:respondToInput',
+      'respondToInput',
+      { requestId: 'r', response: { kind: 'other', text: 't' } }
+    ]
+  ] as const
+
+  /** 调一次通道；回「网关被调时已经登记了几次」 */
+  const call = async (
+    channel: string,
+    method: (typeof CASES)[number][1],
+    params: Record<string, unknown>,
+    via: 'ipc' | 'network' = 'ipc'
+  ): Promise<number[]> => {
+    state.attached.length = 0
+    const seenAtSend: number[] = []
+    state.gateway[method].mockReset().mockImplementation(() => {
+      seenAtSend.push(state.attached.length)
+      return undefined as never
+    })
+    if (via === 'ipc') {
+      await state.handlers.get(channel)!({ sender: { id: 7 } }, params)
+    } else {
+      const netCtx: ClientContext = {
+        client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+        transport: 'network'
+      }
+      await listDefinitions()
+        .find((d) => d.channel === channel)!
+        .fn(netCtx, params)
+    }
+    return seenAtSend
+  }
+
+  it.each(CASES)('TL-93 %s：登记一次，载荷原样，在交给网关之前', async (channel, method, rest) => {
+    const paths = ['/Users/u/a.pdf']
+    const seenAtSend = await call(channel, method, {
+      sessionId: SID,
+      ...rest,
+      attachedPaths: paths
+    })
+    expect(state.attached).toEqual([[SID, paths]])
+    expect(state.attached[0][1]).toBe(paths)
+    expect(seenAtSend).toEqual([1])
+  })
+
+  it('TL-95 网络客户端调 agent:prompt：同样登记', async () => {
+    const seenAtSend = await call(
+      'agent:prompt',
+      'prompt',
+      { sessionId: SID, text: 't', attachedPaths: ['/Users/u/a.pdf'] },
+      'network'
+    )
+    expect(state.attached).toEqual([[SID, ['/Users/u/a.pdf']]])
+    expect(seenAtSend).toEqual([1])
   })
 })

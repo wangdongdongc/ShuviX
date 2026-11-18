@@ -28,7 +28,7 @@ export const CHAT_CONTAINER_ATTR = 'data-chat-container'
  * 见 sessionPanelStore；浏览器是独立窗口，见 browserTabsStore / browserWindowService）。
  * 收件箱与日历原先也在这里；2026-11-16 起它们是左侧栏的两种视图（app-shell SidebarViewSwitch）
  */
-export type PanelTab = 'widget' | 'agents'
+export type PanelTab = 'widget' | 'agents' | 'library'
 
 const BROWSER_MIN = 320
 const BROWSER_MAX = 960

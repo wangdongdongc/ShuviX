@@ -239,8 +239,8 @@ describe('files.open → 独立窗口', () => {
     await panel.open()
     try {
       const icons = await panel.tabIcons()
-      // 右侧面板只剩 widget 与 agents（收件箱与日历自 3a69300a 起是左侧栏的视图）
-      expect(icons).toEqual(['lucide-wrench', 'lucide-activity'])
+      // 右侧面板是 widget、agents 与文件时间线（收件箱与日历自 3a69300a 起是左侧栏的视图）
+      expect(icons).toEqual(['lucide-wrench', 'lucide-activity', 'lucide-images'])
       expect(icons).not.toContain('lucide-eye')
     } finally {
       await panel.close()

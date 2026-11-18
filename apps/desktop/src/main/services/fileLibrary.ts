@@ -11,9 +11,9 @@
  * 库目录**不在会话权限表里**（同 show_image 的快照）：agent 读库只走 `library` 客体与 `ask-on-library-access`。
  */
 import { createHash } from 'crypto'
-import { createReadStream, existsSync } from 'fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { copyFile, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { isAbsolute, join, sep } from 'path'
 import { v7 as uuidv7 } from 'uuid'
 import { parseImagePixelSize } from '@shuvix/agent-runtime'
 import {
@@ -29,14 +29,22 @@ import {
   type LibraryAddInput,
   type LibraryAddResult,
   type LibraryItemInfo,
-  type LibraryItemSource
+  type LibraryItemSource,
+  type LibraryLinkRelation,
+  type LibraryTimelineEntry
 } from '@shuvix/chat-protocol/fileLibrary'
 import type { LibraryDao } from '../dao/libraryDao'
 import type { LibraryItemRow } from '../dao/types/library'
-import { getLibraryFilesDir } from '../utils/paths'
+import {
+  getLibraryFilesDir,
+  getSessionArtifactsDir,
+  getShownImagesDir,
+  isSafeSessionId
+} from '../utils/paths'
 import { previewMimeOf } from '../utils/fileResponse'
 import { resolveRealPath } from '../utils/toolUtils/realPath'
 import { formatSize } from '../../shared/node/truncate'
+import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
 const log = createLogger('FileLibrary')
@@ -59,6 +67,11 @@ type LibraryTable = Pick<
   | 'isLinked'
   | 'deleteLinksOfTarget'
   | 'copyLinksOfTarget'
+  | 'findLinkedByPath'
+  | 'touchLinked'
+  | 'convertToManaged'
+  | 'findLinkedUnder'
+  | 'timeline'
 >
 let table: LibraryTable | null = null
 export function setLibraryTable(dao: LibraryTable | null): void {
@@ -189,7 +202,10 @@ export interface AddToLibraryParams {
  * 失败回 `{ ok: false }`，消息是给用户看的（编辑器的占位里显示；`too-large` 的消息是上限本身）。
  */
 export function addToLibrary(params: AddToLibraryParams): Promise<LibraryAddResult> {
-  return serialized(() => addToLibraryNow(params))
+  return serialized(() => addToLibraryNow(params)).then((result) => {
+    if (result.ok) notifyLibraryChanged()
+    return result
+  })
 }
 
 async function addToLibraryNow(params: AddToLibraryParams): Promise<LibraryAddResult> {
@@ -315,12 +331,16 @@ async function addToLibraryNow(params: AddToLibraryParams): Promise<LibraryAddRe
 
 /** 进回收站；回是否有这件 */
 export function trashLibraryItem(id: string, now = Date.now()): boolean {
-  return isLibraryItemId(id) && !!table && table.setDeletedAt(id, now, now) > 0
+  const done = isLibraryItemId(id) && !!table && table.setDeletedAt(id, now, now) > 0
+  if (done) notifyLibraryChanged()
+  return done
 }
 
 /** 从回收站拿回来；回是否有这件 */
 export function restoreLibraryItem(id: string, now = Date.now()): boolean {
-  return isLibraryItemId(id) && !!table && table.setDeletedAt(id, null, now) > 0
+  const done = isLibraryItemId(id) && !!table && table.setDeletedAt(id, null, now) > 0
+  if (done) notifyLibraryChanged()
+  return done
 }
 
 /** 清空回收站：删元数据与托管文件的目录（引用外部文件的从不删原文件）；回清掉的件数 */
@@ -427,23 +447,192 @@ export async function keepSentImages(
     if (result.ok) ids.push(result.item.id)
     else log.warn(`sent image ${i + 1} not kept (session=${sessionId}): ${result.message}`)
   }
-  if (ids.length > 0) recordSessionSent(sessionId, ids, entryId)
+  if (ids.length > 0) {
+    recordSessionSent(sessionId, ids, entryId)
+    notifyLibraryChanged()
+  }
   return ids
 }
 
-/** 删会话：删掉它的关联，文件留在库里（§10）。从不抛 */
-export function removeSessionLibraryLinks(sessionId: string): void {
+/** 库里的东西变了（进库、关联、删除）：告诉界面重取。合并 200ms 内的多次 */
+let changeTimer: ReturnType<typeof setTimeout> | null = null
+function notifyLibraryChanged(): void {
+  if (changeTimer) return
+  changeTimer = setTimeout(() => {
+    changeTimer = null
+    appEventBus.publish({ type: 'library.changed' })
+  }, 200)
+  changeTimer.unref?.()
+}
+
+/**
+ * 登记一件留在原位置的文件（`storage: 'linked'`，只记绝对路径，不复制）：产物、摆给用户看的图、输入框里添加的文件。
+ * 同一个路径只有一件（再登记只更新大小）；在回收站里的拿回来。不是文件、没有库 → null。从不抛
+ */
+export function registerLinkedFile(params: {
+  path: string
+  source: LibraryItemSource
+  /** 显示名；缺省取文件名 */
+  name?: string
+}): string | null {
+  const t = table
+  if (!t) return null
   try {
-    table?.deleteLinksOfTarget('session', sessionId)
+    const st = statSync(params.path)
+    if (!st.isFile()) return null
+    const now = Date.now()
+    const existing = t.findLinkedByPath(params.path)
+    if (existing) {
+      if (existing.deletedAt) t.setDeletedAt(existing.id, null, now)
+      if (existing.size !== st.size) t.touchLinked(existing.id, st.size, now)
+      return existing.id
+    }
+    const id = uuidv7()
+    const fileName = baseName(params.path)
+    const mime = previewMimeOf(params.path)
+    t.insertItem({
+      id,
+      name: params.name?.trim() || fileName,
+      storage: 'linked',
+      externalPath: params.path,
+      kind: libraryKindOf(mime, fileName),
+      source: params.source,
+      sha256: '',
+      size: st.size,
+      mime,
+      fileName,
+      createdAt: now
+    })
+    return id
+  } catch (err) {
+    log.warn(`register linked file (${params.path}): ${String(err)}`)
+    return null
+  }
+}
+
+function linkToSession(
+  sessionId: string,
+  itemId: string,
+  relation: LibraryLinkRelation,
+  context: Record<string, unknown> | null
+): void {
+  table?.addLink({
+    itemId,
+    targetType: 'session',
+    targetId: sessionId,
+    relation,
+    origin: 'derived',
+    context: context ? JSON.stringify(context) : null,
+    createdAt: Date.now()
+  })
+}
+
+/**
+ * 把留在原位置的文件登记进库并挂到会话上。`shown` = agent 摆给用户看的图的快照，`produced` = 会话的产物，
+ * `attached` = 用户在输入框里添加的文件。从不抛：登记是索引，失败不该让展示 / 写产物 / 发送失败
+ */
+export function recordSessionFiles(
+  sessionId: string,
+  relation: 'shown' | 'produced' | 'attached',
+  files: ReadonlyArray<{ path: string; name?: string }>
+): void {
+  if (!table) return
+  const source: LibraryItemSource =
+    relation === 'shown' ? 'shown' : relation === 'produced' ? 'artifact' : 'chat-file'
+  let any = false
+  for (const file of files) {
+    try {
+      const id = registerLinkedFile({ path: file.path, source, name: file.name })
+      if (!id) continue
+      linkToSession(sessionId, id, relation, { source })
+      any = true
+    } catch (err) {
+      log.warn(`session file (${sessionId}, ${relation}): ${String(err)}`)
+    }
+  }
+  if (any) notifyLibraryChanged()
+}
+
+/** 输入框里添加的文件（`attachedPaths`，载荷来自渠道：不是字符串、不是绝对路径的跳过） */
+export function recordAttachedPaths(sessionId: string, paths: unknown): void {
+  if (!Array.isArray(paths)) return
+  const files = paths
+    .filter((p): p is string => typeof p === 'string' && isAbsolute(p))
+    .map((path) => ({ path }))
+  if (files.length > 0) recordSessionFiles(sessionId, 'attached', files)
+}
+
+/**
+ * 删会话：它的产物目录与快照目录马上要删，留在那里的库文件先收进库（复制成托管），再删掉这条会话的关联 ——
+ * 文件留在库里、照常显示，只是不再归在这条会话下（用户裁决 2026-11-18）。从不抛
+ */
+export function removeSessionLibraryLinks(sessionId: string): void {
+  const t = table
+  if (!t) return
+  try {
+    // 这条会话自己的两个目录：产物、摆出来的图的快照（会话 id 形状不对就没有目录可言）
+    const ownDirs = isSafeSessionId(sessionId)
+      ? [getSessionArtifactsDir(sessionId), getShownImagesDir(sessionId)]
+      : []
+    const now = Date.now()
+    // 不只看挂在这条会话上的：分支会话复制的关联指着的也是这两个目录里的同一件
+    for (const row of ownDirs.flatMap((dir) => t.findLinkedUnder(dir + sep))) {
+      if (!row.externalPath) continue
+      const path = row.externalPath
+      const dir = libraryItemDir(row.id)
+      if (!dir || !existsSync(path)) continue
+      try {
+        const bytes = readFileSync(path)
+        const fileName = sanitizeLibraryFileName(row.fileName)
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, fileName), bytes)
+        t.convertToManaged(
+          row.id,
+          {
+            fileName,
+            sha256: createHash('sha256').update(bytes).digest('hex'),
+            size: bytes.length
+          },
+          now
+        )
+      } catch (err) {
+        log.warn(`keep ${row.id} after session delete (${sessionId}): ${String(err)}`)
+      }
+    }
+    t.deleteLinksOfTarget('session', sessionId)
+    notifyLibraryChanged()
   } catch (err) {
     log.warn(`remove session links (${sessionId}): ${String(err)}`)
   }
+}
+
+/** 时间线的原料：文件 + 它与会话的关联，新的在前；同一件在同一条会话里只算一次（取最新建立的那条关联） */
+export function libraryTimeline(limit = 400): LibraryTimelineEntry[] {
+  const t = table
+  if (!t) return []
+  const seen = new Set<string>()
+  const out: LibraryTimelineEntry[] = []
+  for (const row of t.timeline(Math.max(1, Math.min(2000, limit)))) {
+    const key = `${row.id}\u0000${row.sessionId ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const path = filePathOf(row)
+    out.push({
+      item: toLibraryItemInfo(row),
+      sessionId: row.sessionId,
+      relation: row.relation,
+      at: row.at,
+      ...(path && existsSync(path) ? {} : { missing: true })
+    })
+  }
+  return out
 }
 
 /** 分支会话：复制源会话的关联，不复制文件。从不抛 */
 export function copySessionLibraryLinks(fromId: string, toId: string): void {
   try {
     table?.copyLinksOfTarget('session', fromId, toId)
+    notifyLibraryChanged()
   } catch (err) {
     log.warn(`copy session links (${fromId} → ${toId}): ${String(err)}`)
   }
@@ -468,6 +657,7 @@ export function recordSessionAttached(
       context: JSON.stringify({ source }),
       createdAt: Date.now()
     })
+    notifyLibraryChanged()
   } catch (err) {
     log.warn(`attached link (${sessionId}): ${String(err)}`)
   }
@@ -487,11 +677,14 @@ export function describeLibraryItem(
   return { name: row.name, linked: isLibraryItemLinkedToSession(itemId, sessionId) }
 }
 
+/** 让会话的 agent 不用问就能读的关系：用户自己交给这条会话的（发送、放进笔记、在输入框里添加） */
+const READ_GRANTING_RELATIONS: readonly LibraryLinkRelation[] = ['sent', 'attached']
+
 /**
- * 这件文件与会话有没有关联（`ask-on-library-access` 的 `linked`，D4）：用户在这条会话里发送过它（`sent`），或在
- * 这条会话的笔记里放进了它（`attached`）。笔记正文里的链接（`embedded`）**不算**：正文 agent 也能写，算了就等于
- * agent 能自己给自己开门。项目绑定等 L3
+ * 这件文件与会话有没有「可以直接读」的关联（`ask-on-library-access` 的 `linked`，D4）：只认用户交给这条会话的
+ * 那几种关系（`sent`、`attached`）。agent 摆出来的（`shown`）与产出的（`produced`）**不算** —— `show_image`
+ * 能摆 agent 自己读不了的图，算了就成了读文件的旁路；笔记正文里的链接（`embedded`）也不算：正文 agent 也能写
  */
 export function isLibraryItemLinkedToSession(itemId: string, sessionId: string): boolean {
-  return !!table && table.isLinked(itemId, 'session', sessionId)
+  return !!table && table.isLinked(itemId, 'session', sessionId, READ_GRANTING_RELATIONS)
 }

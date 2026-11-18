@@ -13,6 +13,8 @@
  *   LH-6 通道表：API_TABLE.library、CHANNEL_ACCESS、channelScopeOf、DESKTOP_ONLY_CHANNELS
  *   LH-7 （2026-11-11 补）sessionId：合法（isSafeSessionId）且进库成功 → recordSessionAttached(sessionId, item.id, source)；
  *        不合法、不是字符串、进库失败 → 不调
+ *   TL-97 / TL-98 `library:timeline`（docs/file-library-timeline-tests.md §8）：三种调用方都拿到 libraryTimelineView()
+ *        的那一份；通道表里是 read、files，不是桌面专属
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
@@ -23,7 +25,8 @@ const state = vi.hoisted(() => ({
   showOpenDialog: vi.fn(),
   windowOf: vi.fn(),
   addToLibrary: vi.fn(),
-  recordSessionAttached: vi.fn()
+  recordSessionAttached: vi.fn(),
+  libraryTimelineView: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -36,6 +39,10 @@ vi.mock('../ipcAdapter', () => ({ windowOf: state.windowOf }))
 vi.mock('../../services/fileLibrary', () => ({
   addToLibrary: state.addToLibrary,
   recordSessionAttached: state.recordSessionAttached
+}))
+// 时间线的会话信息要读会话行与项目表（数据库）：这里不测它
+vi.mock('../../services/libraryTimelineView', () => ({
+  libraryTimelineView: state.libraryTimelineView
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -248,9 +255,10 @@ describe('LH-5 library:pickFiles', () => {
 })
 
 describe('LH-6 通道表', () => {
-  it('API_TABLE.library：add（invoke，1 个参数）与 pickFiles（invoke，0 个参数）', () => {
+  it('API_TABLE.library：add（invoke，1 个参数）、timeline 与 pickFiles（invoke，0 个参数）', () => {
     expect(API_TABLE.library).toEqual({
       add: { kind: 'invoke', channel: 'library:add', args: 1 },
+      timeline: { kind: 'invoke', channel: 'library:timeline', args: 0 },
       pickFiles: { kind: 'invoke', channel: 'library:pickFiles', args: 0 }
     })
   })
@@ -331,5 +339,31 @@ describe('LH-7 sessionId → recordSessionAttached', () => {
     })
     await add(winCtx, { item: { kind: 'path', path: '' }, sessionId: 'sess-1' })
     expect(state.recordSessionAttached).not.toHaveBeenCalled()
+  })
+})
+
+describe('TL-97 / TL-98 library:timeline', () => {
+  it.each<[string, ClientContext]>([
+    ['ipc', winCtx],
+    ['network', netCtx],
+    ['agent', agentCtx]
+  ])('TL-97 %s：原样交回 libraryTimelineView() 的结果，不带参数调', (_l, ctx) => {
+    const view = { entries: [], sessions: {} }
+    state.libraryTimelineView.mockReturnValue(view)
+    expect(call(ctx, 'library:timeline')).toBe(view)
+    expect(state.libraryTimelineView).toHaveBeenCalledTimes(1)
+    expect(state.libraryTimelineView).toHaveBeenCalledWith()
+  })
+
+  it('TL-98 通道表：read、files 范围、不是桌面专属（pickFiles 仍是）', () => {
+    expect(CHANNEL_ACCESS['library:timeline']).toBe('read')
+    expect(channelScopeOf('library:timeline')).toBe('files')
+    expect(Object.keys(DESKTOP_ONLY_CHANNELS)).not.toContain('library:timeline')
+    expect(Object.keys(DESKTOP_ONLY_CHANNELS)).toContain('library:pickFiles')
+    expect(API_TABLE.library.timeline).toEqual({
+      kind: 'invoke',
+      channel: 'library:timeline',
+      args: 0
+    })
   })
 })

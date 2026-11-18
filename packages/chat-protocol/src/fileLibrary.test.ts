@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   extractLibraryItemIds,
+  groupLibraryTimeline,
   isLibraryImageName,
   libraryItemIdOfRef,
   libraryKindOf,
@@ -17,7 +18,9 @@ import {
   parseLibraryLink,
   pastedFileName,
   sanitizeLibraryFileName,
-  timestampedFileName
+  timestampedFileName,
+  type LibraryTimelineEntry,
+  type LibraryTimelineResult
 } from './fileLibrary'
 
 const ID = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
@@ -340,5 +343,224 @@ describe('libraryMarkdown', () => {
       expect(m, md).not.toBeNull()
       expect(m![1]).toBe(libraryLink(c.itemId, c.fileName))
     }
+  })
+})
+
+/**
+ * 文件时间线的分组（测试设计 docs/file-library-timeline-tests.md §1，TL-1…TL-20）：天 → 会话 → 文件。
+ * 时刻都用本地时间构造，日期在任何时区都一样。
+ */
+describe('groupLibraryTimeline', () => {
+  const at = (month: number, day: number, hour = 12, min = 0, sec = 0, ms = 0): number =>
+    new Date(2026, month - 1, day, hour, min, sec, ms).getTime()
+
+  function entry(
+    id: string,
+    sessionId: string | null,
+    time: number,
+    over: { name?: string; fileName?: string } = {}
+  ): LibraryTimelineEntry {
+    return {
+      item: {
+        id,
+        name: over.name ?? `${id}.png`,
+        fileName: over.fileName ?? `${id}.png`,
+        kind: 'image',
+        mime: 'image/png',
+        size: 1,
+        storage: 'managed',
+        source: 'chat-image',
+        createdAt: time
+      },
+      sessionId,
+      relation: sessionId ? 'sent' : null,
+      at: time
+    }
+  }
+
+  const known = (...ids: string[]): LibraryTimelineResult['sessions'] =>
+    Object.fromEntries(ids.map((id) => [id, { title: `Session ${id}` }]))
+
+  /** 结果压成 [天, [会话, at, [文件 id…]]…] 好比较 */
+  const shape = (days: ReturnType<typeof groupLibraryTimeline>): unknown[] =>
+    days.map((d) => [
+      d.day,
+      d.groups.map((g) => [g.sessionId, g.at, g.entries.map((e) => e.item.id)])
+    ])
+
+  it('TL-1 没有条目 → 空数组', () => {
+    expect(groupLibraryTimeline({ entries: [], sessions: {} })).toEqual([])
+  })
+
+  it('TL-2 一条：一天一组一件，条目就是传入的那个对象', () => {
+    const e = entry('a', 'S1', at(11, 18, 10))
+    const days = groupLibraryTimeline({ entries: [e], sessions: known('S1') })
+    expect(days).toEqual([
+      { day: '2026-11-18', groups: [{ sessionId: 'S1', at: at(11, 18, 10), entries: [e] }] }
+    ])
+    expect(days[0].groups[0].entries[0]).toBe(e)
+  })
+
+  it('TL-3 天的顺序新的在前，与输入顺序无关', () => {
+    const a = entry('a', 'S1', at(11, 18))
+    const b = entry('b', 'S1', at(11, 17))
+    const c = entry('c', 'S1', at(11, 10))
+    const want = ['2026-11-18', '2026-11-17', '2026-11-10']
+    const sessions = known('S1')
+    expect(groupLibraryTimeline({ entries: [a, b, c], sessions }).map((d) => d.day)).toEqual(want)
+    expect(groupLibraryTimeline({ entries: [c, a, b], sessions }).map((d) => d.day)).toEqual(want)
+  })
+
+  it('TL-5 同一天：组按最新一件排，组内保持输入顺序', () => {
+    const entries = [
+      entry('a', 'S1', at(11, 18, 15)),
+      entry('b', 'S2', at(11, 18, 12)),
+      entry('c', 'S1', at(11, 18, 9))
+    ]
+    expect(shape(groupLibraryTimeline({ entries, sessions: known('S1', 'S2') }))).toEqual([
+      [
+        '2026-11-18',
+        [
+          ['S1', at(11, 18, 15), ['a', 'c']],
+          ['S2', at(11, 18, 12), ['b']]
+        ]
+      ]
+    ])
+  })
+
+  it('TL-6 输入不是新的在前：组的 at 仍是最新一件，顺序照它排', () => {
+    const entries = [
+      entry('c', 'S1', at(11, 18, 9)),
+      entry('b', 'S2', at(11, 18, 12)),
+      entry('a', 'S1', at(11, 18, 15))
+    ]
+    expect(shape(groupLibraryTimeline({ entries, sessions: known('S1', 'S2') }))).toEqual([
+      [
+        '2026-11-18',
+        [
+          ['S1', at(11, 18, 15), ['c', 'a']],
+          ['S2', at(11, 18, 12), ['b']]
+        ]
+      ]
+    ])
+  })
+
+  it('TL-7 一条会话在两天里各有一组', () => {
+    const entries = [entry('a', 'S1', at(11, 18)), entry('b', 'S1', at(11, 17))]
+    expect(shape(groupLibraryTimeline({ entries, sessions: known('S1') }))).toEqual([
+      ['2026-11-18', [['S1', at(11, 18), ['a']]]],
+      ['2026-11-17', [['S1', at(11, 17), ['b']]]]
+    ])
+  })
+
+  it('TL-8 sessionId 为 null → 无会话组，条目不变', () => {
+    const e = entry('a', null, at(11, 18))
+    const days = groupLibraryTimeline({ entries: [e], sessions: {} })
+    expect(days[0].groups).toEqual([{ sessionId: null, at: at(11, 18), entries: [e] }])
+    expect(days[0].groups[0].entries[0]).toBe(e)
+  })
+
+  it('TL-9 会话已不在：并进无会话组，输出里 sessionId 为 null，输入对象不改', () => {
+    const e = entry('a', 'gone', at(11, 18))
+    const days = groupLibraryTimeline({ entries: [e], sessions: {} })
+    expect(days).toHaveLength(1)
+    expect(days[0].groups).toHaveLength(1)
+    expect(days[0].groups[0].sessionId).toBeNull()
+    expect(days[0].groups[0].entries).toEqual([{ ...e, sessionId: null }])
+    expect(e.sessionId).toBe('gone')
+  })
+
+  it('TL-10 同一天同一件挂在两条已删的会话下：无会话组里只出现一次（留先出现的那条）', () => {
+    const first = entry('a', 'g1', at(11, 18, 15))
+    const entries = [first, entry('a', 'g2', at(11, 18, 12)), entry('b', 'g1', at(11, 18, 9))]
+    const days = groupLibraryTimeline({ entries, sessions: {} })
+    expect(shape(days)).toEqual([['2026-11-18', [[null, at(11, 18, 15), ['a', 'b']]]]])
+    expect(days[0].groups[0].entries[0].at).toBe(first.at)
+  })
+
+  it('TL-11 同一件在两天里挂在已删的会话下：每天的无会话组各一次', () => {
+    const entries = [entry('a', 'g1', at(11, 18)), entry('a', 'g2', at(11, 17))]
+    expect(shape(groupLibraryTimeline({ entries, sessions: {} }))).toEqual([
+      ['2026-11-18', [[null, at(11, 18), ['a']]]],
+      ['2026-11-17', [[null, at(11, 17), ['a']]]]
+    ])
+  })
+
+  it('TL-12 同一件既在还在的会话下、又在已删的会话下：两组各一次', () => {
+    const entries = [entry('a', 'S1', at(11, 18, 15)), entry('a', 'g1', at(11, 18, 9))]
+    expect(shape(groupLibraryTimeline({ entries, sessions: known('S1') }))).toEqual([
+      [
+        '2026-11-18',
+        [
+          ['S1', at(11, 18, 15), ['a']],
+          [null, at(11, 18, 9), ['a']]
+        ]
+      ]
+    ])
+  })
+
+  it('TL-13 无会话组与别的组一样按最新一件排', () => {
+    const entries = [entry('a', null, at(11, 18, 16)), entry('b', 'S1', at(11, 18, 10))]
+    const days = groupLibraryTimeline({ entries, sessions: known('S1') })
+    expect(days[0].groups.map((g) => g.sessionId)).toEqual([null, 'S1'])
+  })
+
+  it('TL-14 / TL-15 搜索：显示名与存储文件名，不分大小写', () => {
+    const entries = [
+      entry('a', 'S1', at(11, 18, 15), { name: 'Report.pdf', fileName: 'report.pdf' }),
+      entry('b', 'S1', at(11, 18, 12), { name: 'other.png', fileName: 'other.png' }),
+      entry('c', 'S1', at(11, 18, 9), { name: 'x', fileName: 'ABC-1.png' })
+    ]
+    const result = { entries, sessions: known('S1') }
+    expect(shape(groupLibraryTimeline(result, 'REPORT'))).toEqual([
+      ['2026-11-18', [['S1', at(11, 18, 15), ['a']]]]
+    ])
+    expect(shape(groupLibraryTimeline(result, 'abc'))).toEqual([
+      ['2026-11-18', [['S1', at(11, 18, 9), ['c']]]]
+    ])
+  })
+
+  it('TL-16 搜索：会话标题', () => {
+    const entries = [
+      entry('a', 'S1', at(11, 18, 15), { name: 'a', fileName: 'a' }),
+      entry('b', 'S2', at(11, 18, 12), { name: 'b', fileName: 'b' })
+    ]
+    const sessions = { S1: { title: 'Trip Plan' }, S2: { title: 'Other' } }
+    expect(shape(groupLibraryTimeline({ entries, sessions }, 'plan'))).toEqual([
+      ['2026-11-18', [['S1', at(11, 18, 15), ['a']]]]
+    ])
+  })
+
+  it('TL-17 已删的会话没有标题可搜：只靠文件自己的名字', () => {
+    const entries = [
+      entry('a', 'gone', at(11, 18, 15), { name: 'a', fileName: 'a' }),
+      entry('b', 'gone', at(11, 18, 12), { name: 'trip.png', fileName: 'trip.png' })
+    ]
+    expect(shape(groupLibraryTimeline({ entries, sessions: {} }, 'trip'))).toEqual([
+      ['2026-11-18', [[null, at(11, 18, 12), ['b']]]]
+    ])
+    expect(groupLibraryTimeline({ entries: [entries[0]], sessions: {} }, 'gone')).toEqual([])
+  })
+
+  it('TL-19 什么都不匹配 → 空数组（没有空的天、空的组）', () => {
+    const entries = [entry('a', 'S1', at(11, 18)), entry('b', null, at(11, 17))]
+    expect(groupLibraryTimeline({ entries, sessions: known('S1') }, 'zzz')).toEqual([])
+  })
+
+  it('TL-20 搜索去掉了决定组 at 的那件：at 取留下的那件，组照它排', () => {
+    const entries = [
+      entry('a', 'S1', at(11, 18, 16), { name: 'drop', fileName: 'drop' }),
+      entry('b', 'S2', at(11, 18, 12), { name: 'keep-2', fileName: 'keep-2' }),
+      entry('c', 'S1', at(11, 18, 9), { name: 'keep-1', fileName: 'keep-1' })
+    ]
+    expect(shape(groupLibraryTimeline({ entries, sessions: known('S1', 'S2') }, 'keep'))).toEqual([
+      [
+        '2026-11-18',
+        [
+          ['S2', at(11, 18, 12), ['b']],
+          ['S1', at(11, 18, 9), ['c']]
+        ]
+      ]
+    ])
   })
 })

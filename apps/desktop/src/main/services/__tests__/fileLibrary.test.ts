@@ -22,7 +22,8 @@
  *   LS-13  笔记关联 recordNoteLinks / forgetNoteLinks（只 .md、realpath 作 targetId、不读盘、warn、手动行不动）
  *   LS-14  keepSentImages：命名、source、links 行、同图一件、超限的跳过
  *   LS-15  删会话 / 分支会话的关联；DAO 抛错不外抛
- *   LS-16  describeLibraryItem 与 isLibraryItemLinkedToSession（只看会话关联 sent / attached，embedded 不算）
+ *   LS-16  describeLibraryItem 与 isLibraryItemLinkedToSession（只看会话关联 sent / attached，embedded 不算；
+ *          shown / produced 也不算，见 fileLibraryTimeline.test.ts 的 TL-50）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'

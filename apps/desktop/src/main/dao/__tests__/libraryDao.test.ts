@@ -13,6 +13,8 @@
  *   LD-6  addLink 同主键覆盖写：一行，context 换新，createdAt / origin 留旧
  *   LD-7  replaceDerivedLinks：只换这个目标这种关系的派生行；保留旧 createdAt；跳过库里没有的；手动行与别的目标不动
  *   LD-8  linksOfItem / itemIdsOfTarget / isLinked；deleteLinksOfTarget；copyLinksOfTarget（OR IGNORE）
+ *   LD-9  时间线一轮（docs/file-library-timeline-tests.md §2，TL-21…TL-33）：findLinkedByPath / touchLinked /
+ *         convertToManaged / findLinkedUnder / itemsOfTarget / timeline / isLinked 的 relations
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -449,5 +451,176 @@ describe('LibraryDao：关联', () => {
     )
     // 笔记那条（targetType 不同）没被带过去
     expect(libraryDao.isLinked(C, 'session', 'F')).toBe(false)
+  })
+})
+
+describe('LD-9 时间线一轮的新增（TL-21…TL-33）', () => {
+  const linked = (id: string, path: string, over: Partial<NewLibraryItem> = {}): NewLibraryItem =>
+    newItem(id, { storage: 'linked', externalPath: path, sha256: '', ...over })
+
+  it('TL-21 findLinkedByPath：按路径原样匹配；托管的不算', () => {
+    libraryDao.insertItem(linked(A, '/x/a.png'))
+    libraryDao.insertItem(newItem(B))
+    expect(libraryDao.findLinkedByPath('/x/a.png')).toEqual(libraryDao.findItem(A))
+    expect(libraryDao.findLinkedByPath('/x/A.png')).toBeNull()
+    expect(libraryDao.findLinkedByPath('/x/none')).toBeNull()
+  })
+
+  it('TL-22 findLinkedByPath：回收站里的照样找得到', () => {
+    libraryDao.insertItem(linked(A, '/x/a.png'))
+    libraryDao.setDeletedAt(A, 5, 5)
+    expect(libraryDao.findLinkedByPath('/x/a.png')?.id).toBe(A)
+    expect(libraryDao.findLinkedByPath('/x/a.png')?.deletedAt).toBe(5)
+  })
+
+  it('TL-24 touchLinked：只改这件当前版本的大小与修改时间', () => {
+    libraryDao.insertItem(linked(A, '/x/a.png', { size: 10, createdAt: 1 }))
+    libraryDao.insertItem(newItem(B))
+    const before = libraryDao.findItem(A)!
+    const other = libraryDao.findItem(B)
+
+    libraryDao.touchLinked(A, 25, 9)
+
+    expect(libraryDao.findItem(A)).toEqual({ ...before, size: 25, updatedAt: 9 })
+    expect(libraryDao.findItem(B)).toEqual(other)
+  })
+
+  it('TL-25 convertToManaged：改成托管，记下文件名 / sha / 大小，其余不动', () => {
+    libraryDao.insertItem(
+      linked(A, '/x/my file.svg', { size: 10, fileName: 'my file.svg', createdAt: 1 })
+    )
+    const before = libraryDao.findItem(A)!
+
+    libraryDao.convertToManaged(A, { fileName: 'my-file.svg', sha256: 'h', size: 12 }, 9)
+
+    expect(libraryDao.findItem(A)).toEqual({
+      ...before,
+      storage: 'managed',
+      externalPath: null,
+      updatedAt: 9,
+      fileName: 'my-file.svg',
+      sha256: 'h',
+      size: 12
+    })
+    expect(libraryDao.findLinkedByPath('/x/my file.svg')).toBeNull()
+    expect(libraryDao.findManagedBySha('h')?.id).toBe(A)
+  })
+
+  it('TL-26 convertToManaged：关联都不变', () => {
+    libraryDao.insertItem(linked(A, '/x/a.svg'))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'produced', createdAt: 3 }))
+    libraryDao.addLink(
+      link({ itemId: A, targetType: 'note', targetId: '/n.md', relation: 'embedded', createdAt: 4 })
+    )
+    const before = allLinks()
+    libraryDao.convertToManaged(A, { fileName: 'a.svg', sha256: 'h', size: 1 }, 9)
+    expect(allLinks()).toEqual(before)
+  })
+
+  it('findLinkedUnder：前缀底下的引用条目（含回收站里的）；托管的、兄弟目录的不算', () => {
+    libraryDao.insertItem(linked(A, '/r/sess-1/a.svg'))
+    libraryDao.insertItem(linked(B, '/r/sess-10/b.svg'))
+    libraryDao.insertItem(linked(C, '/r/sess-1/sub/c.svg'))
+    libraryDao.setDeletedAt(C, 5, 5)
+    libraryDao.insertItem(newItem(D))
+    expect(
+      libraryDao
+        .findLinkedUnder('/r/sess-1/')
+        .map((r) => r.id)
+        .sort()
+    ).toEqual([A, C].sort())
+    expect(libraryDao.findLinkedUnder('/nowhere/')).toEqual([])
+  })
+
+  it('TL-27 itemsOfTarget：这个目标的每条关联一行（回收站里的也在），带文件的列', () => {
+    libraryDao.insertItem(newItem(A))
+    libraryDao.insertItem(newItem(B))
+    libraryDao.insertItem(newItem(C))
+    libraryDao.setDeletedAt(B, 5, 5)
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'sent' }))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'attached' }))
+    libraryDao.addLink(link({ itemId: B, targetId: 'S1', relation: 'produced' }))
+    libraryDao.addLink(link({ itemId: C, targetId: 'S2', relation: 'sent' }))
+    libraryDao.addLink(
+      link({ itemId: A, targetType: 'note', targetId: 'S1', relation: 'embedded' })
+    )
+
+    const rows = libraryDao.itemsOfTarget('session', 'S1')
+    expect(rows.map((r) => `${r.id}/${r.relation}`).sort()).toEqual(
+      [`${A}/sent`, `${A}/attached`, `${B}/produced`].sort()
+    )
+    const b = rows.find((r) => r.id === B)!
+    expect(b).toEqual({ ...libraryDao.findItem(B), relation: 'produced' })
+    expect(libraryDao.itemsOfTarget('session', 'nobody')).toEqual([])
+  })
+
+  it('TL-28 timeline：每条会话关联一行，没有关联的一行取进库时刻，新的在前', () => {
+    libraryDao.insertItem(newItem(A, { createdAt: 10 }))
+    libraryDao.insertItem(newItem(B, { createdAt: 200 }))
+    libraryDao.insertItem(newItem(C, { createdAt: 10 }))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', createdAt: 100 }))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S2', relation: 'attached', createdAt: 300 }))
+    libraryDao.addLink(link({ itemId: C, targetId: 'S1', relation: 'produced', createdAt: 50 }))
+
+    const rows = libraryDao.timeline(10)
+    expect(rows.map((r) => [r.id, r.sessionId, r.relation, r.at])).toEqual([
+      [A, 'S2', 'attached', 300],
+      [B, null, null, 200],
+      [A, 'S1', 'sent', 100],
+      [C, 'S1', 'produced', 50]
+    ])
+    expect(rows[1]).toEqual({ ...libraryDao.findItem(B), sessionId: null, relation: null, at: 200 })
+    expect(rows[0]).toMatchObject({ ...libraryDao.findItem(A) })
+  })
+
+  it('TL-29 timeline：只有笔记 / 项目关联的文件恰好一行，算没有会话', () => {
+    libraryDao.insertItem(newItem(A, { createdAt: 77 }))
+    for (const [targetType, targetId, relation] of [
+      ['note', '/n1.md', 'embedded'],
+      ['note', '/n2.md', 'embedded'],
+      ['project', 'p1', 'bound']
+    ] as const) {
+      libraryDao.addLink(link({ itemId: A, targetType, targetId, relation, createdAt: 500 }))
+    }
+    expect(libraryDao.timeline(10).map((r) => [r.id, r.sessionId, r.relation, r.at])).toEqual([
+      [A, null, null, 77]
+    ])
+  })
+
+  it('TL-30 timeline：回收站里的不出现', () => {
+    libraryDao.insertItem(newItem(A))
+    libraryDao.insertItem(newItem(B))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1' }))
+    libraryDao.setDeletedAt(A, 5, 5)
+    libraryDao.setDeletedAt(B, 5, 5)
+    expect(libraryDao.timeline(10)).toEqual([])
+  })
+
+  it('TL-31 timeline：同一件同一条会话的两种关系是两行，新的在前', () => {
+    libraryDao.insertItem(newItem(A))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'sent', createdAt: 10 }))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'attached', createdAt: 20 }))
+    expect(libraryDao.timeline(10).map((r) => [r.relation, r.at])).toEqual([
+      ['attached', 20],
+      ['sent', 10]
+    ])
+  })
+
+  it('TL-33 isLinked 的 relations：只认给出的那几种关系', () => {
+    for (const id of [A, B, C]) libraryDao.insertItem(newItem(id))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'shown' }))
+    libraryDao.addLink(link({ itemId: A, targetId: 'S1', relation: 'produced' }))
+    libraryDao.addLink(link({ itemId: B, targetId: 'S1', relation: 'attached' }))
+    libraryDao.addLink(link({ itemId: C, targetId: 'S1', relation: 'embedded' }))
+    const grant = ['sent', 'attached'] as const
+
+    expect(libraryDao.isLinked(A, 'session', 'S1', grant)).toBe(false)
+    expect(libraryDao.isLinked(A, 'session', 'S1')).toBe(true)
+    expect(libraryDao.isLinked(B, 'session', 'S1', grant)).toBe(true)
+    expect(libraryDao.isLinked(B, 'session', 'S1')).toBe(true)
+    expect(libraryDao.isLinked(C, 'session', 'S1', grant)).toBe(false)
+    expect(libraryDao.isLinked(C, 'session', 'S1')).toBe(true)
+    expect(libraryDao.isLinked(B, 'session', 'S1', [])).toBe(false)
+    expect(libraryDao.isLinked(B, 'session', 'S2', grant)).toBe(false)
   })
 })

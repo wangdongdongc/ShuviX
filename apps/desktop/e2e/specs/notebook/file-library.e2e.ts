@@ -16,7 +16,18 @@
  *   FLE-4 agent 读库：N 读 P1 不问（有 `attached` 关联；决策 library / allow）、拿到图；C 读 P1 恰问一次
  *         （卡片 `Read library file "pasted-….png" (<id>)`，winning `ask-on-library-access#0`），放行后拿到图；
  *         C 读自己发过的 P2 不问；N 换成库目录里的**绝对路径**读 P1 → 走路径门，问 `ask-on-external-path#0`
- *   FLE-5 删掉 C → 它的关联没了，P2 那件的元数据与文件都在，N 与笔记的关联不受影响
+ *   FLE-5 删掉 C → 它的关联没了，P2 那件的元数据与文件都在，N 与笔记的关联不受影响（文件留在时间线上，
+ *         进当天的「没有会话」那一组：TLE-2 用另一条会话钉这件事）
+ *
+ * 文件时间线（右侧面板的文件标签；用例稿 docs/file-library-timeline-tests.md §13），接在 FLE-5 后面、同一个实例：
+ *   TLE-1 对话 D 发 P3（24×24）→ `library.timeline()` 里 P3 在 D 名下（sent，标题与项目名齐）；文件标签里 D 那一组
+ *         有这件（`data-relation="sent"`、不 missing），N 那一组有 P1（attached）；点文件 → 预览窗口开的是库里那份；
+ *         点组标题 → 活动会话变成 D
+ *   TLE-2 删掉 D（标签一直开着：`library.changed` → 重取）→ D 那一组没了，P3 进同一天的「没有会话」组；
+ *         timeline 里 sessionId 为 null、sessions 里没有 D；元数据与字节都在
+ *   TLE-3 对话 E 里脚本 agent 用 `artifact` 工具建 `Timeline chart` → 库里一行 artifact / linked（externalPath 在
+ *         `~/.shuvix/artifacts/<E>/`，库目录里没有它），E 名下 `produced`；删掉 E → 变 managed（externalPath 空、
+ *         sha256 = 产物字节），字节在库目录里，产物目录没了，时间线上在「没有会话」组、不 missing
  *
  * 夹具：项目目录在 fake HOME 里（工作目录，读不问）；笔记本会话 N（绝对 notebookPath，标题 = 文件名）与普通会话 C
  * （非默认标题：自动标题不来抢假提供商的请求），都在这个项目里。脚本一律按这一步的用户消息认领（`promptOf`：
@@ -65,8 +76,11 @@ import {
 } from '../../harness/seed'
 import { syncProbe, type SyncProbe } from '../../harness/sync'
 import {
+  libraryTimelinePane,
   notebookEditorPane,
   sidebarPane,
+  type LibraryTimelineGroupShot,
+  type LibraryTimelinePane,
   type NotebookEditorPane,
   type PasteFileSeed
 } from '../../harness/pages'
@@ -78,6 +92,12 @@ const TURN_TIMEOUT = 60_000
 const NOTE_FILE = 'lib-note.md'
 const NOTE = '# Lib note\n\nend.\n'
 const CHAT_TITLE = 'Library chat'
+const D_TITLE = 'Timeline chat D'
+const E_TITLE = 'Timeline chat E'
+const ARTIFACT_TITLE = 'Timeline chart'
+const ARTIFACT_SVG =
+  '<svg viewBox="0 0 40 20" aria-label="Timeline chart" xmlns="http://www.w3.org/2000/svg">' +
+  '<rect width="10" height="20" fill="var(--viz-1)"/></svg>'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PASTED_NAME_RE = /^pasted-\d{8}-\d{6}\.png$/
@@ -157,6 +177,13 @@ let p1Name = ''
 let pdfId = ''
 let p2Id = ''
 let p2Name = ''
+// 时间线用例（TLE-*）
+let timeline: LibraryTimelinePane
+let projectId = ''
+let dSid = ''
+let p3: Buffer
+let p3Id = ''
+let p3Name = ''
 
 // ─── 小助手 ──────────────────────────────────────
 
@@ -320,6 +347,62 @@ const newLineAtEnd = async (): Promise<void> => {
   await editor.caretToEnd()
 }
 
+// ─── 文件时间线（TLE-*）──────────────────────────
+
+interface TimelineEntryShot {
+  item: { id: string; name: string; storage: string; source: string }
+  sessionId: string | null
+  relation: string | null
+  at: number
+  missing?: boolean
+}
+
+interface TimelineShot {
+  entries: TimelineEntryShot[]
+  sessions: Record<string, { title: string; projectName?: string; notebook?: boolean }>
+}
+
+/** 产物那一件在元数据表里的样子（linked 的件没有库里的版本文件，所以不走 itemRows 的 JOIN 口径） */
+interface ArtifactItemRow {
+  id: string
+  name: string
+  source: string
+  storage: string
+  externalPath: string | null
+  deletedAt: number | null
+}
+
+const timelineOf = (): Promise<TimelineShot> =>
+  app.main.eval<TimelineShot>(`window.api.library.timeline()`)
+
+const artifactItems = (): ArtifactItemRow[] =>
+  sqliteJson<ArtifactItemRow>(
+    app.home,
+    `SELECT id, name, source, storage, externalPath, deletedAt
+       FROM library_items WHERE source = 'artifact' ORDER BY createdAt, id`
+  )
+
+const artifactsDirOf = (sid: string): string => join(app.home, '.shuvix', 'artifacts', sid)
+
+const createChat = (title: string): Promise<string> =>
+  app.main.eval<string>(
+    `window.api.session.create(${JSON.stringify({ title, projectId })}).then((s) => s.id)`
+  )
+
+/** 面板里含这一件的那一组（等它出现） */
+const groupHolding = (
+  fileId: string,
+  sessionId: string,
+  what: string
+): Promise<LibraryTimelineGroupShot> =>
+  until(
+    async () =>
+      (await timeline.groups()).find(
+        (g) => g.sessionId === sessionId && g.files.some((f) => f.id === fileId)
+      ) ?? null,
+    what
+  )
+
 beforeAll(async () => {
   provider = await startFakeProvider()
   app = await launchApp()
@@ -338,7 +421,10 @@ beforeAll(async () => {
   p1 = readFileSync(writePng(join(fixtures, 'p1.png'), { width: 40, height: 24 }))
   p2 = readFileSync(writePng(join(fixtures, 'p2.png'), { width: 32, height: 32 }))
 
+  p3 = readFileSync(writePng(join(fixtures, 'p3.png'), { width: 24, height: 24 }))
+
   const project = await createProject(app.main, { name: 'LibraryProj', path: projDir })
+  projectId = project.id
   nSid = await app.main.eval<string>(
     `window.api.session.create(${JSON.stringify({
       projectId: project.id,
@@ -744,4 +830,223 @@ describe('file library L1', () => {
     expect(sessionLinks(nSid)).toEqual(nBefore)
     expect(noteLinks()).toEqual(notesBefore)
   })
+  it(
+    'TLE-1 a sent image is listed under its session on the Files tab and opens the preview',
+    async () => {
+      provider.reset()
+      dSid = await createChat(D_TITLE)
+      const since = await send(
+        dSid,
+        'TLE1 look at this',
+        [{ text: 'ok' }],
+        [{ type: 'image', data: b64(p3), mimeType: 'image/png' }]
+      )
+      await ended(dSid, since)
+      const row = await until(
+        () => itemRows().find((r) => r.source === 'chat-image' && r.sha256 === sha256(p3)) ?? null,
+        'P3 kept in the library'
+      )
+      p3Id = row.id
+      p3Name = row.fileName
+      await until(
+        () => sessionLinks(dSid).some((l) => l.itemId === p3Id && l.relation === 'sent') || null,
+        'sent link recorded for D'
+      )
+
+      // IPC：P3 在 D 名下，会话的标题与项目名都带回来
+      const shot = await timelineOf()
+      const entry = shot.entries.find((e) => e.item.id === p3Id && e.sessionId === dSid)
+      expect(entry).toMatchObject({ sessionId: dSid, relation: 'sent' })
+      expect(entry?.missing).toBeFalsy()
+      expect(shot.sessions[dSid]).toMatchObject({ title: D_TITLE, projectName: 'LibraryProj' })
+      expect(shot.entries.filter((e) => e.item.id === p3Id)).toHaveLength(1)
+      expect(shot.entries.find((e) => e.item.id === p1Id && e.sessionId === nSid)?.relation).toBe(
+        'attached'
+      )
+      expect(shot.sessions[nSid]?.notebook).toBe(true)
+
+      // 界面：文件标签里 D 那一组有这件，N 那一组有 P1
+      timeline = libraryTimelinePane(app.main)
+      await timeline.open()
+      const dGroup = await groupHolding(p3Id, dSid, "D's group with P3 on the Files tab")
+      expect(dGroup.title).toBe(D_TITLE)
+      expect(dGroup.canOpen).toBe(true)
+      expect(dGroup.files).toEqual([{ id: p3Id, relation: 'sent', missing: false }])
+      const nGroup = await groupHolding(p1Id, nSid, "N's group with P1 on the Files tab")
+      expect(nGroup.files.find((f) => f.id === p1Id)).toEqual({
+        id: p1Id,
+        relation: 'attached',
+        missing: false
+      })
+      expect(await timeline.empty()).toBe(false)
+      expect(await timeline.count()).not.toBe('')
+
+      // 点文件 → 预览窗口开的是库目录里那份
+      await timeline.clickFile(p3Id)
+      const win = await until(
+        () => app.connectFilePreviewWindow(p3Id),
+        'preview window for the library image'
+      )
+      try {
+        const target = (await app.filePreviewWindows()).find((w) => w.path.includes(p3Id))
+        expect(target?.path).toBe(realpathSync(itemFileOf(p3Id, p3Name)))
+      } finally {
+        await win.eval('window.close()').catch(() => undefined)
+        win.close()
+        await until(
+          async () => !(await app.filePreviewWindows()).some((w) => w.path.includes(p3Id)) || null,
+          'image preview window closed'
+        )
+      }
+
+      // 点组标题 → 活动会话变成 D（此前开着的是笔记 N）
+      const sidebar = sidebarPane(app.main)
+      expect(await sidebar.activeTitle()).not.toBe(D_TITLE)
+      await timeline.clickSession(dSid)
+      await until(
+        async () => (await sidebar.activeTitle()) === D_TITLE || null,
+        'D became the active session'
+      )
+    },
+    TURN_TIMEOUT
+  )
+
+  it('TLE-2 deleting the session keeps its file on the timeline, in the no-session group', async () => {
+    const dayBefore = (await groupHolding(p3Id, dSid, "D's group before the delete")).day
+    expect(await timeline.active()).toBe(true)
+
+    await app.main.eval(`window.api.session.delete(${JSON.stringify(dSid)})`)
+
+    // 标签一直开着、没碰过：靠 library.changed 重取
+    await until(
+      async () => !(await timeline.groups()).some((g) => g.sessionId === dSid) || null,
+      "D's group gone from the Files tab"
+    )
+    const orphan = await groupHolding(p3Id, '', 'P3 in the no-session group')
+    expect(orphan.day).toBe(dayBefore)
+    expect(orphan.canOpen).toBe(false)
+    expect(orphan.files.find((f) => f.id === p3Id)).toEqual({
+      id: p3Id,
+      relation: '',
+      missing: false
+    })
+    expect(
+      (await timeline.groups()).filter((g) => g.files.some((f) => f.id === p3Id))
+    ).toHaveLength(1)
+
+    const shot = await timelineOf()
+    const mine = shot.entries.filter((e) => e.item.id === p3Id)
+    expect(mine).toHaveLength(1)
+    expect(mine[0].sessionId).toBeNull()
+    expect(mine[0].missing).toBeFalsy()
+    expect(Object.keys(shot.sessions)).not.toContain(dSid)
+
+    expect(sessionLinks(dSid)).toEqual([])
+    expect(itemRows().find((r) => r.id === p3Id)).toMatchObject({
+      deletedAt: null,
+      storage: 'managed'
+    })
+    expect(readFileSync(itemFileOf(p3Id, p3Name)).equals(p3)).toBe(true)
+  })
+
+  it(
+    'TLE-3 an artifact is listed as made by the agent and survives its session as a managed file',
+    async () => {
+      provider.reset()
+      const eSid = await createChat(E_TITLE)
+      const dirsBefore = itemDirsOnDisk()
+      const callId = 'call_tle3_artifact'
+      const since = await send(eSid, 'TLE3 draw the timeline chart', [
+        {
+          toolCalls: [
+            {
+              id: callId,
+              name: 'artifact',
+              args: JSON.stringify({
+                action: 'create',
+                title: ARTIFACT_TITLE,
+                ext: 'svg',
+                content: ARTIFACT_SVG
+              })
+            }
+          ]
+        },
+        { text: 'TLE3-DONE' }
+      ])
+      await ended(eSid, since)
+      expect(await asksRaisedIn(events, eSid, since)).toBe(0)
+      expect((await probe.waitToolResult(eSid, callId, TURN_TIMEOUT)).isError).toBe(false)
+
+      // 产物在会话的产物目录里，库里只登记一行 linked（库目录里没有它）
+      const artifactsDir = artifactsDirOf(eSid)
+      const files = readdirSync(artifactsDir).filter((f) => f.endsWith('.svg'))
+      expect(files).toHaveLength(1)
+      const artifactBytes = readFileSync(join(artifactsDir, files[0]))
+      const linked = await until(
+        () => (artifactItems().length > 0 ? artifactItems() : null),
+        'artifact registered in the library'
+      )
+      expect(linked).toHaveLength(1)
+      const artId = linked[0].id
+      expect(linked[0]).toMatchObject({
+        name: ARTIFACT_TITLE,
+        source: 'artifact',
+        storage: 'linked',
+        deletedAt: null
+      })
+      expect(realpathSync(linked[0].externalPath ?? '')).toBe(
+        realpathSync(join(artifactsDir, files[0]))
+      )
+      expect(sessionLinks(eSid).map((l) => [l.itemId, l.relation])).toEqual([[artId, 'produced']])
+      expect(itemDirsOnDisk()).toEqual(dirsBefore)
+
+      const before = await timelineOf()
+      expect(before.entries.find((e) => e.item.id === artId && e.sessionId === eSid)).toMatchObject(
+        { relation: 'produced', item: { storage: 'linked', source: 'artifact' } }
+      )
+      const eGroup = await groupHolding(artId, eSid, "E's group with the artifact")
+      expect(eGroup.title).toBe(E_TITLE)
+      expect(eGroup.files).toEqual([{ id: artId, relation: 'produced', missing: false }])
+
+      // 删掉 E：产物目录要没了，这一件先被拷进库里变成 managed
+      await app.main.eval(`window.api.session.delete(${JSON.stringify(eSid)})`)
+      await until(() => !existsSync(artifactsDir) || null, "E's artifacts folder removed")
+      const [after] = await until(
+        () => (artifactItems()[0]?.storage === 'managed' ? artifactItems() : null),
+        'artifact item became managed'
+      )
+      expect(after).toMatchObject({
+        id: artId,
+        storage: 'managed',
+        externalPath: null,
+        deletedAt: null
+      })
+      const managed = itemRows().find((r) => r.id === artId)
+      expect(managed).toMatchObject({ storage: 'managed', sha256: sha256(artifactBytes) })
+      const stored = itemFileOf(artId, managed!.fileName)
+      expect(stored.startsWith(`${join(app.home, '.shuvix', 'library', 'files')}/`)).toBe(true)
+      expect(readFileSync(stored).equals(artifactBytes)).toBe(true)
+      expect(itemDirsOnDisk()).toEqual([...dirsBefore, artId].sort())
+      expect(sessionLinks(eSid)).toEqual([])
+
+      // 时间线：还在，进了「没有会话」那一组，不是 missing
+      await until(
+        async () => !(await timeline.groups()).some((g) => g.sessionId === eSid) || null,
+        "E's group gone from the Files tab"
+      )
+      const orphan = await groupHolding(artId, '', 'artifact in the no-session group')
+      expect(orphan.files.find((f) => f.id === artId)).toEqual({
+        id: artId,
+        relation: '',
+        missing: false
+      })
+      const shot = await timelineOf()
+      const mine = shot.entries.filter((e) => e.item.id === artId)
+      expect(mine).toHaveLength(1)
+      expect(mine[0]).toMatchObject({ sessionId: null, item: { storage: 'managed' } })
+      expect(mine[0].missing).toBeFalsy()
+      expect(Object.keys(shot.sessions)).not.toContain(eSid)
+    },
+    TURN_TIMEOUT
+  )
 })

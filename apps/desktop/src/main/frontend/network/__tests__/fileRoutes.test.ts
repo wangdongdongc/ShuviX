@@ -45,6 +45,8 @@
  *   FR-LIB-2 GET → 200 image/png、字节一致、accept-ranges + nosniff；解析器恰调一次（解码后的 id）；HEAD 只回头；Range → 206
  *   FR-LIB-3 缺 id / 空 id → 400 且解析器不调；解析器回 undefined、deps 里没有它、解析出不在的文件 → 404
  *   FR-LIB-4 不过 path 点位：judgePath 一律拒绝也 200、不调；`/files/preview?path=library:ID` 照常以 preview 调 judgePath → 403
+ *   TL-99…104 留在原位置的库文件（`isLibraryFileExternal` 说是）照普通文件过 path 点位（docs/file-library-timeline-tests.md §9）：
+ *            拒 → 403、放行 → 200；托管的、没给判别函数的不判；解析不出、缺 id 时两个都不调
  *   FR-LIB-5 库里的 .svg 带 `Content-Security-Policy: sandbox` + nosniff；POST → 405 + allow: GET, HEAD，解析器不调
  */
 import { randomBytes } from 'node:crypto'
@@ -1034,5 +1036,102 @@ describe('FR-LIB-2…5 /files/library', () => {
     expect(res.status).toBe(405)
     expect(res.headers.allow).toBe('GET, HEAD')
     expect(resolveLibraryFile).not.toHaveBeenCalled()
+  })
+})
+
+// ─── /files/library：留在原位置的文件过 path 点位（TL-99…104；TL-103 / TL-105 按削减名单略去） ───
+
+describe('TL-99…104 /files/library 的 path 点位', () => {
+  let resolveLibraryFile: ReturnType<typeof libraryResolver>
+  const libFile = (): string => at('library', '01', LIB_ID, 'a.png')
+  const allowAll = (): ReturnType<typeof vi.fn<NonNullable<FileRouteDeps['judgePath']>>> =>
+    vi.fn(
+      (): GateVerdict => ({
+        allowed: true,
+        decision: { effect: 'allow' } as GateVerdict['decision'],
+        downgraded: false
+      })
+    )
+
+  beforeEach(() => {
+    mkdirSync(at('library', '01', LIB_ID), { recursive: true })
+    writeFileSync(libFile(), PAYLOAD)
+    resolveLibraryFile = libraryResolver()
+    deps = { ...deps, resolveLibraryFile }
+  })
+
+  it('TL-99 留在原位置 + 点位拒绝 → 403 规则的话，正文不是文件；judgePath 恰一次 (路径, library)', async () => {
+    const judgePath = denyAllJudgePath()
+    const isLibraryFileExternal = vi.fn(() => true)
+    deps = { ...deps, judgePath, isLibraryFileExternal }
+    await boot()
+
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+
+    expect(res.status).toBe(403)
+    expect(res.body.toString()).toBe('denied by test\n')
+    expect(res.body.equals(PAYLOAD)).toBe(false)
+    expect(isLibraryFileExternal).toHaveBeenCalledWith(LIB_ID)
+    expect(judgePath).toHaveBeenCalledTimes(1)
+    expect(judgePath.mock.calls[0]).toEqual([libFile(), 'library'])
+  })
+
+  it('TL-99 给了 deniedText：403 的正文用它', async () => {
+    deps = {
+      ...deps,
+      judgePath: denyAllJudgePath(),
+      isLibraryFileExternal: () => true,
+      deniedText: () => 'custom refusal'
+    }
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+    expect(res.status).toBe(403)
+    expect(res.body.toString()).toBe('custom refusal')
+  })
+
+  it('TL-100 留在原位置 + 点位放行 → 200，字节一致', async () => {
+    const judgePath = allowAll()
+    deps = { ...deps, judgePath, isLibraryFileExternal: () => true }
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+    expect(res.status).toBe(200)
+    expect(res.body.equals(PAYLOAD)).toBe(true)
+    expect(judgePath).toHaveBeenCalledTimes(1)
+  })
+
+  it('TL-101 托管的文件：一律拒绝的点位也 200，judgePath 不调', async () => {
+    const judgePath = denyAllJudgePath()
+    const isLibraryFileExternal = vi.fn(() => false)
+    deps = { ...deps, judgePath, isLibraryFileExternal }
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+    expect(res.status).toBe(200)
+    expect(res.body.equals(PAYLOAD)).toBe(true)
+    expect(isLibraryFileExternal).toHaveBeenCalledWith(LIB_ID)
+    expect(judgePath).not.toHaveBeenCalled()
+  })
+
+  it('TL-102 deps 里没有 isLibraryFileExternal：不判（FR-LIB-4 的行为不变）', async () => {
+    const judgePath = denyAllJudgePath()
+    deps = { ...deps, judgePath, isLibraryFileExternal: undefined }
+    await boot()
+    const res = await http(networkLibraryFileUrl(LIB_ID))
+    expect(res.status).toBe(200)
+    expect(judgePath).not.toHaveBeenCalled()
+  })
+
+  it('TL-104 解析不出的 id → 404，缺 id → 400：判别函数与点位都不调', async () => {
+    const judgePath = denyAllJudgePath()
+    const isLibraryFileExternal = vi.fn(() => true)
+    deps = { ...deps, judgePath, isLibraryFileExternal }
+    await boot()
+    expectPlain(
+      await http(networkLibraryFileUrl('0199d3a2-0000-7000-8000-0000000000ff')),
+      404,
+      'Not found.'
+    )
+    expectPlain(await http('/files/library'), 400, 'Bad request.')
+    expect(isLibraryFileExternal).not.toHaveBeenCalled()
+    expect(judgePath).not.toHaveBeenCalled()
   })
 })

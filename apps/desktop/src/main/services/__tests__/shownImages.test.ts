@@ -22,6 +22,8 @@
  *   SN-12 shownImagePathOfRef：shown:<合法> → 路径；shown:../x.png、普通路径、合法引用 + 不安全 id → undefined
  *   SN-13 removeShownImages：只删 shown/<sid>；目录不在 no-op；''、'..'、'a/b' 什么都不删；rmSync 抛错也不抛
  *   SN-14 copyShownImages：同名逐字节拷过去、源不动；源目录不在 → 不建目标；不安全 id no-op；已有目标目录 → 合并
+ *   TL-82…87 摆出来的图登记进文件库（docs/file-library-timeline-tests.md §7.1）：原图快照的路径 + 源文件名；
+ *         失败的调用、不安全的会话 id 不登记；登记抛错不影响展示
  *   SN-15 nativeDisplayResizer（nativeImage 桩）：size null 用解码尺寸；给的尺寸优先；png → toPNG、jpg / webp →
  *         toJPEG(90)；已在 2048 内不缩照样重编码；isEmpty / 尺寸为 0 / 编码出空 → null
  */
@@ -52,7 +54,14 @@ const h = vi.hoisted(() => ({
   /** fs.rmSync 的替身（缺省走真的；SN-13 让它抛） */
   rmSync: null as null | ((...args: unknown[]) => void),
   /** fs/promises.readFile 的调用记录（SN-5：超限的文件不读） */
-  readPaths: [] as string[]
+  readPaths: [] as string[],
+  /** services/fileLibrary 的 recordSessionFiles（摆出来的图登记进文件库；TL-82…87） */
+  recordSessionFiles: vi.fn()
+}))
+
+// 文件库整个顶掉：这里只看「登记了什么」，不让用例去加载真的库模块
+vi.mock('../fileLibrary', () => ({
+  recordSessionFiles: (...args: unknown[]) => h.recordSessionFiles(...args)
 }))
 
 vi.mock('electron', () => ({
@@ -115,6 +124,7 @@ beforeEach(() => {
   h.createFromBuffer.mockReset()
   h.rmSync = null
   h.readPaths.length = 0
+  h.recordSessionFiles.mockReset()
 })
 
 const sha = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex')
@@ -791,5 +801,120 @@ describe('SN-15 · nativeDisplayResizer', () => {
       fakeImage({ width: 3000, height: 10 }, { encoded: Buffer.alloc(0) })
     )
     expect(nativeDisplayResizer(Buffer.from('x'), 'webp', null)).toBeNull()
+  })
+})
+
+// ─── TL-82 … TL-87：登记进文件库 ────────────────────────
+
+describe('TL-82…87 · 摆出来的图登记进文件库', () => {
+  it('TL-82 一张小图：(会话, shown, [{快照路径, 源文件名}]) 一次', async () => {
+    const sid = freshSid()
+    const bytes = pngHeader(40, 24)
+    put('tl82/cat.png', bytes)
+    await presentImages(
+      { sessionId: sid, workingDirectory: WD, images: one('tl82/cat.png') },
+      noResize
+    )
+    expect(h.recordSessionFiles).toHaveBeenCalledTimes(1)
+    expect(h.recordSessionFiles).toHaveBeenCalledWith(sid, 'shown', [
+      { path: join(shownDir(sid), `${sha(bytes)}.png`), name: 'cat.png' }
+    ])
+  })
+
+  it('TL-83 有展示副本的大图：登记的是原图快照，不是副本', async () => {
+    const sid = freshSid()
+    const orig = pngHeader(2049, 1)
+    put('tl83/wide.png', orig)
+    const resize = vi.fn<DisplayResizer>(() => ({
+      bytes: Buffer.from('display'),
+      format: 'png',
+      width: 2048,
+      height: 1
+    }))
+    const [image] = await presentImages(
+      { sessionId: sid, workingDirectory: WD, images: one('tl83/wide.png') },
+      resize
+    )
+    expect(image.original).toBe(`${sha(orig)}.png`)
+    expect(image.file).not.toBe(image.original)
+    expect(h.recordSessionFiles).toHaveBeenCalledWith(sid, 'shown', [
+      { path: join(shownDir(sid), `${sha(orig)}.png`), name: 'wide.png' }
+    ])
+  })
+
+  it('TL-84 符号链接：名字取解析后的源文件名', async () => {
+    const sid = freshSid()
+    const target = put('tl84/real/photo.png', pngHeader(3, 3))
+    symlinkSync(target, join(WD, 'tl84', 'link.png'))
+    await presentImages(
+      { sessionId: sid, workingDirectory: WD, images: one('tl84/link.png') },
+      noResize
+    )
+    expect(h.recordSessionFiles.mock.calls[0][2]).toEqual([
+      expect.objectContaining({ name: 'photo.png' })
+    ])
+  })
+
+  it('TL-85 一次两张：一次调用，两件，按请求的顺序', async () => {
+    const sid = freshSid()
+    const a = pngHeader(5, 5)
+    const b = gifHeader(6, 6)
+    put('tl85/a.png', a)
+    put('tl85/b.gif', b)
+    await presentImages(
+      {
+        sessionId: sid,
+        workingDirectory: WD,
+        images: [
+          { path: 'tl85/b.gif', label: 'images[0].path' },
+          { path: 'tl85/a.png', label: 'images[1].path' }
+        ]
+      },
+      noResize
+    )
+    expect(h.recordSessionFiles).toHaveBeenCalledTimes(1)
+    expect(h.recordSessionFiles).toHaveBeenCalledWith(sid, 'shown', [
+      { path: join(shownDir(sid), `${sha(b)}.gif`), name: 'b.gif' },
+      { path: join(shownDir(sid), `${sha(a)}.png`), name: 'a.png' }
+    ])
+  })
+
+  it('TL-86 调用整次失败、会话 id 不安全：不登记', async () => {
+    put('tl86/ok.png', pngHeader(2, 2))
+    await expect(
+      presentImages(
+        {
+          sessionId: freshSid(),
+          workingDirectory: WD,
+          images: [
+            { path: 'tl86/ok.png', label: 'images[0].path' },
+            { path: 'tl86/missing.png', label: 'images[1].path' }
+          ]
+        },
+        noResize
+      )
+    ).rejects.toThrow()
+    await expect(
+      presentImages(
+        { sessionId: 'a/b', workingDirectory: WD, images: one('tl86/ok.png') },
+        noResize
+      )
+    ).rejects.toThrow('This session cannot show images.')
+    expect(h.recordSessionFiles).not.toHaveBeenCalled()
+  })
+
+  it('TL-87 登记抛错：图照样摆出来', async () => {
+    const sid = freshSid()
+    const bytes = pngHeader(7, 7)
+    put('tl87/a.png', bytes)
+    h.recordSessionFiles.mockImplementation(() => {
+      throw new Error('library is down')
+    })
+    const images = await presentImages(
+      { sessionId: sid, workingDirectory: WD, images: one('tl87/a.png') },
+      noResize
+    )
+    expect(images.map((i) => i.file)).toEqual([`${sha(bytes)}.png`])
+    expect(existsSync(join(shownDir(sid), `${sha(bytes)}.png`))).toBe(true)
   })
 })

@@ -21,6 +21,7 @@ import type {
 } from '../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createLogger } from '../logger'
+import { recordAttachedPaths } from '../services/fileLibrary'
 
 const log = createLogger('AgentIPC')
 
@@ -41,6 +42,7 @@ export function registerAgentHandlers(): void {
     operationContext.run(createClientContext(ctx, params.sessionId), async () => {
       // 先授权再开跑：agent 的第一步就可能读它们
       sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
+      recordAttachedPaths(params.sessionId, params.attachedPaths)
       await chatGateway.prompt(
         params.sessionId,
         params.text,
@@ -75,6 +77,7 @@ export function registerAgentHandlers(): void {
   defineHandler('agent:steer', (ctx, params: AgentSteerParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
       sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
+      recordAttachedPaths(params.sessionId, params.attachedPaths)
       chatGateway.steer(
         params.sessionId,
         params.text,
@@ -90,6 +93,7 @@ export function registerAgentHandlers(): void {
   defineHandler('agent:followUp', (ctx, params: AgentFollowUpParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
       sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
+      recordAttachedPaths(params.sessionId, params.attachedPaths)
       chatGateway.followUp(
         params.sessionId,
         params.text,
@@ -224,6 +228,7 @@ export function registerAgentHandlers(): void {
     ) =>
       operationContext.run(createClientContext(ctx, params.sessionId), () => {
         sessionAcl.grantAttachedFiles(params.sessionId, params.attachedPaths)
+        recordAttachedPaths(params.sessionId, params.attachedPaths)
         // 答题方 = 这个窗口（`ipc:<webContentsId>`），只进审计日志（P3-08 PIN-20）
         chatGateway.respondToInput(params.sessionId, params.requestId, params.response, {
           clientId: ctx.client.id

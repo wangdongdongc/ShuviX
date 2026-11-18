@@ -8599,7 +8599,7 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
 //     这一处）；标签栏 = 它的父 div（PanelTabBar 的按钮是直接子节点；屏外测量节点是 span，
 //     不会混进来）；
 //   - agents 面板 = RightPanel 根（标签栏的父级）里内容区（`:scope > div.relative`）的
-//     **最后一个**子节点（RightPanel 按 inbox/widget/calendar/agents 固定序铺开，
+//     `[data-right-panel-pane="agents"]` 那一格（RightPanel 按 widget / agents / library 固定序铺开，
 //     全部常驻挂载、visibility 切换）—— 行 / 空态 / 详情都 scope 在它之内；
 //   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
 //     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；血缘箭头 = `.lucide-corner-down-right`；
@@ -8702,8 +8702,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   const AGENTS_TAB = `[...document.querySelectorAll('button')].find((b) => b.querySelector('.lucide-activity'))`
   // RightPanel 根 = 标签栏（agents tab 的父 div）的父级
   const PANEL = `${AGENTS_TAB}?.parentElement?.parentElement`
-  // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
-  const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
+  // agents 面板 = 内容区里带 data-right-panel-pane="agents" 的那一格（它后面还有文件时间线，不再是最后一个）
+  const AGENTS = `${PANEL}?.querySelector('[data-right-panel-pane="agents"]')`
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
   // widget tab 里的卡片（WidgetPanel 的 `data-widget-card` = widget id，DOM 序 = 列表顺序）；第一个标签是收件箱
   const WIDGET_CARDS = `[...(${PANEL}?.querySelector('[data-widget-panel]')?.querySelectorAll('[data-widget-card]') ?? [])]`
@@ -17051,5 +17051,101 @@ export function goalPane(main: CdpClient): GoalPane {
           .filter((el) => el.querySelector('[data-token-kind="goal"]'))
           .map((el) => el.getAttribute('data-msg-id') ?? '')`
       )
+  }
+}
+
+// ─── 文件时间线（右侧面板第三个标签，docs/file-library-timeline-tests.md §13）───
+
+export interface LibraryTimelineFileShot {
+  /** `data-timeline-file` = 库里那一件的 id */
+  id: string
+  /** `data-relation`：sent / attached / shown / produced；没有会话关联为 '' */
+  relation: string
+  /** 带 `data-missing`（文件不在了，或缩略图没解出来） */
+  missing: boolean
+}
+
+export interface LibraryTimelineGroupShot {
+  /** 所在那一天（`data-timeline-day`，本地 YYYY-MM-DD） */
+  day: string
+  /** `data-timeline-session`：会话 id；不属于任何会话的那一组是 '' */
+  sessionId: string
+  /** 组标题的文字（会话标题；没有会话的那一组是界面文案） */
+  title: string
+  /** 标题能不能点（`[data-timeline-open-session]`） */
+  canOpen: boolean
+  files: LibraryTimelineFileShot[]
+}
+
+export interface LibraryTimelinePane {
+  /** 打开右侧面板并点到文件标签（图标 `lucide-images`），等时间线可见 */
+  open(): Promise<void>
+  /** 文件标签那一格此刻可见吗 */
+  active(): Promise<boolean>
+  /** 每一天里的每一组，DOM 序 */
+  groups(): Promise<LibraryTimelineGroupShot[]>
+  /** 点一件文件（开预览窗口）；没有这一件抛错 */
+  clickFile(id: string): Promise<void>
+  /** 点一组的标题（打开那条会话）；标题不可点 / 没有这一组抛错 */
+  clickSession(sessionId: string): Promise<void>
+  /** `[data-timeline-count]` 的文字 */
+  count(): Promise<string>
+  /** 空态（`[data-timeline-empty]`）在不在 */
+  empty(): Promise<boolean>
+}
+
+export function libraryTimelinePane(main: CdpClient): LibraryTimelinePane {
+  const PANE = `document.querySelector('[data-right-panel-pane="library"]')`
+  const ROOT = `${PANE}?.querySelector('[data-library-timeline]')`
+  const TAB = `[...document.querySelectorAll('button')].find((b) => b.querySelector('.lucide-images'))`
+  const active = (): Promise<boolean> =>
+    main.eval<boolean>(
+      `(() => { const p = ${PANE}; return !!p && getComputedStyle(p).visibility === 'visible' && !!${ROOT} })()`
+    )
+  const clickIn = async (target: string, what: string): Promise<void> => {
+    const ok = await main.eval<boolean>(
+      `(() => { const el = ${target}; if (!el) return false; el.scrollIntoView({ block: 'nearest' }); el.click(); return true })()`
+    )
+    if (!ok) throw new Error(`no ${what}`)
+  }
+
+  return {
+    open: async () => {
+      await rightPanelPane(main).open()
+      await until(() => main.eval<boolean>(`!!${TAB}`), 'files tab mounted')
+      await main.eval(`${TAB}.click()`)
+      await until(active, 'file timeline visible')
+    },
+    active,
+    groups: () =>
+      main.eval<
+        LibraryTimelineGroupShot[]
+      >(`[...(${ROOT}?.querySelectorAll('[data-timeline-day]') ?? [])]
+        .flatMap((day) => [...day.querySelectorAll('[data-timeline-session]')].map((g) => ({
+          day: day.getAttribute('data-timeline-day') ?? '',
+          sessionId: g.getAttribute('data-timeline-session') ?? '',
+          title: (g.querySelector('span.font-semibold')?.textContent ?? '').trim(),
+          canOpen: !!g.querySelector('[data-timeline-open-session]'),
+          files: [...g.querySelectorAll('[data-timeline-file]')].map((f) => ({
+            id: f.getAttribute('data-timeline-file') ?? '',
+            relation: f.getAttribute('data-relation') ?? '',
+            missing: f.hasAttribute('data-missing')
+          }))
+        })))`),
+    clickFile: (id) =>
+      clickIn(
+        `${ROOT}?.querySelector('[data-timeline-file=${JSON.stringify(id)}]')`,
+        `timeline file ${id}`
+      ),
+    clickSession: (sessionId) =>
+      clickIn(
+        `${ROOT}?.querySelector('[data-timeline-open-session=${JSON.stringify(sessionId)}]')`,
+        `clickable timeline heading for session ${sessionId}`
+      ),
+    count: () =>
+      main.eval<string>(
+        `(${ROOT}?.querySelector('[data-timeline-count]')?.textContent ?? '').trim()`
+      ),
+    empty: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-timeline-empty]')`)
   }
 }

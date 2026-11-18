@@ -1321,6 +1321,8 @@ declare global {
       add: (
         params: import('@shuvix/chat-protocol/fileLibrary').LibraryAddParams
       ) => Promise<import('@shuvix/chat-protocol/fileLibrary').LibraryAddResult>
+      /** 文件时间线：库里的文件连同它们所属的会话，新的在前 */
+      timeline: () => Promise<import('@shuvix/chat-protocol/fileLibrary').LibraryTimelineResult>
       /** 本机的选择文件对话框（可多选）；取消 → null */
       pickFiles: () => Promise<string[] | null>
     }

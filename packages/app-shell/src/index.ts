@@ -85,6 +85,8 @@ export {
   toSidebarView
 } from './sidebar/SidebarViewSwitch'
 export type { SidebarView, SidebarViewSwitchProps } from './sidebar/SidebarViewSwitch'
+export { LibraryTimeline } from './library/LibraryTimeline'
+export type { LibraryTimelineProps } from './library/LibraryTimeline'
 export { InboxPanel } from './inbox/InboxPanel'
 export type { InboxPanelProps } from './inbox/InboxPanel'
 export type { InboxTrackingAdapter } from './inbox/InboxTracking'

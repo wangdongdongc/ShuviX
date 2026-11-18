@@ -539,6 +539,7 @@ export const API_TABLE = {
   /** 文件库 */
   library: {
     add: invoke('library:add', 1),
+    timeline: invoke('library:timeline', 0),
     pickFiles: invoke('library:pickFiles', 0)
   },
   /** 知识库 */

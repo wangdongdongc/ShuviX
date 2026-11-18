@@ -55,3 +55,11 @@ export interface LibraryLinkRow {
   context: string | null
   createdAt: number
 }
+
+/** 时间线的一行：一件文件 + 它与一条会话的关联（没有会话关联时 sessionId / relation 为 null） */
+export interface LibraryTimelineRow extends LibraryItemRow {
+  sessionId: string | null
+  relation: LibraryLinkRelation | null
+  /** 这条关联建立的时刻；没有关联 = 文件进库的时刻 */
+  at: number
+}

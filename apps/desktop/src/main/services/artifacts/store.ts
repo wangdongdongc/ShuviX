@@ -174,7 +174,24 @@ export function writeArtifact(params: {
   const path = join(dir, name)
   const content = ext === 'html' ? withStandaloneCsp(params.content) : params.content
   writeFileSync(path, content, 'utf-8')
-  return { name, title: titleOf(content, name), path }
+  const made = { name, title: titleOf(content, name), path }
+  try {
+    writeObserver?.(params.sessionId, made)
+  } catch {
+    /* 观察者是增益（登记进文件库）：失败不影响已经写下的产物 */
+  }
+  return made
+}
+
+/**
+ * 新产物写下之后的观察者（宿主启动时注入：登记进文件库）。不在这里 import 文件库 —— 它是上层的扁平服务，
+ * 这个模块不能反向依赖它
+ */
+let writeObserver: ((sessionId: string, artifact: ArtifactInfo) => void) | null = null
+export function setArtifactWriteObserver(
+  observer: ((sessionId: string, artifact: ArtifactInfo) => void) | null
+): void {
+  writeObserver = observer
 }
 
 /**

@@ -53,6 +53,8 @@ export interface FileRouteDeps {
    * 不过 path 点位：库目录不在任何权限表里，按 id 找（同 `resolveShownImage`）
    */
   readonly resolveLibraryFile?: (itemId: string) => string | undefined
+  /** 这件是不是留在原位置的文件（`storage: 'linked'`）—— 是的话它的路径照普通文件过 path 点位 */
+  readonly isLibraryFileExternal?: (itemId: string) => boolean
   /** path 点位（服务端按这个请求的事实绑好的；不给 → 不判）。`path` 是要读的绝对路径 */
   readonly judgePath?: (path: string, route: FileRoute) => GateVerdict
   /** 拒绝时的 403 正文（缺省：规则的话） */
@@ -168,6 +170,8 @@ export async function serveFileRoute(
         if (!id) return plain(res, 400, 'Bad request.')
         const path = deps.resolveLibraryFile?.(id)
         if (path === undefined) return plain(res, 404, 'Not found.')
+        // 留在原位置的文件（产物、输入框里添加的文件）是本机上任意一个路径：照普通文件过 path 点位
+        if (deps.isLibraryFileExternal?.(id) && !admitPath(res, deps, path, route)) return
         return await sendFile(req, res, path)
       }
       case 'lib': {

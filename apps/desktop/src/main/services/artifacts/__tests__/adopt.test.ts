@@ -23,7 +23,7 @@
  * 顶桩纪律：adopt.ts 间接 import store.ts，所以这里同样必须顶掉 `getSessionArtifactsDir`
  * （漏一条的表现是往真实 home 写盘），文件末尾有真实 home 哨兵。
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import {
   existsSync,
   mkdtempSync,
@@ -53,6 +53,7 @@ vi.mock('../../../utils/paths', () => ({
 
 import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { adoptFigure, figureArtifactName, listAdoptableFigures } from '../adopt'
+import { setArtifactWriteObserver } from '../store'
 
 const HOME_ARTIFACTS = join(homedir(), '.shuvix', 'artifacts')
 const homeSnapshot = (): string[] | null => {
@@ -495,5 +496,36 @@ describe('```interactive —— 与 ```svg 走同一条认领路', () => {
     const again = adoptFigure({ sessionId: sid, messages })
     expect([again?.existing, again?.artifact.name]).toEqual([true, 'figure-2.html'])
     expect(entries(sid)).toEqual(['figure-2.html'])
+  })
+})
+
+/** 认领写下的文件同样告诉观察者（docs/file-library-timeline-tests.md §7.2，TL-92） */
+describe('adoptFigure —— 写下的文件告诉观察者', () => {
+  afterEach(() => {
+    setArtifactWriteObserver(null)
+  })
+
+  it('TL-92 认领一张图 → 观察者一次（路径与标题）；再认领同一张不再写、不再调', () => {
+    const sid = newSession()
+    const observer = vi.fn()
+    setArtifactWriteObserver(observer)
+    const messages = [said(fence(svg('Tiers')))]
+
+    const first = adoptFigure({ sessionId: sid, messages })
+    expect(first?.existing).toBe(false)
+    expect(observer).toHaveBeenCalledTimes(1)
+    expect(observer).toHaveBeenCalledWith(sid, first!.artifact)
+    expect(first!.artifact).toMatchObject({
+      title: 'Tiers',
+      path: join(state.root, sid, first!.artifact.name)
+    })
+
+    const again = adoptFigure({ sessionId: sid, messages })
+    expect(again?.existing).toBe(true)
+    expect(entries(sid)).toEqual([first!.artifact.name])
+    expect(new Set(observer.mock.calls.map((c) => (c[1] as { path: string }).path))).toEqual(
+      new Set([first!.artifact.path])
+    )
+    expect(observer).toHaveBeenCalledTimes(1)
   })
 })

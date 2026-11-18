@@ -1,5 +1,10 @@
 import { BaseDao } from './database'
-import type { LibraryItemRow, LibraryLinkRow, NewLibraryItem } from './types/library'
+import type {
+  LibraryItemRow,
+  LibraryLinkRow,
+  LibraryTimelineRow,
+  NewLibraryItem
+} from './types/library'
 import type { LibraryLinkRelation, LibraryLinkTarget } from '@shuvix/chat-protocol/fileLibrary'
 
 const ITEM_COLUMNS = `i.id, i.name, i.storage, i.externalPath, i.currentVersion, i.kind, i.source, i.description,
@@ -30,6 +35,79 @@ export class LibraryDao extends BaseDao {
        ORDER BY i.createdAt ASC, i.id ASC LIMIT 1`
     ).get(sha256) as LibraryItemRow | undefined
     return row ?? null
+  }
+
+  /** 引用外部文件的那一件（按外部绝对路径找，含回收站里的）；没有 → null */
+  findLinkedByPath(externalPath: string): LibraryItemRow | null {
+    const row = this.stmt(
+      `SELECT ${ITEM_COLUMNS} FROM ${ITEM_FROM}
+       WHERE i.storage = 'linked' AND i.externalPath = ?
+       ORDER BY i.createdAt ASC, i.id ASC LIMIT 1`
+    ).get(externalPath) as LibraryItemRow | undefined
+    return row ?? null
+  }
+
+  /** 外部文件又被写了一次（产物改版）：更新当前版本的大小与条目的修改时间 */
+  touchLinked(id: string, size: number, now: number): void {
+    this.transaction(() => {
+      this.stmt(
+        `UPDATE library_versions SET size = ?
+         WHERE itemId = ? AND version = (SELECT currentVersion FROM library_items WHERE id = ?)`
+      ).run(size, id, id)
+      this.stmt('UPDATE library_items SET updatedAt = ? WHERE id = ?').run(now, id)
+    })
+  }
+
+  /** 把一件引用外部文件的条目收进库（文件已由上层复制到库目录）：改成托管，记下内容的 sha256 与大小 */
+  convertToManaged(
+    id: string,
+    file: { fileName: string; sha256: string; size: number },
+    now: number
+  ): void {
+    this.transaction(() => {
+      this.stmt(
+        `UPDATE library_versions SET fileName = ?, sha256 = ?, size = ?
+         WHERE itemId = ? AND version = (SELECT currentVersion FROM library_items WHERE id = ?)`
+      ).run(file.fileName, file.sha256, file.size, id, id)
+      this.stmt(
+        `UPDATE library_items SET storage = 'managed', externalPath = NULL, updatedAt = ? WHERE id = ?`
+      ).run(now, id)
+    })
+  }
+
+  /** 外部路径以 `prefix` 开头的引用条目（一个目录底下的全部；含回收站里的） */
+  findLinkedUnder(prefix: string): LibraryItemRow[] {
+    return this.stmt(
+      `SELECT ${ITEM_COLUMNS} FROM ${ITEM_FROM}
+       WHERE i.storage = 'linked' AND substr(i.externalPath, 1, ?) = ?`
+    ).all(prefix.length, prefix) as LibraryItemRow[]
+  }
+
+  /** 一个目标关联的全部文件（连同关系；回收站里的也在） */
+  itemsOfTarget(
+    targetType: LibraryLinkTarget,
+    targetId: string
+  ): Array<LibraryItemRow & { relation: LibraryLinkRelation }> {
+    return this.stmt(
+      `SELECT ${ITEM_COLUMNS}, l.relation FROM ${ITEM_FROM}
+       JOIN library_links l ON l.itemId = i.id
+       WHERE l.targetType = ? AND l.targetId = ?`
+    ).all(targetType, targetId) as Array<LibraryItemRow & { relation: LibraryLinkRelation }>
+  }
+
+  /**
+   * 时间线：没进回收站的文件，连同它与会话的每一条关联，新的在前。一件文件在几条会话里出现就有几行；
+   * 没有会话关联的一行（sessionId 为 null），时间取文件进库的时刻
+   */
+  timeline(limit: number): LibraryTimelineRow[] {
+    return this.stmt(
+      `SELECT ${ITEM_COLUMNS}, l.targetId AS sessionId, l.relation AS relation,
+              COALESCE(l.createdAt, i.createdAt) AS at
+       FROM ${ITEM_FROM}
+       LEFT JOIN library_links l ON l.itemId = i.id AND l.targetType = 'session'
+       WHERE i.deletedAt IS NULL
+       ORDER BY at DESC, i.id DESC LIMIT ?`
+    ).all(limit) as LibraryTimelineRow[]
   }
 
   /** 新建一件（第 1 版） */
@@ -171,11 +249,17 @@ export class LibraryDao extends BaseDao {
     ).map((r) => r.itemId)
   }
 
-  /** 这件文件是否与某个目标有任何关联 */
-  isLinked(itemId: string, targetType: LibraryLinkTarget, targetId: string): boolean {
-    return !!this.stmt(
-      'SELECT 1 FROM library_links WHERE itemId = ? AND targetType = ? AND targetId = ? LIMIT 1'
-    ).get(itemId, targetType, targetId)
+  /** 这件文件是否与某个目标有关联；给了 `relations` 就只认这几种关系 */
+  isLinked(
+    itemId: string,
+    targetType: LibraryLinkTarget,
+    targetId: string,
+    relations?: readonly LibraryLinkRelation[]
+  ): boolean {
+    const rows = this.stmt(
+      'SELECT relation FROM library_links WHERE itemId = ? AND targetType = ? AND targetId = ?'
+    ).all(itemId, targetType, targetId) as Array<{ relation: LibraryLinkRelation }>
+    return relations ? rows.some((r) => relations.includes(r.relation)) : rows.length > 0
   }
 
   /** 删掉一个目标的全部关联（删会话时）；回删掉的行数 */

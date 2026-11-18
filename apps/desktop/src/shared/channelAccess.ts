@@ -442,6 +442,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 
   // ─── library：文件库 ───
   'library:add': 'write', // 网络客户端只能交字节（kind:'path' 在处理器里一律拒），不碰本机路径
+  'library:timeline': 'read', // 文件名、大小与所属会话的标题；文件内容另走 /files/library
   'library:pickFiles': 'write', // 本机的选择文件对话框（只桌面）
 
   // ─── knowledge / mentions：知识库 ───

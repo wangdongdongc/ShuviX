@@ -17,6 +17,9 @@
  *  5. **文件库的关联**（文件库 L1，docs/file-library-l1-tests.md §8.4 SV-LIB-1）：delete 对每场会话（级联删掉的子会话
  *     各一次）调 removeSessionLibraryLinks；文件留在库里（§10），文件库服务没有别的调用。`../fileLibrary` 整个换成记录型替身。
  *
+ *  6. **删除的先后**（docs/file-library-timeline-tests.md §7.4 TL-96）：removeSessionLibraryLinks 先于删产物目录、先于删
+ *     快照目录 —— 留在那两个目录里的库文件要先收进库。
+ *
  * mock 面沿用 sessionServiceListChanged.test.ts（import 图全换假件）。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
@@ -107,6 +110,8 @@ vi.mock('../../utils/paths', () => ({
   // 会话 Artifacts 的删除级联也在 sessionService.delete 里（目录不存在时 no-op）。
   // 指到临时目录而不是 /nonexistent：级联那几条用例要看目录**真的**没了
   getSessionArtifactsDir: (sid: string) => `${mocks.artifactsRoot}/${sid}`,
+  // 摆出来的图的快照目录（TL-96 要看它在「收进库」时还在、之后没了）；同样落在临时目录
+  getShownImagesDir: (sid: string) => `${mocks.artifactsRoot}-shown/${sid}`,
   isSafeSessionId: (id: string) =>
     !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
@@ -318,6 +323,29 @@ describe('delete —— 文件库的关联（SV-LIB-1）', () => {
       ['removeSessionLibraryLinks', 'P']
     ])
     expect(mocks.daoDeleteById.mock.calls.map((c) => c[0])).toEqual(['g1', 'c1', 'c2', 'P'])
+  })
+})
+
+describe('delete —— 文件库先收，再删目录（TL-96）', () => {
+  it('TL-96 removeSessionLibraryLinks 被调时产物目录与快照目录都还在；删完之后两个都没了', async () => {
+    const artifacts = seedArtifacts('order')
+    const shown = join(`${mocks.artifactsRoot}-shown`, 'order')
+    mkdirSync(shown, { recursive: true })
+    writeFileSync(join(shown, 'a.png'), 'png')
+    const seen: Array<[string, boolean, boolean]> = []
+    mocks.libraryCalls.mockImplementation((name: string) => {
+      seen.push([name, existsSync(join(artifacts, 'chart.svg')), existsSync(join(shown, 'a.png'))])
+    })
+    let after: boolean[] = []
+    try {
+      await sessionService.delete('order')
+      after = [existsSync(artifacts), existsSync(shown)]
+    } finally {
+      mocks.libraryCalls.mockReset()
+      rmSync(`${mocks.artifactsRoot}-shown`, { recursive: true, force: true })
+    }
+    expect(seen).toEqual([['removeSessionLibraryLinks', true, true]])
+    expect(after).toEqual([false, false])
   })
 })
 

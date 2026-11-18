@@ -88,7 +88,8 @@ import {
 import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { shownImageFilePath } from './services/shownImages'
-import { libraryFileOf, setLibraryTable } from './services/fileLibrary'
+import { libraryFileOf, recordSessionFiles, setLibraryTable } from './services/fileLibrary'
+import { setArtifactWriteObserver } from './services/artifacts/store'
 import { libraryDao } from './dao/libraryDao'
 import { cliServer } from './services/cliServer'
 import {
@@ -1094,7 +1095,13 @@ app.whenReady().then(async () => {
   // 定时器开始之前：上个进程没收尾的运行先记清楚
   step('triggerLogService.sweepInterrupted', () => triggerLogService.sweepInterrupted())
   // 文件库的元数据表（docs/file-library-design.md）：注入之前库是空的
-  step('fileLibrary.init', () => setLibraryTable(libraryDao))
+  step('fileLibrary.init', () => {
+    setLibraryTable(libraryDao)
+    // 新产物登记进文件库（留在会话的产物目录，不复制），挂在产出它的会话上
+    setArtifactWriteObserver((sessionId, artifact) =>
+      recordSessionFiles(sessionId, 'produced', [{ path: artifact.path, name: artifact.title }])
+    )
+  })
   // 收件箱的已读（docs/inbox-read-state-design.md）：无头运行也要（手机 / 浏览器看过就算读过），所以不放在窗口那一套里。
   // 别的会话驱动的一轮不算新回复 —— 发起者从活着的运行时读
   step('unreadService.init', () => {
@@ -1276,6 +1283,7 @@ app.whenReady().then(async () => {
         resolvePreviewPath: resolvePreviewFilePath,
         resolveShownImage: shownImageFilePath,
         resolveLibraryFile: (id) => libraryFileOf(id)?.path,
+        isLibraryFileExternal: (id) => libraryFileOf(id)?.item.storage === 'linked',
         readSandboxLib,
         logger: { warn: (message) => log.warn(message) }
       },

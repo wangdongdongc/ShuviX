@@ -1066,13 +1066,14 @@ export class SessionService {
         /* 忽略 */
       }
     }
+    // 文件库：这条会话的产物与摆出来的图马上随目录删掉，留在那里的库文件先收进库，再删它的关联 ——
+    // 文件留在库里、时间线上照常显示，只是不再归在这条会话下（docs/file-library-design.md §10）
+    removeSessionLibraryLinks(id)
     // 会话 Artifacts：产物归这场对话，会话没了它们也没有意义（目录不存在时是 no-op —— 多数
     // 会话一件都没有，图缺省走 ```svg 围栏、根本不落盘）
     deleteSessionArtifacts(id)
     // 摆给用户看的图的快照（show_image / 带图提议）：只有这场对话的历史指着它们
     removeShownImages(id)
-    // 文件库里这场对话的关联（发送过的图片等）：文件留在库里，只删关联（docs/file-library-design.md §10）
-    removeSessionLibraryLinks(id)
     // 每会话的临时目录（/private/tmp/shuvix-<uid>/<8hex>）：它自己的那一个，以及它借用的那一个（fork 共用源会话的、
     // 子会话共用父会话的）
     // —— 都只在已经没有会话用它的时候删

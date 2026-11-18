@@ -333,3 +333,90 @@ export type LibraryAddFailure = 'not-a-file' | 'too-large' | 'refused' | 'io'
 export type LibraryAddResult =
   | { ok: true; item: LibraryItemInfo; reused: boolean; markdown: string }
   | { ok: false; name: string; reason: LibraryAddFailure; message: string }
+
+/** 时间线的一条：一件文件 + 它与一条会话的关联（没有会话关联 → sessionId / relation 为 null） */
+export interface LibraryTimelineEntry {
+  item: LibraryItemInfo
+  sessionId: string | null
+  relation: LibraryLinkRelation | null
+  /** 这条关联建立的时刻；没有关联 = 文件进库的时刻 */
+  at: number
+  /** 文件不在了（留在原位置的文件被移走、删掉） */
+  missing?: boolean
+}
+
+/** 时间线里出现的一条会话，给界面显示用 */
+export interface LibraryTimelineSession {
+  title: string
+  /** 所在项目的名字；不在项目里没有 */
+  projectName?: string
+  /** 笔记本会话 */
+  notebook?: boolean
+}
+
+/** `library.timeline` 的结果：条目新的在前；`sessions` 只有还在的会话（删掉的会话，它的文件没有分组） */
+export interface LibraryTimelineResult {
+  entries: LibraryTimelineEntry[]
+  sessions: Record<string, LibraryTimelineSession>
+}
+
+/** 时间线上的一组：同一天里同一条会话的文件（`sessionId` 为 null = 不属于任何会话的文件） */
+export interface LibraryTimelineGroup {
+  sessionId: string | null
+  /** 这一组里最新一件的时刻 */
+  at: number
+  entries: LibraryTimelineEntry[]
+}
+
+/** 时间线上的一天（`day` 是本地日期 YYYY-MM-DD） */
+export interface LibraryTimelineDay {
+  day: string
+  groups: LibraryTimelineGroup[]
+}
+
+function localDayKey(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * 把时间线条目排成「天 → 会话 → 文件」。条目本来就新的在前；一条会话在同一天里只有一组，组按最新一件的时刻排。
+ * 会话已经不在（`known` 说不认识）的条目并进当天的无会话组；同一件文件在无会话组里只出现一次。
+ * `query` 非空时只留文件名或会话标题含它的（不分大小写）
+ */
+export function groupLibraryTimeline(
+  result: LibraryTimelineResult,
+  query = ''
+): LibraryTimelineDay[] {
+  const q = query.trim().toLowerCase()
+  const days = new Map<string, Map<string, LibraryTimelineGroup>>()
+  const loose = new Set<string>()
+  for (const entry of result.entries) {
+    const session = entry.sessionId ? result.sessions[entry.sessionId] : undefined
+    const sessionId = session ? entry.sessionId : null
+    if (q) {
+      const hit =
+        entry.item.name.toLowerCase().includes(q) ||
+        entry.item.fileName.toLowerCase().includes(q) ||
+        (session?.title.toLowerCase().includes(q) ?? false)
+      if (!hit) continue
+    }
+    const day = localDayKey(entry.at)
+    if (sessionId === null) {
+      const key = `${day}\u0000${entry.item.id}`
+      if (loose.has(key)) continue
+      loose.add(key)
+    }
+    let groups = days.get(day)
+    if (!groups) days.set(day, (groups = new Map()))
+    const key = sessionId ?? ''
+    let group = groups.get(key)
+    if (!group) groups.set(key, (group = { sessionId, at: entry.at, entries: [] }))
+    group.entries.push(sessionId === entry.sessionId ? entry : { ...entry, sessionId: null })
+    if (entry.at > group.at) group.at = entry.at
+  }
+  return [...days.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([day, groups]) => ({ day, groups: [...groups.values()].sort((a, b) => b.at - a.at) }))
+}

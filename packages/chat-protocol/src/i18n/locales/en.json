@@ -2185,5 +2185,23 @@
     "waitedShortMinutes_other": "{{count}} min",
     "waitedShortHours_one": "{{count}} h",
     "waitedShortHours_other": "{{count}} h"
+  },
+  "library": {
+    "tab": "Files",
+    "search": "Search files or chats",
+    "count_one": "{{count}} file",
+    "count_other": "{{count}} files",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "empty": "Images you send, files you add to a chat or a note, and what agents show or make appear here.",
+    "noMatch": "Nothing matches",
+    "noSession": "Not in a chat",
+    "missing": "File not found",
+    "relation": {
+      "sent": "Sent",
+      "attached": "Added",
+      "shown": "Shown by the agent",
+      "produced": "Made by the agent"
+    }
   }
 }

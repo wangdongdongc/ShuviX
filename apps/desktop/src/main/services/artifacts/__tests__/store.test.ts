@@ -26,7 +26,7 @@
  * `utils/paths` 的 `getSessionArtifactsDir` —— 漏一条的表现是**往真实 home 写盘**，
  * 所以文件末尾还有一道真实 home 哨兵（不靠人肉审查）。
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import {
   chmodSync,
   existsSync,
@@ -57,6 +57,7 @@ import {
   findArtifact,
   listArtifacts,
   readArtifact,
+  setArtifactWriteObserver,
   titleOf,
   withStandaloneCsp,
   writeArtifact
@@ -502,5 +503,62 @@ describe('html artifact —— 落盘带一行 CSP，标题取开头的 <title>'
     expect(findArtifact(sid, 'whatever.html')?.title).toBe('Growth chart')
     expect(findArtifact(sid, 'growth chart')?.name).toBe(made.name)
     expect(readArtifact(sid, made.name)?.startsWith(`${CSP_LINE}\n`)).toBe(true)
+  })
+})
+
+/**
+ * 新产物写下之后的观察者（宿主用它把产物登记进文件库；测试设计 docs/file-library-timeline-tests.md §7.2，
+ * TL-88 / TL-89 / TL-91；TL-90 按削减名单略去）
+ */
+describe('setArtifactWriteObserver —— 写下之后告诉宿主', () => {
+  afterEach(() => {
+    setArtifactWriteObserver(null)
+  })
+
+  it('TL-88 写下一件 → 观察者调一次：文件已在盘上，参数就是返回值', () => {
+    const sid = newSession()
+    const seen: Array<{ onDisk: boolean }> = []
+    const observer = vi.fn((_sessionId: string, artifact: { path: string }) => {
+      seen.push({ onDisk: existsSync(artifact.path) })
+    })
+    setArtifactWriteObserver(observer)
+
+    const made = writeArtifact({
+      sessionId: sid,
+      title: 'Sales chart',
+      ext: 'svg',
+      content: '<svg aria-label="Sales chart"/>'
+    })
+
+    expect(observer).toHaveBeenCalledTimes(1)
+    expect(observer).toHaveBeenCalledWith(sid, made)
+    expect(made).toEqual({
+      name: 'sales-chart.svg',
+      title: 'Sales chart',
+      path: join(state.root, sid, 'sales-chart.svg')
+    })
+    expect(seen).toEqual([{ onDisk: true }])
+  })
+
+  it('TL-89 观察者抛错：产物照样写下、照样返回，不抛', () => {
+    const sid = newSession()
+    setArtifactWriteObserver(() => {
+      throw new Error('library is down')
+    })
+    let made: ReturnType<typeof writeArtifact> | undefined
+    expect(() => {
+      made = writeArtifact({ sessionId: sid, title: 'A', ext: 'svg', content: '<svg/>' })
+    }).not.toThrow()
+    expect(made?.name).toBe('a.svg')
+    expect(readFileSync(made!.path, 'utf-8')).toBe('<svg/>')
+  })
+
+  it('TL-91 被拒的扩展名：照旧抛错，观察者不调', () => {
+    const observer = vi.fn()
+    setArtifactWriteObserver(observer)
+    expect(() =>
+      writeArtifact({ sessionId: newSession(), title: 'Page', ext: 'exe', content: 'MZ' })
+    ).toThrow()
+    expect(observer).not.toHaveBeenCalled()
   })
 })
