@@ -2195,7 +2195,6 @@
     "yesterday": "Yesterday",
     "empty": "Images you send, files you add to a chat or a note, and what agents show or make appear here.",
     "noMatch": "Nothing matches",
-    "noSession": "Not in a chat",
     "missing": "File not found",
     "relation": {
       "sent": "Sent",

@@ -1,7 +1,8 @@
 /**
  * 文件时间线（文件库的第一个界面，docs/file-library-design.md §8；用户裁决 2026-11-18：先在右侧栏做一个简单的
  * 时间线）—— 按天排会话，每条会话下面是它的文件：用户发送的图片、放进笔记的文件、输入框里添加的文件、agent 摆出来
- * 的图、会话的产物。会话已经删掉的文件还在，归进当天的「不属于任何会话」一组。
+ * 的图、会话的产物。会话已经删掉的文件还在，排在当天里，不带会话标题（用户裁决 2026-11-18：不写
+ * 「不属于任何会话」，不折叠成「+N」，不画时间线的竖线）。
  *
  * 只读：点会话标题切到那条会话，点文件开预览。分类、标签、删除留给以后的管理页。
  * 数据经 HostApi `library.timeline`（渠道端没有，不渲染内容），`library.changed` 与面板重新可见时重取。
@@ -27,9 +28,6 @@ export interface LibraryTimelineProps {
 
 /** 交给 mediaUrl seam 的会话参数（库引用不按会话解析，宿主只要求非空） */
 const LIBRARY_MEDIA_SESSION = 'library'
-/** 一组里先显示几张图，其余收在「+N」后面 */
-const THUMBS_SHOWN = 8
-
 const EMPTY: LibraryTimelineResult = { entries: [], sessions: {} }
 
 function sizeLabel(bytes: number): string {
@@ -121,12 +119,9 @@ function Group({
   onOpenSession?: (sessionId: string) => void
 }): React.JSX.Element {
   const { t, i18n } = useTranslation()
-  const [expanded, setExpanded] = useState(false)
   const session = group.sessionId ? result.sessions[group.sessionId] : undefined
   const images = group.entries.filter((e) => e.item.kind === 'image')
   const files = group.entries.filter((e) => e.item.kind !== 'image')
-  const shown = expanded ? images : images.slice(0, THUMBS_SHOWN)
-  const hidden = images.length - shown.length
   const time = new Intl.DateTimeFormat(i18n.language, {
     hour: '2-digit',
     minute: '2-digit'
@@ -142,71 +137,72 @@ function Group({
       ? t('library.missing')
       : [relationLabel(entry), sizeLabel(entry.item.size)].filter(Boolean).join(' · ')
   const Icon = session?.notebook ? NotebookText : MessageSquare
-  const heading = (
-    <>
-      <span className="min-w-0 truncate font-semibold text-text-primary">
-        {session ? session.title : t('library.noSession')}
-      </span>
-      {session?.projectName && (
-        <span className="min-w-0 flex-shrink truncate text-[11px] text-text-tertiary">
-          {session.projectName}
-        </span>
-      )}
-      <span className="ml-auto flex-shrink-0 text-[11px] text-text-tertiary">{time}</span>
-    </>
-  )
   return (
-    <div
-      data-timeline-session={group.sessionId ?? ''}
-      className="relative flex flex-col gap-1.5 pb-3.5 pl-[22px]"
-    >
-      <span
-        aria-hidden="true"
-        className="absolute bottom-0 left-[5px] top-4 w-px bg-border-secondary"
-      />
-      <span
-        aria-hidden="true"
-        className={`absolute left-px top-[5px] h-[9px] w-[9px] rounded-full border-2 bg-bg-primary ${
-          session ? 'border-accent' : 'border-border-primary'
-        }`}
-      />
-      {session && group.sessionId && onOpenSession ? (
-        <button
-          type="button"
-          data-timeline-open-session={group.sessionId}
-          onClick={() => onOpenSession(group.sessionId as string)}
-          className="flex w-full items-baseline gap-2 text-left text-[13px] hover:underline"
-        >
-          <Icon
-            size={12}
-            className="flex-shrink-0 self-center text-text-tertiary"
-            aria-hidden="true"
-          />
-          {heading}
-        </button>
-      ) : (
-        <div className="flex w-full items-baseline gap-2 text-[13px]">{heading}</div>
+    <div data-timeline-session={group.sessionId ?? ''} className="flex flex-col gap-1.5 pb-3.5">
+      {/* 没有会话的文件（会话已经删掉、或本来就不属于哪条会话）不写标题，直接排文件 */}
+      {session && (
+        <SessionHeading
+          sessionId={group.sessionId as string}
+          title={session.title}
+          projectName={session.projectName}
+          time={time}
+          Icon={Icon}
+          onOpen={onOpenSession}
+        />
       )}
-      {shown.length > 0 && (
+      {images.length > 0 && (
         <div className="grid grid-cols-4 gap-1.5">
-          {shown.map((entry) => (
+          {images.map((entry) => (
             <Thumb key={entry.item.id} entry={entry} hint={hintOf(entry)} />
           ))}
-          {hidden > 0 && (
-            <button
-              type="button"
-              data-timeline-more
-              onClick={() => setExpanded(true)}
-              className="aspect-square rounded-md bg-bg-tertiary text-xs font-medium text-text-secondary hover:bg-bg-hover"
-            >
-              +{hidden}
-            </button>
-          )}
         </div>
       )}
       {files.map((entry) => (
         <FileRow key={entry.item.id} entry={entry} hint={hintOf(entry)} meta={metaOf(entry)} />
       ))}
+    </div>
+  )
+}
+
+function SessionHeading({
+  sessionId,
+  title,
+  projectName,
+  time,
+  Icon,
+  onOpen
+}: {
+  sessionId: string
+  title: string
+  projectName?: string
+  time: string
+  Icon: typeof MessageSquare
+  onOpen?: (sessionId: string) => void
+}): React.JSX.Element {
+  const content = (
+    <>
+      <Icon size={12} className="flex-shrink-0 self-center text-text-tertiary" aria-hidden="true" />
+      <span className="min-w-0 truncate font-semibold text-text-primary">{title}</span>
+      {projectName && (
+        <span className="min-w-0 flex-shrink truncate text-[11px] text-text-tertiary">
+          {projectName}
+        </span>
+      )}
+      <span className="ml-auto flex-shrink-0 text-[11px] text-text-tertiary">{time}</span>
+    </>
+  )
+  return onOpen ? (
+    <button
+      type="button"
+      data-timeline-open-session={sessionId}
+      onClick={() => onOpen(sessionId)}
+      className="flex w-full items-baseline gap-2 text-left text-[13px] hover:underline"
+    >
+      {content}
+    </button>
+  ) : (
+    <div data-timeline-heading className="flex w-full items-baseline gap-2 text-[13px]">
+      {content}
     </div>
   )
 }
@@ -294,7 +290,7 @@ export function LibraryTimeline({
         ) : (
           days.map((day) => (
             <section key={day.day} data-timeline-day={day.day}>
-              <h3 className="pb-1.5 pl-[22px] pt-3.5 text-[11px] font-semibold text-text-secondary">
+              <h3 className="pb-1.5 pt-3.5 text-[11px] font-semibold text-text-secondary">
                 {dayLabel(day.day)}
               </h3>
               {day.groups.map((group) => (

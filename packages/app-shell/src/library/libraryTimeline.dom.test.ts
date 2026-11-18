@@ -7,7 +7,7 @@
  *   TL-108      天的顺序与抬头（今天 / 昨天 / 不带年 / 带年）
  *   TL-109…111  会话抬头：标题、项目名、时间；给了 onOpenSession 才可点；没有会话的一组
  *   TL-112…114  图片是缩略图、别的是一行（扩展名、显示名、关系 · 大小）；大小与关系的写法
- *   TL-116/117  一组先显示 8 张图，其余收在 +N 后面；各组各管各的
+ *   TL-116/117  一组里的图全部排出来，没有 +N
  *   TL-118/119  文件不在了：data-missing、不画图；图加载失败同样
  *   TL-121      点文件 → requestFilePreview('library:<id>')
  *   TL-122/123  搜索（文件名、会话标题）；件数按不同的文件数、不随搜索变
@@ -265,14 +265,16 @@ describe('天与会话抬头', () => {
     expect(groupEl('S1').textContent).toContain('Trip plan')
   })
 
-  it('TL-111 没有会话的与会话已删的并成一组：「Not in a chat」，不可点，两件都在里面', async () => {
+  it('TL-111 没有会话的与会话已删的并成一组：不写标题、不可点，两件都在里面', async () => {
     await show(
       result([entry(1, null), entry(2, 'gone', { kind: 'pdf' })], { S1: { title: 'Trip plan' } }),
       { onOpenSession: vi.fn() }
     )
     const groups = $$('[data-timeline-session]')
     expect(groups.map((g) => g.getAttribute('data-timeline-session'))).toEqual([''])
-    expect(groups[0].textContent).toContain(en.library.noSession)
+    // 用户裁决 2026-11-18：没有会话就直接排文件，不写「不属于任何会话」
+    expect(groups[0].querySelectorAll('[data-timeline-heading]')).toHaveLength(0)
+    expect(groups[0].textContent).not.toContain('Trip plan')
     expect($$('[data-timeline-open-session]', groups[0])).toEqual([])
     expect(fileIds(groups[0]).sort()).toEqual([ID(1), ID(2)])
   })
@@ -350,7 +352,7 @@ describe('文件：缩略图与行', () => {
     expect($$('[data-timeline-more]')).toEqual([])
   })
 
-  it('TL-117 一组 11 张图：先 8 张加一格 +3；点了全画出来；别的组不受影响', async () => {
+  it('TL-117 一组 11 张图：全部排出来，不折叠成 +N（用户裁决 2026-11-18）；别的组一样', async () => {
     await show(
       result(
         [
@@ -360,16 +362,9 @@ describe('文件：缩略图与行', () => {
         { S1: { title: 'Trip plan' }, S2: { title: 'Other' } }
       )
     )
-    const s1 = groupEl('S1')
-    expect(fileIds(s1)).toEqual(Array.from({ length: 8 }, (_, i) => ID(i + 1)))
-    expect($('[data-timeline-more]', s1).textContent).toBe('+3')
-
-    act(() => $('[data-timeline-more]', s1).click())
-
-    expect(fileIds(groupEl('S1'))).toHaveLength(11)
-    expect($$('[data-timeline-more]', groupEl('S1'))).toEqual([])
-    expect(fileIds(groupEl('S2'))).toHaveLength(8)
-    expect($('[data-timeline-more]', groupEl('S2')).textContent).toBe('+3')
+    expect(fileIds(groupEl('S1'))).toEqual(Array.from({ length: 11 }, (_, i) => ID(i + 1)))
+    expect(fileIds(groupEl('S2'))).toHaveLength(11)
+    expect(document.querySelectorAll('[data-timeline-more]')).toHaveLength(0)
   })
 
   it('TL-118 文件不在了：带 data-missing；行写「File not found」；图不画 img；还在的没有这个属性', async () => {

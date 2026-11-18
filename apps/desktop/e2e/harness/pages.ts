@@ -17070,7 +17070,7 @@ export interface LibraryTimelineGroupShot {
   day: string
   /** `data-timeline-session`：会话 id；不属于任何会话的那一组是 '' */
   sessionId: string
-  /** 组标题的文字（会话标题；没有会话的那一组是界面文案） */
+  /** 组标题的文字（会话标题；没有会话的那一组没有标题，是空串） */
   title: string
   /** 标题能不能点（`[data-timeline-open-session]`） */
   canOpen: boolean
