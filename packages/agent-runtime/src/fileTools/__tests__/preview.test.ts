@@ -12,8 +12,10 @@ import {
   previewFile,
   PREVIEW_EBOOK_MAX_BYTES,
   PREVIEW_IMAGE_MAX_BYTES,
+  PREVIEW_MARKDOWN_MAX_BYTES,
   PREVIEW_OFFICE_MAX_BYTES,
   PREVIEW_TEXT_MAX_BYTES,
+  textPreviewCap,
   type PreviewClass
 } from '../preview'
 import type { FileSystemPort } from '../port'
@@ -235,16 +237,91 @@ describe('size caps', () => {
     expect(port.reads).toEqual([{ path: 'huge.txt', offset: 0, length: 8192 }])
   })
 
-  it('K-3 text exactly at the cap → text', async () => {
-    const bytes = new Uint8Array(PREVIEW_TEXT_MAX_BYTES).fill(0x61)
-    const port = memPort({ 'edge.txt': { bytes } })
-    expect(await classifyPreviewFile(port, 'edge.txt')).toMatchObject({
+  it('K-3 text exactly at the cap → text (classified on a sparse file, nothing past the sniff read)', async () => {
+    const head = new Uint8Array(8192).fill(0x61)
+    const port = memPort({ 'edge.txt': sparseFile(PREVIEW_TEXT_MAX_BYTES, head) })
+    expect(await classifyPreviewFile(port, 'edge.txt')).toEqual({
       kind: 'text',
-      size: PREVIEW_TEXT_MAX_BYTES
+      size: PREVIEW_TEXT_MAX_BYTES,
+      ext: '.txt'
     })
-    const r = await previewFile(port, 'edge.txt')
+    expect(port.reads).toEqual([{ path: 'edge.txt', offset: 0, length: 8192 }])
+  })
+
+  it('CAP-1 textPreviewCap: Markdown extensions get the Markdown cap, everything else the text cap', () => {
+    expect(PREVIEW_MARKDOWN_MAX_BYTES).toBe(2 * 1024 * 1024)
+    expect(PREVIEW_TEXT_MAX_BYTES).toBe(50 * 1024 * 1024)
+    for (const ext of ['.md', '.mdx', '.markdown']) {
+      expect(textPreviewCap(ext)).toBe(PREVIEW_MARKDOWN_MAX_BYTES)
+    }
+    for (const ext of ['.txt', '.ts', '.log', '']) {
+      expect(textPreviewCap(ext)).toBe(PREVIEW_TEXT_MAX_BYTES)
+    }
+  })
+
+  it('CAP-2 notes.md one byte over the Markdown cap → too-large with the Markdown cap, only the sniff read', async () => {
+    const head = new Uint8Array(8192).fill(0x61)
+    const port = memPort({ 'notes.md': sparseFile(PREVIEW_MARKDOWN_MAX_BYTES + 1, head) })
+    expect(await classifyPreviewFile(port, 'notes.md')).toEqual({
+      kind: 'too-large',
+      size: PREVIEW_MARKDOWN_MAX_BYTES + 1,
+      cap: PREVIEW_MARKDOWN_MAX_BYTES
+    })
+    expect(port.reads).toEqual([{ path: 'notes.md', offset: 0, length: 8192 }])
+  })
+
+  it('CAP-3 notes.md exactly at the Markdown cap → text, decoded in full', async () => {
+    const bytes = new Uint8Array(PREVIEW_MARKDOWN_MAX_BYTES).fill(0x61)
+    const port = memPort({ 'notes.md': { bytes } })
+    expect(await classifyPreviewFile(port, 'notes.md')).toEqual({
+      kind: 'text',
+      size: PREVIEW_MARKDOWN_MAX_BYTES,
+      ext: '.md'
+    })
+    const r = await previewFile(port, 'notes.md')
     expect(r.kind).toBe('text')
-    if (r.kind === 'text') expect(r.content.length).toBe(PREVIEW_TEXT_MAX_BYTES)
+    if (r.kind === 'text') {
+      expect(r.size).toBe(PREVIEW_MARKDOWN_MAX_BYTES)
+      expect(r.content.length).toBe(PREVIEW_MARKDOWN_MAX_BYTES)
+      expect(r.lines).toBe(1)
+    }
+  })
+
+  it('CAP-4 the Markdown extension check is case-insensitive', async () => {
+    const head = new Uint8Array(8192).fill(0x61)
+    const names = ['README.MD', 'Doc.MarkDown', 'x.MDX']
+    const port = memPort(
+      Object.fromEntries(names.map((n) => [n, sparseFile(PREVIEW_MARKDOWN_MAX_BYTES + 1, head)]))
+    )
+    for (const name of names) {
+      expect(await classifyPreviewFile(port, name)).toEqual({
+        kind: 'too-large',
+        size: PREVIEW_MARKDOWN_MAX_BYTES + 1,
+        cap: PREVIEW_MARKDOWN_MAX_BYTES
+      })
+    }
+  })
+
+  it('CAP-5 a 3 MB .txt stays text (plain text does not inherit the Markdown cap)', async () => {
+    const head = new Uint8Array(8192).fill(0x61)
+    const port = memPort({ 'data.txt': sparseFile(3 * 1024 * 1024, head) })
+    expect(await classifyPreviewFile(port, 'data.txt')).toEqual({
+      kind: 'text',
+      size: 3 * 1024 * 1024,
+      ext: '.txt'
+    })
+  })
+
+  it('CAP-6 previewFile on an oversized .md → too-large placeholder, nothing past the sniff read', async () => {
+    const head = new Uint8Array(8192).fill(0x61)
+    const port = memPort({ 'big.md': sparseFile(PREVIEW_MARKDOWN_MAX_BYTES + 1, head) })
+    expect(await previewFile(port, 'big.md')).toEqual({
+      kind: 'too-large',
+      path: 'big.md',
+      size: PREVIEW_MARKDOWN_MAX_BYTES + 1,
+      cap: PREVIEW_MARKDOWN_MAX_BYTES
+    })
+    expect(port.reads).toEqual([{ path: 'big.md', offset: 0, length: 8192 }])
   })
 
   it('K-4 image over the cap → too-large without any read', async () => {

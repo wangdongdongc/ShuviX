@@ -1305,12 +1305,12 @@ declare global {
         sessionId: string
         path: string
       }) => Promise<import('@shuvix/chat-protocol/types/filePreview').FileReadResult>
-      /** 在独立窗口里打开文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；不支持的回 false） */
+      /** 在独立窗口里打开文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；不支持的回 opened:false + 原因） */
       open: (params: {
         sessionId: string
         path: string
         openedBy?: 'agent' | 'user'
-      }) => Promise<boolean>
+      }) => Promise<import('@shuvix/chat-protocol/types/filePreview').FileOpenResult>
       write: (params: {
         sessionId: string
         path: string

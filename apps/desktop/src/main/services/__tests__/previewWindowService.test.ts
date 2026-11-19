@@ -1,34 +1,51 @@
 /**
  * previewWindowService —— 应用里「点开一个文件」：md 进协作编辑窗口，其余能预览的进只读预览窗口，
- * 不能预览的不响应。
+ * 不能预览的不开窗、回 `{ opened: false, reason }`（发起的窗口据此给一句轻提示）。
  *
- * 契约：
- *   - md（给的路径**或**它的真实路径是 .md / .markdown，大小写不敏感）→ 交给 openMarkdownFile（参数是解析后的
- *     绝对路径），它的返回值原样回；这一条不需要本服务初始化；
- *   - 其余文件要先初始化，否则回 false、不开窗；
- *   - 相对路径按会话的工作目录解；会话没了（或没有工作目录）又给相对路径 → false；绝对路径照开；
- *   - 同一个文件（按真实路径）只开一个窗口：已开着就还原（最小化时）/ 显示 / 聚焦、回 true —— 这一步在分类
+ * 契约（`open` 只看 `opened`，`raw` 看完整的 FileOpenResult）：
+ *   - md（给的路径**或**它的真实路径是 .md / .markdown，大小写不敏感；.mdx 不算）→ 先按真实路径分类，超过
+ *     Markdown 上限（2MB，不论真实扩展名）→ `{opened:false, reason:'too-large', size, cap: 2MB}`、不交给
+ *     openMarkdownFile；否则交给 openMarkdownFile（参数是解析后的绝对路径），它开了 → `{opened:true}`，没开 →
+ *     按分类说原因（不存在 → missing、目录 → directory、能读 → unreadable）；这一条不需要本服务初始化；
+ *   - 其余文件要先初始化，否则 → `{opened:false, reason:'unreadable'}`、不开窗；
+ *   - 相对路径按会话的工作目录解；会话没了（或没有工作目录）又给相对路径 → unreadable；绝对路径照开；
+ *   - 同一个文件（按真实路径）只开一个窗口：已开着就还原（最小化时）/ 显示 / 聚焦、回 `{opened:true}` —— 这一步在分类
  *     **之前**，所以文件此刻读不了也照样把那扇窗带到前面；
  *   - 否则由 classifyPreviewFile 决定：可预览 → 新窗口（宽 round(900 × zoom)、先不显示、装守卫、hash 是
  *     `file-preview?sessionId&path=<真实路径>&openedBy`，ready-to-show 才显示 + 聚焦、页面 <title> 盖不掉文件名），
- *     不可预览（二进制 / 超限 / 目录 / 不存在）→ false、不开窗；
+ *     不可预览 → `refusalOf(分类)`：二进制 → unsupported（带扩展名）、超限 → too-large（size / cap）、
+ *     目录 → directory、不存在 → missing、其它错误 → unreadable，不开窗；
+ *   - 无头运行 → unreadable，什么都不开；
  *   - 新窗口相对聚焦窗口错开 24 × (已开窗口数 + 1)；没有聚焦窗口就不指定位置；
  *   - closed → 从表里拿掉；旧窗口迟到的 closed 不拿掉同一路径的新窗口。
  *
  * electron 换成记账的假 BrowserWindow；sessionService / externalOpen / markdownWindowService 是间谍；
  * 分类内核与文件都是真的（临时目录）。模块级状态每条用例重新导入。
  *
- *   W-1  没初始化 → 非 md 回 false、不开窗；md 照样交给 openMarkdownFile
- *   W-2  md 路由：大写扩展名、相对路径、不存在的 .md、false 原样回、`link.txt → real.md` 的链接
+ *   W-1  没初始化 → 非 md 不开（opened=false）；md 照样交给 openMarkdownFile
+ *   W-2  md 路由：大写扩展名、相对路径、不存在的 .md、`link.txt → real.md` 的链接
  *   W-3  每种可预览的文件都开窗（窗口选项、守卫、hash、ready-to-show、page-title-updated）
- *   W-4  不可预览（.zip、带 NUL 的无扩展名文件、超 2MB 的 txt、超 10MB 的 png、目录、不存在的 txt）→ false
+ *   W-4  不可预览（.zip、带 NUL 的无扩展名文件、超 50MB 的 txt、超 10MB 的 png、目录、不存在的 txt）→ 不开窗
  *   W-5  会话已删：相对路径 → false，绝对路径 → true
  *   W-6  一个真实路径一个窗口（直接 / 符号链接 / dir/../）；最小化的被还原、显示、聚焦
  *   W-7  closed 拿掉表项；旧窗口迟到的 closed 不拿掉新窗口
  *   W-8  openedBy=agent 原样进 hash
  *   W-9  错开：每个已开窗口 +24，锚在聚焦窗口；没有聚焦窗口不给 x/y
  *   W-10 已开窗口的文件之后被删了：再开仍聚焦那扇窗、回 true（查表先于分类）
- *   PW-H1 无头运行（已初始化）：可预览的 .txt 与 .md 都回 false；不交给 openMarkdownFile、不开窗、不装守卫
+ *   PW-H1 无头运行（已初始化）：可预览的 .txt 与 .md 都不开；不交给 openMarkdownFile、不开窗、不装守卫
+ *
+ * 拒绝的原因（`raw`）：
+ *   R-1  refusalOf 对照表（binary → unsupported+ext、too-large、三种 error 文案、可预览 → opened）
+ *   R-2  W-4 的每个文件给出确切的拒绝（ext / size / cap / directory / missing），仍不开窗
+ *   R-3  新开的预览窗口与聚焦已开的那扇都是恰好 `{opened:true}`
+ *   R-4  超过 2MB 的 md（含大写扩展名、.markdown）→ too-large + Markdown 上限，不交给 openMarkdownFile、不开窗
+ *   R-5  未初始化时同样拒绝超大的 md
+ *   R-6  恰好 2MB 的 md 照常交给 openMarkdownFile → opened
+ *   R-7  openMarkdownFile 没开：不存在 → missing；能读的小 md → unreadable；叫 notes.md 的目录 → directory
+ *   R-8  `link.txt → real.md`（>2MB）与 `notes.md → data.txt`（3MB）都按 Markdown 上限拒绝，不交给 openMarkdownFile
+ *   R-9  .mdx 不走 md 窗口：3MB 的 .mdx → too-large（上限 2MB）、小的 .mdx 开预览窗口
+ *   R-10 unreadable：无头（.txt / .md）、会话已删的相对路径、未初始化的非 md；
+ *        missing：快照不在的合法 shown: 引用、文件库里在回收站 / 不存在的 id
  *
  * 记住位置与大小（可选的 `frameMemory`，键 `window.filePreview`；这里是 placement / track 两个间谍）：
  *   W-15 placement 给了大小与位置 → 原样用（不再另加 24）；第三个参数是已开的预览窗口数；开窗后 track；
@@ -63,6 +80,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PreviewClass } from '@shuvix/agent-runtime'
 
 const fx = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void
@@ -165,6 +183,9 @@ type FakeWindow = InstanceType<typeof fx.FakeWindow>
 type Service = typeof import('../previewWindowService')
 
 const LIVE = 'sid-live'
+const MD_CAP = 2 * 1024 * 1024
+const TEXT_CAP = 50 * 1024 * 1024
+const IMAGE_CAP = 10 * 1024 * 1024
 const GONE = 'sid-gone'
 const ZOOM = 1.15
 
@@ -210,12 +231,31 @@ beforeAll(() => {
   writeFileSync(p('dir', 'arch.zip'), Buffer.from([0x50, 0x4b, 3, 4]))
   writeFileSync(p('dir', 'noext'), Buffer.from([0x41, 0x00, 0x42]))
   // 可打印字节（稀疏文件全是 0，会先被嗅探判成二进制），比上限多一个字节
-  writeFileSync(p('dir', 'big.txt'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x61))
+  // 50MB+1：头部是文本（只嗅探前 8KB），其余由 truncate 补成稀疏的空洞，不真写 50MB
+  writeFileSync(p('dir', 'big.txt'), Buffer.alloc(8192, 0x61))
+  truncateSync(p('dir', 'big.txt'), 50 * 1024 * 1024 + 1)
   // png 不嗅探，只看大小：稀疏文件就够
   writeFileSync(p('dir', 'huge.png'), '')
   truncateSync(p('dir', 'huge.png'), 10 * 1024 * 1024 + 1)
   symlinkSync(p('dir', 'a.txt'), p('link-a.txt'))
   symlinkSync(p('dir', 'real.md'), p('link.txt'))
+  // R-4…R-9：Markdown 上限（2MB）两侧的文件，头部可打印、其余稀疏
+  const sparseText = (path: string, size: number): void => {
+    writeFileSync(path, Buffer.alloc(8192, 0x61))
+    truncateSync(path, size)
+  }
+  mkdirSync(p('md'))
+  sparseText(p('md', 'big.md'), MD_CAP + 1)
+  sparseText(p('md', 'HUGE.MD'), MD_CAP + 1)
+  sparseText(p('md', 'huge.markdown'), MD_CAP + 1)
+  sparseText(p('md', 'edge.md'), MD_CAP)
+  sparseText(p('md', 'big-real.md'), MD_CAP + 1)
+  symlinkSync(p('md', 'big-real.md'), p('md', 'big-link.txt'))
+  sparseText(p('md', 'data.txt'), 3 * 1024 * 1024)
+  symlinkSync(p('md', 'data.txt'), p('md', 'notes.md'))
+  sparseText(p('md', 'x.mdx'), 3 * 1024 * 1024)
+  writeFileSync(p('md', 'small.mdx'), '# small\n')
+  mkdirSync(p('md', 'folder.md'))
   for (const sid of [LIVE, GONE]) {
     mkdirSync(join(userDataRoot, 'shown', sid), { recursive: true })
     writeFileSync(shownPath(sid, SHOWN_PNG), pngHeader(40, 24))
@@ -278,11 +318,17 @@ function hashOf(win: FakeWindow): {
   }
 }
 
+/** 完整的结果（opened + 拒绝原因） */
+const raw = (
+  path: string,
+  extra: { sessionId?: string; openedBy?: 'agent' | 'user' } = {}
+): ReturnType<Service['openFileInWindow']> =>
+  service.openFileInWindow({ sessionId: extra.sessionId ?? LIVE, path, openedBy: extra.openedBy })
+
 const open = (
   path: string,
   extra: { sessionId?: string; openedBy?: 'agent' | 'user' } = {}
-): Promise<boolean> =>
-  service.openFileInWindow({ sessionId: extra.sessionId ?? LIVE, path, openedBy: extra.openedBy })
+): Promise<boolean> => raw(path, extra).then((r) => r.opened)
 
 describe('W-1 未初始化', () => {
   it('非 md → false、不开窗；md 照样交给 openMarkdownFile', async () => {
@@ -308,13 +354,6 @@ describe('W-2 md 路由', () => {
     init()
     expect(await open(given)).toBe(true)
     expect(fx.openMarkdownFile.mock.calls).toEqual([[expected]])
-    expect(windows()).toHaveLength(0)
-  })
-
-  it('openMarkdownFile 回 false → 原样回 false', async () => {
-    init()
-    fx.openMarkdownFile.mockReturnValue(false)
-    expect(await open(p('dir', 'missing.md'))).toBe(false)
     expect(windows()).toHaveLength(0)
   })
 })
@@ -366,7 +405,7 @@ describe('W-4 不可预览 → 不响应', () => {
   it.each([
     ['已知二进制扩展名', 'dir/arch.zip'],
     ['带 NUL 的无扩展名文件', 'dir/noext'],
-    ['超过 2MB 的 txt', 'dir/big.txt'],
+    ['超过 50MB 的 txt', 'dir/big.txt'],
     ['超过 10MB 的 png', 'dir/huge.png'],
     ['目录', 'sub'],
     ['不存在的 txt', 'dir/missing.txt']
@@ -619,6 +658,183 @@ describe('PW-H1 无头运行', () => {
   })
 })
 
+describe('R-1…R-10 拒绝的原因', () => {
+  afterEach(async () => {
+    ;(await import('../../utils/headless')).resetHeadlessModeForTests()
+  })
+
+  it('R-1 refusalOf 对照表', () => {
+    const cases: Array<[PreviewClass, unknown]> = [
+      [
+        { kind: 'binary', size: 4, ext: '.zip' },
+        { opened: false, reason: 'unsupported', ext: '.zip' }
+      ],
+      [
+        { kind: 'binary', size: 3, ext: '' },
+        { opened: false, reason: 'unsupported', ext: '' }
+      ],
+      [
+        { kind: 'too-large', size: 5, cap: 3 },
+        { opened: false, reason: 'too-large', size: 5, cap: 3 }
+      ],
+      [
+        { kind: 'error', message: 'File not found' },
+        { opened: false, reason: 'missing' }
+      ],
+      [
+        { kind: 'error', message: 'Path is a directory' },
+        { opened: false, reason: 'directory' }
+      ],
+      [
+        { kind: 'error', message: 'EACCES: permission denied' },
+        { opened: false, reason: 'unreadable' }
+      ],
+      [
+        { kind: 'error', message: 'Path is not a regular file' },
+        { opened: false, reason: 'unreadable' }
+      ],
+      [{ kind: 'text', size: 10, ext: '.txt' }, { opened: true }],
+      [{ kind: 'image', mimeType: 'image/png', size: 10, ext: '.png' }, { opened: true }]
+    ]
+    for (const [cls, expected] of cases) {
+      expect(service.refusalOf(cls), JSON.stringify(cls)).toEqual(expected)
+    }
+  })
+
+  it.each([
+    ['dir/arch.zip', { opened: false, reason: 'unsupported', ext: '.zip' }],
+    ['dir/noext', { opened: false, reason: 'unsupported', ext: '' }],
+    ['dir/big.txt', { opened: false, reason: 'too-large', size: TEXT_CAP + 1, cap: TEXT_CAP }],
+    ['dir/huge.png', { opened: false, reason: 'too-large', size: IMAGE_CAP + 1, cap: IMAGE_CAP }],
+    ['sub', { opened: false, reason: 'directory' }],
+    ['dir/missing.txt', { opened: false, reason: 'missing' }]
+  ])('R-2 %s → 确切的拒绝，不开窗', async (rel, expected) => {
+    init()
+    expect(await raw(p(rel))).toEqual(expected)
+    expect(windows()).toHaveLength(0)
+    expect(fx.guardAppWindow).not.toHaveBeenCalled()
+  })
+
+  it('R-3 新开的预览窗口与聚焦已开的那扇都是恰好 {opened:true}', async () => {
+    init()
+    expect(await raw(p('dir', 'a.txt'))).toEqual({ opened: true })
+    expect(await raw(p('dir', 'a.txt'))).toEqual({ opened: true })
+    expect(windows()).toHaveLength(1)
+  })
+
+  it.each(['big.md', 'HUGE.MD', 'huge.markdown'])(
+    'R-4 %s 超过 Markdown 上限 → too-large，不交给 openMarkdownFile、不开窗',
+    async (name) => {
+      init()
+      expect(await raw(p('md', name))).toEqual({
+        opened: false,
+        reason: 'too-large',
+        size: MD_CAP + 1,
+        cap: MD_CAP
+      })
+      expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+      expect(windows()).toHaveLength(0)
+    }
+  )
+
+  it('R-5 未初始化时同样拒绝超大的 md', async () => {
+    expect(await raw(p('md', 'big.md'))).toEqual({
+      opened: false,
+      reason: 'too-large',
+      size: MD_CAP + 1,
+      cap: MD_CAP
+    })
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-6 恰好 Markdown 上限的 md → 交给 openMarkdownFile、opened', async () => {
+    init()
+    expect(await raw(p('md', 'edge.md'))).toEqual({ opened: true })
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[p('md', 'edge.md')]])
+    expect(windows()).toHaveLength(0)
+  })
+
+  it.each([
+    ['不存在的 missing.md', p('dir', 'missing.md'), { opened: false, reason: 'missing' }],
+    ['能读的小 doc.md', p('dir', 'doc.md'), { opened: false, reason: 'unreadable' }],
+    ['叫 folder.md 的目录', p('md', 'folder.md'), { opened: false, reason: 'directory' }]
+  ])('R-7 openMarkdownFile 没开：%s', async (_label, path, expected) => {
+    init()
+    fx.openMarkdownFile.mockReturnValue(false)
+    expect(await raw(path)).toEqual(expected)
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[path]])
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-8 big-link.txt → big-real.md（>2MB）：按 Markdown 上限拒绝，不交给 openMarkdownFile', async () => {
+    init()
+    expect(await raw(p('md', 'big-link.txt'))).toEqual({
+      opened: false,
+      reason: 'too-large',
+      size: MD_CAP + 1,
+      cap: MD_CAP
+    })
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-8 notes.md → data.txt（3MB）：真实扩展名是 .txt 也按 Markdown 上限拒绝', async () => {
+    init()
+    expect(await raw(p('md', 'notes.md'))).toEqual({
+      opened: false,
+      reason: 'too-large',
+      size: 3 * 1024 * 1024,
+      cap: MD_CAP
+    })
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-9 .mdx 不走 md 窗口：3MB 的 → too-large（2MB 上限）；小的开预览窗口', async () => {
+    init()
+    expect(await raw(p('md', 'x.mdx'))).toEqual({
+      opened: false,
+      reason: 'too-large',
+      size: 3 * 1024 * 1024,
+      cap: MD_CAP
+    })
+    expect(windows()).toHaveLength(0)
+
+    expect(await raw(p('md', 'small.mdx'))).toEqual({ opened: true })
+    expect(hashOf(onlyWindow()).path).toBe(p('md', 'small.mdx'))
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+  })
+
+  it('R-10 无头运行：.txt 与 .md 都是 unreadable', async () => {
+    init()
+    ;(await import('../../utils/headless')).enableHeadlessMode()
+    expect(await raw(p('dir', 'a.txt'))).toEqual({ opened: false, reason: 'unreadable' })
+    expect(await raw(p('dir', 'doc.md'))).toEqual({ opened: false, reason: 'unreadable' })
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-10 会话已删的相对路径 → unreadable', async () => {
+    init()
+    expect(await raw('dir/a.txt', { sessionId: GONE })).toEqual({
+      opened: false,
+      reason: 'unreadable'
+    })
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-10 未初始化的非 md → unreadable', async () => {
+    expect(await raw(p('dir', 'a.txt'))).toEqual({ opened: false, reason: 'unreadable' })
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('R-10 合法 shown: 引用但快照不在 → missing', async () => {
+    init()
+    expect(await raw(`shown:${'c'.repeat(64)}.png`)).toEqual({ opened: false, reason: 'missing' })
+    expect(windows()).toHaveLength(0)
+  })
+})
+
 describe('W-11…14 show_image 的快照引用', () => {
   it('W-11 活会话 + shown:<hash>.png（快照在）→ 开窗；path 是快照的真实路径，不在工作目录下', async () => {
     init()
@@ -749,6 +965,15 @@ describe('W-LIB 文件库的引用', () => {
     expect(await open(`library:${LIB_MISSING}`, { sessionId: GONE })).toBe(false)
     expect(windows()).toHaveLength(0)
     expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+  })
+
+  it('R-10 在回收站 / 库里没有的 id → missing，不开窗', async () => {
+    init()
+    // libraryPathOfRef 把取不到的一件解成库目录下不存在的 `.missing`，分类得「File not found」→ missing
+    for (const id of [LIB_TRASHED, LIB_MISSING]) {
+      expect(await raw(`library:${id}`), id).toEqual({ opened: false, reason: 'missing' })
+    }
+    expect(windows()).toHaveLength(0)
   })
 
   it('W-LIB-2 库里的 .md 开只读预览窗口，不进协作编辑的 md 窗口；对照：普通 notes.md 仍交给 openMarkdownFile', async () => {

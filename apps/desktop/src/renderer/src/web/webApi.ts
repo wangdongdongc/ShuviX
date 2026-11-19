@@ -132,11 +132,13 @@ export function webLocalHandlers(
     },
     'files:open': (params) => {
       const p = params as { sessionId?: unknown; path?: unknown; openedBy?: unknown } | undefined
-      if (!isNonEmptyString(p?.sessionId) || !isNonEmptyString(p?.path)) return false
+      // 浏览器这边判断不了能不能预览：一律开新标签页，由预览页自己显示「不支持 / 太大」占位
+      if (!isNonEmptyString(p?.sessionId) || !isNonEmptyString(p?.path))
+        return { opened: false, reason: 'unreadable' }
       // 摆给用户看的图、文件库里的一件：新标签页直接开文件本身（各自的路由），不经文件预览页
       if (shownImageFileOfRef(p.path) || libraryItemIdOfRef(p.path)) {
         win.open(webPreviewUrl(p.sessionId, p.path), '_blank')
-        return true
+        return { opened: true }
       }
       win.open(
         filePreviewPageUrl(win.location, {
@@ -146,7 +148,7 @@ export function webLocalHandlers(
         }),
         '_blank'
       )
-      return true
+      return { opened: true }
     },
     'browser-view:open-window': () => {
       win.open(browserManagerPageUrl(win.location), '_blank')

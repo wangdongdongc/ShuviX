@@ -12,8 +12,24 @@ import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 import type { FileSystemPort } from './port'
 import { parseImagePixelSize } from './imageSize'
 
-/** 文本整读上限：超过给 too-large 占位，不读字节 */
-export const PREVIEW_TEXT_MAX_BYTES = 2 * 1024 * 1024
+/**
+ * 纯文本 / 代码整读上限：超过给 too-large 占位，不读字节。
+ * 实测（2026-11-19，CodeView 只读 CM6）：日志 / 代码 50MB 0.26–0.39s 出字、滚动不卡，100MB 也在 0.6s 内；
+ * 单行压缩 JSON 从 5MB 起滚动有 ~100ms 的卡顿但能用。50MB 留了一倍余量。
+ */
+export const PREVIEW_TEXT_MAX_BYTES = 50 * 1024 * 1024
+/**
+ * Markdown 整读上限（笔记本 / 只读 live-preview 都是 Atomic 编辑器，比 CodeView 重得多）：
+ * 实测 1MB 0.6s / 堆 215MB，2MB 1s / 500MB，5MB 2s / 800MB，10MB 3.7s / 1.1GB —— 维持 2MB。
+ */
+export const PREVIEW_MARKDOWN_MAX_BYTES = 2 * 1024 * 1024
+/** 按 Markdown 渲染（因而用 Markdown 上限）的扩展名 —— 与 FilePreview 的 MARKDOWN_EXTS 同一份 */
+const MARKDOWN_EXTENSIONS = new Set(['.md', '.mdx', '.markdown'])
+
+/** 这个扩展名的文本整读上限（Markdown 比纯文本小得多，见上） */
+export function textPreviewCap(ext: string): number {
+  return MARKDOWN_EXTENSIONS.has(ext) ? PREVIEW_MARKDOWN_MAX_BYTES : PREVIEW_TEXT_MAX_BYTES
+}
 /** 图片 base64 直出上限：超过给 too-large 占位 */
 export const PREVIEW_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 /** Office 整读 base64 上限：渲染端（docx-preview / SheetJS）同步解析，cap 防 UI 长冻结 */
@@ -260,7 +276,8 @@ export async function classifyPreviewFile(
   }
 
   // 走到这里说明是文本
-  if (size > PREVIEW_TEXT_MAX_BYTES) return { kind: 'too-large', size, cap: PREVIEW_TEXT_MAX_BYTES }
+  const cap = textPreviewCap(ext)
+  if (size > cap) return { kind: 'too-large', size, cap }
   return { kind: 'text', size, ext }
 }
 

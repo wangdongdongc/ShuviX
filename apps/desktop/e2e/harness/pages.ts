@@ -10167,7 +10167,7 @@ export interface NotebookEditorPane {
   /**
    * 点正文里的 `[[target]]`（左键 click，经编辑器的 domEventHandlers → requestFilePreview → 主进程在独立窗口里
    * 打开那份文件：md 进 md 窗口（`app.connectMarkdownWindow`），其余可预览的进文件预览窗口
-   * （`app.connectFilePreviewWindow`），不支持预览的不响应）。
+   * （`app.connectFilePreviewWindow`），不支持预览的不开窗、发起的窗口给一句轻提示 —— `fileOpenNotice`）。
    * 链接不在屏则抛错。
    */
   clickWikiLink(target: string): Promise<void>
@@ -12302,6 +12302,16 @@ export function filePreviewWindowShot(client: CdpClient): Promise<FilePreviewWin
   return client.eval<FilePreviewWindowShot>(`(() => {
     const root = document.querySelector('[data-file-preview-window]')
     return { mounted: !!root, text: root?.textContent ?? '' }
+  })()`)
+}
+
+/** 「这个文件打不开」的轻提示（`[data-file-open-notice=<reason>]`，挂在 body 上）；没有 → null */
+export function fileOpenNotice(
+  client: CdpClient
+): Promise<{ reason: string; text: string } | null> {
+  return client.eval<{ reason: string; text: string } | null>(`(() => {
+    const el = document.querySelector('[data-file-open-notice]')
+    return el ? { reason: el.getAttribute('data-file-open-notice') ?? '', text: el.textContent ?? '' } : null
   })()`)
 }
 

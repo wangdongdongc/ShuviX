@@ -1,30 +1,33 @@
 /**
  * 应用里点开一个文件 → 独立窗口（`window.api.files.open` → previewWindowService.openFileInWindow）：
  * md 进协作编辑窗口（#markdown-window），其余能预览的进只读文件预览窗口（#file-preview），
- * 不能预览的（二进制 / 超限 / 目录 / 不存在）不响应：回 false、不开窗，主进程记一行「不支持预览」。
+ * 不能预览的（二进制 / 超限 / 目录 / 不存在）不开窗：回 `{ opened: false, reason }`，主进程记一行「不支持预览」，
+ * 发起的窗口浮出一句轻提示（`[data-file-open-notice]`）。
  * 右侧面板没有 Preview tab，会话面板也没有 Preview 工具了。
  *
  *   E-1 相对路径 a.txt → 预览窗口显示正文；hash 里的 sessionId 是借来的会话；不开 md 窗口
  *   E-2 doc.md → md 窗口，不开预览窗口
  *   E-3 相对 / 绝对 / sub/../ 的写法再开 → 仍只有一个窗口
- *   E-4 blob.bin / 带 NUL 的 noext / 2MB+1 的 big.txt / 目录 sub / 不存在的 missing.txt → false，
- *       窗口数不变，主进程日志各有一行「不支持预览」
+ *   E-4 blob.bin / 带 NUL 的 noext / 50MB+1 的 big.txt / 目录 sub / 不存在的 missing.txt → opened:false + 各自的
+ *       reason，窗口数不变，主进程日志各有一行「不支持预览」；2MB+1 的 big.md（Markdown 上限）→ too-large，不开 md 窗口
  *   E-5 借来的会话删了：绝对路径照开、图片解码（naturalWidth 40）；相对路径 → false
  *   E-6 openedBy=agent → hash 带 openedBy=agent，预览顶上有来源横幅（文案 + 完整路径）
  *   E-7 主窗口没有 `[data-session-tool="preview"]`，右侧面板的标签栏没有 Preview（eye）tab
- *   E-8 真实 UI：笔记本里点 `[[a.txt]]` → 预览窗口；点 `[[doc]]` → md 窗口
+ *   E-8 真实 UI：笔记本里点 `[[a.txt]]` → 预览窗口；点 `[[doc]]` → md 窗口；点 `[[blob.bin]]` → 不开窗，
+ *       主窗底部浮出「blob.bin · 无法预览」的轻提示（reason unsupported），几秒后自己收起
  *   E-9 子目录里的笔记（主窗口，notebookPath 是相对路径）：`![](assets/pic.png)` 按笔记所在目录解码出来，
  *       真鼠标点 `[open it](assets/rel.txt)` → 那份文件的绝对路径开预览窗口
  *
  * 不碰 LLM；界面语言钉成 en（横幅文案按 en.json 比）。每条用例自己关掉它开的窗口。
  */
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
+  fileOpenNotice,
   filePreviewWindowImages,
   filePreviewWindowShot,
   notebookEditorPane,
@@ -33,6 +36,7 @@ import {
   sidebarPane
 } from '../../harness/pages'
 import { createProject, waitRendererReady, writePng } from '../../harness/seed'
+import type { FileOpenResult } from '@shuvix/chat-protocol/types/filePreview'
 
 let app: E2EApp
 let projectDir: string
@@ -45,8 +49,14 @@ const openFile = (params: {
   sessionId?: string
   path: string
   openedBy?: 'agent' | 'user'
-}): Promise<boolean> =>
-  app.main.eval<boolean>(
+}): Promise<boolean> => openFileRaw(params).then((r) => r.opened)
+
+const openFileRaw = (params: {
+  sessionId?: string
+  path: string
+  openedBy?: 'agent' | 'user'
+}): Promise<FileOpenResult> =>
+  app.main.eval<FileOpenResult>(
     `window.api.files.open(${JSON.stringify({ sessionId: params.sessionId ?? sid, path: params.path, ...(params.openedBy ? { openedBy: params.openedBy } : {}) })})`
   )
 
@@ -91,8 +101,11 @@ beforeAll(async () => {
   writeFileSync(join(projectDir, 'doc.md'), '# doc\n\nmarkdown body\n')
   writeFileSync(join(projectDir, 'blob.bin'), Buffer.from([1, 2, 3, 4]))
   writeFileSync(join(projectDir, 'noext'), Buffer.from([0x41, 0x00, 0x42]))
-  writeFileSync(join(projectDir, 'big.txt'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x61))
-  writeFileSync(join(projectDir, 'nb.md'), '# nb\n\nSee [[a.txt]] and [[doc]].\n')
+  // 50MB+1 的文本：头部是文本（只嗅探前 8KB），其余由 truncate 补成稀疏的空洞
+  writeFileSync(join(projectDir, 'big.txt'), Buffer.alloc(8192, 0x61))
+  truncateSync(join(projectDir, 'big.txt'), 50 * 1024 * 1024 + 1)
+  writeFileSync(join(projectDir, 'big.md'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x61))
+  writeFileSync(join(projectDir, 'nb.md'), '# nb\n\nSee [[a.txt]] and [[doc]] and [[blob.bin]].\n')
   mkdirSync(join(projectDir, 'docs', 'assets'), { recursive: true })
   // 宽度与项目根下的 pic.png（40）不同：解到错的目录也不会碰巧通过
   writePng(join(projectDir, 'docs', 'assets', 'pic.png'), { width: 64, height: 30 })
@@ -162,23 +175,42 @@ describe('files.open → 独立窗口', () => {
     }
   })
 
-  it('E-4 不能预览的 → false、不开窗，主进程各记一行「不支持预览」', async () => {
+  it('E-4 不能预览的 → opened:false + 原因、不开窗，主进程各记一行「不支持预览」', async () => {
     const before = { preview: await previewCount(), md: await mdCount() }
-    const names = ['blob.bin', 'noext', 'big.txt', 'sub', 'missing.txt']
-    for (const name of names) {
-      expect(await openFile({ path: name }), name).toBe(false)
+    const expected: Record<string, FileOpenResult> = {
+      'blob.bin': { opened: false, reason: 'unsupported', ext: '.bin' },
+      noext: { opened: false, reason: 'unsupported', ext: '' },
+      'big.txt': {
+        opened: false,
+        reason: 'too-large',
+        size: 50 * 1024 * 1024 + 1,
+        cap: 50 * 1024 * 1024
+      },
+      sub: { opened: false, reason: 'directory' },
+      'missing.txt': { opened: false, reason: 'missing' },
+      'big.md': {
+        opened: false,
+        reason: 'too-large',
+        size: 2 * 1024 * 1024 + 1,
+        cap: 2 * 1024 * 1024
+      }
+    }
+    for (const [name, result] of Object.entries(expected)) {
+      expect(await openFileRaw({ path: name }), name).toEqual(result)
     }
     await sleep(800)
     expect(await previewCount()).toBe(before.preview)
     expect(await mdCount()).toBe(before.md)
+    const names = ['blob.bin', 'noext', 'big.txt', 'sub', 'missing.txt']
     const log = await until(() => {
       const text = app.mainLog()
-      return names.every((n) => text.includes(`不支持预览`) && text.includes(`不响应: ${real(n)}`))
+      return names.every((n) => text.includes(`不开窗: ${real(n)}`)) &&
+        text.includes(`md 超过预览上限，不开窗: ${real('big.md')}`)
         ? text
         : null
     }, 'one "not previewable" log line per file')
     for (const name of names) {
-      const line = log.split('\n').find((l) => l.includes(`不响应: ${real(name)}`))
+      const line = log.split('\n').find((l) => l.includes(`不开窗: ${real(name)}`))
       expect(line, name).toContain('不支持预览')
     }
   })
@@ -284,6 +316,25 @@ describe('files.open → 独立窗口', () => {
     } finally {
       await closeMarkdown(md, 'doc.md')
     }
+
+    // 不能预览的：不开窗，主窗底部一句轻提示，几秒后自己收起
+    const before = { preview: await previewCount(), md: await mdCount() }
+    await until(
+      async () => (await editor.wikiLinkStatus('blob.bin')) === 'resolved',
+      '[[blob.bin]] resolved'
+    )
+    await editor.clickWikiLink('blob.bin')
+    const notice = await until(() => fileOpenNotice(app.main), 'file-open notice shown')
+    expect(notice.reason).toBe('unsupported')
+    expect(notice.text).toContain('blob.bin')
+    expect(notice.text).toContain(en.fileOpen.unsupportedExt.replace('{{ext}}', '.bin'))
+    expect(await previewCount()).toBe(before.preview)
+    expect(await mdCount()).toBe(before.md)
+    await until(
+      async () => (await fileOpenNotice(app.main)) === null || null,
+      'notice hides',
+      10_000
+    )
   })
 
   it('E-9 子目录里的笔记：相对图片按笔记所在目录加载，点相对链接 → 预览窗口开绝对路径', async () => {

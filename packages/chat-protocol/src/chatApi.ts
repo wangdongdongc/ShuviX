@@ -15,7 +15,7 @@ import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
 import type { ShuvixMdValidation } from './shuvixMdContract'
 import type { MdMetaNoteView, MdMetaWriteResult } from './mdMeta'
-import type { FileReadResult } from './types/filePreview'
+import type { FileOpenResult, FileReadResult } from './types/filePreview'
 import type { ChatMessage } from './types/chatMessage'
 import type { BgTaskLogChunk } from './types/bgTask'
 import type { TaskInfo } from './types/task'
@@ -1164,13 +1164,13 @@ export interface HostApi {
   files: {
     /**
      * 在独立窗口里打开文件（桌面）：md → 协作编辑窗口，其余可预览的 → 只读预览窗口；
-     * 不支持预览的（二进制、超限、读不了）不响应，回 false。
+     * 不支持预览的（二进制、超限、读不了）不开窗，回 `{ opened: false, reason }`，发起的窗口给一句轻提示。
      */
     open: (params: {
       sessionId: string
       path: string
       openedBy?: 'agent' | 'user'
-    }) => Promise<boolean>
+    }) => Promise<FileOpenResult>
     write: (params: {
       sessionId: string
       path: string

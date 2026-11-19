@@ -4,7 +4,9 @@
  *
  *  - md（.md / .markdown）→ 协作编辑窗口（markdownWindowService，与从系统打开的 md 同一个窗口）；
  *  - 其余能预览的（文本 / 代码、图片、PDF、音视频、Office、电子书）→ 本服务的只读预览窗口；
- *  - 不支持预览的（二进制、超过上限、读不了）→ **不响应**：不开窗、不提示，只记一行日志。
+ *  - 不支持预览的（二进制、超过上限、读不了）→ 不开窗，回 `{ opened: false, reason }`：发起的窗口给一句
+ *    轻提示（2026-11-19 用户裁定，取代 2026-10-11 的「不响应、不提示」）。md 也先判一次大小：超过 Markdown
+ *    上限的不开一个只能显示错误的协作编辑窗口。
  *
  * 能不能预览由共享内核 classifyPreviewFile 判（只 stat + 最多读前 8KB），与窗口里 files.read
  * 用的是同一份判定，「开不开窗」与「窗里显示什么」不会漂移。
@@ -16,7 +18,13 @@
 import { BrowserWindow } from 'electron'
 import { basename, isAbsolute, join } from 'path'
 import { realpathSync } from 'fs'
-import { classifyPreviewFile, isPreviewable } from '@shuvix/agent-runtime'
+import {
+  classifyPreviewFile,
+  isPreviewable,
+  PREVIEW_MARKDOWN_MAX_BYTES,
+  type PreviewClass
+} from '@shuvix/agent-runtime'
+import type { FileOpenResult } from '@shuvix/chat-protocol/types/filePreview'
 import { sessionService } from './sessionService'
 import { openMarkdownFile } from './markdownWindowService'
 import { shownImagePathOfRef } from './shownImages'
@@ -77,15 +85,35 @@ export interface OpenFileParams {
   openedBy?: 'agent' | 'user'
 }
 
+const OPENED: FileOpenResult = { opened: true }
+const UNREADABLE: FileOpenResult = { opened: false, reason: 'unreadable' }
+
+/** 不能预览的分类 → 给发起窗口的拒绝原因 */
+export function refusalOf(cls: PreviewClass): FileOpenResult {
+  switch (cls.kind) {
+    case 'binary':
+      return { opened: false, reason: 'unsupported', ext: cls.ext }
+    case 'too-large':
+      return { opened: false, reason: 'too-large', size: cls.size, cap: cls.cap }
+    case 'error':
+      // 分类内核的固定文案（classifyPreviewFile）
+      if (cls.message === 'File not found') return { opened: false, reason: 'missing' }
+      if (cls.message === 'Path is a directory') return { opened: false, reason: 'directory' }
+      return UNREADABLE
+    default:
+      return OPENED
+  }
+}
+
 /**
- * 在独立窗口里打开一个文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；其余不响应）。
- * @returns 是否有一个窗口在显示这个文件（新开的或已有的）
+ * 在独立窗口里打开一个文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；其余不开窗并说明原因）。
+ * @returns 开了（新开的或已有的窗口），或没开及原因
  */
-export async function openFileInWindow(params: OpenFileParams): Promise<boolean> {
+export async function openFileInWindow(params: OpenFileParams): Promise<FileOpenResult> {
   // 无头运行：不开窗（网络客户端本来就在自己的浏览器里开新标签页，走不到这里）
   if (isHeadless()) {
     log.info(`无头运行：不开预览窗口，忽略 ${params.path}`)
-    return false
+    return UNREADABLE
   }
   // 文件库里的一件（`library:` 引用）：按 id 找到当前版本。md 也只开只读预览 —— 库里的文件按内容去重，
   // 在协作编辑窗口里改了它，同一份内容的其他引用也跟着变
@@ -96,18 +124,32 @@ export async function openFileInWindow(params: OpenFileParams): Promise<boolean>
   // 相对路径只有会话的工作目录能解；会话没了又给的是相对路径 → 解不出来，不响应
   if (!shown && !isAbsolute(params.path) && !workingDirectory) {
     log.warn(`会话没有工作目录，无法解析相对路径，忽略: ${params.path}`)
-    return false
+    return UNREADABLE
   }
   const absolute = shown ?? resolveReadPath(params.path, workingDirectory ?? '')
 
   const path = canonicalPath(absolute)
   // 是不是 md 两头都认（与 md 窗口同口径）：点的是 `notes.md`，或它链到一个 md
-  if (!library && (isMarkdownPath(absolute) || isMarkdownPath(path)))
-    return openMarkdownFile(absolute)
+  if (!library && (isMarkdownPath(absolute) || isMarkdownPath(path))) {
+    // 超过 Markdown 上限的不开窗：笔记本读不进来，窗里只会有一行错误。其余照旧交给 md 窗口（它自己
+    // 会把已开着的窗口带到前面）；它没开成就按分类说原因
+    // 按 Markdown 上限比：链到 md 的 `.txt`、或链到大 `.txt` 的 `notes.md`，开出来都是 md 窗口
+    const cls = await classifyPreviewFile(nodeFileSystemPort, path)
+    if (
+      (cls.kind === 'too-large' || cls.kind === 'text') &&
+      cls.size > PREVIEW_MARKDOWN_MAX_BYTES
+    ) {
+      log.info(`md 超过预览上限，不开窗: ${path}`)
+      return { opened: false, reason: 'too-large', size: cls.size, cap: PREVIEW_MARKDOWN_MAX_BYTES }
+    }
+    if (openMarkdownFile(absolute)) return OPENED
+    const refusal = refusalOf(cls)
+    return refusal.opened ? UNREADABLE : refusal
+  }
 
   if (!deps) {
     log.error(`服务未初始化，忽略 ${path}`)
-    return false
+    return UNREADABLE
   }
 
   // 已经开着就带到前面 —— 先于分类：文件此刻读不了（被删、被换成二进制）也该让用户看到那扇窗
@@ -116,15 +158,16 @@ export async function openFileInWindow(params: OpenFileParams): Promise<boolean>
     if (open.isMinimized()) open.restore()
     open.show()
     open.focus()
-    return true
+    return OPENED
   }
 
   const cls = await classifyPreviewFile(nodeFileSystemPort, path)
   if (!isPreviewable(cls)) {
-    log.info(`不支持预览（${cls.kind}），不响应: ${path}`)
-    return false
+    log.info(`不支持预览（${cls.kind}），不开窗: ${path}`)
+    return refusalOf(cls)
   }
-  return openPreviewWindow(deps, path, params.sessionId, params.openedBy ?? 'user')
+  openPreviewWindow(deps, path, params.sessionId, params.openedBy ?? 'user')
+  return OPENED
 }
 
 function openPreviewWindow(
@@ -132,7 +175,7 @@ function openPreviewWindow(
   path: string,
   sessionId: string,
   openedBy: 'agent' | 'user'
-): boolean {
+): void {
   const fileName = basename(path)
   const offset = windows.size * CASCADE_STEP
   const anchor = BrowserWindow.getFocusedWindow()?.getBounds()
@@ -178,5 +221,4 @@ function openPreviewWindow(
 
   const query = new URLSearchParams({ sessionId, path, openedBy })
   loadRendererPage(win, `file-preview?${query.toString()}`)
-  return true
 }

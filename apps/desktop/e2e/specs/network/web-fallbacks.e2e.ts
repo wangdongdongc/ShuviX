@@ -437,7 +437,7 @@ describe('network access phase D: what the web client does instead of the deskto
         webPage(),
         `window.api.files.open(${JSON.stringify({ sessionId: sids.chat, path: docMd })})`
       )
-    ).toBe(true)
+    ).toEqual({ opened: true })
     const mdTab = await openedTab(
       (u) => u.startsWith(previewPrefix) && hashParams(u).get('path') === docMd,
       'a #file-preview tab for doc.md'

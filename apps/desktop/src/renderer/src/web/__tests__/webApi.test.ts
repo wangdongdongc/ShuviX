@@ -300,7 +300,7 @@ describe('WN-1 webNotices', () => {
 describe('WA-6 files:open', () => {
   it('WA-6 合法 → true，新标签页开预览那一屏（恰一次）', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
-    expect(open({ sessionId: 's1', path: '/a b/c.png' })).toBe(true)
+    expect(open({ sessionId: 's1', path: '/a b/c.png' })).toEqual({ opened: true })
     expect(fakeWin.open).toHaveBeenCalledTimes(1)
     expect(fakeWin.open).toHaveBeenCalledWith(
       filePreviewPageUrl(fakeWin.location, {
@@ -314,13 +314,13 @@ describe('WA-6 files:open', () => {
 
   it("WA-6 openedBy 只认 'agent'，别的都是 user", () => {
     const open = webLocalHandlers(fakeWin)['files:open']
-    expect(open({ sessionId: 's1', path: '/a.md', openedBy: 'agent' })).toBe(true)
+    expect(open({ sessionId: 's1', path: '/a.md', openedBy: 'agent' })).toEqual({ opened: true })
     expect(fakeWin.open).toHaveBeenLastCalledWith(
       filePreviewPageUrl(fakeWin.location, { sessionId: 's1', path: '/a.md', openedBy: 'agent' }),
       '_blank'
     )
     for (const openedBy of ['user', 'Agent', 'x', undefined, 1]) {
-      expect(open({ sessionId: 's1', path: '/a.md', openedBy })).toBe(true)
+      expect(open({ sessionId: 's1', path: '/a.md', openedBy })).toEqual({ opened: true })
       expect(fakeWin.open, String(openedBy)).toHaveBeenLastCalledWith(
         filePreviewPageUrl(fakeWin.location, { sessionId: 's1', path: '/a.md', openedBy: 'user' }),
         '_blank'
@@ -340,7 +340,7 @@ describe('WA-6 files:open', () => {
       { sessionId: 5, path: '/a.png' },
       { sessionId: 's1', path: ['/a.png'] }
     ]) {
-      expect(open(params), JSON.stringify(params)).toBe(false)
+      expect(open(params), JSON.stringify(params)).toEqual({ opened: false, reason: 'unreadable' })
     }
     expect(fakeWin.open).not.toHaveBeenCalled()
   })
@@ -351,7 +351,9 @@ describe('WA-6-SH files:open 的 shown: 引用', () => {
 
   it('WA-6-SH-1 合法引用 → true，新标签页直接开 /sessions/shown-image（恰一次，不经预览页）', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
-    expect(open({ sessionId: 's 1', path: `shown:${FILE}`, openedBy: 'agent' })).toBe(true)
+    expect(open({ sessionId: 's 1', path: `shown:${FILE}`, openedBy: 'agent' })).toEqual({
+      opened: true
+    })
     expect(fakeWin.open).toHaveBeenCalledTimes(1)
     expect(fakeWin.open).toHaveBeenCalledWith(networkShownImageUrl('s 1', FILE), '_blank')
     const url = String(fakeWin.open.mock.calls[0][0])
@@ -362,7 +364,7 @@ describe('WA-6-SH files:open 的 shown: 引用', () => {
   it('WA-6-SH-2 形状不对的 shown: → 照常开预览页，path 是原串', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
     const raw = `shown:${'A'.repeat(64)}.png`
-    expect(open({ sessionId: 's1', path: raw })).toBe(true)
+    expect(open({ sessionId: 's1', path: raw })).toEqual({ opened: true })
     expect(fakeWin.open).toHaveBeenCalledTimes(1)
     expect(fakeWin.open).toHaveBeenCalledWith(
       filePreviewPageUrl(fakeWin.location, { sessionId: 's1', path: raw, openedBy: 'user' }),
@@ -373,7 +375,7 @@ describe('WA-6-SH files:open 的 shown: 引用', () => {
   it('WA-6-SH-3 shown: 引用但缺 / 空 sessionId → false，不开', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
     for (const params of [{ path: `shown:${FILE}` }, { sessionId: '', path: `shown:${FILE}` }]) {
-      expect(open(params), JSON.stringify(params)).toBe(false)
+      expect(open(params), JSON.stringify(params)).toEqual({ opened: false, reason: 'unreadable' })
     }
     expect(fakeWin.open).not.toHaveBeenCalled()
   })
@@ -384,7 +386,9 @@ describe('WA-LIB-1 files:open 的 library: 引用', () => {
 
   it('WA-LIB-1 合法引用 → true，新标签页直接开 /files/library?id=ID（恰一次，不经预览页、不带 openedBy）', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
-    expect(open({ sessionId: 'S', path: `library:${ID}`, openedBy: 'agent' })).toBe(true)
+    expect(open({ sessionId: 'S', path: `library:${ID}`, openedBy: 'agent' })).toEqual({
+      opened: true
+    })
     expect(fakeWin.open).toHaveBeenCalledTimes(1)
     expect(fakeWin.open).toHaveBeenCalledWith(`/files/library?id=${ID}`, '_blank')
     expect(fakeWin.open).toHaveBeenCalledWith(networkLibraryFileUrl(ID), '_blank')
@@ -396,14 +400,14 @@ describe('WA-LIB-1 files:open 的 library: 引用', () => {
   it('WA-LIB-1 缺 sessionId → false，不开', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
     for (const params of [{ path: `library:${ID}` }, { sessionId: '', path: `library:${ID}` }]) {
-      expect(open(params), JSON.stringify(params)).toBe(false)
+      expect(open(params), JSON.stringify(params)).toEqual({ opened: false, reason: 'unreadable' })
     }
     expect(fakeWin.open).not.toHaveBeenCalled()
   })
 
   it('WA-LIB-1 library:bad → 照常开预览页，path 是原串', () => {
     const open = webLocalHandlers(fakeWin)['files:open']
-    expect(open({ sessionId: 'S', path: 'library:bad' })).toBe(true)
+    expect(open({ sessionId: 'S', path: 'library:bad' })).toEqual({ opened: true })
     expect(fakeWin.open).toHaveBeenCalledTimes(1)
     expect(fakeWin.open).toHaveBeenCalledWith(
       filePreviewPageUrl(fakeWin.location, {

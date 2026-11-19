@@ -122,6 +122,14 @@ export function NotebookView({
           setContent(r.content)
         } else if (r.kind === 'error') setError(r.message)
         else if (r.kind === 'not-allowed') setError(r.reason)
+        else if (r.kind === 'too-large')
+          // 超过 Markdown 预览上限（从系统打开的大 md；应用里点开的在主进程就被拦下、只给一句提示）
+          setError(
+            `${t('panel.preview.tooLarge')} · ${t('panel.preview.tooLargeDetail', {
+              size: formatMegabytes(r.size),
+              cap: formatMegabytes(r.cap)
+            })}`
+          )
         else setError(t('panel.preview.error'))
       })
       .catch((e: unknown) => {
@@ -279,4 +287,9 @@ export function NotebookView({
       />
     </div>
   )
+}
+
+/** 字节 → `12.3 MB`（只用在「太大」的提示里，量级总在 MB 上下） */
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }

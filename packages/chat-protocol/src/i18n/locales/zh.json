@@ -2202,5 +2202,13 @@
       "shown": "智能体展示",
       "produced": "智能体产出"
     }
+  },
+  "fileOpen": {
+    "unsupportedExt": "无法预览 {{ext}} 文件",
+    "unsupported": "无法预览这个文件",
+    "tooLarge": "文件太大，无法预览（{{size}}，上限 {{cap}}）",
+    "missing": "文件不存在",
+    "directory": "这是一个文件夹",
+    "unreadable": "无法打开这个文件"
   }
 }

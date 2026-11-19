@@ -120,10 +120,10 @@ describe('独立窗口的首帧主题', () => {
     await useTheme(mode, themeId)
     const path = join(dir, 'docs', file)
     expect(
-      await app.main.eval<boolean>(
+      await app.main.eval<{ opened: boolean }>(
         `window.api.files.open(${JSON.stringify({ sessionId: sid, path })})`
       )
-    ).toBe(true)
+    ).toEqual({ opened: true })
     const win = await until(() => app.connectMarkdownWindow(path), `${file} window`)
 
     const themes = await themesOverReload(win)
@@ -137,10 +137,10 @@ describe('独立窗口的首帧主题', () => {
     await useTheme('light', 'solarized-light')
     const path = join(dir, 'docs/c.txt')
     expect(
-      await app.main.eval<boolean>(
+      await app.main.eval<{ opened: boolean }>(
         `window.api.files.open(${JSON.stringify({ sessionId: sid, path })})`
       )
-    ).toBe(true)
+    ).toEqual({ opened: true })
     const win = await until(() => app.connectFilePreviewWindow(path), 'c.txt window')
 
     const themes = await themesOverReload(win)
@@ -160,10 +160,10 @@ describe('独立窗口的首帧主题', () => {
     const path = join(dir, 'docs/d.md')
     writeFileSync(path, '# d\n\nbody\n')
     expect(
-      await app.main.eval<boolean>(
+      await app.main.eval<{ opened: boolean }>(
         `window.api.files.open(${JSON.stringify({ sessionId: sid, path })})`
       )
-    ).toBe(true)
+    ).toEqual({ opened: true })
     const win = await until(() => app.connectMarkdownWindow(path), 'd.md window')
 
     await themesOverReload(win)

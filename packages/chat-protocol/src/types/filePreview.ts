@@ -88,3 +88,20 @@ export type FileReadResult =
       path: string
       message: string
     }
+
+/**
+ * 为什么一个文件没能在窗口里打开（`files.open` 拒绝时）—— 发起的窗口据此给一句轻提示：
+ *  - `unsupported`：二进制等没有预览方式的文件（`ext` 是扩展名，可能为空）；
+ *  - `too-large`：超过这一类文件的预览上限（`size` / `cap` 字节）；
+ *  - `missing`：文件不在了；`directory`：是个文件夹；
+ *  - `unreadable`：其它读不了的情况（权限、会话没有工作目录解不出相对路径、无头运行 …）。
+ */
+export type FileOpenRefusal =
+  | { reason: 'unsupported'; ext: string }
+  | { reason: 'too-large'; size: number; cap: number }
+  | { reason: 'missing' }
+  | { reason: 'directory' }
+  | { reason: 'unreadable' }
+
+/** `files.open` 的结果：开了（新开的或带到前面的已有窗口），或没开及原因 */
+export type FileOpenResult = { opened: true } | ({ opened: false } & FileOpenRefusal)

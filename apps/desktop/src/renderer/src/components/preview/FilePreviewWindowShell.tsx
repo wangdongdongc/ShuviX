@@ -5,6 +5,7 @@ import { FilePreview } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSettingsChatHost } from '../../host/settingsChatHost'
 import { useFilePreviewBridge } from '../../host/useFilePreviewBridge'
+import { FileOpenNoticeLayer } from '../../host/FileOpenNoticeLayer'
 import { hostMediaResolver } from '../../host/hostMedia'
 
 /** `#file-preview?sessionId=…&path=…&openedBy=…` —— path 是文件的绝对（真实）路径 */
@@ -101,6 +102,7 @@ export function FilePreviewWindowShell(): React.JSX.Element {
             />
           ) : null}
         </div>
+        <FileOpenNoticeLayer />
       </MediaUrlProvider>
     </ChatHostProvider>
   )
