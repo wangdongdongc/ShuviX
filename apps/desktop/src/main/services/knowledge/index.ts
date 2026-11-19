@@ -4,7 +4,7 @@
  * **两个根、一个目录一个库**：`~/.shuvix/knowledge/` 下每个子目录是一个用户知识库，
  * `~/.shuvix/knowledge-shuvix/projects/<projectId>/` 是每个项目的库，两边一视同仁。**读宽写严**：库里
  * 每个 md 都是一条笔记，只有 `knowledge` 工具 `create` 出来的条目保证 OKF 合规。宿主的簿记只剩扫描缓存、
- * 检索索引、写入后按 bundle 提交 git —— index.md / log.md 不再维护，也没有「建库」这一步：目录随第一次
+ * 检索索引、写入后按 bundle 提交 git —— log.md 不再维护（index.md 只为项目库 / bot 库生成，见 bundleIndex.ts），也没有「建库」这一步：目录随第一次
  * 写入出现，git 仓库在第一次提交前按需建出。
  *
  * 手动维护（侧栏的三个「新建」）在 create.ts：建目录、按标题派生文件名建条目 —— 改名与删除仍然
@@ -50,6 +50,7 @@ export {
   listBases,
   selectedBaseNames,
   enabledBaseChoices,
+  enabledBaseGuide,
   builtinManualDir,
   knowledgeBaseOptions,
   type SessionBundleTarget,
@@ -77,11 +78,13 @@ export { ensureBundleRepo, flushKnowledgeCommits, type KnowledgeChangeOp } from 
 export { searchBundle, invalidateKnowledgeSearch } from './search'
 export {
   recordKnowledgeChange,
+  recordFolderDescriptions,
   notifyKnowledgeFileChanged,
   flushKnowledgeChanges,
   refreshBuiltinKnowledge,
   type KnowledgeChange
 } from './changes'
+export { bundleOutline, maintainsBundleIndex, syncBundleIndexes } from './bundleIndex'
 export { listKnowledgeEntries } from './entries'
 export { setBotKnowledgeHost, type BotKnowledgeHost } from './botBases'
 export { listKnowledgeMentionEntries } from './mentionEntries'

@@ -24,6 +24,7 @@
  * 管理员只能经这里调起（宿主专用档案，派发工具按名解析不到）。它的边界（只动库里的文件、不碰用户自己的笔记、
  * 不去库外核实事实）只写在它的提示词里 —— 不设硬卡点（2026-11-08 裁决）。
  */
+import { cleanIndexLine, KNOWLEDGE_FOLDER_DESCRIPTION_MAX } from './bundleIndex'
 import { parseOkfText } from './okfCodec'
 import { upsertFrontmatterMappings } from '../shuvixMdWrite'
 import type { ResultContract } from '../subagent/nextTool'
@@ -55,6 +56,20 @@ export const KNOWLEDGE_ADMIN_CONTRACT: ResultContract = {
             change: { type: 'string', enum: [...KNOWLEDGE_ENTRY_CHANGES] }
           },
           required: ['entry', 'change'],
+          additionalProperties: false
+        }
+      },
+      folders: {
+        type: 'array',
+        description:
+          'One line for each folder the task lists as lacking a description, and for each folder you created or whose contents you changed so much that its line no longer fits: what the folder holds and when to look in it. Folders by their path inside the base ("/auth").',
+        items: {
+          type: 'object',
+          properties: {
+            folder: { type: 'string' },
+            description: { type: 'string' }
+          },
+          required: ['folder', 'description'],
           additionalProperties: false
         }
       },
@@ -103,6 +118,20 @@ export const KNOWLEDGE_MIGRATION_CONTRACT: ResultContract = {
           'The original path of every migrated entry this base now holds — taken as it was, merged or renamed. Exactly these are removed from the base they came from; the ones you leave out stay there.',
         items: { type: 'string' }
       },
+      folders: {
+        type: 'array',
+        description:
+          'One line for each folder the task lists as lacking a description, and for each folder you created or whose contents you changed so much that its line no longer fits: what the folder holds and when to look in it. Folders by their path inside the base ("/auth").',
+        items: {
+          type: 'object',
+          properties: {
+            folder: { type: 'string' },
+            description: { type: 'string' }
+          },
+          required: ['folder', 'description'],
+          additionalProperties: false
+        }
+      },
       report: {
         type: 'string',
         description:
@@ -133,6 +162,20 @@ export const KNOWLEDGE_ORGANIZE_CONTRACT: ResultContract = {
             change: { type: 'string', enum: [...KNOWLEDGE_ENTRY_CHANGES] }
           },
           required: ['entry', 'change'],
+          additionalProperties: false
+        }
+      },
+      folders: {
+        type: 'array',
+        description:
+          'One line for each folder the task lists as lacking a description, and for each folder you created or whose contents you changed so much that its line no longer fits: what the folder holds and when to look in it. Folders by their path inside the base ("/auth").',
+        items: {
+          type: 'object',
+          properties: {
+            folder: { type: 'string' },
+            description: { type: 'string' }
+          },
+          required: ['folder', 'description'],
           additionalProperties: false
         }
       },
@@ -182,6 +225,17 @@ export interface KnowledgeSubmission {
    * 只是事实：管理员的 md 说「任务点名的拥挤文件夹，这次就按主题分开」—— 让它自己数，实测它不数
    */
   crowded?: KnowledgeCrowdedFolder[]
+  /**
+   * 放着条目、却还没有描述的文件夹（库内路径）—— 只在宿主为这个库存文件夹描述时给（项目库与 bot 库，见
+   * bundleIndex.ts）。同样是点名：让它自己发现哪个文件夹缺描述，它不会去数
+   */
+  undescribed?: string[]
+}
+
+/** 管理员交回的一条文件夹描述（`folder` 已归一成库内相对路径，不带两头的 `/`） */
+export interface KnowledgeFolderDescription {
+  folder: string
+  description: string
 }
 
 /** 一个文件夹里直接放着的条目超过这个数就算挤了（管理员的 md 里写的是「about a dozen」） */
@@ -219,6 +273,16 @@ function crowdedLine(crowded: readonly KnowledgeCrowdedFolder[] | undefined): st
   return [`- Folders with more than ${KNOWLEDGE_CROWDED_FOLDER} entries: ${names.join(', ')}`]
 }
 
+/** 任务文本里点名缺描述的文件夹的那一行（最多点 20 个，免得一个旧库把任务文本撑大） */
+function undescribedLine(undescribed: readonly string[] | undefined): string[] {
+  if (!undescribed || undescribed.length === 0) return []
+  const shown = undescribed.slice(0, 20).map((f) => `/${f}`)
+  const rest = undescribed.length - shown.length
+  return [
+    `- Folders without a description: ${shown.join(', ')}${rest > 0 ? ` (and ${rest} more)` : ''}`
+  ]
+}
+
 /** 管理员交回的一条改动（`entry` 已归一成库内相对路径，不带前导 `/`） */
 export interface KnowledgeEntryChangeRecord {
   entry: string
@@ -235,6 +299,8 @@ export type KnowledgeAdminOutcome =
       admin: string
       /** 迁移：它收下的条目（原路径，不带前导 `/`）；提交没有这一项 */
       taken?: string[]
+      /** 它给文件夹写的描述（没写就没有这一项） */
+      folders?: KnowledgeFolderDescription[]
     }
   | { error: string }
 
@@ -253,6 +319,7 @@ export function buildKnowledgeAdminPrompt(
     '',
     `- Base: "${req.base}" (${req.label}) — directory ${req.bundleDir}`,
     ...crowdedLine(req.crowded),
+    ...undescribedLine(req.undescribed),
     `- Submitted by: ${req.submittedBy}`,
     ...(req.entry ? [`- It corrects or extends: /${req.entry}`] : []),
     // 提交的内容里写的多半是项目相对路径（`src/auth/refresh.ts`）；管理员的提示词里没有环境段，不给它工作目录，
@@ -287,6 +354,7 @@ function buildKnowledgeMigrationPrompt(
     'Take these entries into the knowledge base. They are being migrated from another base: each one you take in is removed from there afterwards.',
     '',
     `- Base: "${req.base}" (${req.label}) — directory ${req.bundleDir}`,
+    ...undescribedLine(req.undescribed),
     `- They come from: the base of ${migration.from}`,
     `- Migrated by: ${req.submittedBy}`,
     '',
@@ -314,6 +382,7 @@ function buildKnowledgeOrganizePrompt(req: KnowledgeSubmission): string {
     '',
     `- Base: "${req.base}" (${req.label}) — directory ${req.bundleDir}`,
     ...crowdedLine(req.crowded),
+    ...undescribedLine(req.undescribed),
     `- Asked for by: ${req.submittedBy}`,
     ...(asked ? ['', 'What was asked for in particular:', '', asked] : [])
   ].join('\n')
@@ -335,13 +404,16 @@ export function readKnowledgeAdminResult(
   report: string
   /** 迁移的结论才有：收下的条目（归一成库内相对路径、去重） */
   taken?: string[]
+  /** 它给文件夹写的描述（同一个文件夹以后一条为准；空描述丢掉） */
+  folders?: KnowledgeFolderDescription[]
 } | null {
   if (typeof structured !== 'object' || structured === null) return null
-  const { accepted, entries, report, taken } = structured as {
+  const { accepted, entries, report, taken, folders } = structured as {
     accepted?: unknown
     entries?: unknown
     report?: unknown
     taken?: unknown
+    folders?: unknown
   }
   if (kind === 'submit' && typeof accepted !== 'boolean') return null
   if (kind === 'organize' && !Array.isArray(entries)) return null
@@ -363,11 +435,23 @@ export function readKnowledgeAdminResult(
         )
       ]
     : undefined
+  const described = new Map<string, string>()
+  for (const item of Array.isArray(folders) ? folders : []) {
+    if (typeof item !== 'object' || item === null) continue
+    const { folder, description } = item as { folder?: unknown; description?: unknown }
+    if (typeof folder !== 'string' || typeof description !== 'string') continue
+    const path = entryName(folder).replace(/\/+$/, '')
+    const line = cleanIndexLine(description, KNOWLEDGE_FOLDER_DESCRIPTION_MAX)
+    if (path && line) described.set(path, line)
+  }
   return {
     accepted: typeof accepted === 'boolean' ? accepted : changes.length > 0,
     entries: changes,
     report: typeof report === 'string' ? report.trim() : '',
-    ...(tookIn ? { taken: tookIn } : {})
+    ...(tookIn ? { taken: tookIn } : {}),
+    ...(described.size > 0
+      ? { folders: [...described].map(([folder, description]) => ({ folder, description })) }
+      : {})
   }
 }
 

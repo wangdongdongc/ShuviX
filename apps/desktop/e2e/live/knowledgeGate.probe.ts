@@ -84,6 +84,7 @@ import {
   SUBMIT_DUPLICATE,
   SUBMIT_ENVFACT,
   SUBMIT_EXTEND,
+  okf,
   SUBMIT_FIX_LESSON,
   SUBMIT_FIX_REPORT,
   SUBMIT_HOWTO,
@@ -137,6 +138,42 @@ interface Case {
   entry?: string
   /** 判据：回一组标记，空 = 合乎期望 */
   flags: (o: Outcome) => string[]
+}
+
+/** 已经分好文件夹、但文件夹都还没有描述的库（索引从没生成过 —— 老库的样子） */
+const FOLDERED_BASE: Record<string, string> = {
+  'infra/redis-主从.md': okf({
+    type: 'Memory',
+    title: 'Redis 是主从，写操作要连主库',
+    description: '写 Redis 报 READONLY，或者要新增一处写缓存的代码时打开。',
+    tags: ['redis'],
+    body: "生产环境的服务名 `redis` 解析到从库。写操作要连 `redis-master`，否则报 `READONLY You can't write against a read only replica`。",
+    source: 'shuvix://session/seed'
+  }),
+  'infra/网关超时.md': okf({
+    type: 'Memory',
+    title: '网关 60 秒超时',
+    description: '接口可能跑超过一分钟（导出、批量任务）时打开。',
+    tags: ['gateway'],
+    body: '所有对外接口经过网关，网关 60 秒没有收到响应就断开连接，这个值改不了。长任务要做成异步。',
+    source: 'shuvix://session/seed'
+  }),
+  'release/发布检查单.md': okf({
+    type: 'Guide',
+    title: '发布检查单',
+    description: '要发版之前打开。',
+    tags: ['release'],
+    body: '周五不发版。发版前先在预发跑一遍回放脚本，确认迁移只加不删。',
+    source: 'shuvix://session/seed'
+  }),
+  'release/回滚.md': okf({
+    type: 'Guide',
+    title: '怎么回滚',
+    description: '发版之后出问题、需要退回上一个版本时打开。',
+    tags: ['release'],
+    body: '运行 `scripts/rollback.sh <上一个 tag>`；数据库迁移不回滚（只加不删就是为了这个）。',
+    source: 'shuvix://session/seed'
+  })
 }
 
 const turnedDown = (o: Outcome): string[] => [
@@ -298,6 +335,19 @@ const CASES: Case[] = [
     }
   },
   {
+    // 文件夹描述（2026-11-19）：库里已有两个没有描述的文件夹，任务文本会点名它们；交的内容落进其中一个
+    id: 'folders',
+    expect: 'record, and describe both folders (through `folders`, never by editing index.md)',
+    base: FOLDERED_BASE,
+    content: SUBMIT_EXTEND,
+    flags: (o) => [
+      ...(o.accepted ? [] : ['TURNED DOWN (expected it recorded)']),
+      ...(Object.values(o.after).some((t) => t.includes('redis-stg-master'))
+        ? []
+        : ['the new fact is missing'])
+    ]
+  },
+  {
     id: 'organize',
     expect: 'merge duplicates, drop what does not last, group into folders',
     base: CROWDED_BASE,
@@ -372,6 +422,10 @@ interface RunRecord {
   /** 管理员的工具调用，按序（`knowledge.search`、`write`…） */
   tools: string[]
   resultText: string
+  /** 放着条目的文件夹 → 它的描述（'' = 没有） */
+  folders: Record<string, string>
+  /** 管理员直接读写 index.md 的那几次调用（它不该碰） */
+  touchedIndex: string[]
 }
 
 const records: RunRecord[] = []
@@ -393,7 +447,58 @@ function readBase(dir: string): Record<string, string> {
   }
   for (const rel of names.sort()) {
     if (!rel.endsWith('.md') || rel.startsWith('.git/') || rel.includes('/.git/')) continue
+    // 宿主生成的目录索引不是条目（2026-11-19）：单独读，见 readIndexes
+    if (/(^|\/)index\.md$/.test(rel)) continue
     out[rel] = readFileSync(join(dir, rel), 'utf8')
+  }
+  return out
+}
+
+/** 库里宿主生成的 index.md：相对路径 → 原文（文件夹描述存在父目录那一份的文件夹行里） */
+function readIndexes(dir: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  let names: string[] = []
+  try {
+    names = readdirSync(dir, { recursive: true }).map((p) => String(p).replace(/\\/g, '/'))
+  } catch {
+    return out
+  }
+  for (const rel of names.sort()) {
+    if (rel.startsWith('.git/') || rel.includes('/.git/')) continue
+    if (/(^|\/)index\.md$/.test(rel)) out[rel] = readFileSync(join(dir, rel), 'utf8')
+  }
+  return out
+}
+
+/** 放着条目的文件夹各自的描述（'' = 没有）：从父目录的 index.md 的文件夹行读 */
+function folderDescriptions(
+  base: Record<string, string>,
+  indexes: Record<string, string>
+): Record<string, string> {
+  const folders = new Set<string>()
+  for (const path of Object.keys(base)) {
+    const parts = path.split('/').slice(0, -1)
+    for (let i = 1; i <= parts.length; i++) folders.add(parts.slice(0, i).join('/'))
+  }
+  const out: Record<string, string> = {}
+  for (const folder of [...folders].sort()) {
+    const cut = folder.lastIndexOf('/')
+    const parent = cut < 0 ? '' : folder.slice(0, cut)
+    const name = cut < 0 ? folder : folder.slice(cut + 1)
+    const index = indexes[parent ? `${parent}/index.md` : 'index.md'] ?? ''
+    let description = ''
+    for (const line of index.split('\n')) {
+      const hit = /^\*\s+\[(?:\\.|[^\]])*\]\(([^()]+)\/\)(?:\s+-\s+(.*))?$/.exec(line.trim())
+      if (!hit) continue
+      let target = hit[1]
+      try {
+        target = decodeURIComponent(target)
+      } catch {
+        // 原样
+      }
+      if (target === name) description = hit[2] ?? ''
+    }
+    out[folder] = description
   }
   return out
 }
@@ -481,19 +586,34 @@ function librarianRun(sid: string): { tools: string[]; dump: string } {
 
 const redact = (text: string): string => (realKey ? text.split(realKey).join('<redacted>') : text)
 
+/** 「描述了几个 / 共几个文件夹」；管理员自己动了 index.md 的另标出来（那是宿主的文件） */
+function folderCell(r: RunRecord): string {
+  const all = Object.keys(r.folders)
+  if (all.length === 0) return '—'
+  const described = all.filter((f) => r.folders[f])
+  return `${described.length}/${all.length}${r.touchedIndex.length ? '<br>TOUCHED index.md' : ''}`
+}
+
 function renderReport(): string {
   const lines = [
     `# knowledge gate probe — ${PROVIDER} (${realModelId})`,
     '',
     `Librarian md: ${LIBRARIAN_MD}`,
     '',
-    '| case | # | s | expect | accepted | +added | −removed | ~changed | librarian calls | flags |',
-    '|---|---|---|---|---|---|---|---|---|---|'
+    '| case | # | s | expect | accepted | +added | −removed | ~changed | librarian calls | folders described | flags |',
+    '|---|---|---|---|---|---|---|---|---|---|---|'
   ]
   for (const r of records) {
     lines.push(
-      `| ${r.id} | ${r.run} | ${r.seconds} | ${r.expect} | ${r.accepted ? 'yes' : 'no'} | ${r.added.join('<br>') || '—'} | ${r.removed.join('<br>') || '—'} | ${r.changed.join('<br>') || '—'} | ${r.tools.length} | ${r.flags.join('<br>') || 'ok'} |`
+      `| ${r.id} | ${r.run} | ${r.seconds} | ${r.expect} | ${r.accepted ? 'yes' : 'no'} | ${r.added.join('<br>') || '—'} | ${r.removed.join('<br>') || '—'} | ${r.changed.join('<br>') || '—'} | ${r.tools.length} | ${folderCell(r)} | ${r.flags.join('<br>') || 'ok'} |`
     )
+  }
+  lines.push('', '## Folder descriptions', '')
+  for (const r of records) {
+    if (Object.keys(r.folders).length === 0) continue
+    lines.push(`### ${r.id} #${r.run}`, '')
+    for (const [f, d] of Object.entries(r.folders)) lines.push(`- \`/${f}\` — ${d || '**(none)**'}`)
+    lines.push('')
   }
   lines.push('', '## What the submitter was told', '')
   for (const r of records) {
@@ -647,6 +767,8 @@ for (const c of SELECTED) {
           changed,
           written: [...added, ...changed].map((p) => after[p]).join('\n')
         }
+        const indexes = readIndexes(baseDir)
+        const folders = folderDescriptions(after, indexes)
         const librarian = librarianRun(sid)
         records.push({
           id: c.id,
@@ -659,7 +781,9 @@ for (const c of SELECTED) {
           removed,
           changed,
           tools: librarian.tools,
-          resultText
+          resultText,
+          folders,
+          touchedIndex: librarian.tools.filter((t) => /index\.md\)$/.test(t))
         })
 
         const dump = [
@@ -686,6 +810,12 @@ for (const c of SELECTED) {
             '```',
             ''
           ]),
+          '## Folder descriptions (from the generated index.md)',
+          ...(Object.keys(folders).length
+            ? Object.entries(folders).map(([f, d]) => `- /${f}: ${d || '(NONE)'}`)
+            : ['(no folders)']),
+          '',
+          ...Object.entries(indexes).flatMap(([p, t]) => [`### ${p}`, '```markdown', t, '```', '']),
           `## Librarian tool calls (${librarian.tools.length}): ${librarian.tools.join(' → ')}`,
           '',
           '## Librarian conversation',

@@ -28,6 +28,7 @@ import {
   KNOWLEDGE_ADMIN_CONTRACT,
   KNOWLEDGE_CROWDED_FOLDER,
   KNOWLEDGE_ENTRY_CHANGES,
+  KNOWLEDGE_MIGRATION_CONTRACT,
   KNOWLEDGE_ORGANIZE_CONTRACT,
   KNOWLEDGE_WRITER_PROFILE_NAME,
   buildKnowledgeAdminPrompt,
@@ -38,6 +39,7 @@ import {
   type KnowledgeSubmission
 } from '../review'
 import { parseOkfText } from '../okfCodec'
+import { KNOWLEDGE_FOLDER_DESCRIPTION_MAX } from '../bundleIndex'
 import {
   currentTrustTierOf,
   isVerificationCurrent,
@@ -111,7 +113,12 @@ describe('KR-1..KR-3 常量与结果契约', () => {
     expect(schema.type).toBe('object')
     expect(schema.required).toEqual(['accepted', 'entries', 'report'])
     expect(schema.additionalProperties).toBe(false)
-    expect(Object.keys(schema.properties).sort()).toEqual(['accepted', 'entries', 'report'])
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      'accepted',
+      'entries',
+      'folders',
+      'report'
+    ])
     expect(schema.properties.accepted.type).toBe('boolean')
     expect(schema.properties.report.type).toBe('string')
     expect(schema.properties.entries.type).toBe('array')
@@ -438,7 +445,7 @@ describe('KR-28..KR-30 整理（organize）', () => {
       properties: Record<string, unknown>
     }
     expect(schema.required).toEqual(['entries', 'report'])
-    expect(Object.keys(schema.properties).sort()).toEqual(['entries', 'report'])
+    expect(Object.keys(schema.properties).sort()).toEqual(['entries', 'folders', 'report'])
     expect(schema.additionalProperties).toBe(false)
     expect(KNOWLEDGE_ORGANIZE_CONTRACT.sourceLabel).toBe('knowledge organize')
   })
@@ -838,5 +845,160 @@ describe('KR-10..KR-27 stampKnowledgeReview', () => {
       { by: R, at: T }
     ])
     expect(currentTrustTierOf(note.concept!)).toBe('human-reviewed')
+  })
+})
+
+/**
+ * 文件夹描述（2026-11-19）：三份结果契约各多一项可选的 `folders`；读回时归一（库内路径去两头的 `/`、描述单行、
+ * 去尖括号、限长，空的丢掉，同一个文件夹以后一条为准）。任务文本点名还缺描述的文件夹（最多 20 个）。
+ */
+describe('KR-F1..F6 文件夹描述', () => {
+  const SUBMITTER = 'shuvix-work/gpt-5'
+  const read = (folders: unknown, extra: Record<string, unknown> = {}): unknown =>
+    readKnowledgeAdminResult({ accepted: true, entries: [], report: 'r', folders, ...extra })
+      ?.folders
+
+  it('KR-F1 三份契约都有可选的 folders：{folder, description} 的数组，两项必填、不收别的键', () => {
+    for (const contract of [
+      KNOWLEDGE_ADMIN_CONTRACT,
+      KNOWLEDGE_MIGRATION_CONTRACT,
+      KNOWLEDGE_ORGANIZE_CONTRACT
+    ]) {
+      expect(validateContractSchema(contract.schema)).toBeNull()
+      const schema = contract.schema as {
+        required: string[]
+        properties: {
+          folders: {
+            type: string
+            items: {
+              type: string
+              required: string[]
+              additionalProperties: boolean
+              properties: Record<string, { type: string }>
+            }
+          }
+        }
+      }
+      expect(schema.required).not.toContain('folders')
+      const { folders } = schema.properties
+      expect(folders.type).toBe('array')
+      expect(folders.items.required).toEqual(['folder', 'description'])
+      expect(folders.items.additionalProperties).toBe(false)
+      expect(Object.keys(folders.items.properties)).toEqual(['folder', 'description'])
+      expect(folders.items.properties.folder.type).toBe('string')
+      expect(folders.items.properties.description.type).toBe('string')
+    }
+  })
+
+  it('KR-F2 归一：路径去两头的 / 与反斜杠，描述压成单行、去尖括号', () => {
+    expect(
+      read([
+        { folder: '/auth/', description: '  Sign-in\nflows <x> ' },
+        { folder: '\\auth\\oauth', description: 'OAuth' }
+      ])
+    ).toEqual([
+      { folder: 'auth', description: 'Sign-in flows x' },
+      { folder: 'auth/oauth', description: 'OAuth' }
+    ])
+  })
+
+  it('KR-F3 丢掉的：空描述、只有尖括号的描述、空路径、类型不对的项；一条都不剩就没有 folders 这一项', () => {
+    expect(
+      read([
+        { folder: 'a', description: '   ' },
+        { folder: 'b', description: '<>' },
+        { folder: '/', description: 'root' },
+        { folder: '', description: 'empty' },
+        { folder: 3, description: 'n' },
+        { folder: 'c', description: null },
+        'auth',
+        null
+      ])
+    ).toBeUndefined()
+    expect(read('auth')).toBeUndefined()
+    expect(read(undefined)).toBeUndefined()
+    expect(read([])).toBeUndefined()
+    expect(
+      Object.keys(
+        readKnowledgeAdminResult({ accepted: true, entries: [], report: 'r', folders: [] })!
+      )
+    ).toEqual(['accepted', 'entries', 'report'])
+  })
+
+  it('KR-F4 同一个文件夹以后一条为准；超长的描述截到上限', () => {
+    expect(
+      read([
+        { folder: '/auth', description: 'first' },
+        { folder: 'auth/', description: 'second' }
+      ])
+    ).toEqual([{ folder: 'auth', description: 'second' }])
+    const [long] = read([{ folder: 'a', description: 'x'.repeat(500) }]) as {
+      description: string
+    }[]
+    expect([...long.description]).toHaveLength(KNOWLEDGE_FOLDER_DESCRIPTION_MAX)
+    expect(long.description.endsWith('…')).toBe(true)
+  })
+
+  it('KR-F5 整理、迁移、没收下的提交：folders 照样读得出', () => {
+    const folders = [{ folder: 'auth', description: 'd' }]
+    expect(
+      readKnowledgeAdminResult({ entries: [], report: 'r', folders }, 'organize')?.folders
+    ).toEqual(folders)
+    const migrated = readKnowledgeAdminResult({
+      accepted: true,
+      entries: [],
+      report: 'r',
+      taken: ['a.md'],
+      folders
+    })
+    expect(migrated?.taken).toEqual(['a.md'])
+    expect(migrated?.folders).toEqual(folders)
+    expect(
+      readKnowledgeAdminResult({ accepted: false, entries: [], report: 'no', folders })?.folders
+    ).toEqual(folders)
+  })
+
+  it('KR-F6 任务文本点名缺描述的文件夹：提交 / 整理 / 迁移都有；没有就没有这一行；最多点 20 个', () => {
+    const base: KnowledgeSubmission = {
+      base: 'project',
+      label: 'project "Acme"',
+      bundleDir: '/u/p',
+      content: 'x',
+      submittedBy: SUBMITTER
+    }
+    const LINE = '- Folders without a description: /a, /b/c'
+    const undescribed = ['a', 'b/c']
+
+    const submit = buildKnowledgeAdminPrompt({
+      ...base,
+      undescribed,
+      crowded: [{ folder: 'a', entries: 20 }]
+    }).split('\n')
+    const at = submit.indexOf(LINE)
+    expect(at).toBeGreaterThan(-1)
+    expect(submit[at - 1]).toMatch(/^- Folders with more than /)
+    expect(submit[at + 1]).toBe(`- Submitted by: ${SUBMITTER}`)
+
+    expect(buildKnowledgeAdminPrompt({ ...base, organize: true, undescribed })).toContain(LINE)
+    expect(
+      buildKnowledgeAdminPrompt({
+        ...base,
+        content: '',
+        undescribed,
+        migration: { from: 'project "big"', entries: [{ entry: 'a.md', text: 'A' }] }
+      })
+    ).toContain(LINE)
+
+    for (const none of [{}, { undescribed: [] }]) {
+      expect(buildKnowledgeAdminPrompt({ ...base, ...none })).not.toContain('without a description')
+    }
+
+    const many = Array.from({ length: 23 }, (_, i) => `f${i}`)
+    const line = buildKnowledgeAdminPrompt({ ...base, undescribed: many })
+      .split('\n')
+      .find((l) => l.startsWith('- Folders without a description'))!
+    expect(line.endsWith(' (and 3 more)')).toBe(true)
+    expect(line).toContain('/f19')
+    expect(line).not.toContain('/f20')
   })
 })

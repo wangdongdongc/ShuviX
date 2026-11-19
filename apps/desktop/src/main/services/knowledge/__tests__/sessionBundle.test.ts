@@ -68,6 +68,7 @@ import { skillExternalProjectId } from '@shuvix/chat-protocol/skillNotes'
 import {
   builtinManualDir,
   enabledBaseChoices,
+  enabledBaseGuide,
   knowledgeBaseOptions,
   listBases,
   projectBaseNamed,
@@ -165,7 +166,8 @@ describe('sessionBundle', () => {
     expect(sessionBundle('s1')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
-      label: 'project "Acme Corp"'
+      label: 'project "Acme Corp"',
+      folderDescriptions: true
     })
     expect(sessionDao.pick).toHaveBeenCalledWith('s1', ['projectId', 'settings'])
     expect(projectDao.findById).toHaveBeenCalledWith('p1')
@@ -180,7 +182,8 @@ describe('sessionBundle', () => {
     expect(sessionBundle('s1')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
-      label: 'project "Acme Corp"'
+      label: 'project "Acme Corp"',
+      folderDescriptions: true
     })
     expect(readdirSync(bundleAt(root, 'projects/p1'))).toEqual(before)
   })
@@ -335,7 +338,8 @@ describe('resolveBase / listBases —— 选择', () => {
     expect(await resolveBase('s1', ' project ')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
-      label: 'project "Acme Corp"'
+      label: 'project "Acme Corp"',
+      folderDescriptions: true
     })
     expect((await listBases('s1')).map((b) => b.base)).toEqual(['project'])
     expect(readdirSync(join(userRoot, 'project'))).toEqual(['a.md'])
@@ -901,7 +905,8 @@ describe('SB-P1..P10 隐式的项目库', () => {
     expect(await resolveBase('s1', 'project')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
-      label: 'project "Acme Corp"'
+      label: 'project "Acme Corp"',
+      folderDescriptions: true
     })
 
     // 没项目时也够不着那个目录
@@ -1003,7 +1008,8 @@ describe('KB-B1 bot 会话引用的工作项目也有项目库', () => {
     expect(sessionBundle('s1')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
-      label: 'project "Acme Corp"'
+      label: 'project "Acme Corp"',
+      folderDescriptions: true
     })
     expect(projectDao.findById).toHaveBeenCalledWith('p1')
     expect(await baseNames()).toEqual(['project'])
@@ -1693,5 +1699,102 @@ describe('SB-BOT bot 自己的库', () => {
       displayNameOf: () => 'X'
     })
     await check()
+  })
+})
+
+/**
+ * 围栏里的顶层简讯（2026-11-19）：`enabledBaseGuide` = `enabledBaseChoices` + 项目库 / bot 库各自顶层的简讯。
+ * 用户勾的库与内置说明书不带；空库没有这个键。文件夹描述从宿主生成的根 index.md 读。
+ */
+describe('SB-G1..G3 enabledBaseGuide —— 项目库 / bot 库的顶层简讯', () => {
+  const seedProjectBase = (): void => {
+    seedConcept(root, 'projects/p1/top.md', [
+      'type: Memory',
+      'title: Top',
+      'description: Open when top'
+    ])
+    seedConcept(root, 'projects/p1/auth/a.md', ['type: Memory', 'title: A'])
+    seedConcept(root, 'projects/p1/auth/deep/b.md', ['type: Memory', 'title: B'])
+    seedConcept(root, 'projects/p1/auth/old.md', [
+      'type: Memory',
+      'title: Old',
+      'status: deprecated'
+    ])
+    writeFileSync(
+      join(bundleAt(root, 'projects/p1'), 'index.md'),
+      '---\nokf_version: "0.2"\n---\n\n## Folders\n\n* [auth](auth/) - Sign-in flows\n'
+    )
+  }
+  const withoutOutline = (bases: Awaited<ReturnType<typeof enabledBaseGuide>>): unknown[] =>
+    bases.map(({ outline: _outline, ...rest }) => rest)
+
+  afterEach(() => setBotKnowledgeHost(null))
+
+  it('SB-G1 项目会话：只有 project 带简讯（文件夹的条目数不含 deprecated、描述来自根 index）；其余与 enabledBaseChoices 一致', async () => {
+    seedProjectBase()
+    seedConcept(userRootOf(root), 'notes/n.md', ['type: Memory', 'title: N'])
+    seedBuiltinConcept(root, 'shuvix/en/guide.md', ['type: Guide', 'title: G'])
+    inProject(['notes'])
+
+    const guide = await enabledBaseGuide('s1')
+    expect(guide.map((b) => b.name)).toEqual(['project', 'notes', 'shuvix'])
+    expect(withoutOutline(guide)).toEqual(enabledBaseChoices('s1'))
+    expect(guide[0].outline).toEqual({
+      folders: [{ name: 'auth', entries: 2, description: 'Sign-in flows' }],
+      entries: [{ name: 'top.md', description: 'Open when top' }],
+      more: 0
+    })
+    expect(guide[1]).not.toHaveProperty('outline')
+    expect(guide[2]).not.toHaveProperty('outline')
+
+    const text = renderKnowledgeGuide(guide)!
+    expect(text).toContain(
+      '- project — Acme Corp\n  auth/ (2 entries) — Sign-in flows\n  /top.md — Open when top\n- notes'
+    )
+  })
+
+  it('SB-G2 空的项目库没有简讯这个键；bot 会话的 bot 库带简讯；项目库 / bot 库的目标带 folderDescriptions，用户库与内置库不带', async () => {
+    seedConcept(userRootOf(root), 'notes/n.md', ['type: Memory', 'title: N'])
+    seedBuiltinConcept(root, 'shuvix/en/guide.md', ['type: Guide', 'title: G'])
+    seedConcept(root, 'bots/k1/facts/x.md', ['type: Memory', 'title: X'])
+    setBotKnowledgeHost({
+      keyOfSession: (sid) => (sid === 's1' ? 'k1' : null),
+      displayNameOf: () => 'Diary Helper'
+    })
+    mockPick({ projectId: 'p1', settings: { bot: 'diary', knowledgeBases: ['notes'] } })
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    const guide = await enabledBaseGuide('s1')
+    expect(guide.map((b) => b.name)).toEqual(['project', 'bot', 'notes', 'shuvix'])
+    expect(guide[0]).not.toHaveProperty('outline')
+    expect(guide[1].outline).toEqual({
+      folders: [{ name: 'facts', entries: 1, description: '' }],
+      entries: [],
+      more: 0
+    })
+    // 没有建出任何东西：空的项目库目录仍不存在
+    expect(existsSync(bundleAt(root, 'projects/p1'))).toBe(false)
+
+    const flags: Record<string, unknown> = {}
+    for (const name of ['project', 'bot', 'notes', 'shuvix']) {
+      const target = await resolveBase('s1', name)
+      flags[name] = 'error' in target ? 'error' : (target.folderDescriptions ?? false)
+    }
+    expect(flags).toEqual({ project: true, bot: true, notes: false, shuvix: false })
+  })
+
+  it('SB-G3 根 index 是用户手写的：文件夹照列、带条目数，但不拿里面的文字当描述', async () => {
+    seedProjectBase()
+    writeFileSync(
+      join(bundleAt(root, 'projects/p1'), 'index.md'),
+      '# My contents\n\n* [auth](auth/) - mine\n'
+    )
+    invalidateKnowledgeScan()
+    inProject()
+
+    const [project] = await enabledBaseGuide('s1')
+    expect(project.outline?.folders).toEqual([{ name: 'auth', entries: 2, description: '' }])
+    // 手写的 index.md 是一条普通笔记，照常列在顶层
+    expect(project.outline?.entries.map((e) => e.name)).toEqual(['index.md', 'top.md'])
   })
 })

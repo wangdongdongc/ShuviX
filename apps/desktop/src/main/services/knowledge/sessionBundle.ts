@@ -36,6 +36,7 @@ import {
 } from '@shuvix/chat-protocol/knowledge'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import type { KnowledgeBaseInfo, KnowledgeGuideBase } from '@shuvix/agent-runtime'
+import { bundleOutline } from './bundleIndex'
 import { projectDao } from '../../dao/projectDao'
 import { sessionRecords } from '../sessionRecords'
 import type { Project } from '../../dao/types/project'
@@ -58,6 +59,8 @@ export interface SessionBundleTarget {
   label: string
   /** 只读（内置库）：工具的 `submit` 拒绝、侧栏没有新建、写钩子与变更管线绕开 */
   readonly?: boolean
+  /** 宿主为这个库存文件夹描述（项目库与 bot 库，见 bundleIndex.ts） */
+  folderDescriptions?: boolean
 }
 
 /** 配置界面用的一个候选库 */
@@ -174,7 +177,12 @@ export function sessionBundle(rootSessionId: string): SessionBundleTarget | { er
   const project = rootProject(rootSessionId)
   if (!project) return { error: NO_PROJECT }
   const bundle = projectBundleId(project.id)
-  return { bundle, dir: bundleDir(bundle), label: `project "${project.name}"` }
+  return {
+    bundle,
+    dir: bundleDir(bundle),
+    label: `project "${project.name}"`,
+    folderDescriptions: true
+  }
 }
 
 /**
@@ -231,7 +239,12 @@ function botTarget(rootSessionId: string): SessionBundleTarget | null {
   if (!key) return null
   const bundle = botBundleId(key)
   const name = botDisplayNameOf(key)?.trim()
-  return { bundle, dir: bundleDir(bundle), label: name ? `bot "${name}"` : 'bot' }
+  return {
+    bundle,
+    dir: bundleDir(bundle),
+    label: name ? `bot "${name}"` : 'bot',
+    folderDescriptions: true
+  }
 }
 
 /**
@@ -288,9 +301,28 @@ export async function resolveBase(
 }
 
 /**
+ * 围栏要列的库，项目库与 bot 库各带顶层的简讯（文件夹 + 条目各一行，2026-11-19）—— 进系统提示词的就是这一份。
+ * 简讯读不出来（扫描失败）就不带，围栏照常。
+ */
+export async function enabledBaseGuide(rootSessionId: string): Promise<KnowledgeGuideBase[]> {
+  const targets = enabledTargets(rootSessionId)
+  const choices = enabledBaseChoices(rootSessionId)
+  return Promise.all(
+    choices.map(async (choice, i) => {
+      const target = targets[i]?.target
+      // 简讯只给会话隐式带的两个库（项目库、bot 库）：内容必然相关，而且顶层有管理员管着不会太长
+      if (!target?.folderDescriptions) return choice
+      const outline = await bundleOutline(target.bundle).catch(() => null)
+      return outline ? { ...choice, outline } : choice
+    })
+  )
+}
+
+/**
  * 围栏要列的库：启用且此刻真在的那些。名字用磁盘上的拼写（NFC 归一在 enabledTargets 里做掉了
  * —— 与工具解析同一份结果，不再各过滤一遍），项目库带上项目当前的名字，内置库带一句它是什么。
  * **不带目录**（2026-11-08）：库目录只有知识库管理员知道，别的 agent 按库名 + 条目名经 `knowledge` 读、交。
+ * 不带简讯（同步）；{@link enabledBaseGuide} 在它上面补。
  */
 export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] {
   const projectName = rootProject(rootSessionId)?.name ?? ''

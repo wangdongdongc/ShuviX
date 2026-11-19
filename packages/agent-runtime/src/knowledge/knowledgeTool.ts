@@ -49,7 +49,9 @@ import {
 } from './conceptFile'
 import { escapesBundle, normalizeBundlePath } from './bundlePaths'
 import { extractConceptLinks } from './okfCodec'
+import { collectFolderDescriptions, undescribedFolders } from './bundleIndex'
 import {
+  isProjectionFile,
   isReservedFile,
   resolveLinkTarget,
   validateKnowledgeText,
@@ -61,6 +63,7 @@ import {
   type KnowledgeAdminOutcome,
   type KnowledgeCrowdedFolder,
   type KnowledgeEntryChangeRecord,
+  type KnowledgeFolderDescription,
   type KnowledgeSubmission
 } from './review'
 
@@ -166,6 +169,11 @@ export interface KnowledgeBundleTarget {
   label: string
   /** 只读（宿主随应用发布的内置库）：`submit` 拒绝，其余动作照常 */
   readonly?: boolean
+  /**
+   * 宿主为这个库存文件夹描述（项目库与 bot 库，见 bundleIndex.ts）：派管理员时点名还缺描述的文件夹，
+   * 它交回的 `folders` 经 `saveFolderDescriptions` 落盘。缺省不存 —— 用户自己的库里宿主不写 index.md
+   */
+  folderDescriptions?: boolean
 }
 
 /**
@@ -248,6 +256,14 @@ export interface KnowledgeToolDeps {
     call: ToolCallScope | undefined
   ) => void | Promise<void>
   /**
+   * 管理员给文件夹写的描述（「这里放什么、什么时候来看」）交宿主存进父目录的 index.md。只对
+   * `target.folderDescriptions` 的库调用；`folder` 是 `bundleDir` 内的相对路径。
+   */
+  saveFolderDescriptions?: (
+    e: { bundleDir: string; folders: readonly KnowledgeFolderDescription[] },
+    call: ToolCallScope | undefined
+  ) => void | Promise<void>
+  /**
    * 另一个项目的项目库（`project` 参数）：按项目名解析。宿主不注入（扩展端）则 `project` 与 `migrate` 不可用。
    * 解析不出（没有这个项目、重名、就是本会话自己的项目）返回一句可读的 error。
    */
@@ -290,6 +306,8 @@ interface BaseSnapshot {
   paths: ReadonlySet<string>
   texts: ReadonlySet<string>
   crowded: KnowledgeCrowdedFolder[]
+  /** 放着条目却没有描述的文件夹；宿主不为这个库存描述时为空 */
+  undescribed: string[]
 }
 
 const DEFAULT_LIMIT = 20
@@ -703,7 +721,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         content,
         ...(entry ? { entry } : {}),
         submittedBy,
-        ...(before.crowded.length > 0 ? { crowded: before.crowded } : {})
+        ...(before.crowded.length > 0 ? { crowded: before.crowded } : {}),
+        ...(before.undescribed.length > 0 ? { undescribed: before.undescribed } : {})
       },
       { call, toolCallId, signal }
     )
@@ -713,6 +732,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         `The knowledge librarian could not take the submission: ${this.scrubDir(outcome.error, target)}`
       )
     }
+    await this.saveFolders(target, outcome.folders, call)
     const report = this.scrubDir(outcome.report, target) || '(no report)'
     if (!outcome.accepted) {
       return text([`Not recorded in base "${base}".`, '', report], { action: 'submit' })
@@ -777,7 +797,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         content: params.content?.trim() ?? '',
         submittedBy: this.deps.actor(call),
         organize: true,
-        ...(before.crowded.length > 0 ? { crowded: before.crowded } : {})
+        ...(before.crowded.length > 0 ? { crowded: before.crowded } : {}),
+        ...(before.undescribed.length > 0 ? { undescribed: before.undescribed } : {})
       },
       { call, toolCallId, signal }
     )
@@ -787,6 +808,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         `The knowledge librarian could not reorganize the base: ${this.scrubDir(outcome.error, target)}`
       )
     }
+    await this.saveFolders(target, outcome.folders, call)
     const report = this.scrubDir(outcome.report, target) || '(no report)'
     if (outcome.entries.length === 0) {
       return text([`Nothing was changed in base "${base}".`, '', report], { action: 'organize' })
@@ -815,6 +837,16 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     )
   }
 
+  /** 管理员给文件夹写的描述交宿主落盘；宿主不为这个库存描述、或它一条没写，就什么都不做 */
+  private async saveFolders(
+    target: KnowledgeBundleTarget,
+    folders: readonly KnowledgeFolderDescription[] | undefined,
+    call: ToolCallScope | undefined
+  ): Promise<void> {
+    if (!target.folderDescriptions || !folders || folders.length === 0) return
+    await this.deps.saveFolderDescriptions?.({ bundleDir: target.dir, folders }, call)
+  }
+
   /**
    * 派管理员之前库里有哪些文件、各是什么原文。之后它报上来的条目里，**路径是新的、原文却与当时某个文件一字不差**
    * 的就是只挪了位置（改名、按主题分进文件夹）：不盖章。
@@ -824,7 +856,13 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     return {
       paths: new Set(files.map((f) => normalizeBundlePath(f.path))),
       texts: new Set(files.map((f) => f.text)),
-      crowded: crowdedFolders(notes.map((n) => n.path))
+      crowded: crowdedFolders(notes.map((n) => n.path)),
+      undescribed: target.folderDescriptions
+        ? undescribedFolders(
+            notes,
+            collectFolderDescriptions(files.filter((f) => isProjectionFile(f.path, f.text)))
+          )
+        : []
     }
   }
 
@@ -951,7 +989,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         bundleDir: target.dir,
         content: '',
         submittedBy,
-        migration: { from: source.label, entries: migrated }
+        migration: { from: source.label, entries: migrated },
+        ...(before.undescribed.length > 0 ? { undescribed: before.undescribed } : {})
       },
       { call, toolCallId, signal }
     )
@@ -961,6 +1000,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         `The knowledge librarian could not take the entries: ${this.scrubDir(outcome.error, target)}. Nothing was removed from ${from}.`
       )
     }
+    await this.saveFolders(target, outcome.folders, call)
     const report = this.scrubDir(outcome.report, target) || '(no report)'
     if (!outcome.accepted) {
       return text(

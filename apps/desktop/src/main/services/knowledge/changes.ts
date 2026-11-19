@@ -4,8 +4,8 @@
  * 删除记 Deletion，挪动记成源的 Deletion 加目标的 Creation；挪走 / 删掉的是一整个目录时整个 bundle 的
  * 扫描缓存一起失效，提交暂存那个目录（底下的增删都进去）。
  *
- * index.md / log.md 不再维护：谁在什么时候改了哪条，git 提交里都有（`kb(<op>): /path` 与
- * `Knowledge-Actor` trailer）。也没有「建库」这一步 —— 目录随第一次写入出现，仓库在第一次提交前按需建出。
+ * log.md 不再维护：谁在什么时候改了哪条，git 提交里都有（`kb(<op>): /path` 与 `Knowledge-Actor` trailer）。
+ * index.md 自 2026-11-19 起只为项目库与 bot 库重新生成（bundleIndex.ts）：它是文件夹描述存放的地方。也没有「建库」这一步 —— 目录随第一次写入出现，仓库在第一次提交前按需建出。
  *
  * 去抖 300ms 而不是立刻做：文件工具的写入先落盘、再由写钩子补 `generated` 章回写一次，
  * 事件在两次之间到达时立刻提交会把没盖章的版本提交进历史；等一拍，最后落盘的才是提交的。
@@ -14,6 +14,7 @@
 import { normalizeBundlePath } from '@shuvix/agent-runtime'
 import { appEventBus } from '../../utils/appEventBus'
 import { createLogger } from '../../logger'
+import { queueFolderDescriptions, syncBundleIndexes } from './bundleIndex'
 import { isBuiltinBundle, locateBundle } from './knowledgePaths'
 import {
   ensureBundleRepo,
@@ -59,6 +60,11 @@ async function process(batch: KnowledgeChange[]): Promise<void> {
     // 拷进来的文件夹、第一次被写入的项目库都可能还不是 git 仓库：自带 .git 就原样沿用；没有就此刻
     // init —— 基线收下文件夹的原貌（本批刚写下的文件除外），这批变更再以自己的提交落地
     for (const [bundle, paths] of touched) await ensureBundleRepo(bundle, { exclude: [...paths] })
+    // 项目库 / bot 库的目录索引跟着这一批重新生成（条目行按 frontmatter，文件夹描述原样带过去，见 bundleIndex.ts），
+    // 写了 / 删了的 index.md 并进同一批提交
+    for (const [bundle, paths] of touched) {
+      for (const rel of await syncBundleIndexes(bundle)) paths.add(rel)
+    }
     for (const change of batch) {
       queueKnowledgeCommit(change.bundle, [...(touched.get(change.bundle) ?? [])], {
         op: change.op,
@@ -87,6 +93,19 @@ export function recordKnowledgeChange(change: KnowledgeChange): void {
     pending = []
     chain = chain.then(() => process(batch))
   }, CHANGE_DEBOUNCE_MS)
+}
+
+/**
+ * 知识库管理员给文件夹写的描述：排进索引的待写队列，再记一笔根 index 的变更把管线叫起来 —— 描述随下一批
+ * 落进父目录的 index.md 并提交。不归宿主维护索引的库（用户的库、内置库）不收。
+ */
+export function recordFolderDescriptions(
+  bundle: string,
+  folders: readonly { folder: string; description: string }[],
+  actor?: string
+): void {
+  if (!queueFolderDescriptions(bundle, folders)) return
+  recordKnowledgeChange({ bundle, path: 'index.md', op: 'Update', actor })
 }
 
 /** 把挂起的变更处理完并等提交落地（测试用） */

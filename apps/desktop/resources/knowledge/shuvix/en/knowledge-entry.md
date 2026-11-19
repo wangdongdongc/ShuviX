@@ -75,9 +75,12 @@ only). A base that is not enabled is like any other folder in your home: reading
   a non-empty string `type`, and carries no *foreign* `shuvix:` marker (a `shuvix: agent v1` file
   in a base is a note, not a concept). Only an entry the knowledge librarian reported after a
   `submit` — and that then passed the strict checks — carries ShuviX's machine confirmation.
-- `index.md` and `log.md` are OKF's reserved names. ShuviX no longer generates them; ones it
-  generated earlier stay hidden by their shape, while a hand-written file with either name is an
-  ordinary note (never a concept).
+- `index.md` and `log.md` are OKF's reserved names. In a project's or a bot's own base ShuviX
+  writes an `index.md` in every folder that holds entries: the sub-folders, each with the one-line
+  description the librarian gave it, then the entries. That file is where folder descriptions
+  live; do not edit it. ShuviX writes no `index.md` in the user's own bases and no `log.md`
+  anywhere. Generated ones stay hidden by their shape, while a hand-written file with either name
+  is an ordinary note (never a concept) and is left alone.
 
 ## Frontmatter keys (the ShuviX profile)
 

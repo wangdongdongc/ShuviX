@@ -11,7 +11,7 @@
  *   KD-6 非 md 文件的删除、内置库里的删除：与写入同一口径，不进管线
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, renameSync, rmSync, rmdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({ root: '' }))
@@ -33,6 +33,7 @@ import {
   notifyKnowledgeFileChanged,
   recordKnowledgeChange
 } from '../changes'
+import { syncBundleIndexes } from '../bundleIndex'
 import { ensureBundleRepo } from '../repo'
 import { invalidateKnowledgeScan, knownKnowledgePaths, scanBundle } from '../scan'
 import {
@@ -62,9 +63,13 @@ let unsubscribe: () => void
 const headTree = (): string[] =>
   gitOutput(dir, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n').filter(Boolean).sort()
 
-/** 一个已是 git 仓库的 bundle，基线收下给定的文件 */
+/**
+ * 一个已是 git 仓库的 bundle，基线收下给定的文件 —— 连同宿主为项目库生成的目录索引（2026-11-19，bundleIndex.ts）：
+ * 先生成再建基线，之后每条用例的提交里就只有这次变更带来的索引改动
+ */
 const makeBundle = async (files: Record<string, string>): Promise<void> => {
   for (const [rel, text] of Object.entries(files)) seedFile(root, `${BUNDLE}/${rel}`, text)
+  await syncBundleIndexes(BUNDLE)
   await ensureBundleRepo(BUNDLE)
 }
 
@@ -100,11 +105,15 @@ describe('notifyKnowledgeFileChanged — delete / move', () => {
     expect(gitHeadMessage(dir)).toBe(
       `kb(deletion): /a.md\n\nKnowledge-Op: deletion\nKnowledge-Actor: ${ACTOR}`
     )
-    expect(gitHeadFiles(dir)).toEqual(['a.md'])
-    expect(headTree()).toEqual(['seed.md'])
+    // 根 index 跟着重新生成（少了 a.md 那一行），进同一条提交
+    expect(gitHeadFiles(dir)).toEqual(['a.md', 'index.md'])
+    expect(headTree()).toEqual(['index.md', 'seed.md'])
+    expect(readFileSync(join(dir, 'index.md'), 'utf-8')).not.toContain('a.md')
     expect(gitStatus(dir)).toBe('')
     expect(events).toEqual([{ type: 'knowledge.changed' }])
-    expect((await scanBundle(BUNDLE)).files.map((f) => f.path)).toEqual(['seed.md'])
+    const scan = await scanBundle(BUNDLE)
+    expect(scan.files.map((f) => f.path)).toEqual(['index.md', 'seed.md'])
+    expect(scan.notes.map((n) => n.path)).toEqual(['seed.md'])
   })
 
   it('KD-1b 迁移收尾的删除（recordKnowledgeChange 带 movedTo）：提交信息多一行 Knowledge-Moved-To；同一批的几条只写一次', async () => {
@@ -177,7 +186,7 @@ describe('notifyKnowledgeFileChanged — delete / move', () => {
         `Knowledge-Actor: ${ACTOR}`
       ].join('\n')
     )
-    expect(headTree()).toEqual(['seed.md', 'topics/b.md'])
+    expect(headTree()).toEqual(['index.md', 'seed.md', 'topics/b.md', 'topics/index.md'])
     expect(gitStatus(dir)).toBe('')
     expect(events).toEqual([{ type: 'knowledge.changed' }])
   })
@@ -204,15 +213,25 @@ describe('notifyKnowledgeFileChanged — delete / move', () => {
     await flushKnowledgeChanges()
 
     expect(gitHeadMessage(dir)).toContain('- deletion /topics\n- creation /areas/topics')
+    // 每个放着笔记的目录各一份索引；旧目录（topics、topics/deep）的索引跟着目录走了，没有留在原地
     expect(headTree()).toEqual([
+      'areas/index.md',
       'areas/topics/a.md',
       'areas/topics/deep/b.md',
+      'areas/topics/deep/index.md',
+      'areas/topics/index.md',
       'areas/topics/pic.png',
+      'index.md',
       'seed.md'
     ])
     expect(gitStatus(dir)).toBe('')
-    // 不等下一次扫描：旧目录下的键已经没了（按条失效只会删掉 `topics` 这一个不存在的键）
-    expect([...knownKnowledgePaths()].filter((k) => k.startsWith(`${BUNDLE}/`))).toEqual([])
+    // 旧目录下的键已经没了（按条失效只会删掉 `topics` 这一个不存在的键）；管线随后为重新生成索引又扫了一遍，
+    // 所以缓存里是新位置的那几条
+    const known = [...knownKnowledgePaths()].filter((k) => k.startsWith(`${BUNDLE}/`))
+    expect(known.filter((k) => k.startsWith(`${BUNDLE}/topics/`))).toEqual([])
+    expect(known).toEqual(
+      expect.arrayContaining([`${BUNDLE}/areas/topics/a.md`, `${BUNDLE}/areas/topics/deep/b.md`])
+    )
     expect(events).toEqual([{ type: 'knowledge.changed' }])
   })
 
@@ -227,7 +246,7 @@ describe('notifyKnowledgeFileChanged — delete / move', () => {
     await flushKnowledgeChanges()
 
     expect(gitCommitCount(dir)).toBe(2)
-    expect(headTree()).toEqual(['final.md', 'seed.md'])
+    expect(headTree()).toEqual(['final.md', 'index.md', 'seed.md'])
     expect(gitStatus(dir)).toBe('')
     expect(logSpy.warn).not.toHaveBeenCalled()
   })
@@ -257,7 +276,7 @@ describe('notifyKnowledgeFileChanged — delete / move', () => {
     notifyKnowledgeFileChanged(note, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
     expect(gitCommitCount(dir)).toBe(2)
-    expect(headTree()).toEqual(['n.md', 'seed.md'])
+    expect(headTree()).toEqual(['index.md', 'n.md', 'seed.md'])
     expect(logSpy.warn).not.toHaveBeenCalled()
   })
 

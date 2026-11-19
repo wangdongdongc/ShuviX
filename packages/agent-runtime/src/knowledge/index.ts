@@ -94,7 +94,27 @@ export {
   type KnowledgeMigratedEntry,
   type KnowledgeAdminOutcome,
   type KnowledgeEntryChange,
-  type KnowledgeEntryChangeRecord
+  type KnowledgeEntryChangeRecord,
+  type KnowledgeFolderDescription
 } from './review'
 export { toKnowledgeEntry, toKnowledgeEntryFromNote } from './entryView'
-export { renderKnowledgeGuide, type KnowledgeGuideBase } from './knowledgeGuide'
+export {
+  renderKnowledgeGuide,
+  withoutKnowledgeOutline,
+  type KnowledgeGuideBase
+} from './knowledgeGuide'
+export {
+  KNOWLEDGE_FOLDER_DESCRIPTION_MAX,
+  KNOWLEDGE_OUTLINE_MAX_LINES,
+  buildKnowledgeOutline,
+  cleanIndexLine,
+  collectFolderDescriptions,
+  foldersWithNotes,
+  indexPathOf,
+  readFolderDescriptions,
+  renderBundleIndexes,
+  undescribedFolders,
+  type KnowledgeOutline,
+  type KnowledgeOutlineEntry,
+  type KnowledgeOutlineFolder
+} from './bundleIndex'

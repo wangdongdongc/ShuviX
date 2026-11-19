@@ -103,7 +103,7 @@ import { withCallAgent, type ToolAgentIdentity } from '../services/toolAgent'
 import type { Project } from '../types'
 import { createLogger } from '../logger'
 import { createAgentTool } from './AgentTool'
-import { builtinManualDir, enabledBaseChoices } from '../services/knowledge'
+import { builtinManualDir, enabledBaseGuide } from '../services/knowledge'
 
 const log = createLogger('AgentHost')
 
@@ -692,7 +692,8 @@ export const desktopPromptHost: PromptHost = {
   // 知识库引导：只列这条会话启用了哪几个库（不扫库、不数条目、不给路径 —— 路径只由 knowledge
   // 工具发放）；项目会话恒含项目库，一个都没启用就回 null、整段不注入。档案带不带 knowledge
   // 工具那道门在段落选择里
-  resolveKnowledgeBases: (sessionId) => renderKnowledgeGuide(enabledBaseChoices(sessionId)),
+  resolveKnowledgeBases: async (sessionId) =>
+    renderKnowledgeGuide(await enabledBaseGuide(sessionId)),
   /**
    * bot 会话根 agent 的 `<bot_profile>`：绑定的那份 bot md 的正文（只选给 bot 基座上的根 agent ——
    * 子会话、派生 agent 按自己的档案说话）。绑定的 md 不在了 → null，会话照常跑在基座 `bot` 上。

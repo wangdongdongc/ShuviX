@@ -13,7 +13,12 @@
  *     到这里只剩一个名字加一句 label，所以这里没有、也不该有按名字特判的分支。
  */
 import { describe, it, expect } from 'vitest'
-import { renderKnowledgeGuide, type KnowledgeGuideBase } from '../knowledgeGuide'
+import {
+  renderKnowledgeGuide,
+  withoutKnowledgeOutline,
+  type KnowledgeGuideBase
+} from '../knowledgeGuide'
+import type { KnowledgeOutline } from '../bundleIndex'
 
 const listLines = (text: string): string[] => text.split('\n').filter((l) => l.startsWith('- '))
 
@@ -96,14 +101,15 @@ describe('KG-1..4 知识库围栏正文', () => {
  * 若还带着旧字段塞进来，渲染器也不看它 —— 列表行恰为 `- <name>` / `- <name> — <label>`。
  */
 describe('KG-5..7 不印库目录', () => {
-  it('KG-5 KnowledgeGuideBase 恰为 name / label / readonly / note —— 没有 dir', () => {
+  it('KG-5 KnowledgeGuideBase 恰为 name / label / readonly / note / outline —— 没有 dir', () => {
     const keys: Record<keyof KnowledgeGuideBase, true> = {
       name: true,
       label: true,
       readonly: true,
-      note: true
+      note: true,
+      outline: true
     }
-    expect(Object.keys(keys).sort()).toEqual(['label', 'name', 'note', 'readonly'])
+    expect(Object.keys(keys).sort()).toEqual(['label', 'name', 'note', 'outline', 'readonly'])
   })
 
   it('KG-6 宿主仍塞进一个 dir（旧调用方）：不印，行里不多出一个 ` — `；整段没有任何路径', () => {
@@ -177,5 +183,110 @@ describe('KG-R 只读的库与库自己的说明', () => {
 
     // 反过来：没有库带说明，就只有清单与通用说明两段
     expect(paragraphsOf(renderKnowledgeGuide([{ name: 'notes' }])!)).toHaveLength(2)
+  })
+})
+
+/**
+ * 顶层简讯（2026-11-19）：项目库与 bot 库那一行下面缩进两格印顶层的文件夹与条目；有简讯时清单后面多一段说明。
+ * 简讯是建 agent 那一刻的快照 —— `withoutKnowledgeOutline` 摘掉它之后，与不带简讯渲染出来的一字不差
+ * （durable lock 据此判「只是库里多了一条」不算提示词过期）。
+ */
+describe('KG-O1..O6 顶层简讯', () => {
+  const OUTLINE: KnowledgeOutline = {
+    folders: [
+      { name: 'auth', entries: 3, description: 'Sign-in and tokens' },
+      { name: 'misc', entries: 1, description: '' }
+    ],
+    entries: [
+      { name: 'a.md', description: 'Open when a' },
+      { name: 'b.md', description: '' }
+    ],
+    more: 0
+  }
+  const OTHER: KnowledgeOutline = {
+    folders: [{ name: 'release', entries: 9, description: 'Shipping' }],
+    entries: [{ name: 'z.md', description: 'Changed' }],
+    more: 2
+  }
+  const indented = (text: string): string[] => text.split('\n').filter((l) => l.startsWith('  '))
+  const isOutlineParagraph = (p: string): boolean => p.startsWith('The indented lines under a base')
+
+  it('KG-O1 库那一行下面缩进两格：文件夹在前（单复数、没描述不带破折号），条目在后', () => {
+    const text = renderKnowledgeGuide([{ name: 'project', label: 'Acme', outline: OUTLINE }])!
+    const lines = text.split('\n')
+    const at = lines.indexOf('- project — Acme')
+    expect(lines.slice(at + 1, at + 5)).toEqual([
+      '  auth/ (3 entries) — Sign-in and tokens',
+      '  misc/ (1 entry)',
+      '  /a.md — Open when a',
+      '  /b.md'
+    ])
+    expect(indented(text)).toHaveLength(4)
+  })
+
+  it('KG-O2 more > 0 时最后一行报没列出来的个数；为 0 不印', () => {
+    const text = renderKnowledgeGuide([{ name: 'project', outline: OTHER }])!
+    expect(indented(text).at(-1)).toBe('  … and 2 more at the top level')
+    expect(renderKnowledgeGuide([{ name: 'project', outline: OUTLINE }])).not.toContain('more at')
+  })
+
+  it('KG-O3 只有带简讯的库底下有缩进行；说明那一段恰一次，紧跟清单、排在通用说明之前', () => {
+    const text = renderKnowledgeGuide([
+      { name: 'project', label: 'Acme', outline: OUTLINE },
+      { name: 'notes' },
+      { name: 'shuvix', label: 'manual', readonly: true }
+    ])!
+    const lines = text.split('\n')
+    expect(lines[lines.indexOf('- notes') + 1]).toBe('- shuvix — manual')
+    const paragraphs = text.split('\n\n')
+    expect(paragraphs.filter(isOutlineParagraph)).toHaveLength(1)
+    expect(isOutlineParagraph(paragraphs[1])).toBe(true)
+    expect(paragraphs[2]).toContain('`search` them')
+  })
+
+  it('KG-O4 没有库带简讯（缺省 / null）：与加这个功能之前一字不差', () => {
+    const plain = renderKnowledgeGuide([{ name: 'project', label: 'Acme' }, { name: 'notes' }])!
+    expect(
+      renderKnowledgeGuide([{ name: 'project', label: 'Acme', outline: null }, { name: 'notes' }])
+    ).toBe(plain)
+    expect(plain.split('\n\n').filter(isOutlineParagraph)).toEqual([])
+    expect(indented(plain)).toEqual([])
+  })
+
+  it('KG-O5 withoutKnowledgeOutline：摘掉简讯 = 不带简讯渲染；两份不同的简讯摘完相等', () => {
+    const bases = (project?: KnowledgeOutline, bot?: KnowledgeOutline): KnowledgeGuideBase[] => [
+      { name: 'project', label: 'Acme', ...(project ? { outline: project } : {}) },
+      { name: 'bot', label: 'Scout', ...(bot ? { outline: bot } : {}) },
+      { name: 'shuvix', label: 'manual', readonly: true, note: 'Read the manual first.' }
+    ]
+    const plain = renderKnowledgeGuide(bases())!
+    expect(withoutKnowledgeOutline(renderKnowledgeGuide(bases(OUTLINE))!)).toBe(plain)
+    expect(withoutKnowledgeOutline(renderKnowledgeGuide(bases(OTHER))!)).toBe(plain)
+    expect(withoutKnowledgeOutline(renderKnowledgeGuide(bases(OUTLINE, OTHER))!)).toBe(plain)
+    // 围栏包着也一样（lock 比的是带围栏的段落文本）
+    const fenced = (t: string): string => `<knowledge_bases>\n${t}\n</knowledge_bases>`
+    expect(withoutKnowledgeOutline(fenced(renderKnowledgeGuide(bases(OUTLINE))!))).toBe(
+      fenced(plain)
+    )
+  })
+
+  it('KG-O6 不带简讯的原样；库的集合 / 标签 / 说明 / 只读变了，摘完仍然不同', () => {
+    const base: KnowledgeGuideBase[] = [
+      { name: 'project', label: 'Acme', outline: OUTLINE },
+      { name: 'shuvix', label: 'manual', readonly: true, note: 'Note A.' }
+    ]
+    const plain = renderKnowledgeGuide([{ name: 'project', label: 'Acme' }])!
+    expect(withoutKnowledgeOutline(plain)).toBe(plain)
+
+    const stripped = (bases: KnowledgeGuideBase[]): string =>
+      withoutKnowledgeOutline(renderKnowledgeGuide(bases)!)
+    const was = stripped(base)
+    const variants: KnowledgeGuideBase[][] = [
+      [...base, { name: 'notes' }],
+      [{ ...base[0], label: 'Renamed', outline: OTHER }, base[1]],
+      [base[0], { ...base[1], note: 'Note B.' }],
+      [{ ...base[0], readonly: true }, base[1]]
+    ]
+    for (const variant of variants) expect(stripped(variant)).not.toBe(was)
   })
 })

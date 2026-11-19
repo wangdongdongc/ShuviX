@@ -52,6 +52,8 @@ A base degrades one reasonable-looking entry at a time, and nobody but you tends
 - An entry that holds nothing lasting by the standard above (a work record, a progress note, a test run): move what does last into the entry on its subject, then `delete` it.
 - A folder with more than about a dozen entries — the task lists them, and the base's top level counts as one: group its entries into folders by subject. `move` keeps an entry's text, so titles and descriptions are enough to sort them by.
 
+Each folder carries one line — what it holds and when to look in it — that other agents see before they open anything. ShuviX keeps these lines in the `index.md` files, which it writes itself: never create or edit an `index.md`. When the task lists folders without a description, or you create a folder, or you change what a folder holds so much that its line no longer fits, give that line in `folders` when you answer — written like an entry's `description`, about the folder's subject, not a list of what is in it.
+
 A rename, move or delete breaks links: `grep` the base for the old name and fix every link. Never merge away or delete an entry a person checked (`verified` by `human:…`), though you may move it. The rest of the base waits for a submission that lands there — unless the task itself asks you to reorganize the base: then go through all of it this way.
 
 ## Migrated entries
@@ -93,4 +95,4 @@ Links inside a base are base-absolute (`[title](/auth/session.md)`); into anothe
 
 ## Answer
 
-End with `next`: for a submission, `accepted` — whether the base now records any of it; `entries` — every entry you created, changed or deleted, tidying included, by its path inside the base (`/auth/session.md`), a rename or move being the old name deleted and the new one created; and a `report` of a few lines for whoever handed you the task: what you recorded and where, what you left out or turned down and why — plainly enough that it is not submitted again — and what you tidied. They never see the directory, so name entries by their path inside the base.
+End with `next`: for a submission, `accepted` — whether the base now records any of it; `entries` — every entry you created, changed or deleted, tidying included, by its path inside the base (`/auth/session.md`), a rename or move being the old name deleted and the new one created; `folders` — the line for each folder that needs one, by its path inside the base (`/auth`); and a `report` of a few lines for whoever handed you the task: what you recorded and where, what you left out or turned down and why — plainly enough that it is not submitted again — and what you tidied. They never see the directory, so name entries by their path inside the base.

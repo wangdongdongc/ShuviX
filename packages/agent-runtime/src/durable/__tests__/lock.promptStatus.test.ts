@@ -55,6 +55,7 @@ import { redactionHost } from './support/redaction'
 import { forkedId } from './support/rollback'
 import { holdTool } from './support/tools'
 import { deferred, withTimeout } from './support/wait'
+import { renderKnowledgeGuide, type KnowledgeGuideBase } from '../../knowledge/knowledgeGuide'
 
 registerHostCleanup()
 
@@ -591,6 +592,82 @@ describe('lock · systemPromptStatus', () => {
       await session.destroyAgent()
       await send(scenario.t, session, 'u2')
       expect(scenario.t.kit.requests.at(-1)!.systemPrompt).toBe(first)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'STS-20 the knowledge outline is a snapshot: a difference only in the outline (entries added, re-described, first entry, emptied) is not stale and the section is reported current; a changed label, base set or note still is; another section gets no such exemption',
+    async () => {
+      const outline = (description: string, entries = 2): KnowledgeGuideBase['outline'] => ({
+        folders: [{ name: 'auth', entries, description }],
+        entries: [{ name: 'top.md', description: 'Open when top' }],
+        more: 0
+      })
+      const guide = (bases: KnowledgeGuideBase[]): string => renderKnowledgeGuide(bases)!
+      const project = (extra: Partial<KnowledgeGuideBase> = {}): KnowledgeGuideBase => ({
+        name: 'project',
+        label: 'Acme',
+        ...extra
+      })
+
+      const scenario = await envScenario({
+        sources: sourceHost({ knowledge: guide([project({ outline: outline('Sign-in') })]) })
+      })
+      const session = await frozenSession(scenario)
+      expect(scenario.t.kit.requests[0]!.systemPrompt).toContain('  auth/ (2 entries) — Sign-in')
+
+      // 只有简讯变了：另一份简讯、简讯没了（库空了）
+      for (const live of [
+        guide([project({ outline: outline('Sign-in and tokens', 5) })]),
+        guide([project()])
+      ]) {
+        scenario.sources.values.knowledge = live
+        scenario.sources.notes.length = 0
+        expect(await statusOf(session)).toEqual(CURRENT)
+        expect(scenario.sources.notes.at(-1)![1]).toContain('knowledge_bases')
+      }
+
+      // 库的标签 / 集合 / 说明变了（简讯也一起变了）：照旧算
+      for (const live of [
+        guide([project({ label: 'Renamed', outline: outline('Other') })]),
+        guide([project({ outline: outline('Sign-in') }), { name: 'notes' }]),
+        guide([project({ outline: outline('Sign-in'), note: 'Use it for billing.' })])
+      ]) {
+        scenario.sources.values.knowledge = live
+        expect(await statusOf(session)).toEqual({
+          frozen: true,
+          stale: [{ key: 'knowledge_bases' }]
+        })
+      }
+
+      // 整段没了：算
+      scenario.sources.values.knowledge = null
+      expect(await statusOf(session)).toEqual({ frozen: true, stale: [{ key: 'knowledge_bases' }] })
+
+      // 别的段落没有这条豁免：项目提示词里多一行缩进的字也算变了
+      scenario.sources.values.knowledge = guide([project({ outline: outline('Sign-in') })])
+      scenario.sources.values.projectPrompt = 'Acme billing.\n  an indented line'
+      expect(await statusOf(session)).toEqual({ frozen: true, stale: [{ key: 'project_prompt' }] })
+    },
+    TIMEOUT
+  )
+
+  it(
+    'STS-21 frozen without an outline (the base was empty), an outline now (its first entry): not stale',
+    async () => {
+      const bare: KnowledgeGuideBase = { name: 'project', label: 'Acme' }
+      const scenario = await envScenario({
+        sources: sourceHost({ knowledge: renderKnowledgeGuide([bare])! })
+      })
+      const session = await frozenSession(scenario)
+      scenario.sources.values.knowledge = renderKnowledgeGuide([
+        {
+          ...bare,
+          outline: { folders: [], entries: [{ name: 'first.md', description: 'd' }], more: 0 }
+        }
+      ])!
+      expect(await statusOf(session)).toEqual(CURRENT)
     },
     TIMEOUT
   )

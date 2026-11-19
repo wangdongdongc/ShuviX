@@ -131,6 +131,7 @@ interface Harness {
   admin: Mock
   scan: Mock
   afterWrite: Mock
+  saveFolders: Mock
   /** 先后流水：`authorize:<access>` / `admin` / `write:<abs>` / `remove:<a,b>` */
   calls: string[]
   run: (params: KnowledgeToolParams, signal?: AbortSignal) => Promise<InvokedToolResult>
@@ -220,6 +221,7 @@ function rig(opts: Options = {}): Harness {
   })
   const scan = vi.fn((bundleDir: string) => Promise.resolve(scanOf(files, bundleDir)))
   const afterWrite = vi.fn()
+  const saveFolders = vi.fn()
   const without = new Set(opts.without ?? [])
   const tool = createKnowledgeTool({
     port,
@@ -231,6 +233,7 @@ function rig(opts: Options = {}): Harness {
     admin: impl === null ? undefined : admin,
     isAdmin: () => opts.isAdmin === true,
     afterWrite,
+    saveFolderDescriptions: saveFolders,
     resolveProjectBase: without.has('resolveProjectBase') ? undefined : resolveProjectBase,
     authorizeProjectBase: authorize,
     removeEntries: without.has('removeEntries') ? undefined : removeEntries,
@@ -246,6 +249,7 @@ function rig(opts: Options = {}): Harness {
     admin,
     scan,
     afterWrite,
+    saveFolders,
     calls,
     run: async (params, signal) =>
       (await invokeTool(tool, params, { callId: 'call-1', signal })).result
@@ -760,11 +764,17 @@ describe('KM-40..KM-43 迁移的任务文本、结果契约与读法', () => {
     }
     expect(schema.required).toEqual(['accepted', 'entries', 'taken', 'report'])
     expect(schema.additionalProperties).toBe(false)
-    expect(Object.keys(schema.properties)).toEqual(['accepted', 'entries', 'taken', 'report'])
+    expect(Object.keys(schema.properties)).toEqual([
+      'accepted',
+      'entries',
+      'taken',
+      'folders',
+      'report'
+    ])
     expect(schema.properties.taken).toMatchObject({ type: 'array', items: { type: 'string' } })
     expect(KNOWLEDGE_MIGRATION_CONTRACT.sourceLabel).toBe('knowledge migrate')
     const submit = KNOWLEDGE_ADMIN_CONTRACT.schema as { properties: Record<string, unknown> }
-    expect(Object.keys(submit.properties)).toEqual(['accepted', 'entries', 'report'])
+    expect(Object.keys(submit.properties)).toEqual(['accepted', 'entries', 'folders', 'report'])
   })
 
   it('KM-43 taken 的读法：归一成库内相对路径、去重、丢掉不是字符串与空的；不是数组 → 没有这一项', () => {
@@ -780,6 +790,30 @@ describe('KM-40..KM-43 迁移的任务文本、结果契约与读法', () => {
     expect(
       Object.keys(readKnowledgeAdminResult({ accepted: true, entries: [], report: 'r' })!)
     ).toEqual(['accepted', 'entries', 'report'])
+  })
+})
+
+// ─── 文件夹描述（2026-11-19）──────────────────────────────────────────────────────
+
+describe('KM-F1 迁移：目标库的文件夹描述', () => {
+  it('KM-F1 目标库由宿主存描述时：请求点名目标库里缺描述的文件夹，交回的 folders 落到目标库（不是源库）；别的库两样都没有', async () => {
+    const folders = [{ folder: 'auth', description: 'Sign-in' }]
+    const taking: AdminImpl = async (req, ctx, files) => ({
+      ...(await takesAll(req, ctx, files)),
+      folders
+    })
+    const seeded = { ...SOURCE_FILES, [`${TARGET_DIR}/ops/run.md`]: entry('Run') }
+
+    const h = rig({ files: seeded, target: { ...TARGET, folderDescriptions: true }, admin: taking })
+    await h.run(MIGRATE)
+    expect(h.admin.mock.calls[0][0].undescribed).toEqual(['ops'])
+    expect(h.saveFolders).toHaveBeenCalledTimes(1)
+    expect(h.saveFolders.mock.calls[0][0]).toEqual({ bundleDir: TARGET_DIR, folders })
+
+    const plain = rig({ files: seeded, admin: taking })
+    await plain.run(MIGRATE)
+    expect(plain.admin.mock.calls[0][0]).not.toHaveProperty('undescribed')
+    expect(plain.saveFolders).not.toHaveBeenCalled()
   })
 })
 

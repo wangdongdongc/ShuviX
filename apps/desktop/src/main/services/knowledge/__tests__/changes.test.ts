@@ -1,7 +1,8 @@
 /**
  * changes —— 宿主观察到的每一次知识库写入都经这条管线：失效缓存 →（还不是 git 仓库的库先 init + 基线）→
  * 排队该 bundle 的 git 提交 → 广播 knowledge.changed。300ms 去抖合批：一批一个事件、每个 bundle 一条提交。
- * index.md / log.md 不再维护 —— 管线从不写它们，谁在什么时候改了哪条都记在提交里。
+ * log.md 不再维护 —— 谁在什么时候改了哪条都记在提交里。index.md 自 2026-11-19 起只为项目库与 bot 库重新生成
+ * （bundleIndex.ts：文件夹描述存在里面），随同一批提交；用户的库里管线照旧一个字不多写。
  * `notifyKnowledgeFileChanged` 是文件工具那一侧的入口：先按 locateBundle 判「这条路径属于哪个 bundle」
  * （落不进任何 bundle 的一概不算知识库变更），再按「扫描是否见过」区分新建 / 更新。
  *
@@ -49,6 +50,7 @@ import {
   recordKnowledgeChange,
   refreshBuiltinKnowledge
 } from '../changes'
+import { isProjectionText } from '@shuvix/agent-runtime'
 import { ensureBundleRepo } from '../repo'
 import { invalidateKnowledgeScan, knownKnowledgePaths, scanAllBundles, scanBundle } from '../scan'
 import { invalidateKnowledgeSearch, searchBundle } from '../search'
@@ -95,9 +97,18 @@ const makeBundle = async (bundle: string): Promise<void> => {
   await ensureBundleRepo(bundle)
 }
 
-/** 管线从不写 index.md / log.md */
+/** 用户的库：管线从不写 index.md / log.md */
 const expectNoBookkeeping = (bundleDir: string): void => {
   expect(existsSync(join(bundleDir, 'index.md')), 'index.md').toBe(false)
+  expect(existsSync(join(bundleDir, 'log.md')), 'log.md').toBe(false)
+}
+
+/** 项目库 / bot 库：根 index 是宿主生成的那份（列着 `entries` 这几条），log.md 照旧不写 */
+const expectGeneratedIndex = (bundleDir: string, entries: readonly string[]): void => {
+  const text = readFileSync(join(bundleDir, 'index.md'), 'utf-8')
+  expect(text.startsWith('---\nokf_version: "0.2"\n---\n')).toBe(true)
+  expect(isProjectionText('index.md', text)).toBe(true)
+  expect([...text.matchAll(/\]\(([^)]+\.md)\)/g)].map((m) => m[1])).toEqual(entries)
   expect(existsSync(join(bundleDir, 'log.md')), 'log.md').toBe(false)
 }
 
@@ -123,7 +134,7 @@ afterEach(async () => {
 })
 
 describe('recordKnowledgeChange', () => {
-  it('CH-1 一条变更 → 去抖后：一次提交（只含变更的文件）、恰一个 knowledge.changed，不写 index / log；窗口内两条 → 一个事件、一条 batch 提交', async () => {
+  it('CH-1 一条变更 → 去抖后：一次提交（变更的文件 + 重新生成的根 index）、恰一个 knowledge.changed，不写 log；窗口内两条 → 一个事件、一条 batch 提交', async () => {
     await makeBundle(BUNDLE)
     seedConcept(root, `${BUNDLE}/a.md`, [
       'type: Memory',
@@ -139,9 +150,9 @@ describe('recordKnowledgeChange', () => {
     expect(gitHeadMessage(dir)).toBe(
       'kb(creation): /a.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
     )
-    expect(gitHeadFiles(dir)).toEqual(['a.md'])
+    expect(gitHeadFiles(dir)).toEqual(['a.md', 'index.md'])
     expect(events).toEqual([{ type: 'knowledge.changed' }])
-    expectNoBookkeeping(dir)
+    expectGeneratedIndex(dir, ['a.md', 'seed.md'])
     const commits = gitCommitCount(dir)
 
     seedConcept(root, `${BUNDLE}/b.md`, [
@@ -160,8 +171,8 @@ describe('recordKnowledgeChange', () => {
     expect(events).toHaveLength(2)
     expect(gitCommitCount(dir)).toBe(commits + 1)
     expect(gitHeadMessage(dir)).toContain('kb(batch): 2 changes')
-    expect(gitHeadFiles(dir)).toEqual(['a.md', 'b.md'])
-    expectNoBookkeeping(dir)
+    expect(gitHeadFiles(dir)).toEqual(['a.md', 'b.md', 'index.md'])
+    expectGeneratedIndex(dir, ['a.md', 'b.md', 'seed.md'])
   })
 
   it('CH-2 一批里跨两个 bundle：各自提交到各自的仓库，事件仍只发一个', async () => {
@@ -181,8 +192,8 @@ describe('recordKnowledgeChange', () => {
     expect(gitCommitCount(otherDir)).toBe(otherBefore + 1)
     expect(gitHeadMessage(dir)).toContain('kb(creation): /a.md')
     expect(gitHeadMessage(otherDir)).toContain('kb(creation): /b.md')
-    expect(gitHeadFiles(dir)).toEqual(['a.md'])
-    expect(gitHeadFiles(otherDir)).toEqual(['b.md'])
+    expect(gitHeadFiles(dir)).toEqual(['a.md', 'index.md'])
+    expect(gitHeadFiles(otherDir)).toEqual(['b.md', 'index.md'])
   })
 })
 
@@ -405,7 +416,7 @@ describe('用户库的簿记', () => {
  * 没有 index / log。
  */
 describe('项目库的簿记', () => {
-  it('CH-8 项目库没有建库步骤：目录此前不存在，首次观察到写入后目录里只有这条与 .git，变更以自己的提交落地，不生成 index / log / project.md', async () => {
+  it('CH-8 项目库没有建库步骤：目录此前不存在，首次观察到写入后目录里只有这条、宿主生成的根 index 与 .git，变更以自己的提交落地，不生成 log / project.md', async () => {
     const bundle = `${PROJECTS}/p1`
     const p1 = bundleAt(root, bundle)
     expect(existsSync(p1)).toBe(false)
@@ -420,13 +431,14 @@ describe('项目库的簿记', () => {
     recordKnowledgeChange({ bundle, path: 't.md', op: 'Creation', actor: ACTOR })
     await flushKnowledgeChanges()
 
-    expect(readdirSync(p1).sort()).toEqual(['.git', 't.md'])
+    expect(readdirSync(p1).sort()).toEqual(['.git', 'index.md', 't.md'])
+    expectGeneratedIndex(p1, ['t.md'])
     // 基线不收本批刚写下的文件，于是空基线不产生 kb(init) 提交
     expect(gitCommitCount(p1)).toBe(1)
     expect(gitHeadMessage(p1)).toBe(
       'kb(creation): /t.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
     )
-    expect(gitHeadFiles(p1)).toEqual(['t.md'])
+    expect(gitHeadFiles(p1)).toEqual(['index.md', 't.md'])
     expect(gitStatus(p1)).toBe('')
     expect(events).toEqual([{ type: 'knowledge.changed' }])
   })
@@ -634,7 +646,7 @@ describe('内置库（只读）', () => {
  * 以自己的提交落地；容器 `bots` 本身不是仓库。
  */
 describe('bot 库', () => {
-  it('CH-B1 bot 库目录此前不存在：经写钩子观察到第一条写入后只有这条与 .git，一条 kb(creation) 提交；容器 bots 与别的库都不长 .git；恰一个事件', async () => {
+  it('CH-B1 bot 库目录此前不存在：经写钩子观察到第一条写入后只有这条、宿主生成的根 index 与 .git，一条 kb(creation) 提交；容器 bots 与别的库都不长 .git；恰一个事件', async () => {
     const bundle = 'bots/k1'
     const k1 = bundleAt(root, bundle)
     expect(existsSync(k1)).toBe(false)
@@ -651,13 +663,13 @@ describe('bot 库', () => {
     notifyKnowledgeFileChanged(x, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
 
-    expect(readdirSync(k1).sort()).toEqual(['.git', 'x.md'])
+    expect(readdirSync(k1).sort()).toEqual(['.git', 'index.md', 'x.md'])
     expect(gitCommitCount(k1)).toBe(1)
     expect(gitHeadMessage(k1)).toBe(
       'kb(creation): /x.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
     )
     expect(gitStatus(k1)).toBe('')
-    expectNoBookkeeping(k1)
+    expectGeneratedIndex(k1, ['x.md'])
     expect(existsSync(join(root, 'bots', '.git'))).toBe(false)
     expect(gitCommitCount(dir)).toBe(projectCommits)
     expect(events).toEqual([{ type: 'knowledge.changed' }])

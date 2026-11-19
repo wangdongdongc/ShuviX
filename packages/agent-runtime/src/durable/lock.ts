@@ -80,9 +80,11 @@ import {
   type SystemPromptSectionKey,
   type SystemPromptStatus
 } from '@shuvix/chat-protocol/systemPromptStatus'
+import { withoutKnowledgeOutline } from '../knowledge/knowledgeGuide'
 import {
   PROMPT_EXTENSION,
   PROMPT_EXTENSION_ORDER,
+  PROMPT_SECTION_KEY,
   sectionKeyOf,
   type PromptExtensionName,
   type PromptExtensions
@@ -292,6 +294,17 @@ function instructionFileOfKey(key: string): string | undefined {
   return Object.prototype.hasOwnProperty.call(INSTRUCTION_FILE_OF_BLOCK, key)
     ? INSTRUCTION_FILE_OF_BLOCK[key as keyof typeof INSTRUCTION_FILE_OF_BLOCK]
     : undefined
+}
+
+/**
+ * 冻结的一段与此刻的来源算不算同一份。知识库那一段带着项目库 / bot 库顶层的简讯（建 agent 那一刻的快照）：
+ * 库里多一条、少一条不是「来源变了」—— 每次 submit 都提醒一次重建没有意义，工具本来就是现查的。所以这一段
+ * 两边都摘掉简讯再比；库的勾选、名字、说明变了照旧算。
+ */
+function sameSectionSource(key: string, now: string | null, was: string | null): boolean {
+  if (now === was) return true
+  if (key !== PROMPT_SECTION_KEY.knowledge || now === null || was === null) return false
+  return withoutKnowledgeOutline(now) === withoutKnowledgeOutline(was)
 }
 
 /** 同一把锁（同一次创建）：提交发布会换出新的记录对象，所以不按对象比 */
@@ -1114,7 +1127,7 @@ export class AgentLock {
       if (!Object.prototype.hasOwnProperty.call(live, key)) continue
       const now = live[key] ?? null
       const was = frozen[key] ?? null
-      if (now === was) {
+      if (sameSectionSource(key, now, was)) {
         current.push(key)
         continue
       }

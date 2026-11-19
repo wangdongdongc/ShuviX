@@ -45,6 +45,7 @@ import {
   listBases,
   locateBundle,
   projectBaseNamed,
+  recordFolderDescriptions,
   recordKnowledgeChange,
   resolveBase,
   scanBundle,
@@ -161,6 +162,12 @@ export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKno
         op: 'Update',
         actor: agentActorOf(withCallAgent(ctx, call))
       })
+    },
+    // 管理员给文件夹写的描述：存进父目录的 index.md（项目库与 bot 库；别的库工具不会调到这里）
+    saveFolderDescriptions: (e, call) => {
+      const located = bundleIdOf(e.bundleDir)
+      if (!located) return
+      recordFolderDescriptions(located, e.folders, agentActorOf(withCallAgent(ctx, call)))
     },
     resolveProjectBase: async (project) => projectBaseNamed(ctx.sessionId, project),
     // 另一个项目的库不在本会话的权限表里：读、改各过一次路径门。给模型的话里只说「某项目的知识库」

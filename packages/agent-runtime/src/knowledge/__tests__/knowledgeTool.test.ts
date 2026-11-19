@@ -143,6 +143,8 @@ interface ToolOptions {
   actor?: (call: ToolCallScope | undefined) => string
   /** port 路径 → 它是符号链接时 readLink 的答复 */
   links?: Record<string, { target: string; resolved: string }>
+  /** 宿主不注入 saveFolderDescriptions（缺省注入一个替身） */
+  noSaveFolders?: boolean
 }
 
 type Result = InvokedToolResult
@@ -154,6 +156,7 @@ interface Harness {
   listBases: Mock
   scan: Mock
   afterWrite: Mock
+  saveFolders: Mock
   admin: Mock
   isAdmin?: Mock
   actor: Mock
@@ -247,6 +250,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
   const afterWrite = vi.fn((e: { bundleDir: string; path: string }) => {
     calls.push(`after:${e.bundleDir}|${e.path}`)
   })
+  const saveFolders = vi.fn()
   const impl = opts.admin === undefined ? NOTHING : opts.admin
   const admin = vi.fn(async (req: KnowledgeSubmission, ctx: AdminCtx) => {
     calls.push(`admin:${req.base}`)
@@ -269,6 +273,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
     admin: impl === null ? undefined : admin,
     isAdmin,
     afterWrite,
+    ...(opts.noSaveFolders ? {} : { saveFolderDescriptions: saveFolders }),
     abortError: opts.abortError,
     label: 'Knowledge'
   })
@@ -279,6 +284,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
     listBases,
     scan,
     afterWrite,
+    saveFolders,
     admin,
     isAdmin,
     actor,
@@ -2758,6 +2764,120 @@ describe('KO-7 挤了的文件夹随请求交给管理员', () => {
       await roomy.run('c2', params)
       expect(roomy.admin.mock.calls[0][0], params.action).not.toHaveProperty('crowded')
     }
+  })
+})
+
+/**
+ * 文件夹描述（2026-11-19）：宿主为这个库存描述时（`target.folderDescriptions`，桌面是项目库与 bot 库），请求里点名
+ * 放着条目却没有描述的文件夹，管理员交回的 `folders` 交宿主落盘；别的库两样都没有。描述只从宿主生成的 index.md
+ * 里读 —— 用户手写的同名笔记不是索引。
+ */
+describe('KF-1..KF-6 文件夹描述', () => {
+  const DESCRIBING: KnowledgeBundleTarget = { ...BUNDLE, folderDescriptions: true }
+  const GENERATED_ROOT = [
+    '---',
+    'okf_version: "0.2"',
+    '---',
+    '',
+    '## Folders',
+    '',
+    '* [auth](auth/) - Sign-in flows',
+    '* [ops](ops/)',
+    ''
+  ].join('\n')
+  const FILES = {
+    [`${ROOT}/index.md`]: GENERATED_ROOT,
+    [`${ROOT}/auth/a.md`]: ENTRY,
+    [`${ROOT}/ops/b.md`]: ENTRY,
+    [`${ROOT}/ops/deep/c.md`]: ENTRY
+  }
+  const FOLDERS = [{ folder: 'ops', description: 'How things are run' }]
+  const withFolders =
+    (accepted = true): AdminImpl =>
+    async () => ({ accepted, entries: [], report: 'ok', admin: ADMIN, folders: FOLDERS })
+  const ACTIONS = [
+    { action: 'submit', base: 'project', content: 'x' },
+    { action: 'organize', base: 'project' }
+  ] as KnowledgeToolParams[]
+
+  it('KF-1 宿主存描述的库：请求点名还缺描述的文件夹（有描述的不点，顶层不点）', async () => {
+    for (const params of ACTIONS) {
+      const h = makeTool({ files: FILES, bundle: DESCRIBING })
+      await h.run('c1', params)
+      expect(h.admin.mock.calls[0][0].undescribed, params.action).toEqual(['ops', 'ops/deep'])
+    }
+    // 都有描述了：没有这个键
+    const full = makeTool({
+      files: { [`${ROOT}/index.md`]: GENERATED_ROOT, [`${ROOT}/auth/a.md`]: ENTRY },
+      bundle: DESCRIBING
+    })
+    await full.run('c2', ACTIONS[0])
+    expect(full.admin.mock.calls[0][0]).not.toHaveProperty('undescribed')
+  })
+
+  it('KF-2 宿主不存描述的库（用户的库）：请求不点名，交回了 folders 也不落盘', async () => {
+    for (const params of ACTIONS) {
+      const h = makeTool({ files: FILES, admin: withFolders() })
+      await h.run('c1', params)
+      expect(h.admin.mock.calls[0][0], params.action).not.toHaveProperty('undescribed')
+      expect(h.saveFolders, params.action).not.toHaveBeenCalled()
+    }
+  })
+
+  it('KF-3 管理员交回的 folders 交宿主落盘：恰一次，带库目录与这次调用的 scope', async () => {
+    for (const params of ACTIONS) {
+      const h = makeTool({ files: FILES, bundle: DESCRIBING, admin: withFolders() })
+      await h.run('c1', params)
+      expect(h.saveFolders, params.action).toHaveBeenCalledTimes(1)
+      const [e, call] = h.saveFolders.mock.calls[0]
+      expect(e).toEqual({ bundleDir: ROOT, folders: FOLDERS })
+      expect(call).toMatchObject({ callId: 'c1' })
+    }
+  })
+
+  it('KF-4 没交 folders / 交了空表 / 管理员没跑成：不调宿主；宿主没注入这个口子：照常成功', async () => {
+    const empty: AdminImpl = async () => ({
+      accepted: true,
+      entries: [],
+      report: 'ok',
+      admin: ADMIN,
+      folders: []
+    })
+    const failed: AdminImpl = async () => ({ error: 'boom' })
+    for (const admin of [NOTHING, empty, failed]) {
+      const h = makeTool({ files: FILES, bundle: DESCRIBING, admin })
+      await h.run('c1', ACTIONS[0])
+      expect(h.saveFolders).not.toHaveBeenCalled()
+    }
+    const bare = makeTool({
+      files: FILES,
+      bundle: DESCRIBING,
+      admin: withFolders(),
+      noSaveFolders: true
+    })
+    const res = await bare.run('c1', ACTIONS[0])
+    expect(res.isError).not.toBe(true)
+    expect(textOf(res)).toContain('Recorded in base "project"')
+  })
+
+  it('KF-5 用户手写的 index.md 不是描述的来源：里面那行像文件夹行的也不算', async () => {
+    const h = makeTool({
+      files: {
+        [`${ROOT}/index.md`]: '# My own table of contents\n\n* [auth](auth/) - mine\n',
+        [`${ROOT}/auth/a.md`]: ENTRY
+      },
+      bundle: DESCRIBING
+    })
+    await h.run('c1', ACTIONS[0])
+    expect(h.admin.mock.calls[0][0].undescribed).toEqual(['auth'])
+  })
+
+  it('KF-6 提交没被收下，文件夹描述照样落盘（描述说的是库现在的样子，与这次提交收没收无关）', async () => {
+    const h = makeTool({ files: FILES, bundle: DESCRIBING, admin: withFolders(false) })
+    const res = await h.run('c1', ACTIONS[0])
+    expect(textOf(res)).toContain('Not recorded in base "project"')
+    expect(h.saveFolders).toHaveBeenCalledTimes(1)
+    expect(h.saveFolders.mock.calls[0][0]).toEqual({ bundleDir: ROOT, folders: FOLDERS })
   })
 })
 

@@ -10,9 +10,17 @@
  * 没有可交的，管理员删减或否决之后不换个说法再交。分工：这里管**什么时候用**，工具描述管
  * **怎么用**（读条目、`submit` 交给管理员）—— 同一句话不在两边各付一遍。
  *
+ * **项目库与 bot 库带顶层简讯**（2026-11-19，用户裁决）：这两个库是会话隐式带的、内容必然相关，所以把库顶层
+ * 的文件夹（条目数 + 管理员写的一行描述）与顶层条目（名字 + 「什么时候值得打开」）直接印在库那一行下面 ——
+ * 不用先 `search` 一轮才知道库里有什么。只印顶层：管理员超过十来条就分文件夹，顶层天然有界（另有行数上限）。
+ * 系统提示词按对话冻结，所以这是建 agent 那一刻的快照；库之后的变化不算「提示词过期」
+ * （{@link withoutKnowledgeOutline}：比对前两边都摘掉简讯）—— 每次 submit 都亮一次提醒没有意义，工具是现查的。
+ *
  * **不印库目录**（2026-11-08）：库目录只有知识库管理员知道，别的 agent 按库名 + 条目名经 `knowledge` 读，
  * 要记的内容 `submit` 给管理员。
  */
+
+import type { KnowledgeOutline } from './bundleIndex'
 
 /** 围栏里列出的一个库 */
 export interface KnowledgeGuideBase {
@@ -24,15 +32,54 @@ export interface KnowledgeGuideBase {
   readonly?: boolean
   /** 这个库自己的一段说明（什么时候用它），由宿主给；印在通用说明之后 */
   note?: string
+  /** 库顶层的简讯（项目库与 bot 库才给）：印在这个库那一行下面，每行缩进两格 */
+  outline?: KnowledgeOutline | null
+}
+
+/** 简讯那几行的缩进 —— {@link withoutKnowledgeOutline} 按它认 */
+const OUTLINE_INDENT = '  '
+
+/** 有简讯时多出的那一段：简讯是什么、怎么用 */
+const OUTLINE_NOTE = `The indented lines under a base are its top level as it was when this conversation started: each
+folder with what it holds, each entry with when it is worth opening. \`read\` an entry that fits what
+you are about to do before you start. A folder cannot be read: \`list\` gives the entries inside the
+folders, and \`search\` finds what is not shown here.`
+
+function outlineLines(outline: KnowledgeOutline): string[] {
+  const lines = [
+    ...outline.folders.map(
+      (f) =>
+        `${f.name}/ (${f.entries} ${f.entries === 1 ? 'entry' : 'entries'})${f.description ? ` — ${f.description}` : ''}`
+    ),
+    ...outline.entries.map((e) => `/${e.name}${e.description ? ` — ${e.description}` : ''}`)
+  ]
+  if (outline.more > 0) lines.push(`… and ${outline.more} more at the top level`)
+  return lines.map((line) => `${OUTLINE_INDENT}${line}`)
+}
+
+/**
+ * 摘掉简讯（缩进的那几行与说明它的那一段）—— 比对「冻结的提示词还是不是现在的样子」时两边都过一遍：
+ * 库里多一条、少一条不算来源变了。
+ */
+export function withoutKnowledgeOutline(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !line.startsWith(OUTLINE_INDENT))
+    .join('\n')
+    .replace(`\n\n${OUTLINE_NOTE}`, '')
 }
 
 /** 围栏正文；一个库都没启用返回 null —— 整段不注入，零成本 */
 export function renderKnowledgeGuide(bases: readonly KnowledgeGuideBase[]): string | null {
   if (bases.length === 0) return null
-  const lines = bases.map((b) => `- ${b.name}${b.label ? ` — ${b.label}` : ''}`)
+  const lines = bases.flatMap((b) => [
+    `- ${b.name}${b.label ? ` — ${b.label}` : ''}`,
+    ...(b.outline ? outlineLines(b.outline) : [])
+  ])
   const paragraphs = [
     `Knowledge bases this session works with — name one with \`base\`:\n${lines.join('\n')}`
   ]
+  if (bases.some((b) => b.outline)) paragraphs.push(OUTLINE_NOTE)
   if (bases.some((b) => !b.readonly)) {
     paragraphs.push(`\`search\` them with the \`knowledge\` tool before working on something you do not already know the
 answer for. Submit only what a later session will need and cannot read off the repository — a

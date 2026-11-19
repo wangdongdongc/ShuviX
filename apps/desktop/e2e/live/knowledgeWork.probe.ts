@@ -62,7 +62,7 @@ import {
   REAL_HOME,
   sendPrompt
 } from './redactionProbeShared'
-import { CROWDED_BASE } from './knowledgeGateFixtures'
+import { CROWDED_BASE, okf } from './knowledgeGateFixtures'
 
 const REPO_ROOT = resolve(process.cwd(), '../..')
 const OUT = process.env.PROBE_OUT ?? mkdtempSync(join(tmpdir(), 'shuvix-knowledge-work-probe-'))
@@ -71,8 +71,8 @@ const PROVIDER = (process.env.PROBE_PROVIDER ?? 'deepseek').toLowerCase()
 const RUNS = Math.max(1, Number(process.env.PROBE_RUNS ?? '1') || 1)
 const LIBRARIAN_MD = process.env.PROBE_LIBRARIAN_MD ?? ''
 
-type Scenario = 'fix' | 'convention' | 'organize'
-const ALL: Scenario[] = ['fix', 'convention', 'organize']
+type Scenario = 'fix' | 'convention' | 'organize' | 'useknown'
+const ALL: Scenario[] = ['fix', 'convention', 'organize', 'useknown']
 const SCENARIOS = (process.env.PROBE_SCENARIOS ?? ALL.join(','))
   .split(',')
   .map((s) => s.trim())
@@ -178,12 +178,77 @@ test('formats cents as yuan', () => {
 `
 }
 
+/**
+ * useknown（2026-11-19）：项目库顶层的简讯进了系统提示词 —— 库里有一条用户没提、代码里也读不出来的约定（税费向上
+ * 取整到分），用户只说「加一个 addTax」。量：它开工前有没有 `read` 那一条、写出来的是不是 `Math.ceil`。
+ * 根目录两条条目 + 两个带描述的文件夹（index.md 按宿主生成的形状种好）。
+ */
+const KNOWN_BASE: Record<string, string> = {
+  'index.md': [
+    '---',
+    'okf_version: "0.2"',
+    '---',
+    '',
+    '## Folders',
+    '',
+    '* [发版](发版/) - 发版前的检查与出问题后的回滚；准备发版或要退回上一个版本时打开。',
+    '* [导出](导出/) - 订单导出的分页与超时约束；改导出接口或导出变慢时打开。',
+    '',
+    '## Entries',
+    '',
+    '* [本地开发先起 Redis](本地开发先起Redis.md) - 本地跑测试连不上 Redis 时打开。',
+    '* [税费的取整规则](税费取整.md) - 写或改任何算税、算手续费的代码之前打开。',
+    ''
+  ].join('\n'),
+  '税费取整.md': okf({
+    type: 'Decision',
+    title: '税费的取整规则',
+    description: '写或改任何算税、算手续费的代码之前打开。',
+    tags: ['pay', 'convention'],
+    body: '税费和手续费一律**向上取整到分**（`Math.ceil`），不是四舍五入。这是财务的要求：四舍五入会让月度对账时税额比税务系统少几分钱。金额本身始终是以分为单位的整数。',
+    source: 'shuvix://session/seed'
+  }),
+  '本地开发先起Redis.md': okf({
+    type: 'Memory',
+    title: '本地开发先起 Redis',
+    description: '本地跑测试连不上 Redis 时打开。',
+    tags: ['dev'],
+    body: '本地跑集成测试之前先 `docker compose up -d redis`。',
+    source: 'shuvix://session/seed'
+  }),
+  '发版/发版检查清单.md': okf({
+    type: 'Guide',
+    title: '发版检查清单',
+    description: '要发版之前打开。',
+    tags: ['release'],
+    body: '周五不发版。发版前在预发跑一遍回放脚本。',
+    source: 'shuvix://session/seed'
+  }),
+  '发版/回滚步骤.md': okf({
+    type: 'Guide',
+    title: '回滚步骤',
+    description: '发版之后需要退回上一个版本时打开。',
+    tags: ['release'],
+    body: '运行 `scripts/rollback.sh <上一个 tag>`。',
+    source: 'shuvix://session/seed'
+  }),
+  '导出/导出分页大小.md': okf({
+    type: 'Decision',
+    title: '导出分页大小',
+    description: '想调导出每页条数时打开。',
+    tags: ['export'],
+    body: '导出每页 2000 条：再大单页查询会超过网关的 60 秒。',
+    source: 'shuvix://session/seed'
+  })
+}
+
 const PROMPTS: Record<Scenario, string[]> = {
   fix: ['`npm test` 里导出的用例挂了，帮我修一下。', '把这次的工作记到项目知识库。'],
   convention: [
     '给 `src/pay/money.js` 加一个 `addTax(amountCents)`，税率 6%，带上测试。注意这个项目里金额一律是以分为单位的整数，四舍五入到分，不能出现浮点金额——以后都按这个来。'
   ],
-  organize: ['项目知识库太乱了，帮我整理一下：重复的合并，没用的删掉，分分类。']
+  organize: ['项目知识库太乱了，帮我整理一下：重复的合并，没用的删掉，分分类。'],
+  useknown: ['给 `src/pay/money.js` 加一个 `addTax(amountCents)`，税率 6%，带上测试。']
 }
 
 interface KnowledgeCall {
@@ -301,6 +366,8 @@ function readBase(dir: string): Record<string, string> {
   }
   for (const rel of names.sort()) {
     if (!rel.endsWith('.md') || rel.startsWith('.git/') || rel.includes('/.git/')) continue
+    // 宿主生成的目录索引不是条目（2026-11-19）
+    if (/(^|\/)index\.md$/.test(rel)) continue
     out[rel] = readFileSync(join(dir, rel), 'utf8')
   }
   return out
@@ -405,7 +472,12 @@ function renderReport(): string {
     '|---|---|---|---|---|---|---|'
   ]
   for (const r of records) {
-    const calls = r.knowledgeCalls.map((c) => `${c.action}${c.isError ? '✗' : ''}`).join(', ')
+    const calls = r.knowledgeCalls
+      .map(
+        (c) =>
+          `${c.action}${c.action === 'read' && c.entry ? `(${c.entry})` : ''}${c.isError ? '✗' : ''}`
+      )
+      .join(', ')
     lines.push(
       `| ${r.scenario} | ${r.run} | ${r.seconds.join(' + ')} | ${r.sessions} | ${calls || '—'} | +${r.added.length} / −${r.removed.length} / ~${r.changed.length} | ${r.before.length} → ${r.after.length} |`
     )
@@ -487,12 +559,24 @@ for (const scenario of SCENARIOS) {
           const baseDir = join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', project.id)
           mkdirSync(baseDir, { recursive: true })
           if (scenario === 'organize') writeTree(baseDir, CROWDED_BASE)
+          if (scenario === 'useknown') writeTree(baseDir, KNOWN_BASE)
           gitInit(baseDir, 'kb(init): knowledge base')
           const before = readBase(baseDir)
 
           const sid = await app.main.eval<string>(
             `window.api.session.create(${JSON.stringify({ title: '新对话', projectId: project.id })}).then((s) => s.id)`
           )
+
+          // 根 agent 实际拿到的知识库围栏（不调模型）：简讯进没进提示词，从这里看
+          const fence = await app.main
+            .eval<string>(
+              `window.api.agent.getInfo(${JSON.stringify(sid)}, { ensure: true }).then((i) => i?.systemPrompt ?? '')`
+            )
+            .then(
+              (text) =>
+                /<knowledge_bases>[\s\S]*?<\/knowledge_bases>/.exec(text)?.[0] ?? '(no fence)'
+            )
+            .catch((e) => `(could not read the system prompt: ${String(e)})`)
 
           const seconds: number[] = []
           const replies: string[] = []
@@ -588,6 +672,20 @@ for (const scenario of SCENARIOS) {
               '```',
               ''
             ]),
+            '## Knowledge fence in the root system prompt',
+            fence,
+            '',
+            ...(scenario === 'useknown'
+              ? [
+                  '## src/pay/money.js after',
+                  '```js',
+                  existsSync(join(workdir, 'src/pay/money.js'))
+                    ? readFileSync(join(workdir, 'src/pay/money.js'), 'utf8')
+                    : '(missing)',
+                  '```',
+                  ''
+                ]
+              : []),
             '## Transcripts',
             ...transcripts
           ].join('\n')

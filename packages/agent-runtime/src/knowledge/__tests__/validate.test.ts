@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { buildIndexMd, buildLogMd, buildRootIndexMd } from '@equationalapplications/core-okf'
+import { renderBundleIndexes } from '../bundleIndex'
 import {
   isProjectionText,
   isReservedFile,
@@ -317,6 +318,40 @@ describe('isProjectionText — 用户手写的同名文件', () => {
     }
     // 对照：只有 frontmatter 的根 index（空库）是生成的
     expect(isProjectionText('index.md', '---\nokf_version: "0.2"\n---\n')).toBe(true)
+  })
+})
+
+describe('isProjectionText — 2026-11-19 起重新生成的 index（项目库 / bot 库）', () => {
+  const notes = [
+    { path: 'a.md', title: 'Alpha [x]', description: 'when - a (b)' },
+    { path: 'my notes (old)/b.md', title: 'B', description: '' },
+    { path: '认证/登录.md', title: '登录', description: '改登录时看' }
+  ]
+  const rendered = renderBundleIndexes(notes, {
+    descriptions: new Map([
+      ['my notes (old)', 'Old notes - kept (for now)'],
+      ['认证', '登录与令牌']
+    ])
+  })
+
+  it('VA-9b 新生成的根 index 与子目录 index 都认作生成形状（名字带空格 / 括号 / 中文也一样）', () => {
+    expect(rendered.size).toBe(3)
+    expect(rendered.get('')).toContain('](my%20notes%20%28old%29/) - Old notes')
+    for (const [dir, text] of rendered) {
+      const path = dir ? `${dir}/index.md` : 'index.md'
+      expect(isProjectionText(path, text), path).toBe(true)
+    }
+  })
+
+  it('VA-9c 生成的 index 里多了一行散文、或根 frontmatter 多了别的键：当作用户手写的', () => {
+    const root = rendered.get('')!
+    expect(isProjectionText('index.md', `${root}\nmy own line\n`)).toBe(false)
+    expect(
+      isProjectionText(
+        'index.md',
+        root.replace('okf_version: "0.2"', 'okf_version: "0.2"\ntitle: Mine')
+      )
+    ).toBe(false)
   })
 })
 
