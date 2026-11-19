@@ -382,8 +382,8 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
 
   it('BK-16 bot-md.md 抄的 bot 基座工具清单 = 同语言 bot 档案的 shuvix-tools（按集合比），并点名三台内置 server', () => {
     const body = conceptOf('bot-md.md').body
-    const match = /`(read,[^`]*)`/.exec(body)
-    expect(match, '正文里找不到以 `read,` 开头的清单').not.toBeNull()
+    const match = /`(bash,[^`]*)`/.exec(body)
+    expect(match, '正文里找不到以 `bash,` 开头的清单').not.toBeNull()
     // 清单在正文里会折行：空白一律压成一个空格再按「, 」切
     const listed = match![1].replace(/\s+/g, ' ').trim().split(', ')
     const bot = profilesOf().find((p) => p.name === 'bot')

@@ -210,7 +210,9 @@ or messaging another session (`ask-on-session-access`), anything a `force-ask` r
 automatic review is turned off — does not wait: a scheduled run is unattended, so that step is refused on the spot,
 the agent is told nobody is there to approve it, and the run goes on without it (the step shows in the conversation
 with a small "nobody here" icon). Other asks (a file in the home folder outside the working folder, a write outside it) go to the
-automatic review, which may refuse.
+automatic review, which may refuse. Commands follow the same rule: one the sandbox confines to the working folder runs
+without asking; one that leaves the sandbox — and every command where there is none (Linux, Windows, or the sandbox
+switched off) — is an `ask-on-command` ask and goes to the automatic review.
 
 So a bot whose job needs any of that gets a **companion policy** of its own, the way the diary bot has
 `daily-bot-access`: one file in `~/.shuvix/policies/` (by convention `<bot>-access.md`) whose rules are all
@@ -294,11 +296,11 @@ session exists; to work somewhere else, start a new chat — the bot's memory is
 Otherwise it is an ordinary rooted session: model picker, extensions, compaction, export, sub-sessions (which work
 where their parent works) and background auto-resume all work as usual.
 
-Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
-no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
+Its root persona is the builtin **`bot`** base, whose tool list is
+`bash, powershell, read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill` —
+no `git` or `shuvix`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions, or allow the bot's request through `tool_search` — that
-is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Its own knowledge base is a read-write row too, so what it records there never asks, scheduled runs included; every change is committed to the base's own git. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with
+is the user's own call). The bot does the work itself, commands included (the command tool for the platform: `bash` on macOS and Linux, `powershell` on Windows); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Its own knowledge base is a read-write row too, so what it records there never asks, scheduled runs included; every change is committed to the base's own git. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write, the bot's own file included, reach the user — see `policy-md`).
 Like `notebook`, the base lists the `project_prompt` block but neither instruction-file block

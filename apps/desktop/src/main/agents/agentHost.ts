@@ -610,8 +610,8 @@ export function desktopPromptBlocks(
       ? (sessionRecords.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? '')
       : ''
   return {
-    // 环境清单：给了才有那一行。没有命令工具就不说 Shell / Git / OS（bot 手里没有 shell，从前也被告知了
-    // 这三行），没有文件工具就不说工作目录与临时目录（Chrome 标签页会话）
+    // 环境清单：给了才有那一行。没有命令工具就不说 Shell / Git / OS，没有文件工具就不说工作目录与
+    // 临时目录（Chrome 标签页会话）
     environment: renderEnvironment(language, {
       ...(hasFiles
         ? {

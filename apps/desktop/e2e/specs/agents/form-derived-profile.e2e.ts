@@ -250,7 +250,7 @@ describe('面与设置项', () => {
  * `tools.list(sid)` 的 `defaultEnabled` = 这条会话根 Agent 档案的白名单 —— 档案由形态推导，
  * 含用户覆盖。只有内置条目带这个键（mcp / skill 条目没有），所以按「键在不在」筛。
  * 探针用两个：`edit`（work / chat / bot 有、notebook 没有 —— 它的文档只经 doc_* 改）与 `bash`（work / chat
- * 有、notebook 与 bot 都没有）。`knowledge` 当过前一个探针，2026-10-30 notebook 也带上了它（ShuviX 文件的
+ * / bot 有、notebook 没有；bot 自 2026-11-19 起有）。bot 与 work 之间靠 `shuvix`（设置工具，work / chat 有、bot 没有）区分。`knowledge` 当过前一个探针，2026-10-30 notebook 也带上了它（ShuviX 文件的
  * 笔记本隐式启用说明书）。`agent` 当不了探针：它是 hidden 工具，根本不进 tools.list，只会读到 undefined。
  * 原先的探针 `ssh`、`database` 都已不再是内置工具，改由内置 MCP 能力服务器提供、默认不勾 ——
  * 清单里只剩 `mcp:<name>` 那一条（不带 defaultEnabled，也没有哪个基座声明它）。
@@ -299,13 +299,16 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
     expect(flag(rows, 'ask')).toBe(true)
   })
 
-  it('bot 会话落在 bot 基座：bash 不勾选、edit 与 read 勾选；不传 sid 回落 work：两个探针都勾选', async () => {
+  it('bot 会话落在 bot 基座：shuvix 不勾选、bash / edit / read 勾选；不传 sid 回落 work：两个探针与 shuvix 都勾选', async () => {
     const sid = await createBotSession(app.main, { bot: 'fd-bot' })
     const rows = await toolsOf(sid)
-    expect(flag(rows, 'bash')).toBe(false)
+    expect(flag(rows, 'shuvix')).toBe(false)
+    expect(flag(rows, 'bash')).toBe(true)
     expect(flag(rows, 'edit')).toBe(true)
     expect(flag(rows, 'read')).toBe(true)
-    expectBothProbesOn(await toolsOf())
+    const work = await toolsOf()
+    expectBothProbesOn(work)
+    expect(flag(work, 'shuvix')).toBe(true)
   })
 
   it('覆盖 chat.md 为 tools: read 之后，无项目会话只有 read 默认勾选', async () => {

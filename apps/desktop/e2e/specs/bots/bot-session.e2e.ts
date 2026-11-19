@@ -10,8 +10,8 @@
  * 普通会话、笔记本形态（bot + notebookPath）、绑定的名字不在 → 没有这一行。
  *
  * 全程零 LLM：运行时是懒创建的，`agent.getInfo(sid, { ensure: true })` 只建不跑。
- * 基座判据走工具面（`tools`）而不是档案名 —— `AgentRuntimeInfo` 里没有档案名那个字段，
- * 而工具面恰恰是 bot 基座最要紧的那半个性质（看得见、动不了）。
+ * 基座判据走工具面（`tools`）而不是档案名 —— `AgentRuntimeInfo` 里没有档案名那个字段。
+ * 2026-11-19 起 bot 也握着 bash / powershell，与 chat / work 的区别落在设置工具 `shuvix`（bot 没有）。
  */
 import { realpathSync, rmSync } from 'node:fs'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -83,20 +83,21 @@ describe('bot 会话 = 一条普通有根会话', () => {
     expect(systemPrompt).toContain('Remembering this person')
     expect(systemPrompt).not.toContain('create-sub-session')
 
-    // 基座判据：bot 的工具面（看得见、动不了 —— write / edit 只为记知识库条目与维护自己那份文件）
+    // 基座判据：bot 的工具面（自己动手干活，有 shell；没有设置工具 shuvix）
     const tools = await toolsOf(sid)
     expect(tools).toContain('session')
     expect(tools).toContain('edit')
     expect(tools).toContain('write')
-    expect(tools).not.toContain('bash')
+    expect(tools).toContain('bash')
+    expect(tools).not.toContain('shuvix')
   })
 
   it('PS-2 普通会话不带围栏 —— 注入只发生在绑定了 bot 的会话上', async () => {
     const { sid, systemPrompt } = await createAgentSession(app.main, {})
     expect(systemPrompt).not.toContain('<bot_profile name=')
     expect(systemPrompt).not.toContain(BODY)
-    // 普通会话落在 chat 基座上：它握着完整工具链，正是 bot 基座刻意不给的那些
-    expect(await toolsOf(sid)).toContain('bash')
+    // 普通会话落在 chat 基座上：它握着设置工具 shuvix，bot 基座不给
+    expect(await toolsOf(sid)).toContain('shuvix')
   })
 
   it('PS-3 bot md 在 ShuviX 之外被删：会话照常跑在 bot 基座上，只是没有人设可注入（不是坏数据）', async () => {
@@ -119,7 +120,7 @@ describe('bot 会话 = 一条普通有根会话', () => {
     // 仍是 bot 基座（形态由 settings.bot 推导，与文件在不在无关）
     const tools = await toolsOf(sid)
     expect(tools).toContain('session')
-    expect(tools).not.toContain('bash')
+    expect(tools).not.toContain('shuvix')
   })
 })
 
@@ -186,7 +187,7 @@ describe('人设够不到干活的地方（结构保证）', () => {
     expect(childPrompt).not.toContain('<bot_profile name=')
     expect(childPrompt).not.toContain(BODY)
 
-    // 子会话不继承人格：它拿到的是完整工具链（无项目 ⇒ chat 基座），干活的那一半在这里
-    expect(await toolsOf(childId)).toContain('bash')
+    // 子会话不继承人格：它落在自己形态的基座上（无项目 ⇒ chat 基座，握着 bot 没有的 shuvix）
+    expect(await toolsOf(childId)).toContain('shuvix')
   })
 })

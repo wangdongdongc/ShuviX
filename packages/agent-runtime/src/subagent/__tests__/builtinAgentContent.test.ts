@@ -9,7 +9,8 @@
  * 漏掉一段，模型在那门语言里就少一条规矩），示例 frontmatter 里每个它该写的键都在 —— 键表只住在这份
  * 提示词里，示例少一个键，它写的条目就少一个。
  *
- * bot（bot 会话的基座档案，2026-10-24 起「自己动手干活」）：三种语言的工具面一字不差、没有 bash / MCP；description
+ * bot（bot 会话的基座档案，2026-10-24 起「自己动手干活」，2026-11-19 起有 bash / powershell）：三种语言的工具面一字不差、
+ * 不声明 MCP；正文不再说「你没有 shell」；description
  * 与正文里不再残留「真正的活都交给子会话、write/edit 不许用来干活」那套旧说法 —— 日报 bot 被定时叫起来时要自己写
  * 跟踪项，旧措辞会让它拒绝动手。
  *
@@ -64,32 +65,32 @@ describe('BA bot 基座档案', () => {
   const BOT = {
     'bot.md': {
       goneDescription: 'hands every real task to a sub-session',
-      goneBody: ["You don't do the work yourself", 'never for a task'],
+      goneBody: ["You don't do the work yourself", 'never for a task', 'You have no shell'],
       present: ['## Working', 'You do the work yourself']
     },
     'bot.zh.md': {
       goneDescription: '把真正的活交给子会话',
-      goneBody: ['活不是你自己干的', '绝不用来干活'],
+      goneBody: ['活不是你自己干的', '绝不用来干活', '你没有 shell'],
       present: ['## 干活', '活由你自己用手上的工具干']
     },
     'bot.ja.md': {
       goneDescription: '実作業はすべてサブセッションに渡す',
-      goneBody: ['作業は自分ではしません', '作業には使いません'],
+      goneBody: ['作業は自分ではしません', '作業には使いません', 'シェルがありません'],
       present: ['## 作業', '作業は自分のツールで自分で行います']
     }
   } as const
   const TOOLS =
-    'read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
+    'bash, powershell, read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session, agent, knowledge, artifact, widget, tool_search, skill'
 
   it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
-    'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',
+    'BA-3 %s：工具面不变（有 bash / powershell，没有 mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活、不再说没有 shell',
     (file) => {
       const text = readFileSync(join(MD_DIR, file), 'utf8')
       const field = (key: string): string =>
         new RegExp(`^${key}: (.*)$`, 'm').exec(text)?.[1]?.trim() ?? ''
       const tools = field('shuvix-tools')
       expect(tools).toBe(TOOLS)
-      expect(tools.split(',').map((t) => t.trim())).not.toContain('bash')
+      expect(tools.split(',').map((t) => t.trim())).toContain('bash')
       expect(tools).not.toMatch(/mcp:/)
 
       const description = field('description')

@@ -179,7 +179,7 @@ agent 写下一份 bot 文件时，工具结果里会说每条 `timer.fired` 绑
 
 绑定触发时没有人在场回答询问。一次运行遇到只有用户能答的询问 —— 读别的会话或往里发消息（`ask-on-session-access`）、
 `force-ask` 规则管着的事、以及自动审查关掉时的每一次询问 —— 不会停下来等：定时运行是无人值守的，这一步当场被拒，智能体被告知此刻没人能批，
-运行跳过它继续（对话里这一步的行尾有一个「无人」小图标）。别的询问（读家目录里工作文件夹之外的文件、写工作文件夹之外的地方）交给自动审查，它可能拒绝。
+运行跳过它继续（对话里这一步的行尾有一个「无人」小图标）。别的询问（读家目录里工作文件夹之外的文件、写工作文件夹之外的地方）交给自动审查，它可能拒绝。命令也一样：沙箱限在工作文件夹里的命令不用问；离开沙箱的命令 —— 以及没有沙箱时（Linux、Windows，或沙箱关掉）的每一条命令 —— 是一次 `ask-on-command` 询问，交给自动审查。
 
 所以一个 bot 的工作要用到这些时，就给它配一份它自己的**配套策略**，就像日记 bot 有 `daily-bot-access`：
 `~/.shuvix/policies/` 里的一个文件（约定叫 `<bot>-access.md`），每条规则都是 `force-allow`（普通的 `allow` 压不过
@@ -247,9 +247,9 @@ bot 会话**只归属于它的 bot，不归属项目**：它只列在 bot 名下
 的记忆在它的文件里，新会话照样认识你。除此之外它是一条普通有根会话：模型选择、扩展能力、压缩、导出、子会话（在父会话
 干活的地方干活）与后台自动续跑一应照常。
 
-它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session,
-agent, knowledge, artifact, widget, tool_search, skill` —— 没有 `bash`，也不声明内置能力服务器
-`mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，或允许 bot 经 `tool_search` 的申请，那是用户自己的选择）。bot 自己动手干活（没有 shell，没能验证的它会直说，而不是写脚本去试）；人设只管它怎么跟你说话，它写的文件、笔记、代码用平实的写法。
+它的根人格是内置的 **`bot`** 基座，工具列表是：`bash, powershell, read, ls, grep, glob, ask, suggest, update_plan, show_image, web_search, write, edit, session,
+agent, knowledge, artifact, widget, tool_search, skill` —— 没有 `git` 和 `shuvix`，也不声明内置能力服务器
+`mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，或允许 bot 经 `tool_search` 的申请，那是用户自己的选择）。bot 自己动手干活，命令也自己跑（按平台用命令工具：macOS 与 Linux 是 `bash`，Windows 是 `powershell`）；人设只管它怎么跟你说话，它写的文件、笔记、代码用平实的写法。
 bot 自己那份文件是这条会话权限表里的一行（**Bot 文件**，缺省可读写；会话设置的「文件访问」里可以改成只读），所以它更新记忆不用问。它自己的知识库也是可读写的一行，往里记东西从不询问，定时运行也一样；每次改动都提交进那个库自己的 git。
 `~/.shuvix/bots/` 下别的写入是一次会话权限表以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
 自动审查时可能由审查员回答（想让每次这样的写入 —— 包括 bot 自己那份文件 —— 都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`

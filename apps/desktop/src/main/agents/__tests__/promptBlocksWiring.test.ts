@@ -607,7 +607,7 @@ describe('desktopPromptBlocks —— Shell 一行按平台给（PBW-S1…S5）',
     setPlatform('darwin')
     vi.stubEnv('SHELL', '/bin/zsh')
     expect(await shellOf(['bash'])).toBe('bash')
-    // 没有 bash / powershell 的 agent（bot、tab …）不被告知 Shell
+    // 没有 bash / powershell 的 agent（notebook、tab …）不被告知 Shell
     expect(await shellOf([])).toBeUndefined()
     expect(await shellOf(['read', 'write'])).toBeUndefined()
   })
@@ -982,7 +982,7 @@ describe('desktopPromptBlocks —— 本会话临时目录那一行（PBW-T）',
     work: true,
     chat: true,
     coding: true,
-    bot: false,
+    bot: true,
     notebook: false
   }
   /** 没有这一行的档案：tab 点了 environment 但手里没有文件工具，其余没点 environment 块 */

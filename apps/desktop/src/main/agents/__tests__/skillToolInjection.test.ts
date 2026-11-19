@@ -102,7 +102,9 @@ import {
   type ResolvedAgentTools
 } from '@shuvix/agent-runtime'
 import { createDesktopToolHost } from '../agentHost'
+import type { ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 import {
+  REGISTERED,
   SR_D,
   inProcess,
   profileOf,
@@ -114,7 +116,7 @@ const SID = 's1'
 /** 技能工具在档案 `shuvix-tools` 里的写法 */
 const SKILL = 'skill'
 
-/** bot 基座那份刻意很窄的工具名单（见 STI-6）—— 它写了技能工具 */
+/** bot 基座的工具名单（见 STI-6）—— 它写了技能工具 */
 const BOT_TOOLS = profileOf('bot').tools
 
 const host = createDesktopToolHost({ sessionOf: () => undefined })
@@ -273,11 +275,19 @@ describe('STI 名单即全部：宿主不在名单之外另挂工具', () => {
     }).toolNames
   }
 
-  /** 名单里「不带前缀」、注册表里有的那部分（agent / skill 由解析结果那条路注入） */
+  /** 名单里「不带前缀」、本平台注册表里有的那部分（agent / skill 由解析结果那条路注入；bash / powershell
+   *  按平台只注册其一，见 REGISTERED） */
   const unprefixed = (names: readonly string[]): string[] =>
-    names.filter((n) => !n.startsWith('mcp:') && n !== SKILL)
+    names.filter(
+      (n) =>
+        !n.startsWith('mcp:') &&
+        n !== SKILL &&
+        REGISTERED.find((r) => r.name === n)?.platforms?.includes(
+          process.platform as ToolPlatform
+        ) !== false
+    )
 
-  it("STI-6 bot 基座的窄名单写了 `skill` → 挂上 skill，SkillTool 构造一次（'enabled'）；工具表恰为名单的投影", async () => {
+  it("STI-6 bot 基座的名单写了 `skill` → 挂上 skill，SkillTool 构造一次（'enabled'）；工具表恰为名单的投影", async () => {
     expect(BOT_TOOLS, 'bot 基座的名单里写了技能工具').toContain(SKILL)
     expect(
       BOT_TOOLS.filter((n) => n.startsWith('skill:')),

@@ -828,27 +828,26 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
 })
 
 /**
- * bot 档案钉板（bot 会话的基座）——「看得见、动不了」的那半个保证住在这里。
+ * bot 档案钉板（bot 会话的基座）。
  *
  * 一条 bot 会话是普通有根会话，根 Agent 跑的就是这份档案；**它是谁**由会话绑定的那份
  * bot md 作为活的 `bot_profile` 段落给出（渲染见 bot/botContext.ts，段落见 durable/prompt/sections.ts）。三条钉板对应
- * 这份设计的三个支点：窄工具清单（REG-4，原 RPer-1）、交接流程活在散文里（RPer-2）、围栏标签名
+ * 这份设计的三个支点：工具清单（REG-4，原 RPer-1）、交接流程活在散文里（RPer-2）、围栏标签名
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十七件（十六个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
-    // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
-    // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
-    // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
-    // 三份清单相同的那条惯例在这里刻意不适用）。`write` 自 2026-10-12 起在：知识库条目由 agent
-    // 用 write 直接写进库再 submit，没有它 bot 就记不了东西（正文限定它只用来记条目）。
-    // `tool_search` 自 2026-11-04 起在：组件是一台台 MCP 服务器，bot 得能找到并请用户开启（每次开启都问，不算给能力）。
-    // `update_plan` 自 2026-11-14 起在：任务列表只是进度显示（钉在对话流末尾），不给任何能力。
-    // 最后一件是技能工具：技能只往上下文里注入文本、不引入任何能力，窄清单的实质不变。货架不由档案
-    // 点名（2026-10-28），是侧栏启用着的全部技能 —— 日报 bot 要的跟踪项技能、作图技能都在其中
+  it('REG-4 三语工具清单恰为二十件（含 bash / powershell）、不含 ssh/database/browser/git、不声明模型', () => {
+    // bot 自己动手干活（2026-10-24 起），2026-11-19 起手里也有 shell（用户裁定：给 bot 完整的工作能力）。
+    // 「人格决定怎么说话、不决定怎么干活」的结构保证不靠工具清单：它靠子会话与派发出去的 agent 拿不到
+    // 人设围栏（agentSessionBot AG-6 / e2e PI-1）。命令照常经沙箱与 ask-on-command，无人值守的运行里
+    // 要询问的那一步当场被拒。仍然不声明 mcp:ssh / mcp:browser / mcp:database（用户勾或 tool_search 批准），
+    // 也不持有 git。`write` 自 2026-10-12、`tool_search` 自 2026-11-04、`update_plan` 自 2026-11-14 起在；
+    // 最后一件是技能工具：货架不由档案点名（2026-10-28），是侧栏启用着的全部技能
     for (const language of LANGS) {
       const built = profile(BOT_PROFILE_NAME, language)
       expect(built.tools, `bot.${language}`).toEqual([
+        'bash',
+        'powershell',
         'read',
         'ls',
         'grep',
@@ -868,12 +867,12 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'tool_search',
         'skill'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(18)
-      for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
+      expect(built.tools, `bot.${language}`).toHaveLength(20)
+      for (const forbidden of ['database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
-      // 档案声明的 mcp: 缺省勾上 —— 清单里一台服务器也没有，多出一个 mcp: 就等于给「动不了」的
-      // bot 塞了一台服务器的全部工具；也不再有逐个点名的 skill: 条目
+      // 档案声明的 mcp: 缺省勾上 —— 清单里一台服务器也没有，多出一个 mcp: 就等于不经用户勾选
+      // 给 bot 塞了一台服务器的全部工具；也不再有逐个点名的 skill: 条目
       expect(
         built.tools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:')),
         `bot.${language}`
