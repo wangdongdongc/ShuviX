@@ -24,6 +24,7 @@ import type {
   WithdrawQueuedResult
 } from '../../types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { WithdrawnInput } from '@shuvix/chat-protocol/chatApi'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import { withDriverAttendance } from '../../services/driverAttendance'
@@ -331,6 +332,10 @@ export class DefaultChatGateway implements ChatGateway {
     if (!session) return 'not_found'
     const result = await session.withdrawQueued(submissionId)
     return result === 'closed' ? 'not_found' : result
+  }
+
+  takeWithdrawnInput(sessionId: string, submissionId: number): WithdrawnInput | undefined {
+    return sessionService.getAgentSession(sessionId)?.takeQueuedInput(submissionId)
   }
 
   /**

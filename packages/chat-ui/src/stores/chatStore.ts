@@ -291,6 +291,8 @@ interface ChatState {
     content: string
     inlineTokens?: Record<string, InlineToken>
     images?: PendingImage[]
+    /** 接在已有草稿后面，而不是整段换掉 */
+    append?: boolean
     nonce: number
   } | null
   /**
@@ -468,7 +470,12 @@ interface ChatState {
     content: string,
     inlineTokens?: Record<string, InlineToken>,
     /** 那条消息带的图片：一起放回输入框（不给 = 输入框里的图片不动） */
-    images?: PendingImage[]
+    images?: PendingImage[],
+    /**
+     * `append`：接在输入框里已有的草稿后面（撤回一条排着的消息 —— 用户可能正写着下一句，不能盖掉）；
+     * 缺省整段换掉（回退）
+     */
+    mode?: 'replace' | 'append'
   ) => void
   clearDraftRestore: () => void
   requestComposerRestore: (request: {
@@ -948,12 +955,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nonce: (state.artifactRevealRequest?.nonce ?? 0) + 1
       }
     })),
-  requestDraftRestore: (content, inlineTokens, images) =>
+  requestDraftRestore: (content, inlineTokens, images, mode) =>
     set((state) => ({
       draftRestoreRequest: {
         content,
         inlineTokens,
         images,
+        ...(mode === 'append' ? { append: true } : {}),
         nonce: (state.draftRestoreRequest?.nonce ?? 0) + 1
       }
     })),

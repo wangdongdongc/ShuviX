@@ -1,6 +1,7 @@
 import { goalService } from '../services/goalService'
 import { defineHandler } from './registry'
 import { chatGateway, operationContext, createClientContext } from '../frontend'
+import { withdrawnResult } from '../frontend/core/ChatGateway'
 import { inputOriginOfClient } from '../utils/operationContext'
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
 import { getBuiltinToolDefinitions } from '../services/agentToolBuilder'
@@ -107,9 +108,14 @@ export function registerAgentHandlers(): void {
 
   /** 撤回一条排着的用户输入（P3-11，视图队列的一行）：`{ result }` */
   defineHandler('agent:withdrawQueued', (ctx, params: AgentWithdrawQueuedParams) =>
-    operationContext.run(createClientContext(ctx, params.sessionId), async () => ({
-      result: await chatGateway.withdrawQueued(params.sessionId, params.submissionId)
-    }))
+    operationContext.run(createClientContext(ctx, params.sessionId), async () =>
+      withdrawnResult(
+        chatGateway,
+        params.sessionId,
+        params.submissionId,
+        await chatGateway.withdrawQueued(params.sessionId, params.submissionId)
+      )
+    )
   )
 
   /** 中止指定 session 的生成（若已有部分内容，后端统一落库并返回） */

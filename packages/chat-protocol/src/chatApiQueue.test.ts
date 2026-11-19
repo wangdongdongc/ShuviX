@@ -7,17 +7,22 @@
  * 断言都在编译期；运行时只跑一条恒真的样本，让 vitest 收得到它。
  */
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import type { AgentWithdrawQueuedParams, SessionChannelApi, WithdrawQueuedResult } from './chatApi'
+import type {
+  AgentWithdrawQueuedParams,
+  SessionChannelApi,
+  WithdrawQueuedResult,
+  WithdrawnInput
+} from './chatApi'
 // @ts-expect-error AgentNextTurnParams is gone end to end (Q-P3-09)
 import type { AgentNextTurnParams } from './chatApi'
 
 describe('P3-11-09 chat-protocol 的撤回契约', () => {
   it('P3-11-09 withdrawQueued 的形状；没有 nextTurn', () => {
     expectTypeOf<SessionChannelApi['agent']['withdrawQueued']>().toEqualTypeOf<
-      (params: {
-        sessionId: string
-        submissionId: number
-      }) => Promise<{ result: 'aborted' | 'already_placed' | 'settled' | 'not_found' }>
+      (params: { sessionId: string; submissionId: number }) => Promise<{
+        result: 'aborted' | 'already_placed' | 'settled' | 'not_found'
+        input?: WithdrawnInput
+      }>
     >()
     expectTypeOf<AgentWithdrawQueuedParams>().toEqualTypeOf<{
       sessionId: string

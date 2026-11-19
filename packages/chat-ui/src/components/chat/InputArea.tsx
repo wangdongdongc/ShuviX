@@ -434,18 +434,34 @@ export function InputArea({
     )
     const sid = useChatStore.getState().activeSessionId
     const images = draftRestore.images
+    // 接在已有草稿后面（撤回一条排着的消息）：已有的正文、胶囊、图片都留着
+    const append = draftRestore.append === true
     const fill = (): void => {
-      if (pasteTokens.length > 0) paste.restoreFromTokens(pasteTokens)
+      // 只有图片的消息，正文是发送时补的那句占位：不当成用户写的话放回来
+      let body = images && images.length > 0 && text === t('input.imageOnly') ? '' : text
+      let restoredPastes = pasteTokens
+      if (append) {
+        // 草稿里已有同名、内容不同的粘贴胶囊（都叫「#1 · 12 行」）：两颗分不开，放回来的这颗直接展开成全文
+        const clash = (token: InlineToken): boolean =>
+          paste
+            .snapshot()
+            .chips.some((chip) => chip.text === token.displayText && chip.payload !== token.payload)
+        for (const token of pasteTokens.filter(clash)) {
+          body = body.split(token.displayText).join(token.payload)
+        }
+        restoredPastes = pasteTokens.filter((token) => !clash(token))
+      }
+      if (restoredPastes.length > 0) paste.restoreFromTokens(restoredPastes)
       if (atTokens.length > 0) at.restoreFromTokens(atTokens)
       // 整段换掉了：之前草稿里的胶囊不再作数
-      secrets.reset()
-      // 只有图片的消息，正文是发送时补的那句占位：不当成用户写的话放回来
-      const body = images && images.length > 0 && text === t('input.imageOnly') ? '' : text
-      setInputText(sid ? secrets.adopt(body, (p) => redactionInfo(sid, p)) : body)
-      // 那条消息带的图片一起回来（整段换掉：之前待发的图片不留）
+      if (!append) secrets.reset()
+      const adopted = sid ? secrets.adopt(body, (p) => redactionInfo(sid, p)) : body
+      const store = useChatStore.getState()
+      const existing = append ? store.inputText.replace(/\s+$/, '') : ''
+      setInputText(existing && adopted ? `${existing}\n${adopted}` : existing || adopted)
+      // 那条消息带的图片一起回来（整段换掉时之前待发的图片不留）
       if (images) {
-        const store = useChatStore.getState()
-        store.clearPendingImages()
+        if (!append) store.clearPendingImages()
         for (const image of images) store.addPendingImage(image)
       }
       setTimeout(() => textareaRef.current?.focus(), 0)

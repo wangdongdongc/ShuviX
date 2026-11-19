@@ -3,7 +3,7 @@
  *
  * 样子与「发送后、受理前」的乐观占位同源（UserBubble 压淡一档）：它还不是会话里的条目，放下之后视图
  * 带来真实的用户消息，同一句话在原地换成真的那条。气泡右上方标档位（立即 / 追加），下方操作行常驻一个
- * **撤回**（`agent.withdrawQueued`）：撤回从不乐观移除 —— 气泡跟着下一帧视图走（撤回了 / 已经放下了，
+ * **撤回**（`agent.withdrawQueued`）：撤回成功，那句话（连同内联 Token 与图片）回到输入框。撤回从不乐观移除 —— 气泡跟着下一帧视图走（撤回了 / 已经放下了，
  * 视图的 `queue` 里都不再有它）。在途时按钮禁用，连点只发一次。已经放下（撤不回）与出错时在气泡下
  * 就地给一句、约 3 秒后消失；`settled` / `not_found` 不出声（那条气泡反正要没了）。渠道端（Chrome
  * 侧边栏，没有 HostApi）同样有撤回。
@@ -59,11 +59,28 @@ export const QueuedBubble = memo(function QueuedBubble({
     inFlight.current = true
     setBusy(true)
     try {
-      const { result } = await getSessionChannelApi().agent.withdrawQueued({
+      const { result, input } = await getSessionChannelApi().agent.withdrawQueued({
         sessionId,
         submissionId: entry.submissionId
       })
       if (result === 'already_placed') setNotice(t('queue.alreadyPlaced'))
+      // 撤回了：那句话回到这条会话的输入框（接在已有草稿后面），不就此消失。宿主交回了它本身就用它（内联 Token、
+      // 图片都在）；没交回（宿主重启过 / 旧宿主）就用视图里这行显示文本。等的时候换了会话：不放到别的会话里去
+      if (result === 'aborted' && useChatStore.getState().activeSessionId === sessionId) {
+        const images = (input?.images ?? []).map(({ data, mimeType }) => ({
+          data,
+          mimeType,
+          preview: `data:${mimeType};base64,${data}`
+        }))
+        useChatStore.getState().requestDraftRestore(
+          // 视图那行文字的兜底：只有图片的那条，文字是发送时补的占位，不是用户写的
+          input?.text ??
+            (entry.imageCount > 0 && entry.text === t('input.imageOnly') ? '' : entry.text),
+          input?.inlineTokens,
+          images.length > 0 ? images : undefined,
+          'append'
+        )
+      }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
       setNotice(t('queue.withdrawFailed', { error }))

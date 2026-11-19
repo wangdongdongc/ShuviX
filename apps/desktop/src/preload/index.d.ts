@@ -34,6 +34,7 @@ import type {
   AgentFollowUpParams,
   AgentWithdrawQueuedParams,
   WithdrawQueuedResult,
+  WithdrawnInput,
   AgentSetModelParams,
   AgentPreviewChangeParams,
   AgentChangePreview,
@@ -408,7 +409,7 @@ declare global {
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
       withdrawQueued: (
         params: AgentWithdrawQueuedParams
-      ) => Promise<{ result: WithdrawQueuedResult }>
+      ) => Promise<{ result: WithdrawQueuedResult; input?: WithdrawnInput }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
       /** 继续被中断的工作（等这一轮落定才回；失败 → success:false + error/code） */
       continue: (sessionId: string) => Promise<AgentContinueResult>

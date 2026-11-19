@@ -223,6 +223,65 @@ describe('AS-LIB-6 运行中发的话带图片（steer / followUp）', () => {
   })
 })
 
+describe('AS-WD 为撤回记着排队的输入（steer / followUp）', () => {
+  const DISPLAY = {
+    content: 'see {{shuvixInlineToken:p0}}',
+    tokens: { p0: { type: 'paste', id: 'p', displayText: '[Pasted]', payload: 'full text' } }
+  }
+
+  it.each(['steer', 'followUp'] as const)(
+    '%s 排着：takeQueuedInput 交回标记态原文 + Token + 图片，取一次就没了',
+    async (m) => {
+      const { durable, session } = facade()
+      durable[m] = async () => ({ submissionId: 12 as never })
+      await session[m]('see full text', undefined, undefined, DISPLAY as never, [IMG1])
+      expect(session.takeQueuedInput(12)).toEqual({
+        text: DISPLAY.content,
+        inlineTokens: DISPLAY.tokens,
+        images: [IMG1]
+      })
+      expect(session.takeQueuedInput(12)).toBeUndefined()
+    }
+  )
+
+  it.each(['steer', 'followUp'] as const)('%s 纯文字：交回那段文字，没有别的键', async (m) => {
+    const { durable, session } = facade()
+    durable[m] = async () => ({ submissionId: 3 as never })
+    await session[m]('plain words')
+    expect(session.takeQueuedInput(3)).toStrictEqual({ text: 'plain words' })
+  })
+
+  it.each(['steer', 'followUp'] as const)(
+    '%s 当场落下（空闲时起了一轮）：不记；排队之后被放下：忘掉',
+    async (m) => {
+      const { durable, session } = facade()
+      durable[m] = async (_content, options = {}) => {
+        options.onAdmitted?.({ entryId: 5 })
+        return { submissionId: 1 as never }
+      }
+      await session[m]('landed at once')
+      expect(session.takeQueuedInput(1)).toBeUndefined()
+
+      let place: (() => void) | undefined
+      durable[m] = async (_content, options = {}) => {
+        options.onAdmitted?.({})
+        place = () => options.onPlaced?.({ entryId: 6 })
+        return { submissionId: 2 as never }
+      }
+      await session[m]('placed later')
+      place!()
+      expect(session.takeQueuedInput(2)).toBeUndefined()
+    }
+  )
+
+  it('被拒：不记', async () => {
+    const { durable, session } = facade()
+    durable.steer = async () => ({ error: 'busy', code: 'busy' as never, submissionId: 9 as never })
+    await expect(session.steer('nope')).rejects.toThrow()
+    expect(session.takeQueuedInput(9)).toBeUndefined()
+  })
+})
+
 describe('AS-LIB-3 不调的情况', () => {
   it('没有图 / 图是空数组', async () => {
     const { session } = facade()

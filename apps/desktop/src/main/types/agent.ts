@@ -16,6 +16,7 @@ export type {
   AgentFollowUpParams,
   AgentWithdrawQueuedParams,
   WithdrawQueuedResult,
+  WithdrawnInput,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   AgentPreviewChangeParams,

@@ -14,6 +14,7 @@ import type {
   WithdrawQueuedResult
 } from '../../types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { WithdrawnInput } from '@shuvix/chat-protocol/chatApi'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type {
   RedactionHint,
@@ -99,6 +100,11 @@ export interface ChatGateway {
    * 会话没打开、句柄已关 → `not_found`（PIN-14）
    */
   withdrawQueued(sessionId: string, submissionId: number): Promise<WithdrawQueuedResult>
+  /**
+   * 取走刚撤回的那条输入本身（文字的标记态原文 + 内联 Token + 图片），交给界面放回输入框；取一次就没了。
+   * 宿主没记着（重启之后撤回的、不是输入框发的、会话没打开）→ undefined
+   */
+  takeWithdrawnInput(sessionId: string, submissionId: number): WithdrawnInput | undefined
 
   /**
    * 采纳一条提议（`suggest` 工具）：核对它此刻还能采纳（取那条的话 —— 从会话里的工具参数取，不信请求），以用户的
@@ -234,4 +240,19 @@ export interface ChatGateway {
     /** 会话的 agent 档案声明了这条 mcp: 项（值为档案显示名）：缺省勾上，可以取消 */
     declaredBy?: string
   }>
+}
+
+/**
+ * 撤回的应答（IPC 与 Chrome 通道共用）：撤回成功就把那条输入本身一并交回（宿主记着的话），界面放回输入框；
+ * 其余结果、或宿主没记着 → 只有 `{ result }`
+ */
+export function withdrawnResult(
+  gateway: Pick<ChatGateway, 'takeWithdrawnInput'>,
+  sessionId: string,
+  submissionId: number,
+  result: WithdrawQueuedResult
+): { result: WithdrawQueuedResult; input?: WithdrawnInput } {
+  const input =
+    result === 'aborted' ? gateway.takeWithdrawnInput(sessionId, submissionId) : undefined
+  return input === undefined ? { result } : { result, input }
 }

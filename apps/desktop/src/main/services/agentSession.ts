@@ -21,6 +21,7 @@ import {
   type WithdrawResult
 } from '@shuvix/agent-runtime'
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
+import type { WithdrawnInput } from '@shuvix/chat-protocol/chatApi'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isDrivingOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -82,6 +83,9 @@ export interface DriveOptions {
   driven: DrivenSendOptions
 }
 
+/** 为撤回记着的排队输入至多这么多条（撤回与落下都会清，这只是兜底） */
+const QUEUED_INPUT_LIMIT = 64
+
 /** 文字 + 图片 → 交给运行时的用户输入（没有图片就是那段文字） */
 function inputWithImages(
   text: string,
@@ -131,6 +135,8 @@ export class AgentSession {
    * 「新回复」（docs/inbox-read-state-design.md D3）。排在后面的 followUp 起的那一轮沿用上一轮的（近似）
    */
   private runOrigin: InputOrigin | undefined
+  /** 输入框发来、还排着的 steer / followUp（submission id → 撤回时交回界面的那一份），见 `trackQueued` */
+  private readonly queuedInputs = new Map<number, WithdrawnInput>()
   get lastRunOrigin(): InputOrigin | undefined {
     return this.runOrigin
   }
@@ -256,6 +262,7 @@ export class AgentSession {
     display?: InlineTokensSidecar,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
+    const queued = await this.trackQueued(text, secrets, display, images)
     const result = await this.admitSteer(
       text,
       {
@@ -263,9 +270,11 @@ export class AgentSession {
         ...(secrets === undefined ? {} : { composer: { secrets } }),
         ...(display === undefined ? {} : { display: display as unknown as JsonObject })
       },
-      images
+      images,
+      queued.onLanded
     )
     if (result.error) throw new Error(admissionErrorText(result))
+    queued.admitted(result)
   }
 
   /**
@@ -280,11 +289,13 @@ export class AgentSession {
       composer?: ComposerInput
       display?: JsonObject
     } = {},
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    /** 这条输入落进了会话（当场落下或排队之后被放下）：`steer` 用它忘掉为撤回记下的那一份 */
+    onLanded?: () => void
   ): Promise<AdmitResult> {
     await carryFromDriver(options.source, this.sessionId, text)
     const result = await this.durable.steer(inputWithImages(text, images), {
-      ...this.queuedInputCallbacks(options.source, images),
+      ...this.queuedInputCallbacks(options.source, images, onLanded),
       ...options
     })
     return result.error ? { ...result, error: admissionErrorText(result) } : result
@@ -299,18 +310,74 @@ export class AgentSession {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
     await carryFromDriver(source, this.sessionId, text)
+    const queued = await this.trackQueued(text, secrets, display, images)
     const result = await this.durable.followUp(inputWithImages(text, images), {
-      ...this.queuedInputCallbacks(source, images),
+      ...this.queuedInputCallbacks(source, images, queued.onLanded),
       ...(source === undefined ? {} : { source }),
       ...(secrets === undefined ? {} : { composer: { secrets } }),
       ...(display === undefined ? {} : { display: display as unknown as JsonObject })
     })
     if (result.error) throw new Error(admissionErrorText(result))
+    queued.admitted(result)
   }
 
   /** 撤回一条排着的用户输入（P3-11）：结果原样上交（含 `closed`，由网关收成 `not_found`） */
   withdrawQueued(submissionId: number): Promise<WithdrawResult> {
     return this.durable.withdrawQueued(submissionId)
+  }
+
+  /**
+   * 取走为撤回记下的那条排队输入（取一次就没了；没记着 → undefined）。撤回成功之后网关来取，随结果交给界面放回
+   * 输入框 —— 视图里那一行只有显示文本和图片张数，粘贴的全文、@ 引用、图片本身都不在里面。
+   */
+  takeQueuedInput(submissionId: number): WithdrawnInput | undefined {
+    const input = this.queuedInputs.get(submissionId)
+    this.queuedInputs.delete(submissionId)
+    return input
+  }
+
+  /**
+   * 为一条输入框发来的 steer / followUp 准备「撤回时交回」的那一份：受理之后还排着（没当场落下）才记，落下就忘。
+   * 记的是脱敏之后的样子（要藏的值已是占位符，同运行时存下的；这里换一遍与运行时再换是幂等的，§14）—— 撤回的可以是
+   * 另一台设备，真值不该随它出去；界面按占位符把胶囊换回来（同回退）。只在内存里：重启之后撤回的那条没有这一份。
+   */
+  private async trackQueued(
+    text: string,
+    secrets: UserSecret[] | undefined,
+    display: InlineTokensSidecar | undefined,
+    images: Array<{ type: 'image'; data: string; mimeType: string }> | undefined
+  ): Promise<{ onLanded: () => void; admitted: (result: AdmitResult) => void }> {
+    let shownText = text
+    let shownDisplay = display
+    const redaction = this.durable.redaction
+    if (secrets !== undefined && secrets.length > 0 && redaction !== undefined) {
+      const masked = await redaction.maskComposerInput(text, secrets, display)
+      if (typeof masked.content === 'string') shownText = masked.content
+      shownDisplay = masked.display
+    }
+    const input: WithdrawnInput = {
+      text: shownDisplay?.content ?? shownText,
+      ...(shownDisplay === undefined ? {} : { inlineTokens: shownDisplay.tokens }),
+      ...(images && images.length > 0 ? { images } : {})
+    }
+    let landed = false
+    let id: number | undefined
+    return {
+      onLanded: () => {
+        landed = true
+        if (id !== undefined) this.queuedInputs.delete(id)
+      },
+      admitted: (result) => {
+        if (landed || result.submissionId === undefined) return
+        id = result.submissionId
+        this.queuedInputs.set(id, input)
+        // 有界：撤回与落下都会清；万一漏了（撤回走了别的路），最旧的先丢
+        if (this.queuedInputs.size > QUEUED_INPUT_LIMIT) {
+          const oldest = this.queuedInputs.keys().next().value
+          if (oldest !== undefined) this.queuedInputs.delete(oldest)
+        }
+      }
+    }
   }
 
   /**
@@ -589,19 +656,23 @@ export class AgentSession {
   /** steer / followUp 的受理回调：活跃时间入账 + 带的图片进文件库（都按落下的那条用户条目的 id，各记一次） */
   private queuedInputCallbacks(
     origin: InputOrigin | undefined,
-    images: Array<{ type: 'image'; data: string; mimeType: string }> | undefined
+    images: Array<{ type: 'image'; data: string; mimeType: string }> | undefined,
+    /** 条目落下时（当场或排队之后）叫一声 */
+    onLanded?: () => void
   ): Required<Pick<AdmitOptions, 'onAdmitted' | 'onPlaced'>> {
     const dayPrompt = this.dayPromptCallbacks(origin)
     const keepImages = images && images.length > 0 ? this.libraryImageCallback(images) : undefined
-    if (keepImages === undefined) return dayPrompt
+    if (keepImages === undefined && onLanded === undefined) return dayPrompt
     return {
       onAdmitted: (info) => {
         dayPrompt.onAdmitted(info)
-        keepImages(info.entryId)
+        keepImages?.(info.entryId)
+        if (info.entryId !== undefined) onLanded?.()
       },
       onPlaced: (info) => {
         dayPrompt.onPlaced(info)
-        keepImages(info.entryId)
+        keepImages?.(info.entryId)
+        onLanded?.()
       }
     }
   }

@@ -120,7 +120,10 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject }
 }
 
-type WithdrawReply = { result: string }
+type WithdrawReply = {
+  result: string
+  input?: { text: string; inlineTokens?: Record<string, unknown>; images?: unknown[] }
+}
 
 interface FakeAgent {
   init: () => Promise<unknown>
@@ -222,6 +225,22 @@ function QueueItems(): React.JSX.Element {
       createElement(MessageRenderer, { key: item.key, item, lastAssistantId: null })
     )
   )
+}
+
+/** 排队的气泡 + 输入框（撤回之后那句话要回到输入框） */
+async function mountQueueAndInput(): Promise<void> {
+  await act(async () => {
+    const Area = InputArea as (props: InputAreaProps) => React.JSX.Element
+    root.render(
+      createElement(
+        Fragment,
+        null,
+        createElement(QueueItems),
+        createElement(Area, { inline: true })
+      )
+    )
+  })
+  await flush()
 }
 
 async function mountQueue(): Promise<void> {
@@ -997,5 +1016,110 @@ describe('发送失败', () => {
       expect(sendError()).toBe(sentence('boom'))
       expect(textarea().value).toBe('')
     })
+  })
+})
+
+describe('撤回之后那句话回到输入框', () => {
+  const withdrawButton = (id: number): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>(`[data-queue-withdraw="${id}"]`)!
+  const withdraw = async (id: number): Promise<void> => {
+    await act(async () => withdrawButton(id).click())
+    await flush()
+  }
+  const LONG = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+  const PASTE = {
+    type: 'paste',
+    id: 'paste-1',
+    displayText: 'Pasted text #1 · 12 lines',
+    payload: LONG
+  }
+  const IMG = { type: 'image', data: 'aGk=', mimeType: 'image/png' }
+
+  it('WD-1 宿主交回了那条输入：文字、粘贴胶囊（全文还在）、图片都回到输入框；再发出去与原来一样', async () => {
+    busy({ queue: [q(4, 'steer', 'see Pasted text #1 · 12 lines', 1)] })
+    agent.withdrawQueued.mockResolvedValueOnce({
+      result: 'aborted',
+      input: { text: 'see {{shuvixInlineToken:p0}}', inlineTokens: { p0: PASTE }, images: [IMG] }
+    })
+    await mountQueueAndInput()
+    await withdraw(4)
+
+    expect(textarea().value).toBe('see Pasted text #1 · 12 lines')
+    expect(store().pendingImages).toEqual([
+      { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
+    ])
+    await pressEnter()
+    expect(agent.steer).toHaveBeenCalledTimes(1)
+    expect(agent.steer.mock.calls[0]![0]).toMatchObject({
+      text: 'see {{shuvixInlineToken:p0}}',
+      images: [IMG],
+      inlineTokens: { p0: expect.objectContaining({ type: 'paste', payload: LONG }) }
+    })
+  })
+
+  it('WD-2 输入框里正写着别的：撤回的那句接在后面，已有的字和图片不动', async () => {
+    busy({ queue: [q(4, 'steer', 'earlier words')] })
+    agent.withdrawQueued.mockResolvedValueOnce({
+      result: 'aborted',
+      input: { text: 'earlier words', images: [IMG] }
+    })
+    await mountQueueAndInput()
+    const mine = {
+      data: 'bWluZQ==',
+      mimeType: 'image/png',
+      preview: 'data:image/png;base64,bWluZQ=='
+    }
+    await act(async () => useChatStore.setState({ pendingImages: [mine] }))
+    await type('writing the next one')
+    await withdraw(4)
+
+    expect(textarea().value).toBe('writing the next one\nearlier words')
+    expect(store().pendingImages).toEqual([
+      mine,
+      { data: 'aGk=', mimeType: 'image/png', preview: 'data:image/png;base64,aGk=' }
+    ])
+  })
+
+  it('WD-3 宿主没交回（重启过 / 旧宿主）：用视图里那行文字；只有图片的那条不把占位文字放回来', async () => {
+    busy({ queue: [q(4, 'steer', 'plain words'), q(5, 'followUp', en.input.imageOnly, 2)] })
+    await mountQueueAndInput()
+    await withdraw(4)
+    expect(textarea().value).toBe('plain words')
+    await withdraw(5)
+    expect(textarea().value).toBe('plain words')
+    expect(store().pendingImages).toEqual([])
+  })
+
+  it.each(['already_placed', 'settled', 'not_found'])(
+    'WD-4 %s：没撤回，输入框不动',
+    async (result) => {
+      busy({ queue: [q(4, 'steer', 'still going')] })
+      agent.withdrawQueued.mockResolvedValueOnce({ result, input: { text: 'ignored' } })
+      await mountQueueAndInput()
+      await withdraw(4)
+      expect(textarea().value).toBe('')
+    }
+  )
+
+  it('WD-5 草稿里已有同名、内容不同的粘贴胶囊：放回来的那颗展开成全文，已有的那颗全文不变', async () => {
+    const OTHER = Array.from({ length: 12 }, (_, i) => `other ${i}`).join('\n')
+    busy({ queue: [q(4, 'steer', 'see Pasted text #1 · 12 lines')] })
+    agent.withdrawQueued.mockResolvedValueOnce({
+      result: 'aborted',
+      input: { text: 'see {{shuvixInlineToken:p0}}', inlineTokens: { p0: PASTE } }
+    })
+    await mountQueueAndInput()
+    await pasteLong(OTHER)
+    expect(textarea().value).toBe('Pasted text #1 · 12 lines')
+    await withdraw(4)
+
+    expect(textarea().value).toBe(`Pasted text #1 · 12 lines\nsee ${LONG}`)
+    await pressEnter()
+    const sent = agent.steer.mock.calls[0]![0] as {
+      text: string
+      inlineTokens: Record<string, { payload: string }>
+    }
+    expect(Object.values(sent.inlineTokens).map((token) => token.payload)).toEqual([OTHER])
+    expect(sent.text).toContain(`see ${LONG}`)
   })
 })

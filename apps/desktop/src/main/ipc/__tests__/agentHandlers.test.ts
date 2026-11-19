@@ -56,6 +56,7 @@ const state = vi.hoisted(() => ({
     followUp: vi.fn(),
     respondToInput: vi.fn(),
     withdrawQueued: vi.fn<(sessionId: string, submissionId: number) => Promise<string>>(),
+    takeWithdrawnInput: vi.fn<(sessionId: string, submissionId: number) => unknown>(),
     continue: vi.fn<(sessionId: string) => Promise<{ error?: string; code?: string }>>()
   },
   contexts: [] as unknown[],
@@ -344,6 +345,22 @@ describe('P3-11-07 agent:withdrawQueued', () => {
     expect(state.gateway.withdrawQueued.mock.calls).toEqual([[SID, 4]])
     expect(depths).toEqual([1])
     expect(state.contexts).toEqual([SID])
+  })
+
+  it('P3-11-07b 撤回成功：宿主记着的那条输入随结果交回；没记着 → 只有 { result }', async () => {
+    const input = {
+      text: 'hello',
+      images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }]
+    }
+    state.gateway.withdrawQueued.mockReset().mockResolvedValue('aborted')
+    state.gateway.takeWithdrawnInput.mockReset().mockReturnValueOnce(input)
+    await expect(
+      invoke('agent:withdrawQueued', { sessionId: SID, submissionId: 4 })
+    ).resolves.toStrictEqual({ result: 'aborted', input })
+    expect(state.gateway.takeWithdrawnInput.mock.calls).toEqual([[SID, 4]])
+    await expect(
+      invoke('agent:withdrawQueued', { sessionId: SID, submissionId: 4 })
+    ).resolves.toStrictEqual({ result: 'aborted' })
   })
 
   it('P3-11-07 「下一轮」的通道不再注册（Q-P3-09）', () => {

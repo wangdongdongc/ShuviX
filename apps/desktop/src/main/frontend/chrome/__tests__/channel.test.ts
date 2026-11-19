@@ -150,7 +150,10 @@ const call = (path: unknown, args: unknown, c: FakeConn = conn): Promise<unknown
 
 /** 全部委托 spy（「恰好调了一个」的计数口径） */
 const allDelegates = (): Array<ReturnType<typeof vi.fn>> => [
-  ...Object.values(mocks.gateway),
+  // takeWithdrawnInput 不是委托：撤回成功之后顺带取那条输入本身
+  ...Object.entries(mocks.gateway)
+    .filter(([name]) => name !== 'takeWithdrawnInput')
+    .map(([, spy]) => spy),
   mocks.getById,
   mocks.getAgentSession,
   mocks.taskList,
@@ -214,6 +217,8 @@ beforeEach(() => {
     listTools: mocks.delegate('listTools', () => [{ name: 'mcp:chrome' }]),
     continue: mocks.delegate('continue', async () => ({})),
     withdrawQueued: mocks.delegate('withdrawQueued', async () => 'aborted'),
+    // 不算委托：撤回成功之后取那条输入本身（缺省宿主没记着）
+    takeWithdrawnInput: vi.fn((): unknown => undefined),
     // 网关的按 requestId 在全部会话里找认领者的那条路 —— 侧边栏绝不能走它
     respondToInput: mocks.delegate('gateway.respondToInput', () => undefined)
   }
@@ -694,6 +699,23 @@ describe('P3-09-15 agent.continue / agent.withdrawQueued', () => {
     expect(
       await call('agent.withdrawQueued', [{ sessionId: OWNED, submissionId: 7 }])
     ).toStrictEqual({ result: 'already_placed' })
+  })
+
+  it('P3-09-15b withdrawQueued 撤回成功：宿主记着的那条输入随结果交回；没撤回成功就不去取', async () => {
+    const input = { text: 'see {{shuvixInlineToken:p0}}', inlineTokens: { p0: { type: 'paste' } } }
+    mocks.gateway.takeWithdrawnInput.mockReset().mockReturnValue(input)
+    expect(
+      await call('agent.withdrawQueued', [{ sessionId: OWNED, submissionId: 7 }])
+    ).toStrictEqual({ result: 'aborted', input })
+    expect(mocks.gateway.takeWithdrawnInput.mock.calls).toEqual([[OWNED, 7]])
+
+    mocks.gateway.takeWithdrawnInput.mockClear()
+    mocks.gateway.withdrawQueued.mockImplementation(async () => 'settled')
+    expect(
+      await call('agent.withdrawQueued', [{ sessionId: OWNED, submissionId: 7 }])
+    ).toStrictEqual({ result: 'settled' })
+    expect(mocks.gateway.takeWithdrawnInput).not.toHaveBeenCalled()
+    mocks.gateway.takeWithdrawnInput.mockReset().mockReturnValue(undefined)
   })
 
   it.each([

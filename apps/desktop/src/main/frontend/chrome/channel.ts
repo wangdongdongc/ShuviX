@@ -22,6 +22,7 @@ import {
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { chatGateway, createChromeContext, operationContext } from '../core'
+import { withdrawnResult } from '../core/ChatGateway'
 import { sessionService } from '../../services/sessionService'
 import { taskRegistry } from '../../services/taskRegistry'
 import { getBuiltinToolPresentations } from '../../services/toolRegistry'
@@ -137,9 +138,14 @@ export async function callPanelChannel(
     }
     case 'agent.withdrawQueued': {
       const p = params<AgentWithdrawQueuedParams>()
-      return inContext(p.sessionId, async () => ({
-        result: await chatGateway.withdrawQueued(p.sessionId, p.submissionId)
-      }))
+      return inContext(p.sessionId, async () =>
+        withdrawnResult(
+          chatGateway,
+          p.sessionId,
+          p.submissionId,
+          await chatGateway.withdrawQueued(p.sessionId, p.submissionId)
+        )
+      )
     }
     case 'agent.respondToInput': {
       const p = params<{ sessionId: string; requestId: string; response: InputResponse }>()

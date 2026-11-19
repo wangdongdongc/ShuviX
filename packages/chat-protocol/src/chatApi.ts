@@ -400,6 +400,17 @@ export interface AgentWithdrawQueuedParams {
  */
 export type WithdrawQueuedResult = 'aborted' | 'already_placed' | 'settled' | 'not_found'
 
+/**
+ * 撤回的那条输入本身，交回给界面放回输入框：`text` 是标记态原文（内联 Token 是 `{{…}}` 标记，要藏的值已是占位符），
+ * `inlineTokens` 是标记的元数据，`images` 是随它发的图片。只在 `result === 'aborted'` 且宿主还记着它时有 ——
+ * 宿主只在内存里记（重启之后撤回的、不是输入框发的，都没有），那时界面退回用视图里那行显示文本。
+ */
+export interface WithdrawnInput {
+  text: string
+  inlineTokens?: Record<string, InlineToken>
+  images?: ImageContentParam[]
+}
+
 export interface AgentSetModelParams {
   sessionId: string
   provider: string
@@ -698,7 +709,9 @@ export interface SessionChannelApi {
     /**
      * 撤回一条排着的用户输入（P3-11，视图 `queue` 的一行）。从不乐观移除 —— 那一行跟着下一帧视图走。
      */
-    withdrawQueued: (params: AgentWithdrawQueuedParams) => Promise<{ result: WithdrawQueuedResult }>
+    withdrawQueued: (
+      params: AgentWithdrawQueuedParams
+    ) => Promise<{ result: WithdrawQueuedResult; input?: WithdrawnInput }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
     /**
      * 继续被中断的工作（上个进程退出时正在跑的那一轮，P3-12）：等它落定才回。空闲且没被中断 = 无操作
