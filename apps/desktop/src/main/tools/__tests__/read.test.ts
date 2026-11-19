@@ -1358,6 +1358,84 @@ describe('read 工具 - URL 抓取', () => {
     expect(getText(result)).toContain(`URL: ${url}`)
     expect(net.historyNoteAgentRead).not.toHaveBeenCalled()
   })
+
+  /** 下一次请求回这些字节，声明成 type */
+  const serveOnce = (bytes: Buffer, type: string): void => {
+    net.browserSession.fetch.mockResolvedValueOnce(
+      new Response(new Uint8Array(bytes), { headers: { 'content-type': type } })
+    )
+  }
+
+  it('RD-URL-IMG-01 图片链接（octet-stream 的 PNG）：回一张图，原图落进 tool_results', async () => {
+    const url = 'https://example.com/files/download?id=1'
+    const served = readFileSync(join(TEST_DIR, 'small.png'))
+    serveOnce(served, 'application/octet-stream')
+    const result = await executeTool(makeReadTool(ctx), 'tc-urlimg1', { path: url })
+
+    const img = imageContent(result)
+    expect(img?.mimeType).toBe('image/png')
+    expect(img?.data).toBe(served.toString('base64'))
+    expect(textContent(result)).toBe(`Image: ${url} (PNG 40×24)`)
+
+    const details = detailsOf(result)
+    expect(details.format).toBe('PNG')
+    expect(details.truncated).toBe(false)
+    expect(details.url).toBe(url)
+    expect(details.fileSize).toBe(served.length)
+    const saved = details.image!.path
+    expect(saved.startsWith(toolResultsDir(SESSION_ID) + sep)).toBe(true)
+    expect(saved.endsWith('.png')).toBe(true)
+    expect(existsSync(saved)).toBe(true)
+    expect(readFileSync(saved).equals(served)).toBe(true)
+    expect(details.image?.width).toBe(40)
+    expect(details.image?.height).toBe(24)
+
+    expect(markItDownConvert).not.toHaveBeenCalled()
+    expect(net.renderPage).not.toHaveBeenCalled()
+    expect(nativeImageStub.decodes).toBe(0)
+  })
+
+  it('RD-URL-IMG-02 长截图那样的大图：原样给，不提「整页截图」', async () => {
+    const url = 'https://example.com/tall.png'
+    serveOnce(readFileSync(join(TEST_DIR, 'tallpage.png')), 'image/png')
+    const result = await executeTool(makeReadTool(ctx), 'tc-urlimg2', { path: url })
+    expect(detailsOf(result).truncated).toBe(false)
+    expect(imageContent(result)?.mimeType).toBe('image/png')
+    const text = textContent(result)
+    expect(text).not.toContain('full-page capture')
+    expect(text).not.toContain('Capture the viewport')
+  })
+
+  it('RD-URL-IMG-03 超宽度上限：和本地图片一样缩成 JPEG，派生图落盘', async () => {
+    const url = 'https://example.com/shot.png'
+    nativeImageStub.size = { width: 1440, height: 900 }
+    serveOnce(readFileSync(join(TEST_DIR, 'screenshot.png')), 'image/png')
+    const result = await executeTool(makeReadTool(ctx), 'tc-urlimg3', { path: url })
+    const details = detailsOf(result)
+    expect(details.truncated).toBe(true)
+    expect(details.format).toBe('JPEG')
+    expect(details.url).toBe(url)
+    const derived = details.image!.path
+    expect(derived.startsWith(toolResultsDir(SESSION_ID) + sep)).toBe(true)
+    expect(derived.endsWith('.jpg')).toBe(true)
+    expect(existsSync(derived)).toBe(true)
+    expect(imageContent(result)?.mimeType).toBe('image/jpeg')
+    expect(textContent(result)).toBe(`Image: ${url} (JPEG 1024×640, downscaled from 1440×900)`)
+  })
+
+  it('RD-URL-IMG-04 没有会话 id 的工具：图照给，不落盘、没有 image 字段', async () => {
+    const url = 'https://example.com/small.png'
+    const base = join(USER_DATA_DIR, 'tool_results')
+    /** tool_results 下所有文件（含各会话子目录里的） */
+    const listing = (): string[] =>
+      existsSync(base) ? readdirSync(base, { recursive: true }).map(String).sort() : []
+    const before = listing()
+    serveOnce(readFileSync(join(TEST_DIR, 'small.png')), 'image/png')
+    const result = await executeTool(makeReadTool({ sessionId: '' }), 'tc-urlimg4', { path: url })
+    expect(imageContent(result)?.mimeType).toBe('image/png')
+    expect(detailsOf(result).image).toBeUndefined()
+    expect(listing()).toEqual(before)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────

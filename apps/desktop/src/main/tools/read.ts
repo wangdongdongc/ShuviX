@@ -206,13 +206,17 @@ let derivedImageSeq = 0
  * 一起清理（sessionService）。落盘失败不影响这次 read —— 模型该看的图已经在
  * content 里了，缺的只是 UI 内联展示。
  */
-async function persistModelImage(sessionId: string, jpeg: Buffer): Promise<string | undefined> {
+async function persistModelImage(
+  sessionId: string,
+  bytes: Buffer,
+  ext = 'jpg'
+): Promise<string | undefined> {
   if (!sessionId) return undefined
   try {
     const dir = getToolResultsDir(sessionId)
     await mkdir(dir, { recursive: true })
-    const filePath = join(dir, `read-image-${Date.now()}-${derivedImageSeq++}.jpg`)
-    await writeFile(filePath, jpeg)
+    const filePath = join(dir, `read-image-${Date.now()}-${derivedImageSeq++}.${ext}`)
+    await writeFile(filePath, bytes)
     return filePath
   } catch (err) {
     log.warn(
@@ -240,18 +244,51 @@ async function persistModelImage(sessionId: string, jpeg: Buffer): Promise<strin
 async function readImage(
   absolutePath: string,
   displayPath: string,
-  fileSize: number,
   ext: string,
   sessionId: string
 ): Promise<ReadResult> {
-  const buffer = await readFile(absolutePath)
+  return imageResult({
+    buffer: await readFile(absolutePath),
+    label: displayPath,
+    ext,
+    mimeType: IMAGE_MIME_BY_EXT[ext] ?? 'image/png',
+    sessionId,
+    sourcePath: absolutePath
+  })
+}
+
+/** URL 下载到的图片：和本地图片同一套缩放；原图没有磁盘落点，直出时也落一份给 UI */
+async function readUrlImage(
+  bytes: Buffer,
+  mimeType: string,
+  url: string,
+  sessionId: string
+): Promise<ReadResult> {
+  const ext = Object.entries(IMAGE_MIME_BY_EXT).find(([, mime]) => mime === mimeType)?.[0] ?? '.png'
+  return imageResult({ buffer: bytes, label: url, ext, mimeType, sessionId, url })
+}
+
+async function imageResult(input: {
+  buffer: Buffer
+  /** 给模型看的来源：本地是显示路径，URL 是地址 */
+  label: string
+  ext: string
+  mimeType: string
+  sessionId: string
+  /** 本地文件的绝对路径；没有（URL）时直出的原图也落盘一份 */
+  sourcePath?: string
+  url?: string
+}): Promise<ReadResult> {
+  const { buffer, label: displayPath, ext, mimeType, sessionId, sourcePath, url } = input
+  const fileSize = buffer.length
   const format = ext.slice(1).toUpperCase()
   const pixelSize = parseImagePixelSize(buffer)
+  const source = url ? { url } : {}
 
-  /** 直出原图：模型收到的就是这个文件的字节，UI 直接指它 */
-  const directOutput = (hint = ''): ReadResult => {
-    const mimeType = IMAGE_MIME_BY_EXT[ext] ?? 'image/png'
+  /** 直出原图：模型收到的就是这些字节，UI 指原文件（URL 时指落盘的那份） */
+  const directOutput = async (hint = ''): Promise<ReadResult> => {
     const dims = pixelSize ? ` ${pixelSize.width}×${pixelSize.height}` : ''
+    const path = sourcePath ?? (await persistModelImage(sessionId, buffer, ext.slice(1)))
     return {
       content: [
         { type: 'image' as const, data: buffer.toString('base64'), mimeType },
@@ -262,7 +299,8 @@ async function readImage(
         fileSize,
         format,
         truncated: false,
-        image: { path: absolutePath, bytes: fileSize, ...(pixelSize ?? {}) }
+        ...source,
+        ...(path ? { image: { path, bytes: fileSize, ...(pixelSize ?? {}) } } : {})
       }
     }
   }
@@ -275,7 +313,7 @@ async function readImage(
     // 可读下限以下，缩不缩都一样糊。这句提示是**可操作**的 —— 告诉模型别再截整页，
     // 换视口或单个元素。跟被砍掉的那些运维数字不同，它能改变下一步动作。
     const capped =
-      pixelSize && pixelSize.width > MAX_IMAGE_WIDTH
+      sourcePath && pixelSize && pixelSize.width > MAX_IMAGE_WIDTH
         ? ' — full-page capture, downscaled by the model provider; text may be unreadable.' +
           ' Capture the viewport or a single element if you need to read it.'
         : ''
@@ -333,6 +371,7 @@ async function readImage(
           fileSize: jpeg.length,
           format: 'JPEG',
           truncated: true,
+          ...source,
           ...(derivedPath
             ? { image: { path: derivedPath, width: newW, height: newH, bytes: jpeg.length } }
             : {})
@@ -397,6 +436,7 @@ async function readUrl(
     fetch: (input, init) => browserSession.fetch(input, init),
     convert: async (response) => (await getMarkItDown()).convert(response),
     render: renderPage,
+    readImage: (bytes, mimeType, imageUrl) => readUrlImage(bytes, mimeType, imageUrl, sessionId),
     userAgent: await browserReadUserAgent(),
     signal,
     abortError: TOOL_ABORTED
@@ -413,8 +453,7 @@ const makeReadDecoders = (ctx: ToolContext): ReadDecoders => ({
   isUrl,
   readUrl: (url, signal) => readUrl(url, signal, ctx.sessionId),
   imageMimeByExt: IMAGE_MIME_BY_EXT,
-  readImage: (portPath, displayPath, ext, fileSize) =>
-    readImage(portPath, displayPath, fileSize, ext, ctx.sessionId),
+  readImage: (portPath, displayPath, ext) => readImage(portPath, displayPath, ext, ctx.sessionId),
   richExtensions: RICH_FILE_EXTENSIONS,
   readRich: readRichFile,
   readLegacyDoc,

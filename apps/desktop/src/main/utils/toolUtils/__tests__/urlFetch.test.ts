@@ -15,6 +15,7 @@ import {
   decodeBody,
   describeFailure,
   MAX_RESPONSE_BYTES,
+  rasterImageMimeOf,
   readUrlContent,
   SELF_DECLARED_USER_AGENT,
   URL_FETCH_TIMEOUT_MS,
@@ -22,6 +23,7 @@ import {
   type ReadUrlOptions,
   type UrlConverter,
   type UrlFetch,
+  type UrlImageReader,
   type UrlRenderer
 } from '../urlFetch'
 
@@ -1731,5 +1733,353 @@ describe('用户中止', () => {
 describe('classifyBody：没有类型时的 PDF', () => {
   it.each(['', 'application/octet-stream'])('类型 %j、全是文本字节的 %%PDF 算二进制', (type) => {
     expect(classifyBody(type, Buffer.from('%PDF-1.4\nplain ascii body\n'))).toBe('binary')
+  })
+})
+
+describe('图片（文件头）', () => {
+  /** PNG 的完整 8 字节签名 */
+  const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  /** 签名 + 一段 IHDR 的样子；带 NUL，嗅探时一定算二进制 */
+  const PNG = Buffer.concat([
+    PNG_SIG,
+    Buffer.from([0, 0, 0, 13]),
+    Buffer.from('IHDR'),
+    Buffer.from([0, 0, 0, 40, 0, 0, 0, 24, 8, 2, 0, 0, 0])
+  ])
+  const JPEG = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]),
+    Buffer.from('JFIF\0'),
+    Buffer.from([1, 1, 0, 0, 1, 0, 1, 0, 0])
+  ])
+  const GIF = Buffer.concat([Buffer.from('GIF89a'), Buffer.from([1, 0, 1, 0, 0x80, 0, 0])])
+  const WEBP = Buffer.concat([
+    Buffer.from('RIFF'),
+    Buffer.from([0x24, 0, 0, 0]),
+    Buffer.from('WEBP'),
+    Buffer.from('VP8 '),
+    Buffer.alloc(8)
+  ])
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect/></svg>'
+  const SENTINEL = {
+    content: [{ type: 'text' as const, text: 'IMAGE-SENTINEL' }],
+    details: { type: 'read' as const, format: 'PNG', truncated: false }
+  }
+  const failed = (type: string): Error => new Error(`could not convert ${type} from ${URL_}`)
+
+  const readerSpy = (): ReturnType<typeof vi.fn<UrlImageReader>> =>
+    vi.fn<UrlImageReader>(async () => SENTINEL)
+
+  const abortedExactly = async (work: Promise<unknown>): Promise<void> => {
+    const error = (await work.then(
+      () => new Error('expected a rejection'),
+      (e: Error) => e
+    )) as Error
+    expect(error.message).toBe(ABORTED)
+  }
+
+  describe('UF-I1 rasterImageMimeOf 认得的格式', () => {
+    it.each([
+      ['PNG 签名（8 字节）', PNG_SIG, 'image/png'],
+      ['PNG 整个文件头', PNG, 'image/png'],
+      ['JPEG FF D8 FF', Buffer.from([0xff, 0xd8, 0xff]), 'image/jpeg'],
+      ['GIF87a', Buffer.from('GIF87a'), 'image/gif'],
+      ['GIF89a', Buffer.from('GIF89a'), 'image/gif'],
+      ['WebP 恰好 12 字节', Buffer.from('RIFF\x24\0\0\0WEBP', 'latin1'), 'image/webp'],
+      ['WebP 更长', WEBP, 'image/webp']
+    ])('%s → %s', (_name, bytes, mime) => {
+      expect(rasterImageMimeOf(bytes)).toBe(mime)
+    })
+  })
+
+  describe('UF-I2 rasterImageMimeOf 不认的', () => {
+    it.each([
+      ['空', Buffer.alloc(0)],
+      ['PNG 签名截到 7 字节', PNG_SIG.subarray(0, 7)],
+      ['FF D8', Buffer.from([0xff, 0xd8])],
+      ['FF D8 00', Buffer.from([0xff, 0xd8, 0x00])],
+      ['GIF88a', Buffer.from('GIF88a')],
+      ['GIF8', Buffer.from('GIF8')],
+      ['RIFF????WAVE', Buffer.from('RIFF\x24\0\0\0WAVE', 'latin1')],
+      ['RIFF????WEB（11 字节）', Buffer.from('RIFF\x24\0\0\0WEB', 'latin1')],
+      ['BMP', Buffer.from('BM\x36\0\0\0\0\0\0\0', 'latin1')],
+      ['SVG 文本', Buffer.from(SVG)],
+      ['%PDF-1.7', Buffer.from('%PDF-1.7')],
+      ['PK zip 头', Buffer.from('PK\x03\x04\x14\0\0\0', 'latin1')]
+    ])('%s → null', (_name, bytes) => {
+      expect(rasterImageMimeOf(bytes)).toBeNull()
+    })
+  })
+
+  it.each([
+    ['image/png', 'image/png'],
+    ['application/octet-stream', 'application/octet-stream'],
+    ['没有类型', undefined],
+    ['image/jpeg（声明错了）', 'image/jpeg'],
+    ['application/pdf（声明错了）', 'application/pdf']
+  ])('UF-I3 真 PNG、类型 %s：交给 readImage，不转换不渲染', async (_name, type) => {
+    const readImage = readerSpy()
+    const { convert } = spyConvert()
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(PNG, type)), { readImage, convert, render })
+    )
+    expect(result).toBe(SENTINEL)
+    expect(readImage).toHaveBeenCalledTimes(1)
+    const [bytes, mime, url] = readImage.mock.calls[0]
+    expect(Buffer.isBuffer(bytes)).toBe(true)
+    expect(bytes.equals(PNG)).toBe(true)
+    expect(mime).toBe('image/png')
+    expect(url).toBe(URL_)
+    expect(convert).not.toHaveBeenCalled()
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['JPEG', JPEG, 'image/jpeg'],
+    ['GIF', GIF, 'image/gif'],
+    ['WebP', WEBP, 'image/webp']
+  ])('UF-I4 %s 声明成 octet-stream：按文件头定 mime', async (_name, body, mime) => {
+    const readImage = readerSpy()
+    const { convert } = spyConvert()
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(body, 'application/octet-stream')), { readImage, convert, render })
+    )
+    expect(result).toBe(SENTINEL)
+    expect(readImage.mock.calls[0][0].equals(body)).toBe(true)
+    expect(readImage.mock.calls[0][1]).toBe(mime)
+    expect(convert).not.toHaveBeenCalled()
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['声明 image/jpeg、内容是 PNG', PNG, 'image/jpeg', 'image/png'],
+    ['声明 image/webp、内容是 GIF', GIF, 'image/webp', 'image/gif']
+  ])('UF-I5 %s：mime 跟文件头走', async (_name, body, type, mime) => {
+    const readImage = readerSpy()
+    await readUrlContent(URL_, options(fetchSeq(respond(body, type)), { readImage }))
+    expect(readImage.mock.calls[0][1]).toBe(mime)
+  })
+
+  it.each(['text/html', 'application/xhtml+xml'])(
+    'UF-I6 声明成 %s 的 PNG：照网页处理，不交给 readImage',
+    async (type) => {
+      const readImage = readerSpy()
+      const render = vi.fn<UrlRenderer>(async () => null)
+      // 真 markitdown 会把这些字节读成一段乱码文字；这里只看「走的是网页那条路」，转换器给空
+      const { convert } = spyConvert('')
+      await expect(
+        readUrlContent(URL_, options(fetchSeq(respond(PNG, type)), { readImage, render, convert }))
+      ).rejects.toThrow(new Error(`the page at ${URL_} has no readable text. ${HINT_FULL}`))
+      expect(convert).toHaveBeenCalledTimes(1)
+      expect(readImage).not.toHaveBeenCalled()
+      expect(render).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('UF-I7 声明成 text/plain 的 PNG：也按文件头交给 readImage', async () => {
+    const readImage = readerSpy()
+    const { convert } = spyConvert()
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(PNG, 'text/plain')), { readImage, convert, render })
+    )
+    expect(result).toBe(SENTINEL)
+    expect(readImage).toHaveBeenCalledTimes(1)
+    expect(readImage.mock.calls[0][1]).toBe('image/png')
+    expect(convert).not.toHaveBeenCalled()
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['image/svg+xml', 'image/svg+xml', `URL: ${URL_} (image/svg+xml)\n\n${SVG}`],
+    ['没有类型、嗅探成文本', undefined, `URL: ${URL_}\n\n${SVG}`]
+  ])('UF-I8 SVG（%s）仍是文本，原样返回', async (_name, type, expected) => {
+    const readImage = readerSpy()
+    const { convert } = spyConvert()
+    const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
+    const result = await readUrlContent(
+      URL_,
+      options(fetchSeq(respond(SVG, type)), { readImage, convert, render })
+    )
+    expect(textOf(result)).toBe(expected)
+    expect(result.details).toMatchObject({ converted: false })
+    expect(readImage).not.toHaveBeenCalled()
+    expect(convert).not.toHaveBeenCalled()
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  describe('UF-I9 不是图片的二进制：有 readImage 也不交', () => {
+    it.each([
+      ['image/png、两个字节', Buffer.from([1, 2]), 'image/png'],
+      ['image/png、PNG 签名只有 7 字节', PNG_SIG.subarray(0, 7), 'image/png'],
+      ['image/bmp', Buffer.from('BM\x36\0\0\0\0\0\0\0', 'latin1'), 'image/bmp']
+    ])('%s：还是转不了的错误', async (_name, body, type) => {
+      const readImage = readerSpy()
+      await expect(
+        readUrlContent(URL_, options(fetchSeq(respond(body, type)), { readImage }))
+      ).rejects.toThrow(failed(type))
+      expect(readImage).not.toHaveBeenCalled()
+    })
+
+    it('%PDF：照旧交给转换器', async () => {
+      const readImage = readerSpy()
+      const { convert, seen } = spyConvert('# Pdf text')
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(Buffer.from('%PDF-1.7\0\xff', 'latin1'), 'application/pdf')), {
+          readImage,
+          convert
+        })
+      )
+      expect(seen[0].type).toBe('application/pdf')
+      expect(textOf(result)).toContain('# Pdf text')
+      expect(readImage).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('UF-I10 没注入 readImage：图片和其他二进制一样转不了', () => {
+    it.each([
+      ['JPEG', JPEG, 'image/jpeg'],
+      ['GIF', GIF, 'image/gif'],
+      ['WebP', WEBP, 'image/webp']
+    ])('%s', async (_name, body, type) => {
+      const { convert } = spyConvert()
+      const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
+      await expect(
+        readUrlContent(URL_, options(fetchSeq(respond(body, type)), { convert, render }))
+      ).rejects.toThrow(failed(type))
+      expect(convert).not.toHaveBeenCalled()
+      expect(render).not.toHaveBeenCalled()
+    })
+
+    it('没有类型的 PNG：unknown type', async () => {
+      const { convert } = spyConvert()
+      const render = vi.fn<UrlRenderer>(async () => ({ html: page(1000) }))
+      expect(classifyBody('', PNG)).toBe('binary')
+      await expect(
+        readUrlContent(URL_, options(fetchSeq(respond(PNG)), { convert, render }))
+      ).rejects.toThrow(failed('unknown type'))
+      expect(convert).not.toHaveBeenCalled()
+      expect(render).not.toHaveBeenCalled()
+    })
+  })
+
+  it.each([
+    ['没有 signal', undefined],
+    ['有一个不会中止的 signal', new AbortController().signal]
+  ])('UF-I11 readImage 抛错（%s）：原样抛出', async (_name, signal) => {
+    const readImage = vi.fn<UrlImageReader>(async () => Promise.reject(new Error('boom')))
+    await expect(
+      readUrlContent(URL_, options(fetchSeq(respond(PNG, 'image/png')), { readImage, signal }))
+    ).rejects.toThrow(new Error('boom'))
+  })
+
+  describe('UF-I12 readImage 进行中中止：恰好是中止错误', () => {
+    const run = async (
+      outcome: (controller: AbortController) => Promise<typeof SENTINEL>
+    ): Promise<void> => {
+      const controller = new AbortController()
+      let entered: () => void = () => {}
+      const started = new Promise<void>((r) => (entered = r))
+      const readImage = vi.fn<UrlImageReader>(async () => {
+        entered()
+        return outcome(controller)
+      })
+      const pending = readUrlContent(
+        URL_,
+        options(fetchSeq(respond(PNG, 'image/png')), { readImage, signal: controller.signal })
+      )
+      await started
+      expect(readImage).toHaveBeenCalledTimes(1)
+      controller.abort()
+      await abortedExactly(pending)
+    }
+
+    it('readImage 永不结束', async () => {
+      await run(() => new Promise<never>(() => {}))
+    })
+
+    it('中止之后 readImage 抛错', async () => {
+      await run(
+        (controller) =>
+          new Promise<never>((_resolve, reject) =>
+            controller.signal.addEventListener('abort', () => reject(new Error('late boom')), {
+              once: true
+            })
+          )
+      )
+    })
+
+    it('中止之后 readImage 还是返回了结果', async () => {
+      await run(
+        (controller) =>
+          new Promise((resolve) =>
+            controller.signal.addEventListener('abort', () => resolve(SENTINEL), { once: true })
+          )
+      )
+    })
+  })
+
+  it('UF-I13 拿到响应时已经中止：中止错误，结果不返回', async () => {
+    const controller = new AbortController()
+    const readImage = readerSpy()
+    const fetch: UrlFetch = async () => {
+      controller.abort()
+      return respond(PNG, 'image/png')
+    }
+    await abortedExactly(
+      readUrlContent(URL_, options(fetch, { readImage, signal: controller.signal }))
+    )
+  })
+
+  describe('UF-I14 拿不到正文的响应不交给 readImage', () => {
+    it('403 + 渲染没拿到：拒绝的错误', async () => {
+      const readImage = readerSpy()
+      const render = vi.fn<UrlRenderer>(async () => null)
+      await expect(
+        readUrlContent(
+          URL_,
+          options(fetchSeq(respond(PNG, 'image/png', { status: 403 })), { readImage, render })
+        )
+      ).rejects.toThrow(
+        new Error(
+          `HTTP 403 from ${URL_}. The site refused the request, often because it blocks automated clients. ${HINT_FULL}`
+        )
+      )
+      expect(readImage).not.toHaveBeenCalled()
+    })
+
+    it('404：一句 HTTP 404', async () => {
+      const readImage = readerSpy()
+      await expect(
+        readUrlContent(
+          URL_,
+          options(fetchSeq(respond(PNG, 'image/png', { status: 404 })), { readImage })
+        )
+      ).rejects.toThrow(new Error(`HTTP 404 from ${URL_}.`))
+      expect(readImage).not.toHaveBeenCalled()
+    })
+
+    it('Content-Length 超过上限：大小限制的错误', async () => {
+      const readImage = readerSpy()
+      await expect(
+        readUrlContent(
+          URL_,
+          options(
+            fetchSeq(
+              respond(PNG, 'image/png', {
+                headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+              })
+            ),
+            { readImage }
+          )
+        )
+      ).rejects.toThrow(new Error('response is larger than the 5 MB limit'))
+      expect(readImage).not.toHaveBeenCalled()
+    })
   })
 })

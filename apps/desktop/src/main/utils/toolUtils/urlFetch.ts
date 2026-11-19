@@ -7,7 +7,8 @@
  *
  * 转换器（markitdown）只按 UTF-8 读字节，JSON / 非 feed 的 XML 一律转换失败且错误信息带着整个响应体，还会把
  * 文本压空行，把任何字节当表格读。所以只把它真能转的东西交给它：HTML（先按声明的编码转成 UTF-8）、feed、notebook
- * 和文件头对得上的文档；其余文本原样返回，其余二进制只报一句简短的错误。
+ * 和文件头对得上的文档；其余文本原样返回。文件头是 PNG / JPEG / GIF / WebP 的二进制交给注入的 `readImage`，
+ * 和读本地图片一样回一张图（2026-11-19 用户报告：图片链接直接报错）；其余二进制只报一句简短的错误。
  */
 
 import type { ToolResult } from '@shuvix/agent-runtime'
@@ -56,10 +57,19 @@ export type UrlConverter = (response: Response) => Promise<
 /** 在隐藏页面里渲染，返回渲染后的 HTML；拿不到就返回 null */
 export type UrlRenderer = (url: string, signal?: AbortSignal) => Promise<{ html: string } | null>
 
+/** 把下载到的图片交给模型（宿主负责缩放、落盘给 UI 看）；mimeType 由文件头定，不看响应头 */
+export type UrlImageReader = (
+  bytes: Buffer,
+  mimeType: RasterImageMime,
+  url: string
+) => Promise<ToolResult<ReadToolDetails>>
+
 export interface ReadUrlOptions {
   fetch: UrlFetch
   convert: UrlConverter
   render?: UrlRenderer
+  /** 没有它，图片和其他二进制一样报「转不了」 */
+  readImage?: UrlImageReader
   userAgent: string
   acceptLanguage?: string
   signal?: AbortSignal
@@ -217,6 +227,21 @@ function convertibleDocumentType(bytes: Uint8Array, contentType: string): string
   return isZip || isOle ? contentType || 'application/octet-stream' : null
 }
 
+export type RasterImageMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
+
+/** 按文件头认模型看得了的图片格式；响应头常常写错（octet-stream、text/plain），所以不看它 */
+export function rasterImageMimeOf(bytes: Uint8Array): RasterImageMime | null {
+  const b = bytes
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    return 'image/png'
+  }
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'
+  const head = Buffer.from(b.subarray(0, 12)).toString('latin1')
+  if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return 'image/gif'
+  if (head.length === 12 && head.startsWith('RIFF') && head.slice(8) === 'WEBP') return 'image/webp'
+  return null
+}
+
 const FEED_START = /^\s*(?:<\?[\s\S]*?\?>\s*|<!--[\s\S]*?-->\s*)*<(?:rss|feed)[\s>]/
 
 function isNotebookUrl(url: string): boolean {
@@ -370,6 +395,20 @@ export async function readUrlContent(
   const contentType = response.headers.get('content-type') ?? ''
   const kind = classifyBody(contentType, bytes)
   const decoded = kind === 'binary' ? null : decodeBody(bytes, contentType)
+
+  // 声明成文本（text/plain 之类）的图片也认：当文本解码只是一堆乱码。声明成网页的照网页处理
+  const imageMime = kind === 'html' ? null : rasterImageMimeOf(bytes)
+  if (imageMime && options.readImage) {
+    const pending = options.readImage(bytes, imageMime, url)
+    const result = await (signal ? untilAborted(pending, signal) : pending).catch(
+      (err: unknown) => {
+        if (signal?.aborted) throw new Error(abortError)
+        throw err
+      }
+    )
+    if (signal?.aborted) throw new Error(abortError)
+    return result
+  }
 
   const converterType = converterTypeOf(kind, bytes, decoded, contentType, url)
   let converted: Converted = null
