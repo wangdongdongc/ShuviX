@@ -15,6 +15,10 @@
  *   RP-9 活动标签还是过期的 'inbox' 的那一帧：三块都藏着、不抛
  *   TL-132…134（docs/file-library-timeline-tests.md §11）LibraryTimeline 只在自己那一页开着时 active；它的
  *        onOpenSession 是 chat store 的 setActiveSessionId；持久化的 'library' 不被兜底改掉
+ *   RP-10 专注模式不淡、选中 S1：LibraryTimeline 的 `focusSessionId: null`
+ *   RP-11 专注模式在淡、选中 S1：`focusSessionId: 'S1'`；onOpenSession 仍是 setActiveSessionId，active 不变
+ *   RP-12 专注模式在淡、没有选中的会话：`focusSessionId: null`
+ *   RP-13 专注模式在淡、选中从 S1 换成 S2：`focusSessionId` 跟着变成 'S2'
  *
  * `@shuvix/app-shell` 整份换成只有 PanelTabBar 与 LibraryTimeline 的替身 —— 面板要是还去拿 InboxPanel /
  * useInboxSections，vitest 的替身模块会在取不存在的导出时抛错，用例就红；`@shuvix/chat-ui` 只有 useChatStore
@@ -43,7 +47,11 @@ const rec = vi.hoisted(() => ({
     setActiveTab: null as unknown as Mock<(tab: string) => void>,
     width: 360
   },
-  widgets: [] as unknown[]
+  widgets: [] as unknown[],
+  /** useFocusDim 替身交回的值 */
+  focusDim: { focusMode: false, dim: false },
+  /** chat store 的 activeSessionId */
+  activeSessionId: null as string | null
 }))
 
 vi.mock('@shuvix/app-shell', async () => {
@@ -56,13 +64,15 @@ vi.mock('@shuvix/app-shell', async () => {
     LibraryTimeline: (props: Props) => {
       rec.libraryPanel.push(props)
       return h('div', { 'data-stub-library-panel': '' })
-    }
+    },
+    useFocusDim: () => rec.focusDim
   }
 })
 
 vi.mock('@shuvix/chat-ui', () => ({
-  useChatStore: (selector: (s: { setActiveSessionId: unknown }) => unknown) =>
-    selector({ setActiveSessionId: rec.openSession })
+  useChatStore: (
+    selector: (s: { setActiveSessionId: unknown; activeSessionId: string | null }) => unknown
+  ) => selector({ setActiveSessionId: rec.openSession, activeSessionId: rec.activeSessionId })
 }))
 
 vi.mock('../../../stores/browserStore', () => ({
@@ -123,6 +133,8 @@ beforeEach(() => {
   rec.panel.activeTab = 'widget'
   rec.panel.setActiveTab = vi.fn()
   rec.widgets = []
+  rec.focusDim = { focusMode: false, dim: false }
+  rec.activeSessionId = null
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -290,5 +302,49 @@ describe('the right panel content', () => {
     expect(hidden(wrapperOf('library'))).toBe(true)
     expect(rec.agentsPanel.at(-1)!.active).toBe(false)
     expect(rec.libraryPanel.at(-1)!.active).toBe(false)
+  })
+})
+
+describe('focus mode in the file timeline', () => {
+  it('RP-10 focus mode not dimming, S1 selected: focusSessionId is null', () => {
+    rec.activeSessionId = 'S1'
+    render()
+    expect(rec.libraryPanel.at(-1)!.focusSessionId).toBeNull()
+  })
+
+  it('RP-11 focus mode dimming, S1 selected: focusSessionId is S1; opening and active are unchanged', () => {
+    rec.focusDim = { focusMode: true, dim: true }
+    rec.activeSessionId = 'S1'
+    rec.panel.activeTab = 'library'
+    render()
+    const props = rec.libraryPanel.at(-1)!
+    expect(props.focusSessionId).toBe('S1')
+    expect(props.onOpenSession).toBe(rec.openSession)
+    expect(props.active).toBe(true)
+  })
+
+  it('RP-11 the same with the library tab not open: active stays false', () => {
+    rec.focusDim = { focusMode: true, dim: true }
+    rec.activeSessionId = 'S1'
+    render()
+    expect(rec.libraryPanel.at(-1)!.focusSessionId).toBe('S1')
+    expect(rec.libraryPanel.at(-1)!.active).toBe(false)
+  })
+
+  it('RP-12 focus mode dimming, no session selected: focusSessionId is null', () => {
+    rec.focusDim = { focusMode: true, dim: true }
+    rec.activeSessionId = null
+    render()
+    expect(rec.libraryPanel.at(-1)!.focusSessionId).toBeNull()
+  })
+
+  it('RP-13 focus mode dimming, selection S1 → S2: focusSessionId follows', () => {
+    rec.focusDim = { focusMode: true, dim: true }
+    rec.activeSessionId = 'S1'
+    render()
+    expect(rec.libraryPanel.at(-1)!.focusSessionId).toBe('S1')
+    rec.activeSessionId = 'S2'
+    render()
+    expect(rec.libraryPanel.at(-1)!.focusSessionId).toBe('S2')
   })
 })

@@ -27,7 +27,14 @@ export interface CalendarViewProps {
   onMonthChange: (month: Date) => void
   /** 不画左边的周数一列（手机布局：宽度让给日期）；缺省按宽度定 */
   hideWeekNumber?: boolean
+  /**
+   * 专注模式淡化（宿主经 useFocusDim 算好传进来）：月历与「这天没有会话」那句一起淡，悬浮 / 键盘焦点在里面时恢复。
+   * 当天的会话行由 ProjectSessionGroups 自己按选中会话淡化，日报行由 DayReportHeader 管；缺省不淡
+   */
+  dim?: boolean
 }
+
+const FADED = 'opacity-30 hover:opacity-100 focus-within:opacity-100'
 
 /**
  * 日历视图 —— 按天浏览会话。月历 + 选中日的会话分组列表；宿主可在列表上方放一块那天的日报
@@ -46,7 +53,8 @@ export function CalendarView({
   onSelect,
   month,
   onMonthChange,
-  hideWeekNumber = false
+  hideWeekNumber = false,
+  dim = false
 }: CalendarViewProps): React.JSX.Element {
   const { i18n, t } = useTranslation()
   const showWeekNumber = !hideWeekNumber && width >= 240
@@ -108,7 +116,11 @@ export function CalendarView({
 
   return (
     <div className="flex flex-col h-full">
-      <div ref={calendarBoxRef} className="calendar-container pt-1">
+      <div
+        ref={calendarBoxRef}
+        data-calendar-grid=""
+        className={`calendar-container pt-1 transition-opacity duration-200 ${dim ? FADED : ''}`}
+      >
         {isResizing ? (
           // 拖动期间不渲染 DayPicker，避免重 layout 卡顿；占位高度跟随当前宽度实时估算
           <div style={{ height: placeholderHeight }} aria-hidden />
@@ -131,7 +143,10 @@ export function CalendarView({
       <div className="flex-1 overflow-y-auto mt-2 pt-2 border-t border-border-secondary/30 no-scrollbar">
         {dayHeader}
         {daySessions.length === 0 ? (
-          <div className="px-3 py-6 text-center text-text-tertiary text-xs">
+          <div
+            data-calendar-empty=""
+            className={`px-3 py-6 text-center text-text-tertiary text-xs transition-opacity duration-200 ${dim ? FADED : ''}`}
+          >
             {t('sidebar.noSessionsOnDay')}
           </div>
         ) : (

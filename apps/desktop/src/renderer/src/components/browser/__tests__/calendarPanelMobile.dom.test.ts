@@ -18,6 +18,10 @@
  *   CM-12 重拉分开算：daily.changed 只重查日报，session.listChanged 只重查会话
  *   CM-13 行菜单「复制链接」：`[标题](shuvix://session/<id>#<那天的第一条>)`
  *   CM-14 行菜单「配置」：弹会话设置
+ *   CM-15 桌面、不淡：月历与日报头都拿到 `dim: false`
+ *   CM-16 桌面、专注模式在淡：两样都拿到 `dim: true`；日报头 `card: false`
+ *   CM-17 手机、专注模式在淡：两样都拿到 `dim: false`（手机没有专注模式）；日报头 `card`、月历 `hideWeekNumber`
+ *   CM-18 专注模式开着但不淡（`focusMode: true, dim: false`）：两样都拿到 `dim: false`
  *
  * `@shuvix/app-shell` 与 `@shuvix/chat-ui` 整份换成记 props 的替身：CalendarView 替身照画 dayHeader、当天有会话就
  * 调 renderGroupedSessionsForDay（真的那个也是这样），于是日报头与会话列表的 props 都记得到。钟只假 `Date`（今天定在
@@ -40,6 +44,8 @@ const rec = vi.hoisted(() => ({
   groups: [] as Props[],
   config: [] as Props[],
   appEvents: {} as Record<string, () => void>,
+  /** useFocusDim 替身交回的值（每个用例在 beforeEach 里复位） */
+  focusDim: { focusMode: false, dim: false },
   projects: [{ id: 'p1', name: 'Proj' }],
   requestDelete: (): void => {},
   store: null as unknown as {
@@ -91,6 +97,7 @@ vi.mock('@shuvix/app-shell', async () => {
       rec.config.push(props)
       return h('div', { 'data-stub-config': props.sessionId as string })
     },
+    useFocusDim: () => rec.focusDim,
     useProjects: () => ({ projects: rec.projects }),
     useSessionDelete: () => ({ requestDelete: rec.requestDelete, deleteDialog: null })
   }
@@ -251,6 +258,7 @@ beforeEach(() => {
   rec.groups.length = 0
   rec.config.length = 0
   rec.appEvents = {}
+  rec.focusDim = { focusMode: false, dim: false }
   rec.requestDelete = vi.fn()
   rec.store.sessions = []
   rec.store.activeSessionId = null
@@ -574,5 +582,37 @@ describe('CalendarPanel：两种布局共用的那一半', () => {
     const onClose = fn<() => void>(rec.config.at(-1)!.onClose)
     act(() => onClose())
     expect(container.querySelector('[data-stub-config]')).toBeNull()
+  })
+})
+
+describe('CalendarPanel：专注模式淡化交给月历与日报头', () => {
+  it('CM-15 桌面、不淡：两样都拿到 dim: false', async () => {
+    await mount()
+    expect(lastView().dim).toBe(false)
+    expect(lastHeader().dim).toBe(false)
+  })
+
+  it('CM-16 桌面、专注模式在淡：两样都拿到 dim: true；日报头不是卡片', async () => {
+    rec.focusDim = { focusMode: true, dim: true }
+    await mount()
+    expect(lastView().dim).toBe(true)
+    expect(lastHeader().dim).toBe(true)
+    expect(lastHeader().card).toBe(false)
+  })
+
+  it('CM-17 手机、专注模式在淡：两样都拿到 dim: false；日报头是卡片、月历不画周数', async () => {
+    rec.focusDim = { focusMode: true, dim: true }
+    await mount({ mobile: true })
+    expect(lastView().dim).toBe(false)
+    expect(lastHeader().dim).toBe(false)
+    expect(lastHeader().card).toBe(true)
+    expect(lastView().hideWeekNumber).toBe(true)
+  })
+
+  it('CM-18 专注模式开着但不淡：两样都拿到 dim: false', async () => {
+    rec.focusDim = { focusMode: true, dim: false }
+    await mount()
+    expect(lastView().dim).toBe(false)
+    expect(lastHeader().dim).toBe(false)
   })
 })

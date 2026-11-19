@@ -778,7 +778,7 @@ export function ProjectSessionGroups({
         dim={groupDim}
         showDividerAbove={dividerAbove}
         onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
-        // 「聊天」分节头的「+」：直接开一条临时会话（日历里不给，与 bot 组一样）
+        // 「聊天」分节头的「+」：直接开一条临时会话（日历里不给：那里没有「聊天」分节头，只有当天的会话）
         onAdd={isTemp && !hideEmptyGroups ? () => onNewChat(null) : undefined}
         addLabel={isTemp ? t('sidebar.newChat') : undefined}
         nav={
@@ -832,8 +832,9 @@ export function ProjectSessionGroups({
           onToggle={() => toggleBot(key)}
           active={activeGroupKey === key}
           dim={dim && activeGroupKey !== key}
-          onMenu={hideEmptyGroups ? undefined : (e) => openBotMenu(bot, e)}
-          onAdd={hideEmptyGroups ? undefined : (e) => openLocationPicker(bot, e)}
+          // 日历按天渲染时也给（与项目组在日历里照样有 ⋮ 一致）：在这一天看到某个 bot，接着就和它开一条
+          onMenu={(e) => openBotMenu(bot, e)}
+          onAdd={(e) => openLocationPicker(bot, e)}
           addLabel={t('sidebar.newChat')}
           nav={
             drill

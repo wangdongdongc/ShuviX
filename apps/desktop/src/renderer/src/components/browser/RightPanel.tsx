@@ -13,7 +13,7 @@ import { useEffect } from 'react'
 import { Activity, Images, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
-import { LibraryTimeline, PanelTabBar, type PanelTabItem } from '@shuvix/app-shell'
+import { LibraryTimeline, PanelTabBar, useFocusDim, type PanelTabItem } from '@shuvix/app-shell'
 import { useChatStore } from '@shuvix/chat-ui'
 import { WidgetPanel } from './WidgetPanel'
 import { AgentMonitorPanel } from './AgentMonitorPanel'
@@ -39,6 +39,9 @@ export function RightPanel(): React.JSX.Element {
   const width = useBrowserStore((s) => s.width)
   const widgetCount = useWidgetStore((s) => s.widgets.length)
   const openSession = useChatStore((s) => s.setActiveSessionId)
+  // 专注模式：文件时间线里只有选中会话的那一组照常，别的淡（同侧栏的会话行）
+  const { dim } = useFocusDim()
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
   // activeTab 兜底：共享 store 默认 'files'（该 tab 已移至会话面板）、持久化里留着已移除的
   // 'preview' / 'inbox' / 'calendar'（后两个搬去了左侧栏）→ 落到第一个（小组件）
   useEffect(() => {
@@ -93,7 +96,11 @@ export function RightPanel(): React.JSX.Element {
           }
         >
           {/* 常驻挂载：重新可见时重取一次，之后跟着 library.changed */}
-          <LibraryTimeline active={activeTab === 'library'} onOpenSession={openSession} />
+          <LibraryTimeline
+            active={activeTab === 'library'}
+            onOpenSession={openSession}
+            focusSessionId={dim ? activeSessionId : null}
+          />
         </div>
       </div>
     </div>

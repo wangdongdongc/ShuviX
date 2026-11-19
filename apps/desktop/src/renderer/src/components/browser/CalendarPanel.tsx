@@ -15,6 +15,7 @@ import {
   ProjectSessionGroups,
   type BotsSectionCaps,
   SessionConfigDialog,
+  useFocusDim,
   useProjects,
   useSessionDelete
 } from '@shuvix/app-shell'
@@ -27,6 +28,13 @@ import {
 } from '@shuvix/chat-protocol/dailyNotes'
 import { useBrowserStore } from '../../stores/browserStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
+import {
+  archiveBot,
+  createBot,
+  newBotSession,
+  openBotNote,
+  pickFolderAsProject
+} from '../sidebar/botGroupActions'
 
 function daysToDates(days: string[]): Date[] {
   const arr: Date[] = []
@@ -62,12 +70,15 @@ export function CalendarPanel({
   mobile = false
 }: CalendarPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
-  const { projects } = useProjects()
+  const { projects, archivedProjects } = useProjects()
   const width = useBrowserStore((s) => s.width)
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const requestScrollToMessage = useChatStore((s) => s.requestScrollToMessage)
   const { requestDelete: handleDelete, deleteDialog } = useSessionDelete()
+  // 专注模式：月历、日期行、日报行跟会话列表一起淡（会话行由 ProjectSessionGroups 自己淡）；手机没有专注模式
+  const { dim: focusDim } = useFocusDim()
+  const dim = focusDim && !mobile
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [selected, setSelected] = useState<Date>(() => new Date())
@@ -186,23 +197,28 @@ export function CalendarPanel({
   }
 
   /**
-   * 当天的 bot 会话与侧栏同一个口径：收在各自的 bot 名下（2026-10-31）。日历按天渲染时 bot 组没有菜单、没有「+」，
-   * 只读清单；那几个动作在这里不会被调到
+   * 当天的 bot 会话与侧栏同一个口径：收在各自的 bot 名下（2026-10-31）。bot 组头的 ⋮ 与「+」与侧栏是同一套动作
+   * （新对话 / 编辑 bot / 归档）；被遮蔽 / 解析不过的文件与找不到文件的那几组日历里不画，删文件 / 删会话用不到
    */
-  const botsSection = useMemo<BotsSectionCaps>(
-    () => ({
+  const botsSection = useMemo<BotsSectionCaps>(() => {
+    const select = (id: string | null): void => {
+      setActiveSessionId(id)
+      if (id) onOpenSession?.(id)
+    }
+    return {
       adapter: {
         list: () => window.api.bot.list(),
-        open: () => undefined,
-        create: () => undefined,
-        openFolder: () => undefined,
-        newSession: () => undefined,
-        archive: () => undefined,
+        open: (fileName, title) => openBotNote(fileName, title, select),
+        create: () => createBot(select),
+        openFolder: () => window.api.bot.openFolder(),
+        newSession: (name, location) => newBotSession(name, location, select),
+        archive: (bot) => archiveBot(bot, select),
         deleteFile: () => undefined
-      }
-    }),
-    []
-  )
+      },
+      pickFolderAsProject,
+      archivedProjects
+    }
+  }, [setActiveSessionId, onOpenSession, archivedProjects])
 
   const handleSelect = useCallback(
     (id: string): void => {
@@ -258,6 +274,7 @@ export function CalendarPanel({
               onRevealFile={(path) => void getHostApi()?.app.revealPath(path)}
               onDelete={() => void handleDeleteReport()}
               card={mobile}
+              dim={dim}
             />
           }
           daySessions={daySessions}
@@ -266,6 +283,7 @@ export function CalendarPanel({
           month={month}
           onMonthChange={setMonth}
           hideWeekNumber={mobile}
+          dim={dim}
           renderGroupedSessionsForDay={(list: Session[]) => (
             <ProjectSessionGroups
               projects={projects}

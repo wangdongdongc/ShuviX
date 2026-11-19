@@ -24,7 +24,14 @@ export interface LibraryTimelineProps {
   active?: boolean
   /** 点会话标题：切到那条会话。不给 → 标题不可点 */
   onOpenSession?: (sessionId: string) => void
+  /**
+   * 专注模式（宿主经 useFocusDim 判定后传当前选中的会话；不淡时不传）：搜索栏、日期标题和别的会话的那一组都淡，
+   * 这条会话自己的那一组照常；悬浮 / 键盘焦点在上面时恢复。缺省不淡
+   */
+  focusSessionId?: string | null
 }
+
+const FADED = 'opacity-30 hover:opacity-100 focus-within:opacity-100'
 
 /** 交给 mediaUrl seam 的会话参数（库引用不按会话解析，宿主只要求非空） */
 const LIBRARY_MEDIA_SESSION = 'library'
@@ -112,11 +119,13 @@ function FileRow({
 function Group({
   group,
   result,
-  onOpenSession
+  onOpenSession,
+  dim
 }: {
   group: LibraryTimelineGroup
   result: LibraryTimelineResult
   onOpenSession?: (sessionId: string) => void
+  dim: boolean
 }): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const session = group.sessionId ? result.sessions[group.sessionId] : undefined
@@ -138,7 +147,10 @@ function Group({
       : [relationLabel(entry), sizeLabel(entry.item.size)].filter(Boolean).join(' · ')
   const Icon = session?.notebook ? NotebookText : MessageSquare
   return (
-    <div data-timeline-session={group.sessionId ?? ''} className="flex flex-col gap-1.5 pb-3.5">
+    <div
+      data-timeline-session={group.sessionId ?? ''}
+      className={`flex flex-col gap-1.5 pb-3.5 transition-opacity duration-200 ${dim ? FADED : ''}`}
+    >
       {/* 没有会话的文件（会话已经删掉、或本来就不属于哪条会话）不写标题，直接排文件 */}
       {session && (
         <SessionHeading
@@ -209,7 +221,8 @@ function SessionHeading({
 
 export function LibraryTimeline({
   active = true,
-  onOpenSession
+  onOpenSession,
+  focusSessionId = null
 }: LibraryTimelineProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const [result, setResult] = useState<LibraryTimelineResult | null>(null)
@@ -262,7 +275,11 @@ export function LibraryTimeline({
 
   return (
     <div data-library-timeline className="flex h-full flex-col overflow-hidden bg-bg-primary">
-      <div className="flex flex-shrink-0 items-center gap-2 px-3 pb-1 pt-2.5">
+      <div
+        className={`flex flex-shrink-0 items-center gap-2 px-3 pb-1 pt-2.5 transition-opacity duration-200 ${
+          focusSessionId ? FADED : ''
+        }`}
+      >
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{t('library.search')}</span>
           <Search
@@ -290,7 +307,11 @@ export function LibraryTimeline({
         ) : (
           days.map((day) => (
             <section key={day.day} data-timeline-day={day.day}>
-              <h3 className="pb-1.5 pt-3.5 text-[11px] font-semibold text-text-secondary">
+              <h3
+                className={`pb-1.5 pt-3.5 text-[11px] font-semibold text-text-secondary transition-opacity duration-200 ${
+                  focusSessionId ? FADED : ''
+                }`}
+              >
                 {dayLabel(day.day)}
               </h3>
               {day.groups.map((group) => (
@@ -299,6 +320,7 @@ export function LibraryTimeline({
                   group={group}
                   result={result ?? EMPTY}
                   onOpenSession={onOpenSession}
+                  dim={!!focusSessionId && group.sessionId !== focusSessionId}
                 />
               ))}
             </section>

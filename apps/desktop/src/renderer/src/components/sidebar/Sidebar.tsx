@@ -42,6 +42,13 @@ import { newPolicyTemplate } from './policyTemplate'
 import { SkillDirDialog } from './SkillDirDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { fileNameOf, uniqueName } from '../common/registryFiles'
+import {
+  archiveBot,
+  createBot,
+  newBotSession,
+  openBotNote,
+  pickFolderAsProject
+} from './botGroupActions'
 
 /**
  * 桌面侧边栏 —— 薄封装共享 <Sidebar>，注入桌面专属能力：
@@ -181,14 +188,6 @@ export function Sidebar({
     setActiveSessionId(session.id)
   }
 
-  /** 选一个文件夹并加成项目（已存在同路径则复用），回项目 id；取消回 null */
-  const pickFolderAsProject = useCallback(async (): Promise<string | null> => {
-    const folder = await window.api.app.openDirectoryDialog()
-    if (!folder) return null
-    const existing = (await getChatApi().project.list()).find((p) => p.path === folder)
-    return existing?.id ?? (await getChatApi().project.create({ path: folder })).id
-  }, [])
-
   /** 打开文件夹并创建为项目（已存在同路径则复用），随后新建会话 */
   const handleOpenFolder = async (): Promise<void> => {
     const projectId = await pickFolderAsProject()
@@ -210,49 +209,19 @@ export function Sidebar({
    * 根档案由形态推导成基座 `bot`；只归属 bot，选的项目记成工作项目的引用）；删除先弹确认框（见 overlays），真删掉后
    * bot.changed 事件让分节重扫。引用必须稳定（useMemo）：分节以 adapter 为扫描依赖。
    */
-  const botGroupAdapter = useMemo<BotGroupAdapter>(() => {
-    const openNote = async (fileName: string, title?: string): Promise<void> => {
-      let session: { id: string }
-      try {
-        session = await window.api.bot.openNote({ fileName, title })
-      } catch {
-        return // 文件已不在（清单过期）—— bot.changed / 聚焦重扫会把这一行拿掉
-      }
-      useChatStore.getState().setSessions(await getChatApi().session.list())
-      setActiveSessionId(session.id)
-    }
-    return {
+  const botGroupAdapter = useMemo<BotGroupAdapter>(
+    () => ({
       list: () => window.api.bot.list(),
-      open: openNote,
-      create: async () => {
-        const r = await window.api.bot.createNew()
-        if (r.success && r.fileName) await openNote(r.fileName, r.name)
-      },
+      open: (fileName, title) => openBotNote(fileName, title, setActiveSessionId),
+      create: () => createBot(setActiveSessionId),
       openFolder: () => window.api.bot.openFolder(),
-      newSession: async (name, location) => {
-        const session = await getChatApi().session.create({
-          bot: name,
-          ...('workProject' in location ? { workProject: location.workProject } : {})
-        })
-        useChatStore.getState().setSessions(await getChatApi().session.list())
-        setActiveSessionId(session.id)
-      },
-      archive: (bot) => {
-        // 正开着这份 bot 文件的笔记本：先离开它（主进程归档时会把那条笔记本会话删掉）
-        const { sessions, activeSessionId } = useChatStore.getState()
-        const active = sessions.find((s) => s.id === activeSessionId)
-        if (
-          active?.projectId === REGISTRY_NOTE_PROJECT_IDS.bot &&
-          active.settings.notebookPath === bot.fileName
-        ) {
-          setActiveSessionId(null)
-        }
-        void window.api.bot.archive({ name: bot.name })
-      },
+      newSession: (name, location) => newBotSession(name, location, setActiveSessionId),
+      archive: (bot) => archiveBot(bot, setActiveSessionId),
       deleteFile: (fileName) => setConfirmingBotDelete({ fileName }),
       deleteSessions: (name, count) => setConfirmingBotSessionsDelete({ name, count })
-    }
-  }, [setActiveSessionId])
+    }),
+    [setActiveSessionId]
+  )
 
   /** 跟踪项分组（实验，只在手机的资料库页里：桌面的跟踪项在收件箱的「跟踪中」一节） */
 
@@ -718,7 +687,7 @@ export function Sidebar({
 
   const botsSection = useMemo<BotsSectionCaps>(
     () => ({ adapter: botGroupAdapter, pickFolderAsProject, archivedProjects }),
-    [botGroupAdapter, pickFolderAsProject, archivedProjects]
+    [botGroupAdapter, archivedProjects]
   )
 
   // 资料库的两层导航：各层共用一个滚动容器 —— 往下钻一层回到顶上，退回来回到离开那一层时的位置

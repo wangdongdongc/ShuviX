@@ -25,6 +25,16 @@
  *   DC-12 active 不画选中态
  *   DC-13 卡片的行里没有 ⋮
  *   DC-14 `card: false` 与不传一样：桌面那一行（文件名 + 小签 + ⋮，新建是无字图标）
+ *
+ * 专注模式淡化（`dim`；FADED = `opacity-30 hover:opacity-100 focus-within:opacity-100` 三个类一起在或一起不在）：
+ *
+ *   DD-1 不传 dim、有日报：日期行与日报行都不带 opacity-30
+ *   DD-2 `dim: true`、有日报、`active: false`：日期行淡，日报行淡且保留 `hover:bg-bg-hover/60`
+ *   DD-3 `dim: true`、有日报、`active: true`：日期行淡；日报行三个类都没有，仍是 `bg-bg-active/80`
+ *   DD-4 `dim: true`、没有日报、能写：日期行淡，新建图标在日期行里，没有日报行
+ *   DD-5 `dim: true`、还没查到：日期行淡，没有日报行也没有图标
+ *   DD-6 `card: true, dim: true`：整块里没有 opacity-30（有日报 / 没有日报能写 / active）
+ *   DD-7 `dim: false` 与 DD-1 一样
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, type ComponentProps } from 'react'
@@ -415,5 +425,78 @@ describe('DayReportHeader 卡片的样子（card）', () => {
     const button = writeButton()!
     expect(button.textContent).toBe('')
     expect(button.getAttribute('aria-label')).toBe(en.daily.write)
+  })
+})
+
+// ─────────────────────────── 专注模式淡化（dim） ───────────────────────────
+
+const FADED_CLASSES = ['opacity-30', 'hover:opacity-100', 'focus-within:opacity-100']
+
+/** 三个淡化类：全在 → 'faded'，全不在 → 'none'，只在一部分 → 'partial'（不该出现） */
+function fadeOf(el: Element): 'faded' | 'none' | 'partial' {
+  const classes = el.className.split(/\s+/)
+  const present = FADED_CLASSES.filter((c) => classes.includes(c)).length
+  return present === FADED_CLASSES.length ? 'faded' : present === 0 ? 'none' : 'partial'
+}
+
+const dateLine = (): HTMLElement =>
+  container.querySelector<HTMLElement>('[data-day-report-header] > .sb-section')!
+const classesOf = (el: Element): string[] => el.className.split(/\s+/)
+
+describe('DayReportHeader 的专注模式淡化（dim）', () => {
+  it.each<[string, Partial<DayReportHeaderProps>]>([
+    ['DD-1 不传', {}],
+    ['DD-7 dim: false', { dim: false }]
+  ])('%s：有日报，日期行与日报行都不淡', (_label, props) => {
+    mount({ ...props, report: REPORT })
+    expect(dateLine()).not.toBeNull()
+    expect(fadeOf(dateLine())).toBe('none')
+    expect(fadeOf(reportRow()!)).toBe('none')
+    expect(classesOf(dateLine())).not.toContain('opacity-30')
+    expect(classesOf(reportRow()!)).not.toContain('opacity-30')
+  })
+
+  it('DD-2 dim、有日报、不是主区开着的：日期行淡，日报行淡且留着悬浮底色', () => {
+    mount({ dim: true, report: REPORT, active: false })
+    expect(fadeOf(dateLine())).toBe('faded')
+    expect(fadeOf(reportRow()!)).toBe('faded')
+    expect(classesOf(reportRow()!)).toContain('hover:bg-bg-hover/60')
+  })
+
+  it('DD-3 dim、有日报、主区开着的正是它：日期行淡，日报行不淡、仍是选中态', () => {
+    mount({ dim: true, report: REPORT, active: true })
+    expect(fadeOf(dateLine())).toBe('faded')
+    expect(fadeOf(reportRow()!)).toBe('none')
+    expect(classesOf(reportRow()!)).toContain('bg-bg-active/80')
+  })
+
+  it('DD-4 dim、没有日报、能写：日期行淡，新建图标在它里面，没有日报行', () => {
+    mount({ dim: true, report: null, writable: true })
+    expect(fadeOf(dateLine())).toBe('faded')
+    expect(writeButton()).not.toBeNull()
+    expect(dateLine().contains(writeButton())).toBe(true)
+    expect(reportRow()).toBeNull()
+  })
+
+  it('DD-5 dim、还没查到：日期行淡，没有日报行也没有图标', () => {
+    mount({ dim: true, report: undefined })
+    expect(fadeOf(dateLine())).toBe('faded')
+    expect(reportRow()).toBeNull()
+    expect(writeButton()).toBeNull()
+  })
+
+  it.each<[string, Partial<DayReportHeaderProps>]>([
+    ['有日报', { report: REPORT }],
+    ['没有日报、能写', { report: null, writable: true }],
+    ['有日报、active', { report: REPORT, active: true }]
+  ])('DD-6 卡片不看 dim（%s）：整块里没有 opacity-30', (_label, props) => {
+    mount({ ...props, card: true, dim: true })
+    expect(container.querySelector('[data-day-report-card]')).not.toBeNull()
+    const all = [...container.querySelectorAll('*')]
+    expect(all.length).toBeGreaterThan(0)
+    for (const el of all) {
+      const cls = el.getAttribute('class') ?? ''
+      expect(cls.split(/\s+/)).not.toContain('opacity-30')
+    }
   })
 })

@@ -14,6 +14,10 @@
  *   TL-124…126  可见时才取、每次重新可见都重取；library.changed 只在可见时重取
  *   TL-127…129  取失败：第一次 → 空页；之后 → 留着原来的；宿主没有 library → 空页
  *   TL-131      先发的答复晚到：不盖掉后发的
+ *   TL-135…141  专注模式（`focusSessionId`）：FADED = `opacity-30 hover:opacity-100 focus-within:opacity-100`
+ *               三个类一起在或一起不在。不传 / null / '' → 什么都不淡；给了 S1 → 搜索栏、每天的抬头、
+ *               S2 那组与没有会话的那组淡，S1 的组（哪天都算）不淡；给了一个不在时间线里的会话 → 全淡、不抛；
+ *               搜索只剩 S2 → 它淡，清空后 S1 回来不淡；S1 → S2 重渲染，淡跟着走
  *
  * `@shuvix/chat-ui` 整份换成替身：`getHostApi` 回每个用例自己的那一份，`useAppEvent` 记下处理函数好让用例发
  * `library.changed`，`useChatStore.getState()` 给 requestFilePreview 间谍，`useMediaUrl` 回 `media://<引用>`。
@@ -532,5 +536,101 @@ describe('什么时候取', () => {
     first.resolve(result([entry(2, 'S1')]))
     await flush()
     expect(fileIds()).toEqual([ID(3)])
+  })
+})
+
+describe('专注模式（focusSessionId）', () => {
+  const FADED_CLASSES = ['opacity-30', 'hover:opacity-100', 'focus-within:opacity-100']
+  /** 三个淡化类：全在 → 'faded'，全不在 → 'none'，只在一部分 → 'partial'（不该出现） */
+  const fadeOf = (el: Element): 'faded' | 'none' | 'partial' => {
+    const classes = (el.getAttribute('class') ?? '').split(/\s+/)
+    const present = FADED_CLASSES.filter((c) => classes.includes(c)).length
+    return present === FADED_CLASSES.length ? 'faded' : present === 0 ? 'none' : 'partial'
+  }
+  /** 时间线里所有带 opacity-30 的元素 */
+  const fadedEls = (): Element[] =>
+    $$('[data-library-timeline] *').filter((el) =>
+      (el.getAttribute('class') ?? '').split(/\s+/).includes('opacity-30')
+    )
+  const searchRow = (): HTMLElement => $('[data-timeline-search]').closest('label')!.parentElement!
+  const headings = (): HTMLElement[] => $$('[data-timeline-day] > h3')
+  const groupsOf = (sessionId: string): HTMLElement[] =>
+    $$(`[data-timeline-session="${sessionId}"]`)
+
+  /** 今天：S1、S2、没有会话的一组；昨天：S1、S2 */
+  const fixture = (): LibraryTimelineResult =>
+    result(
+      [
+        entry(1, 'S1', { at: at(11, 18, 11) }),
+        entry(2, 'S2', { name: 'beach-2.png', at: at(11, 18, 10) }),
+        entry(3, null, { at: at(11, 18, 9) }),
+        entry(4, 'S1', { at: at(11, 17, 11) }),
+        entry(5, 'S2', { name: 'beach-5.png', at: at(11, 17, 10) })
+      ],
+      { S1: { title: 'Trip plan' }, S2: { title: 'Budget' } }
+    )
+
+  it.each<[string, LibraryTimelineProps]>([
+    ['TL-135 不传', {}],
+    ['TL-136 null', { focusSessionId: null }],
+    ["TL-139 ''（当作不淡）", { focusSessionId: '' }]
+  ])('%s：时间线里没有一处带 opacity-30', async (_label, props) => {
+    await show(fixture(), props)
+    expect(groupsOf('S1')).toHaveLength(2)
+    expect(groupsOf('')).toHaveLength(1)
+    expect(fadedEls()).toEqual([])
+    expect(fadeOf(searchRow())).toBe('none')
+    for (const h of headings()) expect(fadeOf(h)).toBe('none')
+    for (const g of $$('[data-timeline-session]')) expect(fadeOf(g)).toBe('none')
+  })
+
+  it('TL-137 给了 S1：搜索栏、每天抬头、S2 与没有会话的组都淡；S1 的组哪天都不淡', async () => {
+    await show(fixture(), { focusSessionId: 'S1' })
+    expect(fadeOf(searchRow())).toBe('faded')
+    expect(headings()).toHaveLength(2)
+    for (const h of headings()) expect(fadeOf(h)).toBe('faded')
+    expect(groupsOf('S2')).toHaveLength(2)
+    for (const g of groupsOf('S2')) expect(fadeOf(g)).toBe('faded')
+    expect(fadeOf(groupsOf('')[0])).toBe('faded')
+    expect(groupsOf('S1')).toHaveLength(2)
+    for (const g of groupsOf('S1')) {
+      // 不淡的组自己与祖先都没有被淡掉
+      let node: Element | null = g
+      while (node && !node.hasAttribute('data-library-timeline')) {
+        expect(fadeOf(node)).toBe('none')
+        node = node.parentElement
+      }
+    }
+    // 过渡类常在，不是淡的标志
+    expect(groupsOf('S1')[0].className.split(/\s+/)).toContain('transition-opacity')
+  })
+
+  it('TL-138 给了一个不在时间线里的会话：搜索栏、抬头、每一组都淡，不抛', async () => {
+    await show(fixture(), { focusSessionId: 'GONE' })
+    expect(fadeOf(searchRow())).toBe('faded')
+    for (const h of headings()) expect(fadeOf(h)).toBe('faded')
+    const groups = $$('[data-timeline-session]')
+    expect(groups).toHaveLength(5)
+    for (const g of groups) expect(fadeOf(g)).toBe('faded')
+  })
+
+  it('TL-140 给了 S1、搜索只剩 S2：剩下的 S2 淡；清空后 S1 回来且不淡', async () => {
+    await show(fixture(), { focusSessionId: 'S1' })
+    type('beach')
+    expect(groupsOf('S1')).toEqual([])
+    expect(groupsOf('S2')).toHaveLength(2)
+    for (const g of groupsOf('S2')) expect(fadeOf(g)).toBe('faded')
+    type('')
+    expect(groupsOf('S1')).toHaveLength(2)
+    for (const g of groupsOf('S1')) expect(fadeOf(g)).toBe('none')
+  })
+
+  it('TL-141 S1 → S2 重渲染：淡跟着走', async () => {
+    await show(fixture(), { focusSessionId: 'S1' })
+    await mount({ focusSessionId: 'S2' })
+    for (const g of groupsOf('S2')) expect(fadeOf(g)).toBe('none')
+    for (const g of groupsOf('S1')) expect(fadeOf(g)).toBe('faded')
+    expect(fadeOf(groupsOf('')[0])).toBe('faded')
+    expect(fadeOf(searchRow())).toBe('faded')
   })
 })

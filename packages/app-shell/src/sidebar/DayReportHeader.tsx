@@ -27,7 +27,14 @@ export interface DayReportHeaderProps {
    * 行尾一个箭头；还没写就是一行「写这一天的日报」。缺省 = 桌面那一行（文件名 + 小签，不放摘录）
    */
   card?: boolean
+  /**
+   * 专注模式淡化（宿主经 useFocusDim 算好传进来）：日期那一行淡；日报行除非主区开着的正是它（`active`）也淡。
+   * 悬浮 / 键盘焦点在上面时恢复。缺省不淡；卡片（手机）不看它
+   */
+  dim?: boolean
 }
+
+const FADED = 'opacity-30 hover:opacity-100 focus-within:opacity-100'
 
 /** 路径的最后一段（日报文件名，如 `2026-10-25.md`）；Windows 的反斜杠一样认 */
 function fileNameOf(path: string): string {
@@ -52,7 +59,8 @@ export function DayReportHeader({
   onOpen,
   onRevealFile,
   onDelete,
-  card = false
+  card = false,
+  dim = false
 }: DayReportHeaderProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const showContextMenu = useContextMenu()
@@ -148,7 +156,10 @@ export function DayReportHeader({
   }
   return (
     <div data-day-report-header="" className="pb-1">
-      <div className="sb-section" style={{ marginTop: 0 }}>
+      <div
+        className={`sb-section transition-opacity duration-200 ${dim ? FADED : ''}`}
+        style={{ marginTop: 0 }}
+      >
         <span className="flex-1 min-w-0 truncate">{label}</span>
         {report === null && writable && (
           <button
@@ -179,8 +190,8 @@ export function DayReportHeader({
             }
           }}
           title={t('daily.open')}
-          className={`group relative sb-row cursor-pointer text-text-primary ${
-            active ? 'bg-bg-active/80' : 'hover:bg-bg-hover/60'
+          className={`group relative sb-row cursor-pointer text-text-primary transition-opacity duration-200 ${
+            active ? 'bg-bg-active/80' : `hover:bg-bg-hover/60 ${dim ? FADED : ''}`
           }`}
         >
           <NotebookText className="sb-icon text-success" />

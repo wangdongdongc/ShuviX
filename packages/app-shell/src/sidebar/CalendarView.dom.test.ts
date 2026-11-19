@@ -12,6 +12,14 @@
  *   CV-8 选日子：点一格 → onSelect(那天)；「今天」→ onSelect + onMonthChange(今天)
  *   CV-9 拖动侧栏时不画月历（带不带 `hideWeekNumber` 都一样）
  *
+ * 专注模式淡化（`dim`；FADED = `opacity-30 hover:opacity-100 focus-within:opacity-100` 三个类一起在或一起不在）：
+ *   CV-10 不传 dim、没有会话：月历格子 `[data-calendar-grid]` 与「这天没有会话」`[data-calendar-empty]` 都不淡
+ *   CV-11 `dim: false`：同 CV-10
+ *   CV-12 `dim: true`、没有会话：两样都淡
+ *   CV-13 `dim: true`、有会话：月历淡；没有那句话；渲染函数给的节点与 dayHeader 自己及祖先（到滚动容器）都不带 opacity-30
+ *   CV-14 `dim: true` 拖动侧栏：占位期间外层照淡；拖完月历回来，外层仍淡
+ *   CV-15 dim true → false 重渲染：淡去掉
+ *
  * 月历是真的 react-day-picker；`@shuvix/chat-ui` 这里只引了类型。i18n 走真 en 资源。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -75,6 +83,30 @@ function expectNoWeekNumbers(): void {
   expect(picker()!.getAttribute('data-week-numbers')).not.toBe('true')
   expect(container.querySelectorAll('th.rdp-weekday')).toHaveLength(7)
   expect(firstWeekCells()).toBe(7)
+}
+
+const FADED_CLASSES = ['opacity-30', 'hover:opacity-100', 'focus-within:opacity-100']
+
+/** 三个淡化类：全在 → 'faded'，全不在 → 'none'，只在一部分 → 'partial'（不该出现） */
+function fadeOf(el: Element): 'faded' | 'none' | 'partial' {
+  const classes = el.className.split(/\s+/)
+  const present = FADED_CLASSES.filter((c) => classes.includes(c)).length
+  return present === FADED_CLASSES.length ? 'faded' : present === 0 ? 'none' : 'partial'
+}
+
+const grid = (): HTMLElement => container.querySelector<HTMLElement>('[data-calendar-grid]')!
+const emptyHint = (): HTMLElement | null =>
+  container.querySelector<HTMLElement>('[data-calendar-empty]')
+
+/** el 自己与祖先（直到并包括滚动容器）都不带 opacity-30 */
+function expectNoFadedAncestor(el: Element): void {
+  let node: Element | null = el
+  while (node && node !== container) {
+    expect(node.className.split(/\s+/)).not.toContain('opacity-30')
+    if (node.classList.contains('overflow-y-auto')) return
+    node = node.parentElement
+  }
+  throw new Error('没走到滚动容器')
 }
 
 function session(id: string): Session {
@@ -225,5 +257,62 @@ describe('CalendarView 的其余部分不随 hideWeekNumber 变', () => {
     expect(container.querySelector('td[data-day]')).toBeNull()
     // 列表那一半照常
     expect(container.textContent).toContain(en.sidebar.noSessionsOnDay)
+  })
+})
+
+describe('CalendarView 的专注模式淡化（dim）', () => {
+  it('CV-10 不传 dim、没有会话：月历与那句话都不淡', () => {
+    mount()
+    expect(grid()).not.toBeNull()
+    expect(emptyHint()).not.toBeNull()
+    expect(fadeOf(grid())).toBe('none')
+    expect(fadeOf(emptyHint()!)).toBe('none')
+    // 过渡类常在，不算淡
+    expect(grid().className.split(/\s+/)).toContain('transition-opacity')
+  })
+
+  it('CV-11 dim: false 与不传一样', () => {
+    mount({ dim: false })
+    expect(fadeOf(grid())).toBe('none')
+    expect(fadeOf(emptyHint()!)).toBe('none')
+  })
+
+  it('CV-12 dim: true、没有会话：月历与那句话都淡', () => {
+    mount({ dim: true })
+    expect(fadeOf(grid())).toBe('faded')
+    expect(fadeOf(emptyHint()!)).toBe('faded')
+    expect(grid().querySelector('.rdp-root')).not.toBeNull()
+  })
+
+  it('CV-13 dim: true、有会话：月历淡；会话列表与 dayHeader 不被外层淡', () => {
+    mount({
+      dim: true,
+      daySessions: [session('s1')],
+      dayHeader: createElement('div', { 'data-test-day-header': '' }, 'header'),
+      renderGroupedSessionsForDay: () => createElement('div', { 'data-test-list': '' }, 'list')
+    })
+    expect(fadeOf(grid())).toBe('faded')
+    expect(emptyHint()).toBeNull()
+    expectNoFadedAncestor(container.querySelector('[data-test-list]')!)
+    expectNoFadedAncestor(container.querySelector('[data-test-day-header]')!)
+  })
+
+  it('CV-14 dim: true 拖动侧栏：占位期间外层照淡，拖完月历回来仍淡', () => {
+    mount({ dim: true, isResizing: true })
+    expect(picker()).toBeNull()
+    expect(grid()).not.toBeNull()
+    expect(fadeOf(grid())).toBe('faded')
+    expect(grid().querySelector('[aria-hidden]')).not.toBeNull()
+    mount({ dim: true, isResizing: false })
+    expect(picker()).not.toBeNull()
+    expect(fadeOf(grid())).toBe('faded')
+  })
+
+  it('CV-15 dim true → false 重渲染：淡去掉', () => {
+    mount({ dim: true })
+    expect(fadeOf(grid())).toBe('faded')
+    mount({ dim: false })
+    expect(fadeOf(grid())).toBe('none')
+    expect(fadeOf(emptyHint()!)).toBe('none')
   })
 })

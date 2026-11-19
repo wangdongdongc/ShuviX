@@ -406,7 +406,7 @@ describe('PG-2 折叠：侧栏与日历', () => {
     expect(isCollapsed(groupEl('scout'))).toBe(true)
   })
 
-  it('PG-2 日历：有会话的 bot 组摊开，定时运行的会话在组里；没有会话的 bot 不画；组上没有菜单与「+」，分节也没有菜单', async () => {
+  it('PG-2 日历：有会话的 bot 组摊开，定时运行的会话在组里；没有会话的 bot 不画；组上照样有菜单与「+」，分节没有菜单', async () => {
     store.sessions = [
       botRow('b1', 'scout'),
       botRow('r1', 'scout', { triggerRun: true }),
@@ -421,12 +421,31 @@ describe('PG-2 折叠：侧栏与日历', () => {
     expect(groupOrder()).toEqual(['scout'])
     expect(isCollapsed(groupEl('scout'))).toBe(false)
     expect(rowIds(groupEl('scout'))).toEqual(['b1', 'r1'])
-    expect(container.querySelector('[data-group-add]')).toBeNull()
+    expect(groupEl('scout').querySelector('[data-group-add]')).not.toBeNull()
     expect(container.querySelector('[data-bot-new-chat]')).toBeNull()
 
-    await rightClick(headerOf('scout'))
+    // 分节头没有菜单；bot 组头的菜单与侧栏同一份
     await rightClick(sectionHeader('Bots'))
     expect(menus).toEqual([])
+    await rightClick(headerOf('scout'))
+    expect(menus).toHaveLength(1)
+    expect(menus[0].map((i) => i.id)).toEqual([
+      'new-bot-chat',
+      'edit-bot',
+      undefined,
+      'archive-bot'
+    ])
+  })
+
+  it('PG-2 日历：bot 组的「+」弹位置选择，选临时就和这个 bot 新建一条', async () => {
+    store.sessions = [botRow('b1', 'scout')]
+    const adapter = makeAdapter(registryOf({ bots: [bot('scout')] }))
+    await mount({ adapter }, { hideEmptyGroups: true, sessionsOverride: store.sessions as never })
+    picks.push('temp')
+    await click(groupEl('scout').querySelector('[data-group-add]')!)
+    expect(menus).toHaveLength(1)
+    expect(menus[0][0]).toEqual({ id: 'where', label: S.botWhere, enabled: false })
+    expect(adapter.newSession).toHaveBeenCalledWith('scout', { temp: true })
   })
 
   it('PG-2 日历：当天一条 bot 会话都没有 → 整个 Bots 分节不画', async () => {

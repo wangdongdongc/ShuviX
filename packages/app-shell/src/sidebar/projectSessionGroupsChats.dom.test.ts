@@ -402,7 +402,7 @@ describe('PC-5 日历（hideEmptyGroups）', () => {
     expect(container.querySelector('[data-temp-new-chat]')).toBeNull()
   })
 
-  it('PC-5 a temporary session that day → its row, no New Chat row, and no "+" anywhere', async () => {
+  it('PC-5 a temporary session that day → its row, no New Chat row, no "+" on 聊天 (the bot group keeps its own)', async () => {
     store.sessions = [row('t1'), botRow('b1', 'scout')]
     await mount(
       { adapter: makeAdapter({ bots: [bot('scout')], shadowed: [], invalid: [] }) },
@@ -411,7 +411,8 @@ describe('PC-5 日历（hideEmptyGroups）', () => {
     expect(chatsHeader()).not.toBeNull()
     expect(rowIds(chatsBox())).toEqual(['t1'])
     expect(container.querySelector('[data-temp-new-chat]')).toBeNull()
-    expect(container.querySelector('[data-group-add]')).toBeNull()
+    expect(chatsHeader()!.querySelector('[data-group-add]')).toBeNull()
+    expect(container.querySelector('[data-bot-group="scout"] [data-group-add]')).not.toBeNull()
   })
 })
 
