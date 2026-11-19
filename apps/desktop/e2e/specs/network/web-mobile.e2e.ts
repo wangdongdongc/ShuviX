@@ -3519,6 +3519,11 @@ describe('phone layout: the shell', () => {
       expect(await pane.browserHistoryStack()).toEqual(['tabs', `tab:${agentTab}`])
 
       // agent 用着的页：刷新先问一句；取消什么都不动
+      // 先等截图落定：它晚到会把下面的按钮往下推一百多像素，按在旧位置上的点击就落到截图上了
+      await until(async () => {
+        const p = await pane.browserTabPage()
+        return p?.id === agentTab && p.screenshot !== 'loading' ? p : null
+      }, 'the screenshot settled')
       const hits = fx.hits('/counter.html?agent=1')
       await pane.tap({ browserTabAction: 'reload' })
       await until(async () => (await pane.browserGuard()) === 'reload', 'the reload question')
