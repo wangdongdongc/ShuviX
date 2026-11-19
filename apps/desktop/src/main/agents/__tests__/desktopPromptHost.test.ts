@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   pickSettings: vi.fn(),
   projectPick: vi.fn(),
   resolveProjectConfig: vi.fn(),
-  enabledBaseChoices: vi.fn(),
+  enabledBaseGuide: vi.fn(),
   forSession: vi.fn(),
   recordRead: vi.fn()
 }))
@@ -40,7 +40,7 @@ vi.mock('../../services/sessionRecords', () => ({
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
-vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: mocks.enabledBaseChoices }))
+vi.mock('../../services/knowledge', () => ({ enabledBaseGuide: mocks.enabledBaseGuide }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
   electronEventSink: {},
@@ -170,16 +170,16 @@ describe('resolveProjectPrompt', () => {
 
 describe('resolveKnowledgeBases', () => {
   it('H11-58 一个库都没勾 → null；勾了 → 恰为 renderKnowledgeGuide(那几个)；每次现问', async () => {
-    mocks.enabledBaseChoices.mockReturnValue([])
+    mocks.enabledBaseGuide.mockResolvedValue([])
     expect(await host.resolveKnowledgeBases!('s1')).toBeNull()
     const bases = [
       { name: 'project', label: 'Acme' },
       { name: 'notes', label: '' }
     ]
-    mocks.enabledBaseChoices.mockReturnValue(bases)
+    mocks.enabledBaseGuide.mockResolvedValue(bases)
     expect(await host.resolveKnowledgeBases!('s1')).toBe(renderKnowledgeGuide(bases))
-    expect(mocks.enabledBaseChoices).toHaveBeenCalledTimes(2)
-    expect(mocks.enabledBaseChoices).toHaveBeenLastCalledWith('s1')
+    expect(mocks.enabledBaseGuide).toHaveBeenCalledTimes(2)
+    expect(mocks.enabledBaseGuide).toHaveBeenLastCalledWith('s1')
   })
 })
 
