@@ -41,6 +41,10 @@ const RENDERABLE_STATUSES = new Set([401, 403, 503])
 const NEEDS_BROWSER_HINT =
   "Calling read again right now will not help. read loads pages with ShuviX's browser, so if the page needs a login or a human check, tell the user to open this address in ShuviX's browser and sign in or pass the check there; after that read can load it."
 
+/** 清理过正文时告诉模型：它要找的链接可能在被去掉的导航里 */
+const CLEANED_PAGE_NOTE =
+  "Note: the site's navigation, header, footer and sidebars were left out of this page.\n\n"
+
 const THIN_PAGE_NOTE = `Note: the page returned very little text. It may need a login or a security check, so its real content may be missing. ${NEEDS_BROWSER_HINT}\n\n`
 
 export type UrlFetch = (url: string, init: RequestInit) => Promise<Response>
@@ -57,6 +61,9 @@ export type UrlConverter = (response: Response) => Promise<
 /** 在隐藏页面里渲染，返回渲染后的 HTML；拿不到就返回 null */
 export type UrlRenderer = (url: string, signal?: AbortSignal) => Promise<{ html: string } | null>
 
+/** 去掉导航、页眉页脚之类的页面家具；不该清理（或清理不了）就返回 null，用原文 */
+export type UrlCleaner = (html: string) => Promise<{ html: string } | null>
+
 /** 把下载到的图片交给模型（宿主负责缩放、落盘给 UI 看）；mimeType 由文件头定，不看响应头 */
 export type UrlImageReader = (
   bytes: Buffer,
@@ -68,6 +75,8 @@ export interface ReadUrlOptions {
   fetch: UrlFetch
   convert: UrlConverter
   render?: UrlRenderer
+  /** 没有它，网页整页转换 */
+  clean?: UrlCleaner
   /** 没有它，图片和其他二进制一样报「转不了」 */
   readImage?: UrlImageReader
   userAgent: string
@@ -309,6 +318,37 @@ export async function readUrlContent(
     }
   }
 
+  /**
+   * 网页转 Markdown：先去掉页面家具再转；清理不了、或清理后转不出文字，就转原文。
+   * `original` 是直接请求到的响应（渲染出来的页面没有）。
+   */
+  const convertHtml = async (
+    original: Response | null,
+    html: string
+  ): Promise<{ converted: Converted; markdown: string; cleaned: boolean }> => {
+    const run = async (text: string): Promise<{ converted: Converted; markdown: string }> => {
+      const converted = await convert(
+        responseForConverter(original, url, 'text/html; charset=utf-8', Buffer.from(text, 'utf-8'))
+      )
+      return { converted, markdown: converted?.markdown?.trim() ?? '' }
+    }
+    let cleanedHtml: string | null = null
+    if (options.clean) {
+      try {
+        const pending = options.clean(html)
+        cleanedHtml = (await (signal ? untilAborted(pending, signal) : pending))?.html ?? null
+      } catch {
+        if (signal?.aborted) throw new Error(abortError)
+      }
+    }
+    if (cleanedHtml !== null) {
+      const result = await run(cleanedHtml)
+      if (result.markdown) return { ...result, cleaned: true }
+      if (signal?.aborted) throw new Error(abortError)
+    }
+    return { ...(await run(html)), cleaned: false }
+  }
+
   const markdownResult = (
     converted: Converted,
     markdown: string,
@@ -336,15 +376,15 @@ export async function readUrlContent(
     }
     if (signal?.aborted) throw new Error(abortError)
     if (!page) return null
-    const body = Buffer.from(page.html, 'utf-8')
-    const converted = await convert(
-      responseForConverter(null, url, 'text/html; charset=utf-8', body)
-    )
+    const { converted, markdown, cleaned } = await convertHtml(null, page.html)
     if (signal?.aborted) throw new Error(abortError)
-    const markdown = converted?.markdown?.trim() ?? ''
     const chars = visibleTextLength(markdown)
     if (chars < Math.max(minChars, 1)) return null
-    return markdownResult(converted, markdown, chars < THIN_PAGE_TEXT_CHARS ? THIN_PAGE_NOTE : '')
+    return markdownResult(
+      converted,
+      markdown,
+      (chars < THIN_PAGE_TEXT_CHARS ? THIN_PAGE_NOTE : '') + (cleaned ? CLEANED_PAGE_NOTE : '')
+    )
   }
 
   let response: Response
@@ -412,16 +452,20 @@ export async function readUrlContent(
 
   const converterType = converterTypeOf(kind, bytes, decoded, contentType, url)
   let converted: Converted = null
-  if (converterType) {
+  let markdown = ''
+  let cleaned = false
+  if (kind === 'html' && decoded !== null) {
+    ;({ converted, markdown, cleaned } = await convertHtml(response, decoded))
+  } else if (converterType) {
     const body = decoded === null ? bytes : Buffer.from(decoded, 'utf-8')
     const isFeed = kind === 'text' && !isNotebookUrl(url)
     converted = await convert(
       responseForConverter(response, isFeed ? null : url, converterType, body)
     )
+    markdown = converted?.markdown?.trim() ?? ''
   }
   if (signal?.aborted) throw new Error(abortError)
 
-  let markdown = converted?.markdown?.trim() ?? ''
   if (kind === 'binary' && isErrorPlaceholder(markdown)) markdown = ''
 
   if (kind === 'html') {
@@ -433,7 +477,11 @@ export async function readUrlContent(
       throw new Error(`the page at ${url} has no readable text. ${NEEDS_BROWSER_HINT}`)
     }
     const thin = bytes.length >= THIN_PAGE_MIN_BYTES && chars < THIN_PAGE_TEXT_CHARS
-    return markdownResult(converted, markdown, thin ? THIN_PAGE_NOTE : '')
+    return markdownResult(
+      converted,
+      markdown,
+      (thin ? THIN_PAGE_NOTE : '') + (cleaned ? CLEANED_PAGE_NOTE : '')
+    )
   }
 
   if (markdown) return markdownResult(converted, markdown, '')

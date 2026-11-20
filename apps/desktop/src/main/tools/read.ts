@@ -18,6 +18,7 @@ import { formatSize } from '../../shared/node/truncate'
 import { suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
 import { getToolResultsDir } from '../utils/paths'
 import { readUrlContent } from '../utils/toolUtils/urlFetch'
+import { cleanMainContent } from '../utils/toolUtils/mainContent'
 import {
   browserReadSession,
   browserReadUserAgent,
@@ -436,6 +437,7 @@ async function readUrl(
     fetch: (input, init) => browserSession.fetch(input, init),
     convert: async (response) => (await getMarkItDown()).convert(response),
     render: renderPage,
+    clean: cleanMainContent,
     readImage: (bytes, mimeType, imageUrl) => readUrlImage(bytes, mimeType, imageUrl, sessionId),
     userAgent: await browserReadUserAgent(),
     signal,

@@ -21,11 +21,13 @@ import {
   URL_FETCH_TIMEOUT_MS,
   visibleTextLength,
   type ReadUrlOptions,
+  type UrlCleaner,
   type UrlConverter,
   type UrlFetch,
   type UrlImageReader,
   type UrlRenderer
 } from '../urlFetch'
+import { cleanMainContent } from '../mainContent'
 
 const URL_ = 'https://example.test/page'
 const CHROME_UA = 'Mozilla/5.0 (test) Chrome/142.0.0.0 Safari/537.36'
@@ -2080,6 +2082,430 @@ describe('图片（文件头）', () => {
         )
       ).rejects.toThrow(new Error('response is larger than the 5 MB limit'))
       expect(readImage).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('正文清理（clean）', () => {
+  /** urlFetch.ts 的 CLEANED_PAGE_NOTE（没导出，照抄原文） */
+  const CLEAN_NOTE =
+    "Note: the site's navigation, header, footer and sidebars were left out of this page.\n\n"
+  const THIN_NOTE = `${NOTE_START} It may need a login or a security check, so its real content may be missing. ${HINT_FULL}\n\n`
+  const HEAD = `URL: ${URL_} — converted to Markdown\n\n`
+  const CLEANED = '<!doctype html><html><body><p>cleaned</p></body></html>'
+  const CLEANED_F = '<!doctype html><html><body><p>cleaned-fetched</p></body></html>'
+  const CLEANED_R = '<!doctype html><html><body><p>cleaned-rendered</p></body></html>'
+
+  const cleanTo = (html: string | null): ReturnType<typeof vi.fn<UrlCleaner>> =>
+    vi.fn<UrlCleaner>(async () => (html === null ? null : { html }))
+
+  /** 按交给它的正文决定转成什么；记下每次的正文 */
+  function convertBy(table: Record<string, string | Error>): {
+    convert: ReturnType<typeof vi.fn<UrlConverter>>
+    bodies: string[]
+  } {
+    const bodies: string[] = []
+    const convert = vi.fn<UrlConverter>(async (response) => {
+      const body = await response.clone().text()
+      bodies.push(body)
+      const out = table[body]
+      if (out instanceof Error) throw out
+      return { title: null, markdown: out ?? '# other' }
+    })
+    return { convert, bodies }
+  }
+
+  const abortedExactly = async (work: Promise<unknown>): Promise<void> => {
+    const error = (await work.then(
+      () => new Error('expected a rejection'),
+      (e: Error) => e
+    )) as Error
+    expect(error.message).toBe(ABORTED)
+  }
+
+  describe('请求到的网页', () => {
+    it('UF-C1 清理过的那份交给转换器，结果带 note，details 不变', async () => {
+      const original = page(500)
+      const clean = cleanTo(CLEANED)
+      const { convert, seen } = spyConvert('# ok')
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(original, HTML)), { clean, convert })
+      )
+      expect(clean).toHaveBeenCalledTimes(1)
+      expect(clean.mock.calls[0][0]).toBe(original)
+      expect(convert).toHaveBeenCalledTimes(1)
+      expect(seen[0].bytes.toString('utf-8')).toBe(CLEANED)
+      expect(seen[0].type).toBe('text/html; charset=utf-8')
+      expect(seen[0].url).toBe(URL_)
+      expect(textOf(result)).toBe(`${HEAD}${CLEAN_NOTE}# ok`)
+      expect(result.details).toEqual({
+        type: 'read',
+        format: 'URL',
+        converted: true,
+        truncated: false,
+        url: URL_
+      })
+    })
+
+    it('UF-C2 GBK 网页：clean 拿到的是解好码的字符串', async () => {
+      const body = Buffer.concat([
+        Buffer.from('<!doctype html><html><head></head><body><p>'),
+        Buffer.from(GBK_ZHONGWEN),
+        Buffer.from('</p></body></html>')
+      ])
+      const clean = cleanTo(null)
+      const { convert } = spyConvert('# ok')
+      await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(body, 'text/html; charset=gbk')), { clean, convert })
+      )
+      expect(clean.mock.calls[0][0]).toContain('中文')
+    })
+
+    it('UF-C4 clean 回 null：转原文，不带 note', async () => {
+      const original = page(500)
+      const { convert, seen } = spyConvert('# ok')
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(original, HTML)), { clean: cleanTo(null), convert })
+      )
+      expect(convert).toHaveBeenCalledTimes(1)
+      expect(seen[0].bytes.toString('utf-8')).toBe(original)
+      expect(textOf(result)).toBe(`${HEAD}# ok`)
+    })
+
+    it('UF-C5 没注入 clean：转原文，不带 note', async () => {
+      const original = page(500)
+      const { convert, seen } = spyConvert('# ok')
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(original, HTML)), { convert })
+      )
+      expect(seen[0].bytes.toString('utf-8')).toBe(original)
+      expect(textOf(result)).toBe(`${HEAD}# ok`)
+    })
+
+    it('UF-C6 clean 抛错（没中止）：不报错，转原文，不带 note', async () => {
+      const original = page(500)
+      const clean = vi.fn<UrlCleaner>(async () => Promise.reject(new Error('jsdom blew up')))
+      const { convert, seen } = spyConvert('# ok')
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(original, HTML)), { clean, convert })
+      )
+      expect(seen[0].bytes.toString('utf-8')).toBe(original)
+      expect(textOf(result)).toBe(`${HEAD}# ok`)
+    })
+
+    it('UF-C7 清理过的转不出字：先转清理的、再转原文，不带 note', async () => {
+      const original = page(500)
+      const { convert, bodies } = convertBy({ [CLEANED]: '', [original]: '# full' })
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(original, HTML)), { clean: cleanTo(CLEANED), convert })
+      )
+      expect(bodies).toEqual([CLEANED, original])
+      expect(textOf(result)).toBe(`${HEAD}# full`)
+    })
+
+    it('UF-C8 转换器在清理过的那份上抛错：同样退回原文', async () => {
+      const original = page(500)
+      const { convert, bodies } = convertBy({
+        [CLEANED]: new Error('conversion failed'),
+        [original]: '# full'
+      })
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(original, HTML)), { clean: cleanTo(CLEANED), convert })
+      )
+      expect(bodies).toEqual([CLEANED, original])
+      expect(textOf(result)).toBe(`${HEAD}# full`)
+    })
+
+    it('UF-C10 清理的和原文都转不出字、没有 render：no readable text', async () => {
+      const original = page(500)
+      const { convert } = convertBy({ [CLEANED]: '', [original]: '' })
+      await expect(
+        readUrlContent(
+          URL_,
+          options(fetchSeq(respond(original, HTML)), { clean: cleanTo(CLEANED), convert })
+        )
+      ).rejects.toThrow(`the page at ${URL_} has no readable text.`)
+    })
+
+    it('UF-C13 几乎没字又清理过：头、几乎没字的 note、清理的 note、正文，各一次、按这个顺序', async () => {
+      const { convert } = spyConvert('short')
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(paddedPage(20, 8000), HTML)), {
+          clean: cleanTo(CLEANED),
+          convert
+        })
+      )
+      const text = textOf(result)
+      expect(text).toBe(`${HEAD}${THIN_NOTE}${CLEAN_NOTE}short`)
+      expect(text.split(CLEAN_NOTE)).toHaveLength(2)
+      expect(text.split(NOTE_START)).toHaveLength(2)
+    })
+  })
+
+  describe('不是网页', () => {
+    const PNG = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from([0, 0, 0, 13]),
+      Buffer.from('IHDR'),
+      Buffer.from([0, 0, 0, 40, 0, 0, 0, 24, 8, 2, 0, 0, 0])
+    ])
+    const SENTINEL = {
+      content: [{ type: 'text' as const, text: 'IMAGE-SENTINEL' }],
+      details: { type: 'read' as const, format: 'PNG', truncated: false }
+    }
+
+    it.each([
+      ['text/plain', URL_, 'hello plain text', 'text/plain'],
+      ['JSON', URL_, '{"a":1}', 'application/json'],
+      [
+        'RSS',
+        URL_,
+        '<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title></channel></rss>',
+        'application/rss+xml'
+      ],
+      ['.ipynb', 'https://example.test/a.ipynb', '{"cells":[]}', 'application/json'],
+      ['%PDF', URL_, Buffer.from('%PDF-1.4\0 body'), 'application/pdf'],
+      ['PNG（readImage）', URL_, PNG, 'image/png']
+    ])('UF-C14 %s：不调 clean，不带 note', async (_name, url, body, type) => {
+      const clean = cleanTo(CLEANED)
+      const { convert } = spyConvert('# ok')
+      const readImage = vi.fn<UrlImageReader>(async () => SENTINEL)
+      const result = await readUrlContent(
+        url,
+        options(fetchSeq(respond(body, type)), { clean, convert, readImage })
+      )
+      expect(clean).not.toHaveBeenCalled()
+      expect(textOf(result)).not.toContain(CLEAN_NOTE)
+    })
+
+    it('UF-C15 404、两次 403（没有 render）：不调 clean', async () => {
+      const clean = cleanTo(CLEANED)
+      await expect(
+        readUrlContent(URL_, options(fetchSeq(respond('no', HTML, { status: 404 })), { clean }))
+      ).rejects.toThrow('HTTP 404')
+      await expect(
+        readUrlContent(
+          URL_,
+          options(
+            fetchSeq(respond('no', HTML, { status: 403 }), respond('no', HTML, { status: 403 })),
+            { clean }
+          )
+        )
+      ).rejects.toThrow('HTTP 403')
+      expect(clean).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('渲染出的网页', () => {
+    // 渲染那份不到 300 字会带「几乎没字」的 note：渲染赢的用例都给够 300 字
+    const FETCHED = page(500, 'a')
+    const RENDERED = page(1000, 'b')
+
+    it('UF-C16 两份都清理：先请求到的、再渲染的；渲染的那份赢，带 note', async () => {
+      const clean = vi.fn<UrlCleaner>(async (html) => ({
+        html: html === RENDERED ? CLEANED_R : CLEANED_F
+      }))
+      const { convert, bodies } = convertBy({
+        [CLEANED_F]: 'a'.repeat(300),
+        [CLEANED_R]: 'b'.repeat(400)
+      })
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(FETCHED, HTML)), {
+          clean,
+          convert,
+          render: async () => ({ html: RENDERED })
+        })
+      )
+      expect(clean).toHaveBeenCalledTimes(2)
+      expect(clean.mock.calls[0][0]).toBe(FETCHED)
+      expect(clean.mock.calls[1][0]).toBe(RENDERED)
+      expect(bodies).toEqual([CLEANED_F, CLEANED_R])
+      expect(textOf(result)).toBe(`${HEAD}${CLEAN_NOTE}${'b'.repeat(400)}`)
+    })
+
+    it('UF-C17 渲染的那份赢、它没清理（clean 回 null）：不带 note', async () => {
+      const clean = vi.fn<UrlCleaner>(async (html) =>
+        html === RENDERED ? null : { html: CLEANED_F }
+      )
+      const { convert } = convertBy({
+        [CLEANED_F]: 'a'.repeat(300),
+        [RENDERED]: 'b'.repeat(400)
+      })
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(FETCHED, HTML)), {
+          clean,
+          convert,
+          render: async () => ({ html: RENDERED })
+        })
+      )
+      expect(textOf(result)).toBe(`${HEAD}${'b'.repeat(400)}`)
+    })
+
+    it('UF-C18 请求到的那份赢（渲染的不多）、它清理过：带 note', async () => {
+      const clean = vi.fn<UrlCleaner>(async (html) => ({
+        html: html === RENDERED ? CLEANED_R : CLEANED_F
+      }))
+      const { convert } = convertBy({
+        [CLEANED_F]: 'a'.repeat(20),
+        [CLEANED_R]: 'b'.repeat(20)
+      })
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(FETCHED, HTML)), {
+          clean,
+          convert,
+          render: async () => ({ html: RENDERED })
+        })
+      )
+      expect(textOf(result)).toBe(`${HEAD}${CLEAN_NOTE}${'a'.repeat(20)}`)
+    })
+
+    it('UF-C19 比的是两份清理后的字：渲染原文 1000 字、清理后 150，请求到的清理后 200 → 用请求到的', async () => {
+      const clean = vi.fn<UrlCleaner>(async (html) => ({
+        html: html === RENDERED ? CLEANED_R : CLEANED_F
+      }))
+      const { convert, bodies } = convertBy({
+        [CLEANED_F]: 'a'.repeat(200),
+        [CLEANED_R]: 'b'.repeat(150),
+        [RENDERED]: 'b'.repeat(1000)
+      })
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(FETCHED, HTML)), {
+          clean,
+          convert,
+          render: async () => ({ html: RENDERED })
+        })
+      )
+      expect(bodies).not.toContain(RENDERED)
+      expect(textOf(result)).toBe(`${HEAD}${CLEAN_NOTE}${'a'.repeat(200)}`)
+    })
+
+    it('UF-C21 两次 403 + 渲染清理后够 300 字：用渲染的，带清理的 note，没有几乎没字的 note', async () => {
+      const clean = cleanTo(CLEANED_R)
+      const { convert } = convertBy({ [CLEANED_R]: 'b'.repeat(300) })
+      const result = await readUrlContent(
+        URL_,
+        options(
+          fetchSeq(respond('no', HTML, { status: 403 }), respond('no', HTML, { status: 403 })),
+          { clean, convert, render: async () => ({ html: RENDERED }) }
+        )
+      )
+      const text = textOf(result)
+      expect(text).toBe(`${HEAD}${CLEAN_NOTE}${'b'.repeat(300)}`)
+      expect(text).not.toContain(NOTE_START)
+      expect(clean).toHaveBeenCalledWith(RENDERED)
+    })
+  })
+
+  describe('中止', () => {
+    it('UF-C24 clean 永远不回，中止 → 恰好是中止错误，转换器没被调', async () => {
+      const controller = new AbortController()
+      let entered: () => void = () => {}
+      const started = new Promise<void>((r) => (entered = r))
+      const clean = vi.fn<UrlCleaner>(() => {
+        entered()
+        return new Promise(() => {})
+      })
+      const { convert } = spyConvert('# ok')
+      const pending = readUrlContent(
+        URL_,
+        options(fetchSeq(respond(page(500), HTML)), {
+          clean,
+          convert,
+          signal: controller.signal
+        })
+      )
+      await started
+      controller.abort()
+      await abortedExactly(pending)
+      expect(convert).not.toHaveBeenCalled()
+    })
+
+    it('UF-C25 中止之后 clean 抛错：中止错误（不当成「清理失败、用原文」）', async () => {
+      const controller = new AbortController()
+      const clean = vi.fn<UrlCleaner>(async () => {
+        controller.abort()
+        throw new Error('jsdom blew up')
+      })
+      const { convert } = spyConvert('# ok')
+      await abortedExactly(
+        readUrlContent(
+          URL_,
+          options(fetchSeq(respond(page(500), HTML)), {
+            clean,
+            convert,
+            signal: controller.signal
+          })
+        )
+      )
+      expect(convert).not.toHaveBeenCalled()
+    })
+
+    it('UF-C26 转换清理过的那份时中止（转出空的）：中止错误，不再转原文', async () => {
+      const controller = new AbortController()
+      const convert = vi.fn<UrlConverter>(async () => {
+        controller.abort()
+        return { markdown: '' }
+      })
+      await abortedExactly(
+        readUrlContent(
+          URL_,
+          options(fetchSeq(respond(page(500), HTML)), {
+            clean: cleanTo(CLEANED),
+            convert,
+            signal: controller.signal
+          })
+        )
+      )
+      expect(convert).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('真清理器 + 真转换器', () => {
+    it('UF-C28 导航、页脚去掉，标题和 note 在头里', async () => {
+      const html = `<!doctype html><html><head><title>T</title></head><body><nav><a href="/x">GONE-NAV</a></nav><article><h1>KEEP-TITLE</h1><p>${'a'.repeat(900)}</p></article><footer>GONE-FOOT</footer></body></html>`
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(html, HTML)), { clean: cleanMainContent })
+      )
+      const text = textOf(result)
+      expect(text.startsWith(`URL: ${URL_} — T — converted to Markdown\n\n${CLEAN_NOTE}`)).toBe(
+        true
+      )
+      expect(text).toContain('KEEP-TITLE')
+      expect(text).not.toContain('GONE-NAV')
+      expect(text).not.toContain('GONE-FOOT')
+    })
+
+    it('UF-C29 没有可删的页面：结果和不清理时一模一样', async () => {
+      const withClean = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(page(900), HTML)), { clean: cleanMainContent })
+      )
+      const without = await readUrlContent(URL_, options(fetchSeq(respond(page(900), HTML))))
+      expect(textOf(withClean)).toBe(textOf(without))
+    })
+
+    it('UF-C30 全页文字安全网触发：导航文字还在，不带 note', async () => {
+      const html = `<!doctype html><html><head><title>T</title></head><body><nav><span>${'n'.repeat(400)}</span></nav><div>short line</div></body></html>`
+      const result = await readUrlContent(
+        URL_,
+        options(fetchSeq(respond(html, HTML)), { clean: cleanMainContent })
+      )
+      const text = textOf(result)
+      expect(text).toContain('n'.repeat(400))
+      expect(text).not.toContain(CLEAN_NOTE)
     })
   })
 })
