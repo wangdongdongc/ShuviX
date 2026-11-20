@@ -44,11 +44,11 @@ import {
 import { parseLibraryLink } from '@shuvix/chat-protocol/fileLibrary'
 
 export const READ_DESCRIPTION =
-  "Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts it to Markdown; JSON, XML and other text come back as they are. Pages are loaded with ShuviX's browser, including the sites the user is signed in to there; one that still needs a login or a human check comes back refused or nearly empty until the user has opened it in ShuviX's browser and signed in or passed the check. For text files, returns content with line numbers (supports pagination via offset/limit); local HTML (.html/.htm) files are read as text source, not auto-converted. For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG)."
+  "Read a file, a directory or a web page (http/https URL). Text files come back with line numbers (page with offset/limit); a directory as a sorted list of entries. PDF, Word, Excel, PowerPoint and Jupyter notebooks are converted to Markdown; PNG, JPEG, GIF, WebP and BMP images come back as images. A web page is converted to Markdown (JSON, XML and other text come back as they are; a local .html file is read as source). Pages load with ShuviX's browser, including the sites the user is signed in to there; one that still needs a login or a human check comes back refused or nearly empty until the user has opened it in ShuviX's browser and signed in or passed the check."
 export const WRITE_DESCRIPTION =
-  "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
+  'Write a file: created if missing, overwritten if present. Parent directories are created.'
 export const EDIT_DESCRIPTION =
-  'Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.'
+  'Replace exact text in a file. `oldText` must match exactly, whitespace included.'
 
 /** 桌面 FileGuards —— 包 fileTime 的 per-session 读取时间 + 写锁 */
 function desktopGuards(sessionId: string): FileGuards {

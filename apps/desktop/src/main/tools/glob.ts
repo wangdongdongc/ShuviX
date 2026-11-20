@@ -38,7 +38,7 @@ const GlobParamsSchema = Type.Object({
 })
 
 const GLOB_DESCRIPTION =
-  'Fast file pattern matching tool that finds files by name/path patterns. Returns matching file paths sorted by modification time (most recent first). Respects .gitignore automatically. Use this when you need to find files by name patterns. For searching file contents, use the grep tool instead.'
+  'Find files by name or path pattern. Returns paths, most recently modified first; .gitignore is respected. To search file contents, use `grep`.'
 
 /** glob 工具 */
 export class GlobTool extends BaseTool<typeof GlobParamsSchema> {

@@ -34,7 +34,7 @@ export const AskParamsSchema = Type.Object({
 })
 
 export const ASK_DESCRIPTION =
-  'Present a question with clickable options to the user. When the user needs to choose between approaches, styles, configurations, or any decision point, use this tool so the options are clickable rather than written out as plain text. ' +
+  'Ask the user a question with clickable options. Use it whenever the user has to choose, instead of writing the options out in your reply. ' +
   'The user may tick one option or several, add words of their own to what they ticked, or answer only in their own words — how many to pick is their call, so do not tell them in the question, and write each option so it stands on its own. ' +
   'Be ready for a result that names more than one option, or that carries a note beside them.'
 

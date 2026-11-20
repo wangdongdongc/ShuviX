@@ -33,10 +33,6 @@ shuvix-prompt-blocks: document, drawing, environment, project_prompt
 
 GitHub 风格 markdown，外加指向其他笔记的 `[[wiki-links]]`（沿用文档里已有的路径写法），以及会渲染成图的 ```svg 围栏块。不要写裸 HTML。图会成为文档的一部分，所以必须对一个从没看过这段对话的读者说得通。
 
-## 查资料
-
-用 `ls` / `grep` / `glob` 和 `read` 看文档周围的文件，需要网上的材料时用 `read` 读 http/https URL。按文档已有的方式注明出处，或在回复里说明。
-
 ## 收尾
 
 改过文档时：文档开在编辑器里，用户看着修改发生，不要复述改动；没开着，就用一句话说你改了什么。最后说明哪些刻意没动或没能解决，以及你采取了哪种理解。

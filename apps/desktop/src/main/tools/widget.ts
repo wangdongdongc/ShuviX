@@ -126,18 +126,9 @@ export const WidgetParamsSchema = Type.Object({
   )
 })
 
-export const WIDGET_DESCRIPTION = `Build and change the user's widgets: small apps the user works in, each with its own records, a screen and an API. The widget skill says how.
+export const WIDGET_DESCRIPTION = `Build and change the user's widgets: small apps the user works in, each with its own records, a screen and an API. Load the widget skill before you build or change one: it explains every action.
 
-Actions:
-- "list": every widget, with its folder, storage, operations and whether this session may use it (none / read / read-write).
-- "create": scaffold a new widget (\`widget\` = its id, kebab-case with at least one dash; \`name\`, \`description\`) and build it once. This session may then use and change it, and edit its folder.
-- "build": build its screen and API after you edited its files; \`message\` says what changed (the build is committed).
-- "test": try one operation (\`widget\`, \`op\`, \`args\`). Everything it wrote is rolled back, and screen-only operations can be tried too. Wrong \`args\` show the operation's input schema.
-- "preview": screenshots of its screen at \`sizes\` in \`theme\`, plus the errors the page logged. It waits for the page's requests to finish, and for \`wait_for\` if given. The page's own calls run as this session.
-- "sql": run \`sql\` on its database — create tables, look at rows, fix data. \`legacy: true\` runs it on an older widget's data in the shared PostgreSQL database.
-- "export": package it as a standalone Vite project zip at \`path\`.
-- "open": open it in its own window, only when the user asks.
-Changing a widget (build, sql, testing a writing operation) needs this session's read-write permission for it; preview, export and testing a reading operation need read. The first use asks the user. If the user declines, do not look for another way in.
+Actions: "list" (every widget, its operations and whether this session may use it), "create", "build", "test" (runs one operation; everything it wrote is rolled back), "preview" (screenshots of its screen; \`wait_for\` for slow content), "sql", "export", "open" (only when the user asks). The first use of a widget asks the user. If the user declines, do not look for another way in.
 
 This tool does not use a widget for real. Once a widget is turned on for a session (in the extensions picker, or with \`tool_search\`), its operations are ordinary tools named mcp__widget-<id>__<operation>.`
 

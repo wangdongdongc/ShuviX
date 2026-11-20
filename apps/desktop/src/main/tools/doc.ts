@@ -82,7 +82,7 @@ const DOC_EDIT_DESCRIPTION = `Replace one passage of the shared document.
 - \`find\`: text that occurs exactly once in the current document, copied verbatim from doc_read (without the line-number prefix). If a short phrase repeats, include some of its surrounding text.
 - \`replace\`: the new text for that passage.
 
-When the document is open in an editor, the user sees a preview at that spot while you write this call, and the change lands in one step when it runs; if they are typing in that passage right then, the edit waits until they pause (up to about ten seconds). Keep each call to one passage; several focused edits read better than one sweeping rewrite.
+When the document is open in an editor, the user sees a preview at that spot while you write this call, and the change lands in one step when it runs; if they are typing in that passage right then, the edit waits until they pause (up to about ten seconds). Keep each call to one passage.
 
 If \`find\` no longer matches — usually because the user just changed that text — the call fails and tells you so: doc_read again and work from what is there now.`
 

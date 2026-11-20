@@ -391,20 +391,14 @@ export function backgroundParamDescription(parts: {
   answersInline: string
 }): string {
   return (
-    'Run the command as a background task bound to this session: it outlives this tool call ' +
-    'and has no timeout. Use for dev servers, watchers, and long builds. Returns a pid and a ' +
-    'log file path right away — deliberately without any output content. Before relying on ' +
-    'the task (e.g. requesting a dev server you just started), read that log with the read ' +
-    'tool to confirm it is ready, and read it again whenever you need the output (reading it ' +
-    `needs no approval); stop the task with \`${parts.stopHint}\`. ` +
-    `Write the command exactly as you would run it in the foreground: ${parts.noDetach} — ` +
-    'this option already detaches the process and captures stdout+stderr. Doing so makes ' +
-    'the tracked process exit immediately, which loses the real pid and leaves the task ' +
-    'untrackable and unstoppable. ' +
-    'The task has no stdin: reads see EOF immediately, exactly as in the foreground, and ' +
-    `neither you nor the user can send it input. Put any answers in the command itself (${parts.answersInline}). ` +
-    'If a command genuinely needs a person at a terminal (a password, a TTY-only prompt), do ' +
-    'not run it here or in the foreground — hand the user the exact command to run in their ' +
-    'own terminal instead.'
+    'Run the command as a background task of this session, with no timeout (dev servers, ' +
+    'watchers, long builds). Returns a pid and a log file path at once, with no output: ' +
+    '`read` the log to confirm the task is ready and whenever you need its output (no ' +
+    `approval needed); stop it with \`${parts.stopHint}\`. ` +
+    `Write the command as you would in the foreground: ${parts.noDetach} — the tracked ` +
+    'process would exit at once and the task could no longer be stopped. ' +
+    `The task has no stdin, so put any answers in the command itself (${parts.answersInline}). ` +
+    'A command that needs a person at a terminal (a password, a TTY-only prompt) cannot run ' +
+    'here or in the foreground: give the user the exact command to run in their own terminal.'
   )
 }

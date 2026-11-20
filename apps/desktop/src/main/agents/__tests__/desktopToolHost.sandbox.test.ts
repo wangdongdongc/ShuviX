@@ -80,7 +80,7 @@ const PLAN = {
   explain: vi.fn()
 } as unknown as SandboxPlan
 
-const BASE = 'Execute a bash command in the working directory.'
+const BASE = 'Run a bash command in the working directory.'
 
 const settled = (): unknown => ({
   kind: 'settled',

@@ -52,7 +52,7 @@ export function searchRejectedMessage(rgMessage: string): string {
 }
 
 const GREP_DESCRIPTION =
-  'Search file contents using regex patterns. Returns matching file paths, line numbers, and line text. Results respect .gitignore automatically. Use the include parameter to filter by file type. For searching file names instead of content, use the glob tool.'
+  'Search file contents by regex. Returns file paths, line numbers and line text; .gitignore is respected. To find files by name, use `glob`.'
 
 /** Grep 工具类 */
 export class GrepTool extends BaseTool<typeof GrepParamsSchema> {

@@ -38,7 +38,7 @@ const LsParamsSchema = Type.Object({
 })
 
 const LS_DESCRIPTION =
-  'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.'
+  'List the files and directories under a path as a tree; .gitignore is respected.'
 
 /** ls 工具 */
 export class ListTool extends BaseTool<typeof LsParamsSchema> {

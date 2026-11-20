@@ -256,7 +256,7 @@ describe('SC-1 schema 与描述跟着构造时的 pin 走', () => {
       ['command', 'description', 'run_in_background', 'timeout'].sort()
     )
     expect('dangerouslyDisableSandbox' in schema.properties).toBe(false)
-    expect(tool.description.startsWith('Execute a bash command')).toBe(true)
+    expect(tool.description.startsWith('Run a bash command')).toBe(true)
     expect(tool.description).not.toMatch(/sandbox/i)
   })
 

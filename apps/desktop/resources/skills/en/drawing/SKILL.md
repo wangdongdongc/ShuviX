@@ -1,6 +1,6 @@
 ---
 name: drawing
-description: "The contract and the craft for inline SVG figures — what a figure must keep to render at all (viewBox, color tokens, what gets stripped), picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, which diagrams to write as ```mermaid instead (flows with branches, sequences, state machines, entity relations, schedules) and their budget, mark specs, label and legend rules, the categorical/sequential/status palette, the look (type scale, two weights, category tints, lines, spacing, number formatting), interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), saving a figure as a standalone .svg file, and a catalog of what goes wrong. Load this before the first figure in a conversation, even a two-box sketch, and before writing a figure to a .svg file."
+description: "The contract and the craft for figures in ShuviX: inline ```svg figures (what one must keep to render at all), which diagrams to write as ```mermaid instead, interactive blocks where your system prompt describes them, and saving a figure as a standalone .svg file. Load this before the first figure in a conversation, even a two-box sketch, and before writing a figure to a .svg file."
 ---
 
 # Drawing figures

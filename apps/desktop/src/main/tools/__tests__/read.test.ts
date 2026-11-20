@@ -987,24 +987,19 @@ describe('read 工具 - 本地 HTML 原文', () => {
   it('RD-HTML-05 description 区分 URL、本地 HTML 与富文档转换', () => {
     const description = makeReadTool(ctx).description
 
-    expect(description).toMatch(/URLs \(http\/https\).*converts it to Markdown/i)
+    expect(description).toMatch(
+      /web page \(http\/https URL\)[\s\S]*A web page is converted to Markdown/i
+    )
     expect(description).toMatch(/text files[^;]*line numbers[^;]*offset\/limit/i)
 
-    const localHtmlClause = description.match(/local HTML[\s\S]*?(?=For directories|$)/i)?.[0]
-    expect(localHtmlClause).toBeDefined()
-    expect(localHtmlClause).toMatch(/\.html\/\.htm/i)
-    expect(localHtmlClause).toMatch(/text source/i)
-    expect(localHtmlClause).toMatch(/not auto-converted/i)
+    expect(description).toMatch(/a local \.html file is read as source/i)
 
-    const richFileDescription = description.match(/Supports PDF[^.]+\./i)?.[0]
+    const richFileDescription = description.match(/PDF[^;]+converted to Markdown/i)?.[0]
     expect(richFileDescription).toBeDefined()
-    for (const format of ['PDF', 'Word', 'Excel', 'PowerPoint', 'Jupyter Notebook']) {
+    for (const format of ['PDF', 'Word', 'Excel', 'PowerPoint', 'Jupyter notebooks']) {
       expect(richFileDescription).toContain(format)
     }
-    expect(richFileDescription).toMatch(/auto-converted to Markdown/i)
-
-    const withoutQualifiedHtmlRule = description.replace(localHtmlClause!, '')
-    expect(withoutQualifiedHtmlRule).not.toMatch(/HTML[^.;]*auto-converted/i)
+    expect(richFileDescription).not.toMatch(/HTML/i)
   })
 })
 
@@ -1302,7 +1297,7 @@ describe('read 工具 - URL 抓取', () => {
   it('RD-URL-13 description：文本原样返回；网页用 ShuviX 的浏览器载入，带着用户在那儿的登录', () => {
     const description = makeReadTool(ctx).description
     expect(description).toMatch(/JSON, XML and other text come back as they are/)
-    expect(description).toMatch(/Pages are loaded with ShuviX's browser/)
+    expect(description).toMatch(/Pages load with ShuviX's browser/)
     expect(description).toMatch(/including the sites the user is signed in to there/)
     expect(description).toMatch(
       /until the user has opened it in ShuviX's browser and signed in or passed the check/

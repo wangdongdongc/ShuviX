@@ -1061,13 +1061,11 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
   })
 
   it('REG-7 正文里 ` / ` 分隔的工具清单，都是该档案自己名单的子集', () => {
-    let checked = 0
     for (const language of LANGS) {
       for (const p of buildBuiltinProfiles({ ...ALL_PARAMS, language })) {
         for (const tokens of slashLists(p.systemPrompt)) {
           const tools = toolListOf(tokens)
           if (!tools) continue
-          checked += 1
           expect(
             tools.filter((t) => !p.tools.includes(t)),
             `${p.name}.${language}：${tokens.join(' / ')}`
@@ -1075,9 +1073,8 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
         }
       }
     }
-    // 语料自检：至少 notebook 三语里的 `ls` / `grep` / `glob`（共 3 处）被当成清单查过 —— 判据一个都没认出来时
-    // 上面那圈恒绿。chat / coding 的身份句清单随 2026-10-12 的精简删掉了；判据本身由 REG-7b 钉
-    expect(checked).toBeGreaterThanOrEqual(3)
+    // 内置正文里现在没有这种清单了（chat / coding 的随 2026-10-12 的精简删掉，notebook 的随
+    // 2026-11-19 删掉「查资料」一节）；这一圈防的是以后再写进来，判据本身由 REG-7b 钉
   })
 
   it('REG-7b 判据自检：身份句里残留 ssh / database / browser 的那种清单会被抓住，非工具的斜杠串不算清单', () => {

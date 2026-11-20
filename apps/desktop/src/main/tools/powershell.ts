@@ -25,8 +25,7 @@ import {
 } from './shellCommand'
 
 const PowerShellParamsSchema = shellCommandParamsSchema({
-  command:
-    'The PowerShell command to execute. Supports pipelines, redirects, and multiple statements. Avoid commands that require interactive input.',
+  command: 'The command. It gets no interactive input.',
   runInBackground: backgroundParamDescription({
     stopHint: stopCommandHint('powershell'),
     noDetach:
@@ -69,7 +68,7 @@ function powershellDescription(): string {
     "- A program whose path contains spaces needs the call operator: `& 'C:\\Program Files\\app\\app.exe' --flag`.",
     '- Commands that would ask for confirmation fail instead of waiting; pass `-Force` or `-Confirm:$false` when you mean it.',
     '- The exit code is 0 when the last statement succeeded and 1 otherwise; the exit code of a native program is in `$LASTEXITCODE` (end with `exit $LASTEXITCODE` when the exact code matters).',
-    'Use this for running scripts, installing packages, git operations, builds, etc. Prefer built-in tools over shell commands where one fits: `ls` instead of `Get-ChildItem`/`dir`, `grep` instead of `Select-String`, `glob` instead of `Get-ChildItem -Recurse -Filter`, `read` instead of `Get-Content`/`cat`, `write` instead of `Set-Content`/`Out-File`, `edit` instead of `-replace` rewrites. Use powershell when no built-in tool can accomplish the task.'
+    'Where a built-in tool fits, use it instead: `ls` for `Get-ChildItem`/`dir`, `grep` for `Select-String`, `glob` for `Get-ChildItem -Recurse -Filter`, `read` for `Get-Content`/`cat`, `write` for `Set-Content`/`Out-File`, `edit` for `-replace` rewrites.'
   ].join('\n')
 }
 

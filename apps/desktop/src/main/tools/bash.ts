@@ -22,8 +22,7 @@ import {
 
 function bashParamsSchema(sandboxed: boolean): ShellCommandParamsSchema {
   return shellCommandParamsSchema({
-    command:
-      'The shell command to execute. Supports pipes, redirects, and other bash features. Avoid commands that require interactive input.',
+    command: 'The command. It gets no interactive input.',
     runInBackground: backgroundParamDescription({
       stopHint: stopCommandHint('bash'),
       noDetach: 'do NOT append `&` and do NOT redirect the output yourself',
@@ -34,7 +33,7 @@ function bashParamsSchema(sandboxed: boolean): ShellCommandParamsSchema {
 }
 
 const BASH_DESCRIPTION =
-  'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. Prefer built-in tools over shell commands where one fits: `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Use bash when no built-in tool can accomplish the task.'
+  'Run a bash command in the working directory. Where a built-in tool fits, use it instead: `ls` for `find`/`ls`, `grep` for `grep`/`rg`, `glob` for `find -name`, `read` for `cat`/`head`/`tail`, `write` for `echo >`, `edit` for `sed`/`awk`.'
 
 /**
  * 沙箱启用时追加的说明。写给模型：沙箱只给简单命令用，稍复杂的直接到沙箱外跑、交给自动审查。

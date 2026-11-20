@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "How to build, change, export and debug ShuviX Widgets — small React apps the user reopens from the Widget panel, each with its own SQLite database and an API that its screen and agents share: the widget tool's building actions, defining the API in api.ts, calling it from the screen with shuvix/widget, the libraries a widget can import (icons, charts, CSV, dates, Markdown, drag and drop, long lists, search, diffs, QR codes, YAML, code highlighting, 3D), reading files on the user's computer in a way that also works when ShuviX is used from a browser, the design guide for the panel, a wide window and a phone, checking the layout with screenshots, and upgrading an older widget. Load this when the user asks for a widget, mini app, 小工具 or 小组件, or a small tool they will come back to, and before changing or debugging an existing widget."
+description: "How to build, change, export and debug ShuviX Widgets — small React apps the user reopens from the Widget panel, each with its own database and an API shared by its screen and agents. Load this when the user asks for a widget, mini app, 小工具 or 小组件, or a small tool they will come back to, and before changing or debugging an existing widget."
 ---
 
 # ShuviX Widgets

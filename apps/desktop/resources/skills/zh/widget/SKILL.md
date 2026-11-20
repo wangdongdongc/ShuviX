@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "如何构建、修改、导出和调试 ShuviX 小组件（widget）—— 用户从「Widget 面板」反复打开的 React 小应用，每个都有自己的 SQLite 数据库，以及一套由它的界面和智能体共用的 API：widget 工具的构建类动作、在 api.ts 里定义 API、在界面里用 shuvix/widget 调用它、小组件能 import 的库（图标、图表、CSV、日期、Markdown、拖拽、长列表、搜索、文本对比、二维码、YAML、代码高亮、3D）、以从浏览器使用 ShuviX 时也能工作的方式读取用户电脑上的文件、面板、宽窗口和手机三处的设计指南、用截图检查排版，以及升级旧的小组件。用户要一个 widget、mini app、小工具或小组件，或者一个会反复回来用的小工具时加载它；修改或调试已有的小组件之前也要加载。"
+description: "如何构建、修改、导出和调试 ShuviX 小组件（widget）—— 用户从「Widget 面板」反复打开的 React 小应用，每个都有自己的数据库，以及一套由界面和智能体共用的 API。用户要一个 widget、mini app、小工具或小组件，或者一个会反复回来用的小工具时加载它；修改或调试已有的小组件之前也要加载。"
 ---
 
 # ShuviX 小组件
