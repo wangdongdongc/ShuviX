@@ -11,6 +11,8 @@ import {
   writeSessionFile
 } from '../services/filePreviewService'
 import { openFileInWindow, type OpenFileParams } from '../services/previewWindowService'
+import { copyImageFile, saveImageFile, type ImageFileParams } from '../services/imageFileActions'
+import { webContentsOf } from './ipcAdapter'
 import { listSessionArtifacts } from '../services/artifacts/listing'
 import {
   readArtifactForRef,
@@ -52,6 +54,11 @@ export function registerFilesHandlers(): void {
   })
   // 在独立窗口里打开文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；不支持预览的不响应）
   defineHandler('files:open', (_ctx, params: OpenFileParams) => openFileInWindow(params))
+  // 看图层的复制 / 另存为（桌面：页面拿不到 shuvix-preview:// 的字节，交主进程做）
+  defineHandler('files:copyImage', (_ctx, params: ImageFileParams) => copyImageFile(params))
+  defineHandler('files:saveImage', (ctx, params: ImageFileParams) =>
+    saveImageFile(params, webContentsOf(ctx))
+  )
   defineHandler(
     'files:write',
     (ctx, params: { sessionId: string; path: string; content: string }) => {

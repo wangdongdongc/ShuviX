@@ -699,7 +699,9 @@ export function LivePreviewEditor({
       // 文件库里的一件：发预览信号（宿主按 id 找到文件，开预览窗口；web 开新标签页）
       const library = parseLibraryLink(url)
       if (library) {
-        useChatStore.getState().requestFilePreview(libraryRef(library.itemId))
+        useChatStore
+          .getState()
+          .requestFilePreview(libraryRef(library.itemId), 'user', library.fileName)
         return
       }
       if (!sessionId || !isRelativeFileLink(url)) {

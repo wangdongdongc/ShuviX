@@ -29,6 +29,7 @@ import {
   type EventRecorder
 } from '../../harness/seed'
 import {
+  imageViewerPane,
   chatPane,
   filePreviewWindowImages,
   sidebarPane,
@@ -388,11 +389,19 @@ describe('模型收到的那张图', () => {
       expect(block.result ?? '').not.toContain(head)
     })
 
-    it('点缩略图：同一路径在独立的文件预览窗口里打开（既有的预览信号）', async () => {
+    it('点缩略图：当前窗口的看图层里看同一路径的图（不开预览窗口）；「在独立窗口打开」再开窗', async () => {
       await chat.setToolRowExpanded(0, true)
       await chat.waitToolImages(1)
       await chat.clickToolImage(0)
-      // 窗口按真实路径开（/tmp → /private/tmp 之类的写法差异由主进程 realpath 抹平）
+      const viewer = imageViewerPane(app.main)
+      const v = await viewer.waitLoaded((s) => s.naturalWidth === 40, 'image decoded in the viewer')
+      expect(v.naturalHeight).toBe(24)
+      expect(v.name).toBe('small.png')
+      expect(decodeURIComponent(v.src)).toContain(smallPng())
+      expect(await app.filePreviewWindows()).toEqual([])
+      // 还想要独立窗口：顶栏的按钮（窗口按真实路径开，/tmp → /private/tmp 由主进程 realpath 抹平）
+      await viewer.action('open')
+      await viewer.waitClosed()
       const real = realpathSync(smallPng())
       const win = await until(() => app.connectFilePreviewWindow(real), 'file preview window')
       try {

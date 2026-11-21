@@ -1311,6 +1311,14 @@ declare global {
         path: string
         openedBy?: 'agent' | 'user'
       }) => Promise<import('@shuvix/chat-protocol/types/filePreview').FileOpenResult>
+      /** 看图层：把图复制进系统剪贴板（桌面专属） */
+      copyImage: (params: { sessionId: string; path: string; name?: string }) => Promise<boolean>
+      /** 看图层：另存为对话框（桌面专属） */
+      saveImage: (params: {
+        sessionId: string
+        path: string
+        name?: string
+      }) => Promise<'saved' | 'cancelled' | 'failed'>
       write: (params: {
         sessionId: string
         path: string

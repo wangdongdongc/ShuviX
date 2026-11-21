@@ -6,8 +6,8 @@
  *   WA-1 app:open-settings：`#settings/<tab>`（带上当前 pathname），没给 / 空 / 非字符串 → `#settings`；回 {success:true}
  *   WA-2 app:open-external：http / https / mailto 用归一后的 href 在新标签页（noopener,noreferrer）开、回 {success:true}；
  *        javascript / file / data / ftp / 自定义协议 / 不是 URL / 空 / undefined → {success:false}，open 不调
- *   WA-3 webDesktopOnlyChannels：桌面专属表减去本地实现（剩 3 条：悬浮窗两条、保存框）；
- *        {} → 24；只认自有属性
+ *   WA-3 webDesktopOnlyChannels：桌面专属表减去本地实现（剩 5 条：悬浮窗两条、保存框、看图层的复制 / 另存（web 客户端页面自己读字节，不调它们））；
+ *        {} → 26；只认自有属性
  *   WA-4 本地实现的每个键都是桌面专属键、也是通道表里的 invoke 通道（服务端反正会拒它们）
  *   WA-5 createWebApi：platform 'web'、sync 的成员就是连接 sync 的那几个函数；命名空间 = 表 + events / liveDoc / knowledge / sync；
  *        liveDoc.respond / knowledge.baseOptions 的打包；两次 events.subscribe 只挂一个 app:event 监听
@@ -141,10 +141,16 @@ describe('WA-2 app:open-external', () => {
 })
 
 describe('WA-3 webDesktopOnlyChannels', () => {
-  it('WA-3 减去本地实现：剩 3 条', () => {
+  it('WA-3 减去本地实现：剩 5 条', () => {
     const set = webDesktopOnlyChannels(webLocalHandlers(fakeWin))
     expect([...set].sort()).toStrictEqual(
-      ['pinChat:focus', 'pinChat:pin', 'widget:pickExportTarget'].sort()
+      [
+        'files:copyImage',
+        'files:saveImage',
+        'pinChat:focus',
+        'pinChat:pin',
+        'widget:pickExportTarget'
+      ].sort()
     )
     expect(set.has('browser-view:open-window')).toBe(false)
     expect(set.has('browser-view:open-settings')).toBe(false)
@@ -154,11 +160,11 @@ describe('WA-3 webDesktopOnlyChannels', () => {
     expect(set.has('app:open-external')).toBe(false)
   })
 
-  it('WA-3 {} → 24；只认自有属性', () => {
-    expect(webDesktopOnlyChannels({}).size).toBe(24)
+  it('WA-3 {} → 26；只认自有属性', () => {
+    expect(webDesktopOnlyChannels({}).size).toBe(26)
     const inherited = webDesktopOnlyChannels(Object.create({ 'app:open-folder': () => {} }))
     expect(inherited.has('app:open-folder')).toBe(true)
-    expect(inherited.size).toBe(24)
+    expect(inherited.size).toBe(26)
   })
 })
 

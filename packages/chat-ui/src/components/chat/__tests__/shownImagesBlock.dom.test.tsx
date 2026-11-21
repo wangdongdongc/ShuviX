@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 /**
  * 摆给用户看的图（`ShownImagesBlock` / `ShownImageView`，`show_image` 工具，docs/show-image-design.md §5；jsdom）。
- * 图的地址经注入的 mediaUrl seam 取（引用 `shown:<快照文件名>`），点图走 requestFilePreview（有原图开原图）。
+ * 图的地址经注入的 mediaUrl seam 取（引用 `shown:<快照文件名>`），点图在看图层里看（有原图看原图，一个块里的图是一组）。
  *
  *   SIB-1  单张：一个 `[data-shown-images]`、一个 `figure[data-shown-image=<file>]`；src 来自解析器
  *          （`(SID, 'shown:<file>', mimeType)`）；`loading="lazy"`；尺寸已知时 `aspect-ratio: W / H`；alt = 说明，
  *          没有说明取源路径的文件名，源路径为空取「Image」；只有带说明才有 figcaption；悬停提示含「点开看原图」与源路径
  *   SIB-2  多张：按序；compact 密度网格有 `@[36rem]:grid-cols-3`，touch 没有；网格里的格子不带 aspect-ratio
  *   SIB-3  `items: []` → 什么都不画
- *   SIB-4  点图：`filePreviewRequest.absPath === 'shown:' + (original ?? file)`、`openedBy 'user'`；再点 nonce 加一；
+ *   SIB-4  点图：看图层打开整块的图（`path` / `openPath` = `'shown:' + (original ?? file)`），从点中的那张开始；再点重新打开；
  *          不冒泡到父级的 onClick（提议卡片里点图不是采纳）
  *   SIB-5  快照没了：img 触发 error → 按钮换成 `[data-shown-image-missing]`「This image is no longer available」，
  *          说明照样在
@@ -39,6 +39,7 @@ import { AssistantBubble } from '../AssistantBubble'
 import { MediaUrlProvider, type ResolveMediaUrl } from '../../../host/mediaUrl'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 import { useChatStore } from '../../../stores/chatStore'
+import { useImageViewerStore } from '../../../stores/imageViewerStore'
 import { assistant, resetStore, text, toolBlock } from '../../../__tests__/support/views'
 
 declare global {
@@ -219,7 +220,8 @@ describe('SIB-3 空', () => {
 // ─── SIB-4 / SIB-5 / SIB-6 / SIB-8 ─────────────────────────
 
 describe('SIB-4 点图', () => {
-  it('SIB-4 有原图开原图；再点 nonce 加一；父级 onClick 收不到', async () => {
+  it('SIB-4 一个块的图是一组、有原图看原图；再点重新打开；父级 onClick 收不到', async () => {
+    useImageViewerStore.getState().close()
     const parentClick = vi.fn()
     await mount(
       createElement(
@@ -233,21 +235,19 @@ describe('SIB-4 点图', () => {
     )
     const buttons = [...container.querySelectorAll<HTMLButtonElement>('figure button')]
     await act(async () => buttons[0]!.click())
-    expect(useChatStore.getState().filePreviewRequest).toStrictEqual({
-      absPath: `shown:${HASH_B}.png`,
-      nonce: 1,
-      openedBy: 'user'
-    })
-    await act(async () => buttons[0]!.click())
-    expect(useChatStore.getState().filePreviewRequest?.nonce).toBe(2)
-
-    // 没有原图：开卡片显示的那份
+    const first = useImageViewerStore.getState()
+    expect(first.images.map((i) => [i.sessionId, i.path, i.openPath])).toEqual([
+      [SID, `shown:${HASH_B}.png`, `shown:${HASH_B}.png`],
+      // 没有原图：看卡片显示的那份
+      [SID, `shown:${HASH_C}.png`, `shown:${HASH_C}.png`]
+    ])
+    expect(first.index).toBe(0)
+    const nonce = first.nonce
     await act(async () => buttons[1]!.click())
-    expect(useChatStore.getState().filePreviewRequest).toStrictEqual({
-      absPath: `shown:${HASH_C}.png`,
-      nonce: 3,
-      openedBy: 'user'
-    })
+    expect(useImageViewerStore.getState().index).toBe(1)
+    expect(useImageViewerStore.getState().nonce).toBe(nonce + 1)
+    expect(useChatStore.getState().filePreviewRequest).toBeNull()
+    useImageViewerStore.getState().close()
     expect(parentClick).not.toHaveBeenCalled()
   })
 })

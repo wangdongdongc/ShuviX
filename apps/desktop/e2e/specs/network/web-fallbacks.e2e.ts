@@ -41,6 +41,7 @@ import {
   type WebClientHandle
 } from '../../harness/networkFixtures'
 import {
+  imageViewerPane,
   chatPane,
   filePreviewWindowImages,
   filePreviewWindowShot,
@@ -409,24 +410,22 @@ describe('network access phase D: what the web client does instead of the deskto
     expect([shot.naturalWidth, shot.naturalHeight]).toEqual([40, 24])
     expect(shot.complete).toBe(true)
 
-    // 点缩略图 → 新标签页里的预览（同一个页面，按 hash 渲染）
+    // 点缩略图 → 页面自己的看图层（不开新标签页，2026-11-20）：图经同一条 HTTP 路由
     const previewPrefix = `http://127.0.0.1:${P}/#file-preview?`
+    const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
     await chat.clickToolImage(0)
-    const imageTab = await openedTab(
-      (u) => u.startsWith(previewPrefix) && hashParams(u).get('path') === smallPng,
-      'a #file-preview tab for small.png'
+    const viewer = imageViewerPane(webPage())
+    const v = await viewer.waitLoaded(
+      (s) => s.naturalWidth === 40,
+      'small.png decoded in the viewer'
     )
-    const params = hashParams(imageTab.url)
-    expect({
-      sessionId: params.get('sessionId'),
-      path: params.get('path'),
-      openedBy: params.get('openedBy')
-    }).toStrictEqual({ sessionId: sids.chat, path: smallPng, openedBy: 'user' })
-    const imgs = await until(async () => {
-      const list = await filePreviewWindowImages(imageTab.page)
-      return list.some((i) => i.path === smallPng && i.naturalWidth === 40) ? list : null
-    }, 'small.png decoded in the preview tab')
-    expect(imgs.find((i) => i.path === smallPng)?.naturalHeight).toBe(24)
+    expect(v.naturalHeight).toBe(24)
+    expect(v.src.startsWith(`/files/preview?session=${encodeURIComponent(sids.chat)}&path=`)).toBe(
+      true
+    )
+    await viewer.action('close')
+    await viewer.waitClosed()
+    expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
     // 服务端那台电脑上什么窗口都没开
     expect(await app.filePreviewWindows()).toEqual([])
     expect(await app.markdownWindows()).toEqual([])
@@ -460,7 +459,6 @@ describe('network access phase D: what the web client does instead of the deskto
     expect(await app.filePreviewWindows()).toEqual([])
     expect(await app.markdownWindows()).toEqual([])
 
-    await closeTab(imageTab.id)
     await closeTab(mdTab.id)
   }, 120_000)
 

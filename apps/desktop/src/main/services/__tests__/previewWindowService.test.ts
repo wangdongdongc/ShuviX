@@ -66,6 +66,11 @@
  *           会话已删照样开；在回收站或不存在的 id → false、不开窗
  *   W-LIB-2 库里的 .md 开只读预览窗口，不进协作编辑的 md 窗口；对照：普通 notes.md 仍交给 openMarkdownFile；
  *           未初始化时库里的 md → false，也不交给 openMarkdownFile
+ *
+ * resolveOpenTarget（打开文件与看图层的复制 / 另存共用的解析）：
+ *   RO-1 库里的一件 → {库文件, library:true}（会话没了也一样）；回收站 / 不存在的 id → {<库根>/.missing, library:true}；
+ *        合法 shown: 引用 → 快照路径、library:false（会话没了也一样）；相对路径 + 活会话 → <工作目录>/<路径>；
+ *        相对路径 + 会话没了 / 没有工作目录 → null；绝对路径 + 会话没了 → 原路径
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -991,5 +996,46 @@ describe('W-LIB 文件库的引用', () => {
     expect(await open(`library:${LIB_MD}`)).toBe(false)
     expect(fx.openMarkdownFile).not.toHaveBeenCalled()
     expect(windows()).toHaveLength(0)
+  })
+
+  it('RO-1 resolveOpenTarget：库引用 / shown: 引用 / 相对 / 绝对', () => {
+    const missing = join(libHome, '.shuvix', 'library', 'files', '.missing')
+    expect(service.resolveOpenTarget({ sessionId: LIVE, path: `library:${LIB_PNG}` })).toEqual({
+      absolute: libFile(LIB_PNG, 'shot.png'),
+      library: true
+    })
+    expect(service.resolveOpenTarget({ sessionId: GONE, path: `library:${LIB_PNG}` })).toEqual({
+      absolute: libFile(LIB_PNG, 'shot.png'),
+      library: true
+    })
+    for (const id of [LIB_TRASHED, LIB_MISSING]) {
+      expect(service.resolveOpenTarget({ sessionId: LIVE, path: `library:${id}` }), id).toEqual({
+        absolute: missing,
+        library: true
+      })
+    }
+
+    for (const sid of [LIVE, GONE]) {
+      expect(
+        service.resolveOpenTarget({ sessionId: sid, path: `shown:${SHOWN_PNG}` }),
+        sid
+      ).toEqual({
+        absolute: shownPath(sid, SHOWN_PNG),
+        library: false
+      })
+    }
+
+    expect(service.resolveOpenTarget({ sessionId: LIVE, path: 'dir/a.txt' })).toEqual({
+      absolute: p('dir', 'a.txt'),
+      library: false
+    })
+    expect(service.resolveOpenTarget({ sessionId: GONE, path: 'dir/a.txt' })).toBeNull()
+    fx.getById.mockImplementation((id) => (id === 'sid-nowd' ? {} : undefined))
+    expect(service.resolveOpenTarget({ sessionId: 'sid-nowd', path: 'dir/a.txt' })).toBeNull()
+
+    expect(service.resolveOpenTarget({ sessionId: GONE, path: p('dir', 'a.txt') })).toEqual({
+      absolute: p('dir', 'a.txt'),
+      library: false
+    })
   })
 })

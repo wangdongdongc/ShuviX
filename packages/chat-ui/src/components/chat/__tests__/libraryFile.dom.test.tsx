@@ -4,7 +4,7 @@
  * 走生产的 MarkdownText；判定表在 utils/rehypeLibraryLinks.test.ts。
  *
  *   LF-1 图片直接显示：地址来自 mediaUrl seam（按 `library:<id>` 取），DOM 里没有 shuvix:// 地址，不走「点击加载」
- *   LF-2 点图片开预览
+ *   LF-2 点图片：在看图层里看（openImageViewer），不再发预览请求
  *   LF-3 加载失败显示“文件已删除”；地址变了再试
  *   LF-4 没有 resolver：只有占位，不抛
  *   LF-5 文件 chip：按钮、图标、文字、悬停说明；点了开预览，不冒泡、不跳转，DOM 里没有 href
@@ -20,6 +20,7 @@ vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
 import { MediaUrlProvider, type ResolveMediaUrl } from '../../../host/mediaUrl'
 import { useChatStore } from '../../../stores/chatStore'
+import { useImageViewerStore } from '../../../stores/imageViewerStore'
 import { MarkdownText } from '../markdownComponents'
 
 declare global {
@@ -117,13 +118,17 @@ describe('LF-1..4 · 库里的图片', () => {
     expect(img.hasAttribute('title')).toBe(false)
   })
 
-  it('LF-2 点图片：请求预览 library:<id>，openedBy 是 user', async () => {
+  it('LF-2 点图片：看图层打开这一张（库引用、alt 作名字），不发预览请求', async () => {
+    useImageViewerStore.getState().close()
     await show(`![Chart](shuvix://file/${ID}/c.png)`)
     click(imgs()[0])
-    expect(useChatStore.getState().filePreviewRequest).toMatchObject({
-      absPath: REF,
-      openedBy: 'user'
-    })
+    const viewer = useImageViewerStore.getState()
+    expect(viewer.images).toEqual([
+      { sessionId: 'library', path: REF, name: 'Chart', openPath: REF }
+    ])
+    expect(viewer.index).toBe(0)
+    expect(useChatStore.getState().filePreviewRequest).toBeNull()
+    viewer.close()
   })
 
   it('LF-3 加载失败：换成“文件已删除”的占位；resolver 给了新地址就重新显示图片', async () => {

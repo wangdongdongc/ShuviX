@@ -85,6 +85,25 @@ export interface OpenFileParams {
   openedBy?: 'agent' | 'user'
 }
 
+/**
+ * 一条会话里的路径或引用 → 绝对路径：`library:` 引用按 id 找库里那件（`library` 为真），`shown:` 引用找会话自己的
+ * 快照，其余按会话工作目录解析。相对路径而会话没有工作目录 → null。打开文件与看图层的复制 / 另存共用它。
+ */
+export function resolveOpenTarget(params: {
+  sessionId: string
+  path: string
+}): { absolute: string; library: boolean } | null {
+  const library = libraryPathOfRef(params.path)
+  if (library) return { absolute: library, library: true }
+  // 摆给用户看的图（`shown:` 引用）：会话自己的快照目录里那一份
+  const shown = shownImagePathOfRef(params.sessionId, params.path)
+  if (shown) return { absolute: shown, library: false }
+  const workingDirectory = sessionService.getById(params.sessionId)?.workingDirectory
+  // 相对路径只有会话的工作目录能解
+  if (!isAbsolute(params.path) && !workingDirectory) return null
+  return { absolute: resolveReadPath(params.path, workingDirectory ?? ''), library: false }
+}
+
 const OPENED: FileOpenResult = { opened: true }
 const UNREADABLE: FileOpenResult = { opened: false, reason: 'unreadable' }
 
@@ -117,16 +136,12 @@ export async function openFileInWindow(params: OpenFileParams): Promise<FileOpen
   }
   // 文件库里的一件（`library:` 引用）：按 id 找到当前版本。md 也只开只读预览 —— 库里的文件按内容去重，
   // 在协作编辑窗口里改了它，同一份内容的其他引用也跟着变
-  const library = libraryPathOfRef(params.path)
-  // 摆给用户看的图（`shown:` 引用）：会话自己的快照目录里那一份，解成绝对路径再照常开窗
-  const shown = library ?? shownImagePathOfRef(params.sessionId, params.path)
-  const workingDirectory = sessionService.getById(params.sessionId)?.workingDirectory
-  // 相对路径只有会话的工作目录能解；会话没了又给的是相对路径 → 解不出来，不响应
-  if (!shown && !isAbsolute(params.path) && !workingDirectory) {
+  const target = resolveOpenTarget(params)
+  if (!target) {
     log.warn(`会话没有工作目录，无法解析相对路径，忽略: ${params.path}`)
     return UNREADABLE
   }
-  const absolute = shown ?? resolveReadPath(params.path, workingDirectory ?? '')
+  const { absolute, library } = target
 
   const path = canonicalPath(absolute)
   // 是不是 md 两头都认（与 md 窗口同口径）：点的是 `notes.md`，或它链到一个 md

@@ -1171,6 +1171,14 @@ export interface HostApi {
       path: string
       openedBy?: 'agent' | 'user'
     }) => Promise<FileOpenResult>
+    /** 看图层：把图复制进这台电脑的剪贴板（桌面专属；web 客户端页面自己读字节） */
+    copyImage?: (params: { sessionId: string; path: string; name?: string }) => Promise<boolean>
+    /** 看图层：另存为对话框（桌面专属） */
+    saveImage?: (params: {
+      sessionId: string
+      path: string
+      name?: string
+    }) => Promise<'saved' | 'cancelled' | 'failed'>
     write: (params: {
       sessionId: string
       path: string

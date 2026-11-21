@@ -534,6 +534,8 @@ export const API_TABLE = {
     unwatch: invoke('files:unwatch', 1),
     read: invoke('files:read', 1),
     open: invoke('files:open', 1),
+    copyImage: invoke('files:copyImage', 1),
+    saveImage: invoke('files:saveImage', 1),
     write: invoke('files:write', 1)
   },
   /** 文件库 */
@@ -597,6 +599,8 @@ export const DESKTOP_ONLY_CHANNELS: Readonly<Record<string, string>> = {
   'knowledge:openFolder': 'opens the system file manager on this computer',
   'knowledge:revealFile': 'opens the system file manager on this computer',
   'files:open': 'opens a preview / markdown window on this computer',
+  'files:copyImage': "writes this computer's clipboard",
+  'files:saveImage': 'native save dialog on this computer',
   'widgetWindow:open': 'opens a widget window on this computer',
   'widgetWindow:status': "reports this computer's widget windows, which a browser does not have",
   'widgetWindow:setPreferWindow': "remembers this computer's window-or-panel choice for a widget",

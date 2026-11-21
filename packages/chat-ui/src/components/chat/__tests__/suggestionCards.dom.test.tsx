@@ -23,7 +23,7 @@
  *   C-10 带图那条：文字右边的缩略图位 `[data-suggestion-thumb-slot]` 里有 `[data-suggestion-image]`，里面是
  *        `figure[data-shown-image=<file>]`；位置在文字（标题、要发的话）之后、采纳按钮之前；没带图的、null / 坏项那一格
  *        都没有图
- *   C-11 点图：不采纳；`filePreviewRequest` = `'shown:' + (original ?? file)`；采纳按钮照样可点
+ *   C-11 点图：不采纳；看图层打开这一张（`'shown:' + (original ?? file)`）；采纳按钮照样可点
  *   C-12 以文字为主、每条一行（2026-11-01 用户裁决，取代并排）：卡片总是竖排（`space-y-1.5`，没有 grid / `@container`）；
  *        一组里有图就**每行**都留一个定宽、随行高的缩略图位（compact `min-h-16 w-24`，touch `min-h-14 w-20`，`self-stretch`，
  *        文字多时一起变高、下方不留白；真实尺寸见 e2e chat-show-image E-4），没图的那行空着；图绝对定位铺满这个位置、
@@ -61,6 +61,7 @@ import { assistant, resetStore, text, toolBlock } from '../../../__tests__/suppo
 import { MediaUrlProvider, type ResolveMediaUrl } from '../../../host/mediaUrl'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 import { useChatStore } from '../../../stores/chatStore'
+import { useImageViewerStore } from '../../../stores/imageViewerStore'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -528,13 +529,14 @@ describe('带图的提议（C-10 … C-15）', () => {
     const imageButton = imageOf(cards()[1]!)!.querySelector<HTMLButtonElement>('button')!
     await click(imageButton)
     expect(accept).not.toHaveBeenCalled()
-    expect(useChatStore.getState().filePreviewRequest).toStrictEqual({
-      absPath: `shown:${HASH_C}.png`,
-      nonce: 1,
-      openedBy: 'user'
-    })
+    expect(useImageViewerStore.getState().images.map((i) => i.path)).toEqual([
+      `shown:${HASH_C}.png`
+    ])
     await click(imageOf(cards()[0]!)!.querySelector<HTMLButtonElement>('button')!)
-    expect(useChatStore.getState().filePreviewRequest?.absPath).toBe(`shown:${HASH_A}.png`)
+    expect(useImageViewerStore.getState().images.map((i) => i.path)).toEqual([
+      `shown:${HASH_A}.png`
+    ])
+    useImageViewerStore.getState().close()
     expect(accept).not.toHaveBeenCalled()
     expect(buttons()).toHaveLength(3)
     expect(buttons().every((b) => !b.disabled)).toBe(true)

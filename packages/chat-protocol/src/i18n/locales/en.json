@@ -2210,5 +2210,23 @@
     "missing": "File not found",
     "directory": "This is a folder",
     "unreadable": "Couldn't open this file"
+  },
+  "imageViewer": {
+    "close": "Close",
+    "previous": "Previous image",
+    "next": "Next image",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to window",
+    "actualSize": "Actual size",
+    "copy": "Copy image",
+    "copied": "Copied",
+    "copyFailed": "Couldn't copy the image",
+    "download": "Download",
+    "share": "Share",
+    "openInWindow": "Open in a separate window",
+    "counter": "{{index}} / {{total}}",
+    "failed": "Couldn't load this image",
+    "image": "Image"
   }
 }

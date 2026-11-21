@@ -438,6 +438,8 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'files:unwatch': 'read',
   'files:read': 'read', // 宿主不限路径：网络客户端读的位置另过 path 点位（files / read）
   'files:open': 'write',
+  'files:copyImage': 'write', // 写这台电脑的剪贴板
+  'files:saveImage': 'write', // 另存为对话框 + 写文件
   'files:write': 'write', // 也能写到注册表目录里的 md：网络客户端写的位置另过 path 点位（files / write）
 
   // ─── library：文件库 ───

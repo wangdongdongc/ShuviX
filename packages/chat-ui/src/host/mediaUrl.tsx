@@ -64,12 +64,18 @@ export function useResolveMediaUrl(): ResolveMediaUrl | null {
  * 解析媒体/PDF 资源 URL。未就绪返回 null（调用方显示占位/loading）。
  * 异步来源(blob)在 path/session 变化或卸载时自动 revoke，避免内存泄漏。
  */
-export function useMediaUrl(sessionId: string, path: string, mimeType?: string): string | null {
+export function useMediaUrl(
+  sessionId: string,
+  path: string,
+  mimeType?: string,
+  /** false = 不解析（调用方手里已有地址，hook 又不能按条件调用） */
+  enabled = true
+): string | null {
   const resolve = useContext(MediaUrlContext)
   const [url, setUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!resolve) {
+    if (!resolve || !enabled) {
       setUrl(null) // eslint-disable-line react-hooks/set-state-in-effect
       return
     }
@@ -91,7 +97,7 @@ export function useMediaUrl(sessionId: string, path: string, mimeType?: string):
       cancelled = true
       revoke?.()
     }
-  }, [resolve, sessionId, path, mimeType])
+  }, [resolve, sessionId, path, mimeType, enabled])
 
   return url
 }

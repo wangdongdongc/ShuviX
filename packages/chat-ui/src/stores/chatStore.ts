@@ -266,7 +266,13 @@ interface ChatState {
    * 其余可预览的 → 预览窗口，不支持预览的不响应）。
    * 含 nonce 以便重复请求同一文件也能触发（值变化）。
    */
-  filePreviewRequest: { absPath: string; nonce: number; openedBy: 'agent' | 'user' } | null
+  filePreviewRequest: {
+    absPath: string
+    nonce: number
+    openedBy: 'agent' | 'user'
+    /** 文件名提示：`library:` 引用自己看不出是不是图，链接里带了名字就交上来（宿主据此决定用不用看图层） */
+    name?: string
+  } | null
   /**
    * 请求在后台任务面板里亮出某条任务的信号（对话流里那张工具卡的行尾状态被点了）。
    *
@@ -461,7 +467,7 @@ interface ChatState {
   setActiveSessionId: (id: string | null) => void
   /** 请求打开某文件预览（绝对路径）；笔记本 [[wiki-link]] / Files 面板点击触发。
    *  openedBy 缺省 'user'。 */
-  requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
+  requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user', name?: string) => void
   /** 请求在后台任务面板里亮出某条任务（工具卡行尾状态点击触发） */
   revealTask: (taskId: string) => void
   revealArtifact: (sessionId: string, name: string) => void
@@ -939,9 +945,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       usedContextTokens: view?.context.usedTokens ?? null
     })
   },
-  requestFilePreview: (absPath, openedBy = 'user') =>
+  requestFilePreview: (absPath, openedBy = 'user', name) =>
     set((state) => ({
-      filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1, openedBy }
+      filePreviewRequest: {
+        absPath,
+        nonce: (state.filePreviewRequest?.nonce ?? 0) + 1,
+        openedBy,
+        ...(name ? { name } : {})
+      }
     })),
   revealTask: (taskId) =>
     set((state) => ({

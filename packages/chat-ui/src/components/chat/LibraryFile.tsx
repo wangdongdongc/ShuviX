@@ -13,6 +13,7 @@ import { FileText, ImageOff } from 'lucide-react'
 import { libraryRef } from '@shuvix/chat-protocol/fileLibrary'
 import { useMediaUrl } from '../../host/mediaUrl'
 import { useChatStore } from '../../stores/chatStore'
+import { openImageViewer } from '../../stores/imageViewerStore'
 
 /** 交给 mediaUrl seam 的会话参数（库引用不按会话解析，宿主只要求非空） */
 const LIBRARY_MEDIA_SESSION = 'library'
@@ -46,7 +47,16 @@ export function LibraryImage({ item, alt }: { item: string; alt?: string }): Rea
       data-library-image={item}
       title={alt || undefined}
       onError={() => setFailedUrl(url)}
-      onClick={() => openItem(item)}
+      onClick={() =>
+        openImageViewer([
+          {
+            sessionId: LIBRARY_MEDIA_SESSION,
+            path: libraryRef(item),
+            name: alt || t('imageViewer.image'),
+            openPath: libraryRef(item)
+          }
+        ])
+      }
       className="max-w-full cursor-zoom-in rounded"
     />
   )

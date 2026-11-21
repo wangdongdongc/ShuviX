@@ -5,6 +5,7 @@ import type { ShownImage } from '@shuvix/chat-protocol/types/chatMessage'
 import { useMediaUrl, useResolveMediaUrl } from '../../host/mediaUrl'
 import { useChatDensity } from '../../host/chatHostContext'
 import { useChatStore } from '../../stores/chatStore'
+import { openImageViewer, type ViewerImage } from '../../stores/imageViewerStore'
 
 /**
  * agent 摆给用户看的图（`show_image` 调用，docs/show-image-design.md §5）—— 画在助手卡片里它被调用的位置，默认就显示
@@ -15,18 +16,26 @@ import { useChatStore } from '../../stores/chatStore'
  *    React state；引用是 `shown:<快照文件名>`，宿主到会话自己的快照目录里找。
  *  - **内存**：卡片显示的是展示副本（大图宿主已缩到长边 2048），`loading="lazy"`，列表本身也是虚拟化的。
  *
- * 点图走 requestFilePreview（有原图就开原图）：桌面开独立预览窗口，web 客户端开新标签页。
+ * 点图在当前窗口的看图层里看（有原图就看原图），一个 show_image 里的几张是一组，← → 翻（2026-11-20）。
  *
  * 宿主没注入 mediaUrl seam（Chrome 侧栏）就取不到图：调用方先看 `useResolveMediaUrl()`，没有就照普通工具行显示
  * （StepGroupView）；提议卡片里的图则干脆不画（ShownImageView 交回 null）。
  */
 export function ShownImagesBlock({ items }: { items: ShownImageItem[] }): React.JSX.Element | null {
   const touch = useChatDensity() === 'touch'
+  const sessionId = useChatStore((s) => s.activeSessionId)
   if (items.length === 0) return null
+  const group = items.map((item) => viewerImageOf(item.image, sessionId ?? '', item.caption))
   if (items.length === 1) {
     return (
       <div data-shown-images className="my-2">
-        <ShownImageView image={items[0].image} caption={items[0].caption} variant="single" />
+        <ShownImageView
+          image={items[0].image}
+          caption={items[0].caption}
+          variant="single"
+          group={group}
+          index={0}
+        />
       </div>
     )
   }
@@ -35,11 +44,31 @@ export function ShownImagesBlock({ items }: { items: ShownImageItem[] }): React.
       <div className={`grid gap-2 grid-cols-2 ${touch ? '' : '@[36rem]:grid-cols-3'}`}>
         {/* 按下标作 key：快照按内容去重，同一张图摆两次文件名相同 */}
         {items.map((item, index) => (
-          <ShownImageView key={index} image={item.image} caption={item.caption} variant="tile" />
+          <ShownImageView
+            key={index}
+            image={item.image}
+            caption={item.caption}
+            variant="tile"
+            group={group}
+            index={index}
+          />
         ))}
       </div>
     </div>
   )
+}
+
+/** 一张摆给用户的图 → 看图层里的一张（看原图；名字是来源文件名，有说明就带上） */
+function viewerImageOf(image: ShownImage, sessionId: string, caption?: string): ViewerImage {
+  const ref = shownImageRef(image.original ?? image.file)
+  const name = image.source.split(/[\\/]/).pop() || image.file
+  return {
+    sessionId,
+    path: ref,
+    mimeType: image.mimeType,
+    name: caption ? `${name} · ${caption}` : name,
+    openPath: ref
+  }
 }
 
 /** 图的显示形态：单张（列宽内、高度封顶）/ 网格里的一格 / 提议卡片右边的缩略图位（铺满那个位置） */
@@ -63,11 +92,16 @@ const IMG_CLASS: Record<ShownImageVariant, string> = {
 export function ShownImageView({
   image,
   caption,
-  variant
+  variant,
+  group,
+  index = 0
 }: {
   image: ShownImage
   caption?: string
   variant: ShownImageVariant
+  /** 同组的图（← → 翻）；不给 = 只看这一张 */
+  group?: ViewerImage[]
+  index?: number
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
@@ -99,7 +133,7 @@ export function ShownImageView({
       onClick={(e) => {
         // 提议卡片里：点图是看图，不是采纳
         e.stopPropagation()
-        useChatStore.getState().requestFilePreview(shownImageRef(image.original ?? image.file))
+        openImageViewer(group ?? [viewerImageOf(image, sessionId ?? '', caption)], index)
       }}
     >
       <img

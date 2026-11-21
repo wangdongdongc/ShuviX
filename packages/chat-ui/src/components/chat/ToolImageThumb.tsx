@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { ToolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
 import { useMediaUrl } from '../../host/mediaUrl'
 import { useChatStore } from '../../stores/chatStore'
+import { imageNameOf, openImageViewer } from '../../stores/imageViewerStore'
 
 /**
  * 工具卡片里「模型收到的那张图」的内联展示。
@@ -20,8 +21,7 @@ import { useChatStore } from '../../stores/chatStore'
  * 见 ToolResultImage）。缩略图是同一份文件的 CSS 缩放，点开是同一份文件的原尺寸 ——
  * 用户不会看到比模型更清楚的画面。
  *
- * 点击走 requestFilePreview：与 Files 面板点文件、笔记本 [[wiki-link]]
- * 同一条信号，宿主开独立预览窗口，不必另写 lightbox。
+ * 点击在当前窗口的看图层里看（ImageViewer，2026-11-20 起不再开独立预览窗口；那里还能点「在独立窗口打开」）。
  */
 export function ToolImageThumb({ image }: { image: ToolResultImage }): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -53,7 +53,16 @@ export function ToolImageThumb({ image }: { image: ToolResultImage }): React.JSX
         }
         className="max-h-40 max-w-full w-auto rounded border border-border-secondary/50 object-contain cursor-zoom-in"
         onError={() => setFailed(true)}
-        onClick={() => useChatStore.getState().requestFilePreview(image.path)}
+        onClick={() =>
+          openImageViewer([
+            {
+              sessionId,
+              path: image.path,
+              name: imageNameOf(image.path),
+              openPath: image.path
+            }
+          ])
+        }
       />
     </div>
   )

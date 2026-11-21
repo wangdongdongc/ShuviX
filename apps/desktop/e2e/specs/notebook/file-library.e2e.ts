@@ -76,6 +76,7 @@ import {
 } from '../../harness/seed'
 import { syncProbe, type SyncProbe } from '../../harness/sync'
 import {
+  imageViewerPane,
   libraryTimelinePane,
   notebookEditorPane,
   sidebarPane,
@@ -881,8 +882,14 @@ describe('file library L1', () => {
       expect(await timeline.empty()).toBe(false)
       expect(await timeline.count()).not.toBe('')
 
-      // 点文件 → 预览窗口开的是库目录里那份
+      // 点图 → 当前窗口的看图层（库引用，不开窗）；顶栏「在独立窗口打开」→ 预览窗口开的是库目录里那份
       await timeline.clickFile(p3Id)
+      const viewer = imageViewerPane(app.main)
+      const viewed = await viewer.waitLoaded(undefined, 'library image in the viewer')
+      expect(decodeURIComponent(viewed.src)).toContain(`library:${p3Id}`)
+      expect(await app.filePreviewWindows()).toEqual([])
+      await viewer.action('open')
+      await viewer.waitClosed()
       const win = await until(
         () => app.connectFilePreviewWindow(p3Id),
         'preview window for the library image'

@@ -5,6 +5,7 @@ import { copyToClipboard } from '../../utils/clipboard'
 import type { UserTextMessage } from '../../stores/chatStore'
 import { segmentContent, resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
+import { openImageViewer } from '../../stores/imageViewerStore'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
 import { OriginBadge, originTone } from './OriginBadge'
 import { SuggestionOriginTag } from './SuggestionCards'
@@ -111,12 +112,29 @@ export const UserBubble = memo(function UserBubble({
       {msg.metadata?.images && msg.metadata.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-2">
           {msg.metadata.images.map((img, idx) => (
-            <img
+            <button
               key={idx}
-              src={imageSrc(img)}
-              alt={t('message.attachment', { index: idx + 1 })}
-              className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain"
-            />
+              type="button"
+              data-user-image={idx}
+              className="block cursor-zoom-in rounded-lg"
+              onClick={() => {
+                const images = msg.metadata?.images ?? []
+                openImageViewer(
+                  images.map((im, i) => ({
+                    src: imageSrc(im),
+                    mimeType: im.mimeType,
+                    name: t('message.attachment', { index: i + 1 })
+                  })),
+                  idx
+                )
+              }}
+            >
+              <img
+                src={imageSrc(img)}
+                alt={t('message.attachment', { index: idx + 1 })}
+                className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain"
+              />
+            </button>
           ))}
         </div>
       )}

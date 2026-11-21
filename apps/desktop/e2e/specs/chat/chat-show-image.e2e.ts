@@ -51,8 +51,8 @@ import {
 } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
+  imageViewerPane,
   chatPane,
-  filePreviewWindowImages,
   shownImagesPane,
   sidebarPane,
   suggestionsPane,
@@ -368,25 +368,24 @@ describe('show_image：摆给用户看的图', () => {
     expect(await shown.cardRows(a2Id)).toStrictEqual({ rows: ['shownImages'], answerAfter: true })
   }, 120_000)
 
-  it('E-3 点 E-1 那张图 → 按快照的真实路径开出预览窗口，解码出原图尺寸', async () => {
+  it('E-3 点 E-1 那张图 → 当前窗口的看图层里看那张快照（不开预览窗口），解码出原图尺寸', async () => {
     await shown.scrollConversation('top')
     const figures = await shown.waitLoaded(1, (f) => f.msgId === a1Id)
     const index = figures.findIndex((f) => f.msgId === a1Id)
     expect(index).toBeGreaterThanOrEqual(0)
     expect(await shown.click(index)).toBe(true)
 
-    const real = realpathSync(join(shownDirOf(sid), chartFile))
-    const win = await until(() => app.connectFilePreviewWindow(real), 'file preview window')
-    try {
-      const imgs = await until(async () => {
-        const list = await filePreviewWindowImages(win)
-        return list.some((i) => i.path === real && i.naturalWidth === 40) ? list : null
-      }, 'snapshot decoded in the preview window')
-      expect(imgs.find((i) => i.path === real)?.naturalHeight).toBe(24)
-    } finally {
-      await win.eval('window.close()').catch(() => undefined)
-      win.close()
-    }
+    const viewer = imageViewerPane(app.main)
+    const v = await viewer.waitLoaded(
+      (s) => s.naturalWidth === 40,
+      'snapshot decoded in the viewer'
+    )
+    expect(v.variant).toBe('desktop')
+    expect(v.naturalHeight).toBe(24)
+    expect(decodeURIComponent(v.src)).toContain(`shown:${chartFile}`)
+    expect(await app.filePreviewWindows()).toEqual([])
+    await viewer.action('close')
+    await viewer.waitClosed()
   }, 60_000)
 
   it('E-4 带图的提议：快照、模型看到「(with image)」、每条一行、缩略图位逐行对齐并随行高；点图只是看图', async () => {
@@ -488,22 +487,20 @@ describe('show_image：摆给用户看的图', () => {
       await app.main.send('Emulation.clearDeviceMetricsOverride')
     }
 
-    // 点第二张卡的图：开出那张快照的预览窗口，什么都不发
+    // 点第二张卡的图：看图层里看那张快照，什么都不发
     const requestsBefore = provider.chatRequestCount()
     const userCountBefore = msgs.filter((m) => m.role === 'user').length
     await shown.scrollConversation('bottom')
     expect(await cards.clickImage(1)).toBe(true)
-    const real = realpathSync(join(shownDirOf(sid), layoutFiles[1]!))
-    const win = await until(() => app.connectFilePreviewWindow(real), 'preview window for layout B')
-    try {
-      await until(async () => {
-        const list = await filePreviewWindowImages(win)
-        return list.some((i) => i.path === real && i.naturalWidth === 32) ? list : null
-      }, 'layout B snapshot decoded in the preview window')
-    } finally {
-      await win.eval('window.close()').catch(() => undefined)
-      win.close()
-    }
+    const viewer = imageViewerPane(app.main)
+    const v = await viewer.waitLoaded(
+      (s) => s.naturalWidth === 32,
+      'layout B snapshot decoded in the viewer'
+    )
+    expect(decodeURIComponent(v.src)).toContain(`shown:${layoutFiles[1]}`)
+    expect(await app.filePreviewWindows()).toEqual([])
+    await viewer.action('close')
+    await viewer.waitClosed()
     await sleep(500)
     expect(provider.chatRequestCount()).toBe(requestsBefore)
     expect((await listMessages()).filter((m) => m.role === 'user')).toHaveLength(userCountBefore)

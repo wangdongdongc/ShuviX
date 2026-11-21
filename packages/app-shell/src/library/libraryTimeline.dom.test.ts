@@ -9,7 +9,9 @@
  *   TL-112…114  图片是缩略图、别的是一行（扩展名、显示名、关系 · 大小）；大小与关系的写法
  *   TL-116/117  一组里的图全部排出来，没有 +N
  *   TL-118/119  文件不在了：data-missing、不画图；图加载失败同样
- *   TL-121      点文件 → requestFilePreview('library:<id>')
+ *   TL-121      点缩略图 → 看图层打开这一组的图（openImageViewer，点中的那张）；点文件行 → requestFilePreview('library:<id>')；
+ *               不在了的图不进组，点它照旧 requestFilePreview
+ *   TL-127      缩略图定宽 72px，网格 `repeat(auto-fill, 72px)`：面板变宽只多排几张（2026-11-20 用户裁定）
  *   TL-122/123  搜索（文件名、会话标题）；件数按不同的文件数、不随搜索变
  *   TL-124…126  可见时才取、每次重新可见都重取；library.changed 只在可见时重取
  *   TL-127…129  取失败：第一次 → 空页；之后 → 留着原来的；宿主没有 library → 空页
@@ -43,6 +45,7 @@ const store = vi.hoisted(() => ({
   /** useAppEvent 最近一次登记的处理函数，按事件名 */
   handlers: {} as Record<string, () => void>,
   requestFilePreview: (_path: string): void => {},
+  openImageViewer: (_images: unknown[], _index?: number): void => {},
   mediaUrl: (_session: string, path: string): string | null => `media://${path}`
 }))
 
@@ -52,6 +55,7 @@ vi.mock('@shuvix/chat-ui', () => ({
     store.handlers[type] = handler
   },
   useChatStore: { getState: () => ({ requestFilePreview: store.requestFilePreview }) },
+  openImageViewer: (images: unknown[], index?: number) => store.openImageViewer(images, index),
   useMediaUrl: (session: string, path: string) => store.mediaUrl(session, path)
 }))
 
@@ -70,6 +74,7 @@ let container: HTMLDivElement
 let root: Root
 let timeline: ReturnType<typeof vi.fn<() => Promise<LibraryTimelineResult>>>
 let preview: ReturnType<typeof vi.fn<(path: string) => void>>
+let viewer: ReturnType<typeof vi.fn<(images: unknown[], index?: number) => void>>
 
 function entry(
   n: number,
@@ -191,6 +196,8 @@ beforeEach(() => {
   store.hostApi = { library: { timeline } }
   store.handlers = {}
   store.requestFilePreview = preview
+  viewer = vi.fn()
+  store.openImageViewer = viewer
   store.mediaUrl = (_session, path) => `media://${path}`
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -295,7 +302,7 @@ describe('文件：缩略图与行', () => {
         entry(5, 'S1', { kind: 'document', name: 'notes.md' })
       ])
     )
-    const grid = $('.grid.grid-cols-4', groupEl('S1'))
+    const grid = $('[data-timeline-thumbs]', groupEl('S1'))
     const thumbs = $$('[data-timeline-file]', grid)
     expect(thumbs.map((t) => t.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON'])
     expect(thumbs.map((t) => $<HTMLImageElement>('img', t).getAttribute('src'))).toEqual(
@@ -401,11 +408,41 @@ describe('文件：缩略图与行', () => {
     expect($$('img', fileEl(2))).toHaveLength(1)
   })
 
-  it('TL-121 点缩略图、点行：各开一次那件的预览', async () => {
-    await show(result([entry(1, 'S1'), entry(2, 'S1', { kind: 'pdf' })]))
-    act(() => fileEl(1).click())
+  it('TL-121 点缩略图：看图层打开这一组的图（点中的那张）；点行：开那件的预览', async () => {
+    await show(result([entry(1, 'S1'), entry(3, 'S1'), entry(2, 'S1', { kind: 'pdf' })]))
+    act(() => fileEl(3).click())
+    expect(viewer).toHaveBeenCalledTimes(1)
+    const [images, index] = viewer.mock.calls[0] as [Array<Record<string, unknown>>, number]
+    expect(images.map((i) => i.path)).toEqual([`library:${ID(1)}`, `library:${ID(3)}`])
+    expect(images.map((i) => i.name)).toEqual(['img-1.png', 'img-3.png'])
+    expect(images[0]).toMatchObject({ sessionId: 'library', openPath: `library:${ID(1)}` })
+    expect(index).toBe(1)
+    expect(preview).not.toHaveBeenCalled()
     act(() => fileEl(2).click())
-    expect(preview.mock.calls).toEqual([[`library:${ID(1)}`], [`library:${ID(2)}`]])
+    expect(preview.mock.calls).toEqual([[`library:${ID(2)}`]])
+  })
+
+  it('TL-121 不在了的图不进组：点它照旧请求预览（给出「文件不存在」）', async () => {
+    await show(result([entry(1, 'S1'), entry(2, 'S1', { missing: true }), entry(3, 'S1')]))
+    act(() => fileEl(2).click())
+    expect(viewer).not.toHaveBeenCalled()
+    expect(preview.mock.calls).toEqual([[`library:${ID(2)}`]])
+    act(() => fileEl(3).click())
+    const [images, index] = viewer.mock.calls[0] as [Array<Record<string, unknown>>, number]
+    expect(images.map((i) => i.path)).toEqual([`library:${ID(1)}`, `library:${ID(3)}`])
+    expect(index).toBe(1)
+  })
+
+  it('TL-127 缩略图定宽 72px；网格按 72px 一格自动排列（面板宽只决定一行几张）', async () => {
+    await show(result([entry(1, 'S1'), entry(2, 'S1')]))
+    const grid = $<HTMLElement>('[data-timeline-thumbs]', groupEl('S1'))
+    expect(grid.style.gridTemplateColumns).toBe('repeat(auto-fill, 72px)')
+    for (const n of [1, 2]) {
+      const el = fileEl(n) as HTMLElement
+      expect(el.style.width).toBe('72px')
+      expect(el.style.height).toBe('72px')
+      expect(el.className).not.toContain('aspect-square')
+    }
   })
 })
 

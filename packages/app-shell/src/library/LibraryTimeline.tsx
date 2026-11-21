@@ -10,7 +10,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileQuestion, ImageOff, NotebookText, MessageSquare, Search } from 'lucide-react'
-import { getHostApi, useAppEvent, useChatStore, useMediaUrl } from '@shuvix/chat-ui'
+import {
+  getHostApi,
+  openImageViewer,
+  useAppEvent,
+  useChatStore,
+  useMediaUrl,
+  type ViewerImage
+} from '@shuvix/chat-ui'
 import {
   groupLibraryTimeline,
   libraryRef,
@@ -53,7 +60,32 @@ function openFile(itemId: string): void {
   useChatStore.getState().requestFilePreview(libraryRef(itemId))
 }
 
-function Thumb({ entry, hint }: { entry: LibraryTimelineEntry; hint: string }): React.JSX.Element {
+/**
+ * 缩略图边长（CSS px）。固定大小（2026-11-20 用户裁定）：面板变宽只多排几张，不把每张放大；
+ * 网格用 `repeat(auto-fill, THUMB_PX)`。
+ */
+export const TIMELINE_THUMB_PX = 72
+
+/** 一组里的图 → 看图层的一组（文件库的引用不按会话解析） */
+function viewerImagesOf(entries: LibraryTimelineEntry[]): ViewerImage[] {
+  return entries.map((e) => ({
+    sessionId: LIBRARY_MEDIA_SESSION,
+    path: libraryRef(e.item.id),
+    mimeType: e.item.mime,
+    name: e.item.name,
+    openPath: libraryRef(e.item.id)
+  }))
+}
+
+function Thumb({
+  entry,
+  hint,
+  onOpen
+}: {
+  entry: LibraryTimelineEntry
+  hint: string
+  onOpen: () => void
+}): React.JSX.Element {
   const url = useMediaUrl(LIBRARY_MEDIA_SESSION, libraryRef(entry.item.id))
   const [failed, setFailed] = useState(false)
   const broken = entry.missing || failed
@@ -65,8 +97,9 @@ function Thumb({ entry, hint }: { entry: LibraryTimelineEntry; hint: string }): 
       data-missing={broken ? '' : undefined}
       title={hint}
       aria-label={hint}
-      onClick={() => openFile(entry.item.id)}
-      className="relative aspect-square overflow-hidden rounded-md bg-bg-tertiary flex items-center justify-center"
+      onClick={onOpen}
+      style={{ width: TIMELINE_THUMB_PX, height: TIMELINE_THUMB_PX }}
+      className="relative overflow-hidden rounded-md bg-bg-tertiary flex items-center justify-center cursor-zoom-in"
     >
       {broken || !url ? (
         <ImageOff size={18} className="text-text-tertiary" aria-hidden="true" />
@@ -163,9 +196,26 @@ function Group({
         />
       )}
       {images.length > 0 && (
-        <div className="grid grid-cols-4 gap-1.5">
+        <div
+          data-timeline-thumbs=""
+          className="grid gap-1.5"
+          style={{ gridTemplateColumns: `repeat(auto-fill, ${TIMELINE_THUMB_PX}px)` }}
+        >
           {images.map((entry) => (
-            <Thumb key={entry.item.id} entry={entry} hint={hintOf(entry)} />
+            <Thumb
+              key={entry.item.id}
+              entry={entry}
+              hint={hintOf(entry)}
+              onOpen={() => {
+                // 不在了的那张不进组：点它照旧走打开（给出「文件不存在」的提示）
+                if (entry.missing) {
+                  openFile(entry.item.id)
+                  return
+                }
+                const present = images.filter((e) => !e.missing)
+                openImageViewer(viewerImagesOf(present), present.indexOf(entry))
+              }}
+            />
           ))}
         </div>
       )}

@@ -17159,3 +17159,74 @@ export function libraryTimelinePane(main: CdpClient): LibraryTimelinePane {
     empty: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-timeline-empty]')`)
   }
 }
+
+// ─── 看图层（chat-ui ImageViewer，2026-11-20）──────────────────────────────────────────────
+//
+// 点一张图在当前窗口叠一层看：根 `[data-image-viewer=desktop|touch]`（挂在 body 上），图 `[data-image-viewer-image]`，
+// 顶栏名字 `[data-image-viewer-name]`（只有桌面样式有）、第几张 `[data-image-viewer-counter]`，按钮
+// `[data-image-viewer-action=zoom-out|zoom-in|copy|download|open|close]`，翻页 `[data-image-viewer-nav=prev|next]`，
+// 缩略图条 `[data-image-viewer-thumb=<i>]`。
+
+export interface ImageViewerShot {
+  variant: string
+  /** 顶栏的名字（手机样式没有 → ''） */
+  name: string
+  /** 「2 / 3」；一组只有一张 → '' */
+  counter: string
+  src: string
+  naturalWidth: number
+  naturalHeight: number
+  /** 图解码完了 */
+  loaded: boolean
+  /** 顶栏上有哪些按钮（DOM 序） */
+  actions: string[]
+  thumbs: number
+}
+
+export interface ImageViewerPane {
+  /** 看图层此刻的样子；没开 → null */
+  shot(): Promise<ImageViewerShot | null>
+  /** 等它开着、图解码完（且满足 `ok`），交回那一刻的样子 */
+  waitLoaded(ok?: (s: ImageViewerShot) => boolean, what?: string): Promise<ImageViewerShot>
+  /** 点顶栏的一个按钮；没有这个按钮抛错 */
+  action(name: string): Promise<void>
+  /** 等它关掉 */
+  waitClosed(): Promise<void>
+}
+
+export function imageViewerPane(client: CdpClient): ImageViewerPane {
+  const shot = (): Promise<ImageViewerShot | null> =>
+    client.eval<ImageViewerShot | null>(`(() => {
+      const root = document.querySelector('[data-image-viewer]')
+      if (!root) return null
+      const img = root.querySelector('[data-image-viewer-image]')
+      return {
+        variant: root.getAttribute('data-image-viewer') ?? '',
+        name: root.querySelector('[data-image-viewer-name]')?.textContent ?? '',
+        counter: root.querySelector('[data-image-viewer-counter]')?.textContent ?? '',
+        src: img?.getAttribute('src') ?? '',
+        naturalWidth: img?.naturalWidth ?? 0,
+        naturalHeight: img?.naturalHeight ?? 0,
+        loaded: !!img && img.complete && img.naturalWidth > 0,
+        actions: [...root.querySelectorAll('[data-image-viewer-action]')].map((b) => b.getAttribute('data-image-viewer-action') ?? ''),
+        thumbs: root.querySelectorAll('[data-image-viewer-thumb]').length
+      }
+    })()`)
+  return {
+    shot,
+    waitLoaded: (ok, what = 'image viewer loaded') =>
+      until(async () => {
+        const s = await shot()
+        return s && s.loaded && (!ok || ok(s)) ? s : null
+      }, what),
+    action: async (name) => {
+      const ok = await client.eval<boolean>(
+        `(() => { const b = document.querySelector('[data-image-viewer-action=${JSON.stringify(name)}]'); if (!b) return false; b.click(); return true })()`
+      )
+      if (!ok) throw new Error(`no image viewer action ${name}`)
+    },
+    waitClosed: async () => {
+      await until(async () => ((await shot()) === null ? true : null), 'image viewer closed')
+    }
+  }
+}

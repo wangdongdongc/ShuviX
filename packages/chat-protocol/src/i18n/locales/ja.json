@@ -2210,5 +2210,23 @@
     "missing": "ファイルが見つかりません",
     "directory": "これはフォルダーです",
     "unreadable": "このファイルを開けません"
+  },
+  "imageViewer": {
+    "close": "閉じる",
+    "previous": "前の画像",
+    "next": "次の画像",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "fit": "ウィンドウに合わせる",
+    "actualSize": "実際のサイズ",
+    "copy": "画像をコピー",
+    "copied": "コピーしました",
+    "copyFailed": "画像をコピーできません",
+    "download": "ダウンロード",
+    "share": "共有",
+    "openInWindow": "別ウィンドウで開く",
+    "counter": "{{index}} / {{total}}",
+    "failed": "この画像を読み込めません",
+    "image": "画像"
   }
 }
