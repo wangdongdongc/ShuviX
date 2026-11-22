@@ -31,8 +31,8 @@ import {
 let app: E2EApp
 let projectId: string
 
-/** work 基座独有的两处锚点（chat 的 body 两者皆无 —— 两份 body 工具面相同，差异全在文案） */
-const WORK_ANCHORS = ['Handing work to a sub-session', 'create-sub-session']
+/** work 基座独有的锚点（chat 的 body 没有 —— 两份 body 工具面相同，差异只剩身份句里这半句） */
+const WORK_ANCHORS = ["working in the user's project"]
 /** coding 正文独有的一句（work / chat 都没有它；三份共用的「Working style」段不能用）—— 「戳没被读」的反向锚点 */
 const CODING_ANCHOR = 'working as a software engineer'
 const PINNED = 'e2e-pinned'

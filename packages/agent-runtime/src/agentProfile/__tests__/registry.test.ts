@@ -406,15 +406,15 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'skill'
     ])
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual(SHARED_BASE_TOOLS)
-    // 这是裁决过的形态：两个基座工具面完全相同，「自己干活 / 把活交给 coding 子会话」
-    // 全靠正文表达（下面那条钉的就是正文差异）。谁想靠收窄 work 的工具来"强制"它
-    // 派活，会在这里撞红 —— 那等于让主会话连验收都做不了。
+    // 这是裁决过的形态：两个基座工具面完全相同，差异全靠正文表达（2026-11-22 起两者
+    // 都自己干活，work 只多一句「在用户的项目里」）。谁想靠收窄工具来表达分工，会在这里撞红。
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual(profile(WORK_PROFILE_NAME).tools)
   })
 
-  it('三语 body 都不含任何派发/子会话引导 —— 拆分的唯一产品差异就是这段文案', () => {
-    // 工具面逐字相同，「自己干活 / 把活交出去」全靠正文表达，而文案没有类型。
-    // 既有用例只断言了 work 点名 coding，没有一条断言 chat **不**点名它。
+  it('三语 chat / work body 都不含任何派发/子会话引导', () => {
+    // 2026-11-22 用户裁决：work 不再主动引导用子会话完成工作（实测把活交给 coding 子会话
+    // 通过率不变、token 与耗时却翻倍）。子会话怎么用只由 session 工具描述教；正文再点名
+    // coding / 子会话动作，就把「拆活、派活、验收」的倾向带回来了。
     const HANDOFF = [
       'coding',
       'create-sub-session',
@@ -425,14 +425,13 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'ディスパッチ'
     ]
     for (const language of LANGS) {
-      const body = profile(CHAT_PROFILE_NAME, language).systemPrompt
-      for (const term of HANDOFF) {
-        expect(body, `chat.${language} 不应出现 ${term}`).not.toContain(term)
-      }
-      // 对照组：同一批词在 work 里是必须有的（否则这条用例可能只是在测一份空 body）
-      const work = profile(WORK_PROFILE_NAME, language).systemPrompt
-      for (const term of ['`coding`', 'create-sub-session', 'prompt-session']) {
-        expect(work, `work.${language} 需点名 ${term}`).toContain(term)
+      for (const name of [CHAT_PROFILE_NAME, WORK_PROFILE_NAME]) {
+        const body = profile(name, language).systemPrompt
+        // 防空 body：两份都还有「做事方式」一节（确认破坏性操作的 `ask`）
+        expect(body, `${name}.${language}`).toContain('`ask`')
+        for (const term of [...HANDOFF, 'prompt-session', 'agent_profile']) {
+          expect(body, `${name}.${language} 不应出现 ${term}`).not.toContain(term)
+        }
       }
     }
   })
@@ -480,23 +479,6 @@ describe('基座名单钉板', () => {
   })
 })
 
-describe('work body 与 session 工具的动作枚举', () => {
-  it('三语都逐字点名正文用到的两个动作与一个参数名（改名后三份 md 会静默失效）', () => {
-    // 正文点名的动作名必须与工具对得上 —— 硬编码钉住，事实源在
-    // apps/desktop/src/main/tools/session.ts 的 ACTIONS 与参数 schema
-    //（与该文件既有的「工具注册序硬编码」同一惯例：那边导入链在测试内加载不了）。
-    // 2026-10-12 起正文只说路线（编程交 coding 子会话、自己管需求与验收）：后台派发、
-    // wait-for-sub-sessions、不要轮询都由 session 工具描述自己教，正文不再重复，也就不再钉
-    const ANCHORS = ['create-sub-session', 'prompt-session', 'agent_profile']
-    for (const language of LANGS) {
-      const body = profile(WORK_PROFILE_NAME, language).systemPrompt
-      for (const anchor of ANCHORS) {
-        expect(body, `work.${language} 需含 ${anchor}`).toContain(anchor)
-      }
-    }
-  })
-})
-
 describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
   it('REG-3 工具面与两个基座**逐字相同** —— 三份档案共用一套工具，分工全在正文', () => {
     const built = profile('coding')
@@ -533,13 +515,14 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
   })
 
   it('不是基座档案 —— 可作 agent_profile 的唯一判据', () => {
-    // coding 是子会话的档案（work 开 `coding` 子会话把活交过去），不是用户切换的目标：
+    // coding 是子会话的档案（会话把 `coding` 指为 agent_profile 时开出），不是用户切换的目标：
     // 它只需过 pinAgentProfile 的那一道门 —— 不是基座名
     expect(BASE_PROFILE_NAMES.has('coding')).toBe(false)
   })
 
-  it('三语 description 都指向 work 与子会话、不再提 /coding 切换', () => {
-    // 描述是设置页里对这份档案的定位说明：会话内切换已下线，「/coding」这条入口不存在了
+  it('三语 description 都指向子会话、不再提 /coding 切换，也不再说由 work 启用', () => {
+    // 描述是设置页里对这份档案的定位说明：会话内切换已下线，「/coding」这条入口不存在了；
+    // 2026-11-22 起 work 不再把活交给 coding，描述里再说「由 work 会话启用」就是错的
     const SUB_SESSION_WORD: Record<(typeof LANGS)[number], string> = {
       en: 'sub-session',
       zh: '子会话',
@@ -548,16 +531,8 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
     for (const language of LANGS) {
       const desc = profile('coding', language).description
       expect(desc, `coding.${language}`).not.toContain('/coding')
-      expect(desc, `coding.${language}`).toContain('work')
+      expect(desc, `coding.${language}`).not.toContain('work')
       expect(desc, `coding.${language}`).toContain(SUB_SESSION_WORD[language])
-    }
-  })
-
-  it('三语 work 都点名 coding —— 子会话该用哪份档案，只能从提示词被模型知晓', () => {
-    for (const language of LANGS) {
-      expect(profile(WORK_PROFILE_NAME, language).systemPrompt, `work.${language}`).toContain(
-        '`coding`'
-      )
     }
   })
 
@@ -567,7 +542,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       const work = profile(WORK_PROFILE_NAME, language).systemPrompt
       // coding：工程场景只要广域调研（结构图在回复里手画 ```svg，不派子智能体）
       expect(coding, `coding.${language} 需点名 explore`).toContain('explore')
-      // work：广域调研留给 coding 子会话；小组件不再是可派发的 agent，而是书架上的技能 builtin:widget
+      // work：不点名派发清单；小组件不再是可派发的 agent，而是书架上的技能 builtin:widget
       expect(work, `work.${language} 不应点名 explore`).not.toContain('explore')
       for (const [name, body] of [
         ['coding', coding],

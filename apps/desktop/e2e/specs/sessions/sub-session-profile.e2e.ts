@@ -46,7 +46,7 @@ const PROFILE_MCP = 'mcp:browser'
 const SKILL_SEEDED = 'e2e-skill-seeded'
 const PARENT_TITLE = 'SP-parent'
 /** work 基座独有的锚点；coding 正文里的一句 */
-const WORK_ANCHOR = 'Handing work to a sub-session'
+const WORK_ANCHOR = "working in the user's project"
 const CODING_ANCHOR = 'working as a software engineer'
 
 interface SessionRow {

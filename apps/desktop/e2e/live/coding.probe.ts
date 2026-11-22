@@ -25,7 +25,8 @@
  * otherwise):
  *   direct  the user talks to the coding agent itself: the project session's base profile is replaced by the
  *           coding md (a user-level `work.md` built from it)
- *   work    today's product: the project session runs `work`, which hands the job to a `coding` sub-session
+ *   work    the project session runs the builtin `work` (until 2026-11-22 it handed the job to a `coding` sub-session;
+ *           since then it works itself, so this arm now measures the product's own work.md, not a hand-off)
  *   goal    the product's goal mode (docs/goal-mode-design.md §16). The project session is created as in
  *           direct (same md) and is the WORKER; the probe never sends it the request. The probe calls
  *           `agent.goalStart({ sessionId, objective })` with the request as the objective: the host forks the

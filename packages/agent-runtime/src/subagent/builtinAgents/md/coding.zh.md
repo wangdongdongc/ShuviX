@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
-description: 编码智能体——完整的本地工具链（shell、文件、搜索）；由 `work` 会话以 `coding` 子会话的形式启用。
+description: 编码智能体——完整的本地工具链（shell、文件、搜索）；会话把 `coding` 指为档案即可开一条这样的子会话。
 shuvix-tools: bash, powershell, read, write, edit, ask, suggest, update_plan, show_image, web_search, ls, grep, glob, agent, session, knowledge, artifact, widget, tool_search, shuvix, skill
 shuvix-displayName: 编码
 shuvix-prompt-blocks: drawing, environment, agents_md, claude_md, project_prompt

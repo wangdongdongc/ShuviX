@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
-description: コーディングエージェント——ローカルのフルツールチェーン（shell、ファイル、検索）。`work` セッションが `coding` サブセッションとして起動します。
+description: コーディングエージェント——ローカルのフルツールチェーン（shell、ファイル、検索）。セッションがプロファイルに `coding` を指定すると、そのサブセッションとして起動します。
 shuvix-tools: bash, powershell, read, write, edit, ask, suggest, update_plan, show_image, web_search, ls, grep, glob, agent, session, knowledge, artifact, widget, tool_search, shuvix, skill
 shuvix-displayName: コーディング
 shuvix-prompt-blocks: drawing, environment, agents_md, claude_md, project_prompt
