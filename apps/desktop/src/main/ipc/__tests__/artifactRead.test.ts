@@ -151,6 +151,7 @@ describe('artifact:read', () => {
       name: 'requests-by-tier.svg',
       title: 'Requests by tier',
       content: '<svg aria-label="Requests by tier"><rect/></svg>',
+      path: expect.stringMatching(/\/requests-by-tier\.svg$/),
       pinned: false,
       latest: true
     })
@@ -211,6 +212,7 @@ describe('artifact:read', () => {
       name: 'drawn-by-the-sub-agent.svg',
       title: 'Drawn by the sub-agent',
       content: '<svg aria-label="Drawn by the sub-agent"/>',
+      path: expect.stringMatching(/\/drawn-by-the-sub-agent\.svg$/),
       pinned: false,
       latest: true
     })
@@ -258,6 +260,7 @@ describe('artifact:read', () => {
       name: 'sync.svg',
       title: 'Sync',
       content: '<svg aria-label="Sync"/>',
+      path: expect.stringMatching(/\/sync\.svg$/),
       pinned: false,
       latest: true
     })
@@ -274,6 +277,7 @@ describe('artifact:read', () => {
       // 内容里没有标题：回落文件名主干
       title: 'async',
       content: 'v1',
+      path: expect.stringMatching(/\/async\.svg$/),
       pinned: false,
       latest: true
     }
@@ -316,6 +320,7 @@ describe('artifact:read', () => {
       name: 'kid.svg',
       title: 'Kid',
       content: '<svg aria-label="Kid"/>',
+      path: expect.stringMatching(/\/kid\.svg$/),
       pinned: false,
       latest: true
     })
@@ -343,6 +348,7 @@ describe('artifact:read', () => {
       name: 'pinned.svg',
       title: 'Pinned',
       content: '<svg aria-label="Pinned"/>',
+      path: expect.stringMatching(/\/pinned\.svg$/),
       pinned: true,
       latest: true
     }

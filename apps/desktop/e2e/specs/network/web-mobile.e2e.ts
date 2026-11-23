@@ -151,6 +151,7 @@ import {
   agentsSidebarPane,
   chatOriginBadges,
   chatPane,
+  showSidebarView,
   sidebarPane,
   webClientPane,
   webMobilePane,
@@ -558,9 +559,12 @@ describe('phone layout: which windows get it', () => {
   it('W-1 at 1280×800 without touch the web client is the desktop layout', async () => {
     expect(await mobile().shellPresent()).toBe(false)
     expect(await mobile().sidebarSettingsRow()).toBe(true)
+    // 资料库各组在侧栏的资料库视图里（07a0fcd8 起），第一次切过去才挂
+    await showSidebarView(page(), 'library')
     const groups = await mobile().documentGroups()
     expect(groups).toEqual(expect.arrayContaining(DESKTOP_REGISTRY_GROUPS))
     expect(groups).not.toContain('tracking')
+    await showSidebarView(page(), 'sessions')
     // 后面 M-5 断「手机的对话横幅里没有 agent 胶囊」：同一条会话在桌面布局里是有的
     expect(await sidebarPane(page()).openSession('MOB-chat')).toBe(true)
     await until(() => mobile().agentChipAnywhere(), 'the agent chip in the desktop banner')

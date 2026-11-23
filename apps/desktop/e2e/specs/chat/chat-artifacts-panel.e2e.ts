@@ -280,6 +280,8 @@ describe('会话产物：版本 + 会话面板的产物页', () => {
       name: FILE_NAME,
       title: 'Bar chart',
       content: SVG,
+      // 文件此刻的路径（画幅的「打开」用；打开的是当前文件，不是钉下的那一版）
+      path: join(artifactsDir(sid), FILE_NAME),
       pinned: true,
       latest: false
     })

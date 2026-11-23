@@ -2887,9 +2887,11 @@ export async function showSidebarView(main: CdpClient, view: MainSidebarView): P
     now = await currentSidebarView(main)
   }
   if (now === null || now === view) return
-  await main.eval(
-    `${SIDEBAR_VIEW_SWITCH}?.querySelector('[data-sidebar-view=${JSON.stringify(view)}]')?.click()`
+  // 手机的视图切换只有三格（资料库是底栏的一页）：没有这一格就没有可切的，交给调用方在自己的页面里找
+  const clicked = await main.eval<boolean>(
+    `(() => { const b = ${SIDEBAR_VIEW_SWITCH}?.querySelector('[data-sidebar-view=${JSON.stringify(view)}]'); if (!b) return false; b.click(); return true })()`
   )
+  if (!clicked) return
   const shown =
     view === 'sessions'
       ? `document.querySelector('[data-sidebar-list]')`
@@ -2910,6 +2912,9 @@ const LIBRARY_GROUP_KEYS = new Set(['agents', 'policies', 'hooks', 'skills', 'kn
  * 给一个 page object 的每个方法前面垫一步「切到某种视图」。`view` 可以按这次调用的参数挑（sidebarPane 的
  * setGroupExpanded('agents') 要资料库，别的要会话）；挑出 `null` = 不动。
  */
+/** 资料库 page object 里返回子 page object 的同步方法：inSidebarView 不包它们 */
+const SYNC_FACTORY_KEYS = new Set(['skillDirDialog'])
+
 function inSidebarView<T extends object>(
   main: CdpClient,
   pane: T,
@@ -2918,7 +2923,8 @@ function inSidebarView<T extends object>(
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(pane)) {
     out[key] =
-      typeof value === 'function'
+      // 返回子 page object 的同步方法原样留着：包成 async 就成了 Promise，调用方的 `dialog.waitOpen()` 找不到方法
+      typeof value === 'function' && !SYNC_FACTORY_KEYS.has(key)
         ? async (...args: unknown[]) => {
             const target = view(args)
             if (target) await showSidebarView(main, target)
