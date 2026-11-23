@@ -1,15 +1,17 @@
 /**
- * 文件时间线（文件库的第一个界面，docs/file-library-design.md §8；用户裁决 2026-11-18：先在右侧栏做一个简单的
- * 时间线）—— 按天排会话，每条会话下面是它的文件：用户发送的图片、放进笔记的文件、输入框里添加的文件、agent 摆出来
- * 的图、会话的产物。会话已经删掉的文件还在，排在当天里，不带会话标题（用户裁决 2026-11-18：不写
- * 「不属于任何会话」，不折叠成「+N」，不画时间线的竖线）。
+ * 文件时间线（文件库的第一个界面，docs/file-library-design.md §8）—— 右侧栏里按天排的一张文件列表：用户发送的图片、
+ * 放进笔记的文件、输入框里添加的文件、agent 摆出来的图、会话的产物。
  *
- * 只读：点会话标题切到那条会话，点文件开预览。分类、标签、删除留给以后的管理页。
- * 数据经 HostApi `library.timeline`（渠道端没有，不渲染内容），`library.changed` 与面板重新可见时重取。
+ * 样子（用户裁决 2026-11-23，样稿 3，去掉搜索那一行）：不按会话分组，一件文件一行 —— 小图（或文件图标）、名字，
+ * 第二行灰字是所属会话与大小，右端是时刻。没有搜索框、没有文件计数、没有会话标题行。同一件文件当天出现在两条会话里
+ * 就是两行。会话已经删掉的文件还在，第二行只有大小。
+ *
+ * 只读：点一行开预览（图片进看图层，同一天的图是一组），点第二行里的会话名切到那条会话。分类、标签、删除留给以后的
+ * 管理页。数据经 HostApi `library.timeline`（渠道端没有，不渲染内容），`library.changed` 与面板重新可见时重取。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileQuestion, ImageOff, NotebookText, MessageSquare, Search } from 'lucide-react'
+import { File as FileIcon, FileQuestion, ImageOff } from 'lucide-react'
 import {
   getHostApi,
   openImageViewer,
@@ -22,18 +24,17 @@ import {
   groupLibraryTimeline,
   libraryRef,
   type LibraryTimelineEntry,
-  type LibraryTimelineGroup,
   type LibraryTimelineResult
 } from '@shuvix/chat-protocol/fileLibrary'
 
 export interface LibraryTimelineProps {
   /** 面板此刻可见（常驻挂载的面板据此在重新可见时重取） */
   active?: boolean
-  /** 点会话标题：切到那条会话。不给 → 标题不可点 */
+  /** 点一行里的会话名：切到那条会话。不给 → 会话名只是文字 */
   onOpenSession?: (sessionId: string) => void
   /**
-   * 专注模式（宿主经 useFocusDim 判定后传当前选中的会话；不淡时不传）：搜索栏、日期标题和别的会话的那一组都淡，
-   * 这条会话自己的那一组照常；悬浮 / 键盘焦点在上面时恢复。缺省不淡
+   * 专注模式（宿主经 useFocusDim 判定后传当前选中的会话；不淡时不传）：日期标题和别的会话的行都淡，
+   * 这条会话自己的行照常；悬浮 / 键盘焦点在上面时恢复。缺省不淡
    */
   focusSessionId?: string | null
 }
@@ -44,6 +45,9 @@ const FADED = 'opacity-30 hover:opacity-100 focus-within:opacity-100'
 const LIBRARY_MEDIA_SESSION = 'library'
 const EMPTY: LibraryTimelineResult = { entries: [], sessions: {} }
 
+/** 一行左端小图（或文件图标）的边长（CSS px） */
+export const TIMELINE_THUMB_PX = 32
+
 function sizeLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   // 四舍五入到 1024 KB 的进一位写成 MB
@@ -51,22 +55,11 @@ function sizeLabel(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function extOf(fileName: string): string {
-  const ext = /\.([A-Za-z0-9]{1,5})$/.exec(fileName)?.[1]
-  return ext ? ext.toUpperCase() : 'FILE'
-}
-
 function openFile(itemId: string): void {
   useChatStore.getState().requestFilePreview(libraryRef(itemId))
 }
 
-/**
- * 缩略图边长（CSS px）。固定大小（2026-11-20 用户裁定）：面板变宽只多排几张，不把每张放大；
- * 网格用 `repeat(auto-fill, THUMB_PX)`。
- */
-export const TIMELINE_THUMB_PX = 72
-
-/** 一组里的图 → 看图层的一组（文件库的引用不按会话解析） */
+/** 一天里的图 → 看图层的一组（文件库的引用不按会话解析） */
 function viewerImagesOf(entries: LibraryTimelineEntry[]): ViewerImage[] {
   return entries.map((e) => ({
     sessionId: LIBRARY_MEDIA_SESSION,
@@ -77,194 +70,118 @@ function viewerImagesOf(entries: LibraryTimelineEntry[]): ViewerImage[] {
   }))
 }
 
-function Thumb({
+function Lead({
   entry,
-  hint,
-  onOpen
+  broken,
+  onFail
 }: {
   entry: LibraryTimelineEntry
-  hint: string
-  onOpen: () => void
+  broken: boolean
+  onFail: () => void
 }): React.JSX.Element {
+  const isImage = entry.item.kind === 'image'
   const url = useMediaUrl(LIBRARY_MEDIA_SESSION, libraryRef(entry.item.id))
-  const [failed, setFailed] = useState(false)
-  const broken = entry.missing || failed
+  const Icon = entry.missing ? FileQuestion : isImage ? ImageOff : FileIcon
   return (
-    <button
-      type="button"
-      data-timeline-file={entry.item.id}
-      data-relation={entry.relation ?? ''}
-      data-missing={broken ? '' : undefined}
-      title={hint}
-      aria-label={hint}
-      onClick={onOpen}
+    <span
       style={{ width: TIMELINE_THUMB_PX, height: TIMELINE_THUMB_PX }}
-      className="relative overflow-hidden rounded-md bg-bg-tertiary flex items-center justify-center cursor-zoom-in"
+      className="pointer-events-none relative flex flex-shrink-0 items-center justify-center overflow-hidden rounded-[5px] bg-bg-tertiary text-text-tertiary"
     >
-      {broken || !url ? (
-        <ImageOff size={18} className="text-text-tertiary" aria-hidden="true" />
-      ) : (
+      {isImage && !broken && url ? (
         <img
           src={url}
           alt=""
           loading="lazy"
           draggable={false}
-          onError={() => setFailed(true)}
+          onError={onFail}
           className="absolute inset-0 h-full w-full object-cover"
         />
+      ) : (
+        <Icon size={16} aria-hidden="true" />
       )}
-    </button>
+    </span>
   )
 }
 
-function FileRow({
+function Row({
   entry,
-  hint,
-  meta
+  result,
+  dim,
+  onOpen,
+  onOpenSession
 }: {
   entry: LibraryTimelineEntry
-  hint: string
-  meta: string
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      data-timeline-file={entry.item.id}
-      data-relation={entry.relation ?? ''}
-      data-missing={entry.missing ? '' : undefined}
-      title={hint}
-      onClick={() => openFile(entry.item.id)}
-      className="flex h-7 w-full items-center gap-2 rounded-md bg-bg-secondary px-2 text-left text-xs hover:bg-bg-hover"
-    >
-      {entry.missing ? (
-        <FileQuestion size={13} className="flex-shrink-0 text-text-tertiary" aria-hidden="true" />
-      ) : (
-        <span className="flex-shrink-0 rounded border border-border-primary bg-bg-primary px-1 text-[9px] font-semibold tracking-wide text-text-secondary">
-          {extOf(entry.item.fileName)}
-        </span>
-      )}
-      <span className="min-w-0 flex-1 truncate text-text-primary">{entry.item.name}</span>
-      <span className="flex-shrink-0 text-[11px] text-text-tertiary">{meta}</span>
-    </button>
-  )
-}
-
-function Group({
-  group,
-  result,
-  onOpenSession,
-  dim
-}: {
-  group: LibraryTimelineGroup
   result: LibraryTimelineResult
-  onOpenSession?: (sessionId: string) => void
   dim: boolean
+  onOpen: () => void
+  onOpenSession?: (sessionId: string) => void
 }): React.JSX.Element {
   const { t, i18n } = useTranslation()
-  const session = group.sessionId ? result.sessions[group.sessionId] : undefined
-  const images = group.entries.filter((e) => e.item.kind === 'image')
-  const files = group.entries.filter((e) => e.item.kind !== 'image')
+  const [failed, setFailed] = useState(false)
+  const session = entry.sessionId ? result.sessions[entry.sessionId] : undefined
+  const sessionId = session ? (entry.sessionId as string) : ''
+  const broken = !!entry.missing || failed
+  const relation = entry.relation
+    ? t(`library.relation.${entry.relation}`, { defaultValue: '' })
+    : ''
+  const hint = [entry.item.name, entry.missing ? t('library.missing') : relation]
+    .filter(Boolean)
+    .join(' · ')
   const time = new Intl.DateTimeFormat(i18n.language, {
     hour: '2-digit',
     minute: '2-digit'
-  }).format(new Date(group.at))
-  const relationLabel = (entry: LibraryTimelineEntry): string =>
-    entry.relation ? t(`library.relation.${entry.relation}`, { defaultValue: '' }) : ''
-  const hintOf = (entry: LibraryTimelineEntry): string =>
-    [entry.item.name, entry.missing ? t('library.missing') : relationLabel(entry)]
-      .filter(Boolean)
-      .join(' · ')
-  const metaOf = (entry: LibraryTimelineEntry): string =>
-    entry.missing
-      ? t('library.missing')
-      : [relationLabel(entry), sizeLabel(entry.item.size)].filter(Boolean).join(' · ')
-  const Icon = session?.notebook ? NotebookText : MessageSquare
+  }).format(new Date(entry.at))
   return (
     <div
-      data-timeline-session={group.sessionId ?? ''}
-      className={`flex flex-col gap-1.5 pb-3.5 transition-opacity duration-200 ${dim ? FADED : ''}`}
+      data-timeline-row=""
+      data-session={sessionId}
+      className={`relative flex h-[42px] items-center gap-2 rounded-md px-1.5 hover:bg-bg-hover transition-opacity duration-200 ${
+        dim ? FADED : ''
+      }`}
     >
-      {/* 没有会话的文件（会话已经删掉、或本来就不属于哪条会话）不写标题，直接排文件 */}
-      {session && (
-        <SessionHeading
-          sessionId={group.sessionId as string}
-          title={session.title}
-          projectName={session.projectName}
-          time={time}
-          Icon={Icon}
-          onOpen={onOpenSession}
-        />
-      )}
-      {images.length > 0 && (
-        <div
-          data-timeline-thumbs=""
-          className="grid gap-1.5"
-          style={{ gridTemplateColumns: `repeat(auto-fill, ${TIMELINE_THUMB_PX}px)` }}
-        >
-          {images.map((entry) => (
-            <Thumb
-              key={entry.item.id}
-              entry={entry}
-              hint={hintOf(entry)}
-              onOpen={() => {
-                // 不在了的那张不进组：点它照旧走打开（给出「文件不存在」的提示）
-                if (entry.missing) {
-                  openFile(entry.item.id)
-                  return
-                }
-                const present = images.filter((e) => !e.missing)
-                openImageViewer(viewerImagesOf(present), present.indexOf(entry))
-              }}
-            />
-          ))}
-        </div>
-      )}
-      {files.map((entry) => (
-        <FileRow key={entry.item.id} entry={entry} hint={hintOf(entry)} meta={metaOf(entry)} />
-      ))}
-    </div>
-  )
-}
-
-function SessionHeading({
-  sessionId,
-  title,
-  projectName,
-  time,
-  Icon,
-  onOpen
-}: {
-  sessionId: string
-  title: string
-  projectName?: string
-  time: string
-  Icon: typeof MessageSquare
-  onOpen?: (sessionId: string) => void
-}): React.JSX.Element {
-  const content = (
-    <>
-      <Icon size={12} className="flex-shrink-0 self-center text-text-tertiary" aria-hidden="true" />
-      <span className="min-w-0 truncate font-semibold text-text-primary">{title}</span>
-      {projectName && (
-        <span className="min-w-0 flex-shrink truncate text-[11px] text-text-tertiary">
-          {projectName}
+      <button
+        type="button"
+        data-timeline-file={entry.item.id}
+        data-relation={entry.relation ?? ''}
+        data-missing={broken ? '' : undefined}
+        title={hint}
+        aria-label={hint}
+        onClick={onOpen}
+        className="absolute inset-0 rounded-md"
+      />
+      <Lead entry={entry} broken={broken} onFail={() => setFailed(true)} />
+      <span className="pointer-events-none relative flex min-w-0 flex-1 flex-col">
+        <span data-timeline-name className="truncate text-[13px] text-text-primary">
+          {entry.item.name}
         </span>
-      )}
-      <span className="ml-auto flex-shrink-0 text-[11px] text-text-tertiary">{time}</span>
-    </>
-  )
-  return onOpen ? (
-    <button
-      type="button"
-      data-timeline-open-session={sessionId}
-      onClick={() => onOpen(sessionId)}
-      className="flex w-full items-baseline gap-2 text-left text-[13px] hover:underline"
-    >
-      {content}
-    </button>
-  ) : (
-    <div data-timeline-heading className="flex w-full items-baseline gap-2 text-[13px]">
-      {content}
+        <span className="flex min-w-0 items-baseline gap-1 text-[11px] text-text-tertiary">
+          {session &&
+            (onOpenSession ? (
+              <button
+                type="button"
+                data-timeline-open-session={sessionId}
+                onClick={() => onOpenSession(sessionId)}
+                className="pointer-events-auto min-w-0 truncate hover:text-text-secondary hover:underline"
+              >
+                {session.title}
+              </button>
+            ) : (
+              <span data-timeline-session-name className="min-w-0 truncate">
+                {session.title}
+              </span>
+            ))}
+          {session && <span aria-hidden="true">·</span>}
+          <span data-timeline-meta className="flex-shrink-0">
+            {entry.missing ? t('library.missing') : sizeLabel(entry.item.size)}
+          </span>
+        </span>
+      </span>
+      <span
+        data-timeline-time
+        className="pointer-events-none relative flex-shrink-0 text-[11px] text-text-tertiary"
+      >
+        {time}
+      </span>
     </div>
   )
 }
@@ -276,7 +193,6 @@ export function LibraryTimeline({
 }: LibraryTimelineProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const [result, setResult] = useState<LibraryTimelineResult | null>(null)
-  const [query, setQuery] = useState('')
   const requestSeq = useRef(0)
 
   const reload = useCallback(() => {
@@ -301,9 +217,13 @@ export function LibraryTimeline({
     if (active) reload()
   })
 
-  const days = useMemo(() => groupLibraryTimeline(result ?? EMPTY, query), [result, query])
-  const fileCount = useMemo(
-    () => new Set((result?.entries ?? []).map((e) => e.item.id)).size,
+  // 天 → 行：分组函数管去重与「会话已删」的归并，这里把一天里各组的条目摊平，新的在前
+  const days = useMemo(
+    () =>
+      groupLibraryTimeline(result ?? EMPTY).map((day) => ({
+        day: day.day,
+        rows: day.groups.flatMap((g) => g.entries).sort((a, b) => b.at - a.at)
+      })),
     [result]
   )
 
@@ -325,56 +245,44 @@ export function LibraryTimeline({
 
   return (
     <div data-library-timeline className="flex h-full flex-col overflow-hidden bg-bg-primary">
-      <div
-        className={`flex flex-shrink-0 items-center gap-2 px-3 pb-1 pt-2.5 transition-opacity duration-200 ${
-          focusSessionId ? FADED : ''
-        }`}
-      >
-        <label className="relative min-w-0 flex-1">
-          <span className="sr-only">{t('library.search')}</span>
-          <Search
-            size={13}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary"
-            aria-hidden="true"
-          />
-          <input
-            data-timeline-search
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('library.search')}
-            className="h-7 w-full rounded-md border border-border-primary bg-bg-primary pl-7 pr-2 text-xs text-text-primary outline-none focus:border-accent"
-          />
-        </label>
-        <span data-timeline-count className="flex-shrink-0 text-[11px] text-text-tertiary">
-          {t('library.count', { count: fileCount })}
-        </span>
-      </div>
-      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {result !== null && days.length === 0 ? (
           <div data-timeline-empty className="px-2 py-10 text-center text-xs text-text-tertiary">
-            {query.trim() ? t('library.noMatch') : t('library.empty')}
+            {t('library.empty')}
           </div>
         ) : (
-          days.map((day) => (
-            <section key={day.day} data-timeline-day={day.day}>
-              <h3
-                className={`pb-1.5 pt-3.5 text-[11px] font-semibold text-text-secondary transition-opacity duration-200 ${
-                  focusSessionId ? FADED : ''
-                }`}
-              >
-                {dayLabel(day.day)}
-              </h3>
-              {day.groups.map((group) => (
-                <Group
-                  key={group.sessionId ?? ''}
-                  group={group}
-                  result={result ?? EMPTY}
-                  onOpenSession={onOpenSession}
-                  dim={!!focusSessionId && group.sessionId !== focusSessionId}
-                />
-              ))}
-            </section>
-          ))
+          days.map((day) => {
+            const images = day.rows.filter((e) => e.item.kind === 'image' && !e.missing)
+            const unique = images.filter(
+              (e, i) => images.findIndex((x) => x.item.id === e.item.id) === i
+            )
+            return (
+              <section key={day.day} data-timeline-day={day.day}>
+                <h3
+                  className={`px-1.5 pb-1 pt-4 text-[11px] font-semibold text-text-secondary transition-opacity duration-200 ${
+                    focusSessionId ? FADED : ''
+                  }`}
+                >
+                  {dayLabel(day.day)}
+                </h3>
+                {day.rows.map((entry) => (
+                  <Row
+                    key={`${entry.sessionId ?? ''}\u0000${entry.item.id}`}
+                    entry={entry}
+                    result={result ?? EMPTY}
+                    dim={!!focusSessionId && entry.sessionId !== focusSessionId}
+                    onOpenSession={onOpenSession}
+                    onOpen={() => {
+                      // 不是图、或不在了：照旧走打开（不在的给出「文件不存在」的提示）
+                      const index = unique.findIndex((e) => e.item.id === entry.item.id)
+                      if (index < 0) openFile(entry.item.id)
+                      else openImageViewer(viewerImagesOf(unique), index)
+                    }}
+                  />
+                ))}
+              </section>
+            )
+          })
         )}
       </div>
     </div>

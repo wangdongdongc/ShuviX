@@ -17209,25 +17209,25 @@ export function goalPane(main: CdpClient): GoalPane {
 
 // ─── 文件时间线（右侧面板第三个标签，docs/file-library-timeline-tests.md §13）───
 
-export interface LibraryTimelineFileShot {
+export interface LibraryTimelineRowShot {
+  /** 所在那一天（`data-timeline-day`，本地 YYYY-MM-DD） */
+  day: string
+  /** 行上的 `data-session`：会话 id；没有会话（或会话已删）是 '' */
+  sessionId: string
+  /** 第二行里的会话名；没有会话是空串 */
+  sessionTitle: string
+  /** 会话名能不能点（`[data-timeline-open-session]`） */
+  canOpenSession: boolean
   /** `data-timeline-file` = 库里那一件的 id */
   id: string
   /** `data-relation`：sent / attached / shown / produced；没有会话关联为 '' */
   relation: string
-  /** 带 `data-missing`（文件不在了，或缩略图没解出来） */
+  /** 带 `data-missing`（文件不在了，或小图没解出来） */
   missing: boolean
-}
-
-export interface LibraryTimelineGroupShot {
-  /** 所在那一天（`data-timeline-day`，本地 YYYY-MM-DD） */
-  day: string
-  /** `data-timeline-session`：会话 id；不属于任何会话的那一组是 '' */
-  sessionId: string
-  /** 组标题的文字（会话标题；没有会话的那一组没有标题，是空串） */
-  title: string
-  /** 标题能不能点（`[data-timeline-open-session]`） */
-  canOpen: boolean
-  files: LibraryTimelineFileShot[]
+  /** `[data-timeline-name]` 的文字 */
+  name: string
+  /** `[data-timeline-meta]` 的文字（大小，或「文件不存在」） */
+  meta: string
 }
 
 export interface LibraryTimelinePane {
@@ -17235,14 +17235,12 @@ export interface LibraryTimelinePane {
   open(): Promise<void>
   /** 文件标签那一格此刻可见吗 */
   active(): Promise<boolean>
-  /** 每一天里的每一组，DOM 序 */
-  groups(): Promise<LibraryTimelineGroupShot[]>
+  /** 每一天里的每一行（一件文件在一条会话名下是一行），DOM 序 */
+  rows(): Promise<LibraryTimelineRowShot[]>
   /** 点一件文件（开预览窗口）；没有这一件抛错 */
   clickFile(id: string): Promise<void>
-  /** 点一组的标题（打开那条会话）；标题不可点 / 没有这一组抛错 */
+  /** 点一行里的会话名（打开那条会话）；会话名不可点 / 没有这条会话的行抛错 */
   clickSession(sessionId: string): Promise<void>
-  /** `[data-timeline-count]` 的文字 */
-  count(): Promise<string>
   /** 空态（`[data-timeline-empty]`）在不在 */
   empty(): Promise<boolean>
 }
@@ -17270,21 +17268,26 @@ export function libraryTimelinePane(main: CdpClient): LibraryTimelinePane {
       await until(active, 'file timeline visible')
     },
     active,
-    groups: () =>
+    rows: () =>
       main.eval<
-        LibraryTimelineGroupShot[]
+        LibraryTimelineRowShot[]
       >(`[...(${ROOT}?.querySelectorAll('[data-timeline-day]') ?? [])]
-        .flatMap((day) => [...day.querySelectorAll('[data-timeline-session]')].map((g) => ({
-          day: day.getAttribute('data-timeline-day') ?? '',
-          sessionId: g.getAttribute('data-timeline-session') ?? '',
-          title: (g.querySelector('span.font-semibold')?.textContent ?? '').trim(),
-          canOpen: !!g.querySelector('[data-timeline-open-session]'),
-          files: [...g.querySelectorAll('[data-timeline-file]')].map((f) => ({
-            id: f.getAttribute('data-timeline-file') ?? '',
-            relation: f.getAttribute('data-relation') ?? '',
-            missing: f.hasAttribute('data-missing')
-          }))
-        })))`),
+        .flatMap((day) => [...day.querySelectorAll('[data-timeline-row]')].map((row) => {
+          const file = row.querySelector('[data-timeline-file]')
+          const open = row.querySelector('[data-timeline-open-session]')
+          const session = open ?? row.querySelector('[data-timeline-session-name]')
+          return {
+            day: day.getAttribute('data-timeline-day') ?? '',
+            sessionId: row.getAttribute('data-session') ?? '',
+            sessionTitle: (session?.textContent ?? '').trim(),
+            canOpenSession: !!open,
+            id: file?.getAttribute('data-timeline-file') ?? '',
+            relation: file?.getAttribute('data-relation') ?? '',
+            missing: !!file?.hasAttribute('data-missing'),
+            name: (row.querySelector('[data-timeline-name]')?.textContent ?? '').trim(),
+            meta: (row.querySelector('[data-timeline-meta]')?.textContent ?? '').trim()
+          }
+        }))`),
     clickFile: (id) =>
       clickIn(
         `${ROOT}?.querySelector('[data-timeline-file=${JSON.stringify(id)}]')`,
@@ -17293,11 +17296,7 @@ export function libraryTimelinePane(main: CdpClient): LibraryTimelinePane {
     clickSession: (sessionId) =>
       clickIn(
         `${ROOT}?.querySelector('[data-timeline-open-session=${JSON.stringify(sessionId)}]')`,
-        `clickable timeline heading for session ${sessionId}`
-      ),
-    count: () =>
-      main.eval<string>(
-        `(${ROOT}?.querySelector('[data-timeline-count]')?.textContent ?? '').trim()`
+        `clickable session name on the timeline for session ${sessionId}`
       ),
     empty: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-timeline-empty]')`)
   }

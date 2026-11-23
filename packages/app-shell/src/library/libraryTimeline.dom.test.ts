@@ -1,25 +1,29 @@
 // @vitest-environment jsdom
 /**
- * 文件时间线（LibraryTimeline.tsx，右侧栏的「文件」页）—— 测试设计 docs/file-library-timeline-tests.md §10，
- * TL-106…TL-131（TL-115 / TL-120 / TL-130 按削减名单略去）。
+ * 文件时间线（LibraryTimeline.tsx，右侧栏的「文件」页）—— 测试设计 docs/file-library-timeline-tests.md §10。
+ * 2026-11-23 改版（用户裁决：不按会话分组、一件一行、没有搜索与件数）后重写；沿用原编号的保留原号，
+ * 搜索 / 件数 / 会话抬头 / 缩略图网格 / +N 的用例（TL-109/110/116/117/122/123/127 网格/140）随之删去，新增 TL-150…159。
  *
- *   TL-106/107  空页；还没取回来时既不画空页也不画天
+ *   TL-106/107  空页（只有那句话，没有搜索框与件数）；还没取回来时既不画空页也不画天
  *   TL-108      天的顺序与抬头（今天 / 昨天 / 不带年 / 带年）
- *   TL-109…111  会话抬头：标题、项目名、时间；给了 onOpenSession 才可点；没有会话的一组
- *   TL-112…114  图片是缩略图、别的是一行（扩展名、显示名、关系 · 大小）；大小与关系的写法
- *   TL-116/117  一组里的图全部排出来，没有 +N
- *   TL-118/119  文件不在了：data-missing、不画图；图加载失败同样
- *   TL-121      点缩略图 → 看图层打开这一组的图（openImageViewer，点中的那张）；点文件行 → requestFilePreview('library:<id>')；
+ *   TL-150      一天里一件一行，按 entry.at 新的在前（不按会话聚）；没有会话抬头 / 缩略图网格 / +N
+ *   TL-151      同一件当天在两条会话里 = 两行
+ *   TL-152/153  行里的会话名：给了 onOpenSession 是按钮，点了只切会话、不开文件；不给是文字
+ *   TL-111      没有会话的与会话已删的：data-session=''、不写会话名；同一件并成一行
+ *   TL-112      左端：图是 img（库引用的媒体地址），别的是图标；打开按钮的 title / aria-label / data-relation
+ *   TL-113/114  大小的写法；关系只进 title，不进第二行
+ *   TL-154      时刻（entry.at 的 HH:MM）
+ *   TL-118/119  文件不在了：data-missing、不画图、第二行与 title 写「File not found」；图加载失败同样带 data-missing
+ *   TL-121      点图的行 → 看图层打开这一天的图（去重、按行序、点中的那张）；点别的行 → requestFilePreview('library:<id>')；
  *               不在了的图不进组，点它照旧 requestFilePreview
- *   TL-127      缩略图定宽 72px，网格 `repeat(auto-fill, 72px)`：面板变宽只多排几张（2026-11-20 用户裁定）
- *   TL-122/123  搜索（文件名、会话标题）；件数按不同的文件数、不随搜索变
+ *   TL-155      看图层的一组只含这一天的图，不带别的天
+ *   TL-156      同一张图当天在两条会话里：组里只算一次，两行点开的是同一张
  *   TL-124…126  可见时才取、每次重新可见都重取；library.changed 只在可见时重取
  *   TL-127…129  取失败：第一次 → 空页；之后 → 留着原来的；宿主没有 library → 空页
  *   TL-131      先发的答复晚到：不盖掉后发的
  *   TL-135…141  专注模式（`focusSessionId`）：FADED = `opacity-30 hover:opacity-100 focus-within:opacity-100`
- *               三个类一起在或一起不在。不传 / null / '' → 什么都不淡；给了 S1 → 搜索栏、每天的抬头、
- *               S2 那组与没有会话的那组淡，S1 的组（哪天都算）不淡；给了一个不在时间线里的会话 → 全淡、不抛；
- *               搜索只剩 S2 → 它淡，清空后 S1 回来不淡；S1 → S2 重渲染，淡跟着走
+ *               三个类一起在或一起不在。不传 / null / '' → 什么都不淡；给了 S1 → 每天的抬头、S2 的行与没有会话的行淡，
+ *               S1 的行（哪天都算）不淡；给了一个不在时间线里的会话 → 全淡、不抛；S1 → S2 重渲染，淡跟着走
  *
  * `@shuvix/chat-ui` 整份换成替身：`getHostApi` 回每个用例自己的那一份，`useAppEvent` 记下处理函数好让用例发
  * `library.changed`，`useChatStore.getState()` 给 requestFilePreview 间谍，`useMediaUrl` 回 `media://<引用>`。
@@ -151,20 +155,27 @@ const $$ = <T extends Element = HTMLElement>(
 ): T[] => Array.from(within.querySelectorAll<T>(selector))
 
 const fileEl = (n: number): HTMLElement => $(`[data-timeline-file="${ID(n)}"]`)
-const metaOf = (n: number): string => fileEl(n).lastElementChild?.textContent ?? ''
-const groupEl = (sessionId: string): HTMLElement => $(`[data-timeline-session="${sessionId}"]`)
+/** 这一件的那一行；一件在几条会话里就有几行，给 sessionId 挑（'' = 不带会话的那一行） */
+const rowEl = (n: number, sessionId?: string): HTMLElement => {
+  const rows = $$('[data-timeline-row]').filter(
+    (r) =>
+      r.querySelector(`[data-timeline-file="${ID(n)}"]`) &&
+      (sessionId === undefined || r.getAttribute('data-session') === sessionId)
+  )
+  if (rows.length !== 1) throw new Error(`expected one row for ${n}, got ${rows.length}`)
+  return rows[0]
+}
+const metaOf = (n: number): string => $('[data-timeline-meta]', rowEl(n)).textContent ?? ''
+const nameOf = (n: number): string => $('[data-timeline-name]', rowEl(n)).textContent ?? ''
 const fileIds = (within: ParentNode = container): string[] =>
   $$('[data-timeline-file]', within).map((el) => el.getAttribute('data-timeline-file') ?? '')
-const countText = (): string => $('[data-timeline-count]').textContent ?? ''
-
-function type(text: string): void {
-  const input = $<HTMLInputElement>('[data-timeline-search]')
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-  act(() => {
-    setter.call(input, text)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-}
+/** 每一行的 [会话, 文件 id]，DOM 序 */
+const rowPairs = (within: ParentNode = container): Array<[string, string]> =>
+  $$('[data-timeline-row]', within).map((r) => [
+    r.getAttribute('data-session') ?? '',
+    $('[data-timeline-file]', r).getAttribute('data-timeline-file') ?? ''
+  ])
+const dayEl = (day: string): HTMLElement => $(`[data-timeline-day="${day}"]`)
 
 function deferred<T>(): {
   promise: Promise<T>
@@ -211,12 +222,14 @@ afterEach(() => {
 })
 
 describe('空页与加载', () => {
-  it('TL-106 没有文件：空页的那句话，没有天，件数 0', async () => {
+  it('TL-106 没有文件：空页的那句话，没有天；没有搜索框与件数', async () => {
     await show(result([], {}))
     expect($$('[data-library-timeline]')).toHaveLength(1)
     expect($('[data-timeline-empty]').textContent).toBe(en.library.empty)
     expect($$('[data-timeline-day]')).toEqual([])
-    expect(countText()).toBe('0 files')
+    expect($$('[data-timeline-search]')).toEqual([])
+    expect($$('[data-timeline-count]')).toEqual([])
+    expect($$('input')).toEqual([])
   })
 
   it('TL-107 还没取回来：既没有空页也没有天', async () => {
@@ -227,7 +240,7 @@ describe('空页与加载', () => {
   })
 })
 
-describe('天与会话抬头', () => {
+describe('天与行', () => {
   it('TL-108 四天按新到旧；抬头：Today、Yesterday、不带年的日期、带年的日期', async () => {
     await show(
       result([
@@ -238,6 +251,7 @@ describe('天与会话抬头', () => {
       ])
     )
     const days = $$('[data-timeline-day]')
+    expect(days.map((d) => d.tagName)).toEqual(['SECTION', 'SECTION', 'SECTION', 'SECTION'])
     expect(days.map((d) => d.getAttribute('data-timeline-day'))).toEqual([
       '2026-11-18',
       '2026-11-17',
@@ -252,73 +266,168 @@ describe('天与会话抬头', () => {
     expect(headings[3]).toContain('2025')
   })
 
-  it('TL-109 会话抬头：标题、项目名、时间；是按钮，点了 → onOpenSession(会话)', async () => {
+  it('TL-150 一天里一件一行、按时刻新的在前，不按会话聚；没有会话抬头、缩略图网格、+N', async () => {
+    await show(
+      result(
+        [
+          entry(1, 'S1', { at: at(11, 18, 8) }),
+          entry(2, 'S2', { at: at(11, 18, 11) }),
+          entry(3, 'S1', { at: at(11, 18, 10), kind: 'pdf' }),
+          entry(4, null, { at: at(11, 18, 9) }),
+          entry(5, 'S2', { at: at(11, 17, 23) })
+        ],
+        { S1: { title: 'Trip plan' }, S2: { title: 'Other' } }
+      )
+    )
+    expect(rowPairs(dayEl('2026-11-18'))).toEqual([
+      ['S2', ID(2)],
+      ['S1', ID(3)],
+      ['', ID(4)],
+      ['S1', ID(1)]
+    ])
+    expect(rowPairs(dayEl('2026-11-17'))).toEqual([['S2', ID(5)]])
+    // 天下面只有抬头与行
+    expect(
+      Array.from(dayEl('2026-11-18').children).map((c) =>
+        c.tagName === 'H3' ? 'h3' : c.hasAttribute('data-timeline-row') ? 'row' : c.tagName
+      )
+    ).toEqual(['h3', 'row', 'row', 'row', 'row'])
+    for (const gone of [
+      '[data-timeline-session]',
+      '[data-timeline-heading]',
+      '[data-timeline-thumbs]',
+      '[data-timeline-more]'
+    ]) {
+      expect($$(gone)).toEqual([])
+    }
+  })
+
+  it('TL-150 一天 11 张图：11 行，全部排出来', async () => {
+    await show(
+      result(Array.from({ length: 11 }, (_, i) => entry(i + 1, 'S1', { at: at(11, 18, 9, i) })))
+    )
+    expect(fileIds()).toEqual(Array.from({ length: 11 }, (_, i) => ID(11 - i)))
+    expect($$('[data-timeline-row]')).toHaveLength(11)
+  })
+
+  it('TL-151 同一件当天在两条会话里：两行，各带各的会话名', async () => {
     const onOpenSession = vi.fn()
     await show(
-      result([entry(1, 'S1', { at: at(11, 18, 9, 5) })], {
-        S1: { title: 'Trip plan', projectName: 'Alpha' }
-      }),
+      result(
+        [
+          entry(1, 'S1', { name: 'a.png', at: at(11, 18, 10) }),
+          entry(1, 'S2', { name: 'a.png', at: at(11, 18, 9), relation: 'attached' })
+        ],
+        { S1: { title: 'Trip plan' }, S2: { title: 'Other' } }
+      ),
       { onOpenSession }
     )
-    const text = groupEl('S1').textContent ?? ''
-    expect(text).toContain('Trip plan')
-    expect(text).toContain('Alpha')
-    expect(text).toContain('09:05')
-    const open = $('[data-timeline-open-session="S1"]')
-    expect(open.tagName).toBe('BUTTON')
-    act(() => open.click())
-    expect(onOpenSession.mock.calls).toEqual([['S1']])
+    expect(rowPairs()).toEqual([
+      ['S1', ID(1)],
+      ['S2', ID(1)]
+    ])
+    expect($('[data-timeline-open-session]', rowEl(1, 'S1')).textContent).toBe('Trip plan')
+    expect($('[data-timeline-open-session]', rowEl(1, 'S2')).textContent).toBe('Other')
+    expect($('[data-timeline-file]', rowEl(1, 'S2')).getAttribute('data-relation')).toBe('attached')
   })
 
-  it('TL-110 不给 onOpenSession：抬头不可点，标题还在', async () => {
+  it('TL-152 给了 onOpenSession：会话名是按钮；点它 → onOpenSession(会话)，不开文件也不开看图层', async () => {
+    const onOpenSession = vi.fn()
+    await show(result([entry(1, 'S1'), entry(2, 'S1', { kind: 'pdf', at: at(11, 18, 8) })]), {
+      onOpenSession
+    })
+    for (const n of [1, 2]) {
+      const open = $('[data-timeline-open-session="S1"]', rowEl(n))
+      expect(open.tagName).toBe('BUTTON')
+      expect(open.textContent).toBe('Trip plan')
+      expect($$('[data-timeline-session-name]', rowEl(n))).toEqual([])
+      act(() => open.click())
+    }
+    expect(onOpenSession.mock.calls).toEqual([['S1'], ['S1']])
+    expect(viewer).not.toHaveBeenCalled()
+    expect(preview).not.toHaveBeenCalled()
+    // 会话名不在打开按钮里面（两个按钮不嵌套）
+    expect(fileEl(1).contains($('[data-timeline-open-session]', rowEl(1)))).toBe(false)
+  })
+
+  it('TL-153 不给 onOpenSession：会话名只是文字', async () => {
     await show(result([entry(1, 'S1')]))
     expect($$('[data-timeline-open-session]')).toEqual([])
-    expect(groupEl('S1').textContent).toContain('Trip plan')
+    const name = $('[data-timeline-session-name]', rowEl(1))
+    expect(name.tagName).toBe('SPAN')
+    expect(name.textContent).toBe('Trip plan')
   })
 
-  it('TL-111 没有会话的与会话已删的并成一组：不写标题、不可点，两件都在里面', async () => {
+  it("TL-111 没有会话的与会话已删的：data-session=''、不写会话名、不可点；第二行只有大小", async () => {
     await show(
-      result([entry(1, null), entry(2, 'gone', { kind: 'pdf' })], { S1: { title: 'Trip plan' } }),
+      result(
+        [
+          entry(1, null, { at: at(11, 18, 10) }),
+          entry(2, 'gone', { kind: 'pdf', at: at(11, 18, 9) })
+        ],
+        { S1: { title: 'Trip plan' } }
+      ),
       { onOpenSession: vi.fn() }
     )
-    const groups = $$('[data-timeline-session]')
-    expect(groups.map((g) => g.getAttribute('data-timeline-session'))).toEqual([''])
-    // 用户裁决 2026-11-18：没有会话就直接排文件，不写「不属于任何会话」
-    expect(groups[0].querySelectorAll('[data-timeline-heading]')).toHaveLength(0)
-    expect(groups[0].textContent).not.toContain('Trip plan')
-    expect($$('[data-timeline-open-session]', groups[0])).toEqual([])
-    expect(fileIds(groups[0]).sort()).toEqual([ID(1), ID(2)])
+    expect(rowPairs()).toEqual([
+      ['', ID(1)],
+      ['', ID(2)]
+    ])
+    for (const n of [1, 2]) {
+      const row = rowEl(n)
+      expect($$('[data-timeline-open-session]', row)).toEqual([])
+      expect($$('[data-timeline-session-name]', row)).toEqual([])
+      expect(row.textContent).not.toContain('Trip plan')
+      // 名字下面那一行：只有大小，没有分隔点
+      expect($('[data-timeline-meta]', row).parentElement?.textContent).toBe('12 KB')
+    }
+  })
+
+  it('TL-111 同一件当天的关联会话都删了：并成一行', async () => {
+    await show(
+      result(
+        [entry(1, 'gone-a', { at: at(11, 18, 10) }), entry(1, 'gone-b', { at: at(11, 18, 9) })],
+        {}
+      )
+    )
+    expect(rowPairs()).toEqual([['', ID(1)]])
   })
 })
 
-describe('文件：缩略图与行', () => {
-  it('TL-112 图片是格子里的缩略图（src = 库引用的媒体地址）；别的是一行：扩展名、显示名、关系 · 大小', async () => {
+describe('一行里的东西', () => {
+  it('TL-112 图：左端是 img（src = 库引用的媒体地址）；别的：图标。打开按钮带名字与关系', async () => {
     await show(
       result([
-        entry(1, 'S1'),
-        entry(2, 'S1'),
-        entry(3, 'S1'),
-        entry(4, 'S1', { kind: 'pdf', name: 'Report.pdf' }),
-        entry(5, 'S1', { kind: 'document', name: 'notes.md' })
+        entry(1, 'S1', { at: at(11, 18, 10) }),
+        entry(4, 'S1', { kind: 'pdf', name: 'Report.pdf', at: at(11, 18, 9) }),
+        entry(5, 'S1', {
+          kind: 'document',
+          name: 'notes.md',
+          at: at(11, 18, 8),
+          relation: 'attached'
+        })
       ])
     )
-    const grid = $('[data-timeline-thumbs]', groupEl('S1'))
-    const thumbs = $$('[data-timeline-file]', grid)
-    expect(thumbs.map((t) => t.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON'])
-    expect(thumbs.map((t) => $<HTMLImageElement>('img', t).getAttribute('src'))).toEqual(
-      [1, 2, 3].map((n) => `media://library:${ID(n)}`)
-    )
-    for (const [n, badge, name] of [
-      [4, 'PDF', 'Report.pdf'],
-      [5, 'MD', 'notes.md']
+    expect($$('[data-timeline-row]').map((r) => r.tagName)).toEqual(['DIV', 'DIV', 'DIV'])
+    const img = $<HTMLImageElement>('img', rowEl(1))
+    expect(img.getAttribute('src')).toBe(`media://library:${ID(1)}`)
+    expect(img.parentElement?.style.width).toBe('32px')
+    expect(img.parentElement?.style.height).toBe('32px')
+    for (const [n, name, hint, relation] of [
+      [1, 'img-1.png', 'img-1.png · Sent', 'sent'],
+      [4, 'Report.pdf', 'Report.pdf · Sent', 'sent'],
+      [5, 'notes.md', 'notes.md · Added', 'attached']
     ] as const) {
-      const row = fileEl(n)
-      expect(row.tagName).toBe('BUTTON')
-      expect(grid.contains(row)).toBe(false)
-      expect($$('img', row)).toEqual([])
-      expect(row.firstElementChild?.textContent).toBe(badge)
-      expect(row.textContent).toContain(name)
-      expect(metaOf(n)).toBe('Sent · 12 KB')
+      const open = fileEl(n)
+      expect(open.tagName).toBe('BUTTON')
+      expect(open.getAttribute('title')).toBe(hint)
+      expect(open.getAttribute('aria-label')).toBe(hint)
+      expect(open.getAttribute('data-relation')).toBe(relation)
+      expect(nameOf(n)).toBe(name)
+    }
+    for (const n of [4, 5]) {
+      expect($$('img', rowEl(n))).toEqual([])
+      expect($$('svg', rowEl(n))).toHaveLength(1)
     }
   })
 
@@ -327,16 +436,18 @@ describe('文件：缩略图与行', () => {
     [1023, '1023 B'],
     [1024, '1 KB'],
     [1536, '2 KB'],
+    [48 * 1024, '48 KB'],
     [1023 * 1024, '1023 KB'],
     [1048575, '1.0 MB'],
     [1048576, '1.0 MB'],
+    [3.4 * 1024 * 1024, '3.4 MB'],
     [5.5 * 1024 * 1024, '5.5 MB']
   ])('TL-113 大小 %d 字节写成 %s', async (size, label) => {
     await show(result([entry(1, null, { kind: 'pdf', size })], {}))
     expect(metaOf(1)).toBe(label)
   })
 
-  it('TL-114 关系的写法；没有关系只写大小，不带分隔符', async () => {
+  it('TL-114 关系只进 title，不进第二行；没有关系 title 只有名字', async () => {
     await show(
       result([
         entry(1, 'S1', { kind: 'pdf', relation: 'sent' }),
@@ -347,38 +458,31 @@ describe('文件：缩略图与行', () => {
       ])
     )
     expect(
-      [1, 2, 3, 4, 5].map((n) => [fileEl(n).getAttribute('data-relation'), metaOf(n)])
+      [1, 2, 3, 4, 5].map((n) => [
+        fileEl(n).getAttribute('data-relation'),
+        fileEl(n).getAttribute('title'),
+        metaOf(n)
+      ])
     ).toEqual([
-      ['sent', 'Sent · 12 KB'],
-      ['attached', 'Added · 12 KB'],
-      ['shown', 'Shown by the agent · 12 KB'],
-      ['produced', 'Made by the agent · 12 KB'],
-      ['', '12 KB']
+      ['sent', 'doc-1.pdf · Sent', '12 KB'],
+      ['attached', 'doc-2.pdf · Added', '12 KB'],
+      ['shown', 'doc-3.pdf · Shown by the agent', '12 KB'],
+      ['produced', 'doc-4.pdf · Made by the agent', '12 KB'],
+      ['', 'doc-5.pdf', '12 KB']
     ])
+    // 带会话的行：会话名 · 大小
+    expect($('[data-timeline-meta]', rowEl(1)).parentElement?.textContent).toBe('Trip plan·12 KB')
   })
 
-  it('TL-116 一组 8 张图：全画出来，没有 +N', async () => {
-    await show(result(Array.from({ length: 8 }, (_, i) => entry(i + 1, 'S1'))))
-    expect($$('[data-timeline-file]')).toHaveLength(8)
-    expect($$('[data-timeline-more]')).toEqual([])
-  })
-
-  it('TL-117 一组 11 张图：全部排出来，不折叠成 +N（用户裁决 2026-11-18）；别的组一样', async () => {
+  it('TL-154 右端是 entry.at 的时刻', async () => {
     await show(
-      result(
-        [
-          ...Array.from({ length: 11 }, (_, i) => entry(i + 1, 'S1', { at: at(11, 18, 10) })),
-          ...Array.from({ length: 11 }, (_, i) => entry(i + 101, 'S2', { at: at(11, 18, 8) }))
-        ],
-        { S1: { title: 'Trip plan' }, S2: { title: 'Other' } }
-      )
+      result([entry(1, 'S1', { at: at(11, 18, 9, 5) }), entry(2, null, { at: at(11, 18, 7, 42) })])
     )
-    expect(fileIds(groupEl('S1'))).toEqual(Array.from({ length: 11 }, (_, i) => ID(i + 1)))
-    expect(fileIds(groupEl('S2'))).toHaveLength(11)
-    expect(document.querySelectorAll('[data-timeline-more]')).toHaveLength(0)
+    expect($('[data-timeline-time]', rowEl(1)).textContent).toContain('09:05')
+    expect($('[data-timeline-time]', rowEl(2)).textContent).toContain('07:42')
   })
 
-  it('TL-118 文件不在了：带 data-missing；行写「File not found」；图不画 img；还在的没有这个属性', async () => {
+  it('TL-118 文件不在了：带 data-missing；第二行与 title 写「File not found」；图不画 img；还在的没有这个属性', async () => {
     await show(
       result([
         entry(1, 'S1', { kind: 'pdf', missing: true }),
@@ -389,41 +493,72 @@ describe('文件：缩略图与行', () => {
     )
     expect(fileEl(1).hasAttribute('data-missing')).toBe(true)
     expect(metaOf(1)).toBe(en.library.missing)
-    expect(fileEl(1).textContent).not.toContain('Sent')
+    expect(fileEl(1).getAttribute('title')).toBe(`doc-1.pdf · ${en.library.missing}`)
+    expect(fileEl(1).getAttribute('aria-label')).toBe(`doc-1.pdf · ${en.library.missing}`)
+    expect(rowEl(1).textContent).not.toContain('12 KB')
     expect(fileEl(2).hasAttribute('data-missing')).toBe(true)
-    expect($$('img', fileEl(2))).toEqual([])
+    expect(metaOf(2)).toBe(en.library.missing)
+    expect($$('img', rowEl(2))).toEqual([])
     expect(fileEl(3).hasAttribute('data-missing')).toBe(false)
+    expect(metaOf(3)).toBe('12 KB')
     expect(fileEl(4).hasAttribute('data-missing')).toBe(false)
-    expect($$('img', fileEl(4))).toHaveLength(1)
+    expect($$('img', rowEl(4))).toHaveLength(1)
   })
 
-  it('TL-119 图加载失败：那一格带上 data-missing、不再画 img', async () => {
-    await show(result([entry(1, 'S1'), entry(2, 'S1')]))
+  it('TL-119 图加载失败：那一行带上 data-missing、不再画 img；第二行仍是大小', async () => {
+    await show(result([entry(1, 'S1'), entry(2, 'S1', { at: at(11, 18, 8) })]))
     act(() => {
-      $('img', fileEl(1)).dispatchEvent(new Event('error'))
+      $('img', rowEl(1)).dispatchEvent(new Event('error'))
     })
     expect(fileEl(1).hasAttribute('data-missing')).toBe(true)
-    expect($$('img', fileEl(1))).toEqual([])
+    expect($$('img', rowEl(1))).toEqual([])
+    expect(metaOf(1)).toBe('12 KB')
     expect(fileEl(2).hasAttribute('data-missing')).toBe(false)
-    expect($$('img', fileEl(2))).toHaveLength(1)
+    expect($$('img', rowEl(2))).toHaveLength(1)
   })
 
-  it('TL-121 点缩略图：看图层打开这一组的图（点中的那张）；点行：开那件的预览', async () => {
-    await show(result([entry(1, 'S1'), entry(3, 'S1'), entry(2, 'S1', { kind: 'pdf' })]))
+  it('TL-119 媒体地址解不出来（null）：画图标，不画 img', async () => {
+    store.mediaUrl = () => null
+    await show(result([entry(1, 'S1')]))
+    expect($$('img', rowEl(1))).toEqual([])
+    expect($$('svg', rowEl(1))).toHaveLength(1)
+  })
+})
+
+describe('点一行', () => {
+  it('TL-121 点图的行：看图层打开这一天的图（按行序，点中的那张）；点别的行：开那件的预览', async () => {
+    await show(
+      result([
+        entry(1, 'S1', { at: at(11, 18, 11) }),
+        entry(2, 'S1', { kind: 'pdf', at: at(11, 18, 10) }),
+        entry(3, 'S1', { at: at(11, 18, 9) })
+      ])
+    )
     act(() => fileEl(3).click())
     expect(viewer).toHaveBeenCalledTimes(1)
     const [images, index] = viewer.mock.calls[0] as [Array<Record<string, unknown>>, number]
     expect(images.map((i) => i.path)).toEqual([`library:${ID(1)}`, `library:${ID(3)}`])
     expect(images.map((i) => i.name)).toEqual(['img-1.png', 'img-3.png'])
-    expect(images[0]).toMatchObject({ sessionId: 'library', openPath: `library:${ID(1)}` })
+    expect(images[0]).toMatchObject({
+      sessionId: 'library',
+      mimeType: 'image/png',
+      openPath: `library:${ID(1)}`
+    })
     expect(index).toBe(1)
     expect(preview).not.toHaveBeenCalled()
     act(() => fileEl(2).click())
     expect(preview.mock.calls).toEqual([[`library:${ID(2)}`]])
+    expect(viewer).toHaveBeenCalledTimes(1)
   })
 
   it('TL-121 不在了的图不进组：点它照旧请求预览（给出「文件不存在」）', async () => {
-    await show(result([entry(1, 'S1'), entry(2, 'S1', { missing: true }), entry(3, 'S1')]))
+    await show(
+      result([
+        entry(1, 'S1', { at: at(11, 18, 11) }),
+        entry(2, 'S1', { missing: true, at: at(11, 18, 10) }),
+        entry(3, 'S1', { at: at(11, 18, 9) })
+      ])
+    )
     act(() => fileEl(2).click())
     expect(viewer).not.toHaveBeenCalled()
     expect(preview.mock.calls).toEqual([[`library:${ID(2)}`]])
@@ -433,68 +568,50 @@ describe('文件：缩略图与行', () => {
     expect(index).toBe(1)
   })
 
-  it('TL-127 缩略图定宽 72px；网格按 72px 一格自动排列（面板宽只决定一行几张）', async () => {
-    await show(result([entry(1, 'S1'), entry(2, 'S1')]))
-    const grid = $<HTMLElement>('[data-timeline-thumbs]', groupEl('S1'))
-    expect(grid.style.gridTemplateColumns).toBe('repeat(auto-fill, 72px)')
-    for (const n of [1, 2]) {
-      const el = fileEl(n) as HTMLElement
-      expect(el.style.width).toBe('72px')
-      expect(el.style.height).toBe('72px')
-      expect(el.className).not.toContain('aspect-square')
-    }
-  })
-})
-
-describe('搜索与件数', () => {
-  it('TL-122 按文件名、按会话标题搜；什么都不匹配写「Nothing matches」；清空后都回来', async () => {
+  it('TL-155 一组是这一天的图：跨会话、含没有会话的，不带别的天', async () => {
     await show(
       result(
         [
-          entry(1, 'S1', { kind: 'pdf', name: 'Report.pdf', at: at(11, 18, 10) }),
-          entry(2, 'S2', { name: 'cat.png', at: at(11, 18, 8) })
+          entry(1, 'S1', { at: at(11, 18, 11) }),
+          entry(2, 'S2', { at: at(11, 18, 10) }),
+          entry(3, null, { at: at(11, 18, 9) }),
+          entry(4, 'S1', { at: at(11, 17, 12) }),
+          entry(5, 'S2', { at: at(11, 17, 11) })
         ],
         { S1: { title: 'Trip plan' }, S2: { title: 'Other' } }
       )
     )
-    const sessions = (): Array<string | null> =>
-      $$('[data-timeline-session]').map((g) => g.getAttribute('data-timeline-session'))
-
-    type('report')
-    expect(sessions()).toEqual(['S1'])
-    expect(fileIds()).toEqual([ID(1)])
-
-    type('TRIP')
-    expect(sessions()).toEqual(['S1'])
-
-    type('zzz')
-    expect(sessions()).toEqual([])
-    expect($('[data-timeline-empty]').textContent).toBe(en.library.noMatch)
-
-    type('')
-    expect(sessions()).toEqual(['S1', 'S2'])
-    expect($$('[data-timeline-empty]')).toEqual([])
+    act(() => fileEl(3).click())
+    act(() => fileEl(4).click())
+    const calls = viewer.mock.calls as Array<[Array<Record<string, unknown>>, number]>
+    expect(calls.map(([images, index]) => [images.map((i) => i.path), index])).toEqual([
+      [[1, 2, 3].map((n) => `library:${ID(n)}`), 2],
+      [[4, 5].map((n) => `library:${ID(n)}`), 0]
+    ])
   })
 
-  it('TL-123 件数按不同的文件：在两条会话里的一件只算一次；不随搜索变；一件写单数', async () => {
+  it('TL-156 同一张图当天在两条会话里：组里只算一次，两行点开的是同一张', async () => {
     await show(
       result(
         [
-          entry(1, 'S1', { name: 'a.png' }),
-          entry(1, 'S2', { name: 'a.png' }),
-          entry(2, 'S1', { name: 'b.png' })
+          entry(9, 'S1', { at: at(11, 18, 12) }),
+          entry(1, 'S1', { at: at(11, 18, 11) }),
+          entry(1, 'S2', { at: at(11, 18, 10) }),
+          entry(2, 'S2', { at: at(11, 18, 9) })
         ],
         { S1: { title: 'Trip plan' }, S2: { title: 'Other' } }
       )
     )
-    expect(countText()).toBe('2 files')
-    type('b.png')
-    expect(fileIds()).toEqual([ID(2)])
-    expect(countText()).toBe('2 files')
-
-    timeline.mockResolvedValue(result([entry(3, 'S1')]))
-    await fireChanged()
-    expect(countText()).toBe('1 file')
+    act(() => $('[data-timeline-file]', rowEl(1, 'S1')).click())
+    act(() => $('[data-timeline-file]', rowEl(1, 'S2')).click())
+    act(() => fileEl(2).click())
+    const calls = viewer.mock.calls as Array<[Array<Record<string, unknown>>, number]>
+    const group = [9, 1, 2].map((n) => `library:${ID(n)}`)
+    expect(calls.map(([images, index]) => [images.map((i) => i.path), index])).toEqual([
+      [group, 1],
+      [group, 1],
+      [group, 2]
+    ])
   })
 })
 
@@ -516,7 +633,7 @@ describe('什么时候取', () => {
     await show(result([entry(1, 'S1')]))
     expect(fileIds()).toEqual([ID(1)])
 
-    timeline.mockResolvedValue(result([entry(2, 'S1'), entry(1, 'S1')]))
+    timeline.mockResolvedValue(result([entry(2, 'S1', { at: at(11, 18, 10) }), entry(1, 'S1')]))
     await fireChanged()
 
     expect(timeline).toHaveBeenCalledTimes(2)
@@ -539,7 +656,7 @@ describe('什么时候取', () => {
   })
 
   it('TL-128 已有内容之后的一次重取失败：原来的文件留着', async () => {
-    await show(result([entry(1, 'S1'), entry(2, 'S1')]))
+    await show(result([entry(1, 'S1', { at: at(11, 18, 10) }), entry(2, 'S1')]))
     timeline.mockRejectedValue(new Error('offline'))
     await fireChanged()
     expect(timeline).toHaveBeenCalledTimes(2)
@@ -589,12 +706,11 @@ describe('专注模式（focusSessionId）', () => {
     $$('[data-library-timeline] *').filter((el) =>
       (el.getAttribute('class') ?? '').split(/\s+/).includes('opacity-30')
     )
-  const searchRow = (): HTMLElement => $('[data-timeline-search]').closest('label')!.parentElement!
   const headings = (): HTMLElement[] => $$('[data-timeline-day] > h3')
-  const groupsOf = (sessionId: string): HTMLElement[] =>
-    $$(`[data-timeline-session="${sessionId}"]`)
+  const rowsOf = (sessionId: string): HTMLElement[] =>
+    $$('[data-timeline-row]').filter((r) => r.getAttribute('data-session') === sessionId)
 
-  /** 今天：S1、S2、没有会话的一组；昨天：S1、S2 */
+  /** 今天：S1、S2、没有会话的一行；昨天：S1、S2 */
   const fixture = (): LibraryTimelineResult =>
     result(
       [
@@ -613,61 +729,47 @@ describe('专注模式（focusSessionId）', () => {
     ["TL-139 ''（当作不淡）", { focusSessionId: '' }]
   ])('%s：时间线里没有一处带 opacity-30', async (_label, props) => {
     await show(fixture(), props)
-    expect(groupsOf('S1')).toHaveLength(2)
-    expect(groupsOf('')).toHaveLength(1)
+    expect(rowsOf('S1')).toHaveLength(2)
+    expect(rowsOf('')).toHaveLength(1)
     expect(fadedEls()).toEqual([])
-    expect(fadeOf(searchRow())).toBe('none')
     for (const h of headings()) expect(fadeOf(h)).toBe('none')
-    for (const g of $$('[data-timeline-session]')) expect(fadeOf(g)).toBe('none')
+    for (const r of $$('[data-timeline-row]')) expect(fadeOf(r)).toBe('none')
   })
 
-  it('TL-137 给了 S1：搜索栏、每天抬头、S2 与没有会话的组都淡；S1 的组哪天都不淡', async () => {
+  it('TL-137 给了 S1：每天抬头、S2 的行与没有会话的行都淡；S1 的行哪天都不淡', async () => {
     await show(fixture(), { focusSessionId: 'S1' })
-    expect(fadeOf(searchRow())).toBe('faded')
     expect(headings()).toHaveLength(2)
     for (const h of headings()) expect(fadeOf(h)).toBe('faded')
-    expect(groupsOf('S2')).toHaveLength(2)
-    for (const g of groupsOf('S2')) expect(fadeOf(g)).toBe('faded')
-    expect(fadeOf(groupsOf('')[0])).toBe('faded')
-    expect(groupsOf('S1')).toHaveLength(2)
-    for (const g of groupsOf('S1')) {
-      // 不淡的组自己与祖先都没有被淡掉
-      let node: Element | null = g
+    expect(rowsOf('S2')).toHaveLength(2)
+    for (const r of rowsOf('S2')) expect(fadeOf(r)).toBe('faded')
+    expect(fadeOf(rowsOf('')[0])).toBe('faded')
+    expect(rowsOf('S1')).toHaveLength(2)
+    for (const r of rowsOf('S1')) {
+      // 不淡的行自己与祖先都没有被淡掉
+      let node: Element | null = r
       while (node && !node.hasAttribute('data-library-timeline')) {
         expect(fadeOf(node)).toBe('none')
         node = node.parentElement
       }
     }
     // 过渡类常在，不是淡的标志
-    expect(groupsOf('S1')[0].className.split(/\s+/)).toContain('transition-opacity')
+    expect(rowsOf('S1')[0].className.split(/\s+/)).toContain('transition-opacity')
   })
 
-  it('TL-138 给了一个不在时间线里的会话：搜索栏、抬头、每一组都淡，不抛', async () => {
+  it('TL-138 给了一个不在时间线里的会话：抬头与每一行都淡，不抛', async () => {
     await show(fixture(), { focusSessionId: 'GONE' })
-    expect(fadeOf(searchRow())).toBe('faded')
     for (const h of headings()) expect(fadeOf(h)).toBe('faded')
-    const groups = $$('[data-timeline-session]')
-    expect(groups).toHaveLength(5)
-    for (const g of groups) expect(fadeOf(g)).toBe('faded')
-  })
-
-  it('TL-140 给了 S1、搜索只剩 S2：剩下的 S2 淡；清空后 S1 回来且不淡', async () => {
-    await show(fixture(), { focusSessionId: 'S1' })
-    type('beach')
-    expect(groupsOf('S1')).toEqual([])
-    expect(groupsOf('S2')).toHaveLength(2)
-    for (const g of groupsOf('S2')) expect(fadeOf(g)).toBe('faded')
-    type('')
-    expect(groupsOf('S1')).toHaveLength(2)
-    for (const g of groupsOf('S1')) expect(fadeOf(g)).toBe('none')
+    const rows = $$('[data-timeline-row]')
+    expect(rows).toHaveLength(5)
+    for (const r of rows) expect(fadeOf(r)).toBe('faded')
   })
 
   it('TL-141 S1 → S2 重渲染：淡跟着走', async () => {
     await show(fixture(), { focusSessionId: 'S1' })
     await mount({ focusSessionId: 'S2' })
-    for (const g of groupsOf('S2')) expect(fadeOf(g)).toBe('none')
-    for (const g of groupsOf('S1')) expect(fadeOf(g)).toBe('faded')
-    expect(fadeOf(groupsOf('')[0])).toBe('faded')
-    expect(fadeOf(searchRow())).toBe('faded')
+    for (const r of rowsOf('S2')) expect(fadeOf(r)).toBe('none')
+    for (const r of rowsOf('S1')) expect(fadeOf(r)).toBe('faded')
+    expect(fadeOf(rowsOf('')[0])).toBe('faded')
+    for (const h of headings()) expect(fadeOf(h)).toBe('faded')
   })
 })

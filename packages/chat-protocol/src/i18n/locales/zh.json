@@ -2197,13 +2197,9 @@
   },
   "library": {
     "tab": "文件",
-    "search": "搜索文件或会话",
-    "count_one": "{{count}} 个文件",
-    "count_other": "{{count}} 个文件",
     "today": "今天",
     "yesterday": "昨天",
     "empty": "你发送的图片、添加到对话或笔记里的文件，以及智能体展示和产出的文件，会出现在这里。",
-    "noMatch": "没有匹配的文件",
     "missing": "找不到文件",
     "relation": {
       "sent": "发送",

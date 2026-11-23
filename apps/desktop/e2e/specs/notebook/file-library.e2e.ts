@@ -17,17 +17,17 @@
  *         （卡片 `Read library file "pasted-….png" (<id>)`，winning `ask-on-library-access#0`），放行后拿到图；
  *         C 读自己发过的 P2 不问；N 换成库目录里的**绝对路径**读 P1 → 走路径门，问 `ask-on-external-path#0`
  *   FLE-5 删掉 C → 它的关联没了，P2 那件的元数据与文件都在，N 与笔记的关联不受影响（文件留在时间线上，
- *         进当天的「没有会话」那一组：TLE-2 用另一条会话钉这件事）
+ *         当天那一行不再带会话名：TLE-2 用另一条会话钉这件事）
  *
  * 文件时间线（右侧面板的文件标签；用例稿 docs/file-library-timeline-tests.md §13），接在 FLE-5 后面、同一个实例：
- *   TLE-1 对话 D 发 P3（24×24）→ `library.timeline()` 里 P3 在 D 名下（sent，标题与项目名齐）；文件标签里 D 那一组
- *         有这件（`data-relation="sent"`、不 missing），N 那一组有 P1（attached）；点文件 → 预览窗口开的是库里那份；
- *         点组标题 → 活动会话变成 D
- *   TLE-2 删掉 D（标签一直开着：`library.changed` → 重取）→ D 那一组没了，P3 进同一天的「没有会话」组；
+ *   TLE-1 对话 D 发 P3（24×24）→ `library.timeline()` 里 P3 在 D 名下（sent，标题与项目名齐）；文件标签里 D 名下
+ *         恰有这一行（`data-relation="sent"`、不 missing、第二行写 D 的标题与大小），N 名下有 P1 的一行（attached）；
+ *         点这一行 → 看图层，再开预览窗口开的是库里那份；点行里的会话名 → 活动会话变成 D
+ *   TLE-2 删掉 D（标签一直开着：`library.changed` → 重取）→ D 名下没有行了，P3 在同一天剩一行、不带会话名；
  *         timeline 里 sessionId 为 null、sessions 里没有 D；元数据与字节都在
  *   TLE-3 对话 E 里脚本 agent 用 `artifact` 工具建 `Timeline chart` → 库里一行 artifact / linked（externalPath 在
  *         `~/.shuvix/artifacts/<E>/`，库目录里没有它），E 名下 `produced`；删掉 E → 变 managed（externalPath 空、
- *         sha256 = 产物字节），字节在库目录里，产物目录没了，时间线上在「没有会话」组、不 missing
+ *         sha256 = 产物字节），字节在库目录里，产物目录没了，时间线上那一行不带会话名、不 missing
  *
  * 夹具：项目目录在 fake HOME 里（工作目录，读不问）；笔记本会话 N（绝对 notebookPath，标题 = 文件名）与普通会话 C
  * （非默认标题：自动标题不来抢假提供商的请求），都在这个项目里。脚本一律按这一步的用户消息认领（`promptOf`：
@@ -80,7 +80,7 @@ import {
   libraryTimelinePane,
   notebookEditorPane,
   sidebarPane,
-  type LibraryTimelineGroupShot,
+  type LibraryTimelineRowShot,
   type LibraryTimelinePane,
   type NotebookEditorPane,
   type PasteFileSeed
@@ -390,17 +390,11 @@ const createChat = (title: string): Promise<string> =>
     `window.api.session.create(${JSON.stringify({ title, projectId })}).then((s) => s.id)`
   )
 
-/** 面板里含这一件的那一组（等它出现） */
-const groupHolding = (
-  fileId: string,
-  sessionId: string,
-  what: string
-): Promise<LibraryTimelineGroupShot> =>
+/** 面板里这一件在这条会话名下的那一行（'' = 不带会话；等它出现） */
+const rowOf = (fileId: string, sessionId: string, what: string): Promise<LibraryTimelineRowShot> =>
   until(
     async () =>
-      (await timeline.groups()).find(
-        (g) => g.sessionId === sessionId && g.files.some((f) => f.id === fileId)
-      ) ?? null,
+      (await timeline.rows()).find((r) => r.sessionId === sessionId && r.id === fileId) ?? null,
     what
   )
 
@@ -866,21 +860,25 @@ describe('file library L1', () => {
       )
       expect(shot.sessions[nSid]?.notebook).toBe(true)
 
-      // 界面：文件标签里 D 那一组有这件，N 那一组有 P1
+      // 界面：文件标签里 D 名下恰有这一行，N 名下有 P1 的一行
       timeline = libraryTimelinePane(app.main)
       await timeline.open()
-      const dGroup = await groupHolding(p3Id, dSid, "D's group with P3 on the Files tab")
-      expect(dGroup.title).toBe(D_TITLE)
-      expect(dGroup.canOpen).toBe(true)
-      expect(dGroup.files).toEqual([{ id: p3Id, relation: 'sent', missing: false }])
-      const nGroup = await groupHolding(p1Id, nSid, "N's group with P1 on the Files tab")
-      expect(nGroup.files.find((f) => f.id === p1Id)).toEqual({
-        id: p1Id,
-        relation: 'attached',
+      const dRow = await rowOf(p3Id, dSid, "D's row with P3 on the Files tab")
+      expect(dRow).toMatchObject({
+        sessionTitle: D_TITLE,
+        canOpenSession: true,
+        relation: 'sent',
         missing: false
       })
+      expect(dRow.name).not.toBe('')
+      expect(dRow.meta).toMatch(/^\d+(\.\d)? (B|KB|MB)$/)
+      expect((await timeline.rows()).filter((r) => r.sessionId === dSid).map((r) => r.id)).toEqual([
+        p3Id
+      ])
+      const nRow = await rowOf(p1Id, nSid, "N's row with P1 on the Files tab")
+      expect(nRow).toMatchObject({ relation: 'attached', missing: false })
+      expect(nRow.sessionTitle).not.toBe('')
       expect(await timeline.empty()).toBe(false)
-      expect(await timeline.count()).not.toBe('')
 
       // 点图 → 当前窗口的看图层（库引用，不开窗）；顶栏「在独立窗口打开」→ 预览窗口开的是库目录里那份
       await timeline.clickFile(p3Id)
@@ -906,7 +904,7 @@ describe('file library L1', () => {
         )
       }
 
-      // 点组标题 → 活动会话变成 D（此前开着的是笔记 N）
+      // 点行里的会话名 → 活动会话变成 D（此前开着的是笔记 N），不开看图层也不开预览窗口
       const sidebar = sidebarPane(app.main)
       expect(await sidebar.activeTitle()).not.toBe(D_TITLE)
       await timeline.clickSession(dSid)
@@ -914,32 +912,32 @@ describe('file library L1', () => {
         async () => (await sidebar.activeTitle()) === D_TITLE || null,
         'D became the active session'
       )
+      expect(await viewer.shot()).toBeNull()
+      expect(await app.filePreviewWindows()).toEqual([])
     },
     TURN_TIMEOUT
   )
 
-  it('TLE-2 deleting the session keeps its file on the timeline, in the no-session group', async () => {
-    const dayBefore = (await groupHolding(p3Id, dSid, "D's group before the delete")).day
+  it('TLE-2 deleting the session keeps its file on the timeline, without a session name', async () => {
+    const dayBefore = (await rowOf(p3Id, dSid, "D's row before the delete")).day
     expect(await timeline.active()).toBe(true)
 
     await app.main.eval(`window.api.session.delete(${JSON.stringify(dSid)})`)
 
     // 标签一直开着、没碰过：靠 library.changed 重取
     await until(
-      async () => !(await timeline.groups()).some((g) => g.sessionId === dSid) || null,
-      "D's group gone from the Files tab"
+      async () => !(await timeline.rows()).some((r) => r.sessionId === dSid) || null,
+      "D's rows gone from the Files tab"
     )
-    const orphan = await groupHolding(p3Id, '', 'P3 in the no-session group')
-    expect(orphan.day).toBe(dayBefore)
-    expect(orphan.canOpen).toBe(false)
-    expect(orphan.files.find((f) => f.id === p3Id)).toEqual({
-      id: p3Id,
+    const orphan = await rowOf(p3Id, '', 'P3 on a row without a session')
+    expect(orphan).toMatchObject({
+      day: dayBefore,
+      sessionTitle: '',
+      canOpenSession: false,
       relation: '',
       missing: false
     })
-    expect(
-      (await timeline.groups()).filter((g) => g.files.some((f) => f.id === p3Id))
-    ).toHaveLength(1)
+    expect((await timeline.rows()).filter((r) => r.id === p3Id)).toHaveLength(1)
 
     const shot = await timelineOf()
     const mine = shot.entries.filter((e) => e.item.id === p3Id)
@@ -1011,9 +1009,17 @@ describe('file library L1', () => {
       expect(before.entries.find((e) => e.item.id === artId && e.sessionId === eSid)).toMatchObject(
         { relation: 'produced', item: { storage: 'linked', source: 'artifact' } }
       )
-      const eGroup = await groupHolding(artId, eSid, "E's group with the artifact")
-      expect(eGroup.title).toBe(E_TITLE)
-      expect(eGroup.files).toEqual([{ id: artId, relation: 'produced', missing: false }])
+      const eRow = await rowOf(artId, eSid, "E's row with the artifact")
+      expect(eRow).toMatchObject({
+        sessionTitle: E_TITLE,
+        canOpenSession: true,
+        relation: 'produced',
+        missing: false,
+        name: ARTIFACT_TITLE
+      })
+      expect((await timeline.rows()).filter((r) => r.sessionId === eSid).map((r) => r.id)).toEqual([
+        artId
+      ])
 
       // 删掉 E：产物目录要没了，这一件先被拷进库里变成 managed
       await app.main.eval(`window.api.session.delete(${JSON.stringify(eSid)})`)
@@ -1036,17 +1042,19 @@ describe('file library L1', () => {
       expect(itemDirsOnDisk()).toEqual([...dirsBefore, artId].sort())
       expect(sessionLinks(eSid)).toEqual([])
 
-      // 时间线：还在，进了「没有会话」那一组，不是 missing
+      // 时间线：还在，那一行不再带会话名，不是 missing
       await until(
-        async () => !(await timeline.groups()).some((g) => g.sessionId === eSid) || null,
-        "E's group gone from the Files tab"
+        async () => !(await timeline.rows()).some((r) => r.sessionId === eSid) || null,
+        "E's rows gone from the Files tab"
       )
-      const orphan = await groupHolding(artId, '', 'artifact in the no-session group')
-      expect(orphan.files.find((f) => f.id === artId)).toEqual({
-        id: artId,
+      const orphan = await rowOf(artId, '', 'artifact on a row without a session')
+      expect(orphan).toMatchObject({
+        sessionTitle: '',
+        canOpenSession: false,
         relation: '',
         missing: false
       })
+      expect((await timeline.rows()).filter((r) => r.id === artId)).toHaveLength(1)
       const shot = await timelineOf()
       const mine = shot.entries.filter((e) => e.item.id === artId)
       expect(mine).toHaveLength(1)
