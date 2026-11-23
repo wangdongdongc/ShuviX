@@ -478,8 +478,8 @@ describe('一行里的东西', () => {
     await show(
       result([entry(1, 'S1', { at: at(11, 18, 9, 5) }), entry(2, null, { at: at(11, 18, 7, 42) })])
     )
-    expect($('[data-timeline-time]', rowEl(1)).textContent).toContain('09:05')
-    expect($('[data-timeline-time]', rowEl(2)).textContent).toContain('07:42')
+    expect($('[data-timeline-time]', rowEl(1)).textContent).toBe('09:05')
+    expect($('[data-timeline-time]', rowEl(2)).textContent).toBe('07:42')
   })
 
   it('TL-118 文件不在了：带 data-missing；第二行与 title 写「File not found」；图不画 img；还在的没有这个属性', async () => {

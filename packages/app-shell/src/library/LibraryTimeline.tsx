@@ -129,7 +129,9 @@ function Row({
     .join(' · ')
   const time = new Intl.DateTimeFormat(i18n.language, {
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    // 一律 24 小时制（用户裁决 2026-11-23）：英文界面否则是 "09:05 AM"，比别的语言宽一截
+    hourCycle: 'h23'
   }).format(new Date(entry.at))
   return (
     <div
