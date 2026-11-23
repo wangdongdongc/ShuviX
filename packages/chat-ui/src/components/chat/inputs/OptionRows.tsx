@@ -98,10 +98,13 @@ export function OptionRow({
               <bdi>{detail}</bdi>
             </span>
           ) : (
+            // 说明平时只占一行（几条长说明会把卡片撑到半屏），全文在悬停提示里；勾上的那行展开 —— 触屏没有悬停，
+            // 勾选题点一下就能看全（发送前还能再点掉）
             <span
-              className={`block leading-snug break-words text-text-tertiary ${
-                touch ? 'text-[13px]' : 'text-[11.5px]'
-              }`}
+              className={`block leading-snug text-text-tertiary ${
+                selected ? 'break-words' : 'truncate'
+              } ${touch ? 'text-[13px]' : 'text-[11.5px]'}`}
+              title={selected ? undefined : detail}
               data-option-detail=""
             >
               {detail}

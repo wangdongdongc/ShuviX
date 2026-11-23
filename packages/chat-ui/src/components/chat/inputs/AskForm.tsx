@@ -41,6 +41,7 @@ import { otherResponseOf, type AskDraft } from './drafts'
 import { DiffViewer } from '../DiffViewer'
 import { ASK_PREVIEW_MAX_H } from '../detailViewport'
 import { OptionRow, useOptionHotkeys } from './OptionRows'
+import { ClampedText } from './ClampedText'
 import { OtherAnswerRow } from './OtherAnswerRow'
 import { useAnswerSubmit } from './useAnswerSubmit'
 
@@ -764,9 +765,11 @@ export function AskForm({
         {review ? (
           <ReviewOpinion review={review} touch={touch} />
         ) : headline ? (
-          <p className={headlineClass} data-ask-description="">
-            {headline}
-          </p>
+          <ClampedText
+            text={headline}
+            className={headlineClass}
+            data={{ 'data-ask-description': '' }}
+          />
         ) : null}
 
         <div data-ask-preview="">

@@ -460,8 +460,8 @@
     "answerFeedback": "You didn't approve and replied: ",
     "recordYourAnswer": "Your answer: ",
     "recordNoSelection": "No option selected",
-    "recordShowOptions": "Show all {{count}} options",
-    "recordHideOptions": "Hide options"
+    "showFullText": "Show full text",
+    "hideFullText": "Show less"
   },
   "queue": {
     "steer": "Now",

@@ -181,11 +181,13 @@ describe('答完的 ask', () => {
     details: ASK
   }
 
-  it('TB-10 done：[data-tool-name=ask] 里是记录，没有工具行', () => {
+  it('TB-10 done：[data-tool-name=ask] 里是记录，没有工具行（唯一的按钮是记录自己那一行）', () => {
     render({ ...ASK_PROPS, args: undefined })
     const el = row('ask')
     expect(el.querySelector('[data-ask-record]')).not.toBeNull()
-    expect(el.querySelector('button')).toBeNull()
+    expect(
+      [...el.querySelectorAll('button')].map((b) => b.hasAttribute('data-ask-record-toggle'))
+    ).toEqual([true])
   })
 
   it.each(['running', 'error'] as const)('TB-11 %s：普通工具行，没有记录', (status) => {

@@ -16466,8 +16466,11 @@ export interface AskRecordShot {
   other: string | null
   none: string | null
   answeredBy: string | null
-  toggle: string | null
+  /** 记录那一行本身就是开关（2026-11-22 起）：展开了没有；没有开关 → null */
+  expanded: boolean | null
   toggleHeight: number
+  /** 那一行有没有边框（记录不再是卡片） */
+  bordered: boolean
   /** 展开了才有：每个选项的文字与有没有对勾 */
   options: Array<{ text: string; checked: boolean }>
 }
@@ -16613,8 +16616,9 @@ export function inlineAskPane(client: CdpClient): InlineAskPane {
           other: el.querySelector('[data-ask-record-other]')?.textContent ?? null,
           none: el.querySelector('[data-ask-record-none]')?.textContent ?? null,
           answeredBy: el.querySelector('[data-ask-record-by] [data-answered-by]')?.getAttribute('data-answered-by') ?? null,
-          toggle: toggle ? (toggle.textContent ?? '').trim() : null,
+          expanded: toggle ? toggle.getAttribute('aria-expanded') === 'true' : null,
           toggleHeight: toggle ? toggle.getBoundingClientRect().height : 0,
+          bordered: [el, toggle].some((n) => n && parseFloat(getComputedStyle(n).borderTopWidth) > 0),
           options: [...el.querySelectorAll('[data-ask-record-options] li')].map((li) => ({
             text: (li.textContent ?? '').trim(),
             checked: !!li.querySelector('svg.lucide-check')

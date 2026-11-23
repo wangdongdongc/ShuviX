@@ -6,6 +6,7 @@ import type { InputFormProps } from './types'
 import { buildChoiceResponse, type ChoiceDraft } from './drafts'
 import { OptionRow, useOptionHotkeys } from './OptionRows'
 import { OtherAnswerRow } from './OtherAnswerRow'
+import { ClampedText } from './ClampedText'
 import { useAnswerSubmit } from './useAnswerSubmit'
 
 /**
@@ -16,8 +17,8 @@ import { useAnswerSubmit } from './useAnswerSubmit'
  * 勾一项就是单选，勾几项就是多选。代价是单选也要多按一次确认 —— 换来的是
  * 表单永远和问题说的对得上。确认键始终在，未勾选时禁用；问题下面一行小字说明可以多选。
  *
- * 形状与审批卡相同：问题在上，选项是占满卡片宽度的行（OptionRows），下面一行写自己的话（OtherAnswerRow），
- * 发送键钉在最下面。整张卡只有这一个发送：勾的和写的一起发（buildChoiceResponse），不会丢掉其中一样。
+ * 形状与审批卡相同：问题在上（长了收成两行，见 ClampedText），选项是占满卡片宽度的行（OptionRows），最后一行
+ * 写自己的话（OtherAnswerRow），发送键就在这一行右端，不再单独占一行。整张卡只有这一个发送：勾的和写的一起发（buildChoiceResponse），不会丢掉其中一样。
  * 选项多了只有中间那段滚动，问题与确认键始终看得见（面板自身封顶，见 PendingInputsPanel）。
  */
 export function ChoiceForm({
@@ -58,14 +59,15 @@ export function ChoiceForm({
             size={touch ? 16 : 13}
             className={`text-accent/80 flex-shrink-0 ${touch ? 'mt-0.5' : 'mt-px'}`}
           />
-          <p
-            className={`flex-1 min-w-0 break-words font-medium text-text-primary leading-snug ${
-              touch ? 'text-sm' : 'text-[13px]'
-            }`}
-            data-choice-question=""
-          >
-            {question}
-          </p>
+          <div className="flex-1 min-w-0">
+            <ClampedText
+              text={question}
+              className={`break-words font-medium text-text-primary leading-snug ${
+                touch ? 'text-sm' : 'text-[13px]'
+              }`}
+              data={{ 'data-choice-question': '' }}
+            />
+          </div>
           {titleAccessory}
         </div>
         <p
@@ -108,29 +110,12 @@ export function ChoiceForm({
           onChange={(otherText) => onDraftChange({ ...draft, otherText })}
           response={response}
           submit={submit}
+          confirm={{
+            label:
+              selected.length > 0 ? `${t('input.send')} (${selected.length})` : t('input.send'),
+            data: { 'data-choice-confirm': '' }
+          }}
         />
-      </div>
-
-      <div
-        className={`flex-shrink-0 flex border-t border-border-secondary/40 ${
-          touch ? 'px-4 py-2.5' : 'px-3.5 py-2 justify-end'
-        }`}
-      >
-        <button
-          type="button"
-          onClick={() => response && submit.send(response)}
-          disabled={!response || submit.sending}
-          data-choice-confirm=""
-          // 还没有可发的内容时是一块安静的灰（半透明的强调色在深色主题里发闷，字也读不清）
-          className={`rounded-lg font-medium transition-colors disabled:cursor-not-allowed ${
-            response
-              ? 'bg-accent text-white hover:bg-accent-hover'
-              : 'bg-bg-secondary text-text-tertiary'
-          } ${touch ? 'flex-1 h-10 text-sm' : 'px-3 py-1 text-xs'}`}
-        >
-          {t('input.send')}
-          {selected.length > 0 && <span className="tabular-nums"> ({selected.length})</span>}
-        </button>
       </div>
     </div>
   )

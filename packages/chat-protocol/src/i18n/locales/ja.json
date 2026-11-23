@@ -460,8 +460,8 @@
     "answerFeedback": "承認せずに返信しました：",
     "recordYourAnswer": "あなたの回答：",
     "recordNoSelection": "選択肢は選ばれていません",
-    "recordShowOptions": "{{count}} 個の選択肢をすべて表示",
-    "recordHideOptions": "選択肢を閉じる"
+    "showFullText": "全文を表示",
+    "hideFullText": "折りたたむ"
   },
   "queue": {
     "steer": "即時",

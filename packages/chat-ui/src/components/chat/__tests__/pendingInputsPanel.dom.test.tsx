@@ -268,7 +268,7 @@ describe('PendingInputsPanel：多条与步进器', () => {
     const question = container.querySelector('[data-choice-question]')!
     expect(question.textContent).toBe('Which?')
     expect(counter()).toBe('2/2')
-    expect(stepper()!.parentElement).toBe(question.parentElement)
+    expect(stepper()!.parentElement!.contains(question)).toBe(true)
 
     await step('next')
     expect(kind()).toBe('ask')

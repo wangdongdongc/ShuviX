@@ -247,7 +247,7 @@ describe('ChoiceForm：数字键', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('CF-6 触屏档：数字键什么都不做，点行照常勾；发送键 flex-1 h-10', () => {
+  it('CF-6 触屏档：数字键什么都不做，点行照常勾；发送键在写字那一行右端、h-7', () => {
     const onSubmit = render(choice(), { touch: true })
     for (const key of ['1', '2', '3']) expect(press(key), key).toBe(true)
     expect(pressed()).toEqual(['false', 'false', 'false'])
@@ -255,7 +255,8 @@ describe('ChoiceForm：数字键', () => {
     expect(pressed()).toEqual(['true', 'false', 'false'])
     click(row('A'))
     expect(pressed()).toEqual(['false', 'false', 'false'])
-    expect(classesOf(confirm())).toEqual(expect.arrayContaining(['flex-1', 'h-10']))
+    expect(classesOf(confirm())).toEqual(expect.arrayContaining(['h-7']))
+    expect(confirm().closest('[data-other-row]')).not.toBeNull()
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
@@ -318,7 +319,8 @@ describe('ChoiceForm：说明、滚动段、选项组', () => {
     render(choice(), { accessory: createElement('span', { 'data-acc': '' }, 'ACC') })
     const acc = container.querySelector('[data-acc]')!
     expect(acc).not.toBeNull()
-    expect(acc.parentElement).toBe(question().parentElement)
+    // 问题收在 ClampedText 里，标签与它同在顶行
+    expect(acc.parentElement!.contains(question())).toBe(true)
     expect(before(question(), acc)).toBe(true)
   })
 })

@@ -460,8 +460,8 @@
     "answerFeedback": "你没有批准，并回复：",
     "recordYourAnswer": "你的回答：",
     "recordNoSelection": "没有选择任何选项",
-    "recordShowOptions": "展开看全部 {{count}} 个选项",
-    "recordHideOptions": "收起选项"
+    "showFullText": "展开全文",
+    "hideFullText": "收起"
   },
   "queue": {
     "steer": "立即",

@@ -40,9 +40,7 @@ const NEW_KEYS = [
   'answerDenied',
   'answerFeedback',
   'recordYourAnswer',
-  'recordNoSelection',
-  'recordShowOptions',
-  'recordHideOptions'
+  'recordNoSelection'
 ] as const
 
 let container: HTMLDivElement
@@ -202,10 +200,8 @@ const all = (selector: string): HTMLElement[] => [
 const toggle = (): HTMLButtonElement | null =>
   container.querySelector<HTMLButtonElement>('[data-ask-record-toggle]')
 const legacyOtherText = (): string | undefined =>
-  all('[data-ask-record] > div').find(
-    (el) =>
-      el.classList.contains('whitespace-pre-wrap') && !el.hasAttribute('data-ask-record-other')
-  )?.textContent ?? undefined
+  q('[data-ask-record-legacy]')?.textContent ?? undefined
+const expanded = (): boolean => toggle()!.getAttribute('aria-expanded') === 'true'
 
 describe('AskRecord', () => {
   it('AR-10 一个选择：问题 + 一行答案', () => {
@@ -221,9 +217,12 @@ describe('AskRecord', () => {
     expect(all('[data-ask-record-selection]').map((el) => el.textContent)).toEqual(['B', 'A'])
   })
 
-  it('AR-12 自己写的：「Your answer:」+ 原文，不再画旧会话那一段', () => {
+  it('AR-12 自己写的：一行里是原文，点开是「Your answer:」+ 原文；不再画旧会话那一段', () => {
     record(DETAILS({ selections: [], other: 'be funny' }), undefined, 'User responded: be funny')
-    expect(q('[data-ask-record-other]')!.textContent).toBe('Your answer: be funny')
+    expect(q('[data-ask-record-other]')!.textContent).toBe('be funny')
+    expect(q('[data-ask-record-note]')).toBeNull()
+    act(() => toggle()!.click())
+    expect(q('[data-ask-record-note]')!.textContent).toBe('Your answer: be funny')
     expect(legacyOtherText()).toBeUndefined()
     expect(q('[data-ask-record-none]')).toBeNull()
   })
@@ -235,7 +234,7 @@ describe('AskRecord', () => {
       'User selected: A\nUser also wrote:\nonly the frontend'
     )
     expect(all('[data-ask-record-selection]').map((el) => el.textContent)).toEqual(['A'])
-    expect(q('[data-ask-record-other]')!.textContent).toBe('Your answer: only the frontend')
+    expect(q('[data-ask-record-other]')!.textContent).toBe('only the frontend')
     expect(legacyOtherText()).toBeUndefined()
   })
 
@@ -249,8 +248,9 @@ describe('AskRecord', () => {
     )
     const other = q('[data-ask-record-other]')!
     expect(other.textContent).toBe('use staging')
-    expect(other.textContent).not.toContain('Your answer')
     expect(q('[data-ask-record-by] [data-answered-by="parent-session"]')).not.toBeNull()
+    act(() => toggle()!.click())
+    expect(q('[data-ask-record-note]')!.textContent).toBe('use staging')
   })
 
   const LEGACY = 'User responded with feedback instead of selecting: use the other one'
@@ -294,18 +294,28 @@ describe('AskRecord', () => {
     }
   )
 
-  it('AR-17 选项：收着时只有开关，点开三行，再点收起', () => {
+  it('AR-17 一行就是开关：收着时没有选项列表；点开是完整问题 + 三行，再点收起', () => {
     record(DETAILS(), ARGS)
-    expect(toggle()!.textContent).toBe('Show all 3 options')
+    expect(expanded()).toBe(false)
+    expect(toggle()!.textContent).toContain('Which style?')
+    expect(toggle()!.textContent).toContain('Terse')
     expect(q('[data-ask-record-options]')).toBeNull()
+    expect(q('[data-ask-record-detail]')).toBeNull()
 
     act(() => toggle()!.click())
-    expect(toggle()!.textContent).toBe('Hide options')
+    expect(expanded()).toBe(true)
+    expect(q('[data-ask-record-detail]')!.textContent).toContain('Which style?')
     expect(all('[data-ask-record-options] li')).toHaveLength(3)
 
     act(() => toggle()!.click())
-    expect(toggle()!.textContent).toBe('Show all 3 options')
+    expect(expanded()).toBe(false)
     expect(q('[data-ask-record-options]')).toBeNull()
+  })
+
+  it('AR-17b 一行没有边框：不是卡片', () => {
+    record(DETAILS(), ARGS)
+    expect(q('[data-ask-record]')!.className).not.toMatch(/\bborder\b/)
+    expect(toggle()!.className).not.toMatch(/\bborder\b/)
   })
 
   it('AR-18 展开的列表：对勾只在选中的上；说明显示；没有说明的没有那一段', () => {
@@ -327,15 +337,16 @@ describe('AskRecord', () => {
     ['字符串', 'x'],
     ['options 是字符串', { options: 'x' }],
     ['options 全是坏项', { options: [null, 3, { label: 1 }] }]
-  ])('AR-19 参数形状不对（%s）：没有开关，不崩', (_label, args) => {
+  ])('AR-19 参数形状不对（%s）：不崩；点开只有完整问题，没有选项列表', (_label, args) => {
     record(DETAILS(), args)
-    expect(toggle()).toBeNull()
     expect(all('[data-ask-record-selection]')).toHaveLength(1)
+    act(() => toggle()!.click())
+    expect(q('[data-ask-record-detail]')!.textContent).toContain('Which style?')
+    expect(q('[data-ask-record-options]')).toBeNull()
   })
 
-  it('AR-20 部分坏项：跳过坏的，计数只数好的', () => {
+  it('AR-20 部分坏项：跳过坏的，只列好的', () => {
     record(DETAILS(), { options: [{ label: 'Good' }, null, 3, { label: 2 }, { label: 'Also' }] })
-    expect(toggle()!.textContent).toBe('Show all 2 options')
     act(() => toggle()!.click())
     expect(all('[data-ask-record-options] li').map((li) => li.textContent)).toEqual([
       'Good',
@@ -359,18 +370,20 @@ describe('AskRecord', () => {
       DETAILS({ question: `Q ${PLACEHOLDER}`, selections: [PLACEHOLDER], other: PLACEHOLDER }),
       { options: [{ label: PLACEHOLDER, description: PLACEHOLDER }] }
     )
+    // 一行里：问题、选择、other
+    expect(chips()).toHaveLength(3)
     act(() => toggle()!.click())
-    // 问题、选择、other、选项标题、选项说明
-    expect(chips()).toHaveLength(5)
+    // 点开再加：完整问题、选项标题、选项说明、other 全文
+    expect(chips()).toHaveLength(7)
   })
 
-  it('AR-23 触屏档：开关 min-h-8，卡片 text-sm；紧凑档没有', () => {
+  it('AR-23 触屏档：那一行 min-h-8、text-sm；紧凑档没有', () => {
     record(DETAILS(), ARGS, undefined, 'touch')
     expect(toggle()!.classList.contains('min-h-8')).toBe(true)
-    expect(q('[data-ask-record]')!.classList.contains('text-sm')).toBe(true)
+    expect(toggle()!.classList.contains('text-sm')).toBe(true)
 
     record(DETAILS(), ARGS)
     expect(toggle()!.classList.contains('min-h-8')).toBe(false)
-    expect(q('[data-ask-record]')!.classList.contains('text-sm')).toBe(false)
+    expect(toggle()!.classList.contains('text-sm')).toBe(false)
   })
 })

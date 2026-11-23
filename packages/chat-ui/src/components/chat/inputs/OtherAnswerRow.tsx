@@ -43,7 +43,8 @@ export function OtherAnswerRow({
   onChange,
   response,
   submit,
-  sendButton = false
+  sendButton = false,
+  confirm
 }: {
   placeholder: string
   value: string
@@ -53,6 +54,11 @@ export function OtherAnswerRow({
   submit: AnswerSubmit
   /** 这一行自己带发送键（有内容时才出现） */
   sendButton?: boolean
+  /**
+   * 整张卡唯一的发送键放在这一行右端（选项题：勾的与写的一起发）。一直摆着，还没有可发的内容时是一块安静的灰；
+   * 给了它就不再看 `sendButton`
+   */
+  confirm?: { label: string; data?: Record<string, string> }
 }): React.JSX.Element {
   const { t } = useTranslation()
   const touch = useChatDensity() === 'touch'
@@ -108,20 +114,38 @@ export function OtherAnswerRow({
             touch ? 'py-[3px] text-base' : 'py-px text-[13px]'
           }`}
         />
-        {sendButton && response && (
+        {confirm ? (
           <button
             type="button"
-            onClick={() => submit.send(response)}
-            disabled={submit.sending}
-            title={t('input.send')}
-            aria-label={t('input.send')}
-            data-other-submit=""
-            className={`flex-shrink-0 flex items-center justify-center bg-accent text-white hover:bg-accent-hover disabled:opacity-50 transition-colors ${
-              touch ? 'h-7 w-7 rounded-full' : 'h-5 w-5 rounded-md'
-            }`}
+            onClick={() => response && submit.send(response)}
+            disabled={!response || submit.sending}
+            {...confirm.data}
+            // 还没有可发的内容时是一块安静的灰（半透明的强调色在深色主题里发闷，字也读不清）
+            className={`flex-shrink-0 rounded-lg font-medium transition-colors disabled:cursor-not-allowed ${
+              response
+                ? 'bg-accent text-white hover:bg-accent-hover'
+                : 'bg-bg-secondary text-text-tertiary'
+            } ${touch ? 'h-7 px-3 text-[13px]' : 'h-5 px-2 text-[11.5px]'}`}
           >
-            <Send size={touch ? 14 : 11} />
+            {confirm.label}
           </button>
+        ) : (
+          sendButton &&
+          response && (
+            <button
+              type="button"
+              onClick={() => submit.send(response)}
+              disabled={submit.sending}
+              title={t('input.send')}
+              aria-label={t('input.send')}
+              data-other-submit=""
+              className={`flex-shrink-0 flex items-center justify-center bg-accent text-white hover:bg-accent-hover disabled:opacity-50 transition-colors ${
+                touch ? 'h-7 w-7 rounded-full' : 'h-5 w-5 rounded-md'
+              }`}
+            >
+              <Send size={touch ? 14 : 11} />
+            </button>
+          )
         )}
       </div>
       {submit.error && (
