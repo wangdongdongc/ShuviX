@@ -73,6 +73,9 @@ const TABS: { key: MobileTab; labelKey: string; Icon: typeof MessagesSquare }[] 
 ]
 
 /** 浏览器历史里标记「这一条是手机布局打开对话时压的」 */
+/** 会话页标题旁的视图切换只画这三段：资料库在手机上是底部的一个标签 */
+const PHONE_SIDEBAR_VIEWS: readonly SidebarView[] = ['sessions', 'inbox', 'calendar']
+
 const HISTORY_MARK = 'shuvixMobileChat'
 /** 同上，打开小组件时压的 */
 const WIDGET_HISTORY_MARK = 'shuvixMobileWidget'
@@ -157,8 +160,9 @@ function MobileShellBody(): React.JSX.Element {
   const [chatOpen, setChatOpen] = useState(false)
   const chatOpenRef = useRef(false)
   // 会话页顶层的三种视图（与桌面侧栏同一个切换、同一份记忆）：分组列表 / 收件箱 / 日历。收件箱与日历头一次切到
-  // 才挂，之后一直挂着、只切显示
-  const view = useSidebarViewStore((st) => st.view)
+  // 才挂，之后一直挂着、只切显示。桌面的第四种「资料库」手机没有（这里它是底部的一个标签）：记着它就当分组列表
+  const storedView = useSidebarViewStore((st) => st.view)
+  const view: SidebarView = storedView === 'library' ? 'sessions' : storedView
   const setView = useSidebarViewStore((st) => st.setView)
   const [viewsMounted, setViewsMounted] = useState<ReadonlySet<SidebarView>>(() => new Set([view]))
   if (!viewsMounted.has(view)) setViewsMounted(new Set([...viewsMounted, view]))
@@ -470,6 +474,7 @@ function MobileShellBody(): React.JSX.Element {
         onChange={setView}
         inboxAlert={waiting.length > 0}
         inboxCount={waiting.length + unread.length}
+        views={PHONE_SIDEBAR_VIEWS}
         size="touch"
         className="mr-1"
       />

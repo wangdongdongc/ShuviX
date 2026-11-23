@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 /**
- * 侧栏的视图切换 `SidebarViewSwitch`（2026-11-16；jsdom）—— 只有图标的三段：会话 / 收件箱 / 日历。
+ * 侧栏的视图切换 `SidebarViewSwitch`（2026-11-16；jsdom）—— 只有图标的分段：会话 / 收件箱 / 日历 / 资料库
+ * （资料库 2026-11-22 起，在日历右边）。
  *
  * 契约：
- *   - 三种视图的顺序固定；认不得的值一律当成 `sessions`（`toSidebarView`）；
- *   - 根是 `role="group"`，`data-sidebar-view-switch` = 当前视图；三枚 `button[data-sidebar-view]`，当前那枚
+ *   - 四种视图的顺序固定；认不得的值一律当成 `sessions`（`toSidebarView`）；
+ *   - `views` 只画给的那几段（按给的顺序；手机不给资料库）；缺省四段全画；
+ *   - 根是 `role="group"`，`data-sidebar-view-switch` = 当前视图；每段一枚 `button[data-sidebar-view]`，当前那枚
  *     `aria-pressed="true"`；
  *   - 收件箱那一段带 `data-inbox-count`；有条数时名字后面接「 · N」（悬停提示 / 读屏），数字不画出来；
  *   - `inboxAlert` → 收件箱那一段上一个 `[data-view-alert]`，与条数、与是否选中都无关；
@@ -65,7 +67,8 @@ function lookup(obj: unknown, key: string): unknown {
 const NAMES: Record<SidebarView, string> = {
   sessions: en.sidebar.viewSessions,
   inbox: en.inbox.title,
-  calendar: en.panel.calendar
+  calendar: en.panel.calendar,
+  library: en.sidebar.library
 }
 
 beforeAll(async () => {
@@ -88,11 +91,11 @@ afterEach(() => {
 })
 
 describe('sidebar views: pure pieces', () => {
-  it('VS-1 the three views, in order', () => {
-    expect([...SIDEBAR_VIEWS]).toEqual(['sessions', 'inbox', 'calendar'])
+  it('VS-1 the four views, in order (library to the right of the calendar)', () => {
+    expect([...SIDEBAR_VIEWS]).toEqual(['sessions', 'inbox', 'calendar', 'library'])
   })
 
-  it('VS-2 toSidebarView keeps the three valid values', () => {
+  it('VS-2 toSidebarView keeps the four valid values', () => {
     for (const view of SIDEBAR_VIEWS) expect(toSidebarView(view)).toBe(view)
   })
 
@@ -117,7 +120,8 @@ describe('sidebar views: pure pieces', () => {
     expect(SIDEBAR_VIEW_LABEL_KEYS).toEqual({
       sessions: 'sidebar.viewSessions',
       inbox: 'inbox.title',
-      calendar: 'panel.calendar'
+      calendar: 'panel.calendar',
+      library: 'sidebar.library'
     })
   })
 
@@ -170,15 +174,38 @@ describe('SidebarViewSwitch', () => {
     expect(el.getAttribute('aria-label')).toBe(en.sidebar.viewSwitch)
   })
 
-  it('VS-8 three buttons in order, each type=button', () => {
+  it('VS-8 four buttons in order, each type=button', () => {
     render()
     const list = buttons()
     expect(list.map((b) => b.getAttribute('data-sidebar-view'))).toEqual([
       'sessions',
       'inbox',
-      'calendar'
+      'calendar',
+      'library'
     ])
     for (const b of list) expect(b.getAttribute('type')).toBe('button')
+  })
+
+  it('VS-8b views draws only the given segments, in the given order', () => {
+    const onChange = vi.fn()
+    render({ views: ['sessions', 'inbox', 'calendar'], onChange })
+    expect(buttons().map((b) => b.getAttribute('data-sidebar-view'))).toEqual([
+      'sessions',
+      'inbox',
+      'calendar'
+    ])
+    expect(container.querySelector('[data-sidebar-view="library"]')).toBeNull()
+    act(() => seg('calendar').click())
+    expect(onChange).toHaveBeenCalledWith('calendar')
+  })
+
+  it('VS-8c the library segment is named Library and changes to library', () => {
+    const onChange = vi.fn()
+    render({ onChange })
+    expect(seg('library').getAttribute('aria-label')).toBe(en.sidebar.library)
+    expect(seg('library').hasAttribute('data-inbox-count')).toBe(false)
+    act(() => seg('library').click())
+    expect(onChange).toHaveBeenCalledWith('library')
   })
 
   it.each(SIDEBAR_VIEWS.map((v) => [v]))('VS-9 only %s is pressed', (value) => {
@@ -304,7 +331,7 @@ describe('SidebarViewSwitch', () => {
     expect(snapshot()).toEqual(regular)
     expect(container.querySelectorAll('[data-view-alert]').length).toBe(1)
     const icons = container.querySelectorAll('button[data-sidebar-view] svg')
-    expect(icons.length).toBe(3)
+    expect(icons.length).toBe(4)
     for (const icon of Array.from(icons)) expect(icon.getAttribute('aria-hidden')).toBe('true')
     act(() => seg('inbox').click())
     expect(onChange).not.toHaveBeenCalled()

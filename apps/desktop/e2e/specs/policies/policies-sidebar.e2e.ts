@@ -733,13 +733,17 @@ describe('侧栏安全策略分组', () => {
     }
   })
 
-  it('PS-H2 侧栏置顶分组顺序 = agents → policies → hooks → skills → knowledge（资料库里不再有 bots）；Bots 分节在资料库之后、项目分节之前', async () => {
-    const outline = await sidebarOutline(app.main)
+  it('PS-H2 资料库视图里的分组顺序 = agents → policies → hooks → skills → knowledge；会话视图里没有它们，Bots 分节在项目分节之前', async () => {
     const library = ['agents', 'policies', 'hooks', 'skills', 'knowledge']
-    expect(outline.filter((g) => [...library, 'bots'].includes(g))).toEqual(library)
+    const libraryOutline = await sidebarOutline(app.main, 'library')
+    expect(libraryOutline.filter((g) => [...library, 'bots'].includes(g))).toEqual(library)
+    const outline = await sidebarOutline(app.main)
+    expect(
+      outline.filter((g) => library.includes(g)),
+      JSON.stringify(outline)
+    ).toEqual([])
     const at = (key: string): number => outline.indexOf(key)
-    expect(at('library-section'), JSON.stringify(outline)).toBeGreaterThanOrEqual(0)
-    expect(at('bots-section'), JSON.stringify(outline)).toBeGreaterThan(at('knowledge'))
+    expect(at('bots-section'), JSON.stringify(outline)).toBeGreaterThanOrEqual(0)
     expect(at('projects-section'), JSON.stringify(outline)).toBeGreaterThan(at('bots-section'))
   })
 })

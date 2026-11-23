@@ -713,6 +713,20 @@ describe('MobileShell: the three views of the Chats tab', () => {
     expect(tabbar().style.display).toBe('')
   })
 
+  it('MV-16b the switch offers only sessions / inbox / calendar (the phone has a Library tab)', () => {
+    mount()
+    expect(lastSwitch().views).toEqual(['sessions', 'inbox', 'calendar'])
+  })
+
+  it('MV-16c a remembered library view (set on the desktop) shows the sessions list', () => {
+    useSidebarViewStore.setState({ view: 'library' })
+    mount()
+    expect(shownViews()).toEqual(['sessions'])
+    expect(lastSwitch().value).toBe('sessions')
+    expect(viewTitle()!.getAttribute('data-mobile-view-title')).toBe('sessions')
+    expect(searchInput()).not.toBeNull()
+  })
+
   it('MV-16 the calendar as the remembered view: mirror', () => {
     useSidebarViewStore.setState({ view: 'calendar' })
     mount()

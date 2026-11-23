@@ -2,8 +2,9 @@
 /**
  * 桌面侧栏的三种画法（components/sidebar/Sidebar.tsx 的 `mode` / `onOpenSession`，jsdom）。
  *
- * 契约：`full`（缺省，桌面）= 共享侧栏 + 窗口拖拽 / 悬浮徽标 + 底部设置栏 + 五个资料库分组（智能体 →
- * 安全策略 → Hooks → 技能 → 知识库；跟踪项 2026-11-10 起在收件箱页里，桌面侧栏没有这一组了）；`sessions`（手机
+ * 契约：`full`（缺省，桌面）= 共享侧栏 + 窗口拖拽 / 悬浮徽标 + 底部设置栏 + 「资料库」视图里的五个分组（智能体 →
+ * 安全策略 → Hooks → 技能 → 知识库；2026-11-22 起不在会话列表顶上，是侧栏的第四种视图；跟踪项 2026-11-10 起在
+ * 收件箱页里，桌面侧栏没有这一组了）；`sessions`（手机
  * 「会话」页）= 共享侧栏，不带任何 caps、不画底部设置栏、不画那几组；`library`（手机「资料库」页）= 不画共享侧栏，
  * 只有那五组（跟踪项在收件箱页里），装在 `[data-mobile-list]` 里；给了 `libraryDrill`（两层导航）时那五组分在两张
  * `[data-library-card]` 里（智能体 / 技能 / 知识库，安全策略 / Hooks），各组都拿到同一个 `drill`。
@@ -13,7 +14,8 @@
  * 选中 null（离开会话）不告诉它。换一个 onOpenSession 回调 → 之后用新的；分组的 adapter 引用不变（分组以
  * adapter 为扫描依赖，换引用会重扫）。
  *
- *   DS-1 full：caps {windowDrag, pin}、hideFooter false、groupsPrepend = Agent, Policy, Hook, Skill, Knowledge（没有 Tracking）
+ *   DS-1 full：caps {windowDrag, pin}、hideFooter false、没有 groupsPrepend；会话视图里没有那五组，切到资料库视图
+ *        才有：Agent, Policy, Hook, Skill, Knowledge（没有 Tracking）
  *   DS-2 sessions：caps {}、hideFooter true、没有分组
  *   DS-3 library（不给 libraryDrill）：没有共享侧栏；五组按桌面的顺序在 [data-mobile-list] 里，没有 Tracking、
  *        没有 [data-library-card]，各组的 drill 是 undefined
@@ -24,9 +26,10 @@
  *        deleteSessions 的确认流程（详见文件末尾那一组）
  *   SE-1 / SE-2 「项目配置」的开法（2026-11-16）：不给 `onEditProject` = 桌面那个居中的对话框；给了（手机布局）就只
  *        调它、不挂对话框
- *   DS-V1..19 侧栏的三种视图（2026-11-16，只在 full）：顶上那一行是视图切换（条数 = 等你回答 + 新回复，有在等的才带点）；
- *        切到收件箱 / 日历 → 会话列表藏起来（`hideList`），那一种视图头一次用到才挂、之后一直挂着只切显示；
- *        sessions / library 没有切换、没有这两块。原先侧栏里的「收件箱」那一行（开右侧面板）没有了
+ *   DS-V1..20 侧栏的四种视图（2026-11-16，资料库 2026-11-22，只在 full）：顶上那一行是视图切换（条数 = 等你回答 +
+ *        新回复，有在等的才带点）；切到收件箱 / 日历 / 资料库 → 会话列表藏起来（`hideList`），那一种视图头一次用到才挂、
+ *        之后一直挂着只切显示；sessions / library 两种画法没有切换、没有这几块。原先侧栏里的「收件箱」那一行（开右侧
+ *        面板）与「资料库」分节标题都没有了
  *
  * 整个 `@shuvix/app-shell` 换成记 props 的替身（共享 Sidebar 与六个分组、视图切换、收件箱面板、useInboxSections、
  * useProjects、useSessionDelete、SessionConfigDialog）；日历面板、跟踪项 adapter、视图 store 也是替身（store 的 hook
@@ -330,6 +333,9 @@ describe('desktop Sidebar modes', () => {
     expect(lastShared().caps).toEqual({ windowDrag: true, pin: true })
     expect(botsAdapter()).toBeDefined()
     expect(lastShared().hideFooter).toBe(false)
+    expect(lastShared().groupsPrepend).toBeUndefined()
+    expect(stubGroups()).toEqual([])
+    switchTo('library')
     expect(stubGroups()).toEqual(GROUP_ORDER)
     expect(container.querySelector('[data-mobile-list]')).toBeNull()
   })
@@ -479,12 +485,15 @@ describe('DS-V the three sidebar views (full only)', () => {
     for (const args of rec.sectionsArgs) expect(args[0]).toBeUndefined()
   })
 
-  it.each([['inbox'], ['calendar']])('DS-V4 full, %s view: the list is hidden', (view) => {
-    rec.view = view
-    render()
-    expect(lastShared().hideList).toBe(true)
-    expect(lastSwitch().value).toBe(view)
-  })
+  it.each([['inbox'], ['calendar'], ['library']])(
+    'DS-V4 full, %s view: the list is hidden',
+    (view) => {
+      rec.view = view
+      render()
+      expect(lastShared().hideList).toBe(true)
+      expect(lastSwitch().value).toBe(view)
+    }
+  )
 
   it('DS-V5 the switch changes only the view', () => {
     render()
@@ -579,18 +588,32 @@ describe('DS-V the three sidebar views (full only)', () => {
     expect(rec.calendarMounts).toBe(1)
   })
 
-  it('DS-V15 full: no inbox row — the Library heading is followed directly by the five groups', () => {
+  it('DS-V15 full: no Library heading or inbox row in the list; the library pane holds the five groups directly', () => {
     render()
-    const heading = container.querySelector('[data-sidebar-section="library"]')!
-    expect(heading.textContent).toBe(en.sidebar.library)
-    const following: string[] = []
-    for (let el = heading.nextElementSibling; el; el = el.nextElementSibling) {
-      if (!el.hasAttribute('data-stub-group')) break
-      following.push(el.getAttribute('data-stub-group')!)
-    }
-    expect(following).toEqual(GROUP_ORDER)
-    expect(heading.nextElementSibling!.getAttribute('data-stub-group')).toBe('Agent')
+    expect(container.querySelector('[data-sidebar-section="library"]')).toBeNull()
     expect(container.querySelector('[data-inbox-row]')).toBeNull()
+    expect(pane('library')).toBeNull()
+    switchTo('library')
+    expect(panes()).toEqual(['library'])
+    const scroller = pane('library')!.querySelector('[data-sidebar-library]')!
+    expect([...scroller.children].map((el) => el.getAttribute('data-stub-group'))).toEqual(
+      GROUP_ORDER
+    )
+    expect(pane('library')!.style.display).toBe('')
+  })
+
+  it('DS-V20 the library pane mounts once, keeps its groups through other views, and sits after the calendar', () => {
+    render()
+    switchTo('library')
+    const mountsBefore = GROUP_ORDER.map((name) => rec.groupMounts.get(name))
+    switchTo('calendar')
+    expect(panes()).toEqual(['calendar', 'library'])
+    expect(pane('library')!.style.display).toBe('none')
+    switchTo('sessions')
+    expect(lastShared().hideList).toBe(false)
+    switchTo('library')
+    expect(pane('library')!.style.display).toBe('')
+    expect(GROUP_ORDER.map((name) => rec.groupMounts.get(name))).toEqual(mountsBefore)
   })
 
   it('DS-V16 sessions with the store on inbox: no switch, no panes, the list shows', () => {
@@ -821,6 +844,8 @@ describe('drill (phone sessions page)', () => {
     render({ drill })
     expect(lastShared().drill).toBeUndefined()
     expect(container.querySelector('[data-inbox-row]')).toBeNull()
+    switchTo('library', { drill })
+    expect(lastShared().drill).toBeUndefined()
     expect(stubGroups()).toEqual(GROUP_ORDER)
     expect(lastShared().caps).toEqual({ windowDrag: true, pin: true })
     expect(lastShared().hideFooter).toBe(false)
@@ -923,6 +948,7 @@ describe('libraryDrill (phone library page)', () => {
 
   it('DS-14 full and sessions ignore libraryDrill', () => {
     const libraryDrill = { scope: 'agents', onOpen: vi.fn() }
+    rec.view = 'library'
     render({ libraryDrill })
     expect(stubGroups()).toEqual(GROUP_ORDER)
     for (const name of GROUP_ORDER) expect(lastDrill(name), name).toBeUndefined()

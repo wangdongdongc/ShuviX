@@ -2862,6 +2862,97 @@ export interface SidebarPane {
 // 返回值取自 `window.__E2E_MENU_PICK`。下面这组助手是「钉好要选哪一项 → 点 ⋮ / 右键 →
 // 顺带核对该项在不在菜单里」的唯一实现，sidebarPane 与 botsPane 都只是换了 scope 来调。
 
+/**
+ * 主窗侧栏的视图（2026-11-22 起四种：会话 / 收件箱 / 日历 / 资料库）。资料库那几组（智能体 / 安全策略 / Hooks /
+ * 技能 / 知识库）只长在「资料库」视图里（头一次切过去才挂上），会话、项目、Bots 只长在「会话」视图里 —— 两边的
+ * page object 都先经这里切到自己那一种。没有切换（侧栏收起、手机布局）就什么都不做。
+ */
+export type MainSidebarView = 'sessions' | 'inbox' | 'calendar' | 'library'
+
+const SIDEBAR_VIEW_SWITCH = `document.querySelector('[data-sidebar-view-switch]')`
+
+/** 此刻是哪种视图；没有切换 → null */
+export function currentSidebarView(main: CdpClient): Promise<MainSidebarView | null> {
+  return main.eval<MainSidebarView | null>(
+    `${SIDEBAR_VIEW_SWITCH}?.getAttribute('data-sidebar-view-switch') ?? null`
+  )
+}
+
+/** 切到某种视图并等它上屏（会话视图 = 列表露出来；另几种 = 那一格露出来） */
+export async function showSidebarView(main: CdpClient, view: MainSidebarView): Promise<void> {
+  let now = await currentSidebarView(main)
+  // 刚启动时侧栏可能还没画出来：等它一会儿（侧栏收起 / 手机布局时本来就没有，等满就算了）
+  for (let i = 0; now === null && i < 25; i++) {
+    await sleep(200)
+    now = await currentSidebarView(main)
+  }
+  if (now === null || now === view) return
+  await main.eval(
+    `${SIDEBAR_VIEW_SWITCH}?.querySelector('[data-sidebar-view=${JSON.stringify(view)}]')?.click()`
+  )
+  const shown =
+    view === 'sessions'
+      ? `document.querySelector('[data-sidebar-list]')`
+      : `document.querySelector('[data-sidebar-view-pane=${JSON.stringify(view)}]')`
+  await until(
+    () =>
+      main.eval<boolean>(
+        `(() => { const el = ${shown}; return !!el && el.style.display !== 'none' && el.getClientRects().length > 0 })()`
+      ),
+    `sidebar ${view} view shown`
+  )
+}
+
+/** 资料库那几组的组键（`data-group`）：经 sidebarPane 拿它们的组时要先在资料库视图里 */
+const LIBRARY_GROUP_KEYS = new Set(['agents', 'policies', 'hooks', 'skills', 'knowledge'])
+
+/**
+ * 给一个 page object 的每个方法前面垫一步「切到某种视图」。`view` 可以按这次调用的参数挑（sidebarPane 的
+ * setGroupExpanded('agents') 要资料库，别的要会话）；挑出 `null` = 不动。
+ */
+function inSidebarView<T extends object>(
+  main: CdpClient,
+  pane: T,
+  view: (args: unknown[]) => MainSidebarView | null
+): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(pane)) {
+    out[key] =
+      typeof value === 'function'
+        ? async (...args: unknown[]) => {
+            const target = view(args)
+            if (target) await showSidebarView(main, target)
+            return (value as (...a: unknown[]) => unknown)(...args)
+          }
+        : value
+  }
+  return out as T
+}
+
+/** 会话视图的 page object：只在资料库视图开着时切回会话（收件箱 / 日历视图开着的用例照旧，不去打扰） */
+async function leaveLibraryView(main: CdpClient): Promise<void> {
+  if ((await currentSidebarView(main)) === 'library') await showSidebarView(main, 'sessions')
+}
+
+function inSessionsView<T extends object>(main: CdpClient, pane: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(pane)) {
+    out[key] =
+      typeof value === 'function'
+        ? async (...args: unknown[]) => {
+            const first = args[0]
+            if (typeof first === 'string' && LIBRARY_GROUP_KEYS.has(first)) {
+              await showSidebarView(main, 'library')
+            } else {
+              await leaveLibraryView(main)
+            }
+            return (value as (...a: unknown[]) => unknown)(...args)
+          }
+        : value
+  }
+  return out as T
+}
+
 /** 行/组头尾部那颗 ⋮（RowMenuButton）—— 侧栏一切动作如今的唯一入口 */
 const MENU_BTN = (scope: string): string =>
   `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`
@@ -2959,6 +3050,10 @@ async function pickFromMenu(
  * 这里只需「钉好要选哪一项 → 点 ⋮ → 顺带核对该项在不在菜单里」（见上方 pickFromMenu）。
  */
 export function sidebarPane(main: CdpClient): SidebarPane {
+  return inSessionsView(main, rawSidebarPane(main))
+}
+
+function rawSidebarPane(main: CdpClient): SidebarPane {
   // 「项目知识库」/「Bot 知识库」文件夹行（`data-project-knowledge` / `data-bot-knowledge`）同样是「div > div > span.truncate」的形状，
   // 但它不是会话 —— 每个项目组都有一行，不滤掉就会混进 titles() / openSession 里
   // 每组先只放 8 条，更早的折在「查看更多」（`data-view-more`）后面：按标题找行之前先把它们都点开 ——
@@ -3229,15 +3324,22 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 }
 
 /**
- * 侧栏自上而下的骨架（DOM 序）：每个分组头 / 分节标题一项 —— 资料库那一行分节标题（`data-sidebar-section="library"`）
- * 记成 `library-section`，两个 `data-group="section"` 按正文分成 `bots-section`（正文第一层是
- * `[data-sidebar-section="bots"]`）与 `projects-section`，其余记它自己的 `data-group`（bot 组是 `bot`）。
- * 「Bots 分节排在资料库与项目之间」这类顺序断言用它，不必在用例里写选择器。
+ * 侧栏某一种视图自上而下的骨架（DOM 序）：每个分组头 / 分节标题一项 —— 两个 `data-group="section"` 按正文分成
+ * `bots-section`（正文第一层是 `[data-sidebar-section="bots"]`）与 `projects-section`，其余记它自己的 `data-group`
+ * （bot 组是 `bot`）。`sessions`（缺省）读会话列表，`library` 读资料库视图（先切过去）。
+ * 「Bots 分节排在项目之前」「资料库各组的顺序」这类顺序断言用它，不必在用例里写选择器。
  */
-export function sidebarOutline(main: CdpClient): Promise<string[]> {
+export async function sidebarOutline(
+  main: CdpClient,
+  view: 'sessions' | 'library' = 'sessions'
+): Promise<string[]> {
+  await showSidebarView(main, view)
+  const root =
+    view === 'library'
+      ? `document.querySelector('[data-sidebar-library]')`
+      : `document.querySelector('[data-sidebar-list]')`
   return main.eval<string[]>(
-    `[...document.querySelectorAll('[data-sidebar-section="library"], div[class*="group/header"]')].map((el) => {
-      if (el.getAttribute('data-sidebar-section') === 'library') return 'library-section'
+    `[...((${root})?.querySelectorAll('div[class*="group/header"]') ?? [])].map((el) => {
       const g = el.getAttribute('data-group') ?? ''
       if (g !== 'section') return g
       return el.nextElementSibling?.querySelector(':scope > [data-sidebar-section="bots"]')
@@ -5454,6 +5556,10 @@ export interface BotsPane {
 }
 
 export function botsPane(main: CdpClient): BotsPane {
+  return inSessionsView(main, rawBotsPane(main))
+}
+
+function rawBotsPane(main: CdpClient): BotsPane {
   const HEADER = (name: string): string => BOT_GROUP_HEADER(name)
   const MISSING = (name: string): string =>
     `[...(${BOTS_SECTION}?.querySelectorAll('[data-bot-missing-group]') ?? [])].find((g) => g.getAttribute('data-bot-missing-group') === ${JSON.stringify(name)})`
@@ -5810,6 +5916,10 @@ export interface AgentsSidebarPane {
 }
 
 export function agentsSidebarPane(main: CdpClient): AgentsSidebarPane {
+  return inSidebarView(main, rawAgentsSidebarPane(main), () => 'library')
+}
+
+function rawAgentsSidebarPane(main: CdpClient): AgentsSidebarPane {
   const HEADER_SEL = `div[class*="group/header"][data-group="agents"]`
   const HEADER = `document.querySelector('${HEADER_SEL}')`
   const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
@@ -6081,6 +6191,10 @@ export interface PoliciesSidebarPane {
 }
 
 export function policiesSidebarPane(main: CdpClient): PoliciesSidebarPane {
+  return inSidebarView(main, rawPoliciesSidebarPane(main), () => 'library')
+}
+
+function rawPoliciesSidebarPane(main: CdpClient): PoliciesSidebarPane {
   const HEADER_SEL = `div[class*="group/header"][data-group="policies"]`
   const HEADER = `document.querySelector('${HEADER_SEL}')`
   const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
@@ -6379,6 +6493,10 @@ export interface HooksSidebarPane {
 }
 
 export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
+  return inSidebarView(main, rawHooksSidebarPane(main), () => 'library')
+}
+
+function rawHooksSidebarPane(main: CdpClient): HooksSidebarPane {
   const HEADER_SEL = `div[class*="group/header"][data-group="hooks"]`
   const HEADER = `document.querySelector('${HEADER_SEL}')`
   const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
@@ -6643,6 +6761,10 @@ export interface SkillsSidebarPane {
 }
 
 export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
+  return inSidebarView(main, rawSkillsSidebarPane(main), () => 'library')
+}
+
+function rawSkillsSidebarPane(main: CdpClient): SkillsSidebarPane {
   const HEADER = `document.querySelector('div[class*="group/header"][data-group="skills"]')`
   const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
   const COLLAPSE = `${HEADER}?.nextElementSibling`
@@ -7244,7 +7366,11 @@ function knowledgeDraftProbes(main: CdpClient): KnowledgeDraftProbes {
 }
 
 export function knowledgePane(main: CdpClient): KnowledgePane {
-  const sidebar = sidebarPane(main)
+  return inSidebarView(main, rawKnowledgePane(main), () => 'library')
+}
+
+function rawKnowledgePane(main: CdpClient): KnowledgePane {
+  const sidebar = rawSidebarPane(main)
   const HEADER = `document.querySelector('div[class*="group/header"][data-group="knowledge"]')`
   // 分组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层）→ overflow 层 → SessionGroup 的内缩层
   const BODY = `${HEADER}?.nextElementSibling?.firstElementChild?.firstElementChild`
@@ -7372,7 +7498,14 @@ export function projectKnowledgePane(
   main: CdpClient,
   project: { id: string; name: string }
 ): ProjectKnowledgePane {
-  const sidebar = sidebarPane(main)
+  return inSessionsView(main, rawProjectKnowledgePane(main, project))
+}
+
+function rawProjectKnowledgePane(
+  main: CdpClient,
+  project: { id: string; name: string }
+): ProjectKnowledgePane {
+  const sidebar = rawSidebarPane(main)
   const FOLDER = `[...document.querySelectorAll('[data-project-knowledge]')].find(
     (el) => el.getAttribute('data-project-knowledge') === ${JSON.stringify(project.id)}
   )`

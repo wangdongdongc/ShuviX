@@ -95,10 +95,18 @@ export interface SidebarProps {
 }
 
 /**
- * 侧栏的另两种视图（收件箱、日历）：原先是右侧面板里的两个标签，组件与里面的交互一点没变，只是换到了侧栏里
- * （2026-11-16）。头一次切到哪一种才挂哪一种，之后一直挂着、只切显示 —— 切回来时滚动位置、展开的询问卡片都还在。
+ * 侧栏的另几种视图（收件箱、日历、资料库）：收件箱与日历原先是右侧面板里的两个标签，组件与里面的交互一点没变，只是
+ * 换到了侧栏里（2026-11-16）；资料库那几组原先是会话那棵树最上面的一节，2026-11-22 起是第四种视图（组件也没变，
+ * 由调用方递进来 —— 各组的 adapter 都在 Sidebar 里）。头一次切到哪一种才挂哪一种，之后一直挂着、只切显示 ——
+ * 切回来时滚动位置、展开的询问卡片与分组都还在。
  */
-function SidebarExtraViews({ view }: { view: SidebarView }): React.JSX.Element {
+function SidebarExtraViews({
+  view,
+  library
+}: {
+  view: SidebarView
+  library: React.ReactNode
+}): React.JSX.Element {
   const selectSession = useChatStore((s) => s.setActiveSessionId)
   const trackingAdapter = useTrackingAdapter(selectSession)
   const [mounted, setMounted] = useState<ReadonlySet<SidebarView>>(() => new Set([view]))
@@ -117,6 +125,17 @@ function SidebarExtraViews({ view }: { view: SidebarView }): React.JSX.Element {
     <>
       {pane('inbox', <InboxPanel tracking={trackingAdapter} />)}
       {pane('calendar', <CalendarPanel />)}
+      {pane(
+        'library',
+        // 与会话列表同一副滚动容器（左右留白、无滚动条）；最上面留一个分节的空，与会话视图第一节对齐
+        <div
+          data-sidebar-library=""
+          className="h-full overflow-y-auto no-scrollbar px-2.5 pb-3"
+          style={{ paddingTop: 'var(--sb-section-space)' }}
+        >
+          {library}
+        </div>
+      )}
     </>
   )
 }
@@ -130,7 +149,7 @@ export function Sidebar({
 }: SidebarProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const full = mode === 'full'
-  // 侧栏的三种视图（会话 / 收件箱 / 日历）：只有桌面整条侧栏有；手机的会话页自己画切换
+  // 侧栏的四种视图（会话 / 收件箱 / 日历 / 资料库）：只有桌面整条侧栏有；手机的会话页自己画切换
   const view = useSidebarViewStore((st) => st.view)
   const setView = useSidebarViewStore((st) => st.setView)
   const { waiting, unread } = useInboxSections()
@@ -710,7 +729,7 @@ export function Sidebar({
     }
   }, [libraryScope])
 
-  // 资料库各组。跟踪项不在这里：它在收件箱里（桌面是右侧面板的收件箱，手机是会话页顶上的收件箱那一页）
+  // 资料库各组（桌面是侧栏的「资料库」视图，手机是底部的资料库标签）。跟踪项不在这里：它在收件箱里
   const groups = (
     <>
       <AgentGroup adapter={agentGroupAdapter} />
@@ -926,18 +945,7 @@ export function Sidebar({
         ) : undefined
       }
       hideList={full && view !== 'sessions'}
-      extraViews={full ? <SidebarExtraViews view={view} /> : undefined}
-      groupsPrepend={
-        full ? (
-          <>
-            {/* 资料库那几组也是一节（与「项目」「临时对话」同一副分节标题）：Finder 侧栏一节一节往下排 */}
-            <div className="sb-section" data-sidebar-section="library">
-              {t('sidebar.library')}
-            </div>
-            {groups}
-          </>
-        ) : undefined
-      }
+      extraViews={full ? <SidebarExtraViews view={view} library={groups} /> : undefined}
       drill={full ? undefined : drill}
       overlays={overlays}
     />
