@@ -35,7 +35,12 @@ import type {
 } from './types/mcp'
 import type { InputRequest, InputResponse } from './types/inputRequest'
 import type { SessionUnread } from './sessionUnread'
-import type { LibraryAddParams, LibraryAddResult, LibraryTimelineResult } from './fileLibrary'
+import type {
+  LibraryAddParams,
+  LibraryAddResult,
+  LibraryFileLocation,
+  LibraryTimelineResult
+} from './fileLibrary'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
 import type { ArtifactRefContent, SessionArtifact } from './artifacts'
@@ -1199,6 +1204,8 @@ export interface HostApi {
     add: (params: LibraryAddParams) => Promise<LibraryAddResult>
     /** 文件时间线：库里的文件连同它们所属的会话，新的在前 */
     timeline: () => Promise<LibraryTimelineResult>
+    /** 一件文件此刻在磁盘上的位置（复制路径、在文件夹中显示）；库里没有这件 → null */
+    locate: (id: string) => Promise<LibraryFileLocation | null>
     /** 本机的选择文件对话框（可多选，桌面）；取消、web 客户端 → null（页面自己开文件选择框） */
     pickFiles: () => Promise<string[] | null>
   }

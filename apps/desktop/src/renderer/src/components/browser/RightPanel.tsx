@@ -99,6 +99,7 @@ export function RightPanel(): React.JSX.Element {
           <LibraryTimeline
             active={activeTab === 'library'}
             onOpenSession={openSession}
+            onRevealPath={(p) => void window.api.app.revealPath(p)}
             focusSessionId={dim ? activeSessionId : null}
           />
         </div>

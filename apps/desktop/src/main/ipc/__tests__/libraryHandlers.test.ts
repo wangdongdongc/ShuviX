@@ -15,6 +15,8 @@
  *        不合法、不是字符串、进库失败 → 不调
  *   TL-97 / TL-98 `library:timeline`（docs/file-library-timeline-tests.md §8）：三种调用方都拿到 libraryTimelineView()
  *        的那一份；通道表里是 read、files，不是桌面专属
+ *   LH-8…LH-13 `library:locate`（docs/file-library-open-reveal-tests.md §3）：三种调用方都原样拿到 locateLibraryFile(id)
+ *        的结果（null 也原样）；参数不是字符串 → null、不调服务；通道表里是 read、files，不是桌面专属
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
@@ -26,6 +28,7 @@ const state = vi.hoisted(() => ({
   windowOf: vi.fn(),
   addToLibrary: vi.fn(),
   recordSessionAttached: vi.fn(),
+  locateLibraryFile: vi.fn(),
   libraryTimelineView: vi.fn()
 }))
 
@@ -38,6 +41,7 @@ vi.mock('electron', () => ({
 vi.mock('../ipcAdapter', () => ({ windowOf: state.windowOf }))
 vi.mock('../../services/fileLibrary', () => ({
   addToLibrary: state.addToLibrary,
+  locateLibraryFile: state.locateLibraryFile,
   recordSessionAttached: state.recordSessionAttached
 }))
 // 时间线的会话信息要读会话行与项目表（数据库）：这里不测它
@@ -255,10 +259,11 @@ describe('LH-5 library:pickFiles', () => {
 })
 
 describe('LH-6 通道表', () => {
-  it('API_TABLE.library：add（invoke，1 个参数）、timeline 与 pickFiles（invoke，0 个参数）', () => {
+  it('API_TABLE.library：add 与 locate（invoke，1 个参数）、timeline 与 pickFiles（invoke，0 个参数）', () => {
     expect(API_TABLE.library).toEqual({
       add: { kind: 'invoke', channel: 'library:add', args: 1 },
       timeline: { kind: 'invoke', channel: 'library:timeline', args: 0 },
+      locate: { kind: 'invoke', channel: 'library:locate', args: 1 },
       pickFiles: { kind: 'invoke', channel: 'library:pickFiles', args: 0 }
     })
   })
@@ -365,5 +370,64 @@ describe('TL-97 / TL-98 library:timeline', () => {
       channel: 'library:timeline',
       args: 0
     })
+  })
+})
+
+describe('LH-8…LH-13 library:locate', () => {
+  const LOCATION = { path: '/somewhere/a.png', storage: 'linked' as const }
+
+  it.each<[string, ClientContext]>([
+    ['ipc', winCtx],
+    ['network', netCtx],
+    ['agent', agentCtx]
+  ])('LH-8 %s：原样交回 locateLibraryFile(id) 的结果，只带 id 调一次', (_l, ctx) => {
+    state.locateLibraryFile.mockReturnValue(LOCATION)
+    expect(call(ctx, 'library:locate', ID)).toBe(LOCATION)
+    expect(state.locateLibraryFile).toHaveBeenCalledTimes(1)
+    expect(state.locateLibraryFile.mock.calls[0]).toEqual([ID])
+  })
+
+  it('LH-9 服务回 null → 处理器回 null（不是 undefined）', () => {
+    state.locateLibraryFile.mockReturnValue(null)
+    expect(call(winCtx, 'library:locate', ID)).toBeNull()
+  })
+
+  it.each<[string, unknown]>([
+    ['undefined', undefined],
+    ['null', null],
+    ['42', 42],
+    ['{}', {}],
+    ["['id']", [ID]]
+  ])('LH-10 参数不是字符串（%s）→ null，不调服务，不抛', (_l, arg) => {
+    state.locateLibraryFile.mockReturnValue(LOCATION)
+    expect(call(netCtx, 'library:locate', arg)).toBeNull()
+    expect(state.locateLibraryFile).not.toHaveBeenCalled()
+  })
+
+  it.each([[''], [`library:${ID}`]])(
+    'LH-11 不是 id 的字符串（%j）原样交给服务（形状由服务判）',
+    (arg) => {
+      state.locateLibraryFile.mockReturnValue(null)
+      expect(call(winCtx, 'library:locate', arg)).toBeNull()
+      expect(state.locateLibraryFile.mock.calls).toEqual([[arg]])
+    }
+  )
+
+  it('LH-12 处理器什么都不加：missing 原样带回，没有的不多出这个键', () => {
+    state.locateLibraryFile.mockReturnValueOnce({ ...LOCATION, missing: true })
+    expect(call(winCtx, 'library:locate', ID)).toEqual({ ...LOCATION, missing: true })
+
+    state.locateLibraryFile.mockReturnValueOnce({ ...LOCATION })
+    const plain = call(winCtx, 'library:locate', ID) as Record<string, unknown>
+    expect(plain).toEqual(LOCATION)
+    expect('missing' in plain).toBe(false)
+  })
+
+  it('LH-13 通道表：read、files 范围、不是桌面专属（pickFiles 仍是）、处理器已注册', () => {
+    expect(CHANNEL_ACCESS['library:locate']).toBe('read')
+    expect(channelScopeOf('library:locate')).toBe('files')
+    expect(Object.keys(DESKTOP_ONLY_CHANNELS)).not.toContain('library:locate')
+    expect(Object.keys(DESKTOP_ONLY_CHANNELS)).toContain('library:pickFiles')
+    expect(listDefinitions().map((d) => d.channel)).toContain('library:locate')
   })
 })

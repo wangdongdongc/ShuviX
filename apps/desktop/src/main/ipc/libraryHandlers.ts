@@ -1,12 +1,13 @@
 import { dialog } from 'electron'
 import { defineHandler } from './registry'
 import { windowOf } from './ipcAdapter'
-import { addToLibrary, recordSessionAttached } from '../services/fileLibrary'
+import { addToLibrary, locateLibraryFile, recordSessionAttached } from '../services/fileLibrary'
 import { libraryTimelineView } from '../services/libraryTimelineView'
 import { isSafeSessionId } from '../utils/paths'
 import type {
   LibraryAddParams,
   LibraryAddResult,
+  LibraryFileLocation,
   LibraryItemSource,
   LibraryTimelineResult
 } from '@shuvix/chat-protocol/fileLibrary'
@@ -73,6 +74,10 @@ export function registerLibraryHandlers(): void {
   // 文件时间线：库里的文件连同它们所属的会话（标题、项目名在这里补上；删掉的会话不在 `sessions` 里，
   // 界面把它的文件放进当天的无会话组）
   defineHandler('library:timeline', (): LibraryTimelineResult => libraryTimelineView())
+  // 一件文件此刻在磁盘上的位置（行菜单的复制路径、在文件夹中显示）。入参不是字符串 → null，不抛
+  defineHandler('library:locate', (_ctx, id: string): LibraryFileLocation | null =>
+    typeof id === 'string' ? locateLibraryFile(id) : null
+  )
   // 笔记右键「插入图片或文件…」：本机的选择文件对话框（挂在调用方窗口上；取消、没有窗口 → null）。
   // 不用页面里的 input.click()：原生菜单的点击回到页面时已经没有用户激活，Chromium 不让开文件选择框
   defineHandler('library:pickFiles', async (ctx): Promise<string[] | null> => {

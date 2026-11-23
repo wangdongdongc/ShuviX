@@ -17243,6 +17243,16 @@ export interface LibraryTimelinePane {
   clickSession(sessionId: string): Promise<void>
   /** 空态（`[data-timeline-empty]`）在不在 */
   empty(): Promise<boolean>
+  /**
+   * 在这一件的那一行上右键（合成的 contextmenu），回弹出的菜单项；`pick` = 让原生菜单桩选中的那一项的 id，
+   * null = 只看不选。菜单要先向主进程问路径（`library.locate`）才弹，这里等到它弹出。没有这一行抛错。
+   * 别选 `reveal`：`app:reveal-path` 没有桩，会在跑测试的机器上打开文件管理器。
+   */
+  rowMenu(id: string, pick: string | null): Promise<MenuItemShot[]>
+  /** 把 `navigator.clipboard.writeText` 换成记录器（并清空记录）—— 绝不写跑测试的人的剪贴板 */
+  stubClipboard(): Promise<void>
+  /** 记录器记下的文字，按先后 */
+  clipboardWrites(): Promise<string[]>
 }
 
 export function libraryTimelinePane(main: CdpClient): LibraryTimelinePane {
@@ -17298,7 +17308,33 @@ export function libraryTimelinePane(main: CdpClient): LibraryTimelinePane {
         `${ROOT}?.querySelector('[data-timeline-open-session=${JSON.stringify(sessionId)}]')`,
         `clickable session name on the timeline for session ${sessionId}`
       ),
-    empty: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-timeline-empty]')`)
+    empty: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-timeline-empty]')`),
+    rowMenu: async (id, pick) => {
+      await armMenu(main, pick)
+      const fired = await main.eval<boolean>(`(() => {
+        const row = ${ROOT}?.querySelector('[data-timeline-file=${JSON.stringify(id)}]')?.closest('[data-timeline-row]')
+        if (!row) return false
+        row.scrollIntoView({ block: 'nearest' })
+        row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      if (!fired) throw new Error(`no timeline row for file ${id}`)
+      return lastMenuItems(main)
+    },
+    stubClipboard: async () => {
+      await main.eval(`(() => {
+        window.__e2eClipboard = []
+        const fake = {
+          writeText: (text) => {
+            window.__e2eClipboard.push(String(text))
+            return Promise.resolve()
+          }
+        }
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => fake })
+        return true
+      })()`)
+    },
+    clipboardWrites: () => main.eval<string[]>(`window.__e2eClipboard ?? []`)
   }
 }
 

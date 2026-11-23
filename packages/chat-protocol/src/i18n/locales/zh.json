@@ -2201,6 +2201,7 @@
     "yesterday": "昨天",
     "empty": "你发送的图片、添加到对话或笔记里的文件，以及智能体展示和产出的文件，会出现在这里。",
     "missing": "找不到文件",
+    "openSession": "打开所属会话",
     "relation": {
       "sent": "发送",
       "attached": "添加",

@@ -28,7 +28,7 @@ import type { FileOpenResult } from '@shuvix/chat-protocol/types/filePreview'
 import { sessionService } from './sessionService'
 import { openMarkdownFile } from './markdownWindowService'
 import { shownImagePathOfRef } from './shownImages'
-import { libraryPathOfRef } from './fileLibrary'
+import { libraryOpenTargetOfRef } from './fileLibrary'
 import { guardAppWindow } from './externalOpen'
 import { isMarkdownPath } from '../utils/markdownFiles'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
@@ -86,15 +86,16 @@ export interface OpenFileParams {
 }
 
 /**
- * 一条会话里的路径或引用 → 绝对路径：`library:` 引用按 id 找库里那件（`library` 为真），`shown:` 引用找会话自己的
+ * 一条会话里的路径或引用 → 绝对路径：`library:` 引用按 id 找库里那件（托管的 `library` 为真，留在原位置的为假），`shown:` 引用找会话自己的
  * 快照，其余按会话工作目录解析。相对路径而会话没有工作目录 → null。打开文件与看图层的复制 / 另存共用它。
  */
 export function resolveOpenTarget(params: {
   sessionId: string
   path: string
 }): { absolute: string; library: boolean } | null {
-  const library = libraryPathOfRef(params.path)
-  if (library) return { absolute: library, library: true }
+  const library = libraryOpenTargetOfRef(params.path)
+  // 留在原位置的那种（产物、输入框添加的文件）是磁盘上的普通文件：与文件面板同样打开（`library` 为假）
+  if (library) return { absolute: library.path, library: !library.linked }
   // 摆给用户看的图（`shown:` 引用）：会话自己的快照目录里那一份
   const shown = shownImagePathOfRef(params.sessionId, params.path)
   if (shown) return { absolute: shown, library: false }
@@ -134,8 +135,8 @@ export async function openFileInWindow(params: OpenFileParams): Promise<FileOpen
     log.info(`无头运行：不开预览窗口，忽略 ${params.path}`)
     return UNREADABLE
   }
-  // 文件库里的一件（`library:` 引用）：按 id 找到当前版本。md 也只开只读预览 —— 库里的文件按内容去重，
-  // 在协作编辑窗口里改了它，同一份内容的其他引用也跟着变
+  // 文件库里托管的一件（`library:` 引用）：按 id 找到当前版本。md 也只开只读预览 —— 托管的文件按内容去重，
+  // 在协作编辑窗口里改了它，同一份内容的其他引用也跟着变。留在原位置的那种照普通文件开
   const target = resolveOpenTarget(params)
   if (!target) {
     log.warn(`会话没有工作目录，无法解析相对路径，忽略: ${params.path}`)

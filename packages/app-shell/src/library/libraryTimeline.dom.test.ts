@@ -25,12 +25,17 @@
  *               三个类一起在或一起不在。不传 / null / '' → 什么都不淡；给了 S1 → 每天的抬头、S2 的行与没有会话的行淡，
  *               S1 的行（哪天都算）不淡；给了一个不在时间线里的会话 → 全淡、不抛；S1 → S2 重渲染，淡跟着走
  *
+ *   TL-160…184 行的右键菜单（docs/file-library-open-reveal-tests.md §4）：哪些项（打开 / 打开所属会话 | 复制路径 /
+ *               在文件夹中显示）、每一项做什么、`library.locate` 什么时候问、取不到路径（宿主没有、拒绝、同步抛、
+ *               回 null、过了 LOCATE_TIMEOUT_MS 还没答）时只剩前两项、内置 DOM 菜单、没有 Provider 时什么都不做。
+ *               菜单经 `ContextMenuProvider` 的 `render` 间谍观察（没有 Provider 时 useContextMenu 是空操作）
+ *
  * `@shuvix/chat-ui` 整份换成替身：`getHostApi` 回每个用例自己的那一份，`useAppEvent` 记下处理函数好让用例发
  * `library.changed`，`useChatStore.getState()` 给 requestFilePreview 间谍，`useMediaUrl` 回 `media://<引用>`。
  * 今天定在 2026-11-18 12:00（只假 Date）。文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, type FunctionComponent } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
@@ -50,6 +55,7 @@ const store = vi.hoisted(() => ({
   handlers: {} as Record<string, () => void>,
   requestFilePreview: (_path: string): void => {},
   openImageViewer: (_images: unknown[], _index?: number): void => {},
+  copyToClipboard: (_text: string): void => {},
   mediaUrl: (_session: string, path: string): string | null => `media://${path}`
 }))
 
@@ -60,10 +66,14 @@ vi.mock('@shuvix/chat-ui', () => ({
   },
   useChatStore: { getState: () => ({ requestFilePreview: store.requestFilePreview }) },
   openImageViewer: (images: unknown[], index?: number) => store.openImageViewer(images, index),
+  copyToClipboard: (text: string) => store.copyToClipboard(text),
   useMediaUrl: (session: string, path: string) => store.mediaUrl(session, path)
 }))
 
-import { LibraryTimeline, type LibraryTimelineProps } from './LibraryTimeline'
+import { LibraryTimeline, LOCATE_TIMEOUT_MS, type LibraryTimelineProps } from './LibraryTimeline'
+import { ContextMenuProvider, type ContextMenuRenderer } from '../contextmenu/ContextMenuProvider'
+import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
+import type { LibraryFileLocation } from '@shuvix/chat-protocol/fileLibrary'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -771,5 +781,497 @@ describe('专注模式（focusSessionId）', () => {
     for (const r of rowsOf('S1')) expect(fadeOf(r)).toBe('faded')
     expect(fadeOf(rowsOf('')[0])).toBe('faded')
     for (const h of headings()) expect(fadeOf(h)).toBe('faded')
+  })
+})
+
+describe('行的右键菜单', () => {
+  type Locate = (id: string) => Promise<LibraryFileLocation | null>
+
+  let locate: ReturnType<typeof vi.fn<Locate>>
+  let menu: ReturnType<typeof vi.fn<ContextMenuRenderer>>
+  let copy: ReturnType<typeof vi.fn<(text: string) => void>>
+  let openSession: ReturnType<typeof vi.fn<(id: string) => void>>
+  let reveal: ReturnType<typeof vi.fn<(path: string) => void>>
+  /** 菜单间谍下一次（及之后）回的那一项 */
+  let pick: string | null
+
+  const LOC = (n: number, over: Partial<LibraryFileLocation> = {}): LibraryFileLocation => ({
+    path: `/files/item-${n}`,
+    storage: 'linked',
+    ...over
+  })
+
+  beforeEach(() => {
+    pick = null
+    locate = vi.fn<Locate>(async (id) => ({ path: `/files/${id}`, storage: 'linked' }))
+    menu = vi.fn<ContextMenuRenderer>(async () => pick)
+    copy = vi.fn()
+    openSession = vi.fn()
+    reveal = vi.fn()
+    store.copyToClipboard = copy
+    store.hostApi = { library: { timeline, locate } }
+  })
+
+  /** 等 locate → 菜单 → 动作这一串微任务走完 */
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      for (let i = 0; i < 12; i++) await Promise.resolve()
+    })
+  }
+
+  /** 挂在 ContextMenuProvider 里（`render` 是菜单间谍；传 null = 内置 DOM 菜单） */
+  async function showWithMenu(
+    r: LibraryTimelineResult,
+    props: LibraryTimelineProps = { onOpenSession: openSession, onRevealPath: reveal },
+    render: ContextMenuRenderer | null = menu
+  ): Promise<void> {
+    timeline.mockResolvedValue(r)
+    act(() =>
+      root.render(
+        createElement(
+          ContextMenuProvider as FunctionComponent<{ render?: ContextMenuRenderer }>,
+          render ? { render } : {},
+          createElement(LibraryTimeline, props)
+        )
+      )
+    )
+    await flush()
+  }
+
+  /** 在一个元素上发 contextmenu（不等后面的异步） */
+  function fireMenu(el: Element, x = 30, y = 40): MouseEvent {
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y
+    })
+    act(() => {
+      el.dispatchEvent(event)
+    })
+    return event
+  }
+
+  async function rightClick(el: Element, x = 30, y = 40): Promise<MouseEvent> {
+    const event = fireMenu(el, x, y)
+    await settle()
+    return event
+  }
+
+  /** 第 n 次弹出的菜单项 */
+  const itemsOf = (call = 0): ContextMenuItem[] => menu.mock.calls[call][0]
+  /** id 序列，分隔线写成 `|` */
+  const shape = (items: ContextMenuItem[]): string[] =>
+    items.map((i) => (i.type === 'separator' ? '|' : (i.id ?? '?')))
+  const item = (items: ContextMenuItem[], id: string): ContextMenuItem => {
+    const found = items.find((i) => i.id === id)
+    if (!found) throw new Error(`no menu item ${id}`)
+    return found
+  }
+
+  const doc = (n: number, sessionId: string | null = 'S1'): LibraryTimelineEntry =>
+    entry(n, sessionId, { kind: 'pdf', relation: sessionId ? 'produced' : null })
+
+  describe('哪些项', () => {
+    it('TL-160 留在原位置的产物、会话在、两个回调都给：open, openSession | copyPath, reveal；四个标签；reveal 可用', async () => {
+      locate.mockResolvedValue(LOC(1))
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+
+      expect(menu).toHaveBeenCalledTimes(1)
+      const items = itemsOf()
+      expect(shape(items)).toEqual(['open', 'openSession', '|', 'copyPath', 'reveal'])
+      expect(items.filter((i) => i.id).map((i) => i.label)).toEqual([
+        'Open',
+        'Open chat',
+        'Copy path',
+        'Show in folder'
+      ])
+      expect(item(items, 'reveal').enabled).not.toBe(false)
+      expect(item(items, 'copyPath').enabled).not.toBe(false)
+    })
+
+    it('TL-161 文件不在了（missing）：同样四项，reveal 置灰、copyPath 仍可用', async () => {
+      locate.mockResolvedValue(LOC(1, { missing: true }))
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+
+      const items = itemsOf()
+      expect(shape(items)).toEqual(['open', 'openSession', '|', 'copyPath', 'reveal'])
+      expect(item(items, 'reveal').enabled).toBe(false)
+      expect(item(items, 'copyPath').enabled).not.toBe(false)
+    })
+
+    it('TL-162 不给 onRevealPath：没有 reveal', async () => {
+      await showWithMenu(result([doc(1)]), { onOpenSession: openSession })
+      await rightClick(rowEl(1))
+      expect(shape(itemsOf())).toEqual(['open', 'openSession', '|', 'copyPath'])
+    })
+
+    it('TL-163 不给 onOpenSession：没有 openSession（会话在也没有）', async () => {
+      await showWithMenu(result([doc(1)]), { onRevealPath: reveal })
+      await rightClick(rowEl(1))
+      expect(shape(itemsOf())).toEqual(['open', '|', 'copyPath', 'reveal'])
+    })
+
+    it('TL-164 没有会话的行、会话已删的行：没有 openSession', async () => {
+      await showWithMenu(
+        result([doc(1, null), entry(2, 'GONE', { kind: 'pdf', at: at(11, 18, 8) })])
+      )
+      await rightClick(rowEl(1))
+      await rightClick(rowEl(2))
+      expect(shape(itemsOf(0))).toEqual(['open', '|', 'copyPath', 'reveal'])
+      expect(shape(itemsOf(1))).toEqual(['open', '|', 'copyPath', 'reveal'])
+    })
+
+    it.each<[string, () => void]>([
+      ['宿主没有 library.locate', () => (store.hostApi = { library: { timeline } })],
+      ['locate 拒绝', () => locate.mockRejectedValue(new Error('offline'))],
+      ['locate 回 null', () => locate.mockResolvedValue(null)],
+      [
+        'locate 同步抛',
+        () =>
+          locate.mockImplementation(() => {
+            throw new Error('not connected')
+          })
+      ]
+    ])('TL-165 取不到路径（%s）：恰好 open, openSession，没有分隔线', async (_l, arrange) => {
+      arrange()
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(menu).toHaveBeenCalledTimes(1)
+      expect(shape(itemsOf())).toEqual(['open', 'openSession'])
+    })
+
+    it('TL-165 既没有会话也取不到路径：恰好 [open]', async () => {
+      locate.mockResolvedValue(null)
+      await showWithMenu(result([doc(1, null)]))
+      await rightClick(rowEl(1))
+      expect(shape(itemsOf())).toEqual(['open'])
+    })
+
+    it.each<[string, unknown]>([
+      ['null', null],
+      ['没有 library', {}]
+    ])('TL-166 弹菜单时宿主 api 是 %s：open（+ openSession），不抛', async (_l, api) => {
+      await showWithMenu(result([doc(1)]))
+      store.hostApi = api
+      await rightClick(rowEl(1))
+      expect(shape(itemsOf())).toEqual(['open', 'openSession'])
+      expect(locate).not.toHaveBeenCalled()
+    })
+
+    it('取不到路径：过了 LOCATE_TIMEOUT_MS 还没答 → 不带路径那两项弹出；迟到的答复不再弹第二次', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date(2026, 10, 18, 12, 0))
+      const pending = deferred<LibraryFileLocation | null>()
+      locate.mockReturnValue(pending.promise)
+      await showWithMenu(result([doc(1)]))
+
+      await rightClick(rowEl(1))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(LOCATE_TIMEOUT_MS - 1)
+      })
+      expect(menu).not.toHaveBeenCalled()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1)
+      })
+      await settle()
+      expect(menu).toHaveBeenCalledTimes(1)
+      expect(shape(itemsOf())).toEqual(['open', 'openSession'])
+
+      pending.resolve(LOC(1))
+      await settle()
+      expect(menu).toHaveBeenCalledTimes(1)
+    })
+
+    it('TL-167 locate 每次右键问一次、带这一行的 id；挂载、点击、library.changed 都不问；再右键再问（文件其间被删 → reveal 置灰）', async () => {
+      await showWithMenu(result([doc(1), entry(2, 'S1', { kind: 'pdf', at: at(11, 18, 8) })]))
+      expect(locate).not.toHaveBeenCalled()
+      act(() => fileEl(1).click())
+      await fireChanged()
+      expect(locate).not.toHaveBeenCalled()
+
+      locate.mockResolvedValueOnce(LOC(2))
+      await rightClick(rowEl(2))
+      expect(locate.mock.calls).toEqual([[ID(2)]])
+      expect(item(itemsOf(0), 'reveal').enabled).not.toBe(false)
+
+      locate.mockResolvedValueOnce(LOC(2, { missing: true }))
+      await rightClick(rowEl(2))
+      expect(locate.mock.calls).toEqual([[ID(2)], [ID(2)]])
+      expect(item(itemsOf(1), 'reveal').enabled).toBe(false)
+    })
+
+    it('TL-168 渲染器收到事件的 { x: clientX, y: clientY }', async () => {
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1), 123, 456)
+      expect(menu.mock.calls[0][1]).toEqual({ x: 123, y: 456 })
+    })
+
+    it('TL-169 contextmenu 当场 preventDefault、不再往外冒（locate 还没答）', async () => {
+      const pending = deferred<LibraryFileLocation | null>()
+      locate.mockReturnValue(pending.promise)
+      await showWithMenu(result([doc(1)]))
+      const outer = vi.fn()
+      document.body.addEventListener('contextmenu', outer)
+      try {
+        const event = fireMenu(rowEl(1))
+        expect(event.defaultPrevented).toBe(true)
+        expect(outer).not.toHaveBeenCalled()
+        expect(menu).not.toHaveBeenCalled()
+      } finally {
+        document.body.removeEventListener('contextmenu', outer)
+        pending.resolve(null)
+        await settle()
+      }
+    })
+
+    it('TL-170 同一件在两条会话里的两行：各自的菜单打开各自的会话', async () => {
+      pick = 'openSession'
+      await showWithMenu(
+        result(
+          [
+            entry(1, 'S1', { kind: 'pdf', at: at(11, 18, 11) }),
+            entry(1, 'S2', { kind: 'pdf', at: at(11, 18, 10) })
+          ],
+          { S1: { title: 'Trip plan' }, S2: { title: 'Budget' } }
+        )
+      )
+      await rightClick(rowEl(1, 'S2'))
+      await rightClick(rowEl(1, 'S1'))
+      expect(shape(itemsOf(0))).toContain('openSession')
+      expect(shape(itemsOf(1))).toContain('openSession')
+      expect(openSession.mock.calls).toEqual([['S2'], ['S1']])
+    })
+
+    it('TL-171 在行里的会话名按钮或小图上右键：弹的是这一行的菜单，不切会话、不开文件', async () => {
+      await showWithMenu(result([entry(1, 'S1')]))
+      await rightClick($('[data-timeline-open-session="S1"]', rowEl(1)))
+      await rightClick($('img', rowEl(1)))
+
+      expect(menu).toHaveBeenCalledTimes(2)
+      expect(locate.mock.calls).toEqual([[ID(1)], [ID(1)]])
+      expect(shape(itemsOf(1))).toEqual(['open', 'openSession', '|', 'copyPath', 'reveal'])
+      expect(openSession).not.toHaveBeenCalled()
+      expect(preview).not.toHaveBeenCalled()
+      expect(viewer).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('每一项做什么', () => {
+    const nothingElse = (
+      except: 'preview' | 'viewer' | 'session' | 'copy' | 'reveal' | ''
+    ): void => {
+      if (except !== 'preview') expect(preview).not.toHaveBeenCalled()
+      if (except !== 'viewer') expect(viewer).not.toHaveBeenCalled()
+      if (except !== 'session') expect(openSession).not.toHaveBeenCalled()
+      if (except !== 'copy') expect(copy).not.toHaveBeenCalled()
+      if (except !== 'reveal') expect(reveal).not.toHaveBeenCalled()
+    }
+
+    it('TL-172 非图片行选 open：requestFilePreview(library:<id>) 一次，与点这一行相同；别的都不动', async () => {
+      pick = 'open'
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(preview.mock.calls).toEqual([[`library:${ID(1)}`]])
+      nothingElse('preview')
+
+      act(() => fileEl(1).click())
+      expect(preview.mock.calls[1]).toEqual(preview.mock.calls[0])
+    })
+
+    it('TL-173 图片行选 open：看图层，参数与点击完全一样；不在了的图 → requestFilePreview', async () => {
+      pick = 'open'
+      await showWithMenu(
+        result([
+          entry(1, 'S1', { at: at(11, 18, 11) }),
+          entry(2, 'S1', { missing: true, at: at(11, 18, 10) }),
+          entry(3, 'S1', { at: at(11, 18, 9) })
+        ])
+      )
+      await rightClick(rowEl(3))
+      act(() => fileEl(3).click())
+      expect(viewer).toHaveBeenCalledTimes(2)
+      expect(viewer.mock.calls[0]).toEqual(viewer.mock.calls[1])
+      expect(viewer.mock.calls[0][1]).toBe(1)
+      expect(preview).not.toHaveBeenCalled()
+
+      await rightClick(rowEl(2))
+      expect(preview.mock.calls).toEqual([[`library:${ID(2)}`]])
+      expect(viewer).toHaveBeenCalledTimes(2)
+    })
+
+    it('TL-174 选 openSession：onOpenSession(会话) 一次；不开预览、不开看图层', async () => {
+      pick = 'openSession'
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(openSession.mock.calls).toEqual([['S1']])
+      nothingElse('session')
+    })
+
+    it.each<[string, Partial<LibraryFileLocation>]>([
+      ['文件在', {}],
+      ['文件不在了', { missing: true }]
+    ])('TL-175 选 copyPath（%s）：copyToClipboard(那个路径) 一次；不 reveal', async (_l, over) => {
+      pick = 'copyPath'
+      locate.mockResolvedValue(LOC(1, over))
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(copy.mock.calls).toEqual([['/files/item-1']])
+      nothingElse('copy')
+    })
+
+    it('TL-176 选 reveal：onRevealPath(那个路径) 一次；不碰剪贴板', async () => {
+      pick = 'reveal'
+      locate.mockResolvedValue(LOC(1))
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(reveal.mock.calls).toEqual([['/files/item-1']])
+      nothingElse('reveal')
+    })
+
+    it('TL-177 渲染器不管 enabled、对不在了的文件回 reveal：onRevealPath 不调', async () => {
+      pick = 'reveal'
+      locate.mockResolvedValue(LOC(1, { missing: true }))
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(menu).toHaveBeenCalledTimes(1)
+      nothingElse('')
+    })
+
+    it.each<[string, string | null]>([
+      ['null（关掉了）', null],
+      ['不认识的 id', 'delete']
+    ])('TL-178 渲染器回 %s：什么都不做', async (_l, picked) => {
+      pick = picked
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(menu).toHaveBeenCalledTimes(1)
+      nothingElse('')
+    })
+
+    it('TL-179 路径是这一次菜单取的：A 关掉、B 选 copyPath → B 的路径', async () => {
+      locate.mockImplementation(async (id) => ({ path: `/files/of/${id}`, storage: 'linked' }))
+      await showWithMenu(result([doc(1), entry(2, 'S1', { kind: 'pdf', at: at(11, 18, 8) })]))
+      pick = null
+      await rightClick(rowEl(1))
+      pick = 'copyPath'
+      await rightClick(rowEl(2))
+      expect(copy.mock.calls).toEqual([[`/files/of/${ID(2)}`]])
+    })
+  })
+
+  describe('时序与生命周期', () => {
+    it('TL-180 locate 还没答：渲染器没被调；答了之后调一次', async () => {
+      const pending = deferred<LibraryFileLocation | null>()
+      locate.mockReturnValue(pending.promise)
+      await showWithMenu(result([doc(1)]))
+      await rightClick(rowEl(1))
+      expect(menu).not.toHaveBeenCalled()
+
+      pending.resolve(LOC(1))
+      await settle()
+      expect(menu).toHaveBeenCalledTimes(1)
+      expect(shape(itemsOf())).toEqual(['open', 'openSession', '|', 'copyPath', 'reveal'])
+    })
+
+    it('TL-181 locate 还没答组件就卸了：之后答复不抛、不告警', async () => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const rejections: unknown[] = []
+      const onRejection = (reason: unknown): void => void rejections.push(reason)
+      process.on('unhandledRejection', onRejection)
+      try {
+        const pending = deferred<LibraryFileLocation | null>()
+        locate.mockReturnValue(pending.promise)
+        await showWithMenu(result([doc(1)]))
+        await rightClick(rowEl(1))
+        act(() => root.render(null))
+
+        pending.resolve(LOC(1))
+        await settle()
+        await new Promise((resolve) => setImmediate(resolve))
+        expect(rejections).toEqual([])
+        expect(errors).not.toHaveBeenCalled()
+        // 现状（记录，不是契约）：菜单的请求照样交给渲染器 —— 弹不弹由宿主的渲染器自己决定
+        expect(menu.mock.calls.length).toBeLessThanOrEqual(1)
+      } finally {
+        process.off('unhandledRejection', onRejection)
+        errors.mockRestore()
+      }
+    })
+
+    it.each<[string, () => void]>([
+      ['open', () => expect(preview.mock.calls).toEqual([[`library:${ID(1)}`]])],
+      ['openSession', () => expect(openSession.mock.calls).toEqual([['S1']])]
+    ])(
+      'TL-182 菜单开着时重取把这一行拿掉了：选 %s 仍按开菜单时的那一件 / 会话',
+      async (picked, verify) => {
+        const choice = deferred<string | null>()
+        menu.mockReturnValue(choice.promise)
+        await showWithMenu(result([doc(1)]))
+        await rightClick(rowEl(1))
+        expect(menu).toHaveBeenCalledTimes(1)
+
+        timeline.mockResolvedValue(result([], {}))
+        await fireChanged()
+        expect($$('[data-timeline-row]')).toEqual([])
+
+        choice.resolve(picked)
+        await settle()
+        verify()
+      }
+    )
+
+    it('TL-183 内置 DOM 菜单（Provider 不给 render）：四个标签；置灰的「Show in folder」点了没反应；点「Copy path」→ copyToClipboard', async () => {
+      locate.mockResolvedValue(LOC(1, { missing: true }))
+      await showWithMenu(
+        result([doc(1)]),
+        { onOpenSession: openSession, onRevealPath: reveal },
+        null
+      )
+      expect(document.querySelector('[data-context-menu]')).toBeNull()
+      await rightClick(rowEl(1))
+
+      const panel = document.querySelector<HTMLElement>('[data-context-menu]')
+      if (!panel) throw new Error('no context menu')
+      const buttons = Array.from(panel.querySelectorAll('button'))
+      expect(buttons.map((b) => b.textContent)).toEqual([
+        'Open',
+        'Open chat',
+        'Copy path',
+        'Show in folder'
+      ])
+      const byLabel = (label: string): HTMLButtonElement => {
+        const b = buttons.find((x) => x.textContent === label)
+        if (!b) throw new Error(`no button ${label}`)
+        return b
+      }
+
+      act(() => byLabel('Show in folder').click())
+      await settle()
+      expect(reveal).not.toHaveBeenCalled()
+      expect(document.querySelector('[data-context-menu]')).not.toBeNull()
+
+      act(() => byLabel('Copy path').click())
+      await settle()
+      expect(copy.mock.calls).toEqual([['/files/item-1']])
+      expect(reveal).not.toHaveBeenCalled()
+      expect(document.querySelector('[data-context-menu]')).toBeNull()
+    })
+
+    it('TL-184 没有 ContextMenuProvider：右键什么都不做、不抛', async () => {
+      await show(result([doc(1)]), { onOpenSession: openSession, onRevealPath: reveal })
+      const event = fireMenu(rowEl(1))
+      await settle()
+      expect(event.defaultPrevented).toBe(true)
+      expect(menu).not.toHaveBeenCalled()
+      expect(document.querySelector('[data-context-menu]')).toBeNull()
+      expect(preview).not.toHaveBeenCalled()
+      expect(openSession).not.toHaveBeenCalled()
+      expect(copy).not.toHaveBeenCalled()
+      expect(reveal).not.toHaveBeenCalled()
+    })
   })
 })

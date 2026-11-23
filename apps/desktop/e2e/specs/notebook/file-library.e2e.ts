@@ -37,6 +37,13 @@
  *
  * 决策日志里没有 `linked` 这个字段（`SecurityDecisionRecord` 只记客体种类与摘要）：「有关联」由 allow + 没命中
  * `ask-on-library-access#0` + 关联表里那一行 `attached` / `sent` 合起来证明。
+ *         TLE-6（并在 TLE-3 末尾）会话删掉之后行菜单没有「打开所属会话」；`library.locate` 给库里那份（managed）；
+ *         把盘上那份删掉 → missing、「在文件夹中显示」置灰、「复制路径」还在
+ *   TLE-4 行菜单（docs/file-library-open-reveal-tests.md §5）：对话 F 的产物（linked）与笔记里的 P1（managed）都是
+ *         open, openSession | copyPath, reveal；`library.locate` 各给各的位置；选「复制路径」→ 剪贴板记录器里是产物的
+ *         真实路径（= 库里那行的 externalPath = artifact.read 的 path）。「在文件夹中显示」只看在不在，不点
+ *   TLE-5 留在原位置的 md 产物点开是协作编辑的 md 窗口（有编辑器与输入卡片、正文是产物的内容）；托管的 md 点开是
+ *         只读预览窗口（库目录里那份）
  */
 import { createHash } from 'node:crypto'
 import {
@@ -45,6 +52,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   writeFileSync
 } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -78,10 +86,12 @@ import { syncProbe, type SyncProbe } from '../../harness/sync'
 import {
   imageViewerPane,
   libraryTimelinePane,
+  markdownWindowPane,
   notebookEditorPane,
   sidebarPane,
   type LibraryTimelineRowShot,
   type LibraryTimelinePane,
+  type MenuItemShot,
   type NotebookEditorPane,
   type PasteFileSeed
 } from '../../harness/pages'
@@ -95,6 +105,7 @@ const NOTE = '# Lib note\n\nend.\n'
 const CHAT_TITLE = 'Library chat'
 const D_TITLE = 'Timeline chat D'
 const E_TITLE = 'Timeline chat E'
+const F_TITLE = 'Timeline chat F'
 const ARTIFACT_TITLE = 'Timeline chart'
 const ARTIFACT_SVG =
   '<svg viewBox="0 0 40 20" aria-label="Timeline chart" xmlns="http://www.w3.org/2000/svg">' +
@@ -182,6 +193,7 @@ let p2Name = ''
 let timeline: LibraryTimelinePane
 let projectId = ''
 let dSid = ''
+let fSid = ''
 let p3: Buffer
 let p3Id = ''
 let p3Name = ''
@@ -397,6 +409,53 @@ const rowOf = (fileId: string, sessionId: string, what: string): Promise<Library
       (await timeline.rows()).find((r) => r.sessionId === sessionId && r.id === fileId) ?? null,
     what
   )
+
+/** 菜单项的 id 序列，分隔线写成 `|` */
+const menuShape = (items: MenuItemShot[]): string[] =>
+  items.map((i) => (i.type === 'separator' ? '|' : (i.id ?? '?')))
+
+interface LocationShot {
+  path: string
+  storage: string
+  missing?: boolean
+}
+const locate = (id: string): Promise<LocationShot | null> =>
+  app.main.eval<LocationShot | null>(`window.api.library.locate(${JSON.stringify(id)})`)
+
+/** 让脚本 agent 在这条会话里建一件产物，回它在产物目录里的绝对路径与库里的那一行 */
+const makeArtifact = async (
+  sid: string,
+  marker: string,
+  callId: string,
+  spec: { title: string; ext: string; content: string }
+): Promise<{ path: string; item: ArtifactItemRow }> => {
+  const since = await send(sid, marker, [
+    {
+      toolCalls: [
+        { id: callId, name: 'artifact', args: JSON.stringify({ action: 'create', ...spec }) }
+      ]
+    },
+    { text: `${marker}-DONE` }
+  ])
+  await ended(sid, since)
+  expect((await probe.waitToolResult(sid, callId, TURN_TIMEOUT)).isError).toBe(false)
+  // 库里那一行的名字取自内容里的标题（svg 的 aria-label、md 的首个 #），所以按它所在的产物目录与扩展名找
+  const dir = artifactsDirOf(sid)
+  const files = readdirSync(dir).filter((f) => f.endsWith(`.${spec.ext}`))
+  expect(files).toHaveLength(1)
+  const path = join(dir, files[0])
+  const item = await until(
+    () =>
+      artifactItems().find(
+        (r) =>
+          !!r.externalPath &&
+          existsSync(r.externalPath) &&
+          realpathSync(r.externalPath) === realpathSync(path)
+      ) ?? null,
+    `artifact "${spec.title}" registered in the library`
+  )
+  return { path, item }
+}
 
 beforeAll(async () => {
   provider = await startFakeProvider()
@@ -1061,6 +1120,168 @@ describe('file library L1', () => {
       expect(mine[0]).toMatchObject({ sessionId: null, item: { storage: 'managed' } })
       expect(mine[0].missing).toBeFalsy()
       expect(Object.keys(shot.sessions)).not.toContain(eSid)
+
+      // TLE-6 行菜单：会话没了就没有「打开所属会话」；路径现在是库里那份
+      expect(menuShape(await timeline.rowMenu(artId, null))).toEqual([
+        'open',
+        '|',
+        'copyPath',
+        'reveal'
+      ])
+      const location = await locate(artId)
+      expect(location).toEqual({ path: stored, storage: 'managed' })
+      // 盘上那份被删掉：「在文件夹中显示」置灰，「复制路径」还在
+      rmSync(stored)
+      expect(await locate(artId)).toEqual({ path: stored, storage: 'managed', missing: true })
+      const afterLoss = await timeline.rowMenu(artId, null)
+      expect(menuShape(afterLoss)).toEqual(['open', '|', 'copyPath', 'reveal'])
+      expect(afterLoss.find((i) => i.id === 'reveal')?.enabled).toBe(false)
+      expect(afterLoss.find((i) => i.id === 'copyPath')?.enabled).not.toBe(false)
+    },
+    TURN_TIMEOUT
+  )
+
+  it(
+    'TLE-4 row menus: a linked artifact and a managed image offer the same items; Copy path gives the real path',
+    async () => {
+      provider.reset()
+      if (!(await timeline.active())) await timeline.open()
+      fSid = await createChat(F_TITLE)
+      const made = await makeArtifact(fSid, 'TLE4 draw it', 'call_tle4_artifact', {
+        title: 'Menu chart',
+        ext: 'svg',
+        content: ARTIFACT_SVG.replace(ARTIFACT_TITLE, 'Menu chart')
+      })
+      expect(made.item.name).toBe('Menu chart')
+      const artId = made.item.id
+      expect(made.item.storage).toBe('linked')
+      await rowOf(artId, fSid, "F's row with the artifact")
+      // 托管的那一件：贴进笔记的 P1，挂在笔记会话 N 名下
+      await rowOf(p1Id, nSid, "N's row with P1")
+
+      const FULL = ['open', 'openSession', '|', 'copyPath', 'reveal']
+      const artMenu = await timeline.rowMenu(artId, null)
+      expect(menuShape(artMenu)).toEqual(FULL)
+      expect(artMenu.find((i) => i.id === 'reveal')?.enabled).not.toBe(false)
+      expect(artMenu.filter((i) => i.id).map((i) => i.label)).toEqual([
+        'Open',
+        'Open chat',
+        'Copy path',
+        'Show in folder'
+      ])
+      const imageMenu = await timeline.rowMenu(p1Id, null)
+      expect(menuShape(imageMenu)).toEqual(FULL)
+      expect(imageMenu.find((i) => i.id === 'reveal')?.enabled).not.toBe(false)
+
+      // 路径：产物在会话的产物目录里（留在原位置），图在库目录里（托管）；都不是 missing
+      const artLocation = await locate(artId)
+      expect(artLocation).toEqual({ path: made.item.externalPath, storage: 'linked' })
+      expect(realpathSync(artLocation!.path)).toBe(realpathSync(made.path))
+      expect(
+        realpathSync(artLocation!.path).startsWith(`${realpathSync(artifactsDirOf(fSid))}/`)
+      ).toBe(true)
+      expect(await locate(p1Id)).toEqual({ path: itemFileOf(p1Id, p1Name), storage: 'managed' })
+
+      // 复制路径：剪贴板（记录器）里恰是产物的真实路径，与 artifact.read 给的一致
+      await timeline.stubClipboard()
+      await timeline.rowMenu(artId, 'copyPath')
+      await until(
+        async () => (await timeline.clipboardWrites()).length > 0 || null,
+        'Copy path wrote to the clipboard'
+      )
+      expect(await timeline.clipboardWrites()).toEqual([made.item.externalPath])
+      const read = await app.main.eval<{ path?: string } | null>(
+        `window.api.artifact.read(${JSON.stringify({ sessionId: fSid, name: 'Menu chart' })})`
+      )
+      expect(read?.path).toBe(made.item.externalPath)
+      // 只选了复制：没有开预览窗口、看图层或 md 窗口
+      expect(await app.filePreviewWindows()).toEqual([])
+      expect(await app.markdownWindows()).toEqual([])
+      expect(await imageViewerPane(app.main).shot()).toBeNull()
+    },
+    TURN_TIMEOUT
+  )
+
+  it(
+    'TLE-5 a linked Markdown artifact opens the markdown window; a managed md opens the read-only preview',
+    async () => {
+      provider.reset()
+      expect(await app.markdownWindows()).toEqual([])
+      expect(await app.filePreviewWindows()).toEqual([])
+      const made = await makeArtifact(fSid, 'TLE5 write notes', 'call_tle5_artifact', {
+        title: 'Menu notes',
+        ext: 'md',
+        content: '# Menu notes\n\nTLE5-BODY\n'
+      })
+      const mdName = made.path.slice(made.path.lastIndexOf('/') + 1)
+      await rowOf(made.item.id, fSid, "F's row with the md artifact")
+
+      // 留在原位置的 md：与文件面板同样进协作编辑的 md 窗口（有编辑器、有输入卡片），不开预览窗口
+      await timeline.clickFile(made.item.id)
+      const mdWin = await until(
+        () => app.connectMarkdownWindow(mdName),
+        'markdown window for the md artifact'
+      )
+      try {
+        const windows = await app.markdownWindows()
+        expect(windows).toHaveLength(1)
+        expect(windows[0].path.endsWith(`/${mdName}`)).toBe(true)
+        expect(realpathSync(windows[0].path)).toBe(realpathSync(made.path))
+        const pane = markdownWindowPane(mdWin)
+        await pane.ready()
+        await until(
+          async () => (await pane.docText()).includes('TLE5-BODY') || null,
+          'the artifact text in the markdown window'
+        )
+        expect(await app.filePreviewWindows()).toEqual([])
+      } finally {
+        await mdWin.eval('window.close()').catch(() => undefined)
+        mdWin.close()
+        await until(
+          async () => (await app.markdownWindows()).length === 0 || null,
+          'markdown window closed'
+        )
+      }
+
+      // 托管的 md（字节进库、挂在 F 名下）：只读预览窗口，开的是库目录里那份；不进 md 窗口
+      const NOTE_BYTES = Buffer.from('# Managed note\n\nTLE5-MANAGED\n')
+      const added = await app.main.eval<{ ok: boolean; item?: { id: string; fileName: string } }>(
+        `window.api.library.add(${JSON.stringify({
+          item: {
+            kind: 'bytes',
+            name: 'note.md',
+            mimeType: 'text/markdown',
+            dataBase64: b64(NOTE_BYTES)
+          },
+          source: 'note-drop',
+          sessionId: fSid
+        })})`
+      )
+      expect(added.ok).toBe(true)
+      const noteId = added.item!.id
+      expect(await locate(noteId)).toEqual({
+        path: itemFileOf(noteId, added.item!.fileName),
+        storage: 'managed'
+      })
+      await rowOf(noteId, fSid, "F's row with the managed note")
+      await timeline.clickFile(noteId)
+      const previewWin = await until(
+        () => app.connectFilePreviewWindow(noteId),
+        'preview window for the managed md'
+      )
+      try {
+        const previews = await app.filePreviewWindows()
+        expect(previews).toHaveLength(1)
+        expect(previews[0].path).toBe(realpathSync(itemFileOf(noteId, added.item!.fileName)))
+        expect(await app.markdownWindows()).toEqual([])
+      } finally {
+        await previewWin.eval('window.close()').catch(() => undefined)
+        previewWin.close()
+        await until(
+          async () => (await app.filePreviewWindows()).length === 0 || null,
+          'managed md preview window closed'
+        )
+      }
     },
     TURN_TIMEOUT
   )

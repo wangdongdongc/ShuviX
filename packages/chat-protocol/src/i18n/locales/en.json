@@ -2201,6 +2201,7 @@
     "yesterday": "Yesterday",
     "empty": "Images you send, files you add to a chat or a note, and what agents show or make appear here.",
     "missing": "File not found",
+    "openSession": "Open chat",
     "relation": {
       "sent": "Sent",
       "attached": "Added",

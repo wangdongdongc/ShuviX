@@ -84,6 +84,21 @@ describe('IFA-1 copyImageFile', () => {
     expect(fx.log.warn).toHaveBeenCalledTimes(1)
   })
 
+  it('IMG-L1 留在原位置的库图片（解析给出原路径、library:false）→ 读那个路径；回收站 / 不在了（.missing）→ false', async () => {
+    const params = { sessionId: 's1', path: 'library:0199d3a2-0000-7000-9000-000000000003' }
+    expect(await copyImageFile(params)).toBe(true)
+    expect(fx.resolveOpenTarget).toHaveBeenCalledWith(params)
+    expect(Buffer.compare(fx.createFromBuffer.mock.calls[0][0], BYTES)).toBe(0)
+    expect(fx.writeImage).toHaveBeenCalledTimes(1)
+
+    fx.resolveOpenTarget.mockReturnValue({
+      absolute: join(root, '.shuvix', 'library', 'files', '.missing'),
+      library: true
+    })
+    expect(await copyImageFile(params)).toBe(false)
+    expect(fx.writeImage).toHaveBeenCalledTimes(1)
+  })
+
   it('解析不出 → false，不读文件', async () => {
     fx.resolveOpenTarget.mockReturnValue(null)
     expect(await copyImageFile(PARAMS)).toBe(false)

@@ -18,6 +18,8 @@
  *   LS-9   写入中断：rename 失败 / insertItem 抛错 → io，没有行、目录删掉、没有 .tmp
  *   LS-10  没注入表：进库 io、什么都不写；其余函数不抛
  *   LS-11  按 id 定位：libraryItemDir / libraryFileOf / libraryPathOfRef
+ *   LOC-1..11  locateLibraryFile（`library:locate`）：托管 / 留在原位置、missing、未知 / 形状不对 / 回收站 / 没有表 → null
+ *   LOC-12..15 libraryOpenTargetOfRef：打开一个 `library:` 引用用的路径与 linked 标记，找不到一律 `.missing` + false
  *   LS-12  回收站：trash / restore / emptyLibraryTrash（linked 的外部原文件不删）
  *   LS-13  笔记关联 recordNoteLinks / forgetNoteLinks（只 .md、realpath 作 targetId、不读盘、warn、手动行不动）
  *   LS-14  keepSentImages：命名、source、links 行、同图一件、超限的跳过
@@ -107,8 +109,11 @@ import {
   keepSentImages,
   libraryFileOf,
   libraryItemDir,
+  libraryOpenTargetOfRef,
   libraryPathOfRef,
+  locateLibraryFile,
   recordNoteLinks,
+  recordSessionFiles,
   recordSessionAttached,
   recordSessionSent,
   removeSessionLibraryLinks,
@@ -692,6 +697,180 @@ describe('LS-11 按 id 定位', () => {
     expect(libraryPathOfRef('shown:x')).toBeUndefined()
     expect(libraryPathOfRef('a.png')).toBeUndefined()
     expect(libraryPathOfRef('library:bad')).toBeUndefined()
+  })
+})
+
+describe('LOC locateLibraryFile（library:locate）', () => {
+  /** 一件留在原位置的文件：盘上写一个文件，库里记它的绝对路径 */
+  function seedLinked(id: string, name: string, write = true): string {
+    const external = join(scratch, name)
+    if (write) writeFileSync(external, `bytes of ${name}`)
+    seedItem(id, {
+      storage: 'linked',
+      externalPath: external,
+      kind: 'document',
+      mime: 'text/markdown',
+      fileName: name
+    })
+    return external
+  }
+  /** 一件托管的文件：行 + 库目录里的文件 */
+  function seedManaged(id: string, fileName = 'a.png', write = true): string {
+    seedItem(id, { fileName })
+    const dir = libraryItemDir(id)!
+    const path = join(dir, fileName)
+    if (write) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path, png())
+    }
+    return path
+  }
+
+  it('LOC-1 托管、文件在：库目录里它自己的文件，没有 missing 键', () => {
+    seedManaged(ID)
+    const result = locateLibraryFile(ID)
+    expect(result).toEqual({ path: join(libraryItemDir(ID)!, 'a.png'), storage: 'managed' })
+    expect('missing' in result!).toBe(false)
+  })
+
+  it('LOC-2 留在原位置、文件在：原样回它记下的路径（不 realpath、不搬进库目录）', () => {
+    const real = join(scratch, 'real.md')
+    writeFileSync(real, 'x')
+    const link = join(scratch, 'link.md')
+    symlinkSync(real, link)
+    seedItem(ID, { storage: 'linked', externalPath: link, fileName: 'link.md' })
+
+    const result = locateLibraryFile(ID)
+    expect(result).toEqual({ path: link, storage: 'linked' })
+    expect('missing' in result!).toBe(false)
+    expect(result!.path.startsWith(root())).toBe(false)
+  })
+
+  it('LOC-3 托管而文件被删：同一个路径，missing: true', () => {
+    const path = seedManaged(ID, 'a.png', false)
+    expect(locateLibraryFile(ID)).toEqual({ path, storage: 'managed', missing: true })
+  })
+
+  it('LOC-4 留在原位置而外部文件被删：{ path, linked, missing: true }', () => {
+    const external = seedLinked(ID, 'gone.md')
+    unlinkSync(external)
+    expect(locateLibraryFile(ID)).toEqual({ path: external, storage: 'linked', missing: true })
+  })
+
+  it('LOC-5 形状对但库里没有：null，findItem 用这个 id 问了一次', () => {
+    const findItem = vi.fn((id: string) => dao.findItem(id))
+    setLibraryTable(wrapTable({ findItem }))
+    expect(locateLibraryFile(ID2)).toBeNull()
+    expect(findItem).toHaveBeenCalledTimes(1)
+    expect(findItem).toHaveBeenCalledWith(ID2)
+  })
+
+  it('LOC-6 不是 id：null，不查表（先看形状）', () => {
+    seedManaged(ID)
+    const findItem = vi.fn((id: string) => dao.findItem(id))
+    setLibraryTable(wrapTable({ findItem }))
+    for (const bad of ['', 'abc', `library:${ID}`, '../../etc/passwd', `${ID}/x`, ID_UP]) {
+      expect(locateLibraryFile(bad), bad).toBeNull()
+    }
+    expect(findItem).not.toHaveBeenCalled()
+  })
+
+  it('LOC-7 在回收站里（托管的与留在原位置的，文件都还在）：null', () => {
+    const managed = seedManaged(ID)
+    const external = seedLinked(ID2, 'kept.md')
+    expect(trashLibraryItem(ID)).toBe(true)
+    expect(trashLibraryItem(ID2)).toBe(true)
+    expect(existsSync(managed)).toBe(true)
+    expect(existsSync(external)).toBe(true)
+    expect(locateLibraryFile(ID)).toBeNull()
+    expect(locateLibraryFile(ID2)).toBeNull()
+  })
+
+  it('LOC-8 留在原位置的行没有 externalPath：null，不抛', () => {
+    seedItem(ID, { storage: 'linked' })
+    expect(dao.findItem(ID)?.externalPath ?? null).toBeNull()
+    expect(() => locateLibraryFile(ID)).not.toThrow()
+    expect(locateLibraryFile(ID)).toBeNull()
+  })
+
+  it('LOC-9 没注入表：null，不抛', () => {
+    seedManaged(ID)
+    setLibraryTable(null)
+    expect(() => locateLibraryFile(ID)).not.toThrow()
+    expect(locateLibraryFile(ID)).toBeNull()
+  })
+
+  it('LOC-10 真的进库一件：与 libraryFileOf 同一个路径；进回收站 → null；去重拿回来 → 又是这个路径', async () => {
+    const data = png(40, 24, 9)
+    const added = ok(await addToLibrary({ item: bytesItem('a.png', data), source: 'note-paste' }))
+    const id = added.item.id
+    const path = libraryFileOf(id)!.path
+    expect(locateLibraryFile(id)).toEqual({ path, storage: 'managed' })
+
+    expect(trashLibraryItem(id)).toBe(true)
+    expect(locateLibraryFile(id)).toBeNull()
+
+    const again = ok(await addToLibrary({ item: bytesItem('b.png', data), source: 'note-paste' }))
+    expect(again.item.id).toBe(id)
+    expect(locateLibraryFile(id)).toEqual({ path, storage: 'managed' })
+  })
+
+  it('LOC-11 删会话后收进库的产物：storage 变 managed，路径在库目录里', () => {
+    const S = 'sess-loc-11'
+    const artifacts = join(state.home, '.shuvix', 'artifacts', S)
+    mkdirSync(artifacts, { recursive: true })
+    const file = join(artifacts, 'report.md')
+    writeFileSync(file, '# report')
+    recordSessionFiles(S, 'produced', [{ path: file }])
+    const id = dao.findLinkedByPath(file)!.id
+    expect(locateLibraryFile(id)).toEqual({ path: file, storage: 'linked' })
+
+    removeSessionLibraryLinks(S)
+
+    const after = locateLibraryFile(id)
+    expect(after).toEqual({ path: join(libraryItemDir(id)!, 'report.md'), storage: 'managed' })
+    expect(after!.path.startsWith(root() + '/')).toBe(true)
+    expect(readFileSync(after!.path, 'utf8')).toBe('# report')
+  })
+
+  describe('libraryOpenTargetOfRef', () => {
+    const missing = (): string => join(root(), '.missing')
+
+    it('LOC-12 留在原位置（文件在）→ 原路径 + linked: true；托管 → 库里的文件 + linked: false', () => {
+      const external = seedLinked(ID, 'note.md')
+      const managed = seedManaged(ID2, 'm.md')
+      expect(libraryOpenTargetOfRef(`library:${ID}`)).toEqual({ path: external, linked: true })
+      expect(libraryOpenTargetOfRef(`library:${ID2}`)).toEqual({ path: managed, linked: false })
+    })
+
+    it('LOC-13 / LOC-15 找不到的库引用一律 `.missing` + linked: false，与 libraryPathOfRef 一致', () => {
+      const TRASHED = '0199d3a2-1111-7000-8000-000000000001'
+      const GONE = '0199d3a2-2222-7000-8000-000000000002'
+      const UNKNOWN = '0199d3a2-3333-7000-8000-000000000003'
+      seedLinked(TRASHED, 'trashed.md')
+      trashLibraryItem(TRASHED)
+      seedLinked(GONE, 'gone.md', false)
+
+      for (const ref of [`library:${TRASHED}`, `library:${GONE}`, `library:${UNKNOWN}`]) {
+        expect(libraryOpenTargetOfRef(ref), ref).toEqual({ path: missing(), linked: false })
+        expect(libraryPathOfRef(ref), ref).toBe(missing())
+      }
+      expect(existsSync(missing())).toBe(false)
+    })
+
+    it('LOC-13 不是库引用 → undefined（调用方照普通路径解析）', () => {
+      seedLinked(ID, 'note.md')
+      for (const ref of ['library:bad', '/tmp/a.md', 'notes.md', 'shown:abc.png', ID, '']) {
+        expect(libraryOpenTargetOfRef(ref), ref).toBeUndefined()
+        expect(libraryPathOfRef(ref), ref).toBeUndefined()
+      }
+    })
+
+    it('LOC-14 没注入表：库引用 → `.missing` + linked: false，不抛', () => {
+      seedLinked(ID, 'note.md')
+      setLibraryTable(null)
+      expect(libraryOpenTargetOfRef(`library:${ID}`)).toEqual({ path: missing(), linked: false })
+    })
   })
 })
 

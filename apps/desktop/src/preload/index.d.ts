@@ -1334,6 +1334,10 @@ declare global {
       ) => Promise<import('@shuvix/chat-protocol/fileLibrary').LibraryAddResult>
       /** 文件时间线：库里的文件连同它们所属的会话，新的在前 */
       timeline: () => Promise<import('@shuvix/chat-protocol/fileLibrary').LibraryTimelineResult>
+      /** 一件文件此刻在磁盘上的位置；库里没有这件 → null */
+      locate: (
+        id: string
+      ) => Promise<import('@shuvix/chat-protocol/fileLibrary').LibraryFileLocation | null>
       /** 本机的选择文件对话框（可多选）；取消 → null */
       pickFiles: () => Promise<string[] | null>
     }

@@ -312,6 +312,15 @@ export interface LibraryItemInfo {
   deletedAt?: number
 }
 
+/** `library.locate` 的结果：一件文件此刻在磁盘上的位置 */
+export interface LibraryFileLocation {
+  /** 绝对路径（托管的在库目录里，留在原位置的是它原来的路径） */
+  path: string
+  storage: 'managed' | 'linked'
+  /** 文件不在了 */
+  missing?: boolean
+}
+
 /** 交给 `library.add` 的内容：桌面窗口可以交本机路径，网络客户端只能交字节 */
 export type LibraryAddInput =
   | { kind: 'path'; path: string }

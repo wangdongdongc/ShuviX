@@ -15,6 +15,8 @@
  *   RP-9 活动标签还是过期的 'inbox' 的那一帧：三块都藏着、不抛
  *   TL-132…134（docs/file-library-timeline-tests.md §11）LibraryTimeline 只在自己那一页开着时 active；它的
  *        onOpenSession 是 chat store 的 setActiveSessionId；持久化的 'library' 不被兜底改掉
+ *   RP-14 LibraryTimeline 拿到 `onRevealPath`：调它 → window.api.app.revealPath(路径) 一次
+ *        （docs/file-library-open-reveal-tests.md 的 RP-11，那个编号这里已经用过）
  *   RP-10 专注模式不淡、选中 S1：LibraryTimeline 的 `focusSessionId: null`
  *   RP-11 专注模式在淡、选中 S1：`focusSessionId: 'S1'`；onOpenSession 仍是 setActiveSessionId，active 不变
  *   RP-12 专注模式在淡、没有选中的会话：`focusSessionId: null`
@@ -279,6 +281,22 @@ describe('the right panel content', () => {
     const onOpenSession = rec.libraryPanel.at(-1)!.onOpenSession as (id: string) => void
     act(() => onOpenSession('S1'))
     expect(rec.openSession.mock.calls).toEqual([['S1']])
+  })
+
+  it('RP-14 the timeline reveals a file through window.api.app.revealPath', () => {
+    const revealPath = vi.fn(async () => ({ success: true }))
+    const target = window as unknown as { api?: unknown }
+    const before = target.api
+    target.api = { app: { revealPath } }
+    try {
+      render()
+      const onRevealPath = rec.libraryPanel.at(-1)!.onRevealPath
+      expect(onRevealPath).toBeTypeOf('function')
+      act(() => (onRevealPath as (path: string) => void)('/a/b.png'))
+      expect(revealPath.mock.calls).toEqual([['/a/b.png']])
+    } finally {
+      target.api = before
+    }
   })
 
   it.each(['widget', 'agents', 'library'])(

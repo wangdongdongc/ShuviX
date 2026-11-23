@@ -467,6 +467,15 @@ describe('WA-LIB-2 library:pickFiles', () => {
   })
 })
 
+describe('WEB-1 library:locate', () => {
+  it('WEB-1 没有本地实现（走连接）；app:reveal-path 与 library:pickFiles 仍在本地答', () => {
+    const local = Object.keys(webLocalHandlers(fakeWin))
+    expect(local).not.toContain('library:locate')
+    expect(local).toEqual(expect.arrayContaining(['app:reveal-path', 'library:pickFiles']))
+    expect(Object.keys(DESKTOP_ONLY_CHANNELS)).not.toContain('library:locate')
+  })
+})
+
 describe('WA-7 widgetWindow:open', () => {
   it('WA-7 合法 → {success:true}，新标签页开 widget 那一屏', () => {
     const open = webLocalHandlers(fakeWin)['widgetWindow:open']

@@ -6,8 +6,10 @@
  * 第二行灰字是所属会话与大小，右端是时刻。没有搜索框、没有文件计数、没有会话标题行。同一件文件当天出现在两条会话里
  * 就是两行。会话已经删掉的文件还在，第二行只有大小。
  *
- * 只读：点一行开预览（图片进看图层，同一天的图是一组），点第二行里的会话名切到那条会话。分类、标签、删除留给以后的
- * 管理页。数据经 HostApi `library.timeline`（渠道端没有，不渲染内容），`library.changed` 与面板重新可见时重取。
+ * 只读：点一行开预览（图片进看图层，同一天的图是一组），点第二行里的会话名切到那条会话。打开与文件面板同样对待：
+ * 留在原位置的文件（产物、输入框添加的文件）按它的真实路径开，md 进协作编辑窗口；库里托管的 md 只读（主进程按引用判定）。
+ * 行的右键菜单（手机上长按）：打开、打开所属会话、复制路径、在文件夹中显示 —— 路径经 `library.locate` 现取，
+ * 取不到（渠道端、库里已没有这件）就只有前两项；文件不在了「在文件夹中显示」置灰。分类、标签、删除留给以后的管理页。数据经 HostApi `library.timeline`（渠道端没有，不渲染内容），`library.changed` 与面板重新可见时重取。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -15,11 +17,14 @@ import { File as FileIcon, FileQuestion, ImageOff } from 'lucide-react'
 import {
   getHostApi,
   openImageViewer,
+  copyToClipboard,
   useAppEvent,
   useChatStore,
   useMediaUrl,
   type ViewerImage
 } from '@shuvix/chat-ui'
+import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
+import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import {
   groupLibraryTimeline,
   libraryRef,
@@ -32,6 +37,8 @@ export interface LibraryTimelineProps {
   active?: boolean
   /** 点一行里的会话名：切到那条会话。不给 → 会话名只是文字 */
   onOpenSession?: (sessionId: string) => void
+  /** 在系统文件管理器里定位一个文件（宿主注入才有「在文件夹中显示」这一项） */
+  onRevealPath?: (absPath: string) => void
   /**
    * 专注模式（宿主经 useFocusDim 判定后传当前选中的会话；不淡时不传）：日期标题和别的会话的行都淡，
    * 这条会话自己的行照常；悬浮 / 键盘焦点在上面时恢复。缺省不淡
@@ -44,6 +51,9 @@ const FADED = 'opacity-30 hover:opacity-100 focus-within:opacity-100'
 /** 交给 mediaUrl seam 的会话参数（库引用不按会话解析，宿主只要求非空） */
 const LIBRARY_MEDIA_SESSION = 'library'
 const EMPTY: LibraryTimelineResult = { entries: [], sessions: {} }
+
+/** 行菜单等 `library.locate` 的上限（毫秒）：过了就不带路径那两项弹出 */
+export const LOCATE_TIMEOUT_MS = 1500
 
 /** 一行左端小图（或文件图标）的边长（CSS px） */
 export const TIMELINE_THUMB_PX = 32
@@ -108,12 +118,14 @@ function Row({
   result,
   dim,
   onOpen,
+  onMenu,
   onOpenSession
 }: {
   entry: LibraryTimelineEntry
   result: LibraryTimelineResult
   dim: boolean
   onOpen: () => void
+  onMenu: (position: { x: number; y: number }) => void
   onOpenSession?: (sessionId: string) => void
 }): React.JSX.Element {
   const { t, i18n } = useTranslation()
@@ -137,6 +149,11 @@ function Row({
     <div
       data-timeline-row=""
       data-session={sessionId}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onMenu({ x: e.clientX, y: e.clientY })
+      }}
       className={`relative flex h-[42px] items-center gap-2 rounded-md px-1.5 hover:bg-bg-hover transition-opacity duration-200 ${
         dim ? FADED : ''
       }`}
@@ -191,9 +208,11 @@ function Row({
 export function LibraryTimeline({
   active = true,
   onOpenSession,
+  onRevealPath,
   focusSessionId = null
 }: LibraryTimelineProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
+  const showContextMenu = useContextMenu()
   const [result, setResult] = useState<LibraryTimelineResult | null>(null)
   const requestSeq = useRef(0)
 
@@ -228,6 +247,43 @@ export function LibraryTimeline({
       })),
     [result]
   )
+
+  /** 行菜单：路径现取（时间线的数据里不带路径）；取不到就没有复制路径与在文件夹中显示 */
+  const openRowMenu = async (
+    entry: LibraryTimelineEntry,
+    position: { x: number; y: number },
+    open: () => void
+  ): Promise<void> => {
+    const sessionId = entry.sessionId && result?.sessions[entry.sessionId] ? entry.sessionId : null
+    // 宿主的 locate 同步抛、拒绝、或迟迟不答（半断的网络连接）都当取不到：菜单照出，只是没有路径那两项
+    const locate = getHostApi()?.library?.locate
+    const location = await Promise.race([
+      Promise.resolve()
+        .then(() => locate?.(entry.item.id) ?? null)
+        .catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), LOCATE_TIMEOUT_MS))
+    ])
+    const items: ContextMenuItem[] = [{ id: 'open', label: t('panel.filesMenu.open') }]
+    if (sessionId && onOpenSession) {
+      items.push({ id: 'openSession', label: t('library.openSession') })
+    }
+    if (location) {
+      items.push({ type: 'separator' }, { id: 'copyPath', label: t('panel.filesMenu.copyPath') })
+      if (onRevealPath) {
+        items.push({
+          id: 'reveal',
+          label: t('panel.filesMenu.reveal'),
+          enabled: !location.missing
+        })
+      }
+    }
+    await showContextMenu(position, items, (id) => {
+      if (id === 'open') open()
+      else if (id === 'openSession' && sessionId) onOpenSession?.(sessionId)
+      else if (id === 'copyPath' && location) copyToClipboard(location.path)
+      else if (id === 'reveal' && location && !location.missing) onRevealPath?.(location.path)
+    })
+  }
 
   const dayLabel = (day: string): string => {
     const [y, m, d] = day.split('-').map(Number)
@@ -267,21 +323,25 @@ export function LibraryTimeline({
                 >
                   {dayLabel(day.day)}
                 </h3>
-                {day.rows.map((entry) => (
-                  <Row
-                    key={`${entry.sessionId ?? ''}\u0000${entry.item.id}`}
-                    entry={entry}
-                    result={result ?? EMPTY}
-                    dim={!!focusSessionId && entry.sessionId !== focusSessionId}
-                    onOpenSession={onOpenSession}
-                    onOpen={() => {
-                      // 不是图、或不在了：照旧走打开（不在的给出「文件不存在」的提示）
-                      const index = unique.findIndex((e) => e.item.id === entry.item.id)
-                      if (index < 0) openFile(entry.item.id)
-                      else openImageViewer(viewerImagesOf(unique), index)
-                    }}
-                  />
-                ))}
+                {day.rows.map((entry) => {
+                  const open = (): void => {
+                    // 不是图、或不在了：照旧走打开（不在的给出「文件不存在」的提示）
+                    const index = unique.findIndex((e) => e.item.id === entry.item.id)
+                    if (index < 0) openFile(entry.item.id)
+                    else openImageViewer(viewerImagesOf(unique), index)
+                  }
+                  return (
+                    <Row
+                      key={`${entry.sessionId ?? ''}\u0000${entry.item.id}`}
+                      entry={entry}
+                      result={result ?? EMPTY}
+                      dim={!!focusSessionId && entry.sessionId !== focusSessionId}
+                      onOpenSession={onOpenSession}
+                      onOpen={open}
+                      onMenu={(position) => void openRowMenu(entry, position, open)}
+                    />
+                  )
+                })}
               </section>
             )
           })

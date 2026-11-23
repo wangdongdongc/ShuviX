@@ -28,6 +28,7 @@ import {
   timestampedFileName,
   type LibraryAddInput,
   type LibraryAddResult,
+  type LibraryFileLocation,
   type LibraryItemInfo,
   type LibraryItemSource,
   type LibraryLinkRelation,
@@ -118,6 +119,34 @@ export function libraryFileOf(id: string): { item: LibraryItemRow; path: string 
   const path = filePathOf(item)
   if (!path || !existsSync(path)) return null
   return { item, path }
+}
+
+/**
+ * 一件文件此刻在磁盘上的位置（`library:locate`：复制路径、在文件夹中显示）。托管的 = 库目录里它自己的那个文件，
+ * 留在原位置的 = 它原来的路径。文件不在了也回路径（`missing`），界面据此把「在文件夹中显示」置灰；
+ * 库里没有这件、或在回收站里 → null
+ */
+export function locateLibraryFile(id: string): LibraryFileLocation | null {
+  if (!isLibraryItemId(id)) return null
+  const item = table?.findItem(id) ?? null
+  if (!item || item.deletedAt) return null
+  const path = filePathOf(item)
+  if (!path) return null
+  return { path, storage: item.storage, ...(existsSync(path) ? {} : { missing: true }) }
+}
+
+/**
+ * 打开一个 `library:<id>` 引用要用的两样东西，一次查出来：绝对路径，以及它是不是留在原位置的文件（产物、输入框添加
+ * 的文件、摆出来的图的原图）。留在原位置的就是磁盘上的普通文件，打开时与文件面板同样对待（md 进协作编辑窗口）；
+ * 托管的文件按内容去重，md 只开只读预览。不是这种引用 → undefined；是但找不到 → 库目录下一个不存在的路径、
+ * `linked: false`（照常回“文件不存在”，不会落回工作目录去解析 `library:…` 这个相对名）
+ */
+export function libraryOpenTargetOfRef(ref: string): { path: string; linked: boolean } | undefined {
+  const id = libraryItemIdOfRef(ref)
+  if (id === undefined) return undefined
+  const file = libraryFileOf(id)
+  if (!file) return { path: join(getLibraryFilesDir(), '.missing'), linked: false }
+  return { path: file.path, linked: file.item.storage === 'linked' }
 }
 
 /**

@@ -67,7 +67,12 @@
  *   W-LIB-2 库里的 .md 开只读预览窗口，不进协作编辑的 md 窗口；对照：普通 notes.md 仍交给 openMarkdownFile；
  *           未初始化时库里的 md → false，也不交给 openMarkdownFile
  *
+ *   W-LIB-3…17 留在原位置的一件（`storage: 'linked'`：产物、输入框添加的文件）照普通文件开 —— md 进协作编辑窗口、
+ *           其余进预览窗口，与直接点那个绝对路径完全一样；回收站 / 文件不在 / 未知 id 一律 missing（失败时不落回工作目录）
+ *
  * resolveOpenTarget（打开文件与看图层的复制 / 另存共用的解析）：
+ *   RO-2…6 留在原位置 → {原路径, library:false}；托管 → library:true；找不到 → `.missing` + library:true（工作目录里
+ *        真有一个叫 `library:<id>` 的文件也不认）；id 形状不对的 `library:` 不是库引用，当相对路径
  *   RO-1 库里的一件 → {库文件, library:true}（会话没了也一样）；回收站 / 不存在的 id → {<库根>/.missing, library:true}；
  *        合法 shown: 引用 → 快照路径、library:false（会话没了也一样）；相对路径 + 活会话 → <工作目录>/<路径>；
  *        相对路径 + 会话没了 / 没有工作目录 → null；绝对路径 + 会话没了 → 原路径
@@ -898,11 +903,50 @@ const libHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'shuvix-prevwin-h
 fx.home = libHome
 const libFile = (id: string, fileName: string): string =>
   join(libHome, '.shuvix', 'library', 'files', id.slice(0, 2), id, fileName)
-const LIB_FILES: Record<string, { fileName: string; deletedAt: number | null }> = {
+interface LibEntry {
+  fileName: string
+  deletedAt: number | null
+  storage?: 'managed' | 'linked'
+  externalPath?: string | null
+}
+const LIB_FILES: Record<string, LibEntry> = {
   [LIB_PNG]: { fileName: 'shot.png', deletedAt: null },
   [LIB_MD]: { fileName: 'note.md', deletedAt: null },
   [LIB_TRASHED]: { fileName: 'old.png', deletedAt: 5 }
 }
+
+// 留在原位置的文件：放在库目录与活会话工作目录之外的另一个临时目录
+const linkRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'shuvix-prevwin-linked-')))
+const lp = (...rel: string[]): string => join(linkRoot, ...rel)
+const linkedId = (n: number): string =>
+  `0199d3a2-0000-7000-9000-${n.toString(16).padStart(12, '0')}`
+const L_MD = linkedId(1)
+const L_TXT = linkedId(2)
+const L_PNG = linkedId(3)
+const L_TRASHED = linkedId(4)
+const L_GONE = linkedId(5)
+const L_LINK_TXT = linkedId(6)
+const L_NOTES_MD = linkedId(7)
+const L_BIG_MD = linkedId(8)
+const L_ZIP = linkedId(9)
+const L_DIR = linkedId(10)
+const L_FLIP = linkedId(11)
+const LINKED_FILES: Record<string, LibEntry> = {
+  [L_MD]: { fileName: 'linked.md', deletedAt: null, externalPath: lp('linked.md') },
+  [L_TXT]: { fileName: 'linked.txt', deletedAt: null, externalPath: lp('linked.txt') },
+  [L_PNG]: { fileName: 'linked.png', deletedAt: null, externalPath: lp('linked.png') },
+  [L_TRASHED]: { fileName: 'trashed.md', deletedAt: 5, externalPath: lp('trashed.md') },
+  [L_GONE]: { fileName: 'gone.md', deletedAt: null, externalPath: lp('gone.md') },
+  [L_LINK_TXT]: { fileName: 'link.txt', deletedAt: null, externalPath: lp('link.txt') },
+  [L_NOTES_MD]: { fileName: 'notes.md', deletedAt: null, externalPath: lp('notes.md') },
+  [L_BIG_MD]: { fileName: 'big.md', deletedAt: null, externalPath: lp('big.md') },
+  [L_ZIP]: { fileName: 'arch.zip', deletedAt: null, externalPath: lp('arch.zip') },
+  [L_DIR]: { fileName: 'folder', deletedAt: null, externalPath: lp('folder') },
+  [L_FLIP]: { fileName: 'flip.md', deletedAt: null, externalPath: lp('flip.md') }
+}
+for (const entry of Object.values(LINKED_FILES)) entry.storage = 'linked'
+/** 用例里临时改掉的行（W-LIB-17 的 linked → managed）；每条用例后清空 */
+const libOverrides: Record<string, LibEntry> = {}
 
 describe('W-LIB 文件库的引用', () => {
   beforeAll(() => {
@@ -915,8 +959,32 @@ describe('W-LIB 文件库的引用', () => {
     }
   })
 
+  // 工作目录里真的有两个叫 `library:<id>` 的文件（及一个 .md 邻居）：找不到的库引用绝不能落到它们头上
+  const DECOYS = [`library:${LIB_MISSING}`, `library:${L_GONE}`, `library:${LIB_MISSING}.md`]
+
+  beforeAll(() => {
+    writeFileSync(lp('linked.md'), '# linked note\n')
+    writeFileSync(lp('linked.txt'), 'linked text\n')
+    writeFileSync(lp('linked.png'), pngHeader(40, 24))
+    writeFileSync(lp('trashed.md'), '# trashed\n')
+    writeFileSync(lp('real.md'), '# real\n')
+    symlinkSync(lp('real.md'), lp('link.txt'))
+    writeFileSync(lp('data.txt'), 'data\n')
+    symlinkSync(lp('data.txt'), lp('notes.md'))
+    writeFileSync(lp('big.md'), Buffer.alloc(8192, 0x61))
+    truncateSync(lp('big.md'), MD_CAP + 1)
+    writeFileSync(lp('arch.zip'), Buffer.from([0x50, 0x4b, 3, 4]))
+    mkdirSync(lp('folder'))
+    writeFileSync(lp('flip.md'), '# flip (external)\n')
+    mkdirSync(join(libFile(L_FLIP, 'flip.md'), '..'), { recursive: true })
+    writeFileSync(libFile(L_FLIP, 'flip.md'), '# flip (library copy)\n')
+    for (const name of DECOYS) writeFileSync(p(name), '# decoy\n')
+  })
+
   afterAll(() => {
     rmSync(libHome, { recursive: true, force: true })
+    rmSync(linkRoot, { recursive: true, force: true })
+    for (const name of DECOYS) rmSync(p(name), { force: true })
   })
 
   beforeEach(async () => {
@@ -924,13 +992,13 @@ describe('W-LIB 文件库的引用', () => {
     const lib = await import('../fileLibrary')
     lib.setLibraryTable({
       findItem: (id: string) => {
-        const entry = LIB_FILES[id]
+        const entry = libOverrides[id] ?? LIB_FILES[id] ?? LINKED_FILES[id]
         return entry
           ? {
               id,
               name: entry.fileName,
-              storage: 'managed',
-              externalPath: null,
+              storage: entry.storage ?? 'managed',
+              externalPath: entry.externalPath ?? null,
               fileName: entry.fileName,
               deletedAt: entry.deletedAt
             }
@@ -941,6 +1009,8 @@ describe('W-LIB 文件库的引用', () => {
 
   afterEach(async () => {
     ;(await import('../fileLibrary')).setLibraryTable(null)
+    for (const id of Object.keys(libOverrides)) delete libOverrides[id]
+    ;(await import('../../utils/headless')).resetHeadlessModeForTests()
   })
 
   it('W-LIB-1 库里的图片 → 开预览窗口；path 是库文件的真实路径，hash 带借用的会话 id；不交给 openMarkdownFile', async () => {
@@ -974,7 +1044,7 @@ describe('W-LIB 文件库的引用', () => {
 
   it('R-10 在回收站 / 库里没有的 id → missing，不开窗', async () => {
     init()
-    // libraryPathOfRef 把取不到的一件解成库目录下不存在的 `.missing`，分类得「File not found」→ missing
+    // libraryOpenTargetOfRef 把取不到的一件解成库目录下不存在的 `.missing`，分类得「File not found」→ missing
     for (const id of [LIB_TRASHED, LIB_MISSING]) {
       expect(await raw(`library:${id}`), id).toEqual({ opened: false, reason: 'missing' })
     }
@@ -996,6 +1066,177 @@ describe('W-LIB 文件库的引用', () => {
     expect(await open(`library:${LIB_MD}`)).toBe(false)
     expect(fx.openMarkdownFile).not.toHaveBeenCalled()
     expect(windows()).toHaveLength(0)
+  })
+
+  // ─── 留在原位置的一件（storage: 'linked'）：与文件面板同样打开 ─────────────────────
+
+  const MISSING = join(libHome, '.shuvix', 'library', 'files', '.missing')
+
+  it('RO-2 / RO-3 留在原位置 → {原路径, library:false}（会话没了也一样）；托管 → library:true', () => {
+    for (const sid of [LIVE, GONE]) {
+      expect(service.resolveOpenTarget({ sessionId: sid, path: `library:${L_MD}` }), sid).toEqual({
+        absolute: lp('linked.md'),
+        library: false
+      })
+      expect(service.resolveOpenTarget({ sessionId: sid, path: `library:${LIB_MD}` }), sid).toEqual(
+        { absolute: libFile(LIB_MD, 'note.md'), library: true }
+      )
+    }
+  })
+
+  it('RO-4 / RO-5 回收站里的、文件不在的、未知 id → `.missing` + library:true；工作目录里同名的真文件不认', () => {
+    for (const id of [L_TRASHED, L_GONE, LIB_MISSING]) {
+      for (const sid of [LIVE, GONE]) {
+        const target = service.resolveOpenTarget({ sessionId: sid, path: `library:${id}` })
+        expect(target, `${id} ${sid}`).toEqual({ absolute: MISSING, library: true })
+        expect(target!.absolute.startsWith(realRoot + '/')).toBe(false)
+      }
+    }
+  })
+
+  it('RO-6 id 形状不对的 `library:` 不是库引用：活会话按工作目录解，会话没了 → null', () => {
+    expect(service.resolveOpenTarget({ sessionId: LIVE, path: 'library:bad' })).toEqual({
+      absolute: p('library:bad'),
+      library: false
+    })
+    expect(service.resolveOpenTarget({ sessionId: GONE, path: 'library:bad' })).toBeNull()
+  })
+
+  it('W-LIB-3 / W-LIB-6 留在原位置的 .md → openMarkdownFile(原路径)，不开预览窗；同一夹具里托管的 .md 仍是只读预览', async () => {
+    init()
+    expect(await raw(`library:${L_MD}`)).toEqual({ opened: true })
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[lp('linked.md')]])
+    expect(windows()).toHaveLength(0)
+
+    expect(await raw(`library:${LIB_MD}`)).toEqual({ opened: true })
+    expect(fx.openMarkdownFile).toHaveBeenCalledTimes(1)
+    expect(hashOf(onlyWindow()).path).toBe(realpathSync.native(libFile(LIB_MD, 'note.md')))
+  })
+
+  it('W-LIB-4 留在原位置的 .txt → 预览窗口，path 是原路径的真实路径、会话 id 是发起方的', async () => {
+    init()
+    expect(await raw(`library:${L_TXT}`)).toEqual({ opened: true })
+    expect(hashOf(onlyWindow())).toEqual({
+      route: 'file-preview',
+      sessionId: LIVE,
+      path: realpathSync.native(lp('linked.txt')),
+      openedBy: 'user'
+    })
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+  })
+
+  it('W-LIB-5 留在原位置的 .png → 预览窗口开在原路径上', async () => {
+    init()
+    expect(await open(`library:${L_PNG}`)).toBe(true)
+    expect(hashOf(onlyWindow()).path).toBe(realpathSync.native(lp('linked.png')))
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+  })
+
+  it('W-LIB-7 与文件面板一致：引用与同一个绝对路径给出同样的 openMarkdownFile 调用与结果；txt 落在同一扇窗', async () => {
+    init()
+    const viaRef = await raw(`library:${L_MD}`)
+    const viaPath = await raw(lp('linked.md'))
+    expect(viaRef).toEqual(viaPath)
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[lp('linked.md')], [lp('linked.md')]])
+
+    expect(await raw(`library:${L_TXT}`)).toEqual({ opened: true })
+    expect(await raw(lp('linked.txt'))).toEqual({ opened: true })
+    const win = onlyWindow()
+    expect(win.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['link.txt → real.md', L_LINK_TXT, lp('link.txt')],
+    ['notes.md → data.txt', L_NOTES_MD, lp('notes.md')]
+  ])(
+    'W-LIB-8 符号链接后面的一件（%s）→ md 窗口，交过去的是记下的那个路径',
+    async (_l, id, path) => {
+      init()
+      expect(await raw(`library:${id}`)).toEqual({ opened: true })
+      expect(fx.openMarkdownFile.mock.calls).toEqual([[path]])
+      expect(windows()).toHaveLength(0)
+    }
+  )
+
+  it('W-LIB-9 超过 Markdown 上限的留在原位置的 .md → too-large，不交给 openMarkdownFile、不开窗', async () => {
+    init()
+    expect(await raw(`library:${L_BIG_MD}`)).toEqual({
+      opened: false,
+      reason: 'too-large',
+      size: MD_CAP + 1,
+      cap: MD_CAP
+    })
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('W-LIB-10 openMarkdownFile 没开：能读的 md → unreadable，不退回去开预览窗', async () => {
+    init()
+    fx.openMarkdownFile.mockReturnValue(false)
+    expect(await raw(`library:${L_MD}`)).toEqual({ opened: false, reason: 'unreadable' })
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[lp('linked.md')]])
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('W-LIB-11 未初始化：留在原位置的 md 照样交给 openMarkdownFile；托管的 md → false', async () => {
+    expect(await raw(`library:${L_MD}`)).toEqual({ opened: true })
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[lp('linked.md')]])
+    expect(await open(`library:${LIB_MD}`)).toBe(false)
+    expect(fx.openMarkdownFile).toHaveBeenCalledTimes(1)
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('W-LIB-12 / W-LIB-13 失败时关上：回收站里的、文件不在的、未知 id → missing；工作目录里同名的文件与 .md 邻居都不开', async () => {
+    init()
+    for (const id of [L_TRASHED, L_GONE, LIB_MISSING]) {
+      for (const sid of [LIVE, GONE]) {
+        expect(await raw(`library:${id}`, { sessionId: sid }), `${id} ${sid}`).toEqual({
+          opened: false,
+          reason: 'missing'
+        })
+      }
+    }
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('W-LIB-14 留在原位置的二进制 → unsupported + 扩展名；路径是个目录 → directory', async () => {
+    init()
+    expect(await raw(`library:${L_ZIP}`)).toEqual({
+      opened: false,
+      reason: 'unsupported',
+      ext: '.zip'
+    })
+    expect(await raw(`library:${L_DIR}`)).toEqual({ opened: false, reason: 'directory' })
+    expect(windows()).toHaveLength(0)
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+  })
+
+  it('W-LIB-15 无头运行：留在原位置的 md 与 txt → unreadable，不交给 openMarkdownFile、不开窗', async () => {
+    init()
+    ;(await import('../../utils/headless')).enableHeadlessMode()
+    expect(await raw(`library:${L_MD}`)).toEqual({ opened: false, reason: 'unreadable' })
+    expect(await raw(`library:${L_TXT}`)).toEqual({ opened: false, reason: 'unreadable' })
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+  })
+
+  it('W-LIB-16 openedBy=agent 原样进 hash', async () => {
+    init()
+    expect(await open(`library:${L_TXT}`, { openedBy: 'agent' })).toBe(true)
+    expect(hashOf(onlyWindow()).openedBy).toBe('agent')
+  })
+
+  it('W-LIB-17 原来留在原位置、之后收进库的一件：第一次进 md 窗口，第二次是库里那份的只读预览', async () => {
+    init()
+    expect(await raw(`library:${L_FLIP}`)).toEqual({ opened: true })
+    expect(fx.openMarkdownFile.mock.calls).toEqual([[lp('flip.md')]])
+    expect(windows()).toHaveLength(0)
+
+    libOverrides[L_FLIP] = { fileName: 'flip.md', deletedAt: null, storage: 'managed' }
+    expect(await raw(`library:${L_FLIP}`)).toEqual({ opened: true })
+    expect(fx.openMarkdownFile).toHaveBeenCalledTimes(1)
+    expect(hashOf(onlyWindow()).path).toBe(realpathSync.native(libFile(L_FLIP, 'flip.md')))
   })
 
   it('RO-1 resolveOpenTarget：库引用 / shown: 引用 / 相对 / 绝对', () => {
