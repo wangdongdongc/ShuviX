@@ -1109,6 +1109,12 @@ export interface HostApi {
    *    目标不在当前对话里）是 `false`，什么都没动 —— 调用方据此不回填草稿、不重发（P3-10b PIN-02）
    */
   message: {
+    /**
+     * 压缩前的历史（只读回看）：`compactionId`（当前对话里一条压缩摘要消息的 id）压缩掉的那一段，最旧在前。
+     * 更早还压缩过 → 以那条压缩的摘要消息开头（拿它的 id 再取就是再往上一段）。认不出 / 旧格式会话 → `[]`。
+     * 宿主面：Chrome 侧边栏没有它，那里压缩之前的历史照旧看不到
+     */
+    listCompacted: (params: { sessionId: string; compactionId: string }) => Promise<ChatMessage[]>
     clear: (sessionId: string) => Promise<{ success: boolean }>
     rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
   }

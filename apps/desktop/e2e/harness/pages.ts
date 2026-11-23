@@ -17367,3 +17367,116 @@ export function imageViewerPane(client: CdpClient): ImageViewerPane {
     }
   }
 }
+
+// ─── 压缩前的历史（往上翻接上来的那几段，chat-ui useCompactedHistory） ───
+
+/** 对话列里此刻渲染着的一项（Virtuoso 的项外框 + 里面 MessageRenderer 的 data-msg-id） */
+export interface CompactedListItem {
+  /** 消息 id（MessageRenderer 根的 data-msg-id；一张卡是它的锚点消息） */
+  msgId: string
+  /** Virtuoso 的 `data-item-index`（带着 firstItemIndex：接上压缩前的历史之后它不从 1_000_000 起） */
+  itemIndex: number
+  /** 这一项里有压缩分隔线 `[data-compaction-divider]` */
+  divider: boolean
+  /** 整项的文本（找 U1 / R1 这类标记用） */
+  text: string
+  top: number
+  bottom: number
+}
+
+export interface CompactedHistoryPane {
+  /** 此刻渲染着的项，按 DOM 次序 */
+  items(): Promise<CompactedListItem[]>
+  /** 把滚动区设到最顶（Virtuoso 随即报「在顶部」） */
+  scrollToTop(): Promise<void>
+  /** 某条分隔线（按它所在压缩摘要的消息 id）的视口 top；不在 DOM 里为 null */
+  dividerTop(msgId: string): Promise<number | null>
+  /** 逐帧（rAF）读 `ms` 毫秒那条分隔线的 top（读不到的帧记 null） */
+  sampleDividerTop(msgId: string, ms: number): Promise<Array<number | null>>
+  /** 这一项里有没有「回退到这里」按钮（按无障碍名，en 界面） */
+  hasRollback(msgId: string): Promise<boolean>
+  /** 这一项里有没有「从这里分支」按钮 */
+  hasFork(msgId: string): Promise<boolean>
+  /**
+   * 从最顶滚到最底（每次九成屏）把整份列表的项都收一遍，按 itemIndex 排好；同一 itemIndex 只记一次。
+   * 滚过最顶会让列表去取更早的一段 —— 调用方先把能取的都取完
+   */
+  scan(): Promise<CompactedListItem[]>
+}
+
+export function compactedHistoryPane(main: CdpClient): CompactedHistoryPane {
+  const SCROLLER = `document.querySelector('.conversation-scroller')`
+  const ITEMS = `(() => {
+    const el = ${SCROLLER}
+    if (!el) return []
+    return [...el.querySelectorAll('[data-item-index]')].flatMap((wrap) => {
+      const msg = wrap.querySelector('[data-msg-id]')
+      if (!msg) return []
+      const r = wrap.getBoundingClientRect()
+      return [{
+        msgId: msg.getAttribute('data-msg-id') ?? '',
+        itemIndex: Number(wrap.getAttribute('data-item-index')),
+        divider: !!wrap.querySelector('[data-compaction-divider]'),
+        text: wrap.textContent ?? '',
+        top: r.top,
+        bottom: r.bottom
+      }]
+    })
+  })()`
+  const itemSel = (msgId: string): string =>
+    `document.querySelector('.conversation-scroller [data-msg-id="' + CSS.escape(${JSON.stringify(msgId)}) + '"]')`
+  const items = (): Promise<CompactedListItem[]> => main.eval<CompactedListItem[]>(ITEMS)
+  const dividerTopExpr = (msgId: string): string => `(() => {
+    const host = ${itemSel(msgId)}
+    const line = host?.querySelector('[data-compaction-divider]')
+    return line ? line.getBoundingClientRect().top : null
+  })()`
+  const hasButton = (msgId: string, selector: string): Promise<boolean> =>
+    main.eval<boolean>(`(() => {
+      const host = ${itemSel(msgId)}
+      return !!host?.querySelector(${JSON.stringify(selector)})
+    })()`)
+
+  return {
+    items,
+    scrollToTop: async () => {
+      // 先发一个 wheel：像人滚动一样（人一动，列表就不再替接上来的那一段摆位置），再把位置拨到顶
+      await main.eval(
+        `(() => { const el = ${SCROLLER}; if (el) { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -1 })); el.scrollTop = 0 } return true })()`
+      )
+      await sleep(60)
+    },
+    dividerTop: (msgId) => main.eval<number | null>(dividerTopExpr(msgId)),
+    sampleDividerTop: (msgId, ms) =>
+      main.eval<Array<number | null>>(`new Promise((resolve) => {
+        const out = []
+        const t0 = performance.now()
+        const tick = () => {
+          out.push(${dividerTopExpr(msgId)})
+          if (performance.now() - t0 >= ${ms}) resolve(out)
+          else requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+      })`),
+    hasRollback: (msgId) => hasButton(msgId, 'button[aria-label="Rollback to here"]'),
+    hasFork: (msgId) => hasButton(msgId, '[data-fork-reply]'),
+    scan: async () => {
+      const seen = new Map<number, CompactedListItem>()
+      await main.eval(`(() => { const el = ${SCROLLER}; if (el) el.scrollTop = 0; return true })()`)
+      for (let i = 0; i < 400; i++) {
+        await sleep(120)
+        for (const item of await items())
+          if (!seen.has(item.itemIndex)) seen.set(item.itemIndex, item)
+        const atEnd = await main.eval<boolean>(`(() => {
+          const el = ${SCROLLER}
+          if (!el) return true
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) return true
+          el.scrollTop = el.scrollTop + Math.max(100, Math.floor(el.clientHeight * 0.9))
+          return false
+        })()`)
+        if (atEnd) break
+      }
+      return [...seen.values()].sort((a, b) => a.itemIndex - b.itemIndex)
+    }
+  }
+}

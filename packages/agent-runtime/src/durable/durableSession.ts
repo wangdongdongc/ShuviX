@@ -100,6 +100,7 @@ import type {
 } from '@shuvix/chat-protocol/systemPromptStatus'
 import { isUnattendedOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
@@ -138,6 +139,7 @@ import {
   type ReconfigureOutcome,
   type ReconfigurePreview
 } from './lock'
+import { compactedSegment } from './compactedHistory'
 import { collectMonitorRows, type AgentMonitorRow } from './monitorSnapshot'
 import { newSessionProcessRecord, type SessionProcessRecord } from './processRecord'
 import { withMidRunNote } from './midRunNote'
@@ -601,6 +603,12 @@ export interface DurableSession {
    * 同一判据）。从不挂载投影、不留任何订阅、不开启调度器。句柄已关 → 以 `SessionClosedError` 拒绝。
    */
   viewSnapshot(): Promise<SessionView>
+  /**
+   * 压缩前的历史（只读回看，见 `compactedHistory.ts`）：`compactionId`（当前对话里一条压缩摘要消息的 id）压缩掉的
+   * 那一段，按界面投影的同一套规则投影成消息（id 仍是条目 id）。更早还压缩过 → 结果以那条压缩的摘要消息开头，
+   * 拿它的 id 再调一次就是再往上一段。认不出 → `[]`。只读：不挂载投影、不开启调度器、不写。
+   */
+  compactedMessages(compactionId: string): Promise<ChatMessage[]>
   /**
    * 运行状态变化（PIN-23）：每次 `runState` 变了都在微任务里调用（含没有提交发布的转变 —— 继续 / 中止
    * 开启调度器的那一刻），读 `runState` 得到的就是新值。关停之后不再调用。监听器抛错只记日志。
@@ -2916,6 +2924,25 @@ export class DurableSessionImpl implements DurableSession {
 
   viewSnapshot(): Promise<SessionView> {
     return this.op(async () => this.snapshotOf(await this.currentConversation()))
+  }
+
+  compactedMessages(compactionId: string): Promise<ChatMessage[]> {
+    return this.op(async () => {
+      if (!/^[1-9]\d*$/.test(compactionId)) return []
+      const conversation = await this.currentConversation()
+      const entries = await compactedSegment(conversation, Number(compactionId))
+      if (entries.length === 0) return []
+      // 一次性投影（同 viewSnapshot 没跟上时那条路）：只换条目、不带任何文档 —— 没有活卡、队列、运行中的任务
+      const state = await conversation.viewState(BG)
+      const frame = state.value
+      state.dispose()
+      const view = await SessionProjectorImpl.snapshot(this.projectorHost(), conversation.id, {
+        conversation: frame.conversation,
+        entries,
+        docs: {}
+      })
+      return view.messages
+    })
   }
 
   /** 某对话此刻的视图（`viewSnapshot` 的本体；不计 op、不进区段，会话内部用） */

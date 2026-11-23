@@ -18,6 +18,7 @@
  *   UI-5 成功 → openSession(新 id)；被拒 → 说明框（一颗按钮），Close / Escape / 点遮罩关掉
  *   UI-6 只渲染 AssistantBubble：给了 onFork 但在流式 → 没有操作行；只有工具、没有正文、也没给 onRegenerate
  *        的卡仍有操作行，里面只有分支这一颗
+ *   C-10 压缩前的历史（往上翻接上来的那几段）只读：旧的用户气泡没有回退、旧卡没有分支 / 重新生成；当前的照旧
  *   UI-7 渲染成本：可分支时运行中会话的流式更新不让已落定的卡重画
  *
  * 桩：Virtuoso 换成直接把每一项画出来的壳；输入区、待处理输入、Footer 顶成空壳；`useChatActions` 交回
@@ -36,10 +37,16 @@ import { DURABLE_SQLITE_1, HARNESS_V3_JSONL } from '@shuvix/chat-protocol/sessio
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 interface VirtuosoStubProps {
+  firstItemIndex?: number
   data: Array<{ key: string }>
   itemContent: (index: number, item: unknown) => ReactNode
   computeItemKey: (index: number, item: unknown) => string
+  atTopStateChange?: (atTop: boolean) => void
+  atBottomStateChange?: (atBottom: boolean) => void
 }
+
+/** 最近一次渲染的 Virtuoso props（压缩前的历史要它的 atTopStateChange / atBottomStateChange） */
+const stub = vi.hoisted(() => ({ virt: null as VirtuosoStubProps | null }))
 
 const probe = vi.hoisted(() => ({
   /** ChatHost：`openSession` 有没有、是哪一个 */
@@ -81,6 +88,9 @@ vi.mock('react-virtuoso', async () => {
   const React = await import('react')
   const Virtuoso = React.forwardRef<unknown, VirtuosoStubProps>(function VirtuosoStub(props, ref) {
     React.useImperativeHandle(ref, () => ({ scrollToIndex: () => {} }), [])
+    React.useEffect(() => {
+      stub.virt = props
+    })
     return React.createElement(
       'div',
       { 'data-virtuoso-stub': '' },
@@ -89,7 +99,7 @@ vi.mock('react-virtuoso', async () => {
         return React.createElement(
           probe.card!.Provider,
           { key, value: key },
-          props.itemContent(i, item)
+          props.itemContent((props.firstItemIndex ?? 0) + i, item)
         )
       })
     )
@@ -610,5 +620,48 @@ describe('渲染成本（UI-7）', () => {
     // 跑完：按钮回来（落定卡这一次重画）
     load([...running, assistant('a2', [text('two')], SID)])
     expect(rowsWithFork()).toEqual(['a1', 'a2'])
+  })
+})
+
+describe('C-10 压缩前的历史只读', () => {
+  /** c0 之上那一段：u-old · 卡 [a-old-t 工具, a-old 终答] */
+  const older = (): ChatMessage[] => [
+    user('u-old', 'old question', SID),
+    assistant('a-old-t', [toolBlock('a-old-t1', 'read', { path: 'y' }, { result: 'ok' })], SID),
+    assistant('a-old', [text('old answer')], SID)
+  ]
+
+  it('C-10 接上来的旧用户气泡没有回退、旧卡没有分支 / 重新生成；当前的照旧都有', async () => {
+    const listCompacted = vi.fn(async () => older())
+    setChatApi({
+      session: host,
+      message: { listCompacted }
+    } as unknown as ChatApi)
+    // 末条是助手终答 a4：当前的最后一张卡有重新生成
+    load(history())
+    render()
+    // 定位落地（没有滚动区可量：Virtuoso 报到底就算），再报在顶部
+    act(() => stub.virt!.atBottomStateChange!(true))
+    act(() => stub.virt!.atTopStateChange!(true))
+    await flush()
+    expect(listCompacted).toHaveBeenCalledWith({ sessionId: SID, compactionId: 'c0' })
+    expect(container.querySelector('[data-msg-id="u-old"]')).not.toBeNull()
+    expect(container.querySelector('[data-msg-id="a-old"]')).not.toBeNull()
+
+    const rollbackIn = (id: string): HTMLElement | null =>
+      rowOf(id).querySelector(`button[aria-label="${en.message.rollback}"]`)
+    const regenerateIn = (id: string): HTMLElement | null =>
+      rowOf(id).querySelector(`[title="${en.message.regenerate}"]`)
+    expect(rollbackIn('u-old')).toBeNull()
+    expect(rollbackIn('u1')).not.toBeNull()
+    expect(forkButtons(rowOf('a-old'))).toHaveLength(0)
+    expect(regenerateIn('a-old')).toBeNull()
+    expect(rowsWithFork()).toEqual(['a2', 'a3', 'a4'])
+    expect(regenerateIn('a4')).not.toBeNull()
+    // 旧的一段排在压缩摘要之前
+    const order = [...container.querySelectorAll<HTMLElement>('[data-msg-id]')].map(
+      (el) => el.dataset.msgId
+    )
+    expect(order.indexOf('a-old')).toBeLessThan(order.indexOf('c0'))
   })
 })

@@ -325,7 +325,7 @@
     "hintKeep": "そのまま送信"
   },
   "compact": {
-    "summaryLabel": "会話の要約（自動圧縮済み）"
+    "dividerLabel": "ここまでの内容は要約に圧縮済み"
   },
   "backgroundNotice": {
     "title": "バックグラウンドの処理が完了しました"

@@ -143,6 +143,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 
   // ─── message：消息 ───
   'message:list': 'read',
+  'message:listCompacted': 'read',
   'message:clear': 'write',
   'message:rollback': 'write',
 

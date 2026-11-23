@@ -23,6 +23,7 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { AssistantBlock, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 interface VirtuosoStubProps {
+  firstItemIndex?: number
   data: Array<{ key: string }>
   itemContent: (index: number, item: unknown) => ReactNode
   computeItemKey: (index: number, item: unknown) => string
@@ -85,7 +86,7 @@ vi.mock('react-virtuoso', async () => {
         return React.createElement(
           probe.card!.Provider,
           { key, value: key },
-          props.itemContent(i, item)
+          props.itemContent((props.firstItemIndex ?? 0) + i, item)
         )
       })
     )

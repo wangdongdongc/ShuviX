@@ -23,6 +23,7 @@
  *   CS-7 触发源与跟踪项（实验，2026-10-24）：trigger:status 是 agents 的 read；tracking:list 是 sessions 的 read，
  *        开笔记本 / 开目录 / 删一项是 write；settings:set 写 triggers.timer.enabled → agents + admin；
  *        触发日志：trigger:logs 是 agents 的 read，trigger:clearLogs 是 agents 的 write
+ *   CA-MC-1 压缩前的历史（message:listCompacted）：read，scope 与 message:list 一样
  *   CS-8 应用日志（2026-10-25）：appLog:info / appLog:tail 是 system 的 read（与 LLM 请求日志同级）
  *   CS-9 内置浏览器的历史记录（2026-10-29）：browser-history:suggest / :list 是 admin（历史里的网址可能带着登录
  *        令牌），:search-suggest / :remove / :remove-url / :clear 是 write，都在 browser scope（browserHistory 分组）；
@@ -694,5 +695,21 @@ describe('CA-WS web_search 的搜索 API 密钥', () => {
     expect([...all].filter((c) => c.toLowerCase().startsWith('websearch:')).sort()).toEqual(
       CHANNELS.map(([channel]) => channel).sort()
     )
+  })
+})
+
+describe('压缩前的历史（message:listCompacted，2026-11-23）', () => {
+  it('CA-MC-1 是请求通道、read，scope 与 message:list 相同（来自 message 分组，不点名覆盖）', () => {
+    expect(REQUEST_CHANNELS.has('message:listCompacted')).toBe(true)
+    expect(CHANNEL_ACCESS['message:listCompacted']).toBe('read')
+    expect(channelAccessOf('message:listCompacted')).toBe('read')
+    expect(channelScopeOf('message:listCompacted')).toBe(channelScopeOf('message:list'))
+    expect(channelGroupOf('message:listCompacted')).toBe('message')
+    expect(Object.hasOwn(CHANNEL_SCOPE_OVERRIDES, 'message:listCompacted')).toBe(false)
+    expect(API_TABLE.message.listCompacted).toEqual({
+      kind: 'invoke',
+      channel: 'message:listCompacted',
+      args: 1
+    })
   })
 })

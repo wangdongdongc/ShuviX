@@ -133,10 +133,15 @@ export function streamingPlaceholder(sessionId: string): AssistantMessage {
  * 次序。它们不算轮次：放下之后视图带来真实的用户消息，那时才起新的一轮。
  */
 export function buildVisibleItems(
-  messages: ChatMessage[],
+  messages: readonly ChatMessage[],
   isStreaming: boolean,
   pending?: UserTextMessage | null,
-  queue?: readonly QueuedInputView[]
+  queue?: readonly QueuedInputView[],
+  /**
+   * 助手卡 key 的前缀：压缩前的历史一段一段单独建（`compacted:<压缩摘要 id>:`），它们的轮次从这一段自己数起，
+   * 不能与当前上下文的 `turn:…` 撞上；当前上下文不给前缀，key 与从前一样
+   */
+  keyPrefix = ''
 ): VisibleItem[] {
   const items: VisibleItem[] = []
   let group: AssistantMessage[] = []
@@ -147,7 +152,7 @@ export function buildVisibleItems(
 
   const flush = (streamingTail = false): void => {
     if (group.length === 0) return
-    const key = `turn:${turn}.${card}`
+    const key = `${keyPrefix}turn:${turn}.${card}`
     const cached = assistantItemCache.get(group[0])
     if (
       cached &&

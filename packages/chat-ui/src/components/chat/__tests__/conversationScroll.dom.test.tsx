@@ -13,6 +13,9 @@
  *   - 询问卡片（CS 系列）：卡片在 Footer 里；人在底部才把新卡片露出来（400ms 的跟随，人一动就松开）；「等你批准」提示看的是
  *     量出来的卡片位置（滚动、总高变化时重量），不是 Virtuoso 那 160px 的「在底部」；看不见的卡片数字键不算数。
  *
+ *   - 压缩前的历史（CH 系列）：初始定位过了、又报「在顶部」、滚动区也真在顶上 600px 以内才取；取回以摘要开头还在顶部就接着取；接上来的项排在最前、
+ *     `firstItemIndex` 随之减；换会话再回来就没了，要再翻到顶才取。
+ *
  * Virtuoso 换成一个记录 props / 挂载次数 / `scrollToIndex` 的桩（会把假滚动区交给 `scrollerRef`）；
  * 输入区、消息渲染、Footer 等重组件都顶成空壳 —— 被测的是 MessageList 的门与按钮，不是它们。桩把 `components.Footer`
  * 画进一层 `[data-virtuoso-scroller]`（矩形跟着假滚动区），询问面板换成只挂真 `useOptionHotkeys` 的空壳：外框与把关是真的。
@@ -28,6 +31,7 @@ import type { Session } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 
 interface VirtuosoStubProps {
+  firstItemIndex?: number
   data: Array<{ key: string; msg: { id: string } }>
   itemContent: (index: number, item: unknown) => ReactNode
   computeItemKey: (index: number, item: unknown) => string
@@ -35,6 +39,8 @@ interface VirtuosoStubProps {
   scrollerRef?: (el: HTMLElement | Window | null) => void
   atBottomStateChange?: (atBottom: boolean) => void
   atBottomThreshold?: number
+  atTopStateChange?: (atTop: boolean) => void
+  atTopThreshold?: number
   totalListHeightChanged?: (height: number) => void
   components: {
     List: (props: Record<string, unknown>) => ReactNode
@@ -87,7 +93,7 @@ vi.mock('react-virtuoso', async () => {
         React.createElement(
           React.Fragment,
           { key: props.computeItemKey(i, item) },
-          props.itemContent(i, item)
+          props.itemContent((props.firstItemIndex ?? 0) + i, item)
         )
       ),
       React.createElement(
@@ -164,6 +170,9 @@ import {
 import { Conversation } from '../Conversation'
 import { V, assistant, resetStore, text, toolBlock, user } from '../../../__tests__/support/views'
 import { TASK_LIST_TOOL_NAME } from '@shuvix/chat-protocol/taskList'
+import { setChatApi } from '../../../api/chatApi'
+import { useUnreadStore } from '../../../stores/unreadStore'
+import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -210,9 +219,14 @@ function fakeScroller(): HTMLElement {
 }
 
 /** 假滚动区里此刻渲染着的项（`hasLanded` 量的就是它们）：缺省一项、就是开头、底边在视口内 */
-const fakeItem = (index: number, top: number, bottom: number): HTMLElement =>
+const fakeItem = (
+  index: number,
+  top: number,
+  bottom: number,
+  dataset: Record<string, string> = { itemIndex: String(index) }
+): HTMLElement =>
   ({
-    dataset: { itemIndex: String(index) },
+    dataset,
     getBoundingClientRect: () => ({ top, bottom })
   }) as unknown as HTMLElement
 let renderedItems: HTMLElement[] = [fakeItem(0, 0, 100)]
@@ -738,6 +752,23 @@ describe('揭开列表', () => {
 
   it('REV-8 最后一项的底边还在视口下面（实际高度比估的高）：不揭开', () => {
     renderedItems = [fakeItem(0, 0, 100), fakeItem(5, 200, 6000)]
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    expect(listVisibility()).toBe('hidden')
+  })
+
+  it('REV-9 接上压缩前的历史后 data-item-index 不从 0 起：按 data-index（数据下标）认开头', () => {
+    // 真 Virtuoso：data-index 是数据下标，data-item-index 带着 firstItemIndex
+    renderedItems = [fakeItem(0, 200, 400, { index: '0', itemIndex: '999998' })]
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    expect(listVisibility()).toBe('visible')
+  })
+
+  it('REV-9b 有 data-index 而它不是 0、上沿又没铺满：不揭开（不退回去看 data-item-index）', () => {
+    renderedItems = [fakeItem(3, 200, 400, { index: '3', itemIndex: '0' })]
     loadView(S1, history(S1))
     render(S1)
     land()
@@ -1453,5 +1484,247 @@ describe('询问卡片', () => {
     expect(list!.getAttribute('data-task-list-placement')).toBe('conversation')
     expect(list!.closest('[data-virtuoso-scroller]')).not.toBeNull()
     expect(list!.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('压缩前的历史', () => {
+  const BASE = 1_000_000
+  interface Pending {
+    params: { sessionId: string; compactionId: string }
+    resolve: (messages: ChatMessage[]) => void
+    reject: (error: unknown) => void
+  }
+  let pending: Pending[]
+  const listCompacted = vi.fn(
+    (params: Pending['params']) =>
+      new Promise<ChatMessage[]>((resolve, reject) => pending.push({ params, resolve, reject }))
+  )
+  const summary = (id: string, sid = S1): ChatMessage =>
+    assistant(id, [text(`summary ${id}`)], sid, { isCompactionSummary: true })
+  /** 当前视图：压缩摘要 c2 在最前，后面一轮 */
+  const compactedView = (sid = S1): ChatMessage[] => [
+    summary(`${sid}-c2`, sid),
+    user(`${sid}-u3`, 'third', sid),
+    assistant(`${sid}-a3`, [text('three')], sid)
+  ]
+  const keys = (): string[] => virt.props!.data.map((item) => item.key)
+  const atTop = (value: boolean): void => {
+    act(() => virt.props!.atTopStateChange!(value))
+  }
+  /** 人翻到顶：滚动区真的在 0，Virtuoso 报「在顶部」（先报一次不在，好让它是一次变化） */
+  const reachTop = (): void => {
+    metrics.scrollTop = 0
+    atTop(false)
+    atTop(true)
+  }
+  async function answer(index: number, messages: ChatMessage[]): Promise<void> {
+    await act(async () => {
+      pending[index]!.resolve(messages)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  beforeEach(() => {
+    pending = []
+    listCompacted.mockClear()
+    setChatApi({
+      message: { listCompacted },
+      session: { list: vi.fn(async () => []) }
+    } as unknown as ChatApi)
+  })
+  afterEach(() => {
+    setChatApi(null as unknown as ChatApi)
+  })
+
+  it('CH-0 列表的到顶阈值是 600px；没有接上任何东西时 firstItemIndex 是 1_000_000', () => {
+    loadView(S1, compactedView())
+    render(S1)
+    expect(virt.props!.atTopThreshold).toBe(600)
+    expect(virt.props!.firstItemIndex).toBe(BASE)
+    expect(virt.mountProps[0].firstItemIndex).toBe(BASE)
+  })
+
+  it('C-15 初始位置照旧是真底；没报「在顶部」就不取（落地了、过了宽限期也不取）', () => {
+    loadView(S1, compactedView())
+    render(S1)
+    expect(virt.mountProps[0].initialTopMostItemIndex).toEqual(LIST_BOTTOM)
+    land()
+    advance(5_000)
+    expect(listCompacted).not.toHaveBeenCalled()
+  })
+
+  it('C-7 初始定位途中报「在顶部」不算；落地之后那个旧的「在顶部」（滚动区已在底）也不算；人真翻到顶才取', () => {
+    loadView(S1, compactedView())
+    render(S1)
+    atTop(true)
+    expect(listCompacted).not.toHaveBeenCalled()
+    // Virtuoso 挂上时报的「在顶部」还没被「不在」盖掉，定位就落地了：滚动区在底，不取
+    land()
+    advance(1_000)
+    expect(listCompacted).not.toHaveBeenCalled()
+    reachTop()
+    expect(listCompacted.mock.calls).toEqual([[{ sessionId: S1, compactionId: `${S1}-c2` }]])
+  })
+
+  it('C-7d 按滚动区的位置核：离顶 600px 以内取，再远就不取（哪怕 Virtuoso 还说在顶部）', () => {
+    loadView(S1, compactedView())
+    render(S1)
+    land()
+    metrics.scrollTop = 601
+    atTop(false)
+    atTop(true)
+    expect(listCompacted).not.toHaveBeenCalled()
+    metrics.scrollTop = 600
+    atTop(false)
+    atTop(true)
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+  })
+
+  it('C-18 有「新内容」锚点而当前项里不画分隔线（整条都是新的）：接上来的旧项也不画「新内容」分隔线', async () => {
+    act(() => useUnreadStore.setState({ mark: { sessionId: S1, at: 0 } }))
+    loadView(S1, compactedView())
+    render(S1)
+    land()
+    reachTop()
+    await answer(0, [user(`${S1}-u2`, 'second'), assistant(`${S1}-a2`, [text('two')])])
+    expect(keys()[0]).toBe(`${S1}-u2`)
+    expect(container.querySelectorAll('[data-new-content-divider]')).toHaveLength(0)
+    act(() => useUnreadStore.setState({ mark: null }))
+  })
+
+  it('C-7b 只是宽限期到点（量不到贴底）不算落地：不取；之后量到了（滚动时再量），在顶上就取', () => {
+    // 一屏放得下的短会话：滚动区在 0，Virtuoso 同时报在顶部
+    loadView(S1, compactedView())
+    render(S1)
+    renderedItems = []
+    atTop(true)
+    advance(800)
+    expect(listCompacted).not.toHaveBeenCalled()
+    renderedItems = [fakeItem(0, 0, 100)]
+    metrics.scrollHeight = metrics.clientHeight
+    metrics.scrollTop = 0
+    act(() => {
+      virt.scroller!.dispatchEvent(new Event('scroll'))
+    })
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+  })
+
+  it('C-7e 挂上那一刻（条目还没画出来）同时报在顶部、在底部：不取；落到长会话的底之后也不取', () => {
+    loadView(S1, compactedView())
+    render(S1)
+    renderedItems = []
+    atTop(true)
+    atBottom(true)
+    expect(listCompacted).not.toHaveBeenCalled()
+    // 长会话落到底：渲染着的是末尾几项，上沿铺满
+    renderedItems = [fakeItem(5, -50, 400)]
+    land()
+    advance(3_000)
+    expect(listCompacted).not.toHaveBeenCalled()
+    reachTop()
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+  })
+
+  it('C-15b 一屏放得下的短会话：落地即在顶上，不用滚就取（有意为之）', () => {
+    metrics.scrollHeight = metrics.clientHeight
+    loadView(S1, compactedView())
+    render(S1)
+    atTop(true)
+    land()
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+  })
+
+  it('C-7c 当前视图第一条不是压缩摘要：到顶也不取', () => {
+    loadView(S1, history(S1))
+    render(S1)
+    land()
+    reachTop()
+    expect(listCompacted).not.toHaveBeenCalled()
+  })
+
+  it('C-8 / C-9 接上一段：项排在最前、firstItemIndex 随之减；那段以摘要开头且还在顶部就接着取；不以摘要开头就停', async () => {
+    loadView(S1, compactedView())
+    render(S1)
+    land()
+    reachTop()
+    expect(keys()).toEqual([`${S1}-c2`, `${S1}-u3`, 'turn:1.0'])
+
+    await answer(0, [
+      summary(`${S1}-c1`),
+      user(`${S1}-u2`, 'second'),
+      assistant(`${S1}-a2`, [text('two')])
+    ])
+    // C-9：[旧…, 分隔线（当前的摘要）, 当前…]
+    expect(keys()).toEqual([
+      `${S1}-c1`,
+      `${S1}-u2`,
+      `compacted:${S1}-c2:turn:1.0`,
+      `${S1}-c2`,
+      `${S1}-u3`,
+      'turn:1.0'
+    ])
+    expect(virt.props!.firstItemIndex).toBe(BASE - 3)
+    // 列表没重挂：Virtuoso 靠 firstItemIndex 保住眼前那一项
+    expect(virt.mounts).toBe(1)
+    // 接上的项画成只读（index -1 那条路），当前项照旧：桩把每一项都画出来了
+    expect(container.querySelectorAll('[data-stub-item]')).toHaveLength(6)
+
+    // C-8：还在顶部 → 自动接着取摘要 c1 之上那一段
+    expect(listCompacted).toHaveBeenCalledTimes(2)
+    expect(pending[1]!.params).toEqual({ sessionId: S1, compactionId: `${S1}-c1` })
+    await answer(1, [user(`${S1}-u1`, 'first'), assistant(`${S1}-a1`, [text('one')])])
+    expect(keys().slice(0, 2)).toEqual([`${S1}-u1`, `compacted:${S1}-c1:turn:1.0`])
+    expect(virt.props!.firstItemIndex).toBe(BASE - 5)
+    // 这段不以摘要开头：到头了，不再取
+    reachTop()
+    expect(listCompacted).toHaveBeenCalledTimes(2)
+    // 所有项的 key 互不相同
+    expect(new Set(keys()).size).toBe(keys().length)
+  })
+
+  it('C-8b 接上一段之后人已经离开顶部：不接着取，再翻到顶才取', async () => {
+    loadView(S1, compactedView())
+    render(S1)
+    land()
+    reachTop()
+    metrics.scrollTop = 3_000
+    atTop(false)
+    await answer(0, [summary(`${S1}-c1`), user(`${S1}-u2`, 'second')])
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+    reachTop()
+    expect(listCompacted).toHaveBeenCalledTimes(2)
+  })
+
+  it('C-13 换到别的会话再回来：接上的历史没了（列表重挂），firstItemIndex 回到起点，要再翻到顶才取', async () => {
+    loadView(S1, compactedView())
+    loadView(S2, history(S2))
+    render(S1)
+    land()
+    reachTop()
+    await answer(0, [user(`${S1}-u2`, 'second'), assistant(`${S1}-a2`, [text('two')])])
+    expect(keys()[0]).toBe(`${S1}-u2`)
+
+    render(S2)
+    render(S1)
+    expect(keys()).toEqual([`${S1}-c2`, `${S1}-u3`, 'turn:1.0'])
+    expect(virt.props!.firstItemIndex).toBe(BASE)
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+    land()
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+    reachTop()
+    expect(listCompacted).toHaveBeenCalledTimes(2)
+  })
+
+  it('C-14 又压缩了一次（当前视图第一条换了）：接上的历史作废，不再画出来', async () => {
+    loadView(S1, compactedView())
+    render(S1)
+    land()
+    reachTop()
+    await answer(0, [user(`${S1}-u2`, 'second'), assistant(`${S1}-a2`, [text('two')])])
+    expect(keys()[0]).toBe(`${S1}-u2`)
+    loadView(S1, [summary(`${S1}-c9`), user(`${S1}-u9`, 'later')])
+    expect(keys()).toEqual([`${S1}-c9`, `${S1}-u9`])
+    expect(virt.props!.firstItemIndex).toBe(BASE)
   })
 })

@@ -5,6 +5,9 @@
  * false）→ `{success:false}`，界面据此不回填草稿、不重发。处理函数跑在 `createClientContext(ctx, sessionId)`
  * 里；运行时抛错原样拒绝（不吞成 `{success:false}`）。
  *
+ * `message:listCompacted`（压缩前的历史，M-5）：原样转给网关 `listCompactedMessages(sessionId, compactionId)`，
+ * 同样跑在 createClientContext(ctx, sessionId) 里，结果原样交回，网关抛错原样拒绝。
+ *
  * electron 是替身（handle 收进 Map）；网关只替到 rollbackMessage 那一层，operationContext 记下上下文。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +17,7 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown
 const state = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   rollbackMessage: vi.fn<(sessionId: string, messageId: string) => Promise<boolean>>(),
+  listCompactedMessages: vi.fn<(sessionId: string, compactionId: string) => Promise<unknown[]>>(),
   /** operationContext.run 收到的上下文与此刻是否在其中 */
   contexts: [] as unknown[],
   inside: undefined as unknown,
@@ -32,6 +36,10 @@ vi.mock('../../frontend', () => ({
     rollbackMessage: (sessionId: string, messageId: string) => {
       state.seenInside.push(state.inside)
       return state.rollbackMessage(sessionId, messageId)
+    },
+    listCompactedMessages: (sessionId: string, compactionId: string) => {
+      state.seenInside.push(state.inside)
+      return state.listCompactedMessages(sessionId, compactionId)
     }
   },
   operationContext: {
@@ -63,6 +71,7 @@ const invoke = (channel: string, ...args: unknown[]): unknown => {
 
 beforeEach(() => {
   state.rollbackMessage.mockReset()
+  state.listCompactedMessages.mockReset()
   state.contexts.length = 0
   state.seenInside.length = 0
 })
@@ -92,5 +101,26 @@ describe('P3-10b-11 message:rollback 的结果（PIN-02）', () => {
     await expect(invoke('message:rollback', { sessionId: 's1', messageId: '42' })).rejects.toBe(
       boom
     )
+  })
+})
+
+describe('M-5 message:listCompacted', () => {
+  it('M-5 转给网关 listCompactedMessages(sessionId, compactionId)，在 createClientContext 里，结果原样交回', async () => {
+    const segment = [{ id: '2' }, { id: '3' }]
+    state.listCompactedMessages.mockResolvedValue(segment)
+    expect(await invoke('message:listCompacted', { sessionId: 's1', compactionId: '9' })).toBe(
+      segment
+    )
+    expect(state.listCompactedMessages.mock.calls).toEqual([['s1', '9']])
+    expect(state.contexts).toEqual([{ electron: 's1' }])
+    expect(state.seenInside).toEqual([{ electron: 's1' }])
+  })
+
+  it('M-5 网关抛错 → 原样拒绝', async () => {
+    const boom = new Error('boom')
+    state.listCompactedMessages.mockRejectedValue(boom)
+    await expect(
+      invoke('message:listCompacted', { sessionId: 's1', compactionId: '9' })
+    ).rejects.toBe(boom)
   })
 })

@@ -1,5 +1,13 @@
 import { useChatHost } from '@shuvix/chat-ui'
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Virtuoso,
@@ -17,6 +25,7 @@ import {
   selectSessionQueueItems
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
+import { useCompactedHistory } from '../../hooks/useCompactedHistory'
 import { forkRefusalKey, selectSessionForkable, useSessionFork } from '../../hooks/useSessionFork'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
@@ -32,6 +41,7 @@ import { InputArea } from './InputArea'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ViewLoadGate } from './ConversationLoadBar'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 /** 列表经 Virtuoso 交给 List / Footer 的上下文 */
 interface ListContext {
@@ -94,8 +104,9 @@ function hasLanded(scroller: HTMLElement): boolean {
   if (rendered.length === 0) return false
   const view = scroller.getBoundingClientRect()
   const first = rendered[0]
-  const startsFilled =
-    first.dataset.itemIndex === '0' || first.getBoundingClientRect().top <= view.top
+  // `data-index` 是数据里的下标（从 0 数）；`data-item-index` 带着 firstItemIndex（压缩前的历史接在上面时它不从 0 起）
+  const dataIndex = first.dataset.index ?? first.dataset.itemIndex
+  const startsFilled = dataIndex === '0' || first.getBoundingClientRect().top <= view.top
   const dist = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
   return (
     startsFilled &&
@@ -112,6 +123,19 @@ const AT_BOTTOM_THRESHOLD = 160
  * 时由这个宽限期兜底
  */
 const BOTTOM_STATE_GRACE_MS = 800
+/**
+ * Virtuoso 的 `firstItemIndex` 起点：压缩前的历史接在列表上面时，它减去接上的项数，Virtuoso 据此保住
+ * 眼前那一项的位置（不跳）。只能是正数，所以从一个够大的数起
+ */
+const FIRST_ITEM_BASE = 1_000_000
+/** 离顶部多近（px）就去取上面那一段：留一点余量，翻到顶之前就接上，不用停下来等 */
+const AT_TOP_THRESHOLD = 600
+/**
+ * 接上压缩前的一段之后，最多再摆正几帧：接上的项先按估计的高度排，画出来量到真高才变（一张长卡可以差上千 px），
+ * 量完之前眼前那一项会被顶走。连续这么多帧没再动就收手
+ */
+const PREPEND_SETTLE_FRAMES = 6
+const PREPEND_MAX_FRAMES = 90
 /**
  * 落地之后多久内仍跟着底部：落地之后还会有东西长高 —— 末项里异步出现的块（某种 mermaid 图第一次用到、等它的图类型分包加载）、输入卡片顶格的
  * 询问面板（撑高 Footer），以及列表本身变矮（会话横幅、智能体条在 agent.init 回来后才出现，把列表上沿往下压；
@@ -140,8 +164,15 @@ function indexOfMessage(items: VisibleItem[], messageId: string): number {
  * 这一条会话的这一份列表：换会话、或回退清空后重新出现，都从头来过。
  */
 interface MessageListProps {
+  sessionId: string
+  /** 当前视图的消息（压缩前历史的锚点与查重看它） */
+  messages: readonly ChatMessage[]
+  /** 当前上下文的项（压缩前历史由列表自己接在它们上面） */
   items: VisibleItem[]
-  renderItem: (index: number, item: VisibleItem) => React.ReactNode
+  /**
+   * 画一项。`index` 是它在 `items`（当前上下文）里的下标；`compacted` = 接上来的压缩前历史（只读），那时 index 为 -1
+   */
+  renderItem: (index: number, item: VisibleItem, compacted: boolean) => React.ReactNode
   /** 本会话正在运行：按钮平时换成运行指示（见 ScrollToBottomButton） */
   running: boolean
   /** 本会话待办的日历跳转（点进某天 → 滚到当天第一条用户消息）；没有为 null */
@@ -158,7 +189,9 @@ interface MessageListProps {
 }
 
 function MessageList({
-  items,
+  sessionId,
+  messages,
+  items: currentItems,
   renderItem,
   running,
   scrollRequest,
@@ -166,8 +199,67 @@ function MessageList({
   onLanded,
   onInputResponse
 }: MessageListProps): React.JSX.Element {
-  const virtuosoRef = useRef<VirtuosoHandle>(null)
+  // 压缩前的历史：往上翻到顶就把压缩掉的那一段接在最上面（只给人看，见 useCompactedHistory）。状态挂在这里而不是
+  // Conversation：列表按会话重挂，换会话、再回来都从头来过。一段一段单独建项，助手卡的 key 带着这一段的前缀 ——
+  // 与当前上下文的 turn:… 不撞，再往上接一段也不动已经接上的项
+  // 接上之前眼前那一项（当前上下文的第一项，即压缩摘要那条分隔线）离滚动区上沿多远：接上之后照着摆回去，
+  // 屏幕不动。Virtuoso 的 firstItemIndex 只按估计的高度保位置，接上的项一画出来量到真高就会把它顶走
   const scrollerRef = useRef<HTMLElement | null>(null)
+  const prependedRef = useRef(0)
+  /** 当前上下文第一项的消息 id（按 `data-msg-id` 找它，不按下标：接上的那一刻下标跟着变） */
+  const anchorIdRef = useRef<string | undefined>(currentItems[0]?.msg.id)
+  useEffect(() => {
+    anchorIdRef.current = currentItems[0]?.msg.id
+  }, [currentItems])
+  const prependAnchor = useRef<{ id: string; offset: number } | null>(null)
+  /** 正在摆的那个位置（摆正的循环还没收手）：这时接着又取回一段（还在顶上，接着取），记它而不是现量 —— 现量的是半路上的一帧 */
+  const restoring = useRef<{ id: string; offset: number } | null>(null)
+  const captureAnchor = useCallback(() => {
+    prependAnchor.current = null
+    if (restoring.current && restoring.current.id === anchorIdRef.current) {
+      prependAnchor.current = restoring.current
+      return
+    }
+    const scroller = scrollerRef.current
+    const id = anchorIdRef.current
+    if (!scroller || id === undefined) return
+    const found = scroller.querySelector<HTMLElement>(`[data-msg-id=${JSON.stringify(id)}]`)
+    // 量 Virtuoso 包着这一项的那一层（`data-index`）：项与项首尾相接，摆正时没画出它也能用上面那一项的下沿推出它的位置
+    const node = found?.closest<HTMLElement>('[data-index]') ?? found
+    if (!node) return
+    prependAnchor.current = {
+      id,
+      offset: node.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    }
+  }, [])
+  const compactedOptions = useMemo(() => ({ onBeforePrepend: captureAnchor }), [captureAnchor])
+  const compacted = useCompactedHistory(sessionId, messages, compactedOptions)
+  const compactedItems = useMemo(
+    () =>
+      compacted.segments.flatMap((segment) =>
+        buildVisibleItems(
+          segment.messages,
+          false,
+          null,
+          undefined,
+          `compacted:${segment.compactionId}:`
+        )
+      ),
+    [compacted.segments]
+  )
+  const prependedCount = compactedItems.length
+  const items = useMemo(
+    () => (prependedCount === 0 ? currentItems : [...compactedItems, ...currentItems]),
+    [compactedItems, currentItems, prependedCount]
+  )
+  const onReachTop = compacted.canLoad ? compacted.load : undefined
+  // 布局阶段就跟上（排在下面那个摆位置的 useLayoutEffect 之前）：摆位置时要读这一次的 items
+  const itemsRef = useRef(items)
+  useLayoutEffect(() => {
+    itemsRef.current = items
+  }, [items])
+
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
   // 初始定位只认挂载那一刻：那时已有日历跳转就直接落在目标上（记下用掉的是哪一个请求），否则落在底部。
   // 按请求对象认而不按 nonce 认：nonce 在请求清掉之后又从 1 数起，下一次点日历会撞上同一个数
   const [initial] = useState<{
@@ -423,6 +515,127 @@ function MessageList({
     },
     [unpin, stickToBottom, reportScrollbarWidth, checkLanded]
   )
+  // 翻到顶：初始定位落了地才算，接上一段之后还在顶部就接着取，直到上面没有可取的。只看 settled 不够：Virtuoso 挂上的
+  // 那一刻条目还没画出来，滚动区就一屏高、scrollTop 0，它同时报「在顶部」与「在底部」（settled 随之成立），跳到底之后的
+  // 「不在顶部」又节流在 50ms 之后 —— 只看这两个值，一打开长会话就会去取。所以要等量到贴底（landed：条目上了屏，短到一屏
+  // 放得下的会话此刻就在顶上；日历跳到中间的不等），再按滚动区此刻的位置核一遍「在顶部」
+  const [atTop, setAtTop] = useState(false)
+  const positioned = landed || !startsAtBottom
+  useEffect(() => {
+    if (!atTop || !settled || !positioned) return
+    const el = scrollerRef.current
+    if (el && el.scrollTop > AT_TOP_THRESHOLD) return
+    onReachTop?.()
+  }, [atTop, settled, positioned, onReachTop])
+  // 接上了一段：把眼前那一项摆回接上之前的位置，一直摆到高度量完（连着几帧不再动），人一动就松手。
+  // 每一帧画完才量（rAF 里排 setTimeout(0)）：接上的项量到真高时 Virtuoso 自己也会补滚动位置，在同一帧里先量先补，
+  // 就会和它补两遍（实测闪过一帧 −3000px）；画完再量，量到的是它补完之后真正画出来的位置，只补它没补齐的那一截
+  useLayoutEffect(() => {
+    const before = prependedRef.current
+    prependedRef.current = prependedCount
+    const anchor = prependAnchor.current
+    prependAnchor.current = null
+    const scroller = scrollerRef.current
+    if (prependedCount <= before || !anchor || !scroller) return
+    const index = prependedCount
+    let frames = 0
+    let still = 0
+    let raf = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const listeners = new AbortController()
+    restoring.current = anchor
+    const next = (): void => {
+      raf = requestAnimationFrame(() => {
+        timer = setTimeout(settle, 0)
+      })
+    }
+    // 接上的项画出来、量到真高的那一帧：Virtuoso 的尺寸观察把报告推到下一帧的 rAF 里才补滚动位置，这一帧会照原样画出来
+    // （实测有一帧连分隔线都不在屏上）。自己观察列表的高度，在这一帧画之前就摆正；Virtuoso 下一帧的 rAF 里再补一遍时，
+    // 紧跟着（同一帧、排在它后面的 rAF）再摆一次，把它补多的那一截抵掉
+    let followRaf = 0
+    // 眼前那一项正上方的那一项（新接上的这一段的最后一项）：Virtuoso 量到真高的那一帧可能没画眼前那一项，
+    // 它的位置就是这一项的下沿
+    const aboveId = itemsRef.current[prependedCount - 1]?.msg.id
+    const topOfAnchor = (): number | null => {
+      const found = scroller.querySelector<HTMLElement>(
+        `[data-msg-id=${JSON.stringify(anchor.id)}]`
+      )
+      const node = found?.closest<HTMLElement>('[data-index]') ?? found
+      if (node) return node.getBoundingClientRect().top
+      if (aboveId === undefined) return null
+      const above = scroller
+        .querySelector<HTMLElement>(`[data-msg-id=${JSON.stringify(aboveId)}]`)
+        ?.closest<HTMLElement>('[data-index]')
+      return above ? above.getBoundingClientRect().bottom : null
+    }
+    const correct = (): number => {
+      const top = topOfAnchor()
+      if (top === null) return Number.NaN
+      const delta = top - scroller.getBoundingClientRect().top - anchor.offset
+      if (Math.abs(delta) > 0.5) scroller.scrollTop += delta
+      return delta
+    }
+    const list = scroller.querySelector<HTMLElement>('[data-testid="virtuoso-item-list"]')
+    const observer =
+      list && typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            correct()
+            cancelAnimationFrame(followRaf)
+            followRaf = requestAnimationFrame(() => {
+              correct()
+            })
+          })
+        : null
+    if (list) observer?.observe(list)
+    const stop = (): void => {
+      cancelAnimationFrame(raf)
+      cancelAnimationFrame(followRaf)
+      clearTimeout(timer)
+      observer?.disconnect()
+      listeners.abort()
+      if (restoring.current === anchor) restoring.current = null
+    }
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+      scroller.addEventListener(type, stop, { passive: true, signal: listeners.signal })
+    }
+    const settle = (): void => {
+      const delta = correct()
+      if (!Number.isNaN(delta)) {
+        if (Math.abs(delta) > 0.5) still = 0
+        else still++
+      } else {
+        // 被顶出了渲染范围：先让 Virtuoso 把它滚回来，下一帧再量
+        virtuosoRef.current?.scrollToIndex({ index, align: 'start', offset: -anchor.offset })
+        still = 0
+      }
+      frames++
+      if (still >= PREPEND_SETTLE_FRAMES || frames >= PREPEND_MAX_FRAMES) {
+        stop()
+        return
+      }
+      next()
+    }
+    next()
+    return stop
+  }, [prependedCount])
+  const firstItemIndex = FIRST_ITEM_BASE - prependedCount
+  // Virtuoso 交给 itemContent 的下标带着 firstItemIndex；外面按当前上下文里的下标认。压缩前的历史只读：
+  // 提议卡片没有会话上下文就只读（不能拿一组旧提议去「采纳」）
+  const itemContent = useCallback(
+    (index: number, item: VisibleItem) => {
+      const dataIndex = index - firstItemIndex
+      if (dataIndex < prependedCount) {
+        return (
+          <SuggestionContext.Provider value={null}>
+            {renderItem(-1, item, true)}
+          </SuggestionContext.Provider>
+        )
+      }
+      return renderItem(dataIndex - prependedCount, item, false)
+    },
+    [renderItem, firstItemIndex, prependedCount]
+  )
+
   const scrollToBottom = useCallback(() => {
     const el = scrollerRef.current
     const far =
@@ -440,7 +653,8 @@ function MessageList({
         // 不再溢出到悬浮输入卡片之上——卡片在 DOM 中更靠后，始终盖住正文
         className="relative z-0 flex-1 min-w-0 thin-scrollbar conversation-scroller"
         data={items}
-        itemContent={renderItem}
+        firstItemIndex={firstItemIndex}
+        itemContent={itemContent}
         components={LIST_COMPONENTS}
         context={listContext}
         initialTopMostItemIndex={initial.location}
@@ -449,6 +663,9 @@ function MessageList({
         scrollerRef={handleScrollerRef}
         atBottomThreshold={AT_BOTTOM_THRESHOLD}
         atBottomStateChange={handleAtBottomChange}
+        atTopThreshold={AT_TOP_THRESHOLD}
+        skipAnimationFrameInResizeObserver
+        atTopStateChange={setAtTop}
         totalListHeightChanged={handleTotalHeightChange}
       />
       {/* 排在输入卡片之前：卡片向上展开的浮层要盖住它（见 ScrollToBottomButton） */}
@@ -544,13 +761,12 @@ export function Conversation({
   )
   const onFork = forkAvailable && chatHost.openSession && forkable ? handleFork : undefined
 
-  // 预构建可见消息列表，messages 不变时复用缓存。
-  // 注：被压缩掉的历史不在其中 —— message.list 走 buildContextEntries，自带压缩过滤，
-  // 压缩点之前的消息原地换成一张摘要卡片，UI 不提供回看入口。
+  // 预构建可见消息列表，messages 不变时复用缓存。视图只有活上下文：压缩掉的历史原地换成一行压缩摘要
   const visibleItems = useMemo(
     () => buildVisibleItems(messages, isStreaming, pendingPrompt, queue),
     [messages, isStreaming, pendingPrompt, queue]
   )
+
   // 「新内容」分隔线（docs/inbox-read-state-design.md §7）：这次打开时它是未读的，就在那一轮开跑之后的第一项前画一条；
   // 锚点是切进来那一刻记下的（打开即已读，未读随即没了），离开这条会话就不再画
   const newContentAt = useUnreadStore((s) => (s.mark?.sessionId === sessionId ? s.mark.at : null))
@@ -558,7 +774,8 @@ export function Conversation({
     () => newContentIndex(visibleItems, newContentAt),
     [visibleItems, newContentAt]
   )
-  // 每组提议开着还是关了、采纳的是哪一条：按整条消息列表算（之后用户说了别的话就关），卡片从 context 里取
+  // 每组提议开着还是关了、采纳的是哪一条：按整条消息列表算（之后用户说了别的话就关），卡片从 context 里取。
+  // 接上来的压缩前历史不在这里：那些卡片拿到的是空的上下文，一律只读（见 MessageList）
   const suggestionContext = useMemo(
     () => ({ sessionId, states: suggestionStatesOf(messages) }),
     [sessionId, messages]
@@ -598,10 +815,12 @@ export function Conversation({
     s.scrollToMessageRequest?.sessionId === sessionId ? s.scrollToMessageRequest : null
   )
 
-  /** 渲染单条可见消息 */
+  /** 渲染单条可见消息。接上来的压缩前历史只读：不给回退 / 重新生成 / 分支，也不画「新内容」分隔线 */
   const renderItem = useCallback(
-    (index: number, item: VisibleItem) => {
-      const message = (
+    (index: number, item: VisibleItem, compactedItem: boolean) => {
+      const message = compactedItem ? (
+        <MessageRenderer item={item} lastAssistantId={null} />
+      ) : (
         <MessageRenderer
           item={item}
           lastAssistantId={lastAssistantId}
@@ -610,7 +829,8 @@ export function Conversation({
           onFork={onFork}
         />
       )
-      if (index !== dividerIndex || newContentAt === null) return message
+      // 接上来的压缩前历史以 index -1 进来：dividerIndex 也是 -1（不画分隔线）时不能把它们当成那一项
+      if (compactedItem || index !== dividerIndex || newContentAt === null) return message
       return (
         <>
           <NewContentDivider at={newContentAt} />
@@ -657,6 +877,8 @@ export function Conversation({
               <SuggestionContext.Provider value={suggestionContext}>
                 <MessageList
                   key={sessionId}
+                  sessionId={sessionId}
+                  messages={messages}
                   items={visibleItems}
                   renderItem={renderItem}
                   running={isStreaming}

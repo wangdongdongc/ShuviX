@@ -6,6 +6,7 @@
  *   C-10 只有那组提议、之后没人说话 → 开着（按钮可点）；之后来了一条用户消息 → 关了（没有按钮）；
  *        之后那条用户消息的来源带着指向它的引用 → 采纳（那张卡 `data-suggestion-accepted`，其余压淡）；之后只来了一条
  *        系统通知（后台完成）→ 什么都不变，仍开着；点按钮带的是这条会话的 id
+ *   C-12 往上翻接上来的压缩前历史里的那组提议一律只读（没有按钮），哪怕它之后（那一段里）没人说话；当前视图里的照旧开着
  *
  * 桩照抄 conversationFork.dom.test.tsx：Virtuoso 换成直接把每一项画出来的壳；输入区、待处理输入、Footer 顶成空壳；
  * `useChatActions` 交回稳定回调；包入口给 `useChatHost` 与 `getHostApi: () => null`。宿主经 `setChatApi` 注入
@@ -23,10 +24,16 @@ import type { AcceptSuggestionResult } from '@shuvix/chat-protocol/suggestions'
 import type { AssistantToolBlock, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 interface VirtuosoStubProps {
+  firstItemIndex?: number
   data: Array<{ key: string }>
   itemContent: (index: number, item: unknown) => ReactNode
   computeItemKey: (index: number, item: unknown) => string
+  atTopStateChange?: (atTop: boolean) => void
+  atBottomStateChange?: (atBottom: boolean) => void
 }
+
+/** 最近一次渲染的 Virtuoso props（压缩前的历史要它的 atTopStateChange / atBottomStateChange） */
+const stub = vi.hoisted(() => ({ virt: null as VirtuosoStubProps | null }))
 
 const probe = vi.hoisted(() => ({
   host: { appearance: { focusMode: false } },
@@ -41,6 +48,9 @@ vi.mock('react-virtuoso', async () => {
   const React = await import('react')
   const Virtuoso = React.forwardRef<unknown, VirtuosoStubProps>(function VirtuosoStub(props, ref) {
     React.useImperativeHandle(ref, () => ({ scrollToIndex: () => {} }), [])
+    React.useEffect(() => {
+      stub.virt = props
+    })
     return React.createElement(
       'div',
       { 'data-virtuoso-stub': '' },
@@ -48,7 +58,7 @@ vi.mock('react-virtuoso', async () => {
         React.createElement(
           React.Fragment,
           { key: props.computeItemKey(i, item) },
-          props.itemContent(i, item)
+          props.itemContent((props.firstItemIndex ?? 0) + i, item)
         )
       )
     )
@@ -222,5 +232,44 @@ describe('C-10 卡片状态跟着会话视图走', () => {
     expect(group()!.getAttribute('data-suggestion-state')).toBe('open')
     expect(buttons()).toHaveLength(2)
     expect(buttons().every((b) => !b.disabled)).toBe(true)
+  })
+})
+
+describe('C-12 压缩前历史里的提议只读', () => {
+  const summary = assistant('c0', [text('summary')], SID, { isCompactionSummary: true })
+  const oldSuggest: AssistantToolBlock = { ...suggestBlock, toolCallId: 'call_old' }
+
+  it('C-12 那一段里的提议之后没人说话，也只读（没有按钮）；当前视图里的照旧开着、可点', async () => {
+    const listCompacted = vi.fn(async () => [
+      user('u0', 'earlier', SID),
+      assistant('a0', [oldSuggest, text('Earlier answer.')], SID)
+    ])
+    setChatApi({
+      session: { list: vi.fn(async () => [SESSION]) },
+      suggestion: { accept },
+      message: { listCompacted }
+    } as unknown as ChatApi)
+    load([summary, ...history()])
+    render()
+    // 定位落地（没有滚动区可量：Virtuoso 报到底就算），再报在顶部
+    act(() => stub.virt!.atBottomStateChange!(true))
+    act(() => stub.virt!.atTopStateChange!(true))
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await Promise.resolve()
+      })
+    }
+    expect(listCompacted).toHaveBeenCalledTimes(1)
+
+    const oldGroup = container.querySelector<HTMLElement>('[data-msg-id="a0"] [data-suggestions]')
+    const currentGroup = container.querySelector<HTMLElement>(
+      '[data-msg-id="a1"] [data-suggestions]'
+    )
+    expect(oldGroup).not.toBeNull()
+    expect(oldGroup!.getAttribute('data-suggestion-state')).toBe('closed')
+    expect(oldGroup!.querySelectorAll('[data-suggestion-accept]')).toHaveLength(0)
+    expect(currentGroup!.getAttribute('data-suggestion-state')).toBe('open')
+    expect(currentGroup!.querySelectorAll('[data-suggestion-accept]')).toHaveLength(2)
+    expect(buttons()).toHaveLength(2)
   })
 })

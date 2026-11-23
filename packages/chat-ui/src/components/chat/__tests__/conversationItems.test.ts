@@ -8,6 +8,9 @@
  *
  * 另有一组钉**项的复用**（IR 组）：内容没变的项交回上一次的同一个对象（助手项连同同一个 msgs 数组），
  * 卡的 memo 才拦得住 —— 缓存按消息对象记（模块级 WeakMap），所以 IR 组每条用例都用自己新造的消息对象。
+ *
+ * KP 组钉 `keyPrefix`（压缩前的历史一段一段单独建，`compacted:<压缩摘要 id>:`）：助手卡 key 带前缀、轮次从这一段
+ * 自己数起，与不带前缀的当前上下文不撞；单条项照旧按 id；再往上接一段，已经接上的那段项（对象与 key）不变。
  */
 import { describe, it, expect } from 'vitest'
 import type {
@@ -626,5 +629,82 @@ describe('buildVisibleItems —— 排队气泡', () => {
     expect(edited).not.toBe(first)
     expect(edited.msg.content).toBe('changed')
     expect(buildVisibleItems([], false, null, [q(9, 'followUp', 'changed')])[0]).not.toBe(edited)
+  })
+})
+
+describe('buildVisibleItems —— keyPrefix（压缩前的历史）', () => {
+  it('KP-1 助手卡的 key 带前缀、轮次从这一段自己数；用户消息 / 压缩摘要仍按 id；不给前缀 = 从前的 key', () => {
+    const seg = [userMsg('kp1-u1'), agentMsg('kp1-a1'), userMsg('kp1-u2'), agentMsg('kp1-a2')]
+    const items = buildVisibleItems(seg, false, null, undefined, 'compacted:9:')
+    expect(items.map((i) => i.key)).toEqual([
+      'kp1-u1',
+      'compacted:9:turn:1.0',
+      'kp1-u2',
+      'compacted:9:turn:2.0'
+    ])
+    const plain = buildVisibleItems(structuredClone(seg), false)
+    expect(plain.map((i) => i.key)).toEqual(['kp1-u1', 'turn:1.0', 'kp1-u2', 'turn:2.0'])
+  })
+
+  it('KP-2 两段压缩前的历史 + 当前上下文接在一起：所有 key 互不相同', () => {
+    const older = [userMsg('kp2-u1'), agentMsg('kp2-a1', { tools: 1 }), agentMsg('kp2-a1b')]
+    const newer = [
+      compactionMsg('kp2-c1'),
+      userMsg('kp2-u2'),
+      agentMsg('kp2-a2'),
+      agentMsg('kp2-a2b')
+    ]
+    const current = [compactionMsg('kp2-c2'), userMsg('kp2-u3'), agentMsg('kp2-a3')]
+    const items = [
+      ...buildVisibleItems(older, false, null, undefined, 'compacted:kp2-c1:'),
+      ...buildVisibleItems(newer, false, null, undefined, 'compacted:kp2-c2:'),
+      ...buildVisibleItems(current, false)
+    ]
+    const keys = items.map((i) => i.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(keys).toEqual([
+      'kp2-u1',
+      'compacted:kp2-c1:turn:1.0',
+      'kp2-c1',
+      'kp2-u2',
+      'compacted:kp2-c2:turn:1.0',
+      'compacted:kp2-c2:turn:1.1',
+      'kp2-c2',
+      'kp2-u3',
+      'turn:1.0'
+    ])
+  })
+
+  it('KP-3 一段以助手消息开头（轮次 0）也带前缀：不与当前上下文开头的 turn:0.x 撞', () => {
+    const seg = [agentMsg('kp3-a0'), userMsg('kp3-u1'), agentMsg('kp3-a1')]
+    const items = buildVisibleItems(seg, false, null, undefined, 'compacted:7:')
+    expect(items[0].key).toBe('compacted:7:turn:0.0')
+    const current = buildVisibleItems([agentMsg('kp3-cur')], false)
+    expect(current[0].key).toBe('turn:0.0')
+  })
+
+  it('KP-4 往上再接一段：已经接上的那段交回同一批项对象（key 不变），新的一段在最前', () => {
+    const newer = [compactionMsg('kp4-c1'), userMsg('kp4-u2'), agentMsg('kp4-a2')]
+    const older = [userMsg('kp4-u1'), agentMsg('kp4-a1')]
+    const build = (
+      segments: { id: string; messages: ChatMessage[] }[]
+    ): ReturnType<typeof buildVisibleItems> =>
+      segments.flatMap((s) =>
+        buildVisibleItems(s.messages, false, null, undefined, `compacted:${s.id}:`)
+      )
+    const first = build([{ id: 'kp4-c2', messages: newer }])
+    const second = build([
+      { id: 'kp4-c1', messages: older },
+      { id: 'kp4-c2', messages: newer }
+    ])
+    expect(second.slice(older.length)).toHaveLength(first.length)
+    second.slice(older.length).forEach((item, i) => {
+      expect(item).toBe(first[i])
+      expect(item.key).toBe(first[i].key)
+    })
+    expect(second.slice(0, older.length).map((i) => i.key)).toEqual([
+      'kp4-u1',
+      'compacted:kp4-c1:turn:1.0'
+    ])
   })
 })

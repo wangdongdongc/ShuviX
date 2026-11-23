@@ -173,6 +173,7 @@ export const API_TABLE = {
   /** 消息 */
   message: {
     list: invoke('message:list', 1),
+    listCompacted: invoke('message:listCompacted', 1),
     clear: invoke('message:clear', 1),
     rollback: invoke('message:rollback', 1)
   },

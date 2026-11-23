@@ -49,6 +49,23 @@ export class MessageService {
     }
   }
 
+  /**
+   * 压缩前的历史（只读回看）：`compactionId` 那条压缩摘要压缩掉的一段（`DurableSession.compactedMessages`）。
+   * 同 `listBySession` 只 `peek`；旧格式会话没有这条读取路径 → `[]`。
+   */
+  async listCompacted(sessionId: string, compactionId: string): Promise<ChatMessage[]> {
+    if (isLegacySession(sessionId)) return []
+    for (let attempt = 0; ; attempt++) {
+      const session = await getSessionHost().peek(sessionId)
+      if (session === undefined) return []
+      try {
+        return await session.compactedMessages(compactionId)
+      } catch (error) {
+        if (!(error instanceof SessionClosedError) || attempt > 0) throw error
+      }
+    }
+  }
+
   /** 会话最后一条消息 */
   async findLastBySession(sessionId: string): Promise<ChatMessage | undefined> {
     const msgs = await this.listBySession(sessionId)

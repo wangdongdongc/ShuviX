@@ -509,6 +509,10 @@ export class DefaultChatGateway implements ChatGateway {
     return await messageService.listBySession(sessionId)
   }
 
+  async listCompactedMessages(sessionId: string, compactionId: string): Promise<ChatMessage[]> {
+    return await messageService.listCompacted(sessionId, compactionId)
+  }
+
   async clearMessages(sessionId: string): Promise<void> {
     // PIN-08：先销毁 agent（中止还在跑的 run、广播 agent_closing 一对），再关掉并删掉存储、镜像归位
     await sessionService.invalidateAgent(sessionId)

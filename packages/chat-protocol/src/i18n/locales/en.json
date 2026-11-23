@@ -325,7 +325,7 @@
     "hintKeep": "Send as written"
   },
   "compact": {
-    "summaryLabel": "Conversation Summary (Auto-compacted)"
+    "dividerLabel": "Earlier messages compacted into a summary"
   },
   "backgroundNotice": {
     "title": "Background work finished"

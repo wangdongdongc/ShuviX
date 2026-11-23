@@ -15,6 +15,8 @@
  *          focus-visible:opacity-100）；touch 常驻，点了复制代码原文、title 变 Copied
  *   MA-U18 压缩摘要行（CompactionNoticeRow）展开后的复制：compact 悬浮才显形（group-hover/notice）；touch 常驻，
  *          点了复制摘要全文
+ *   C-17 压缩摘要行是一条分隔线：标签 compact.dividerLabel + `[data-compaction-divider]`，折叠时不带摘要的任何一行；
+ *        点开才是摘要全文
  *   MA-U19 错误行（ErrorEventBlock）的删除（aria-label Delete）：compact 悬浮才显形（group-hover）；touch 常驻，点了
  *          以这行的 id 调 removeMessage
  *   MA-U21 守卫：touch 下一组条目（点过的用户气泡、带 ts 代码块的回复、展开的压缩摘要、错误行）里没有一颗按钮的 class
@@ -376,6 +378,38 @@ describe('MA-U18 压缩摘要行的复制键', () => {
       expect(spies.copy).toHaveBeenCalledWith('## Sum\nbody')
     }
   })
+})
+
+describe('C-17 压缩摘要行是分隔线', () => {
+  const SUMMARY = assistant(
+    'c1',
+    [text('## Conversation summary\nSECRET-FIRST-LINE body\nmore')],
+    SID,
+    {
+      isCompactionSummary: true
+    }
+  )
+
+  it.each(DENSITIES)(
+    'C-17 %s：折叠时是「标签 + 细线」，不带摘要预览；点开是摘要全文',
+    (density) => {
+      renderItems(density, [{ key: 'c1', msg: SUMMARY }])
+      const notice = container.querySelector<HTMLElement>('[data-system-notice="compaction"]')!
+      expect(notice.getAttribute('data-notice-state')).toBe('collapsed')
+      expect(notice.textContent).toContain(en.compact.dividerLabel)
+      const line = notice.querySelector<HTMLElement>('[data-compaction-divider]')
+      expect(line).not.toBeNull()
+      expect(line!.getAttribute('aria-hidden')).toBe('true')
+      expect(line!.textContent).toBe('')
+      expect(notice.textContent).not.toContain('Conversation summary')
+      expect(notice.textContent).not.toContain('SECRET-FIRST-LINE')
+
+      click(notice.querySelector('button')!)
+      expect(notice.getAttribute('data-notice-state')).toBe('expanded')
+      expect(notice.textContent).toContain('SECRET-FIRST-LINE body')
+      expect(notice.querySelector('.markdown-body h2')?.textContent).toBe('Conversation summary')
+    }
+  )
 })
 
 describe('MA-U19 错误行的删除键', () => {

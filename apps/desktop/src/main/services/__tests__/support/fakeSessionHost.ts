@@ -68,6 +68,7 @@ import type {
 } from '@shuvix/agent-runtime'
 import type { UserInput } from '@earendil-works/pi-durable'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -157,6 +158,8 @@ export class FakeDurableSession implements DurableSession {
   readonly queued: Array<(info: { entryId: number }) => void> = []
   /** `viewSnapshot()` 交的视图（缺省空的 durable 视图） */
   view: SessionView | undefined
+  /** `compactedMessages(id)` 交的消息（按压缩摘要 id；缺省 `[]`） */
+  readonly compacted = new Map<string, ChatMessage[]>()
 
   constructor(sessionId: string) {
     this.sessionId = sessionId
@@ -552,6 +555,12 @@ export class FakeDurableSession implements DurableSession {
     this.calls.push(['viewSnapshot'])
     if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
     return this.view ?? emptySessionView(this.sessionId)
+  }
+
+  async compactedMessages(compactionId: string): Promise<ChatMessage[]> {
+    this.calls.push(['compactedMessages', compactionId])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.compacted.get(compactionId) ?? []
   }
 
   onRunStateChange(): () => void {

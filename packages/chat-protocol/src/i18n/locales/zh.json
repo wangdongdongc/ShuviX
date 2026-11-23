@@ -325,7 +325,7 @@
     "hintKeep": "照原样发"
   },
   "compact": {
-    "summaryLabel": "对话摘要（自动压缩）"
+    "dividerLabel": "以上已压缩成摘要"
   },
   "backgroundNotice": {
     "title": "后台任务已完成"

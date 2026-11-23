@@ -554,6 +554,8 @@ declare global {
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
+      /** 压缩前的历史（只读回看）：某条压缩摘要压缩掉的一段，最旧在前 */
+      listCompacted: (params: { sessionId: string; compactionId: string }) => Promise<ChatMessage[]>
       clear: (sessionId: string) => Promise<{ success: boolean }>
       /** 回退到指定消息之前（fork 到它之前、销毁 agent）；`success:false` = 没有可回退的目标，什么都没动 */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>

@@ -180,6 +180,8 @@ export interface ChatGateway {
 
   /** 获取会话消息列表（entry 树的 UI 投影） */
   listMessages(sessionId: string): Promise<ChatMessage[]>
+  /** 压缩前的历史：`compactionId` 那条压缩摘要压缩掉的一段（只读） */
+  listCompactedMessages(sessionId: string, compactionId: string): Promise<ChatMessage[]>
 
   /** 清空会话所有消息（整棵 entry 树）；先关停运行时再删，故为异步 */
   clearMessages(sessionId: string): Promise<void>

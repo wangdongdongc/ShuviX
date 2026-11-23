@@ -13,6 +13,15 @@ export function registerMessageHandlers(): void {
     )
   )
 
+  /** 压缩前的历史（只读回看）：某条压缩摘要压缩掉的一段 */
+  defineHandler(
+    'message:listCompacted',
+    (ctx, params: { sessionId: string; compactionId: string }) =>
+      operationContext.run(createClientContext(ctx, params.sessionId), () =>
+        chatGateway.listCompactedMessages(params.sessionId, params.compactionId)
+      )
+  )
+
   // 注：message:add 已移除 —— 迁移到 AgentHarness 后消息只能由 harness 产生，
   // 外部前端不再能凭空插入一条消息进会话树。
 
