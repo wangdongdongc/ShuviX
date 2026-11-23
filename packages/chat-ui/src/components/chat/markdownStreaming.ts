@@ -51,3 +51,9 @@ export function noteTextBlockMessage(block: object, messageId: string): void {
 export function messageIdOfTextBlock(block: object): string | null {
   return textBlockMessage.get(block) ?? null
 }
+
+/**
+ * 在一件产物的画幅里渲染 markdown（chat-ui ArtifactTextFrame）：里面的 ```artifact 引用与 ```interactive 交互图只按代码
+ * 显示（CodeBlock 读它）。前者会在画幅里再套一个画幅（一件引用自己的产物就是无限递归），后者是要点开才有意义的沙箱 iframe。
+ */
+export const ArtifactFrameContext = createContext(false)

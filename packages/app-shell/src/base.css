@@ -843,6 +843,28 @@ span.sb-icon {
   font-size: 0.9em;
 }
 
+/* 产物画幅里的 csv 表（chat-ui ArtifactTextFrame）：它坐在助手消息的 .markdown-body 里，但不是正文里的表 ——
+   上面三条（块级、max-content、单元格底色、0.9em）一条都不要，外观跟文件预览窗口的表格一致，由组件自己的类定 */
+.markdown-body table[data-artifact-table] {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 11px;
+}
+.markdown-body [data-artifact-table] th,
+.markdown-body [data-artifact-table] td {
+  background: transparent;
+  padding: 4px 10px;
+  word-break: normal;
+  font-size: 11px;
+}
+.markdown-body [data-artifact-table] th {
+  font-weight: 500;
+  background: var(--color-bg-tertiary);
+}
+
 /* —— 水平线：不渲染 —— */
 /* 模型很爱拿 `---` 当章节分隔，但在对话流里那条横线比消息之间的边界还显眼，
    一条回复里出现两次就把它切成了三段独立文档。压淡试过（40%）——淡到看不见时

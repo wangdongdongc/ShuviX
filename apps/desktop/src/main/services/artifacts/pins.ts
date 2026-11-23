@@ -51,6 +51,11 @@ export interface ArtifactReadResult {
   name: string
   title: string
   content: string
+  /**
+   * 文件此刻的绝对路径（「在窗口中打开」用 —— 打开的是当前文件，不是钉下的那一版）；钉下的那一份已经不在磁盘上
+   * （删了、改了名）时没有
+   */
+  path?: string
   /** 显示的是这条回复钉下的那一版 */
   pinned: boolean
   /** 显示的内容就是文件此刻的内容（没钉的恒为 true；钉下的那一版之后又被改过 → false） */
@@ -196,6 +201,7 @@ export function readCurrentArtifact(sessionId: string, name: string): ArtifactRe
         name: found.name,
         title: found.title,
         content,
+        path: found.path,
         pinned: false,
         latest: true
       }
@@ -233,6 +239,7 @@ export async function readArtifactForRef(
             name: pin.file,
             title: titleOf(content, pin.file),
             content,
+            ...(current ? { path: current.path } : {}),
             pinned: true,
             latest: now === null || (await hashBlobText(now)) === pin.oid
           }

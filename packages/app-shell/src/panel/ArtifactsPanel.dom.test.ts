@@ -313,8 +313,11 @@ describe('ArtifactsPanel', () => {
     expect(expandedNames()).toEqual(['beta.md'])
     expect(previewOf(rowEl('alpha.svg'))).toBeNull()
     const mdPreview = previewOf(rowEl('beta.md'))!
-    expect(mdPreview.querySelector('pre')?.textContent).toBe('# Title of beta.md\nbody')
-    // 源码里那行标题是内容；预览头上不再另写一遍
+    // md 产物在画幅里渲染成正文（2026-11-23）：标题是 h1，不再是一块源码
+    expect(mdPreview.querySelector('[data-artifact-frame="markdown"] h1')?.textContent).toBe(
+      'Title of beta.md'
+    )
+    // 正文里那行标题是内容；预览头上不再另写一遍
     expect(mdPreview.textContent?.split('Title of beta.md')).toHaveLength(2)
 
     click(toggleOf(rowEl('beta.md')))

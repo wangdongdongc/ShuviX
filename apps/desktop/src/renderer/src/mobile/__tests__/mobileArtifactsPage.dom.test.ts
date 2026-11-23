@@ -282,7 +282,12 @@ describe('MobileArtifactDetailPage', () => {
     const body = q('[data-mobile-artifact-detail]')!
     expect(body.getAttribute('data-mobile-artifact-detail')).toBe('a.svg')
     expect(body.querySelector('[data-stub-preview="a.svg"]')).not.toBeNull()
-    expect(rec.previews.at(-1)).toEqual({ sessionId: 's1', name: 'a.svg', hideTitle: true })
+    expect(rec.previews.at(-1)).toEqual({
+      sessionId: 's1',
+      name: 'a.svg',
+      hideTitle: true,
+      framed: false
+    })
     click(q('[data-mobile-panel-back]')!)
     expect(onBack).toHaveBeenCalledTimes(1)
   })
@@ -293,7 +298,12 @@ describe('MobileArtifactDetailPage', () => {
     expect(rec.asked.at(-1)).toBe('s1')
     expect(text('[data-mobile-panel-title]')).toBe('Sub figure')
     expect(text('[data-mobile-panel-subtitle]')).toBe('a.svg · v3 · T7000')
-    expect(rec.previews.at(-1)).toEqual({ sessionId: 'sub1', name: 'a.svg', hideTitle: true })
+    expect(rec.previews.at(-1)).toEqual({
+      sessionId: 'sub1',
+      name: 'a.svg',
+      hideTitle: true,
+      framed: false
+    })
   })
 
   it.each<[string, Partial<SessionArtifact>]>([

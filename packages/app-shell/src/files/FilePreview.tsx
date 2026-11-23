@@ -3,6 +3,7 @@
  *
  * 各 kind 渲染策略：
  *  - text + .md/.mdx/.markdown   → MarkdownView（只读 Atomic live-preview，可切源码模式）
+ *  - text + .csv                 → CsvTableView（表格，可切源码模式；超过 CSV_TABLE_MAX_BYTES 只给源码）
  *  - text + 其它扩展             → CodeView（CodeMirror 6 read-only viewer）
  *  - image                       → <img> + data: URL
  *  - pdf / media                 → 通过 shuvix-preview 协议喂给 Chromium 原生 PDFium / <video>/<audio>
@@ -45,6 +46,7 @@ import {
 import { LivePreviewEditor, type NotebookCaps } from '../notebook/LivePreviewEditor'
 import { EbookView } from './EbookView'
 import { OfficeView, SHEET_CONFIRM_BYTES, DOCX_CONFIRM_BYTES } from './OfficeView'
+import { CSV_TABLE_MAX_BYTES, CsvTableView } from './CsvTableView'
 import { useMediaUrl } from '@shuvix/chat-ui'
 import { basename } from './paths'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
@@ -63,6 +65,11 @@ export interface FilePreviewProps {
 }
 
 const MARKDOWN_EXTS = new Set(['.md', '.mdx', '.markdown'])
+
+/** 这份文本按表格显示得了吗：`.csv` 且不超过 CSV_TABLE_MAX_BYTES */
+function csvTableable(r: FileReadResult | null): boolean {
+  return r?.kind === 'text' && r.ext === '.csv' && r.size <= CSV_TABLE_MAX_BYTES
+}
 
 export function FilePreview({
   path,
@@ -134,8 +141,11 @@ export function FilePreview({
   const fileName = basename(path)
   // 当前预览是否为 markdown 文本 —— 决定是否显示「渲染/源码」模式切换
   const isMarkdownText = result?.kind === 'text' && MARKDOWN_EXTS.has(result.ext)
-  // wrap / 行号开关：非 markdown 文本，或 markdown 切到源码模式时显示（即落到 CodeView 时）
-  const showWrapToggle = result?.kind === 'text' && (!isMarkdownText || mdSourceMode)
+  // csv 同 markdown：缺省是表格，源码键切到 CodeView（同一个 mdSourceMode 开关）
+  const isCsvTable = csvTableable(result)
+  // wrap / 行号开关：落到 CodeView 时才显示（普通文本，或 markdown / csv 切到源码模式）
+  const showWrapToggle =
+    result?.kind === 'text' && (!(isMarkdownText || isCsvTable) || mdSourceMode)
   // 渲染成本门控：非 null 时先展示确认卡片，用户点了才把结果交给 renderBody。
   // 两类成本各按各自的量纲判断 —— Office 看字节数（解析耗时随体积涨），图片看像素数
   // （解码内存与字节数无关，见 HEAVY_PIXEL_BUDGET）。
@@ -172,8 +182,9 @@ export function FilePreview({
               <FolderOpen size={11} />
             </button>
           )}
-          {isMarkdownText && (
+          {(isMarkdownText || isCsvTable) && (
             <button
+              data-preview-source-toggle=""
               onClick={() => setMdSourceMode((v) => !v)}
               className={[
                 'p-1 rounded hover:bg-bg-hover/40 transition-colors',
@@ -181,7 +192,9 @@ export function FilePreview({
                   ? 'text-accent bg-bg-hover/30'
                   : 'text-text-tertiary hover:text-text-secondary'
               ].join(' ')}
-              title={t('panel.preview.markdownSourceToggle')}
+              title={t(
+                isCsvTable ? 'panel.preview.csvSourceToggle' : 'panel.preview.markdownSourceToggle'
+              )}
             >
               <Code2 size={11} />
             </button>
@@ -311,6 +324,7 @@ function renderBody(r: FileReadResult | null, opts: RenderBodyOpts): React.React
       if (MARKDOWN_EXTS.has(r.ext) && !mdSourceMode) {
         return <MarkdownView path={path} content={r.content} sessionId={sessionId} caps={caps} />
       }
+      if (csvTableable(r) && !mdSourceMode) return <CsvTableView content={r.content} />
       return (
         <CodeView content={r.content} ext={r.ext} wrap={wrapText} lineNumbers={showLineNumbers} />
       )

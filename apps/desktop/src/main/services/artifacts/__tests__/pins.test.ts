@@ -598,11 +598,13 @@ describe('readArtifactForRef —— 按钉取回当时那一版', () => {
     const mid = await pinnedAnswer(session, sid, ['bar-chart.svg', 'Bar chart'])
 
     // 没有 messageId：当前内容
+    const barPath = join(dirOf(sid), 'bar-chart.svg')
     expect(await readArtifactForRef(session, sid, 'bar-chart.svg')).toStrictEqual({
       sessionId: sid,
       name: 'bar-chart.svg',
       title: 'Bar chart',
       content: v1,
+      path: barPath,
       pinned: false,
       latest: true
     })
@@ -615,6 +617,7 @@ describe('readArtifactForRef —— 按钉取回当时那一版', () => {
       name: 'bar-chart.svg',
       title: 'Bar chart',
       content: v1,
+      path: barPath,
       pinned: true,
       latest: true
     }
@@ -644,9 +647,10 @@ describe('readArtifactForRef —— 按钉取回当时那一版', () => {
     expect(await readArtifactForRef(session, sid, 'Bar chart')).toBeNull()
     expect(await readArtifactForRef(session, sid, 'Bar chart', mid)).toStrictEqual(pinnedV1)
 
-    // 删了：钉下的那一版，latest true（没有更新的可看）
+    // 删了：钉下的那一版，latest true（没有更新的可看）；文件不在了，也就没有可打开的路径
     rmSync(join(dirOf(sid), 'bar-chart.svg'))
-    expect(await readArtifactForRef(session, sid, 'bar-chart.svg', mid)).toStrictEqual(pinnedV1)
+    const { path: _gone, ...pinnedGone } = pinnedV1
+    expect(await readArtifactForRef(session, sid, 'bar-chart.svg', mid)).toStrictEqual(pinnedGone)
     expect(await readArtifactForRef(session, sid, 'bar-chart.svg')).toBeNull()
   })
 
@@ -663,6 +667,7 @@ describe('readArtifactForRef —— 按钉取回当时那一版', () => {
       name: 'kid.svg',
       title: 'Kid',
       content: k1,
+      path: join(dirOf(child), 'kid.svg'),
       pinned: true,
       latest: true
     }
@@ -695,6 +700,7 @@ describe('readArtifactForRef —— 按钉取回当时那一版', () => {
       name: 'f.svg',
       title: 'Forked',
       content: v1,
+      path: join(dirOf(fork), 'f.svg'),
       pinned: true,
       latest: true
     })
@@ -729,6 +735,7 @@ describe('readArtifactForRef —— 按钉取回当时那一版', () => {
       name: 'a.svg',
       title: 'V2',
       content: v2,
+      path: join(dirOf(sid), 'a.svg'),
       pinned: false,
       latest: true
     }

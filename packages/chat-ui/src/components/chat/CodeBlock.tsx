@@ -19,11 +19,17 @@ import {
 import { ChatHostContext } from '../../host/chatHostContext'
 import { MermaidBlock } from './MermaidBlock'
 import { InteractiveBlock, InteractiveUnsupportedBlock } from './InteractiveBlock'
-import { useMarkdownMessageId, useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
+import {
+  ArtifactFrameContext,
+  useMarkdownMessageId,
+  useMarkdownSource,
+  useMarkdownStreaming
+} from './markdownStreaming'
 import { FigureExportButton } from '../figure/FigureExportPanel'
 import { authoredFigureSource } from '../figure/figureExport'
 import { FigureBlock, FIGURE_SOURCE_CLASS } from '../figure/FigureBlock'
 import { useRestoreForCopy } from '../../hooks/useRedaction'
+import { ArtifactTextFrame } from './ArtifactFrame'
 
 /** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
 const authoredSvgCache = new Map<string, string>()
@@ -92,6 +98,8 @@ export function CodeBlock({
   const canRunInteractive = useContext(ChatHostContext)?.interactiveFigures === true
   // 触屏密度（手机）没有悬浮：复制键常驻
   const touch = useContext(ChatHostContext)?.density === 'touch'
+  // 在一件 md 产物的画幅里：交互图与产物引用只按代码显示（见 ArtifactFrameContext）
+  const inArtifactFrame = useContext(ArtifactFrameContext)
 
   // 从 hast 节点提取语言名称
   const codeNode = node?.children?.[0] as HastNode | undefined
@@ -122,13 +130,13 @@ export function CodeBlock({
   }
 
   // 交互图：沙箱 iframe 里跑的 HTML/JS，围栏闭合才挂（见 InteractiveBlock）
-  if (lang === INTERACTIVE_FENCE_LANG && rawCode) {
+  if (lang === INTERACTIVE_FENCE_LANG && rawCode && !inArtifactFrame) {
     if (!canRunInteractive) return <InteractiveUnsupportedBlock code={rawCode} />
     return <InteractiveBlock code={rawCode} closed={codeFenceIsClosed(node, source, streaming)} />
   }
 
   // 会话 Artifact 的引用：围栏里只有一个名字，内容现取（见 ArtifactRefBlock）
-  const artifactName = artifactRefName(lang, rawCode)
+  const artifactName = inArtifactFrame ? null : artifactRefName(lang, rawCode)
   if (artifactName) {
     return <ArtifactRefBlock name={artifactName} />
   }
@@ -295,6 +303,8 @@ type ArtifactLoadState =
       name: string
       title: string
       content: string
+      /** 文件此刻的绝对路径（「在窗口中打开」用）；宿主没给就没有 */
+      path?: string
       pinned: boolean
       latest: boolean
     }
@@ -308,22 +318,27 @@ type ArtifactLoadState =
  *  - `followChanges`：`artifacts.changed` 一来就重取（钉住的内容不变，但「已有新版」要跟上；没钉的
  *    要跟上新内容；回复落定后钉才写下，也靠这一下换成钉住的那一版）。面板那边换 key 重挂，不用它。
  *  - `hideTitle`：面板那一行已经写着标题，展开的预览的说明行里不再重复（svg 的导出按钮、版本标记照留）。
+ *  - `framed`：文本类产物（md / txt / csv / json）放进一个有高度上限的画幅（ArtifactTextFrame）。缺省 true；
+ *    手机的产物详情页本身就是「完整打开」，传 false。
  */
 export function ArtifactPreview({
   sessionId,
   name,
   messageId = null,
   followChanges = false,
-  hideTitle = false
+  hideTitle = false,
+  framed = true
 }: {
   sessionId: string | null
   name: string
   messageId?: string | null
   followChanges?: boolean
   hideTitle?: boolean
+  framed?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   const canRunInteractive = useContext(ChatHostContext)?.interactiveFigures === true
+  const touch = useContext(ChatHostContext)?.density === 'touch'
   // 取不到宿主通道（扩展端没有 artifact 存储）就直接按「找不到」呈现 —— **派生出来，不写进
   // state**：在 effect 里同步 setState 会触发级联渲染，react-hooks/set-state-in-effect 拦它
   const reader = getHostApi()?.artifact?.read
@@ -372,6 +387,7 @@ export function ArtifactPreview({
               name: row.name ?? name,
               title: row.title,
               content: row.content,
+              ...(row.path ? { path: row.path } : {}),
               pinned: row.pinned === true,
               latest: row.latest !== false
             }
@@ -437,6 +453,21 @@ export function ArtifactPreview({
   const svgHtml =
     state.kind === 'ok' && artifactRefIsSvg(state.content) ? sanitizeAuthoredSvg(state.content) : ''
 
+  // 文本类产物（不是 svg、不是交互图）：画幅
+  if (state.kind === 'ok' && !svgHtml) {
+    return (
+      <ArtifactTextFrame
+        name={state.name}
+        content={state.content}
+        path={state.path}
+        label={hideTitle ? undefined : state.title}
+        extras={versionMark}
+        framed={framed}
+        touch={touch}
+      />
+    )
+  }
+
   const showExport = state.kind === 'ok' && !!svgHtml
   return (
     <FigureBlock
@@ -460,14 +491,12 @@ export function ArtifactPreview({
     >
       {state.kind === 'loading' ? (
         <div className="p-3 text-[11px] text-text-tertiary">{t('message.rendering')}</div>
-      ) : svgHtml ? (
+      ) : (
         <div
           ref={figureRef}
           className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
           dangerouslySetInnerHTML={{ __html: svgHtml }}
         />
-      ) : (
-        <pre className={FIGURE_SOURCE_CLASS}>{state.content}</pre>
       )}
     </FigureBlock>
   )
@@ -481,6 +510,7 @@ function sameLoadState(a: ArtifactLoadState, b: ArtifactLoadState): boolean {
     a.name === b.name &&
     a.title === b.title &&
     a.content === b.content &&
+    a.path === b.path &&
     a.pinned === b.pinned &&
     a.latest === b.latest
   )

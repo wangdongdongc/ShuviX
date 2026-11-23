@@ -13,6 +13,9 @@
  *   CR-6 跟着 `artifacts.changed`：点到这场会话 → 重取，回包一样时 `.html` 的 iframe 还是同一个节点；没钉 → 钉了，
  *        标记跟着换；别的会话 → 不重取；产物所在的子会话 → 重取；不带 sessionIds → 重取；卸载时退订；
  *        面板用的 `ArtifactPreview`（不给 messageId、不 followChanges）从不订阅、不标记
+ *   R-1..8 文本类产物进画幅（ArtifactTextFrame）：csv 画幅 + 打开（回包的 path）、没有 path 不给打开、重取后用新 path、
+ *        版本标记进说明行、hideTitle、svg / html / 找不到 / 加载中照旧、净化不过的 .svg 落文本画幅而内容是 svg 的 .txt
+ *        仍是图、framed=false 没有高度上限
  *
  * 宿主面经 `setChatApi` 注入：`artifact.read` 按用例回包，`events.subscribe` 记下监听者（退订也记下）。
  * 数据走真的 chatStore（`resetStore`、流式正文直接写 `sessionStreams`）；文件是 .tsx 但一律 createElement。
@@ -391,5 +394,153 @@ describe('跟着 artifacts.changed 重取', () => {
 
     await emit({ type: 'artifacts.changed', sessionIds: [SID] })
     expect(read).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── 文本类产物进画幅（ArtifactTextFrame）────────────────────────────────────
+
+describe('文本类产物：画幅', () => {
+  const csvRow = (over: Partial<ArtifactRefContent> = {}): ArtifactRefContent =>
+    row({ name: 't.csv', title: 'Table', content: 'h\n1', path: '/abs/t.csv', ...over })
+  const frameEl = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-artifact-frame]')
+  const openButton = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-artifact-open]')
+
+  beforeEach(() => {
+    useChatStore.setState({ filePreviewRequest: null })
+  })
+
+  it('R-1 csv 回包 → csv 画幅（不是 pre）；打开 → requestFilePreview(path)', async () => {
+    read.mockResolvedValue(csvRow())
+    show(bubble([assistant('31', [text(fence('t.csv'))])]))
+    await flush()
+    expect(frameEl()?.getAttribute('data-artifact-frame')).toBe('csv')
+    expect(container.querySelector('[data-artifact-table]')).not.toBeNull()
+    expect(container.querySelector('[data-figure-block] > pre')).toBeNull()
+    click(openButton()!)
+    expect(useChatStore.getState().filePreviewRequest).toMatchObject({
+      absPath: '/abs/t.csv',
+      nonce: 1
+    })
+  })
+
+  it('R-2 回包没有 path → 没有打开键', async () => {
+    const noPath = csvRow()
+    delete noPath.path
+    read.mockResolvedValue(noPath)
+    show(bubble([assistant('32', [text(fence('t.csv'))])]))
+    await flush()
+    expect(frameEl()).not.toBeNull()
+    expect(openButton()).toBeNull()
+  })
+
+  it('R-3 重取后 path 变了、内容一样 → 打开用新路径', async () => {
+    read.mockResolvedValue(csvRow({ path: '/old/t.csv' }))
+    show(bubble([assistant('33', [text(fence('t.csv'))])]))
+    await flush()
+    read.mockResolvedValue(csvRow({ path: '/new/t.csv' }))
+    await emit({ type: 'artifacts.changed', sessionIds: [SID] })
+    expect(read).toHaveBeenCalledTimes(2)
+    click(openButton()!)
+    expect(useChatStore.getState().filePreviewRequest?.absPath).toBe('/new/t.csv')
+  })
+
+  it('R-4 版本标记进说明行：已有新版可点；没钉 → 当前版本', async () => {
+    read.mockResolvedValue(csvRow({ sessionId: 'kid', pinned: true, latest: false }))
+    show(bubble([assistant('34', [text(fence('t.csv'))])]))
+    await flush()
+    const newer = container.querySelector<HTMLButtonElement>(
+      '[data-figure-caption] [data-artifact-newer]'
+    )
+    expect(newer).not.toBeNull()
+    click(newer!)
+    expect(useChatStore.getState().artifactRevealRequest).toEqual({
+      sessionId: 'kid',
+      name: 't.csv',
+      nonce: 1
+    })
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    read.mockResolvedValue(csvRow({ pinned: false }))
+    show(bubble([assistant('35', [text(fence('t.csv'))])]))
+    await flush()
+    expect(container.querySelector('[data-figure-caption] [data-artifact-unpinned]')).not.toBeNull()
+    expect(newerMark()).toBeNull()
+  })
+
+  it('R-5 hideTitle：没有标题，规模与复制照留', async () => {
+    read.mockResolvedValue(csvRow())
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 't.csv', hideTitle: true }))
+    await flush()
+    expect(container.querySelector('[data-figure-label]')?.textContent).toBe('')
+    expect(container.textContent).not.toContain('Table')
+    expect(container.querySelector('[data-artifact-size]')?.textContent).toBe('1 rows × 1 columns')
+    expect(container.querySelector('[data-artifact-copy]')).not.toBeNull()
+  })
+
+  it('R-6 回归：svg 仍是图（有导出、无画幅）；html 进沙箱；找不到 → 橙色提示；加载中 → rendering', async () => {
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 'bar-chart.svg' }))
+    await flush()
+    expect(container.querySelector('svg[aria-label="Bar chart"]')).not.toBeNull()
+    expect(container.querySelector('[data-figure-export]')).not.toBeNull()
+    expect(frameEl()).toBeNull()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    read.mockResolvedValue(row({ name: 'g.html', title: 'G', content: '<div>g</div>' }))
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 'g.html' }))
+    await flush()
+    expect(iframe()).not.toBeNull()
+    expect(frameEl()).toBeNull()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    read.mockResolvedValue(null)
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 'gone.csv' }))
+    await flush()
+    expect(container.querySelector('.text-orange-400')?.textContent).toBe(
+      en.message.artifactMissing.replace('{{name}}', 'gone.csv')
+    )
+    expect(frameEl()).toBeNull()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    read.mockReturnValue(new Promise(() => {}))
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 't.csv' }))
+    await flush()
+    expect(container.textContent).toContain(en.message.rendering)
+    expect(frameEl()).toBeNull()
+  })
+
+  it('R-7 净化不过的 .svg → 文本画幅；内容是合法 svg 的 .txt → 图', async () => {
+    const huge = `<svg viewBox="0 0 4 4"><text>${'x'.repeat(256 * 1024)}</text></svg>`
+    read.mockResolvedValue(row({ name: 'big.svg', title: 'Big', content: huge }))
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 'big.svg' }))
+    await flush()
+    expect(frameEl()?.getAttribute('data-artifact-frame')).toBe('text')
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    read.mockResolvedValue(row({ name: 'pic.txt', title: 'Pic', content: SVG('Pic') }))
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 'pic.txt' }))
+    await flush()
+    expect(container.querySelector('svg[aria-label="Pic"]')).not.toBeNull()
+    expect(frameEl()).toBeNull()
+  })
+
+  it('R-8 framed=false → 没有高度上限', async () => {
+    read.mockResolvedValue(csvRow())
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 't.csv', framed: false }))
+    await flush()
+    expect(frameEl()).not.toBeNull()
+    expect(frameEl()!.style.maxHeight).toBe('')
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    show(createElement(ArtifactPreview, { sessionId: SID, name: 't.csv' }))
+    await flush()
+    expect(frameEl()!.style.maxHeight).toBe('240px')
   })
 })

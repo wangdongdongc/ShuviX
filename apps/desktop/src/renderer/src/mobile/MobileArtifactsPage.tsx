@@ -171,6 +171,7 @@ export function MobileArtifactDetailPage({
           sessionId={artifact.sessionId}
           name={artifact.name}
           hideTitle
+          framed={false}
         />
       </div>
     </MobilePage>
