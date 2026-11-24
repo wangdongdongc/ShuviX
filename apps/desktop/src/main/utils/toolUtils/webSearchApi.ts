@@ -27,8 +27,6 @@ export interface ApiSearchRequest {
   init: { method: 'POST'; headers: Record<string, string>; body: string }
 }
 
-const SNIPPET_CHARS = 300
-
 /** 写给模型的失败（消息就是工具结果）；`kind` 给设置页的「测试」与单测用 */
 export class WebSearchApiError extends Error {
   constructor(
@@ -91,9 +89,12 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function clip(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > SNIPPET_CHARS ? `${flat.slice(0, SNIPPET_CHARS - 1)}…` : flat
+/**
+ * 摘要不截（用户裁定，2026-11-23）：搜索 API 给的是按查询挑出来的段落，比结果页上那一两句有用，
+ * 用户选了它就是要这些内容。只把空白压平成一行。
+ */
+function flatten(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -170,7 +171,7 @@ export function parseApiSearchResponse(
     const highlights = Array.isArray(o.highlights)
       ? (o.highlights as unknown[]).filter((h): h is string => typeof h === 'string').join(' … ')
       : ''
-    const snippet = clip(str(o.content) || highlights || str(o.summary) || str(o.text))
+    const snippet = flatten(str(o.content) || highlights || str(o.summary) || str(o.text))
     seen.add(url)
     out.push({ title: str(o.title).trim() || url, url, snippet })
     if (out.length >= limit) break

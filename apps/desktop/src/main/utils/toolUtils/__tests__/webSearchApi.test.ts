@@ -2,7 +2,7 @@
  * 商业搜索 API 的请求与回包（utils/toolUtils/webSearchApi.ts）—— 纯函数，不 mock。
  *
  *   WA-1..3   请求：端点、鉴权头（Tavily 是 Bearer，Exa 是 x-api-key）、请求体；密钥只在头里
- *   WA-4..16  结果：摘要取哪一段、只留 http(s) 地址、去重、条数、标题、空白与 300 字、形状不对
+ *   WA-4..16  结果：摘要取哪一段、只留 http(s) 地址、去重、条数、标题、空白压平、摘要不截、形状不对
  *   WA-17..24 失败的归类与那句给模型的话
  *   WA-25     密钥不进任何消息（服务方回显、网络层报错）
  *
@@ -211,17 +211,14 @@ describe('结果', () => {
     expect(r.snippet).toBe('a b c d')
   })
 
-  it('WA-13 a snippet is at most 300 characters, ellipsis included', () => {
+  it('WA-13 a snippet is not cut, whatever its length', () => {
     const snippetOf = (content: string): string =>
       (parse({ results: [item(1, { content })] }) as Array<{ snippet: string }>)[0].snippet
-    const exact = 'x'.repeat(300)
-    expect(snippetOf(exact)).toBe(exact)
-    for (const length of [301, 5000]) {
+    for (const length of [300, 301, 5000]) {
       const long = Array.from({ length }, (_, i) => String(i % 10)).join('')
       const snippet = snippetOf(long)
-      expect(snippet.length).toBe(300)
-      expect(snippet.startsWith(long.slice(0, 299))).toBe(true)
-      expect(snippet.endsWith('…')).toBe(true)
+      expect(snippet).toBe(long)
+      expect(snippet.endsWith('…')).toBe(false)
     }
   })
 
