@@ -464,6 +464,7 @@ export function ArtifactPreview({
         extras={versionMark}
         framed={framed}
         touch={touch}
+        stateKey={messageId ? `${messageId}\u0000${state.name}` : undefined}
       />
     )
   }

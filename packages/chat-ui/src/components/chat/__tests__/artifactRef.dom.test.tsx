@@ -411,13 +411,19 @@ describe('文本类产物：画幅', () => {
     useChatStore.setState({ filePreviewRequest: null })
   })
 
-  it('R-1 csv 回包 → csv 画幅（不是 pre）；打开 → requestFilePreview(path)', async () => {
-    read.mockResolvedValue(csvRow())
+  it('R-1 csv 回包 → csv 画幅（不是 pre）；点长表原地展开（不跳窗），点打开 → requestFilePreview(path)', async () => {
+    const rows = ['h', ...Array.from({ length: 50 }, (_, i) => String(i))].join('\n')
+    read.mockResolvedValue(csvRow({ content: rows }))
     show(bubble([assistant('31', [text(fence('t.csv'))])]))
     await flush()
     expect(frameEl()?.getAttribute('data-artifact-frame')).toBe('csv')
     expect(container.querySelector('[data-artifact-table]')).not.toBeNull()
+    expect(container.querySelectorAll('[data-artifact-table] tbody tr')).toHaveLength(40)
     expect(container.querySelector('[data-figure-block] > pre')).toBeNull()
+    click(frameEl()!)
+    expect(frameEl()?.hasAttribute('data-artifact-expanded')).toBe(true)
+    expect(container.querySelectorAll('[data-artifact-table] tbody tr')).toHaveLength(50)
+    expect(useChatStore.getState().filePreviewRequest).toBeNull()
     click(openButton()!)
     expect(useChatStore.getState().filePreviewRequest).toMatchObject({
       absPath: '/abs/t.csv',
