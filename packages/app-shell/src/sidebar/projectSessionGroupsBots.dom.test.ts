@@ -456,6 +456,42 @@ describe('PG-2 折叠：侧栏与日历', () => {
     )
     expect(container.querySelector('[data-sidebar-section="bots"]')).toBeNull()
   })
+
+  it('PG-2 日历：bot 会话与它的子会话都在当天 → 子会话折在父行下', async () => {
+    store.sessions = [botRow('b1', 'scout'), row('c1', { parentId: 'b1', createdAt: 2 })]
+    await mount(
+      { adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) },
+      { hideEmptyGroups: true, sessionsOverride: store.sessions as never }
+    )
+    expect(rowIds(groupEl('scout'))).toEqual(['b1', 'c1'])
+    expect(rowEl('b1').getAttribute('data-sub-count')).toBe('1')
+    expect(rowEl('c1').hasAttribute('data-sub')).toBe(true)
+  })
+
+  it('PG-2 日历：当天只有子会话动过（父 bot 会话不在当天）→ 子会话进它 bot 的组，不掉进「聊天」', async () => {
+    store.sessions = [
+      botRow('b1', 'scout'),
+      row('c1', { parentId: 'b1', createdAt: 2, settings: { workProject: 'p1' } }),
+      row('t1')
+    ]
+    await mount(
+      { adapter: makeAdapter(registryOf({ bots: [bot('scout')] })) },
+      { hideEmptyGroups: true, sessionsOverride: store.sessions.slice(1) as never }
+    )
+    expect(rowIds(groupEl('scout'))).toEqual(['c1'])
+    expect(rowEl('c1').hasAttribute('data-sub')).toBe(false)
+    expect(locationOf('c1')).toBe('Proj')
+    expect(rowIds(tempGroupBox()!)).toEqual(['t1'])
+  })
+
+  it('PG-2 日历：父会话在已归档的 bot 名下 → 那条子会话不列（哪个组都没有）', async () => {
+    store.sessions = [botRow('b1', 'gone'), row('c1', { parentId: 'b1', createdAt: 2 })]
+    await mount(
+      { adapter: makeAdapter(registryOf({ bots: [], archived: ['gone'] })) },
+      { hideEmptyGroups: true, sessionsOverride: [store.sessions[1]] as never }
+    )
+    expect(container.querySelectorAll('[data-session-row]')).toHaveLength(0)
+  })
 })
 
 // ─── PG-3 ─────────────────────────────────────

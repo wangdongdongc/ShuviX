@@ -306,7 +306,10 @@ export function ProjectSessionGroups({
     for (const s of sessions) {
       // 子会话跟着父行渲染（父级不在列表里时 childrenByParent 也没收它，照常平铺）
       if (s.parentId && childrenByParent.has(s.parentId)) continue
-      const bot = bots ? botGroupOf(s) : undefined
+      // 平铺出来的子会话（日历按天：那天只有它动过，父会话不在这一份清单里）按父会话落组 —— bot 会话的子会话
+      // 自己既没有 settings.bot 也没有 projectId，按它自己的字段会掉进「聊天」，与它的 bot 分了家
+      const root = s.parentId ? (storeSessions.find((x) => x.id === s.parentId) ?? s) : s
+      const bot = bots ? botGroupOf(root) : undefined
       if (bot) {
         const list = byBot.get(bot)
         if (list) list.push(s)
@@ -324,7 +327,7 @@ export function ProjectSessionGroups({
     const out: Array<[string, Session[]]> = sorted
     out.push([TEMP_GROUP_KEY, temp])
     return { groups: out, botSessions: byBot }
-  }, [projects, sessions, projectNames, childrenByParent, bots])
+  }, [projects, sessions, storeSessions, projectNames, childrenByParent, bots])
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
@@ -360,14 +363,12 @@ export function ProjectSessionGroups({
    * 归档 / 删掉的项目、归档的 bot）不在里面 —— 搜索与平铺都只在这里面取
    */
   const listableSessions = useMemo(() => {
-    // 父会话不在这一份清单里（日历按天：那天只有子会话动过）的子会话是平铺出来的顶层行，按它自己的字段会落进
-    // 「聊天」—— 可它其实跟着父会话走：父会话在藏起来的地方（归档的 bot、不在列表里的项目），它也不列
+    // 父会话不在这一份清单里（日历按天：那天只有子会话动过）的子会话是平铺出来的顶层行，跟着父会话走：父会话
+    // 在不在列表里的项目里，它也不列（父会话是 bot 会话的那些已随父会话落进 botSessions，归档的 bot 在下面滤掉）
     const orphanOfHidden = (s: Session): boolean => {
       if (!s.parentId) return false
       const parent = storeSessions.find((x) => x.id === s.parentId)
       if (!parent) return false
-      const bot = bots ? botGroupOf(parent) : undefined
-      if (bot) return !!botRegistry?.archived?.includes(bot)
       return !!parent.projectId && !Object.hasOwn(projectNames, parent.projectId)
     }
     const roots = groups.flatMap(([, list]) => list).filter((s) => !orphanOfHidden(s))
@@ -375,7 +376,7 @@ export function ProjectSessionGroups({
       if (!botRegistry?.archived?.includes(name)) roots.push(...list)
     }
     return roots.flatMap((s) => [s, ...(childrenByParent.get(s.id) ?? [])])
-  }, [groups, botSessions, botRegistry, childrenByParent, storeSessions, bots, projectNames])
+  }, [groups, botSessions, botRegistry, childrenByParent, storeSessions, projectNames])
   const searchResults = useMemo(() => {
     if (!query) return []
     return listableSessions
