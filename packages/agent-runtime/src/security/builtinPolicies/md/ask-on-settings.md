@@ -27,6 +27,7 @@ there goes straight into your settings. It never reaches the conversation or the
 **Who answers**: each call carries the same facts as a remote client's call:
 `object.channel` (for example `mcp:add`), `object.scope` (which part of ShuviX, for example
 `extensions`) and `object.access`.
+
 - An `admin` change touches ShuviX's own configuration, such as MCP servers, and only you can
   answer it. The builtin hook `auto-review` leaves these to you.
 - A `write` change can be answered by the automatic review.

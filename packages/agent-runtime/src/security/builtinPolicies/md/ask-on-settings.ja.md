@@ -25,6 +25,7 @@ ShuviX がエージェントに開放した設定だけで、ツールの `descr
 
 **誰が答えるか**：呼び出しごとに、リモートクライアントの呼び出しと同じ事実が付きます：`object.channel`
 （たとえば `mcp:add`）、`object.scope`（ShuviX のどの部分か、たとえば `extensions`）、`object.access`。
+
 - `admin` の変更は ShuviX 自体の構成（MCP サーバーなど）を変えるもので、**あなただけが答えます**。
   組み込みの hook `auto-review` はこれをあなたに任せます。
 - `write` の変更は自動レビューが代わりに答えられます。

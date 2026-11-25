@@ -13,6 +13,8 @@ tmp/
 
 # 本地文档
 docs/
+reports/
+research_notes/
 # TypeScript 增量编译缓存
 *.tsbuildinfo
 CLAUDE.md

@@ -23,6 +23,7 @@ shuvix-policy-rules:
 
 **谁来回答**：每次调用带的事实和远程客户端调用时一样：`object.channel`（比如 `mcp:add`）、
 `object.scope`（管的是 ShuviX 的哪一块，比如 `extensions`）和 `object.access`。
+
 - `admin` 级的修改动的是 ShuviX 自己的配置，比如 MCP 服务器，**只能由你回答**：内置 hook `auto-review` 把它们留给你。
 - `write` 级的修改可以由自动审查代答。
 

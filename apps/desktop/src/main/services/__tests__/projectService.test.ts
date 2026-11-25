@@ -114,7 +114,9 @@ describe('projectService — 按名字找项目（bot 触发绑定的 project �
     const other = project('p3', { name: 'tiny-cli-2' })
     const hidden = project(REGISTRY_NOTE_PROJECT_IDS.bot, { name: 'tiny-cli' })
     vi.mocked(projectDao.findAllActive).mockReturnValue([tiny, other, hidden, tinyUpper])
-    vi.mocked(projectDao.findAllArchived).mockReturnValue([project('p4', { name: 'archived', archivedAt: 5 })])
+    vi.mocked(projectDao.findAllArchived).mockReturnValue([
+      project('p4', { name: 'archived', archivedAt: 5 })
+    ])
 
     expect(projectService.projectsNamed('TINY-cli ')).toEqual([tiny, tinyUpper])
     expect(projectService.projectsNamed('tiny-cli-2')).toEqual([other])
