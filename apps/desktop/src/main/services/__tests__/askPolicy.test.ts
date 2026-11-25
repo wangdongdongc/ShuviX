@@ -1379,9 +1379,7 @@ describe('桌面安全 provider — 组件使用（ask-on-widget-access，「允
       widget: { widgetId: WIDGET_ID, name: NAME, access: 'write', operation: 'addBook' }
     })
     expect(asks[0]).not.toHaveProperty('session')
-    expect(asks[0].policyPrompt?.text).toContain(
-      'This lets the agent change the records in this widget'
-    )
+    expect(asks[0].policyPrompt?.text).toContain('This lets the agent change this widget itself')
     expect(widgetRows('s1')).toEqual([
       { kind: 'widget', target: WIDGET_ID, access: 'write', source: 'user', sourceKey: '' }
     ])

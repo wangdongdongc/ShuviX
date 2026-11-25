@@ -6,8 +6,8 @@
  * `mcpService`（setComputedMcpServers），并进 McpManager 的 store。`mcp:list` 和配置分享直接读 mcpDao，所以设置页和导出都看不到它们。
  *
  * **授权**：操作照旧过 `ask-on-widget-access`。对象上的 `selected` 说这条会话的勾选里有它：勾选是用户的同意
- * （选择器、批准过的 `tool_search` 卡片、项目保存的默认），所以读操作不再问，写操作第一次仍单独问。`selected` 只有这里
- * 会填，`widget` 工具的 `preview` / `export` 和预览页面都没有它，勾选放开的只是这里的读操作。
+ * （选择器、批准过的 `tool_search` 卡片、项目保存的默认），所以组件已提供的操作（含改它记录的写操作）都不再问。`selected` 只有这里
+ * 会填，`widget` 工具的 `build` / `sql` / `preview` / `export` 和预览页面都没有它，改组件本身仍单独问。
  *
  * **声明的变化**：连接在建立时列一次工具，agent 的锁里存着当时的声明。绿色构建改了 API、组件归档或删除时，
  * `widgetService.onServerChanged` 让这台的连接退役，下一次连接重新列；已经开着它的 agent 不跟着变（见 AgentLock.planReconfigure），

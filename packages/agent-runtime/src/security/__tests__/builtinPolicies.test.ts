@@ -329,7 +329,7 @@ describe('buildBuiltinPolicies', () => {
     expect(policy.displayName).toBe('Ask Before Using Another Session')
   })
 
-  it('WT4-SE-01 ask-on-widget-access：两条 ask × widget，desktop 限定 —— #0 读看 vars.aclWidgetRead 与客体的 selected，#1 写只看 vars.aclWidgetWrite；没有 lets、不是 inDir 的目录参数', () => {
+  it('WT4-SE-01 ask-on-widget-access：两条 ask × widget，desktop 限定 —— #0 读看 vars.aclWidgetRead 与客体的 selected，#1 写看 vars.aclWidgetWrite 与客体的 selected；没有 lets、不是 inDir 的目录参数', () => {
     const policy = byName('ask-on-widget-access')
     expect(policy.scope).toStrictEqual({
       'subject.kind': ['agent'],
@@ -347,7 +347,8 @@ describe('buildBuiltinPolicies', () => {
       {
         effect: 'ask',
         conditions: { action: ['write'] },
-        match: '!(object.widgetId in vars.aclWidgetWrite)'
+        match:
+          '!(object.widgetId in vars.aclWidgetWrite) && !(has(object.selected) && object.selected)'
       }
     ])
     // 每条恰读一张表（「读写隐含读」靠宿主把可读写的行也放进可读表，widgetAclView）
@@ -2365,9 +2366,9 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       expect(sinks.logWarn).not.toHaveBeenCalled()
     })
 
-    // 勾选算读的同意（2026-11-04）：`selected` 只有组件的 MCP 服务器会填。读因它放行，写从不因它放行 ——
-    // 写规则对 selected 一个字都不看，「勾上就能改」是这张表要拦的那个错
-    it('WT4-SE-20 selected 只放行读：true 免读；false 与缺键照问；写不看它（表外的写、只读的行都照问）；读写的行照旧放行', () => {
+    // 勾选算调用组件已提供操作的同意（读写都算）：`selected` 只有组件的 MCP 服务器会填；
+    // `widget` 工具（构建 / SQL / 预览 / 导出）不填它，改组件本身仍照问
+    it('WT4-SE-20 selected 放行读写：true 免问；false 与缺键照问；读写的行照旧放行', () => {
       const selected = (
         widgetId: string,
         value: boolean,
@@ -2380,8 +2381,11 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         ['表外、勾着：读放行', 'read', selected('X', true), 'allow'],
         ['表外、没勾：读照问', 'read', selected('X', false), '#0'],
         ['表外、缺键：读照问', 'read', widget('X'), '#0'],
-        ['表外、勾着：写照问', 'write', selected('X', true, 'addBook'), '#1'],
-        ['只读的行、勾着：写照问', 'write', selected('R', true, 'addBook'), '#1'],
+        ['表外、勾着：写放行', 'write', selected('X', true, 'addBook'), 'allow'],
+        ['表外、没勾：写照问', 'write', selected('X', false, 'addBook'), '#1'],
+        ['表外、缺键：写照问', 'write', widget('X', 'Reading list', 'build'), '#1'],
+        ['只读的行、勾着：写放行', 'write', selected('R', true, 'addBook'), 'allow'],
+        ['只读的行、没勾：写照问', 'write', selected('R', false, 'addBook'), '#1'],
         ['只读的行、没勾：读放行', 'read', selected('R', false), 'allow'],
         ['读写的行、没勾：写放行', 'write', selected('W', false, 'addBook'), 'allow'],
         ['读写的行、勾着：读放行', 'read', selected('W', true), 'allow']

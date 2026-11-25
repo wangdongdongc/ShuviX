@@ -498,8 +498,19 @@ describe('tools/call 的同意', () => {
     expect(h.noteWidgetUse).toHaveBeenCalledWith(ID, 's1')
   })
 
-  it('WM-C2 写 + 勾着 → 问（写的卡，操作名）；允许一次才跑；下一次写照问', async () => {
+  it('WM-C2 写 + 勾着 → 不问，直接跑（勾选是调用组件已提供操作的同意，读写都算）', async () => {
     select(ENTRY)
+    const session = await open()
+
+    expect((await call(session, 'addBook', { title: 'x' })).isError).toBe(false)
+    await call(session, 'addBook', { title: 'y' })
+
+    expect(session.asks).toHaveLength(0)
+    expect(h.runtime.call).toHaveBeenCalledTimes(2)
+    expect(h.granted).toEqual([])
+  })
+
+  it('WM-C2b 写 + 没勾 → 问（写的卡，操作名）；允许一次才跑；下一次写照问', async () => {
     const session = await open()
 
     expect((await call(session, 'addBook', { title: 'x' })).isError).toBe(false)
@@ -519,7 +530,6 @@ describe('tools/call 的同意', () => {
   })
 
   it('WM-C3 允许并记住 → 记一行读写；之后读写都不问', async () => {
-    select(ENTRY)
     const session = await open({
       respond: async () => ({ kind: 'ask', allowed: true, extra: { remember: true } })
     })
@@ -534,8 +544,7 @@ describe('tools/call 的同意', () => {
     expect(h.runtime.call).toHaveBeenCalledTimes(3)
   })
 
-  it('WM-C3 只读的行免不了写，就算勾着', async () => {
-    select(ENTRY)
+  it('WM-C3 只读的行免不了写（没勾时）', async () => {
     h.aclRead = [ID]
     const session = await open()
     await call(session, 'addBook', { title: 'x' })
@@ -642,7 +651,7 @@ describe('tools/call 的门', () => {
     expect(session.asks).toHaveLength(1)
   })
 
-  it('WM-C10 勾着时客体上 selected 是 true；写也如此（策略决定它不算数）', async () => {
+  it('WM-C10 勾着时客体上 selected 是 true；写也如此（策略据此放行）', async () => {
     select(ENTRY)
     const session = await open()
     await call(session, 'addBook', { title: 'x' })

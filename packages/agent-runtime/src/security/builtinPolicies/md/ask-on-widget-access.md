@@ -18,8 +18,8 @@ shuvix-policy-rules:
   - effect: ask
     action: [write]
     match: >-
-      !(object.widgetId in vars.aclWidgetWrite)
-    prompt: This lets the agent change the records in this widget, or change the widget itself, as you would in its own screen.
+      !(object.widgetId in vars.aclWidgetWrite) && !(has(object.selected) && object.selected)
+    prompt: This lets the agent change this widget itself — rebuild its code, run SQL on its data, or export it. (Calling the tools the widget already provides is covered by turning the widget on.)
 ---
 
 **What it does**: each widget has its own operations — the same ones its screen
@@ -27,10 +27,12 @@ uses — and each one either reads or changes the widget's records. An agent cal
 them once the widget is turned on in its session, and agents that build widgets
 use the `widget` tool. The agent works freely with:
 
-- **reading a widget turned on in this session** — ticking it in the extensions
+- **calling a widget turned on in this session** — ticking it in the extensions
   picker, allowing it when the agent asks through `tool_search`, or a project's
-  saved extensions are your consent to read its records. This covers its read
-  operations only; previewing and exporting it still need a row.
+  saved extensions are your consent to call all of its operations, including the
+  ones that change its records. This covers only the operations the widget
+  already provides; building, running SQL, previewing and exporting it still
+  need a row.
 - **the widgets in this session's permission table** — "allow and remember"
   on a question card writes a row there. A row is either **read** (call the
   widget's read operations and preview it) or **read and write** (call every
