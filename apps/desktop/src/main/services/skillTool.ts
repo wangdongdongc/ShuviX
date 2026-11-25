@@ -52,6 +52,7 @@ export class SkillTool extends BaseTool<SkillParams> {
   readonly parameters: SkillParams
 
   private skills: ReturnType<typeof skillService.findEnabled>
+  private readonly projectPath?: string
 
   /** 这一次装配到底有没有 skill 可给 —— 注入点据此决定要不要挂上本工具 */
   get hasSkills(): boolean {
@@ -65,6 +66,7 @@ export class SkillTool extends BaseTool<SkillParams> {
 
   constructor(shelf: SkillShelf, projectPath?: string) {
     super()
+    this.projectPath = projectPath
 
     // 内置技能与用户的一视同仁：启用着就上架（用户自带一份作图技能、不想要内置那份时，在侧栏把内置的
     // 关掉）。关闭仍然有效：findEnabled 已经把 .config.json 的 disabled / disabledDirs 过滤掉了。
@@ -142,7 +144,14 @@ export class SkillTool extends BaseTool<SkillParams> {
     // 从**这一次装配的名单**里取，而不是 findByName（它走 findAll，不看 .config.json 的
     // disabled / disabledDirs）。否则「关掉」只是把它从索引里摘掉，模型按名调用照样拿到全文 ——
     // 而内置 drawing 的名字写在每个 root agent 的常驻提示里，那条路径是默认可达的，不是理论。
-    const skill = this.skills.find((s) => s.name === skillName) ?? null
+    // 货架（description 里的索引）创建后不再变；但用户中途新增 skill 并告知 agent 时，按名字实时再查一次
+    // 磁盘（仍只认启用着、模型可调用的），命中则并入本实例货架。
+    let skill = this.skills.find((s) => s.name === skillName) ?? null
+    if (!skill) {
+      skill =
+        skillService.findModelInvocable(this.projectPath).find((s) => s.name === skillName) ?? null
+      if (skill) this.skills = [...this.skills, skill]
+    }
     if (!skill) {
       return {
         content: [
