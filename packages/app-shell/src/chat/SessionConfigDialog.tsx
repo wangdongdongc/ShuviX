@@ -1,16 +1,19 @@
 import { getChatApi } from '@shuvix/chat-ui'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Trash2, X } from 'lucide-react'
+import { Puzzle, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useDialogClose, isImeComposing } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { SessionConfigPanel } from './SessionConfigPanel'
+import { SessionAclSection, useSessionAclCounts } from './SessionAclSection'
+import { SessionExtensionsSection } from './SessionConfigPanel'
 
 export interface SessionConfigDialogProps {
   sessionId: string
   onClose: () => void
 }
+
+type SessionConfigTabKey = 'extensions' | 'permissions'
 
 export function SessionConfigDialog({
   sessionId,
@@ -20,6 +23,8 @@ export function SessionConfigDialog({
   const { closing, handleClose } = useDialogClose(onClose)
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
   const [title, setTitle] = useState(session?.title || '')
+  const [activeTab, setActiveTab] = useState<SessionConfigTabKey>('extensions')
+  const aclCounts = useSessionAclCounts(sessionId)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -53,32 +58,45 @@ export function SessionConfigDialog({
     onClose()
   }
 
+  const totalAclCount = aclCounts ? aclCounts.paths + aclCounts.sessions + aclCounts.widgets : 0
+
+  const tabs: {
+    key: SessionConfigTabKey
+    label: string
+    icon: React.ReactNode
+    badge?: number
+  }[] = [
+    {
+      key: 'extensions',
+      label: t('sessionConfig.extensionsGroup'),
+      icon: <Puzzle size={12} />
+    },
+    {
+      key: 'permissions',
+      label: t('sessionConfig.permissionsTab'),
+      icon: <ShieldCheck size={12} />,
+      badge: totalAclCount
+    }
+  ]
+
   return (
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
       onClick={handleClose}
     >
       <div
-        className="w-[560px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[85vh] flex flex-col dialog-panel"
+        data-session-config-dialog=""
+        className="w-[680px] max-w-[92vw] h-[520px] max-h-[80vh] bg-bg-primary border border-border-primary rounded-xl shadow-xl flex flex-col overflow-hidden dialog-panel"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-secondary/50 bg-bg-secondary/50">
-          <h3 className="text-sm font-semibold text-text-primary">{t('sessionConfig.title')}</h3>
-          <button
-            onClick={handleClose}
-            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
-          >
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="px-5 py-5 space-y-5 overflow-y-auto flex-1 min-h-0">
-          {/* 会话标题 */}
-          <section>
-            <h3 className="text-[13px] font-semibold text-text-primary mb-2 px-1">
-              {t('sessionConfig.sessionTitle')}
-            </h3>
-            <div className="rounded-xl border border-border-secondary/60 bg-bg-secondary/30 px-4 py-2">
+        {/* 头部：行内可编辑会话标题 + 关闭 + 顶部下划线 Tab 栏 */}
+        <div className="bg-bg-secondary/40 border-b border-border-secondary/60 px-5 pt-3.5 shrink-0">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="text-[11px] font-medium text-text-tertiary shrink-0">
+                {t('sessionConfig.title')}
+              </span>
+              <span className="text-border-primary shrink-0">/</span>
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -86,18 +104,73 @@ export function SessionConfigDialog({
                 onKeyDown={(e) => {
                   // 输入法组字中的回车是「确认选词」，不能当成提交（中文标题必踩）
                   if (isImeComposing(e)) return
-                  if (e.key === 'Enter') void handleSaveTitle()
+                  if (e.key === 'Enter') {
+                    void handleSaveTitle()
+                    e.currentTarget.blur()
+                  }
                 }}
-                className="w-full bg-transparent border-none outline-none text-[13px] text-text-primary placeholder:text-text-tertiary"
+                placeholder={t('sessionConfig.sessionTitle')}
+                aria-label={t('sessionConfig.sessionTitle')}
+                className="min-w-0 flex-1 bg-transparent px-2 py-0.5 -ml-1 rounded-md border border-transparent hover:border-border-secondary/60 focus:border-accent/60 focus:bg-bg-primary outline-none text-sm font-semibold text-text-primary placeholder:text-text-tertiary placeholder:font-normal transition-colors"
               />
             </div>
-          </section>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors shrink-0"
+            >
+              <X size={14} />
+            </button>
+          </div>
 
-          <SessionConfigPanel sessionId={sessionId} aclExpanded />
+          <div role="tablist" className="flex items-center gap-5 mt-2.5 -mb-px">
+            {tabs.map(({ key, label, icon, badge }) => {
+              const active = activeTab === key
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  data-config-tab={key}
+                  onClick={() => setActiveTab(key)}
+                  className={`relative inline-flex items-center gap-1.5 pb-2.5 text-xs transition-colors ${
+                    active
+                      ? 'text-text-primary font-medium'
+                      : 'text-text-tertiary hover:text-text-secondary'
+                  }`}
+                >
+                  <span className="flex shrink-0 opacity-80">{icon}</span>
+                  <span>{label}</span>
+                  {badge !== undefined && badge > 0 && (
+                    <span
+                      className={`px-1.5 py-px rounded-full text-[10px] tabular-nums leading-tight ${
+                        active ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-text-tertiary'
+                      }`}
+                    >
+                      {badge}
+                    </span>
+                  )}
+                  {active && (
+                    <span className="absolute inset-x-0 bottom-0 h-[2px] rounded-full bg-accent" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
-        <div className="px-4 py-3 border-t border-border-secondary/50 bg-bg-secondary/30 flex items-center justify-between">
+        <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
+          {activeTab === 'extensions' ? (
+            <SessionExtensionsSection sessionId={sessionId} hideTitle />
+          ) : (
+            <SessionAclSection sessionId={sessionId} />
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-border-secondary/60 bg-bg-secondary/30 flex items-center justify-between shrink-0">
           <button
+            type="button"
             onClick={() => void handleRequestDelete()}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-colors"
           >
@@ -105,6 +178,7 @@ export function SessionConfigDialog({
             {t('common.delete')}
           </button>
           <button
+            type="button"
             onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
           >

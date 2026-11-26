@@ -179,7 +179,7 @@ export function SettingsSection({
   footer,
   children
 }: {
-  title: ReactNode
+  title?: ReactNode
   /** 这一节是干嘛的 —— 收进标题旁的问号气泡 */
   description?: ReactNode
   headerAction?: ReactNode
@@ -198,20 +198,26 @@ export function SettingsSection({
       </div>
     ) : null
 
+  const hasTitle = title !== undefined && title !== null && title !== ''
+
   return (
     <section>
-      <div className="flex items-start justify-between mb-2 px-1 gap-3">
-        <div className="min-w-0 flex items-center gap-1.5">
-          <h3
-            data-settings-section-title=""
-            className="text-[13px] font-semibold text-text-primary"
-          >
-            {title}
-          </h3>
-          {hint && <InfoHint hint={hint} />}
+      {(hasTitle || headerAction) && (
+        <div className="flex items-start justify-between mb-2 px-1 gap-3">
+          <div className="min-w-0 flex items-center gap-1.5">
+            {hasTitle && (
+              <h3
+                data-settings-section-title=""
+                className="text-[13px] font-semibold text-text-primary"
+              >
+                {title}
+              </h3>
+            )}
+            {hint && <InfoHint hint={hint} />}
+          </div>
+          {headerAction && <div className="shrink-0">{headerAction}</div>}
         </div>
-        {headerAction && <div className="shrink-0">{headerAction}</div>}
-      </div>
+      )}
       {preamble && <div className="mb-2">{preamble}</div>}
       <div
         data-settings-card=""
@@ -219,6 +225,11 @@ export function SettingsSection({
       >
         {children}
       </div>
+      {!hasTitle && !headerAction && hint && (
+        <div className="mt-1.5 flex justify-end px-1">
+          <InfoHint hint={hint} />
+        </div>
+      )}
     </section>
   )
 }

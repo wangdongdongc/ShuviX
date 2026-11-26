@@ -636,7 +636,11 @@
     "extensionDeclared": "The {{profile}} agent includes this by default. Unticking it here applies only here and leaves the agent itself unchanged.",
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which of your own bases this session can search and write to. The ShuviX System Guide is always on, and a session in a project always has that project's own base. Changes take effect right away.",
-    "knowledgeDefault": "Not picked yet — new sessions start with none of your own bases. The ShuviX System Guide is always on, and a session in a project always has that project's own base. Tick the bases this session should use; changes take effect right away."
+    "knowledgeDefault": "Not picked yet — new sessions start with none of your own bases. The ShuviX System Guide is always on, and a session in a project always has that project's own base. Tick the bases this session should use; changes take effect right away.",
+    "permissionsTab": "Permissions",
+    "builtinGroup": "Built-in",
+    "mcpServersGroup": "MCP Servers",
+    "widgetsGroup": "Widgets"
   },
   "sessionAcl": {
     "title": "File access",

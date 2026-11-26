@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Puzzle, SlidersHorizontal, Terminal } from 'lucide-react'
 import { type ToolItem } from '../common/ToolSelectList'
 import {
   ExtensionsSection,
@@ -15,8 +16,8 @@ interface ProjectEditDialogProps {
 }
 
 /**
- * 项目编辑弹窗 —— 复用共享 ProjectConfigDialog 外壳 + ProjectInfoForm（名称 + 文件夹 + 项目提示词），
- * 桌面专属的扩展能力（MCP / 知识库）/环境变量作为 children 并进同一个「配置」tab（单 tab，外壳自动隐藏切换条）。
+ * 项目编辑弹窗 —— 复用共享 ProjectConfigDialog 横向顶部 Tab 外壳：
+ * 基本信息（名称 + 文件夹 + 项目提示词）/ 扩展能力（MCP + 知识库）/ 环境变量。
  */
 export function ProjectEditDialog({
   projectId,
@@ -25,6 +26,7 @@ export function ProjectEditDialog({
   const { t } = useTranslation()
 
   // 项目字段
+  const [activeTab, setActiveTab] = useState<'basic' | 'extensions' | 'env'>('basic')
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
@@ -117,10 +119,15 @@ export function ProjectEditDialog({
 
   if (loading) return null
 
+  const activeExtCount =
+    enabledTools.filter((item) => !item.startsWith('-')).length + knowledgeBases.length
+  const activeEnvCount = envVars.filter((v) => v.key.trim()).length
+
   const tabs: ProjectConfigTab[] = [
     {
-      key: 'config',
-      label: t('projectForm.configTab'),
+      key: 'basic',
+      label: t('projectForm.basicInfoTitle'),
+      icon: <SlidersHorizontal size={12} />,
       content: (
         <ProjectInfoForm
           name={name}
@@ -129,23 +136,36 @@ export function ProjectEditDialog({
           onSelectFolder={handleSelectFolder}
           systemPrompt={systemPrompt}
           onSystemPromptChange={setSystemPrompt}
-        >
-          <ExtensionsSection
-            title={t('projectForm.wizardStepExtensions')}
-            footer={t('projectForm.extensionsDesc')}
-            mcpTools={mcpTools}
-            enabledTools={enabledTools}
-            onChange={setEnabledTools}
-            knowledge={{
-              options: kbOptions,
-              selected: knowledgeBases,
-              onToggle: toggleKnowledgeBase,
-              hint: t('projectForm.knowledgeBasesDesc')
-            }}
-          />
-          <ProjectEnvVarsSection envVars={envVars} onChange={setEnvVars} />
-        </ProjectInfoForm>
+          hideTitle
+        />
       )
+    },
+    {
+      key: 'extensions',
+      label: t('projectForm.wizardStepExtensions'),
+      icon: <Puzzle size={12} />,
+      badge: activeExtCount,
+      content: (
+        <ExtensionsSection
+          footer={t('projectForm.extensionsDesc')}
+          mcpTools={mcpTools}
+          enabledTools={enabledTools}
+          onChange={setEnabledTools}
+          knowledge={{
+            options: kbOptions,
+            selected: knowledgeBases,
+            onToggle: toggleKnowledgeBase,
+            hint: t('projectForm.knowledgeBasesDesc')
+          }}
+        />
+      )
+    },
+    {
+      key: 'env',
+      label: t('projectForm.envVarsTitle'),
+      icon: <Terminal size={12} />,
+      badge: activeEnvCount,
+      content: <ProjectEnvVarsSection envVars={envVars} onChange={setEnvVars} hideTitle />
     }
   ]
 
@@ -153,8 +173,8 @@ export function ProjectEditDialog({
     <ProjectConfigDialog
       title={t('projectForm.editTitle')}
       tabs={tabs}
-      activeTab="config"
-      onTabChange={() => {}}
+      activeTab={activeTab}
+      onTabChange={(key) => setActiveTab(key as 'basic' | 'extensions' | 'env')}
       onClose={onClose}
       onSave={handleSave}
       onArchive={handleArchive}

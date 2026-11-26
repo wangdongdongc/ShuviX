@@ -795,11 +795,12 @@ describe('session access', () => {
 
       // A 的设置弹窗：「Session access」卡不在了（重新打开时现取）
       await withConfig(A_TITLE, async () => {
+        await config.selectTab('permissions')
         // 文件访问那张卡先上屏，再断「会话访问」不在
         await until(
           () =>
             app.main.eval<boolean>(
-              `!![...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))?.querySelector(${JSON.stringify(`[data-session-acl="${aSid}"]`)})`
+              `!!document.querySelector('[data-session-config-dialog]')?.querySelector(${JSON.stringify(`[data-session-acl="${aSid}"]`)})`
             ),
           'File access section'
         )

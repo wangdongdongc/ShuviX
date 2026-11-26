@@ -54,43 +54,59 @@ const builtinFirst = (a: ExtItem, b: ExtItem): number => Number(!!b.builtin) - N
 
 /** 组配色（MCP 紫 / 知识库蓝）—— 写成完整类名，Tailwind 才扫得到 */
 const EXT_TONES = {
-  purple: { title: 'text-purple-400', checked: 'border-purple-400/40 bg-purple-400/10' },
-  sky: { title: 'text-sky-400', checked: 'border-sky-400/40 bg-sky-400/10' }
+  purple: {
+    title: 'text-purple-400',
+    checked: 'border-purple-400/55 bg-purple-400/12',
+    dot: 'bg-purple-400 shadow-[0_0_8px_rgba(192,132,252,0.55)]'
+  },
+  sky: {
+    title: 'text-sky-400',
+    checked: 'border-sky-400/55 bg-sky-400/12',
+    dot: 'bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.55)]'
+  }
 } as const
 
 type ExtTone = keyof typeof EXT_TONES
 
-/** 一组一行：左组名，右条目。行是外层两列网格的 subgrid，组名列因此各行等宽 */
-function ExtGroupRow({
+/** 按来源分组的网格区块：顶部组名 + 计数，下方等宽网格卡片 */
+function ExtGridGroup({
+  groupKey,
   title,
   icon,
   tone,
+  count,
   locked,
+  colsClass,
   children
 }: {
+  groupKey: string
   title: string
   icon: React.ReactNode
   tone: ExtTone
+  count: number
   /** 组名旁挂把锁：整排压暗之外再给一个明确的「锁住了」信号 */
   locked: boolean
+  colsClass: string
   children?: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className="col-span-2 grid grid-cols-subgrid items-start px-3.5 py-2.5">
-      {/* h-6 与标签同高 */}
-      <div
-        className={`flex items-center gap-1.5 h-6 whitespace-nowrap text-[12px] font-medium ${EXT_TONES[tone].title}`}
-      >
-        {icon}
-        {title}
-        {locked && <Lock size={10} data-ext-lock className="text-text-tertiary" />}
+    <div data-ext-group={groupKey} className="px-3.5 py-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div
+          className={`flex items-center gap-1.5 text-[11px] font-medium ${EXT_TONES[tone].title}`}
+        >
+          {icon}
+          <span data-ext-group-title="">{title}</span>
+          {locked && <Lock size={10} data-ext-lock className="text-text-tertiary" />}
+        </div>
+        <span className="text-[10px] text-text-tertiary tabular-nums">{count}</span>
       </div>
-      {children && <div className="flex flex-wrap gap-1.5 min-w-0">{children}</div>}
+      {children && <div className={`grid ${colsClass} gap-1.5`}>{children}</div>}
     </div>
   )
 }
 
-/** 一个勾选标签。`attrs` 是给 e2e 与调用方认条目的 data-* 锚点（扩展能力与知识库各用各的） */
+/** 一个等宽网格勾选卡片。`attrs` 是给 e2e 与调用方认条目的 data-* 锚点（扩展能力与知识库各用各的） */
 function ExtChip({
   tone,
   checked,
@@ -119,17 +135,21 @@ function ExtChip({
   attrs: Record<`data-${string}`, string | boolean | undefined>
 }): React.JSX.Element {
   const { t } = useTranslation()
-  // 只读时整排按禁用态画（压暗 + 禁用光标）：勾选的还看得出是勾选的（描边留着），
-  // 但一眼就知道改不了；原因放在悬停提示里，不另起一行文字
+  const showIdentifier = Boolean(label && !sameAsIdentifier(label, display))
+  // 只读时整排按禁用态画（压暗 + 禁用光标）；正常态下未选中项呈专注模式半隐藏，悬停唤醒，选中项点亮状态灯
   const stateCls = checked
     ? EXT_TONES[tone].checked
-    : `border-border-secondary/60${readonly ? '' : ' hover:bg-bg-hover/60'}`
+    : readonly
+      ? 'border-border-secondary/40 bg-transparent'
+      : 'border-border-secondary/35 bg-transparent opacity-55 hover:opacity-100 hover:bg-bg-hover/50 hover:border-border-secondary/80'
   return (
     <label
       {...attrs}
       aria-disabled={readonly || undefined}
       title={title}
-      className={`inline-flex items-center gap-1.5 h-6 max-w-full px-2 rounded-md border transition-colors ${
+      className={`group flex items-center justify-between gap-2 w-full min-w-0 px-2.5 ${
+        showIdentifier ? 'py-2' : 'py-1.5'
+      } rounded-lg border transition-all has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent/60 ${
         readonly ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
       } ${stateCls}`}
     >
@@ -142,51 +162,71 @@ function ExtChip({
           if (readonly) return
           onToggle()
         }}
-        className="rounded border-border-primary accent-accent w-3 h-3 shrink-0"
+        className="sr-only"
       />
-      {/* 内置记号：琥珀色小包裹（随应用一起来的），悬停与读屏说「内置」—— 不用锁，锁在这张卡上是只读的意思 */}
-      {widget && (
-        <span
-          data-widget-mark
-          role="img"
-          aria-label={t('input.extensionWidgetBadge')}
-          title={t('input.extensionWidgetBadge')}
-          className="flex shrink-0 text-amber-500"
-        >
-          <Wrench size={11} aria-hidden />
-        </span>
-      )}
-      {builtin && (
-        <span
-          data-builtin-badge
-          role="img"
-          aria-label={t('input.skillBuiltinBadge')}
-          title={t('input.skillBuiltinBadge')}
-          className="flex shrink-0 text-amber-500"
-        >
-          <Package size={11} aria-hidden />
-        </span>
-      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {/* 内置记号：琥珀色小包裹（随应用一起来的），悬停与读屏说「内置」—— 不用锁，锁在这张卡上是只读的意思 */}
+          {widget && (
+            <span
+              data-widget-mark
+              role="img"
+              aria-label={t('input.extensionWidgetBadge')}
+              title={t('input.extensionWidgetBadge')}
+              className="flex shrink-0 text-amber-500"
+            >
+              <Wrench size={11} aria-hidden />
+            </span>
+          )}
+          {builtin && (
+            <span
+              data-builtin-badge
+              role="img"
+              aria-label={t('input.skillBuiltinBadge')}
+              title={t('input.skillBuiltinBadge')}
+              className="flex shrink-0 text-amber-500"
+            >
+              <Package size={11} aria-hidden />
+            </span>
+          )}
+          <span
+            data-chip-name
+            className={`text-[12px] leading-snug ${label ? '' : 'font-mono '}truncate ${
+              offline
+                ? 'text-error'
+                : checked
+                  ? 'text-text-primary font-medium'
+                  : 'text-text-secondary'
+            }`}
+          >
+            {label ?? display}
+          </span>
+          {offline && (
+            <WifiOff
+              size={10}
+              className="text-error shrink-0"
+              aria-label={t('settings.mcpStatusDisconnected')}
+            />
+          )}
+        </div>
+        {showIdentifier && (
+          <div
+            data-chip-identifier
+            className="text-[10px] leading-tight font-mono text-text-tertiary truncate mt-0.5"
+          >
+            {display}
+          </div>
+        )}
+      </div>
+      {/* 右侧状态灯：选中时点亮主色圆点，未选中时仅淡描边（悬停微显） */}
       <span
-        data-chip-name
-        className={`text-[11px] ${label ? '' : 'font-mono '}truncate ${
-          offline ? 'text-error' : checked ? 'text-text-primary' : 'text-text-secondary'
+        aria-hidden
+        className={`w-2 h-2 rounded-full shrink-0 transition-all ${
+          checked
+            ? EXT_TONES[tone].dot
+            : 'border border-border-secondary/70 opacity-45 group-hover:opacity-85'
         }`}
-      >
-        {label ?? display}
-      </span>
-      {label && !sameAsIdentifier(label, display) && (
-        <span data-chip-identifier className="text-[10px] font-mono text-text-tertiary shrink-0">
-          {display}
-        </span>
-      )}
-      {offline && (
-        <WifiOff
-          size={10}
-          className="text-error shrink-0"
-          aria-label={t('settings.mcpStatusDisconnected')}
-        />
-      )}
+      />
     </label>
   )
 }
@@ -208,8 +248,8 @@ export interface ExtensionsKnowledge {
 }
 
 export interface ExtensionsSectionProps {
-  /** 分组标题（项目编辑页与会话设置各用各的文案） */
-  title: React.ReactNode
+  /** 分组标题（缺省时不画标题行，适合独立 Tab 页避免与 Tab 名重复） */
+  title?: React.ReactNode
   /** 卡片的说明（MCP 的勾选何时作数） */
   footer?: React.ReactNode
   mcpTools: ToolItem[]
@@ -297,6 +337,35 @@ export function ExtensionsSection({
 
   const kbOptions = knowledge?.options ?? []
 
+  // 按来源拆成三个自然分组（内置 / 外部 MCP / 小组件），各自保持输入顺序
+  const builtinItems = mcpItems.filter((it) => it.builtin)
+  const externalItems = mcpItems.filter((it) => !it.builtin && !it.widget)
+  const widgetItems = mcpItems.filter((it) => !it.builtin && it.widget)
+
+  const mcpGroups = [
+    {
+      key: 'builtin',
+      title: t('sessionConfig.builtinGroup'),
+      icon: <Package size={12} />,
+      items: builtinItems,
+      colsClass: 'grid-cols-2 sm:grid-cols-3'
+    },
+    {
+      key: 'external',
+      title: t('sessionConfig.mcpServersGroup'),
+      icon: <Puzzle size={12} />,
+      items: externalItems,
+      colsClass: 'grid-cols-2 sm:grid-cols-3'
+    },
+    {
+      key: 'widgets',
+      title: t('sessionConfig.widgetsGroup'),
+      icon: <Wrench size={12} />,
+      items: widgetItems,
+      colsClass: 'grid-cols-1 sm:grid-cols-2'
+    }
+  ].filter((g) => g.items.length > 0)
+
   return (
     // 卡片说明与知识库那一段叠成气泡里的两段（SettingsSection 把 description 与 footer 按先后叠起来）；
     // 知识库那段带锚点，e2e 按它单独读「还没选过 / 已明确设过」是哪一句
@@ -309,18 +378,44 @@ export function ExtensionsSection({
         ) : undefined
       }
     >
-      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 divide-y divide-border-secondary/40">
-        {only !== 'knowledge' && (
-          <ExtGroupRow title="MCP" icon={<Puzzle size={12} />} tone="purple" locked={readonly}>
-            {extChips(mcpItems, 'purple')}
-          </ExtGroupRow>
-        )}
+      <div className="divide-y divide-border-secondary/40">
+        {only !== 'knowledge' &&
+          (mcpGroups.length > 0 ? (
+            mcpGroups.map((group, idx) => (
+              <ExtGridGroup
+                key={group.key}
+                groupKey={group.key}
+                title={group.title}
+                icon={group.icon}
+                tone="purple"
+                count={group.items.length}
+                // 只在首个 MCP 分组上挂一把只读锁（与既有一卡一锁的语义及测试保持一致）
+                locked={readonly && idx === 0}
+                colsClass={group.colsClass}
+              >
+                {extChips(group.items, 'purple')}
+              </ExtGridGroup>
+            ))
+          ) : (
+            <ExtGridGroup
+              groupKey="external"
+              title={t('sessionConfig.mcpServersGroup')}
+              icon={<Puzzle size={12} />}
+              tone="purple"
+              count={0}
+              locked={readonly}
+              colsClass="grid-cols-2 sm:grid-cols-3"
+            />
+          ))}
         {only !== 'mcp' && knowledge && kbOptions.length > 0 && (
-          <ExtGroupRow
+          <ExtGridGroup
+            groupKey="knowledge"
             title={t('sessionConfig.knowledgeGroup')}
             icon={<Library size={12} />}
             tone="sky"
+            count={kbOptions.length}
             locked={false}
+            colsClass="grid-cols-2 sm:grid-cols-3"
           >
             {kbOptions.map((option) => {
               const copy = builtinKnowledgeCopy(option.name, t)
@@ -339,7 +434,7 @@ export function ExtensionsSection({
                 />
               )
             })}
-          </ExtGroupRow>
+          </ExtGridGroup>
         )}
       </div>
     </SettingsSection>

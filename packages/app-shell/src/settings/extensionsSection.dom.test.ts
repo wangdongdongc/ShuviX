@@ -384,12 +384,12 @@ describe('组件的条目', () => {
     ).toBe(i18n.t('input.extensionWidgetBadge'))
   })
 
-  it('ES-W1 别的条目没有这个记号；isBuiltin false 的组件排在内置后面', () => {
+  it('ES-W1 别的条目没有这个记号；按来源分组：内置 → MCP 服务器 → 小组件', () => {
     render({
       mcpTools: [WIDGET, mcp('other'), mcp('ssh', { isBuiltin: true })],
       enabledTools: []
     })
-    expect(keys()).toEqual(['mcp:ssh', 'mcp:widget-a-b', 'mcp:other'])
+    expect(keys()).toEqual(['mcp:ssh', 'mcp:other', 'mcp:widget-a-b'])
     expect(item('mcp:other').querySelector('[data-widget-mark]')).toBeNull()
     expect(item('mcp:ssh').querySelector('[data-widget-mark]')).toBeNull()
   })
@@ -461,11 +461,14 @@ describe('only：只画一行', () => {
     if (!hit) throw new Error(`knowledge base ${name} not rendered`)
     return hit.querySelector('input[type="checkbox"]') as HTMLInputElement
   }
-  /** 卡片里的各组行（外层两列网格的 subgrid 行） */
-  const groupRows = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.col-span-2')]
-  /** 各组行的组名 */
+  /** 卡片里的各分组区块 */
+  const groupRows = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-ext-group]')
+  ]
+  /** 各分组的组名 */
   const groupTitles = (): string[] =>
-    groupRows().map((el) => el.firstElementChild?.textContent ?? '')
+    groupRows().map((el) => el.querySelector('[data-ext-group-title]')?.textContent ?? '')
+  const mcpGroup = (): string => i18n.t('sessionConfig.mcpServersGroup')
   const kbGroup = (): string => i18n.t('sessionConfig.knowledgeGroup')
   /** 标题旁的问号气泡（悬上去才挂到 body 上）；没有问号 → 空串 */
   const hintText = (): string => {
@@ -488,14 +491,14 @@ describe('only：只画一行', () => {
     expect(kbGroup()).not.toBe('sessionConfig.knowledgeGroup')
     expect(keys()).toEqual(MCP_TOOLS.map((tool) => tool.name))
     expect(kbLabels()).toHaveLength(2)
-    expect(groupTitles()).toEqual(['MCP', kbGroup()])
+    expect(groupTitles()).toEqual([mcpGroup(), kbGroup()])
   })
 
   it('EX-2 `mcp`: the MCP row only', () => {
     render({ only: 'mcp', knowledge: kb() })
     expect(keys()).toEqual(MCP_TOOLS.map((tool) => tool.name))
     expect(kbLabels()).toHaveLength(0)
-    expect(groupTitles()).toEqual(['MCP'])
+    expect(groupTitles()).toEqual([mcpGroup()])
     expect(container.textContent).not.toContain(kbGroup())
   })
 
@@ -566,7 +569,7 @@ describe('only：只画一行', () => {
 
   it('EX-9 `mcp` with no MCP tools: one MCP row with no chips', () => {
     expect(() => render({ only: 'mcp', mcpTools: [], knowledge: kb() })).not.toThrow()
-    expect(groupTitles()).toEqual(['MCP'])
+    expect(groupTitles()).toEqual([mcpGroup()])
     expect(items()).toHaveLength(0)
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
   })

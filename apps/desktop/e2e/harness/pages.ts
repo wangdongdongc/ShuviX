@@ -3592,12 +3592,35 @@ export interface SessionConfigPane {
    * （confirmPane 接着点）。弹窗不在 → 抛
    */
   clickDelete(): Promise<void>
+  /** 切换顶部 Tab（`extensions` / `permissions`） */
+  selectTab(key: 'extensions' | 'permissions'): Promise<void>
+}
+
+/** 幂等切换配置弹窗里的顶部 Tab（已在目标 Tab 或该 Tab 不存在时不重复点击） */
+async function ensureConfigTab(main: CdpClient, panelExpr: string, key: string): Promise<void> {
+  const clicked = await main.eval<boolean>(`(() => {
+    const tab = ${panelExpr}?.querySelector(${JSON.stringify(`[data-config-tab="${key}"]`)})
+    if (!tab || tab.getAttribute('aria-selected') === 'true') return false
+    tab.click()
+    return true
+  })()`)
+  if (clicked) {
+    await until(
+      () =>
+        main.eval<boolean>(
+          `${panelExpr}?.querySelector(${JSON.stringify(`[data-config-tab="${key}"]`)})?.getAttribute('aria-selected') === 'true'`
+        ),
+      `config dialog tab ${key} active`
+    )
+  }
 }
 
 /** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
 export function sessionConfigPane(main: CdpClient): SessionConfigPane {
-  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
-  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== undefined`)
+  const PANEL = `document.querySelector('[data-session-config-dialog]')`
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== null`)
+  const ensureTab = (key: 'extensions' | 'permissions'): Promise<void> =>
+    ensureConfigTab(main, PANEL, key)
   return {
     waitOpen: async () => {
       await until(isOpen, 'session config dialog open')
@@ -3606,7 +3629,7 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
     waitClosed: async () => {
       await until(async () => !(await isOpen()), 'session config dialog closed')
     },
-    // 标题输入框是这个弹窗里的第一个 input（配置面板排在它下面：开关，以及有 MCP 时的扩展能力勾选框）
+    // 标题输入框位于顶栏，始终是这个弹窗里的第一个 input
     titleValue: () => main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`),
     close: async () => {
       await main.eval(
@@ -3617,14 +3640,34 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
       )
       await until(async () => !(await isOpen()), 'session config dialog closed')
     },
-    extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
-    toggleExt: (key) => toggleExtIn(main, PANEL, key, 'session config dialog'),
-    lockIndicatorCount: () =>
-      main.eval<number>(`${PANEL}?.querySelectorAll('[data-ext-lock]').length ?? 0`),
-    hintText: () => main.eval<string>(EXT_HINT(PANEL)),
-    knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
-    toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'session config dialog'),
-    knowledgeHint: () => main.eval<string>(KNOWLEDGE_HINT(PANEL)),
+    extItems: async () => {
+      await ensureTab('extensions')
+      return main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL))
+    },
+    toggleExt: async (key) => {
+      await ensureTab('extensions')
+      await toggleExtIn(main, PANEL, key, 'session config dialog')
+    },
+    lockIndicatorCount: async () => {
+      await ensureTab('extensions')
+      return main.eval<number>(`${PANEL}?.querySelectorAll('[data-ext-lock]').length ?? 0`)
+    },
+    hintText: async () => {
+      await ensureTab('extensions')
+      return main.eval<string>(EXT_HINT(PANEL))
+    },
+    knowledgeItems: async () => {
+      await ensureTab('extensions')
+      return main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL))
+    },
+    toggleKnowledgeBase: async (name) => {
+      await ensureTab('extensions')
+      await toggleKnowledgeIn(main, PANEL, name, 'session config dialog')
+    },
+    knowledgeHint: async () => {
+      await ensureTab('extensions')
+      return main.eval<string>(KNOWLEDGE_HINT(PANEL))
+    },
 
     overlayZ: () =>
       main.eval<number>(`(() => {
@@ -3641,7 +3684,8 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
         return true
       })()`)
       if (!ok) throw new Error('session config dialog: no delete button')
-    }
+    },
+    selectTab: ensureTab
   }
 }
 
@@ -3750,7 +3794,8 @@ export interface SessionAccessPane {
 }
 
 export function sessionAccessPane(main: CdpClient): SessionAccessPane {
-  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  const PANEL = `document.querySelector('[data-session-config-dialog]')`
+  const ensurePermissions = (): Promise<void> => ensureConfigTab(main, PANEL, 'permissions')
   // 属性值带引号：uuid 可以数字打头，不带引号的属性选择器会抛
   const CARD = (sid: string): string =>
     `${PANEL}?.querySelector(${JSON.stringify(`[data-session-acl-sessions="${sid}"]`)})`
@@ -3763,6 +3808,7 @@ export function sessionAccessPane(main: CdpClient): SessionAccessPane {
     pick: string,
     what: string
   ): Promise<void> => {
+    await ensurePermissions()
     const ok = await main.eval<boolean>(`(() => {
       const row = ${ROW(sid, target)}
       const btn = row ? ${pick} : null
@@ -3773,14 +3819,20 @@ export function sessionAccessPane(main: CdpClient): SessionAccessPane {
     if (!ok) throw new Error(`session access row ${target}: no ${what}`)
   }
   return {
-    present: (sid) => main.eval<boolean>(`!!${CARD(sid)}`),
+    present: async (sid) => {
+      await ensurePermissions()
+      return main.eval<boolean>(`!!${CARD(sid)}`)
+    },
     // SettingsSection：<section> 里标题行的 <h3>
-    sectionTitle: (sid) =>
-      main.eval<string>(
+    sectionTitle: async (sid) => {
+      await ensurePermissions()
+      return main.eval<string>(
         `(${CARD(sid)}?.closest('section')?.querySelector('h3')?.textContent ?? '').trim()`
-      ),
-    rows: (sid) =>
-      main.eval<SessionAccessRowShot[]>(
+      )
+    },
+    rows: async (sid) => {
+      await ensurePermissions()
+      return main.eval<SessionAccessRowShot[]>(
         `[...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="session"]') ?? [])].map((r) => {
           // 行首一块 = 图标 + 两行文字（标题 / id）的那个 div
           const text = r.firstElementChild?.querySelector(':scope > div')
@@ -3797,7 +3849,8 @@ export function sessionAccessPane(main: CdpClient): SessionAccessPane {
             ).trim()
           }
         })`
-      ),
+      )
+    },
     setAccess: (sid, target, access) =>
       clickIn(
         sid,
@@ -4033,17 +4086,24 @@ export interface WidgetAccessPane {
 }
 
 export function widgetAccessPane(main: CdpClient): WidgetAccessPane {
-  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  const PANEL = `document.querySelector('[data-session-config-dialog]')`
+  const ensurePermissions = (): Promise<void> => ensureConfigTab(main, PANEL, 'permissions')
   const CARD = (sid: string): string =>
     `${PANEL}?.querySelector(${JSON.stringify(`[data-session-acl-widgets="${sid}"]`)})`
   return {
-    present: (sid) => main.eval<boolean>(`!!${CARD(sid)}`),
-    sectionTitle: (sid) =>
-      main.eval<string>(
+    present: async (sid) => {
+      await ensurePermissions()
+      return main.eval<boolean>(`!!${CARD(sid)}`)
+    },
+    sectionTitle: async (sid) => {
+      await ensurePermissions()
+      return main.eval<string>(
         `(${CARD(sid)}?.closest('section')?.querySelector('h3')?.textContent ?? '').trim()`
-      ),
-    rows: (sid) =>
-      main.eval<WidgetAccessRowShot[]>(
+      )
+    },
+    rows: async (sid) => {
+      await ensurePermissions()
+      return main.eval<WidgetAccessRowShot[]>(
         `[...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="widget"]') ?? [])].map((r) => {
           const text = r.firstElementChild?.querySelector(':scope > div')
           return {
@@ -4059,8 +4119,10 @@ export function widgetAccessPane(main: CdpClient): WidgetAccessPane {
             ).trim()
           }
         })`
-      ),
+      )
+    },
     setAccess: async (sid, target, access) => {
+      await ensurePermissions()
       const ok = await main.eval<boolean>(`(() => {
         const row = [...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="widget"]') ?? [])].find(
           (r) => r.getAttribute('data-acl-target') === ${JSON.stringify(target)})
@@ -4241,9 +4303,11 @@ export interface ProjectEditPane {
  * 弹的是 OS 级目录面板，e2e 关不掉，整条 spec 会挂死。
  */
 export function projectEditPane(main: CdpClient): ProjectEditPane {
-  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  const PANEL = `document.querySelector('[data-project-config-dialog]')`
   // 弹窗在项目数据到手之前渲染 null，故 isOpen 天然要靠 until 等
-  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== undefined`)
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== null`)
+  const ensureTab = (key: 'basic' | 'extensions' | 'env'): Promise<void> =>
+    ensureConfigTab(main, PANEL, key)
   return {
     waitOpen: async () => {
       await until(isOpen, 'project edit dialog open')
@@ -4252,7 +4316,10 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
     waitClosed: async () => {
       await until(async () => !(await isOpen()), 'project edit dialog closed')
     },
-    nameValue: () => main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`),
+    nameValue: async () => {
+      await ensureTab('basic')
+      return main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`)
+    },
     close: async () => {
       await main.eval(
         `(() => {
@@ -4262,10 +4329,22 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
       )
       await until(async () => !(await isOpen()), 'project edit dialog closed')
     },
-    extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
-    toggleExt: (key) => toggleExtIn(main, PANEL, key, 'project edit dialog'),
-    knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
-    toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'project edit dialog'),
+    extItems: async () => {
+      await ensureTab('extensions')
+      return main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL))
+    },
+    toggleExt: async (key) => {
+      await ensureTab('extensions')
+      await toggleExtIn(main, PANEL, key, 'project edit dialog')
+    },
+    knowledgeItems: async () => {
+      await ensureTab('extensions')
+      return main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL))
+    },
+    toggleKnowledgeBase: async (name) => {
+      await ensureTab('extensions')
+      await toggleKnowledgeIn(main, PANEL, name, 'project edit dialog')
+    },
     save: async () => {
       // 面板的子节点依次是头部 / 内容 / 页脚；页脚里左边是归档，右边「取消 · 保存」—— 保存是最后一颗
       const clicked = await main.eval<boolean>(`(() => {
@@ -4279,13 +4358,16 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
       await until(async () => !(await isOpen()), 'project edit dialog closed after save')
     },
     // 文件夹行：图标 + 等宽的文件夹名（title = 完整路径）+「更换」按钮，三者同一个父节点
-    folder: () =>
-      main.eval<{ name: string; path: string } | null>(`(() => {
+    folder: async () => {
+      await ensureTab('basic')
+      return main.eval<{ name: string; path: string } | null>(`(() => {
         const span = ${PANEL}?.querySelector('span.font-mono[title]')
         if (!span) return null
         return { name: (span.textContent ?? '').trim(), path: span.getAttribute('title') ?? '' }
-      })()`),
+      })()`)
+    },
     clickChangeFolder: async () => {
+      await ensureTab('basic')
       const clicked = await main.eval<boolean>(`(() => {
         const button = ${PANEL}?.querySelector('span.font-mono[title]')?.parentElement?.querySelector('button')
         if (!button) return false

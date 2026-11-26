@@ -16,11 +16,14 @@ export interface EnvVar {
 interface ProjectEnvVarsSectionProps {
   envVars: EnvVar[]
   onChange: (envVars: EnvVar[]) => void
+  /** 独立 Tab 页中隐藏标题行，改为在卡片底部放添加行（与 SessionAclSection 同款） */
+  hideTitle?: boolean
 }
 
 export function ProjectEnvVarsSection({
   envVars,
-  onChange
+  onChange,
+  hideTitle = false
 }: ProjectEnvVarsSectionProps): React.JSX.Element {
   const { t } = useTranslation()
   const [visibility, setVisibility] = useState<Record<number, boolean>>({})
@@ -33,24 +36,29 @@ export function ProjectEnvVarsSection({
     onChange(next)
   }
 
+  const addVar = (): void => onChange([...envVars, { key: '', value: '', sensitive: false }])
+
   const inputCls =
     'min-w-0 px-2 py-1 rounded-md text-[11px] bg-bg-primary border border-border-secondary/50 text-text-primary placeholder:text-text-tertiary outline-none transition-colors hover:border-border-secondary focus:border-accent/60'
 
   return (
     <SettingsSection
-      title={t('projectForm.envVarsTitle')}
+      title={hideTitle ? undefined : t('projectForm.envVarsTitle')}
       footer={t('projectForm.envVarsDesc')}
       headerAction={
-        <button
-          onClick={() => onChange([...envVars, { key: '', value: '', sensitive: false }])}
-          className="inline-flex items-center gap-1 text-[11px] text-accent hover:bg-accent/10 px-2 py-1 rounded transition-colors"
-        >
-          <Plus size={11} />
-          {t('projectForm.envVarAdd')}
-        </button>
+        hideTitle ? undefined : (
+          <button
+            type="button"
+            onClick={addVar}
+            className="inline-flex items-center gap-1 text-[11px] text-accent hover:bg-accent/10 px-2 py-1 rounded transition-colors"
+          >
+            <Plus size={11} />
+            {t('projectForm.envVarAdd')}
+          </button>
+        )
       }
     >
-      {envVars.length === 0 ? (
+      {envVars.length === 0 && !hideTitle ? (
         <div className="px-4 py-4 text-center text-[11px] text-text-tertiary">—</div>
       ) : (
         envVars.map((v, i) => (
@@ -99,6 +107,7 @@ export function ProjectEnvVarsSection({
               </span>
             </label>
             <button
+              type="button"
               onClick={() => onChange(envVars.filter((_, j) => j !== i))}
               className="p-1 rounded text-text-tertiary hover:text-error hover:bg-error/10 shrink-0 transition-colors"
             >
@@ -106,6 +115,16 @@ export function ProjectEnvVarsSection({
             </button>
           </div>
         ))
+      )}
+      {hideTitle && (
+        <button
+          type="button"
+          onClick={addVar}
+          className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[12px] text-text-secondary transition-colors hover:bg-bg-hover/60 hover:text-text-primary"
+        >
+          <Plus size={13} />
+          {t('projectForm.envVarAdd')}
+        </button>
       )}
     </SettingsSection>
   )

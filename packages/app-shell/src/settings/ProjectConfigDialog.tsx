@@ -12,6 +12,9 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
 export interface ProjectConfigTab {
   key: string
   label: string
+  icon?: React.ReactNode
+  /** 可选小计数徽标（> 0 时展示） */
+  badge?: number
   content: React.ReactNode
 }
 
@@ -50,6 +53,7 @@ export function ProjectConfigDialog({
   }, [handleClose])
 
   const current = tabs.find((tb) => tb.key === activeTab) ?? tabs[0]
+  const hasTabs = tabs.length > 1
 
   return (
     <div
@@ -58,43 +62,71 @@ export function ProjectConfigDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[560px] max-w-[92vw] max-h-[88vh] flex flex-col dialog-panel"
+        data-project-config-dialog=""
+        className={`bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[680px] max-w-[92vw] ${
+          hasTabs ? 'h-[520px]' : ''
+        } max-h-[80vh] flex flex-col overflow-hidden dialog-panel`}
       >
-        {/* 头部：标题 + Tab + X */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border-secondary shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary shrink-0">{title}</h3>
-            {tabs.length > 1 && (
-              <div className="flex items-center gap-1 min-w-0">
-                {tabs.map(({ key, label }) => (
+        {/* 头部：标题 + X，以及多 tab 时的顶部下划线切换栏 */}
+        <div
+          className={`bg-bg-secondary/40 border-b border-border-secondary/60 shrink-0 ${
+            hasTabs ? 'px-5 pt-3.5' : 'px-5 py-3'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-text-primary truncate">{title}</h3>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors shrink-0"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {hasTabs && (
+            <div role="tablist" className="flex items-center gap-5 mt-2.5 -mb-px">
+              {tabs.map(({ key, label, icon, badge }) => {
+                const active = activeTab === key
+                return (
                   <button
                     key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    data-config-tab={key}
                     onClick={() => onTabChange(key)}
-                    className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
-                      activeTab === key
-                        ? 'bg-accent/10 text-accent font-medium'
-                        : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
+                    className={`relative inline-flex items-center gap-1.5 pb-2.5 text-xs transition-colors ${
+                      active
+                        ? 'text-text-primary font-medium'
+                        : 'text-text-tertiary hover:text-text-secondary'
                     }`}
                   >
-                    {label}
+                    {icon && <span className="flex shrink-0 opacity-80">{icon}</span>}
+                    <span>{label}</span>
+                    {badge !== undefined && badge > 0 && (
+                      <span
+                        className={`px-1.5 py-px rounded-full text-[10px] tabular-nums leading-tight ${
+                          active ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-text-tertiary'
+                        }`}
+                      >
+                        {badge}
+                      </span>
+                    )}
+                    {active && (
+                      <span className="absolute inset-x-0 bottom-0 h-[2px] rounded-full bg-accent" />
+                    )}
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <button
-            onClick={handleClose}
-            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors shrink-0"
-          >
-            <X size={14} />
-          </button>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* 内容 */}
-        <div className="px-5 py-5 space-y-5 overflow-y-auto flex-1 min-h-0">{current?.content}</div>
+        <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">{current?.content}</div>
 
         {/* 底部：归档（左） + 取消/保存（右） */}
-        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-border-secondary shrink-0">
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-border-secondary/60 bg-bg-secondary/30 shrink-0">
           {onArchive ? (
             <button
               onClick={() => setShowArchiveConfirm(true)}

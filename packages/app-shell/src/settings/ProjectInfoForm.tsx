@@ -19,6 +19,8 @@ export interface ProjectInfoFormProps {
   systemPrompt?: string
   /** 传入则卡片末尾渲染提示词输入；缺省不渲染 */
   onSystemPromptChange?: (v: string) => void
+  /** 隐藏外层卡片标题（独立 Tab 页中 Tab 栏已标明标题，避免重复） */
+  hideTitle?: boolean
   /** 宿主追加的额外段（桌面：扩展能力/环境变量；扩展：无） */
   children?: React.ReactNode
 }
@@ -30,6 +32,7 @@ export function ProjectInfoForm({
   onSelectFolder,
   systemPrompt = '',
   onSystemPromptChange,
+  hideTitle = false,
   children
 }: ProjectInfoFormProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -38,7 +41,7 @@ export function ProjectInfoForm({
 
   return (
     <>
-      <SettingsSection title={t('projectForm.basicInfoTitle')}>
+      <SettingsSection title={hideTitle ? undefined : t('projectForm.basicInfoTitle')}>
         <SettingsRow
           title={t('projectForm.name')}
           control={
@@ -46,7 +49,7 @@ export function ProjectInfoForm({
               value={name}
               onChange={onNameChange}
               placeholder={t('projectForm.namePlaceholder')}
-              width={260}
+              width={280}
             />
           }
         />
@@ -59,7 +62,7 @@ export function ProjectInfoForm({
                   <>
                     <FolderOpen size={11} className="text-text-tertiary shrink-0" />
                     <span
-                      className="text-[12px] font-mono text-text-tertiary truncate max-w-[260px]"
+                      className="text-[12px] font-mono text-text-tertiary truncate max-w-[320px]"
                       title={path}
                     >
                       {folderName}
@@ -95,9 +98,9 @@ export function ProjectInfoForm({
               value={systemPrompt}
               onChange={(e) => onSystemPromptChange(e.target.value)}
               placeholder={t('projectForm.systemPromptPlaceholder')}
-              rows={3}
+              rows={5}
               spellCheck={false}
-              className="block w-full px-2.5 py-2 rounded-md text-xs leading-relaxed bg-bg-primary text-text-primary border border-border-secondary/50 placeholder:text-text-tertiary transition-colors hover:border-border-secondary focus:outline-none focus:border-accent/60 resize-none [field-sizing:content] min-h-[72px]"
+              className="block w-full px-2.5 py-2 rounded-md text-xs leading-relaxed bg-bg-primary text-text-primary border border-border-secondary/50 placeholder:text-text-tertiary transition-colors hover:border-border-secondary focus:outline-none focus:border-accent/60 resize-none [field-sizing:content] min-h-[120px]"
             />
           </SettingsBlock>
         )}

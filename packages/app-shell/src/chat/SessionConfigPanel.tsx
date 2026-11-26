@@ -37,12 +37,15 @@ export type SessionConfigSection = 'extensions' | 'knowledge' | 'paths' | 'sessi
  * 弹窗可能开在一条非当前会话上，所以挂载时自己向后端拉一次勾选，不依赖当前会话
  * 的初始化。两组都没有条目时整节不显示（扩展端落在这里：它没有会话级扩展能力，也没有知识库）。
  */
-function SessionExtensionsSection({
+export function SessionExtensionsSection({
   sessionId,
-  only
+  only,
+  hideTitle = false
 }: {
   sessionId: string
   only?: 'mcp' | 'knowledge'
+  /** 独立 Tab 页中隐藏卡片标题，避免与 Tab 标签重复 */
+  hideTitle?: boolean
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const { enabledTools, setEnabledTools } = useSessionTools(sessionId)
@@ -75,9 +78,11 @@ function SessionExtensionsSection({
       <ExtensionsSection
         only={only}
         title={
-          only === 'knowledge'
-            ? t('sessionConfig.knowledgeGroup')
-            : t('sessionConfig.extensionsGroup')
+          hideTitle
+            ? undefined
+            : only === 'knowledge'
+              ? t('sessionConfig.knowledgeGroup')
+              : t('sessionConfig.extensionsGroup')
         }
         // 只画知识库那一行时不带 MCP 的那段说明
         footer={only === 'knowledge' ? undefined : t('sessionConfig.extensionsDesc')}
