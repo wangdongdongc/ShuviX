@@ -1,5 +1,6 @@
 import { ArrowDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { InputRequestKind } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** 运行指示三点的错峰（ms）：一道波从左扫到右 */
 const DOT_DELAYS = [0, 160, 320]
@@ -27,8 +28,8 @@ export function ScrollToBottomButton({
   visible: boolean
   /** 本会话正在运行（一轮还没收尾） */
   running: boolean
-  /** 有询问在等人回答：ask = 审批，choice = 选择题；null = 没有 */
-  waiting?: 'ask' | 'choice' | null
+  /** 有询问在等人回答：ask = 审批，choice = 选择题，form = 表单；null = 没有 */
+  waiting?: InputRequestKind | null
   onClick: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()

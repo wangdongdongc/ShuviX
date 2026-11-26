@@ -741,5 +741,45 @@ describe('会话脱敏', () => {
       expect(errors[0]).toContain('masking failed')
       expect(errors[0]).toContain('keychain refused')
     })
+
+    describe('registerSecrets（表单敏感字段）', () => {
+      it('RS-1 批量加密写入脱敏表、相同值复用同一占位符、空串返回空串，且后续 restoreJson 可还原', async () => {
+        const { redaction } = await rig('rs1')
+        const [p1, p2, p3, p4] = await redaction.registerSecrets([
+          { value: 'my-super-secret-token', category: 'SECRET' },
+          { value: '', category: 'SECRET' },
+          { value: 'my-super-secret-token', category: 'SECRET' },
+          { value: 'another-secret-value', category: 'SECRET' }
+        ])
+        expect(p1).toMatch(/^\{\{REDACTED_SECRET_[a-z2-7]{8}\}\}$/)
+        expect(p2).toBe('')
+        expect(p3).toBe(p1)
+        expect(p4).toMatch(/^\{\{REDACTED_SECRET_[a-z2-7]{8}\}\}$/)
+        expect(p4).not.toBe(p1)
+
+        const restored = await redaction.restoreJson({ token: p1, second: p4 })
+        expect(restored.value).toEqual({
+          token: 'my-super-secret-token',
+          second: 'another-secret-value'
+        })
+        expect(restored.restored).toEqual(['SECRET'])
+        expect(restored.unavailable).toEqual([])
+      })
+
+      it('RS-2 加密器失败时 fail-closed 抛错，不静默降级', async () => {
+        const { make } = await rig('rs2')
+        const broken = make(undefined, {
+          vault: {
+            seal: () => {
+              throw new Error('vault locked')
+            },
+            open: () => ''
+          }
+        })
+        await expect(
+          broken.registerSecrets([{ value: 'top-secret', category: 'SECRET' }])
+        ).rejects.toThrow('vault locked')
+      })
+    })
   })
 })

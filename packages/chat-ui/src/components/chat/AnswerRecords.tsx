@@ -103,10 +103,12 @@ export function AskRecord({
   const { other, answeredBy } = details
   // 落盘的数据形状不保证：一条坏记录不能让整张对话卡崩掉
   const selections = Array.isArray(details.selections) ? details.selections : []
+  const fields = Array.isArray(details.fields) ? details.fields : []
   const chosen = new Set(selections)
-  // 没选、也没写：要么真的没选（结果文字由 ask 工具写，见 askTool），要么是旧会话的「其它」回答 —— 旧会话没有
+  const filledFieldsCount = fields.filter((f) => f.value !== undefined && f.value.length > 0).length
+  // 没选、没填表单、也没写：要么真的没选（结果文字由 ask 工具写，见 askTool），要么是旧会话的「其它」回答 —— 旧会话没有
   // details.other，那段话只在结果文字里（英文的固定开头一并显示，不去解析它）
-  const unanswered = selections.length === 0 && !other
+  const unanswered = selections.length === 0 && fields.length === 0 && !other
   const noSelection = unanswered && (!result || /made no selection\.?$/.test(result))
   const legacyOther = unanswered && !noSelection ? result : undefined
   const sep = <span className="text-text-tertiary"> · </span>
@@ -140,9 +142,14 @@ export function AskRecord({
               </span>
             </span>
           ))}
+          {fields.length > 0 && (
+            <span data-ask-record-fields="">
+              {t('pendingInputs.recordSubmittedFields', { count: filledFieldsCount })}
+            </span>
+          )}
           {other && (
             <>
-              {selections.length > 0 && sep}
+              {(selections.length > 0 || fields.length > 0) && sep}
               {/* 一行里只放那句话本身；全文与「你的回答」字样在展开处 */}
               <span data-ask-record-other="" className="font-normal">
                 <RedactedText text={other} />
@@ -213,6 +220,24 @@ export function AskRecord({
                 </li>
               ))}
             </ul>
+          )}
+          {fields.length > 0 && (
+            <dl className="space-y-1" data-ask-record-field-list="">
+              {fields.map((field) => (
+                <div key={field.key} className="flex items-baseline gap-1.5 min-w-0">
+                  <dt className="flex-shrink-0 text-text-tertiary">{field.label}:</dt>
+                  <dd className="min-w-0 break-all text-text-primary">
+                    {field.value !== undefined && field.value.length > 0 ? (
+                      <RedactedText text={field.value} />
+                    ) : (
+                      <span className="text-text-tertiary">
+                        {t('pendingInputs.recordNotProvided')}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
           )}
           {other && (
             <p

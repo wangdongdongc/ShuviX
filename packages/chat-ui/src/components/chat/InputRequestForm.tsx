@@ -10,12 +10,21 @@ import { useChatStore } from '../../stores/chatStore'
 import type {
   AskInputRequest,
   ChoiceInputRequest,
+  FormInputRequest,
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import { AskForm } from './inputs/AskForm'
 import { ChoiceForm } from './inputs/ChoiceForm'
-import { emptyAskDraft, emptyChoiceDraft, type AskDraft, type ChoiceDraft } from './inputs/drafts'
+import { FormInputForm } from './inputs/FormInputForm'
+import {
+  emptyAskDraft,
+  emptyChoiceDraft,
+  emptyFormDraft,
+  type AskDraft,
+  type ChoiceDraft,
+  type FormDraft
+} from './inputs/drafts'
 
 export interface InputRequestFormProps {
   /** 询问挂在哪条会话上（草稿按它存） */
@@ -42,7 +51,11 @@ export function InputRequestForm({
     setInputDraft(
       sessionId,
       request.id,
-      request.kind === 'ask' ? emptyAskDraft() : emptyChoiceDraft()
+      request.kind === 'ask'
+        ? emptyAskDraft()
+        : request.kind === 'form'
+          ? emptyFormDraft()
+          : emptyChoiceDraft()
     )
   }, [draft, request.id, request.kind, sessionId, setInputDraft])
 
@@ -56,6 +69,15 @@ export function InputRequestForm({
           key={request.id}
           request={request as AskInputRequest}
           draft={draft as AskDraft}
+          onDraftChange={onDraftChange}
+          onSubmit={onResponse}
+          titleAccessory={titleAccessory}
+        />
+      ) : request.kind === 'form' ? (
+        <FormInputForm
+          key={request.id}
+          request={request as FormInputRequest}
+          draft={draft as FormDraft}
           onDraftChange={onDraftChange}
           onSubmit={onResponse}
           titleAccessory={titleAccessory}

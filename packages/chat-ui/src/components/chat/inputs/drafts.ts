@@ -58,3 +58,24 @@ export function emptyAskDraft(): AskDraft {
 export function buildAskResponse(draft: AskDraft): InputResponse | null {
   return otherResponseOf(draft.otherText)
 }
+
+// ─── Form ──────────────────────────────────────────────
+
+/**
+ * Form 表单的草稿状态：
+ * 只保存非敏感字段（`type === 'text'`）的值与底部「其它」回复；
+ * 敏感字段（`type === 'secret'`）绝不进草稿 store，仅存组件局部状态。
+ */
+export interface FormDraft {
+  values: Record<string, string>
+  /** 卡片最后一行写的话 */
+  otherText?: string
+}
+
+export function emptyFormDraft(): FormDraft {
+  return { values: {} }
+}
+
+export function buildFormResponse(draft: FormDraft): InputResponse | null {
+  return otherResponseOf(draft.otherText)
+}

@@ -17,7 +17,7 @@ import type { PermissionRisk } from './permissionReview'
 
 // ─── 请求侧 ──────────────────────────────────────────
 
-export type InputRequestKind = 'ask' | 'choice'
+export type InputRequestKind = 'ask' | 'choice' | 'form'
 
 interface InputRequestBase {
   /** 与 toolCallId 一致,作为路由 key */
@@ -243,7 +243,46 @@ export interface ChoiceInputRequest extends InputRequestBase {
   options: Array<{ label: string; description: string }>
 }
 
-export type InputRequest = AskInputRequest | ChoiceInputRequest
+/** 表单字段控件类型（首期支持普通文本与敏感信息，后续可扩展 select / checkbox / file 等） */
+export type FormFieldType = 'text' | 'secret'
+
+/** 结构化表单中的一项输入 */
+export interface FormField {
+  /** 返回给工具的键名（如 username、password、token） */
+  key: string
+  /** 展示给用户的标签 */
+  label: string
+  /** 字段类型：'secret' = 打码输入、不进草稿、主进程强制加密入会话脱敏表；'text' = 普通明文 */
+  type: FormFieldType
+  /** 可选填写说明 */
+  description?: string
+  /** 多行输入（如 PEM 私钥或长文本） */
+  multiline?: boolean
+  /** 是否必填，缺省为 true */
+  required?: boolean
+  /** 输入框占位文案 */
+  placeholder?: string
+}
+
+export interface FormInputRequest extends InputRequestBase {
+  kind: 'form'
+  question: string
+  detail?: string
+  fields: FormField[]
+}
+
+export type InputRequest = AskInputRequest | ChoiceInputRequest | FormInputRequest
+
+/** 表单中是否包含敏感信息字段 */
+export function hasSecretFields(request: FormInputRequest): boolean {
+  return request.fields.some((field) => field.type === 'secret')
+}
+
+/** 一条待处理询问的一行摘要（侧栏 / 收件箱 / 通知共用） */
+export function inputRequestSummary(request: InputRequest): string {
+  if (request.kind === 'ask') return request.description?.trim() || request.command
+  return request.question
+}
 
 // ─── 响应侧 ──────────────────────────────────────────
 
@@ -333,4 +372,19 @@ export interface CancelResponse extends InputResponseBase {
   reason: CancelReason
 }
 
-export type InputResponse = AskResponse | ChoiceResponse | OtherResponse | CancelResponse
+export interface FormResponse extends InputResponseBase {
+  kind: 'form'
+  /**
+   * 表单各字段的值（key → value）。
+   * 前端提交原始值；主进程收到后按对应 FormInputRequest.fields 将所有 `type === 'secret'` 的非空项
+   * 加密写入会话脱敏表并替换为占位符，原始值从不进入会话记录或模型上下文。
+   */
+  values: Record<string, string>
+}
+
+export type InputResponse =
+  | AskResponse
+  | ChoiceResponse
+  | FormResponse
+  | OtherResponse
+  | CancelResponse

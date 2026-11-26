@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUpRight, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
+import { ArrowUpRight, KeyRound, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
 import {
   getChatApi,
   getSessionChannelApi,
@@ -24,7 +24,11 @@ import {
   RedactionSessionProvider,
   useChatStore
 } from '@shuvix/chat-ui'
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import {
+  hasSecretFields,
+  type InputRequest,
+  type InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 import {
   askContextOf,
   askItemsOf,
@@ -200,10 +204,19 @@ function AskGlyph({ request }: { request: InputRequest }): React.JSX.Element {
       </GlyphCell>
     )
   }
-  const Icon = request.kind === 'ask' ? ShieldAlert : MessageCircleQuestion
+  const Icon =
+    request.kind === 'ask'
+      ? ShieldAlert
+      : request.kind === 'form' && hasSecretFields(request)
+        ? KeyRound
+        : MessageCircleQuestion
   return (
     <GlyphCell>
-      <Icon size={17} aria-hidden="true" className="text-warning" />
+      <Icon
+        size={17}
+        aria-hidden="true"
+        className={request.kind === 'ask' ? 'text-warning' : 'text-accent'}
+      />
     </GlyphCell>
   )
 }

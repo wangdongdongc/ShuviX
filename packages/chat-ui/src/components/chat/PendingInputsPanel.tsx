@@ -24,19 +24,24 @@ import { useChatDensity } from '../../host/chatHostContext'
 import type {
   AskInputRequest,
   ChoiceInputRequest,
+  FormInputRequest,
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import { AskForm } from './inputs/AskForm'
 import { ChoiceForm } from './inputs/ChoiceForm'
+import { FormInputForm } from './inputs/FormInputForm'
 import { answerErrorText } from './inputs/useAnswerSubmit'
 import {
   buildAskResponse,
   buildChoiceResponse,
+  buildFormResponse,
   emptyAskDraft,
   emptyChoiceDraft,
+  emptyFormDraft,
   type AskDraft,
-  type ChoiceDraft
+  type ChoiceDraft,
+  type FormDraft
 } from './inputs/drafts'
 
 interface PendingInputsPanelProps {
@@ -53,6 +58,7 @@ interface PendingInputsPanelProps {
 function createDraftFor(req: InputRequest): unknown {
   if (req.kind === 'ask') return emptyAskDraft()
   if (req.kind === 'choice') return emptyChoiceDraft()
+  if (req.kind === 'form') return emptyFormDraft()
   return {}
 }
 
@@ -60,6 +66,7 @@ function createDraftFor(req: InputRequest): unknown {
 function buildResponseFor(req: InputRequest, draft: unknown): InputResponse | null {
   if (req.kind === 'ask') return buildAskResponse(draft as AskDraft)
   if (req.kind === 'choice') return buildChoiceResponse(draft as ChoiceDraft)
+  if (req.kind === 'form') return buildFormResponse(draft as FormDraft)
   return null
 }
 
@@ -204,6 +211,16 @@ export function PendingInputsPanel({
           key={activeRequest.id}
           request={activeRequest as ChoiceInputRequest}
           draft={activeDraft as ChoiceDraft}
+          onDraftChange={handleDraftChange}
+          onSubmit={handleSubmit}
+          titleAccessory={stepper}
+        />
+      )}
+      {activeRequest.kind === 'form' && activeDraft !== undefined && (
+        <FormInputForm
+          key={activeRequest.id}
+          request={activeRequest as FormInputRequest}
+          draft={activeDraft as FormDraft}
           onDraftChange={handleDraftChange}
           onSubmit={handleSubmit}
           titleAccessory={stepper}

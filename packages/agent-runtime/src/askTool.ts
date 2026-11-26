@@ -16,27 +16,72 @@
 import { Type } from 'typebox'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
-import type { AskToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { AskFormFieldRecord, AskToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type {
+  FormField,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 import { catchToolErrors, toExecutionResult, type ToolResult } from './tools/toolResult'
 import { UNATTENDED_QUESTION_TEXT } from '@shuvix/chat-protocol/unattended'
 import { backstopOutputLimits } from './tools/outputLimits'
 
+export const AskFormFieldSchema = Type.Object({
+  key: Type.String({
+    description: 'Identifier returned in the result, e.g. username, password, token'
+  }),
+  label: Type.String({ description: 'Human-readable label shown on the card' }),
+  type: Type.Union([Type.Literal('text'), Type.Literal('secret')], {
+    description:
+      "Input type. Use 'secret' for passwords, API keys, tokens, private keys, or any sensitive value so it is masked and stored encrypted in this session's redaction table; use 'text' for non-sensitive values like username or host."
+  }),
+  description: Type.Optional(
+    Type.String({ description: 'Optional hint explaining what to enter or where to find it' })
+  ),
+  multiline: Type.Optional(
+    Type.Boolean({ description: 'True for multi-line values such as PEM private keys or notes' })
+  ),
+  required: Type.Optional(
+    Type.Boolean({ description: 'Whether the user must fill this field (default: true)' })
+  ),
+  placeholder: Type.Optional(Type.String({ description: 'Optional input placeholder text' }))
+})
+
 export const AskParamsSchema = Type.Object({
-  question: Type.String({ description: 'The question to ask the user' }),
-  options: Type.Array(
-    Type.Object({
-      label: Type.String({ description: 'Short label for the option' }),
-      description: Type.String({ description: 'Longer description explaining the option' })
-    }),
-    { description: 'Options for the user to choose from', minItems: 2, maxItems: 9 }
+  question: Type.String({ description: 'The question or prompt to ask the user' }),
+  detail: Type.Optional(
+    Type.String({
+      description: 'Optional extra context explaining why the input is needed or how it is used'
+    })
+  ),
+  options: Type.Optional(
+    Type.Array(
+      Type.Object({
+        label: Type.String({ description: 'Short label for the option' }),
+        description: Type.String({ description: 'Longer description explaining the option' })
+      }),
+      {
+        description:
+          'Clickable options for the user to choose from (2-9 items). Mutually exclusive with `fields`.',
+        minItems: 2,
+        maxItems: 9
+      }
+    )
+  ),
+  fields: Type.Optional(
+    Type.Array(AskFormFieldSchema, {
+      description:
+        'Structured form fields for the user to fill in (e.g. credentials, secrets, or paired inputs like username + password). Mutually exclusive with `options`.',
+      minItems: 1,
+      maxItems: 8
+    })
   )
 })
 
 export const ASK_DESCRIPTION =
-  'Ask the user a question with clickable options. Use it whenever the user has to choose, instead of writing the options out in your reply. ' +
-  'The user may tick one option or several, add words of their own to what they ticked, or answer only in their own words — how many to pick is their call, so do not tell them in the question, and write each option so it stands on its own. ' +
-  'Be ready for a result that names more than one option, or that carries a note beside them.'
+  'Ask the user a question via an interactive card. Pass EITHER `options` (for clickable choices) OR `fields` (for a structured input form), never both.\n' +
+  '- Use `options` whenever the user has to choose, instead of writing options out in your reply. The user may tick one option or several, add words of their own, or answer only in their own words — do not tell them how many to pick, and write each option so it stands on its own.\n' +
+  '- Use `fields` when you need sensitive credentials (passwords, API keys, tokens, private keys) or a small group of structured values (such as username + password). Always mark sensitive fields with `type: "secret"` instead of asking the user to paste secrets in chat — ShuviX encrypts them for this session and returns placeholders that are automatically restored when passed to tools.'
 
 /**
  * 父会话代答时结果的开头。子会话的模型要知道这不是用户本人选的（它可以据此判断要不要再向用户确认）；
@@ -76,6 +121,117 @@ export function createAskTool({
       catchToolErrors(context, async () => {
         if (context.abortSignal?.aborted) throw new Error(abortError)
 
+        const hasOptions = Array.isArray(params.options) && params.options.length > 0
+        const hasFields = Array.isArray(params.fields) && params.fields.length > 0
+        if (hasOptions === hasFields) {
+          throw new Error(
+            'Provide either `options` (for clickable choices) or `fields` (for a structured form), not both.'
+          )
+        }
+
+        if (hasFields) {
+          const fields: FormField[] = params.fields!.map((f) => ({
+            key: f.key.trim(),
+            label: f.label,
+            type: f.type,
+            ...(f.description === undefined ? {} : { description: f.description }),
+            ...(f.multiline === undefined ? {} : { multiline: f.multiline }),
+            ...(f.required === undefined ? {} : { required: f.required }),
+            ...(f.placeholder === undefined ? {} : { placeholder: f.placeholder })
+          }))
+          const seenKeys = new Set<string>()
+          for (const field of fields) {
+            if (!field.key) throw new Error('Each form field must have a non-empty `key`.')
+            if (seenKeys.has(field.key)) {
+              throw new Error(`Duplicate form field key: "${field.key}".`)
+            }
+            seenKeys.add(field.key)
+          }
+
+          const response = await awaitWithContext(
+            requestUserInput({
+              id: api.callId,
+              kind: 'form',
+              toolName: 'ask',
+              ...(api.conversationId === undefined ? {} : { conversationId: api.conversationId }),
+              question: params.question,
+              ...(params.detail === undefined ? {} : { detail: params.detail }),
+              fields,
+              createdAt: Date.now()
+            }),
+            context
+          )
+
+          if (context.abortSignal?.aborted) throw new Error(abortError)
+
+          if (response.kind === 'cancel' && response.reason === 'unattended') {
+            const result: ToolResult<AskToolDetails> = {
+              content: [{ type: 'text', text: UNATTENDED_QUESTION_TEXT }],
+              details: { type: 'ask', question: params.question, selections: [] }
+            }
+            return toExecutionResult(result, 'ask')
+          }
+          if (response.kind === 'cancel') throw new Error(abortError)
+          if (response.kind === 'other') {
+            const result: ToolResult<AskToolDetails> = {
+              content: [
+                {
+                  type: 'text',
+                  text: `User did not fill the form and responded with feedback instead:\n${response.text}`
+                }
+              ],
+              details: {
+                type: 'ask',
+                question: params.question,
+                selections: [],
+                other: response.text
+              }
+            }
+            return toExecutionResult(result, 'ask')
+          }
+          if (response.kind !== 'form') {
+            const result: ToolResult<AskToolDetails> = {
+              content: [{ type: 'text', text: 'User input error: unexpected response kind' }],
+              details: { type: 'ask', question: params.question, selections: [] }
+            }
+            return toExecutionResult(result, 'ask')
+          }
+
+          const fieldRecords: AskFormFieldRecord[] = fields.map((field) => {
+            const raw = response.values[field.key]
+            const value = typeof raw === 'string' && raw.length > 0 ? raw : undefined
+            return {
+              key: field.key,
+              label: field.label,
+              type: field.type,
+              ...(value === undefined ? {} : { value })
+            }
+          })
+          const hasProvidedSecret = fieldRecords.some(
+            (record) => record.type === 'secret' && record.value !== undefined
+          )
+          const lines: string[] = ['User submitted the requested form.']
+          if (hasProvidedSecret) {
+            lines.push(
+              'Sensitive values are stored encrypted for this session — pass their placeholders verbatim to tools (bash, write, edit, etc.) and ShuviX will restore them locally before execution.'
+            )
+          }
+          lines.push('')
+          for (const record of fieldRecords) {
+            lines.push(`- ${record.key}: ${record.value ?? '(not provided)'}`)
+          }
+          const result: ToolResult<AskToolDetails> = {
+            content: [{ type: 'text', text: lines.join('\n') }],
+            details: {
+              type: 'ask',
+              question: params.question,
+              selections: [],
+              fields: fieldRecords
+            }
+          }
+          return toExecutionResult(result, 'ask')
+        }
+
         const response = await awaitWithContext(
           requestUserInput({
             id: api.callId,
@@ -83,7 +239,8 @@ export function createAskTool({
             toolName: 'ask',
             ...(api.conversationId === undefined ? {} : { conversationId: api.conversationId }),
             question: params.question,
-            options: params.options,
+            ...(params.detail === undefined ? {} : { detail: params.detail }),
+            options: params.options!,
             createdAt: Date.now()
           }),
           context

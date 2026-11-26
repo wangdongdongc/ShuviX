@@ -251,10 +251,10 @@ export function askContextOf(messages: ChatMessage[], toolCallId: string): strin
   return null
 }
 
-/** 收起时那一行的一句话：选择题是问题本身；审批是工具写的说明，没有就是命令 / 路径 */
+/** 收起时那一行的一句话：选择题 / 表单是问题本身；审批是工具写的说明，没有就是命令 / 路径 */
 export function requestSummaryOf(request: InputRequest): string {
-  if (request.kind === 'choice') return request.question
-  return request.description?.trim() || request.command
+  if (request.kind === 'ask') return request.description?.trim() || request.command
+  return request.question
 }
 
 /** 等了几分钟（向下取整，不小于 0） */

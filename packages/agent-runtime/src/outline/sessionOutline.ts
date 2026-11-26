@@ -169,6 +169,15 @@ function optionsLine(options: ReadonlyArray<{ label: string }>): string {
   return oneLine(options.map((o) => oneLine(o.label, OPTION_CLIP)).join(' | '), OPTIONS_CLIP)
 }
 
+/** 挂着的表单询问在大纲里的那一行 */
+function formLine(ask: Extract<InputRequest, { kind: 'form' }>): string {
+  const fields = oneLine(
+    ask.fields.map((f) => oneLine(f.label, OPTION_CLIP)).join(', '),
+    OPTIONS_CLIP
+  )
+  return `ask (waiting for form input, ask_id=${oneLine(ask.id, 60)}) ${oneLine(ask.question, QUESTION_CLIP)} [${fields}]`
+}
+
 /** 挂着的选择题在大纲里的那一行 */
 function questionLine(ask: Extract<InputRequest, { kind: 'choice' }>): string {
   return `ask (asking, ask_id=${oneLine(ask.id, 60)}) ${oneLine(ask.question, QUESTION_CLIP)} [${optionsLine(ask.options)}]`
@@ -242,6 +251,9 @@ function toolRow(
   if (ask?.kind === 'choice') {
     line = questionLine(ask)
     status = 'waiting for an answer'
+  } else if (ask?.kind === 'form') {
+    line = formLine(ask)
+    status = 'waiting for form input'
   } else if (ask?.kind === 'ask') {
     line = `${label} — waiting for the user's approval`
     status = "waiting for the user's approval"
@@ -487,13 +499,15 @@ function buildRows(
     const line =
       ask.kind === 'choice'
         ? questionLine(ask)
-        : `${oneLine(`${ask.toolName}: ${ask.command}`, 120)} — waiting for the user's approval`
+        : ask.kind === 'form'
+          ? formLine(ask)
+          : `${oneLine(`${ask.toolName}: ${ask.command}`, 120)} — waiting for the user's approval`
     const row: Row = {
       // 编号用完整的 id：截短了两个前缀相同的 id 会撞车（行本身另有长度兜底）
       ref: `#ask.${ask.id.replace(/\s+/g, '')}`,
       turn: Math.max(turn, 1),
       line,
-      search: ask.kind === 'choice' ? ask.question : ask.command,
+      search: ask.kind === 'ask' ? ask.command : ask.question,
       expand: () =>
         ask.kind === 'choice'
           ? [
@@ -501,7 +515,15 @@ function buildRows(
               ask.question,
               ...ask.options.map((o) => `- ${o.label}${o.description ? ` — ${o.description}` : ''}`)
             ]
-          : [`waiting for the user's approval (${ask.toolName}):`, ask.command],
+          : ask.kind === 'form'
+            ? [
+                `form (ask_id ${ask.id}):`,
+                ask.question,
+                ...ask.fields.map(
+                  (f) => `- ${f.label} (${f.type})${f.description ? ` — ${f.description}` : ''}`
+                )
+              ]
+            : [`waiting for the user's approval (${ask.toolName}):`, ask.command],
       leaves: []
     }
     row.leaves = [row]

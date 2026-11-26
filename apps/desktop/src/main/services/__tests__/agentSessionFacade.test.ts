@@ -977,3 +977,108 @@ describe('AF 无人值守', () => {
     expect(lookup).not.toHaveBeenCalled()
   })
 })
+
+describe('AgentSession.respondToInput 表单脱敏（kind: form）', () => {
+  const FORM_REQ = {
+    id: 'form-1',
+    kind: 'form' as const,
+    toolName: 'ask',
+    question: 'Enter credentials',
+    fields: [
+      { key: 'username', label: 'Username', type: 'text' as const },
+      { key: 'password', label: 'Password', type: 'secret' as const },
+      { key: 'optional_secret', label: 'Optional', type: 'secret' as const, required: false }
+    ],
+    createdAt: 0
+  }
+
+  it('RF-1 secret 字段按 SECRET 类别加密换成占位符，text 原样透传，多余键被过滤', async () => {
+    const { durable, session } = facade()
+    durable.pendingRequests = [FORM_REQ]
+    const registerSecrets = vi.fn(async () => ['{{REDACTED_SECRET_11223344}}'])
+    durable.redaction = { registerSecrets } as unknown as typeof durable.redaction
+
+    const claimed = session.respondToInput(
+      'form-1',
+      {
+        kind: 'form',
+        values: {
+          username: 'alice',
+          password: 'raw-password',
+          optional_secret: '',
+          injected: 'should-be-dropped'
+        }
+      },
+      { clientId: 'ipc:1' }
+    )
+    expect(claimed).toBe(true)
+    await vi.waitFor(() => expect(durable.callsOf('respondToInput')).toHaveLength(1))
+
+    expect(registerSecrets).toHaveBeenCalledWith([{ value: 'raw-password', category: 'SECRET' }])
+    expect(durable.callsOf('respondToInput')[0]).toEqual([
+      'respondToInput',
+      'form-1',
+      {
+        kind: 'form',
+        values: {
+          username: 'alice',
+          password: '{{REDACTED_SECRET_11223344}}',
+          optional_secret: ''
+        }
+      }
+    ])
+    expect(durable.respondArgs[0]).toMatchObject({ meta: { clientId: 'ipc:1' } })
+  })
+
+  it('RF-2 fail-closed：含非空 secret 字段但未启用脱敏或加密失败时，不投递并广播错误', async () => {
+    const { durable, session } = facade()
+    durable.pendingRequests = [FORM_REQ]
+    durable.redaction = undefined
+
+    expect(
+      session.respondToInput('form-1', {
+        kind: 'form',
+        values: { username: 'alice', password: 'raw-password' }
+      })
+    ).toBe(true)
+    await vi.waitFor(() => expect(mocks.broadcast).toHaveBeenCalledTimes(1))
+    expect(durable.callsOf('respondToInput')).toHaveLength(0)
+    expect(mocks.broadcast.mock.calls[0]![0]).toMatchObject({ type: 'error' })
+
+    // 加密抛错同样 fail-closed
+    mocks.broadcast.mockClear()
+    durable.redaction = {
+      registerSecrets: vi.fn(async () => {
+        throw new Error('vault locked')
+      })
+    } as unknown as typeof durable.redaction
+    session.respondToInput('form-1', {
+      kind: 'form',
+      values: { username: 'alice', password: 'raw-password' }
+    })
+    await vi.waitFor(() => expect(mocks.broadcast).toHaveBeenCalledTimes(1))
+    expect(durable.callsOf('respondToInput')).toHaveLength(0)
+  })
+
+  it('RF-3 纯 text 表单在无脱敏时也可正常投递；不存在的 requestId 返回 false', async () => {
+    const { durable, session } = facade()
+    const textOnly = {
+      ...FORM_REQ,
+      id: 'form-text',
+      fields: [{ key: 'host', label: 'Host', type: 'text' as const }]
+    }
+    durable.pendingRequests = [textOnly]
+    durable.redaction = undefined
+
+    expect(session.respondToInput('missing', { kind: 'form', values: { host: 'a' } })).toBe(false)
+    expect(
+      session.respondToInput('form-text', { kind: 'form', values: { host: 'db.local' } })
+    ).toBe(true)
+    await vi.waitFor(() => expect(durable.callsOf('respondToInput')).toHaveLength(1))
+    expect(durable.callsOf('respondToInput')[0]).toEqual([
+      'respondToInput',
+      'form-text',
+      { kind: 'form', values: { host: 'db.local' } }
+    ])
+  })
+})

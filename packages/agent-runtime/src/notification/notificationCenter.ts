@@ -114,6 +114,7 @@ function describeRequest(request: InputRequest): string {
       // 改设置的询问：宿主已按界面语言写好一句「这次做什么」，比通道调用的原文好认
       return oneLine(request.preview?.kind === 'settings' ? request.preview.title : request.command)
     case 'choice':
+    case 'form':
       return oneLine(request.question)
   }
 }

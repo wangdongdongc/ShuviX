@@ -321,6 +321,43 @@ export class SessionRedaction {
     return { entries, replace: (text) => text.replace(pattern, (m) => placeholders.get(m)!) }
   }
 
+  /**
+   * 直接把一批敏感值记进会话脱敏表，按顺序返回各自对应的占位符（空串返回空串）。
+   * 供 `ask` 表单中的 `secret` 字段使用：与 `maskComposerTexts` 一样**出错就抛**（fail-closed），
+   * 绝不在没藏住时降级成明文。
+   */
+  async registerSecrets(secrets: readonly UserSecret[]): Promise<string[]> {
+    if (secrets.length === 0) return []
+    const table = await this.table()
+    const entries: RedactionEntry[] = []
+    const placeholders = new Map<string, string>()
+    const result: string[] = []
+    for (const { value, category } of secrets) {
+      if (value.length === 0) {
+        result.push('')
+        continue
+      }
+      const existing = placeholders.get(value)
+      if (existing !== undefined) {
+        result.push(existing)
+        continue
+      }
+      const known = table.known.get(value)
+      const placeholder =
+        known?.placeholder ??
+        placeholderFor(this.deps.host.signer, category, value, (p) => table.has(p))
+      if (!known && !table.has(placeholder)) {
+        entries.push({ placeholder, category, rule: USER_RULE, value })
+      }
+      placeholders.set(value, placeholder)
+      result.push(placeholder)
+    }
+    if (entries.length > 0) {
+      await recordRedactions(this.deps.harness, table, entries, this.deps.host.vault)
+    }
+    return result
+  }
+
   /** 这个值是不是用户在输入框里照原样发过的（提示不再提它） */
   async isAsWritten(value: string): Promise<boolean> {
     const table = await this.table()

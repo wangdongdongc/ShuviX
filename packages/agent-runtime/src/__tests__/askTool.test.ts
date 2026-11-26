@@ -470,3 +470,127 @@ describe('ASK 无人值守的运行（docs/unattended-run-design.md §3，Q3）'
     })
   })
 })
+
+describe('ASK 表单模式（fields）', () => {
+  const FORM_ARGS = {
+    question: 'Enter registry credentials',
+    detail: 'Used to log in to npm registry',
+    fields: [
+      { key: 'username', label: 'Username', type: 'text' as const },
+      { key: 'password', label: 'Password', type: 'secret' as const },
+      { key: 'scope', label: 'Scope', type: 'text' as const, required: false }
+    ]
+  }
+
+  it('FM-1 发出 kind: form 请求，返回含加密占位符说明与 details.fields', async () => {
+    const placeholder = '{{REDACTED_SECRET_a1b2c3d4}}'
+    const { requestUserInput } = channel(() => ({
+      kind: 'form',
+      values: { username: 'alice', password: placeholder, scope: '' }
+    }))
+    const { result } = await invokeTool(createAskTool({ requestUserInput }), FORM_ARGS, {
+      callId: 'call-form-1'
+    })
+
+    expect(requestUserInput.mock.calls[0][0]).toStrictEqual({
+      id: 'call-form-1',
+      kind: 'form',
+      toolName: 'ask',
+      conversationId: expect.any(Number),
+      question: 'Enter registry credentials',
+      detail: 'Used to log in to npm registry',
+      fields: FORM_ARGS.fields,
+      createdAt: expect.any(Number)
+    })
+
+    expect(result.isError).toBeUndefined()
+    const text = resultText(result)
+    expect(text).toContain('User submitted the requested form.')
+    expect(text).toContain('Sensitive values are stored encrypted')
+    expect(text).toContain(`- username: alice`)
+    expect(text).toContain(`- password: ${placeholder}`)
+    expect(text).toContain('- scope: (not provided)')
+    expect(result.details).toStrictEqual({
+      type: 'ask',
+      question: 'Enter registry credentials',
+      selections: [],
+      fields: [
+        { key: 'username', label: 'Username', type: 'text', value: 'alice' },
+        { key: 'password', label: 'Password', type: 'secret', value: placeholder },
+        { key: 'scope', label: 'Scope', type: 'text' }
+      ]
+    })
+  })
+
+  it('FM-2 仅含 text 字段时不输出敏感占位符提示', async () => {
+    const { requestUserInput } = channel(() => ({
+      kind: 'form',
+      values: { host: 'example.com' }
+    }))
+    const { result } = await invokeTool(createAskTool({ requestUserInput }), {
+      question: 'Target host',
+      fields: [{ key: 'host', label: 'Host', type: 'text' }]
+    })
+    expect(resultText(result)).not.toContain('Sensitive values are stored encrypted')
+    expect(resultText(result)).toContain('- host: example.com')
+  })
+
+  it('FM-3 表单模式下用户走 other 反馈或 unattended 无人值守', async () => {
+    const { requestUserInput: otherCh } = channel(() => ({
+      kind: 'other',
+      text: 'Read it from ~/.npmrc instead'
+    }))
+    const otherRes = await invokeTool(createAskTool({ requestUserInput: otherCh }), FORM_ARGS)
+    expect(otherRes.result).toStrictEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'User did not fill the form and responded with feedback instead:\nRead it from ~/.npmrc instead'
+        }
+      ],
+      details: {
+        type: 'ask',
+        question: 'Enter registry credentials',
+        selections: [],
+        other: 'Read it from ~/.npmrc instead'
+      }
+    })
+
+    const { requestUserInput: unattendedCh } = channel(() => ({
+      kind: 'cancel',
+      reason: 'unattended'
+    }))
+    const unattendedRes = await invokeTool(
+      createAskTool({ requestUserInput: unattendedCh }),
+      FORM_ARGS
+    )
+    expect(unattendedRes.result.isError).toBeUndefined()
+    expect(isUnattendedResult(resultText(unattendedRes.result))).toBe(true)
+  })
+
+  it('FM-4 参数校验：options 与 fields 必须二选一、key 不可为空或重复', async () => {
+    const tool = createAskTool({ requestUserInput: vi.fn() })
+
+    const neither = await invokeTool(tool, { question: 'Empty' })
+    expect(neither.result.isError).toBe(true)
+
+    const both = await invokeTool(tool, { ...ARGS, fields: FORM_ARGS.fields })
+    expect(both.result.isError).toBe(true)
+
+    const dupKey = await invokeTool(tool, {
+      question: 'Dup',
+      fields: [
+        { key: 'token', label: 'A', type: 'secret' },
+        { key: 'token', label: 'B', type: 'secret' }
+      ]
+    })
+    expect(dupKey.result.isError).toBe(true)
+    expect(resultText(dupKey.result)).toContain('Duplicate form field key')
+
+    const emptyKey = await invokeTool(tool, {
+      question: 'Blank key',
+      fields: [{ key: '   ', label: 'A', type: 'secret' }]
+    })
+    expect(emptyKey.result.isError).toBe(true)
+  })
+})

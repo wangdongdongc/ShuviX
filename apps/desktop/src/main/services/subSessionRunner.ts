@@ -531,7 +531,9 @@ class SubSessionRunner {
               options: request.options.map((o) => ({ label: o.label, description: o.description })),
               answerable
             }
-          : { id: request.id, kind: 'approval', summary: approvalSummary(request) }
+          : request.kind === 'form'
+            ? { id: request.id, kind: 'approval', summary: request.question }
+            : { id: request.id, kind: 'approval', summary: approvalSummary(request) }
     )
   }
 

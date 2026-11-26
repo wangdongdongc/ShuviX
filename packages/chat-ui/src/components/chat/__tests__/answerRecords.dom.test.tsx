@@ -386,4 +386,29 @@ describe('AskRecord', () => {
     expect(toggle()!.classList.contains('min-h-8')).toBe(false)
     expect(toggle()!.classList.contains('text-sm')).toBe(false)
   })
+
+  it('AR-24 表单记录：折叠态显示已提交项数，展开态逐项显示明文、未填写与脱敏占位符胶囊', () => {
+    record(
+      DETAILS({
+        question: 'Enter credentials',
+        selections: [],
+        fields: [
+          { key: 'username', label: 'Username', type: 'text', value: 'alice' },
+          { key: 'password', label: 'Password', type: 'secret', value: PLACEHOLDER },
+          { key: 'note', label: 'Note', type: 'text' }
+        ]
+      }),
+      {}
+    )
+    expect(q('[data-ask-record-fields]')!.textContent).toContain('2')
+    expect(q('[data-ask-record-none]')).toBeNull()
+    act(() => toggle()!.click())
+    const list = q('[data-ask-record-field-list]')!
+    expect(list.textContent).toContain('Username:')
+    expect(list.textContent).toContain('alice')
+    expect(list.textContent).toContain('Password:')
+    expect(list.textContent).toContain('Note:')
+    expect(list.textContent).toContain('Not provided')
+    expect(chips()).toHaveLength(1)
+  })
 })

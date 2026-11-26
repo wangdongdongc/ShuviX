@@ -544,6 +544,12 @@ export class AgentSession {
       if (claimed && accepted) stashCardValues(this.sessionId, requestId, accepted)
       return claimed
     }
+    if (response.kind === 'form') {
+      const request = this.durable.pendingInputs().find((pending) => pending.id === requestId)
+      if (!request || request.kind !== 'form') return false
+      void this.respondToForm(requestId, request, response, meta)
+      return true
+    }
     if (
       (response.kind === 'other' || response.kind === 'choice') &&
       response.secrets !== undefined
@@ -600,6 +606,64 @@ export class AgentSession {
       rest.kind === 'other'
         ? { ...rest, text }
         : { ...rest, ...(rest.note === undefined ? {} : { note: text }) }
+    if (meta === undefined) this.durable.respondToInput(requestId, answer)
+    else this.durable.respondToInput(requestId, answer, meta)
+  }
+
+  /**
+   * 结构化表单应答（`ask` 工具 `fields` 模式）：按请求里声明的 `fields` 逐项收值，
+   * 所有 `type === 'secret'` 的非空项固定按 `'SECRET'` 类别加密写入会话脱敏表并替换为占位符（fail-closed：
+   * 未启用脱敏或加密失败时不投递、保留卡片）；`type === 'text'` 原样透传。原始敏感值从不进 durable 或模型。
+   */
+  private async respondToForm(
+    requestId: string,
+    request: Extract<InputRequest, { kind: 'form' }>,
+    response: Extract<InputResponse, { kind: 'form' }>,
+    meta?: InputResponseMeta
+  ): Promise<void> {
+    const rawValues = response.values && typeof response.values === 'object' ? response.values : {}
+    const sanitized: Record<string, string> = {}
+    const secretKeys: string[] = []
+    const secretInputs: UserSecret[] = []
+    for (const field of request.fields) {
+      const raw = rawValues[field.key]
+      const value = typeof raw === 'string' ? raw : ''
+      if (field.type === 'secret' && value.length > 0) {
+        secretKeys.push(field.key)
+        secretInputs.push({ value, category: 'SECRET' })
+      } else {
+        sanitized[field.key] = value
+      }
+    }
+
+    if (secretInputs.length > 0) {
+      const notDelivered = (reason: string): void => {
+        log.error(
+          `session ${this.sessionId}: a form answer with sensitive values was not delivered: ${reason}`
+        )
+        chatFrontendRegistry.broadcast({
+          type: 'error',
+          sessionId: this.sessionId,
+          error: `The answer was not sent: ${reason}`
+        })
+      }
+      const redaction = this.durable.redaction
+      if (redaction === undefined) {
+        notDelivered('hiding sensitive values from the model is not available in this session')
+        return
+      }
+      try {
+        const placeholders = await redaction.registerSecrets(secretInputs)
+        secretKeys.forEach((key, index) => {
+          sanitized[key] = placeholders[index] ?? ''
+        })
+      } catch (error) {
+        notDelivered(error instanceof Error ? error.message : String(error))
+        return
+      }
+    }
+
+    const answer: InputResponse = { ...response, values: sanitized }
     if (meta === undefined) this.durable.respondToInput(requestId, answer)
     else this.durable.respondToInput(requestId, answer, meta)
   }

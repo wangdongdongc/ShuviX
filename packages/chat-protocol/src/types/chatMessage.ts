@@ -291,11 +291,21 @@ export interface LsToolDetails {
   persisted?: boolean
 }
 
+/** ask 工具表单回答中的一项记录（secret 字段的 value 已是脱敏占位符） */
+export interface AskFormFieldRecord {
+  key: string
+  label: string
+  type: 'text' | 'secret'
+  value?: string
+}
+
 /** ask 工具详情 */
 export interface AskToolDetails {
   type: 'ask'
   question: string
   selections: string[]
+  /** 表单模式提交的各字段记录（secret 字段存的是脱敏占位符） */
+  fields?: AskFormFieldRecord[]
   /**
    * 答题方写的一段话：`selections` 为空时是「其它」，不为空时是勾选之外的补充。
    * 旧会话的「其它」回答没有这一项，那段话只在工具结果的文字里
