@@ -780,6 +780,60 @@ describe('会话脱敏', () => {
           broken.registerSecrets([{ value: 'top-secret', category: 'SECRET' }])
         ).rejects.toThrow('vault locked')
       })
+
+      it('AF-08 多行 PEM 私钥与含引号/$ 的特殊字符在 restoreJson（含 posix 命令引号转义）中准确还原', async () => {
+        const { redaction } = await rig('af08')
+        const pem =
+          '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\n-----END PRIVATE KEY-----'
+        const special = `p@ss'with"$VAR`
+        const [pPem, pSpecial] = await redaction.registerSecrets([
+          { value: pem, category: 'SECRET' },
+          { value: special, category: 'SECRET' }
+        ])
+        expect(pPem).toMatch(/^\{\{REDACTED_SECRET_[a-z2-7]{8}\}\}$/)
+        expect(pSpecial).toMatch(/^\{\{REDACTED_SECRET_[a-z2-7]{8}\}\}$/)
+
+        // 普通字段：原文还原（含换行与引号/$）
+        const plain = await redaction.restoreJson({ content: pPem, password: pSpecial })
+        expect(plain.value).toEqual({ content: pem, password: special })
+        expect(plain.restored).toEqual(['SECRET'])
+        expect(plain.unavailable).toEqual([])
+
+        // posix 命令字段：按引号环境安全转义
+        const cmd = await redaction.restoreJson(
+          { command: `echo "${pSpecial}" '${pSpecial}' ${pSpecial}`, note: pPem },
+          { field: 'command', dialect: 'posix' }
+        )
+        expect(cmd.value).toEqual({
+          command: `echo "p@ss'with\\"\\$VAR" 'p@ss'\\''with"$VAR' 'p@ss'\\''with"$VAR'`,
+          note: pem
+        })
+        expect(cmd.restored).toEqual(['SECRET'])
+        expect(cmd.unavailable).toEqual([])
+      })
+
+      it('AF-09 会话脱敏表不跨会话：会话 A registerSecrets 写入的占位符在会话 B 中无法还原', async () => {
+        const t = await makeHost({ ephemeral: ['af09-a', 'af09-b'], redaction: host })
+        const sessionA = await t.open('af09-a')
+        const sessionB = await t.open('af09-b')
+
+        const [placeholder] = await sessionA.redaction!.registerSecrets([
+          { value: 'session-a-only-secret', category: 'SECRET' }
+        ])
+        expect(placeholder).toMatch(/^\{\{REDACTED_SECRET_[a-z2-7]{8}\}\}$/)
+
+        // 会话 A 自己可以还原
+        expect(await sessionA.redaction!.restoreJson({ token: placeholder })).toMatchObject({
+          value: { token: 'session-a-only-secret' },
+          restored: ['SECRET'],
+          unavailable: []
+        })
+
+        // 会话 B 无法还原，原样返回且 restored 为空
+        const inB = await sessionB.redaction!.restoreJson({ token: placeholder })
+        expect(inB.value).toEqual({ token: placeholder })
+        expect(inB.restored).toEqual([])
+      })
     })
   })
 })

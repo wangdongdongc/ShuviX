@@ -592,5 +592,128 @@ describe('ASK 表单模式（fields）', () => {
       fields: [{ key: '   ', label: 'A', type: 'secret' }]
     })
     expect(emptyKey.result.isError).toBe(true)
+
+    // AF-04: 空数组 fields: [] / options: [] 与 trim 后重复 key
+    const emptyFields = await invokeTool(tool, { question: 'Empty fields', fields: [] })
+    expect(emptyFields.result.isError).toBe(true)
+
+    const emptyOptions = await invokeTool(tool, { question: 'Empty options', options: [] })
+    expect(emptyOptions.result.isError).toBe(true)
+
+    const trimmedDupKey = await invokeTool(tool, {
+      question: 'Trimmed dup',
+      fields: [
+        { key: 'token', label: 'A', type: 'secret' },
+        { key: ' token ', label: 'B', type: 'secret' }
+      ]
+    })
+    expect(trimmedDupKey.result.isError).toBe(true)
+    expect(resultText(trimmedDupKey.result)).toContain('Duplicate form field key')
+  })
+
+  it('AF-02 表单字段可选属性 multiline / required / description / placeholder 透传进请求', async () => {
+    const richFields = [
+      {
+        key: 'pem',
+        label: 'Private Key',
+        type: 'secret' as const,
+        description: 'Paste PEM block',
+        multiline: true,
+        required: true,
+        placeholder: '-----BEGIN PRIVATE KEY-----'
+      },
+      {
+        key: 'note',
+        label: 'Note',
+        type: 'text' as const,
+        description: 'Optional remarks',
+        multiline: false,
+        required: false,
+        placeholder: 'e.g. prod'
+      }
+    ]
+    const { requestUserInput } = channel(() => ({
+      kind: 'form',
+      values: { pem: '{{REDACTED_SECRET_11223344}}', note: 'prod' }
+    }))
+    const { result } = await invokeTool(
+      createAskTool({ requestUserInput }),
+      { question: 'Upload key', fields: richFields },
+      { callId: 'call-form-rich' }
+    )
+    expect(result.isError).toBeUndefined()
+    expect(requestUserInput.mock.calls[0][0]).toStrictEqual({
+      id: 'call-form-rich',
+      kind: 'form',
+      toolName: 'ask',
+      conversationId: expect.any(Number),
+      question: 'Upload key',
+      fields: richFields,
+      createdAt: expect.any(Number)
+    })
+  })
+
+  it('AF-03 secret 字段全为选填且留空时不输出敏感占位符加密提示', async () => {
+    const { requestUserInput } = channel(() => ({
+      kind: 'form',
+      values: { host: 'db.local', token: '' }
+    }))
+    const { result } = await invokeTool(createAskTool({ requestUserInput }), {
+      question: 'Optional token',
+      fields: [
+        { key: 'host', label: 'Host', type: 'text' },
+        { key: 'token', label: 'API Token', type: 'secret', required: false }
+      ]
+    })
+    expect(result.isError).toBeUndefined()
+    const text = resultText(result)
+    expect(text).not.toContain('Sensitive values are stored encrypted')
+    expect(text).toContain('- host: db.local')
+    expect(text).toContain('- token: (not provided)')
+    expect(result.details).toStrictEqual({
+      type: 'ask',
+      question: 'Optional token',
+      selections: [],
+      fields: [
+        { key: 'host', label: 'Host', type: 'text', value: 'db.local' },
+        { key: 'token', label: 'API Token', type: 'secret' }
+      ]
+    })
+  })
+
+  it.each(['aborted', 'closed', 'superseded'] as const)(
+    'AF-05 表单模式收到 cancel(%s) → isError，文字为 abortError',
+    async (reason) => {
+      const { requestUserInput } = channel(() => ({ kind: 'cancel', reason }))
+      const { result } = await invokeTool(
+        createAskTool({ requestUserInput, abortError: 'FORM_ABORTED' }),
+        FORM_ARGS
+      )
+      expect(result).toStrictEqual({
+        isError: true,
+        content: [{ type: 'text', text: 'FORM_ABORTED' }]
+      })
+    }
+  )
+
+  it('AF-05 表单模式收到意外 kind（如 choice）返回错误文本；abortSignal 中止优先抛错', async () => {
+    const { requestUserInput: wrongKindCh } = channel(() => ({
+      kind: 'choice',
+      selections: ['A']
+    }))
+    const wrongRes = await invokeTool(createAskTool({ requestUserInput: wrongKindCh }), FORM_ARGS)
+    expect(wrongRes.result).toStrictEqual({
+      content: [{ type: 'text', text: 'User input error: unexpected response kind' }],
+      details: { type: 'ask', question: FORM_ARGS.question, selections: [] }
+    })
+
+    const ac = new AbortController()
+    const abortingCh = vi.fn(async (): Promise<InputResponse> => {
+      ac.abort()
+      return { kind: 'form', values: { username: 'alice', password: 'x', scope: '' } }
+    })
+    await expect(
+      invokeTool(createAskTool({ requestUserInput: abortingCh }), FORM_ARGS, { signal: ac.signal })
+    ).rejects.toBeDefined()
   })
 })

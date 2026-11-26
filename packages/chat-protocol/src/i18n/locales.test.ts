@@ -516,4 +516,30 @@ describe('i18n 语言包', () => {
       for (const key of REMOVED) expect(present.has(key), `${lang} ${key}`).toBe(false)
     }
   })
+
+  /**
+   * AF-23：ask 结构化表单（text + secret）新增的 6 个 pendingInputs 键与敏感输入显隐按钮 2 个键在三语中齐全非空。
+   */
+  it('AF-23 pendingInputs 表单 6 键（recordSubmittedFields 恰插 {{count}}）与 input.secretHide / secretShow 三语齐全非空', () => {
+    const FORM_KEYS = [
+      'pendingInputs.formSecretHint',
+      'pendingInputs.formSecretBadge',
+      'pendingInputs.formSubmit',
+      'pendingInputs.otherPlaceholderForm',
+      'pendingInputs.recordSubmittedFields',
+      'pendingInputs.recordNotProvided',
+      'input.secretHide',
+      'input.secretShow'
+    ]
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of FORM_KEYS) {
+        const text = leaf(bundle, key)
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} ${key}`).toEqual(
+          key === 'pendingInputs.recordSubmittedFields' ? ['count'] : []
+        )
+      }
+      expect(leaf(bundle, 'input.secretHide'), lang).not.toBe(leaf(bundle, 'input.secretShow'))
+    }
+  })
 })

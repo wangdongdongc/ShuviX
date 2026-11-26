@@ -90,6 +90,33 @@ describe('通知决策器 — 三个触发点', () => {
     expect(h.dismissed).toEqual(['ask:req-1'])
   })
 
+  it('AF-14 后台会话表单询问挂起时弹 kind: ask 通知含 question，askResolved 后撤回', () => {
+    const h = makeCenter()
+    h.titles.set(ROOT, '部署会话')
+    const formReq: InputRequest = {
+      id: 'form-1',
+      kind: 'form',
+      toolName: 'ask',
+      question: 'Enter deploy token',
+      fields: [{ key: 'token', label: 'Token', type: 'secret' }],
+      createdAt: 0
+    }
+
+    h.center.askRaised(ROOT, formReq)
+    expect(h.shown).toHaveLength(1)
+    expect(h.shown[0]).toMatchObject({
+      key: 'ask:form-1',
+      kind: 'ask',
+      sessionId: ROOT,
+      title: '部署会话',
+      requestId: 'form-1',
+      body: 'notification.askBody|Enter deploy token'
+    })
+
+    h.center.askResolved(ROOT, 'form-1')
+    expect(h.dismissed).toEqual(['ask:form-1'])
+  })
+
   it('一轮正常跑完弹完成，出错弹失败，用户中止不弹', () => {
     const h = makeCenter()
 

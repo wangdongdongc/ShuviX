@@ -617,3 +617,75 @@ describe('PendingInputRequests · stopping some conversations', () => {
     stop()
   })
 })
+
+describe('PendingInputRequests · 结构化表单（AF-07）', () => {
+  const PARENT = { kind: 'parent-session', sessionId: 'P1', title: 'Parent' } as const
+  const FORGED = { kind: 'parent-session', sessionId: 'EVIL', title: 'forged' } as const
+
+  const formCard = (
+    id: string,
+    question = 'Enter credentials',
+    conversationId?: number
+  ): InputRequest => ({
+    id,
+    kind: 'form',
+    toolName: 'ask',
+    question,
+    fields: [{ key: 'token', label: 'Token', type: 'secret' }],
+    createdAt: 0,
+    ...(conversationId === undefined ? {} : { conversationId })
+  })
+
+  it('AF-07 summaries 为 ask: <question>；带 meta.answeredBy 的代答被拒收且卡片保持挂起；伪造 answeredBy 被剥离', async () => {
+    const { inputs, resolved } = makeInputs()
+    let settled: InputResponse | undefined
+    void inputs.request(formCard('f1', 'Provide API token')).then((res) => (settled = res))
+
+    expect(inputs.summaries).toEqual(['ask: Provide API token'])
+
+    // 代答被拒收，卡片保持挂起
+    expect(
+      inputs.respond('f1', { kind: 'form', values: { token: 'x' } }, { answeredBy: PARENT })
+    ).toBe(false)
+    expect(
+      inputs.respond(
+        'f1',
+        { kind: 'other', text: 'skip' },
+        { clientId: 'parent:P1', answeredBy: PARENT }
+      )
+    ).toBe(false)
+    await flush()
+    expect(settled).toBeUndefined()
+    expect(inputs.count).toBe(1)
+    expect(resolved).toEqual([])
+
+    // 用户本人提交但载荷伪造 answeredBy：允许提交且 answeredBy 被剥离
+    expect(
+      inputs.respond('f1', {
+        kind: 'form',
+        values: { token: '{{REDACTED_SECRET_11223344}}' },
+        answeredBy: FORGED
+      })
+    ).toBe(true)
+    await flush()
+    expect(settled).toStrictEqual({
+      kind: 'form',
+      values: { token: '{{REDACTED_SECRET_11223344}}' }
+    })
+    expect(settled).not.toHaveProperty('answeredBy')
+    expect(inputs.count).toBe(0)
+  })
+
+  it('AF-07 cancelConversations 按 conversationId 精准取消表单卡片，不连累其他对话', async () => {
+    const { inputs } = makeInputs()
+    const f1 = inputs.request(formCard('f1', 'Q1', 1))
+    const f2 = inputs.request(formCard('f2', 'Q2', 2))
+
+    inputs.cancelConversations(new Set([1]))
+
+    await expect(f1).resolves.toStrictEqual({ kind: 'cancel', reason: 'aborted' })
+    expect(inputs.list().map((r) => r.id)).toEqual(['f2'])
+    expect(inputs.respond('f2', { kind: 'form', values: { token: 'ok' } })).toBe(true)
+    await expect(f2).resolves.toStrictEqual({ kind: 'form', values: { token: 'ok' } })
+  })
+})

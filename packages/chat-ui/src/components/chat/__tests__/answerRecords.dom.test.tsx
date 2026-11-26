@@ -411,4 +411,20 @@ describe('AskRecord', () => {
     expect(list.textContent).toContain('Not provided')
     expect(chips()).toHaveLength(1)
   })
+
+  it('AF-21 表单询问走 other 回复时展示 [data-ask-record-other]，不展示空表单项数', () => {
+    record(
+      DETAILS({
+        question: 'Enter credentials',
+        selections: [],
+        other: 'Read from ~/.netrc instead'
+      }),
+      {
+        fields: [{ key: 'token', label: 'Token', type: 'secret' }]
+      }
+    )
+    expect(q('[data-ask-record-other]')?.textContent).toBe('Read from ~/.netrc instead')
+    expect(q('[data-ask-record-fields]')).toBeNull()
+    expect(q('[data-ask-record-none]')).toBeNull()
+  })
 })

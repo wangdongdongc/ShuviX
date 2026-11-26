@@ -2601,6 +2601,36 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       expect(msg).toContain('Nothing was sent.')
       release()
     })
+
+    it('AF-12 子会话挂起 kind: form 表单时：pendingAsksOf 将其标为不可代答的 approval，父会话 answer 拒绝且挂起卡片不变', async () => {
+      const formAsk: InputRequest = {
+        id: 'f1',
+        kind: 'form',
+        toolName: 'ask',
+        question: 'Enter API credentials',
+        fields: [{ key: 'token', label: 'Token', type: 'secret' }],
+        createdAt: 0
+      }
+      const { res, release } = await inputInWindow(formAsk)
+      expect(res.kind).toBe('input')
+      if (res.kind !== 'input') throw new Error('expected input')
+      expect(res.info?.pendingAsks).toEqual([
+        { id: 'f1', kind: 'approval', summary: 'Enter API credentials' }
+      ])
+
+      const msg = err(await answerReceipt({ askId: 'f1', selections: undefined, message: 'try' }))
+      expect(msg).toBeTruthy()
+      expect(child.respondToInput).not.toHaveBeenCalled()
+      expect(child.asks).toEqual([formAsk])
+
+      // 即使不传 askId，也拒收（没有可代答的 choice）
+      const msgNoId = err(await answerReceipt({ selections: undefined, message: 'try' }))
+      expect(msgNoId).toBeTruthy()
+      expect(child.respondToInput).not.toHaveBeenCalled()
+      expect(child.asks).toEqual([formAsk])
+
+      await finishTurn(release)
+    })
   })
 
   // ── E. steer-sub-session ───────────────────────────────────────

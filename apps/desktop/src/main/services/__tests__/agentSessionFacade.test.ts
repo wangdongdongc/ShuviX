@@ -993,10 +993,11 @@ describe('AgentSession.respondToInput 表单脱敏（kind: form）', () => {
   }
 
   it('RF-1 secret 字段按 SECRET 类别加密换成占位符，text 原样透传，多余键被过滤', async () => {
-    const { durable, session } = facade()
-    durable.pendingRequests = [FORM_REQ]
     const registerSecrets = vi.fn(async () => ['{{REDACTED_SECRET_11223344}}'])
-    durable.redaction = { registerSecrets } as unknown as typeof durable.redaction
+    const { durable, session } = facade({
+      pendingRequests: [FORM_REQ],
+      redaction: { registerSecrets }
+    } as never)
 
     const claimed = session.respondToInput(
       'form-1',
@@ -1031,9 +1032,7 @@ describe('AgentSession.respondToInput 表单脱敏（kind: form）', () => {
   })
 
   it('RF-2 fail-closed：含非空 secret 字段但未启用脱敏或加密失败时，不投递并广播错误', async () => {
-    const { durable, session } = facade()
-    durable.pendingRequests = [FORM_REQ]
-    durable.redaction = undefined
+    const { durable, session } = facade({ pendingRequests: [FORM_REQ] })
 
     expect(
       session.respondToInput('form-1', {
@@ -1047,11 +1046,13 @@ describe('AgentSession.respondToInput 表单脱敏（kind: form）', () => {
 
     // 加密抛错同样 fail-closed
     mocks.broadcast.mockClear()
-    durable.redaction = {
-      registerSecrets: vi.fn(async () => {
-        throw new Error('vault locked')
-      })
-    } as unknown as typeof durable.redaction
+    Object.assign(durable, {
+      redaction: {
+        registerSecrets: vi.fn(async () => {
+          throw new Error('vault locked')
+        })
+      }
+    })
     session.respondToInput('form-1', {
       kind: 'form',
       values: { username: 'alice', password: 'raw-password' }
@@ -1061,14 +1062,12 @@ describe('AgentSession.respondToInput 表单脱敏（kind: form）', () => {
   })
 
   it('RF-3 纯 text 表单在无脱敏时也可正常投递；不存在的 requestId 返回 false', async () => {
-    const { durable, session } = facade()
     const textOnly = {
       ...FORM_REQ,
       id: 'form-text',
       fields: [{ key: 'host', label: 'Host', type: 'text' as const }]
     }
-    durable.pendingRequests = [textOnly]
-    durable.redaction = undefined
+    const { durable, session } = facade({ pendingRequests: [textOnly] })
 
     expect(session.respondToInput('missing', { kind: 'form', values: { host: 'a' } })).toBe(false)
     expect(
@@ -1080,5 +1079,47 @@ describe('AgentSession.respondToInput 表单脱敏（kind: form）', () => {
       'form-text',
       { kind: 'form', values: { host: 'db.local' } }
     ])
+  })
+
+  it('AF-10/AF-11 对非 form 请求提交 FormResponse 返回 false；secret 全为选填留空且无 redaction 时仍正常投递', async () => {
+    const choiceReq = {
+      id: 'choice-1',
+      kind: 'choice' as const,
+      toolName: 'ask',
+      question: 'Pick one',
+      options: [{ label: 'A', description: 'a' }],
+      createdAt: 0
+    }
+    const optionalSecretForm = {
+      id: 'form-opt-secret',
+      kind: 'form' as const,
+      toolName: 'ask',
+      question: 'Optional secret form',
+      fields: [
+        { key: 'host', label: 'Host', type: 'text' as const },
+        { key: 'token', label: 'Token', type: 'secret' as const, required: false }
+      ],
+      createdAt: 0
+    }
+    const { durable, session } = facade({ pendingRequests: [choiceReq, optionalSecretForm] })
+
+    // 对非 form 请求提交 FormResponse → 拒收返回 false
+    expect(session.respondToInput('choice-1', { kind: 'form', values: { a: '1' } })).toBe(false)
+    expect(durable.callsOf('respondToInput')).toHaveLength(0)
+
+    // secret 全为选填留空且无 redaction → 正常投递，不广播错误
+    expect(
+      session.respondToInput('form-opt-secret', {
+        kind: 'form',
+        values: { host: 'db.local', token: '' }
+      })
+    ).toBe(true)
+    await vi.waitFor(() => expect(durable.callsOf('respondToInput')).toHaveLength(1))
+    expect(durable.callsOf('respondToInput')[0]).toEqual([
+      'respondToInput',
+      'form-opt-secret',
+      { kind: 'form', values: { host: 'db.local', token: '' } }
+    ])
+    expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 })

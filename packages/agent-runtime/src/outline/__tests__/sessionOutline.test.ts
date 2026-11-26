@@ -2497,3 +2497,47 @@ describe('O. 人答过的调用（details.shuvixAnswers）', () => {
     ).toHaveLength(2)
   })
 })
+
+describe('P. 挂起的表单询问（AF-13）', () => {
+  const formAsk = (id: string): InputRequest => ({
+    id,
+    kind: 'form',
+    toolName: 'ask',
+    question: 'Enter deploy credentials',
+    fields: [
+      { key: 'user', label: 'Username', type: 'text', description: 'Registry account' },
+      { key: 'token', label: 'API Token', type: 'secret' }
+    ],
+    createdAt: 0
+  })
+
+  it('AF-13 匹配到工具块时输出 ask (waiting for form input, ask_id=...)，且不再重复输出 #ask.<id>', () => {
+    const v = view(
+      [U('1', 'deploy'), A('2', [T('f1', 'ask', { question: 'Enter deploy credentials' })])],
+      {
+        asks: [formAsk('f1')],
+        run: 'busy'
+      }
+    )
+    const res = outline(v, ALL)
+    expect(res.lines).toEqual([
+      '#1 [unattributed] deploy',
+      '#2.0 ask (waiting for form input, ask_id=f1) Enter deploy credentials [Username, API Token]'
+    ])
+  })
+
+  it('AF-13 未匹配到工具块时独立成行 #ask.<id>，展开列出各字段 label / type / description', () => {
+    const v = view([U('1', 'deploy')], { asks: [formAsk('f2')], run: 'busy' })
+    const res = outline(v, ALL)
+    expect(res.lines).toEqual([
+      '#1 [unattributed] deploy',
+      '#ask.f2 ask (waiting for form input, ask_id=f2) Enter deploy credentials [Username, API Token]'
+    ])
+    expect(item(v, '#ask.f2').lines).toEqual([
+      'form (ask_id f2):',
+      'Enter deploy credentials',
+      '- Username (text) — Registry account',
+      '- API Token (secret)'
+    ])
+  })
+})

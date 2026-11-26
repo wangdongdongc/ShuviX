@@ -203,6 +203,22 @@ describe('外框', () => {
     expect(choice.getAttribute('data-pending-card')).toBe('choice')
     expect(choice.classList.contains('border-accent/45')).toBe(true)
     expect(choice.classList.contains('ring-accent/10')).toBe(true)
+
+    // AF-19: form 卡片渲染 data-pending-card="form" 与 accent 外框
+    await mount([
+      {
+        id: 'r-form',
+        kind: 'form',
+        toolName: 'ask',
+        question: 'Enter token',
+        fields: [{ key: 'token', label: 'Token', type: 'secret' }],
+        createdAt: 3
+      }
+    ])
+    const form = container.querySelector('[data-pending-card]')!
+    expect(form.getAttribute('data-pending-card')).toBe('form')
+    expect(form.classList.contains('border-accent/45')).toBe(true)
+    expect(form.classList.contains('ring-accent/10')).toBe(true)
   })
 })
 

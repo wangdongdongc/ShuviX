@@ -517,4 +517,28 @@ describe('PendingInputsPanel：一键提交已填与卡片最后一行', () => {
     await flush()
     expect(batchError()).toBeNull()
   })
+
+  it('AF-19 choice + form 队列步进切换：1/2 choice → 下一条 2/2 form → 上一条回到 choice', async () => {
+    const formReq: InputRequest = {
+      id: 'r-form',
+      kind: 'form',
+      toolName: 'ask',
+      question: 'Enter API token',
+      fields: [{ key: 'token', label: 'Token', type: 'secret' }],
+      createdAt: 5
+    }
+    await mount([CHOICE, formReq])
+    expect(kind()).toBe('choice')
+    expect(counter()).toBe('1/2')
+
+    await step('next')
+    expect(kind()).toBe('form')
+    expect(counter()).toBe('2/2')
+    expect(container.querySelector('[data-form-card="secret"]')).not.toBeNull()
+    expect(container.querySelector('[data-form-question]')?.textContent).toBe('Enter API token')
+
+    await step('prev')
+    expect(kind()).toBe('choice')
+    expect(counter()).toBe('1/2')
+  })
 })

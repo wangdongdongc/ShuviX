@@ -111,8 +111,8 @@ function FormFieldRow({
             <button
               type="button"
               onClick={() => setShown((v) => !v)}
-              title={shown ? t('toolCall.askFieldHide') : t('toolCall.askFieldShow')}
-              aria-label={shown ? t('toolCall.askFieldHide') : t('toolCall.askFieldShow')}
+              title={shown ? t('input.secretHide') : t('input.secretShow')}
+              aria-label={shown ? t('input.secretHide') : t('input.secretShow')}
               className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded text-text-tertiary hover:text-text-primary transition-colors"
             >
               {shown ? <EyeOff size={13} /> : <Eye size={13} />}
@@ -148,8 +148,8 @@ function FormFieldRow({
             <button
               type="button"
               onClick={() => setShown((v) => !v)}
-              title={shown ? t('toolCall.askFieldHide') : t('toolCall.askFieldShow')}
-              aria-label={shown ? t('toolCall.askFieldHide') : t('toolCall.askFieldShow')}
+              title={shown ? t('input.secretHide') : t('input.secretShow')}
+              aria-label={shown ? t('input.secretHide') : t('input.secretShow')}
               className={`flex flex-shrink-0 items-center justify-center text-text-tertiary hover:text-text-primary transition-colors ${
                 touch ? 'h-10 w-10' : 'h-7 w-7'
               }`}
@@ -201,7 +201,7 @@ export function FormInputForm({
   const missingRequired = fields.some((field) => {
     if (field.required === false) return false
     const v = valueOf(field)
-    return (field.multiline ? v : v.trim()).length === 0
+    return v.trim().length === 0
   })
 
   const handleSubmitForm = (): void => {
@@ -209,7 +209,7 @@ export function FormInputForm({
     const values: Record<string, string> = {}
     for (const field of fields) {
       const raw = valueOf(field)
-      values[field.key] = field.multiline ? raw : raw.trim()
+      values[field.key] = field.type === 'secret' || field.multiline ? raw : raw.trim()
     }
     submit.send({ kind: 'form', values })
   }
