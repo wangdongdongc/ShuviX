@@ -193,6 +193,8 @@ export interface ToolExecution {
   messageId?: string
   /** 自动审查正在替用户看这次调用（`tool_review` 事件的本地叠加，PIN-04） */
   reviewing?: boolean
+  /** 运行中发起的嵌套调用列表（如 codemode 内部的工具调用） */
+  nestedCalls?: ToolRunView['nestedCalls']
 }
 
 export const EMPTY_TOOLS: ToolExecution[] = []
@@ -236,7 +238,8 @@ function sameExecution(a: ToolExecution, b: ToolExecution): boolean {
     a.result === b.result &&
     a.details === b.details &&
     a.messageId === b.messageId &&
-    !!a.reviewing === !!b.reviewing
+    !!a.reviewing === !!b.reviewing &&
+    a.nestedCalls === b.nestedCalls
   )
 }
 
@@ -272,7 +275,8 @@ export function deriveToolExecutions(
       ...(block?.result === undefined ? {} : { result: block.result }),
       ...(details === undefined ? {} : { details }),
       ...(hit === undefined ? {} : { messageId: hit.messageId }),
-      ...(status === 'running' && reviewing?.[toolCallId] ? { reviewing: true } : {})
+      ...(status === 'running' && reviewing?.[toolCallId] ? { reviewing: true } : {}),
+      ...(run.nestedCalls === undefined ? {} : { nestedCalls: run.nestedCalls })
     }
     const before = prevById.get(toolCallId)
     if (before !== undefined && sameExecution(before, exec)) {

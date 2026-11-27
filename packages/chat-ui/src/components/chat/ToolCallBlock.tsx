@@ -57,6 +57,7 @@ import {
   isShellCommandDetails,
   toolResultImage
 } from '@shuvix/chat-protocol/types/chatMessage'
+import type { NestedToolRunView } from '@shuvix/chat-protocol/types/sessionView'
 import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -259,7 +260,15 @@ export function ToolCallBlock({
     statusConfig[status]
   )
 
-  const canExpand = !!(args || result || hasEditDiff || streamingArgsText || modelImage)
+  const codemodeCalls = extractCodemodeCalls(liveExec?.nestedCalls, details)
+  const canExpand = !!(
+    args ||
+    result ||
+    hasEditDiff ||
+    streamingArgsText ||
+    modelImage ||
+    codemodeCalls.length > 0
+  )
   // 终端形态：presentation 声明 + 确有命令可渲染，否则降级回通用表单形态
   const isTerminalView =
     presentation?.detailView === 'terminal' && typeof args?.command === 'string'
@@ -410,6 +419,9 @@ export function ToolCallBlock({
                 )}
               </>
             ))}
+
+          {/* 嵌套调用列表（codemode 运行中来自 liveExec.nestedCalls，落盘后来自 details.calls） */}
+          {codemodeCalls.length > 0 && <CodemodeCallsList items={codemodeCalls} />}
 
           {/* 模型收到的那张图：跟在结果之后。只在展开态挂载 —— 见 ToolImageThumb 注释 */}
           {modelImage && <ToolImageThumb image={modelImage} />}
@@ -610,6 +622,93 @@ function TextFormItem({ label, value }: { label?: string; value: unknown }): Rea
       <pre className={DETAIL_PRE_CLASS}>
         <RedactedText text={text} />
       </pre>
+    </div>
+  )
+}
+
+interface CodemodeCallItem {
+  key: string
+  name: string
+  args?: string
+  status: 'running' | 'ok' | 'error'
+  durationMs?: number
+  error?: string
+}
+
+/** 统一抽取嵌套调用：运行中优先看 `liveExec.nestedCalls`，落盘后读 `CodemodeToolDetails.calls` */
+function extractCodemodeCalls(
+  nestedCalls: readonly NestedToolRunView[] | undefined,
+  details: ToolResultDetails | undefined
+): CodemodeCallItem[] {
+  if (nestedCalls && nestedCalls.length > 0) {
+    return nestedCalls.map((item) => ({
+      key: item.callId,
+      name: item.name,
+      status: item.status === 'done' ? (item.isError ? 'error' : 'ok') : 'running',
+      durationMs: item.durationMs,
+      error: item.error
+    }))
+  }
+  const rawCalls = (details as { calls?: unknown } | undefined)?.calls
+  if (!Array.isArray(rawCalls) || rawCalls.length === 0) return []
+  const items: CodemodeCallItem[] = []
+  for (let i = 0; i < rawCalls.length; i++) {
+    const entry = rawCalls[i]
+    if (typeof entry !== 'object' || entry === null) continue
+    const rec = entry as Record<string, unknown>
+    if (typeof rec.name !== 'string') continue
+    const status: CodemodeCallItem['status'] =
+      rec.status === 'ok' ? 'ok' : rec.status === 'running' ? 'running' : 'error'
+    items.push({
+      key: String(rec.id ?? i),
+      name: rec.name,
+      args: typeof rec.args === 'string' ? rec.args : undefined,
+      status,
+      durationMs: typeof rec.durationMs === 'number' ? rec.durationMs : undefined,
+      error: typeof rec.error === 'string' ? rec.error : undefined
+    })
+  }
+  return items
+}
+
+function CodemodeCallsList({ items }: { items: readonly CodemodeCallItem[] }): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div>
+      <div className="text-[10px] text-text-tertiary mb-0.5">
+        {t('toolCall.codemodeCalls', { count: items.length })}
+      </div>
+      <div className="space-y-0.5 rounded border border-border-secondary/40 px-2 py-1 text-[11px]">
+        {items.map((item) => (
+          <div key={item.key} className="flex items-start gap-1.5 leading-snug">
+            <span className="mt-0.5 flex-shrink-0">
+              {item.status === 'running' ? (
+                <Loader2 size={10} className="animate-spin text-accent" />
+              ) : item.status === 'error' ? (
+                <X size={10} className="text-error" />
+              ) : (
+                <Check size={10} className="text-success" />
+              )}
+            </span>
+            <span className="font-mono text-text-primary flex-shrink-0">{item.name}</span>
+            {item.args && (
+              <span className="font-mono text-text-tertiary truncate">
+                {clipLine(item.args, 80)}
+              </span>
+            )}
+            {item.durationMs !== undefined && (
+              <span className="ml-auto text-[10px] text-text-tertiary flex-shrink-0">
+                {item.durationMs}ms
+              </span>
+            )}
+            {item.error && (
+              <span className="text-error truncate" title={item.error}>
+                {clipLine(item.error, 80)}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

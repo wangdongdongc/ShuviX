@@ -59,11 +59,15 @@ extraResources:
     to: tree-sitter/web-tree-sitter.wasm
   - from: ../../node_modules/tree-sitter-bash/tree-sitter-bash.wasm
     to: tree-sitter/tree-sitter-bash.wasm
+  # pi-codemode 的 QuickJS wasm（持久化代码模式沙箱）
+  - from: ../../node_modules/quickjs-wasi/quickjs.wasm
+    to: codemode/quickjs.wasm
 asarUnpack:
   - resources/**
   - out/main/sqlWorker.js
   # 主线程卡顿看门狗的 worker（与 sqlWorker 同策：worker 从解包目录加载）
   - out/main/stallWatchdogWorker.js
+  - out/main/codemodeWorker.js
   - out/main/cli.js
   - out/main/chunks/**
   - node_modules/@vscode/ripgrep/**

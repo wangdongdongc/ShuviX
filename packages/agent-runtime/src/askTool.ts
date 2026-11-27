@@ -113,6 +113,7 @@ export function createAskTool({
     label,
     description: ASK_DESCRIPTION,
     parameters: AskParamsSchema,
+    callers: ['model'],
     replay: 'safe',
     outputLimits: backstopOutputLimits({}),
     execute: (params, api, context) =>

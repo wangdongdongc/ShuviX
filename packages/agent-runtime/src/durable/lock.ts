@@ -340,6 +340,11 @@ export interface AgentLockDeps {
   processRecord: SessionProcessRecord
   /** 内置扩展再带上的 hook（自动脱敏的 afterTool） */
   extraHooks?: readonly HookRegistration[]
+  /** 持久化代码模式扩展与现读开关（已安装到 registry；创建 agent 时按 isEnabled 决定是否纳入） */
+  codemode?: {
+    readonly extension: Extension
+    readonly isEnabled: () => boolean
+  }
 }
 
 /**
@@ -728,10 +733,21 @@ export class AgentLock {
     const seenMessages: readonly Message[] =
       seen === undefined ? [] : (await seen.context(BG)).messages
     cancelled()
-    const tools = orderForMinimalDiff(getCurrentTools(seenMessages), composed.tools)
+    const codemodeActive = this.deps.codemode?.isEnabled() === true
+    const codemodeTools = codemodeActive ? (this.deps.codemode!.extension.tools ?? []) : []
+    const composedTools = [...composed.tools]
+    for (const tool of codemodeTools) {
+      if (!composedTools.some((t) => t.name === tool.name)) composedTools.push(tool)
+    }
+    const tools = orderForMinimalDiff(getCurrentTools(seenMessages), composedTools)
     const builtinExt = builtinExtension(builtin, this.hooks)
     const agentExt = agentExtension(conversation.id, composed.agentTools)
-    const extensions: Extension[] = [builtinExt, ...promptExtensions, agentExt]
+    const extensions: Extension[] = [
+      builtinExt,
+      ...promptExtensions,
+      ...(codemodeActive ? [this.deps.codemode!.extension] : []),
+      agentExt
+    ]
     const mcp: LockRecord['mcp'] = {}
     for (const entry of resolved.mcp ?? []) mcp[entry.server] = [...entry.declarations]
     const record: LockRecord = {
@@ -921,10 +937,13 @@ export class AgentLock {
 
     const name = agentExtensionName(lock.conversationId)
     const previous = registry.snapshot().extension(name)
-    const builtin = new Set(registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)?.tools ?? [])
+    const nonAgent = new Set([
+      ...(registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)?.tools ?? []),
+      ...(this.deps.codemode?.extension.tools ?? [])
+    ])
     const next = agentExtension(
       lock.conversationId,
-      plan.tools.filter((tool) => !builtin.has(tool))
+      plan.tools.filter((tool) => !nonAgent.has(tool))
     )
     try {
       // 先装扩展再提交（与创建同一条纪律）：提交一落定，下一次解析就看得到新工具；提交失败就装回原来那份
@@ -989,7 +1008,8 @@ export class AgentLock {
     const installed = new Map<string, ToolRegistration>()
     for (const extension of [
       snapshot.extension(SHUVIX_BUILTIN_EXTENSION),
-      snapshot.extension(agentExtensionName(lock.conversationId))
+      snapshot.extension(agentExtensionName(lock.conversationId)),
+      ...(this.deps.codemode ? [snapshot.extension(this.deps.codemode.extension.name)] : [])
     ]) {
       for (const tool of extension?.tools ?? []) installed.set(tool.name, tool)
     }

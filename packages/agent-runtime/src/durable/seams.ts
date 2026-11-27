@@ -19,6 +19,7 @@ import type {
   ToolRegistration
 } from '@earendil-works/pi-durable'
 import type { ImageProcessor } from '@earendil-works/pi-durable/tools'
+import type { CodemodeToolOptions } from '@earendil-works/pi-durable/codemode'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { AgentKind, PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
 import type { McpToolDeclaration } from '../mcpManager'
@@ -57,7 +58,23 @@ export const DEFAULT_MAX_IDLE_OPEN = 8
 /** 系统通知自动续跑的合并窗口（几条后台任务同一时刻跑完时只起一轮） */
 export const DEFAULT_NOTICE_COALESCE_MS = 500
 
+/** 宿主注入的持久化代码模式（`pi-durable/codemode`）配置 */
+export interface CodemodeHostConfig {
+  readonly sandbox: CodemodeToolOptions['sandbox']
+  /** 是否在沙箱内暴露 `models.*`（缺省 false：Phase 1 不允许脚本绕过会话直调模型） */
+  readonly models?: boolean
+  /** `codemode` 提示词段落内联 TS 工具声明的 token 预算（缺省 3000） */
+  readonly inlineBudget?: number
+  /** 现读开关：返回 true 时为新创建的 root agent 启用 `codemode`（缺省始终开启） */
+  readonly isEnabled?: () => boolean
+}
+
 export interface SessionHostDeps {
+  /**
+   * 持久化 QuickJS 代码模式（`pi-durable/codemode`）：给了就在每条会话注册表安装 `codemode` 扩展；
+   * 新创建 agent 时按 `isEnabled()` 决定是否把 `codemode` 纳入会话扩展与工具列表。缺省 = 不启用
+   */
+  codemode?: CodemodeHostConfig
   /**
    * 自动脱敏的两把钥匙（占位符签名、对照表加密）：给了，每条会话写入对话记录之前把认出的内容换成占位符，
    * 工具执行前可经 `session.redaction` 换回真值（docs/auto-redaction-design.md）。缺省 = 不脱敏

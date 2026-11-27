@@ -41,6 +41,8 @@ export default defineConfig({
         exclude: [
           '@earendil-works/pi-ai',
           '@earendil-works/pi-durable',
+          '@earendil-works/pi-codemode',
+          '@earendil-works/pi-schema',
           '@earendil-works/chord',
           '@marcbachmann/cel-js',
           // 知识库（OKF）依赖：okf-minisearch 纯 ESM 必须内联；core-okf 是 agent-runtime 的依赖
@@ -73,7 +75,9 @@ export default defineConfig({
           // 产物 out/main/cli.js，由 resources/cli/shuvix-cli{,.cmd} shim 触发
           cli: resolve(__dirname, 'src/cli/index.ts'),
           // 组件宿主：所有 SQLite 组件的 QuickJS 沙箱与数据库连接所在的子进程（services/widget/api/widgetRuntime.ts 拉起）
-          widgetHost: resolve(__dirname, 'src/main/services/widget/api/widgetHost.ts')
+          widgetHost: resolve(__dirname, 'src/main/services/widget/api/widgetHost.ts'),
+          // 持久化代码模式（pi-durable/codemode）的 QuickJS worker 线程入口
+          codemodeWorker: resolve(__dirname, 'src/main/services/codemode/worker.ts')
         }
       }
     }

@@ -24,7 +24,12 @@
  * 不起 jsdom：纯 store 读写。
  */
 import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest'
-import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import type {
+  AgentView,
+  NestedToolRunView,
+  SessionView
+} from '@shuvix/chat-protocol/types/sessionView'
+import { deriveToolExecutions } from '../viewDerivation'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { buildVisibleItems } from '../../components/chat/conversationItems'
 import {
@@ -554,5 +559,50 @@ describe('P3-08-25 legacy 视图（PIN-16）', () => {
     expect(selectIsStreaming(store())).toBe(false)
     expect(selectStreamingContent(store())).toBe('')
     expect(selectSessionRun(store())).toEqual({ state: 'idle' })
+  })
+})
+
+describe('CM-PR-06 deriveToolExecutions 透传 nestedCalls 与结构共享', () => {
+  it('透传 nestedCalls；未变时复用 prev 引用；变化时产出新对象与新数组', () => {
+    const block = toolBlock('cm-1', 'codemode', { code: 'return 1' })
+    const messages = [assistant('a1', [block])]
+    const nested1: NestedToolRunView[] = [{ callId: 'n1', name: 'read', status: 'running' }]
+
+    const view1 = {
+      messages,
+      live: null,
+      toolRuns: { 'cm-1': { status: 'running' as const, nestedCalls: nested1 } }
+    }
+    const execs1 = deriveToolExecutions(view1, undefined)
+    expect(execs1).toHaveLength(1)
+    expect(execs1[0].nestedCalls).toBe(nested1)
+
+    // nestedCalls 引用未变 → 复用整个 prev 数组与条目对象
+    const view1Again = {
+      messages,
+      live: null,
+      toolRuns: { 'cm-1': { status: 'running' as const, nestedCalls: nested1 } }
+    }
+    const execs1Again = deriveToolExecutions(view1Again, undefined, execs1)
+    expect(execs1Again).toBe(execs1)
+    expect(execs1Again[0]).toBe(execs1[0])
+
+    // nestedCalls 变化 → 产出新数组与新条目对象
+    const nested2: NestedToolRunView[] = [
+      { callId: 'n1', name: 'read', status: 'done', isError: false, durationMs: 15 }
+    ]
+    const view2 = {
+      messages,
+      live: null,
+      toolRuns: { 'cm-1': { status: 'running' as const, nestedCalls: nested2 } }
+    }
+    const execs2 = deriveToolExecutions(view2, undefined, execs1)
+    expect(execs2).not.toBe(execs1)
+    expect(execs2[0]).not.toBe(execs1[0])
+    expect(execs2[0].nestedCalls).toBe(nested2)
+
+    // 同步通过 applySessionView + selectToolExecutions 验证端到端透传
+    applySessionView('s1', V('s1', { ...view2, run: { state: 'busy' } }))
+    expect(selectToolExecutions(store())[0].nestedCalls).toEqual(nested2)
   })
 })

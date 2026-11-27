@@ -86,6 +86,7 @@ interface ToolSearchParams {
 export class ToolSearchTool extends BaseTool<typeof ToolSearchParamsSchema> {
   readonly name = TOOL_SEARCH_TOOL_NAME
   readonly label = t(BUILTIN_TOOL_PRESENTATIONS.tool_search.labelKey)
+  readonly callers = ['model'] as const
   readonly description = TOOL_SEARCH_DESCRIPTION
   readonly parameters = ToolSearchParamsSchema
 

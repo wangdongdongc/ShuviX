@@ -44,12 +44,24 @@ export interface RunView {
   compacting?: RunCompactingView
 }
 
+/** 一次嵌套工具调用的实时进度（codemode 等工具通过 `api.executeTool` 发起的子调用） */
+export interface NestedToolRunView {
+  callId: string
+  name: string
+  status: 'pending' | 'running' | 'sleeping' | 'waiting' | 'done'
+  isError?: boolean
+  durationMs?: number
+  error?: string
+}
+
 /** 一次工具调用的实时进度（按 toolCallId 索引）；结果本身回填在消息的工具块上 */
 export interface ToolRunView {
   status: 'pending' | 'running' | 'done'
   /** 运行中保留的输出（有上限） */
   output?: string
   details?: ToolResultDetails
+  /** 运行中发起的嵌套调用列表（`pi.live.nestedTools` 按 parentCallId 归组） */
+  nestedCalls?: NestedToolRunView[]
 }
 
 /** 排队等边界的一条用户输入（系统写的通知不在其中） */

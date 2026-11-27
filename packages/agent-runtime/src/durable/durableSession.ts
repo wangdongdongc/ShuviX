@@ -92,7 +92,12 @@ import {
   type TaskId,
   type UserInput
 } from '@earendil-works/pi-durable'
-import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
+import type {
+  Extension,
+  HarnessSettings,
+  Registry,
+  ToolRegistration
+} from '@earendil-works/pi-durable'
 import { createFitImagesExtension } from '@earendil-works/pi-durable/images/fit'
 import type { ImageProcessor } from '@earendil-works/pi-durable/tools'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
@@ -878,6 +883,11 @@ export interface DurableSessionDeps {
   redactionPolicy?: RedactionPolicy
   /** 工具返回图片的自动适配处理器（`pi-durable/images/fit`）；缺省 = 不启用 */
   imageProcessor?: ImageProcessor
+  /** 持久化代码模式扩展与开关（`pi-durable/codemode`）；缺省 = 不启用 */
+  codemode?: {
+    readonly extension: Extension
+    readonly isEnabled: () => boolean
+  }
 }
 
 interface LiveTask {
@@ -998,6 +1008,7 @@ export class DurableSessionImpl implements DurableSession {
       currentConversation: () => this.currentConversation(),
       stopForDestroy: () => this.stopForDestroy(),
       processRecord: this.processRecord,
+      ...(deps.codemode === undefined ? {} : { codemode: deps.codemode }),
       ...(extraHooks.length === 0 ? {} : { extraHooks })
     })
     this.spawner = new SpawnCoordinatorImpl({

@@ -36,9 +36,11 @@
 import {
   createRegistry,
   Harness,
+  type Extension,
   type Registry,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
+import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode'
 import { SessionManager } from '../sessionManager'
 import type { RuntimeLogger } from '../types'
 import { spawnExtension } from './anchor'
@@ -255,11 +257,22 @@ class SessionHostImpl implements SessionHost {
       if (this.sealedFlag) return undefined
       const storage = await this.deps.openStorage(sessionId)
       let registry: Registry<ToolRegistration>
+      let codemodeExt: Extension | undefined
       try {
         registry = (this.deps.createRegistry ?? (() => createRegistry()))(sessionId)
         for (const extension of this.promptExtensions.all) registry.install(extension)
         // 宿主派发的锚任务（P2-08）：重开时 durable 要按名解析存储里残留的锚
         registry.install(spawnExtension)
+        if (this.deps.codemode !== undefined) {
+          codemodeExt = createCodemodeExtension({
+            sandbox: this.deps.codemode.sandbox,
+            models: this.deps.codemode.models ?? false,
+            ...(this.deps.codemode.inlineBudget === undefined
+              ? {}
+              : { inlineBudget: this.deps.codemode.inlineBudget })
+          })
+          registry.install(codemodeExt)
+        }
       } catch (error) {
         await storage.close(BG).catch(() => undefined)
         throw error
@@ -358,6 +371,14 @@ class SessionHostImpl implements SessionHost {
           ...(this.deps.imageProcessor === undefined
             ? {}
             : { imageProcessor: this.deps.imageProcessor }),
+          ...(codemodeExt === undefined
+            ? {}
+            : {
+                codemode: {
+                  extension: codemodeExt,
+                  isEnabled: this.deps.codemode?.isEnabled ?? (() => true)
+                }
+              }),
           settings
         })
         lockedSession = session

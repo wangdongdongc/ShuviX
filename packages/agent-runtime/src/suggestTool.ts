@@ -113,6 +113,7 @@ export function createSuggestTool({
     label,
     description: presentImages ? SUGGEST_DESCRIPTION_WITH_IMAGES : SUGGEST_DESCRIPTION,
     parameters: presentImages ? SuggestParamsWithImagesSchema : SuggestParamsSchema,
+    callers: ['model'],
     replay: 'safe',
     outputLimits: backstopOutputLimits({}),
     execute: (params, _api, context) =>

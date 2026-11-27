@@ -262,7 +262,19 @@ describe('P3-01 · SessionView types and the JSON guard', () => {
     expectTypeOf<SessionView['toolRuns']>().toEqualTypeOf<
       Record<
         string,
-        { status: 'pending' | 'running' | 'done'; output?: string; details?: ToolResultDetails }
+        {
+          status: 'pending' | 'running' | 'done'
+          output?: string
+          details?: ToolResultDetails
+          nestedCalls?: {
+            callId: string
+            name: string
+            status: 'pending' | 'running' | 'sleeping' | 'waiting' | 'done'
+            isError?: boolean
+            durationMs?: number
+            error?: string
+          }[]
+        }
       >
     >()
     expectTypeOf<SessionView['run']['state']>().toEqualTypeOf<'idle' | 'busy' | 'interrupted'>()

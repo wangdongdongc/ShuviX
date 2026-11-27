@@ -237,6 +237,15 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     presentation: { icon: 'Puzzle', iconColor: '#8b5cf6' },
     buildSummary: (args) => asStr(args.query)
   },
+  codemode: {
+    labelKey: 'tool.codemodeLabel',
+    presentation: {
+      icon: 'Code',
+      iconColor: '#38bdf8',
+      formItems: [{ field: 'code', renderer: { type: 'code', language: 'javascript' } }]
+    },
+    buildSummary: (args) => firstLine(args.code)
+  },
   shuvix: {
     labelKey: 'tool.shuvixLabel',
     presentation: { icon: 'SlidersHorizontal', iconColor: '#3b82f6' },

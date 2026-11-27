@@ -69,6 +69,7 @@ import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   AgentView,
   LiveCard,
+  NestedToolRunView,
   QueuedInputView,
   RunView,
   RunViewState,
@@ -369,7 +370,11 @@ export class ProjectionMemo {
       }
     | undefined
   private toolRuns:
-    | { readonly tools: unknown; readonly value: Record<string, ToolRunView> }
+    | {
+        readonly tools: unknown
+        readonly nestedTools: unknown
+        readonly value: Record<string, ToolRunView>
+      }
     | undefined
   private lastStats: ProjectionMemoStats = { historyReused: false, built: 0, reused: 0 }
 
@@ -493,10 +498,14 @@ export class ProjectionMemo {
   /** @internal */
   toolRunsOf(live: LiveInput): Record<string, ToolRunView> {
     const tools = isRecord(live) && Array.isArray(live.tools) ? live.tools : undefined
+    const nestedTools =
+      isRecord(live) && Array.isArray(live.nestedTools) ? live.nestedTools : undefined
     const last = this.toolRuns
-    if (last !== undefined && last.tools === tools) return last.value
+    if (last !== undefined && last.tools === tools && last.nestedTools === nestedTools) {
+      return last.value
+    }
     const value = toolRunsOf(live)
-    this.toolRuns = { tools, value }
+    this.toolRuns = { tools, nestedTools, value }
     return value
   }
 }
@@ -942,6 +951,14 @@ function liveCardOf(
   }
 }
 
+const NESTED_SLOT_STATUSES: ReadonlySet<unknown> = new Set([
+  'pending',
+  'running',
+  'sleeping',
+  'waiting',
+  'done'
+])
+
 function toolRunsOf(live: LiveInput): Record<string, ToolRunView> {
   const runs = new Map<string, ToolRunView>()
   const slots = isRecord(live) && Array.isArray(live.tools) ? (live.tools as unknown[]) : []
@@ -957,6 +974,32 @@ function toolRunsOf(live: LiveInput): Record<string, ToolRunView> {
       ...(typeof slot.output === 'string' ? { output: slot.output } : {}),
       ...(details === undefined ? {} : { details })
     })
+  }
+  const nestedSlots =
+    isRecord(live) && Array.isArray(live.nestedTools) ? (live.nestedTools as unknown[]) : []
+  for (const slot of nestedSlots) {
+    if (
+      !isRecord(slot) ||
+      typeof slot.callId !== 'string' ||
+      typeof slot.parentCallId !== 'string' ||
+      typeof slot.name !== 'string' ||
+      !NESTED_SLOT_STATUSES.has(slot.status)
+    ) {
+      continue
+    }
+    const parent = runs.get(slot.parentCallId)
+    if (parent === undefined) continue
+    const summary = isRecord(slot.summary) ? slot.summary : undefined
+    const nested: NestedToolRunView = {
+      callId: slot.callId,
+      name: slot.name,
+      status: slot.status as NestedToolRunView['status'],
+      ...(typeof summary?.isError === 'boolean' ? { isError: summary.isError } : {}),
+      ...(typeof summary?.durationMs === 'number' ? { durationMs: summary.durationMs } : {}),
+      ...(typeof summary?.error === 'string' ? { error: summary.error } : {})
+    }
+    if (parent.nestedCalls === undefined) parent.nestedCalls = [nested]
+    else parent.nestedCalls.push(nested)
   }
   return Object.fromEntries(runs)
 }

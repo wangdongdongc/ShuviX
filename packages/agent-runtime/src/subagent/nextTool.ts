@@ -97,6 +97,7 @@ export interface NextToolDetails {
 export class NextTool extends BaseTool<Schema> {
   readonly name = NEXT_TOOL_NAME
   readonly label = NEXT_TOOL_NAME
+  readonly callers = ['model'] as const
   readonly description =
     "Call this exactly once to finish your task. Your arguments ARE the result handed back to the caller and must satisfy this tool's parameter schema. After a successful call the task ends — do not call any other tool afterwards."
   readonly parameters: Schema

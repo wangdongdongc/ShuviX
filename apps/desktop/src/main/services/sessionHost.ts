@@ -46,8 +46,10 @@ import { createLogger } from '../logger'
 import { peekSyncHub, sessionHostHooks } from '../frontend/sync/syncWiring'
 import type { ToolAgentIdentity } from './toolAgent'
 import { electronEventSink } from './agentRuntimeAdapters'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { installSessionSignals } from './sessionSignals'
 import { createElectronImageProcessor } from './nativeImageProcessor'
+import { CODEMODE_ENABLED_KEY, getCodemodeSandbox } from './codemode/sandbox'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { writeSessionMirror } from './sessionMirror'
 import { sessionRecords } from './sessionRecords'
@@ -175,6 +177,14 @@ export function buildSessionHostDeps(
       ),
     // 工具返回图片兜底适配（pi-durable/images/fit）：按当前模型限制校验 MIME、缩放超大图并过滤坏图
     imageProcessor: createElectronImageProcessor(),
+    // 持久化代码模式（pi-durable/codemode，Phase 1）：实验开关开启时为新创建的 root agent 启用，
+    // 沙箱内关闭 models.* 直调，并提供 Node env 供超长输出落临时文件
+    env: (target) => new NodeExecutionEnv({ cwd: target.cwd || process.cwd() }),
+    codemode: {
+      sandbox: getCodemodeSandbox(),
+      models: false,
+      isEnabled: () => settingsService.get(CODEMODE_ENABLED_KEY) === 'true'
+    },
     ...overrides
   }
 }
