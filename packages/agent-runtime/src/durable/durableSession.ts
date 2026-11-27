@@ -93,6 +93,8 @@ import {
   type UserInput
 } from '@earendil-works/pi-durable'
 import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
+import { createFitImagesExtension } from '@earendil-works/pi-durable/images/fit'
+import type { ImageProcessor } from '@earendil-works/pi-durable/tools'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type {
   RebuildSystemPromptResult,
@@ -874,6 +876,8 @@ export interface DurableSessionDeps {
   redaction?: RedactionHost
   /** 自动脱敏的策略：写入时判新内容脱不脱敏（没配 = 按内置策略的默认） */
   redactionPolicy?: RedactionPolicy
+  /** 工具返回图片的自动适配处理器（`pi-durable/images/fit`）；缺省 = 不启用 */
+  imageProcessor?: ImageProcessor
 }
 
 interface LiveTask {
@@ -970,6 +974,14 @@ export class DurableSessionImpl implements DurableSession {
             ...(deps.redactionPolicy === undefined ? {} : { policy: deps.redactionPolicy }),
             logger: deps.logger
           })
+    const extraHooks = [
+      ...(this.redaction === undefined
+        ? []
+        : [redactionToolHook(this.redaction, deps.logger), redactionRequestHook(this.redaction)]),
+      ...(deps.imageProcessor === undefined
+        ? []
+        : (createFitImagesExtension(deps.imageProcessor).hooks ?? []))
+    ]
     this.agentLock = new AgentLock({
       sessionId: deps.sessionId,
       harness: deps.harness,
@@ -986,14 +998,7 @@ export class DurableSessionImpl implements DurableSession {
       currentConversation: () => this.currentConversation(),
       stopForDestroy: () => this.stopForDestroy(),
       processRecord: this.processRecord,
-      ...(this.redaction === undefined
-        ? {}
-        : {
-            extraHooks: [
-              redactionToolHook(this.redaction, deps.logger),
-              redactionRequestHook(this.redaction)
-            ]
-          })
+      ...(extraHooks.length === 0 ? {} : { extraHooks })
     })
     this.spawner = new SpawnCoordinatorImpl({
       sessionId: deps.sessionId,

@@ -101,10 +101,18 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
 
       const sending = session.submitUser(ROOT_TEXT)
       await withTimeout(summary.reached, 8000, 'summary request')
+      // pi-durable 1.6.1 modelOverrides：根会话保留自己的大窗口阈值，小窗口子 agent 走独立的 modelOverrides
       expect(settingsWhileChildRuns).toEqual({
-        reserveTokens: 750,
-        backgroundTokens: 750,
-        keepRecentTokens: 750
+        reserveTokens: 10000,
+        backgroundTokens: 10000,
+        keepRecentTokens: 10000,
+        modelOverrides: {
+          'faux/tiny': {
+            reserveTokens: 750,
+            backgroundTokens: 750,
+            keepRecentTokens: 750
+          }
+        }
       })
       const request = world.model.summaries[0]!
       expect(request.modelId).toBe('tiny')

@@ -18,6 +18,7 @@
  */
 import type {
   CompactionPolicy,
+  CompactionSettings,
   ConversationRetryPolicy,
   ConversationStreamOptions,
   Extension,
@@ -70,11 +71,18 @@ export function compactionKeepRecentTokens(contextWindow: number | undefined): n
 export interface ShuviXSettingsOverrides {
   readonly stream?: ConversationStreamOptions
   readonly retry?: Partial<ConversationRetryPolicy>
-  readonly compaction?: Partial<CompactionPolicy>
+  readonly compaction?: CompactionSettings
   readonly toolExecution?: ToolExecutionMode
   readonly steeringMode?: QueueMode
   readonly followUpMode?: QueueMode
   readonly extensions?: readonly Extension[]
+}
+
+/** 某个在跑模型的上下文窗口（供 `compaction.modelOverrides` 按模型独立计算压缩阈值） */
+export interface LiveModelContextWindow {
+  /** `"provider/modelId"`，与 pi-durable `CompactionSettings.modelOverrides` 的键一致 */
+  readonly key: string
+  readonly contextWindow: number | undefined
 }
 
 export interface ShuviXSettingsOptions {
@@ -84,8 +92,12 @@ export interface ShuviXSettingsOptions {
    */
   readonly contextWindow?: () => number | undefined
   /**
-   * 此刻在跑的派生 agent 模型的上下文窗口（Q-P2-08，PIN-08）：压缩余量按「锁定模型 + 这些」里最小的
-   * 那个算。同步读取；未知的项（undefined / 非有限正数）忽略；读取抛错 = 都未知。
+   * 此刻在跑的派生 agent 模型的上下文窗口（按 `"provider/modelId"` 独立映射进 `compaction.modelOverrides`），
+   * 使大窗口根会话与小窗口子 agent 各自按自己的上下文窗口压缩，互不拖累。
+   */
+  readonly liveModelContextWindows?: () => readonly LiveModelContextWindow[]
+  /**
+   * 旧版兼容（未提供 `liveModelContextWindows` 时生效）：压缩余量按「锁定模型 + 这些」里最小的那个算。
    */
   readonly liveContextWindows?: () => readonly (number | undefined)[]
   /** 逐段覆盖；每次读取时现读，改了下一次判定就生效 */
@@ -100,13 +112,16 @@ export function createShuviXSettings(options: ShuviXSettingsOptions = {}): Harne
   }
   const known = (value: unknown): value is number =>
     typeof value === 'number' && Number.isFinite(value) && value > 0
-  const contextWindow = (): number | undefined => {
-    let lock: number | undefined
+  const readRootWindow = (): number | undefined => {
     try {
-      lock = options.contextWindow?.()
+      return options.contextWindow?.()
     } catch {
-      lock = undefined
+      return undefined
     }
+  }
+  const contextWindow = (): number | undefined => {
+    const lock = readRootWindow()
+    if (options.liveModelContextWindows !== undefined) return lock
     let live: readonly (number | undefined)[] = []
     try {
       live = options.liveContextWindows?.() ?? []
@@ -126,14 +141,43 @@ export function createShuviXSettings(options: ShuviXSettingsOptions = {}): Harne
     get retry() {
       return { ...SHUVIX_RETRY_POLICY, ...overrides().retry }
     },
-    get compaction() {
+    get compaction(): CompactionSettings {
       const window = contextWindow()
       const reserve = compactionReserveTokens(window)
+      const override = overrides().compaction
+      const { modelOverrides: overrideModels, ...overrideBase } = override ?? {}
+      let modelOverrides: Record<string, Partial<CompactionPolicy>> | undefined
+      if (options.liveModelContextWindows !== undefined) {
+        let entries: readonly LiveModelContextWindow[] = []
+        try {
+          entries = options.liveModelContextWindows()
+        } catch {
+          entries = []
+        }
+        for (const entry of entries) {
+          if (!entry.key || !known(entry.contextWindow)) continue
+          const childReserve = compactionReserveTokens(entry.contextWindow)
+          modelOverrides ??= {}
+          modelOverrides[entry.key] = {
+            keepRecentTokens: compactionKeepRecentTokens(entry.contextWindow),
+            reserveTokens: childReserve,
+            backgroundTokens: childReserve,
+            ...overrideBase
+          }
+        }
+      }
+      if (overrideModels !== undefined) {
+        modelOverrides ??= {}
+        for (const [key, policy] of Object.entries(overrideModels)) {
+          modelOverrides[key] = { ...modelOverrides[key], ...policy }
+        }
+      }
       return {
         keepRecentTokens: compactionKeepRecentTokens(window),
         reserveTokens: reserve,
         backgroundTokens: reserve,
-        ...overrides().compaction
+        ...overrideBase,
+        ...(modelOverrides === undefined ? {} : { modelOverrides })
       }
     },
     get toolExecution() {

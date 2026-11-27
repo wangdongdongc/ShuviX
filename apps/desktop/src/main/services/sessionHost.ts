@@ -47,6 +47,7 @@ import { peekSyncHub, sessionHostHooks } from '../frontend/sync/syncWiring'
 import type { ToolAgentIdentity } from './toolAgent'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { installSessionSignals } from './sessionSignals'
+import { createElectronImageProcessor } from './nativeImageProcessor'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { writeSessionMirror } from './sessionMirror'
 import { sessionRecords } from './sessionRecords'
@@ -172,6 +173,8 @@ export function buildSessionHostDeps(
       redactionDecision(request, (sessionId, conversationId) =>
         sessionOf(sessionId)?.agentIdentity(conversationId)
       ),
+    // 工具返回图片兜底适配（pi-durable/images/fit）：按当前模型限制校验 MIME、缩放超大图并过滤坏图
+    imageProcessor: createElectronImageProcessor(),
     ...overrides
   }
 }

@@ -17,10 +17,13 @@ import {
   compactionReserveTokens,
   createShuviXSettings,
   SHUVIX_RETRY_POLICY,
-  SHUVIX_STREAM_OPTIONS
+  SHUVIX_STREAM_OPTIONS,
+  type LiveModelContextWindow,
+  type ShuviXSettingsOverrides
 } from '../settings'
-import { answer, modelError } from './support/faux'
+import { answer, fauxKit, held, modelError } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from './support/host'
+import { callAgent, hostD } from './support/spawn'
 import { waitFor, withTimeout } from './support/wait'
 
 registerHostCleanup()
@@ -249,5 +252,303 @@ describe('ShuviX settings · live spawned windows (P2-03, Q-P2-08 / PIN-08)', ()
       overrides: { compaction: { reserveTokens: 123 } }
     })
     expect(window(settings)).toEqual([123, 2000, 2000])
+  })
+})
+
+describe('ShuviX settings · per-model compaction overrides (modelOverrides)', () => {
+  it('C-01 root 200k + single sub-agent 32k → root stays 32768/32768/20000, sub gets 8000/8000/8000', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [{ key: 'p/sub-32k', contextWindow: 32_000 }]
+    }).compaction
+    expect(compaction).toEqual({
+      reserveTokens: 32_768,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000,
+      modelOverrides: {
+        'p/sub-32k': {
+          reserveTokens: 8000,
+          backgroundTokens: 8000,
+          keepRecentTokens: 8000
+        }
+      }
+    })
+  })
+
+  it('C-02 multiple parallel sub-agents with different windows → each computed independently', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [
+        { key: 'p/sub-16k', contextWindow: 16_000 },
+        { key: 'p/sub-128k', contextWindow: 128_000 },
+        { key: 'p/sub-200k', contextWindow: 200_000 }
+      ]
+    }).compaction
+    expect(compaction?.modelOverrides).toEqual({
+      'p/sub-16k': { reserveTokens: 4000, backgroundTokens: 4000, keepRecentTokens: 4000 },
+      'p/sub-128k': { reserveTokens: 32_000, backgroundTokens: 32_000, keepRecentTokens: 20_000 },
+      'p/sub-200k': { reserveTokens: 32_768, backgroundTokens: 32_768, keepRecentTokens: 20_000 }
+    })
+  })
+
+  it('C-03 unknown root window + 8k sub-agent → root keeps defaults, sub-agent gets 2000/2000/2000', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => undefined,
+      liveModelContextWindows: () => [{ key: 'p/sub-8k', contextWindow: 8000 }]
+    }).compaction
+    expect(compaction).toEqual({
+      reserveTokens: 32_768,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000,
+      modelOverrides: {
+        'p/sub-8k': { reserveTokens: 2000, backgroundTokens: 2000, keepRecentTokens: 2000 }
+      }
+    })
+  })
+
+  it('C-04 live sub-agent models change dynamically (start → switch → clear)', () => {
+    let live: LiveModelContextWindow[] = []
+    const settings = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => live
+    })
+    expect(settings.compaction?.modelOverrides).toBeUndefined()
+
+    live = [{ key: 'p/a', contextWindow: 32_000 }]
+    expect(settings.compaction?.modelOverrides).toEqual({
+      'p/a': { reserveTokens: 8000, backgroundTokens: 8000, keepRecentTokens: 8000 }
+    })
+
+    live = [{ key: 'p/b', contextWindow: 16_000 }]
+    expect(settings.compaction?.modelOverrides).toEqual({
+      'p/b': { reserveTokens: 4000, backgroundTokens: 4000, keepRecentTokens: 4000 }
+    })
+
+    live = []
+    expect(settings.compaction?.modelOverrides).toBeUndefined()
+  })
+
+  it('C-05 invalid windows and empty key are ignored; all invalid → modelOverrides undefined', () => {
+    const invalid: LiveModelContextWindow[] = [
+      { key: '', contextWindow: 32_000 },
+      { key: 'p/undef', contextWindow: undefined },
+      { key: 'p/zero', contextWindow: 0 },
+      { key: 'p/neg', contextWindow: -1 },
+      { key: 'p/nan', contextWindow: Number.NaN },
+      { key: 'p/inf', contextWindow: Number.POSITIVE_INFINITY },
+      { key: 'p/ninf', contextWindow: Number.NEGATIVE_INFINITY }
+    ]
+
+    const allInvalid = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => invalid
+    }).compaction
+    expect(allInvalid?.modelOverrides).toBeUndefined()
+
+    const mixed = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [...invalid, { key: 'p/valid', contextWindow: 32_000 }]
+    }).compaction
+    expect(mixed?.modelOverrides).toEqual({
+      'p/valid': { reserveTokens: 8000, backgroundTokens: 8000, keepRecentTokens: 8000 }
+    })
+  })
+
+  it('C-06 throwing liveModelContextWindows degrades safely; root and explicit modelOverrides preserved', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => 100_000,
+      liveModelContextWindows: () => {
+        throw new Error('registry unavailable')
+      },
+      overrides: {
+        compaction: {
+          modelOverrides: { 'p/explicit': { reserveTokens: 5000 } }
+        }
+      }
+    }).compaction
+    expect(compaction).toEqual({
+      reserveTokens: 25_000,
+      backgroundTokens: 25_000,
+      keepRecentTokens: 20_000,
+      modelOverrides: {
+        'p/explicit': { reserveTokens: 5000 }
+      }
+    })
+  })
+
+  it('C-07 duplicate model keys produce a single entry without throwing', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [
+        { key: 'p/dup', contextWindow: 16_000 },
+        { key: 'p/dup', contextWindow: 32_000 }
+      ]
+    }).compaction
+    expect(Object.keys(compaction?.modelOverrides ?? {})).toEqual(['p/dup'])
+    expect(compaction?.modelOverrides?.['p/dup']).toEqual({
+      reserveTokens: 8000,
+      backgroundTokens: 8000,
+      keepRecentTokens: 8000
+    })
+  })
+
+  it('C-08 explicit overrides.compaction base fields apply to both root and dynamic modelOverrides', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [{ key: 'p/sub-32k', contextWindow: 32_000 }],
+      overrides: {
+        compaction: { enabled: false, reserveTokens: 1234 }
+      }
+    }).compaction
+    expect(compaction).toEqual({
+      enabled: false,
+      reserveTokens: 1234,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000,
+      modelOverrides: {
+        'p/sub-32k': {
+          enabled: false,
+          reserveTokens: 1234,
+          backgroundTokens: 8000,
+          keepRecentTokens: 8000
+        }
+      }
+    })
+  })
+
+  it('C-09 explicit overrides.compaction.modelOverrides merge per-key, read live via function, and return isolated copies', () => {
+    // 无动态项时保留显式 modelOverrides
+    const staticOnly = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [],
+      overrides: {
+        compaction: {
+          modelOverrides: { 'p/manual': { reserveTokens: 4321 } }
+        }
+      }
+    }).compaction
+    expect(staticOnly?.modelOverrides).toEqual({ 'p/manual': { reserveTokens: 4321 } })
+
+    // 有动态项时按 key 字段级合并，显式字段优先，动态字段不丢失；支持函数形式现读
+    const manualPolicy = { keepRecentTokens: 1111 }
+    let currentOverrides: ShuviXSettingsOverrides | undefined = {
+      compaction: {
+        modelOverrides: {
+          'p/sub-32k': manualPolicy,
+          'p/other': { reserveTokens: 9999 }
+        }
+      }
+    }
+    const settings = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [{ key: 'p/sub-32k', contextWindow: 32_000 }],
+      overrides: () => currentOverrides
+    })
+    const first = settings.compaction!
+    expect(first.modelOverrides).toEqual({
+      'p/sub-32k': {
+        reserveTokens: 8000,
+        backgroundTokens: 8000,
+        keepRecentTokens: 1111
+      },
+      'p/other': { reserveTokens: 9999 }
+    })
+
+    // 返回值为浅拷贝：修改返回值不污染入参也不影响后续读取
+    ;(first.modelOverrides!['p/sub-32k'] as { keepRecentTokens?: number }).keepRecentTokens = 7777
+    ;(first.modelOverrides!['p/other'] as { reserveTokens?: number }).reserveTokens = 5555
+    expect(manualPolicy.keepRecentTokens).toBe(1111)
+    expect(settings.compaction?.modelOverrides?.['p/sub-32k']?.keepRecentTokens).toBe(1111)
+    expect(settings.compaction?.modelOverrides?.['p/other']?.reserveTokens).toBe(9999)
+
+    // 函数形式现读
+    currentOverrides = {
+      compaction: {
+        modelOverrides: { 'p/sub-32k': { reserveTokens: 2222 } }
+      }
+    }
+    expect(settings.compaction?.modelOverrides).toEqual({
+      'p/sub-32k': {
+        reserveTokens: 2222,
+        backgroundTokens: 8000,
+        keepRecentTokens: 8000
+      }
+    })
+  })
+
+  it('C-10 liveModelContextWindows takes precedence over legacy liveContextWindows; legacy still works alone', () => {
+    const both = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveModelContextWindows: () => [{ key: 'p/sub-32k', contextWindow: 32_000 }],
+      liveContextWindows: () => [8000]
+    }).compaction
+    expect(both).toEqual({
+      reserveTokens: 32_768,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000,
+      modelOverrides: {
+        'p/sub-32k': { reserveTokens: 8000, backgroundTokens: 8000, keepRecentTokens: 8000 }
+      }
+    })
+
+    const legacyOnly = createShuviXSettings({
+      contextWindow: () => 200_000,
+      liveContextWindows: () => [8000]
+    }).compaction
+    expect(legacyOnly).toEqual({
+      reserveTokens: 2000,
+      backgroundTokens: 2000,
+      keepRecentTokens: 2000
+    })
+    expect(legacyOnly?.modelOverrides).toBeUndefined()
+  })
+
+  it('C-11 makeHost multi-model integration: live sub-agent populates modelOverrides and clears after completion', async () => {
+    const d = await hostD({
+      host: {
+        makeKit: () =>
+          fauxKit({
+            models: [
+              { id: 'faux-1', contextWindow: 200_000 },
+              { id: 'sub-32k', contextWindow: 32_000 }
+            ]
+          }),
+        resolveProfileModel: (spec) =>
+          spec === 'spec:faux-2' ? { provider: 'faux', modelId: 'sub-32k' } : null,
+        settingsOverrides: { retry: { enabled: false } }
+      }
+    })
+
+    expect(d.session.effectiveSettings.compaction).toEqual({
+      reserveTokens: 32_768,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000
+    })
+
+    const step = held(answer('found'))
+    d.t.kit.queue(callAgent('modeled', 'find X'), step.step, answer('done'))
+    const sent = d.session.submitUser('go')
+    await step.reached
+
+    expect(d.session.effectiveSettings.compaction).toEqual({
+      reserveTokens: 32_768,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000,
+      modelOverrides: {
+        'faux/sub-32k': {
+          reserveTokens: 8000,
+          backgroundTokens: 8000,
+          keepRecentTokens: 8000
+        }
+      }
+    })
+
+    step.release()
+    expect(await withTimeout(sent, 5000, 'root')).toEqual({})
+    expect(d.session.effectiveSettings.compaction).toEqual({
+      reserveTokens: 32_768,
+      backgroundTokens: 32_768,
+      keepRecentTokens: 20_000
+    })
   })
 })

@@ -18,6 +18,7 @@ import type {
   Storage,
   ToolRegistration
 } from '@earendil-works/pi-durable'
+import type { ImageProcessor } from '@earendil-works/pi-durable/tools'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { AgentKind, PromptBlockTexts, PromptBlocksCtx } from '../agentProfile/promptBlocks'
 import type { McpToolDeclaration } from '../mcpManager'
@@ -67,6 +68,11 @@ export interface SessionHostDeps {
    * 每条会话的模型调用经出口装饰器按它改写。没给 = 不改写请求（对话记录里照样是占位符，原样发出）
    */
   redactionPolicy?: RedactionPolicy
+  /**
+   * 工具返回图片的自动适配处理器（`pi-durable/images/fit`）：给了，会在 `shuvix.builtin` 上挂 `fit-images`
+   * 的 `afterTool` 钩子，在结果落库前按当前对话模型的图片限制校验 MIME、缩放超大图并过滤损坏图。缺省 = 不启用
+   */
+  imageProcessor?: ImageProcessor
   /** pi-ai 模型访问（生成用；压缩窗口也按它查锁定模型的 contextWindow） */
   models: Models
   /**

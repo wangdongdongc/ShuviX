@@ -273,11 +273,12 @@ class SessionHostImpl implements SessionHost {
             ? undefined
             : this.deps.models.getModel(model.provider, model.modelId)?.contextWindow
         },
-        // 在跑的派生 agent（Q-P2-08）：查不到的模型按未知
-        liveContextWindows: () =>
-          (lockedSession?.liveAgentModels() ?? []).map(
-            (model) => this.deps.models.getModel(model.provider, model.modelId)?.contextWindow
-          ),
+        // 在跑的派生 agent（pi-durable 1.6.1 modelOverrides）：每个模型各自按自己的窗口压缩，不拖累根会话
+        liveModelContextWindows: () =>
+          (lockedSession?.liveAgentModels() ?? []).map((model) => ({
+            key: `${model.provider}/${model.modelId}`,
+            contextWindow: this.deps.models.getModel(model.provider, model.modelId)?.contextWindow
+          })),
         overrides: () => this.deps.settingsOverrides
       })
       let harness: Harness
@@ -354,6 +355,9 @@ class SessionHostImpl implements SessionHost {
           ...(this.deps.redactionPolicy === undefined
             ? {}
             : { redactionPolicy: this.deps.redactionPolicy }),
+          ...(this.deps.imageProcessor === undefined
+            ? {}
+            : { imageProcessor: this.deps.imageProcessor }),
           settings
         })
         lockedSession = session

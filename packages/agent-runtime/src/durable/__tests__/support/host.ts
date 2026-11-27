@@ -97,6 +97,8 @@ export interface TestHostOptions {
   redaction?: SessionHostDeps['redaction']
   /** 出口按它判（与 redaction 同时给才包 Models 装饰器） */
   redactionPolicy?: SessionHostDeps['redactionPolicy']
+  /** 工具返回图片的自动适配处理器（`fit-images`；`restart()` 沿用） */
+  imageProcessor?: SessionHostDeps['imageProcessor']
   /** 整份替换缺省的测试覆盖（关重试 / 关自动压缩） */
   settingsOverrides?: ShuviXSettingsOverrides
   interruptedSendPolicy?: InterruptedSendPolicy
@@ -360,6 +362,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     ...(options.maxAgentDepth === undefined ? {} : { maxAgentDepth: options.maxAgentDepth }),
     ...(options.redaction === undefined ? {} : { redaction: options.redaction }),
     ...(options.redactionPolicy === undefined ? {} : { redactionPolicy: options.redactionPolicy }),
+    ...(options.imageProcessor === undefined ? {} : { imageProcessor: options.imageProcessor }),
     logger: {
       info: (message) => infos.push(message),
       warn: (message) => warnings.push(message),
