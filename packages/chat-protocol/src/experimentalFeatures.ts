@@ -15,6 +15,8 @@ export const EXPERIMENTAL_FEATURES = {
   tracking: 'experimental.hint',
   /** 目标（输入框的 `/goal`：fork 出一条管理员会话，docs/goal-mode-design.md §16） */
   goal: 'experimental.hint',
+  /** 持久化代码模式（QuickJS 沙箱编排多步工具调用与 MCP 收拢） */
+  codemode: 'experimental.hint',
   telegramBots: 'experimental.hintTelegramBots'
 } as const
 

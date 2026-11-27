@@ -70,13 +70,24 @@ const textResult = (text: string): ToolResult => ({
   details: undefined
 })
 
-/** 开启之后给模型的回答：工具全名和描述首行（用户批准之后，这些声明本来就会发给模型） */
-function loadedText(server: string, tools: readonly McpToolDeclaration[]): string {
+/** 开启之后给模型的回答：工具全名和描述首行（用户批准之后，这些声明本来就会发给模型；codemode 收拢模式下改提示经 codemode 调用） */
+function loadedText(
+  server: string,
+  tools: readonly McpToolDeclaration[],
+  codemodeOnly = false
+): string {
   const lines = tools.map((tool) => {
     const first = (tool.description ?? '').trim().split(/\r?\n/)[0].slice(0, 200)
-    return `- mcp__${server}__${tool.name}${first ? `: ${first}` : ''}`
+    const callName = codemodeOnly
+      ? `tools.mcp__${server}__${tool.name}(...)`
+      : `mcp__${server}__${tool.name}`
+    return `- ${callName}${first ? `: ${first}` : ''}`
   })
-  return `Loaded ${tools.length} tool${tools.length === 1 ? '' : 's'}. They are available from your next call:\n${lines.join('\n')}`
+  const noun = `tool${tools.length === 1 ? '' : 's'}`
+  if (codemodeOnly) {
+    return `Loaded ${tools.length} ${noun} for codemode. Call them inside the \`codemode\` tool from your next call:\n${lines.join('\n')}`
+  }
+  return `Loaded ${tools.length} ${noun}. They are available from your next call:\n${lines.join('\n')}`
 }
 
 interface ToolSearchParams {
@@ -179,7 +190,7 @@ export class ToolSearchTool extends BaseTool<typeof ToolSearchParamsSchema> {
         `${safeExtensionName(server.name)} was selected for this session but did not reach the agent. It will be used from the next new agent.`
       )
     }
-    return textResult(loadedText(server.name, tools))
+    return textResult(loadedText(server.name, tools, sessionService.isCodemodeMcpOnly(sessionId)))
   }
 
   /** 搜到的那台已经开着或被用户取消了：说清楚，不是「没找到」 */
@@ -187,7 +198,9 @@ export class ToolSearchTool extends BaseTool<typeof ToolSearchParamsSchema> {
     const { sessionId } = this.ctx
     const name = safeExtensionName(server.name)
     const tools = sessionService.lockedServerTools(sessionId, server.name)
-    if (tools) return `${name} is already on. ${loadedText(server.name, tools)}`
+    if (tools) {
+      return `${name} is already on. ${loadedText(server.name, tools, sessionService.isCodemodeMcpOnly(sessionId))}`
+    }
     if (sessionService.rootToolState(sessionId).optedOut.has(`mcp:${server.name}`)) {
       return `The user turned ${name} off in this session, so it cannot be enabled from here.`
     }

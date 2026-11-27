@@ -49,7 +49,7 @@ import { electronEventSink } from './agentRuntimeAdapters'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { installSessionSignals } from './sessionSignals'
 import { createElectronImageProcessor } from './nativeImageProcessor'
-import { CODEMODE_ENABLED_KEY, getCodemodeSandbox } from './codemode/sandbox'
+import { CODEMODE_ENABLED_KEY, CODEMODE_MCP_ONLY_KEY, getCodemodeSandbox } from './codemode/sandbox'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { writeSessionMirror } from './sessionMirror'
 import { sessionRecords } from './sessionRecords'
@@ -183,7 +183,8 @@ export function buildSessionHostDeps(
     codemode: {
       sandbox: getCodemodeSandbox(),
       models: false,
-      isEnabled: () => settingsService.get(CODEMODE_ENABLED_KEY) === 'true'
+      isEnabled: () => settingsService.get(CODEMODE_ENABLED_KEY) === 'true',
+      mcpToolsOnly: () => settingsService.get(CODEMODE_MCP_ONLY_KEY) === 'true'
     },
     ...overrides
   }

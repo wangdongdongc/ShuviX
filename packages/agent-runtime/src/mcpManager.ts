@@ -199,6 +199,10 @@ export interface McpRegistrationOptions {
    * 不看它，照样带给可信 server（见 McpCallMeta.conversationId）。
    */
   callerIdOf?: (conversationId: ConversationId) => string | undefined
+  /**
+   * 允许谁调用这组 MCP 工具（缺省 = 模型与脚本皆可；`['tools']` = 仅代码模式脚本可调，不注入模型原生工具表）
+   */
+  callers?: ToolRegistration['callers']
 }
 
 /** MCP 工具的 durable 注册项：工具名 `mcp__<server>__<tool>`，带安全门要的 mcpMeta */
@@ -1170,6 +1174,7 @@ export class McpManager {
       label: decl.description || decl.name,
       description: decl.description ?? '',
       parameters: jsonSchemaToTypebox(decl.inputSchema),
+      ...(opts?.callers === undefined ? {} : { callers: opts.callers }),
       replay: 'unsafe',
       outputLimits: backstopOutputLimits({}),
       execute: (args, api, context) =>

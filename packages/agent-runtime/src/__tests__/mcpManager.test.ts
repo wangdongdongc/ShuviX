@@ -3497,3 +3497,71 @@ describe('McpManager tools/call 的超时', () => {
     await failed
   })
 })
+
+describe('Codemode Phase 2 · McpManager callers 透传', () => {
+  it('CM2-MCP-01 getRegistrationsByServerName 透传 callers: ["tools"]，且 name / mcpMeta / replay 不受影响', async () => {
+    const h = setup([row({ id: 'srv-id', name: 'srv' })])
+    h.plan.set('srv', { tools: [tool('ping')] })
+    await h.mgr.connect('srv-id')
+
+    const regs = h.mgr.getRegistrationsByServerName('srv', 's1', { callers: ['tools'] })
+    expect(regs).toHaveLength(1)
+    const reg = regs[0]!
+    expect(reg.callers).toEqual(['tools'])
+    expect(reg.name).toBe('mcp__srv__ping')
+    expect(reg.replay).toBe('unsafe')
+    expect(reg.mcpMeta).toEqual({ server: 'srv', tool: 'ping', trusted: false })
+  })
+
+  it('CM2-MCP-02 registrationsFromDeclarations 透传 callers: ["tools"]', () => {
+    const h = setup([row({ id: 'srv-id', name: 'srv' })])
+    const decls: McpToolDeclaration[] = [
+      {
+        name: 'ping',
+        description: 'Ping server',
+        inputSchema: { type: 'object', properties: {} },
+        trusted: false
+      }
+    ]
+
+    const regs = h.mgr.registrationsFromDeclarations('srv', 's1', decls, { callers: ['tools'] })
+    expect(regs).toHaveLength(1)
+    const reg = regs[0]!
+    expect(reg.callers).toEqual(['tools'])
+    expect(reg.name).toBe('mcp__srv__ping')
+    expect(reg.replay).toBe('unsafe')
+    expect(reg.mcpMeta).toEqual({ server: 'srv', tool: 'ping', trusted: false })
+  })
+
+  it('CM2-MCP-03 省略 opts / {} / { callers: undefined } 时，返回注册项不包含 callers 键', async () => {
+    const h = setup([row({ id: 'srv-id', name: 'srv' })])
+    h.plan.set('srv', { tools: [tool('ping')] })
+    await h.mgr.connect('srv-id')
+    const decls: McpToolDeclaration[] = [
+      {
+        name: 'ping',
+        inputSchema: { type: 'object', properties: {} },
+        trusted: false
+      }
+    ]
+
+    const cases: Array<McpRegistrationOptions | undefined> = [undefined, {}, { callers: undefined }]
+    for (const opts of cases) {
+      const liveRegs =
+        opts === undefined
+          ? h.mgr.getRegistrationsByServerName('srv', 's1')
+          : h.mgr.getRegistrationsByServerName('srv', 's1', opts)
+      expect(liveRegs).toHaveLength(1)
+      expect(liveRegs[0]!.callers).toBeUndefined()
+      expect('callers' in liveRegs[0]!).toBe(false)
+
+      const declRegs =
+        opts === undefined
+          ? h.mgr.registrationsFromDeclarations('srv', 's1', decls)
+          : h.mgr.registrationsFromDeclarations('srv', 's1', decls, opts)
+      expect(declRegs).toHaveLength(1)
+      expect(declRegs[0]!.callers).toBeUndefined()
+      expect('callers' in declRegs[0]!).toBe(false)
+    }
+  })
+})

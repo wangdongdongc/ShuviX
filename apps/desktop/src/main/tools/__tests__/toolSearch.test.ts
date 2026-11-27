@@ -41,6 +41,7 @@ const state = vi.hoisted(() => ({
   previewAgentChange: vi.fn(),
   enableServer: vi.fn(),
   lockedServerTools: vi.fn(),
+  isCodemodeMcpOnly: vi.fn(() => false),
   assertExtensionAccess: vi.fn(),
   widgets: new Map<string, { id: string; name: string; description: string }>()
 }))
@@ -74,7 +75,8 @@ vi.mock('../../services/sessionService', () => ({
     rootToolState: state.rootToolState,
     previewAgentChange: state.previewAgentChange,
     enableServer: state.enableServer,
-    lockedServerTools: state.lockedServerTools
+    lockedServerTools: state.lockedServerTools,
+    isCodemodeMcpOnly: state.isCodemodeMcpOnly
   }
 }))
 vi.mock('../../services/toolContext', () => ({
@@ -199,10 +201,12 @@ beforeEach(() => {
     state.previewAgentChange,
     state.enableServer,
     state.lockedServerTools,
+    state.isCodemodeMcpOnly,
     state.assertExtensionAccess
   ]) {
     mock.mockReset()
   }
+  state.isCodemodeMcpOnly.mockReturnValue(false)
   state.configuredServers.mockReturnValue([builtin('browser'), builtin('ssh')])
   state.rootToolState.mockImplementation(() => toolState())
   state.previewAgentChange.mockImplementation(
@@ -834,5 +838,80 @@ describe('TS-W 组件', () => {
 
   it('TS-W6 描述固定，说了组件也是扩展', () => {
     expect(TOOL_SEARCH_DESCRIPTION).toContain("The user's widgets are extensions too")
+  })
+})
+
+// ─── Codemode Phase 2 ────────────────────────────────────────────────────
+
+describe('Codemode Phase 2 · tool_search 回复文案', () => {
+  it('CM2-TS-01 isCodemodeMcpOnly: true 批准加载 2 个工具时返回 codemode 指引及 tools.mcp__srv__<tool>(...) 首行描述', async () => {
+    state.configuredServers.mockReturnValue([thirdParty('srv')])
+    state.isCodemodeMcpOnly.mockReturnValue(true)
+    state.enableServer.mockResolvedValue([
+      decl('alpha', 'First line\nSecond line'),
+      decl('beta', 'Beta action')
+    ])
+
+    const text = await textOf('srv')
+
+    expect(text).toBe(
+      'Loaded 2 tools for codemode. Call them inside the `codemode` tool from your next call:\n' +
+        '- tools.mcp__srv__alpha(...): First line\n' +
+        '- tools.mcp__srv__beta(...): Beta action'
+    )
+    expect(state.isCodemodeMcpOnly).toHaveBeenCalledWith(SID)
+  })
+
+  it('CM2-TS-02 isCodemodeMcpOnly: true 单数工具且无描述 → Loaded 1 tool for codemode. 且无多余冒号', async () => {
+    state.configuredServers.mockReturnValue([thirdParty('srv')])
+    state.isCodemodeMcpOnly.mockReturnValue(true)
+    state.enableServer.mockResolvedValue([decl('ping')])
+
+    const text = await textOf('srv')
+
+    expect(text).toBe(
+      'Loaded 1 tool for codemode. Call them inside the `codemode` tool from your next call:\n' +
+        '- tools.mcp__srv__ping(...)'
+    )
+  })
+
+  it('CM2-TS-03 isCodemodeMcpOnly: true 报告服务器已开启 → srv is already on. Loaded ... for codemode. 且使用 tools.mcp__srv__<tool>(...)', async () => {
+    state.configuredServers.mockReturnValue([thirdParty('srv')])
+    state.isCodemodeMcpOnly.mockReturnValue(true)
+    state.rootToolState.mockReturnValue(toolState({ names: ['mcp:srv'], selection: ['mcp:srv'] }))
+    state.lockedServerTools.mockReturnValue([decl('ping', 'Ping server')])
+
+    const text = await textOf('srv')
+
+    expect(text).toBe(
+      'srv is already on. Loaded 1 tool for codemode. Call them inside the `codemode` tool from your next call:\n' +
+        '- tools.mcp__srv__ping(...): Ping server'
+    )
+    expect(state.isCodemodeMcpOnly).toHaveBeenCalledWith(SID)
+    expectNothingHappened()
+  })
+
+  it('CM2-TS-04 isCodemodeMcpOnly: false 两条路径回归，保持原格式不含 for codemode 或 tools.mcp__', async () => {
+    state.configuredServers.mockReturnValue([thirdParty('srv')])
+    state.isCodemodeMcpOnly.mockReturnValue(false)
+    state.enableServer.mockResolvedValue([decl('ping', 'Ping server')])
+
+    // 路径 1：批准加载
+    const loaded = await textOf('srv')
+    expect(loaded).toBe(
+      'Loaded 1 tool. They are available from your next call:\n- mcp__srv__ping: Ping server'
+    )
+    expect(loaded).not.toContain('for codemode')
+    expect(loaded).not.toContain('tools.mcp__')
+
+    // 路径 2：已开启
+    state.rootToolState.mockReturnValue(toolState({ names: ['mcp:srv'], selection: ['mcp:srv'] }))
+    state.lockedServerTools.mockReturnValue([decl('ping', 'Ping server')])
+    const alreadyOn = await textOf('srv')
+    expect(alreadyOn).toBe(
+      'srv is already on. Loaded 1 tool. They are available from your next call:\n- mcp__srv__ping: Ping server'
+    )
+    expect(alreadyOn).not.toContain('for codemode')
+    expect(alreadyOn).not.toContain('tools.mcp__')
   })
 })

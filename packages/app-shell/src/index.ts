@@ -240,6 +240,7 @@ export type { ContextMenuPopupProps } from './contextmenu/ContextMenuPopup'
 // 通用 UI 原子
 export { AnimatedCollapse } from './common/AnimatedCollapse'
 export { ConfirmDialog } from './common/ConfirmDialog'
+export { ExperimentalTag } from './common/ExperimentalTag'
 export { startPanelDrag } from './common/panelDrag'
 export type { PanelDragOptions } from './common/panelDrag'
 export type { ConfirmDialogProps } from './common/ConfirmDialog'

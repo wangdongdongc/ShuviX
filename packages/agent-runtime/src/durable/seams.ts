@@ -67,6 +67,8 @@ export interface CodemodeHostConfig {
   readonly inlineBudget?: number
   /** 现读开关：返回 true 时为新创建的 root agent 启用 `codemode`（缺省始终开启） */
   readonly isEnabled?: () => boolean
+  /** 现读开关：返回 true 且 `isEnabled()` 为真时，新创建的 root agent 将 MCP 工具标为 `callers: ['tools']`（仅在代码模式内调用） */
+  readonly mcpToolsOnly?: () => boolean
 }
 
 export interface SessionHostDeps {
@@ -329,6 +331,8 @@ export interface AgentToolsRequest {
   thinkingLevel?: ThinkingLevel
   /** 工作目录（可为空串） */
   cwd: string
+  /** MCP 工具的 callers 限制（缺省 = 模型与脚本皆可；`['tools']` = 仅代码模式脚本可调） */
+  mcpCallers?: ToolRegistration['callers']
   /**
    * 已实例化的附加工具（派生 agent 的 `next`）：宿主包好放进 `ResolvedAgentTools.extraTools`
    * （排在宿主自己的附加工具之前）；root 的锁拒绝附加工具
@@ -412,6 +416,8 @@ export interface AgentToolsReconfigureRequest {
   /** 归一后的新名单（档案全量 + 会话勾选） */
   names: readonly string[]
   servers: readonly string[]
+  /** 锁定的 MCP callers 限制（`lock.codemodeMcpOnly` 为真时为 `['tools']`，保证新接 MCP 与已有 MCP 口径一致） */
+  mcpCallers?: ToolRegistration['callers']
 }
 
 /** 重配时宿主解析出的那几样 */

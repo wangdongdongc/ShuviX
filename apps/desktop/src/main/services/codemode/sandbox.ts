@@ -17,6 +17,9 @@ import { CodemodeSandbox, loadQuickJSWasm } from '@earendil-works/pi-codemode'
 /** 全局会话设置键：`'true'` 时为新创建的 root agent 启用持久化代码模式（默认关闭） */
 export const CODEMODE_ENABLED_KEY = 'session.codemode'
 
+/** 全局会话设置键：`'true'` 且启用代码模式时，将 MCP 工具标为 `callers: ['tools']`（仅在代码模式内调用） */
+export const CODEMODE_MCP_ONLY_KEY = 'session.codemodeMcpOnly'
+
 let singleton: CodemodeSandbox | undefined
 
 function resolveWorkerUrl(): URL | undefined {

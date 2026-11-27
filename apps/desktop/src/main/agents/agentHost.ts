@@ -218,10 +218,14 @@ function sessionWrapper(
  * MCP 调用方 id：按这次调用的对话认人（派生 agent = 它的 agentId）；身份不带调用方 id（根 agent）
  * 或认不出就报会话 id。创建与重建共用 —— 按调用现取，不在注册那一刻定死
  */
-function mcpOptions(ctx: ToolContext): McpRegistrationOptions {
+function mcpOptions(
+  ctx: ToolContext,
+  callers?: ToolRegistration['callers']
+): McpRegistrationOptions {
   return {
     callerIdOf: (conversationId) =>
-      withCallAgent(ctx, { conversationId }).agent?.callerId ?? ctx.sessionId
+      withCallAgent(ctx, { conversationId }).agent?.callerId ?? ctx.sessionId,
+    ...(callers === undefined ? {} : { callers })
   }
 }
 
@@ -305,13 +309,14 @@ async function connectMcpServer(
   server: string,
   ctx: ToolContext,
   wrap: (tool: object) => ToolRegistration,
-  signal: AbortSignal
+  signal: AbortSignal,
+  callers?: ToolRegistration['callers']
 ): Promise<ResolvedMcp | undefined> {
   const sessionId = ctx.sessionId
   if (!(await ensureMcpConnected(server, sessionId, signal))) return undefined
   const declarations: McpToolDeclaration[] = mcpService.declarationsOf(server, sessionId)
   const tools = mcpService
-    .registrationsFromDeclarations(server, sessionId, declarations, mcpOptions(ctx))
+    .registrationsFromDeclarations(server, sessionId, declarations, mcpOptions(ctx, callers))
     .map(wrap)
   return { server, declarations, tools }
 }
@@ -365,7 +370,9 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
 
       // MCP：并发连（实例按根会话：派生 agent 与根 agent 共用一份）；连上的按名单序排
       const attempts = await Promise.all(
-        mcpServersOf(req.names).map((server) => connectMcpServer(server, ctx, wrap, signal))
+        mcpServersOf(req.names).map((server) =>
+          connectMcpServer(server, ctx, wrap, signal, req.mcpCallers)
+        )
       )
       const mcp = attempts.filter((entry): entry is ResolvedMcp => entry !== undefined)
 
@@ -389,7 +396,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
     },
 
     async reconfigureAgentTools(
-      { sessionId, servers }: AgentToolsReconfigureRequest,
+      { sessionId, servers, mcpCallers }: AgentToolsReconfigureRequest,
       { signal, connect }
     ): Promise<ReconfiguredAgentTools> {
       if (signal.aborted) throw signal.reason
@@ -400,7 +407,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       const pending: string[] = []
       if (connect) {
         const attempts = await Promise.all(
-          servers.map((server) => connectMcpServer(server, ctx, wrap, signal))
+          servers.map((server) => connectMcpServer(server, ctx, wrap, signal, mcpCallers))
         )
         mcp.push(...attempts.filter((entry): entry is ResolvedMcp => entry !== undefined))
       } else {
@@ -411,7 +418,12 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
           }
           const declarations: McpToolDeclaration[] = mcpService.declarationsOf(server, sessionId)
           const tools = mcpService
-            .registrationsFromDeclarations(server, sessionId, declarations, mcpOptions(ctx))
+            .registrationsFromDeclarations(
+              server,
+              sessionId,
+              declarations,
+              mcpOptions(ctx, mcpCallers)
+            )
             .map(wrap)
           mcp.push({ server, declarations, tools })
         }
@@ -434,7 +446,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       }
       const ctx = sessionToolContext(deps, sessionId)
       const wrap = sessionWrapper(deps, sessionId, ctx)
-      const options = mcpOptions(ctx)
+      const options = mcpOptions(ctx, lock.codemodeMcpOnly ? ['tools'] : undefined)
       const spawned = spawnedFieldsOf(lock)
       const offersAgent = offersDispatchTool({
         kind: lock.kind,

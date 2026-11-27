@@ -287,6 +287,51 @@ describe('agent records · parse / serialise', () => {
     const typed: LockRecord = lockW()
     expect(typed.kind).toBe('root')
   })
+
+  it('CM2-REC-01 codemodeMcpOnly: true 经 lockRecordJson / parseLockRecord 往返保留', () => {
+    const record: LockRecord = { ...lockW(), codemodeMcpOnly: true }
+    const json = lockRecordJson(record)
+    expect(json.codemodeMcpOnly).toBe(true)
+    const parsed = parseLockRecord(json)
+    expect(parsed).toEqual(record)
+    expect(parsed?.codemodeMcpOnly).toBe(true)
+    expect(parseLockRecord(JSON.parse(JSON.stringify(json)))).toEqual(record)
+  })
+
+  it('CM2-REC-02 旧锁缺省或 codemodeMcpOnly: false 经 parseLockRecord 后不含 codemodeMcpOnly 键', () => {
+    const base = lockW()
+    const parsedMissing = parseLockRecord(lockRecordJson(base))
+    expect(parsedMissing).toBeDefined()
+    expect(parsedMissing!.codemodeMcpOnly).toBeUndefined()
+    expect('codemodeMcpOnly' in parsedMissing!).toBe(false)
+
+    const withFalse = { ...lockRecordJson(base), codemodeMcpOnly: false }
+    const parsedFalse = parseLockRecord(withFalse)
+    expect(parsedFalse).toBeDefined()
+    expect(parsedFalse!.codemodeMcpOnly).toBeUndefined()
+    expect('codemodeMcpOnly' in parsedFalse!).toBe(false)
+    expect(parsedFalse).toEqual(base)
+  })
+
+  it.each([
+    ['"true"', 'true'],
+    ['1', 1],
+    ['0', 0],
+    ['null', null],
+    ['{}', {}],
+    ['[]', []]
+  ])(
+    'CM2-REC-03 codemodeMcpOnly 畸形值 %s 不导致整条锁作废，畸形字段被丢弃，其余字段完整保留',
+    (_label, badValue) => {
+      const base = lockW()
+      const raw = { ...lockRecordJson(base), codemodeMcpOnly: badValue }
+      const parsed = parseLockRecord(raw)
+      expect(parsed).toBeDefined()
+      expect(parsed!.codemodeMcpOnly).toBeUndefined()
+      expect('codemodeMcpOnly' in parsed!).toBe(false)
+      expect(parsed).toEqual(base)
+    }
+  )
 })
 
 describe('agent records · AgentStateDoc fields', () => {

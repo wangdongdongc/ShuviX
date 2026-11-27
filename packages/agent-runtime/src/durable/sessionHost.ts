@@ -376,7 +376,10 @@ class SessionHostImpl implements SessionHost {
             : {
                 codemode: {
                   extension: codemodeExt,
-                  isEnabled: this.deps.codemode?.isEnabled ?? (() => true)
+                  isEnabled: this.deps.codemode?.isEnabled ?? (() => true),
+                  ...(this.deps.codemode?.mcpToolsOnly === undefined
+                    ? {}
+                    : { mcpToolsOnly: this.deps.codemode.mcpToolsOnly })
                 }
               }),
           settings

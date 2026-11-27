@@ -18,6 +18,7 @@ import { useCompactLayout } from '../../mobile/useCompactLayout'
 import { setPhoneFontSize, usePhoneFontSize } from '../../mobile/phoneFontSize'
 import { isWebHost } from '../../host/hostMedia'
 import { NotificationSettings } from './NotificationSettings'
+import { CodemodeSettings } from './CodemodeSettings'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -169,6 +170,8 @@ export function GeneralSettings(): React.JSX.Element {
           onChange: persistClassifier
         }}
       />
+
+      <CodemodeSettings />
     </div>
   )
 }

@@ -65,6 +65,8 @@ export interface LockRecord {
    * 报它（option A）。这个字段之前建的锁没有它 → 缺省
    */
   selection?: string[]
+  /** 创建时是否启用「MCP 工具仅通过代码模式调用」（重开与重配据此保持同一 callers；缺省 false） */
+  codemodeMcpOnly?: boolean
   createdAt: number
 }
 
@@ -88,7 +90,7 @@ function cloneJson<T>(value: T): T {
 /** 锁字段那一段的校验与拷贝（两种记录共用）；kind 只认 root / spawned */
 function parseLockFields(raw: Record<string, unknown>): LockRecord | undefined {
   const { conversationId, profileName, kind, model, thinkingLevel, toolNames } = raw
-  const { extensions, sandboxed, mcp, skills, selection, createdAt } = raw
+  const { extensions, sandboxed, mcp, skills, selection, codemodeMcpOnly, createdAt } = raw
   if (!isPositiveInteger(conversationId)) return undefined
   if (typeof profileName !== 'string') return undefined
   if (kind !== 'root' && kind !== 'spawned') return undefined
@@ -121,6 +123,7 @@ function parseLockFields(raw: Record<string, unknown>): LockRecord | undefined {
     skills: [...skills],
     // 可选字段宽松读：写坏了只丢掉它，不让整条锁按「写坏了」清掉
     ...(isStringArray(selection) ? { selection: [...selection] } : {}),
+    ...(codemodeMcpOnly === true ? { codemodeMcpOnly: true } : {}),
     createdAt
   }
 }

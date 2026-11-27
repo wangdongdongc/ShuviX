@@ -887,6 +887,7 @@ export interface DurableSessionDeps {
   codemode?: {
     readonly extension: Extension
     readonly isEnabled: () => boolean
+    readonly mcpToolsOnly?: () => boolean
   }
 }
 

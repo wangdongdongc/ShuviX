@@ -155,12 +155,17 @@ export function scenarioBuiltins(
   )
 }
 
-function mcpTool(server: FakeMcpServer, decl: McpToolDeclaration): ToolRegistration {
+function mcpTool(
+  server: FakeMcpServer,
+  decl: McpToolDeclaration,
+  callers?: ToolRegistration['callers']
+): ToolRegistration {
   return {
     name: `mcp__${server.name}__${decl.name}`,
     description: decl.description ?? '',
     parameters: unsafe<Record<string, unknown>>(decl.inputSchema as Record<string, unknown>),
     replay: 'unsafe',
+    ...(callers === undefined ? {} : { callers }),
     execute: async (args, _api, context) => {
       try {
         return await server.call(decl.name, args, context.abortSignal)
@@ -263,7 +268,7 @@ export function makeTestToolHost(
         mcp.push({
           server: server.name,
           declarations,
-          tools: declarations.map((decl) => mcpTool(server, decl))
+          tools: declarations.map((decl) => mcpTool(server, decl, request.mcpCallers))
         })
       }
       const extras =
@@ -294,12 +299,18 @@ export function makeTestToolHost(
         names: record.toolNames,
         ...('canSpawn' in record ? { canSpawn: record.canSpawn } : {})
       })
+      const mcpCallers: ToolRegistration['callers'] | undefined = record.codemodeMcpOnly
+        ? ['tools']
+        : undefined
       const set: AgentToolSet = {
         ...(dispatch ? { agent: dispatchOf(sessionId) } : {}),
         ...(record.skills.length > 0 ? { skill: skillTool(record.skills) } : {}),
         mcp: Object.entries(record.mcp).map(([name, declarations]) => {
           const server = servers.get(name) ?? fakeMcpServer(name, [])
-          return { server: name, tools: declarations.map((decl) => mcpTool(server, decl)) }
+          return {
+            server: name,
+            tools: declarations.map((decl) => mcpTool(server, decl, mcpCallers))
+          }
         }),
         tools: [...agentToolsOf(sessionId, record.toolNames)]
       }
@@ -345,7 +356,8 @@ export function makeTestToolHost(
         request: {
           sessionId: request.sessionId,
           names: [...request.names],
-          servers: [...request.servers]
+          servers: [...request.servers],
+          ...(request.mcpCallers === undefined ? {} : { mcpCallers: [...request.mcpCallers] })
         },
         connect
       }
@@ -377,7 +389,7 @@ export function makeTestToolHost(
         mcp.push({
           server: server.name,
           declarations,
-          tools: declarations.map((decl) => mcpTool(server, decl))
+          tools: declarations.map((decl) => mcpTool(server, decl, request.mcpCallers))
         })
       }
       return {

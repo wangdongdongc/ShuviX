@@ -843,6 +843,11 @@ export class SessionService {
     return mcp && Object.hasOwn(mcp, server) ? mcp[server] : undefined
   }
 
+  /** 这条会话的锁是否启用了「MCP 工具仅通过代码模式调用」 */
+  isCodemodeMcpOnly(sessionId: string): boolean {
+    return this.host.get(sessionId)?.lock?.codemodeMcpOnly === true
+  }
+
   /**
    * 为这条会话开启一台 MCP 服务器（`tool_search` 经用户确认之后；调用方要先把它连上）：勾选里加上它，重配 agent。
    * 读改写之间没有 await，不会和别的写入交错。答的是这台真的接上了没有 —— `updateEnabledTools` 与重配的结果都说明

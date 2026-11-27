@@ -600,3 +600,433 @@ describe('Codemode Phase 1 · B. callers: ["model"] 工具隔离', () => {
     TIMEOUT
   )
 })
+
+describe('Codemode Phase 2 · MCP 工具收拢进代码模式', () => {
+  it(
+    'CM2-RT-01 双开主路径：模型原生工具隐藏 mcp__srv__ping、提示词含声明、沙箱可调且记入 details.calls、resolveCalls 与锁记录正确',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:srv']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          agentTools: [makeEchoTool()],
+          mcp: { srv: [mcpDecl('ping', 'Ping remote server')] }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => true,
+          mcpToolsOnly: () => true
+        }
+      })
+
+      const session = await t.open(SID)
+      t.kit.queue(
+        callTool(
+          'codemode',
+          { code: `const r = await tools.mcp__srv__ping({}); return r;` },
+          'cm2-1'
+        ),
+        answer('done')
+      )
+
+      expect(await withTimeout(session.submitUser('call mcp ping'), TIMEOUT, 'submit')).toEqual({})
+
+      // ① 模型原生 tools 不含 mcp__srv__ping，但含内置/agent 工具与 codemode
+      const req0 = t.kit.requests[0]!
+      const nativeNames = req0.tools.map((tool) => tool.name)
+      expect(nativeNames).not.toContain('mcp__srv__ping')
+      expect(nativeNames).toContain('echo')
+      expect(nativeNames).toContain('codemode')
+
+      // ② systemPrompt 包含 mcp__srv__ping 声明
+      expect(req0.systemPrompt).toContain('mcp__srv__ping')
+
+      // ③ codemode 脚本调用成功且 details.calls 记录该调用
+      const results = await toolResultEntries(session)
+      expect(results).toHaveLength(1)
+      expect(toolResultText(results[0]!)).toContain('srv.ping')
+      const calls = toolResultDetails(results[0]!)?.calls ?? []
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ name: 'mcp__srv__ping', status: 'ok' })
+
+      // ④ resolveCalls[0].mcpCallers 为 ['tools']
+      expect(t.toolHost.resolveCalls).toHaveLength(1)
+      expect(t.toolHost.resolveCalls[0]!.mcpCallers).toEqual(['tools'])
+
+      // ⑤ 锁记录 codemodeMcpOnly === true
+      const lock = await storedLockOf(session)
+      expect(lock?.codemodeMcpOnly).toBe(true)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-02 isEnabled: true 但 mcpToolsOnly 省略或返回 false → 模型原生工具同时包含 mcp__srv__ping 与 codemode，mcpCallers 为 undefined，锁无 codemodeMcpOnly',
+    async () => {
+      for (const [label, codemode] of [
+        ['omitted', { sandbox: makeSandbox(), isEnabled: () => true }],
+        ['false', { sandbox: makeSandbox(), isEnabled: () => true, mcpToolsOnly: () => false }]
+      ] as const) {
+        const config = defaultAgentConfig()
+        config.toolOverlay = ['mcp:srv']
+        const sid = `cm2-02-${label}`
+        const t = await makeHost({
+          ephemeral: [sid],
+          agentConfig: config,
+          toolHost: {
+            agentTools: [makeEchoTool()],
+            mcp: { srv: [mcpDecl('ping', 'Ping remote server')] }
+          },
+          codemode
+        })
+        const session = await t.open(sid)
+        t.kit.queue(answer('ok'))
+        expect(await withTimeout(session.submitUser('hi'), TIMEOUT, `submit-${label}`)).toEqual({})
+
+        const nativeNames = requestTools(t.kit, 0).map((tool) => tool.name)
+        expect(nativeNames).toContain('mcp__srv__ping')
+        expect(nativeNames).toContain('codemode')
+        expect(t.toolHost.resolveCalls[0]!.mcpCallers).toBeUndefined()
+        const lock = await storedLockOf(session)
+        expect(lock?.codemodeMcpOnly).toBeUndefined()
+        expect('codemodeMcpOnly' in (lock ?? {})).toBe(false)
+      }
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-03 防工具黑洞：isEnabled: false 且 mcpToolsOnly: true → 模型原生工具不含 codemode 但仍包含 mcp__srv__ping，mcpCallers 为 undefined，锁无 codemodeMcpOnly',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:srv']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          agentTools: [makeEchoTool()],
+          mcp: { srv: [mcpDecl('ping', 'Ping remote server')] }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => false,
+          mcpToolsOnly: () => true
+        }
+      })
+      const session = await t.open(SID)
+      t.kit.queue(answer('ok'))
+      expect(await withTimeout(session.submitUser('hi'), TIMEOUT, 'submit')).toEqual({})
+
+      const nativeNames = requestTools(t.kit, 0).map((tool) => tool.name)
+      expect(nativeNames).not.toContain('codemode')
+      expect(nativeNames).toContain('mcp__srv__ping')
+      expect(t.toolHost.resolveCalls[0]!.mcpCallers).toBeUndefined()
+      const lock = await storedLockOf(session)
+      expect(lock?.codemodeMcpOnly).toBeUndefined()
+      expect('codemodeMcpOnly' in (lock ?? {})).toBe(false)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-04 省略 isEnabled 且 mcpToolsOnly: () => true → 等效双开',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:srv']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          agentTools: [makeEchoTool()],
+          mcp: { srv: [mcpDecl('ping', 'Ping remote server')] }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          mcpToolsOnly: () => true
+        }
+      })
+      const session = await t.open(SID)
+      t.kit.queue(
+        callTool('codemode', { code: `return await tools.mcp__srv__ping({});` }, 'cm2-4'),
+        answer('ok')
+      )
+      expect(await withTimeout(session.submitUser('hi'), TIMEOUT, 'submit')).toEqual({})
+
+      const nativeNames = requestTools(t.kit, 0).map((tool) => tool.name)
+      expect(nativeNames).toContain('codemode')
+      expect(nativeNames).not.toContain('mcp__srv__ping')
+      expect(t.toolHost.resolveCalls[0]!.mcpCallers).toEqual(['tools'])
+      expect((await storedLockOf(session))?.codemodeMcpOnly).toBe(true)
+
+      const results = await toolResultEntries(session)
+      expect(results).toHaveLength(1)
+      expect(toolResultText(results[0]!)).toContain('srv.ping')
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-05 同进程 Reopen 沿用锁记录，不受全局 mcpToolsOnly 翻转影响（true → false 与 false → true 双方向）',
+    async () => {
+      // 方向 1：true → false
+      {
+        let mcpOnly = true
+        const config = defaultAgentConfig()
+        config.toolOverlay = ['mcp:srv']
+        const t = await makeHost({
+          agentConfig: config,
+          toolHost: {
+            agentTools: [makeEchoTool()],
+            mcp: { srv: [mcpDecl('ping', 'Ping server')] }
+          },
+          codemode: {
+            sandbox: makeSandbox(),
+            isEnabled: () => true,
+            mcpToolsOnly: () => mcpOnly
+          }
+        })
+        const s1 = await t.open('reopen-t2f')
+        t.kit.queue(answer('first'))
+        expect(await withTimeout(s1.submitUser('turn 1'), TIMEOUT, 't2f-1')).toEqual({})
+        expect(requestTools(t.kit, 0).map((tool) => tool.name)).not.toContain('mcp__srv__ping')
+
+        mcpOnly = false
+        await withTimeout(t.host.close('reopen-t2f'), TIMEOUT, 'close t2f')
+        const s2 = await t.open('reopen-t2f')
+        t.kit.queue(
+          callTool('codemode', { code: `return await tools.mcp__srv__ping({});` }, 'cm2-reopen'),
+          answer('second')
+        )
+        expect(await withTimeout(s2.submitUser('turn 2'), TIMEOUT, 't2f-2')).toEqual({})
+
+        expect(requestTools(t.kit, 1).map((tool) => tool.name)).not.toContain('mcp__srv__ping')
+        expect((await storedLockOf(s2))?.codemodeMcpOnly).toBe(true)
+        const results = await toolResultEntries(s2)
+        expect(results).toHaveLength(1)
+        expect(toolResultText(results[0]!)).toContain('srv.ping')
+      }
+
+      // 方向 2：false → true
+      {
+        let mcpOnly = false
+        const config = defaultAgentConfig()
+        config.toolOverlay = ['mcp:srv']
+        const t = await makeHost({
+          agentConfig: config,
+          toolHost: {
+            agentTools: [makeEchoTool()],
+            mcp: { srv: [mcpDecl('ping', 'Ping server')] }
+          },
+          codemode: {
+            sandbox: makeSandbox(),
+            isEnabled: () => true,
+            mcpToolsOnly: () => mcpOnly
+          }
+        })
+        const s1 = await t.open('reopen-f2t')
+        t.kit.queue(answer('first'))
+        expect(await withTimeout(s1.submitUser('turn 1'), TIMEOUT, 'f2t-1')).toEqual({})
+        expect(requestTools(t.kit, 0).map((tool) => tool.name)).toContain('mcp__srv__ping')
+
+        mcpOnly = true
+        await withTimeout(t.host.close('reopen-f2t'), TIMEOUT, 'close f2t')
+        const s2 = await t.open('reopen-f2t')
+        t.kit.queue(answer('second'))
+        expect(await withTimeout(s2.submitUser('turn 2'), TIMEOUT, 'f2t-2')).toEqual({})
+
+        expect(requestTools(t.kit, 1).map((tool) => tool.name)).toContain('mcp__srv__ping')
+        expect((await storedLockOf(s2))?.codemodeMcpOnly).toBeUndefined()
+      }
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-06 Reconfigure 新增 MCP 服务器沿用锁记录的 codemodeMcpOnly 口径（双方向）',
+    async () => {
+      // 方向 1：锁为 true，全局翻 false，新加 srv2 仍获 mcpCallers: ['tools']、隐藏出模型直调列表但沙箱可调
+      {
+        let mcpOnly = true
+        const config = defaultAgentConfig()
+        config.toolOverlay = ['mcp:srv1']
+        const t = await makeHost({
+          ephemeral: ['reconf-t2f'],
+          agentConfig: config,
+          toolHost: {
+            agentTools: [makeEchoTool()],
+            mcp: {
+              srv1: [mcpDecl('one', 'One')],
+              srv2: [mcpDecl('two', 'Two')]
+            }
+          },
+          codemode: {
+            sandbox: makeSandbox(),
+            isEnabled: () => true,
+            mcpToolsOnly: () => mcpOnly
+          }
+        })
+        const session = await t.open('reconf-t2f')
+        t.kit.queue(answer('init'))
+        expect(await withTimeout(session.submitUser('init'), TIMEOUT, 'init')).toEqual({})
+
+        mcpOnly = false
+        config.toolOverlay = ['mcp:srv1', 'mcp:srv2']
+        expect((await withTimeout(session.reconfigureAgent(), TIMEOUT, 'reconf')).applied).toBe(
+          true
+        )
+
+        const reconfCall = t.toolHost.reconfigureCalls.at(-1)!
+        expect(reconfCall.request.servers).toEqual(['srv2'])
+        expect(reconfCall.request.mcpCallers).toEqual(['tools'])
+        expect((await storedLockOf(session))?.codemodeMcpOnly).toBe(true)
+
+        t.kit.queue(
+          callTool('codemode', { code: `return await tools.mcp__srv2__two({});` }, 'cm2-srv2'),
+          answer('done')
+        )
+        expect(await withTimeout(session.submitUser('call srv2'), TIMEOUT, 'run')).toEqual({})
+        const nativeNames = requestTools(t.kit, 1).map((tool) => tool.name)
+        expect(nativeNames).not.toContain('mcp__srv1__one')
+        expect(nativeNames).not.toContain('mcp__srv2__two')
+        const results = await toolResultEntries(session)
+        expect(results).toHaveLength(1)
+        expect(toolResultText(results[0]!)).toContain('srv2.two')
+      }
+
+      // 方向 2：锁为 false，全局翻 true，新加 srv2 仍获 mcpCallers: undefined、进模型直调列表
+      {
+        let mcpOnly = false
+        const config = defaultAgentConfig()
+        config.toolOverlay = ['mcp:srv1']
+        const t = await makeHost({
+          ephemeral: ['reconf-f2t'],
+          agentConfig: config,
+          toolHost: {
+            agentTools: [makeEchoTool()],
+            mcp: {
+              srv1: [mcpDecl('one', 'One')],
+              srv2: [mcpDecl('two', 'Two')]
+            }
+          },
+          codemode: {
+            sandbox: makeSandbox(),
+            isEnabled: () => true,
+            mcpToolsOnly: () => mcpOnly
+          }
+        })
+        const session = await t.open('reconf-f2t')
+        t.kit.queue(answer('init'))
+        expect(await withTimeout(session.submitUser('init'), TIMEOUT, 'init')).toEqual({})
+
+        mcpOnly = true
+        config.toolOverlay = ['mcp:srv1', 'mcp:srv2']
+        expect((await withTimeout(session.reconfigureAgent(), TIMEOUT, 'reconf')).applied).toBe(
+          true
+        )
+
+        const reconfCall = t.toolHost.reconfigureCalls.at(-1)!
+        expect(reconfCall.request.servers).toEqual(['srv2'])
+        expect(reconfCall.request.mcpCallers).toBeUndefined()
+        expect((await storedLockOf(session))?.codemodeMcpOnly).toBeUndefined()
+
+        t.kit.queue(answer('done'))
+        expect(await withTimeout(session.submitUser('check tools'), TIMEOUT, 'run')).toEqual({})
+        const nativeNames = requestTools(t.kit, 1).map((tool) => tool.name)
+        expect(nativeNames).toContain('mcp__srv1__one')
+        expect(nativeNames).toContain('mcp__srv2__two')
+      }
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-07 Reconfigure 移除 MCP 服务器不丢失 codemodeMcpOnly: true 标记',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:srv1', 'mcp:srv2']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          agentTools: [makeEchoTool()],
+          mcp: {
+            srv1: [mcpDecl('one', 'One')],
+            srv2: [mcpDecl('two', 'Two')]
+          }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => true,
+          mcpToolsOnly: () => true
+        }
+      })
+      const session = await t.open(SID)
+      t.kit.queue(answer('init'))
+      expect(await withTimeout(session.submitUser('init'), TIMEOUT, 'init')).toEqual({})
+      expect((await storedLockOf(session))?.codemodeMcpOnly).toBe(true)
+
+      // 移除 srv2
+      config.toolOverlay = ['mcp:srv1']
+      expect((await withTimeout(session.reconfigureAgent(), TIMEOUT, 'reconf')).applied).toBe(true)
+
+      const lock = await storedLockOf(session)
+      expect(lock?.codemodeMcpOnly).toBe(true)
+      expect(Object.keys(lock?.mcp ?? {})).toEqual(['srv1'])
+
+      t.kit.queue(answer('after'))
+      expect(await withTimeout(session.submitUser('after'), TIMEOUT, 'after')).toEqual({})
+      const nativeNames = requestTools(t.kit, 1).map((tool) => tool.name)
+      expect(nativeNames).not.toContain('mcp__srv1__one')
+      expect(nativeNames).not.toContain('mcp__srv2__two')
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM2-RT-08 destroyAgent() 后重新发送按此刻开关重新决定（双方向翻转）',
+    async () => {
+      let mcpOnly = true
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:srv']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          agentTools: [makeEchoTool()],
+          mcp: { srv: [mcpDecl('ping', 'Ping server')] }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => true,
+          mcpToolsOnly: () => mcpOnly
+        }
+      })
+      const session = await t.open(SID)
+
+      // 初始为 true → 隐藏
+      t.kit.queue(answer('t1'))
+      expect(await withTimeout(session.submitUser('turn 1'), TIMEOUT, 't1')).toEqual({})
+      expect(requestTools(t.kit, 0).map((tool) => tool.name)).not.toContain('mcp__srv__ping')
+      expect((await storedLockOf(session))?.codemodeMcpOnly).toBe(true)
+
+      // 翻为 false 并销毁重建 → 暴露给模型直调
+      mcpOnly = false
+      await withTimeout(session.destroyAgent(), TIMEOUT, 'destroy-1')
+      t.kit.queue(answer('t2'))
+      expect(await withTimeout(session.submitUser('turn 2'), TIMEOUT, 't2')).toEqual({})
+      expect(requestTools(t.kit, 1).map((tool) => tool.name)).toContain('mcp__srv__ping')
+      expect((await storedLockOf(session))?.codemodeMcpOnly).toBeUndefined()
+
+      // 翻回 true 并销毁重建 → 重新隐藏
+      mcpOnly = true
+      await withTimeout(session.destroyAgent(), TIMEOUT, 'destroy-2')
+      t.kit.queue(answer('t3'))
+      expect(await withTimeout(session.submitUser('turn 3'), TIMEOUT, 't3')).toEqual({})
+      expect(requestTools(t.kit, 2).map((tool) => tool.name)).not.toContain('mcp__srv__ping')
+      expect((await storedLockOf(session))?.codemodeMcpOnly).toBe(true)
+    },
+    TIMEOUT
+  )
+})

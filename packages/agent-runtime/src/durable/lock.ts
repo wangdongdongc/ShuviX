@@ -340,10 +340,11 @@ export interface AgentLockDeps {
   processRecord: SessionProcessRecord
   /** 内置扩展再带上的 hook（自动脱敏的 afterTool） */
   extraHooks?: readonly HookRegistration[]
-  /** 持久化代码模式扩展与现读开关（已安装到 registry；创建 agent 时按 isEnabled 决定是否纳入） */
+  /** 持久化代码模式扩展与现读开关（已安装到 registry；创建 agent 时按 isEnabled / mcpToolsOnly 决定是否纳入与收拢 MCP） */
   codemode?: {
     readonly extension: Extension
     readonly isEnabled: () => boolean
+    readonly mcpToolsOnly?: () => boolean
   }
 }
 
@@ -618,6 +619,12 @@ export class AgentLock {
     const thinkingLevel = resolveThinkingLevel(kind, profile, config.thinkingLevel)
     const cwd = config.cwd ?? ''
 
+    const codemodeActive = this.deps.codemode?.isEnabled() === true
+    const codemodeMcpOnly = codemodeActive && this.deps.codemode?.mcpToolsOnly?.() === true
+    const mcpCallers: ToolRegistration['callers'] | undefined = codemodeMcpOnly
+      ? ['tools']
+      : undefined
+
     const resolved = await toolHost.resolveAgentTools(
       {
         sessionId,
@@ -629,7 +636,8 @@ export class AgentLock {
         names: requested,
         model: resolution.model,
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-        cwd
+        cwd,
+        ...(mcpCallers === undefined ? {} : { mcpCallers })
       },
       { signal }
     )
@@ -733,7 +741,6 @@ export class AgentLock {
     const seenMessages: readonly Message[] =
       seen === undefined ? [] : (await seen.context(BG)).messages
     cancelled()
-    const codemodeActive = this.deps.codemode?.isEnabled() === true
     const codemodeTools = codemodeActive ? (this.deps.codemode!.extension.tools ?? []) : []
     const composedTools = [...composed.tools]
     for (const tool of codemodeTools) {
@@ -763,6 +770,7 @@ export class AgentLock {
       skills: [...(resolved.skills ?? [])],
       // 按哪份勾选建的（`agent.init` 锁着时报它，option A）；配置没给勾选就不记
       ...(config.toolOverlay === undefined ? {} : { selection: [...new Set(config.toolOverlay)] }),
+      ...(codemodeMcpOnly ? { codemodeMcpOnly: true } : {}),
       createdAt: this.deps.now()
     }
 
@@ -999,8 +1007,11 @@ export class AgentLock {
     const servers = desiredServers.filter(
       (server) => !lockServers.includes(server) && !requestedBefore.has(server)
     )
+    const mcpCallers: ToolRegistration['callers'] | undefined = lock.codemodeMcpOnly
+      ? ['tools']
+      : undefined
     const resolved = await toolHost.reconfigureAgentTools!(
-      { sessionId, names, servers },
+      { sessionId, names, servers, ...(mcpCallers === undefined ? {} : { mcpCallers }) },
       { signal: options.signal, connect: options.connect }
     )
 

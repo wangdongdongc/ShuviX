@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_TOOL_PRESENTATIONS } from '../builtinToolPresentations'
+import { EXPERIMENTAL_FEATURES } from '../experimentalFeatures'
 import { buildToolSummary } from '../toolSummaries'
 import en from '../i18n/locales/en.json'
 import zh from '../i18n/locales/zh.json'
@@ -75,6 +76,45 @@ describe('Codemode Phase 1 · D. Presentation、摘要与 i18n', () => {
       expect(bundle.toolCall.codemodeCalls, `${locale}.toolCall.codemodeCalls`).toContain(
         '{{count}}'
       )
+    }
+  })
+
+  it('CM2-I18N-01 EXPERIMENTAL_FEATURES.codemode 存在且三语翻译非空；三语均包含非空 codemode 设置页文案', () => {
+    const featureKey = EXPERIMENTAL_FEATURES.codemode
+    expect(typeof featureKey).toBe('string')
+    expect(featureKey.length).toBeGreaterThan(0)
+
+    const resolveKey = (bundle: Record<string, unknown>, dotKey: string): unknown =>
+      dotKey.split('.').reduce<unknown>((acc, part) => {
+        if (acc !== null && typeof acc === 'object' && part in (acc as Record<string, unknown>)) {
+          return (acc as Record<string, unknown>)[part]
+        }
+        return undefined
+      }, bundle)
+
+    const settingsKeys = [
+      'codemodeSection',
+      'codemodeSectionHint',
+      'codemodeEnabled',
+      'codemodeEnabledHint',
+      'codemodeMcpOnly',
+      'codemodeMcpOnlyHint'
+    ] as const
+
+    for (const [locale, bundle] of [
+      ['en', en],
+      ['zh', zh],
+      ['ja', ja]
+    ] as const) {
+      const expText = resolveKey(bundle as unknown as Record<string, unknown>, featureKey)
+      expect(typeof expText, `${locale}.${featureKey}`).toBe('string')
+      expect((expText as string).trim().length, `${locale}.${featureKey}`).toBeGreaterThan(0)
+
+      for (const key of settingsKeys) {
+        const val = bundle.settings[key]
+        expect(typeof val, `${locale}.settings.${key}`).toBe('string')
+        expect(val.trim().length, `${locale}.settings.${key}`).toBeGreaterThan(0)
+      }
     }
   })
 })
