@@ -27,7 +27,8 @@ vi.mock('@shuvix/app-shell', async () => {
   const { createElement: h } = await import('react')
   return {
     AppearanceTab: () => h('div', { 'data-stub-appearance': '' }),
-    ModelDefaultsSettings: () => h('div', { 'data-stub-model-defaults': '' })
+    ModelDefaultsSettings: () => h('div', { 'data-stub-model-defaults': '' }),
+    ExperimentalTag: () => h('span', { 'data-stub-experimental': '' })
   }
 })
 vi.mock('../../../stores/settingsStore', () => ({

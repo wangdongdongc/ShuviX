@@ -40,7 +40,10 @@ describe('P2-11 · J6 model and thinking md keys', () => {
       world.model.chatIn('tuned', childAnswer.step)
       const sending = session.submitUser('go')
       await withTimeout(childAnswer.reached, 3000, 'child request')
-      expect(session.effectiveSettings.compaction?.reserveTokens).toBe(2000)
+      expect(session.effectiveSettings.compaction?.reserveTokens).toBe(10000)
+      expect(
+        session.effectiveSettings.compaction?.modelOverrides?.['faux/faux-2']?.reserveTokens
+      ).toBe(2000)
       childAnswer.release()
       expect(await withTimeout(sending, 5000, 'send')).toEqual({})
       world.chat(answer('after'))

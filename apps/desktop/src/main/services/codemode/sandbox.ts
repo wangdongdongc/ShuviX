@@ -23,7 +23,7 @@ export const CODEMODE_MCP_ONLY_KEY = 'session.codemodeMcpOnly'
 let singleton: CodemodeSandbox | undefined
 
 function resolveWorkerUrl(): URL | undefined {
-  if (app.isPackaged) {
+  if (app?.isPackaged === true) {
     return pathToFileURL(
       join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'codemodeWorker.js')
     )
@@ -34,7 +34,7 @@ function resolveWorkerUrl(): URL | undefined {
 }
 
 function resolveWasmPath(): string | undefined {
-  if (app.isPackaged) {
+  if (app?.isPackaged === true) {
     return join(process.resourcesPath, 'codemode', 'quickjs.wasm')
   }
   return undefined

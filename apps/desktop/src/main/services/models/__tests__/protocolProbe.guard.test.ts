@@ -176,7 +176,7 @@ describe('P4-06 protocol probe · env loader', () => {
     expect(byId.kimi).toMatchObject({
       key: 'k',
       model: 'kimi-for-coding',
-      api: 'anthropic-messages',
+      api: 'openai-completions',
       target: { slug: 'kimi-coding' }
     })
     expect(byId.completions).toMatchObject({

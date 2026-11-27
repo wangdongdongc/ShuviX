@@ -8,7 +8,7 @@
  *  - 损坏 / 无法解码 / 压缩后仍无法满足上限：返回 `undefined`，由 `fit-images` 省略该图并附带诊断说明，
  *    避免一张坏图永久污染整条会话的后续请求。
  */
-import { nativeImage } from 'electron'
+import * as electron from 'electron'
 import type { ImageLimits, ImageProcessor, PreparedImage } from '@earendil-works/pi-durable/tools'
 
 const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
@@ -59,15 +59,23 @@ function fitDimensions(
   }
 }
 
-export function createElectronImageProcessor(
-  api: NativeImageModuleLike = nativeImage
-): ImageProcessor {
+function resolveDefaultNativeImage(): NativeImageModuleLike | undefined {
+  try {
+    return (electron as { nativeImage?: NativeImageModuleLike }).nativeImage
+  } catch {
+    return undefined
+  }
+}
+
+export function createElectronImageProcessor(api?: NativeImageModuleLike): ImageProcessor {
   return {
     async prepare(
       bytes: Uint8Array,
       mimeType: string,
       limits: ImageLimits
     ): Promise<PreparedImage | undefined> {
+      const mod = api ?? resolveDefaultNativeImage()
+      if (!mod?.createFromBuffer) return undefined
       if (
         !Number.isFinite(limits.maxWidth) ||
         limits.maxWidth <= 0 ||
@@ -82,7 +90,7 @@ export function createElectronImageProcessor(
         const buffer = Buffer.isBuffer(bytes)
           ? bytes
           : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-        const img = api.createFromBuffer(buffer)
+        const img = mod.createFromBuffer(buffer)
         if (img.isEmpty()) return undefined
 
         const { width: origW, height: origH } = img.getSize()

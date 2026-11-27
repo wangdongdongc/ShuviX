@@ -21,32 +21,49 @@ function window(session: DurableSession): { reserve?: number; background?: numbe
   }
 }
 
+function childOverride(
+  session: DurableSession,
+  key = 'faux/faux-2'
+): { reserve?: number; background?: number; keep?: number } | undefined {
+  const override = session.effectiveSettings.compaction?.modelOverrides?.[key]
+  if (!override) return undefined
+  return {
+    reserve: override.reserveTokens,
+    background: override.backgroundTokens,
+    keep: override.keepRecentTokens
+  }
+}
+
 const SMALL = { reserve: 2000, background: 2000, keep: 2000 }
 const ROOT = { reserve: 10000, background: 10000, keep: 10000 }
 
-describe('SpawnCoordinator · min-window settings', () => {
-  it('P2-03-72 a live faux-2 child shrinks the window; it ends → back to the root window', async () => {
+describe('SpawnCoordinator · per-model compaction overrides', () => {
+  it('P2-03-72 a live faux-2 child gets its own modelOverride without shrinking root; it ends → override removed', async () => {
     const d = await hostD()
     expect(window(d.session)).toEqual(ROOT)
+    expect(childOverride(d.session)).toBeUndefined()
     const step = held(answer('found'))
     d.t.kit.queue(callAgent('modeled', 'find X'), step.step, answer('done'))
     const sent = d.session.submitUser('go')
     await step.reached
-    expect(window(d.session)).toEqual(SMALL)
+    expect(window(d.session)).toEqual(ROOT)
+    expect(childOverride(d.session)).toEqual(SMALL)
     // faux-2 从注册表里没了：按未知，不抛
     const original = d.t.kit.models.getProvider('faux')!
     d.t.kit.models.setProvider(
       fauxProvider({ models: [{ id: 'faux-1', contextWindow: 40000 }] }).provider
     )
     expect(window(d.session)).toEqual(ROOT)
+    expect(childOverride(d.session)).toBeUndefined()
     d.t.kit.models.setProvider(original)
     step.release()
     expect(await withTimeout(sent, 3000, 'root')).toEqual({})
     // 闲着的子 agent 不算
     expect(window(d.session)).toEqual(ROOT)
+    expect(childOverride(d.session)).toBeUndefined()
   })
 
-  it('P2-03-73 after a restart: an interrupted faux-2 child counts right after open, without a model call', async () => {
+  it('P2-03-73 after a restart: an interrupted faux-2 child gets its modelOverride right after open, without a model call', async () => {
     const first = await hostD()
     const stall = stalled()
     first.t.kit.queue(callAgent('modeled', 'find X'), stall.step)
@@ -54,7 +71,8 @@ describe('SpawnCoordinator · min-window settings', () => {
     await stall.reached
     await firstChild(first.session)
     const d = await first.reopen()
-    expect(window(d.session)).toEqual(SMALL)
+    expect(window(d.session)).toEqual(ROOT)
+    expect(childOverride(d.session)).toEqual(SMALL)
     expect(d.t.kit.callCount).toBe(0)
   }, 15000)
 })
