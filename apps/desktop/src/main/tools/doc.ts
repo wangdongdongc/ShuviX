@@ -18,7 +18,7 @@
  * 目标文档恒取 ToolContext.sessionId 那条笔记本会话的文档 —— 刻意不收路径参数：这组工具只改「这一份」。
  * 操作失败（原文对不上、匹配多处）以抛错结束：pi 只把抛出的调用记为失败，步骤行才会是红的。
  */
-import { Type, type Static } from 'typebox'
+import { obj, opt, str, type Static } from '@earendil-works/pi-schema'
 import { basename } from 'path'
 import type { ToolCallScope, ToolResult } from '@shuvix/agent-runtime'
 import {
@@ -93,29 +93,29 @@ const DOC_INSERT_DESCRIPTION = `Insert new text into the shared document without
 
 Like doc_edit, an open editor shows a preview while you write the call and the insertion lands in one step; it waits for the user to pause if they are typing right at that spot.`
 
-const DocReadParamsSchema = Type.Object({})
+const DocReadParamsSchema = obj({})
 
-const DocEditParamsSchema = Type.Object({
-  find: Type.String({
+const DocEditParamsSchema = obj({
+  find: str({
     description:
       'Text to replace. Must occur exactly once in the current document; copy it verbatim from doc_read.'
   }),
-  replace: Type.String({ description: 'The new text for that passage.' })
+  replace: str({ description: 'The new text for that passage.' })
 })
 
 // 锚点排在 text 之前：模型大多按 schema 顺序写参数，锚点先到，虚影一开始就落在对的位置
-const DocInsertParamsSchema = Type.Object({
-  after: Type.Optional(
-    Type.String({
+const DocInsertParamsSchema = obj({
+  after: opt(
+    str({
       description: 'Insert right after this text (must occur exactly once). Omit to append.'
     })
   ),
-  before: Type.Optional(
-    Type.String({
+  before: opt(
+    str({
       description: 'Insert right before this text (must occur exactly once). Omit to append.'
     })
   ),
-  text: Type.String({
+  text: str({
     description: 'Text to insert, verbatim (include separating line breaks).'
   })
 })

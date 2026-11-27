@@ -79,7 +79,7 @@ async function setPartial(
   content: unknown[]
 ): Promise<void> {
   await liveCommit(session, (live) => {
-    live.run = { taskId: 7 as never, inputs: [] }
+    live.run = { taskId: 7 as never, inputs: [], turns: 0 }
     live.generation = { attempt: 1, message: partial(content) }
   })
 }

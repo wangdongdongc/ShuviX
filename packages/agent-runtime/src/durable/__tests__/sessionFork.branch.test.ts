@@ -15,7 +15,7 @@
  *   BA-9  句柄已关 → {ok:false, reason:'closed'}，从不抛、从不重开
  *   BA-10 branchAt 之后关了再开：指针仍是 F、视图相同
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   CompactionEntry,
   defineTool,
@@ -141,9 +141,12 @@ describe('session fork · branchAt', () => {
     // 建 F 与指针在同一次发布里
     const creating = recorder.publications.filter((p) => createsConversation(p, F))
     expect(creating).toHaveLength(1)
+    const stateChange = sessionStateChange(creating[0]!)
     expect(
-      (sessionStateChange(creating[0]!)?.value as { currentConversation?: number } | null)
-        ?.currentConversation
+      (stateChange?.kind === 'change'
+        ? (stateChange.value as { currentConversation?: number })
+        : null
+      )?.currentConversation
     ).toBe(F)
 
     const view = await viewOf(session)
@@ -350,7 +353,7 @@ describe('session fork · branchAt', () => {
       const waitTool = defineTool({
         name: 'wait',
         description: 'wait: waits for the test',
-        parameters: Type.Object({}),
+        parameters: obj({}),
         execute: async (_args, _api, context) => {
           started.resolve()
           await Promise.race([gate.promise, aborted(context.abortSignal!)])

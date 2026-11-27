@@ -11,7 +11,7 @@
  * （onFileChange），所以宿主的变更管线（知识库的 git 提交、扫描缓存、files.changed）看得见改名与删除 ——
  * 不必绕去 shell。两者都要 port 的可选能力（rename / remove），没有的宿主上工具直接报不支持。
  */
-import { Type } from 'typebox'
+import { num, obj, opt, str } from '@earendil-works/pi-schema'
 import type { ToolResult } from './toolResult'
 import type {
   ReadToolDetails,
@@ -32,36 +32,34 @@ import { urlObjectOf } from '../security/urlObject'
 type ReadResult = ToolResult<ReadToolDetails>
 
 // ─── 参数 schema（两端一致；导出供工具定义枚举复用，无需实例化） ──────────────
-export const ReadParamsSchema = Type.Object({
-  path: Type.String({ description: 'The file path, directory path, or URL (http/https) to read' }),
-  offset: Type.Optional(
-    Type.Number({
+export const ReadParamsSchema = obj({
+  path: str({ description: 'The file path, directory path, or URL (http/https) to read' }),
+  offset: opt(
+    num({
       description: 'Starting line number (1-based) for paginated reading of large files'
     })
   ),
-  limit: Type.Optional(
-    Type.Number({ description: 'Maximum number of lines to read, used together with offset' })
-  )
+  limit: opt(num({ description: 'Maximum number of lines to read, used together with offset' }))
 })
-export const WriteParamsSchema = Type.Object({
-  path: Type.String({ description: 'The file path to write to (relative or absolute)' }),
-  content: Type.String({ description: 'The content to write to the file' })
+export const WriteParamsSchema = obj({
+  path: str({ description: 'The file path to write to (relative or absolute)' }),
+  content: str({ description: 'The content to write to the file' })
 })
-export const EditParamsSchema = Type.Object({
-  path: Type.String({ description: 'The file path to modify' }),
-  oldText: Type.String({
+export const EditParamsSchema = obj({
+  path: str({ description: 'The file path to modify' }),
+  oldText: str({
     description: 'Exact text to find and replace (must match exactly, including whitespace)'
   }),
-  newText: Type.String({ description: 'New text to replace with' })
+  newText: str({ description: 'New text to replace with' })
 })
-export const MoveParamsSchema = Type.Object({
-  from: Type.String({ description: 'The file or directory to move (relative or absolute)' }),
-  to: Type.String({
+export const MoveParamsSchema = obj({
+  from: str({ description: 'The file or directory to move (relative or absolute)' }),
+  to: str({
     description: 'Its new path, name included (relative or absolute); must not exist yet'
   })
 })
-export const DeleteParamsSchema = Type.Object({
-  path: Type.String({ description: 'The file or empty directory to delete' })
+export const DeleteParamsSchema = obj({
+  path: str({ description: 'The file or empty directory to delete' })
 })
 
 /** move 的缺省描述（宿主可经 deps.descriptions.move 换掉） */

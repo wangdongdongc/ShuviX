@@ -13,7 +13,7 @@
  * P2-02：没有回调了 —— 结果只在返回值的 `details: {result}` 里（从不经 `api.details()`，PIN-04），
  * 转写条目经 `nextResultOf` 读回。用例编号 P2-02-16…20。
  */
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { ConversationId, EntryId, EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import {
@@ -120,7 +120,7 @@ describe('NextTool — 结果在 details 里（P2-02）', () => {
     const tool = new NextTool(TITLE_SCHEMA)
     const bad = await run(tool, {})
     expect(bad.isError).toBe(true)
-    expect(textOf(bad)).toMatch(/\(root\): must have required properties title/)
+    expect(textOf(bad)).toMatch(/\/title: missing/)
     expect(textOf(bad)).toMatch(/call `next` again/)
     expect('details' in bad).toBe(false)
     // 失败的一次不收尾：模型还得改了再调
@@ -143,7 +143,7 @@ describe('NextTool — 结果在 details 里（P2-02）', () => {
     const tool = new NextTool(schema)
     const rejected = await run(tool, { level: 0, kind: 'c' })
     expect(rejected.isError).toBe(true)
-    expect(textOf(rejected)).toMatch(/\/level: must be >= 1/)
+    expect(textOf(rejected)).toMatch(/\/level: expected >= 1/)
     expect('details' in rejected).toBe(false)
 
     const ok = await run(tool, { level: 3, kind: 'a' }, 't2')

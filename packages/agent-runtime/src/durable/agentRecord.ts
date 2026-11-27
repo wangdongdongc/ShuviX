@@ -17,7 +17,8 @@
  * 身份（`AgentIdentity`）是记录在工具眼里的那一截：档案名、root / spawned、惰性模型配置、调用方 id ——
  * 结构上就是桌面的 `ToolAgentIdentity`。
  */
-import { copyJson, type Context, type JsonValue } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
 import type {
   ConversationId,
   DocumentReader,

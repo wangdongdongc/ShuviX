@@ -419,8 +419,8 @@ describe('```interactive —— 认领成 .html、list 按种类判、create 收
     }
 
     const inDescription = /needs `title` and `ext`: ([a-z, ]+)\)/.exec(ARTIFACT_DESCRIPTION)?.[1]
-    const extParam = (ArtifactParamsSchema.properties.ext as unknown as { description?: string })
-      .description
+    const props = ArtifactParamsSchema.properties as Record<string, { description?: string }>
+    const extParam = props.ext?.description
     const inParam = /— ([a-z, ]+)$/.exec(extParam ?? '')?.[1]
     const missingExt = textOf(await run({ action: 'create', title: 'T', content: 'x' }))
     const inMissing = /\(([a-z, ]+)\)/.exec(missingExt)?.[1]

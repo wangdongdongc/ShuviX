@@ -19,7 +19,7 @@
  *   RC-13 问题卡：用户答 other 时写的值记成照原样发，结果不换；父会话代答的是工具结果，按策略换
  *   RC-14 还原回显：命令回显转义后的真值，脱敏时换回同一个占位符，不脱敏时存明文
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj, str } from '@earendil-works/pi-schema'
 import {
   defineTool,
   ROOT_CONVERSATION_ID,
@@ -96,7 +96,7 @@ function printTool(text: string | (() => string), name = 'emit'): ToolRegistrati
   return defineTool({
     name,
     description: `${name}: prints something`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async () => ({
       output: [{ type: 'text', text: typeof text === 'function' ? text() : text }]
     })
@@ -108,7 +108,7 @@ function echoTool(getSession: () => DurableSession, seen: unknown[] = []): ToolR
   return defineTool({
     name: 'echo',
     description: 'echo: prints its argument',
-    parameters: Type.Object({ text: Type.String() }),
+    parameters: obj({ text: str() }),
     execute: async (args) => {
       const { value } = await getSession().redaction!.restoreJson(args)
       seen.push(value)
@@ -971,7 +971,7 @@ describe('记录即所发', () => {
           defineTool({
             name: 'sh',
             description: 'sh: echoes the command it ran',
-            parameters: Type.Object({ command: Type.String() }),
+            parameters: obj({ command: str() }),
             execute: async (args) => {
               const { value } = await live.session!.redaction!.restoreJson(args, {
                 field: 'command',

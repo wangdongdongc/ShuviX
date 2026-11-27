@@ -17,13 +17,13 @@
  * 输出截断/落盘由各宿主的包装器在装配工具时统一处理（读取 outputStrategy / outputMax*）；
  * durable 自己的那道截断（`outputLimits`）只当兜底，见 outputLimits.ts。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
   ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { TSchema, Static } from 'typebox'
+import type { Schema, Static } from '@earendil-works/pi-schema'
 import { catchToolErrors, toExecutionResult, type ToolResult } from './toolResult'
 import type { ToolExecutionMode } from './toolResult'
 import { toolCallScope, type ToolCallScope } from './toolCall'
@@ -34,7 +34,7 @@ import type { TruncateStrategy } from '../toolOutput/spill'
 export type ToolReplay = 'safe' | 'unsafe'
 
 export abstract class BaseTool<
-  TParams extends TSchema = TSchema
+  TParams extends Schema = Schema
 > implements ToolRegistration<TParams> {
   abstract readonly name: string
   abstract readonly label: string

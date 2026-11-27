@@ -1,55 +1,30 @@
 /**
- * 视图同步钩子用例的服务端一侧（pi 1.2 / chord2）：一个**真的** chord2 宿主（名字 `main`），用与产品相同的远程契约
- * （`shuvix.session-view` / `shuvix.agent-view`）交出测试可控的视图，经 {@link linkChannel} 包成一条
- * `SyncLinkChannel`（帧 JSON 往返一遍、在微任务里送达，与 IPC 一样异步）。
- *
- * 与产品的视图服务端（agent-runtime 的 `viewServer`）的区别：这里的状态完全由测试摆布 ——
- *  - `serve(target, view)`：给一个目标装上初始值（第一次持有之前调）；
- *  - `change(target, draft => …)`：改服务端的值（一次修订，客户端收到增量）；
- *  - `replace(target, view)`：换一份新的值（整份），可用性回到 `available`；
- *  - `withdraw(target)`：`availability = 'unavailable'`（会话被删 / 对话没了）；
- *  - `reset(holdId)`：把同一份值整份再发一次（客户端收到一个 reset 帧）；
- *  - `failSubscribe(code)`：下一次新建的视图记录以这个码失败（`not_found` → chord 的「找不到」；其余当 chord 码；
- *    不给 → 一个没有码的普通错误，chord 记成 `unavailable`）。
- *
- * 记录：`calls`（`subscribe:<holdId>` / `unsubscribe:<holdId>`，按链路上的 hold / release 帧记）、
- * `subscriptions(target)`（还持有着的 hold）、`frameListeners`（渠道 onFrame 的登记 / 注销）、`sent`（客户端
- * 发出的每一帧，`[链路 id, 帧, 时刻]`）。
- *
- * 链路 / 传输的摆布（{@link linkChannel} 的，`fakeServer` 原样转交）：
- *  - `setUp(bool)`：传输断开 / 恢复（驱动渠道的 `isUp` / `onDown` / `onUp`；断开时服务端这头的链路一起结束、
- *    两个方向的帧都丢掉）；
- *  - `endServerLink(id, {bye})`：服务端结束一条链路（带 `bye` = 客户端当场知道；不带 = 悄悄没了，客户端只能靠
- *    ping 超时发现）；
- *  - `inject(linkId, frame)`：直接往客户端塞一帧；
- *  - `setDeaf(bool)`：服务端不再读客户端的帧（不建链路、不应答 —— 「新链路一帧都收不到」）；
- *  - `delayDown(match)` / `releaseDown()`：服务端发往客户端的帧里匹配的先扣下、再按序放行（调换两个订阅的先后）；
- *  - `throwOnSend(match)`：渠道的 `send` 对匹配的帧抛错（传输坏了）；
- *  - `fakeServer` 自己的：`close()`（`host.close`：服务端的记录被强制拿走 = gone，链路随后带 `bye` 关掉）、
- *    `refuseAllLinks()`（每条新链路一来就带 `bye` 关掉）。
+ * 视图同步钩子用例的服务端一侧（Chord 1.6.1 / v2）：一个**真的** chord v2 宿主（地址 `VIEW_SERVER_ADDRESS`），
+ * 用与产品相同的远程契约（`shuvix.session-view` / `shuvix.agent-view`）交出测试可控的视图，经 {@link linkChannel}
+ * 包成一条 `SyncLinkChannel`（帧 JSON 往返一遍、在微任务里送达，与 IPC 一样异步）。
  */
-import {
-  ChordError,
-  cell,
-  createHost,
-  local,
-  replicatedState,
-  type BehaviorOf,
-  type ChordErrorCode,
-  type Draft,
-  type MutableReplicatedState
-} from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { Type } from 'typebox'
+import { diffRevisions, type Draft, type Op } from '@earendil-works/chord/delta'
+import type { JsonValue as ChordJsonValue } from '@earendil-works/chord/json'
 import {
   AgentViewContract,
-  AvailabilitySchema,
+  ChordError,
+  createHost,
+  defineFacet,
+  forbidden,
   FrameLink,
   notFoundError,
   SessionViewContract,
-  VIEW_SERVER_HOST,
+  VIEW_LINK_CODEC,
+  VIEW_SERVER_ADDRESS,
+  type ChordErrorCode,
+  type FollowObserver,
   type ViewAvailability
 } from '@shuvix/agent-runtime/sync/viewContracts'
+import {
+  replicatedState,
+  type MutableReplicatedState
+} from '../../../../../agent-runtime/src/sync/replicatedState'
 import {
   SYNC_NOT_FOUND,
   syncTargetKey,
@@ -68,7 +43,7 @@ function json<T>(value: T): T {
 // ─── 渠道 ⇄ 服务端链路 ─────────────────────────────────
 
 /** 线上的一帧（JSON 副本） */
-export type WireFrame = { t?: unknown; [key: string]: unknown }
+export type WireFrame = { t?: unknown; d?: unknown; [key: string]: unknown }
 
 /** 客户端发出的一帧：`[链路 id, 帧, 交给渠道时的 Date.now()]` */
 export type SentFrame = [linkId: string, frame: WireFrame, at: number]
@@ -111,7 +86,7 @@ export interface LinkChannel {
  */
 export function linkChannel(
   accept: (link: FrameLink, linkId: string) => void,
-  tap?: (linkId: string, frame: { t?: unknown; [key: string]: unknown }) => void
+  tap?: (linkId: string, frame: WireFrame) => void
 ): LinkChannel {
   const listeners = new Set<(link: string, frame: JsonValue) => void>()
   const downListeners = new Set<(reason: string) => void>()
@@ -246,7 +221,6 @@ interface Served {
 }
 
 export interface FakeServerOptions {
-  /** 旧版的「订阅回复之前先发几帧」—— chord2 的链路上没有这回事，保留只为不改调用方 */
   framesBeforeReply?: number
 }
 
@@ -266,7 +240,7 @@ export interface FakeServer extends Pick<
   /** 链路上的持有：`subscribe:<holdId>` / `unsubscribe:<holdId>` */
   readonly calls: string[]
   readonly frameListeners: { registered: number; unregistered: number; active: number }
-  /** 关掉服务端宿主（`host.close`）：每个记录被强制拿走（客户端句柄 gone），之后链路带 `bye` 关掉 */
+  /** 关掉服务端宿主（`host.close`）：每个对象被强制结束，之后链路带 `bye` 关掉 */
   close(): Promise<void>
   /** 之后每条新链路一来就带 `bye` 关掉（`false` = 不再拒） */
   refuseAllLinks(refuse?: boolean): void
@@ -286,12 +260,6 @@ export interface FakeServer extends Pick<
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-const FakeSource = local('test.fake-view-source', {
-  version: 1,
-  input: Type.Object({ key: Type.String() }),
-  members: { view: Type.Unknown(), availability: AvailabilitySchema }
-})
-
 export function fakeServer(_options: FakeServerOptions = {}): FakeServer {
   const served = new Map<string, Served>()
   const calls: string[] = []
@@ -299,8 +267,14 @@ export function fakeServer(_options: FakeServerOptions = {}): FakeServer {
   const holds = new Map<string, { id: string; key: string }>()
   let failNext: { code?: string } | undefined
   let refusing = false
+  let closed = false
 
-  const host = createHost({ name: VIEW_SERVER_HOST, onError: () => {} })
+  const host = createHost({
+    address: VIEW_SERVER_ADDRESS,
+    principal: { kind: 'host' },
+    revokedBy: () => ['disposed'],
+    onError: () => {}
+  })
 
   const entryOf = (target: SyncTarget): Served => {
     const entry = served.get(syncTargetKey(target))
@@ -311,110 +285,168 @@ export function fakeServer(_options: FakeServerOptions = {}): FakeServer {
     for (const listener of [...entry.listeners]) listener()
   }
 
-  host.serve(FakeSource, ({ key }, _principal, self) => {
-    const initial = served.get(key)
-    const cells = self.state({
-      view: cell(Type.Unknown(), (initial?.state.value ?? null) as unknown),
-      availability: cell(AvailabilitySchema, initial?.availability ?? 'unavailable')
-    })
-    self.tasks({
-      bridge: async (ctx) => {
-        const entry = served.get(key)
-        if (entry === undefined) return
-        let current: MutableReplicatedState<View> | undefined
-        let resets = entry.resets
-        let stop: (() => void) | undefined
-        const sync = (): void => {
-          if (ctx.signal.aborted) return
-          if (current !== entry.state) {
-            stop?.()
-            current = entry.state
-            const state = entry.state
-            cells.view.replace(ctx, state.value)
-            stop = state.subscribe((value) => {
-              if (ctx.signal.aborted || current !== state || value === cells.view.value) return
-              cells.view.replace(ctx, value, { diff: true })
-            })
-          } else if (resets !== entry.resets) {
-            // 真的整份重发：订阅者收到一个 reset（线上是 `{t:'state', reset}`，服务端的增量编码随之重来）。
-            // `replace` 不行 —— 值没变就没有 op，什么都不发
-            cells.view.reset(json(entry.state.value), cells.view.schema)
-          }
-          resets = entry.resets
-          if (cells.availability.value !== entry.availability) {
-            cells.availability.replace(ctx, entry.availability)
-          }
-        }
-        sync()
-        entry.listeners.add(sync)
-        await new Promise<void>((resolve) => {
-          if (ctx.signal.aborted) resolve()
-          else ctx.signal.addEventListener('abort', () => resolve(), { once: true })
-        })
-        entry.listeners.delete(sync)
-        stop?.()
-      }
-    })
-    return { view: cells.view, availability: cells.availability }
-  })
-
   const refuse = (): void => {
     if (failNext === undefined) return
     const { code } = failNext
     failNext = undefined
     if (code === undefined) throw new Error('subscribe refused (no code)')
     if (code === SYNC_NOT_FOUND) throw notFoundError('subscribe refused (not found)')
-    throw new ChordError(code as ChordErrorCode, `subscribe refused (${code})`)
+    if (code === 'forbidden') throw forbidden('subscribe refused (forbidden)')
+    throw new ChordError({
+      code: code as Exclude<ChordErrorCode, 'invalid'>,
+      message: `subscribe refused (${code})`
+    })
   }
 
-  host.serve(SessionViewContract, ({ sessionId }, _principal, self) => {
-    refuse()
-    const source = self.get(FakeSource, { key: syncTargetKey({ kind: 'session', sessionId }) })
-    return {
-      kind: 'owner',
-      view: source.view,
-      availability: source.availability
-    } as unknown as BehaviorOf<typeof SessionViewContract>
-  })
-  host.serve(AgentViewContract, ({ agentId }, _principal, self) => {
-    refuse()
-    const source = self.get(FakeSource, { key: syncTargetKey({ kind: 'agent', agentId }) })
-    return {
-      kind: 'owner',
-      view: source.view,
-      availability: source.availability
-    } as unknown as BehaviorOf<typeof AgentViewContract>
+  const facet = defineFacet((fHost) => {
+    const attach = (
+      key: string,
+      self: Parameters<Parameters<typeof fHost.serve<typeof SessionViewContract>>[1]>[2]
+    ): {
+      readonly view: ReturnType<typeof self.follow<unknown>>
+      readonly availability: ReturnType<typeof self.follow<ViewAvailability>>
+    } => {
+      const bridgeNative = self.open(
+        async () => {
+          const entry = served.get(key)
+          let viewValue: unknown = entry?.state.value ?? null
+          let availValue: ViewAvailability = entry?.availability ?? 'unavailable'
+          let current: MutableReplicatedState<View> | undefined
+          let resets = entry?.resets ?? 0
+          let stopState: (() => void) | undefined
+          const viewObservers = new Set<FollowObserver<unknown>>()
+          const availObservers = new Set<FollowObserver<unknown>>()
+
+          const emitView = (next: unknown, ops: readonly Op[]): void => {
+            viewValue = next
+            if (ops.length === 0) return
+            for (const obs of [...viewObservers]) {
+              obs.advance({ kind: 'value', value: next, ops, retired: false }, BACKGROUND_CONTEXT)
+            }
+          }
+          const emitAvail = (next: ViewAvailability): void => {
+            if (availValue === next) return
+            availValue = next
+            for (const obs of [...availObservers]) {
+              obs.advance(
+                { kind: 'value', value: next, ops: [['r', next]], retired: false },
+                BACKGROUND_CONTEXT
+              )
+            }
+          }
+
+          const sync = (): void => {
+            if (entry === undefined) return
+            if (current !== entry.state) {
+              stopState?.()
+              current = entry.state
+              const state = entry.state
+              emitView(state.value, [['r', state.value as unknown as ChordJsonValue]])
+              stopState = state.subscribe((value, _ctx, delivery) => {
+                if (current !== state || value === viewValue) return
+                const ops =
+                  delivery.ops.length > 0
+                    ? delivery.ops
+                    : diffRevisions(
+                        viewValue as unknown as ChordJsonValue,
+                        value as unknown as ChordJsonValue
+                      )
+                emitView(value, ops)
+              })
+            } else if (resets !== entry.resets) {
+              const fresh = json(entry.state.value)
+              emitView(fresh, [['r', fresh as unknown as ChordJsonValue]])
+            }
+            resets = entry.resets
+            emitAvail(entry.availability)
+          }
+
+          if (entry !== undefined) {
+            sync()
+            entry.listeners.add(sync)
+          }
+          return {
+            attachView: (obs: FollowObserver<unknown>) => {
+              viewObservers.add(obs)
+              return { value: viewValue, detach: () => void viewObservers.delete(obs) }
+            },
+            attachAvail: (obs: FollowObserver<unknown>) => {
+              availObservers.add(obs)
+              return { value: availValue, detach: () => void availObservers.delete(obs) }
+            },
+            close: () => {
+              entry?.listeners.delete(sync)
+              stopState?.()
+              viewObservers.clear()
+              availObservers.clear()
+            }
+          }
+        },
+        (bridge) => bridge.close()
+      )
+
+      const view = self.follow<unknown>(async (obs) => bridgeNative.value.attachView(obs))
+      const availability = self.follow<ViewAvailability>(async (obs) =>
+        bridgeNative.value.attachAvail(obs)
+      )
+      return { view, availability }
+    }
+
+    fHost.serve(SessionViewContract, ({ sessionId }, _principal, self) => {
+      refuse()
+      const members = attach(syncTargetKey({ kind: 'session', sessionId }), self)
+      return { variant: 'owner', members } as never
+    })
+    fHost.serve(AgentViewContract, ({ agentId }, _principal, self) => {
+      refuse()
+      const members = attach(syncTargetKey({ kind: 'agent', agentId }), self)
+      return { variant: 'owner', members } as never
+    })
   })
 
-  const keyOfHold = (frame: { [key: string]: unknown }): string | undefined => {
-    const name = (frame.token as { name?: unknown } | undefined)?.name
-    const input = (frame.input ?? {}) as { sessionId?: unknown; agentId?: unknown }
+  void host.load([{ name: 'test-fake-server', facet }], BACKGROUND_CONTEXT)
+
+  const keyOfHold = (frame: WireFrame): { id: string; key: string | undefined } | undefined => {
+    const tuple = Array.isArray(frame.d) ? frame.d : undefined
+    if (!tuple || tuple[0] !== 'H') return undefined
+    const id = String(tuple[1])
+    const name = tuple[2]
+    const part = Array.isArray(tuple[5]) ? tuple[5][1] : undefined
+    const input = (part ?? {}) as { sessionId?: unknown; agentId?: unknown }
     if (name === SessionViewContract.name && typeof input.sessionId === 'string') {
-      return syncTargetKey({ kind: 'session', sessionId: input.sessionId })
+      return { id, key: syncTargetKey({ kind: 'session', sessionId: input.sessionId }) }
     }
     if (name === AgentViewContract.name && typeof input.agentId === 'string') {
-      return syncTargetKey({ kind: 'agent', agentId: input.agentId })
+      return { id, key: syncTargetKey({ kind: 'agent', agentId: input.agentId }) }
     }
-    return undefined
+    return { id, key: undefined }
   }
 
   const wire = linkChannel(
     (link, linkId) => {
-      // 链路怎么结束的都一样（客户端 bye、服务端结束、传输断开、被拒）：它上面的持有都不在了
       link.onClose(() => {
         for (const hold of [...holds.keys()]) if (hold.startsWith(`${linkId}#`)) holds.delete(hold)
       })
-      if (refusing) link.close('refused')
-      else host.accept(link, { principal: { kind: 'test' }, kind: 'client' })
+      if (refusing || closed) link.close('refused')
+      else
+        host.accept(
+          link,
+          { principal: { kind: 'test' }, codec: VIEW_LINK_CODEC },
+          BACKGROUND_CONTEXT
+        )
     },
     (linkId, frame) => {
       if (frame.t === 'hold') {
-        const id = String(frame.id)
-        const key = keyOfHold(frame)
-        calls.push(`subscribe:${id}`)
-        if (key !== undefined) holds.set(`${linkId}#${id}`, { id, key })
+        const parsed = keyOfHold(frame)
+        if (parsed !== undefined) {
+          calls.push(`subscribe:${parsed.id}`)
+          if (parsed.key !== undefined) {
+            holds.set(`${linkId}#${parsed.id}`, { id: parsed.id, key: parsed.key })
+          }
+        }
       } else if (frame.t === 'release') {
-        const id = String(frame.id)
+        const tuple = Array.isArray(frame.d) ? frame.d : undefined
+        const id = tuple ? String(tuple[1]) : ''
         calls.push(`unsubscribe:${id}`)
         holds.delete(`${linkId}#${id}`)
       } else if (frame.t === 'bye') {
@@ -436,7 +468,12 @@ export function fakeServer(_options: FakeServerOptions = {}): FakeServer {
     delayDown: wire.delayDown,
     releaseDown: wire.releaseDown,
     throwOnSend: wire.throwOnSend,
-    close: () => host.close(),
+    close: async () => {
+      if (closed) return
+      closed = true
+      host.revoke('disposed', BACKGROUND_CONTEXT)
+      await host.close(BACKGROUND_CONTEXT)
+    },
     refuseAllLinks: (refuse = true) => {
       refusing = refuse
     },

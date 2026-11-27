@@ -25,7 +25,14 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ChordError, forbidden, isChordError, type Frame } from '@earendil-works/chord'
+import {
+  ChordError,
+  forbidden,
+  isChordError,
+  memberNames,
+  type Schema
+} from '@earendil-works/chord'
+import { compile } from '@earendil-works/pi-schema'
 import { SYNC_NOT_FOUND } from '@shuvix/chat-protocol/sync'
 import type {
   AssistantMessage,
@@ -38,7 +45,6 @@ import {
   type LiveCard,
   type SessionView
 } from '@shuvix/chat-protocol/types/sessionView'
-import { Value } from 'typebox/value'
 import { describe, expect, it, vi } from 'vitest'
 import { legacySessionView } from '../services'
 import {
@@ -51,14 +57,26 @@ import {
   NOT_FOUND_REASON,
   notFoundError,
   SessionViewContract,
-  VIEW_SERVER_HOST
+  VIEW_SERVER_HOST,
+  type Frame
 } from '../viewContracts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+const UTF8 = new TextDecoder()
 
-/** 一帧（测试里随便造的形状；chord 的 Frame 类型只在这里断言） */
+function checkSchema(schema: Schema, value: unknown): boolean {
+  return compile(schema).check(value)
+}
+
+/** 一帧（测试里随便造的形状） */
 function frame(n: number): Frame {
-  return { t: 'test', n } as unknown as Frame
+  return { t: 'test', n }
+}
+
+/** 把收到的 Uint8Array 解码回 JSON 值，方便测试断言 */
+function decodeBytes(bytes: Uint8Array): unknown {
+  const text = UTF8.decode(bytes)
+  return text === 'undefined' ? undefined : JSON.parse(text)
 }
 
 /** 一条链路 + 它的全部记录（发出的帧、收尾、关闭回调，按发生次序记进同一个 `log`） */
@@ -89,19 +107,19 @@ function recordedLink(options: { transmitThrows?: boolean; shutdownThrows?: bool
 // ─── FrameLink ─────────────────────────────────────────
 
 describe('FrameLink', () => {
-  it('FL-1 frames delivered before receive() are queued, flushed in order, then delivered live', () => {
+  it('FL-1 frames delivered before onMessage() are queued, flushed in order, then delivered live', () => {
     const { link } = recordedLink()
     link.deliver(frame(1))
     link.deliver(frame(2))
     link.deliver(frame(3))
     const got: unknown[] = []
-    link.receive((value) => got.push(value))
+    link.onMessage((value) => got.push(decodeBytes(value)))
     expect(got).toEqual([frame(1), frame(2), frame(3)])
     link.deliver(frame(4))
     expect(got).toEqual([frame(1), frame(2), frame(3), frame(4)])
     // 冲出去之后队列是空的：再换一个接收方不会重放旧帧
     const second: unknown[] = []
-    link.receive((value) => second.push(value))
+    link.onMessage((value) => second.push(decodeBytes(value)))
     expect(second).toEqual([])
     link.deliver(frame(5))
     expect(second).toEqual([frame(5)])
@@ -113,7 +131,7 @@ describe('FrameLink', () => {
     const { link, shutdowns, sent } = recordedLink()
     const closes: string[] = []
     link.onClose((reason) => closes.push(reason))
-    // bye 在 receive 之前到：不排队，照样结束
+    // bye 在 onMessage 之前到：不排队，照样结束
     link.deliver(frame(1))
     link.deliver({ t: 'bye', reason: 'x' })
     expect(link.closed).toBe(true)
@@ -121,7 +139,7 @@ describe('FrameLink', () => {
     expect(closes).toEqual(['x'])
     // 排队的帧丢掉了；之后到的帧、又一个 bye 都不理
     const got: unknown[] = []
-    link.receive((value) => got.push(value))
+    link.onMessage((value) => got.push(decodeBytes(value)))
     link.deliver(frame(2))
     link.deliver({ t: 'bye', reason: 'again' })
     link.ended('late')
@@ -136,7 +154,7 @@ describe('FrameLink', () => {
       const other = recordedLink()
       const reasons: string[] = []
       other.link.onClose((reason) => reasons.push(reason))
-      other.link.receive(() => {
+      other.link.onMessage(() => {
         throw new Error('a bye must never reach the handler')
       })
       other.link.deliver(bye)
@@ -160,7 +178,7 @@ describe('FrameLink', () => {
 
     link.close('again')
     link.ended('late')
-    link.send(frame(1))
+    link.send(frame(1) as unknown as Uint8Array)
     expect(sent).toEqual([{ t: 'bye', reason: 'r' }])
     expect(shutdowns).toEqual(['r'])
     expect(closes).toEqual(['r'])
@@ -176,13 +194,13 @@ describe('FrameLink', () => {
     const failing = recordedLink({ transmitThrows: true })
     const closes: string[] = []
     failing.link.onClose((reason) => closes.push(reason))
-    expect(() => failing.link.send(frame(1))).not.toThrow()
+    expect(() => failing.link.send(frame(1) as unknown as Uint8Array)).not.toThrow()
     expect(failing.link.closed).toBe(true)
     expect(failing.shutdowns).toEqual(['transport error'])
     expect(closes).toEqual(['transport error'])
     // 结束之后不再碰传输
     const attempts = failing.log.filter((entry) => entry.startsWith('transmit:')).length
-    failing.link.send(frame(2))
+    failing.link.send(frame(2) as unknown as Uint8Array)
     expect(failing.log.filter((entry) => entry.startsWith('transmit:')).length).toBe(attempts)
 
     const closing = recordedLink({ transmitThrows: true })
@@ -227,7 +245,7 @@ describe('FrameLink', () => {
     const viaSend = recordedLink({ transmitThrows: true, shutdownThrows: true })
     const sendCloses: string[] = []
     viaSend.link.onClose((reason) => sendCloses.push(reason))
-    expect(() => viaSend.link.send(frame(1))).not.toThrow()
+    expect(() => viaSend.link.send(frame(1) as unknown as Uint8Array)).not.toThrow()
     expect(viaSend.shutdowns).toEqual(['transport error'])
     expect(sendCloses).toEqual(['transport error'])
 
@@ -250,20 +268,19 @@ describe('FrameLink', () => {
     expect(byeReasons).toEqual(['peer'])
   })
 
-  it('FL-6 non-object values are handed to the handler unchanged and are never taken as a bye', () => {
+  it('FL-6 non-object values are handed to the handler encoded and are never taken as a bye', () => {
     const { link, shutdowns } = recordedLink()
     const got: unknown[] = []
-    // 一部分在 receive 之前到（排队），一部分之后到（直接送达）
+    // 一部分在 onMessage 之前到（排队），一部分之后到（直接送达）
     const array = [{ t: 'bye', reason: 'inside an array' }]
     link.deliver('bye')
     link.deliver(null)
-    link.receive((value) => got.push(value))
+    link.onMessage((value) => got.push(decodeBytes(value)))
     link.deliver(array)
     link.deliver(42)
     link.deliver(undefined)
     link.deliver(['bye'])
     expect(got).toEqual(['bye', null, array, 42, undefined, ['bye']])
-    expect(got[2]).toBe(array)
     expect(link.closed).toBe(false)
     expect(shutdowns).toEqual([])
   })
@@ -391,44 +408,45 @@ describe('view contracts', () => {
     // 完整视图确实是严格 JSON（chord 只收 JSON）
     expect(JSON.parse(JSON.stringify(full))).toEqual(full)
     for (const view of [empty, legacy, full]) {
-      expect(Value.Check(LooseSessionViewSchema, view)).toBe(true)
-      expect(Value.Check(LooseSessionViewSchema, JSON.parse(JSON.stringify(view)))).toBe(true)
+      expect(checkSchema(LooseSessionViewSchema, view)).toBe(true)
+      expect(checkSchema(LooseSessionViewSchema, JSON.parse(JSON.stringify(view)))).toBe(true)
     }
-    expect(Value.Check(LooseSessionViewSchema, legacySessionView('s2', { messages: [] }))).toBe(
+    expect(checkSchema(LooseSessionViewSchema, legacySessionView('s2', { messages: [] }))).toBe(
       true
     )
 
     for (const view of [serverEmptyAgentView('a1'), fullAgentView()]) {
-      expect(Value.Check(LooseAgentViewSchema, view)).toBe(true)
+      expect(checkSchema(LooseAgentViewSchema, view)).toBe(true)
     }
 
     // 缺 messages / v:2 不收（会话、agent 两种）
     for (const view of [empty, full]) {
-      expect(Value.Check(LooseSessionViewSchema, without(view, 'messages'))).toBe(false)
-      expect(Value.Check(LooseSessionViewSchema, { ...view, v: 2 })).toBe(false)
+      expect(checkSchema(LooseSessionViewSchema, without(view, 'messages'))).toBe(false)
+      expect(checkSchema(LooseSessionViewSchema, { ...view, v: 2 })).toBe(false)
     }
     for (const view of [serverEmptyAgentView('a1'), fullAgentView()]) {
-      expect(Value.Check(LooseAgentViewSchema, without(view, 'messages'))).toBe(false)
-      expect(Value.Check(LooseAgentViewSchema, { ...view, v: 2 })).toBe(false)
+      expect(checkSchema(LooseAgentViewSchema, without(view, 'messages'))).toBe(false)
+      expect(checkSchema(LooseAgentViewSchema, { ...view, v: 2 })).toBe(false)
     }
     // 两份 schema 互不收对方
-    expect(Value.Check(LooseAgentViewSchema, full)).toBe(false)
-    expect(Value.Check(LooseSessionViewSchema, fullAgentView())).toBe(false)
+    expect(checkSchema(LooseAgentViewSchema, full)).toBe(false)
+    expect(checkSchema(LooseSessionViewSchema, fullAgentView())).toBe(false)
   })
 
-  it('CT-2 not-found is unavailable + reason not_found, and only that counts', () => {
+  it('CT-2 not-found is unavailable + details.reason not_found, and only that counts', () => {
     const error = notFoundError('Session s1 was deleted')
     expect(error).toBeInstanceOf(ChordError)
     expect(error.code).toBe('unavailable')
-    expect(error.reason).toBe('not_found')
-    // chord 在消息前面加上 `code/reason: `
+    expect(error.details).toEqual({ reason: 'not_found' })
     expect(error.message).toContain('Session s1 was deleted')
     expect(isChordError(error, 'unavailable')).toBe(true)
     expect(isNotFoundError(error)).toBe(true)
 
-    expect(isNotFoundError(new ChordError('unavailable', 'plain'))).toBe(false)
-    expect(isNotFoundError(new ChordError('unavailable', 'other', { reason: 'busy' }))).toBe(false)
-    expect(isNotFoundError(forbidden())).toBe(false)
+    expect(isNotFoundError(new ChordError({ code: 'unavailable', message: 'plain' }))).toBe(false)
+    expect(
+      isNotFoundError(new ChordError({ code: 'unavailable', reason: 'busy', message: 'other' }))
+    ).toBe(false)
+    expect(isNotFoundError(forbidden('denied'))).toBe(false)
     expect(isNotFoundError(new Error('not_found'))).toBe(false)
     expect(isNotFoundError(Object.assign(new Error('x'), { reason: 'not_found' }))).toBe(false)
     expect(isNotFoundError(undefined)).toBe(false)
@@ -438,39 +456,25 @@ describe('view contracts', () => {
     expect(SYNC_NOT_FOUND).toBe(NOT_FOUND_REASON)
   })
 
-  it('CT-3 contract names, versions, the owner variant with view + availability, non-empty input ids', () => {
+  it('CT-3 contract names, versions, the owner variant with view + availability', () => {
     expect(VIEW_SERVER_HOST).toBe('main')
     const cases = [
-      { contract: SessionViewContract, name: 'shuvix.session-view', key: 'sessionId' },
-      { contract: AgentViewContract, name: 'shuvix.agent-view', key: 'agentId' }
+      { contract: SessionViewContract, name: 'shuvix.session-view' },
+      { contract: AgentViewContract, name: 'shuvix.agent-view' }
     ] as const
-    for (const { contract, name, key } of cases) {
+    for (const { contract, name } of cases) {
       expect(contract.name).toBe(name)
       expect(contract.version).toBe(1)
-      expect(contract.scope).toBe('remote')
-      const variants = contract.description.variants
-      expect(Object.keys(variants)).toEqual(['owner'])
-      const members = variants.owner!
-      expect(Object.keys(members).sort()).toEqual(['availability', 'view'])
-      expect(members.view!.kind).toBe('state')
-      expect(members.availability!.kind).toBe('state')
-
-      // 输入：恰好一个 id 键，至少一个字符
-      expect(Value.Check(contract.input, { [key]: 'x' })).toBe(true)
-      expect(Value.Check(contract.input, { [key]: '' })).toBe(false)
-      expect(Value.Check(contract.input, {})).toBe(false)
-      expect(Value.Check(contract.input, { [key]: 1 })).toBe(false)
-      const property = (contract.input as { properties: Record<string, { minLength?: number }> })
-        .properties[key]
-      expect(property?.minLength).toBe(1)
+      expect(contract.kind).toBe('remote')
+      const members = memberNames(contract, 'owner')
+      expect([...members.state].sort()).toEqual(['availability', 'view'])
+      expect(members.methods).toEqual([])
+      expect(members.events).toEqual([])
     }
-    // 会话契约的输入不收 agentId，反之亦然
-    expect(Value.Check(SessionViewContract.input, { agentId: 'a1' })).toBe(false)
-    expect(Value.Check(AgentViewContract.input, { sessionId: 's1' })).toBe(false)
 
-    expect(Value.Check(AvailabilitySchema, 'available')).toBe(true)
-    expect(Value.Check(AvailabilitySchema, 'unavailable')).toBe(true)
-    expect(Value.Check(AvailabilitySchema, 'gone')).toBe(false)
+    expect(checkSchema(AvailabilitySchema, 'available')).toBe(true)
+    expect(checkSchema(AvailabilitySchema, 'unavailable')).toBe(true)
+    expect(checkSchema(AvailabilitySchema, 'gone')).toBe(false)
   })
 
   it('CT-4 viewServer.ts and services.ts import nothing from electron or node built-ins (P3-04-20)', () => {

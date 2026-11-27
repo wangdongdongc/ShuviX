@@ -7,7 +7,7 @@
  * 好处：新增工具只需在工具文件末尾注册一次，无需修改 ALL_TOOL_NAMES、labelMap 等多处硬编码。
  */
 
-import type { TSchema } from 'typebox'
+import type { JsonSchema } from '@earendil-works/pi-schema'
 import type { ToolContext } from '../services/toolContext'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
 import type { ToolPlatform } from '@shuvix/chat-protocol/chatApi'
@@ -43,7 +43,7 @@ export interface BuiltinToolMeta {
    * 惰性给出该工具「发给 LLM」的描述与参数 schema，供设置页只读展示（toBuiltinToolDefinitions）。
    * 纯读、无副作用、不需运行时上下文；声明了此项的工具才会出现在「LLM 工具」设置页。
    */
-  describe?: () => { description: string; parameters: TSchema }
+  describe?: () => { description: string; parameters: JsonSchema }
 }
 
 const _entries: BuiltinToolMeta[] = []

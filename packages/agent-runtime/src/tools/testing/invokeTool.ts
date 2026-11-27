@@ -16,7 +16,8 @@
  * `memo` 是一张进程内的表（先到的候选值胜出，同 durable）；`agent()` 缺省回一个只装着这个工具的
  * agent。调用结束之后再碰 api 也会抛（durable 的约束：调用结算后 api 失效）。
  */
-import { copyJson, type Context, type JsonValue } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import {
   ROOT_CONVERSATION_ID,
@@ -28,14 +29,15 @@ import {
   type ToolDiagnostic,
   type ToolExecutionApi
 } from '@earendil-works/pi-durable'
-import type { Static, TSchema, Usage } from '@earendil-works/pi-ai'
+import type { Usage } from '@earendil-works/pi-ai'
+import type { JsonSchema, Static } from '@earendil-works/pi-schema'
 import type { AnyTool, ToolContent } from '../toolResult'
 
 /** 能交给 invokeTool 的工具：durable 注册项（BaseTool 子类、ask / git / MCP 等函数式注册项） */
 export type InvokableTool = AnyTool
 
 /** 工具参数的类型（按它的 parameters 推） */
-export type InvokeArgs<T> = T extends { parameters: infer P extends TSchema }
+export type InvokeArgs<T> = T extends { parameters: infer P extends JsonSchema }
   ? Static<P>
   : Record<string, unknown>
 
@@ -181,6 +183,9 @@ export async function invokeTool<T extends InvokableTool>(
     raw = await registration.execute(args, api, context)
   } finally {
     ended = true
+  }
+  if ('kind' in raw) {
+    throw new Error(`invokeTool: tool "${registration.name}" parked (${raw.kind})`)
   }
 
   const merged = [...diagnostics, ...(raw.diagnostics ?? [])]

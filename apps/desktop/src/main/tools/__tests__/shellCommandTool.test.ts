@@ -473,9 +473,10 @@ describe('停止命令的提示按 shell 给，不按平台', () => {
   })
 
   /** 参数 schema 里 run_in_background 的说明 */
-  const backgroundHelp = (shell: ShellName): string =>
-    (makeTool(shell).parameters.properties.run_in_background as { description?: string })
-      .description ?? ''
+  const backgroundHelp = (shell: ShellName): string => {
+    const props = makeTool(shell).parameters.properties as Record<string, { description?: string }>
+    return props.run_in_background?.description ?? ''
+  }
 
   it('D6 — bash 的 run_in_background 说明：由宿主代停（shuvix task stop），不教 kill 进程组，不提 taskkill', () => {
     const text = backgroundHelp('bash')

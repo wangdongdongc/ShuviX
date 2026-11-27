@@ -100,9 +100,9 @@ describe('P3-03 · mount', () => {
       const proj = await session.projector()
       const h = proj.acquire()
       const conversation = await session.currentConversation()
-      const state = await conversation.viewState(BG)
+      const state = await conversation.watch(BG, { min: 2000, max: 4000 })
       const { entries, docs } = state.value
-      state.dispose()
+      await state.stop()
       const display = await resolveDisplayItems(session.harness, conversation.id, entries)
       const expected = projectSessionView(
         { sessionId: 's1', conversationId: conversation.id },
@@ -226,12 +226,20 @@ describe('P3-03 · mount', () => {
       })
       await projector.start()
       const publishedIds: number[][] = []
-      const stop = session.harness.subscribeCommits((publication) => {
-        const ids = publication.changes.flatMap((change) =>
-          change.type === 'entry' && change.value.conversationId === 1 ? [change.value.id] : []
-        )
-        if (ids.length > 0) publishedIds.push(ids)
-      })
+      const stop = (
+        (obs) => () =>
+          obs.detach()
+      )(
+        session.harness.observeCommits({
+          advance: (publication) => {
+            const ids = publication.changes.flatMap((change) =>
+              change.type === 'entry' && change.value.conversationId === 1 ? [change.value.id] : []
+            )
+            if (ids.length > 0) publishedIds.push(ids)
+          },
+          end: () => {}
+        })
+      )
       t.kit.queue(answer('A1'))
       expect(await session.submitUser('run PAYLOAD-K1 please', { display: D1 })).toEqual({})
       await settleFrames()

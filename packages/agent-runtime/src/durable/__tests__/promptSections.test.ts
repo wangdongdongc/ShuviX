@@ -17,7 +17,8 @@
  *   SEC-8  noteSectionsCurrent：[] 不转告；宿主没实现不抛；否则原样转告一次
  * （SEC-3 —— 每份黄金 fixture 的 renderSections 与 fixture 的段落逐字相同 —— 在 promptSections.golden.test.ts）
  */
-import { getCurrentSystemPrompt, Type } from '@earendil-works/pi-ai'
+import { getCurrentSystemPrompt } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   defineTool,
   SystemEntry,
@@ -775,7 +776,7 @@ describe('sections through a real durable request', () => {
     const flip = defineTool({
       name: 'flip',
       description: 'changes the instruction file',
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: async () => {
         live.values.files = { 'AGENTS.md': 'Use npm.' }
         return { output: [{ type: 'text', text: 'flipped' }] }

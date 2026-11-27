@@ -20,8 +20,7 @@ import { connect, type Socket } from 'net'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { Frame } from '@earendil-works/chord'
-import type { ViewPrincipal, ViewServer } from '@shuvix/agent-runtime'
+import type { Frame, ViewPrincipal, ViewServer } from '@shuvix/agent-runtime'
 import {
   BridgeChunkAssembler,
   CHROME_BRIDGE_PROTOCOL,

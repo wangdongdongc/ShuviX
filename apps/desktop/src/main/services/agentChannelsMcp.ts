@@ -8,7 +8,17 @@
  * 给模型看的结果里一律只说有没有值。远程服务器的认证头照旧用 `{{VAR}}` 模板引用 env（McpManager 现成的替换），
  * 这样卡上要填的只是那串 token 本身。
  */
-import { Type, type TSchema } from 'typebox'
+import {
+  arr,
+  bool,
+  map,
+  nullable,
+  obj,
+  oneOf,
+  opt,
+  str,
+  type Schema
+} from '@earendil-works/pi-schema'
 import type { AskField } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   McpServer,
@@ -29,10 +39,10 @@ const HEADER_FIELD_PREFIX = 'header.'
 
 // ─── 参数结构（给模型看的，英文） ───
 
-const stringMap = (description: string): TSchema =>
-  Type.Record(Type.String(), Type.String(), { description })
-const nullableStringMap = (description: string): TSchema =>
-  Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]), { description })
+const stringMap = (description: string): Schema<Record<string, string>> =>
+  map(str(), { description })
+const nullableStringMap = (description: string): Schema<Record<string, string | null>> =>
+  map(nullable(str()), { description })
 
 const NAME_DESCRIPTION =
   'Server name. It becomes the prefix of its tool names (mcp__<name>__<tool>), so keep it short: letters, digits, - and _. It must be unique, must not contain "__" and must not start with "widget-".'
@@ -43,48 +53,38 @@ const ENV_DESCRIPTION =
 const HEADERS_DESCRIPTION =
   'HTTP headers (type http). To put a secret in a header, reference an env entry, e.g. {"Authorization": "Bearer {{GITHUB_TOKEN}}"} with env {"GITHUB_TOKEN": ""}.'
 
-const AddParams = Type.Object(
-  {
-    name: Type.String({ description: NAME_DESCRIPTION }),
-    type: Type.Union([Type.Literal('stdio'), Type.Literal('http')], {
-      description:
-        'stdio: ShuviX starts a local command. http: a remote server URL (Streamable HTTP; servers that only speak the older SSE transport are found automatically).'
-    }),
-    command: Type.Optional(Type.String({ description: 'stdio: the executable, e.g. "npx".' })),
-    args: Type.Optional(Type.Array(Type.String(), { description: 'stdio: its arguments.' })),
-    cwd: Type.Optional(Type.String({ description: 'stdio: absolute working folder (optional).' })),
-    env: Type.Optional(stringMap(ENV_DESCRIPTION)),
-    url: Type.Optional(Type.String({ description: 'http: the server URL.' })),
-    headers: Type.Optional(stringMap(HEADERS_DESCRIPTION))
-  },
-  { additionalProperties: false }
-)
+const AddParams = obj({
+  name: str({ description: NAME_DESCRIPTION }),
+  type: oneOf(['stdio', 'http'], {
+    description:
+      'stdio: ShuviX starts a local command. http: a remote server URL (Streamable HTTP; servers that only speak the older SSE transport are found automatically).'
+  }),
+  command: opt(str({ description: 'stdio: the executable, e.g. "npx".' })),
+  args: opt(arr(str(), { description: 'stdio: its arguments.' })),
+  cwd: opt(str({ description: 'stdio: absolute working folder (optional).' })),
+  env: opt(stringMap(ENV_DESCRIPTION)),
+  url: opt(str({ description: 'http: the server URL.' })),
+  headers: opt(stringMap(HEADERS_DESCRIPTION))
+})
 
-const UpdateParams = Type.Object(
-  {
-    name: Type.String({ description: 'The server to change (its current name).' }),
-    newName: Type.Optional(Type.String({ description: 'Rename it. ' + NAME_DESCRIPTION })),
-    type: Type.Optional(Type.Union([Type.Literal('stdio'), Type.Literal('http')])),
-    command: Type.Optional(Type.String()),
-    args: Type.Optional(Type.Array(Type.String(), { description: 'Replaces all arguments.' })),
-    cwd: Type.Optional(
-      Type.Union([Type.String(), Type.Null()], { description: 'null removes it.' })
-    ),
-    env: Type.Optional(
-      nullableStringMap(
-        'Merged by key into what is there: a value replaces that key, null removes it, keys you leave out stay as they are (you cannot see their values). An empty string is typed by the user on the card.'
-      )
-    ),
-    url: Type.Optional(Type.String()),
-    headers: Type.Optional(nullableStringMap('Merged by key, like env.')),
-    enabled: Type.Optional(
-      Type.Boolean({ description: 'false keeps the server but no session can turn it on.' })
+const UpdateParams = obj({
+  name: str({ description: 'The server to change (its current name).' }),
+  newName: opt(str({ description: 'Rename it. ' + NAME_DESCRIPTION })),
+  type: opt(oneOf(['stdio', 'http'])),
+  command: opt(str()),
+  args: opt(arr(str(), { description: 'Replaces all arguments.' })),
+  cwd: opt(nullable(str(), { description: 'null removes it.' })),
+  env: opt(
+    nullableStringMap(
+      'Merged by key into what is there: a value replaces that key, null removes it, keys you leave out stay as they are (you cannot see their values). An empty string is typed by the user on the card.'
     )
-  },
-  { additionalProperties: false }
-)
+  ),
+  url: opt(str()),
+  headers: opt(nullableStringMap('Merged by key, like env.')),
+  enabled: opt(bool({ description: 'false keeps the server but no session can turn it on.' }))
+})
 
-const NameParams = Type.Object({ name: Type.String() }, { additionalProperties: false })
+const NameParams = obj({ name: str() })
 
 type AddArgs = {
   name: string
@@ -274,7 +274,7 @@ export const mcpList: AgentChannel<Record<string, never>> = {
   channel: 'mcp:list',
   summary:
     "List the user's MCP servers: how each one starts or where it connects, which env and header keys have values (never the values), whether it is enabled, and the last connection error.",
-  params: Type.Object({}, { additionalProperties: false }),
+  params: obj({}),
   // 表上是 admin（返回值带 key）；这条路把值都打了码，只剩读
   access: 'read',
   card: () => ({ title: t('agentApi.mcpListTitle'), rows: [] }),

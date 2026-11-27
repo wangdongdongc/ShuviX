@@ -18,8 +18,8 @@
  * 模型看到的文本（PIN-04）：子 agent 没建起来（深度 / 解析失败）→ `Error: <原因>`；建起来了 → 路由交回的
  * 结果文本。从不设 `isError`。自己的 signal 落下 → 抛 `abortError`（durable 的中止语义靠它）。
  */
-import type { JsonValue } from '@earendil-works/chord'
-import { Type } from 'typebox'
+import type { JsonValue } from '@earendil-works/chord/json'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import type { ToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
 import type { ToolCallScope } from '../tools/toolCall'
@@ -32,16 +32,16 @@ import type { SubAgentManager } from './manager'
  */
 export const DISPATCH_TOOL_NAME = 'agent'
 
-export const AgentParamsSchema = Type.Object({
-  description: Type.String({ description: 'A short (3-5 word) description of the task' }),
-  name: Type.Optional(
-    Type.String({
+export const AgentParamsSchema = obj({
+  description: str({ description: 'A short (3-5 word) description of the task' }),
+  name: opt(
+    str({
       // 没有默认 agent：省略 name 得到的是 Missing "name"（resolveRef），所以这里不许诺「省略即默认」
       description:
         'An agent name your instructions or the user gave (never a guess), or the path of an agent definition file.'
     })
   ),
-  prompt: Type.String({
+  prompt: str({
     description:
       'The complete task: requirements, constraints and file paths — the agent sees nothing else.'
   })

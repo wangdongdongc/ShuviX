@@ -13,7 +13,7 @@
  *    durable 的中止语义靠这一抛。其余失败（用户取消卡片、没有询问通道……）按裁定 Q12 收成
  *    `isError` 结果，模型看到的文字与旧版相同。
  */
-import { Type } from 'typebox'
+import { arr, bool, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import type { AskFormFieldRecord, AskToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
@@ -26,39 +26,37 @@ import { catchToolErrors, toExecutionResult, type ToolResult } from './tools/too
 import { UNATTENDED_QUESTION_TEXT } from '@shuvix/chat-protocol/unattended'
 import { backstopOutputLimits } from './tools/outputLimits'
 
-export const AskFormFieldSchema = Type.Object({
-  key: Type.String({
+export const AskFormFieldSchema = obj({
+  key: str({
     description: 'Identifier returned in the result, e.g. username, password, token'
   }),
-  label: Type.String({ description: 'Human-readable label shown on the card' }),
-  type: Type.Union([Type.Literal('text'), Type.Literal('secret')], {
+  label: str({ description: 'Human-readable label shown on the card' }),
+  type: oneOf(['text', 'secret'], {
     description:
       "Input type. Use 'secret' for passwords, API keys, tokens, private keys, or any sensitive value so it is masked and stored encrypted in this session's redaction table; use 'text' for non-sensitive values like username or host."
   }),
-  description: Type.Optional(
-    Type.String({ description: 'Optional hint explaining what to enter or where to find it' })
+  description: opt(
+    str({ description: 'Optional hint explaining what to enter or where to find it' })
   ),
-  multiline: Type.Optional(
-    Type.Boolean({ description: 'True for multi-line values such as PEM private keys or notes' })
+  multiline: opt(
+    bool({ description: 'True for multi-line values such as PEM private keys or notes' })
   ),
-  required: Type.Optional(
-    Type.Boolean({ description: 'Whether the user must fill this field (default: true)' })
-  ),
-  placeholder: Type.Optional(Type.String({ description: 'Optional input placeholder text' }))
+  required: opt(bool({ description: 'Whether the user must fill this field (default: true)' })),
+  placeholder: opt(str({ description: 'Optional input placeholder text' }))
 })
 
-export const AskParamsSchema = Type.Object({
-  question: Type.String({ description: 'The question or prompt to ask the user' }),
-  detail: Type.Optional(
-    Type.String({
+export const AskParamsSchema = obj({
+  question: str({ description: 'The question or prompt to ask the user' }),
+  detail: opt(
+    str({
       description: 'Optional extra context explaining why the input is needed or how it is used'
     })
   ),
-  options: Type.Optional(
-    Type.Array(
-      Type.Object({
-        label: Type.String({ description: 'Short label for the option' }),
-        description: Type.String({ description: 'Longer description explaining the option' })
+  options: opt(
+    arr(
+      obj({
+        label: str({ description: 'Short label for the option' }),
+        description: str({ description: 'Longer description explaining the option' })
       }),
       {
         description:
@@ -68,8 +66,8 @@ export const AskParamsSchema = Type.Object({
       }
     )
   ),
-  fields: Type.Optional(
-    Type.Array(AskFormFieldSchema, {
+  fields: opt(
+    arr(AskFormFieldSchema, {
       description:
         'Structured form fields for the user to fill in (e.g. credentials, secrets, or paired inputs like username + password). Mutually exclusive with `options`.',
       minItems: 1,

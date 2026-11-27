@@ -26,7 +26,7 @@
  * BT-INT 再加 AgentSession 的外围（hook 埋点、日历、记录），宿主与门面是真的。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import { MemoryStorage, defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import {
   createAskTool,
@@ -304,7 +304,7 @@ describe('BT-INT 真宿主 + 真 AgentSession + 真 ask（无人值守的运行�
     defineTool({
       name: 'gate',
       description: 'gate: a slow step',
-      parameters: Type.Object({}),
+      parameters: obj({}),
       replay: 'unsafe',
       execute: async (_args, _api, context) => {
         gateReached = true
@@ -321,7 +321,7 @@ describe('BT-INT 真宿主 + 真 AgentSession + 真 ask（无人值守的运行�
     defineTool({
       name: 'needs_approval',
       description: 'needs_approval: an operation a policy asks about',
-      parameters: Type.Object({}),
+      parameters: obj({}),
       replay: 'unsafe',
       execute: async (_args, api) => {
         await executeDecision({

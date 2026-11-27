@@ -7,8 +7,7 @@
  */
 
 import { resolve } from 'path'
-import { Type } from 'typebox'
-import type { TObject, TString } from 'typebox'
+import { obj, str, type Schema } from '@earendil-works/pi-schema'
 import { rgFiles } from '../utils/toolUtils/ripgrep'
 import { BaseTool } from '@shuvix/agent-runtime'
 import type { ToolResult } from '@shuvix/agent-runtime'
@@ -25,9 +24,9 @@ import { t } from '../i18n'
  * 实例也照样带着别的会话的示例名。深拷贝不是出路 —— TypeBox 的 schema 带 Symbol 键
  * （`Symbol.for('TypeBox.Kind')`），structuredClone 会把它们丢掉。
  */
-const makeSkillParams = (hint: string): TObject<{ name: TString }> =>
-  Type.Object({
-    name: Type.String({ description: `The name of the skill from available_skills${hint}` })
+const makeSkillParams = (hint: string): Schema<{ name: string }> =>
+  obj({
+    name: str({ description: `The name of the skill from available_skills${hint}` })
   })
 
 /** 类型锚点：各实例的 schema 同形，值各造各的 */

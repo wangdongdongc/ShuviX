@@ -20,7 +20,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Link } from '@earendil-works/chord'
-import type { ViewPrincipal, ViewServer } from '@shuvix/agent-runtime'
+import type { FrameLink, ViewPrincipal, ViewServer } from '@shuvix/agent-runtime'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ViewSubscription } from '../../../../../../../packages/chat-ui/src/sync/syncClient'
@@ -50,7 +50,7 @@ const ONE_LISTENER = { destroyed: 1, 'render-process-gone': 1, 'did-navigate': 1
 
 /** 一条被接受的链路：它、它的主体、它结束的原因 */
 interface Accepted {
-  readonly link: Link
+  readonly link: FrameLink
   readonly principal: ViewPrincipal
   readonly reasons: string[]
 }
@@ -96,8 +96,11 @@ function rig(
   const warnings: string[] = []
   const hub = createIpcLinkHub({
     accept: (link, principal) => {
-      const record: Accepted = { link, principal, reasons: [] }
-      link.onClose((reason) => record.reasons.push(reason))
+      const frameLink = link as FrameLink
+      const record: Accepted = { link: frameLink, principal, reasons: [] }
+      frameLink.onClose((reason) => {
+        record.reasons.push(reason)
+      })
       accepted.push(record)
       server.accept(link, principal)
     },
@@ -128,6 +131,9 @@ async function live(...subs: ViewSubscription<SessionView>[]): Promise<void> {
   await until(() => subs.every((sub) => sub.state().status === 'live'), 'live')
 }
 
+const UTF8 = new TextDecoder()
+const decodeBytes = (bytes: Uint8Array): unknown => JSON.parse(UTF8.decode(bytes))
+
 /** 只关心链路表自己时的 `accept`：记下链路与主体，链路收到的帧也记下 */
 function recordingHub(options: Partial<IpcLinkHubDeps> = {}): {
   hub: IpcLinkHub
@@ -139,7 +145,7 @@ function recordingHub(options: Partial<IpcLinkHubDeps> = {}): {
   const accept = vi.fn<IpcLinkHubDeps['accept']>((link) => {
     const frames: unknown[] = []
     received.set(link, frames)
-    link.receive((frame) => frames.push(frame))
+    link.onMessage((bytes) => frames.push(decodeBytes(bytes)))
   })
   const warn = vi.fn<(message: string) => void>()
   const hub = createIpcLinkHub({ accept, logger: { warn }, ...options })
@@ -449,7 +455,7 @@ describe('IL-11 dead webContents and failing sends', () => {
 
     // chord 当场回 pong → send 抛错：不往外抛，链路结束
     wc.throwOnSend = true
-    expect(() => r.hub.receive(wc, 'a.1', { t: 'ping', n: 99 })).not.toThrow()
+    expect(() => r.hub.receive(wc, 'a.1', { t: 'ping', d: ['p'] })).not.toThrow()
     expect(r.accepted[0]!.link.closed).toBe(true)
     expect(r.accepted[0]!.reasons).toEqual(['transport error'])
     expect(r.hub.linkCount(7)).toBe(0)

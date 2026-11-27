@@ -17,7 +17,7 @@
  * 2026-11-14 从实验的内置 MCP（`plan` server 的 `mcp__plan__update`）转正：参数、结果文本、折叠规则都没变，
  * 换的只是载体与名字（与 Codex、Claude 桌面端的同类工具同名）。`replay: 'safe'`：一次调用只读转写、不改任何东西。
  */
-import { Type } from 'typebox'
+import { arr, bool, int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import {
   applyTaskListUpdate,
@@ -43,44 +43,32 @@ export const TASK_LIST_DESCRIPTION = [
   '- No closing call is needed: when your run ends, ShuviX closes the list.'
 ].join('\n')
 
-export const TaskListParamsSchema = Type.Object(
-  {
-    items: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            content: Type.String({ description: 'A short imperative step, a few words.' }),
-            status: Type.Union([
-              Type.Literal('pending'),
-              Type.Literal('in_progress'),
-              Type.Literal('completed')
-            ])
-          },
-          { additionalProperties: false }
-        ),
-        {
-          description: 'The whole plan, in order; replaces the current list.',
-          minItems: 1,
-          maxItems: TASK_LIST_MAX_ITEMS
-        }
-      )
-    ),
-    advance: Type.Optional(
-      Type.Boolean({
-        description: 'true: finish the step in progress and start the next pending one.'
-      })
-    ),
-    done: Type.Optional(
-      Type.Array(Type.Integer({ minimum: 1 }), {
-        description: 'Step numbers (1-based) to mark completed.'
-      })
-    ),
-    start: Type.Optional(
-      Type.Integer({ minimum: 1, description: 'Step number (1-based) to start.' })
+export const TaskListParamsSchema = obj({
+  items: opt(
+    arr(
+      obj({
+        content: str({ description: 'A short imperative step, a few words.' }),
+        status: oneOf(['pending', 'in_progress', 'completed'])
+      }),
+      {
+        description: 'The whole plan, in order; replaces the current list.',
+        minItems: 1,
+        maxItems: TASK_LIST_MAX_ITEMS
+      }
     )
-  },
-  { additionalProperties: false }
-)
+  ),
+  advance: opt(
+    bool({
+      description: 'true: finish the step in progress and start the next pending one.'
+    })
+  ),
+  done: opt(
+    arr(int({ minimum: 1 }), {
+      description: 'Step numbers (1-based) to mark completed.'
+    })
+  ),
+  start: opt(int({ minimum: 1, description: 'Step number (1-based) to start.' }))
+})
 
 /** 宿主的读者：这条会话里、`beforeToolCallId` 那次调用之前的列表；这个请求里还没有 → undefined */
 export type TaskListReader = (beforeToolCallId: string) => Promise<TaskListItem[] | undefined>

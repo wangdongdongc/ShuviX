@@ -72,7 +72,7 @@ type WiringModule = typeof import('../../frontend/sync/syncWiring')
 type AdapterModule = typeof import('../ipcAdapter')
 
 const S1: SyncTarget = { kind: 'session', sessionId: 's1' }
-const HELLO = { t: 'hello', name: 'renderer', kind: 'client', epoch: 1 } as const
+const HELLO = { t: 'hello', d: ['h', 1, '00000000-0000-7000-8000-000000000001', 10000] } as const
 
 let windows: SyncWindow[] = []
 let wiring: WiringModule | undefined
@@ -189,7 +189,9 @@ describe('SH-3 the sender is the principal', () => {
     expect(accept).toHaveBeenCalledTimes(1)
     expect(accept.mock.calls[0]![1]).toEqual({ kind: 'window', webContentsId: 7 })
     // 服务端的 hello 回到 7（同一个链路 id），8 什么都没收到
-    expect(wc7.frames()).toEqual([['L1', expect.objectContaining({ t: 'hello', kind: 'host' })]])
+    expect(wc7.frames()).toEqual([
+      ['L1', expect.objectContaining({ t: 'hello', d: expect.arrayContaining(['h']) })]
+    ])
     expect(wc8.sent).toEqual([])
 
     ipcMain.emitFrom(wc8, 'sync:frame', 'L1', HELLO)
@@ -240,20 +242,14 @@ describe('SH-5 invalid input over IPC', () => {
     register(modules, ipcMain)
     const wc = new FakeWebContents(7)
     const window = page(wc, ipcMain)
-    const sub = window.client.acquire<SessionView>({ kind: 'session', sessionId: '' })
-    await until(() => sub.state().status === 'error', 'error')
-    expect(sub.state()).toEqual({ status: 'error', code: 'invalid' })
-    expect(sub.value()).toBeUndefined()
-    // 判定来自服务端：拒绝是经 IPC 回来的一帧 gone
-    expect(
-      wc
-        .frames()
-        .some(
-          ([, frame]) =>
-            (frame as { t?: unknown }).t === 'gone' &&
-            (frame as { error?: { code?: unknown } }).error?.code === 'invalid'
-        )
-    ).toBe(true)
+    // Chord v2 validates contract params (`Id = str({ min: 1 })`) synchronously on hold
+    let thrown: unknown
+    try {
+      window.client.acquire<SessionView>({ kind: 'session', sessionId: '' })
+    } catch (error) {
+      thrown = error
+    }
+    expect((thrown as { code?: unknown } | undefined)?.code).toBe('invalid')
     await settle()
     expect(viewHost().peeks).toEqual([])
     expect(holder.getSessionHost).not.toHaveBeenCalled()

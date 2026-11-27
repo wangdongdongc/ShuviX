@@ -73,6 +73,7 @@ describe('SpawnCoordinator · abort on error', () => {
           id: handle.id,
           abort: (context, options) => handle.abort(context, options),
           waitForIdle: (context) => handle.waitForIdle(context),
+          admit: (tx, draft) => handle.admit(tx, draft),
           submit: async (draft, context) => {
             const submission = await handle.submit(draft, context)
             return {
@@ -115,6 +116,7 @@ describe('SpawnCoordinator · abort on error', () => {
           id: handle.id,
           abort: (context, options) => handle.abort(context, options),
           waitForIdle: (context) => handle.waitForIdle(context),
+          admit: (tx, draft) => handle.admit(tx, draft),
           submit: async (draft, context) => {
             submits++
             if (submits === 2) throw new Error('nudge broke')

@@ -154,12 +154,6 @@ const hellos = (server: FakeServer): string[] =>
 const helloAt = (server: FakeServer, linkId: string): number | undefined =>
   server.sent.find(([id, frame]) => id === linkId && frame.t === 'hello')?.[2]
 
-/** 某条链路上某个成员（`view` / `availability`）的订阅 id（客户端的 `sub` 帧） */
-const subIds = (server: FakeServer, linkId: string, member: string): unknown[] =>
-  framesOn(server, linkId)
-    .filter((frame) => frame.t === 'sub' && frame.member === member)
-    .map((frame) => frame.id)
-
 const holdsSent = (server: FakeServer): number =>
   server.calls.filter((call) => call.startsWith('subscribe:')).length
 
@@ -370,19 +364,15 @@ describe('syncClient: status mapping', () => {
     expect((subs[1].sub.value() as SessionView).context.usedTokens).toBe(105)
   })
 
-  it('SC-8 exactly one hydrate per (re)subscription, whichever of view and availability arrives first', async () => {
+  it('SC-8 exactly one hydrate per (re)subscription when bound arrives', async () => {
     const { server, client } = rig({ reconnectDelayMs: 1 })
     server.serve(S1, sessionView('s1'))
     server.serve(S2, sessionView('s2'))
-    const stateOf = (member: string) => (linkId: string, frame: WireFrame) =>
-      frame.t === 'state' && subIds(server, linkId, member).includes(frame.id)
+    const isBound = (_linkId: string, frame: WireFrame): boolean => frame.t === 'bound'
 
-    // 首次订阅，可用性先到（视图扣下）/ 视图先到（可用性扣下）
-    for (const [target, held] of [
-      [S1, 'view'],
-      [S2, 'availability']
-    ] as const) {
-      server.delayDown(stateOf(held))
+    // 首次订阅，扣下 bound 帧：未到达前保持 loading；放行后恰好一个 live + 一个 hydrate
+    for (const target of [S1, S2] as const) {
+      server.delayDown(isBound)
       const sub = client.acquire<SessionView>(target)
       const events = record(sub)
       await server.settle()
@@ -390,7 +380,7 @@ describe('syncClient: status mapping', () => {
       expect(events).toEqual([])
       server.delayDown(undefined)
       server.releaseDown()
-      await until(() => sub.state().status === 'live', `live (${held} held back)`)
+      await until(() => sub.state().status === 'live', 'live (bound held back)')
       await server.settle()
       expect(events).toEqual([
         LIVE_EVENT,
@@ -398,15 +388,12 @@ describe('syncClient: status mapping', () => {
       ])
     }
 
-    // 重新订阅（链路被服务端关掉、新链路上重新持有）：两种先后各来一次
+    // 重新订阅（链路被服务端关掉、新链路上重新持有）
     const sub = client.acquire<SessionView>(S1)
     const events = record(sub)
-    for (const [round, held] of [
-      [2, 'view'],
-      [3, 'availability']
-    ] as const) {
+    for (const round of [2, 3] as const) {
       events.length = 0
-      server.delayDown(stateOf(held))
+      server.delayDown(isBound)
       server.endServerLink(`t.${round - 1}`, { bye: true })
       await until(() => framesOn(server, `t.${round}`).length > 0, `link t.${round}`)
       await server.settle()
@@ -414,7 +401,7 @@ describe('syncClient: status mapping', () => {
       expect(events).toEqual([LOADING_EVENT])
       server.delayDown(undefined)
       server.releaseDown()
-      await until(() => sub.state().status === 'live', `live again (${held} held back)`)
+      await until(() => sub.state().status === 'live', 'live again (bound held back)')
       await server.settle()
       expect(events).toEqual([
         LOADING_EVENT,
@@ -710,8 +697,18 @@ describe('syncClient: links', () => {
       server.inject(linkId, { t: 'bye', reason: 'forged' })
     }
 
-    // 空闲关掉的 t.1 上：用 t.2 上视图订阅的 id 伪造一帧（误投递就会换掉值）、一帧坏帧、一个 bye
-    forged('t.1', subIds(server, 't.2', 'view')[0])
+    const holdIdOn = (linkId: string): number => {
+      const holdFrame = framesOn(server, linkId).find((f) => f.t === 'hold')
+      const tuple = Array.isArray(holdFrame?.d) ? holdFrame.d : []
+      return Number(tuple[1])
+    }
+    const forgedStateFrame = (holdId: number): WireFrame => ({
+      t: 'state',
+      d: ['s', [[holdId, [[1, [0, [['r', sessionView('s1', { conversationId: 99 })]]]]]]]]
+    })
+
+    // 空闲关掉的 t.1 上：用 t.2 上 hold 的 id 伪造一帧（误投递就会换掉值）、一帧坏帧、一个 bye
+    forged('t.1', holdIdOn('t.2'))
     await server.settle()
     expect(events).toEqual([])
     expect(sub.value()).toBe(value)
@@ -724,7 +721,7 @@ describe('syncClient: links', () => {
     await server.settle()
     events.length = 0
     const current = sub.value()
-    forged('t.2', subIds(server, 't.3', 'view')[0])
+    forged('t.2', holdIdOn('t.3'))
     await server.settle()
     expect(events).toEqual([])
     expect(sub.value()).toBe(current)
@@ -733,11 +730,7 @@ describe('syncClient: links', () => {
     expect(server.links()).toEqual(['t.3'])
 
     // 对照：同一帧投到当前链路上就会换掉值（所以上面「没变」不是因为这帧本身无效）
-    server.inject('t.3', {
-      t: 'state',
-      id: subIds(server, 't.3', 'view')[0],
-      reset: sessionView('s1', { conversationId: 99 })
-    })
+    server.inject('t.3', forgedStateFrame(holdIdOn('t.3')))
     await server.settle()
     expect(sub.value()?.conversationId).toBe(99)
   })
@@ -966,10 +959,11 @@ describe('syncClient: links over time (fake timers)', () => {
     expect(sub.state()).toEqual({ status: 'loading' })
 
     server.setUp(true)
+    expect(framesOn(server, 't.2')[0]).toMatchObject({ t: 'hello' })
+    await drain()
     const out = framesOn(server, 't.2')
     expect(out[0]).toMatchObject({ t: 'hello' })
     expect(out.slice(1).map((frame) => frame.t)).toContain('hold')
-    await drain()
     expect(sub.state()).toEqual({ status: 'live' })
     expect(sub.value()).toEqual(server.value(S1))
     expect(events).toEqual([

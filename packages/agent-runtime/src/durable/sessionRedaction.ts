@@ -7,7 +7,7 @@
  * 出错的处置（§4.4）：替换的任何一步抛错 → 记 error、按原样写入（当作漏检）；判不出策略 → 按内置策略的默认（只有默认照发
  * 的几类照原样存）；还原时表项解不开 → 那个占位符记为「查不到」，由调用方拦下这次工具调用（不会把占位符写进文件）。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import {
   GenerationTask,
   hook,

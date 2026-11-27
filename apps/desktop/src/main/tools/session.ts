@@ -34,7 +34,7 @@
  *   - stop / set-title 本来就幂等；list / read 只读。
  * 父会话的「继续」因此在同一轮里把它等着的子会话一起带起来（Q-P2-02）。
  */
-import { Type } from 'typebox'
+import { arr, num, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import { v7 as uuidv7 } from 'uuid'
 import type { ToolCallScope, ToolResult } from '@shuvix/agent-runtime'
 import { BaseTool, OUTLINE_LIMITS, callOwnerOf } from '@shuvix/agent-runtime'
@@ -104,94 +104,95 @@ const LEGACY_ACTIONS: Readonly<Record<string, SessionAction>> = {
   'inspect-sub-session': 'inspect-session'
 }
 
-export const SessionParamsSchema = Type.Object({
-  action: Type.Unsafe<(typeof ACTIONS)[number]>({
-    type: 'string',
-    enum: [...ACTIONS],
-    description: 'What to do. See the tool description for what each action does.'
-  }),
-  title: Type.Optional(
-    Type.String({
-      description: `For "set-title": the new title (at most ${TITLE_MAX_CHARS} characters, in the conversation's language). For "create-sub-session": an optional title.`
-    })
-  ),
-  agent_profile: Type.Optional(
-    Type.String({
-      description:
-        'For "create-sub-session": the agent profile it runs as (e.g. "coding"); omit for this session\'s own base profile.'
-    })
-  ),
-  session_id: Type.Optional(
-    Type.String({
-      description:
-        'The session to address: one of your sub-sessions, or another session by the exact id the user gave you. May be omitted when you have exactly one sub-session. "wait-for-sessions" without it waits for every running one you started.'
-    })
-  ),
-  session_ids: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        'For "move-session": the ids of the sessions to move, each exactly as the user gave it.'
-    })
-  ),
-  message: Type.Optional(
-    Type.String({
-      description:
-        'For "prompt-session": the message, self-contained, in your own words. If the receiving agent takes the user\'s words, ShuviX attaches them verbatim after your text (the receipt says so) — don\'t copy them in. For "steer-session": what to tell the running turn. For "answer-session": your answer in your own words, instead of `selections`.'
-    })
-  ),
-  ask_id: Type.Optional(
-    Type.String({
-      description:
-        'For "answer-session": the question to answer (its `ask_id`); may be omitted when exactly one question is waiting.'
-    })
-  ),
-  selections: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        'For "answer-session": the options you pick, each exactly as its label reads (one or several).'
-    })
-  ),
-  turns: Type.Optional(
-    Type.Number({
-      description: `For "inspect-session": how many recent turns to outline (default ${OUTLINE_LIMITS.defaultTurns}, at most ${OUTLINE_LIMITS.maxTurns}).`
-    })
-  ),
-  item: Type.Optional(
-    Type.String({
-      description:
-        'For "inspect-session": expand one line of the outline by its ref (e.g. "#12.3") — full text, or a tool call\'s arguments and result.'
-    })
-  ),
-  match: Type.Optional(
-    Type.String({
-      description:
-        'For "inspect-session": find the lines of the whole conversation that contain this text (case-insensitive).'
-    })
-  ),
-  before: Type.Optional(
-    Type.String({
-      description:
-        'For "inspect-session": continue an outline that was cut at the size limit — pass the ref it gave you.'
-    })
-  ),
-  timeout_seconds: Type.Optional(
-    Type.Number({
-      description: `For "wait-for-sessions" (default ${DEFAULT_WAIT_TIMEOUT_SEC}s) and "wait-for-next-turn" (default ${DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC}s): how long to wait. On timeout everything keeps running.`
-    })
-  ),
-  active_since: Type.Optional(
-    Type.String({
-      description:
-        'For "list-sessions": instead of your sub-sessions, list the sessions that had messages on or after this local date (YYYY-MM-DD), as on the calendar.'
-    })
-  ),
-  active_until: Type.Optional(
-    Type.String({
-      description:
-        'For "list-sessions" with `active_since`: the last local date to include (YYYY-MM-DD, default today).'
-    })
-  )
-})
+export const SessionParamsSchema = obj(
+  {
+    action: oneOf(ACTIONS, {
+      description: 'What to do. See the tool description for what each action does.'
+    }),
+    title: opt(
+      str({
+        description: `For "set-title": the new title (at most ${TITLE_MAX_CHARS} characters, in the conversation's language). For "create-sub-session": an optional title.`
+      })
+    ),
+    agent_profile: opt(
+      str({
+        description:
+          'For "create-sub-session": the agent profile it runs as (e.g. "coding"); omit for this session\'s own base profile.'
+      })
+    ),
+    session_id: opt(
+      str({
+        description:
+          'The session to address: one of your sub-sessions, or another session by the exact id the user gave you. May be omitted when you have exactly one sub-session. "wait-for-sessions" without it waits for every running one you started.'
+      })
+    ),
+    session_ids: opt(
+      arr(str(), {
+        description:
+          'For "move-session": the ids of the sessions to move, each exactly as the user gave it.'
+      })
+    ),
+    message: opt(
+      str({
+        description:
+          'For "prompt-session": the message, self-contained, in your own words. If the receiving agent takes the user\'s words, ShuviX attaches them verbatim after your text (the receipt says so) — don\'t copy them in. For "steer-session": what to tell the running turn. For "answer-session": your answer in your own words, instead of `selections`.'
+      })
+    ),
+    ask_id: opt(
+      str({
+        description:
+          'For "answer-session": the question to answer (its `ask_id`); may be omitted when exactly one question is waiting.'
+      })
+    ),
+    selections: opt(
+      arr(str(), {
+        description:
+          'For "answer-session": the options you pick, each exactly as its label reads (one or several).'
+      })
+    ),
+    turns: opt(
+      num({
+        description: `For "inspect-session": how many recent turns to outline (default ${OUTLINE_LIMITS.defaultTurns}, at most ${OUTLINE_LIMITS.maxTurns}).`
+      })
+    ),
+    item: opt(
+      str({
+        description:
+          'For "inspect-session": expand one line of the outline by its ref (e.g. "#12.3") — full text, or a tool call\'s arguments and result.'
+      })
+    ),
+    match: opt(
+      str({
+        description:
+          'For "inspect-session": find the lines of the whole conversation that contain this text (case-insensitive).'
+      })
+    ),
+    before: opt(
+      str({
+        description:
+          'For "inspect-session": continue an outline that was cut at the size limit — pass the ref it gave you.'
+      })
+    ),
+    timeout_seconds: opt(
+      num({
+        description: `For "wait-for-sessions" (default ${DEFAULT_WAIT_TIMEOUT_SEC}s) and "wait-for-next-turn" (default ${DEFAULT_FOLLOWING_TURN_TIMEOUT_SEC}s): how long to wait. On timeout everything keeps running.`
+      })
+    ),
+    active_since: opt(
+      str({
+        description:
+          'For "list-sessions": instead of your sub-sessions, list the sessions that had messages on or after this local date (YYYY-MM-DD), as on the calendar.'
+      })
+    ),
+    active_until: opt(
+      str({
+        description:
+          'For "list-sessions" with `active_since`: the last local date to include (YYYY-MM-DD, default today).'
+      })
+    )
+  },
+  { open: true }
+)
 
 export const SESSION_DESCRIPTION = `Read or change the session this task belongs to, manage its sub-sessions, and work with other sessions.
 

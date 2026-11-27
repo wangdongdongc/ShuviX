@@ -16,7 +16,8 @@
  * ShuviX 的注册项一律**显式**声明 `replay`（durable 缺省是 'unsafe'，但「这个工具中断后能不能重跑」
  * 应该是写工具的人想过的事）—— 测试辅助 `invokeTool` 拒收没声明它的工具。
  */
-import { copyJson, type Context, type JsonValue } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
 import type {
   ToolControl,
   ToolDiagnostic,

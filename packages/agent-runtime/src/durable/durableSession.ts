@@ -69,7 +69,7 @@
  *    （fork 空闲、收件箱为空，PIN-25）→ 停下时排干的通知（推迟的、合并窗口里的）送到 fork 上（PIN-23）。
  *    投影按指针变化换挂载；下一次发送按此刻的设置在 fork 上重建锁；旧分支留在存储里。
  */
-import { copyJson } from '@earendil-works/chord'
+import { copyJson } from '@earendil-works/chord/json'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
   AgentDoc,
@@ -171,7 +171,7 @@ import type { LockModel, ModelSelection } from '../models/lockModel'
 const GENERATION_TASK_KIND = 'pi.generation'
 /** durable 内置的压缩任务（后台 / 阻塞 / 手动） */
 const COMPACTION_TASK_KIND = 'pi.compaction'
-const LIVE_TASK_STATUSES = ['pending', 'running', 'waiting', 'completing'] as const
+const LIVE_TASK_STATUSES = ['pending', 'running', 'waiting', 'sleeping', 'completing'] as const
 const SCAN_PAGE_SIZE = 256
 /** 受理记录的上限（PIN-08：`submitUser` 受理之后马上取走，留着的只是没人要的） */
 const ADMISSION_LIMIT = 256
@@ -1051,7 +1051,11 @@ export class DurableSessionImpl implements DurableSession {
   }
 
   private async init(): Promise<void> {
-    this.unsubscribe = this.raw.subscribeCommits((publication) => this.observe(publication))
+    const commitObservation = this.raw.observeCommits({
+      advance: (publication) => this.observe(publication),
+      end: () => {}
+    })
+    this.unsubscribe = () => commitObservation.detach()
     this.scanTouched = new Set()
     // 在串行线上扫一遍活着的任务与全部对话，并在回调末尾**同步**装载：此前的发布被这次扫描覆盖，
     // 此后的发布来自更晚的提交、叠加在它上面 —— 两者之间没有缝。（只读提交不产生发布。）
@@ -1355,13 +1359,16 @@ export class DurableSessionImpl implements DurableSession {
       ) {
         // 身份 / 辅助分类跟着存储变（同步）。`document.copy`（fork 的 asOf 副本）不带值，不在这里处理 ——
         // fork 派生 agent 的对话不是产品路径（PIN-11），fork 出来的对话按根认人
-        this.directory.observeAgentState(change.conversationId, change.value)
+        this.directory.observeAgentState(
+          change.conversationId,
+          change.kind === 'change' ? change.value : null
+        )
         this.scanTouched?.add(change.conversationId)
         changed = true
       } else if (
         change.type === 'document' &&
-        change.record.kind === SessionStateDoc.definition.kind &&
-        change.value !== null
+        change.kind === 'change' &&
+        change.record.kind === SessionStateDoc.definition.kind
       ) {
         // 锁缓存：谁写了 SessionStateDoc.lock 都跟着变（同步，读取永远是真值）
         this.agentLock.observe((change.value as SessionState).lock)
@@ -2933,9 +2940,9 @@ export class DurableSessionImpl implements DurableSession {
       const entries = await compactedSegment(conversation, Number(compactionId))
       if (entries.length === 0) return []
       // 一次性投影（同 viewSnapshot 没跟上时那条路）：只换条目、不带任何文档 —— 没有活卡、队列、运行中的任务
-      const state = await conversation.viewState(BG)
-      const frame = state.value
-      state.dispose()
+      const watch = await conversation.watch(BG, { min: 1, max: 1 })
+      const frame = watch.value
+      void watch.stop().catch(() => undefined)
       const view = await SessionProjectorImpl.snapshot(this.projectorHost(), conversation.id, {
         conversation: frame.conversation,
         entries,
@@ -2948,9 +2955,9 @@ export class DurableSessionImpl implements DurableSession {
   /** 某对话此刻的视图（`viewSnapshot` 的本体；不计 op、不进区段，会话内部用） */
   private async snapshotOf(conversation: Conversation): Promise<SessionView> {
     // 视图挂载此刻的一帧（与投影的 watch 同一个挂载：值不可变，跟上了就是同一份引用）；读完即放
-    const state = await conversation.viewState(BG)
-    const frame = state.value
-    state.dispose()
+    const watch = await conversation.watch(BG, { min: 2000, max: 4000 })
+    const frame = watch.value
+    void watch.stop().catch(() => undefined)
     const current = this.projectorEntry?.instance.snapshotIfCurrent(conversation.id, frame)
     if (current !== undefined) return current
     return SessionProjectorImpl.snapshot(this.projectorHost(), conversation.id, frame)

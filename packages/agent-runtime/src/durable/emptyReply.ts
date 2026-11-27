@@ -25,7 +25,7 @@
  * 追问是一条 user 消息（pi 的 continue 只能写这个），用 `<empty-reply>` 信封包着：投影认成系统通知
  * （通知行，不画成用户气泡），transcriptDigest 也不把它当人写的 —— 自动审查只看人说了什么。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { AssistantMessage, Message } from '@earendil-works/pi-ai'
 import {
   GenerationTask,
@@ -104,7 +104,7 @@ export function emptyReplyHook(deps: EmptyReplyHookDeps): HookRegistration {
       deps.logger.info(
         `session ${deps.sessionId} conversation ${api.conversationId}: the reply after tool results had no text and no tool call; requesting a continuation (skipped if user input is queued)`
       )
-      return { continue: EMPTY_REPLY_NOTICE_TEXT }
+      return { kind: 'continue', continue: EMPTY_REPLY_NOTICE_TEXT }
     }
   })
 }

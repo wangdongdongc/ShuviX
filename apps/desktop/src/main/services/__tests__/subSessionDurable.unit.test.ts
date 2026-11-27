@@ -20,7 +20,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { DrivenSettledEvent } from '@shuvix/agent-runtime'
 import { invokeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 

@@ -28,8 +28,7 @@ import {
   type EntryRecord,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import { Type, type TSchema } from 'typebox'
-import { Check, Errors } from 'typebox/value'
+import { compile, obj, unsafe, type Schema } from '@earendil-works/pi-schema'
 import type { ToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
 
@@ -77,7 +76,7 @@ You are running as ${source}. When the task is complete, you MUST end by calling
 export const NEXT_NUDGE_TEXT =
   'You finished without calling the `next` tool. Call `next` now, exactly once, with your result as its arguments — that call is the only way your result reaches the caller.'
 
-const NextParamsFallback = Type.Object({})
+const NextParamsFallback = obj({})
 
 /** 结果契约的确认文案（成功捕获那一次） */
 const RECORDED_TEXT = 'Result recorded — the task is complete. Do not call any more tools.'
@@ -95,18 +94,20 @@ export interface NextToolDetails {
  * 捕获是一次性的（每实例）：重复调用返回「已记录」、不带 details（并联工具调用的双发防护）；
  * 跨进程的「只认第一次」靠转写次序，不靠这个标记。
  */
-export class NextTool extends BaseTool<TSchema> {
+export class NextTool extends BaseTool<Schema> {
   readonly name = NEXT_TOOL_NAME
   readonly label = NEXT_TOOL_NAME
   readonly description =
     "Call this exactly once to finish your task. Your arguments ARE the result handed back to the caller and must satisfy this tool's parameter schema. After a successful call the task ends — do not call any other tool afterwards."
-  readonly parameters: TSchema
+  readonly parameters: Schema
 
   private captured = false
 
   constructor(schema: Record<string, unknown>) {
     super()
-    this.parameters = schema ? Type.Unsafe<Record<string, unknown>>(schema) : NextParamsFallback
+    this.parameters = schema
+      ? unsafe<Record<string, unknown>>(schema as Schema)
+      : NextParamsFallback
   }
 
   async preExecute(): Promise<void> {
@@ -132,10 +133,12 @@ export class NextTool extends BaseTool<TSchema> {
 
     // 完整 JSON Schema 校验（不依赖上游参数校验层的严格程度）；
     // 失败 throw —— BaseTool 模板收成 isError 结果，模型在同一轮内看到指正并重试
-    if (!Check(this.parameters, params)) {
-      const details = [...Errors(this.parameters, params)]
+    const validator = compile(this.parameters, { unresolvedRefs: 'reject' })
+    if (!validator.check(params)) {
+      const details = validator
+        .errors(params)
         .slice(0, 8)
-        .map((e) => `  - ${e.instancePath || '(root)'}: ${e.message}`)
+        .map((e) => `  - ${e.path || '(root)'}: ${e.message}`)
         .join('\n')
       throw new Error(
         `Result does not satisfy the schema. Fix these fields and call \`next\` again:\n${details}`

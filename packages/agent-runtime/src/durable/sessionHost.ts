@@ -302,7 +302,7 @@ class SessionHostImpl implements SessionHost {
               await seedConversationDocs(tx, record)
               await this.deps.conversationCreated?.(tx, record)
             },
-            onReport: (error) => this.report(sessionId, error),
+            onReport: (report) => this.report(sessionId, report.error),
             ...(this.deps.now === undefined ? {} : { now: this.deps.now })
           },
           BG
@@ -369,7 +369,7 @@ class SessionHostImpl implements SessionHost {
         // 存储报错会让 Harness 自己失败并关闭（pi-durable 1.2 起读也算）：把它从表里摘掉，免得被看着的会话
         // 一直钉在表里、每个调用都失败到重启为止；下一次使用照常重开，durable 从已提交的状态恢复
         void harness.closed.then((end) => {
-          if (end.reason === 'failed') this.onSessionFailed(sessionId, session, end.error)
+          if (end.kind === 'failed') this.onSessionFailed(sessionId, session, end.error)
         })
         return session
       } catch (error) {

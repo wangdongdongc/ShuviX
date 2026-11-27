@@ -18,5 +18,8 @@
     "i18next": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@earendil-works/chord": "1.6.1"
   }
 }

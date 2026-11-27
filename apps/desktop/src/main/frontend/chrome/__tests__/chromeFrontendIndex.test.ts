@@ -415,7 +415,7 @@ describe('PA-1 / PA-2 panelAppearance', () => {
 
 describe('CX-1 … CX-3 侧边栏的视图同步链路与 chrome 主体', () => {
   /** chord 客户端宿主的 hello（侧边栏那条链路的第一帧） */
-  const HELLO = { t: 'hello', name: 'client:tab5', kind: 'client', epoch: 0 }
+  const HELLO = { t: 'hello', d: ['h', 1, '00000000-0000-7000-8000-000000000001'] }
   const onEvent = (conn: FakeConn, name: string, params: unknown): void =>
     handlers.onEvent!(asConn(conn), name, params)
   const onClosed = (conn: FakeConn): void =>
@@ -445,7 +445,7 @@ describe('CX-1 … CX-3 侧边栏的视图同步链路与 chrome 主体', () => 
       expect(conn.emit).toHaveBeenCalledWith('sync.link', {
         panelId: 'panel:5',
         link: 'L1',
-        frame: expect.objectContaining({ t: 'hello', kind: 'host', name: 'main' })
+        frame: expect.objectContaining({ t: 'hello' })
       })
       expect(mocks.closeTabSession).not.toHaveBeenCalled()
 

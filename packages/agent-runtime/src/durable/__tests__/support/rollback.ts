@@ -114,7 +114,15 @@ export function rawPublications(session: DurableSession): {
   stop(): void
 } {
   const publications: CommitPublication[] = []
-  const stop = session.harness.subscribeCommits((publication) => publications.push(publication))
+  const stop = (
+    (obs) => () =>
+      obs.detach()
+  )(
+    session.harness.observeCommits({
+      advance: (publication) => publications.push(publication),
+      end: () => {}
+    })
+  )
   return { publications, stop }
 }
 

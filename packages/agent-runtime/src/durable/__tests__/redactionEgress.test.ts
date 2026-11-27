@@ -11,13 +11,13 @@
  *   ME-7 classify / generateImages 原样转交，不问策略
  *   ME-8 问策略出错之后：上一次的判定不再算数，工具结果按内置默认判（KEY 存占位符）
  */
+import { obj } from '@earendil-works/pi-schema'
 import {
   createAssistantMessageEventStream,
   fauxAssistantMessage,
   fauxText,
   fauxThinking,
   fauxToolCall,
-  Type,
   type AssistantMessage,
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
@@ -86,7 +86,7 @@ const emitKey = (): ToolRegistration =>
   defineTool({
     name: 'emit',
     description: 'prints a key',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async () => ({ output: [{ type: 'text', text: `printed ${KEY}` }] })
   })
 

@@ -4,10 +4,13 @@
  * `not_found`。完整的用例集由下一轮测试设计补上；这里只证明整条路是通的。
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { replicatedState, type MutableReplicatedState } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { SYNC_NOT_FOUND } from '@shuvix/chat-protocol/sync'
 import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import {
+  replicatedState,
+  type MutableReplicatedState
+} from '../../../../agent-runtime/src/sync/replicatedState'
 import {
   createViewServer,
   type SyncHubHost,

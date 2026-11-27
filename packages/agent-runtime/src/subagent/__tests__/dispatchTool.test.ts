@@ -7,7 +7,7 @@
  * 后又收到同一条错，形成误导闭环。
  */
 import { describe, it, expect, vi } from 'vitest'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { AgentParamsSchema, createDispatchAgentTool, toInProcessAgentType } from '../dispatchTool'
 import type { RunTaskOutcome, RunTaskParams, SubAgentManager } from '../manager'
 import type { AgentProfile } from '../types'
@@ -107,8 +107,8 @@ describe('DispatchAgentTool — 参数校验错误必须给出纠错指引', () 
 describe('DispatchAgentTool — name has no default (AG-1 / AG-2)', () => {
   it('AG-1 the name description promises no default and no "omit it" (omitting yields Missing "name"); path refs still mentioned', () => {
     // TOptional<TString> 的类型上没有 description，运行时是带 description 的 schema 对象
-    const description =
-      (AgentParamsSchema.properties.name as { description?: string }).description ?? ''
+    const props = AgentParamsSchema.properties as Record<string, { description?: string }>
+    const description = props.name?.description ?? ''
     expect(description).not.toMatch(/default/i)
     expect(description).not.toMatch(/omit/i)
     expect(description).toContain('agent definition file')

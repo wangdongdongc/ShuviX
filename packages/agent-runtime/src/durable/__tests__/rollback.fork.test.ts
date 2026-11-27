@@ -18,7 +18,7 @@
  * 记日期、不写通知 —— 日期通知前面总有别的条目。用例 04 因此在日期通知之前放一条上一天的后台通知 N0：
  * 回退到 U1 时 fork 点是日期通知 D，视图是 [N0, D]（全是通知），当天的下一次发送不再告知日期。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   CompactionEntry,
   defineTool,
@@ -219,7 +219,7 @@ describe('P3-10a · fork point', () => {
       const waitTool = defineTool({
         name: 'wait',
         description: 'wait: waits for the test',
-        parameters: Type.Object({}),
+        parameters: obj({}),
         execute: async (_args, _api, context) => {
           started.resolve()
           await Promise.race([gate.promise, aborted(context.abortSignal!)])
@@ -271,16 +271,19 @@ describe('P3-10a · commit and pointer', () => {
     const creating = recorder.publications.filter((p) => createsConversation(p, F))
     expect(creating).toHaveLength(1)
     const fork = creating[0]!
+    const forkState = sessionStateChange(fork)
     expect(
-      (sessionStateChange(fork)?.value as { currentConversation?: number } | null)
+      (forkState?.kind === 'change' ? (forkState.value as { currentConversation?: number }) : null)
         ?.currentConversation
     ).toBe(F)
     // 指针第一次指向 F 的那次发布就是建 F 的那次
-    const pointing = recorder.publications.filter(
-      (p) =>
-        (sessionStateChange(p)?.value as { currentConversation?: number } | null | undefined)
+    const pointing = recorder.publications.filter((p) => {
+      const sc = sessionStateChange(p)
+      return (
+        (sc?.kind === 'change' ? (sc.value as { currentConversation?: number }) : null)
           ?.currentConversation === F
-    )
+      )
+    })
     expect(pointing[0]).toBe(fork)
     expect(fork.changes.some((change) => change.type === 'entry')).toBe(false)
     for (const change of fork.changes) {
@@ -304,8 +307,11 @@ describe('P3-10a · commit and pointer', () => {
       expect(after).toEqual({ ...rest, currentConversation: F })
       const fork = recorder.publications.find((p) => createsConversation(p, F))!
       const change = sessionStateChange(fork)!
-      expect(change.ops.length).toBeGreaterThan(0)
-      for (const op of change.ops) expect(opPath(op)[0]).toBe('currentConversation')
+      expect(change.kind).toBe('change')
+      if (change.kind === 'change') {
+        expect(change.ops.length).toBeGreaterThan(0)
+        for (const op of change.ops) expect(opPath(op)[0]).toBe('currentConversation')
+      }
 
       const view = await viewOf(session)
       await t.host.close('s1')

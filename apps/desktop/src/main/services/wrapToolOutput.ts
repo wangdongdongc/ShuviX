@@ -28,10 +28,11 @@ import {
   type SpillMode,
   type TruncateStrategy
 } from '@shuvix/agent-runtime'
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
+  ToolPark,
   ToolRegistration
 } from '@earendil-works/pi-durable'
 import { withToolAnswers } from '@shuvix/chat-protocol/types/toolAnswer'
@@ -252,7 +253,7 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
       }
     }
 
-    let result: ToolExecutionResult
+    let result: ToolExecutionResult | ToolPark
     // 工具本体里的执行点（路径门、命令门……）按 taskId 查到这次调用还原了哪些类别（tool.restored）
     setRestoredCategories(sessionId, api.taskId, restored)
     try {
@@ -267,6 +268,7 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
       // 结果交回之前就等它落定：下一次调模型时，这次调用写下的那一版已经在历史里了
       await runHook(executionHooks?.after, call)
     }
+    if ('kind' in result) return result
     if (result.isError) {
       takeReviewAllowed(sessionId, reviewCall)
       return withAnswers(result, restored.length)

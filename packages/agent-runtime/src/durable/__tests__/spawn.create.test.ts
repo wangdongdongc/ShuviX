@@ -71,30 +71,39 @@ describe('SpawnCoordinator · creation', () => {
     const raw: { conversation: boolean; docs: string[]; state?: unknown }[] = []
     const kinds: (string | undefined)[] = []
     let C: ConversationId | undefined
-    const stop = d.session.harness.subscribeCommits((publication) => {
-      publications.push(summarize(publication))
-      let conversation = false
-      let state: unknown
-      let created: ConversationId | undefined
-      for (const change of publication.changes) {
-        if (change.type === 'conversation' && change.value.owner !== undefined) {
-          conversation = true
-          created = change.value.id
-          C = created
-        }
-      }
-      for (const change of publication.changes) {
-        if (
-          change.type === 'document' &&
-          change.conversationId === C &&
-          change.record.kind === AgentStateDoc.definition.kind
-        ) {
-          state = change.value
-        }
-      }
-      raw.push({ conversation, docs: summarize(publication).docs, state })
-      if (created !== undefined) kinds.push(d.session.agentIdentity(created)?.kind)
-    })
+    const stop = (
+      (obs) => () =>
+        obs.detach()
+    )(
+      d.session.harness.observeCommits({
+        advance: (publication) => {
+          publications.push(summarize(publication))
+          let conversation = false
+          let state: unknown
+          let created: ConversationId | undefined
+          for (const change of publication.changes) {
+            if (change.type === 'conversation' && change.value.owner !== undefined) {
+              conversation = true
+              created = change.value.id
+              C = created
+            }
+          }
+          for (const change of publication.changes) {
+            if (
+              change.type === 'document' &&
+              change.kind === 'change' &&
+              change.conversationId === C &&
+              change.record.kind === AgentStateDoc.definition.kind
+            ) {
+              state = change.value
+            }
+          }
+          raw.push({ conversation, docs: summarize(publication).docs, state })
+          if (created !== undefined) kinds.push(d.session.agentIdentity(created)?.kind)
+        },
+        end: () => {}
+      })
+    )
     d.t.kit.queue(callAgent('explore', 'find X'), answer('found'), answer('done'))
     expect(await d.session.submitUser('go')).toEqual({})
     stop()

@@ -19,7 +19,7 @@
  * after 照跑、钩子出错只吞掉、门没放行时都不跑、after 落定之前结果不交回、「已审查」标记照旧。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import type { AnyTool } from '@shuvix/agent-runtime'
 import type { EnforceOutcome, McpToolMeta, SecurityContext } from '@shuvix/agent-runtime'

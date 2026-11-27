@@ -22,7 +22,7 @@
  * 工具名，附加工具也算）、`platform`、`failReconfigure` / `beforeReconfigure`（重配的失败 / 闸门）。
  * `rebuildContexts` 记每次重建的上下文，`reconfigureCalls` 记每次重配的请求与 `connect`。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj, unsafe } from '@earendil-works/pi-schema'
 import {
   defineTool,
   type ToolExecutionResult,
@@ -120,7 +120,7 @@ function simpleTool(
   return defineTool({
     name,
     description,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     replay,
     execute: async (): Promise<ToolExecutionResult> => ({
       output: [{ type: 'text', text: `${name} ok` }]
@@ -159,7 +159,7 @@ function mcpTool(server: FakeMcpServer, decl: McpToolDeclaration): ToolRegistrat
   return {
     name: `mcp__${server.name}__${decl.name}`,
     description: decl.description ?? '',
-    parameters: Type.Unsafe<Record<string, unknown>>(decl.inputSchema as Record<string, unknown>),
+    parameters: unsafe<Record<string, unknown>>(decl.inputSchema as Record<string, unknown>),
     replay: 'unsafe',
     execute: async (args, _api, context) => {
       try {

@@ -182,15 +182,17 @@ describe('TI-2 · 形状', () => {
   })
 
   it('TI-2 schema：images 1..6，path 必填、caption 可选，caption 描述说 200', () => {
-    const images = ShowImageParamsSchema.properties.images
-    const bounds = images as unknown as { minItems?: number; maxItems?: number }
-    expect(bounds.minItems).toBe(1)
-    expect(bounds.maxItems).toBe(6)
+    const props = ShowImageParamsSchema.properties as Record<string, unknown>
+    const images = props.images as {
+      minItems?: number
+      maxItems?: number
+      items: { required?: string[]; properties: Record<string, { description?: string }> }
+    }
+    expect(images.minItems).toBe(1)
+    expect(images.maxItems).toBe(6)
     expect([...(images.items.required ?? [])]).toStrictEqual(['path'])
     expect(Object.keys(images.items.properties).sort()).toStrictEqual(['caption', 'path'])
-    // description 是 JSON Schema 的选项，typebox 的类型上不带它：按普通对象读
-    const caption = images.items.properties.caption as unknown as { description?: string }
-    expect(caption.description).toContain('200')
+    expect(images.items.properties.caption.description).toContain('200')
   })
 })
 

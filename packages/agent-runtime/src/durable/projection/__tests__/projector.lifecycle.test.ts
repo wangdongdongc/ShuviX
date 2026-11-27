@@ -52,19 +52,28 @@ const kinds = (lc: ReturnType<typeof recordLifecycle>): (string | undefined)[][]
 function runPresence(session: DurableSession): { appearances: () => number; stop: () => void } {
   let present = false
   let count = 0
-  const stop = session.harness.subscribeCommits((publication) => {
-    for (const change of publication.changes) {
-      if (
-        change.type === 'document' &&
-        change.conversationId === 1 &&
-        change.record.kind === LiveDoc.definition.kind
-      ) {
-        const now = (change.value as { run?: unknown } | null)?.run !== undefined
-        if (now && !present) count++
-        present = now
-      }
-    }
-  })
+  const stop = (
+    (obs) => () =>
+      obs.detach()
+  )(
+    session.harness.observeCommits({
+      advance: (publication) => {
+        for (const change of publication.changes) {
+          if (
+            change.type === 'document' &&
+            change.conversationId === 1 &&
+            change.record.kind === LiveDoc.definition.kind
+          ) {
+            const now =
+              change.kind === 'change' && (change.value as { run?: unknown }).run !== undefined
+            if (now && !present) count++
+            present = now
+          }
+        }
+      },
+      end: () => {}
+    })
+  )
   return { appearances: () => count, stop }
 }
 

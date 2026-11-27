@@ -12,18 +12,9 @@
  *  - **裸的 chord 客户端** `rawClient(server, principal)`：一条窃听链路上的 chord 客户端宿主，`get(target)` 交回一个
  *    记下全部值 / 事件 / 可用性 / 状态的 {@link TestView}。
  */
-import {
-  createHost,
-  type Frame,
-  type Handle,
-  type HandleStatus,
-  type Host,
-  type LinkOptions,
-  type MutableReplicatedState,
-  replicatedState
-} from '@earendil-works/chord'
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Draft } from '@earendil-works/chord'
+import { createHost, type Held, type Host, type RefState } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
+import type { Draft } from '@earendil-works/chord/delta'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { AssistantMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import {
@@ -31,6 +22,7 @@ import {
   type AgentView,
   type SessionView
 } from '@shuvix/chat-protocol/types/sessionView'
+import { replicatedState, type MutableReplicatedState } from '../../replicatedState'
 import type { LegacyTranscript } from '../../services'
 import {
   createViewServer,
@@ -42,13 +34,15 @@ import {
   type ViewPrincipal,
   type ViewProjector,
   type ViewServer,
-  type ViewServerDeps
+  type ViewServerDeps,
+  type ViewServerHeartbeat
 } from '../../viewServer'
 import {
   AgentViewContract,
   FrameLink,
   SessionViewContract,
-  VIEW_SERVER_HOST,
+  VIEW_LINK_CODEC,
+  type Frame,
   type ViewAvailability
 } from '../../viewContracts'
 
@@ -637,21 +631,23 @@ export function tappedLinkPair(tap?: (dir: TapDirection, frame: Frame) => void):
 
 // ─── 裸的 chord 客户端 ─────────────────────────────────
 
-type ViewHandle = Handle<typeof SessionViewContract> | Handle<typeof AgentViewContract>
+type ViewHandle = Held<typeof SessionViewContract> | Held<typeof AgentViewContract>
+
+export type TestHandleStatus = 'loading' | 'live' | 'gone' | 'released'
 
 /** 一个目标的句柄 + 它的全部记录 */
 export interface TestView<V = SessionView | AgentView> {
   readonly target: SyncTarget
   readonly handle: ViewHandle
-  /** view.subscribe 交来的每个值（含开头的 undefined） */
+  /** view 交来的每个值 */
   readonly views: (V | undefined)[]
-  /** view.events 的事件种类（snap / reset / ops） */
+  /** view 变化的事件种类（snap / reset / ops） */
   readonly events: string[]
-  /** availability.subscribe 交来的每个值 */
+  /** availability 交来的每个值 */
   readonly availability: (ViewAvailability | undefined)[]
-  /** onStatus 报的每个状态 */
-  readonly statuses: HandleStatus[]
-  status(): HandleStatus
+  /** 状态变化 */
+  readonly statuses: TestHandleStatus[]
+  status(): TestHandleStatus
   error(): unknown
   /** 句柄此刻的视图值 */
   value(): V | undefined
@@ -659,7 +655,7 @@ export interface TestView<V = SessionView | AgentView> {
   avail(): ViewAvailability | undefined
   /** 交来过的非 undefined 值 */
   values(): V[]
-  /** ready 落定：失败 → 错误，成功 → undefined */
+  /** 首次 live 或失败落定：失败 → 错误，成功 → undefined */
   settled(): Promise<unknown>
   release(): void
 }
@@ -676,18 +672,43 @@ export interface RawClient {
   close(): Promise<void>
 }
 
-let rawSeq = 0
+function mapStatus(state: RefState, released: boolean): TestHandleStatus {
+  if (released) return 'released'
+  switch (state.kind) {
+    case 'loading':
+      return 'loading'
+    case 'live':
+      return 'live'
+    case 'failed':
+    case 'ended':
+      return 'gone'
+  }
+}
+
+function errorOfState(state: RefState): unknown {
+  if (state.kind === 'failed') return state.cause.error
+  if (state.kind === 'ended') return state.error
+  return undefined
+}
 
 /** 一条窃听链路上的 chord 客户端宿主（服务端 `accept` 它，主体由这里给） */
 export function rawClient(
   server: ViewServer,
   principal: ViewPrincipal,
-  options: { upstreamOptions?: LinkOptions } = {}
+  options: { heartbeat?: ViewServerHeartbeat } = {}
 ): RawClient {
   const pair = tappedLinkPair()
   server.accept(pair.server, principal)
-  const host = createHost({ name: `raw-client-${++rawSeq}`, kind: 'client', onError: () => {} })
-  host.connect(pair.client, options.upstreamOptions)
+  const host = createHost({
+    ...(options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
+    onError: () => {}
+  })
+  void host.load([], BACKGROUND_CONTEXT)
+  host.connect(
+    pair.client,
+    { principal: { kind: 'server' }, codec: VIEW_LINK_CODEC },
+    BACKGROUND_CONTEXT
+  )
   return {
     host,
     pair,
@@ -695,23 +716,114 @@ export function rawClient(
     get<V = SessionView>(target: SyncTarget): TestView<V> {
       const handle: ViewHandle =
         target.kind === 'session'
-          ? host.get(SessionViewContract, { sessionId: target.sessionId }, { at: VIEW_SERVER_HOST })
-          : host.get(AgentViewContract, { agentId: target.agentId }, { at: VIEW_SERVER_HOST })
-      const settled = handle.ready.then(
-        () => undefined,
-        (error: unknown) => error
-      )
-      const views: (V | undefined)[] = []
-      const events: string[] = []
-      const availability: (ViewAvailability | undefined)[] = []
-      const statuses: HandleStatus[] = []
-      const stops = [
-        handle.view.subscribe((value) => views.push(value as V | undefined)),
-        handle.view.events((event) => events.push(event.type)),
-        handle.availability.subscribe((value) => availability.push(value)),
-        handle.onStatus((status) => statuses.push(status))
-      ]
+          ? host.hold(SessionViewContract, { sessionId: target.sessionId }, BACKGROUND_CONTEXT)
+          : host.hold(AgentViewContract, { agentId: target.agentId }, BACKGROUND_CONTEXT)
+      const { context: watchCtx, cancel: cancelWatches } = withCancel(BACKGROUND_CONTEXT)
+      const views: (V | undefined)[] = [undefined]
+      const events: string[] = ['snap']
+      const availability: (ViewAvailability | undefined)[] = [undefined]
+      const statuses: TestHandleStatus[] = []
       let released = false
+      let resolveSettled!: (error: unknown) => void
+      let settledDone = false
+      const settled = new Promise<unknown>((resolve) => {
+        resolveSettled = resolve
+      })
+      const finishSettled = (error: unknown): void => {
+        if (settledDone) return
+        settledDone = true
+        resolveSettled(error)
+      }
+      const recordState = (st: RefState): void => {
+        const mapped = mapStatus(st, released)
+        if (statuses.at(-1) !== mapped) statuses.push(mapped)
+        if (st.kind === 'live') {
+          try {
+            const v = handle.view.value as V
+            if (views.at(-1) !== v) {
+              views.push(v)
+              events.push('reset')
+            }
+            const a = handle.availability.value as ViewAvailability
+            if (availability.at(-1) !== a) availability.push(a)
+          } catch {
+            /* not hydrated yet */
+          }
+          finishSettled(undefined)
+        } else if (st.kind === 'failed') {
+          finishSettled(st.cause.error)
+        } else if (st.kind === 'ended') {
+          finishSettled(st.error)
+        }
+      }
+
+      void handle.state
+        .watch(watchCtx)
+        .then((watch) => {
+          if (released) {
+            void watch.stop()
+            return
+          }
+          if (watch.value.kind !== 'loading') recordState(watch.value)
+          watch.start(async (call) => {
+            if (call.kind === 'value') recordState(call.value)
+          })
+        })
+        .catch(() => undefined)
+
+      void handle.view
+        .watch(watchCtx)
+        .then((watch) => {
+          if (released) {
+            void watch.stop()
+            return
+          }
+          watch.start(async (call) => {
+            if (call.kind === 'value') {
+              const v = call.value as V
+              if (views.at(-1) !== v) views.push(v)
+              const isReset = call.ops.length === 1 && call.ops[0]?.[0] === 'r'
+              events.push(isReset ? 'reset' : 'ops')
+            }
+          })
+        })
+        .catch(() => undefined)
+
+      void handle.availability
+        .watch(watchCtx)
+        .then((watch) => {
+          if (released) {
+            void watch.stop()
+            return
+          }
+          watch.start(async (call) => {
+            if (call.kind === 'value') {
+              const a = call.value as ViewAvailability
+              if (availability.at(-1) !== a) availability.push(a)
+            }
+          })
+        })
+        .catch(() => undefined)
+
+      if (handle.state.value.kind !== 'loading') recordState(handle.state.value)
+
+      const readValue = (): V | undefined => {
+        if (released || handle.state.value.kind !== 'live') return undefined
+        try {
+          return handle.view.value as V | undefined
+        } catch {
+          return undefined
+        }
+      }
+      const readAvail = (): ViewAvailability | undefined => {
+        if (released || handle.state.value.kind !== 'live') return undefined
+        try {
+          return handle.availability.value as ViewAvailability | undefined
+        } catch {
+          return undefined
+        }
+      }
+
       return {
         target,
         handle,
@@ -719,34 +831,31 @@ export function rawClient(
         events,
         availability,
         statuses,
-        status: () => handle.status,
-        error: () => handle.error,
-        value: () => handle.view.value as V | undefined,
-        avail: () => handle.availability.value,
+        status: () => mapStatus(handle.state.value, released),
+        error: () => errorOfState(handle.state.value),
+        value: readValue,
+        avail: readAvail,
         values: () => views.filter((value): value is V => value !== undefined),
         settled: () => settled,
         release: () => {
           if (released) return
           released = true
-          for (const stop of stops) stop()
+          statuses.push('released')
+          cancelWatches()
           handle.release()
+          finishSettled(undefined)
         }
       }
     },
     down: () => pair.frames.filter((r) => r.dir === 'down').map((r) => r.frame),
     up: () => pair.frames.filter((r) => r.dir === 'up').map((r) => r.frame),
-    close: () => host.close()
+    close: () => host.close(BACKGROUND_CONTEXT)
   }
 }
 
-/** 帧里带视图值的 state 帧（快照 / 重置 / 增量） */
+/** 帧里带视图值的帧（bound 快照 / state 增量） */
 export function isViewStateFrame(frame: Frame): boolean {
-  return (
-    frame.t === 'state' &&
-    ((frame as { snap?: unknown }).snap !== undefined ||
-      (frame as { reset?: unknown }).reset !== undefined ||
-      (frame as { ops?: unknown }).ops !== undefined)
-  )
+  return frame.t === 'bound' || frame.t === 'state'
 }
 
 export type { ViewHandle }

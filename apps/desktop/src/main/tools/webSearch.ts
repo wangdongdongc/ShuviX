@@ -13,8 +13,7 @@
  *
  * 门：结果页地址照浏览器的导航上报 `{type:'url', browser:'app'}`（出厂没有 url 策略，no policy = allow）。
  */
-import { Type } from 'typebox'
-import type { TInteger, TObject, TOptional, TString } from 'typebox'
+import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   BaseTool,
   callOwnerOf,
@@ -50,13 +49,10 @@ export const WEB_SEARCH_DESCRIPTION =
   'Write the query the way you would type it into a search engine: a few specific words, not a question to an assistant. ' +
   "If the search engine asks for a human check, the call fails and says so: tell the user they can complete it in ShuviX's browser, and get what you need another way meanwhile."
 
-export const WebSearchParamsSchema: TObject<{
-  query: TString
-  max_results: TOptional<TInteger>
-}> = Type.Object({
-  query: Type.String({ description: 'What to search for' }),
-  max_results: Type.Optional(
-    Type.Integer({
+export const WebSearchParamsSchema = obj({
+  query: str({ description: 'What to search for' }),
+  max_results: opt(
+    int({
       description: `How many results to return (1 to ${WEB_SEARCH_MAX_RESULTS}, default ${DEFAULT_RESULTS})`,
       minimum: 1,
       maximum: WEB_SEARCH_MAX_RESULTS

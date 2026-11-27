@@ -37,7 +37,7 @@
  *
  * 不依赖 Node / Electron。
  */
-import { copyJson } from '@earendil-works/chord'
+import { copyJson } from '@earendil-works/chord/json'
 import type {
   AssistantMessage as PiAssistantMessage,
   ImageContent,
@@ -92,7 +92,7 @@ import { spillLocatorOf } from '../../toolOutput/spill'
 import { toolResultText } from '../../toolResultText'
 import { NoticeEntry } from '../docs'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
-import type { DisplayItem } from './display'
+import { activeViewEntries, type DisplayItem } from './display'
 import { firstMessage, tsOf, unwrapCompactionSummary, userText } from './entryText'
 
 // ─────────────────────────── 公共类型 ───────────────────────────
@@ -984,7 +984,12 @@ function runOf(live: LiveInput, runState: RunViewState): RunView {
   if (shown !== undefined) {
     const retryAt = isRecord(shown.retry) ? shown.retry.at : undefined
     run.compacting = {
-      reason: typeof shown.reason === 'string' ? shown.reason : '',
+      reason:
+        typeof shown.trigger === 'string'
+          ? shown.trigger
+          : typeof shown.reason === 'string'
+            ? shown.reason
+            : '',
       blocking: shown.blocking === true,
       attempt: typeof shown.attempt === 'number' ? shown.attempt : 0,
       ...(typeof retryAt === 'number' ? { retryAt } : {})
@@ -1064,7 +1069,7 @@ export function projectSessionView(
 ): SessionView {
   const core = projectCore(
     meta.sessionId,
-    entries,
+    activeViewEntries(entries),
     live,
     display,
     origins,
@@ -1102,7 +1107,7 @@ export function projectAgentView(
 ): AgentView {
   const core = projectCore(
     meta.sessionId,
-    entries,
+    activeViewEntries(entries),
     live,
     display,
     origins,

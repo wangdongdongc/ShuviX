@@ -18,7 +18,7 @@
  * 告诉用户「档案改过了」，用户点重建（{@link forgetFrozenPrompt} 删掉冻结的那份），下一次上锁才重新渲染，在下一次
  * 请求里作为增量重发。派生 agent 每次都是新对话，不走这一条。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { ConversationId, DocumentReader, Tx } from '@earendil-works/pi-durable'
 import {
   composePersona,

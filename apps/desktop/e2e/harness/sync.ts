@@ -20,18 +20,21 @@
  *                            否则以 `not_found` 失败 —— 抛出，错误带 `.code`）
  *   waitAgentView(id, pred)  轮询直到 agent 视图满足 pred
  */
-import type { Frame, Handle, Host } from '@earendil-works/chord'
-import { createHost } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { SYNC_NOT_FOUND, type SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AssistantToolBlock, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import {
   AgentViewContract,
+  createHost,
   FrameLink,
   isNotFoundError,
   SessionViewContract,
-  VIEW_SERVER_HOST
+  VIEW_LINK_CODEC,
+  type Frame,
+  type Held,
+  type Host
 } from '../../../../packages/agent-runtime/src/sync/viewContracts'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
@@ -45,7 +48,7 @@ const BIND_TIMEOUT_MS = 15_000
 /** 探针链路的 ping 超时：帧只在读的时候取回来，空闲再久也不能让链路自己断 */
 const PROBE_PING_TIMEOUT_MS = 24 * 60 * 60 * 1000
 
-type ViewHandle = Handle<typeof SessionViewContract> | Handle<typeof AgentViewContract>
+type ViewHandle = Held<typeof SessionViewContract> | Held<typeof AgentViewContract>
 
 /** 句柄失败的错误 → 带 `.code` 的 Error（「找不到」映射成 `not_found`，与渲染端的 syncClient 同一个口径） */
 export function syncErrorOf(error: unknown): Error & { code?: string } {
@@ -186,8 +189,16 @@ export function syncProbe(main: CdpClient): SyncProbe {
 
   function client(): Host {
     if (host === undefined) {
-      host = createHost({ name: `e2e-probe:${linkId}`, kind: 'client', onError: () => {} })
-      host.connect(link, { pingTimeout: PROBE_PING_TIMEOUT_MS })
+      host = createHost({
+        heartbeat: { ping: PROBE_PING_TIMEOUT_MS, close: PROBE_PING_TIMEOUT_MS * 2 },
+        onError: () => {}
+      })
+      void host.load([], BACKGROUND_CONTEXT)
+      host.connect(
+        link,
+        { principal: { kind: 'server' }, codec: VIEW_LINK_CODEC },
+        BACKGROUND_CONTEXT
+      )
     }
     return host
   }
@@ -217,23 +228,24 @@ export function syncProbe(main: CdpClient): SyncProbe {
     const host = client()
     const handle: ViewHandle =
       target.kind === 'session'
-        ? host.get(SessionViewContract, { sessionId: target.sessionId }, { at: VIEW_SERVER_HOST })
-        : host.get(AgentViewContract, { agentId: target.agentId }, { at: VIEW_SERVER_HOST })
-    handle.ready.catch(() => undefined)
+        ? host.hold(SessionViewContract, { sessionId: target.sessionId }, BACKGROUND_CONTEXT)
+        : host.hold(AgentViewContract, { agentId: target.agentId }, BACKGROUND_CONTEXT)
     const binding: ProbeBinding = {
       handle,
-      stops: [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
+      stops: []
     }
     bindings.set(key, binding)
-    // 自己轮询（`until` 会吞掉错误）：gone = 订阅失败，带着码抛出去
+    // 自己轮询（`until` 会吞掉错误）：failed / ended = 订阅失败，带着码抛出去
     const deadline = Date.now() + BIND_TIMEOUT_MS
     try {
       for (;;) {
         await drain()
-        if (handle.status === 'gone') throw syncErrorOf(handle.error)
-        if (handle.status === 'live' && handle.view.value !== undefined) return binding
+        const st = handle.state.value
+        if (st.kind === 'failed') throw syncErrorOf(st.cause.error)
+        if (st.kind === 'ended') throw syncErrorOf(st.error)
+        if (st.kind === 'live') return binding
         if (Date.now() > deadline) {
-          throw new Error(`timeout waiting: view of ${key} hydrated (status ${handle.status})`)
+          throw new Error(`timeout waiting: view of ${key} hydrated (status ${st.kind})`)
         }
         await sleep(50)
       }

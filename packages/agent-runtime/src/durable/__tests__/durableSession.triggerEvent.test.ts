@@ -22,7 +22,7 @@
  *   RE-16 提交不再二次脱敏：submitUser(text) 之后记录 === text
  */
 import { createHmac } from 'node:crypto'
-import { Type } from '@earendil-works/pi-ai'
+import { obj, str } from '@earendil-works/pi-schema'
 import { defineTool, type EntryRecord, type JsonObject } from '@earendil-works/pi-durable'
 import { startsTaskListRequest } from '@shuvix/chat-protocol/taskList'
 import {
@@ -264,7 +264,7 @@ describe('trigger messages on the real redactor', () => {
       const echo = defineTool({
         name: 'echo_secret',
         description: 'prints its argument',
-        parameters: Type.Object({ value: Type.String() }),
+        parameters: obj({ value: str() }),
         // 宿主在工具执行前还原参数（桌面端 wrapToolOutput.restoreArguments 调的就是 restoreJson）
         execute: async (args) => {
           const { value } = await live.session!.redaction!.restoreJson(args)

@@ -180,7 +180,10 @@ describe('P3-03 · asks', () => {
       const h = proj.acquire()
       const ops = opsOf(h.state)
       const publications: unknown[] = []
-      const stop = session.harness.subscribeCommits((p) => publications.push(p))
+      const stop = (
+        (obs) => () =>
+          obs.detach()
+      )(session.harness.observeCommits({ advance: (p) => publications.push(p), end: () => {} }))
       const first = session.requestUserInput(ask('R1', 'first?'))
       expect(h.state.value.asks).toStrictEqual([
         { id: 'R1', kind: 'ask', toolName: 'ask', question: 'first?', createdAt: 0 }

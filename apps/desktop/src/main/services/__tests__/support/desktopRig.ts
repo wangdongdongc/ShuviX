@@ -26,14 +26,15 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { Type, getCurrentSystemPrompt, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { getCurrentSystemPrompt, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   defineTool,
   type ConversationId,
   type TaskRecord,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   DurableSession,
@@ -756,7 +757,7 @@ async function mustSession(sessionId: string): Promise<DurableSession> {
   return session
 }
 
-const BG = (): import('@earendil-works/chord').Context => proc().runtime.backgroundContext
+const BG = (): import('@earendil-works/chord/context').Context => proc().runtime.backgroundContext
 
 /** 当前对话的转写（`<kind>:<text>`） */
 export async function transcriptOf(sessionId: string): Promise<string[]> {
@@ -900,7 +901,7 @@ function probeTool(
   return defineTool({
     name: 'probe',
     description: 'probe: records who called it',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     replay: 'safe',
     execute: async (_args, api) => {
       probeCalls.push({
@@ -920,7 +921,7 @@ function askOpTool(ctx: ProbeCtx): ToolRegistration {
   return defineTool({
     name: 'askOp',
     description: 'askOp: an operation the policies want judged',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     replay: 'unsafe',
     execute: async (_args, api) => {
       askOpCalls.push({

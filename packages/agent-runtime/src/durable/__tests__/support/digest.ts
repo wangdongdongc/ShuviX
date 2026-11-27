@@ -19,7 +19,7 @@ import type {
   EntryRecord,
   JsonObject
 } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { backgroundContext as BG } from '../../context'
 import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '../../transcriptDigest'
 import type {

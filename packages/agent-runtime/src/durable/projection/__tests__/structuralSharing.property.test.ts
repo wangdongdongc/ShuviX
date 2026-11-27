@@ -17,12 +17,8 @@
  *   SP-03 随机步骤（120 个种子 × 40 步），SessionView 与 AgentView 一起；步骤里含输入来源的设 / 清 / 值相等的
  *         重新解析（`metadata.origin`，2026-10-21）
  */
-import {
-  copyJson,
-  replicatedState,
-  type JsonValue,
-  type MutableReplicatedState
-} from '@earendil-works/chord'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
+import { replicatedState, type MutableReplicatedState } from '../../../sync/replicatedState'
 import type { EntryRecord, InboxState, LiveState } from '@earendil-works/pi-durable'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'

@@ -29,7 +29,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DurableSession } from '@shuvix/agent-runtime'
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
@@ -703,7 +703,7 @@ describe('SI-10 the fork keeps the source agent (cache-preserving)', () => {
         defineTool({
           name,
           description: `${name} tool`,
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async () => ({ output: [{ type: 'text', text: `${name} ok` }] })
         })
       const read = readTool()

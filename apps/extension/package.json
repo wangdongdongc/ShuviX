@@ -12,8 +12,8 @@
   "dependencies": {
     "i18next": "^25.8.13",
     "lucide-react": "^0.564.0",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-i18next": "^16.5.4"
   },
   "devDependencies": {

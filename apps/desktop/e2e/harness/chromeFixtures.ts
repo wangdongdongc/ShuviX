@@ -48,13 +48,18 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
-import { createHost, remote, type Frame, type Handle, type Host } from '@earendil-works/chord'
-import { Type } from 'typebox'
+import { remote, unknown } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
   AgentViewContract,
+  createHost,
   FrameLink,
   SessionViewContract,
-  VIEW_SERVER_HOST
+  VIEW_LINK_CODEC,
+  VIEW_SERVER_ADDRESS,
+  type Frame,
+  type Held,
+  type Host
 } from '../../../../packages/agent-runtime/src/sync/viewContracts'
 import { sleep, until } from './cdp'
 import type { FakeProvider, FakeTurn } from './fakeProvider'
@@ -379,7 +384,7 @@ export function withChromeTabTokens(
   return { text: `${markers.join(' ')} ${text}`, inlineTokens }
 }
 
-type SyncHandle = Handle<typeof SessionViewContract> | Handle<typeof AgentViewContract>
+type SyncHandle = Held<typeof SessionViewContract> | Held<typeof AgentViewContract>
 
 /** 一个持有着的视图：句柄 + 让远端状态一直订着 */
 interface PanelView {
@@ -407,8 +412,9 @@ function releaseBinding(binding: PanelView): void {
 /** 服务端不认识的远程类型（看它回什么错） */
 const UnknownViewContract = remote('e2e.not-a-view', {
   version: 1,
-  input: Type.Object({}),
-  variants: { owner: { state: { view: Type.Unknown() } } }
+  params: {},
+  hostAddress: () => VIEW_SERVER_ADDRESS,
+  variants: { owner: { state: { view: unknown() } } }
 })
 
 export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
@@ -773,8 +779,13 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
     const link = new FrameLink((frame: Frame) => {
       send({ type: 'event', name: 'sync.link', params: { panelId, link: linkId, frame } })
     })
-    const host = createHost({ name: `fake-panel:${linkId}`, kind: 'client', onError: () => {} })
-    host.connect(link)
+    const host = createHost({ onError: () => {} })
+    void host.load([], BACKGROUND_CONTEXT)
+    host.connect(
+      link,
+      { principal: { kind: 'server' }, codec: VIEW_LINK_CODEC },
+      BACKGROUND_CONTEXT
+    )
     const created: PanelSync = { panelId, linkId, link, host, views: new Map(), agents: new Map() }
     panelSyncs.set(panelId, created)
     return created
@@ -784,34 +795,44 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
   function dropPanelSyncs(reason: string): void {
     for (const panel of panelSyncs.values()) {
       panel.link.ended(reason)
-      void panel.host.close().catch(() => undefined)
+      void panel.host.close(BACKGROUND_CONTEXT).catch(() => undefined)
     }
     panelSyncs.clear()
   }
 
   const panelOf = (sessionId: string): string => panelOfSession.get(sessionId) ?? 'panel:0'
 
-  /** 等一个句柄活过来、快照到了；gone → 放掉、抛带 `.code` 的错 */
+  /** 等一个句柄活过来、快照到了；failed / ended → 放掉、抛带 `.code` 的错 */
   async function hydrated(handle: SyncHandle, what: string, release: () => void): Promise<void> {
     const deadline = Date.now() + DEFAULT_TIMEOUT_MS
     for (;;) {
-      if (handle.status === 'gone') {
+      const st = handle.state.value
+      if (st.kind === 'failed') {
         release()
-        throw syncErrorOf(handle.error)
+        throw syncErrorOf(st.cause.error)
       }
-      if (handle.status === 'live' && handle.view.value !== undefined) return
+      if (st.kind === 'ended') {
+        release()
+        throw syncErrorOf(st.error)
+      }
+      if (st.kind === 'live') return
       if (Date.now() > deadline) {
         release()
-        throw new Error(`timeout waiting: ${what} hydrated (status ${handle.status})${diag()}`)
+        throw new Error(`timeout waiting: ${what} hydrated (status ${st.kind})${diag()}`)
       }
       await sleep(20)
     }
   }
 
-  const currentView = (sessionId: string): SessionView | undefined =>
-    panelSyncs.get(panelOf(sessionId))?.views.get(sessionId)?.handle.view.value as
-      | SessionView
-      | undefined
+  const currentView = (sessionId: string): SessionView | undefined => {
+    const binding = panelSyncs.get(panelOf(sessionId))?.views.get(sessionId)
+    if (!binding || binding.handle.state.value.kind !== 'live') return undefined
+    try {
+      return binding.handle.view.value as SessionView | undefined
+    } catch {
+      return undefined
+    }
+  }
 
   /** 一帧交给解码器之后：记下新出现的询问卡、叫醒条件已成立的观察者 */
   function afterViewChange(sessionId: string, at: number): void {
@@ -832,11 +853,10 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
   const bindView = async (sessionId: string): Promise<void> => {
     const panel = panelSync(panelOf(sessionId))
     if (panel.views.has(sessionId)) return
-    const handle = panel.host.get(SessionViewContract, { sessionId }, { at: VIEW_SERVER_HOST })
-    handle.ready.catch(() => undefined)
+    const handle = panel.host.hold(SessionViewContract, { sessionId }, BACKGROUND_CONTEXT)
     const binding: PanelView = {
       handle,
-      stops: [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
+      stops: []
     }
     panel.views.set(sessionId, binding)
     await hydrated(handle, `view of ${sessionId}`, () => {
@@ -856,11 +876,10 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
     const panel = panelSync('panel:0')
     let binding = panel.agents.get(agentId)
     if (!binding) {
-      const handle = panel.host.get(AgentViewContract, { agentId }, { at: VIEW_SERVER_HOST })
-      handle.ready.catch(() => undefined)
+      const handle = panel.host.hold(AgentViewContract, { agentId }, BACKGROUND_CONTEXT)
       const created: PanelView = {
         handle,
-        stops: [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
+        stops: []
       }
       binding = created
       panel.agents.set(agentId, created)
@@ -874,14 +893,22 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
 
   const holdUnknownType = async (): Promise<Error & { code?: string }> => {
     const panel = panelSync('panel:0')
-    const handle = panel.host.get(UnknownViewContract, {}, { at: VIEW_SERVER_HOST })
-    return handle.ready.then(
-      () => {
-        handle.release()
-        throw new Error('the desktop served a type it does not know')
-      },
-      (error: unknown) => syncErrorOf(error)
-    )
+    const handle = panel.host.hold(UnknownViewContract, {}, BACKGROUND_CONTEXT)
+    const deadline = Date.now() + DEFAULT_TIMEOUT_MS
+    try {
+      for (;;) {
+        const st = handle.state.value
+        if (st.kind === 'failed') return syncErrorOf(st.cause.error)
+        if (st.kind === 'ended') return syncErrorOf(st.error)
+        if (st.kind === 'live') throw new Error('the desktop served a type it does not know')
+        if (Date.now() > deadline) {
+          throw new Error(`timeout waiting: unknown type refused${diag()}`)
+        }
+        await sleep(20)
+      }
+    } finally {
+      handle.release()
+    }
   }
 
   const summarize = (view: SessionView | undefined): string =>

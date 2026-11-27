@@ -6,7 +6,7 @@
 import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { statSync } from 'fs'
-import { Type } from 'typebox'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import { BaseTool, callOwnerOf, type ToolCallScope } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
@@ -25,13 +25,13 @@ const log = createLogger('Tool:glob')
 /** 最大返回文件数 */
 const LIMIT = 100
 
-const GlobParamsSchema = Type.Object({
-  pattern: Type.String({
+const GlobParamsSchema = obj({
+  pattern: str({
     description:
       'The glob pattern to match files against (e.g. "**/*.ts", "src/**/*.{js,jsx}", "*.json")'
   }),
-  path: Type.Optional(
-    Type.String({
+  path: opt(
+    str({
       description: 'The directory to search in (optional, defaults to current working directory)'
     })
   )

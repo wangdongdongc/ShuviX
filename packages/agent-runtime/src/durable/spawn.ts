@@ -49,7 +49,8 @@
  * 协调器不发任何 ChatEvent、不碰任务登记（那是 P2-05 的路由）。
  */
 import type { MaskOptions } from './sessionRedaction'
-import { copyJson, type Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import { copyJson } from '@earendil-works/chord/json'
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,

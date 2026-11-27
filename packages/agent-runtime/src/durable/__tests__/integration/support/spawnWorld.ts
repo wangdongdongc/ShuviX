@@ -28,10 +28,10 @@ import {
   type TaskRecord,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import { Type } from 'typebox'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import { parseAgentDefinitionFile } from '../../../../agentProfile/definitionFile'
 import { buildBuiltinHooks } from '../../../../hook/builtinHooks'
 import { createInlineHookMdReader } from '../../../../hook/builtinHooks/inlineSources'
@@ -366,7 +366,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
     defineTool({
       name: 'hold',
       description: 'hold: waits until released',
-      parameters: Type.Object({}),
+      parameters: obj({}),
       replay: 'unsafe',
       execute: async (_args, api, context) => {
         holds.push(api.callId)
@@ -377,7 +377,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
     defineTool({
       name: 'probe',
       description: 'probe: records the calling agent and echoes text',
-      parameters: Type.Object({ text: Type.Optional(Type.String()) }),
+      parameters: obj({ text: opt(str()) }),
       replay: 'safe',
       execute: async (args, api) => {
         probeCalls.push({
@@ -391,9 +391,9 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
     defineTool({
       name: 'session',
       description: 'session: manage this session (stub)',
-      parameters: Type.Object({
-        action: Type.String(),
-        title: Type.Optional(Type.String())
+      parameters: obj({
+        action: str(),
+        title: opt(str())
       }),
       replay: 'unsafe',
       execute: async (args, api) => {

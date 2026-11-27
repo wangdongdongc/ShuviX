@@ -251,9 +251,10 @@ describe('TS-U1 工具的形状与参数', () => {
   })
 
   it('TS-U1 schema 只有一个必填的字符串 query', () => {
+    const props = ToolSearchParamsSchema.properties as Record<string, { type?: string }>
     expect(ToolSearchParamsSchema.required).toEqual(['query'])
-    expect(Object.keys(ToolSearchParamsSchema.properties)).toEqual(['query'])
-    expect(ToolSearchParamsSchema.properties.query.type).toBe('string')
+    expect(Object.keys(props)).toEqual(['query'])
+    expect(props.query.type).toBe('string')
   })
 
   it.each([

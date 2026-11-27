@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isJsonValue } from '@earendil-works/chord'
+import { isJsonValue } from '@earendil-works/chord/json'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { assertJsonOnly, isJsonOnly } from '../utils/jsonOnly'
 import type { AssistantMessage, ChatMessage, ToolResultDetails } from './chatMessage'

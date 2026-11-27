@@ -33,14 +33,15 @@ export function summarize(publication: CommitPublication): PublicationSummary {
   return { seq: publication.seq as unknown as number, docs: [...docs].sort(), entries }
 }
 
-export function recordPublications(
-  harness: Pick<Harness, 'subscribeCommits'>
-): PublicationRecorder {
+export function recordPublications(harness: Pick<Harness, 'observeCommits'>): PublicationRecorder {
   const publications: PublicationSummary[] = []
-  const stop = harness.subscribeCommits((publication) => publications.push(summarize(publication)))
+  const obs = harness.observeCommits({
+    advance: (publication) => publications.push(summarize(publication)),
+    end: () => {}
+  })
   return {
     publications,
     touching: (doc) => publications.filter((publication) => publication.docs.includes(doc)),
-    stop
+    stop: () => obs.detach()
   }
 }

@@ -22,6 +22,7 @@
  */
 import type { Link } from '@earendil-works/chord'
 import type { ViewPrincipal } from '@shuvix/agent-runtime'
+import type { FrameLink } from '@shuvix/agent-runtime/sync/viewContracts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createNetworkLinkHub,
@@ -59,13 +60,18 @@ function connection(id = 'ws:1', remoteAddress = '192.168.1.9'): TestConnection 
   return conn
 }
 
+const UTF8 = new TextDecoder()
+const decodeBytes = (bytes: Uint8Array): unknown => JSON.parse(UTF8.decode(bytes))
+
 beforeEach(() => {
   accepted = []
   accept = vi.fn((link: Link, principal: ViewPrincipal) => {
     const entry: Accepted = { link, principal, frames: [], reasons: [] }
     accepted.push(entry)
-    link.receive((frame) => entry.frames.push(frame))
-    link.onClose((reason) => entry.reasons.push(reason))
+    link.onMessage((bytes) => entry.frames.push(decodeBytes(bytes)))
+    ;(link as FrameLink).onClose((reason) => {
+      entry.reasons.push(reason ?? 'closed')
+    })
   })
   logger = { warn: vi.fn() }
   hub = createNetworkLinkHub({ accept, logger, maxLinksPerConnection: 2 })

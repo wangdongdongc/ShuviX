@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { copyJson } from '@earendil-works/chord'
+import { copyJson } from '@earendil-works/chord/json'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isJsonOnly } from '@shuvix/chat-protocol/utils/jsonOnly'

@@ -39,6 +39,31 @@ export function displayContentOf(item: unknown): string | undefined {
  * 忽略；侧车形状不对 → 忽略（那条条目退回模型文本）。按 requestId 找只能在提交里做：这是一个只读提交
  * （不产生发布）。
  */
+/**
+ * 从 pi-durable 1.5+ 的窗口条目中切出活跃上下文（与 1.2 的 `ConversationView.entries` 口径一致）：
+ * 找到最新的 head 标记 H（压缩摘要或 reset），只保留 `[H, ...head 为空且 id >= H.head]`；
+ * 没有 head 标记时原样返回以保持引用相等。
+ */
+export function activeViewEntries(entries: readonly EntryRecord[]): readonly EntryRecord[] {
+  let latestHead: EntryRecord | undefined
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].head !== undefined) {
+      latestHead = entries[i]
+      break
+    }
+  }
+  if (latestHead === undefined) return entries
+  const keptFrom = latestHead.head!
+  // pi-durable 1.5+ 的滑动窗口里，压缩/reset 条目的 head 指向更早保留的条目（<= latestHead.id）；
+  // 已预切片的合成夹具（如 G06b）head 指向后续条目（> latestHead.id），原样保留。
+  if (keptFrom > latestHead.id) return entries
+  const active: EntryRecord[] = [latestHead]
+  for (const entry of entries) {
+    if (entry.head === undefined && entry.id >= keptFrom) active.push(entry)
+  }
+  return active
+}
+
 export async function resolveDisplayItems(
   harness: Harness,
   conversationId: ConversationId,
@@ -53,7 +78,7 @@ export async function resolveDisplayItems(
   }
   if (items.length === 0) return resolved
   const users = new Map<ConversationId, Set<EntryId>>()
-  for (const entry of entries) {
+  for (const entry of activeViewEntries(entries)) {
     if (entry.kind !== UserEntry.kind) continue
     let ids = users.get(entry.conversationId)
     if (ids === undefined) {

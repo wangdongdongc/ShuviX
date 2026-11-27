@@ -47,11 +47,19 @@ async function lines(session: DurableSession, C?: ConversationId): Promise<strin
 /** 这段期间有没有提交摸到某对话的任务 */
 function taskChanges(session: DurableSession, C: ConversationId): { count: number; stop(): void } {
   const seen = { count: 0, stop: () => {} }
-  seen.stop = session.harness.subscribeCommits((publication) => {
-    for (const change of publication.changes) {
-      if (change.type === 'task' && change.value.conversationId === C) seen.count++
-    }
-  })
+  seen.stop = (
+    (obs) => () =>
+      obs.detach()
+  )(
+    session.harness.observeCommits({
+      advance: (publication) => {
+        for (const change of publication.changes) {
+          if (change.type === 'task' && change.value.conversationId === C) seen.count++
+        }
+      },
+      end: () => {}
+    })
+  )
   return seen
 }
 

@@ -39,7 +39,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { replicatedState } from '@earendil-works/chord'
+import { replicatedState } from '@shuvix/agent-runtime'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'

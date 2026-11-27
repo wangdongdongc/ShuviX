@@ -14,7 +14,8 @@
  *   P3-02-55 `renderHarnessDiagnostics` 与 pi 的 `renderDiagnostics` 逐字节一致
  *   P3-02-56 身份冒烟：发布时的投影 = 重开之后的投影（终态，与带中间态的那一刻）
  */
-import { Type, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai'
+import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai'
+import { num, obj } from '@earendil-works/pi-schema'
 import {
   InboxDoc,
   LiveDoc,
@@ -99,7 +100,7 @@ async function queueDisplayOf(session: DurableSession): Promise<Map<number, Disp
 /** 当前对话的视图：viewState 的条目与文档 + 显示侧车解析，过严格 JSON 检查 */
 async function viewOf(session: DurableSession, options: ViewOptions = {}): Promise<SessionView> {
   const conversation = await session.currentConversation()
-  const state = await conversation.viewState(BG)
+  const state = await conversation.watch(BG, { min: 2000, max: 4000 })
   try {
     const { entries, docs } = state.value
     const display =
@@ -119,7 +120,7 @@ async function viewOf(session: DurableSession, options: ViewOptions = {}): Promi
       )
     )
   } finally {
-    state.dispose()
+    await state.stop()
   }
 }
 
@@ -189,9 +190,9 @@ describe('P3-02 · projector over real flows', () => {
     }, BG)
     await appendEntries(session, [compactionDraft(v!.id, 'S', 6)])
 
-    const state = await conversation.viewState(BG)
+    const state = await conversation.watch(BG, { min: 2000, max: 4000 })
     const entries = state.value.entries
-    state.dispose()
+    await state.stop()
     const resolved = await resolveDisplayItems(session.harness, conversation.id, entries)
     expect([...resolved.keys()]).toEqual([v!.id])
     expect(resolved.get(v!.id)).toEqual({ content: 'VALID', tokens })
@@ -654,7 +655,7 @@ describe('P3-02 · projector over real flows', () => {
       const diag = defineTool({
         name: 'diag',
         description: 'returns diagnostics',
-        parameters: Type.Object({ n: Type.Number() }),
+        parameters: obj({ n: num() }),
         execute: async (args) => ({
           output: [{ type: 'text', text: `out ${(args as { n: number }).n}` }],
           diagnostics: sets[(args as { n: number }).n]!
@@ -701,7 +702,9 @@ describe('P3-02 · projector over real flows', () => {
       const conversation = await session.currentConversation()
       const watch = await conversation.watch(BG)
       const views: SessionView[] = []
-      watch.start(async (value) => {
+      watch.start(async (call) => {
+        if (call.kind !== 'value') return
+        const value = call.value
         views.push(
           projectSessionView(
             { sessionId: session.sessionId, conversationId: conversation.id },
@@ -723,7 +726,7 @@ describe('P3-02 · projector over real flows', () => {
         const echo = defineTool({
           name: 'echo',
           description: 'echo',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async () => ({ output: [{ type: 'text', text: 'echoed' }] })
         })
         const first = await makeHost({ tools: [echo] })

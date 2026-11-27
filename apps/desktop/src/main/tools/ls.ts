@@ -5,7 +5,7 @@
 
 import { stat } from 'fs/promises'
 import { relative, resolve } from 'path'
-import { Type } from 'typebox'
+import { arr, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   resolveProjectConfig,
   assertReadAllowed,
@@ -24,14 +24,14 @@ const log = createLogger('Tool:ls')
 /** 最大返回文件数 */
 const LIMIT = 100
 
-const LsParamsSchema = Type.Object({
-  path: Type.Optional(
-    Type.String({
+const LsParamsSchema = obj({
+  path: opt(
+    str({
       description: 'The directory path to list (optional, defaults to current working directory)'
     })
   ),
-  ignore: Type.Optional(
-    Type.Array(Type.String(), {
+  ignore: opt(
+    arr(str(), {
       description: 'Additional glob patterns to exclude (e.g. "*.log", "tmp/")'
     })
   )

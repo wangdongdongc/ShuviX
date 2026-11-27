@@ -36,8 +36,8 @@
  *   DU-27  触发运行跑完：标记留着（界面只在运行中才画，自动续跑的那一轮跟着它）
  *   DU-28  关掉再打开 / 重启：从有人值守算起；关掉那一刻广播 unattended:false
  */
-import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
+import { obj } from '@earendil-works/pi-schema'
 import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { describe, expect, it } from 'vitest'
@@ -119,7 +119,7 @@ async function rig(sessionId = SID): Promise<Rig> {
   const probe: ToolRegistration = defineTool({
     name: 'probe',
     description: 'probe: asks the user and reports what came back',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async (_args, api) => {
       const session = opened.session!
       const unattended = session.unattended

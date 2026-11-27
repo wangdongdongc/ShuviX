@@ -10,12 +10,8 @@
  *   PG-01..03 性能护栏（不看时钟）：300 与 1200 条消息的会话，流式一帧 / 追加一条 / 工具结果回填，碰草稿的
  *         次数完全相同，且 memo 只新建变了的那一条
  */
-import {
-  copyJson,
-  replicatedState,
-  type JsonValue,
-  type MutableReplicatedState
-} from '@earendil-works/chord'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
+import { replicatedState, type MutableReplicatedState } from '../../../sync/replicatedState'
 import type { EntryRecord, InboxState, LiveState } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'

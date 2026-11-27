@@ -3,7 +3,7 @@
  * + `resolveLockModel`；被拒 / 抛错 / 解析不了都回落调用方的现取模型（seam 在才警告）；思考档位 =
  * 档案的 ?? 调用方的现取档位；调用方没有模型 → 拒绝、什么都不建。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import {
   AgentDoc,
   ROOT_CONVERSATION_ID,

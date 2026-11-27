@@ -11,7 +11,7 @@
  * 写操作，而 durable 的重跑策略是按工具、在调用开始前定死的（中断的调用记成「可能已部分执行」，
  * 不重跑）。失败按裁定 Q12 收成 `isError` 结果（文字与旧版相同），只有取消照旧抛。
  */
-import { Type, type TSchema } from 'typebox'
+import { arr, bool, lit, num, obj, opt, str, union, type Schema } from '@earendil-works/pi-schema'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import { catchToolErrors, toExecutionResult, type ToolResult } from '../tools/toolResult'
 import { backstopOutputLimits } from '../tools/outputLimits'
@@ -48,54 +48,46 @@ interface GitToolParams extends GitOpParams {
   action: GitAction
 }
 
-/** 参数 schema（typebox）：action Literal Union + 扁平参数超集（静态，无 caps） */
-export function buildGitParamsSchema(): TSchema {
-  return Type.Object({
-    action: Type.Union(
-      GIT_OPS.map((op) => Type.Literal(op.name)),
+/** 参数 schema（pi-schema）：action Literal Union + 扁平参数超集（静态，无 caps） */
+export function buildGitParamsSchema(): Schema {
+  return obj({
+    action: union(
+      GIT_OPS.map((op) => lit(op.name)),
       { description: 'The git operation to perform. Use "help" for the full manual.' }
     ),
-    dir: Type.Optional(
-      Type.String({
+    dir: opt(
+      str({
         description:
           'Repository directory (absolute, or relative to the working directory). Omit to use the working directory.'
       })
     ),
-    paths: Type.Optional(
-      Type.Array(Type.String(), {
+    paths: opt(
+      arr(str(), {
         description:
           'Repo-relative paths — add/unstage/restore targets, or status filter. add supports ["."] for all changes.'
       })
     ),
-    path: Type.Optional(Type.String({ description: 'Single file or directory filter — log/diff' })),
-    message: Type.Optional(Type.String({ description: 'Commit message' })),
-    ref: Type.Optional(
-      Type.String({
+    path: opt(str({ description: 'Single file or directory filter — log/diff' })),
+    message: opt(str({ description: 'Commit message' })),
+    ref: opt(
+      str({
         description: 'Branch or commit — log (default HEAD), show, checkout, restore (default HEAD)'
       })
     ),
-    from: Type.Optional(Type.String({ description: 'diff: base commit' })),
-    to: Type.Optional(Type.String({ description: 'diff: target commit (omit = worktree)' })),
-    staged: Type.Optional(
-      Type.Boolean({ description: 'diff: show index vs HEAD instead of worktree vs index' })
+    from: opt(str({ description: 'diff: base commit' })),
+    to: opt(str({ description: 'diff: target commit (omit = worktree)' })),
+    staged: opt(bool({ description: 'diff: show index vs HEAD instead of worktree vs index' })),
+    depth: opt(num({ description: 'log: max commits to return (default 20)' })),
+    name: opt(str({ description: 'branch: name to create (and switch to) or delete' })),
+    delete: opt(bool({ description: 'branch: delete the branch "name" instead of creating it' })),
+    force: opt(
+      bool({ description: 'checkout: overwrite conflicting local changes (DISCARDS them)' })
     ),
-    depth: Type.Optional(Type.Number({ description: 'log: max commits to return (default 20)' })),
-    name: Type.Optional(
-      Type.String({ description: 'branch: name to create (and switch to) or delete' })
-    ),
-    delete: Type.Optional(
-      Type.Boolean({ description: 'branch: delete the branch "name" instead of creating it' })
-    ),
-    force: Type.Optional(
-      Type.Boolean({ description: 'checkout: overwrite conflicting local changes (DISCARDS them)' })
-    ),
-    authorName: Type.Optional(
-      Type.String({ description: 'commit: author name (must be paired with authorEmail)' })
-    ),
-    authorEmail: Type.Optional(Type.String({ description: 'commit: author email' })),
-    topic: Type.Optional(
-      Type.Union(
-        GIT_HELP_TOPICS.map((t) => Type.Literal(t)),
+    authorName: opt(str({ description: 'commit: author name (must be paired with authorEmail)' })),
+    authorEmail: opt(str({ description: 'commit: author email' })),
+    topic: opt(
+      union(
+        GIT_HELP_TOPICS.map((t) => lit(t)),
         { description: 'help topic (omit for the full manual)' }
       )
     )
@@ -170,7 +162,7 @@ function formatGitCommand(action: GitAction, params: GitOpParams): string {
 type Result = ToolResult<GitToolDetails>
 
 /** git 工具：durable 注册项 + 界面显示名 */
-export type GitTool = ToolRegistration<TSchema> & {
+export type GitTool = ToolRegistration<Schema> & {
   readonly label: string
   readonly replay: 'unsafe'
 }

@@ -10,8 +10,8 @@
  *  - **假协调器 FC**（单元用例）：`fakeSession()` 是一个会话桩，`agents.spawn/continue/interrupt/destroy` 按脚本
  *    走，`onCreated` 由脚本按需调用；`fakeScope()` 是一次工具调用的 scope。
  */
-import type { Context } from '@earendil-works/chord'
-import { Type } from '@earendil-works/pi-ai'
+import type { Context } from '@earendil-works/chord/context'
+import { obj, str } from '@earendil-works/pi-schema'
 import {
   defineTool,
   ROOT_CONVERSATION_ID,
@@ -308,7 +308,7 @@ export function contractTool(
   return defineTool({
     name: options.name ?? 'contract_agent',
     description: 'contract_agent: dispatch a sub-agent with a result contract',
-    parameters: Type.Object({ prompt: Type.String() }),
+    parameters: obj({ prompt: str() }),
     replay: 'safe',
     execute: async (args, api, context) => {
       try {

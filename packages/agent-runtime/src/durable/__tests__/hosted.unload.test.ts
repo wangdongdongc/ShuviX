@@ -15,8 +15,8 @@
  * 那一刻（runner 等 runTask，spawn 的 finally 已经跑过）；判定型正常交卷在 `decide` / askOp 返回那一刻；
  * 判定型超时 / 中止时 `decide` 先于协调器收尾返回，等 `runner.runningCount() === 0`（坑位留到收尾结束）。
  */
-import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ConversationId, type ToolRegistration } from '@earendil-works/pi-durable'
+import { obj } from '@earendil-works/pi-schema'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { PermissionDecision } from '@shuvix/chat-protocol/types/permissionReview'
 import type { TaskStatus } from '@shuvix/chat-protocol/types/task'
@@ -543,7 +543,7 @@ describe('P2-08 D · hook agents are unloaded once their dispatch settles', () =
     defineTool({
       name,
       description: `${name}: waits on a card`,
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: async (_args, api) => {
         const response = await rig().session.requestUserInput({
           id: api.callId,

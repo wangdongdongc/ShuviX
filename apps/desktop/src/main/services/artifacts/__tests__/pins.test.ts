@@ -379,9 +379,14 @@ describe('pinCallingReply —— 工具执行之前钉住发起它的那条回�
       call('read', {}, 'c2')
     ])
     const commits: number[] = []
-    const stop = session.harness.subscribeCommits((p) => {
-      if (p.changes.some((c) => c.type === 'document' && c.record.kind === 'shuvix.artifact-pins'))
-        commits.push(1)
+    const obs = session.harness.observeCommits({
+      advance: (p) => {
+        if (
+          p.changes.some((c) => c.type === 'document' && c.record.kind === 'shuvix.artifact-pins')
+        )
+          commits.push(1)
+      },
+      end: () => {}
     })
     try {
       await Promise.all([
@@ -389,7 +394,7 @@ describe('pinCallingReply —— 工具执行之前钉住发起它的那条回�
         pinCallingReply(session, sid, { conversationId: conv, callId: 'c2' })
       ])
     } finally {
-      stop()
+      obs.detach()
     }
     expect(storeBlob.mock.calls.map(([, content]) => content).sort()).toEqual(
       ['# B', svg('A')].sort()

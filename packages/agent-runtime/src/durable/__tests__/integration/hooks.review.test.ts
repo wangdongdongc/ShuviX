@@ -62,14 +62,17 @@ function contentText(result: Awaited<ReturnType<typeof executeTool>>): string {
 /** 记下每个任务的状态序列（提交发布里的任务变化） */
 function recordTaskStates(session: DurableSession): Map<number, string[]> {
   const states = new Map<number, string[]>()
-  session.harness.subscribeCommits((publication: CommitPublication) => {
-    for (const change of publication.changes) {
-      if (change.type !== 'task') continue
-      const id = change.value.id as unknown as number
-      const list = states.get(id) ?? []
-      list.push(change.value.state.status)
-      states.set(id, list)
-    }
+  session.harness.observeCommits({
+    advance: (publication: CommitPublication) => {
+      for (const change of publication.changes) {
+        if (change.type !== 'task') continue
+        const id = change.value.id as unknown as number
+        const list = states.get(id) ?? []
+        list.push(change.value.state.status)
+        states.set(id, list)
+      }
+    },
+    end: () => {}
   })
   return states
 }

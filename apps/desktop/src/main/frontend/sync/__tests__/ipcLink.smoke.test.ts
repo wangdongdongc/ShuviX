@@ -9,9 +9,9 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
-import { replicatedState } from '@earendil-works/chord'
 import {
   createViewServer,
+  replicatedState,
   type SyncHubHost,
   type SyncSession,
   type ViewServer

@@ -12,8 +12,8 @@
  *   LT-B4 重配把次序弄成非 K6 的之后，重启 / 回退到后面的消息再发：下一次请求的工具与上一次逐个同名同序
  *   LT-B5 见过、但不再选中的工具不在；其余见过的保持相对次序
  */
-import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
+import { obj } from '@earendil-works/pi-schema'
 import { describe, expect, it } from 'vitest'
 import { AgentCreationError, composeAgentTools } from '../lock'
 import {
@@ -286,7 +286,7 @@ function plainTool(name: string, description = `${name} tool`): ToolRegistration
   return defineTool({
     name,
     description,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async () => ({ output: [{ type: 'text', text: `${name} ok` }] })
   })
 }

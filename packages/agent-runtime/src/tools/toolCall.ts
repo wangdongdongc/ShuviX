@@ -11,7 +11,7 @@
  * 审查归属（EnforceOpts / PermissionRequestEvent）要按它认人 —— 各 PEP 调用点经 `callOwnerOf(call)`
  * 把 taskId / conversationId 并进 EnforceOpts。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { ConversationId, TaskId, ToolExecutionApi } from '@earendil-works/pi-durable'
 
 export interface ToolCallScope {

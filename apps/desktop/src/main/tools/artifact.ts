@@ -30,8 +30,7 @@
  * `adopt` 读的正是那份转写 —— 目录跟着转写走，才不会出现「能看见的图认领不到、认领到的
  * 图看不见」。
  */
-import { Type } from 'typebox'
-import type { TObject, TString } from 'typebox'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { callOwnerOf, type ToolCallScope, type ToolResult } from '@shuvix/agent-runtime'
 import { listArtifacts, writeArtifact } from '../services/artifacts/store'
@@ -53,30 +52,20 @@ export const ARTIFACT_DESCRIPTION = [
   'Draw figures with a ```svg or ```interactive fence, not with this tool. Adopt one only when it is about to be changed: the reply then shows the new version with a ```artifact fence naming it.'
 ].join('\n')
 
-export const ArtifactParamsSchema: TObject<{
-  action: TString
-  ref: TString
-  title: TString
-  ext: TString
-  content: TString
-}> = Type.Object({
-  action: Type.String({ description: "One of 'list' | 'adopt' | 'create'" }),
-  ref: Type.Optional(
-    Type.String({
+export const ArtifactParamsSchema = obj({
+  action: str({ description: "One of 'list' | 'adopt' | 'create'" }),
+  ref: opt(
+    str({
       description: "adopt: the figure's title or its number from `list`; omit for the most recent"
     })
-  ) as unknown as TString,
-  title: Type.Optional(
-    Type.String({ description: 'create: human title; the file name is derived from it' })
-  ) as unknown as TString,
-  ext: Type.Optional(
-    Type.String({
+  ),
+  title: opt(str({ description: 'create: human title; the file name is derived from it' })),
+  ext: opt(
+    str({
       description: 'create: extension without the dot — svg, md, txt, csv, json, html'
     })
-  ) as unknown as TString,
-  content: Type.Optional(
-    Type.String({ description: 'create: the file body' })
-  ) as unknown as TString
+  ),
+  content: opt(str({ description: 'create: the file body' }))
 })
 
 interface ArtifactDetails {

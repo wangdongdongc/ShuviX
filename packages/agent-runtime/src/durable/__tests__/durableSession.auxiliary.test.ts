@@ -12,7 +12,7 @@
  * 这种锚不进运行状态（PIN-02），锚拥有的同形用例在 hosted.regressions.test.ts（期望相同）。
  * 重启用例都用 SQLite、真实计时器、约 15 秒的超时。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   AgentDoc,
   configure,
@@ -238,7 +238,7 @@ describe('auxiliary work · abort-marked at open, never resumed', () => {
       const askReview = defineTool({
         name: 'ask_review',
         description: 'ask_review: asks a reviewer',
-        parameters: Type.Object({}),
+        parameters: obj({}),
         execute: async (_args, api, context) => {
           const reviewer = await api.commit(async (tx) => {
             const created = await tx.createConversation({

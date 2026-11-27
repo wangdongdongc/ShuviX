@@ -285,13 +285,18 @@ describe('P1-12 · lifecycle', () => {
       const assistants = (await allEntries(conversation)).filter(
         (entry) => entry.kind === 'pi.assistant'
       )
-      const sum = assistants.reduce((total, entry) => {
+      const sumInput = assistants.reduce((total, entry) => {
         const message = entry.model?.[0]
         return total + (message?.role === 'assistant' ? message.usage.input : 0)
       }, 0)
+      const sumTotal = assistants.reduce((total, entry) => {
+        const message = entry.model?.[0]
+        return total + (message?.role === 'assistant' ? message.usage.totalTokens : 0)
+      }, 0)
       const usage = await session.harness.snapshot(UsageDoc, conversation.id, BG)
-      expect(sum).toBeGreaterThan(0)
-      expect(usage?.models['faux/faux-1']?.input).toBe(sum)
+      expect(sumTotal).toBeGreaterThan(0)
+      expect(usage?.models['faux/faux-1']?.input).toBe(sumInput)
+      expect(usage?.models['faux/faux-1']?.totalTokens).toBe(sumTotal)
       expect(Object.keys(usage?.models ?? {})).toEqual(['faux/faux-1'])
 
       await waitFor(() => session.runState === 'idle', 2000, 'idle')

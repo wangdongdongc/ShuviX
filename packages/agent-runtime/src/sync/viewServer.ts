@@ -1,53 +1,47 @@
 /**
- * 视图服务端（pi 1.2 / chord2；替换了 phase 3 基于 `RemoteServiceProvider` 的 SyncHub）—— 把会话视图
- * （SessionView）与派生 agent 视图（AgentView）同步给任意多个前端。宿主无关：不碰 Electron / node，链路由
- * 宿主交进来（`accept(link, principal)`）。
+ * 视图服务端（Chord 1.6.1 / v2）—— 把会话视图（SessionView）与派生 agent 视图（AgentView）同步给任意多个前端。
+ * 宿主无关：不碰 Electron / node，链路由宿主交进来（`accept(link, principal)`）。
  *
- * 结构（一个 chord2 宿主 `main`）：
- *  - **远程类型** `shuvix.session-view` / `shuvix.agent-view`（契约见 `viewContracts.ts`）：每个（输入，主体）一条
- *    记录，工厂很薄 —— 核对主体（`authorize`，不通过 → `forbidden`），然后 `self.get` 共享的 `ViewSource`，把它的
- *    两个状态成员原样交出去。自己没有状态。
- *  - **本地类型** `shuvix.view-source`：**每个目标一条共享记录**（以宿主主体持有）。两个 cell：`view` 与
- *    `availability`。资源 `target` 在激活时解析目标（agent → 根会话，`resolveAgent`）、**先登记钉住、再 peek**
- *    （PIN：peek 刚打开的会话会马上被修剪检查）、算出第一份实现；任务 `lifecycle` 在记录 live 之前把它写进
- *    cell（于是第一份快照就是真的视图，不是空视图），之后一个顺序循环处理该根会话的开 / 关 / 删事件。
+ * 结构（一个 chord v2 宿主，地址 `VIEW_SERVER_ADDRESS`）：
+ *  - **远程类型** `shuvix.session-view` / `shuvix.agent-view`（契约见 `viewContracts.ts`）：每个（参数，主体）一条
+ *    对象，工厂很薄 —— 核对主体（`authorize`，不通过 → `forbidden`），通过 `self.open` 共享底层的 `TargetRuntime`
+ *    （按目标引用计数，先钉住再 peek），再通过 `self.follow` 把 `view` 与 `availability` 两个状态成员原样交出去。
+ *  - **共享目标运行时** `TargetRuntime`：**每个目标一个共享实例**（不按主体重复 peek / 重复借投影租约）。
+ *    激活时解析目标（agent → 根会话，`resolveAgent`）、**先登记钉住、再 peek**（PIN：peek 刚打开的会话会马上被
+ *    修剪检查）、算出第一份实现并装上，于是 `self.follow` 挂上那一刻的第一份快照就是真的视图，不是空视图；之后一个
+ *    顺序事件队列处理该根会话的开 / 关 / 删事件。
  *
- * 实现的换法（远程成员一直是同一个 cell，前端的句柄不断）：
+ * 实现的换法（远程成员一直是同一个 follow 源，前端的引用不断）：
  *  - 激活时：封存 → 空视图（PIN-18，之后不再换）；旧格式 → 冻结的静态视图；否则**只 peek**（从不 open、
  *    从不 resume）—— 没有存储 → 空视图（`source:'none'`，PIN-17/24），有 → 活投影（`acquire()`）。
- *  - 活投影的每个修订经 `cell.replace(ctx, v, { diff: true })` 桥进 cell（`diff: true` 必须：不加的话 chord 只看
- *    一层，每个修订都整份发）。换实现 = 停掉旧的桥、`replace` 成新的当前值（整份）、订上新的之后再还旧租约。
+ *  - 活投影的每个修订把精确操作流 `ops`（缺省时 `diffRevisions`）直接推给所有 `view` 观察者。换实现 = 停掉旧的桥、
+ *    整份替换 `[['r', next]]`、订上新的之后再还旧租约。
  *  - 会话打开（`onSessionOpened`）：空 / 静态 / 旧格式 → 活投影。
- *  - 会话关闭（非 destroy，PIN-13）：停桥、还租约；cell 里留着最后一个值（它本就是不可变的修订，不必再拷）。
- *    运行状态停在最后投影的样子，不合成 interrupted。
+ *  - 会话关闭（非 destroy，PIN-13）：停桥、还租约；保留最后一个值。运行状态停在最后投影的样子，不合成 interrupted。
  *  - 存储被销毁（`destroy`，即 host.delete —— 清空走的也是它）：会话目标 → 空视图（会话还在）；派生 agent
  *    目标 → `availability = 'unavailable'`（对话没了），之后不再变。
  *  - **会话被删除**（`deleteSession`，PIN-14）：它的每个目标 `availability = 'unavailable'`、立刻松开钉住；之后
- *    再 get 这条会话 → 「找不到」（`unavailable` + reason `not_found`），直到同一个 id 再被打开。
+ *    再 get 这条会话 → 「找不到」（`unavailable` + `details.reason = 'not_found'`），直到同一个 id 再被打开。
  *
- * 钉住：有目标记录（含激活途中）的会话不被 LRU 回收（`hasSubscribers` 接宿主的 `isPinned`）；派生 agent 目标
- * 钉住它的根会话（PIN-16）。前端离开（链路断开 / 页面重载）= chord 释放经那条链路的全部持有 → 记录处置 →
- * 钉住松开（PIN-21）。
+ * 钉住：有目标运行时（含激活途中）的会话不被 LRU 回收（`hasSubscribers` 接宿主的 `isPinned`）；派生 agent 目标
+ * 钉住它的根会话（PIN-16）。前端离开（链路断开 / 页面重载）= chord 释放经那条链路的全部持有 → 对象关闭 →
+ * 共享引用归零 → 钉住松开（PIN-21）。
  */
 import {
+  broken,
   ChordError,
-  cell,
   createHost,
+  defineFacet,
   forbidden,
-  hostPrincipal,
-  local,
-  resource,
-  type BehaviorOf,
-  type Cell,
-  type Ctx,
+  type FollowObserver,
   type Host,
+  type HostError,
   type Link,
-  type LinkOptions,
-  type Principal,
-  type ReplicatedState,
-  type Self
+  type Principal
 } from '@earendil-works/chord'
-import { Type } from 'typebox'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
+import { diffRevisions, type Op } from '@earendil-works/chord/delta'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { syncTargetKey, type SyncTarget } from '@shuvix/chat-protocol/sync'
 import {
   emptySessionView,
@@ -55,13 +49,14 @@ import {
   type SessionView
 } from '@shuvix/chat-protocol/types/sessionView'
 import type { RuntimeLogger } from '../types'
+import type { ReplicatedState } from './replicatedState'
 import { legacySessionView, type LegacyTranscript, type SyncView } from './services'
 import {
   AgentViewContract,
-  AvailabilitySchema,
   notFoundError,
   SessionViewContract,
-  VIEW_SERVER_HOST,
+  VIEW_LINK_CODEC,
+  VIEW_SERVER_ADDRESS,
   type ViewAvailability
 } from './viewContracts'
 
@@ -119,6 +114,11 @@ export interface ViewPrincipal {
   readonly [key: string]: unknown
 }
 
+export interface ViewServerHeartbeat {
+  readonly ping?: number
+  readonly close?: number
+}
+
 export interface ViewServerDeps {
   readonly host: SyncHubHost
   /** 旧格式会话的冻结投影；不是旧格式会话 → undefined / null */
@@ -134,16 +134,16 @@ export interface ViewServerDeps {
     | Promise<{ sessionId: string; conversationId: number } | undefined>
   /**
    * 这个主体能不能看这个目标（同步或异步）；false → `forbidden`。缺省 = 都能看。宿主自己（进程内的 get）不经它。
-   * 异步的判定与目标的激活并行进行：不通过时记录失败，视图一帧都不会发给这个主体。
+   * 异步的判定与目标的激活并行进行：不通过时对象失败，视图一帧都不会发给这个主体。
    */
   readonly authorize?: (principal: ViewPrincipal, target: SyncTarget) => boolean | Promise<boolean>
   readonly logger?: RuntimeLogger
-  /** 接受的链路的 ping 选项（缺省 chord 的 15s / 45s；测试调小） */
-  readonly linkOptions?: LinkOptions
+  /** 链路心跳选项（缺省 chord 的 15s / 30s；测试调小） */
+  readonly heartbeat?: ViewServerHeartbeat
 }
 
 export interface ViewServer {
-  /** chord 宿主（名字 `main`）—— 进程内也可以直接 `get` 契约（测试） */
+  /** chord 宿主（地址 `VIEW_SERVER_ADDRESS`）—— 进程内也可以直接 `get` 契约（测试） */
   readonly host: Host
   /** 接受一条前端的链路（主体由调用方盖章） */
   accept(link: Link, principal: ViewPrincipal): void
@@ -151,21 +151,13 @@ export interface ViewServer {
   hasSubscribers(sessionId: string): boolean
   /** 会话本身被删除（侧栏删除，不是清空）：它的目标全部 unavailable，之后再 get → 找不到 */
   deleteSession(sessionId: string): void
-  /** 关掉一切（记录强制处置 → 前端的句柄 gone，链路关掉） */
+  /** 关掉一切（对象强制结束 → 前端的引用 ended，链路关掉） */
   dispose(): Promise<void>
 }
 
 // ─── 内部 ─────────────────────────────────────────────
 
-/** 每个目标一条共享记录（宿主主体） */
-const ViewSourceContract = local('shuvix.view-source', {
-  version: 1,
-  input: Type.Object({
-    kind: Type.Union([Type.Literal('session'), Type.Literal('agent')]),
-    id: Type.String({ minLength: 1 })
-  }),
-  members: { view: Type.Unknown(), availability: AvailabilitySchema }
-})
+const HOST_PRINCIPAL: Principal = { kind: 'host' }
 
 type Mode = 'live' | 'static' | 'none' | 'legacy' | 'sealed' | 'gone'
 
@@ -182,18 +174,22 @@ type TargetEvent =
   | { readonly type: 'closed'; readonly reason: SyncSessionClosedReason }
   | { readonly type: 'deleted' }
 
-interface SourceCells {
-  readonly view: Cell<unknown>
-  readonly availability: Cell<ViewAvailability>
-}
-
 /** 激活时最多重算几次（途中有开 / 关事件就丢掉结果重算；再多就照收、交给循环处理） */
 const MAX_INIT_ATTEMPTS = 5
 
 const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () => {} }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  if (error instanceof Error) return error.message
+  if (typeof error === 'object' && error !== null && 'kind' in error) {
+    const he = error as HostError
+    if ('error' in he && he.error !== undefined) return `${he.kind}: ${errorText(he.error)}`
+    if ('failure' in he && he.failure !== undefined) {
+      return `${he.kind}: ${errorText(he.failure.error)}`
+    }
+    return he.kind
+  }
+  return String(error)
 }
 
 function emptyAgentView(agentId: string): AgentView {
@@ -210,18 +206,27 @@ function emptyAgentView(agentId: string): AgentView {
   }
 }
 
+/** 共享的目标记录（按目标键一份，多个主体共用） */
+interface SharedTarget {
+  readonly runtime: TargetRuntime
+  readonly controller: AbortController
+  ready: Promise<void>
+  refs: number
+}
+
 /** 服务端各目标共用的那一点 */
 interface ServerCore {
   readonly deps: ViewServerDeps
   readonly logger: RuntimeLogger
   readonly runtimes: Set<TargetRuntime>
+  readonly sources: Map<string, SharedTarget>
   /** 根会话 → 钉住它的目标数 */
   readonly pins: Map<string, number>
   /** 删掉的会话（PIN-14）：再 get → 找不到；同一个 id 再被打开时撤销 */
   readonly deleted: Set<string>
 }
 
-/** 一个目标（`ViewSource` 记录的资源值）：解析、钉住、实现、事件循环 */
+/** 一个目标的共享运行时：解析、钉住、实现、事件循环、向所有跟随的成员推值与增量 */
 class TargetRuntime {
   readonly key: string
   rootSessionId: string | undefined
@@ -229,33 +234,59 @@ class TargetRuntime {
   mode: Mode | 'init' = 'init'
   lease: ViewLease<SyncView> | undefined
   session: SyncSession | undefined
-  /** 激活算出的第一份实现，`run` 装上 */
-  #initial: ViewImpl | undefined
+  view: SyncView
+  availability: ViewAvailability = 'available'
+  readonly #viewObservers = new Set<FollowObserver<unknown>>()
+  readonly #availabilityObservers = new Set<FollowObserver<unknown>>()
   #queue: TargetEvent[] = []
-  #wake: (() => void) | undefined
+  #draining = false
   #pinned = false
   /** 删掉了（标记同步落下：钉住立刻松开，激活途中则失败） */
   #deleted = false
   #closed = false
   #stopBridge: (() => void) | undefined
-  #ctx: Ctx | undefined
 
   constructor(
     private readonly core: ServerCore,
-    readonly target: SyncTarget,
-    private readonly cells: SourceCells
+    readonly target: SyncTarget
   ) {
     this.key = syncTargetKey(target)
+    this.view =
+      target.kind === 'session'
+        ? emptySessionView(target.sessionId)
+        : emptyAgentView(target.agentId)
   }
 
-  // ─── 激活（资源 open） ─────────────────────────────
+  attachView(observer: FollowObserver<unknown>): { readonly value: unknown; detach(): void } {
+    this.#viewObservers.add(observer)
+    return {
+      value: this.view,
+      detach: () => {
+        this.#viewObservers.delete(observer)
+      }
+    }
+  }
+
+  attachAvailability(observer: FollowObserver<unknown>): {
+    readonly value: ViewAvailability
+    detach(): void
+  } {
+    this.#availabilityObservers.add(observer)
+    return {
+      value: this.availability,
+      detach: () => {
+        this.#availabilityObservers.delete(observer)
+      }
+    }
+  }
+
+  // ─── 激活 ───────────────────────────────────────────
 
   async open(signal: AbortSignal): Promise<void> {
     this.core.runtimes.add(this)
     const target = this.target
     if (target.kind === 'session') {
       this.rootSessionId = target.sessionId
-      // 工厂核对过之后、资源打开之前也可能被删：这里再核对一次（与 agent 目标一样）
       if (this.core.deleted.has(target.sessionId)) {
         throw notFoundError(`Session ${target.sessionId} was deleted`)
       }
@@ -280,7 +311,7 @@ class TargetRuntime {
       }
       if (signal.aborted || this.#closed) {
         this.#release(impl.lease)
-        throw new ChordError('aborted', `${this.key} abandoned`)
+        throw new ChordError({ code: 'aborted', message: `${this.key} abandoned` })
       }
       // 途中有开 / 关（generation 变了），或报打开的会话不是算出来的那个（peek 早于它的存储出生）→ 重算。
       // 自己的 peek 打开会话时钩子也会报，那时算出的正是它，不必重算
@@ -289,7 +320,8 @@ class TargetRuntime {
       )
       if (relevant.length === 0 || attempt >= MAX_INIT_ATTEMPTS) {
         this.#queue = relevant
-        this.#initial = impl
+        this.#install(impl)
+        if (this.#queue.length > 0) void this.#drainQueue()
         return
       }
       this.#release(impl.lease)
@@ -337,25 +369,24 @@ class TargetRuntime {
       : emptyAgentView(this.target.agentId)
   }
 
-  // ─── 生命周期（任务） ──────────────────────────────
+  // ─── 事件循环 ──────────────────────────────────────
 
-  /**
-   * 记录的任务：同步装上第一份实现（记录 live 之前，所以第一份快照就是它），之后顺序处理事件，直到记录被处置
-   */
-  async run(ctx: Ctx): Promise<void> {
-    this.#ctx = ctx
+  push(event: TargetEvent): void {
+    if (this.#closed) return
+    this.#queue.push(event)
+    // 激活期间事件留在队列里由 open() 核对 / 重算；装好第一份实现后再顺序处理
+    if (this.mode !== 'init') void this.#drainQueue()
+  }
+
+  async #drainQueue(): Promise<void> {
+    if (this.#draining || this.#closed) return
+    this.#draining = true
     try {
-      const initial = this.#initial
-      this.#initial = undefined
-      if (initial !== undefined) this.#install(initial)
-      while (!ctx.signal.aborted && !this.#closed) {
+      while (!this.#closed) {
         const event = this.#queue.shift()
-        if (event === undefined) {
-          await this.#nextEvent(ctx.signal)
-          continue
-        }
+        if (event === undefined) break
         try {
-          await this.#handle(event, ctx)
+          await this.#handle(event)
         } catch (error) {
           this.core.logger.warn(
             `view server: ${this.key} ${event.type} failed: ${errorText(error)}`
@@ -363,30 +394,11 @@ class TargetRuntime {
         }
       }
     } finally {
-      this.#stop()
-      this.#ctx = undefined
+      this.#draining = false
     }
   }
 
-  #nextEvent(signal: AbortSignal): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const done = (): void => {
-        this.#wake = undefined
-        signal.removeEventListener('abort', done)
-        resolve()
-      }
-      this.#wake = done
-      signal.addEventListener('abort', done, { once: true })
-    })
-  }
-
-  push(event: TargetEvent): void {
-    if (this.#closed) return
-    this.#queue.push(event)
-    this.#wake?.()
-  }
-
-  async #handle(event: TargetEvent, ctx: Ctx): Promise<void> {
+  async #handle(event: TargetEvent): Promise<void> {
     // 删掉的会话目标在同一个 id 再被打开时复活（记录是共享的：旧持有者还没放手时，新的订阅拿到的也是这一条）；
     // 其余终态（销毁的 agent 目标）不再变
     if (this.mode === 'gone') {
@@ -404,8 +416,7 @@ class TargetRuntime {
           this.agent === undefined
             ? await event.session.projector()
             : await event.session.agentProjector(this.agent)
-        // 等的途中被处置 / 删掉了：不再去借租约
-        if (ctx.signal.aborted || this.#closed || this.#isGone()) return
+        if (this.#closed || this.#isGone()) return
         // 派生 agent 在重开的会话里不认识了：保持静态的最后一个值
         if (projector === undefined) return
         this.#install(this.#liveImpl(projector.acquire(), event.session))
@@ -423,7 +434,7 @@ class TargetRuntime {
           return
         }
         if (this.mode !== 'live') return
-        // 关了：停桥、还租约，cell 里留着最后一个值（PIN-13），前端的句柄不断
+        // 关了：停桥、还租约，保留最后一个值（PIN-13），前端的引用不断
         this.#syncLast()
         this.#stop()
         this.mode = 'static'
@@ -442,12 +453,19 @@ class TargetRuntime {
     this.mode = impl.mode
     this.lease = impl.lease
     this.session = impl.session
-    this.#write((ctx) => this.cells.view.replace(ctx, impl.value))
+    const initialValue = impl.lease?.state.value ?? impl.value
+    this.#setView(initialValue, [['r', initialValue as unknown as JsonValue]])
     const lease = impl.lease
     if (lease !== undefined) {
-      this.#stopBridge = lease.state.subscribe((value) => {
-        if (this.lease !== lease || value === undefined || value === this.cells.view.value) return
-        this.#write((ctx) => this.cells.view.replace(ctx, value, { diff: true }))
+      this.#stopBridge = lease.state.subscribe((value, _ctx, delivery) => {
+        if (this.#closed || this.lease !== lease || value === undefined || value === this.view) {
+          return
+        }
+        const ops: readonly Op[] =
+          delivery?.ops !== undefined && delivery.ops.length > 0
+            ? delivery.ops
+            : diffRevisions(this.view as unknown as JsonValue, value as unknown as JsonValue)
+        this.#setView(value, ops)
       })
     }
     if (previous !== undefined && previous !== impl.lease) this.#release(previous)
@@ -456,8 +474,34 @@ class TargetRuntime {
   /** 活投影最后的值还没桥过来（不该发生 —— 桥是同步的）：补一次 */
   #syncLast(): void {
     const value = this.lease?.state.value
-    if (value !== undefined && value !== this.cells.view.value) {
-      this.#write((ctx) => this.cells.view.replace(ctx, value, { diff: true }))
+    if (value !== undefined && value !== this.view) {
+      const ops = diffRevisions(this.view as unknown as JsonValue, value as unknown as JsonValue)
+      this.#setView(value, ops)
+    }
+  }
+
+  #setView(next: SyncView, ops: readonly Op[]): void {
+    this.view = next
+    if (ops.length === 0) return
+    for (const observer of [...this.#viewObservers]) {
+      try {
+        observer.advance({ kind: 'value', value: next, ops, retired: false }, BACKGROUND_CONTEXT)
+      } catch (error) {
+        this.core.logger.error(`view server: write failed ${this.key}: ${errorText(error)}`)
+      }
+    }
+  }
+
+  #setAvailability(next: ViewAvailability): void {
+    if (this.availability === next) return
+    this.availability = next
+    const ops: readonly Op[] = [['r', next]]
+    for (const observer of [...this.#availabilityObservers]) {
+      try {
+        observer.advance({ kind: 'value', value: next, ops, retired: false }, BACKGROUND_CONTEXT)
+      } catch (error) {
+        this.core.logger.error(`view server: write failed ${this.key}: ${errorText(error)}`)
+      }
     }
   }
 
@@ -470,7 +514,7 @@ class TargetRuntime {
   #gone(): void {
     this.#stop()
     this.mode = 'gone'
-    this.#write((ctx) => this.cells.availability.replace(ctx, 'unavailable'))
+    this.#setAvailability('unavailable')
   }
 
   /** 复活（删掉之后同一个 id 又被打开）：重新钉住、标回 available；视图由紧接着的 `opened` 装上 */
@@ -478,7 +522,7 @@ class TargetRuntime {
     this.#deleted = false
     this.mode = 'none'
     this.#pin()
-    this.#write((ctx) => this.cells.availability.replace(ctx, 'available'))
+    this.#setAvailability('available')
   }
 
   /** 停桥、还租约 */
@@ -489,16 +533,6 @@ class TargetRuntime {
     this.lease = undefined
     this.session = undefined
     this.#release(lease)
-  }
-
-  #write(run: (ctx: Ctx) => void): void {
-    const ctx = this.#ctx
-    if (ctx === undefined || ctx.signal.aborted) return
-    try {
-      run(ctx)
-    } catch (error) {
-      this.core.logger.error(`view server: write failed ${this.key}: ${errorText(error)}`)
-    }
   }
 
   #release(lease: ViewLease<SyncView> | undefined): void {
@@ -529,14 +563,14 @@ class TargetRuntime {
     else this.core.pins.delete(root)
   }
 
-  /** 会话被删（同步）：钉住立刻松开；cell 的改写交给循环 */
+  /** 会话被删（同步）：钉住立刻松开；availability 改写交给队列 */
   markDeleted(): void {
     this.#deleted = true
     this.#unpin()
     this.push({ type: 'deleted' })
   }
 
-  /** 资源关闭（记录处置）/ 激活失败：钉住、监听、租约一并放掉 */
+  /** 关闭（最后一个引用释放 / 激活失败）：钉住、监听、租约一并放掉 */
   close(): void {
     if (this.#closed) return
     this.#closed = true
@@ -544,11 +578,87 @@ class TargetRuntime {
     this.#unpin()
     this.#stop()
     this.#queue.length = 0
-    this.#wake?.()
-    const initial = this.#initial
-    this.#initial = undefined
-    this.#release(initial?.lease)
+    this.#viewObservers.clear()
+    this.#availabilityObservers.clear()
   }
+}
+
+interface SharedTargetLease {
+  readonly runtime: TargetRuntime
+  release(): void
+}
+
+/** 借用共享目标（引用计数）：同一目标多个主体共用一次 peek 与一条投影租约 */
+async function acquireSharedTarget(
+  core: ServerCore,
+  target: SyncTarget,
+  ctx: Context
+): Promise<SharedTargetLease> {
+  const key = syncTargetKey(target)
+  let shared = core.sources.get(key)
+  if (shared === undefined) {
+    const runtime = new TargetRuntime(core, target)
+    const controller = new AbortController()
+    const entry: SharedTarget = {
+      runtime,
+      controller,
+      refs: 0,
+      ready: Promise.resolve()
+    }
+    const ready = runtime.open(controller.signal).catch((error: unknown) => {
+      if (core.sources.get(key) === entry) core.sources.delete(key)
+      runtime.close()
+      throw error
+    })
+    // 避免共享激活失败在无人等待时触发未处理拒绝
+    ready.catch(() => undefined)
+    entry.ready = ready
+    shared = entry
+    core.sources.set(key, shared)
+  }
+  const owned = shared
+  owned.refs += 1
+  let released = false
+  const release = (): void => {
+    if (released) return
+    released = true
+    owned.refs -= 1
+    if (owned.refs === 0) {
+      if (core.sources.get(key) === owned) core.sources.delete(key)
+      owned.controller.abort()
+      owned.runtime.close()
+    }
+  }
+  const signal = ctx.abortSignal
+  try {
+    if (signal?.aborted) {
+      throw new ChordError({ code: 'aborted', message: `${key} abandoned` })
+    }
+    if (signal === undefined) {
+      await owned.ready
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = (): void => {
+          reject(new ChordError({ code: 'aborted', message: `${key} abandoned` }))
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        owned.ready.then(
+          () => {
+            signal.removeEventListener('abort', onAbort)
+            resolve()
+          },
+          (error: unknown) => {
+            signal.removeEventListener('abort', onAbort)
+            reject(error)
+          }
+        )
+      })
+    }
+  } catch (error) {
+    release()
+    throw broken(error)
+  }
+  return { runtime: owned.runtime, release }
 }
 
 // ─── 服务端 ─────────────────────────────────────────────
@@ -559,94 +669,108 @@ export function createViewServer(deps: ViewServerDeps): ViewServer {
     deps,
     logger,
     runtimes: new Set(),
+    sources: new Map(),
     pins: new Map(),
     deleted: new Set()
   }
   const host = createHost({
-    name: VIEW_SERVER_HOST,
+    address: VIEW_SERVER_ADDRESS,
+    principal: HOST_PRINCIPAL,
+    revokedBy: () => ['disposed'],
+    ...(deps.heartbeat === undefined ? {} : { heartbeat: deps.heartbeat }),
     onError: (error) => logger.warn(`view server: ${errorText(error)}`)
   })
 
-  /** 主体核对：同步的当场判；异步的作为一个资源与激活并行等（不通过 → 记录失败） */
-  function gate(principal: Principal, target: SyncTarget, self: Self): void {
+  /** 主体核对：同步的当场判（false / 抛错 → 直接抛 forbidden）；异步的返回 Promise 与激活并行等 */
+  function startGate(principal: Principal, target: SyncTarget): Promise<boolean> | undefined {
     const authorize = deps.authorize
-    if (authorize === undefined || principal === hostPrincipal) return
+    if (authorize === undefined || principal === HOST_PRINCIPAL) return undefined
     const refuse = (): ChordError =>
       forbidden(`${syncTargetKey(target)} is not visible to this client`)
     let verdict: boolean | Promise<boolean>
     try {
       verdict = authorize(principal as ViewPrincipal, target)
     } catch {
-      // 判定本身抛错也按不让看（与异步判定拒绝同一个口径）
       throw refuse()
     }
-    if (verdict === true) return
+    if (verdict === true) return undefined
     if (verdict === false) throw refuse()
-    verdict.catch(() => undefined)
-    self.resources({
-      grant: resource({
-        rev: 1,
-        open: async () => {
-          // 判定本身抛错 / 拒绝也按不让看（不把底下的错误透给客户端）
-          const allowed = await verdict.catch(() => false)
-          if (!allowed) throw refuse()
-          return true
-        }
-      })
-    })
+    // 异步判定：抛错也按拒绝，并吞掉裸拒绝
+    return verdict.catch(() => false)
   }
 
-  host.serve(ViewSourceContract, ({ kind, id }, _principal, self) => {
-    const target: SyncTarget =
-      kind === 'session' ? { kind, sessionId: id } : { kind: 'agent', agentId: id }
-    const initial: SyncView = kind === 'session' ? emptySessionView(id) : emptyAgentView(id)
-    const cells = self.state({
-      view: cell(Type.Unknown(), initial as unknown),
-      availability: cell(AvailabilitySchema, 'available' as ViewAvailability)
-    })
-    const res = self.resources({
-      target: resource({
-        rev: 1,
-        open: async ({ signal }) => {
-          const runtime = new TargetRuntime(core, target, cells)
-          try {
-            await runtime.open(signal)
-          } catch (error) {
-            runtime.close()
-            throw error
+  const facet = defineFacet((fHost) => {
+    const serveTarget = (
+      target: SyncTarget,
+      principal: Principal,
+      self: Parameters<Parameters<typeof fHost.serve<typeof SessionViewContract>>[1]>[2]
+    ): {
+      readonly view: ReturnType<typeof self.follow<unknown>>
+      readonly availability: ReturnType<typeof self.follow<ViewAvailability>>
+    } => {
+      const authPromise = startGate(principal, target)
+      // 同步允许（或免检）且会话已删：当场拒掉；异步判定时留给 open 并行等，保证不让看的客户端拿到 forbidden 而不是 not_found
+      if (
+        authPromise === undefined &&
+        target.kind === 'session' &&
+        core.deleted.has(target.sessionId)
+      ) {
+        throw notFoundError(`Session ${target.sessionId} was deleted`)
+      }
+      const refuse = (): ChordError =>
+        forbidden(`${syncTargetKey(target)} is not visible to this client`)
+      const targetNative = self.open(
+        async (ctx) => {
+          const leasePromise = acquireSharedTarget(core, target, ctx)
+          if (authPromise === undefined) return leasePromise
+          // 并行等认证与目标激活；一旦认证拒绝立刻放掉目标租约并报 forbidden
+          const allowed = await authPromise
+          if (!allowed) {
+            void leasePromise.then(
+              (lease) => lease.release(),
+              () => undefined
+            )
+            throw broken(refuse())
           }
-          return runtime
+          return leasePromise
         },
-        close: (runtime) => runtime.close()
-      })
+        (lease) => lease.release()
+      )
+      const view = self.follow<unknown>(async (observer) =>
+        targetNative.value.runtime.attachView(observer)
+      )
+      const availability = self.follow<ViewAvailability>(async (observer) =>
+        targetNative.value.runtime.attachAvailability(observer)
+      )
+      return { view, availability }
+    }
+
+    fHost.serve(SessionViewContract, ({ sessionId }, principal, self) => {
+      const members = serveTarget({ kind: 'session', sessionId }, principal, self)
+      return {
+        variant: 'owner',
+        members: members as unknown as {
+          view: typeof members.view
+          availability: typeof members.availability
+        }
+      } as never
     })
-    self.tasks({ lifecycle: (ctx) => res.target.value.run(ctx) })
-    return { view: cells.view, availability: cells.availability }
+
+    fHost.serve(AgentViewContract, ({ agentId }, principal, self) => {
+      const members = serveTarget({ kind: 'agent', agentId }, principal, self)
+      return {
+        variant: 'owner',
+        members: members as unknown as {
+          view: typeof members.view
+          availability: typeof members.availability
+        }
+      } as never
+    })
   })
 
-  host.serve(SessionViewContract, ({ sessionId }, principal, self) => {
-    const target: SyncTarget = { kind: 'session', sessionId }
-    // 先核对主体再说删没删：不让看的客户端分不出「删了」与「不归你」
-    gate(principal, target, self)
-    if (core.deleted.has(sessionId)) throw notFoundError(`Session ${sessionId} was deleted`)
-    const source = self.get(ViewSourceContract, { kind: 'session', id: sessionId })
-    // 视图成员是 ViewSource 的状态成员（类型上与松 schema 对不上，只在这里断言）
-    return {
-      kind: 'owner',
-      view: source.view,
-      availability: source.availability
-    } as unknown as BehaviorOf<typeof SessionViewContract>
-  })
-
-  host.serve(AgentViewContract, ({ agentId }, principal, self) => {
-    const target: SyncTarget = { kind: 'agent', agentId }
-    gate(principal, target, self)
-    const source = self.get(ViewSourceContract, { kind: 'agent', id: agentId })
-    return {
-      kind: 'owner',
-      view: source.view,
-      availability: source.availability
-    } as unknown as BehaviorOf<typeof AgentViewContract>
+  // 同步发布（没有空参数 local 类型，load 在微任务里落定，但 #published 当场为 true）
+  void host.load([{ name: 'shuvix-view-server', facet }], BACKGROUND_CONTEXT).catch((error) => {
+    logger.error(`view server: load failed: ${errorText(error)}`)
   })
 
   const forRoot = (sessionId: string, run: (runtime: TargetRuntime) => void): void => {
@@ -675,10 +799,14 @@ export function createViewServer(deps: ViewServerDeps): ViewServer {
     host,
     accept(link, principal) {
       if (disposed) {
-        link.close('view server disposed')
+        ;(link as { close(reason?: string): void }).close('view server disposed')
         return
       }
-      host.accept(link, { ...deps.linkOptions, principal, kind: 'client' })
+      host.accept(
+        link,
+        { principal: principal as Principal, codec: VIEW_LINK_CODEC },
+        BACKGROUND_CONTEXT
+      )
     },
     hasSubscribers: (sessionId) => (core.pins.get(sessionId) ?? 0) > 0,
     deleteSession(sessionId) {
@@ -696,7 +824,9 @@ export function createViewServer(deps: ViewServerDeps): ViewServer {
           logger.warn(`view server: unhook failed: ${errorText(error)}`)
         }
       }
-      await host.close()
+      // 先撤掉所有远程主体（对端收到 gone），再关闭宿主
+      host.revoke('disposed', BACKGROUND_CONTEXT)
+      await host.close(BACKGROUND_CONTEXT)
     }
   }
 }

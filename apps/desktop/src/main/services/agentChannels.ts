@@ -18,7 +18,7 @@ import {
   type ChannelAccess
 } from '../../shared/channelAccess'
 import { mcpAdd, mcpDelete, mcpGetTools, mcpList, mcpUpdate } from './agentChannelsMcp'
-import type { TSchema } from 'typebox'
+import type { JsonSchema } from '@earendil-works/pi-schema'
 import type { AskField } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** 卡上的内容（宿主按界面语言写好） */
@@ -41,7 +41,7 @@ export interface AgentChannel<A = Record<string, unknown>> {
   /** 给模型看的一句话（英文，`describe` 列出来的） */
   summary: string
   /** agent 传的参数（一个对象）的结构 */
-  params: TSchema
+  params: JsonSchema
   /**
    * agent 这条路的访问级别，缺省 = 通道表的（channelAccess.ts）。只能往松里写一档的理由是这条路确实做得少：
    * `mcp:list` 在表上是 admin（返回值带 key），给 agent 的结果打了码，就是 read

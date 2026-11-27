@@ -174,11 +174,13 @@ describe('ST-4 · 注册项形状', () => {
   })
 
   it('ST-4 schema 的条数上下限与 SUGGEST_LIMITS 一致；必填 title / message，detail 可选', () => {
-    const list = SuggestParamsSchema.properties.suggestions
-    // 条数上下限是 JSON Schema 的选项，typebox 的类型上不带它们：按普通对象读
-    const bounds = list as unknown as { minItems?: number; maxItems?: number }
-    expect(bounds.minItems).toBe(1)
-    expect(bounds.maxItems).toBe(SUGGEST_LIMITS.maxItems)
+    const list = (SuggestParamsSchema.properties as Record<string, unknown>).suggestions as {
+      minItems?: number
+      maxItems?: number
+      items: { required?: string[]; properties: Record<string, unknown> }
+    }
+    expect(list.minItems).toBe(1)
+    expect(list.maxItems).toBe(SUGGEST_LIMITS.maxItems)
     expect([...(list.items.required ?? [])].sort()).toStrictEqual(['message', 'title'])
     expect(Object.keys(list.items.properties).sort()).toStrictEqual(['detail', 'message', 'title'])
   })
@@ -262,10 +264,14 @@ describe('ST-6 · 宿主能摆图时的描述与 schema', () => {
   it('ST-6 schema：项的键恰 {detail, image, message, title}，必填 {message, title}，条数上下限同 SUGGEST_LIMITS', () => {
     const tool = createSuggestTool({ presentImages: presenter() })
     expect(tool.parameters).toBe(SuggestParamsWithImagesSchema)
-    const list = SuggestParamsWithImagesSchema.properties.suggestions
-    const bounds = list as unknown as { minItems?: number; maxItems?: number }
-    expect(bounds.minItems).toBe(1)
-    expect(bounds.maxItems).toBe(SUGGEST_LIMITS.maxItems)
+    const list = (SuggestParamsWithImagesSchema.properties as Record<string, unknown>)
+      .suggestions as {
+      minItems?: number
+      maxItems?: number
+      items: { required?: string[]; properties: Record<string, { description?: string }> }
+    }
+    expect(list.minItems).toBe(1)
+    expect(list.maxItems).toBe(SUGGEST_LIMITS.maxItems)
     expect(Object.keys(list.items.properties).sort()).toStrictEqual([
       'detail',
       'image',
@@ -276,10 +282,9 @@ describe('ST-6 · 宿主能摆图时的描述与 schema', () => {
   })
 
   it('ST-6 image 的描述说出格式清单，并说它不会发给模型', () => {
-    // description 是 JSON Schema 的选项，typebox 的类型上不带它：按普通对象读
-    const image = SuggestParamsWithImagesSchema.properties.suggestions.items.properties
-      .image as unknown as { description?: string }
-    const description = image.description ?? ''
+    const list = (SuggestParamsWithImagesSchema.properties as Record<string, unknown>)
+      .suggestions as { items: { properties: Record<string, { description?: string }> } }
+    const description = list.items.properties.image?.description ?? ''
     expect(description).toContain(SHOWN_IMAGE_FORMAT_NAMES)
     expect(description).toContain('not sent to you')
   })

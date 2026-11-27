@@ -16,7 +16,7 @@
  *   RT    重跑表（agent-runtime 这一半）：read 'safe'；write / edit / knowledge（Q1）/ next / agent 'unsafe'
  */
 import { describe, expect, it, vi } from 'vitest'
-import { Type } from 'typebox'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import { BaseTool, type ToolReplay } from '../baseTool'
 import type { ToolCallScope } from '../toolCall'
@@ -31,7 +31,7 @@ import { createDispatchAgentTool } from '../../subagent/dispatchTool'
 import type { SubAgentManager } from '../../subagent/manager'
 import type { KnowledgeToolDeps } from '../../knowledge/knowledgeTool'
 
-const Params = Type.Object({ value: Type.Optional(Type.String()) })
+const Params = obj({ value: opt(str()) })
 
 type Hook = 'preExecute' | 'securityCheck' | 'executeInternal'
 interface HookCall {

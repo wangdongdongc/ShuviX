@@ -18,7 +18,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 
 const mocks = vi.hoisted(() => ({
   getDesktopSecurityContext: vi.fn(),

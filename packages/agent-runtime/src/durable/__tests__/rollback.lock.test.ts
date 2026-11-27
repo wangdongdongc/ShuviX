@@ -59,11 +59,19 @@ describe('P3-10a · the agent lock', () => {
     const closingBefore = t.broadcastsOf('agent_closing').length
     let closingAtFork: number | undefined
     const recorder = rawPublications(session)
-    const stop = session.harness.subscribeCommits((publication) => {
-      if (publication.changes.some((change) => change.type === 'conversation')) {
-        closingAtFork ??= t.broadcastsOf('agent_closing').length - closingBefore
-      }
-    })
+    const stop = (
+      (obs) => () =>
+        obs.detach()
+    )(
+      session.harness.observeCommits({
+        advance: (publication) => {
+          if (publication.changes.some((change) => change.type === 'conversation')) {
+            closingAtFork ??= t.broadcastsOf('agent_closing').length - closingBefore
+          }
+        },
+        end: () => {}
+      })
+    )
     const F = forkedId(await session.rollbackTo(ids.u2))
     stop()
     recorder.stop()

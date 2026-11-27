@@ -34,7 +34,7 @@
  *    （存储没了 = 一个带原因的失败，PIN-08）；模型取 `modelConfig`（hook 的运行模型），取消在 `signal` 上 ——
  *    落下时协调器中止子对话（PIN-05）。登记 / 广播 / 任务条目与工具派发同一套，只是没有 `parentToolCallId`。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'

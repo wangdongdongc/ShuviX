@@ -225,7 +225,7 @@ describe('move', () => {
     expect(suite.move.name).toBe('move')
     expect(suite.move.label).toBe('Move')
     expect(suite.move.description).toBe(MOVE_DESCRIPTION)
-    expect(Object.keys(suite.move.parameters.properties).sort()).toEqual(['from', 'to'])
+    expect(Object.keys(suite.move.parameters.properties as object).sort()).toEqual(['from', 'to'])
     expect(suite.move.replay).toBe('unsafe')
   })
 
@@ -403,7 +403,7 @@ describe('delete', () => {
     expect(suite.delete.name).toBe('delete')
     expect(suite.delete.label).toBe('Delete')
     expect(suite.delete.description).toBe(DELETE_DESCRIPTION)
-    expect(Object.keys(suite.delete.parameters.properties)).toEqual(['path'])
+    expect(Object.keys(suite.delete.parameters.properties as object)).toEqual(['path'])
   })
 
   it('DEL-1 删一个文件：门问一次 write、在删之前；回执与一条 delete 回调', async () => {

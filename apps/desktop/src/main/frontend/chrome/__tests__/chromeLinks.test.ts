@@ -21,8 +21,7 @@
  * `support/fakeSw` 扮演的 SW。
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Frame, Link } from '@earendil-works/chord'
-import type { ViewPrincipal, ViewServer } from '@shuvix/agent-runtime'
+import type { Frame, FrameLink, ViewPrincipal, ViewServer } from '@shuvix/agent-runtime'
 import type { SyncLinkChannel, SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { createChromeLinkHub, MAX_LINKS_PER_CONNECTION, type ChromeLinkHub } from '../chromeLinks'
@@ -43,13 +42,16 @@ const HELLO = { t: 'hello', name: 'client:tab5', kind: 'client', epoch: 0 }
 const BYE = { t: 'bye', reason: 'side panel closed' }
 
 interface Accepted {
-  readonly link: Link
+  readonly link: FrameLink
   readonly principal: ViewPrincipal
   /** 交给链路接收方的帧 */
   readonly frames: unknown[]
   /** 链路结束的原因 */
   readonly closes: string[]
 }
+
+const UTF8 = new TextDecoder()
+const decodeBytes = (bytes: Uint8Array): unknown => JSON.parse(UTF8.decode(bytes))
 
 /** 链路表 + 记录型 accept */
 function recordingHub(max?: number): {
@@ -61,9 +63,12 @@ function recordingHub(max?: number): {
   const warnings: string[] = []
   const hub = createChromeLinkHub({
     accept: (link, principal) => {
-      const entry: Accepted = { link, principal, frames: [], closes: [] }
-      link.receive((frame: Frame) => entry.frames.push(frame))
-      link.onClose((reason) => entry.closes.push(reason))
+      const frameLink = link as FrameLink
+      const entry: Accepted = { link: frameLink, principal, frames: [], closes: [] }
+      frameLink.onMessage((bytes) => entry.frames.push(decodeBytes(bytes)))
+      frameLink.onClose((reason) => {
+        entry.closes.push(reason)
+      })
       accepted.push(entry)
     },
     logger: { warn: (message) => warnings.push(message) },

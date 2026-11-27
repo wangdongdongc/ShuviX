@@ -16,9 +16,7 @@
  *
  * 不重跑（BaseTool 缺省 `replay: 'unsafe'`）：中断之后模型拿到中断结果，要不要再来一次由它看了 `mcp:list` 再定。
  */
-import { Type } from 'typebox'
-import type { TObject } from 'typebox'
-import { Check, Errors } from 'typebox/value'
+import { compile, map, obj, oneOf, opt, str, unknown } from '@earendil-works/pi-schema'
 import { BaseTool, callOwnerOf, type ToolCallScope, type ToolResult } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import { SHUVIX_TOOL_NAME } from '@shuvix/chat-protocol/toolSelection'
@@ -44,16 +42,14 @@ export const SHUVIX_TOOL_DESCRIPTION =
   '- `call` runs one `channel` with `args`. Reading runs at once. A change is shown to the user on an approval card first; the result says what happened.\n\n' +
   'Secret values (API keys, tokens): pass the placeholder you hold, or leave the value as an empty string and the user types it on the approval card. Never ask the user to type a secret into the chat.'
 
-export const ShuvixParamsSchema: TObject = Type.Object({
-  action: Type.Union([Type.Literal('describe'), Type.Literal('call')]),
-  scope: Type.Optional(
-    Type.String({ description: 'describe: one area (as listed by describe), with full args.' })
+export const ShuvixParamsSchema = obj({
+  action: oneOf(['describe', 'call']),
+  scope: opt(str({ description: 'describe: one area (as listed by describe), with full args.' })),
+  channel: opt(
+    str({ description: 'describe: one channel with full args. call: the channel to run.' })
   ),
-  channel: Type.Optional(
-    Type.String({ description: 'describe: one channel with full args. call: the channel to run.' })
-  ),
-  args: Type.Optional(
-    Type.Record(Type.String(), Type.Unknown(), {
+  args: opt(
+    map(unknown(), {
       description: 'call: the arguments, as describe shows them.'
     })
   )
@@ -79,12 +75,25 @@ function channelLine(channel: AnyAgentChannel): string {
   return `- ${channel.channel} (${access === 'read' ? 'read' : 'change, asks the user'}): ${channel.summary}`
 }
 
+const validatorCache = new WeakMap<object, ReturnType<typeof compile>>()
+
 /** 参数校验不过时给模型看的话：每条一行，路径 + 原因 */
 function argsProblems(channel: AnyAgentChannel, args: unknown): string | undefined {
-  if (Check(channel.params, args)) return undefined
-  const lines = [...Errors(channel.params, args)]
+  let validator =
+    typeof channel.params === 'object' && channel.params !== null
+      ? validatorCache.get(channel.params)
+      : undefined
+  if (!validator) {
+    validator = compile(channel.params, { unresolvedRefs: 'reject' })
+    if (typeof channel.params === 'object' && channel.params !== null) {
+      validatorCache.set(channel.params, validator)
+    }
+  }
+  if (validator.check(args)) return undefined
+  const lines = validator
+    .errors(args)
     .slice(0, 8)
-    .map((error) => `- ${error.instancePath || '(args)'}: ${error.message}`)
+    .map((error) => `- ${error.path || '(args)'}: ${error.message}`)
   return `The args for ${channel.channel} do not fit:\n${lines.join('\n')}\nCall describe with channel "${channel.channel}" for its exact args.`
 }
 

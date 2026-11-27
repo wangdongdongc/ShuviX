@@ -193,7 +193,7 @@ describe('P3-07 · viewSnapshot parity', () => {
       expect(await session.submitUser('U1')).toEqual({})
       const settled = await list(session)
       await liveCommit(session, (live) => {
-        live.run = { taskId: 7 as never, inputs: [] }
+        live.run = { taskId: 7 as never, inputs: [], turns: 0 }
         live.generation = {
           attempt: 1,
           message: fauxAssistantMessage([fauxText('Hel')]) as never
@@ -314,11 +314,11 @@ describe('P3-07 · read-your-writes and the projector (PIN-13 / PIN-14)', () => 
 
       // 视图挂载的值换过了（新的一帧）→ 旧的那一帧不算跟上
       const conversation = await session.currentConversation()
-      const state = await conversation.viewState(BG)
-      const frame = state.value
-      state.dispose()
+      const watch = await conversation.watch(BG, { min: 2000, max: 4000 })
+      const frame = watch.value
+      await watch.stop()
       expect(proj.snapshotIfCurrent(conversation.id, frame)).toBe(proj.value)
-      expect(proj.snapshotIfCurrent(conversation.id, { ...frame })).toBeUndefined()
+      expect(proj.snapshotIfCurrent(conversation.id, { ...frame, entries: [] })).toBeUndefined()
       expect(proj.snapshotIfCurrent((conversation.id + 1) as ConversationId, frame)).toBeUndefined()
       h.release()
       expect(proj.snapshotIfCurrent(conversation.id, frame)).toBeUndefined()
@@ -335,13 +335,14 @@ describe('P3-07 · read-your-writes and the projector (PIN-13 / PIN-14)', () => 
       expect(await session.submitUser('U1')).toEqual({})
       const projector = vi.spyOn(session, 'projector')
       const unsubscribes: Array<ReturnType<typeof vi.fn>> = []
-      const original = session.harness.subscribeCommits.bind(session.harness)
+      const original = session.harness.observeCommits.bind(session.harness)
       const subscribe = vi
-        .spyOn(session.harness, 'subscribeCommits')
-        .mockImplementation((listener) => {
-          const unsubscribe = vi.fn(original(listener))
-          unsubscribes.push(unsubscribe)
-          return unsubscribe
+        .spyOn(session.harness, 'observeCommits')
+        .mockImplementation((observer) => {
+          const obs = original(observer)
+          const detach = vi.fn(() => obs.detach())
+          unsubscribes.push(detach)
+          return { detach }
         })
       const listed = await list(session)
       expect(projector).not.toHaveBeenCalled()

@@ -1033,11 +1033,24 @@ export {
 } from './sync/viewServer'
 export {
   AgentViewContract,
+  bytesToFrame,
   FrameLink,
+  frameToBytes,
   isNotFoundError,
   notFoundError,
   SessionViewContract,
+  VIEW_LINK_CODEC,
+  VIEW_SERVER_ADDRESS,
   VIEW_SERVER_HOST,
+  ViewServerHostKind,
+  type Frame,
   type ViewAvailability
 } from './sync/viewContracts'
+export {
+  replicatedState,
+  type MutableReplicatedState,
+  type ReplicatedState,
+  type ReplicatedStateDelivery,
+  type ReplicatedStateListener
+} from './sync/replicatedState'
 export { legacySessionView, type LegacyTranscript, type SyncView } from './sync/services'

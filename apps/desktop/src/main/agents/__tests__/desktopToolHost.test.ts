@@ -40,7 +40,7 @@ import {
   type Mock
 } from 'vitest'
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 
 interface SkillToolCall {
   args: unknown[]

@@ -28,7 +28,7 @@
  *   MO-8 脱敏器内部出错（签名抛错）：不抛，原样交回，记 error
  */
 import { createHmac } from 'node:crypto'
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import {
@@ -83,7 +83,7 @@ const envTool = (): ToolRegistration =>
   defineTool({
     name: 'read_env',
     description: 'reads .env',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async () => ({
       output: [{ type: 'text', text: `OPENAI_API_KEY=${KEY}\nPORT=3000` }],
       details: { raw: `OPENAI_API_KEY=${KEY}` }
@@ -348,7 +348,7 @@ describe('会话脱敏', () => {
         defineTool({
           name: 'pwd',
           description: 'prints the working directory',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async () => ({ output: [{ type: 'text', text: '/Users/alexander/proj' }] })
         })
       ]

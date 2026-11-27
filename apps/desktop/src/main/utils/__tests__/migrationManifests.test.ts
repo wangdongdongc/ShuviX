@@ -145,10 +145,10 @@ describe('依赖清单 —— 迁移守卫', () => {
     }
   })
 
-  it('MM-1b / P3-08-11 chat-ui 精确声明 `@earendil-works/chord` 1.2.0', () => {
+  it('MM-1b / P3-08-11 chat-ui 精确声明 `@earendil-works/chord` 1.6.1', () => {
     const chatUi = MANIFESTS.filter((m) => m.rel === 'packages/chat-ui/package.json')
     expect(chatUi).toHaveLength(1)
-    expect(declarationsOf('@earendil-works/chord', chatUi).map((d) => d.version)).toEqual(['1.2.0'])
+    expect(declarationsOf('@earendil-works/chord', chatUi).map((d) => d.version)).toEqual(['1.6.1'])
   })
 
   it('MM-2 任何清单、任何依赖字段都不再声明 `@earendil-works/pi-agent-core`', () => {

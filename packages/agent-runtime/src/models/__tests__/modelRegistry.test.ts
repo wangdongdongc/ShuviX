@@ -276,9 +276,10 @@ describe('network and error text', () => {
 
   it('REG-15 risk probe: a deleted custom provider whose uuid contains 502 is not retryable (M4)', async () => {
     const id = '0193a502-0000-7000-8000-000000000502'
+    // pi-ai 1.6.1+ fixed the upstream regex so a UUID containing 502 is no longer misclassified as retryable
     const raw = { stopReason: 'error', errorMessage: `Unknown provider: ${id}` }
     expect(isRetryableAssistantError(raw as Parameters<typeof isRetryableAssistantError>[0])).toBe(
-      true
+      false
     )
 
     const port = fakePort(

@@ -117,8 +117,10 @@ beforeEach(() => {
   accept = vi.fn((link: Link, principal: ViewPrincipal) => {
     const entry = { link, principal, reasons: [] as string[] }
     accepted.push(entry)
-    link.receive(() => {})
-    link.onClose((reason) => entry.reasons.push(reason))
+    link.onMessage(() => {})
+    link.onClose(() => {
+      entry.reasons.push('closed')
+    })
   })
   links = createNetworkLinkHub({ accept })
   onConnection = vi.fn()

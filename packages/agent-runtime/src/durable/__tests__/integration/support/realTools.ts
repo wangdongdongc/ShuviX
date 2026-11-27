@@ -18,7 +18,7 @@
  * 询问通道是**晚绑定**的：`requestUserInput(sessionId)` 每次现找那条会话此刻打开着的实例（重启之后
  * 是新进程的那个）；找不到就当关停取消。审查接缝（`onPermissionRequest`）只记下事件、回 null（照旧问人）。
  */
-import { Type } from 'typebox'
+import { num, obj } from '@earendil-works/pi-schema'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createAskTool } from '../../../../askTool'
@@ -123,7 +123,7 @@ export function fileSuite(fs: MemFs, security: SecurityContext): FileToolSuite {
   })
 }
 
-const DumpParams = Type.Object({ lines: Type.Number({ description: 'How many lines to print' }) })
+const DumpParams = obj({ lines: num({ description: 'How many lines to print' }) })
 
 /** `line 1` … `line N`（每行唯一，好断言预览里有没有某一行） */
 export function dumpText(lines: number): string {
@@ -155,7 +155,7 @@ class DumpTool extends BaseTool<typeof DumpParams> {
   }
 }
 
-const NoParams = Type.Object({})
+const NoParams = obj({})
 
 /** 测试 BaseTool：抛 `boom`（Q12：模型看到的就是这句，不进 `<harness>`） */
 class BoomTool extends BaseTool<typeof NoParams> {

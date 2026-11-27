@@ -8,7 +8,7 @@
  *  - `revisionsOf(state)`：精确操作流（同 `projectorSupport.opsOf`，都靠 `opStream.ts` 的影子 tracker；
  *    不拖会话夹具进来）。
  */
-import type { MutableReplicatedState } from '@earendil-works/chord'
+import type { MutableReplicatedState } from '../../../sync/replicatedState'
 import type { Op } from '@earendil-works/chord/delta'
 import { expect } from 'vitest'
 import { inShadowReplay, tapOps } from './opStream'

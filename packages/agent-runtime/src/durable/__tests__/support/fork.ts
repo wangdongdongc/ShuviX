@@ -18,7 +18,7 @@ import {
   type TaskRecord
 } from '@earendil-works/pi-durable'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { backgroundContext as BG } from '../../context'
 import {
   AgentStateDoc,

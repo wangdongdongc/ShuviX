@@ -12,14 +12,15 @@
  *   22 句柄已关：`{ok:false, reason:'closed'}`，从不重开
  */
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import { createHost, memoryLinkPair, type HandleStatus } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
+import { memoryLinkPair, type RefState } from '@earendil-works/chord'
 import { describe, expect, it } from 'vitest'
 import {
   createViewServer,
   type SyncSession,
   type SyncSessionClosedReason
 } from '../../sync/viewServer'
-import { SessionViewContract, VIEW_SERVER_HOST } from '../../sync/viewContracts'
+import { createHost, SessionViewContract, VIEW_LINK_CODEC } from '../../sync/viewContracts'
 import type { DurableSession } from '../durableSession'
 import { freshMount, opsOf, settleFrames } from '../projection/__tests__/projectorSupport'
 import { answer, held } from './support/faux'
@@ -215,21 +216,44 @@ describe('P3-10a · refusals, races and remount', () => {
       })
       const [down, up] = memoryLinkPair()
       server.accept(down, { kind: 'window', webContentsId: 1 })
-      const client = createHost({
-        name: 'renderer',
-        kind: 'client',
-        upstream: up,
-        onError: () => {}
-      })
-      const handle = client.get(SessionViewContract, { sessionId: 's1' }, { at: VIEW_SERVER_HOST })
+      const client = createHost({ onError: () => {} })
+      await client.load([], BACKGROUND_CONTEXT)
+      client.connect(
+        up,
+        {
+          principal: { kind: 'window', webContentsId: 1 },
+          codec: VIEW_LINK_CODEC
+        },
+        BACKGROUND_CONTEXT
+      )
+      const handle = client.hold(SessionViewContract, { sessionId: 's1' }, BACKGROUND_CONTEXT)
       const availability: unknown[] = []
-      const stopAvailability = handle.availability.subscribe((value) => availability.push(value))
-      const stopView = handle.view.subscribe(() => {})
-      await withTimeout(handle.ready, 5000, 'handle ready')
+      const availWatch = withCancel(BACKGROUND_CONTEXT)
+      const viewWatch = withCancel(BACKGROUND_CONTEXT)
+      void (async () => {
+        const w = await handle.availability.watch(availWatch.context)
+        if (w.value !== undefined) availability.push(w.value)
+        w.start(async (call) => {
+          if (call.kind === 'value') availability.push(call.value)
+        })
+      })()
+      void (async () => {
+        const w = await handle.view.watch(viewWatch.context)
+        w.start(async () => {})
+      })()
+      await withTimeout(
+        waitFor(() => handle.state.value.kind === 'live', 5000, 'handle live'),
+        5000,
+        'handle ready'
+      )
       await waitFor(() => handle.view.value !== undefined, 3000, 'snapshot')
       // 活了之后的每一次状态变化（不该有）
-      const statuses: HandleStatus[] = []
-      handle.onStatus((status) => statuses.push(status))
+      const statuses: RefState['kind'][] = []
+      const statusCancel = withCancel(BACKGROUND_CONTEXT)
+      const statusWatch = await handle.state.watch(statusCancel.context)
+      statusWatch.start(async (call) => {
+        if (call.kind === 'value') statuses.push(call.value.kind)
+      })
 
       const proj = await session.projector()
       const h = proj.acquire()
@@ -253,15 +277,16 @@ describe('P3-10a · refusals, races and remount', () => {
         'client caught up'
       )
       expect(statuses).toEqual([])
-      expect(handle.status).toBe('live')
+      expect(handle.state.value.kind).toBe('live')
       expect(availability.filter((value) => value !== undefined)).toEqual(['available'])
       expect(handle.view.value).toEqual(h.state.value)
       ops.stop()
       h.release()
-      stopView()
-      stopAvailability()
+      statusCancel.cancel()
+      viewWatch.cancel()
+      availWatch.cancel()
       handle.release()
-      await client.close()
+      await client.close(BACKGROUND_CONTEXT)
       await server.dispose()
     },
     TIMEOUT

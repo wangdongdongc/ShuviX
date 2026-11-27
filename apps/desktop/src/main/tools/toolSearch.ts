@@ -13,8 +13,7 @@
  * 不重跑（BaseTool 缺省 `replay: 'unsafe'`）：进程中断之后模型拿到中断结果，自己再调一次时已经开启的那台
  * 走「已经开着」的回答，不会再问一次。
  */
-import { Type } from 'typebox'
-import type { TObject, TString } from 'typebox'
+import { obj, str } from '@earendil-works/pi-schema'
 import {
   BaseTool,
   callOwnerOf,
@@ -58,8 +57,8 @@ export const TOOL_SEARCH_DESCRIPTION =
   'With several you get their names: call again with the exact name of the one you need. ' +
   'Searching itself starts nothing.'
 
-export const ToolSearchParamsSchema: TObject<{ query: TString }> = Type.Object({
-  query: Type.String({
+export const ToolSearchParamsSchema = obj({
+  query: str({
     description: 'Keywords for what you need, or the exact name of an extension.'
   })
 })

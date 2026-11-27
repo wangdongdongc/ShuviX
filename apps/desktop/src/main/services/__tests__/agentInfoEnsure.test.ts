@@ -17,7 +17,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Type } from '@earendil-works/pi-ai'
+import { obj, str } from '@earendil-works/pi-schema'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import {
   backgroundContext as BG,
@@ -228,7 +228,7 @@ const counters = {
 const probe: ToolRegistration = defineTool({
   name: 'probe',
   description: 'probe: looks at things',
-  parameters: Type.Object({ target: Type.String() }),
+  parameters: obj({ target: str() }),
   execute: async () => ({ output: [{ type: 'text', text: 'probe done' }] })
 })
 

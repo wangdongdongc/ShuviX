@@ -19,7 +19,7 @@
  */
 import { readFileSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
-import { Type } from 'typebox'
+import { arr, bool, obj, oneOf, opt, str, unknown } from '@earendil-works/pi-schema'
 import type { ToolCallScope, ToolResult } from '@shuvix/agent-runtime'
 import { BaseTool, callOwnerOf } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
@@ -72,54 +72,45 @@ type WidgetAction = (typeof WIDGET_ACTIONS)[number]
 
 const PREVIEW_SIZES = ['panel', 'window', 'phone'] as const
 
-export const WidgetParamsSchema = Type.Object({
-  action: Type.Unsafe<WidgetAction>({
-    type: 'string',
-    enum: [...WIDGET_ACTIONS],
+export const WidgetParamsSchema = obj({
+  action: oneOf(WIDGET_ACTIONS, {
     description: 'What to do. See the tool description for what each action does.'
   }),
-  widget: Type.Optional(Type.String({ description: 'The widget id (every action but "list").' })),
-  op: Type.Optional(Type.String({ description: 'For "test": the operation name.' })),
-  args: Type.Optional(
-    Type.Unknown({
+  widget: opt(str({ description: 'The widget id (every action but "list").' })),
+  op: opt(str({ description: 'For "test": the operation name.' })),
+  args: opt(
+    unknown({
       description: `For "test": the operation's input, as its input schema says (default {}).`
     })
   ),
-  name: Type.Optional(Type.String({ description: 'For "create": the name the user sees.' })),
-  description: Type.Optional(
-    Type.String({ description: 'For "create": one sentence on what the widget is for.' })
+  name: opt(str({ description: 'For "create": the name the user sees.' })),
+  description: opt(str({ description: 'For "create": one sentence on what the widget is for.' })),
+  message: opt(str({ description: 'For "build": what changed (the build is committed with it).' })),
+  sizes: opt(
+    arr(oneOf(PREVIEW_SIZES), {
+      description: 'For "preview": which sizes to capture (default all three).'
+    })
   ),
-  message: Type.Optional(
-    Type.String({ description: 'For "build": what changed (the build is committed with it).' })
-  ),
-  sizes: Type.Optional(
-    Type.Array(
-      Type.Unsafe<(typeof PREVIEW_SIZES)[number]>({ type: 'string', enum: [...PREVIEW_SIZES] }),
-      { description: 'For "preview": which sizes to capture (default all three).' }
-    )
-  ),
-  theme: Type.Optional(
-    Type.Unsafe<'light' | 'dark'>({
-      type: 'string',
-      enum: ['light', 'dark'],
+  theme: opt(
+    oneOf(['light', 'dark'], {
       description: 'For "preview": the color scheme (default the app\'s).'
     })
   ),
-  wait_for: Type.Optional(
-    Type.String({
+  wait_for: opt(
+    str({
       description:
         'For "preview": a CSS selector to wait for (up to 30s) before each screenshot. Have the page add it once slow content, such as a 3D model, has drawn.'
     })
   ),
-  sql: Type.Optional(Type.String({ description: 'For "sql": the SQL to run.' })),
-  legacy: Type.Optional(
-    Type.Boolean({
+  sql: opt(str({ description: 'For "sql": the SQL to run.' })),
+  legacy: opt(
+    bool({
       description:
         'For "sql": run it on an older widget\'s data that is still in the shared PostgreSQL database (to move it over).'
     })
   ),
-  path: Type.Optional(
-    Type.String({
+  path: opt(
+    str({
       description:
         'For "export": where to write the zip (a folder or a .zip path; relative paths are inside the working directory).'
     })

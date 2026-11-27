@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { ROOT_CONVERSATION_ID, type ToolExecutionApi } from '@earendil-works/pi-durable'
-import type { TSchema } from 'typebox'
+import type { JsonSchema } from '@earendil-works/pi-schema'
 import type { AnyTool, ToolContent } from '../toolResult'
 import { executeTool, invokeTool, resultText } from '../testing/invokeTool'
 
@@ -203,7 +203,7 @@ interface LegacyShapedTool {
   name: string
   label: string
   description: string
-  parameters: TSchema
+  parameters: JsonSchema
   execute(
     toolCallId: string,
     params: unknown,
@@ -217,7 +217,7 @@ describe('IT 旧形状工具不再被收', () => {
       name: 'legacy',
       label: 'Legacy',
       description: 'legacy tool',
-      parameters: {} as TSchema,
+      parameters: {} as JsonSchema,
       execute
     }
   }

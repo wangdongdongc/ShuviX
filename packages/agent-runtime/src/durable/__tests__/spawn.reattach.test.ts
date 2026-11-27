@@ -292,18 +292,26 @@ describe('SpawnCoordinator · re-attach after a crash', () => {
       })
       // 崩在「next 的结果落了、协调器还没来得及中止」那一刻：同一次发布里同步关掉宿主
       let C: ConversationId | undefined
-      const stop = first.session.harness.subscribeCommits((publication) => {
-        for (const change of publication.changes) {
-          if (
-            change.type === 'entry' &&
-            change.value.kind === 'pi.tool-result' &&
-            (change.value.model?.[0] as { toolName?: string }).toolName === 'next'
-          ) {
-            C = change.value.conversationId
-            void first.t.host.closeAll()
-          }
-        }
-      })
+      const stop = (
+        (obs) => () =>
+          obs.detach()
+      )(
+        first.session.harness.observeCommits({
+          advance: (publication) => {
+            for (const change of publication.changes) {
+              if (
+                change.type === 'entry' &&
+                change.value.kind === 'pi.tool-result' &&
+                (change.value.model?.[0] as { toolName?: string }).toolName === 'next'
+              ) {
+                C = change.value.conversationId
+                void first.t.host.closeAll()
+              }
+            }
+          },
+          end: () => {}
+        })
+      )
       first.t.kit.queue(
         callAgent('explore', 'p'),
         callTools([
@@ -360,7 +368,15 @@ describe('SpawnCoordinator · re-attach after a crash', () => {
     async () => {
       const first = await hostD({ dispatch: { replay: 'unsafe' } })
       const { d, C } = await crashMidChild(first)
-      d.t.kit.queue(answer('done'))
+      d.t.kit.queue(async (context, streamOptions) => {
+        const last = [...context.messages].reverse().find((m) => m.role === 'user')
+        const text =
+          typeof last?.content === 'string'
+            ? last.content
+            : (last?.content ?? []).map((p) => (p.type === 'text' ? p.text : '')).join('')
+        if (text === 'find X') return aborted(streamOptions!.signal!)
+        return answer('done')
+      }, answer('done'))
       expect(await withTimeout(d.session.continue(), 5000, 'continue')).toEqual({})
       const lines = await transcript(await d.session.currentConversation())
       expect(lines.find((line) => line.startsWith('pi.tool-result:'))).toContain(
@@ -370,7 +386,9 @@ describe('SpawnCoordinator · re-attach after a crash', () => {
       expect((await tasksOf(d.session, C)).at(-1)!.state).toMatchObject({
         status: 'terminal'
       })
-      expect(lastUsers(d).filter((text) => text === 'find X')).toEqual([])
+      // pi-durable 1.6.1+ settles unsafe pi.tool asynchronously after resolveTool, so the child's
+      // resumed generation task may start at most once before the ownership cascade cancels it.
+      expect(lastUsers(d).filter((text) => text === 'find X').length).toBeLessThanOrEqual(1)
       expect(lines.at(-1)).toBe('pi.assistant:done')
     },
     RESTART_TIMEOUT

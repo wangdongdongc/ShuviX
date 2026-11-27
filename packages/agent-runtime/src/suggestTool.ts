@@ -12,7 +12,7 @@
  * （提示词不指向用不了的东西）。图由宿主快照进会话目录，快照记在结果的 `details`（`SuggestToolDetails`，下标同参数）；
  * 图有问题就整次失败，与「不留半截卡片」一致。快照不过权限判断，所以照样立刻返回。
  */
-import { Type } from 'typebox'
+import { arr, obj, opt, str } from '@earendil-works/pi-schema'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import { SUGGEST_LIMITS, SUGGEST_TOOL_NAME } from '@shuvix/chat-protocol/suggestions'
 import { SHOWN_IMAGE_FORMAT_NAMES } from '@shuvix/chat-protocol/shownImages'
@@ -21,14 +21,14 @@ import { catchToolErrors, toExecutionResult } from './tools/toolResult'
 import { backstopOutputLimits } from './tools/outputLimits'
 
 const SUGGESTION_FIELDS = {
-  title: Type.String({
+  title: str({
     description: `What the suggestion is, in a few words (the card's headline, at most ${SUGGEST_LIMITS.title} characters)`
   }),
-  message: Type.String({
+  message: str({
     description: `What the user sends you when they accept it, written in their voice, as they would say it (at most ${SUGGEST_LIMITS.message} characters). Shown on the card in full`
   }),
-  detail: Type.Optional(
-    Type.String({
+  detail: opt(
+    str({
       description: `Why, in a sentence or two (at most ${SUGGEST_LIMITS.detail} characters)`
     })
   )
@@ -40,17 +40,17 @@ const LIST_OPTIONS = {
   maxItems: SUGGEST_LIMITS.maxItems
 }
 
-export const SuggestParamsSchema = Type.Object({
-  suggestions: Type.Array(Type.Object(SUGGESTION_FIELDS), LIST_OPTIONS)
+export const SuggestParamsSchema = obj({
+  suggestions: arr(obj(SUGGESTION_FIELDS), LIST_OPTIONS)
 })
 
 /** 宿主能摆图时的参数：每条多一个可选的 `image` */
-export const SuggestParamsWithImagesSchema = Type.Object({
-  suggestions: Type.Array(
-    Type.Object({
+export const SuggestParamsWithImagesSchema = obj({
+  suggestions: arr(
+    obj({
       ...SUGGESTION_FIELDS,
-      image: Type.Optional(
-        Type.String({
+      image: opt(
+        str({
           description: `A picture of what this suggestion leads to, when one helps the user choose (for example a mockup of each layout option): the path of a ${SHOWN_IMAGE_FORMAT_NAMES} file on this machine. Shown on the card; it is not sent to you when the user accepts`
         })
       )

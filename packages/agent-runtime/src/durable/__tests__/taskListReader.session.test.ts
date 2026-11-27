@@ -16,7 +16,8 @@
  *   TTS-3 列表之前的 advance → 结果是错误「还没有列表」；之后的 items 照常
  *   TTS-4 下一个请求里的 advance → 「还没有列表」（上一个请求的列表不漏过来）
  */
-import { Type, type ToolResultMessage } from '@earendil-works/pi-ai'
+import { type ToolResultMessage } from '@earendil-works/pi-ai'
+import { arr, bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { defineTool, type JsonObject, type ToolRegistration } from '@earendil-works/pi-durable'
 import {
   LEGACY_TASK_LIST_TOOL_NAME,
@@ -69,13 +70,11 @@ function planTool(
   return defineTool({
     name: PLAN,
     description: 'test plan tool',
-    parameters: Type.Object({
-      items: Type.Optional(
-        Type.Array(Type.Object({ content: Type.String(), status: Type.String() }))
-      ),
-      advance: Type.Optional(Type.Boolean()),
-      done: Type.Optional(Type.Array(Type.Integer())),
-      start: Type.Optional(Type.Integer())
+    parameters: obj({
+      items: opt(arr(obj({ content: str(), status: str() }))),
+      advance: opt(bool()),
+      done: opt(arr(int())),
+      start: opt(int())
     }),
     execute: async (_args, api) => {
       const list = await readTaskList(getSession(), api.callId)
@@ -242,11 +241,9 @@ function legacyPlanTool(seen: string[]): ToolRegistration {
   return defineTool({
     name: LEGACY,
     description: 'legacy plan tool',
-    parameters: Type.Object({
-      items: Type.Optional(
-        Type.Array(Type.Object({ content: Type.String(), status: Type.String() }))
-      ),
-      advance: Type.Optional(Type.Boolean())
+    parameters: obj({
+      items: opt(arr(obj({ content: str(), status: str() }))),
+      advance: opt(bool())
     }),
     execute: async (_args, api) => {
       seen.push(api.callId)

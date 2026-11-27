@@ -11,7 +11,7 @@
  *
  * 系统提示词逐字节的对照来自 faux 的请求记录（`FauxRequest.systemPrompt` = pi-ai `getCurrentSystemPrompt`）。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { num, obj, str, unsafe } from '@earendil-works/pi-schema'
 import {
   defineTool,
   ROOT_CONVERSATION_ID,
@@ -236,7 +236,7 @@ describe('P3-06 A · agentInfo content', () => {
       ...defineTool({
         name: 'labeled',
         description: 'labeled: a host tool with a label',
-        parameters: Type.Object({ path: Type.String(), depth: Type.Number() }),
+        parameters: obj({ path: str(), depth: num() }),
         execute: async () => ({ output: [{ type: 'text' as const, text: 'ok' }] })
       }),
       label: 'Labeled Tool'
@@ -244,7 +244,7 @@ describe('P3-06 A · agentInfo content', () => {
     const schemaless: ToolRegistration = {
       name: 'schemaless',
       description: 'schemaless: no properties at all',
-      parameters: Type.Unsafe<Record<string, unknown>>({ type: 'object' }),
+      parameters: unsafe<Record<string, unknown>>({ type: 'object' }),
       execute: async () => ({ output: [{ type: 'text', text: 'ok' }] })
     }
     const { t } = await scenarioW({
@@ -360,7 +360,7 @@ describe('P3-06 A · agentInfo content', () => {
     const probe = defineTool({
       name: 'probe',
       description: 'probe: probes',
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: async () => ({ output: [{ type: 'text' as const, text: 'probe done' }] })
     })
     const tools = await makeHost({ tools: [probe] })

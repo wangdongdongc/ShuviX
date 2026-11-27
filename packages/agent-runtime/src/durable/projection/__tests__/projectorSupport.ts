@@ -14,9 +14,9 @@
  *  - `liveCommit(session, mutate)`：直接写当前对话的 `pi.live`（精确控制流式中间态的用例用）。
  *  - 测试工具：`readTool`、`streamTool`（逐段 `api.output`）、`spillTool`（带落盘诊断的结果）。
  */
-import type { MutableReplicatedState, ReplicatedState } from '@earendil-works/chord'
+import type { MutableReplicatedState, ReplicatedState } from '../../../sync/replicatedState'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import { applyImmutable, type Op } from '@earendil-works/chord/delta'
-import { Type } from '@earendil-works/pi-ai'
 import {
   LiveDoc,
   defineTool,
@@ -247,10 +247,11 @@ export async function attachOracle(
       return
     }
     watch = next
-    next.start(async (frame) => {
+    next.start(async (call) => {
+      if (call.kind !== 'value') return
       records.push({
         conversationId,
-        frame,
+        frame: call.value,
         runState: session.runState,
         asks: JSON.parse(JSON.stringify(session.pendingInputs())) as InputRequest[],
         view: state.value
@@ -424,7 +425,7 @@ export function readTool(): ToolRegistration {
   return defineTool({
     name: 'read',
     description: 'read: reads a file',
-    parameters: Type.Object({ path: Type.Optional(Type.String()) }),
+    parameters: obj({ path: opt(str()) }),
     execute: async (args) => ({ output: [{ type: 'text', text: `read ${args.path ?? '?'}` }] })
   })
 }
@@ -434,7 +435,7 @@ export function streamTool(chunks: readonly string[], gapMs = 150): ToolRegistra
   return defineTool({
     name: 'bash',
     description: 'bash: runs a command',
-    parameters: Type.Object({ command: Type.Optional(Type.String()) }),
+    parameters: obj({ command: opt(str()) }),
     execute: async (_args, api) => {
       for (const chunk of chunks) {
         api.output(chunk)
@@ -453,7 +454,7 @@ export function spillTool(): ToolRegistration {
   return defineTool({
     name: 'dump',
     description: 'dump: prints a lot',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async (_args, api) => {
       api.diagnostic(
         truncationDiagnostic({

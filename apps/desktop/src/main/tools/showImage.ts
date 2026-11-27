@@ -7,8 +7,7 @@
  * 没有权限点（用户裁决，2026-11-01）：用户看自己的图不需要权限，模型看才需要 —— 所以这里不过 securityCheck，
  * 没人在场的运行里也不会卡在询问上。不成为读文件的旁路，靠的是快照在会话权限表之外（见 shownImages.ts 文件头）。
  */
-import { Type } from 'typebox'
-import type { TArray, TObject, TOptional, TString } from 'typebox'
+import { arr, obj, opt, str } from '@earendil-works/pi-schema'
 import { BaseTool, type ToolResult } from '@shuvix/agent-runtime'
 import {
   SHOW_IMAGE_LIMITS,
@@ -30,16 +29,14 @@ export const SHOW_IMAGE_DESCRIPTION =
   'Markdown images in your reply do not render, so use this instead. ' +
   'Do not describe the images again beyond what the user needs.'
 
-export const ShowImageParamsSchema: TObject<{
-  images: TArray<TObject<{ path: TString; caption: TOptional<TString> }>>
-}> = Type.Object({
-  images: Type.Array(
-    Type.Object({
-      path: Type.String({
+export const ShowImageParamsSchema = obj({
+  images: arr(
+    obj({
+      path: str({
         description: `A ${SHOWN_IMAGE_FORMAT_NAMES} file on this machine; a relative path is resolved against the working directory`
       }),
-      caption: Type.Optional(
-        Type.String({
+      caption: opt(
+        str({
           description: `A short line shown under the image (at most ${SHOW_IMAGE_LIMITS.caption} characters)`
         })
       )

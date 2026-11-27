@@ -14,7 +14,7 @@ import { describe, it, expect, afterAll, vi } from 'vitest'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Type } from 'typebox'
+import { obj } from '@earendil-works/pi-schema'
 import type { Agent, ToolDiagnostic, ToolExecutionApi } from '@earendil-works/pi-durable'
 import { BaseTool, type AnyTool } from '@shuvix/agent-runtime'
 import {
@@ -49,7 +49,7 @@ function textProbe(...texts: string[]): AnyTool {
     name: 'probe',
     label: 'probe',
     description: 'probe tool',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     replay: 'unsafe',
     execute: async () => ({ output: texts.map((text) => ({ type: 'text' as const, text })) })
   } as unknown as AnyTool
@@ -149,7 +149,7 @@ describe('WD 两层叠起来之后的元数据', () => {
     class Probe extends BaseTool {
       readonly name = 'probe'
       readonly label = 'Probe'
-      readonly parameters = Type.Object({})
+      readonly parameters = obj({})
       readonly replay = 'safe' as const
       readonly outputStrategy = 'keep-end' as const
       readonly outputMaxBytes = 4096

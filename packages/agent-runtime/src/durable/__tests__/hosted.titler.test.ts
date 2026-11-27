@@ -110,18 +110,26 @@ describe('P2-08 B · titler dispatch (observe)', () => {
       runState: string
       interrupted: boolean
     }[] = []
-    const stop = session.harness.subscribeCommits((publication) => {
-      const created = publication.changes.find(
-        (change) => change.type === 'conversation' && change.value.owner !== undefined
-      )
-      if (created === undefined || created.type !== 'conversation') return
-      seen.push({
-        changes: publication.changes,
-        identity: session.agentIdentity(created.value.id)?.kind,
-        runState: session.runState,
-        interrupted: session.isInterrupted()
+    const stop = (
+      (obs) => () =>
+        obs.detach()
+    )(
+      session.harness.observeCommits({
+        advance: (publication) => {
+          const created = publication.changes.find(
+            (change) => change.type === 'conversation' && change.value.owner !== undefined
+          )
+          if (created === undefined || created.type !== 'conversation') return
+          seen.push({
+            changes: publication.changes,
+            identity: session.agentIdentity(created.value.id)?.kind,
+            runState: session.runState,
+            interrupted: session.isInterrupted()
+          })
+        },
+        end: () => {}
       })
-    })
+    )
     queueRoles(rig.kit, { titler: [answer('Hooked title')] })
     fire(rig)
     await waitFor(() => rig.ends().length === 1)
@@ -156,7 +164,10 @@ describe('P2-08 B · titler dispatch (observe)', () => {
         change.conversationId === T &&
         change.record.kind === AgentStateDoc.definition.kind
     )
-    const value = state?.type === 'document' ? (state.value as Record<string, unknown>) : {}
+    const value =
+      state?.type === 'document' && state.kind === 'change'
+        ? (state.value as Record<string, unknown>)
+        : {}
     expect(value).toMatchObject({ kind: 'spawned', dispatch: 'hook', hook: 'auto-title' })
     expect(typeof value.persona).toBe('string')
     expect(rig.t.warnings).toEqual([])
@@ -273,11 +284,19 @@ describe('P2-08 B · titler dispatch (observe)', () => {
     const session = rig.session
     const before = rig.t.statesOf('s1')
     const bad: string[] = []
-    const stop = session.harness.subscribeCommits(() => {
-      if (session.runState !== 'idle' || session.isBusy()) {
-        bad.push(`${session.runState}/${session.isBusy()}`)
-      }
-    })
+    const stop = (
+      (obs) => () =>
+        obs.detach()
+    )(
+      session.harness.observeCommits({
+        advance: () => {
+          if (session.runState !== 'idle' || session.isBusy()) {
+            bad.push(`${session.runState}/${session.isBusy()}`)
+          }
+        },
+        end: () => {}
+      })
+    )
     const h = held(answer('Hooked title'))
     queueRoles(rig.kit, { titler: [h.step] })
     fire(rig)

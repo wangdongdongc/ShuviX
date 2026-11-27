@@ -14,7 +14,7 @@
  * 「没有未处理的错误」两头都看：vitest 自己遇到未处理的拒绝 / 未捕获异常会让这次运行失败；用例里另外在
  * process 上挂监听器记下来、断言为空，失败时能看到是哪一条。
  */
-import type { MutableReplicatedState, ReplicatedStateDelivery } from '@earendil-works/chord'
+import type { MutableReplicatedState, ReplicatedStateDelivery } from '../../../sync/replicatedState'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { afterEach, describe, expect, it } from 'vitest'

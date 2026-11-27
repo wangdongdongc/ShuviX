@@ -14,7 +14,8 @@
  *  - **faux 按内容路由**（队列是全局的）：titler 的请求带 `<hook_event trigger="session.prompt-accepted">`、
  *    reviewer 的带 `trigger="permission.request"`，其余是根的（`queueRoles`）。
  */
-import { Type, type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import {
   defineTool,
   type ConversationId,
@@ -22,7 +23,7 @@ import {
   type TaskRecord,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import {
   createHookRunner,
@@ -240,7 +241,7 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
     defineTool({
       name: 'askOp',
       description: 'askOp: an operation the policies want judged',
-      parameters: Type.Object({}),
+      parameters: obj({}),
       replay: options.askReplay ?? 'unsafe',
       execute: async (_args, api, context) => {
         const signal = options.askSignal?.() ?? context.abortSignal
@@ -261,7 +262,7 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
     defineTool({
       name: 'titleProbe',
       description: 'titleProbe: applies a title',
-      parameters: Type.Object({ title: Type.Optional(Type.String()) }),
+      parameters: obj({ title: opt(str()) }),
       execute: async (_args, api) => {
         titleCalls.push({ sessionId, conversationId: api.conversationId, taskId: api.taskId })
         return { output: [{ type: 'text', text: 'titled' }] }

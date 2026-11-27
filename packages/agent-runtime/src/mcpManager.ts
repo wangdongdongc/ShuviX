@@ -29,7 +29,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SseError } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { Type, type TSchema } from 'typebox'
+import { unsafe, type Schema } from '@earendil-works/pi-schema'
 import type { ConversationId, ToolRegistration } from '@earendil-works/pi-durable'
 import { catchToolErrors, toExecutionResult, toolErrorResult } from './tools/toolResult'
 import type { ToolContent, ToolResult } from './tools/toolResult'
@@ -202,7 +202,7 @@ export interface McpRegistrationOptions {
 }
 
 /** MCP 工具的 durable 注册项：工具名 `mcp__<server>__<tool>`，带安全门要的 mcpMeta */
-export type McpToolRegistration = ToolRegistration<TSchema> &
+export type McpToolRegistration = ToolRegistration<Schema> &
   McpToolMeta & {
     readonly label: string
     readonly replay: 'unsafe'
@@ -332,9 +332,9 @@ function jsonCopy<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-/** JSON Schema → TypeBox（Type.Unsafe 原样透传给 LLM） */
-function jsonSchemaToTypebox(schema: McpDiscoveredTool['inputSchema']): TSchema {
-  return Type.Unsafe<Record<string, unknown>>(schema as Record<string, unknown>)
+/** JSON Schema → pi-schema（unsafe 原样透传给 LLM） */
+function jsonSchemaToTypebox(schema: McpDiscoveredTool['inputSchema']): Schema {
+  return unsafe<Record<string, unknown>>(schema as Schema)
 }
 
 interface McpContentBlock {

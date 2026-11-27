@@ -27,7 +27,7 @@
  *  - 段落 key 用模型认得的名字（与围栏标签一致）：支持中途 system 消息的 API 会把增量写成
  *    `Updated system prompt section "project_prompt": …`，key 对模型可见。避开 durable 保留的 `instructions`。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { Message } from '@earendil-works/pi-ai'
 import {
   defineExtension,

@@ -23,7 +23,7 @@ import {
 import type { AuthorizeSessionAccess } from '../../services/subSessionRunner'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
 import { sessionMentionPayload } from '@shuvix/chat-protocol/utils/inlineTokens'
-import { Check } from 'typebox/value'
+import { compile } from '@earendil-works/pi-schema'
 import {
   executeTool,
   failureText,
@@ -155,7 +155,7 @@ const setTitle = (title?: string): Promise<InvokedToolResult> =>
 
 describe('SessionTool — 参数面与目标会话边界', () => {
   it('schema 不含 sessionId：能点名的只有 session_id（且必须是自己的子会话）', () => {
-    const keys = Object.keys(mod.SessionParamsSchema.properties)
+    const keys = Object.keys(mod.SessionParamsSchema.properties as object)
     expect(keys).toEqual([
       'action',
       'title',
@@ -584,7 +584,7 @@ describe('SessionTool — 子会话 action', () => {
     const legacy = { run_in_background: false, timeout_seconds: 30 }
     // typebox Object 没设 additionalProperties:false：多出来的旧键过得了校验
     expect(
-      Check(mod.SessionParamsSchema, {
+      compile(mod.SessionParamsSchema).check({
         action: 'prompt-session',
         session_id: 'sub-1',
         message: 'go',
@@ -1425,8 +1425,8 @@ describe('SessionTool — 旧动作名与 sub_session_id 的别名（XS-60）', 
     expect(failure).toBe(
       `Unknown action "rename-sub-session". Valid actions: ${CURRENT_ACTIONS.join(', ')}`
     )
-    const enumValues = (mod.SessionParamsSchema.properties.action as unknown as { enum: string[] })
-      .enum
+    const props = mod.SessionParamsSchema.properties as Record<string, { enum: string[] }>
+    const enumValues = props.action.enum
     expect(enumValues).toEqual(CURRENT_ACTIONS)
     for (const [legacy] of LEGACY_PAIRS) {
       expect(failure).not.toContain(legacy)
@@ -2259,7 +2259,7 @@ describe('SessionTool — move-session（MV-T）', () => {
 
   it('MV-T1 session_ids 进 schema；session_ids 与 session_id 合起来交给 plan（原样，不在工具层去重）', async () => {
     expect(
-      Check(mod.SessionParamsSchema, { action: 'move-session', session_ids: ['a', 'b'] })
+      compile(mod.SessionParamsSchema).check({ action: 'move-session', session_ids: ['a', 'b'] })
     ).toBe(true)
     mocks.planSessionMove.mockReturnValue(planOf({ already: [{ id: 'a', title: 'T-a' }] }))
     mocks.applySessionMove.mockResolvedValue(outcomeOf({ already: [{ id: 'a', title: 'T-a' }] }))

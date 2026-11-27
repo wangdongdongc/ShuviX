@@ -31,7 +31,7 @@ export interface CommitRecorder {
 
 const KINDS = { live: 'pi.live', inbox: 'pi.inbox', usage: 'pi.usage' } as const
 
-export function recordCommits(harness: Pick<Harness, 'subscribeCommits'>): CommitRecorder {
+export function recordCommits(harness: Pick<Harness, 'observeCommits'>): CommitRecorder {
   const recorder: Omit<CommitRecorder, 'stop'> = {
     live: [],
     inbox: [],
@@ -54,7 +54,7 @@ export function recordCommits(harness: Pick<Harness, 'subscribeCommits'>): Commi
         })
         continue
       }
-      if (change.type !== 'document' || change.value === null) continue
+      if (change.type !== 'document' || change.kind !== 'change') continue
       const conversationId = change.conversationId as unknown as number | undefined
       // 深拷贝：发布的值是不可变修订，但拷一份更稳（断言时不会碰到共享结构）
       const value = structuredClone(change.value) as unknown
@@ -71,6 +71,6 @@ export function recordCommits(harness: Pick<Harness, 'subscribeCommits'>): Commi
       }
     }
   }
-  const stop = harness.subscribeCommits(observe)
-  return { ...recorder, stop }
+  const obs = harness.observeCommits({ advance: observe, end: () => {} })
+  return { ...recorder, stop: () => obs.detach() }
 }

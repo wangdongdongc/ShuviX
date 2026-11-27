@@ -21,7 +21,7 @@
  * 前三份文档都在每个创建 / fork 对话的提交里补种（`seedConversationDocs`，挂在
  * `HarnessOptions.conversationCreated` 上）：已存在的文档原样保留，绝不重置会话状态。
  */
-import { copyJson, type JsonValue } from '@earendil-works/chord'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
 import {
   defineDoc,
   defineEntry,
@@ -76,7 +76,8 @@ export const SessionStateDoc = defineDoc<SessionState>({
   kind: 'shuvix.session-state',
   version: 1,
   scope: 'session',
-  initial: () => ({ deferredNotices: [] })
+  initial: () => ({ deferredNotices: [] }),
+  checkpointWhen: () => true
 })
 
 /**
@@ -155,7 +156,8 @@ export const AgentStateDoc = defineDoc<AgentStateRecord>({
   scope: 'conversation',
   history: 'rewindable',
   fork: 'asOf',
-  initial: () => ({})
+  initial: () => ({}),
+  checkpointWhen: () => true
 })
 
 export type DisplayState = {
@@ -169,7 +171,8 @@ export const DisplayDoc = defineDoc<DisplayState>({
   scope: 'conversation',
   history: 'rewindable',
   fork: 'asOf',
-  initial: () => ({ items: {} })
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 32
 })
 
 export type SourceState = {
@@ -183,7 +186,8 @@ export const SourceDoc = defineDoc<SourceState>({
   scope: 'conversation',
   history: 'rewindable',
   fork: 'asOf',
-  initial: () => ({ items: {} })
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 32
 })
 
 export type ArtifactPinsState = {
@@ -205,7 +209,8 @@ export const ArtifactPinsDoc = defineDoc<ArtifactPinsState>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ items: {} })
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 32
 })
 
 export type RedactionTableState = {
@@ -230,7 +235,8 @@ export const RedactionTableDoc = defineDoc<RedactionTableState>({
   kind: 'shuvix.redaction-table',
   version: 1,
   scope: 'session',
-  initial: () => ({ items: {} })
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 32
 })
 
 export type NoticeData = { kind: string; [key: string]: JsonValue }

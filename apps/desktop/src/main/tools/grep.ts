@@ -5,7 +5,7 @@
 
 import { stat } from 'fs/promises'
 import { resolve, relative, dirname, basename } from 'path'
-import { Type } from 'typebox'
+import { obj, opt, str } from '@earendil-works/pi-schema'
 import { BaseTool, callOwnerOf, type ToolCallScope } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
@@ -27,20 +27,18 @@ const MAX_LINE_LENGTH = 2000
 /** 最大返回匹配数 */
 const LIMIT = 100
 
-const GrepParamsSchema = Type.Object({
-  pattern: Type.String({
+const GrepParamsSchema = obj({
+  pattern: str({
     description:
       'The regex pattern to search for in file contents (e.g. "function\\s+\\w+", "TODO|FIXME")'
   }),
-  path: Type.Optional(
-    Type.String({
+  path: opt(
+    str({
       description:
         'The directory or single file to search in (optional, defaults to current working directory)'
     })
   ),
-  include: Type.Optional(
-    Type.String({ description: 'File glob pattern to filter (e.g. "*.ts", "*.{js,jsx}")' })
-  )
+  include: opt(str({ description: 'File glob pattern to filter (e.g. "*.ts", "*.{js,jsx}")' }))
 })
 
 /** rg 拒绝执行时交给模型的话：rg 自己的说明原样附上；是正则写错时再说怎么转义 */

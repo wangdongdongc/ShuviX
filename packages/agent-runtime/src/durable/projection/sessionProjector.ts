@@ -34,12 +34,12 @@
  * 共享与回收：`DurableSession.projector()` 惰性建一个、同一时刻只有一个；`acquire()` / `release()` 计数，
  * 最后一个 release 之后拆掉（状态保留最后的值）；会话关停时一并拆掉。不依赖 Node / Electron。
  */
+import type { Context } from '@earendil-works/chord/context'
 import {
   replicatedState,
-  type Context,
   type MutableReplicatedState,
   type ReplicatedStateDelivery
-} from '@earendil-works/chord'
+} from '../../sync/replicatedState'
 import {
   AssistantEntry,
   LiveDoc,
@@ -299,7 +299,19 @@ export abstract class ProjectorCore<V extends object> {
     if (this.disposedFlag || state === undefined || mount === undefined || mount.stale) {
       return undefined
     }
-    if (mount.conversationId !== conversationId || mount.value !== frame) return undefined
+    if (mount.conversationId !== conversationId) return undefined
+    if (
+      mount.value !== frame &&
+      !(
+        mount.value.conversation.id === frame.conversation.id &&
+        mount.value.entries.length === frame.entries.length &&
+        mount.value.entries.at(-1)?.id === frame.entries.at(-1)?.id &&
+        mount.value.docs['pi.live'] === frame.docs['pi.live'] &&
+        mount.value.docs['pi.inbox'] === frame.docs['pi.inbox']
+      )
+    ) {
+      return undefined
+    }
     if (this.refreshScheduled) return undefined
     return state.value
   }
@@ -348,9 +360,11 @@ export abstract class ProjectorCore<V extends object> {
 
   /** 先挂旁路（子类在调 `mountConversation` 之前调它），返回之后的发布都会被记下 */
   protected attachSideChannel(): void {
-    this.unsubscribers.push(
-      this.host.harness.subscribeCommits((publication) => this.sideChannel(publication))
-    )
+    const observation = this.host.harness.observeCommits({
+      advance: (publication) => this.sideChannel(publication),
+      end: () => {}
+    })
+    this.unsubscribers.push(() => observation.detach())
   }
 
   /** 登记一个退订函数（拆掉时调用） */
@@ -370,7 +384,7 @@ export abstract class ProjectorCore<V extends object> {
     const harness = this.host.harness
     const conversation = await harness.conversation(conversationId, BG)
     if (conversation === undefined) throw new Error(`Conversation ${conversationId} does not exist`)
-    const watch = await conversation.watch(BG)
+    const watch = await conversation.watch(BG, { min: 2000, max: 4000 })
     try {
       const value = watch.value
       // 旁路记下的更新（挂载途中的写入）优先
@@ -493,8 +507,8 @@ export abstract class ProjectorCore<V extends object> {
   }
 
   private listen(mount: ProjectorMount): void {
-    mount.watch.start(async (value) => {
-      this.onFrame(mount, value)
+    mount.watch.start(async (call) => {
+      if (call.kind === 'value') this.onFrame(mount, call.value)
     })
   }
 
@@ -732,6 +746,7 @@ export abstract class ProjectorCore<V extends object> {
           if (change.record.key !== undefined) continue
           const kind = change.record.kind
           if (kind === DisplayDoc.definition.kind) {
+            if (change.kind !== 'change') continue
             const display = this.displayOf(change.conversationId)
             const items = isRecord(change.value) ? change.value.items : undefined
             if (isRecord(items)) {
@@ -741,6 +756,7 @@ export abstract class ProjectorCore<V extends object> {
               }
             }
           } else if (kind === SourceDoc.definition.kind) {
+            if (change.kind !== 'change') continue
             const sources = this.sourcesOf(change.conversationId)
             const items = isRecord(change.value) ? change.value.items : undefined
             if (isRecord(items)) {
@@ -750,7 +766,11 @@ export abstract class ProjectorCore<V extends object> {
               }
             }
           } else if (kind === LiveDoc.definition.kind) {
-            this.observeOtherLive(change.conversationId, change.value, change.ops)
+            if (change.kind === 'change') {
+              this.observeOtherLive(change.conversationId, change.value, change.ops)
+            } else {
+              this.observeOtherLive(change.conversationId, null, [])
+            }
           }
         }
       }
@@ -1009,8 +1029,8 @@ export class SessionProjectorImpl extends ProjectorCore<SessionView> implements 
     for (const change of publication.changes) {
       if (
         change.type !== 'document' ||
-        change.record.kind !== SessionStateDoc.definition.kind ||
-        change.value === null
+        change.kind !== 'change' ||
+        change.record.kind !== SessionStateDoc.definition.kind
       ) {
         continue
       }

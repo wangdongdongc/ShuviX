@@ -27,7 +27,7 @@
  *
  * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索 / 管理员派发全部注入。
  */
-import { Type } from 'typebox'
+import { arr, num, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import type { ToolResult } from '../tools/toolResult'
 import type { FileSystemPort } from '../fileTools/port'
 import {
@@ -80,47 +80,43 @@ const MIGRATE_TARGET_HINT =
 /** 一次 `migrate` 交给管理员的原文总量上限（字节） */
 const MIGRATE_MAX_BYTES = 200 * 1024
 
-export const KnowledgeParamsSchema = Type.Object({
-  action: Type.Unsafe<KnowledgeAction>({
-    type: 'string',
-    enum: [...ACTIONS],
+export const KnowledgeParamsSchema = obj({
+  action: oneOf(ACTIONS, {
     description: 'See the tool description.'
   }),
-  base: Type.Optional(
-    Type.String({
+  base: opt(
+    str({
       description:
         'A name from "bases". Required for "list", "read", "submit", "organize" and "migrate" (where the entries go); "search" without it covers every base.'
     })
   ),
-  query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
-  entry: Type.Optional(
-    Type.String({
+  query: opt(str({ description: 'For "search": free-text query.' })),
+  entry: opt(
+    str({
       description:
         'An entry\'s path inside its base, as "search" and "list" give it. For "read": the entry to read. For "submit": the entry the submission corrects or extends, if any.'
     })
   ),
-  project: Type.Optional(
-    Type.String({
+  project: opt(
+    str({
       description:
         'Another project, by its name: its own knowledge base. With "list", "search" or "read" it takes the place of `base`. With "migrate" it is the project the entries come from.'
     })
   ),
-  entries: Type.Optional(
-    Type.Array(Type.String(), {
+  entries: opt(
+    arr(str(), {
       description: `For "migrate": the entries to bring over (at most ${KNOWLEDGE_MIGRATE_MAX_ENTRIES}), each by its path inside that project's base; a folder path takes every entry under it, and "/" is the whole base.`
     })
   ),
-  content: Type.Optional(
-    Type.String({
+  content: opt(
+    str({
       description:
         'For "submit": what to record, in markdown. For "organize": what the user asked for in particular, if anything.'
     })
   ),
-  offset: Type.Optional(
-    Type.Number({ description: 'For "read": the line to start at (1-based).' })
-  ),
-  limit: Type.Optional(
-    Type.Number({
+  offset: opt(num({ description: 'For "read": the line to start at (1-based).' })),
+  limit: opt(
+    num({
       description:
         'For "search" / "list": max results (default 20 / 100). For "read": max lines (default 2000).'
     })

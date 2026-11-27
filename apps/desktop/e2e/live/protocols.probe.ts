@@ -71,7 +71,6 @@ import {
   fauxText,
   fauxThinking,
   fauxToolCall,
-  Type,
   type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
@@ -87,6 +86,7 @@ import {
   type Usage,
   type UserMessage
 } from '@earendil-works/pi-ai'
+import { obj, str } from '@earendil-works/pi-schema'
 import {
   AssistantEntry,
   LiveDoc,
@@ -646,7 +646,7 @@ function probeTool(nonce: Rig['nonce']): ToolRegistration {
   return defineTool({
     name: 'probe_lookup',
     description: 'Look up the value stored under a key. Always call this when asked to look up.',
-    parameters: Type.Object({ key: Type.String({ description: 'The key to look up' }) }),
+    parameters: obj({ key: str({ description: 'The key to look up' }) }),
     execute: async () => {
       nonce.calls++
       nonce.value = `PX-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -994,7 +994,7 @@ for (const family of FAMILIES) {
 
         // The UI path: the same projection the renderer gets.
         const conversation = await session.currentConversation()
-        const state = await conversation.viewState(BG)
+        const state = await conversation.watch(BG, { min: 2000, max: 4000 })
         let block: AssistantToolBlock | undefined
         try {
           const { entries: live, docs } = state.value
@@ -1015,7 +1015,7 @@ for (const family of FAMILIES) {
                 candidate.type === 'tool' && candidate.toolCallId === call?.id
             )
         } finally {
-          state.dispose()
+          await state.stop()
         }
 
         const problems: string[] = []

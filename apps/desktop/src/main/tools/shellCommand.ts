@@ -9,15 +9,7 @@
  * 哪个工具在哪个平台上存在由注册表的 `platforms` 决定（见 toolRegistry）。
  */
 
-import {
-  Type,
-  type TBoolean,
-  type TNumber,
-  type TObject,
-  type TOptional,
-  type TProperties,
-  type TString
-} from 'typebox'
+import { bool, num, obj, opt, str, type Schema } from '@earendil-works/pi-schema'
 import {
   BaseTool,
   callOwnerOf,
@@ -60,13 +52,7 @@ export interface ShellCommandParams {
  * `dangerouslyDisableSandbox` 在类型上恒为可选字段；运行时只有沙箱启用的工具实例才真的带它 ——
  * 提示词绝不能指向 agent 没有的东西。
  */
-export type ShellCommandParamsSchema = TObject<{
-  command: TString
-  description: TString
-  timeout: TOptional<TNumber>
-  run_in_background: TOptional<TBoolean>
-  dangerouslyDisableSandbox: TOptional<TBoolean>
-}>
+export type ShellCommandParamsSchema = Schema<ShellCommandParams>
 
 /**
  * 越界参数的说明。名字刻意沿用 Claude Code 的 `dangerouslyDisableSandbox`（camelCase，与
@@ -82,18 +68,18 @@ export function shellCommandParamsSchema(text: {
   /** 本工具实例的命令在沙箱里跑：带上越界参数 */
   sandboxed?: boolean
 }): ShellCommandParamsSchema {
-  const properties: TProperties = {
-    command: Type.String({ description: text.command }),
-    description: Type.String({
+  const base = {
+    command: str({ description: text.command }),
+    description: str({
       description: 'Brief description of what this command does and why.'
     }),
-    timeout: Type.Optional(
-      Type.Number({
+    timeout: opt(
+      num({
         description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Increase for long-running commands. Pass 0 for no time limit.`
       })
     ),
-    run_in_background: Type.Optional(
-      Type.Boolean({
+    run_in_background: opt(
+      bool({
         // 用法说明留在此处（随 tools 块每次请求发一份、走 prompt cache），
         // 不进工具结果 —— 结果会永久留在上下文并被每一步重发。见 formatStartReceipt。
         description: text.runInBackground
@@ -101,11 +87,12 @@ export function shellCommandParamsSchema(text: {
     )
   }
   if (text.sandboxed) {
-    properties.dangerouslyDisableSandbox = Type.Optional(
-      Type.Boolean({ description: DISABLE_SANDBOX_PARAM })
-    )
+    return obj({
+      ...base,
+      dangerouslyDisableSandbox: opt(bool({ description: DISABLE_SANDBOX_PARAM }))
+    }) as ShellCommandParamsSchema
   }
-  return Type.Object(properties) as unknown as ShellCommandParamsSchema
+  return obj(base) as ShellCommandParamsSchema
 }
 
 /**

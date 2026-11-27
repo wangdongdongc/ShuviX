@@ -12,7 +12,7 @@
  * 整条链（真会话里续跑、自我封顶、用户输入优先、派生 agent）在 integration/emptyReply.test.ts 与
  * spawn.emptyReply.test.ts；三处装内置扩展都带 hook 在 lock.hooks.test.ts。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import {
   fauxAssistantMessage,
@@ -180,6 +180,7 @@ describe('ER-04 the onYield hook', () => {
   it('ER-04c an empty answer after a tool result → continue with the notice; reads the asking conversation; logs info once', async () => {
     const r = rig([user, assistant('toolUse'), toolResult])
     expect(await r.onYield(EMPTY, api, BACKGROUND_CONTEXT)).toEqual({
+      kind: 'continue',
       continue: EMPTY_REPLY_NOTICE_TEXT
     })
     expect(r.conversation).toHaveBeenCalledTimes(1)

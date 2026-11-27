@@ -12,7 +12,8 @@
  * 第二遍。同一个状态上可以挂多个记录器（共用一个影子）；最后一个摘掉时恢复原方法。
  */
 import { isDeepStrictEqual } from 'node:util'
-import type { Context, MutableReplicatedState } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import type { MutableReplicatedState } from '../../../sync/replicatedState'
 import { track, type Draft, type Op, type Tracker } from '@earendil-works/chord/delta'
 
 export interface StateRevision<V> {

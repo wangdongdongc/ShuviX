@@ -10,7 +10,8 @@
  * 中止的范围（SCOPE）：I3 信号聋的工具在停止开始之后才问 —— 当场取消、中止落定，同一段时间根发起的卡片照样挂着，
  * 之后追问发起的询问照常受理 · I4 会话中止一张不留、关窗口、走中止前 seam；中止一个子对话这三样都不碰。
  */
-import { fauxText, fauxToolCall, Type } from '@earendil-works/pi-ai'
+import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   defineTool,
   type ConversationId,
@@ -76,11 +77,19 @@ function taskChanges(
   conversationId: ConversationId
 ): { count: number; stop: () => void } {
   const seen = { count: 0, stop: () => {} }
-  seen.stop = d.session.harness.subscribeCommits((publication) => {
-    for (const change of publication.changes) {
-      if (change.type === 'task' && change.value.conversationId === conversationId) seen.count++
-    }
-  })
+  seen.stop = (
+    (obs) => () =>
+      obs.detach()
+  )(
+    d.session.harness.observeCommits({
+      advance: (publication) => {
+        for (const change of publication.changes) {
+          if (change.type === 'task' && change.value.conversationId === conversationId) seen.count++
+        }
+      },
+      end: () => {}
+    })
+  )
   return seen
 }
 
@@ -216,13 +225,21 @@ describe('SpawnCoordinator · continue', () => {
     const C = await headline(d)
     const rootBefore = await transcript(await d.session.currentConversation())
     const submissions: SubmissionRecord[] = []
-    const stop = d.session.harness.subscribeCommits((publication) => {
-      for (const change of publication.changes) {
-        if (change.type === 'submission' && change.value.conversationId === C) {
-          submissions.push(change.value)
-        }
-      }
-    })
+    const stop = (
+      (obs) => () =>
+        obs.detach()
+    )(
+      d.session.harness.observeCommits({
+        advance: (publication) => {
+          for (const change of publication.changes) {
+            if (change.type === 'submission' && change.value.conversationId === C) {
+              submissions.push(change.value)
+            }
+          }
+        },
+        end: () => {}
+      })
+    )
     const busy: boolean[] = []
     const gate = held(answer('more ok'))
     d.t.kit.queue(gate.step)
@@ -540,7 +557,7 @@ function namedAskTool(
   return defineTool({
     name,
     description: `${name}: asks the user`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async (_args, api, context) => {
       options.onStart?.(context.abortSignal)
       if (options.gate !== undefined) await options.gate

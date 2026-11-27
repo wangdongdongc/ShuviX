@@ -6,7 +6,7 @@
  * describe 惰性求值 —— 静态工具直接返回常量 schema+描述，动态工具（ssh 列凭据 / Agent 列子代理）
  * 在调用时计算；全程不实例化工具、不需要宿主运行时上下文，因此各端无需占位 ctx / 临时句柄。
  */
-import type { TSchema } from 'typebox'
+import type { JsonSchema } from '@earendil-works/pi-schema'
 import type { BuiltinToolDefinition, ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 
 /** 单个工具「发给 LLM」定义的注册条目（宿主无关） */
@@ -20,7 +20,7 @@ export interface ToolDefinitionEntry {
   icon?: string
   iconColor?: string
   /** 惰性求出该工具发给 LLM 的描述与参数 schema；纯读、无副作用 */
-  describe: () => { description: string; parameters: TSchema }
+  describe: () => { description: string; parameters: JsonSchema }
 }
 
 /**
@@ -32,7 +32,7 @@ export function toBuiltinToolDefinitions(
 ): BuiltinToolDefinition[] {
   const out: BuiltinToolDefinition[] = []
   for (const e of entries) {
-    let described: { description: string; parameters: TSchema }
+    let described: { description: string; parameters: JsonSchema }
     try {
       described = e.describe()
     } catch {

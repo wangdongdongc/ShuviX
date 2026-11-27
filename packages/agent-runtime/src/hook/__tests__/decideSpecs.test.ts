@@ -73,18 +73,10 @@ describe('schema 经真 NextTool', () => {
 
   it.each([
     ["decision: 'maybe'", { ...verdictOf(), decision: 'maybe' }, /\/decision:/],
-    [
-      '缺 reason',
-      (({ reason: _r, ...rest }) => rest)(verdictOf()),
-      /\(root\): must have required properties reason/
-    ],
+    ['缺 reason', (({ reason: _r, ...rest }) => rest)(verdictOf()), /\/reason: missing/],
     ["risk: 'LOW'", { ...verdictOf(), risk: 'LOW' }, /\/risk:/],
-    ['summary: 42', { ...verdictOf(), summary: 42 }, /\/summary: must be string/],
-    [
-      '多出 confidence',
-      { ...verdictOf(), confidence: 0.9 },
-      /\(root\): must not have additional properties/
-    ]
+    ['summary: 42', { ...verdictOf(), summary: 42 }, /\/summary: expected string/],
+    ['多出 confidence', { ...verdictOf(), confidence: 0.9 }, /\/confidence: unknown field/]
   ])(
     'DS-3 不合格（%s）→ isError、不带 details、错误点名那个字段',
     async (_label, params, pattern) => {

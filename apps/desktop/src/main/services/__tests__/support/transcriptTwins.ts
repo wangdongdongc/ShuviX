@@ -17,7 +17,7 @@
  */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai'
 import type { ImageContent, TextContent, ThinkingContent, ToolCall } from '@earendil-works/pi-ai'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import {
   MemoryStorage,
   type ConversationId,

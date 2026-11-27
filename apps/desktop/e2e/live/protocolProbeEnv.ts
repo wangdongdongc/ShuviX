@@ -135,7 +135,7 @@ const BUILTIN_FAMILIES: readonly {
     id: 'kimi',
     label: 'Kimi UA check (kimi-coding)',
     slug: 'kimi-coding',
-    api: 'anthropic-messages',
+    api: 'openai-completions',
     stem: 'KIMI'
   }
 ]

@@ -145,7 +145,11 @@ describe('P1-12 · compaction', () => {
       })
 
       await withTimeout(summary.reached, 3000, 'summary request')
-      expect(statuses(world)[0]).toMatchObject({ reason: 'threshold', blocking: false, attempt: 1 })
+      expect(statuses(world)[0]).toMatchObject({
+        trigger: 'threshold',
+        blocking: false,
+        attempt: 1
+      })
       expect(await liveCompactions(session)).toHaveLength(1)
       expect(session.isBusy()).toBe(false)
       await waitFor(() => session.runState === 'busy', 1000, 'background compaction counts as busy')
@@ -285,8 +289,8 @@ describe('P1-12 · compaction', () => {
       world.chat(modelError(OVERFLOW), answer('a3'))
       expect(await withTimeout(session.submitUser('q3'), 5000, 'q3')).toEqual({})
 
-      expect(statuses(world).map(({ reason, blocking }) => ({ reason, blocking }))).toEqual([
-        { reason: 'overflow', blocking: true }
+      expect(statuses(world).map(({ trigger, blocking }) => ({ trigger, blocking }))).toEqual([
+        { trigger: 'overflow', blocking: true }
       ])
       expect(world.model.requests.map((request) => request.kind).slice(-3)).toEqual([
         'chat',
@@ -325,8 +329,25 @@ describe('P1-12 · compaction', () => {
       ).toBe(false)
 
       // 用量：报错的那一次请求与摘要都记了账
-      expect(failed?.role === 'assistant' && failed.usage.input).toBeGreaterThan(0)
-      expect(await ledgerInput(session)).toBeGreaterThan(assistantInputSum(all))
+      expect(failed?.role === 'assistant' && failed.usage.totalTokens).toBeGreaterThan(0)
+      const usageDoc = await session.harness.snapshot(
+        UsageDoc,
+        (await session.currentConversation()).id,
+        BG
+      )
+      const ledgerTotal = Object.values(usageDoc?.models ?? {}).reduce(
+        (n, m) => n + m.totalTokens,
+        0
+      )
+      const assistantTotal = all.reduce(
+        (n, e) =>
+          n +
+          (e.kind === 'pi.assistant' && e.model?.[0]?.role === 'assistant'
+            ? e.model[0].usage.totalTokens
+            : 0),
+        0
+      )
+      expect(ledgerTotal).toBeGreaterThan(assistantTotal)
     },
     TIMEOUT
   )
@@ -349,7 +370,7 @@ describe('P1-12 · compaction', () => {
       const seen = statuses(world)
       expect(seen.some((status) => status.retry?.error.includes('503'))).toBe(true)
       expect(seen.some((status) => status.attempt === 2)).toBe(true)
-      expect(seen.every((status) => status.reason === 'overflow' && status.blocking)).toBe(true)
+      expect(seen.every((status) => status.trigger === 'overflow' && status.blocking)).toBe(true)
       expect(world.model.summaries).toHaveLength(2)
       const tail = (await entries(session)).filter((entry) => entry.kind !== 'pi.system').slice(-3)
       expect(tail.map((entry) => entry.kind)).toEqual([
@@ -424,7 +445,7 @@ describe('P1-12 · compaction', () => {
       const sending = session.submitUser('q3')
       await withTimeout(summary.reached, 3000, 'summary request')
       expect(statuses(world)).toEqual([
-        expect.objectContaining({ reason: 'threshold', blocking: true })
+        expect.objectContaining({ trigger: 'threshold', blocking: true })
       ])
       await sleep(100)
       expect(world.model.chats.length).toBe(chatsBefore)

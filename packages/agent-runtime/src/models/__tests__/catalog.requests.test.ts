@@ -208,10 +208,10 @@ describe('custom providers', () => {
 
   it('REQ-10 risk probe: a keyless custom row whose uuid contains 500 is not retryable (M4)', async () => {
     const id = '0193a500-0000-7000-8000-000000000500'
-    // premise: the raw pi text with the uuid in it WOULD be classified as retryable
+    // pi-ai 1.6.1+ fixed the upstream regex so a UUID containing 500 is no longer misclassified as retryable
     const raw = { stopReason: 'error', errorMessage: `Provider is not configured: ${id}` }
     expect(isRetryableAssistantError(raw as Parameters<typeof isRetryableAssistantError>[0])).toBe(
-      true
+      false
     )
 
     stubFetch()

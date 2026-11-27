@@ -43,7 +43,7 @@
  * 段落扩展（`promptExtensionsFor` 的次序）、`shuvix.agent.<对话>` —— 永远显式（durable 的缺省是
  * 「全部已安装的扩展」）。
  */
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { getCurrentTools, type Message } from '@earendil-works/pi-ai'
 import {
   configure,

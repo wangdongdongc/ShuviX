@@ -3,7 +3,7 @@
  * 会话运行时自己发起的调用一律用不可取消的后台 Context —— 取消一次「等待」只取消等待本身，
  * 从不取消已经提交的工作（durable 的语义），所以没有理由在这里传播调用方的 signal。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 /** 永不取消的后台 Context */

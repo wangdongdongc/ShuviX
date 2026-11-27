@@ -3,7 +3,7 @@
  *
  * 宿主无关、浏览器安全：只依赖 chord 根入口与 chat-protocol。
  */
-import { copyJson, type JsonValue } from '@earendil-works/chord'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
 import {
   capabilitiesOfStorageKind,
   HARNESS_V3_JSONL

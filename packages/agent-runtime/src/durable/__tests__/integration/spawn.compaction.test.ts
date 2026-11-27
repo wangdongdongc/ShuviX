@@ -112,9 +112,9 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
       expect(request.options?.cacheRetention).toBe('none')
       expect(request.messages.map((message) => textOf(message)).join('\n')).not.toContain(ROOT_TEXT)
       const C = await childOfCall(session, 'r-agent')
-      expect(compactionsSeen(sw, C).map(({ reason, blocking }) => ({ reason, blocking }))).toEqual([
-        { reason: 'threshold', blocking: false }
-      ])
+      expect(
+        compactionsSeen(sw, C).map(({ trigger, blocking }) => ({ trigger, blocking }))
+      ).toEqual([{ trigger: 'threshold', blocking: false }])
       expect(compactionsSeen(sw, 1)).toEqual([])
 
       // 摘要还扣着：根照样拿到回答、发送落定；运行状态在摘要落定之前仍是忙
@@ -169,9 +169,9 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
       expect(await withTimeout(session.submitUser('go'), 8000, 'send')).toEqual({})
 
       const C = await childOfCall(session, 'r-agent')
-      expect(compactionsSeen(sw, C).map(({ reason, blocking }) => ({ reason, blocking }))).toEqual([
-        { reason: 'overflow', blocking: true }
-      ])
+      expect(
+        compactionsSeen(sw, C).map(({ trigger, blocking }) => ({ trigger, blocking }))
+      ).toEqual([{ trigger: 'overflow', blocking: true }])
       const kinds = world.model.requests
         .filter((request) => request.lane === 'smallctx' || request.kind === 'summary')
         .map((request) => request.kind)

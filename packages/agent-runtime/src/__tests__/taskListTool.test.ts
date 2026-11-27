@@ -108,9 +108,7 @@ describe('TT · registration', () => {
     const stepProps = propsOf(step)
     expect(Object.keys(stepProps).sort()).toEqual(['content', 'status'])
     expect(stepProps.content).toMatchObject({ type: 'string' })
-    const variants = stepProps.status.anyOf as JsonSchema[]
-    expect(variants.map((v) => v.const)).toEqual(['pending', 'in_progress', 'completed'])
-    for (const v of variants) expect(v.type).toBe('string')
+    expect(stepProps.status.enum).toEqual(['pending', 'in_progress', 'completed'])
 
     expect(props.advance).toMatchObject({ type: 'boolean' })
     expect(props.done).toMatchObject({ type: 'array', items: { type: 'integer', minimum: 1 } })

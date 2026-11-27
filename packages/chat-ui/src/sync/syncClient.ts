@@ -1,39 +1,38 @@
 /**
- * 视图同步的前端客户端（pi 1.2 / chord2；phase 3 的 P3-08 换了底子，公开接口不变）—— 在渠道的链路
- * （`SessionChannelApi.sync`，一个 {@link SyncLinkChannel}）上跑一个 chord2 **客户端宿主**，每个**目标**（一条会话
- * / 一个派生 agent）一个 chord 句柄（`shuvix.session-view` / `shuvix.agent-view`，契约在 agent-runtime 的
- * `sync/viewContracts`），交出那份视图的完整值。
+ * 视图同步的前端客户端（Chord 1.6.1 / v2；公开接口不变）—— 在渠道的链路（`SessionChannelApi.sync`，一个
+ * {@link SyncLinkChannel}）上跑一个 chord v2 **客户端宿主**，每个**目标**（一条会话 / 一个派生 agent）一个
+ * chord 持有引用（`shuvix.session-view` / `shuvix.agent-view`，契约在 agent-runtime 的 `sync/viewContracts`），
+ * 交出那份视图的完整值。
  *
- *  - **状态**：句柄 `loading` → `loading`；`live` 且 `availability === 'available'` 且快照到了 → `live`；
- *    `availability === 'unavailable'` → `unavailable`（值清空）；第一次就没活成（`ready` 被拒）→ `error` + 码
- *    （chord 的码；「找不到」映射成 chat-protocol 的 `SYNC_NOT_FOUND`），**不重试**；活过之后被强制拿走（gone）
+ *  - **状态**：引用 `loading` → `loading`；`live` 且 `availability === 'available'` → `live`；
+ *    `availability === 'unavailable'` → `unavailable`（值清空）；第一次就没活成（`failed` / `ended`）→ `error` + 码
+ *    （chord 的码；「找不到」映射成 chat-protocol 的 `SYNC_NOT_FOUND`），**不重试**；活过之后被强制拿走（`ended`）
  *    → `unavailable`。
- *  - **永不交出过时的值**：链路断开重连时句柄回到 `loading`、值清空；重新持有之后服务端的快照到了才再交值。
+ *  - **永不交出过时的值**：链路断开重连时引用回到 `loading`、值清空；重新持有之后服务端的快照到了才再交值。
  *  - **链路**：每条链路一个新 id（`<idPrefix>.<序号>`），帧带着它走 —— 旧链路迟到的帧落不进新链路。链路不是
- *    客户端自己关的（服务端关了、传输断了、ping 超时）→ 立刻换一条新链路（chord 的句柄在新链路上自动重新持有），
- *    新链路先攒着帧，等退避时间到、传输 up 了再发（于是新的 get 永远有上游，不会因为「没有路由」直接 gone）。
+ *    客户端自己关的（服务端关了、传输断了、心跳超时）→ 立刻换一条新链路（chord 的引用在新链路上自动重新持有），
+ *    新链路先攒着帧，等退避时间到、传输 up 了再发（于是新的 hold 永远有上游）。
  *  - `resetAll()`：现在就换一条新链路（旧的发 `bye`，服务端随之放掉它的持有）。
  *
- * 目标按引用计数共享（同一目标的多个使用方共用一个句柄）；最后一个使用方离开才放手（`release`）。
+ * 目标按引用计数共享（同一目标的多个使用方共用一个引用）；最后一个使用方离开才放手（`release`）。
  *
- * 浏览器安全：只引 chord 根入口、agent-runtime 的 `sync/viewContracts`（它本身只引 chord 与 typebox）、
- * chat-protocol（守护用例 `__tests__/browserSafe.test.ts`）。
+ * 浏览器安全：只引 chord 根入口 / `/context`、agent-runtime 的 `sync/viewContracts`、chat-protocol
+ * （守护用例 `__tests__/browserSafe.test.ts`）。
  */
-import {
-  createHost,
-  isChordError,
-  type Frame,
-  type Handle,
-  type HandleStatus,
-  type Host,
-  type StateEvent
-} from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import {
   AgentViewContract,
+  createHost,
   FrameLink,
-  NOT_FOUND_REASON,
+  isChordError,
+  isNotFoundError,
   SessionViewContract,
-  VIEW_SERVER_HOST,
+  VIEW_LINK_CODEC,
+  type Frame,
+  type Held,
+  type Host,
+  type HostError,
+  type RefState,
   type ViewAvailability
 } from '@shuvix/agent-runtime/sync/viewContracts'
 import {
@@ -68,7 +67,7 @@ export interface ViewSubscription<V> {
   value(): V | undefined
   /** 订阅变化（不补发已有的值 —— 先读 `value()`）；返回退订 */
   subscribe(listener: (event: ViewEvent<V>) => void): () => void
-  /** 放手（幂等）；最后一个使用方放手时放掉句柄 —— 那一次返回 true */
+  /** 放手（幂等）；最后一个使用方放手时放掉引用 —— 那一次返回 true */
   release(): boolean
 }
 
@@ -89,18 +88,18 @@ export interface SyncClientOptions {
 }
 
 export interface SyncClient {
-  /** 持有一个目标（引用计数）：第一次持有时建句柄 */
+  /** 持有一个目标（引用计数）：第一次持有时建引用 */
   acquire<V extends SessionView | AgentView>(target: SyncTarget): ViewSubscription<V>
   /**
-   * 现在就换一条新链路（连接重来过、服务端换了一个进程，PIN-10）：每个句柄在新链路上重新持有、拿一份新快照；
+   * 现在就换一条新链路（连接重来过、服务端换了一个进程，PIN-10）：每个引用在新链路上重新持有、拿一份新快照；
    * 期间状态回到 loading
    */
   resetAll(): void
-  /** 丢掉一切（放掉每个句柄、关掉链路与客户端宿主） */
+  /** 丢掉一切（放掉每个引用、关掉链路与客户端宿主） */
   dispose(): void
 }
 
-type ViewHandle = Handle<typeof SessionViewContract> | Handle<typeof AgentViewContract>
+type ViewHandle = Held<typeof SessionViewContract> | Held<typeof AgentViewContract>
 
 interface TargetBinding {
   readonly key: string
@@ -111,27 +110,37 @@ interface TargetBinding {
   /** 交给使用方的值（只在可用且快照到了之后才有） */
   value: SessionView | AgentView | undefined
   readonly handle: ViewHandle
+  readonly cancelWatches: () => void
+  /** 当前引用是否处于 live */
+  refLive: boolean
   /** 这一次持有里服务端的视图值（快照到了才有） */
   view: SessionView | AgentView | undefined
   /** 这一次持有里服务端的可用性（快照到了才有） */
   availability: ViewAvailability | undefined
-  /** 句柄活过（之后的 gone = 被拿走，不是订阅失败） */
+  /** 引用活过（之后的 ended / failed = 被拿走，不是订阅失败） */
   everLive: boolean
-  readonly stops: (() => void)[]
   disposed: boolean
 }
 
+const SERVER_PRINCIPAL = { kind: 'server' } as const
+
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  if (error instanceof Error) return error.message
+  if (typeof error === 'object' && error !== null && 'kind' in error) {
+    const he = error as HostError
+    if ('error' in he && he.error !== undefined) return `${he.kind}: ${errorText(he.error)}`
+    if ('failure' in he && he.failure !== undefined) {
+      return `${he.kind}: ${errorText(he.failure.error)}`
+    }
+    return he.kind
+  }
+  return String(error)
 }
 
 /** chord 错误 → 绑定的码：「找不到」映射成 `SYNC_NOT_FOUND`，其余用 chord 的码 */
 function codeOf(error: unknown): string | undefined {
-  if (isChordError(error)) {
-    return error.code === 'unavailable' && error.reason === NOT_FOUND_REASON
-      ? SYNC_NOT_FOUND
-      : error.code
-  }
+  if (isNotFoundError(error)) return SYNC_NOT_FOUND
+  if (isChordError(error)) return error.code
   const code = (error as { code?: unknown } | null)?.code
   return typeof code === 'string' ? code : undefined
 }
@@ -223,16 +232,15 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const prefix = options.idPrefix ?? `c${++clientCount}.${Math.random().toString(36).slice(2, 8)}`
   const baseDelay = options.reconnectDelayMs ?? 250
   const host: Host = createHost({
-    name: `client:${prefix}`,
-    kind: 'client',
     onError: (error) => logger.warn(`[sync] ${errorText(error)}`)
   })
+  void host.load([], BACKGROUND_CONTEXT).catch(() => undefined)
   const bindings = new Map<string, TargetBinding>()
   let link: ChannelLink | undefined
   let linkSeq = 0
   let nextDelay = baseDelay
   let idleTimer: ReturnType<typeof setTimeout> | undefined
-  /** 正在建的绑定数（`host.get` 里链路就可能断：那时绑定还没进表，也得重连） */
+  /** 正在建的绑定数（`host.hold` 里链路就可能断：那时绑定还没进表，也得重连） */
   let creating = 0
   let disposed = false
 
@@ -244,10 +252,25 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       nextDelay = baseDelay
     })
     link = next
-    host.connect(next)
-    // 在 host.connect 之后登记：chord 自己的关闭处理先跑（句柄先脱开），这里再换新链路（它们在新链路上重新持有）
+    host.connect(next, { principal: SERVER_PRINCIPAL, codec: VIEW_LINK_CODEC }, BACKGROUND_CONTEXT)
+    // 在 host.connect 之后登记：chord 自己的关闭处理先跑（引用先回到 loading），这里再换新链路（它们在新链路上重新持有）
     next.onClose((reason) => {
-      if (next.intended || disposed || link !== next) return
+      if (disposed || link !== next) return
+      // 链路断了：已终结/失败的引用立刻落定，其余活着的绑定同步切回 loading（不留过时的值）
+      for (const binding of bindings.values()) {
+        if (binding.disposed) continue
+        const current = binding.handle.state.value
+        if (current.kind === 'ended' || current.kind === 'failed') {
+          onRefState(binding, current)
+        } else if (binding.state.status === 'live') {
+          binding.refLive = false
+          binding.view = undefined
+          binding.availability = undefined
+          binding.value = undefined
+          setState(binding, LOADING)
+        }
+      }
+      if (next.intended) return
       // 没人持有任何目标：不必重连，下一次 acquire 再开一条
       if (bindings.size === 0 && creating === 0) {
         link = undefined
@@ -306,7 +329,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   /** 视图与可用性都到了、可用：交值（并报 live） */
   function publish(binding: TargetBinding, delivery: 'hydrate' | 'update'): void {
-    if (binding.disposed || binding.availability !== 'available') return
+    if (binding.disposed || !binding.refLive || binding.availability !== 'available') return
     const value = binding.view
     if (value === undefined) return
     binding.value = value
@@ -316,18 +339,24 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   // ─── 绑定 ─────────────────────────────────
 
-  function onView(binding: TargetBinding, event: StateEvent<unknown>): void {
-    // 订上时那一下（`snap`）是本地此刻的值：还没到（undefined）或者断线前留下的旧值 —— 不交
-    if (binding.disposed || event.type === 'snap' || event.value === undefined) return
-    binding.view = event.value as SessionView | AgentView
-    publish(binding, event.type === 'reset' ? 'hydrate' : 'update')
+  function onViewValue(
+    binding: TargetBinding,
+    value: unknown,
+    delivery: 'hydrate' | 'update'
+  ): void {
+    if (binding.disposed || !binding.refLive || value === undefined) return
+    const next = value as SessionView | AgentView
+    if (next === binding.view && binding.value !== undefined) return
+    binding.view = next
+    publish(binding, binding.value === undefined ? 'hydrate' : delivery)
   }
 
-  function onAvailability(binding: TargetBinding, event: StateEvent<unknown>): void {
-    if (binding.disposed || event.type === 'snap' || event.value === undefined) return
+  function onAvailabilityValue(binding: TargetBinding, value: unknown): void {
+    if (binding.disposed || !binding.refLive || value === undefined) return
+    const next = value as ViewAvailability
     const previous = binding.availability
-    binding.availability = event.value as ViewAvailability
-    if (binding.availability === 'unavailable') {
+    binding.availability = next
+    if (next === 'unavailable') {
       binding.value = undefined
       setState(binding, UNAVAILABLE)
       return
@@ -335,20 +364,41 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     if (previous !== 'available') publish(binding, 'hydrate')
   }
 
-  function onStatus(binding: TargetBinding, status: HandleStatus, error: unknown): void {
+  function onRefState(binding: TargetBinding, refState: RefState): void {
     if (binding.disposed) return
-    switch (status) {
-      case 'live':
+    switch (refState.kind) {
+      case 'live': {
         binding.everLive = true
+        binding.refLive = true
+        // 引用 live 时两个状态成员都已水合：同步读出当前值并发布（首帧或重连后的新快照）
+        let viewValue: unknown
+        let availValue: unknown
+        try {
+          viewValue = binding.handle.view.value
+          availValue = binding.handle.availability.value
+        } catch {
+          return
+        }
+        binding.view = viewValue as SessionView | AgentView
+        binding.availability = availValue as ViewAvailability
+        if (binding.availability === 'unavailable') {
+          binding.value = undefined
+          setState(binding, UNAVAILABLE)
+        } else {
+          publish(binding, 'hydrate')
+        }
         return
+      }
       case 'loading':
         // 链路断了、正在新链路上重新持有：之前的值作废，等新的快照
+        binding.refLive = false
         binding.view = undefined
         binding.availability = undefined
         binding.value = undefined
         setState(binding, LOADING)
         return
-      case 'gone': {
+      case 'failed': {
+        binding.refLive = false
         binding.view = undefined
         binding.availability = undefined
         binding.value = undefined
@@ -356,13 +406,23 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           setState(binding, UNAVAILABLE)
           return
         }
-        // 第一次就没活成 = 订阅失败：报给使用方，带着服务端的码，不重试
-        const code = codeOf(error)
+        const code = codeOf(refState.cause.error)
         setState(binding, code === undefined ? { status: 'error' } : { status: 'error', code })
         return
       }
-      case 'released':
+      case 'ended': {
+        binding.refLive = false
+        binding.view = undefined
+        binding.availability = undefined
+        binding.value = undefined
+        if (binding.everLive) {
+          setState(binding, UNAVAILABLE)
+          return
+        }
+        const code = codeOf(refState.error)
+        setState(binding, code === undefined ? { status: 'error' } : { status: 'error', code })
         return
+      }
     }
   }
 
@@ -370,9 +430,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     ensureConnected()
     const handle: ViewHandle =
       target.kind === 'session'
-        ? host.get(SessionViewContract, { sessionId: target.sessionId }, { at: VIEW_SERVER_HOST })
-        : host.get(AgentViewContract, { agentId: target.agentId }, { at: VIEW_SERVER_HOST })
-    handle.ready.catch(() => undefined)
+        ? host.hold(SessionViewContract, { sessionId: target.sessionId }, BACKGROUND_CONTEXT)
+        : host.hold(AgentViewContract, { agentId: target.agentId }, BACKGROUND_CONTEXT)
+    const { context: watchCtx, cancel: cancelWatches } = withCancel(BACKGROUND_CONTEXT)
     const binding: TargetBinding = {
       key,
       target:
@@ -384,32 +444,69 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       state: LOADING,
       value: undefined,
       handle,
+      cancelWatches,
+      refLive: false,
       view: undefined,
       availability: undefined,
       everLive: false,
-      stops: [],
       disposed: false
     }
-    binding.stops.push(
-      handle.onStatus((status, error) => onStatus(binding, status, error)),
-      handle.view.events((event) => onView(binding, event)),
-      handle.availability.events((event) => onAvailability(binding, event))
-    )
-    // 句柄可能当场就 gone 了（比如没有上游）：onStatus 不补报已有的状态
-    if (handle.status === 'gone') onStatus(binding, 'gone', handle.error)
+
+    // 跟踪引用生命周期（loading / live / failed / ended）
+    void handle.state
+      .watch(watchCtx)
+      .then((watch) => {
+        if (binding.disposed) {
+          void watch.stop()
+          return
+        }
+        if (watch.value.kind !== 'loading') onRefState(binding, watch.value)
+        watch.start(async (call) => {
+          if (call.kind === 'value') onRefState(binding, call.value)
+        })
+      })
+      .catch(() => undefined)
+
+    // 跟踪 view 状态成员的变化（增量与整份替换）
+    void handle.view
+      .watch(watchCtx)
+      .then((watch) => {
+        if (binding.disposed) {
+          void watch.stop()
+          return
+        }
+        watch.start(async (call) => {
+          if (call.kind === 'value') {
+            const isReset = call.ops.length === 1 && call.ops[0]?.[0] === 'r'
+            onViewValue(binding, call.value, isReset ? 'hydrate' : 'update')
+          }
+        })
+      })
+      .catch(() => undefined)
+
+    // 跟踪 availability 状态成员的变化
+    void handle.availability
+      .watch(watchCtx)
+      .then((watch) => {
+        if (binding.disposed) {
+          void watch.stop()
+          return
+        }
+        watch.start(async (call) => {
+          if (call.kind === 'value') onAvailabilityValue(binding, call.value)
+        })
+      })
+      .catch(() => undefined)
+
+    const initialState = handle.state.value
+    if (initialState.kind !== 'loading') onRefState(binding, initialState)
     return binding
   }
 
   function releaseBinding(binding: TargetBinding): void {
     binding.disposed = true
     bindings.delete(binding.key)
-    for (const stop of binding.stops.splice(0)) {
-      try {
-        stop()
-      } catch (error) {
-        logger.warn(`[sync] unsubscribe ${binding.key} failed: ${errorText(error)}`)
-      }
-    }
+    binding.cancelWatches()
     binding.listeners.clear()
     try {
       binding.handle.release()
@@ -468,9 +565,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     resetAll(): void {
       if (disposed || link === undefined) return
       const previous = link
-      if (previous !== undefined) previous.intended = true
+      link = undefined
+      previous.intended = true
+      previous.close('reset')
       nextDelay = baseDelay
-      // host.connect 关掉旧链路（发 bye）、句柄在新链路上重新持有（状态回到 loading，之后新快照）
       connect(0)
     },
 
@@ -486,7 +584,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         current.intended = true
         current.close('client disposed')
       }
-      void host.close().catch((error: unknown) => {
+      void host.close(BACKGROUND_CONTEXT).catch((error: unknown) => {
         logger.warn(`[sync] closing the client host failed: ${errorText(error)}`)
       })
     }

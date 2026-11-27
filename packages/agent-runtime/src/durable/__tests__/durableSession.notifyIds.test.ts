@@ -68,13 +68,21 @@ function inputSubmissions(session: DurableSession): {
   stop(): void
 } {
   const records = new Map<number, SubmissionRecord>()
-  const stop = session.harness.subscribeCommits((publication: CommitPublication) => {
-    for (const change of publication.changes) {
-      if (change.type === 'submission' && change.value.type === 'input') {
-        records.set(change.value.id, change.value)
-      }
-    }
-  })
+  const stop = (
+    (obs) => () =>
+      obs.detach()
+  )(
+    session.harness.observeCommits({
+      advance: (publication: CommitPublication) => {
+        for (const change of publication.changes) {
+          if (change.type === 'submission' && change.value.type === 'input') {
+            records.set(change.value.id, change.value)
+          }
+        }
+      },
+      end: () => {}
+    })
+  )
   return { records, stop }
 }
 

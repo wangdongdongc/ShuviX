@@ -33,7 +33,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { MID_RUN_NOTE_SEPARATOR, MID_RUN_NOTE_TEXT } from '@shuvix/chat-protocol/midRunNote'
 import { describe, expect, it } from 'vitest'

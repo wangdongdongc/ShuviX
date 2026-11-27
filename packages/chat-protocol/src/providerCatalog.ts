@@ -74,7 +74,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   {
     name: 'openrouter',
     displayName: 'OpenRouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
+    baseUrl: 'https://openrouter.ai/api',
     defaultApi: 'openai-completions'
   },
   {
@@ -98,19 +98,31 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   {
     name: 'opencode',
     displayName: 'OpenCode',
-    baseUrl: 'https://opencode.ai/zen',
+    baseUrl: 'https://opencode.ai/inference/anthropic',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'opencode-go',
+    displayName: 'OpenCode Go',
+    baseUrl: 'https://opencode.ai/inference/go/anthropic',
     defaultApi: 'openai-completions'
   },
   {
     name: 'kimi-coding',
     displayName: 'Kimi Coding',
-    baseUrl: 'https://api.kimi.com/coding',
-    defaultApi: 'anthropic-messages'
+    baseUrl: 'https://api.kimi.com/coding/v1',
+    defaultApi: 'openai-completions'
   },
   {
     name: 'zai',
     displayName: 'ZAI (智谱)',
     baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'zai-coding-cn',
+    displayName: 'ZAI Coding CN (智谱)',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
     defaultApi: 'openai-completions'
   },
   {
@@ -140,8 +152,92 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   {
     name: 'xiaomi',
     displayName: '小米 MiMo',
-    baseUrl: 'https://token-plan-ams.xiaomimimo.com/anthropic',
+    baseUrl: 'https://api.xiaomimimo.com/v1',
     defaultApi: 'openai-completions'
+  },
+  {
+    name: 'xiaomi-token-plan-cn',
+    displayName: '小米 MiMo Token Plan CN',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'xiaomi-token-plan-ams',
+    displayName: '小米 MiMo Token Plan AMS',
+    baseUrl: 'https://token-plan-ams.xiaomimimo.com/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'xiaomi-token-plan-sgp',
+    displayName: '小米 MiMo Token Plan SGP',
+    baseUrl: 'https://token-plan-sgp.xiaomimimo.com/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'ant-ling',
+    displayName: 'Ant Ling (蚂蚁百灵)',
+    baseUrl: 'https://api.ant-ling.com/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'qwen-token-plan',
+    displayName: 'Qwen Token Plan',
+    baseUrl: 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'qwen-token-plan-cn',
+    displayName: 'Qwen Token Plan CN',
+    baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'qwen-token-plan-individual',
+    displayName: 'Qwen Token Plan Individual',
+    baseUrl: 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'qwen-token-plan-individual-cn',
+    displayName: 'Qwen Token Plan Individual CN',
+    baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'together',
+    displayName: 'Together AI',
+    baseUrl: 'https://api.together.ai/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'nvidia',
+    displayName: 'NVIDIA NIM',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'baseten',
+    displayName: 'Baseten',
+    baseUrl: 'https://inference.baseten.co/v1',
+    defaultApi: 'openai-completions'
+  },
+  {
+    name: 'meta',
+    displayName: 'Meta AI',
+    baseUrl: 'https://api.meta.ai/v1',
+    defaultApi: 'openai-responses'
+  },
+  {
+    name: 'vercel-ai-gateway',
+    displayName: 'Vercel AI Gateway',
+    baseUrl: 'https://ai-gateway.vercel.sh',
+    defaultApi: 'anthropic-messages'
+  },
+  {
+    name: 'radius',
+    displayName: 'Pi Radius',
+    baseUrl: 'https://radius.pi.dev/v1',
+    defaultApi: 'pi-messages'
   },
   // Cloudflare 系列 baseUrl 含 {CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID} 占位符，
   // 留空让 pi-ai 按 model 用 per-model canonical（故无法兜底未知模型）

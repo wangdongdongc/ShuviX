@@ -8,7 +8,8 @@
  * 工具：重跑再派一个新的）。拥有者已经死了（打了中止标记）→ 创建被拒、什么都不建（PIN-13）。
  * 拒绝计数仍是进程内、按会话的（安全模块），不进任何文档。
  */
-import { Type, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { type FauxResponseStep } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   ROOT_CONVERSATION_ID,
   defineTool,
@@ -256,7 +257,7 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
       defineTool({
         name: 'askTwice',
         description: 'askTwice: a read gate, then a write gate',
-        parameters: Type.Object({}),
+        parameters: obj({}),
         execute: async (_args, api, context) => {
           const opts = { signal: context.abortSignal!, ownerTaskId: api.taskId }
           const read = await rig().runner.decide(
@@ -461,7 +462,7 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
         defineTool({
           name: 'gatedOp',
           description: 'gatedOp: an operation behind an ask gate',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async (_args, api, context) => {
             const provider: SecurityHostProvider = {
               host: 'desktop',

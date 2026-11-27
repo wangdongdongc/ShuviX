@@ -121,8 +121,15 @@ describe('P1-12 · retries', () => {
       const conversation = await session.currentConversation()
       const usage = await session.harness.snapshot(UsageDoc, conversation.id, BG)
       const errors = list.slice(0, 2)
-      expect(inputSum(errors)).toBeGreaterThan(0)
+      const totalSum = (entries: typeof list): number =>
+        entries.reduce(
+          (sum, entry) =>
+            sum + (entry.model?.[0]?.role === 'assistant' ? entry.model[0].usage.totalTokens : 0),
+          0
+        )
+      expect(totalSum(errors)).toBeGreaterThan(0)
       expect(usage?.models[`${U}/faux-1`]?.input).toBe(inputSum(list))
+      expect(usage?.models[`${U}/faux-1`]?.totalTokens).toBe(totalSum(list))
 
       world.chat(answer('again'))
       expect(await session.submitUser('next')).toEqual({})

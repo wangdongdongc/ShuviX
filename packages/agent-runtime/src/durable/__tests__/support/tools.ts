@@ -2,7 +2,7 @@
  * 测试工具：扣住的工具（等闸门）与发起询问的工具。经 defineExtension 安装 —— 没有显式选择时，
  * 每个对话默认选中全部已安装的扩展。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import {
   defineExtension,
   defineTool,
@@ -32,7 +32,7 @@ export function holdTool(
   return defineTool({
     name,
     description: `${name}: waits for the test`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async (_args, _api, context) => {
       options.onRun?.()
       const signal = context.abortSignal
@@ -62,7 +62,7 @@ export function askingTool(
   return defineTool({
     name,
     description: `${name}: asks the user`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async (_args, api, context) => {
       options.onStart?.()
       if (options.gate !== undefined) await options.gate

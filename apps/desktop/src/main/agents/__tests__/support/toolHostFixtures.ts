@@ -2,7 +2,7 @@
  * P1-11 用例的共享夹具（不是用例文件：`support/` 下没有 `.test.ts`）—— 设计稿的 Fx-REG / N_W / R_D /
  * L_D 与 MCP 声明。vi.mock 不能共享（按文件提升），各用例文件自己声明；这里只放纯数据与小工具。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { obj, unsafe } from '@earendil-works/pi-schema'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import {
   buildBuiltinProfiles,
@@ -57,7 +57,7 @@ export function stubTool(name: string, extra: Record<string, unknown> = {}): Too
   return {
     name,
     description: `${name}: stub`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     replay: SAFE.has(name) ? 'safe' : 'unsafe',
     execute: async () => ({ output: [{ type: 'text', text: `${name} ok` }] }),
     ...extra
@@ -183,7 +183,7 @@ export function mcpRegistration(server: string, d: McpToolDeclaration): ToolRegi
     name: `mcp__${server}__${d.name}`,
     label: d.description ?? d.name,
     description: d.description ?? '',
-    parameters: Type.Unsafe<Record<string, unknown>>(d.inputSchema as Record<string, unknown>),
+    parameters: unsafe<Record<string, unknown>>(d.inputSchema as Record<string, unknown>),
     replay: 'unsafe',
     mcpMeta: { server, tool: d.name, trusted: d.trusted },
     execute: async () => ({ output: [{ type: 'text', text: `${d.name} ok` }] })

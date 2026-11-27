@@ -11,7 +11,8 @@
  *  - `startRun()`、`liveTasks()`、`requestsWith()`、`mentions()`：起一轮 / 看活任务 / 看请求。
  *  - 唯一带断言的是 `expectUnloadedTool()`（一次性工具派发「卸掉了」的那组判定，几个 spawn 用例共用）。
  */
-import { Type, type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
+import { bool, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   configure,
   defineExtension,
@@ -26,7 +27,8 @@ import {
   type ToolExecutionApi,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { Context, JsonValue } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { expect } from 'vitest'
 import type { ModelSelection } from '../../../models/lockModel'
 import type { ResultContract } from '../../../subagent/nextTool'
@@ -309,7 +311,7 @@ export function identityProbe(
   return defineTool({
     name,
     description: `${name}: records the calling agent`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async (_args, api) => {
       seen.push(getSession().agentIdentity(api.conversationId))
       return { output: [{ type: 'text', text: `${name} done` }] }
@@ -349,11 +351,11 @@ export function dispatch(options: DispatchOptions): ToolRegistration {
   return defineTool({
     name,
     description: `${name}: dispatch a sub-agent`,
-    parameters: Type.Object({
-      name: Type.String(),
-      prompt: Type.String(),
-      description: Type.String(),
-      oneShot: Type.Optional(Type.Boolean())
+    parameters: obj({
+      name: str(),
+      prompt: str(),
+      description: str(),
+      oneShot: opt(bool())
     }),
     replay: options.replay ?? 'safe',
     execute: async (args, api, context) => {
@@ -461,7 +463,7 @@ export function probeTool(name = 'probe'): ToolRegistration {
   return defineTool({
     name,
     description: `${name}: probes`,
-    parameters: Type.Object({}),
+    parameters: obj({}),
     execute: async () => ({ output: [{ type: 'text', text: `${name} done` }] })
   })
 }

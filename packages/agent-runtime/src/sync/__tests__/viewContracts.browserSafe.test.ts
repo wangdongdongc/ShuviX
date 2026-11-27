@@ -17,11 +17,9 @@ function importsOf(source: string): string[] {
 }
 
 describe('viewContracts is browser-safe', () => {
-  it('imports only the chord root entry and typebox', () => {
+  it('imports only the chord root entry', () => {
     const specs = importsOf(readFileSync(FILE, 'utf8'))
     expect(specs.length).toBeGreaterThan(0)
-    expect(specs.filter((spec) => spec !== '@earendil-works/chord' && spec !== 'typebox')).toEqual(
-      []
-    )
+    expect(specs.filter((spec) => spec !== '@earendil-works/chord')).toEqual([])
   })
 })

@@ -18,7 +18,7 @@
  * 原先断言的 `spill` / `sessionId` 换成「交没交落盘口」—— 会话归属绑在宿主的落盘口上，内核不知道。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { Type } from 'typebox'
+import { obj } from '@earendil-works/pi-schema'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
   createModels,
@@ -105,7 +105,7 @@ function probe(execute: Execute, extra: Record<string, unknown> = {}): AnyTool {
     name: 'probe',
     label: 'probe',
     description: 'probe tool',
-    parameters: Type.Object({}),
+    parameters: obj({}),
     replay: 'unsafe',
     execute,
     ...extra
@@ -395,7 +395,7 @@ describe('WD 失败结果与元数据', () => {
     class Probe extends BaseTool {
       readonly name = 'probe'
       readonly label = 'Probe'
-      readonly parameters = Type.Object({})
+      readonly parameters = obj({})
       readonly replay = 'safe' as const
       readonly outputStrategy = 'keep-end' as const
       readonly outputMaxBytes = 4096
@@ -548,7 +548,7 @@ const textsOf = (message: ToolResultMessage): string[] =>
 const readStub = defineTool({
   name: 'read',
   description: 'read stub',
-  parameters: Type.Object({}),
+  parameters: obj({}),
   execute: async () => ({ output: [{ type: 'text', text: 'unused' }] })
 }) as unknown as AnyTool
 

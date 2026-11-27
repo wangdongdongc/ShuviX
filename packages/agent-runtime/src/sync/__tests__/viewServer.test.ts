@@ -16,7 +16,7 @@
  *   处置      VS-70
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isChordError, type Frame, type HandleStatus } from '@earendil-works/chord'
+import { isChordError } from '@earendil-works/chord'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import {
@@ -26,10 +26,11 @@ import {
 } from '@shuvix/chat-protocol/types/sessionView'
 import { isJsonOnly } from '@shuvix/chat-protocol/utils/jsonOnly'
 import { legacySessionView } from '../services'
-import { isNotFoundError, SessionViewContract, VIEW_SERVER_HOST } from '../viewContracts'
+import { isNotFoundError, SessionViewContract, type Frame } from '../viewContracts'
 import type { ViewPrincipal, ViewServer, ViewServerDeps } from '../viewServer'
 import {
   agentView,
+  BG,
   durableView,
   fakeViewHost,
   isViewStateFrame,
@@ -105,24 +106,35 @@ async function failed(view: TestView<unknown>): Promise<unknown> {
 const codeOf = (error: unknown): string | undefined =>
   isChordError(error) ? error.code : (error as { code?: string } | undefined)?.code
 
-/** 客户端在某个成员上的订阅 id（`sub` 帧） */
-function subIds(client: RawClient, member: 'view' | 'availability'): number[] {
-  return client
-    .up()
-    .filter((f) => f.t === 'sub' && (f as { member: string }).member === member)
-    .map((f) => (f as { id: number }).id)
+/** 提取 state 帧里针对 `view`（成员索引 1）的操作批次 */
+function viewOpsInStateFrame(frame: Frame): unknown[][] {
+  if (frame.t !== 'state' || !Array.isArray(frame.d)) return []
+  const holds = frame.d[1]
+  if (!Array.isArray(holds)) return []
+  const out: unknown[][] = []
+  for (const entry of holds) {
+    if (!Array.isArray(entry) || !Array.isArray(entry[1])) continue
+    for (const pair of entry[1]) {
+      if (!Array.isArray(pair) || pair[0] !== 1) continue
+      const part = pair[1]
+      if (Array.isArray(part) && part[0] === 0 && Array.isArray(part[1])) {
+        out.push(...(part[1] as unknown[][]))
+      }
+    }
+  }
+  return out
 }
 
-/** 服务端在视图订阅上发来的 state 帧 */
-function viewStateFrames(client: RawClient): Frame[] {
-  const ids = new Set(subIds(client, 'view'))
-  return client.down().filter((f) => f.t === 'state' && ids.has((f as { id: number }).id))
-}
-
+/** 服务端在视图成员上发来的增量 state 帧 */
 const opsFramesOf = (client: RawClient): Frame[] =>
-  viewStateFrames(client).filter((f) => (f as { ops?: unknown }).ops !== undefined)
+  client.down().filter((f) => viewOpsInStateFrame(f).length > 0)
 
 const holdFrames = (client: RawClient): Frame[] => client.up().filter((f) => f.t === 'hold')
+
+const holdIdOf = (frame: Frame): number | undefined => {
+  if (!Array.isArray(frame.d)) return undefined
+  return typeof frame.d[1] === 'number' ? frame.d[1] : undefined
+}
 
 const acquires = (host: FakeViewHost): string[] => host.log.filter((e) => e.startsWith('acquire:'))
 
@@ -161,15 +173,10 @@ describe('VS basics', () => {
     expect(view.events).toEqual(['snap', 'reset', 'ops'])
     expect(view.value()).toEqual(session.root.value)
 
-    const frames = viewStateFrames(client)
-    const snapshot = frames.find(
-      (f) =>
-        (f as { snap?: unknown }).snap !== undefined ||
-        (f as { reset?: unknown }).reset !== undefined
-    )!
-    const delta = frames.filter((f) => (f as { ops?: unknown }).ops !== undefined)
+    const snapshot = client.down().find((f) => f.t === 'bound')!
+    const delta = opsFramesOf(client)
     expect(delta).toHaveLength(1)
-    const ops = (delta[0] as unknown as { ops: unknown[][] }).ops
+    const ops = viewOpsInStateFrame(delta[0]!)
     expect(ops.some((op) => op[0] === 'r')).toBe(false)
     expect(JSON.stringify(delta[0]).length).toBeLessThan(JSON.stringify(snapshot).length / 4)
   })
@@ -195,12 +202,15 @@ describe('VS basics', () => {
     expect(vb.value()).toEqual(session.root.value)
 
     for (const client of [a, b]) {
-      const holds = new Set(holdFrames(client).map((f) => (f as { id: number }).id))
-      const subs = new Set([...subIds(client, 'view'), ...subIds(client, 'availability')])
+      const holds = new Set(holdFrames(client).map((f) => holdIdOf(f)))
       for (const frame of client.down()) {
-        if (frame.t === 'state') expect(subs.has((frame as { id: number }).id)).toBe(true)
-        if (frame.t === 'shape' || frame.t === 'gone') {
-          expect(holds.has((frame as { id: number }).id)).toBe(true)
+        if ((frame.t === 'bound' || frame.t === 'state') && Array.isArray(frame.d)) {
+          for (const entry of frame.d[1] as unknown[][]) {
+            expect(holds.has(entry[0] as number)).toBe(true)
+          }
+        }
+        if (frame.t === 'gone' || frame.t === 'failed') {
+          expect(holds.has(holdIdOf(frame))).toBe(true)
         }
       }
     }
@@ -275,17 +285,9 @@ describe('VS basics', () => {
     const authorize = vi.fn(() => false)
     const { host, server } = rig({ deps: { authorize } })
     const session = host.add('s1')
-    const handle = server.host.get(
-      SessionViewContract,
-      { sessionId: 's1' },
-      { at: VIEW_SERVER_HOST }
-    )
-    const stop = handle.view.subscribe(() => {})
-    await handle.ready
-    await until(() => handle.view.value !== undefined, 'in-process value')
+    const handle = await server.host.get(SessionViewContract, { sessionId: 's1' }, BG)
     expect(handle.view.value).toEqual(session.root.value)
     expect(authorize).not.toHaveBeenCalled()
-    stop()
     handle.release()
   })
 
@@ -296,8 +298,13 @@ describe('VS basics', () => {
       { kind: 'session', sessionId: '' },
       { kind: 'agent', agentId: '' }
     ] as SyncTarget[]) {
-      const view = client.get(target)
-      expect(codeOf(await failed(view))).toBe('invalid')
+      let thrown: unknown
+      try {
+        client.get(target)
+      } catch (error) {
+        thrown = error
+      }
+      expect(codeOf(thrown)).toBe('invalid')
     }
     expect(host.peeks).toEqual([])
     expect(host.resolveCalls).toEqual([])
@@ -832,7 +839,7 @@ describe('VS lifecycle', () => {
     const releasedAt = host.log.indexOf(`release:${oldRoot.id}`)
     expect(acquiredAt).toBeGreaterThanOrEqual(0)
     expect(releasedAt).toBeGreaterThan(acquiredAt)
-    expect(view.statuses.filter((s: HandleStatus) => s === 'loading')).toEqual([])
+    expect(view.statuses.filter((s) => s === 'loading')).toEqual([])
     expect(view.value()).toEqual(newRoot.value)
   })
 
@@ -886,7 +893,7 @@ describe('VS lifecycle', () => {
     stream.append(agent.state, 'ing')
     await until(() => view.value()?.live?.message.content === 'streaming', 'streamed')
     const appendOps = opsFramesOf(client)
-      .flatMap((f) => (f as unknown as { ops: unknown[][] }).ops)
+      .flatMap((f) => viewOpsInStateFrame(f))
       .filter((op) => op[0] === 'a')
     expect(appendOps.length).toBeGreaterThan(0)
 
@@ -983,13 +990,7 @@ describe('VS legacy and sealed', () => {
     expect(host.session('old')!.projectorCalls).toBe(0)
 
     // 服务端那份值：严格 JSON、与输入不共享容器
-    const handle = server.host.get(
-      SessionViewContract,
-      { sessionId: 'old' },
-      { at: VIEW_SERVER_HOST }
-    )
-    const stop = handle.view.subscribe(() => {})
-    await handle.ready
+    const handle = await server.host.get(SessionViewContract, { sessionId: 'old' }, BG)
     const own = handle.view.value as SessionView
     expect(isJsonOnly(own)).toBe(true)
     expect(own.messages).not.toBe(messages)
@@ -997,7 +998,6 @@ describe('VS legacy and sealed', () => {
     expect((own.messages[1] as { blocks: unknown }).blocks).not.toBe(
       (messages[1] as unknown as { blocks: unknown }).blocks
     )
-    stop()
     handle.release()
 
     host.closed('old', 'remove')
@@ -1153,7 +1153,7 @@ describe('VS clients gone', () => {
 
   it('VS-52 ping timeout: a silent link is closed by the server and its pins drop', async () => {
     const { host, server, connect } = rig({
-      deps: { linkOptions: { pingInterval: 20, pingTimeout: 60 } }
+      deps: { heartbeat: { ping: 20, close: 60 } }
     })
     host.add('s1')
     const a = connect(W1)

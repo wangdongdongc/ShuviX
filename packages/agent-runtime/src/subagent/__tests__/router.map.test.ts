@@ -3,7 +3,7 @@
  * 广播 register、登记任务、记下索引；索引在完成与 LRU 关闭之后仍在、从不为查询打开会话；非工具拥有者在 P2-08
  * 起交给协调器（`{anchor}` / `{task}`，宿主派发的参数随之）。OS-M1：`oneShot` 只在为 true 时交给协调器。
  */
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { DurableSession } from '../../durable/durableSession'
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundContext as BG } from '../../durable/context'

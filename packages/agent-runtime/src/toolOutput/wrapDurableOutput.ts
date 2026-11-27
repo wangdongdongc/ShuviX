@@ -32,9 +32,10 @@ import type {
   ToolDiagnostic,
   ToolExecutionApi,
   ToolExecutionResult,
+  ToolPark,
   ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import { backstopOutputLimits, type DurableOutputLimits } from '../tools/outputLimits'
 import { toolErrorResult, type AnyTool, type ToolContent } from '../tools/toolResult'
 import {
@@ -144,13 +145,14 @@ export function wrapDurableOutput(tool: AnyTool, opts: WrapDurableOutputOptions)
       }
     }
 
-    let result: ToolExecutionResult
+    let result: ToolExecutionResult | ToolPark
     try {
       result = await inner.execute(args, trackedApi, context)
     } catch (err) {
       if (context.abortSignal?.aborted) throw err
       return toolErrorResult(err)
     }
+    if ('kind' in result) return result
     // 工具交回的失败（BaseTool 模板 / 函数式注册项按 Q12 收口的抛错）：原样交回，不过后处理
     if (result.isError) return result
 
