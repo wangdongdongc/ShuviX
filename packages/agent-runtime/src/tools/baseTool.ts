@@ -44,6 +44,8 @@ export abstract class BaseTool<
   readonly replay: ToolReplay = 'unsafe'
   /** 允许的调用方（缺省不限 = 模型与工具均可；交互/控制类工具设为 `['model']` 避免被 codemode 嵌套调用） */
   readonly callers?: readonly ('model' | 'tools')[]
+  /** 供程序调用方（如 codemode）解析的结构化输出 Schema；声明后成功结果须返回匹配的 `structuredOutput` */
+  readonly structuredOutputSchema?: Schema
   /** 单个工具覆盖同批执行方式（缺省跟随会话设置） */
   readonly executionMode?: ToolExecutionMode
   /** 输出过长时的截断策略 —— 包装器读取此字段决定留下开头 / 末尾 / 首尾（缺省留首尾） */

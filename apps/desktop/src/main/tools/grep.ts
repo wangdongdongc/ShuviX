@@ -5,7 +5,7 @@
 
 import { stat } from 'fs/promises'
 import { resolve, relative, dirname, basename } from 'path'
-import { obj, opt, str } from '@earendil-works/pi-schema'
+import { arr, bool, num, obj, opt, str } from '@earendil-works/pi-schema'
 import { BaseTool, callOwnerOf, type ToolCallScope } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
@@ -49,6 +49,17 @@ export function searchRejectedMessage(rgMessage: string): string {
   return `The search was not run — ripgrep rejected it:\n${rgMessage}${hint}`
 }
 
+const GrepOutputSchema = obj({
+  matches: arr(
+    obj({
+      file: str({ description: 'File path relative to the working directory' }),
+      line: num({ description: '1-based line number' }),
+      text: str({ description: 'Matched line text (clipped to 2000 characters)' })
+    })
+  ),
+  truncated: bool({ description: 'True when matches hit the result cap' })
+})
+
 const GREP_DESCRIPTION =
   'Search file contents by regex. Returns file paths, line numbers and line text; .gitignore is respected. To find files by name, use `glob`.'
 
@@ -58,6 +69,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   readonly label = t('tool.grepLabel')
   readonly description = GREP_DESCRIPTION
   readonly parameters = GrepParamsSchema
+  readonly structuredOutputSchema = GrepOutputSchema
   readonly outputStrategy = 'keep-start' as const
   // 只读：中断后恢复时重跑一遍无害（durable replay）
   readonly replay = 'safe' as const
@@ -148,7 +160,8 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     if (matches.length === 0) {
       return {
         content: [{ type: 'text' as const, text: 'No matches found' }],
-        details: { type: 'grep', matches: 0, truncated: false }
+        details: { type: 'grep', matches: 0, truncated: false },
+        structuredOutput: { matches: [], truncated: false }
       }
     }
 
@@ -156,6 +169,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     const outputLines: string[] = [
       `Found ${matches.length} matches${truncated ? ` (showing first ${LIMIT})` : ''}`
     ]
+    const structuredMatches: Array<{ file: string; line: number; text: string }> = []
 
     let currentFile = ''
     for (const match of matches) {
@@ -174,6 +188,11 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
           ? match.lineText.substring(0, MAX_LINE_LENGTH) + '...'
           : match.lineText
       outputLines.push(`  Line ${match.lineNum}: ${lineText}`)
+      structuredMatches.push({
+        file: relPath.split('\\').join('/'),
+        line: match.lineNum,
+        text: lineText
+      })
     }
 
     if (truncated) {
@@ -189,6 +208,10 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       details: {
         type: 'grep',
         matches: matches.length,
+        truncated
+      },
+      structuredOutput: {
+        matches: structuredMatches,
         truncated
       }
     }

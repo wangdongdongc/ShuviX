@@ -226,3 +226,71 @@ describe.skipIf(!RG_AVAILABLE)('grep 工具 —— 合法模式零命中仍是 N
     }
   )
 })
+
+describe.skipIf(!RG_AVAILABLE)('grep 工具 —— 结构化输出（SO-07）', () => {
+  it('SO-07 声明 structuredOutputSchema；正常匹配（1-based line、单文件）、无匹配、超 100 截断、超长行截断至 2000 + "..." 均返回正确 { matches, truncated }；非法正则返回 isError 且无 structuredOutput', async () => {
+    const tool = new GrepTool(ctx)
+    expect(tool.structuredOutputSchema).toBeDefined()
+
+    // 1) 正常匹配（目录模式 + 单文件模式，1-based line，正斜杠）
+    write('src/a.ts', 'first\nconst needle = 1\nthird\n')
+    const dirRes = await grep({ pattern: 'needle' })
+    expect(dirRes.isError).toBeUndefined()
+    expect((dirRes as { structuredOutput?: unknown }).structuredOutput).toEqual({
+      matches: [{ file: 'src/a.ts', line: 2, text: 'const needle = 1' }],
+      truncated: false
+    })
+
+    const singleRes = await grep({ pattern: 'needle', path: 'src/a.ts' })
+    expect(singleRes.isError).toBeUndefined()
+    expect((singleRes as { structuredOutput?: unknown }).structuredOutput).toEqual({
+      matches: [{ file: 'src/a.ts', line: 2, text: 'const needle = 1' }],
+      truncated: false
+    })
+
+    // 2) 无匹配
+    const emptyRes = await grep({ pattern: 'no_such_token_xyz' })
+    expect(emptyRes.isError).toBeUndefined()
+    expect((emptyRes as { structuredOutput?: unknown }).structuredOutput).toEqual({
+      matches: [],
+      truncated: false
+    })
+
+    // 3) 超 100 匹配截断
+    write('many.txt', Array.from({ length: 120 }, (_, i) => `hit-${i}`).join('\n') + '\n')
+    const truncRes = await grep({ pattern: 'hit-', path: 'many.txt' })
+    const truncOut = (
+      truncRes as {
+        structuredOutput?: {
+          matches: Array<{ file: string; line: number; text: string }>
+          truncated: boolean
+        }
+      }
+    ).structuredOutput
+    expect(truncOut?.truncated).toBe(true)
+    expect(truncOut?.matches).toHaveLength(100)
+    expect(truncOut?.matches[0]).toEqual({ file: 'many.txt', line: 1, text: 'hit-0' })
+
+    // 4) 超长行截断至 2000 + '...'
+    const longLine = `LONG_${'x'.repeat(2500)}`
+    write('long.txt', `${longLine}\n`)
+    const longRes = await grep({ pattern: 'LONG_', path: 'long.txt' })
+    const longOut = (
+      longRes as {
+        structuredOutput?: {
+          matches: Array<{ file: string; line: number; text: string }>
+          truncated: boolean
+        }
+      }
+    ).structuredOutput
+    expect(longOut).toEqual({
+      matches: [{ file: 'long.txt', line: 1, text: `${longLine.slice(0, 2000)}...` }],
+      truncated: false
+    })
+
+    // 5) 非法正则 → isError: true 且无 structuredOutput
+    const errRes = await grep({ pattern: 'unclosed(' })
+    expect(errRes.isError).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(errRes, 'structuredOutput')).toBe(false)
+  })
+})

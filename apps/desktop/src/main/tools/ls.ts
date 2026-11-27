@@ -5,7 +5,7 @@
 
 import { stat } from 'fs/promises'
 import { relative, resolve } from 'path'
-import { arr, obj, opt, str } from '@earendil-works/pi-schema'
+import { arr, bool, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   resolveProjectConfig,
   assertReadAllowed,
@@ -37,6 +37,12 @@ const LsParamsSchema = obj({
   )
 })
 
+const LsOutputSchema = obj({
+  path: str({ description: 'Listed directory path relative to the working directory' }),
+  files: arr(str(), { description: 'Sorted relative file paths using forward slashes' }),
+  truncated: bool({ description: 'True when the listing hit the result cap' })
+})
+
 const LS_DESCRIPTION =
   'List the files and directories under a path as a tree; .gitignore is respected.'
 
@@ -46,6 +52,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   readonly label = t('tool.lsLabel')
   readonly description = LS_DESCRIPTION
   readonly parameters = LsParamsSchema
+  readonly structuredOutputSchema = LsOutputSchema
   readonly outputStrategy = 'keep-start' as const
   // 只读：中断后恢复时重跑一遍无害（durable replay）
   readonly replay = 'safe' as const
@@ -144,6 +151,11 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
         type: 'ls',
         path: searchPath,
         count: files.length,
+        truncated
+      },
+      structuredOutput: {
+        path: relPath.split('\\').join('/'),
+        files: files.map((f) => f.split('\\').join('/')),
         truncated
       }
     }

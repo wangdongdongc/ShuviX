@@ -660,3 +660,124 @@ describe('ED-W 组件也是一台服务器', () => {
     })
   })
 })
+
+// ─── BM25 增强扩展检索排序 ────────────────────────────────────────────────
+
+describe('BM25 增强扩展检索排序', () => {
+  it('BM25-01 英文词干归一 -ies → -y（长度 4 的 ties/dies 不走 -ies → -y，回落去单 -s 为 tie/die）', () => {
+    expect(tokenizeExtensionText('queries flies')).toEqual(['query', 'fly'])
+    expect(tokenizeExtensionText('ties dies')).toEqual(['tie', 'die'])
+  })
+
+  it('BM25-02 英文词干归一 -ches/-shes/-sses/-xes/-zes 去 -es（长度 ≤ 4 的 axes/ches 不走去 -es，回落去单 -s 为 axe/che）', () => {
+    expect(tokenizeExtensionText('searches flushes classes boxes buzzes')).toEqual([
+      'search',
+      'flush',
+      'class',
+      'box',
+      'buzz'
+    ])
+    expect(tokenizeExtensionText('axes ches')).toEqual(['axe', 'che'])
+  })
+
+  it('BM25-03 英文词干归一末尾单 -s 去 -s 但保留 -ss，长度 ≤ 3 不截断，大小写混合归一', () => {
+    expect(tokenizeExtensionText('tabs files')).toEqual(['tab', 'file'])
+    expect(tokenizeExtensionText('address access css')).toEqual(['address', 'access', 'css'])
+    expect(tokenizeExtensionText('gas aws')).toEqual(['gas', 'aws'])
+    expect(tokenizeExtensionText('Queries Searches')).toEqual(['query', 'search'])
+  })
+
+  it('BM25-04 查询与文档双向词干互通', () => {
+    expect(rankExtensionDocuments('query', [{ name: 'db', text: 'run sql queries' }])).toEqual([
+      'db'
+    ])
+    expect(rankExtensionDocuments('searches', [{ name: 'web', text: 'full text search' }])).toEqual(
+      ['web']
+    )
+    expect(rankExtensionDocuments('tabs', [{ name: 'br', text: 'list_tab open_page' }])).toEqual([
+      'br'
+    ])
+  })
+
+  it('BM25-05 同主分内 IDF 稀有词加权：命中稀有词的文档排在仅命中高频公共词之前', () => {
+    const documents = [
+      { name: 'common-1', text: 'common alpha' },
+      { name: 'common-2', text: 'common beta' },
+      { name: 'common-3', text: 'common gamma' },
+      { name: 'rare-doc', text: 'rare delta' }
+    ]
+    // 查 `common rare`：前 3 篇各命中 common（主分 1），rare-doc 仅命中 rare（主分 1）；
+    // rare 的 df=1 < common 的 df=3，因此 rare-doc 的 BM25 分更高排在最前
+    const ranked = rankExtensionDocuments('common rare', documents)
+    expect(ranked[0]).toBe('rare-doc')
+    expect(ranked).toEqual(['rare-doc', 'common-1', 'common-2', 'common-3'])
+  })
+
+  it('BM25-06 同主分内 TF 饱和：出现 3 次排在 1 次前，但高频单正文词主分 1 仍不敌名字命中主分 3 或双词命中主分 2', () => {
+    // 同主分内：TF=3 排在 TF=1 前
+    expect(
+      rankExtensionDocuments('alpha', [
+        { name: 'once', text: 'alpha' },
+        { name: 'thrice', text: 'alpha alpha alpha' }
+      ])
+    ).toEqual(['thrice', 'once'])
+
+    // 高频单正文词（主分 1）仍不敌名字命中（主分 3，且 1*2 < 3 被半数门槛过滤）
+    expect(
+      rankExtensionDocuments('alpha', [
+        { name: 'spam', text: 'alpha '.repeat(20) },
+        { name: 'alpha', text: '' }
+      ])
+    ).toEqual(['alpha'])
+
+    // 高频单正文词（主分 1）仍不敌双词命中（主分 2）
+    expect(
+      rankExtensionDocuments('alpha beta', [
+        { name: 'spam', text: 'alpha '.repeat(20) },
+        { name: 'both', text: 'alpha beta' }
+      ])
+    ).toEqual(['both', 'spam'])
+  })
+
+  it('BM25-07 不做文档长度惩罚：短文档与追加大量无关词的长文档同词频时同分并保持原顺序', () => {
+    const padding = Array.from({ length: 100 }, (_, i) => `filler${i}`).join(' ')
+    const shortDoc = { name: 'short', text: 'needle' }
+    const longDoc = { name: 'long', text: `needle ${padding}` }
+
+    expect(rankExtensionDocuments('needle', [shortDoc, longDoc])).toEqual(['short', 'long'])
+    expect(rankExtensionDocuments('needle', [longDoc, shortDoc])).toEqual(['long', 'short'])
+  })
+
+  it('BM25-08 主分半数门槛回归、名字+正文双命中优于仅名字命中、同分稳定排序、空输入返回 []', () => {
+    // 半数门槛：score * 2 >= top（3 vs 2 → 都留；3 vs 1 → 只留 3）
+    expect(
+      rankExtensionDocuments('alpha beta', [
+        { name: 'body-one', text: 'alpha' },
+        { name: 'body-two', text: 'alpha beta' },
+        { name: 'alpha', text: '' }
+      ])
+    ).toEqual(['alpha', 'body-two'])
+
+    // 名字 + 正文双命中（主分 3，BM25 含名字权重 + TF 权重）排在仅名字命中（主分 3，无正文 TF）之前
+    expect(
+      rankExtensionDocuments('alpha', [
+        { name: 'name-only', matchName: 'alpha', text: '' },
+        { name: 'name-and-body', matchName: 'alpha', text: 'alpha' }
+      ])
+    ).toEqual(['name-and-body', 'name-only'])
+
+    // 全同分按原下标
+    expect(
+      rankExtensionDocuments('alpha', [
+        { name: 'third', text: 'alpha' },
+        { name: 'first', text: 'alpha' },
+        { name: 'second', text: 'alpha' }
+      ])
+    ).toEqual(['third', 'first', 'second'])
+
+    // 空 query / 空 docs → []
+    expect(rankExtensionDocuments('', [{ name: 'a', text: 'alpha' }])).toEqual([])
+    expect(rankExtensionDocuments('   ', [{ name: 'a', text: 'alpha' }])).toEqual([])
+    expect(rankExtensionDocuments('alpha', [])).toEqual([])
+  })
+})

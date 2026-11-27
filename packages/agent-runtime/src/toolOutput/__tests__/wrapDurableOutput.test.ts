@@ -18,7 +18,7 @@
  * 原先断言的 `spill` / `sessionId` 换成「交没交落盘口」—— 会话归属绑在宿主的落盘口上，内核不知道。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { obj } from '@earendil-works/pi-schema'
+import { arr, bool, obj, str } from '@earendil-works/pi-schema'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
   createModels,
@@ -40,7 +40,7 @@ import {
   type ToolExecutionApi
 } from '@earendil-works/pi-durable'
 import { BaseTool } from '../../tools/baseTool'
-import type { AnyTool } from '../../tools/toolResult'
+import { toExecutionResult, type AnyTool, type ToolResult } from '../../tools/toolResult'
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from '../../fileTools/truncate'
 import { invokeTool, resultText, type InvokedToolResult } from '../../tools/testing/invokeTool'
 import type { SpillSink } from '../spill'
@@ -616,5 +616,130 @@ describe('WD-R 一轮真的 pi-durable', () => {
     })
     const { message } = await durableRound(wrapDurableOutput(tool, { spill: 'auto' }))
     expect(textsOf(message)).toEqual(['streamed result\n'])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SO-01..03 —— Codemode 结构化输出（structuredOutput / structuredOutputSchema）透传
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('SO 结构化输出透传', () => {
+  it('SO-01 toExecutionResult 透传对象/数组/false/0/null；省略时不带 structuredOutput 键', () => {
+    const cases: Array<{
+      label: string
+      value:
+        | { files: string[]; truncated: boolean }
+        | Array<number | string | boolean>
+        | boolean
+        | number
+        | null
+    }> = [
+      { label: 'object', value: { files: ['a.ts'], truncated: false } },
+      { label: 'array', value: [1, 'two', true] },
+      { label: 'false', value: false },
+      { label: '0', value: 0 },
+      { label: 'null', value: null }
+    ]
+
+    for (const { label, value } of cases) {
+      const exec = toExecutionResult(
+        { content: [{ type: 'text', text: 'ok' }], details: undefined, structuredOutput: value },
+        'probe'
+      )
+      expect(Object.prototype.hasOwnProperty.call(exec, 'structuredOutput'), label).toBe(true)
+      expect(exec.structuredOutput, label).toEqual(value)
+    }
+
+    const omitted = toExecutionResult(
+      { content: [{ type: 'text', text: 'ok' }], details: undefined },
+      'probe'
+    )
+    expect(Object.prototype.hasOwnProperty.call(omitted, 'structuredOutput')).toBe(false)
+    expect(omitted.structuredOutput).toBeUndefined()
+  })
+
+  it('SO-02 BaseTool 子类声明 structuredOutputSchema 并返回 structuredOutput 时成功透传；抛错时收口为 isError 且不带 structuredOutput', async () => {
+    const schema = obj({ files: arr(str()), truncated: bool() })
+    let shouldFail = false
+
+    class StructuredTool extends BaseTool {
+      readonly name = 'structured'
+      readonly label = 'Structured'
+      readonly description = 'Returns structured output'
+      readonly parameters = obj({})
+      readonly replay = 'safe' as const
+      readonly structuredOutputSchema = schema
+      async preExecute(): Promise<void> {
+        /* no-op */
+      }
+      protected async securityCheck(): Promise<void> {
+        /* no-op */
+      }
+      protected async executeInternal(): Promise<ToolResult> {
+        if (shouldFail) throw new Error('boom')
+        return {
+          content: [{ type: 'text', text: 'a.ts' }],
+          details: undefined,
+          structuredOutput: { files: ['a.ts'], truncated: false }
+        }
+      }
+    }
+
+    const tool = new StructuredTool()
+    expect(tool.structuredOutputSchema).toBe(schema)
+
+    const ok = await run(tool)
+    expect(ok.isError).toBeUndefined()
+    expect((ok as { structuredOutput?: unknown }).structuredOutput).toEqual({
+      files: ['a.ts'],
+      truncated: false
+    })
+
+    shouldFail = true
+    const err = await run(tool)
+    expect(err.isError).toBe(true)
+    expect(resultText(err)).toBe('boom')
+    expect(Object.prototype.hasOwnProperty.call(err, 'structuredOutput')).toBe(false)
+    expect((err as { structuredOutput?: unknown }).structuredOutput).toBeUndefined()
+  })
+
+  it('SO-03 wrapDurableOutput 原型链保留 structuredOutputSchema；未截断、触发截断/落盘、空文本补 (no output) 时均原样保留 structuredOutput', async () => {
+    const schema = obj({ count: str() })
+    const payload = { count: '42', items: ['x', 'y'] }
+
+    const makeTool = (text: string): AnyTool =>
+      probe(
+        async () => ({
+          output: text === '' ? [] : [{ type: 'text' as const, text }],
+          structuredOutput: payload
+        }),
+        { structuredOutputSchema: schema }
+      )
+
+    // 原型链保留 structuredOutputSchema（不是 own 属性）
+    const wrappedSmall = wrap(makeTool('short'))
+    expect(wrappedSmall.structuredOutputSchema).toBe(schema)
+    expect(Object.prototype.hasOwnProperty.call(wrappedSmall, 'structuredOutputSchema')).toBe(false)
+
+    // 1) 未截断
+    const rSmall = await run(wrappedSmall)
+    expect(resultText(rSmall)).toBe('short')
+    expect((rSmall as { structuredOutput?: unknown }).structuredOutput).toEqual(payload)
+
+    // 2) 触发超长落盘
+    const mem = memorySink('so-03')
+    const rSpilled = await run(wrap(makeTool(big('so')), { sink: mem.sink, spill: true }))
+    expect(codes(rSpilled)).toEqual(['spilled'])
+    expect((rSpilled as { structuredOutput?: unknown }).structuredOutput).toEqual(payload)
+
+    // 3) 触发内存截断
+    const rTrunc = await run(wrap(makeTool(big('tr')), { spill: false }))
+    expect(codes(rTrunc)).toEqual(['truncated'])
+    expect((rTrunc as { structuredOutput?: unknown }).structuredOutput).toEqual(payload)
+
+    // 4) 空文本补 (no output)
+    const rEmpty = await run(wrap(makeTool('')))
+    expect(resultText(rEmpty)).toBe('(no output)')
+    expect((rEmpty as { structuredOutput?: unknown }).structuredOutput).toEqual(payload)
   })
 })

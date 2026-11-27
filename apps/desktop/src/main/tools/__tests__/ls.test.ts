@@ -206,3 +206,54 @@ describe('ls 工具 - 错误处理', () => {
     expect(failure).toContain('is not a directory')
   })
 })
+
+describe('ls 工具 - 结构化输出（SO-05）', () => {
+  it('SO-05 声明 structuredOutputSchema；正常目录、空目录、超 100 文件截断均返回正确 { path, files, truncated }（正斜杠）；路径不存在返回 isError 且无 structuredOutput', async () => {
+    const tool = new ListTool(ctx)
+    expect(tool.structuredOutputSchema).toBeDefined()
+
+    // 1) 正常子目录
+    const normal = await executeTool(tool, 'so-ls-1', { path: join(TEST_DIR, 'src') })
+    expect(normal.isError).toBeUndefined()
+    expect((normal as { structuredOutput?: unknown }).structuredOutput).toEqual({
+      path: 'src',
+      files: ['index.ts', 'utils/helper.ts'],
+      truncated: false
+    })
+
+    // 2) 默认工作目录 → path 为 '.'，所有路径用正斜杠
+    const root = await executeTool(tool, 'so-ls-root', {})
+    const rootOut = (
+      root as { structuredOutput?: { path: string; files: string[]; truncated: boolean } }
+    ).structuredOutput
+    expect(rootOut?.path).toBe('.')
+    expect(rootOut?.truncated).toBe(false)
+    expect(rootOut?.files).toContain('src/utils/helper.ts')
+    expect(rootOut?.files.every((f) => !f.includes('\\'))).toBe(true)
+
+    // 3) 空目录
+    const empty = join(TEST_DIR, 'empty-so05')
+    mkdirSync(empty, { recursive: true })
+    const emptyRes = await executeTool(tool, 'so-ls-empty', { path: empty })
+    expect((emptyRes as { structuredOutput?: unknown }).structuredOutput).toEqual({
+      path: 'empty-so05',
+      files: [],
+      truncated: false
+    })
+
+    // 4) 超 100 文件截断
+    const truncRes = await executeTool(tool, 'so-ls-many', { path: MANY_DIR })
+    const truncOut = (
+      truncRes as { structuredOutput?: { path: string; files: string[]; truncated: boolean } }
+    ).structuredOutput
+    expect(truncOut?.truncated).toBe(true)
+    expect(truncOut?.files).toHaveLength(100)
+    expect(truncOut?.path.includes('\\')).toBe(false)
+    expect(truncOut?.files.every((f) => !f.includes('\\'))).toBe(true)
+
+    // 5) 路径不存在 → isError: true 且不带 structuredOutput
+    const errRes = await executeTool(tool, 'so-ls-err', { path: join(TEST_DIR, 'does-not-exist') })
+    expect(errRes.isError).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(errRes, 'structuredOutput')).toBe(false)
+  })
+})

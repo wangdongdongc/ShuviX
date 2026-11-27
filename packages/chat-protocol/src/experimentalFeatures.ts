@@ -17,6 +17,8 @@ export const EXPERIMENTAL_FEATURES = {
   goal: 'experimental.hint',
   /** 持久化代码模式（QuickJS 沙箱编排多步工具调用与 MCP 收拢） */
   codemode: 'experimental.hint',
+  /** Prompt Cache 后台保活（长对话等待期间按成本核算自动续期缓存） */
+  cacheWarming: 'experimental.hint',
   telegramBots: 'experimental.hintTelegramBots'
 } as const
 

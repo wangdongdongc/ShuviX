@@ -11,7 +11,7 @@
  */
 import { InlineCodemodeSandbox, loadQuickJSWasm } from '@earendil-works/pi-codemode'
 import { defineTool, type EntryRecord, type ToolRegistration } from '@earendil-works/pi-durable'
-import { obj, str } from '@earendil-works/pi-schema'
+import { arr, bool, obj, str } from '@earendil-works/pi-schema'
 import { describe, expect, it } from 'vitest'
 import { createAskTool } from '../../askTool'
 import { createSuggestTool } from '../../suggestTool'
@@ -1026,6 +1026,121 @@ describe('Codemode Phase 2 · MCP 工具收拢进代码模式', () => {
       expect(await withTimeout(session.submitUser('turn 3'), TIMEOUT, 't3')).toEqual({})
       expect(requestTools(t.kit, 2).map((tool) => tool.name)).not.toContain('mcp__srv__ping')
       expect((await storedLockOf(session))?.codemodeMcpOnly).toBe(true)
+    },
+    TIMEOUT
+  )
+})
+
+describe('Codemode · 结构化输出（SO-08..09）', () => {
+  it(
+    'SO-08 带 structuredOutputSchema 的工具在沙箱内直接 resolve 为 JS 对象，普通 echo 仍为字符串，首轮 systemPrompt 渲染出对象返回类型签名',
+    async () => {
+      const listFiles = defineTool({
+        name: 'list_files',
+        description: 'List project files',
+        parameters: obj({ dir: str({ description: 'Directory' }) }),
+        structuredOutputSchema: obj({
+          files: arr(str()),
+          truncated: bool()
+        }),
+        execute: async () => ({
+          output: [{ type: 'text', text: 'a.ts\nb.ts' }],
+          structuredOutput: { files: ['a.ts', 'b.ts'], truncated: false }
+        })
+      })
+
+      const t = await makeHost({
+        ephemeral: [SID],
+        tools: [listFiles, makeEchoTool()],
+        codemode: { sandbox: makeSandbox() }
+      })
+      const session = await t.open(SID)
+
+      const code = `
+        const listed = await tools.list_files({ dir: '.' });
+        const echoed = await tools.echo({ text: 'hello' });
+        return {
+          listedType: typeof listed,
+          isArray: Array.isArray(listed.files),
+          files: listed.files,
+          truncated: listed.truncated,
+          echoType: typeof echoed,
+          echoed
+        };
+      `
+      t.kit.queue(callTool('codemode', { code }, 'cm-so-08'), answer('done'))
+
+      expect(await withTimeout(session.submitUser('structured test'), TIMEOUT, 'submit')).toEqual(
+        {}
+      )
+
+      // 首轮 systemPrompt 渲染出 TypeScript 对象返回类型签名（含 files / truncated）
+      const sysPrompt = t.kit.requests[0]!.systemPrompt
+      expect(sysPrompt).toContain('list_files')
+      expect(sysPrompt).toMatch(/files\s*:\s*(?:Array<string>|string\[\])/)
+      expect(sysPrompt).toMatch(/truncated\s*:\s*boolean/)
+
+      const results = await toolResultEntries(session)
+      expect(results).toHaveLength(1)
+      const text = toolResultText(results[0]!)
+      expect(text).toContain('"listedType":"object"')
+      expect(text).toContain('"isArray":true')
+      expect(text).toContain('"files":["a.ts","b.ts"]')
+      expect(text).toContain('"truncated":false')
+      expect(text).toContain('"echoType":"string"')
+      expect(text).toContain('"echoed":"echo:hello"')
+    },
+    TIMEOUT
+  )
+
+  it(
+    'SO-09 带 structuredOutputSchema 的工具返回 isError: true（无 structuredOutput）时，沙箱内 reject 且可被 try/catch 捕获，details.calls 记为 status: "error"',
+    async () => {
+      const brokenList = defineTool({
+        name: 'broken_list',
+        description: 'List files that always fails',
+        parameters: obj({ dir: str({ description: 'Directory' }) }),
+        structuredOutputSchema: obj({
+          files: arr(str()),
+          truncated: bool()
+        }),
+        execute: async () => ({
+          isError: true,
+          output: [{ type: 'text', text: 'Path not found: /missing' }]
+        })
+      })
+
+      const t = await makeHost({
+        ephemeral: [SID],
+        tools: [brokenList],
+        codemode: { sandbox: makeSandbox() }
+      })
+      const session = await t.open(SID)
+
+      const code = `
+        try {
+          await tools.broken_list({ dir: '/missing' });
+          return { caught: false };
+        } catch (err) {
+          return { caught: true, message: String(err) };
+        }
+      `
+      t.kit.queue(callTool('codemode', { code }, 'cm-so-09'), answer('done'))
+
+      expect(await withTimeout(session.submitUser('structured err'), TIMEOUT, 'submit')).toEqual({})
+
+      const results = await toolResultEntries(session)
+      expect(results).toHaveLength(1)
+      const text = toolResultText(results[0]!)
+      expect(text).toContain('"caught":true')
+      expect(text).toContain('Path not found: /missing')
+
+      const calls = toolResultDetails(results[0]!)?.calls ?? []
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({
+        name: 'broken_list',
+        status: 'error'
+      })
     },
     TIMEOUT
   )

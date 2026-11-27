@@ -69,6 +69,9 @@ const log = createLogger('SessionHost')
  */
 export const AUTO_RESUME_KEY = 'session.autoResume'
 
+/** Prompt Cache 后台保活开关（现读，默认关；`'true'` 时按成本核算自动续期长对话缓存） */
+export const CACHE_WARMING_ENABLED_KEY = 'session.cacheWarming'
+
 /**
  * 中断会话上收到用户发送时怎么办（裁决 R5，用户 2026-10-04 定为 abort-then-send）：
  * 先中止被中断的那件事，再发送。另一种策略 `'continue-then-queue'` 仍保留在运行时里，换只改这一行。
@@ -185,6 +188,10 @@ export function buildSessionHostDeps(
       models: false,
       isEnabled: () => settingsService.get(CODEMODE_ENABLED_KEY) === 'true',
       mcpToolsOnly: () => settingsService.get(CODEMODE_MCP_ONLY_KEY) === 'true'
+    },
+    // Prompt Cache 后台保活（pi-ai cache-warming）：实验开关开启时按成本模型续期长对话缓存
+    cacheWarming: {
+      isEnabled: () => settingsService.get(CACHE_WARMING_ENABLED_KEY) === 'true'
     },
     ...overrides
   }

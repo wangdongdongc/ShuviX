@@ -39,8 +39,15 @@ function normalizeExtensionText(text: string): string {
     .replace(/[_-]+/g, ' ')
 }
 
+function stemEnglish(word: string): string {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`
+  if (word.length > 4 && /(ches|shes|sses|xes|zes)$/.test(word)) return word.slice(0, -2)
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1)
+  return word
+}
+
 /**
- * 分词（中日文也切得开，pi-durable 1.2 的搜索只认 ASCII）。`_` / `-` 按空格算：`read_page` 要能被 `page` 搜到。
+ * 分词（中日文也切得开）。`_` / `-` 按空格算：`read_page` 要能被 `page` 搜到。
  * 单个字符不算（`a`、`的`、`で`、`器`）：它们到处都是，只会让不相干的服务器也算命中。
  */
 export function tokenizeExtensionText(text: string): string[] {
@@ -49,7 +56,7 @@ export function tokenizeExtensionText(text: string): string[] {
     if (!part.isWordLike) continue
     const word = part.segment
     if (STOP_WORDS.has(word) || [...word].length === 1) continue
-    tokens.push(word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word)
+    tokens.push(/^[a-z0-9]+$/.test(word) ? stemEnglish(word) : word)
   }
   return tokens
 }
@@ -61,30 +68,72 @@ export interface ExtensionDocument {
   matchName?: string
 }
 
+const BM25_K1 = 1.2
+const NAME_WEIGHT = 3
+
 /**
- * 按查询排序：查询里的词命中几个算几分，命中服务器名多给分。只留得分不低于最高分一半的 —— 一句话里碰巧撞上一个词的
- * 服务器不该把唯一命中变成“多个命中”。
+ * 按查询排序：
+ *  1. 主分按词覆盖与名字命中算（名字命中 3 分、正文/非 ASCII 子串命中 1 分），只留不低于最高分一半的 ——
+ *     一句话里碰巧撞上一个词的服务器不该把唯一命中变成“多个命中”。
+ *  2. 同主分内用 BM25（IDF 稀有词加权 + TF 饱和，k1=1.2，不做文档长度惩罚：工具多的服务器不该因
+ *     工具清单长而被压低）排先后，仍同分按原序。
  */
 export function rankExtensionDocuments(
   query: string,
   documents: readonly ExtensionDocument[]
 ): string[] {
   const wanted = [...new Set(tokenizeExtensionText(query))]
-  const scored = documents
-    .map((document, index) => {
-      const words = new Set(tokenizeExtensionText(document.text))
-      const nameWords = new Set(tokenizeExtensionText(document.matchName ?? document.name))
-      const raw = normalizeExtensionText(document.text)
+  if (wanted.length === 0 || documents.length === 0) return []
+
+  const indexed = documents.map((document, index) => {
+    const textCounts = new Map<string, number>()
+    for (const token of tokenizeExtensionText(document.text)) {
+      textCounts.set(token, (textCounts.get(token) ?? 0) + 1)
+    }
+    return {
+      name: document.name,
+      index,
+      textCounts,
+      nameWords: new Set(tokenizeExtensionText(document.matchName ?? document.name)),
+      raw: normalizeExtensionText(document.text)
+    }
+  })
+
+  const totalDocs = indexed.length
+  const idf = new Map<string, number>(
+    wanted.map((word) => {
+      const nonAscii = /\P{ASCII}/u.test(word)
+      const df = indexed.filter(
+        (doc) =>
+          doc.nameWords.has(word) ||
+          doc.textCounts.has(word) ||
+          (nonAscii && doc.raw.includes(word))
+      ).length
+      return [word, Math.log(1 + (totalDocs - df + 0.5) / (df + 0.5))]
+    })
+  )
+
+  const scored = indexed
+    .map((doc) => {
       let score = 0
+      let bm25 = 0
       for (const word of wanted) {
-        if (nameWords.has(word)) score += 3
-        // 非 ASCII 的词也认子串：切词结果随 ICU 版本变（`データベース` 对 `リモートデータベース`）
-        else if (words.has(word) || (/\P{ASCII}/u.test(word) && raw.includes(word))) score += 1
+        const inName = doc.nameWords.has(word)
+        const count = doc.textCounts.get(word) ?? 0
+        const subMatch = count === 0 && /\P{ASCII}/u.test(word) && doc.raw.includes(word)
+        if (inName) score += NAME_WEIGHT
+        else if (count > 0 || subMatch) score += 1
+
+        const tf = count > 0 ? count : subMatch ? 1 : 0
+        const weight =
+          (inName ? NAME_WEIGHT : 0) + (tf > 0 ? (tf * (BM25_K1 + 1)) / (tf + BM25_K1) : 0)
+        if (weight > 0) bm25 += (idf.get(word) ?? 0) * weight
       }
-      return { name: document.name, score, index }
+      return { name: doc.name, score, bm25, index: doc.index }
     })
     .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .sort((a, b) => b.score - a.score || b.bm25 - a.bm25 || a.index - b.index)
+
   const top = scored[0]?.score ?? 0
   return scored.filter((entry) => entry.score * 2 >= top).map((entry) => entry.name)
 }

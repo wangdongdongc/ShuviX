@@ -687,6 +687,12 @@ export {
   type SessionHost
 } from './durable/sessionHost'
 export {
+  withCacheWarming,
+  resolveCacheWarmingModel,
+  type CacheWarmingDeps
+} from './durable/cacheWarmingModels'
+export type { CacheWarmingHostConfig } from './durable/seams'
+export {
   SessionClosedError,
   observeResumes,
   settlementResult,

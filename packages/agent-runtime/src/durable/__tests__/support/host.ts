@@ -101,6 +101,8 @@ export interface TestHostOptions {
   imageProcessor?: SessionHostDeps['imageProcessor']
   /** 持久化代码模式配置（`pi-durable/codemode`；`restart()` 沿用） */
   codemode?: SessionHostDeps['codemode']
+  /** Prompt Cache 后台保活配置（`pi-ai` cache-warming；`restart()` 沿用） */
+  cacheWarming?: SessionHostDeps['cacheWarming']
   /** 整份替换缺省的测试覆盖（关重试 / 关自动压缩） */
   settingsOverrides?: ShuviXSettingsOverrides
   interruptedSendPolicy?: InterruptedSendPolicy
@@ -366,6 +368,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     ...(options.redactionPolicy === undefined ? {} : { redactionPolicy: options.redactionPolicy }),
     ...(options.imageProcessor === undefined ? {} : { imageProcessor: options.imageProcessor }),
     ...(options.codemode === undefined ? {} : { codemode: options.codemode }),
+    ...(options.cacheWarming === undefined ? {} : { cacheWarming: options.cacheWarming }),
     logger: {
       info: (message) => infos.push(message),
       warn: (message) => warnings.push(message),

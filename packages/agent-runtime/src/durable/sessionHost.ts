@@ -57,6 +57,7 @@ import {
   type SessionHostDeps
 } from './seams'
 import { createShuviXSettings } from './settings'
+import { withCacheWarming } from './cacheWarmingModels'
 import { withRedactionEgress } from './redactionModels'
 
 const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () => {} }
@@ -120,6 +121,8 @@ class SessionHostImpl implements SessionHost {
   private readonly promptExtensions: PromptExtensions
   /** 本进程报过的 driven 落定（P2-09：每个进程至多一次；LRU 关了再开也不重报），按会话 */
   private readonly drivenEmitted = new Map<string, Set<number>>()
+  /** 每条会话的 Prompt Cache 保活清理函数（会话关闭 / 驱逐 / 删除时调用） */
+  private readonly cacheWarmingCleanups = new Map<string, () => void>()
   /**
    * 每条会话在本进程里的记录（option A：锁 = 「agent 在本进程里初始化过」；显式喊停）：LRU 关了再开交回
    * 同一个对象，宿主换了（新进程）就是空的；删除时丢掉
@@ -295,20 +298,33 @@ class SessionHostImpl implements SessionHost {
         overrides: () => this.deps.settingsOverrides
       })
       let harness: Harness
+      let disposeCacheWarming: (() => void) | undefined
       try {
+        // 自动脱敏的出口：这条会话的每个模型调用问一次策略（第一层拒发不发请求；判定留给写入时用；会话对象出生之后才有对照表）
+        const egressModels =
+          this.deps.redaction !== undefined && this.deps.redactionPolicy !== undefined
+            ? withRedactionEgress(this.deps.models, {
+                sessionId,
+                redaction: () => lockedSession?.redaction,
+                policy: this.deps.redactionPolicy,
+                logger: this.logger
+              })
+            : this.deps.models
+        let sessionModels = egressModels
+        if (this.deps.cacheWarming !== undefined) {
+          const warming = withCacheWarming(egressModels, {
+            sessionId,
+            isEnabled: this.deps.cacheWarming.isEnabled,
+            logger: this.logger,
+            ...(this.deps.now === undefined ? {} : { now: this.deps.now })
+          })
+          sessionModels = warming.models
+          disposeCacheWarming = warming.dispose
+        }
         harness = await Harness.open(
           storage,
           {
-            // 自动脱敏的出口：这条会话的每个模型调用问一次策略（第一层拒发不发请求；判定留给写入时用；会话对象出生之后才有对照表）
-            models:
-              this.deps.redaction !== undefined && this.deps.redactionPolicy !== undefined
-                ? withRedactionEgress(this.deps.models, {
-                    sessionId,
-                    redaction: () => lockedSession?.redaction,
-                    policy: this.deps.redactionPolicy,
-                    logger: this.logger
-                  })
-                : this.deps.models,
+            models: sessionModels,
             registry,
             settings,
             ...(this.deps.env === undefined ? {} : { env: this.deps.env }),
@@ -322,6 +338,7 @@ class SessionHostImpl implements SessionHost {
           BG
         )
       } catch (error) {
+        disposeCacheWarming?.()
         // Harness.open 失败时自己会关掉存储；构造之前就失败（如注册表缺内置任务）则由这里关
         await storage.close(BG).catch(() => undefined)
         throw error
@@ -386,8 +403,12 @@ class SessionHostImpl implements SessionHost {
         })
         lockedSession = session
         if (this.sealedFlag) {
+          disposeCacheWarming?.()
           await session.close('remove')
           return undefined
+        }
+        if (disposeCacheWarming !== undefined) {
+          this.cacheWarmingCleanups.set(sessionId, disposeCacheWarming)
         }
         // 打开时总报一次此刻的运行状态（PIN-R，与锁镜像的 K11 同理）：崩溃可能把 DB 里的运行标记留在
         // busy（后台压缩中、最后一次提交与转闲的微任务之间），空闲重开若不报，那个标记永远好不了
@@ -401,6 +422,8 @@ class SessionHostImpl implements SessionHost {
         })
         return session
       } catch (error) {
+        this.cacheWarmingCleanups.delete(sessionId)
+        disposeCacheWarming?.()
         await harness.close(BG).catch(() => undefined)
         throw error
       }
@@ -450,6 +473,11 @@ class SessionHostImpl implements SessionHost {
 
   /** `onSessionClosed`（PIN-09）：`destroy` = 删除，其余都算 `remove`；抛错只记日志 */
   private notifyClosed(sessionId: string, reason: SessionCloseReason): void {
+    const disposeWarming = this.cacheWarmingCleanups.get(sessionId)
+    if (disposeWarming !== undefined) {
+      this.cacheWarmingCleanups.delete(sessionId)
+      disposeWarming()
+    }
     try {
       this.deps.onSessionClosed?.(sessionId, reason === 'destroy' ? 'destroy' : 'remove')
     } catch (error) {

@@ -71,7 +71,17 @@ export interface CodemodeHostConfig {
   readonly mcpToolsOnly?: () => boolean
 }
 
+/** 宿主注入的 Prompt Cache 后台保活配置（`pi-ai` `cache-warming`） */
+export interface CacheWarmingHostConfig {
+  /** 现读开关：返回 true 时在长对话等待工具或用户期间按成本模型自动续期 Prompt Cache */
+  readonly isEnabled: () => boolean
+}
+
 export interface SessionHostDeps {
+  /**
+   * Prompt Cache 后台保活（`pi-ai` `cache-warming`）：给了就按会话包一层保活装饰器；缺省 = 不启用
+   */
+  cacheWarming?: CacheWarmingHostConfig
   /**
    * 持久化 QuickJS 代码模式（`pi-durable/codemode`）：给了就在每条会话注册表安装 `codemode` 扩展；
    * 新创建 agent 时按 `isEnabled()` 决定是否把 `codemode` 纳入会话扩展与工具列表。缺省 = 不启用

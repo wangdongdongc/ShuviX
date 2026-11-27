@@ -19,6 +19,7 @@ import { setPhoneFontSize, usePhoneFontSize } from '../../mobile/phoneFontSize'
 import { isWebHost } from '../../host/hostMedia'
 import { NotificationSettings } from './NotificationSettings'
 import { CodemodeSettings } from './CodemodeSettings'
+import { CacheWarmingSettings } from './CacheWarmingSettings'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -172,6 +173,7 @@ export function GeneralSettings(): React.JSX.Element {
       />
 
       <CodemodeSettings />
+      <CacheWarmingSettings />
     </div>
   )
 }

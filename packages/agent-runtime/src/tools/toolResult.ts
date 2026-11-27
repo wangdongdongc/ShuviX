@@ -44,6 +44,8 @@ export interface ToolResult<TDetails = unknown> {
   control?: ToolControl
   /** 关于这次调用的附注（模型可见，渲染成 `<harness>` 段）—— 慎用 */
   diagnostics?: readonly ToolDiagnostic[]
+  /** 供程序调用方（如 codemode 脚本）读取的结构化结果；仅当工具声明了 `structuredOutputSchema` 时提供 */
+  structuredOutput?: JsonValue
 }
 
 /** 同批工具的执行方式：并行，或按调用顺序逐个（即 durable 的同名类型） */
@@ -102,7 +104,8 @@ export function toExecutionResult(result: ToolResult, toolName: string): ToolExe
     ...(result.control === undefined ? {} : { control: result.control }),
     ...(result.diagnostics === undefined || result.diagnostics.length === 0
       ? {}
-      : { diagnostics: result.diagnostics })
+      : { diagnostics: result.diagnostics }),
+    ...(result.structuredOutput === undefined ? {} : { structuredOutput: result.structuredOutput })
   }
 }
 

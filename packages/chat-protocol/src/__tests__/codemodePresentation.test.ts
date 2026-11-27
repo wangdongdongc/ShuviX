@@ -117,4 +117,41 @@ describe('Codemode Phase 1 · D. Presentation、摘要与 i18n', () => {
       }
     }
   })
+
+  it('CW-D02 EXPERIMENTAL_FEATURES.cacheWarming 与 en/zh/ja 三语 settings.cacheWarming* 键完整非空', () => {
+    const featureKey = EXPERIMENTAL_FEATURES.cacheWarming
+    expect(typeof featureKey).toBe('string')
+    expect(featureKey.length).toBeGreaterThan(0)
+
+    const resolveKey = (bundle: Record<string, unknown>, dotKey: string): unknown =>
+      dotKey.split('.').reduce<unknown>((acc, part) => {
+        if (acc !== null && typeof acc === 'object' && part in (acc as Record<string, unknown>)) {
+          return (acc as Record<string, unknown>)[part]
+        }
+        return undefined
+      }, bundle)
+
+    const settingsKeys = [
+      'cacheWarmingSection',
+      'cacheWarmingSectionHint',
+      'cacheWarmingEnabled',
+      'cacheWarmingEnabledHint'
+    ] as const
+
+    for (const [locale, bundle] of [
+      ['en', en],
+      ['zh', zh],
+      ['ja', ja]
+    ] as const) {
+      const expText = resolveKey(bundle as unknown as Record<string, unknown>, featureKey)
+      expect(typeof expText, `${locale}.${featureKey}`).toBe('string')
+      expect((expText as string).trim().length, `${locale}.${featureKey}`).toBeGreaterThan(0)
+
+      for (const key of settingsKeys) {
+        const val = bundle.settings[key]
+        expect(typeof val, `${locale}.settings.${key}`).toBe('string')
+        expect(val.trim().length, `${locale}.settings.${key}`).toBeGreaterThan(0)
+      }
+    }
+  })
 })

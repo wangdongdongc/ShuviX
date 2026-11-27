@@ -6,7 +6,7 @@
 import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { statSync } from 'fs'
-import { obj, opt, str } from '@earendil-works/pi-schema'
+import { arr, bool, obj, opt, str } from '@earendil-works/pi-schema'
 import { BaseTool, callOwnerOf, type ToolCallScope } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
@@ -37,6 +37,14 @@ const GlobParamsSchema = obj({
   )
 })
 
+const GlobOutputSchema = obj({
+  files: arr(str(), {
+    description:
+      'Matched file paths relative to the working directory, most recently modified first'
+  }),
+  truncated: bool({ description: 'True when matches hit the result cap' })
+})
+
 const GLOB_DESCRIPTION =
   'Find files by name or path pattern. Returns paths, most recently modified first; .gitignore is respected. To search file contents, use `grep`.'
 
@@ -46,6 +54,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   readonly label = t('tool.globLabel')
   readonly description = GLOB_DESCRIPTION
   readonly parameters = GlobParamsSchema
+  readonly structuredOutputSchema = GlobOutputSchema
   readonly outputStrategy = 'keep-start' as const
   // 只读：中断后恢复时重跑一遍无害（durable replay）
   readonly replay = 'safe' as const
@@ -124,7 +133,8 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
     if (files.length === 0) {
       return {
         content: [{ type: 'text' as const, text: 'No files found' }],
-        details: { type: 'glob', count: 0, truncated: false }
+        details: { type: 'glob', count: 0, truncated: false },
+        structuredOutput: { files: [], truncated: false }
       }
     }
 
@@ -142,10 +152,11 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
     filesWithMtime.sort((a, b) => b.mtime - a.mtime)
 
     // 转为相对于工作目录的路径
-    const outputLines = filesWithMtime.map((f) => {
+    const matchedFiles = filesWithMtime.map((f) => {
       const absPath = resolve(searchPath, f.path)
       return relative(config.workingDirectory, absPath)
     })
+    const outputLines = [...matchedFiles]
 
     if (truncated) {
       outputLines.push('')
@@ -160,6 +171,10 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
       details: {
         type: 'glob',
         count: files.length,
+        truncated
+      },
+      structuredOutput: {
+        files: matchedFiles.map((f) => f.split('\\').join('/')),
         truncated
       }
     }
