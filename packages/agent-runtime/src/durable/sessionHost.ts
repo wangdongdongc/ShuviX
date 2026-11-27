@@ -59,6 +59,7 @@ import {
 import { createShuviXSettings } from './settings'
 import { withCacheWarming } from './cacheWarmingModels'
 import { withRedactionEgress } from './redactionModels'
+import { withToolCallPartialJson } from './toolCallPartialJsonModels'
 
 const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () => {} }
 
@@ -300,16 +301,18 @@ class SessionHostImpl implements SessionHost {
       let harness: Harness
       let disposeCacheWarming: (() => void) | undefined
       try {
+        // Pi 1.6.1 兼容：从 toolcall_delta 恢复 partialJson 供投影层产出 live.argsText（文档协作虚影 / 流式参数预览）
+        const partialJsonModels = withToolCallPartialJson(this.deps.models)
         // 自动脱敏的出口：这条会话的每个模型调用问一次策略（第一层拒发不发请求；判定留给写入时用；会话对象出生之后才有对照表）
         const egressModels =
           this.deps.redaction !== undefined && this.deps.redactionPolicy !== undefined
-            ? withRedactionEgress(this.deps.models, {
+            ? withRedactionEgress(partialJsonModels, {
                 sessionId,
                 redaction: () => lockedSession?.redaction,
                 policy: this.deps.redactionPolicy,
                 logger: this.logger
               })
-            : this.deps.models
+            : partialJsonModels
         let sessionModels = egressModels
         if (this.deps.cacheWarming !== undefined) {
           const warming = withCacheWarming(egressModels, {

@@ -22,8 +22,22 @@
  * Used by .github/workflows/linux-headless.yml against an installed deb, and by the macOS e2e
  * (apps/desktop/e2e/specs/startup/headless*.e2e.ts) against an isolated instance.
  */
-import { createHost, remote } from '@earendil-works/chord'
-import { Type } from 'typebox'
+import {
+  arr,
+  createHost,
+  hostKind,
+  lit,
+  nul,
+  num,
+  obj,
+  oneOf,
+  remote,
+  str,
+  textCodec,
+  union,
+  unknown
+} from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 const STEP_TIMEOUT_MS = 20_000
 
@@ -70,6 +84,50 @@ function withTimeout(promise, step) {
     .catch((error) => fail(step, error instanceof Error ? error.message : String(error)))
 }
 
+const UTF8_ENCODER = new TextEncoder()
+const UTF8_DECODER = new TextDecoder()
+
+const TAG_TO_KIND = {
+  h: 'hello',
+  H: 'hold',
+  R: 'release',
+  b: 'bound',
+  s: 'state',
+  f: 'failed',
+  l: 'loading',
+  g: 'gone',
+  p: 'ping',
+  P: 'pong',
+  a: 'ack',
+  T: 'retry',
+  V: 'revoke',
+  C: 'closed',
+  c: 'call',
+  r: 'result',
+  e: 'error',
+  x: 'abort',
+  E: 'event'
+}
+
+function bytesToFrame(bytes) {
+  const parsed = JSON.parse(UTF8_DECODER.decode(bytes))
+  const tag = Array.isArray(parsed)
+    ? parsed[0] === '@' && Array.isArray(parsed[2])
+      ? parsed[2][0]
+      : parsed[0]
+    : undefined
+  const t = typeof tag === 'string' && tag in TAG_TO_KIND ? TAG_TO_KIND[tag] : 'frame'
+  return { t, d: parsed }
+}
+
+function frameToBytes(frame) {
+  if (frame instanceof Uint8Array || ArrayBuffer.isView(frame)) return frame
+  if (frame && typeof frame === 'object' && 'd' in frame && frame.d !== undefined) {
+    return UTF8_ENCODER.encode(JSON.stringify(frame.d))
+  }
+  return UTF8_ENCODER.encode(JSON.stringify(frame))
+}
+
 /** A chord Link over the socket's {t:'sync'} messages (same rules as agent-runtime's FrameLink) */
 class SocketLink {
   #handler
@@ -86,23 +144,32 @@ class SocketLink {
     return this.#closed
   }
 
-  send(frame) {
+  send(bytes) {
     if (this.#closed) return
     try {
-      this.#transmit(frame)
+      this.#transmit(bytesToFrame(bytes))
     } catch {
       this.ended('transport error')
     }
   }
 
-  receive(handler) {
+  onMessage(handler) {
     this.#handler = handler
-    for (const frame of this.#queue.splice(0)) handler(frame)
+    for (const bytes of this.#queue.splice(0)) handler(bytes)
+    return () => {
+      if (this.#handler === handler) this.#handler = undefined
+    }
   }
 
   onClose(handler) {
-    if (this.#closed) handler('closed')
-    else this.#closeHandlers.add(handler)
+    if (this.#closed) {
+      handler('closed')
+      return () => {}
+    }
+    this.#closeHandlers.add(handler)
+    return () => {
+      this.#closeHandlers.delete(handler)
+    }
   }
 
   close(reason = 'closed') {
@@ -121,8 +188,9 @@ class SocketLink {
       this.ended(typeof frame.reason === 'string' ? frame.reason : 'peer closed')
       return
     }
-    if (this.#handler === undefined) this.#queue.push(frame)
-    else this.#handler(frame)
+    const bytes = frameToBytes(frame)
+    if (this.#handler === undefined) this.#queue.push(bytes)
+    else this.#handler(bytes)
   }
 
   ended(reason) {
@@ -136,12 +204,30 @@ class SocketLink {
 
 /**
  * The session view contract (packages/agent-runtime/src/sync/viewContracts.ts) as a consumer: same name, version and
- * input; both state members are left unconstrained, which any provider schema covers
+ * params; both state members are left unconstrained, which any provider schema covers
  */
+const ViewServerAddress = hostKind('main')()
+const AvailabilitySchema = oneOf('available', 'unavailable')
+const LooseSessionViewSchema = obj({
+  v: lit(1),
+  sessionId: str(),
+  source: str(),
+  capabilities: unknown(),
+  conversationId: union([num(), nul()]),
+  messages: arr(unknown()),
+  live: unknown(),
+  toolRuns: unknown(),
+  run: unknown(),
+  queue: arr(unknown()),
+  asks: arr(unknown()),
+  context: unknown()
+})
+
 const SessionViewContract = remote('shuvix.session-view', {
   version: 1,
-  input: Type.Object({ sessionId: Type.String({ minLength: 1 }) }),
-  variants: { owner: { state: { view: Type.Unknown(), availability: Type.Unknown() } } }
+  params: { sessionId: str({ min: 1 }) },
+  hostAddress: () => ViewServerAddress,
+  variants: { owner: { state: { view: LooseSessionViewSchema, availability: AvailabilitySchema } } }
 })
 
 // 1. the web client
@@ -260,18 +346,24 @@ ok('session:create', session.id)
 // 5. the session's view over a view-sync link
 {
   const step = 'view sync'
-  const host = createHost({ name: `headless-smoke:${linkId}`, kind: 'client', onError: () => {} })
-  host.connect(link, { pingTimeout: 60_000 })
-  const handle = host.get(SessionViewContract, { sessionId: session.id }, { at: 'main' })
-  handle.ready.catch(() => undefined)
-  const stops = [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
+  const host = createHost({
+    heartbeat: { ping: 60_000, close: 120_000 },
+    onError: () => {}
+  })
+  await host.load([], BACKGROUND_CONTEXT)
+  host.connect(link, { principal: { kind: 'server' }, codec: textCodec }, BACKGROUND_CONTEXT)
+  const handle = host.hold(SessionViewContract, { sessionId: session.id }, BACKGROUND_CONTEXT)
   const view = await withTimeout(
     new Promise((resolve, reject) => {
       const poll = setInterval(() => {
-        if (handle.status === 'gone') {
+        const st = handle.state.value
+        if (st.kind === 'failed') {
           clearInterval(poll)
-          reject(new Error(`subscription failed: ${handle.error?.message ?? handle.error}`))
-        } else if (handle.status === 'live' && handle.view.value !== undefined) {
+          reject(new Error(`subscription failed: ${st.cause.error?.message ?? st.cause.error}`))
+        } else if (st.kind === 'ended') {
+          clearInterval(poll)
+          reject(new Error(`subscription ended: ${st.error?.message ?? st.error}`))
+        } else if (st.kind === 'live' && handle.view.value !== undefined) {
           clearInterval(poll)
           resolve(handle.view.value)
         }
@@ -285,7 +377,6 @@ ok('session:create', session.id)
     step,
     `session view v${view.v}, ${view.messages.length} message(s), ${handle.availability.value}`
   )
-  for (const stop of stops) stop()
   handle.release()
 }
 
