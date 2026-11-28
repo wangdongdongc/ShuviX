@@ -89,6 +89,9 @@ export function listenAddresses(
       const family = entry.family as unknown
       if (entry.internal || (family !== 'IPv4' && family !== 4)) continue
       if (!isPrivatePeerAddress(entry.address)) continue
+      // 跳过网络地址（.0）与广播地址（.255）：虚拟网桥等接口偶发给出 x.x.x.0，无法作为可连接主机地址
+      const lastOctet = Number(entry.address.split('.')[3])
+      if (lastOctet === 0 || lastOctet === 255) continue
       const url = `http://${entry.address}:${port}`
       if (!urls.includes(url)) urls.push(url)
     }

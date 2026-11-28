@@ -116,7 +116,8 @@ export function privateIPv4Addresses(): string[] {
     for (const entry of entries ?? []) {
       const family = entry.family as unknown
       if (entry.internal || (family !== 'IPv4' && family !== 4)) continue
-      const [a, b] = entry.address.split('.').map(Number)
+      const [a, b, , d] = entry.address.split('.').map(Number)
+      if (d === 0 || d === 255) continue
       const isPrivate =
         a === 10 ||
         (a === 172 && b >= 16 && b <= 31) ||
@@ -152,7 +153,8 @@ export function privateIPv4Networks(): PrivateIPv4Network[] {
     const entry = (all[name] ?? []).find((e) => {
       const family = e.family as unknown
       if (e.internal || (family !== 'IPv4' && family !== 4)) return false
-      const [a, b] = e.address.split('.').map(Number)
+      const [a, b, , d] = e.address.split('.').map(Number)
+      if (d === 0 || d === 255) return false
       return (
         a === 10 ||
         (a === 172 && b >= 16 && b <= 31) ||

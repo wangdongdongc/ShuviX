@@ -1070,7 +1070,6 @@ async function uiLocale(): Promise<FilesMenuLocale> {
   const set = await app.main.eval<string | null>(
     `Promise.resolve(window.api.settings.get('general.language')).then((v) => v || null)`
   )
-  const lang =
-    set ?? (await app.main.eval<string>('navigator.language')).split('-')[0]!.toLowerCase()
+  const lang = (set ?? 'en').split('-')[0]!.toLowerCase()
   return LOCALES[lang] ?? en
 }

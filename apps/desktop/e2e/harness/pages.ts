@@ -3419,9 +3419,16 @@ const EXT_ITEMS = (scope: string): string =>
 const SECTION_HINT = (anchor: string, part?: string): string =>
   `(async () => {
     const section = (${anchor})?.closest('section')
-    // 只认标题那一行的问号：卡片里的行可能各有各的问号，document 序上都排在它后面
+    // 有标题行时只认标题那一行的问号；无标题（hideTitle，如会话设置独立 Tab）时认卡片外部的问号
     const header = section?.querySelector('h3')?.parentElement
-    const btn = header?.querySelector('[data-info-hint]')
+    const btn =
+      header?.querySelector('[data-info-hint]') ??
+      (section
+        ? [...section.children]
+            .filter((el) => !el.hasAttribute('data-settings-card'))
+            .map((el) => el.querySelector('[data-info-hint]'))
+            .find(Boolean)
+        : null)
     if (!btn) return ''
     // 走**悬浮**那条路，不走聚焦：气泡失焦即收起，而这一刻别处（弹窗挂载时的自动聚焦、异步数据
     // 到货后的重渲染）随时可能把焦点抢走 —— 抢走就等于当场收起，先前按 focus() 读的版本因此每隔
@@ -7765,10 +7772,24 @@ export function infoHintPane(client: CdpClient, scope = 'document'): InfoHintPan
     return host.tagName === 'H3' ? host.parentElement : host
   })()`
 
-  /** 这一行里的那个问号（找不到行、或这一行没有说明时为 null） */
+  /** 这一行里的那个问号（找不到行、或这一行没有说明时为 null；无标题 Tab 面板回落到对应选中 Tab 下的卡片外问号） */
   const btn = (titles: string[]): string => `(() => {
     const line = ${titleLine(titles)}
-    return line ? line.querySelector('[data-info-hint]') : null
+    if (line) return line.querySelector('[data-info-hint]')
+    const want = ${JSON.stringify(titles)}
+    const root = ${scope}
+    const activeTab = root && [...root.querySelectorAll('[role="tab"][aria-selected="true"]')].find((el) =>
+      want.includes((el.textContent ?? '').trim())
+    )
+    if (!activeTab) return null
+    for (const sec of root.querySelectorAll('section')) {
+      for (const child of sec.children) {
+        if (child.hasAttribute('data-settings-card')) continue
+        const found = child.querySelector('[data-info-hint]')
+        if (found) return found
+      }
+    }
+    return null
   })()`
 
   /** 该问号此刻的气泡快照（按 aria-describedby 精确取，不认 document 里的第一个） */
@@ -7830,8 +7851,10 @@ export function infoHintPane(client: CdpClient, scope = 'document'): InfoHintPan
   const count = (titles: string[]): Promise<number> =>
     client.eval<number>(`(() => {
       const line = ${titleLine(titles)}
-      if (!line) throw new Error('settings title not on screen: ' + ${JSON.stringify(titles.join(' / '))})
-      return line.querySelectorAll('[data-info-hint]').length
+      if (line) return line.querySelectorAll('[data-info-hint]').length
+      const b = ${btn(titles)}
+      if (b) return 1
+      throw new Error('settings title not on screen: ' + ${JSON.stringify(titles.join(' / '))})
     })()`)
 
   return {

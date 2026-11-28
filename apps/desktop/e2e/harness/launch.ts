@@ -533,6 +533,9 @@ export async function launchApp(
       // 这两个开关让实例不理会遮挡与后台化，e2e 结果于是与「屏幕上还有什么窗口」无关。
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
+      // 隔离 e2e 只连本机回环 / 局域网测试服务；不禁用系统代理时，宿主机开启 HTTP/SOCKS 代理
+      // 会把 browserView 访问局域网 IP 的请求拐进代理，导致 web 客户端与对端地址判定失败（如 NP-RO / NP-SC）。
+      '--no-proxy-server',
       ...headlessArgs,
       ...(opts.args ?? [])
     ],

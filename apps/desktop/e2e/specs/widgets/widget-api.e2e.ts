@@ -731,16 +731,48 @@ describe('widget API: built with the tool, used as an MCP server', () => {
   )
 
   it(
-    'WA-E4 writing asks: the "Change a widget" card; allow once writes and the open page refetches without a reload; the next write asks again; allow and remember writes a row; the one after does not ask',
+    'WA-E4 writing through the selected server does not ask and refetches the open page; modifying via the widget tool asks ("Change a widget"): allow once writes without a row, allow and remember writes a row, and the next call does not ask',
     async () => {
       provider.reset()
       await events.clear()
       const stamp = await panel.frameStamp(WIDGET)
 
-      // 1. 第一次写 → 卡
+      // 1. 通过已勾选的组件 MCP 服务写：勾选已放开组件提供的全部操作（含写），不问、不记行；开着的页面经 SSE 重取、不重载
       const B3 = 'WA-B3 add a note'
       script(stepB(B3), [opCall('call_b_add1', 'addNote', { text: NOTE_ONCE })], 'WA-B3-DONE')
+      const markDirect = await events.mark()
       await sendPrompt(bSid, B3)
+      await waitAssistant(bSid, 'WA-B3-DONE')
+      expect(await asksRaisedIn(events, bSid, markDirect)).toBe(0)
+      const added = jsonOf<NoteRow>(await okText(bSid, 'call_b_add1'))
+      expect(added).toMatchObject({ text: NOTE_ONCE })
+      expect(added.addedBy).toMatch(/^shuvix-work\//)
+      expect(widgetRows(bSid)).toEqual([])
+
+      await until(
+        async () => (await pageNotes()).some((n) => n.text === NOTE_ONCE) || null,
+        'the open page shows the agent’s note',
+        30_000
+      )
+      expect(await pageNotes()).toEqual([{ text: NOTE_ONCE, by: added.addedBy }])
+      expect(await pageNotReloaded()).toBe(true)
+      expect(await panel.frameStamp(WIDGET)).toBe(stamp)
+
+      // 2. 通过 widget 工具本身写（test 调写操作，不带 selected）→ 弹「Change a widget」卡；允许一次写了、不记行
+      const B4 = 'WA-B4 add via widget tool'
+      script(
+        stepB(B4),
+        [
+          widgetCall('call_b_add2', {
+            action: 'test',
+            widget: WIDGET,
+            op: 'addNote',
+            args: { text: NOTE_REMEMBER }
+          })
+        ],
+        'WA-B4-DONE'
+      )
+      await sendPrompt(bSid, B4)
       const ask = await nextAsk(bSid)
       expect(ask.command).toBe(`Widget(write, ${WIDGET})`)
       expect(ask.widget).toEqual({
@@ -763,40 +795,38 @@ describe('widget API: built with the tool, used as an MCP server', () => {
           { id: 'deny', label: en.toolCall.deny, remember: null }
         ]
       })
-      // 审查员不出场：组件询问只有人答；卡还开着时什么都没写
+      // 审查员不出场：组件询问只有人答；卡还开着时第二条还没写
       expect(reviewerRequests()).toEqual([])
-      expect(await pageNotes()).toEqual([])
+      expect((await pageNotes()).some((n) => n.text === NOTE_REMEMBER)).toBe(false)
 
-      // 2. 允许一次：写了，不记行
       await widgetAsk.pick('allow')
       await probe.waitAskGone(bSid, ask.id)
-      await waitAssistant(bSid, 'WA-B3-DONE')
-      const added = jsonOf<NoteRow>(await okText(bSid, 'call_b_add1'))
-      expect(added).toMatchObject({ text: NOTE_ONCE })
-      expect(added.addedBy).toMatch(/^shuvix-work\//)
+      await waitAssistant(bSid, 'WA-B4-DONE')
+      await okText(bSid, 'call_b_add2')
       expect(widgetRows(bSid)).toEqual([])
 
-      // 3. 开着的页面没重载就重取出了它（SSE 的 data）
-      await until(
-        async () => (await pageNotes()).some((n) => n.text === NOTE_ONCE) || null,
-        'the open page shows the agent’s note',
-        30_000
+      // 3. 下一次经 widget 工具写照问；这回允许并记住 → 记下 write 权限行
+      const B5 = 'WA-B5 add another via widget tool'
+      script(
+        stepB(B5),
+        [
+          widgetCall('call_b_add3', {
+            action: 'test',
+            widget: WIDGET,
+            op: 'addNote',
+            args: { text: NOTE_FREE }
+          })
+        ],
+        'WA-B5-DONE'
       )
-      expect(await pageNotes()).toEqual([{ text: NOTE_ONCE, by: added.addedBy }])
-      expect(await pageNotReloaded()).toBe(true)
-      expect(await panel.frameStamp(WIDGET)).toBe(stamp)
-
-      // 4. 下一次写照问；这回允许并记住
-      const B4 = 'WA-B4 add another'
-      script(stepB(B4), [opCall('call_b_add2', 'addNote', { text: NOTE_REMEMBER })], 'WA-B4-DONE')
-      await sendPrompt(bSid, B4)
+      await sendPrompt(bSid, B5)
       const again = await nextAsk(bSid)
       expect(again.command).toBe(`Widget(write, ${WIDGET})`)
       await until(() => widgetAsk.shot(), 'second widget ask card')
       await widgetAsk.pick('remember-widget')
       await probe.waitAskGone(bSid, again.id)
-      await waitAssistant(bSid, 'WA-B4-DONE')
-      await okText(bSid, 'call_b_add2')
+      await waitAssistant(bSid, 'WA-B5-DONE')
+      await okText(bSid, 'call_b_add3')
       expect(widgetRows(bSid)).toEqual([
         { kind: 'widget', target: WIDGET, access: 'write', source: 'user', sourceKey: '' }
       ])
@@ -817,13 +847,23 @@ describe('widget API: built with the tool, used as an MCP server', () => {
       })
       expect(remembered?.review).toBeUndefined()
 
-      // 5. 再写不问
-      const B5 = 'WA-B5 one more'
-      script(stepB(B5), [opCall('call_b_add3', 'addNote', { text: NOTE_FREE })], 'WA-B5-DONE')
+      // 4. 再经 widget 工具调操作不再问；同时通过已勾选的组件服务补写两条持久化记录，供后续用例断言 4 条记录
+      const B5B = 'WA-B5B test read and persist two more notes'
+      script(
+        stepB(B5B),
+        [
+          widgetCall('call_b_test_list', { action: 'test', widget: WIDGET, op: 'listNotes' }),
+          opCall('call_b_persist_2', 'addNote', { text: NOTE_REMEMBER }),
+          opCall('call_b_persist_3', 'addNote', { text: NOTE_FREE })
+        ],
+        'WA-B5B-DONE'
+      )
       const mark = await events.mark()
-      await sendPrompt(bSid, B5)
-      await waitAssistant(bSid, 'WA-B5-DONE')
-      await okText(bSid, 'call_b_add3')
+      await sendPrompt(bSid, B5B)
+      await waitAssistant(bSid, 'WA-B5B-DONE')
+      await okText(bSid, 'call_b_test_list')
+      await okText(bSid, 'call_b_persist_2')
+      await okText(bSid, 'call_b_persist_3')
       expect(await asksRaisedIn(events, bSid, mark)).toBe(0)
       expect(reviewerRequests()).toEqual([])
       // B 也在同一个项目里：标签还是那一个

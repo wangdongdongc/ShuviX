@@ -105,7 +105,10 @@ beforeAll(async () => {
   app = await launchApp({ builtinBots: true })
   home = app.home
   await waitRendererReady(app.main)
-  const base = (await app.main.eval<string>('navigator.language')).split('-')[0].toLowerCase()
+  const saved = await app.main.eval<string | null>(
+    `Promise.resolve(window.api.settings.get('general.language')).then((v) => v || null)`
+  )
+  const base = (saved ?? 'en').split('-')[0].toLowerCase()
   language = base === 'zh' || base === 'ja' ? base : 'en'
 }, 120_000)
 
