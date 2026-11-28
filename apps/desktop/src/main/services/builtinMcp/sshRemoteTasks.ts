@@ -34,6 +34,7 @@ import { hostname, userInfo } from 'os'
 import { join } from 'path'
 import type { TaskInfo, TaskRegistry, TaskStatus } from '@shuvix/agent-runtime'
 import { sanitizeBinaryOutput } from '../../utils/toolUtils/shell'
+import { taskLogFileName } from '../../utils/toolUtils/processToolOutput'
 import { createLogger } from '../../logger'
 import { classifySshFailure, sshScript, sshScriptDetached, type SshExecResult } from './sshControl'
 import {
@@ -312,7 +313,7 @@ export async function runRemoteCommand(p: RemoteRunParams): Promise<RemoteRunOut
     registry.get(p.toolCallId) || entries.has(p.toolCallId)
       ? `${p.toolCallId}~${callSuffix}`
       : p.toolCallId
-  const logPath = join(host.toolResultsDir(p.sessionId), `${taskId}.log`)
+  const logPath = join(host.toolResultsDir(p.sessionId), taskLogFileName(taskId))
   writeFileSync(logPath, '')
 
   const e: Entry = {

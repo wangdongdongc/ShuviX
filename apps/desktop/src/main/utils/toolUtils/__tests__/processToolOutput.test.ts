@@ -34,7 +34,7 @@ import {
   type ProcessToolOutputResult,
   type TruncateStrategy
 } from '@shuvix/agent-runtime'
-import { desktopSpillSink, spillFileName } from '../processToolOutput'
+import { desktopSpillSink, spillFileName, taskLogFileName } from '../processToolOutput'
 
 /** 内核 + 本层的落盘口；`spill: false` 不给落盘口（只在内存里截断），缺省给 */
 function processToolOutput(opts: {
@@ -284,6 +284,37 @@ describe('SFN spillFileName —— toolCallId 来自模型提供商，不能原�
 
   it('SFN-5 空 id 有兜底名', () => {
     expect(spillFileName('')).toBe('tool-call.txt')
+  })
+})
+
+describe('TLN taskLogFileName', () => {
+  it('TLN-1 正常 id（含防撞 ~ 后缀）原样保留', () => {
+    expect(taskLogFileName('call_fg')).toBe('call_fg.log')
+    expect(taskLogFileName('call_1~a1b2c3')).toBe('call_1~a1b2c3.log')
+  })
+
+  it('TLN-2 codemode 嵌套子调用 id（含 | 与 /c1）清洗为单层安全文件名', () => {
+    const id =
+      'call_d396402de19f47fd9c12675d784a4126|ctc_0cc07b1d43f5aabd016b0a7cabb21087d2b5b1cbc85f640c71/c1'
+    const name = taskLogFileName(id)
+    expect(name).not.toContain('/')
+    expect(name).not.toContain('|')
+    expect(name.endsWith('_c1.log')).toBe(true)
+    const dir = resultsDir('tln-2')
+    expect(resolve(join(dir, name)).startsWith(resolve(dir) + sep)).toBe(true)
+  })
+
+  it('TLN-3 超长嵌套 id 截断并附带短 hash，/c1 与 /c2 不撞名', () => {
+    const prefix = 'call_' + 'a'.repeat(180)
+    const n1 = taskLogFileName(`${prefix}/c1`)
+    const n2 = taskLogFileName(`${prefix}/c2`)
+    expect(n1).not.toBe(n2)
+    expect(n1.length).toBeLessThanOrEqual(160)
+    expect(n2.length).toBeLessThanOrEqual(160)
+  })
+
+  it('TLN-4 空 id 有兜底名', () => {
+    expect(taskLogFileName('')).toBe('task.log')
   })
 })
 

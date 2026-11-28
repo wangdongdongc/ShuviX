@@ -3,6 +3,7 @@
  * `wrapDurableOutput`）。此处只提供「Node fs 写 tool_results」这个 SpillSink（`desktopSpillSink`），
  * 由 durable 工具包装器 wrapToolOutput.ts 注入内核。
  */
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
 import type { SpillSink } from '@shuvix/agent-runtime'
@@ -15,6 +16,19 @@ import { getToolResultsDir } from '../paths'
 export function spillFileName(toolCallId: string): string {
   const safe = toolCallId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128)
   return `${safe || 'tool-call'}.txt`
+}
+
+/**
+ * 本机 / 远端命令任务日志文件名。codemode 嵌套子调用生成的 toolCallId 带 `/c1`（供应商也可能带 `|` / `:`），
+ * 直接拼 `${taskId}.log` 会把 `/` 当成不存在的子目录导致 ENOENT；清洗非法路径字符，超长时附带短 hash 防撞名。
+ */
+export function taskLogFileName(taskId: string): string {
+  const safe = taskId.replace(/[^A-Za-z0-9_~-]/g, '_')
+  if (safe.length > 160) {
+    const hash = createHash('sha256').update(taskId).digest('hex').slice(0, 16)
+    return `${safe.slice(0, 120)}_${hash}.log`
+  }
+  return `${safe || 'task'}.log`
 }
 
 /**

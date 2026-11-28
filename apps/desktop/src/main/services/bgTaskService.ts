@@ -59,6 +59,7 @@ import {
   type ShellKind
 } from '../utils/toolUtils/shell'
 import { buildSpawnEnv, getToolResultsDir } from '../utils/paths'
+import { taskLogFileName } from '../utils/toolUtils/processToolOutput'
 import { recordInvocation } from './commandInvocation'
 import { createLogger } from '../logger'
 import { taskRegistry, toBgTaskInfo, setTaskNotifier, type TaskNotifier } from './taskRegistry'
@@ -356,7 +357,7 @@ function formatExitNotice(task: TaskInfo, tail: string): string {
  */
 export async function runCommand(params: RunCommandParams): Promise<CommandOutcome> {
   const { sessionId, toolCallId, command, description, cwd, extraEnv, background } = params
-  const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
+  const logPath = join(getToolResultsDir(sessionId), taskLogFileName(toolCallId))
   const base = shellInvocation(params.shell, command)
   const invocation = params.sandbox ? params.sandbox.wrap(base) : base
   // 宿主给的变量：沙箱计划的（TMPDIR 等），没套沙箱时是本会话的临时目录 —— 都盖过同名的项目变量
