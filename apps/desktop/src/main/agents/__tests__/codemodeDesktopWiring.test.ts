@@ -119,6 +119,7 @@ describe('Codemode Phase 2 · 桌面宿主接线', () => {
 
     const deps = buildSessionHostDeps({}, () => undefined)
     expect(deps.codemode).toBeDefined()
+    expect(deps.codemode?.inlineBudget).toBe(6000)
     expect(deps.codemode?.isEnabled).toBeTypeOf('function')
     expect(deps.codemode?.mcpToolsOnly).toBeTypeOf('function')
 

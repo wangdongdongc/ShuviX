@@ -369,7 +369,11 @@ export interface AgentToolSet {
   /** 技能工具（有技能可给时） */
   skill?: ToolRegistration
   /** MCP 工具：服务器一台接一台，台内按工具次序 */
-  mcp?: readonly { readonly server: string; readonly tools: readonly ToolRegistration[] }[]
+  mcp?: readonly {
+    readonly server: string
+    readonly description?: string
+    readonly tools: readonly ToolRegistration[]
+  }[]
   /** 宿主的其它按 agent 工具（排在 MCP 之后） */
   tools?: readonly ToolRegistration[]
   /**
@@ -402,6 +406,7 @@ export interface ResolvedAgentTools extends AgentToolSet {
   /** 只含**连上了**的服务器（K7：连不上的不记，下次创建再试），各带声明快照（纯 JSON） */
   mcp?: readonly {
     readonly server: string
+    readonly description?: string
     readonly declarations: readonly McpToolDeclaration[]
     readonly tools: readonly ToolRegistration[]
   }[]
@@ -435,6 +440,7 @@ export interface ReconfiguredAgentTools {
   /** 接上了的服务器：声明快照（记进锁）+ 按它建的注册项 */
   mcp: readonly {
     readonly server: string
+    readonly description?: string
     readonly declarations: readonly McpToolDeclaration[]
     readonly tools: readonly ToolRegistration[]
   }[]

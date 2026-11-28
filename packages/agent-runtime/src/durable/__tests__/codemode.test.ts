@@ -1145,3 +1145,134 @@ describe('Codemode · 结构化输出（SO-08..09）', () => {
     TIMEOUT
   )
 })
+
+describe('Codemode · 按 MCP 服务器划分 Extension.namespace（CM-NS-01..03）', () => {
+  it(
+    'CM-NS-01 启用 codemode 时每台 MCP 服务器注册独立 namespace 扩展；轮询预算避免短描述多的服务器挤掉长描述核心工具',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:browser', 'mcp:ssh']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          mcp: {
+            // 模拟 browser：大量极短描述工具
+            browser: Array.from({ length: 12 }, (_, i) =>
+              mcpDecl(`b${i}`, `Short browser op ${i}`)
+            ),
+            // 模拟 ssh：少量工具，其中 exec 描述很长
+            ssh: [
+              mcpDecl('list_hosts', 'List hosts'),
+              mcpDecl(
+                'exec',
+                'Run a shell command on a remote machine. ' + 'Detailed documentation. '.repeat(25)
+              )
+            ]
+          }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => true,
+          // 刻意给紧凑预算：若没有按 namespace 轮询，12 个短 browser 工具会先把预算吃光挤掉 ssh.exec
+          inlineBudget: 450
+        }
+      })
+      const session = await t.open(SID)
+
+      t.kit.queue(answer('ok'))
+      expect(await withTimeout(session.submitUser('check prompt'), TIMEOUT, 'submit')).toEqual({})
+
+      const lock = await storedLockOf(session)
+      expect(lock?.extensions.some((name) => name.includes('.browser'))).toBe(true)
+      expect(lock?.extensions.some((name) => name.includes('.ssh'))).toBe(true)
+
+      const sys = t.kit.requests[0]?.systemPrompt ?? ''
+      expect(sys).toContain('## browser')
+      expect(sys).toContain('## ssh')
+      expect(sys).toContain('### `mcp__ssh__exec`')
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM-NS-02 沙箱内 describeNamespace 与 searchTools({ namespace }) 可按 MCP 服务器名检索工具',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:ssh', 'mcp:db']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          mcp: {
+            ssh: [mcpDecl('exec', 'Run remote command')],
+            db: [mcpDecl('query', 'Run SQL query')]
+          }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => true
+        }
+      })
+      const session = await t.open(SID)
+
+      const code = `
+        const ns = await describeNamespace('ssh');
+        const found = await searchTools('Run', { namespace: 'db' });
+        return { nsTools: ns?.tools, foundNames: found.map((x) => x.name) };
+      `
+      t.kit.queue(callTool('codemode', { code }, 'cm-ns-02'), answer('done'))
+      expect(await withTimeout(session.submitUser('discover'), TIMEOUT, 'submit')).toEqual({})
+
+      const results = await toolResultEntries(session)
+      const text = toolResultText(results[0]!)
+      expect(text).toContain('mcp__ssh__exec')
+      expect(text).toContain('mcp__db__query')
+    },
+    TIMEOUT
+  )
+
+  it(
+    'CM-NS-03 Reconfigure 增删 MCP 服务器时同步更新锁里的 shuvix.mcp.<cid>.<server> 扩展',
+    async () => {
+      const config = defaultAgentConfig()
+      config.toolOverlay = ['mcp:srv1']
+      const t = await makeHost({
+        ephemeral: [SID],
+        agentConfig: config,
+        toolHost: {
+          mcp: {
+            srv1: [mcpDecl('one', 'One')],
+            srv2: [mcpDecl('two', 'Two')]
+          }
+        },
+        codemode: {
+          sandbox: makeSandbox(),
+          isEnabled: () => true
+        }
+      })
+      const session = await t.open(SID)
+
+      t.kit.queue(answer('t1'))
+      expect(await withTimeout(session.submitUser('turn 1'), TIMEOUT, 't1')).toEqual({})
+      const lock1 = await storedLockOf(session)
+      expect(lock1?.extensions.some((name) => name.endsWith('.srv1'))).toBe(true)
+      expect(lock1?.extensions.some((name) => name.endsWith('.srv2'))).toBe(false)
+
+      // 增接 srv2、移除 srv1
+      config.toolOverlay = ['mcp:srv2']
+      const reconfig = await withTimeout(session.reconfigureAgent(), TIMEOUT, 'reconfig')
+      expect(reconfig.applied).toBe(true)
+      const lock2 = await storedLockOf(session)
+      expect(lock2?.extensions.some((name) => name.endsWith('.srv1'))).toBe(false)
+      expect(lock2?.extensions.some((name) => name.endsWith('.srv2'))).toBe(true)
+
+      t.kit.queue(answer('t2'))
+      expect(await withTimeout(session.submitUser('turn 2'), TIMEOUT, 't2')).toEqual({})
+      const sys2 = t.kit.requests[1]?.systemPrompt ?? ''
+      expect(sys2).not.toContain('## srv1')
+      expect(sys2).toContain('## srv2')
+    },
+    TIMEOUT
+  )
+})

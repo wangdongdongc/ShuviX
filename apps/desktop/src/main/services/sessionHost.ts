@@ -186,6 +186,8 @@ export function buildSessionHostDeps(
     codemode: {
       sandbox: getCodemodeSandbox(),
       models: false,
+      // 配合按 MCP 服务器划分的 Extension.namespace 轮询配额，避免核心长描述工具（如 mcp__ssh__exec）被挤出内联目录
+      inlineBudget: 6000,
       isEnabled: () => settingsService.get(CODEMODE_ENABLED_KEY) === 'true',
       mcpToolsOnly: () => settingsService.get(CODEMODE_MCP_ONLY_KEY) === 'true'
     },

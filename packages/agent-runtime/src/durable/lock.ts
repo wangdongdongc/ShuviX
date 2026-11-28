@@ -284,6 +284,39 @@ export function agentExtension(
   return defineExtension({ name: agentExtensionName(conversationId), tools })
 }
 
+/**
+ * 代码模式下每台 MCP 服务器的独立扩展名（`shuvix.mcp.<对话>.<服务器>`）。
+ * 挂上 `Extension.namespace` 后，`pi-durable/codemode` 会按服务器分组并轮询分配 `inlineBudget`，
+ * 避免单个工具数多且描述短的服务器（如 browser）把长描述核心工具（如 `mcp__ssh__exec`）挤出内联目录。
+ */
+export function mcpServerExtensionName(conversationId: ConversationId, server: string): string {
+  return `shuvix.mcp.${conversationId}.${server}`
+}
+
+export function mcpServerExtension(
+  conversationId: ConversationId,
+  server: string,
+  tools: readonly ToolRegistration[],
+  description?: string
+): Extension {
+  return defineExtension({
+    name: mcpServerExtensionName(conversationId, server),
+    namespace: {
+      name: server,
+      description: description?.trim() || `Tools provided by the "${server}" MCP server.`
+    },
+    tools
+  })
+}
+
+function isMcpServerExtensionName(conversationId: ConversationId, name: string): boolean {
+  return name.startsWith(`shuvix.mcp.${conversationId}.`)
+}
+
+function agentNonMcpTools(set: AgentToolSet): ToolRegistration[] {
+  return agentExtensionTools({ ...set, mcp: undefined })
+}
+
 /** 名单里带某个前缀的那几项（去掉前缀，名单序） */
 function prefixed(names: readonly string[], prefix: 'mcp:'): string[] {
   return names.filter((name) => name.startsWith(prefix)).map((name) => name.slice(prefix.length))
@@ -451,7 +484,20 @@ export class AgentLock {
         sessionId,
         ...(initialize ? { connect: { signal: this.restoreAbort.signal } } : {})
       })
-      this.deps.registry.install(agentExtension(lock.conversationId, agentExtensionTools(set)))
+      const usesMcpNamespaces = lock.extensions.some((name) =>
+        isMcpServerExtensionName(lock.conversationId, name)
+      )
+      if (usesMcpNamespaces) {
+        this.deps.registry.install(agentExtension(lock.conversationId, agentNonMcpTools(set)))
+        for (const entry of set.mcp ?? []) {
+          if (entry.tools.length === 0) continue
+          this.deps.registry.install(
+            mcpServerExtension(lock.conversationId, entry.server, entry.tools, entry.description)
+          )
+        }
+      } else {
+        this.deps.registry.install(agentExtension(lock.conversationId, agentExtensionTools(set)))
+      }
     } catch (error) {
       // 会话在关停：存着的锁原样留着（不是重建失败），下一次打开再判
       if (this.restoreAbort.signal.aborted) return
@@ -748,12 +794,23 @@ export class AgentLock {
     }
     const tools = orderForMinimalDiff(getCurrentTools(seenMessages), composedTools)
     const builtinExt = builtinExtension(builtin, this.hooks)
-    const agentExt = agentExtension(conversation.id, composed.agentTools)
+    const mcpExts: Extension[] = codemodeActive
+      ? (resolved.mcp ?? [])
+          .filter((entry) => entry.tools.length > 0)
+          .map((entry) =>
+            mcpServerExtension(conversation.id, entry.server, entry.tools, entry.description)
+          )
+      : []
+    const agentExt = agentExtension(
+      conversation.id,
+      codemodeActive ? agentNonMcpTools(resolved) : composed.agentTools
+    )
     const extensions: Extension[] = [
       builtinExt,
       ...promptExtensions,
       ...(codemodeActive ? [this.deps.codemode!.extension] : []),
-      agentExt
+      agentExt,
+      ...mcpExts
     ]
     const mcp: LockRecord['mcp'] = {}
     for (const entry of resolved.mcp ?? []) mcp[entry.server] = [...entry.declarations]
@@ -777,6 +834,7 @@ export class AgentLock {
     // 先装扩展再提交：提交一落定，任何解析都看得到这些工具；提交失败就撤回（全有或全无）
     const previousBuiltin = registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)
     const rollback = (): void => {
+      for (const ext of mcpExts) registry.uninstall(ext)
       registry.uninstall(agentExt)
       if (previousBuiltin !== undefined) registry.install(previousBuiltin)
       else registry.uninstall(builtinExt)
@@ -784,6 +842,7 @@ export class AgentLock {
     try {
       registry.install(builtinExt)
       registry.install(agentExt)
+      for (const ext of mcpExts) registry.install(ext)
       cancelled()
       await this.deps.harness.commit(async (tx) => {
         const json = lockRecordJson(record)
@@ -944,25 +1003,57 @@ export class AgentLock {
     if (unchanged) return { applied: false, record: lock }
 
     const name = agentExtensionName(lock.conversationId)
-    const previous = registry.snapshot().extension(name)
+    const snapshot = registry.snapshot()
+    const previous = snapshot.extension(name)
     const nonAgent = new Set([
-      ...(registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)?.tools ?? []),
+      ...(snapshot.extension(SHUVIX_BUILTIN_EXTENSION)?.tools ?? []),
       ...(this.deps.codemode?.extension.tools ?? [])
     ])
+    const codemodeActiveInLock =
+      this.deps.codemode !== undefined &&
+      lock.extensions.includes(this.deps.codemode.extension.name)
+    const previousMcpExts = codemodeActiveInLock
+      ? lock.extensions
+          .filter((extName) => isMcpServerExtensionName(lock.conversationId, extName))
+          .map((extName) => snapshot.extension(extName))
+          .filter((ext): ext is Extension => ext !== undefined)
+      : []
+    const nextMcpExts = codemodeActiveInLock ? plan.mcpExtensions : []
+    const mcpToolSet = new Set(nextMcpExts.flatMap((ext) => ext.tools ?? []))
     const next = agentExtension(
       lock.conversationId,
-      plan.tools.filter((tool) => !nonAgent.has(tool))
+      plan.tools.filter((tool) => !nonAgent.has(tool) && !mcpToolSet.has(tool))
     )
+    const nextExtNames = new Set(nextMcpExts.map((ext) => ext.name))
+    const removedMcpExts = previousMcpExts.filter((ext) => !nextExtNames.has(ext.name))
+    const nextExtensionObjects: Extension[] | undefined = codemodeActiveInLock
+      ? record.extensions
+          .map((extName) => {
+            if (extName === next.name) return next
+            const mcpMatch = nextMcpExts.find((ext) => ext.name === extName)
+            if (mcpMatch !== undefined) return mcpMatch
+            return snapshot.extension(extName)
+          })
+          .filter((ext): ext is Extension => ext !== undefined)
+      : undefined
     try {
       // 先装扩展再提交（与创建同一条纪律）：提交一落定，下一次解析就看得到新工具；提交失败就装回原来那份
       registry.install(next)
+      for (const ext of nextMcpExts) registry.install(ext)
+      for (const ext of removedMcpExts) registry.uninstall(ext)
       cancelled()
       await this.deps.harness.commit(async (tx) => {
-        await configure(tx, lock.conversationId, { model: record.model, tools: plan.tools })
+        await configure(tx, lock.conversationId, {
+          model: record.model,
+          tools: plan.tools,
+          ...(nextExtensionObjects === undefined ? {} : { extensions: nextExtensionObjects })
+        })
         const state = await tx.doc(SessionStateDoc)
         state.lock = lockRecordJson(record)
       }, BG)
     } catch (error) {
+      for (const ext of nextMcpExts) registry.uninstall(ext)
+      for (const ext of previousMcpExts) registry.install(ext)
       if (previous !== undefined) registry.install(previous)
       else registry.uninstall(next)
       throw error
@@ -989,6 +1080,7 @@ export class AgentLock {
     record: LockRecord
     resolved: ReconfiguredAgentTools
     messages: readonly Message[]
+    mcpExtensions: Extension[]
   }> {
     const { sessionId, registry, toolHost } = this.deps
     const { profile } = config
@@ -1017,10 +1109,14 @@ export class AgentLock {
 
     const snapshot = registry.snapshot()
     const installed = new Map<string, ToolRegistration>()
+    const previousMcpExtensions = lock.extensions
+      .filter((extName) => isMcpServerExtensionName(lock.conversationId, extName))
+      .map((extName) => snapshot.extension(extName))
     for (const extension of [
       snapshot.extension(SHUVIX_BUILTIN_EXTENSION),
       snapshot.extension(agentExtensionName(lock.conversationId)),
-      ...(this.deps.codemode ? [snapshot.extension(this.deps.codemode.extension.name)] : [])
+      ...(this.deps.codemode ? [snapshot.extension(this.deps.codemode.extension.name)] : []),
+      ...previousMcpExtensions
     ]) {
       for (const tool of extension?.tools ?? []) installed.set(tool.name, tool)
     }
@@ -1042,15 +1138,62 @@ export class AgentLock {
       if (!removedServers.has(server)) mcp[server] = declarations
     }
     for (const entry of resolved.mcp) mcp[entry.server] = [...entry.declarations]
+
+    const codemodeActiveInLock =
+      this.deps.codemode !== undefined &&
+      lock.extensions.includes(this.deps.codemode.extension.name)
+    const mcpExtensions: Extension[] = []
+    if (codemodeActiveInLock) {
+      const activeToolSet = new Set(tools)
+      const addedByServer = new Map(resolved.mcp.map((entry) => [entry.server, entry]))
+      for (const server of Object.keys(mcp)) {
+        const added = addedByServer.get(server)
+        if (added !== undefined) {
+          const serverTools = added.tools.filter((tool) => activeToolSet.has(tool))
+          if (serverTools.length > 0) {
+            mcpExtensions.push(
+              mcpServerExtension(lock.conversationId, server, serverTools, added.description)
+            )
+          }
+          continue
+        }
+        const prevExt = snapshot.extension(mcpServerExtensionName(lock.conversationId, server))
+        const prevTools = (prevExt?.tools ?? []).filter((tool) => activeToolSet.has(tool))
+        const fallbackTools =
+          prevTools.length > 0
+            ? prevTools
+            : tools.filter((tool) => tool.name.startsWith(`mcp__${server}__`))
+        if (fallbackTools.length > 0) {
+          mcpExtensions.push(
+            mcpServerExtension(
+              lock.conversationId,
+              server,
+              fallbackTools,
+              prevExt?.namespace?.description
+            )
+          )
+        }
+      }
+    }
+    const extensions = codemodeActiveInLock
+      ? [
+          ...lock.extensions.filter(
+            (extName) => !isMcpServerExtensionName(lock.conversationId, extName)
+          ),
+          ...mcpExtensions.map((ext) => ext.name)
+        ]
+      : lock.extensions
+
     const record: LockRecord = {
       ...lock,
       model: { ...model },
       toolNames: tools.map((tool) => tool.name),
+      extensions,
       mcp,
       ...(config.toolOverlay === undefined ? {} : { selection: [...new Set(config.toolOverlay)] })
     }
 
-    return { tools, record, resolved, messages }
+    return { tools, record, resolved, messages, mcpExtensions }
   }
 
   // ─── 冻结的系统提示词：提醒（2026-11-06） ───────────────
